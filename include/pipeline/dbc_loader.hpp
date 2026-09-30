@@ -145,6 +145,19 @@ private:
     void buildIdCache() const;
 
     /**
+     * Move the strings of a non-English client into the enUS columns.
+     *
+     * A localized string is a block of locale columns (16 in TBC/WotLK, 8 in
+     * vanilla) plus a flags column, and a client fills only its own locale's
+     * column: a German client leaves enUS empty and writes deDE, three columns
+     * later. Every reader here asks for the enUS column, so on such a client
+     * every spell, zone and map name read as empty. Blocks whose enUS column is
+     * empty in every record and whose only populated column holds string
+     * offsets get that column copied into enUS. An English file is untouched.
+     */
+    void promoteLocalizedStrings();
+
+    /**
      * Load from CSV text format (produced by dbc_to_csv tool).
      * Rebuilds the same in-memory layout as binary load.
      */

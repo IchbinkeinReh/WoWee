@@ -483,3 +483,89 @@ TEST_CASE("Spell.dbc's timing columns come from the file's shape", "[dbc][spell]
         CHECK(f.categoryRecoveryTime == 0);
     }
 }
+
+TEST_CASE("A localized client's strings are read where the enUS ones would be", "[dbc][locale]") {
+    // A German client writes each string into its deDE column, three past
+    // enUS, and leaves enUS empty - so every spell name read as empty and
+    // every cast bar said "Unknown". Two WotLK-shaped blocks: name and rank,
+    // sixteen locale columns and a flags column each.
+    std::string strings(1, '\0');
+    auto add = [&](const std::string& s) {
+        uint32_t off = static_cast<uint32_t>(strings.size());
+        strings += s;
+        strings += '\0';
+        return off;
+    };
+    const uint32_t heal   = add("Geringes Heilen");
+    const uint32_t rank1  = add("Rang 1");
+    const uint32_t smite  = add("Heiliges Feuer");
+    const uint32_t flags  = 0x00FF01FEu;
+
+    // [ID, school, name x16, flags, rank x16, flags]
+    constexpr uint32_t kFields = 2 + 17 + 17;
+    constexpr uint32_t kName = 2, kRank = 19;
+    auto row = [&](uint32_t id, uint32_t locale, uint32_t name, uint32_t rank) {
+        std::vector<uint32_t> r(kFields, 0);
+        r[0] = id;
+        r[1] = 2;
+        r[kName + locale] = name;
+        r[kName + 16] = flags;
+        r[kRank + locale] = rank;
+        r[kRank + 16] = flags;
+        return r;
+    };
+
+    SECTION("deDE") {
+        DBCFile dbc;
+        REQUIRE(dbc.load(buildSyntheticDBC(2, kFields,
+            {row(2050, 3, heal, rank1), row(585, 3, smite, 0)}, strings)));
+        CHECK(dbc.getString(0, kName) == "Geringes Heilen");
+        CHECK(dbc.getString(0, kRank) == "Rang 1");
+        CHECK(dbc.getString(1, kName) == "Heiliges Feuer");
+        CHECK(dbc.getString(1, kRank).empty());
+        CHECK(dbc.getUInt32(0, 1) == 2);
+        CHECK(dbc.getUInt32(0, kName + 16) == flags);
+    }
+
+    SECTION("enUS is left as it is") {
+        DBCFile dbc;
+        REQUIRE(dbc.load(buildSyntheticDBC(2, kFields,
+            {row(2050, 0, heal, rank1), row(585, 0, smite, 0)}, strings)));
+        CHECK(dbc.getString(0, kName) == "Geringes Heilen");
+        CHECK(dbc.getString(0, kRank) == "Rang 1");
+        for (uint32_t l = 1; l < 16; ++l) {
+            CHECK(dbc.getUInt32(0, kName + l) == 0);
+            CHECK(dbc.getUInt32(0, kRank + l) == 0);
+        }
+    }
+
+    SECTION("an English file's zero columns before a path are not a block") {
+        // Name block in enUS, then two unused columns and a path: the path
+        // with the zeros before it is shaped like a deDE block.
+        std::string s(1, '\0');
+        const uint32_t name = static_cast<uint32_t>(s.size()); s += "Lesser Heal"; s += '\0';
+        const uint32_t path = static_cast<uint32_t>(s.size()); s += "Spells\\Holy.m2"; s += '\0';
+        std::vector<uint32_t> r(1 + 17 + 3 + 16, 0);
+        r[0] = 2050;
+        r[1] = name;
+        r[17] = flags;
+        r[21] = path;  // columns 18-20 zero, path at 18 + 3
+        DBCFile dbc;
+        REQUIRE(dbc.load(buildSyntheticDBC(1, static_cast<uint32_t>(r.size()), {r}, s)));
+        CHECK(dbc.getUInt32(0, 18) == 0);
+        CHECK(dbc.getString(0, 21) == "Spells\\Holy.m2");
+    }
+
+    SECTION("vanilla deDE, eight locale columns") {
+        // [ID, name x8, flags, 0...]
+        std::vector<uint32_t> r(12, 0);
+        r[0] = 2050;
+        r[1 + 3] = heal;
+        r[9] = flags;
+        r[10] = 7;
+        DBCFile dbc;
+        REQUIRE(dbc.load(buildSyntheticDBC(1, 12, {r}, strings)));
+        CHECK(dbc.getString(0, 1) == "Geringes Heilen");
+        CHECK(dbc.getUInt32(0, 10) == 7);
+    }
+}

@@ -123,7 +123,105 @@ bool DBCFile::load(const std::vector<uint8_t>& dbcData) {
     idCacheBuilt = false;
     idToIndexCache.clear();
 
+    promoteLocalizedStrings();
+
     return true;
+}
+
+void DBCFile::promoteLocalizedStrings() {
+    if (!loaded || recordCount == 0 || fieldCount < 9 || recordSize < fieldCount * 4) return;
+
+    // Per column: every record zero, and every value a string offset (the
+    // start of a string in the block) with at least one non-empty string.
+    std::vector<bool> allZero(fieldCount, true);
+    std::vector<bool> stringCol(fieldCount, true);
+    std::vector<bool> hasText(fieldCount, false);
+    for (uint32_t r = 0; r < recordCount; ++r) {
+        const uint8_t* rec = recordData.data() + static_cast<size_t>(r) * recordSize;
+        for (uint32_t f = 0; f < fieldCount; ++f) {
+            uint32_t v;
+            std::memcpy(&v, rec + f * 4, 4);
+            if (v == 0) continue;
+            allZero[f] = false;
+            if (!stringCol[f]) continue;
+            if (v >= stringBlockSize || stringBlock[v - 1] != '\0') {
+                stringCol[f] = false;
+            } else if (stringBlock[v] != '\0') {
+                hasText[f] = true;
+            }
+        }
+    }
+
+    auto isText = [&](uint32_t f) { return stringCol[f] && hasText[f]; };
+
+    // A block of `locales` columns whose enUS column is empty and whose one
+    // populated column is text. Returns that column's locale index, or 0.
+    auto blockLocale = [&](uint32_t f, uint32_t locales) -> uint32_t {
+        if (!allZero[f]) return 0;
+        uint32_t found = 0;
+        for (uint32_t l = 1; l < locales; ++l) {
+            if (allZero[f + l]) continue;
+            if (found != 0 || !isText(f + l)) return 0;
+            found = l;
+        }
+        return found;
+    };
+    // The same block as an English client writes it: text, then nothing.
+    auto englishBlock = [&](uint32_t f, uint32_t locales) {
+        if (!isText(f)) return false;
+        for (uint32_t l = 1; l < locales; ++l) {
+            if (!allZero[f + l]) return false;
+        }
+        return true;
+    };
+
+    // Real clients: enUS, koKR, frFR, deDE, zhCN, zhTW, esES, esMX, and ruRU
+    // in the sixteen-wide files. The later columns are never written.
+    for (uint32_t locales : {16u, 8u}) {
+        const uint32_t maxLocale = (locales == 16) ? 8u : 7u;
+
+        // One English block and the file is English, whatever else in it
+        // looks like a block: a column of zeros beside a column of paths is
+        // shaped like one, and copying into it would be a bug of its own.
+        bool english = false;
+        for (uint32_t f = 0; f + locales <= fieldCount && !english; ++f) {
+            english = englishBlock(f, locales);
+        }
+        if (english) return;
+
+        // Each block's locale; the file's is the one most blocks agree on.
+        std::vector<std::pair<uint32_t, uint32_t>> blocks;  // start, locale
+        uint32_t votes[16] = {};
+        for (uint32_t f = 0; f + locales < fieldCount;) {
+            uint32_t l = blockLocale(f, locales);
+            if (l != 0 && l <= maxLocale) {
+                blocks.emplace_back(f, l);
+                ++votes[l];
+                f += locales + 1;  // the block and its flags column
+            } else {
+                ++f;
+            }
+        }
+        if (blocks.empty()) continue;
+
+        uint32_t locale = 1;
+        for (uint32_t l = 2; l <= maxLocale; ++l) {
+            if (votes[l] > votes[locale]) locale = l;
+        }
+
+        uint32_t promoted = 0;
+        for (const auto& [start, l] : blocks) {
+            if (l != locale) continue;
+            for (uint32_t r = 0; r < recordCount; ++r) {
+                uint8_t* rec = recordData.data() + static_cast<size_t>(r) * recordSize;
+                std::memcpy(rec + start * 4, rec + (start + l) * 4, 4);
+            }
+            ++promoted;
+        }
+        LOG_DEBUG("DBC: ", promoted, " localized string field(s) read from locale column ",
+                  locale, " of ", locales, " (enUS column empty)");
+        return;
+    }
 }
 
 const uint8_t* DBCFile::getRecord(uint32_t index) const {
@@ -390,6 +488,8 @@ bool DBCFile::loadCSV(const std::vector<uint8_t>& csvData) {
     loaded = true;
     idCacheBuilt = false;
     idToIndexCache.clear();
+
+    promoteLocalizedStrings();
 
     LOG_DEBUG("Loaded CSV DBC: ", recordCount, " records, ",
               fieldCount, " fields, ", stringCols.size(), " string cols, ",
