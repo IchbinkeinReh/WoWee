@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">WoWee</string>
+
+    <string name="data_folder_title">Game data</string>
+    <string name="data_folder_need_access">WoWee reads the game data from %1$s, and needs access to all files to read a folder outside its own.</string>
+    <string name="data_folder_found">Game data found in\n%1$s</string>
+    <string name="data_folder_missing">No game data in\n%1$s\n\nExtract it from your WoW install on a PC and copy the result into this folder, or choose the folder you copied it to.</string>
+    <string name="data_folder_unsupported">That folder is not on this device\'s storage. Choose one on the internal storage or an SD card.</string>
+    <string name="data_folder_grant">Allow access</string>
+    <string name="data_folder_start">Start</string>
+    <string name="data_folder_choose">Choose folder…</string>
+    <string name="data_folder_default">Use /sdcard/wowee</string>
+    <string name="data_folder_shortcut">Data folder</string>
 </resources>

@@ -285,24 +285,23 @@ unknown source.
 
 Extract on a desktop exactly as above. There is no need to extract on the
 device. A full extraction is around 18 GB, so cut it down to a profile that
-fits, then copy the result across. Open the app once before pushing, so Android
-creates its folder:
+fits, then copy the result across:
 
 ```bash
 tools/android/make_minimal_data.py --source ~/Data --out ~/Data-phone \
     --profile world --maps all
-adb push ~/Data-phone/. /sdcard/Android/data/com.wowee.client/files/Data/
-adb shell chmod -R a+rwX /sdcard/Android/data/com.wowee.client/files/Data
+adb push ~/Data-phone/. /sdcard/wowee/
 ```
 
-The trailing `/.` matters: push the **contents**, not the directory. Nesting it
-one level deeper leaves the client unable to find its `manifest.json`, and it
-starts with no game data at all.
+The trailing `/.` matters: push the **contents**, not the directory. The folder
+should hold `manifest.json` or `expansions/<id>/manifest.json` directly; one
+level of `Data/` in between is also found.
 
-The `chmod` matters too. Files `adb push` writes into the app's folder belong to
-the shell user, not the app, and their directories are closed to it; without
-the `chmod` the client stops at startup with `Permission denied` on
-`manifest.json`. Run it again after any later push.
+The app reads the data from `/sdcard/wowee` by default. On first start it asks
+for access to all files, which it needs to read a folder outside its own, and
+shows where it is looking. **Choose folder…** picks another folder; a long
+press on the app icon and **Data folder** brings that screen back later. The
+folder is not deleted with the app, so reinstalling keeps the data.
 
 | Profile | Size | Reaches |
 |---|---|---|

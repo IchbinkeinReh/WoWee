@@ -25,10 +25,9 @@ import org.libsdl.app.SDLActivity;
  * runs. The layout under it is the layout of a desktop install: assets/ beside
  * Data/.
  *
- * The root is getExternalFilesDir, not filesDir, because the player has to be
- * able to reach it: game data is ~35 GB extracted from their own WoW install on
- * a PC and copied to Data/ under this root, which is visible over USB and to
- * adb push. Nothing here downloads or ships game data.
+ * The game data is not under this root: it is extracted from the player's own
+ * WoW install on a PC and copied to a folder they choose, /sdcard/wowee by
+ * default (see DataFolderActivity). Nothing here downloads or ships game data.
  */
 public class WoweeActivity extends SDLActivity {
 
@@ -62,8 +61,12 @@ public class WoweeActivity extends SDLActivity {
             Log.e(TAG, "could not unpack packaged assets", e);
         }
 
-        File data = new File(root, "Data");
-        if (!hasGameData(data)) {
+        // The game data is in the folder DataFolderActivity settled on, not
+        // under root: root goes with the app on uninstall, and the data is
+        // gigabytes the player copied in. The packaged Data/ above stays here;
+        // the client copies its expansion tables across into this one itself.
+        File data = DataFolderActivity.dataDir(this);
+        if (!DataFolderActivity.hasGameData(data)) {
             Log.w(TAG, "no game data in " + data.getAbsolutePath()
                     + " - extract it from a WoW install and copy it here.");
         }
@@ -100,19 +103,6 @@ public class WoweeActivity extends SDLActivity {
         } catch (ErrnoException e) {
             Log.e(TAG, "could not set " + name, e);
         }
-    }
-
-    /**
-     * True if anything other than the JSON profiles the APK itself carries is
-     * present, which is the cheapest test for "the player copied data in".
-     */
-    private boolean hasGameData(File data) {
-        String[] entries = data.list();
-        if (entries == null) return false;
-        for (String entry : entries) {
-            if (!entry.equals("expansions") && !entry.equals("opcodes")) return true;
-        }
-        return false;
     }
 
     /**

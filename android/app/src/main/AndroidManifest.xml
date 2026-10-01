@@ -7,6 +7,11 @@
                   android:version="0x00401000" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The game data is in a folder the player chooses, /sdcard/wowee by
+         default, and the client opens it by path from native code. Only
+         all-files access reaches such a folder that way; see
+         DataFolderActivity. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <application
         android:label="@string/app_name"
@@ -17,19 +22,29 @@
         android:hardwareAccelerated="true"
         android:hasFragileUserData="true">
 
+        <!-- The launcher entry: finds the game data, then starts the client. -->
         <activity
-            android:name="com.wowee.client.WoweeActivity"
+            android:name="com.wowee.client.DataFolderActivity"
             android:label="@string/app_name"
             android:theme="@style/WoweeFullscreen"
             android:exported="true"
-            android:launchMode="singleTask"
-            android:screenOrientation="sensorLandscape"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
-            android:preferMinimalPostProcessing="true">
+            android:screenOrientation="sensorLandscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data android:name="android.app.shortcuts"
+                       android:resource="@xml/shortcuts" />
         </activity>
+
+        <activity
+            android:name="com.wowee.client.WoweeActivity"
+            android:label="@string/app_name"
+            android:theme="@style/WoweeFullscreen"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:preferMinimalPostProcessing="true" />
     </application>
 </manifest>
