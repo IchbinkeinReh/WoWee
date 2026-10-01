@@ -72,6 +72,26 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
         // of them drew as a literal bar and an n. globalstrings.lua alone has a
         // hundred and thirty-eight.
         if (tag == 'n' || tag == 'N') { cur.text += '\n'; i += 2; continue; }
+        // |4singular:plural; - the word chosen by the number written before it.
+        // SecondsToTime and every duration in the interface is built on it
+        // ("%d |4Sec:Sec;"), and it drew raw: "Time in queue: 13 |4Sec:Sec;".
+        if (tag == '4') {
+            const size_t semi = in.find(';', i + 2);
+            if (semi != std::string::npos) {
+                const std::string body = in.substr(i + 2, semi - (i + 2));
+                const size_t colon = body.find(':');
+                // The number is the last one before the escape, spaces aside.
+                size_t j = i;
+                while (j > 0 && in[j - 1] == ' ') --j;
+                size_t digitsEnd = j;
+                while (j > 0 && ((in[j - 1] >= '0' && in[j - 1] <= '9') || in[j - 1] == '.')) --j;
+                const bool one = digitsEnd > j && in.substr(j, digitsEnd - j) == "1";
+                if (colon == std::string::npos) cur.text += body;
+                else cur.text += one ? body.substr(0, colon) : body.substr(colon + 1);
+                i = semi + 1;
+                continue;
+            }
+        }
         if (tag == 'H') {
             // |Hitem:3299|h[Fractured Canine]|h - the payload runs to the
             // first |h, the display text follows it, and a second |h closes.

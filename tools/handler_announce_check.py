@@ -139,6 +139,11 @@ EXPECTED = {
     "SMSG_ATTACKSWING_CANT_ATTACK": "auto-attack state, error already raised",
     "SMSG_ATTACKSWING_NOTINRANGE": "auto-attack state, error already raised",
     "SMSG_ATTACKSWING_NOTSTANDING": "auto-attack state, error already raised",
+    # Clears the pending-join marker, which only this client's unanswered-join
+    # timeout reads. The queue itself reaches the interface as
+    # UPDATE_BATTLEFIELD_STATUS from SMSG_BATTLEFIELD_STATUS, and a refusal
+    # goes through addUIError to the error frame.
+    "SMSG_GROUP_JOINED_BATTLEGROUND": "join-timeout bookkeeping, queue drawn from status",
     # The home bind. GetBindLocation reads it when the hearthstone tooltip or
     # the confirm-binder popup draws; 3.3.5 has no bind-changed event.
     "SMSG_BINDPOINTUPDATE": "bind location, read on demand",

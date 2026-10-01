@@ -1,5 +1,36 @@
 # Changelog
 
+## [v3.1.41] - 2026-09-30
+
+### Build
+- **The v3.1.40 build failed its interface sweep.** The battleground-join handler's pending-join marker, which only this client's unanswered-join timeout reads, was reported as state the interface was never told about. It is recorded as client bookkeeping, and the sweep passes
+- A newer push to a branch cancels the older Build and Security runs still going on it
+
+## [v3.1.40] - 2026-09-30
+
+### Added
+- **Boats ride the water.** Rowboats, canoes and punts moored in a canal or on a lake rise, fall and rock gently, each in its own time. A boat pulled up on a beach stays still
+
+### Fixed
+- **No prompt when a battleground queue popped.** The interface was told which state the queue was in where it expected which queue it was, so the "enter battleground" prompt was raised for the wrong queue or not at all. The prompt appears now
+- **Leave Queue did nothing.** It looked for an invitation to decline, and a queue still waiting has none. It leaves the queue picked, popped or not
+- **A refused battleground queue said "Your group has joined the battleground."** The server's answer was read as success whatever it said. The reason is shown now - Deserter, too many queues, and the rest - and a join the server leaves unanswered, such as a random battleground on a realm that keeps it back, says so after five seconds
+- **Time in queue read "13 |4Sec:Sec;" and stood still.** The interface's plural escape is resolved now, and the time counts up between the server's once-a-minute updates
+- **Duels could not be accepted or declined.** Both answers went out without the duel flag the server reads first, and it dropped them. The challenger was also read from the wrong field and named as a number, and the player issuing a challenge was asked to accept it
+- **Tooltips with line breaks ran out of their box.** Lines joined with `|n`, such as the Wintergrasp timer's, were measured as one line
+- **The PvP and battlemaster windows** open in the middle of the screen and can be dragged, as can the battleground scoreboard
+- **The camera went under the ground** after a taxi flight and on sharp rises. Terrain more than half a yard above the camera was taken for a ceiling and ignored. The camera stays above the ground outdoors, is kept clear of it on a flight, and is held clear of the ground beside it as well as below
+- **Azshara's trees were see-through.** A tree carrying falling-leaf emitters was taken for a spell effect and drawn additively
+- **Waterfalls paused, or froze after one pass.** The water's scroll was tied to an animation clock that looped at a fixed 3.3 seconds, or never, instead of at the scroll's own length. Stranglethorn's waterfall was also treated as a plant, for the "thorn" in its name
+- **Parts of Stormwind, and many other buildings, were very dark.** Light baked into a building's outer walls was used to darken them, and most of it is near black. It adds to the light now
+- **Sunlight lit the mist through mountains.** A ridge far off on the sun's side was not drawn into the shadow map, so it cast no shadow on the air or the ground near the player
+- **Water reflections jittered while the camera moved.** The reflection was sampled through the camera of the next frame
+- **Hyjal's world map showed a neighbouring zone, or nothing.** A zone with no map of its own opens its continent, as the original client does
+- **Cloaks, sheathed weapons and the no-cloak back.** Each cloak uses its own length, one-handed weapons sheathe at the hip and shields on the back, each arm reaches for the right weapon, and the back without a cloak is drawn with the torso's clothing and lighting (#150, #151, #152, thanks @banishlight)
+
+### Changed
+- **Canal water** is less see-through and shows more of its own colour, however shallow
+
 ## [v3.1.39] - 2026-09-24
 
 ### Fixed

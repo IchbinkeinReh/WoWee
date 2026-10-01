@@ -44,7 +44,7 @@ layout(set = 1, binding = 1) uniform WMOMaterial {
     float wmoAmbientG;
     float wmoAmbientB;
     int emissive;
-    int padding0;
+    int hasVertexColors;
     int padding1;
     int padding2;
 };
@@ -358,11 +358,18 @@ void main() {
         result = rtAmbient(rt, ambientColor.rgb) * texColor.rgb
                + shadow * (diff * lightColor.rgb * texColor.rgb + spec * lightColor.rgb);
 
-        // Exterior vertex colour is the baked shadow and occlusion the
-        // artists painted. Floored at 0.5 it kept only the top half of that
-        // range; 0.25 keeps most of it while still refusing the odd black
-        // vertex that some roots ship with.
-        result *= max(VertColor.rgb, vec3(0.25));
+        // An exterior group's vertex colour is light baked into it - a lamp's
+        // pool on a wall - and it adds to the sun, as it does in the client.
+        // It was multiplied in as if it were baked shadow, floored at a
+        // quarter: Stormwind has two exterior groups with vertex colours at
+        // all, both near black, and they drew at a quarter of the light the
+        // rest of the city had, shadows on or off - and so did 278 of the 362
+        // exterior groups in the game that carry any. A group without them has
+        // white filled in by the loader, which must add nothing.
+        //
+        // At half: a handful of Icecrown exteriors ship them pure white, and
+        // added at full those would double in brightness.
+        if (hasVertexColors != 0) result += texColor.rgb * VertColor.rgb * 0.5;
     }
 
     if (isWindow == 0 && isLava == 0)

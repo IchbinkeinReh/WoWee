@@ -848,6 +848,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             matData.alphaTest = mb.alphaTest ? 1 : 0;
             matData.unlit = mb.unlit ? 1 : 0;
             matData.isInterior = isInterior ? 1 : 0;
+            matData.hasVertexColors = (groupRes.groupFlags & 0x4) != 0 ? 1 : 0;
             matData.specularIntensity = 0.5f;
             matData.isWindow = mb.isWindow ? (wmoOnlyMap_ ? 2 : 1) : 0;
             matData.enableNormalMap = normalMappingEnabled_ ? 1 : 0;

@@ -172,6 +172,9 @@ struct BgQueueSlot {
     uint32_t instanceId = 0;
     bool     isRated = false;
     std::chrono::steady_clock::time_point inviteReceivedTime{};
+    // When timeInQueueSec was last told. The server says it about once a
+    // minute; the time waited counts on from here in between.
+    std::chrono::steady_clock::time_point queueTimeReceivedAt{};
     std::string bgName;
 };
 

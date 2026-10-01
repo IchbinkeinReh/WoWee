@@ -111,6 +111,8 @@ void DataRepository::loadZones(const std::string& mapName,
             const uint32_t exploreFlag = areaDbc->getUInt32(i, atL ? (*atL)["ExploreFlag"] : 3);
             const uint32_t parentArea = areaDbc->getUInt32(i, parentField);
             if (areaId != 0) exploreFlagByAreaId[areaId] = exploreFlag;
+            if (areaId != 0)
+                mapIdByAreaId_[areaId] = areaDbc->getUInt32(i, atL ? (*atL)["MapID"] : 1);
             if (parentArea != 0) childBitsByParent[parentArea].push_back(exploreFlag);
             // Cache area display name (field 11 = AreaName_lang enUS)
             if (areaId != 0 && fieldCount > 11) {

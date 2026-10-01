@@ -40,6 +40,8 @@ struct InstanceData {
     // 0 for an ordinary instance, 1 while the player is pressing on it. Sits
     // in what was padding, so the entry is the same 96 bytes it always was.
     float highlight;
+    // Bit 0: a boat afloat, which rides the water. Also in what was padding.
+    int flags;
 };
 layout(set = 3, binding = 0) readonly buffer InstanceSSBO {
     InstanceData instanceData[];
@@ -184,6 +186,21 @@ void main() {
     }
 
     vec4 worldPos = model * pos;
+
+    // A boat on the water rises and falls with it and rocks a little, pivoting
+    // about where it was placed. Two rates each, so it never settles into a
+    // metronome, and the phase comes from where it is moored so a row of
+    // boats along a canal does not bob in step.
+    if ((instanceData[instIdx].flags & 1) != 0) {
+        vec3 origin = model[3].xyz;
+        float t = fogParams.z;
+        float ph = dot(origin.xy, vec2(0.37, 0.23));
+        float bob   = sin(t * 0.9 + ph) * 0.06 + sin(t * 1.7 + ph * 1.3) * 0.025;
+        float pitch = sin(t * 0.7 + ph * 0.8) * 0.020 + sin(t * 1.9 + ph) * 0.006;
+        float roll  = sin(t * 1.1 + ph * 1.9) * 0.030 + sin(t * 2.3 + ph * 0.6) * 0.008;
+        vec3 rel = worldPos.xyz - origin;
+        worldPos.z += bob + rel.x * pitch + rel.y * roll;
+    }
 
     // Foliage parts around whoever walks through it, then springs back. Applied
     // in world space after the model transform: the displacement is a distance

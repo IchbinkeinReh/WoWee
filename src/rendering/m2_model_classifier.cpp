@@ -410,6 +410,10 @@ M2ClassificationResult classifyM2Model(
         "outcrop",   "pillar",    "pylon",     "roof",      "rock",
         "ruin",      "shield",    "sign",      "stair",     "statue",
         "stone",     "tomb",      "tower",     "wall",
+        // Not a structure, but no more a plant: StranglethornWaterfall01 read
+        // as foliage from the "thorn" in the zone's name, swayed in the wind,
+        // and had its animation turned off with the rest of the foliage.
+        "waterfall",
     });
     const TokenMatch structureHit = lastMatchAny(n, kStructureTokens);
 
@@ -558,6 +562,13 @@ M2ClassificationResult classifyM2Model(
     // lamps in glass and not cones of light. They were added here while
     // hunting for the searchlight and the debug colour showed them lighting
     // up instead of it.
+    // A rowboat, a canoe, a swamp punt: the craft left moored in a canal or on
+    // a lake. A wreck lies where it sank, a sign and a boathouse are buildings,
+    // a battleground gate is named for the boat it guards, and a vehicle is a
+    // creature the server moves.
+    r.isBoat = (has(n, "boat") || has(n, "canoe")) &&
+               !has(n, "wreck") && !has(n, "boathouse") && !has(n, "sign") &&
+               !has(n, "gate") && !has(n, "vehicle");
     r.isTransportDoodad = has(n, "transportship_sails")
                        || has(n, "icebreaker_paddlewheel");
 
@@ -630,8 +641,13 @@ M2ClassificationResult classifyM2Model(
     const bool steamVehicle = has(n, "tonk") || has(n, "tank");
     const bool steamVfx = has(n, "steam") && !steamVehicle
                         && emitterCount >= 1 && vertexCount <= 200;
+    // A small mesh carrying several emitters is usually an effect, but a
+    // tree is a tree however few vertices it has. AZR_Tree01 is 197 vertices
+    // with three falling-leaf emitters; taken for an effect, its alpha-keyed
+    // canopy was drawn additively, and Azshara's forest turned translucent.
+    const bool particleDominated = emitterCount >= 3 && vertexCount <= 200 && !treeLike;
     r.isSpellEffect = hasAny(n, kEffectTokens) || steamVfx || particleEmitterVfx
-                    || (emitterCount >= 3 && vertexCount <= 200);
+                    || particleDominated;
     // Instance portals are spell effects too.
     if (r.isInstancePortal) r.isSpellEffect = true;
 

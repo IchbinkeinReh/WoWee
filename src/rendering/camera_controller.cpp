@@ -243,6 +243,30 @@ float CameraController::raymarchTerrainCameraLimit(const glm::vec3& pivot, const
     return maxDist;
 }
 
+std::optional<float> CameraController::cameraTerrainFloor(float x, float y,
+                                                         const glm::vec3& targetPos) const {
+    if (!terrainManager) return std::nullopt;
+    auto feetH = terrainManager->getHeightAt(targetPos.x, targetPos.y);
+    if (feetH && targetPos.z < *feetH - 0.2f) return std::nullopt;
+
+    // The near plane is wider than a point. On a ridge or a bank the ground a
+    // few hand-widths to the side can stand well above the ground straight
+    // below, and a camera held clear of only the latter looks into the hill.
+    constexpr float kFootprint = 0.35f;
+    //
+    // A hole-cut quad is a cave mouth or a way underground; the height across
+    // it is interpolated and is not ground, so it holds nothing up.
+    std::optional<float> best;
+    for (const auto& [ox, oy] : {std::pair{0.0f, 0.0f},
+                                 std::pair{kFootprint, 0.0f}, std::pair{-kFootprint, 0.0f},
+                                 std::pair{0.0f, kFootprint}, std::pair{0.0f, -kFootprint}}) {
+        if (terrainManager->isHoleAt(x + ox, y + oy)) continue;
+        auto h = terrainManager->getHeightAt(x + ox, y + oy);
+        if (h && (!best || *h > *best)) best = h;
+    }
+    return best;
+}
+
 void CameraController::triggerShake(float magnitude, float frequency, float duration) {
     // Scaled here rather than at each caller, so the setting covers the sources
     // that exist - a spell's shake and a thunderstorm's - and any added later.
@@ -2390,6 +2414,17 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
             camFloorH = selectReachableFloor(
                 camTerrainH, camWmoH, smoothedCamPos.z, 0.5f);
         }
+        // Terrain has no underside. The reachability filter above is for
+        // structure floors, where something half a yard over the camera may be
+        // a deck it is under; applied to the heightfield it meant that a
+        // camera which had sunk more than half a yard into a hill - coming in
+        // from a taxi, or on a sharp rise - was left there, the ground now
+        // counting as a ceiling. While the character stands on or above the
+        // terrain, the camera belongs above it too.
+        if (!cachedInsideInteriorWMO) {
+            auto groundH = cameraTerrainFloor(smoothedCamPos.x, smoothedCamPos.y, targetPos);
+            if (groundH && (!camFloorH || *groundH > *camFloorH)) camFloorH = groundH;
+        }
         if (camFloorH && smoothedCamPos.z < *camFloorH + MIN_FLOOR_CLEARANCE) {
             smoothedCamPos.z = *camFloorH + MIN_FLOOR_CLEARANCE;
         }
@@ -2732,8 +2767,21 @@ void CameraController::update(float deltaTime) {
                 ? 1.0f : (1.0f - std::exp(-camSmoothSpeed_ * deltaTime));
             smoothedCamPos += (actualCam - smoothedCamPos) * camLerp;
 
+            // A flight path skims ridges and lands on hillsides.
+            if (auto groundH = cameraTerrainFloor(smoothedCamPos.x, smoothedCamPos.y, targetPos)) {
+                constexpr float kTaxiFloorClearance = 0.35f;
+                smoothedCamPos.z = std::max(smoothedCamPos.z, *groundH + kTaxiFloorClearance);
+            }
+
             camera->setPosition(smoothedCamPos);
         }
+
+        // The ground limits are not kept up in flight. Left as they were at
+        // takeoff, the first frames on the ground eased toward them from a
+        // limit measured somewhere else entirely; starting over takes the
+        // ground as it is at the landing.
+        smoothedCollisionDist_ = -1.0f;
+        smoothedTerrainDist_ = -1.0f;
 
         return;
     }

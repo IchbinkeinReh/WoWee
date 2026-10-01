@@ -88,6 +88,19 @@ void M2Renderer::seedInstanceAnimation(const M2ModelGPU& model, uint32_t modelId
     }
 }
 
+// A model the bone loop does not step still plays its first sequence: its
+// texture scroll and its emitters are keyed to it, and update() wraps the
+// clock at this length. Left at zero, the length was unknown, the clock was
+// wrapped at a fixed 3.3 s instead, and a waterfall whose scroll lasts 2.6 s
+// stood still for the difference every lap.
+void M2Renderer::seedUnanimatedSequence(const M2ModelGPU& model, M2Instance& instance) {
+    if (model.sequences.empty() || model.sequences[0].duration == 0) return;
+    instance.currentSequenceIndex = 0;
+    instance.idleSequenceIndex = 0;
+    instance.animDuration = static_cast<float>(model.sequences[0].duration);
+    instance.animTime = static_cast<float>(randRange(model.sequences[0].duration));
+}
+
 uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
                                      const glm::vec3& rotation, float scale,
                                      bool allowPositionDedup) {
@@ -149,6 +162,7 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     instance.cachedIsSkyBird = mdlRef.isSkyBird;
     instance.cachedIsLightBeam = mdlRef.isLightBeam;
     instance.cachedIsTransportDoodad = mdlRef.isTransportDoodad;
+    instance.cachedIsBoat = mdlRef.isBoat;
     instance.cachedIsValid = mdlRef.isValid();
     instance.cachedModel = &mdlRef;
     instance.recomputeCachedCullFactors();
@@ -157,6 +171,8 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     const auto& mdl = mdlRef;
     if (mdl.hasAnimation && !mdl.disableAnimation) {
         seedInstanceAnimation(mdlRef, modelId, instance);
+    } else {
+        seedUnanimatedSequence(mdlRef, instance);
     }
 
     // Register in dedup map before pushing (uses original position, not ground-adjusted)
@@ -249,6 +265,7 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
     instance.cachedIsSkyBird = mdl2.isSkyBird;
     instance.cachedIsLightBeam = mdl2.isLightBeam;
     instance.cachedIsTransportDoodad = mdl2.isTransportDoodad;
+    instance.cachedIsBoat = mdl2.isBoat;
     instance.cachedIsValid = mdl2.isValid();
     instance.cachedModel = &mdl2;
     instance.recomputeCachedCullFactors();
@@ -262,11 +279,9 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
         // instance at zero puts a courtyard of identical torches in lockstep,
         // so the phase is spread.
         //
-        // createInstance above does not do this, so doodads spawned by
-        // position keep the lockstep this avoids. Which of the two is right is
-        // a question for whoever next looks at particle timing; they differ
-        // today and this is the difference.
+        // createInstance above now does the same.
         instance.animTime = randFloat(0.0f, 10000.0f);
+        seedUnanimatedSequence(mdl2, instance);
     }
 
     // Register in dedup map
@@ -417,9 +432,37 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
     // --- Normal M2 animation update ---
     // Advance animTime for ALL instances (needed for texture UV animation on static doodads).
     // This is a tight loop touching only one float per instance - no hash lookups.
+    //
+    // An instance the bone loop below does not step is wrapped here, at the
+    // length of its own sequence. A texture track is sampled against this
+    // time and holds its last key once the time runs past the end, so a
+    // waterfall with no bones of its own scrolled once after it loaded and
+    // then stood still, and one with emitters - wrapped at a fixed 3.3 s
+    // below, whatever its sequence - stopped for the rest of each lap.
     for (auto& instance : instances) {
         instance.animTime += dtMs;
         instance.globalSequenceTime += dtMs;
+        // A boat asks once whether it is on water - the canal may stream in
+        // after it does, so it keeps asking for a while - and rides it if so.
+        // A rowboat pulled up on a beach is the same model and stays put.
+        if (instance.cachedIsBoat && instance.afloat < 0 && waterHeightAt_) {
+            instance.afloatRecheck -= deltaTime;
+            if (instance.afloatRecheck <= 0.0f) {
+                instance.afloatRecheck = 1.0f;
+                const auto water = waterHeightAt_(instance.position.x, instance.position.y,
+                                                  instance.position.z);
+                if (water && std::abs(*water - instance.position.z) < 1.5f) {
+                    instance.afloat = 1;
+                } else if (++instance.afloatTries >= 15) {
+                    instance.afloat = 0;
+                }
+            }
+        }
+        const bool steppedBelow = instance.cachedHasAnimation && !instance.cachedDisableAnimation;
+        if (!steppedBelow && instance.animDuration > 0.0f &&
+            instance.animTime >= instance.animDuration) {
+            instance.animTime = std::fmod(instance.animTime, instance.animDuration);
+        }
     }
 
     // The sky model's clock, when this is the renderer that draws one.
@@ -453,9 +496,12 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
     // particle emission cycle (~3s for torch/campfire effects) while preventing float
     // precision loss that accumulates over hours of runtime.
     static constexpr float kParticleWrapMs = 3333.0f;
+    // Only for those with no sequence length to wrap at; the rest were
+    // wrapped at their own above.
     for (size_t idx : particleOnlyInstanceIndices_) {
         if (idx >= instances.size()) continue;
         auto& instance = instances[idx];
+        if (instance.animDuration > 0.0f) continue;
         // Use iterative subtraction instead of fmod() to preserve precision
         while (instance.animTime > kParticleWrapMs) {
             instance.animTime -= kParticleWrapMs;
@@ -1493,7 +1539,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 e.boneBase = p.useBones ? static_cast<int32_t>(inst.megaBoneOffset) : 0;
                 e.boneCount = static_cast<int32_t>(inst.boneMatrices.size());
                 e.highlight = inst.highlight;
-                e._pad = 0;
+                e.flags = inst.afloat > 0 ? 1 : 0;
                 instanceDataCount_++;
                 ++writtenInstances;
             }
@@ -1778,7 +1824,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                             e.boneBase = p.useBones ? static_cast<int32_t>(inst.megaBoneOffset) : 0;
                             e.boneCount = static_cast<int32_t>(inst.boneMatrices.size());
                             e.highlight = inst.highlight;
-                            e._pad = 0;
+                            e.flags = inst.afloat > 0 ? 1 : 0;
                             instanceDataCount_++;
                         }
                     }
@@ -2063,7 +2109,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             e.boneBase = needsBones ? static_cast<int32_t>(instance.megaBoneOffset) : 0;
             e.boneCount = static_cast<int32_t>(instance.boneMatrices.size());
             e.highlight = instance.highlight;
-            e._pad = 0;
+            e.flags = instance.afloat > 0 ? 1 : 0;
             instanceDataCount_++;
 
             // Pipeline selection

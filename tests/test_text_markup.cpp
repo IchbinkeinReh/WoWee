@@ -377,3 +377,13 @@ TEST_CASE("A letter limit counts what is shown, not what is stored",
               std::string("look at [Fractured Canine] now").size());
     }
 }
+
+// SecondsToTime's "%d |4Sec:Sec;" drew raw in the battleground queue tooltip:
+// "Time in queue: 13 |4Sec:Sec;".
+TEST_CASE("the plural escape picks its word by the number before it", "[markup]") {
+    REQUIRE(drawn("13 |4Sec:Sec;") == "13 Sec");
+    REQUIRE(drawn("1 |4Min:Mins;") == "1 Min");
+    REQUIRE(drawn("2 |4Min:Mins; 5 |4Sec:Sec;") == "2 Mins 5 Sec");
+    REQUIRE(drawn("11 |4hour:hours;") == "11 hours");
+    REQUIRE(drawn("|4one:many;") == "many");
+}

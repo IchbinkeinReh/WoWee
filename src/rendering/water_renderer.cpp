@@ -30,7 +30,7 @@ struct WaterMaterialUBO {
     float waterAlpha;
     float shimmerStrength;
     float alphaScale;
-    float _pad;
+    float bodyFloor;   // least the water's own colour shows, however shallow
 };
 
 // Push constants matching water.vert.glsl
@@ -505,7 +505,8 @@ void WaterRenderer::createSceneHistoryResources(VkExtent2D extent, VkFormat colo
 
         VkDescriptorBufferInfo reflUBOInfo{};
         reflUBOInfo.buffer = reflectionUBO;
-        reflUBOInfo.offset = 0;
+        // Each frame in flight reads its own slot; see uploadFrameUBO.
+        reflUBOInfo.offset = static_cast<VkDeviceSize>(f) * kFrameUBOStride;
         reflUBOInfo.range = sizeof(WaterFrameUBOData);
 
         std::vector<VkWriteDescriptorSet> writes;
@@ -599,13 +600,23 @@ void WaterRenderer::updateMaterialUBO(WaterSurface& surface) {
 
     bool canalProfile = (surface.wmoId != 0) || (surface.liquidType == 5);
     float shimmerStrength = canalProfile ? 0.95f : 0.50f;
-    float alphaScale = canalProfile ? 0.90f : 1.00f;
+    // A canal is a couple of yards deep, and the water's colour is weighted by
+    // depth - so it came out as clear glass over the stone bed. Its own colour
+    // is given a floor, a little deeper than a lake's, and it is no longer
+    // thinned below open water.
+    float alphaScale = canalProfile ? 1.15f : 1.00f;
+    float bodyFloor = 0.0f;
+    if (canalProfile && (surface.liquidType == 0 || (surface.liquidType - 1) % 4 < 2)) {
+        color = glm::vec4(0.08f, 0.30f, 0.40f, 1.0f);
+        bodyFloor = 0.45f;
+    }
 
     WaterMaterialUBO mat{};
     mat.waterColor = color;
     mat.waterAlpha = alpha;
     mat.shimmerStrength = shimmerStrength;
     mat.alphaScale = alphaScale;
+    mat.bodyFloor = bodyFloor;
 
     // Create UBO
     VkBufferCreateInfo bufCI{};
@@ -1087,6 +1098,9 @@ void WaterRenderer::clear() {
 
 void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                             const Camera& camera, float /*time*/, bool use1x, uint32_t frameIndex) {
+    // The wake as it stands, into this frame's slot - safe now, the frame has
+    // waited for the GPU to finish with it.
+    uploadFrameUBO();
     VkPipeline pipeline = (use1x && water1xPipeline) ? water1xPipeline : waterPipeline;
     if (!renderingEnabled || surfaces.empty() || !pipeline) {
         if (renderDiagCounter_++ % 300 == 0 && !surfaces.empty()) {
@@ -1729,7 +1743,7 @@ void WaterRenderer::createReflectionResources() {
     // --- Reflection UBO ---
     VkBufferCreateInfo bufCI{};
     bufCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufCI.size = sizeof(WaterFrameUBOData);
+    bufCI.size = kFrameUBOStride * SCENE_HISTORY_FRAMES;
     bufCI.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
     VmaAllocationCreateInfo uboAllocCI{};
@@ -1748,7 +1762,10 @@ void WaterRenderer::createReflectionResources() {
     WaterFrameUBOData initData{};
     initData.reflViewProj = glm::mat4(1.0f);
     if (reflectionUBOMapped) {
-        std::memcpy(reflectionUBOMapped, &initData, sizeof(initData));
+        for (uint32_t f = 0; f < SCENE_HISTORY_FRAMES; ++f) {
+            std::memcpy(static_cast<char*>(reflectionUBOMapped) + f * kFrameUBOStride,
+                        &initData, sizeof(initData));
+        }
     }
 
     // Transition reflection color image to shader-read so first frame doesn't read undefined
@@ -1857,9 +1874,16 @@ void WaterRenderer::updateReflectionUBO(const glm::mat4& reflViewProj) {
     uploadFrameUBO();
 }
 
+// Into the slot of the frame being recorded. There was one slot for every frame
+// in flight, so the reflection matrix was rewritten for the next frame while the
+// GPU was still drawing water with it for the last one - the reflection was
+// sampled through a camera a frame out of step with the one that rendered it,
+// and shook whenever the view moved.
 void WaterRenderer::uploadFrameUBO() {
-    if (!reflectionUBOMapped) return;
-    std::memcpy(reflectionUBOMapped, &frameUBO_, sizeof(frameUBO_));
+    if (!reflectionUBOMapped || !vkCtx) return;
+    const uint32_t slot = vkCtx->getCurrentFrame() % SCENE_HISTORY_FRAMES;
+    std::memcpy(static_cast<char*>(reflectionUBOMapped) + slot * kFrameUBOStride,
+                &frameUBO_, sizeof(frameUBO_));
 }
 
 // Disturbance trail. Points are dropped along the path rather than parented to
@@ -1954,7 +1978,10 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
         frameUBO_.wakePoints[i] = glm::vec4(p.pos.x, p.pos.y, age01, p.strength);
     }
     frameUBO_.wakeBounds = glm::vec4(centre.x, centre.y, cullRadius, static_cast<float>(count));
-    uploadFrameUBO();
+    // Uploaded when the frame is recorded, not here: this runs before the frame
+    // has waited for its slot, and the slot it would name is still being read
+    // by the frame the GPU is drawing.
+    
 }
 
 // ==============================================================

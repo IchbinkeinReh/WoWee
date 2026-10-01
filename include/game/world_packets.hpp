@@ -1500,16 +1500,16 @@ public:
 // Duel
 // ============================================================
 
-/** CMSG_DUEL_ACCEPTED packet builder (no payload) */
+/** CMSG_DUEL_ACCEPTED: the duel flag's guid */
 class DuelAcceptPacket {
 public:
-    static network::Packet build();
+    static network::Packet build(uint64_t arbiterGuid);
 };
 
-/** CMSG_DUEL_CANCELLED packet builder */
+/** CMSG_DUEL_CANCELLED: the duel flag's guid */
 class DuelCancelPacket {
 public:
-    static network::Packet build();
+    static network::Packet build(uint64_t arbiterGuid);
 };
 
 // ============================================================

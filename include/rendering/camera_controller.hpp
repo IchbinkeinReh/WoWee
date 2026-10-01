@@ -660,6 +660,12 @@ private:
     [[nodiscard]] float raymarchTerrainCameraLimit(const glm::vec3& pivot, const glm::vec3& camDir,
                                      float maxDist) const;
 
+    // The terrain a camera at (x, y) must stay above, or nothing when the
+    // character is under the heightfield (a cave, a tunnel) and the terrain
+    // over them is a roof rather than a floor.
+    [[nodiscard]] std::optional<float> cameraTerrainFloor(float x, float y,
+                                                          const glm::vec3& targetPos) const;
+
     // Swimming
     bool swimming = false;
     bool wasSwimming = false;

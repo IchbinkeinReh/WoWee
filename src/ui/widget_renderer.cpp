@@ -377,6 +377,28 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
 /// every tooltip has to have placed its lines before any font string is
 /// measured, or a line whose id fell below its tooltip's would be
 /// measured against the size it had last frame.
+namespace {
+/// A tooltip line with its |n breaks made real. FrameXML writes most of its
+/// multi-line tooltips that way - the Wintergrasp timer's is three lines in
+/// one string - and the markup parser only turns them into newlines as it
+/// draws. Counted before that, the lines read as one row and ran out of the
+/// bottom of the box. "||" is a literal bar and is left alone.
+std::string withRealBreaks(const std::string& text) {
+    if (text.find('|') == std::string::npos) return text;
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '|' && i + 1 < text.size()) {
+            const char next = text[i + 1];
+            if (next == '|') { out += "||"; ++i; continue; }
+            if (next == 'n' || next == 'N') { out += '\n'; ++i; continue; }
+        }
+        out += text[i];
+    }
+    return out;
+}
+}  // namespace
+
 void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree) {
     if (w->tooltipLines.empty()) return;
     // Only something that really is a tooltip. The flag is set by whichever
@@ -401,19 +423,32 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
     // A picture counts toward the width, as it does when the line is
     // drawn. Measured from the stripped text alone, a sell price came out
     // as wide as its digits and the coins hung off the end.
+    // The widest of its lines, where a line breaks: runs are added up only
+    // until a newline, or a colour change on the second line would be
+    // measured as sitting at the end of the first.
     const auto measure = [&](const std::string& text) {
+        float widestLine = 0.0f;
         float total = 0.0f;
         for (const auto& run : parseMarkup(text)) {
             if (!run.texture.empty()) {
                 total += run.texWidth > 0.0f    ? run.texWidth
                        : run.texHeight > 0.0f   ? run.texHeight
                                                 : size;
-            } else {
-                total += font->CalcTextSizeA(size, FLT_MAX, 0.0f,
-                                             run.text.c_str()).x;
+                continue;
+            }
+            std::size_t at = 0;
+            while (true) {
+                const std::size_t brk = run.text.find('\n', at);
+                const std::string piece = run.text.substr(
+                    at, brk == std::string::npos ? std::string::npos : brk - at);
+                total += font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
+                if (brk == std::string::npos) break;
+                widestLine = std::max(widestLine, total);
+                total = 0.0f;
+                at = brk + 1;
             }
         }
-        return total;
+        return std::max(widestLine, total);
     };
     for (const auto& line : w->tooltipLines) {
         // A wrapping line does not set the width - that is what the comment
@@ -455,9 +490,10 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
         // measured six lines as one and the other five fell out of the box.
         int n = 0;
         std::size_t at = 0;
-        while (at <= line.left.size()) {
-            std::size_t brk = line.left.find('\n', at);
-            std::string segment = line.left.substr(
+        const std::string text = withRealBreaks(line.left);
+        while (at <= text.size()) {
+            std::size_t brk = text.find('\n', at);
+            std::string segment = text.substr(
                 at, brk == std::string::npos ? std::string::npos : brk - at);
             if (!segment.empty() && segment.back() == '\r') segment.pop_back();
 
@@ -2382,7 +2418,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 tipRows.reserve(w->tooltipLines.size());
                 int rows = 0;
                 for (const auto& line : w->tooltipLines) {
-                    int n = 1;
+                    // As many rows as the sizing pass counted, breaks and
+                    // all; only a wrapping line is re-counted at this width.
+                    int n = std::max(line.lines, 1);
                     if (line.wrap && tipFont) {
                         const auto broken = wrapText(
                             parseMarkup(line.left), tipTextW, false,
@@ -2390,7 +2428,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                 return tipFont->CalcTextSizeA(
                                     tipSize, FLT_MAX, 0.0f, piece.c_str()).x;
                             });
-                        n = static_cast<int>(broken.empty() ? 1 : broken.size());
+                        n = std::max(static_cast<int>(broken.empty() ? 1 : broken.size()),
+                                     line.lines);
                     }
                     tipRows.push_back(n);
                     rows += n;

@@ -36,6 +36,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "core/env_flag.hpp"
+#include "core/geoset_rules.hpp"
 #include "core/logger.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -3085,8 +3086,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 // displacement moves each mirrored half in opposite screen
                 // directions, producing crossed eyes and a center-squashed
                 // mouth at oblique angles. Keep normal lighting, but never
-                // displace UVs on group 0 body/head surfaces.
-                if (batchGroup == 0) {
+                // displace UVs on group 0 body/head surfaces - nor on the
+                // no-cloak panel, which is a patch of the same torso.
+                if (batchGroup == 0 || batch.submeshId == core::kGeosetNoCape) {
                     normalMap = flatNormalTexture_.get();
                     matData.specularIntensity = 0.20f;
                     matData.enableNormalMap = 0;
@@ -3600,7 +3602,8 @@ VkTexture* CharacterRenderer::resolveBatchTexture(const CharacterInstance& inst,
                             // Only apply skin override to skin groups
                             uint16_t grp = b.submeshId / 100;
                             bool isSkinGroup = (grp == 0 || grp == 3 || grp == 4 || grp == 5 ||
-                                                grp == 8 || grp == 9 || grp == 13 || grp == 20);
+                                                grp == 8 || grp == 9 || grp == 13 || grp == 15 ||
+                                                grp == 20);
                             if (isSkinGroup) texPtr = itO->second;
                         } else {
                             texPtr = itO->second;

@@ -1167,14 +1167,19 @@ network::Packet ReadyCheckConfirmPacket::build(bool ready) {
 // Duel
 // ============================================================
 
-network::Packet DuelAcceptPacket::build() {
+// Both answers name the duel flag. The server reads the guid before anything
+// else, and a packet too short for it is dropped unread - sent empty, as they
+// were, a duel could be neither accepted nor declined.
+network::Packet DuelAcceptPacket::build(uint64_t arbiterGuid) {
     network::Packet packet(wireOpcode(Opcode::CMSG_DUEL_ACCEPTED));
+    packet.writeUInt64(arbiterGuid);
     LOG_DEBUG("Built CMSG_DUEL_ACCEPTED");
     return packet;
 }
 
-network::Packet DuelCancelPacket::build() {
+network::Packet DuelCancelPacket::build(uint64_t arbiterGuid) {
     network::Packet packet(wireOpcode(Opcode::CMSG_DUEL_CANCELLED));
+    packet.writeUInt64(arbiterGuid);
     LOG_DEBUG("Built CMSG_DUEL_CANCELLED");
     return packet;
 }

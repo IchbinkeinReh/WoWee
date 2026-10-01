@@ -49,6 +49,11 @@ public:
 
     [[nodiscard]] const std::unordered_map<uint32_t, uint32_t>& exploreFlagByAreaId() const { return exploreFlagByAreaId_; }
     [[nodiscard]] const std::unordered_map<uint32_t, std::string>& areaNameByAreaId() const { return areaNameByAreaId_; }
+    /// The map an AreaTable row is on, or 0 if unknown.
+    [[nodiscard]] uint32_t mapIdForArea(uint32_t areaId) const {
+        auto it = mapIdByAreaId_.find(areaId);
+        return it == mapIdByAreaId_.end() ? 0 : it->second;
+    }
 
     /// ZMP pixel map accessors.
     static constexpr int ZMP_SIZE = 128;
@@ -84,6 +89,7 @@ private:
     std::vector<CosmicMapEntry> azerothRegions_;
     std::unordered_map<uint32_t, uint32_t> exploreFlagByAreaId_;
     std::unordered_map<uint32_t, std::string> areaNameByAreaId_;
+    std::unordered_map<uint32_t, uint32_t> mapIdByAreaId_;
     int cosmicIdx_ = -1;
     int worldIdx_ = -1;
     int currentMapId_ = -1;

@@ -426,6 +426,15 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
         }
 
         int playerZone = findZoneForPlayer(d.data.zones(), displayPlayerRenderPos, d.playerZoneId);
+        // A zone on this continent that has no map of its own - Hyjal, in
+        // 3.3.5 - opens the continent, as the real client does. Left to the
+        // rectangles, a neighbour whose box reached into it was shown instead.
+        if (d.playerZoneId != 0 &&
+            findZoneByAreaId(d.data.zones(), d.playerZoneId) < 0 &&
+            d.data.mapIdForArea(d.playerZoneId) != 0 &&
+            static_cast<int>(d.data.mapIdForArea(d.playerZoneId)) == d.data.currentMapId()) {
+            playerZone = -1;
+        }
 
         // Some zones are stored on a different physical map from the continent
         // shown by the world-map UI. The draenei islands are the important case:

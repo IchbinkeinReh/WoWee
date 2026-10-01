@@ -107,6 +107,7 @@ struct M2ClassificationResult {
     /// eye, which is where a real beam thins to nothing.
     bool isVolumetricBeam   = false;
     bool isTransportDoodad  = false; ///< Ship sail/paddle child whose motion must remain visible
+    bool isBoat             = false; ///< A small boat, which rides the water if it is left on some
 
     // --- Ambient emitter type (for sound system) ---
     AmbientEmitterType ambientEmitterType = AmbientEmitterType::None;

@@ -38,6 +38,7 @@ layout(set = 1, binding = 0) uniform WaterMaterial {
     float waterAlpha;
     float shimmerStrength;
     float alphaScale;
+    float bodyFloor;   // least the water's own colour shows, however shallow
 };
 
 layout(set = 2, binding = 0) uniform sampler2D SceneColor;
@@ -400,7 +401,7 @@ void main() {
 
     vec3 shallowColor = waterColor.rgb * 1.2;
     vec3 deepColor = waterColor.rgb * vec3(0.3, 0.5, 0.7);
-    float depthFade = 1.0 - exp(-verticalDepth * 0.15);
+    float depthFade = max(1.0 - exp(-verticalDepth * 0.15), bodyFloor);
     vec3 waterBody = mix(shallowColor, deepColor, depthFade);
 
     // Whether the refraction capture holds a frame is a fact the renderer

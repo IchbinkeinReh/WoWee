@@ -625,6 +625,11 @@ private:
     // Duel
     bool pendingDuelRequest_    = false;
     uint64_t duelChallengerGuid_= 0;
+    uint64_t duelArbiterGuid_   = 0;   // the duel flag; both answers name it
+
+    // A join the server has not answered yet, and how long it has left.
+    uint32_t bgJoinPendingType_ = 0;
+    float bgJoinWaitSec_        = 0.0f;
     std::string duelChallengerName_;
     uint32_t duelCountdownMs_   = 0;
     std::chrono::steady_clock::time_point duelCountdownStartedAt_{};

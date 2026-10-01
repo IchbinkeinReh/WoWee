@@ -1719,6 +1719,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                  "' will be softened and hazed");
     }
     gpuModel.isTransportDoodad           = cls.isTransportDoodad;
+    gpuModel.isBoat                      = cls.isBoat;
     gpuModel.ambientEmitterType          = cls.ambientEmitterType;
     gpuModel.boundMin = tightMin;
     gpuModel.boundMax = tightMax;

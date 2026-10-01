@@ -1268,7 +1268,8 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
         "  end)\n"
         "end\n");
 
-    // Let the bag windows and the character sheet be dragged around.
+    // Let the bag windows, the character sheet and the PvP panels be dragged
+    // around.
     //
     // A deliberate departure from 3.3.5, where neither can be moved: the bags
     // arrange themselves up the right-hand side and the character sheet is a
@@ -1285,7 +1286,35 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
         "  f:SetScript('OnDragStop', function(self) self:StopMovingOrSizing() end)\n"
         "end\n"
         "for i = 1, 13 do draggable(_G['ContainerFrame' .. i]) end\n"
-        "draggable(CharacterFrame)\n");
+        "draggable(CharacterFrame)\n"
+        // The PvP window (H), the battlemaster's list and the scoreboard -
+        // asked for with the rest, and fixed panels in 3.3.5 for the same
+        // reason the character sheet is.
+        "draggable(PVPParentFrame)\n"
+        "draggable(BattlefieldFrame)\n"
+        "draggable(WorldStateScoreFrame)\n");
+
+    // The PvP window and the battlemaster's list open in the middle of the
+    // screen, where they were asked for.
+    //
+    // Both are "left" panels in UIPanelWindows, which the panel manager
+    // re-anchors to the left edge every time one opens - so an anchor set
+    // here would be overwritten on the next show. Out of that table,
+    // ShowUIPanel and HideUIPanel simply show and hide them; UISpecialFrames
+    // keeps Escape closing them, which the panel table used to do.
+    luaEngine_.executeString(
+        "local function centered(f)\n"
+        "  if not f or not UIPanelWindows then return end\n"
+        "  local name = f:GetName()\n"
+        "  UIPanelWindows[name] = nil\n"
+        "  if UISpecialFrames then tinsert(UISpecialFrames, name) end\n"
+        "  f:HookScript('OnShow', function(self)\n"
+        "    self:ClearAllPoints()\n"
+        "    self:SetPoint('CENTER', UIParent, 'CENTER')\n"
+        "  end)\n"
+        "end\n"
+        "centered(PVPParentFrame)\n"
+        "centered(BattlefieldFrame)\n");
 
     // A search box on the trainer, which 3.3.5 has no equivalent of.
     //

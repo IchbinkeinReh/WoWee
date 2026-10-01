@@ -4462,7 +4462,7 @@ static int lua_JoinBattlefield(lua_State* L) {
     // is not what the real client sends. Nought is.
     const uint64_t battlemaster =
         gh->isGossipWindowOpen() ? gh->getCurrentGossip().npcGuid : 0;
-    LOG_INFO("CMSG_BATTLEMASTER_JOIN: bgTypeId=", bgTypeId, " instance=", instanceId,
+    LOG_WARNING("CMSG_BATTLEMASTER_JOIN: bgTypeId=", bgTypeId, " instance=", instanceId,
              " asGroup=", asGroup, " battlemaster=0x", std::hex, battlemaster, std::dec);
     gh->joinBattlefield(battlemaster, bgTypeId, instanceId, asGroup);
     return 0;
@@ -5744,9 +5744,19 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetBattlefieldTimeWaited", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 1));
+            // Counted on from the server's last word, which comes about once
+            // a minute - answered as it stood, the minimap tooltip's time in
+            // queue sat still for a minute and then jumped.
             double ms = 0.0;
-            if (gh && index >= 1 && index <= 3)
-                ms = gh->getBgQueues()[static_cast<size_t>(index - 1)].timeInQueueSec * 1000.0;
+            if (gh && index >= 1 && index <= 3) {
+                const auto& q = gh->getBgQueues()[static_cast<size_t>(index - 1)];
+                ms = q.timeInQueueSec * 1000.0;
+                if (q.statusId == 1 &&
+                    q.queueTimeReceivedAt != std::chrono::steady_clock::time_point{}) {
+                    ms += std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - q.queueTimeReceivedAt).count();
+                }
+            }
             lua_pushnumber(L, ms);
             return 1;
         }},

@@ -2920,11 +2920,19 @@ void registerUnitLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"AcceptBattlefieldPort", [](lua_State* L) -> int {
+            // AcceptBattlefieldPort(queue, accept): the queue counts from one,
+            // and a refusal is also how a queue still waiting is left. The
+            // queue used to be dropped, which sent every answer to whichever
+            // slot held an invitation - so Leave Queue on a queue that had not
+            // popped found none and did nothing.
             auto* gh = getGameHandler(L);
+            const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const uint32_t slot = (idx >= 1 && idx <= 3) ? static_cast<uint32_t>(idx - 1)
+                                                         : 0xFFFFFFFFu;
             int accept = lua_toboolean(L, 2);
             if (gh) {
-                if (accept) gh->acceptBattlefield();
-                else gh->declineBattlefield();
+                if (accept) gh->acceptBattlefield(slot);
+                else gh->declineBattlefield(slot);
             }
             return 0;
         }},

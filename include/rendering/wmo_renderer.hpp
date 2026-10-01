@@ -477,7 +477,7 @@ private:
         float wmoAmbientG;         // 56 (interior ambient color G)
         float wmoAmbientB;         // 60 (interior ambient color B)
         int32_t emissive;           // 64 (0 none, 1 lamp glass, 2 firelit)
-        int32_t padding0;           // 68
+        int32_t hasVertexColors;    // 68: the group carries MOCV (MOGP flag 0x4)
         int32_t padding1;           // 72
         int32_t padding2;           // 76
     };  // 80 bytes total

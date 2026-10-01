@@ -199,6 +199,10 @@ private:
     VkSampler sceneDepthSampler = VK_NULL_HANDLE;
     // Per-frame scene history to avoid race between frames in flight
     static constexpr uint32_t SCENE_HISTORY_FRAMES = 2;
+    // One reflection/wake UBO slot per frame in flight, at an offset every
+    // device accepts for a uniform buffer (Vulkan caps the alignment at 256).
+    static constexpr VkDeviceSize kFrameUBOStride =
+        (sizeof(WaterFrameUBOData) + 255) / 256 * 256;
     struct PerFrameSceneHistory {
         VkImage colorImage = VK_NULL_HANDLE;
         VmaAllocation colorAlloc = VK_NULL_HANDLE;
