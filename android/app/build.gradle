@@ -114,10 +114,27 @@ android {
     // a desktop build directory is: everything, music included.
     sourceSets.debug.assets.srcDirs = [stagedMusic]
 
+    // A key that stays the same from one build to the next, when the
+    // environment names one. Android only lets an APK replace an installed one
+    // signed by the same key, and the debug key is generated afresh on every CI
+    // runner - so without this each build had to be installed over an
+    // uninstall, taking the app's data with it.
+    def keystoreFile = System.getenv('WOWEE_KEYSTORE_FILE')
+    signingConfigs {
+        if (keystoreFile) {
+            stable {
+                storeFile file(keystoreFile)
+                storePassword System.getenv('WOWEE_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('WOWEE_KEY_ALIAS')
+                keyPassword System.getenv('WOWEE_KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            signingConfig keystoreFile ? signingConfigs.stable : signingConfigs.debug
         }
     }
     compileOptions {

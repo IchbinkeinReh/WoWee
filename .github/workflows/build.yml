@@ -738,8 +738,18 @@ jobs:
 
     - name: Build the APK
       working-directory: android
+      env:
+        # A repository with these secrets signs every build with one key, so
+        # each APK installs over the last; without them it is the debug key.
+        ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        WOWEE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        WOWEE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       run: |
         export ANDROID_NDK_ROOT="${ANDROID_HOME}/ndk/28.2.13676358"
+        if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
+          export WOWEE_KEYSTORE_FILE="${RUNNER_TEMP}/wowee.jks"
+          echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${WOWEE_KEYSTORE_FILE}"
+        fi
         ./gradlew :app:assembleRelease --no-daemon
 
     - name: Upload APK
