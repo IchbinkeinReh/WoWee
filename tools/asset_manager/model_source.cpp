@@ -40,7 +40,7 @@ public:
             tools::Extractor::archiveChain(mpqDir, expansion, "");
         for (const std::string& path : chain) {
             HANDLE handle = nullptr;
-            if (SFileOpenArchive(path.c_str(), 0, 0, &handle)) handles_.push_back(handle);
+            if (SFileOpenArchive(path.c_str(), 0, MPQ_OPEN_READ_ONLY, &handle)) handles_.push_back(handle);
         }
         if (handles_.empty()) {
             if (error != nullptr) {
