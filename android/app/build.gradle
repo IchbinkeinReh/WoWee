@@ -43,14 +43,67 @@ def gitVersionCode = {
 def stagedAssets = layout.buildDirectory.dir("staged-assets")
 def stagedMusic = layout.buildDirectory.dir("staged-music")
 
+def shaderSources = file("${repoRoot}/assets/shaders")
+def compiledShaders = layout.buildDirectory.dir("compiled-shaders")
+
+// Every shader compiled from its GLSL, with the glslc the NDK carries.
+//
+// The APK took the .spv committed beside the GLSL and nothing else, and
+// several shaders have never had one committed - the grass, the Hi-Z culling,
+// the world map's fog - so on Android those failed to load. The committed ones
+// could also be older than their source. CMake compiles them on the desktop,
+// but only with a glslc it finds on the host, which the Android build has no
+// reason to have; the NDK always does.
+tasks.register('compileShaders') {
+    inputs.files(fileTree(shaderSources) { include '*.glsl', '*.glsli' })
+    outputs.dir(compiledShaders)
+    doLast {
+        def hostTools = new File(android.ndkDirectory, 'shader-tools').listFiles()?.find { it.isDirectory() }
+        if (hostTools == null) {
+            throw new GradleException("No shader-tools in the NDK at ${android.ndkDirectory}")
+        }
+        def glslc = new File(hostTools, System.getProperty('os.name').toLowerCase().contains('windows')
+                ? 'glslc.exe' : 'glslc')
+        def out = compiledShaders.get().asFile
+        out.mkdirs()
+
+        def stages = [vert: 'vertex', frag: 'fragment', comp: 'compute', geom: 'geometry']
+        def jobs = []
+        fileTree(shaderSources) { include '*.glsl' }.each { src ->
+            def m = src.name =~ /\.(vert|frag|comp|geom)\.glsl$/
+            if (!m.find()) return
+            jobs << [src, src.name.replaceFirst(/\.glsl$/, '.spv'), ["-fshader-stage=${stages[m.group(1)]}"]]
+        }
+        // The variants CMakeLists.txt builds from one source with extra
+        // definitions (SHADER_VARIANTS there); keep the two lists alike.
+        jobs << [new File(shaderSources, 'rt_prepare.comp.glsl'), 'rt_prepare_ms.comp.spv',
+                 ['-fshader-stage=compute', '-DRT_MSAA']]
+        jobs << [new File(shaderSources, 'rt_trace.comp.glsl'), 'rt_trace_hw.comp.spv',
+                 ['-fshader-stage=compute', '-DRT_HARDWARE', '--target-env=vulkan1.2']]
+
+        jobs.each { job ->
+            exec {
+                commandLine([glslc.absolutePath] + job[2] +
+                            ['-O', job[0].absolutePath, '-o', new File(out, job[1]).absolutePath])
+            }
+        }
+        logger.lifecycle("Compiled ${jobs.size()} shaders with ${glslc}")
+    }
+}
+
 // The same payload the desktop and macOS releases ship: assets/ without the
 // original music, and the git-tracked Data JSONs. Game data is not here - the
 // player extracts that from their own install and copies it in.
 tasks.register('stageAssets', Copy) {
     into stagedAssets
+    // The shaders from compileShaders, not the committed .spv.
     from("${repoRoot}/assets") {
         into 'assets'
         exclude 'Original Music/**'
+        exclude 'shaders/*.spv'
+    }
+    from(tasks.named('compileShaders')) {
+        into 'assets/shaders'
     }
     // Exactly the files `git ls-files Data/` lists. A recursive glob here also
     // catches the overlay manifests a local extraction generates, which are
