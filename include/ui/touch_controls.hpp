@@ -2,6 +2,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstdint>
+
 namespace wowee {
 namespace rendering { class CameraController; }
 namespace ui {
@@ -19,6 +21,10 @@ namespace ui {
  * only what it needs: a thumb in the lower-left corner becomes a movement
  * stick, and two fingers spreading become the camera zoom. Everything else is
  * left alone.
+ *
+ * A finger held still is a right click, which a touch screen otherwise has no
+ * way to make: the menu on a unit frame or a name in chat - where Invite is -
+ * and interacting with whatever in the world is under the finger.
  *
  * The stick's own finger is also the one SDL is reporting as a held mouse
  * button, which would orbit the camera the whole time the player walked. So
@@ -45,7 +51,8 @@ public:
 
     void handleEvent(const SDL_Event& event, int windowWidth, int windowHeight);
 
-    /// Applies the stick to the movement keys. Once a frame, after events.
+    /// Applies the stick to the movement keys, and turns a finger held still
+    /// into a right click. Once a frame, after events.
     void update();
 
     /// Draws the stick where the thumb put it. Nothing when idle.
@@ -80,8 +87,18 @@ private:
     /// How far a look finger travels before it counts as a drag rather than a
     /// tap, so that selecting a target does not also swing the view.
     static constexpr float kLookSlopPixels = 16.0f;
+    /// How long a finger stays put before it is a right click. Long enough that
+    /// a tap is never one, short enough not to feel like waiting.
+    static constexpr uint64_t kLongPressMs = 500;
+    /// When the ring that shows a long press coming starts to draw, so a plain
+    /// tap does not flash one.
+    static constexpr uint64_t kLongPressHintMs = 150;
 
     void setMovementKeys(bool forward, bool back, bool left, bool right) const;
+    /// A look finger held still long enough becomes a right click.
+    void updateLongPress();
+    /// Lets go of what a long press is holding.
+    void endLongPress();
     /// Full deflection in real pixels, from the display's density.
     [[nodiscard]] float stickRadius() const;
     /// Held with hysteresis: a direction already on lets go later than it came on.
@@ -102,6 +119,13 @@ private:
     float lookX_ = 0.0f, lookY_ = 0.0f;
     bool lookMoved_ = false;
     float lookTravel_ = 0.0f;
+    uint64_t lookDownMs_ = 0;
+    // The long press on the look finger: whether it has fired, whether the
+    // right button it pressed is still down (it is let go the next frame), and
+    // whether the left button the finger is holding is being read as up.
+    bool longPressFired_ = false;
+    bool rightHeld_ = false;
+    bool leftMasked_ = false;
 
     SDL_FingerID pinchA_ = kNoFinger, pinchB_ = kNoFinger;
     float pinchAX_ = 0.0f, pinchAY_ = 0.0f;

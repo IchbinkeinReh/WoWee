@@ -34,6 +34,11 @@ public:
     /// mouse. The pointer itself is the real one - it is warped, so everything
     /// that asks where it is gets the truth - and only the button is faked.
     void setVirtualMouseButton(int button, bool held);
+    /// Reads a button as up even while the device holds it down. A touch
+    /// screen's long press is a right click, and the finger is still pressing
+    /// the left button SDL made of it - read as held, it would turn the right
+    /// click into both buttons, which is walking forward.
+    void setMouseButtonMasked(int button, bool masked);
     [[nodiscard]] bool isKeyJustPressed(SDL_Scancode key) const;
 
     // Mouse
@@ -61,6 +66,7 @@ private:
 
     std::array<bool, NUM_MOUSE_BUTTONS> currentMouseState = {};
     std::array<bool, NUM_MOUSE_BUTTONS> virtualMouseState = {};
+    std::array<bool, NUM_MOUSE_BUTTONS> maskedMouseState = {};
     std::array<bool, NUM_MOUSE_BUTTONS> previousMouseState = {};
 
     glm::vec2 mousePosition = glm::vec2(0.0f);

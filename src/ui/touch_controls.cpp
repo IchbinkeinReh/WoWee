@@ -87,6 +87,8 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
             lookY_ = y;
             lookMoved_ = false;
             lookTravel_ = 0.0f;
+            lookDownMs_ = SDL_GetTicks();
+            longPressFired_ = false;
         }
         if (pinchA_ == kNoFinger) {
             pinchA_ = id; pinchAX_ = x; pinchAY_ = y;
@@ -107,6 +109,12 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
             if (id == lookFingerId_) {
                 lookFingerId_ = kNoFinger;
                 lookMoved_ = false;
+                // The finger is off, so SDL has let go of its left button and
+                // there is nothing left to read as up.
+                if (leftMasked_) {
+                    core::Input::getInstance().setMouseButtonMasked(SDL_BUTTON_LEFT, false);
+                    leftMasked_ = false;
+                }
             }
             if (id == pinchA_) { pinchA_ = kNoFinger; pinching_ = false; }
             if (id == pinchB_) { pinchB_ = kNoFinger; pinching_ = false; }
@@ -160,7 +168,56 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
     SDL_PushEvent(&wheel);
 }
 
+void TouchControls::updateLongPress() {
+    auto& input = core::Input::getInstance();
+    // Pressed last frame, let go this one: a click, which is what both the
+    // world's targeting and the interface's OnClick wait for the release of.
+    if (rightHeld_) {
+        input.setVirtualMouseButton(SDL_BUTTON_RIGHT, false);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        rightHeld_ = false;
+    }
+    if (!inWorld_ || longPressFired_ || lookFingerId_ == kNoFinger || lookMoved_ ||
+        pinchB_ != kNoFinger) {
+        return;
+    }
+    if (SDL_GetTicks() - lookDownMs_ < kLongPressMs) return;
+    longPressFired_ = true;
+    LOG_DEBUG("touch: long press at ", lookX_, ",", lookY_, " - right click");
+
+    // The left button first. The finger has held it since it went down, and
+    // the world reads both buttons at once as walking forward - and the
+    // world's right click only counts with the left one up.
+    //
+    // Both channels, as the gamepad presses its buttons: the world polls
+    // core::Input, and every panel asks ImGui. ImGui hands the queued changes
+    // out a frame at a time, so the left button lets go before the right one
+    // goes down, and the interface sees a right click on its own.
+    input.setMouseButtonMasked(SDL_BUTTON_LEFT, true);
+    leftMasked_ = true;
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+
+    input.setVirtualMouseButton(SDL_BUTTON_RIGHT, true);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+    rightHeld_ = true;
+}
+
+void TouchControls::endLongPress() {
+    auto& input = core::Input::getInstance();
+    if (rightHeld_) {
+        input.setVirtualMouseButton(SDL_BUTTON_RIGHT, false);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        rightHeld_ = false;
+    }
+    if (leftMasked_) {
+        input.setMouseButtonMasked(SDL_BUTTON_LEFT, false);
+        leftMasked_ = false;
+    }
+    longPressFired_ = false;
+}
+
 void TouchControls::update() {
+    updateLongPress();
     if (!inWorld_ || stickFingerId_ == kNoFinger) {
         wasForward_ = wasBack_ = wasLeft_ = wasRight_ = false;
         setMovementKeys(false, false, false, false);
@@ -180,7 +237,28 @@ void TouchControls::update() {
 }
 
 void TouchControls::draw() const {
-    if (!inWorld_ || stickFingerId_ == kNoFinger) return;
+    if (!inWorld_) return;
+
+    // A ring closing round a finger held still, so a long press can be seen
+    // coming and the finger lifted in time if a right click was not meant. In
+    // front of everything, because the finger is usually on a frame.
+    if (lookFingerId_ != kNoFinger && !lookMoved_ && !longPressFired_ &&
+        pinchB_ == kNoFinger) {
+        const uint64_t held = SDL_GetTicks() - lookDownMs_;
+        if (held >= kLongPressHintMs) {
+            if (ImDrawList* fg = ImGui::GetForegroundDrawList()) {
+                const float t = std::min(1.0f, static_cast<float>(held - kLongPressHintMs) /
+                                                   static_cast<float>(kLongPressMs - kLongPressHintMs));
+                const float r = stickRadius() * 0.35f;
+                const ImVec2 c(lookX_, lookY_);
+                constexpr float kTop = -1.5707963f;
+                fg->PathArcTo(c, r, kTop, kTop + t * 6.2831853f, 40);
+                fg->PathStroke(IM_COL32(255, 255, 255, 170), 0, 4.0f);
+            }
+        }
+    }
+
+    if (stickFingerId_ == kNoFinger) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     if (!dl) return;
     const float radius = stickRadius();
@@ -202,6 +280,7 @@ void TouchControls::reset() {
     pinching_ = false;
     stickX_ = stickY_ = 0.0f;
     wasForward_ = wasBack_ = wasLeft_ = wasRight_ = false;
+    endLongPress();
     // Everything the stick could be holding, not just the four it uses now.
     core::Input::getInstance().clearVirtualKeys();
 }

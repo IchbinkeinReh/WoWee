@@ -791,6 +791,49 @@ void GameScreen::renderWorldMap(game::GameHandler& gameHandler) {
     int screenH = window ? window->getHeight() : 720;
     wm->render(playerPos, screenW, screenH, playerYaw);
 
+#ifdef __ANDROID__
+    // A close button a finger can find. On a desktop the map closes with M or
+    // Escape, and hosted in FrameXML's frame it has no title bar and so no X
+    // of its own - which on a phone, with no keyboard, was a map that opened
+    // and could not be closed. Back closes it as Escape does; this is the
+    // button for whoever does not think to try that.
+    if (wm->isOpen() || wm->isTaxiMapOpen()) {
+        const ImGuiIO& io = ImGui::GetIO();
+        const float side = ImGui::GetFrameHeight() * 1.8f;
+        const float margin = side * 0.4f;
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - side - margin, margin));
+        // In front of the map, which takes focus whenever it is touched.
+        ImGui::SetNextWindowFocus();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, side * 0.5f);
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                       ImGuiWindowFlags_NoSavedSettings |
+                                       ImGuiWindowFlags_AlwaysAutoResize |
+                                       ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav;
+        if (ImGui::Begin("##WorldMapClose", nullptr, flags)) {
+            if (ImGui::Button("X", ImVec2(side, side))) {
+                if (wm->isTaxiMapOpen()) {
+                    gameHandler.closeTaxi();
+                } else if (frameXmlDrivesMap) {
+                    // FrameXML's frame is what holds the map open; hiding it
+                    // takes the map's rect away and the map with it.
+                    if (auto* addons = app.getAddonManager()) {
+                        if (auto* engine = addons->getLuaEngine()) {
+                            engine->executeString(
+                                "if WorldMapFrame and WorldMapFrame:IsShown() then "
+                                "HideUIPanel(WorldMapFrame) end");
+                        }
+                    }
+                } else {
+                    wm->close();
+                }
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+    }
+#endif
+
     // Sync showWorldMap_ if the map closed itself (e.g. ESC key inside the overlay).
     // Only where that flag is what opened it: under FrameXML the frame's own
     // visibility is the state, and clearing this would say nothing.

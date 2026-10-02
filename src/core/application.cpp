@@ -1484,6 +1484,15 @@ void Application::run() {
                 ui::touchControls().handleEvent(event, tw, th);
             }
 
+            // Back is Escape. A phone has no Escape key, and Escape is what
+            // closes the map, the bags and every dialog, and opens the game
+            // menu - so without this the map could be opened and not closed.
+            if ((event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
+                event.key.scancode == SDL_SCANCODE_AC_BACK) {
+                event.key.scancode = SDL_SCANCODE_ESCAPE;
+                event.key.key = SDLK_ESCAPE;
+            }
+
             // The activity going to the background takes the native window with
             // it, and the Vulkan surface and swapchain built on it die at the
             // same moment. Drawing to them afterwards is what left the client on

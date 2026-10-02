@@ -82,6 +82,12 @@ bool Window::initialize() {
     // released separately and the frame is skipped while it is gone.
     SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
 
+    // The back button or gesture is this client's Escape (the event loop
+    // translates it), so it closes the map, a bag or a dialog. Untrapped, the
+    // system took it and the activity left - and with no keyboard there was no
+    // other way to close a window that had no close button of its own.
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+
 #endif
 
     // Initialize SDL
