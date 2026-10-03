@@ -1124,6 +1124,35 @@ end
 end
 )LUA";
 
+inline constexpr const char* kWorldMapFitLua = R"LUA(
+-- The full-size world map is laid out on WorldMapPositioningGuide, 1024 by 768
+-- units: exactly the height the interface always has in the real client, where
+-- the interface scale stops at 1.0. This client lets it go higher, and the
+-- interface is then 768 / scale units tall - so the map, which does not shrink
+-- with it, ran off the top and bottom of the screen. A phone, where the scale
+-- is turned up to make the text readable, is where that showed.
+--
+-- Scaled down until the guide fits, and never up. Checked as it opens and
+-- while it is open, since the scale and the window can change under it, and
+-- there is no event for the former.
+if WorldMapFrame and WorldMapFrame.HookScript and UIParent then
+    local fitted = nil
+    local function fit()
+        local w, h = UIParent:GetWidth(), UIParent:GetHeight()
+        if not w or not h or w <= 0 or h <= 0 then return end
+        local key = w * 100000 + h
+        if key == fitted then return end
+        fitted = key
+        local scale = math.min(1, h / 768, w / 1024)
+        if math.abs((WorldMapFrame:GetScale() or 1) - scale) > 0.001 then
+            WorldMapFrame:SetScale(scale)
+        end
+    end
+    WorldMapFrame:HookScript("OnShow", function() fitted = nil; fit() end)
+    WorldMapFrame:HookScript("OnUpdate", fit)
+end
+)LUA";
+
 inline constexpr const char* kRemovedControlsLua = R"LUA(
 local kRemoved = {
     -- Sound is mixed in software at the device's own rate, with no effect

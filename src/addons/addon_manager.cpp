@@ -588,6 +588,11 @@ void AddonManager::giveCoinAmountsClearance() {
         LOG_WARNING("Minimap north tag did not apply: ", luaEngine_.lastError());
     }
 
+    // The full-size world map, shrunk to fit an interface scaled above 1.0.
+    if (!luaEngine_.executeString(kWorldMapFitLua)) {
+        LOG_WARNING("World map fit did not apply: ", luaEngine_.lastError());
+    }
+
     // Every control for something this client does not do, taken off the panel.
     if (!luaEngine_.executeString(kRemovedControlsLua)) {
         LOG_WARNING("Removed controls did not apply: ", luaEngine_.lastError());
