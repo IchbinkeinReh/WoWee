@@ -780,6 +780,26 @@ private:
     static constexpr uint32_t kShadowTexPoolFrames = 2;
     VkDescriptorPool shadowTexPool_[kShadowTexPoolFrames] = {};
 
+    // The instanced shadow path (m2_shadow.vert): each caster's model matrix,
+    // one buffer per frame in flight, read by the shader by instance. Set 1 of
+    // its layout is instanceSetLayout_; set 0 and the push range are the plain
+    // shadow pipeline's, so the two can share what is bound there. A null
+    // pipeline means it could not be built, and renderShadow then draws every
+    // caster one instance at a time.
+    VkPipeline shadowInstancedPipeline_ = VK_NULL_HANDLE;
+    VkPipelineLayout shadowInstancedLayout_ = VK_NULL_HANDLE;
+    static constexpr uint32_t kMaxShadowInstances = 32768;  // 2 MB a frame
+    VkDescriptorPool shadowInstanceDescPool_ = VK_NULL_HANDLE;
+    ::VkBuffer shadowInstanceBuffer_[2] = {};
+    VmaAllocation shadowInstanceAlloc_[2] = {};
+    void* shadowInstanceMapped_[2] = {};
+    VkDescriptorSet shadowInstanceSet_[2] = {};
+    /// Builds the above. False leaves the plain path to draw everything.
+    bool initializeInstancedShadow(VkRenderPass shadowRenderPass,
+                                   const VkPipelineShaderStageCreateInfo& fragStage,
+                                   const VkVertexInputBindingDescription& vertBind,
+                                   const std::vector<VkVertexInputAttributeDescription>& vertAttrs);
+
     // Particle pipelines
     VkPipeline particlePipeline_ = VK_NULL_HANDLE;       // M2 emitter particles
     VkPipeline particleAdditivePipeline_ = VK_NULL_HANDLE; // Additive particle blend

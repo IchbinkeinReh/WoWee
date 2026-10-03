@@ -274,6 +274,8 @@ public:
     /// False on hardware without fillModeNonSolid, where a VK_POLYGON_MODE_LINE
     /// pipeline cannot be built and the wireframe views are unavailable.
     [[nodiscard]] bool isWireframeSupported() const { return fillModeNonSolidSupported_; }
+    [[nodiscard]] bool isMultiDrawIndirectSupported() const { return multiDrawIndirectSupported_; }
+    [[nodiscard]] uint32_t getMaxDrawIndirectCount() const { return maxDrawIndirectCount_; }
     /// False on hardware missing shaderStorageImageWriteWithoutFormat or
     /// shaderInt16, which the FSR2 compute shaders both need.
     [[nodiscard]] bool areFsr2ComputeFeaturesSupported() const {
@@ -612,6 +614,8 @@ private:
     std::unordered_map<uint64_t, VkSampler> samplerCache_;
     bool samplerAnisotropySupported_ = false;
     bool fillModeNonSolidSupported_ = false;
+    bool multiDrawIndirectSupported_ = false;
+    uint32_t maxDrawIndirectCount_ = 1;
     bool fsr2ComputeFeaturesSupported_ = false;
     bool blockCompressionSupported_ = false;
     /// True when the swapchain was built with a transform the surface is not

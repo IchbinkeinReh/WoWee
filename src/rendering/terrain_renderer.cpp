@@ -251,7 +251,9 @@ bool TerrainRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
             LOG_WARNING("TerrainRenderer: mega IB allocation failed, per-chunk fallback");
         }
 
-        // Indirect draw command buffer
+        // The shadow pass's draw commands, one buffer per frame in flight.
+        static_assert(kIndirectFrames == MAX_FRAMES_IN_FLIGHT,
+                      "one indirect buffer per frame in flight");
         VkBufferCreateInfo indCI{};
         indCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         indCI.size = MAX_INDIRECT_DRAWS * sizeof(VkDrawIndexedIndirectCommand);
@@ -259,11 +261,15 @@ bool TerrainRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
         VmaAllocationCreateInfo indAllocCI{};
         indAllocCI.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
         indAllocCI.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        VmaAllocationInfo indInfo{};
-        if (vmaCreateBuffer(allocator, &indCI, &indAllocCI,
-                &indirectBuffer_, &indirectAlloc_, &indInfo) == VK_SUCCESS) {
-        } else {
-            LOG_WARNING("TerrainRenderer: indirect buffer allocation failed");
+        for (uint32_t f = 0; f < kIndirectFrames; ++f) {
+            VmaAllocationInfo indInfo{};
+            if (vmaCreateBuffer(allocator, &indCI, &indAllocCI,
+                    &indirectBuffer_[f], &indirectAlloc_[f], &indInfo) == VK_SUCCESS) {
+                indirectMapped_[f] = indInfo.pMappedData;
+            } else {
+                LOG_WARNING("TerrainRenderer: indirect buffer allocation failed; "
+                            "the shadow pass draws chunk by chunk");
+            }
         }
 
         LOG_INFO("Terrain mega buffers: VB=", vbCI.size / (1024*1024), "MB IB=",
@@ -343,7 +349,14 @@ void TerrainRenderer::shutdown() {
     // Destroy mega buffers and indirect draw buffer
     if (megaVB_) { vmaDestroyBuffer(allocator, megaVB_, megaVBAlloc_); megaVB_ = VK_NULL_HANDLE; megaVBAlloc_ = VK_NULL_HANDLE; megaVBMapped_ = nullptr; }
     if (megaIB_) { vmaDestroyBuffer(allocator, megaIB_, megaIBAlloc_); megaIB_ = VK_NULL_HANDLE; megaIBAlloc_ = VK_NULL_HANDLE; megaIBMapped_ = nullptr; }
-    if (indirectBuffer_) { vmaDestroyBuffer(allocator, indirectBuffer_, indirectAlloc_); indirectBuffer_ = VK_NULL_HANDLE; indirectAlloc_ = VK_NULL_HANDLE; }
+    for (uint32_t f = 0; f < kIndirectFrames; ++f) {
+        if (indirectBuffer_[f]) {
+            vmaDestroyBuffer(allocator, indirectBuffer_[f], indirectAlloc_[f]);
+            indirectBuffer_[f] = VK_NULL_HANDLE;
+            indirectAlloc_[f] = VK_NULL_HANDLE;
+            indirectMapped_[f] = nullptr;
+        }
+    }
     megaVBUsed_ = 0;
     megaIBUsed_ = 0;
 
@@ -1114,6 +1127,19 @@ void TerrainRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSp
     const float scaleY = glm::length(glm::vec3(lightSpaceMatrix[0][1], lightSpaceMatrix[1][1],
                                                lightSpaceMatrix[2][1]));
 
+    // Every chunk in the mega buffers shares the pipeline, the buffers and the
+    // one push constant, so nothing changes between their draws: they are
+    // written into this frame's indirect buffer and issued as one draw after
+    // the loop, where they used to be a draw call each - thousands of them
+    // with the sun low. A chunk outside the mega buffers, or a device without
+    // multi-draw, draws on its own as before.
+    const uint32_t frame = vkCtx->getCurrentFrame();
+    auto* queuedDraws = (useMegaShadow && vkCtx->isMultiDrawIndirectSupported() &&
+                         frame < kIndirectFrames)
+        ? static_cast<VkDrawIndexedIndirectCommand*>(indirectMapped_[frame])
+        : nullptr;
+    uint32_t queuedCount = 0;
+
     uint32_t shadowChunksDrawn = 0;
     for (const auto& chunk : chunks) {
         if (!chunk.isValid()) continue;
@@ -1126,6 +1152,16 @@ void TerrainRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSp
         // Depth grows away from the light in either depth convention.
         if (ls.z > centreLs.z + (shadowRadius + chunk.boundingSphereRadius) * scaleZ) continue;
         ++shadowChunksDrawn;
+
+        if (queuedDraws && chunk.megaBaseVertex >= 0 && queuedCount < MAX_INDIRECT_DRAWS) {
+            queuedDraws[queuedCount++] = VkDrawIndexedIndirectCommand{
+                .indexCount = chunk.indexCount,
+                .instanceCount = 1,
+                .firstIndex = chunk.megaFirstIndex,
+                .vertexOffset = chunk.megaBaseVertex,
+                .firstInstance = 0};
+            continue;
+        }
 
         if (useMegaShadow && chunk.megaBaseVertex >= 0) {
             // Rebound after a fallback chunk, for the reason given in the main
@@ -1144,6 +1180,26 @@ void TerrainRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSp
             vkCmdBindIndexBuffer(cmd, chunk.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(cmd, chunk.indexCount, 1, 0, 0, 0);
             megaShadowBound = false;
+        }
+    }
+
+    if (queuedCount > 0) {
+        constexpr VkDeviceSize stride = sizeof(VkDrawIndexedIndirectCommand);
+        // A no-op on coherent memory, which CPU_TO_GPU nearly always is.
+        vmaFlushAllocation(vkCtx->getAllocator(), indirectAlloc_[frame], 0, queuedCount * stride);
+        // A fallback chunk above may have left its own buffers bound.
+        if (!megaShadowBound) {
+            VkDeviceSize megaOffset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &megaVB_, &megaOffset);
+            vkCmdBindIndexBuffer(cmd, megaIB_, 0, VK_INDEX_TYPE_UINT32);
+        }
+        // In pieces no larger than the device takes in one call; with
+        // multi-draw that is at least 2^16, so in practice this is one draw.
+        const uint32_t perCall = std::max(vkCtx->getMaxDrawIndirectCount(), 1u);
+        for (uint32_t first = 0; first < queuedCount; first += perCall) {
+            vkCmdDrawIndexedIndirect(cmd, indirectBuffer_[frame], first * stride,
+                                     std::min(perCall, queuedCount - first),
+                                     static_cast<uint32_t>(stride));
         }
     }
     // How many chunks cast, said when it moves by a quarter: the count is the

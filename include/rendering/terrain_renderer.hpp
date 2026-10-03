@@ -270,7 +270,8 @@ private:
 
     // Mega vertex/index buffers for indirect drawing
     // All terrain chunks share a single VB + IB, eliminating per-chunk rebinds.
-    // Indirect draw commands are built CPU-side each frame for visible chunks.
+    // The shadow pass writes its draws into indirectBuffer_ and issues them as
+    // one indirect draw; see renderShadow.
     VkBuffer megaVB_ = VK_NULL_HANDLE;
     VmaAllocation megaVBAlloc_ = VK_NULL_HANDLE;
     void* megaVBMapped_ = nullptr;
@@ -282,8 +283,13 @@ private:
     static constexpr uint32_t MEGA_VB_MAX_VERTS   = 1536 * 1024; // ~1.5M verts × 44B ≈ 64MB
     static constexpr uint32_t MEGA_IB_MAX_INDICES  = 6 * 1024 * 1024; // 6M indices × 4B = 24MB
 
-    VkBuffer indirectBuffer_ = VK_NULL_HANDLE;
-    VmaAllocation indirectAlloc_ = VK_NULL_HANDLE;
+    // One per frame in flight (VkContext's MAX_FRAMES_IN_FLIGHT, checked where
+    // they are made): the GPU may still be reading the previous frame's
+    // commands while this frame writes its own.
+    static constexpr uint32_t kIndirectFrames = 2;
+    VkBuffer indirectBuffer_[kIndirectFrames] = {};
+    VmaAllocation indirectAlloc_[kIndirectFrames] = {};
+    void* indirectMapped_[kIndirectFrames] = {};
     static constexpr uint32_t MAX_INDIRECT_DRAWS = 8192;
 };
 

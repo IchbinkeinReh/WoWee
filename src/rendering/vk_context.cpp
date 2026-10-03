@@ -544,6 +544,9 @@ bool VkContext::selectPhysicalDevice() {
     // is asked in createGpuQueryPools, which runs after the queue family has
     // been chosen - it is not known here.
     timestampPeriodNs_ = props.limits.timestampPeriod;
+    // How many draws one indirect call may carry. 1 without multiDrawIndirect,
+    // and at least 2^16 with it.
+    maxDrawIndirectCount_ = props.limits.maxDrawIndirectCount;
 
     // Each of these has to be enabled before createLogicalDevice constructs the
     // DeviceBuilder, for the reason spelled out at the top of that function.
@@ -556,6 +559,10 @@ bool VkContext::selectPhysicalDevice() {
     };
     samplerAnisotropySupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::samplerAnisotropy);
     fillModeNonSolidSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::fillModeNonSolid);
+    // Many draws from one buffer of commands in a single call. The terrain
+    // shadow pass draws every chunk that casts that way; without it each
+    // command is still read from the buffer, one call apiece.
+    multiDrawIndirectSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::multiDrawIndirect);
     fsr2ComputeFeaturesSupported_ =
         enableIfPresent(&VkPhysicalDeviceFeatures::shaderStorageImageWriteWithoutFormat) &&
         enableIfPresent(&VkPhysicalDeviceFeatures::shaderInt16);
@@ -583,6 +590,7 @@ bool VkContext::selectPhysicalDevice() {
                 : (noRobust ? "off (WOWEE_VK_NO_ROBUST_BUFFERS)" : "not offered by this device"));
     LOG_INFO("Sampler anisotropy supported: ", samplerAnisotropySupported_ ? "YES" : "NO");
     LOG_INFO("Wireframe views supported: ", fillModeNonSolidSupported_ ? "YES" : "NO");
+    LOG_INFO("Multi-draw indirect supported: ", multiDrawIndirectSupported_ ? "YES" : "NO");
     LOG_INFO("FSR2 compute features supported: ",
              fsr2ComputeFeaturesSupported_ ? "YES" : "NO");
     LOG_INFO("Block compressed textures (BC1/2/3) supported: ",

@@ -2331,6 +2331,14 @@ bool M2Renderer::initializeShadow(VkRenderPass shadowRenderPass) {
         vertBind, vertAttrs, shadowPipelineLayout_, shadowRenderPass,
         vkCtx_->useDynamicRendering());
 
+    if (shadowPipeline_ &&
+        !initializeInstancedShadow(shadowRenderPass,
+                                   fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT),
+                                   vertBind, vertAttrs)) {
+        LOG_WARNING("M2Renderer: instanced shadow path unavailable; casters draw one "
+                    "instance at a time");
+    }
+
     vertShader.destroy();
     fragShader.destroy();
 
@@ -2339,6 +2347,88 @@ bool M2Renderer::initializeShadow(VkRenderPass shadowRenderPass) {
         return false;
     }
     LOG_INFO("M2Renderer shadow pipeline initialized");
+    return true;
+}
+
+bool M2Renderer::initializeInstancedShadow(
+        VkRenderPass shadowRenderPass, const VkPipelineShaderStageCreateInfo& fragStage,
+        const VkVertexInputBindingDescription& vertBind,
+        const std::vector<VkVertexInputAttributeDescription>& vertAttrs) {
+    VkDevice device = vkCtx_->getDevice();
+    if (!instanceSetLayout_) return false;
+
+    // The plain shadow layout plus the instance buffer at set 1. The push
+    // range is the same, which is what keeps set 0 shared between the two.
+    VkPushConstantRange pc{};
+    pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pc.offset = 0;
+    pc.size = sizeof(ShadowPush);
+    shadowInstancedLayout_ =
+        createPipelineLayout(device, {shadowParams_.layout, instanceSetLayout_}, {pc});
+    if (!shadowInstancedLayout_) return false;
+
+    VkShaderModule vertShader;
+    if (!vertShader.loadFromFile(device, "assets/shaders/m2_shadow.vert.spv")) {
+        LOG_WARNING("M2Renderer: could not load m2_shadow.vert.spv");
+        return false;
+    }
+    shadowInstancedPipeline_ = buildShadowPipeline(
+        device, vkCtx_->getPipelineCache(),
+        vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT), fragStage,
+        vertBind, vertAttrs, shadowInstancedLayout_, shadowRenderPass,
+        vkCtx_->useDynamicRendering());
+    vertShader.destroy();
+    if (!shadowInstancedPipeline_) return false;
+    // Half-built is not built: without its pipeline renderShadow never looks
+    // at the buffers, and what was made is freed in shutdown as usual.
+    auto fail = [&]() {
+        vkDestroyPipeline(device, shadowInstancedPipeline_, nullptr);
+        shadowInstancedPipeline_ = VK_NULL_HANDLE;
+        return false;
+    };
+
+    const VkDeviceSize bufSize = kMaxShadowInstances * sizeof(glm::mat4);
+    VkDescriptorPoolSize poolSize{.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 2};
+    VkDescriptorPoolCreateInfo poolCi{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolCi.maxSets = 2;
+    poolCi.poolSizeCount = 1;
+    poolCi.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(device, &poolCi, nullptr, &shadowInstanceDescPool_) != VK_SUCCESS) {
+        shadowInstanceDescPool_ = VK_NULL_HANDLE;
+        return fail();
+    }
+    for (int i = 0; i < 2; i++) {
+        VkBufferCreateInfo bci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bci.size = bufSize;
+        bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+        aci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo allocInfo{};
+        if (vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &shadowInstanceBuffer_[i],
+                            &shadowInstanceAlloc_[i], &allocInfo) != VK_SUCCESS) {
+            return fail();
+        }
+        shadowInstanceMapped_[i] = allocInfo.pMappedData;
+
+        VkDescriptorSetAllocateInfo setAi{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        setAi.descriptorPool = shadowInstanceDescPool_;
+        setAi.descriptorSetCount = 1;
+        setAi.pSetLayouts = &instanceSetLayout_;
+        if (vkAllocateDescriptorSets(device, &setAi, &shadowInstanceSet_[i]) != VK_SUCCESS) {
+            shadowInstanceSet_[i] = VK_NULL_HANDLE;
+            return fail();
+        }
+        VkDescriptorBufferInfo bufInfo{.buffer = shadowInstanceBuffer_[i], .offset = 0, .range = bufSize};
+        VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = shadowInstanceSet_[i];
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &bufInfo;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
+    LOG_INFO("M2Renderer instanced shadow pipeline initialized");
     return true;
 }
 
@@ -2440,6 +2530,17 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
         std::sort(bucket.begin(), bucket.end());
     }
 
+    // Instanced where it can be: every copy of a model is one draw per batch,
+    // each reading its model matrix out of this frame's shadow instance buffer
+    // (m2_shadow.vert). A forest was a draw call per tree per batch. Models
+    // that no longer fit in the buffer, or every model when the instanced
+    // pipeline could not be built, draw one instance at a time as before.
+    auto* shadowModels = (shadowInstancedPipeline_ && frameIdx < 2 &&
+                          shadowInstanceSet_[frameIdx])
+        ? static_cast<glm::mat4*>(shadowInstanceMapped_[frameIdx])
+        : nullptr;
+    uint32_t shadowInstanceCount = 0;
+
     // Helper lambda to draw instances with a given foliageSway setting
     auto drawPass = [&](bool foliagePass) {
         // What this pass is, carried with each draw rather than written into a
@@ -2454,8 +2555,26 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
                                    foliagePass ? 1 : 0, 0};
         const glm::vec4 wind{globalTime, 0.0f, 0.0f, 0.0f};
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipelineLayout_,
+        // Set 0 is laid out alike in both pipeline layouts, with the same push
+        // range, so what is bound there survives switching between the two.
+        // It is always bound through the layout of the pipeline in use: bound
+        // through the plain one, which has no set 1, it would disturb the
+        // instance buffer the instanced pipeline reads there.
+        VkPipeline boundPipeline = VK_NULL_HANDLE;
+        VkPipelineLayout boundLayout = shadowPipelineLayout_;
+        auto usePipeline = [&](bool instanced) {
+            VkPipeline want = instanced ? shadowInstancedPipeline_ : shadowPipeline_;
+            if (want == boundPipeline) return;
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+            boundLayout = instanced ? shadowInstancedLayout_ : shadowPipelineLayout_;
+            if (instanced) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    shadowInstancedLayout_, 1, 1, &shadowInstanceSet_[frameIdx], 0, nullptr);
+            }
+            boundPipeline = want;
+        };
+        usePipeline(shadowModels != nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, boundLayout,
             0, 1, &shadowParams_.set, 0, nullptr);
 
         const auto& casters = shadowCasters_[foliagePass ? 1 : 0];
@@ -2478,6 +2597,18 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &model.vertexBuffer, &offset);
             vkCmdBindIndexBuffer(cmd, model.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
+            // This model's instances into the buffer once, for all its batches.
+            const auto groupSize = static_cast<uint32_t>(groupEnd - g);
+            const bool instanced = shadowModels &&
+                                   shadowInstanceCount + groupSize <= kMaxShadowInstances;
+            const uint32_t firstShadowSlot = shadowInstanceCount;
+            if (instanced) {
+                for (std::size_t k = g; k < groupEnd; ++k) {
+                    shadowModels[shadowInstanceCount++] = instances[casters[k].second].modelMatrix;
+                }
+            }
+            usePipeline(instanced);
 
             for (const auto& batch : model.batches) {
                 if (batch.submeshLevel > 0) continue;
@@ -2504,12 +2635,27 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
                 if (foliagePass && batch.hasAlpha && batch.texture) {
                     VkDescriptorSet texSet = getTexDescSet(batch.texture);
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        shadowPipelineLayout_, 0, 1, &texSet, 0, nullptr);
+                        boundLayout, 0, 1, &texSet, 0, nullptr);
                 } else if (foliagePass) {
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        shadowPipelineLayout_, 0, 1, &shadowParams_.set, 0, nullptr);
+                        boundLayout, 0, 1, &shadowParams_.set, 0, nullptr);
                 }
 
+                if (instanced) {
+                    // The light's matrix alone: the model is the instance's.
+                    // flags.w is where this model's instances start.
+                    ShadowPush push{
+                        .lightSpaceModel = lightSpaceMatrix,
+                        .sway = glm::vec4(0.0f, 0.0f, modelSwayZW.x, modelSwayZW.y),
+                        .flags = glm::ivec4(passFlags.x, passFlags.y, passFlags.z,
+                                            static_cast<int>(firstShadowSlot)),
+                        .wind = wind};
+                    vkCmdPushConstants(cmd, shadowInstancedLayout_,
+                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       0, sizeof(ShadowPush), &push);
+                    vkCmdDrawIndexed(cmd, batch.indexCount, groupSize, batch.indexStart, 0, 0);
+                    continue;
+                }
                 for (std::size_t k = g; k < groupEnd; ++k) {
                     const auto& instance = instances[casters[k].second];
                     // The instance's own origin is what gives the wind its
@@ -2535,6 +2681,12 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
     drawPass(false);
     // Pass 2: foliage (wind displacement enabled, per-batch alpha-tested textures)
     drawPass(true);
+
+    if (shadowInstanceCount > 0) {
+        // A no-op on coherent memory, which CPU_TO_GPU nearly always is.
+        vmaFlushAllocation(vkCtx_->getAllocator(), shadowInstanceAlloc_[frameIdx], 0,
+                           shadowInstanceCount * sizeof(glm::mat4));
+    }
 
     // A shadow that flickers is a caster that was drawn last frame and is not
     // drawn this one. The cull is in light space and the light turns with the
