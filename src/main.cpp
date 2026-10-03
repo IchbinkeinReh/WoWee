@@ -193,7 +193,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
     // anything loads MoltenVK, since it reads its configuration once, and
     // without overwrite so MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS=1 still
     // restores the old behaviour.
-    setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "0", 0);
+    wowee::core::setEnvVar("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "0", /*overwrite=*/false);
     {
         uint32_t bufSize = 0;
         _NSGetExecutablePath(nullptr, &bufSize);
