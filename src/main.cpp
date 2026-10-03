@@ -183,6 +183,17 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
     // location. A signed macOS bundle keeps data in Contents/Resources because
     // Contents/MacOS may contain code only.
 #ifdef __APPLE__
+    // MoltenVK translates a frame into Metal inside vkQueueSubmit, and by
+    // default it does that on the thread that submits - the main thread, which
+    // is also the one running the game and the interface. A profile on an
+    // Intel MacBook Air put that translation at a third of the main thread
+    // (endFrame, ~45ms a frame). Asynchronous submits hand it to MoltenVK's
+    // own dispatch queue instead; the command buffers already outlive the
+    // submit until their fence, which is all Vulkan asks of them. Set before
+    // anything loads MoltenVK, since it reads its configuration once, and
+    // without overwrite so MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS=1 still
+    // restores the old behaviour.
+    setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "0", 0);
     {
         uint32_t bufSize = 0;
         _NSGetExecutablePath(nullptr, &bufSize);
