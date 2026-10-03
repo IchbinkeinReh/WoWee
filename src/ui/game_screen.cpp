@@ -736,6 +736,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     // whether the map is wanted; under FrameXML that is FrameXML's frame being
     // on screen rather than this client's own flag.
     renderWorldMap(gameHandler);
+    renderTouchChatButton(gameHandler);
 
     // Insert spell link into chat if player shift-clicked a spellbook entry
     {

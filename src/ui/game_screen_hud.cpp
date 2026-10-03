@@ -732,6 +732,41 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
 
 }
 
+void GameScreen::renderTouchChatButton([[maybe_unused]] game::GameHandler& gameHandler) {
+#ifdef __ANDROID__
+    // The chat box opens on Enter or a slash, and a phone has neither key. The
+    // on-screen keyboard comes up by itself once an edit box has focus (see
+    // the text input handling in UIManager), so opening the box is all this
+    // has to do. Hidden while something is being typed: the keyboard is up
+    // then, and Back or the keyboard's own enter closes the box again.
+    if (ImGui::GetIO().WantTextInput || interfaceTakingTypedInput()) return;
+
+    const ImGuiIO& io = ImGui::GetIO();
+    const float h = ImGui::GetFrameHeight() * 1.8f;
+    const float w = h * 2.2f;
+    const float margin = h * 0.4f;
+    // Top centre: the unit frames are on the left, the minimap and the map's
+    // close button on the right, and the movement stick takes the lower left.
+    ImGui::SetNextWindowPos(ImVec2((io.DisplaySize.x - w) * 0.5f, margin));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, h * 0.3f);
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(20, 20, 20, 150));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_AlwaysAutoResize |
+                                   ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav |
+                                   ImGuiWindowFlags_NoFocusOnAppearing;
+    if (ImGui::Begin("##TouchChat", nullptr, flags)) {
+        if (ImGui::Button("Chat", ImVec2(w, h))) {
+            gameHandler.runInterfaceCommand("ChatFrame_OpenChat(\"\")");
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+#endif
+}
+
 void GameScreen::renderWorldMap(game::GameHandler& gameHandler) {
     auto& app = core::Application::getInstance();
     auto* renderer = app.getRenderer();

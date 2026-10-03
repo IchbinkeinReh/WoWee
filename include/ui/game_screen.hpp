@@ -343,6 +343,9 @@ private:
      * Inventory screen
      */
     void renderWorldMap(game::GameHandler& gameHandler);
+    /// Android only: the button that opens the chat box, and with it the
+    /// on-screen keyboard. Nothing elsewhere.
+    void renderTouchChatButton(game::GameHandler& gameHandler);
     /// Everything a map shows besides the land, for either map: the in-game
     /// one and the one on the second window. See game_screen_hud.cpp.
     /// `questAreaShown` says which quests have their objective areas shaded:
