@@ -186,6 +186,9 @@ void WidgetTree::setParent(uint32_t id, uint32_t newParent) {
     }
     w->parent = newParent;
     get(newParent)->children.push_back(id);
+    // Moved under a hidden frame still marked visible: the next pass has to
+    // walk whichever hidden subtree it landed in.
+    ++visibilityRaises_;
 }
 
 void WidgetTree::markScrollFrame(uint32_t id) {
@@ -753,6 +756,7 @@ void WidgetTree::layout(float pixelW, float pixelH) {
     rootW.bottom = 0.0f;
     rootW.rectW = screenW;
     rootW.rectH = screenH;
+    if ((!rootW.visibleChain || !rootW.visible) && rootW.shown) ++visibilityRaises_;
     rootW.visibleChain = rootW.shown;
     rootW.visible = rootW.shown;
     rootW.effStrata = rootW.strata;
@@ -768,8 +772,10 @@ void WidgetTree::layout(float pixelW, float pixelH) {
         ui->bottom = 0.0f;
         ui->rectW = screenW;
         ui->rectH = screenH;
-        ui->visibleChain = rootW.visible && ui->shown;
-        ui->visible = ui->visibleChain;
+        const bool uiVisible = rootW.visible && ui->shown;
+        if (uiVisible && (!ui->visibleChain || !ui->visible)) ++visibilityRaises_;
+        ui->visibleChain = uiVisible;
+        ui->visible = uiVisible;
         ui->effStrata = ui->strata;
         ui->effLevel = 0;
         ui->effScale = 1.0f;
@@ -832,8 +838,16 @@ void WidgetTree::layoutWidget(uint32_t id, float screenW, float screenH) {
     // and every ancestor shown - so placing them is arithmetic for something
     // that is neither drawn nor measured against. Of the 28018 widgets this
     // pass walked, 666 were visible; the other 97% were the 3.4ms.
-    if (const Widget* self = get(id); self && !self->visibleChain) {
+    //
+    // Marking them is itself a walk of the whole hidden subtree, and it was
+    // most of what this pass cost: every frame, every hidden widget set to
+    // the hidden it already was. Once a subtree is marked it stays marked
+    // until something turns visible, so walk it again only then.
+    if (Widget* self = get(id); self && !self->visibleChain) {
+        if (self->hiddenMarkedAt == visibilityRaises_) return;
+        const uint64_t raises = visibilityRaises_;
         markSubtreeHidden(id);
+        if (Widget* again = get(id)) again->hiddenMarkedAt = raises;
         return;
     }
 
@@ -890,6 +904,8 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     // every ancestor shown; drawing additionally needs somewhere to be drawn.
     // Inherited from the parent's chain rather than its `visible`, or a child
     // of an unanchored driver frame would stop running too.
+    const bool wasChain = w->visibleChain;
+    const bool wasVisible = w->visible;
     w->visibleChain = w->shown && (!parent || parent->visibleChain);
     // How much of the tree the walk placed that nobody can see. The whole
     // pass is 3.4ms over 28018 widgets every frame, and a hidden frame's rect
@@ -901,6 +917,7 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     // the thing it is anchored to has no position. Deriving this from the
     // chain instead put those children back on screen.
     w->visible = w->shown && (!parent || parent->visible) && !unanchoredFrame;
+    if ((w->visibleChain && !wasChain) || (w->visible && !wasVisible)) ++visibilityRaises_;
     // Clipping is inherited: anything under a scroll frame is bounded by it,
     // however deep, because a scroll child holds frames of its own.
     //

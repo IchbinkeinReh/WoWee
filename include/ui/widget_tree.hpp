@@ -634,6 +634,11 @@ struct Widget {
     /// animation system.
     bool  visibleChain = false;
     bool  visible = false;      ///< visibleChain, and anchored somewhere
+    /// The tree's visibilityRaises_ when markSubtreeHidden last walked this
+    /// widget's subtree. Equal means nothing anywhere has turned visible
+    /// since, so every descendant is still marked hidden and the walk can be
+    /// skipped.
+    uint64_t hiddenMarkedAt = 0;
     /// Whether the interface has been told this is on screen. Visibility is
     /// not a property a frame sets - it is shown, and every ancestor shown too
     /// - so becoming visible has to be noticed rather than announced at the
@@ -1015,6 +1020,11 @@ private:
     uint64_t cleanPasses_ = 0;
     uint64_t totalPasses_ = 0;
     uint32_t visibleThisPass_ = 0;
+    /// Bumped whenever a widget's visibleChain or visible goes from false to
+    /// true, or a widget changes parent. Only those can leave a descendant of
+    /// a hidden frame marked visible, so while it holds still a hidden
+    /// subtree that has been marked once stays marked.
+    uint64_t visibilityRaises_ = 1;
     uint32_t lastVisibleCount_ = 0;
 
 public:
