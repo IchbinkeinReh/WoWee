@@ -158,11 +158,12 @@ This client's own settings sit under a **WoWee** heading in the game's Video, So
 ### Data Directory
 Game data is looked for in this order:
 1. `WOW_DATA_PATH`, if set
-2. The per-user data directory, if it holds an extraction (this is where the asset builder writes):
+2. The folder chosen in the client: login screen → **more options** → **Game data** → **choose folder...**, or **Use an existing folder...** on the first-run screen. Saved in `data_folder.txt` in the config folder and used from the next start; skipped if the folder is missing
+3. The per-user data directory, if it holds an extraction (this is where the asset builder writes):
    - macOS: `~/Library/Application Support/Wowee/Data`
    - Windows: `%LOCALAPPDATA%\Wowee\Data`
    - Linux: `$XDG_DATA_HOME/wowee/Data`, or `~/.local/share/wowee/Data`
-3. `Data/` in the working directory. On Linux and macOS the client changes into its own directory at startup. `build/bin/Data` points at the checkout's `Data/`: CMake links it on Linux and macOS, and `build.ps1` makes a junction on Windows
+4. `Data/` in the working directory. On Linux and macOS the client changes into its own directory at startup. `build/bin/Data` points at the checkout's `Data/`: CMake links it on Linux and macOS, and `build.ps1` makes a junction on Windows
 
 ### Settings
 - Settings are saved to `~/.wowee/settings.cfg` (Linux/macOS)

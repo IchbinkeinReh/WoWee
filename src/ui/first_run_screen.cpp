@@ -6,6 +6,8 @@
 
 #include "imgui.h"
 #include "core/application.hpp"
+#include "core/window.hpp"
+#include "ui/data_folder_picker.hpp"
 #include "ui/paper_ui.hpp"
 
 namespace wowee::ui {
@@ -93,6 +95,7 @@ FirstRunScreen::FirstRunScreen() {
 }
 
 bool FirstRunScreen::render() {
+    dataFolderPicker().poll();
     const PaperTheme theme;
     const float scale = screenScale();
     const int pushed = pushPaperStyle(theme);
@@ -145,6 +148,22 @@ bool FirstRunScreen::render() {
             "WoWee has no game assets yet, so there is nothing to log in to. Point it at a "
             "World of Warcraft installation you own and it will build what it needs. "
             "Nothing is written into that installation.");
+
+        // Or the assets were built already and live somewhere WoWee does not
+        // look - another drive, another install's folder. This screen is the
+        // only one a client without assets shows, so the choice has to be here
+        // as well as at the login screen.
+        ImGui::Spacing();
+        ImGui::TextWrapped("Built them already, somewhere else? Choose that folder, then "
+                           "start WoWee again.");
+        auto& picker = dataFolderPicker();
+        ImGui::BeginDisabled(picker.isOpen());
+        if (ImGui::Button(picker.isOpen() ? "Choosing..." : "Use an existing folder...")) {
+            auto* window = core::Application::getInstance().getWindow();
+            picker.open(window ? window->getSDLWindow() : nullptr);
+        }
+        ImGui::EndDisabled();
+        if (!picker.message().empty()) ImGui::TextWrapped("%s", picker.message().c_str());
     }
     ImGui::Spacing();
     ImGui::Separator();

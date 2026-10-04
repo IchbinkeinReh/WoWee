@@ -225,15 +225,20 @@ overridden per saved server profile.
 The client looks for data in this order:
 
 1. `WOW_DATA_PATH`, if set
-2. The per-user data directory, if it holds an extraction:
+2. The folder chosen at the login screen (**more options** → **Game data** →
+   **choose folder...**), or on the first-run screen with **Use an existing
+   folder...**. It is saved in `data_folder.txt` in the config folder and used
+   from the next start; a folder that is missing, such as an unplugged drive,
+   is skipped
+3. The per-user data directory, if it holds an extraction:
    `~/Library/Application Support/Wowee/Data` on macOS,
    `%LOCALAPPDATA%\Wowee\Data` on Windows, and `$XDG_DATA_HOME/wowee/Data`
    (default `~/.local/share/wowee/Data`) on Linux
-3. `Data/` in the working directory, which on Linux and macOS is the
+4. `Data/` in the working directory, which on Linux and macOS is the
    executable's own directory. CMake links `build/bin/Data` to the checkout's
    `Data/` on Linux and macOS; on Windows `build.ps1` makes a junction
 
-To store data elsewhere:
+To store data elsewhere, choose the folder in the client, or:
 
 ```bash
 export WOW_DATA_PATH=/path/to/extracted/Data

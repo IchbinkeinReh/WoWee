@@ -1006,6 +1006,7 @@ set(WOWEE_SOURCES
     src/ui/ui_texture_load.cpp
     src/ui/auth_screen.cpp
     src/ui/first_run_screen.cpp
+    src/ui/data_folder_picker.cpp
     src/ui/realm_screen.cpp
     src/ui/character_create_screen.cpp
     src/ui/character_screen.cpp
@@ -1184,6 +1185,7 @@ set(WOWEE_HEADERS
 
     include/ui/ui_manager.hpp
     include/ui/auth_screen.hpp
+    include/ui/data_folder_picker.hpp
     include/ui/realm_screen.hpp
     include/ui/character_create_screen.hpp
     include/ui/character_screen.hpp

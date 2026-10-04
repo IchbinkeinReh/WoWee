@@ -123,6 +123,20 @@ static wowee::core::LogLevel readLogLevelFromEnv() {
 static void selectUserDataPath() {
     if (std::getenv("WOW_DATA_PATH")) return;
 
+    // The folder chosen at the login screen, ahead of the default search. Not
+    // when it has gone - an external drive that is not plugged in - where the
+    // client starts from the default rather than from an empty folder, and
+    // says why.
+    if (const std::string chosen = wowee::core::getCustomDataRoot(); !chosen.empty()) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(chosen, ec)) {
+            wowee::core::setEnvVar("WOW_DATA_PATH", chosen.c_str(), /*overwrite=*/false);
+            return;
+        }
+        LOG_WARNING("The chosen game data folder ", chosen,
+                    " is not there; looking in the default places instead");
+    }
+
     const std::filesystem::path dataRoot = wowee::core::userDataRoot();
     if (!wowee::core::holdsExtraction(dataRoot)) return;
 

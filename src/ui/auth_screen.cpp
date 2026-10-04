@@ -4,6 +4,7 @@
 #include "rendering/pom_quality.hpp"
 #include "ui/graphics_presets.hpp"
 #include "ui/settings_panel.hpp"
+#include "ui/data_folder_picker.hpp"
 #include "auth/crypto.hpp"
 #include "core/application.hpp"
 #include "pipeline/asset_inventory.hpp"
@@ -269,6 +270,9 @@ void AuthScreen::setPort(int value) {
 }
 
 void AuthScreen::render(auth::AuthHandler& authHandler) {
+    // The folder dialog's answer, if it has given one, on this thread.
+    dataFolderPicker().poll();
+
     // Load saved login info on first render
     if (!loginInfoLoaded) {
         loadLoginInfo();
@@ -926,6 +930,43 @@ void AuthScreen::renderCard(auth::AuthHandler& authHandler, float screenW, float
             if (ui_.field("pin", a, b, pinCode_, opts).submitted) submit = true;
             col.gap(px(kRowGap));
         }
+
+#ifndef __ANDROID__
+        // Where the game data is read from, and a way to choose. The heading
+        // and the link share a row, and the path wraps under them: the card is
+        // already the tallest thing on the screen with this section open.
+        // Android chooses its folder before the client starts.
+        {
+            auto& picker = dataFolderPicker();
+            ui_.text(col.at(), "Game data", labelSize, theme.inkSoft);
+            const char* chooseLabel = picker.isOpen() ? "choosing..." : "choose folder...";
+            const float chooseW = ui_.textWidth(chooseLabel, smallSize);
+            if (ui_.link("datafolder",
+                         ImVec2(col.x1 - chooseW, col.y + (labelSize - smallSize) * 0.5f),
+                         chooseLabel, smallSize) &&
+                !picker.isOpen()) {
+                auto* window = core::Application::getInstance().getWindow();
+                picker.open(window ? window->getSDLWindow() : nullptr);
+            }
+            col.gap(labelRow);
+
+            const std::string folder = DataFolderPicker::currentFolder();
+            col.gap(ui_.wrapped(col.at(), contentW, folder.c_str(), smallSize, theme.pencil));
+            if (DataFolderPicker::hasCustomFolder()) {
+                const char* label = "use the default folder";
+                if (ui_.link("datafolderdefault", col.at(), label, smallSize)) {
+                    picker.useDefault();
+                }
+                col.gap(smallRow);
+            }
+            if (!picker.message().empty()) {
+                col.gap(px(4));
+                col.gap(ui_.wrapped(col.at(), contentW, picker.message().c_str(), smallSize,
+                                    theme.inkSoft));
+            }
+            col.gap(px(kRowGap));
+        }
+#endif
 
 #ifdef WOWEE_HAVE_ASSET_PANEL
         // The way back to the asset builder once there is already something

@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -103,6 +104,38 @@ std::string getConfigRoot() {
         }
     }
     return perUserConfigDir();
+}
+
+namespace {
+fs::path customDataRootFile() {
+    return fs::path(getConfigRoot()) / "data_folder.txt";
+}
+}  // namespace
+
+std::string getCustomDataRoot() {
+    std::ifstream in(customDataRootFile());
+    std::string line;
+    if (!in || !std::getline(in, line)) return {};
+    // Trimmed, so a file written by hand with a trailing newline or a CRLF
+    // from Notepad names the folder rather than one with a space on the end.
+    const auto first = line.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = line.find_last_not_of(" \t\r\n");
+    return line.substr(first, last - first + 1);
+}
+
+bool setCustomDataRoot(const std::string& path) {
+    std::error_code ec;
+    const fs::path file = customDataRootFile();
+    if (path.empty()) {
+        fs::remove(file, ec);
+        return !ec;
+    }
+    fs::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::trunc);
+    if (!out) return false;
+    out << path << '\n';
+    return static_cast<bool>(out);
 }
 
 void migratePortableConfigIfNeeded() {

@@ -17,6 +17,16 @@ std::string getExecutableDir();
 //   - Per-user (default): %APPDATA%\wowee on Windows, ~/.wowee elsewhere.
 std::string getConfigRoot();
 
+// The game data folder the player chose, or empty when they have not chosen
+// one and the default search applies (WOW_DATA_PATH, then the per-user data
+// folder, then Data/ beside the client). Kept in <config root>/data_folder.txt,
+// one path on one line, so it can also be written or removed by hand.
+std::string getCustomDataRoot();
+// Remembers PATH as the game data folder, or forgets the choice when PATH is
+// empty. Read once at startup, so a new choice takes effect on the next start.
+// False when the file could not be written or removed.
+bool setCustomDataRoot(const std::string& path);
+
 // One-time seeding of portable config. On the first launch after the user drops
 // a "portable.txt" marker next to the executable (before any config folder
 // exists), copies the existing per-user config tree into <exe_dir>/config so
