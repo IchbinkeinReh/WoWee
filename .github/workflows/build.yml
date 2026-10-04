@@ -210,7 +210,9 @@ jobs:
 
     - name: Configure
       shell: msys2 {0}
-      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      # The editor ships in the Windows package as well: in the default build,
+      # so the package's install rule picks it up.
+      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWOWEE_BUILD_EDITOR=ON
 
     - name: Assert AMD FSR2 target
       shell: msys2 {0}
@@ -248,7 +250,9 @@ jobs:
         test -x build/bin/wowee.exe
         test -x build/bin/asset_extract.exe
         test -x build/bin/wowee_assets.exe
-        for exe in build/bin/wowee.exe build/bin/asset_extract.exe build/bin/wowee_assets.exe; do
+        test -x build/bin/wowee_editor.exe
+        for exe in build/bin/wowee.exe build/bin/asset_extract.exe build/bin/wowee_assets.exe \
+                   build/bin/wowee_editor.exe; do
           ldd "$exe" \
             | awk '/=> \// { print $3 }' \
             | grep -iv '^/c/Windows' \
@@ -333,7 +337,9 @@ jobs:
 
     - name: Configure
       shell: msys2 {0}
-      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      # The editor ships in the Windows package as well: in the default build,
+      # so the package's install rule picks it up.
+      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWOWEE_BUILD_EDITOR=ON
 
     - name: Assert AMD FSR2 target
       shell: msys2 {0}
@@ -371,7 +377,9 @@ jobs:
         test -x build/bin/wowee.exe
         test -x build/bin/asset_extract.exe
         test -x build/bin/wowee_assets.exe
-        for exe in build/bin/wowee.exe build/bin/asset_extract.exe build/bin/wowee_assets.exe; do
+        test -x build/bin/wowee_editor.exe
+        for exe in build/bin/wowee.exe build/bin/asset_extract.exe build/bin/wowee_assets.exe \
+                   build/bin/wowee_editor.exe; do
           ldd "$exe" \
             | awk '/=> \// { print $3 }' \
             | grep -iv '^/c/Windows' \
