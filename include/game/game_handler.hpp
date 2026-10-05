@@ -2935,9 +2935,12 @@ public:
     /// UI_ERROR_MESSAGE is also the wrong event for this: it carries the game's
     /// own refusals - out of range, not enough mana - and the real client
     /// reports script errors somewhere else entirely.
-    void addScriptError(const std::string& msg) {
-        if (uiErrorCallback_) uiErrorCallback_(msg);
-    }
+    /// A Lua error in the interface. Logged where it is caught, and nothing
+    /// more: the UI error callback this went through only plays the error
+    /// sound - the interface draws error text itself - so every script error
+    /// beeped as a failed cast does. The original client makes no sound for
+    /// them, and a chat line that raised one beeped on every emote.
+    void addScriptError([[maybe_unused]] const std::string& msg) {}
     void addUIInfoMessage(const std::string& msg) {
         fireAddonEvent("UI_INFO_MESSAGE", {msg});
     }

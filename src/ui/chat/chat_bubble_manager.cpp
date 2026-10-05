@@ -112,9 +112,14 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
         // thing that cannot go underneath.
         ImDrawList* dl = ImGui::GetBackgroundDrawList();
         ImFont* font = ImGui::GetFont();
-        const float fontSize = ImGui::GetFontSize();
-        constexpr float kWrapWidth = 200.0f;
-        const ImVec2 padding(8.0f, 4.0f);
+        // A tenth larger than the interface's own text, with the wrap width
+        // grown alike so a line breaks where it did, and room around it: at the
+        // body size with 8 by 4 the words sat on the bubble's edge and were
+        // hard to read over a busy scene.
+        constexpr float kBubbleScale = 1.1f;
+        const float fontSize = ImGui::GetFontSize() * kBubbleScale;
+        constexpr float kWrapWidth = 200.0f * kBubbleScale;
+        const ImVec2 padding(13.0f, 9.0f);
 
         const ImVec2 textSize =
             font->CalcTextSizeA(fontSize, FLT_MAX, kWrapWidth, bubble.message.c_str());
@@ -126,11 +131,16 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
         ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
         background.w = 0.7f * alpha;
         dl->AddRectFilled(topLeft, ImVec2(topLeft.x + size.x, topLeft.y + size.y),
-                          ImGui::GetColorU32(background), 8.0f);
+                          ImGui::GetColorU32(background), 10.0f);
 
+        // A creature's words in the light yellow the chat window gives them,
+        // as the original client draws them; a player's in white. Yells are
+        // red whoever shouts.
+        const bool fromCreature = (bubble.senderGuid >> 48) != 0;
         const ImVec4 textColor = bubble.isYell
             ? ImVec4(1.0f, 0.2f, 0.2f, alpha)
-            : ImVec4(1.0f, 1.0f, 1.0f, alpha);
+            : fromCreature ? ImVec4(1.0f, 1.0f, 0.624f, alpha)
+                           : ImVec4(1.0f, 1.0f, 1.0f, alpha);
         dl->AddText(font, fontSize, ImVec2(topLeft.x + padding.x, topLeft.y + padding.y),
                     ImGui::GetColorU32(textColor), bubble.message.c_str(), nullptr,
                     kWrapWidth);

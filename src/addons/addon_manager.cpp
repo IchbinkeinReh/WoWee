@@ -822,7 +822,9 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
             {"RAID_WARNING", 1.0f, 0.28f, 0.0f},
             {"WHISPER", 1.0f, 0.5f, 1.0f},   {"WHISPER_INFORM", 1.0f, 0.5f, 1.0f},
             {"EMOTE", 1.0f, 0.5f, 0.25f},    {"TEXT_EMOTE", 1.0f, 0.5f, 0.25f},
-            {"MONSTER_SAY", 1.0f, 1.0f, 1.0f},
+            // Light yellow, as the original client's chat-cache has it
+            // (255 255 159) - white made an NPC's line look like a player's.
+            {"MONSTER_SAY", 1.0f, 1.0f, 0.624f},
             {"MONSTER_YELL", 1.0f, 0.25f, 0.25f},
             {"MONSTER_EMOTE", 1.0f, 0.5f, 0.25f},
             {"MONSTER_WHISPER", 1.0f, 0.72f, 0.72f},
