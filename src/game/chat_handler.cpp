@@ -110,6 +110,24 @@ bool isPlayerGuid(uint64_t guid) {
     return guid != 0 && (guid >> 48) == 0;
 }
 
+/// The creature entry a creature's or vehicle's guid carries in bits 24-47,
+/// or zero for any other kind of guid.
+uint32_t creatureEntryOf(uint64_t guid) {
+    const uint64_t high = guid >> 48;
+    if (high != 0xF130 && high != 0xF150) return 0;
+    return static_cast<uint32_t>((guid >> 24) & 0xFFFFFF);
+}
+
+/// The event a line goes to the interface as. A text emote with no sender name
+/// is the one line chatframe.lua cannot print: it takes the gsub path only
+/// when there is a name, and otherwise looks up CHAT_TEXT_EMOTE_GET, which no
+/// GlobalStrings has - so it raised, and the line was lost. A monster emote is
+/// printed from its text alone, which is all a nameless one has.
+std::string chatEventNameFor(ChatType type, const std::string& shownName) {
+    if (type == ChatType::TEXT_EMOTE && shownName.empty()) return "CHAT_MSG_MONSTER_EMOTE";
+    return std::string("CHAT_MSG_") + getChatTypeString(type);
+}
+
 bool chatPacketDiagEnabled() {
     static const bool enabled = [] {
         const char* raw = std::getenv("WOWEE_CHAT_PACKET_DIAG");
@@ -488,7 +506,18 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
             }
         }
 
-        if (data.senderName.empty()) {
+        // A creature's name, from what the creature queries have brought back,
+        // when it is not in sight to be read off. A player name query about
+        // one is never answered, so the line waited out the whole delay and
+        // then went without a name.
+        if (data.senderName.empty() && !isPlayerGuid(data.senderGuid)) {
+            if (const uint32_t entry = creatureEntryOf(data.senderGuid)) {
+                data.senderName = owner_.getCachedCreatureName(entry);
+                if (data.senderName.empty()) owner_.queryCreatureInfo(entry, data.senderGuid);
+            }
+        }
+
+        if (data.senderName.empty() && isPlayerGuid(data.senderGuid)) {
             owner_.queryPlayerName(data.senderGuid);
             // Hold the line rather than showing it with nobody's name on it.
             //
@@ -792,8 +821,6 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
 
     // Fire CHAT_MSG_* addon events
     if (owner_.addonEventCallbackRef()) {
-        std::string eventName = "CHAT_MSG_";
-        eventName += getChatTypeString(data.type);
         // The language's *name*, not its id. ChatFrame_MessageEventHandler
         // does
         //
@@ -853,6 +880,16 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
                              : (data.chatTag & 0x02) ? "DND"
                              : (data.chatTag & 0x01) ? "AFK"
                                                      : "";
+        // arg2 is the name the interface prints, and for an outgoing whisper
+        // that is the person written to rather than the one writing:
+        // CHAT_WHISPER_INFORM_GET is "To %s: " and takes the same argument
+        // CHAT_WHISPER_GET does. Passing the sender there addressed every
+        // whisper the player sent to the player themselves.
+        const std::string& shownName =
+            (data.type == ChatType::WHISPER_INFORM && !data.receiverName.empty())
+                ? data.receiverName
+                : data.senderName;
+        const std::string eventName = chatEventNameFor(data.type, shownName);
         // Says a line reached the interface at all. A blank chat window is
         // either nothing arriving or something arriving and not being drawn,
         // and those have opposite causes with the same appearance.
@@ -869,15 +906,6 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
                             data.senderName, "' - said once per event name");
             }
         }
-        // arg2 is the name the interface prints, and for an outgoing whisper
-        // that is the person written to rather than the one writing:
-        // CHAT_WHISPER_INFORM_GET is "To %s: " and takes the same argument
-        // CHAT_WHISPER_GET does. Passing the sender there addressed every
-        // whisper the player sent to the player themselves.
-        const std::string& shownName =
-            (data.type == ChatType::WHISPER_INFORM && !data.receiverName.empty())
-                ? data.receiverName
-                : data.senderName;
         owner_.addonEventCallbackRef()(eventName, {
             data.message,
             shownName,
@@ -984,11 +1012,37 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
         return;
     }
 
+    // The player's own emote, as the server echoes it, is the line the chat
+    // shows for it - "You wave at Bob." This returned here, on the reading that
+    // the line had been made when the emote was sent. It is not any more: the
+    // interface sends emotes through DoEmote, which makes no line, so the
+    // player's own emotes never appeared at all.
     if (data.senderGuid == owner_.getPlayerGuid() && data.senderGuid != 0) {
+        const std::string* target = data.targetName.empty() ? nullptr : &data.targetName;
+        std::string text =
+            rendering::AnimationController::getSelfEmoteTextByDbcId(data.textEmoteId, target);
+        if (text.empty()) return;
+        const Character* ac = owner_.getActiveCharacter();
+        MessageChatData chatMsg;
+        chatMsg.type = ChatType::TEXT_EMOTE;
+        chatMsg.language = ChatLanguage::UNIVERSAL;
+        chatMsg.senderGuid = data.senderGuid;
+        chatMsg.senderName = ac ? ac->name : std::string{};
+        chatMsg.message = std::move(text);
+        addLocalChatMessage(chatMsg);
         return;
     }
 
     std::string senderName = owner_.lookupName(data.senderGuid);
+    // An NPC's name from the creature queries, when it is not in sight to be
+    // read off. Asked of the player name query, as it was, it is never
+    // answered, and the emote was dropped for want of a name.
+    if (senderName.empty() && !isPlayerGuid(data.senderGuid)) {
+        if (const uint32_t entry = creatureEntryOf(data.senderGuid)) {
+            senderName = owner_.getCachedCreatureName(entry);
+            if (senderName.empty()) owner_.queryCreatureInfo(entry, data.senderGuid);
+        }
+    }
     // SMSG_TEXT_EMOTE is the narrated chat line. The server sends the actual
     // visual separately in SMSG_EMOTE; replaying an animation here restarts
     // one-shots and replaces correctly resolved STATE_* loops such as /dance.
@@ -1003,7 +1057,7 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
     }
 
     if (senderName.empty()) {
-        owner_.queryPlayerName(data.senderGuid);
+        if (isPlayerGuid(data.senderGuid)) owner_.queryPlayerName(data.senderGuid);
         LOG_DEBUG("Deferred chat text for unresolved SMSG_TEXT_EMOTE sender=0x",
                   std::hex, data.senderGuid, std::dec,
                   " emoteId=", data.textEmoteId);
@@ -1020,7 +1074,9 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
 
     MessageChatData chatMsg;
     chatMsg.type = ChatType::TEXT_EMOTE;
-    chatMsg.language = ChatLanguage::COMMON;
+    // Universal: an emote is seen, not spoken, and anything else is printed
+    // as a language header in front of it.
+    chatMsg.language = ChatLanguage::UNIVERSAL;
     chatMsg.senderGuid = data.senderGuid;
     chatMsg.senderName = senderName;
     chatMsg.message = emoteText;
@@ -1243,11 +1299,21 @@ void ChatHandler::addLocalChatMessage(const MessageChatData& msg) {
 
 void ChatHandler::fireChatEvent(const MessageChatData& msg) {
     if (!owner_.addonEventCallbackRef()) return;
-    std::string eventName = "CHAT_MSG_";
-    eventName += getChatTypeString(msg.type);
     const Character* ac = owner_.getActiveCharacter();
     std::string senderName = msg.senderName.empty()
         ? (ac ? ac->name : std::string{}) : msg.senderName;
+    // arg2 is the name the interface prints, and for a whisper the player
+    // sent that is who it went to, not who wrote it: CHAT_WHISPER_INFORM_GET
+    // is "To %s: " and reads the same argument CHAT_WHISPER_GET does. The
+    // other announce path already does this; this one did not, and this is
+    // the path an outgoing whisper actually takes - the server's echo is
+    // dropped in favour of the local row made on send - so every whisper the
+    // player sent came back addressed to the player.
+    const std::string& shownName =
+        (msg.type == ChatType::WHISPER_INFORM && !msg.receiverName.empty())
+            ? msg.receiverName
+            : senderName;
+    const std::string eventName = chatEventNameFor(msg.type, shownName);
     char guidBuf[32];
     snprintf(guidBuf, sizeof(guidBuf), "0x%016llX",
              (unsigned long long)(msg.senderGuid != 0 ? msg.senderGuid : owner_.getPlayerGuid()));
@@ -1267,17 +1333,6 @@ void ChatHandler::fireChatEvent(const MessageChatData& msg) {
     // one thing the callback that used to announce these as well did better,
     // and it is here now so nothing was lost when that went.
     const int channelIndex = getChannelIndex(msg.channelName);
-    // arg2 is the name the interface prints, and for a whisper the player
-    // sent that is who it went to, not who wrote it: CHAT_WHISPER_INFORM_GET
-    // is "To %s: " and reads the same argument CHAT_WHISPER_GET does. The
-    // other announce path already does this; this one did not, and this is
-    // the path an outgoing whisper actually takes - the server's echo is
-    // dropped in favour of the local row made on send - so every whisper the
-    // player sent came back addressed to the player.
-    const std::string& shownName =
-        (msg.type == ChatType::WHISPER_INFORM && !msg.receiverName.empty())
-            ? msg.receiverName
-            : senderName;
     owner_.addonEventCallbackRef()(eventName, {
         msg.message, shownName,
         owner_.getLanguageName(static_cast<uint32_t>(msg.language)),

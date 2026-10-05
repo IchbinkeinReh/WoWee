@@ -338,6 +338,13 @@ std::string EmoteRegistry::textFor(const std::string& emoteName,
     return "";
 }
 
+std::string EmoteRegistry::selfTextByDbcId(uint32_t dbcId,
+                                           const std::string* targetName) const {
+    auto it = emoteByDbcId_.find(dbcId);
+    if (it == emoteByDbcId_.end()) return "";
+    return textFor(it->second->command, targetName);
+}
+
 uint32_t EmoteRegistry::dbcIdFor(const std::string& emoteName) const {
     auto it = emoteTable_.find(emoteName);
     if (it != emoteTable_.end()) {

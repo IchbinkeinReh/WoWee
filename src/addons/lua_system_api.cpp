@@ -3543,7 +3543,15 @@ static int lua_GetDefaultLanguage(lua_State* L) {
     auto* gh = getGameHandler(L);
     static const std::set<uint8_t> kHordeRaces = {2, 5, 6, 8, 10};
     const bool horde = gh && kHordeRaces.count(gh->getPlayerRace()) > 0;
-    lua_pushstring(L, horde ? "Orcish" : "Common");
+    // Named from Languages.dbc, as every chat line's language is. ChatFrame
+    // prints "[language]" in front of any line whose language differs from
+    // this, and an English "Common" beside a German "Gemeinsprache" from the
+    // file differed on every line - so a localized client headed everything
+    // the player's own faction said, and their custom emotes, with it.
+    // Orcish is language 1 and Common 7; the English names when the file
+    // has neither.
+    const std::string& fromFile = gh ? gh->getLanguageName(horde ? 1u : 7u) : std::string();
+    lua_pushstring(L, !fromFile.empty() ? fromFile.c_str() : (horde ? "Orcish" : "Common"));
     return 1;
 }
 

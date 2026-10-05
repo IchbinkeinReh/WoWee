@@ -62,6 +62,11 @@ public:
                             const std::string& senderName,
                             const std::string* targetName = nullptr) const;
 
+    /// The first-person text by DBC ID - "You wave." - for the server's echo
+    /// of the player's own emote, which is the line the chat shows for it.
+    std::string selfTextByDbcId(uint32_t dbcId,
+                                const std::string* targetName = nullptr) const;
+
 
 private:
     EmoteRegistry() = default;

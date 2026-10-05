@@ -303,15 +303,18 @@ void ChatPanel::sendChatMessage(game::GameHandler& gameHandler) {
 
                 uint32_t dbcId = rendering::AnimationController::getEmoteDbcId(cmdLower);
                 if (dbcId != 0) {
+                    // The server's echo is the line, as it is for an emote
+                    // sent from the interface; one made here as well was the
+                    // same emote twice.
                     uint64_t targetGuid = gameHandler.hasTarget() ? gameHandler.getTargetGuid() : 0;
                     gameHandler.sendTextEmote(dbcId, targetGuid);
+                } else {
+                    game::MessageChatData msg;
+                    msg.type = game::ChatType::TEXT_EMOTE;
+                    msg.language = game::ChatLanguage::UNIVERSAL;
+                    msg.message = emoteText;
+                    gameHandler.addLocalChatMessage(msg);
                 }
-
-                game::MessageChatData msg;
-                msg.type = game::ChatType::TEXT_EMOTE;
-                msg.language = game::ChatLanguage::COMMON;
-                msg.message = emoteText;
-                gameHandler.addLocalChatMessage(msg);
 
                 chatInputBuffer_[0] = '\0';
                 return;
