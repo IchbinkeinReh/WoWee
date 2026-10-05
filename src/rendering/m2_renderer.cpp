@@ -108,10 +108,6 @@ uint32_t M2Renderer::gatherLocalLights(const glm::vec3& cameraPos,
         float distSq;
         glm::vec4 posRadius;
         glm::vec4 colorIntensity;
-        bool flame = false;  // lamps/torches/braziers gutter; lava burns steady
-        // Fixture placement, used only to seed the flicker phase. The light's own
-        // position animates with the flame, which would re-roll the phase every frame.
-        glm::vec3 phaseSeed{0.0f};
     };
     std::vector<Candidate> candidates;
 
@@ -129,8 +125,7 @@ uint32_t M2Renderer::gatherLocalLights(const glm::vec3& cameraPos,
                 const float radius = std::clamp(instance.cachedVisualRadius * 0.8f,
                                                 10.0f, 35.0f);
                 candidates.push_back({.distSq = distSq, .posRadius = glm::vec4(worldPos, radius),
-                                      .colorIntensity = glm::vec4(1.0f, 0.28f, 0.035f, 1.75f),
-                                      .flame = false, .phaseSeed = instance.position});
+                                      .colorIntensity = glm::vec4(1.0f, 0.28f, 0.035f, 1.75f)});
             }
         }
 
@@ -166,8 +161,7 @@ uint32_t M2Renderer::gatherLocalLights(const glm::vec3& cameraPos,
             if (batch.glowTint == 1) color = glm::vec3(0.42f, 0.68f, 1.0f);
             else if (batch.glowTint == 2) color = glm::vec3(1.0f, 0.24f, 0.14f);
             candidates.push_back({.distSq = distSq, .posRadius = glm::vec4(worldPos, radius),
-                                  .colorIntensity = glm::vec4(color, 1.35f), .flame = true,
-                                  .phaseSeed = instance.position});
+                                  .colorIntensity = glm::vec4(color, 1.35f)});
             hasBatchLight = true;
         }
 
@@ -217,8 +211,7 @@ uint32_t M2Renderer::gatherLocalLights(const glm::vec3& cameraPos,
                     }
                     candidates.push_back({.distSq = distSq,
                         .posRadius = glm::vec4(worldPos, radius),
-                        .colorIntensity = glm::vec4(color, intensity),
-                        .flame = true, .phaseSeed = instance.position});
+                        .colorIntensity = glm::vec4(color, intensity)});
                 }
             }
         }
@@ -229,18 +222,9 @@ uint32_t M2Renderer::gatherLocalLights(const glm::vec3& cameraPos,
     if (count == 0) return 0;
     std::partial_sort(candidates.begin(), candidates.begin() + count, candidates.end(),
         [](const Candidate& a, const Candidate& b) { return a.distSq < b.distSq; });
-    // Guttering is applied to the light itself, not just the glow sprite: the
-    // pool of light a lamp throws on the ground and nearby walls is what the eye
-    // actually reads as firelight, so modulating the sprite alone was too subtle
-    // to notice.
-    const float flickerSeconds = lampFlickerClockSeconds();
     for (uint32_t i = 0; i < count; ++i) {
         outPosRadius[i] = candidates[i].posRadius;
         outColorIntensity[i] = candidates[i].colorIntensity;
-        if (candidates[i].flame) {
-            outColorIntensity[i].w *= lampFlicker(candidates[i].phaseSeed,
-                                                  flickerSeconds, 0.82f, 0.12f, 0.06f);
-        }
     }
     return count;
 }

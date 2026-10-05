@@ -19,11 +19,8 @@ inline bool has(const std::string& lower, std::string_view token) noexcept {
 /// `has`, but the token may not be the tail of a longer word.
 ///
 /// Written for `fire`, which is in `hellfire`. Outland's sky model is
-/// HellfireSkyBox, so it classified as a brazier - and the renderer gives an
-/// additive batch of a brazier a lamp flicker keyed on the instance position.
-/// A sky dome's position is the camera's, rewritten every frame, so the flicker
-/// re-rolled its phase whenever the camera crossed a one-unit cell and the sky
-/// strobed. lampFlicker's own comment says a drifting seed does exactly that.
+/// HellfireSkyBox, so it classified as a brazier, and the fire treatments
+/// meant for braziers made the sky strobe.
 ///
 /// The same shape as the `forge` rule below, which was added when Ironforge
 /// made all 64 doodads of the city into forges.

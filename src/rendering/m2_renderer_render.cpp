@@ -1784,26 +1784,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                                 gs.size = std::min(gs.size, kMaxFireGlowRadius * inst.scale);
                             }
 
-                            // Flame guttering. The phase comes from the lamp's own
-                            // world position, so two lanterns on the same street
-                            // never pulse together - a synchronised row of lamps
-                            // reads as a rendering artifact, not firelight. Two
-                            // detuned sines keep any single lamp from looping
-                            // visibly. Alpha and size move together, since a
-                            // brighter flame also looks slightly larger.
-                            {
-                                // Matches the phase used for this lamp's local
-                                // light, so the sprite and the pool of light it
-                                // casts breathe together.
-                                // Same clock and parameters as the local light in
-                                // gatherLocalLights, so the sprite and the pool of
-                                // light it casts rise and fall together.
-                                const float flicker = lampFlicker(
-                                    inst.position, lampFlickerClockSeconds(),
-                                    0.82f, 0.12f, 0.06f);
-                                gs.color.a *= flicker;
-                                gs.size    *= 0.98f + 0.02f * flicker;
-                            }
                             glowSprites_.push_back(gs);
                             GlowSprite halo = gs;
                             halo.color.a *= batch.preserveGlowMesh ? 0.34f : 0.42f;
@@ -2222,27 +2202,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 if (batch.colorKeyBlack)
                     mat->colorKeyThreshold = (effectiveBlendMode == 4 || effectiveBlendMode == 5) ? 0.7f : 0.08f;
 
-                // A fire's own glow breathes. The same clock and parameters as
-                // the lamp sprites and the local light they cast, so a brazier
-                // and the pool of light under it rise and fall together
-                // instead of beating against each other.
-                //
-                // Never for a sky. lampFlicker is keyed on the instance
-                // position and says a seed that drifts re-rolls its phase every
-                // frame and strobes; a sky dome's position IS the camera's,
-                // rewritten every frame, so it is the one instance that can
-                // never be a valid seed. The classifier no longer calls
-                // HellfireSkyBox a brazier, and this makes sure the next model
-                // that gets miscalled one cannot strobe the sky either.
-                if (!skyMode_ && m2BlendIsAdditive(batch.blendMode) &&
-                    (model.isBrazierOrFire || model.isTorch || model.isLanternLike)) {
-                    const float flicker = lampFlicker(
-                        instance.position, lampFlickerClockSeconds(),
-                        0.82f, 0.12f, 0.06f);
-                    mat->tintR = batch.tint.r * flicker;
-                    mat->tintG = batch.tint.g * flicker;
-                    mat->tintB = batch.tint.b * flicker;
-                }
             }
 
             if (!batch.materialSet) continue;
