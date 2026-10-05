@@ -165,7 +165,10 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     instance.cachedHasAnimation = mdlRef.hasAnimation;
     instance.cachedDisableAnimation = mdlRef.disableAnimation;
     instance.cachedIsSmoke = mdlRef.isSmoke;
-    instance.cachedHasParticleEmitters = !mdlRef.particleEmitters.empty();
+    // Ribbons are updated in the same pass, so a model with ribbons alone
+    // has to be on the list too or its trails never move.
+    instance.cachedHasParticleEmitters = !mdlRef.particleEmitters.empty() ||
+                                         !mdlRef.ribbonEmitters.empty();
     instance.cachedBoundRadius = mdlRef.boundRadius;
     instance.cachedIsGroundDetail = mdlRef.isGroundDetail;
     instance.cachedIsInvisibleTrap = mdlRef.isInvisibleTrap;
@@ -269,7 +272,8 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
     instance.cachedHasAnimation = mdl2.hasAnimation;
     instance.cachedDisableAnimation = mdl2.disableAnimation;
     instance.cachedIsSmoke = mdl2.isSmoke;
-    instance.cachedHasParticleEmitters = !mdl2.particleEmitters.empty();
+    instance.cachedHasParticleEmitters = !mdl2.particleEmitters.empty() ||
+                                         !mdl2.ribbonEmitters.empty();
     instance.cachedBoundRadius = mdl2.boundRadius;
     instance.cachedIsGroundDetail = mdl2.isGroundDetail;
     instance.cachedIsInvisibleTrap = mdl2.isInvisibleTrap;

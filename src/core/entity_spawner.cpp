@@ -2270,7 +2270,7 @@ void EntitySpawner::spawnCreatureParticleTwin(uint64_t guid, uint32_t displayId,
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
     if (!charRenderer || !m2) return;
     const pipeline::M2Model* data = charRenderer->getModelData(charModelId);
-    if (!data || data->particleEmitters.empty()) return;
+    if (!data || (data->particleEmitters.empty() && data->ribbonEmitters.empty())) return;
 
     // The same model, loaded once into the M2 renderer for its emitters and
     // drawn for nothing else.
