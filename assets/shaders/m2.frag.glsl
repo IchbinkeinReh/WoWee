@@ -41,7 +41,7 @@ layout(set = 1, binding = 2) uniform M2Material {
     float tintG;
     float tintB;
     int volumetricBeam;
-    int fireCard;
+    int unused2;       // was a WoWee-only fire-card fade; kept for the layout
     int unfogged;      // material flag 0x2: the client draws it without fog
 };
 
@@ -58,7 +58,6 @@ layout(location = 0) in vec3 FragPos;
 layout(location = 1) in vec3 Normal;
 layout(location = 2) in vec2 TexCoord;
 layout(location = 3) flat in vec3 InstanceOrigin;
-layout(location = 4) in float ModelHeight;
 layout(location = 5) in float vFadeAlpha;
 layout(location = 6) flat in int vSkyMode;
 layout(location = 7) flat in float vHighlight;
@@ -433,24 +432,6 @@ void main() {
         // Additive beams carry their brightness in the colour rather than the
         // alpha, so fading one means dimming it.
         if (blendAdds()) result *= beamFade;
-    }
-
-    // A flame stops before its card does.
-    //
-    // The bonfire's fire is drawn on cards whose material says opaque, so the
-    // black backing around the flame came out as a rectangle - a hard-edged
-    // slab with a straight top. Keying the black out and adding rather than
-    // covering deals with the backing; this deals with the edge, which is
-    // still an edge wherever the texture is bright right up to it.
-    //
-    // ModelHeight is how far up its own model this fragment sits, so the fade
-    // lands in the same place whatever size the fire is placed at.
-    if (fireCard != 0) {
-        float tipFade = 1.0 - smoothstep(0.55, 0.98, ModelHeight);
-        outAlpha *= tipFade;
-        // An additive card carries its brightness in the colour, so fading one
-        // means dimming it.
-        if (blendAdds()) result *= tipFade;
     }
 
     if (blendMultiplies()) {

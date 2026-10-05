@@ -72,9 +72,6 @@ struct M2ModelGPU {
         bool lanternGlowHint = false; // Texture/model hints this batch is a glow-card billboard
         bool glowCardLike = false; // Batch likely is a flat emissive card that should be sprite-replaced
         bool preserveGlowMesh = false; // Keep emissive glass/fixture mesh below its glow sprite
-        // Forge fire card: the flame/coals/glow batches of a forge, as opposed
-        // to the masonry and ironwork the rest of the model is made of.
-        bool forgeFireCard = false;
         // A sky model's star-point layer. Suppressed when the client draws its
         // own stars instead: the authored layer is a 256x256 compressed texture
         // magnified across the whole dome, which is soft at any resolution and
@@ -436,7 +433,7 @@ struct M2MaterialUBO {
     int32_t volumetricBeam;
     /// A flame card. Fades out over the top of its own model, so the card's
     /// upper edge is not where the fire stops.
-    int32_t fireCard;
+    int32_t unused2;   // was a WoWee-only fire-card fade; kept for the layout
     /// Material flag 0x2: the client draws the batch without fog.
     int32_t unfogged;
 };

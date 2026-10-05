@@ -22,7 +22,7 @@ layout(push_constant) uniform Push {
     int instanceDataOffset;  // Base index into InstanceSSBO for this draw group
     float swayRefHeight;     // Unused; kept so the push layout does not move
     float swayAmp;           // Unused; kept so the push layout does not move
-    float plantHeight;       // The model's own height (model space), for ModelHeight
+    float plantHeight;       // Unused; kept so the layout holds
 } push;
 
 layout(set = 2, binding = 0) readonly buffer BoneSSBO {
@@ -64,7 +64,6 @@ layout(location = 0) out vec3 FragPos;
 layout(location = 1) out vec3 Normal;
 layout(location = 2) out vec2 TexCoord;
 layout(location = 3) flat out vec3 InstanceOrigin;
-layout(location = 4) out float ModelHeight;
 layout(location = 5) out float vFadeAlpha;
 layout(location = 6) flat out int vSkyMode;
 layout(location = 7) flat out float vHighlight;
@@ -110,10 +109,6 @@ void main() {
     TexCoord = vec2(dot(uvLin.xy, baseUV), dot(uvLin.zw, baseUV)) + uvOff;
 
     InstanceOrigin = model[3].xyz;
-    // How far up the model this vertex is, as a fraction of the model's own
-    // height. The fragment shader fades a fire card's tip with it, and
-    // dividing by a constant there could only be right for one size of fire.
-    ModelHeight = push.plantHeight > 0.0 ? clamp(pos.z / push.plantHeight, 0.0, 1.0) : 1.0;
     vFadeAlpha = fade;
     vColorMul = instanceData[instIdx].colorMul;
     vSkyMode = push.isFoliage < 0 ? 1 : 0;

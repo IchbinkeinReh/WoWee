@@ -1367,7 +1367,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         int32_t instanceDataOffset; // Base index into instance SSBO for this draw group
         float swayRefHeight;        // Unused, zero; kept so the shader's layout holds
         float swayAmp;              // Unused, zero; kept so the shader's layout holds
-        float plantHeight;          // The model's own height, for ModelHeight
+        float plantHeight;          // Unused, zero; kept so the shader's layout holds
     };
 
     // Fill the model half of the push constants.
@@ -1375,16 +1375,11 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     // There is no sway any more: the client moves a doodad only through its
     // own bones and texture tracks, so a tree, a banner or a field of clutter
     // moves exactly as its artist keyed it and the shader adds nothing.
-    //
-    // The height is measured from the model's base rather than its origin, as
-    // a few detail doodads sit with geometry below z=0. It is filled in for
-    // every model: the fragment shader fades a fire card's tip by how far up
-    // the model it is, and a fire is not foliage.
-    auto fillModelPush = [](M2PushConstants& pc, const M2ModelGPU& mdl, bool sky) {
+    auto fillModelPush = [](M2PushConstants& pc, bool sky) {
         pc.isFoliage = sky ? -1 : 0;
         pc.swayRefHeight = 0.0f;
         pc.swayAmp = 0.0f;
-        pc.plantHeight = std::max(mdl.boundMax.z - std::min(mdl.boundMin.z, 0.0f), 0.05f);
+        pc.plantHeight = 0.0f;
     };
 
     auto appendInstancePortalGlow = [&](const M2Instance& instance, float distSq) {
@@ -1489,9 +1484,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             }
 
             bool modelNeedsAnimation = model.hasAnimation && !model.disableAnimation;
-            const bool particleDominantEffect = model.isSpellEffect &&
-                !model.particleEmitters.empty() && model.batches.size() <= 2;
-
             // Collect per-instance data for this model group
             pending.clear();
             for (size_t vi = visStart; vi < groupEnd; vi++) {
@@ -1771,11 +1763,9 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
 
                     // Opaque gate - transparent glow cards were handled above so their
                     // sprites are generated before the mesh moves to pass 2.
-                    const bool rawTransparent = (batch.blendMode >= 2) || model.isSpellEffect;
-                    if (rawTransparent) continue;
-
-                    // Particle-dominant effects: emission geometry - skip opaque
-                    if (particleDominantEffect && batch.blendMode <= 1) continue;
+                    // A spell's opaque layers are opaque like anyone else's:
+                    // the client draws every batch by its blend mode.
+                    if (batch.blendMode >= 2) continue;
 
                     // Handle texture animation: if this batch has per-instance uvOffset,
                     // write a separate SSBO range with the correct offsets.
@@ -1832,49 +1822,23 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     }
 
                     // Pipeline selection (per-model/batch, not per-instance)
-                    // The fire burning in the hearth is an effect overlay on a
-                    // black background, the same shape as a spell visual; drawn
-                    // opaque it fills the forge opening with a black rectangle
-                    // instead of flame. That is true of the flame cards only -
-                    // treating the whole model this way turned the masonry and
-                    // ironwork additive, which is to say translucent.
-                    const bool fireEffectModel = batch.forgeFireCard;
-                    // A batch the artist marked additive is already doing
-                    // what a cutout would approximate: black adds nothing, so
-                    // it disappears on its own.
                     // The client alpha-tests alpha-key batches and nothing
                     // else (FUN_0081fe90): a blended batch is blended, and an
                     // opaque one is opaque whatever its texture's alpha. It
-                    // never keys by colour. Ground clutter is this renderer's
+                    // forces no batch additive and never keys by colour,
+                    // spell or fire alike. Ground clutter is this renderer's
                     // own and keeps its cutout.
                     const bool forceCutout =
-                        !model.isSpellEffect && !fireEffectModel &&
                         !m2BlendIsAdditive(batch.blendMode) &&
                         (model.isGroundDetail ||
                          m2BatchNeedsAlphaTest(batch.blendMode, batch.hasAlpha));
+                    const uint8_t effectiveBlendMode = forceCutout ? 1 : batch.blendMode;
 
-                    uint8_t effectiveBlendMode = batch.blendMode;
-                    if (model.isSpellEffect || fireEffectModel) {
-                        if (effectiveBlendMode <= 1) effectiveBlendMode = 3;
-                        else if (effectiveBlendMode == 4 || effectiveBlendMode == 5) effectiveBlendMode = 3;
-                    }
-                    // The cards above forced additive keep the pipeline they
-                    // have always drawn with, whatever number they now carry.
-                    const bool forcedAdditive = effectiveBlendMode != batch.blendMode;
-                    if (forceCutout) effectiveBlendMode = 1;
-
-                    VkPipeline desiredPipeline;
-                    if (forceCutout) {
-                        desiredPipeline = cutoutPipeline_;
-                    } else if (forcedAdditive) {
-                        desiredPipeline = additivePipeline_;
-                    } else {
-                        desiredPipeline = blendPipelineFor(effectiveBlendMode);
-                    }
+                    VkPipeline desiredPipeline = forceCutout ? cutoutPipeline_
+                                                             : blendPipelineFor(effectiveBlendMode);
                     // Cull, depth test and depth write from the material's
                     // flags, as the client sets them for every blend mode.
-                    desiredPipeline = pipelineVariant(desiredPipeline, batch.materialFlags,
-                                                      forcedAdditive);
+                    desiredPipeline = pipelineVariant(desiredPipeline, batch.materialFlags, false);
                     if (desiredPipeline != currentPipeline) {
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
                         currentPipeline = desiredPipeline;
@@ -1895,11 +1859,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         }
                         mat->volumetricBeam =
                             (model.isVolumetricBeam || batch.volumetricBeam) ? 1 : 0;
-                        mat->fireCard = batch.forgeFireCard ? 1 : 0;
-                        // The shader's view of the blend: a multiply forced
-                        // onto the additive pipeline must not output one.
-                        mat->blendMode = (forcedAdditive && m2BlendIsModulate(batch.blendMode))
-                            ? static_cast<int32_t>(M2_BLEND_ADD_ALPHA) : static_cast<int32_t>(batch.blendMode);
+                        mat->blendMode = batch.blendMode;
                     }
 
                     // Bind material descriptor set (set 1)
@@ -1913,7 +1873,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     // Push constants + instanced draw
                     M2PushConstants pc;
                     pc.texCoordSet = static_cast<int32_t>(batch.textureUnit);
-                    fillModelPush(pc, model, skyMode_);
+                    fillModelPush(pc, skyMode_);
                     pc.instanceDataOffset = static_cast<int32_t>(drawOffset);
                     vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
                     vkCmdDrawIndexed(cmd, batch.indexCount, groupSize, batch.indexStart, 0, 0);
@@ -1993,9 +1953,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         uint16_t targetLOD = desiredLOD;
         while (targetLOD > 0 && !(model.availableLODs & (1u << targetLOD))) --targetLOD;
 
-        const bool particleDominantEffect = model.isSpellEffect &&
-            !model.particleEmitters.empty() && model.batches.size() <= 2;
-
         for (const auto& batch : model.batches) {
             if (batch.indexCount == 0) continue;
             if (!model.isGroundDetail && batch.submeshLevel != targetLOD) continue;
@@ -2005,8 +1962,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             // Pass 2 gate: only transparent/additive batches - or, for a faded
             // instance, every batch, since the opaque pass left it out.
             {
-                const bool rawTransparent = (batch.blendMode >= 2) || model.isSpellEffect ||
-                                            instanceFaded;
+                const bool rawTransparent = (batch.blendMode >= 2) || instanceFaded;
                 if (!rawTransparent) continue;
             }
 
@@ -2044,7 +2000,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 continue;
             }
 
-            if (particleDominantEffect) continue; // emission-only mesh
 
             // Compute UV offset for this instance + batch
             //
@@ -2093,25 +2048,13 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             e.highlight = instance.highlight;
             instanceDataCount_++;
 
-            // Pipeline selection
-            uint8_t effectiveBlendMode = batch.blendMode;
-            if (model.isSpellEffect || batch.forgeFireCard) {
-                // Matches the opaque pass: a forge's flame cards are additive,
-                // the forge itself is not.
-                if (effectiveBlendMode <= 1) effectiveBlendMode = 3;
-                else if (effectiveBlendMode == 4 || effectiveBlendMode == 5) effectiveBlendMode = 3;
-            }
-
-            const bool forcedAdditive = effectiveBlendMode != batch.blendMode;
-            VkPipeline desiredPipeline = forcedAdditive ? additivePipeline_
-                                                        : blendPipelineFor(effectiveBlendMode);
-            // Opaque and alpha-key layers reach this pass only faded; see below.
-            if (!forcedAdditive && effectiveBlendMode <= 1) desiredPipeline = additivePipeline_;
+            // Pipeline selection: the batch's own blend mode, spell or not.
+            VkPipeline desiredPipeline = blendPipelineFor(batch.blendMode);
             // An opaque layer of a faded instance: blended by its fade.
-            if (instanceFaded && effectiveBlendMode <= 1) desiredPipeline = alphaPipeline_;
+            if (instanceFaded && batch.blendMode <= 1) desiredPipeline = alphaPipeline_;
             // Cull, depth test and depth write from the material's flags, as
             // the client sets them for every blend mode.
-            desiredPipeline = pipelineVariant(desiredPipeline, batch.materialFlags, forcedAdditive);
+            desiredPipeline = pipelineVariant(desiredPipeline, batch.materialFlags, false);
             if (desiredPipeline != currentPipeline) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
                 currentPipeline = desiredPipeline;
@@ -2125,9 +2068,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 // never ran on the one model it was written for.
                 mat->volumetricBeam =
                     (model.isVolumetricBeam || batch.volumetricBeam) ? 1 : 0;
-                mat->fireCard = batch.forgeFireCard ? 1 : 0;
-                mat->blendMode = (forcedAdditive && m2BlendIsModulate(batch.blendMode))
-                    ? static_cast<int32_t>(M2_BLEND_ADD_ALPHA) : static_cast<int32_t>(batch.blendMode);
+                mat->blendMode = batch.blendMode;
                 mat->interiorDarken = 0.0f;
             }
 
@@ -2141,7 +2082,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             // Push constants + single-instance draw
             M2PushConstants pc;
             pc.texCoordSet = static_cast<int32_t>(batch.textureUnit);
-            fillModelPush(pc, model, skyMode_);
+            fillModelPush(pc, skyMode_);
             pc.instanceDataOffset = static_cast<int32_t>(drawOffset);
             vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
             vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.indexStart, 0, 0);

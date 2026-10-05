@@ -1422,25 +1422,6 @@ bool M2Renderer::hasModel(uint32_t modelId) const {
 
 namespace {
 
-// Which batches of a forge are the fire, as opposed to the stone and iron it is
-// built from. classifyBatchTexture already recognises flame and glow cards; the
-// forge adds coals, lava and the reflect textures Blizzard uses for hot metal,
-// none of which carry a flame token in their name.
-bool isForgeFireTexture(const std::string& texKeyLower,
-                        const M2BatchTexClassification& tcls) {
-    if (tcls.hasFlameToken || tcls.likelyFlame || tcls.hasGlowToken
-        || tcls.hasGlowCardToken) {
-        return true;
-    }
-    static constexpr std::string_view kEmberTokens[] = {
-        "cinder", "coal", "ember", "lava", "magma", "reflect", "smoke",
-    };
-    for (auto tok : kEmberTokens) {
-        if (texKeyLower.find(tok) != std::string::npos) return true;
-    }
-    return false;
-}
-
 } // namespace
 
 void M2Renderer::markModelAsSpellEffect(uint32_t modelId) {
@@ -2149,16 +2130,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 if (pit != texturePropsByPtr_.end()) {
                     bgpu.hasAlpha = pit->second.hasAlpha;
                     bgpu.alphaIsSilhouette = pit->second.alphaIsSilhouette;
-                    // The fire cards of a forge or a bonfire - coals, lava
-                    // lumps, ARMORREFLECT/ORBREFLECT, OrcBonFire's LavaLump2
-                    // and FlameLickSmall - as opposed to the masonry, ironwork,
-                    // wood and ash the rest of the model is made of. Nothing is
-                    // keyed out of them: the client draws the batch by its
-                    // blend mode and never keys by colour.
-                    if ((gpuModel.isForge || gpuModel.isBrazierOrFire) &&
-                        isForgeFireTexture(batchTexKeyLower, tcls)) {
-                        bgpu.forgeFireCard = true;
-                    }
                 }
             }
             // textureCoordIndex is an index into a texture coord combo table, not directly
