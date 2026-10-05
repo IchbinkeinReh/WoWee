@@ -3,6 +3,7 @@
 #include "pipeline/m2_loader.hpp"
 
 #include <glm/common.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
@@ -134,6 +135,44 @@ inline glm::quat sampleQuat(const pipeline::M2AnimationTrack& track,
         ? glm::normalize(glm::slerp(safe(keys.quatValues[lower]),
                                    safe(keys.quatValues[lower + 1]), fraction))
         : safe(keys.quatValues[lower]);
+}
+
+
+/// A texture transform's matrix as the 3.3.5a client builds it (FUN_0082da40):
+/// from identity, the rotation about the texture's centre, then the scale
+/// about it, then the translation - each only where its track has keys.
+/// Applied to a UV, the translation acts first.
+inline glm::mat4 textureTransformMatrix(const pipeline::M2TextureTransform& tt, int seq,
+                                        float animTime, float globalTime,
+                                        const std::vector<uint32_t>& globalSeqDurations) {
+    const glm::vec3 centre(0.5f, 0.5f, 0.0f);
+    glm::mat4 m(1.0f);
+    if (!tt.rotation.sequences.empty()) {
+        const glm::quat q = sampleQuat(tt.rotation, seq, animTime, globalTime, globalSeqDurations);
+        m = m * glm::translate(glm::mat4(1.0f), centre) * glm::mat4_cast(q) *
+            glm::translate(glm::mat4(1.0f), -centre);
+    }
+    if (!tt.scale.sequences.empty()) {
+        const glm::vec3 sc = sampleVec3(tt.scale, seq, animTime, globalTime, globalSeqDurations,
+                                        glm::vec3(1.0f));
+        m = m * glm::translate(glm::mat4(1.0f), centre) * glm::scale(glm::mat4(1.0f), sc) *
+            glm::translate(glm::mat4(1.0f), -centre);
+    }
+    if (!tt.translation.sequences.empty()) {
+        const glm::vec3 tr = sampleVec3(tt.translation, seq, animTime, globalTime,
+                                        globalSeqDurations, glm::vec3(0.0f));
+        m = m * glm::translate(glm::mat4(1.0f), tr);
+    }
+    return m;
+}
+
+/// The transform a batch names through its model's lookup table, or null.
+inline const pipeline::M2TextureTransform* batchTextureTransform(const pipeline::M2Model& model,
+                                                                 uint16_t textureAnimIndex) {
+    if (textureAnimIndex == 0xFFFF || textureAnimIndex >= model.textureTransformLookup.size())
+        return nullptr;
+    const uint16_t idx = model.textureTransformLookup[textureAnimIndex];
+    return idx < model.textureTransforms.size() ? &model.textureTransforms[idx] : nullptr;
 }
 
 } // namespace wowee::rendering::m2_track

@@ -50,6 +50,13 @@ layout(set = 1, binding = 1) uniform CharMaterial {
     int colourBlend;
     // 0 no fog, 1 the world's fog, 2 to black, 3 to white, 4 to grey.
     int fogMode;
+    // The batch's texture matrix: rows of the linear part, and translation.
+    float uvM00;
+    float uvM01;
+    float uvM10;
+    float uvM11;
+    float uvTx;
+    float uvTy;
 };
 
 // What a colour-only blend (Mod, Mod2x, NoAlphaAdd) is handed. The 3.3.5a
@@ -76,7 +83,10 @@ layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 
 layout(location = 0) in vec3 FragPos;
 layout(location = 1) in vec3 Normal;
-layout(location = 2) in vec2 TexCoord;
+layout(location = 2) in vec2 inTexCoord;
+// The animated UV, set first thing in main from inTexCoord and the batch's
+// texture matrix; everything below samples through it.
+vec2 TexCoord;
 layout(location = 3) in vec3 Tangent;
 layout(location = 4) in vec3 Bitangent;
 
@@ -266,6 +276,8 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist) {
 }
 
 void main() {
+    TexCoord = vec2(uvM00 * inTexCoord.x + uvM01 * inTexCoord.y + uvTx,
+                    uvM10 * inTexCoord.x + uvM11 * inTexCoord.y + uvTy);
     if (enablePOM == PREVIEW_SIMPLE_TEXTURE_MODE) {
         vec4 texColor = samplePreviewTexture(uTexture, TexCoord);
         if (isMagentaKeyColor(texColor)) {

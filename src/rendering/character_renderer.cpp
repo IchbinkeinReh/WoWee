@@ -256,6 +256,11 @@ struct CharMaterialUBO {
     // The client's fog for this batch: 0 none, 1 the world's fog, 2 black,
     // 3 white, 4 grey. See the table at the batch's material setup.
     int32_t fogMode;
+    // The batch's texture matrix (see m2_track::textureTransformMatrix): the
+    // linear part's rows and the translation. Scalars, so std140 adds no
+    // padding; identity unless the batch animates its texture.
+    float uvM00 = 1.0f, uvM01 = 0.0f, uvM10 = 0.0f, uvM11 = 1.0f;
+    float uvTx = 0.0f, uvTy = 0.0f;
 };
 
 // GPU vertex struct with tangent (expanded from M2Vertex for normal mapping)
@@ -3200,6 +3205,16 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 matData.heightMapVariance = useAdvancedMaterials ? batchHeightVariance : 0.0f;
                 matData.normalMapStrength = normalMapStrength_;
                 matData.hairMaterial = hairMaterial ? 1 : 0;
+                // Texture animation, which this renderer did not do at all.
+                if (const auto* tt = m2_track::batchTextureTransform(gpuModel.data,
+                                                                     batch.textureAnimIndex)) {
+                    const glm::mat4 uvm = m2_track::textureTransformMatrix(
+                        *tt, instance.currentSequenceIndex, instance.animationTime,
+                        instance.globalSequenceTime, gpuModel.data.globalSequenceDurations);
+                    matData.uvM00 = uvm[0][0]; matData.uvM01 = uvm[1][0];
+                    matData.uvM10 = uvm[0][1]; matData.uvM11 = uvm[1][1];
+                    matData.uvTx = uvm[3][0];  matData.uvTy = uvm[3][1];
+                }
                 matData.colourBlend = (instance.isEffectModel || !colourOnlyBlend) ? 0
                                     : (blendMode == 5 ? 1 : (blendMode == 6 ? 2 : 3));
                 // The client's fog per blend mode (table at 0x00a45390): the

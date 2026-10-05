@@ -56,34 +56,6 @@ namespace rendering {
 
 namespace {
 
-// A texture transform's matrix as the 3.3.5a client builds it (FUN_0082da40):
-// from identity, rotation about the texture's centre, then scale about it,
-// then the translation - each only where its track has keys. Applied to a
-// UV, the translation acts first.
-glm::mat4 m2TextureMatrix(const pipeline::M2TextureTransform& tt, int seq, float animTime,
-                          float globalTime, const std::vector<uint32_t>& globalSeqDurations) {
-    const glm::vec3 centre(0.5f, 0.5f, 0.0f);
-    glm::mat4 m(1.0f);
-    if (!tt.rotation.sequences.empty()) {
-        const glm::quat q = m2_track::sampleQuat(tt.rotation, seq, animTime, globalTime,
-                                                 globalSeqDurations);
-        m = m * glm::translate(glm::mat4(1.0f), centre) * glm::mat4_cast(q) *
-            glm::translate(glm::mat4(1.0f), -centre);
-    }
-    if (!tt.scale.sequences.empty()) {
-        const glm::vec3 sc = m2_track::sampleVec3(tt.scale, seq, animTime, globalTime,
-                                                  globalSeqDurations, glm::vec3(1.0f));
-        m = m * glm::translate(glm::mat4(1.0f), centre) * glm::scale(glm::mat4(1.0f), sc) *
-            glm::translate(glm::mat4(1.0f), -centre);
-    }
-    if (!tt.translation.sequences.empty()) {
-        const glm::vec3 tr = m2_track::sampleVec3(tt.translation, seq, animTime, globalTime,
-                                                  globalSeqDurations, glm::vec3(0.0f));
-        m = m * glm::translate(glm::mat4(1.0f), tr);
-    }
-    return m;
-}
-
 // The 2x3 a UV needs from it: rows of the linear part, and the translation.
 void setUvTransform(glm::vec4& linear, glm::vec2& offset, const glm::mat4& m) {
     linear = glm::vec4(m[0][0], m[1][0], m[0][1], m[1][1]);
@@ -1854,7 +1826,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                             glm::vec4 uvLinear(1.0f, 0.0f, 0.0f, 1.0f);
                             if (tt) {
                                 setUvTransform(uvLinear, uvOffset,
-                                               m2TextureMatrix(*tt, inst.currentSequenceIndex,
+                                               m2_track::textureTransformMatrix(*tt, inst.currentSequenceIndex,
                                                                inst.animTime, inst.globalSequenceTime,
                                                                model.globalSequenceDurations));
                             }
@@ -2152,7 +2124,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     uint16_t transformIdx = model.textureTransformLookup[lookupIdx];
                     if (transformIdx < model.textureTransforms.size()) {
                         setUvTransform(uvLinear, uvOffset,
-                                       m2TextureMatrix(model.textureTransforms[transformIdx],
+                                       m2_track::textureTransformMatrix(model.textureTransforms[transformIdx],
                                                        instance.currentSequenceIndex,
                                                        instance.animTime, instance.globalSequenceTime,
                                                        model.globalSequenceDurations));
