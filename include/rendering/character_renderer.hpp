@@ -10,6 +10,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <vector>
+#include <array>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
@@ -383,6 +384,15 @@ private:
     VkPipeline noAlphaAddPipeline_ = VK_NULL_HANDLE;
     VkPipeline modPipeline_ = VK_NULL_HANDLE;
     VkPipeline mod2xPipeline_ = VK_NULL_HANDLE;
+    // Variants of each blend pipeline for an M2 material's flags; index is
+    // cull (none, back, front) + 3 * no-depth-test + 6 * no-depth-write.
+    static constexpr uint32_t kPipelineVariantCount = 12u;
+    std::unordered_map<VkPipeline, std::array<VkPipeline, kPipelineVariantCount>> pipelineVariants_;
+    /// The client's per-material state on top of a blend pipeline: culled
+    /// unless two-sided (0x4), depth test off for 0x8, depth write off for 0x10.
+    VkPipeline pipelineVariant(VkPipeline base, uint16_t materialFlags, bool mirrored,
+                               bool forceNoDepthWrite) const;
+    void destroyPipelineVariants();
     // Whole-instance fades (ghost form, spawn fade-in): alpha blend with depth
     // write kept on, so the faded model still self-occludes instead of showing
     // backfaces and under-armor skin through the body.

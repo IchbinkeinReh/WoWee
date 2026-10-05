@@ -302,14 +302,18 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
 
     // --- Build pipelines ---
     auto buildCharPipeline = [&](VkPipelineColorBlendAttachmentState blendState,
-                                  bool depthWrite, bool alphaToCoverage = false) -> VkPipeline {
+                                  bool depthWrite, bool alphaToCoverage = false,
+                                  VkCullModeFlags cullMode = VK_CULL_MODE_NONE,
+                                  bool depthTest = true) -> VkPipeline {
         auto builder = PipelineBuilder()
             .setShaders(charVert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
                         charFrag.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
             .setVertexInput({charBinding}, charAttrs)
             .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-            .setDepthTest(true, depthWrite, VK_COMPARE_OP_LESS)
+            // Counter-clockwise front, as the M2 renderer's: the camera flips
+            // Y for Vulkan, which turns the model's outward winding around.
+            .setRasterization(VK_POLYGON_MODE_FILL, cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+            .setDepthTest(depthTest, depthWrite, VK_COMPARE_OP_LESS)
             .setDepthBias(0.0f, 0.0f)
             .setColorBlendAttachment(blendState)
             .setMultisample(samples);
@@ -340,6 +344,61 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
     modPipeline_ = buildCharPipeline(colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_ZERO), false);
     mod2xPipeline_ = buildCharPipeline(colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_SRC_COLOR), false);
 
+    // The per-batch state the 3.3.5a client sets from an M2 material's flags
+    // (FUN_0081fe90): back faces culled unless 0x4 (two-sided), depth test
+    // off with 0x8, depth write off with 0x10 - for every blend mode alike.
+    // One variant per combination for each base; a mirrored instance culls
+    // front faces instead, its winding being turned around.
+    struct VariantSpec {
+        VkPipeline base;
+        VkPipelineColorBlendAttachmentState blend;
+        bool alphaToCoverage;
+    };
+    const VariantSpec variantSpecs[] = {
+        {.base = opaquePipeline_, .blend = PipelineBuilder::blendDisabled(), .alphaToCoverage = false},
+        {.base = alphaTestPipeline_, .blend = PipelineBuilder::blendDisabled(), .alphaToCoverage = true},
+        {.base = alphaPipeline_, .blend = PipelineBuilder::blendAlpha(), .alphaToCoverage = false},
+        {.base = additivePipeline_, .blend = PipelineBuilder::blendAdditive(), .alphaToCoverage = false},
+        {.base = noAlphaAddPipeline_, .blend = colourBlend(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE), .alphaToCoverage = false},
+        {.base = modPipeline_, .blend = colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_ZERO), .alphaToCoverage = false},
+        {.base = mod2xPipeline_, .blend = colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_SRC_COLOR), .alphaToCoverage = false},
+    };
+    constexpr VkCullModeFlags kCullModes[3] = {VK_CULL_MODE_NONE, VK_CULL_MODE_BACK_BIT,
+                                               VK_CULL_MODE_FRONT_BIT};
+    for (const auto& spec : variantSpecs) {
+        if (!spec.base) continue;
+        std::array<VkPipeline, kPipelineVariantCount> variants{};
+        for (uint32_t v = 0; v < kPipelineVariantCount; ++v) {
+            const uint32_t cull = v % 3;
+            const bool noTest = ((v / 3) & 1) != 0;
+            const bool noWrite = ((v / 6) & 1) != 0;
+            variants[v] = buildCharPipeline(spec.blend, !noWrite, spec.alphaToCoverage,
+                                            kCullModes[cull], !noTest);
+        }
+        pipelineVariants_[spec.base] = variants;
+    }
+}
+
+void CharacterRenderer::destroyPipelineVariants() {
+    if (!vkCtx_) return;
+    VkDevice device = vkCtx_->getDevice();
+    for (auto& [base, variants] : pipelineVariants_) {
+        for (VkPipeline& p : variants) {
+            if (p) vkDestroyPipeline(device, p, nullptr);
+            p = VK_NULL_HANDLE;
+        }
+    }
+    pipelineVariants_.clear();
+}
+
+VkPipeline CharacterRenderer::pipelineVariant(VkPipeline base, uint16_t materialFlags,
+                                              bool mirrored, bool forceNoDepthWrite) const {
+    auto it = pipelineVariants_.find(base);
+    if (it == pipelineVariants_.end()) return base;
+    const uint32_t cull = (materialFlags & 0x04) ? 0u : (mirrored ? 2u : 1u);
+    const uint32_t noTest = (materialFlags & 0x08) ? 1u : 0u;
+    const uint32_t noWrite = ((materialFlags & 0x10) || forceNoDepthWrite) ? 1u : 0u;
+    return it->second[cull + 3u * noTest + 6u * noWrite];
 }
 
 bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout,
@@ -570,6 +629,7 @@ void CharacterRenderer::shutdown() {
     destroyPipeline(noAlphaAddPipeline_);
     destroyPipeline(modPipeline_);
     destroyPipeline(mod2xPipeline_);
+    destroyPipelineVariants();
     destroyPipeline(translucentPipeline_);
 
     destroy(device, pipelineLayout_);
@@ -2720,6 +2780,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             ? instance.overrideModelMatrix
             : getModelMatrix(instance);
 
+        // A mirrored instance turns its winding around, so it culls the other face.
+        const bool mirroredInstance = glm::determinant(glm::mat3(modelMat)) < 0.0f;
+
         // Push model matrix
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &modelMat);
 
@@ -2978,12 +3041,15 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 // inferring a cutout from "the texture has alpha" discards the whole
                 // building and leaves the sky showing through it. Only an alpha-key
                 // material (blendMode 1) cuts out here.
+                //
+                // The client cuts out alpha-key batches and nothing else
+                // (FUN_0081fe90 sets the alpha reference by blend mode alone):
+                // an opaque batch is opaque whatever its texture's alpha, and a
+                // blended one is blended. Hair keeps this renderer's cutout.
                 const bool blendNeedsCutout = instance.isSceneModel
                     ? (blendMode == 1)
-                    : ((blendMode == 1) ||
-                       (blendMode == 0 && alphaCutout) ||
-                       (blendMode >= 2 && !alphaCutout) ||
-                       hairMaterial);
+                    : ((blendMode == 1) || hairMaterial);
+                (void)alphaCutout;
                 // Enchant glows emit their own light; scene lighting must not tint them.
                 const bool unlit = ((materialFlags & 0x01) != 0) || (blendMode >= 3) ||
                                    instance.isEffectModel;
@@ -3042,8 +3108,10 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     // character standing behind them - the card's own materials
                     // ask for no depth write (0x10) and the scenes animate their
                     // alpha, so almost every frame took this branch.
-                    const bool noDepthWrite = (blendMode >= 2) || ((materialFlags & 0x10) != 0);
-                    desiredPipeline = noDepthWrite ? alphaPipeline_ : translucentPipeline_;
+                    //
+                    // Whether it writes depth is the material's 0x10 flag, as
+                    // for every batch; see pipelineVariant below.
+                    desiredPipeline = alphaPipeline_;
                 } else if (hairMaterial) {
                     desiredPipeline = alphaTestPipeline_;
                 } else {
@@ -3059,6 +3127,12 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                         default: desiredPipeline = alphaPipeline_; break;
                     }
                 }
+                // Cull, depth test and depth write from the material's flags, as
+                // the client sets them for every blend mode (FUN_0081fe90).
+                // Enchant glows are forced additive here and stay off the depth
+                // buffer as they always have.
+                desiredPipeline = pipelineVariant(desiredPipeline, materialFlags,
+                                                  mirroredInstance, instance.isEffectModel);
                 if (desiredPipeline != currentPipeline) {
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
                     currentPipeline = desiredPipeline;
@@ -3097,7 +3171,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 // Create per-batch material UBO
                 CharMaterialUBO matData{};
                 matData.opacity = instance.opacity * batchColorAlpha;
-                matData.alphaTest = blendNeedsCutout ? 1 : 0;
+                // 1: the client's alpha-key test. 2: a blended mode, which the
+                // client tests at 1/255 - only what is fully transparent goes.
+                matData.alphaTest = blendNeedsCutout ? 1 : (blendMode >= 2 ? 2 : 0);
                 matData.colorKeyBlack = colorKeyBlack ? 1 : 0;
                 matData.unlit = unlit ? 1 : 0;
                 matData.emissiveBoost = emissiveBoost;
@@ -4411,6 +4487,7 @@ void CharacterRenderer::recreatePipelines() {
     destroy(device, noAlphaAddPipeline_);
     destroy(device, modPipeline_);
     destroy(device, mod2xPipeline_);
+    destroyPipelineVariants();
     destroy(device, translucentPipeline_);
 
     // --- Load shaders ---

@@ -62,6 +62,11 @@ vec4 colourBlendOutput(vec3 lit, vec3 tex, float alpha) {
     return vec4(lit, alpha);
 }
 
+// The 3.3.5a client's alpha-key reference (FUN_0081fe90): 224/255 of the
+// batch's alpha, against an output alpha that carries the same batch alpha -
+// so the texture's alpha against 224/255.
+const float ALPHA_KEY_REF = 0.8784314;
+
 layout(set = 1, binding = 2) uniform sampler2D uNormalHeightMap;
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
@@ -264,10 +269,13 @@ void main() {
         if (isMagentaKeyColor(texColor)) {
             discard;
         }
-        if (alphaTest != 0 && texColor.a < 0.5) {
+        if (alphaTest == 1 && texColor.a < ALPHA_KEY_REF) {
             discard;
         }
-        if (alphaTest != 0 && hairMaterial != 0) {
+        if (alphaTest == 2 && texColor.a * opacity < 1.0 / 255.0) {
+            discard;
+        }
+        if (alphaTest == 1 && hairMaterial != 0) {
             texColor.a = 1.0;
         }
         if (colorKeyBlack != 0) {
@@ -293,7 +301,7 @@ void main() {
     vec2 finalUV = TexCoord;
 
     bool usePOM = enablePOM != 0 &&
-                  alphaTest == 0 &&
+                  alphaTest != 1 &&
                   colorKeyBlack == 0 &&
                   heightMapVariance > 0.001 &&
                   lodFactor < 0.99;
@@ -321,7 +329,7 @@ void main() {
     // Transparent edge texels can carry black/garbage RGB even when alpha is
     // valid; pull color from a coarser mip and trust the source more as alpha
     // approaches opaque. This matches the generic M2 path.
-    if (alphaTest != 0 && texColor.a > 0.01 && texColor.a < 1.0) {
+    if (alphaTest == 1 && texColor.a > 0.01 && texColor.a < 1.0) {
         vec3 mipColor = textureLod(uTexture, finalUV, 4.0).rgb;
         float trust = smoothstep(0.0, 0.9, texColor.a);
         texColor.rgb = mix(mipColor, texColor.rgb, trust);
@@ -335,18 +343,22 @@ void main() {
         discard;
     }
 
-    if (alphaTest != 0 && hairMaterial != 0) {
-        if (texColor.a < 0.5) {
+    if (alphaTest == 1 && hairMaterial != 0) {
+        if (texColor.a < ALPHA_KEY_REF) {
             discard;
         }
         texColor.a = 1.0;
-    } else if (alphaTest != 0) {
+    } else if (alphaTest == 1) {
         // Screen-space sharpened alpha for alpha-to-coverage anti-aliasing.
-        // Rescales alpha so the 0.5 cutoff maps to exactly the texel boundary,
+        // Rescales alpha so the cutoff maps to exactly the texel boundary,
         // giving smooth edges when MSAA + alpha-to-coverage is active.
         float aGrad = fwidth(texColor.a);
-        texColor.a = clamp((texColor.a - 0.5) / max(aGrad, 0.001) * 0.5 + 0.5, 0.0, 1.0);
+        texColor.a = clamp((texColor.a - ALPHA_KEY_REF) / max(aGrad, 0.001) * 0.5 + 0.5, 0.0, 1.0);
         if (texColor.a < 1.0 / 255.0) discard;
+    } else if (alphaTest == 2 && texColor.a * opacity < 1.0 / 255.0) {
+        // A blended mode: the client tests it at 1/255, so what is fully
+        // transparent is not drawn and writes no depth.
+        discard;
     }
     if (colorKeyBlack != 0) {
         float lum = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));

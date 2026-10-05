@@ -13,6 +13,7 @@
 #include <glm/glm.hpp>
 #include <atomic>
 #include <memory>
+#include <array>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -71,9 +72,6 @@ struct M2ModelGPU {
         uint8_t texFlags = 0;     // M2Texture.flags (bit0=WrapS, bit1=WrapT)
         bool lanternGlowHint = false; // Texture/model hints this batch is a glow-card billboard
         bool glowCardLike = false; // Batch likely is a flat emissive card that should be sprite-replaced
-        /// Single-sided opaque batch wound entirely inside-out: only its far
-        /// wall is meant to show. See M2Renderer::batchIsInsideOut.
-        bool cullBackFaces = false;
         bool preserveGlowMesh = false; // Keep emissive glass/fixture mesh below its glow sprite
         // Forge fire card: the flame/coals/glow batches of a forge, as opposed
         // to the masonry and ironwork the rest of the model is made of.
@@ -760,9 +758,6 @@ private:
 
     // Vulkan pipelines (one per blend mode)
     VkPipeline opaquePipeline_ = VK_NULL_HANDLE;       // blend mode 0
-    /// Opaque with back faces culled, for the inside-out single-sided batches
-    /// that every other M2 batch does without: the rest are drawn two-sided.
-    VkPipeline opaqueCullPipeline_ = VK_NULL_HANDLE;
     /// Cutout: leaves, ground clutter, anything the fragment shader alpha-tests.
     /// Blend disabled with alpha-to-coverage on, which is what turns the
     /// shader's sharpened alpha into per-sample coverage.
@@ -784,6 +779,29 @@ private:
     VkPipeline noAlphaAddPipeline_ = VK_NULL_HANDLE;    // blend mode 3
     VkPipeline modPipeline_ = VK_NULL_HANDLE;           // blend mode 5
     VkPipeline mod2xPipeline_ = VK_NULL_HANDLE;         // blend mode 6
+    // Variants of each blend pipeline for an M2 material's flags; see
+    // buildMainPassPipelines. Index bits: cull back faces, no depth test, no
+    // depth write.
+    static constexpr uint32_t kVariantCull = 1u;
+    static constexpr uint32_t kVariantNoDepthTest = 2u;
+    static constexpr uint32_t kVariantNoDepthWrite = 4u;
+    static constexpr uint32_t kPipelineVariantCount = 8u;
+    std::unordered_map<VkPipeline, std::array<VkPipeline, kPipelineVariantCount>> pipelineVariants_;
+    /// The client's per-material state on top of a blend pipeline: culled
+    /// unless two-sided (0x4), depth test off for 0x8, depth write off for
+    /// 0x10 or when the caller needs it off.
+    VkPipeline pipelineVariant(VkPipeline base, uint16_t materialFlags,
+                               bool forceNoDepthWrite = false) const {
+        auto it = pipelineVariants_.find(base);
+        if (it == pipelineVariants_.end()) return base;
+        uint32_t v = 0;
+        if ((materialFlags & 0x04) == 0) v |= kVariantCull;
+        if ((materialFlags & 0x08) != 0) v |= kVariantNoDepthTest;
+        if ((materialFlags & 0x10) != 0 || forceNoDepthWrite) v |= kVariantNoDepthWrite;
+        return it->second[v];
+    }
+    void destroyPipelineVariants();
+
     /// The pipeline an M2 blend mode draws with, as the client maps it.
     VkPipeline blendPipelineFor(uint8_t blendMode) const {
         switch (blendMode) {

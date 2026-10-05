@@ -234,24 +234,11 @@ void main() {
         texColor.rgb = mix(mipColor, texColor.rgb, trust);
     }
 
-    float alphaCutoff = 0.5;
-    if (alphaTest == 2) {
-        alphaCutoff = 0.4;
-    } else if (alphaTest == 3) {
-        alphaCutoff = 0.25;
-    } else if (alphaTest != 0) {
-        alphaCutoff = 0.4;
-    }
-    // Mip-alpha preservation: alpha mips average downward, thinning distant
-    // canopies to skeletons. Boost alpha with mip level so perceived leaf
-    // density stays constant with distance.
-    if (isFoliage && hasTexture != 0) {
-        // Gentler than it was: at 0.18 a mip-4 canopy came back with every
-        // leaf texel above 0.23 alpha opaque, which is a solid green mass
-        // rather than a thinned one. Coverage carries the rest now.
-        float mip = textureQueryLod(uTexture, TexCoord).x;
-        texColor.a *= 1.0 + clamp(mip, 0.0, 4.0) * 0.11;
-    }
+    // The client's alpha reference (FUN_0081fe90): 224/255 of the batch's
+    // alpha for an alpha key, which against an output alpha of texture times
+    // that same batch alpha is the texture's alpha against 224/255. Ground
+    // clutter is this renderer's own and keeps its lower cutoff.
+    float alphaCutoff = (alphaTest == 3) ? 0.25 : 0.8784314;
     if (alphaTest != 0) {
         // Screen-space sharpened alpha: rescale so the cutoff maps to the
         // texel boundary. With MSAA + alpha-to-coverage on the cutout
@@ -260,6 +247,10 @@ void main() {
         float aGrad = fwidth(texColor.a);
         texColor.a = clamp((texColor.a - alphaCutoff) / max(aGrad, 0.001) * 0.5 + 0.5, 0.0, 1.0);
         if (texColor.a < 1.0 / 255.0) discard;
+    } else if (blendMode >= 2 && colorKeyBlack == 0 && texColor.a * vFadeAlpha < 1.0 / 255.0) {
+        // Every blended mode is alpha tested at 1/255 in the client: what is
+        // fully transparent is not drawn at all, so it writes no depth.
+        discard;
     }
     if (colorKeyBlack != 0) {
         float lum = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));

@@ -74,10 +74,16 @@ inline bool m2BlendIsAdditive(uint8_t blendMode) {
 /// Safe to lean on, because hasAlpha is measured rather than guessed:
 /// BLPImage::hasTransparency walks level 0 and, for DXT1, counts a block only
 /// when it is in punch-through mode and a texel actually selects index 3.
+///
+/// The 3.3.5a client settles it by blend mode alone (FUN_0081fe90 sets the
+/// alpha reference): alpha key is tested at 224/255, every blended mode only
+/// loses what is fully transparent, and opaque is never tested. A blended
+/// batch without alpha is blended - by an alpha of 1, which is opaque - rather
+/// than cut out. hasAlpha is kept for the callers; an alpha-key texture with
+/// none passes the test everywhere, so the answer is the same either way.
 inline bool m2BatchNeedsAlphaTest(uint8_t blendMode, bool hasAlpha) {
-    if (blendMode == M2_BLEND_ALPHA_KEY) return hasAlpha;
-    if (m2BlendIsAdditive(blendMode) || m2BlendIsModulate(blendMode)) return false;
-    return blendMode >= M2_BLEND_ALPHA && !hasAlpha;
+    (void)hasAlpha;
+    return blendMode == M2_BLEND_ALPHA_KEY;
 }
 
 /// Should this batch have its black keyed out?

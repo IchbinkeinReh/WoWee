@@ -1884,10 +1884,15 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     // Forcing it opaque and then keying the black out leaves
                     // the bright middle of a glow card as a solid disc, which
                     // is what Orgrimmar's bonfires were.
+                    // The client alpha-tests alpha-key batches and nothing
+                    // else (FUN_0081fe90): a blended batch is blended, and an
+                    // opaque one is opaque whatever its texture's alpha.
+                    // Ground clutter and the colour key are this renderer's
+                    // own and keep their cutout.
                     const bool forceCutout =
                         !model.isSpellEffect && !fireEffectModel &&
                         !m2BlendIsAdditive(batch.blendMode) &&
-                        (model.isGroundDetail || foliageCutout ||
+                        (model.isGroundDetail ||
                          m2BatchNeedsAlphaTest(batch.blendMode, batch.hasAlpha) ||
                          batch.colorKeyBlack);
 
@@ -1908,9 +1913,11 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         desiredPipeline = additivePipeline_;
                     } else {
                         desiredPipeline = blendPipelineFor(effectiveBlendMode);
-                        if (effectiveBlendMode == 0 && batch.cullBackFaces)
-                            desiredPipeline = opaqueCullPipeline_;
                     }
+                    // Cull, depth test and depth write from the material's
+                    // flags, as the client sets them for every blend mode.
+                    desiredPipeline = pipelineVariant(desiredPipeline, batch.materialFlags,
+                                                      forcedAdditive);
                     if (desiredPipeline != currentPipeline) {
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
                         currentPipeline = desiredPipeline;
@@ -1927,6 +1934,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                             mat->colorKeyThreshold = (effectiveBlendMode == 4 || effectiveBlendMode == 5) ? 0.7f : 0.08f;
                         if (forceCutout) {
                             mat->alphaTest = model.isGroundDetail ? 3 : (foliageCutout ? 2 : 1);
+                        } else {
+                            mat->alphaTest = 0;
                             if (model.isGroundDetail) mat->unlit = 0;
                         }
                         mat->volumetricBeam =
@@ -2144,6 +2153,9 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             if (!forcedAdditive && effectiveBlendMode <= 1) desiredPipeline = additivePipeline_;
             // An opaque layer of a faded instance: blended by its fade.
             if (instanceFaded && effectiveBlendMode <= 1) desiredPipeline = alphaPipeline_;
+            // Cull, depth test and depth write from the material's flags, as
+            // the client sets them for every blend mode.
+            desiredPipeline = pipelineVariant(desiredPipeline, batch.materialFlags, forcedAdditive);
             if (desiredPipeline != currentPipeline) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
                 currentPipeline = desiredPipeline;

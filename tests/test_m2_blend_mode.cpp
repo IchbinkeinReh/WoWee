@@ -41,23 +41,18 @@ TEST_CASE("no additive batch is alpha tested", "[m2]") {
     }
 }
 
-TEST_CASE("alpha key is tested where there is alpha to key on", "[m2]") {
+TEST_CASE("alpha key is tested, whatever the texture", "[m2]") {
+    // The 3.3.5a client sets the alpha reference from the blend mode alone
+    // (FUN_0081fe90). An alpha-key texture with no alpha passes the test
+    // everywhere, so testing it costs nothing and decides nothing.
     CHECK(m2BatchNeedsAlphaTest(1, true));
-    // And not where there is none. Every texel passes a test against an alpha
-    // that is 1 everywhere, so the test decides nothing - but it still puts
-    // the batch on the cutout pipeline and its alpha-to-coverage. Tirisfal's
-    // canopy trunks are drawn alpha-keyed over a DXT1 texture with no
-    // punch-through block in it; the one of the seven whose trunk is plain
-    // opaque is the one that renders right.
-    CHECK_FALSE(m2BatchNeedsAlphaTest(1, false));
+    CHECK(m2BatchNeedsAlphaTest(1, false));
 }
 
-TEST_CASE("a blended batch with no alpha still falls back to cutout",
-          "[m2]") {
-    // The reason the rule existed. Blending by an alpha that is 1 everywhere
-    // draws the quad solid, so testing gives the silhouette a chance.
-    CHECK(m2BatchNeedsAlphaTest(2, false));
-    // With a real alpha channel it blends, as authored.
+TEST_CASE("a blended batch is blended, not cut out", "[m2]") {
+    // The client blends a mode-2 batch whatever its texture: without alpha
+    // that is an alpha of 1, which is opaque, and it does not cut it out.
+    CHECK_FALSE(m2BatchNeedsAlphaTest(2, false));
     CHECK_FALSE(m2BatchNeedsAlphaTest(2, true));
 }
 
@@ -88,7 +83,7 @@ TEST_CASE("blend mode 7 is plain alpha", "[m2]") {
     // The client's M2 -> Gx table maps 7 to Alpha, not to an additive blend.
     CHECK_FALSE(m2BlendIsAdditive(7));
     CHECK_FALSE(m2BlendIsModulate(7));
-    CHECK(m2BatchNeedsAlphaTest(7, false));
+    CHECK_FALSE(m2BatchNeedsAlphaTest(7, false));
     CHECK_FALSE(m2BatchNeedsAlphaTest(7, true));
 }
 

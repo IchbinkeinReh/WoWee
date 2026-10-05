@@ -43,11 +43,6 @@
 namespace wowee {
 namespace rendering {
 
-namespace {
-
-
-} // namespace
-
 void M2Instance::updateModelMatrix() {
     // Doodads and buildings compose this identically, in placement_transform.hpp
     // - the header records what it took to establish the order, and a test
@@ -307,7 +302,8 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
     auto buildM2Pipeline = [&](VkPipelineColorBlendAttachmentState blendState, bool depthWrite,
                                VkPipelineCreateFlags flags = 0, VkPipeline basePipeline = VK_NULL_HANDLE,
                                bool alphaToCoverage = false,
-                               VkCullModeFlags cullMode = VK_CULL_MODE_NONE) -> VkPipeline {
+                               VkCullModeFlags cullMode = VK_CULL_MODE_NONE,
+                               bool depthTest = true) -> VkPipeline {
         auto builder = PipelineBuilder()
             .setShaders(m2Vert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
                         m2Frag.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
@@ -318,7 +314,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
             // pushed to the far plane, so the test is what lets ground drawn
             // before it occlude it, and a write would put the far plane over
             // everything drawn after.
-            .setDepthTest(true, skyMode_ ? false : depthWrite, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setDepthTest(depthTest, skyMode_ ? false : depthWrite, VK_COMPARE_OP_LESS_OR_EQUAL)
             .setColorBlendAttachment(blendState)
             .setMultisample(vkCtx_->getMsaaSamples());
         // MSAA alpha-to-coverage dithers the shader's sharpened cutout alpha
@@ -335,12 +331,9 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
 
     opaquePipeline_ = buildM2Pipeline(PipelineBuilder::blendDisabled(), true,
                                       VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT);
-    // Counter-clockwise is the front face here: the camera flips Y for Vulkan,
-    // which turns the model's outward winding around, and it is the winding
-    // the culling variant needs to keep the far wall of an inside-out mesh.
-    opaqueCullPipeline_ = buildM2Pipeline(PipelineBuilder::blendDisabled(), true,
-                                          VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_,
-                                          /*alphaToCoverage=*/false, VK_CULL_MODE_BACK_BIT);
+    // Counter-clockwise is the front face for every M2 pipeline: the camera
+    // flips Y for Vulkan, which turns the model's outward winding around. The
+    // culled variants (see below) rely on it.
     alphaTestPipeline_ = buildM2Pipeline(PipelineBuilder::blendAlpha(), true,
                                          VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_);
     // Every alpha-tested batch - a canopy, a fern, a tuft of clutter - is drawn
@@ -374,6 +367,43 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                                    VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_);
     mod2xPipeline_ = buildM2Pipeline(colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_SRC_COLOR), false,
                                      VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_);
+
+    // The per-batch state the 3.3.5a client sets from an M2 material's flags
+    // (FUN_0081fe90): back faces culled unless 0x4 (two-sided), depth test
+    // off with 0x8, depth write off with 0x10 - for every blend mode alike.
+    // Each base above gets one variant per combination; pipelineVariant()
+    // picks it at draw time. The bases themselves stay as they were for the
+    // paths that bind them directly.
+    struct VariantSpec {
+        VkPipeline base;
+        VkPipelineColorBlendAttachmentState blend;
+        bool alphaToCoverage;
+    };
+    const VariantSpec variantSpecs[] = {
+        {.base = opaquePipeline_, .blend = PipelineBuilder::blendDisabled(), .alphaToCoverage = false},
+        {.base = alphaTestPipeline_, .blend = PipelineBuilder::blendAlpha(), .alphaToCoverage = false},
+        {.base = cutoutPipeline_, .blend = PipelineBuilder::blendDisabled(), .alphaToCoverage = true},
+        {.base = alphaPipeline_, .blend = PipelineBuilder::blendAlpha(), .alphaToCoverage = false},
+        {.base = additivePipeline_, .blend = PipelineBuilder::blendAdditive(), .alphaToCoverage = false},
+        {.base = noAlphaAddPipeline_, .blend = colourBlend(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE), .alphaToCoverage = false},
+        {.base = modPipeline_, .blend = colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_ZERO), .alphaToCoverage = false},
+        {.base = mod2xPipeline_, .blend = colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_SRC_COLOR), .alphaToCoverage = false},
+    };
+    for (const auto& spec : variantSpecs) {
+        if (!spec.base) continue;
+        std::array<VkPipeline, kPipelineVariantCount> variants{};
+        for (uint32_t v = 0; v < kPipelineVariantCount; ++v) {
+            const bool cull = (v & kVariantCull) != 0;
+            const bool noTest = (v & kVariantNoDepthTest) != 0;
+            const bool noWrite = (v & kVariantNoDepthWrite) != 0;
+            variants[v] = buildM2Pipeline(spec.blend, !noWrite,
+                                          VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_,
+                                          spec.alphaToCoverage,
+                                          cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE,
+                                          !noTest);
+        }
+        pipelineVariants_[spec.base] = variants;
+    }
 
     // --- Build particle pipelines ---
     if (particleVert.isValid() && particleFrag.isValid()) {
@@ -1097,6 +1127,18 @@ void M2Renderer::invalidateCullOutput(uint32_t frameIndex) {
     }
 }
 
+void M2Renderer::destroyPipelineVariants() {
+    if (!vkCtx_) return;
+    VkDevice device = vkCtx_->getDevice();
+    for (auto& [base, variants] : pipelineVariants_) {
+        for (VkPipeline& p : variants) {
+            if (p) vkDestroyPipeline(device, p, nullptr);
+            p = VK_NULL_HANDLE;
+        }
+    }
+    pipelineVariants_.clear();
+}
+
 void M2Renderer::shutdown() {
     LOG_INFO("Shutting down M2 renderer...");
     if (!vkCtx_) return;
@@ -1156,11 +1198,11 @@ void M2Renderer::shutdown() {
     // Destroy pipelines
     auto destroyPipeline = [&](VkPipeline& p) { if (p) { vkDestroyPipeline(device, p, nullptr); p = VK_NULL_HANDLE; } };
     destroyPipeline(opaquePipeline_);
-    destroyPipeline(opaqueCullPipeline_);
     destroyPipeline(cutoutPipeline_);
     destroyPipeline(alphaTestPipeline_);
     destroyPipeline(alphaPipeline_);
     destroyPipeline(additivePipeline_);
+    destroyPipelineVariants();
     destroyPipeline(noAlphaAddPipeline_);
     destroyPipeline(modPipeline_);
     destroyPipeline(mod2xPipeline_);
@@ -1452,45 +1494,6 @@ void M2Renderer::censusInstance(const M2Instance& instance) {
                 " authoredH=", authored, " drawnH=", authored * instance.scale,
                 " top=", instance.position.z + gpu.boundMax.z * instance.scale);
 }
-
-namespace {
-
-/// True when every triangle of the batch faces toward the middle of the batch's
-/// own vertices.
-///
-/// Such a mesh is only meant to be seen from inside, which is how an artist
-/// puts a surface behind something and in front of nothing: the demon
-/// crystal's opaque core is the far wall of the crystal, wound inward, with its
-/// eyes floating between it and the translucent shell. The client back-face
-/// culls any batch that is not marked two-sided, so only that far wall is ever
-/// drawn. This renderer draws everything two-sided, which puts the near wall in
-/// front of the eyes and hides them.
-bool batchIsInsideOut(const pipeline::M2Model& model, uint32_t indexStart, uint32_t indexCount) {
-    if (indexCount < 12 || indexStart + indexCount > model.indices.size()) return false;
-    glm::vec3 centre(0.0f);
-    uint32_t n = 0;
-    for (uint32_t k = 0; k < indexCount; ++k) {
-        const uint16_t v = model.indices[indexStart + k];
-        if (v >= model.vertices.size()) return false;
-        centre += model.vertices[v].position;
-        ++n;
-    }
-    centre /= static_cast<float>(n);
-    uint32_t inward = 0, outward = 0;
-    for (uint32_t k = 0; k + 2 < indexCount; k += 3) {
-        const uint16_t a = model.indices[indexStart + k];
-        const uint16_t b = model.indices[indexStart + k + 1];
-        const uint16_t c = model.indices[indexStart + k + 2];
-        const glm::vec3& pa = model.vertices[a].position;
-        const glm::vec3 normal = glm::cross(model.vertices[b].position - pa,
-                                            model.vertices[c].position - pa);
-        const glm::vec3 faceCentre = (pa + model.vertices[b].position + model.vertices[c].position) / 3.0f;
-        if (glm::dot(normal, faceCentre - centre) < 0.0f) ++inward; else ++outward;
-    }
-    return outward == 0 && inward > 0;
-}
-
-} // namespace
 
 bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     if (models.find(modelId) != models.end()) {
@@ -2490,13 +2493,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                           " tex=", bgpu.texture,
                           " idxCount=", bgpu.indexCount);
             }
-            // Single-sided, opaque and wound inside-out: draw only what faces
-            // the camera. Kept to small models, because a sky dome or a room is
-            // wound inward to be seen from within and must keep both walls.
-            bgpu.cullBackFaces = bgpu.blendMode == 0 &&
-                                 (bgpu.materialFlags & 0x04) == 0 &&
-                                 gpuModel.boundRadius <= 12.0f &&
-                                 batchIsInsideOut(model, bgpu.indexStart, bgpu.indexCount);
 
             gpuModel.batches.push_back(bgpu);
         }
