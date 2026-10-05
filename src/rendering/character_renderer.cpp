@@ -872,7 +872,7 @@ CharacterRenderer::NormalMapResult CharacterRenderer::generateNormalHeightMapCPU
     return result;
 }
 
-VkTexture* CharacterRenderer::loadTexture(const std::string& path) {
+VkTexture* CharacterRenderer::loadTexture(const std::string& path, uint32_t texFlags) {
     constexpr uint64_t kFailedTextureRetryLookups = 512;
     // Skip empty or whitespace-only paths (type-0 textures have no filename)
     if (path.empty()) return whiteTexture_.get();
@@ -888,9 +888,13 @@ VkTexture* CharacterRenderer::loadTexture(const std::string& path) {
     // carried four of its eleven tokens and searched the whole path, so which
     // textures were colour-keyed depended on which renderer had loaded them.
     const bool colorKeyBlackHint = assetNameLooksLikeFlame(key);
+    // The wrap mode belongs to the sampler, so a file loaded with other wrap
+    // flags is a texture of its own. Repeat-both keeps the plain path.
+    texFlags &= 0x3;
+    const std::string cacheKey = texFlags == 0x3 ? key : key + "#wrap" + std::to_string(texFlags);
 
     // Check cache
-    auto it = textureCache.find(key);
+    auto it = textureCache.find(cacheKey);
     if (it != textureCache.end()) {
         it->second.lastUse = ++textureCacheCounter_;
         return it->second.texture.get();
@@ -958,8 +962,11 @@ VkTexture* CharacterRenderer::loadTexture(const std::string& path) {
     auto tex = std::make_unique<VkTexture>();
     tex->upload(*vkCtx_, blpImage.data.data(), blpImage.width, blpImage.height,
                 VK_FORMAT_R8G8B8A8_UNORM, true);
-    tex->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
-                       VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    // M2Texture flags: bit 0 repeats U, bit 1 repeats V; otherwise clamped,
+    // as the client samples them. Characters always repeated.
+    tex->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR,
+                       (texFlags & 0x1) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                       (texFlags & 0x2) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
 
     VkTexture* texPtr = tex.get();
 
@@ -969,16 +976,17 @@ VkTexture* CharacterRenderer::loadTexture(const std::string& path) {
     e.lastUse = ++textureCacheCounter_;
     e.hasAlpha = hasAlpha;
     e.colorKeyBlack = colorKeyBlackHint;
+    e.wrapFlags = static_cast<uint8_t>(texFlags);
 
     // Launch normal map generation on background thread - CPU work is pure compute,
     // only the GPU upload (in processPendingNormalMaps) needs the main thread (~1-2ms).
     e.normalMapPending = queueNormalMapGeneration(
-        key, std::vector<uint8_t>(blpImage.data.begin(), blpImage.data.end()),
+        cacheKey, std::vector<uint8_t>(blpImage.data.begin(), blpImage.data.end()),
         blpImage.width, blpImage.height);
 
     textureCacheBytes_ += e.approxBytes;
     texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha, .colorKeyBlack = colorKeyBlackHint};
-    textureCache[key] = std::move(e);
+    textureCache[cacheKey] = std::move(e);
     failedTextureCache_.erase(key);
     failedTextureRetryAt_.erase(key);
 
@@ -1011,8 +1019,11 @@ void CharacterRenderer::processPendingNormalMaps(int budget) {
         bool ok = tex->upload(*vkCtx_, result.pixels.data(), result.width, result.height,
                               VK_FORMAT_R8G8B8A8_UNORM, true);
         if (ok) {
-            tex->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
-                               VK_SAMPLER_ADDRESS_MODE_REPEAT);
+            // Wrapped as the texture it belongs to is.
+            const uint8_t wrap = it->second.wrapFlags;
+            tex->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR,
+                               (wrap & 0x1) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                               (wrap & 0x2) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
             it->second.heightMapVariance = result.variance;
             it->second.approxBytes += approxTextureBytesWithMips(result.width, result.height);
             textureCacheBytes_ += approxTextureBytesWithMips(result.width, result.height);
@@ -1902,7 +1913,7 @@ bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
     // untextured when nothing answered, because CreatureDisplayInfo has no
     // second skin for it to be overwritten with.
     for (const auto& tex : model.textures) {
-        VkTexture* texPtr = tex.type == 0 ? loadTexture(tex.filename) : nullptr;
+        VkTexture* texPtr = tex.type == 0 ? loadTexture(tex.filename, tex.flags) : nullptr;
         gpuModel.textureIds.push_back(texPtr);
     }
 

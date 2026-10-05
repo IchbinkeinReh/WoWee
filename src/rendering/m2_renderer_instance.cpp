@@ -734,9 +734,13 @@ VkTexture* M2Renderer::loadTexture(const std::string& path, uint32_t texFlags) {
     };
     std::string key = normalizeKey(path);
     const uint64_t lookupSerial = ++textureLookupSerial_;
+    // The wrap mode belongs to the sampler, and models share a file with
+    // different wrap flags; keyed on the path alone, whichever loaded it
+    // first decided how every later one tiles.
+    const std::string cacheKey = key + "#wrap" + std::to_string(texFlags & 0x3);
 
     // Check cache
-    auto it = textureCache.find(key);
+    auto it = textureCache.find(cacheKey);
     if (it != textureCache.end()) {
         it->second.lastUse = ++textureCacheCounter_;
         return it->second.texture.get();
@@ -853,7 +857,7 @@ VkTexture* M2Renderer::loadTexture(const std::string& path, uint32_t texFlags) {
     e.approxBytes = approxBytes;
     e.lastUse = ++textureCacheCounter_;
     textureCacheBytes_ += e.approxBytes;
-    textureCache[key] = std::move(e);
+    textureCache[cacheKey] = std::move(e);
     failedTextureCache_.erase(key);
     failedTextureRetryAt_.erase(key);
     texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha,

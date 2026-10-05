@@ -355,7 +355,9 @@ public:
     void clearCompositeCache();
 
     /** Load a BLP texture from MPQ and return VkTexture* (cached). */
-    VkTexture* loadTexture(const std::string& path);
+    /// texFlags: the M2 texture's wrap flags (bit 0 repeat U, bit 1 repeat V;
+    /// clamp otherwise), as the client samples it. Repeat both by default.
+    VkTexture* loadTexture(const std::string& path, uint32_t texFlags = 0x3);
     [[nodiscard]] VkTexture* getTransparentTexture() const { return transparentTexture_.get(); }
 
     /** Replace a loaded model's texture at the given slot. */
@@ -447,6 +449,7 @@ private:
         bool hasAlpha = false;
         bool colorKeyBlack = false;
         bool normalMapPending = false;  // deferred normal map generation
+        uint8_t wrapFlags = 0x3;  // M2Texture wrap flags the sampler was made with
     };
     std::unordered_map<std::string, TextureCacheEntry> textureCache;
     struct NormalMapInfo {
