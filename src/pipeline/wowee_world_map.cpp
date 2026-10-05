@@ -171,8 +171,12 @@ WoweeWorldMap WoweeWorldMapLoader::makeArena(const std::string& mapName) {
     m.name = mapName;
     m.worldType = WoweeWorldMap::Arena;
     m.gridSize = 1;
+    // The one tile's bit set directly. Through setTile, GCC 16 at -O3 inlined
+    // its grow-the-bitmap branch here - dead, since assign has just made the
+    // byte - and reported the resize as an overflow, failing the editor's
+    // Windows build. The client is built with LTO and never saw it.
     m.tileBitmap.assign(bitmapBytesFor(1), 0);
-    m.setTile(0, 0, true);
+    m.tileBitmap[0] = 1;
     return m;
 }
 
