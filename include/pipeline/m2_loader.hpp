@@ -178,6 +178,9 @@ struct M2ParticleEmitter {
     M2FBlock particleColor;   // vec3 RGB at 3 timestamps
     M2FBlock particleAlpha;   // float (from uint16/32767) at 3 timestamps
     M2FBlock particleScale;   // float (x component of vec2) at 3 timestamps
+    // WotLK +0x1C8, uint8: while it reads 0 the emitter stops emitting. No
+    // keys means enabled, as the client samples it with a default of 1.
+    M2AnimationTrack enabledTrack;
     bool enabled = true;
 };
 

@@ -122,6 +122,13 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
     for (size_t ei = 0; ei < gpu.particleEmitters.size(); ei++) {
         const auto& em = gpu.particleEmitters[ei];
         if (!em.enabled) continue;
+        // The emitter's own on/off track (client FUN_0082d2f0): while it is
+        // off nothing new is emitted, and what is already alive plays out.
+        if (m2_track::sampleFloat(em.enabledTrack, inst.currentSequenceIndex, inst.animTime,
+                                  inst.globalSequenceTime, gpu.globalSequenceDurations,
+                                  1.0f) < 0.5f) {
+            continue;
+        }
 
         float rate = interpFloat(em.emissionRate, inst.animTime, inst.globalSequenceTime,
                                  inst.currentSequenceIndex, gpu.globalSequenceDurations);
@@ -789,13 +796,6 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             float alpha = std::min(interpFBlockFloat(em.particleAlpha, lifeRatio), 1.0f);
             float rawScale = interpFBlockFloat(em.particleScale, lifeRatio);
 
-            if (!gpu.isSpellEffect && !gpu.isFireflyEffect && !gpu.isLanternLike &&
-                !gpu.isTorch && !gpu.isBrazierOrFire && !gpu.isKoboldFlame &&
-                !cachedFlameTexture) {
-                color = glm::mix(color, glm::vec3(1.0f), 0.7f);
-                if (rawScale > 2.0f) alpha *= 0.02f;
-                if (cachedBlendType == 3 || cachedBlendType == 4) alpha *= 0.05f;
-            }
             // Flame fixtures: the authored curves can leave a particle with
             // effectively no colour or alpha for most of its life. CHANDELIER01
             // ramps scale from zero over a six second life and its candles spend
