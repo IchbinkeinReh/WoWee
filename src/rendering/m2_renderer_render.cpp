@@ -1,7 +1,6 @@
 #include "rendering/shadow_params.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_renderer_internal.h"
-#include "rendering/m2_sway.hpp"
 #include "rendering/m2_blend_mode.hpp"
 #include "rendering/m2_glow_card.hpp"
 #include "core/thread_pool.hpp"
@@ -199,7 +198,6 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     instance.cachedIsSkyBird = mdlRef.isSkyBird;
     instance.cachedIsLightBeam = mdlRef.isLightBeam;
     instance.cachedIsTransportDoodad = mdlRef.isTransportDoodad;
-    instance.cachedIsBoat = mdlRef.isBoat;
     instance.cachedIsValid = mdlRef.isValid();
     instance.cachedModel = &mdlRef;
     instance.recomputeCachedCullFactors();
@@ -303,7 +301,6 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
     instance.cachedIsSkyBird = mdl2.isSkyBird;
     instance.cachedIsLightBeam = mdl2.isLightBeam;
     instance.cachedIsTransportDoodad = mdl2.isTransportDoodad;
-    instance.cachedIsBoat = mdl2.isBoat;
     instance.cachedIsValid = mdl2.isValid();
     instance.cachedModel = &mdl2;
     instance.recomputeCachedCullFactors();
@@ -490,22 +487,6 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
     for (auto& instance : instances) {
         instance.animTime += dtMs;
         instance.globalSequenceTime += dtMs;
-        // A boat asks once whether it is on water - the canal may stream in
-        // after it does, so it keeps asking for a while - and rides it if so.
-        // A rowboat pulled up on a beach is the same model and stays put.
-        if (instance.cachedIsBoat && instance.afloat < 0 && waterHeightAt_) {
-            instance.afloatRecheck -= deltaTime;
-            if (instance.afloatRecheck <= 0.0f) {
-                instance.afloatRecheck = 1.0f;
-                const auto water = waterHeightAt_(instance.position.x, instance.position.y,
-                                                  instance.position.z);
-                if (water && std::abs(*water - instance.position.z) < 1.5f) {
-                    instance.afloat = 1;
-                } else if (++instance.afloatTries >= 15) {
-                    instance.afloat = 0;
-                }
-            }
-        }
         const bool steppedBelow = instance.cachedHasAnimation && !instance.cachedDisableAnimation;
         if (!steppedBelow && instance.animDuration > 0.0f &&
             instance.animTime >= instance.animDuration) {
@@ -1382,36 +1363,28 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     // Push constants now carry per-batch data only; per-instance data is in instance SSBO.
     struct M2PushConstants {
         int32_t texCoordSet;        // UV set index (0 or 1)
-        int32_t isFoliage;          // -1 = sky, 0 = none, 1 = wind foliage, 2 = ground clutter
+        int32_t isFoliage;          // -1 = sky, 0 = everything else
         int32_t instanceDataOffset; // Base index into instance SSBO for this draw group
-        float swayRefHeight;        // Model-space height the wind normalises against
-        float swayAmp;              // Wind amplitude scale; 1.0 = the tree-sized default
-        float plantHeight;          // The model's own height, for the player brush
+        float swayRefHeight;        // Unused, zero; kept so the shader's layout holds
+        float swayAmp;              // Unused, zero; kept so the shader's layout holds
+        float plantHeight;          // The model's own height, for ModelHeight
     };
 
-    // Fill the sway half of the push constants for one model.
+    // Fill the model half of the push constants.
     //
-    // Two modes, and the split is about who owns the idle motion. Ground clutter
-    // plays a sequence of its own, so mode 2 asks the shader for the player
-    // brush and no wind - two swings of one plant at two rates reads as a
-    // glitch. Everything else the wind picks up has its animation disabled by
-    // the classifier and gets mode 1, wind and brush both.
+    // There is no sway any more: the client moves a doodad only through its
+    // own bones and texture tracks, so a tree, a banner or a field of clutter
+    // moves exactly as its artist keyed it and the shader adds nothing.
     //
-    // The wind itself was written for trees: it normalised height against 20
-    // yards and displaced by an absolute number of model units, so a one-yard
-    // tuft travelled a fraction of a millimetre. Every model normalises against
-    // its own height now, with an amplitude interpolated between the two ends
-    // rather than switched at a threshold - a bush a foot taller than its
-    // neighbour should not sway ten times less. Both ends reproduce the numbers
-    // that were there: a 20-yard tree still throws 0.35 model units at the tip.
-    auto fillSway = [](M2PushConstants& pc, const M2ModelGPU& mdl, bool sky) {
-        const M2Sway sway = m2SwayFor(sky, mdl.isHangingCloth, mdl.shadowWindFoliage,
-                                      mdl.isGroundDetail, mdl.boundMin.z, mdl.boundMax.z,
-                                      mdl.isStandingCloth);
-        pc.isFoliage = sway.mode;
-        pc.swayRefHeight = sway.refHeight;
-        pc.swayAmp = sway.amp;
-        pc.plantHeight = sway.plantHeight;
+    // The height is measured from the model's base rather than its origin, as
+    // a few detail doodads sit with geometry below z=0. It is filled in for
+    // every model: the fragment shader fades a fire card's tip by how far up
+    // the model it is, and a fire is not foliage.
+    auto fillModelPush = [](M2PushConstants& pc, const M2ModelGPU& mdl, bool sky) {
+        pc.isFoliage = sky ? -1 : 0;
+        pc.swayRefHeight = 0.0f;
+        pc.swayAmp = 0.0f;
+        pc.plantHeight = std::max(mdl.boundMax.z - std::min(mdl.boundMin.z, 0.0f), 0.05f);
     };
 
     auto appendInstancePortalGlow = [&](const M2Instance& instance, float distSq) {
@@ -1588,7 +1561,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 e.boneBase = p.useBones ? static_cast<int32_t>(inst.megaBoneOffset) : 0;
                 e.boneCount = static_cast<int32_t>(inst.boneMatrices.size());
                 e.highlight = inst.highlight;
-                e.flags = inst.afloat > 0 ? 1 : 0;
                 instanceDataCount_++;
                 ++writtenInstances;
             }
@@ -1856,7 +1828,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                             e.boneBase = p.useBones ? static_cast<int32_t>(inst.megaBoneOffset) : 0;
                             e.boneCount = static_cast<int32_t>(inst.boneMatrices.size());
                             e.highlight = inst.highlight;
-                            e.flags = inst.afloat > 0 ? 1 : 0;
                             instanceDataCount_++;
                         }
                     }
@@ -1949,7 +1920,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     // Push constants + instanced draw
                     M2PushConstants pc;
                     pc.texCoordSet = static_cast<int32_t>(batch.textureUnit);
-                    fillSway(pc, model, skyMode_);
+                    fillModelPush(pc, model, skyMode_);
                     pc.instanceDataOffset = static_cast<int32_t>(drawOffset);
                     vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
                     vkCmdDrawIndexed(cmd, batch.indexCount, groupSize, batch.indexStart, 0, 0);
@@ -2128,7 +2099,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             e.boneBase = needsBones ? static_cast<int32_t>(instance.megaBoneOffset) : 0;
             e.boneCount = static_cast<int32_t>(instance.boneMatrices.size());
             e.highlight = instance.highlight;
-            e.flags = instance.afloat > 0 ? 1 : 0;
             instanceDataCount_++;
 
             // Pipeline selection
@@ -2182,7 +2152,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             // Push constants + single-instance draw
             M2PushConstants pc;
             pc.texCoordSet = static_cast<int32_t>(batch.textureUnit);
-            fillSway(pc, model, skyMode_);
+            fillModelPush(pc, model, skyMode_);
             pc.instanceDataOffset = static_cast<int32_t>(drawOffset);
             vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
             vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.indexStart, 0, 0);
@@ -2435,7 +2405,7 @@ bool M2Renderer::initializeInstancedShadow(
     return true;
 }
 
-void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix, float globalTime,
+void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
                               const glm::vec3& /*shadowCenter*/, float shadowRadius) {
     if (!shadowPipeline_ || !shadowParams_.set) return;
     if (instances.empty() || models.empty()) return;
@@ -2544,7 +2514,8 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
         : nullptr;
     uint32_t shadowInstanceCount = 0;
 
-    // Helper lambda to draw instances with a given foliageSway setting
+    // Helper lambda to draw one of the two passes: solid casters, or foliage
+    // whose leaf cards are cut out of their texture by the alpha test.
     auto drawPass = [&](bool foliagePass) {
         // What this pass is, carried with each draw rather than written into a
         // buffer both passes share. The uniform buffer this used to be is read
@@ -2554,9 +2525,7 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
         // land inside the previous frame's reads. A foliage batch that lost
         // its alpha test that way casts the whole leaf quad, which is the
         // canopy's outline in solid black instead of its cutout.
-        const glm::ivec4 passFlags{foliagePass ? 1 : 0, foliagePass ? 1 : 0,
-                                   foliagePass ? 1 : 0, 0};
-        const glm::vec4 wind{globalTime, 0.0f, 0.0f, 0.0f};
+        const glm::ivec4 passFlags{foliagePass ? 1 : 0, foliagePass ? 1 : 0, 0, 0};
 
         // Set 0 is laid out alike in both pipeline layouts, with the same push
         // range, so what is bound there survives switching between the two.
@@ -2590,13 +2559,7 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
             if (!firstInstance.cachedModel) { g = groupEnd; continue; }
             const M2ModelGPU& model = *firstInstance.cachedModel;
 
-            // Once per model, not once per instance: the bend comes from the
-            // model's own bounds and its kind, and so do the buffers.
-            const M2Sway sway = m2SwayFor(false, model.isHangingCloth,
-                                          model.shadowWindFoliage, model.isGroundDetail,
-                                          model.boundMin.z, model.boundMax.z,
-                                          model.isStandingCloth);
-            const glm::vec2 modelSwayZW(sway.refHeight, sway.amp);
+            // Once per model, not once per instance.
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &model.vertexBuffer, &offset);
             vkCmdBindIndexBuffer(cmd, model.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
@@ -2649,10 +2612,8 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
                     // flags.w is where this model's instances start.
                     ShadowPush push{
                         .lightSpaceModel = lightSpaceMatrix,
-                        .sway = glm::vec4(0.0f, 0.0f, modelSwayZW.x, modelSwayZW.y),
                         .flags = glm::ivec4(passFlags.x, passFlags.y, passFlags.z,
-                                            static_cast<int>(firstShadowSlot)),
-                        .wind = wind};
+                                            static_cast<int>(firstShadowSlot))};
                     vkCmdPushConstants(cmd, shadowInstancedLayout_,
                                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                        0, sizeof(ShadowPush), &push);
@@ -2661,15 +2622,9 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
                 }
                 for (std::size_t k = g; k < groupEnd; ++k) {
                     const auto& instance = instances[casters[k].second];
-                    // The instance's own origin is what gives the wind its
-                    // per-tree phase; the height and amplitude beside it are
-                    // the model's.
-                    const glm::vec3 origin = glm::vec3(instance.modelMatrix[3]);
                     ShadowPush push{
                         .lightSpaceModel = lightSpaceMatrix * instance.modelMatrix,
-                        .sway = glm::vec4(origin.x, origin.y, modelSwayZW.x, modelSwayZW.y),
-                        .flags = passFlags,
-                        .wind = wind};
+                        .flags = passFlags};
                     vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                                        0, sizeof(ShadowPush), &push);
                     vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.indexStart, 0, 0);
@@ -2680,9 +2635,10 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
         }
     };
 
-    // Pass 1: non-foliage (no wind displacement)
+    // Pass 1: solid casters
     drawPass(false);
-    // Pass 2: foliage (wind displacement enabled, per-batch alpha-tested textures)
+    // Pass 2: foliage, with per-batch alpha-tested textures so a leaf card
+    // casts its cutout rather than its quad
     drawPass(true);
 
     if (shadowInstanceCount > 0) {

@@ -448,7 +448,7 @@ private:
 
     // Where the player was, for shaders that react to them moving through the
     // world. playerWakePos_ chases characterPosition with a fixed time
-    // constant; the lag is what gives brushed-past foliage its springback.
+    // constant; the lag is what gives brushed-past grass its springback.
     glm::vec3 playerWakePos_ = glm::vec3(0.0f);
     glm::vec3 prevPlayerPos_ = glm::vec3(0.0f);
     float playerSpeed_ = 0.0f;

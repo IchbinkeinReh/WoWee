@@ -23,9 +23,10 @@ struct GPUPerFrameData {
     glm::vec4 fogParams;      // x = fogStart, y = fogEnd, z = time, w = water ripple strength
     glm::vec4 shadowParams;   // x = enabled(0/1), y = strength, z = one shadow-map texel, w = unused
     // The player, for effects that react to where they are standing: water
-    // ripples and the foliage the player brushes past. playerWake trails the
-    // player by a fixed time constant, so clutter the player has already walked
-    // through springs back over that interval instead of snapping upright.
+    // ripples and the procedural grass the player brushes past. playerWake
+    // trails the player by a fixed time constant, so grass the player has
+    // already walked through springs back over that interval instead of
+    // snapping upright.
     glm::vec4 playerPos;      // xyz = player world position, w = horizontal speed (yd/s)
     glm::vec4 playerWake;     // xyz = trailing player position, w = unused
     glm::vec4 localLightPosRadius[MAX_LOCAL_LIGHTS];       // xyz = position, w = radius
@@ -50,27 +51,20 @@ struct GPUPushConstants {
     glm::mat4 model;
 };
 
-/// The WMO's own, which carries where a batch of cloth hangs beside the model
-/// matrix: (top z, drop, centre x, centre y) in the model's local space.
-struct WMOPushConstants {
-    glm::mat4 model;
-    glm::vec4 cloth{0.0f};
-};
-
 // Push constants for shadow rendering passes.
 //
-// Two matrices filled 128 bytes exactly, which is all Vulkan guarantees for
-// push constants - and left no room for the sway a foliage caster needs to
-// match the tree it belongs to. The light-space and model matrices are
-// multiplied on the CPU instead, since nothing in the shadow shaders wanted
-// them apart: the fragment shader's world position was never read.
+// The light-space and model matrices are multiplied on the CPU, since nothing
+// in the shadow shaders wants them apart: the fragment shader's world
+// position was never read. The instanced M2 caster puts the light's matrix
+// alone here and reads the model per instance.
 struct ShadowPush {
     glm::mat4 lightSpaceModel;
-    /// xy: the instance's world origin, which gives the wind its per-tree
-    /// phase. z: the height the bend is normalised against. w: its amplitude.
-    /// All zero for anything that does not sway.
+    /// Unused and zero. This carried a procedural wind sway that the client
+    /// does not have - it moves a model only by its own animation - and is
+    /// kept so the layout the shadow shaders declare does not move.
     glm::vec4 sway{0.0f};
-    /// x: sample the texture. y: alpha-test it. z: bend in the wind.
+    /// x: sample the texture. y: alpha-test it. z: unused, zero. w: the first
+    /// instance, for the instanced M2 caster.
     ///
     /// These were in the uniform buffer, and the M2 pass writes that buffer
     /// twice a frame - once for its solid casters, once for its foliage. A
@@ -82,7 +76,7 @@ struct ShadowPush {
     /// canopy. Push constants are recorded into the command buffer with the
     /// draw, so there is nothing left to race.
     glm::ivec4 flags{0};
-    /// x: the wind clock the sway is sampled at.
+    /// Unused and zero, as sway.
     glm::vec4 wind{0.0f};
 };
 

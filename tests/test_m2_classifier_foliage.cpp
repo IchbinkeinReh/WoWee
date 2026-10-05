@@ -124,7 +124,8 @@ TEST_CASE("a ruin misread as foliage would also lose its collision",
 
     const auto tree = classify("DustwallowTree04", 9.0f, 7.0f);
     CHECK(tree.isFoliageLike);
-    CHECK(tree.disableAnimation);
+    // A tree plays its own animation, as in the client.
+    CHECK_FALSE(tree.disableAnimation);
 }
 
 // isForge forces the batch additive, so a false positive renders a solid model
@@ -304,19 +305,6 @@ TEST_CASE("a waterfall is not foliage, whatever zone it is named for",
     CHECK(classify("StranglethornWaterfall01").isWaterfall);
 }
 
-TEST_CASE("a moored boat is a boat; a wreck, a sign and a gate are not",
-          "[m2][classifier]") {
-    for (const char* n : {"RowBoat01", "BE_RowBoat", "DarkshoreBoat", "SwampBoat01", "TS_Boat_01"}) {
-        INFO(n);
-        CHECK(classify(n).isBoat);
-    }
-    for (const char* n : {"WreckedRowBoat", "BE_RowBoatWrecked", "HumanBoatHouseSign",
-                          "Alliance_Boat_Gate_BG", "RowBoat01_Vehicle"}) {
-        INFO(n);
-        CHECK_FALSE(classify(n).isBoat);
-    }
-}
-
 // "street" contains "tree", which this list already knew about for StreetSign
 // and not for StreetLamp - so Stormwind's ironwork lamps swayed in the wind.
 TEST_CASE("a street lamp is ironwork, not a sapling", "[m2][classifier]") {
@@ -333,40 +321,15 @@ TEST_CASE("a street lamp is ironwork, not a sapling", "[m2][classifier]") {
     }
 }
 
-// Cloth hung from its top edge, which sways from the bar down rather than from
-// the ground up. The names are the real assets: Stormwind's gate and interior
-// banners are WMO doodads under PASSIVE DOODADS\BANNERS, and Karazhan's are
-// tapestries.
-TEST_CASE("hanging cloth is picked out by name", "[m2][classifier][cloth]") {
-    SECTION("banners, tapestries and flags") {
-        for (const char* n : {
-                 "WORLD\\GENERIC\\HUMAN\\PASSIVE DOODADS\\BANNERS\\STORMWINDLIONBANNER.m2",
-                 "world\\generic\\human\\passive doodads\\banners\\stormwindgriffonbanner01.m2",
-                 "world\\azeroth\\karazahn\\passivedoodads\\tapestries\\karazantapestry01.m2",
-                 "world\\azeroth\\elwynn\\passivedoodads\\battlegladebanner1\\battlegladebanner1.m2",
-                 "AllianceFlag01", "HordePennant02"}) {
-            INFO(n);
-            CHECK(classify(n).isHangingCloth);
-        }
-    }
-
-    SECTION("what is not cloth") {
-        // A flagstone is a floor, and swaying a floor is worse than a still
-        // banner. Foliage keeps its own sway rather than taking this one.
-        for (const char* n : {"Flagstone01", "ElwynnFlagstoneFloor",
-                              "StormwindBrazier01", "ElwynnTree01"}) {
-            INFO(n);
-            CHECK_FALSE(classify(n).isHangingCloth);
-        }
-    }
-}
-
 // A stump is a tree by name and timber by nature.
 //
-// shadowWindFoliage is what bends a model in the wind, and it was set for
+// shadowWindFoliage was what bent a model in the wind, and it was set for
 // anything foliage-like - which a name carrying "tree" always is. So the cut
 // stumps and fallen logs scattered through Elwynn and Duskwood swayed like
-// saplings, trunk and all, with no canopy to justify it.
+// saplings, trunk and all, with no canopy to justify it. The wind is gone -
+// the client moves a model only by its own animation - and the flag now only
+// puts a caster in the alpha-tested foliage shadow pass, which a stump with
+// no leaf cards does not belong in either.
 //
 // The classifier already separates the wooden parts of a tree from the leafy
 // ones: hardTreePart is trunk, stump and log, and it is what the collision

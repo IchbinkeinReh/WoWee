@@ -81,7 +81,7 @@ struct M2ClassificationResult {
     bool collisionTreeTrunk          = false; ///< Tree trunk cylinder
 
     // --- Rendering / effect classification ---
-    bool isFoliageLike      = false; ///< Foliage or tree (wind sway, disabled animation)
+    bool isFoliageLike      = false; ///< Foliage or tree (disabled animation)
     bool isSmallFoliage     = false; ///< Small bush/grass/plant (skip during taxi/flight)
     bool isSpellEffect      = false; ///< Spell effect / particle-dominated visual
     bool isLavaModel        = false; ///< Lava surface (UV scroll animation)
@@ -107,20 +107,13 @@ struct M2ClassificationResult {
     /// eye, which is where a real beam thins to nothing.
     bool isVolumetricBeam   = false;
     bool isTransportDoodad  = false; ///< Ship sail/paddle child whose motion must remain visible
-    bool isBoat             = false; ///< A small boat, which rides the water if it is left on some
 
     // --- Ambient emitter type (for sound system) ---
     AmbientEmitterType ambientEmitterType = AmbientEmitterType::None;
 
     // --- Animation flags ---
     bool disableAnimation   = false; ///< Keep visually stable (foliage, chest lids, etc.)
-    bool shadowWindFoliage  = false; ///< Apply wind sway in shadow pass for foliage/trees
-    /// A banner, a flag, a tapestry: cloth hung from its top edge.
-    ///
-    /// Held at the bar and free at the hem, which is the opposite of a plant -
-    /// so it gets a sway of its own rather than the foliage one, and a small
-    /// one: a banner indoors moves, it does not flap.
-    bool isHangingCloth     = false;
+    bool shadowWindFoliage  = false; ///< Cast shadows in the alpha-tested foliage pass (leaf cutouts)
 };
 
 /**

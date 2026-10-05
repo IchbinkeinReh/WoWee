@@ -559,13 +559,6 @@ M2ClassificationResult classifyM2Model(
     // lamps in glass and not cones of light. They were added here while
     // hunting for the searchlight and the debug colour showed them lighting
     // up instead of it.
-    // A rowboat, a canoe, a swamp punt: the craft left moored in a canal or on
-    // a lake. A wreck lies where it sank, a sign and a boathouse are buildings,
-    // a battleground gate is named for the boat it guards, and a vehicle is a
-    // creature the server moves.
-    r.isBoat = (has(n, "boat") || has(n, "canoe")) &&
-               !has(n, "wreck") && !has(n, "boathouse") && !has(n, "sign") &&
-               !has(n, "gate") && !has(n, "vehicle");
     r.isTransportDoodad = has(n, "transportship_sails")
                        || has(n, "icebreaker_paddlewheel");
 
@@ -574,43 +567,23 @@ M2ClassificationResult classifyM2Model(
     // ---------------------------------------------------------------
     const bool foliageOrTree = foliageName || treeLike;
     r.isFoliageLike    = foliageOrTree && !ambientCreature;
-    // Deliberately not ground detail, which was tried and reverted. Every
-    // detail doodad ships exactly one bone and one sequence, and that sequence
-    // is not always a sway - a number of them carry a small insect or butterfly
-    // that flits around the plant, and silencing the lot of them to save the
-    // bone took the ambient life of a field with it. The wind in the shader
-    // stands down for clutter instead; see the isFoliage == 2 path in
-    // m2.vert.glsl, which brushes it aside for the player and leaves the
-    // authored motion alone.
-    r.disableAnimation = r.isFoliageLike || chestName;
+    // Not foliage. A tree's own bone animation is how the client moves it -
+    // there is no shader wind - so freezing it leaves the forest standing
+    // dead still. Ground detail was never frozen either: a number of detail
+    // doodads carry a small insect or butterfly that flits around the plant.
+    r.disableAnimation = chestName;
+    // Which casters go through the alpha-tested foliage shadow pass, so a
+    // leaf card casts its cutout rather than its quad.
+    //
     // Ground clutter is foliage whether or not its name says so: the detail
     // doodads the ground-effect scatterer places are grass, weeds and flowers,
     // and most of them are named for their tileset rather than for a plant
-    // (ElwGra01, 8DE_Detail02). Wind and the player's passage apply to them.
+    // (ElwGra01, 8DE_Detail02).
     //
     // Except the wooden parts of a tree, which are not foliage however much
     // the name says "tree": a stump, a fallen log and a bare trunk are solid
-    // timber, and hardTreePart is already exactly that set. They matched
-    // treeLike on the name and bent in the wind like a sapling.
+    // timber, and hardTreePart is already exactly that set.
     r.shadowWindFoliage = (r.isFoliageLike || r.isGroundDetail) && !hardTreePart;
-    // Cloth: banners, flags, tapestries, pennants.
-    //
-    // The name is all this sees, and it is not enough on its own. It used to
-    // say the pole in the same model barely moves because the sway is applied
-    // from the top down - which is backwards: a standard planted in the ground
-    // has its foot where the weight is greatest, and that is what swung the
-    // Undercity gate's flagpole hardest at its base. The caller settles both
-    // halves from the geometry the classifier never sees - whether the model
-    // is painted as cloth at all, whether its own bones already move it, and
-    // which end it is held by. See m2_renderer.cpp.
-    //
-    // "flag" alone is not enough here either: a flagstone is a floor tile, and
-    // swaying a floor is worse than a still banner.
-    const bool flagCloth = has(n, "flag") && !has(n, "flagstone") &&
-                           !has(n, "flagging");
-    r.isHangingCloth = !r.isFoliageLike &&
-                       (has(n, "banner") || flagCloth || has(n, "tapestry") ||
-                        has(n, "pennant"));
     r.isFireflyEffect   = ambientCreature;
 
     // Small foliage: foliage-like models with a small bounding box.

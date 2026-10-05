@@ -186,9 +186,7 @@ struct M2ModelGPU {
     bool isSpellEffect = false;  // True for spell effect models (skip particle dampeners)
     bool isInstancePortal = false; // Instance portal model (spin + glow)
     bool disableAnimation = false; // Keep foliage/tree doodads visually stable
-    bool shadowWindFoliage = false; // Apply wind sway in shadow pass for foliage/tree cards
-    bool isHangingCloth = false;    // Banner/flag/tapestry: sways from the end it is held by
-    bool isStandingCloth = false;   // ...and that end is the foot of a planted pole
+    bool shadowWindFoliage = false; // Cast shadows in the alpha-tested foliage pass (leaf cutouts)
     bool isFoliageLike = false;     // Model name matches foliage/tree/bush/grass etc (precomputed)
     bool isElvenLike = false;       // Model name matches elf/elven/quel (precomputed)
     bool isLanternLike = false;     // Model name matches lantern/lamp/light (precomputed)
@@ -213,7 +211,6 @@ struct M2ModelGPU {
     /// skinned to run backward; everything else keeps looping forward.
     std::vector<uint8_t> pingPongBones;
     bool isTransportDoodad = false; // Animated ship sail/paddle child
-    bool isBoat = false;            // Small boat; bobs if it turns out to be afloat
     bool hasTextureAnimation = false; // True if any batch has UV animation
     bool hasTransparentBatches = false; // True if any batch uses alpha-blend or additive (blendMode >= 2)
     uint8_t availableLODs = 0;  // Bitmask: bit N set if any batch has submeshLevel==N
@@ -341,11 +338,6 @@ struct M2Instance {
     bool cachedIsSkyBird = false;
     bool cachedIsLightBeam = false;
     bool cachedIsTransportDoodad = false;
-    bool cachedIsBoat = false;
-    // Whether the boat sits on water: -1 not known yet, 0 no, 1 afloat.
-    int8_t afloat = -1;
-    uint8_t afloatTries = 0;
-    float afloatRecheck = 0.0f;
     bool cachedIsValid = false;
     bool skipCollision = false;    // Fully non-collidable visual/effect instance
     bool skipWallCollision = false; // Keep authored floors, suppress only wall blocking
@@ -514,8 +506,6 @@ public:
     /// lighting. Static doodads only - animated models would cast their
     /// bind pose. Not given to the sky's renderer.
     void setRtScene(RtScene* scene) { rtScene_ = scene; }
-    /// Water surface height near a point, for telling a moored boat from a beached one.
-    void setWaterHeightQuery(std::function<std::optional<float>(float, float, float)> q) { waterHeightAt_ = std::move(q); }
     /// Bring the scene's instances in line with this renderer's, once a frame
     /// while the lighting is on.
     void syncRtScene();
@@ -534,7 +524,7 @@ public:
     /**
      * Render depth-only pass for shadow casting
      */
-    void renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix, float globalTime = 0.0f,
+    void renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
                       const glm::vec3& shadowCenter = glm::vec3(0), float shadowRadius = 1e9f);
 
     /**
@@ -937,7 +927,7 @@ private:
         int32_t boneBase;          //  4 bytes @ offset 80
         int32_t boneCount;         //  4 bytes @ offset 84 - clamps skinning reads
         float highlight = 0.0f;    //  4 bytes @ offset 88 - pressed-on lift
-        int32_t flags = {};        //  4 bytes @ offset 92 - bit 0: afloat (bobs on the water)
+        int32_t flags = {};        //  4 bytes @ offset 92 - unused, zero (was padding)
         // The texture matrix's linear part, rows (m00, m01) and (m10, m11);
         // uvOffset is its translation. Identity is (1, 0, 0, 1).
         glm::vec4 uvLinear;        // 16 bytes @ offset 96
@@ -1257,7 +1247,6 @@ private:
     static constexpr size_t MAX_M2_PARTICLES = 4000;
     std::mt19937 particleRng_{123};
     bool skyMode_ = false;
-    std::function<std::optional<float>(float, float, float)> waterHeightAt_;
     // What the sky-model clock diagnostic last reported, so it prints on a
     // restart or once a second rather than every frame. See M2Renderer::update.
     uint32_t skyDiagInstanceId_ = 0;

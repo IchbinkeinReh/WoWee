@@ -3692,10 +3692,6 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (!m2Renderer->initialize(vkCtx, perFrameSetLayout, assetManager))
             LOG_ERROR("M2Renderer initialization failed");
         m2Renderer->setRtScene(rtScene_.get());
-        m2Renderer->setWaterHeightQuery([this](float x, float y, float z) -> std::optional<float> {
-            return waterRenderer ? waterRenderer->getNearestWaterHeightAt(x, y, z, 3.0f)
-                                 : std::nullopt;
-        });
         if (swimEffects) {
             swimEffects->setM2Renderer(m2Renderer.get());
         }
@@ -4503,7 +4499,7 @@ void Renderer::renderShadowPass() {
         wmoRenderer->renderShadow(currentCmd, lightSpaceMatrix, shadowCenter, shadowCullRadius);
     }
     if (m2Renderer) {
-        m2Renderer->renderShadow(currentCmd, lightSpaceMatrix, globalTime, shadowCenter, shadowCullRadius);
+        m2Renderer->renderShadow(currentCmd, lightSpaceMatrix, shadowCenter, shadowCullRadius);
     }
     if (characterRenderer) {
         characterRenderer->renderShadow(currentCmd, lightSpaceMatrix, shadowCenter, shadowCullRadius);
