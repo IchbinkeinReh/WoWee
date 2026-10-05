@@ -495,6 +495,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
 
         if (inWater) {
         swimming = true;
+        jumpLocked_ = false;
         // Swim movement follows look pitch (f.forward/back), while strafe stays
         // lateral for stable control.
         float swimSpeed = (swimSpeedOverride_ > 0.0f && swimSpeedOverride_ < 100.0f && !std::isnan(swimSpeedOverride_))
@@ -714,6 +715,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         // Use 3D pitch-following movement with no gravity or grounding.
         if (flyingActive_ && flightAirborne_) {
             grounded = true;  // suppress fall-damage checks
+            jumpLocked_ = false;
             verticalVelocity = 0.0f;
             jumpBufferTimer = 0.0f;
             coyoteTimer = 0.0f;
@@ -769,6 +771,15 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             // Skip all ground physics - go straight to collision/WMO sections
         } else {
 
+        // Mid-jump the air carries the character: input is ignored and the
+        // takeoff direction and speed hold until landing.
+        if (grounded) {
+            jumpLocked_ = false;
+        } else if (jumpLocked_) {
+            f.movement = jumpMoveDir_;
+            f.speed = jumpMoveSpeed_;
+        }
+
         float moveLenSq = glm::dot(f.movement, f.movement);
         if (moveLenSq > 1e-6f) {
             f.movement *= glm::inversesqrt(moveLenSq);
@@ -796,6 +807,9 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         bool canJump = (coyoteTimer > 0.0f) && (jumpBufferTimer > 0.0f) && !mounted_;
         if (canJump) {
             verticalVelocity = f.jumpVel;
+            jumpLocked_ = true;
+            jumpMoveDir_ = f.movement;
+            jumpMoveSpeed_ = f.speed;
             grounded = false;
             jumpBufferTimer = 0.0f;
             coyoteTimer = 0.0f;
@@ -2571,6 +2585,7 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
 
     if (inWater) {
         swimming = true;
+        jumpLocked_ = false;
         float swimSpeed = (swimSpeedOverride_ > 0.0f && swimSpeedOverride_ < 100.0f && !std::isnan(swimSpeedOverride_))
                               ? swimSpeedOverride_ : f.speed * SWIM_SPEED_FACTOR;
         float waterSurfaceCamZ = waterH ? (*waterH - WATER_SURFACE_OFFSET + eyeHeight) : newPos.z;
@@ -2611,6 +2626,13 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
     } else {
         swimming = false;
 
+        if (grounded) {
+            jumpLocked_ = false;
+        } else if (jumpLocked_) {
+            f.movement = jumpMoveDir_;
+            f.speed = jumpMoveSpeed_;
+        }
+
         float movLenSq2 = glm::dot(f.movement, f.movement);
         if (movLenSq2 > 1e-6f) {
             f.movement *= glm::inversesqrt(movLenSq2);
@@ -2623,6 +2645,9 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
 
         if (coyoteTimer > 0.0f && jumpBufferTimer > 0.0f && !mounted_) {
             verticalVelocity = f.jumpVel;
+            jumpLocked_ = true;
+            jumpMoveDir_ = f.movement;
+            jumpMoveSpeed_ = f.speed;
             grounded = false;
             jumpBufferTimer = 0.0f;
             coyoteTimer = 0.0f;
@@ -3440,6 +3465,7 @@ void CameraController::reset() {
     pitch = defaultPitch;
     verticalVelocity = 0.0f;
     grounded = true;
+    jumpLocked_ = false;
     swimming = false;
     sitting = false;
     autoRunning = false;

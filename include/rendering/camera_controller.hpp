@@ -602,6 +602,11 @@ private:
     // Gravity / grounding
     float verticalVelocity = 0.0f;
     bool grounded = false;
+    // A jump commits to the direction and speed it left the ground with, as in
+    // the retail client: letting go of the keys mid-air does not stop you.
+    bool jumpLocked_ = false;
+    glm::vec3 jumpMoveDir_{0.0f};
+    float jumpMoveSpeed_ = 0.0f;
     static constexpr float STAND_EYE_HEIGHT = 1.2f;  // Standing eye height
     static constexpr float CROUCH_EYE_HEIGHT = 0.6f; // Crouching eye height
     float eyeHeight = STAND_EYE_HEIGHT;
