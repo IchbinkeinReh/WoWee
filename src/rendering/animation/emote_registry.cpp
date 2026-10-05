@@ -102,19 +102,57 @@ static std::unordered_set<uint32_t> makeFallbackStateEmoteIds() {
     return {10, 12, 13, 26, 28, 64, 65, 68, 69, 173, 213, 214, 233, 234, 379, 383};
 }
 
-static std::string replacePlaceholders(const std::string& text, const std::string* targetName) {
+// Fills an EmotesTextData template. The English client writes "%s waves at
+// %s." and takes the arguments in order; other locales reorder them with
+// positional specifiers ("%1$s nickt %2$s zu."), which the plain scan left in
+// the line as written. 'sequential' feeds the bare %s, 'positional' is what
+// %N$s indexes (1 = sender, 2 = target); a slot with no name fills with nothing.
+static std::string fillEmoteTemplate(const std::string& text,
+                                     const std::vector<const std::string*>& sequential,
+                                     const std::vector<const std::string*>& positional) {
     if (text.empty()) return text;
+    auto name = [](const std::vector<const std::string*>& v, size_t i) -> const std::string* {
+        return i < v.size() ? v[i] : nullptr;
+    };
     std::string out;
     out.reserve(text.size() + 16);
+    size_t next = 0;
     for (size_t i = 0; i < text.size(); ++i) {
-        if (text[i] == '%' && i + 1 < text.size() && text[i + 1] == 's') {
-            if (targetName && !targetName->empty()) out += *targetName;
-            i++;
+        if (text[i] != '%' || i + 1 >= text.size()) {
+            out.push_back(text[i]);
+            continue;
+        }
+        const char c = text[i + 1];
+        if (c == '%') {
+            out.push_back('%');
+            ++i;
+        } else if (c == 's') {
+            if (const std::string* n = name(sequential, next++)) out += *n;
+            ++i;
+        } else if (std::isdigit(static_cast<unsigned char>(c))) {
+            size_t j = i + 1;
+            size_t index = 0;
+            while (j < text.size() && std::isdigit(static_cast<unsigned char>(text[j]))) {
+                index = index * 10 + static_cast<size_t>(text[j] - '0');
+                ++j;
+            }
+            if (j + 1 < text.size() && text[j] == '$' && text[j + 1] == 's' && index >= 1) {
+                if (const std::string* n = name(positional, index - 1)) out += *n;
+                i = j + 1;
+            } else {
+                out.push_back(text[i]);
+            }
         } else {
             out.push_back(text[i]);
         }
     }
     return out;
+}
+
+static std::string replacePlaceholders(const std::string& text, const std::string* targetName) {
+    // The player's own line: the sender is "you" and is not in the text, so
+    // %2$s is the target and %1$s has no name to give.
+    return fillEmoteTemplate(text, {targetName}, {nullptr, targetName});
 }
 
 // ── EmoteRegistry implementation ─────────────────────────────────────────────
@@ -363,26 +401,16 @@ std::string EmoteRegistry::textByDbcId(uint32_t dbcId,
 
     if (targetName && !targetName->empty()) {
         if (!info.othersTarget.empty()) {
-            std::string out;
-            out.reserve(info.othersTarget.size() + senderName.size() + targetName->size());
-            bool firstReplaced = false;
-            for (size_t i = 0; i < info.othersTarget.size(); ++i) {
-                if (info.othersTarget[i] == '%' && i + 1 < info.othersTarget.size() && info.othersTarget[i + 1] == 's') {
-                    out += firstReplaced ? *targetName : senderName;
-                    firstReplaced = true;
-                    ++i;
-                } else {
-                    out.push_back(info.othersTarget[i]);
-                }
-            }
-            return out;
+            return fillEmoteTemplate(info.othersTarget, {&senderName, targetName},
+                                     {&senderName, targetName});
         }
         return senderName + " " + info.command + "s at " + *targetName + ".";
-    }         if (!info.othersNoTarget.empty()) {
-            return replacePlaceholders(info.othersNoTarget, &senderName);
-        }
-        return senderName + " " + info.command + "s.";
-   
+    }
+
+    if (!info.othersNoTarget.empty()) {
+        return fillEmoteTemplate(info.othersNoTarget, {&senderName}, {&senderName});
+    }
+    return senderName + " " + info.command + "s.";
 }
 
 } // namespace rendering
