@@ -249,7 +249,10 @@ struct CharMaterialUBO {
     float heightMapVariance;
     float normalMapStrength;
     int32_t hairMaterial;
-    float _pad[1];
+    // How the shader hands its colour to a colour-only blend: 0 normally,
+    // 1 Mod and 2 Mod2x (faded toward their neutral 1.0 and 0.5 by alpha),
+    // 3 NoAlphaAdd (scaled by the batch's opacity, not the texture's alpha).
+    int32_t colourBlend;
 };
 
 // GPU vertex struct with tangent (expanded from M2Vertex for normal mapping)
@@ -324,6 +327,18 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
     alphaPipeline_ = buildCharPipeline(PipelineBuilder::blendAlpha(), false);
     additivePipeline_ = buildCharPipeline(PipelineBuilder::blendAdditive(), false);
     translucentPipeline_ = buildCharPipeline(PipelineBuilder::blendAlpha(), true);
+    // Colour-only blends; the destination's alpha is left as it is.
+    auto colourBlend = [](VkBlendFactor src, VkBlendFactor dst) {
+        VkPipelineColorBlendAttachmentState st = PipelineBuilder::blendAdditive();
+        st.srcColorBlendFactor = src;
+        st.dstColorBlendFactor = dst;
+        st.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        st.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        return st;
+    };
+    noAlphaAddPipeline_ = buildCharPipeline(colourBlend(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE), false);
+    modPipeline_ = buildCharPipeline(colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_ZERO), false);
+    mod2xPipeline_ = buildCharPipeline(colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_SRC_COLOR), false);
 
 }
 
@@ -552,6 +567,9 @@ void CharacterRenderer::shutdown() {
     destroyPipeline(alphaTestPipeline_);
     destroyPipeline(alphaPipeline_);
     destroyPipeline(additivePipeline_);
+    destroyPipeline(noAlphaAddPipeline_);
+    destroyPipeline(modPipeline_);
+    destroyPipeline(mod2xPipeline_);
     destroyPipeline(translucentPipeline_);
 
     destroy(device, pipelineLayout_);
@@ -2972,12 +2990,16 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
                 // Hair textures are authored as alpha-cut cards. If they use the
                 // translucent pipeline they form a soft shell around the head.
-                // M2Blend: 0 Opaque, 1 AlphaKey, 2 Alpha, 3 NoAlphaAdd, 4 Add,
-                // 5 Mod, 6 Mod2x, 7 BlendAdd. (6/Mod2x is kept on additive as it
-                // has been; the doodad path in M2Renderer already sends
-                // everything above 2 there.)
-                const bool additiveBlend = (blendMode == 3 || blendMode == 4 ||
-                                            blendMode == 6 || blendMode == 7);
+                //
+                // M2 blend modes as the 3.3.5a client draws them (its M2 -> Gx
+                // table at 0x00a453b0, Gx factors at 0x00a2f964/0x00a2f994):
+                // 0 Opaque, 1 AlphaKey, 2 Alpha, 3 NoAlphaAdd (ONE, ONE),
+                // 4 Add (SRC_ALPHA, ONE), 5 Mod (DST_COLOR, ZERO), 6 Mod2x
+                // (DST_COLOR, SRC_COLOR), 7 Alpha. 6 and 7 were drawn additive and
+                // 5 alpha-blended; a Mod2x tint added instead of multiplied is the
+                // mana wyrm's wings turned to solid white.
+                const bool additiveBlend = (blendMode == 3 || blendMode == 4);
+                const bool colourOnlyBlend = (blendMode == 3 || blendMode == 5 || blendMode == 6);
 
                 VkPipeline desiredPipeline;
                 if (instance.isEffectModel) {
@@ -2985,6 +3007,10 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     // declare Mod/alpha blending, which would composite that black
                     // background as an opaque quad - force additive so only the light adds.
                     desiredPipeline = additivePipeline_;
+                } else if (blendMode == 5 || blendMode == 6) {
+                    // A multiply fades toward its neutral value in the shader,
+                    // so a partial alpha does not divert it either.
+                    desiredPipeline = blendMode == 5 ? modPipeline_ : mod2xPipeline_;
                 } else if (additiveBlend) {
                     // Decided before the fade branch below, not after it. An
                     // additive card fades by adding less light - matData.opacity
@@ -2996,7 +3022,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     // animated pulse, so the diversion tripped on almost every
                     // frame the pulse was not at full, and the cards showed as
                     // black roughly half the time.
-                    desiredPipeline = additivePipeline_;
+                    desiredPipeline = blendMode == 3 ? noAlphaAddPipeline_ : additivePipeline_;
                 } else if (instance.opacity * batchColorAlpha < 0.999f) {
                     // Whole-instance fade (ghost form, spawn fade-in): the opaque and
                     // alpha-test pipelines have blending disabled, so the shader's
@@ -3090,6 +3116,8 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 matData.heightMapVariance = useAdvancedMaterials ? batchHeightVariance : 0.0f;
                 matData.normalMapStrength = normalMapStrength_;
                 matData.hairMaterial = hairMaterial ? 1 : 0;
+                matData.colourBlend = (instance.isEffectModel || !colourOnlyBlend) ? 0
+                                    : (blendMode == 5 ? 1 : (blendMode == 6 ? 2 : 3));
 
                 // The base humanoid mesh samples a mirrored character atlas,
                 // with the face sitting directly beside a UV seam. Parallax
@@ -4380,6 +4408,9 @@ void CharacterRenderer::recreatePipelines() {
     destroy(device, alphaTestPipeline_);
     destroy(device, alphaPipeline_);
     destroy(device, additivePipeline_);
+    destroy(device, noAlphaAddPipeline_);
+    destroy(device, modPipeline_);
+    destroy(device, mod2xPipeline_);
     destroy(device, translucentPipeline_);
 
     // --- Load shaders ---

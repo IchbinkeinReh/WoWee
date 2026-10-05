@@ -45,7 +45,19 @@ layout(set = 1, binding = 1) uniform CharMaterial {
     float heightMapVariance;
     float normalMapStrength;
     int hairMaterial;
+    // 0 normal; 1 Mod and 2 Mod2x, faded toward their neutral 1.0 and 0.5 by
+    // alpha; 3 NoAlphaAdd, scaled by opacity alone. See CharMaterialUBO.
+    int colourBlend;
 };
+
+// What a colour-only blend (Mod, Mod2x, NoAlphaAdd) is handed: its blend
+// factors ignore alpha, so the fade has to be in the colour itself.
+vec4 colourBlendOutput(vec3 rgb, float alpha) {
+    if (colourBlend == 1) return vec4(mix(vec3(1.0), rgb, alpha), alpha);
+    if (colourBlend == 2) return vec4(mix(vec3(0.5), rgb, alpha), alpha);
+    if (colourBlend == 3) return vec4(rgb * opacity, alpha);
+    return vec4(rgb, alpha);
+}
 
 layout(set = 1, binding = 2) uniform sampler2D uNormalHeightMap;
 
@@ -261,7 +273,7 @@ void main() {
             texColor.a *= ck;
             if (texColor.a < 0.01) discard;
         }
-        outColor = vec4(texColor.rgb, texColor.a * opacity);
+        outColor = colourBlendOutput(texColor.rgb, texColor.a * opacity);
         return;
     }
 
@@ -389,6 +401,14 @@ void main() {
     }
 
     if (unlit == 0) result += localLightContribution(FragPos, norm, texColor.rgb);
+
+    // A multiply or a plain add is drawn over what is already fogged; fogging
+    // it again would tint the scene behind it.
+    if (colourBlend != 0) {
+        outColor = colourBlendOutput(finiteVec3(result) ? result : texColor.rgb,
+                                     texColor.a * opacity);
+        return;
+    }
 
     float dist = length(viewPos.xyz - FragPos);
     result = applyFog(result, FragPos, dist);

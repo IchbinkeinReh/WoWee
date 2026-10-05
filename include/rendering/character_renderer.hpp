@@ -377,6 +377,12 @@ private:
     VkPipeline alphaTestPipeline_ = VK_NULL_HANDLE;
     VkPipeline alphaPipeline_ = VK_NULL_HANDLE;
     VkPipeline additivePipeline_ = VK_NULL_HANDLE;
+    // The rest of the client's M2 blend states (Gx blend table at 0x00a2f964):
+    // M2 blend 3 is NoAlphaAdd (ONE, ONE), 5 Mod (DST_COLOR, ZERO), 6 Mod2x
+    // (DST_COLOR, SRC_COLOR). additivePipeline_ is Add (SRC_ALPHA, ONE), blend 4.
+    VkPipeline noAlphaAddPipeline_ = VK_NULL_HANDLE;
+    VkPipeline modPipeline_ = VK_NULL_HANDLE;
+    VkPipeline mod2xPipeline_ = VK_NULL_HANDLE;
     // Whole-instance fades (ghost form, spawn fade-in): alpha blend with depth
     // write kept on, so the faded model still self-occludes instead of showing
     // backfaces and under-armor skin through the body.
