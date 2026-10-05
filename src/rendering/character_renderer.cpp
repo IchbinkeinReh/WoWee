@@ -253,6 +253,9 @@ struct CharMaterialUBO {
     // 1 Mod and 2 Mod2x (faded toward their neutral 1.0 and 0.5 by alpha),
     // 3 NoAlphaAdd (scaled by the batch's opacity, not the texture's alpha).
     int32_t colourBlend;
+    // The client's fog for this batch: 0 none, 1 the world's fog, 2 black,
+    // 3 white, 4 grey. See the table at the batch's material setup.
+    int32_t fogMode;
 };
 
 // GPU vertex struct with tangent (expanded from M2Vertex for normal mapping)
@@ -3042,9 +3045,11 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     ? (blendMode == 1)
                     : ((blendMode == 1) || hairMaterial);
                 (void)alphaCutout;
-                // Enchant glows emit their own light; scene lighting must not tint them.
-                const bool unlit = ((materialFlags & 0x01) != 0) || (blendMode >= 3) ||
-                                   instance.isEffectModel;
+                // Lit unless the material says unlit (0x1), as the client has it
+                // (FUN_0081fb10, table at 0x00a45374): the additive modes are lit
+                // too, and Mod and Mod2x are drawn unlit in the shader. Enchant
+                // glows emit their own light; scene lighting must not tint them.
+                const bool unlit = ((materialFlags & 0x01) != 0) || instance.isEffectModel;
 
                 // Hair textures are authored as alpha-cut cards. If they use the
                 // translucent pipeline they form a soft shell around the head.
@@ -3186,6 +3191,14 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 matData.hairMaterial = hairMaterial ? 1 : 0;
                 matData.colourBlend = (instance.isEffectModel || !colourOnlyBlend) ? 0
                                     : (blendMode == 5 ? 1 : (blendMode == 6 ? 2 : 3));
+                // The client's fog per blend mode (table at 0x00a45390): the
+                // world's for 0-2, black for the adds, white for Mod, grey for
+                // Mod2x; none for an unfogged material (0x2) or mode 7, which
+                // reads past the table. Enchant glows are drawn as adds.
+                static constexpr int32_t kFogByBlend[7] = {1, 1, 1, 2, 2, 3, 4};
+                matData.fogMode = ((materialFlags & 0x02) != 0) ? 0
+                                : instance.isEffectModel ? 2
+                                : (blendMode < 7 ? kFogByBlend[blendMode] : 0);
 
                 // The base humanoid mesh samples a mirrored character atlas,
                 // with the face sitting directly beside a UV seam. Parallax
@@ -3302,6 +3315,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             matData.heightMapVariance = 0.0f;
             matData.normalMapStrength = normalMapStrength_;
             matData.hairMaterial = 0;
+            matData.fogMode = 1;   // the world's fog, as this path always had
             if (usePreviewSimpleShader) {
                 matData.enableNormalMap = 0;
                 matData.enablePOM = kPreviewSimpleTextureMode;

@@ -2576,6 +2576,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             mat.tintB = bgpu.tint.b;
             mat.colorKeyThreshold = 0.08f;
             mat.unlit = (bgpu.materialFlags & 0x01) ? 1 : 0;
+            mat.unfogged = (bgpu.materialFlags & 0x02) ? 1 : 0;
             mat.blendMode = bgpu.blendMode;
             mat.volumetricBeam = bgpu.volumetricBeam ? 1 : 0;
             mat.fadeAlpha = 1.0f;

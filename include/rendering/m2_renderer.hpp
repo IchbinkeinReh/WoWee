@@ -425,6 +425,8 @@ struct M2MaterialUBO {
     /// A flame card. Fades out over the top of its own model, so the card's
     /// upper edge is not where the fire stops.
     int32_t fireCard;
+    /// Material flag 0x2: the client draws the batch without fog.
+    int32_t unfogged;
 };
 
 // M2 params UBO - matches M2Params in m2.vert.glsl (set 1, binding 1)

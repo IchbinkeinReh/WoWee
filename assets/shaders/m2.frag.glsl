@@ -42,6 +42,7 @@ layout(set = 1, binding = 2) uniform M2Material {
     float tintB;
     int volumetricBeam;
     int fireCard;
+    int unfogged;      // material flag 0x2: the client draws it without fog
 };
 
 // The 3.3.5a client's M2 blends: 3 NoAlphaAdd and 4 Add add to the scene,
@@ -366,7 +367,16 @@ void main() {
     if (unlit == 0) result += localLightContribution(FragPos, norm, texColor.rgb);
 
     float dist = length(viewPos.xyz - FragPos);
-    if (blendAdds()) {
+    // The client's fog per blend mode (FUN_0081fb10, table at 0x00a45390):
+    // the world's fog for opaque, alpha key and alpha; black for the adds,
+    // white for Mod and grey for Mod2x - the colour that leaves the scene as
+    // it is - and none at all for an unfogged material (flag 0x2). Mode 7
+    // reads past the table's end and gets none.
+    const bool fogOn = unfogged == 0 && blendMode != 7;
+    const float fogFactor = clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0);
+    if (!fogOn) {
+        // Drawn as it is.
+    } else if (blendAdds()) {
         // Additive. Mixing toward the fog colour would give the card's black
         // corners the fog's colour, and additive then adds that to the scene -
         // the whole quad shows up as a lit rectangle hanging in the air, which
@@ -374,12 +384,10 @@ void main() {
         // Distance can only take an additive contribution away, and so can
         // the air in front of it: its own light is already in the scene
         // behind the card.
-        float fogFactor = clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0);
         result *= fogFactor;
         if (volumetricParams.x > 0.5) result *= fogVolumeAt(FragPos).a;
     } else if (!blendMultiplies()) {
-        // A multiply is drawn over a scene already fogged; fogging it again
-        // would tint what is behind it.
+        // A multiply fogs toward its neutral colour, below with its output.
         result = applyFog(result, FragPos, dist);
     }
 
@@ -524,6 +532,7 @@ void main() {
         // and an emissive of 1.0 (Mod) or 0.5 (Mod2x), whatever the alpha:
         // Mod2x's doubling then makes its net effect dst * texture.
         result = rawTexRgb * (blendMode == 5 ? 1.0 : 0.5);
+        if (fogOn) result = mix(vec3(blendMode == 5 ? 1.0 : 0.5019608), result, fogFactor);
     } else if (blendMode == 3) {
         // NoAlphaAdd ignores alpha: the fade has to be in the colour.
         result *= vFadeAlpha;

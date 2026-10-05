@@ -48,6 +48,8 @@ layout(set = 1, binding = 1) uniform CharMaterial {
     // 0 normal; 1 Mod and 2 Mod2x, faded toward their neutral 1.0 and 0.5 by
     // alpha; 3 NoAlphaAdd, scaled by opacity alone. See CharMaterialUBO.
     int colourBlend;
+    // 0 no fog, 1 the world's fog, 2 to black, 3 to white, 4 to grey.
+    int fogMode;
 };
 
 // What a colour-only blend (Mod, Mod2x, NoAlphaAdd) is handed. The 3.3.5a
@@ -417,19 +419,26 @@ void main() {
 
     if (unlit == 0) result += localLightContribution(FragPos, norm, texColor.rgb);
 
-    // A multiply or a plain add is drawn over what is already fogged; fogging
-    // it again would tint the scene behind it.
-    if (colourBlend != 0) {
-        outColor = colourBlendOutput(finiteVec3(result) ? result : texColor.rgb,
-                                     texColor.rgb, texColor.a * opacity);
-        return;
-    }
-
-    float dist = length(viewPos.xyz - FragPos);
-    result = applyFog(result, FragPos, dist);
     if (!finiteVec3(result)) {
         result = texColor.rgb;
     }
+    vec4 shaded = colourBlendOutput(result, texColor.rgb, texColor.a * opacity);
 
-    outColor = vec4(result, texColor.a * opacity);
+    // The client's fog for this blend mode: the world's fog, or toward the
+    // colour that leaves the scene unchanged - black for an add, white for
+    // Mod, grey for Mod2x - or none for an unfogged material.
+    float dist = length(viewPos.xyz - FragPos);
+    float fogFactor = clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0);
+    if (fogMode == 1) {
+        shaded.rgb = applyFog(shaded.rgb, FragPos, dist);
+    } else if (fogMode == 2) {
+        shaded.rgb *= fogFactor;
+        if (volumetricParams.x > 0.5) shaded.rgb *= fogVolumeAt(FragPos).a;
+    } else if (fogMode == 3) {
+        shaded.rgb = mix(vec3(1.0), shaded.rgb, fogFactor);
+    } else if (fogMode == 4) {
+        shaded.rgb = mix(vec3(0.5019608), shaded.rgb, fogFactor);
+    }
+
+    outColor = shaded;
 }
