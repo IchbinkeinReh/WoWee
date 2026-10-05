@@ -25,6 +25,10 @@ constexpr uint32_t kGoTypeChair = 7;
 /// GENERIC - decorative, no interaction - and FISHINGHOLE, which is fished
 /// rather than clicked. Neither may take a click from a unit.
 constexpr uint32_t kGoTypeGeneric = 5;
+/// SPELLFOCUS: a campfire, an anvil, a forge. It is there to stand beside while
+/// casting; the real client gives it no hand cursor and no click, and the Basic
+/// Campfire a player lights was answering both.
+constexpr uint32_t kGoTypeSpellFocus = 8;
 constexpr uint32_t kGoTypeFishingHole = 25;
 
 bool isDeadUnit(const std::shared_ptr<game::Entity>& entity) {
@@ -135,6 +139,7 @@ ScenePick pickScene(game::GameHandler& gameHandler,
             }
         } else if (type == game::ObjectType::GAMEOBJECT) {
             const bool interactive = !goInfo || (goInfo->type != kGoTypeGeneric &&
+                                                 goInfo->type != kGoTypeSpellFocus &&
                                                  goInfo->type != kGoTypeFishingHole);
             // How well the ray is aimed at this one, as a fraction of its own
             // size: nought is dead centre and one is a graze. Ranked by that
