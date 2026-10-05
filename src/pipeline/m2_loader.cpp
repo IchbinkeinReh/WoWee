@@ -488,7 +488,8 @@ std::string readString(const std::vector<uint8_t>& data, uint32_t offset, uint32
     return std::string(reinterpret_cast<const char*>(&data[offset]), actualLen);
 }
 
-enum class TrackType { VEC3, QUAT_COMPRESSED, FLOAT, FIXED16, BYTE_BOOL };
+enum class TrackType { VEC3, QUAT_COMPRESSED, FLOAT, FIXED16, BYTE_BOOL,
+                       QUAT_FLOAT };  // float x,y,z,w: a texture transform's rotation
 
 // M2 sequence flag: when set, keyframe data is embedded in the M2 file.
 // When clear, data lives in an external .anim file and the M2 offsets are
@@ -545,6 +546,7 @@ void parseAnimTrack(const std::vector<uint8_t>& data,
         else if (type == TrackType::FIXED16) keyElementSize = sizeof(int16_t);
         else if (type == TrackType::BYTE_BOOL) keyElementSize = sizeof(uint8_t);
         else if (type == TrackType::VEC3) keyElementSize = sizeof(float) * 3;
+        else if (type == TrackType::QUAT_FLOAT) keyElementSize = sizeof(float) * 4;
         else keyElementSize = sizeof(int16_t) * 4;
         if (keyOffset + keyCount * keyElementSize > data.size()) {
             track.sequences[i].timestamps.clear();
@@ -571,6 +573,18 @@ void parseAnimTrack(const std::vector<uint8_t>& data,
             for (uint32_t k = 0; k < keyCount; k++) {
                 track.sequences[i].floatValues.push_back(
                     readValue<uint8_t>(data, keyOffset + k) != 0 ? 1.0f : 0.0f);
+            }
+        } else if (type == TrackType::QUAT_FLOAT) {
+            // Uncompressed C4Quaternion, x y z w: the client steps a texture
+            // transform's rotation keys 16 bytes apart (FUN_0082ad50).
+            struct QuatDisk { float x, y, z, w; };
+            auto values = readArray<QuatDisk>(data, keyOffset, keyCount);
+            track.sequences[i].quatValues.reserve(values.size());
+            for (const auto& v : values) {
+                glm::quat q(v.w, v.x, v.y, v.z);
+                const float len = glm::length(q);
+                track.sequences[i].quatValues.push_back(
+                    (std::isfinite(len) && len > 0.001f) ? q / len : glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
             }
         } else if (type == TrackType::VEC3) {
             // Translation/scale: float[3] per key
@@ -1332,7 +1346,9 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
             if (header.version >= 264) {
                 M2TextureTransformDisk dt = readValue<M2TextureTransformDisk>(m2Data, ofs);
                 parseAnimTrack(m2Data, dt.translation, tt.translation, TrackType::VEC3, seqFlags);
-                parseAnimTrack(m2Data, dt.rotation, tt.rotation, TrackType::QUAT_COMPRESSED, seqFlags);
+                // Float quaternions, unlike a bone's: the client reads these
+                // keys 16 bytes apart. Read as compressed they were garbage.
+                parseAnimTrack(m2Data, dt.rotation, tt.rotation, TrackType::QUAT_FLOAT, seqFlags);
                 parseAnimTrack(m2Data, dt.scaling, tt.scale, TrackType::VEC3, seqFlags);
             } else {
                 M2TextureTransformDiskVanilla dt = readValue<M2TextureTransformDiskVanilla>(m2Data, ofs);

@@ -42,6 +42,9 @@ struct InstanceData {
     float highlight;
     // Bit 0: a boat afloat, which rides the water. Also in what was padding.
     int flags;
+    // The texture matrix's linear part, rows (m00, m01) and (m10, m11);
+    // uvOffset is its translation.
+    vec4 uvLinear;
 };
 layout(set = 3, binding = 0) readonly buffer InstanceSSBO {
     InstanceData instanceData[];
@@ -278,7 +281,9 @@ void main() {
     FragPos = worldPos.xyz;
     Normal = mat3(model) * norm.xyz;
 
-    TexCoord = (push.texCoordSet == 1 ? aTexCoord2 : aTexCoord) + uvOff;
+    vec2 baseUV = push.texCoordSet == 1 ? aTexCoord2 : aTexCoord;
+    vec4 uvLin = instanceData[instIdx].uvLinear;
+    TexCoord = vec2(dot(uvLin.xy, baseUV), dot(uvLin.zw, baseUV)) + uvOff;
 
     InstanceOrigin = model[3].xyz;
     // How far up the plant this vertex is, as a fraction of the plant's own

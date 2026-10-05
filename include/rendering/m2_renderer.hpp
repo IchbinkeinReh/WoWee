@@ -907,6 +907,9 @@ private:
         int32_t boneCount;         //  4 bytes @ offset 84 - clamps skinning reads
         float highlight = 0.0f;    //  4 bytes @ offset 88 - pressed-on lift
         int32_t flags = {};        //  4 bytes @ offset 92 - bit 0: afloat (bobs on the water)
+        // The texture matrix's linear part, rows (m00, m01) and (m10, m11);
+        // uvOffset is its translation. Identity is (1, 0, 0, 1).
+        glm::vec4 uvLinear;        // 16 bytes @ offset 96
     };
     // How many instances one frame may hand the GPU, not how many exist. Ground
     // clutter is what fills it: it is drawn by the thousand and every tuft

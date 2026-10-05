@@ -53,6 +53,45 @@ namespace rendering {
 /// none until the next one; copying them from a sibling of the same model
 /// draws it immediately. A seed entry pointing at an instance that has since
 /// gone is dropped rather than followed.
+
+namespace {
+
+// A texture transform's matrix as the 3.3.5a client builds it (FUN_0082da40):
+// from identity, rotation about the texture's centre, then scale about it,
+// then the translation - each only where its track has keys. Applied to a
+// UV, the translation acts first.
+glm::mat4 m2TextureMatrix(const pipeline::M2TextureTransform& tt, int seq, float animTime,
+                          float globalTime, const std::vector<uint32_t>& globalSeqDurations) {
+    const glm::vec3 centre(0.5f, 0.5f, 0.0f);
+    glm::mat4 m(1.0f);
+    if (!tt.rotation.sequences.empty()) {
+        const glm::quat q = m2_track::sampleQuat(tt.rotation, seq, animTime, globalTime,
+                                                 globalSeqDurations);
+        m = m * glm::translate(glm::mat4(1.0f), centre) * glm::mat4_cast(q) *
+            glm::translate(glm::mat4(1.0f), -centre);
+    }
+    if (!tt.scale.sequences.empty()) {
+        const glm::vec3 sc = m2_track::sampleVec3(tt.scale, seq, animTime, globalTime,
+                                                  globalSeqDurations, glm::vec3(1.0f));
+        m = m * glm::translate(glm::mat4(1.0f), centre) * glm::scale(glm::mat4(1.0f), sc) *
+            glm::translate(glm::mat4(1.0f), -centre);
+    }
+    if (!tt.translation.sequences.empty()) {
+        const glm::vec3 tr = m2_track::sampleVec3(tt.translation, seq, animTime, globalTime,
+                                                  globalSeqDurations, glm::vec3(0.0f));
+        m = m * glm::translate(glm::mat4(1.0f), tr);
+    }
+    return m;
+}
+
+// The 2x3 a UV needs from it: rows of the linear part, and the translation.
+void setUvTransform(glm::vec4& linear, glm::vec2& offset, const glm::mat4& m) {
+    linear = glm::vec4(m[0][0], m[1][0], m[0][1], m[1][1]);
+    offset = glm::vec2(m[3][0], m[3][1]);
+}
+
+} // namespace
+
 void M2Renderer::seedInstanceAnimation(const M2ModelGPU& model, uint32_t modelId,
                                        M2Instance& instance) {
         if (!model.sequences.empty()) {
@@ -1544,6 +1583,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 auto& e = instSSBO[instanceDataCount_];
                 e.model = inst.modelMatrix;
                 e.uvOffset = glm::vec2(0.0f);
+                e.uvLinear = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
                 e.fadeAlpha = p.fadeAlpha;
                 e.useBones = (p.useBones && !kM2NoSkinning) ? 1 : 0;
                 e.boneBase = p.useBones ? static_cast<int32_t>(inst.megaBoneOffset) : 0;
@@ -1811,12 +1851,12 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                             const auto& p = pending[j];
                             auto& inst = instances[p.instanceIdx];
                             glm::vec2 uvOffset(0.0f);
+                            glm::vec4 uvLinear(1.0f, 0.0f, 0.0f, 1.0f);
                             if (tt) {
-                                glm::vec3 trans = m2_track::sampleVec3(
-                                    tt->translation, inst.currentSequenceIndex,
-                                    inst.animTime, inst.globalSequenceTime,
-                                    model.globalSequenceDurations, glm::vec3(0.0f));
-                                uvOffset = glm::vec2(trans.x, trans.y);
+                                setUvTransform(uvLinear, uvOffset,
+                                               m2TextureMatrix(*tt, inst.currentSequenceIndex,
+                                                               inst.animTime, inst.globalSequenceTime,
+                                                               model.globalSequenceDurations));
                             }
                             if (model.isLavaModel && uvOffset == glm::vec2(0.0f)) {
                                 uvOffset = glm::vec2(lavaAnimSeconds * 0.03f,
@@ -1829,6 +1869,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                             auto& e = instSSBO[instanceDataCount_];
                             e.model = inst.modelMatrix;
                             e.uvOffset = uvOffset;
+                            e.uvLinear = uvLinear;
                             e.fadeAlpha = p.fadeAlpha;
                             e.useBones = (p.useBones && !kM2NoSkinning) ? 1 : 0;
                             e.boneBase = p.useBones ? static_cast<int32_t>(inst.megaBoneOffset) : 0;
@@ -2103,18 +2144,18 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             static const bool skyNoTexAnim =
                 std::getenv("WOWEE_SKY_M2_NO_TEXANIM") != nullptr;
             glm::vec2 uvOffset(0.0f);
+            glm::vec4 uvLinear(1.0f, 0.0f, 0.0f, 1.0f);
             if (batch.textureAnimIndex != 0xFFFF && model.hasTextureAnimation &&
                 !(skyMode_ && skyNoTexAnim)) {
                 uint16_t lookupIdx = batch.textureAnimIndex;
                 if (lookupIdx < model.textureTransformLookup.size()) {
                     uint16_t transformIdx = model.textureTransformLookup[lookupIdx];
                     if (transformIdx < model.textureTransforms.size()) {
-                        const auto& tt = model.textureTransforms[transformIdx];
-                        glm::vec3 trans = m2_track::sampleVec3(
-                            tt.translation, instance.currentSequenceIndex,
-                            instance.animTime, instance.globalSequenceTime,
-                            model.globalSequenceDurations, glm::vec3(0.0f));
-                        uvOffset = glm::vec2(trans.x, trans.y);
+                        setUvTransform(uvLinear, uvOffset,
+                                       m2TextureMatrix(model.textureTransforms[transformIdx],
+                                                       instance.currentSequenceIndex,
+                                                       instance.animTime, instance.globalSequenceTime,
+                                                       model.globalSequenceDurations));
                     }
                 }
             }
@@ -2129,6 +2170,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             auto& e = instSSBO[instanceDataCount_];
             e.model = instance.modelMatrix;
             e.uvOffset = uvOffset;
+            e.uvLinear = uvLinear;
             e.fadeAlpha = instanceFadeAlpha;
             e.useBones = (needsBones && !kM2NoSkinning) ? 1 : 0;
             e.boneBase = needsBones ? static_cast<int32_t>(instance.megaBoneOffset) : 0;
