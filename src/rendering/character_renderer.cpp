@@ -2783,6 +2783,10 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             // depends only on static batch metadata, so per-frame re-sorting was waste).
             const auto& sortedBatchIndices = gpuModel.sortedBatchIndices;
 
+            const bool modelHasHairTexture = std::any_of(
+                gpuModel.data.textures.begin(), gpuModel.data.textures.end(),
+                [](const auto& t) { return t.type == 6; });
+
             for (int pass = 0; pass < 2; pass++) {
             for (size_t bi : sortedBatchIndices) {
                 const auto& batch = gpuModel.data.batches[bi];
@@ -2890,9 +2894,15 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                                         (submeshGroup == 0 && batch.submeshId > 0 && batch.submeshId <= 99);
                 // Scene models have no hair, and their submesh ids are all 0, which
                 // would otherwise satisfy the hair-geoset guess for every batch.
+                // The geoset-id guess is for player-style models, whose hair has
+                // a texture slot of its own. A creature has none, and its
+                // submesh ids land in the same ranges by accident: a translucent
+                // body part (Mana Wyrm) was taken for hair, alpha-cut, and drawn
+                // solid.
                 const bool hairMaterial = !instance.isSceneModel &&
                                           (hairTexture ||
-                                           (hairGeoset && (blendMode != 0 || batch.textureCount > 1)));
+                                           (modelHasHairTexture && hairGeoset &&
+                                            (blendMode != 0 || batch.textureCount > 1)));
 
                 // Attached weapon models can include additive FX/card batches that
                 // appear as detached flat quads for some swords. Keep core geometry
