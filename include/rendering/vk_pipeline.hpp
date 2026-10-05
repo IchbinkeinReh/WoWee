@@ -1,6 +1,8 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <array>
+#include <unordered_map>
 #include <vector>
 #include <string>
 
@@ -277,6 +279,21 @@ VkPipelineLayout createPipelineLayout(VkDevice device,
 // Helper to create a descriptor set layout from bindings
 VkDescriptorSetLayout createDescriptorSetLayout(VkDevice device,
     const std::vector<VkDescriptorSetLayoutBinding>& bindings);
+
+/// Destroy every pipeline in a map of per-state variants (cull, depth test,
+/// depth write) built over base pipelines, and empty it. The bases themselves
+/// are owned and destroyed elsewhere; the variants never include them.
+template <std::size_t N>
+void destroyPipelineVariants(VkDevice device,
+    std::unordered_map<VkPipeline, std::array<VkPipeline, N>>& variants) {
+    for (auto& [base, set] : variants) {
+        for (VkPipeline& p : set) {
+            if (p) vkDestroyPipeline(device, p, nullptr);
+            p = VK_NULL_HANDLE;
+        }
+    }
+    variants.clear();
+}
 
 } // namespace rendering
 } // namespace wowee

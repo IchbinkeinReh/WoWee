@@ -1128,15 +1128,7 @@ void M2Renderer::invalidateCullOutput(uint32_t frameIndex) {
 }
 
 void M2Renderer::destroyPipelineVariants() {
-    if (!vkCtx_) return;
-    VkDevice device = vkCtx_->getDevice();
-    for (auto& [base, variants] : pipelineVariants_) {
-        for (VkPipeline& p : variants) {
-            if (p) vkDestroyPipeline(device, p, nullptr);
-            p = VK_NULL_HANDLE;
-        }
-    }
-    pipelineVariants_.clear();
+    if (vkCtx_) rendering::destroyPipelineVariants(vkCtx_->getDevice(), pipelineVariants_);
 }
 
 void M2Renderer::shutdown() {

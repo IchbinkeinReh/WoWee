@@ -380,15 +380,7 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
 }
 
 void CharacterRenderer::destroyPipelineVariants() {
-    if (!vkCtx_) return;
-    VkDevice device = vkCtx_->getDevice();
-    for (auto& [base, variants] : pipelineVariants_) {
-        for (VkPipeline& p : variants) {
-            if (p) vkDestroyPipeline(device, p, nullptr);
-            p = VK_NULL_HANDLE;
-        }
-    }
-    pipelineVariants_.clear();
+    if (vkCtx_) rendering::destroyPipelineVariants(vkCtx_->getDevice(), pipelineVariants_);
 }
 
 VkPipeline CharacterRenderer::pipelineVariant(VkPipeline base, uint16_t materialFlags,
