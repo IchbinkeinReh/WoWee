@@ -2473,7 +2473,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             mat.fadeAlpha = bgpu.staticAlpha;
             mat.interiorDarken = 0.0f;
             mat.specularIntensity = 0.5f;
-            mat.emissiveBoost = bgpu.preserveGlowMesh ? 2.4f : 1.0f;
+            mat.emissiveBoost = 1.0f;
             memcpy(matAllocInfo.pMappedData, &mat, sizeof(mat));
             bgpu.materialUBOMapped = matAllocInfo.pMappedData;
 

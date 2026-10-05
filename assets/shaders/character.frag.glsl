@@ -396,9 +396,10 @@ void main() {
     vec3 result;
 
     if (unlit != 0) {
-        vec3 emissiveTint = vec3(emissiveTintR, emissiveTintG, emissiveTintB);
-        vec3 warm = emissiveTint * emissiveBoost;
-        result = texColor.rgb * (1.0 + warm);
+        // The texture as it is: the client draws an unlit batch with its
+        // colour as the emissive and no light (FUN_0081fb10). This was
+        // texture * (1 + boost), twice the texture at the defaults.
+        result = texColor.rgb;
     } else {
         vec3 ldir = normalize(-lightDir.xyz);
         float diff = max(dot(norm, ldir), 0.0);

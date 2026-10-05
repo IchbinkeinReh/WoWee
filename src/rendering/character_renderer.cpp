@@ -2669,8 +2669,6 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
     // 4.0 covers Tauren, mounted characters, and most creature models.
     constexpr float kDefaultCharacterCullRadius = 4.0f;
     const glm::vec3 camPos = camera.getPosition();
-    const float frameTimeSeconds = std::chrono::duration<float>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
 
     // Extract frustum planes for per-instance visibility testing
     Frustum frustum;
@@ -3151,20 +3149,6 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     currentPipeline = desiredPipeline;
                 }
 
-                float emissiveBoost = 1.0f;
-                glm::vec3 emissiveTint(1.0f, 1.0f, 1.0f);
-                const bool koboldCandleFlame = colorKeyBlack && gpuModel.isKoboldFlame;
-                if (unlit && koboldCandleFlame) {
-                    float phase = static_cast<float>(batch.submeshId) * 0.31f;
-                    float f1 = std::sin(frameTimeSeconds * 7.9f + phase);
-                    float f2 = std::sin(frameTimeSeconds * 12.7f + phase * 1.73f);
-                    float f3 = std::sin(frameTimeSeconds * 4.3f + phase * 2.11f);
-                    float flicker = 0.90f + 0.10f * f1 + 0.06f * f2 + 0.04f * f3;
-                    flicker = std::clamp(flicker, 0.72f, 1.12f);
-                    emissiveBoost = (blendMode >= 3) ? (2.4f * flicker) : (1.5f * flicker);
-                    emissiveTint = glm::vec3(1.28f, 1.04f, 0.82f);
-                }
-
                 // Resolve normal/height map for this texture
                 VkTexture* normalMap = flatNormalTexture_.get();
                 float batchHeightVariance = 0.0f;
@@ -3189,10 +3173,10 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 matData.alphaTest = blendNeedsCutout ? 1 : (blendMode >= 2 ? 2 : 0);
                 matData.colorKeyBlack = colorKeyBlack ? 1 : 0;
                 matData.unlit = unlit ? 1 : 0;
-                matData.emissiveBoost = emissiveBoost;
-                matData.emissiveTintR = emissiveTint.r;
-                matData.emissiveTintG = emissiveTint.g;
-                matData.emissiveTintB = emissiveTint.b;
+                matData.emissiveBoost = 1.0f;
+                matData.emissiveTintR = 1.0f;
+                matData.emissiveTintG = 1.0f;
+                matData.emissiveTintB = 1.0f;
                 matData.specularIntensity = 0.5f;
                 matData.enableNormalMap = (useAdvancedMaterials && normalMappingEnabled_) ? 1 : 0;
                 // Character textures are layered/mirrored atlases, not coherent
