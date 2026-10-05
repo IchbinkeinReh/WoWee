@@ -82,7 +82,11 @@ public:
     /// surrounds it is transparent. A portrait is masked by the frame art
     /// around it, and anything opaque behind the head shows as a block of
     /// colour inside that frame.
-    void setTransparentBackground(bool transparent);
+    ///
+    /// 'opaqueBlack' keeps the backdrop away but clears to solid black instead
+    /// of nothing: the real client's 3D portraits sit on black, where the frame
+    /// art only masks the corners. Ignored unless 'transparent' is set.
+    void setTransparentBackground(bool transparent, bool opaqueBlack = false);
 
     // Off-screen composite pass - call from Renderer::beginFrame() before main render pass
     void compositePass(VkCommandBuffer cmd, uint32_t frameIndex);
@@ -199,6 +203,7 @@ private:
     glm::vec3 previewStandPosition_{0.0f};
     glm::vec3 previewViewDirection_{0.0f, 1.0f, 0.0f};
     bool transparentBackground_ = false;
+    bool opaqueBlackBackground_ = false;
 
     // Cached info from loadCharacter() for later recompositing.
     game::Race race_ = game::Race::HUMAN;

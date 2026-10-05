@@ -83,7 +83,7 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
 
         // Declared before the model loads, so the racial backdrop is never
         // built in the first place.
-        preview_->setTransparentBackground(true);
+        preview_->setTransparentBackground(true, framing_ == Framing::Face);
         if (preview_->loadCharacter(self->race, self->gender, skin, face,
                                     hairStyle, hairColor, self->facialFeatures,
                                     self->useFemaleModel)) {
@@ -148,7 +148,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
         const uint8_t hairStyle = (appearanceBytes >> 16) & 0xFF;
         const uint8_t hairColor = (appearanceBytes >> 24) & 0xFF;
 
-        preview_->setTransparentBackground(true);
+        preview_->setTransparentBackground(true, framing_ == Framing::Face);
         if (preview_->loadCharacter(static_cast<game::Race>(race),
                                     static_cast<game::Gender>(gender),
                                     skin, face, hairStyle, hairColor,
@@ -204,7 +204,7 @@ bool UnitPortrait::updateCreature(const std::string& m2Path,
     if (loadedCreaturePath_ != m2Path) {
         // Declared before the model loads, so the racial backdrop is never
         // built in the first place - the same order loadCharacter needs.
-        preview_->setTransparentBackground(true);
+        preview_->setTransparentBackground(true, framing_ == Framing::Face);
         if (preview_->loadCreature(m2Path, skins)) {
             if (framing_ == Framing::Face) {
                 preview_->setPortraitFraming();

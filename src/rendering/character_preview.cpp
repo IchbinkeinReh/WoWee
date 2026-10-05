@@ -1419,7 +1419,7 @@ void CharacterPreview::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
     // Nothing at all behind a portrait, so the frame art around it shows
     // through; the studio backdrop everywhere else.
     VkClearColorValue clearColor = transparentBackground_
-        ? VkClearColorValue{{0.0f, 0.0f, 0.0f, 0.0f}}
+        ? VkClearColorValue{{0.0f, 0.0f, 0.0f, opaqueBlackBackground_ ? 1.0f : 0.0f}}
         : VkClearColorValue{{0.05f, 0.05f, 0.1f, 1.0f}};
     renderTarget_->beginPass(cmd, clearColor);
 
@@ -1450,8 +1450,9 @@ void CharacterPreview::zoom(float wheelDelta) {
     applyPreviewView();
 }
 
-void CharacterPreview::setTransparentBackground(bool transparent) {
+void CharacterPreview::setTransparentBackground(bool transparent, bool opaqueBlack) {
     transparentBackground_ = transparent;
+    opaqueBlackBackground_ = transparent && opaqueBlack;
     // The scene model behind the character is as opaque as the clear colour,
     // so it goes as well.
     if (transparent && backdropInstanceId_ != 0 && charRenderer_) {
