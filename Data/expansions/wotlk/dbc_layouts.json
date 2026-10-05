@@ -50,6 +50,7 @@
   },
   "CreatureDisplayInfo": {
     "CreatureModelScale": 4,
+    "ParticleColorID": 13,
     "ExtraDisplayId": 3,
     "ID": 0,
     "ModelID": 1,
@@ -227,6 +228,12 @@
   "Map": {
     "ID": 0,
     "InternalName": 1
+  },
+  "ParticleColor": {
+    "End": 7,
+    "ID": 0,
+    "Mid": 4,
+    "Start": 1
   },
   "SkillLine": {
     "Category": 1,

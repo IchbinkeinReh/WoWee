@@ -181,6 +181,9 @@ struct M2ParticleEmitter {
     // WotLK +0x1C8, uint8: while it reads 0 the emitter stops emitting. No
     // keys means enabled, as the client samples it with a default of 1.
     M2AnimationTrack enabledTrack;
+    // +0x2A: which of a display's ParticleColor slots (11, 12, 13) recolours
+    // this emitter; anything else keeps its own colours.
+    uint16_t particleColorIndex = 0;
     bool enabled = true;
 };
 

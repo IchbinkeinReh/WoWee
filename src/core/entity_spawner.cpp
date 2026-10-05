@@ -84,6 +84,7 @@ void EntitySpawner::update() {
     processPendingRemotePlayerMounts();
     syncCreatureStealthVisuals();
     refreshCreatureScales();
+    syncCreatureParticleTwins();
 }
 
 void EntitySpawner::syncCreatureStealthVisuals() {
@@ -126,6 +127,7 @@ void EntitySpawner::shutdown() {
     clearAllQueues();
     // Clear all instances
     creatureInstances_.clear();
+    creatureParticleTwins_.clear();
     creatureModelIds_.clear();
     creatureDisplayIds_.clear();
     requestedCreatureDisplayIds_.clear();
@@ -165,6 +167,7 @@ void EntitySpawner::resetAllState() {
 
     // Clear all instance tracking
     creatureInstances_.clear();
+    creatureParticleTwins_.clear();
     creatureModelIds_.clear();
     creatureDisplayIds_.clear();
     requestedCreatureDisplayIds_.clear();
@@ -594,6 +597,10 @@ void EntitySpawner::buildCreatureDisplayLookups() {
                 const float displayScale = cdi->getFloat(i, scaleField);
                 if (displayScale > 0.0f) data.displayScale = displayScale;
             }
+            const uint32_t pcField = cdiL ? (*cdiL)["ParticleColorID"] : 0xFFFFFFFFu;
+            if (pcField != 0xFFFFFFFFu && pcField < cdi->getFieldCount()) {
+                data.particleColorId = cdi->getUInt32(i, pcField);
+            }
             displayDataMap_[cdi->getUInt32(i, cdiL ? (*cdiL)["ID"] : 0)] = data;
         }
         LOG_INFO("Loaded ", displayDataMap_.size(), " display→model mappings");
@@ -669,6 +676,31 @@ void EntitySpawner::buildCreatureDisplayLookups() {
             }
         }
         LOG_INFO("Loaded ", modelIdToPath_.size(), " model→path mappings");
+    }
+
+    // ParticleColor.dbc: a display's recolouring of its model's emitters - for
+    // each of three slots a start, mid and end colour (client FUN_004ea9e0).
+    if (auto pc = assetManager_->loadDBC("ParticleColor.dbc"); pc && pc->isLoaded()) {
+        const auto* pcL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ParticleColor") : nullptr;
+        if (pcL) {
+            const uint32_t fStart = (*pcL)["Start"], fMid = (*pcL)["Mid"], fEnd = (*pcL)["End"];
+            if (fEnd != 0xFFFFFFFFu && fEnd + 2 < pc->getFieldCount()) {
+                auto rgb = [](uint32_t argb) {
+                    return glm::vec3(((argb >> 16) & 0xFF) / 255.0f, ((argb >> 8) & 0xFF) / 255.0f,
+                                     (argb & 0xFF) / 255.0f);
+                };
+                for (uint32_t i = 0; i < pc->getRecordCount(); i++) {
+                    std::array<glm::vec3, 9> c{};
+                    for (uint32_t slot = 0; slot < 3; ++slot) {
+                        c[slot * 3 + 0] = rgb(pc->getUInt32(i, fStart + slot));
+                        c[slot * 3 + 1] = rgb(pc->getUInt32(i, fMid + slot));
+                        c[slot * 3 + 2] = rgb(pc->getUInt32(i, fEnd + slot));
+                    }
+                    particleColors_[pc->getUInt32(i, (*pcL)["ID"])] = c;
+                }
+            }
+        }
+        LOG_INFO("Loaded ", particleColors_.size(), " particle colour records");
     }
 
     // CreatureFamily.dbc: the size a beast family grows through as it levels.
@@ -2232,6 +2264,64 @@ void EntitySpawner::refreshCreatureScales() {
     }
 }
 
+void EntitySpawner::spawnCreatureParticleTwin(uint64_t guid, uint32_t displayId,
+                                              uint32_t charModelId, uint32_t charInstanceId) {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
+    if (!charRenderer || !m2) return;
+    const pipeline::M2Model* data = charRenderer->getModelData(charModelId);
+    if (!data || data->particleEmitters.empty()) return;
+
+    // The same model, loaded once into the M2 renderer for its emitters and
+    // drawn for nothing else.
+    const uint32_t twinModelId = 0x5A000000u + charModelId;
+    if (!m2->hasModel(twinModelId)) {
+        if (!m2->loadModel(*data, twinModelId)) return;
+        m2->setModelParticlesOnly(twinModelId);
+    }
+    glm::mat4 model(1.0f);
+    const std::vector<glm::mat4>* bones = nullptr;
+    int seq = 0;
+    float t = 0.0f, gt = 0.0f;
+    if (!charRenderer->getInstancePose(charInstanceId, model, bones, seq, t, gt)) return;
+    const uint32_t twin = m2->createInstance(twinModelId, glm::vec3(model[3]), glm::vec3(0.0f), 1.0f,
+                                            /*allowPositionDedup=*/false);
+    if (twin == 0) return;
+    m2->setInstanceExternalPose(twin, model, *bones, seq, t, gt);
+    if (auto disp = displayDataMap_.find(displayId);
+        disp != displayDataMap_.end() && disp->second.particleColorId != 0) {
+        if (auto pc = particleColors_.find(disp->second.particleColorId); pc != particleColors_.end()) {
+            m2->setInstanceParticleColors(twin, pc->second);
+        }
+    }
+    creatureParticleTwins_[guid] = twin;
+}
+
+void EntitySpawner::syncCreatureParticleTwins() {
+    if (creatureParticleTwins_.empty()) return;
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
+    if (!charRenderer || !m2) return;
+    for (const auto& [guid, twin] : creatureParticleTwins_) {
+        auto it = creatureInstances_.find(guid);
+        if (it == creatureInstances_.end()) continue;
+        glm::mat4 model(1.0f);
+        const std::vector<glm::mat4>* bones = nullptr;
+        int seq = 0;
+        float t = 0.0f, gt = 0.0f;
+        if (charRenderer->getInstancePose(it->second, model, bones, seq, t, gt) && bones) {
+            m2->setInstanceExternalPose(twin, model, *bones, seq, t, gt);
+        }
+    }
+}
+
+void EntitySpawner::removeCreatureParticleTwin(uint64_t guid) {
+    auto it = creatureParticleTwins_.find(guid);
+    if (it == creatureParticleTwins_.end()) return;
+    if (auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr) m2->removeInstance(it->second);
+    creatureParticleTwins_.erase(it);
+}
+
 void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x, float y, float z, float orientation, float scale) {
     if (!renderer_ || !renderer_->getCharacterRenderer() || !assetManager_) return;
 
@@ -2409,6 +2499,7 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
     // Track instance
     creatureInstances_[guid] = instanceId;
     creatureAppliedScale_[guid] = scale;
+    spawnCreatureParticleTwin(guid, displayId, modelId, instanceId);
     creatureModelIds_[guid] = modelId;
     creatureDisplayIds_[guid] = displayId;
     creatureRenderPosCache_[guid] = renderPos;

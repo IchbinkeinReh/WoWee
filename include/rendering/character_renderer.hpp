@@ -124,6 +124,11 @@ public:
     void setInstanceVisible(uint32_t instanceId, bool visible);
     void removeInstance(uint32_t instanceId);
     bool getAnimationState(uint32_t instanceId, uint32_t& animationId, float& animationTimeMs, float& animationDurationMs) const;
+    /// Everything an M2 instance needs to pose its particles as this one is
+    /// posed: world matrix, bones, and the sequence and times tracks sample at.
+    bool getInstancePose(uint32_t instanceId, glm::mat4& model,
+                         const std::vector<glm::mat4>*& bones, int& sequenceIndex,
+                         float& animationTimeMs, float& globalTimeMs) const;
     /// Footfall ($FSD) event times in ms for the sequence the instance is
     /// currently playing; nullptr if the model has none for that sequence.
     [[nodiscard]] const std::vector<uint32_t>* getFootstepEventTimes(uint32_t instanceId) const;

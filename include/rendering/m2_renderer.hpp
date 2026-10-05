@@ -295,6 +295,12 @@ struct M2Instance {
     /// alone, every layer of it, since an opaque layer cannot fade otherwise.
     float fade = 1.0f;
 
+    /// A display's ParticleColor record: start, mid and end for each of the
+    /// three slots an emitter can name (11, 12, 13), in that order. Applied
+    /// in place of an emitter's own colours where hasParticleColors is set.
+    std::array<glm::vec3, 9> particleColors{};
+    bool hasParticleColors = false;
+
     // Particle emitter state
     std::vector<float> emitterAccumulators;  // fractional particle counter per emitter
     std::vector<M2Particle> particles;
@@ -601,6 +607,19 @@ public:
         return instanceIndexById.find(instanceId) != instanceIndexById.end();
     }
     void removeInstance(uint32_t instanceId);
+
+    /// A model drawn for its particles alone: no geometry, no shadow, no
+    /// collision, and no animation of its own. A creature's particle effects
+    /// are drawn through one, posed from the creature each frame.
+    void setModelParticlesOnly(uint32_t modelId);
+    /// Pose an instance of a particles-only model from outside: its world
+    /// matrix, its bones, and the sequence and times its tracks sample at.
+    void setInstanceExternalPose(uint32_t instanceId, const glm::mat4& model,
+                                 const std::vector<glm::mat4>& bones, int sequenceIndex,
+                                 float animTimeMs, float globalTimeMs);
+    /// A display's ParticleColor record for this instance; see
+    /// M2Instance::particleColors.
+    void setInstanceParticleColors(uint32_t instanceId, const std::array<glm::vec3, 9>& colors);
     void removeInstances(const std::vector<uint32_t>& instanceIds);
     /// Mark an instance as a server game object so the adaptive doodad render
     /// distance can't cull it while the server still considers it visible.

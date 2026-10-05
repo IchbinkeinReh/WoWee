@@ -704,6 +704,10 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         uint32_t cachedTotalTiles = 1;
         uint16_t cachedBlendType = 0;
         const pipeline::M2ParticleEmitter* cachedEm = nullptr;
+        // The display's ParticleColor slot this emitter takes its colours
+        // from (client FUN_00825410 / FUN_0097a990), or null for its own.
+        const glm::vec3* cachedColorOverride = nullptr;
+        pipeline::M2FBlock cachedOverrideBlock;
         ParticleGroup* cachedGroup = nullptr;
         // animFrame depends only on inst.animTime + totalTiles, so it's also
         // emitter-stable within one frame.
@@ -757,6 +761,17 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             if (p.emitterIndex != lastEmitterIdx) {
                 lastEmitterIdx = p.emitterIndex;
                 cachedEm = &gpu.particleEmitters[p.emitterIndex];
+                cachedColorOverride = (inst.hasParticleColors &&
+                                       cachedEm->particleColorIndex >= 11 &&
+                                       cachedEm->particleColorIndex <= 13)
+                    ? &inst.particleColors[(cachedEm->particleColorIndex - 11u) * 3u] : nullptr;
+                if (cachedColorOverride) {
+                    // The record's start, mid and end replace the emitter's
+                    // three colour keys, over the emitter's own key times.
+                    cachedOverrideBlock.timestamps = cachedEm->particleColor.timestamps.size() == 3
+                        ? cachedEm->particleColor.timestamps : std::vector<float>{0.0f, 0.5f, 1.0f};
+                    cachedOverrideBlock.vec3Values.assign(cachedColorOverride, cachedColorOverride + 3);
+                }
 
                 cachedTex = whiteTexture_.get();
                 if (p.emitterIndex < static_cast<int>(gpu.particleTextures.size())) {
@@ -793,6 +808,7 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             const auto& em = *cachedEm;
             float lifeRatio = p.life / std::max(p.maxLife, 0.001f);
             glm::vec3 color = interpFBlockVec3(em.particleColor, lifeRatio);
+            if (cachedColorOverride) color = interpFBlockVec3(cachedOverrideBlock, lifeRatio);
             float alpha = std::min(interpFBlockFloat(em.particleAlpha, lifeRatio), 1.0f);
             float rawScale = interpFBlockFloat(em.particleScale, lifeRatio);
 

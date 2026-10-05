@@ -3780,6 +3780,20 @@ VkTexture* CharacterRenderer::resolveBatchTexture(const CharacterInstance& inst,
             return whiteTexture_.get();
 }
 
+bool CharacterRenderer::getInstancePose(uint32_t instanceId, glm::mat4& model,
+                                        const std::vector<glm::mat4>*& bones, int& sequenceIndex,
+                                        float& animationTimeMs, float& globalTimeMs) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return false;
+    const auto& inst = it->second;
+    model = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
+    bones = &inst.boneMatrices;
+    sequenceIndex = inst.currentSequenceIndex;
+    animationTimeMs = inst.animationTime;
+    globalTimeMs = inst.globalSequenceTime;
+    return true;
+}
+
 glm::mat4 CharacterRenderer::getModelMatrix(const CharacterInstance& instance) const {
     glm::mat4 model = glm::mat4(1.0f);
 

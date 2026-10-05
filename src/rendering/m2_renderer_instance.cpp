@@ -186,6 +186,41 @@ bool M2Renderer::getInstanceBounds(uint32_t instanceId, glm::vec3& outCenter, fl
     return outRadius > 0.0f;
 }
 
+void M2Renderer::setModelParticlesOnly(uint32_t modelId) {
+    auto it = models.find(modelId);
+    if (it == models.end()) return;
+    // Every path that would draw, shadow or collide with it already skips an
+    // invisible trap, and the particle passes do not.
+    it->second.isInvisibleTrap = true;
+    it->second.disableAnimation = true;
+}
+
+void M2Renderer::setInstanceExternalPose(uint32_t instanceId, const glm::mat4& model,
+                                         const std::vector<glm::mat4>& bones, int sequenceIndex,
+                                         float animTimeMs, float globalTimeMs) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    setInstanceTransform(instanceId, model);
+    auto& inst = instances[idxIt->second];
+    inst.scale = glm::length(glm::vec3(model[0]));
+    inst.boneMatrices = bones;
+    inst.currentSequenceIndex = sequenceIndex;
+    inst.animTime = animTimeMs;
+    inst.globalSequenceTime = globalTimeMs;
+    if (inst.cachedModel && sequenceIndex >= 0 &&
+        sequenceIndex < static_cast<int>(inst.cachedModel->sequences.size())) {
+        inst.animDuration = static_cast<float>(inst.cachedModel->sequences[sequenceIndex].duration);
+    }
+}
+
+void M2Renderer::setInstanceParticleColors(uint32_t instanceId, const std::array<glm::vec3, 9>& colors) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    auto& inst = instances[idxIt->second];
+    inst.particleColors = colors;
+    inst.hasParticleColors = true;
+}
+
 void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& transform) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;

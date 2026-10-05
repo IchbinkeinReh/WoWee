@@ -313,6 +313,9 @@ private:
         /// 1.5 for a giant, over ten displays. Nothing read it, so every
         /// creature sharing a model drew at that model's own size.
         float displayScale = 1.0f;
+        /// CreatureDisplayInfo.ParticleColorID: the ParticleColor record that
+        /// recolours the model's emitters naming slot 11, 12 or 13.
+        uint32_t particleColorId = 0;
     };
 
     /// CreatureModelData.ModelScale for a model id, the second half of the
@@ -436,6 +439,15 @@ private:
     std::unordered_map<uint64_t, bool> creatureWasStealthed_;
     uint32_t stealthSyncFrameCounter_ = 0;  // throttles syncCreatureStealthVisuals()
     std::unordered_map<uint64_t, float> creatureAppliedScale_;  // guid → scale the instance was given
+    // A creature's particle effects. The character renderer draws no
+    // particles, so a creature whose model has emitters gets a particles-only
+    // twin in the M2 renderer, posed from it every frame.
+    std::unordered_map<uint64_t, uint32_t> creatureParticleTwins_;  // guid → M2 instance id
+    std::unordered_map<uint32_t, std::array<glm::vec3, 9>> particleColors_;  // ParticleColor.dbc
+    void spawnCreatureParticleTwin(uint64_t guid, uint32_t displayId, uint32_t charModelId,
+                                   uint32_t charInstanceId);
+    void syncCreatureParticleTwins();
+    void removeCreatureParticleTwin(uint64_t guid);
     uint32_t scaleSyncFrameCounter_ = 0;  // throttles refreshCreatureScales()
     std::unordered_set<uint64_t> creatureWeaponsAttached_;
     std::unordered_map<uint64_t, uint8_t> creatureWeaponAttachAttempts_;
