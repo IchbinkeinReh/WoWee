@@ -42,8 +42,13 @@ def first_chain(src: str):
     if not m:
         return None
     body = re.sub(r"//[^\n]*", "", m.group(1))
-    return [f"{k}({re.sub(r'\s+', ' ', v).strip()})"
-            for k, v in re.findall(r"\.(set\w+)\(([^;]*?)\)\s*\n", body)]
+    # Collapsed outside the f-string: a backslash inside an f-string
+    # expression is a syntax error before Python 3.12.
+    calls = []
+    for k, v in re.findall(r"\.(set\w+)\(([^;]*?)\)\s*\n", body):
+        args = re.sub(r"\s+", " ", v).strip()
+        calls.append(f"{k}({args})")
+    return calls
 
 
 def main() -> int:
