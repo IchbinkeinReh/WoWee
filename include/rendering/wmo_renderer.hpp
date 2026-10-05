@@ -275,7 +275,6 @@ public:
     void setNormalMapStrength(float s) { normalMapStrength_ = s; materialSettingsDirty_ = true; }
     void setPOMEnabled(bool enabled) { pomEnabled_ = enabled; materialSettingsDirty_ = true; }
     void setPOMQuality(int q) { pomQuality_ = q; materialSettingsDirty_ = true; }
-    void setWMOOnlyMap(bool v) { wmoOnlyMap_ = v; materialSettingsDirty_ = true; }
     bool isNormalMappingEnabled() const { return normalMappingEnabled_; }
     float getNormalMapStrength() const { return normalMapStrength_; }
     bool isPOMEnabled() const { return pomEnabled_; }
@@ -465,7 +464,7 @@ private:
         int32_t unlit;             // 8
         int32_t isInterior;        // 12
         float specularIntensity;   // 16
-        int32_t isWindow;          // 20
+        int32_t unused20;          // 20 (unused; was the invented window-glass mode)
         int32_t enableNormalMap;   // 24
         int32_t enablePOM;         // 28
         float pomScale;            // 32 (height scale)
@@ -476,7 +475,7 @@ private:
         float wmoAmbientR;         // 52 (interior ambient color R)
         float wmoAmbientG;         // 56 (interior ambient color G)
         float wmoAmbientB;         // 60 (interior ambient color B)
-        int32_t emissive;           // 64 (0 none, 1 lamp glass, 2 firelit)
+        int32_t unused64;           // 64 (unused; was a per-texture-name emissive mode)
         int32_t hasVertexColors;    // 68: the group carries MOCV (MOGP flag 0x4)
         int32_t padding1;           // 72
         int32_t padding2;           // 76
@@ -519,12 +518,7 @@ private:
             bool alphaTest = false;
             bool unlit = false;
             bool isTransparent = false;     // blendMode >= 2
-            bool isWindow = false;          // F_SIDN or F_WINDOW material
             bool isLava = false;            // lava/magma texture (UV scroll)
-            // 0 = not luminous, 1 = authored lamp glass (bright), 2 = firelit
-            // from behind with a flicker (clock faces). See wmo.frag's emissive
-            // branch for how each level is shaded.
-            uint8_t emissiveLevel = 0;
             // For multi-draw: store index ranges
             struct DrawRange { uint32_t firstIndex; uint32_t indexCount; };
             std::vector<DrawRange> draws;
@@ -818,7 +812,6 @@ private:
     // Vulkan pipelines
     VkPipeline opaquePipeline_ = VK_NULL_HANDLE;
     VkPipeline transparentPipeline_ = VK_NULL_HANDLE;
-    VkPipeline glassPipeline_ = VK_NULL_HANDLE;      // alpha blend + depth write (windows)
     VkPipeline wireframePipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 
@@ -881,7 +874,6 @@ private:
     bool pomEnabled_ = true;             // on by default
     int pomQuality_ = 1;                 // 0=Low(16), 1=Medium(32), 2=High(64)
     bool materialSettingsDirty_ = false; // rebuild UBOs when settings change
-    bool wmoOnlyMap_ = false;            // true for dungeon/instance WMO-only maps
 
     // Rendering state
     bool wireframeMode = false;

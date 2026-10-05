@@ -32,7 +32,7 @@ layout(set = 1, binding = 1) uniform WMOMaterial {
     int unlit;
     int isInterior;
     float specularIntensity;
-    int isWindow;
+    int unused20;      // unused; was the invented window-glass mode
     int enableNormalMap;
     int enablePOM;
     float pomScale;
@@ -43,7 +43,7 @@ layout(set = 1, binding = 1) uniform WMOMaterial {
     float wmoAmbientR;
     float wmoAmbientG;
     float wmoAmbientB;
-    int emissive;
+    int unused64;      // unused; was a per-texture-name emissive mode
     int hasVertexColors;
     int padding1;
     int padding2;
@@ -268,65 +268,9 @@ void main() {
     RtLight rt = rtLightAt(FragPos);
     shadow = rtShadow(rt, shadow);
 
-    if (emissive == 1) {
-        // Authored luminous glass must remain bright in direct sun and shadow.
-        // A small warm bias keeps low-valued texels from reading as dark glass.
-        vec3 glass = texColor.rgb * 2.0 + vec3(0.16, 0.07, 0.015);
-
-        // Gentle guttering, weaker than the clock's open fire - these are steady
-        // lamps, not flames in the wind.
-        //
-        // Every lamp in a building shares one batch, so a uniform phase would
-        // pulse a whole street in lockstep. The phase is hashed from the lamp's
-        // world position instead, quantised into cells a few units across: large
-        // enough that one lamp's glass falls in a single cell, small enough that
-        // neighbouring lamps land in different ones.
-        vec3 cell = floor(FragPos * 0.2);
-        float h = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-        float phase = h * 6.2831853;
-        float t = fogParams.z;
-        float flicker = 0.93
-                      + 0.05 * sin(t * 1.3 + phase)
-                      + 0.02 * sin(t * 2.9 + phase * 1.7);
-        result = glass * flicker;
-    } else if (emissive == 2) {
-        // Firelit from behind (Darkshire's clock face): the surface is still lit
-        // by the sun so it belongs to the building by day, with a warm glow
-        // seeping through it as if a fire burned in the tower.
-        vec3 ldir = normalize(-lightDir.xyz);
-        float diff = max(dot(norm, ldir), 0.0);
-        vec3 lit = texColor.rgb * (ambientColor.rgb + lightColor.rgb * diff * shadow);
-
-        // Three detuned sines: a slow breathing sway, a quicker wobble, and a
-        // faint fast jitter. Their periods share no common multiple over any
-        // watchable span, so the flame never visibly loops.
-        float t = fogParams.z;
-        float flicker = 0.84
-                      + 0.10 * sin(t * 1.3)
-                      + 0.05 * sin(t * 2.9 + 1.7)
-                      + 0.03 * sin(t * 6.7 + 0.6);
-
-        // Firelight only competes with daylight once the sun is down, so fade the
-        // glow up as the scene darkens. A small floor keeps it faintly visible in
-        // daytime shade rather than switching on at dusk.
-        float daylight = clamp(dot(ambientColor.rgb + lightColor.rgb,
-                                   vec3(0.299, 0.587, 0.114)), 0.0, 1.0);
-        float night = mix(1.0, 0.22, daylight);
-
-        const vec3 kFireColor = vec3(1.0, 0.58, 0.22);
-        result = lit + kFireColor * (0.30 * flicker * night);
-
-        // Glass covering the dial: a tight sun highlight plus a Fresnel sheen
-        // that picks up sky colour at grazing angles, which is what sells a pane
-        // in front of the face rather than paint on stone. Both are additive and
-        // unaffected by the fire, since they live on the outer surface.
-        vec3 viewDir = normalize(viewPos.xyz - FragPos);
-        vec3 halfDir = normalize(ldir + viewDir);
-        float gloss  = pow(max(dot(norm, halfDir), 0.0), 96.0);
-        float fresnel = pow(1.0 - clamp(dot(norm, viewDir), 0.0, 1.0), 4.0);
-        result += lightColor.rgb * (gloss * 0.55 * shadow)
-                + ambientColor.rgb * (fresnel * 0.35);
-    } else if (isLava != 0) {
+    // Windows, lamp glass and clock faces are lit like any other surface:
+    // the client draws a batch by its material's blend mode and flags.
+    if (isLava != 0) {
         // Lava is self-luminous - bright emissive, no shadows
         result = texColor.rgb * 1.5;
     } else if (isInterior != 0) {
@@ -370,45 +314,11 @@ void main() {
         if (hasVertexColors != 0) result += texColor.rgb * VertColor.rgb * 0.5;
     }
 
-    if (isWindow == 0 && isLava == 0)
+    if (isLava == 0)
         result += localLightContribution(FragPos, norm, texColor.rgb);
 
     float dist = length(viewPos.xyz - FragPos);
     result = applyFog(result, FragPos, dist);
 
-    float alpha = texColor.a;
-
-    // Window glass: opaque but simulates dark tinted glass with reflections.
-    if (isWindow != 0) {
-        vec3 viewDir = normalize(viewPos.xyz - FragPos);
-        float NdotV = abs(dot(norm, viewDir));
-        float fresnel = 0.08 + 0.92 * pow(1.0 - NdotV, 4.0);
-
-        vec3 ldir = normalize(-lightDir.xyz);
-        vec3 reflectDir = reflect(-viewDir, norm);
-        float sunGlint = pow(max(dot(reflectDir, ldir), 0.0), 32.0);
-
-        float baseBrightness = mix(0.3, 0.9, sunGlint);
-        vec3 glass = result * baseBrightness;
-
-        vec3 reflectTint = mix(ambientColor.rgb * 1.2, vec3(0.6, 0.75, 1.0), 0.6);
-        glass = mix(glass, reflectTint, fresnel * 0.8);
-
-        vec3 halfDir = normalize(ldir + viewDir);
-        float spec = pow(max(dot(norm, halfDir), 0.0), 256.0);
-        glass += spec * lightColor.rgb * 0.8;
-
-        float specBroad = pow(max(dot(norm, halfDir), 0.0), 12.0);
-        glass += specBroad * lightColor.rgb * 0.12;
-
-        result = glass;
-        if (isWindow == 2) {
-            // Instance/dungeon glass: mostly transparent to see through
-            alpha = mix(0.12, 0.35, fresnel);
-        } else {
-            alpha = mix(0.4, 0.95, NdotV);
-        }
-    }
-
-    outColor = vec4(result, alpha);
+    outColor = vec4(result, texColor.a);
 }

@@ -343,9 +343,6 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
         // its tiles up by map, and left on the last one it found none - a
         // dungeon with no dungeon on its minimap.
         renderer_->setActiveMapName(mapName);
-        if (renderer_->getWMORenderer()) {
-            renderer_->getWMORenderer()->setWMOOnlyMap(true);
-        }
         if (renderer_->getTerrainManager()) {
             renderer_->getTerrainManager()->setStreamingEnabled(false);
         }
@@ -909,11 +906,8 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     }
     renderer_->setCharacterYaw(spawnYawDeg);
 
-    // Every sub-renderer, and out of instance mode.
+    // Every sub-renderer.
     renderer_->setActiveMapName(mapName);
-    if (renderer_->getWMORenderer()) {
-        renderer_->getWMORenderer()->setWMOOnlyMap(false);
-    }
 
     // NOTE: TransportManager renderer connection moved to after initializeRenderers (later in this function)
 

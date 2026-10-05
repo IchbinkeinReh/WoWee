@@ -7,7 +7,6 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/rt_bvh.hpp"
 #include "rendering/rt_scene.hpp"
-#include "rendering/wmo_material_class.hpp"
 #include "rendering/normal_map.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/vk_context.hpp"
@@ -133,23 +132,6 @@ bool WMORenderer::buildMainPassPipelines(VkDevice device,
     if (!transparentPipeline_) {
         core::Logger::getInstance().warning("WMORenderer: transparent pipeline not available");
     }
-
-    // --- Build glass pipeline (derivative - alpha blend WITH depth write for windows) ---
-    glassPipeline_ = PipelineBuilder()
-        .setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
-                    fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
-        .setVertexInput({ vertexBinding }, vertexAttribs)
-        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-        .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
-        .setColorBlendAttachment(PipelineBuilder::blendAlpha())
-        .setMultisample(vkCtx_->getMsaaSamples())
-        .setLayout(pipelineLayout_)
-        .setRenderPass(mainPass)
-        .setDynamicStates(viewportAndScissorDynamic())
-        .setFlags(VK_PIPELINE_CREATE_DERIVATIVE_BIT)
-        .setBasePipeline(opaquePipeline_)
-        .build(device, vkCtx_->getPipelineCache());
 
     // --- Build wireframe pipeline (derivative of opaque) ---
     wireframePipeline_ = PipelineBuilder()
@@ -369,7 +351,6 @@ void WMORenderer::shutdown() {
     // Destroy pipelines
     destroy(device, opaquePipeline_);
     destroy(device, transparentPipeline_);
-    destroy(device, glassPipeline_);
     destroy(device, wireframePipeline_);
     destroy(device, pipelineLayout_);
     destroy(device, materialDescPool_);
@@ -662,12 +643,10 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             uintptr_t texPtr;
             bool alphaTest;
             bool unlit;
-            bool isWindow;
-            uint8_t emissiveLevel;
+            bool transparent;
             bool operator==(const BatchKey& o) const {
                 return texPtr == o.texPtr && alphaTest == o.alphaTest &&
-                       unlit == o.unlit && isWindow == o.isWindow &&
-                       emissiveLevel == o.emissiveLevel;
+                       unlit == o.unlit && transparent == o.transparent;
             }
         };
         struct BatchKeyHash {
@@ -675,8 +654,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 return std::hash<uintptr_t>()(k.texPtr) ^
                        (std::hash<bool>()(k.alphaTest) << 1) ^
                        (std::hash<bool>()(k.unlit) << 2) ^
-                       (std::hash<bool>()(k.isWindow) << 3) ^
-                       (std::hash<uint8_t>()(k.emissiveLevel) << 4);
+                       (std::hash<bool>()(k.transparent) << 3);
             }
         };
         std::unordered_map<BatchKey, GroupResources::MergedBatch, BatchKeyHash> batchMap;
@@ -710,19 +688,14 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             }
 
             bool unlit = false;
-            uint32_t matFlags = 0;
             if (batch.materialId < modelData.materialFlags.size()) {
-                matFlags = modelData.materialFlags[batch.materialId];
-                unlit = (matFlags & 0x01) != 0;
+                unlit = (modelData.materialFlags[batch.materialId] & 0x01) != 0;
             }
 
-            // Glass comes from the flags the artist set on the material, not
-            // from the texture's file name: most textures named for a window
-            // are walls with window openings painted into them. See
-            // rendering/wmo_material_class.hpp.
-            bool isWindow = false;
+            // Windows, lamp glass and clock faces get no treatment of their
+            // own: the client draws every batch from its MOMT material, by
+            // blend mode and flags, whatever its texture is called.
             bool isLava = false;
-            uint8_t emissiveLevel = 0;
             if (batch.materialId < modelData.materialTextureIndices.size()) {
                 uint32_t ti = modelData.materialTextureIndices[batch.materialId];
                 if (ti < modelData.textureNames.size()) {
@@ -730,15 +703,6 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                     // Case-insensitive search for material types
                     std::string texNameLower = texName;
                     std::transform(texNameLower.begin(), texNameLower.end(), texNameLower.begin(), ::tolower);
-                    if (texNameLower.find("stormwindlampglass.blp") != std::string::npos) {
-                        emissiveLevel = 1;  // authored lamp glass: bright
-                    } else if (texNameLower.find("mm_clockface") != std::string::npos) {
-                        // Darkshire's town hall clock, and any building sharing the
-                        // face: backlit by a flickering fire in the tower.
-                        emissiveLevel = 2;
-                    }
-                    isWindow = emissiveLevel == 0 &&
-                               wmoMaterialIsGlass(matFlags, texName);
                     isLava = (texNameLower.find("lava") != std::string::npos ||
                               texNameLower.find("molten") != std::string::npos ||
                               texNameLower.find("magma") != std::string::npos);
@@ -746,7 +710,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             }
 
             BatchKey key{ .texPtr = reinterpret_cast<uintptr_t>(tex), .alphaTest = alphaTest, .unlit = unlit,
-                          .isWindow = isWindow, .emissiveLevel = emissiveLevel };
+                          .transparent = blendMode >= 2 };
             auto& mb = batchMap[key];
             if (mb.draws.empty()) {
                 mb.texture = tex;
@@ -754,9 +718,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 mb.alphaTest = alphaTest;
                 mb.unlit = unlit;
                 mb.isTransparent = (blendMode >= 2);
-                mb.isWindow = isWindow;
                 mb.isLava = isLava;
-                mb.emissiveLevel = emissiveLevel;
                 // Look up normal/height map from texture cache
                 if (hasTexture && tex != whiteTexture_.get()) {
                     for (const auto& [cacheKey, cacheEntry] : textureCache) {
@@ -797,7 +759,6 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             matData.isInterior = isInterior ? 1 : 0;
             matData.hasVertexColors = (groupRes.groupFlags & 0x4) != 0 ? 1 : 0;
             matData.specularIntensity = 0.5f;
-            matData.isWindow = mb.isWindow ? (wmoOnlyMap_ ? 2 : 1) : 0;
             matData.enableNormalMap = normalMappingEnabled_ ? 1 : 0;
             matData.enablePOM = pomEnabled_ ? 1 : 0;
             matData.pomScale = 0.012f;
@@ -808,7 +769,6 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             matData.wmoAmbientR = modelData.wmoAmbientColor.r;
             matData.wmoAmbientG = modelData.wmoAmbientColor.g;
             matData.wmoAmbientB = modelData.wmoAmbientColor.b;
-            matData.emissive = static_cast<int32_t>(mb.emissiveLevel);
             if (matBuf.info.pMappedData) {
                 memcpy(matBuf.info.pMappedData, &matData, sizeof(matData));
             }
@@ -1794,9 +1754,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
 
                 // Determine which pipeline this batch needs
                 int neededPipeline = 0; // opaque
-                if (mb.isWindow && glassPipeline_) {
-                    neededPipeline = 2; // glass (alpha blend + depth write)
-                } else if (mb.isTransparent && transparentPipeline_) {
+                if (mb.isTransparent && transparentPipeline_) {
                     neededPipeline = 1; // transparent (alpha blend, no depth write)
                 }
 
@@ -1805,7 +1763,6 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
                 if (neededPipeline != currentPipelineKind) {
                     VkPipeline targetPipeline = activePipeline;
                     if (neededPipeline == 1) targetPipeline = transparentPipeline_;
-                    else if (neededPipeline == 2) targetPipeline = glassPipeline_;
                     if (targetPipeline == VK_NULL_HANDLE) continue;
 
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, targetPipeline);
@@ -4177,7 +4134,6 @@ void WMORenderer::recreatePipelines() {
     // Destroy old main-pass pipelines (NOT shadow, NOT pipeline layout)
     destroy(device, opaquePipeline_);
     destroy(device, transparentPipeline_);
-    destroy(device, glassPipeline_);
     destroy(device, wireframePipeline_);
 
     // --- Load shaders ---
@@ -4249,14 +4205,10 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
             const uint32_t mat = batch.materialId;
             const uint32_t blend = mat < model.materialBlendModes.size() ? model.materialBlendModes[mat] : 0;
             if (blend >= 2) continue;  // blended: glass, light cards, water sheets
-            const uint32_t flags = mat < model.materialFlags.size() ? model.materialFlags[mat] : 0;
             glm::vec3 albedo(0.5f);
             float opacity = 1.0f;
             if (mat < model.materialTextureIndices.size()) {
                 const uint32_t ti = model.materialTextureIndices[mat];
-                if (ti < model.textureNames.size() && wmoMaterialIsGlass(flags, model.textureNames[ti])) {
-                    continue;
-                }
                 if (ti < model.textures.size() && model.textures[ti]) {
                     albedo = model.textures[ti]->averageColor();
                     if (blend == 1) opacity = model.textures[ti]->alphaCoverage();
