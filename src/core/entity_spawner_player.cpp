@@ -990,6 +990,11 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
                         " displayId=", displayId, " instanceId=", goIt->second.instanceId);
             gameObjectInstances_.erase(goIt);
             goIt = gameObjectInstances_.end();
+            // The new instance takes the pose the old one was in.
+            if (auto st = gameObjectServerState_.find(guid); st != gameObjectServerState_.end()) {
+                gameObjectPendingState_[guid] = st->second;
+                gameObjectServerState_.erase(st);
+            }
         }
     }
     if (goIt != gameObjectInstances_.end()) {
@@ -1283,12 +1288,6 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
         // proximity/footprint check, not a physical block).
         if (displayId == 3831u) {
             m2Renderer->setSkipCollision(instanceId, true);
-        }
-
-        // Transports are driven by the transport system rather than a looping idle.
-        bool isTransportGO = gameHandler_ && gameHandler_->isTransportGuid(guid);
-        if (!isTransportGO) {
-            applyGameObjectAnimationPolicy(guid, entry, instanceId);
         }
 
         gameObjectInstances_[guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = false};

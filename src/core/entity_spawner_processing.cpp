@@ -1981,52 +1981,37 @@ void EntitySpawner::despawnCreature(uint64_t guid) {
     LOG_DEBUG("Despawned creature: guid=0x", std::hex, guid, std::dec);
 }
 
+
 namespace {
 
-// Game object types whose pose is server state rather than a looping idle: they
-// hold one frame until the server says otherwise (a door stands open or shut, a
-// chest sits closed until it is opened), so playing their sequence on a loop
-// would animate them open over and over. Every other type plays its idle
-// continuously, which is what retail does - fishing pools circle their fish,
-// braziers gutter, banners wave.
-bool gameObjectPoseIsStateDriven(uint32_t goType) {
-    switch (goType) {
-        case 0:   // DOOR
-        case 1:   // BUTTON
-        case 3:   // CHEST
-        case 6:   // TRAP
-        case 10:  // GOOBER
-        case 33:  // DESTRUCTIBLE_BUILDING
-        case 35:  // TRAPDOOR
-            return true;
-        default:
-            return false;
+// The 3.3.5a client's game object animation, from CGGameObject_C's state
+// handlers (12340: FUN_0070d690 picks the state, FUN_0070d1e0 the animation,
+// FUN_0070d7e0 moves on when one ends). It applies to every type alike.
+//
+// Internal states, indexing the animation table at 0x00ada938.
+enum GoAnimState : uint8_t {
+    kGoSpawn = 0, kGoClosed = 1, kGoOpen = 2, kGoOpened = 3,
+    kGoClose = 4, kGoDestroy = 5, kGoDestroyed = 6, kGoRebuild = 7,
+};
+constexpr uint32_t kGoStateAnim[8] = {
+    rendering::anim::SPAWN,   rendering::anim::CLOSED,  rendering::anim::OPEN,
+    rendering::anim::OPENED,  rendering::anim::CLOSE,   rendering::anim::DESTROY,
+    rendering::anim::DESTROYED, rendering::anim::REBUILD,
+};
+
+// FUN_0070d690: a change of the server's GOState (0 ACTIVE, 1 READY,
+// 2 ACTIVE_ALTERNATIVE) from `from` to `to`. The client also checks an
+// animation-progress value it is sent; it is unset (0xFFFF) outside a
+// transition in progress, which is what this assumes.
+GoAnimState goAnimStateFor(uint8_t from, uint8_t to) {
+    switch (to) {
+        case 0:  return from != 1 ? kGoOpened : kGoOpen;
+        case 1:  return from == 0 ? kGoClose : (from == 2 ? kGoRebuild : kGoClosed);
+        default: return from != 1 ? kGoDestroyed : kGoDestroy;
     }
 }
 
 } // namespace
-
-void EntitySpawner::applyGameObjectAnimationPolicy(uint64_t guid, uint32_t entry,
-                                                   uint32_t instanceId) {
-    auto* m2Renderer = renderer_ ? renderer_->getM2Renderer() : nullptr;
-    if (!m2Renderer) return;
-
-    const game::GameObjectQueryResponseData* info =
-        (gameHandler_ && entry != 0) ? gameHandler_->getCachedGameObjectInfo(entry) : nullptr;
-    if (!info) {
-        // The type has not arrived yet. Freeze for now - a door caught mid-swing
-        // is worse than a pool of still fish - and revisit in
-        // onGameObjectInfoReceived once the query response lands.
-        m2Renderer->setInstanceAnimationFrozen(instanceId, true);
-        if (entry != 0) gameObjectPendingAnimPolicy_[entry].push_back(instanceId);
-        return;
-    }
-
-    const bool freeze = gameObjectPoseIsStateDriven(info->type);
-    m2Renderer->setInstanceAnimationFrozen(instanceId, freeze);
-    LOG_DEBUG("GO animation policy: guid=0x", std::hex, guid, std::dec,
-              " entry=", entry, " type=", info->type, " frozen=", freeze);
-}
 
 void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
     auto it = gameObjectInstances_.find(guid);
@@ -2042,12 +2027,21 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
     if (!m2) return;
 
     const uint32_t instanceId = it->second.instanceId;
-    // Canonical GOState: 0 ACTIVE (open), 1 READY (closed), 2 ACTIVE_ALTERNATIVE
-    // (destroyed). The animation ids are the game's own: OPEN, CLOSE, DESTROY.
-    const uint32_t anim = goState == 0 ? 148u : (goState == 2 ? 149u : 146u);
-    // Straight to the end when the state arrived before the model: the swing
-    // belongs to the moment a door opens, not to the moment it is first seen.
-    const bool skipToEnd = gameObjectPendingState_.erase(guid) > 0;
+    gameObjectPendingState_.erase(guid);
+    // Ships, zeppelins and lifts move by the transport system's clock, and
+    // the client drives them from their own type classes rather than this.
+    if (gameHandler_ && gameHandler_->isTransportGuid(guid)) return;
+
+    // The first state an object is seen in is taken as a change from that
+    // state to itself, which lands on its resting pose (CLOSED, OPENED,
+    // DESTROYED) - what the client does once a spawn animation ends. On a
+    // model load the client instead starts an open object's OPEN transition
+    // part-way, at a progress value the server sends in GAMEOBJECT_DYNAMIC;
+    // that is not read here, and the end of the transition is where it goes.
+    auto prevIt = gameObjectServerState_.find(guid);
+    const uint8_t from = prevIt != gameObjectServerState_.end() ? prevIt->second : goState;
+    gameObjectServerState_[guid] = goState;
+    const GoAnimState state = goAnimStateFor(from, goState);
 
     // Whether an open pose should also stop blocking.
     //
@@ -2086,40 +2080,70 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
         }
     }
 
-    if (m2->hasAnimation(instanceId, anim)) {
-        m2->setInstanceAnimationHeld(instanceId, anim, skipToEnd);
-        return;
+    // FUN_0070d1e0: the state's own animation, or what stands in for it.
+    const auto has = [&](uint32_t anim) { return m2->hasAnimation(instanceId, anim); };
+    uint32_t anim = kGoStateAnim[state];
+    bool hold = false;    // the client's speed 0: the stand-in's first frame
+    if (!has(anim)) {
+        switch (anim) {
+            case rendering::anim::CLOSE:
+                if (!has(rendering::anim::OPEN)) anim = rendering::anim::CLOSED;
+                break;
+            case rendering::anim::CLOSED:
+                if (!has(rendering::anim::CLOSE)) {
+                    if (has(rendering::anim::OPEN)) { anim = rendering::anim::OPEN; hold = true; }
+                    else anim = rendering::anim::STAND;
+                }
+                break;
+            case rendering::anim::OPEN:
+                if (!has(rendering::anim::CLOSE)) {
+                    anim = has(rendering::anim::DESTROY) ? rendering::anim::DESTROY
+                                                         : rendering::anim::OPENED;
+                }
+                break;
+            case rendering::anim::OPENED:
+                if (!has(rendering::anim::OPEN)) {
+                    if (has(rendering::anim::CLOSE)) { anim = rendering::anim::CLOSE; hold = true; }
+                    else anim = rendering::anim::DESTROYED;
+                }
+                break;
+            default:
+                break;
+        }
     }
-    // No OPEN or CLOSE sequence of its own, but one animation that is the
-    // opening: Undercity's lift doors are one bone and one sequence, id 0,
-    // 3333ms. Held at its end the door stands open. Simply letting it run -
-    // which is what this did - swung it open and shut on a loop forever,
-    // and freezing it put it back to shut, so the door never opened at all.
-    if (goState == 0) {
+
+    // Kept from before, and not the client's rule: Undercity's lift doors are
+    // one bone and one sequence, id 0, 3333ms, and that sequence is the
+    // opening. Held at its end the door stands open; letting it loop swung it
+    // open and shut forever, and its first frame is shut.
+    if (goState == 0 && !has(anim)) {
         if (const auto only = m2->soleSequenceId(instanceId)) {
-            m2->setInstanceAnimationHeld(instanceId, *only, skipToEnd);
+            m2->setInstanceAnimationHeld(instanceId, *only, prevIt == gameObjectServerState_.end());
             return;
         }
     }
-    // The closed pose is the bind pose.
-    m2->setInstanceAnimationFrozen(instanceId, goState != 0);
+
+    // An animation the model lacks plays its idle instead, as the client's
+    // own lookup falls back to Stand.
+    if (!has(anim)) anim = rendering::anim::STAND;
+
+    if (hold) {
+        m2->setInstanceAnimation(instanceId, anim, true);
+        m2->setInstanceAnimationFrozen(instanceId, true);
+    } else if (state == kGoOpen || state == kGoClose || state == kGoDestroy || state == kGoRebuild) {
+        // A transition plays once; the client then enters the state it leads
+        // to, whose pose is where this one ends.
+        m2->setInstanceAnimationHeld(instanceId, anim, false);
+    } else if (has(anim)) {
+        m2->setInstanceAnimation(instanceId, anim, true);
+    } else {
+        m2->setInstanceAnimationFrozen(instanceId, false);
+    }
 }
 
-void EntitySpawner::onGameObjectInfoReceived(uint32_t entry) {
-    auto it = gameObjectPendingAnimPolicy_.find(entry);
-    if (it == gameObjectPendingAnimPolicy_.end()) return;
-    auto* m2Renderer = renderer_ ? renderer_->getM2Renderer() : nullptr;
-    const game::GameObjectQueryResponseData* info =
-        (gameHandler_ && m2Renderer) ? gameHandler_->getCachedGameObjectInfo(entry) : nullptr;
-    if (info && !gameObjectPoseIsStateDriven(info->type)) {
-        for (uint32_t instanceId : it->second) {
-            // No-op for instances that despawned while the query was in flight.
-            m2Renderer->setInstanceAnimationFrozen(instanceId, false);
-        }
-        LOG_DEBUG("GO animation policy resolved: entry=", entry,
-                  " type=", info->type, " unfroze ", it->second.size(), " instance(s)");
-    }
-    gameObjectPendingAnimPolicy_.erase(it);
+void EntitySpawner::onGameObjectInfoReceived(uint32_t /*entry*/) {
+    // The client animates game objects by their state alone (see
+    // applyGameObjectState); the type that arrives here does not change it.
 }
 
 void EntitySpawner::despawnGameObject(uint64_t guid) {
@@ -2162,6 +2186,7 @@ void EntitySpawner::despawnGameObject(uint64_t guid) {
     }
 
     gameObjectInstances_.erase(it);
+    gameObjectServerState_.erase(guid);
 
     LOG_DEBUG("Despawned gameobject: guid=0x", std::hex, guid, std::dec);
 }

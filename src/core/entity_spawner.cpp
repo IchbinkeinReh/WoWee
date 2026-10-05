@@ -204,7 +204,7 @@ void EntitySpawner::resetAllState() {
     gameObjectDisplayIdWmoCache_.clear();
     gameObjectDisplayIdFailedCache_.clear();
     // Instance ids in here belong to a renderer that has just been cleared.
-    gameObjectPendingAnimPolicy_.clear();
+    gameObjectServerState_.clear();
 }
 
 void EntitySpawner::rebuildLookups() {
