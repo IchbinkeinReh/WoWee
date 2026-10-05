@@ -452,7 +452,6 @@ private:
         size_t approxBytes = 0;
         uint64_t lastUse = 0;
         bool hasAlpha = false;
-        bool colorKeyBlack = false;
         bool normalMapPending = false;  // deferred normal map generation
         uint8_t wrapFlags = 0x3;  // M2Texture wrap flags the sampler was made with
     };
@@ -464,7 +463,6 @@ private:
     std::unordered_map<VkTexture*, NormalMapInfo> normalMapByTexPtr_;
     struct TextureProperties {
         bool hasAlpha = false;
-        bool colorKeyBlack = false;
     };
     std::unordered_map<VkTexture*, TextureProperties> texturePropsByPtr_;
     std::unordered_map<std::string, VkTexture*> compositeCache_;  // key → texture for reuse

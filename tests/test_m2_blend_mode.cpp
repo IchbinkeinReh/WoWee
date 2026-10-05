@@ -20,7 +20,6 @@
 #include "rendering/m2_blend_mode.hpp"
 
 using wowee::rendering::m2BatchNeedsAlphaTest;
-using wowee::rendering::m2BatchWantsColorKey;
 using wowee::rendering::m2BlendIsAdditive;
 using wowee::rendering::m2BlendIsModulate;
 
@@ -75,8 +74,6 @@ TEST_CASE("the modulate modes are never alpha tested", "[m2]") {
     CHECK_FALSE(m2BatchNeedsAlphaTest(6, false));
     CHECK_FALSE(m2BatchNeedsAlphaTest(5, true));
     CHECK_FALSE(m2BatchNeedsAlphaTest(6, true));
-    CHECK_FALSE(m2BatchWantsColorKey(5, true));
-    CHECK_FALSE(m2BatchWantsColorKey(6, true));
 }
 
 TEST_CASE("blend mode 7 is plain alpha", "[m2]") {
@@ -85,30 +82,4 @@ TEST_CASE("blend mode 7 is plain alpha", "[m2]") {
     CHECK_FALSE(m2BlendIsModulate(7));
     CHECK_FALSE(m2BatchNeedsAlphaTest(7, false));
     CHECK_FALSE(m2BatchNeedsAlphaTest(7, true));
-}
-
-TEST_CASE("an additive card is not colour keyed", "[m2]") {
-    // The key discards every texel below a threshold so a card with a black
-    // backing can be drawn opaquely. Additive has no such problem, and the key
-    // ruins it: the transparent pass raised the threshold to 0.7 for blend
-    // mode 4, and a glow card is a radial gradient from black to white, so
-    // everything below the bright core was thrown away and the soft falloff
-    // became a hard-edged disc. That is what Orgrimmar's bonfires were.
-    CHECK_FALSE(m2BatchWantsColorKey(4, true));
-    CHECK_FALSE(m2BatchWantsColorKey(3, true));
-}
-
-TEST_CASE("everything else that asked for the key still gets it", "[m2]") {
-    // The key is how a black-backed card survives being drawn opaquely, which
-    // is still what happens for every mode that covers what is behind it.
-    CHECK(m2BatchWantsColorKey(0, true));
-    CHECK(m2BatchWantsColorKey(1, true));
-    CHECK(m2BatchWantsColorKey(2, true));
-    CHECK(m2BatchWantsColorKey(7, true));
-
-    // And a texture nothing marked is never keyed, whatever it blends as.
-    for (uint8_t mode = 0; mode <= 6; ++mode) {
-        INFO("blend mode " << int(mode));
-        CHECK_FALSE(m2BatchWantsColorKey(mode, false));
-    }
 }

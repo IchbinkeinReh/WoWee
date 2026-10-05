@@ -25,7 +25,6 @@ struct M2GlowCardBatch {
     uint8_t blendMode = 0;
     bool lanternGlowHint = false;
     bool glowCardLike = false;
-    bool colorKeyBlack = false;
     bool unlit = false;
     bool preserveGlowMesh = false;
 
@@ -48,7 +47,11 @@ inline bool m2IsSmallCardLikeBatch(const M2GlowCardBatch& b) {
 
 /// Should a billboarded sprite be emitted for this batch?
 inline bool m2WantsGlowSprite(const M2GlowCardBatch& b) {
-    const bool koboldFlameCard = b.colorKeyBlack && b.modelIsKoboldFlame;
+    // A kobold's candle keeps its flame as a mesh. This used to ask whether
+    // the card was also colour keyed; there is no key any more (the client
+    // draws a batch by its blend mode and never keys by colour), so the model
+    // alone decides.
+    const bool koboldFlameCard = b.modelIsKoboldFlame;
     const bool fixtureWithHint =
         (b.modelIsLanternLike || b.modelIsTorch || b.modelIsBrazierOrFire) &&
         b.lanternGlowHint;
@@ -56,8 +59,7 @@ inline bool m2WantsGlowSprite(const M2GlowCardBatch& b) {
            (b.modelIsElvenLike || fixtureWithHint) &&
            !b.modelIsSpellEffect &&
            m2IsSmallCardLikeBatch(b) &&
-           (b.lanternGlowHint || b.blendMode >= 3 ||
-            (b.colorKeyBlack && b.unlit && b.blendMode >= 1));
+           (b.lanternGlowHint || b.blendMode >= 3);
 }
 
 /// Once a sprite stands in for it, should the mesh itself be dropped?
@@ -68,7 +70,7 @@ inline bool m2WantsGlowSprite(const M2GlowCardBatch& b) {
 inline bool m2GlowSpriteReplacesMesh(const M2GlowCardBatch& b) {
     const bool cardLikeSkipMesh =
         !b.preserveGlowMesh &&
-        (b.glowCardLike || b.blendMode >= 3 || b.colorKeyBlack || b.unlit);
+        (b.glowCardLike || b.blendMode >= 3 || b.unlit);
     const bool lanternGlowCardSkip =
         (b.modelIsLanternLike || b.modelIsTorch || b.modelIsBrazierOrFire) &&
         b.lanternGlowHint && m2IsSmallCardLikeBatch(b) && cardLikeSkipMesh;

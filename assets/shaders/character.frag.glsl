@@ -29,7 +29,7 @@ layout(set = 1, binding = 0) uniform sampler2D uTexture;
 layout(set = 1, binding = 1) uniform CharMaterial {
     float opacity;
     int alphaTest;
-    int colorKeyBlack;
+    int unused0;       // was the black colour key: the client never keys by colour
     int unlit;
     float emissiveBoost;
     // Keep these as scalar floats to match the C++ UBO packing. A std140 vec3
@@ -292,12 +292,6 @@ void main() {
         if (alphaTest == 1 && hairMaterial != 0) {
             texColor.a = 1.0;
         }
-        if (colorKeyBlack != 0) {
-            float lum = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
-            float ck = smoothstep(0.12, 0.30, lum);
-            texColor.a *= ck;
-            if (texColor.a < 0.01) discard;
-        }
         outColor = colourBlendOutput(texColor.rgb, texColor.rgb, texColor.a * opacity);
         return;
     }
@@ -316,7 +310,6 @@ void main() {
 
     bool usePOM = enablePOM != 0 &&
                   alphaTest != 1 &&
-                  colorKeyBlack == 0 &&
                   heightMapVariance > 0.001 &&
                   lodFactor < 0.99;
     bool useNormalMap = enableNormalMap != 0 &&
@@ -371,14 +364,10 @@ void main() {
         if (texColor.a < 1.0 / 255.0) discard;
     } else if (alphaTest == 2 && texColor.a * opacity < 1.0 / 255.0) {
         // A blended mode: the client tests it at 1/255, so what is fully
-        // transparent is not drawn and writes no depth.
+        // transparent is not drawn and writes no depth. Nothing is discarded
+        // for being dark: the client draws the batch by its blend mode and
+        // never keys by colour.
         discard;
-    }
-    if (colorKeyBlack != 0) {
-        float lum = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
-        float ck = smoothstep(0.12, 0.30, lum);
-        texColor.a *= ck;
-        if (texColor.a < 0.01) discard;
     }
 
     // Compute normal (with normal mapping if enabled)

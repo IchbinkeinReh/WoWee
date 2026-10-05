@@ -1666,7 +1666,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     glowCard.blendMode = batch.blendMode;
                     glowCard.lanternGlowHint = batch.lanternGlowHint;
                     glowCard.glowCardLike = batch.glowCardLike;
-                    glowCard.colorKeyBlack = batch.colorKeyBlack;
                     glowCard.unlit = batchUnlit;
                     glowCard.preserveGlowMesh = batch.preserveGlowMesh;
                     glowCard.modelIsElvenLike = model.isElvenLike;
@@ -1841,22 +1840,18 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     // ironwork additive, which is to say translucent.
                     const bool fireEffectModel = batch.forgeFireCard;
                     // A batch the artist marked additive is already doing
-                    // what the cutout and the colour key are approximations
-                    // of: black adds nothing, so it disappears on its own.
-                    // Forcing it opaque and then keying the black out leaves
-                    // the bright middle of a glow card as a solid disc, which
-                    // is what Orgrimmar's bonfires were.
+                    // what a cutout would approximate: black adds nothing, so
+                    // it disappears on its own.
                     // The client alpha-tests alpha-key batches and nothing
                     // else (FUN_0081fe90): a blended batch is blended, and an
-                    // opaque one is opaque whatever its texture's alpha.
-                    // Ground clutter and the colour key are this renderer's
-                    // own and keep their cutout.
+                    // opaque one is opaque whatever its texture's alpha. It
+                    // never keys by colour. Ground clutter is this renderer's
+                    // own and keeps its cutout.
                     const bool forceCutout =
                         !model.isSpellEffect && !fireEffectModel &&
                         !m2BlendIsAdditive(batch.blendMode) &&
                         (model.isGroundDetail ||
-                         m2BatchNeedsAlphaTest(batch.blendMode, batch.hasAlpha) ||
-                         batch.colorKeyBlack);
+                         m2BatchNeedsAlphaTest(batch.blendMode, batch.hasAlpha));
 
                     uint8_t effectiveBlendMode = batch.blendMode;
                     if (model.isSpellEffect || fireEffectModel) {
@@ -1892,8 +1887,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         // outdoor trees) when the camera is inside a WMO.  Disable it; indoor
                         // M2s already look correct from the darker ambient/lighting.
                         mat->interiorDarken = 0.0f;
-                        if (batch.colorKeyBlack)
-                            mat->colorKeyThreshold = (effectiveBlendMode == 4 || effectiveBlendMode == 5) ? 0.7f : 0.08f;
                         if (forceCutout) {
                             mat->alphaTest = model.isGroundDetail ? 3 : 1;
                         } else {
@@ -2039,7 +2032,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             glowCard.blendMode = batch.blendMode;
             glowCard.lanternGlowHint = batch.lanternGlowHint;
             glowCard.glowCardLike = batch.glowCardLike;
-            glowCard.colorKeyBlack = batch.colorKeyBlack;
             glowCard.unlit = batchUnlit;
             glowCard.preserveGlowMesh = batch.preserveGlowMesh;
             glowCard.modelIsElvenLike = model.isElvenLike;
@@ -2137,9 +2129,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 mat->blendMode = (forcedAdditive && m2BlendIsModulate(batch.blendMode))
                     ? static_cast<int32_t>(M2_BLEND_ADD_ALPHA) : static_cast<int32_t>(batch.blendMode);
                 mat->interiorDarken = 0.0f;
-                if (batch.colorKeyBlack)
-                    mat->colorKeyThreshold = (effectiveBlendMode == 4 || effectiveBlendMode == 5) ? 0.7f : 0.08f;
-
             }
 
             if (!batch.materialSet) continue;

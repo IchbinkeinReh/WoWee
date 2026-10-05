@@ -44,15 +44,6 @@ bool assetNameHasToken(const std::string& path, std::string_view token);
 /// `firebeam` still matches `fire`.
 bool assetNameHasWordToken(const std::string& path, std::string_view token);
 
-/// True when the asset's file name names something that burns, and whose dark
-/// pixels are therefore background rather than picture.
-///
-/// One list, because there were two: eleven tokens in M2Renderer::loadTexture
-/// and four in CharacterRenderer::loadTexture, both spelled as a search of the
-/// whole path. Which textures got a colour key depended on which renderer had
-/// asked for them.
-bool assetNameLooksLikeFlame(const std::string& path);
-
 /// Ambient sound emitter type for doodad models (fire, water, etc.).
 enum class AmbientEmitterType : uint8_t {
     None           = 0,

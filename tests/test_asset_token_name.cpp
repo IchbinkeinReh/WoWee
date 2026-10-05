@@ -26,7 +26,6 @@
 using wowee::rendering::assetNameHasToken;
 using wowee::rendering::assetTokenName;
 using wowee::rendering::assetNameHasWordToken;
-using wowee::rendering::assetNameLooksLikeFlame;
 
 TEST_CASE("the token name is the file, not the path", "[asset-token]") {
     CHECK(assetTokenName("World\\Azeroth\\Elwynn\\Trees\\ElwynnTree01.m2") ==
@@ -118,30 +117,6 @@ TEST_CASE("a token is not matched as the tail of a longer word",
     CHECK(assetNameHasWordToken("doodads\\stone_fire01.blp", "fire"));
     CHECK(assetNameHasWordToken("fire.blp", "fire"));
     CHECK(assetNameHasWordToken("a\\b\\2fire.blp", "fire"));
-}
-
-TEST_CASE("the flame list keeps every token both renderers had",
-          "[asset-token]") {
-    // Eleven in the M2 renderer and four in the character renderer, merged.
-    // Losing one silently turns a colour key off for a whole family of
-    // textures, which shows up as a black square around a flame rather than as
-    // anything that raises.
-    for (const char* named : {"candle.blp", "flame01.blp", "fire.blp",
-                              "torch02.blp", "lamp.blp", "lantern.blp",
-                              "glow.blp", "flare.blp", "brazier.blp",
-                              "campfire.blp", "bonfire.blp"}) {
-        INFO(named);
-        CHECK(assetNameLooksLikeFlame(std::string("doodads\\") + named));
-    }
-
-    // And the sky is not one of them, whichever renderer asks.
-    CHECK_FALSE(assetNameLooksLikeFlame("environment\\stars\\hellfireskynebula01.blp"));
-    CHECK_FALSE(assetNameLooksLikeFlame("environment\\stars\\hellfireskyclouds01.blp"));
-
-    // The character-component exclusion that used to be written by hand is not
-    // needed: the directory is no longer part of the question.
-    CHECK_FALSE(assetNameLooksLikeFlame(
-        "item\\texturecomponents\\leglowertexture\\leather_a_01brown_pant_ll.blp"));
 }
 
 // ---------------------------------------------------------------------------

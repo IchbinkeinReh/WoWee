@@ -785,16 +785,6 @@ VkTexture* M2Renderer::loadTexture(const std::string& path, uint32_t texFlags) {
         return whiteTexture_.get();
     }
 
-    // The black key discards every pixel darker than the threshold, so a
-    // texture it is applied to wrongly loses its dark areas.
-    //
-    // Both the list and what it is matched against now live in
-    // assetNameLooksLikeFlame. This asked the whole path, which is what made
-    // Outland's sky flicker: HellFireSkyNebula01 has "fire" in it, so every
-    // layer of the Hellfire sky was keyed as a flame and lost whichever of its
-    // dark pixels fell under the threshold that frame.
-    const bool colorKeyBlackHint = assetNameLooksLikeFlame(key);
-
     // Check pre-decoded BLP cache first (populated by background worker threads)
     pipeline::BLPImage blp;
     if (predecodedBLPCache_) {
@@ -896,8 +886,7 @@ VkTexture* M2Renderer::loadTexture(const std::string& path, uint32_t texFlags) {
     failedTextureCache_.erase(key);
     failedTextureRetryAt_.erase(key);
     texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha,
-                                  .alphaIsSilhouette = alphaIsSilhouette,
-                                  .colorKeyBlack = colorKeyBlackHint};
+                                  .alphaIsSilhouette = alphaIsSilhouette};
     LOG_DEBUG("M2: Loaded texture: ", path, " (", blp.width, "x", blp.height, ")");
 
     return texPtr;

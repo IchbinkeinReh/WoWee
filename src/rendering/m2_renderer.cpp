@@ -2149,24 +2149,14 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 if (pit != texturePropsByPtr_.end()) {
                     bgpu.hasAlpha = pit->second.hasAlpha;
                     bgpu.alphaIsSilhouette = pit->second.alphaIsSilhouette;
-                    bgpu.colorKeyBlack = pit->second.colorKeyBlack;
-                    // Forge fire is drawn on cards with a black backing that has
-                    // to be keyed out, and some of them use effect textures
-                    // carrying none of the flame/glow tokens the hint looks for
-                    // - coals, lava lumps, ARMORREFLECT/ORBREFLECT. Keying the
-                    // whole model instead made the masonry and ironwork
-                    // translucent, since a forge is mostly those.
-                    // And a bonfire's, which is the same thing at a different
-                    // scale: OrcBonFire draws its flame on cards textured with
-                    // LavaLump2 and FlameLickSmall over a black backing, with
-                    // the material marked opaque. Drawn as the material asks,
-                    // the black backing is a solid rectangle around the flame -
-                    // which is the hard-edged slab standing over Grom'gol. The
-                    // wood and ash batches carry neither an ember nor a flame
-                    // token, so they stay solid.
+                    // The fire cards of a forge or a bonfire - coals, lava
+                    // lumps, ARMORREFLECT/ORBREFLECT, OrcBonFire's LavaLump2
+                    // and FlameLickSmall - as opposed to the masonry, ironwork,
+                    // wood and ash the rest of the model is made of. Nothing is
+                    // keyed out of them: the client draws the batch by its
+                    // blend mode and never keys by colour.
                     if ((gpuModel.isForge || gpuModel.isBrazierOrFire) &&
                         isForgeFireTexture(batchTexKeyLower, tcls)) {
-                        bgpu.colorKeyBlack = true;
                         bgpu.forgeFireCard = true;
                     }
                 }
@@ -2244,7 +2234,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             }
 
             // Compute batch center and radius for glow sprite positioning
-            if ((bgpu.blendMode >= 3 || bgpu.colorKeyBlack || bgpu.glowCardLike) && batch.indexCount > 0) {
+            if ((bgpu.blendMode >= 3 || bgpu.glowCardLike) && batch.indexCount > 0) {
                 glm::vec3 sum(0.0f);
                 uint32_t counted = 0;
                 std::unordered_map<uint16_t, glm::vec4> boneAnchorSums;
@@ -2351,7 +2341,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                              m2BatchNeedsAlphaTest(bgpu.blendMode, bgpu.hasAlpha) ? 1 : 0,
                              " hasAlpha=", bgpu.hasAlpha ? "Y" : "N",
                              " alphaIsSilhouette=", bgpu.alphaIsSilhouette ? "Y" : "N",
-                             " colorKey=", bgpu.colorKeyBlack ? "Y" : "N",
                              " glowCardLike=", bgpu.glowCardLike ? "Y" : "N",
                              " preserveGlowMesh=", bgpu.preserveGlowMesh ? "Y" : "N",
                              " opacity=", bgpu.batchOpacity,
@@ -2365,7 +2354,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 LOG_DEBUG("M2 GLOW DIAG '", model.name, "' batch ", gpuModel.batches.size(),
                           ": blend=", bgpu.blendMode, " matFlags=0x",
                           std::hex, bgpu.materialFlags, std::dec,
-                          " colorKey=", bgpu.colorKeyBlack ? "Y" : "N",
                           " hasAlpha=", bgpu.hasAlpha ? "Y" : "N",
                           " unlit=", (bgpu.materialFlags & 0x01) ? "Y" : "N",
                           " lanternHint=", bgpu.lanternGlowHint ? "Y" : "N",
@@ -2416,7 +2404,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             if (pit != texturePropsByPtr_.end()) {
                 bgpu.hasAlpha = pit->second.hasAlpha;
                 bgpu.alphaIsSilhouette = pit->second.alphaIsSilhouette;
-                bgpu.colorKeyBlack = pit->second.colorKeyBlack;
             }
         }
         gpuModel.batches.push_back(bgpu);
@@ -2457,12 +2444,9 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             M2MaterialUBO mat{};
             mat.hasTexture = (bgpu.texture != nullptr && bgpu.texture != whiteTexture_.get()) ? 1 : 0;
             mat.alphaTest = m2BatchNeedsAlphaTest(bgpu.blendMode, bgpu.hasAlpha) ? 1 : 0;
-            mat.colorKeyBlack =
-                m2BatchWantsColorKey(bgpu.blendMode, bgpu.colorKeyBlack) ? 1 : 0;
             mat.tintR = bgpu.tint.r;
             mat.tintG = bgpu.tint.g;
             mat.tintB = bgpu.tint.b;
-            mat.colorKeyThreshold = 0.08f;
             mat.unlit = (bgpu.materialFlags & 0x01) ? 1 : 0;
             mat.unfogged = (bgpu.materialFlags & 0x02) ? 1 : 0;
             mat.blendMode = bgpu.blendMode;
@@ -2486,7 +2470,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 LOG_INFO("skyM2 batch ", &bgpu - gpuModel.batches.data(),
                          ": blend=", static_cast<int>(bgpu.blendMode),
                          " alphaTest=", mat.alphaTest,
-                         " colorKey=", mat.colorKeyBlack,
                          " hasAlpha=", bgpu.hasAlpha ? 1 : 0,
                          " unlit=", mat.unlit,
                          " glowCardLike=", bgpu.glowCardLike ? 1 : 0,

@@ -237,7 +237,9 @@ static float evalBatchTextureWeight(const pipeline::M2Model& model,
 struct CharMaterialUBO {
     float opacity;
     int32_t alphaTest;
-    int32_t colorKeyBlack;
+    // Was the black colour key. The client draws a batch by its blend mode
+    // and never keys by colour; the slot stays so the layout matches.
+    int32_t unused0;
     int32_t unlit;
     float emissiveBoost;
     float emissiveTintR, emissiveTintG, emissiveTintB;
@@ -889,10 +891,6 @@ VkTexture* CharacterRenderer::loadTexture(const std::string& path, uint32_t texF
 
     std::string key = normalizeTexturePathKey(path);
     const uint64_t lookupSerial = ++textureLookupSerial_;
-    // The same question the M2 renderer asks, through the same answer. This
-    // carried four of its eleven tokens and searched the whole path, so which
-    // textures were colour-keyed depended on which renderer had loaded them.
-    const bool colorKeyBlackHint = assetNameLooksLikeFlame(key);
     // The wrap mode belongs to the sampler, so a file loaded with other wrap
     // flags is a texture of its own. Repeat-both keeps the plain path.
     texFlags &= 0x3;
@@ -980,7 +978,6 @@ VkTexture* CharacterRenderer::loadTexture(const std::string& path, uint32_t texF
     e.approxBytes = approxBytes;
     e.lastUse = ++textureCacheCounter_;
     e.hasAlpha = hasAlpha;
-    e.colorKeyBlack = colorKeyBlackHint;
     e.wrapFlags = static_cast<uint8_t>(texFlags);
 
     // Launch normal map generation on background thread - CPU work is pure compute,
@@ -990,7 +987,7 @@ VkTexture* CharacterRenderer::loadTexture(const std::string& path, uint32_t texF
         blpImage.width, blpImage.height);
 
     textureCacheBytes_ += e.approxBytes;
-    texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha, .colorKeyBlack = colorKeyBlackHint};
+    texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha};
     textureCache[cacheKey] = std::move(e);
     failedTextureCache_.erase(key);
     failedTextureRetryAt_.erase(key);
@@ -1484,8 +1481,7 @@ VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& 
     e.approxBytes = approxTextureBytesWithMips(width, height);
     e.lastUse = ++textureCacheCounter_;
     e.hasAlpha = hasAlpha;
-    e.colorKeyBlack = false;
-    texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha, .colorKeyBlack = false};
+    texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha};
     // No derived normal map for a composited body, and this is why: the
     // derivation reads luminance as height, which holds for stone and bark and
     // does not hold for skin. Every freckle, every painted shadow under a
@@ -1795,8 +1791,7 @@ VkTexture* CharacterRenderer::compositeWithRegions(const std::string& basePath,
     entry.approxBytes = approxTextureBytesWithMips(width, height);
     entry.lastUse = ++textureCacheCounter_;
     entry.hasAlpha = hasAlpha;
-    entry.colorKeyBlack = false;
-    texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha, .colorKeyBlack = false};
+    texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha};
     // Skin again, with armour composited onto it. Same reason as above.
     // Checked before emplacing: see the note in compositeTexture. Testing
     // ins.second afterwards is too late -- by then the texture has been moved
@@ -3037,12 +3032,10 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
                 // Determine material properties
                 bool alphaCutout = false;
-                bool colorKeyBlack = false;
                 if (texPtr != nullptr && texPtr != whiteTexture_.get()) {
                     auto pit = texturePropsByPtr_.find(texPtr);
                     if (pit != texturePropsByPtr_.end()) {
                         alphaCutout = pit->second.hasAlpha;
-                        colorKeyBlack = pit->second.colorKeyBlack;
                     }
                 }
                 // A scene means what its materials say. Stormwind's walls are DXT5 with
@@ -3171,7 +3164,6 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 // 1: the client's alpha-key test. 2: a blended mode, which the
                 // client tests at 1/255 - only what is fully transparent goes.
                 matData.alphaTest = blendNeedsCutout ? 1 : (blendMode >= 2 ? 2 : 0);
-                matData.colorKeyBlack = colorKeyBlack ? 1 : 0;
                 matData.unlit = unlit ? 1 : 0;
                 matData.emissiveBoost = 1.0f;
                 matData.emissiveTintR = 1.0f;
@@ -3307,7 +3299,6 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             CharMaterialUBO matData{};
             matData.opacity = instance.opacity;
             matData.alphaTest = 0;
-            matData.colorKeyBlack = 0;
             matData.unlit = 0;
             matData.emissiveBoost = 1.0f;
             matData.emissiveTintR = 1.0f;
@@ -3356,7 +3347,7 @@ bool CharacterRenderer::initializeShadow(VkRenderPass shadowRenderPass) {
     // ShadowCharParams UBO (matches character_shadow.frag.glsl set=1 binding=1)
     struct ShadowCharParams {
         int32_t alphaTest = 0;
-        int32_t colorKeyBlack = 0;
+        int32_t unused0 = 0;  // was the black colour key; the client never keys by colour
     };
 
     // The same set the other three shadow passes bind - a sampler and a small
@@ -3381,7 +3372,6 @@ bool CharacterRenderer::initializeShadow(VkRenderPass shadowRenderPass) {
         if (paramsInfo.pMappedData) {
             ShadowCharParams p{};
             p.alphaTest = 1;
-            p.colorKeyBlack = 0;
             std::memcpy(paramsInfo.pMappedData, &p, sizeof(p));
         }
     }

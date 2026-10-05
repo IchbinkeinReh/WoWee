@@ -62,7 +62,6 @@ struct M2ModelGPU {
         bool hasAlpha = false;
         /// The alpha is a real silhouette, not an atlas leftover.
         bool alphaIsSilhouette = false;
-        bool colorKeyBlack = false;
         glm::vec3 tint{1.0f};  ///< the batch's authored colour
         uint16_t textureAnimIndex = 0xFFFF; // 0xFFFF = no texture animation
         uint16_t blendMode = 0;   // 0=Opaque, 1=AlphaKey, 2=Alpha, 3=Add, etc.
@@ -414,8 +413,11 @@ struct SmokeParticle {
 struct M2MaterialUBO {
     int32_t hasTexture;
     int32_t alphaTest;
-    int32_t colorKeyBlack;
-    float colorKeyThreshold;
+    // Was the black colour key and its threshold. The client draws a batch by
+    // its blend mode and never keys by colour; the slots stay so the layout
+    // matches m2.frag.glsl.
+    int32_t unused0;
+    float unused1;
     int32_t unlit;
     int32_t blendMode;
     float fadeAlpha;
@@ -1086,7 +1088,6 @@ private:
     struct TextureProperties {
         bool hasAlpha = false;
         bool alphaIsSilhouette = false;
-        bool colorKeyBlack = false;
     };
     std::unordered_map<VkTexture*, TextureProperties> texturePropsByPtr_;
     size_t textureCacheBytes_ = 0;

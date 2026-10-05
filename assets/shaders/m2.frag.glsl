@@ -29,8 +29,8 @@ layout(set = 1, binding = 0) uniform sampler2D uTexture;
 layout(set = 1, binding = 2) uniform M2Material {
     int hasTexture;
     int alphaTest;
-    int colorKeyBlack;
-    float colorKeyThreshold;
+    int unused0;       // was the black colour key: the client never keys by colour
+    float unused1;     // was the colour key's threshold
     int unlit;
     int blendMode;
     float fadeAlpha;
@@ -241,14 +241,12 @@ void main() {
         float aGrad = fwidth(texColor.a);
         texColor.a = clamp((texColor.a - alphaCutoff) / max(aGrad, 0.001) * 0.5 + 0.5, 0.0, 1.0);
         if (texColor.a < 1.0 / 255.0) discard;
-    } else if (blendMode >= 2 && colorKeyBlack == 0 && texColor.a * batchFade < 1.0 / 255.0) {
+    } else if (blendMode >= 2 && texColor.a * batchFade < 1.0 / 255.0) {
         // Every blended mode is alpha tested at 1/255 in the client: what is
         // fully transparent is not drawn at all, so it writes no depth.
+        // Nothing is discarded for being dark: the client draws the batch by
+        // its blend mode and never keys by colour.
         discard;
-    }
-    if (colorKeyBlack != 0) {
-        float lum = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
-        if (lum < colorKeyThreshold) discard;
     }
     if (blendMode == 1 && texColor.a < 0.004) discard;
 
@@ -327,11 +325,6 @@ void main() {
     float outAlpha = texColor.a * batchFade;
     // Cutout materials output the sharpened coverage alpha computed above -
     // alpha-to-coverage turns it into per-sample coverage for smooth edges.
-    // Color-key-only materials have no meaningful texture alpha; keep them
-    // opaque after the discard.
-    if (colorKeyBlack != 0 && alphaTest == 0) {
-        outAlpha = batchFade;
-    }
     // The distance fade, for a batch drawn with no blending to fade through.
     // Sixteen ordered steps against the fragment's own screen position: a tree
     // at the edge of the draw distance thins out rather than switching off,
