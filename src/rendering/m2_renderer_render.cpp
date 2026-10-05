@@ -1516,7 +1516,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             }
 
             bool modelNeedsAnimation = model.hasAnimation && !model.disableAnimation;
-            const bool foliageLikeModel = model.isFoliageLike;
             const bool particleDominantEffect = model.isSpellEffect &&
                 !model.particleEmitters.empty() && model.batches.size() <= 2;
 
@@ -1863,37 +1862,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     }
 
                     // Pipeline selection (per-model/batch, not per-instance)
-                    // A batch the artist marked opaque is not asking for
-                    // any of this. Blend mode 0 means the alpha channel goes
-                    // unread, and M2 textures are routinely atlases whose
-                    // alpha belongs to another layer or another model - so
-                    // keying on it eats surfaces that were painted solid.
-                    //
-                    // Silverpine's trees are the case that found it. Their
-                    // trunk is one opaque batch sampling the right-hand panel
-                    // of SilverPineTree01TrunkSkin, and that panel carries a
-                    // stale alpha hole across its middle - 24% of the texels
-                    // the trunk's own triangles cover, with unbroken bark
-                    // painted underneath. Forced to the cutout pipeline, where
-                    // alpha becomes coverage, the trunk lost its midsection
-                    // and left the canopy floating over the stump. 133 foliage
-                    // models were holed the same way - Tirisfal's canopytree07,
-                    // the Plaguelands and Stonetalon pines, Eversong and
-                    // Silvermoon, Nagrand, Crystalsong, Ruby Sanctum, the
-                    // Storm Peaks, and every Zangarmarsh mushroom cap.
-                    //
-                    // Where the alpha really is the silhouette - a card drawn
-                    // on a black backing, or DXT1 punch-through, which stores
-                    // no colour under a transparent texel at all - the cutout
-                    // still stands, over the 15 models that need it: Swamp of
-                    // Sorrows' canopies, the quilboar thorn cards, Loch Modan's
-                    // leaves and the lamps whose glass is keyed out. Measured
-                    // from the texture by alphaIsSilhouette, not guessed from
-                    // its name.
-                    const bool opaqueByMaterial = batch.blendMode == M2_BLEND_OPAQUE;
-                    const bool foliageCutout = foliageLikeModel && !model.isSpellEffect &&
-                                               batch.blendMode <= 3 &&
-                                               (!opaqueByMaterial || batch.alphaIsSilhouette);
                     // The fire burning in the hearth is an effect overlay on a
                     // black background, the same shape as a spell visual; drawn
                     // opaque it fills the forge opening with a black rectangle
@@ -1956,7 +1924,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         if (batch.colorKeyBlack)
                             mat->colorKeyThreshold = (effectiveBlendMode == 4 || effectiveBlendMode == 5) ? 0.7f : 0.08f;
                         if (forceCutout) {
-                            mat->alphaTest = model.isGroundDetail ? 3 : (foliageCutout ? 2 : 1);
+                            mat->alphaTest = model.isGroundDetail ? 3 : 1;
                         } else {
                             mat->alphaTest = 0;
                             if (model.isGroundDetail) mat->unlit = 0;
