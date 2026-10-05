@@ -45,6 +45,9 @@ struct InstanceData {
     // The texture matrix's linear part, rows (m00, m01) and (m10, m11);
     // uvOffset is its translation.
     vec4 uvLinear;
+    // The batch's animated colour and alpha for this instance; alpha below
+    // zero means the material's static values apply.
+    vec4 colorMul;
 };
 layout(set = 3, binding = 0) readonly buffer InstanceSSBO {
     InstanceData instanceData[];
@@ -65,6 +68,7 @@ layout(location = 4) out float ModelHeight;
 layout(location = 5) out float vFadeAlpha;
 layout(location = 6) flat out int vSkyMode;
 layout(location = 7) flat out float vHighlight;
+layout(location = 8) flat out vec4 vColorMul;
 
 void main() {
     // Fetch per-instance data from SSBO
@@ -291,6 +295,7 @@ void main() {
     // constant there could only be right for one size of plant.
     ModelHeight = push.plantHeight > 0.0 ? clamp(pos.z / push.plantHeight, 0.0, 1.0) : 1.0;
     vFadeAlpha = fade;
+    vColorMul = instanceData[instIdx].colorMul;
     vSkyMode = push.isFoliage < 0 ? 1 : 0;
     vHighlight = instanceData[instIdx].highlight;
 

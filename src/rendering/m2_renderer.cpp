@@ -734,7 +734,7 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
     // Instance data SSBO - per-frame buffer holding per-instance transforms, fade, bones.
     // Shader reads instanceData[push.instanceDataOffset + gl_InstanceIndex].
     {
-        static_assert(sizeof(M2InstanceGPU) == 112, "M2InstanceGPU must be 112 bytes (std430)");
+        static_assert(sizeof(M2InstanceGPU) == 128, "M2InstanceGPU must be 128 bytes (std430)");
         const VkDeviceSize instBufSize = MAX_INSTANCE_DATA * sizeof(M2InstanceGPU);
 
         // Descriptor pool for 2 sets (double-buffered)
@@ -2118,6 +2118,9 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     // Copy texture transform data for UV animation
     gpuModel.textureTransforms = model.textureTransforms;
     gpuModel.textureTransformLookup = model.textureTransformLookup;
+    gpuModel.colorRGBTracks = model.colorRGBTracks;
+    gpuModel.colorAlphaTracks = model.colorAlphaTracks;
+    gpuModel.textureWeightTracks = model.textureWeightTracks;
     gpuModel.hasTextureAnimation = false;
 
     // Build per-batch GPU entries
@@ -2332,27 +2335,49 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 }
             }
 
-            // Apply at-rest transparency and color alpha from the M2 animation tracks.
-            // These provide per-batch opacity for ghosts, ethereal effects, fading doodads, etc.
-            // Skip zero values: some animated tracks start at 0 and animate up, and baking
-            // that first keyframe would make the entire batch permanently invisible.
+            // The batch's colour and transparency, which the client takes on
+            // every draw (FUN_0081fe90): a track that moves is sampled per
+            // frame at draw time, one that does not is its one value here -
+            // zero included, which the client draws as nothing.
             if (bgpu.batchOpacity > 0.0f) {
-                float animAlpha = 1.0f;
                 if (batch.colorIndex < model.colorRGB.size()) {
                     // The batch's authored colour. A glow card is painted
                     // white and coloured here, so without it every fire in the
                     // world burns white: Orgrimmar's carries (1.0, 0.329, 0.0).
                     bgpu.tint = model.colorRGB[batch.colorIndex];
                 }
-                if (batch.colorIndex < model.colorAlphas.size()) {
-                    float ca = model.colorAlphas[batch.colorIndex];
-                    if (ca > 0.001f) animAlpha *= ca;
+                // Through the lookup, as the client resolves it: the batch's
+                // index names a lookup entry, which names the track.
+                uint16_t weightIdx = 0xFFFF;
+                if (batch.transparencyIndex < model.textureWeightLookup.size()) {
+                    weightIdx = model.textureWeightLookup[batch.transparencyIndex];
                 }
-                if (batch.transparencyIndex < model.textureWeights.size()) {
-                    float tw = model.textureWeights[batch.transparencyIndex];
-                    if (tw > 0.001f) animAlpha *= tw;
-                }
-                bgpu.batchOpacity *= animAlpha;
+                if (batch.colorIndex < model.colorAlphaTracks.size()) bgpu.colorTrackIndex = batch.colorIndex;
+                if (weightIdx < model.textureWeightTracks.size()) bgpu.weightTrackIndex = weightIdx;
+
+                // A track moves if a sequence has more than one key, two
+                // sequences hold keys (each its own value), or it runs on a
+                // global clock.
+                auto animates = [](const std::vector<pipeline::M2AnimationTrack>& tracks, uint16_t idx) {
+                    if (idx >= tracks.size()) return false;
+                    const auto& t = tracks[idx];
+                    if (t.globalSequence >= 0) return true;
+                    int keyed = 0;
+                    for (const auto& seq : t.sequences) {
+                        if (seq.timestamps.size() > 1) return true;
+                        if (!seq.timestamps.empty()) ++keyed;
+                    }
+                    return keyed > 1;
+                };
+                bgpu.colorAnimated = animates(model.colorAlphaTracks, bgpu.colorTrackIndex) ||
+                                     animates(model.colorRGBTracks, bgpu.colorTrackIndex) ||
+                                     animates(model.textureWeightTracks, bgpu.weightTrackIndex);
+
+                float staticAlpha = 1.0f;
+                if (batch.colorIndex < model.colorAlphas.size()) staticAlpha *= model.colorAlphas[batch.colorIndex];
+                if (weightIdx < model.textureWeights.size()) staticAlpha *= model.textureWeights[weightIdx];
+                bgpu.staticAlpha = std::clamp(staticAlpha, 0.0f, 1.0f);
+                if (!bgpu.colorAnimated && bgpu.staticAlpha < 0.004f) bgpu.batchOpacity = 0.0f;
             }
 
             // Compute batch center and radius for glow sprite positioning
@@ -2579,7 +2604,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             mat.unfogged = (bgpu.materialFlags & 0x02) ? 1 : 0;
             mat.blendMode = bgpu.blendMode;
             mat.volumetricBeam = bgpu.volumetricBeam ? 1 : 0;
-            mat.fadeAlpha = 1.0f;
+            mat.fadeAlpha = bgpu.staticAlpha;
             mat.interiorDarken = 0.0f;
             mat.specularIntensity = 0.5f;
             mat.emissiveBoost = bgpu.preserveGlowMesh ? 2.4f : 1.0f;

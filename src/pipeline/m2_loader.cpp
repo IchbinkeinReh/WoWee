@@ -1246,6 +1246,7 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         model.colorAlphas.reserve(header.nColors);
         model.colorRGB.reserve(header.nColors);
         model.colorAlphaTracks.resize(header.nColors);
+        model.colorRGBTracks.resize(header.nColors);
         for (uint32_t ci = 0; ci < header.nColors; ci++) {
             uint32_t alphaTrackOfs = header.ofsColors + ci * colorSize + alphaOfs;
             M2AnimationTrack& track = model.colorAlphaTracks[ci];
@@ -1284,6 +1285,16 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
             // values. See m2ColorTrackFirstKeyOffset.
             glm::vec3 rgb(1.0f);
             const uint32_t colorTrackOfs = header.ofsColors + ci * colorSize;
+            // The whole track, for the renderers that animate it.
+            if (wotlk) {
+                if (colorTrackOfs + sizeof(M2TrackDisk) <= m2Data.size()) {
+                    parseAnimTrack(m2Data, readValue<M2TrackDisk>(m2Data, colorTrackOfs),
+                                   model.colorRGBTracks[ci], TrackType::VEC3, seqFlags);
+                }
+            } else if (colorTrackOfs + sizeof(M2TrackDiskVanilla) <= m2Data.size()) {
+                parseAnimTrackVanilla(m2Data, readValue<M2TrackDiskVanilla>(m2Data, colorTrackOfs),
+                                      model.colorRGBTracks[ci], TrackType::VEC3);
+            }
             uint32_t rgbOfs = 0;
             if (m2ColorTrackFirstKeyOffset(m2Data.size(), colorTrackOfs, wotlk,
                                            [&](uint32_t at) {

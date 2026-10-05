@@ -62,6 +62,7 @@ layout(location = 4) in float ModelHeight;
 layout(location = 5) in float vFadeAlpha;
 layout(location = 6) flat in int vSkyMode;
 layout(location = 7) flat in float vHighlight;
+layout(location = 8) flat in vec4 vColorMul;
 
 layout(location = 0) out vec4 outColor;
 
@@ -178,7 +179,18 @@ void main() {
     // The batch's authored colour. A glow card is painted white and coloured
     // here - Orgrimmar's bonfire carries (1.0, 0.329, 0.0) - so without it
     // every fire in the world burns white.
-    texColor.rgb *= vec3(tintR, tintG, tintB);
+    //
+    // The client takes the batch's colour and alpha every draw (FUN_0081fe90),
+    // so a track that moves is sampled per frame and handed in per instance;
+    // otherwise the material carries its one value.
+    const bool batchAnimated = vColorMul.a >= 0.0;
+    texColor.rgb *= batchAnimated ? vColorMul.rgb : vec3(tintR, tintG, tintB);
+    // The distance fade and the batch's own alpha together: what a blended
+    // batch is drawn at.
+    const float batchFade = vFadeAlpha * (batchAnimated ? vColorMul.a : fadeAlpha);
+    // A batch whose alpha has run to zero is not drawn, whatever it blends
+    // as: that is how a model hides a part for the length of a sequence.
+    if (batchAnimated && vColorMul.a < 1.0 / 255.0) discard;
 
     // Original client sky M2s carry their authored colour and alpha, and are
     // taken as they are. They are camera-centered and unlit, and must not be
@@ -212,7 +224,7 @@ void main() {
             skyColor = (blendAdds()) ? skyColor * air.a : skyColor * air.a + air.rgb;
         }
         if (blendMultiplies()) skyColor = rawTexRgb * (blendMode == 5 ? 1.0 : 0.5);
-        outColor = vec4(skyColor, skyAlpha * vFadeAlpha);
+        outColor = vec4(skyColor, skyAlpha * batchFade);
         return;
     }
 
@@ -248,7 +260,7 @@ void main() {
         float aGrad = fwidth(texColor.a);
         texColor.a = clamp((texColor.a - alphaCutoff) / max(aGrad, 0.001) * 0.5 + 0.5, 0.0, 1.0);
         if (texColor.a < 1.0 / 255.0) discard;
-    } else if (blendMode >= 2 && colorKeyBlack == 0 && texColor.a * vFadeAlpha < 1.0 / 255.0) {
+    } else if (blendMode >= 2 && colorKeyBlack == 0 && texColor.a * batchFade < 1.0 / 255.0) {
         // Every blended mode is alpha tested at 1/255 in the client: what is
         // fully transparent is not drawn at all, so it writes no depth.
         discard;
@@ -391,13 +403,13 @@ void main() {
         result = applyFog(result, FragPos, dist);
     }
 
-    float outAlpha = texColor.a * vFadeAlpha;
+    float outAlpha = texColor.a * batchFade;
     // Cutout materials output the sharpened coverage alpha computed above -
     // alpha-to-coverage turns it into per-sample coverage for smooth edges.
     // Color-key-only materials have no meaningful texture alpha; keep them
     // opaque after the discard.
     if (colorKeyBlack != 0 && alphaTest == 0) {
-        outAlpha = vFadeAlpha;
+        outAlpha = batchFade;
     }
     // The distance fade, for a batch drawn with no blending to fade through.
     // Sixteen ordered steps against the fragment's own screen position: a tree

@@ -62,6 +62,29 @@ void setUvTransform(glm::vec4& linear, glm::vec2& offset, const glm::mat4& m) {
     offset = glm::vec2(m[3][0], m[3][1]);
 }
 
+// A batch's colour and alpha for one instance's frame, for the shader's
+// colorMul; alpha -1 leaves the material's static values in charge. The
+// client samples both tracks on every draw (FUN_0081fe90).
+glm::vec4 batchColorMul(const M2ModelGPU& model, const M2ModelGPU::BatchGPU& batch,
+                        int sequenceIndex, float animTime, float globalTime) {
+    if (!batch.colorAnimated) return glm::vec4(1.0f, 1.0f, 1.0f, -1.0f);
+    glm::vec3 rgb = batch.tint;
+    float alpha = 1.0f;
+    if (batch.colorTrackIndex < model.colorRGBTracks.size()) {
+        rgb = m2_track::sampleVec3(model.colorRGBTracks[batch.colorTrackIndex], sequenceIndex,
+                                   animTime, globalTime, model.globalSequenceDurations, rgb);
+    }
+    if (batch.colorTrackIndex < model.colorAlphaTracks.size()) {
+        alpha *= m2_track::sampleFloat(model.colorAlphaTracks[batch.colorTrackIndex], sequenceIndex,
+                                       animTime, globalTime, model.globalSequenceDurations, 1.0f);
+    }
+    if (batch.weightTrackIndex < model.textureWeightTracks.size()) {
+        alpha *= m2_track::sampleFloat(model.textureWeightTracks[batch.weightTrackIndex], sequenceIndex,
+                                       animTime, globalTime, model.globalSequenceDurations, 1.0f);
+    }
+    return glm::vec4(glm::max(rgb, glm::vec3(0.0f)), glm::clamp(alpha, 0.0f, 1.0f));
+}
+
 } // namespace
 
 void M2Renderer::seedInstanceAnimation(const M2ModelGPU& model, uint32_t modelId,
@@ -1560,6 +1583,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 e.model = inst.modelMatrix;
                 e.uvOffset = glm::vec2(0.0f);
                 e.uvLinear = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+                e.colorMul = glm::vec4(1.0f, 1.0f, 1.0f, -1.0f);
                 e.fadeAlpha = p.fadeAlpha;
                 e.useBones = (p.useBones && !kM2NoSkinning) ? 1 : 0;
                 e.boneBase = p.useBones ? static_cast<int32_t>(inst.megaBoneOffset) : 0;
@@ -1806,7 +1830,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     // Handle texture animation: if this batch has per-instance uvOffset,
                     // write a separate SSBO range with the correct offsets.
                     bool hasBatchTexAnim = (batch.textureAnimIndex != 0xFFFF && model.hasTextureAnimation)
-                                           || model.isLavaModel;
+                                           || model.isLavaModel || batch.colorAnimated;
                     uint32_t drawOffset = groupSSBOOffset;
                     if (hasBatchTexAnim && instanceDataCount_ + groupSize <= MAX_INSTANCE_DATA) {
                         drawOffset = instanceDataCount_;
@@ -1846,6 +1870,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                             e.model = inst.modelMatrix;
                             e.uvOffset = uvOffset;
                             e.uvLinear = uvLinear;
+                            e.colorMul = batchColorMul(model, batch, inst.currentSequenceIndex,
+                                                       inst.animTime, inst.globalSequenceTime);
                             e.fadeAlpha = p.fadeAlpha;
                             e.useBones = (p.useBones && !kM2NoSkinning) ? 1 : 0;
                             e.boneBase = p.useBones ? static_cast<int32_t>(inst.megaBoneOffset) : 0;
@@ -2147,6 +2173,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             e.model = instance.modelMatrix;
             e.uvOffset = uvOffset;
             e.uvLinear = uvLinear;
+            e.colorMul = batchColorMul(model, batch, instance.currentSequenceIndex,
+                                       instance.animTime, instance.globalSequenceTime);
             e.fadeAlpha = instanceFadeAlpha;
             e.useBones = (needsBones && !kM2NoSkinning) ? 1 : 0;
             e.boneBase = needsBones ? static_cast<int32_t>(instance.megaBoneOffset) : 0;

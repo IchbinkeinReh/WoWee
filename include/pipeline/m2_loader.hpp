@@ -270,6 +270,9 @@ struct M2Model {
     // render time to hide batches whose alpha animates to 0 in the current
     // animation (e.g. the lumberjack carry model's alternate wood bundle).
     std::vector<M2AnimationTrack> colorAlphaTracks;
+    // The colour record's RGB track (0..1), beside its alpha; colorRGB holds
+    // only its at-rest key.
+    std::vector<M2AnimationTrack> colorRGBTracks;
 
     // Attachment points (for weapon/effect anchoring)
     std::vector<M2Attachment> attachments;

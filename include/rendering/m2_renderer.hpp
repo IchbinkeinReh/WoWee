@@ -90,6 +90,13 @@ struct M2ModelGPU {
         bool volumetricBeam = false;
         uint8_t glowTint = 0; // 0=warm, 1=cool, 2=red
         float batchOpacity = 1.0f; // Resolved texture weight opacity (0=transparent, skip batch)
+        // The batch's colour record and transparency track, for evaluating
+        // them per frame as the client does (FUN_0081fe90 takes the batch's
+        // colour and alpha each draw); 0xFFFF where it has none.
+        uint16_t colorTrackIndex = 0xFFFF;
+        uint16_t weightTrackIndex = 0xFFFF;
+        bool colorAnimated = false;  // either track has more than one key, or a global clock
+        float staticAlpha = 1.0f;    // colour alpha x transparency, for a batch that does not animate
         glm::vec3 center = glm::vec3(0.0f); // Center of batch geometry (model space)
         float glowSize = 1.0f;              // Approx radius of batch geometry
 
@@ -229,6 +236,11 @@ struct M2ModelGPU {
     // Texture transform data for UV animation
     std::vector<pipeline::M2TextureTransform> textureTransforms;
     std::vector<uint16_t> textureTransformLookup;
+    // Colour and transparency tracks, sampled per frame for the batches whose
+    // colour animates (Batch::colorAnimated).
+    std::vector<pipeline::M2AnimationTrack> colorRGBTracks;
+    std::vector<pipeline::M2AnimationTrack> colorAlphaTracks;
+    std::vector<pipeline::M2AnimationTrack> textureWeightTracks;
     std::vector<int> idleVariationIndices;  // Sequence indices for idle variations (animId 0)
 
     [[nodiscard]] bool isValid() const { return vertexBuffer != VK_NULL_HANDLE && indexCount > 0; }
@@ -929,6 +941,9 @@ private:
         // The texture matrix's linear part, rows (m00, m01) and (m10, m11);
         // uvOffset is its translation. Identity is (1, 0, 0, 1).
         glm::vec4 uvLinear;        // 16 bytes @ offset 96
+        // A batch's animated colour and alpha for this instance; alpha below
+        // zero means the batch's static material values apply.
+        glm::vec4 colorMul;        // 16 bytes @ offset 112
     };
     // How many instances one frame may hand the GPU, not how many exist. Ground
     // clutter is what fills it: it is drawn by the thousand and every tuft
