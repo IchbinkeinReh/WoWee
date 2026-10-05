@@ -50,13 +50,16 @@ layout(set = 1, binding = 1) uniform CharMaterial {
     int colourBlend;
 };
 
-// What a colour-only blend (Mod, Mod2x, NoAlphaAdd) is handed: its blend
-// factors ignore alpha, so the fade has to be in the colour itself.
-vec4 colourBlendOutput(vec3 rgb, float alpha) {
-    if (colourBlend == 1) return vec4(mix(vec3(1.0), rgb, alpha), alpha);
-    if (colourBlend == 2) return vec4(mix(vec3(0.5), rgb, alpha), alpha);
-    if (colourBlend == 3) return vec4(rgb * opacity, alpha);
-    return vec4(rgb, alpha);
+// What a colour-only blend (Mod, Mod2x, NoAlphaAdd) is handed. The 3.3.5a
+// client (FUN_0081fe90) draws Mod and Mod2x unlit, with no diffuse and a
+// constant emissive of 1.0 and 0.5: the texture, or half of it, whatever the
+// alpha - Mod2x then doubles it back, so its net effect is dst * texture.
+// NoAlphaAdd's factors ignore alpha, so its fade is in the colour.
+vec4 colourBlendOutput(vec3 lit, vec3 tex, float alpha) {
+    if (colourBlend == 1) return vec4(tex, alpha);
+    if (colourBlend == 2) return vec4(tex * 0.5, alpha);
+    if (colourBlend == 3) return vec4(lit * opacity, alpha);
+    return vec4(lit, alpha);
 }
 
 layout(set = 1, binding = 2) uniform sampler2D uNormalHeightMap;
@@ -273,7 +276,7 @@ void main() {
             texColor.a *= ck;
             if (texColor.a < 0.01) discard;
         }
-        outColor = colourBlendOutput(texColor.rgb, texColor.a * opacity);
+        outColor = colourBlendOutput(texColor.rgb, texColor.rgb, texColor.a * opacity);
         return;
     }
 
@@ -406,7 +409,7 @@ void main() {
     // it again would tint the scene behind it.
     if (colourBlend != 0) {
         outColor = colourBlendOutput(finiteVec3(result) ? result : texColor.rgb,
-                                     texColor.a * opacity);
+                                     texColor.rgb, texColor.a * opacity);
         return;
     }
 

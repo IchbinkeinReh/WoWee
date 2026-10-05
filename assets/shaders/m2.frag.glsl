@@ -171,6 +171,9 @@ vec4 fogVolumeSky(vec2 uv) {
 
 void main() {
     vec4 texColor = hasTexture != 0 ? texture(uTexture, TexCoord) : vec4(1.0);
+    // A multiply takes the texture alone: the client's colour goes in through
+    // the diffuse, and a multiply has none.
+    const vec3 rawTexRgb = texColor.rgb;
     // The batch's authored colour. A glow card is painted white and coloured
     // here - Orgrimmar's bonfire carries (1.0, 0.329, 0.0) - so without it
     // every fire in the world burns white.
@@ -207,10 +210,7 @@ void main() {
             vec4 air = fogVolumeSky(clip.xy / max(clip.w, 1e-4) * 0.5 + 0.5);
             skyColor = (blendAdds()) ? skyColor * air.a : skyColor * air.a + air.rgb;
         }
-        if (blendMultiplies()) {
-            skyColor = mix(vec3(blendMode == 5 ? 1.0 : 0.5), skyColor,
-                           clamp(skyAlpha * vFadeAlpha, 0.0, 1.0));
-        }
+        if (blendMultiplies()) skyColor = rawTexRgb * (blendMode == 5 ? 1.0 : 0.5);
         outColor = vec4(skyColor, skyAlpha * vFadeAlpha);
         return;
     }
@@ -529,7 +529,10 @@ void main() {
     }
 
     if (blendMultiplies()) {
-        result = mix(vec3(blendMode == 5 ? 1.0 : 0.5), result, clamp(outAlpha, 0.0, 1.0));
+        // The client (FUN_0081fe90) draws a multiply unlit, with no diffuse
+        // and an emissive of 1.0 (Mod) or 0.5 (Mod2x), whatever the alpha:
+        // Mod2x's doubling then makes its net effect dst * texture.
+        result = rawTexRgb * (blendMode == 5 ? 1.0 : 0.5);
     } else if (blendMode == 3) {
         // NoAlphaAdd ignores alpha: the fade has to be in the colour.
         result *= vFadeAlpha;
