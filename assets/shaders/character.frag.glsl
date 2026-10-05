@@ -403,9 +403,9 @@ void main() {
         vec3 ldir = normalize(-lightDir.xyz);
         float diff = max(dot(norm, ldir), 0.0);
 
-        vec3 viewDir = normalize(viewPos.xyz - FragPos);
-        vec3 halfDir = normalize(ldir + viewDir);
-        float spec = pow(max(dot(norm, halfDir), 0.0), 32.0) * specularIntensity;
+        // Ambient and diffuse only, as the client lights a model: no
+        // specular term (its 'specular' option is off by default and
+        // reaches only the terrain).
 
         float shadow = 1.0;
         if (shadowParams.x > 0.5) {
@@ -426,7 +426,7 @@ void main() {
         shadow = rtShadow(rt, shadow);
 
         result = rtAmbient(rt, ambientColor.rgb) * texColor.rgb
-               + shadow * (diff * lightColor.rgb * texColor.rgb + spec * lightColor.rgb);
+               + shadow * (diff * lightColor.rgb * texColor.rgb);
     }
 
     if (unlit == 0) result += localLightContribution(FragPos, norm, texColor.rgb);

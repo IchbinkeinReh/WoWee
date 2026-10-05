@@ -351,12 +351,10 @@ void main() {
         vec3 ldir = normalize(-lightDir.xyz);
         float diff = max(dot(norm, ldir), 0.0);
 
-        vec3 viewDir = normalize(viewPos.xyz - FragPos);
-        vec3 halfDir = normalize(ldir + viewDir);
-        float spec = pow(max(dot(norm, halfDir), 0.0), 32.0) * specularIntensity;
-
+        // No specular: MapObjSpecular is used only with the client's
+        // 'specular' option, which is off by default.
         result = rtAmbient(rt, ambientColor.rgb) * texColor.rgb
-               + shadow * (diff * lightColor.rgb * texColor.rgb + spec * lightColor.rgb);
+               + shadow * diff * lightColor.rgb * texColor.rgb;
 
         // An exterior group's vertex colour is light baked into it - a lamp's
         // pool on a wall - and it adds to the sun, as it does in the client.

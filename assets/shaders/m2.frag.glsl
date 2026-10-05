@@ -317,12 +317,10 @@ void main() {
     } else {
         vec3 viewDir = normalize(viewPos.xyz - FragPos);
 
-        float spec = 0.0;
+        // Ambient and diffuse only. The client lights an M2 batch with the
+        // fixed-function light (FUN_0081fb10) and no specular term; its
+        // 'specular' option defaults off and only the terrain reads it.
         float shadow = 1.0;
-        if (!isFoliage) {
-            vec3 halfDir = normalize(ldir + viewDir);
-            spec = pow(max(dot(norm, halfDir), 0.0), 32.0) * specularIntensity;
-        }
 
         if (shadowParams.x > 0.5) {
             float normalOffset = shadowTexel() * 2.0 * (1.0 - abs(dot(norm, ldir)));
@@ -358,7 +356,7 @@ void main() {
             ambientTerm *= 0.82 + 0.30 * clamp(norm.z, 0.0, 1.0);
         }
         result = ambientTerm * texColor.rgb
-               + shadow * (diff * lightColor.rgb * texColor.rgb + spec * lightColor.rgb)
+               + shadow * (diff * lightColor.rgb * texColor.rgb)
                + sss;
 
         if (interiorDarken > 0.0) {
