@@ -44,6 +44,12 @@ layout(set = 1, binding = 2) uniform M2Material {
     int fireCard;
 };
 
+// The 3.3.5a client's M2 blends: 3 NoAlphaAdd and 4 Add add to the scene,
+// 5 Mod and 6 Mod2x multiply it, 7 is plain alpha. A multiply's factors
+// ignore alpha, and white (Mod) or mid-grey (Mod2x) leaves the scene as it is.
+bool blendAdds() { return blendMode == 3 || blendMode == 4; }
+bool blendMultiplies() { return blendMode == 5 || blendMode == 6; }
+
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 
@@ -199,7 +205,11 @@ void main() {
         if (volumetricParams.x > 0.5) {
             vec4 clip = projection * view * vec4(FragPos, 1.0);
             vec4 air = fogVolumeSky(clip.xy / max(clip.w, 1e-4) * 0.5 + 0.5);
-            skyColor = (blendMode >= 3) ? skyColor * air.a : skyColor * air.a + air.rgb;
+            skyColor = (blendAdds()) ? skyColor * air.a : skyColor * air.a + air.rgb;
+        }
+        if (blendMultiplies()) {
+            skyColor = mix(vec3(blendMode == 5 ? 1.0 : 0.5), skyColor,
+                           clamp(skyAlpha * vFadeAlpha, 0.0, 1.0));
         }
         outColor = vec4(skyColor, skyAlpha * vFadeAlpha);
         return;
@@ -365,7 +375,7 @@ void main() {
     if (unlit == 0) result += localLightContribution(FragPos, norm, texColor.rgb);
 
     float dist = length(viewPos.xyz - FragPos);
-    if (blendMode >= 3) {
+    if (blendAdds()) {
         // Additive. Mixing toward the fog colour would give the card's black
         // corners the fog's colour, and additive then adds that to the scene -
         // the whole quad shows up as a lit rectangle hanging in the air, which
@@ -376,7 +386,9 @@ void main() {
         float fogFactor = clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0);
         result *= fogFactor;
         if (volumetricParams.x > 0.5) result *= fogVolumeAt(FragPos).a;
-    } else {
+    } else if (!blendMultiplies()) {
+        // A multiply is drawn over a scene already fogged; fogging it again
+        // would tint what is behind it.
         result = applyFog(result, FragPos, dist);
     }
 
@@ -495,7 +507,7 @@ void main() {
         outAlpha *= beamFade;
         // Additive beams carry their brightness in the colour rather than the
         // alpha, so fading one means dimming it.
-        if (blendMode >= 3) result *= beamFade;
+        if (blendAdds()) result *= beamFade;
     }
 
     // A flame stops before its card does.
@@ -513,8 +525,14 @@ void main() {
         outAlpha *= tipFade;
         // An additive card carries its brightness in the colour, so fading one
         // means dimming it.
-        if (blendMode >= 3) result *= tipFade;
+        if (blendAdds()) result *= tipFade;
     }
 
+    if (blendMultiplies()) {
+        result = mix(vec3(blendMode == 5 ? 1.0 : 0.5), result, clamp(outAlpha, 0.0, 1.0));
+    } else if (blendMode == 3) {
+        // NoAlphaAdd ignores alpha: the fade has to be in the colour.
+        result *= vFadeAlpha;
+    }
     outColor = vec4(result, outAlpha);
 }

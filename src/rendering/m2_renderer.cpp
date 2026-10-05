@@ -359,6 +359,21 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                                      VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_);
     additivePipeline_ = buildM2Pipeline(PipelineBuilder::blendAdditive(), false,
                                         VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_);
+    // Colour-only blends; the destination's alpha is left as it is.
+    auto colourBlend = [](VkBlendFactor src, VkBlendFactor dst) {
+        VkPipelineColorBlendAttachmentState st = PipelineBuilder::blendAdditive();
+        st.srcColorBlendFactor = src;
+        st.dstColorBlendFactor = dst;
+        st.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        st.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        return st;
+    };
+    noAlphaAddPipeline_ = buildM2Pipeline(colourBlend(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE), false,
+                                          VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_);
+    modPipeline_ = buildM2Pipeline(colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_ZERO), false,
+                                   VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_);
+    mod2xPipeline_ = buildM2Pipeline(colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_SRC_COLOR), false,
+                                     VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_);
 
     // --- Build particle pipelines ---
     if (particleVert.isValid() && particleFrag.isValid()) {
@@ -1146,6 +1161,9 @@ void M2Renderer::shutdown() {
     destroyPipeline(alphaTestPipeline_);
     destroyPipeline(alphaPipeline_);
     destroyPipeline(additivePipeline_);
+    destroyPipeline(noAlphaAddPipeline_);
+    destroyPipeline(modPipeline_);
+    destroyPipeline(mod2xPipeline_);
     destroyPipeline(particlePipeline_);
     destroyPipeline(particleAdditivePipeline_);
     destroyPipeline(smokePipeline_);

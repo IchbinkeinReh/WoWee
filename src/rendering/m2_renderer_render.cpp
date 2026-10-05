@@ -1896,19 +1896,20 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         if (effectiveBlendMode <= 1) effectiveBlendMode = 3;
                         else if (effectiveBlendMode == 4 || effectiveBlendMode == 5) effectiveBlendMode = 3;
                     }
+                    // The cards above forced additive keep the pipeline they
+                    // have always drawn with, whatever number they now carry.
+                    const bool forcedAdditive = effectiveBlendMode != batch.blendMode;
                     if (forceCutout) effectiveBlendMode = 1;
 
                     VkPipeline desiredPipeline;
                     if (forceCutout) {
                         desiredPipeline = cutoutPipeline_;
+                    } else if (forcedAdditive) {
+                        desiredPipeline = additivePipeline_;
                     } else {
-                        switch (effectiveBlendMode) {
-                            case 0: desiredPipeline = batch.cullBackFaces ? opaqueCullPipeline_
-                                                                          : opaquePipeline_; break;
-                            case 1: desiredPipeline = alphaTestPipeline_; break;
-                            case 2: desiredPipeline = alphaPipeline_; break;
-                            default: desiredPipeline = additivePipeline_; break;
-                        }
+                        desiredPipeline = blendPipelineFor(effectiveBlendMode);
+                        if (effectiveBlendMode == 0 && batch.cullBackFaces)
+                            desiredPipeline = opaqueCullPipeline_;
                     }
                     if (desiredPipeline != currentPipeline) {
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
@@ -1931,6 +1932,10 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         mat->volumetricBeam =
                             (model.isVolumetricBeam || batch.volumetricBeam) ? 1 : 0;
                         mat->fireCard = batch.forgeFireCard ? 1 : 0;
+                        // The shader's view of the blend: a multiply forced
+                        // onto the additive pipeline must not output one.
+                        mat->blendMode = (forcedAdditive && m2BlendIsModulate(batch.blendMode))
+                            ? static_cast<int32_t>(M2_BLEND_ADD_ALPHA) : static_cast<int32_t>(batch.blendMode);
                     }
 
                     // Bind material descriptor set (set 1)
@@ -2132,11 +2137,11 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 else if (effectiveBlendMode == 4 || effectiveBlendMode == 5) effectiveBlendMode = 3;
             }
 
-            VkPipeline desiredPipeline;
-            switch (effectiveBlendMode) {
-                case 2: desiredPipeline = alphaPipeline_; break;
-                default: desiredPipeline = additivePipeline_; break;
-            }
+            const bool forcedAdditive = effectiveBlendMode != batch.blendMode;
+            VkPipeline desiredPipeline = forcedAdditive ? additivePipeline_
+                                                        : blendPipelineFor(effectiveBlendMode);
+            // Opaque and alpha-key layers reach this pass only faded; see below.
+            if (!forcedAdditive && effectiveBlendMode <= 1) desiredPipeline = additivePipeline_;
             // An opaque layer of a faded instance: blended by its fade.
             if (instanceFaded && effectiveBlendMode <= 1) desiredPipeline = alphaPipeline_;
             if (desiredPipeline != currentPipeline) {
@@ -2153,6 +2158,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 mat->volumetricBeam =
                     (model.isVolumetricBeam || batch.volumetricBeam) ? 1 : 0;
                 mat->fireCard = batch.forgeFireCard ? 1 : 0;
+                mat->blendMode = (forcedAdditive && m2BlendIsModulate(batch.blendMode))
+                    ? static_cast<int32_t>(M2_BLEND_ADD_ALPHA) : static_cast<int32_t>(batch.blendMode);
                 mat->interiorDarken = 0.0f;
                 if (batch.colorKeyBlack)
                     mat->colorKeyThreshold = (effectiveBlendMode == 4 || effectiveBlendMode == 5) ? 0.7f : 0.08f;

@@ -30,9 +30,17 @@ enum M2BlendMode : uint8_t {
     M2_BLEND_ALPHA = 2,       ///< blended by the texture's alpha
     M2_BLEND_ADD = 3,         ///< added to what is behind; black is invisible
     M2_BLEND_ADD_ALPHA = 4,   ///< additive, scaled by alpha where there is one
-    M2_BLEND_MODULATE = 5,
-    M2_BLEND_MODULATE2X = 6,
+    M2_BLEND_MODULATE = 5,    ///< multiplies what is behind (DST_COLOR, ZERO)
+    M2_BLEND_MODULATE2X = 6,  ///< twice that (DST_COLOR, SRC_COLOR)
+    M2_BLEND_ALPHA_ALT = 7,   ///< the 3.3.5a client draws this as plain alpha
 };
+
+/// True for the modes that multiply the framebuffer rather than covering it.
+/// Their factors ignore alpha, and white (Mod) or mid-grey (Mod2x) is the
+/// colour that leaves the scene unchanged.
+inline bool m2BlendIsModulate(uint8_t blendMode) {
+    return blendMode == M2_BLEND_MODULATE || blendMode == M2_BLEND_MODULATE2X;
+}
 
 /// True when the mode adds to the framebuffer rather than covering it.
 ///
@@ -68,7 +76,7 @@ inline bool m2BlendIsAdditive(uint8_t blendMode) {
 /// when it is in punch-through mode and a texel actually selects index 3.
 inline bool m2BatchNeedsAlphaTest(uint8_t blendMode, bool hasAlpha) {
     if (blendMode == M2_BLEND_ALPHA_KEY) return hasAlpha;
-    if (m2BlendIsAdditive(blendMode)) return false;
+    if (m2BlendIsAdditive(blendMode) || m2BlendIsModulate(blendMode)) return false;
     return blendMode >= M2_BLEND_ALPHA && !hasAlpha;
 }
 
@@ -82,7 +90,8 @@ inline bool m2BatchNeedsAlphaTest(uint8_t blendMode, bool hasAlpha) {
 /// into a hard-edged disc. Orgrimmar's bonfires used a threshold of 0.7 on
 /// exactly such a card.
 inline bool m2BatchWantsColorKey(uint8_t blendMode, bool textureIsKeyed) {
-    return textureIsKeyed && !m2BlendIsAdditive(blendMode);
+    // Nor a multiply: its dark texels are the ones doing the work.
+    return textureIsKeyed && !m2BlendIsAdditive(blendMode) && !m2BlendIsModulate(blendMode);
 }
 
 }  // namespace wowee::rendering

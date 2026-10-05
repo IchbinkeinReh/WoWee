@@ -778,7 +778,24 @@ private:
     uint32_t lastFoliageCasters_ = 0;
     VkPipeline alphaTestPipeline_ = VK_NULL_HANDLE;     // blend mode 1
     VkPipeline alphaPipeline_ = VK_NULL_HANDLE;         // blend mode 2
-    VkPipeline additivePipeline_ = VK_NULL_HANDLE;      // blend mode 3+
+    VkPipeline additivePipeline_ = VK_NULL_HANDLE;      // blend mode 4 (Add)
+    // The rest of the 3.3.5a client's M2 blends (its M2 -> Gx table at
+    // 0x00a453b0): 3 NoAlphaAdd, 5 Mod, 6 Mod2x. 7 is drawn as plain alpha.
+    VkPipeline noAlphaAddPipeline_ = VK_NULL_HANDLE;    // blend mode 3
+    VkPipeline modPipeline_ = VK_NULL_HANDLE;           // blend mode 5
+    VkPipeline mod2xPipeline_ = VK_NULL_HANDLE;         // blend mode 6
+    /// The pipeline an M2 blend mode draws with, as the client maps it.
+    VkPipeline blendPipelineFor(uint8_t blendMode) const {
+        switch (blendMode) {
+            case 0: return opaquePipeline_;
+            case 1: return alphaTestPipeline_;
+            case 2: case 7: return alphaPipeline_;
+            case 3: return noAlphaAddPipeline_;
+            case 5: return modPipeline_;
+            case 6: return mod2xPipeline_;
+            default: return additivePipeline_;
+        }
+    }
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 
     // Shadow rendering (Phase 7)

@@ -68,13 +68,27 @@ TEST_CASE("opaque is never tested", "[m2]") {
     CHECK_FALSE(m2BlendIsAdditive(2));
 }
 
-TEST_CASE("the modulate modes keep the old fallback", "[m2]") {
-    // They cover what is behind rather than adding to it, so a missing alpha
-    // is the same problem it is for blending.
-    CHECK(m2BatchNeedsAlphaTest(5, false));
-    CHECK(m2BatchNeedsAlphaTest(6, false));
+TEST_CASE("the modulate modes are never alpha tested", "[m2]") {
+    // The 3.3.5a client draws 5 as Mod (DST_COLOR, ZERO) and 6 as Mod2x
+    // (DST_COLOR, SRC_COLOR): factors that never read alpha, so there is
+    // nothing missing for a cutout to stand in for. Forced onto the cutout
+    // pipeline a tint layer is drawn as a solid sheet.
+    CHECK(m2BlendIsModulate(5));
+    CHECK(m2BlendIsModulate(6));
+    CHECK_FALSE(m2BatchNeedsAlphaTest(5, false));
+    CHECK_FALSE(m2BatchNeedsAlphaTest(6, false));
     CHECK_FALSE(m2BatchNeedsAlphaTest(5, true));
     CHECK_FALSE(m2BatchNeedsAlphaTest(6, true));
+    CHECK_FALSE(m2BatchWantsColorKey(5, true));
+    CHECK_FALSE(m2BatchWantsColorKey(6, true));
+}
+
+TEST_CASE("blend mode 7 is plain alpha", "[m2]") {
+    // The client's M2 -> Gx table maps 7 to Alpha, not to an additive blend.
+    CHECK_FALSE(m2BlendIsAdditive(7));
+    CHECK_FALSE(m2BlendIsModulate(7));
+    CHECK(m2BatchNeedsAlphaTest(7, false));
+    CHECK_FALSE(m2BatchNeedsAlphaTest(7, true));
 }
 
 TEST_CASE("an additive card is not colour keyed", "[m2]") {
@@ -90,11 +104,11 @@ TEST_CASE("an additive card is not colour keyed", "[m2]") {
 
 TEST_CASE("everything else that asked for the key still gets it", "[m2]") {
     // The key is how a black-backed card survives being drawn opaquely, which
-    // is still what happens for every non-additive mode.
+    // is still what happens for every mode that covers what is behind it.
     CHECK(m2BatchWantsColorKey(0, true));
     CHECK(m2BatchWantsColorKey(1, true));
     CHECK(m2BatchWantsColorKey(2, true));
-    CHECK(m2BatchWantsColorKey(5, true));
+    CHECK(m2BatchWantsColorKey(7, true));
 
     // And a texture nothing marked is never keyed, whatever it blends as.
     for (uint8_t mode = 0; mode <= 6; ++mode) {
