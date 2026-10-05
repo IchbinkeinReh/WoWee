@@ -5,8 +5,10 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <limits>
+#include <vector>
 
 // Minimal JSON parsing (no external dependency) - expansion.json is tiny and flat.
 // We parse the subset we need: strings, integers, arrays of integers.
@@ -17,6 +19,37 @@ std::string trim(const std::string& s) {
     size_t end = s.find_last_not_of(" \t\r\n\",");
     if (start == std::string::npos) return "";
     return s.substr(start, end - start + 1);
+}
+
+/// The language of the client whose data a profile points at.
+///
+/// A retail client folder says which one it is in two places: a
+/// component.wow-<lang>.txt beside the executable and a Data/<lang> directory
+/// with the language's own files. A profile that names no locale used to be
+/// taken for enUS, and that is what the login sent - so a server that picks the
+/// language of its names and texts from it answered in English to a client whose
+/// every data file is German. Empty when nothing says, and the caller keeps its
+/// default.
+std::string detectClientLocale(const std::string& dataPath) {
+    static const char* const kLocales[] = {
+        "enUS", "enGB", "deDE", "frFR", "esES", "esMX", "ruRU", "koKR", "zhCN", "zhTW",
+    };
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::vector<std::string> found;
+    for (const char* locale : kLocales) {
+        std::string lower = locale;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const fs::path root(dataPath);
+        if (fs::exists(root / ("component.wow-" + lower + ".txt"), ec) ||
+            fs::is_directory(root / "data" / lower, ec) ||
+            fs::is_directory(root / "Data" / locale, ec)) {
+            found.emplace_back(locale);
+        }
+    }
+    // One language is a client that says so. Two or none is not an answer.
+    return found.size() == 1 ? found.front() : std::string();
 }
 
 // Quick-and-dirty JSON value extractor for flat objects.
@@ -236,7 +269,14 @@ bool ExpansionRegistry::loadProfile(const std::string& jsonPath, const std::stri
         v = jsonValue(json, "game"); if (!v.empty()) p.game = v;
         v = jsonValue(json, "platform"); if (!v.empty()) p.platform = v;
         v = jsonValue(json, "os"); if (!v.empty()) p.os = v;
-        v = jsonValue(json, "locale"); if (!v.empty()) p.locale = v;
+        v = jsonValue(json, "locale");
+        if (!v.empty()) {
+            p.locale = v;
+        } else if (const std::string detected = detectClientLocale(dirPath); !detected.empty()) {
+            p.locale = detected;
+            LOG_INFO("ExpansionRegistry: '", p.id, "' names no locale; the client data in ",
+                     dirPath, " is ", detected);
+        }
         p.timezone = static_cast<uint32_t>(jsonInt(json, "timezone", static_cast<int>(p.timezone)));
     }
     p.maxLevel = static_cast<uint32_t>(jsonInt(json, "maxLevel", 60));
