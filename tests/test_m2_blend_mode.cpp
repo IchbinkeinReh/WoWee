@@ -22,6 +22,7 @@
 using wowee::rendering::m2BatchNeedsAlphaTest;
 using wowee::rendering::m2BatchWantsColorKey;
 using wowee::rendering::m2BlendIsAdditive;
+using wowee::rendering::m2BlendIsModulate;
 
 TEST_CASE("the Orgrimmar bonfire's glow card is not alpha tested", "[m2]") {
     // Blend mode 4, no alpha channel: the case that showed it.
