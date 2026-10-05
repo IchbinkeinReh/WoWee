@@ -341,6 +341,16 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
 
     // Cache camera state for frustum-culling bone computation
     cachedCamPos_ = cameraPos;
+    if (vkCtx_) {
+        // The vertical scale of the projection is the length of the second row of
+        // projection x view, because the view's rows are unit vectors.
+        const float verticalScale =
+            glm::length(glm::vec3(viewProjection[0][1], viewProjection[1][1], viewProjection[2][1]));
+        const float screenHeight = static_cast<float>(vkCtx_->getSwapchainExtent().height);
+        if (verticalScale > 0.0f && screenHeight > 0.0f) {
+            particlePointScale_ = screenHeight * verticalScale / 500.0f;
+        }
+    }
     // Never past the ground. The density constants are how far models are
     // worth drawing, not how far there is anything to draw them on: the
     // terrain and the WMOs stop at the view distance itself, so a doodad
@@ -1893,7 +1903,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         desiredPipeline = cutoutPipeline_;
                     } else {
                         switch (effectiveBlendMode) {
-                            case 0: desiredPipeline = opaquePipeline_; break;
+                            case 0: desiredPipeline = batch.cullBackFaces ? opaqueCullPipeline_
+                                                                          : opaquePipeline_; break;
                             case 1: desiredPipeline = alphaTestPipeline_; break;
                             case 2: desiredPipeline = alphaPipeline_; break;
                             default: desiredPipeline = additivePipeline_; break;

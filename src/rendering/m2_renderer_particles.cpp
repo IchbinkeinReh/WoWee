@@ -14,6 +14,8 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <random>
 #include <limits>
@@ -88,6 +90,24 @@ std::vector<glm::vec3> M2Renderer::getWaterVegetationPositions(const glm::vec3& 
     return result;
 }
 
+namespace {
+
+/// TEMPORARY tuning for the emitters drawing fire or magic, read once from the
+/// environment so the right values can be found without rebuilding:
+/// WOWEE_PFX_RATE scales how many are emitted, WOWEE_PFX_GAIN how bright the
+/// additive ones are, WOWEE_PFX_SIZE how large they are drawn.
+float pfxTuning(const char* name) {
+    const char* v = std::getenv(name);
+    if (!v || !*v) return 1.0f;
+    const float f = static_cast<float>(std::atof(v));
+    return f > 0.0f ? f : 1.0f;
+}
+const float kPfxRate = pfxTuning("WOWEE_PFX_RATE");
+const float kPfxGain = pfxTuning("WOWEE_PFX_GAIN");
+const float kPfxSize = pfxTuning("WOWEE_PFX_SIZE");
+
+} // namespace
+
 void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt) {
     if (gpu.isInstancePortal) return;
 
@@ -112,6 +132,9 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
         // setting take smoke, dust and spell effects down while a candle is
         // pulled back up to the handful of particles that still reads as fire.
         rate *= particleDensity_;
+        if (ei < gpu.particleSkipGenericDimming.size() && gpu.particleSkipGenericDimming[ei] != 0) {
+            rate *= kPfxRate;
+        }
 
         // A flame reads as a flame only when enough particles are alive at once.
         // Authored rates vary wildly for the same visual intent - a candle asks
@@ -162,6 +185,25 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
 
             // Position: emitter position transformed by bone matrix
             glm::vec3 localPos = em.position;
+            // A plane emitter scatters its particles across a rectangle rather
+            // than letting them all leave from one point. Left out, the demon
+            // crystal's fire was a single thin thread of sprites down its
+            // middle where the model draws a broad soft cloud. Kept to the
+            // emitters drawing fire or magic, like the other corrections here.
+            if (em.emitterType == 1 && ei < gpu.particleSkipGenericDimming.size() &&
+                gpu.particleSkipGenericDimming[ei] != 0) {
+                const float areaLength = interpFloat(em.emissionAreaLength, inst.animTime,
+                                                     inst.globalSequenceTime,
+                                                     inst.currentSequenceIndex,
+                                                     gpu.globalSequenceDurations);
+                const float areaWidth = interpFloat(em.emissionAreaWidth, inst.animTime,
+                                                    inst.globalSequenceTime,
+                                                    inst.currentSequenceIndex,
+                                                    gpu.globalSequenceDurations);
+                // Half the length and half the width either side of the emitter.
+                localPos.x += distN(particleRng_) * areaLength * 0.5f;
+                localPos.y += distN(particleRng_) * areaWidth * 0.5f;
+            }
             glm::mat4 boneXform = glm::mat4(1.0f);
             if (em.bone < inst.boneMatrices.size()) {
                 boneXform = inst.boneMatrices[em.bone];
@@ -179,10 +221,24 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
 
             // Base direction: up in model space, transformed to world
             glm::vec3 dir(0.0f, 0.0f, 1.0f);
-            // Add random spread
-            dir.x += distN(particleRng_) * hRange;
-            dir.y += distN(particleRng_) * hRange;
-            dir.z += distN(particleRng_) * vRange;
+            if (hRange > 1.0f) {
+                // A horizontal range this wide is an azimuth sweep, not a
+                // spread: 6.283 is a full turn around the emission axis, and
+                // the vertical range is how far off that axis a particle may
+                // lean. Read as the width of a random offset it threw the
+                // demon crystal's flames out sideways at nearly right angles,
+                // when the model sends them almost straight up.
+                const float tilt = dist01(particleRng_) * std::abs(vRange);
+                const float azimuth = dist01(particleRng_) * hRange;
+                dir = glm::vec3(std::sin(tilt) * std::cos(azimuth),
+                                std::sin(tilt) * std::sin(azimuth),
+                                std::cos(tilt));
+            } else {
+                // Add random spread
+                dir.x += distN(particleRng_) * hRange;
+                dir.y += distN(particleRng_) * hRange;
+                dir.z += distN(particleRng_) * vRange;
+            }
             float lenSq = glm::dot(dir, dir);
             if (lenSq > 0.001f * 0.001f) dir *= glm::inversesqrt(lenSq);
 
@@ -265,7 +321,14 @@ void M2Renderer::updateParticles(M2Instance& inst, float dt) {
             float grav = interpFloat(pem.gravity,
                                       inst.animTime, inst.globalSequenceTime,
                                       inst.currentSequenceIndex, gpu.globalSequenceDurations);
-            if (grav == 0.0f && !gpu.isFireflyEffect) {
+            // Zero is an answer when the emitter is drawing fire or magic: the
+            // demon crystal's clouds are meant to keep climbing for their six
+            // seconds, and the stand-in below pulled them back down past
+            // where they began.
+            const bool authoredGravity =
+                e < gpu.particleSkipGenericDimming.size() &&
+                gpu.particleSkipGenericDimming[e] != 0;
+            if (grav == 0.0f && !gpu.isFireflyEffect && !authoredGravity) {
                 float emSpeed = interpFloat(pem.emissionSpeed,
                                              inst.animTime, inst.globalSequenceTime,
                                              inst.currentSequenceIndex, gpu.globalSequenceDurations);
@@ -640,6 +703,7 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         uint32_t cachedAnimFrame = 0;
         float cachedTilesFloat = 1.0f;
         bool cachedIsTiled = false;
+        bool cachedFlameTexture = false;
         float invAnimMs = 1.0f / 1000.0f;
 
         // How far this instance's particles actually reach, against how far
@@ -649,6 +713,36 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         // which model it is. This does.
         float highestParticleZ = -std::numeric_limits<float>::max();
         float widestParticle = 0.0f;
+
+        // WOWEE_M2_PARTICLE_DIAG=<name substring>: once every two seconds, what
+        // each emitter of a matching model has alive - how many, how bright,
+        // how big on screen, and how far above and below its instance.
+        static const std::string kParticleDiag = [] {
+            const char* v = std::getenv("WOWEE_M2_PARTICLE_DIAG");
+            std::string t = v ? v : "";
+            std::transform(t.begin(), t.end(), t.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return t;
+        }();
+        struct EmitterDiag { uint32_t n = 0; float alpha = 0, size = 0, minZ = 1e9f, maxZ = -1e9f; };
+        std::vector<EmitterDiag> emitterDiag;
+        if (!kParticleDiag.empty()) {
+            std::string lower = gpu.name;
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            // Several names may be given, separated by commas.
+            size_t from = 0;
+            while (from <= kParticleDiag.size()) {
+                size_t to = kParticleDiag.find(',', from);
+                if (to == std::string::npos) to = kParticleDiag.size();
+                const std::string name = kParticleDiag.substr(from, to - from);
+                if (!name.empty() && lower.find(name) != std::string::npos) {
+                    emitterDiag.resize(gpu.particleEmitters.size());
+                    break;
+                }
+                from = to + 1;
+            }
+        }
 
         for (const auto& p : inst.particles) {
             if (p.emitterIndex < 0 || p.emitterIndex >= static_cast<int>(gpu.particleEmitters.size())) continue;
@@ -666,6 +760,9 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                 cachedTotalTiles = static_cast<uint32_t>(cachedTilesX) *
                                    static_cast<uint32_t>(cachedTilesY);
                 cachedBlendType = cachedEm->blendingType;
+                cachedFlameTexture =
+                    static_cast<size_t>(p.emitterIndex) < gpu.particleSkipGenericDimming.size() &&
+                    gpu.particleSkipGenericDimming[p.emitterIndex] != 0;
                 ParticleGroupKey key{.texture = cachedTex, .blendType = static_cast<uint8_t>(cachedBlendType), .tilesX = cachedTilesX, .tilesY = cachedTilesY};
                 cachedGroup = &groups[key];
                 cachedGroup->texture = cachedTex;
@@ -693,7 +790,8 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             float rawScale = interpFBlockFloat(em.particleScale, lifeRatio);
 
             if (!gpu.isSpellEffect && !gpu.isFireflyEffect && !gpu.isLanternLike &&
-                !gpu.isTorch && !gpu.isBrazierOrFire && !gpu.isKoboldFlame) {
+                !gpu.isTorch && !gpu.isBrazierOrFire && !gpu.isKoboldFlame &&
+                !cachedFlameTexture) {
                 color = glm::mix(color, glm::vec3(1.0f), 0.7f);
                 if (rawScale > 2.0f) alpha *= 0.02f;
                 if (cachedBlendType == 3 || cachedBlendType == 4) alpha *= 0.05f;
@@ -710,6 +808,10 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                 gpu.isBrazierOrFire || gpu.isKoboldFlame) {
                 color = glm::max(color, glm::vec3(0.50f, 0.26f, 0.09f));
                 alpha = std::max(alpha, 0.30f);
+            }
+
+            if (cachedFlameTexture && (cachedBlendType == 3 || cachedBlendType == 4)) {
+                color *= kPfxGain;
             }
 
             float scale = rawScale;
@@ -741,6 +843,14 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                 particleRuns_.push_back({.group = cachedGroup, .first = vbWritten, .count = 0});
             }
             highestParticleZ = std::max(highestParticleZ, p.position.z);
+            if (!emitterDiag.empty()) {
+                auto& dg = emitterDiag[static_cast<size_t>(p.emitterIndex)];
+                ++dg.n;
+                dg.alpha += alpha;
+                dg.size += scale * inst.scale;
+                dg.minZ = std::min(dg.minZ, p.position.z - inst.position.z);
+                dg.maxZ = std::max(dg.maxZ, p.position.z - inst.position.z);
+            }
             widestParticle = std::max(widestParticle, scale);
 
             float* vd = vbBase + static_cast<size_t>(vbWritten) * 9;
@@ -751,7 +861,19 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             vd[4] = color.g;
             vd[5] = color.b;
             vd[6] = alpha;
-            vd[7] = scale;
+            // A particle's size is in model units, like its position and its
+            // speed - both of which carry the instance's scale. The size did not,
+            // so on a scaled model the particles flew its full distance and were
+            // drawn at a fraction of the size: the demon crystal's fire was a few
+            // sparse specks.
+            // Only an emitter flagged 0x400 follows the model's own scale; the
+            // rest are the same size however large the model is drawn. The
+            // client's quad is twice its size across, which is what the point
+            // scale below gives, and it does so for the exempt group alone:
+            // everything else keeps the fixed 500 it was tuned against.
+            const float modelScale = (cachedEm->flags & 0x400) ? inst.scale : 1.0f;
+            vd[7] = scale * modelScale *
+                    (cachedFlameTexture ? particlePointScale_ * kPfxSize : 1.0f);
             float tileIndex = p.tileIndex;
             if (cachedIsTiled) {
                 tileIndex = p.tileIndex + static_cast<float>(cachedAnimFrame);
@@ -763,6 +885,24 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             ++vbWritten;
             ++particleRuns_.back().count;
             totalParticles++;
+        }
+
+        if (!emitterDiag.empty()) {
+            static float lastDiagSeconds = -10.0f;
+            const float now = std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (now - lastDiagSeconds > 2.0f) {
+                lastDiagSeconds = now;
+                for (size_t ei = 0; ei < emitterDiag.size(); ++ei) {
+                    const auto& dg = emitterDiag[ei];
+                    const float n = std::max<float>(1.0f, static_cast<float>(dg.n));
+                    LOG_WARNING("PARTICLE DIAG '", gpu.name, "' scale=", inst.scale, " emitter=", ei,
+                                " alive=", dg.n, " avgAlpha=", dg.alpha / n,
+                                " avgSize=", dg.size / n, " z=[", dg.minZ, ",", dg.maxZ, "]",
+                                " blend=", static_cast<int>(gpu.particleEmitters[ei].blendingType),
+                                " skipDim=", ei < gpu.particleSkipGenericDimming.size()
+                                                 ? static_cast<int>(gpu.particleSkipGenericDimming[ei]) : -1);
+                }
+            }
         }
 
         // Said once per model, on an absolute reach rather than a ratio

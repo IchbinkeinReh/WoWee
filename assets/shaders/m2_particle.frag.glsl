@@ -29,6 +29,10 @@ void main() {
     // Soft circular falloff for point-sprite edges.
     float edge = 1.0 - smoothstep(0.4, 0.5, length(p - 0.5));
     float alpha = texColor.a * vColor.a * edge * vFogVisibility;
-    vec3 rgb = texColor.rgb * vColor.rgb * alpha;
+    // The colour goes out as it is: both particle pipelines blend with SRC_ALPHA,
+    // which is where the alpha comes in. Multiplying it in here as well - as this
+    // did - applied it twice, so every particle added alpha squared and was
+    // drawn dimmer than the client draws it.
+    vec3 rgb = texColor.rgb * vColor.rgb;
     outColor = vec4(rgb, alpha);
 }

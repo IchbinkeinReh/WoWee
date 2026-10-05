@@ -71,6 +71,9 @@ struct M2ModelGPU {
         uint8_t texFlags = 0;     // M2Texture.flags (bit0=WrapS, bit1=WrapT)
         bool lanternGlowHint = false; // Texture/model hints this batch is a glow-card billboard
         bool glowCardLike = false; // Batch likely is a flat emissive card that should be sprite-replaced
+        /// Single-sided opaque batch wound entirely inside-out: only its far
+        /// wall is meant to show. See M2Renderer::batchIsInsideOut.
+        bool cullBackFaces = false;
         bool preserveGlowMesh = false; // Keep emissive glass/fixture mesh below its glow sprite
         // Forge fire card: the flame/coals/glow batches of a forge, as opposed
         // to the masonry and ironwork the rest of the model is made of.
@@ -213,6 +216,11 @@ struct M2ModelGPU {
     // Particle emitter data (kept from M2Model)
     std::vector<pipeline::M2ParticleEmitter> particleEmitters;
     std::vector<VkTexture*> particleTextures;    // Resolved Vulkan textures per emitter
+    /// Per emitter: it is drawing fire or magic whatever the model is called -
+    /// its texture is a flame sprite sheet, or its authored colour is strongly
+    /// tinted - so it is spared the dimming meant for the generic clouds of
+    /// white and grey additive dust.
+    std::vector<uint8_t> particleSkipGenericDimming;
     std::vector<VkDescriptorSet> particleTexSets; // Pre-allocated descriptor sets per emitter (stable, avoids per-frame alloc)
 
     // Ribbon emitter data (kept from M2Model)
@@ -752,6 +760,9 @@ private:
 
     // Vulkan pipelines (one per blend mode)
     VkPipeline opaquePipeline_ = VK_NULL_HANDLE;       // blend mode 0
+    /// Opaque with back faces culled, for the inside-out single-sided batches
+    /// that every other M2 batch does without: the rest are drawn two-sided.
+    VkPipeline opaqueCullPipeline_ = VK_NULL_HANDLE;
     /// Cutout: leaves, ground clutter, anything the fragment shader alpha-tests.
     /// Blend disabled with alpha-to-coverage on, which is what turns the
     /// shader's sharpened alpha into per-sample coverage.
@@ -1205,6 +1216,12 @@ private:
     /// drawing stars. See BatchGPU::starLayer.
     bool suppressBakedStars_ = false;
     float particleDensity_ = 1.0f;
+    /// What a particle's size is multiplied by to give the point size the vertex
+    /// shader draws: the shader divides by distance after a fixed 500, while a
+    /// particle is a quad twice its size across, so the number of pixels it
+    /// spans is size x screen height x the projection's vertical scale. Set
+    /// each frame in update().
+    float particlePointScale_ = 1.0f;
     float furthestDrawnSq_ = 0.0f;
     bool forceNoCull_ = false;
 

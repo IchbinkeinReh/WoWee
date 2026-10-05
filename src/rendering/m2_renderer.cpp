@@ -306,13 +306,14 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
     // Pipeline derivatives - opaque is the base, others derive from it for shared state optimization
     auto buildM2Pipeline = [&](VkPipelineColorBlendAttachmentState blendState, bool depthWrite,
                                VkPipelineCreateFlags flags = 0, VkPipeline basePipeline = VK_NULL_HANDLE,
-                               bool alphaToCoverage = false) -> VkPipeline {
+                               bool alphaToCoverage = false,
+                               VkCullModeFlags cullMode = VK_CULL_MODE_NONE) -> VkPipeline {
         auto builder = PipelineBuilder()
             .setShaders(m2Vert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
                         m2Frag.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
             .setVertexInput({m2Binding}, m2Attrs)
             .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+            .setRasterization(VK_POLYGON_MODE_FILL, cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
             // The sky model tests depth but never writes it. Its vertices are
             // pushed to the far plane, so the test is what lets ground drawn
             // before it occlude it, and a write would put the far plane over
@@ -334,6 +335,12 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
 
     opaquePipeline_ = buildM2Pipeline(PipelineBuilder::blendDisabled(), true,
                                       VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT);
+    // Counter-clockwise is the front face here: the camera flips Y for Vulkan,
+    // which turns the model's outward winding around, and it is the winding
+    // the culling variant needs to keep the far wall of an inside-out mesh.
+    opaqueCullPipeline_ = buildM2Pipeline(PipelineBuilder::blendDisabled(), true,
+                                          VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_,
+                                          /*alphaToCoverage=*/false, VK_CULL_MODE_BACK_BIT);
     alphaTestPipeline_ = buildM2Pipeline(PipelineBuilder::blendAlpha(), true,
                                          VK_PIPELINE_CREATE_DERIVATIVE_BIT, opaquePipeline_);
     // Every alpha-tested batch - a canopy, a fern, a tuft of clutter - is drawn
@@ -1134,6 +1141,7 @@ void M2Renderer::shutdown() {
     // Destroy pipelines
     auto destroyPipeline = [&](VkPipeline& p) { if (p) { vkDestroyPipeline(device, p, nullptr); p = VK_NULL_HANDLE; } };
     destroyPipeline(opaquePipeline_);
+    destroyPipeline(opaqueCullPipeline_);
     destroyPipeline(cutoutPipeline_);
     destroyPipeline(alphaTestPipeline_);
     destroyPipeline(alphaPipeline_);
@@ -1426,6 +1434,45 @@ void M2Renderer::censusInstance(const M2Instance& instance) {
                 " authoredH=", authored, " drawnH=", authored * instance.scale,
                 " top=", instance.position.z + gpu.boundMax.z * instance.scale);
 }
+
+namespace {
+
+/// True when every triangle of the batch faces toward the middle of the batch's
+/// own vertices.
+///
+/// Such a mesh is only meant to be seen from inside, which is how an artist
+/// puts a surface behind something and in front of nothing: the demon
+/// crystal's opaque core is the far wall of the crystal, wound inward, with its
+/// eyes floating between it and the translucent shell. The client back-face
+/// culls any batch that is not marked two-sided, so only that far wall is ever
+/// drawn. This renderer draws everything two-sided, which puts the near wall in
+/// front of the eyes and hides them.
+bool batchIsInsideOut(const pipeline::M2Model& model, uint32_t indexStart, uint32_t indexCount) {
+    if (indexCount < 12 || indexStart + indexCount > model.indices.size()) return false;
+    glm::vec3 centre(0.0f);
+    uint32_t n = 0;
+    for (uint32_t k = 0; k < indexCount; ++k) {
+        const uint16_t v = model.indices[indexStart + k];
+        if (v >= model.vertices.size()) return false;
+        centre += model.vertices[v].position;
+        ++n;
+    }
+    centre /= static_cast<float>(n);
+    uint32_t inward = 0, outward = 0;
+    for (uint32_t k = 0; k + 2 < indexCount; k += 3) {
+        const uint16_t a = model.indices[indexStart + k];
+        const uint16_t b = model.indices[indexStart + k + 1];
+        const uint16_t c = model.indices[indexStart + k + 2];
+        const glm::vec3& pa = model.vertices[a].position;
+        const glm::vec3 normal = glm::cross(model.vertices[b].position - pa,
+                                            model.vertices[c].position - pa);
+        const glm::vec3 faceCentre = (pa + model.vertices[b].position + model.vertices[c].position) / 3.0f;
+        if (glm::dot(normal, faceCentre - centre) < 0.0f) ++inward; else ++outward;
+    }
+    return outward == 0 && inward > 0;
+}
+
+} // namespace
 
 bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     if (models.find(modelId) != models.end()) {
@@ -1762,7 +1809,13 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     gpuModel.globalSequenceDurations = model.globalSequenceDurations;
     gpuModel.hasAnimation = false;
     for (const auto& bone : model.bones) {
-        if (bone.translation.hasData() || bone.rotation.hasData() || bone.scale.hasData()) {
+        // A billboard bone turns toward the camera every frame, so a model
+        // that has one is animated even when no track moves anything. Without
+        // this the bones were posed once at spawn, and a glow card or a face
+        // such as the demon crystal's eyes stayed turned to wherever the
+        // camera was then - edge-on, and so invisible, from everywhere else.
+        if (bone.translation.hasData() || bone.rotation.hasData() || bone.scale.hasData() ||
+            (bone.flags & kM2BoneSphericalBillboard) != 0) {
             gpuModel.hasAnimation = true;
             break;
         }
@@ -1941,8 +1994,22 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     // Copy particle emitter data and resolve textures
     gpuModel.particleEmitters = model.particleEmitters;
     gpuModel.particleTextures.resize(model.particleEmitters.size(), whiteTexture_.get());
+    gpuModel.particleSkipGenericDimming.assign(model.particleEmitters.size(), 0);
     for (size_t ei = 0; ei < model.particleEmitters.size(); ei++) {
         uint16_t texIdx = model.particleEmitters[ei].texture;
+        if (texIdx < textureKeysLower.size() &&
+            textureKeysLower[texIdx].find("flame") != std::string::npos) {
+            gpuModel.particleSkipGenericDimming[ei] = 1;
+        }
+        // Strongly tinted somewhere in its life: orange, green, red. The washing
+        // toward white that the generic path does would erase exactly that, and
+        // plain dust never has it.
+        float strongestTint = 0.0f;
+        for (const glm::vec3& c : model.particleEmitters[ei].particleColor.vec3Values) {
+            strongestTint = std::max(strongestTint,
+                                     std::max({c.r, c.g, c.b}) - std::min({c.r, c.g, c.b}));
+        }
+        if (strongestTint > 0.4f) gpuModel.particleSkipGenericDimming[ei] = 1;
         if (texIdx < allTextures.size() && allTextures[texIdx] != nullptr) {
             gpuModel.particleTextures[ei] = allTextures[texIdx];
         } else {
@@ -2405,6 +2472,14 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                           " tex=", bgpu.texture,
                           " idxCount=", bgpu.indexCount);
             }
+            // Single-sided, opaque and wound inside-out: draw only what faces
+            // the camera. Kept to small models, because a sky dome or a room is
+            // wound inward to be seen from within and must keep both walls.
+            bgpu.cullBackFaces = bgpu.blendMode == 0 &&
+                                 (bgpu.materialFlags & 0x04) == 0 &&
+                                 gpuModel.boundRadius <= 12.0f &&
+                                 batchIsInsideOut(model, bgpu.indexStart, bgpu.indexCount);
+
             gpuModel.batches.push_back(bgpu);
         }
         if (beamBatchSeen) {

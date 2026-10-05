@@ -1520,6 +1520,7 @@ void M2Renderer::recreatePipelines() {
 
     // Destroy old main-pass pipelines (NOT shadow, NOT pipeline layouts)
     destroy(device, opaquePipeline_);
+    destroy(device, opaqueCullPipeline_);
     destroy(device, cutoutPipeline_);
     destroy(device, alphaTestPipeline_);
     destroy(device, alphaPipeline_);
