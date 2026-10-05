@@ -356,7 +356,7 @@ int handleRemoveProjectOrphans(int& i, int argc, char** argv) {
                 } else {
                     std::fprintf(stderr,
                         "  WARN: failed to remove %s (%s)\n",
-                        p.c_str(), ec.message().c_str());
+                        p.string().c_str(), ec.message().c_str());
                     failed++;
                 }
             }
