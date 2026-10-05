@@ -23,7 +23,7 @@ namespace wowee {
 namespace rendering { class Renderer; }
 namespace pipeline { class AssetManager; struct M2Model; struct WMOModel; }
 namespace audio { enum class VoiceType; }
-namespace game { class GameHandler; }
+namespace game { class GameHandler; class Entity; }
 
 namespace core {
 
@@ -339,6 +339,16 @@ private:
     /// model's own size, and guessing smaller would hide it.
     float creatureDisplayScale(uint32_t displayId) const;
 
+    /// The size the client draws a creature at, before the server's
+    /// OBJECT_FIELD_SCALE_X: display scale times model scale, overridden by
+    /// the creature's beast family where that is larger or it is a pet.
+    float creatureRenderScale(uint64_t guid, uint32_t displayId) const;
+    float creatureRenderScaleFor(const game::Entity* entity, uint32_t displayId) const;
+
+    /// Re-apply creatureRenderScale to spawned creatures whose level, family
+    /// or server scale has changed or arrived since they were spawned.
+    void refreshCreatureScales();
+
     /// Apply the textures a creature display names: its own skin variations,
     /// and for a humanoid the composited body, face, hair and equipment. Once
     /// per display, since the model is shared by every creature using it.
@@ -379,6 +389,14 @@ private:
     std::unordered_map<uint32_t, HumanoidDisplayExtra> humanoidExtraMap_;  // extraDisplayId → humanoid data
     std::unordered_map<uint32_t, std::string> modelIdToPath_;   // modelId → M2 path (from CreatureModelData.dbc)
     std::unordered_map<uint32_t, float> modelIdToScale_;        // modelId → CreatureModelData.ModelScale
+    // CreatureFamily.dbc: the size range a beast family grows through by level.
+    struct FamilyScale {
+        float minScale = 1.0f;
+        int32_t minScaleLevel = 0;
+        float maxScale = 1.0f;
+        int32_t maxScaleLevel = 0;
+    };
+    std::unordered_map<uint32_t, FamilyScale> familyScale_;      // familyId → scale range
     // CharHairGeosets.dbc: key = (raceId<<16)|(sexId<<8)|variationId → geosetId (skinSectionId)
     std::unordered_map<uint32_t, uint16_t> hairGeosetMap_;
     // CharFacialHairStyles.dbc: key = (raceId<<16)|(sexId<<8)|variationId → {geoset100, geoset300, geoset200}
@@ -425,6 +443,8 @@ private:
     std::unordered_map<uint64_t, uint32_t> creatureActiveEmotes_;
     std::unordered_map<uint64_t, bool> creatureWasStealthed_;
     uint32_t stealthSyncFrameCounter_ = 0;  // throttles syncCreatureStealthVisuals()
+    std::unordered_map<uint64_t, float> creatureAppliedScale_;  // guid → scale the instance was given
+    uint32_t scaleSyncFrameCounter_ = 0;  // throttles refreshCreatureScales()
     std::unordered_set<uint64_t> creatureWeaponsAttached_;
     std::unordered_map<uint64_t, uint8_t> creatureWeaponAttachAttempts_;
     std::unordered_map<uint32_t, bool> modelIdIsWolfLike_;

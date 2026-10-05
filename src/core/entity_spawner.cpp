@@ -26,6 +26,7 @@
 #include "game/game_services.hpp"
 #include "game/transport_manager.hpp"
 
+#include <bit>
 #include <cmath>
 #include <algorithm>
 #include <cctype>
@@ -82,6 +83,7 @@ void EntitySpawner::update() {
     processPendingMount();
     processPendingRemotePlayerMounts();
     syncCreatureStealthVisuals();
+    refreshCreatureScales();
 }
 
 void EntitySpawner::syncCreatureStealthVisuals() {
@@ -667,6 +669,30 @@ void EntitySpawner::buildCreatureDisplayLookups() {
             }
         }
         LOG_INFO("Loaded ", modelIdToPath_.size(), " model→path mappings");
+    }
+
+    // CreatureFamily.dbc: the size a beast family grows through as it levels.
+    // The client lets this override the display's own size - see
+    // creatureRenderScale - so a family's young are not drawn at the size
+    // their display alone asks for.
+    if (auto fam = assetManager_->loadDBC("CreatureFamily.dbc"); fam && fam->isLoaded()) {
+        const auto* famL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CreatureFamily") : nullptr;
+        const uint32_t fId = famL ? (*famL)["ID"] : 0;
+        const uint32_t fMin = famL ? (*famL)["MinScale"] : 1;
+        const uint32_t fMinLvl = famL ? (*famL)["MinScaleLevel"] : 2;
+        const uint32_t fMax = famL ? (*famL)["MaxScale"] : 3;
+        const uint32_t fMaxLvl = famL ? (*famL)["MaxScaleLevel"] : 4;
+        if (fMaxLvl < fam->getFieldCount()) {
+            for (uint32_t i = 0; i < fam->getRecordCount(); i++) {
+                FamilyScale f;
+                f.minScale = fam->getFloat(i, fMin);
+                f.minScaleLevel = static_cast<int32_t>(fam->getUInt32(i, fMinLvl));
+                f.maxScale = fam->getFloat(i, fMax);
+                f.maxScaleLevel = static_cast<int32_t>(fam->getUInt32(i, fMaxLvl));
+                familyScale_[fam->getUInt32(i, fId)] = f;
+            }
+        }
+        LOG_INFO("Loaded ", familyScale_.size(), " creature family scales");
     }
 
     // Resolve gryphon/wyvern display IDs by exact model path so taxi mounts have textures.
@@ -2132,6 +2158,80 @@ float EntitySpawner::creatureDisplayScale(uint32_t displayId) const {
     return it != displayDataMap_.end() ? it->second.displayScale : 1.0f;
 }
 
+namespace {
+// OBJECT_FIELD_SCALE_X as the spawn path reads it: unset or implausible is 1.0.
+float unitServerScale(const game::Entity& entity) {
+    const uint16_t idx = game::fieldIndex(game::UF::OBJECT_FIELD_SCALE_X);
+    if (idx == 0xFFFF) return 1.0f;
+    const uint32_t raw = entity.getField(idx);
+    if (raw == 0) return 1.0f;
+    const float s = std::bit_cast<float>(raw);
+    return (s > 0.01f && s <= 100.0f) ? s : 1.0f;
+}
+} // namespace
+
+float EntitySpawner::creatureRenderScale(uint64_t guid, uint32_t displayId) const {
+    // The 3.3.5a client (12340, FUN_0071c110) sizes a creature as the
+    // display's scale times its model's, and then lets the creature's beast
+    // family override that: the family grows linearly from minScale at
+    // minScaleLevel to maxScale at maxScaleLevel, and where that is larger -
+    // or the unit is a hunter pet, which always takes it - it wins. A
+    // Springpaw Cub is a cat on a 0.4 display, so it is drawn at no less
+    // than the cat family's size for its level.
+    if (!gameHandler_) return creatureRenderScaleFor(nullptr, displayId);
+    auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    return creatureRenderScaleFor(entity.get(), displayId);
+}
+
+float EntitySpawner::creatureRenderScaleFor(const game::Entity* entity, uint32_t displayId) const {
+    float s = creatureDisplayScale(displayId) * creatureModelScale(displayId);
+    if (!(s > 0.0f)) s = 1.0f;
+
+    if (!gameHandler_ || !entity || entity->getType() != game::ObjectType::UNIT) return s;
+    const auto* unit = static_cast<const game::Unit*>(entity);
+
+    // The family arrives with the creature query response, which can be
+    // later than the spawn; refreshCreatureScales picks it up then.
+    const uint32_t familyId = gameHandler_->getCreatureFamily(unit->getEntry());
+    auto famIt = familyScale_.find(familyId);
+    if (familyId == 0 || famIt == familyScale_.end()) return s;
+    const FamilyScale& fam = famIt->second;
+
+    const int32_t level = static_cast<int32_t>(unit->getLevel());
+    const int32_t range = fam.maxScaleLevel - fam.minScaleLevel;
+    int32_t into = level < fam.minScaleLevel ? 0 : level - fam.minScaleLevel;
+    if (into > range) into = range;
+    const float t = range != 0 ? static_cast<float>(into) / static_cast<float>(range) : 0.0f;
+    const float familySize = fam.minScale + (fam.maxScale - fam.minScale) * t;
+
+    const uint16_t petIdx = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
+    const bool isPet = petIdx != 0xFFFF && unit->getField(petIdx) != 0;
+    return (familySize > s || isPet) ? familySize : s;
+}
+
+void EntitySpawner::refreshCreatureScales() {
+    // Level, family and the server's scale can all change, or arrive, after
+    // the instance exists. A few sweeps a second is plenty for a size.
+    if (++scaleSyncFrameCounter_ % 15 != 0) return;
+    if (!renderer_ || !gameHandler_) return;
+    auto* charRenderer = renderer_->getCharacterRenderer();
+    if (!charRenderer) return;
+    const auto& entities = gameHandler_->getEntityManager().getEntities();
+    for (const auto& [guid, instanceId] : creatureInstances_) {
+        auto entIt = entities.find(guid);
+        if (entIt == entities.end() || !entIt->second) continue;
+        auto dispIt = creatureDisplayIds_.find(guid);
+        if (dispIt == creatureDisplayIds_.end()) continue;
+        const float want = unitServerScale(*entIt->second) *
+                           creatureRenderScaleFor(entIt->second.get(), dispIt->second);
+        auto& applied = creatureAppliedScale_[guid];
+        if (std::abs(applied - want) > 1e-4f) {
+            charRenderer->setInstanceScale(instanceId, want);
+            applied = want;
+        }
+    }
+}
+
 void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x, float y, float z, float orientation, float scale) {
     if (!renderer_ || !renderer_->getCharacterRenderer() || !assetManager_) return;
 
@@ -2185,7 +2285,7 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
     // model at 0.6 and at 1.5 both drawing at 1.0.
     const float dispScale = creatureDisplayScale(displayId);
     const float serverScale = scale;
-    scale *= dispScale * creatureModelScale(displayId);
+    scale *= creatureRenderScale(guid, displayId);
 
     // Measured: this server sends 1.0 for every creature whose display asks
     // for a size of its own, so it does not fold CreatureDisplayInfo's scale
@@ -2224,7 +2324,8 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
                         ", entry ", entry, ") draws ", path,
                         " at ", scale, " (server ", serverScale,
                         " x display ", dispScale,
-                        " x model ", creatureModelScale(displayId), ")");
+                        " x model ", creatureModelScale(displayId),
+                        ", family-adjusted ", creatureRenderScale(guid, displayId), ")");
         }
     }
 
@@ -2307,6 +2408,7 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
 
     // Track instance
     creatureInstances_[guid] = instanceId;
+    creatureAppliedScale_[guid] = scale;
     creatureModelIds_[guid] = modelId;
     creatureDisplayIds_[guid] = displayId;
     creatureRenderPosCache_[guid] = renderPos;

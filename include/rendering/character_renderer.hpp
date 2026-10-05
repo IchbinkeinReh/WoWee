@@ -107,6 +107,7 @@ public:
     void moveInstanceTo(uint32_t instanceId, const glm::vec3& destination, float durationSeconds);
     void startFadeIn(uint32_t instanceId, float durationSeconds);
     void setInstanceOpacity(uint32_t instanceId, float opacity);
+    void setInstanceScale(uint32_t instanceId, float scale);
     [[nodiscard]] const pipeline::M2Model* getModelData(uint32_t modelId) const;
     [[nodiscard]] const pipeline::M2Model* getInstanceModelData(uint32_t instanceId) const;
     void setActiveGeosets(uint32_t instanceId, const std::unordered_set<uint16_t>& geosets);

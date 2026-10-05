@@ -3771,6 +3771,12 @@ void CharacterRenderer::startFadeIn(uint32_t instanceId, float durationSeconds) 
     it->second.fadeInDuration = durationSeconds;
 }
 
+void CharacterRenderer::setInstanceScale(uint32_t instanceId, float scale) {
+    // Attachments take the parent's model matrix each frame, so they follow.
+    auto it = instances.find(instanceId);
+    if (it != instances.end() && scale > 0.0f) it->second.scale = scale;
+}
+
 void CharacterRenderer::setInstanceOpacity(uint32_t instanceId, float opacity) {
     auto it = instances.find(instanceId);
     if (it != instances.end()) {

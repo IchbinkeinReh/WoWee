@@ -46,6 +46,7 @@ static const UFNameEntry kUFNames[] = {
     {.name = "UNIT_FIELD_MINDAMAGE", .field = UF::UNIT_FIELD_MINDAMAGE},
     {.name = "UNIT_FIELD_MAXDAMAGE", .field = UF::UNIT_FIELD_MAXDAMAGE},
     {.name = "UNIT_FIELD_PETEXPERIENCE", .field = UF::UNIT_FIELD_PETEXPERIENCE},
+    {.name = "UNIT_FIELD_PETNUMBER", .field = UF::UNIT_FIELD_PETNUMBER},
     {.name = "UNIT_FIELD_PETNEXTLEVELEXP", .field = UF::UNIT_FIELD_PETNEXTLEVELEXP},
     {.name = "UNIT_FIELD_RESISTANCES", .field = UF::UNIT_FIELD_RESISTANCES},
     {.name = "UNIT_FIELD_STAT0", .field = UF::UNIT_FIELD_STAT0},

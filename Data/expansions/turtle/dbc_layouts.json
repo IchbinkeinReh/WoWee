@@ -60,6 +60,13 @@
     "SexID": 2,
     "SkinID": 3
   },
+  "CreatureFamily": {
+    "ID": 0,
+    "MaxScale": 3,
+    "MaxScaleLevel": 4,
+    "MinScale": 1,
+    "MinScaleLevel": 2
+  },
   "CreatureModelData": {
     "ID": 0,
     "ModelPath": 2,
