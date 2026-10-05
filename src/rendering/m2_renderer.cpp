@@ -1448,8 +1448,6 @@ void M2Renderer::markModelAsSpellEffect(uint32_t modelId) {
     if (it != models.end()) {
         it->second.isSpellEffect = true;
         // Spell effects MUST have bone animation for ribbons/particles to work.
-        // The classifier may have set disableAnimation=true based on name tokens
-        // (e.g. "chest" in HolySmite_Low_Chest.m2) - override that for spell effects.
         if (it->second.disableAnimation && it->second.hasAnimation) {
             it->second.disableAnimation = false;
             LOG_INFO("SpellEffect: re-enabled animation for '", it->second.name, "'");
@@ -1583,7 +1581,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     gpuModel.collisionNoBlock            = cls.collisionNoBlock;
     gpuModel.isGroundDetail              = cls.isGroundDetail;
     gpuModel.isFoliageLike               = cls.isFoliageLike;
-    gpuModel.disableAnimation            = cls.disableAnimation;
     gpuModel.shadowWindFoliage           = cls.shadowWindFoliage;
     gpuModel.isFireflyEffect             = cls.isFireflyEffect;
     gpuModel.isSmallFoliage              = cls.isSmallFoliage;
@@ -1606,7 +1603,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     // mid-air whenever distance culling stops its bone updates, so give it the
     // same treatment as named sky birds.
     bool flightPathDoodad = cls.isSkyBird;
-    if (!flightPathDoodad && !cls.disableAnimation) {
+    if (!flightPathDoodad) {
         glm::vec3 meshExtent = tightMax - tightMin;
         const bool smallMesh = meshExtent.x < 6.0f && meshExtent.y < 6.0f &&
                                meshExtent.z < 6.0f;

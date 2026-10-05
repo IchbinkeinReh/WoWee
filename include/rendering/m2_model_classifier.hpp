@@ -112,7 +112,6 @@ struct M2ClassificationResult {
     AmbientEmitterType ambientEmitterType = AmbientEmitterType::None;
 
     // --- Animation flags ---
-    bool disableAnimation   = false; ///< Keep visually stable (foliage, chest lids, etc.)
     bool shadowWindFoliage  = false; ///< Cast shadows in the alpha-tested foliage pass (leaf cutouts)
 };
 

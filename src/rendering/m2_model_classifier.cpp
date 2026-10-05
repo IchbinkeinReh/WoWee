@@ -335,7 +335,6 @@ M2ClassificationResult classifyM2Model(
                               || has(n, "cauldron") || has(n, "cannon")
                               || has(n, "wagon") || has(n, "cart")
                               || has(n, "table") || has(n, "desk");
-    const bool chestName      = has(n, "chest");
 
     r.collisionSteppedFountain    = has(n, "fountain");
     r.collisionSteppedLowPlatform = !r.collisionSteppedFountain
@@ -567,11 +566,6 @@ M2ClassificationResult classifyM2Model(
     // ---------------------------------------------------------------
     const bool foliageOrTree = foliageName || treeLike;
     r.isFoliageLike    = foliageOrTree && !ambientCreature;
-    // Not foliage. A tree's own bone animation is how the client moves it -
-    // there is no shader wind - so freezing it leaves the forest standing
-    // dead still. Ground detail was never frozen either: a number of detail
-    // doodads carry a small insect or butterfly that flits around the plant.
-    r.disableAnimation = chestName;
     // Which casters go through the alpha-tested foliage shadow pass, so a
     // leaf card casts its cutout rather than its quad.
     //

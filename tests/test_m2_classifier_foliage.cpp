@@ -63,9 +63,6 @@ TEST_CASE("rigid props whose names contain a foliage token do not sway",
         // it - and here "bed" comes first, so it has to win outright.
         CHECK_FALSE(classify("InnBedCanopy").isFoliageLike);
         CHECK_FALSE(classify("InnBedCanopy").shadowWindFoliage);
-        // Its own animation was being turned off as well, which is what
-        // disableAnimation does to anything read as foliage.
-        CHECK_FALSE(classify("InnBedCanopy").disableAnimation);
         // Substring matching carries the wardrobes along, which is furniture
         // too: warDRoBEDwarven.
         CHECK_FALSE(classify("WardrobeDwarvenOrnate01").isFoliageLike);
@@ -120,12 +117,9 @@ TEST_CASE("a ruin misread as foliage would also lose its collision",
     const auto ruin = classify("StranglethornRuins07", 9.0f, 7.0f);
     CHECK_FALSE(ruin.isFoliageLike);
     CHECK_FALSE(ruin.collisionNoBlock);
-    CHECK_FALSE(ruin.disableAnimation);
 
     const auto tree = classify("DustwallowTree04", 9.0f, 7.0f);
     CHECK(tree.isFoliageLike);
-    // A tree plays its own animation, as in the client.
-    CHECK_FALSE(tree.disableAnimation);
 }
 
 // isForge forces the batch additive, so a false positive renders a solid model
@@ -301,7 +295,6 @@ TEST_CASE("a small tree with leaf emitters is a tree, not an effect",
 TEST_CASE("a waterfall is not foliage, whatever zone it is named for",
           "[m2][classifier][foliage]") {
     CHECK_FALSE(classify("StranglethornWaterfall01").isFoliageLike);
-    CHECK_FALSE(classify("StranglethornWaterfall01").disableAnimation);
     CHECK(classify("StranglethornWaterfall01").isWaterfall);
 }
 

@@ -66,7 +66,6 @@ TEST_CASE("Lighthouse beams are classified for distant bone updates", "[m2][anim
         "World\\Generic\\Human\\Passive Doodads\\Stormwind\\Stormwind_LighthouseBeam_01.m2",
         glm::vec3(-1.0f), glm::vec3(1.0f), 100, 0);
     REQUIRE(beam.isLightBeam);
-    REQUIRE_FALSE(beam.disableAnimation);
 }
 
 TEST_CASE("Ship machinery is classified for distant bone updates", "[m2][animation][transport]") {
