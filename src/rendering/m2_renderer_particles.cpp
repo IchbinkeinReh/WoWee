@@ -673,11 +673,19 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
     // instances instead, asking each whether its particle vector was empty.
     // That walk was 2.0ms of a 16ms frame - two thirds of the M2 worker,
     // which is the critical path of renderWorld.
+    particleDrawOrder_.clear();
     for (size_t idx : particleInstanceIndices_) {
         if (idx >= instances.size()) continue;
+        const auto& candidate = instances[idx];
+        if (candidate.particles.empty() || !candidate.cachedModel) continue;
+        const glm::vec3 toCam = candidate.position - cachedCamPos_;
+        particleDrawOrder_.emplace_back(glm::dot(toCam, toCam), idx);
+    }
+    std::sort(particleDrawOrder_.begin(), particleDrawOrder_.end());
+    size_t droppedParticles = 0;
+
+    for (const auto& [instDistSq, idx] : particleDrawOrder_) {
         auto& inst = instances[idx];
-        if (inst.particles.empty()) continue;
-        if (!inst.cachedModel) continue;
         const auto& gpu = *inst.cachedModel;
 
 
@@ -801,7 +809,10 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             // point sprite that was too small, and a quad is the size it is.
             const float scale = rawScale;
 
-            if (vbWritten >= MAX_M2_PARTICLE_VERTS) break;
+            if (vbWritten >= MAX_M2_PARTICLE_VERTS) {
+                droppedParticles += 1;
+                continue;
+            }
             // A run per stretch of particles sharing a group. The group only
             // changes when the emitter does, and particles from one emitter
             // are adjacent, so this closes a run about once per emitter.
@@ -817,6 +828,29 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                 dg.size += scale * inst.scale;
                 dg.minZ = std::min(dg.minZ, p.position.z - inst.position.z);
                 dg.maxZ = std::max(dg.maxZ, p.position.z - inst.position.z);
+                // The first particle of each emitter, whole, once in a while:
+                // what is drawn and from what.
+                static float lastDump = -10.0f;
+                const float nowDump = std::chrono::duration<float>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                if (dg.n == 1 && nowDump - lastDump > 4.0f) {
+                    if (static_cast<size_t>(p.emitterIndex) + 1 == gpu.particleEmitters.size()) {
+                        lastDump = nowDump;
+                    }
+                    LOG_WARNING("PFX FIRST '", gpu.name, "' emitter=", p.emitterIndex,
+                                " at=(", p.position.x - inst.position.x, ",",
+                                p.position.y - inst.position.y, ",",
+                                p.position.z - inst.position.z, ")",
+                                " life=", p.life, "/", p.maxLife,
+                                " color=(", color.r, ",", color.g, ",", color.b, ")",
+                                " alpha=", alpha, " half=", scale * p.sizeVary,
+                                " tile=", p.tileIndex, " tiles=", cachedTilesX, "x", cachedTilesY,
+                                " tex=", (cachedTex && cachedTex->isValid()) ? "ok" : "INVALID",
+                                " texSet=", (cachedGroup && cachedGroup->preAllocSet != VK_NULL_HANDLE)
+                                                ? "ok" : "NULL",
+                                " blend=", static_cast<int>(cachedBlendType),
+                                " flags=0x", std::hex, cachedEm->flags, std::dec);
+                }
             }
             widestParticle = std::max(widestParticle, scale);
 
@@ -828,16 +862,6 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             vd[4] = color.g;
             vd[5] = color.b;
             vd[6] = alpha;
-            // A particle's size is in model units, like its position and its
-            // speed - both of which carry the instance's scale. The size did not,
-            // so on a scaled model the particles flew its full distance and were
-            // drawn at a fraction of the size: the demon crystal's fire was a few
-            // sparse specks.
-            // Only an emitter flagged 0x400 follows the model's own scale; the
-            // rest are the same size however large the model is drawn. The
-            // client's quad is twice its size across, which is what the point
-            // scale below gives, and it does so for the exempt group alone:
-            // everything else keeps the fixed 500 it was tuned against.
             // The quad is a size either side of the centre, so this is half its
             // width: the scale, times the particle's own roll of the spread, and
             // the model's scale where the emitter is flagged 0x400.
@@ -857,14 +881,16 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         }
 
         if (!emitterDiag.empty()) {
-            static float lastDiagSeconds = -10.0f;
+            // Per instance, so every one of a model's instances says what it has.
+            static std::unordered_map<uint32_t, float> lastDiagByInstance;
+            float& lastDiagSeconds = lastDiagByInstance.try_emplace(inst.id, -10.0f).first->second;
             const float now = std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
             if (now - lastDiagSeconds > 2.0f) {
                 lastDiagSeconds = now;
                 for (size_t ei = 0; ei < emitterDiag.size(); ++ei) {
                     const auto& dg = emitterDiag[ei];
                     const float n = std::max<float>(1.0f, static_cast<float>(dg.n));
-                    LOG_WARNING("PARTICLE DIAG '", gpu.name, "' scale=", inst.scale, " emitter=", ei,
+                    LOG_WARNING("PARTICLE DIAG '", gpu.name, "' inst=", inst.id, " go=", inst.isGameObject ? 1 : 0, " pos=(", inst.position.x, ",", inst.position.y, ",", inst.position.z, ") scale=", inst.scale, " emitter=", ei,
                                 " alive=", dg.n, " avgAlpha=", dg.alpha / n,
                                 " avgSize=", dg.size / n, " z=[", dg.minZ, ",", dg.maxZ, "]",
                                 " blend=", static_cast<int>(gpu.particleEmitters[ei].blendingType),
@@ -891,6 +917,17 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                                 inst.particles.size(), " live, largest ", widestParticle, " yd)");
                 }
             }
+        }
+    }
+
+    if (droppedParticles > 0) {
+        static float lastSaid = -30.0f;
+        const float nowSaid = std::chrono::duration<float>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (nowSaid - lastSaid > 10.0f) {
+            lastSaid = nowSaid;
+            LOG_WARNING("Particle buffer full: ", droppedParticles,
+                        " of the furthest particles not drawn this frame (", vbWritten, " drawn)");
         }
     }
 

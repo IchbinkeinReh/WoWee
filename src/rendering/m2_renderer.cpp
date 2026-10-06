@@ -272,6 +272,8 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
             {.location = 3, .binding = 0, .format = VK_FORMAT_R32_SFLOAT, .offset = 8 * sizeof(float)},          // tile
         };
 
+        // WOWEE_PFX_NODEPTH=1: particles ignore the depth buffer (a diagnostic).
+        const bool pfxNoDepth = std::getenv("WOWEE_PFX_NODEPTH") != nullptr;
         auto buildParticlePipeline = [&](VkPipelineColorBlendAttachmentState blend) -> VkPipeline {
             return PipelineBuilder()
                 .setShaders(particleVert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
@@ -279,7 +281,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                 .setVertexInput({pBind}, pAttrs)
                 .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
                 .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-                .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+                .setDepthTest(!pfxNoDepth, false, VK_COMPARE_OP_LESS_OR_EQUAL)
                 .setColorBlendAttachment(blend)
                 .setMultisample(vkCtx_->getMsaaSamples())
                 .setLayout(particlePipelineLayout_)

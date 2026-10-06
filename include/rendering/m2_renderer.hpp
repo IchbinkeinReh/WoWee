@@ -1138,7 +1138,12 @@ private:
     std::vector<ParticleRun> particleRuns_;
     /// Vertices the particle buffer holds. Not MAX_M2_PARTICLES, which is the
     /// cap on one instance's particles: this has to hold a whole frame's.
-    static constexpr size_t MAX_M2_PARTICLE_VERTS = 32768;
+    static constexpr size_t MAX_M2_PARTICLE_VERTS = 131072;
+    /// The instances with live particles this frame, nearest first, so that when
+    /// the buffer is full it is the far ones that go without and not whichever
+    /// was made last - a campfire a player lights is made after every doodad of
+    /// the zone and was the one left out.
+    std::vector<std::pair<float, size_t>> particleDrawOrder_;
 
     // Animation update buffers (avoid per-frame allocation)
     std::vector<size_t> boneWorkIndices_;        // Reused each frame
