@@ -111,6 +111,13 @@ public:
     void setInstanceRotation(uint32_t instanceId, const glm::vec3& rotation);
     void setInstanceTorsoYaw(uint32_t instanceId, float deltaYawRad);
     void moveInstanceTo(uint32_t instanceId, const glm::vec3& destination, float durationSeconds);
+    /// How fast the unit drawn by this instance is moving, in yards a second
+    /// (zero standing). Its movement animation plays at this over the
+    /// sequence's movingSpeed, as the client's does; see
+    /// m2_track::locomotionPlaybackRate. Set it before playAnimation, which
+    /// also reads it to carry the stride over from one movement sequence to
+    /// the next.
+    void setLocomotionSpeed(uint32_t instanceId, float yardsPerSecond);
     void startFadeIn(uint32_t instanceId, float durationSeconds);
     void setInstanceOpacity(uint32_t instanceId, float opacity);
     void setInstanceScale(uint32_t instanceId, float scale);
@@ -272,6 +279,8 @@ private:
         bool armSequenceLoops[2] = {false, false};  // Idle arm loops; a reaching arm holds its last frame
         std::vector<int8_t> boneArm;  // Per bone: 0 left arm, 1 right arm, -1 neither; built by setArmAnimations
         float animationTime = 0.0f;
+        float locomotionSpeed = 0.0f;  // yards a second the unit moves at; see setLocomotionSpeed
+        float playbackRate = 1.0f;     // the rate animationTime last advanced at
         float globalSequenceTime = 0.0f; // Separate timer for global sequences (accumulates without wrapping at sequence duration)
         bool animationLoop = true;
         /// The sequence the body is blending out of; see m2_track::SequenceBlend.

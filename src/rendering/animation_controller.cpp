@@ -1071,6 +1071,16 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
     // Evaluate MountFSM
     auto mountOut = mountFSM.evaluate(mountIn);
 
+    // The mount's stride follows the speed the player moves at, the rider's
+    // does not move (FUN_007385c0 scales only movement animations).
+    if (characterRenderer) {
+        if (mountInstanceId_ > 0) {
+            characterRenderer->setLocomotionSpeed(mountInstanceId_,
+                                                  cameraController->getLocomotionSpeed());
+        }
+        characterRenderer->setLocomotionSpeed(characterInstanceId, 0.0f);
+    }
+
     // Apply mount animation if changed
     if (mountOut.mountAnimChanged && mountInstanceId_ > 0 && characterRenderer) {
         characterRenderer->playAnimation(mountInstanceId_, mountOut.mountAnimId, mountOut.mountAnimLoop);
@@ -1168,6 +1178,12 @@ void AnimationController::updateCharacterAnimation() {
     if (characterRenderer && characterInstanceId > 0) {
         fi.haveAnimState = characterRenderer->getAnimationState(
             characterInstanceId, fi.currentAnimId, fi.currentAnimTime, fi.currentAnimDuration);
+    }
+
+    // The speed the character's movement animation plays to (FUN_007385c0).
+    if (characterRenderer && characterInstanceId > 0) {
+        characterRenderer->setLocomotionSpeed(characterInstanceId,
+                                              cameraController->getLocomotionSpeed());
     }
 
     // Inject FrameInput and resolve animation via CharacterAnimator

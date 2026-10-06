@@ -124,11 +124,34 @@ public:
     }
 
     // Multi-segment path movement (Catmull-Rom spline interpolation)
-    void startMoveAlongPath(const std::vector<std::array<float, 3>>& path, float destO, float totalDuration) {
-        if (path.empty()) return;
-        if (path.size() == 1 || totalDuration <= 0.0f) {
-            startMoveTo(path.back()[0], path.back()[1], path.back()[2], destO, totalDuration);
+    void startMoveAlongPath(const std::vector<std::array<float, 3>>& packetPath, float destO, float totalDuration) {
+        if (packetPath.empty()) return;
+        if (packetPath.size() == 1 || totalDuration <= 0.0f) {
+            startMoveTo(packetPath.back()[0], packetPath.back()[1], packetPath.back()[2], destO, totalDuration);
             return;
+        }
+        // A spline is not extrapolated past its end: the server sends the next.
+        continuesMoving_ = false;
+        // Snap position if in overrun phase: the renderer showed moveEnd.
+        if (isMoving_ && moveElapsed_ >= moveDuration_) {
+            x = moveEndX_; y = moveEndY_; z = moveEndZ_;
+        }
+        // The client's spline starts where the unit is drawn, not where the
+        // packet says the server had it: CGUnit_C's monster-move handler
+        // (FUN_0073c8e0) puts the unit's current position (vfunc +0x30) first
+        // and keeps the packet's start after it only when the two are more
+        // than 0.00077160494 apart squared. Starting at the packet's start
+        // jumped a unit redirected mid-move back or forward to it.
+        std::vector<std::array<float, 3>> path;
+        path.reserve(packetPath.size() + 1);
+        {
+            const float sx = packetPath[0][0] - x;
+            const float sy = packetPath[0][1] - y;
+            const float sz = packetPath[0][2] - z;
+            constexpr float kSameStartDistanceSq = 0.00077160494f;
+            path.push_back({x, y, z});
+            if (sx * sx + sy * sy + sz * sz >= kSameStartDistanceSq) path.push_back(packetPath[0]);
+            path.insert(path.end(), packetPath.begin() + 1, packetPath.end());
         }
         // Build cumulative distances for proportional time assignment.
         // (Stored in a tiny stack/heap vector - typical N is <=15 waypoints,
@@ -157,26 +180,27 @@ public:
         activeSpline_.emplace(std::move(keys), /*timeClosed=*/false);
         splineDurationMs_ = durationMs;
 
-        // Snap position if in overrun phase
-        if (isMoving_ && moveElapsed_ >= moveDuration_) {
-            x = moveEndX_; y = moveEndY_; z = moveEndZ_;
-        }
-        moveEndX_ = path.back()[0]; moveEndY_ = path.back()[1]; moveEndZ_ = path.back()[2];
-        moveDuration_ = totalDuration;
-        moveElapsed_ = 0.0f;
-        orientation = destO;
-        isMoving_ = true;
-        usePathMode_ = true;
-        // Velocity for dead-reckoning after path completes
-        float fromX = isMoving_ ? moveEndX_ : x;
-        float fromY = isMoving_ ? moveEndY_ : y;
-        float impliedVX = (path.back()[0] - fromX) / totalDuration;
-        float impliedVY = (path.back()[1] - fromY) / totalDuration;
-        float impliedVZ = (path.back()[2] - path[0][2]) / totalDuration;
+        // Velocity for dead-reckoning after path completes, from the previous
+        // destination as startMoveTo takes it.
+        const float fromX = isMoving_ ? moveEndX_ : x;
+        const float fromY = isMoving_ ? moveEndY_ : y;
+        const float impliedVX = (path.back()[0] - fromX) / totalDuration;
+        const float impliedVY = (path.back()[1] - fromY) / totalDuration;
+        const float impliedVZ = (path.back()[2] - path[0][2]) / totalDuration;
         const float alpha = 0.65f;
         velX_ = alpha * impliedVX + (1.0f - alpha) * velX_;
         velY_ = alpha * impliedVY + (1.0f - alpha) * velY_;
         velZ_ = alpha * impliedVZ + (1.0f - alpha) * velZ_;
+
+        moveEndX_ = path.back()[0]; moveEndY_ = path.back()[1]; moveEndZ_ = path.back()[2];
+        moveDuration_ = totalDuration;
+        moveElapsed_ = 0.0f;
+        // The spline's length over its duration: what the client's
+        // CMovement::GetCurrentSpeed (FUN_00987570) answers for a unit on one.
+        moveSpeed_ = totalDist / totalDuration;
+        orientation = destO;
+        isMoving_ = true;
+        usePathMode_ = true;
     }
 
     // Movement interpolation (syncs entity position with renderer during movement)
@@ -191,12 +215,14 @@ public:
         // positive duration without any actual displacement. Treat these as
         // authoritative stops; otherwise isActivelyMoving() drives Run/Walk
         // while the model has nowhere to move. This applies equally to nearby
-        // players and creatures.
+        // players and creatures - except a unit whose flags say it is still
+        // under way (setContinuesMoving, set before this call), which is
+        // moving even when this packet lands where it was drawn.
         const float remainingX = destX - x;
         const float remainingY = destY - y;
         const float remainingZ = destZ - z;
         constexpr float kNoOpMoveDistanceSq = 0.02f * 0.02f;
-        if (remainingX * remainingX + remainingY * remainingY +
+        if (!continuesMoving_ && remainingX * remainingX + remainingY * remainingY +
                 remainingZ * remainingZ <= kNoOpMoveDistanceSq) {
             setPosition(destX, destY, destZ, destO);
             return;
@@ -204,8 +230,10 @@ public:
         // If we're in the dead-reckoning overrun phase, snap x/y/z back to the
         // destination before using them as the new start.  The renderer was showing
         // the entity at moveEnd (via getLatest) during overrun, so the new
-        // interpolation must start there to avoid a visible teleport.
-        if (isMoving_ && moveElapsed_ >= moveDuration_) {
+        // interpolation must start there to avoid a visible teleport. A unit
+        // that was being extrapolated (continuesMoving_) was drawn where x/y/z
+        // are, so it carries on from there.
+        if (isMoving_ && moveElapsed_ >= moveDuration_ && !continuesMoving_) {
             x = moveEndX_;
             y = moveEndY_;
             z = moveEndZ_;
@@ -231,8 +259,29 @@ public:
         moveEndX_ = destX; moveEndY_ = destY; moveEndZ_ = destZ;
         moveDuration_ = durationSec;
         moveElapsed_ = 0.0f;
+        const float segX = destX - x, segY = destY - y, segZ = destZ - z;
+        moveSpeed_ = std::sqrt(segX * segX + segY * segY + segZ * segZ) / durationSec;
         orientation = destO;
         isMoving_ = true;
+    }
+
+    /// Whether the unit is expected to keep moving past the end of the current
+    /// segment: a player whose last movement packet still had a direction
+    /// flag set. The client moves such a unit on by its flags until it is told
+    /// to stop; here it is dead-reckoned on at its last velocity for up to
+    /// one more interval (updateMovement), and counts as actively moving while
+    /// it is, instead of standing at the segment's end until the next
+    /// heartbeat arrives. Set it before startMoveTo. A spline
+    /// (startMoveAlongPath) clears it.
+    void setContinuesMoving(bool continues) { continuesMoving_ = continues; }
+
+    /// The speed of the current movement, in yards a second, while the
+    /// entity is actively moving; zero otherwise. Set from each segment's
+    /// length over its duration, or by setMoveSpeed when the caller knows it
+    /// better.
+    [[nodiscard]] float getMoveSpeed() const { return isActivelyMoving() ? moveSpeed_ : 0.0f; }
+    void setMoveSpeed(float yardsPerSecond) {
+        if (std::isfinite(yardsPerSecond) && yardsPerSecond >= 0.0f) moveSpeed_ = yardsPerSecond;
     }
 
     void updateMovement(float deltaTime) {
@@ -278,7 +327,7 @@ public:
     /// Unlike isEntityMoving(), this does NOT include the dead-reckoning overrun window,
     /// so animations (Run/Walk) should use this to avoid "running in place" after arrival.
     [[nodiscard]] bool isActivelyMoving() const {
-        return isMoving_ && moveElapsed_ < moveDuration_;
+        return isMoving_ && (moveElapsed_ < moveDuration_ || continuesMoving_);
     }
 
     // Returns the latest server-authoritative position: destination if moving, current if not.
@@ -334,6 +383,8 @@ protected:
     float moveDuration_ = 0;
     float moveElapsed_ = 0;
     float velX_ = 0, velY_ = 0, velZ_ = 0;  // Smoothed velocity for dead reckoning
+    float moveSpeed_ = 0;                   // Current movement's speed; see getMoveSpeed
+    bool continuesMoving_ = false;          // Extrapolate past the segment; see setContinuesMoving
     // CatmullRom spline for multi-segment path movement (replaces linear pathPoints_/pathSegDists_)
     std::optional<math::CatmullRomSpline> activeSpline_;
     uint32_t splineDurationMs_ = 0;

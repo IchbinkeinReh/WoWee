@@ -54,6 +54,66 @@ TEST_CASE("Entity still interpolates meaningful movement", "[entity][movement]")
     REQUIRE(e.isActivelyMoving());
 }
 
+TEST_CASE("Entity reports the speed of the movement under way", "[entity][movement]") {
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    REQUIRE(e.getMoveSpeed() == 0.0f);
+
+    e.startMoveTo(3.0f, 4.0f, 0.0f, 0.0f, 2.0f);
+    REQUIRE(e.getMoveSpeed() == Catch::Approx(2.5f));
+    e.setMoveSpeed(7.0f);
+    REQUIRE(e.getMoveSpeed() == Catch::Approx(7.0f));
+
+    // Arrived: nothing under way.
+    e.updateMovement(2.5f);
+    REQUIRE(e.getMoveSpeed() == 0.0f);
+}
+
+TEST_CASE("A spline starts where the entity is, as the client's does",
+          "[entity][movement]") {
+    // FUN_0073c8e0 puts the unit's current position first; a unit redirected
+    // mid-move must not jump to the packet's start.
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    const std::vector<std::array<float, 3>> path = {
+        {{2.0f, 0.0f, 0.0f}}, {{4.0f, 0.0f, 0.0f}}, {{6.0f, 0.0f, 0.0f}}};
+    e.startMoveAlongPath(path, 0.0f, 3.0f);
+    e.updateMovement(0.001f);
+    REQUIRE(e.getX() < 0.1f);
+    // Six yards in three seconds, from where it stood.
+    REQUIRE(e.getMoveSpeed() == Catch::Approx(2.0f));
+    e.updateMovement(2.998f);
+    REQUIRE(e.getX() == Catch::Approx(6.0f).margin(0.01f));
+}
+
+TEST_CASE("A unit still under way is carried on past a late packet", "[entity][movement]") {
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.setContinuesMoving(true);
+    e.startMoveTo(3.5f, 0.0f, 0.0f, 0.0f, 0.5f);
+    // The next heartbeat is late: past the segment's end the unit keeps going
+    // at its velocity and still counts as moving.
+    e.updateMovement(0.6f);
+    REQUIRE(e.isActivelyMoving());
+    REQUIRE(e.getX() > 3.5f);
+    const float drawnX = e.getX();
+    // The late packet carries on from where it was drawn, not from 3.5.
+    e.startMoveTo(7.0f, 0.0f, 0.0f, 0.0f, 0.5f);
+    e.updateMovement(0.0f);
+    REQUIRE(e.getX() == Catch::Approx(drawnX));
+    // Two intervals without a packet: stopped.
+    e.updateMovement(1.1f);
+    REQUIRE_FALSE(e.isActivelyMoving());
+}
+
+TEST_CASE("A unit not under way stops at the segment's end", "[entity][movement]") {
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveTo(3.5f, 0.0f, 0.0f, 0.0f, 0.5f);
+    e.updateMovement(0.6f);
+    REQUIRE_FALSE(e.isActivelyMoving());
+}
+
 TEST_CASE("Entity field set/get/has", "[entity]") {
     Entity e;
     REQUIRE_FALSE(e.hasField(10));

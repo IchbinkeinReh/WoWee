@@ -345,6 +345,7 @@ void CameraController::setFlyingActive(bool active) {
 glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInput& f,
                                                   glm::vec3& prevTargetPos) {
     // Move the follow target (character position) instead of the camera
+    locomotionSpeed_ = 0.0f;
     prevTargetPos = *followTarget;
     glm::vec3 targetPos = *followTarget;
     if (!externalFollow_) {
@@ -534,6 +535,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             // Use backward swim speed when moving backwards only (not when combining with strafe)
             float applySpeed = (f.nowBackward && !f.nowForward) ? swimBackSpeed : swimSpeed;
             targetPos += swimMove * applySpeed * f.physicsDeltaTime;
+            locomotionSpeed_ = applySpeed;
         }
 
         // Spacebar = swim up, X = swim down (both continuous, not a jump)
@@ -746,6 +748,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
                                          ? flightBackSpeedOverride_ : flyFwdSpeed * 0.5f;
                 float flySpeed = (f.nowBackward && !f.nowForward) ? flyBackSpeed : flyFwdSpeed;
                 targetPos += flyMove * flySpeed * f.physicsDeltaTime;
+                locomotionSpeed_ = flySpeed;
             }
             targetPos.z += verticalVelocity * f.physicsDeltaTime;
 
@@ -784,6 +787,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         if (moveLenSq > 1e-6f) {
             f.movement *= glm::inversesqrt(moveLenSq);
             targetPos += f.movement * f.speed * f.physicsDeltaTime;
+            locomotionSpeed_ = f.speed;
         }
 
         // Apply server-driven knockback horizontal velocity (decays over time).

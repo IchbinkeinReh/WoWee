@@ -2194,8 +2194,33 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
         m2_track::beginSequenceBlend(
             instance.sequenceBlend, instance.globalSequenceTime, previousSequence, previousTime,
             previousLoops, previousFinished, instance.currentSequenceIndex,
-            model.sequences[instance.currentSequenceIndex].blendTime, model.sequences);
+            model.sequences[instance.currentSequenceIndex].blendTime, model.sequences,
+            instance.playbackRate);
     }
+
+    // A moving unit going from one movement sequence to another keeps its
+    // stride: the new one starts at the fraction of its length the old had
+    // reached (FUN_007385c0, see m2_track::locomotionPhaseTime). The client
+    // asks for this only when the new animation is a movement one with a
+    // movingSpeed, the unit is moving, and the old sequence has a movingSpeed
+    // and a length.
+    if (instance.locomotionSpeed > 0.0f && instance.currentSequenceIndex >= 0 &&
+        previousSequence >= 0 && static_cast<size_t>(previousSequence) < model.sequences.size()) {
+        const auto& from = model.sequences[static_cast<size_t>(previousSequence)];
+        const auto& to = model.sequences[static_cast<size_t>(instance.currentSequenceIndex)];
+        if (m2_track::isLocomotionAnimation(to.id) && to.movingSpeed != 0.0f &&
+            from.movingSpeed != 0.0f) {
+            instance.animationTime =
+                m2_track::locomotionPhaseTime(previousTime, from.duration, to.duration);
+        }
+    }
+}
+
+void CharacterRenderer::setLocomotionSpeed(uint32_t instanceId, float yardsPerSecond) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    it->second.locomotionSpeed =
+        std::isfinite(yardsPerSecond) ? std::max(0.0f, yardsPerSecond) : 0.0f;
 }
 
 void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
@@ -2249,7 +2274,14 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
                 inst.currentAnimationId = inst.cachedModel->data.sequences[0].id;
             }
             const auto& seq = inst.cachedModel->data.sequences[inst.currentSequenceIndex];
-            inst.animationTime += deltaTime * 1000.0f;
+            // A movement sequence plays at the unit's speed over its own
+            // movingSpeed, so the feet keep to the ground (FUN_007385c0 sets
+            // the rate, FUN_0082f0f0 runs time at it). Recomputed each frame
+            // from the current speed, which keeps the sequence's time as
+            // FUN_00827000 does when the client changes a playing rate.
+            inst.playbackRate = m2_track::locomotionPlaybackRate(
+                seq.id, seq.movingSpeed, inst.scale, inst.locomotionSpeed);
+            inst.animationTime += deltaTime * 1000.0f * inst.playbackRate;
             if (seq.duration > 0 && inst.animationTime >= static_cast<float>(seq.duration)) {
                 const auto& seqs = inst.cachedModel->data.sequences;
                 const int primary = inst.primarySequenceIndex;
@@ -2268,7 +2300,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
                         m2_track::beginSequenceBlend(
                             inst.sequenceBlend, inst.globalSequenceTime, oldSeq, oldDur,
                             /*currentLoops=*/false, /*currentFinished=*/false, next,
-                            seqs[next].blendTime, seqs);
+                            seqs[next].blendTime, seqs, inst.playbackRate);
                         inst.currentSequenceIndex = next;
                     }
                     const float newDur = static_cast<float>(seqs[inst.currentSequenceIndex].duration);
@@ -3864,36 +3896,25 @@ void CharacterRenderer::moveInstanceTo(uint32_t instanceId, const glm::vec3& des
     // Don't move dead instances (corpses shouldn't slide around)
     if (inst.isDead) return;
 
-    auto pickMoveAnim = [&](bool preferRun) -> uint32_t {
-        // Choose movement anim from estimated speed; fall back if missing.
-        if (preferRun) {
-            if (hasAnimation(instanceId, 5)) return 5; // Run
-            if (hasAnimation(instanceId, 4)) return 4; // Walk
-        } else {
-            if (hasAnimation(instanceId, 4)) return 4; // Walk
-            if (hasAnimation(instanceId, 5)) return 5; // Run
-        }
-        return 0;
-    };
-
+    // Movement only. Which animation a moving unit plays - Walk, Run, Swim,
+    // Fly, a rider's Mount - is the per-frame sync's choice, from the unit's
+    // movement flags. Choosing Walk or Run here as well, from this segment's
+    // apparent speed, replaced a remote player's Swim and Fly with Run on
+    // every frame it moved, and its rider's Mount pose with Run, which the
+    // sync then put back - restarting the pose each frame.
     float pdx = destination.x - inst.position.x;
     float pdy = destination.y - inst.position.y;
     float planarDistSq = pdx * pdx + pdy * pdy;
-    bool synthesizedDuration = false;
     if (durationSeconds <= 0.0f) {
         if (planarDistSq < 1e-4f) {
             // Stop at current location.
             inst.position = destination;
             inst.isMoving = false;
-            if (inst.currentAnimationId == anim::WALK || inst.currentAnimationId == anim::RUN) {
-                playAnimation(instanceId, anim::STAND, true);
-            }
             return;
         }
         // Some cores send movement-only deltas without spline duration.
-        // Synthesize a tiny duration so movement anim/rotation still updates.
+        // Synthesize a tiny duration so movement still updates.
         durationSeconds = std::clamp(std::sqrt(planarDistSq) / 7.0f, 0.05f, 0.20f);
-        synthesizedDuration = true;
     }
 
     inst.moveStart = inst.position;
@@ -3907,15 +3928,6 @@ void CharacterRenderer::moveInstanceTo(uint32_t instanceId, const glm::vec3& des
     if (dir.x * dir.x + dir.y * dir.y > 1e-6f) {
         float angle = std::atan2(dir.y, dir.x);
         inst.rotation.z = angle;
-    }
-
-    // Play movement animation while moving.
-    // Prefer run only when speed is clearly above normal walk pace.
-    float moveSpeed = std::sqrt(planarDistSq) / std::max(durationSeconds, 0.001f);
-    bool preferRun = (!synthesizedDuration && moveSpeed >= 4.5f);
-    uint32_t moveAnim = pickMoveAnim(preferRun);
-    if (moveAnim != 0 && inst.currentAnimationId != moveAnim) {
-        playAnimation(instanceId, moveAnim, true);
     }
 }
 

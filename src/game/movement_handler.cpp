@@ -1295,10 +1295,18 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     }
 
     uint32_t durationMs = 120;
+    // The mover's own speed: the distance from its last reported position
+    // over the time between the two packets' movement timestamps, which the
+    // mover stamped and network jitter leaves alone. -1 when unknown.
+    float measuredSpeed = -1.0f;
     auto itPrev = otherPlayerMoveTimeMs_.find(moverGuid);
     if (itPrev != otherPlayerMoveTimeMs_.end()) {
         uint32_t rawDt = info.time - itPrev->second;
         if (rawDt >= 20 && rawDt <= 2000) {
+            const glm::vec3 lastReported(entity->getLatestX(), entity->getLatestY(),
+                                         entity->getLatestZ());
+            measuredSpeed = glm::length(canonical - lastReported) /
+                            (static_cast<float>(rawDt) / 1000.0f);
             float fDt = static_cast<float>(rawDt);
             auto& smoothed = otherPlayerSmoothedIntervalMs_[moverGuid];
             if (smoothed < 1.0f) smoothed = fDt;
@@ -1319,7 +1327,20 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     const bool isJumpOpcode  = (wireOp == wireOpcode(Opcode::MSG_MOVE_JUMP));
 
     const float entityDuration = isStopOpcode ? 0.0f : (durationMs / 1000.0f);
+    // Still under way: the client keeps moving another player by the
+    // direction flags of its last packet (CMovement::GetCurrentSpeed,
+    // FUN_00987570, tests the same 0xc0000f) until a stop arrives, rather
+    // than standing it at each heartbeat's position until the next one.
+    constexpr uint32_t kDirectionFlags =
+        static_cast<uint32_t>(MovementFlags::FORWARD) |
+        static_cast<uint32_t>(MovementFlags::BACKWARD) |
+        static_cast<uint32_t>(MovementFlags::STRAFE_LEFT) |
+        static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT) |
+        static_cast<uint32_t>(MovementFlags::ASCENDING) |
+        static_cast<uint32_t>(MovementFlags::DESCENDING);
+    entity->setContinuesMoving(!isStopOpcode && (info.flags & kDirectionFlags) != 0);
     entity->startMoveTo(canonical.x, canonical.y, canonical.z, canYaw, entityDuration);
+    if (measuredSpeed >= 0.0f) entity->setMoveSpeed(measuredSpeed);
 
     if (owner_.creatureMoveCallbackRef()) {
         const uint32_t notifyDuration = isStopOpcode ? 0u : durationMs;

@@ -163,6 +163,11 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
                     bool gotState = cr->getAnimationState(instanceId, curAnimId, curT, curDur);
                     const bool walking = entitySpawner_.getCreatureWalkingState().count(guid) > 0;
                     const uint32_t targetAnim = walking ? rendering::anim::WALK : rendering::anim::RUN;
+                    // The new spline's speed, before the play reads it to carry
+                    // the stride over from Walk to Run.
+                    if (auto entity = gameHandler_.getEntityManager().getEntity(guid)) {
+                        cr->setLocomotionSpeed(instanceId, entity->getMoveSpeed());
+                    }
                     // Only restart when the selected locomotion animation changed.
                     if (!gotState || (curAnimId != rendering::anim::DEATH && curAnimId != targetAnim)) {
                         cr->playAnimation(instanceId, targetAnim, /*loop=*/true);

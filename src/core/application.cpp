@@ -3354,6 +3354,11 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // the renderer to the correct destination via the spline packet.
                 posIt->second = renderPos;
 
+                // The speed its movement animation plays to: the spline's,
+                // as the client's GetCurrentSpeed gives it for a unit on one.
+                charRenderer->setLocomotionSpeed(
+                    instanceId, isMovingNow ? entity->getMoveSpeed() : 0.0f);
+
                 // Drive movement animation: Walk/Run/Swim (4/5/42) when moving,
                 // Stand/SwimIdle (0/41) when idle. Walk(4) selected when WALKING flag is set.
                 // WoW M2 animation IDs: 4=Walk, 5=Run, 41=SwimIdle, 42=Swim.
@@ -3540,6 +3545,14 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     }
                 }
                 posIt->second = renderPos;
+
+                // The speed the player's (or its mount's) movement animation
+                // plays to - see the creature loop above.
+                const float locomotionSpeed = isMovingNow ? entity->getMoveSpeed() : 0.0f;
+                charRenderer->setLocomotionSpeed(instanceId, locomotionSpeed);
+                if (remoteMount) {
+                    charRenderer->setLocomotionSpeed(remoteMount->instanceId, locomotionSpeed);
+                }
 
                 // Drive movement animation (same logic as creatures)
                 const bool isSwimmingNow = _pCreatureSwimmingState.count(guid) > 0;

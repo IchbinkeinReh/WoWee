@@ -2150,6 +2150,14 @@ register_test_target(test_m2_color_track)
 wowee_add_test(test_m2_sequence_blend
     SOURCES test_m2_sequence_blend.cpp)
 
+# ── test_m2_locomotion_rate ──────────────────────────────────
+# The rate a movement animation plays at, as FUN_007385c0 sets it: the unit's
+# speed over the sequence's (scaled) movingSpeed, for the ids FUN_00714e80
+# names; the stride carried from one moving sequence to the next; and the
+# blended-out sequence keeping its rate.
+wowee_add_test(test_m2_locomotion_rate
+    SOURCES test_m2_locomotion_rate.cpp)
+
 # ── test_m2_sequence_variation ───────────────────────────────
 # Which variation of an animation plays, rolled along the chain by frequency
 # as FUN_00826e60 does, and which loop and transitions each stand state plays.

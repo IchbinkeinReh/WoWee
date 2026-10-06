@@ -210,6 +210,7 @@ struct SequenceBlend {
     bool fromLoops = true;      // wraps at its length, or holds at its end
     float startClockMs = 0.0f;  // the instance clock at the switch
     float blendTimeMs = 0.0f;   // the new sequence's blendTime
+    float fromRate = 1.0f;      // its playback rate at the switch, which it keeps
 };
 
 /// What a frame samples the old pose at, and how much of it there is.
@@ -230,7 +231,7 @@ inline BlendSample currentBlend(const SequenceBlend& blend, float clockMs,
     const float elapsed = clockMs - blend.startClockMs;
     const float weight = sequenceBlendWeight(blend.blendTimeMs - elapsed, blend.blendTimeMs);
     if (weight <= 0.0f) return {};
-    float time = blend.fromTimeMs + std::max(0.0f, elapsed);
+    float time = blend.fromTimeMs + std::max(0.0f, elapsed) * blend.fromRate;
     const float duration =
         static_cast<float>(sequences[static_cast<size_t>(blend.fromSequence)].duration);
     if (duration > 0.0f) {
@@ -242,19 +243,23 @@ inline BlendSample currentBlend(const SequenceBlend& blend, float clockMs,
 
 /// Record a switch away from `currentSequence` at `currentTimeMs`, to a
 /// sequence whose blendTime is `newBlendTimeMs` (FUN_00826c40). Call before
-/// the instance's own sequence and time change.
+/// the instance's own sequence and time change. `currentRate` is the rate the
+/// old sequence was playing at: FUN_00826c40 copies the whole time state,
+/// speed (+0x14) included, into the old slot, and FUN_00827000 only ever
+/// changes the playing one's, so the old pose runs on at the rate it had.
 inline void beginSequenceBlend(SequenceBlend& blend, float clockMs,
                                int currentSequence, float currentTimeMs,
                                bool currentLoops, bool currentFinished,
                                int newSequence, uint32_t newBlendTimeMs,
-                               const std::vector<pipeline::M2Sequence>& sequences) {
+                               const std::vector<pipeline::M2Sequence>& sequences,
+                               float currentRate = 1.0f) {
     if (currentSequence < 0) return;
     if (currentFinished && newSequence == currentSequence) return;
     const BlendSample running = currentBlend(blend, clockMs, sequences, -1, 0.0f);
     if (running.weight > 0.5f) return;
     blend = {.fromSequence = currentSequence, .fromTimeMs = currentTimeMs,
              .fromLoops = currentLoops, .startClockMs = clockMs,
-             .blendTimeMs = static_cast<float>(newBlendTimeMs)};
+             .blendTimeMs = static_cast<float>(newBlendTimeMs), .fromRate = currentRate};
 }
 
 /// Whether a track takes the old pose: not a global sequence, not discrete.
@@ -332,6 +337,63 @@ inline int pickSequenceVariation(const std::vector<pipeline::M2Sequence>& seqs, 
         idx = next;
     }
     return primary;
+}
+
+// ---- Locomotion playback rate ----
+//
+// The client plays a unit's movement animation at the rate that keeps its
+// feet on the ground. CGUnit_C's animation update (FUN_007385c0, at
+// 0x007388af-0x00738904) reads the requested sequence's info (FUN_0082ced0:
+// M2Sequence +0x8 movingSpeed, times the model's world scale when the model
+// is scaled, flag 0x8000) and, when that is non-zero, the animation is one
+// of the movement ids below (FUN_00714e80) and the unit's movement flags hold
+// any of 0xc0000f (forward, back, strafe, ascend, descend), sets the rate to
+// CMovement::GetCurrentSpeed (FUN_00987570) / |movingSpeed|. GetCurrentSpeed
+// is the spline's length over its duration for a unit on a spline, and
+// otherwise the walk, run, back, swim or flight speed its flags select. The
+// rate goes into the time state as speed (+0x14, FUN_00826b00), and the
+// sequence's time is (now - start) * speed. When the same animation is
+// already playing, FUN_00737ef0 only changes the rate (FUN_00735cc0 ->
+// FUN_00827000), moving the start so the current time is kept.
+
+/// The animation ids FUN_00714e80 calls movement: Walk, Run, ShuffleLeft,
+/// ShuffleRight, Walkbackwards, JumpStart, Jump, JumpEnd, Swim, SwimLeft,
+/// SwimRight, SwimBackwards, StealthWalk, Fly, Sprint, JumpLandRun, StealthRun.
+inline bool isLocomotionAnimation(uint32_t animationId) {
+    switch (animationId) {
+        case 4: case 5: case 11: case 12: case 13:
+        case 37: case 38: case 39:
+        case 42: case 43: case 44: case 45:
+        case 119: case 135: case 143: case 187: case 223:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/// The rate a sequence plays at for a unit moving at `unitSpeed` yards a
+/// second (zero when it is not moving): one unless the client's conditions
+/// above hold, then the unit's speed over the sequence's scaled movingSpeed.
+inline float locomotionPlaybackRate(uint32_t animationId, float movingSpeed, float modelScale,
+                                    float unitSpeed) {
+    if (!(unitSpeed > 0.0f) || !std::isfinite(unitSpeed)) return 1.0f;
+    if (!isLocomotionAnimation(animationId)) return 1.0f;
+    const float sequenceSpeed = std::abs(movingSpeed * modelScale);
+    if (!(sequenceSpeed > 0.0f) || !std::isfinite(sequenceSpeed)) return 1.0f;
+    return unitSpeed / sequenceSpeed;
+}
+
+/// Where a movement sequence starts when the unit changes from one moving
+/// sequence to another while it moves - Walk to Run, Run to Swim: at the same
+/// fraction of its length as the one it leaves, so the stride carries on
+/// (FUN_007385c0, 0x00738924-0x0073898c, in the client's integer arithmetic:
+/// elapsed * newDuration / oldDuration, modulo newDuration). Zero when either
+/// length is.
+inline float locomotionPhaseTime(float currentTimeMs, uint32_t currentDurationMs,
+                                 uint32_t newDurationMs) {
+    if (currentDurationMs == 0 || newDurationMs == 0 || !(currentTimeMs > 0.0f)) return 0.0f;
+    const uint64_t elapsed = static_cast<uint64_t>(currentTimeMs);
+    return static_cast<float>((elapsed * newDurationMs / currentDurationMs) % newDurationMs);
 }
 
 } // namespace wowee::rendering::m2_track

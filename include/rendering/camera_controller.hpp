@@ -105,6 +105,11 @@ public:
     [[nodiscard]] float getMovementSpeed() const { return movementSpeed; }
     [[nodiscard]] const glm::vec3& getDefaultPosition() const { return defaultPosition; }
     [[nodiscard]] bool isMoving() const;
+    /// The speed the followed character moved at this frame by its own
+    /// locomotion - run, walk, backpedal, swim or flight speed, whichever was
+    /// applied - in yards a second; zero standing. What the client's
+    /// CMovement::GetCurrentSpeed (FUN_00987570) gives its movement animation.
+    [[nodiscard]] float getLocomotionSpeed() const { return locomotionSpeed_; }
     [[nodiscard]] float getYaw() const { return yaw; }
     [[nodiscard]] float getPitch() const { return pitch; }
     [[nodiscard]] float getFacingYaw() const { return facingYaw; }
@@ -607,6 +612,7 @@ private:
     bool jumpLocked_ = false;
     glm::vec3 jumpMoveDir_{0.0f};
     float jumpMoveSpeed_ = 0.0f;
+    float locomotionSpeed_ = 0.0f;  // see getLocomotionSpeed
     static constexpr float STAND_EYE_HEIGHT = 1.2f;  // Standing eye height
     static constexpr float CROUCH_EYE_HEIGHT = 0.6f; // Crouching eye height
     float eyeHeight = STAND_EYE_HEIGHT;
