@@ -2156,6 +2156,14 @@ wowee_add_test(test_m2_sequence_blend
 wowee_add_test(test_m2_sequence_variation
     SOURCES test_m2_sequence_variation.cpp)
 
+# ── test_m2_external_sequences ───────────────────────────────
+# Which sequences keep their keyframes in an .anim file, and which of them a
+# filtered load asks for. m2_loader knows nothing about the asset tree.
+wowee_add_test(test_m2_external_sequences
+    SOURCES test_m2_external_sequences.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_dbc_layout_columns ──────────────────────────────────
 # Every column a layout names has to exist in the file it describes. A DBC
 # asked for a field past the end answers zero for every row, forever, which

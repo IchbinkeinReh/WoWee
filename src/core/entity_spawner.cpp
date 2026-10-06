@@ -201,6 +201,8 @@ void EntitySpawner::resetAllState() {
     displayIdTexturesApplied_.clear();
     charSectionsCache_.clear();
     charSectionsCacheBuilt_ = false;
+    // The asset tree may differ next time - a failure is not carried over.
+    failedPlayerModelKeys_.clear();
 
     // Clear GO display caches
     gameObjectDisplayIdModelCache_.clear();
@@ -223,6 +225,7 @@ void EntitySpawner::rebuildLookups() {
 bool EntitySpawner::hasWorkPending() const {
     return !pendingCreatureSpawns_.empty() || !asyncCreatureLoads_.empty() ||
            !asyncNpcCompositeLoads_.empty() || !pendingPlayerSpawns_.empty() ||
+           !asyncPlayerModelLoads_.empty() ||
            !asyncEquipmentLoads_.empty() || !deferredEquipmentQueue_.empty() ||
            !pendingGameObjectSpawns_.empty() || !asyncGameObjectLoads_.empty();
 }
@@ -334,6 +337,8 @@ void EntitySpawner::clearAllQueues() {
     deadCreatureGuids_.clear();
     pendingPlayerSpawns_.clear();
     pendingPlayerSpawnGuids_.clear();
+    // Waits for a load still running: the worker reads through assetManager_.
+    asyncPlayerModelLoads_.clear();
     pendingOnlinePlayerEquipment_.clear();
     deferredEquipmentQueue_.clear();
     pendingGameObjectSpawns_.clear();

@@ -77,6 +77,18 @@ uint16_t selectHairScalpGeoset(const std::unordered_map<uint32_t, uint16_t>& hai
 }
 } // namespace
 
+uint32_t EntitySpawner::readyPlayerModelId(uint32_t cacheKey) {
+    auto it = playerModelCache_.find(cacheKey);
+    if (it == playerModelCache_.end()) return 0;
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (charRenderer && charRenderer->getModelData(it->second)) return it->second;
+    LOG_WARNING("Cached player model missing after world reload, reloading modelId=",
+                it->second, " race=", cacheKey >> 8, " gender=", cacheKey & 0xFF);
+    playerTextureSlotsByModelId_.erase(it->second);
+    playerModelCache_.erase(it);
+    return 0;
+}
+
 void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
                                     uint8_t raceId,
                                     uint8_t genderId,
@@ -98,76 +110,13 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
     }
     auto* charRenderer = renderer_->getCharacterRenderer();
 
-    // Base geometry model: cache by (race, gender)
-    uint32_t cacheKey = (static_cast<uint32_t>(raceId) << 8) | static_cast<uint32_t>(genderId & 0xFF);
-    uint32_t modelId = 0;
-    auto itCache = playerModelCache_.find(cacheKey);
-    if (itCache != playerModelCache_.end()) {
-        modelId = itCache->second;
-        if (!charRenderer->getModelData(modelId)) {
-            LOG_WARNING("spawnOnlinePlayer: cached player model missing after world reload, reloading modelId=",
-                        modelId, " race=", static_cast<int>(raceId),
-                        " gender=", static_cast<int>(genderId));
-            playerTextureSlotsByModelId_.erase(modelId);
-            playerModelCache_.erase(itCache);
-            modelId = 0;
-        }
-    }
+    // The model is loaded off the main thread by processPlayerSpawnQueue, every
+    // external sequence with it, and this only ever draws one that is ready.
+    const uint32_t modelId = readyPlayerModelId(playerModelCacheKey(raceId, genderId));
     if (modelId == 0) {
-        game::Race race = static_cast<game::Race>(raceId);
-        game::Gender gender = (genderId == 1) ? game::Gender::FEMALE : game::Gender::MALE;
-        std::string m2Path = game::getPlayerModelPath(race, gender);
-        if (m2Path.empty()) {
-            LOG_WARNING("spawnOnlinePlayer: unknown race/gender for guid 0x", std::hex, guid, std::dec,
-                        " race=", static_cast<int>(raceId), " gender=", static_cast<int>(genderId));
-            return;
-        }
-
-        auto m2Data = assetManager_->readFile(m2Path);
-        if (m2Data.empty()) {
-            LOG_WARNING("spawnOnlinePlayer: failed to read M2: ", m2Path);
-            return;
-        }
-
-        pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
-        if (model.vertices.empty()) {
-            LOG_WARNING("spawnOnlinePlayer: failed to parse M2: ", m2Path);
-            return;
-        }
-
-        // Skin file (only for WotLK M2s - vanilla has embedded skin)
-        std::string skinPath = pipeline::skinPathForM2(m2Path);
-        auto skinData = assetManager_->readFile(skinPath);
-        if (!skinData.empty() && model.version >= 264) {
-            pipeline::M2Loader::loadSkin(skinData, model);
-        }
-
-        // After skin loading, full model must be valid (vertices + indices)
-        if (!model.isValid()) {
-            LOG_WARNING("spawnOnlinePlayer: failed to load skin for M2: ", m2Path);
-            return;
-        }
-
-        // Only the three animations a standing player needs. Loading every
-        // external sequence of a character model stalls the frame.
-        pipeline::loadExternalAnimations(
-            *assetManager_, m2Path, m2Data, model,
-            {rendering::anim::STAND, rendering::anim::WALK, rendering::anim::RUN,
-             // Stand states other players are seen in (UNIT_FIELD_BYTES_1).
-             rendering::anim::SIT_GROUND_DOWN, rendering::anim::SITTING,
-             rendering::anim::SIT_GROUND_UP, rendering::anim::SLEEP_DOWN,
-             rendering::anim::SLEEP, rendering::anim::SLEEP_UP,
-             rendering::anim::SIT_CHAIR_LOW, rendering::anim::SIT_CHAIR_MED,
-             rendering::anim::SIT_CHAIR_HIGH, rendering::anim::KNEEL_START,
-             rendering::anim::KNEEL_LOOP, rendering::anim::KNEEL_END});
-
-        modelId = nextPlayerModelId_++;
-        if (!charRenderer->loadModel(model, modelId)) {
-            LOG_WARNING("spawnOnlinePlayer: failed to load model to GPU: ", m2Path);
-            return;
-        }
-
-        playerModelCache_[cacheKey] = modelId;
+        LOG_WARNING("spawnOnlinePlayer: no model loaded for guid 0x", std::hex, guid, std::dec,
+                    " race=", static_cast<int>(raceId), " gender=", static_cast<int>(genderId));
+        return;
     }
 
     // Determine texture slots once per model
@@ -891,20 +840,34 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
 }
 
 void EntitySpawner::despawnPlayer(uint64_t guid) {
+    // A player still waiting on its model leaves the queue too. The wait can now
+    // be the length of a model load, and one that walked out of range during it
+    // was otherwise drawn when the load finished, where it was last seen.
+    if (pendingPlayerSpawnGuids_.erase(guid) > 0) {
+        pendingPlayerSpawns_.erase(
+            std::remove_if(pendingPlayerSpawns_.begin(), pendingPlayerSpawns_.end(),
+                           [guid](const PendingPlayerSpawn& p) { return p.guid == guid; }),
+            pendingPlayerSpawns_.end());
+    }
+    pendingOnlinePlayerEquipment_.erase(guid);
     if (!renderer_ || !renderer_->getCharacterRenderer()) return;
     pendingRemotePlayerMounts_.erase(guid);
     removeRemotePlayerMount(guid);
     auto it = playerInstances_.find(guid);
     if (it == playerInstances_.end()) return;
     auto* charRenderer = renderer_->getCharacterRenderer();
-    // Player composites get a fresh model id per spawn (unlike displayId-keyed
-    // creature models, which stay cached), so free the model with the instance.
-    const uint32_t compositeModelId = charRenderer->getInstanceModelId(it->second);
+    // The race and gender models stay loaded: they are cached in
+    // playerModelCache_ with every animation read in, which is a load worth
+    // keeping for the next player of that race. Anything else the instance was
+    // drawn with goes with it.
+    const uint32_t instanceModelId = charRenderer->getInstanceModelId(it->second);
     charRenderer->removeInstance(it->second);
-    if (compositeModelId != 0) charRenderer->unloadModelIfUnused(compositeModelId);
+    const bool isCachedPlayerModel = std::any_of(
+        playerModelCache_.begin(), playerModelCache_.end(),
+        [instanceModelId](const auto& entry) { return entry.second == instanceModelId; });
+    if (instanceModelId != 0 && !isCachedPlayerModel) charRenderer->unloadModelIfUnused(instanceModelId);
     playerInstances_.erase(it);
     onlinePlayerAppearance_.erase(guid);
-    pendingOnlinePlayerEquipment_.erase(guid);
     deadCreatureGuids_.erase(guid);
     creatureRenderPosCache_.erase(guid);
     creatureSwimmingState_.erase(guid);

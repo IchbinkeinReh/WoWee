@@ -595,7 +595,29 @@ private:
     std::vector<std::string> resolveEquipmentTexturePaths(uint64_t guid,
         const std::array<uint32_t, 19>& displayInfoIds,
         const std::array<uint8_t, 19>& inventoryTypes) const;
-    std::unordered_map<uint32_t, uint32_t> playerModelCache_;
+    std::unordered_map<uint32_t, uint32_t> playerModelCache_;  // playerModelCacheKey → model id
+    static uint32_t playerModelCacheKey(uint8_t raceId, uint8_t genderId) {
+        return (static_cast<uint32_t>(raceId) << 8) | static_cast<uint32_t>(genderId);
+    }
+    /// The model a player of this race and gender is drawn with, or 0 when it
+    /// is not on the GPU - never loaded, or dropped with the world it was in.
+    uint32_t readyPlayerModelId(uint32_t cacheKey);
+
+    // --- Player model async loads ---
+    // A character model keeps nearly every sequence in an .anim file of its
+    // own, and reading them all takes longer than a frame. They are read on a
+    // worker, like a creature's, and the finished model is uploaded on the main
+    // thread; the players waiting on it stay queued until then.
+    struct PreparedPlayerModel {
+        uint32_t cacheKey = 0;
+        std::string m2Path;
+        std::shared_ptr<pipeline::M2Model> model;
+        bool valid = false;
+    };
+    std::unordered_map<uint32_t, std::future<PreparedPlayerModel>> asyncPlayerModelLoads_;  // by cache key
+    std::unordered_set<uint32_t> failedPlayerModelKeys_;
+    void processAsyncPlayerModelResults();
+    static constexpr int MAX_ASYNC_PLAYER_MODEL_LOADS = 2;
     /// Which runtime texture slot of a player model takes which art. Type 8 is
     /// Skin Extra - the head detail sheet, not the underwear, though on the
     /// models the game shipped the underwear art is what ends up in it.

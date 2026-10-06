@@ -33,6 +33,15 @@ struct M2Model;
 bool loadM2WithSkin(AssetManager& assets, const std::string& m2Path, M2Model& outModel);
 
 /**
+ * loadM2WithSkin, then every external sequence's keyframes.
+ *
+ * Reading all of a character model's .anim files is too slow for the frame, so
+ * this is for a worker thread: the AssetManager is safe to read from one, and
+ * the model is handed to the renderer on the main thread once it is complete.
+ */
+bool loadM2WithAllAnimations(AssetManager& assets, const std::string& m2Path, M2Model& outModel);
+
+/**
  * The external .anim file for one sequence: the model path without its
  * extension, then the animation id and the variation, zero-padded -
  * Character\Human\Male\HumanMale0097-00.anim.
@@ -46,8 +55,8 @@ std::string animPathForM2(const std::string& m2Path, uint32_t animId, uint32_t v
  * in a file beside it, and a sequence whose file is missing simply does not
  * animate. `wantedAnimIds` limits the work to a few animations - loading every
  * external sequence of a character model stalls the frame, which is why the
- * paths that run during play name the three or five they actually need. An
- * empty list loads them all.
+ * paths that load on the main thread during play name the three or five they
+ * actually need. An empty list loads them all.
  *
  * `m2Data` is the original file bytes: the track headers the .anim data slots
  * into are still read from there.

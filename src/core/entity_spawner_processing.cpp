@@ -682,19 +682,101 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
     }
 }
 
+void EntitySpawner::processAsyncPlayerModelResults() {
+    for (auto it = asyncPlayerModelLoads_.begin(); it != asyncPlayerModelLoads_.end(); ) {
+        if (!it->second.valid() ||
+            it->second.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        PreparedPlayerModel result = it->second.get();
+        it = asyncPlayerModelLoads_.erase(it);
+
+        auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+        if (!charRenderer) continue;
+        if (!result.valid || !result.model) {
+            LOG_WARNING("Player model failed to load: ", result.m2Path);
+            failedPlayerModelKeys_.insert(result.cacheKey);
+            continue;
+        }
+
+        // The upload is the one part that has to be here. The model is complete
+        // before the renderer sees it, so no animation worker ever samples a
+        // track that is still being filled in.
+        const uint32_t modelId = nextPlayerModelId_++;
+        if (!charRenderer->loadModel(*result.model, modelId)) {
+            LOG_WARNING("Player model failed to upload: ", result.m2Path);
+            failedPlayerModelKeys_.insert(result.cacheKey);
+            continue;
+        }
+        playerModelCache_[result.cacheKey] = modelId;
+        // One upload a tick: it is the costly half, and the rest can wait for
+        // the next frame.
+        break;
+    }
+}
+
 void EntitySpawner::processPlayerSpawnQueue() {
+    processAsyncPlayerModelResults();
     if (pendingPlayerSpawns_.empty()) return;
     if (!assetManager_ || !assetManager_->isInitialized()) return;
 
     int processed = 0;
-    while (!pendingPlayerSpawns_.empty() && processed < MAX_SPAWNS_PER_FRAME) {
+    // Each queued player is looked at once a tick at most: one still waiting on
+    // its model goes to the back, and must not be met again in the same pass.
+    size_t remaining = pendingPlayerSpawns_.size();
+    while (remaining-- > 0 && !pendingPlayerSpawns_.empty() && processed < MAX_SPAWNS_PER_FRAME) {
         PendingPlayerSpawn s = pendingPlayerSpawns_.front();
-        pendingPlayerSpawns_.erase(pendingPlayerSpawns_.begin());
+        pendingPlayerSpawns_.pop_front();
         pendingPlayerSpawnGuids_.erase(s.guid);
 
         // Skip if already spawned (could have been spawned by a previous update this frame)
         if (playerInstances_.count(s.guid)) {
             processed++;
+            continue;
+        }
+
+        const uint32_t cacheKey = playerModelCacheKey(s.raceId, s.genderId);
+        if (readyPlayerModelId(cacheKey) == 0) {
+            // A model that could not be read will not be read on a second try.
+            if (failedPlayerModelKeys_.count(cacheKey)) {
+                pendingOnlinePlayerEquipment_.erase(s.guid);
+                continue;
+            }
+            if (!asyncPlayerModelLoads_.count(cacheKey)) {
+                const std::string m2Path = game::getPlayerModelPath(
+                    static_cast<game::Race>(s.raceId),
+                    s.genderId == 1 ? game::Gender::FEMALE : game::Gender::MALE);
+                if (m2Path.empty()) {
+                    LOG_WARNING("Unknown race/gender for player guid 0x", std::hex, s.guid, std::dec,
+                                " race=", static_cast<int>(s.raceId),
+                                " gender=", static_cast<int>(s.genderId));
+                    failedPlayerModelKeys_.insert(cacheKey);
+                    pendingOnlinePlayerEquipment_.erase(s.guid);
+                    continue;
+                }
+                if (static_cast<int>(asyncPlayerModelLoads_.size()) < MAX_ASYNC_PLAYER_MODEL_LOADS) {
+                    auto* am = assetManager_;
+                    asyncPlayerModelLoads_.emplace(cacheKey, std::async(std::launch::async,
+                        [am, m2Path, cacheKey]() -> PreparedPlayerModel {
+                            PreparedPlayerModel result;
+                            result.cacheKey = cacheKey;
+                            result.m2Path = m2Path;
+                            auto model = std::make_shared<pipeline::M2Model>();
+                            // Every sequence, not the handful a standing player
+                            // needs: on a character model the attacks, casts,
+                            // emotes and jump all live in .anim files, and a
+                            // sequence without its file plays the bind pose.
+                            if (pipeline::loadM2WithAllAnimations(*am, m2Path, *model)) {
+                                result.model = std::move(model);
+                                result.valid = true;
+                            }
+                            return result;
+                        }));
+                }
+            }
+            pendingPlayerSpawns_.push_back(s);
+            pendingPlayerSpawnGuids_.insert(s.guid);
             continue;
         }
 

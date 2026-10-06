@@ -2141,6 +2141,21 @@ std::string skinPathForM2(const std::string& m2Path) {
 }
 
 
+std::vector<uint32_t> externalSequenceIndices(const M2Model& model,
+                                              std::initializer_list<uint32_t> wantedAnimIds) {
+    std::vector<uint32_t> out;
+    for (uint32_t si = 0; si < model.sequences.size(); si++) {
+        const M2Sequence& seq = model.sequences[si];
+        if (seq.flags & 0x20) continue;
+        if (wantedAnimIds.size() > 0 &&
+            std::find(wantedAnimIds.begin(), wantedAnimIds.end(), seq.id) == wantedAnimIds.end()) {
+            continue;
+        }
+        out.push_back(si);
+    }
+    return out;
+}
+
 std::string modelPathToM2(const std::string& modelPath) {
     if (modelPath.size() < 4) return modelPath;
     std::string ext = modelPath.substr(modelPath.size() - 4);

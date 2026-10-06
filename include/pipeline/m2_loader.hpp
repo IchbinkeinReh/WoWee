@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <initializer_list>
 #include <vector>
 #include <string>
 #include <glm/glm.hpp>
@@ -347,6 +349,17 @@ std::string skinPathForM2(const std::string& m2Path);
 /// Both are handled here. A path with any other extension, or none, comes back
 /// unchanged - this rewrites a known alias and does not guess.
 std::string modelPathToM2(const std::string& modelPath);
+
+/// The sequences whose keyframes live in an .anim file beside the model, by
+/// index into model.sequences.
+///
+/// Flag 0x20 means the data is inside the M2; every other sequence is empty
+/// until its file is read. On a character model that is nearly all of them -
+/// the attacks, the casts, the emotes, the jump - and a sequence left out here
+/// samples the bind pose. `wantedAnimIds` keeps only those animation ids; an
+/// empty list keeps every external sequence.
+std::vector<uint32_t> externalSequenceIndices(const M2Model& model,
+                                              std::initializer_list<uint32_t> wantedAnimIds = {});
 
 } // namespace pipeline
 } // namespace wowee
