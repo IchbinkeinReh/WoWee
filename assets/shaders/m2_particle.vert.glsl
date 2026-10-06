@@ -26,6 +26,12 @@ layout(location = 3) in float aTile;
 layout(location = 0) out vec4 vColor;
 layout(location = 1) out float vTile;
 layout(location = 2) out float vFogVisibility;
+layout(location = 3) out vec2 vCorner;
+
+// The quad's corners in the order the client builds them (0x00b2d5b4): its
+// strip runs down the left edge and up the right, each corner one size from
+// the centre.
+const vec2 kCorner[4] = vec2[4](vec2(-1.0, 1.0), vec2(-1.0, -1.0), vec2(1.0, 1.0), vec2(1.0, -1.0));
 
 // The air between the camera and this point, out of the fog volume: rgb is
 // the light it scatters toward the camera, a how much of the point shows
@@ -41,9 +47,13 @@ vec4 fogVolumeAt(vec3 worldPos) {
 }
 
 void main() {
+    // A camera-facing quad, as the client draws a particle: the centre moved
+    // into view space, and each corner a size away from it there - so the quad
+    // is two sizes across in yards, at any distance, with no point-size limit.
+    const vec2 corner = kCorner[gl_VertexIndex];
     vec4 viewPos4 = view * vec4(aPos, 1.0);
-    float dist = -viewPos4.z;
-    gl_PointSize = clamp(aSize * 500.0 / max(dist, 1.0), 1.0, 128.0);
+    vCorner = vec2(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5);
+    viewPos4.xy += corner * aSize;
     vColor = aColor;
     vTile = aTile;
     float worldDist = length(viewPos.xyz - aPos);

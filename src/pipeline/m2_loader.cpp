@@ -1625,6 +1625,11 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                     parseAnimTrack(m2Data, disk, em.enabledTrack, TrackType::BYTE_BOOL, emSeqFlags);
                 }
 
+                em.lifespanVary = readValue<float>(m2Data, base + 0xAC);
+                em.emissionRateVary = readValue<float>(m2Data, base + 0xC4);
+                em.scaleVary = glm::vec2(readValue<float>(m2Data, base + 0x134),
+                                         readValue<float>(m2Data, base + 0x138));
+
                 // Parse FBlocks (color, alpha, scale) - FBlocks are 16 bytes each
                 parseFBlock(m2Data, base + 0x104, em.particleColor, 0);
                 parseFBlock(m2Data, base + 0x114, em.particleAlpha, 1);

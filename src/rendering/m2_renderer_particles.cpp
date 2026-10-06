@@ -103,7 +103,6 @@ float pfxTuning(const char* name) {
     return f > 0.0f ? f : 1.0f;
 }
 const float kPfxRate = pfxTuning("WOWEE_PFX_RATE");
-const float kPfxGain = pfxTuning("WOWEE_PFX_GAIN");
 const float kPfxSize = pfxTuning("WOWEE_PFX_SIZE");
 
 } // namespace
@@ -132,29 +131,13 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
                                  inst.currentSequenceIndex, gpu.globalSequenceDurations);
         float life = interpFloat(em.lifespan, inst.animTime, inst.globalSequenceTime,
                                  inst.currentSequenceIndex, gpu.globalSequenceDurations);
-        // What the player asked to see of it, before the floor below. The order
-        // is the whole point: thinning first and flooring second lets a low
-        // setting take smoke, dust and spell effects down while a candle is
-        // pulled back up to the handful of particles that still reads as fire.
+        // The emission rate as the client takes it: the track's value plus a
+        // roll of the emitter's spread (FUN_0097d8c0), times the density the
+        // player asked for. Nothing raises it beyond what the model authors.
+        rate += distN(particleRng_) * em.emissionRateVary;
         rate *= particleDensity_;
         if (ei < gpu.particleSkipGenericDimming.size() && gpu.particleSkipGenericDimming[ei] != 0) {
             rate *= kPfxRate;
-        }
-
-        // A flame reads as a flame only when enough particles are alive at once.
-        // Authored rates vary wildly for the same visual intent - a candle asks
-        // for 40/s over half a second, CHANDELIER01 for 1/s over six seconds,
-        // which sustains a single speck per candle and looks like a bare glow.
-        // Steady-state population is rate x lifespan, so floor the rate against
-        // the lifespan to hold every fixture at a comparable density. Do not lower
-        // this: at 7 the flames disappear entirely, as they do under any change
-        // that reduces how many particles are alive or how far they travel. The
-        // effect is only visible because a scattering of particles reaches open
-        // air, so thinning it drops the whole thing below the threshold.
-        if (rate > 0.0f && life > 0.0f &&
-            (gpu.isLanternLike || gpu.isTorch || gpu.isBrazierOrFire || gpu.isKoboldFlame)) {
-            constexpr float kMinLiveParticles = 15.0f;
-            rate = std::max(rate, kMinLiveParticles / std::max(life, 0.1f));
         }
 
         if (rate <= 0.0f || life <= 0.0f) {
@@ -185,7 +168,13 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             M2Particle p;
             p.emitterIndex = static_cast<int>(ei);
             p.life = 0.0f;
-            p.maxLife = life;
+            // The lifespan and the size are rolled once, as the client does
+            // when it makes a particle (FUN_00979e90): the track's value plus
+            // the emitter's spread times a random in -1..1; the size is
+            // multiplied by 1 plus the scale spread times another, never
+            // below a tenth of a thousandth.
+            p.maxLife = std::max(life + distN(particleRng_) * em.lifespanVary, 0.001f);
+            p.sizeVary = std::max(1.0f + distN(particleRng_) * em.scaleVary.x, 0.0001f);
             p.tileIndex = 0.0f;
 
             // Position: emitter position transformed by bone matrix
@@ -219,6 +208,10 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             // Velocity: emission speed in upward direction + random spread
             float speed = interpFloat(em.emissionSpeed, inst.animTime, inst.globalSequenceTime,
                                       inst.currentSequenceIndex, gpu.globalSequenceDurations);
+            // (roll * speed spread + 1) * speed, as the client's FUN_009792d0.
+            speed *= 1.0f + distN(particleRng_) *
+                     interpFloat(em.speedVariation, inst.animTime, inst.globalSequenceTime,
+                                 inst.currentSequenceIndex, gpu.globalSequenceDurations);
             float vRange = interpFloat(em.verticalRange, inst.animTime, inst.globalSequenceTime,
                                        inst.currentSequenceIndex, gpu.globalSequenceDurations);
             float hRange = interpFloat(em.horizontalRange, inst.animTime, inst.globalSequenceTime,
@@ -707,7 +700,6 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         uint32_t cachedAnimFrame = 0;
         float cachedTilesFloat = 1.0f;
         bool cachedIsTiled = false;
-        bool cachedFlameTexture = false;
         float invAnimMs = 1.0f / 1000.0f;
 
         // How far this instance's particles actually reach, against how far
@@ -775,9 +767,6 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                 cachedTotalTiles = static_cast<uint32_t>(cachedTilesX) *
                                    static_cast<uint32_t>(cachedTilesY);
                 cachedBlendType = cachedEm->blendingType;
-                cachedFlameTexture =
-                    static_cast<size_t>(p.emitterIndex) < gpu.particleSkipGenericDimming.size() &&
-                    gpu.particleSkipGenericDimming[p.emitterIndex] != 0;
                 ParticleGroupKey key{.texture = cachedTex, .blendType = static_cast<uint8_t>(cachedBlendType), .tilesX = cachedTilesX, .tilesY = cachedTilesY};
                 cachedGroup = &groups[key];
                 cachedGroup->texture = cachedTex;
@@ -805,43 +794,12 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             float alpha = std::min(interpFBlockFloat(em.particleAlpha, lifeRatio), 1.0f);
             float rawScale = interpFBlockFloat(em.particleScale, lifeRatio);
 
-            // Flame fixtures: the authored curves can leave a particle with
-            // effectively no colour or alpha for most of its life. CHANDELIER01
-            // ramps scale from zero over a six second life and its candles spend
-            // nearly all of that time contributing nothing - and because these
-            // draw additively, a near-black particle adds literally nothing to
-            // the frame. Floor colour and alpha so a lit fixture always shows
-            // flame. Floors only lift the dim end, leaving torches and candles
-            // that already read correctly untouched.
-            if (gpu.isLanternLike || gpu.isTorch ||
-                gpu.isBrazierOrFire || gpu.isKoboldFlame) {
-                color = glm::max(color, glm::vec3(0.50f, 0.26f, 0.09f));
-                alpha = std::max(alpha, 0.30f);
-            }
-
-            if (cachedFlameTexture && (cachedBlendType == 3 || cachedBlendType == 4)) {
-                color *= kPfxGain;
-            }
-
-            float scale = rawScale;
-            if (gpu.isSpellEffect) {
-                scale = std::max(rawScale * 1.5f, 0.15f);
-            } else if (!gpu.isFireflyEffect) {
-                scale = std::min(rawScale, 1.5f);
-                // Candle flames are authored at a fraction of a unit, which lands
-                // sub-pixel at any normal viewing distance - the fixture glows
-                // with no visible flame. Small effect-heavy models dodge this by
-                // being classified as spell effects (three or more emitters and
-                // few vertices) and picking up that path's floor, but a
-                // chandelier is a real fixture at 370 vertices and misses the
-                // cut, so its five candles rendered as nothing. Give flame
-                // fixtures the same floor without making them spell effects,
-                // which would also change how they blend.
-                if (gpu.isLanternLike || gpu.isTorch ||
-                    gpu.isBrazierOrFire || gpu.isKoboldFlame) {
-                    scale = std::max(scale, 0.15f);
-                }
-            }
+            // The authored colour, alpha and size, as they are: the client puts
+            // no floor under a particle's colour or alpha, no cap or floor on its
+            // size, and no gain on an emitter, and drew every particle the same
+            // whatever model it belongs to. Each of those was here to make a
+            // point sprite that was too small, and a quad is the size it is.
+            const float scale = rawScale;
 
             if (vbWritten >= MAX_M2_PARTICLE_VERTS) break;
             // A run per stretch of particles sharing a group. The group only
@@ -880,9 +838,11 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             // client's quad is twice its size across, which is what the point
             // scale below gives, and it does so for the exempt group alone:
             // everything else keeps the fixed 500 it was tuned against.
+            // The quad is a size either side of the centre, so this is half its
+            // width: the scale, times the particle's own roll of the spread, and
+            // the model's scale where the emitter is flagged 0x400.
             const float modelScale = (cachedEm->flags & 0x400) ? inst.scale : 1.0f;
-            vd[7] = scale * modelScale *
-                    (cachedFlameTexture ? particlePointScale_ * kPfxSize : 1.0f);
+            vd[7] = scale * p.sizeVary * modelScale * kPfxSize;
             float tileIndex = p.tileIndex;
             if (cachedIsTiled) {
                 tileIndex = p.tileIndex + static_cast<float>(cachedAnimFrame);
@@ -966,8 +926,17 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         ParticleGroup& group = *run.group;
 
         uint8_t blendType = group.blendType;
-        VkPipeline desiredPipeline = (blendType == 3 || blendType == 4)
-            ? particleAdditivePipeline_ : particlePipeline_;
+        // The client's blend for each M2 blend type (table 0x00a453b0 into the
+        // Gx factors): 4 adds by its alpha, 3 adds outright, 5 and 6 modulate.
+        VkPipeline desiredPipeline = particlePipeline_;
+        switch (blendType) {
+            case 3: desiredPipeline = particleNoAlphaAddPipeline_; break;
+            case 4: desiredPipeline = particleAdditivePipeline_; break;
+            case 5: desiredPipeline = particleModPipeline_; break;
+            case 6: desiredPipeline = particleMod2xPipeline_; break;
+            default: break;
+        }
+        if (!desiredPipeline) desiredPipeline = particlePipeline_;
         if (desiredPipeline != currentPipeline) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
             currentPipeline = desiredPipeline;
@@ -1012,7 +981,8 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         // Both used to be wrong: every group copied to offset zero and drew
         // from vertex zero, so with more than one group up they all drew
         // whatever had been copied last.
-        vkCmdDraw(cmd, run.count, 1, run.first, 0);
+        // A quad of four vertices for each particle of the run.
+        vkCmdDraw(cmd, 4, run.count, 0, run.first);
     }
 }
 

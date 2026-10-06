@@ -180,6 +180,13 @@ struct M2ParticleEmitter {
     M2FBlock particleColor;   // vec3 RGB at 3 timestamps
     M2FBlock particleAlpha;   // float (from uint16/32767) at 3 timestamps
     M2FBlock particleScale;   // float (x component of vec2) at 3 timestamps
+    // The spreads the client rolls per particle, after the tracks (WotLK):
+    // lifespan +0xAC and emission rate +0xC4 are added to their track's value
+    // by a random in -1..1; the scale spread +0x134 multiplies a particle's size
+    // by 1 + a random in -1..1 times it; the speed spread is the track above.
+    float lifespanVary = 0.0f;
+    float emissionRateVary = 0.0f;
+    glm::vec2 scaleVary{0.0f};
     // WotLK +0x1C8, uint8: while it reads 0 the emitter stops emitting. No
     // keys means enabled, as the client samples it with a default of 1.
     M2AnimationTrack enabledTrack;

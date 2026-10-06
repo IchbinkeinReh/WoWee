@@ -203,6 +203,7 @@ struct M2Particle {
     float maxLife;     // total lifespan
     int emitterIndex;  // which emitter spawned this
     float tileIndex = 0.0f; // texture atlas tile index
+    float sizeVary = 1.0f;  // this particle's roll of the emitter's scale spread
 };
 
 /**
@@ -799,7 +800,12 @@ private:
 
     // Particle pipelines
     VkPipeline particlePipeline_ = VK_NULL_HANDLE;       // M2 emitter particles
-    VkPipeline particleAdditivePipeline_ = VK_NULL_HANDLE; // Additive particle blend
+    VkPipeline particleAdditivePipeline_ = VK_NULL_HANDLE; // Additive particle blend (source alpha, one)
+    // The client's other particle blends, by M2 blend type: 3 adds with no
+    // alpha (one, one), 5 and 6 modulate against the frame.
+    VkPipeline particleNoAlphaAddPipeline_ = VK_NULL_HANDLE;
+    VkPipeline particleModPipeline_ = VK_NULL_HANDLE;
+    VkPipeline particleMod2xPipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout particlePipelineLayout_ = VK_NULL_HANDLE;
 
     // Ribbon pipelines (additive + alpha-blend)

@@ -10,25 +10,25 @@ layout(push_constant) uniform Push {
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in float vTile;
 layout(location = 2) in float vFogVisibility;
+layout(location = 3) in vec2 vCorner;
 
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    vec2 p = gl_PointCoord;
+    vec2 p = vCorner;
     float tile = floor(vTile);
     float tx = mod(tile, push.tileCount.x);
     float ty = floor(tile / push.tileCount.x);
     vec2 uv = (vec2(tx, ty) + p) / push.tileCount;
     vec4 texColor = texture(uTexture, uv);
 
-    if (push.alphaKey != 0) {
-        float lum = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
-        if (lum < 0.05) discard;
-    }
+    // An alpha-key particle keeps what passes the client's reference, 224/255
+    // of its alpha (FUN_0081fe90).
+    if (push.alphaKey != 0 && texColor.a * vColor.a < 224.0 / 255.0) discard;
 
-    // Soft circular falloff for point-sprite edges.
-    float edge = 1.0 - smoothstep(0.4, 0.5, length(p - 0.5));
-    float alpha = texColor.a * vColor.a * edge * vFogVisibility;
+    // The whole of the texture, to its edges, as the client draws it: the
+    // circular falloff this had was a point sprite's.
+    float alpha = texColor.a * vColor.a * vFogVisibility;
     // The colour goes out as it is: both particle pipelines blend with SRC_ALPHA,
     // which is where the alpha comes in. Multiplying it in here as well - as this
     // did - applied it twice, so every particle added alpha squared and was
