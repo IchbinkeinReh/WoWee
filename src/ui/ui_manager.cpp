@@ -16,6 +16,7 @@
 #include "auth/auth_handler.hpp"
 #include "game/game_handler.hpp"
 #include "rendering/vk_context.hpp"
+#include "ui/ui_texture_load.hpp"
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
@@ -457,6 +458,35 @@ void UIManager::render(core::AppState appState, auth::AuthHandler* authHandler, 
 
 }
 
+void UIManager::drawGloveCursor() {
+    if (!cursorAssets_ || !window || gloveCursorFailed_) return;
+    // Anything that asked for another pointer - a text caret, a link's hand, a
+    // cursor drawn from the world - keeps it.
+    if (ImGui::GetMouseCursor() != ImGuiMouseCursor_Arrow) return;
+    // Not while the mouse turns the camera: the pointer is hidden then.
+    SDL_Window* sdlWindow = window->getSDLWindow();
+    if (sdlWindow && SDL_GetWindowRelativeMouseMode(sdlWindow)) return;
+    const ImVec2 at = ImGui::GetIO().MousePos;
+    if (at.x < -1000.0f || at.y < -1000.0f) return;  // outside the window
+
+    if (!gloveCursor_) {
+        ui::UiTextureLoad why = ui::UiTextureLoad::Ok;
+        gloveCursor_ = ui::uploadUiTextureFromBlp(
+            cursorAssets_, "Interface\\Cursor\\Point.blp", window, &why);
+        if (!gloveCursor_) {
+            // Said once, and the system arrow stays.
+            gloveCursorFailed_ = true;
+            LOG_WARNING("Pointer art Interface\\Cursor\\Point.blp did not load (",
+                        static_cast<int>(why), ") - the system pointer stays");
+            return;
+        }
+    }
+    ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    constexpr float kSize = 32.0f;
+    ImGui::GetForegroundDrawList()->AddImage(
+        (ImTextureID)(uintptr_t)gloveCursor_, at, ImVec2(at.x + kSize, at.y + kSize));
+}
+
 void UIManager::finishImGuiFrame() {
     // Finalize ImGui draw data (actual rendering happens in the command buffer).
     //
@@ -493,6 +523,7 @@ void UIManager::finishImGuiFrame() {
         textInputUp_ = wantsText;
     }
 
+    drawGloveCursor();
     ImGui::Render();
 }
 

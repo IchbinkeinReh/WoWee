@@ -1178,12 +1178,33 @@ const char* friendlyUnitCursorPath(uint32_t npcFlags) {
     return nullptr;
 }
 
-/// The cursor over a unit: the sword over something to fight, and over a
-/// friendly one what it is for - a bag for a merchant, a speech bubble for a
-/// talker - which the real client says with the art before anything is clicked.
+/// The cursor's "can't" art for one that has it: Attack.blp becomes
+/// UnableAttack.blp, as the client puts "Unable" before the name.
+std::string unableCursorPath(const char* path) {
+    std::string out = path;
+    const size_t slash = out.rfind('\\');
+    out.insert(slash == std::string::npos ? 0 : slash + 1, "Unable");
+    return out;
+}
+
+/// Whether the player may attack another player (FUN_00729740, as far as it
+/// reads): an enemy faction's player who is flagged for PvP. The client's other
+/// branches - a duel, free-for-all, sanctuary, the party exceptions - are not here.
+bool playerMayAttackPlayer(const game::Unit& other) {
+    constexpr uint32_t kUnitFlagPvp = 0x00001000;
+    if (other.getHealth() == 0) return false;
+    if (other.getUnitFlags() & (0x00000002u | game::UNIT_FLAG_NOT_SELECTABLE)) return false;
+    return other.isHostile() && (other.getUnitFlags() & kUnitFlagPvp) != 0;
+}
+
+/// The cursor over a unit or another player, as the client picks it: the sword
+/// over what the player may attack, a loot bag or the skinning knife over a
+/// corpse with something on it, and over a friendly unit what it is for - a bag
+/// for a merchant, a speech bubble for a talker. Past the reach at which the
+/// client would answer a click, the cursor with its "can't" art.
 ///
-/// False when the unit has none, and the caller leaves the plain pointer, as the
-/// client does. A corpse is loot and the caller's business.
+/// False when there is none, and the caller leaves the glove pointer, as the
+/// client does.
 bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
                                   const ui::ScenePick& pick) {
     // resolve(), not closestGuid. closestGuid is whatever the ray touched
@@ -1194,16 +1215,53 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
     // asking it a different question put the two back into disagreement, and
     // the vendor cursor lost every argument to the scenery around the vendor.
     const uint64_t guid = pick.resolve();
-    if (guid == 0 || guid == pick.deadUnitGuid) return false;
+    if (guid == 0) return false;
     auto entity = gameHandler.getEntityManager().getEntity(guid);
-    if (!entity || entity->getType() != game::ObjectType::UNIT) return false;
+    if (!entity) return false;
+    const bool isPlayer = entity->getType() == game::ObjectType::PLAYER;
+    if (entity->getType() != game::ObjectType::UNIT && !isPlayer) return false;
     auto unit = std::static_pointer_cast<game::Unit>(entity);
-    const char* path = guid == pick.hostileUnitGuid
-        ? "Interface\\Cursor\\Attack.blp"
-        : friendlyUnitCursorPath(unit->getNpcFlags());
-    if (!path) return false;
 
-    VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window, path);
+    // Where the click would reach: the unit's combat reach and four yards
+    // (FUN_004f7a50), measured from the player.
+    const auto& me = gameHandler.getMovementInfo();
+    const float dx = entity->getX() - me.x, dy = entity->getY() - me.y, dz = entity->getZ() - me.z;
+    const float reach = unit->getCombatReach() + 4.0f;
+    const bool outOfReach = dx * dx + dy * dy + dz * dz > reach * reach;
+
+    constexpr uint32_t kNonAttackable = 0x00000002, kNotAttackable1 = 0x00000080,
+                       kImmuneToPlayers = 0x00000100, kUnk16 = 0x00010000,
+                       kUnk20 = 0x00100000, kSkinnable = 0x04000000;
+    const uint32_t flags = unit->getUnitFlags();
+    std::string path;
+
+    if (unit->getHealth() == 0) {
+        // A corpse: the bag when there is loot on it, the knife when it can be
+        // skinned. Both are the client's, and both give way to "can't" past reach.
+        if (unit->getDynamicFlags() & game::UNIT_DYNFLAG_LOOTABLE) {
+            path = "Interface\\Cursor\\LootAll.blp";
+        } else if (flags & kSkinnable) {
+            path = "Interface\\Cursor\\Skin.blp";
+        } else {
+            return false;
+        }
+        if (outOfReach) path = unableCursorPath(path.c_str());
+    } else if (isPlayer ? playerMayAttackPlayer(*unit)
+                        : ((flags & (kNonAttackable | kNotAttackable1 | kImmuneToPlayers | kUnk16 |
+                                     kUnk20 | game::UNIT_FLAG_NOT_SELECTABLE)) == 0 &&
+                           (unit->isHostile() || gameHandler.unitReactionToPlayer(*unit) <= 4))) {
+        // The sword over whatever the player may attack: alive, not flagged
+        // non-attackable, immune to players or not selectable, and not friendly
+        // - so a neutral boar wears it as a hostile wolf does. No "can't" for
+        // it: the client sets it whatever the distance.
+        path = "Interface\\Cursor\\Attack.blp";
+    } else {
+        const char* friendly = isPlayer ? nullptr : friendlyUnitCursorPath(unit->getNpcFlags());
+        if (!friendly) return false;
+        path = outOfReach ? unableCursorPath(friendly) : std::string(friendly);
+    }
+
+    VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window, path.c_str());
     if (!tex) return false;
     // Drawn in place of the pointer rather than beside it, which is what a
     // cursor is. The tip sits at the mouse position, the way the art is
@@ -1855,15 +1913,10 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             const ui::ScenePick hoverPick =
                 ui::pickScene(gameHandler, ray, ui::ScenePickParams{});
             // The client changes the pointer only over what a click can act
-            // on - and over a friendly unit with nothing to offer, or scenery,
-            // it stays the plain pointer. A corpse is loot, and keeps the hand
-            // for want of the client's loot art.
-            if (!drawVendorCursor(gameHandler, hoverPick) &&
-                !drawWorldObjectCursor(gameHandler, hoverPick)) {
-                const uint64_t hovered = hoverPick.resolve();
-                if (hovered != 0 && hovered == hoverPick.deadUnitGuid) {
-                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                }
+            // on; anywhere else it stays the glove (drawn by the interface
+            // manager once nothing here has taken the pointer).
+            if (!drawVendorCursor(gameHandler, hoverPick)) {
+                drawWorldObjectCursor(gameHandler, hoverPick);
             }
         }
     }

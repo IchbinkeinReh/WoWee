@@ -504,6 +504,7 @@ bool Application::initialize() {
         if (uiManager) {
             uiManager->loadInterfaceFont(assetPath, assetManager.get());
             uiManager->loadInterfaceFont(dataPath, assetManager.get());
+            uiManager->setCursorAssets(assetManager.get());
         }
 
         // Renderer creation precedes AssetManager creation, so DBC-driven

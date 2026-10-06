@@ -93,6 +93,11 @@ public:
     /// overlays that render() puts in the same draw list.
     void finishImGuiFrame();
 
+    /// Where the pointer's art comes from. The client draws its own glove
+    /// (Interface\Cursor\Point.blp) for the pointer everywhere, and the
+    /// interface puts it up wherever nothing has asked for another.
+    void setCursorAssets(pipeline::AssetManager* assets) { cursorAssets_ = assets; }
+
     void processEvent(const SDL_Event& event);
 
     /**
@@ -122,6 +127,10 @@ private:
     /// Whether this asked SDL for text input, so it is started and stopped
     /// once per change rather than every frame.
     bool textInputUp_ = false;
+    pipeline::AssetManager* cursorAssets_ = nullptr;
+    VkDescriptorSet gloveCursor_ = VK_NULL_HANDLE;
+    bool gloveCursorFailed_ = false;
+    void drawGloveCursor();
 
     /// How much bigger than a desktop layout this display needs the interface
     /// drawn. Decided once at start-up; the style and the font atlas both use
