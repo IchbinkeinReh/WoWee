@@ -2730,7 +2730,8 @@ void CharacterRenderer::prepareRender(uint32_t frameIndex) {
     }
 }
 
-void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera) {
+void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                               Phase phase) {
     if (instances.empty() || !opaquePipeline_) {
         return;
     }
@@ -2819,8 +2820,24 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
     VkPipeline currentPipeline = opaquePipeline_;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, currentPipeline);
 
-    for (auto& pair : instances) {
-        auto& instance = pair.second;
+    // The blended phase draws the furthest instance first, so each one
+    // composites over everything behind it.
+    drawOrder_.clear();
+    for (auto& pair : instances) drawOrder_.emplace_back(pair.first, &pair.second);
+    if (phase == Phase::Blended) {
+        const auto distSqOf = [&camPos](const CharacterInstance* inst) {
+            const glm::vec3 at = inst->hasOverrideModelMatrix
+                ? glm::vec3(inst->overrideModelMatrix[3]) : inst->position;
+            const glm::vec3 d = at - camPos;
+            return glm::dot(d, d);
+        };
+        std::sort(drawOrder_.begin(), drawOrder_.end(), [&](const auto& a, const auto& b) {
+            return distSqOf(a.second) > distSqOf(b.second);
+        });
+    }
+
+    for (const auto& [instanceId, instancePtr] : drawOrder_) {
+        auto& instance = *instancePtr;
 
         // Skip invisible instances (e.g., player in first-person mode)
         if (!instance.visible) continue;
@@ -2854,6 +2871,17 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
         // Skip fully transparent instances
         if (instance.opacity <= 0.0f) continue;
+
+        // Nothing to draw in the blended phase for a model with no blended batch.
+        if (phase == Phase::Blended) {
+            const auto& mats = gpuModel.data.materials;
+            const bool anyBlended = std::any_of(
+                gpuModel.data.batches.begin(), gpuModel.data.batches.end(),
+                [&mats](const pipeline::M2Batch& b) {
+                    return b.materialIndex < mats.size() && mats[b.materialIndex].blendMode >= 2;
+                });
+            if (!anyBlended) continue;
+        }
 
         // Set model matrix (use override for weapon instances)
         glm::mat4 modelMat = instance.hasOverrideModelMatrix
@@ -2954,6 +2982,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 uint16_t bm = getBatchBlendMode(batch);
                 if (pass == 0 && bm != 0) continue;  // pass 0: opaque only
                 if (pass == 1 && bm == 0) continue;   // pass 1: non-opaque only
+                // Blended batches (2 and up) are the world's last phase.
+                if (phase == Phase::Opaque && bm >= 2) continue;
+                if (phase == Phase::Blended && bm < 2) continue;
                 if (applyGeosetFilter) {
                     if (instance.activeGeosets.find(batch.submeshId) == instance.activeGeosets.end()) {
                         continue;
@@ -2998,7 +3029,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     // white texture, and they resolve to a texture. Twenty-four
                     // of them a session is noise in a log read for faults.
                     core::Logger::getInstance().debug(
-                        "Head batch: instance=", pair.first, " model=", instance.modelId,
+                        "Head batch: instance=", instanceId, " model=", instance.modelId,
                         " geoset=", batch.submeshId, " firstSlotType=", chosenType,
                         " resolved=", (rt == whiteTexture_.get() ? "WHITE"
                                        : (rt == nullptr ? "null" : "texture")),

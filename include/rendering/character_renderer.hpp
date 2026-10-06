@@ -95,7 +95,13 @@ public:
 
     /** Pre-allocate GPU resources (bone SSBOs, descriptors) on main thread before parallel render. */
     void prepareRender(uint32_t frameIndex);
-    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera);
+    /// Which batches a render() call draws. Blended batches leave no depth
+    /// behind, so whatever is drawn after them paints over them where it is
+    /// further away: the world draws Opaque, then the doodads, then Blended,
+    /// back to front, so a translucent fin shows what stands behind it.
+    enum class Phase { All, Opaque, Blended };
+    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                Phase phase = Phase::All);
     void recreatePipelines();
     /// The five main-pass pipelines, which initialize() and
     /// recreatePipelines() both need and each used to describe.
@@ -498,6 +504,8 @@ private:
 
     std::unordered_map<uint32_t, M2ModelGPU> models;
     std::unordered_map<uint32_t, CharacterInstance> instances;
+    /// The instances a render() call draws, in the order it draws them.
+    std::vector<std::pair<uint32_t, CharacterInstance*>> drawOrder_;
 
     uint32_t nextInstanceId = 1;
 

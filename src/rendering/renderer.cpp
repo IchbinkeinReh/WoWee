@@ -3034,9 +3034,20 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             VkCommandBuffer cmd = beginSecondary(SEC_CHARS);
             setSecondaryViewportScissor(cmd);
             if (characterRenderer && camera && !skipChars) {
-                characterRenderer->render(cmd, perFrameSet, *camera);
+                characterRenderer->render(cmd, perFrameSet, *camera,
+                                          CharacterRenderer::Phase::Opaque);
             }
             vkEndCommandBuffer(cmd);
+
+            // Same worker, one after the other: the second shares the renderer's
+            // per-frame state with the first.
+            VkCommandBuffer blendedCmd = beginSecondary(SEC_CHARS_BLENDED);
+            setSecondaryViewportScissor(blendedCmd);
+            if (characterRenderer && camera && !skipChars) {
+                characterRenderer->render(blendedCmd, perFrameSet, *camera,
+                                          CharacterRenderer::Phase::Blended);
+            }
+            vkEndCommandBuffer(blendedCmd);
             return std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
         });
@@ -3133,8 +3144,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         }
 
         // --- Execute all secondary buffers in correct draw order ---
-        VkCommandBuffer validCmds[8];
-        const char* validLabels[8];
+        VkCommandBuffer validCmds[9];
+        const char* validLabels[9];
         uint32_t numCmds = 0;
         // Terrain first, then the sky. Every sky layer sits on the far plane
         // and depth-tests against what is already there, so drawing it after
@@ -3157,6 +3168,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         queue(secondaryCmds_[SEC_CHARS][frameIdx], "characters");
         if (m2Renderer && camera && !skipM2)
             queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
+        queue(secondaryCmds_[SEC_CHARS_BLENDED][frameIdx], "characters blended");
         queue(secondaryCmds_[SEC_POST][frameIdx], "water/effects");
 
         // One at a time, with a mark after each.
@@ -3236,7 +3248,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
         if (characterRenderer && camera && !skipChars) {
             characterRenderer->prepareRender(frameIdx);
-            characterRenderer->render(currentCmd, perFrameSet, *camera);
+            characterRenderer->render(currentCmd, perFrameSet, *camera,
+                                      CharacterRenderer::Phase::Opaque);
             if (vkCtx) vkCtx->gpuMark(currentCmd, "characters");
         }
 
@@ -3253,6 +3266,12 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             if (vkCtx) vkCtx->gpuMark(currentCmd, "m2");
             lastM2RenderMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - m2Start).count();
+        }
+
+        if (characterRenderer && camera && !skipChars) {
+            characterRenderer->render(currentCmd, perFrameSet, *camera,
+                                      CharacterRenderer::Phase::Blended);
+            if (vkCtx) vkCtx->gpuMark(currentCmd, "characters blended");
         }
 
         if (waterRenderer && camera && !waterDrawsInContinuePass()) {
@@ -4187,6 +4206,16 @@ bool Renderer::createSecondaryCommandResources() {
                 LOG_ERROR("Failed to allocate worker secondary buffer w=", w, " f=", f);
                 return false;
             }
+        }
+    }
+
+    // The characters' blended buffer comes from the pool of the worker that
+    // records the characters' opaque one (index 2 above).
+    allocInfo.commandPool = workerCmdPools_[2];
+    for (uint32_t f = 0; f < MAX_FRAMES; ++f) {
+        if (vkAllocateCommandBuffers(device, &allocInfo, &secondaryCmds_[SEC_CHARS_BLENDED][f]) != VK_SUCCESS) {
+            LOG_ERROR("Failed to allocate blended characters secondary buffer f=", f);
+            return false;
         }
     }
 
