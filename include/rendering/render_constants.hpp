@@ -15,15 +15,10 @@ constexpr float    M2_MAX_RENDER_DISTANCE_HIGH_DENSITY = 800.0f;
 constexpr float    M2_MAX_RENDER_DISTANCE_LOW_DENSITY  = 2800.0f;
 
 // ---------------------------------------------------------------------------
-// M2 LOD / bone-update distance thresholds (world units)
+// M2 distance thresholds (world units)
 // ---------------------------------------------------------------------------
-constexpr float M2_LOD3_DISTANCE        = 150.0f;  // Beyond this: no bone updates
-constexpr float M2_BONE_SKIP_DIST_FAR   = 100.0f;  // Beyond this: every 4th frame
-constexpr float M2_BONE_SKIP_DIST_MID   = 50.0f;   // Beyond this: every 2nd frame
-// Flying ambient models have obvious, rapid wing motion.  They are exempt from
-// bone frame-skipping and the LOD3 bone freeze (their flight path is baked into
-// bone animation), so they stay fully animated out to this range instead of
-// despawning at the generic no-bone LOD boundary.
+// Flying ambient models are drawn out to this range: their flight path is
+// baked into bone animation, and they read from much further away.
 constexpr float M2_SKY_BIRD_MAX_RENDER_DISTANCE = 320.0f;
 
 // ---------------------------------------------------------------------------

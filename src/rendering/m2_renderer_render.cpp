@@ -553,25 +553,10 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         float paddedRadius = instance.cachedPaddedRadius;
         if (paddedRadius > 0.0f && !updateFrustum.intersectsSphere(instance.cachedCullCenter, paddedRadius)) continue;
 
-        // LOD 3 skip: models beyond 150 units use the lowest LOD mesh which has
-        // no visible skeletal animation.  Keep their last-computed bone matrices
-        // (always valid - seeded on spawn) and avoid the expensive per-bone work.
-        // Sky birds, light beams, and ship machinery are exempt: their visible
-        // motion is baked entirely into bone animation.
-        constexpr float kLOD3DistSq = rendering::M2_LOD3_DISTANCE * rendering::M2_LOD3_DISTANCE;
-        const bool needsDistantBones = instance.cachedIsSkyBird || instance.cachedIsLightBeam ||
-                                       instance.cachedIsTransportDoodad;
-        if (distSq > kLOD3DistSq && !needsDistantBones) continue;
-
-        // Distance-based frame skipping: update distant bones less frequently
-        uint32_t boneInterval = 1;
-        if (!needsDistantBones) {
-            if (distSq > rendering::M2_BONE_SKIP_DIST_FAR * rendering::M2_BONE_SKIP_DIST_FAR) boneInterval = 4;
-            else if (distSq > rendering::M2_BONE_SKIP_DIST_MID * rendering::M2_BONE_SKIP_DIST_MID) boneInterval = 2;
-        }
-        instance.frameSkipCounter++;
-        if ((instance.frameSkipCounter % boneInterval) != 0) continue;
-
+        // Every frame, at every distance it is drawn: the client steps a
+        // visible model's bones each frame, and updating every second or
+        // fourth frame - or freezing past 150 yards - is what made distant
+        // doodads move in visible steps.
         boneWorkIndices_.push_back(idx);
     }
 

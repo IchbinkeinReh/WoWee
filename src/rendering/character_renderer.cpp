@@ -2168,15 +2168,11 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
 }
 
 void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
-    // Distance culling for animation updates in dense areas.
-    const float animUpdateRadius = static_cast<float>(envSizeOrDefault("WOWEE_CHAR_ANIM_RADIUS", 120));
+    // Animate everything that can be drawn. The animation radius used to be
+    // 120 yards against a 130-yard draw radius, so anything between the two
+    // stood frozen in its last pose; the client animates what it shows.
+    const float animUpdateRadius = static_cast<float>(envSizeOrDefault("WOWEE_CHAR_RENDER_RADIUS", 130));
     const float animUpdateRadiusSq = animUpdateRadius * animUpdateRadius;
-    // Creature birds are rendered by this path rather than M2Renderer.  Their
-    // rapid wing motion remains conspicuous at distance, and the render radius
-    // can be larger than the generic animation radius.  Use the same boundary
-    // as rendering so a visible bird never holds its last bone pose.
-    const float birdUpdateRadius = static_cast<float>(envSizeOrDefault("WOWEE_CHAR_RENDER_RADIUS", 130));
-    const float birdUpdateRadiusSq = birdUpdateRadius * birdUpdateRadius;
 
     // Single pass: fade-in, movement, and animation bone collection
     toUpdate_.clear();
@@ -2210,9 +2206,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
         if (inst.hasOverrideModelMatrix && !inst.isEffectModel) continue;
 
         float distSq = glm::distance2(inst.position, cameraPos);
-        const bool isSkyBird = inst.cachedModel && inst.cachedModel->isSkyBird;
-        const float updateRadiusSq = isSkyBird ? birdUpdateRadiusSq : animUpdateRadiusSq;
-        if (distSq > updateRadiusSq && !inst.isSceneModel) continue;
+        if (distSq > animUpdateRadiusSq && !inst.isSceneModel) continue;
 
         // Advance global sequence timer (accumulates independently of animation wrapping)
         inst.globalSequenceTime += deltaTime * 1000.0f;
@@ -2249,23 +2243,10 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
             }
         }
 
-        // Keep combat-range creatures at the render frame rate. Aggressive
-        // throttling used to begin at 10 yards and reached every eighth frame
-        // at 40 yards, making ordinary monster locomotion look like a slideshow.
-        // Reserve frame skipping for models far enough away that bone detail is
-        // much less noticeable, consistent with the generic M2 renderer.
-        uint32_t boneInterval = 1;
-        if (!isSkyBird) {
-            if (distSq > 90.0f * 90.0f) boneInterval = 4;
-            else if (distSq > 45.0f * 45.0f) boneInterval = 2;
-        }
-
-        inst.boneUpdateCounter++;
-        bool needsBones = (inst.boneUpdateCounter >= boneInterval) || inst.boneMatrices.empty();
-        if (needsBones) {
-            inst.boneUpdateCounter = 0;
-            toUpdate_.push_back(std::ref(inst));
-        }
+        // Bones every frame, at any distance: the client steps a visible
+        // model each frame. Every second or fourth frame past 45 and 90 yards
+        // made creature locomotion visibly step.
+        toUpdate_.push_back(std::ref(inst));
     }
 
     const size_t updatedCount = toUpdate_.size();
