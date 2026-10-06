@@ -66,7 +66,7 @@ struct M2ModelGPU {
         uint16_t textureAnimIndex = 0xFFFF; // 0xFFFF = no texture animation
         uint16_t blendMode = 0;   // 0=Opaque, 1=AlphaKey, 2=Alpha, 3=Add, etc.
         uint16_t materialFlags = 0; // M2 material flags (0x01=Unlit, 0x04=TwoSided, 0x10=NoDepthWrite)
-        uint16_t submeshLevel = 0; // LOD level: 0=base, 1=LOD1, 2=LOD2, 3=LOD3
+        uint16_t submeshLevel = 0; // Skin section level: the high half of its starts, not an LOD
         uint8_t textureUnit = 0;  // UV set index (0=texCoords[0], 1=texCoords[1])
         uint8_t texFlags = 0;     // M2Texture.flags (bit0=WrapS, bit1=WrapT)
         bool glowCardLike = false; // Batch looks like a flat emissive card (kept out of the ray traced scene)
@@ -165,7 +165,6 @@ struct M2ModelGPU {
     bool isTransportDoodad = false; // Animated ship sail/paddle child
     bool hasTextureAnimation = false; // True if any batch has UV animation
     bool hasTransparentBatches = false; // True if any batch uses alpha-blend or additive (blendMode >= 2)
-    uint8_t availableLODs = 0;  // Bitmask: bit N set if any batch has submeshLevel==N
 
     // Particle emitter data (kept from M2Model)
     std::vector<pipeline::M2ParticleEmitter> particleEmitters;

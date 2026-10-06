@@ -326,6 +326,17 @@ struct M2SkinProfileEmbedded {
 static_assert(sizeof(M2SkinProfileEmbedded) == 44,
               "M2SkinProfileEmbedded is read straight from the file: 44 bytes, no padding");
 
+// Where a skin section starts. Its level is the high half of its starts,
+// which are 16-bit on disk: (level << 16) is added to them, so a model
+// with more than 65535 triangle indices can address the rest. It is not a
+// level of detail - the client draws every section of the skin it loaded
+// (FUN_008203b0). The guard keeps a file that disagrees in range.
+static uint32_t skinSectionStart(uint16_t start, uint16_t level, uint16_t count,
+                                 size_t total) {
+    const uint32_t wide = static_cast<uint32_t>(start) + (static_cast<uint32_t>(level) << 16);
+    return (static_cast<size_t>(wide) + count <= total) ? wide : start;
+}
+
 // Skin batch structure (24 bytes on disk)
 struct M2BatchDisk {
     uint8_t flags;
@@ -1846,9 +1857,11 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
 
                 if (db.skinSectionIndex < submeshes.size()) {
                     const auto& sm = submeshes[db.skinSectionIndex];
-                    batch.indexStart = sm.indexStart;
+                    batch.indexStart = skinSectionStart(sm.indexStart, sm.level, sm.indexCount,
+                                                        model.indices.size());
                     batch.indexCount = sm.indexCount;
-                    batch.vertexStart = sm.vertexStart;
+                    batch.vertexStart = skinSectionStart(sm.vertexStart, sm.level, sm.vertexCount,
+                                                         model.vertices.size());
                     batch.vertexCount = sm.vertexCount;
                     batch.submeshId = sm.id;
                     batch.submeshLevel = sm.level;
@@ -1961,9 +1974,11 @@ bool M2Loader::loadSkin(const std::vector<uint8_t>& skinData, M2Model& model) {
             // Look up proper vertex/index ranges from submesh
             if (db.skinSectionIndex < submeshes.size()) {
                 const auto& sm = submeshes[db.skinSectionIndex];
-                batch.indexStart = sm.indexStart;
+                batch.indexStart = skinSectionStart(sm.indexStart, sm.level, sm.indexCount,
+                                                    model.indices.size());
                 batch.indexCount = sm.indexCount;
-                batch.vertexStart = sm.vertexStart;
+                batch.vertexStart = skinSectionStart(sm.vertexStart, sm.level, sm.vertexCount,
+                                                     model.vertices.size());
                 batch.vertexCount = sm.vertexCount;
                 batch.submeshId = sm.id;
                 batch.submeshLevel = sm.level;

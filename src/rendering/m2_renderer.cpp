@@ -2100,11 +2100,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
         }
     }
 
-    // Pre-compute available LOD levels to avoid per-instance batch iteration
-    gpuModel.availableLODs = 0;
-    for (const auto& b : gpuModel.batches) {
-        if (b.submeshLevel < 8) gpuModel.availableLODs |= (1u << b.submeshLevel);
-    }
 
     registerRtModel(gpuModel, model);
     models[modelId] = std::move(gpuModel);
@@ -2138,7 +2133,7 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     src.positions.reserve(model.vertices.size());
     for (const auto& v : model.vertices) src.positions.push_back(v.position);
     for (const auto& batch : gpuModel.batches) {
-        if (batch.submeshLevel != 0 || batch.blendMode >= 2 || batch.batchOpacity < 0.01f ||
+        if (batch.blendMode >= 2 || batch.batchOpacity < 0.01f ||
             batch.starLayer || batch.glowCardLike) {
             continue;
         }

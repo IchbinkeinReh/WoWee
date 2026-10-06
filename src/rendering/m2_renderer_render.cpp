@@ -1451,16 +1451,11 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 if (needsBones && instance.megaBoneOffset == 0) continue;
 
                 // LOD selection
-                uint16_t desiredLOD = 0;
-                if (entry.distSq > 150.0f * 150.0f) desiredLOD = 3;
-                else if (entry.distSq > 80.0f * 80.0f) desiredLOD = 2;
-                else if (entry.distSq > 40.0f * 40.0f) desiredLOD = 1;
-                // Down to the nearest level the model actually has, not all
-                // the way back to full detail. A model carrying 0 and 1 and
-                // asked for 3 was drawn at 0 - the most expensive level there
-                // is - at the distance where it mattered least.
-                uint16_t targetLOD = desiredLOD;
-                while (targetLOD > 0 && !(model.availableLODs & (1u << targetLOD))) --targetLOD;
+                // Every section of the loaded skin is drawn: the client picks
+                // detail by loading a different .skin, and draws all of its
+                // sections (FUN_008203b0). A section's level is the high half
+                // of its index start, not a level of detail.
+                const uint16_t targetLOD = 0;
 
                 pending.push_back({.instanceIdx = entry.index, .fadeAlpha = instanceFadeAlpha, .useBones = needsBones, .targetLOD = targetLOD});
             }
@@ -1574,8 +1569,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         skipped = "WOWEE_M2_ONLY_BATCH";
                     }
                     else if (batch.indexCount == 0) skipped = "no indices";
-                    else if (!model.isGroundDetail && batch.submeshLevel != lod)
-                        skipped = "submeshLevel is not this LOD";
                     else if (batch.batchOpacity < 0.01f) skipped = "opacity is zero";
                     else if (!skyBatchAllowed(skyMode_, bi)) skipped = "sky batch rule";
                     else if (suppressBakedStars_ && batch.starLayer) skipped = "baked star layer";
@@ -1760,17 +1753,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         bool needsBones = modelNeedsAnimation && !instance.boneMatrices.empty();
         if (needsBones && instance.megaBoneOffset == 0) continue;
 
-        uint16_t desiredLOD = 0;
-        if (entry.distSq > 150.0f * 150.0f) desiredLOD = 3;
-        else if (entry.distSq > 80.0f * 80.0f) desiredLOD = 2;
-        else if (entry.distSq > 40.0f * 40.0f) desiredLOD = 1;
-        // The nearest level the model has; see the note in the batched path.
-        uint16_t targetLOD = desiredLOD;
-        while (targetLOD > 0 && !(model.availableLODs & (1u << targetLOD))) --targetLOD;
-
         for (const auto& batch : model.batches) {
             if (batch.indexCount == 0) continue;
-            if (!model.isGroundDetail && batch.submeshLevel != targetLOD) continue;
             if (batch.batchOpacity < 0.01f) continue;
             if (!skyBatchAllowed(skyMode_, static_cast<std::size_t>(&batch - model.batches.data()))) continue;
 
@@ -2258,7 +2242,6 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
             usePipeline(instanced);
 
             for (const auto& batch : model.batches) {
-                if (batch.submeshLevel > 0) continue;
                 // A leaf card with no texture is a shadow with no caster.
                 //
                 // The else below binds the white set, whose alpha test passes

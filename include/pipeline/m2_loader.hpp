@@ -107,7 +107,7 @@ struct M2Batch {
 
     // Geoset info (from submesh)
     uint16_t submeshId = 0;         // Submesh/geoset ID (determines body part group)
-    uint16_t submeshLevel = 0;      // Submesh level (0=base, 1+=LOD/alternate mesh)
+    uint16_t submeshLevel = 0;      // Skin section level: high half of its starts (already applied)
 };
 
 // Material / render flags (per-batch blend mode)
