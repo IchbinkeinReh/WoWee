@@ -13,6 +13,25 @@ bool LocomotionFSM::oneShotComplete(const Input& in, uint32_t expectedAnimId) co
            (in.currentAnimDuration > 0.1f && in.currentAnimTime >= in.currentAnimDuration - 0.05f);
 }
 
+// ── Landing ───────────────────────────────────────────────────────────────────
+
+// The client's landing (FUN_0073d2b0), decided as the feet touch down: with no
+// direction held it plays JumpEnd; running on - forward or strafing, not
+// backing up, faster than twice walk speed (FUN_00716fa0) - JumpLandRun;
+// walking or backing up goes straight back to moving. WoWee dropped the
+// landing whenever the player was moving, so a jump on the run never landed.
+void LocomotionFSM::land(const Input& in, const AnimCapabilitySet& caps) {
+    jumpEndSeen_ = false;
+    landDecided_ = true;
+    landRun_ = in.moving && !in.movingBackward && in.sprinting &&
+               caps.resolvedJumpLandRun != 0;
+    if (in.moving && !landRun_) {
+        state_ = in.sprinting ? State::RUN : State::WALK;
+    } else {
+        state_ = State::JUMP_END;
+    }
+}
+
 // ── Event handling ───────────────────────────────────────────────────────────
 
 void LocomotionFSM::onEvent(AnimEvent event) {
@@ -32,6 +51,7 @@ void LocomotionFSM::onEvent(AnimEvent event) {
         case AnimEvent::LANDED:
             if (state_ == State::JUMP_MID || state_ == State::JUMP_START) {
                 jumpEndSeen_ = false;
+                landDecided_ = false;
                 state_ = State::JUMP_END;
             }
             break;
@@ -110,8 +130,7 @@ void LocomotionFSM::updateTransitions(const Input& in, const AnimCapabilitySet& 
             if (in.swimming) {
                 state_ = State::SWIM_IDLE;
             } else if (in.grounded) {
-                state_ = State::JUMP_END;
-                jumpEndSeen_ = false;
+                land(in, caps);
             } else if (caps.resolvedJumpStart == 0) {
                 // Model doesn't have JUMP_START animation - skip to mid-air
                 state_ = State::JUMP_MID;
@@ -134,15 +153,32 @@ void LocomotionFSM::updateTransitions(const Input& in, const AnimCapabilitySet& 
             if (in.swimming) {
                 state_ = State::SWIM_IDLE;
             } else if (in.grounded) {
-                state_ = State::JUMP_END;
+                land(in, caps);
             }
             break;
 
-        case State::JUMP_END:
+        case State::JUMP_END: {
+            // Reached by the LANDED event, which carries no input to decide by.
+            if (!landDecided_) {
+                land(in, caps);
+                if (state_ != State::JUMP_END) break;
+            }
             if (in.swimming) {
                 state_ = effectiveMoving ? State::SWIM : State::SWIM_IDLE;
+            } else if (landRun_) {
+                if (!effectiveMoving || in.movingBackward) {
+                    // Stopped or turned back mid-landing: plain locomotion.
+                    state_ = !effectiveMoving ? State::IDLE
+                           : effectiveSprinting ? State::RUN : State::WALK;
+                } else if (in.haveAnimState) {
+                    const uint32_t expected = caps.resolvedJumpLandRun;
+                    if (in.currentAnimId == expected) jumpEndSeen_ = true;
+                    if (jumpEndSeen_ && oneShotComplete(in, expected)) state_ = State::RUN;
+                } else {
+                    state_ = State::RUN;
+                }
             } else if (effectiveMoving) {
-                // Movement overrides landing animation
+                // Walking or backing up: no landing animation, as in the client.
                 state_ = effectiveSprinting ? State::RUN : State::WALK;
             } else if (caps.resolvedJumpEnd == 0) {
                 // Model doesn't have JUMP_END animation - go straight to IDLE
@@ -158,6 +194,7 @@ void LocomotionFSM::updateTransitions(const Input& in, const AnimCapabilitySet& 
                 state_ = State::IDLE;
             }
             break;
+        }
 
         case State::SWIM_IDLE:
             if (!in.swimming) {
@@ -225,7 +262,8 @@ AnimOutput LocomotionFSM::resolve(const Input& in, const AnimCapabilitySet& caps
             loop = true;  // Must loop - long falls outlast a single play cycle
             break;
         case State::JUMP_END:
-            animId = caps.resolvedJumpEnd ? caps.resolvedJumpEnd : anim::JUMP_END;
+            animId = landRun_ ? caps.resolvedJumpLandRun
+                   : caps.resolvedJumpEnd ? caps.resolvedJumpEnd : anim::JUMP_END;
             loop = false;
             break;
 
@@ -264,6 +302,8 @@ void LocomotionFSM::reset() {
     wasSprinting_ = false;
     jumpStartSeen_ = false;
     jumpEndSeen_ = false;
+    landDecided_ = false;
+    landRun_ = false;
 }
 
 } // namespace rendering

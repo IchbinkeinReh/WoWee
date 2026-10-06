@@ -54,6 +54,7 @@ struct AnimCapabilitySet {
     uint32_t resolvedJumpStart = 0;
     uint32_t resolvedJump = 0;       // Mid-air loop
     uint32_t resolvedJumpEnd = 0;
+    uint32_t resolvedJumpLandRun = 0; // Landing while running on (JumpLandRun)
     uint32_t resolvedSwimIdle = 0;
     uint32_t resolvedSwim = 0;
     uint32_t resolvedSwimBackwards = 0;

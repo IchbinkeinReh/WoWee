@@ -17,6 +17,7 @@ static AnimCapabilitySet makeLocoCaps() {
     caps.resolvedJumpStart = anim::JUMP_START;
     caps.resolvedJump = anim::JUMP;
     caps.resolvedJumpEnd = anim::JUMP_END;
+    caps.resolvedJumpLandRun = anim::JUMP_LAND_RUN;
     caps.resolvedSwimIdle = anim::SWIM_IDLE;
     caps.resolvedSwim = anim::SWIM;
     caps.hasStand = true;
@@ -162,4 +163,70 @@ TEST_CASE("LocomotionFSM: reset restores IDLE", "[locomotion]") {
 
     fsm.reset();
     CHECK(fsm.getState() == LocomotionFSM::State::IDLE);
+}
+
+// Landing, as the client's FUN_0073d2b0 chooses it: JumpEnd with no direction
+// held, JumpLandRun running on, and straight back to moving when walking or
+// backing up. WoWee dropped the landing whenever the player was moving.
+// The game reports the playing animation; mid-air that is the Jump loop.
+static LocomotionFSM::Input airborneAnim(LocomotionFSM::Input in) {
+    in.haveAnimState = true;
+    in.currentAnimId = anim::JUMP;
+    in.currentAnimDuration = 1.0f;
+    in.currentAnimTime = 0.2f;
+    return in;
+}
+
+static LocomotionFSM landFrom(LocomotionFSM::Input landing) {
+    LocomotionFSM fsm;
+    fsm.setState(LocomotionFSM::State::JUMP_MID);
+    landing.grounded = true;
+    fsm.resolve(airborneAnim(landing), makeLocoCaps());   // touches down
+    return fsm;
+}
+
+TEST_CASE("LocomotionFSM: landing standing plays JumpEnd", "[locomotion]") {
+    auto fsm = landFrom(idle());
+    CHECK(fsm.getState() == LocomotionFSM::State::JUMP_END);
+    auto out = fsm.resolve(airborneAnim(idle()), makeLocoCaps());
+    REQUIRE(out.valid);
+    CHECK(out.animId == anim::JUMP_END);
+    CHECK_FALSE(out.loop);
+}
+
+TEST_CASE("LocomotionFSM: landing while running on plays JumpLandRun", "[locomotion]") {
+    auto in = idle();
+    in.moving = true;
+    in.movingForward = true;
+    in.sprinting = true;
+    auto fsm = landFrom(in);
+    auto out = fsm.resolve(airborneAnim(in), makeLocoCaps());
+    REQUIRE(out.valid);
+    CHECK(out.animId == anim::JUMP_LAND_RUN);
+    CHECK_FALSE(out.loop);
+    CHECK(fsm.getState() == LocomotionFSM::State::JUMP_END);
+
+    // Once it has played, the run resumes.
+    in.haveAnimState = true;
+    in.currentAnimId = anim::JUMP_LAND_RUN;
+    in.currentAnimDuration = 0.5f;
+    in.currentAnimTime = 0.5f;
+    out = fsm.resolve(in, makeLocoCaps());
+    REQUIRE(out.valid);
+    CHECK(out.animId == anim::RUN);
+}
+
+TEST_CASE("LocomotionFSM: landing while walking or backing up has no landing", "[locomotion]") {
+    auto walking = idle();
+    walking.moving = true;
+    walking.movingForward = true;
+    auto fsm = landFrom(walking);
+    CHECK(fsm.getState() == LocomotionFSM::State::WALK);
+
+    auto backing = idle();
+    backing.moving = true;
+    backing.movingBackward = true;
+    backing.sprinting = true;
+    auto fsm2 = landFrom(backing);
+    CHECK(fsm2.getState() == LocomotionFSM::State::RUN);
 }

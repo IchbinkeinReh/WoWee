@@ -65,8 +65,13 @@ private:
     bool wasSprinting_ = false;
 
     // One-shot tracking for jump start/end animations
+    void land(const Input& in, const AnimCapabilitySet& caps);
     bool jumpStartSeen_ = false;
     bool jumpEndSeen_ = false;
+    // How this landing plays, decided on the first update after touching
+    // down (FUN_0073d2b0): JumpEnd standing, JumpLandRun running on.
+    bool landDecided_ = false;
+    bool landRun_ = false;
 
     static constexpr float kGraceSec = 0.12f;
 
