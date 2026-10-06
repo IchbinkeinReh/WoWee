@@ -1564,11 +1564,12 @@ void EntitySpawner::processPendingMount() {
             }
         }
 
-        // Load external .anim files (only idle + run needed for mounts)
-        // Only what a mount does while standing still; the rest would stall.
-        pipeline::loadExternalAnimations(
-            *assetManager_, m2Path, m2Data, model,
-            {rendering::anim::STAND, rendering::anim::WALK, rendering::anim::RUN});
+        // Every external .anim, not just Stand/Walk/Run: a mount also jumps,
+        // backs up, swims and rears, and those sequences sampled the bind
+        // pose. A mount model has a few dozen at most, loaded once per display;
+        // and the model lands in the display cache creatures share, which must
+        // not hold a trimmed copy.
+        pipeline::loadExternalAnimations(*assetManager_, m2Path, m2Data, model);
 
         if (!charRenderer->loadModel(model, modelId)) {
             LOG_WARNING("Failed to load mount model: ", m2Path);
@@ -1887,10 +1888,9 @@ bool EntitySpawner::loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
         }
         if (!model.isValid()) return false;
 
-        pipeline::loadExternalAnimations(
-            *assetManager_, modelPath, m2Data, model,
-            {rendering::anim::STAND, rendering::anim::WALK, rendering::anim::RUN,
-             rendering::anim::FLY_IDLE, rendering::anim::FLY_FORWARD});
+        // Every external .anim, as above: the display cache is shared with
+        // creatures, and a mount does more than stand, run and fly.
+        pipeline::loadExternalAnimations(*assetManager_, modelPath, m2Data, model);
 
         modelId = nextCreatureModelId_++;
         if (!cr->loadModel(model, modelId)) return false;
