@@ -161,10 +161,10 @@ bool parseMonsterMoveFacing(network::Packet& packet, MonsterMoveData& data, bool
     }
 
     if (data.moveType == 2) {
-        // FacingSpot - a point to look at, which nothing here needs; read past.
+        // FacingSpot - the point to face on arriving.
         if (!packet.hasRemaining(12)) return false;
-        packet.readFloat();
-        packet.readFloat();
+        data.facingSpotX = packet.readFloat();
+        data.facingSpotY = packet.readFloat();
         packet.readFloat();
     } else if (data.moveType == 3) {
         // FacingTarget

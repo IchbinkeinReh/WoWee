@@ -97,6 +97,7 @@ namespace SplineFlagWotlk {
     constexpr uint32_t ENTER_CYCLE     = 0x00100000;
     constexpr uint32_t ANIMATION       = 0x00200000;
     constexpr uint32_t FROZEN          = 0x00400000;
+    constexpr uint32_t ORIENT_INVERSED = 0x08000000;
 
     constexpr uint32_t UNCOMPRESSED_MASK = CATMULLROM | CYCLIC | ENTER_CYCLE;
 } // namespace SplineFlagWotlk

@@ -40,6 +40,26 @@ float slowUpdateObjectBlockLogThresholdMs() {
     return static_cast<float>(thresholdMs);
 }
 
+/// A unit's speeds from the movement section of its create or movement
+/// block, onto its entity: what another player is moved on at between its
+/// packets (Entity::startMoveByFlags). A block without them - a vanilla one
+/// has no flight speeds - leaves the base speeds in place.
+void applyBlockSpeedsToEntity(const UpdateBlock& block, Entity& entity) {
+    if (!block.hasMovement || block.runSpeed <= 0.1f || block.runSpeed >= 100.0f) return;
+    auto apply = [](float value, float& destination) {
+        if (std::isfinite(value) && value > 0.01f && value < 200.0f) destination = value;
+    };
+    MovementSpeeds& speeds = entity.movementSpeeds();
+    apply(block.walkSpeed, speeds.walk);
+    apply(block.runSpeed, speeds.run);
+    apply(block.runBackSpeed, speeds.runBack);
+    apply(block.swimSpeed, speeds.swim);
+    apply(block.swimBackSpeed, speeds.swimBack);
+    apply(block.flightSpeed, speeds.flight);
+    apply(block.flightBackSpeed, speeds.flightBack);
+    apply(block.turnRate, speeds.turnRate);
+}
+
 } // anonymous namespace
 
 EntityController::EntityController(GameHandler& owner)
@@ -2544,6 +2564,7 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
                     block.flightBackSpeed, block.turnRate, block.pitchRate);
             }
         }
+        applyBlockSpeedsToEntity(block, *entity);
         // 3b: Track player-on-transport state
         if (block.guid == owner_.getPlayerGuid()) {
             applyPlayerTransportState(block, entity, pos, oCanonical, false);
@@ -2619,6 +2640,7 @@ void EntityController::handleMovementUpdate(const UpdateBlock& block) {
                 float oCanonical = core::coords::serverToCanonicalYaw(block.orientation);
                 entity->setPosition(pos.x, pos.y, pos.z, oCanonical);
                 LOG_DEBUG("Updated entity position: 0x", std::hex, block.guid, std::dec);
+                applyBlockSpeedsToEntity(block, *entity);
 
                 updateNonPlayerTransportAttachment(block, entity, entity->getType());
 

@@ -2021,6 +2021,7 @@ struct MonsterMoveData {
     uint8_t moveType = 0;  // 0=Normal, 1=Stop, 2=FacingSpot, 3=FacingTarget, 4=FacingAngle
     float facingAngle = 0;
     uint64_t facingTarget = 0;
+    float facingSpotX = 0, facingSpotY = 0;  // FacingSpot, server coords; its height is not needed
     uint32_t splineFlags = 0;
     uint32_t duration = 0;
     // Destination (final point of the spline, server coords)

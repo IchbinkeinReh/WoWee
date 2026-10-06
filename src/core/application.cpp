@@ -3418,7 +3418,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     }
                 }
             }
-            float renderYaw = entity->getOrientation() + glm::radians(90.0f);
+            // The model turns towards the movement facing (FUN_00735f60).
+            float renderYaw = entity->getModelFacing() + glm::radians(90.0f);
             charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, 0.0f, renderYaw));
         }
     }
@@ -3629,8 +3630,10 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 }
             }
 
-            // Orientation sync
-            float renderYaw = entity->getOrientation() + glm::radians(90.0f);
+            // Orientation sync: the model turns towards the movement facing
+            // rather than snapping to it, as the client draws other players
+            // (FUN_00735f60).
+            float renderYaw = entity->getModelFacing() + glm::radians(90.0f);
             charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, 0.0f, renderYaw));
             if (remoteMount) {
                 charRenderer->setInstanceRotation(remoteMount->instanceId,

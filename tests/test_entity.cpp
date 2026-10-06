@@ -86,24 +86,197 @@ TEST_CASE("A spline starts where the entity is, as the client's does",
     REQUIRE(e.getX() == Catch::Approx(6.0f).margin(0.01f));
 }
 
+namespace {
+constexpr uint32_t kForward = 0x1, kStrafeLeft = 0x4, kTurnLeft = 0x10, kTurnRight = 0x20;
+constexpr uint32_t kWalking = 0x100, kSwimming = 0x200000, kFlying = 0x2000000;
+constexpr uint32_t kBackward = 0x2, kAscending = 0x400000;
+constexpr float kPi = 3.14159265f;
+} // namespace
+
+TEST_CASE("A unit's speed follows its flags as GetCurrentSpeed picks it",
+          "[entity][movement]") {
+    MovementSpeeds speeds;
+    REQUIRE(Entity::speedForFlags(speeds, 0) == 0.0f);
+    REQUIRE(Entity::speedForFlags(speeds, kTurnLeft) == 0.0f);
+    REQUIRE(Entity::speedForFlags(speeds, kForward) == Catch::Approx(7.0f));
+    REQUIRE(Entity::speedForFlags(speeds, kBackward) == Catch::Approx(4.5f));
+    REQUIRE(Entity::speedForFlags(speeds, kForward | kWalking) == Catch::Approx(2.5f));
+    REQUIRE(Entity::speedForFlags(speeds, kBackward | kWalking) == Catch::Approx(2.5f));
+    REQUIRE(Entity::speedForFlags(speeds, kForward | kSwimming) == Catch::Approx(4.722222f));
+    REQUIRE(Entity::speedForFlags(speeds, kBackward | kSwimming) == Catch::Approx(2.5f));
+    REQUIRE(Entity::speedForFlags(speeds, kAscending | kFlying) == Catch::Approx(7.0f));
+    // A slowed run below the walk speed is walked at the run speed.
+    speeds.run = 2.0f;
+    REQUIRE(Entity::speedForFlags(speeds, kForward | kWalking) == Catch::Approx(2.0f));
+}
+
+TEST_CASE("A player starts moving on its start packet", "[entity][movement]") {
+    // A start packet has no displacement: the unit moves from it at its
+    // speed, not from the next heartbeat.
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.movementSpeeds().run = 8.0f;
+    REQUIRE(e.getMovementSpeeds().run == Catch::Approx(8.0f));
+    e.startMoveByFlags(0.0f, 0.0f, 0.0f, 0.0f, kForward, 0, 0.12f);
+    REQUIRE(e.isActivelyMoving());
+    REQUIRE(e.getMoveSpeed() == Catch::Approx(8.0f));
+    e.updateMovement(0.25f);
+    // Canonical facing 0 is +x.
+    REQUIRE(e.getX() == Catch::Approx(2.0f));
+    REQUIRE(e.getY() == Catch::Approx(0.0f).margin(1e-4f));
+    // The packet's position stays the latest reported one.
+    REQUIRE(e.getLatestX() == Catch::Approx(0.0f));
+}
+
+TEST_CASE("A strafing player moves to its side", "[entity][movement]") {
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveByFlags(0.0f, 0.0f, 0.0f, 0.0f, kStrafeLeft, 0, 0.12f);
+    e.updateMovement(0.5f);
+    // Left of +x is canonical -y (forward is (cos o, -sin o)).
+    REQUIRE(e.getX() == Catch::Approx(0.0f).margin(1e-4f));
+    REQUIRE(e.getY() == Catch::Approx(-3.5f));
+}
+
+TEST_CASE("A packet's correction is taken out from where the unit is drawn",
+          "[entity][movement]") {
+    Entity e;
+    e.setPosition(1.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveByFlags(0.0f, 0.0f, 0.0f, 0.0f, kForward, 0, 0.5f);
+    e.updateMovement(0.0f);
+    REQUIRE(e.getX() == Catch::Approx(1.0f));
+    e.updateMovement(0.25f);
+    REQUIRE(e.getX() == Catch::Approx(1.75f + 0.5f));
+    e.updateMovement(0.25f);
+    REQUIRE(e.getX() == Catch::Approx(3.5f));
+}
+
 TEST_CASE("A unit still under way is carried on past a late packet", "[entity][movement]") {
     Entity e;
     e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
-    e.setContinuesMoving(true);
-    e.startMoveTo(3.5f, 0.0f, 0.0f, 0.0f, 0.5f);
-    // The next heartbeat is late: past the segment's end the unit keeps going
-    // at its velocity and still counts as moving.
+    e.startMoveByFlags(0.0f, 0.0f, 0.0f, 0.0f, kForward, 0, 0.5f);
+    // The next heartbeat is late: the unit keeps going and still counts as
+    // moving.
     e.updateMovement(0.6f);
     REQUIRE(e.isActivelyMoving());
-    REQUIRE(e.getX() > 3.5f);
-    const float drawnX = e.getX();
-    // The late packet carries on from where it was drawn, not from 3.5.
-    e.startMoveTo(7.0f, 0.0f, 0.0f, 0.0f, 0.5f);
+    REQUIRE(e.getX() == Catch::Approx(4.2f));
+    // The late packet carries on from where it was drawn.
+    e.startMoveByFlags(3.5f, 0.0f, 0.0f, 0.0f, kForward, 0, 0.5f);
     e.updateMovement(0.0f);
-    REQUIRE(e.getX() == Catch::Approx(drawnX));
-    // Two intervals without a packet: stopped.
+    REQUIRE(e.getX() == Catch::Approx(4.2f));
+    // No packet for too long: stopped where it was carried to.
     e.updateMovement(1.1f);
     REQUIRE_FALSE(e.isActivelyMoving());
+    REQUIRE(e.getX() == Catch::Approx(10.5f));
+    // A stop packet stands it at the stop's position.
+    e.startMoveTo(10.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    REQUIRE(e.getX() == Catch::Approx(10.0f));
+}
+
+TEST_CASE("A player turning in place turns at its turn rate", "[entity][movement]") {
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveByFlags(0.0f, 0.0f, 0.0f, 0.0f, kTurnLeft, 0, 0.12f);
+    REQUIRE_FALSE(e.isActivelyMoving());
+    e.updateMovement(0.25f);
+    REQUIRE(e.getOrientation() == Catch::Approx(kPi / 4.0f));
+    // No heartbeat comes while only turning; it keeps turning.
+    e.updateMovement(1.25f);
+    REQUIRE(e.getOrientation() == Catch::Approx(-kPi / 2.0f));
+    REQUIRE(e.getX() == 0.0f);
+    // Right is the other way; STOP_TURN carries no turn flag.
+    e.startMoveByFlags(0.0f, 0.0f, 0.0f, 0.0f, kTurnRight, 0, 0.12f);
+    e.updateMovement(0.5f);
+    REQUIRE(e.getOrientation() == Catch::Approx(-kPi / 2.0f));
+    e.startMoveTo(0.0f, 0.0f, 0.0f, 0.3f, 0.0f);
+    e.updateMovement(0.5f);
+    REQUIRE(e.getOrientation() == Catch::Approx(0.3f));
+}
+
+TEST_CASE("A player turning as it runs turns slower, along an arc", "[entity][movement]") {
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveByFlags(0.0f, 0.0f, 0.0f, 0.0f, kForward | kTurnLeft, 0, 0.12f);
+    // Three quarters of the turn rate while moving (FUN_00987770).
+    const float w = 0.75f * kPi;
+    const float t = 0.8f;
+    e.updateMovement(t);
+    REQUIRE(e.getOrientation() == Catch::Approx(w * t));
+    // On a circle of radius speed / rate, still at its speed.
+    const float r = 7.0f / w;
+    REQUIRE(e.getX() == Catch::Approx(r * std::sin(w * t)));
+    REQUIRE(e.getY() == Catch::Approx(-r * (1.0f - std::cos(w * t))));
+
+    // MOVEMENTFLAG2_FULL_SPEED_TURNING keeps the whole rate.
+    Entity full;
+    full.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    full.startMoveByFlags(0.0f, 0.0f, 0.0f, 0.0f, kForward | kTurnLeft, 0x8, 0.12f);
+    full.updateMovement(0.5f);
+    REQUIRE(full.getOrientation() == Catch::Approx(kPi / 2.0f));
+}
+
+TEST_CASE("A unit's model turns towards its facing rather than snapping",
+          "[entity][movement]") {
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.updateMovement(0.016f);
+    REQUIRE(e.getModelFacing() == 0.0f);
+    e.setOrientation(1.0f);
+    // Half of the way each frame (FUN_00735f60)...
+    e.updateMovement(0.016f);
+    REQUIRE(e.getModelFacing() == Catch::Approx(0.5f));
+    e.updateMovement(0.016f);
+    REQUIRE(e.getModelFacing() == Catch::Approx(0.75f));
+    // ...until close enough to set.
+    for (int i = 0; i < 10; ++i) e.updateMovement(0.016f);
+    REQUIRE(e.getModelFacing() == 1.0f);
+
+    // The short way round.
+    e.setOrientation(3.0f);
+    for (int i = 0; i < 20; ++i) e.updateMovement(0.016f);
+    e.setOrientation(-3.0f);
+    e.updateMovement(0.016f);
+    REQUIRE(std::abs(e.getModelFacing()) > 3.0f);
+}
+
+TEST_CASE("A creature faces along its move, then the facing it was given",
+          "[entity][movement]") {
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveTo(0.0f, 10.0f, 0.0f, 1.0f, 2.0f);
+    e.faceAlongMove(1.0f, std::nullopt, false);
+    // Towards +y is canonical yaw -pi/2.
+    REQUIRE(e.getOrientation() == Catch::Approx(-kPi / 2.0f));
+    e.updateMovement(1.0f);
+    REQUIRE(e.getOrientation() == Catch::Approx(-kPi / 2.0f));
+    e.updateMovement(1.5f);
+    REQUIRE(e.getOrientation() == Catch::Approx(1.0f));
+
+    // Along the spline's tangent: out along +x, then round to +y.
+    Entity c;
+    c.setPosition(0.0f, 0.0f, 0.0f, 2.0f);
+    const std::vector<std::array<float, 3>> path = {
+        {{0.0f, 0.0f, 0.0f}}, {{10.0f, 0.0f, 0.0f}}, {{10.0f, 10.0f, 0.0f}}};
+    c.startMoveAlongPath(path, 2.0f, 4.0f);
+    c.faceAlongMove(std::nullopt, std::nullopt, false);
+    REQUIRE(c.getOrientation() == Catch::Approx(0.0f).margin(0.2f));
+    c.updateMovement(3.5f);
+    REQUIRE(c.getOrientation() == Catch::Approx(-kPi / 2.0f).margin(0.3f));
+    // No final facing: it keeps the last.
+    c.updateMovement(1.0f);
+    REQUIRE(c.getOrientation() == Catch::Approx(-kPi / 2.0f).margin(0.3f));
+
+    // A spline that keeps its orientation, inverted or not.
+    Entity f;
+    f.setPosition(0.0f, 0.0f, 0.0f, 0.5f);
+    f.startMoveTo(10.0f, 0.0f, 0.0f, 0.5f, 2.0f);
+    f.faceAlongMove(std::nullopt, 0.5f, false);
+    REQUIRE(f.getOrientation() == Catch::Approx(0.5f));
+    Entity b;
+    b.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    b.startMoveTo(10.0f, 0.0f, 0.0f, 0.0f, 2.0f);
+    b.faceAlongMove(std::nullopt, std::nullopt, true);
+    REQUIRE(std::abs(b.getOrientation()) == Catch::Approx(kPi));
 }
 
 TEST_CASE("A unit not under way stops at the segment's end", "[entity][movement]") {

@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <zlib.h>
 #include <array>
 #include <unordered_set>
@@ -153,19 +154,25 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
 
     // Spline speed: all opcodes share the same PackedGuid+float format, differing
     // only in which member receives the value. Factory avoids 8 copy-pasted lambdas.
-    auto makeSplineSpeedHandler = [this](float MovementHandler::* member) {
-        return [this, member](network::Packet& packet) {
+    // Another unit's speed goes on its entity (Entity::movementSpeeds).
+    auto makeSplineSpeedHandler = [this](float MovementHandler::* member,
+                                         float MovementSpeeds::* unitMember) {
+        return [this, member, unitMember](network::Packet& packet) {
             if (!packet.hasRemaining(5)) return;
             uint64_t guid = packet.readPackedGuid();
             if (!packet.hasRemaining(4)) return;
             float speed = packet.readFloat();
-            if (guid == owner_.getPlayerGuid() && std::isfinite(speed) && speed > 0.01f && speed < 200.0f)
+            if (!std::isfinite(speed) || speed <= 0.01f || speed >= 200.0f) return;
+            if (guid == owner_.getPlayerGuid()) {
                 this->*member = speed;
+            } else if (auto entity = owner_.getEntityManager().getEntity(guid)) {
+                entity->movementSpeeds().*unitMember = speed;
+            }
         };
     };
-    table[Opcode::SMSG_SPLINE_SET_RUN_SPEED]      = makeSplineSpeedHandler(&MovementHandler::serverRunSpeed_);
-    table[Opcode::SMSG_SPLINE_SET_RUN_BACK_SPEED]  = makeSplineSpeedHandler(&MovementHandler::serverRunBackSpeed_);
-    table[Opcode::SMSG_SPLINE_SET_SWIM_SPEED]      = makeSplineSpeedHandler(&MovementHandler::serverSwimSpeed_);
+    table[Opcode::SMSG_SPLINE_SET_RUN_SPEED]      = makeSplineSpeedHandler(&MovementHandler::serverRunSpeed_, &MovementSpeeds::run);
+    table[Opcode::SMSG_SPLINE_SET_RUN_BACK_SPEED]  = makeSplineSpeedHandler(&MovementHandler::serverRunBackSpeed_, &MovementSpeeds::runBack);
+    table[Opcode::SMSG_SPLINE_SET_SWIM_SPEED]      = makeSplineSpeedHandler(&MovementHandler::serverSwimSpeed_, &MovementSpeeds::swim);
 
     // Force speed changes
     table[Opcode::SMSG_FORCE_RUN_SPEED_CHANGE] = [this](network::Packet& packet) { handleForceRunSpeedChange(packet); };
@@ -269,7 +276,7 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
     for (auto op : { Opcode::MSG_MOVE_SET_RUN_SPEED, Opcode::MSG_MOVE_SET_RUN_BACK_SPEED,
                      Opcode::MSG_MOVE_SET_WALK_SPEED, Opcode::MSG_MOVE_SET_SWIM_SPEED,
                      Opcode::MSG_MOVE_SET_SWIM_BACK_SPEED, Opcode::MSG_MOVE_SET_FLIGHT_SPEED,
-                     Opcode::MSG_MOVE_SET_FLIGHT_BACK_SPEED }) {
+                     Opcode::MSG_MOVE_SET_FLIGHT_BACK_SPEED, Opcode::MSG_MOVE_SET_TURN_RATE }) {
         table[op] = [this](network::Packet& packet) {
             if (owner_.getState() == WorldState::IN_WORLD) handleMoveSetSpeed(packet);
         };
@@ -308,11 +315,11 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
     };
 
     // Remaining spline speed opcodes - same factory as above.
-    table[Opcode::SMSG_SPLINE_SET_FLIGHT_SPEED]      = makeSplineSpeedHandler(&MovementHandler::serverFlightSpeed_);
-    table[Opcode::SMSG_SPLINE_SET_FLIGHT_BACK_SPEED]  = makeSplineSpeedHandler(&MovementHandler::serverFlightBackSpeed_);
-    table[Opcode::SMSG_SPLINE_SET_SWIM_BACK_SPEED]    = makeSplineSpeedHandler(&MovementHandler::serverSwimBackSpeed_);
-    table[Opcode::SMSG_SPLINE_SET_WALK_SPEED]          = makeSplineSpeedHandler(&MovementHandler::serverWalkSpeed_);
-    table[Opcode::SMSG_SPLINE_SET_TURN_RATE]           = makeSplineSpeedHandler(&MovementHandler::serverTurnRate_);
+    table[Opcode::SMSG_SPLINE_SET_FLIGHT_SPEED]      = makeSplineSpeedHandler(&MovementHandler::serverFlightSpeed_, &MovementSpeeds::flight);
+    table[Opcode::SMSG_SPLINE_SET_FLIGHT_BACK_SPEED]  = makeSplineSpeedHandler(&MovementHandler::serverFlightBackSpeed_, &MovementSpeeds::flightBack);
+    table[Opcode::SMSG_SPLINE_SET_SWIM_BACK_SPEED]    = makeSplineSpeedHandler(&MovementHandler::serverSwimBackSpeed_, &MovementSpeeds::swimBack);
+    table[Opcode::SMSG_SPLINE_SET_WALK_SPEED]          = makeSplineSpeedHandler(&MovementHandler::serverWalkSpeed_, &MovementSpeeds::walk);
+    table[Opcode::SMSG_SPLINE_SET_TURN_RATE]           = makeSplineSpeedHandler(&MovementHandler::serverTurnRate_, &MovementSpeeds::turnRate);
     // Pitch rate not stored locally - consume packet to keep stream aligned.
     table[Opcode::SMSG_SPLINE_SET_PITCH_RATE] = [](network::Packet& packet) { packet.skipAll(); };
 
@@ -1219,8 +1226,24 @@ void MovementHandler::handleMoveSetSpeed(network::Packet& packet) {
     float speed = packet.readFloat();
     if (!std::isfinite(speed) || speed <= 0.01f || speed > 200.0f) return;
 
-    if (moverGuid != owner_.getPlayerGuid()) return;
     const uint16_t wireOp = packet.getOpcode();
+    if (moverGuid != owner_.getPlayerGuid()) {
+        // Another player's: kept on its entity for moving it on by its flags
+        // (Entity::startMoveByFlags), as the client keeps every unit's speeds
+        // in its CMovement.
+        auto entity = owner_.getEntityManager().getEntity(moverGuid);
+        if (!entity) return;
+        MovementSpeeds& speeds = entity->movementSpeeds();
+        if      (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_RUN_SPEED))         speeds.run        = speed;
+        else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_RUN_BACK_SPEED))    speeds.runBack    = speed;
+        else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_WALK_SPEED))        speeds.walk       = speed;
+        else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_SWIM_SPEED))        speeds.swim       = speed;
+        else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_SWIM_BACK_SPEED))   speeds.swimBack   = speed;
+        else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_FLIGHT_SPEED))      speeds.flight     = speed;
+        else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_FLIGHT_BACK_SPEED)) speeds.flightBack = speed;
+        else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_TURN_RATE))         speeds.turnRate   = speed;
+        return;
+    }
     if      (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_RUN_SPEED))        serverRunSpeed_      = speed;
     else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_RUN_BACK_SPEED))   serverRunBackSpeed_  = speed;
     else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_WALK_SPEED))       serverWalkSpeed_     = speed;
@@ -1228,6 +1251,7 @@ void MovementHandler::handleMoveSetSpeed(network::Packet& packet) {
     else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_SWIM_BACK_SPEED))  serverSwimBackSpeed_ = speed;
     else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_FLIGHT_SPEED))     serverFlightSpeed_   = speed;
     else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_FLIGHT_BACK_SPEED))serverFlightBackSpeed_= speed;
+    else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_TURN_RATE))        serverTurnRate_      = speed;
 }
 
 void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
@@ -1327,23 +1351,34 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     const bool isJumpOpcode  = (wireOp == wireOpcode(Opcode::MSG_MOVE_JUMP));
 
     const float entityDuration = isStopOpcode ? 0.0f : (durationMs / 1000.0f);
-    // Still under way: the client keeps moving another player by the
-    // direction flags of its last packet (CMovement::GetCurrentSpeed,
-    // FUN_00987570, tests the same 0xc0000f) until a stop arrives, rather
-    // than standing it at each heartbeat's position until the next one.
-    constexpr uint32_t kDirectionFlags =
+    // Still under way or turning: the client moves another player on by the
+    // flags of its last packet until the next one changes them - the start
+    // packet included, which has no displacement to measure a speed from -
+    // at the speeds it holds for that player (CMovement::GetCurrentSpeed,
+    // FUN_00987570, and the turn rate FUN_00987770 reads), rather than
+    // standing it at each packet's position until the next arrives. The
+    // flags decide, not the opcode: a STOP_TURN or a landing with FORWARD
+    // still set leaves the player running.
+    constexpr uint32_t kUnderWayFlags =
         static_cast<uint32_t>(MovementFlags::FORWARD) |
         static_cast<uint32_t>(MovementFlags::BACKWARD) |
         static_cast<uint32_t>(MovementFlags::STRAFE_LEFT) |
         static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT) |
+        static_cast<uint32_t>(MovementFlags::TURN_LEFT) |
+        static_cast<uint32_t>(MovementFlags::TURN_RIGHT) |
         static_cast<uint32_t>(MovementFlags::ASCENDING) |
         static_cast<uint32_t>(MovementFlags::DESCENDING);
-    entity->setContinuesMoving(!isStopOpcode && (info.flags & kDirectionFlags) != 0);
-    entity->startMoveTo(canonical.x, canonical.y, canonical.z, canYaw, entityDuration);
-    if (measuredSpeed >= 0.0f) entity->setMoveSpeed(measuredSpeed);
+    const bool underWay = (info.flags & kUnderWayFlags) != 0;
+    if (underWay) {
+        entity->startMoveByFlags(canonical.x, canonical.y, canonical.z, canYaw,
+                                 info.flags, info.flags2, durationMs / 1000.0f);
+    } else {
+        entity->startMoveTo(canonical.x, canonical.y, canonical.z, canYaw, entityDuration);
+        if (measuredSpeed >= 0.0f) entity->setMoveSpeed(measuredSpeed);
+    }
 
     if (owner_.creatureMoveCallbackRef()) {
-        const uint32_t notifyDuration = isStopOpcode ? 0u : durationMs;
+        const uint32_t notifyDuration = isStopOpcode && !underWay ? 0u : durationMs;
         owner_.creatureMoveCallbackRef()(moverGuid, canonical.x, canonical.y, canonical.z, notifyDuration);
     }
 
@@ -1681,42 +1716,39 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
         glm::vec3 destCanonical = core::coords::serverToCanonical(
             glm::vec3(data.destX, data.destY, data.destZ));
 
-        float orientation = entity->getOrientation();
+        // The facing the move ends on, which the client gives the unit on
+        // arriving (FUN_006eb0b0) - FINAL_ANGLE, FINAL_TARGET or
+        // FINAL_POINT - and on its way faces it along the path. A target is
+        // faced from where the move ends, as it stands now.
+        std::optional<float> finalFacing;
+        auto facingFromDest = [&](float toX, float toY) -> std::optional<float> {
+            const float dx = toX - destCanonical.x;
+            const float dy = toY - destCanonical.y;
+            if (std::abs(dx) <= 0.01f && std::abs(dy) <= 0.01f) return std::nullopt;
+            return std::atan2(-dy, dx);
+        };
         if (data.moveType == 4) {
-            orientation = core::coords::serverToCanonicalYaw(data.facingAngle);
+            finalFacing = core::coords::serverToCanonicalYaw(data.facingAngle);
         } else if (data.moveType == 3) {
-            auto target = owner_.getEntityManager().getEntity(data.facingTarget);
-            if (target) {
-                float dx = target->getX() - entity->getX();
-                float dy = target->getY() - entity->getY();
-                if (std::abs(dx) > 0.01f || std::abs(dy) > 0.01f) {
-                    orientation = std::atan2(-dy, dx);
-                }
+            if (auto target = owner_.getEntityManager().getEntity(data.facingTarget)) {
+                finalFacing = facingFromDest(target->getLatestX(), target->getLatestY());
             }
-        } else {
-            float dx = destCanonical.x - entity->getX();
-            float dy = destCanonical.y - entity->getY();
-            if (std::abs(dx) > 0.01f || std::abs(dy) > 0.01f) {
-                orientation = std::atan2(-dy, dx);
-            }
+        } else if (data.moveType == 2) {
+            const glm::vec3 spot = core::coords::serverToCanonical(
+                glm::vec3(data.facingSpotX, data.facingSpotY, 0.0f));
+            finalFacing = facingFromDest(spot.x, spot.y);
         }
-
-        if (data.moveType != 3) {
-            glm::vec3 startCanonical = core::coords::serverToCanonical(
-                glm::vec3(data.x, data.y, data.z));
-            float travelDx = destCanonical.x - startCanonical.x;
-            float travelDy = destCanonical.y - startCanonical.y;
-            float travelLen = std::sqrt(travelDx * travelDx + travelDy * travelDy);
-            if (travelLen > 0.5f) {
-                float travelAngle = std::atan2(-travelDy, travelDx);
-                float diff = orientation - travelAngle;
-                while (diff >  static_cast<float>(M_PI)) diff -= 2.0f * static_cast<float>(M_PI);
-                while (diff < -static_cast<float>(M_PI)) diff += 2.0f * static_cast<float>(M_PI);
-                if (std::abs(diff) > static_cast<float>(M_PI) * 0.5f) {
-                    orientation = travelAngle;
-                }
-            }
-        }
+        // FUN_0098ca00 leaves the facing alone on a falling or
+        // orientation-fixed spline (0x4200) and faces the other way along an
+        // inverted one; the pre-WotLK flags are not read for either.
+        const bool wotlkSplineFlags = !usesPreWotlkSplineFlags;
+        const bool keepsFacing = wotlkSplineFlags &&
+            (data.splineFlags & (SplineFlagWotlk::FALLING | SplineFlagWotlk::ORIENT_FIXED)) != 0;
+        const bool inverted = wotlkSplineFlags &&
+            (data.splineFlags & SplineFlagWotlk::ORIENT_INVERSED) != 0;
+        const float facingBefore = entity->getOrientation();
+        // What a move too short to launch a spline faces at once.
+        const float orientation = finalFacing.value_or(facingBefore);
 
         // Build full path: start → waypoints → destination (all in canonical coords)
         if (!data.waypoints.empty()) {
@@ -1738,6 +1770,9 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
                                 orientation, data.duration / 1000.0f);
         }
+        entity->faceAlongMove(finalFacing,
+                              keepsFacing ? std::optional<float>(facingBefore) : std::nullopt,
+                              inverted);
 
         if (owner_.creatureMoveCallbackRef()) {
             owner_.creatureMoveCallbackRef()(data.guid,
@@ -1891,6 +1926,10 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
 
         owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, destLocalCanonical, false, 0.0f);
         entity->startMoveTo(destWorld.x, destWorld.y, destWorld.z, facingAngle, duration / 1000.0f);
+        // Along the path, then the facing asked for on arriving - as
+        // handleMonsterMove does.
+        entity->faceAlongMove(moveType >= 2 ? std::optional<float>(facingAngle) : std::nullopt,
+                              std::nullopt, false);
 
         if (entity->getType() == ObjectType::UNIT && owner_.creatureMoveCallbackRef())
             owner_.creatureMoveCallbackRef()(moverGuid, destWorld.x, destWorld.y, destWorld.z, duration);

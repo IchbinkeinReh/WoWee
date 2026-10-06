@@ -3,6 +3,7 @@
 #include "game/protocol_constants.hpp"
 #include "game/update_field_table.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cmath>
 #include <string>
@@ -92,6 +93,22 @@ inline const char* updateTypeName(UpdateType type) {
     return "UNKNOWN";
 }
 
+/// A unit's movement speeds as the client's CMovement keeps them, walk at
+/// +0x90 through flight-back at +0xa8 and the turn rate at +0xac: yards a
+/// second, and radians a second for the turn rate. The defaults are the base
+/// speeds every 3.3.5a unit starts with; the create block's movement section
+/// and the speed-change opcodes replace them.
+struct MovementSpeeds {
+    float walk = 2.5f;
+    float run = 7.0f;
+    float runBack = 4.5f;
+    float swim = 4.722222f;
+    float swimBack = 2.5f;
+    float flight = 7.0f;
+    float flightBack = 4.5f;
+    float turnRate = 3.14159265f;
+};
+
 /**
  * Base entity class for all game objects
  */
@@ -121,6 +138,7 @@ public:
         isMoving_ = false; // Instant position set cancels interpolation
         usePathMode_ = false;
         activeSpline_.reset();
+        resetMotionExtras();
     }
 
     // Multi-segment path movement (Catmull-Rom spline interpolation)
@@ -130,8 +148,7 @@ public:
             startMoveTo(packetPath.back()[0], packetPath.back()[1], packetPath.back()[2], destO, totalDuration);
             return;
         }
-        // A spline is not extrapolated past its end: the server sends the next.
-        continuesMoving_ = false;
+        resetMotionExtras();
         // Snap position if in overrun phase: the renderer showed moveEnd.
         if (isMoving_ && moveElapsed_ >= moveDuration_) {
             x = moveEndX_; y = moveEndY_; z = moveEndZ_;
@@ -207,6 +224,7 @@ public:
     void startMoveTo(float destX, float destY, float destZ, float destO, float durationSec) {
         usePathMode_ = false;
         activeSpline_.reset();
+        resetMotionExtras();
         if (durationSec <= 0.0f) {
             setPosition(destX, destY, destZ, destO);
             return;
@@ -215,14 +233,13 @@ public:
         // positive duration without any actual displacement. Treat these as
         // authoritative stops; otherwise isActivelyMoving() drives Run/Walk
         // while the model has nowhere to move. This applies equally to nearby
-        // players and creatures - except a unit whose flags say it is still
-        // under way (setContinuesMoving, set before this call), which is
-        // moving even when this packet lands where it was drawn.
+        // players and creatures; a player whose flags say it is still under
+        // way goes through startMoveByFlags instead.
         const float remainingX = destX - x;
         const float remainingY = destY - y;
         const float remainingZ = destZ - z;
         constexpr float kNoOpMoveDistanceSq = 0.02f * 0.02f;
-        if (!continuesMoving_ && remainingX * remainingX + remainingY * remainingY +
+        if (remainingX * remainingX + remainingY * remainingY +
                 remainingZ * remainingZ <= kNoOpMoveDistanceSq) {
             setPosition(destX, destY, destZ, destO);
             return;
@@ -231,13 +248,10 @@ public:
         // destination before using them as the new start.  The renderer was showing
         // the entity at moveEnd (via getLatest) during overrun, so the new
         // interpolation must start there to avoid a visible teleport. A unit
-        // that was being extrapolated (continuesMoving_) was drawn where x/y/z
-        // are, so it carries on from there.
-        if (isMoving_ && moveElapsed_ >= moveDuration_ && !continuesMoving_) {
-            x = moveEndX_;
-            y = moveEndY_;
-            z = moveEndZ_;
-        }
+        // moved on by its flags was drawn where x/y/z are, so it carries on
+        // from there.
+        snapOverrunToDestination();
+        movingByFlags_ = false;
         // Derive velocity from the displacement this packet implies.
         // Use the previous destination (not current lerped pos) as the "from" so
         // variable network timing doesn't inflate/shrink the implied speed.
@@ -265,15 +279,137 @@ public:
         isMoving_ = true;
     }
 
-    /// Whether the unit is expected to keep moving past the end of the current
-    /// segment: a player whose last movement packet still had a direction
-    /// flag set. The client moves such a unit on by its flags until it is told
-    /// to stop; here it is dead-reckoned on at its last velocity for up to
-    /// one more interval (updateMovement), and counts as actively moving while
-    /// it is, instead of standing at the segment's end until the next
-    /// heartbeat arrives. Set it before startMoveTo. A spline
-    /// (startMoveAlongPath) clears it.
-    void setContinuesMoving(bool continues) { continuesMoving_ = continues; }
+    /// Moves a unit on from a movement packet by the packet's flags, as the
+    /// client moves another player between that player's packets: from the
+    /// packet's position and facing, at the speed CMovement::GetCurrentSpeed
+    /// (FUN_00987570, speedForFlags) gives for the flags, along the direction
+    /// FUN_00988df0 sets up for them - ahead, behind, to either side, or
+    /// halfway between - and up or down at 45 degrees while ascending or
+    /// descending (FUN_00987700). FUN_00987b50 picks the displacement for the
+    /// time since the packet; while TURN_LEFT or TURN_RIGHT is set the facing
+    /// turns at the unit's turn rate (FUN_00987770) and the path curves with
+    /// it (FUN_00987a00), except while falling, when only the facing turns.
+    ///
+    /// The unit starts moving on the packet that sets the flags - a start
+    /// packet, which carries no displacement of its own - instead of on the
+    /// next heartbeat's. It is drawn where it was when the packet arrived and
+    /// the difference to the packet's track is taken out over correctionSec,
+    /// as a heartbeat's correction is. It is moved on for at most
+    /// kFlagDeadReckonLimitSec after the packet. With no direction flag the
+    /// packet is a startMoveTo, turning if a turn flag is set.
+    void startMoveByFlags(float px, float py, float pz, float po,
+                          uint32_t flags, uint32_t flags2, float correctionSec) {
+        const float speed = speedForFlags(speeds_, flags);
+        // Backward wins over forward and left over right, as FUN_00988df0
+        // tests them; ascending over descending, as FUN_00987a00 does.
+        const float ahead = (flags & kBackward) ? -1.0f : (flags & kForward) ? 1.0f : 0.0f;
+        const float left = (flags & kStrafeLeft) ? 1.0f : (flags & kStrafeRight) ? -1.0f : 0.0f;
+        const float up = (flags & kAscending) ? 1.0f : (flags & kDescending) ? -1.0f : 0.0f;
+        const bool horizontal = ahead != 0.0f || left != 0.0f;
+
+        // FUN_00987770: the turn rate, positive to the left, at three
+        // quarters while the unit is also moving or falling (0xc0100f)
+        // unless MOVEMENTFLAG2_FULL_SPEED_TURNING (0x8) is set.
+        float turn = 0.0f;
+        if (flags & kTurnLeft) turn = speeds_.turnRate;
+        else if (flags & kTurnRight) turn = -speeds_.turnRate;
+        if ((flags & kTurnSlowingFlags) != 0 && (flags2 & kFullSpeedTurning) == 0) turn *= 0.75f;
+
+        if (speed <= 0.0f || (!horizontal && up == 0.0f)) {
+            startMoveTo(px, py, pz, po, correctionSec);
+        } else {
+            snapOverrunToDestination();
+            usePathMode_ = false;
+            activeSpline_.reset();
+            resetMotionExtras();
+            const bool corrects = correctionSec > 0.0f;
+            corrX_ = corrects ? x - px : 0.0f;
+            corrY_ = corrects ? y - py : 0.0f;
+            corrZ_ = corrects ? z - pz : 0.0f;
+            moveStartX_ = px; moveStartY_ = py; moveStartZ_ = pz;
+            moveEndX_ = px; moveEndY_ = py; moveEndZ_ = pz;
+            moveDuration_ = correctionSec;
+            moveElapsed_ = 0.0f;
+            // Up or down alone at the full speed (FUN_00987b50's 0x10 case);
+            // with a horizontal direction, each at 0.70710677 of it.
+            constexpr float kDiagonal = 0.70710677f;
+            flagHeading_ = horizontal ? po + std::atan2(left, ahead) : po;
+            flagSpeed_ = horizontal ? (up != 0.0f ? speed * kDiagonal : speed) : 0.0f;
+            flagClimb_ = up * (horizontal ? speed * kDiagonal : speed);
+            // FUN_00987b50 only takes the arc when not falling (0x1000).
+            flagArcRate_ = (flags & kFalling) ? 0.0f : turn;
+            velX_ = flagSpeed_ * std::cos(flagHeading_);
+            velY_ = -flagSpeed_ * std::sin(flagHeading_);
+            velZ_ = flagClimb_;
+            moveSpeed_ = speed;
+            orientation = po;
+            isMoving_ = true;
+            movingByFlags_ = true;
+        }
+        if (turn != 0.0f) {
+            turnRate_ = turn;
+            turnBase_ = po;
+            turnElapsed_ = 0.0f;
+        }
+    }
+
+    /// The speed a unit moves at under these movement flags, as the client's
+    /// CMovement::GetCurrentSpeed (FUN_00987570) answers for a unit not on a
+    /// spline: nothing without a direction flag (0xc0000f); flying (0x2000000)
+    /// before swimming (0x200000) before the ground; backwards at the back
+    /// speed when that is the slower; walking (0x100) at the walk speed, or
+    /// the run speed when that is the slower.
+    [[nodiscard]] static float speedForFlags(const MovementSpeeds& speeds, uint32_t flags) {
+        if ((flags & kDirectionFlags) == 0) return 0.0f;
+        const bool back = (flags & kBackward) != 0;
+        if (flags & kFlying) {
+            return back && speeds.flightBack <= speeds.flight ? speeds.flightBack : speeds.flight;
+        }
+        if (flags & kSwimming) {
+            return back && speeds.swimBack <= speeds.swim ? speeds.swimBack : speeds.swim;
+        }
+        if (flags & kWalking) return speeds.walk < speeds.run ? speeds.walk : speeds.run;
+        return back && speeds.runBack <= speeds.run ? speeds.runBack : speeds.run;
+    }
+
+    [[nodiscard]] const MovementSpeeds& getMovementSpeeds() const { return speeds_; }
+    MovementSpeeds& movementSpeeds() { return speeds_; }
+
+    /// Faces a unit along the move just started, as the client faces one on
+    /// a spline: each step FUN_0098ca00 sets the movement facing to the
+    /// direction of the spline's tangent when its x/y length squared is over
+    /// 0.001849, the other way for an inverted spline - unless the spline is
+    /// falling or keeps its orientation, when the unit keeps fixedFacing, the
+    /// one it had. On arrival FUN_006eb0b0 sets the final facing the monster
+    /// move asked for (FINAL_ANGLE, FINAL_TARGET or FINAL_POINT); without one
+    /// the unit keeps the last. Call after startMoveTo or startMoveAlongPath.
+    /// A move that did not start has already taken its orientation, as the
+    /// client's monster move handler (FUN_0073c8e0) faces a unit at once when
+    /// it launches no spline.
+    void faceAlongMove(std::optional<float> finalFacing, std::optional<float> fixedFacing,
+                       bool inverted) {
+        if (!isMoving_ || movingByFlags_) return;
+        finalFacing_ = finalFacing;
+        pathFacingOffset_ = inverted ? kPi : 0.0f;
+        if (fixedFacing) {
+            orientation = *fixedFacing;
+        } else if (usePathMode_ && activeSpline_) {
+            faceAlongPath_ = true;
+            const math::SplineEvalResult start = activeSpline_->evaluate(0);
+            faceDirection(start.tangent.x, start.tangent.y);
+        } else {
+            faceDirection(moveEndX_ - moveStartX_, moveEndY_ - moveStartY_);
+        }
+    }
+
+    /// The facing the unit's model is drawn at. The client draws every unit
+    /// but the active player turning towards its movement facing rather than
+    /// at it: each frame (CWorldFrame's update, FUN_004fa5f0, through
+    /// FUN_00739630) FUN_00735f60 moves the model half of the way there,
+    /// averaging the last four differences while they keep the same sign and
+    /// never stepping past the target, and sets it when within 0.01. The
+    /// per-frame update is updateMovement.
+    [[nodiscard]] float getModelFacing() const { return modelFacingSet_ ? modelFacing_ : orientation; }
 
     /// The speed of the current movement, in yards a second, while the
     /// entity is actively moving; zero otherwise. Set from each segment's
@@ -285,40 +421,15 @@ public:
     }
 
     void updateMovement(float deltaTime) {
-        if (!isMoving_) return;
-        moveElapsed_ += deltaTime;
-        if (moveElapsed_ < moveDuration_) {
-            if (usePathMode_ && activeSpline_) {
-                // Catmull-Rom spline interpolation
-                uint32_t pathTimeMs = static_cast<uint32_t>(moveElapsed_ * 1000.0f);
-                if (pathTimeMs >= splineDurationMs_) pathTimeMs = splineDurationMs_ - 1;
-                glm::vec3 pos = activeSpline_->evaluatePosition(pathTimeMs);
-                x = pos.x;
-                y = pos.y;
-                z = pos.z;
-            } else {
-                // Single-segment linear interpolation
-                float t = moveElapsed_ / moveDuration_;
-                x = moveStartX_ + (moveEndX_ - moveStartX_) * t;
-                y = moveStartY_ + (moveEndY_ - moveStartY_) * t;
-                z = moveStartZ_ + (moveEndZ_ - moveStartZ_) * t;
-            }
-        } else {
-            // Past the interpolation window: dead-reckon at the smoothed velocity
-            // rather than freezing in place. Cap to one extra interval so we don't
-            // drift endlessly if the entity stops sending packets.
-            float overrun = moveElapsed_ - moveDuration_;
-            if (overrun < moveDuration_) {
-                x = moveEndX_ + velX_ * overrun;
-                y = moveEndY_ + velY_ * overrun;
-                z = moveEndZ_ + velZ_ * overrun;
-            } else {
-                // Two intervals with no update - entity has probably stopped.
-                x = moveEndX_; y = moveEndY_; z = moveEndZ_;
-                velX_ = 0.0f; velY_ = 0.0f; velZ_ = 0.0f;
-                isMoving_ = false;
-            }
+        if (turnRate_ != 0.0f) {
+            turnElapsed_ += deltaTime;
+            orientation = wrapAngle(turnBase_ + turnRate_ * turnElapsed_);
         }
+        if (isMoving_) {
+            if (movingByFlags_) advanceByFlags(deltaTime);
+            else advanceSegment(deltaTime);
+        }
+        updateModelFacing();
     }
 
     [[nodiscard]] bool isEntityMoving() const { return isMoving_; }
@@ -327,7 +438,7 @@ public:
     /// Unlike isEntityMoving(), this does NOT include the dead-reckoning overrun window,
     /// so animations (Run/Walk) should use this to avoid "running in place" after arrival.
     [[nodiscard]] bool isActivelyMoving() const {
-        return isMoving_ && (moveElapsed_ < moveDuration_ || continuesMoving_);
+        return isMoving_ && (moveElapsed_ < moveDuration_ || movingByFlags_);
     }
 
     // Returns the latest server-authoritative position: destination if moving, current if not.
@@ -384,10 +495,166 @@ protected:
     float moveElapsed_ = 0;
     float velX_ = 0, velY_ = 0, velZ_ = 0;  // Smoothed velocity for dead reckoning
     float moveSpeed_ = 0;                   // Current movement's speed; see getMoveSpeed
-    bool continuesMoving_ = false;          // Extrapolate past the segment; see setContinuesMoving
     // CatmullRom spline for multi-segment path movement (replaces linear pathPoints_/pathSegDists_)
     std::optional<math::CatmullRomSpline> activeSpline_;
     uint32_t splineDurationMs_ = 0;
+
+private:
+    static constexpr float kPi = 3.14159265f;
+    // Movement flag bits, as MovementFlags has them (world_packets.hpp).
+    static constexpr uint32_t kForward = 0x1, kBackward = 0x2;
+    static constexpr uint32_t kStrafeLeft = 0x4, kStrafeRight = 0x8;
+    static constexpr uint32_t kTurnLeft = 0x10, kTurnRight = 0x20;
+    static constexpr uint32_t kWalking = 0x100, kFalling = 0x1000;
+    static constexpr uint32_t kSwimming = 0x200000, kFlying = 0x2000000;
+    static constexpr uint32_t kAscending = 0x400000, kDescending = 0x800000;
+    static constexpr uint32_t kDirectionFlags = 0xc0000f;
+    static constexpr uint32_t kTurnSlowingFlags = 0xc0100f;
+    static constexpr uint32_t kFullSpeedTurning = 0x8;  // MOVEMENTFLAG2_FULL_SPEED_TURNING
+    /// How long a unit is moved on by its flags after its last packet. The
+    /// client sends a heartbeat every 500 ms while moving (FUN_006f09f0), so
+    /// this is two missed ones.
+    static constexpr float kFlagDeadReckonLimitSec = 1.0f;
+
+    static float wrapAngle(float a) { return std::remainder(a, 2.0f * kPi); }
+
+    void resetMotionExtras() {
+        movingByFlags_ = false;
+        turnRate_ = 0.0f;
+        faceAlongPath_ = false;
+        finalFacing_.reset();
+    }
+
+    void snapOverrunToDestination() {
+        if (isMoving_ && !movingByFlags_ && moveElapsed_ >= moveDuration_) {
+            x = moveEndX_;
+            y = moveEndY_;
+            z = moveEndZ_;
+        }
+    }
+
+    void faceDirection(float dx, float dy) {
+        constexpr float kMinTangentSq = 0.0018490001f;  // FUN_0098ca00
+        if (dx * dx + dy * dy > kMinTangentSq) {
+            orientation = wrapAngle(std::atan2(-dy, dx) + pathFacingOffset_);
+        }
+    }
+
+    void advanceSegment(float deltaTime) {
+        moveElapsed_ += deltaTime;
+        if (moveElapsed_ < moveDuration_) {
+            if (usePathMode_ && activeSpline_) {
+                // Catmull-Rom spline interpolation
+                uint32_t pathTimeMs = static_cast<uint32_t>(moveElapsed_ * 1000.0f);
+                if (pathTimeMs >= splineDurationMs_) pathTimeMs = splineDurationMs_ - 1;
+                const math::SplineEvalResult eval = activeSpline_->evaluate(pathTimeMs);
+                x = eval.position.x;
+                y = eval.position.y;
+                z = eval.position.z;
+                if (faceAlongPath_) faceDirection(eval.tangent.x, eval.tangent.y);
+            } else {
+                // Single-segment linear interpolation
+                float t = moveElapsed_ / moveDuration_;
+                x = moveStartX_ + (moveEndX_ - moveStartX_) * t;
+                y = moveStartY_ + (moveEndY_ - moveStartY_) * t;
+                z = moveStartZ_ + (moveEndZ_ - moveStartZ_) * t;
+            }
+            return;
+        }
+        // Arrived: the facing the move was to end on (FUN_006eb0b0).
+        faceAlongPath_ = false;
+        if (finalFacing_) {
+            orientation = *finalFacing_;
+            finalFacing_.reset();
+        }
+        // Past the interpolation window: dead-reckon at the smoothed velocity
+        // rather than freezing in place. Cap to one extra interval so we don't
+        // drift endlessly if the entity stops sending packets.
+        float overrun = moveElapsed_ - moveDuration_;
+        if (overrun < moveDuration_) {
+            x = moveEndX_ + velX_ * overrun;
+            y = moveEndY_ + velY_ * overrun;
+            z = moveEndZ_ + velZ_ * overrun;
+        } else {
+            // Two intervals with no update - entity has probably stopped.
+            x = moveEndX_; y = moveEndY_; z = moveEndZ_;
+            velX_ = 0.0f; velY_ = 0.0f; velZ_ = 0.0f;
+            isMoving_ = false;
+        }
+    }
+
+    void advanceByFlags(float deltaTime) {
+        moveElapsed_ += deltaTime;
+        const float t = std::min(moveElapsed_, kFlagDeadReckonLimitSec);
+        // The heading turns with the facing; integrated, the path is an arc
+        // of radius speed / turn rate (FUN_00987a00), a line when not turning.
+        float dx = flagSpeed_ * t * std::cos(flagHeading_);
+        float dy = -flagSpeed_ * t * std::sin(flagHeading_);
+        if (std::abs(flagArcRate_) > 1e-4f) {
+            const float heading = flagHeading_ + flagArcRate_ * t;
+            dx = flagSpeed_ * (std::sin(heading) - std::sin(flagHeading_)) / flagArcRate_;
+            dy = flagSpeed_ * (std::cos(heading) - std::cos(flagHeading_)) / flagArcRate_;
+        }
+        const float correction =
+            moveElapsed_ < moveDuration_ ? 1.0f - moveElapsed_ / moveDuration_ : 0.0f;
+        x = moveEndX_ + dx + corrX_ * correction;
+        y = moveEndY_ + dy + corrY_ * correction;
+        z = moveEndZ_ + flagClimb_ * t + corrZ_ * correction;
+        if (moveElapsed_ >= kFlagDeadReckonLimitSec) {
+            // No packet for too long: stand where it was carried to.
+            isMoving_ = false;
+            movingByFlags_ = false;
+        }
+    }
+
+    void updateModelFacing() {
+        if (!modelFacingSet_) {
+            modelFacing_ = orientation;
+            modelFacingSet_ = true;
+            return;
+        }
+        const float diff = wrapAngle(orientation - modelFacing_);
+        if (std::abs(diff) <= 0.01f) {
+            facingDiffs_[0] = 0.0f;
+            modelFacing_ = orientation;
+            return;
+        }
+        if ((diff >= 0.0f && facingDiffs_[0] < 0.0f) || (diff < 0.0f && facingDiffs_[0] > 0.0f)) {
+            facingDiffs_[0] = 0.0f;
+        }
+        float step = diff;
+        if (facingDiffs_[0] == 0.0f) {
+            facingDiffs_.fill(diff);
+        } else {
+            facingDiffs_[3] = facingDiffs_[2];
+            facingDiffs_[2] = facingDiffs_[1];
+            facingDiffs_[1] = facingDiffs_[0];
+            facingDiffs_[0] = diff;
+            step = (facingDiffs_[0] + facingDiffs_[1] + facingDiffs_[2] + facingDiffs_[3]) * 0.25f;
+            if (diff <= 0.0f ? step < diff : step > diff) step = diff;
+        }
+        modelFacing_ = wrapAngle(modelFacing_ + step * 0.5f);
+    }
+
+    MovementSpeeds speeds_;
+    // Moved on by its flags (startMoveByFlags): moveEnd is the packet's
+    // position, the corr* offset is taken out over moveDuration_.
+    bool movingByFlags_ = false;
+    float corrX_ = 0, corrY_ = 0, corrZ_ = 0;
+    float flagHeading_ = 0;                 // Direction of travel at the packet
+    float flagSpeed_ = 0;                   // Horizontal speed
+    float flagClimb_ = 0;                   // Vertical speed
+    float flagArcRate_ = 0;                 // Rate the direction turns at
+    // Turning by TURN_LEFT / TURN_RIGHT, from turnBase_ at the packet.
+    float turnRate_ = 0, turnBase_ = 0, turnElapsed_ = 0;
+    // Facing along a monster move; see faceAlongMove.
+    bool faceAlongPath_ = false;
+    float pathFacingOffset_ = 0;
+    std::optional<float> finalFacing_;
+    // The drawn facing; see getModelFacing.
+    float modelFacing_ = 0;
+    bool modelFacingSet_ = false;
+    std::array<float, 4> facingDiffs_{};
 };
 
 /**
