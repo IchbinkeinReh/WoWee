@@ -2429,7 +2429,8 @@ void GameHandler::registerRemainingOpcodes() {
             glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
             spawnPos = core::coords::canonicalToRender(canonical);
         }
-        if (auto* sv = renderer->getSpellVisualSystem()) sv->playSpellVisual(impVisualId, spawnPos, /*useImpactKit=*/true);
+        if (auto* sv = renderer->getSpellVisualSystem()) sv->playSpellVisual(impVisualId, spawnPos, /*useImpactKit=*/true,
+                                                                       resolveUnitRenderInstance(impTargetGuid));
     };
     // SMSG_READ_ITEM_OK - moved to InventoryHandler::registerOpcodes
     // SMSG_READ_ITEM_FAILED - moved to InventoryHandler::registerOpcodes

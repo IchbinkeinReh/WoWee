@@ -67,7 +67,14 @@ private:
         bool isPrecast;  // true for precast effects (removed on cancel/interrupt)
         uint32_t attachmentId;  // character attachment point to track (0=none/static)
         uint32_t attachInstanceId;  // CharacterRenderer instance the attachment belongs to
+        // An effect with no bone of its own - an aura, an impact - keeps its
+        // spot relative to the unit it was cast on, and moves with it.
+        bool followsUnit = false;
+        glm::vec3 followOffset{0.0f};
     };
+
+    /// Make the effect just added follow its unit, from where it was placed.
+    void followUnitFromSpawn(const glm::vec3& spawnPos);
 
     struct PhysicalProjectile {
         uint32_t instanceId = 0;

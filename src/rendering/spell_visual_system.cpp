@@ -338,6 +338,7 @@ void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec
             : SPELL_VISUAL_DEFAULT_DURATION;
     }
     activeSpellVisuals_.push_back({.instanceId = instanceId, .elapsed = 0.0f, .duration = duration, .isPrecast = true, .attachmentId = attachId, .attachInstanceId = attachInstanceId});
+    followUnitFromSpawn(spawnPos);
     LOG_INFO("SpellVisual: spawned precast visualId=", visualId, " instanceId=", instanceId,
              " duration=", duration, "s castTimeMs=", castTimeMs, " attach=", attachId,
              " model=", modelPath,
@@ -484,6 +485,7 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
         ? std::clamp(animDurMs / 1000.0f, 0.5f, SPELL_VISUAL_MAX_DURATION)
         : SPELL_VISUAL_DEFAULT_DURATION;
     activeSpellVisuals_.push_back({.instanceId = instanceId, .elapsed = 0.0f, .duration = duration, .isPrecast = false, .attachmentId = attachId, .attachInstanceId = attachInstanceId});
+    followUnitFromSpawn(spawnPos);
     LOG_INFO("SpellVisual: spawned ", (useImpactKit ? "impact" : "cast"), " visualId=", visualId,
              " instanceId=", instanceId, " duration=", duration, "s animDurMs=", animDurMs,
              " attach=", attachId, " model=", modelPath, " active=", activeSpellVisuals_.size());
@@ -560,6 +562,17 @@ void SpellVisualSystem::playPhysicalProjectile(const std::string& modelPath,
                                     .duration = std::max(duration, 0.05f), .spin = spin});
 }
 
+void SpellVisualSystem::followUnitFromSpawn(const glm::vec3& spawnPos) {
+    if (activeSpellVisuals_.empty() || !renderer_) return;
+    auto& added = activeSpellVisuals_.back();
+    if (added.attachmentId != 0 || added.attachInstanceId == 0) return;
+    auto* charRenderer = renderer_->getCharacterRenderer();
+    glm::vec3 unitPos;
+    if (!charRenderer || !charRenderer->getInstancePosition(added.attachInstanceId, unitPos)) return;
+    added.followsUnit = true;
+    added.followOffset = spawnPos - unitPos;
+}
+
 void SpellVisualSystem::update(float deltaTime) {
     if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
 
@@ -579,6 +592,11 @@ void SpellVisualSystem::update(float deltaTime) {
                 if (charRenderer->getAttachmentTransform(it->attachInstanceId, it->attachmentId, attachMat)) {
                     glm::vec3 bonePos = glm::vec3(attachMat[3]);
                     m2Renderer_->setInstancePosition(it->instanceId, bonePos);
+                }
+            } else if (it->followsUnit && charRenderer) {
+                glm::vec3 unitPos;
+                if (charRenderer->getInstancePosition(it->attachInstanceId, unitPos)) {
+                    m2Renderer_->setInstancePosition(it->instanceId, unitPos + it->followOffset);
                 }
             }
             ++it;
