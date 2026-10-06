@@ -394,6 +394,37 @@ void AnimationCallbackHandler::setupCallbacks() {
         }
     });
 
+    // Other units' stand state (UNIT_FIELD_BYTES_1 byte 0): sit down / lie
+    // down / kneel through the transition into the loop, stand up through the
+    // transition out. A unit not yet drawn takes its pose at spawn.
+    gameHandler_.setUnitStandStateCallback([this](uint64_t guid, uint8_t oldState, uint8_t newState) {
+        auto* cr = renderer_.getCharacterRenderer();
+        if (!cr) return;
+        uint32_t instanceId = entitySpawner_.getCreatureInstanceId(guid);
+        if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(guid);
+        if (instanceId == 0) return;
+        uint32_t curAnim = 0; float curT = 0.0f, curDur = 0.0f;
+        if (cr->getAnimationState(instanceId, curAnim, curT, curDur) &&
+            curAnim == rendering::anim::DEATH) return;
+        const auto from = rendering::anim::standStateAnims(oldState);
+        const auto to = rendering::anim::standStateAnims(newState);
+        uint32_t loopAnim = to.loop;
+        if (newState == 0) {
+            // Standing up resumes a retained NPC work loop, as the sync loop does.
+            auto& activeEmotes = entitySpawner_.getCreatureActiveEmotes();
+            auto it = activeEmotes.find(guid);
+            if (it != activeEmotes.end() && cr->hasAnimation(instanceId, it->second))
+                loopAnim = it->second;
+        }
+        if (!cr->hasAnimation(instanceId, loopAnim)) loopAnim = rendering::anim::STAND;
+        const uint32_t transition = newState == 0 ? from.up : to.down;
+        if (transition != 0 && cr->hasAnimation(instanceId, transition)) {
+            cr->playAnimation(instanceId, transition, /*loop=*/false, loopAnim);
+        } else {
+            cr->playAnimation(instanceId, loopAnim, /*loop=*/true);
+        }
+    });
+
     // Spell cast animation callback - play cast animation on caster (player or NPC/other player)
     // WoW-accurate 3-phase spell animation sequence:
     //   SPELL_PRECAST (31)              - one-shot wind-up

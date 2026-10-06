@@ -322,8 +322,6 @@ struct M2Instance {
 
     void recomputeCachedCullFactors();
 
-    // Frame-skip optimization (update distant animations less frequently)
-    uint8_t frameSkipCounter = 0;
     bool bonesDirty[2] = {false, false};  // Per-frame-index: set when bones recomputed, cleared after upload
     // Mega-bone slot this instance's bones were last uploaded to, per frame
     // index (0 = never uploaded; valid slots start at 1). Lets prepareRender

@@ -559,6 +559,28 @@ const char* nameFromId(uint32_t id);
 /// Logs warnings for IDs present in DBC but missing from constants, and vice versa.
 void validateAgainstDBC(const std::shared_ptr<wowee::pipeline::DBCFile>& dbc);
 
+/// What a unit shows in a UNIT_FIELD_BYTES_1 stand state: the transition in,
+/// the loop it holds, the transition out (0 = none).
+struct StandStateAnims {
+    uint32_t down = 0;
+    uint32_t loop = STAND;
+    uint32_t up = 0;
+};
+constexpr StandStateAnims standStateAnims(uint8_t standState) {
+    switch (standState) {
+        case 1: return {SIT_GROUND_DOWN, SITTING, SIT_GROUND_UP};
+        case 2: return {0, SIT_CHAIR_MED, 0};   // UNIT_STAND_STATE_SIT_CHAIR
+        case 3: return {SLEEP_DOWN, SLEEP, SLEEP_UP};
+        case 4: return {0, SIT_CHAIR_LOW, 0};
+        case 5: return {0, SIT_CHAIR_MED, 0};
+        case 6: return {0, SIT_CHAIR_HIGH, 0};
+        case 7: return {0, DEAD, 0};
+        case 8: return {KNEEL_START, KNEEL_LOOP, KNEEL_END};
+        case 9: return {0, SUBMERGED, 0};
+        default: return {};
+    }
+}
+
 } // namespace anim
 } // namespace rendering
 } // namespace wowee

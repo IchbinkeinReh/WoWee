@@ -454,6 +454,11 @@ public:
     using EmoteAnimCallback = std::function<void(uint64_t, uint32_t, bool)>;
     void setEmoteAnimCallback(EmoteAnimCallback cb) { emoteAnimCallback_ = std::move(cb); }
 
+    // Another unit's stand state changed (UNIT_FIELD_BYTES_1 byte 0):
+    // guid, old state, new state. The local player uses StandStateCallback.
+    using UnitStandStateCallback = std::function<void(uint64_t, uint8_t, uint8_t)>;
+    void setUnitStandStateCallback(UnitStandStateCallback cb) { unitStandStateCallback_ = std::move(cb); }
+
     /**
      * Get chat history (recent messages)
      * @param maxMessages Maximum number of messages to return (0 = all)
@@ -3788,6 +3793,7 @@ public:
     auto& creatureMoveCallbackRef() { return creatureMoveCallback_; }
     auto& creatureSpawnCallbackRef() { return creatureSpawnCallback_; }
     auto& emoteAnimCallbackRef() { return emoteAnimCallback_; }
+    auto& unitStandStateCallbackRef() { return unitStandStateCallback_; }
     auto& gameObjectDespawnCallbackRef() { return gameObjectDespawnCallback_; }
     auto& gameObjectInfoCallbackRef() { return gameObjectInfoCallback_; }
     auto& gameObjectMoveCallbackRef() { return gameObjectMoveCallback_; }
@@ -4278,6 +4284,7 @@ private:
     RandomPropertyNameResolver randomPropertyNameResolver_;
     RandomStatResolver randomStatResolver_;
     EmoteAnimCallback emoteAnimCallback_;
+    UnitStandStateCallback unitStandStateCallback_;
 
     // Targeting
     uint64_t targetGuid = 0;

@@ -3400,6 +3400,12 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                                 if (emoteIt != _creatureActiveEmotes.end() &&
                                     charRenderer->hasAnimation(instanceId, emoteIt->second)) {
                                     targetAnim = emoteIt->second;
+                                } else {
+                                    // Stopped while sitting/sleeping/kneeling.
+                                    const uint32_t standLoop = rendering::anim::standStateAnims(
+                                        unitPtr->getStandState()).loop;
+                                    if (charRenderer->hasAnimation(instanceId, standLoop))
+                                        targetAnim = standLoop;
                                 }
                             }
                         }
@@ -3582,7 +3588,12 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                         } else {
                             if (isFlyingNow)        targetAnim = rendering::anim::FLY_IDLE;
                             else if (isSwimmingNow) targetAnim = rendering::anim::SWIM_IDLE;
-                            else                    targetAnim = rendering::anim::STAND;
+                            else {
+                                targetAnim = rendering::anim::standStateAnims(
+                                    unitPtr->getStandState()).loop;
+                                if (!charRenderer->hasAnimation(instanceId, targetAnim))
+                                    targetAnim = rendering::anim::STAND;
+                            }
                         }
                         charRenderer->playAnimation(instanceId, targetAnim, /*loop=*/true);
                     }

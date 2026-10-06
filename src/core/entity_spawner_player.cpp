@@ -152,7 +152,14 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
         // external sequence of a character model stalls the frame.
         pipeline::loadExternalAnimations(
             *assetManager_, m2Path, m2Data, model,
-            {rendering::anim::STAND, rendering::anim::WALK, rendering::anim::RUN});
+            {rendering::anim::STAND, rendering::anim::WALK, rendering::anim::RUN,
+             // Stand states other players are seen in (UNIT_FIELD_BYTES_1).
+             rendering::anim::SIT_GROUND_DOWN, rendering::anim::SITTING,
+             rendering::anim::SIT_GROUND_UP, rendering::anim::SLEEP_DOWN,
+             rendering::anim::SLEEP, rendering::anim::SLEEP_UP,
+             rendering::anim::SIT_CHAIR_LOW, rendering::anim::SIT_CHAIR_MED,
+             rendering::anim::SIT_CHAIR_HIGH, rendering::anim::KNEEL_START,
+             rendering::anim::KNEEL_LOOP, rendering::anim::KNEEL_END});
 
         modelId = nextPlayerModelId_++;
         if (!charRenderer->loadModel(model, modelId)) {
@@ -300,7 +307,18 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
     if (deadCreatureGuids_.count(guid)) {
         charRenderer->playAnimation(instanceId, rendering::anim::DEATH, false);
     } else {
-        charRenderer->playAnimation(instanceId, rendering::anim::STAND, true);
+        // A player already seated when we first see them stays seated.
+        uint32_t idleAnim = rendering::anim::STAND;
+        if (gameHandler_) {
+            auto entity = gameHandler_->getEntityManager().getEntity(guid);
+            if (entity && entity->getType() == game::ObjectType::PLAYER) {
+                idleAnim = rendering::anim::standStateAnims(
+                    std::static_pointer_cast<game::Unit>(entity)->getStandState()).loop;
+                if (!charRenderer->hasAnimation(instanceId, idleAnim))
+                    idleAnim = rendering::anim::STAND;
+            }
+        }
+        charRenderer->playAnimation(instanceId, idleAnim, true);
     }
     playerInstances_[guid] = instanceId;
 

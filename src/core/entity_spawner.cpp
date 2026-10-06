@@ -1311,9 +1311,20 @@ if (deadCreatureGuids_.count(guid)) {
             npcEmoteAnim = activeIt->second;
         }
     }
+    uint32_t standLoop = 0;
+    if (gameHandler_) {
+        auto entity = gameHandler_->getEntityManager().getEntity(guid);
+        if (entity && entity->getType() == game::ObjectType::UNIT) {
+            const uint8_t st = std::static_pointer_cast<game::Unit>(entity)->getStandState();
+            if (st != 0) standLoop = rendering::anim::standStateAnims(st).loop;
+        }
+    }
     if (npcEmoteAnim != 0 && charRenderer->hasAnimation(instanceId, npcEmoteAnim)) {
         creatureActiveEmotes_[guid] = npcEmoteAnim;
         charRenderer->playAnimation(instanceId, npcEmoteAnim, true);
+    } else if (standLoop != 0 && charRenderer->hasAnimation(instanceId, standLoop)) {
+        // Spawned sitting, sleeping, kneeling or as a corpse (creature_addon.bytes1).
+        charRenderer->playAnimation(instanceId, standLoop, true);
     } else if (charRenderer->hasAnimation(instanceId, rendering::anim::BIRTH)) {
         // Play birth animation (one-shot) - will return to STAND after
         charRenderer->playAnimation(instanceId, rendering::anim::BIRTH, false);

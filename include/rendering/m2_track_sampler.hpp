@@ -314,4 +314,24 @@ inline const pipeline::M2TextureTransform* batchTextureTransform(const pipeline:
     return idx < model.textureTransforms.size() ? &model.textureTransforms[idx] : nullptr;
 }
 
+// Which variation of a sequence plays, as the client picks it
+// (FUN_00826e60): a roll in 0..0x7FFF walks the chain from the primary
+// through nextAnimation, taking away each sequence's frequency; the one the
+// roll runs out on plays, and the primary if the chain ends first. The
+// caller supplies the roll so the pick can be tested.
+inline int pickSequenceVariation(const std::vector<pipeline::M2Sequence>& seqs, int primary,
+                                 uint32_t roll) {
+    if (primary < 0 || static_cast<size_t>(primary) >= seqs.size()) return primary;
+    int idx = primary;
+    for (size_t guard = 0; guard < seqs.size(); ++guard) {
+        const uint32_t freq = static_cast<uint16_t>(seqs[idx].frequency);
+        if (roll < freq) return idx;
+        roll -= freq;
+        const int next = seqs[idx].nextAnimation;
+        if (next < 0 || static_cast<size_t>(next) >= seqs.size()) break;
+        idx = next;
+    }
+    return primary;
+}
+
 } // namespace wowee::rendering::m2_track

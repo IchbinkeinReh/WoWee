@@ -406,6 +406,12 @@ public:
     // Client presentation flags (byte 2 of UNIT_FIELD_BYTES_1).
     [[nodiscard]] uint8_t getVisibilityFlags() const { return visibilityFlags; }
     void setVisibilityFlags(uint8_t f) { visibilityFlags = f; }
+
+    // Stand state (byte 0 of UNIT_FIELD_BYTES_1): 0 stand, 1 sit, 2-6 chairs,
+    // 3 sleep, 7 dead, 8 kneel, 9 submerged. Other clients learn of a sit only
+    // through this field; SMSG_STANDSTATE_UPDATE goes to the sitter alone.
+    [[nodiscard]] uint8_t getStandState() const { return standState; }
+    void setStandState(uint8_t s) { standState = s; }
     [[nodiscard]] bool hasCreepVisibility() const { return (visibilityFlags & UNIT_VIS_FLAG_CREEP) != 0; }
     void clearCreepVisibility() {
         visibilityFlags &= static_cast<uint8_t>(~UNIT_VIS_FLAG_CREEP);
@@ -451,6 +457,7 @@ protected:
     uint32_t mountDisplayId = 0;
     uint32_t unitFlags = 0;
     uint8_t visibilityFlags = 0;
+    uint8_t standState = 0;
     uint32_t dynamicFlags = 0;
     uint32_t npcFlags = 0;
     uint32_t npcEmoteState = 0;

@@ -2150,6 +2150,12 @@ register_test_target(test_m2_color_track)
 wowee_add_test(test_m2_sequence_blend
     SOURCES test_m2_sequence_blend.cpp)
 
+# ── test_m2_sequence_variation ───────────────────────────────
+# Which variation of an animation plays, rolled along the chain by frequency
+# as FUN_00826e60 does, and which loop and transitions each stand state plays.
+wowee_add_test(test_m2_sequence_variation
+    SOURCES test_m2_sequence_variation.cpp)
+
 # ── test_dbc_layout_columns ──────────────────────────────────
 # Every column a layout names has to exist in the file it describes. A DBC
 # asked for a field past the end answers zero for every row, forever, which

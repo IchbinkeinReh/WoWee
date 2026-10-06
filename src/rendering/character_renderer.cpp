@@ -2139,6 +2139,7 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
     // Find animation sequence index by ID
     instance.currentAnimationId = animationId;
     instance.currentSequenceIndex = -1;
+    instance.primarySequenceIndex = -1;
     instance.armSequenceIndex[0] = instance.armSequenceIndex[1] = -1;
     instance.animationTime = 0.0f;
     instance.animationLoop = loop;
@@ -2156,6 +2157,14 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
     }
     if (instance.currentSequenceIndex < 0 && firstMatch >= 0) {
         instance.currentSequenceIndex = firstMatch;
+    }
+    if (instance.currentSequenceIndex >= 0) {
+        // Roll the variation as the client does on every play (FUN_00832bxx ->
+        // FUN_00826e60); update() re-rolls at the end of each looped pass.
+        instance.primarySequenceIndex = instance.currentSequenceIndex;
+        instance.currentSequenceIndex =
+            m2_track::pickSequenceVariation(model.sequences, instance.primarySequenceIndex,
+                                            static_cast<uint32_t>(std::rand()) & 0x7FFFu);
     }
 
     if (instance.currentSequenceIndex < 0) {
@@ -2237,7 +2246,29 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
             const auto& seq = inst.cachedModel->data.sequences[inst.currentSequenceIndex];
             inst.animationTime += deltaTime * 1000.0f;
             if (seq.duration > 0 && inst.animationTime >= static_cast<float>(seq.duration)) {
-                if (inst.animationLoop) {
+                const auto& seqs = inst.cachedModel->data.sequences;
+                const int primary = inst.primarySequenceIndex;
+                const bool hasVariations = inst.animationLoop && primary >= 0 &&
+                    static_cast<size_t>(primary) < seqs.size() &&
+                    seqs[primary].nextAnimation >= 0;
+                if (hasVariations) {
+                    // FUN_00831fc0: a looping animation with variations re-rolls
+                    // at the end of every pass - Stand -> a fidget -> Stand.
+                    const int oldSeq = inst.currentSequenceIndex;
+                    const float oldDur = static_cast<float>(seq.duration);
+                    float carry = inst.animationTime - oldDur;
+                    const int next = m2_track::pickSequenceVariation(
+                        seqs, primary, static_cast<uint32_t>(std::rand()) & 0x7FFFu);
+                    if (next != oldSeq) {
+                        m2_track::beginSequenceBlend(
+                            inst.sequenceBlend, inst.globalSequenceTime, oldSeq, oldDur,
+                            /*currentLoops=*/false, /*currentFinished=*/false, next,
+                            seqs[next].blendTime, seqs);
+                        inst.currentSequenceIndex = next;
+                    }
+                    const float newDur = static_cast<float>(seqs[inst.currentSequenceIndex].duration);
+                    inst.animationTime = newDur > 0.0f ? std::fmod(std::max(0.0f, carry), newDur) : 0.0f;
+                } else if (inst.animationLoop) {
                     // Subtract duration instead of fmod to preserve float precision
                     // fmod() loses precision with large animationTime values
                     inst.animationTime -= static_cast<float>(seq.duration);

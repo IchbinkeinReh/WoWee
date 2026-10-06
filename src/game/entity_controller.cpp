@@ -920,6 +920,11 @@ bool EntityController::applyUnitFieldsOnCreate(const UpdateBlock& block,
         }
         else if (key == ufi.npcFlags) { unit->setNpcFlags(val); }
         else if (key == ufi.npcEmoteState) { unit->setNpcEmoteState(val); }
+        else if (ufi.bytes1 != 0xFFFF && key == ufi.bytes1) {
+            // A unit created sitting, sleeping, kneeling or feigning a corpse
+            // (creature_addon.bytes1) - the spawn pose reads it from here.
+            unit->setStandState(static_cast<uint8_t>(val & 0xFF));
+        }
         else if (key == ufi.dynFlags) {
             unit->setDynamicFlags(val);
             if ((block.objectType == ObjectType::UNIT ||
@@ -1099,6 +1104,16 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             const uint8_t oldVisibilityFlags = unit->getVisibilityFlags();
             const uint8_t newVisibilityFlags = static_cast<uint8_t>((val >> 16) & 0xFF);
             unit->setVisibilityFlags(newVisibilityFlags);
+
+            // Byte 0 is the stand state. Everyone but the sitter hears of a
+            // /sit, a chair or a sleep only through this field.
+            const uint8_t oldStandState = unit->getStandState();
+            const uint8_t newStandState = static_cast<uint8_t>(val & 0xFF);
+            unit->setStandState(newStandState);
+            if (newStandState != oldStandState && block.guid != owner_.getPlayerGuid() &&
+                owner_.unitStandStateCallbackRef()) {
+                owner_.unitStandStateCallbackRef()(block.guid, oldStandState, newStandState);
+            }
 
             if (block.guid == owner_.getPlayerGuid()) {
                 const bool wasStealthed = (oldVisibilityFlags & UNIT_VIS_FLAG_CREEP) != 0;
