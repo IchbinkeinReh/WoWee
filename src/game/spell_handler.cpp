@@ -12,6 +12,7 @@
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/spell_visual_system.hpp"
+#include "rendering/spell_missile.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/spell_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
@@ -446,6 +447,78 @@ void SpellHandler::launchRangedWeaponProjectile(uint32_t spellId, uint64_t targe
     visuals->playPhysicalProjectile(modelPath, texturePath, start, end, duration, spin);
 }
 
+
+// FUN_007fffb0 and FUN_00732ff0: a spell with a speed flies its visual's
+// missile from the caster to each target it was cast at - hit or missed - or,
+// cast at the ground, one to the point, from the source point when the cast
+// names one too. The impact kit waits for the missile: on the target it flew
+// to, or for a ground missile on everything it hit (FUN_00700c80 hands the
+// hit list to it).
+std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data, uint32_t visualId) {
+    namespace sm = rendering::spell_missile;
+    using MissileEnd = rendering::SpellVisualSystem::MissileEnd;
+    std::vector<uint64_t> carried;
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    if (!svs) return carried;
+    owner_.loadSpellNameCache();
+    auto spellIt = owner_.spellNameCacheRef().find(data.spellId);
+    const float speed = spellIt != owner_.spellNameCacheRef().end() ? spellIt->second.missileSpeed : 0.0f;
+    if (!(speed > 0.0f)) return carried;
+    const auto* missile = svs->findMissileVisual(visualId);
+    if (!missile) return carried;
+
+    MissileEnd from;
+    if (!resolveUnitPosition(data.casterUnit, from.position)) return carried;
+    from.renderInstanceId = owner_.resolveUnitRenderInstance(data.casterUnit);
+    auto unitEnd = [&](uint64_t guid, MissileEnd& end) {
+        if (guid == 0 || !resolveUnitPosition(guid, end.position)) return false;
+        end.renderInstanceId = owner_.resolveUnitRenderInstance(guid);
+        return true;
+    };
+
+    const size_t targetCount = data.hitTargets.size() + data.missTargets.size();
+    switch (sm::chooseTargeting(data.targetFlags, targetCount, missile->flags)) {
+    case sm::Targeting::EachTarget: {
+        for (uint64_t guid : data.hitTargets) {
+            MissileEnd to;
+            if (unitEnd(guid, to) && svs->launchSpellMissile(visualId, speed, from, to, {to}))
+                carried.push_back(guid);
+        }
+        for (const auto& miss : data.missTargets) {
+            MissileEnd to;
+            if (unitEnd(miss.targetGuid, to)) svs->launchSpellMissile(visualId, speed, from, to, {});
+        }
+        break;
+    }
+    case sm::Targeting::Location: {
+        const auto point = [](float x, float y, float z) {
+            return MissileEnd{0, core::coords::canonicalToRender(glm::vec3(x, y, z))};
+        };
+        MissileEnd to;
+        if (data.hasDestLocation) {
+            to = point(data.destX, data.destY, data.destZ);
+            if (data.hasSourceLocation) from = point(data.sourceX, data.sourceY, data.sourceZ);
+        } else if (data.hasSourceLocation) {
+            to = point(data.sourceX, data.sourceY, data.sourceZ);
+        } else {
+            break;
+        }
+        std::vector<MissileEnd> impacts;
+        for (uint64_t guid : data.hitTargets) {
+            MissileEnd end;
+            if (unitEnd(guid, end)) impacts.push_back(end);
+        }
+        if (impacts.empty()) impacts.push_back(to);
+        if (svs->launchSpellMissile(visualId, speed, from, to, std::move(impacts)))
+            carried = data.hitTargets;
+        break;
+    }
+    case sm::Targeting::None:
+        break;
+    }
+    return carried;
+}
 
 static std::string displaySpellName(GameHandler& handler, uint32_t spellId) {
     if (spellId == 0) return {};
@@ -2273,9 +2346,11 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                     }
                 }
             }
-            // Impact visual at each hit target
+            // Impact visual at each hit target - when a missile carries it,
+            // on the missile's arrival instead.
+            const std::vector<uint64_t> carried = launchSpellMissiles(data, visualId);
             for (const auto& tgt : data.hitTargets) {
-                if (tgt != 0) {
+                if (tgt != 0 && std::find(carried.begin(), carried.end(), tgt) == carried.end()) {
                     triggerImpactVisual(data.spellId, tgt);
                 }
             }
@@ -3274,6 +3349,8 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t rangeIdxField = spellL ? spellL->field("RangeIndex") : 0xFFFFFFFF;
     const uint32_t targetAuraStateField = spellL ? spellL->field("TargetAuraState") : 0xFFFFFFFF;
     const uint32_t spellVisualIdField = spellL ? spellL->field("SpellVisualID") : 0xFFFFFFFF;
+    // Only the WotLK layout names Speed: it is what gates spell missiles.
+    const uint32_t speedField = spellL ? spellL->tryField("Speed") : 0xFFFFFFFF;
     // Read off the file's own shape. Only TBC's layout named these two, so on
     // WotLK, Classic and Turtle every cooldown this client worked out for itself
     // came back zero - which is most of them, since the server sends a cooldown
@@ -3349,6 +3426,8 @@ void SpellHandler::loadSpellNameCache() const {
             // SpellVisualID: references SpellVisual.dbc for cast/impact M2 effects
             if (spellVisualIdField != 0xFFFFFFFF && spellVisualIdField < dbc->getFieldCount())
                 entry.spellVisualId = dbc->getUInt32(i, spellVisualIdField);
+            if (speedField != 0xFFFFFFFF && speedField < fieldCount)
+                entry.missileSpeed = dbc->getFloat(i, speedField);
             if (recoveryField != 0xFFFFFFFF && recoveryField < fieldCount)
                 entry.recoveryMs = dbc->getUInt32(i, recoveryField);
             if (categoryRecoveryField != 0xFFFFFFFF && categoryRecoveryField < fieldCount)

@@ -1,32 +1,16 @@
 #pragma once
 
-/// Where the sun is, from the direction its light travels.
+/// Where the sun is on screen.
 ///
-/// The lighting system gives a directional vector - the way the light goes -
-/// so the sun is the other way. Below the horizon it stays below: this used to
-/// be written inline in SkySystem::getSunPosition, which mirrored a sun under
-/// the ground back up into the sky (`sunDir = dir` rather than `-dir`).
-///
-/// Only the lens flare asked where the sun was then, so all the mirror achieved
-/// was to invent one for the flare to draw around, at a position no sun was at.
-/// The flare's own height attenuation then read the mirrored height as a sun
-/// climbing the sky and let it through unweakened. The sun shafts ask too now,
-/// and would have streamed from the same invented sun.
+/// The sun's direction itself is the client's sun curve now
+/// (daynight::sunDirection, 0x007eecc0), not the reverse of the light: the two
+/// share a side of the sky but not a height. It used to be derived from the
+/// light and, before that, mirrored a sun below the horizon back up into the
+/// sky, inventing one for the lens flare to draw around at night.
 
 #include <glm/glm.hpp>
 
 namespace wowee::rendering {
-
-/// The unit direction from the eye toward the sun.
-///
-/// A zero or degenerate directional means no sun has been given yet; straight
-/// down is what the rest of the sky code falls back to, so the sun reads as
-/// being straight up and everything that gates on height turns it off.
-inline glm::vec3 sunDirectionFromLightDir(const glm::vec3& directionalDir) {
-    const float lenSq = glm::dot(directionalDir, directionalDir);
-    if (lenSq < 1e-8f) return glm::vec3(0.0f, 0.0f, 1.0f);
-    return -directionalDir * glm::inversesqrt(lenSq);
-}
 
 /// Where the sun falls on the screen.
 struct SunOnScreen {

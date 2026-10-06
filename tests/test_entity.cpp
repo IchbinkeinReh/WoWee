@@ -518,41 +518,203 @@ TEST_CASE("EntityManager spatial query filters nearby entities", "[entity][spati
 TEST_CASE("Entity reportMoveFlags: a jump launches and lands", "[entity][jump]") {
     constexpr uint32_t kForward = 0x1, kFalling = 0x1000;
     Entity e;
-    CHECK(e.reportMoveFlags(kForward, false) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(kForward, MoveOpcodeKind::None) == ReportedJump::None);
     CHECK_FALSE(e.isAirborne());
-    CHECK(e.reportMoveFlags(kForward | kFalling, true) == ReportedJump::Launch);
+    CHECK(e.reportMoveFlags(kForward | kFalling, MoveOpcodeKind::Jump) == ReportedJump::Launch);
     CHECK(e.isAirborne());
     // A heartbeat in the air changes nothing.
-    CHECK(e.reportMoveFlags(kForward | kFalling, false) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(kForward | kFalling, MoveOpcodeKind::None) == ReportedJump::None);
     CHECK(e.isAirborne());
-    CHECK(e.reportMoveFlags(kForward, false) == ReportedJump::Land);
+    CHECK(e.reportMoveFlags(kForward, MoveOpcodeKind::None) == ReportedJump::Land);
     CHECK_FALSE(e.isAirborne());
     CHECK(e.getReportedMoveFlags() == kForward);
-    CHECK(e.reportMoveFlags(kForward, false) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(kForward, MoveOpcodeKind::None) == ReportedJump::None);
 }
 
 TEST_CASE("Entity reportMoveFlags: a fall off a ledge lands without a landing", "[entity][jump]") {
     constexpr uint32_t kFalling = 0x1000, kFallingFar = 0x2000;
     Entity e;
-    CHECK(e.reportMoveFlags(kFalling, false) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(kFalling, MoveOpcodeKind::None) == ReportedJump::None);
     CHECK_FALSE(e.isAirborne());
-    CHECK(e.reportMoveFlags(0, false) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(0, MoveOpcodeKind::None) == ReportedJump::None);
 
     // Falling far is airborne and lands.
-    CHECK(e.reportMoveFlags(kFalling | kFallingFar, false) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(kFalling | kFallingFar, MoveOpcodeKind::None) == ReportedJump::None);
     CHECK(e.isAirborne());
-    CHECK(e.reportMoveFlags(0, false) == ReportedJump::Land);
+    CHECK(e.reportMoveFlags(0, MoveOpcodeKind::None) == ReportedJump::Land);
 }
 
 TEST_CASE("Entity reportMoveFlags: no landing into water or flight", "[entity][jump]") {
     constexpr uint32_t kFalling = 0x1000, kSwimming = 0x200000, kFlying = 0x2000000;
     Entity e;
-    CHECK(e.reportMoveFlags(kFalling, true) == ReportedJump::Launch);
-    CHECK(e.reportMoveFlags(kSwimming, false) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(kFalling, MoveOpcodeKind::Jump) == ReportedJump::Launch);
+    CHECK(e.reportMoveFlags(kSwimming, MoveOpcodeKind::None) == ReportedJump::None);
     CHECK_FALSE(e.isAirborne());
-    CHECK(e.reportMoveFlags(kFalling, true) == ReportedJump::Launch);
-    CHECK(e.reportMoveFlags(kFlying, false) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(kFalling, MoveOpcodeKind::Jump) == ReportedJump::Launch);
+    CHECK(e.reportMoveFlags(kFlying, MoveOpcodeKind::None) == ReportedJump::None);
     // The jump is over: a later fall off a ledge is no jump.
-    CHECK(e.reportMoveFlags(kFalling, false) == ReportedJump::None);
-    CHECK(e.reportMoveFlags(0, false) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(kFalling, MoveOpcodeKind::None) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(0, MoveOpcodeKind::None) == ReportedJump::None);
+}
+
+TEST_CASE("Entity reportMoveFlags: a fall with a vertical speed was launched", "[entity][jump]") {
+    // FUN_00723350 and FUN_006eb730 read the jump block's vertical speed,
+    // not the opcode: a knockback, which comes in as no jump, is launched.
+    constexpr uint32_t kFalling = 0x1000;
+    Entity e;
+    CHECK(e.reportMoveFlags(kForward | kFalling, MoveOpcodeKind::None, -12.0f) ==
+          ReportedJump::None);
+    CHECK(e.isAirborne());
+    CHECK(e.reportMoveFlags(kForward, MoveOpcodeKind::None, 0.0f) == ReportedJump::Land);
+    CHECK_FALSE(e.isAirborne());
+
+    // Falling without one - off a ledge - is not, whatever the opcode.
+    CHECK(e.reportMoveFlags(kFalling, MoveOpcodeKind::Jump, 0.0f) == ReportedJump::Launch);
+    CHECK_FALSE(e.isAirborne());
+    CHECK(e.reportMoveFlags(0, MoveOpcodeKind::None, 0.0f) == ReportedJump::None);
+
+    // A heartbeat in the air keeps the jump's speed and the unit in the air.
+    CHECK(e.reportMoveFlags(kFalling, MoveOpcodeKind::Jump, -7.955547f) == ReportedJump::Launch);
+    CHECK(e.reportMoveFlags(kFalling, MoveOpcodeKind::None, -7.955547f) == ReportedJump::None);
+    CHECK(e.isAirborne());
+    CHECK(e.reportMoveFlags(0, MoveOpcodeKind::None, 0.0f) == ReportedJump::Land);
+}
+
+TEST_CASE("Entity reportMoveFlags: flight take-off and landing", "[entity][jump]") {
+    constexpr uint32_t kCanFly = 0x1000000;
+    Entity e;
+    CHECK(e.reportMoveFlags(kCanFly | kFlying, MoveOpcodeKind::SetFly, 0.0f) ==
+          ReportedJump::TakeOff);
+    CHECK(e.reportMoveFlags(kCanFly, MoveOpcodeKind::SetFly, 0.0f) == ReportedJump::FlightLand);
+}
+
+TEST_CASE("Entity reportMoveFlags: starts and stops ask for locomotion once", "[entity][jump]") {
+    Entity e;
+    CHECK_FALSE(e.takeLocomotionRequest());
+    e.reportMoveFlags(kForward, MoveOpcodeKind::Locomotion);
+    CHECK(e.takeLocomotionRequest());
+    CHECK_FALSE(e.takeLocomotionRequest());
+    // A heartbeat after it leaves an unread ask standing.
+    e.reportMoveFlags(0, MoveOpcodeKind::Locomotion);
+    e.reportMoveFlags(0, MoveOpcodeKind::None);
+    CHECK(e.takeLocomotionRequest());
+    // Walk or run mode only while under way.
+    e.reportMoveFlags(0, MoveOpcodeKind::LocomotionIfMoving);
+    CHECK_FALSE(e.takeLocomotionRequest());
+    e.reportMoveFlags(kForward, MoveOpcodeKind::LocomotionIfMoving);
+    CHECK(e.takeLocomotionRequest());
+}
+
+TEST_CASE("fallDistance follows the client's gravity and terminal speeds", "[entity][fall]") {
+    constexpr float g = 19.291105f;
+    CHECK(fallDistance(0.0f, 0.0f, false) == Catch::Approx(0.0f));
+    CHECK(fallDistance(1.0f, 0.0f, false) == Catch::Approx(0.5f * g));
+    // A jump (-7.955547, FUN_009883f0) peaks 1.64 yards up, 0.41 s in, and
+    // is back at its start at twice that.
+    const float apexT = 7.955547f / g;
+    CHECK(fallDistance(apexT, -7.955547f, false) == Catch::Approx(-1.6404f).epsilon(1e-3));
+    CHECK(fallDistance(2.0f * apexT, -7.955547f, false) == Catch::Approx(0.0f).margin(1e-4));
+    // Past the terminal speed (60.148003) the drop goes on at it.
+    const float toTerminal = 60.148003f / g;
+    const float atTerminal = 0.5f * g * toTerminal * toTerminal;
+    CHECK(fallDistance(toTerminal + 2.0f, 0.0f, false) ==
+          Catch::Approx(atTerminal + 2.0f * 60.148003f));
+    // SAFE_FALL caps it at 7.
+    const float toSafe = 7.0f / g;
+    CHECK(fallDistance(toSafe + 1.0f, 0.0f, true) ==
+          Catch::Approx(0.5f * g * toSafe * toSafe + 7.0f));
+}
+
+TEST_CASE("A jump in place goes straight up and comes down", "[entity][fall]") {
+    constexpr uint32_t kFalling = 0x1000;
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 10.0f, 0.0f);
+    FallMotion fall;
+    fall.verticalSpeed = -7.955547f;
+    fall.dirX = 1.0f;
+    fall.horizontalSpeed = 7.0f;
+    e.startMoveByFlags(0.0f, 0.0f, 10.0f, 0.0f, kFalling, 0, 0.0f, fall);
+    REQUIRE(e.isFallingByFlags());
+    e.updateMovement(7.955547f / 19.291105f);
+    CHECK(e.getZ() == Catch::Approx(11.6404f).epsilon(1e-4));
+    // No direction flag: the jump's speed carries it nowhere (FUN_00987b50).
+    CHECK(e.getX() == Catch::Approx(0.0f).margin(1e-5));
+    CHECK(e.getY() == Catch::Approx(0.0f).margin(1e-5));
+}
+
+TEST_CASE("A running jump goes along the jump's direction at its speed", "[entity][fall]") {
+    constexpr uint32_t kFalling = 0x1000;
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    FallMotion fall;
+    fall.verticalSpeed = -7.955547f;
+    fall.dirY = 1.0f;  // Canonical +y, whatever the facing
+    fall.horizontalSpeed = 8.0f;
+    // Turning in the air turns the facing alone, not the path.
+    e.startMoveByFlags(0.0f, 0.0f, 0.0f, 0.0f, kForward | kFalling | kTurnLeft, 0, 0.0f, fall);
+    e.updateMovement(0.5f);
+    CHECK(e.getX() == Catch::Approx(0.0f).margin(1e-4));
+    CHECK(e.getY() == Catch::Approx(4.0f));
+    CHECK(e.getZ() == Catch::Approx(-fallDistance(0.5f, -7.955547f, false)));
+    CHECK(e.getMoveSpeed() == Catch::Approx(8.0f));
+}
+
+TEST_CASE("A heartbeat in a fall carries on the fall it is part of", "[entity][fall]") {
+    // The fall began fallTime before the packet, at the height
+    // FUN_00988990 puts fallDistance above it: the unit is at the packet's
+    // height at the packet, and drops on as it was dropping.
+    constexpr uint32_t kFalling = 0x1000;
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 5.0f, 0.0f);
+    FallMotion fall;
+    fall.fallTimeSec = 0.6f;
+    fall.verticalSpeed = -7.955547f;
+    e.startMoveByFlags(0.0f, 0.0f, 5.0f, 0.0f, kFalling, 0, 0.0f, fall);
+    e.updateMovement(0.0f);
+    CHECK(e.getZ() == Catch::Approx(5.0f));
+    e.updateMovement(0.2f);
+    CHECK(e.getZ() == Catch::Approx(5.0f + fallDistance(0.6f, -7.955547f, false) -
+                                    fallDistance(0.8f, -7.955547f, false)));
+    // Landed: a stop stands it on the ground.
+    e.startMoveTo(0.0f, 0.0f, 4.0f, 0.0f, 0.0f);
+    CHECK_FALSE(e.isFallingByFlags());
+}
+
+// Our own jump as the client sends it (outgoingJumpBlock): a downward-positive
+// impulse, the keys' direction x first, the current speed. It went out as
+// +7.96 with sin before cos and the facing alone, so other clients drew it
+// dropping straight down and heading off mirrored.
+TEST_CASE("An outgoing jump carries the client's block", "[entity][fall]") {
+    constexpr uint32_t kForward = 0x1, kBackward = 0x2, kStrafeLeft = 0x4, kWalking = 0x100;
+    constexpr float kHalfPi = 1.5707963f;
+
+    SECTION("in place: straight up, no direction or speed") {
+        const auto j = outgoingJumpBlock(0, 1.0f, 2.5f, 7.0f, 4.5f);
+        CHECK(j.verticalSpeed == Catch::Approx(-7.955547f));
+        CHECK(j.dirX == 0.0f);
+        CHECK(j.dirY == 0.0f);
+        CHECK(j.horizontalSpeed == 0.0f);
+    }
+    SECTION("running forward: along the facing at run speed, x first") {
+        const auto j = outgoingJumpBlock(kForward, kHalfPi, 2.5f, 7.0f, 4.5f);
+        CHECK(j.dirX == Catch::Approx(0.0f).margin(1e-6));
+        CHECK(j.dirY == Catch::Approx(1.0f));
+        CHECK(j.horizontalSpeed == 7.0f);
+    }
+    SECTION("backing up: turned by pi at run-back speed") {
+        const auto j = outgoingJumpBlock(kBackward, 0.0f, 2.5f, 7.0f, 4.5f);
+        CHECK(j.dirX == Catch::Approx(-1.0f));
+        CHECK(j.horizontalSpeed == 4.5f);
+    }
+    SECTION("strafing left is a quarter turn to the left; forward-left is half way") {
+        const auto left = outgoingJumpBlock(kStrafeLeft, 0.0f, 2.5f, 7.0f, 4.5f);
+        CHECK(left.dirX == Catch::Approx(0.0f).margin(1e-6));
+        CHECK(left.dirY == Catch::Approx(1.0f));
+        const auto diag = outgoingJumpBlock(kForward | kStrafeLeft, 0.0f, 2.5f, 7.0f, 4.5f);
+        CHECK(diag.dirX == Catch::Approx(0.70710678f));
+        CHECK(diag.dirY == Catch::Approx(0.70710678f));
+    }
+    SECTION("walking uses walk speed") {
+        CHECK(outgoingJumpBlock(kForward | kWalking, 0.0f, 2.5f, 7.0f, 4.5f).horizontalSpeed == 2.5f);
+    }
 }

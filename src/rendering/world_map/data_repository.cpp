@@ -32,6 +32,7 @@ void DataRepository::clear() {
     cosmicIdx_ = -1;
     worldIdx_ = -1;
     currentMapId_ = -1;
+    entrance_ = {};
     cosmicEnabled_ = true;
     poisLoaded_ = false;
 }
@@ -48,6 +49,7 @@ void DataRepository::loadZones(const std::string& mapName,
     const auto* mapL = activeLayout ? activeLayout->getLayout("Map") : nullptr;
 
     int mapID = -1;
+    entrance_ = {};
     auto mapDbc = assetManager.loadDBC("Map.dbc");
     if (mapDbc && mapDbc->isLoaded()) {
         for (uint32_t i = 0; i < mapDbc->getRecordCount(); i++) {
@@ -55,6 +57,19 @@ void DataRepository::loadZones(const std::string& mapName,
             if (dir == mapName) {
                 mapID = static_cast<int>(mapDbc->getUInt32(i, mapL ? (*mapL)["ID"] : 0));
                 LOG_INFO("DataRepository: Map.dbc '", mapName, "' -> mapID=", mapID);
+                // Where an instance is entered from: the map and spot a ghost
+                // is sent back to. The client opens the map of an instance
+                // that has none of its own on the zone holding that spot.
+                // 3.3.5's 66-field Map.dbc has it at 59-61; the older files
+                // are laid out differently and are left without.
+                if (mapDbc->getFieldCount() == 66) {
+                    entrance_.mapId = mapDbc->getUInt32(i, 59);
+                    entrance_.x = mapDbc->getFloat(i, 60);
+                    entrance_.y = mapDbc->getFloat(i, 61);
+                    entrance_.valid = entrance_.mapId != UINT32_MAX &&
+                                      static_cast<int>(entrance_.mapId) != mapID &&
+                                      (entrance_.x != 0.0f || entrance_.y != 0.0f);
+                }
                 break;
             }
         }
@@ -130,11 +145,26 @@ void DataRepository::loadZones(const std::string& mapName,
     }
 
     const auto* wmaL = activeLayout ? activeLayout->getLayout("WorldMapArea") : nullptr;
+    const uint32_t displayField = wmaL ? (*wmaL)["DisplayMapID"] : 8;
+    // DisplayMapID is -1 on an ordinary row, so 0 is the Eastern Kingdoms -
+    // unless the file has no -1 at all, which is a file without the column.
+    // Taken as written, the -1 was a map id of its own: it named the "World"
+    // view, and opening the map anywhere but on a moved zone loaded that, an
+    // empty map, and stayed there.
+    bool displayHasMinusOne = false;
+    for (uint32_t i = 0; i < wmaDbc->getRecordCount() && !displayHasMinusOne; i++) {
+        displayHasMinusOne = wmaDbc->getUInt32(i, displayField) == UINT32_MAX;
+    }
+    const uint32_t floorField = [&] {
+        const uint32_t f = wmaL ? wmaL->tryField("DefaultDungeonFloor") : UINT32_MAX;
+        return f != UINT32_MAX ? f : 9u;
+    }();
 
     int continentIdx = -1;
     for (uint32_t i = 0; i < wmaDbc->getRecordCount(); i++) {
         uint32_t recMapID = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["MapID"] : 1);
-        uint32_t displayMapID = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["DisplayMapID"] : 8);
+        uint32_t displayMapID = worldMapDisplayMap(
+            recMapID, wmaDbc->getUInt32(i, displayField), displayHasMinusOne);
         // WorldMapArea can place a zone on one physical map while displaying it
         // under another continent. Azuremyst/Bloodmyst physically live on map
         // 530, but DisplayMapID=1 makes them children of Kalimdor. Include those
@@ -153,6 +183,12 @@ void DataRepository::loadZones(const std::string& mapName,
         zone.bounds.locBottom = wmaDbc->getFloat(i, wmaL ? (*wmaL)["LocBottom"] : 7);
         zone.displayMapID = displayMapID;
         zone.parentWorldMapID = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["ParentWorldMapID"] : 10);
+        // -1 is no parent, as zero is; every reader asks "is there one" with != 0.
+        if (zone.parentWorldMapID == UINT32_MAX) zone.parentWorldMapID = 0;
+        if (const uint32_t floor = wmaDbc->getUInt32(i, floorField);
+            floor != UINT32_MAX && floor < 64) {
+            zone.dungeonFloor = floor;
+        }
         if (recMapID != static_cast<uint32_t>(mapID) && displayMapID == static_cast<uint32_t>(mapID)) {
             const float centerX = (zone.bounds.locLeft + zone.bounds.locRight) * 0.5f;
             const float centerY = (zone.bounds.locTop + zone.bounds.locBottom) * 0.5f;
@@ -225,6 +261,33 @@ void DataRepository::loadZones(const std::string& mapName,
                 cont.bounds.locRight = std::min(cont.bounds.locRight, z.bounds.locRight);
                 cont.bounds.locTop = std::max(cont.bounds.locTop, z.bounds.locTop);
                 cont.bounds.locBottom = std::min(cont.bounds.locBottom, z.bounds.locBottom);
+            }
+        }
+    }
+
+    // A dungeon map has no rectangle of its own in WorldMapArea - all four
+    // edges are zero - and takes it from DungeonMap.dbc, one row per floor:
+    // ID, MapID, FloorIndex, MinX, MaxX, MinY, MaxY. The same edges in
+    // WorldMapArea's terms are left = max Y, right = min Y, top = max X,
+    // bottom = min X.
+    auto dungeonDbc = assetManager.loadDBC("DungeonMap.dbc");
+    if (dungeonDbc && dungeonDbc->isLoaded() && dungeonDbc->getFieldCount() >= 7) {
+        for (auto& z : zones_) {
+            if (z.areaID == 0 || z.dungeonFloor == 0) continue;
+            if (std::abs(z.bounds.locLeft - z.bounds.locRight) > 0.001f ||
+                std::abs(z.bounds.locTop - z.bounds.locBottom) > 0.001f) {
+                continue;
+            }
+            for (uint32_t i = 0; i < dungeonDbc->getRecordCount(); ++i) {
+                if (dungeonDbc->getUInt32(i, 1) != z.mapID ||
+                    dungeonDbc->getUInt32(i, 2) != z.dungeonFloor) {
+                    continue;
+                }
+                z.bounds.locLeft   = dungeonDbc->getFloat(i, 6);
+                z.bounds.locRight  = dungeonDbc->getFloat(i, 5);
+                z.bounds.locTop    = dungeonDbc->getFloat(i, 4);
+                z.bounds.locBottom = dungeonDbc->getFloat(i, 3);
+                break;
             }
         }
     }

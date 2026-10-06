@@ -109,6 +109,34 @@ TEST_CASE("Spell field indices are distinct", "[dbc][layout]") {
     }
 }
 
+// Spell missiles read Spell.dbc Speed and the missile half of SpellVisual.dbc.
+// The columns are 3.3.5a's: the client loads Speed at record offset 0xBC
+// (FUN_00732ff0) and reads SpellVisual's 32 columns (FUN_008b93f0) at the
+// offsets pinned here. Only WotLK names them; the others fly no missile.
+TEST_CASE("WotLK layout carries the spell missile columns", "[dbc][layout]") {
+    DBCLayout layout;
+    REQUIRE(layout.loadFromJson(layoutPath("wotlk")));
+    const auto* spell = layout.getLayout("Spell");
+    REQUIRE(spell != nullptr);
+    CHECK(spell->field("Speed") == 47);
+    CHECK(spell->field("SpellVisualID") == 131);
+
+    const auto* visual = layout.getLayout("SpellVisual");
+    REQUIRE(visual != nullptr);
+    CHECK(visual->field("MissileModel") == 8);
+    CHECK(visual->field("MissileDestinationAttachment") == 10);
+    CHECK(visual->field("Flags") == 13);
+    CHECK(visual->field("MissileAttachment") == 16);
+    CHECK(visual->field("MissileCastOffsetX") == 26);
+    CHECK(visual->field("MissileCastOffsetZ") == 28);
+    CHECK(visual->field("MissileImpactOffsetX") == 29);
+    CHECK(visual->field("MissileImpactOffsetZ") == 31);
+
+    const auto* effectName = layout.getLayout("SpellVisualEffectName");
+    REQUIRE(effectName != nullptr);
+    CHECK(effectName->field("Scale") == 4);
+}
+
 // CharacterFacialHairStyles drives the three facial-feature geoset channels: a
 // beard, and for races like the Draenei the face tendrils. The geoset columns
 // are not where the obvious reading of the WotLK definition puts them - in every

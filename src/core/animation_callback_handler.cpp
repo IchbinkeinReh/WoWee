@@ -303,12 +303,24 @@ void AnimationCallbackHandler::setupCallbacks() {
     // FUN_0073d2b0 picks from the flags the unit lands with: JumpEnd back to
     // its rest animation, JumpLandRun back to Run, or nothing - the sync
     // loop then takes a unit left in an airborne loop back to its locomotion.
-    // A mounted player's rider keeps the seat pose.
+    // Taking off into flight plays JumpStart too, unless the unit is falling
+    // (Fall playing), and landing from flight JumpLandRun (FUN_0073ed10,
+    // case 0x346); the sync loop picks the locomotion after either.
+    //
+    // A mounted player's jump is its mount's. The client plays a unit's
+    // animations on its mount model when it has one (FUN_007385c0 hands the
+    // animation to the mount at +0x98c, through the model's fallbacks,
+    // FUN_007176f0), and the rider holds the mounted pose (+0xb7c, Mount
+    // unless the mount says otherwise) throughout.
     gameHandler_.setUnitJumpCallback([this](uint64_t guid, game::ReportedJump jump) {
         auto* cr = renderer_.getCharacterRenderer();
         if (!cr) return;
         uint32_t instanceId = entitySpawner_.getPlayerInstanceId(guid);
-        if (instanceId != 0 && entitySpawner_.getRemotePlayerMount(guid)) return;
+        if (instanceId != 0) {
+            if (const auto* mount = entitySpawner_.getRemotePlayerMount(guid)) {
+                instanceId = mount->instanceId;
+            }
+        }
         if (instanceId == 0) instanceId = entitySpawner_.getCreatureInstanceId(guid);
         if (instanceId == 0) return;
         auto entity = gameHandler_.getEntityManager().getEntity(guid);
@@ -316,7 +328,9 @@ void AnimationCallbackHandler::setupCallbacks() {
         // Don't override Death animation
         uint32_t curAnim = 0; float curT = 0.0f, curDur = 0.0f;
         if (cr->getAnimationState(instanceId, curAnim, curT, curDur) && curAnim == rendering::anim::DEATH) return;
-        if (jump == game::ReportedJump::Launch) {
+        const bool takeOff =
+            jump == game::ReportedJump::TakeOff && curAnim != rendering::anim::FALL;
+        if (jump == game::ReportedJump::Launch || takeOff) {
             if (cr->hasAnimation(instanceId, rendering::anim::JUMP_START)) {
                 cr->playAnimation(instanceId, rendering::anim::JUMP_START, /*loop=*/false,
                                   rendering::anim::JUMP);
@@ -325,6 +339,13 @@ void AnimationCallbackHandler::setupCallbacks() {
             }
             return;
         }
+        if (jump == game::ReportedJump::FlightLand) {
+            if (cr->hasAnimation(instanceId, rendering::anim::JUMP_LAND_RUN)) {
+                cr->playAnimation(instanceId, rendering::anim::JUMP_LAND_RUN, /*loop=*/false);
+            }
+            return;
+        }
+        if (jump != game::ReportedJump::Land) return;
         const uint32_t flags = entity->getReportedMoveFlags();
         const auto& speeds = entity->getMovementSpeeds();
         const rendering::JumpLanding landing = rendering::jumpLandingForFlags(

@@ -2,6 +2,8 @@
 // Extracted from WorldMap::initialize, shutdown, compositePass, loadZoneTextures,
 // loadOverlayTextures, destroyZoneTextures (Phase 7 of refactoring plan).
 #include "rendering/world_map/composite_renderer.hpp"
+#include "rendering/world_map/map_resolver.hpp"
+#include "rendering/world_map/coordinate_projection.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_texture.hpp"
 #include "rendering/vk_render_target.hpp"
@@ -279,8 +281,7 @@ void CompositeRenderer::loadZoneTextures(int zoneIdx, std::vector<Zone>& zones,
     int loaded = 0;
 
     for (int i = 0; i < 12; i++) {
-        std::string path = "Interface\\WorldMap\\" + folder + "\\" +
-                           folder + std::to_string(i + 1) + ".blp";
+        const std::string path = worldMapTilePath(folder, zone.dungeonFloor, i + 1);
         auto blpImage = assetManager->loadTexture(path);
         if (!blpImage.isValid()) {
             slots.tileTextures[i] = nullptr;
@@ -490,39 +491,23 @@ void CompositeRenderer::compositePass(VkCommandBuffer cmd,
                                         overlayPipelineLayout_, 0, 1,
                                         &overlayDescSets_[frameIdx][descSlot], 0, nullptr);
 
-                int tileCol = t % ov.tileCols;
-                int tileRow = t / ov.tileCols;
-
                 // An overlay is cut into 256px pieces and the last one in each
-                // direction is only as wide as the overlay has left. Drawing
-                // every piece as a full cell stretched those edges up to 256,
-                // which is why the explored region did not sit at the same
-                // scale as the map under it.
-                const int pieceW = std::min<int>(TILE_PX, ov.texWidth - tileCol * TILE_PX);
-                const int pieceH = std::min<int>(TILE_PX, ov.texHeight - tileRow * TILE_PX);
-                if (pieceW <= 0 || pieceH <= 0) continue;
-
-                // And the file holding a piece is padded out to the next power
-                // of two, so only part of it is the piece. Sixteen is the
-                // smallest the tools emit.
-                auto fileExtent = [](int pixels) {
-                    int e = 16;
-                    while (e < pixels) e *= 2;
-                    return e;
-                };
-
-                float px = static_cast<float>(ov.offsetX + tileCol * TILE_PX);
-                float py = static_cast<float>(ov.offsetY + tileRow * TILE_PX);
+                // direction is only as wide as the overlay has left, in a file
+                // padded out to a power of two. Drawing every piece as a full
+                // cell stretched those edges up to 256, which is why the
+                // explored region did not sit at the same scale as the map
+                // under it.
+                const OverlayPiece piece = overlayPiece(ov, t);
+                if (piece.width <= 0 || piece.height <= 0) continue;
 
                 OverlayPush ovPush{};
-                ovPush.gridOffset = glm::vec2(px / static_cast<float>(TILE_PX),
-                                              py / static_cast<float>(TILE_PX));
+                ovPush.gridOffset = glm::vec2(static_cast<float>(piece.x) / TILE_PX,
+                                              static_cast<float>(piece.y) / TILE_PX);
                 ovPush.gridCols = static_cast<float>(GRID_COLS);
                 ovPush.gridRows = static_cast<float>(GRID_ROWS);
-                ovPush.gridScale = glm::vec2(static_cast<float>(pieceW) / TILE_PX,
-                                             static_cast<float>(pieceH) / TILE_PX);
-                ovPush.uvScale = glm::vec2(static_cast<float>(pieceW) / fileExtent(pieceW),
-                                           static_cast<float>(pieceH) / fileExtent(pieceH));
+                ovPush.gridScale = glm::vec2(static_cast<float>(piece.width) / TILE_PX,
+                                             static_cast<float>(piece.height) / TILE_PX);
+                ovPush.uvScale = glm::vec2(piece.uMax, piece.vMax);
                 ovPush.tintColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
                 vkCmdPushConstants(cmd, overlayPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(WorldMapTilePush), &ovPush);

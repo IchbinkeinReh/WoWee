@@ -74,6 +74,16 @@ public:
     /// Reset all data (called on map change).
     void clear();
 
+    /// Where the loaded map is entered from, when it is an instance that says
+    /// so: Map.dbc's ghost-return map and position, as the file has it - x
+    /// north and y west, the order the server sends a position in.
+    struct Entrance {
+        bool valid = false;
+        uint32_t mapId = 0;
+        float x = 0.0f, y = 0.0f;
+    };
+    [[nodiscard]] const Entrance& entrance() const { return entrance_; }
+
 private:
     struct MapTransform {
         uint32_t sourceMapId = 0;
@@ -93,6 +103,7 @@ private:
     int cosmicIdx_ = -1;
     int worldIdx_ = -1;
     int currentMapId_ = -1;
+    Entrance entrance_;
     bool cosmicEnabled_ = true;
     bool poisLoaded_ = false;
 

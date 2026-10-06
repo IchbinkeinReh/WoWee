@@ -458,9 +458,11 @@ struct MovementInfo {
     // Optional fields (based on flags)
     float pitch = 0.0f;             // Pitch angle (swimming/flying)
     uint32_t fallTime = 0;          // Time falling (milliseconds)
-    float jumpVelocity = 0.0f;      // Jump vertical velocity
-    float jumpSinAngle = 0.0f;      // Jump horizontal sin
-    float jumpCosAngle = 0.0f;      // Jump horizontal cos
+    float jumpVelocity = 0.0f;      // Jump vertical speed, downward-positive (-7.955547 on a jump)
+    // The jump direction in wire order. Despite the names, the first is its x
+    // (cos) and the second its y (sin) - see outgoingJumpBlock.
+    float jumpSinAngle = 0.0f;
+    float jumpCosAngle = 0.0f;
     float jumpXYSpeed = 0.0f;       // Jump horizontal speed
 
     // Transport fields (when ONTRANSPORT flag is set)
@@ -516,6 +518,19 @@ public:
      * @return Packet ready to send
      */
     static network::Packet build(Opcode opcode, const MovementInfo& info, uint64_t playerGuid = 0);
+
+    /**
+     * Read what follows the transport block of a 3.3.5a movement block: the
+     * pitch while swimming or flying (0x2200000) or always allowed to pitch
+     * (flags2 0x20), the fall time, the jump block while falling (0x1000) and
+     * the spline elevation (0x4000000) - as the client's reader of a
+     * movement status does (FUN_004f4d40). The jump block's first angle is
+     * the x of the jump's direction and its second the y (the client's +0x70
+     * and +0x74, FUN_00988990); MovementInfo calls them sin and cos.
+     *
+     * @return false if the packet ends first
+     */
+    static bool readPitchAndFall(network::Packet& packet, MovementInfo& info);
 };
 
 // Forward declare Entity types
@@ -2294,6 +2309,15 @@ struct SpellGoData {
     uint8_t missCount = 0;
     std::vector<SpellGoMissEntry> missTargets;
     uint64_t targetGuid = 0;  ///< Primary target GUID from SpellCastTargets (0 = none/AoE)
+    /// SpellCastTargets flags and the two points they may carry, in server
+    /// (canonical) coordinates. The client aims a spell's missile with them:
+    /// at each target for a unit cast, at the destination for a ground one
+    /// (FUN_007fffb0). Read for WotLK only; the older parsers leave them 0.
+    uint32_t targetFlags = 0;
+    bool hasSourceLocation = false;
+    float sourceX = 0.0f, sourceY = 0.0f, sourceZ = 0.0f;
+    bool hasDestLocation = false;
+    float destX = 0.0f, destY = 0.0f, destZ = 0.0f;
 
     [[nodiscard]] bool isValid() const { return spellId != 0; }
 };

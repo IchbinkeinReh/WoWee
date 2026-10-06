@@ -10,6 +10,7 @@
 #include "core/appearance_composer.hpp"
 #include "core/window.hpp"
 #include "core/coordinates.hpp"
+#include "rendering/world_map/map_resolver.hpp"
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/animation_controller.hpp"
@@ -136,6 +137,54 @@ void spawnInstancePortalVisuals(uint32_t mapId,
                      portal.canonicalPos.y, ", ", portal.canonicalPos.z, ")");
         }
     }
+}
+
+/// What the loading screen says it is loading: the zone the player is going
+/// to, by its AreaTable name - which on a localized client is its own
+/// language's, since the strings are read from its column.
+///
+/// It said the continent, by an English name chosen from the map id. Map 530
+/// is Outland and also Eversong Woods, Ghostlands, Silvermoon, the draenei
+/// islands and the Exodar, so every blood elf and draenei logging in at home
+/// was told "Outland", on a German client as on any other.
+///
+/// The character list names the zone at login; a teleport has only the
+/// destination, which WorldMapArea's rectangles place. Map.dbc's own name is
+/// the last word, for a map no rectangle covers - an instance.
+std::string loadingZoneCaption(const game::GameHandler* gh, pipeline::AssetManager* am,
+                               uint32_t mapId, float serverX, float serverY) {
+    if (!gh) return {};
+    // The canonical position, which is what WorldMapArea is written in.
+    const glm::vec3 canonical = coords::serverToCanonical(glm::vec3(serverX, serverY, 0.0f));
+
+    if (const game::Character* ch = gh->getActiveCharacter();
+        ch && ch->zoneId != 0 && ch->mapId == mapId &&
+        std::abs(ch->x - serverX) < 5.0f && std::abs(ch->y - serverY) < 5.0f) {
+        if (std::string name = gh->getAreaName(ch->zoneId); !name.empty()) return name;
+    }
+
+    if (am && am->isInitialized()) {
+        if (auto wma = am->loadDBC("WorldMapArea.dbc"); wma && wma->isLoaded()) {
+            const auto* layout = pipeline::getActiveDBCLayout()
+                ? pipeline::getActiveDBCLayout()->getLayout("WorldMapArea") : nullptr;
+            std::vector<rendering::world_map::Zone> rows;
+            for (uint32_t i = 0; i < wma->getRecordCount(); ++i) {
+                rendering::world_map::Zone z;
+                z.mapID = wma->getUInt32(i, layout ? (*layout)["MapID"] : 1);
+                z.areaID = wma->getUInt32(i, layout ? (*layout)["AreaID"] : 2);
+                if (z.mapID != mapId || z.areaID == 0) continue;
+                z.bounds.locLeft = wma->getFloat(i, layout ? (*layout)["LocLeft"] : 4);
+                z.bounds.locRight = wma->getFloat(i, layout ? (*layout)["LocRight"] : 5);
+                z.bounds.locTop = wma->getFloat(i, layout ? (*layout)["LocTop"] : 6);
+                z.bounds.locBottom = wma->getFloat(i, layout ? (*layout)["LocBottom"] : 7);
+                rows.push_back(std::move(z));
+            }
+            const uint32_t areaId = rendering::world_map::zoneAreaAtPosition(
+                rows, mapId, canonical.x, canonical.y);
+            if (std::string name = gh->getAreaName(areaId); !name.empty()) return name;
+        }
+    }
+    return gh->getMapName(mapId);
 }
 
 } // namespace
@@ -758,19 +807,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     loadingUi.ok = loadingScreenOk;
     loadingUi.showProgress = showProgress;
 
-    // Set zone name on loading screen - prefer friendly display name, then DBC
-    {
-        const char* friendly = mapDisplayName(mapId);
-        if (friendly) {
-            loadingScreen.setZoneName(friendly);
-        } else if (gameHandler_) {
-            std::string dbcName = gameHandler_->getMapName(mapId);
-            if (!dbcName.empty())
-                loadingScreen.setZoneName(dbcName);
-            else
-                loadingScreen.setZoneName("Loading...");
-        }
-    }
+    // The zone being loaded, in the client's language; nothing rather than a
+    // guess when nothing names it.
+    loadingScreen.setZoneName(loadingZoneCaption(gameHandler_, assetManager_, mapId, x, y));
 
     showProgress("Entering world...", 0.0f);
 

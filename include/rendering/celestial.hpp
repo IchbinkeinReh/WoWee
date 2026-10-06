@@ -50,13 +50,16 @@ public:
      * @param cmd         Command buffer to record into
      * @param perFrameSet Per-frame descriptor set (set 0, camera UBO)
      * @param timeOfDay   Time of day in hours (0-24)
-     * @param sunDir      Optional sun direction from lighting system (normalized)
+     * @param sunDir      From the eye toward the sun, unit length: the client's
+     *                    sun curve (daynight::sunDirection, 0x007eecc0)
+     * @param moonDir     From the eye toward the moon, the same way
      * @param sunColor    Optional sun colour from lighting system
      * @param gameTime    Optional server game time in seconds (deterministic moon phases)
      */
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 float timeOfDay,
-                const glm::vec3* sunDir   = nullptr,
+                const glm::vec3& sunDir,
+                const glm::vec3& moonDir,
                 const glm::vec3* sunColor = nullptr,
                 float gameTime = -1.0f,
                 float nightFactor = 1.0f);
@@ -84,11 +87,8 @@ public:
     void setDualMoonMode(bool enabled) { dualMoonMode_ = enabled; }
     [[nodiscard]] bool isDualMoonMode() const { return dualMoonMode_; }
 
-    // --- Positional / colour queries (unchanged from GL version) ---
-    [[nodiscard]] glm::vec3 getSunPosition(float timeOfDay) const;
-    [[nodiscard]] glm::vec3 getMoonPosition(float timeOfDay) const;
+    // --- Colour query (unchanged from GL version) ---
     [[nodiscard]] glm::vec3 getSunColor(float timeOfDay) const;
-    [[nodiscard]] float     getSunIntensity(float timeOfDay) const;
 
 private:
     // Push constant block - MUST match celestial.vert.glsl / celestial.frag.glsl
@@ -107,13 +107,12 @@ private:
 
     void renderSun(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                    float timeOfDay,
-                   const glm::vec3* sunDir, const glm::vec3* sunColor);
-    void renderMoon(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, float timeOfDay,
-                    float nightFactor);
-    void renderBlueChild(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, float timeOfDay,
-                         float nightFactor);
+                   const glm::vec3& sunDir, const glm::vec3* sunColor);
+    void renderMoon(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
+                    const glm::vec3& moonDir, float nightFactor);
+    void renderBlueChild(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
+                         const glm::vec3& moonDir, float nightFactor);
 
-    [[nodiscard]] float calculateCelestialAngle(float timeOfDay, float riseTime, float setTime) const;
     [[nodiscard]] float computePhaseFromGameTime(float gameTime, float cycleDays) const;
     void  updatePhasesFromGameTime(float gameTime);
 

@@ -918,7 +918,6 @@ set(WOWEE_SOURCES
     src/rendering/weather.cpp
     src/rendering/lightning.cpp
     src/rendering/lighting_manager.cpp
-    src/rendering/zone_ambience.cpp
     src/rendering/sky_system.cpp
     src/rendering/character_renderer.cpp
     src/rendering/character_preview.cpp

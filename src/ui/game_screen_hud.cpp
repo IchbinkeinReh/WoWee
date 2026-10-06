@@ -489,7 +489,14 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
     // they happen to sit deepest inside. The boxes are axis-aligned rectangles
     // around irregular zones and overlap their neighbours heavily, so opening
     // the map could land on a zone the player was only near.
-    wm->setPlayerZoneId(gameHandler.getWorldStateZoneId());
+    //
+    // The zone under the player's feet first, as GetZoneText has it, and the
+    // server's only where the terrain cannot say - inside an instance, or
+    // before the first chunk is in. The server names a zone on
+    // SMSG_INIT_WORLD_STATES alone, so its answer is the last zone it noticed,
+    // and the map opened on the zone the player had just walked out of.
+    const uint32_t liveZone = renderer->getCurrentZoneId();
+    wm->setPlayerZoneId(liveZone != 0 ? liveZone : gameHandler.getWorldStateZoneId());
 
     // Party member dots on world map
     {

@@ -1177,6 +1177,10 @@ register_test_target(test_locomotion_fsm)
 wowee_add_test(test_jump_landing
     SOURCES test_jump_landing.cpp ${TEST_COMMON_SOURCES})
 
+# ── test_movement_fall_block ─────────────────────────────────
+# The pitch, fall time and jump block after another unit's movement head.
+wowee_add_packet_test(test_movement_fall_block)
+
 # ── test_chat_filters ────────────────────────────────────────
 add_executable(test_chat_filters
     test_chat_filters.cpp
@@ -1251,10 +1255,6 @@ register_test_target(test_anim_capability)
 wowee_add_test(test_indoor_shadows
     SOURCES test_indoor_shadows.cpp)
 
-# ── test_zone_ambience ─────────────────────────────────────────
-wowee_add_test(test_zone_ambience
-    SOURCES test_zone_ambience.cpp
-            ${CMAKE_SOURCE_DIR}/src/rendering/zone_ambience.cpp)
 
 # ── test_transport_components ────────────────────────────────
 wowee_add_test(test_transport_components
@@ -1276,6 +1276,13 @@ wowee_add_test(test_world_map_coordinate_projection
 # ── test_world_map_map_resolver ───────────────────────────────
 wowee_add_test(test_world_map_map_resolver
     SOURCES test_world_map_map_resolver.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/world_map/map_resolver.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/world_map/coordinate_projection.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_world_map_open ───────────────────────────────────────
+wowee_add_test(test_world_map_open
+    SOURCES test_world_map_open.cpp
             ${CMAKE_SOURCE_DIR}/src/rendering/world_map/map_resolver.cpp
             ${CMAKE_SOURCE_DIR}/src/rendering/world_map/coordinate_projection.cpp
             ${TEST_COMMON_SOURCES})
@@ -2081,14 +2088,6 @@ wowee_test_link_glm(test_light_bands)
 add_test(NAME light_bands COMMAND test_light_bands)
 register_test_target(test_light_bands)
 
-# ── test_light_headroom ──────────────────────────────────────
-# Keeping ambient + diffuse inside 1.0. 82% of the client's LightParams
-# rows exceed it at noon, and per-channel clipping shifts hue: Mulgore's
-# grass went searing yellow, Teldrassil's canopies magenta.
-wowee_add_test(test_light_headroom
-    SOURCES test_light_headroom.cpp
-            ${TEST_COMMON_SOURCES})
-
 # ── test_m2_view_distance ────────────────────────────────────
 # How far one M2 instance draws. Three separate widenings - a size factor,
 # an animation factor and the game object floor - each pushed past the view
@@ -2104,20 +2103,21 @@ target_link_libraries(test_m2_view_distance PRIVATE catch2_main)
 add_test(NAME m2_view_distance COMMAND test_m2_view_distance)
 register_test_target(test_m2_view_distance)
 
-# ── test_light_volume_order ──────────────────────────────────
-# Which of two overlapping light volumes is blended first. Equal weights
-# are the ordinary case, not a coincidence, and an unstable sort decided
-# them differently every time the list changed - so the sky model flipped
-# frame to frame while walking.
-add_executable(test_light_volume_order
-    test_light_volume_order.cpp
-    ${TEST_COMMON_SOURCES})
-target_include_directories(test_light_volume_order PRIVATE ${TEST_INCLUDE_DIRS})
-target_include_directories(test_light_volume_order SYSTEM PRIVATE
-    ${TEST_SYSTEM_INCLUDE_DIRS})
-target_link_libraries(test_light_volume_order PRIVATE catch2_main)
-add_test(NAME light_volume_order COMMAND test_light_volume_order)
-register_test_target(test_light_volume_order)
+# ── test_day_night ───────────────────────────────────────────
+# The client's DayNight curves and light blending (Wow.exe 3.3.5a): where the
+# light, the sun and the moon are at each hour, how far one Light.dbc volume
+# reaches, which order the volumes are applied in, the storm blend and the fog
+# range.
+wowee_add_test(test_day_night
+    SOURCES test_day_night.cpp)
+target_compile_definitions(test_day_night PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+# ── test_game_clock ──────────────────────────────────────────
+# The time of day running on from the server's time and speed. It was stored
+# at login and never advanced, so the sky stayed at the login hour.
+wowee_add_test(test_game_clock
+    SOURCES test_game_clock.cpp)
 
 # ── test_m2_blend_mode ───────────────────────────────────────
 # Whether an M2 batch is alpha tested. Additive batches were forced onto
@@ -2526,6 +2526,17 @@ wowee_add_test(test_grass_cull_math
 wowee_add_test(test_pass_ablation
     SOURCES test_pass_ablation.cpp
             ${CMAKE_SOURCE_DIR}/src/rendering/pass_ablation.cpp)
+
+# ── test_spell_missile ───────────────────────────────
+# The arithmetic of the client's spell missile: which attachment it aims at,
+# which targets get one, how far it moves a frame, that it homes and that it
+# faces where it goes. Header-only, so no renderer.
+wowee_add_test(test_spell_missile
+    SOURCES test_spell_missile.cpp)
+
+# ── test_spell_go_targets ────────────────────────────
+# SMSG_SPELL_GO's target flags and points, which a ground missile flies to.
+wowee_add_packet_test(test_spell_go_targets)
 
 # ── Sanitizers, once every test target exists ────────────────
 # This must be the last thing in this file. The loop walks ALL_TEST_TARGETS,

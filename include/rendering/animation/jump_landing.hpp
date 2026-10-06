@@ -40,24 +40,31 @@ enum class AirborneAnimSync : uint8_t {
     None,       // Nothing to do with a jump: pick locomotion as usual
     Hold,       // Leave the jump animation playing
     Fall,       // Airborne without a jump animation: play Fall (40)
-    Refresh,    // Down again but still in an airborne loop: pick locomotion now
+    Refresh,    // Down again in an airborne loop, or a landing cut short:
+                // pick locomotion now
 };
 
-/// While a unit is airborne - falling (0x1000) after a jump or knockback, or
-/// falling far (0x2000), as FUN_00723350 has it - the client's locomotion
-/// choice (FUN_00724200) keeps whichever of JumpStart, Jump, JumpEnd and Fall
-/// (37-40) is playing (FUN_0071dc20) and otherwise plays Fall; a JumpStart
-/// gives way to the Jump loop when it ends (FUN_0073b510). Once down, the
-/// landing one-shot (JumpEnd, JumpLandRun) plays out; a unit still in an
-/// airborne loop (a landing that plays nothing) goes back to its locomotion.
-[[nodiscard]] constexpr AirborneAnimSync airborneAnimSync(bool airborne,
-                                                          uint32_t currentAnim) noexcept {
+/// While a unit is airborne - falling (0x1000) with a vertical speed, after a
+/// jump or knockback, or falling far (0x2000), as FUN_00723350 has it - the
+/// client's locomotion choice (FUN_00724200) keeps whichever of JumpStart,
+/// Jump, JumpEnd and Fall (37-40) is playing (FUN_0071dc20) and otherwise
+/// plays Fall; a JumpStart gives way to the Jump loop when it ends
+/// (FUN_0073b510). Once down, the landing one-shot (JumpEnd, JumpLandRun)
+/// plays out, unless a movement opcode asked for the unit's locomotion again
+/// (locomotionAsked: FUN_0073ed10 calling FUN_0073ac30), which replaces it at
+/// once; a unit still in an airborne loop (a landing that plays nothing) goes
+/// back to its locomotion. Taking off into flight, the JumpStart plays out
+/// before the flight's locomotion (FUN_0073b510, case 0x25 with FLYING).
+[[nodiscard]] constexpr AirborneAnimSync airborneAnimSync(bool airborne, uint32_t currentAnim,
+                                                          bool flying,
+                                                          bool locomotionAsked) noexcept {
     const bool inAirLoop = currentAnim == anim::JUMP_START || currentAnim == anim::JUMP ||
                            currentAnim == anim::FALL;
     const bool landing = currentAnim == anim::JUMP_END || currentAnim == anim::JUMP_LAND_RUN;
     if (airborne) return inAirLoop || currentAnim == anim::JUMP_END ? AirborneAnimSync::Hold
                                                                     : AirborneAnimSync::Fall;
-    if (landing) return AirborneAnimSync::Hold;
+    if (flying && currentAnim == anim::JUMP_START) return AirborneAnimSync::Hold;
+    if (landing) return locomotionAsked ? AirborneAnimSync::Refresh : AirborneAnimSync::Hold;
     return inAirLoop ? AirborneAnimSync::Refresh : AirborneAnimSync::None;
 }
 

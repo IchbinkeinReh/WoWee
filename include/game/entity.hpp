@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <mutex>
 #include <chrono>
 #include "math/spline.hpp"
@@ -115,7 +116,78 @@ enum class ReportedJump : uint8_t {
     None,
     Launch,     // MSG_MOVE_JUMP: JumpStart, then the Jump loop
     Land,       // Down from a jump or a long fall: the landing animation
+    TakeOff,    // Into flight (CMSG_MOVE_SET_FLY with FLYING): JumpStart
+    FlightLand, // Out of flight (CMSG_MOVE_SET_FLY without it): JumpLandRun
 };
+
+/// What the client's handler for another unit's movement opcode
+/// (FUN_0073ed10, called after the packet is applied) does with the unit's
+/// animation, as Entity::reportMoveFlags takes it.
+enum class MoveOpcodeKind : uint8_t {
+    None,               // Heartbeat, facing, pitch, landing...: nothing more
+    Jump,               // MSG_MOVE_JUMP (0xbb): JumpStart
+    SetFly,             // CMSG_MOVE_SET_FLY as relayed (0x346): take off or land
+    Locomotion,         // Start, stop, turn, swim, ascend...: locomotion again
+    LocomotionIfMoving, // Walk or run mode: locomotion again if under way
+};
+
+/// The client's fall (FUN_00986f00): how far a unit has dropped t seconds
+/// into a fall begun at verticalSpeed - downwards positive, so a jump starts
+/// below zero (-7.955547, FUN_009883f0) and the distance is negative while
+/// it rises - under 19.291105 yd/s^2 of gravity, up to a terminal speed of
+/// 60.148003, or 7 with SAFE_FALL (0x20000000; DAT_00b2d9e8, DAT_00b2d9ec).
+[[nodiscard]] inline float fallDistance(float t, float verticalSpeed, bool safeFall) noexcept {
+    constexpr float kGravity = 19.291105f;
+    const float terminal = safeFall ? 7.0f : 60.148003f;
+    const float v0 = std::min(verticalSpeed, terminal);
+    if (kGravity * t + v0 <= terminal) return (0.5f * kGravity * t + v0) * t;
+    const float toTerminal = (terminal - v0) / kGravity;
+    return (0.5f * kGravity * toTerminal + v0) * toTerminal + (t - toTerminal) * terminal;
+}
+
+/// The jump or fall a movement packet with FALLING (0x1000) carries - its
+/// fall time and jump block - as Entity::startMoveByFlags takes it, in
+/// canonical axes.
+struct FallMotion {
+    float fallTimeSec = 0.0f;       // Fallen for this long at the packet
+    float verticalSpeed = 0.0f;     // At the start of the fall; see fallDistance
+    float dirX = 0.0f, dirY = 0.0f; // The jump's horizontal direction
+    float horizontalSpeed = 0.0f;
+};
+
+/// The jump block the client sends with MSG_MOVE_JUMP, in the server's axes
+/// and in wire order: the vertical speed, the x and y of the jump's direction
+/// (MovementInfo calls them jumpSinAngle and jumpCosAngle, in that order -
+/// the names are the wrong way round), and the horizontal speed.
+struct OutgoingJump {
+    float verticalSpeed = 0.0f;
+    float dirX = 0.0f, dirY = 0.0f;
+    float horizontalSpeed = 0.0f;
+};
+
+/// What the client puts in it on a jump. The vertical speed is the jump
+/// impulse, -7.955547 - the fall's speeds are downward-positive (FUN_009883f0
+/// -> FUN_00988370). The direction is the way the keys move the unit, not
+/// only the facing: backing up turns it by pi, a strafe by pi/2 to the left,
+/// diagonals half way (FUN_00988df0). The speed is the unit's current one
+/// (FUN_00987570): walk when walking, run-back when only backing up, else
+/// run; and none when no key is moving it, so the jump goes straight up.
+inline OutgoingJump outgoingJumpBlock(uint32_t flags, float orientation, float walkSpeed,
+                                      float runSpeed, float runBackSpeed) {
+    constexpr uint32_t kForward = 0x1, kBackward = 0x2, kStrafeLeft = 0x4,
+                       kStrafeRight = 0x8, kWalking = 0x100;
+    OutgoingJump j;
+    j.verticalSpeed = -7.955547f;
+    const float fwd = ((flags & kForward) ? 1.0f : 0.0f) - ((flags & kBackward) ? 1.0f : 0.0f);
+    const float side = ((flags & kStrafeLeft) ? 1.0f : 0.0f) - ((flags & kStrafeRight) ? 1.0f : 0.0f);
+    if (fwd == 0.0f && side == 0.0f) return j;
+    const float dir = orientation + std::atan2(side, fwd);
+    j.dirX = std::cos(dir);
+    j.dirY = std::sin(dir);
+    const bool onlyBack = (flags & kBackward) && !(flags & kForward);
+    j.horizontalSpeed = (flags & kWalking) ? walkSpeed : onlyBack ? runBackSpeed : runSpeed;
+    return j;
+}
 
 /**
  * Base entity class for all game objects
@@ -305,8 +377,18 @@ public:
     /// as a heartbeat's correction is. It is moved on for at most
     /// kFlagDeadReckonLimitSec after the packet. With no direction flag the
     /// packet is a startMoveTo, turning if a turn flag is set.
+    ///
+    /// Falling, with the packet's fall given, the unit drops by gravity
+    /// instead: FUN_00988990 takes the fall time, vertical speed, direction
+    /// and speed from the jump block and puts the fall's start fallDistance
+    /// above the packet's height, and FUN_007618b0 sets the unit that far
+    /// under it each step. Across it moves only while a direction flag (0xf)
+    /// is set - FUN_00988df0 keeps the jump's direction while falling, and
+    /// FUN_00987b50 moves along it at the jump's speed (FUN_009876b0) and
+    /// never in an arc - so a jump in place goes straight up and down.
     void startMoveByFlags(float px, float py, float pz, float po,
-                          uint32_t flags, uint32_t flags2, float correctionSec) {
+                          uint32_t flags, uint32_t flags2, float correctionSec,
+                          const std::optional<FallMotion>& fall = std::nullopt) {
         const float speed = speedForFlags(speeds_, flags);
         // Backward wins over forward and left over right, as FUN_00988df0
         // tests them; ascending over descending, as FUN_00987a00 does.
@@ -323,7 +405,7 @@ public:
         else if (flags & kTurnRight) turn = -speeds_.turnRate;
         if ((flags & kTurnSlowingFlags) != 0 && (flags2 & kFullSpeedTurning) == 0) turn *= 0.75f;
 
-        if (speed <= 0.0f || (!horizontal && up == 0.0f)) {
+        if (!fall && (speed <= 0.0f || (!horizontal && up == 0.0f))) {
             startMoveTo(px, py, pz, po, correctionSec);
         } else {
             snapOverrunToDestination();
@@ -344,12 +426,25 @@ public:
             flagHeading_ = horizontal ? po + std::atan2(left, ahead) : po;
             flagSpeed_ = horizontal ? (up != 0.0f ? speed * kDiagonal : speed) : 0.0f;
             flagClimb_ = up * (horizontal ? speed * kDiagonal : speed);
+            moveSpeed_ = speed;
+            falling_ = fall.has_value();
+            if (fall) {
+                const bool across = (flags & kHorizontalFlags) != 0 &&
+                                    fall->dirX * fall->dirX + fall->dirY * fall->dirY > 1e-6f;
+                flagHeading_ = across ? std::atan2(-fall->dirY, fall->dirX) : po;
+                flagSpeed_ = across ? fall->horizontalSpeed : 0.0f;
+                flagClimb_ = 0.0f;
+                moveSpeed_ = flagSpeed_;
+                fallElapsedSec_ = fall->fallTimeSec;
+                fallSpeed_ = fall->verticalSpeed;
+                safeFall_ = (flags & kSafeFall) != 0;
+                fallTopZ_ = pz + fallDistance(fallElapsedSec_, fallSpeed_, safeFall_);
+            }
             // FUN_00987b50 only takes the arc when not falling (0x1000).
             flagArcRate_ = (flags & kFalling) ? 0.0f : turn;
             velX_ = flagSpeed_ * std::cos(flagHeading_);
             velY_ = -flagSpeed_ * std::sin(flagHeading_);
-            velZ_ = flagClimb_;
-            moveSpeed_ = speed;
+            velZ_ = falling_ ? -fallSpeed_ : flagClimb_;
             orientation = po;
             isMoving_ = true;
             movingByFlags_ = true;
@@ -380,25 +475,43 @@ public:
         return back && speeds.runBack <= speeds.run ? speeds.runBack : speeds.run;
     }
 
-    /// Takes the flags of a movement packet (MSG_MOVE_*) from the unit and
-    /// says what it did to the unit's jump, as the client's handlers do for
-    /// another unit. MSG_MOVE_JUMP launches it (FUN_0073ed10, case 0xbb). A
-    /// packet that clears FALLING (0x1000) lands it (FUN_006eb730 calling
-    /// FUN_0073d3d0), and FUN_0073d2b0 plays a landing only after a fall with
-    /// a vertical speed - a jump or a knockback; WoWee knows it by the jump
-    /// opcode rather than from the packet's jump block - or a fall far
-    /// (0x2000), and not into water or into flight (0x2200000). A fall off a
-    /// ledge lands on its feet still moving.
-    ReportedJump reportMoveFlags(uint32_t flags, bool jumped) {
+    /// Takes the flags of a movement packet (MSG_MOVE_*) from the unit, what
+    /// kind of opcode it came in, and the vertical speed of its jump block
+    /// when that was read, and says what the packet did to the unit's jump,
+    /// as the client's handlers do for another unit.
+    ///
+    /// MSG_MOVE_JUMP launches it (FUN_0073ed10, case 0xbb). A unit falling
+    /// (0x1000) with a vertical speed (+0xb8, set from the jump block by
+    /// FUN_00988990) was launched - a jump or a knockback, whichever opcode
+    /// said so - as FUN_00723350 and FUN_006eb730 test it; without the jump
+    /// block (before WotLK, where it is not read) the jump opcode stands for
+    /// it. A packet that clears FALLING lands the unit (FUN_006eb730 calling
+    /// FUN_0073d3d0), and FUN_0073d2b0 plays a landing only after a launch or
+    /// a fall far (0x2000), and not into water or into flight (0x2200000). A
+    /// fall off a ledge lands on its feet still moving.
+    ///
+    /// CMSG_MOVE_SET_FLY, relayed, takes the unit off with FLYING (0x2000000)
+    /// or lands it without (FUN_0073ed10, case 0x346). Start, stop, turn and
+    /// the rest of FUN_0073ed10's cases ask for the unit's locomotion again
+    /// at once (FUN_0073ac30) - which cuts a landing short; see
+    /// takeLocomotionRequest.
+    ReportedJump reportMoveFlags(uint32_t flags, MoveOpcodeKind kind,
+                                 std::optional<float> verticalSpeed = std::nullopt) {
         const uint32_t before = reportedMoveFlags_;
-        reportedMoveFlags_ = flags;
-        if (jumped) {
-            launched_ = (flags & kFalling) != 0;
-            return ReportedJump::Launch;
-        }
-        if ((flags & kFalling) != 0 || (before & kFalling) == 0) return ReportedJump::None;
         const bool wasLaunched = launched_;
-        launched_ = false;
+        reportedMoveFlags_ = flags;
+        const bool falling = (flags & kFalling) != 0;
+        if (verticalSpeed) launched_ = falling && *verticalSpeed != 0.0f;
+        else if (kind == MoveOpcodeKind::Jump) launched_ = falling;
+        else if (!falling) launched_ = false;
+        locomotionRequested_ =
+            locomotionRequested_ || kind == MoveOpcodeKind::Locomotion ||
+            (kind == MoveOpcodeKind::LocomotionIfMoving && (flags & kTurnSlowingFlags) != 0);
+        if (kind == MoveOpcodeKind::SetFly) {
+            return (flags & kFlying) != 0 ? ReportedJump::TakeOff : ReportedJump::FlightLand;
+        }
+        if (kind == MoveOpcodeKind::Jump) return ReportedJump::Launch;
+        if (falling || (before & kFalling) == 0) return ReportedJump::None;
         if (!wasLaunched && (before & kFallingFar) == 0) return ReportedJump::None;
         return (flags & (kSwimming | kFlying)) == 0 ? ReportedJump::Land : ReportedJump::None;
     }
@@ -407,11 +520,21 @@ public:
     [[nodiscard]] uint32_t getReportedMoveFlags() const { return reportedMoveFlags_; }
 
     /// In the air as the client's locomotion choice sees a unit
-    /// (FUN_00723350): falling after a jump, or falling far.
+    /// (FUN_00723350): falling with a vertical speed, or falling far.
     [[nodiscard]] bool isAirborne() const {
         return (reportedMoveFlags_ & kFalling) != 0 &&
                (launched_ || (reportedMoveFlags_ & kFallingFar) != 0);
     }
+
+    /// Whether the unit's last movement packets asked for its locomotion
+    /// again (see reportMoveFlags), once: the ask is cleared by reading it.
+    [[nodiscard]] bool takeLocomotionRequest() {
+        return std::exchange(locomotionRequested_, false);
+    }
+
+    /// Moved down by gravity from a packet's fall (startMoveByFlags), rather
+    /// than along the ground.
+    [[nodiscard]] bool isFallingByFlags() const { return movingByFlags_ && falling_; }
 
     [[nodiscard]] const MovementSpeeds& getMovementSpeeds() const { return speeds_; }
     MovementSpeeds& movementSpeeds() { return speeds_; }
@@ -549,6 +672,8 @@ private:
     static constexpr uint32_t kWalking = 0x100, kFalling = 0x1000, kFallingFar = 0x2000;
     static constexpr uint32_t kSwimming = 0x200000, kFlying = 0x2000000;
     static constexpr uint32_t kAscending = 0x400000, kDescending = 0x800000;
+    static constexpr uint32_t kHorizontalFlags = 0xf;
+    static constexpr uint32_t kSafeFall = 0x20000000;
     static constexpr uint32_t kDirectionFlags = 0xc0000f;
     static constexpr uint32_t kTurnSlowingFlags = 0xc0100f;
     static constexpr uint32_t kFullSpeedTurning = 0x8;  // MOVEMENTFLAG2_FULL_SPEED_TURNING
@@ -561,6 +686,7 @@ private:
 
     void resetMotionExtras() {
         movingByFlags_ = false;
+        falling_ = false;
         turnRate_ = 0.0f;
         faceAlongPath_ = false;
         finalFacing_.reset();
@@ -640,11 +766,15 @@ private:
             moveElapsed_ < moveDuration_ ? 1.0f - moveElapsed_ / moveDuration_ : 0.0f;
         x = moveEndX_ + dx + corrX_ * correction;
         y = moveEndY_ + dy + corrY_ * correction;
-        z = moveEndZ_ + flagClimb_ * t + corrZ_ * correction;
+        const float carriedZ =
+            falling_ ? fallTopZ_ - fallDistance(fallElapsedSec_ + t, fallSpeed_, safeFall_)
+                     : moveEndZ_ + flagClimb_ * t;
+        z = carriedZ + corrZ_ * correction;
         if (moveElapsed_ >= kFlagDeadReckonLimitSec) {
             // No packet for too long: stand where it was carried to.
             isMoving_ = false;
             movingByFlags_ = false;
+            falling_ = false;
         }
     }
 
@@ -682,6 +812,8 @@ private:
     // jump's; see reportMoveFlags.
     uint32_t reportedMoveFlags_ = 0;
     bool launched_ = false;
+    // Asked for its locomotion again; see takeLocomotionRequest.
+    bool locomotionRequested_ = false;
     // Moved on by its flags (startMoveByFlags): moveEnd is the packet's
     // position, the corr* offset is taken out over moveDuration_.
     bool movingByFlags_ = false;
@@ -690,6 +822,11 @@ private:
     float flagSpeed_ = 0;                   // Horizontal speed
     float flagClimb_ = 0;                   // Vertical speed
     float flagArcRate_ = 0;                 // Rate the direction turns at
+    // Falling by the packet's fall: from fallTopZ_, where the fall began,
+    // fallElapsedSec_ into it at the packet; see fallDistance.
+    bool falling_ = false;
+    bool safeFall_ = false;
+    float fallTopZ_ = 0, fallElapsedSec_ = 0, fallSpeed_ = 0;
     // Turning by TURN_LEFT / TURN_RIGHT, from turnBase_ at the packet.
     float turnRate_ = 0, turnBase_ = 0, turnElapsed_ = 0;
     // Facing along a monster move; see faceAlongMove.

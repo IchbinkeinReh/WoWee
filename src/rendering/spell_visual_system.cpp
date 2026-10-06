@@ -1,4 +1,6 @@
 #include "rendering/spell_visual_system.hpp"
+#include "rendering/spell_missile.hpp"
+#include "rendering/placement_transform.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/character_renderer.hpp"
@@ -75,7 +77,11 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                   fxDbc ? fxDbc->getFieldCount() : 0, ")");
         return;
     }
+    // Scale is what the client sizes a missile by (FUN_00732ff0 reads it
+    // beside the path); the kits here do not use it.
+    const uint32_t fxScaleField = fxLayout ? fxLayout->tryField("Scale") : 0xFFFFFFFFu;
     std::unordered_map<uint32_t, std::string> effectPaths; // effectNameId → path
+    std::unordered_map<uint32_t, float> effectScales;      // effectNameId → Scale
     for (uint32_t i = 0; i < fxDbc->getRecordCount(); ++i) {
         uint32_t id   = fxDbc->getUInt32(i, 0);
         std::string p = fxDbc->getString(i, fxFilePathField);
@@ -84,6 +90,8 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             // shipped is .m2.
             p = pipeline::modelPathToM2(p);
             effectPaths[id] = p;
+            if (fxScaleField < fxDbc->getFieldCount())
+                effectScales[id] = fxDbc->getFloat(i, fxScaleField);
         }
     }
 
@@ -126,10 +134,60 @@ void SpellVisualSystem::loadSpellVisualDbc() {
         return;
     }
     uint32_t svFc = svDbc->getFieldCount();
+    // The missile columns (3.3.5a's SpellVisual has 32, FUN_008b93f0). Only
+    // the WotLK layout names them; elsewhere the missile keeps its defaults.
+    auto svColumn = [&](const char* name) -> uint32_t {
+        const uint32_t f = svLayout ? svLayout->tryField(name) : 0xFFFFFFFFu;
+        return f < svFc ? f : 0xFFFFFFFFu;
+    };
+    const uint32_t svFlagsField      = svColumn("Flags");
+    const uint32_t svMissileAttField = svColumn("MissileAttachment");
+    const uint32_t svMissileDstField = svColumn("MissileDestinationAttachment");
+    const uint32_t svCastOffField[3] = {svColumn("MissileCastOffsetX"), svColumn("MissileCastOffsetY"),
+                                        svColumn("MissileCastOffsetZ")};
+    const uint32_t svImpactOffField[3] = {svColumn("MissileImpactOffsetX"), svColumn("MissileImpactOffsetY"),
+                                          svColumn("MissileImpactOffsetZ")};
+    // Where the missile flies, its model is the missile and nothing else: the
+    // client never plays it as a cast or an impact. Elsewhere it stands in
+    // for a kit the visual lacks, as it always has here.
+    const bool missilesFly = svMissileDstField != 0xFFFFFFFFu;
+    auto svInt = [&](uint32_t row, uint32_t field, int32_t fallback) {
+        return field != 0xFFFFFFFFu ? svDbc->getInt32(row, field) : fallback;
+    };
+    auto svVec = [&](uint32_t row, const uint32_t (&fields)[3]) {
+        glm::vec3 v(0.0f);
+        for (int axis = 0; axis < 3; ++axis)
+            if (fields[axis] != 0xFFFFFFFFu) v[axis] = svDbc->getFloat(row, fields[axis]);
+        return v;
+    };
     uint32_t loadedPrecast = 0, loadedCast = 0, loadedImpact = 0;
     for (uint32_t i = 0; i < svDbc->getRecordCount(); ++i) {
         uint32_t vid = svDbc->getUInt32(i, 0);
         if (!vid) continue;
+
+        // Missile: MissileModel names a SpellVisualEffectName row. Negative
+        // values are the caster's weapons and ammunition (FUN_00732ff0's -1
+        // to -5), which this does not fly.
+        if (svMissileField < svFc) {
+            const int32_t missileModel = svDbc->getInt32(i, svMissileField);
+            auto fxIt = missileModel > 0 ? effectPaths.find(static_cast<uint32_t>(missileModel))
+                                         : effectPaths.end();
+            if (fxIt != effectPaths.end()) {
+                MissileVisual missile;
+                missile.modelPath = fxIt->second;
+                auto scaleIt = effectScales.find(static_cast<uint32_t>(missileModel));
+                if (scaleIt != effectScales.end() && scaleIt->second > 0.0f)
+                    missile.scale = scaleIt->second;
+                missile.flags = static_cast<uint32_t>(svInt(i, svFlagsField, 0));
+                missile.sourceAttachment = spell_missile::m2AttachmentFor(
+                    svInt(i, svMissileAttField, -1), missile.flags);
+                missile.destinationAttachment = spell_missile::m2AttachmentFor(
+                    svInt(i, svMissileDstField, -1), missile.flags);
+                missile.castOffset = spell_missile::attachmentOffset(svVec(i, svCastOffField));
+                missile.impactOffset = spell_missile::attachmentOffset(svVec(i, svImpactOffField));
+                missileVisuals_[vid] = std::move(missile);
+            }
+        }
 
         // Precast path: PrecastKit → SpecialEffect0/BaseEffect
         {
@@ -139,11 +197,12 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             if (!path.empty()) { spellVisualPrecastPath_[vid] = path; ++loadedPrecast; }
         }
         // Cast path: CastKit → SpecialEffect0/BaseEffect, fallback to MissileModel
+        // where the missile does not fly (a layout without its columns).
         {
             std::string path;
             if (svCastKitField < svFc)
                 path = kitPath(svDbc->getUInt32(i, svCastKitField));
-            if (path.empty() && svMissileField < svFc)
+            if (path.empty() && !missilesFly && svMissileField < svFc)
                 path = missilePath(svDbc->getUInt32(i, svMissileField));
             if (!path.empty()) { spellVisualCastPath_[vid] = path; ++loadedCast; }
         }
@@ -152,12 +211,13 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             std::string path;
             if (svImpactKitField < svFc)
                 path = kitPath(svDbc->getUInt32(i, svImpactKitField));
-            if (path.empty() && svMissileField < svFc)
+            if (path.empty() && !missilesFly && svMissileField < svFc)
                 path = missilePath(svDbc->getUInt32(i, svMissileField));
             if (!path.empty()) { spellVisualImpactPath_[vid] = path; ++loadedImpact; }
         }
     }
     LOG_INFO("SpellVisual: loaded precast=", loadedPrecast, " cast=", loadedCast, " impact=", loadedImpact,
+             " missile=", missileVisuals_.size(),
              " visual\u2192M2 mappings (of ", svDbc->getRecordCount(), " records)");
 }
 
@@ -202,6 +262,60 @@ glm::vec3 SpellVisualSystem::applyEffectHeightOffset(const glm::vec3& basePos, c
     }
     // "base" / "feet" / ground effects stay at ground level
     return basePos;
+}
+
+uint32_t SpellVisualSystem::acquireEffectModel(const std::string& modelPath) {
+    // Get or assign a model ID for this path
+    auto midIt = spellVisualModelIds_.find(modelPath);
+    uint32_t modelId = 0;
+    if (midIt != spellVisualModelIds_.end()) {
+        modelId = midIt->second;
+    } else {
+        if (nextSpellVisualModelId_ >= 999800) {
+            LOG_WARNING("SpellVisual: model ID pool exhausted");
+            return 0;
+        }
+        modelId = nextSpellVisualModelId_++;
+        spellVisualModelIds_[modelPath] = modelId;
+    }
+
+    // Skip models that have previously failed to load (avoid repeated I/O)
+    if (spellVisualFailedModels_.count(modelId)) {
+        LOG_WARNING("SpellVisual: model in failed-cache, skipping: ", modelPath);
+        return 0;
+    }
+    if (m2Renderer_->hasModel(modelId)) return modelId;
+
+    auto m2Data = cachedAssetManager_->readFile(modelPath);
+    if (m2Data.empty()) {
+        LOG_WARNING("SpellVisual: could not read model: ", modelPath);
+        spellVisualFailedModels_.insert(modelId);
+        return 0;
+    }
+    pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
+    if (model.name.empty()) model.name = modelPath;
+    LOG_INFO("SpellVisual: M2 parsed: verts=", model.vertices.size(),
+             " bones=", model.bones.size(), " particles=", model.particleEmitters.size(),
+             " ribbons=", model.ribbonEmitters.size());
+    if (model.vertices.empty() && model.particleEmitters.empty()) {
+        LOG_WARNING("SpellVisual: empty model: ", modelPath);
+        spellVisualFailedModels_.insert(modelId);
+        return 0;
+    }
+    // Load skin file for WotLK-format M2s
+    if (model.version >= 264) {
+        std::string skinPath = pipeline::skinPathForM2(modelPath);
+        auto skinData = cachedAssetManager_->readFile(skinPath);
+        if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, model);
+    }
+    if (!m2Renderer_->loadModel(model, modelId)) {
+        LOG_WARNING("SpellVisual: failed to load model to GPU: ", modelPath);
+        spellVisualFailedModels_.insert(modelId);
+        return 0;
+    }
+    m2Renderer_->markModelAsSpellEffect(modelId);
+    LOG_INFO("SpellVisual: loaded model id=", modelId, " path=", modelPath);
+    return modelId;
 }
 
 void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec3& worldPosition,
@@ -389,59 +503,8 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
     const std::string& modelPath = pathIt->second;
     LOG_INFO("SpellVisual: ", (useImpactKit ? "impact" : "cast"), " path resolved to: ", modelPath);
 
-    // Get or assign a model ID for this path
-    auto midIt = spellVisualModelIds_.find(modelPath);
-    uint32_t modelId = 0;
-    if (midIt != spellVisualModelIds_.end()) {
-        modelId = midIt->second;
-    } else {
-        if (nextSpellVisualModelId_ >= 999800) {
-            LOG_WARNING("SpellVisual: model ID pool exhausted");
-            return;
-        }
-        modelId = nextSpellVisualModelId_++;
-        spellVisualModelIds_[modelPath] = modelId;
-    }
-
-    // Skip models that have previously failed to load (avoid repeated I/O)
-    if (spellVisualFailedModels_.count(modelId)) {
-        LOG_WARNING("SpellVisual: model in failed-cache, skipping: ", modelPath);
-        return;
-    }
-
-    // Load the M2 model if not already loaded
-    if (!m2Renderer_->hasModel(modelId)) {
-        auto m2Data = cachedAssetManager_->readFile(modelPath);
-        if (m2Data.empty()) {
-            LOG_WARNING("SpellVisual: could not read model: ", modelPath);
-            spellVisualFailedModels_.insert(modelId);
-            return;
-        }
-        LOG_INFO("SpellVisual: cast/impact M2 data read OK, size=", m2Data.size(), " bytes");
-        pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
-        if (model.name.empty()) model.name = modelPath;
-        LOG_INFO("SpellVisual: M2 parsed: verts=", model.vertices.size(),
-                 " bones=", model.bones.size(), " particles=", model.particleEmitters.size(),
-                 " ribbons=", model.ribbonEmitters.size());
-        if (model.vertices.empty() && model.particleEmitters.empty()) {
-            LOG_WARNING("SpellVisual: empty model: ", modelPath);
-            spellVisualFailedModels_.insert(modelId);
-            return;
-        }
-        // Load skin file for WotLK-format M2s
-        if (model.version >= 264) {
-            std::string skinPath = pipeline::skinPathForM2(modelPath);
-            auto skinData = cachedAssetManager_->readFile(skinPath);
-            if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, model);
-        }
-        if (!m2Renderer_->loadModel(model, modelId)) {
-            LOG_WARNING("SpellVisual: failed to load model to GPU: ", modelPath);
-            spellVisualFailedModels_.insert(modelId);
-            return;
-        }
-        m2Renderer_->markModelAsSpellEffect(modelId);
-        LOG_INFO("SpellVisual: loaded model id=", modelId, " path=", modelPath);
-    }
+    const uint32_t modelId = acquireEffectModel(modelPath);
+    if (modelId == 0) return;
 
     // Determine attachment point for bone tracking on cast effects. Only the
     // caster identified by attachInstanceId may be tracked - never default to
@@ -562,6 +625,155 @@ void SpellVisualSystem::playPhysicalProjectile(const std::string& modelPath,
                                     .duration = std::max(duration, 0.05f), .spin = spin});
 }
 
+const SpellVisualSystem::MissileVisual* SpellVisualSystem::findMissileVisual(uint32_t visualId) {
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    auto it = missileVisuals_.find(visualId);
+    return it != missileVisuals_.end() ? &it->second : nullptr;
+}
+
+// Where the caster lets the missile go, as FUN_00720bf0 finds it. A visual
+// naming MissileAttachment leaves from that attachment, carried by
+// MissileCastOffset in its frame; one naming only an offset carries it from
+// the directed spell hand (38, DAT_00ADAA50). Neither, and the client takes
+// the cast model's $CSL, $CSR or $CST event position, in that order, then
+// the unit's own position (FUN_0071a720). Those events sit in the spell
+// hands, and WoWee does not read M2 events, so the hands stand in for them.
+glm::vec3 SpellVisualSystem::missileSource(const MissileVisual& visual, const MissileEnd& from) const {
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || from.renderInstanceId == 0) return from.position;
+    glm::mat4 attachMat;
+    const bool hasOffset = visual.castOffset != glm::vec3(0.0f);
+    if (visual.sourceAttachment >= 0 || hasOffset) {
+        const int32_t attachment = visual.sourceAttachment >= 0 ? visual.sourceAttachment : 38;
+        if (charRenderer->getAttachmentTransform(from.renderInstanceId,
+                                                 static_cast<uint32_t>(attachment), attachMat)) {
+            return glm::vec3(attachMat * glm::vec4(visual.castOffset, 1.0f));
+        }
+    }
+    for (uint32_t hand : {21u /* SpellLeftHand */, 22u /* SpellRightHand */}) {
+        if (charRenderer->getAttachmentTransform(from.renderInstanceId, hand, attachMat))
+            return glm::vec3(attachMat[3]);
+    }
+    return from.position;
+}
+
+// Where the missile aims this frame (FUN_006ff320): the target's attachment
+// carrying the impact offset while the target exists, and once it has gone
+// the last point it was seen at, which is where the missile then lands.
+glm::vec3 SpellVisualSystem::missileTargetPoint(ActiveMissile& missile) const {
+    if (missile.targetInstanceId == 0) return missile.lastTarget;
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    glm::mat4 frame;
+    const bool found = charRenderer &&
+        (missile.targetAttachment >= 0
+             ? charRenderer->getAttachmentTransform(missile.targetInstanceId,
+                                                    static_cast<uint32_t>(missile.targetAttachment), frame)
+             : charRenderer->getInstanceFrame(missile.targetInstanceId, frame));
+    if (!found) {
+        missile.targetInstanceId = 0;
+        return missile.lastTarget;
+    }
+    missile.lastTarget = glm::vec3(frame * glm::vec4(missile.impactOffset, 1.0f));
+    return missile.lastTarget;
+}
+
+bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
+                                           const MissileEnd& to, std::vector<MissileEnd> impacts) {
+    if (!m2Renderer_ || visualId == 0 || !(speed > 0.0f)) return false;
+    if (!cachedAssetManager_)
+        cachedAssetManager_ = core::Application::getInstance().getAssetManager();
+    if (!cachedAssetManager_) return false;
+    const MissileVisual* visual = findMissileVisual(visualId);
+    if (!visual) return false;
+    const uint32_t modelId = acquireEffectModel(visual->modelPath);
+    if (modelId == 0) return false;
+
+    ActiveMissile missile;
+    missile.visualId = visualId;
+    missile.speed = speed;
+    missile.scale = visual->scale;
+    missile.impacts = std::move(impacts);
+    missile.impactOffset = visual->impactOffset;
+    missile.position = missileSource(*visual, from);
+    missile.lastTarget = to.position;
+
+    // The attachment is settled once, at launch, as FUN_007022d0 settles it:
+    // the one the visual names if the target's model has it, else the first
+    // fallback it has, else none - the target's origin.
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    glm::mat4 probe;
+    if (charRenderer && to.renderInstanceId != 0 && charRenderer->getInstanceFrame(to.renderInstanceId, probe)) {
+        missile.targetInstanceId = to.renderInstanceId;
+        if (visual->destinationAttachment >= 0 &&
+            charRenderer->getAttachmentTransform(to.renderInstanceId,
+                                                 static_cast<uint32_t>(visual->destinationAttachment), probe)) {
+            missile.targetAttachment = visual->destinationAttachment;
+        } else {
+            for (int32_t fallback : spell_missile::kDestinationFallbacks) {
+                if (charRenderer->getAttachmentTransform(to.renderInstanceId,
+                                                         static_cast<uint32_t>(fallback), probe)) {
+                    missile.targetAttachment = fallback;
+                    break;
+                }
+            }
+        }
+    }
+    const glm::vec3 target = missileTargetPoint(missile);
+    const float flight = spell_missile::flightTime(glm::length(target - missile.position), speed);
+    // A missile chasing a unit that runs from it takes longer than this, so
+    // the cap is generous; it only stops one that can never arrive.
+    missile.maxLifetime = flight * 3.0f + 5.0f;
+
+    missile.instanceId = m2Renderer_->createInstance(
+        modelId, missile.position, spell_missile::facingEuler(target - missile.position), missile.scale);
+    if (missile.instanceId == 0) return false;
+    m2Renderer_->restartInstanceAnimation(missile.instanceId);
+    activeMissiles_.push_back(missile);
+    LOG_DEBUG("SpellVisual: missile visualId=", visualId, " speed=", speed, " flight=", flight,
+              "s model=", visual->modelPath, " target attach=", missile.targetAttachment);
+    return true;
+}
+
+// One frame of every missile in flight (FUN_007015d0): home on the target,
+// face along the way, and on arrival take the missile away and play the
+// impact kit there (FUN_00703410, FUN_00700e20).
+void SpellVisualSystem::updateMissiles(float deltaTime) {
+    if (activeMissiles_.empty() || !m2Renderer_) return;
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    for (auto it = activeMissiles_.begin(); it != activeMissiles_.end(); ) {
+        it->elapsed += deltaTime;
+        const glm::vec3 target = missileTargetPoint(*it);
+        const glm::vec3 travel = target - it->position;
+        const spell_missile::Step step = spell_missile::advance(it->position, target, it->speed, deltaTime);
+        if (!step.arrived && it->elapsed < it->maxLifetime) {
+            it->position = step.position;
+            m2Renderer_->setInstanceTransform(
+                it->instanceId,
+                placementModelMatrix(it->position, spell_missile::facingEuler(travel), it->scale));
+            ++it;
+            continue;
+        }
+        m2Renderer_->removeInstance(it->instanceId);
+        const uint32_t visualId = it->visualId;
+        std::vector<MissileEnd> impacts = std::move(it->impacts);
+        it = activeMissiles_.erase(it);
+        // Impact kits are placed from a unit's feet like every other impact
+        // here (the kit's own model carries its height), so a unit still
+        // standing hands over its origin; one that has gone, where it was.
+        for (const MissileEnd& impact : impacts) {
+            glm::vec3 impactPos = impact.position;
+            uint32_t impactInstance = 0;
+            glm::mat4 unitFrame;
+            if (impact.renderInstanceId != 0 && charRenderer &&
+                charRenderer->getInstanceFrame(impact.renderInstanceId, unitFrame)) {
+                impactPos = glm::vec3(unitFrame[3]);
+                impactInstance = impact.renderInstanceId;
+            }
+            playSpellVisual(visualId, impactPos, /*useImpactKit=*/true, impactInstance);
+        }
+    }
+}
+
 void SpellVisualSystem::followUnitFromSpawn(const glm::vec3& spawnPos) {
     if (activeSpellVisuals_.empty() || !renderer_) return;
     auto& added = activeSpellVisuals_.back();
@@ -574,6 +786,8 @@ void SpellVisualSystem::followUnitFromSpawn(const glm::vec3& spawnPos) {
 }
 
 void SpellVisualSystem::update(float deltaTime) {
+    // First: an arrival plays its impact kit, which joins activeSpellVisuals_.
+    updateMissiles(deltaTime);
     if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
 
     // Get character bone tracking context (once per frame)
@@ -645,6 +859,10 @@ void SpellVisualSystem::reset() {
         if (m2Renderer_) m2Renderer_->removeInstance(sv.instanceId);
     }
     activeSpellVisuals_.clear();
+    for (const auto& missile : activeMissiles_) {
+        if (m2Renderer_) m2Renderer_->removeInstance(missile.instanceId);
+    }
+    activeMissiles_.clear();
     if (renderer_ && renderer_->getCharacterRenderer()) {
         for (const auto& projectile : physicalProjectiles_)
             renderer_->getCharacterRenderer()->removeInstance(projectile.instanceId);

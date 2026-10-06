@@ -86,6 +86,23 @@ bool isLeafContinent(const std::vector<Zone>& zones, int idx);
 /// map's zone dropdown and made choosing a continent do nothing.
 int continentZoneIndex(const std::vector<Zone>& zones, uint32_t mapId);
 
+/// Where one piece of an explored-area overlay goes on the 1024 by 768 map,
+/// and how much of its file it is.
+///
+/// What WorldMapFrame_Update does with GetMapOverlayInfo: an overlay of
+/// textureWidth by textureHeight is cut into 256-pixel pieces, numbered across
+/// then down from one, and piece k of row j sits at offsetX + 256 (k - 1),
+/// offsetY + 256 (j - 1) from the map's top-left. Every piece is 256 across but
+/// the last in a row or column, which is what is left of the overlay - and the
+/// file holding that one is padded to the next power of two from 16, so only
+/// part of it is the piece.
+struct OverlayPiece {
+    int x = 0, y = 0;          ///< top-left on the map, in map pixels
+    int width = 0, height = 0; ///< size on the map; zero when there is no such piece
+    float uMax = 1.0f, vMax = 1.0f;  ///< how much of the file to sample
+};
+OverlayPiece overlayPiece(const OverlayEntry& overlay, int pieceIndex);
+
 } // namespace world_map
 } // namespace rendering
 } // namespace wowee

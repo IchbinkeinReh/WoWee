@@ -153,6 +153,7 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
     if (packet.hasData()) {
         if (packet.hasRemaining(4)) {
             uint32_t targetFlags = packet.readUInt32();
+            data.targetFlags = targetFlags;
 
             auto readPackedTarget = [&](uint64_t* out) -> bool {
                 if (!packet.hasFullPackedGuid()) return false;
@@ -160,11 +161,12 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
                 if (out) *out = g;
                 return true;
             };
-            auto skipPackedAndFloats3 = [&]() -> bool {
+            // The point is kept: a ground-targeted missile flies to it.
+            auto readPackedAndFloats3 = [&](float (&xyz)[3]) -> bool {
                 if (!packet.hasFullPackedGuid()) return false;
                 packet.readPackedGuid(); // transport GUID
                 if (!packet.hasRemaining(12)) return false;
-                packet.readFloat(); packet.readFloat(); packet.readFloat();
+                for (float& v : xyz) v = packet.readFloat();
                 return true;
             };
 
@@ -177,12 +179,19 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
                 readPackedTarget(nullptr);
             }
             // SOURCE_LOCATION: PackedGuid (transport) + float x,y,z
-            if (targetFlags & 0x0020u) {
-                skipPackedAndFloats3();
+            float point[3] = {};
+            if ((targetFlags & 0x0020u) && readPackedAndFloats3(point)) {
+                data.hasSourceLocation = true;
+                data.sourceX = point[0];
+                data.sourceY = point[1];
+                data.sourceZ = point[2];
             }
             // DEST_LOCATION: PackedGuid (transport) + float x,y,z
-            if (targetFlags & 0x0040u) {
-                skipPackedAndFloats3();
+            if ((targetFlags & 0x0040u) && readPackedAndFloats3(point)) {
+                data.hasDestLocation = true;
+                data.destX = point[0];
+                data.destY = point[1];
+                data.destZ = point[2];
             }
             // STRING: null-terminated
             if (targetFlags & 0x0200u) {

@@ -582,7 +582,7 @@ private:
     // Screen-space sun shafts, built from the finished frame at the end of
     // endFrame and added in the overlay pass ahead of the interface.
     std::unique_ptr<SunShafts> sunShafts_;
-    bool sunShaftsEnabled_ = true;
+    bool sunShaftsEnabled_ = false;  // opt-in: the original client has none
     /// renderWorld ran this frame. The shafts are built from the world's
     /// picture, and a login screen or a loading screen is not one.
     bool worldDrawnThisFrame_ = false;

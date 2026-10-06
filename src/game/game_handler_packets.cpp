@@ -661,6 +661,7 @@ void GameHandler::registerCoreOpcodes() {
                 const WowDate t = unpackWowPackedTime(packet.readUInt32());
                 gameTime_ = static_cast<float>(t.hour) +
                             static_cast<float>(t.minute) / 60.0f;
+                gameTimeSetAt_ = std::chrono::steady_clock::now();
                 // Said out loud, because this is where realm time actually
                 // comes from on servers that never send SMSG_LOGIN_SETTIMESPEED
                 // - which logged its arrival and so looked like the only
@@ -678,7 +679,8 @@ void GameHandler::registerCoreOpcodes() {
             float timeSpeed = packet.readFloat();
             gameTime_ = static_cast<float>(t.hour) +
                         static_cast<float>(t.minute) / 60.0f;
-            timeSpeed_ = timeSpeed;
+            gameTimeSetAt_ = std::chrono::steady_clock::now();
+            timeSpeed_ = clampGameTimeSpeed(timeSpeed);
         }
         packet.skipAll();
     };

@@ -220,6 +220,37 @@ MapResolveResult resolveCosmicClick(uint32_t targetMapId) {
     return result;
 }
 
+// ── Reading WorldMapArea the way the client does ─────────────
+
+uint32_t worldMapDisplayMap(uint32_t ownMapId, uint32_t rawDisplayMapId,
+                            bool hasMinusOneRows) {
+    if (rawDisplayMapId == UINT32_MAX) return ownMapId;
+    if (!hasMinusOneRows && rawDisplayMapId == 0) return ownMapId;
+    return rawDisplayMapId;
+}
+
+std::string worldMapTilePath(const std::string& folder, uint32_t dungeonFloor,
+                             int tileIndex) {
+    std::string path = "Interface\\WorldMap\\" + folder + "\\" + folder;
+    if (dungeonFloor > 0) path += std::to_string(dungeonFloor) + "_";
+    return path + std::to_string(tileIndex) + ".blp";
+}
+
+uint32_t mapDbcNameField(uint32_t fieldCount) {
+    return fieldCount >= 66 ? 5u : 4u;
+}
+
+uint32_t zoneAreaAtPosition(const std::vector<Zone>& zones, uint32_t mapId,
+                            float wowX, float wowY) {
+    std::vector<Zone> onMap;
+    for (const Zone& z : zones) {
+        if (z.mapID == mapId && z.areaID != 0) onMap.push_back(z);
+    }
+    // Render space has the two horizontal axes the other way round.
+    const int idx = findZoneForPlayer(onMap, glm::vec3(wowY, wowX, 0.0f), 0);
+    return idx >= 0 ? onMap[static_cast<size_t>(idx)].areaID : 0;
+}
+
 } // namespace world_map
 } // namespace rendering
 } // namespace wowee

@@ -21,6 +21,7 @@
 #include "addons/lua_api_helpers.hpp"
 #include "addons/chat_window_background.hpp"
 #include "ui/display_modes.hpp"
+#include "ui/fullscreen_scale.hpp"
 #include "ui/widget_tree.hpp"
 #include "rendering/camera_controller.hpp"
 #include "addons/lua_engine.hpp"
@@ -2026,6 +2027,32 @@ static int lua_GetMinimapZoneText(lua_State* L) {
     return lua_GetZoneText(L);
 }
 
+// SetupFullscreenScale(frame) - the scale of a full-screen frame.
+//
+// The client's own, and it was a no-op here: frame:SetScale(min(1, aspect *
+// 0.75)) for a frame that sits outside UIParent's scale, worked out for this
+// client's root by fullscreenFrameScale. WorldMapFrame_OnShow is the caller
+// that matters - the full-size map takes the whole height of the screen,
+// whatever the interface scale.
+static int lua_SetupFullscreenScale(lua_State* L) {
+    if (!lua_istable(L, 1)) return luaL_error(L, "Usage: SetupFullscreenScale(frame)");
+    auto* tree = getWidgetTree(L);
+    const auto* root = tree ? tree->get(tree->rootId()) : nullptr;
+    if (!root) return 0;
+    // Through the frame's own SetScale, so the change goes wherever any other
+    // scale change goes.
+    lua_getfield(L, 1, "SetScale");
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return 0; }
+    lua_pushvalue(L, 1);
+    lua_pushnumber(L, ui::fullscreenFrameScale(root->rectW, root->rectH));
+    if (lua_pcall(L, 2, 0, 0) != 0) {
+        LOG_WARNING("SetupFullscreenScale: ", lua_tostring(L, -1));
+        lua_pop(L, 1);
+    }
+    return 0;
+}
+
+// --- World Map Navigation API ---
 // --- World Map Navigation API ---
 
 // Map ID → continent mapping
@@ -6191,7 +6218,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"RegisterForSave",          lua_ReturnNothing},
                 {"RegisterStaticConstants",  lua_ReturnNothing},
                 {"SetChatWindowName",        lua_SetChatWindowName},
-                {"SetupFullscreenScale",     lua_ReturnNothing},
+                {"SetupFullscreenScale",     lua_SetupFullscreenScale},
                 // DropCursorMoney is real now, and lives with the rest of the
                 // money cursor in lua_inventory_api.cpp. Two registrations of
                 // one name would be settled by load order.

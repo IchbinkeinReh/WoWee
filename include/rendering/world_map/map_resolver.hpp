@@ -81,6 +81,48 @@ int findContinentForMapId(const std::vector<Zone>& zones,
                            uint32_t mapId,
                            int cosmicIdx);
 
+// ── Reading WorldMapArea the way the client does ─────────────
+
+/// The map a WorldMapArea row is drawn on.
+///
+/// DisplayMapID is -1 on every ordinary row and means "the row's own map"; a
+/// value of zero or more is the continent the row is shown on instead. The
+/// client reads it exactly that way (SetMapByID takes MapID when it is below
+/// zero), and zero is a real answer: Eversong Woods, Ghostlands and Silvermoon
+/// are on map 530 and are drawn on the Eastern Kingdoms, map 0.
+///
+/// A file with no -1 anywhere in the column is one that does not carry it at
+/// all - vanilla's has no such field and reads as zero - and there zero means
+/// nothing either. hasMinusOneRows says which of the two the file is.
+uint32_t worldMapDisplayMap(uint32_t ownMapId, uint32_t rawDisplayMapId,
+                            bool hasMinusOneRows);
+
+/// The art for one tile of a WorldMapArea map. A map with dungeon floors names
+/// its tiles by floor as well - Dalaran1_1 to Dalaran1_12 - which is what the
+/// interface builds from GetCurrentMapDungeonLevel; one without is Name1 to
+/// Name12. tileIndex is one-based, as the files are.
+std::string worldMapTilePath(const std::string& folder, uint32_t dungeonFloor,
+                             int tileIndex);
+
+/// The zone a position on a map falls in, by WorldMapArea's rectangles alone:
+/// the AreaTable id of the zone row of mapId that the point sits deepest
+/// inside, or 0 when none holds it. wowX and wowY are canonical coordinates as
+/// the client holds them - coords::serverToCanonical of what the server sent.
+///
+/// For a caller with only a destination - the loading screen, before any of
+/// the map is there to ask.
+uint32_t zoneAreaAtPosition(const std::vector<Zone>& zones, uint32_t mapId,
+                            float wowX, float wowY);
+
+/// The column of Map.dbc holding the map's name, MapName_lang, for a file of
+/// fieldCount columns. 3.3.5's file has 66 and a Flags column at 3 that the
+/// older ones lack, which puts the name at 5 rather than 4; read at 4 it was
+/// the PvP flag, an offset of zero, and every name came out empty.
+///
+/// The enUS column of the block - on a localized client the loader has already
+/// moved that client's own column there.
+uint32_t mapDbcNameField(uint32_t fieldCount);
+
 } // namespace world_map
 } // namespace rendering
 } // namespace wowee

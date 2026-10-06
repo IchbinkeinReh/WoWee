@@ -48,6 +48,40 @@ public:
                                 float duration,
                                 bool spin);
 
+    /// The missile half of a SpellVisual.dbc row - see spell_missile.hpp for
+    /// how the client flies it.
+    struct MissileVisual {
+        std::string modelPath;               ///< SpellVisualEffectName[MissileModel]
+        float scale = 1.0f;                  ///< SpellVisualEffectName Scale
+        uint32_t flags = 0;                  ///< SpellVisual Flags
+        int32_t sourceAttachment = -1;       ///< M2 attachment id; -1 = the default
+        int32_t destinationAttachment = -1;  ///< M2 attachment id; -1 = the fallbacks
+        glm::vec3 castOffset{0.0f};          ///< in the source attachment's frame
+        glm::vec3 impactOffset{0.0f};        ///< in the destination attachment's frame
+    };
+
+    /// The visual's missile, or null when it flies none (no MissileModel, or
+    /// one naming a weapon or ammunition, which the client takes from the
+    /// caster's items rather than from the visual).
+    const MissileVisual* findMissileVisual(uint32_t visualId);
+
+    /// One end of a missile's flight. A unit end names its CharacterRenderer
+    /// instance so the missile can leave from and home on its attachments;
+    /// `position` is where it stands, used when it has no instance and for a
+    /// point on the ground (renderInstanceId 0).
+    struct MissileEnd {
+        uint32_t renderInstanceId = 0;
+        glm::vec3 position{0.0f};
+    };
+
+    /// Launch the visual's missile from `from` to `to` at `speed` yards per
+    /// second. On arrival the missile is removed and the visual's impact kit
+    /// plays on each of `impacts` - the client plays them then, not at
+    /// SMSG_SPELL_GO (FUN_00700e20). False when nothing was launched (no
+    /// missile, no speed, no model), so the caller plays the impacts itself.
+    bool launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
+                            const MissileEnd& to, std::vector<MissileEnd> impacts);
+
     // Advance lifetime timers and remove expired instances.
     void update(float deltaTime);
 
@@ -88,7 +122,34 @@ private:
         bool spin = false;
     };
 
+    // A missile in flight (CMissile).
+    struct ActiveMissile {
+        uint32_t instanceId = 0;
+        uint32_t visualId = 0;
+        glm::vec3 position{0.0f};
+        float speed = 0.0f;
+        float scale = 1.0f;
+        // The target: its instance while it exists (0 once it has gone, or
+        // for a point), the attachment the missile aims at on it (-1 = its
+        // origin), and where the aim point was last seen - which is where the
+        // missile lands if the target despawns, as FUN_006ff320 keeps it.
+        uint32_t targetInstanceId = 0;
+        int32_t targetAttachment = -1;
+        glm::vec3 impactOffset{0.0f};
+        glm::vec3 lastTarget{0.0f};
+        std::vector<MissileEnd> impacts;  // where the impact kit plays on arrival
+        float elapsed = 0.0f;
+        float maxLifetime = 0.0f;
+    };
+
     void loadSpellVisualDbc();
+    /// The M2Renderer model id for an effect model, loading it on first use;
+    /// 0 when it cannot be loaded (remembered, so it is not read again).
+    uint32_t acquireEffectModel(const std::string& modelPath);
+    glm::vec3 missileSource(const MissileVisual& visual, const MissileEnd& from) const;
+    /// Where the missile aims this frame; forgets a target that has gone.
+    glm::vec3 missileTargetPoint(ActiveMissile& missile) const;
+    void updateMissiles(float deltaTime);
 
     M2Renderer* m2Renderer_ = nullptr;
     Renderer* renderer_ = nullptr;
@@ -96,6 +157,8 @@ private:
 
     std::vector<SpellVisualInstance> activeSpellVisuals_;
     std::vector<PhysicalProjectile> physicalProjectiles_;
+    std::vector<ActiveMissile> activeMissiles_;
+    std::unordered_map<uint32_t, MissileVisual> missileVisuals_;      // visualId → missile
     std::unordered_map<uint32_t, std::string> spellVisualPrecastPath_; // visualId → precast M2 path
     std::unordered_map<uint32_t, std::string> spellVisualCastPath_;   // visualId → cast M2 path
     std::unordered_map<uint32_t, std::string> spellVisualImpactPath_; // visualId → impact M2 path

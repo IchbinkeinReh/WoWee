@@ -40,20 +40,40 @@ TEST_CASE("Turning alone is no direction for the landing", "[jump_landing]") {
 }
 
 TEST_CASE("Airborne units keep their jump animations, or fall", "[jump_landing]") {
-    CHECK(airborneAnimSync(true, anim::JUMP_START) == AirborneAnimSync::Hold);
-    CHECK(airborneAnimSync(true, anim::JUMP) == AirborneAnimSync::Hold);
-    CHECK(airborneAnimSync(true, anim::JUMP_END) == AirborneAnimSync::Hold);
-    CHECK(airborneAnimSync(true, anim::FALL) == AirborneAnimSync::Hold);
-    CHECK(airborneAnimSync(true, anim::RUN) == AirborneAnimSync::Fall);
-    CHECK(airborneAnimSync(true, anim::STAND) == AirborneAnimSync::Fall);
+    CHECK(airborneAnimSync(true, anim::JUMP_START, false, false) == AirborneAnimSync::Hold);
+    CHECK(airborneAnimSync(true, anim::JUMP, false, false) == AirborneAnimSync::Hold);
+    CHECK(airborneAnimSync(true, anim::JUMP_END, false, false) == AirborneAnimSync::Hold);
+    CHECK(airborneAnimSync(true, anim::FALL, false, false) == AirborneAnimSync::Hold);
+    CHECK(airborneAnimSync(true, anim::RUN, false, false) == AirborneAnimSync::Fall);
+    CHECK(airborneAnimSync(true, anim::STAND, false, false) == AirborneAnimSync::Fall);
 }
 
 TEST_CASE("Grounded units play out the landing, then leave the air loops", "[jump_landing]") {
-    CHECK(airborneAnimSync(false, anim::JUMP_END) == AirborneAnimSync::Hold);
-    CHECK(airborneAnimSync(false, anim::JUMP_LAND_RUN) == AirborneAnimSync::Hold);
-    CHECK(airborneAnimSync(false, anim::JUMP_START) == AirborneAnimSync::Refresh);
-    CHECK(airborneAnimSync(false, anim::JUMP) == AirborneAnimSync::Refresh);
-    CHECK(airborneAnimSync(false, anim::FALL) == AirborneAnimSync::Refresh);
-    CHECK(airborneAnimSync(false, anim::RUN) == AirborneAnimSync::None);
-    CHECK(airborneAnimSync(false, anim::STAND) == AirborneAnimSync::None);
+    CHECK(airborneAnimSync(false, anim::JUMP_END, false, false) == AirborneAnimSync::Hold);
+    CHECK(airborneAnimSync(false, anim::JUMP_LAND_RUN, false, false) == AirborneAnimSync::Hold);
+    CHECK(airborneAnimSync(false, anim::JUMP_START, false, false) == AirborneAnimSync::Refresh);
+    CHECK(airborneAnimSync(false, anim::JUMP, false, false) == AirborneAnimSync::Refresh);
+    CHECK(airborneAnimSync(false, anim::FALL, false, false) == AirborneAnimSync::Refresh);
+    CHECK(airborneAnimSync(false, anim::RUN, false, false) == AirborneAnimSync::None);
+    CHECK(airborneAnimSync(false, anim::STAND, false, false) == AirborneAnimSync::None);
+}
+
+TEST_CASE("A movement packet cuts a landing short, not a fall", "[jump_landing]") {
+    // FUN_0073ed10 asks for the unit's locomotion (FUN_0073ac30) on a start,
+    // stop or turn; once the unit is down that replaces the landing.
+    CHECK(airborneAnimSync(false, anim::JUMP_END, false, true) == AirborneAnimSync::Refresh);
+    CHECK(airborneAnimSync(false, anim::JUMP_LAND_RUN, false, true) == AirborneAnimSync::Refresh);
+    CHECK(airborneAnimSync(false, anim::RUN, false, true) == AirborneAnimSync::None);
+    // In the air FUN_00724200 still holds the jump.
+    CHECK(airborneAnimSync(true, anim::JUMP, false, true) == AirborneAnimSync::Hold);
+    CHECK(airborneAnimSync(true, anim::JUMP_END, false, true) == AirborneAnimSync::Hold);
+}
+
+TEST_CASE("Taking off into flight plays JumpStart out", "[jump_landing]") {
+    CHECK(airborneAnimSync(false, anim::JUMP_START, true, false) == AirborneAnimSync::Hold);
+    CHECK(airborneAnimSync(false, anim::JUMP_START, true, true) == AirborneAnimSync::Hold);
+    // Then the flight's locomotion, from the Jump it gives way to.
+    CHECK(airborneAnimSync(false, anim::JUMP, true, false) == AirborneAnimSync::Refresh);
+    // Landing from flight holds JumpLandRun like any landing.
+    CHECK(airborneAnimSync(false, anim::JUMP_LAND_RUN, false, false) == AirborneAnimSync::Hold);
 }

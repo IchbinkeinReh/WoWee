@@ -16,51 +16,56 @@ namespace rendering {
  * Time-of-day lighting parameters sampled from DBC curves
  */
 struct LightingParams {
-    glm::vec3 ambientColor{0.4f, 0.4f, 0.5f};      // Fill lighting
-    glm::vec3 diffuseColor{1.0f, 0.95f, 0.8f};     // Directional sun color
-    glm::vec3 directionalDir{0.0f, -1.0f, 0.5f};   // Sun direction (normalized)
+    glm::vec3 ambientColor{0.4f, 0.4f, 0.5f};      // ch1: fill lighting
+    glm::vec3 diffuseColor{1.0f, 0.95f, 0.8f};     // ch0: directional sun/moon colour
+    /// The way the directional light travels, render space, unit length. Not
+    /// from the DBC: the client's fixed time curve (daynight::directionalLightDir,
+    /// 0x007eea90).
+    glm::vec3 directionalDir{0.0f, -1.0f, 0.5f};
+    /// From the eye toward the sun and the moon sprites (0x007eecc0), render
+    /// space, unit length. Their own curves, on the light's side of the sky.
+    glm::vec3 sunDir{0.0f, 0.0f, 1.0f};
+    glm::vec3 moonDir{0.0f, 0.0f, -1.0f};
 
-    glm::vec3 fogColor{0.5f, 0.6f, 0.7f};          // Fog color
-    float fogStart = 100.0f;                        // Fog start distance
-    float fogEnd = 1000.0f;                         // Fog end distance
+    glm::vec3 fogColor{0.5f, 0.6f, 0.7f};          // ch7: fog, and the sky's horizon
+    float fogStart = 100.0f;                        // Fog start distance (yards)
+    float fogEnd = 1000.0f;                         // Fog end distance (yards)
+    /// Float band 1: fogStart as a fraction of fogEnd. The client blends the
+    /// lights' end and fraction and only then works out the start (0x007f16f0).
+    float fogStartScalar = 0.1f;
     float fogDensity = 0.001f;                      // Fog density
 
-    glm::vec3 skyTopColor{0.5f, 0.7f, 1.0f};       // Sky zenith color
-    glm::vec3 skyMiddleColor{0.7f, 0.85f, 1.0f};   // Sky horizon color
-    glm::vec3 skyBand1Color{0.9f, 0.95f, 1.0f};    // Sky band 1
-    glm::vec3 skyBand2Color{1.0f, 0.98f, 0.9f};    // Sky band 2
+    glm::vec3 skyTopColor{0.5f, 0.7f, 1.0f};       // ch2: sky zenith
+    glm::vec3 skyMiddleColor{0.7f, 0.85f, 1.0f};   // ch3
+    glm::vec3 skyBand1Color{0.9f, 0.95f, 1.0f};    // ch4
+    glm::vec3 skyBand2Color{1.0f, 0.98f, 0.9f};    // ch5
+    glm::vec3 skySmogColor{0.7f, 0.7f, 0.7f};      // ch6: the band just above the horizon
 
     float cloudDensity = 0.3f;                      // Cloud density/opacity
     float horizonGlow = 0.3f;                       // Horizon glow intensity
 };
 
-/** Apply any authored ambience that must remain stable regardless of world time. */
-void applyZoneAmbienceOverride(uint32_t zoneId, LightingParams& params);
-
-/** Resolve the sky clock shown for a zone without changing the world clock. */
-float resolveZoneVisualTimeHours(uint32_t zoneId, bool isIndoors, float worldTimeHours);
-
-/**
- * Light set keyframe for time-of-day interpolation
- */
-struct LightKeyframe {
-    uint32_t time;  // Time in minutes since midnight (0-1439)
-
-    // Colors stored as RGB int tuples (0-255) in DBC
-    glm::vec3 ambientColor;
-    glm::vec3 diffuseColor;
-    glm::vec3 fogColor;
-    glm::vec3 skyTopColor;
-    glm::vec3 skyMiddleColor;
-    glm::vec3 skyBand1Color;
-    glm::vec3 skyBand2Color;
-
-    float fogStart;
-    float fogEnd;
-    float fogDensity;
-    float cloudDensity;
-    float horizonGlow;
-};
+/// `a` moved `w` of the way toward `b`, as the client applies one light over
+/// what is already there (0x007ed4c0). The directions are the client's curves
+/// and the same in both, so they are left as `a` has them.
+inline LightingParams lerpLightingParams(const LightingParams& a, const LightingParams& b, float w) {
+    LightingParams out = a;
+    out.ambientColor = glm::mix(a.ambientColor, b.ambientColor, w);
+    out.diffuseColor = glm::mix(a.diffuseColor, b.diffuseColor, w);
+    out.fogColor = glm::mix(a.fogColor, b.fogColor, w);
+    out.skyTopColor = glm::mix(a.skyTopColor, b.skyTopColor, w);
+    out.skyMiddleColor = glm::mix(a.skyMiddleColor, b.skyMiddleColor, w);
+    out.skyBand1Color = glm::mix(a.skyBand1Color, b.skyBand1Color, w);
+    out.skyBand2Color = glm::mix(a.skyBand2Color, b.skyBand2Color, w);
+    out.skySmogColor = glm::mix(a.skySmogColor, b.skySmogColor, w);
+    out.fogStart = glm::mix(a.fogStart, b.fogStart, w);
+    out.fogEnd = glm::mix(a.fogEnd, b.fogEnd, w);
+    out.fogStartScalar = glm::mix(a.fogStartScalar, b.fogStartScalar, w);
+    out.fogDensity = glm::mix(a.fogDensity, b.fogDensity, w);
+    out.cloudDensity = glm::mix(a.cloudDensity, b.cloudDensity, w);
+    out.horizonGlow = glm::mix(a.horizonGlow, b.horizonGlow, w);
+    return out;
+}
 
 /**
  * Light volume from Light.dbc (spatial lighting)
@@ -72,11 +77,19 @@ struct LightVolume {
     float innerRadius = 0.0f;   // Full weight radius
     float outerRadius = 0.0f;   // Fade-out radius
 
-    // LightParams IDs for different conditions
-    uint32_t lightParamsId = 0;        // Normal/clear weather
-    uint32_t lightParamsIdRain = 0;    // Rainy weather
-    uint32_t lightParamsIdUnderwater = 0;
-    // More variants exist for phases, death, etc.
+    /// Light.dbc's LightParams columns, the first five of which the client
+    /// reads by index (0x007eb180, with the slot 0x007f3230 picks): 1 when the
+    /// camera is in liquid, +2 for the storm set it blends toward in weather,
+    /// and 4 for the death override.
+    enum ParamsSlot : uint32_t {
+        PARAMS_NORMAL = 0,
+        PARAMS_UNDERWATER = 1,
+        PARAMS_STORM = 2,
+        PARAMS_STORM_UNDERWATER = 3,
+        PARAMS_DEATH = 4,
+        PARAMS_SLOT_COUNT = 5
+    };
+    uint32_t lightParamsIds[PARAMS_SLOT_COUNT] = {};
 };
 
 /**
@@ -162,11 +175,14 @@ struct LightParamsProfile {
 /**
  * WoW DBC-driven lighting manager
  *
- * Implements WotLK's time-of-day lighting system:
+ * The client's DayNight light selection (Wow.exe 3.3.5a):
  * - Loads Light.dbc, LightParams.dbc, LightIntBand.dbc, LightFloatBand.dbc
- * - Samples lighting curves based on time-of-day
- * - Interpolates between keyframes
- * - Provides lighting parameters for rendering
+ * - Starts from the map's default light (0x007ecb30) and lerps every nearby
+ *   light over it, farthest first (0x007f1360, 0x007ee5d0)
+ * - Samples each light's normal or underwater set, blended toward its storm
+ *   set by the weather (0x007ee510, 0x007f3920)
+ * - Places the light, the sun and the moon on the client's time curves
+ *   (0x007eea90, 0x007eecc0)
  */
 class LightingManager {
 public:
@@ -179,58 +195,55 @@ public:
     bool initialize(pipeline::AssetManager* assetManager);
 
     /**
-     * Update lighting for current time and player position
-     * @param playerPos Player world position
+     * Update lighting for current time and position
+     * @param playerPos Position the lights are measured from
      * @param mapId Current map ID
-     * @param gameTime Optional game time in seconds (use -1 for real time)
-     * @param isRaining Whether it's raining
-     * @param isUnderwater Whether player is underwater
-     *
-     * Note: WoW uses server-sent game time, not local PC time.
-     * Pass gameTime from SMSG_LOGIN_SETTIMESPEED or similar.
+     * @param gameTime Server game time in hours since midnight (-1: local time)
+     * @param weatherIntensity Weather intensity 0-1, any kind of weather; the
+     *        storm sets are blended in by min(1, 4 * intensity)
+     * @param cameraInLiquid Whether the camera is under a liquid surface; picks
+     *        the underwater sets
      */
-    void update(const glm::vec3& playerPos, uint32_t mapId, uint32_t zoneId,
+    void update(const glm::vec3& playerPos, uint32_t mapId,
                 float gameTime = -1.0f,
-                bool isRaining = false, bool isUnderwater = false);
+                float weatherIntensity = 0.0f, bool cameraInLiquid = false);
 
     /**
      * Get current lighting parameters
      */
     [[nodiscard]] const LightingParams& getLightingParams() const { return currentParams_; }
 
-    /**
-     * Set whether player is indoors (disables outdoor lighting)
-     */
-    void setIndoors(bool indoors) { isIndoors_ = indoors; }
-    /// How far the distance fog is pulled toward the sky's horizon colour.
-    /// 0 keeps LightParams' own fog colour, 1 is the sky itself. See
-    /// LightingManager::update.
+    /// How far the distance fog is pulled toward the sky's middle band. Not
+    /// something the client does (its fog is ch7 exactly, 0x007f16f0): an
+    /// opt-in setting, 0 by default.
     void setFogSkyBlend(float blend) { fogSkyBlend_ = blend; }
     [[nodiscard]] float getFogSkyBlend() const { return fogSkyBlend_; }
     /// How much distance fog, as a multiplier on the zone's own fog distances.
-    /// 1 is the DBC unchanged, above 1 is thicker, 0 is none; the default
-    /// 0.4 thins the authored fog, which reads too heavy here. See
-    /// LightingManager::update.
+    /// 1 is the client's fog unchanged and the default, above 1 is thicker,
+    /// 0 is none. See LightingManager::update.
     void setFogStrength(float strength) { fogStrength_ = strength; }
     [[nodiscard]] float getFogStrength() const { return fogStrength_; }
+    /// The far clip the fog end is kept inside, as the client keeps it
+    /// (0x007f16f0). 0 or less leaves the fog end alone.
+    void setFarClip(float farClip) { farClip_ = farClip; }
 
     /**
      * Get current time of day (0.0-1.0)
      */
     [[nodiscard]] float getTimeOfDay() const { return timeOfDay_; }
 
-    /** Time used by the visible sky, including persistent zone ambience. */
-    [[nodiscard]] float getVisualTimeOfDayHours() const { return visualTimeOfDayHours_; }
+    /** The time of day in hours, 0-24. */
+    [[nodiscard]] float getTimeOfDayHours() const { return timeOfDay_ * 24.0f; }
 
     /// One of the original client's sky models, and how much of it is up.
     struct SkyboxLayer {
         std::string path;
-        float weight = 0.0f;   ///< 0..1: the share of the lights here that name it
+        float weight = 0.0f;   ///< 0..1, as the client accumulates it
     };
-    /// Every sky model the lights around the player name, heaviest first, at
-    /// the weights those lights have - the same falloff the sky colours blend
-    /// by, smoothed the same way. A zone's sky fades out across its edge as
-    /// the next one's fades in, rather than one swapping for the other.
+    /// Every sky model the lights around the player name, heaviest first. The
+    /// default light's model is up at 1; each nearby light adds its own weight
+    /// to the model it names, at most 1, up to three models (0x007ed4c0).
+    /// Smoothed over time like the colours.
     [[nodiscard]] const std::vector<SkyboxLayer>& getSkyboxLayers() const { return skyboxLayers_; }
 
     /**
@@ -261,23 +274,31 @@ private:
      */
     bool loadLightBandDbcs(pipeline::AssetManager* assetManager);
 
-    /**
-     * Weighted light volume for blending
-     */
+    /// A light near the player and how much of it shows, in the order the
+    /// client applies them: farthest first.
     struct WeightedVolume {
         const LightVolume* volume = nullptr;
         float weight = 0.0f;
     };
 
-    /**
-     * Find light volumes for blending (up to 4 with weight > 0)
-     */
+    /// Every light on the map within its outer radius of `playerPos`, other
+    /// than the default, in the client's order (0x007f1360, 0x007ed0a0).
     [[nodiscard]] std::vector<WeightedVolume> findLightVolumes(const glm::vec3& playerPos, uint32_t mapId) const;
 
-    /**
-     * Get LightParams ID based on conditions
-     */
-    uint32_t selectLightParamsId(const LightVolume* volume, bool isRaining, bool isUnderwater) const;
+    /// The map's default light: its Light row at (0,0,0), or Light ID 1 when
+    /// it has none (0x007ecb30). Null when neither exists.
+    [[nodiscard]] const LightVolume* defaultLight(uint32_t mapId) const;
+
+    /// One light's LightParams profile for a slot, falling back to the
+    /// matching non-storm set and then the normal one when a column is empty.
+    [[nodiscard]] const LightParamsProfile* profileFor(const LightVolume& volume, uint32_t slot) const;
+
+    /// One light as the client samples it at this time (0x007ee510): the
+    /// normal or underwater set, lerped toward the storm set by `storm`.
+    /// `skyboxId` is the model the light names.
+    [[nodiscard]] LightingParams sampleLight(const LightVolume& volume, bool cameraInLiquid,
+                                             float storm, uint16_t timeHalfMinutes,
+                                             uint32_t& skyboxId) const;
 
     /**
      * Sample lighting from LightParams profile
@@ -300,8 +321,13 @@ private:
     [[nodiscard]] glm::vec3 dbcColorToVec3(uint32_t dbcColor) const;
 
 
-    // Light volumes by map
+    // Light volumes by map, the default lights not among them
     std::map<uint32_t, std::vector<LightVolume>> lightVolumesByMap_;
+    // Each map's default light: its Light row at (0,0,0)
+    std::map<uint32_t, LightVolume> defaultLightByMap_;
+    // Light ID 1, the default for a map without one of its own
+    LightVolume globalDefaultLight_;
+    bool hasGlobalDefaultLight_ = false;
 
     // LightParams profiles by ID
     std::map<uint32_t, LightParamsProfile> lightParamsProfiles_;
@@ -310,32 +336,29 @@ private:
     // Current state
     LightingParams currentParams_;
     std::vector<WeightedVolume> activeVolumes_;
-    glm::vec3 currentPlayerPos_{0.0f};
     float timeOfDay_ = 0.5f;  // Start at noon
-    float visualTimeOfDayHours_ = 12.0f;
     std::vector<SkyboxLayer> skyboxLayers_;
     /// When update last ran, for smoothing by real time rather than by frame.
     std::chrono::steady_clock::time_point lastUpdate_{};
-    bool isIndoors_ = false;
-    float fogSkyBlend_ = 0.7f;
-    float fogStrength_ = 0.4f;
+    float fogSkyBlend_ = 0.0f;
+    float fogStrength_ = 1.0f;
+    float farClip_ = 0.0f;
 
     // Last values the sky diagnostic reported, so it prints on a change
     // rather than every frame. See LightingManager::update.
     /// The map the volume list was last named for, so it is named once per map
     /// rather than once per frame. findLightVolumes is const.
     mutable uint32_t diagLoggedMapId_ = 0xFFFFFFFFu;
-    uint32_t diagZoneId_ = 0xFFFFFFFFu;
     uint32_t diagCallsSinceLog_ = 0;
     uint32_t diagFirstVolume_ = 0xFFFFFFFFu;
     uint32_t diagSecondVolume_ = 0xFFFFFFFFu;
-    float diagVisualHours_ = -1.0f;
+    float diagHours_ = -1.0f;
     float diagSkyLuma_ = -1.0f;
     std::string diagSkyboxPath_ = "\x01";
     bool manualTime_ = false;
     bool initialized_ = false;
 
-    // Fallback lighting
+    // Lighting when Light.dbc is missing altogether
     LightingParams fallbackParams_;
 };
 

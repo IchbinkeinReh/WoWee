@@ -31,11 +31,15 @@ inline SkyParams skyParamsFromLighting(float timeOfDay, float gameTime,
     params.gameTime = gameTime;
     if (lighting) {
         params.directionalDir = lighting->directionalDir;
+        params.sunDir = lighting->sunDir;
+        params.moonDir = lighting->moonDir;
         params.sunColor = lighting->diffuseColor;
         params.skyTopColor = lighting->skyTopColor;
         params.skyMiddleColor = lighting->skyMiddleColor;
         params.skyBand1Color = lighting->skyBand1Color;
         params.skyBand2Color = lighting->skyBand2Color;
+        params.skySmogColor = lighting->skySmogColor;
+        params.skyFogColor = lighting->fogColor;
         params.cloudDensity = lighting->cloudDensity;
         params.fogDensity = lighting->fogDensity;
         params.horizonGlow = lighting->horizonGlow;

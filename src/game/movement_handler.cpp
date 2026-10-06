@@ -66,6 +66,31 @@ uint32_t findKnownReturnAreaTrigger(uint32_t triggerId) {
     }
 }
 
+// What the client does with another unit's animation for the opcode its
+// movement came in (FUN_0073ed10). Every start and stop, turn, swim and
+// ascent asks for its locomotion at once (FUN_0073ac30), as does a change of
+// walk or run mode while under way; a heartbeat, a facing or a landing asks
+// for nothing more.
+MoveOpcodeKind moveOpcodeKind(uint16_t wireOp) {
+    if (wireOp == wireOpcode(Opcode::MSG_MOVE_JUMP)) return MoveOpcodeKind::Jump;
+    if (wireOp == wireOpcode(Opcode::CMSG_MOVE_SET_FLY)) return MoveOpcodeKind::SetFly;
+    if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_RUN_MODE) ||
+        wireOp == wireOpcode(Opcode::MSG_MOVE_SET_WALK_MODE)) {
+        return MoveOpcodeKind::LocomotionIfMoving;
+    }
+    for (const Opcode op : {Opcode::MSG_MOVE_START_FORWARD, Opcode::MSG_MOVE_START_BACKWARD,
+                            Opcode::MSG_MOVE_STOP, Opcode::MSG_MOVE_START_STRAFE_LEFT,
+                            Opcode::MSG_MOVE_START_STRAFE_RIGHT, Opcode::MSG_MOVE_STOP_STRAFE,
+                            Opcode::MSG_MOVE_START_TURN_LEFT, Opcode::MSG_MOVE_START_TURN_RIGHT,
+                            Opcode::MSG_MOVE_STOP_TURN, Opcode::MSG_MOVE_START_SWIM,
+                            Opcode::MSG_MOVE_STOP_SWIM, Opcode::MSG_MOVE_START_ASCEND,
+                            Opcode::MSG_MOVE_STOP_ASCEND, Opcode::MSG_MOVE_START_DESCEND,
+                            Opcode::MSG_MOVE_ROOT, Opcode::MSG_MOVE_UPDATE_CAN_FLY}) {
+        if (wireOp == wireOpcode(op)) return MoveOpcodeKind::Locomotion;
+    }
+    return MoveOpcodeKind::None;
+}
+
 } // namespace
 
 MovementHandler::MovementHandler(GameHandler& owner)
@@ -266,7 +291,13 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
                      // were last seen until their next heartbeat.
                      Opcode::MSG_MOVE_HOVER, Opcode::MSG_MOVE_FEATHER_FALL,
                      Opcode::MSG_MOVE_WATER_WALK,
-                     Opcode::MSG_MOVE_ROOT, Opcode::MSG_MOVE_UNROOT }) {
+                     Opcode::MSG_MOVE_ROOT, Opcode::MSG_MOVE_UNROOT,
+                     // Taking off into flight and landing from it. The
+                     // server relays a player's CMSG_MOVE_SET_FLY to the
+                     // others under the same opcode, and the client plays
+                     // the take-off and the landing on it (FUN_0073ed10,
+                     // case 0x346).
+                     Opcode::CMSG_MOVE_SET_FLY }) {
         table[op] = [this](network::Packet& packet) {
             if (owner_.getState() == WorldState::IN_WORLD) handleOtherPlayerMovement(packet);
         };
@@ -589,23 +620,20 @@ void MovementHandler::sendMovement(Opcode opcode) {
             isFalling_ = true;
             fallStartMs_ = movementInfo.time;
             movementInfo.fallTime = 0;
-            movementInfo.jumpVelocity = 7.96f;
             {
-                const float facingRad = movementInfo.orientation;
-                movementInfo.jumpCosAngle = std::cos(facingRad);
-                movementInfo.jumpSinAngle = std::sin(facingRad);
-                const uint32_t horizFlags =
-                    static_cast<uint32_t>(MovementFlags::FORWARD) |
-                    static_cast<uint32_t>(MovementFlags::BACKWARD) |
-                    static_cast<uint32_t>(MovementFlags::STRAFE_LEFT) |
-                    static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT);
-                const bool movingHoriz = (movementInfo.flags & horizFlags) != 0;
-                if (movingHoriz) {
-                    const bool isWalking = (movementInfo.flags & static_cast<uint32_t>(MovementFlags::WALKING)) != 0;
-                    movementInfo.jumpXYSpeed = isWalking ? 2.5f : (serverRunSpeed_ > 0.0f ? serverRunSpeed_ : 7.0f);
-                } else {
-                    movementInfo.jumpXYSpeed = 0.0f;
-                }
+                // The client's jump block (see outgoingJumpBlock): the impulse
+                // is downward-positive, -7.955547; the direction is the keys'
+                // and goes out x first; the speed is the current one. This sent
+                // +7.96, sin before cos and the facing alone, so every other
+                // client drew our jump falling straight down and heading off
+                // mirrored across the facing.
+                const OutgoingJump jump = outgoingJumpBlock(
+                    movementInfo.flags, movementInfo.orientation, serverWalkSpeed_,
+                    serverRunSpeed_ > 0.0f ? serverRunSpeed_ : 7.0f, serverRunBackSpeed_);
+                movementInfo.jumpVelocity = jump.verticalSpeed;
+                movementInfo.jumpSinAngle = jump.dirX;   // wire order: x, then y
+                movementInfo.jumpCosAngle = jump.dirY;
+                movementInfo.jumpXYSpeed = jump.horizontalSpeed;
             }
             break;
         case Opcode::MSG_MOVE_START_TURN_LEFT:
@@ -1293,11 +1321,22 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
         }
         if (flags2Size >= 2) {
             /*int8_t transportSeat =*/ packet.readUInt8();
-            if (info.flags2 & 0x0200) {
+            // MOVEMENTFLAG2_INTERPOLATED_MOVEMENT, as FUN_004f4d40 tests it.
+            if (info.flags2 & 0x0400) {
                 /*uint32_t transportTime2 =*/ packet.readUInt32();
             }
         }
     }
+
+    // The pitch, the fall time and the jump block after it (FUN_004f4d40):
+    // how the unit is falling, and whether it was launched. Read on WotLK
+    // only. TBC and Classic gate the jump block on JUMPING (0x2000) and the
+    // pitch on other bits, and everything below reads the unit's flags as
+    // WotLK's.
+    const bool fallRead = !isPreWotlk() && MovementPacket::readPitchAndFall(packet, info);
+    const bool fallingNow = (info.flags & static_cast<uint32_t>(MovementFlags::FALLING)) != 0;
+    std::optional<float> verticalSpeed;
+    if (fallRead) verticalSpeed = fallingNow ? info.jumpVelocity : 0.0f;
 
     auto entity = owner_.getEntityManager().getEntity(moverGuid);
     if (!entity) {
@@ -1348,7 +1387,6 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
         (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP_TURN)) ||
         (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP_SWIM)) ||
         (wireOp == wireOpcode(Opcode::MSG_MOVE_FALL_LAND));
-    const bool isJumpOpcode  = (wireOp == wireOpcode(Opcode::MSG_MOVE_JUMP));
 
     const float entityDuration = isStopOpcode ? 0.0f : (durationMs / 1000.0f);
     // Still under way or turning: the client moves another player on by the
@@ -1369,7 +1407,21 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
         static_cast<uint32_t>(MovementFlags::ASCENDING) |
         static_cast<uint32_t>(MovementFlags::DESCENDING);
     const bool underWay = (info.flags & kUnderWayFlags) != 0;
-    if (underWay) {
+    // Falling, it drops by gravity from the fall the packet carries, up and
+    // over on a jump (FUN_00988990, FUN_007618b0) - on a transport WoWee
+    // carries it with the transport instead.
+    if (fallRead && fallingNow && !onTransport) {
+        FallMotion fall;
+        fall.fallTimeSec = static_cast<float>(info.fallTime) / 1000.0f;
+        fall.verticalSpeed = info.jumpVelocity;
+        const glm::vec3 dir = core::coords::serverToCanonical(
+            glm::vec3(info.jumpSinAngle, info.jumpCosAngle, 0.0f));
+        fall.dirX = dir.x;
+        fall.dirY = dir.y;
+        fall.horizontalSpeed = info.jumpXYSpeed;
+        entity->startMoveByFlags(canonical.x, canonical.y, canonical.z, canYaw,
+                                 info.flags, info.flags2, durationMs / 1000.0f, fall);
+    } else if (underWay) {
         entity->startMoveByFlags(canonical.x, canonical.y, canonical.z, canYaw,
                                  info.flags, info.flags2, durationMs / 1000.0f);
     } else {
@@ -1389,7 +1441,8 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     // The jump this packet starts or ends: FUN_0073ed10 plays JumpStart on
     // MSG_MOVE_JUMP, and the packet that clears FALLING - MSG_MOVE_FALL_LAND,
     // or any other - lands the unit (FUN_0073d2b0).
-    const ReportedJump jump = entity->reportMoveFlags(info.flags, isJumpOpcode);
+    const ReportedJump jump =
+        entity->reportMoveFlags(info.flags, moveOpcodeKind(wireOp), verticalSpeed);
     if (jump != ReportedJump::None && owner_.unitJumpCallbackRef()) {
         owner_.unitJumpCallbackRef()(moverGuid, jump);
     }

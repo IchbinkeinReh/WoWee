@@ -33,6 +33,7 @@
 #include <unordered_set>
 
 #include "game/spell_description_eval.hpp"
+#include "game/game_clock.hpp"
 #include <map>
 #include <optional>
 #include <algorithm>
@@ -1410,8 +1411,9 @@ public:
     using SpellCastFailedCallback = std::function<void(uint32_t spellId)>;
     void setSpellCastFailedCallback(SpellCastFailedCallback cb) { spellCastFailedCallback_ = std::move(cb); }
 
-    /// Another unit jumped (ReportedJump::Launch) or came down from a jump or
-    /// a long fall (ReportedJump::Land); see Entity::reportMoveFlags.
+    /// Another unit jumped (ReportedJump::Launch), came down from a jump or
+    /// a long fall (ReportedJump::Land), or took off into flight or landed
+    /// from it (TakeOff, FlightLand); see Entity::reportMoveFlags.
     using UnitJumpCallback = std::function<void(uint64_t guid, ReportedJump jump)>;
     void setUnitJumpCallback(UnitJumpCallback cb) { unitJumpCallback_ = std::move(cb); }
 
@@ -1475,7 +1477,15 @@ public:
     // format is a packed bitfield, the sky divided by 86400 as though it were
     // seconds, GetGameTime split it as hours, and SMSG_SERVERTIME wrote a unix
     // timestamp into the same field.
-    float getGameTime() const { return gameTime_; }
+    //
+    // Run on from the server's time at the server's speed, as the client's
+    // clock does (0x0076cff0); see game_clock.hpp.
+    float getGameTime() const {
+        if (gameTime_ < 0.0f) return gameTime_;
+        const double elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - gameTimeSetAt_).count();
+        return advanceGameClockHours(gameTime_, elapsed, timeSpeed_);
+    }
     float getTimeSpeed() const { return timeSpeed_; }
 
     // Global Cooldown (GCD) - set when the server sends a spellId=0 cooldown entry
@@ -3975,6 +3985,10 @@ public:
         uint32_t implicitTargetA = 0;
         float durationSec = 0.0f;
         uint32_t spellVisualId = 0;
+        // Spell.dbc Speed: yards per second the spell's missile flies at, the
+        // client's CMissile speed (FUN_00732ff0). Zero - most spells - means
+        // it lands at once and sends no missile.
+        float missileSpeed = 0.0f;
         uint32_t recoveryMs = 0;
         uint32_t categoryRecoveryMs = 0;
         uint32_t createdItemId = 0;
@@ -4966,7 +4980,10 @@ private:
     ///
     /// The old comment said seconds. The code that assigns it writes hours.
     float gameTime_ = -1.0f;
-    float timeSpeed_ = 0.0166f;   // Time scale (default: 1 game day = 1 real hour)
+    /// When gameTime_ was last set, so getGameTime can run the clock on.
+    std::chrono::steady_clock::time_point gameTimeSetAt_{};
+    /// Game minutes per real second (default 1/60: a game day per real day).
+    float timeSpeed_ = kDefaultGameTimeSpeed;
     void handleLoginSetTimeSpeed(network::Packet& packet);
 
     // ---- Global Cooldown (GCD) ----

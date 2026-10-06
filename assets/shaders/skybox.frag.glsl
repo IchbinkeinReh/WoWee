@@ -18,12 +18,22 @@ layout(set = 0, binding = 0) uniform PerFrame {
 
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 
+// The client's sky dome (Wow.exe 3.3.5a 0x007f2470, coloured by 0x007f0530):
+// an untextured unit sphere centred cos(45 deg) below the eye, whose rows sit
+// at polar angles {0, .17, .20, .23, .24, .25, 1} x pi, carrying the light's
+// sky channels ch2..ch6, then the fog colour ch7 at the horizon ring and the
+// nadir. Seen from the eye those rows are at 90, 16.8, 9.8, 3.7, 1.8 and 0
+// degrees of elevation, so the sky ends in exactly the colour distant
+// terrain fogs to. Nothing else is added: the warm scatter, the sun glow,
+// the horizon haze and the moonlight tint that used to be here are not in
+// the client.
 layout(push_constant) uniform Push {
-    vec4 zenithColor;     // DBC skyTopColor
-    vec4 midColor;        // DBC skyMiddleColor
-    vec4 horizonColor;    // DBC skyBand1Color
-    vec4 fogColorPush;    // DBC skyBand2Color
-    vec4 sunDirAndTime;   // xyz = sun direction, w = timeOfDay
+    vec4 skyTop;      // ch2
+    vec4 skyMiddle;   // ch3
+    vec4 skyBand1;    // ch4
+    vec4 skyBand2;    // ch5
+    vec4 skySmog;     // ch6
+    vec4 skyFog;      // ch7, the fog colour
 } push;
 
 layout(location = 0) in vec2 TexCoord;
@@ -34,6 +44,16 @@ layout(location = 0) out vec4 outColor;
 // it lies behind everything, so it takes all the air there is.
 vec4 fogVolumeSky(vec2 uv) {
     return textureLod(uFogVolume, vec3(uv, 1.0), 0.0);
+}
+
+// The dome's polar angle, as a fraction of pi, where the ray from the eye
+// along `dir` meets it.
+float domePolar(vec3 dir) {
+    const float c = 0.70710678;  // the centre's depth below the eye
+    // |t*dir - (0,0,-c)| = 1, the far root: t^2 + 2c dir.z t + c^2 - 1 = 0.
+    float t = -c * dir.z + sqrt(max(c * c * dir.z * dir.z - c * c + 1.0, 0.0));
+    float cosPhi = clamp(t * dir.z + c, -1.0, 1.0);
+    return acos(cosPhi) * 0.31830989;
 }
 
 void main() {
@@ -48,60 +68,22 @@ void main() {
     mat3 invViewRot = transpose(mat3(view));
     vec3 worldDir = normalize(invViewRot * viewDir);
 
-    vec3 sunDir = push.sunDirAndTime.xyz;
-    float timeOfDay = push.sunDirAndTime.w;
-
-    // Elevation: +1 = zenith, 0 = horizon, -1 = nadir
-    float elev = worldDir.z;
-    float elevClamped = clamp(elev, 0.0, 1.0);
-
-    // --- 3-band sky gradient using DBC colors ---
-    // Zenith dominates upper sky, mid color fills the middle,
-    // horizon band at the bottom with a thin fog fringe.
+    // Gouraud shading along the dome's rows, as linear in the polar angle.
+    float u = domePolar(worldDir);
     vec3 sky;
-    if (elevClamped > 0.4) {
-        // Upper sky: mid -> zenith
-        float t = (elevClamped - 0.4) / 0.6;
-        sky = mix(push.midColor.rgb, push.zenithColor.rgb, t);
-    } else if (elevClamped > 0.05) {
-        // Lower sky: horizon -> mid (wide band)
-        float t = (elevClamped - 0.05) / 0.35;
-        sky = mix(push.horizonColor.rgb, push.midColor.rgb, t);
+    if (u < 0.17) {
+        sky = mix(push.skyTop.rgb, push.skyMiddle.rgb, u / 0.17);
+    } else if (u < 0.20) {
+        sky = mix(push.skyMiddle.rgb, push.skyBand1.rgb, (u - 0.17) / 0.03);
+    } else if (u < 0.23) {
+        sky = mix(push.skyBand1.rgb, push.skyBand2.rgb, (u - 0.20) / 0.03);
+    } else if (u < 0.24) {
+        sky = mix(push.skyBand2.rgb, push.skySmog.rgb, (u - 0.23) / 0.01);
+    } else if (u < 0.25) {
+        sky = mix(push.skySmog.rgb, push.skyFog.rgb, (u - 0.24) / 0.01);
     } else {
-        // Thin fog fringe right at horizon
-        float t = elevClamped / 0.05;
-        sky = mix(push.fogColorPush.rgb, push.horizonColor.rgb, t);
-    }
-
-    // --- Below-horizon darkening (nadir) ---
-    if (elev < 0.0) {
-        float nadirFade = clamp(-elev * 3.0, 0.0, 1.0);
-        vec3 nadirColor = push.fogColorPush.rgb * 0.3;
-        sky = mix(push.fogColorPush.rgb, nadirColor, nadirFade);
-    }
-
-    // --- Rayleigh-like scattering (subtle warm glow near sun) ---
-    float sunDot = max(dot(worldDir, sunDir), 0.0);
-    float sunAboveHorizon = clamp(sunDir.z, 0.0, 1.0);
-
-    float rayleighStrength = pow(1.0 - elevClamped, 3.0) * 0.15;
-    vec3 scatterColor = mix(vec3(0.8, 0.45, 0.15), vec3(0.3, 0.5, 1.0), elevClamped);
-    sky += scatterColor * rayleighStrength * sunDot * sunAboveHorizon;
-
-    // --- Mie-like forward scatter (sun disk glow) ---
-    float mieSharp = pow(sunDot, 64.0) * 0.4;
-    float mieSoft  = pow(sunDot, 8.0) * 0.1;
-    vec3 sunGlowColor = mix(vec3(1.0, 0.85, 0.55), vec3(1.0, 1.0, 0.95), elevClamped);
-    sky += sunGlowColor * (mieSharp + mieSoft) * sunAboveHorizon;
-
-    // --- Subtle horizon haze ---
-    float hazeDensity = exp(-elevClamped * 12.0) * 0.06;
-    sky += push.horizonColor.rgb * hazeDensity * sunAboveHorizon;
-
-    // --- Night: slight moonlight tint ---
-    if (sunDir.z < 0.0) {
-        float moonlight = clamp(-sunDir.z * 0.5, 0.0, 0.15);
-        sky += vec3(0.02, 0.03, 0.08) * moonlight;
+        // The horizon ring and the nadir are both the fog colour.
+        sky = push.skyFog.rgb;
     }
 
     if (volumetricParams.x > 0.5) {

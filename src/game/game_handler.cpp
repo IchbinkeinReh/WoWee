@@ -6,6 +6,7 @@
 #include "game/item_text.hpp"
 #include "game/achievement_criteria.hpp"
 #include "game/game_utils.hpp"
+#include "rendering/world_map/map_resolver.hpp"
 #include "game/chat_handler.hpp"
 #include "game/movement_handler.hpp"
 #include "game/combat_handler.hpp"
@@ -3036,12 +3037,13 @@ void GameHandler::loadMapNameCache() const {
     auto dbc = am->loadDBC("Map.dbc");
     if (!dbc || !dbc->isLoaded()) return;
 
-    // Map.dbc layout: 0=ID, 1=InternalName, 2=InstanceType, 3=Flags,
-    // 4=MapName_enUS (display name), fields 5+ = other locales
+    // Map.dbc layout: 0=ID, 1=InternalName, 2=InstanceType, then the name -
+    // at 4 in the older files and 5 in 3.3.5's, which has Flags at 3.
+    const uint32_t nameField = rendering::world_map::mapDbcNameField(dbc->getFieldCount());
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         uint32_t id = dbc->getUInt32(i, 0);
         mapInstanceTypeCache_[id] = dbc->getUInt32(i, 2);
-        std::string name = dbc->getString(i, 4);
+        std::string name = dbc->getString(i, nameField);
         if (name.empty()) name = dbc->getString(i, 1); // internal name fallback
         if (!name.empty() && !mapNameCache_.count(id)) {
             mapNameCache_[id] = std::move(name);

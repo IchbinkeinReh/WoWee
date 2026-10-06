@@ -289,6 +289,30 @@ bool zoneBelongsToContinent(const std::vector<Zone>& zones,
            centerY >= rectMinY(cont) && centerY <= rectMaxY(cont);
 }
 
+// ── Overlay layout ───────────────────────────────────────────
+
+OverlayPiece overlayPiece(const OverlayEntry& overlay, int pieceIndex) {
+    constexpr int kPiece = 256;
+    OverlayPiece piece;
+    if (overlay.tileCols <= 0 || pieceIndex < 0) return piece;
+    const int col = pieceIndex % overlay.tileCols;
+    const int row = pieceIndex / overlay.tileCols;
+    piece.width = std::min(kPiece, static_cast<int>(overlay.texWidth) - col * kPiece);
+    piece.height = std::min(kPiece, static_cast<int>(overlay.texHeight) - row * kPiece);
+    if (piece.width <= 0 || piece.height <= 0) return {};
+    piece.x = overlay.offsetX + col * kPiece;
+    piece.y = overlay.offsetY + row * kPiece;
+    // Sixteen is the smallest file the tools emit.
+    auto fileExtent = [](int pixels) {
+        int e = 16;
+        while (e < pixels) e *= 2;
+        return e;
+    };
+    piece.uMax = static_cast<float>(piece.width) / static_cast<float>(fileExtent(piece.width));
+    piece.vMax = static_cast<float>(piece.height) / static_cast<float>(fileExtent(piece.height));
+    return piece;
+}
+
 } // namespace world_map
 } // namespace rendering
 } // namespace wowee

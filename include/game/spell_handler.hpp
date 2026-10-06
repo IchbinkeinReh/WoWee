@@ -413,6 +413,9 @@ private:
     // Play the impact visual effect at the target's position.
     void triggerImpactVisual(uint32_t spellId, uint64_t targetGuid);
     void launchRangedWeaponProjectile(uint32_t spellId, uint64_t targetGuid);
+    // Send the spell's missiles, as the client does from SMSG_SPELL_GO.
+    // Returns the hit targets whose impact now waits for a missile to land.
+    std::vector<uint64_t> launchSpellMissiles(const SpellGoData& data, uint32_t visualId);
     void refreshRestorationFromPlayerAuras();
     void stopRestorationPresentation();
 

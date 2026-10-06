@@ -22,6 +22,10 @@ class LightingManager;
 struct SkyParams {
     // Sun/moon positioning
     glm::vec3 directionalDir{0.0f, -1.0f, 0.3f};
+    /// From the eye toward the sun and the moon, unit length: the client's own
+    /// curves for them (LightingParams::sunDir, moonDir; 0x007eecc0).
+    glm::vec3 sunDir{0.0f, 0.0f, 1.0f};
+    glm::vec3 moonDir{0.0f, 0.0f, -1.0f};
     glm::vec3 sunColor{1.0f, 1.0f, 0.9f};
 
     // Sky colors (for skybox tinting/blending)
@@ -29,6 +33,8 @@ struct SkyParams {
     glm::vec3 skyMiddleColor{0.7f, 0.85f, 1.0f};
     glm::vec3 skyBand1Color{0.9f, 0.95f, 1.0f};
     glm::vec3 skyBand2Color{1.0f, 0.98f, 0.9f};
+    glm::vec3 skySmogColor{0.7f, 0.7f, 0.7f};   // ch6
+    glm::vec3 skyFogColor{0.7f, 0.7f, 0.7f};    // ch7: the horizon, the fog's colour
 
     // Atmospheric effects
     float cloudDensity = 0.0f;      // 0-1

@@ -78,14 +78,18 @@ constexpr SettingDesc kSchema[] = {
     // reading against a surface that does not behave the way they assume. The
     // shader keeps its own guard for a frame whose scene copy is not there yet,
     // which is a different thing from a player turning the feature off.
+    // 1 and 0 by default: the original client's fog, which ends at the zone's
+    // own distance in the zone's own fog colour (Wow.exe 0x007f16f0). They
+    // were 0.4 and 0.7, which put the fog two and a half times farther out
+    // and most of the way to the sky's middle band.
     {"fogstrength", "Fog thickness", SettingKind::Float, 0, 2, 0.05f, "Graphics", "Atmosphere",
      "How heavy the distance fog is, against the zone's own design.\n"
      "1 is as designed. Below 1 thins it and 0 removes it; above 1\n"
-     "brings it closer.", "", 0.4f},
+     "brings it closer.", "", 1.0f},
     {"fogskyblend", "Fog takes the sky's colour", SettingKind::Float, 0, 1, 0.05f, "Graphics", "",
-     "How much distant fog is tinted toward the sky behind it, so the\n"
-     "horizon does not stand out pale against a dark sky. 0 uses the\n"
-     "zone's fog colour alone; 1 matches the sky.", "", 0.7f},
+     "How much distant fog is tinted toward the sky behind it. 0, the\n"
+     "original look, uses the zone's fog colour alone; 1 matches the\n"
+     "sky's middle band.", "", 0.0f},
     // The light shafts' own thickness. Their switch and its quality are on
     // the Detail page; see there.
     {"mistdensity", "Mist density", SettingKind::Float, 0, 3, 0.1f, "Graphics", "",
@@ -124,11 +128,12 @@ constexpr SettingDesc kSchema[] = {
      "the sky's own small star texture, which goes soft at high\n"
      "resolutions.", "", 1},
     // A check box and not a strength slider: the page has room for the one
-    // and not the other.
+    // and not the other. Off by default: the original client has no sun
+    // shafts, so they are an opt-in addition.
     {"sunshafts", "Sun shafts", SettingKind::Bool, 0, 0, 0, "Graphics", "",
      "Rays of light streaming from the sun through gaps in trees and\n"
      "between buildings when you look toward it. Cheap; drawn over\n"
-     "the finished picture.", "", 1},
+     "the finished picture. Not in the original client.", "", 0},
 
     // ------------------------------------------------------------------ Detail
     //
@@ -188,8 +193,9 @@ constexpr SettingDesc kSchema[] = {
      "Detail", "Atmosphere",
      "Mist that light moves through: the sun casts shafts past trees\n"
      "and buildings, and torches and lava glow in it. Higher settings\n"
-     "are sharper and cost more; Low suits weaker hardware.",
-     "Off|Low|Medium|High", 2},
+     "are sharper and cost more; Low suits weaker hardware. Not in\n"
+     "the original client, so off unless chosen.",
+     "Off|Low|Medium|High", 0},
 
     // Off by default: the compute tracer is what most machines get, and it
     // costs real frames. One row rather than three switches, because each

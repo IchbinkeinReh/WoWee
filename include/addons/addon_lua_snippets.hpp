@@ -1126,26 +1126,27 @@ end
 
 inline constexpr const char* kWorldMapFitLua = R"LUA(
 -- The full-size world map is laid out on WorldMapPositioningGuide, 1024 by 768
--- units: exactly the height the interface always has in the real client, where
--- the interface scale stops at 1.0. This client lets it go higher, and the
--- interface is then 768 / scale units tall - so the map, which does not shrink
--- with it, ran off the top and bottom of the screen. A phone, where the scale
--- is turned up to make the text readable, is where that showed.
---
--- Scaled down until the guide fits, and never up. Checked as it opens and
--- while it is open, since the scale and the window can change under it, and
--- there is no event for the former.
-if WorldMapFrame and WorldMapFrame.HookScript and UIParent then
+-- units, and WorldMapFrame_OnShow scales it with SetupFullscreenScale - which
+-- is the client's own now, and fills the height of the screen as the client's
+-- does at any interface scale. Neither runs again when the window or the scale
+-- changes while the map is open, and there is no event for the latter, so it
+-- is asked again then, and when the map changes size. The windowed map sits
+-- in UIParent and takes the interface scale like everything else there, so it
+-- is put back to 1 rather than keeping the full-size map's.
+if WorldMapFrame and WorldMapFrame.HookScript and SetupFullscreenScale then
     local fitted = nil
     local function fit()
-        local w, h = UIParent:GetWidth(), UIParent:GetHeight()
+        local w, h = GetScreenWidth(), GetScreenHeight()
         if not w or not h or w <= 0 or h <= 0 then return end
-        local key = w * 100000 + h
+        local windowed = WORLDMAP_SETTINGS ~= nil and
+                         WORLDMAP_SETTINGS.size == WORLDMAP_WINDOWED_SIZE
+        local key = string.format("%.1f:%.1f:%s", w, h, tostring(windowed))
         if key == fitted then return end
         fitted = key
-        local scale = math.min(1, h / 768, w / 1024)
-        if math.abs((WorldMapFrame:GetScale() or 1) - scale) > 0.001 then
-            WorldMapFrame:SetScale(scale)
+        if windowed then
+            WorldMapFrame:SetScale(1)
+        else
+            SetupFullscreenScale(WorldMapFrame)
         end
     end
     WorldMapFrame:HookScript("OnShow", function() fitted = nil; fit() end)

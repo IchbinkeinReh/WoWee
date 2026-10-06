@@ -84,8 +84,13 @@ struct Zone {
     uint32_t areaID = 0;         // 0 = continent level
     std::string areaName;        // texture folder name (from DBC)
     ZoneBounds bounds;
+    /// The map this row is drawn on - its own map unless WorldMapArea moves it
+    /// to another continent (see worldMapDisplayMap).
     uint32_t displayMapID = 0;
     uint32_t parentWorldMapID = 0;
+    /// The dungeon floor the map opens on, and so which set of tiles it draws.
+    /// Zero for a map with no floors.
+    uint32_t dungeonFloor = 0;
     float virtualOffsetWowX = 0.0f;
     float virtualOffsetWowY = 0.0f;
     std::vector<uint32_t> exploreBits;  // all AreaBit indices (zone + subzones)

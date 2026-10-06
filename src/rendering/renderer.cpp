@@ -1850,7 +1850,7 @@ float Renderer::sampleSunOcclusion() const {
 
     // The same direction the flare itself is drawn around, from the same rule.
     const glm::vec3 sunDir = lightingManager
-        ? sunDirectionFromLightDir(lightingManager->getLightingParams().directionalDir)
+        ? lightingManager->getLightingParams().sunDir
         : glm::vec3(0.0f, 0.0f, -1.0f);
     // Below the horizon there is nothing to be occluded by, and nothing to
     // flare either - the time-of-day gate in LensFlare covers the same ground.
@@ -1969,24 +1969,29 @@ void Renderer::update(float deltaTime) {
         const auto* gh = core::Application::getInstance().getGameHandler();
         uint32_t mapId    = gh ? gh->getCurrentMapId() : 0;
         float gameTime    = gh ? gh->getGameTime() : -1.0f;
-        bool isRaining    = gh ? gh->isRaining() : false;
-        bool isUnderwater = cameraController ? cameraController->isSwimming() : false;
-        const uint32_t resolvedZoneId = getCurrentZoneId();
+        // Any weather: the client blends the storm light sets in by
+        // min(1, 4 x intensity) whatever is falling (0x007f3920). Clear
+        // weather (state 0) carries no intensity.
+        const float weatherIntensity =
+            (gh && gh->getWeatherType() != 0) ? gh->getWeatherIntensity() : 0.0f;
+        // The underwater sets are for the camera in liquid (0x007f3230 asks
+        // 0x00780620 at the camera), not the player swimming.
+        bool cameraInLiquid = false;
+        if (waterRenderer && camera) {
+            const glm::vec3 eye = camera->getPosition();
+            const auto surface = waterRenderer->getNearestWaterHeightAt(eye.x, eye.y, eye.z);
+            cameraInLiquid = surface && eye.z < *surface;
+        }
 
-        lightingManager->update(characterPosition, mapId, resolvedZoneId,
-                                gameTime, isRaining, isUnderwater);
+        lightingManager->setFarClip(viewDistance_);
+        lightingManager->update(characterPosition, mapId,
+                                gameTime, weatherIntensity, cameraInLiquid);
 
         // Sync weather visual renderer with game state
         if (weather && gh) {
             uint32_t wType = gh->getWeatherType();
             float wInt = gh->getWeatherIntensity();
-            if (resolvedZoneId == 10) {
-                // Duskwood's defining effect is persistent ground fog. Some
-                // realms continuously report rain here; suppress those streak
-                // particles so they cannot replace the authored fog ambience.
-                weather->setWeatherType(Weather::Type::NONE);
-                weather->setIntensity(0.0f);
-            } else if (wType != 0) {
+            if (wType != 0) {
                 // Server-driven weather (SMSG_WEATHER) - authoritative
                 if (wType == 1)      weather->setWeatherType(Weather::Type::RAIN);
                 else if (wType == 2) weather->setWeatherType(Weather::Type::SNOW);
@@ -2234,7 +2239,7 @@ void Renderer::update(float deltaTime) {
             zctx.weatherIntensity = weather->getIntensity();
         }
         if (lightingManager) {
-            zctx.gameTimeHours = lightingManager->getVisualTimeOfDayHours();
+            zctx.gameTimeHours = lightingManager->getTimeOfDayHours();
         }
         if (terrainManager) {
             auto tile = terrainManager->getCurrentTile();
@@ -2875,7 +2880,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     // Get time of day for sky-related rendering
     auto* skybox = skySystem ? skySystem->getSkybox() : nullptr;
     float timeOfDay = lightingManager
-        ? lightingManager->getVisualTimeOfDayHours()
+        ? lightingManager->getTimeOfDayHours()
         : (skybox ? skybox->getTimeOfDay() : 12.0f);
     // Two questions, apart while the sky crossfades. The sky models are drawn
     // whenever any is up at all; the procedural sun, moons and clouds they
@@ -4343,24 +4348,16 @@ void Renderer::renderReflectionPass() {
     if (canRenderScene) {
         // Render scene into reflection texture (sky + terrain + WMO only for perf)
         if (skySystem) {
-            rendering::SkyParams skyParams;
             auto* reflSkybox = skySystem->getSkybox();
-            skyParams.timeOfDay = lightingManager
-                ? lightingManager->getVisualTimeOfDayHours()
+            const float reflTimeOfDay = lightingManager
+                ? lightingManager->getTimeOfDayHours()
                 : (reflSkybox ? reflSkybox->getTimeOfDay() : 12.0f);
-            if (lightingManager) {
-                const auto& lp = lightingManager->getLightingParams();
-                skyParams.directionalDir = lp.directionalDir;
-                skyParams.sunColor = lp.diffuseColor;
-                skyParams.skyTopColor = lp.skyTopColor;
-                skyParams.skyMiddleColor = lp.skyMiddleColor;
-                skyParams.skyBand1Color = lp.skyBand1Color;
-                skyParams.skyBand2Color = lp.skyBand2Color;
-                skyParams.cloudDensity = lp.cloudDensity;
-                skyParams.fogDensity = lp.fogDensity;
-                skyParams.horizonGlow = lp.horizonGlow;
-            }
-            // weatherIntensity left at default 0 for reflection pass (no game handler in scope)
+            // The same fields the main sky gets, from the one place that
+            // fills them. weatherIntensity stays 0 for the reflection pass
+            // (no game handler in scope).
+            rendering::SkyParams skyParams = rendering::skyParamsFromLighting(
+                reflTimeOfDay, -1.0f, 0.0f,
+                lightingManager ? &lightingManager->getLightingParams() : nullptr, false);
             // A flare is an artefact of the lens, so it belongs to the camera
             // and not to what the water is showing it.
             skyParams.sunOcclusion = 1.0f;
@@ -4629,7 +4626,7 @@ float Renderer::volumetricFogExtinction() const {
             extinction *= glm::clamp(900.0f / authoredEnd, 0.6f, 2.0f);
         }
         // Morning mist: thickest around half past six, gone by nine.
-        const float hours = lightingManager->getVisualTimeOfDayHours();
+        const float hours = lightingManager->getTimeOfDayHours();
         const float dawn = 1.0f - glm::smoothstep(0.0f, 2.5f, std::abs(hours - 6.5f));
         extinction *= 1.0f + 0.8f * dawn;
     }
@@ -4714,8 +4711,9 @@ void Renderer::recordSunShafts() {
         currentImageIndex < images.size() &&
         !(passAblation_ && passAblation_->skip(AblationPass::SunShafts))) {
         const auto& lp = lightingManager->getLightingParams();
-        // The sun the lens flare draws around, from the same rule.
-        const glm::vec3 sunDir = sunDirectionFromLightDir(lp.directionalDir);
+        // The sun the lens flare draws around: the client's sun curve
+        // (0x007eecc0), not the light's direction.
+        const glm::vec3 sunDir = lp.sunDir;
         const SunOnScreen sun = sunScreenPosition(camera->getViewMatrix(),
                                                   camera->getProjectionMatrix(), sunDir);
         if (sun.inFront) {

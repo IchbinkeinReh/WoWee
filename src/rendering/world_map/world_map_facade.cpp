@@ -127,6 +127,14 @@ struct WorldMapFacade::Impl {
     // re-enters that rather than keeping a second copy of it here.
     bool recenterOnPlayer = false;
     bool viewChanged = false;
+    // The ImGui frame the map was last drawn in. A gap means it was closed in
+    // between, and a map that is opened shows where the player is.
+    int lastRenderedFrame = -1;
+    // Showing the map an instance is entered from, because the instance has
+    // none of its own. The player is not on that map and is not drawn on it.
+    bool showingEntrance = false;
+    glm::vec3 entrancePos{0.0f};   // render space, while showingEntrance
+    uint32_t entranceMapId = 0;
 
     DataRepository data;
     ViewStateMachine viewState;
@@ -167,7 +175,10 @@ struct WorldMapFacade::Impl {
 
     void initOverlayLayers();
     void closeMap();
+    void reloadMap(const std::string& newMapName);
     void switchToMap(const std::string& newMapName);
+    void showIndex(int idx, ViewLevel level);
+    void applyZoom(const ViewStateMachine::ZoomResult& zr);
     void switchToWorldView();
     void renderImGuiOverlay(const glm::vec3& playerRenderPos,
                             int screenWidth, int screenHeight,
@@ -193,10 +204,9 @@ void WorldMapFacade::Impl::closeMap() {
     }
 }
 
-void WorldMapFacade::Impl::switchToMap(const std::string& newMapName) {
-    if (mapName == newMapName && !data.zones().empty()) return;
-    userMapOverride = true;
-    pendingMapName.clear();
+// Drop everything loaded for the map being shown and load another in its
+// place, with nothing selected on it yet.
+void WorldMapFacade::Impl::reloadMap(const std::string& newMapName) {
     if (zoneHighlightLayer) zoneHighlightLayer->clearTextures();
     compositor.detachZoneTextures();
     data.clear();
@@ -206,6 +216,40 @@ void WorldMapFacade::Impl::switchToMap(const std::string& newMapName) {
     data.loadZones(mapName, *assetManager);
     zoneMetadata.initialize();
     viewState.setCosmicEnabled(data.cosmicEnabled());
+    viewState.setContinentIdx(-1);
+    viewState.setCurrentZoneIdx(-1);
+}
+
+// Show one zone or continent of the loaded map: its art first, then the view,
+// so the picture and everything drawn over it describe the same place. The
+// interface's dropdowns, its zoom-out button and its clicks moved the view
+// alone, and the picture stayed on whatever had been composited before.
+void WorldMapFacade::Impl::showIndex(int idx, ViewLevel level) {
+    if (idx < 0 || idx >= static_cast<int>(data.zones().size())) return;
+    compositor.loadZoneTextures(idx, data.zones(), mapName);
+    if (level == ViewLevel::ZONE) compositor.loadOverlayTextures(idx, data.zones());
+    compositor.requestComposite(idx);
+    viewState.setCurrentZoneIdx(idx);
+    viewState.setLevel(level);
+}
+
+// What a zoom step the view has already taken needs drawn.
+void WorldMapFacade::Impl::applyZoom(const ViewStateMachine::ZoomResult& zr) {
+    if (!zr.changed) return;
+    if (zr.targetIdx >= 0) {
+        showIndex(zr.targetIdx, zr.newLevel);
+    } else if (zr.newLevel == ViewLevel::WORLD) {
+        switchToWorldView();
+    } else if (zr.newLevel == ViewLevel::COSMIC && data.cosmicIdx() >= 0) {
+        showIndex(data.cosmicIdx(), ViewLevel::COSMIC);
+    }
+}
+
+void WorldMapFacade::Impl::switchToMap(const std::string& newMapName) {
+    if (mapName == newMapName && !data.zones().empty()) return;
+    userMapOverride = true;
+    pendingMapName.clear();
+    reloadMap(newMapName);
 
     // Find the continent root zone and display it (skip synthetic World/Cosmic)
     int rootIdx = findContinentRootIdx(data.zones(), data.cosmicIdx(), data.worldIdx(), mapName);
@@ -235,16 +279,7 @@ void WorldMapFacade::Impl::switchToWorldView() {
     }
 
     // If on a different map, switch back to Azeroth first.
-    if (mapName != "Azeroth") {
-        if (zoneHighlightLayer) zoneHighlightLayer->clearTextures();
-        compositor.detachZoneTextures();
-        data.clear();
-        compositor.invalidateComposite();
-        mapName = "Azeroth";
-        data.loadZones(mapName, *assetManager);
-        zoneMetadata.initialize();
-        viewState.setCosmicEnabled(data.cosmicEnabled());
-    }
+    if (mapName != "Azeroth") reloadMap("Azeroth");
     userMapOverride = true;
 
     // Non-Azeroth worlds (e.g. Outland) go to cosmic view.
@@ -395,6 +430,9 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
 
     const int physicalMapId = folderToMapId(d.physicalMapName);
     auto displayedPlayerPosition = [&]() {
+        // Inside an instance shown on the map it is entered from, the player
+        // is nowhere on that map - the client draws no arrow there.
+        if (d.showingEntrance) return glm::vec3(1.0e9f, 1.0e9f, 0.0f);
         return physicalMapId >= 0
             ? d.data.transformRenderPosition(
                   static_cast<uint32_t>(physicalMapId), playerRenderPos)
@@ -413,23 +451,65 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
         }
     }
 
+    // Drawn again after a frame or more without being drawn: the map was
+    // closed and is being opened. The client opens it on where the player is
+    // every time, whatever was browsed to before it was closed. Asked here
+    // rather than of whoever opens it, because there are three of those - the
+    // interface's frame, this client's key and the flight master - and only
+    // the interface said so.
+    const int frame = ImGui::GetFrameCount();
+    if (d.lastRenderedFrame >= 0 && frame - d.lastRenderedFrame > 1) {
+        d.userMapOverride = false;
+        d.recenterOnPlayer = true;
+    }
+    d.lastRenderedFrame = frame;
+
     // First-time open, zones lost after a map change, or the interface asking
     // to go back to the player's own zone
     if (!d.open || d.data.zones().empty() || d.recenterOnPlayer) {
         d.open = true;
         d.recenterOnPlayer = false;
+        // From the map the player is on. One browsed to says nothing about
+        // where they are now, and one shown in place of theirs - a continent
+        // that draws their zone, an instance's entrance - only while it still
+        // holds them. Kept when it does, because the interface asks for this
+        // on every quest log change and reloading two maps each time is a
+        // hitch the player can see.
+        if (d.virtualMapOverride) {
+            bool keep = d.showingEntrance && d.mapName == mapIdToFolder(d.entranceMapId);
+            if (!keep && !d.showingEntrance) {
+                const int z = findZoneForPlayer(d.data.zones(), displayPlayerRenderPos,
+                                                d.playerZoneId);
+                keep = z >= 0 &&
+                       static_cast<int>(d.data.zones()[z].mapID) != d.data.currentMapId() &&
+                       static_cast<int>(d.data.zones()[z].displayMapID) == d.data.currentMapId();
+            }
+            if (!keep) {
+                d.virtualMapOverride = false;
+                d.showingEntrance = false;
+                d.reloadMap(d.physicalMapName);
+            }
+        } else if (d.mapName != d.physicalMapName) {
+            d.reloadMap(d.physicalMapName);
+        }
         if (d.data.zones().empty()) {
             d.data.loadZones(d.mapName, *d.assetManager);
             d.zoneMetadata.initialize();
             d.viewState.setCosmicEnabled(d.data.cosmicEnabled());
-            displayPlayerRenderPos = displayedPlayerPosition();
         }
+        displayPlayerRenderPos = displayedPlayerPosition();
 
-        int playerZone = findZoneForPlayer(d.data.zones(), displayPlayerRenderPos, d.playerZoneId);
+        const auto& entrance = d.data.entrance();
+        // In render space, which keeps the server's order.
+        const glm::vec3 entrancePos = core::coords::canonicalToRender(
+            core::coords::serverToCanonical(glm::vec3(entrance.x, entrance.y, 0.0f)));
+        int playerZone = d.showingEntrance
+            ? findZoneForPlayer(d.data.zones(), d.entrancePos, 0)
+            : findZoneForPlayer(d.data.zones(), displayPlayerRenderPos, d.playerZoneId);
         // A zone on this continent that has no map of its own - Hyjal, in
         // 3.3.5 - opens the continent, as the real client does. Left to the
         // rectangles, a neighbour whose box reached into it was shown instead.
-        if (d.playerZoneId != 0 &&
+        if (!d.showingEntrance && d.playerZoneId != 0 &&
             findZoneByAreaId(d.data.zones(), d.playerZoneId) < 0 &&
             d.data.mapIdForArea(d.playerZoneId) != 0 &&
             static_cast<int>(d.data.mapIdForArea(d.playerZoneId)) == d.data.currentMapId()) {
@@ -439,56 +519,62 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
         // Some zones are stored on a different physical map from the continent
         // shown by the world-map UI. The draenei islands are the important case:
         // terrain/minimap data comes from Expansion01 (map 530), while their
-        // WorldMapArea DisplayMapID is Kalimdor (map 1). Follow that metadata
-        // instead of opening Outland merely because the terrain map is 530.
-        if (!d.virtualMapOverride && playerZone >= 0) {
+        // WorldMapArea DisplayMapID is Kalimdor (map 1); Eversong Woods and
+        // the rest of Quel'Thalas are the same with the Eastern Kingdoms (map
+        // 0). Follow that metadata instead of opening Outland merely because
+        // the terrain map is 530.
+        const char* displayFolder = "";
+        if (playerZone >= 0 && !d.showingEntrance) {
             const Zone& zone = d.data.zones()[playerZone];
-            if (zone.displayMapID != 0 &&
-                zone.displayMapID != static_cast<uint32_t>(d.data.currentMapId())) {
-                const char* virtualFolder = mapIdToFolder(zone.displayMapID);
-                if (virtualFolder && *virtualFolder) {
-                    d.physicalMapName = d.mapName;
-                    d.virtualMapOverride = true;
-                    d.mapName = virtualFolder;
-                    if (d.zoneHighlightLayer) d.zoneHighlightLayer->clearTextures();
-                    d.compositor.detachZoneTextures();
-                    d.data.clear();
-                    d.compositor.invalidateComposite();
-                    d.data.loadZones(d.mapName, *d.assetManager);
-                    d.zoneMetadata.initialize();
-                    d.viewState.setCosmicEnabled(d.data.cosmicEnabled());
-                    d.viewState.setContinentIdx(-1);
-                    d.viewState.setCurrentZoneIdx(-1);
-                    displayPlayerRenderPos = displayedPlayerPosition();
-                    playerZone = findZoneForPlayer(d.data.zones(), displayPlayerRenderPos, d.playerZoneId);
-                    LOG_INFO("World map virtual continent: physical='",
-                             d.physicalMapName, "' display='", d.mapName, "'");
-                }
-            }
-        } else if (d.virtualMapOverride) {
-            const bool stillInVirtualArea = playerZone >= 0 &&
-                d.data.zones()[playerZone].mapID !=
-                    static_cast<uint32_t>(d.data.currentMapId()) &&
-                d.data.zones()[playerZone].displayMapID ==
-                    static_cast<uint32_t>(d.data.currentMapId());
-            if (!stillInVirtualArea) {
-                d.virtualMapOverride = false;
-                d.mapName = d.physicalMapName;
-                if (d.zoneHighlightLayer) d.zoneHighlightLayer->clearTextures();
-                d.compositor.detachZoneTextures();
-                d.data.clear();
-                d.compositor.invalidateComposite();
-                d.data.loadZones(d.mapName, *d.assetManager);
-                d.zoneMetadata.initialize();
-                d.viewState.setCosmicEnabled(d.data.cosmicEnabled());
-                d.viewState.setContinentIdx(-1);
-                d.viewState.setCurrentZoneIdx(-1);
-                displayPlayerRenderPos = displayedPlayerPosition();
-                playerZone = findZoneForPlayer(d.data.zones(), displayPlayerRenderPos, d.playerZoneId);
+            if (zone.displayMapID != zone.mapID &&
+                static_cast<int>(zone.displayMapID) != d.data.currentMapId()) {
+                displayFolder = mapIdToFolder(zone.displayMapID);
             }
         }
+        // An instance with no map of its own opens on the zone it is entered
+        // from, which is what the client calls "Inside Instance"; one with a
+        // map of its own has a zone row and is shown below like any zone.
+        const bool hasContinent = std::any_of(
+            d.data.zones().begin(), d.data.zones().end(),
+            [](const Zone& z) { return z.areaID == 0 && z.wmaID != 0; });
+        if (playerZone < 0 && !hasContinent && !d.showingEntrance) {
+            // An instance map whose rectangle is its dungeon floors' rather
+            // than its own: its zone row is the map, wherever the player is.
+            for (int i = 0; i < static_cast<int>(d.data.zones().size()); ++i) {
+                const Zone& z = d.data.zones()[static_cast<size_t>(i)];
+                if (z.areaID != 0 && static_cast<int>(z.mapID) == d.data.currentMapId()) {
+                    playerZone = i;
+                    break;
+                }
+            }
+        }
+        const bool toEntrance = playerZone < 0 && !hasContinent && entrance.valid &&
+                                *mapIdToFolder(entrance.mapId) != '\0';
+        const uint32_t entranceMapId = entrance.mapId;
+        if (toEntrance) displayFolder = mapIdToFolder(entrance.mapId);
 
-        int bestContinent = findBestContinentForPlayer(d.data.zones(), displayPlayerRenderPos);
+        if (*displayFolder && !isUiOnlyMapFolder(displayFolder)) {
+            d.virtualMapOverride = true;
+            d.reloadMap(displayFolder);
+            if (toEntrance) {
+                // The entrance read off the instance's own Map.dbc row, which
+                // the reload has just replaced - so taken before it.
+                d.showingEntrance = true;
+                d.entrancePos = entrancePos;
+                d.entranceMapId = entranceMapId;
+                playerZone = findZoneForPlayer(d.data.zones(), entrancePos, 0);
+                displayPlayerRenderPos = displayedPlayerPosition();
+            } else {
+                displayPlayerRenderPos = displayedPlayerPosition();
+                playerZone = findZoneForPlayer(d.data.zones(), displayPlayerRenderPos,
+                                               d.playerZoneId);
+            }
+            LOG_INFO("World map virtual continent: physical='",
+                     d.physicalMapName, "' display='", d.mapName, "'");
+        }
+
+        int bestContinent = findBestContinentForPlayer(
+            d.data.zones(), d.showingEntrance ? d.entrancePos : displayPlayerRenderPos);
         if (bestContinent >= 0 && bestContinent != d.viewState.continentIdx()) {
             d.viewState.setContinentIdx(bestContinent);
             d.compositor.invalidateComposite();
@@ -498,18 +584,15 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
         if (!d.taxiMode &&
             playerZone >= 0 && d.viewState.continentIdx() >= 0 &&
             zoneBelongsToContinent(d.data.zones(), playerZone, d.viewState.continentIdx())) {
-            d.compositor.loadZoneTextures(playerZone, d.data.zones(), d.mapName);
-            d.compositor.loadOverlayTextures(playerZone, d.data.zones());
-            d.viewState.setCurrentZoneIdx(playerZone);
-            d.viewState.setLevel(ViewLevel::ZONE);
+            d.showIndex(playerZone, ViewLevel::ZONE);
             d.exploration.update(d.data.zones(), displayPlayerRenderPos, playerZone,
                                  d.data.exploreFlagByAreaId(), d.playerZoneId);
-            d.compositor.requestComposite(playerZone);
         } else if (d.viewState.continentIdx() >= 0) {
-            d.compositor.loadZoneTextures(d.viewState.continentIdx(), d.data.zones(), d.mapName);
-            d.compositor.requestComposite(d.viewState.continentIdx());
-            d.viewState.setCurrentZoneIdx(d.viewState.continentIdx());
-            d.viewState.setLevel(ViewLevel::CONTINENT);
+            d.showIndex(d.viewState.continentIdx(), ViewLevel::CONTINENT);
+        } else if (playerZone >= 0) {
+            // A map with no continent over it: an instance with a map of its
+            // own, which is all there is to show.
+            d.showIndex(playerZone, ViewLevel::ZONE);
         }
         // The view has only now become the player's zone, and the interface
         // asked before it did.
@@ -564,35 +647,13 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
                 !zoneBelongsToContinent(d.data.zones(), validPlayerZone, d.viewState.continentIdx())) {
                 validPlayerZone = -1;
             }
-            auto zr = d.viewState.zoomIn(candidateZone, validPlayerZone);
-            if (zr.changed && zr.targetIdx >= 0) {
-                d.compositor.loadZoneTextures(zr.targetIdx, d.data.zones(), d.mapName);
-                if (zr.newLevel == ViewLevel::ZONE) {
-                    d.compositor.loadOverlayTextures(zr.targetIdx, d.data.zones());
-                }
-                d.compositor.requestComposite(zr.targetIdx);
-            } else if (zr.changed && zr.newLevel == ViewLevel::WORLD) {
-                d.switchToWorldView();
-            }
+            d.applyZoom(d.viewState.zoomIn(candidateZone, validPlayerZone));
             break;
         }
 
-        case InputAction::ZOOM_OUT: {
-            auto zr = d.viewState.zoomOut();
-            if (zr.changed && zr.targetIdx >= 0) {
-                d.compositor.loadZoneTextures(zr.targetIdx, d.data.zones(), d.mapName);
-                d.compositor.requestComposite(zr.targetIdx);
-            } else if (zr.changed && zr.newLevel == ViewLevel::WORLD) {
-                d.switchToWorldView();
-            } else if (zr.changed && zr.newLevel == ViewLevel::COSMIC) {
-                if (d.data.cosmicIdx() >= 0) {
-                    d.compositor.loadZoneTextures(d.data.cosmicIdx(), d.data.zones(), d.mapName);
-                    d.compositor.requestComposite(d.data.cosmicIdx());
-                    d.viewState.setCurrentZoneIdx(d.data.cosmicIdx());
-                }
-            }
+        case InputAction::ZOOM_OUT:
+            d.applyZoom(d.viewState.zoomOut());
             break;
-        }
 
         case InputAction::CLICK_ZONE: {
             int hz = inputResult.targetIdx;
@@ -666,6 +727,7 @@ void WorldMapFacade::setMapName(const std::string& name) {
     if (d.virtualMapOverride && name == d.physicalMapName) return;
     d.physicalMapName = name;
     d.virtualMapOverride = false;
+    d.showingEntrance = false;
     if (d.mapName == name && !d.data.zones().empty()) return;
     d.mapName = name;
 
@@ -752,12 +814,14 @@ std::string WorldMapFacade::zoneNameAtMapPoint(float u, float v) const {
 bool WorldMapFacade::clickMapPoint(float u, float v) {
     const int idx = zoneAtMapPoint(u, v);
     if (idx < 0) return false;
-    impl_->viewState.zoomIn(idx, /*playerZoneIdx=*/-1);
+    impl_->userMapOverride = true;
+    impl_->applyZoom(impl_->viewState.zoomIn(idx, /*playerZoneIdx=*/-1));
     return true;
 }
 
 void WorldMapFacade::zoomOutOneLevel() {
-    impl_->viewState.zoomOut();
+    impl_->userMapOverride = true;
+    impl_->applyZoom(impl_->viewState.zoomOut());
 }
 
 std::string WorldMapFacade::currentMapFolder() const {
@@ -1568,28 +1632,36 @@ std::vector<std::string> WorldMapFacade::zoneNames(int continentIndex) const {
 }
 
 bool WorldMapFacade::showMap(int continentIndex, int zoneIndex) {
+    auto& d = *impl_;
     // Continent zero is the world, which is what the zoom-out button asks for
     // from a continent.
     if (continentIndex <= 0) {
-        impl_->viewState.enterWorldView();
+        d.switchToWorldView();
         return true;
     }
     if (continentIndex > kContinentCount) return false;
-    const auto& zones = impl_->data.zones();
-    const int contIdx = continentZoneIdx(
-        zones, kContinents[continentIndex - 1].mapId);
-    if (contIdx < 0) return false;
+    const uint32_t mapId = kContinents[continentIndex - 1].mapId;
+    int contIdx = continentZoneIdx(d.data.zones(), mapId);
+    if (contIdx < 0) {
+        // A continent of another map. Only the shown map's zones are loaded,
+        // so picking Kalimdor from the dropdown on the Eastern Kingdoms was
+        // turned down; it loads that map, as clicking it on the world does.
+        const char* folder = mapIdToFolder(mapId);
+        if (!*folder) return false;
+        d.switchToMap(folder);
+        contIdx = continentZoneIdx(d.data.zones(), mapId);
+        if (contIdx < 0) return false;
+    }
+    d.userMapOverride = true;
+    d.viewState.setContinentIdx(contIdx);
 
     if (zoneIndex <= 0) {
-        impl_->viewState.setContinentIdx(contIdx);
-        impl_->viewState.setCurrentZoneIdx(contIdx);
-        impl_->viewState.setLevel(ViewLevel::CONTINENT);
+        d.showIndex(contIdx, ViewLevel::CONTINENT);
         return true;
     }
-    const auto rows = zonesOnContinent(zones, impl_->data.areaNameByAreaId(), contIdx);
+    const auto rows = zonesOnContinent(d.data.zones(), d.data.areaNameByAreaId(), contIdx);
     if (zoneIndex > static_cast<int>(rows.size())) return false;
-    impl_->viewState.setContinentIdx(contIdx);
-    impl_->viewState.enterZone(rows[static_cast<size_t>(zoneIndex) - 1].second);
+    d.showIndex(rows[static_cast<size_t>(zoneIndex) - 1].second, ViewLevel::ZONE);
     return true;
 }
 
@@ -1652,10 +1724,9 @@ bool WorldMapFacade::showWorldMapArea(uint32_t worldMapAreaId) {
         // if it were a zone would show its overview at zone level.
         if (zones[i].areaID == 0) {
             impl_->viewState.setContinentIdx(static_cast<int>(i));
-            impl_->viewState.setCurrentZoneIdx(static_cast<int>(i));
-            impl_->viewState.setLevel(ViewLevel::CONTINENT);
+            impl_->showIndex(static_cast<int>(i), ViewLevel::CONTINENT);
         } else {
-            impl_->viewState.enterZone(static_cast<int>(i));
+            impl_->showIndex(static_cast<int>(i), ViewLevel::ZONE);
         }
         impl_->userMapOverride = true;
         return true;
@@ -1670,11 +1741,7 @@ bool WorldMapFacade::showAreaZone(uint32_t areaTableId) {
         if (d.data.zones()[i].areaID != areaTableId) continue;
         // What clicking the zone does, art and all: moving the view alone
         // leaves the last zone's picture on screen under the new zone's pins.
-        const int idx = static_cast<int>(i);
-        d.compositor.loadZoneTextures(idx, d.data.zones(), d.mapName);
-        d.compositor.loadOverlayTextures(idx, d.data.zones());
-        d.compositor.requestComposite(idx);
-        d.viewState.enterZone(idx);
+        d.showIndex(static_cast<int>(i), ViewLevel::ZONE);
         d.userMapOverride = true;
         return true;
     }

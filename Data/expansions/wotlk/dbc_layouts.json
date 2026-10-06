@@ -202,8 +202,10 @@
     "ID": 0,
     "InnerRadius": 5,
     "LightParamsID": 7,
-    "LightParamsIDRain": 8,
-    "LightParamsIDUnderwater": 9,
+    "LightParamsIDDeath": 11,
+    "LightParamsIDStorm": 9,
+    "LightParamsIDStormUnderwater": 10,
+    "LightParamsIDUnderwater": 8,
     "MapID": 1,
     "OuterRadius": 6,
     "X": 2,
@@ -300,6 +302,7 @@
     "ReagentCount7": 67,
     "RecoveryTime": 29,
     "SchoolMask": 225,
+    "Speed": 47,
     "SpellVisualID": 131,
     "TargetAuraState": 21,
     "Targets": 16,
@@ -324,14 +327,24 @@
   },
   "SpellVisual": {
     "CastKit": 2,
+    "Flags": 13,
     "ID": 0,
     "ImpactKit": 3,
+    "MissileAttachment": 16,
+    "MissileCastOffsetX": 26,
+    "MissileCastOffsetY": 27,
+    "MissileCastOffsetZ": 28,
+    "MissileDestinationAttachment": 10,
+    "MissileImpactOffsetX": 29,
+    "MissileImpactOffsetY": 30,
+    "MissileImpactOffsetZ": 31,
     "MissileModel": 8,
     "PrecastKit": 1
   },
   "SpellVisualEffectName": {
     "FilePath": 2,
-    "ID": 0
+    "ID": 0,
+    "Scale": 4
   },
   "SpellVisualKit": {
     "BaseEffect": 5,

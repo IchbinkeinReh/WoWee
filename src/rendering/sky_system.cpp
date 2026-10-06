@@ -1,5 +1,4 @@
 #include "rendering/sky_system.hpp"
-#include "rendering/sun_direction.hpp"
 #include "rendering/skybox.hpp"
 #include "rendering/celestial.hpp"
 #include "rendering/starfield.hpp"
@@ -150,7 +149,7 @@ void SkySystem::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         float skyLum = glm::dot(params.skyTopColor, glm::vec3(0.2126f, 0.7152f, 0.0722f));
         float nightFactor = 1.0f - glm::smoothstep(0.08f, 0.25f, skyLum);
         celestial_->render(cmd, perFrameSet, params.timeOfDay,
-                           &params.directionalDir, &params.sunColor, params.gameTime,
+                           params.sunDir, params.moonDir, &params.sunColor, params.gameTime,
                            nightFactor);
     }
 
@@ -177,9 +176,12 @@ void SkySystem::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 }
 
 glm::vec3 SkySystem::getSunPosition(const SkyParams& params) const {
-    // Below the horizon it stays below - see sun_direction.hpp for what the
-    // mirror that used to be here cost.
-    return sunDirectionFromLightDir(params.directionalDir) * 800.0f;
+    // The client's sun curve (0x007eecc0), not the light's direction: the two
+    // share a side of the sky but not a height. Below the horizon it stays
+    // below - see sun_direction.hpp for what mirroring it up once cost.
+    const float lenSq = glm::dot(params.sunDir, params.sunDir);
+    if (lenSq < 1e-8f) return glm::vec3(0.0f, 0.0f, 800.0f);
+    return params.sunDir * glm::inversesqrt(lenSq) * 800.0f;
 }
 
 void SkySystem::setMoonPhaseCycling(bool enabled) {

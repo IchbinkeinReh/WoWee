@@ -123,17 +123,20 @@ namespace {
 // Where another unit's jump leaves the sync loop's locomotion choice this
 // frame (airborneAnimSync): true while the jump's animations hold it - Fall
 // started for a unit in the air without one; refresh set for a unit down
-// again but still in an airborne loop, whose locomotion must be picked
-// although nothing else changed.
+// again but still in an airborne loop, or whose landing a movement packet
+// cut short, whose locomotion must be picked although nothing else changed.
+// The instance is the one the unit's animations play on: a mounted player's
+// mount.
 bool jumpHoldsAnimation(rendering::CharacterRenderer& charRenderer, uint32_t instanceId,
-                        bool airborne, bool& refresh) {
+                        const game::Entity& entity, bool flying, bool locomotionAsked,
+                        bool& refresh) {
     uint32_t curAnim = 0;
     float curT = 0.0f, curDur = 0.0f;
     if (!charRenderer.getAnimationState(instanceId, curAnim, curT, curDur) ||
         curAnim == rendering::anim::DEATH) {
         return false;
     }
-    switch (rendering::airborneAnimSync(airborne, curAnim)) {
+    switch (rendering::airborneAnimSync(entity.isAirborne(), curAnim, flying, locomotionAsked)) {
         case rendering::AirborneAnimSync::Hold:
             return true;
         case rendering::AirborneAnimSync::Fall:
@@ -148,6 +151,15 @@ bool jumpHoldsAnimation(rendering::CharacterRenderer& charRenderer, uint32_t ins
             break;
     }
     return false;
+}
+
+// The height a moving unit is drawn at over the floor found under it. On the
+// ground it is set on the floor. Falling, the client moves it by gravity and
+// stops it only where it meets the ground (FUN_007618b0 moving it through
+// FUN_007612b0's collision): kept above the floor, not pulled down onto it,
+// so a jump rises and comes down instead of sliding along the ground.
+float heightOverFloor(const game::Entity& entity, float z, float floorZ) {
+    return entity.isFallingByFlags() ? std::max(z, floorZ) : floorZ;
 }
 
 std::optional<float> movingEntityFloor(rendering::Renderer* renderer,
@@ -3322,7 +3334,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             if (entity->isActivelyMoving() && groundCreature) {
                 if (auto floorZ = movingEntityFloor(renderer.get(), renderPos,
                                                     previousRenderPos)) {
-                    renderPos.z = *floorZ;
+                    renderPos.z = heightOverFloor(*entity, renderPos.z, *floorZ);
                 }
             }
 
@@ -3408,8 +3420,10 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // or server changes WALKING flag while creature is already running → Walk.
                 // A jump keeps its animations until it is down and landed.
                 bool jumpRefresh = false;
+                const bool locomotionAsked = entity->takeLocomotionRequest();
                 const bool jumpHolds = !deadOrCorpse &&
-                    jumpHoldsAnimation(*charRenderer, instanceId, entity->isAirborne(), jumpRefresh);
+                    jumpHoldsAnimation(*charRenderer, instanceId, *entity, isFlyingNow,
+                                       locomotionAsked, jumpRefresh);
                 const bool stateChanged = !jumpHolds &&
                                           (jumpRefresh ||
                                            (isMovingNow  != prevMoving)   ||
@@ -3537,7 +3551,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             if (entity->isActivelyMoving() && groundPlayer) {
                 if (auto floorZ = movingEntityFloor(renderer.get(), renderPos,
                                                     previousMountPos)) {
-                    renderPos.z = *floorZ;
+                    renderPos.z = heightOverFloor(*entity, renderPos.z, *floorZ);
                 }
             }
 
@@ -3603,11 +3617,15 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 bool prevSwimming = _pCreatureWasSwimming[guid];
                 bool prevFlying   = _pCreatureWasFlying[guid];
                 bool prevWalking  = _pCreatureWasWalking[guid];
-                // A jump keeps its animations until it is down and landed;
-                // a mounted rider keeps the seat pose instead.
+                // A jump keeps its animations until it is down and landed -
+                // a mounted player's on the mount, the rider keeping the
+                // seat pose.
                 bool jumpRefresh = false;
-                const bool jumpHolds = !deadOrCorpse && !remoteMount &&
-                    jumpHoldsAnimation(*charRenderer, instanceId, entity->isAirborne(), jumpRefresh);
+                const bool locomotionAsked = entity->takeLocomotionRequest();
+                const bool jumpHolds = !deadOrCorpse &&
+                    jumpHoldsAnimation(*charRenderer,
+                                       remoteMount ? remoteMount->instanceId : instanceId,
+                                       *entity, isFlyingNow, locomotionAsked, jumpRefresh);
                 const bool stateChanged = !jumpHolds &&
                                           (jumpRefresh ||
                                            (isMovingNow  != prevMoving)   ||

@@ -934,6 +934,28 @@ void MovementPacket::writeMovementPayload(network::Packet& packet, const Movemen
     }
 }
 
+bool MovementPacket::readPitchAndFall(network::Packet& packet, MovementInfo& info) {
+    if (info.hasFlag(MovementFlags::SWIMMING) || info.hasFlag(MovementFlags::FLYING) ||
+        (info.flags2 & 0x0020) != 0) {  // MOVEMENTFLAG2_ALWAYS_ALLOW_PITCHING
+        if (!packet.hasRemaining(4)) return false;
+        info.pitch = packet.readFloat();
+    }
+    if (!packet.hasRemaining(4)) return false;
+    info.fallTime = packet.readUInt32();
+    if (info.hasFlag(MovementFlags::FALLING)) {
+        if (!packet.hasRemaining(16)) return false;
+        info.jumpVelocity = packet.readFloat();
+        info.jumpSinAngle = packet.readFloat();
+        info.jumpCosAngle = packet.readFloat();
+        info.jumpXYSpeed = packet.readFloat();
+    }
+    if ((info.flags & 0x04000000) != 0) {  // MOVEMENTFLAG_SPLINE_ELEVATION
+        if (!packet.hasRemaining(4)) return false;
+        (void)packet.readFloat();
+    }
+    return true;
+}
+
 network::Packet MovementPacket::build(Opcode opcode, const MovementInfo& info, uint64_t playerGuid) {
     network::Packet packet(wireOpcode(opcode));
 
