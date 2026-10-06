@@ -1301,7 +1301,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                                 model.vertices.size(),
                                 model.particleEmitters.size());
     const bool isInvisibleTrap   = cls.isInvisibleTrap;
-    const bool groundDetailModel = cls.isGroundDetail;
     if (isInvisibleTrap) {
         LOG_INFO("Loading InvisibleTrap model: ", model.name, " (will be invisible, no collision)");
     }
@@ -1927,21 +1926,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             }
         }
         gpuModel.batches.push_back(bgpu);
-    }
-
-    // Detect particle emitter volume models: box mesh (24 verts, 36 indices)
-    // with disproportionately large bounds. These are invisible bounding volumes
-    // that only exist to spawn particles - their mesh should never be rendered.
-    if (!isInvisibleTrap && !groundDetailModel &&
-        gpuModel.vertexCount <= 24 && gpuModel.indexCount <= 36
-        && !model.particleEmitters.empty()) {
-        glm::vec3 size = gpuModel.boundMax - gpuModel.boundMin;
-        float maxDim = std::max({size.x, size.y, size.z});
-        if (maxDim > 5.0f) {
-            gpuModel.isInvisibleTrap = true;
-            LOG_DEBUG("M2 emitter volume hidden: '", model.name, "' size=(",
-                      size.x, " x ", size.y, " x ", size.z, ")");
-        }
     }
 
     vkCtx_->endUploadBatch();
