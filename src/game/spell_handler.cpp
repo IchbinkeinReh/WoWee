@@ -3996,7 +3996,10 @@ void SpellHandler::extractSkillFields(const FlatFieldMap& fields) {
 
             const std::string& name = owner_.getSkillName(skillId);
             std::string skillName = name.empty() ? ("Skill #" + std::to_string(skillId)) : name;
-            owner_.addSystemChatMessage("Your skill in " + skillName + " has increased to " + std::to_string(skill.value) + ".");
+            // CHAT_MSG_SKILL, which the interface colours blue, as the server
+            // sends it - not a system line, which is yellow.
+            owner_.addLocalChatLine(ChatType::SKILL, "Your skill in " + skillName +
+                                    " has increased to " + std::to_string(skill.value) + ".");
         }
     }
 
