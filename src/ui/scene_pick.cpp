@@ -22,14 +22,6 @@ constexpr float kMaxGameObjectPickRadius = 3.0f;
 constexpr float kMinGameObjectPickRadius = 0.6f;
 /// GAMEOBJECT_TYPE_CHAIR.
 constexpr uint32_t kGoTypeChair = 7;
-/// GENERIC - decorative, no interaction - and FISHINGHOLE, which is fished
-/// rather than clicked. Neither may take a click from a unit.
-constexpr uint32_t kGoTypeGeneric = 5;
-/// SPELLFOCUS: a campfire, an anvil, a forge. It is there to stand beside while
-/// casting; the real client gives it no hand cursor and no click, and the Basic
-/// Campfire a player lights was answering both.
-constexpr uint32_t kGoTypeSpellFocus = 8;
-constexpr uint32_t kGoTypeFishingHole = 25;
 
 bool isDeadUnit(const std::shared_ptr<game::Entity>& entity) {
     auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
@@ -138,9 +130,16 @@ ScenePick pickScene(game::GameHandler& gameHandler,
                 }
             }
         } else if (type == game::ObjectType::GAMEOBJECT) {
-            const bool interactive = !goInfo || (goInfo->type != kGoTypeGeneric &&
-                                                 goInfo->type != kGoTypeSpellFocus &&
-                                                 goInfo->type != kGoTypeFishingHole);
+            // What the real client lets a click use: by type, and by the
+            // flags the server keeps current (in use, not selectable, a
+            // conditional one that is not lit). An object whose template has
+            // not arrived yet is taken as usable until it does.
+            const uint16_t ufFlags = game::fieldIndex(game::UF::GAMEOBJECT_FLAGS);
+            const uint16_t ufDynamic = game::fieldIndex(game::UF::GAMEOBJECT_DYNAMIC);
+            const uint32_t goFlags = ufFlags == 0xFFFF ? 0u : entity->getField(ufFlags);
+            const uint32_t goDynamicLow = ufDynamic == 0xFFFF ? 0u : (entity->getField(ufDynamic) & 0xFFFFu);
+            const bool interactive =
+                !goInfo || gameObjectTakesClick(goInfo->type, goFlags, goDynamicLow);
             // How well the ray is aimed at this one, as a fraction of its own
             // size: nought is dead centre and one is a graze. Ranked by that
             // rather than by which centre is nearest along the ray, because

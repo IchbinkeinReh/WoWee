@@ -49,6 +49,32 @@ inline bool raySphereIntersect(const rendering::Ray& ray, const glm::vec3& cente
     return true;
 }
 
+/// Whether the 3.3.5a client lets a game object be used by a click - gives it a
+/// cursor and answers the click - from its type, GAMEOBJECT_FLAGS and the low
+/// half of GAMEOBJECT_DYNAMIC. Read from the client's per-type object classes:
+/// the ones whose IsInteractable is a plain "no" (generic, spell focus,
+/// transport, map object, duel arbiter, fishing hole, capture point, aura
+/// generator, dungeon difficulty, destructible building, trap door, and the
+/// three types with no class at all), and the checks the others share
+/// (FUN_007112a0): not in use (0x1), not NOT_SELECTABLE (0x10), not marked
+/// no-interact (dynamic 0x4), and a conditional one (flag 0x4) only while it
+/// is lit (dynamic 0x1).
+inline bool gameObjectTakesClick(uint32_t goType, uint32_t flags, uint32_t dynamicLow) {
+    switch (goType) {
+        case 5: case 8: case 11: case 14: case 15: case 16: case 20: case 21:
+        case 25: case 28: case 29: case 30: case 31: case 33: case 35:
+            return false;
+        default:
+            break;
+    }
+    constexpr uint32_t kFlagInUse = 0x1, kFlagInteractCond = 0x4, kFlagNotSelectable = 0x10;
+    constexpr uint32_t kDynActivate = 0x1, kDynNoInteract = 0x4;
+    if (flags & (kFlagInUse | kFlagNotSelectable)) return false;
+    if (dynamicLow & kDynNoInteract) return false;
+    if ((flags & kFlagInteractCond) && !(dynamicLow & kDynActivate)) return false;
+    return true;
+}
+
 /// The parts of picking the two callers disagree about.
 struct ScenePickParams {
     /// Fallback hit sphere for a unit with no render bounds. The right-click

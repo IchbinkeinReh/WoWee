@@ -125,6 +125,7 @@ enum class UF : uint16_t {
 
     // GameObject fields
     GAMEOBJECT_DISPLAYID,
+    GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,
     // MO_TRANSPORT route clock. LEVEL carries the route's period in ms; the high
     // int16 of DYNAMIC carries how far through that period the transport is, as a
