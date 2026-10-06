@@ -1429,12 +1429,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             " tris, grid ", gpuModel.collision.gridCellsX, "x", gpuModel.collision.gridCellsY);
     }
 
-    // Identify idle variation sequences (animation ID 0 = Stand)
-    for (int i = 0; i < static_cast<int>(model.sequences.size()); i++) {
-        if (model.sequences[i].id == 0 && model.sequences[i].duration > 0) {
-            gpuModel.idleVariationIndices.push_back(i);
-        }
-    }
 
     // Batch all GPU uploads (VB, IB, textures) into a single command buffer
     // submission with one fence wait, instead of one fence wait per upload.

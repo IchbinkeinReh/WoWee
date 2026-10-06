@@ -91,7 +91,6 @@ void M2Renderer::seedInstanceAnimation(const M2ModelGPU& model, uint32_t modelId
             instance.idleSequenceIndex = 0;
             instance.animDuration = static_cast<float>(model.sequences[0].duration);
             instance.animTime = static_cast<float>(randRange(std::max(1u, model.sequences[0].duration)));
-            instance.variationTimer = randFloat(rendering::M2_VARIATION_TIMER_MIN_MS, rendering::M2_VARIATION_TIMER_MAX_MS);
         }
 
     auto seedIt = boneSeedInstanceByModel_.find(modelId);
@@ -507,31 +506,33 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
                     instance.animDuration = static_cast<float>(model.sequences[instance.idleSequenceIndex].duration);
                 }
                 instance.animTime = 0.0f;
-                instance.variationTimer = randFloat(rendering::M2_LOOP_VARIATION_TIMER_MIN_MS, rendering::M2_LOOP_VARIATION_TIMER_MAX_MS);
             } else {
                 // Use iterative subtraction instead of fmod() to preserve precision
                 float duration = std::max(1.0f, instance.animDuration);
                 while (instance.animTime >= duration) {
                     instance.animTime -= duration;
                 }
-            }
-        }
-
-        // Idle variation timer
-        if (!instance.playingVariation && !instance.holdAtEnd &&
-            model.idleVariationIndices.size() > 1) {
-            instance.variationTimer -= dtMs;
-            if (instance.variationTimer <= 0.0f) {
-                int pick = static_cast<int>(randRange(static_cast<uint32_t>(model.idleVariationIndices.size())));
-                int newSeq = model.idleVariationIndices[pick];
-                if (newSeq != instance.currentSequenceIndex && newSeq < static_cast<int>(model.sequences.size())) {
-                    blendIntoSequence(model, instance, newSeq);
-                    instance.playingVariation = true;
-                    instance.currentSequenceIndex = newSeq;
-                    instance.animDuration = static_cast<float>(model.sequences[newSeq].duration);
-                    instance.animTime = 0.0f;
-                } else {
-                    instance.variationTimer = randFloat(rendering::M2_IDLE_VARIATION_TIMER_MIN_MS, rendering::M2_IDLE_VARIATION_TIMER_MAX_MS);
+                // At the end of each pass the client rolls the variation chain
+                // of the animation again (FUN_00831fc0 -> FUN_00826e60), which
+                // is how Stand alternates with its fidgets; it never cuts a
+                // pass short on a timer.
+                const int current = instance.currentSequenceIndex;
+                if (current >= 0 && current < static_cast<int>(model.sequences.size())) {
+                    int primary = current;
+                    for (int i = 0; i < static_cast<int>(model.sequences.size()); ++i) {
+                        if (model.sequences[i].id == model.sequences[current].id &&
+                            model.sequences[i].variationIndex == 0) { primary = i; break; }
+                    }
+                    const int next = m2_track::pickSequenceVariation(
+                        model.sequences, primary, static_cast<uint32_t>(std::rand()) & 0x7FFFu);
+                    if (next != current && next >= 0 &&
+                        next < static_cast<int>(model.sequences.size()) &&
+                        model.sequences[next].duration > 0) {
+                        blendIntoSequence(model, instance, next);
+                        instance.currentSequenceIndex = next;
+                        instance.animDuration = static_cast<float>(model.sequences[next].duration);
+                        instance.animTime = std::min(instance.animTime, instance.animDuration - 1.0f);
+                    }
                 }
             }
         }

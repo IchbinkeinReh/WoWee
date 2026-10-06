@@ -189,7 +189,6 @@ struct M2ModelGPU {
     std::vector<pipeline::M2AnimationTrack> colorRGBTracks;
     std::vector<pipeline::M2AnimationTrack> colorAlphaTracks;
     std::vector<pipeline::M2AnimationTrack> textureWeightTracks;
-    std::vector<int> idleVariationIndices;  // Sequence indices for idle variations (animId 0)
 
     [[nodiscard]] bool isValid() const { return vertexBuffer != VK_NULL_HANDLE && indexCount > 0; }
 };
@@ -236,7 +235,6 @@ struct M2Instance {
 
     // Idle variation state
     int idleSequenceIndex = 0;   // Default idle sequence index
-    float variationTimer = 0.0f; // Time until next variation attempt (ms)
     bool playingVariation = false;// Currently playing a one-shot variation
 
     /// Stop at the end of the sequence and stay there.
