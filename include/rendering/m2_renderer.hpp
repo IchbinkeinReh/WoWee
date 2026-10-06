@@ -75,13 +75,6 @@ struct M2ModelGPU {
         // magnified across the whole dome, which is soft at any resolution and
         // softer at a high one.
         bool starLayer = false;
-        /// A cone of light drawn as geometry, picked out by its texture.
-        ///
-        /// Per batch rather than per model, because the model that carries the
-        /// zeppelin's searchlight also carries its fins, its engine, a bike
-        /// and a goblin pedlar - flagging the whole of HordeZepAnimation
-        /// would have softened all of them and cut haze holes in the crew.
-        bool volumetricBeam = false;
         float batchOpacity = 1.0f; // Resolved texture weight opacity (0=transparent, skip batch)
         // The batch's colour record and transparency track, for evaluating
         // them per frame as the client does (FUN_0081fe90 takes the batch's
@@ -114,7 +107,7 @@ struct M2ModelGPU {
     bool collisionStatue = false;
     bool isSmallFoliage = false;    // Small foliage (bushes, grass, plants) - skip during taxi
     bool isInvisibleTrap = false;   // Invisible trap objects (don't render, no collision)
-    bool isGroundDetail = false;    // Ground clutter/detail doodads (special fallback render path)
+    bool isGroundDetail = false;    // Ground clutter/detail doodads (culling distance, density, dedup)
     bool isWaterVegetation = false; // Cattails, reeds, kelp etc. near water (insect spawning)
     bool isFireflyEffect = false;   // Firefly/fireflies M2 (exempt from particle dampeners)
     bool isWaterfall = false;       // Waterfall model (ambient sound + splash particles)
@@ -169,22 +162,6 @@ struct M2ModelGPU {
     bool isKoboldFlame = false;     // Model name matches kobold+(candle/torch/mine) (precomputed)
     bool isSkyBird = false;         // Flying bird/bat doodad - hide until animation range
     bool isLightBeam = false;       // Lighthouse/light-ray beam - distant bones must keep updating
-    bool isVolumetricBeam = false;  // Light drawn as geometry; softened at its silhouette
-    /// Play the sequence forward, then backward, rather than looping it.
-    ///
-    /// A searchlight sweeps one way and then the other. Wrapping its timeline
-    /// at the end of the sequence throws the beam back to where it started in
-    /// a single frame, which reads as a jump - the light is at one side of the
-    /// arc and then, without crossing the middle, at the other. Reversing
-    /// instead is what the sweep actually is.
-    bool pingPongAnim = false;
-    /// Which bones the reversing clock applies to, one byte per bone.
-    ///
-    /// The searchlight shares HordeZepAnimation with the zeppelin's fins and
-    /// propeller, and reversing the whole timeline turned the propeller
-    /// backwards for half of every cycle. Only the bones the beam is actually
-    /// skinned to run backward; everything else keeps looping forward.
-    std::vector<uint8_t> pingPongBones;
     bool isTransportDoodad = false; // Animated ship sail/paddle child
     bool hasTextureAnimation = false; // True if any batch has UV animation
     bool hasTransparentBatches = false; // True if any batch uses alpha-blend or additive (blendMode >= 2)
@@ -322,12 +299,6 @@ struct M2Instance {
     // bound radius), populated by recomputeCachedCullFactors(). The per-frame SSBO
     // upload just multiplies by the smoothed render distance and packs the rest.
     float cachedEffectiveMaxDistSqFactor = 1.0f;  // multiplied by maxRenderDistanceSq each frame
-    /// +1 playing forward, -1 playing back. See M2ModelGPU::pingPongAnim.
-    float animDir = 1.0f;
-    /// The reversing clock, for the bones named in pingPongBones. The ordinary
-    /// animTime beside it keeps looping, so the same model can sweep a beam
-    /// back and forth while its propeller turns one way.
-    float animTimeAlt = 0.0f;
     float cachedPaddedRadius = 0.0f;              // sphere radius used by the cull compute
     const M2ModelGPU* cachedModel = nullptr;  // Avoid per-frame hash lookups
 
@@ -404,10 +375,7 @@ struct M2MaterialUBO {
     float tintR;
     float tintG;
     float tintB;
-    /// Light drawn as geometry - a searchlight cone, a god ray, a shaft
-    /// through a window. The fragment shader fades it out where the surface
-    /// turns away from the eye, so the mesh's silhouette stops being an edge.
-    int32_t volumetricBeam;
+    int32_t unused3;   // was a WoWee-only light-beam softening; kept for the layout
     /// A flame card. Fades out over the top of its own model, so the card's
     /// upper edge is not where the fire stops.
     int32_t unused2;   // was a WoWee-only fire-card fade; kept for the layout

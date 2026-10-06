@@ -63,7 +63,6 @@ layout(location = 5) in vec2 aTexCoord2;
 layout(location = 0) out vec3 FragPos;
 layout(location = 1) out vec3 Normal;
 layout(location = 2) out vec2 TexCoord;
-layout(location = 3) flat out vec3 InstanceOrigin;
 layout(location = 5) out float vFadeAlpha;
 layout(location = 6) flat out int vSkyMode;
 layout(location = 7) flat out float vHighlight;
@@ -108,7 +107,6 @@ void main() {
     vec4 uvLin = instanceData[instIdx].uvLinear;
     TexCoord = vec2(dot(uvLin.xy, baseUV), dot(uvLin.zw, baseUV)) + uvOff;
 
-    InstanceOrigin = model[3].xyz;
     vFadeAlpha = fade;
     vColorMul = instanceData[instIdx].colorMul;
     vSkyMode = push.isFoliage < 0 ? 1 : 0;

@@ -548,20 +548,6 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         if (!instance.cachedModel) continue;
         const M2ModelGPU& model = *instance.cachedModel;
 
-        // The reversing clock, kept beside the ordinary one rather than in
-        // place of it: animTime keeps looping for the rest of the skeleton.
-        if (model.pingPongAnim) {
-            const float dur = std::max(1.0f, instance.animDuration);
-            instance.animTimeAlt += dtMs * instance.animDir;
-            if (instance.animTimeAlt >= dur) {
-                instance.animTimeAlt = dur;
-                instance.animDir = -1.0f;
-            } else if (instance.animTimeAlt <= 0.0f) {
-                instance.animTimeAlt = 0.0f;
-                instance.animDir = 1.0f;
-            }
-        }
-
         // Validate sequence index
         if (instance.currentSequenceIndex < 0 ||
             instance.currentSequenceIndex >= static_cast<int>(model.sequences.size())) {
@@ -1666,12 +1652,11 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     // else (FUN_0081fe90): a blended batch is blended, and an
                     // opaque one is opaque whatever its texture's alpha. It
                     // forces no batch additive and never keys by colour,
-                    // spell or fire alike. Ground clutter is this renderer's
-                    // own and keeps its cutout.
+                    // spell, fire and ground clutter alike: the client draws
+                    // a batch by its material.
                     const bool forceCutout =
                         !m2BlendIsAdditive(batch.blendMode) &&
-                        (model.isGroundDetail ||
-                         m2BatchNeedsAlphaTest(batch.blendMode, batch.hasAlpha));
+                        m2BatchNeedsAlphaTest(batch.blendMode, batch.hasAlpha);
                     const uint8_t effectiveBlendMode = forceCutout ? 1 : batch.blendMode;
 
                     VkPipeline desiredPipeline = forceCutout ? cutoutPipeline_
@@ -1691,14 +1676,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         // outdoor trees) when the camera is inside a WMO.  Disable it; indoor
                         // M2s already look correct from the darker ambient/lighting.
                         mat->interiorDarken = 0.0f;
-                        if (forceCutout) {
-                            mat->alphaTest = model.isGroundDetail ? 3 : 1;
-                        } else {
-                            mat->alphaTest = 0;
-                            if (model.isGroundDetail) mat->unlit = 0;
-                        }
-                        mat->volumetricBeam =
-                            (model.isVolumetricBeam || batch.volumetricBeam) ? 1 : 0;
+                        mat->alphaTest = forceCutout ? 1 : 0;
                         mat->blendMode = batch.blendMode;
                     }
 
@@ -1776,7 +1754,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         }
         float instanceFadeAlpha = fadeAlpha * instance.fade;
         const bool instanceFaded = instance.fade < 0.999f;
-        if (model.isGroundDetail) instanceFadeAlpha *= 0.82f;
 
         bool modelNeedsAnimation = model.hasAnimation && !model.disableAnimation;
         if (modelNeedsAnimation && instance.boneMatrices.empty()) continue;
@@ -1876,12 +1853,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
 
             if (batch.materialUBOMapped) {
                 auto* mat = static_cast<M2MaterialUBO*>(batch.materialUBOMapped);
-                // Here as well as in the opaque pass. A searchlight beam is
-                // additive, so this is the pass that actually draws it - and
-                // setting the flag only in the other one meant the softening
-                // never ran on the one model it was written for.
-                mat->volumetricBeam =
-                    (model.isVolumetricBeam || batch.volumetricBeam) ? 1 : 0;
                 mat->blendMode = batch.blendMode;
                 mat->interiorDarken = 0.0f;
             }
