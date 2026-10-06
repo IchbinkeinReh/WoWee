@@ -5,11 +5,29 @@
     <string name="data_folder_title">Game data</string>
     <string name="data_folder_need_access">WoWee reads the game data from %1$s, and needs access to all files to read a folder outside its own.</string>
     <string name="data_folder_found">Game data found in\n%1$s</string>
-    <string name="data_folder_missing">No game data in\n%1$s\n\nExtract it from your WoW install on a PC and copy the result into this folder, or choose the folder you copied it to.</string>
+    <string name="data_folder_missing">No game data in\n%1$s\n\nExtract it from your WoW install on a PC and copy the result into this folder, choose the folder you copied it to, or unpack a zip of it.</string>
     <string name="data_folder_unsupported">That folder is not on this device\'s storage. Choose one on the internal storage or an SD card.</string>
     <string name="data_folder_grant">Allow access</string>
     <string name="data_folder_start">Start</string>
     <string name="data_folder_choose">Choose folder…</string>
     <string name="data_folder_default">Use /sdcard/wowee</string>
     <string name="data_folder_shortcut">Data folder</string>
+
+    <!-- Unpacking a zip of the data into the folder; see ZipImport. -->
+    <string name="data_folder_zip">Unpack a zip…</string>
+    <string name="data_folder_zip_found">Unpack %1$s</string>
+    <string name="zip_importing">Unpacking %1$s into\n%2$s</string>
+    <string name="zip_progress">%1$d%% · %2$s of %3$s</string>
+    <string name="zip_progress_unknown">%1$s read</string>
+    <string name="zip_finishing">Moving the files into place…</string>
+    <string name="zip_cancel">Cancel</string>
+    <string name="zip_cancelling">Cancelling and removing what was unpacked…</string>
+    <string name="zip_cancelled">Unpacking cancelled. Nothing from the zip was kept.</string>
+    <string name="zip_failed">Could not unpack %1$s:\n%2$s\n\nNothing from the zip was kept.</string>
+    <string name="zip_no_space">Not enough free space for %1$s: %2$s needed, %3$s free.</string>
+    <string name="zip_no_data">The zip holds no manifest.json, at its top or under expansions/&lt;id&gt;/, in its first three folder levels. Zip the extracted Data folder, or its contents.</string>
+    <string name="zip_bad_entry">The zip has an entry that points outside the folder it is unpacked into: %1$s</string>
+    <string name="zip_unreadable">The zip could not be opened.</string>
+    <string name="zip_replace">%1$s already holds game data. Files the zip also has will be replaced.</string>
+    <string name="zip_replace_ok">Unpack</string>
 </resources>

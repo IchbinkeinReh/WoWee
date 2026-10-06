@@ -308,6 +308,28 @@ shows where it is looking. **Choose folder…** picks another folder; a long
 press on the app icon and **Data folder** brings that screen back later. The
 folder is not deleted with the app, so reinstalling keeps the data.
 
+#### Or as one zip
+
+One large file is often easier to get onto a phone than 200,000 small ones.
+Zip the folder and let the app unpack it:
+
+```bash
+cd ~/Data-phone && zip -r -0 ../wowee-data.zip .
+```
+
+On the data screen, **Unpack a zip…** picks the zip with the system file
+picker, wherever it is. A zip named `wowee-data.zip` in `Download/` or in the
+data folder itself is offered without picking. The app unpacks it into the data
+folder with a progress bar, then starts as if the folder had been copied in.
+`manifest.json` may sit at the top of the zip, under `Data/`, or under one more
+folder around that (`wowee/Data/manifest.json`); the app finds it.
+
+The phone needs room for the zip and the unpacked data at once; the zip can be
+deleted afterwards. `-0` stores rather than compresses, which unpacks faster
+and costs little: most of the data is already compressed. Keep the app in front
+while it unpacks - leaving it can get it stopped, and a stopped or cancelled
+unpack removes what it wrote rather than leave half a data set.
+
 | Profile | Size | Reaches |
 |---|---|---|
 | `login` | 787 MB | Login, character selection and creation. No world |

@@ -310,3 +310,16 @@ walking each ADT for the models it references, which is phase 3 work and is not 
 and up. `adb push` and most USB connections still write it, but the player-facing answer is a
 first-run importer that asks for the extracted `Data/` folder through the storage access
 framework, which sidesteps the question entirely.
+
+**Since then:** the data lives in a folder the player chooses, `/sdcard/wowee` by default, read by
+path under all-files access (`DataFolderActivity`). It can also arrive as **one zip**:
+`ZipImport` unpacks a zip picked with `ACTION_OPEN_DOCUMENT`, or a `wowee-data.zip` left in
+`Download/` or in the data folder, into that folder. It streams - `ZipFile` when the picked
+document maps to a path, which gives exact sizes for the progress bar and the free space check;
+otherwise `ZipInputStream` over the provider's stream, with progress by compressed bytes read out
+of `OpenableColumns.SIZE`. Entries go into a hidden staging folder inside the target, are checked
+against `..` and absolute names, and are only moved into place once the whole zip is out and a
+`manifest.json` has been found in its first three levels, which is what tolerates a `Data/` or
+wrapper folder in the zip. Cancel, failure, or a process killed mid-unpack (cleaned up on the next
+start) leave nothing behind. A `.wowee-zip-imported` marker records where the data came from.
+It is not a foreground service, so the screen is kept on and the player is told to stay in the app.
