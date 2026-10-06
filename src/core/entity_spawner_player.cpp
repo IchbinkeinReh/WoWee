@@ -318,6 +318,7 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
                     idleAnim = rendering::anim::STAND;
             }
         }
+        if (idleAnim != rendering::anim::STAND) charRenderer->setRestAnimation(instanceId, idleAnim);
         charRenderer->playAnimation(instanceId, idleAnim, true);
     }
     playerInstances_[guid] = instanceId;

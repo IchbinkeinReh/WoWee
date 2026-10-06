@@ -2109,6 +2109,11 @@ uint32_t CharacterRenderer::createInstance(uint32_t modelId, const glm::vec3& po
     return id;
 }
 
+void CharacterRenderer::setRestAnimation(uint32_t instanceId, uint32_t restAnim) {
+    auto it = instances.find(instanceId);
+    if (it != instances.end()) it->second.restAnimation = restAnim;
+}
+
 void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId, bool loop,
                                       uint32_t oneShotReturnAnim) {
     auto it = instances.find(instanceId);
@@ -2278,10 +2283,13 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
                     }
                 } else {
                     // One-shot animation finished: return to the caller-specified
-                    // resume anim (NPC state emote) or Stand, unless dead
+                    // resume anim (NPC state emote), else the loop the unit
+                    // rests in (sitting, sleeping...), else Stand, unless dead
                     if (inst.currentAnimationId != anim::DEATH) {
                         const uint32_t resumeAnim =
-                            inst.oneShotReturnAnim != 0 ? inst.oneShotReturnAnim : anim::STAND;
+                            inst.oneShotReturnAnim != 0 ? inst.oneShotReturnAnim
+                            : inst.restAnimation != 0  ? inst.restAnimation
+                                                       : anim::STAND;
                         playAnimation(pair.first, resumeAnim, true);
                     } else {
                         // Stay on last frame of death

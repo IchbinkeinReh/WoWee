@@ -417,6 +417,7 @@ void AnimationCallbackHandler::setupCallbacks() {
                 loopAnim = it->second;
         }
         if (!cr->hasAnimation(instanceId, loopAnim)) loopAnim = rendering::anim::STAND;
+        cr->setRestAnimation(instanceId, newState == 0 ? 0 : loopAnim);
         const uint32_t transition = newState == 0 ? from.up : to.down;
         if (transition != 0 && cr->hasAnimation(instanceId, transition)) {
             cr->playAnimation(instanceId, transition, /*loop=*/false, loopAnim);

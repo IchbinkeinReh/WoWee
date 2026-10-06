@@ -1324,6 +1324,7 @@ if (deadCreatureGuids_.count(guid)) {
         charRenderer->playAnimation(instanceId, npcEmoteAnim, true);
     } else if (standLoop != 0 && charRenderer->hasAnimation(instanceId, standLoop)) {
         // Spawned sitting, sleeping, kneeling or as a corpse (creature_addon.bytes1).
+        charRenderer->setRestAnimation(instanceId, standLoop);
         charRenderer->playAnimation(instanceId, standLoop, true);
     } else if (charRenderer->hasAnimation(instanceId, rendering::anim::BIRTH)) {
         // Play birth animation (one-shot) - will return to STAND after

@@ -84,6 +84,10 @@ public:
     // persistent work/state loop instead of idling.
     void playAnimation(uint32_t instanceId, uint32_t animationId, bool loop = true,
                        uint32_t oneShotReturnAnim = 0);
+    /// The loop a unit rests in - its stand state's (sitting, sleeping,
+    /// kneeling...) or 0 for Stand. A one-shot played with no return anim
+    /// goes back to it, so a seated unit that is hit stays seated.
+    void setRestAnimation(uint32_t instanceId, uint32_t restAnim);
     /// Play other animations on each arm alone, until the next playAnimation.
     void setArmAnimations(uint32_t instanceId, uint32_t leftArmAnim, uint32_t rightArmAnim);
 
@@ -273,7 +277,8 @@ private:
         /// The sequence the body is blending out of; see m2_track::SequenceBlend.
         /// Timed on globalSequenceTime, which runs whatever the sequence does.
         m2_track::SequenceBlend sequenceBlend;
-        uint32_t oneShotReturnAnim = 0; // Anim to resume when a one-shot ends (0 = Stand)
+        uint32_t oneShotReturnAnim = 0; // Anim to resume when a one-shot ends (0 = restAnimation)
+        uint32_t restAnimation = 0;     // The stand state's loop, or 0 for Stand
         bool isDead = false;  // Prevents movement while in death state
         std::vector<glm::mat4> boneMatrices;  // Current bone transforms
 
