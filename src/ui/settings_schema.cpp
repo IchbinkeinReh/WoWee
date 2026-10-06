@@ -387,10 +387,6 @@ constexpr SettingDesc kSchema[] = {
     {"micromenu", "Micro menu buttons", SettingKind::Bool, 0, 0, 0, "Interface", "",
      "The row of shortcut buttons to the character sheet, spellbook,\n"
      "talents and the rest.", "", 0},
-    {"checkforupdates", "Check for new versions", SettingKind::Bool, 0, 0, 0, "Interface", "",
-     "Ask GitHub once at startup whether a newer WoWee has been\n"
-     "released, and say so on the login screen. Nothing is downloaded\n"
-     "or installed, and nothing about you is sent.", "", 1},
 
     {"bagscale", "Bag scale", SettingKind::Float, 0.75f, 1.5f, 0.05f, "Interface", "Bags",
      "Size of the bag windows.", "", 1},
@@ -922,6 +918,11 @@ constexpr SettingDesc kSchema[] = {
      "", "lua:ShowingCloak|ShowCloak"},
     {"showhelm", "Show your helm", SettingKind::Bool, 0, 0, 0, "Gameplay", "",
      "The same for the helm.", "", 1, "", "lua:ShowingHelm|ShowHelm"},
+    // On the Gameplay page: the Interface page's two columns are full.
+    {"checkforupdates", "Check for new versions", SettingKind::Bool, 0, 0, 0, "Gameplay", "Updates",
+     "Ask GitHub once at startup whether a newer WoWee has been\n"
+     "released, and say so on the login screen. Nothing is downloaded\n"
+     "or installed, and nothing about you is sent.", "", 1},
 };
 
 }  // namespace

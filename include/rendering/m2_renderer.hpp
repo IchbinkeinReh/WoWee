@@ -1192,7 +1192,6 @@ private:
     /// particle is a quad twice its size across, so the number of pixels it
     /// spans is size x screen height x the projection's vertical scale. Set
     /// each frame in update().
-    float particlePointScale_ = 1.0f;
     float furthestDrawnSq_ = 0.0f;
     bool forceNoCull_ = false;
 
