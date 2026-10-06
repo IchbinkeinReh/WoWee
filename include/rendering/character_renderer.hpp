@@ -28,6 +28,7 @@ namespace rendering {
 
 // Forward declarations
 class Camera;
+class Frustum;
 class VkContext;
 class VkTexture;
 
@@ -97,11 +98,27 @@ public:
     void prepareRender(uint32_t frameIndex);
     /// Which batches a render() call draws. Blended batches leave no depth
     /// behind, so whatever is drawn after them paints over them where it is
-    /// further away: the world draws Opaque, then the doodads, then Blended,
-    /// back to front, so a translucent fin shows what stands behind it.
+    /// further away. The client sorts every model of the scene - doodads and
+    /// units alike - by its distance and draws the blended ones far to near,
+    /// so the world draws Opaque here, and a unit's Blended batches in turn
+    /// among the doodads' (see planBlended and M2Renderer::BlendedInterleave).
     enum class Phase { All, Opaque, Blended };
+    /// onlyInstance: draw that instance alone (0 = all of them).
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                Phase phase = Phase::All);
+                Phase phase = Phase::All, uint32_t onlyInstance = 0);
+
+    /// An instance with blended batches, and its squared distance from the camera.
+    struct BlendedDraw {
+        float distSq;
+        uint32_t instanceId;
+    };
+    /// The instances render(Phase::Blended) would draw, furthest first.
+    std::vector<BlendedDraw> planBlended(const Camera& camera) const;
+    /// The blended batches of one instance.
+    void renderBlendedInstance(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
+                               const Camera& camera, uint32_t instanceId) {
+        render(cmd, perFrameSet, camera, Phase::Blended, instanceId);
+    }
     void recreatePipelines();
     /// The five main-pass pipelines, which initialize() and
     /// recreatePipelines() both need and each used to describe.
@@ -169,6 +186,9 @@ public:
     bool getInstanceKeyBonePivotZ(uint32_t instanceId, int32_t keyBoneId, float& outZ) const;
     bool getInstanceFootZ(uint32_t instanceId, float& outFootZ) const;
     bool getInstancePosition(uint32_t instanceId, glm::vec3& outPos) const;
+    /// The instance's world matrix - position, facing and scale - which an
+    /// effect parented to the unit rides on.
+    bool getInstanceFrame(uint32_t instanceId, glm::mat4& outFrame) const;
 
     /** Debug: Log all available animations for an instance */
     void dumpAnimations(uint32_t instanceId) const;
@@ -506,6 +526,14 @@ private:
     std::unordered_map<uint32_t, CharacterInstance> instances;
     /// The instances a render() call draws, in the order it draws them.
     std::vector<std::pair<uint32_t, CharacterInstance*>> drawOrder_;
+    /// render() is called from two recording threads - the characters' own and
+    /// the one that draws the doodads and takes the blended characters among
+    /// them - and shares the material ring, descriptor cache and drawOrder_.
+    std::mutex renderMutex_;
+    /// Whether an instance is drawn this frame: visible, in range and view, and
+    /// with geometry.
+    bool isDrawCandidate(const CharacterInstance& instance, const glm::vec3& camPos,
+                         const Frustum& frustum, float renderRadiusSq) const;
 
     uint32_t nextInstanceId = 1;
 

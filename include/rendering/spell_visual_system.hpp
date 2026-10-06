@@ -67,13 +67,15 @@ private:
         bool isPrecast;  // true for precast effects (removed on cancel/interrupt)
         uint32_t attachmentId;  // character attachment point to track (0=none/static)
         uint32_t attachInstanceId;  // CharacterRenderer instance the attachment belongs to
-        // An effect with no bone of its own - an aura, an impact - keeps its
-        // spot relative to the unit it was cast on, and moves with it.
+        // An effect with no bone of its own - an aura, an impact - is parented
+        // to the unit it was cast on, as the client's CEffect::UpdateAttachment
+        // parents the effect's model to the unit's: it keeps its spot in the
+        // unit's own frame, so it moves and turns with it.
         bool followsUnit = false;
-        glm::vec3 followOffset{0.0f};
+        glm::vec3 followOffset{0.0f};  // in the unit's frame
     };
 
-    /// Make the effect just added follow its unit, from where it was placed.
+    /// Parent the effect just added to its unit, from where it was placed.
     void followUnitFromSpawn(const glm::vec3& spawnPos);
 
     struct PhysicalProjectile {

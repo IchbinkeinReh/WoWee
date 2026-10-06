@@ -927,7 +927,8 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
     cmdPipelineBarrier2(cmd, dep);
 }
 
-void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera) {
+void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                        const BlendedInterleave* interleave) {
     if (instances.empty() || !opaquePipeline_) {
         return;
     }
@@ -1633,7 +1634,40 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     currentPipeline = opaquePipeline_;
     currentMaterialSet = VK_NULL_HANDLE;
 
+    // Another renderer's blended models that stand behind the next doodad (or
+    // behind every one that is left) are drawn first. They bind a state of
+    // their own, so everything this loop keeps bound is bound again after.
+    const auto drawInterleavedBehind = [&](float distSq) {
+        if (!interleave || !interleave->peek || !interleave->draw) return;
+        float next = 0.0f;
+        bool drew = false;
+        while (interleave->peek(next) && next >= distSq) {
+            interleave->draw();
+            drew = true;
+        }
+        if (!drew) return;
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipelineLayout_, 0, 1, &perFrameSet, 0, nullptr);
+        if (megaBoneSet_[frameIndex]) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout_, 2, 1, &megaBoneSet_[frameIndex], 0, nullptr);
+        } else if (dummyBoneSet_) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout_, 2, 1, &dummyBoneSet_, 0, nullptr);
+        }
+        if (instanceSet_[frameIndex]) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout_, 3, 1, &instanceSet_[frameIndex], 0, nullptr);
+        }
+        currentModelId = UINT32_MAX;
+        currentModel = nullptr;
+        currentModelValid = false;
+        currentPipeline = VK_NULL_HANDLE;
+        currentMaterialSet = VK_NULL_HANDLE;
+    };
+
     for (const auto& entry : transparentVisible_) {
+        drawInterleavedBehind(entry.distSq);
         if (entry.index >= instances.size()) continue;
         auto& instance = instances[entry.index];
 

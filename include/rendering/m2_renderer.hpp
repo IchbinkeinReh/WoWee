@@ -419,7 +419,18 @@ public:
     void prepareRender(uint32_t frameIndex, const Camera& camera);
     /** Dispatch GPU frustum culling compute shader on primary cmd before render pass. */
     void dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, const Camera& camera);
-    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera);
+    /// Lets another renderer draw its own blended models among this one's.
+    /// The client sorts every model of the scene by its distance and draws the
+    /// blended ones far to near, units and doodads together; here the units
+    /// are another renderer's, so its next one is offered before each doodad
+    /// it stands behind. peek gives the squared distance of the next one, or
+    /// false when none is left; draw draws it.
+    struct BlendedInterleave {
+        std::function<bool(float&)> peek;
+        std::function<void()> draw;
+    };
+    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                const BlendedInterleave* interleave = nullptr);
 
     /** Set the HiZ system for occlusion culling (Phase 6.3). nullptr disables HiZ. */
     void setHiZSystem(HiZSystem* hiz) { hizSystem_ = hiz; }

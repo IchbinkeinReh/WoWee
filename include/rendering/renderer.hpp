@@ -499,11 +499,12 @@ private:
     static constexpr uint32_t SEC_M2        = 5;  // M2 + particles + glow (worker 3)
     static constexpr uint32_t SEC_POST      = 6;  // water + weather + effects (worker 4)
     static constexpr uint32_t SEC_IMGUI     = 7;  // ImGui (main thread, non-FSR only)
-    // Blended batches of the characters, recorded by the characters' worker
-    // and executed after SEC_M2, so they composite over the doodads' too.
-    static constexpr uint32_t SEC_CHARS_BLENDED = 8;
-    static constexpr uint32_t NUM_SECONDARIES = 9;
+    static constexpr uint32_t NUM_SECONDARIES = 8;
     static constexpr uint32_t NUM_WORKERS = 5;
+
+    /// The doodads and, among their blended batches, the characters' own, by
+    /// distance. withCharacters: whether the characters draw at all.
+    void renderM2Models(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, bool withCharacters);
 
     // Per-worker command pools (thread-safe: one pool per thread)
     VkCommandPool workerCmdPools_[NUM_WORKERS] = {};

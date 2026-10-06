@@ -2730,16 +2730,87 @@ void CharacterRenderer::prepareRender(uint32_t frameIndex) {
     }
 }
 
+namespace {
+
+// Default frustum-cull radius when model bounds aren't available.
+// 4.0 covers Tauren, mounted characters, and most creature models.
+constexpr float kDefaultCharacterCullRadius = 4.0f;
+
+float characterRenderRadiusSq() {
+    const float renderRadius = static_cast<float>(envSizeOrDefault("WOWEE_CHAR_RENDER_RADIUS", 130));
+    return renderRadius * renderRadius;
+}
+
+/// Whether any batch of the model is blended (blend mode 2 and up).
+template <class Model>
+bool modelHasBlendedBatch(const Model& gpuModel) {
+    const auto& mats = gpuModel.data.materials;
+    return std::any_of(gpuModel.data.batches.begin(), gpuModel.data.batches.end(),
+                       [&mats](const pipeline::M2Batch& b) {
+                           return b.materialIndex < mats.size() && mats[b.materialIndex].blendMode >= 2;
+                       });
+}
+
+} // namespace
+
+bool CharacterRenderer::isDrawCandidate(const CharacterInstance& instance, const glm::vec3& camPos,
+                                        const Frustum& frustum, float renderRadiusSq) const {
+    // Skip invisible instances (e.g., player in first-person mode)
+    if (!instance.visible) return false;
+
+    // Character instance culling: test both distance and frustum visibility
+    if (!instance.hasOverrideModelMatrix && !instance.isSceneModel) {
+        const glm::vec3 toInst = instance.position - camPos;
+        // Distance cull: skip if beyond render radius
+        if (glm::dot(toInst, toInst) > renderRadiusSq) return false;
+
+        // Compute per-instance bounding radius from model data when available.
+        float cullRadius = kDefaultCharacterCullRadius;
+        auto mIt = models.find(instance.modelId);
+        if (mIt != models.end()) {
+            const float modelR = mIt->second.data.boundRadius;
+            if (modelR > 0.01f)
+                cullRadius = std::max(kDefaultCharacterCullRadius, modelR * std::max(0.001f, instance.scale));
+        }
+
+        // Frustum cull: skip if outside view frustum
+        if (!frustum.intersectsSphere(instance.position, cullRadius)) return false;
+    }
+
+    if (!instance.cachedModel) return false;
+    // Skip models without GPU buffers
+    if (!instance.cachedModel->vertexBuffer) return false;
+    // Skip fully transparent instances
+    return instance.opacity > 0.0f;
+}
+
+std::vector<CharacterRenderer::BlendedDraw> CharacterRenderer::planBlended(const Camera& camera) const {
+    std::vector<BlendedDraw> plan;
+    if (instances.empty() || !opaquePipeline_) return plan;
+    const glm::vec3 camPos = camera.getPosition();
+    Frustum frustum;
+    frustum.extractFromMatrix(camera.getViewProjectionMatrix());
+    const float renderRadiusSq = characterRenderRadiusSq();
+    for (const auto& [id, instance] : instances) {
+        if (!isDrawCandidate(instance, camPos, frustum, renderRadiusSq)) continue;
+        if (!modelHasBlendedBatch(*instance.cachedModel)) continue;
+        const glm::vec3 at = instance.hasOverrideModelMatrix
+            ? glm::vec3(instance.overrideModelMatrix[3]) : instance.position;
+        const glm::vec3 d = at - camPos;
+        plan.push_back({glm::dot(d, d), id});
+    }
+    std::sort(plan.begin(), plan.end(),
+              [](const BlendedDraw& a, const BlendedDraw& b) { return a.distSq > b.distSq; });
+    return plan;
+}
+
 void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                               Phase phase) {
+                               Phase phase, uint32_t onlyInstance) {
     if (instances.empty() || !opaquePipeline_) {
         return;
     }
-    const float renderRadius = static_cast<float>(envSizeOrDefault("WOWEE_CHAR_RENDER_RADIUS", 130));
-    const float renderRadiusSq = renderRadius * renderRadius;
-    // Default frustum-cull radius when model bounds aren't available.
-    // 4.0 covers Tauren, mounted characters, and most creature models.
-    constexpr float kDefaultCharacterCullRadius = 4.0f;
+    std::lock_guard<std::mutex> renderLock(renderMutex_);
+    const float renderRadiusSq = characterRenderRadiusSq();
     const glm::vec3 camPos = camera.getPosition();
 
     // Extract frustum planes for per-instance visibility testing
@@ -2820,68 +2891,24 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
     VkPipeline currentPipeline = opaquePipeline_;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, currentPipeline);
 
-    // The blended phase draws the furthest instance first, so each one
-    // composites over everything behind it.
+    // One instance alone, or all of them. A caller drawing several blended
+    // instances between a doodad renderer's own orders them far to near.
     drawOrder_.clear();
-    for (auto& pair : instances) drawOrder_.emplace_back(pair.first, &pair.second);
-    if (phase == Phase::Blended) {
-        const auto distSqOf = [&camPos](const CharacterInstance* inst) {
-            const glm::vec3 at = inst->hasOverrideModelMatrix
-                ? glm::vec3(inst->overrideModelMatrix[3]) : inst->position;
-            const glm::vec3 d = at - camPos;
-            return glm::dot(d, d);
-        };
-        std::sort(drawOrder_.begin(), drawOrder_.end(), [&](const auto& a, const auto& b) {
-            return distSqOf(a.second) > distSqOf(b.second);
-        });
+    if (onlyInstance != 0) {
+        auto it = instances.find(onlyInstance);
+        if (it != instances.end()) drawOrder_.emplace_back(it->first, &it->second);
+    } else {
+        for (auto& pair : instances) drawOrder_.emplace_back(pair.first, &pair.second);
     }
 
     for (const auto& [instanceId, instancePtr] : drawOrder_) {
         auto& instance = *instancePtr;
 
-        // Skip invisible instances (e.g., player in first-person mode)
-        if (!instance.visible) continue;
-
-        // Character instance culling: test both distance and frustum visibility
-        if (!instance.hasOverrideModelMatrix && !instance.isSceneModel) {
-            glm::vec3 toInst = instance.position - camPos;
-            float distSq = glm::dot(toInst, toInst);
-
-            // Distance cull: skip if beyond render radius
-            if (distSq > renderRadiusSq) continue;
-
-            // Compute per-instance bounding radius from model data when available.
-            float cullRadius = kDefaultCharacterCullRadius;
-            auto mIt = models.find(instance.modelId);
-            if (mIt != models.end()) {
-                float modelR = mIt->second.data.boundRadius;
-                if (modelR > 0.01f)
-                    cullRadius = std::max(kDefaultCharacterCullRadius, modelR * std::max(0.001f, instance.scale));
-            }
-
-            // Frustum cull: skip if outside view frustum
-            if (!frustum.intersectsSphere(instance.position, cullRadius)) continue;
-        }
-
-        if (!instance.cachedModel) continue;
+        if (!isDrawCandidate(instance, camPos, frustum, renderRadiusSq)) continue;
         const auto& gpuModel = *instance.cachedModel;
 
-        // Skip models without GPU buffers
-        if (!gpuModel.vertexBuffer) continue;
-
-        // Skip fully transparent instances
-        if (instance.opacity <= 0.0f) continue;
-
         // Nothing to draw in the blended phase for a model with no blended batch.
-        if (phase == Phase::Blended) {
-            const auto& mats = gpuModel.data.materials;
-            const bool anyBlended = std::any_of(
-                gpuModel.data.batches.begin(), gpuModel.data.batches.end(),
-                [&mats](const pipeline::M2Batch& b) {
-                    return b.materialIndex < mats.size() && mats[b.materialIndex].blendMode >= 2;
-                });
-            if (!anyBlended) continue;
-        }
+        if (phase == Phase::Blended && !modelHasBlendedBatch(gpuModel)) continue;
 
         // Set model matrix (use override for weapon instances)
         glm::mat4 modelMat = instance.hasOverrideModelMatrix
@@ -4420,6 +4447,14 @@ bool CharacterRenderer::getInstancePosition(uint32_t instanceId, glm::vec3& outP
     auto it = instances.find(instanceId);
     if (it == instances.end()) return false;
     outPos = it->second.position;
+    return true;
+}
+
+bool CharacterRenderer::getInstanceFrame(uint32_t instanceId, glm::mat4& outFrame) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return false;
+    outFrame = it->second.hasOverrideModelMatrix ? it->second.overrideModelMatrix
+                                                 : getModelMatrix(it->second);
     return true;
 }
 

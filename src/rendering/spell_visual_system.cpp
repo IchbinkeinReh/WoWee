@@ -567,10 +567,10 @@ void SpellVisualSystem::followUnitFromSpawn(const glm::vec3& spawnPos) {
     auto& added = activeSpellVisuals_.back();
     if (added.attachmentId != 0 || added.attachInstanceId == 0) return;
     auto* charRenderer = renderer_->getCharacterRenderer();
-    glm::vec3 unitPos;
-    if (!charRenderer || !charRenderer->getInstancePosition(added.attachInstanceId, unitPos)) return;
+    glm::mat4 unitFrame;
+    if (!charRenderer || !charRenderer->getInstanceFrame(added.attachInstanceId, unitFrame)) return;
     added.followsUnit = true;
-    added.followOffset = spawnPos - unitPos;
+    added.followOffset = glm::vec3(glm::inverse(unitFrame) * glm::vec4(spawnPos, 1.0f));
 }
 
 void SpellVisualSystem::update(float deltaTime) {
@@ -585,18 +585,19 @@ void SpellVisualSystem::update(float deltaTime) {
             m2Renderer_->removeInstance(it->instanceId);
             it = activeSpellVisuals_.erase(it);
         } else {
-            // Update position for bone-tracked effects - follow the CASTER's
-            // hands/chest/head, not the local player's.
+            // An effect rides on its unit's whole transform, turning with it:
+            // the attachment point's for a hand, chest or head effect - the
+            // CASTER's, not the local player's - and the unit's own otherwise.
             if (it->attachmentId != 0 && it->attachInstanceId != 0 && charRenderer) {
                 glm::mat4 attachMat;
                 if (charRenderer->getAttachmentTransform(it->attachInstanceId, it->attachmentId, attachMat)) {
-                    glm::vec3 bonePos = glm::vec3(attachMat[3]);
-                    m2Renderer_->setInstancePosition(it->instanceId, bonePos);
+                    m2Renderer_->setInstanceTransform(it->instanceId, attachMat);
                 }
             } else if (it->followsUnit && charRenderer) {
-                glm::vec3 unitPos;
-                if (charRenderer->getInstancePosition(it->attachInstanceId, unitPos)) {
-                    m2Renderer_->setInstancePosition(it->instanceId, unitPos + it->followOffset);
+                glm::mat4 unitFrame;
+                if (charRenderer->getInstanceFrame(it->attachInstanceId, unitFrame)) {
+                    m2Renderer_->setInstanceTransform(
+                        it->instanceId, glm::translate(unitFrame, it->followOffset));
                 }
             }
             ++it;

@@ -2958,7 +2958,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 VkCommandBuffer cmd = beginSecondary(SEC_M2);
                 setSecondaryViewportScissor(cmd);
                 const auto tBegin = std::chrono::steady_clock::now();
-                m2Renderer->render(cmd, perFrameSet, *camera);
+                renderM2Models(cmd, perFrameSet, !skipChars);
                 const auto tModels = std::chrono::steady_clock::now();
                 m2Renderer->renderM2Particles(cmd, perFrameSet);
                 const auto tParts = std::chrono::steady_clock::now();
@@ -3038,16 +3038,6 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                                           CharacterRenderer::Phase::Opaque);
             }
             vkEndCommandBuffer(cmd);
-
-            // Same worker, one after the other: the second shares the renderer's
-            // per-frame state with the first.
-            VkCommandBuffer blendedCmd = beginSecondary(SEC_CHARS_BLENDED);
-            setSecondaryViewportScissor(blendedCmd);
-            if (characterRenderer && camera && !skipChars) {
-                characterRenderer->render(blendedCmd, perFrameSet, *camera,
-                                          CharacterRenderer::Phase::Blended);
-            }
-            vkEndCommandBuffer(blendedCmd);
             return std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
         });
@@ -3144,8 +3134,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         }
 
         // --- Execute all secondary buffers in correct draw order ---
-        VkCommandBuffer validCmds[9];
-        const char* validLabels[9];
+        VkCommandBuffer validCmds[8];
+        const char* validLabels[8];
         uint32_t numCmds = 0;
         // Terrain first, then the sky. Every sky layer sits on the far plane
         // and depth-tests against what is already there, so drawing it after
@@ -3168,7 +3158,6 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         queue(secondaryCmds_[SEC_CHARS][frameIdx], "characters");
         if (m2Renderer && camera && !skipM2)
             queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
-        queue(secondaryCmds_[SEC_CHARS_BLENDED][frameIdx], "characters blended");
         queue(secondaryCmds_[SEC_POST][frameIdx], "water/effects");
 
         // One at a time, with a mark after each.
@@ -3260,18 +3249,12 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             }
             m2Renderer->prepareRender(frameIdx, *camera);
             auto m2Start = std::chrono::steady_clock::now();
-            m2Renderer->render(currentCmd, perFrameSet, *camera);
+            renderM2Models(currentCmd, perFrameSet, !skipChars);
             m2Renderer->renderM2Particles(currentCmd, perFrameSet);
             m2Renderer->renderM2Ribbons(currentCmd, perFrameSet);
             if (vkCtx) vkCtx->gpuMark(currentCmd, "m2");
             lastM2RenderMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - m2Start).count();
-        }
-
-        if (characterRenderer && camera && !skipChars) {
-            characterRenderer->render(currentCmd, perFrameSet, *camera,
-                                      CharacterRenderer::Phase::Blended);
-            if (vkCtx) vkCtx->gpuMark(currentCmd, "characters blended");
         }
 
         if (waterRenderer && camera && !waterDrawsInContinuePass()) {
@@ -4209,16 +4192,6 @@ bool Renderer::createSecondaryCommandResources() {
         }
     }
 
-    // The characters' blended buffer comes from the pool of the worker that
-    // records the characters' opaque one (index 2 above).
-    allocInfo.commandPool = workerCmdPools_[2];
-    for (uint32_t f = 0; f < MAX_FRAMES; ++f) {
-        if (vkAllocateCommandBuffers(device, &allocInfo, &secondaryCmds_[SEC_CHARS_BLENDED][f]) != VK_SUCCESS) {
-            LOG_ERROR("Failed to allocate blended characters secondary buffer f=", f);
-            return false;
-        }
-    }
-
     const uint32_t mainSecondaries[] = { SEC_SKY, SEC_SELECTION, SEC_IMGUI };
     for (uint32_t idx : mainSecondaries) {
         allocInfo.commandPool = mainSecondaryCmdPool_;
@@ -4282,6 +4255,30 @@ VkCommandBuffer Renderer::beginSecondary(uint32_t secondaryIndex) {
                   " frame ", frame, " result=", static_cast<int>(result));
     }
     return cmd;
+}
+
+void Renderer::renderM2Models(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, bool withCharacters) {
+    // The client keeps every model of the scene - doodads and units alike - in
+    // one list sorted by distance, and draws the blended ones far to near. The
+    // doodads are drawn here; the characters' opaque batches were drawn with
+    // the characters, and their blended ones are offered to the doodads' loop,
+    // each before the nearest doodad it stands behind.
+    std::vector<CharacterRenderer::BlendedDraw> plan;
+    if (withCharacters && characterRenderer) plan = characterRenderer->planBlended(*camera);
+    size_t next = 0;
+    const M2Renderer::BlendedInterleave among{
+        .peek = [&](float& distSq) {
+            if (next >= plan.size()) return false;
+            distSq = plan[next].distSq;
+            return true;
+        },
+        .draw = [&] {
+            characterRenderer->renderBlendedInstance(cmd, perFrameSet, *camera, plan[next++].instanceId);
+        }};
+    m2Renderer->render(cmd, perFrameSet, *camera, &among);
+    // Whatever stands in front of every doodad, or when the doodad pass drew
+    // nothing at all.
+    while (next < plan.size()) among.draw();
 }
 
 void Renderer::setSecondaryViewportScissor(VkCommandBuffer cmd) {
