@@ -286,7 +286,11 @@ inline void computeBoneMatrices(const M2ModelGPU& model, M2Instance& instance,
                 face[0] = glm::vec4(toCamera, 0.0f);
                 face[1] = glm::vec4(right, 0.0f);
                 face[2] = glm::vec4(trueUp, 0.0f);
-                local *= face;
+                // The authored rotation does not go: it turns the card in its own
+                // frame, about the axis that faces the viewer, which is how a
+                // spinning flare spins. Dropping it left the power orb's swirl
+                // standing still.
+                local *= face * glm::toMat4(rot);
             } else {
                 local *= glm::toMat4(rot);
             }
