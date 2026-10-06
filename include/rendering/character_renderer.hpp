@@ -4,6 +4,7 @@
 #include "rendering/shadow_params.hpp"
 
 #include "pipeline/m2_loader.hpp"
+#include "rendering/m2_track_sampler.hpp"
 #include "pipeline/blp_loader.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
@@ -268,6 +269,9 @@ private:
         float animationTime = 0.0f;
         float globalSequenceTime = 0.0f; // Separate timer for global sequences (accumulates without wrapping at sequence duration)
         bool animationLoop = true;
+        /// The sequence the body is blending out of; see m2_track::SequenceBlend.
+        /// Timed on globalSequenceTime, which runs whatever the sequence does.
+        m2_track::SequenceBlend sequenceBlend;
         uint32_t oneShotReturnAnim = 0; // Anim to resume when a one-shot ends (0 = Stand)
         bool isDead = false;  // Prevents movement while in death state
         std::vector<glm::mat4> boneMatrices;  // Current bone transforms
@@ -333,7 +337,8 @@ private:
     void calculateBindPose(M2ModelGPU& gpuModel);
     void calculateBoneMatrices(CharacterInstance& instance);
     glm::mat4 getBoneTransform(const pipeline::M2Bone& bone, float animTime, float globalSeqTime,
-                               int sequenceIndex, const std::vector<uint32_t>& globalSeqDurations);
+                               int sequenceIndex, const std::vector<uint32_t>& globalSeqDurations,
+                               const m2_track::BlendSample& blend);
     [[nodiscard]] glm::mat4 getModelMatrix(const CharacterInstance& instance) const;
     void destroyModelGPU(M2ModelGPU& gpuModel, bool defer = false);
     void destroyInstanceBones(CharacterInstance& inst, bool defer = false);

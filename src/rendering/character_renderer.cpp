@@ -2128,6 +2128,14 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
         instance.isDead = false;  // Respawned
     }
 
+    // What is playing now, for the blend out of it below.
+    const int previousSequence = instance.currentSequenceIndex;
+    const float previousTime = instance.animationTime;
+    const bool previousLoops = instance.animationLoop;
+    const bool previousFinished = !previousLoops && previousSequence >= 0 &&
+        static_cast<size_t>(previousSequence) < model.sequences.size() &&
+        previousTime >= static_cast<float>(model.sequences[previousSequence].duration);
+
     // Find animation sequence index by ID
     instance.currentAnimationId = animationId;
     instance.currentSequenceIndex = -1;
@@ -2164,6 +2172,15 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
             // First time seeing this missing animation for this model
             LOG_WARNING("Animation ", animationId, " not found in model ", mId, ", using default");
         }
+    }
+
+    // Blend from the old pose over the new sequence's blendTime, as the
+    // client's FUN_00826c40 does for every animation a unit is told to play.
+    if (instance.currentSequenceIndex >= 0) {
+        m2_track::beginSequenceBlend(
+            instance.sequenceBlend, instance.globalSequenceTime, previousSequence, previousTime,
+            previousLoops, previousFinished, instance.currentSequenceIndex,
+            model.sequences[instance.currentSequenceIndex].blendTime, model.sequences);
     }
 }
 
@@ -2468,13 +2485,22 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
     const bool armsOwnSequences = (instance.armSequenceIndex[0] >= 0 || instance.armSequenceIndex[1] >= 0) &&
                                   instance.boneArm.size() == numBones;
 
+    // The pose the body is blending out of, the same for every bone: the
+    // client sets the state on the root and the rest inherit it (FUN_0082f0f0).
+    const m2_track::BlendSample bodyBlend = m2_track::currentBlend(
+        instance.sequenceBlend, instance.globalSequenceTime, model.sequences,
+        instance.currentSequenceIndex, instance.animationTime);
+
     for (size_t i = 0; i < numBones; i++) {
         const auto& bone = model.bones[i];
 
         int sequence = instance.currentSequenceIndex;
         float time = instance.animationTime;
+        m2_track::BlendSample blend = bodyBlend;
         const int arm = armsOwnSequences ? instance.boneArm[i] : -1;
         if (arm >= 0 && instance.armSequenceIndex[arm] >= 0) {
+            // An arm on a sequence of its own does not take the body's old pose.
+            blend = {};
             sequence = instance.armSequenceIndex[arm];
             const float duration = static_cast<float>(model.sequences[sequence].duration);
             if (duration > 0.0f) {
@@ -2485,7 +2511,7 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
         // Local transform includes pivot bracket: T(pivot)*T*R*S*T(-pivot)
         // At rest this is identity, so no separate bind pose is needed
         glm::mat4 localTransform = getBoneTransform(bone, time, instance.globalSequenceTime,
-                                                    sequence, gsd);
+                                                    sequence, gsd, blend);
 
         if (bone.keyBoneId == kKeyBoneSpineLow && instance.torsoYawOverrideRad != 0.0f) {
             glm::mat4 extraYaw = glm::translate(glm::mat4(1.0f), bone.pivot)
@@ -2532,19 +2558,17 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
 }
 
 glm::mat4 CharacterRenderer::getBoneTransform(const pipeline::M2Bone& bone, float animTime, float globalSeqTime,
-                                               int sequenceIndex, const std::vector<uint32_t>& globalSeqDurations) {
+                                               int sequenceIndex, const std::vector<uint32_t>& globalSeqDurations,
+                                               const m2_track::BlendSample& blend) {
     // Resolve global sequences: bones with globalSequence >= 0 use sequence 0
     // with time wrapped at the global sequence duration, independent of the
-    // character's current animation.
-    glm::vec3 translation = m2_track::sampleVec3(
-        bone.translation, sequenceIndex, animTime, globalSeqTime,
-        globalSeqDurations, glm::vec3(0.0f));
-    glm::quat rotation = m2_track::sampleQuat(
-        bone.rotation, sequenceIndex, animTime, globalSeqTime,
-        globalSeqDurations);
-    glm::vec3 scale = m2_track::sampleVec3(
-        bone.scale, sequenceIndex, animTime, globalSeqTime,
-        globalSeqDurations, glm::vec3(1.0f));
+    // character's current animation. Those never blend; the rest move toward
+    // the pose of the sequence being left by the blend's weight.
+    const m2_track::BoneTRS trs = m2_track::sampleBone(bone, sequenceIndex, animTime, globalSeqTime,
+                                                       globalSeqDurations, blend);
+    const glm::vec3& translation = trs.translation;
+    const glm::quat& rotation = trs.rotation;
+    const glm::vec3& scale = trs.scale;
 
     // M2 bone transform: T(pivot) * T(trans) * R(rot) * S(scale) * T(-pivot).
     // Build directly instead of chaining glm::translate/rotate/scale (each of

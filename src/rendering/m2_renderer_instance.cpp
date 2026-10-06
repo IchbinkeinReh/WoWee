@@ -116,6 +116,8 @@ void M2Renderer::setInstanceAnimationHeld(uint32_t instanceId, uint32_t animatio
     const auto& seqs = inst.cachedModel->sequences;
     for (int i = 0; i < static_cast<int>(seqs.size()); ++i) {
         if (seqs[i].id != animationId) continue;
+        // A door jumped straight to its end state has no old pose to leave.
+        if (!skipToEnd) blendIntoSequence(*inst.cachedModel, inst, i);
         inst.currentSequenceIndex = i;
         inst.animDuration = static_cast<float>(seqs[i].duration);
         inst.playingVariation = false;   // not a variation: it does not go back
@@ -140,6 +142,7 @@ void M2Renderer::setInstanceAnimation(uint32_t instanceId, uint32_t animationId,
     // Find the first sequence matching the requested animation ID
     for (int i = 0; i < static_cast<int>(seqs.size()); ++i) {
         if (seqs[i].id == animationId) {
+            blendIntoSequence(*inst.cachedModel, inst, i);
             inst.currentSequenceIndex = i;
             inst.animDuration = static_cast<float>(seqs[i].duration);
             inst.animTime = 0.0f;

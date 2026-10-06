@@ -216,6 +216,21 @@ inline glm::vec3 closestPointOnTriangle(const glm::vec3& p,
 /// keeps its glow on bone 0, flagged 0x8.
 constexpr uint32_t kM2BoneSphericalBillboard = 0x8;
 
+/// Note a switch from the instance's sequence to `newSequence`, so its bones
+/// blend out of the old pose over the new sequence's blendTime - the doodad's
+/// CM2Model goes through the same FUN_00826c40 a unit does, the idle
+/// variations included (FUN_00831fc0). Call before the sequence changes.
+inline void blendIntoSequence(const M2ModelGPU& model, M2Instance& instance, int newSequence) {
+    if (newSequence < 0 || static_cast<size_t>(newSequence) >= model.sequences.size()) return;
+    const bool loops = !instance.holdAtEnd && !instance.playingVariation;
+    const bool finished = !loops && instance.animDuration > 0.0f &&
+                          instance.animTime >= instance.animDuration;
+    m2_track::beginSequenceBlend(instance.sequenceBlend, instance.globalSequenceTime,
+                                 instance.currentSequenceIndex, instance.animTime, loops, finished,
+                                 newSequence, model.sequences[newSequence].blendTime,
+                                 model.sequences);
+}
+
 /// Bone transforms for one instance.
 ///
 /// `cameraPosWorld` is what a billboard bone turns toward; pass nullptr and
@@ -227,18 +242,19 @@ inline void computeBoneMatrices(const M2ModelGPU& model, M2Instance& instance,
     if (numBones == 0) return;
     instance.boneMatrices.resize(numBones);
     const auto& gsd = model.globalSequenceDurations;
+    // The pose of the sequence being left, for every bone alike (FUN_0082f0f0).
+    const m2_track::BlendSample blend = m2_track::currentBlend(
+        instance.sequenceBlend, instance.globalSequenceTime, model.sequences,
+        instance.currentSequenceIndex, instance.animTime);
 
     for (size_t i = 0; i < numBones; i++) {
         const auto& bone = model.bones[i];
-        glm::vec3 trans = m2_track::sampleVec3(
-            bone.translation, instance.currentSequenceIndex, instance.animTime,
-            instance.globalSequenceTime, gsd, glm::vec3(0.0f));
-        glm::quat rot = m2_track::sampleQuat(
-            bone.rotation, instance.currentSequenceIndex, instance.animTime,
-            instance.globalSequenceTime, gsd);
-        glm::vec3 scl = m2_track::sampleVec3(
-            bone.scale, instance.currentSequenceIndex, instance.animTime,
-            instance.globalSequenceTime, gsd, glm::vec3(1.0f));
+        const m2_track::BoneTRS trs = m2_track::sampleBone(
+            bone, instance.currentSequenceIndex, instance.animTime,
+            instance.globalSequenceTime, gsd, blend);
+        const glm::vec3& trans = trs.translation;
+        const glm::quat& rot = trs.rotation;
+        glm::vec3 scl = trs.scale;
 
         if (scl.x < 0.001f) scl.x = 1.0f;
         if (scl.y < 0.001f) scl.y = 1.0f;

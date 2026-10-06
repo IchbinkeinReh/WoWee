@@ -8,6 +8,7 @@
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/grass_clearing.hpp"
 #include "rendering/m2_model_classifier.hpp"
+#include "rendering/m2_track_sampler.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -228,6 +229,9 @@ struct M2Instance {
     float animSpeed = 1.0f;      // Animation playback speed
     int currentSequenceIndex = 0;// Index into sequences array
     float animDuration = 0.0f;   // Duration of current animation (ms)
+    /// The sequence the bones are blending out of, timed on globalSequenceTime;
+    /// see m2_track::SequenceBlend and blendIntoSequence.
+    m2_track::SequenceBlend sequenceBlend;
     std::vector<glm::mat4> boneMatrices;
 
     // Idle variation state

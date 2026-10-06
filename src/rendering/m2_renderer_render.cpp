@@ -500,6 +500,7 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
                 instance.animTime = instance.animDuration;
                 instance.animSpeed = 0.0f;
             } else if (instance.playingVariation) {
+                blendIntoSequence(model, instance, instance.idleSequenceIndex);
                 instance.playingVariation = false;
                 instance.currentSequenceIndex = instance.idleSequenceIndex;
                 if (instance.idleSequenceIndex < static_cast<int>(model.sequences.size())) {
@@ -524,6 +525,7 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
                 int pick = static_cast<int>(randRange(static_cast<uint32_t>(model.idleVariationIndices.size())));
                 int newSeq = model.idleVariationIndices[pick];
                 if (newSeq != instance.currentSequenceIndex && newSeq < static_cast<int>(model.sequences.size())) {
+                    blendIntoSequence(model, instance, newSeq);
                     instance.playingVariation = true;
                     instance.currentSequenceIndex = newSeq;
                     instance.animDuration = static_cast<float>(model.sequences[newSeq].duration);

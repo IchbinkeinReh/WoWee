@@ -2143,6 +2143,13 @@ target_link_libraries(test_m2_color_track PRIVATE catch2_main)
 add_test(NAME m2_color_track COMMAND test_m2_color_track)
 register_test_target(test_m2_color_track)
 
+# ── test_m2_sequence_blend ───────────────────────────────────
+# Blending out of the sequence a model leaves, as FUN_00826c40 and
+# FUN_0082f0f0 do: smoothstep weight over the new sequence's blendTime, the
+# old sequence running on, and each track mixed toward its old pose.
+wowee_add_test(test_m2_sequence_blend
+    SOURCES test_m2_sequence_blend.cpp)
+
 # ── test_dbc_layout_columns ──────────────────────────────────
 # Every column a layout names has to exist in the file it describes. A DBC
 # asked for a field past the end answers zero for every row, forever, which
