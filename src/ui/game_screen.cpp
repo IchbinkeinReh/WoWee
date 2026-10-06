@@ -1143,21 +1143,47 @@ const char* objectCursorPath(uint32_t goType) {
     switch (goType) {
         case 2:  return "Interface\\Cursor\\Quest.blp";
         case 3:  return "Interface\\Cursor\\LootAll.blp";
+        case 9:  return "Interface\\Cursor\\Inspect.blp";   // text: a book or plaque
         case 17: return "Interface\\Cursor\\Fishing.blp";
         case 19: return "Interface\\Cursor\\Mail.blp";
+        case 34: return "Interface\\Cursor\\Buy.blp";       // guild bank
         default: return "Interface\\Cursor\\Interact.blp";
     }
 }
 
-/// Interface\\Cursor\\Buy.blp under the pointer while it is over a vendor.
+/// The cursor the 3.3.5 client gives a friendly unit, from its NPC flags, in
+/// the client's own order (FUN_004f7a50): the first flag it finds decides.
+/// Null for a unit that is none of these - the plain pointer, as there.
+const char* friendlyUnitCursorPath(uint32_t npcFlags) {
+    constexpr uint32_t kPetitioner = 0x00040000, kTabardDesigner = 0x00080000,
+                       kBattlemaster = 0x00100000, kStableMaster = 0x00400000,
+                       kGuildBanker = 0x00800000, kSpellClick = 0x01000000;
+    using namespace game;
+    if (npcFlags & NPC_FLAG_REPAIR)        return "Interface\\Cursor\\RepairNPC.blp";
+    if (npcFlags & NPC_FLAG_INNKEEPER)     return "Interface\\Cursor\\Innkeeper.blp";
+    if (npcFlags & NPC_FLAG_FLIGHT_MASTER) return "Interface\\Cursor\\Taxi.blp";
+    if (npcFlags & NPC_FLAG_TRAINER)       return "Interface\\Cursor\\Trainer.blp";
+    if (npcFlags & (NPC_FLAG_SPIRIT_HEALER | NPC_FLAG_SPIRIT_GUIDE))
+                                           return "Interface\\Cursor\\Speak.blp";
+    if (npcFlags & (NPC_FLAG_BANKER | kGuildBanker))
+                                           return "Interface\\Cursor\\Buy.blp";
+    if (npcFlags & (kPetitioner | kTabardDesigner | kBattlemaster))
+                                           return "Interface\\Cursor\\Speak.blp";
+    if (npcFlags & NPC_FLAG_AUCTIONEER)    return "Interface\\Cursor\\Buy.blp";
+    if (npcFlags & kStableMaster)          return "Interface\\Cursor\\Speak.blp";
+    // The merchant's bag, which the client names Pickup.
+    if (npcFlags & NPC_FLAG_VENDOR)        return "Interface\\Cursor\\Pickup.blp";
+    if (npcFlags & NPC_FLAG_GOSSIP)        return "Interface\\Cursor\\Speak.blp";
+    if (npcFlags & kSpellClick)            return "Interface\\Cursor\\Interact.blp";
+    return nullptr;
+}
+
+/// The cursor over a unit: the sword over something to fight, and over a
+/// friendly one what it is for - a bag for a merchant, a speech bubble for a
+/// talker - which the real client says with the art before anything is clicked.
 ///
-/// Every interactable answered the same hand cursor, so a merchant looked like
-/// a door: what a unit is for is known before it is clicked, and the real
-/// client says so with the art. The bag is the one WoW uses for a vendor.
-///
-/// False when the unit is not a vendor to trade with, and the caller falls back
-/// to the hand. A hostile is not one - it is the attack cursor's business - and
-/// neither is a corpse, which is loot.
+/// False when the unit has none, and the caller leaves the plain pointer, as the
+/// client does. A corpse is loot and the caller's business.
 bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
                                   const ui::ScenePick& pick) {
     // resolve(), not closestGuid. closestGuid is whatever the ray touched
@@ -1168,45 +1194,21 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
     // asking it a different question put the two back into disagreement, and
     // the vendor cursor lost every argument to the scenery around the vendor.
     const uint64_t guid = pick.resolve();
-    if (guid == 0 || guid == pick.hostileUnitGuid || guid == pick.deadUnitGuid) {
-        return false;
-    }
+    if (guid == 0 || guid == pick.deadUnitGuid) return false;
     auto entity = gameHandler.getEntityManager().getEntity(guid);
     if (!entity || entity->getType() != game::ObjectType::UNIT) return false;
     auto unit = std::static_pointer_cast<game::Unit>(entity);
-    if ((unit->getNpcFlags() & game::NPC_FLAG_ANY_VENDOR) == 0) return false;
+    const char* path = guid == pick.hostileUnitGuid
+        ? "Interface\\Cursor\\Attack.blp"
+        : friendlyUnitCursorPath(unit->getNpcFlags());
+    if (!path) return false;
 
-    // Only a successful upload is cached, so a transient descriptor-pool
-    // failure is retried rather than leaving the cursor plain for good.
-    static VkDescriptorSet cursorTex = VK_NULL_HANDLE;
-    if (!cursorTex) {
-        ui::UiTextureLoad why = ui::UiTextureLoad::Ok;
-        cursorTex = ui::uploadUiTextureFromBlp(
-            services_.assetManager, "Interface\\Cursor\\Buy.blp", services_.window, &why);
-        // Said once. A cursor that will not load and a unit that is not a
-        // vendor both end as the plain hand, and from the chair they are the
-        // same thing - so the one that is a fault has to name itself.
-        if (!cursorTex) {
-            static bool said = false;
-            if (!said) {
-                said = true;
-                LOG_WARNING("Vendor cursor: Interface\\Cursor\\Buy.blp did not load (",
-                            static_cast<int>(why),
-                            ") - the pointer stays the plain hand over merchants");
-            }
-        }
-    }
-    if (!cursorTex) return false;
-
+    VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window, path);
+    if (!tex) return false;
     // Drawn in place of the pointer rather than beside it, which is what a
-    // cursor is - so the arrow goes for as long as the bag is up. The tip sits
-    // at the mouse position, the way the art is authored.
-    ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-    const ImVec2 at = ImGui::GetIO().MousePos;
-    constexpr float kSize = 32.0f;
-    ImGui::GetForegroundDrawList()->AddImage(
-        (ImTextureID)(uintptr_t)cursorTex, at,
-        ImVec2(at.x + kSize, at.y + kSize));
+    // cursor is. The tip sits at the mouse position, the way the art is
+    // authored.
+    drawCursorTexture(tex);
     return true;
 }
 
@@ -1852,9 +1854,14 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             // tighter sphere critters get, which this copy did not have.
             const ui::ScenePick hoverPick =
                 ui::pickScene(gameHandler, ray, ui::ScenePickParams{});
-            if (hoverPick.closestGuid != 0) {
-                if (!drawVendorCursor(gameHandler, hoverPick) &&
-                    !drawWorldObjectCursor(gameHandler, hoverPick)) {
+            // The client changes the pointer only over what a click can act
+            // on - and over a friendly unit with nothing to offer, or scenery,
+            // it stays the plain pointer. A corpse is loot, and keeps the hand
+            // for want of the client's loot art.
+            if (!drawVendorCursor(gameHandler, hoverPick) &&
+                !drawWorldObjectCursor(gameHandler, hoverPick)) {
+                const uint64_t hovered = hoverPick.resolve();
+                if (hovered != 0 && hovered == hoverPick.deadUnitGuid) {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                 }
             }
