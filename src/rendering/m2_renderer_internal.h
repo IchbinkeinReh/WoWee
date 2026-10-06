@@ -37,7 +37,6 @@ inline float randFloat(float lo, float hi) {
 }
 
 // ---- Constants ----
-inline const auto kLavaAnimStart = std::chrono::steady_clock::now();
 inline constexpr uint32_t kParticleFlagRandomized = 0x40;
 inline constexpr uint32_t kParticleFlagTiled = 0x80;
 inline constexpr float kSmokeEmitInterval = 1.0f / 48.0f;

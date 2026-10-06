@@ -226,8 +226,6 @@ M2ClassificationResult classifyM2Model(
     const bool particleEmitterVfx = has(fullPath, "\\particleemitters\\")
                                  || has(fullPath, "/particleemitters/");
     r.isSmoke         = has(n, "smoke");
-    r.isLavaModel     = has(n, "forgelava") || has(n, "lavapot") || has(n, "lavaflow")
-                    || has(n, "lavapool");
 
     r.isInstancePortal  = has(n, "instanceportal") || has(n, "instancenewportal")
                         || has(n, "portalfx")       || has(n, "spellportal");

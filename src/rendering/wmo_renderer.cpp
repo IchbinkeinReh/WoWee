@@ -692,22 +692,9 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 unlit = (modelData.materialFlags[batch.materialId] & 0x01) != 0;
             }
 
-            // Windows, lamp glass and clock faces get no treatment of their
-            // own: the client draws every batch from its MOMT material, by
-            // blend mode and flags, whatever its texture is called.
-            bool isLava = false;
-            if (batch.materialId < modelData.materialTextureIndices.size()) {
-                uint32_t ti = modelData.materialTextureIndices[batch.materialId];
-                if (ti < modelData.textureNames.size()) {
-                    const auto& texName = modelData.textureNames[ti];
-                    // Case-insensitive search for material types
-                    std::string texNameLower = texName;
-                    std::transform(texNameLower.begin(), texNameLower.end(), texNameLower.begin(), ::tolower);
-                    isLava = (texNameLower.find("lava") != std::string::npos ||
-                              texNameLower.find("molten") != std::string::npos ||
-                              texNameLower.find("magma") != std::string::npos);
-                }
-            }
+            // Windows, lamp glass, clock faces and lava get no treatment of
+            // their own: the client draws every batch from its MOMT material,
+            // by blend mode and flags, whatever its texture is called.
 
             BatchKey key{ .texPtr = reinterpret_cast<uintptr_t>(tex), .alphaTest = alphaTest, .unlit = unlit,
                           .transparent = blendMode >= 2 };
@@ -718,7 +705,6 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 mb.alphaTest = alphaTest;
                 mb.unlit = unlit;
                 mb.isTransparent = (blendMode >= 2);
-                mb.isLava = isLava;
                 // Look up normal/height map from texture cache
                 if (hasTexture && tex != whiteTexture_.get()) {
                     for (const auto& [cacheKey, cacheEntry] : textureCache) {
@@ -765,7 +751,6 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             matData.pomMaxSamples = pomSamplesFor(pomQuality_);
             matData.heightMapVariance = mb.heightMapVariance;
             matData.normalMapStrength = normalMapStrength_;
-            matData.isLava = mb.isLava ? 1 : 0;
             matData.wmoAmbientR = modelData.wmoAmbientColor.r;
             matData.wmoAmbientG = modelData.wmoAmbientColor.g;
             matData.wmoAmbientB = modelData.wmoAmbientColor.b;

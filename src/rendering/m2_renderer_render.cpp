@@ -1057,8 +1057,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     }
 
     lastDrawCallCount = 0;
-    const float lavaAnimSeconds = std::chrono::duration<float>(
-        std::chrono::steady_clock::now() - kLavaAnimStart).count();
 
     // GPU cull results - dispatchCullCompute() already updated smoothedRenderDist_.
     // Use the cached value (set by dispatchCullCompute or fallback below).
@@ -1616,7 +1614,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     // Handle texture animation: if this batch has per-instance uvOffset,
                     // write a separate SSBO range with the correct offsets.
                     bool hasBatchTexAnim = (batch.textureAnimIndex != 0xFFFF && model.hasTextureAnimation)
-                                           || model.isLavaModel || batch.colorAnimated;
+                                           || batch.colorAnimated;
                     uint32_t drawOffset = groupSSBOOffset;
                     if (hasBatchTexAnim && instanceDataCount_ + groupSize <= MAX_INSTANCE_DATA) {
                         drawOffset = instanceDataCount_;
@@ -1643,10 +1641,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                                                m2_track::textureTransformMatrix(*tt, inst.currentSequenceIndex,
                                                                inst.animTime, inst.globalSequenceTime,
                                                                model.globalSequenceDurations));
-                            }
-                            if (model.isLavaModel && uvOffset == glm::vec2(0.0f)) {
-                                uvOffset = glm::vec2(lavaAnimSeconds * 0.03f,
-                                                     -lavaAnimSeconds * 0.08f);
                             }
                             // Rebuild the entry from CPU-side data rather than copying it
                             // out of the base entry. instSSBO lives in write-combined
@@ -1850,10 +1844,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                                                        model.globalSequenceDurations));
                     }
                 }
-            }
-            if (model.isLavaModel && uvOffset == glm::vec2(0.0f)) {
-                uvOffset = glm::vec2(lavaAnimSeconds * 0.03f,
-                                     -lavaAnimSeconds * 0.08f);
             }
 
             // Write single instance entry to SSBO

@@ -75,7 +75,6 @@ struct M2ClassificationResult {
     bool isFoliageLike      = false; ///< Foliage or tree (disabled animation)
     bool isSmallFoliage     = false; ///< Small bush/grass/plant (skip during taxi/flight)
     bool isSpellEffect      = false; ///< Spell effect / particle-dominated visual
-    bool isLavaModel        = false; ///< Lava surface (UV scroll animation)
     bool isInstancePortal   = false; ///< Instance portal (a spell effect)
     bool isWaterVegetation  = false; ///< Aquatic vegetation (cattails, kelp, reeds, etc.)
     bool isFireflyEffect    = false; ///< Ambient creature (exempt from particle dampeners)
