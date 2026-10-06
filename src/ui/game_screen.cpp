@@ -1187,14 +1187,41 @@ std::string unableCursorPath(const char* path) {
     return out;
 }
 
-/// Whether the player may attack another player (FUN_00729740, as far as it
-/// reads): an enemy faction's player who is flagged for PvP. The client's other
-/// branches - a duel, free-for-all, sanctuary, the party exceptions - are not here.
-bool playerMayAttackPlayer(const game::Unit& other) {
-    constexpr uint32_t kUnitFlagPvp = 0x00001000;
+/// Whether the player may attack another player, as FUN_00729740 decides it:
+/// not a friendly faction; the same duel (both name one duel flag); otherwise
+/// the target flagged for PvP, or either side marked contested (flag 2), and
+/// neither in a sanctuary (8) - or both in free-for-all (4). The flags are byte 1
+/// of UNIT_FIELD_BYTES_2. Without those fields (before WotLK) a PvP flag on the
+/// unit itself stands in.
+bool playerMayAttackPlayer(game::GameHandler& gameHandler, const game::Unit& other) {
     if (other.getHealth() == 0) return false;
     if (other.getUnitFlags() & (0x00000002u | game::UNIT_FLAG_NOT_SELECTABLE)) return false;
-    return other.isHostile() && (other.getUnitFlags() & kUnitFlagPvp) != 0;
+    if (!other.isHostile()) return false;
+
+    const auto me = gameHandler.getEntityManager().getEntity(gameHandler.getPlayerGuid());
+    const uint16_t arbiterField = game::fieldIndex(game::UF::PLAYER_DUEL_ARBITER);
+    if (me && arbiterField != 0xFFFF) {
+        const uint64_t mine = me->getField(arbiterField) |
+                              (static_cast<uint64_t>(me->getField(arbiterField + 1)) << 32);
+        const uint64_t theirs = other.getField(arbiterField) |
+                                (static_cast<uint64_t>(other.getField(arbiterField + 1)) << 32);
+        if (mine != 0 && mine == theirs) return true;
+    }
+
+    const uint16_t bytes2Field = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
+    if (!me || bytes2Field == 0xFFFF) {
+        constexpr uint32_t kUnitFlagPvp = 0x00001000;
+        return (other.getUnitFlags() & kUnitFlagPvp) != 0;
+    }
+    constexpr uint32_t kPvp = 1, kContested = 2, kFfa = 4, kSanctuary = 8;
+    const uint32_t mine = (me->getField(bytes2Field) >> 8) & 0xFF;
+    const uint32_t theirs = (other.getField(bytes2Field) >> 8) & 0xFF;
+    if (!(theirs & kPvp)) {
+        if ((mine & kFfa) && (theirs & kFfa)) return true;
+        if (!(mine & kContested) && !(theirs & kContested)) return false;
+    }
+    if (mine & kSanctuary) return false;
+    return !(theirs & kSanctuary);
 }
 
 /// The cursor over a unit or another player, as the client picks it: the sword
@@ -1241,12 +1268,25 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
         if (unit->getDynamicFlags() & game::UNIT_DYNFLAG_LOOTABLE) {
             path = "Interface\\Cursor\\LootAll.blp";
         } else if (flags & kSkinnable) {
-            path = "Interface\\Cursor\\Skin.blp";
+            // What it is skinned for, from the creature's type flags
+            // (FUN_00715e50): herbs, ore and engineering parts are gathered, the
+            // rest is skinned.
+            constexpr uint32_t kHerbLoot = 0x100, kMiningLoot = 0x200, kEngineerLoot = 0x8000;
+            uint32_t typeFlags = 0;
+            const auto& creatures = gameHandler.getCreatureInfoCache();
+            if (auto it = creatures.find(unit->getEntry()); it != creatures.end()) {
+                typeFlags = it->second.typeFlags;
+            }
+            path = (typeFlags & kHerbLoot)
+                       ? "Interface\\Cursor\\GatherHerbs.blp"
+                   : (typeFlags & (kMiningLoot | kEngineerLoot))
+                       ? "Interface\\Cursor\\Mine.blp"
+                       : "Interface\\Cursor\\Skin.blp";
         } else {
             return false;
         }
         if (outOfReach) path = unableCursorPath(path.c_str());
-    } else if (isPlayer ? playerMayAttackPlayer(*unit)
+    } else if (isPlayer ? playerMayAttackPlayer(gameHandler, *unit)
                         : ((flags & (kNonAttackable | kNotAttackable1 | kImmuneToPlayers | kUnk16 |
                                      kUnk20 | game::UNIT_FLAG_NOT_SELECTABLE)) == 0 &&
                            (unit->isHostile() || gameHandler.unitReactionToPlayer(*unit) <= 4))) {
@@ -1291,8 +1331,20 @@ bool GameScreen::drawWorldObjectCursor(game::GameHandler& gameHandler,
     auto go = std::static_pointer_cast<game::GameObject>(entity);
     const auto* info = gameHandler.getCachedGameObjectInfo(go->getEntry());
     if (usable) {
+        // The art with "can't" on it when a click would be refused: the player
+        // is dead (the client's CanUse says no outright), or too far away for
+        // the use to go - the same ten yards the click itself allows.
+        const auto& me = gameHandler.getMovementInfo();
+        const float dx = entity->getX() - me.x, dy = entity->getY() - me.y,
+                    dz = entity->getZ() - me.z;
+        constexpr float kUseDistance = 10.0f;
+        const bool cannotUse = gameHandler.isPlayerDead() ||
+                               dx * dx + dy * dy + dz * dz > kUseDistance * kUseDistance;
+        const std::string cursorPath = cannotUse
+            ? unableCursorPath(objectCursorPath(info ? info->type : 0u))
+            : std::string(objectCursorPath(info ? info->type : 0u));
         VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window,
-                                            objectCursorPath(info ? info->type : 0u));
+                                            cursorPath.c_str());
         if (!tex) return false;
         drawCursorTexture(tex);
     }
