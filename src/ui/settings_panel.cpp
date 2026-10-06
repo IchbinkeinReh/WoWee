@@ -459,6 +459,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
         pendingShowMinimapClock = showMinimapClock_;
         pendingShowMinimapCoordinates = showMinimapCoordinates_;
         pendingShowLatencyMeter = showLatencyMeter_;
+        pendingShowFps = showFps_;
         if (renderer) {
             if (auto* minimap = renderer->getMinimap()) {
                 minimap->setRotateWithCamera(minimapRotate_);
@@ -857,7 +858,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "groundclutter", "grassenabled", "grassdensity", "grassheight",
     "grassdistance", "waterrefraction", "upscaling", "fsrquality",
     "fsrsharpness", "framegen", "brightness", "uiopacity", "minimapsquare",
-    "minimapnpcdots", "minimapclock", "minimapcoords", "minimaprotate", "latencymeter",
+    "minimapnpcdots", "minimapclock", "minimapcoords", "minimaprotate", "latencymeter", "showfps",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "raytracedlighting",
     // Moved off the game's own Effects panel, so this list is now what
@@ -1083,6 +1084,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "windowuiscale", .asFloat = &SettingsPanel::pendingWindowUiScale},
     {.key = "scrollspeed",   .asFloat = &SettingsPanel::pendingScrollSpeed},
     {.key = "latencymeter",  .asBool  = &SettingsPanel::pendingShowLatencyMeter},
+    {.key = "showfps",       .asBool  = &SettingsPanel::pendingShowFps},
     {.key = "checkforupdates",   .asBool  = &SettingsPanel::pendingCheckForUpdates},
     {.key = "micromenu",     .asBool  = &SettingsPanel::pendingShowMicroMenu},
     {.key = "chatboxvisible", .asBool = &SettingsPanel::pendingChatBoxVisible},
@@ -1434,6 +1436,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         showMinimapCoordinates_ = pendingShowMinimapCoordinates;
     } else if (key == "latencymeter") {
         showLatencyMeter_ = pendingShowLatencyMeter;
+    } else if (key == "showfps") {
+        showFps_ = pendingShowFps;
     } else if (key == "woweemusic") {
         // Not a volume: it changes which tracks the zone rotation can pick, and
         // switching it off has to stop whichever of ours is playing now - the

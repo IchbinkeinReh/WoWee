@@ -374,7 +374,10 @@ constexpr SettingDesc kSchema[] = {
      "How far the mouse wheel or a trackpad scrolls text in chat, the\n"
      "quest log and other windows. 1 is a line per click of a wheel.", "", 1.0f},
     {"latencymeter", "Latency meter", SettingKind::Bool, 0, 0, 0, "Interface", "",
-     "Show your ping - the round trip to the server - beside the minimap.", "", 1},
+     "Show your ping - the round trip to the server - at the top of the screen.", "", 1},
+    {"showfps", "Show frame rate", SettingKind::Bool, 0, 0, 0, "Interface", "",
+     "Show how many frames a second the game is drawing, at the top of\n"
+     "the screen.", "", 1},
     {"micromenu", "Micro menu buttons", SettingKind::Bool, 0, 0, 0, "Interface", "",
      "The row of shortcut buttons to the character sheet, spellbook,\n"
      "talents and the rest.", "", 0},

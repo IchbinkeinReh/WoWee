@@ -503,9 +503,12 @@ void GameScreen::renderMinimapIndicators(game::GameHandler& gameHandler, float c
         nextIndicatorY += kIndicatorH;
     }
 
-    // Latency + FPS indicator - centered at top of screen
+    // Frame rate and latency indicator - centered at top of screen. Each is its
+    // own option; the box is there while either is on.
     uint32_t latMs = gameHandler.getLatencyMs();
-    if (settingsPanel_.showLatencyMeter_ && gameHandler.getState() == game::WorldState::IN_WORLD) {
+    const bool showLatency = settingsPanel_.showLatencyMeter_ && latMs > 0;
+    if ((settingsPanel_.showFps_ || showLatency) &&
+        gameHandler.getState() == game::WorldState::IN_WORLD) {
         float currentFps = ImGui::GetIO().Framerate;
         ImVec4 latColor;
         if      (latMs < 100) latColor = ImVec4(0.3f, 1.0f, 0.3f, 0.9f);
@@ -519,10 +522,12 @@ void GameScreen::renderMinimapIndicators(game::GameHandler& gameHandler, float c
         else                          fpsColor = ImVec4(1.0f, 0.3f, 0.3f, 0.9f);
 
         char infoText[64];
-        if (latMs > 0)
+        if (settingsPanel_.showFps_ && showLatency)
             snprintf(infoText, sizeof(infoText), "%.0f fps  |  %u ms", currentFps, latMs);
-        else
+        else if (settingsPanel_.showFps_)
             snprintf(infoText, sizeof(infoText), "%.0f fps", currentFps);
+        else
+            snprintf(infoText, sizeof(infoText), "%u ms", latMs);
 
         ImVec2 textSize = ImGui::CalcTextSize(infoText);
         float latW = textSize.x + 16.0f;
@@ -534,11 +539,13 @@ void GameScreen::renderMinimapIndicators(game::GameHandler& gameHandler, float c
         ImGui::SetNextWindowBgAlpha(0.45f);
         if (ImGui::Begin("##LatencyIndicator", nullptr, indicatorFlags)) {
             // Color the FPS and latency portions differently
-            ImGui::TextColored(fpsColor, "%.0f fps", currentFps);
-            if (latMs > 0) {
-                ImGui::SameLine(0, 4);
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 0.7f), "|");
-                ImGui::SameLine(0, 4);
+            if (settingsPanel_.showFps_) ImGui::TextColored(fpsColor, "%.0f fps", currentFps);
+            if (showLatency) {
+                if (settingsPanel_.showFps_) {
+                    ImGui::SameLine(0, 4);
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 0.7f), "|");
+                    ImGui::SameLine(0, 4);
+                }
                 ImGui::TextColored(latColor, "%u ms", latMs);
             }
         }
@@ -1722,6 +1729,7 @@ void GameScreen::saveSettings() {
     out << "show_minimap_clock=" << (settingsPanel_.pendingShowMinimapClock ? 1 : 0) << "\n";
     out << "show_minimap_coordinates=" << (settingsPanel_.pendingShowMinimapCoordinates ? 1 : 0) << "\n";
     out << "show_latency_meter=" << (settingsPanel_.pendingShowLatencyMeter ? 1 : 0) << "\n";
+    out << "show_fps=" << (settingsPanel_.pendingShowFps ? 1 : 0) << "\n";
     out << "check_for_updates=" << (settingsPanel_.pendingCheckForUpdates ? 1 : 0) << "\n";
     out << "show_dps_meter=" << (settingsPanel_.showDPSMeter_ ? 1 : 0) << "\n";
     {
@@ -1956,6 +1964,9 @@ void GameScreen::loadSettings() {
             } else if (key == "show_latency_meter") {
                 settingsPanel_.showLatencyMeter_ = (std::stoi(val) != 0);
                 settingsPanel_.pendingShowLatencyMeter = settingsPanel_.showLatencyMeter_;
+            } else if (key == "show_fps") {
+                settingsPanel_.showFps_ = (std::stoi(val) != 0);
+                settingsPanel_.pendingShowFps = settingsPanel_.showFps_;
             } else if (key == "show_dps_meter") {
                 settingsPanel_.showDPSMeter_ = (std::stoi(val) != 0);
             } else if (key == "dps_meter_x") {

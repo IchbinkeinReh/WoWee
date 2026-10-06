@@ -161,6 +161,7 @@ public:
     bool pendingShowMinimapClock = false;
     bool pendingShowMinimapCoordinates = false;
     bool pendingShowLatencyMeter = true;
+    bool pendingShowFps = true;
     bool pendingSeparateBags = true;
     bool pendingShowKeyring = true;
     float pendingBagScale = 1.0f;
@@ -259,6 +260,7 @@ public:
     bool showMinimapClock_ = false;
     bool showMinimapCoordinates_ = false;
     bool showLatencyMeter_ = true;           // Show server latency indicator
+    bool showFps_ = true;                    // Show the frame rate at the top of the screen
     bool minimapSettingsApplied_ = false;
     // Separate from the apply latches. The file is re-read once, when the
     // renderer first exists; the subsystems it feeds are built at different
