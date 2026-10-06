@@ -238,13 +238,11 @@ M2ClassificationResult classifyM2Model(
 
     r.isWaterfall       = has(n, "waterfall");
 
-    r.isElvenLike   = has(n, "elf")     || has(n, "elven") || has(n, "quel");
     // Directional volumetric light effects (lighthouse beam, light rays/shafts) match
     // the broad "light" token but are NOT point lanterns. They are animated additive
     // meshes - e.g. the Stormwind lighthouse beam rotates via a looped single-bone
-    // animation. Classifying them as lanterns routed their batch through the glow-card
-    // path, which skips the mesh and draws a static billboard instead, freezing the
-    // sweep. Exclude beams/rays/shafts so their animated mesh renders normally.
+    // animation, and a lantern classification would hang a point light on the
+    // beam. Exclude beams/rays/shafts; their mesh is drawn by its material.
     const bool volumetricLightBeam =
         has(n, "beam")     || has(n, "lighthouse") || has(n, "lightray") ||
         has(n, "lightshaft") || has(n, "godray")   || has(n, "sunray");
@@ -705,8 +703,8 @@ M2BatchTexClassification classifyBatchTexture(const std::string& lowerTexKey)
     r.likelyFlame      = hasAnyWord(lowerTexKey, kLikelyFlameTokens);
     r.lanternFamily    = hasAny(lowerTexKey, kLanternFamilyTokens);
     // Stormwind street lamps use an opaque unlit glass texture rather than a
-    // named glow card or particle emitter. Preserve that glass mesh and layer
-    // a soft halo over it in the renderer.
+    // named glow card or particle emitter. The glass is still a glow surface
+    // for placing a local light; its mesh is drawn by its material.
     r.softGlowSurface  = lowerTexKey ==
         "dungeons\\textures\\doodads\\stormwindlampglass.blp";
     r.glowTint         = hasAny(lowerTexKey, kCoolTintTokens) ? 1

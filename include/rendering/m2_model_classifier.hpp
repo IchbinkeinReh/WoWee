@@ -79,7 +79,6 @@ struct M2ClassificationResult {
     bool isInstancePortal   = false; ///< Instance portal (additive, spin, no collision)
     bool isWaterVegetation  = false; ///< Aquatic vegetation (cattails, kelp, reeds, etc.)
     bool isFireflyEffect    = false; ///< Ambient creature (exempt from particle dampeners)
-    bool isElvenLike        = false; ///< Night elf / Blood elf themed model
     bool isLanternLike      = false; ///< Lantern/lamp/light model
     bool isKoboldFlame      = false; ///< Kobold candle/torch model
     bool isGroundDetail     = false; ///< Ground-clutter detail doodad (always non-blocking)
@@ -141,7 +140,7 @@ struct M2BatchTexClassification {
     bool hasGlowCardToken    = false; ///< glow / flamelick / lensflare / t_vfx / lightbeam / glowball / genericglow
     bool likelyFlame         = false; ///< fire / flame / torch
     bool lanternFamily       = false; ///< lantern / lamp / elf / silvermoon / quel / thalas
-    bool softGlowSurface     = false; ///< Lit glass surface that keeps its mesh beneath a soft halo
+    bool softGlowSurface     = false; ///< Lit glass surface (places a local light)
     int  glowTint            = 0;     ///< 0 = neutral, 1 = cool (blue/arcane), 2 = warm (red/scarlet)
     bool starPointLayer      = false; ///< A sky model's star-point layer, as opposed to its clouds or planets
 };

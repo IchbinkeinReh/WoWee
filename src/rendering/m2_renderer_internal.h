@@ -37,8 +37,8 @@ inline float randFloat(float lo, float hi) {
 }
 
 // World-space center of a skinned batch. Glow cards on swinging lanterns are
-// bone animated; using only modelMatrix * bind-pose center leaves both their
-// sprite and the pool of local light fixed at the fixture origin.
+// bone animated; using only modelMatrix * bind-pose center leaves the pool of
+// local light fixed at the fixture origin.
 inline glm::vec3 animatedBatchWorldCenter(const M2Instance& instance,
                                           const M2ModelGPU::BatchGPU& batch) {
     if (batch.lightBoneAnchors.empty()) {
@@ -59,7 +59,7 @@ inline glm::vec3 animatedBatchWorldCenter(const M2Instance& instance,
 // Lanterns are broad point lights, so the small physical displacement of a
 // swinging bulb is almost invisible on the ground. Follow the authored hanging
 // chain from its fixed suspension pivot to the animated glow tip, then project
-// that direction toward the model's ground plane. The glow sprite remains at
+// that direction toward the model's ground plane. The unprojected tip is
 // animatedBatchWorldCenter(); only the pool of light uses this projected center.
 inline glm::vec3 animatedBatchLightWorldCenter(const M2Instance& instance,
                                                const M2ModelGPU::BatchGPU& batch) {

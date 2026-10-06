@@ -2,7 +2,6 @@
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_blend_mode.hpp"
-#include "rendering/m2_glow_card.hpp"
 #include "core/thread_pool.hpp"
 #include "rendering/m2_model_classifier.hpp"
 #include "rendering/hiz_system.hpp"
@@ -1074,9 +1073,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                  " draws=", lastDrawCallCount);
     }
 
-    // Reuse persistent buffers (clear instead of reallocating)
-    glowSprites_.clear();
-
     lastDrawCallCount = 0;
     const float lavaAnimSeconds = std::chrono::duration<float>(
         std::chrono::steady_clock::now() - kLavaAnimStart).count();
@@ -1382,21 +1378,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         pc.plantHeight = 0.0f;
     };
 
-    auto appendInstancePortalGlow = [&](const M2Instance& instance, float distSq) {
-        if (distSq >= 400.0f * 400.0f) return;
-        glm::vec3 center = glm::vec3(instance.modelMatrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-        GlowSprite core;
-        core.worldPos = center;
-        core.color = glm::vec4(0.35f, 0.55f, 1.0f, 1.25f);
-        core.size = instance.scale * 7.0f;
-        glowSprites_.push_back(core);
-
-        GlowSprite halo = core;
-        halo.color.a *= 0.35f;
-        halo.size *= 2.4f;
-        glowSprites_.push_back(halo);
-    };
-
     // Validate per-frame descriptor set before any Vulkan commands
     if (!perFrameSet) {
         LOG_ERROR("M2Renderer::render: perFrameSet is VK_NULL_HANDLE - skipping M2 render");
@@ -1466,15 +1447,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             }
             const M2ModelGPU& model = *instances[firstEntry.index].cachedModel;
             if (skipGroundDetail_ && model.isGroundDetail) {
-                visStart = groupEnd;
-                continue;
-            }
-            if (model.isInstancePortal) {
-                for (size_t vi = visStart; vi < groupEnd; vi++) {
-                    const auto& entry = sortedVisible_[vi];
-                    if (entry.index >= instances.size()) continue;
-                    appendInstancePortalGlow(instances[entry.index], entry.distSq);
-                }
                 visStart = groupEnd;
                 continue;
             }
@@ -1652,117 +1624,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         }
                     }
                     if (skipped) continue;
-                    const bool batchUnlit = (batch.materialFlags & 0x01) != 0;
-                    M2GlowCardBatch glowCard;
-                    glowCard.glowSize = batch.glowSize;
-                    glowCard.blendMode = batch.blendMode;
-                    glowCard.lanternGlowHint = batch.lanternGlowHint;
-                    glowCard.glowCardLike = batch.glowCardLike;
-                    glowCard.unlit = batchUnlit;
-                    glowCard.preserveGlowMesh = batch.preserveGlowMesh;
-                    glowCard.modelIsElvenLike = model.isElvenLike;
-                    glowCard.modelIsLanternLike = model.isLanternLike;
-                    glowCard.modelIsTorch = model.isTorch;
-                    glowCard.modelIsBrazierOrFire = model.isBrazierOrFire;
-                    glowCard.modelIsSpellEffect = model.isSpellEffect;
-                    glowCard.modelIsKoboldFlame = model.isKoboldFlame;
-                    const bool shouldUseGlowSprite = m2WantsGlowSprite(glowCard);
-                    if (shouldUseGlowSprite) {
-                        // Generate glow sprites for each instance in the group
-                        for (size_t j = lodIdx; j < lodEnd; j++) {
-                            auto& inst = instances[pending[j].instanceIdx];
-                            glm::vec3 worldPos;
-                            if (model.isGroundFire &&
-                                !model.particleEmitters.empty()) {
-                                worldPos = glm::vec3(std::numeric_limits<float>::max());
-                                for (const auto& emitter : model.particleEmitters) {
-                                    glm::mat4 boneXform(1.0f);
-                                    if (emitter.bone < inst.boneMatrices.size()) {
-                                        boneXform = inst.boneMatrices[emitter.bone];
-                                    }
-                                    const glm::vec3 emitterWorld = glm::vec3(
-                                        inst.modelMatrix * boneXform * glm::vec4(emitter.position, 1.0f));
-                                    if (emitterWorld.z < worldPos.z) worldPos = emitterWorld;
-                                }
-                            } else {
-                                worldPos = animatedBatchWorldCenter(inst, batch);
-                            }
-                            // Preserved emissive glass writes opaque depth before
-                            // this additive point sprite. Move only the visual
-                            // halo just beyond the camera-facing glass surface so
-                            // depth testing does not reject it; the associated
-                            // local light remains at the true batch center.
-                            if (batch.preserveGlowMesh) {
-                                const glm::vec3 towardCamera = camPos - worldPos;
-                                const float lenSq = glm::dot(towardCamera, towardCamera);
-                                if (lenSq > 0.0001f) {
-                                    worldPos += towardCamera * glm::inversesqrt(lenSq) *
-                                        (batch.glowSize * inst.scale * 1.25f);
-                                }
-                            }
-                            GlowSprite gs;
-                            gs.worldPos = worldPos;
-                            if (batch.glowTint == 1 || model.isElvenLike)
-                                gs.color = glm::vec4(0.48f, 0.72f, 1.0f, 1.05f);
-                            else if (batch.glowTint == 2)
-                                gs.color = glm::vec4(1.0f, 0.28f, 0.22f, 1.10f);
-                            else
-                                gs.color = glm::vec4(1.0f, 0.82f, 0.46f, 1.15f);
-                            // Match the parent M2's distance fade instead of a separate
-                            // hard 180-unit cutoff, which made tunnel lights pop on.
-                            gs.color.a *= pending[j].fadeAlpha;
-                            gs.size = batch.glowSize * inst.scale *
-                                (batch.preserveGlowMesh ? 2.0f : 1.45f);
-                            if (batch.preserveGlowMesh) gs.color.a *= 1.25f;
-
-                            // A fixture with real particle flames should read as
-                            // flames with a halo behind them. The sprite is sized
-                            // from its glow card's geometric radius, which on a
-                            // chandelier spans the whole fixture - an additive
-                            // blob about a unit across, against candle flames of
-                            // 0.15, so the glow swallowed them entirely. Cap it
-                            // just above what a small glow card already produces
-                            // (the 0.5 floor times 1.45), so candles, lanterns
-                            // and torches are untouched and only oversized cards
-                            // are clamped.
-                            if (!model.particleEmitters.empty() && model.isLanternLike) {
-                                constexpr float kMaxHaloRadius = 0.75f;
-                                gs.size = std::min(gs.size, kMaxHaloRadius * inst.scale);
-                            }
-
-                            // Fire burning inside a hearth. The sprite is a point
-                            // billboard carrying one depth value for the whole
-                            // quad, so as soon as its centre shows through the
-                            // fireplace opening the entire square draws - brick
-                            // surround included, which reads as the fire glowing
-                            // through the masonry. Sized from the glow card's
-                            // geometric radius these spheres are wider than the
-                            // opening, so keep them inside it.
-                            const bool hearthFire = model.isBrazierOrFire ||
-                                                    model.isGroundFire ||
-                                                    model.isForge;
-                            if (hearthFire) {
-                                constexpr float kMaxFireGlowRadius = 0.5f;
-                                gs.size = std::min(gs.size, kMaxFireGlowRadius * inst.scale);
-                            }
-
-                            glowSprites_.push_back(gs);
-                            GlowSprite halo = gs;
-                            halo.color.a *= batch.preserveGlowMesh ? 0.34f : 0.42f;
-                            halo.size *= batch.preserveGlowMesh ? 2.2f : 1.8f;
-                            // The halo is nearly twice the sprite, so capping only
-                            // the sprite would leave the bleed to the halo.
-                            if (hearthFire) {
-                                constexpr float kMaxFireHaloRadius = 0.85f;
-                                halo.size = std::min(halo.size, kMaxFireHaloRadius * inst.scale);
-                            }
-                            glowSprites_.push_back(halo);
-                        }
-                        if (m2GlowSpriteReplacesMesh(glowCard)) continue;
-                    }
-
-                    // Opaque gate - transparent glow cards were handled above so their
-                    // sprites are generated before the mesh moves to pass 2.
+                    // Opaque gate. The client draws every batch's mesh by its
+                    // material and adds no glow sprite in place of or beside it.
                     // A spell's opaque layers are opaque like anyone else's:
                     // the client draws every batch by its blend mode.
                     if (batch.blendMode >= 2) continue;
@@ -1915,7 +1778,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             currentModelValid = false;
             currentModel = instance.cachedModel;
             if (!currentModel) continue;
-            if (currentModel->isInstancePortal) continue;
             if (!currentModel->hasTransparentBatches && !currentModel->isSpellEffect) continue;
             if (!currentModel->vertexBuffer || !currentModel->indexBuffer) continue;
             currentModelValid = true;
@@ -1938,7 +1800,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         float instanceFadeAlpha = fadeAlpha * instance.fade;
         const bool instanceFaded = instance.fade < 0.999f;
         if (model.isGroundDetail) instanceFadeAlpha *= 0.82f;
-        if (model.isInstancePortal) instanceFadeAlpha *= 0.72f;
 
         bool modelNeedsAnimation = model.hasAnimation && !model.disableAnimation;
         if (modelNeedsAnimation && instance.boneMatrices.empty()) continue;
@@ -1980,26 +1841,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 }();
                 if (skipBlend >= 0 && batch.blendMode == skipBlend) continue;
             }
-
-            // Skip glow sprites (handled in opaque pass)
-            const bool batchUnlit = (batch.materialFlags & 0x01) != 0;
-            M2GlowCardBatch glowCard;
-            glowCard.glowSize = batch.glowSize;
-            glowCard.blendMode = batch.blendMode;
-            glowCard.lanternGlowHint = batch.lanternGlowHint;
-            glowCard.glowCardLike = batch.glowCardLike;
-            glowCard.unlit = batchUnlit;
-            glowCard.preserveGlowMesh = batch.preserveGlowMesh;
-            glowCard.modelIsElvenLike = model.isElvenLike;
-            glowCard.modelIsLanternLike = model.isLanternLike;
-            glowCard.modelIsTorch = model.isTorch;
-            glowCard.modelIsBrazierOrFire = model.isBrazierOrFire;
-            glowCard.modelIsSpellEffect = model.isSpellEffect;
-            glowCard.modelIsKoboldFlame = model.isKoboldFlame;
-            if (m2WantsGlowSprite(glowCard) && m2GlowSpriteReplacesMesh(glowCard)) {
-                continue;
-            }
-
 
             // Compute UV offset for this instance + batch
             //
@@ -2089,40 +1930,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             if (skyMode_) ++skyDiagDrawsTransparent_;
             lastDrawCallCount++;
         }
-    }
-
-    // Render glow sprites as billboarded additive point lights
-    if (!glowSprites_.empty() && particleAdditivePipeline_ && glowVB_ && glowTexDescSet_) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, particleAdditivePipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                particlePipelineLayout_, 0, 1, &perFrameSet, 0, nullptr);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                particlePipelineLayout_, 1, 1, &glowTexDescSet_, 0, nullptr);
-
-        // Push constants for particle: tileCount(vec2) + alphaKey(int)
-        struct { float tileX, tileY; int alphaKey; } particlePush = {.tileX = 1.0f, .tileY = 1.0f, .alphaKey = 0};
-        vkCmdPushConstants(cmd, particlePipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                           sizeof(particlePush), &particlePush);
-
-        // Write glow vertex data directly to mapped buffer (no temp vector)
-        size_t uploadCount = std::min(glowSprites_.size(), MAX_GLOW_SPRITES);
-        float* dst = static_cast<float*>(glowVBMapped_);
-        for (size_t gi = 0; gi < uploadCount; gi++) {
-            const auto& gs = glowSprites_[gi];
-            *dst++ = gs.worldPos.x;
-            *dst++ = gs.worldPos.y;
-            *dst++ = gs.worldPos.z;
-            *dst++ = gs.color.r;
-            *dst++ = gs.color.g;
-            *dst++ = gs.color.b;
-            *dst++ = gs.color.a;
-            *dst++ = gs.size;
-            *dst++ = 0.0f;
-        }
-
-        VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &glowVB_, &offset);
-        vkCmdDraw(cmd, static_cast<uint32_t>(uploadCount), 1, 0, 0);
     }
 
     // How many of the sky's layers were actually drawn this frame.

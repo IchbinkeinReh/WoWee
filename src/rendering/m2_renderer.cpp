@@ -204,7 +204,7 @@ uint32_t M2Renderer::gatherLocalLights(const glm::vec3& cameraPos,
                         // surrounds the fire. At 11 a hearth fire lit its entire
                         // chimney from the inside out and the brickwork read as
                         // though it were glowing. Keep the reach close to the
-                        // firebox and let the sprite and flames carry the rest.
+                        // firebox and let the flames carry the rest.
                         radius    = model->isTorch ? 3.0f : 3.5f;
                         intensity = model->isTorch ? 0.95f : 1.05f;
                         color     = glm::vec3(1.0f, 0.50f, 0.18f);
@@ -1027,11 +1027,6 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
         vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &m2ParticleVB_, &m2ParticleVBAlloc_, &allocInfo);
         m2ParticleVBMapped_ = allocInfo.pMappedData;
 
-        // Dedicated glow sprite buffer (separate from particle VB to avoid data race)
-        bci.size = MAX_GLOW_SPRITES * 9 * sizeof(float);
-        vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &glowVB_, &glowVBAlloc_, &allocInfo);
-        glowVBMapped_ = allocInfo.pMappedData;
-
         // Ribbon vertex buffer - triangle strip: pos(3)+color(3)+alpha(1)+uv(2)=9 floats/vert
         bci.size = MAX_RIBBON_VERTS * 9 * sizeof(float);
         vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &ribbonVB_, &ribbonVBAlloc_, &allocInfo);
@@ -1046,52 +1041,6 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
         whiteTexture_->createSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
     }
 
-    // --- Generate soft radial gradient glow texture ---
-    {
-        static constexpr int SZ = 64;
-        std::vector<uint8_t> px(SZ * SZ * 4);
-        float half = SZ / 2.0f;
-        for (int y = 0; y < SZ; y++) {
-            for (int x = 0; x < SZ; x++) {
-                float dx = (x + 0.5f - half) / half;
-                float dy = (y + 0.5f - half) / half;
-                float r = std::sqrt(dx * dx + dy * dy);
-                float a = std::max(0.0f, 1.0f - r);
-                a = a * a; // Quadratic falloff
-                int idx = (y * SZ + x) * 4;
-                px[idx + 0] = 255;
-                px[idx + 1] = 255;
-                px[idx + 2] = 255;
-                px[idx + 3] = static_cast<uint8_t>(a * 255);
-            }
-        }
-        glowTexture_ = std::make_unique<VkTexture>();
-        glowTexture_->upload(*vkCtx_, px.data(), SZ, SZ, VK_FORMAT_R8G8B8A8_UNORM);
-        glowTexture_->createSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
-        // Pre-allocate glow texture descriptor set (reused every frame).
-        //
-        // Valid, not merely built: upload and createSampler both answer nothing
-        // here, and a texture missing either writes a null view and sampler
-        // into this set for the glow pass to sample. The bind site already
-        // skips a null set, so leaving it unallocated loses the glow sprites
-        // rather than the device.
-        if (glowTexture_->isValid() && particleTexLayout_ && materialDescPool_) {
-            VkDescriptorSetAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            ai.descriptorPool = materialDescPool_;
-            ai.descriptorSetCount = 1;
-            ai.pSetLayouts = &particleTexLayout_;
-            if (vkAllocateDescriptorSets(device, &ai, &glowTexDescSet_) == VK_SUCCESS) {
-                VkDescriptorImageInfo imgInfo = glowTexture_->descriptorInfo();
-                VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                write.dstSet = glowTexDescSet_;
-                write.dstBinding = 0;
-                write.descriptorCount = 1;
-                write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                write.pImageInfo = &imgInfo;
-                vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-            }
-        }
-    }
     textureCacheBudgetBytes_ =
         envSizeMBOrDefault("WOWEE_M2_TEX_CACHE_MB", 4096) * 1024ull * 1024ull;
     modelCacheLimit_ = envSizeMBOrDefault("WOWEE_M2_MODEL_LIMIT", 6000);
@@ -1152,7 +1101,6 @@ void M2Renderer::shutdown() {
     // The singletons the cache never held. Same reason as above: a
     // unique_ptr<VkTexture> releases nothing on its own.
     if (whiteTexture_) { whiteTexture_->destroy(device, alloc); whiteTexture_.reset(); }
-    if (glowTexture_)  { glowTexture_->destroy(device, alloc);  glowTexture_.reset(); }
     textureCacheBytes_ = 0;
     textureCacheCounter_ = 0;
     texturePropsByPtr_.clear();
@@ -1162,12 +1110,10 @@ void M2Renderer::shutdown() {
     textureLookupSerial_ = 0;
     textureBudgetRejectWarnings_ = 0;
     whiteTexture_.reset();
-    glowTexture_.reset();
 
     // Clean up particle/ribbon buffers
     destroy(alloc, smokeVB_, smokeVBAlloc_);
     destroy(alloc, m2ParticleVB_, m2ParticleVBAlloc_);
-    destroy(alloc, glowVB_, glowVBAlloc_);
     destroy(alloc, ribbonVB_, ribbonVBAlloc_);
     smokeParticles.clear();
 
@@ -1570,7 +1516,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     gpuModel.isLavaModel                 = cls.isLavaModel;
     gpuModel.isInstancePortal            = cls.isInstancePortal;
     gpuModel.isWaterVegetation           = cls.isWaterVegetation;
-    gpuModel.isElvenLike                 = cls.isElvenLike;
     gpuModel.isLanternLike               = cls.isLanternLike;
     gpuModel.isKoboldFlame               = cls.isKoboldFlame;
     gpuModel.isWaterfall                 = cls.isWaterfall;
@@ -2100,8 +2045,8 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 tcls.hasGlowToken && tcls.hasGlowCardToken;
             // Fire pits and braziers commonly pair an authored flame mesh
             // (for example FLAMELICKSMALL) with a separate flat GLOW32 card.
-            // Replace only that glow-textured card; retaining the flame mesh
-            // preserves the intended animated fire shape.
+            // Only that glow-textured card places a local light; both meshes
+            // are drawn by their material.
             const bool fireGlowCard = gpuModel.isBrazierOrFire &&
                 tcls.hasGlowToken && tcls.hasGlowCardToken;
             bgpu.lanternGlowHint =
@@ -2114,16 +2059,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                  (!tcls.likelyFlame || modelLanternFamily));
             bgpu.glowCardLike = bgpu.lanternGlowHint &&
                 (tcls.hasGlowCardToken || tcls.softGlowSurface);
-            // A flame texture is the fire itself, not a flat card standing in for
-            // one, so swapping it for a featureless sprite deletes the visible
-            // flame - chandeliers and candelabra lit their surroundings while
-            // their candles sat unlit. Braziers already keep their flame mesh for
-            // this reason (see fireGlowCard above); FLAMELICK counts as a
-            // glow-card token, so lantern-family models were not getting the same
-            // treatment. Keep the mesh and let the sprite glow behind it.
-            const bool flameCard = tcls.hasFlameToken || tcls.likelyFlame;
-            bgpu.preserveGlowMesh = tcls.softGlowSurface ||
-                                    (bgpu.lanternGlowHint && flameCard);
             bgpu.glowTint = tcls.glowTint;
             if (tex != nullptr && tex != whiteTexture_.get()) {
                 auto pit = texturePropsByPtr_.find(tex);
@@ -2204,8 +2139,10 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 if (!bgpu.colorAnimated && bgpu.staticAlpha < 0.004f) bgpu.batchOpacity = 0.0f;
             }
 
-            // Compute batch center and radius for glow sprite positioning
-            if ((bgpu.blendMode >= 3 || bgpu.glowCardLike) && batch.indexCount > 0) {
+            // Batch center and radius, which place a glow card's local light
+            // (gatherLocalLights). The client draws the batch's mesh by its
+            // material and adds no sprite for it.
+            if (bgpu.glowCardLike && batch.indexCount > 0) {
                 glm::vec3 sum(0.0f);
                 uint32_t counted = 0;
                 std::unordered_map<uint16_t, glm::vec4> boneAnchorSums;
@@ -2269,9 +2206,9 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                     bgpu.glowSize = std::max(maxDist, 0.5f);
                     // Upright fire glow cards are deliberately tall, so their
                     // geometric center floats above a small ground fire. Keep
-                    // the radial halo near the fuel/flame base instead.
+                    // the light near the fuel/flame base instead.
                     if (fireGlowCard && gpuModel.isGroundFire) {
-                        // Ground-fire sprites follow a particle emitter and its
+                        // Ground-fire lights follow a particle emitter and its
                         // animated bone at render time. Origin is the fallback
                         // for unusual fire models without an emitter.
                         bgpu.center = glm::vec3(0.0f);
@@ -2313,7 +2250,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                              " hasAlpha=", bgpu.hasAlpha ? "Y" : "N",
                              " alphaIsSilhouette=", bgpu.alphaIsSilhouette ? "Y" : "N",
                              " glowCardLike=", bgpu.glowCardLike ? "Y" : "N",
-                             " preserveGlowMesh=", bgpu.preserveGlowMesh ? "Y" : "N",
                              " opacity=", bgpu.batchOpacity,
                              " idxCount=", bgpu.indexCount,
                              " texFailed=", texFailed ? "Y" : "N");
@@ -2445,7 +2381,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                          " unlit=", mat.unlit,
                          " glowCardLike=", bgpu.glowCardLike ? 1 : 0,
                          " lanternHint=", bgpu.lanternGlowHint ? 1 : 0,
-                         " preserveGlowMesh=", bgpu.preserveGlowMesh ? 1 : 0,
                          " texAnim=", bgpu.textureAnimIndex,
                          " tint=(", bgpu.tint.r, ",", bgpu.tint.g, ",", bgpu.tint.b, ")");
             }

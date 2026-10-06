@@ -69,9 +69,8 @@ struct M2ModelGPU {
         uint16_t submeshLevel = 0; // LOD level: 0=base, 1=LOD1, 2=LOD2, 3=LOD3
         uint8_t textureUnit = 0;  // UV set index (0=texCoords[0], 1=texCoords[1])
         uint8_t texFlags = 0;     // M2Texture.flags (bit0=WrapS, bit1=WrapT)
-        bool lanternGlowHint = false; // Texture/model hints this batch is a glow-card billboard
-        bool glowCardLike = false; // Batch likely is a flat emissive card that should be sprite-replaced
-        bool preserveGlowMesh = false; // Keep emissive glass/fixture mesh below its glow sprite
+        bool lanternGlowHint = false; // Texture/model hints this batch is a fixture's glow (places a local light)
+        bool glowCardLike = false; // Batch looks like a flat emissive card (places a local light)
         // A sky model's star-point layer. Suppressed when the client draws its
         // own stars instead: the authored layer is a 256x256 compressed texture
         // magnified across the whole dome, which is soft at any resolution and
@@ -93,8 +92,8 @@ struct M2ModelGPU {
         uint16_t weightTrackIndex = 0xFFFF;
         bool colorAnimated = false;  // either track has more than one key, or a global clock
         float staticAlpha = 1.0f;    // colour alpha x transparency, for a batch that does not animate
-        glm::vec3 center = glm::vec3(0.0f); // Center of batch geometry (model space)
-        float glowSize = 1.0f;              // Approx radius of batch geometry
+        glm::vec3 center = glm::vec3(0.0f); // Center of batch geometry (model space), for local lights
+        float glowSize = 1.0f;              // Approx radius of batch geometry, for local lights
 
         struct LightBoneAnchor {
             uint16_t bone = 0;
@@ -135,7 +134,7 @@ struct M2ModelGPU {
     bool isFireflyEffect = false;   // Firefly/fireflies M2 (exempt from particle dampeners)
     bool isWaterfall = false;       // Waterfall model (ambient sound + splash particles)
     bool isBrazierOrFire = false;   // Brazier / campfire / bonfire model
-    bool isGroundFire = false;      // Ground fire whose halo follows its lowest flame emitter
+    bool isGroundFire = false;      // Ground fire whose light follows its lowest flame emitter
     bool isTorch = false;           // Wall-mounted or standing torch
     bool isForge = false;           // Smithy forge (contained fire, lights its surroundings)
     AmbientEmitterType ambientEmitterType = AmbientEmitterType::None;
@@ -180,11 +179,10 @@ struct M2ModelGPU {
     uint32_t rtMesh = ~0u;      // RtScene mesh, or ~0u when it does not cast
     bool isSmoke = false;       // True for smoke models (UV scroll animation)
     bool isSpellEffect = false;  // True for spell effect models (skip particle dampeners)
-    bool isInstancePortal = false; // Instance portal model (spin + glow)
+    bool isInstancePortal = false; // Instance portal model (spin)
     bool disableAnimation = false; // Keep foliage/tree doodads visually stable
     bool shadowWindFoliage = false; // Cast shadows in the alpha-tested foliage pass (leaf cutouts)
     bool isFoliageLike = false;     // Model name matches foliage/tree/bush/grass etc (precomputed)
-    bool isElvenLike = false;       // Model name matches elf/elven/quel (precomputed)
     bool isLanternLike = false;     // Model name matches lantern/lamp/light (precomputed)
     bool isKoboldFlame = false;     // Model name matches kobold+(candle/torch/mine) (precomputed)
     bool isLavaModel = false;       // Model name contains lava/molten/magma (UV scroll fallback)
@@ -1032,11 +1030,6 @@ private:
     ::VkBuffer m2ParticleVB_ = VK_NULL_HANDLE;
     VmaAllocation m2ParticleVBAlloc_ = VK_NULL_HANDLE;
     void* m2ParticleVBMapped_ = nullptr;
-    // Dedicated glow sprite vertex buffer (separate from particle VB to avoid data race)
-    static constexpr size_t MAX_GLOW_SPRITES = 8000;
-    ::VkBuffer glowVB_ = VK_NULL_HANDLE;
-    VmaAllocation glowVBAlloc_ = VK_NULL_HANDLE;
-    void* glowVBMapped_ = nullptr;
 
     std::unordered_map<uint32_t, M2ModelGPU> models;
     // Grace period for model cleanup: track when a model first became instanceless.
@@ -1110,8 +1103,6 @@ private:
     uint64_t textureLookupSerial_ = 0;
     uint32_t textureBudgetRejectWarnings_ = 0;
     std::unique_ptr<VkTexture> whiteTexture_;
-    std::unique_ptr<VkTexture> glowTexture_;
-    VkDescriptorSet glowTexDescSet_ = VK_NULL_HANDLE;  // cached glow texture descriptor (allocated once)
 
     // Optional query-space culling for collision/raycast hot paths.
     CollisionFocus collisionFocus;
@@ -1142,12 +1133,6 @@ private:
     };
     std::vector<VisibleEntry> sortedVisible_;  // Reused each frame
     std::vector<VisibleEntry> transparentVisible_; // Only models needing pass 2
-    struct GlowSprite {
-        glm::vec3 worldPos;
-        glm::vec4 color;
-        float size;
-    };
-    std::vector<GlowSprite> glowSprites_;  // Reused each frame
 
     // Shadow-pass texture descriptor cache (reused each frame, cleared via pool reset)
     std::unordered_map<VkImageView, VkDescriptorSet> shadowTexSetCache_;
