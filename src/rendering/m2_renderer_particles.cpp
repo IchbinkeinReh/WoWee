@@ -679,8 +679,7 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
     // the update path above already uses it; this pass walked all 66211
     // instances instead, asking each whether its particle vector was empty.
     // That walk was 2.0ms of a 16ms frame - two thirds of the M2 worker,
-    // which is the critical path of renderWorld. The smoke pass beside this
-    // one does the same kind of work against a flat list and costs 0.003ms.
+    // which is the critical path of renderWorld.
     for (size_t idx : particleInstanceIndices_) {
         if (idx >= instances.size()) continue;
         auto& inst = instances[idx];
@@ -1015,36 +1014,6 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         // whatever had been copied last.
         vkCmdDraw(cmd, run.count, 1, run.first, 0);
     }
-}
-
-void M2Renderer::renderSmokeParticles(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
-    if (smokeParticles.empty() || !smokePipeline_ || !smokeVB_) return;
-
-    // Build vertex data: pos(3) + lifeRatio(1) + size(1) + isSpark(1) per particle
-    size_t count = std::min(smokeParticles.size(), static_cast<size_t>(MAX_SMOKE_PARTICLES));
-    float* dst = static_cast<float*>(smokeVBMapped_);
-    for (size_t i = 0; i < count; i++) {
-        const auto& p = smokeParticles[i];
-        *dst++ = p.position.x;
-        *dst++ = p.position.y;
-        *dst++ = p.position.z;
-        *dst++ = p.life / p.maxLife;
-        *dst++ = p.size;
-        *dst++ = p.isSpark;
-    }
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, smokePipeline_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            smokePipelineLayout_, 0, 1, &perFrameSet, 0, nullptr);
-
-    // Push constant: screenHeight
-    float screenHeight = static_cast<float>(vkCtx_->getSwapchainExtent().height);
-    vkCmdPushConstants(cmd, smokePipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                       sizeof(float), &screenHeight);
-
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &smokeVB_, &offset);
-    vkCmdDraw(cmd, static_cast<uint32_t>(count), 1, 0, 0);
 }
 
 } // namespace rendering

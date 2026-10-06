@@ -225,7 +225,6 @@ M2ClassificationResult classifyM2Model(
     // glow begins.
     const bool particleEmitterVfx = has(fullPath, "\\particleemitters\\")
                                  || has(fullPath, "/particleemitters/");
-    r.isSmoke         = has(n, "smoke");
 
     r.isInstancePortal  = has(n, "instanceportal") || has(n, "instancenewportal")
                         || has(n, "portalfx")       || has(n, "spellportal");

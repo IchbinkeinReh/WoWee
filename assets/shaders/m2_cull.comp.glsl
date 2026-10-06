@@ -11,7 +11,7 @@ layout(local_size_x = 64) in;
 struct CullInstance {
     vec4  sphere;              // xyz = world position, w = padded radius
     float effectiveMaxDistSq;  // adaptive distance cull threshold
-    uint  flags;               // bit 0 = valid, bit 1 = smoke, bit 2 = invisibleTrap
+    uint  flags;               // bit 0 = valid, bit 1 unused, bit 2 = invisibleTrap
     float _pad0;
     float _pad1;
 };
@@ -39,9 +39,9 @@ void main() {
 
     CullInstance inst = cullInstances[id];
 
-    // Flag check: must be valid, not smoke, not invisible trap
+    // Flag check: must be valid, not an invisible trap
     uint f = inst.flags;
-    if ((f & 1u) == 0u || (f & 6u) != 0u) {
+    if ((f & 1u) == 0u || (f & 4u) != 0u) {
         visibility[id] = 0u;
         return;
     }

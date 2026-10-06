@@ -63,23 +63,6 @@ constexpr float M2_DEFAULT_PARTICLE_ANIM_MS    = 3333.0f;
 constexpr float HIZ_VP_DIFF_THRESHOLD = 0.5f;
 
 // ---------------------------------------------------------------------------
-// Smoke / spark particle tuning
-// ---------------------------------------------------------------------------
-constexpr float SMOKE_OFFSET_XY_MIN  = -0.4f;
-constexpr float SMOKE_OFFSET_XY_MAX  =  0.4f;
-constexpr float SMOKE_VEL_Z_MIN      =  3.0f;
-constexpr float SMOKE_VEL_Z_MAX      =  5.0f;
-constexpr float SMOKE_LIFETIME_MIN   =  4.0f;
-constexpr float SMOKE_LIFETIME_MAX   =  7.0f;
-constexpr float SMOKE_Z_VEL_DAMPING  =  0.98f;
-constexpr float SMOKE_SIZE_START     =  1.0f;
-constexpr float SMOKE_SIZE_GROWTH    =  2.5f;
-
-constexpr int   SPARK_PROBABILITY_DENOM = 8;      // 1-in-8 chance per frame
-constexpr float SPARK_LIFE_BASE         = 0.8f;
-constexpr float SPARK_LIFE_RANGE        = 1.2f;
-
-// ---------------------------------------------------------------------------
 // Character rendering
 // ---------------------------------------------------------------------------
 // Default frustum-cull radius when model bounds are unavailable (world units).

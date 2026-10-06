@@ -24,7 +24,7 @@ the pipeline twice and those are what this reads.
 
 Only the first chain in each function is read. A renderer that builds several
 pipelines in one function - the WMO renderer's opaque, transparent and
-wireframe passes, or the M2 renderer's particle, smoke and ribbon ones - is
+wireframe passes, or the M2 renderer's particle and ribbon ones - is
 out of scope here: those are different pipelines rather than one pipeline
 described twice, and telling them apart needs the name each is assigned to.
 """

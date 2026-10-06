@@ -30,7 +30,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <random>
 #include <limits>
 #include <future>
 #include <thread>
@@ -185,7 +184,6 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     // Cache model flags on instance to avoid per-frame hash lookups
     instance.cachedHasAnimation = mdlRef.hasAnimation;
     instance.cachedDisableAnimation = mdlRef.disableAnimation;
-    instance.cachedIsSmoke = mdlRef.isSmoke;
     // Ribbons are updated in the same pass, so a model with ribbons alone
     // has to be on the list too or its trails never move.
     instance.cachedHasParticleEmitters = !mdlRef.particleEmitters.empty() ||
@@ -225,9 +223,6 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     instances.push_back(instance);
     size_t idx = instances.size() - 1;
     // Track special instances for fast-path iteration
-    if (mdlRef.isSmoke) {
-        smokeInstanceIndices_.push_back(idx);
-    }
     if (!mdlRef.particleEmitters.empty()) {
         particleInstanceIndices_.push_back(idx);
     }
@@ -287,7 +282,6 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
     const auto& mdl2 = models[modelId];
     instance.cachedHasAnimation = mdl2.hasAnimation;
     instance.cachedDisableAnimation = mdl2.disableAnimation;
-    instance.cachedIsSmoke = mdl2.isSmoke;
     instance.cachedHasParticleEmitters = !mdl2.particleEmitters.empty() ||
                                          !mdl2.ribbonEmitters.empty();
     instance.cachedBoundRadius = mdl2.boundRadius;
@@ -329,9 +323,6 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
     censusInstance(instance);
     instances.push_back(instance);
     size_t idx = instances.size() - 1;
-    if (mdl2.isSmoke) {
-        smokeInstanceIndices_.push_back(idx);
-    }
     if (!mdl2.particleEmitters.empty()) {
         particleInstanceIndices_.push_back(idx);
     }
@@ -396,65 +387,6 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
     // Build frustum for culling bones
     Frustum updateFrustum;
     updateFrustum.extractFromMatrix(viewProjection);
-
-    // --- Smoke particle spawning (only iterate tracked smoke instances) ---
-    std::uniform_real_distribution<float> distXY(rendering::SMOKE_OFFSET_XY_MIN, rendering::SMOKE_OFFSET_XY_MAX);
-    std::uniform_real_distribution<float> distVelXY(-0.3f, 0.3f);
-    std::uniform_real_distribution<float> distVelZ(rendering::SMOKE_VEL_Z_MIN, rendering::SMOKE_VEL_Z_MAX);
-    std::uniform_real_distribution<float> distLife(rendering::SMOKE_LIFETIME_MIN, rendering::SMOKE_LIFETIME_MAX);
-    std::uniform_real_distribution<float> distDrift(-0.2f, 0.2f);
-
-    smokeEmitAccum += deltaTime;
-    constexpr float emitInterval = kSmokeEmitInterval;  // 48 particles per second per emitter
-
-    if (smokeEmitAccum >= emitInterval &&
-        static_cast<int>(smokeParticles.size()) < MAX_SMOKE_PARTICLES) {
-        for (size_t si : smokeInstanceIndices_) {
-            if (si >= instances.size()) continue;
-            auto& instance = instances[si];
-
-            glm::vec3 emitWorld = glm::vec3(instance.modelMatrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-            bool spark = (smokeRng() % rendering::SPARK_PROBABILITY_DENOM == 0);
-
-            SmokeParticle p;
-            p.position = emitWorld + glm::vec3(distXY(smokeRng), distXY(smokeRng), 0.0f);
-            if (spark) {
-                p.velocity = glm::vec3(distVelXY(smokeRng) * 2.0f, distVelXY(smokeRng) * 2.0f, distVelZ(smokeRng) * 1.5f);
-                p.maxLife = rendering::SPARK_LIFE_BASE + static_cast<float>(smokeRng() % 100) / 100.0f * rendering::SPARK_LIFE_RANGE;
-                p.size = 0.5f;
-                p.isSpark = 1.0f;
-            } else {
-                p.velocity = glm::vec3(distVelXY(smokeRng), distVelXY(smokeRng), distVelZ(smokeRng));
-                p.maxLife = distLife(smokeRng);
-                p.size = 1.0f;
-                p.isSpark = 0.0f;
-            }
-            p.life = 0.0f;
-            p.instanceId = instance.id;
-            smokeParticles.push_back(p);
-            if (static_cast<int>(smokeParticles.size()) >= MAX_SMOKE_PARTICLES) break;
-        }
-        smokeEmitAccum = 0.0f;
-    }
-
-    // --- Update existing smoke particles (swap-and-pop for O(1) removal) ---
-    for (size_t i = 0; i < smokeParticles.size(); ) {
-        auto& p = smokeParticles[i];
-        p.life += deltaTime;
-        if (p.life >= p.maxLife) {
-            smokeParticles[i] = smokeParticles.back();
-            smokeParticles.pop_back();
-            continue;
-        }
-        p.position += p.velocity * deltaTime;
-        p.velocity.z *= rendering::SMOKE_Z_VEL_DAMPING;  // Slight deceleration
-        p.velocity.x += distDrift(smokeRng) * deltaTime;
-        p.velocity.y += distDrift(smokeRng) * deltaTime;
-        // Grow from 1.0 to 3.5 over lifetime
-        float t = p.life / p.maxLife;
-        p.size = rendering::SMOKE_SIZE_START + t * rendering::SMOKE_SIZE_GROWTH;
-        ++i;
-    }
 
     // --- Normal M2 animation update ---
     // Advance animTime for ALL instances (needed for texture UV animation on static doodads).
@@ -948,7 +880,6 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
 
             uint32_t flags = 0;
             if (inst.cachedIsValid)          flags |= 1u;
-            if (inst.cachedIsSmoke)           flags |= 2u;
             if (inst.cachedIsInvisibleTrap)   flags |= 4u;
             // Bit 3: previouslyVisible - the shader runs the HiZ occlusion test
             // ONLY when this bit is set (an object with no depth in last frame's
@@ -1197,7 +1128,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 distSq = glm::dot(toCam, toCam);
                 effectiveMaxDistSq = instanceMaxDistSq;
             } else {
-                if (!instance.cachedIsValid || instance.cachedIsSmoke || instance.cachedIsInvisibleTrap) continue;
+                if (!instance.cachedIsValid || instance.cachedIsInvisibleTrap) continue;
                 glm::vec3 toCam = instance.position - camPos;
                 distSq = glm::dot(toCam, toCam);
                 if (distSq > maxPossibleDistSq) continue;
@@ -2143,8 +2074,7 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
     shadowCasters_[1].clear();
     for (uint32_t i = 0; i < instances.size(); ++i) {
         const auto& instance = instances[i];
-        if (!instance.cachedIsValid || instance.cachedIsSmoke ||
-            instance.cachedIsInvisibleTrap) continue;
+        if (!instance.cachedIsValid || instance.cachedIsInvisibleTrap) continue;
         if (!instance.cachedModel) continue;
         const M2ModelGPU& model = *instance.cachedModel;
 
@@ -2242,6 +2172,10 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
             usePipeline(instanced);
 
             for (const auto& batch : model.batches) {
+                // A blended or additive layer - smoke, a glow, a spell's
+                // card - covers nothing, so it casts nothing; the ray-traced
+                // scene leaves the same layers out.
+                if (batch.blendMode >= 2) continue;
                 // A leaf card with no texture is a shadow with no caster.
                 //
                 // The else below binds the white set, whose alpha test passes

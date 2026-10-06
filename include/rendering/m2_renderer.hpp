@@ -153,7 +153,6 @@ struct M2ModelGPU {
     std::vector<uint32_t> globalSequenceDurations;  // Loop durations for global sequence tracks
     bool hasAnimation = false;  // True if any bone has keyframes
     uint32_t rtMesh = ~0u;      // RtScene mesh, or ~0u when it does not cast
-    bool isSmoke = false;       // True for smoke models (UV scroll animation)
     bool isSpellEffect = false;  // True for spell effect models (skip particle dampeners)
     bool disableAnimation = false; // Keep foliage/tree doodads visually stable
     bool shadowWindFoliage = false; // Cast shadows in the alpha-tested foliage pass (leaf cutouts)
@@ -281,7 +280,6 @@ struct M2Instance {
     // Cached model flags (set at creation to avoid per-frame hash lookups)
     bool cachedHasAnimation = false;
     bool cachedDisableAnimation = false;
-    bool cachedIsSmoke = false;
     bool cachedHasParticleEmitters = false;
     bool cachedIsGroundDetail = false;
     bool cachedIsInvisibleTrap = false;
@@ -338,19 +336,6 @@ struct M2Instance {
     uint32_t megaBoneOffset = 0;
 
     void updateModelMatrix();
-};
-
-/**
- * A single smoke particle emitted from a chimney or similar M2 model
- */
-struct SmokeParticle {
-    glm::vec3 position;
-    glm::vec3 velocity;
-    float life = 0.0f;
-    float maxLife = 3.0f;
-    float size = 1.0f;
-    float isSpark = 0.0f;  // 0 = smoke, 1 = ember/spark
-    uint32_t instanceId = 0;
 };
 
 // M2 material UBO - matches M2Material in m2.frag.glsl (set 1, binding 2)
@@ -468,11 +453,6 @@ public:
      * Render M2 particle emitters (point sprites)
      */
     void renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
-
-    /**
-     * Render smoke particles from chimneys etc.
-     */
-    void renderSmokeParticles(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
 
     /**
      * Render M2 ribbon emitters (spell trails / wing effects)
@@ -810,8 +790,6 @@ private:
     VkPipeline particlePipeline_ = VK_NULL_HANDLE;       // M2 emitter particles
     VkPipeline particleAdditivePipeline_ = VK_NULL_HANDLE; // Additive particle blend
     VkPipelineLayout particlePipelineLayout_ = VK_NULL_HANDLE;
-    VkPipeline smokePipeline_ = VK_NULL_HANDLE;           // Smoke particles
-    VkPipelineLayout smokePipelineLayout_ = VK_NULL_HANDLE;
 
     // Ribbon pipelines (additive + alpha-blend)
     VkPipeline ribbonPipeline_ = VK_NULL_HANDLE;          // Alpha-blend ribbons
@@ -893,7 +871,7 @@ private:
     struct CullInstanceGPU {        // matches CullInstance in m2_cull.comp.glsl (32 bytes, std430)
         glm::vec4 sphere;           // xyz = world position, w = padded radius
         float effectiveMaxDistSq;   // adaptive distance cull threshold
-        uint32_t flags;             // bit 0 = valid, bit 1 = smoke, bit 2 = invisibleTrap
+        uint32_t flags;             // bit 0 = valid, bit 1 unused, bit 2 = invisibleTrap
         float _pad[2] = {};
     };
     struct CullUniformsGPU {        // matches CullUniforms in m2_cull_hiz.comp.glsl (std140)
@@ -964,9 +942,6 @@ private:
     void* ribbonVBMapped_ = nullptr;
 
     // Dynamic particle buffers
-    ::VkBuffer smokeVB_ = VK_NULL_HANDLE;
-    VmaAllocation smokeVBAlloc_ = VK_NULL_HANDLE;
-    void* smokeVBMapped_ = nullptr;
     ::VkBuffer m2ParticleVB_ = VK_NULL_HANDLE;
     VmaAllocation m2ParticleVBAlloc_ = VK_NULL_HANDLE;
     void* m2ParticleVBMapped_ = nullptr;
@@ -1158,14 +1133,8 @@ private:
     std::vector<size_t> particleOnlyInstanceIndices_; // !hasAnimation && hasParticleEmitters
     std::vector<size_t> particleInstanceIndices_;    // ALL instances with particle emitters
 
-    // Smoke particle system
-    std::vector<SmokeParticle> smokeParticles;
-    std::vector<size_t> smokeInstanceIndices_;  // Indices into instances[] for smoke emitters
-    static constexpr int MAX_SMOKE_PARTICLES = 1000;
-    float smokeEmitAccum = 0.0f;
-    std::mt19937 smokeRng{42};
-
-    // M2 particle emitter system
+    // M2 particle emitter system. The client emits only from a model's own
+    // particle and ribbon emitters; nothing is added by model name.
     static constexpr size_t MAX_M2_PARTICLES = 4000;
     std::mt19937 particleRng_{123};
     bool skyMode_ = false;
