@@ -1382,12 +1382,16 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
         owner_.creatureMoveCallbackRef()(moverGuid, canonical.x, canonical.y, canonical.z, notifyDuration);
     }
 
-    if (owner_.unitAnimHintCallbackRef() && isJumpOpcode) {
-        owner_.unitAnimHintCallbackRef()(moverGuid, 38u);
-    }
-
     if (owner_.unitMoveFlagsCallbackRef()) {
         owner_.unitMoveFlagsCallbackRef()(moverGuid, info.flags, ~0u);
+    }
+
+    // The jump this packet starts or ends: FUN_0073ed10 plays JumpStart on
+    // MSG_MOVE_JUMP, and the packet that clears FALLING - MSG_MOVE_FALL_LAND,
+    // or any other - lands the unit (FUN_0073d2b0).
+    const ReportedJump jump = entity->reportMoveFlags(info.flags, isJumpOpcode);
+    if (jump != ReportedJump::None && owner_.unitJumpCallbackRef()) {
+        owner_.unitJumpCallbackRef()(moverGuid, jump);
     }
 }
 

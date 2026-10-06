@@ -1173,6 +1173,10 @@ target_link_libraries(test_locomotion_fsm PRIVATE catch2_main)
 add_test(NAME locomotion_fsm COMMAND test_locomotion_fsm)
 register_test_target(test_locomotion_fsm)
 
+# ── test_jump_landing ────────────────────────────────────────
+wowee_add_test(test_jump_landing
+    SOURCES test_jump_landing.cpp ${TEST_COMMON_SOURCES})
+
 # ── test_chat_filters ────────────────────────────────────────
 add_executable(test_chat_filters
     test_chat_filters.cpp

@@ -16,6 +16,7 @@
 #include "core/ui_screen_callback_handler.hpp"
 #include "game/spell_classification.hpp"
 #include "rendering/animation/animation_ids.hpp"
+#include "rendering/animation/jump_landing.hpp"
 #include "rendering/animation_controller.hpp"
 #include <bit>
 #include <unordered_set>
@@ -118,6 +119,36 @@ namespace wowee {
 namespace core {
 
 namespace {
+
+// Where another unit's jump leaves the sync loop's locomotion choice this
+// frame (airborneAnimSync): true while the jump's animations hold it - Fall
+// started for a unit in the air without one; refresh set for a unit down
+// again but still in an airborne loop, whose locomotion must be picked
+// although nothing else changed.
+bool jumpHoldsAnimation(rendering::CharacterRenderer& charRenderer, uint32_t instanceId,
+                        bool airborne, bool& refresh) {
+    uint32_t curAnim = 0;
+    float curT = 0.0f, curDur = 0.0f;
+    if (!charRenderer.getAnimationState(instanceId, curAnim, curT, curDur) ||
+        curAnim == rendering::anim::DEATH) {
+        return false;
+    }
+    switch (rendering::airborneAnimSync(airborne, curAnim)) {
+        case rendering::AirborneAnimSync::Hold:
+            return true;
+        case rendering::AirborneAnimSync::Fall:
+            if (charRenderer.hasAnimation(instanceId, rendering::anim::FALL)) {
+                charRenderer.playAnimation(instanceId, rendering::anim::FALL, /*loop=*/true);
+            }
+            return true;
+        case rendering::AirborneAnimSync::Refresh:
+            refresh = true;
+            return false;
+        case rendering::AirborneAnimSync::None:
+            break;
+    }
+    return false;
+}
 
 std::optional<float> movingEntityFloor(rendering::Renderer* renderer,
                                         const glm::vec3& renderPos,
@@ -3374,10 +3405,16 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // Trigger animation update on any locomotion-state transition, not just
                 // moving/idle - e.g. creature lands while still moving → FlyForward→Run,
                 // or server changes WALKING flag while creature is already running → Walk.
-                const bool stateChanged = (isMovingNow  != prevMoving)   ||
-                                          (isSwimmingNow != prevSwimming) ||
-                                          (isFlyingNow   != prevFlying)   ||
-                                          (isWalkingNow  != prevWalking && isMovingNow);
+                // A jump keeps its animations until it is down and landed.
+                bool jumpRefresh = false;
+                const bool jumpHolds = !deadOrCorpse &&
+                    jumpHoldsAnimation(*charRenderer, instanceId, entity->isAirborne(), jumpRefresh);
+                const bool stateChanged = !jumpHolds &&
+                                          (jumpRefresh ||
+                                           (isMovingNow  != prevMoving)   ||
+                                           (isSwimmingNow != prevSwimming) ||
+                                           (isFlyingNow   != prevFlying)   ||
+                                           (isWalkingNow  != prevWalking && isMovingNow));
                 if (stateChanged) {
                     _creatureWasMoving[guid]   = isMovingNow;
                     _creatureWasSwimming[guid] = isSwimmingNow;
@@ -3565,10 +3602,17 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 bool prevSwimming = _pCreatureWasSwimming[guid];
                 bool prevFlying   = _pCreatureWasFlying[guid];
                 bool prevWalking  = _pCreatureWasWalking[guid];
-                const bool stateChanged = (isMovingNow  != prevMoving)   ||
-                                          (isSwimmingNow != prevSwimming) ||
-                                          (isFlyingNow   != prevFlying)   ||
-                                          (isWalkingNow  != prevWalking && isMovingNow);
+                // A jump keeps its animations until it is down and landed;
+                // a mounted rider keeps the seat pose instead.
+                bool jumpRefresh = false;
+                const bool jumpHolds = !deadOrCorpse && !remoteMount &&
+                    jumpHoldsAnimation(*charRenderer, instanceId, entity->isAirborne(), jumpRefresh);
+                const bool stateChanged = !jumpHolds &&
+                                          (jumpRefresh ||
+                                           (isMovingNow  != prevMoving)   ||
+                                           (isSwimmingNow != prevSwimming) ||
+                                           (isFlyingNow   != prevFlying)   ||
+                                           (isWalkingNow  != prevWalking && isMovingNow));
                 if (stateChanged) {
                     _pCreatureWasMoving[guid]   = isMovingNow;
                     _pCreatureWasSwimming[guid] = isSwimmingNow;

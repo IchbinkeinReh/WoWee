@@ -514,3 +514,45 @@ TEST_CASE("EntityManager spatial query filters nearby entities", "[entity][spati
     REQUIRE(std::any_of(result.begin(), result.end(), [](const auto& e) { return e->getGuid() == 2; }));
     REQUIRE_FALSE(std::any_of(result.begin(), result.end(), [](const auto& e) { return e->getGuid() == 3; }));
 }
+
+TEST_CASE("Entity reportMoveFlags: a jump launches and lands", "[entity][jump]") {
+    constexpr uint32_t kForward = 0x1, kFalling = 0x1000;
+    Entity e;
+    CHECK(e.reportMoveFlags(kForward, false) == ReportedJump::None);
+    CHECK_FALSE(e.isAirborne());
+    CHECK(e.reportMoveFlags(kForward | kFalling, true) == ReportedJump::Launch);
+    CHECK(e.isAirborne());
+    // A heartbeat in the air changes nothing.
+    CHECK(e.reportMoveFlags(kForward | kFalling, false) == ReportedJump::None);
+    CHECK(e.isAirborne());
+    CHECK(e.reportMoveFlags(kForward, false) == ReportedJump::Land);
+    CHECK_FALSE(e.isAirborne());
+    CHECK(e.getReportedMoveFlags() == kForward);
+    CHECK(e.reportMoveFlags(kForward, false) == ReportedJump::None);
+}
+
+TEST_CASE("Entity reportMoveFlags: a fall off a ledge lands without a landing", "[entity][jump]") {
+    constexpr uint32_t kFalling = 0x1000, kFallingFar = 0x2000;
+    Entity e;
+    CHECK(e.reportMoveFlags(kFalling, false) == ReportedJump::None);
+    CHECK_FALSE(e.isAirborne());
+    CHECK(e.reportMoveFlags(0, false) == ReportedJump::None);
+
+    // Falling far is airborne and lands.
+    CHECK(e.reportMoveFlags(kFalling | kFallingFar, false) == ReportedJump::None);
+    CHECK(e.isAirborne());
+    CHECK(e.reportMoveFlags(0, false) == ReportedJump::Land);
+}
+
+TEST_CASE("Entity reportMoveFlags: no landing into water or flight", "[entity][jump]") {
+    constexpr uint32_t kFalling = 0x1000, kSwimming = 0x200000, kFlying = 0x2000000;
+    Entity e;
+    CHECK(e.reportMoveFlags(kFalling, true) == ReportedJump::Launch);
+    CHECK(e.reportMoveFlags(kSwimming, false) == ReportedJump::None);
+    CHECK_FALSE(e.isAirborne());
+    CHECK(e.reportMoveFlags(kFalling, true) == ReportedJump::Launch);
+    CHECK(e.reportMoveFlags(kFlying, false) == ReportedJump::None);
+    // The jump is over: a later fall off a ledge is no jump.
+    CHECK(e.reportMoveFlags(kFalling, false) == ReportedJump::None);
+    CHECK(e.reportMoveFlags(0, false) == ReportedJump::None);
+}

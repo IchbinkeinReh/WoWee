@@ -1410,9 +1410,10 @@ public:
     using SpellCastFailedCallback = std::function<void(uint32_t spellId)>;
     void setSpellCastFailedCallback(SpellCastFailedCallback cb) { spellCastFailedCallback_ = std::move(cb); }
 
-    // Unit animation hint: signal jump (animId=38) for other players/NPCs
-    using UnitAnimHintCallback = std::function<void(uint64_t guid, uint32_t animId)>;
-    void setUnitAnimHintCallback(UnitAnimHintCallback cb) { unitAnimHintCallback_ = std::move(cb); }
+    /// Another unit jumped (ReportedJump::Launch) or came down from a jump or
+    /// a long fall (ReportedJump::Land); see Entity::reportMoveFlags.
+    using UnitJumpCallback = std::function<void(uint64_t guid, ReportedJump jump)>;
+    void setUnitJumpCallback(UnitJumpCallback cb) { unitJumpCallback_ = std::move(cb); }
 
     // Unit move-flags callback: fired on every MSG_MOVE_* for other players with the raw flags field.
     // Drives Walk(4) vs Run(5) selection and swim state initialization from heartbeat packets.
@@ -3840,7 +3841,7 @@ public:
     auto& playerPositionCorrectionCallbackRef() { return playerPositionCorrectionCallback_; }
     auto& taxiPrecacheCallbackRef() { return taxiPrecacheCallback_; }
     auto& transportMoveCallbackRef() { return transportMoveCallback_; }
-    auto& unitAnimHintCallbackRef() { return unitAnimHintCallback_; }
+    auto& unitJumpCallbackRef() { return unitJumpCallback_; }
     auto& unitMoveFlagsCallbackRef() { return unitMoveFlagsCallback_; }
     auto& worldEntryCallbackRef() { return worldEntryCallback_; }
 
@@ -5024,7 +5025,7 @@ private:
     // lastMeleeSwingMs_ moved to CombatHandler
     SpellCastAnimCallback spellCastAnimCallback_;
     SpellCastFailedCallback spellCastFailedCallback_;
-    UnitAnimHintCallback unitAnimHintCallback_;
+    UnitJumpCallback unitJumpCallback_;
     UnitMoveFlagsCallback unitMoveFlagsCallback_;
     NpcSwingCallback npcSwingCallback_;
     HitReactionCallback hitReactionCallback_;

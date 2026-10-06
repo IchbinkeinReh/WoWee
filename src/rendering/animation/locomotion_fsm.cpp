@@ -1,5 +1,6 @@
 #include "rendering/animation/locomotion_fsm.hpp"
 #include "rendering/animation/animation_ids.hpp"
+#include "rendering/animation/jump_landing.hpp"
 #include <algorithm>
 
 namespace wowee {
@@ -15,17 +16,15 @@ bool LocomotionFSM::oneShotComplete(const Input& in, uint32_t expectedAnimId) co
 
 // ── Landing ───────────────────────────────────────────────────────────────────
 
-// The client's landing (FUN_0073d2b0), decided as the feet touch down: with no
-// direction held it plays JumpEnd; running on - forward or strafing, not
-// backing up, faster than twice walk speed (FUN_00716fa0) - JumpLandRun;
-// walking or backing up goes straight back to moving. WoWee dropped the
-// landing whenever the player was moving, so a jump on the run never landed.
+// The client's landing (FUN_0073d2b0, chooseJumpLanding), decided as the feet
+// touch down. WoWee dropped the landing whenever the player was moving, so a
+// jump on the run never landed.
 void LocomotionFSM::land(const Input& in, const AnimCapabilitySet& caps) {
     jumpEndSeen_ = false;
     landDecided_ = true;
-    landRun_ = in.moving && !in.movingBackward && in.sprinting &&
-               caps.resolvedJumpLandRun != 0;
-    if (in.moving && !landRun_) {
+    const JumpLanding landing = chooseJumpLanding(in.moving, in.movingBackward, in.sprinting);
+    landRun_ = landing == JumpLanding::LandRun && caps.resolvedJumpLandRun != 0;
+    if (landing != JumpLanding::End && !landRun_) {
         state_ = in.sprinting ? State::RUN : State::WALK;
     } else {
         state_ = State::JUMP_END;

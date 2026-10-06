@@ -109,6 +109,14 @@ struct MovementSpeeds {
     float turnRate = 3.14159265f;
 };
 
+/// What a movement packet from a unit did to its jump; see
+/// Entity::reportMoveFlags.
+enum class ReportedJump : uint8_t {
+    None,
+    Launch,     // MSG_MOVE_JUMP: JumpStart, then the Jump loop
+    Land,       // Down from a jump or a long fall: the landing animation
+};
+
 /**
  * Base entity class for all game objects
  */
@@ -372,6 +380,39 @@ public:
         return back && speeds.runBack <= speeds.run ? speeds.runBack : speeds.run;
     }
 
+    /// Takes the flags of a movement packet (MSG_MOVE_*) from the unit and
+    /// says what it did to the unit's jump, as the client's handlers do for
+    /// another unit. MSG_MOVE_JUMP launches it (FUN_0073ed10, case 0xbb). A
+    /// packet that clears FALLING (0x1000) lands it (FUN_006eb730 calling
+    /// FUN_0073d3d0), and FUN_0073d2b0 plays a landing only after a fall with
+    /// a vertical speed - a jump or a knockback; WoWee knows it by the jump
+    /// opcode rather than from the packet's jump block - or a fall far
+    /// (0x2000), and not into water or into flight (0x2200000). A fall off a
+    /// ledge lands on its feet still moving.
+    ReportedJump reportMoveFlags(uint32_t flags, bool jumped) {
+        const uint32_t before = reportedMoveFlags_;
+        reportedMoveFlags_ = flags;
+        if (jumped) {
+            launched_ = (flags & kFalling) != 0;
+            return ReportedJump::Launch;
+        }
+        if ((flags & kFalling) != 0 || (before & kFalling) == 0) return ReportedJump::None;
+        const bool wasLaunched = launched_;
+        launched_ = false;
+        if (!wasLaunched && (before & kFallingFar) == 0) return ReportedJump::None;
+        return (flags & (kSwimming | kFlying)) == 0 ? ReportedJump::Land : ReportedJump::None;
+    }
+
+    /// The flags of the unit's last movement packet; see reportMoveFlags.
+    [[nodiscard]] uint32_t getReportedMoveFlags() const { return reportedMoveFlags_; }
+
+    /// In the air as the client's locomotion choice sees a unit
+    /// (FUN_00723350): falling after a jump, or falling far.
+    [[nodiscard]] bool isAirborne() const {
+        return (reportedMoveFlags_ & kFalling) != 0 &&
+               (launched_ || (reportedMoveFlags_ & kFallingFar) != 0);
+    }
+
     [[nodiscard]] const MovementSpeeds& getMovementSpeeds() const { return speeds_; }
     MovementSpeeds& movementSpeeds() { return speeds_; }
 
@@ -505,7 +546,7 @@ private:
     static constexpr uint32_t kForward = 0x1, kBackward = 0x2;
     static constexpr uint32_t kStrafeLeft = 0x4, kStrafeRight = 0x8;
     static constexpr uint32_t kTurnLeft = 0x10, kTurnRight = 0x20;
-    static constexpr uint32_t kWalking = 0x100, kFalling = 0x1000;
+    static constexpr uint32_t kWalking = 0x100, kFalling = 0x1000, kFallingFar = 0x2000;
     static constexpr uint32_t kSwimming = 0x200000, kFlying = 0x2000000;
     static constexpr uint32_t kAscending = 0x400000, kDescending = 0x800000;
     static constexpr uint32_t kDirectionFlags = 0xc0000f;
@@ -637,6 +678,10 @@ private:
     }
 
     MovementSpeeds speeds_;
+    // The last movement packet's flags, and whether the fall in them is a
+    // jump's; see reportMoveFlags.
+    uint32_t reportedMoveFlags_ = 0;
+    bool launched_ = false;
     // Moved on by its flags (startMoveByFlags): moveEnd is the packet's
     // position, the corr* offset is taken out over moveDuration_.
     bool movingByFlags_ = false;

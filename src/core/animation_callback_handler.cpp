@@ -10,6 +10,7 @@
 #include "rendering/animation_controller.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/animation/emote_registry.hpp"
+#include "rendering/animation/jump_landing.hpp"
 #include "game/game_handler.hpp"
 #include "game/spell_classification.hpp"
 #include "game/world_packets.hpp"
@@ -295,19 +296,47 @@ void AnimationCallbackHandler::setupCallbacks() {
         ac->setLowHealth(lowHp);
     });
 
-    // Unit animation hint callback - plays jump (38=JumpMid) animation on other players/NPCs.
-    // Swim/walking state is now authoritative from the move-flags callback below.
-    // animId=38 (JumpMid): airborne jump animation; land detection is via per-frame sync.
-    gameHandler_.setUnitAnimHintCallback([this](uint64_t guid, uint32_t animId) {
+    // Another unit's jump, as the client plays it for one. MSG_MOVE_JUMP
+    // plays JumpStart (FUN_0073ed10, case 0xbb), and when that ends the Jump
+    // loop follows (FUN_0073b510), held while the unit is in the air by the
+    // sync loops in Application::update. Touching down plays the landing
+    // FUN_0073d2b0 picks from the flags the unit lands with: JumpEnd back to
+    // its rest animation, JumpLandRun back to Run, or nothing - the sync
+    // loop then takes a unit left in an airborne loop back to its locomotion.
+    // A mounted player's rider keeps the seat pose.
+    gameHandler_.setUnitJumpCallback([this](uint64_t guid, game::ReportedJump jump) {
         auto* cr = renderer_.getCharacterRenderer();
         if (!cr) return;
         uint32_t instanceId = entitySpawner_.getPlayerInstanceId(guid);
+        if (instanceId != 0 && entitySpawner_.getRemotePlayerMount(guid)) return;
         if (instanceId == 0) instanceId = entitySpawner_.getCreatureInstanceId(guid);
         if (instanceId == 0) return;
+        auto entity = gameHandler_.getEntityManager().getEntity(guid);
+        if (!entity) return;
         // Don't override Death animation
         uint32_t curAnim = 0; float curT = 0.0f, curDur = 0.0f;
         if (cr->getAnimationState(instanceId, curAnim, curT, curDur) && curAnim == rendering::anim::DEATH) return;
-        cr->playAnimation(instanceId, animId, /*loop=*/true);
+        if (jump == game::ReportedJump::Launch) {
+            if (cr->hasAnimation(instanceId, rendering::anim::JUMP_START)) {
+                cr->playAnimation(instanceId, rendering::anim::JUMP_START, /*loop=*/false,
+                                  rendering::anim::JUMP);
+            } else if (cr->hasAnimation(instanceId, rendering::anim::JUMP)) {
+                cr->playAnimation(instanceId, rendering::anim::JUMP, /*loop=*/true);
+            }
+            return;
+        }
+        const uint32_t flags = entity->getReportedMoveFlags();
+        const auto& speeds = entity->getMovementSpeeds();
+        const rendering::JumpLanding landing = rendering::jumpLandingForFlags(
+            flags, game::Entity::speedForFlags(speeds, flags), speeds.walk);
+        if (landing == rendering::JumpLanding::End &&
+            cr->hasAnimation(instanceId, rendering::anim::JUMP_END)) {
+            cr->playAnimation(instanceId, rendering::anim::JUMP_END, /*loop=*/false);
+        } else if (landing == rendering::JumpLanding::LandRun &&
+                   cr->hasAnimation(instanceId, rendering::anim::JUMP_LAND_RUN)) {
+            cr->playAnimation(instanceId, rendering::anim::JUMP_LAND_RUN, /*loop=*/false,
+                              rendering::anim::RUN);
+        }
     });
 
     // Unit move-flags callback - updates swimming and walking state from every MSG_MOVE_* packet.
