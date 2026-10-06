@@ -1323,9 +1323,7 @@ bool CombatHandler::isSelectableUnit(uint64_t guid) const {
     // Not re-gated here, because that would be trading a working behaviour for
     // a theory. Anyone who wants the gate back should first confirm against a
     // live corpse that the flag now reads what it should.
-    // Empty, fully-looted corpses are already removed locally by the
-    // lootableCleared -> despawnCreatureLocally path (see
-    // EntityController::onValuesUpdateUnit), so they don't return as click targets.
+    // A looted corpse stays a target until the server removes it, as in the client.
     return true;
 }
 
