@@ -129,7 +129,13 @@ private:
     // Composite render target (3x3 tiles = 768x768)
     std::unique_ptr<VkRenderTarget> compositeTarget;
     static constexpr int TILE_PX = 256;
-    static constexpr int COMPOSITE_PX = TILE_PX * 3;  // 768
+    // The composite is a square of GRID x GRID tiles around the player's own. The
+    // furthest zoom shows 800 yards each way and the player can stand anywhere in
+    // the middle tile, so the grid has to reach 800 yards past its edge: three
+    // tiles (a tile is 533 yards) left the sides empty, which is where the map
+    // only worked in the middle; five reach 1067 yards at the least.
+    static constexpr int GRID = 5;
+    static constexpr int COMPOSITE_PX = TILE_PX * GRID;
 
     // Shared quad vertex buffer (6 verts, pos2 + uv2 = 16 bytes/vert)
     ::VkBuffer quadVB = VK_NULL_HANDLE;
@@ -138,12 +144,12 @@ private:
     // Descriptor resources (shared layout: 1 combined image sampler at binding 0)
     VkDescriptorSetLayout samplerSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool descPool = VK_NULL_HANDLE;
-    static constexpr uint32_t MAX_DESC_SETS = 24;
+    static constexpr uint32_t MAX_DESC_SETS = 2 * GRID * GRID + 1;
 
     // Tile composite pipeline (renders into VkRenderTarget)
     VkPipeline tilePipeline = VK_NULL_HANDLE;
     VkPipelineLayout tilePipelineLayout = VK_NULL_HANDLE;
-    VkDescriptorSet tileDescSets[2][9] = {};  // [frameInFlight][tileSlot]
+    VkDescriptorSet tileDescSets[2][GRID * GRID] = {};  // [frameInFlight][tileSlot]
 
     // Display pipeline (renders into main render pass)
     VkPipeline displayPipeline = VK_NULL_HANDLE;

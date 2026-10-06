@@ -23,7 +23,8 @@ namespace rendering {
 
 // Push constant for tile composite vertex shader
 struct MinimapTilePush {
-    glm::vec2 gridOffset;  // 8 bytes
+    glm::vec2 gridOffset;  // which cell of the grid, from its corner
+    float gridSize;        // cells to a side
 };
 
 // Push constant for display vertex + fragment shaders
@@ -133,28 +134,30 @@ bool Minimap::initialize(VkContext* ctx, VkDescriptorSetLayout /*perFrameLayout*
     vkCreateDescriptorPool(device, &poolInfo, nullptr, &descPool);
 
     // --- Allocate all descriptor sets ---
-    // 18 tile sets (2 frames × 9 tiles) + 1 display set = 19 total
-    std::vector<VkDescriptorSetLayout> layouts(19, samplerSetLayout);
+    // Two frames of GRID x GRID tile sets, and one display set
+    constexpr uint32_t kTileSets = GRID * GRID;
+    constexpr uint32_t kSetCount = 2 * kTileSets + 1;
+    std::vector<VkDescriptorSetLayout> layouts(kSetCount, samplerSetLayout);
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descPool;
-    allocInfo.descriptorSetCount = 19;
+    allocInfo.descriptorSetCount = kSetCount;
     allocInfo.pSetLayouts = layouts.data();
 
     // Checked, not assumed. On failure allSets holds nothing this code put
     // there, and every one of the nineteen is then written and bound - which
     // is an invalid handle in a live descriptor rather than a minimap that
     // does not draw.
-    VkDescriptorSet allSets[19];
+    VkDescriptorSet allSets[kSetCount];
     if (vkAllocateDescriptorSets(device, &allocInfo, allSets) != VK_SUCCESS) {
         LOG_ERROR("Minimap: failed to allocate descriptor sets");
         return false;
     }
 
     for (int f = 0; f < 2; f++)
-        for (int t = 0; t < 9; t++)
-            tileDescSets[f][t] = allSets[f * 9 + t];
-    displayDescSet = allSets[18];
+        for (uint32_t t = 0; t < kTileSets; t++)
+            tileDescSets[f][t] = allSets[f * kTileSets + t];
+    displayDescSet = allSets[2 * kTileSets];
 
     // --- Write display descriptor set → composite render target ---
     VkDescriptorImageInfo compositeImgInfo = compositeTarget->descriptorInfo();
@@ -167,7 +170,7 @@ bool Minimap::initialize(VkContext* ctx, VkDescriptorSetLayout /*perFrameLayout*
     displayWrite.pImageInfo = &compositeImgInfo;
     vkUpdateDescriptorSets(device, 1, &displayWrite, 0, nullptr);
 
-    // --- Tile pipeline layout: samplerSetLayout + 8-byte push constant (vertex) ---
+    // --- Tile pipeline layout: samplerSetLayout + push constant (vertex) ---
     VkPushConstantRange tilePush{};
     tilePush.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     tilePush.offset = 0;
@@ -395,14 +398,15 @@ VkTexture* Minimap::getOrLoadTileTexture(int tileX, int tileY) {
 // --------------------------------------------------------
 
 void Minimap::updateTileDescriptors(uint32_t frameIdx, int centerTileX, int centerTileY) {
-    constexpr int kTileCount = 9; // 3x3 grid
+    constexpr int kTileCount = GRID * GRID;
+    constexpr int kHalf = GRID / 2;
     VkDevice device = vkCtx->getDevice();
     std::array<VkDescriptorImageInfo, kTileCount> imgInfos{};
     std::array<VkWriteDescriptorSet, kTileCount> writes{};
     int slot = 0;
 
-    for (int dr = -1; dr <= 1; dr++) {
-        for (int dc = -1; dc <= 1; dc++) {
+    for (int dr = -kHalf; dr <= kHalf; dr++) {
+        for (int dc = -kHalf; dc <= kHalf; dc++) {
             int tx = centerTileX + dr;
             int ty = centerTileY + dc;
 
@@ -467,17 +471,19 @@ void Minimap::compositePass(VkCommandBuffer cmd, const glm::vec3& centerWorldPos
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &quadVB, &offset);
 
-    // Draw 3x3 tile grid
+    // Draw the tile grid
+    constexpr int kHalf = GRID / 2;
     int slot = 0;
-    for (int dr = -1; dr <= 1; dr++) {
-        for (int dc = -1; dc <= 1; dc++) {
+    for (int dr = -kHalf; dr <= kHalf; dr++) {
+        for (int dc = -kHalf; dc <= kHalf; dc++) {
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     tilePipelineLayout, 0, 1,
                                     &tileDescSets[frameIdx][slot], 0, nullptr);
 
             MinimapTilePush push{};
-            push.gridOffset = glm::vec2(static_cast<float>(dc + 1),
-                                        static_cast<float>(dr + 1));
+            push.gridOffset = glm::vec2(static_cast<float>(dc + kHalf),
+                                        static_cast<float>(dr + kHalf));
+            push.gridSize = static_cast<float>(GRID);
             vkCmdPushConstants(cmd, tilePipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(push), &push);
 
@@ -539,10 +545,11 @@ void Minimap::render(VkCommandBuffer cmd, const Camera& playerCamera,
     float fracNS = 32.0f - static_cast<float>(tileX) - centerWorldPos.y / TILE_SIZE;
     float fracEW = 32.0f - static_cast<float>(tileY) - centerWorldPos.x / TILE_SIZE;
 
-    float playerU = (1.0f + fracEW) / 3.0f;
-    float playerV = (1.0f + fracNS) / 3.0f;
+    constexpr float kHalfGrid = static_cast<float>(GRID / 2);
+    float playerU = (kHalfGrid + fracEW) / static_cast<float>(GRID);
+    float playerV = (kHalfGrid + fracNS) / static_cast<float>(GRID);
 
-    float zoomRadius = viewRadius / (TILE_SIZE * 3.0f);
+    float zoomRadius = viewRadius / (TILE_SIZE * static_cast<float>(GRID));
 
     // Rotating with the camera is off everywhere: the saved setting is read and
     // dropped in loadSettings, since "Stabilize transports and correct minimap
