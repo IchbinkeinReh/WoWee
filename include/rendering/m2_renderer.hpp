@@ -179,7 +179,6 @@ struct M2ModelGPU {
     uint32_t rtMesh = ~0u;      // RtScene mesh, or ~0u when it does not cast
     bool isSmoke = false;       // True for smoke models (UV scroll animation)
     bool isSpellEffect = false;  // True for spell effect models (skip particle dampeners)
-    bool isInstancePortal = false; // Instance portal model (spin)
     bool disableAnimation = false; // Keep foliage/tree doodads visually stable
     bool shadowWindFoliage = false; // Cast shadows in the alpha-tested foliage pass (leaf cutouts)
     bool isFoliageLike = false;     // Model name matches foliage/tree/bush/grass etc (precomputed)
@@ -328,7 +327,6 @@ struct M2Instance {
     bool cachedHasParticleEmitters = false;
     bool cachedIsGroundDetail = false;
     bool cachedIsInvisibleTrap = false;
-    bool cachedIsInstancePortal = false;
     bool cachedIsSkyBird = false;
     bool cachedIsLightBeam = false;
     bool cachedIsTransportDoodad = false;
@@ -349,7 +347,6 @@ struct M2Instance {
     /// back and forth while its propeller turns one way.
     float animTimeAlt = 0.0f;
     float cachedPaddedRadius = 0.0f;              // sphere radius used by the cull compute
-    float portalSpinAngle = 0.0f;  // Accumulated spin angle for portal rotation
     const M2ModelGPU* cachedModel = nullptr;  // Avoid per-frame hash lookups
 
     // Result of the most recent GPU cull dispatch that actually covered this
@@ -1221,7 +1218,6 @@ private:
     // Smoke particle system
     std::vector<SmokeParticle> smokeParticles;
     std::vector<size_t> smokeInstanceIndices_;  // Indices into instances[] for smoke emitters
-    std::vector<size_t> portalInstanceIndices_; // Indices into instances[] for spinning portals
     static constexpr int MAX_SMOKE_PARTICLES = 1000;
     float smokeEmitAccum = 0.0f;
     std::mt19937 smokeRng{42};

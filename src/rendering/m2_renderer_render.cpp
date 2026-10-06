@@ -193,7 +193,6 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     instance.cachedBoundRadius = mdlRef.boundRadius;
     instance.cachedIsGroundDetail = mdlRef.isGroundDetail;
     instance.cachedIsInvisibleTrap = mdlRef.isInvisibleTrap;
-    instance.cachedIsInstancePortal = mdlRef.isInstancePortal;
     instance.cachedIsSkyBird = mdlRef.isSkyBird;
     instance.cachedIsLightBeam = mdlRef.isLightBeam;
     instance.cachedIsTransportDoodad = mdlRef.isTransportDoodad;
@@ -228,9 +227,6 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     // Track special instances for fast-path iteration
     if (mdlRef.isSmoke) {
         smokeInstanceIndices_.push_back(idx);
-    }
-    if (mdlRef.isInstancePortal) {
-        portalInstanceIndices_.push_back(idx);
     }
     if (!mdlRef.particleEmitters.empty()) {
         particleInstanceIndices_.push_back(idx);
@@ -458,19 +454,6 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         float t = p.life / p.maxLife;
         p.size = rendering::SMOKE_SIZE_START + t * rendering::SMOKE_SIZE_GROWTH;
         ++i;
-    }
-
-    // --- Spin instance portals ---
-    static constexpr float PORTAL_SPIN_SPEED = 1.2f; // radians/sec
-    static constexpr float kTwoPi = 6.2831853f;
-    for (size_t idx : portalInstanceIndices_) {
-        if (idx >= instances.size()) continue;
-        auto& inst = instances[idx];
-        inst.portalSpinAngle += PORTAL_SPIN_SPEED * deltaTime;
-        if (inst.portalSpinAngle > kTwoPi)
-            inst.portalSpinAngle -= kTwoPi;
-        inst.rotation.z = inst.portalSpinAngle;
-        inst.updateModelMatrix();
     }
 
     // --- Normal M2 animation update ---

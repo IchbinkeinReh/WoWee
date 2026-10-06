@@ -321,14 +321,12 @@ void M2Renderer::removeInstance(uint32_t instanceId) {
     // Rebuild the lightweight auxiliary index vectors (smoke, portal, etc.)
     // These are small vectors of indices that are rebuilt cheaply.
     smokeInstanceIndices_.clear();
-    portalInstanceIndices_.clear();
     animatedInstanceIndices_.clear();
     particleOnlyInstanceIndices_.clear();
     particleInstanceIndices_.clear();
     for (size_t i = 0; i < instances.size(); i++) {
         auto& ri = instances[i];
         if (ri.cachedIsSmoke) smokeInstanceIndices_.push_back(i);
-        if (ri.cachedIsInstancePortal) portalInstanceIndices_.push_back(i);
         if (ri.cachedHasParticleEmitters) particleInstanceIndices_.push_back(i);
         if (ri.cachedHasAnimation && !ri.cachedDisableAnimation)
             animatedInstanceIndices_.push_back(i);
@@ -448,7 +446,6 @@ void M2Renderer::clear() {
     for (auto& ids : cullReadableIds_) ids.clear();
     smokeParticles.clear();
     smokeInstanceIndices_.clear();
-    portalInstanceIndices_.clear();
     animatedInstanceIndices_.clear();
     particleOnlyInstanceIndices_.clear();
     particleInstanceIndices_.clear();
@@ -480,7 +477,6 @@ void M2Renderer::clearInstances() {
     for (auto& ids : cullSubmittedIds_) ids.clear();
     for (auto& ids : cullReadableIds_) ids.clear();
     smokeInstanceIndices_.clear();
-    portalInstanceIndices_.clear();
     animatedInstanceIndices_.clear();
     particleOnlyInstanceIndices_.clear();
     particleInstanceIndices_.clear();
@@ -504,7 +500,6 @@ void M2Renderer::rebuildSpatialIndex() {
     instanceDedupMap_.clear();
     instanceIndexById.reserve(instances.size());
     smokeInstanceIndices_.clear();
-    portalInstanceIndices_.clear();
     animatedInstanceIndices_.clear();
     particleOnlyInstanceIndices_.clear();
     particleInstanceIndices_.clear();
@@ -528,9 +523,6 @@ void M2Renderer::rebuildSpatialIndex() {
 
         if (inst.cachedIsSmoke) {
             smokeInstanceIndices_.push_back(i);
-        }
-        if (inst.cachedIsInstancePortal) {
-            portalInstanceIndices_.push_back(i);
         }
         if (inst.cachedHasParticleEmitters) {
             particleInstanceIndices_.push_back(i);

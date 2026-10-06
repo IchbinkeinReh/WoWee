@@ -1514,7 +1514,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     gpuModel.isSmoke                     = cls.isSmoke;
     gpuModel.isSpellEffect               = cls.isSpellEffect;
     gpuModel.isLavaModel                 = cls.isLavaModel;
-    gpuModel.isInstancePortal            = cls.isInstancePortal;
     gpuModel.isWaterVegetation           = cls.isWaterVegetation;
     gpuModel.isLanternLike               = cls.isLanternLike;
     gpuModel.isKoboldFlame               = cls.isKoboldFlame;

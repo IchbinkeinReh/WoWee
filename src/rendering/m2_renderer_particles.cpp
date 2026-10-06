@@ -109,8 +109,6 @@ const float kPfxSize = pfxTuning("WOWEE_PFX_SIZE");
 } // namespace
 
 void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt) {
-    if (gpu.isInstancePortal) return;
-
     if (inst.emitterAccumulators.size() != gpu.particleEmitters.size()) {
         inst.emitterAccumulators.resize(gpu.particleEmitters.size(), 0.0f);
     }
@@ -366,8 +364,6 @@ void M2Renderer::updateParticles(M2Instance& inst, float dt) {
 // Ribbon emitter simulation
 // ---------------------------------------------------------------------------
 void M2Renderer::updateRibbons(M2Instance& inst, const M2ModelGPU& gpu, float dt) {
-    if (gpu.isInstancePortal) return;
-
     const auto& emitters = gpu.ribbonEmitters;
     if (emitters.empty()) return;
 
@@ -504,7 +500,6 @@ void M2Renderer::renderM2Ribbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
     for (const auto& inst : instances) {
         if (!inst.cachedModel) continue;
         const auto& gpu = *inst.cachedModel;
-        if (gpu.isInstancePortal) continue;
         if (gpu.ribbonEmitters.empty()) continue;
 
         for (size_t ri = 0; ri < gpu.ribbonEmitters.size(); ri++) {
@@ -692,7 +687,6 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         if (inst.particles.empty()) continue;
         if (!inst.cachedModel) continue;
         const auto& gpu = *inst.cachedModel;
-        if (gpu.isInstancePortal) continue;
 
 
         // Cache the last emitter's per-emitter state so adjacent particles
