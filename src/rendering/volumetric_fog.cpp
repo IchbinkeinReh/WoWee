@@ -23,7 +23,7 @@ struct VolumeParamsGPU {
     glm::vec4 rayCorner[4];   // world rays at one yard of view depth: uv (0,0), (1,0), (0,1), (1,1)
     glm::mat4 prevViewProj;   // last frame's, for reprojecting the history
     glm::vec4 medium;         // x = density, y = layer base z, z = 1 / layer height, w = floor
-    glm::vec4 lighting;       // x = sun scatter, y = local light scatter, z = ambient scatter, w = unused
+    glm::vec4 lighting;       // x = sun scatter, y = unused, z = ambient scatter, w = unused
     glm::vec4 drift;          // xyz = how far the mist has blown, w = noise amount
     glm::vec4 jitter;         // xyz = where in its cell this frame samples, w = history weight
     glm::ivec4 dims;          // xyz = volume size
@@ -421,7 +421,9 @@ void VolumetricFog::record(VkCommandBuffer cmd, uint32_t frame, VkDescriptorSet 
 
     p.medium = glm::vec4(in.density, in.layerBase, 1.0f / std::max(in.layerHeight, 1.0f),
                          glm::clamp(in.layerFloor, 0.0f, 1.0f));
-    p.lighting = glm::vec4(in.sunScatter, in.localLightScatter, in.ambientScatter, 0.0f);
+    // No local lights: the client has none to glow in the air, its WMO
+    // light being baked into the vertex colours.
+    p.lighting = glm::vec4(in.sunScatter, 0.0f, in.ambientScatter, 0.0f);
     // A slow breeze, a yard a second, so the mist drifts rather than sits.
     const float t = in.time;
     p.drift = glm::vec4(t * 0.9f, t * 0.45f, t * 0.12f, glm::clamp(in.noiseAmount, 0.0f, 1.0f));

@@ -20,6 +20,13 @@ wowee::rendering::M2ClassificationResult classify(const std::string& name,
                            500, 0);
 }
 
+// Whether the classifier takes a model for a smithy forge, which is what gives
+// it the forge's ambient sound.
+bool isForge(const std::string& name) {
+    return classify(name).ambientEmitterType ==
+           wowee::rendering::AmbientEmitterType::Forge;
+}
+
 } // namespace
 
 // Foliage tokens are substring-matched because model names concatenate words
@@ -122,8 +129,8 @@ TEST_CASE("a ruin misread as foliage would also lose its collision",
     CHECK(tree.isFoliageLike);
 }
 
-// isForge forces the batch additive, so a false positive renders a solid model
-// as glowing translucent VFX - the same failure the Steam Tank had.
+// A forge gets the forge's ambient sound loop, so a false positive puts a
+// roaring fire in every bench and statue of Ironforge.
 TEST_CASE("only an actual forge is treated as forge fire", "[m2][classifier][forge]") {
     SECTION("the city of Ironforge is not a forge") {
         for (const char* n : {"IronforgeBench_Average01", "IronforgeStatue_01",
@@ -131,15 +138,15 @@ TEST_CASE("only an actual forge is treated as forge fire", "[m2][classifier][for
                               "IronforgeHangingLantern01", "IronforgeBanner01",
                               "IronforgeSignpost", "ironforgepiston"}) {
             INFO(n);
-            CHECK_FALSE(classify(n).isForge);
+            CHECK_FALSE(isForge(n));
         }
     }
 
     SECTION("nor is a part of one, or a panel that controls one") {
-        CHECK_FALSE(classify("Dalaran_ForgeArms").isForge);
-        CHECK_FALSE(classify("Dalaran_ForgeSmelter").isForge);
-        CHECK_FALSE(classify("BU_CrystalForgeController").isForge);
-        CHECK_FALSE(classify("UL_Forge_Iron_Press").isForge);
+        CHECK_FALSE(isForge("Dalaran_ForgeArms"));
+        CHECK_FALSE(isForge("Dalaran_ForgeSmelter"));
+        CHECK_FALSE(isForge("BU_CrystalForgeController"));
+        CHECK_FALSE(isForge("UL_Forge_Iron_Press"));
     }
 
     SECTION("real forges still are, with or without a numeric suffix") {
@@ -150,12 +157,12 @@ TEST_CASE("only an actual forge is treated as forge fire", "[m2][classifier][for
                               "DarkIronForge", "Wolvar_Forge",
                               "WORLD\\GENERIC\\HUMAN\\FORGE\\ID_FORGE.M2"}) {
             INFO(n);
-            CHECK(classify(n).isForge);
+            CHECK(isForge(n));
         }
     }
 
     SECTION("forge lava stays excluded as before") {
-        CHECK_FALSE(classify("UL_ForgeLava").isForge);
+        CHECK_FALSE(isForge("UL_ForgeLava"));
     }
 }
 

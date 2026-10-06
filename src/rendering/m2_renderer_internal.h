@@ -36,63 +36,6 @@ inline float randFloat(float lo, float hi) {
     return std::uniform_real_distribution<float>(lo, hi)(rng());
 }
 
-// World-space center of a skinned batch. Glow cards on swinging lanterns are
-// bone animated; using only modelMatrix * bind-pose center leaves the pool of
-// local light fixed at the fixture origin.
-inline glm::vec3 animatedBatchWorldCenter(const M2Instance& instance,
-                                          const M2ModelGPU::BatchGPU& batch) {
-    if (batch.lightBoneAnchors.empty()) {
-        return glm::vec3(instance.modelMatrix * glm::vec4(batch.center, 1.0f));
-    }
-
-    glm::vec4 animatedCenter(0.0f);
-    for (const auto& anchor : batch.lightBoneAnchors) {
-        if (anchor.bone < instance.boneMatrices.size()) {
-            animatedCenter += instance.boneMatrices[anchor.bone] * anchor.weightedPoint;
-        } else {
-            animatedCenter += anchor.weightedPoint;
-        }
-    }
-    return glm::vec3(instance.modelMatrix * animatedCenter);
-}
-
-// Lanterns are broad point lights, so the small physical displacement of a
-// swinging bulb is almost invisible on the ground. Follow the authored hanging
-// chain from its fixed suspension pivot to the animated glow tip, then project
-// that direction toward the model's ground plane. The unprojected tip is
-// animatedBatchWorldCenter(); only the pool of light uses this projected center.
-inline glm::vec3 animatedBatchLightWorldCenter(const M2Instance& instance,
-                                               const M2ModelGPU::BatchGPU& batch) {
-    glm::vec3 tip = animatedBatchWorldCenter(instance, batch);
-    if (batch.lightSuspensionBone == UINT16_MAX ||
-        batch.lightSuspensionBone >= instance.boneMatrices.size()) {
-        return tip;
-    }
-
-    const glm::vec3 suspension = glm::vec3(
-        instance.modelMatrix * instance.boneMatrices[batch.lightSuspensionBone] *
-        glm::vec4(batch.lightSuspensionPoint, 1.0f));
-    const glm::vec3 chain = tip - suspension;
-    if (chain.z >= -0.05f) return tip;
-
-    const float groundZ = glm::vec3(instance.modelMatrix[3]).z;
-    const float groundDrop = tip.z - groundZ;
-    if (groundDrop <= 0.0f) return tip;
-
-    // Deliberately amplify the projected travel. At the authored Darkshire
-    // swing amplitude a physically exact pool moves less than one terrain unit,
-    // which disappears inside the broad local-light falloff.
-    constexpr float kLanternPoolSwingExaggeration = 3.0f;
-    glm::vec2 projectedOffset(chain.x, chain.y);
-    projectedOffset *= (groundDrop / -chain.z) * kLanternPoolSwingExaggeration;
-    const float offsetLength = glm::length(projectedOffset);
-    const float maxOffset = std::max(0.75f, 4.0f * instance.scale);
-    if (offsetLength > maxOffset) projectedOffset *= maxOffset / offsetLength;
-    tip.x += projectedOffset.x;
-    tip.y += projectedOffset.y;
-    return tip;
-}
-
 // ---- Constants ----
 inline const auto kLavaAnimStart = std::chrono::steady_clock::now();
 inline constexpr uint32_t kParticleFlagRandomized = 0x40;

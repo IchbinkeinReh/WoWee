@@ -13,9 +13,6 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 shadowParams;
     vec4 playerPos;
     vec4 playerWake;
-    vec4 localLightPosRadius[64];
-    vec4 localLightColorIntensity[64];
-    ivec4 localLightMeta;
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
 };
 

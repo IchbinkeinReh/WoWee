@@ -609,47 +609,15 @@ void Renderer::updatePerFrameUBO() {
     currentFrameData.volumetricParams = volumetricThisFrame_ ? volumetricFog_->frameParams()
                                                              : glm::vec4(0.0f);
 
-    for (uint32_t i = 0; i < MAX_LOCAL_LIGHTS; ++i) {
-        currentFrameData.localLightPosRadius[i] = glm::vec4(0.0f);
-        currentFrameData.localLightColorIntensity[i] = glm::vec4(0.0f);
-    }
-    uint32_t localLightCount = wmoRenderer
-        ? wmoRenderer->gatherLavaLights(camera->getPosition(),
-              currentFrameData.localLightPosRadius,
-              currentFrameData.localLightColorIntensity,
-              MAX_LOCAL_LIGHTS)
-        : 0;
-    if (m2Renderer && localLightCount < MAX_LOCAL_LIGHTS) {
-        localLightCount += m2Renderer->gatherLocalLights(camera->getPosition(),
-            currentFrameData.localLightPosRadius + localLightCount,
-            currentFrameData.localLightColorIntensity + localLightCount,
-            MAX_LOCAL_LIGHTS - localLightCount);
-    }
-    currentFrameData.localLightMeta = glm::ivec4(static_cast<int32_t>(localLightCount), 0, 0, 0);
+    // No local lights: the client has no dynamic point lights from torches,
+    // braziers, glow cards or lava. Its WMO light is baked into the vertex
+    // colours.
 
     if (rtLighting_) {
         const RtLighting::ConsumerData rt = rtLighting_->consumerData();
         currentFrameData.rtViewProj = rt.viewProj;
         currentFrameData.rtCameraPos = rt.cameraPos;
         currentFrameData.rtParams = rt.params;
-    }
-
-    // What the local lights are actually doing, throttled to a line every few
-    // seconds. These are gathered around the camera rather than the player, so
-    // which ones are in the set changes as the view is orbited - and they are
-    // the warm ones: braziers, torches, forges, lava. A warm cast that moves
-    // with the camera and nothing else would look exactly like this, so it is
-    // worth being able to read the count rather than reason about it.
-    {
-        static double lastLightLog = 0.0;
-        if (localLightCount > 0 && (globalTime - lastLightLog) > 3.0) {
-            lastLightLog = globalTime;
-            const glm::vec4& c0 = currentFrameData.localLightColorIntensity[0];
-            const glm::vec4& p0 = currentFrameData.localLightPosRadius[0];
-            LOG_INFO("localLights: count=", localLightCount, " of ", MAX_LOCAL_LIGHTS,
-                     " first rgb=(", c0.r, ",", c0.g, ",", c0.b, ") intensity=", c0.w,
-                     " radius=", p0.w);
-        }
     }
 
     // Player motion, consumed by water ripples and by the foliage brush in
@@ -4712,7 +4680,7 @@ void Renderer::renderVolumetricFog() {
     if (globalTime - lastFogLog > 5.0) {
         lastFogLog = globalTime;
         LOG_INFO("volumetricFog: extinction=", fogExtinction_, "/yd (target ", target,
-                 ") layerBase=", fogLayerBase_, " lights=", currentFrameData.localLightMeta.x);
+                 ") layerBase=", fogLayerBase_);
     }
 }
 

@@ -131,9 +131,6 @@ vec4 fogParams      // x = fogStart, y = fogEnd, z = TIME, w = water ripple stre
 vec4 shadowParams
 vec4 playerPos      // xyz = player world position, w = horizontal speed (yd/s)
 vec4 playerWake     // xyz = trailing player position
-vec4 localLightPosRadius[MAX_LOCAL_LIGHTS]
-vec4 localLightColorIntensity[MAX_LOCAL_LIGHTS]
-ivec4 localLightMeta // x = active light count
 ```
 
 Consequences — **do not add a new UBO for any of these**:

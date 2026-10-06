@@ -398,12 +398,6 @@ public:
      */
     bool isInsideInteriorWMO(float glX, float glY, float glZ) const;
 
-    /** Gather local orange point lights derived from visible lava materials. */
-    uint32_t gatherLavaLights(const glm::vec3& cameraPos,
-                              glm::vec4* outPosRadius,
-                              glm::vec4* outColorIntensity,
-                              uint32_t maxLights) const;
-
     /**
      * Raycast against WMO bounding boxes for camera collision
      * @param origin Ray origin (e.g., character head position)
@@ -524,8 +518,6 @@ private:
             std::vector<DrawRange> draws;
         };
         std::vector<MergedBatch> mergedBatches;
-        // Local-space center/radius for each authored lava draw range.
-        std::vector<glm::vec4> lavaLights;
 
         // Collision geometry (positions only, for floor raycasting)
         std::vector<glm::vec3> collisionVertices;

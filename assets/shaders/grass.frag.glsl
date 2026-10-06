@@ -20,9 +20,6 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 shadowParams;
     vec4 playerPos;
     vec4 playerWake;
-    vec4 localLightPosRadius[64];
-    vec4 localLightColorIntensity[64];
-    ivec4 localLightMeta;
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
 };
 
@@ -53,8 +50,7 @@ vec4 fogVolumeAt(vec3 worldPos) {
 
 // The zone's distance fog, then the air in front of it. The distance fog is
 // the far haze the sky is painted to meet, so it goes on first; the volume is
-// everything between the camera and that, sunlit shafts and torch glow
-// included.
+// everything between the camera and that, sunlit shafts included.
 vec3 applyFog(vec3 color, vec3 worldPos, float dist) {
     float fogFactor = clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0);
     color = mix(fogColor.rgb, color, fogFactor);

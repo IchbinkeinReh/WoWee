@@ -13,9 +13,6 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 shadowParams;
     vec4 playerPos;   // xyz = player world position, w = horizontal speed
     vec4 playerWake;  // xyz = trailing player position (springback reference)
-    vec4 localLightPosRadius[64];
-    vec4 localLightColorIntensity[64];
-    ivec4 localLightMeta;
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
     mat4 rtViewProj;
     vec4 rtCameraPos;
@@ -68,26 +65,6 @@ float sampleShadowPCF(sampler2DShadow smap, vec3 coords) {
     return shadow / 9.0;
 }
 
-vec3 localLightContribution(vec3 pos, vec3 normal, vec3 albedo) {
-    vec3 sum = vec3(0.0);
-    for (int i = 0; i < min(localLightMeta.x, 64); ++i) {
-        vec3 toLight = localLightPosRadius[i].xyz - pos;
-        float radius = localLightPosRadius[i].w;
-        // Rejected on the squared distance, before the square root and the
-        // divide: most of the sixty-four are out of range of any one pixel,
-        // and this is what each of them costs.
-        float distSq = dot(toLight, toLight);
-        if (radius <= 0.0 || distSq >= radius * radius) continue;
-        float dist = sqrt(distSq);
-        float attenuation = 1.0 - dist / radius;
-        attenuation *= attenuation;
-        float wrappedDiffuse = 0.22 + 0.78 * max(dot(normal, toLight / max(dist, 0.001)), 0.0);
-        sum += albedo * localLightColorIntensity[i].rgb *
-               (localLightColorIntensity[i].w * attenuation * wrappedDiffuse);
-    }
-    return sum;
-}
-
 /// How much of the seam blur below is worth paying for at this distance.
 /// Set once in main() from the fragment's distance; see sampleAlpha.
 float gBlurDistFade = 1.0;
@@ -138,8 +115,7 @@ vec4 fogVolumeAt(vec3 worldPos) {
 
 // The zone's distance fog, then the air in front of it. The distance fog is
 // the far haze the sky is painted to meet, so it goes on first; the volume is
-// everything between the camera and that, sunlit shafts and torch glow
-// included.
+// everything between the camera and that, sunlit shafts included.
 vec3 applyFog(vec3 color, vec3 worldPos, float dist) {
     float fogFactor = clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0);
     color = mix(fogColor.rgb, color, fogFactor);
@@ -260,7 +236,6 @@ void main() {
     ambient = rtAmbient(rt, ambientColor.rgb) * finalColor.rgb;
 
     vec3 result = ambient + shadow * diffuse;
-    result += localLightContribution(FragPos, norm, finalColor.rgb);
 
     result = applyFog(result, FragPos, fragDist);
 

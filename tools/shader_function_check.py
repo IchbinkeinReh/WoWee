@@ -6,12 +6,10 @@
 WHY
 
 GLSL has no linker here. Every shader is compiled on its own, so a function
-two of them need is written into both, and nothing connects the copies. Seven
+two of them need is written into both, and nothing connects the copies. Six
 bodies are duplicated across the seventy-eight shaders in this tree:
 
     parallaxOcclusionMap    29 lines, in character.frag and wmo.frag
-    localLightContribution  14 lines, in character.frag, m2.frag, terrain.frag
-                            and wmo.frag
     sampleShadowPCF          8 lines, in four of them
     safeNormalize            6 lines, computeLodFactor 5, fallbackTangent 3
 
@@ -47,12 +45,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-# Copies read and judged as the same function, keyed by name.
-SETTLED = {
-    # wmo.frag hoists the normalised light vector into a local instead of
-    # dividing twice. Same arithmetic, one line longer.
-    "localLightContribution",
-}
+# Copies read and judged as the same function, keyed by name. None at present.
+SETTLED: set[str] = set()
 
 
 def functions(path):

@@ -86,9 +86,7 @@ struct M2ClassificationResult {
     bool isSmoke            = false; ///< Smoke model (UV scroll animation)
     bool isWaterfall        = false; ///< Waterfall model (ambient sound + splash particles)
     bool isBrazierOrFire    = false; ///< Brazier / campfire / bonfire model
-    bool isGroundFire       = false; ///< Ground fire whose halo follows its lowest flame emitter
     bool isTorch            = false; ///< Wall-mounted or standing torch
-    bool isForge            = false; ///< Smithy forge - a contained fire that lights its surroundings
     bool isSkyBird          = false; ///< Flying bird/bat doodad (hide until animation range)
     bool isLightBeam        = false; ///< Distant rotating lighthouse/light-ray beam
     /// A cone or shaft of light drawn as geometry: a searchlight, a god ray,
@@ -129,7 +127,7 @@ M2ClassificationResult classifyM2Model(
 // ---------------------------------------------------------------------------
 
 /**
- * Per-batch texture key classification - glow / tint token flags.
+ * Per-batch texture key classification - glow token flags.
  * Input must be a lowercased, backslash-normalised texture path (as stored in
  * M2Renderer's textureKeysLower vector).  Pure data - no Vulkan dependencies.
  */
@@ -140,13 +138,12 @@ struct M2BatchTexClassification {
     bool hasGlowCardToken    = false; ///< glow / flamelick / lensflare / t_vfx / lightbeam / glowball / genericglow
     bool likelyFlame         = false; ///< fire / flame / torch
     bool lanternFamily       = false; ///< lantern / lamp / elf / silvermoon / quel / thalas
-    bool softGlowSurface     = false; ///< Lit glass surface (places a local light)
-    int  glowTint            = 0;     ///< 0 = neutral, 1 = cool (blue/arcane), 2 = warm (red/scarlet)
+    bool softGlowSurface     = false; ///< Lit glass surface (a glow card, kept out of the ray traced scene)
     bool starPointLayer      = false; ///< A sky model's star-point layer, as opposed to its clouds or planets
 };
 
 /**
- * Classify a batch texture by its lowercased path for glow/tint hinting.
+ * Classify a batch texture by its lowercased path for glow hinting.
  *
  * Pure function - no Vulkan, VkContext, or AssetManager dependencies.
  *

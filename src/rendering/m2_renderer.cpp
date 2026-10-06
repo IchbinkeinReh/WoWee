@@ -98,137 +98,6 @@ M2Renderer::~M2Renderer() {
     shutdown();
 }
 
-uint32_t M2Renderer::gatherLocalLights(const glm::vec3& cameraPos,
-                                       glm::vec4* outPosRadius,
-                                       glm::vec4* outColorIntensity,
-                                       uint32_t maxLights) const {
-    if (!outPosRadius || !outColorIntensity || maxLights == 0) return 0;
-
-    struct Candidate {
-        float distSq;
-        glm::vec4 posRadius;
-        glm::vec4 colorIntensity;
-    };
-    std::vector<Candidate> candidates;
-
-    for (const auto& instance : instances) {
-        const M2ModelGPU* model = instance.cachedModel;
-        if (!model || (!model->isLanternLike && !model->isTorch &&
-                       !model->isBrazierOrFire && !model->isForge &&
-                       !model->isLavaModel)) continue;
-
-        if (model->isLavaModel) {
-            const glm::vec3 worldPos = instance.cachedCullCenter;
-            const glm::vec3 delta = worldPos - cameraPos;
-            const float distSq = glm::dot(delta, delta);
-            if (distSq <= 300.0f * 300.0f) {
-                const float radius = std::clamp(instance.cachedVisualRadius * 0.8f,
-                                                10.0f, 35.0f);
-                candidates.push_back({.distSq = distSq, .posRadius = glm::vec4(worldPos, radius),
-                                      .colorIntensity = glm::vec4(1.0f, 0.28f, 0.035f, 1.75f)});
-            }
-        }
-
-        bool hasBatchLight = false;
-        for (const auto& batch : model->batches) {
-            if (!batch.glowCardLike || !batch.lanternGlowHint) continue;
-
-            glm::vec3 worldPos;
-            if (model->isGroundFire &&
-                !model->particleEmitters.empty()) {
-                worldPos = glm::vec3(std::numeric_limits<float>::max());
-                for (const auto& emitter : model->particleEmitters) {
-                    glm::mat4 boneXform(1.0f);
-                    if (emitter.bone < instance.boneMatrices.size()) {
-                        boneXform = instance.boneMatrices[emitter.bone];
-                    }
-                    const glm::vec3 emitterWorld = glm::vec3(
-                        instance.modelMatrix * boneXform * glm::vec4(emitter.position, 1.0f));
-                    if (emitterWorld.z < worldPos.z) worldPos = emitterWorld;
-                }
-            } else {
-                worldPos = animatedBatchLightWorldCenter(instance, batch);
-            }
-            const glm::vec3 delta = worldPos - cameraPos;
-            const float distSq = glm::dot(delta, delta);
-            // Keep tunnel/interior fixtures resident well before their lit
-            // surfaces enter view; the shader's radius still bounds the work.
-            if (distSq > 300.0f * 300.0f) continue;
-
-            const float radius = std::clamp(batch.glowSize * instance.scale * 8.0f,
-                                            5.0f, 12.0f);
-            glm::vec3 color(1.0f, 0.58f, 0.22f);
-            if (batch.glowTint == 1) color = glm::vec3(0.42f, 0.68f, 1.0f);
-            else if (batch.glowTint == 2) color = glm::vec3(1.0f, 0.24f, 0.14f);
-            candidates.push_back({.distSq = distSq, .posRadius = glm::vec4(worldPos, radius),
-                                  .colorIntensity = glm::vec4(color, 1.35f)});
-            hasBatchLight = true;
-        }
-
-        // Candles, hearth fires, campfires, torches and forges express their
-        // flame purely as particle emitters, with no glow-card batch for the
-        // path above - so without this they lit nothing at all. One light at
-        // the emitter centroid; chandeliers with an authored glow batch stay
-        // represented by that batch rather than by five separate lights.
-        const bool openFlame = model->isBrazierOrFire || model->isTorch ||
-                               model->isGroundFire || model->isForge;
-        if (!hasBatchLight && (model->isLanternLike || openFlame) &&
-            !model->particleEmitters.empty()) {
-            glm::vec3 worldPos(0.0f);
-            uint32_t emitterCount = 0;
-            for (const auto& emitter : model->particleEmitters) {
-                glm::mat4 boneXform(1.0f);
-                if (emitter.bone < instance.boneMatrices.size()) {
-                    boneXform = instance.boneMatrices[emitter.bone];
-                }
-                worldPos += glm::vec3(instance.modelMatrix * boneXform *
-                                      glm::vec4(emitter.position, 1.0f));
-                emitterCount++;
-            }
-            if (emitterCount > 0) {
-                worldPos /= static_cast<float>(emitterCount);
-                const glm::vec3 delta = worldPos - cameraPos;
-                const float distSq = glm::dot(delta, delta);
-                if (distSq <= 300.0f * 300.0f) {
-                    const bool chandelier =
-                        model->name.find("Chandelier") != std::string::npos ||
-                        model->name.find("chandelier") != std::string::npos;
-                    // A hearth or campfire throws light much further than a
-                    // candle, and burns oranger than a lamp wick.
-                    float radius    = chandelier ? 10.0f : 5.0f;
-                    float intensity = chandelier ? 1.25f : 0.85f;
-                    glm::vec3 color(1.0f, 0.58f, 0.22f);
-                    if (openFlame) {
-                        // Local lights are not shadowed, so this radius is the
-                        // distance the glow reaches straight through whatever
-                        // surrounds the fire. At 11 a hearth fire lit its entire
-                        // chimney from the inside out and the brickwork read as
-                        // though it were glowing. Keep the reach close to the
-                        // firebox and let the flames carry the rest.
-                        radius    = model->isTorch ? 3.0f : 3.5f;
-                        intensity = model->isTorch ? 0.95f : 1.05f;
-                        color     = glm::vec3(1.0f, 0.50f, 0.18f);
-                    }
-                    candidates.push_back({.distSq = distSq,
-                        .posRadius = glm::vec4(worldPos, radius),
-                        .colorIntensity = glm::vec4(color, intensity)});
-                }
-            }
-        }
-    }
-
-    const uint32_t count = std::min<uint32_t>(maxLights,
-        static_cast<uint32_t>(candidates.size()));
-    if (count == 0) return 0;
-    std::partial_sort(candidates.begin(), candidates.begin() + count, candidates.end(),
-        [](const Candidate& a, const Candidate& b) { return a.distSq < b.distSq; });
-    for (uint32_t i = 0; i < count; ++i) {
-        outPosRadius[i] = candidates[i].posRadius;
-        outColorIntensity[i] = candidates[i].colorIntensity;
-    }
-    return count;
-}
-
 /// The nine main-pass pipelines, built once at startup and again after a
 /// device loss.
 ///
@@ -1519,8 +1388,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     gpuModel.isKoboldFlame               = cls.isKoboldFlame;
     gpuModel.isWaterfall                 = cls.isWaterfall;
     gpuModel.isBrazierOrFire             = cls.isBrazierOrFire;
-    gpuModel.isGroundFire                = cls.isGroundFire;
-    gpuModel.isForge                     = cls.isForge;
     gpuModel.isTorch                     = cls.isTorch;
     // Data-driven flight-path detection: name tokens miss many flying doodads
     // (buzzards, swallows, bird swarms, ...). A small mesh whose bone animation
@@ -1781,17 +1648,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
         }
     }
 
-    static const bool kGlowDiag = core::envFlagEnabled("WOWEE_M2_GLOW_DIAG", false);
-    if (kGlowDiag) {
-        if (gpuModel.isLanternLike) {
-            for (size_t ti = 0; ti < model.textures.size(); ++ti) {
-                const std::string key = (ti < textureKeysLower.size()) ? textureKeysLower[ti] : std::string();
-                LOG_DEBUG("M2 GLOW TEX '", model.name, "' tex[", ti, "]='", key, "' flags=0x",
-                          std::hex, model.textures[ti].flags, std::dec);
-            }
-        }
-    }
-
     // Copy particle emitter data and resolve textures
     gpuModel.particleEmitters = model.particleEmitters;
     gpuModel.particleTextures.resize(model.particleEmitters.size(), whiteTexture_.get());
@@ -2039,16 +1895,18 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             }
             const auto tcls = classifyBatchTexture(batchTexKeyLower);
             bgpu.starLayer = tcls.starPointLayer;
+            // A flat emissive card: a lantern's glow, or the GLOW32 card a
+            // torch, fire pit or brazier pairs with its flame mesh. Both are
+            // drawn by their material; this only keeps them out of the ray
+            // traced scene, where a card would cast a shadow. The client
+            // places no light at them - its WMO light is baked into the
+            // vertex colours.
             const bool modelLanternFamily = gpuModel.isLanternLike;
             const bool torchGlowCard = gpuModel.isTorch &&
                 tcls.hasGlowToken && tcls.hasGlowCardToken;
-            // Fire pits and braziers commonly pair an authored flame mesh
-            // (for example FLAMELICKSMALL) with a separate flat GLOW32 card.
-            // Only that glow-textured card places a local light; both meshes
-            // are drawn by their material.
             const bool fireGlowCard = gpuModel.isBrazierOrFire &&
                 tcls.hasGlowToken && tcls.hasGlowCardToken;
-            bgpu.lanternGlowHint =
+            const bool lanternGlowHint =
                 tcls.softGlowSurface ||
                 tcls.exactLanternGlowTex ||
                 torchGlowCard ||
@@ -2056,9 +1914,8 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 ((tcls.hasGlowToken || (modelLanternFamily && tcls.hasFlameToken)) &&
                  (tcls.lanternFamily || modelLanternFamily) &&
                  (!tcls.likelyFlame || modelLanternFamily));
-            bgpu.glowCardLike = bgpu.lanternGlowHint &&
+            bgpu.glowCardLike = lanternGlowHint &&
                 (tcls.hasGlowCardToken || tcls.softGlowSurface);
-            bgpu.glowTint = tcls.glowTint;
             if (tex != nullptr && tex != whiteTexture_.get()) {
                 auto pit = texturePropsByPtr_.find(tex);
                 if (pit != texturePropsByPtr_.end()) {
@@ -2138,83 +1995,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 if (!bgpu.colorAnimated && bgpu.staticAlpha < 0.004f) bgpu.batchOpacity = 0.0f;
             }
 
-            // Batch center and radius, which place a glow card's local light
-            // (gatherLocalLights). The client draws the batch's mesh by its
-            // material and adds no sprite for it.
-            if (bgpu.glowCardLike && batch.indexCount > 0) {
-                glm::vec3 sum(0.0f);
-                uint32_t counted = 0;
-                std::unordered_map<uint16_t, glm::vec4> boneAnchorSums;
-                for (uint32_t j = batch.indexStart; j < batch.indexStart + batch.indexCount; j++) {
-                    if (j < model.indices.size()) {
-                        uint16_t vi = model.indices[j];
-                        if (vi < model.vertices.size()) {
-                            const auto& vertex = model.vertices[vi];
-                            sum += vertex.position;
-                            for (size_t influence = 0; influence < 4; ++influence) {
-                                const float weight = static_cast<float>(vertex.boneWeights[influence]) / 255.0f;
-                                if (weight <= 0.0f) continue;
-                                const uint16_t bone = vertex.boneIndices[influence];
-                                boneAnchorSums[bone] += glm::vec4(vertex.position * weight, weight);
-                            }
-                            counted++;
-                        }
-                    }
-                }
-                if (counted > 0) {
-                    bgpu.center = sum / static_cast<float>(counted);
-                    bgpu.lightBoneAnchors.reserve(boneAnchorSums.size());
-                    for (const auto& [bone, weightedPoint] : boneAnchorSums) {
-                        bgpu.lightBoneAnchors.push_back({
-                            .bone = bone, .weightedPoint = weightedPoint / static_cast<float>(counted)});
-                    }
-                    if (!boneAnchorSums.empty() && !model.bones.empty()) {
-                        const auto dominant = std::max_element(
-                            boneAnchorSums.begin(), boneAnchorSums.end(),
-                            [](const auto& a, const auto& b) {
-                                return a.second.w < b.second.w;
-                            });
-                        size_t suspensionBone = dominant->first;
-                        while (suspensionBone < model.bones.size()) {
-                            const int16_t parent = model.bones[suspensionBone].parentBone;
-                            if (parent < 0 || static_cast<size_t>(parent) >= model.bones.size()) break;
-                            const glm::vec3 span = model.bones[parent].pivot -
-                                                   model.bones[suspensionBone].pivot;
-                            // A hanging chain climbs through parents above the
-                            // bulb. Stop before a generic model/root bone at the
-                            // placement origin poisons the projection direction.
-                            if (span.z <= 0.01f || glm::length(span) > 5.0f) break;
-                            suspensionBone = static_cast<size_t>(parent);
-                        }
-                        if (suspensionBone < model.bones.size() &&
-                            suspensionBone != dominant->first) {
-                            bgpu.lightSuspensionBone = static_cast<uint16_t>(suspensionBone);
-                            bgpu.lightSuspensionPoint = model.bones[suspensionBone].pivot;
-                        }
-                    }
-                    float maxDist = 0.0f;
-                    for (uint32_t j = batch.indexStart; j < batch.indexStart + batch.indexCount; j++) {
-                        if (j < model.indices.size()) {
-                            uint16_t vi = model.indices[j];
-                            if (vi < model.vertices.size()) {
-                                float d = glm::length(model.vertices[vi].position - bgpu.center);
-                                maxDist = std::max(maxDist, d);
-                            }
-                        }
-                    }
-                    bgpu.glowSize = std::max(maxDist, 0.5f);
-                    // Upright fire glow cards are deliberately tall, so their
-                    // geometric center floats above a small ground fire. Keep
-                    // the light near the fuel/flame base instead.
-                    if (fireGlowCard && gpuModel.isGroundFire) {
-                        // Ground-fire lights follow a particle emitter and its
-                        // animated bone at render time. Origin is the fallback
-                        // for unusual fire models without an emitter.
-                        bgpu.center = glm::vec3(0.0f);
-                    }
-                }
-            }
-
             // Why a batch of a named model came out the way it did.
             //
             // Set WOWEE_M2_BATCH_DIAG to a substring of the model's name and
@@ -2253,19 +2033,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                              " idxCount=", bgpu.indexCount,
                              " texFailed=", texFailed ? "Y" : "N");
                 }
-            }
-
-            // Optional diagnostics for glow/light batches (disabled by default).
-            if (kGlowDiag && gpuModel.isLanternLike) {
-                LOG_DEBUG("M2 GLOW DIAG '", model.name, "' batch ", gpuModel.batches.size(),
-                          ": blend=", bgpu.blendMode, " matFlags=0x",
-                          std::hex, bgpu.materialFlags, std::dec,
-                          " hasAlpha=", bgpu.hasAlpha ? "Y" : "N",
-                          " unlit=", (bgpu.materialFlags & 0x01) ? "Y" : "N",
-                          " lanternHint=", bgpu.lanternGlowHint ? "Y" : "N",
-                          " glowSize=", bgpu.glowSize,
-                          " tex=", bgpu.texture,
-                          " idxCount=", bgpu.indexCount);
             }
 
             gpuModel.batches.push_back(bgpu);
@@ -2379,7 +2146,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                          " hasAlpha=", bgpu.hasAlpha ? 1 : 0,
                          " unlit=", mat.unlit,
                          " glowCardLike=", bgpu.glowCardLike ? 1 : 0,
-                         " lanternHint=", bgpu.lanternGlowHint ? 1 : 0,
                          " texAnim=", bgpu.textureAnimIndex,
                          " tint=(", bgpu.tint.r, ",", bgpu.tint.g, ",", bgpu.tint.b, ")");
             }

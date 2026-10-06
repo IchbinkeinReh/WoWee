@@ -7,48 +7,6 @@
 
 using namespace wowee::pipeline;
 
-TEST_CASE("Animated glow centers follow their skinned bones", "[m2][lights]") {
-    wowee::rendering::M2Instance instance;
-    instance.modelMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f));
-    instance.boneMatrices = {
-        glm::mat4(1.0f),
-        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 2.0f))
-    };
-
-    wowee::rendering::M2ModelGPU::BatchGPU batch;
-    // Average of two rigid vertices: (0,0,0) on bone 0 and (2,0,0)
-    // on bone 1. Moving bone 1 upward by two moves their center upward by one.
-    batch.lightBoneAnchors.push_back({0, glm::vec4(0.0f, 0.0f, 0.0f, 0.5f)});
-    batch.lightBoneAnchors.push_back({1, glm::vec4(1.0f, 0.0f, 0.0f, 0.5f)});
-
-    const glm::vec3 center = wowee::rendering::animatedBatchWorldCenter(instance, batch);
-    CHECK(center.x == Catch::Approx(11.0f));
-    CHECK(center.y == Catch::Approx(0.0f));
-    CHECK(center.z == Catch::Approx(1.0f));
-}
-
-TEST_CASE("Hanging lantern light pools project from suspension to animated tip", "[m2][lights]") {
-    wowee::rendering::M2Instance instance;
-    instance.modelMatrix = glm::mat4(1.0f);
-    instance.scale = 1.0f;
-    instance.boneMatrices = {
-        glm::mat4(1.0f),
-        glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 0.0f, 1.0f))
-    };
-
-    wowee::rendering::M2ModelGPU::BatchGPU batch;
-    batch.lightBoneAnchors.push_back({1, glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)});
-    batch.lightSuspensionBone = 0;
-    batch.lightSuspensionPoint = glm::vec3(0.0f, 0.0f, 2.0f);
-
-    CHECK(wowee::rendering::animatedBatchWorldCenter(instance, batch).x ==
-          Catch::Approx(1.0f));
-    const glm::vec3 pool = wowee::rendering::animatedBatchLightWorldCenter(instance, batch);
-    CHECK(pool.x == Catch::Approx(4.0f));
-    CHECK(pool.y == Catch::Approx(0.0f));
-    CHECK(pool.z == Catch::Approx(1.0f));
-}
-
 TEST_CASE("Foliage asset paths never block player movement", "[m2][collision]") {
     const auto grass = wowee::rendering::classifyM2Model(
         "World\\NoDXT\\Detail\\ElwynnGrass01.m2",

@@ -24,9 +24,6 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 shadowParams;
     vec4 playerPos;
     vec4 playerWake;
-    vec4 localLightPosRadius[64];
-    vec4 localLightColorIntensity[64];
-    ivec4 localLightMeta;
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
 };
 
@@ -35,7 +32,7 @@ layout(set = 1, binding = 0) uniform VolumeParams {
     vec4 rayCorner[4];   // rays one yard deep through uv (0,0), (1,0), (0,1), (1,1)
     mat4 prevViewProj;
     vec4 medium;         // x = density, y = layer base, z = 1 / layer height, w = floor
-    vec4 lighting;       // x = sun scatter, y = local light scatter, z = ambient scatter
+    vec4 lighting;       // x = sun scatter, y = unused, z = ambient scatter
     vec4 drift;          // xyz = how far the mist has blown, w = noise amount
     vec4 jitter;         // xyz = sample point inside the cell, w = history weight
     ivec4 dims;
@@ -153,20 +150,6 @@ void main() {
     if (sunUp > 0.0) {
         light += lightColor.rgb * (sunVisibility(p) * phase * sunUp * vol.lighting.x);
     }
-
-    // Torches, braziers and lava: the same set, falloff and intensity the
-    // surfaces are lit by, so the halo is where the pool of light is.
-    vec3 local = vec3(0.0);
-    for (int i = 0; i < min(localLightMeta.x, 64); ++i) {
-        vec3 toLight = localLightPosRadius[i].xyz - p;
-        float radius = localLightPosRadius[i].w;
-        float distSq = dot(toLight, toLight);
-        if (radius <= 0.0 || distSq >= radius * radius) continue;
-        float attenuation = 1.0 - sqrt(distSq) / radius;
-        local += localLightColorIntensity[i].rgb *
-                 (localLightColorIntensity[i].w * attenuation * attenuation);
-    }
-    light += local * vol.lighting.y;
 
     vec4 result = vec4(light * density, density);
 

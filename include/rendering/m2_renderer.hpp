@@ -69,8 +69,7 @@ struct M2ModelGPU {
         uint16_t submeshLevel = 0; // LOD level: 0=base, 1=LOD1, 2=LOD2, 3=LOD3
         uint8_t textureUnit = 0;  // UV set index (0=texCoords[0], 1=texCoords[1])
         uint8_t texFlags = 0;     // M2Texture.flags (bit0=WrapS, bit1=WrapT)
-        bool lanternGlowHint = false; // Texture/model hints this batch is a fixture's glow (places a local light)
-        bool glowCardLike = false; // Batch looks like a flat emissive card (places a local light)
+        bool glowCardLike = false; // Batch looks like a flat emissive card (kept out of the ray traced scene)
         // A sky model's star-point layer. Suppressed when the client draws its
         // own stars instead: the authored layer is a 256x256 compressed texture
         // magnified across the whole dome, which is soft at any resolution and
@@ -83,7 +82,6 @@ struct M2ModelGPU {
         /// and a goblin pedlar - flagging the whole of HordeZepAnimation
         /// would have softened all of them and cut haze holes in the crew.
         bool volumetricBeam = false;
-        uint8_t glowTint = 0; // 0=warm, 1=cool, 2=red
         float batchOpacity = 1.0f; // Resolved texture weight opacity (0=transparent, skip batch)
         // The batch's colour record and transparency track, for evaluating
         // them per frame as the client does (FUN_0081fe90 takes the batch's
@@ -92,19 +90,6 @@ struct M2ModelGPU {
         uint16_t weightTrackIndex = 0xFFFF;
         bool colorAnimated = false;  // either track has more than one key, or a global clock
         float staticAlpha = 1.0f;    // colour alpha x transparency, for a batch that does not animate
-        glm::vec3 center = glm::vec3(0.0f); // Center of batch geometry (model space), for local lights
-        float glowSize = 1.0f;              // Approx radius of batch geometry, for local lights
-
-        struct LightBoneAnchor {
-            uint16_t bone = 0;
-            // Sum of (vertex position * skin weight, skin weight), divided by
-            // sampled vertex count. Transforming and summing these reproduces
-            // the animated center of the skinned glow geometry.
-            glm::vec4 weightedPoint{0.0f};
-        };
-        std::vector<LightBoneAnchor> lightBoneAnchors;
-        uint16_t lightSuspensionBone = UINT16_MAX;
-        glm::vec3 lightSuspensionPoint{0.0f};
     };
 
     ::VkBuffer vertexBuffer = VK_NULL_HANDLE;
@@ -134,9 +119,7 @@ struct M2ModelGPU {
     bool isFireflyEffect = false;   // Firefly/fireflies M2 (exempt from particle dampeners)
     bool isWaterfall = false;       // Waterfall model (ambient sound + splash particles)
     bool isBrazierOrFire = false;   // Brazier / campfire / bonfire model
-    bool isGroundFire = false;      // Ground fire whose light follows its lowest flame emitter
     bool isTorch = false;           // Wall-mounted or standing torch
-    bool isForge = false;           // Smithy forge (contained fire, lights its surroundings)
     AmbientEmitterType ambientEmitterType = AmbientEmitterType::None;
 
     // Collision mesh with spatial grid (from M2 bounding geometry)
@@ -486,12 +469,6 @@ public:
     /** Dispatch GPU frustum culling compute shader on primary cmd before render pass. */
     void dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, const Camera& camera);
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera);
-
-    /** Gather the nearest authored glow cards as inexpensive scene point lights. */
-    uint32_t gatherLocalLights(const glm::vec3& cameraPos,
-                               glm::vec4* outPosRadius,
-                               glm::vec4* outColorIntensity,
-                               uint32_t maxLights) const;
 
     /** Set the HiZ system for occlusion culling (Phase 6.3). nullptr disables HiZ. */
     void setHiZSystem(HiZSystem* hiz) { hizSystem_ = hiz; }

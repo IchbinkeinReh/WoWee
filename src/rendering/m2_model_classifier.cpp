@@ -241,8 +241,8 @@ M2ClassificationResult classifyM2Model(
     // Directional volumetric light effects (lighthouse beam, light rays/shafts) match
     // the broad "light" token but are NOT point lanterns. They are animated additive
     // meshes - e.g. the Stormwind lighthouse beam rotates via a looped single-bone
-    // animation, and a lantern classification would hang a point light on the
-    // beam. Exclude beams/rays/shafts; their mesh is drawn by its material.
+    // animation, and is no lantern. Exclude beams/rays/shafts; their mesh is
+    // drawn by its material.
     const bool volumetricLightBeam =
         has(n, "beam")     || has(n, "lighthouse") || has(n, "lightray") ||
         has(n, "lightshaft") || has(n, "godray")   || has(n, "sunray");
@@ -292,12 +292,7 @@ M2ClassificationResult classifyM2Model(
     }();
     const bool torchName   = has(n, "torch") && !r.isKoboldFlame && !unlitVariant;
     r.isBrazierOrFire = fireName || brazierName;
-    // TaurenLampPost is the small ground-level path fire used around Camp
-    // Narache, despite its misleading model name. Its decorative halo must
-    // follow the lowest flame emitter rather than the mesh/card center.
-    r.isGroundFire    = (fireName && !brazierName) || has(n, "taurenlamppost");
     r.isTorch         = torchName;
-    r.isForge         = forgeName;
 
     // ---------------------------------------------------------------
     // Collision: shape categories (mirrors original logic ordering)
@@ -689,12 +684,6 @@ M2BatchTexClassification classifyBatchTexture(const std::string& lowerTexKey)
     static constexpr auto kLanternFamilyTokens = std::to_array<std::string_view>({
         "elf", "lamp", "lantern", "quel", "silvermoon", "thalas",
     });
-    static constexpr auto kCoolTintTokens = std::to_array<std::string_view>({
-        "arcane", "blue", "nightelf",
-    });
-    static constexpr auto kRedTintTokens = std::to_array<std::string_view>({
-        "red", "ruby", "scarlet",
-    });
 
     r.hasGlowToken     = hasAny(lowerTexKey, kGlowTokens);
     r.hasFlameToken    = hasAnyWord(lowerTexKey, kFlameTokens);
@@ -703,13 +692,10 @@ M2BatchTexClassification classifyBatchTexture(const std::string& lowerTexKey)
     r.likelyFlame      = hasAnyWord(lowerTexKey, kLikelyFlameTokens);
     r.lanternFamily    = hasAny(lowerTexKey, kLanternFamilyTokens);
     // Stormwind street lamps use an opaque unlit glass texture rather than a
-    // named glow card or particle emitter. The glass is still a glow surface
-    // for placing a local light; its mesh is drawn by its material.
+    // named glow card or particle emitter. The glass is still a glow surface,
+    // kept out of the ray traced scene; its mesh is drawn by its material.
     r.softGlowSurface  = lowerTexKey ==
         "dungeons\\textures\\doodads\\stormwindlampglass.blp";
-    r.glowTint         = hasAny(lowerTexKey, kCoolTintTokens) ? 1
-                       : hasAny(lowerTexKey, kRedTintTokens)  ? 2
-                       : 0;
 
     return r;
 }

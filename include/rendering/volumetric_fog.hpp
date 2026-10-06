@@ -82,10 +82,6 @@ public:
         /// colour. Half, so a shaft stands against the shade beside it rather
         /// than against a haze nearly as bright.
         float ambientScatter = 0.5f;
-        /// Brightness of the glow around local lights. Well above one because
-        /// a torch's reach is a dozen yards, and that little air scatters
-        /// little of it.
-        float localLightScatter = 8.0f;
     };
 
     VolumetricFog() = default;

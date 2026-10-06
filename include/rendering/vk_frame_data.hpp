@@ -8,8 +8,6 @@
 namespace wowee {
 namespace rendering {
 
-static constexpr uint32_t MAX_LOCAL_LIGHTS = 64;
-
 // Must match the PerFrame UBO layout in all shaders (std140 alignment)
 struct GPUPerFrameData {
     glm::mat4 view;
@@ -29,9 +27,6 @@ struct GPUPerFrameData {
     // snapping upright.
     glm::vec4 playerPos;      // xyz = player world position, w = horizontal speed (yd/s)
     glm::vec4 playerWake;     // xyz = trailing player position, w = unused
-    glm::vec4 localLightPosRadius[MAX_LOCAL_LIGHTS];       // xyz = position, w = radius
-    glm::vec4 localLightColorIntensity[MAX_LOCAL_LIGHTS];  // rgb = color, w = intensity
-    glm::ivec4 localLightMeta;                             // x = active light count
     // The fog volume at set 0 binding 2, and how to find a depth in it:
     // x = on (0/1), y = near edge of the first slice in yards,
     // z = 1 / ln(far / near), w = slice count. Off in the reflection pass and
