@@ -2125,6 +2125,8 @@ wowee_add_test(test_sky_client
             ${CMAKE_SOURCE_DIR}/src/pipeline/wmo_loader.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+target_compile_definitions(test_sky_client PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── test_wmo_doodad_light ────────────────────────────────────
 # How the client lights M2s inside a WMO interior (Wow.exe 3.3.5a): a doodad by

@@ -31,7 +31,7 @@ Celestial::~Celestial() {
 VkPipeline Celestial::buildPipeline(VkDevice device,
                                     const VkPipelineShaderStageCreateInfo& vertStage,
                                     const VkPipelineShaderStageCreateInfo& fragStage,
-                                    bool additive) {
+                                    bool glare) {
     // Vertex: vec3 pos + vec2 texCoord, stride = 20 bytes
     VkVertexInputBindingDescription binding = tightVertexBinding(5 * sizeof(float));
     std::vector<VkVertexInputAttributeDescription> attrs = positionPlusUvAttrs();
@@ -42,11 +42,15 @@ VkPipeline Celestial::buildPipeline(VkDevice device,
         .setVertexInput({binding}, attrs)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        // On the far plane and tested, never written: the ground is drawn before
-        // the sky now, and this is what keeps the sun behind a mountain.
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
-        .setColorBlendAttachment(additive ? PipelineBuilder::blendAdditive()
-                                          : PipelineBuilder::blendAlpha())
+        // The bodies: on the far plane and tested, never written - the ground
+        // is drawn before the sky, and this keeps the sun behind a mountain;
+        // alpha blended (0x009ac660 sets blend mode 2). The glare: drawn
+        // after the world with no depth test at all and added on (0x009ac400
+        // sets blend mode 3 and turns the depth test off); the occlusion
+        // query fades it instead.
+        .setDepthTest(!glare, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+        .setColorBlendAttachment(glare ? PipelineBuilder::blendAdditive()
+                                       : PipelineBuilder::blendAlpha())
         .setMultisample(vkCtx_->getMsaaSamples())
         .setLayout(pipelineLayout_)
         .setRenderPass(vkCtx_->getImGuiRenderPass())
@@ -199,17 +203,27 @@ void Celestial::loadTextures(pipeline::AssetManager* assetManager) {
 // ---------------------------------------------------------------------------
 
 void Celestial::drawSprite(VkCommandBuffer cmd, Tex tex, const glm::vec3& dir, float size,
-                           const glm::vec4& color) {
+                           const glm::vec4& color, bool body) {
     if (texSets_[tex] == VK_NULL_HANDLE || size <= 0.0f || color.a <= 0.0f) return;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
                             1, 1, &texSets_[tex], 0, nullptr);
     CelestialPush push{};
     push.dirSize = glm::vec4(dir, size);
     push.color = color;
+    push.params = glm::vec4(body ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
     vkCmdPushConstants(cmd, pipelineLayout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(push), &push);
     vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
+}
+
+void Celestial::bindQuad(VkCommandBuffer cmd, VkPipeline pipeline, VkDescriptorSet perFrameSet) {
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
+        0, 1, &perFrameSet, 0, nullptr);
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);
+    vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
 }
 
 void Celestial::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Frame& frame) {
@@ -218,32 +232,31 @@ void Celestial::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const F
     }
     using namespace daynight;
     const float t = frame.dayFraction;
+    bindQuad(cmd, pipeline_, perFrameSet);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
-        0, 1, &perFrameSet, 0, nullptr);
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);
-    vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
-
-    // The bodies, each in ch9 at alpha 1 - storm (0x007f3230's tail), on
-    // their own curves and at their own sizes (0x007eecc0). The vertex shader
-    // cuts each at the horizon and fades it in over the 0.4 units above it.
+    // The sun, the White Lady and the Blue Child, in that order (0x007f09b0
+    // calls 0x009ac660 for each), each in ch9 at alpha 1 - storm (0x007f3230's
+    // tail), on their own curves and at their own sizes (0x007eecc0). The
+    // shaders cut each at the horizon and fade it in over the 0.4 units above
+    // it as 0x007edee0 does.
     const glm::vec4 bodyColor(frame.color, 1.0f - frame.storm);
-    const float sunSize = sampleCurve(kSunSize, t);
-    const float moonSize = sampleCurve(kMoonSize, t) * kWhiteLadyScale;
-    const float blueChildSize = sampleCurve(kMoonSize, blueChildTime(t)) * kBlueChildScale;
-    drawSprite(cmd, TEX_SUN, frame.sunDir, sunSize, bodyColor);
-    drawSprite(cmd, TEX_MOON, frame.moonDir, moonSize, bodyColor);
-    drawSprite(cmd, TEX_BLUE_CHILD, blueChildDirection(t), blueChildSize, bodyColor);
+    drawSprite(cmd, TEX_SUN, frame.sunDir, sampleCurve(kSunSize, t), bodyColor, true);
+    drawSprite(cmd, TEX_MOON, frame.moonDir, sampleCurve(kMoonSize, t) * kWhiteLadyScale,
+               bodyColor, true);
+    drawSprite(cmd, TEX_BLUE_CHILD, blueChildDirection(t),
+               sampleCurve(kMoonSize, blueChildTime(t)) * kBlueChildScale, bodyColor, true);
+}
 
-    if (!frame.drawGlare) return;
+void Celestial::updateGlare(const Frame& frame) {
+    using namespace daynight;
+    const float t = frame.dayFraction;
 
-    // The glare (0x007ef6e0): what it should show is the hour's curve, times
-    // whether the body is above the horizon and not hidden, times how much
-    // sky the sky models leave; what it does show steps toward that at its
-    // own rise and fall rates. Its size and alpha grow from a facing of 0.7
-    // to looking straight at it.
+    // The glare (0x007ef6e0, for the sun and then the White Lady from
+    // 0x007f0870): what it should show is the hour's curve, times whether
+    // the body is above the horizon and not hidden, times how much sky the
+    // sky models leave; what it does show steps toward that at its own rise
+    // and fall rates. Its size and alpha grow from a facing of 0.7 to looking
+    // straight at it.
     const auto step = [&](float& current, float target, const GlareDef& def) {
         if (target > current) current = std::min(target, current + def.riseRate * deltaTime_);
         else current = std::max(target, current - def.fallRate * deltaTime_);
@@ -258,20 +271,31 @@ void Celestial::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const F
     step(sunGlare_, sunTarget, kSunGlare);
     step(moonGlare_, moonTarget, kMoonGlare);
 
-    if ((sunGlare_ > 0.0f || moonGlare_ > 0.0f) && glarePipeline_ != VK_NULL_HANDLE) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, glarePipeline_);
-        const float sunFacing = glareFacing(glm::dot(frame.cameraForward, frame.sunDir));
-        drawSprite(cmd, TEX_SUN_GLARE, frame.sunDir,
-                   glm::mix(kSunGlare.sizeNear, kSunGlare.sizeFacing, sunFacing) * kSunGlare.sizeBase,
-                   glm::vec4(frame.color, bodyColor.a *
-                             glm::mix(kSunGlare.alphaNear, kSunGlare.alphaFacing, sunFacing) * sunGlare_));
-        // The moon's glare is the moon's own size, twice (0x007eecc0 writes the
-        // size into both ends of its range).
-        const float moonFacing = glareFacing(glm::dot(frame.cameraForward, frame.moonDir));
-        drawSprite(cmd, TEX_MOON_GLARE, frame.moonDir, moonSize * kMoonGlare.sizeBase,
-                   glm::vec4(frame.color, bodyColor.a *
-                             glm::mix(kMoonGlare.alphaNear, kMoonGlare.alphaFacing, moonFacing) * moonGlare_));
-    }
+    const float alpha = 1.0f - frame.storm;
+    const float sunFacing = glareFacing(glm::dot(frame.cameraForward, frame.sunDir));
+    glare_[0] = {frame.sunDir,
+                 glm::mix(kSunGlare.sizeNear, kSunGlare.sizeFacing, sunFacing) * kSunGlare.sizeBase,
+                 glm::vec4(frame.color, alpha *
+                           glm::mix(kSunGlare.alphaNear, kSunGlare.alphaFacing, sunFacing) * sunGlare_)};
+    // The moon's glare is the moon's own size, twice (0x007eecc0 writes the
+    // size into both ends of its range).
+    const float moonFacing = glareFacing(glm::dot(frame.cameraForward, frame.moonDir));
+    glare_[1] = {frame.moonDir,
+                 sampleCurve(kMoonSize, t) * kWhiteLadyScale * kMoonGlare.sizeBase,
+                 glm::vec4(frame.color, alpha *
+                           glm::mix(kMoonGlare.alphaNear, kMoonGlare.alphaFacing, moonFacing) * moonGlare_)};
+    // How far the sun's glare darkens the world's light next frame
+    // (0x007ef6e0 keeps it at 0xd38f4c, 0x007816f0 applies it).
+    sunGlareDim_ = sunGlareWorldDim(glm::dot(frame.cameraForward, frame.sunDir), sunGlare_);
+    glareReady_ = true;
+}
+
+void Celestial::renderGlare(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
+    if (!renderingEnabled_ || glarePipeline_ == VK_NULL_HANDLE || !glareReady_) return;
+    if (glare_[0].color.a <= 0.0f && glare_[1].color.a <= 0.0f) return;
+    bindQuad(cmd, glarePipeline_, perFrameSet);
+    drawSprite(cmd, TEX_SUN_GLARE, glare_[0].dir, glare_[0].size, glare_[0].color, false);
+    drawSprite(cmd, TEX_MOON_GLARE, glare_[1].dir, glare_[1].size, glare_[1].color, false);
 }
 
 // ---------------------------------------------------------------------------

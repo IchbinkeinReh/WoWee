@@ -19,6 +19,7 @@
 #include "rendering/celestial.hpp"
 #include "rendering/starfield.hpp"
 #include "rendering/day_night.hpp"
+#include "core/memory_monitor.hpp"
 #include "rendering/clouds.hpp"
 #include "rendering/lens_flare.hpp"
 #include "rendering/weather.hpp"
@@ -571,9 +572,13 @@ void Renderer::updatePerFrameUBO() {
     if (lightingManager) {
         const auto& lp = lightingManager->getLightingParams();
         currentFrameData.lightDir = glm::vec4(lp.directionalDir, 0.0f);
-        currentFrameData.lightColor = glm::vec4(lp.diffuseColor, 1.0f);
+        // Looking into the sun's glare darkens the world: the ambient and
+        // the direct light by up to 35% (0x007816f0 with the glare's
+        // 0xd38f4c from the frame before, 0x007ef6e0).
+        const float glareDim = skySystem ? 1.0f - skySystem->getSunGlareDim() : 1.0f;
+        currentFrameData.lightColor = glm::vec4(lp.diffuseColor * glareDim, 1.0f);
         // w: ch8's red, how dark the terrain's baked shadows are drawn.
-        currentFrameData.ambientColor = glm::vec4(lp.ambientColor, lp.shadowOpacity);
+        currentFrameData.ambientColor = glm::vec4(lp.ambientColor * glareDim, lp.shadowOpacity);
         // The zone's fog colour for the world, the camera's own - its
         // interior's blended in - for interior groups and what stands in
         // them (0x007f16f0, 0x007a8440). w: the power the fog is drawn
@@ -2049,7 +2054,10 @@ void Renderer::update(float deltaTime) {
         // (0x004f7020 -> 0x007ecec0), with the ffxDeath pass over the frame.
         const bool deathLight = gh && gh->isPlayerGhost();
 
-        lightingManager->setFarClip(viewDistance_);
+        // The far clip for this map, and the fog's end held inside it
+        // (0x00780770, 0x007f16f0).
+        if (mapId != farClipMapId_) applyFarClip(mapId);
+        lightingManager->setFarClip(farClip_);
         // The interior fog of the WMO group the camera is in (MFOG,
         // 0x007a1150).
         {
@@ -3169,6 +3177,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 if (drawSkyModels) {
                     skyboxModelRenderer_->render(cmd, perFrameSet, *camera);
                 }
+                // The glare steps here, on the main thread, and is drawn at
+                // the end of the world by the post worker (0x007f0870).
+                skySystem->updateGlare(*camera, skyParams);
             }
             vkEndCommandBuffer(cmd);
         }
@@ -3222,6 +3233,10 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             if (footprintRenderer && camera) footprintRenderer->render(cmd, perFrameSet, *camera);
             if (questMarkerRenderer && camera) questMarkerRenderer->render(cmd, perFrameSet, *camera);
 
+            // The sun's and the White Lady's glare, over the whole world with
+            // no depth test, last before the overlays (0x007f0870 runs after
+            // the world, 0x009ac400 turns the depth test off).
+            if (skySystem && camera && !skipSky) skySystem->renderGlare(cmd, perFrameSet);
             renderUnderwaterOverlay(cmd);
             renderPostSceneOverlays(cmd, gameHandler);
             vkEndCommandBuffer(cmd);
@@ -3379,6 +3394,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 skyboxModelRenderer_->prepareRender(frameIdx, *camera);
                 skyboxModelRenderer_->render(currentCmd, perFrameSet, *camera);
             }
+            skySystem->updateGlare(*camera, skyParams);
             if (vkCtx) vkCtx->gpuMark(currentCmd, "sky");
         }
 
@@ -3438,6 +3454,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     // Underwater overlay and minimap - in the fallback path these run inline;
     // in the parallel path they were already recorded into SEC_POST above.
     if (!parallelRecordingEnabled_) {
+        // The glare, over the finished world (0x007f0870, 0x009ac400).
+        if (skySystem && camera && !skipSky) skySystem->renderGlare(currentCmd, perFrameSet);
         renderUnderwaterOverlay(currentCmd);
         renderPostSceneOverlays(currentCmd, gameHandler);
     }
@@ -4141,6 +4159,7 @@ void Renderer::logViewDistanceDiag() {
     diagM2Furthest_ = m2Furthest;
 
     LOG_WARNING("view distance ", static_cast<int>(viewDistance_),
+                ", far clip ", static_cast<int>(farClip_),
                 ": terrain drew to ", static_cast<int>(terrainFurthest),
                 ", doodads to ", static_cast<int>(m2Furthest),
                 ", tiles loaded to ", getTerrainLoadRadius(),
@@ -4159,10 +4178,22 @@ void Renderer::setSharpStars(bool enabled) {
 
 void Renderer::setViewDistance(float distance) {
     viewDistance_ = glm::clamp(distance, 400.0f, 2400.0f);
+    applyFarClip(farClipMapId_);
+}
 
-    if (terrainRenderer) terrainRenderer->setViewDistance(viewDistance_);
-    if (wmoRenderer) wmoRenderer->setViewDistance(viewDistance_);
-    if (m2Renderer) m2Renderer->setViewDistance(viewDistance_);
+// The setting is the client's farclip cvar; what the world is drawn to is
+// that held to the map's limit, 791 yards before map 530 and 1583 from it
+// (0x00780770, on a change of setting 0x00780800 and on a new map
+// 0x00781430). The fog ends inside it too (LightingManager::setFarClip).
+void Renderer::applyFarClip(uint32_t mapId) {
+    farClipMapId_ = mapId;
+    const bool moreThan1GB = core::MemoryMonitor::getInstance().getTotalRAM() == 0 ||
+                             core::MemoryMonitor::getInstance().getTotalRAM() > 0x40000000ull;
+    farClip_ = daynight::clientFarClip(viewDistance_, mapId, false, moreThan1GB);
+
+    if (terrainRenderer) terrainRenderer->setViewDistance(farClip_);
+    if (wmoRenderer) wmoRenderer->setViewDistance(farClip_);
+    if (m2Renderer) m2Renderer->setViewDistance(farClip_);
     if (terrainManager) {
         terrainManager->setLoadRadius(getTerrainLoadRadius());
         terrainManager->setUnloadRadius(getTerrainUnloadRadius());
@@ -4171,7 +4202,7 @@ void Renderer::setViewDistance(float distance) {
 
 int Renderer::getTerrainLoadRadius() const {
     constexpr float kAdtTileSize = core::coords::TILE_SIZE;
-    return glm::clamp(static_cast<int>(std::ceil(viewDistance_ / kAdtTileSize)) + 1, 2, 6);
+    return glm::clamp(static_cast<int>(std::ceil(farClip_ / kAdtTileSize)) + 1, 2, 6);
 }
 void Renderer::renderHUD() {
     if (currentCmd == VK_NULL_HANDLE) return;
@@ -4524,10 +4555,10 @@ void Renderer::renderReflectionPass() {
                 reflTimeOfDay, -1.0f, 0.0f,
                 lightingManager ? &lightingManager->getLightingParams() : nullptr, false);
             // A flare is an artefact of the lens, so it belongs to the camera
-            // and not to what the water is showing it.
+            // and not to what the water is showing it; the glare is drawn
+            // over the camera's own picture only (0x009ac400).
             skyParams.sunOcclusion = 1.0f;
             skyParams.moonOcclusion = 1.0f;
-            skyParams.drawGlare = false;
             skySystem->render(currentCmd, reflDescSet, *camera, skyParams);
         }
         if (terrainRenderer && terrainEnabled) {

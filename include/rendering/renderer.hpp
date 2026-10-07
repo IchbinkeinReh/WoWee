@@ -383,6 +383,12 @@ private:
     bool shadowsEnabled = false;
     float shadowDistance_ = 300.0f;  // Shadow frustum half-extent (default: 300 units)
     float viewDistance_ = 1200.0f;
+    /// The far clip the world is drawn to: the setting held to this map's
+    /// limit (daynight::clientFarClip, 0x00780770), and the map it was worked
+    /// out for, so a map change reapplies it.
+    float farClip_ = 1200.0f;
+    uint32_t farClipMapId_ = 0;
+    void applyFarClip(uint32_t mapId);
     bool sharpStars_ = false;
     float diagTerrainFurthest_ = -1.0f;
     float diagM2Furthest_ = -1.0f;
@@ -402,6 +408,9 @@ public:
     float getShadowDistance() const { return shadowDistance_; }
     void setViewDistance(float distance);
     float getViewDistance() const { return viewDistance_; }
+    /// What the world is actually drawn to on this map: the view distance
+    /// held to 791 yards before map 530 and 1583 from it (0x00780770).
+    float getFarClip() const { return farClip_; }
     /// Draw the client's own point stars in place of the sky model's baked
     /// star layer, which is a 256x256 compressed texture stretched across the
     /// whole dome. See Renderer::setSharpStars.

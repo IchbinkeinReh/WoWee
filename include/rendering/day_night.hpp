@@ -157,6 +157,44 @@ inline float glareFacing(float facing) {
     return (f - kGlareFacingThreshold) / (1.0f - kGlareFacingThreshold);
 }
 
+/// How much the sun's glare takes off the world's light: 0.35 x the facing,
+/// held to no less than 0.7, to the tenth power, x how much glare shows
+/// (0x007ef6e0 keeps pow(facing, 10) x glare at 0xd38f4c; 0x007816f0 scales
+/// the ambient and direct light, 0xd38ca8 and 0xd38cac, by one less 0.35 of
+/// it). Looking into a full glare the world is 35% darker.
+inline float sunGlareWorldDim(float facing, float glare) {
+    const float f = facing < kGlareFacingThreshold ? kGlareFacingThreshold : facing;
+    return 0.35f * std::pow(f, 10.0f) * glare;
+}
+
+/// A sun or moon quad's alpha at `h` client units above the eye, for a body
+/// whose centre is `centre` above it, `size` across and coloured at alpha
+/// `a` (0x007edee0): cut at the horizon; the vertices within 0.4 units of it
+/// take 2.5 x their height, the rest keep `a`, and a quad that straddles the
+/// 0.4 line gets a row of vertices on it at 1. Gouraud shading between them.
+/// Negative where the quad is cut.
+inline float celestialQuadAlpha(float h, float centre, float size, float a) {
+    if (h < 0.0f) return -1.0f;
+    const float top = centre + size * 0.5f;
+    float bottom = centre - size * 0.5f;
+    if (top < 0.0f) return -1.0f;
+    if (bottom < 0.0f) bottom = 0.0f;
+    const auto low = [](float y) { const float v = y * 2.5f; return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+    const bool topLow = top - 0.4f < 0.001f;
+    const bool bottomLow = bottom - 0.4f < 0.001f;
+    if (!topLow && bottomLow) {
+        // Split on the 0.4 line: 2.5 h below it, 1 on it, `a` at the top.
+        if (h <= 0.4f) return low(h);
+        const float f = (h - 0.4f) / (top - 0.4f);
+        return 1.0f + (a - 1.0f) * (f > 1.0f ? 1.0f : f);
+    }
+    const float span = top - bottom;
+    const float f = span > 0.0f ? (h - bottom) / span : 0.0f;
+    const float aBottom = bottomLow ? low(bottom) : a;
+    const float aTop = topLow ? low(top) : a;
+    return aBottom + (aTop - aBottom) * (f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f));
+}
+
 /// The way the directional light travels at day fraction `t` (0x007eea90).
 /// Always out of the north-west and downward: 37 degrees above the horizon at
 /// midnight and noon, 20 at 06:00 and 18:00. The moon's light at night comes
@@ -246,6 +284,44 @@ inline FogRange clientFogRange(float fogEndYards, float startScalar, float farCl
 inline bool mapUsesFogExponent(uint32_t mapId) {
     return mapId >= 530u;
 }
+
+/// The far clip's bounds (0x00780770): no nearer than 183 yards; no farther
+/// than 1583 on the newer maps, 791 on the old ones.
+inline constexpr float kFarClipMin = 183.33333f;
+inline constexpr float kFarClipOldWorld = 791.66669f;
+inline constexpr float kFarClipNewWorld = 1583.3334f;
+
+/// How far a map may be drawn (0x00780770): 1583 yards from map 530 on -
+/// but not Hellfire Ramparts (543) or Utgarde Pinnacle (575) - on a machine
+/// with more than 1 GB of memory (0x0086b4c0), else 791. The maps before 530,
+/// and those two, get 791 unless farClipOverride is 1 or more (it is 0 by
+/// default, 0x0078e400).
+inline float clientFarClipLimit(uint32_t mapId, bool farClipOverride = false,
+                                bool moreThan1GB = true) {
+    if (mapId < 530u || mapId == 543u || mapId == 575u)
+        return farClipOverride ? kFarClipNewWorld : kFarClipOldWorld;
+    return moreThan1GB ? kFarClipNewWorld : kFarClipOldWorld;
+}
+
+/// The far clip the client draws a map with for a view-distance setting (the
+/// farclip cvar, 350 by default): the setting held between 183 yards and the
+/// map's limit (0x00780770, applied by 0x00780800 and on entering a map by
+/// 0x00781430). The camera takes it (0x00607b00) and DNInfo's far clip with
+/// it (0x004f8410), which every light's fog end is held to (0x007f16f0) and
+/// which the later fog ends at (0x007ecd80).
+inline float clientFarClip(float setting, uint32_t mapId, bool farClipOverride = false,
+                           bool moreThan1GB = true) {
+    const float limit = clientFarClipLimit(mapId, farClipOverride, moreThan1GB);
+    if (!(setting >= kFarClipMin)) return kFarClipMin;
+    return setting > limit ? limit : setting;
+}
+
+/// What 0x007f3230 draws with when it has no light at all (DAT_00d39008 0):
+/// fog out to 1e10 yards - so to the far clip (0x007f16f0) - starting half way,
+/// drawn with an exponent of 4 on any map.
+inline constexpr float kNoLightFogEnd = 1.0e10f;
+inline constexpr float kNoLightFogStartScalar = 0.5f;
+inline constexpr float kNoLightFogExponent = 4.0f;
 
 /// The power that fog is drawn with for a light whose authored fog runs from
 /// `start` to `end` yards (0x007ecd00): 1.5 for a range of 500 yards or more

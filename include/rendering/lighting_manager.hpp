@@ -7,6 +7,8 @@
 #include <string>
 #include <glm/glm.hpp>
 
+#include "rendering/day_night.hpp"
+
 namespace wowee {
 namespace pipeline { class DBCFile; class AssetManager; }
 
@@ -117,6 +119,48 @@ inline LightingParams lerpLightingParams(const LightingParams& a, const Lighting
     out.oceanShallowAlpha = glm::mix(a.oceanShallowAlpha, b.oceanShallowAlpha, w);
     out.oceanDeepAlpha = glm::mix(a.oceanDeepAlpha, b.oceanDeepAlpha, w);
     return out;
+}
+
+/// The light 0x007f3230 sets up when it has none to blend - Light.dbc missing,
+/// or no row for the map and no global default: every colour channel white
+/// but channel 1, the ambient, at 0x404040 (DNInfo[0], 0x007ebff0's slot for
+/// channel 1, is 0xd38bd4); the fog out to the far
+/// clip, starting half way and drawn with an exponent of 4 (0xd38c1c..24);
+/// no HighlightSky, glow 0.5, no cloud cover, and water alphas 0.5, 1, 0.75
+/// and 1 (0xd38c28..4c).
+inline LightingParams noLightParams() {
+    LightingParams p;
+    const glm::vec3 white(1.0f);
+    p.ambientColor = glm::vec3(64.0f / 255.0f);
+    p.diffuseColor = white;
+    p.fogColor = white;
+    p.zoneFogColor = white;
+    p.fogEnd = daynight::kNoLightFogEnd;
+    p.fogStartScalar = daynight::kNoLightFogStartScalar;
+    p.fogStart = p.fogEnd * p.fogStartScalar;
+    p.fogExponent = daynight::kNoLightFogExponent;
+    p.skyTopColor = white;
+    p.skyMiddleColor = white;
+    p.skyBand1Color = white;
+    p.skyBand2Color = white;
+    p.skySmogColor = white;
+    p.shadowOpacity = 1.0f;
+    p.sunColor = white;
+    p.cloudSunColor = white;
+    p.cloudShadeColor = white;
+    p.cloudBaseColor = white;
+    p.oceanCloseColor = white;
+    p.oceanFarColor = white;
+    p.riverCloseColor = white;
+    p.riverFarColor = white;
+    p.cloudDensity = 0.0f;
+    p.highlightSky = 0.0f;
+    p.glow = 0.5f;
+    p.waterShallowAlpha = 0.5f;
+    p.waterDeepAlpha = 1.0f;
+    p.oceanShallowAlpha = 0.75f;
+    p.oceanDeepAlpha = 1.0f;
+    return p;
 }
 
 /**

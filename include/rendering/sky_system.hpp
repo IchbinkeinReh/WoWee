@@ -62,9 +62,6 @@ struct SkyParams {
     /// The heaviest sky model up, 0..1: the glare fades under it
     /// (0x007ef6e0).
     float skyboxWeight = 0.0f;
-    /// Whether the sun and moon glare is drawn: it belongs to the camera, not
-    /// to a reflection of the sky.
-    bool drawGlare = true;
 
     // Time
     float timeOfDay = 12.0f;    // 0-24 hours
@@ -110,13 +107,21 @@ public:
      * @param perFrameSet Per-frame descriptor set (set 0, camera UBO)
      * @param camera      Camera for legacy sub-renderers (lens flare, etc.)
      * @param params      Sky parameters from lighting system
-     * @param drawStarModel Draws the client's stars model, called right after
-     *                    the dome and before the sun, moons and clouds, which
-     *                    is where 0x007f09b0 draws them. Empty for none.
+     * @param drawStarModel Draws the client's stars model, called first,
+     *                    before the sun, the moons, the dome and the clouds,
+     *                    which is where 0x007f09b0 draws it. Empty for none.
      */
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 const Camera& camera, const SkyParams& params,
                 const std::function<void(VkCommandBuffer)>& drawStarModel = {});
+
+    /// Steps the sun's and the White Lady's glare once a frame, whether or
+    /// not the procedural sky is drawn (0x007f0870). Main thread.
+    void updateGlare(const Camera& camera, const SkyParams& params);
+    /// The glare, over the finished world with no depth test (0x009ac400).
+    void renderGlare(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
+    /// How much the sun's glare darkens the world's light (0x007816f0).
+    [[nodiscard]] float getSunGlareDim() const;
 
     /**
      * Enable/disable procedural stars (DEBUG/FALLBACK)

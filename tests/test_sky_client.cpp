@@ -9,6 +9,7 @@
 #include "pipeline/wmo_loader.hpp"
 #include "rendering/day_night.hpp"
 #include "rendering/lighting_manager.hpp"
+#include "test_support.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -50,6 +51,77 @@ TEST_CASE("the glare grows as the camera turns to face the body", "[sky][glare]"
     CHECK(dn::sampleCurve(dn::kSunGlare.time, 0.0f) == Catch::Approx(0.0f));
     CHECK(dn::sampleCurve(dn::kMoonGlare.time, 0.0f) == Catch::Approx(1.0f).margin(0.02f));
     CHECK(dn::sampleCurve(dn::kMoonGlare.time, 0.5f) == Catch::Approx(0.0f));
+}
+
+TEST_CASE("a body is cut at the horizon and faded over the 0.4 units above it", "[sky][celestial]") {
+    // 0x007edee0. Well up, the colour's alpha (1 - storm) all over.
+    CHECK(dn::celestialQuadAlpha(6.0f, 6.0f, 1.0f, 0.75f) == Catch::Approx(0.75f));
+    CHECK(dn::celestialQuadAlpha(5.6f, 6.0f, 1.0f, 0.75f) == Catch::Approx(0.75f));
+    // Straddling the 0.4 line: 2.5 x the height below it, 1 on it, the
+    // colour's alpha at the top - not 1 - storm all the way down.
+    CHECK(dn::celestialQuadAlpha(0.2f, 0.3f, 1.0f, 0.75f) == Catch::Approx(0.5f));
+    CHECK(dn::celestialQuadAlpha(0.4f, 0.3f, 1.0f, 0.75f) == Catch::Approx(1.0f));
+    CHECK(dn::celestialQuadAlpha(0.6f, 0.3f, 1.0f, 0.75f) == Catch::Approx(0.875f));
+    CHECK(dn::celestialQuadAlpha(0.8f, 0.3f, 1.0f, 0.75f) == Catch::Approx(0.75f));
+    // All of it under 0.4: 2.5 x the height everywhere.
+    CHECK(dn::celestialQuadAlpha(0.1f, 0.15f, 0.3f, 0.75f) == Catch::Approx(0.25f));
+    // Below the horizon nothing: under the cut, or the whole quad.
+    CHECK(dn::celestialQuadAlpha(-0.1f, 0.3f, 1.0f, 1.0f) < 0.0f);
+    CHECK(dn::celestialQuadAlpha(0.0f, -1.0f, 1.0f, 1.0f) < 0.0f);
+    // The shader measures the height as the client does, the body's plus
+    // the quad's own up offset, and works the alpha out the same way.
+    const std::string vert = wowee::test::slurp("assets/shaders/celestial.vert.glsl");
+    const std::string frag = wowee::test::slurp("assets/shaders/celestial.frag.glsl");
+    REQUIRE(vert.size() > 100);
+    REQUIRE(frag.size() > 100);
+    CHECK(vert.find("vHeight = push.dirSize.z * 12.0 + aPos.y * push.dirSize.w;") != std::string::npos);
+    CHECK(frag.find("bool topLow = top - 0.4 < 0.001;") != std::string::npos);
+}
+
+TEST_CASE("the sun's glare darkens the world's light", "[sky][glare]") {
+    // 0x007ef6e0 keeps pow(max(facing, 0.7), 10) x the glare; 0x007816f0
+    // takes 0.35 of it off the ambient and direct light.
+    CHECK(dn::sunGlareWorldDim(1.0f, 1.0f) == Catch::Approx(0.35f));
+    CHECK(dn::sunGlareWorldDim(1.0f, 0.5f) == Catch::Approx(0.175f));
+    CHECK(dn::sunGlareWorldDim(0.0f, 1.0f) == Catch::Approx(0.35f * std::pow(0.7f, 10.0f)));
+    CHECK(dn::sunGlareWorldDim(0.9f, 0.0f) == 0.0f);
+    const std::string renderer = wowee::test::slurp("src/rendering/renderer.cpp");
+    REQUIRE(renderer.size() > 1000);
+    CHECK(renderer.find("lp.diffuseColor * glareDim") != std::string::npos);
+    CHECK(renderer.find("lp.ambientColor * glareDim") != std::string::npos);
+}
+
+TEST_CASE("the sky goes stars, bodies, dome added on, clouds; the glare after the world",
+          "[sky][order]") {
+    // 0x007f09b0: the stars model, the three bodies (0x009ac660, alpha
+    // blended), the dome (0x009acb00, blend mode 3), the clouds (0x009acd40).
+    const std::string sky = wowee::test::slurp("src/rendering/sky_system.cpp");
+    REQUIRE(sky.size() > 1000);
+    const size_t body = sky.find("SkySystem::render(");
+    REQUIRE(body != std::string::npos);
+    const size_t stars = sky.find("drawStarModel(cmd)", body);
+    const size_t bodies = sky.find("celestial_->render(", body);
+    const size_t dome = sky.find("skybox_->render(", body);
+    const size_t clouds = sky.find("clouds_->render(", body);
+    REQUIRE(stars != std::string::npos);
+    REQUIRE(bodies != std::string::npos);
+    REQUIRE(dome != std::string::npos);
+    REQUIRE(clouds != std::string::npos);
+    CHECK(stars < bodies);
+    CHECK(bodies < dome);
+    CHECK(dome < clouds);
+    // Under a sky model that hides the procedural sky, the dome goes too.
+    const size_t hidden = sky.find("if (params.useOriginalSkybox) return;", body);
+    REQUIRE(hidden != std::string::npos);
+    CHECK(hidden < dome);
+    // The dome adds; the glare adds with no depth test, after the world.
+    const std::string skybox = wowee::test::slurp("src/rendering/skybox.cpp");
+    CHECK(skybox.find(".setColorBlendAttachment(domeBlend())") != std::string::npos);
+    const std::string celestial = wowee::test::slurp("src/rendering/celestial.cpp");
+    CHECK(celestial.find(".setDepthTest(!glare, false") != std::string::npos);
+    const std::string renderer = wowee::test::slurp("src/rendering/renderer.cpp");
+    CHECK(renderer.find("skySystem->renderGlare(cmd, perFrameSet)") != std::string::npos);
+    CHECK(renderer.find("skySystem->renderGlare(currentCmd, perFrameSet)") != std::string::npos);
 }
 
 TEST_CASE("the cloud dome is solid overhead and gone at the horizon", "[sky][clouds]") {

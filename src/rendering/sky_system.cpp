@@ -100,6 +100,22 @@ void SkySystem::update(float deltaTime) {
     if (clouds_)    clouds_->update(deltaTime);
 }
 
+namespace {
+Celestial::Frame celestialFrame(const Camera& camera, const SkyParams& params) {
+    Celestial::Frame frame;
+    frame.dayFraction = params.timeOfDay / 24.0f;
+    frame.sunDir = params.sunDir;
+    frame.moonDir = params.moonDir;
+    frame.color = params.sunColor;
+    frame.storm = daynight::stormBlend(params.weatherIntensity);
+    frame.cameraForward = camera.getForward();
+    frame.sunOcclusion = params.sunOcclusion;
+    frame.moonOcclusion = params.moonOcclusion;
+    frame.skyboxWeight = params.skyboxWeight;
+    return frame;
+}
+}  // namespace
+
 void SkySystem::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                         const Camera& camera, const SkyParams& params,
                         const std::function<void(VkCommandBuffer)>& drawStarModel) {
@@ -107,20 +123,12 @@ void SkySystem::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         return;
     }
 
-    // --- Skybox (authoritative sky gradient, DBC-driven colors) ---
-    if (skybox_) {
-        // The glow's azimuth runs from the camera's heading (0x007f3920).
-        skybox_->render(cmd, perFrameSet, params,
-                        daynight::skyHighlightPhase(core::coords::renderToCanonical(camera.getForward())));
-    }
-
     // --- Stars ---
-    // The client's are a model of their own, drawn between the dome and the
-    // sun (0x007f09b0, 0x009abd50), and only with the procedural sky; the
-    // caller decides that and hands the draw in. Sharp stars, an option and
-    // off by default, are a point field in their place - and drawn under a
-    // sky model too, where M2Renderer drops that model's own star layer for
-    // them.
+    // The client's are a model of their own, drawn first of the procedural
+    // sky (0x007f09b0, 0x009abd50), and only with it; the caller decides
+    // that and hands the draw in. Sharp stars, an option and off by default,
+    // are a point field in their place - and drawn under a sky model too,
+    // where M2Renderer drops that model's own star layer for them.
     const bool renderProceduralStars = debugSkyMode_ || proceduralStarsEnabled_;
     if (starField_) {
         starField_->setEnabled(renderProceduralStars);
@@ -131,26 +139,25 @@ void SkySystem::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
     if (!renderProceduralStars && drawStarModel) drawStarModel(cmd);
 
     // Under a sky model up past 0.99 without LightSkybox flag 0x2 - or the
-    // death model - the client draws none of its own sky (0x007f09b0).
+    // death model - the client draws none of its own sky: not the dome, the
+    // sun, the moons or the clouds (0x007f09b0). What shows round the model
+    // is the frame's clear colour.
     if (params.useOriginalSkybox) return;
 
-    // --- The sun, the White Lady and the Blue Child, and their glare ---
+    // --- The sun, the White Lady and the Blue Child ---
+    // Under the dome, into the cleared sky (0x007f09b0 draws them before it).
     if (celestial_) {
-        Celestial::Frame frame;
-        frame.dayFraction = params.timeOfDay / 24.0f;
-        frame.sunDir = params.sunDir;
-        frame.moonDir = params.moonDir;
-        frame.color = params.sunColor;
-        frame.storm = daynight::stormBlend(params.weatherIntensity);
-        frame.cameraForward = camera.getForward();
-        frame.sunOcclusion = params.sunOcclusion;
-        frame.moonOcclusion = params.moonOcclusion;
-        frame.skyboxWeight = params.skyboxWeight;
-        frame.drawGlare = params.drawGlare;
-        celestial_->render(cmd, perFrameSet, frame);
+        celestial_->render(cmd, perFrameSet, celestialFrame(camera, params));
     }
 
-    // --- Clouds: the light's cloud colours and cover (0x007efd00) ---
+    // --- The dome, added on over the stars and the bodies (0x009acb00) ---
+    if (skybox_) {
+        // The glow's azimuth runs from the camera's heading (0x007f3920).
+        skybox_->render(cmd, perFrameSet, params,
+                        daynight::skyHighlightPhase(core::coords::renderToCanonical(camera.getForward())));
+    }
+
+    // --- Clouds: the light's cloud colours and cover, last (0x009acd40) ---
     if (clouds_) {
         clouds_->render(cmd, perFrameSet, params);
     }
@@ -162,6 +169,18 @@ void SkySystem::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                            0.0f, params.cloudDensity,
                            params.weatherIntensity, params.sunOcclusion);
     }
+}
+
+void SkySystem::updateGlare(const Camera& camera, const SkyParams& params) {
+    if (initialized_ && celestial_) celestial_->updateGlare(celestialFrame(camera, params));
+}
+
+void SkySystem::renderGlare(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
+    if (initialized_ && celestial_) celestial_->renderGlare(cmd, perFrameSet);
+}
+
+float SkySystem::getSunGlareDim() const {
+    return celestial_ ? celestial_->getSunGlareDim() : 0.0f;
 }
 
 glm::vec3 SkySystem::getSunPosition(const SkyParams& params) const {

@@ -23,6 +23,17 @@ struct SkyPushConstants {
 };
 static_assert(sizeof(SkyPushConstants) == 96, "SkyPushConstants size mismatch");
 
+// The dome is added on over what is already there (0x009acb00 draws it with
+// blend mode 3, source alpha and one, its vertex alpha 255): the stars, the
+// sun and the moons are drawn first into the cleared sky and the dome's
+// colour goes on top of them. The alpha channel is written as before.
+static VkPipelineColorBlendAttachmentState domeBlend() {
+    VkPipelineColorBlendAttachmentState state = PipelineBuilder::blendAdditive();
+    state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    return state;
+}
+
 Skybox::Skybox() = default;
 
 Skybox::~Skybox() {
@@ -65,7 +76,7 @@ bool Skybox::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout) {
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
         .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)  // depth test on, write off, LEQUAL for far plane
-        .setColorBlendAttachment(PipelineBuilder::blendDisabled())
+        .setColorBlendAttachment(domeBlend())
         .setMultisample(vkCtx->getMsaaSamples())
         .setLayout(pipelineLayout)
         .setRenderPass(vkCtx->getImGuiRenderPass())
@@ -102,7 +113,7 @@ void Skybox::recreatePipelines() {
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
         .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
-        .setColorBlendAttachment(PipelineBuilder::blendDisabled())
+        .setColorBlendAttachment(domeBlend())
         .setMultisample(vkCtx->getMsaaSamples())
         .setLayout(pipelineLayout)
         .setRenderPass(vkCtx->getImGuiRenderPass())

@@ -20,18 +20,11 @@ namespace rendering {
 constexpr uint16_t kHalfMinutesPerDay = 2880;
 
 LightingManager::LightingManager() {
-    // Only for a client with no Light.dbc at all. Every map that has one has a
-    // default light, and the client starts from that (0x007ecb30).
-    fallbackParams_.ambientColor = glm::vec3(0.5f, 0.5f, 0.6f);
-    fallbackParams_.diffuseColor = glm::vec3(1.0f, 0.95f, 0.85f);
-    fallbackParams_.fogColor = glm::vec3(0.6f, 0.7f, 0.85f);
-    fallbackParams_.zoneFogColor = fallbackParams_.fogColor;
-    fallbackParams_.fogEnd = 1500.0f;
-    fallbackParams_.fogStartScalar = 0.2f;
-    fallbackParams_.fogStart = 300.0f;
-    fallbackParams_.skyTopColor = glm::vec3(0.4f, 0.6f, 0.9f);
-    fallbackParams_.skyMiddleColor = glm::vec3(0.6f, 0.75f, 0.95f);
-
+    // Only for a client with no light to blend: Light.dbc missing, or no row
+    // for the map and no global default. The client's fixed set for that
+    // (0x007f3230 with DAT_00d39008 0): white, a grey ambient, and fog to the
+    // far clip from half way with an exponent of 4.
+    fallbackParams_ = noLightParams();
     currentParams_ = fallbackParams_;
 }
 

@@ -237,6 +237,77 @@ TEST_CASE("the fog shaders raise the ramp to the exponent in fogColor.w", "[dayn
     CHECK(renderer.find("glm::vec4(lp.fogColor, lp.fogExponent)") != std::string::npos);
 }
 
+TEST_CASE("the far clip is held to 791 yards before map 530 and 1583 from it", "[daynight][farclip]") {
+    // 0x00780770: the farclip setting held between 183 and the map's limit.
+    CHECK(dn::clientFarClip(1900.0f, 0) == Catch::Approx(791.6667f));
+    CHECK(dn::clientFarClip(1900.0f, 1) == Catch::Approx(791.6667f));
+    CHECK(dn::clientFarClip(1900.0f, 529) == Catch::Approx(791.6667f));
+    // Eversong is on map 530, Northrend on 571.
+    CHECK(dn::clientFarClip(1900.0f, 530) == Catch::Approx(1583.3334f));
+    CHECK(dn::clientFarClip(1900.0f, 571) == Catch::Approx(1583.3334f));
+    // Hellfire Ramparts (0x21f) and Utgarde Pinnacle (0x23f) keep the old limit.
+    CHECK(dn::clientFarClip(1900.0f, 543) == Catch::Approx(791.6667f));
+    CHECK(dn::clientFarClip(1900.0f, 575) == Catch::Approx(791.6667f));
+    // Inside the limit the setting stands; under 183 yards it is 183.
+    CHECK(dn::clientFarClip(350.0f, 0) == Catch::Approx(350.0f));
+    CHECK(dn::clientFarClip(1200.0f, 530) == Catch::Approx(1200.0f));
+    CHECK(dn::clientFarClip(100.0f, 530) == Catch::Approx(183.33333f));
+    // farClipOverride lifts the old maps to 1583; a machine with 1 GB or
+    // less holds the new ones to 791 (0x0086b4c0).
+    CHECK(dn::clientFarClip(1900.0f, 0, true) == Catch::Approx(1583.3334f));
+    CHECK(dn::clientFarClip(1900.0f, 543, true) == Catch::Approx(1583.3334f));
+    CHECK(dn::clientFarClip(1900.0f, 530, false, false) == Catch::Approx(791.6667f));
+}
+
+TEST_CASE("the fog follows the map's far clip", "[daynight][farclip][fog]") {
+    // The fog's end is held to the far clip (0x007f16f0), and the later fog
+    // ends at it (0x007ecd80), so the same setting fogs the two worlds at
+    // different distances: Elwynn's long fog stops at 791 yards, Eversong's
+    // short one is drawn out to 1583.
+    const float oldClip = dn::clientFarClip(1900.0f, 0);
+    const float newClip = dn::clientFarClip(1900.0f, 530);
+    CHECK(dn::clientFogRange(2000.0f, 0.25f, oldClip).end == Catch::Approx(791.6667f));
+    const dn::LightFog eversong = dn::clientLightFog(300.0f, 0.25f, newClip, true);
+    CHECK(eversong.end == Catch::Approx(1583.3334f));
+    // 700 is nearer than the clip, so the reach is 500 and the exponent the
+    // one a 1000 yard clip gives.
+    CHECK(eversong.exponent == Catch::Approx(4.525f));
+    // The renderer works the clip out per map and hands it to the fog.
+    const std::string renderer = wowee::test::slurp("src/rendering/renderer.cpp");
+    CHECK(renderer.find("daynight::clientFarClip(viewDistance_, mapId") != std::string::npos);
+    CHECK(renderer.find("lightingManager->setFarClip(farClip_)") != std::string::npos);
+    CHECK(renderer.find("ceil(farClip_ / kAdtTileSize)") != std::string::npos);
+}
+
+TEST_CASE("with no light the fog runs to the far clip with an exponent of 4", "[daynight][fog]") {
+    // 0x007f3230 with no lights loaded: 0xd38c1c = 1e10, 0xd38c20 = 0.5,
+    // 0xd38c24 = 4.
+    const wowee::rendering::LightingParams p = wowee::rendering::noLightParams();
+    CHECK(p.fogEnd == Catch::Approx(1.0e10f));
+    CHECK(p.fogStartScalar == Catch::Approx(0.5f));
+    CHECK(p.fogExponent == Catch::Approx(4.0f));
+    const dn::FogRange r = dn::clientFogRange(p.fogEnd, p.fogStartScalar, 791.6667f);
+    CHECK(r.end == Catch::Approx(791.6667f));
+    CHECK(r.start == Catch::Approx(395.8333f));
+    // Half way to the far clip it is clear, three quarters of the way 1/16.
+    CHECK(dn::clientFogVisibility(395.0f, r.start, r.end, p.fogExponent) == Catch::Approx(1.0f));
+    CHECK(dn::clientFogVisibility(593.75f, r.start, r.end, p.fogExponent) ==
+          Catch::Approx(0.0625f).margin(0.001f));
+    // Every channel white but channel 1, 0x404040 (DNInfo[0], 0xd38bd4).
+    CHECK(p.ambientColor.r == Catch::Approx(64.0f / 255.0f));
+    CHECK(p.diffuseColor == glm::vec3(1.0f));
+    CHECK(p.fogColor == glm::vec3(1.0f));
+    CHECK(p.skyTopColor == glm::vec3(1.0f));
+    CHECK(p.sunColor == glm::vec3(1.0f));
+    CHECK(p.glow == Catch::Approx(0.5f));
+    CHECK(p.cloudDensity == 0.0f);
+    CHECK(p.oceanShallowAlpha == Catch::Approx(0.75f));
+    // The lighting manager starts from it and uses it whenever no light
+    // applies.
+    const std::string lm = wowee::test::slurp("src/rendering/lighting_manager.cpp");
+    CHECK(lm.find("fallbackParams_ = noLightParams();") != std::string::npos);
+}
+
 TEST_CASE("the fog exponent is lerped with the rest of the light", "[daynight][fog]") {
     wowee::rendering::LightingParams a;
     wowee::rendering::LightingParams b;
