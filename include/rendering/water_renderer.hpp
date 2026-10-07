@@ -235,6 +235,11 @@ public:
 private:
     LightWaterColors lightWaterColors_;
     bool hasLightWaterColors_ = false;
+    /// The client's 'specular' option (0x0078de60 sets world flag 0x8000000),
+    /// off by default. 0x00781430 hands it, with the pixel shader flag
+    /// 0x10000000, to 0xb23f68 through 0xce04a0 (0x007bd8a0), and 0x008a1fa0
+    /// picks CMaterialWater over CMaterialWaterNoSpec by it.
+    bool clientSpecular_ = false;
     bool enhancedWater_ = false;
     double clientTimeSeconds_ = 0.0;
 

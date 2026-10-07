@@ -388,8 +388,9 @@ void main() {
         const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, pc.interiorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
-        result = pc.interiorAmbient.rgb * texColor.rgb
-               + idiff * pc.interiorDirect.rgb * pc.lightFlags.y * texColor.rgb;
+        // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct).
+        result = clamp(pc.interiorAmbient.rgb + idiff * pc.interiorDirect.rgb * pc.lightFlags.y,
+                       0.0, 1.0) * texColor.rgb;
     } else {
         vec3 ldir = normalize(-lightDir.xyz);
         float diff = max(dot(norm, ldir), 0.0);
@@ -420,8 +421,12 @@ void main() {
         // zone's as it is (0x007a1e90). The direct light by its scale:
         // halved in the terrain's baked shadow (0x007c1730 multiplies by +0x8c).
         vec3 ambient = pc.interiorAmbient.w > 0.5 ? pc.interiorAmbient.rgb : ambientColor.rgb;
-        result = rtAmbient(rt, ambient) * texColor.rgb
-               + shadow * (diff * lightColor.rgb * pc.lightFlags.y * texColor.rgb);
+        // The Diffuse_* programs' light: clamp(ambient + clamp(N.L) x direct),
+        // the direct light no more than one a channel (0x00873ca0), then the
+        // shadow variants' 0.7 + 0.3 x the light the shadow map lets through.
+        vec3 direct = min(lightColor.rgb * pc.lightFlags.y, vec3(1.0));
+        result = clamp(rtAmbient(rt, ambient) + diff * direct, 0.0, 1.0)
+               * (0.7 + 0.3 * shadow) * texColor.rgb;
     }
 
     if (!finiteVec3(result)) {

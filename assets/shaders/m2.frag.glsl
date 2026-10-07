@@ -295,7 +295,8 @@ void main() {
         const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, vInteriorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
-        light = vInteriorAmbient + idiff * vInteriorDirect.rgb;
+        // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct).
+        light = clamp(vInteriorAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0);
     } else {
         // Ambient and diffuse only. The client lights an M2 batch with the
         // fixed-function light (FUN_0081fb10) and no specular term; its
@@ -324,7 +325,12 @@ void main() {
         const bool worldObject = (vInteriorLit & 4) != 0;
         vec3 ambient = worldObject ? vInteriorAmbient : ambientColor.rgb;
         vec3 direct = worldObject ? vInteriorDirect.rgb : lightColor.rgb;
-        light = rtAmbient(rt, ambient) + shadow * (diff * direct);
+        // The Diffuse_* programs' light: clamp(ambient + clamp(N.L) x direct),
+        // the direct light no more than one a channel (0x00873ca0), then the
+        // shadow variants' 0.7 + 0.3 x the light the shadow map lets through
+        // over all of it.
+        light = clamp(rtAmbient(rt, ambient) + diff * min(direct, vec3(1.0)), 0.0, 1.0)
+              * (0.7 + 0.3 * shadow);
     }
     vec3 result = combineStages(vec4(light * tint, batchFade), tex0, tex1).rgb;
 

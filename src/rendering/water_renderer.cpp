@@ -2862,11 +2862,13 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
                 const bool interiorLight = surface.wmoId != 0 && surface.wmoInterior;
                 push.params = glm::vec4(rec.floats[st.depthScaleFloat], interiorLight ? 1.0f : 0.0f, 0.0f,
                                         depthSourceOf(depthSlot.procedural));
-                // Water draws with vsLiquidWater/psLiquidWater: 0xb23f68 is 1
-                // unless the world turns it off (0x00781430), which picks the
-                // specular material over NoSpec (0x008a1fa0). Procedural water
-                // is drawn as its fixed-function stand-in, which has none.
-                if (liquid->kind == client_liquid::MaterialKind::Water) {
+                // Water draws with vsLiquidWater/psLiquidWater only with the
+                // 'specular' option on: 0x00781430 sets 0xb23f68 from it
+                // (0xce04a0, 0x007bd8a0) and 0x008a1fa0 picks NoSpec without,
+                // vsLiquidWaterNoSpec/psLiquidWaterNoSpec - no highlight and
+                // no quarter lift. Procedural water is drawn as its
+                // fixed-function stand-in, which has none.
+                if (liquid->kind == client_liquid::MaterialKind::Water && clientSpecular_) {
                     const glm::vec3 sun = hasLightWaterColors_ ? lightWaterColors_.sunColor : glm::vec3(1.0f);
                     push.specular = glm::vec4(sun, kLiquidSpecularPower);
                 }
