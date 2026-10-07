@@ -920,7 +920,8 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
 void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) {
     // Every field, every time: the entry is in write-combined memory and is
     // never read back, so whatever the slot held last frame must not show.
-    e.flags = inst.interiorLit ? kInstanceInteriorLit : 0;
+    e.flags = (inst.interiorLit ? kInstanceInteriorLit : 0) | (inst.interiorPass ? kInstanceInteriorPass : 0) |
+              (inst.worldObjectLit && !inst.interiorLit ? kInstanceWorldObject : 0);
     e.interiorAmbient = glm::vec4(inst.interiorAmbient, 0.0f);
     e.interiorDirect = glm::vec4(inst.interiorDirect, inst.interiorTowardSun);
 }

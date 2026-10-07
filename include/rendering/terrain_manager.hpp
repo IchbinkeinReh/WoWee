@@ -279,6 +279,10 @@ public:
      */
     [[nodiscard]] std::optional<float> getHeightAt(float glX, float glY) const;
 
+    /// Whether a point lies in the terrain's baked shadow: the chunk's MCSH
+    /// texel under it is set (0x007a06a0). False where the chunk has none.
+    [[nodiscard]] bool isInBakedShadowAt(float glX, float glY) const;
+
     /**
      * True when the MCNK chunk containing this position is cut by terrain holes.
      * getHeightAt interpolates straight across a hole and reports a surface that

@@ -267,7 +267,17 @@ struct M2Instance {
     float interiorTowardSun = 0.0f;
     /// A game object's floor and where it was asked for, so one that stays
     /// put is not asked again.
-    std::optional<pipeline::wmo_doodad_light::FloorLight> floorLight;
+    pipeline::wmo_doodad_light::ObjectFloorState floor;
+    /// A game object's light as it eases (0x007a1e90): its ambient, 0..255,
+    /// which 0x00781a10 starts at the zone's, and the scale on its direct
+    /// light, which it starts at 1. worldObjectLit once it has them.
+    bool worldObjectLit = false;
+    glm::ivec3 easedAmbient{0};
+    float directScale = 1.0f;
+    /// In a WMO group drawn in the camera's interior pass: the camera's fog
+    /// colour (0x007c1730 tests +0xc 0x8000), and the pass it was found for.
+    bool interiorPass = false;
+    uint64_t interiorPassGeneration = 0;
     bool floorQueried = false;
     glm::vec3 floorQueryPos{0.0f};
     /// An alpha its owner sets on the whole model - the sky's crossfade
@@ -583,17 +593,25 @@ public:
     /// Mark an instance as a server game object so the adaptive doodad render
     /// distance can't cull it while the server still considers it visible.
     void setInstanceIsGameObject(uint32_t instanceId, bool isGameObject);
-    /// The floor under a point, as WMORenderer::unitInteriorLightAt finds it.
-    using FloorLightQuery =
-        std::function<std::optional<pipeline::wmo_doodad_light::FloorLight>(const glm::vec3&)>;
+    /// What a game object's floor search finds: from `feet`, starting at
+    /// `startZ` (0x007c2e70).
+    using FloorQuery =
+        std::function<pipeline::wmo_doodad_light::ObjectFloorState(const glm::vec3& feet, float startZ)>;
+    /// Whether a point is in a WMO group drawn in the camera's interior pass.
+    using InteriorPassQuery = std::function<bool(const glm::vec3&)>;
     /// Lights every game object as the client lights a world object
     /// (0x00781a10 makes one for each; 0x007c2e70, 0x007a0d60): on an
     /// interior floor by that floor's light, toward the zone's on a
-    /// transition face, and by the zone's light elsewhere. A game object was
-    /// lit by the sun wherever it stood. `zoneAmbient`, `zoneDirect`: the
-    /// zone's light now.
-    void refreshGameObjectLights(const FloorLightQuery& floorAt, const glm::vec3& zoneAmbient,
-                                 const glm::vec3& zoneDirect);
+    /// transition face, and by the zone's light elsewhere, its ambient easing
+    /// from the zone's into the floor's and its direct light halved in the
+    /// terrain's baked shadow (0x007a1e90, 0x007a1bc0). Marks every instance
+    /// in a group of the camera's interior pass (`inInteriorPass`, which
+    /// changes with `passGeneration`) for the camera's fog colour.
+    /// `zoneAmbient`, `zoneDirect`: the zone's light now; `seconds` the
+    /// frame's time.
+    void refreshGameObjectLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
+                                 uint64_t passGeneration, const glm::vec3& zoneAmbient,
+                                 const glm::vec3& zoneDirect, float seconds);
     void setSkipCollision(uint32_t instanceId, bool skip);
     void setSkipWallCollision(uint32_t instanceId, bool skip);
     void clear();
@@ -908,6 +926,11 @@ private:
         glm::vec4 interiorDirect;  // 16 bytes @ offset 144
     };
     static constexpr int32_t kInstanceInteriorLit = 1;
+    /// In a WMO group of the camera's interior pass: the camera's fog colour.
+    static constexpr int32_t kInstanceInteriorPass = 2;
+    /// A game object lit as a world object outside: interiorAmbient is its
+    /// eased ambient, interiorDirect its direct light, scale applied.
+    static constexpr int32_t kInstanceWorldObject = 4;
     static void writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst);
     // How many instances one frame may hand the GPU, not how many exist. Ground
     // clutter is what fills it: it is drawn by the thousand and every tuft

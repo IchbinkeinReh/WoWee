@@ -2926,6 +2926,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         if (instance.lightKnown) {
             charPush.interiorAmbient = instance.drawAmbient;
             charPush.interiorDirect = instance.drawDirect;
+            charPush.lightFlags = instance.drawFlags;
         }
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(charPush), &charPush);
@@ -4087,8 +4088,9 @@ void CharacterRenderer::clearTextureSlotOverride(uint32_t instanceId, uint16_t t
     }
 }
 
-void CharacterRenderer::refreshInteriorLights(const InteriorLightQuery& lightAt, const glm::vec3& zoneAmbient,
-                                              const glm::vec3& zoneDirect, float seconds) {
+void CharacterRenderer::refreshInteriorLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
+                                              const glm::vec3& zoneAmbient, const glm::vec3& zoneDirect,
+                                              float seconds) {
     namespace wl = pipeline::wmo_doodad_light;
     const auto toBytes = [](const glm::vec3& c) {
         return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
@@ -4101,22 +4103,31 @@ void CharacterRenderer::refreshInteriorLights(const InteriorLightQuery& lightAt,
         if (!instance.interiorQueried || glm::dot(d, d) >= 0.25f * 0.25f) {
             instance.interiorQueried = true;
             instance.interiorQueryPos = feet;
-            instance.floorLight = lightAt(feet);
+            instance.floor = floorAt(feet);
         }
+        const auto& floorLight = instance.floor.light;
 
         // The ambient it should have: the floor's, carried toward the zone's
         // on a transition face, or the zone's off any interior floor. The
         // one drawn moves toward it a step a frame (0x007a1e90); a new
         // instance starts at it.
         wl::ObjectLight light{zoneAmbient, zoneDirect, 0.0f};
-        if (instance.floorLight) light = wl::floorLightInZone(*instance.floorLight, zoneAmbient, zoneDirect);
+        if (floorLight) light = wl::floorLightInZone(*floorLight, zoneAmbient, zoneDirect);
         const glm::ivec3 target = toBytes(light.ambient);
         instance.easedAmbient = instance.lightKnown ? wl::easeAmbient(instance.easedAmbient, target, seconds)
                                                     : target;
+        // The direct light's scale, toward half in the terrain's baked
+        // shadow and whole elsewhere (0x007a1bc0, 0x007a1e90).
+        const float scaleTarget = wl::directScaleTarget(floorLight.has_value(),
+                                                        floorLight ? floorLight->towardOutside : 0,
+                                                        instance.floor.inBakedShadow && !instance.floor.onWmo);
+        instance.directScale = wl::easeDirectScale(instance.directScale, scaleTarget, seconds);
         instance.lightKnown = true;
         instance.drawAmbient = glm::vec4(glm::vec3(instance.easedAmbient) / 255.0f,
-                                         instance.floorLight ? 2.0f : 1.0f);
+                                         floorLight ? 2.0f : 1.0f);
         instance.drawDirect = glm::vec4(light.direct, light.towardSun);
+        instance.drawFlags = glm::vec4(inInteriorPass && inInteriorPass(feet) ? 1.0f : 0.0f,
+                                       instance.directScale, 0.0f, 0.0f);
     }
 }
 

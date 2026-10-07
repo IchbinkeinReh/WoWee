@@ -30,24 +30,30 @@ layout(set = 1, binding = 1) uniform WMOMaterial {
     int unlit;
     int isInterior;
     float specularIntensity;
-    int unused20;      // unused; was the invented window-glass mode
+    int transition;    // a transition batch: the outside and inside light blended by the vertex alpha
     int enableNormalMap;
     int enablePOM;
     float pomScale;
     int pomMaxSamples;
     float heightMapVariance;
     float normalMapStrength;
-    int unused48;     // unused; kept for the layout
+    int unfogged;     // a transition batch whose material has F_UNFOGGED: no fog
     float wmoAmbientR;
     float wmoAmbientG;
     float wmoAmbientB;
     int unused64;      // unused; was a per-texture-name emissive mode
-    int hasVertexColors;
+    int hasVertexColors;  // 0 none, 1 MOCV as it is (MOHD 0x8), 2 as 0x007d7380 left it
     int padding1;
     int padding2;
 };
 
 layout(set = 1, binding = 2) uniform sampler2D uNormalHeightMap;
+
+// The group's draw, after the vertex stage's model matrix: 1 when the group
+// is drawn in the camera's interior pass (0x007a9380's local_14).
+layout(push_constant) uniform GroupPush {
+    layout(offset = 64) int interiorPass;
+} gp;
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
@@ -241,28 +247,34 @@ void main() {
 
     // Windows, lamp glass and clock faces are lit like any other surface:
     // the client draws a batch by its material's blend mode and flags.
-    if (isInterior != 0) {
-        // WMO interior: vertex colors (MOCV) are pre-baked lighting from the
-        // artist, floored by the root's MOHD ambient. No sun and no sun
-        // shadow: the client lights an interior pass with the MOHD ambient
-        // and a black direct light (Wow.exe 3.3.5a 0x007a8b10, mode 3). The
-        // 0.15 floor and the shadow clamp that were here are not the
-        // client's. How the two colours combine is in the MapObj shaders in
-        // the MPQs, not in Wow.exe; the max() is WoWee's reading.
-        vec3 wmoAmbient = vec3(wmoAmbientR, wmoAmbientG, wmoAmbientB);
-        vec3 mocv = max(VertColor.rgb, wmoAmbient);
-        result = texColor.rgb * mocv;
-    } else if (unlit != 0) {
+    //
+    // The vertex colour on the scale of the MOCV: 0x007d7380 halved it when
+    // the group was loaded (and brightened it by its alpha, off the
+    // transition batches), so twice what it left.
+    vec3 mocv = VertColor.rgb * (hasVertexColors == 2 ? 2.0 : 1.0);
+
+    // WMO interior: vertex colors (MOCV) are pre-baked lighting from the
+    // artist, floored by the root's MOHD ambient. No sun and no sun
+    // shadow: the client lights an interior pass with the MOHD ambient
+    // and a black direct light (Wow.exe 3.3.5a 0x007a8b10, mode 3). The
+    // 0.15 floor and the shadow clamp that were here are not the
+    // client's. How the two colours combine is in the MapObj shaders in
+    // the MPQs, not in Wow.exe; the max() is WoWee's reading.
+    vec3 wmoAmbient = vec3(wmoAmbientR, wmoAmbientG, wmoAmbientB);
+    vec3 inside = texColor.rgb * max(mocv, wmoAmbient);
+
+    vec3 outside;
+    if (unlit != 0) {
         // Outdoor unlit surface - still receives directional shadows
-        result = texColor.rgb * shadow;
+        outside = texColor.rgb * shadow;
     } else {
         vec3 ldir = normalize(-lightDir.xyz);
         float diff = max(dot(norm, ldir), 0.0);
 
         // No specular: MapObjSpecular is used only with the client's
         // 'specular' option, which is off by default.
-        result = rtAmbient(rt, ambientColor.rgb) * texColor.rgb
-               + shadow * diff * lightColor.rgb * texColor.rgb;
+        outside = rtAmbient(rt, ambientColor.rgb) * texColor.rgb
+                + shadow * diff * lightColor.rgb * texColor.rgb;
 
         // An exterior group's vertex colour is light baked into it - a lamp's
         // pool on a wall - and it adds to the sun, as it does in the client.
@@ -275,11 +287,29 @@ void main() {
         //
         // At half: a handful of Icecrown exteriors ship them pure white, and
         // added at full those would double in brightness.
-        if (hasVertexColors != 0) result += texColor.rgb * VertColor.rgb * 0.5;
+        if (hasVertexColors != 0) outside += texColor.rgb * mocv * 0.5;
     }
 
     float dist = length(viewPos.xyz - FragPos);
-    result = applyFog(result, FragPos, dist, isInterior != 0 ? cameraFogColor.rgb : fogColor.rgb);
+    // The camera's fog colour for an interior group in the camera's interior
+    // pass, the zone's for the rest (0x007a9380 by way of 0x007a8440).
+    vec3 insideFog = gp.interiorPass != 0 ? cameraFogColor.rgb : fogColor.rgb;
+    if (transition != 0) {
+        // A transition batch, drawn twice by the client (0x007a9380): by the
+        // outside light in the zone's fog, colour times alpha (blend 9), then
+        // by the interior light in the group's fog, colour times one minus
+        // alpha, added (blend 7). The alpha is the vertex colour's, which
+        // 0x007d7380 kept on those vertices. F_UNFOGGED takes the fog off both.
+        if (unfogged == 0) {
+            outside = applyFog(outside, FragPos, dist, fogColor.rgb);
+            inside = applyFog(inside, FragPos, dist, insideFog);
+        }
+        result = outside * VertColor.a + inside * (1.0 - VertColor.a);
+    } else if (isInterior != 0) {
+        result = applyFog(inside, FragPos, dist, insideFog);
+    } else {
+        result = applyFog(outside, FragPos, dist, fogColor.rgb);
+    }
 
     outColor = vec4(result, texColor.a);
 }

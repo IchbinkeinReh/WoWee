@@ -77,21 +77,45 @@ void M2Renderer::setInstanceInteriorLight(uint32_t instanceId, const glm::vec3& 
     inst.interiorDirect = direct;
 }
 
-void M2Renderer::refreshGameObjectLights(const FloorLightQuery& floorAt, const glm::vec3& zoneAmbient,
-                                         const glm::vec3& zoneDirect) {
+void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
+                                         uint64_t passGeneration, const glm::vec3& zoneAmbient,
+                                         const glm::vec3& zoneDirect, float seconds) {
+    namespace wl = pipeline::wmo_doodad_light;
+    const auto toBytes = [](const glm::vec3& c) {
+        return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
+    };
     for (auto& inst : instances) {
+        // A doodad stays where it is: asked again only when the pass changes.
+        if (inst.isGameObject || inst.interiorPassGeneration != passGeneration) {
+            inst.interiorPassGeneration = passGeneration;
+            inst.interiorPass = inInteriorPass && inInteriorPass(inst.position);
+        }
         if (!inst.isGameObject) continue;
         const glm::vec3 d = inst.position - inst.floorQueryPos;
         if (!inst.floorQueried || glm::dot(d, d) >= 0.25f * 0.25f) {
             inst.floorQueried = true;
             inst.floorQueryPos = inst.position;
-            inst.floorLight = floorAt(inst.position);
+            inst.floor = floorAt(inst.position, wl::gameObjectFloorStart(inst.position.z, inst.worldBoundsMax.z));
         }
-        inst.interiorLit = inst.floorLight.has_value();
-        if (!inst.floorLight) continue;
-        const auto light = pipeline::wmo_doodad_light::floorLightInZone(*inst.floorLight, zoneAmbient, zoneDirect);
-        inst.interiorAmbient = light.ambient;
-        inst.interiorDirect = light.direct;
+        const auto& floorLight = inst.floor.light;
+        wl::ObjectLight light{zoneAmbient, zoneDirect, 0.0f};
+        if (floorLight) light = wl::floorLightInZone(*floorLight, zoneAmbient, zoneDirect);
+        // From the zone's ambient into the floor's (0x00781a10, 0x007a1e90),
+        // the direct light toward half in the baked shadow (0x007a1bc0).
+        if (!inst.worldObjectLit) {
+            inst.worldObjectLit = true;
+            inst.easedAmbient = toBytes(zoneAmbient);
+            inst.directScale = 1.0f;
+        }
+        inst.easedAmbient = wl::easeAmbient(inst.easedAmbient, toBytes(light.ambient), seconds);
+        inst.directScale = wl::easeDirectScale(
+            inst.directScale,
+            wl::directScaleTarget(floorLight.has_value(), floorLight ? floorLight->towardOutside : 0,
+                                  inst.floor.inBakedShadow),
+            seconds);
+        inst.interiorLit = floorLight.has_value();
+        inst.interiorAmbient = glm::vec3(inst.easedAmbient) / 255.0f;
+        inst.interiorDirect = light.direct * inst.directScale;
         inst.interiorTowardSun = light.towardSun;
     }
 }

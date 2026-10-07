@@ -239,9 +239,15 @@ bool WMORenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayou
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushRange.offset = 0;
     pushRange.size = sizeof(GPUPushConstants);
+    // The group's draw: whether it is in the camera's interior pass, which
+    // picks its fog colour (WMOGroupPush).
+    VkPushConstantRange groupRange{};
+    groupRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    groupRange.offset = sizeof(GPUPushConstants);
+    groupRange.size = sizeof(WMOGroupPush);
 
     std::vector<VkDescriptorSetLayout> setLayouts = { perFrameLayout, materialSetLayout_ };
-    pipelineLayout_ = createPipelineLayout(device, setLayouts, { pushRange });
+    pipelineLayout_ = createPipelineLayout(device, setLayouts, { pushRange, groupRange });
     if (!pipelineLayout_) {
         core::Logger::getInstance().error("WMORenderer: failed to create pipeline layout");
         return false;
@@ -647,9 +653,12 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             bool alphaTest;
             bool unlit;
             bool transparent;
+            bool transition;
+            bool unfogged;
             bool operator==(const BatchKey& o) const {
                 return texPtr == o.texPtr && alphaTest == o.alphaTest &&
-                       unlit == o.unlit && transparent == o.transparent;
+                       unlit == o.unlit && transparent == o.transparent &&
+                       transition == o.transition && unfogged == o.unfogged;
             }
         };
         struct BatchKeyHash {
@@ -657,7 +666,9 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 return std::hash<uintptr_t>()(k.texPtr) ^
                        (std::hash<bool>()(k.alphaTest) << 1) ^
                        (std::hash<bool>()(k.unlit) << 2) ^
-                       (std::hash<bool>()(k.transparent) << 3);
+                       (std::hash<bool>()(k.transparent) << 3) ^
+                       (std::hash<bool>()(k.transition) << 4) ^
+                       (std::hash<bool>()(k.unfogged) << 5);
             }
         };
         std::unordered_map<BatchKey, GroupResources::MergedBatch, BatchKeyHash> batchMap;
@@ -691,22 +702,30 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             }
 
             bool unlit = false;
+            uint32_t materialFlags = 0;
             if (batch.materialId < modelData.materialFlags.size()) {
-                unlit = (modelData.materialFlags[batch.materialId] & 0x01) != 0;
+                materialFlags = modelData.materialFlags[batch.materialId];
+                unlit = (materialFlags & 0x01) != 0;
             }
+            // F_UNFOGGED counts on a transition batch alone: 0x007a9380 reads
+            // material flag 0x2 in that branch and nowhere else.
+            const bool unfogged = batch.transition && (materialFlags & 0x02) != 0;
 
             // Windows, lamp glass, clock faces and lava get no treatment of
             // their own: the client draws every batch from its MOMT material,
             // by blend mode and flags, whatever its texture is called.
 
             BatchKey key{ .texPtr = reinterpret_cast<uintptr_t>(tex), .alphaTest = alphaTest, .unlit = unlit,
-                          .transparent = blendMode >= 2 };
+                          .transparent = blendMode >= 2, .transition = batch.transition,
+                          .unfogged = unfogged };
             auto& mb = batchMap[key];
             if (mb.draws.empty()) {
                 mb.texture = tex;
                 mb.hasTexture = hasTexture;
                 mb.alphaTest = alphaTest;
                 mb.unlit = unlit;
+                mb.transition = batch.transition;
+                mb.unfogged = unfogged;
                 mb.isTransparent = (blendMode >= 2);
                 // Look up normal/height map from texture cache
                 if (hasTexture && tex != whiteTexture_.get()) {
@@ -751,7 +770,12 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             matData.alphaTest = mb.alphaTest ? 1 : 0;
             matData.unlit = mb.unlit ? 1 : 0;
             matData.isInterior = isInterior ? 1 : 0;
-            matData.hasVertexColors = (groupRes.groupFlags & 0x4) != 0 ? 1 : 0;
+            matData.transition = mb.transition ? 1 : 0;
+            matData.unfogged = mb.unfogged ? 1 : 0;
+            // 2 when the colours are as 0x007d7380 left them, 1 as the
+            // MOCV has them (MOHD flag 0x8, 0x007d7c30).
+            matData.hasVertexColors = (groupRes.groupFlags & 0x4) == 0 ? 0
+                                    : (modelData.mohdFlags & 0x8u) ? 1 : 2;
             matData.specularIntensity = 0.5f;
             matData.enableNormalMap = normalMappingEnabled_ ? 1 : 0;
             matData.enablePOM = pomEnabled_ ? 1 : 0;
@@ -1707,6 +1731,10 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
         // LOD shell groups render only beyond this distance squared (190 units)
         static constexpr float LOD_SHELL_DIST_SQ = 196.0f * 196.0f;
 
+        // Which of its groups are in the camera's interior pass.
+        const auto passIt = interiorPass_.find(instance.id);
+        const std::vector<uint8_t>* passGroups = passIt != interiorPass_.end() ? &passIt->second : nullptr;
+
         // Render visible groups
         for (uint32_t gi : dl.visibleGroups) {
             const auto& group = model.groups[gi];
@@ -1724,6 +1752,13 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
 
             // Skip groups with invalid GPU resources
             if (group.vertexBuffer == VK_NULL_HANDLE || group.indexBuffer == VK_NULL_HANDLE) continue;
+
+            // The group's fog colour: the camera's in its interior pass
+            // (0x007a9380, local_14), the zone's otherwise.
+            WMOGroupPush groupPush{};
+            groupPush.interiorPass = (passGroups && gi < passGroups->size() && (*passGroups)[gi]) ? 1 : 0;
+            vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
+                               sizeof(GPUPushConstants), sizeof(WMOGroupPush), &groupPush);
 
             // Bind vertex + index buffers
             VkDeviceSize offset = 0;
@@ -1916,12 +1951,19 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
     std::vector<WMOVertex> vertices;
     vertices.reserve(group.vertices.size());
 
-    for (const auto& v : group.vertices) {
+    // The vertex colours as the client uploads them: 0x007d7c30 runs
+    // 0x007d7380 over a group's MOCV unless MOHD flag 0x8 is set - the
+    // transition batches' vertices halved with their alpha kept, which
+    // blends those batches' two passes, the rest brightened by their alpha,
+    // halved and made opaque.
+    const std::vector<glm::vec4> colors = pipeline::wmo_doodad_light::loadedVertexColors(group, mohdFlags);
+    for (size_t i = 0; i < group.vertices.size(); ++i) {
+        const auto& v = group.vertices[i];
         WMOVertex vd;
         vd.position = v.position;
         vd.normal = v.normal;
         vd.texCoord = v.texCoord;
-        vd.color = v.color;
+        vd.color = colors[i];
         vd.tangent = glm::vec4(0.0f);
         vertices.push_back(vd);
     }
@@ -2008,20 +2050,11 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
     }
     // An interior group with vertex colours (MOGP 0x4) keeps them for the
     // light of whoever stands on it (0x007c7fe0 reads the group's MOCV), as
-    // the client has them once loaded: 0x007d7c30 runs 0x007d7380 over them
-    // unless MOHD flag 0x8 is set. The transition batches' vertices are those
-    // up to the last of them's highest index.
+    // the client has them once loaded - the same colours it draws.
     if (!(groupFlags & pipeline::wmo_doodad_light::kOutsideGroupFlags) && (groupFlags & 0x4u)) {
-        uint32_t transitionEnd = 0;
-        if (group.transBatchCount > 0 && group.transBatchCount <= group.batches.size()) {
-            transitionEnd = static_cast<uint32_t>(group.batches[group.transBatchCount - 1].lastVertex) + 1;
-        }
-        const bool fixUp = (mohdFlags & 0x8u) == 0;
-        resources.collisionColors.reserve(group.vertices.size());
-        for (size_t i = 0; i < group.vertices.size(); ++i) {
-            glm::ivec4 c(glm::round(glm::clamp(group.vertices[i].color, 0.0f, 1.0f) * 255.0f));
-            if (fixUp) c = pipeline::wmo_doodad_light::loadedVertexColor(c, i < transitionEnd);
-            resources.collisionColors.push_back(glm::u8vec4(c));
+        resources.collisionColors.reserve(colors.size());
+        for (const glm::vec4& c : colors) {
+            resources.collisionColors.push_back(glm::u8vec4(glm::round(c * 255.0f)));
         }
     }
     if (!group.triFlags.empty()) {
@@ -2086,11 +2119,15 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
 
     // Create batches
     if (!group.batches.empty()) {
-        for (const auto& batch : group.batches) {
+        for (size_t bi = 0; bi < group.batches.size(); ++bi) {
+            const auto& batch = group.batches[bi];
             GroupResources::Batch resBatch;
             resBatch.startIndex = batch.startIndex;
             resBatch.indexCount = batch.indexCount;
             resBatch.materialId = batch.materialId;
+            // 0x007a9380 draws batch i as a transition batch while i is below
+            // MOGP's first count.
+            resBatch.transition = bi < group.transBatchCount;
             resources.batches.push_back(resBatch);
         }
     } else {
@@ -3955,16 +3992,16 @@ bool WMORenderer::isInsideInteriorWMO(float glX, float glY, float glZ) const {
     return isInsideWMOGroups(glX, glY, glZ, /*interiorOnly=*/true, nullptr);
 }
 
-std::optional<pipeline::wmo_doodad_light::FloorLight> WMORenderer::unitInteriorLightAt(const glm::vec3& feet) const {
-    // The floor under the feet: from a yard above them to twelve below
-    // (0x007a0d60), the nearest across every WMO there.
-    constexpr float kAbove = 1.0f;
-    constexpr float kReach = 13.0f;
+std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3& start, float endZ) const {
+    // The first WMO triangle met going straight from `start` to `endZ`,
+    // across every WMO there (0x007c2700 asks each, 0x007c25d0 each group).
+    const float reach = std::abs(start.z - endZ);
+    if (reach <= 0.0f) return std::nullopt;
+    const float sign = endZ < start.z ? -1.0f : 1.0f;
     std::vector<size_t> candidates;
-    gatherCandidates(feet - glm::vec3(0.5f, 0.5f, kReach - kAbove), feet + glm::vec3(0.5f, 0.5f, kAbove),
-                     candidates);
-    const glm::vec3 worldOrigin = feet + glm::vec3(0.0f, 0.0f, kAbove);
-    float bestDrop = kReach;
+    gatherCandidates(glm::vec3(start.x - 0.5f, start.y - 0.5f, std::min(start.z, endZ)),
+                     glm::vec3(start.x + 0.5f, start.y + 0.5f, std::max(start.z, endZ)), candidates);
+    float bestDist = reach;
     const ModelData* bestModel = nullptr;
     const GroupResources* bestGroup = nullptr;
     uint32_t bestTri = 0;
@@ -3974,10 +4011,12 @@ std::optional<pipeline::wmo_doodad_light::FloorLight> WMORenderer::unitInteriorL
         auto it = loadedModels.find(instance.modelId);
         if (it == loadedModels.end()) continue;
         const ModelData& model = it->second;
-        const glm::vec3 localOrigin = glm::vec3(instance.invModelMatrix * glm::vec4(worldOrigin, 1.0f));
+        const glm::vec3 localOrigin = glm::vec3(instance.invModelMatrix * glm::vec4(start, 1.0f));
         const glm::vec3 localDir =
-            glm::normalize(glm::vec3(instance.invModelMatrix * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+            glm::normalize(glm::vec3(instance.invModelMatrix * glm::vec4(0.0f, 0.0f, sign, 0.0f)));
         for (const auto& group : model.groups) {
+            // 0x007c25d0 passes over groups with 0x80, 0x10000 or 0x400000.
+            if (group.groupFlags & 0x410080u) continue;
             if (!trianglesAlongRay(group, localOrigin, localDir, tl_triScratch)) continue;
             const auto& verts = group.collisionVertices;
             const auto& indices = group.collisionIndices;
@@ -3989,9 +4028,9 @@ std::optional<pipeline::wmo_doodad_light::FloorLight> WMORenderer::unitInteriorL
                 if (t <= 0.0f) continue;
                 const glm::vec3 hitLocal = localOrigin + localDir * t;
                 const glm::vec3 hitWorld = glm::vec3(instance.modelMatrix * glm::vec4(hitLocal, 1.0f));
-                const float drop = worldOrigin.z - hitWorld.z;
-                if (drop < 0.0f || drop >= bestDrop) continue;
-                bestDrop = drop;
+                const float dist = (hitWorld.z - start.z) * sign;
+                if (dist < 0.0f || dist >= bestDist) continue;
+                bestDist = dist;
                 bestModel = &model;
                 bestGroup = &group;
                 bestTri = triStart;
@@ -3999,9 +4038,13 @@ std::optional<pipeline::wmo_doodad_light::FloorLight> WMORenderer::unitInteriorL
             }
         }
     }
-    // A unit on an exterior or exterior-lit group's floor takes the zone's
-    // light (0x007c15f0), as does one on a group with no vertex colours.
-    if (!bestGroup || bestGroup->collisionColors.empty()) return std::nullopt;
+    if (!bestGroup) return std::nullopt;
+    ObjectFloor found;
+    found.z = start.z + bestDist * sign;
+    // An object on an exterior or exterior-lit group's floor takes the
+    // zone's light (0x007c15f0), as does one on a group with no vertex
+    // colours.
+    if (bestGroup->collisionColors.empty()) return found;
 
     // The vertex colours at the feet, by barycentric weight (0x007c7fe0).
     const auto& indices = bestGroup->collisionIndices;
@@ -4031,7 +4074,71 @@ std::optional<pipeline::wmo_doodad_light::FloorLight> WMORenderer::unitInteriorL
     if (tri < bestGroup->triMopyFlags.size() && (bestGroup->triMopyFlags[tri] & 0x1u)) {
         out.towardOutside = static_cast<int>(mocv.a);
     }
-    return out;
+    found.light = out;
+    return found;
+}
+
+void WMORenderer::updateInteriorPass(const glm::vec3& cameraPos, const Frustum* frustum) {
+    std::unordered_map<uint32_t, std::vector<uint8_t>> pass;
+    std::vector<std::pair<glm::vec3, glm::vec3>> bounds;
+    std::vector<size_t> candidates;
+    gatherCandidates(cameraPos - glm::vec3(0.5f), cameraPos + glm::vec3(0.5f), candidates);
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        if (!withinWorldBounds(instance, cameraPos.x, cameraPos.y, cameraPos.z)) continue;
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const ModelData& model = it->second;
+
+        // The groups the camera is in (0x007ad1f0 walks from each), as
+        // interiorFogAt finds them.
+        const glm::vec3 local = glm::vec3(instance.invModelMatrix * glm::vec4(cameraPos, 1.0f));
+        std::vector<uint32_t> cameraGroups;
+        std::vector<uint32_t> flags(model.groups.size());
+        for (size_t gi = 0; gi < model.groups.size(); ++gi) {
+            const auto& g = model.groups[gi];
+            flags[gi] = g.groupFlags;
+            if (glm::all(glm::greaterThanEqual(local, g.boundingBoxMin)) &&
+                glm::all(glm::lessThanEqual(local, g.boundingBoxMax))) {
+                cameraGroups.push_back(static_cast<uint32_t>(gi));
+            }
+        }
+        if (cameraGroups.empty()) continue;
+
+        // Through a portal only when the camera can see it (0x007ac060 clips
+        // the walk to the view through each portal).
+        std::vector<std::vector<uint32_t>> neighbours(model.groups.size());
+        for (size_t gi = 0; gi < model.groups.size() && gi < model.groupPortalRefs.size(); ++gi) {
+            const auto [start, count] = model.groupPortalRefs[gi];
+            for (uint32_t r = start; r < static_cast<uint32_t>(start) + count && r < model.portalRefs.size(); ++r) {
+                const PortalRef& ref = model.portalRefs[r];
+                if (frustum && !isPortalVisible(model, ref.portalIndex, local, *frustum, instance.modelMatrix)) {
+                    continue;
+                }
+                neighbours[gi].push_back(ref.groupIndex);
+            }
+        }
+        auto groups = pipeline::wmo_doodad_light::interiorPassGroups(flags, neighbours, cameraGroups);
+        bool any = false;
+        for (size_t gi = 0; gi < groups.size(); ++gi) {
+            if (!groups[gi]) continue;
+            any = true;
+            if (gi < instance.worldGroupBounds.size()) bounds.push_back(instance.worldGroupBounds[gi]);
+        }
+        if (any) pass[instance.id] = std::move(groups);
+    }
+    if (pass != interiorPass_) {
+        interiorPass_ = std::move(pass);
+        ++interiorPassGeneration_;
+    }
+    interiorPassBounds_ = std::move(bounds);
+}
+
+bool WMORenderer::inInteriorPass(const glm::vec3& pos) const {
+    for (const auto& [lo, hi] : interiorPassBounds_) {
+        if (glm::all(glm::greaterThanEqual(pos, lo)) && glm::all(glm::lessThanEqual(pos, hi))) return true;
+    }
+    return false;
 }
 
 std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::vec3& pos) const {

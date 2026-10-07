@@ -426,15 +426,32 @@ public:
     };
     [[nodiscard]] std::optional<InteriorFog> interiorFogAt(const glm::vec3& pos) const;
 
-    /// What a unit standing at `feet` is lit by when the floor under it is an
-    /// interior group's (pipeline::wmo_doodad_light::unitLight of the floor's
-    /// vertex colour there, 0x007a0d60 and 0x007c7fe0): the nearest floor
-    /// within a yard above and twelve below the feet, as the client looks. No
-    /// value on an exterior or exterior-lit group's floor, or off any WMO -
-    /// the zone's light then. On a transition face the floor's alpha says
-    /// how far toward the outside's light it is (FloorLight::towardOutside).
-    [[nodiscard]] std::optional<pipeline::wmo_doodad_light::FloorLight> unitInteriorLightAt(
-        const glm::vec3& feet) const;
+    /// The WMO floor a world object's floor search meets (0x007c28f0's WMO
+    /// half, 0x007c2700): the first triangle straight from `start` to
+    /// `endZ`, across every WMO there, passing over groups with 0x80,
+    /// 0x10000 or 0x400000. `light` is what the object is lit by when that
+    /// is an interior group's floor with vertex colours
+    /// (pipeline::wmo_doodad_light::unitLight of the colour there, 0x007c7fe0),
+    /// none on an exterior or exterior-lit group's floor (0x007c15f0) - the
+    /// zone's light then. On a transition face the floor's alpha says how far
+    /// toward the outside's light it is (FloorLight::towardOutside).
+    struct ObjectFloor {
+        float z = 0.0f;
+        std::optional<pipeline::wmo_doodad_light::FloorLight> light;
+    };
+    [[nodiscard]] std::optional<ObjectFloor> floorAlong(const glm::vec3& start, float endZ) const;
+
+    /// Works out which groups are drawn in the camera's interior pass
+    /// (pipeline::wmo_doodad_light::interiorPassGroups): a walk through the
+    /// portals from the groups the camera is in, through those it can see
+    /// (`frustum`, or every portal when null). Once a frame, before the lights
+    /// and the draw.
+    void updateInteriorPass(const glm::vec3& cameraPos, const Frustum* frustum);
+    /// Whether a point is in a group drawn in that pass: what sets an
+    /// object's 0x8000, and the camera's fog colour with it (0x007c1730).
+    [[nodiscard]] bool inInteriorPass(const glm::vec3& pos) const;
+    /// Changes whenever the set of those groups does.
+    [[nodiscard]] uint64_t interiorPassGeneration() const { return interiorPassGeneration_; }
 
     /**
      * Raycast against WMO bounding boxes for camera collision
@@ -496,14 +513,14 @@ private:
         int32_t unlit;             // 8
         int32_t isInterior;        // 12
         float specularIntensity;   // 16
-        int32_t unused20;          // 20 (unused; was the invented window-glass mode)
+        int32_t transition;        // 20: a transition batch, the two lights blended by the vertex alpha
         int32_t enableNormalMap;   // 24
         int32_t enablePOM;         // 28
         float pomScale;            // 32 (height scale)
         int32_t pomMaxSamples;     // 36 (max ray-march steps)
         float heightMapVariance;   // 40 (low variance = skip POM)
         float normalMapStrength;   // 44 (0=flat, 1=full, 2=exaggerated)
-        int32_t unused48;          // 48 (unused; kept for the layout)
+        int32_t unfogged;          // 48: a transition batch with F_UNFOGGED, drawn with no fog
         float wmoAmbientR;         // 52 (interior ambient color R)
         float wmoAmbientG;         // 56 (interior ambient color G)
         float wmoAmbientB;         // 60 (interior ambient color B)
@@ -512,6 +529,15 @@ private:
         int32_t padding1;           // 72
         int32_t padding2;           // 76
     };  // 80 bytes total
+
+    /// What a group's draw pushes to wmo.frag after the model matrix:
+    /// interiorPass 1 when the group is drawn in the camera's interior pass
+    /// (wmo_doodad_light::interiorPassGroups), whose interior batches the
+    /// client fogs in the camera's colour (0x007a9380).
+    struct WMOGroupPush {
+        int32_t interiorPass = 0;
+        int32_t pad[3] = {};
+    };
 
     /**
      * WMO group GPU resources
@@ -535,6 +561,9 @@ private:
             uint32_t startIndex;   // First index in EBO
             uint32_t indexCount;   // Number of indices to draw
             uint8_t materialId;    // Material/texture reference
+            /// One of MOGP's first transBatchCount batches, drawn as a blend
+            /// of the outside and inside light (0x007a9380).
+            bool transition = false;
         };
         std::vector<Batch> batches;
 
@@ -550,6 +579,8 @@ private:
             bool alphaTest = false;
             bool unlit = false;
             bool isTransparent = false;     // blendMode >= 2
+            bool transition = false;        // Batch::transition
+            bool unfogged = false;          // F_UNFOGGED (0x2), read only on a transition batch
             // For multi-draw: store index ranges
             struct DrawRange { uint32_t firstIndex; uint32_t indexCount; };
             std::vector<DrawRange> draws;
@@ -585,7 +616,7 @@ private:
         /// An interior group's vertex colours (MOCV, rgba 0..255) as the
         /// client keeps them once loaded (wmo_doodad_light::loadedVertexColor),
         /// one per collision vertex, for the light a unit standing on it
-        /// takes (unitInteriorLightAt). Empty for the other groups.
+        /// takes (floorAlong). Empty for the other groups.
         std::vector<glm::u8vec4> collisionColors;
         /// True when no triangle in this group blocks: no collision hull, and
         /// nothing rendered that is not detail. Detail never blocks, so such a
@@ -644,7 +675,7 @@ private:
         glm::vec3 boundingBoxMin;
         glm::vec3 boundingBoxMax;
         glm::vec3 wmoAmbientColor{0.5f, 0.5f, 0.5f};  // From MOHD, used for interior lighting
-        uint32_t mohdFlags = 0;                        // MOHD flags (0x2: see unitInteriorLightAt)
+        uint32_t mohdFlags = 0;                        // MOHD flags (0x2: see floorAlong)
         bool isLowPlatform = false;
 
         // Doodad templates (M2 models placed in WMO, stored for instancing)
@@ -964,6 +995,11 @@ private:
     std::vector<size_t> visibleInstances_;      // reused per frame
     std::vector<InstanceDrawList> drawLists_;    // reused per frame
     std::unordered_set<uint32_t> portalVisibleGroupSet_; // reused per frame (portal culling scratch)
+    /// The camera's interior pass (updateInteriorPass): per instance id, a
+    /// flag per group, and the world bounds of the groups flagged.
+    std::unordered_map<uint32_t, std::vector<uint8_t>> interiorPass_;
+    std::vector<std::pair<glm::vec3, glm::vec3>> interiorPassBounds_;
+    uint64_t interiorPassGeneration_ = 0;
 
     // Collision query profiling - atomic because getFloorHeight is dispatched
     // on async threads from camera_controller while the main thread reads these.

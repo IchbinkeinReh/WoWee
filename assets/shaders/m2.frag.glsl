@@ -224,7 +224,7 @@ void main() {
         // client draws an unlit batch with no light and adds nothing
         // (FUN_0081fb10).
         result = texColor.rgb;
-    } else if (vInteriorLit != 0) {
+    } else if ((vInteriorLit & 1) != 0) {
         // A doodad of a WMO interior group (0x007c1150): its MODD colour as
         // the ambient and as one light down from a fixed direction (0xaeedf0,
         // the same in render space), and nothing of the sun - neither its
@@ -258,8 +258,13 @@ void main() {
 
         RtLight rt = rtLightAt(FragPos);
         shadow = rtShadow(rt, shadow);
-        result = rtAmbient(rt, ambientColor.rgb) * texColor.rgb
-               + shadow * (diff * lightColor.rgb * texColor.rgb);
+        // A game object takes its own: its ambient as it eases, its direct
+        // light as scaled in the terrain's baked shadow (0x007a1e90).
+        const bool worldObject = (vInteriorLit & 4) != 0;
+        vec3 ambient = worldObject ? vInteriorAmbient : ambientColor.rgb;
+        vec3 direct = worldObject ? vInteriorDirect.rgb : lightColor.rgb;
+        result = rtAmbient(rt, ambient) * texColor.rgb
+               + shadow * (diff * direct * texColor.rgb);
 
     }
 
@@ -285,7 +290,9 @@ void main() {
         if (volumetricParams.x > 0.5) result *= fogVolumeAt(FragPos).a;
     } else if (!blendMultiplies()) {
         // A multiply fogs toward its neutral colour, below with its output.
-        result = applyFog(result, FragPos, dist, vInteriorLit != 0 ? cameraFogColor.rgb : fogColor.rgb);
+        // In a group of the camera's interior pass, the camera's fog colour
+        // (0x007c1730 tests +0xc 0x8000).
+        result = applyFog(result, FragPos, dist, (vInteriorLit & 2) != 0 ? cameraFogColor.rgb : fogColor.rgb);
     }
 
     float outAlpha = texColor.a * batchFade;

@@ -41,7 +41,10 @@ struct InstanceData {
     // in what was padding.
     float highlight;
     // 1: a WMO interior doodad, lit by the two colours below rather than
-    // the zone's light. Also in what was padding.
+    // the zone's light. 2: in a WMO group of the camera's interior pass, so
+    // fogged in the camera's colour. 4: a game object outside, lit by the
+    // two colours below as the zone's light reaches it. Also in what was
+    // padding.
     int flags;
     // The texture matrix's linear part, rows (m00, m01) and (m10, m11);
     // uvOffset is its translation.
@@ -117,7 +120,7 @@ void main() {
     vColorMul = instanceData[instIdx].colorMul;
     vSkyMode = push.isFoliage < 0 ? 1 : 0;
     vHighlight = instanceData[instIdx].highlight;
-    vInteriorLit = instanceData[instIdx].flags & 1;
+    vInteriorLit = instanceData[instIdx].flags;
     vInteriorAmbient = instanceData[instIdx].interiorAmbient.rgb;
     vInteriorDirect = instanceData[instIdx].interiorDirect;
 

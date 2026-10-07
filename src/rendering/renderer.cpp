@@ -11,6 +11,7 @@
 #include "rendering/camera_controller.hpp"
 #include "rendering/terrain_renderer.hpp"
 #include "rendering/terrain_manager.hpp"
+#include "rendering/frustum.hpp"
 #include "pipeline/custom_zone_discovery.hpp"
 #include "rendering/performance_hud.hpp"
 #include "rendering/water_renderer.hpp"
@@ -714,6 +715,7 @@ bool Renderer::initialize(core::Window* win) {
         const int level = std::clamp(
             std::atoi(addons::storedCVarValue("extShadowQuality", kDefaultShadowLevel).c_str()),
             0, 4);
+        extShadowQuality_ = level;
         setShadowMapSize(kShadowSideForLevel[level]);
     }
 
@@ -2052,7 +2054,10 @@ void Renderer::update(float deltaTime) {
         // 0x007a1150).
         {
             std::optional<LightingManager::InteriorFog> interiorFog;
-            if (wmoRenderer && camera) {
+            // None for a ghost: 0x0077fb90 returns before looking when
+            // PLAYER_FLAGS (the player's +0x1008 fields, +8) has 0x10,
+            // PLAYER_FLAGS_GHOST.
+            if (wmoRenderer && camera && !deathLight) {
                 if (auto f = wmoRenderer->interiorFogAt(camera->getPosition())) {
                     interiorFog = LightingManager::InteriorFog{
                         .end = f->end, .startScalar = f->startScalar, .color = f->color,
@@ -2070,12 +2075,51 @@ void Renderer::update(float deltaTime) {
         // a transition face partly by the zone's (0x007a0d60, 0x007c7fe0); a
         // unit's ambient eases between the two as it walks (0x007a1e90).
         if (wmoRenderer) {
-            const auto& zl = lightingManager->getLightingParams();
-            const auto floorAt = [&](const glm::vec3& feet) { return wmoRenderer->unitInteriorLightAt(feet); };
-            if (characterRenderer) {
-                characterRenderer->refreshInteriorLights(floorAt, zl.ambientColor, zl.diffuseColor, deltaTime);
+            // The groups drawn in the camera's interior pass (0x007ad1f0),
+            // which take the camera's fog colour, as does what stands in them.
+            if (camera) {
+                Frustum frustum;
+                frustum.extractFromMatrix(camera->getProjectionMatrix() * camera->getViewMatrix());
+                wmoRenderer->updateInteriorPass(camera->getPosition(), &frustum);
             }
-            if (m2Renderer) m2Renderer->refreshGameObjectLights(floorAt, zl.ambientColor, zl.diffuseColor);
+            const auto& zl = lightingManager->getLightingParams();
+            // The terrain's baked shadow halves a world object's direct light
+            // only with extShadowQuality below 2 (0x007a1bc0 asks 0x00873f80).
+            const bool bakedShadowCounts = !shadowsEnabled || extShadowQuality_ < 2;
+            // 0x007c28f0: the first WMO floor from `startZ` down a thousand
+            // yards, unless the ground is nearer; with neither, up a thousand
+            // yards from the feet.
+            const auto objectFloor = [&](const glm::vec3& feet, float startZ, bool unit) {
+                namespace wl = pipeline::wmo_doodad_light;
+                const glm::vec3 start(feet.x, feet.y, startZ);
+                std::optional<float> ground;
+                if (terrainManager) ground = terrainManager->getHeightAt(feet.x, feet.y);
+                auto found = wmoRenderer->floorAlong(start, startZ - wl::kFloorReach);
+                if (found && wl::terrainNearer(startZ, ground, found->z)) found.reset();
+                const bool groundBelow = ground && *ground <= startZ;
+                if (!found && !groundBelow) found = wmoRenderer->floorAlong(feet, feet.z + wl::kFloorReach);
+                wl::ObjectFloorState state;
+                if (found) {
+                    state.light = found->light;
+                    state.onWmo = unit;
+                }
+                state.inBakedShadow = bakedShadowCounts && terrainManager &&
+                                      terrainManager->isInBakedShadowAt(feet.x, feet.y);
+                return state;
+            };
+            const auto inPass = [&](const glm::vec3& p) { return wmoRenderer->inInteriorPass(p); };
+            if (characterRenderer) {
+                characterRenderer->refreshInteriorLights(
+                    [&](const glm::vec3& feet) {
+                        return objectFloor(feet, feet.z + pipeline::wmo_doodad_light::kUnitFloorAbove, true);
+                    },
+                    inPass, zl.ambientColor, zl.diffuseColor, deltaTime);
+            }
+            if (m2Renderer) {
+                m2Renderer->refreshGameObjectLights(
+                    [&](const glm::vec3& feet, float startZ) { return objectFloor(feet, startZ, false); },
+                    inPass, wmoRenderer->interiorPassGeneration(), zl.ambientColor, zl.diffuseColor, deltaTime);
+            }
         }
         if (waterRenderer) {
             const auto& wl = lightingManager->getLightingParams();

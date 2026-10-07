@@ -161,20 +161,23 @@ public:
     void clearTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot);
     void setInstanceVisible(uint32_t instanceId, bool visible);
 
-    /// The light of a unit standing at a point, when it is an interior
-    /// floor's rather than the zone's.
-    using InteriorLightQuery =
-        std::function<std::optional<pipeline::wmo_doodad_light::FloorLight>(const glm::vec3&)>;
-    /// Asks `lightAt` for every instance that has moved since it was last
+    /// What a unit's floor search finds under its feet (0x007c2a70).
+    using FloorQuery = std::function<pipeline::wmo_doodad_light::ObjectFloorState(const glm::vec3&)>;
+    /// Whether a point is in a WMO group drawn in the camera's interior pass.
+    using InteriorPassQuery = std::function<bool(const glm::vec3&)>;
+    /// Asks `floorAt` for every instance that has moved since it was last
     /// asked, and works out what each is drawn with this frame. The client
     /// keeps a unit's floor light as it walks (0x007a1bc0, 0x007c2a70); in an
     /// interior a unit is lit by the floor's vertex colour from a fixed
     /// direction and not by the sun, on a transition face partly by the
     /// zone's light (0x007a0d60), and its ambient eases toward whichever it
-    /// stands in (0x007a1e90). `zoneAmbient` and `zoneDirect` are the zone's
-    /// light now, `seconds` the frame's time.
-    void refreshInteriorLights(const InteriorLightQuery& lightAt, const glm::vec3& zoneAmbient,
-                               const glm::vec3& zoneDirect, float seconds);
+    /// stands in (0x007a1e90). Its direct light is halved, easing, while its
+    /// feet are in the terrain's baked shadow (0x007a1bc0, 0x007a06a0). In a
+    /// group of the camera's interior pass it takes the camera's fog colour
+    /// (0x007c1730, `inInteriorPass`). `zoneAmbient` and `zoneDirect` are the
+    /// zone's light now, `seconds` the frame's time.
+    void refreshInteriorLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
+                               const glm::vec3& zoneAmbient, const glm::vec3& zoneDirect, float seconds);
     void removeInstance(uint32_t instanceId);
     bool getAnimationState(uint32_t instanceId, uint32_t& animationId, float& animationTimeMs, float& animationDurationMs) const;
     /// Everything an M2 instance needs to pose its particles as this one is
@@ -310,13 +313,16 @@ private:
     /// zone's light as the frame has it, 1 for this ambient with the zone's
     /// direct light, 2 for an interior floor's light. interiorDirect: that
     /// floor's direct colour, w = how far its direction has turned toward
-    /// the sun's.
+    /// the sun's. lightFlags: x 1 in a group of the camera's interior pass
+    /// (its fog colour, 0x007c1730), y the scale on the direct light
+    /// (0x007a1e90's +0x8c).
     struct CharPushConstants {
         glm::mat4 model{1.0f};
         glm::vec4 interiorAmbient{0.0f};
         glm::vec4 interiorDirect{0.0f};
+        glm::vec4 lightFlags{0.0f, 1.0f, 0.0f, 0.0f};
     };
-    static_assert(sizeof(CharPushConstants) == 96, "CharPushConstants must match the shaders");
+    static_assert(sizeof(CharPushConstants) == 112, "CharPushConstants must match the shaders");
 
     struct CharacterInstance {
         uint32_t id;
@@ -382,7 +388,7 @@ private:
 
         // Standing on a WMO interior floor: lit by the floor's colour rather
         // than the zone's light (refreshInteriorLights, 0x007a0d60).
-        std::optional<pipeline::wmo_doodad_light::FloorLight> floorLight;
+        pipeline::wmo_doodad_light::ObjectFloorState floor;
         // Where that was last asked, so a unit standing still is not asked again.
         bool interiorQueried = false;
         glm::vec3 interiorQueryPos{0.0f};
@@ -392,6 +398,10 @@ private:
         glm::ivec3 easedAmbient{0};
         glm::vec4 drawAmbient{0.0f};
         glm::vec4 drawDirect{0.0f};
+        // The direct light's scale as it eases (0x007a1e90, from 1 at
+        // 0x00781a10), and lightFlags as drawn.
+        float directScale = 1.0f;
+        glm::vec4 drawFlags{0.0f, 1.0f, 0.0f, 0.0f};
 
         // Enchant visual attached to a weapon. Such a model is nothing but the
         // additive FX batches that attached weapons otherwise drop, and it still

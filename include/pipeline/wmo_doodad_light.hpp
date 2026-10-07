@@ -27,6 +27,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "pipeline/wmo_loader.hpp"
@@ -164,6 +165,145 @@ inline glm::ivec3 easeAmbient(const glm::ivec3& current, const glm::ivec3& targe
         else if (target[i] < current[i]) out[i] = glm::max(current[i] - step, target[i]);
     }
     return out;
+}
+
+/// The transition batches' vertices are those below this: one past the
+/// highest vertex of the last transition batch (0x007d7380 reads MOBA entry
+/// transBatchCount - 1's last vertex). 0 for a group with none.
+inline uint32_t transitionVertexEnd(const WMOGroup& group) {
+    if (group.transBatchCount == 0 || group.transBatchCount > group.batches.size()) return 0;
+    return static_cast<uint32_t>(group.batches[group.transBatchCount - 1].lastVertex) + 1;
+}
+
+/// A group's vertex colours, rgba 0..1, as the client draws them: what
+/// loadedVertexColor leaves, unless MOHD flag 0x8 is set (0x007d7c30 then
+/// skips 0x007d7380). A group without MOCV (MOGP flag 0x4) has none to fix.
+inline std::vector<glm::vec4> loadedVertexColors(const WMOGroup& group, uint32_t mohdFlags) {
+    std::vector<glm::vec4> out;
+    out.reserve(group.vertices.size());
+    const bool fixUp = (group.flags & 0x4u) && !(mohdFlags & 0x8u);
+    const uint32_t transitionEnd = transitionVertexEnd(group);
+    for (size_t i = 0; i < group.vertices.size(); ++i) {
+        glm::ivec4 c(glm::round(glm::clamp(group.vertices[i].color, 0.0f, 1.0f) * 255.0f));
+        if (fixUp) c = loadedVertexColor(c, i < transitionEnd);
+        out.push_back(glm::vec4(c) / 255.0f);
+    }
+    return out;
+}
+
+/// Which fog a batch of a WMO group is drawn with (0x007a9380 by way of
+/// 0x007a8440): none, the zone's colour (0xd38b8c), or the camera's with its
+/// interior fog blended in (0xd38ba0).
+enum class BatchFog : uint8_t { None, Zone, Camera };
+
+/// A transition batch (one of MOGP's first transBatchCount) is drawn twice:
+/// lit by the outside light (0x007a8b10 mode 1, 2 or 0 unlit) with blend 9,
+/// colour times alpha, then by the interior light (mode 3) with blend 7,
+/// colour times one minus alpha, added. The alpha is the vertex colour's,
+/// which 0x007d7380 left on those vertices. Each pass has its own fog; the
+/// material's F_UNFOGGED (0x2) takes it off both, and it is the only place
+/// the client reads that flag. Every other batch is fogged by its group: the
+/// zone's colour for an exterior or exterior-lit group (0x48), and for an
+/// interior one the camera's when the group is drawn in the camera's
+/// interior pass (interiorPassGroups; 0x007a9380's local_14), the zone's
+/// otherwise.
+struct BatchFogs {
+    BatchFog outsidePass = BatchFog::Zone;  // the transition batch's first pass
+    BatchFog insidePass = BatchFog::Zone;   // its second, or the only pass
+};
+inline BatchFogs batchFogs(uint32_t groupFlags, bool transitionBatch, uint32_t materialFlags,
+                           bool interiorPass) {
+    const BatchFog inside = interiorPass ? BatchFog::Camera : BatchFog::Zone;
+    BatchFogs out;
+    if (transitionBatch) {
+        const bool unfogged = (materialFlags & 0x2u) != 0;
+        out.outsidePass = unfogged ? BatchFog::None : BatchFog::Zone;
+        out.insidePass = unfogged ? BatchFog::None : inside;
+        return out;
+    }
+    out.insidePass = (groupFlags & kOutsideGroupFlags) ? BatchFog::Zone : inside;
+    out.outsidePass = out.insidePass;
+    return out;
+}
+
+/// The groups of one WMO drawn in the camera's interior pass. 0x007ad1f0
+/// starts a portal walk (0x007ac060) from each group the camera is in with
+/// the pass flag set; a group with 0x8 or 0x40 clears it for itself and all
+/// it leads to, a group with 0x10000 is not walked. A group so reached sets
+/// DAT_00cfbeb8, which 0x007a9380 fogs in the camera's colour, and the
+/// objects in it 0x8000 (0x00799310, 0x0079a260), which 0x007c1730 does the
+/// same for. `neighbours[g]`: the groups g's portals lead to that the walk
+/// may pass. `cameraGroups`: the groups the camera is in.
+inline std::vector<uint8_t> interiorPassGroups(const std::vector<uint32_t>& groupFlags,
+                                               const std::vector<std::vector<uint32_t>>& neighbours,
+                                               const std::vector<uint32_t>& cameraGroups) {
+    std::vector<uint8_t> pass(groupFlags.size(), 0);
+    std::vector<uint32_t> open;
+    const auto visit = [&](uint32_t g) {
+        if (g >= groupFlags.size() || pass[g]) return;
+        if (groupFlags[g] & (kOutsideGroupFlags | 0x10000u)) return;
+        pass[g] = 1;
+        open.push_back(g);
+    };
+    for (uint32_t g : cameraGroups) visit(g);
+    while (!open.empty()) {
+        const uint32_t g = open.back();
+        open.pop_back();
+        if (g >= neighbours.size()) continue;
+        for (uint32_t n : neighbours[g]) visit(n);
+    }
+    return pass;
+}
+
+/// The floor search under a world object (0x007c2f80): a unit's from a tenth
+/// of a yard above its feet (0x007c2a70), a game object's from four yards
+/// above or a tenth above its top if that is lower (0x007c2e70), both down
+/// a thousand yards.
+inline constexpr float kUnitFloorAbove = 0.1f;
+inline constexpr float kFloorReach = 1000.0f;
+inline float gameObjectFloorStart(float feetZ, float topZ) { return glm::min(feetZ + 4.0f, topZ + 0.1f); }
+
+/// Whether the terrain takes the place of a WMO floor found by that search
+/// (0x007c28f0): when the ground under the start is nearer than the floor -
+/// both as a fraction of the thousand yards - the object stands on the
+/// ground and takes the zone's light. Ground above the start is not counted.
+inline bool terrainNearer(float startZ, const std::optional<float>& terrainZ, float floorZ) {
+    if (!terrainZ) return false;
+    const float terrain = (startZ - *terrainZ) * 0.001f;
+    if (terrain < 0.0f) return false;
+    return terrain < (startZ - floorZ) / kFloorReach;
+}
+
+/// What a world object's floor search found under it: the interior floor's
+/// light when it stands on one, whether it stands on any WMO floor (0x007c2a70
+/// sets +0xc 0x200; a game object's search never does), and whether its feet
+/// are in the terrain's baked shadow where that counts (directScaleTarget).
+struct ObjectFloorState {
+    std::optional<FloorLight> light;
+    bool onWmo = false;
+    bool inBakedShadow = false;
+};
+
+/// The scale on a world object's direct light it eases toward (0x007a1bc0,
+/// at +0xc4). On an interior floor 1, or 1 + alpha x 1.5 on a transition
+/// face; outside 2.5 - so 1 once clamped - or 0.5 when its feet are in the
+/// terrain's baked shadow (0x007a06a0), which counts only with
+/// extShadowQuality below 2 and not for a unit on a WMO floor.
+inline float directScaleTarget(bool onInteriorFloor, int towardOutside, bool inBakedShadow) {
+    if (onInteriorFloor) {
+        return towardOutside > 0 ? static_cast<float>(towardOutside) / 255.0f * 1.5f + 1.0f : 1.0f;
+    }
+    return inBakedShadow ? 0.5f : 2.5f;
+}
+
+/// That scale as drawn (+0x8c): it moves toward the target by 3.33 a second,
+/// stops on it, and is never above 1 (0x007a1e90). 0x00781a10 starts it at 1.
+inline float easeDirectScale(float current, float target, float seconds) {
+    const float step = seconds * 3.3333333f;
+    float out = current;
+    if (current > target) out = glm::max(current - step, target);
+    else if (current < target) out = glm::min(current + step, target);
+    return glm::min(out, 1.0f);
 }
 
 /// Which of a model's MODD doodads are lit as interior ones: those that only

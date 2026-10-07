@@ -81,6 +81,9 @@ layout(set = 1, binding = 2) uniform sampler2D uNormalHeightMap;
 layout(push_constant) uniform Push {
     layout(offset = 64) vec4 interiorAmbient;
     vec4 interiorDirect;
+    // x: 1 in a WMO group of the camera's interior pass, y: the scale on the
+    // direct light (CharPushConstants::lightFlags).
+    vec4 lightFlags;
 } pc;
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
@@ -385,7 +388,8 @@ void main() {
         const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, pc.interiorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
-        result = pc.interiorAmbient.rgb * texColor.rgb + idiff * pc.interiorDirect.rgb * texColor.rgb;
+        result = pc.interiorAmbient.rgb * texColor.rgb
+               + idiff * pc.interiorDirect.rgb * pc.lightFlags.y * texColor.rgb;
     } else {
         vec3 ldir = normalize(-lightDir.xyz);
         float diff = max(dot(norm, ldir), 0.0);
@@ -413,10 +417,11 @@ void main() {
         shadow = rtShadow(rt, shadow);
 
         // The ambient as it eases in from an interior's (w = 1), or the
-        // zone's as it is (0x007a1e90).
+        // zone's as it is (0x007a1e90). The direct light by its scale:
+        // halved in the terrain's baked shadow (0x007c1730 multiplies by +0x8c).
         vec3 ambient = pc.interiorAmbient.w > 0.5 ? pc.interiorAmbient.rgb : ambientColor.rgb;
         result = rtAmbient(rt, ambient) * texColor.rgb
-               + shadow * (diff * lightColor.rgb * texColor.rgb);
+               + shadow * (diff * lightColor.rgb * pc.lightFlags.y * texColor.rgb);
     }
 
     if (!finiteVec3(result)) {
@@ -430,9 +435,10 @@ void main() {
     float dist = length(viewPos.xyz - FragPos);
     float fogFactor = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
     if (fogMode == 1) {
-        // On an interior floor, the camera's fog colour (0x007c1730).
+        // In a group of the camera's interior pass, the camera's fog colour
+        // (0x007c1730 tests +0xc 0x8000).
         shaded.rgb = applyFog(shaded.rgb, FragPos, dist,
-                              pc.interiorAmbient.w > 1.5 ? cameraFogColor.rgb : fogColor.rgb);
+                              pc.lightFlags.x > 0.5 ? cameraFogColor.rgb : fogColor.rgb);
     } else if (fogMode == 2) {
         shaded.rgb *= fogFactor;
         if (volumetricParams.x > 0.5) shaded.rgb *= fogVolumeAt(FragPos).a;

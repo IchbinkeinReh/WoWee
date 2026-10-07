@@ -2349,6 +2349,18 @@ std::optional<float> TerrainManager::getHeightAt(float glX, float glY) const {
     return surface.z;
 }
 
+bool TerrainManager::isInBakedShadowAt(float glX, float glY) const {
+    float fracX = 0.0f, fracY = 0.0f;
+    const pipeline::MapChunk* chunk = findChunkAt(glX, glY, fracX, fracY);
+    if (!chunk || chunk->shadowMap.size() != 64 * 64) return false;
+    // 64 texels across the chunk's 8 quads, laid out as the heights and the
+    // alpha maps are, so read by the same fractions getHeightAt samples
+    // (0x007a06a0: 1.92 texels a yard).
+    const int row = glm::clamp(static_cast<int>(fracY * 8.0f), 0, 63);
+    const int col = glm::clamp(static_cast<int>(fracX * 8.0f), 0, 63);
+    return chunk->shadowMap[static_cast<size_t>(row * 64 + col)] != 0;
+}
+
 bool TerrainManager::isTileLoadedAt(float glX, float glY) const {
     return loadedTiles.find(worldToTile(glX, glY)) != loadedTiles.end();
 }
