@@ -421,12 +421,12 @@ void CharacterRenderer::destroyPipelineVariants() {
 }
 
 VkPipeline CharacterRenderer::pipelineVariant(VkPipeline base, uint16_t materialFlags,
-                                              bool mirrored, bool forceNoDepthWrite) const {
+                                              bool mirrored) const {
     auto it = pipelineVariants_.find(base);
     if (it == pipelineVariants_.end()) return base;
     const uint32_t cull = (materialFlags & 0x04) ? 0u : (mirrored ? 2u : 1u);
     const uint32_t noTest = (materialFlags & 0x08) ? 1u : 0u;
-    const uint32_t noWrite = ((materialFlags & 0x10) || forceNoDepthWrite) ? 1u : 0u;
+    const uint32_t noWrite = (materialFlags & 0x10) ? 1u : 0u;
     return it->second[cull + 3u * noTest + 6u * noWrite];
 }
 
@@ -3250,9 +3250,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 (void)alphaCutout;
                 // Lit unless the material says unlit (0x1), as the client has it
                 // (FUN_0081fb10, table at 0x00a45374): the additive modes are lit
-                // too, and Mod and Mod2x are drawn unlit in the shader. Enchant
-                // glows emit their own light; scene lighting must not tint them.
-                const bool unlit = ((materialFlags & 0x01) != 0) || instance.isEffectModel;
+                // too, and Mod and Mod2x are drawn unlit in the shader. An
+                // enchant's model is no exception: it is drawn by its materials.
+                const bool unlit = (materialFlags & 0x01) != 0;
 
                 // Hair textures are authored as alpha-cut cards. If they use the
                 // translucent pipeline they form a soft shell around the head.
@@ -3267,13 +3267,10 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 const bool additiveBlend = (blendMode == 3 || blendMode == 4);
                 const bool colourOnlyBlend = (blendMode == 3 || blendMode == 5 || blendMode == 6);
 
+                // An enchant's model (ItemVisualEffects) included: the client
+                // draws it as any M2, by its own materials (FUN_0081fe90).
                 VkPipeline desiredPipeline;
-                if (instance.isEffectModel) {
-                    // Enchant visuals are glow cards drawn on black. Their materials
-                    // declare Mod/alpha blending, which would composite that black
-                    // background as an opaque quad - force additive so only the light adds.
-                    desiredPipeline = additivePipeline_;
-                } else if (blendMode == 5 || blendMode == 6) {
+                if (blendMode == 5 || blendMode == 6) {
                     // A multiply fades toward its neutral value in the shader,
                     // so a partial alpha does not divert it either.
                     desiredPipeline = blendMode == 5 ? modPipeline_ : mod2xPipeline_;
@@ -3329,10 +3326,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 }
                 // Cull, depth test and depth write from the material's flags, as
                 // the client sets them for every blend mode (FUN_0081fe90).
-                // Enchant glows are forced additive here and stay off the depth
-                // buffer as they always have.
-                desiredPipeline = pipelineVariant(desiredPipeline, materialFlags,
-                                                  mirroredInstance, instance.isEffectModel);
+                desiredPipeline = pipelineVariant(desiredPipeline, materialFlags, mirroredInstance);
                 if (desiredPipeline != currentPipeline) {
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
                     currentPipeline = desiredPipeline;
@@ -3413,15 +3407,14 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                         }
                     }
                 }
-                matData.colourBlend = (instance.isEffectModel || !colourOnlyBlend) ? 0
+                matData.colourBlend = !colourOnlyBlend ? 0
                                     : (blendMode == 5 ? 1 : (blendMode == 6 ? 2 : 3));
                 // The client's fog per blend mode (table at 0x00a45390): the
                 // world's for 0-2, black for the adds, white for Mod, grey for
                 // Mod2x; none for an unfogged material (0x2) or mode 7, which
-                // reads past the table. Enchant glows are drawn as adds.
+                // reads past the table.
                 static constexpr int32_t kFogByBlend[7] = {1, 1, 1, 2, 2, 3, 4};
                 matData.fogMode = ((materialFlags & 0x02) != 0) ? 0
-                                : instance.isEffectModel ? 2
                                 : (blendMode < 7 ? kFogByBlend[blendMode] : 0);
 
                 // The base humanoid mesh samples a mirrored character atlas,

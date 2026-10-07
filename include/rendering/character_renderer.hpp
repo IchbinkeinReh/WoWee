@@ -403,9 +403,9 @@ private:
         float directScale = 1.0f;
         glm::vec4 drawFlags{0.0f, 1.0f, 0.0f, 0.0f};
 
-        // Enchant visual attached to a weapon. Such a model is nothing but the
-        // additive FX batches that attached weapons otherwise drop, and it still
-        // needs its animation advanced even though its transform comes from the parent.
+        // Enchant visual attached to a weapon. It needs its animation advanced
+        // even though its transform comes from the parent; it is drawn by its
+        // own materials, as any M2.
         bool isEffectModel = false;
 
         // A scene rather than a character: the glue-screen backdrops. Two things
@@ -495,8 +495,7 @@ private:
     std::unordered_map<VkPipeline, std::array<VkPipeline, kPipelineVariantCount>> pipelineVariants_;
     /// The client's per-material state on top of a blend pipeline: culled
     /// unless two-sided (0x4), depth test off for 0x8, depth write off for 0x10.
-    VkPipeline pipelineVariant(VkPipeline base, uint16_t materialFlags, bool mirrored,
-                               bool forceNoDepthWrite) const;
+    VkPipeline pipelineVariant(VkPipeline base, uint16_t materialFlags, bool mirrored) const;
     void destroyPipelineVariants();
     // Whole-instance fades (ghost form, spawn fade-in): alpha blend with depth
     // write kept on, so the faded model still self-occludes instead of showing
