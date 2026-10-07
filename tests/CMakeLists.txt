@@ -716,6 +716,12 @@ wowee_add_test(test_detail_doodad_shade
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
 
+# ── test_wmo_sidn ────────────────────────────────────────────
+# A WMO material's window light and the emissive the MapObj programs add.
+wowee_add_test(test_wmo_sidn
+    SOURCES test_wmo_sidn.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_spline_body ─────────────────────────────────────────
 # The body of SMSG_MONSTER_MOVE, whose head two parsers shared and neither
 # covered. Checked against AzerothCore's own WriteCommonMonsterMovePart.

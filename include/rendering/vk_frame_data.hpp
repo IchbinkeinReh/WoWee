@@ -51,6 +51,10 @@ struct GPUPerFrameData {
     // (0x007ee750's 0xd38cb0/cb4). Only the WMO shader reads these.
     glm::vec4 averagedDirectColor;
     glm::vec4 averagedAmbientColor;
+    // x: the light's window level (0x007f3230 samples the curve at 0xaf4c80
+    // into 0xd38cdc), which lights a WMO material's windows at night
+    // (wmo_sidn.hpp). Only the WMO shader reads it.
+    glm::vec4 windowLight{0.0f};
 };
 
 // Push constants for the model matrix (most common case)

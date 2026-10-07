@@ -22,6 +22,8 @@ layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aTexCoord;
 layout(location = 3) in vec4 aColor;
 layout(location = 4) in vec4 aTangent;
+layout(location = 5) in vec2 aTexCoord2;  // the second MOTV
+layout(location = 6) in vec4 aColor2;     // the second MOCV
 
 layout(location = 0) out vec3 FragPos;
 layout(location = 1) out vec3 Normal;
@@ -32,6 +34,8 @@ layout(location = 5) out vec3 Bitangent;
 // MapObjDiffuse_T1_Refl's second coordinates: reflect(P, N).xy in view space,
 // unnormalised (the client's +z-forward view gives the same x and y).
 layout(location = 6) out vec2 EnvCoord;
+layout(location = 7) out vec2 TexCoord2;
+layout(location = 8) out vec4 VertColor2;
 
 void main() {
     // A building's geometry stays where it was authored. The client moves
@@ -43,6 +47,8 @@ void main() {
     Normal = normalMatrix * aNormal;
     TexCoord = aTexCoord;
     VertColor = aColor;
+    TexCoord2 = aTexCoord2;
+    VertColor2 = aColor2;
 
     // Compute TBN basis vectors for normal mapping
     vec3 T = normalize(normalMatrix * aTangent.xyz);

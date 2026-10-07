@@ -20,6 +20,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 cameraFogColor;  // the camera's fog, its interior's blended in
     vec4 averagedDirectColor;   // light mode 2's direct light (0xd38cb0)
     vec4 averagedAmbientColor;  // and its ambient (0xd38cb4)
+    vec4 windowLight;           // x: the light's window level (0xd38cdc, wmo_sidn.hpp)
 };
 
 #include "rt_lighting.glsli"
@@ -48,9 +49,9 @@ layout(set = 1, binding = 1) uniform WMOMaterial {
     int shadowed;      // bit 0 the first pass samples the sun's shadow map, bit 1 the second
     int program;       // the pixel program: 0 Diffuse 1 Specular 2 Metal 3 Env 4 Opaque 5 EnvMetal 6 Composite
     float alphaRef;    // the alpha test's reference by blend mode (0x00ad8b7c), 0 for none
-    int pad84;
-    int pad88;
-    int pad92;
+    float sidnR;       // MOMT sidnColor where the material has flag 0x10, else 0
+    float sidnG;
+    float sidnB;
 };
 
 layout(set = 1, binding = 2) uniform sampler2D uNormalHeightMap;
@@ -73,6 +74,8 @@ layout(location = 3) in vec4 VertColor;
 layout(location = 4) in vec3 Tangent;
 layout(location = 5) in vec3 Bitangent;
 layout(location = 6) in vec2 EnvCoord;
+layout(location = 7) in vec2 TexCoord2;   // the second MOTV
+layout(location = 8) in vec4 VertColor2;  // the second MOCV
 
 layout(location = 0) out vec4 outColor;
 
@@ -194,6 +197,19 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
 // (MapObjDiffuse_T1 and the rest, 0x007ac6a0/0x007ac9f0) or add half of it
 // (MapObjUDiffuse_T1 and the rest, unified, 0x007a9380: c28 is 0x7f7f7f, from
 // 0x007a8940), clamped. Mode 3 is the MOHD ambient with no direct light.
+//
+// The lit programs add c29 as well: half the material's frameSidnColor - its
+// sidnColor times the light's window level, a byte at a time (0x007a8520) -
+// which 0x007ac6a0, 0x007ac9f0 and 0x007a9380 hand them (0x007a8940). It
+// lights a window at night. The client adds the light's ambient into it too
+// for the WMO of the game object under the cursor.
+vec3 windowEmissive() {
+    vec3 sidn = round(vec3(sidnR, sidnG, sidnB) * 255.0);
+    float level = max(roundEven(windowLight.x * 255.0 - 0.5), 0.0);
+    vec3 frameSidn = floor(sidn * level / 256.0);
+    return floor(frameSidn * 0.5) / 255.0;
+}
+
 vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt) {
     if (mode == 0) return v;
     vec3 ambient = vec3(wmoAmbientR, wmoAmbientG, wmoAmbientB);
@@ -207,14 +223,21 @@ vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt) {
     }
     float ndl = clamp(dot(norm, normalize(-lightDir.xyz)), 0.0, 1.0);
     vec3 light = clamp(ambient + ndl * direct, 0.0, 1.0);
-    return unifiedPath != 0 ? clamp(light * 0.5 + v, 0.0, 1.0) : clamp(v * light, 0.0, 1.0);
+    vec3 c29 = windowEmissive();
+    return unifiedPath != 0 ? clamp(light * 0.5 + v + c29, 0.0, 1.0) : clamp(v * light + c29, 0.0, 1.0);
 }
 
 // The pixel program over a pass's colour `c` (the vertex colour doubled, as
 // every MapObj program has it): MapObjEnv adds the reflection by the
 // texture's alpha, MapObjEnvMetal by the texture times its alpha. Specular
 // and Metal draw as Opaque: their programs read no specular.
+//
+// MapObjComposite (MapObjUComposite, unified WMOs only - 0x007afee0 gives the
+// other table none, and those are drawn as Diffuse here) lays MOMT texture_2 at the second MOTV under texture_1 by
+// the second MOCV's alpha: mix(tex2, tex1, secondary.a), its alpha the same
+// way, and doubles it over the colour as the others do.
 vec3 surface(vec3 c, vec4 tex, vec3 env) {
+    if (program == 6 && unifiedPath != 0) tex = mix(texture(uEnvTexture, TexCoord2), tex, VertColor2.a);
     vec3 rgb = 2.0 * c * tex.rgb;
     if (program == 3) rgb += tex.a * env;
     else if (program == 5) rgb += tex.rgb * tex.a * env;
@@ -280,7 +303,9 @@ void main() {
     // The output alpha: the vertex alpha, times the texture's for
     // MapObjDiffuse alone. It is what the alpha test reads and what blends a
     // transition batch's two passes.
-    float alpha = v.a * (program == 0 ? texColor.a : 1.0);
+    float alpha = v.a * (program == 0 ? texColor.a
+                       : (program == 6 && unifiedPath != 0) ? mix(texture(uEnvTexture, TexCoord2).a, texColor.a, VertColor2.a)
+                       : 1.0);
     if (transition == 0 && alphaRef > 0.0 && alpha < alphaRef) discard;
 
     // The sun's shadow map, where the pass samples it: the shadow variants of

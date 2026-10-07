@@ -517,6 +517,8 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
 
             // Parse sub-chunks within MOGP
             int groupLogCount = 0;
+            int motvSeen = 0;
+            int mocvSeen = 0;
             while (mogpOffset + 8 < chunkEnd) {
                 uint32_t subChunkId = read<uint32_t>(groupData, mogpOffset);
                 uint32_t subChunkSize = read<uint32_t>(groupData, mogpOffset);
@@ -590,12 +592,15 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                     }
                 }
                 else if (subChunkId == MOTV) { // Texture coords
-                    // Update texture coords for existing vertices
+                    // The first MOTV is the UVs; a second one (MOGP 0x2000000)
+                    // is the second layer's, which used to overwrite them.
+                    const bool second = motvSeen++ > 0;
                     uint32_t texCoordCount = subChunkSize / 8;
                     core::Logger::getInstance().debug("  MOTV: ", texCoordCount, " tex coords for ", group.vertices.size(), " vertices");
                     for (uint32_t i = 0; i < texCoordCount && i < group.vertices.size(); i++) {
-                        group.vertices[i].texCoord.x = read<float>(groupData, mogpOffset);
-                        group.vertices[i].texCoord.y = read<float>(groupData, mogpOffset);
+                        glm::vec2& uv = second ? group.vertices[i].texCoord2 : group.vertices[i].texCoord;
+                        uv.x = read<float>(groupData, mogpOffset);
+                        uv.y = read<float>(groupData, mogpOffset);
                     }
                     if (texCoordCount > 0 && !group.vertices.empty()) {
                         core::Logger::getInstance().debug("    First UV: (", group.vertices[0].texCoord.x, ", ", group.vertices[0].texCoord.y, ")");
@@ -603,6 +608,9 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                 }
                 else if (subChunkId == MOCV) { // Vertex colors
                     // Update vertex colors
+                    // The first MOCV is the colours; a second one (MOGP
+                    // 0x1000000) is MapObjComposite's blend.
+                    const bool second = mocvSeen++ > 0;
                     uint32_t colorCount = subChunkSize / 4;
                     core::Logger::getInstance().debug("  MOCV: ", colorCount, " vertex colors for ", group.vertices.size(), " vertices");
                     for (uint32_t i = 0; i < colorCount && i < group.vertices.size(); i++) {
@@ -610,7 +618,8 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                         uint8_t g = read<uint8_t>(groupData, mogpOffset);
                         uint8_t r = read<uint8_t>(groupData, mogpOffset);
                         uint8_t a = read<uint8_t>(groupData, mogpOffset);
-                        group.vertices[i].color = glm::vec4(r/255.0f, g/255.0f, b/255.0f, a/255.0f);
+                        (second ? group.vertices[i].color2 : group.vertices[i].color) =
+                            glm::vec4(r/255.0f, g/255.0f, b/255.0f, a/255.0f);
                     }
                     if (colorCount > 0 && !group.vertices.empty()) {
                         const auto& c = group.vertices[0].color;

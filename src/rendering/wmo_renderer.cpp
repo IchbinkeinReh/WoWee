@@ -559,8 +559,11 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         modelData.materialBlendModes.push_back(mat.blendMode);
         modelData.materialFlags.push_back(mat.flags);
         modelData.materialShaders.push_back(mat.shader);
-        // MapObjEnv and MapObjEnvMetal sample texture_2 as their reflection.
-        const bool envProgram = mat.shader == 3 || mat.shader == 5;
+        modelData.materialSidn.push_back((mat.flags & 0x10u) != 0 ? mat.color1 : 0u);
+        // MapObjEnv and MapObjEnvMetal sample texture_2 as their reflection,
+        // MapObjComposite as its second layer (0x007ac6a0 binds it to stage
+        // 1 for every material).
+        const bool envProgram = mat.shader == 3 || mat.shader == 5 || mat.shader == 6;
         modelData.materialEnvTextureIndices.push_back(
             envProgram && t2 < model.textures.size() && !model.textures[t2].empty()
                 ? t2 : std::numeric_limits<uint32_t>::max());
@@ -667,10 +670,11 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             bool transparent;
             bool transition;
             uint32_t surface;
+            uint32_t sidn;
             bool operator==(const BatchKey& o) const {
                 return texPtr == o.texPtr && envPtr == o.envPtr && alphaTest == o.alphaTest &&
                        transparent == o.transparent && transition == o.transition &&
-                       surface == o.surface;
+                       surface == o.surface && sidn == o.sidn;
             }
         };
         struct BatchKeyHash {
@@ -680,7 +684,8 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                        (std::hash<bool>()(k.alphaTest) << 2) ^
                        (std::hash<bool>()(k.transparent) << 3) ^
                        (std::hash<bool>()(k.transition) << 4) ^
-                       (std::hash<uint32_t>()(k.surface) << 5);
+                       (std::hash<uint32_t>()(k.surface) << 5) ^
+                       (std::hash<uint32_t>()(k.sidn) << 7);
             }
         };
         std::unordered_map<BatchKey, GroupResources::MergedBatch, BatchKeyHash> batchMap;
@@ -751,7 +756,8 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 (lights.outsideShadowed ? 0x100u : 0u) | (lights.insideShadowed ? 0x200u : 0u) |
                 (static_cast<uint32_t>(program) << 12) | (blendMode << 16);
             VkTexture* envTex = nullptr;
-            if (program == wl::SurfaceProgram::Env || program == wl::SurfaceProgram::EnvMetal) {
+            if (program == wl::SurfaceProgram::Env || program == wl::SurfaceProgram::EnvMetal ||
+                program == wl::SurfaceProgram::Composite) {
                 const uint32_t ei = batch.materialId < modelData.materialEnvTextureIndices.size()
                     ? modelData.materialEnvTextureIndices[batch.materialId]
                     : std::numeric_limits<uint32_t>::max();
@@ -765,12 +771,15 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             BatchKey key{ .texPtr = reinterpret_cast<uintptr_t>(tex),
                           .envPtr = reinterpret_cast<uintptr_t>(envTex),
                           .alphaTest = alphaTest, .transparent = blendMode >= 2,
-                          .transition = batch.transition, .surface = surfaceKey };
+                          .transition = batch.transition, .surface = surfaceKey,
+                          .sidn = batch.materialId < modelData.materialSidn.size()
+                                ? modelData.materialSidn[batch.materialId] : 0u };
             auto& mb = batchMap[key];
             if (mb.draws.empty()) {
                 mb.texture = tex;
                 mb.envTexture = envTex;
                 mb.surfaceKey = surfaceKey;
+                mb.sidn = key.sidn;
                 mb.hasTexture = hasTexture;
                 mb.alphaTest = alphaTest;
                 mb.unlit = unlit;
@@ -837,6 +846,10 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             matData.wmoAmbientR = modelData.wmoAmbientColor.r;
             matData.wmoAmbientG = modelData.wmoAmbientColor.g;
             matData.wmoAmbientB = modelData.wmoAmbientColor.b;
+            // D3DCOLOR: the window light the shader scales by the level.
+            matData.sidnR = static_cast<float>((mb.sidn >> 16) & 0xffu) / 255.0f;
+            matData.sidnG = static_cast<float>((mb.sidn >> 8) & 0xffu) / 255.0f;
+            matData.sidnB = static_cast<float>(mb.sidn & 0xffu) / 255.0f;
             if (matBuf.info.pMappedData) {
                 memcpy(matBuf.info.pMappedData, &matData, sizeof(matData));
             }
@@ -2025,6 +2038,8 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
         vd.texCoord = v.texCoord;
         vd.color = colors[i];
         vd.tangent = glm::vec4(0.0f);
+        vd.texCoord2 = v.texCoord2;
+        vd.color2 = v.color2;
         vertices.push_back(vd);
     }
 

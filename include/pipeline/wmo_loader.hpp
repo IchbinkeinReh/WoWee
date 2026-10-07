@@ -142,6 +142,12 @@ struct WMOVertex {
     glm::vec3 normal;
     glm::vec2 texCoord;
     glm::vec4 color;           // Vertex color
+    /// The second MOTV and MOCV (MOGP flags 0x2000000 and 0x1000000), which
+    /// MapObjComposite blends its two textures by: the second layer's UVs,
+    /// and the colour whose alpha is the blend (0x007a9380 hands them to the
+    /// program as attributes 7 and 5).
+    glm::vec2 texCoord2{0.0f};
+    glm::vec4 color2{0.0f};
 };
 
 // WMO Batch (render batch)

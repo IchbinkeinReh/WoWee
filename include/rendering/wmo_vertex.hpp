@@ -25,15 +25,20 @@ struct WMOVertex {
     glm::vec4 color;
     /// xyz is the tangent direction, w the handedness, plus or minus one.
     glm::vec4 tangent;
+    /// The second MOTV and MOCV, MapObjComposite's second layer and blend.
+    glm::vec2 texCoord2;
+    glm::vec4 color2;
 };
 
 /// What assets/shaders/wmo.vert.glsl declares, in its order.
-inline constexpr std::array<VertexAttribute, 5> kWmoVertexAttributes = {{
+inline constexpr std::array<VertexAttribute, 7> kWmoVertexAttributes = {{
     {.location = 0, .componentCount = 3, .offset = static_cast<uint32_t>(offsetof(WMOVertex, position))},
     {.location = 1, .componentCount = 3, .offset = static_cast<uint32_t>(offsetof(WMOVertex, normal))},
     {.location = 2, .componentCount = 2, .offset = static_cast<uint32_t>(offsetof(WMOVertex, texCoord))},
     {.location = 3, .componentCount = 4, .offset = static_cast<uint32_t>(offsetof(WMOVertex, color))},
     {.location = 4, .componentCount = 4, .offset = static_cast<uint32_t>(offsetof(WMOVertex, tangent))},
+    {.location = 5, .componentCount = 2, .offset = static_cast<uint32_t>(offsetof(WMOVertex, texCoord2))},
+    {.location = 6, .componentCount = 4, .offset = static_cast<uint32_t>(offsetof(WMOVertex, color2))},
 }};
 
 /// The same geometry through assets/shaders/shadow.vert.glsl, which is shared

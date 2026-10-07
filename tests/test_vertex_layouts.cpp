@@ -74,14 +74,16 @@ std::string shaderPath(const std::string& name) {
 }  // namespace
 
 TEST_CASE("the WMO vertex is what the layout comment claims", "[wmovertex]") {
-    // 3+3+2+4+4 floats. The shadow pipeline used to spell this 64 as a
+    // 3+3+2+4+4+2+4 floats. The shadow pipeline used to spell the size as a
     // literal, so it is worth stating once where a change would be noticed.
-    STATIC_REQUIRE(sizeof(WMOVertex) == 64);
+    STATIC_REQUIRE(sizeof(WMOVertex) == 88);
     STATIC_REQUIRE(offsetof(WMOVertex, position) == 0);
     STATIC_REQUIRE(offsetof(WMOVertex, normal) == 12);
     STATIC_REQUIRE(offsetof(WMOVertex, texCoord) == 24);
     STATIC_REQUIRE(offsetof(WMOVertex, color) == 32);
     STATIC_REQUIRE(offsetof(WMOVertex, tangent) == 48);
+    STATIC_REQUIRE(offsetof(WMOVertex, texCoord2) == 64);
+    STATIC_REQUIRE(offsetof(WMOVertex, color2) == 72);
 }
 
 TEST_CASE("every attribute sits inside the vertex", "[wmovertex]") {

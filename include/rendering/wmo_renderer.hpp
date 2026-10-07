@@ -529,9 +529,9 @@ private:
         int32_t shadowed;           // 72: bit 0 the first pass samples the sun's shadow map, bit 1 the second
         int32_t program;            // 76: the pixel program (wmo_doodad_light::SurfaceProgram)
         float alphaRef;             // 80: the alpha test's reference (0x00ad8b7c), 0 for none
-        int32_t pad84;              // 84
-        int32_t pad88;              // 88
-        int32_t pad92;              // 92
+        float sidnR;                // 84: MOMT sidnColor where flag 0x10, else 0 (wmo_sidn.hpp)
+        float sidnG;                // 88
+        float sidnB;                // 92
     };  // 96 bytes total
 
     /// What a group's draw pushes to wmo.frag after the model matrix:
@@ -590,6 +590,7 @@ private:
             bool averaged = false;          // material flag 0x20 where 0x007a9380 reads it: light mode 2
             VkTexture* envTexture = nullptr;  // MOMT texture_2 for MapObjEnv/EnvMetal, NOT owned
             uint32_t surfaceKey = 0;        // the lights, fogs, shadows and program packed (WMOMaterialUBO)
+            uint32_t sidn = 0;              // MOMT sidnColor where flag 0x10 (WMOMaterialUBO)
             // For multi-draw: store index ranges
             struct DrawRange { uint32_t firstIndex; uint32_t indexCount; };
             std::vector<DrawRange> draws;
@@ -706,6 +707,9 @@ private:
 
         // MOMT's shader (materialId -> the effect table's index, 0x007afee0)
         std::vector<uint32_t> materialShaders;
+        /// MOMT sidnColor (+0x10) where the material has flag 0x10, else 0:
+        /// what its windows are lit by at night (wmo_sidn.hpp).
+        std::vector<uint32_t> materialSidn;
 
         // MOMT's texture_2 (materialId -> texture index, ~0u for none): the
         // map MapObjEnv and MapObjEnvMetal reflect.

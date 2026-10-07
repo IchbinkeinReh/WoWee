@@ -1,5 +1,6 @@
 #include "rendering/renderer.hpp"
 #include "rendering/sun_direction.hpp"
+#include "rendering/wmo_sidn.hpp"
 
 #include <fstream>
 #include <iterator>
@@ -588,6 +589,8 @@ void Renderer::updatePerFrameUBO() {
         // Not dimmed by the glare: 0x007816f0 darkens only 0xd38ca8/cac.
         currentFrameData.averagedDirectColor = glm::vec4(lp.averagedDirectColor, 1.0f);
         currentFrameData.averagedAmbientColor = glm::vec4(lp.averagedAmbientColor, 1.0f);
+        currentFrameData.windowLight = glm::vec4(
+            wmo_sidn::windowLevel(lightingManager->getTimeOfDay()), 0.0f, 0.0f, 0.0f);
         currentFrameData.fogParams.x = lp.fogStart;
         currentFrameData.fogParams.y = lp.fogEnd;
 
