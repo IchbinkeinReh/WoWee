@@ -838,6 +838,7 @@ constexpr const char* kGraphicsPresetKeys[] = {
     "normalmapping", "normalmapstrength", "parallax", "parallaxquality",
     "groundclutter",
     "grassenabled", "grassdensity", "grassheight", "grassdistance",
+    "lensflare", "sharpstars", "sunshafts", "lightshafts", "fogskyblend",
 };
 
 /// Every graphics setting that has to reach something when it is loaded.
@@ -860,6 +861,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "fsrsharpness", "framegen", "brightness", "uiopacity", "minimapsquare",
     "minimapnpcdots", "minimapclock", "minimapcoords", "minimaprotate", "latencymeter", "showfps",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
+    "lensflare",
     "screenglow", "raytracedlighting",
     // Moved off the game's own Effects panel, so this list is now what
     // applies them at startup; the cvar store used to do it.
@@ -914,6 +916,11 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
         pendingGrassDensity      = p.grassDensity;
         pendingGrassHeight       = p.grassHeight;
         pendingGrassDistance     = p.grassDistance;
+        pendingLensFlare         = p.lensFlare;
+        pendingSharpStars        = p.sharpStars;
+        pendingSunShafts         = p.sunShafts;
+        pendingVolumetricFog     = p.lightShafts;
+        pendingFogSkyBlend       = p.fogSkyBlend;
         // Each one goes to the thing it affects through the one function that
         // knows where that is, rather than through a second copy of the same
         // renderer calls written out here.
@@ -953,6 +960,11 @@ void SettingsPanel::updateGraphicsPresetFromCurrentSettings() {
             pendingPOM == p.parallax &&
             std::abs(pendingGroundClutterDensity - p.groundClutter) <= 10 &&
             pendingGrassEnabled == p.grass &&
+            std::abs(pendingLensFlare - p.lensFlare) <= 0.05f &&
+            pendingSharpStars == p.sharpStars &&
+            pendingSunShafts == p.sunShafts &&
+            pendingVolumetricFog == p.lightShafts &&
+            std::abs(pendingFogSkyBlend - p.fogSkyBlend) <= 0.025f &&
             // As with shadows: a preset that grows no grass says nothing about
             // how dense, how tall or how far it would have been.
             (!p.grass || (std::abs(pendingGrassDensity - p.grassDensity) <= 5 &&

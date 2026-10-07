@@ -1654,6 +1654,11 @@ void AuthScreen::applyPresetToState(LoginGraphicsState& s, int preset) {
     s.grassDensity   = p.grassDensity;
     s.grassHeight    = p.grassHeight;
     s.grassDistance  = p.grassDistance;
+    s.lensFlare      = p.lensFlare;
+    s.sharpStars     = p.sharpStars;
+    s.sunShafts      = p.sunShafts;
+    s.lightShafts    = p.lightShafts;
+    s.fogSkyBlend    = p.fogSkyBlend;
 
     // Not in the table because the in-game preset has no opinion about them
     // either: upscaling and water refraction are the player's, and brightness,
@@ -1703,6 +1708,9 @@ void AuthScreen::loadLoginGraphicsState() {
         else if (key == "fog_sky_blend")    loginGfx_.fogSkyBlend    = clampF(std::stof(val), 0.0f, 1.0f);
         else if (key == "fog_strength")     loginGfx_.fogStrength    = clampF(std::stof(val), 0.0f, 2.0f);
         else if (key == "sharp_stars")      loginGfx_.sharpStars     = (val == "1");
+        else if (key == "lens_flare")       loginGfx_.lensFlare      = clampF(std::stof(val), 0.0f, 2.0f);
+        else if (key == "sun_shafts")       loginGfx_.sunShafts      = (val == "1");
+        else if (key == "light_shafts")     loginGfx_.lightShafts    = clampI(std::stoi(val), 0, 3);
         else if (key == "antialiasing")     loginGfx_.antiAliasing   = clampI(std::stoi(val), 0, 3);
         else if (key == "fxaa")             loginGfx_.fxaa           = (val == "1");
         else if (key == "normal_mapping")   loginGfx_.normalMapping  = (val == "1");
@@ -1743,6 +1751,9 @@ void AuthScreen::saveLoginGraphicsState() {
     cfg["fog_sky_blend"]         = std::to_string(loginGfx_.fogSkyBlend);
     cfg["fog_strength"]          = std::to_string(loginGfx_.fogStrength);
     cfg["sharp_stars"]           = loginGfx_.sharpStars      ? "1" : "0";
+    cfg["lens_flare"]            = std::to_string(loginGfx_.lensFlare);
+    cfg["sun_shafts"]            = loginGfx_.sunShafts       ? "1" : "0";
+    cfg["light_shafts"]          = std::to_string(loginGfx_.lightShafts);
     cfg["antialiasing"]          = std::to_string(loginGfx_.antiAliasing);
     cfg["fxaa"]                  = loginGfx_.fxaa           ? "1" : "0";
     cfg["normal_mapping"]        = loginGfx_.normalMapping  ? "1" : "0";

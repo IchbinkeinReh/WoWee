@@ -303,6 +303,21 @@ TEST_CASE("no preset asks for shadows to be off", "[settings]") {
     }
 }
 
+TEST_CASE("every preset leaves the client's missing extras off", "[settings]") {
+    // Lens flare, sharp stars, sun shafts, light shafts and sky-tinted fog are
+    // not in the original client. They stay as opt-in extras; no preset turns
+    // one on, and picking a preset turns each off.
+    for (int i = 0; i < wowee::ui::kGraphicsPresetCount; ++i) {
+        const auto& p = wowee::ui::kGraphicsPresets[i];
+        INFO("preset index " << i);
+        CHECK(p.lensFlare == 0.0f);
+        CHECK_FALSE(p.sharpStars);
+        CHECK_FALSE(p.sunShafts);
+        CHECK(p.lightShafts == 0);
+        CHECK(p.fogSkyBlend == 0.0f);
+    }
+}
+
 TEST_CASE("the presets climb", "[settings]") {
     // Each step up is meant to ask for more than the one below it. A column
     // that goes backwards is a preset that improves something by turning it

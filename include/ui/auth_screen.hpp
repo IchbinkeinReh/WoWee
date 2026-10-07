@@ -253,6 +253,11 @@ private:
         float fogSkyBlend    = 0.0f;
         float fogStrength    = 1.0f;
         bool  sharpStars     = false;
+        // The other extras the original client lacks, carried so a preset
+        // picked here turns them off as the in-game one does.
+        float lensFlare      = 0.0f;
+        bool  sunShafts      = false;
+        int   lightShafts    = 0;   // 0=Off 1=Low 2=Medium 3=High
         int  antiAliasing    = 1;   // 0=Off 1=2x 2=4x 3=8x
         bool fxaa            = false;
         bool normalMapping   = true;
