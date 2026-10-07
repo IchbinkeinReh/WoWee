@@ -1,4 +1,5 @@
 #include "core/entity_spawner.hpp"
+#include "core/item_attachments.hpp"
 #include "rendering/m2_model_classifier.hpp"
 #include "core/appearance_composer.hpp"
 #include "pipeline/char_sections.hpp"
@@ -1361,6 +1362,12 @@ void EntitySpawner::normalizeHumanoidClothingGeosets(uint32_t instanceId, uint32
     charRenderer->setActiveGeosets(
         instanceId, core::modelGeosetsShown(core::characterLookGeosets(*assetManager_, look),
                                             modelSubmeshIds(modelId)));
+    // The helm and the shoulders, as the component hangs them on any character
+    // (0x004ef0d0, 0x004ef840).
+    core::attachHelm(*charRenderer, *assetManager_, instanceId, extra.equipDisplayId[0], extra.raceId,
+                     extra.sexId, [this] { return nextWeaponModelId_++; });
+    core::attachShoulders(*charRenderer, *assetManager_, instanceId, extra.equipDisplayId[1],
+                          [this] { return nextWeaponModelId_++; });
 
     // The cape's texture, so the cloak mesh shows the cloak rather than the
     // body's texture.

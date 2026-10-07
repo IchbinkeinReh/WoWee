@@ -643,7 +643,10 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
     constexpr size_t kPreSocketSkip = 48;
     if (packet.getReadPos() + kPreSocketSkip + 28 <= packet.getSize()) {
         // LockID(0), Material(1), Sheath(2), RandomProperty(3), RandomSuffix(4), Block(5)
-        for (size_t i = 0; i < 6; ++i) packet.readUInt32();
+        packet.readUInt32();
+        packet.readUInt32();
+        data.sheath = packet.readUInt32();
+        for (size_t i = 0; i < 3; ++i) packet.readUInt32();
         data.itemSetId = packet.readUInt32(); // ItemSet(6)
         // MaxDurability(7), Area(8), Map(9)
         for (size_t i = 0; i < 3; ++i) packet.readUInt32();
