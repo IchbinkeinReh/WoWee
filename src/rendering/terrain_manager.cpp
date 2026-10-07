@@ -1,4 +1,5 @@
 #include "rendering/terrain_manager.hpp"
+#include "rendering/m2_view_distance.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 
 #include <vector>
@@ -644,6 +645,7 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
         p.position = glPos;
         p.rotation = placementEuler(placement.rotation);
         p.scale = placement.scale * kInv1024;
+        p.mddfFlags = placement.flags;
         pending->m2Placements.push_back(p);
     }
 
@@ -1100,6 +1102,9 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                 }
                 uint32_t instId = m2Renderer->createInstance(p.modelId, p.position, p.rotation, p.scale);
                 if (instId) {
+                    // MDDF 0x1: no distance culls it (0x007becd0).
+                    if (p.mddfFlags & kMddfNoDistanceCull)
+                        m2Renderer->setInstanceNoDistanceCull(instId, true);
                     ft.m2InstanceIds.push_back(instId);
                     if (p.uniqueId != 0) {
                         placedDoodadIds.insert(p.uniqueId);

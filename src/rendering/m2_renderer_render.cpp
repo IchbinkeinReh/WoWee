@@ -365,13 +365,23 @@ static bool skyBatchAllowed(bool skyMode, std::size_t index) {
 }
 
 float M2Renderer::instanceMaxDistSq(const M2Instance& inst) const {
+    if (inst.noDistanceCull && !inst.isGameObject) {
+        // Flag 0x800: only the chunk walk holds it back (0x00799980), by the
+        // chunks it is listed in.
+        const glm::vec3 half = inst.cachedVisualExtent * 0.5f;
+        glm::vec3 boxMin, boxMax;
+        rendering::m2ChunkBoxAround(inst.cachedCullCenter - half, inst.cachedCullCenter + half, boxMin, boxMax);
+        const float depth = rendering::m2ChunkViewDepth(boxMin, boxMax, cullViewPos_, cullViewDir_);
+        if (inst.cachedSizeClass < rendering::m2ChunkMinSizeClass(depth, environmentDetail_)) return -1.0f;
+    }
     return rendering::m2InstanceMaxDistSq(inst.cachedSizeClass, environmentDetail_,
                                           inst.isGameObject, cappedViewDistance(),
-                                          inst.cachedIsGroundDetail, groundDetailMaxDistance_);
+                                          inst.cachedIsGroundDetail, groundDetailMaxDistance_,
+                                          inst.noDistanceCull);
 }
 
 float M2Renderer::instanceDistanceFade(const M2Instance& inst, float distSq) const {
-    if (inst.isGameObject) return 1.0f;
+    if (inst.isGameObject || inst.noDistanceCull) return 1.0f;
     const float dist = std::sqrt(distSq);
     if (inst.cachedIsGroundDetail && groundDetailMaxDistance_ > 0.0f) {
         // From 85% of groundEffectDist to all of it (0x007b15d0).
@@ -760,6 +770,8 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
     Frustum frustum;
     frustum.extractFromMatrix(vp);
     const glm::vec3 camPos = camera.getPosition();
+    cullViewPos_ = camPos;
+    cullViewDir_ = camera.getForward();
 
     if (cullUniformMapped_[frameIndex]) {
         auto* ubo = static_cast<CullUniformsGPU*>(cullUniformMapped_[frameIndex]);
@@ -1001,6 +1013,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     }
 
     const glm::vec3 camPos = camera.getPosition();
+    cullViewPos_ = camPos;
+    cullViewDir_ = camera.getForward();
 
     // Where this pass's three milliseconds go.
     //

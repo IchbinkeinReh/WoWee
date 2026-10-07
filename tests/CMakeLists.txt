@@ -2107,6 +2107,7 @@ target_include_directories(test_m2_view_distance PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_m2_view_distance SYSTEM PRIVATE
     ${TEST_SYSTEM_INCLUDE_DIRS})
 target_link_libraries(test_m2_view_distance PRIVATE catch2_main)
+wowee_test_link_glm(test_m2_view_distance)
 add_test(NAME m2_view_distance COMMAND test_m2_view_distance)
 register_test_target(test_m2_view_distance)
 

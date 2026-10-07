@@ -90,6 +90,7 @@ struct PendingTile {
         glm::vec3 position;
         glm::vec3 rotation;
         float scale;
+        uint16_t mddfFlags = 0;  // the MDDF record's flags; 0 for ground cover
     };
     std::vector<M2Placement> m2Placements;
 

@@ -83,8 +83,12 @@ void M2Instance::recomputeCachedCullFactors() {
         cachedVisualRadius = cachedBoundRadius * scale;
     }
 
-    // The size class by the largest side of the world box (0x007bdb10).
-    if (cachedModel) {
+    // The size class by the largest side of the header's vertex box in the
+    // world (0x007bdb10); a model with no header box, by its own vertices.
+    if (cachedModel && cachedModel->hasVertexBox) {
+        cachedSizeClass = m2DoodadSizeClassOfBox(modelMatrix, cachedModel->vertexBoxMin,
+                                                 cachedModel->vertexBoxMax);
+    } else if (cachedModel) {
         const glm::vec3 ext = cachedVisualExtent;
         cachedSizeClass = m2DoodadSizeClass(std::max({ext.x, ext.y, ext.z}));
     } else {
@@ -1422,6 +1426,9 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     gpuModel.ambientEmitterType          = cls.ambientEmitterType;
     gpuModel.boundMin = tightMin;
     gpuModel.boundMax = tightMax;
+    gpuModel.vertexBoxMin = model.vertexBoxMin;
+    gpuModel.vertexBoxMax = model.vertexBoxMax;
+    gpuModel.hasVertexBox = model.hasVertexBox;
     gpuModel.boundRadius = model.boundRadius;
     // Fallback when the M2 header reports 0. Measured from the model origin,
     // like the header value it stands in for: the sphere this feeds is centred

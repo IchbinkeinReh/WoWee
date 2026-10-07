@@ -22,6 +22,7 @@
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/m2_color_track.hpp"
 #include "core/logger.hpp"
+#include <cstddef>
 #include <cstring>
 #include <algorithm>
 
@@ -112,6 +113,8 @@ struct M2Header {
 };
 static_assert(sizeof(M2Header) == 304,
               "M2Header is read straight from the file: 304 bytes, no padding");
+static_assert(offsetof(M2Header, vertexBox) == 0xa0,
+              "the vertex box the client sizes a doodad by sits at +0xa0 (0x007bdb10)");
 
 // M2 vertex structure (on-disk format)
 struct M2VertexDisk {
@@ -908,6 +911,7 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
 
         // Float sections (vertexBox, vertexRadius, boundingBox, boundingRadius)
         if (c + 56 <= m2Data.size()) {
+            model.hasVertexBox = true;
             std::memcpy(header.vertexBox, m2Data.data() + c, 24); c += 24;
             std::memcpy(&header.vertexRadius, m2Data.data() + c, 4); c += 4;
             std::memcpy(header.boundingBox, m2Data.data() + c, 24); c += 24;
@@ -950,6 +954,7 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         }
         std::memcpy(reinterpret_cast<uint8_t*>(&header) + COMMON_PREFIX_SIZE,
                     m2Data.data() + COMMON_PREFIX_SIZE, wotlkSize);
+        model.hasVertexBox = true;
     }
 
     core::Logger::getInstance().debug("Loading M2 model (version ", header.version, ")");
@@ -975,6 +980,10 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     model.boundMin = glm::vec3(header.boundingBox[0], header.boundingBox[1], header.boundingBox[2]);
     model.boundMax = glm::vec3(header.boundingBox[3], header.boundingBox[4], header.boundingBox[5]);
     model.boundRadius = header.boundingRadius;
+    if (model.hasVertexBox) {
+        model.vertexBoxMin = glm::vec3(header.vertexBox[0], header.vertexBox[1], header.vertexBox[2]);
+        model.vertexBoxMax = glm::vec3(header.vertexBox[3], header.vertexBox[4], header.vertexBox[5]);
+    }
 
     // Read vertices
     if (header.nVertices > 0 && header.ofsVertices > 0) {

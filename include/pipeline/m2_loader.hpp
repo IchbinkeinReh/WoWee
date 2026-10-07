@@ -227,6 +227,11 @@ struct M2Model {
     glm::vec3 boundMin;             // Model bounding box
     glm::vec3 boundMax;
     float boundRadius;              // Bounding sphere
+    // The header's vertex box (+0xa0): what the client sizes a doodad by
+    // (0x007bdb10). Absent from a file too short to carry it.
+    glm::vec3 vertexBoxMin{0.0f};
+    glm::vec3 vertexBoxMax{0.0f};
+    bool hasVertexBox = false;
 
     // Geometry data
     std::vector<M2Vertex> vertices;

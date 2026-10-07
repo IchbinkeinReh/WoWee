@@ -405,6 +405,12 @@ void M2Renderer::setInstanceIsGameObject(uint32_t instanceId, bool isGameObject)
     instances[idxIt->second].isGameObject = isGameObject;
 }
 
+void M2Renderer::setInstanceNoDistanceCull(uint32_t instanceId, bool noDistanceCull) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end() || idxIt->second >= instances.size()) return;
+    instances[idxIt->second].noDistanceCull = noDistanceCull;
+}
+
 void M2Renderer::setSkipCollision(uint32_t instanceId, bool skip) {
     for (auto& inst : instances) {
         if (inst.id == instanceId) {

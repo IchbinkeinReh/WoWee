@@ -102,6 +102,11 @@ struct M2ModelGPU {
     glm::vec3 boundMin;
     glm::vec3 boundMax;
     float boundRadius = 0.0f;
+    // The header's vertex box, which the size class is taken from
+    // (0x007bdb10); the tight box above is the cull sphere's.
+    glm::vec3 vertexBoxMin{0.0f};
+    glm::vec3 vertexBoxMax{0.0f};
+    bool hasVertexBox = false;
     bool collisionSteppedFountain = false;
     bool collisionSteppedLowPlatform = false;
     bool collisionPlanter = false;
@@ -350,6 +355,10 @@ struct M2Instance {
     // held to a doodad's size-class distance; drawn as far as the world is.
     // Set by the spawner.
     bool isGameObject = false;
+    // A terrain doodad with MDDF flag 0x1: the client's flag 0x800
+    // (0x007becd0), which no distance culls or fades (0x00791cb0); only its
+    // chunk's size-class walk bounds it (0x0078fb60).
+    bool noDistanceCull = false;
 
     void recomputeCachedCullFactors();
 
@@ -597,6 +606,9 @@ public:
     /// Mark an instance as a server game object, which the doodad size-class
     /// distances do not hold.
     void setInstanceIsGameObject(uint32_t instanceId, bool isGameObject);
+    /// Mark a terrain doodad placed with MDDF flag 0x1, which the client
+    /// does not cull or fade by its distance (0x007becd0, 0x00791cb0).
+    void setInstanceNoDistanceCull(uint32_t instanceId, bool noDistanceCull);
     /// What a game object's floor search finds: from `feet`, starting at
     /// `startZ` (0x007c2e70).
     using FloorQuery =
@@ -1246,6 +1258,10 @@ private:
 
     // Cached camera state from update() for frustum-culling bones
     glm::vec3 cachedCamPos_ = glm::vec3(0.0f);
+    // The view direction the last cull or render pass looked along, for a
+    // chunk's depth (0x007c3e70).
+    glm::vec3 cullViewPos_ = glm::vec3(0.0f);
+    glm::vec3 cullViewDir_ = glm::vec3(1.0f, 0.0f, 0.0f);
     float environmentDetail_ = 1.0f;
     float groundDetailMaxDistance_ = 0.0f;   // 0 = no cap of its own
     float viewDistanceAbsolute_ = 1200.0f;

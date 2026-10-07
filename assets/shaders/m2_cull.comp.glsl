@@ -10,7 +10,7 @@ layout(local_size_x = 64) in;
 // Per-instance cull data (uploaded from CPU each frame)
 struct CullInstance {
     vec4  sphere;              // xyz = world position, w = padded radius
-    float effectiveMaxDistSq;  // adaptive distance cull threshold
+    float effectiveMaxDistSq;  // draw distance squared: size class (0x0078f570), capped by view distance
     uint  flags;               // bit 0 = valid, bit 1 unused, bit 2 = invisibleTrap
     float _pad0;
     float _pad1;
