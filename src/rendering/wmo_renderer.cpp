@@ -596,7 +596,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         }
 
         GroupResources resources;
-        if (createGroupResources(wmoGroup, resources, wmoGroup.flags)) {
+        if (createGroupResources(wmoGroup, resources, wmoGroup.flags, model.flags)) {
             // Detect distance-only LOD/exterior shell groups:
             // 1. Very low vertex count (<100) - portal connectors, tiny shells
             // 2. ALWAYS_DRAW (0x10000) with low verts - distant LOD stand-ins
@@ -728,7 +728,12 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         // Allocate descriptor sets and UBOs for each merged batch
         groupRes.mergedBatches.reserve(batchMap.size());
         bool anyTextured = false;
-        bool isInterior = (groupRes.groupFlags & 0x2000) != 0;
+        // Lit and fogged as an interior unless the group is exterior or
+        // exterior-lit: 0x007a9380 tests 0x48, not the interior flag 0x2000,
+        // choosing the interior light (0x007a8b10 mode 3) and the camera's
+        // fog colour, or the outside light and the zone's fog colour
+        // (0x007a8440 with 2). A group with 0x2000 and 0x40 is lit by the sun.
+        const bool isInterior = (groupRes.groupFlags & pipeline::wmo_doodad_light::kOutsideGroupFlags) == 0;
         for (auto& [key, mb] : batchMap) {
             if (mb.hasTexture) anyTextured = true;
 
@@ -1895,7 +1900,8 @@ uint32_t WMORenderer::getTotalTriangleCount() const {
     return total;
 }
 
-bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupResources& resources, uint32_t groupFlags) {
+bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupResources& resources, uint32_t groupFlags,
+                                       uint32_t mohdFlags) {
     if (group.vertices.empty() || group.indices.empty()) {
         return false;
     }
@@ -2001,12 +2007,21 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
         resources.collisionVertices.push_back(v.position);
     }
     // An interior group with vertex colours (MOGP 0x4) keeps them for the
-    // light of whoever stands on it (0x007c7fe0 reads the group's MOCV).
+    // light of whoever stands on it (0x007c7fe0 reads the group's MOCV), as
+    // the client has them once loaded: 0x007d7c30 runs 0x007d7380 over them
+    // unless MOHD flag 0x8 is set. The transition batches' vertices are those
+    // up to the last of them's highest index.
     if (!(groupFlags & pipeline::wmo_doodad_light::kOutsideGroupFlags) && (groupFlags & 0x4u)) {
+        uint32_t transitionEnd = 0;
+        if (group.transBatchCount > 0 && group.transBatchCount <= group.batches.size()) {
+            transitionEnd = static_cast<uint32_t>(group.batches[group.transBatchCount - 1].lastVertex) + 1;
+        }
+        const bool fixUp = (mohdFlags & 0x8u) == 0;
         resources.collisionColors.reserve(group.vertices.size());
-        for (const auto& v : group.vertices) {
-            resources.collisionColors.push_back(
-                glm::u8vec3(glm::round(glm::clamp(glm::vec3(v.color), 0.0f, 1.0f) * 255.0f)));
+        for (size_t i = 0; i < group.vertices.size(); ++i) {
+            glm::ivec4 c(glm::round(glm::clamp(group.vertices[i].color, 0.0f, 1.0f) * 255.0f));
+            if (fixUp) c = pipeline::wmo_doodad_light::loadedVertexColor(c, i < transitionEnd);
+            resources.collisionColors.push_back(glm::u8vec4(c));
         }
     }
     if (!group.triFlags.empty()) {
@@ -3940,7 +3955,7 @@ bool WMORenderer::isInsideInteriorWMO(float glX, float glY, float glZ) const {
     return isInsideWMOGroups(glX, glY, glZ, /*interiorOnly=*/true, nullptr);
 }
 
-std::optional<WMORenderer::UnitInteriorLight> WMORenderer::unitInteriorLightAt(const glm::vec3& feet) const {
+std::optional<pipeline::wmo_doodad_light::FloorLight> WMORenderer::unitInteriorLightAt(const glm::vec3& feet) const {
     // The floor under the feet: from a yard above them to twelve below
     // (0x007a0d60), the nearest across every WMO there.
     constexpr float kAbove = 1.0f;
@@ -4005,11 +4020,18 @@ std::optional<WMORenderer::UnitInteriorLight> WMORenderer::unitInteriorLightAt(c
     }
     const float wa = 1.0f - wb - wc;
     const auto& cols = bestGroup->collisionColors;
-    const glm::vec3 mocv = glm::vec3(cols[i0]) * wa + glm::vec3(cols[i1]) * wb + glm::vec3(cols[i2]) * wc;
+    const glm::vec4 mocv = glm::vec4(cols[i0]) * wa + glm::vec4(cols[i1]) * wb + glm::vec4(cols[i2]) * wc;
     const glm::ivec3 floor = pipeline::wmo_doodad_light::unitFloorColor(
-        mocv, bestModel->mohdFlags, glm::vec4(bestModel->wmoAmbientColor, 1.0f));
-    const auto light = pipeline::wmo_doodad_light::unitLight(floor);
-    return UnitInteriorLight{light.ambient, light.direct};
+        glm::vec3(mocv), bestModel->mohdFlags, glm::vec4(bestModel->wmoAmbientColor, 1.0f));
+    pipeline::wmo_doodad_light::FloorLight out;
+    out.light = pipeline::wmo_doodad_light::unitLight(floor);
+    // On a transition face (MOPY 0x1) the alpha there takes the light toward
+    // the outside's (0x007c7fe0's last output, 0x007a0d60).
+    const size_t tri = bestTri / 3;
+    if (tri < bestGroup->triMopyFlags.size() && (bestGroup->triMopyFlags[tri] & 0x1u)) {
+        out.towardOutside = static_cast<int>(mocv.a);
+    }
+    return out;
 }
 
 std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::vec3& pos) const {

@@ -68,3 +68,65 @@ TEST_CASE("only doodads that interior groups alone list are interior-lit", "[wmo
     CHECK(interior[3] == 0);  // exterior-lit
     CHECK(interior[4] == 0);  // no group lists it
 }
+
+TEST_CASE("a group's vertex colours as the client keeps them once loaded", "[wmo][doodad-light]") {
+    // 0x007d7380: a transition batch's vertex is halved and keeps its alpha.
+    CHECK(wl::loadedVertexColor(glm::ivec4(200, 101, 0, 77), true) == glm::ivec4(100, 50, 0, 77));
+    // The others: ((c * a >> 6) + c) >> 1, at most 255, and alpha 255. At
+    // alpha 0 that is half the colour, which 0x007c7fe0 doubles back.
+    CHECK(wl::loadedVertexColor(glm::ivec4(200, 100, 10, 0), false) == glm::ivec4(100, 50, 5, 255));
+    CHECK(wl::loadedVertexColor(glm::ivec4(100, 40, 0, 64), false) == glm::ivec4(100, 40, 0, 255));
+    CHECK(wl::loadedVertexColor(glm::ivec4(200, 100, 0, 255), false) == glm::ivec4(255, 249, 0, 255));
+}
+
+TEST_CASE("a transition face carries a floor's light toward the zone's", "[wmo][doodad-light]") {
+    // 0x006acc50 as 0x007a0d60 uses it: 255 is all the way, otherwise the
+    // alpha is of 256.
+    const glm::vec3 a(0.2f, 0.4f, 0.6f);
+    const glm::vec3 b(1.0f, 0.0f, 0.6f);
+    CHECK(wl::towardColor(a, b, 255) == b);
+    CHECK(wl::towardColor(a, b, 0) == a);
+    const glm::vec3 half = wl::towardColor(a, b, 128);
+    CHECK(half.r == Catch::Approx(0.6f));
+    CHECK(half.g == Catch::Approx(0.2f));
+
+    wl::FloorLight floor;
+    floor.light.ambient = glm::vec3(0.3f);
+    floor.light.direct = glm::vec3(0.7f);
+    const glm::vec3 zoneAmbient(0.5f, 0.5f, 0.6f);
+    const glm::vec3 zoneDirect(1.0f, 0.9f, 0.8f);
+
+    // Off a transition face the floor's light as it is, from the interior
+    // direction.
+    const auto inside = wl::floorLightInZone(floor, zoneAmbient, zoneDirect);
+    CHECK(inside.ambient == floor.light.ambient);
+    CHECK(inside.direct == floor.light.direct);
+    CHECK(inside.towardSun == 0.0f);
+
+    // At the doorway's outer edge the zone's light, from the sun
+    // (0x007c1730 turns the direction by alpha / 255).
+    floor.towardOutside = 255;
+    const auto outside = wl::floorLightInZone(floor, zoneAmbient, zoneDirect);
+    CHECK(outside.ambient == zoneAmbient);
+    CHECK(outside.direct == zoneDirect);
+    CHECK(outside.towardSun == 1.0f);
+
+    floor.towardOutside = 51;
+    const auto partway = wl::floorLightInZone(floor, zoneAmbient, zoneDirect);
+    CHECK(partway.ambient.r == Catch::Approx(0.3f + 0.2f * 51.0f / 256.0f));
+    CHECK(partway.towardSun == Catch::Approx(0.2f));
+}
+
+TEST_CASE("a unit's ambient eases between floors", "[wmo][doodad-light]") {
+    // 0x007a1e90: each channel moves toward its target by seconds x 510, at
+    // least 1, and stops on it.
+    const glm::ivec3 from(40, 200, 100);
+    const glm::ivec3 to(140, 100, 100);
+    CHECK(wl::easeAmbient(from, to, 0.1f) == glm::ivec3(91, 149, 100));
+    CHECK(wl::easeAmbient(from, to, 0.0f) == glm::ivec3(41, 199, 100));
+    CHECK(wl::easeAmbient(from, to, 1.0f) == to);
+    // A full swing is over in about half a second: 8 a frame at 60 a second.
+    glm::ivec3 c(0);
+    for (int frame = 0; frame < 32; ++frame) c = wl::easeAmbient(c, glm::ivec3(255), 1.0f / 60.0f);
+    CHECK(c == glm::ivec3(255));
+}

@@ -8,10 +8,11 @@
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/grass_clearing.hpp"
 #include "pipeline/wmo_loader.hpp"
+#include "pipeline/wmo_doodad_light.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
-#include <glm/ext/vector_uint3_sized.hpp>
+#include <glm/ext/vector_uint4_sized.hpp>
 #include <atomic>
 #include <memory>
 #include <unordered_map>
@@ -430,12 +431,10 @@ public:
     /// vertex colour there, 0x007a0d60 and 0x007c7fe0): the nearest floor
     /// within a yard above and twelve below the feet, as the client looks. No
     /// value on an exterior or exterior-lit group's floor, or off any WMO -
-    /// the zone's light then.
-    struct UnitInteriorLight {
-        glm::vec3 ambient{0.0f};
-        glm::vec3 direct{0.0f};
-    };
-    [[nodiscard]] std::optional<UnitInteriorLight> unitInteriorLightAt(const glm::vec3& feet) const;
+    /// the zone's light then. On a transition face the floor's alpha says
+    /// how far toward the outside's light it is (FloorLight::towardOutside).
+    [[nodiscard]] std::optional<pipeline::wmo_doodad_light::FloorLight> unitInteriorLightAt(
+        const glm::vec3& feet) const;
 
     /**
      * Raycast against WMO bounding boxes for camera collision
@@ -583,10 +582,11 @@ private:
 
         // Per-collision-triangle MOPY flags (indexed by collision tri index, i.e. triStart/3)
         std::vector<uint8_t> triMopyFlags;
-        /// An interior group's vertex colours (MOCV, rgb 0..255), one per
-        /// collision vertex, for the light a unit standing on it takes
-        /// (unitInteriorLightAt). Empty for the other groups.
-        std::vector<glm::u8vec3> collisionColors;
+        /// An interior group's vertex colours (MOCV, rgba 0..255) as the
+        /// client keeps them once loaded (wmo_doodad_light::loadedVertexColor),
+        /// one per collision vertex, for the light a unit standing on it
+        /// takes (unitInteriorLightAt). Empty for the other groups.
+        std::vector<glm::u8vec4> collisionColors;
         /// True when no triangle in this group blocks: no collision hull, and
         /// nothing rendered that is not detail. Detail never blocks, so such a
         /// group is walk-through in its entirety - which is a thing to be
@@ -753,7 +753,8 @@ private:
     /**
      * Create GPU resources for a WMO group
      */
-    bool createGroupResources(const pipeline::WMOGroup& group, GroupResources& resources, uint32_t groupFlags = 0);
+    bool createGroupResources(const pipeline::WMOGroup& group, GroupResources& resources, uint32_t groupFlags = 0,
+                              uint32_t mohdFlags = 0);
 
     /**
      * Check if group is visible in frustum

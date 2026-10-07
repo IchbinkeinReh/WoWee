@@ -72,7 +72,7 @@ layout(location = 7) flat out float vHighlight;
 layout(location = 8) flat out vec4 vColorMul;
 layout(location = 9) flat out int vInteriorLit;
 layout(location = 10) flat out vec3 vInteriorAmbient;
-layout(location = 11) flat out vec3 vInteriorDirect;
+layout(location = 11) flat out vec4 vInteriorDirect;
 
 void main() {
     // Fetch per-instance data from SSBO
@@ -119,7 +119,7 @@ void main() {
     vHighlight = instanceData[instIdx].highlight;
     vInteriorLit = instanceData[instIdx].flags & 1;
     vInteriorAmbient = instanceData[instIdx].interiorAmbient.rgb;
-    vInteriorDirect = instanceData[instIdx].interiorDirect.rgb;
+    vInteriorDirect = instanceData[instIdx].interiorDirect;
 
     gl_Position = projection * view * worldPos;
     // A sky model sits on the far plane whatever its radius, so the depth

@@ -922,7 +922,7 @@ void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) {
     // never read back, so whatever the slot held last frame must not show.
     e.flags = inst.interiorLit ? kInstanceInteriorLit : 0;
     e.interiorAmbient = glm::vec4(inst.interiorAmbient, 0.0f);
-    e.interiorDirect = glm::vec4(inst.interiorDirect, 0.0f);
+    e.interiorDirect = glm::vec4(inst.interiorDirect, inst.interiorTowardSun);
 }
 
 void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,

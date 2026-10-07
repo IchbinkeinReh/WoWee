@@ -12,9 +12,13 @@
 /// doodad of an exterior group is lit by the zone's light like any other.
 ///
 /// A unit standing on an interior group's floor is lit the same way, by the
-/// group's vertex colour under its feet - doubled, plus the WMO's ambient when
-/// MOHD flag 0x2 is set - with the direct light no darker than 168/255
-/// (0x007a0d60, 0x007c7fe0).
+/// group's vertex colour under its feet as the client keeps it once loaded
+/// (loadedVertexColor) - doubled, plus the WMO's ambient when MOHD flag 0x2 is
+/// set - with the direct light no darker than 168/255 (0x007a0d60,
+/// 0x007c7fe0). So is a game object: every world object is lit this way. On a
+/// transition face (MOPY 0x1) the colour's alpha carries both lights, and the
+/// direction, toward the zone's outdoor light (floorLightInZone), and a unit's
+/// ambient eases from one floor's to the next (easeAmbient).
 ///
 /// mapObjLightLOD, the cvar that sounds like it would add the MOLT lights, is
 /// written by its handler (0x0078ded0) and read nowhere; no M2 takes a WMO's
@@ -93,6 +97,73 @@ inline glm::ivec3 unitFloorColor(const glm::vec3& mocv, uint32_t mohdFlags, cons
     glm::ivec3 c = glm::ivec3(mocv) * 2;
     if (mohdFlags & 0x2u) c += glm::ivec3(glm::round(glm::vec3(mohdAmbient) * 255.0f));
     return glm::min(c, glm::ivec3(255));
+}
+
+/// A group's vertex colour (rgba, 0..255) as the client keeps it once the
+/// group is loaded (0x007d7380, which 0x007d7c30 runs unless MOHD flag 0x8 is
+/// set). The vertices of the transition batches, those up to the last of them
+/// (MOGP's first batch count), are halved and keep their alpha, which says how
+/// far toward the outside their light is. The rest are brightened by their
+/// alpha and halved, and their alpha made 255. 0x007c7fe0 doubles what this
+/// leaves when it reads the colour under a unit.
+inline glm::ivec4 loadedVertexColor(const glm::ivec4& rgba, bool transitionVertex) {
+    if (transitionVertex) return {rgba.r >> 1, rgba.g >> 1, rgba.b >> 1, rgba.a};
+    const auto lift = [&](int c) { return glm::min(((c * rgba.a >> 6) + c) >> 1, 255); };
+    return {lift(rgba.r), lift(rgba.g), lift(rgba.b), 255};
+}
+
+/// One colour carried toward another by `alpha` of 256, as the client lerps a
+/// colour's bytes (0x006acc50): all the way at 255, not at all at 0.
+inline glm::vec3 towardColor(const glm::vec3& from, const glm::vec3& to, int alpha) {
+    if (alpha >= 255) return to;
+    if (alpha <= 0) return from;
+    return from + (to - from) * (static_cast<float>(alpha) / 256.0f);
+}
+
+/// The light of a world object - a unit, a player, a game object - on an
+/// interior floor. 0x007c7fe0 also says whether the triangle under it is a
+/// transition face (MOPY flag 0x1); on one, the vertex colour's alpha there
+/// carries both colours toward the zone's outdoor light (0x007a0d60: the
+/// direct toward the zone's direct, the ambient toward its ambient), and the
+/// light's direction from the fixed interior one toward the sun's
+/// (0x007c1730). `towardOutside` is that alpha, 0 off a transition face.
+struct FloorLight {
+    InteriorLight light;
+    int towardOutside = 0;
+};
+
+/// What a world object is drawn with: ambient, direct colour, and how far
+/// (0..1) the direct light's direction has turned from the interior one
+/// (kInteriorLightDir) toward the sun's.
+struct ObjectLight {
+    glm::vec3 ambient{0.0f};
+    glm::vec3 direct{0.0f};
+    float towardSun = 0.0f;
+};
+
+/// A floor's light with the zone's outdoor light blended in by its alpha
+/// (0x007a0d60, 0x007c1730).
+inline ObjectLight floorLightInZone(const FloorLight& floor, const glm::vec3& zoneAmbient,
+                                    const glm::vec3& zoneDirect) {
+    ObjectLight out;
+    out.ambient = towardColor(floor.light.ambient, zoneAmbient, floor.towardOutside);
+    out.direct = towardColor(floor.light.direct, zoneDirect, floor.towardOutside);
+    out.towardSun = static_cast<float>(glm::clamp(floor.towardOutside, 0, 255)) / 255.0f;
+    return out;
+}
+
+/// A world object's ambient does not jump to a new floor's: every frame each
+/// channel moves toward the one it should be by `seconds` x 510, at least
+/// 1, of 255, and stops on it (0x007a1e90). Walking through a door the
+/// ambient fades over at most half a second. Colours are 0..255.
+inline glm::ivec3 easeAmbient(const glm::ivec3& current, const glm::ivec3& target, float seconds) {
+    const int step = glm::max(1, static_cast<int>(seconds * 2.0f * 255.0f));
+    glm::ivec3 out = current;
+    for (int i = 0; i < 3; ++i) {
+        if (target[i] > current[i]) out[i] = glm::min(current[i] + step, target[i]);
+        else if (target[i] < current[i]) out[i] = glm::max(current[i] - step, target[i]);
+    }
+    return out;
 }
 
 /// Which of a model's MODD doodads are lit as interior ones: those that only

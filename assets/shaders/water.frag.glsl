@@ -240,10 +240,11 @@ vec4 fogVolumeAt(vec3 worldPos) {
 // The zone's distance fog, then the air in front of it. The distance fog is
 // the far haze the sky is painted to meet, so it goes on first; the volume is
 // everything between the camera and that, sunlit shafts included.
-vec3 applyFog(vec3 color, vec3 worldPos, float dist) {
+// `distanceFog`: the zone's fog colour here (0x007f16f0's 0xd38b8c).
+vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     // Raised to fogColor.w: 1 before map 530, the later fog's exponent after (0x00873210).
     float fogFactor = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
-    color = mix(fogColor.rgb, color, fogFactor);
+    color = mix(distanceFog, color, fogFactor);
     if (volumetricParams.x > 0.5) {
         vec4 air = fogVolumeAt(worldPos);
         color = color * air.a + air.rgb;
@@ -298,7 +299,7 @@ void main() {
         // Emissive brightening for hot areas
         color *= 1.0 + coreMask * 0.6;
 
-        color = applyFog(color, FragPos, dist);
+        color = applyFog(color, FragPos, dist, fogColor.rgb);
         outColor = vec4(color, 0.97);
         return;
     }
@@ -733,7 +734,7 @@ void main() {
     // edge straight back.
     alpha *= smoothstep(2400.0, 600.0, dist);
 
-    color = applyFog(color, FragPos, dist);
+    color = applyFog(color, FragPos, dist, fogColor.rgb);
 
     outColor = vec4(color, alpha);
 }

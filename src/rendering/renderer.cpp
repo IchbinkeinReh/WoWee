@@ -573,8 +573,12 @@ void Renderer::updatePerFrameUBO() {
         currentFrameData.lightColor = glm::vec4(lp.diffuseColor, 1.0f);
         // w: ch8's red, how dark the terrain's baked shadows are drawn.
         currentFrameData.ambientColor = glm::vec4(lp.ambientColor, lp.shadowOpacity);
-        // w: the power the fog is drawn with, 1 before map 530 (0x00873210).
-        currentFrameData.fogColor = glm::vec4(lp.fogColor, lp.fogExponent);
+        // The zone's fog colour for the world, the camera's own - its
+        // interior's blended in - for interior groups and what stands in
+        // them (0x007f16f0, 0x007a8440). w: the power the fog is drawn
+        // with, 1 before map 530 (0x00873210).
+        currentFrameData.fogColor = glm::vec4(lp.zoneFogColor, lp.fogExponent);
+        currentFrameData.cameraFogColor = glm::vec4(lp.fogColor, lp.fogExponent);
         currentFrameData.fogParams.x = lp.fogStart;
         currentFrameData.fogParams.y = lp.fogEnd;
 
@@ -2059,19 +2063,20 @@ void Renderer::update(float deltaTime) {
             }
             lightingManager->setInteriorFog(interiorFog);
         }
-        // A unit on an interior floor is lit by that floor's vertex colour,
-        // not the zone's light (0x007a0d60, 0x007c7fe0).
-        if (characterRenderer && wmoRenderer) {
-            characterRenderer->refreshInteriorLights(
-                [&](const glm::vec3& feet) -> std::optional<std::pair<glm::vec3, glm::vec3>> {
-                    if (auto l = wmoRenderer->unitInteriorLightAt(feet)) {
-                        return std::make_pair(l->ambient, l->direct);
-                    }
-                    return std::nullopt;
-                });
-        }
         lightingManager->update(characterPosition, mapId,
                                 gameTime, weatherIntensity, cameraLiquid, deathLight);
+        // A world object - unit, player or game object - on an interior floor
+        // is lit by that floor's vertex colour, not the zone's light, and on
+        // a transition face partly by the zone's (0x007a0d60, 0x007c7fe0); a
+        // unit's ambient eases between the two as it walks (0x007a1e90).
+        if (wmoRenderer) {
+            const auto& zl = lightingManager->getLightingParams();
+            const auto floorAt = [&](const glm::vec3& feet) { return wmoRenderer->unitInteriorLightAt(feet); };
+            if (characterRenderer) {
+                characterRenderer->refreshInteriorLights(floorAt, zl.ambientColor, zl.diffuseColor, deltaTime);
+            }
+            if (m2Renderer) m2Renderer->refreshGameObjectLights(floorAt, zl.ambientColor, zl.diffuseColor);
+        }
         if (waterRenderer) {
             const auto& wl = lightingManager->getLightingParams();
             WaterRenderer::LightWaterColors wc;

@@ -2923,9 +2923,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         // (w = 1); the zone's light otherwise.
         CharPushConstants charPush{};
         charPush.model = modelMat;
-        if (instance.interiorLit) {
-            charPush.interiorAmbient = glm::vec4(instance.interiorAmbient, 1.0f);
-            charPush.interiorDirect = glm::vec4(instance.interiorDirect, 0.0f);
+        if (instance.lightKnown) {
+            charPush.interiorAmbient = instance.drawAmbient;
+            charPush.interiorDirect = instance.drawDirect;
         }
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(charPush), &charPush);
@@ -4087,23 +4087,36 @@ void CharacterRenderer::clearTextureSlotOverride(uint32_t instanceId, uint16_t t
     }
 }
 
-void CharacterRenderer::refreshInteriorLights(const InteriorLightQuery& lightAt) {
+void CharacterRenderer::refreshInteriorLights(const InteriorLightQuery& lightAt, const glm::vec3& zoneAmbient,
+                                              const glm::vec3& zoneDirect, float seconds) {
+    namespace wl = pipeline::wmo_doodad_light;
+    const auto toBytes = [](const glm::vec3& c) {
+        return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
+    };
     for (auto& [id, instance] : instances) {
         const glm::vec3 feet = instance.hasOverrideModelMatrix
             ? glm::vec3(instance.overrideModelMatrix[3])
             : instance.position;
-        if (instance.interiorQueried) {
-            const glm::vec3 d = feet - instance.interiorQueryPos;
-            if (glm::dot(d, d) < 0.25f * 0.25f) continue;
+        const glm::vec3 d = feet - instance.interiorQueryPos;
+        if (!instance.interiorQueried || glm::dot(d, d) >= 0.25f * 0.25f) {
+            instance.interiorQueried = true;
+            instance.interiorQueryPos = feet;
+            instance.floorLight = lightAt(feet);
         }
-        instance.interiorQueried = true;
-        instance.interiorQueryPos = feet;
-        const auto light = lightAt(feet);
-        instance.interiorLit = light.has_value();
-        if (light) {
-            instance.interiorAmbient = light->first;
-            instance.interiorDirect = light->second;
-        }
+
+        // The ambient it should have: the floor's, carried toward the zone's
+        // on a transition face, or the zone's off any interior floor. The
+        // one drawn moves toward it a step a frame (0x007a1e90); a new
+        // instance starts at it.
+        wl::ObjectLight light{zoneAmbient, zoneDirect, 0.0f};
+        if (instance.floorLight) light = wl::floorLightInZone(*instance.floorLight, zoneAmbient, zoneDirect);
+        const glm::ivec3 target = toBytes(light.ambient);
+        instance.easedAmbient = instance.lightKnown ? wl::easeAmbient(instance.easedAmbient, target, seconds)
+                                                    : target;
+        instance.lightKnown = true;
+        instance.drawAmbient = glm::vec4(glm::vec3(instance.easedAmbient) / 255.0f,
+                                         instance.floorLight ? 2.0f : 1.0f);
+        instance.drawDirect = glm::vec4(light.direct, light.towardSun);
     }
 }
 

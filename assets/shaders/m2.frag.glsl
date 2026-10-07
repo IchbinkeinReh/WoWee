@@ -17,6 +17,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
     mat4 rtViewProj;
     vec4 rtCameraPos;
     vec4 rtParams;
+    vec4 cameraFogColor;  // the camera's fog, its interior's blended in
 };
 
 #include "rt_lighting.glsli"
@@ -60,7 +61,7 @@ layout(location = 7) flat in float vHighlight;
 layout(location = 8) flat in vec4 vColorMul;
 layout(location = 9) flat in int vInteriorLit;
 layout(location = 10) flat in vec3 vInteriorAmbient;
-layout(location = 11) flat in vec3 vInteriorDirect;
+layout(location = 11) flat in vec4 vInteriorDirect;
 
 layout(location = 0) out vec4 outColor;
 
@@ -111,10 +112,12 @@ vec4 fogVolumeAt(vec3 worldPos) {
 // The zone's distance fog, then the air in front of it. The distance fog is
 // the far haze the sky is painted to meet, so it goes on first; the volume is
 // everything between the camera and that, sunlit shafts included.
-vec3 applyFog(vec3 color, vec3 worldPos, float dist) {
+// `distanceFog`: the zone's fog colour, or the camera's for an interior group
+// and what stands in one (0x007a8440).
+vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     // Raised to fogColor.w: 1 before map 530, the later fog's exponent after (0x00873210).
     float fogFactor = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
-    color = mix(fogColor.rgb, color, fogFactor);
+    color = mix(distanceFog, color, fogFactor);
     if (volumetricParams.x > 0.5) {
         vec4 air = fogVolumeAt(worldPos);
         color = color * air.a + air.rgb;
@@ -225,10 +228,13 @@ void main() {
         // A doodad of a WMO interior group (0x007c1150): its MODD colour as
         // the ambient and as one light down from a fixed direction (0xaeedf0,
         // the same in render space), and nothing of the sun - neither its
-        // light nor its shadow.
-        const vec3 interiorDir = normalize(vec3(0.30822, 0.30822, 0.9));
-        float idiff = max(dot(norm, interiorDir), 0.0);
-        result = vInteriorAmbient * texColor.rgb + idiff * vInteriorDirect * texColor.rgb;
+        // light nor its shadow. A game object on an interior floor the same,
+        // by the floor's colour; on a transition face its light turns toward
+        // the sun's by w (0x007c1730). A doodad's w is 0.
+        const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
+        vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, vInteriorDirect.w));
+        float idiff = max(dot(norm, toLight), 0.0);
+        result = vInteriorAmbient * texColor.rgb + idiff * vInteriorDirect.rgb * texColor.rgb;
     } else {
         // Ambient and diffuse only. The client lights an M2 batch with the
         // fixed-function light (FUN_0081fb10) and no specular term; its
@@ -279,7 +285,7 @@ void main() {
         if (volumetricParams.x > 0.5) result *= fogVolumeAt(FragPos).a;
     } else if (!blendMultiplies()) {
         // A multiply fogs toward its neutral colour, below with its output.
-        result = applyFog(result, FragPos, dist);
+        result = applyFog(result, FragPos, dist, vInteriorLit != 0 ? cameraFogColor.rgb : fogColor.rgb);
     }
 
     float outAlpha = texColor.a * batchFade;

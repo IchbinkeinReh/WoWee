@@ -25,6 +25,7 @@ LightingManager::LightingManager() {
     fallbackParams_.ambientColor = glm::vec3(0.5f, 0.5f, 0.6f);
     fallbackParams_.diffuseColor = glm::vec3(1.0f, 0.95f, 0.85f);
     fallbackParams_.fogColor = glm::vec3(0.6f, 0.7f, 0.85f);
+    fallbackParams_.zoneFogColor = fallbackParams_.fogColor;
     fallbackParams_.fogEnd = 1500.0f;
     fallbackParams_.fogStartScalar = 0.2f;
     fallbackParams_.fogStart = 300.0f;
@@ -501,6 +502,7 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
     // record's second fog is the one, if the LiquidType and the fog's flags
     // allow it, and LiquidType flag 0x40 makes it the whole of the fog
     // rather than a blend (daynight::wmoFogChoice).
+    newParams.zoneFogColor = newParams.fogColor;
     if (interiorFog_) {
         const uint32_t liquidFlags = liquidRow ? liquidRow->flags : 0u;
         const daynight::WmoFogChoice choice =
@@ -522,9 +524,11 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
                 if (start < 0.0f) start = 0.0f;
             }
             const glm::vec3 color = liquidFog ? interiorFog_->liquidColor : interiorFog_->color;
-            const float b = daynight::wmoLiquidFogIsWhole(choice, liquidFlags)
-                                ? 1.0f
-                                : daynight::wmoFogBlend(interiorFog_->distanceInside);
+            // Whole, it replaces the zone's fog itself (0x007f16f0 copies it
+            // over 0xd38b8c), so the outside is fogged in it too.
+            const bool whole = daynight::wmoLiquidFogIsWhole(choice, liquidFlags);
+            const float b = whole ? 1.0f : daynight::wmoFogBlend(interiorFog_->distanceInside);
+            if (whole) newParams.zoneFogColor = color;
             newParams.fogEnd = glm::mix(newParams.fogEnd, end, b);
             newParams.fogStart = glm::mix(newParams.fogStart, start, b);
             newParams.fogColor = glm::mix(newParams.fogColor, color, b);
@@ -542,6 +546,8 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
     if (fogSkyBlend_ > 0.0f) {
         newParams.fogColor = glm::mix(newParams.fogColor, newParams.skyMiddleColor,
                                       glm::clamp(fogSkyBlend_, 0.0f, 1.0f));
+        newParams.zoneFogColor = glm::mix(newParams.zoneFogColor, newParams.skyMiddleColor,
+                                          glm::clamp(fogSkyBlend_, 0.0f, 1.0f));
     }
 
     // How much fog, as a multiplier on the distances the zone asks for. 1.0,

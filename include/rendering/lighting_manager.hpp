@@ -28,6 +28,12 @@ struct LightingParams {
     glm::vec3 moonDir{0.0f, 0.0f, -1.0f};
 
     glm::vec3 fogColor{0.5f, 0.6f, 0.7f};          // ch7: fog, and the sky's horizon
+    /// The fog colour before the camera's WMO interior fog is blended in
+    /// (0x007f16f0 keeps it at 0xd38b8c, the blended one at 0xd38ba0). The
+    /// terrain, the sky, exterior groups and what stands outside are fogged
+    /// in this; fogColor is the camera's, for interior groups and what stands
+    /// in them (0x007a8440). The same as fogColor outside any interior.
+    glm::vec3 zoneFogColor{0.5f, 0.6f, 0.7f};
     float fogStart = 100.0f;                        // Fog start distance (yards)
     float fogEnd = 1000.0f;                         // Fog end distance (yards)
     /// Float band 1: fogStart as a fraction of fogEnd. The client blends the

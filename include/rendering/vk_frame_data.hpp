@@ -39,6 +39,13 @@ struct GPUPerFrameData {
     glm::mat4 rtViewProj;
     glm::vec4 rtCameraPos;
     glm::vec4 rtParams;
+    // The camera's own fog colour, its WMO interior's fog blended in by how
+    // far in it is (0x007f16f0's 0xd38ba0). fogColor above is the zone's
+    // (0xd38b8c), which the terrain, the sky, exterior groups and whatever
+    // stands outside are fogged with. The distances are the blended ones for
+    // both. Only an interior group, and what stands in one, takes this
+    // (0x007a9380 by way of 0x007a8440, 0x007c1730).
+    glm::vec4 cameraFogColor;
 };
 
 // Push constants for the model matrix (most common case)

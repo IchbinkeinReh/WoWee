@@ -6,6 +6,7 @@
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "pipeline/wmo_doodad_light.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -161,14 +162,19 @@ public:
     void setInstanceVisible(uint32_t instanceId, bool visible);
 
     /// The light of a unit standing at a point, when it is an interior
-    /// floor's rather than the zone's: ambient, then direct.
+    /// floor's rather than the zone's.
     using InteriorLightQuery =
-        std::function<std::optional<std::pair<glm::vec3, glm::vec3>>(const glm::vec3&)>;
+        std::function<std::optional<pipeline::wmo_doodad_light::FloorLight>(const glm::vec3&)>;
     /// Asks `lightAt` for every instance that has moved since it was last
-    /// asked. The client keeps a unit's floor light as it walks (0x007a1bc0,
-    /// 0x007c2a70); in an interior a unit is lit by the floor's vertex colour
-    /// from a fixed direction and not by the sun.
-    void refreshInteriorLights(const InteriorLightQuery& lightAt);
+    /// asked, and works out what each is drawn with this frame. The client
+    /// keeps a unit's floor light as it walks (0x007a1bc0, 0x007c2a70); in an
+    /// interior a unit is lit by the floor's vertex colour from a fixed
+    /// direction and not by the sun, on a transition face partly by the
+    /// zone's light (0x007a0d60), and its ambient eases toward whichever it
+    /// stands in (0x007a1e90). `zoneAmbient` and `zoneDirect` are the zone's
+    /// light now, `seconds` the frame's time.
+    void refreshInteriorLights(const InteriorLightQuery& lightAt, const glm::vec3& zoneAmbient,
+                               const glm::vec3& zoneDirect, float seconds);
     void removeInstance(uint32_t instanceId);
     bool getAnimationState(uint32_t instanceId, uint32_t& animationId, float& animationTimeMs, float& animationDurationMs) const;
     /// Everything an M2 instance needs to pose its particles as this one is
@@ -300,8 +306,11 @@ private:
 
     // Character instance
     /// What a draw pushes: character.vert reads the matrix, character.frag
-    /// the light of the interior floor under the instance (w = 1 when it is
-    /// lit by one).
+    /// the instance's light. interiorAmbient: the ambient, w = 0 for the
+    /// zone's light as the frame has it, 1 for this ambient with the zone's
+    /// direct light, 2 for an interior floor's light. interiorDirect: that
+    /// floor's direct colour, w = how far its direction has turned toward
+    /// the sun's.
     struct CharPushConstants {
         glm::mat4 model{1.0f};
         glm::vec4 interiorAmbient{0.0f};
@@ -373,12 +382,16 @@ private:
 
         // Standing on a WMO interior floor: lit by the floor's colour rather
         // than the zone's light (refreshInteriorLights, 0x007a0d60).
-        bool interiorLit = false;
-        glm::vec3 interiorAmbient{0.0f};
-        glm::vec3 interiorDirect{0.0f};
+        std::optional<pipeline::wmo_doodad_light::FloorLight> floorLight;
         // Where that was last asked, so a unit standing still is not asked again.
         bool interiorQueried = false;
         glm::vec3 interiorQueryPos{0.0f};
+        // The ambient as it eases between floors, 0..255 (0x007a1e90), and
+        // what the instance is drawn with this frame (CharPushConstants).
+        bool lightKnown = false;
+        glm::ivec3 easedAmbient{0};
+        glm::vec4 drawAmbient{0.0f};
+        glm::vec4 drawDirect{0.0f};
 
         // Enchant visual attached to a weapon. Such a model is nothing but the
         // additive FX batches that attached weapons otherwise drop, and it still

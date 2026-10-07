@@ -259,7 +259,7 @@ TEST_CASE("MFOG is read into the model's fogs", "[wmo][mfog]") {
     CHECK(f.color2.b == Catch::Approx(0x80 / 255.0f));
 }
 
-TEST_CASE("MODR and the MOHD flags are read", "[wmo][modr]") {
+TEST_CASE("MODR, the transition batch count and the MOHD flags are read", "[wmo][modr]") {
     std::vector<uint8_t> root;
     put32(root, 0x4D564552);  // MVER
     put32(root, 4);
@@ -283,7 +283,9 @@ TEST_CASE("MODR and the MOHD flags are read", "[wmo][modr]") {
     put32(group, 0);
     put32(group, 0);
     put32(group, 0x2000);      // flags
-    for (int i = 0; i < 14; ++i) put32(group, 0);  // rest of the header
+    for (int i = 0; i < 7; ++i) put32(group, 0);   // bounds, portals
+    put32(group, 0x00050002);  // 2 transition batches, 5 interior ones
+    for (int i = 0; i < 6; ++i) put32(group, 0);   // rest of the header
     put32(group, 0x4D4F4452);  // MODR
     put32(group, 4);
     put32(group, 0x00090003);  // refs 3 and 9
@@ -293,6 +295,9 @@ TEST_CASE("MODR and the MOHD flags are read", "[wmo][modr]") {
     // read all the same.
     (void)wowee::pipeline::WMOLoader::loadGroup(group, model, 0);
     CHECK(model.groups[0].flags == 0x2000u);
+    // The transition batches' count, whose vertices keep their alpha
+    // (0x007d7380 reads it at the group's +0x5c).
+    CHECK(model.groups[0].transBatchCount == 2);
     REQUIRE(model.groups[0].doodadRefs.size() == 2);
     CHECK(model.groups[0].doodadRefs[0] == 3);
     CHECK(model.groups[0].doodadRefs[1] == 9);

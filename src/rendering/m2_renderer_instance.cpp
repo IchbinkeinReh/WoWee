@@ -77,6 +77,25 @@ void M2Renderer::setInstanceInteriorLight(uint32_t instanceId, const glm::vec3& 
     inst.interiorDirect = direct;
 }
 
+void M2Renderer::refreshGameObjectLights(const FloorLightQuery& floorAt, const glm::vec3& zoneAmbient,
+                                         const glm::vec3& zoneDirect) {
+    for (auto& inst : instances) {
+        if (!inst.isGameObject) continue;
+        const glm::vec3 d = inst.position - inst.floorQueryPos;
+        if (!inst.floorQueried || glm::dot(d, d) >= 0.25f * 0.25f) {
+            inst.floorQueried = true;
+            inst.floorQueryPos = inst.position;
+            inst.floorLight = floorAt(inst.position);
+        }
+        inst.interiorLit = inst.floorLight.has_value();
+        if (!inst.floorLight) continue;
+        const auto light = pipeline::wmo_doodad_light::floorLightInZone(*inst.floorLight, zoneAmbient, zoneDirect);
+        inst.interiorAmbient = light.ambient;
+        inst.interiorDirect = light.direct;
+        inst.interiorTowardSun = light.towardSun;
+    }
+}
+
 void M2Renderer::setInstanceHighlight(uint32_t instanceId, float amount) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;

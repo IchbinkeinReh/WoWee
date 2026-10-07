@@ -17,6 +17,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
     mat4 rtViewProj;
     vec4 rtCameraPos;
     vec4 rtParams;
+    vec4 cameraFogColor;  // the camera's fog, its interior's blended in
 };
 
 #include "rt_lighting.glsli"
@@ -248,10 +249,12 @@ vec4 fogVolumeAt(vec3 worldPos) {
 // The zone's distance fog, then the air in front of it. The distance fog is
 // the far haze the sky is painted to meet, so it goes on first; the volume is
 // everything between the camera and that, sunlit shafts included.
-vec3 applyFog(vec3 color, vec3 worldPos, float dist) {
+// `distanceFog`: the zone's fog colour, or the camera's for an interior group
+// and what stands in one (0x007a8440).
+vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     // Raised to fogColor.w: 1 before map 530, the later fog's exponent after (0x00873210).
     float fogFactor = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
-    color = mix(fogColor.rgb, color, fogFactor);
+    color = mix(distanceFog, color, fogFactor);
     if (volumetricParams.x > 0.5) {
         vec4 air = fogVolumeAt(worldPos);
         color = color * air.a + air.rgb;
@@ -373,12 +376,15 @@ void main() {
         // colour as the emissive and no light (FUN_0081fb10). This was
         // texture * (1 + boost), twice the texture at the defaults.
         result = texColor.rgb;
-    } else if (pc.interiorAmbient.w > 0.5) {
+    } else if (pc.interiorAmbient.w > 1.5) {
         // On an interior floor: its vertex colour as the ambient and as one
         // light down from a fixed direction (0xaeedf0, the same in render
-        // space), nothing of the sun - neither its light nor its shadow.
-        const vec3 interiorDir = normalize(vec3(0.30822, 0.30822, 0.9));
-        float idiff = max(dot(norm, interiorDir), 0.0);
+        // space), nothing of the sun's shadow. On a transition face the
+        // direction turns toward the sun's by the floor's alpha (0x007c1730),
+        // the colours having been carried toward the zone's already.
+        const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
+        vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, pc.interiorDirect.w));
+        float idiff = max(dot(norm, toLight), 0.0);
         result = pc.interiorAmbient.rgb * texColor.rgb + idiff * pc.interiorDirect.rgb * texColor.rgb;
     } else {
         vec3 ldir = normalize(-lightDir.xyz);
@@ -406,7 +412,10 @@ void main() {
         RtLight rt = rtLightAt(FragPos);
         shadow = rtShadow(rt, shadow);
 
-        result = rtAmbient(rt, ambientColor.rgb) * texColor.rgb
+        // The ambient as it eases in from an interior's (w = 1), or the
+        // zone's as it is (0x007a1e90).
+        vec3 ambient = pc.interiorAmbient.w > 0.5 ? pc.interiorAmbient.rgb : ambientColor.rgb;
+        result = rtAmbient(rt, ambient) * texColor.rgb
                + shadow * (diff * lightColor.rgb * texColor.rgb);
     }
 
@@ -421,7 +430,9 @@ void main() {
     float dist = length(viewPos.xyz - FragPos);
     float fogFactor = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
     if (fogMode == 1) {
-        shaded.rgb = applyFog(shaded.rgb, FragPos, dist);
+        // On an interior floor, the camera's fog colour (0x007c1730).
+        shaded.rgb = applyFog(shaded.rgb, FragPos, dist,
+                              pc.interiorAmbient.w > 1.5 ? cameraFogColor.rgb : fogColor.rgb);
     } else if (fogMode == 2) {
         shaded.rgb *= fogFactor;
         if (volumetricParams.x > 0.5) shaded.rgb *= fogVolumeAt(FragPos).a;

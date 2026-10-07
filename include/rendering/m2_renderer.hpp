@@ -7,6 +7,7 @@
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/grass_clearing.hpp"
+#include "pipeline/wmo_doodad_light.hpp"
 #include "rendering/m2_model_classifier.hpp"
 #include "rendering/m2_track_sampler.hpp"
 #include <vulkan/vulkan.h>
@@ -255,9 +256,20 @@ struct M2Instance {
     /// Lit as a doodad of a WMO interior group (pipeline::wmo_doodad_light):
     /// by its own ambient and one direct light from a fixed direction, with
     /// no sun and no sun shadow (0x007c1150). Otherwise the zone's light.
+    ///
+    /// A game object is a world object, lit like a unit by the floor under it
+    /// (refreshGameObjectLights): the floor's colour as both, carried toward
+    /// the zone's light on a transition face, with the direct light's
+    /// direction turned toward the sun's by interiorTowardSun.
     bool interiorLit = false;
     glm::vec3 interiorAmbient{0.0f};
     glm::vec3 interiorDirect{0.0f};
+    float interiorTowardSun = 0.0f;
+    /// A game object's floor and where it was asked for, so one that stays
+    /// put is not asked again.
+    std::optional<pipeline::wmo_doodad_light::FloorLight> floorLight;
+    bool floorQueried = false;
+    glm::vec3 floorQueryPos{0.0f};
     /// An alpha its owner sets on the whole model - the sky's crossfade
     /// between zones. Below one the instance is drawn in the blended pass
     /// alone, every layer of it, since an opaque layer cannot fade otherwise.
@@ -571,6 +583,17 @@ public:
     /// Mark an instance as a server game object so the adaptive doodad render
     /// distance can't cull it while the server still considers it visible.
     void setInstanceIsGameObject(uint32_t instanceId, bool isGameObject);
+    /// The floor under a point, as WMORenderer::unitInteriorLightAt finds it.
+    using FloorLightQuery =
+        std::function<std::optional<pipeline::wmo_doodad_light::FloorLight>(const glm::vec3&)>;
+    /// Lights every game object as the client lights a world object
+    /// (0x00781a10 makes one for each; 0x007c2e70, 0x007a0d60): on an
+    /// interior floor by that floor's light, toward the zone's on a
+    /// transition face, and by the zone's light elsewhere. A game object was
+    /// lit by the sun wherever it stood. `zoneAmbient`, `zoneDirect`: the
+    /// zone's light now.
+    void refreshGameObjectLights(const FloorLightQuery& floorAt, const glm::vec3& zoneAmbient,
+                                 const glm::vec3& zoneDirect);
     void setSkipCollision(uint32_t instanceId, bool skip);
     void setSkipWallCollision(uint32_t instanceId, bool skip);
     void clear();

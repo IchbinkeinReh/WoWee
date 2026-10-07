@@ -503,7 +503,8 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
             group.boundingBoxMax.z = read<float>(groupData, mogpOffset);
             group.portalStart = read<uint16_t>(groupData, mogpOffset);
             group.portalCount = read<uint16_t>(groupData, mogpOffset);
-            mogpOffset += 8; // transBatchCount, intBatchCount, extBatchCount, padding
+            group.transBatchCount = read<uint16_t>(groupData, mogpOffset);
+            mogpOffset += 6; // intBatchCount, extBatchCount, padding
             // fogIndices: 4 × uint8 (4 bytes total, NOT 4 × uint32)
             group.fogIndices[0] = read<uint8_t>(groupData, mogpOffset);
             group.fogIndices[1] = read<uint8_t>(groupData, mogpOffset);

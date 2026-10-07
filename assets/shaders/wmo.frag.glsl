@@ -17,6 +17,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
     mat4 rtViewProj;
     vec4 rtCameraPos;
     vec4 rtParams;
+    vec4 cameraFogColor;  // the camera's fog, its interior's blended in
 };
 
 #include "rt_lighting.glsli"
@@ -158,10 +159,12 @@ vec4 fogVolumeAt(vec3 worldPos) {
 // The zone's distance fog, then the air in front of it. The distance fog is
 // the far haze the sky is painted to meet, so it goes on first; the volume is
 // everything between the camera and that, sunlit shafts included.
-vec3 applyFog(vec3 color, vec3 worldPos, float dist) {
+// `distanceFog`: the zone's fog colour, or the camera's for an interior group
+// and what stands in one (0x007a8440).
+vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     // Raised to fogColor.w: 1 before map 530, the later fog's exponent after (0x00873210).
     float fogFactor = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
-    color = mix(fogColor.rgb, color, fogFactor);
+    color = mix(distanceFog, color, fogFactor);
     if (volumetricParams.x > 0.5) {
         vec4 air = fogVolumeAt(worldPos);
         color = color * air.a + air.rgb;
@@ -276,7 +279,7 @@ void main() {
     }
 
     float dist = length(viewPos.xyz - FragPos);
-    result = applyFog(result, FragPos, dist);
+    result = applyFog(result, FragPos, dist, isInterior != 0 ? cameraFogColor.rgb : fogColor.rgb);
 
     outColor = vec4(result, texColor.a);
 }
