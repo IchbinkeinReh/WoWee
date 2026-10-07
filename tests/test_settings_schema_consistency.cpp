@@ -338,7 +338,7 @@ TEST_CASE("every panel the client offers still has settings on it", "[settings][
     std::set<std::string> present;
     for (const auto& d : schema()) present.insert(d.category);
 
-    for (const char* category : {"Graphics", "Detail", "Grass", "Ray Tracing", "Upscaling", "Display",
+    for (const char* category : {"Graphics", "Detail", "Grass", "Water", "Ray Tracing", "Upscaling", "Display",
                                  "Camera", "Interface", "Minimap", "Action Bars", "HUD",
                                  "Combat", "Names", "Nameplates", "Combat Text", "Unit Frames",
                                  "Sound", "Sound Effects", "Chat", "Gameplay"}) {
@@ -360,7 +360,8 @@ TEST_CASE("every panel the client offers still has settings on it", "[settings][
     // is more than the 413 by 428 container holds in two columns, and the
     // last four were being laid out past the bottom of the second one.
     // Twenty with Ray Tracing, for the same reason as Grass: Graphics and
-    // Detail both fill their columns.
-    INFO("the schema names " << present.size() << " categories where twenty are expected");
-    CHECK(present.size() == 20);
+    // Detail both fill their columns. Twenty-one with Water, for the same
+    // reason again.
+    INFO("the schema names " << present.size() << " categories where twenty-one are expected");
+    CHECK(present.size() == 21);
 }

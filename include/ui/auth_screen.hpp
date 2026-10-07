@@ -264,7 +264,8 @@ private:
         bool pom             = true;
         int  pomQuality      = 1;   // 0=Low 1=Medium 2=High
         int  upscalingMode   = 0;   // 0=Off 1=FSR1 2=FSR3
-        bool waterRefraction = true;
+        /// This client's procedural water; off is the client's own liquid.
+        bool enhancedWater   = false;
         int  groundClutter   = kDefaultGroundClutter; // 0-150
         // Ground cover, so that a preset picked here means what the same
         // preset means in game. Ultra grows it; the others do not.

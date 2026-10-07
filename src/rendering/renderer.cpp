@@ -1049,11 +1049,16 @@ void Renderer::unregisterPreview(CharacterPreview* preview) {
     }
 }
 
-void Renderer::setWaterRefractionEnabled(bool /*enabled*/) {
-    // Always on. Kept as a call rather than deleted because saved settings and
-    // the CVar bridge still reach it, and a config written before this that says
-    // 0 should not be able to turn it off again.
-    if (waterRenderer) waterRenderer->setRefractionEnabled(true);
+void Renderer::setEnhancedWaterEnabled(bool enabled) {
+    // Refraction belongs to the enhanced water: its shoreline, meniscus and
+    // underwater tint are written against water that refracts, so it is on
+    // exactly when that water is drawn. The client's own liquid needs neither
+    // the scene copy nor the reflection pass.
+    enhancedWater_ = enabled;
+    if (waterRenderer) {
+        waterRenderer->setEnhancedWater(enabled);
+        waterRenderer->setRefractionEnabled(enabled);
+    }
 }
 void Renderer::setMsaaSamples(VkSampleCountFlagBits samples) {
     if (!vkCtx) return;
@@ -2139,6 +2144,7 @@ void Renderer::update(float deltaTime) {
             wc.oceanFar = glm::vec4(wl.oceanFarColor, wl.oceanDeepAlpha);
             wc.riverClose = glm::vec4(wl.riverCloseColor, wl.waterShallowAlpha);
             wc.riverFar = glm::vec4(wl.riverFarColor, wl.waterDeepAlpha);
+            wc.sunColor = wl.sunColor;
             waterRenderer->setLightWaterColors(wc);
         }
 
@@ -3823,6 +3829,10 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (!waterRenderer->initialize(vkCtx, perFrameSetLayout)) {
             LOG_ERROR("Failed to initialize water renderer");
             waterRenderer.reset();
+        } else {
+            waterRenderer->loadClientLiquids(assetManager);
+            waterRenderer->setEnhancedWater(enhancedWater_);
+            waterRenderer->setRefractionEnabled(enhancedWater_);
         }
     }
 
@@ -4514,6 +4524,7 @@ void Renderer::setSecondaryViewportScissor(VkCommandBuffer cmd) {
 
 void Renderer::renderReflectionPass() {
     if (!waterRenderer || !camera || !waterRenderer->hasReflectionPass() || !waterRenderer->hasSurfaces()) return;
+    if (!waterRenderer->isEnhancedWater()) return;  // the client's liquid reflects nothing
     if (currentCmd == VK_NULL_HANDLE || !reflPerFrameUBOMapped) return;
 
     // Select the current frame's pre-bound reflection descriptor set

@@ -8,18 +8,26 @@
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
+#include <array>
+#include <string>
+#include <unordered_map>
+
+#include "rendering/client_liquid.hpp"
+#include "rendering/vk_texture.hpp"
 
 namespace wowee {
 namespace pipeline {
     struct ADTTerrain;
     struct LiquidData;
     struct WMOLiquid;
+    class AssetManager;
 }
 
 namespace rendering {
 
 class Camera;
 class VkContext;
+class VkTexture;
 
 /**
  * Water surface for a single map chunk
@@ -58,6 +66,29 @@ struct WaterSurface {
     // Material descriptor set (set 1)
     VkDescriptorSet materialSet = VK_NULL_HANDLE;
 
+    // --- The client's own liquid (client_liquid.hpp) ---
+    /// The LiquidType.dbc row this is drawn with. MH2O names it outright; MCLQ
+    /// and the merged tiles carry the basic type, turned into its row (1-4).
+    uint32_t clientLiquidType = 0;
+    /// Per vertex, laid out as `heights`: the depth byte, and the stored
+    /// texture coordinate a vertex-format-1 liquid carries. Empty when absent.
+    std::vector<uint8_t> depths;
+    std::vector<glm::vec2> storedUVs;
+    /// What this client moved the heights by on its own account; the client's
+    /// draw puts the surface back where the file has it.
+    float clientZOffset = 0.0f;
+    /// A WMO liquid's vertices where the file has them, each with its own
+    /// height (0x007a7cc0); this client draws its own surface flat.
+    std::vector<glm::vec3> clientPositions;
+    /// A WMO liquid drawn the interior way (0x00793d20), and the MOMT colour
+    /// its vertices take then.
+    bool wmoInterior = false;
+    uint32_t wmoColorBGRA = 0xffffffffu;
+    /// The client's vertices (position, surface coordinate, depth coordinate,
+    /// colour), drawn with the index buffer above.
+    ::VkBuffer clientVertexBuffer = VK_NULL_HANDLE;
+    VmaAllocation clientVertexAlloc = VK_NULL_HANDLE;
+
     [[nodiscard]] bool hasHeightData() const { return !heights.empty(); }
 };
 
@@ -86,7 +117,10 @@ public:
     void loadFromTerrain(const pipeline::ADTTerrain& terrain, bool append = false,
                          int tileX = -1, int tileY = -1);
 
-    void loadFromWMO(const pipeline::WMOLiquid& liquid, const glm::mat4& modelMatrix, uint32_t wmoId);
+    /// `momtDiffuseBGRA`: the diffuse colour of the MOMT entry the liquid
+    /// names, which an interior liquid's vertices take (0x00793d20).
+    void loadFromWMO(const pipeline::WMOLiquid& liquid, const glm::mat4& modelMatrix, uint32_t wmoId,
+                     uint32_t momtDiffuseBGRA = 0xffffffffu);
     void removeWMO(uint32_t wmoId);
     void removeTile(int tileX, int tileY);
     void clear();
@@ -143,6 +177,17 @@ public:
     void setEnabled(bool enabled) { renderingEnabled = enabled; }
     bool isEnabled() const { return renderingEnabled; }
 
+    /// Which water is drawn. Off - the default - is the client's own liquid:
+    /// its LiquidType textures, its depth ramps and its blending
+    /// (client_liquid.hpp). On is this client's procedural water with
+    /// reflection and refraction.
+    void setEnhancedWater(bool enabled) { enhancedWater_ = enabled; }
+    [[nodiscard]] bool isEnhancedWater() const { return enhancedWater_; }
+
+    /// LiquidType.dbc and LiquidMaterial.dbc, for the client's liquid. Textures
+    /// are loaded on a type's first draw.
+    void loadClientLiquids(pipeline::AssetManager* assetManager);
+
     void setRefractionEnabled(bool enabled);
     bool isRefractionEnabled() const { return refractionEnabled; }
     // Display brightness (1.0 = neutral). The scene-history capture used for
@@ -177,6 +222,10 @@ public:
         glm::vec4 oceanFar{0.0f};
         glm::vec4 riverClose{0.0f};
         glm::vec4 riverFar{0.0f};
+        /// ch9, which the world light carries as its specular colour
+        /// (0x007816f0 copies the light's +0xf8 into it) and
+        /// psLiquidWater's highlight is tinted by.
+        glm::vec3 sunColor{1.0f};
     };
     void setLightWaterColors(const LightWaterColors& colors) {
         lightWaterColors_ = colors;
@@ -186,6 +235,56 @@ public:
 private:
     LightWaterColors lightWaterColors_;
     bool hasLightWaterColors_ = false;
+    bool enhancedWater_ = false;
+    double clientTimeSeconds_ = 0.0;
+
+    // --- The client's own liquid ---
+    struct ClientTexSlot {
+        bool loaded = false;
+        client_liquid::ProceduralTex procedural = client_liquid::ProceduralTex::None;
+        std::vector<std::unique_ptr<VkTexture>> frames;
+        std::vector<VkDescriptorSet> sets;  // one per frame, set 1 or 2 layout
+    };
+    struct ClientLiquid {
+        client_liquid::LiquidTypeRecord record;
+        int32_t lvf = 0;
+        client_liquid::MaterialKind kind = client_liquid::MaterialKind::Water;
+        std::array<ClientTexSlot, 6> slots;
+    };
+    std::unordered_map<uint32_t, client_liquid::LiquidTypeRecord> clientTypeRecords_;
+    std::unordered_map<uint32_t, client_liquid::LiquidMaterialRecord> clientMaterials_;
+    std::unordered_map<uint32_t, ClientLiquid> clientLiquids_;
+    pipeline::AssetManager* assetManager_ = nullptr;
+
+    VkDescriptorSetLayout clientTexSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout clientRampSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool clientTexPool_ = VK_NULL_HANDLE;
+    VkDescriptorPool clientRampPool_ = VK_NULL_HANDLE;
+    VkPipelineLayout clientPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline clientWaterPipeline_ = VK_NULL_HANDLE;
+    VkPipeline clientMagmaPipeline_ = VK_NULL_HANDLE;
+    VkPipeline clientWater1xPipeline_ = VK_NULL_HANDLE;
+    VkPipeline clientMagma1xPipeline_ = VK_NULL_HANDLE;
+    std::unique_ptr<VkTexture> clientWhiteTex_;
+    VkDescriptorSet clientWhiteSet_ = VK_NULL_HANDLE;
+    static constexpr VkDeviceSize kRampUBOSize = 192 * sizeof(glm::vec4);
+    ::VkBuffer clientRampUBO_ = VK_NULL_HANDLE;
+    VmaAllocation clientRampAlloc_ = VK_NULL_HANDLE;
+    void* clientRampMapped_ = nullptr;
+    VkDescriptorSet clientRampSets_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+
+    bool initClientLiquid(VkDescriptorSetLayout perFrameLayout);
+    void destroyClientLiquid();
+    /// Both client pipelines against one pass; shared by initialize,
+    /// recreatePipelines and the 1x pass, so the three cannot disagree.
+    void buildClientPipelines(VkRenderPass pass, VkSampleCountFlagBits samples,
+                              VkPipeline& water, VkPipeline& magma);
+    ClientLiquid* clientLiquidFor(uint32_t liquidType);
+    void loadClientSlot(ClientTexSlot& slot, const std::string& name);
+    void createClientMesh(WaterSurface& surface);
+    void writeClientRamps(uint32_t frameSlot);
+    void renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                      bool use1x, uint32_t frameIndex);
 
     void createWaterMesh(WaterSurface& surface);
     void destroyWaterMesh(WaterSurface& surface);

@@ -240,6 +240,11 @@
     "Name": 1,
     "Flags": 2
   },
+  "LiquidMaterial": {
+    "Flags": 2,
+    "ID": 0,
+    "LVF": 1
+  },
   "LiquidType": {
     "ID": 0,
     "Flags": 2,
@@ -247,7 +252,11 @@
     "FogDarkenIntensity": 7,
     "AmbDarkenIntensity": 8,
     "DirDarkenIntensity": 9,
-    "LightID": 10
+    "LightID": 10,
+    "MaterialID": 14,
+    "Texture": 15,
+    "Float": 23,
+    "Int": 41
   },
   "Map": {
     "ID": 0,

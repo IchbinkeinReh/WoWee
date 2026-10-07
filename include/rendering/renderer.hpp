@@ -446,7 +446,11 @@ public:
     void setFSREnabled(bool enabled);
     void setFSR2Enabled(bool enabled);
 
-    void setWaterRefractionEnabled(bool enabled);
+    /// Off (the default): the client's own liquid (WaterRenderer's client
+    /// path). On: this client's procedural water, with its reflection pass
+    /// and refraction copy.
+    void setEnhancedWaterEnabled(bool enabled);
+    [[nodiscard]] bool isEnhancedWaterEnabled() const { return enhancedWater_; }
 
 private:
     void applyMsaaChange();
@@ -621,6 +625,7 @@ private:
     // endFrame and added in the overlay pass ahead of the interface.
     std::unique_ptr<SunShafts> sunShafts_;
     bool sunShaftsEnabled_ = false;  // opt-in: the original client has none
+    bool enhancedWater_ = false;     // opt-in: the original client draws its own liquid
     /// renderWorld ran this frame. The shafts are built from the world's
     /// picture, and a login screen or a loading screen is not one.
     bool worldDrawnThisFrame_ = false;

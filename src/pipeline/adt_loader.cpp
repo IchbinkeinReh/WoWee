@@ -556,11 +556,22 @@ void ADTLoader::parseMCLQ(std::span<const uint8_t> data, int chunkIndex,
     else if (mcnkFlags & 0x10) liquidType = 2;  // magma
     else if (mcnkFlags & 0x20) liquidType = 3;  // slime
 
-    // Read 9x9 height values (skip depth/flow bytes, just read the float height)
+    // Read 9x9 vertices: the float height at +4, and ahead of it a water's
+    // depth byte or a magma's two texture coordinates.
     const std::span<const uint8_t> vertData = data.subspan(8);
+    const bool magmaVerts = liquidType >= 2;
     std::vector<float> heights(81);
+    std::vector<uint8_t> depths;
+    std::vector<uint16_t> uvs;
+    if (magmaVerts) uvs.resize(162); else depths.resize(81);
     for (int i = 0; i < 81; i++) {
         heights[i] = readFloat(vertData, i * 8 + 4);  // float at offset 4 within each 8-byte vertex
+        if (magmaVerts) {
+            uvs[i * 2] = readUInt16(vertData, i * 8);
+            uvs[i * 2 + 1] = readUInt16(vertData, i * 8 + 2);
+        } else {
+            depths[i] = vertData[i * 8];
+        }
     }
 
     // Read 8x8 tile flags
@@ -605,6 +616,10 @@ void ADTLoader::parseMCLQ(std::span<const uint8_t> data, int chunkIndex,
     layer.width = 8;   // 8 tiles = 9 vertices per axis
     layer.height = 8;
     layer.heights = std::move(heights);
+    layer.vertexFormat = magmaVerts ? 1 : 0;
+    layer.fromMCLQ = true;
+    layer.depths = std::move(depths);
+    layer.uvs = std::move(uvs);
     layer.mask.resize(8);  // 8 bytes = 64 bits for 8x8 tiles
     for (int row = 0; row < 8; row++) {
         uint8_t rowBits = 0;
@@ -734,6 +749,27 @@ void ADTLoader::parseMH2O(std::span<const uint8_t> data, ADTTerrain& terrain) {
 
             // Check liquid object flags (LVF) to determine vertex format
             bool hasHeightData = (liquidObject != 2);  // LVF_height_depth or LVF_height_texcoord
+            layer.vertexFormat = liquidObject;
+
+            // What follows the heights: LVF 0 a depth byte a vertex, 1 two
+            // ushort texture coordinates, 2 depth alone, 3 coordinates then
+            // depth. The client draws with both (0x007ce390).
+            if (offsetVertexData > 0 && liquidObject <= 3) {
+                size_t at = offsetVertexData + (hasHeightData ? numVertices * sizeof(float) : 0);
+                if (liquidObject == 1 || liquidObject == 3) {
+                    if (at + numVertices * 4 <= data.size()) {
+                        layer.uvs.resize(numVertices * 2);
+                        for (size_t i = 0; i < numVertices * 2; i++) {
+                            layer.uvs[i] = readUInt16(data, at + i * 2);
+                        }
+                    }
+                    at += numVertices * 4;
+                }
+                if (liquidObject != 1 && at + numVertices <= data.size()) {
+                    layer.depths.assign(data.begin() + static_cast<std::ptrdiff_t>(at),
+                                        data.begin() + static_cast<std::ptrdiff_t>(at + numVertices));
+                }
+            }
 
             if (hasHeightData && offsetVertexData > 0) {
                 size_t vertexOffset = offsetVertexData;

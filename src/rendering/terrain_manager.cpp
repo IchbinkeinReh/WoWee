@@ -1213,7 +1213,12 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                             uint8_t basicType = (lt == 0) ? 0 : ((lt - 1) % 4);
                             if (basicType < 2) continue;
                         }
-                        waterRenderer->loadFromWMO(group.liquid, modelMatrix, wmoInstId);
+                        // The MOMT entry MLIQ names gives an interior liquid its
+                        // colour (0x00793d20 reads its diffuse colour, +0x1c).
+                        const auto& mats = wmoReady.model.materials;
+                        const uint32_t momtColor = group.liquid.momtIndex < mats.size()
+                            ? mats[group.liquid.momtIndex].color2 : 0xffffffffu;
+                        waterRenderer->loadFromWMO(group.liquid, modelMatrix, wmoInstId, momtColor);
                         liquidGroupsLoaded++;
                     }
                     // More liquid groups remain on this WMO - yield

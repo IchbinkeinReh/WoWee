@@ -121,6 +121,17 @@ struct WMOLiquid {
     uint16_t materialId = 0;    // Liquid material/type
     std::vector<float> heights; // Height per vertex (xVerts * yVerts)
     std::vector<uint8_t> flags; // Flags per tile (xTiles * yTiles)
+    /// Each vertex's first four bytes, ahead of its height: a water's depth
+    /// in the low byte, or a magma's two int16 texture coordinates. The client
+    /// draws with both (0x007a7b00).
+    std::vector<uint32_t> vertexInfo;
+    /// MLIQ's own material id as stored: an index into MOMT, whose diffuse
+    /// colour an interior liquid is drawn in (0x00793d20). `materialId` above
+    /// falls back to the group's liquid type when this is 0.
+    uint16_t momtIndex = 0;
+    /// The group's MOGP flags; 0x48 decides whether its liquid is drawn the
+    /// interior way (0x00793d20).
+    uint32_t groupFlags = 0;
 
     [[nodiscard]] bool hasLiquid() const { return xVerts > 0 && yVerts > 0; }
 };

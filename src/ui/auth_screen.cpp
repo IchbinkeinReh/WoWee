@@ -1659,9 +1659,10 @@ void AuthScreen::applyPresetToState(LoginGraphicsState& s, int preset) {
     s.sunShafts      = p.sunShafts;
     s.lightShafts    = p.lightShafts;
     s.fogSkyBlend    = p.fogSkyBlend;
+    s.enhancedWater  = p.enhancedWater;
 
     // Not in the table because the in-game preset has no opinion about them
-    // either: upscaling and water refraction are the player's, and brightness,
+    // either: upscaling is the player's, and brightness,
     // vsync and fullscreen are not quality settings. A preset that reset them
     // would undo a display choice every time one was picked.
 }
@@ -1717,7 +1718,7 @@ void AuthScreen::loadLoginGraphicsState() {
         else if (key == "pom")              loginGfx_.pom            = (val == "1");
         else if (key == "pom_quality")      loginGfx_.pomQuality     = clampI(std::stoi(val), 0, rendering::kPomQualityCount - 1);
         else if (key == "upscaling_mode")   loginGfx_.upscalingMode  = clampI(std::stoi(val), 0, 2);
-        else if (key == "water_refraction") loginGfx_.waterRefraction = (val == "1");
+        else if (key == "enhanced_water")   loginGfx_.enhancedWater  = (val == "1");
         else if (key == "ground_clutter_density") loginGfx_.groundClutter = clampI(std::stoi(val), 0, 150);
         else if (key == "grass_enabled")    loginGfx_.grass          = (val == "1");
         else if (key == "grass_density")    loginGfx_.grassDensity   = clampI(std::stoi(val), 0, 300);
@@ -1760,7 +1761,10 @@ void AuthScreen::saveLoginGraphicsState() {
     cfg["pom"]                   = loginGfx_.pom            ? "1" : "0";
     cfg["pom_quality"]           = std::to_string(loginGfx_.pomQuality);
     cfg["upscaling_mode"]        = std::to_string(loginGfx_.upscalingMode);
-    cfg["water_refraction"]      = loginGfx_.waterRefraction ? "1" : "0";
+    cfg["enhanced_water"]        = loginGfx_.enhancedWater   ? "1" : "0";
+    // Written before the enhanced water had a switch, for a refraction that
+    // was always on; nothing reads it now.
+    cfg.erase("water_refraction");
     cfg["ground_clutter_density"]= std::to_string(loginGfx_.groundClutter);
     cfg["grass_enabled"]         = loginGfx_.grass ? "1" : "0";
     cfg["grass_density"]         = std::to_string(loginGfx_.grassDensity);
@@ -1869,7 +1873,7 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
         toggle("gfx.fxaa", "FXAA", &loginGfx_.fxaa);
         toggle("gfx.normals", "Normal mapping", &loginGfx_.normalMapping);
         toggle("gfx.pom", "Parallax occlusion", &loginGfx_.pom);
-        toggle("gfx.water", "Water refraction", &loginGfx_.waterRefraction);
+        toggle("gfx.water", "Enhanced water", &loginGfx_.enhancedWater);
         toggle("gfx.vsync", "V-Sync", &loginGfx_.vsync);
         toggle("gfx.fullscreen", "Fullscreen", &loginGfx_.fullscreen);
     }

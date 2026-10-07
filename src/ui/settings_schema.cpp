@@ -67,12 +67,9 @@ constexpr SettingDesc kSchema[] = {
     // Each of the moved settings is bound to the cvar its old control wrote,
     // in kClientCVars, so an addon or a macro that writes the cvar still
     // reaches the same value this panel shows.
-    // No water refraction row on purpose. It is not a choice any more: the
-    // shoreline masks, the meniscus at the waterline and the underwater tint are
-    // all written against water that refracts, and the flat fallback left them
-    // reading against a surface that does not behave the way they assume. The
-    // shader keeps its own guard for a frame whose scene copy is not there yet,
-    // which is a different thing from a player turning the feature off.
+    // There is no water refraction row: refraction is part of the enhanced
+    // water below - its shoreline masks, meniscus and underwater tint are all
+    // written against water that refracts - and on exactly when that is.
     // 1 and 0 by default: the original client's fog, which ends at the zone's
     // own distance in the zone's own fog colour (Wow.exe 0x007f16f0). They
     // were 0.4 and 0.7, which put the fog two and a half times farther out
@@ -196,6 +193,16 @@ constexpr SettingDesc kSchema[] = {
      "are sharper and cost more; Low suits weaker hardware. Not in\n"
      "the original client, so off unless chosen.",
      "Off|Low|Medium|High", 0},
+    // Off by default, and off in every preset: the original client draws its
+    // liquids with their own animated textures and the light's depth colours
+    // (WaterRenderer's client path), which is what is drawn when this is off.
+    // A page of its own: Detail is full to the bottom of both columns, and
+    // this one row put past it is a row nobody finds.
+    {"enhancedwater", "Enhanced water (reflections and refraction)", SettingKind::Bool, 0, 0, 0,
+     "Water", "Water",
+     "This client's own water: waves, reflections of the world, the\n"
+     "bed seen through it and foam at the shore. Off is the original\n"
+     "client's animated water. Costs a reflection pass each frame.", "", 0},
 
     // Off by default: the compute tracer is what most machines get, and it
     // costs real frames. One row rather than three switches, because each

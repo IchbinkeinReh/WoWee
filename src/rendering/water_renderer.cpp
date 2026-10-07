@@ -12,10 +12,14 @@
 #include "rendering/frustum.hpp"
 #include "pipeline/adt_loader.hpp"
 #include "pipeline/wmo_loader.hpp"
+#include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_loader.hpp"
+#include "pipeline/dbc_layout.hpp"
 #include "core/logger.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <array>
@@ -214,6 +218,11 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
         return false;
     }
 
+    // The client's own liquid, drawn while enhanced water is off.
+    if (!initClientLiquid(perFrameLayout)) {
+        LOG_ERROR("WaterRenderer: failed to set up the client's liquid pipelines");
+    }
+
     LOG_INFO("Water renderer initialized (Vulkan)");
     return true;
 }
@@ -275,6 +284,10 @@ void WaterRenderer::recreatePipelines() {
 
     if (!waterPipeline) {
         LOG_ERROR("WaterRenderer::recreatePipelines: failed to create pipeline");
+    }
+
+    if (clientPipelineLayout_) {
+        buildClientPipelines(mainPass, vkCtx->getMsaaSamples(), clientWaterPipeline_, clientMagmaPipeline_);
     }
 }
 
@@ -342,6 +355,7 @@ void WaterRenderer::shutdown() {
     destroyWater1xResources();
     destroyReflectionResources();
     destroySceneHistoryResources();
+    destroyClientLiquid();
     destroy(device, waterPipeline);
     destroy(device, pipelineLayout);
     destroy(device, sceneDescPool);
@@ -665,6 +679,23 @@ void WaterRenderer::updateMaterialUBO(WaterSurface& surface) {
 // Data loading (preserved from GL version - no GL calls)
 // ==============================================================
 
+namespace {
+
+/// The LiquidType row a terrain layer is drawn with: MH2O names it, MCLQ
+/// carries the basic type, which is the row one above it (1 water, 2 ocean,
+/// 3 magma, 4 slime).
+uint32_t clientTypeOfLayer(const pipeline::ADTTerrain::WaterLayer& layer) {
+    return layer.fromMCLQ ? static_cast<uint32_t>(layer.liquidType) + 1u : layer.liquidType;
+}
+
+/// A layer's stored coordinate at one of its vertices, as 0x007ce390 scales it.
+glm::vec2 layerStoredUV(const pipeline::ADTTerrain::WaterLayer& layer, size_t vertex) {
+    if (vertex * 2 + 1 >= layer.uvs.size()) return glm::vec2(0.0f);
+    return client_liquid::chunkStoredCoord(layer.uvs[vertex * 2], layer.uvs[vertex * 2 + 1]);
+}
+
+}  // namespace
+
 void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool append,
                                      int tileX, int tileY) {
     constexpr float TILE_SIZE = 33.33333f / 8.0f;
@@ -786,10 +817,17 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
                         for (float& h : surface.heights) h -= 1.0f;
                         surface.minHeight -= 1.0f;
                         surface.maxHeight -= 1.0f;
+                        surface.clientZOffset += 1.0f;
                     }
                 }
 
                 surface.mask = layer.mask;
+                surface.clientLiquidType = clientTypeOfLayer(layer);
+                if (layer.depths.size() == numVertices) surface.depths = layer.depths;
+                if (layer.uvs.size() == numVertices * 2) {
+                    surface.storedUVs.resize(numVertices);
+                    for (size_t v = 0; v < numVertices; ++v) surface.storedUVs[v] = layerStoredUV(layer, v);
+                }
                 surface.tileX = tileX;
                 surface.tileY = tileY;
 
@@ -830,6 +868,8 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
         const int gridW = MERGED_W + 1;  // 129
         const int gridH = MERGED_W + 1;
         surface.heights.resize(gridW * gridH, groupHeight);
+        surface.clientLiquidType = chunkLayers.empty() ? key.liquidType
+                                                       : clientTypeOfLayer(*chunkLayers.front().layer);
 
         // Initialize mask (128×128 sub-tiles)
         // Mask uses LSB bit order: tileIndex = row * 128 + col
@@ -888,6 +928,15 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
                     }
 
                     surface.heights[mgy * gridW + mgx] = h;
+                    const size_t layerVertex = static_cast<size_t>(ly) * layerGridW + lx;
+                    if (layer.depths.size() == numVertices) {
+                        if (surface.depths.empty()) surface.depths.assign(surface.heights.size(), 0);
+                        surface.depths[mgy * gridW + mgx] = layer.depths[layerVertex];
+                    }
+                    if (layer.uvs.size() == numVertices * 2) {
+                        if (surface.storedUVs.empty()) surface.storedUVs.assign(surface.heights.size(), glm::vec2(0.0f));
+                        surface.storedUVs[mgy * gridW + mgx] = layerStoredUV(layer, layerVertex);
+                    }
                     if (h < surface.minHeight) surface.minHeight = h;
                     if (h > surface.maxHeight) surface.maxHeight = h;
                 }
@@ -919,6 +968,7 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
                 for (float& h : surface.heights) h -= 1.0f;
                 surface.minHeight -= 1.0f;
                 surface.maxHeight -= 1.0f;
+                surface.clientZOffset += 1.0f;
             }
         }
 
@@ -953,9 +1003,9 @@ void WaterRenderer::removeTile(int tileX, int tileY) {
     }
 }
 
-void WaterRenderer::loadFromWMO([[maybe_unused]] const pipeline::WMOLiquid& liquid,
-                                 [[maybe_unused]] const glm::mat4& modelMatrix,
-                                 [[maybe_unused]] uint32_t wmoId) {
+void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
+                                 const glm::mat4& modelMatrix,
+                                 uint32_t wmoId, uint32_t momtDiffuseBGRA) {
     if (!liquid.hasLiquid() || liquid.xTiles == 0 || liquid.yTiles == 0) return;
     if (liquid.xVerts < 2 || liquid.yVerts < 2) return;
     if (liquid.xTiles != liquid.xVerts - 1 || liquid.yTiles != liquid.yVerts - 1) return;
@@ -1006,6 +1056,41 @@ void WaterRenderer::loadFromWMO([[maybe_unused]] const pipeline::WMOLiquid& liqu
     surface.position.z = adjustedZ;
 
     if (surface.origin.z > 2000.0f || surface.origin.z < -500.0f) return;
+
+    // The client's draw of it (0x00793d20, 0x007a7cc0, 0x007a7b00): every
+    // vertex at its own height, the depth byte or the magma coordinate ahead
+    // of it, and the interior look for a group that is not exterior.
+    {
+        uint32_t ltFlags = 0;
+        if (auto it = clientTypeRecords_.find(liquid.materialId); it != clientTypeRecords_.end())
+            ltFlags = it->second.flags;
+        surface.wmoInterior = client_liquid::wmoLiquidIsInterior(liquid.groupFlags, ltFlags);
+        surface.clientLiquidType = surface.wmoInterior
+            ? client_liquid::wmoInteriorLiquidType(liquid.materialId) : liquid.materialId;
+        surface.wmoColorBGRA = momtDiffuseBGRA;
+        const bool haveInfo = liquid.vertexInfo.size() == static_cast<size_t>(vertexCount);
+        surface.clientPositions.resize(vertexCount);
+        if (haveInfo) {
+            surface.depths.resize(vertexCount);
+            surface.storedUVs.resize(vertexCount);
+        }
+        for (int gy = 0; gy < gridHeight; ++gy) {
+            for (int gx = 0; gx < gridWidth; ++gx) {
+                const int i = gy * gridWidth + gx;
+                const float h = i < static_cast<int>(liquid.heights.size()) ? liquid.heights[i]
+                                                                            : liquid.basePosition.z;
+                const glm::vec3 local = localBase + localStepX * static_cast<float>(gx) +
+                                        localStepY * static_cast<float>(gy);
+                surface.clientPositions[i] = glm::vec3(modelMatrix * glm::vec4(local.x, local.y, h, 1.0f));
+                if (haveInfo) {
+                    const uint32_t info = liquid.vertexInfo[i];
+                    surface.depths[i] = static_cast<uint8_t>(info & 0xff);
+                    surface.storedUVs[i] = client_liquid::wmoStoredCoord(
+                        static_cast<int16_t>(info & 0xffff), static_cast<int16_t>(info >> 16));
+                }
+            }
+        }
+    }
 
     // Build tile mask from MLIQ flags
     size_t tileCount = static_cast<size_t>(surface.width) * static_cast<size_t>(surface.height);
@@ -1101,7 +1186,13 @@ void WaterRenderer::clear() {
 // ==============================================================
 
 void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
-                            const Camera& camera, float /*time*/, bool use1x, uint32_t frameIndex) {
+                            const Camera& camera, float time, bool use1x, uint32_t frameIndex) {
+    if (!enhancedWater_) {
+        // The client's own liquid; none of the enhanced water's passes run.
+        clientTimeSeconds_ = time;
+        if (renderingEnabled && !surfaces.empty()) renderClient(cmd, perFrameSet, camera, use1x, frameIndex);
+        return;
+    }
     // The wake as it stands, into this frame's slot - safe now, the frame has
     // waited for the GPU to finish with it.
     uploadFrameUBO();
@@ -1426,6 +1517,8 @@ void WaterRenderer::createWaterMesh(WaterSurface& surface) {
         VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
     surface.indexBuffer = ib.buffer;
     surface.indexAlloc = ib.allocation;
+
+    createClientMesh(surface);
 }
 
 void WaterRenderer::destroyWaterMesh(WaterSurface& surface) {
@@ -1441,6 +1534,10 @@ void WaterRenderer::destroyWaterMesh(WaterSurface& surface) {
     VmaAllocation materialAlloc = surface.materialAlloc;
     VkDescriptorPool pool = materialDescPool;
     VkDescriptorSet materialSet = surface.materialSet;
+    ::VkBuffer clientVB = surface.clientVertexBuffer;
+    VmaAllocation clientVBAlloc = surface.clientVertexAlloc;
+    surface.clientVertexBuffer = VK_NULL_HANDLE;
+    surface.clientVertexAlloc = VK_NULL_HANDLE;
 
     surface.vertexBuffer = VK_NULL_HANDLE;
     surface.vertexAlloc = VK_NULL_HANDLE;
@@ -1451,7 +1548,11 @@ void WaterRenderer::destroyWaterMesh(WaterSurface& surface) {
     surface.materialSet = VK_NULL_HANDLE;
 
     vkCtx->deferAfterAllFrameFences([device, allocator, vertexBuffer, vertexAlloc, indexBuffer, indexAlloc,
-                                     materialUBO, materialAlloc, pool, materialSet]() {
+                                     materialUBO, materialAlloc, pool, materialSet, clientVB, clientVBAlloc]() {
+        if (clientVB) {
+            AllocatedBuffer ab{}; ab.buffer = clientVB; ab.allocation = clientVBAlloc;
+            destroyBuffer(allocator, ab);
+        }
         if (vertexBuffer) {
             AllocatedBuffer ab{}; ab.buffer = vertexBuffer; ab.allocation = vertexAlloc;
             destroyBuffer(allocator, ab);
@@ -2171,6 +2272,10 @@ bool WaterRenderer::createWater1xPass(VkFormat colorFormat, VkFormat depthFormat
         LOG_ERROR("WaterRenderer: failed to create 1x water pipeline");
         return false;
     }
+    if (clientPipelineLayout_) {
+        buildClientPipelines(water1xRenderPass, VK_SAMPLE_COUNT_1_BIT,
+                             clientWater1xPipeline_, clientMagma1xPipeline_);
+    }
 
     LOG_INFO("WaterRenderer: created 1x water pass and pipeline");
     return true;
@@ -2212,7 +2317,578 @@ void WaterRenderer::destroyWater1xResources() {
     }
     water1xFramebuffers.clear();
     destroy(device, water1xPipeline);
+    destroy(device, clientWater1xPipeline_);
+    destroy(device, clientMagma1xPipeline_);
     if (water1xRenderPass) { vkDestroyRenderPass(device, water1xRenderPass, nullptr); water1xRenderPass = VK_NULL_HANDLE; }
 }
+
+// ==============================================================
+// The client's own liquid (client_liquid.hpp)
+// ==============================================================
+
+namespace {
+
+/// The client's liquid vertex (0x007ce390, 0x007a7b00): position, surface
+/// coordinate, depth coordinate and colour.
+struct ClientLiquidVertex {
+    glm::vec3 pos;
+    glm::vec2 surfaceUV;
+    glm::vec2 depthUV;
+    uint8_t color[4];
+};
+static_assert(sizeof(ClientLiquidVertex) == 32, "liquid.vert.glsl reads a 32-byte vertex");
+
+struct ClientLiquidPush {
+    glm::vec4 animMatrix;  // the surface coordinate's 2x2, column by column
+    glm::vec4 params;      // depth v scale, light, kind, depth source
+    glm::vec4 scroll;      // the surface coordinate's translation
+    glm::vec4 specular;    // c36: colour, and the exponent in w (0 for no highlight)
+};
+
+/// psLiquidWater's specular exponent, c36.w (0x008a38b0 writes 6.0 to 0xd44ef4).
+constexpr float kLiquidSpecularPower = 6.0f;
+
+constexpr uint32_t kClientTexSets = 2048;
+
+/// Where a liquid's depth stage reads from, as liquid.frag.glsl numbers them.
+float depthSourceOf(client_liquid::ProceduralTex p) {
+    switch (p) {
+        case client_liquid::ProceduralTex::River: return 0.0f;
+        case client_liquid::ProceduralTex::Ocean: return 1.0f;
+        case client_liquid::ProceduralTex::WmoWater: return 2.0f;
+        case client_liquid::ProceduralTex::Unknown: return 3.0f;
+        default: return 4.0f;
+    }
+}
+
+/// A row for a liquid type this data has none for: the basic type's look as
+/// 3.3.5a's own rows give it, so data from before LiquidType carried textures
+/// still draws. Inferred: the numbers are not from the exe.
+client_liquid::LiquidTypeRecord fallbackLiquidRecord(uint32_t type) {
+    client_liquid::LiquidTypeRecord r;
+    r.id = type;
+    const uint32_t basic = type == 0 ? 0 : (type - 1) % 4;
+    r.floats[0] = 1.0f;   // surface scale
+    r.floats[2] = 1.0f;   // depth v scale
+    r.ints[0] = 0;        // depth table
+    r.ints[1] = 1000;     // animation period, ms
+    switch (basic) {
+        case 1:
+            r.materialId = 1;
+            r.textures[0] = "XTextures\\ocean\\ocean_h.%d.blp";
+            r.textures[1] = "proceduralOceanDepthTex";
+            break;
+        case 2:
+            r.materialId = 2;
+            r.textures[0] = "XTextures\\lava\\lava.%d.blp";
+            r.floats[0] = 0.0f;
+            break;
+        case 3:
+            r.materialId = 2;
+            r.textures[0] = "XTextures\\slime\\slime.%d.blp";
+            r.floats[0] = 0.0f;
+            break;
+        default:
+            r.materialId = 1;
+            r.textures[0] = "XTextures\\river\\lake_a.%d.blp";
+            r.textures[1] = "proceduralRiverDepthTex";
+            break;
+    }
+    return r;
+}
+
+}  // namespace
+
+void WaterRenderer::loadClientLiquids(pipeline::AssetManager* assetManager) {
+    assetManager_ = assetManager;
+    if (!assetManager) return;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* lt = layouts ? layouts->getLayout("LiquidType") : nullptr;
+    if (lt && lt->tryField("MaterialID") != 0xFFFFFFFFu) {
+        auto data = assetManager->readFile("DBFilesClient\\LiquidType.dbc");
+        pipeline::DBCFile dbc;
+        if (!data.empty() && dbc.load(data)) {
+            const uint32_t fields = dbc.getFieldCount();
+            const uint32_t idCol = lt->tryField("ID");
+            const uint32_t flagsCol = lt->tryField("Flags");
+            const uint32_t matCol = lt->tryField("MaterialID");
+            const uint32_t texCol = lt->tryField("Texture");
+            const uint32_t floatCol = lt->tryField("Float");
+            const uint32_t intCol = lt->tryField("Int");
+            if (idCol < fields && matCol < fields && texCol + 6 <= fields &&
+                floatCol + 18 <= fields && intCol + 4 <= fields) {
+                for (uint32_t i = 0; i < dbc.getRecordCount(); ++i) {
+                    client_liquid::LiquidTypeRecord r;
+                    r.id = dbc.getUInt32(i, idCol);
+                    if (flagsCol < fields) r.flags = dbc.getUInt32(i, flagsCol);
+                    r.materialId = dbc.getUInt32(i, matCol);
+                    for (int t = 0; t < 6; ++t) r.textures[t] = dbc.getString(i, texCol + t);
+                    for (int f = 0; f < 18; ++f) r.floats[f] = dbc.getFloat(i, floatCol + f);
+                    for (int n = 0; n < 4; ++n) r.ints[n] = dbc.getUInt32(i, intCol + n);
+                    clientTypeRecords_[r.id] = std::move(r);
+                }
+            }
+        }
+    }
+    const auto* lm = layouts ? layouts->getLayout("LiquidMaterial") : nullptr;
+    if (lm) {
+        auto data = assetManager->readFile("DBFilesClient\\LiquidMaterial.dbc");
+        pipeline::DBCFile dbc;
+        if (!data.empty() && dbc.load(data)) {
+            const uint32_t fields = dbc.getFieldCount();
+            const uint32_t idCol = lm->tryField("ID");
+            const uint32_t lvfCol = lm->tryField("LVF");
+            const uint32_t flagsCol = lm->tryField("Flags");
+            if (idCol < fields && lvfCol < fields) {
+                for (uint32_t i = 0; i < dbc.getRecordCount(); ++i) {
+                    client_liquid::LiquidMaterialRecord m;
+                    m.id = dbc.getUInt32(i, idCol);
+                    m.lvf = static_cast<int32_t>(dbc.getUInt32(i, lvfCol));
+                    if (flagsCol < fields) m.flags = dbc.getUInt32(i, flagsCol);
+                    clientMaterials_[m.id] = m;
+                }
+            }
+        }
+    }
+    LOG_INFO("Water: client liquids - ", clientTypeRecords_.size(), " LiquidType rows, ",
+             clientMaterials_.size(), " LiquidMaterial rows");
+}
+
+WaterRenderer::ClientLiquid* WaterRenderer::clientLiquidFor(uint32_t liquidType) {
+    auto it = clientLiquids_.find(liquidType);
+    if (it != clientLiquids_.end()) return &it->second;
+    ClientLiquid liquid;
+    // An unknown type is drawn as water, as both banks default it
+    // (0x008a1fa0, 0x008a28f0).
+    if (auto rec = clientTypeRecords_.find(liquidType); rec != clientTypeRecords_.end()) {
+        liquid.record = rec->second;
+    } else if (auto water = clientTypeRecords_.find(1); water != clientTypeRecords_.end() &&
+               !clientTypeRecords_.empty()) {
+        liquid.record = water->second;
+    } else {
+        liquid.record = fallbackLiquidRecord(liquidType);
+    }
+    liquid.kind = client_liquid::materialKind(liquid.record.materialId);
+    if (auto m = clientMaterials_.find(liquid.record.materialId); m != clientMaterials_.end()) {
+        liquid.lvf = m->second.lvf;
+    } else {
+        // 3.3.5a's LiquidMaterial: water carries depth, magma coordinates.
+        liquid.lvf = liquid.kind == client_liquid::MaterialKind::Magma ? 1 : 0;
+    }
+    return &clientLiquids_.emplace(liquidType, std::move(liquid)).first->second;
+}
+
+void WaterRenderer::loadClientSlot(ClientTexSlot& slot, const std::string& name) {
+    slot.loaded = true;
+    if (name.empty() || !vkCtx || !assetManager_ || !clientTexPool_) return;
+    slot.procedural = client_liquid::proceduralTexFor(name);
+    if (slot.procedural != client_liquid::ProceduralTex::None) return;
+
+    // A "%d" name is frames 1 to 30 (0x008a2450); any other is one texture.
+    std::vector<std::string> paths;
+    if (client_liquid::isFrameSequence(name)) {
+        for (int n = 1; n <= client_liquid::kMaxAnimFrames; ++n)
+            paths.push_back(client_liquid::frameName(name, n));
+    } else {
+        paths.push_back(name);
+    }
+    VkDevice device = vkCtx->getDevice();
+    for (const auto& path : paths) {
+        pipeline::BLPImage blp = assetManager_->loadTexture(path, true);
+        if (!blp.isValid()) continue;
+        auto tex = std::make_unique<VkTexture>();
+        if (!tex->uploadBLP(*vkCtx, blp)) continue;
+        // Filtered and wrapped, as 0x008a2450 creates a file's texture.
+        tex->createSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+        if (!tex->isValid()) continue;
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = clientTexPool_;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &clientTexSetLayout_;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(device, &ai, &set) != VK_SUCCESS) break;
+        VkDescriptorImageInfo img = tex->descriptorInfo();
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = set;
+        w.dstBinding = 0;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+        slot.frames.push_back(std::move(tex));
+        slot.sets.push_back(set);
+    }
+    if (slot.frames.empty()) LOG_WARNING("Water: no texture for liquid slot '", name, "'");
+}
+
+bool WaterRenderer::initClientLiquid(VkDescriptorSetLayout perFrameLayout) {
+    VkDevice device = vkCtx->getDevice();
+
+    VkDescriptorSetLayoutBinding texBinding{};
+    texBinding.binding = 0;
+    texBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    texBinding.descriptorCount = 1;
+    texBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    clientTexSetLayout_ = createDescriptorSetLayout(device, {texBinding});
+
+    VkDescriptorSetLayoutBinding rampBinding{};
+    rampBinding.binding = 0;
+    rampBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    rampBinding.descriptorCount = 1;
+    rampBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    clientRampSetLayout_ = createDescriptorSetLayout(device, {rampBinding});
+    if (!clientTexSetLayout_ || !clientRampSetLayout_) return false;
+
+    VkDescriptorPoolSize texPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kClientTexSets};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = kClientTexSets;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &texPoolSize;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &clientTexPool_) != VK_SUCCESS) return false;
+
+    VkDescriptorPoolSize rampPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2};
+    pi.maxSets = 2;
+    pi.pPoolSizes = &rampPoolSize;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &clientRampPool_) != VK_SUCCESS) return false;
+
+    VkPushConstantRange push{};
+    push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    push.size = sizeof(ClientLiquidPush);
+    clientPipelineLayout_ = createPipelineLayout(
+        device, {perFrameLayout, clientTexSetLayout_, clientTexSetLayout_, clientRampSetLayout_}, {push});
+    if (!clientPipelineLayout_) return false;
+
+    // The ramps, one slot per frame in flight.
+    VkBufferCreateInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bi.size = kRampUBOSize * 2;
+    bi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+    aci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VmaAllocationInfo mi{};
+    if (vmaCreateBuffer(vkCtx->getAllocator(), &bi, &aci, &clientRampUBO_, &clientRampAlloc_, &mi) != VK_SUCCESS)
+        return false;
+    clientRampMapped_ = mi.pMappedData;
+    for (uint32_t f = 0; f < 2; ++f) {
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = clientRampPool_;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &clientRampSetLayout_;
+        if (vkAllocateDescriptorSets(device, &ai, &clientRampSets_[f]) != VK_SUCCESS) return false;
+        VkDescriptorBufferInfo buf{clientRampUBO_, kRampUBOSize * f, kRampUBOSize};
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = clientRampSets_[f];
+        w.dstBinding = 0;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w.pBufferInfo = &buf;
+        vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+    }
+    for (uint32_t f = 0; f < 2; ++f) writeClientRamps(f);
+
+    // The depth stage's set when the depth texture is procedural.
+    clientWhiteTex_ = std::make_unique<VkTexture>();
+    const uint8_t white[4] = {255, 255, 255, 255};
+    if (!clientWhiteTex_->upload(*vkCtx, white, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false)) return false;
+    clientWhiteTex_->createSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    {
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = clientTexPool_;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &clientTexSetLayout_;
+        if (vkAllocateDescriptorSets(device, &ai, &clientWhiteSet_) != VK_SUCCESS) return false;
+        VkDescriptorImageInfo img = clientWhiteTex_->descriptorInfo();
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = clientWhiteSet_;
+        w.dstBinding = 0;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+    }
+
+    buildClientPipelines(vkCtx->getImGuiRenderPass(), vkCtx->getMsaaSamples(),
+                         clientWaterPipeline_, clientMagmaPipeline_);
+    return clientWaterPipeline_ != VK_NULL_HANDLE && clientMagmaPipeline_ != VK_NULL_HANDLE;
+}
+
+void WaterRenderer::buildClientPipelines(VkRenderPass pass, VkSampleCountFlagBits samples,
+                                         VkPipeline& water, VkPipeline& magma) {
+    VkDevice device = vkCtx->getDevice();
+    destroy(device, water);
+    destroy(device, magma);
+    if (!clientPipelineLayout_ || !pass) return;
+    VkShaderModule vert, frag;
+    if (!vert.loadFromFile(device, "assets/shaders/liquid.vert.spv") ||
+        !frag.loadFromFile(device, "assets/shaders/liquid.frag.spv")) {
+        LOG_ERROR("WaterRenderer: failed to load the liquid shaders");
+        return;
+    }
+    VkVertexInputBindingDescription binding{};
+    binding.binding = 0;
+    binding.stride = sizeof(ClientLiquidVertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    const std::vector<VkVertexInputAttributeDescription> attribs = {
+        {.location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT,
+         .offset = static_cast<uint32_t>(offsetof(ClientLiquidVertex, pos))},
+        {.location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT,
+         .offset = static_cast<uint32_t>(offsetof(ClientLiquidVertex, surfaceUV))},
+        {.location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT,
+         .offset = static_cast<uint32_t>(offsetof(ClientLiquidVertex, depthUV))},
+        {.location = 3, .binding = 0, .format = VK_FORMAT_R8G8B8A8_UNORM,
+         .offset = static_cast<uint32_t>(offsetof(ClientLiquidVertex, color))},
+    };
+    // Both draw both faces (render state 0x11, culling, set 0). Water blends by
+    // its alpha (state 6 set to 2) and leaves depth alone; magma sets no blend
+    // and is drawn solid.
+    for (int kind = 0; kind < 2; ++kind) {
+        const bool isWater = kind == 0;
+        VkPipeline p = PipelineBuilder()
+            .setShaders(vert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
+                        frag.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
+            .setVertexInput({binding}, attribs)
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+            .setDepthTest(true, !isWater, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setColorBlendAttachment(isWater ? PipelineBuilder::blendAlpha() : PipelineBuilder::blendDisabled())
+            .setMultisample(samples)
+            .setLayout(clientPipelineLayout_)
+            .setRenderPass(pass)
+            .setDynamicStates(viewportAndScissorDynamic())
+            .build(device, vkCtx->getPipelineCache());
+        (isWater ? water : magma) = p;
+    }
+    vert.destroy();
+    frag.destroy();
+}
+
+void WaterRenderer::destroyClientLiquid() {
+    if (!vkCtx) return;
+    VkDevice device = vkCtx->getDevice();
+    destroy(device, clientWaterPipeline_);
+    destroy(device, clientMagmaPipeline_);
+    destroy(device, clientWater1xPipeline_);
+    destroy(device, clientMagma1xPipeline_);
+    destroy(device, clientPipelineLayout_);
+    clientLiquids_.clear();
+    clientWhiteTex_.reset();
+    clientWhiteSet_ = VK_NULL_HANDLE;
+    destroy(device, clientTexPool_);
+    destroy(device, clientRampPool_);
+    destroy(device, clientTexSetLayout_);
+    destroy(device, clientRampSetLayout_);
+    if (clientRampUBO_) {
+        vmaDestroyBuffer(vkCtx->getAllocator(), clientRampUBO_, clientRampAlloc_);
+        clientRampUBO_ = VK_NULL_HANDLE;
+        clientRampAlloc_ = VK_NULL_HANDLE;
+        clientRampMapped_ = nullptr;
+    }
+    clientRampSets_[0] = clientRampSets_[1] = VK_NULL_HANDLE;
+}
+
+void WaterRenderer::writeClientRamps(uint32_t frameSlot) {
+    if (!clientRampMapped_) return;
+    // The light's colours, or what LightingParams starts with before a light
+    // has been sampled.
+    LightWaterColors c = lightWaterColors_;
+    if (!hasLightWaterColors_) {
+        c.oceanClose = glm::vec4(0.1f, 0.3f, 0.5f, 0.75f);
+        c.oceanFar = glm::vec4(0.04f, 0.16f, 0.38f, 1.0f);
+        c.riverClose = glm::vec4(0.1f, 0.3f, 0.5f, 0.5f);
+        c.riverFar = glm::vec4(0.1f, 0.28f, 0.55f, 1.0f);
+    }
+    std::array<glm::vec4, 192> out{};
+    auto put = [&](int base, const client_liquid::RampTexel& t, int row) {
+        out[base * 64 + row] = glm::vec4(t.r, t.g, t.b, t.a) / 255.0f;
+    };
+    const auto river = client_liquid::depthRamp(glm::vec3(c.riverClose), c.riverClose.a,
+                                                glm::vec3(c.riverFar), c.riverFar.a, false);
+    const auto ocean = client_liquid::depthRamp(glm::vec3(c.oceanClose), c.oceanClose.a,
+                                                glm::vec3(c.oceanFar), c.oceanFar.a, true);
+    const auto wmo = client_liquid::wmoWaterRamp(glm::vec3(c.riverFar), c.riverClose.a, c.riverFar.a);
+    for (int row = 0; row < client_liquid::kRampRows; ++row) {
+        put(0, river[row], row);
+        put(1, ocean[row], row);
+        put(2, wmo[row][0], row);
+    }
+    std::memcpy(static_cast<uint8_t*>(clientRampMapped_) + kRampUBOSize * (frameSlot % 2),
+                out.data(), kRampUBOSize);
+}
+
+void WaterRenderer::createClientMesh(WaterSurface& surface) {
+    if (!vkCtx || surface.indexCount == 0) return;
+    ClientLiquid* liquid = clientLiquidFor(surface.clientLiquidType);
+    const int32_t lvf = liquid ? liquid->lvf : 0;
+    const uint32_t table = liquid ? liquid->record.ints[0] : 0;
+    const bool depthCoord = client_liquid::hasDepthCoord(lvf, table);
+    const bool isWmo = surface.wmoId != 0;
+
+    uint8_t color[4] = {255, 255, 255, 255};
+    if (isWmo && surface.wmoInterior) {
+        // The MOMT colour, a D3DCOLOR, alpha and all: vsLiquidWater
+        // multiplies its lit colour, alpha 1, by the vertex colour.
+        color[0] = static_cast<uint8_t>((surface.wmoColorBGRA >> 16) & 0xff);
+        color[1] = static_cast<uint8_t>((surface.wmoColorBGRA >> 8) & 0xff);
+        color[2] = static_cast<uint8_t>(surface.wmoColorBGRA & 0xff);
+        color[3] = static_cast<uint8_t>((surface.wmoColorBGRA >> 24) & 0xff);
+    }
+
+    const int gridWidth = surface.width + 1;
+    const int gridHeight = surface.height + 1;
+    std::vector<ClientLiquidVertex> verts(static_cast<size_t>(gridWidth) * gridHeight);
+    for (int y = 0; y < gridHeight; ++y) {
+        for (int x = 0; x < gridWidth; ++x) {
+            const size_t i = static_cast<size_t>(y) * gridWidth + x;
+            ClientLiquidVertex& v = verts[i];
+            if (i < surface.clientPositions.size()) {
+                v.pos = surface.clientPositions[i];
+            } else {
+                v.pos = surface.origin + surface.stepX * static_cast<float>(x) +
+                        surface.stepY * static_cast<float>(y);
+                v.pos.z = (i < surface.heights.size() ? surface.heights[i] : surface.minHeight) +
+                          surface.clientZOffset;
+            }
+            if (lvf == 1 && i < surface.storedUVs.size()) {
+                v.surfaceUV = surface.storedUVs[i];
+            } else if (isWmo) {
+                v.surfaceUV = client_liquid::wmoSurfaceCoord(x, y);
+            } else {
+                v.surfaceUV = client_liquid::chunkSurfaceCoord(v.pos);
+            }
+            const float depth = (depthCoord && i < surface.depths.size())
+                ? client_liquid::depthCoord(surface.depths[i], table) : 0.0f;
+            // A WMO's u picks proceduralWmoWaterTex's white half when it is
+            // drawn the interior way (0x00793d20 passes 1.0, else 0).
+            v.depthUV = glm::vec2(isWmo && surface.wmoInterior ? 1.0f : 0.0f, depth);
+            std::memcpy(v.color, color, 4);
+        }
+    }
+    AllocatedBuffer vb = uploadBuffer(*vkCtx, verts.data(), verts.size() * sizeof(ClientLiquidVertex),
+                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    surface.clientVertexBuffer = vb.buffer;
+    surface.clientVertexAlloc = vb.allocation;
+}
+
+void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                                 bool use1x, uint32_t frameIndex) {
+    VkPipeline waterPipe = use1x && clientWater1xPipeline_ ? clientWater1xPipeline_ : clientWaterPipeline_;
+    VkPipeline magmaPipe = use1x && clientMagma1xPipeline_ ? clientMagma1xPipeline_ : clientMagmaPipeline_;
+    if (!waterPipe || !magmaPipe || !clientPipelineLayout_) return;
+
+    const uint32_t slot = frameIndex % 2;
+    writeClientRamps(slot);
+    const uint32_t timeMs = static_cast<uint32_t>(clientTimeSeconds_ * 1000.0);
+
+    Frustum frustum;
+    frustum.extractFromMatrix(camera.getViewProjectionMatrix());
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clientPipelineLayout_,
+                            0, 1, &perFrameSet, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clientPipelineLayout_,
+                            3, 1, &clientRampSets_[slot], 0, nullptr);
+
+    // The solid magma first, then the blended water over what is behind it.
+    // The client draws its liquids together after the world's opaque passes
+    // (0x0079a870 calls 0x008a2240 after 0x00793d20), sorted by material and
+    // settings (0x008a1980); opaque before blended here is this client's.
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool magmaPass = pass == 0;
+        bool bound = false;
+        for (auto& surface : surfaces) {
+            if (!surface.clientVertexBuffer || !surface.indexBuffer || surface.indexCount == 0) continue;
+            ClientLiquid* liquid = clientLiquidFor(surface.clientLiquidType);
+            if (!liquid || liquid->kind == client_liquid::MaterialKind::None) continue;
+            const bool isMagma = liquid->kind == client_liquid::MaterialKind::Magma;
+            if (isMagma != magmaPass) continue;
+
+            {
+                const glm::vec3 extentX = surface.stepX * static_cast<float>(surface.width);
+                const glm::vec3 extentY = surface.stepY * static_cast<float>(surface.height);
+                const glm::vec3 c0 = surface.origin;
+                const glm::vec3 c1 = surface.origin + extentX;
+                const glm::vec3 c2 = surface.origin + extentY;
+                const glm::vec3 c3 = surface.origin + extentX + extentY;
+                const glm::vec3 lo(std::min({c0.x, c1.x, c2.x, c3.x}), std::min({c0.y, c1.y, c2.y, c3.y}),
+                                   surface.minHeight - 2.0f);
+                const glm::vec3 hi(std::max({c0.x, c1.x, c2.x, c3.x}), std::max({c0.y, c1.y, c2.y, c3.y}),
+                                   surface.maxHeight + 2.0f + surface.clientZOffset);
+                if (!frustum.intersectsAABB(lo, hi)) continue;
+            }
+
+            const auto& rec = liquid->record;
+            ClientLiquidPush push{};
+            VkDescriptorSet animSet = VK_NULL_HANDLE;
+            VkDescriptorSet depthSet = clientWhiteSet_;
+            if (isMagma) {
+                // 0x008a6090 (and its stand-in 0x008a6350): slot 0 over the
+                // fixed period, scrolled by Float[0] and Float[1], unlit.
+                auto& s0 = liquid->slots[client_liquid::kMagmaSlot];
+                if (!s0.loaded) loadClientSlot(s0, rec.textures[client_liquid::kMagmaSlot]);
+                if (s0.sets.empty()) continue;
+                animSet = s0.sets[client_liquid::animFrameIndex(
+                    timeMs, client_liquid::kFixedSlotPeriodMs, static_cast<uint32_t>(s0.sets.size()))];
+                push.animMatrix = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+                push.params = glm::vec4(1.0f, 2.0f, 1.0f, 4.0f);
+                push.scroll = glm::vec4(client_liquid::magmaScroll(timeMs, rec.floats[0], rec.floats[1]), 0.0f, 0.0f);
+            } else {
+                const auto& st = liquid->kind == client_liquid::MaterialKind::ProcWater
+                    ? client_liquid::kProcWaterStages : client_liquid::kWaterStages;
+                auto& depthSlot = liquid->slots[st.depthSlot];
+                auto& animSlot = liquid->slots[st.animSlot];
+                if (!depthSlot.loaded) loadClientSlot(depthSlot, rec.textures[st.depthSlot]);
+                if (!animSlot.loaded) loadClientSlot(animSlot, rec.textures[st.animSlot]);
+                // Either texture missing and the material draws nothing (0x008a5c70).
+                if (animSlot.sets.empty()) continue;
+                const bool procDepth = depthSlot.procedural != client_liquid::ProceduralTex::None;
+                if (!procDepth && depthSlot.sets.empty()) continue;
+                animSet = animSlot.sets[client_liquid::animFrameIndex(
+                    timeMs, rec.ints[st.animPeriodInt], static_cast<uint32_t>(animSlot.sets.size()))];
+                if (!procDepth) {
+                    depthSet = depthSlot.sets[client_liquid::animFrameIndex(
+                        timeMs, client_liquid::kFixedSlotPeriodMs, static_cast<uint32_t>(depthSlot.sets.size()))];
+                }
+                // 0xb23f64, the scale both floats are multiplied by, is 1.
+                const glm::mat2 m = client_liquid::animStageMatrix(rec.floats[st.rotationFloat],
+                                                                   rec.floats[st.scaleFloat]);
+                push.animMatrix = glm::vec4(m[0], m[1]);
+                const bool interiorLight = surface.wmoId != 0 && surface.wmoInterior;
+                push.params = glm::vec4(rec.floats[st.depthScaleFloat], interiorLight ? 1.0f : 0.0f, 0.0f,
+                                        depthSourceOf(depthSlot.procedural));
+                // Water draws with vsLiquidWater/psLiquidWater: 0xb23f68 is 1
+                // unless the world turns it off (0x00781430), which picks the
+                // specular material over NoSpec (0x008a1fa0). Procedural water
+                // is drawn as its fixed-function stand-in, which has none.
+                if (liquid->kind == client_liquid::MaterialKind::Water) {
+                    const glm::vec3 sun = hasLightWaterColors_ ? lightWaterColors_.sunColor : glm::vec3(1.0f);
+                    push.specular = glm::vec4(sun, kLiquidSpecularPower);
+                }
+            }
+
+            if (!bound) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, magmaPass ? magmaPipe : waterPipe);
+                bound = true;
+            }
+            VkDescriptorSet sets[2] = {animSet, depthSet};
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clientPipelineLayout_,
+                                    1, 2, sets, 0, nullptr);
+            vkCmdPushConstants(cmd, clientPipelineLayout_,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(push), &push);
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &surface.clientVertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, surface.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, static_cast<uint32_t>(surface.indexCount), 1, 0, 0, 0);
+        }
+    }
+}
+
 } // namespace rendering
 } // namespace wowee

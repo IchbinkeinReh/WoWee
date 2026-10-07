@@ -587,6 +587,10 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 drawSchemaCategory("Grass", saveCallback);
 
                 ImGui::Spacing();
+                ImGui::SeparatorText("Water");
+                drawSchemaCategory("Water", saveCallback);
+
+                ImGui::Spacing();
                 ImGui::SeparatorText("Ray Tracing (highly experimental)");
                 drawSchemaCategory("Ray Tracing", saveCallback);
 
@@ -624,7 +628,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 if (ImGui::Button("Restore Video Defaults", ImVec2(-1, 0))) {
                     // Three categories, because the settings window puts on one
                     // tab what the options panels put on three.
-                    for (const char* category : {"Graphics", "Detail", "Ray Tracing", "Upscaling", "Display"}) {
+                    for (const char* category : {"Graphics", "Detail", "Water", "Ray Tracing", "Upscaling", "Display"}) {
                         restoreSchemaDefaults(category);
                     }
                     // Only the resolution is outside the schema now: it is the
@@ -839,6 +843,7 @@ constexpr const char* kGraphicsPresetKeys[] = {
     "groundclutter",
     "grassenabled", "grassdensity", "grassheight", "grassdistance",
     "lensflare", "sharpstars", "sunshafts", "lightshafts", "fogskyblend",
+    "enhancedwater",
 };
 
 /// Every graphics setting that has to reach something when it is loaded.
@@ -857,7 +862,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "viewdistance", "shadows", "shadowdistance", "antialiasing", "fxaa",
     "normalmapping", "normalmapstrength", "parallax", "parallaxquality",
     "groundclutter", "grassenabled", "grassdensity", "grassheight",
-    "grassdistance", "waterrefraction", "upscaling", "fsrquality",
+    "grassdistance", "enhancedwater", "upscaling", "fsrquality",
     "fsrsharpness", "framegen", "brightness", "uiopacity", "minimapsquare",
     "minimapnpcdots", "minimapclock", "minimapcoords", "minimaprotate", "latencymeter", "showfps",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
@@ -921,6 +926,7 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
         pendingSunShafts         = p.sunShafts;
         pendingVolumetricFog     = p.lightShafts;
         pendingFogSkyBlend       = p.fogSkyBlend;
+        pendingEnhancedWater     = p.enhancedWater;
         // Each one goes to the thing it affects through the one function that
         // knows where that is, rather than through a second copy of the same
         // renderer calls written out here.
@@ -965,6 +971,7 @@ void SettingsPanel::updateGraphicsPresetFromCurrentSettings() {
             pendingSunShafts == p.sunShafts &&
             pendingVolumetricFog == p.lightShafts &&
             std::abs(pendingFogSkyBlend - p.fogSkyBlend) <= 0.025f &&
+            pendingEnhancedWater == p.enhancedWater &&
             // As with shadows: a preset that grows no grass says nothing about
             // how dense, how tall or how far it would have been.
             (!p.grass || (std::abs(pendingGrassDensity - p.grassDensity) <= 5 &&
@@ -1052,7 +1059,7 @@ constexpr FieldBinding kFieldBindings[] = {
     // --- Graphics ---
     {.key = "shadows",           .asBool  = &SettingsPanel::pendingShadows},
     {.key = "shadowdistance",    .asFloat = &SettingsPanel::pendingShadowDistance},
-    {.key = "waterrefraction",   .asBool  = &SettingsPanel::pendingWaterRefraction},
+    {.key = "enhancedwater",     .asBool  = &SettingsPanel::pendingEnhancedWater},
     {.key = "antialiasing",      .asInt   = &SettingsPanel::pendingAntiAliasing},
     {.key = "fxaa",              .asBool  = &SettingsPanel::pendingFXAA},
     {.key = "normalmapping",     .asBool  = &SettingsPanel::pendingNormalMapping},
@@ -1246,8 +1253,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setShadowsEnabled(pendingShadows);
     } else if (key == "shadowdistance") {
         if (renderer) renderer->setShadowDistance(pendingShadowDistance);
-    } else if (key == "waterrefraction") {
-        if (renderer) renderer->setWaterRefractionEnabled(pendingWaterRefraction);
+    } else if (key == "enhancedwater") {
+        if (renderer) renderer->setEnhancedWaterEnabled(pendingEnhancedWater);
     } else if (key == "groundclutter") {
         if (renderer) {
             if (auto* tm = renderer->getTerrainManager()) {

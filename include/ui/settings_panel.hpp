@@ -69,7 +69,9 @@ public:
     int pendingRtLighting = 0;
     /// A multiplier on how thick that mist is. See Renderer::setVolumetricFogDensity.
     float pendingVolumetricDensity = 1.0f;
-    bool pendingWaterRefraction = true;
+    /// This client's procedural water with reflection and refraction, instead
+    /// of the client's own liquid. Off by default. See Renderer::setEnhancedWaterEnabled.
+    bool pendingEnhancedWater = false;
     int pendingBrightness = 50; // 0-100, maps to 0.0-2.0 (50 = 1.0 default)
 
     // ---- Pending audio settings ----
@@ -279,7 +281,7 @@ public:
     bool lightingSettingsApplied_ = false; // True once saved shadows/brightness are applied
     bool lensFlareApplied_ = false;        // True once the saved flare strength reached the sky
     bool frameCapApplied_ = false;         // True once the saved frame limit reached the window
-    bool waterRefractionApplied_ = false;
+    bool enhancedWaterApplied_ = false;
     bool normalMapSettingsApplied_ = false;  // True once saved normal map/POM settings applied
 
     // ---- Mute state: mute bypasses master volume without touching slider values ----

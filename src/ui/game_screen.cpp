@@ -499,12 +499,12 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         }
     }
 
-    // Apply saved water refraction setting once when renderer is available
-    if (!settingsPanel_.waterRefractionApplied_) {
+    // Apply the saved water choice once when the renderer is available
+    if (!settingsPanel_.enhancedWaterApplied_) {
         auto* renderer = services_.renderer;
         if (renderer) {
-            renderer->setWaterRefractionEnabled(settingsPanel_.pendingWaterRefraction);
-            settingsPanel_.waterRefractionApplied_ = true;
+            renderer->setEnhancedWaterEnabled(settingsPanel_.pendingEnhancedWater);
+            settingsPanel_.enhancedWaterApplied_ = true;
         }
     }
 

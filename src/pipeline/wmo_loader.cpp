@@ -672,6 +672,8 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                         group.liquid.basePosition.y = read<float>(groupData, parseOffset);
                         group.liquid.basePosition.z = read<float>(groupData, parseOffset);
                         group.liquid.materialId = read<uint16_t>(groupData, parseOffset);
+                        group.liquid.momtIndex = group.liquid.materialId;
+                        group.liquid.groupFlags = group.flags;
 
                         // Keep parser resilient across minor format variants:
                         // prefer explicit per-vertex floats, otherwise fall back to flat.
@@ -689,8 +691,9 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                         const size_t VERTEX_STRIDE = 8; // bytes per vertex
                         if (vertexCount > 0 && bytesRemaining >= vertexCount * VERTEX_STRIDE) {
                             group.liquid.heights.resize(vertexCount);
+                            group.liquid.vertexInfo.resize(vertexCount);
                             for (size_t i = 0; i < vertexCount; i++) {
-                                parseOffset += 4; // skip flow/unknown data
+                                group.liquid.vertexInfo[i] = read<uint32_t>(groupData, parseOffset);
                                 group.liquid.heights[i] = read<float>(groupData, parseOffset);
                             }
                         } else if (vertexCount > 0 && bytesRemaining >= vertexCount * sizeof(float)) {

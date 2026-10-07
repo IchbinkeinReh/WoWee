@@ -110,7 +110,7 @@ TEST_CASE("the settings the user reported are on the applied list",
     const auto applyKeys =
         namesIn(wowee::test::slurp("src/ui/settings_panel.cpp"), "ApplyKeys");
     for (const char* key : {"viewdistance", "groundclutter", "shadows",
-                            "shadowdistance", "waterrefraction", "brightness"}) {
+                            "shadowdistance", "enhancedwater", "brightness"}) {
         INFO(key);
         CHECK(applyKeys.count(key) == 1);
     }
@@ -304,9 +304,9 @@ TEST_CASE("no preset asks for shadows to be off", "[settings]") {
 }
 
 TEST_CASE("every preset leaves the client's missing extras off", "[settings]") {
-    // Lens flare, sharp stars, sun shafts, light shafts and sky-tinted fog are
-    // not in the original client. They stay as opt-in extras; no preset turns
-    // one on, and picking a preset turns each off.
+    // Lens flare, sharp stars, sun shafts, light shafts, sky-tinted fog and the
+    // enhanced water are not in the original client. They stay as opt-in
+    // extras; no preset turns one on, and picking a preset turns each off.
     for (int i = 0; i < wowee::ui::kGraphicsPresetCount; ++i) {
         const auto& p = wowee::ui::kGraphicsPresets[i];
         INFO("preset index " << i);
@@ -315,6 +315,7 @@ TEST_CASE("every preset leaves the client's missing extras off", "[settings]") {
         CHECK_FALSE(p.sunShafts);
         CHECK(p.lightShafts == 0);
         CHECK(p.fogSkyBlend == 0.0f);
+        CHECK_FALSE(p.enhancedWater);
     }
 }
 

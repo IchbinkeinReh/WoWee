@@ -878,6 +878,13 @@ wowee_add_test(test_water_surface_grid
     SOURCES test_water_surface_grid.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_client_liquid ───────────────────────────────────────
+# How wow.exe draws a liquid: its frame stepping, depth tables, ramps and
+# texture coordinates (rendering/client_liquid.hpp).
+wowee_add_test(test_client_liquid
+    SOURCES test_client_liquid.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_dxt_block ───────────────────────────────────────────
 # The colour half of a DXT block, decoded three times in blp_loader.cpp and
 # never tested; the BLP tests stop at header validation.

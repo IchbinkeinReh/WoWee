@@ -167,6 +167,19 @@ struct ADTTerrain {
         uint8_t height;           // Height in vertices (1-9)
         std::vector<float> heights;  // Height values (width * height)
         std::vector<uint8_t> mask;   // Render mask (which tiles to render)
+        /// The vertex format the data was stored in: MH2O's LVF (0 height and
+        /// depth, 1 height and UV, 2 depth only, 3 all three), or for MCLQ 0
+        /// for water and 1 for magma and slime.
+        uint16_t vertexFormat = 0;
+        /// MCLQ's layers carry the basic type (0 water, 1 ocean, 2 magma, 3
+        /// slime) where MH2O's carry the LiquidType row.
+        bool fromMCLQ = false;
+        /// Per vertex, as `heights`: the depth byte the client turns into its
+        /// depth coordinate (0x007ce390), empty when the format has none.
+        std::vector<uint8_t> depths;
+        /// Per vertex, two each: the stored texture coordinate a format-1
+        /// liquid is drawn with (0x007ce390), empty when there is none.
+        std::vector<uint16_t> uvs;
     };
 
     struct ChunkWater {
