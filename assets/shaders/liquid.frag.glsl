@@ -68,8 +68,8 @@ vec4 sampleRamp(int ramp, vec2 uv) {
     return mix(rampTexel(ramp, r0, whiteness), rampTexel(ramp, r1, whiteness), t);
 }
 
-vec4 depthTexture(vec2 uv) {
-    int source = int(push.params.w + 0.5);
+vec4 depthTexture(vec2 uv, float sourceParam) {
+    int source = int(sourceParam + 0.5);
     if (source <= 2) return sampleRamp(source, uv);
     // A "procedural" name the client has not registered: its one green texel.
     if (source == 3) return vec4(0.0, 1.0, 0.0, 1.0);
@@ -79,7 +79,7 @@ vec4 depthTexture(vec2 uv) {
 void main() {
     vec4 color;
     if (push.params.z < 0.5) {
-        vec4 tex0 = depthTexture(vDepthUV);
+        vec4 tex0 = depthTexture(vDepthUV, push.params.w);
         vec4 tex1 = texture(uAnimTex, vSurfaceUV);
         color.rgb = vPrimary.rgb * tex0.rgb + tex1.rgb;
         // The specular term and the quarter that rides with it, both gated by

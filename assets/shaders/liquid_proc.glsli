@@ -1,0 +1,35 @@
+// psLiquidProcWater and vsLiquidProcWater's constants (CMaterialProcWater,
+// 0x008a48f0), shared by liquid_proc.vert.glsl and liquid_proc.frag.glsl.
+// Every vector here is on the client's own axes - x north, y west - which
+// render space has the other way round.
+
+layout(set = 0, binding = 0) uniform PerFrame {
+    mat4 view;
+    mat4 projection;
+    mat4 lightSpaceMatrix;
+    vec4 lightDir;
+    vec4 lightColor;
+    vec4 ambientColor;
+    vec4 viewPos;
+    vec4 fogColor;
+    vec4 fogParams;
+};
+
+layout(set = 1, binding = 6) uniform ProcWater {
+    vec4 normalMat[4];  // c9-c24: the surface coordinate's four matrices, column by column
+    vec4 maskMat;       // c29-c32: the highlight mask's
+    vec4 depthParams;   // x c26's v scale (Float 8), y the depth source as liquid.frag numbers it
+    vec4 c46;           // the circular waves' phases
+    vec4 c47;           // the plane waves' phases
+    vec4 circle[3];     // c48-c50: centre, 1/wavelength, amplitude
+    vec4 c51;           // the circular waves' 1/falloff
+    vec4 c52;           // the plane waves' 1/falloff
+    vec4 plane[3];      // c53-c55: centre, direction
+    vec4 c56;           // the plane waves' 1/wavelength
+    vec4 c57;           // the plane waves' amplitude
+    vec4 c9;            // the light's specular colour, exponent 50 (0x008a3c90)
+    vec4 c10;           // 1/F11, F12, F13, F14 (0x008a3810)
+    vec4 c11;           // F17, F15, F16, 0
+} pw;
+
+vec3 toClient(vec3 v) { return v.yxz; }

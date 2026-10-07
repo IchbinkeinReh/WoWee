@@ -13,6 +13,7 @@
 #include <unordered_map>
 
 #include "rendering/client_liquid.hpp"
+#include "rendering/client_proc_water.hpp"
 #include "rendering/vk_texture.hpp"
 
 namespace wowee {
@@ -249,6 +250,10 @@ private:
         client_liquid::ProceduralTex procedural = client_liquid::ProceduralTex::None;
         std::vector<std::unique_ptr<VkTexture>> frames;
         std::vector<VkDescriptorSet> sets;  // one per frame, set 1 or 2 layout
+        /// Procedural water's cube units (0 and 1): one cube image a frame.
+        std::vector<VkImage> cubeImages;
+        std::vector<VmaAllocation> cubeAllocs;
+        std::vector<VkImageView> cubeViews;
     };
     struct ClientLiquid {
         client_liquid::LiquidTypeRecord record;
@@ -278,12 +283,35 @@ private:
     void* clientRampMapped_ = nullptr;
     VkDescriptorSet clientRampSets_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
 
+    // Procedural water (CMaterialProcWater, 0x008a48f0): six units and its
+    // constants in one set, drawn sets allocated afresh each frame.
+    VkDescriptorSetLayout procSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout procPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline clientProcPipeline_ = VK_NULL_HANDLE;
+    VkPipeline clientProc1xPipeline_ = VK_NULL_HANDLE;
+    VkDescriptorPool procPools_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    static constexpr uint32_t kProcSetsPerFrame = 32;
+    static constexpr VkDeviceSize kProcUBOStride = 512;
+    ::VkBuffer procUBO_ = VK_NULL_HANDLE;
+    VmaAllocation procAlloc_ = VK_NULL_HANDLE;
+    void* procMapped_ = nullptr;
+    VkSampler procCubeSampler_ = VK_NULL_HANDLE;
+    std::unique_ptr<VkTexture> procGreenTex_;
+    ClientTexSlot procGreenCube_;
+    client_proc_water::WaveManager waves_;
+    client_proc_water::CrtRand waveRand_;
+
+    bool initProcWater(VkDescriptorSetLayout perFrameLayout);
+    void destroyProcWater();
+    void loadProcCubeSlot(ClientTexSlot& slot, const std::string& name);
+    bool uploadCube(ClientTexSlot& slot, const uint8_t* rgba, uint32_t width, uint32_t height);
+
     bool initClientLiquid(VkDescriptorSetLayout perFrameLayout);
     void destroyClientLiquid();
     /// Both client pipelines against one pass; shared by initialize,
     /// recreatePipelines and the 1x pass, so the three cannot disagree.
     void buildClientPipelines(VkRenderPass pass, VkSampleCountFlagBits samples,
-                              VkPipeline& water, VkPipeline& magma);
+                              VkPipeline& water, VkPipeline& magma, VkPipeline& proc);
     ClientLiquid* clientLiquidFor(uint32_t liquidType);
     void loadClientSlot(ClientTexSlot& slot, const std::string& name);
     void createClientMesh(WaterSurface& surface);

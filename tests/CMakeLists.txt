@@ -885,6 +885,12 @@ wowee_add_test(test_client_liquid
     SOURCES test_client_liquid.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_client_proc_water ───────────────────────────────────
+# Procedural water's wave manager and constants (rendering/client_proc_water.hpp).
+wowee_add_test(test_client_proc_water
+    SOURCES test_client_proc_water.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_dxt_block ───────────────────────────────────────────
 # The colour half of a DXT block, decoded three times in blp_loader.cpp and
 # never tested; the BLP tests stop at header validation.

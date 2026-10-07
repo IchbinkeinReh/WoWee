@@ -287,7 +287,8 @@ void WaterRenderer::recreatePipelines() {
     }
 
     if (clientPipelineLayout_) {
-        buildClientPipelines(mainPass, vkCtx->getMsaaSamples(), clientWaterPipeline_, clientMagmaPipeline_);
+        buildClientPipelines(mainPass, vkCtx->getMsaaSamples(), clientWaterPipeline_, clientMagmaPipeline_,
+                             clientProcPipeline_);
     }
 }
 
@@ -2274,7 +2275,7 @@ bool WaterRenderer::createWater1xPass(VkFormat colorFormat, VkFormat depthFormat
     }
     if (clientPipelineLayout_) {
         buildClientPipelines(water1xRenderPass, VK_SAMPLE_COUNT_1_BIT,
-                             clientWater1xPipeline_, clientMagma1xPipeline_);
+                             clientWater1xPipeline_, clientMagma1xPipeline_, clientProc1xPipeline_);
     }
 
     LOG_INFO("WaterRenderer: created 1x water pass and pipeline");
@@ -2319,6 +2320,7 @@ void WaterRenderer::destroyWater1xResources() {
     destroy(device, water1xPipeline);
     destroy(device, clientWater1xPipeline_);
     destroy(device, clientMagma1xPipeline_);
+    destroy(device, clientProc1xPipeline_);
     if (water1xRenderPass) { vkDestroyRenderPass(device, water1xRenderPass, nullptr); water1xRenderPass = VK_NULL_HANDLE; }
 }
 
@@ -2615,16 +2617,18 @@ bool WaterRenderer::initClientLiquid(VkDescriptorSetLayout perFrameLayout) {
         vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
     }
 
+    if (!initProcWater(perFrameLayout)) LOG_WARNING("Water: procedural water unavailable");
     buildClientPipelines(vkCtx->getImGuiRenderPass(), vkCtx->getMsaaSamples(),
-                         clientWaterPipeline_, clientMagmaPipeline_);
+                         clientWaterPipeline_, clientMagmaPipeline_, clientProcPipeline_);
     return clientWaterPipeline_ != VK_NULL_HANDLE && clientMagmaPipeline_ != VK_NULL_HANDLE;
 }
 
 void WaterRenderer::buildClientPipelines(VkRenderPass pass, VkSampleCountFlagBits samples,
-                                         VkPipeline& water, VkPipeline& magma) {
+                                         VkPipeline& water, VkPipeline& magma, VkPipeline& proc) {
     VkDevice device = vkCtx->getDevice();
     destroy(device, water);
     destroy(device, magma);
+    destroy(device, proc);
     if (!clientPipelineLayout_ || !pass) return;
     VkShaderModule vert, frag;
     if (!vert.loadFromFile(device, "assets/shaders/liquid.vert.spv") ||
@@ -2668,6 +2672,31 @@ void WaterRenderer::buildClientPipelines(VkRenderPass pass, VkSampleCountFlagBit
     }
     vert.destroy();
     frag.destroy();
+
+    // Procedural water: the water's states (0x008a48f0 sets the same culling,
+    // blend and alpha reference).
+    if (!procPipelineLayout_) return;
+    VkShaderModule pvert, pfrag;
+    if (!pvert.loadFromFile(device, "assets/shaders/liquid_proc.vert.spv") ||
+        !pfrag.loadFromFile(device, "assets/shaders/liquid_proc.frag.spv")) {
+        LOG_ERROR("WaterRenderer: failed to load the procedural water shaders");
+        return;
+    }
+    proc = PipelineBuilder()
+        .setShaders(pvert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
+                    pfrag.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
+        .setVertexInput({binding}, attribs)
+        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+        .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+        .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+        .setColorBlendAttachment(PipelineBuilder::blendAlpha())
+        .setMultisample(samples)
+        .setLayout(procPipelineLayout_)
+        .setRenderPass(pass)
+        .setDynamicStates(viewportAndScissorDynamic())
+        .build(device, vkCtx->getPipelineCache());
+    pvert.destroy();
+    pfrag.destroy();
 }
 
 void WaterRenderer::destroyClientLiquid() {
@@ -2677,6 +2706,7 @@ void WaterRenderer::destroyClientLiquid() {
     destroy(device, clientMagmaPipeline_);
     destroy(device, clientWater1xPipeline_);
     destroy(device, clientMagma1xPipeline_);
+    destroyProcWater();
     destroy(device, clientPipelineLayout_);
     clientLiquids_.clear();
     clientWhiteTex_.reset();
@@ -2777,10 +2807,249 @@ void WaterRenderer::createClientMesh(WaterSurface& surface) {
     surface.clientVertexAlloc = vb.allocation;
 }
 
+// ==============================================================
+// Procedural water (client_proc_water.hpp)
+// ==============================================================
+
+namespace {
+
+/// liquid_proc.glsli's ProcWater block, std140.
+struct ProcWaterUBO {
+    glm::vec4 normalMat[4];
+    glm::vec4 maskMat;
+    glm::vec4 depthParams;
+    glm::vec4 c46, c47;
+    glm::vec4 circle[3];
+    glm::vec4 c51, c52;
+    glm::vec4 plane[3];
+    glm::vec4 c56, c57;
+    glm::vec4 c9, c10, c11;
+};
+static_assert(sizeof(ProcWaterUBO) == 21 * 16, "liquid_proc.glsli's ProcWater block");
+
+glm::vec4 packMat2(const glm::mat2& m) { return glm::vec4(m[0], m[1]); }
+
+}  // namespace
+
+bool WaterRenderer::initProcWater(VkDescriptorSetLayout perFrameLayout) {
+    VkDevice device = vkCtx->getDevice();
+    std::vector<VkDescriptorSetLayoutBinding> bindings;
+    for (uint32_t b = 0; b < 6; ++b) {
+        VkDescriptorSetLayoutBinding s{};
+        s.binding = b;
+        s.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        s.descriptorCount = 1;
+        s.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings.push_back(s);
+    }
+    VkDescriptorSetLayoutBinding ubo{};
+    ubo.binding = 6;
+    ubo.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    ubo.descriptorCount = 1;
+    ubo.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings.push_back(ubo);
+    procSetLayout_ = createDescriptorSetLayout(device, bindings);
+    if (!procSetLayout_) return false;
+    procPipelineLayout_ = createPipelineLayout(device, {perFrameLayout, procSetLayout_, clientRampSetLayout_}, {});
+    if (!procPipelineLayout_) return false;
+
+    const VkDescriptorPoolSize sizes[2] = {
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kProcSetsPerFrame * 6},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kProcSetsPerFrame},
+    };
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = kProcSetsPerFrame;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sizes;
+    for (auto& pool : procPools_) {
+        if (vkCreateDescriptorPool(device, &pi, nullptr, &pool) != VK_SUCCESS) return false;
+    }
+
+    VkBufferCreateInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bi.size = kProcUBOStride * kProcSetsPerFrame * 2;
+    bi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+    aci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VmaAllocationInfo mi{};
+    if (vmaCreateBuffer(vkCtx->getAllocator(), &bi, &aci, &procUBO_, &procAlloc_, &mi) != VK_SUCCESS) return false;
+    procMapped_ = mi.pMappedData;
+
+    // Cube maps filtered and clamped.
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = VK_FILTER_LINEAR;
+    si.minFilter = VK_FILTER_LINEAR;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.maxLod = VK_LOD_CLAMP_NONE;
+    if (vkCreateSampler(device, &si, nullptr, &procCubeSampler_) != VK_SUCCESS) return false;
+
+    // A file the client cannot open is its 1x1 stand-in, bytes 00 ff 00 ff
+    // (0x004b9760 falls back to 0x004b9550 with 0xac3354): opaque green.
+    const uint8_t green[4] = {0x00, 0xff, 0x00, 0xff};
+    procGreenTex_ = std::make_unique<VkTexture>();
+    if (!procGreenTex_->upload(*vkCtx, green, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false)) return false;
+    procGreenTex_->createSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    return uploadCube(procGreenCube_, green, 1, 1);
+}
+
+namespace {
+void destroyCubes(VkDevice device, VmaAllocator allocator, std::vector<VkImage>& images,
+                  std::vector<VmaAllocation>& allocs, std::vector<VkImageView>& views) {
+    for (auto v : views) vkDestroyImageView(device, v, nullptr);
+    for (size_t i = 0; i < images.size(); ++i) vmaDestroyImage(allocator, images[i], allocs[i]);
+    views.clear();
+    images.clear();
+    allocs.clear();
+}
+}  // namespace
+
+void WaterRenderer::destroyProcWater() {
+    if (!vkCtx) return;
+    VkDevice device = vkCtx->getDevice();
+    VmaAllocator allocator = vkCtx->getAllocator();
+    destroy(device, clientProcPipeline_);
+    destroy(device, clientProc1xPipeline_);
+    destroy(device, procPipelineLayout_);
+    for (auto& pool : procPools_) destroy(device, pool);
+    destroy(device, procSetLayout_);
+    if (procUBO_) {
+        vmaDestroyBuffer(allocator, procUBO_, procAlloc_);
+        procUBO_ = VK_NULL_HANDLE;
+        procAlloc_ = VK_NULL_HANDLE;
+        procMapped_ = nullptr;
+    }
+    destroy(device, procCubeSampler_);
+    procGreenTex_.reset();
+    destroyCubes(device, allocator, procGreenCube_.cubeImages, procGreenCube_.cubeAllocs, procGreenCube_.cubeViews);
+    for (auto& [type, liquid] : clientLiquids_) {
+        for (auto& slot : liquid.slots)
+            destroyCubes(device, allocator, slot.cubeImages, slot.cubeAllocs, slot.cubeViews);
+    }
+}
+
+bool WaterRenderer::uploadCube(ClientTexSlot& slot, const uint8_t* rgba, uint32_t width, uint32_t height) {
+    // A strip six faces wide is taken as the faces in order +X, -X, +Y, -Y,
+    // +Z, -Z; anything else is the one image on every face. Inferred: the
+    // client binds whatever 0x004b9760 loads to the cube unit, and 3.3.5a's
+    // data ships no file for it (only the green stand-in above).
+    const bool strip = width == height * 6;
+    const uint32_t size = strip ? height : std::max(width, height);
+    std::vector<uint8_t> faces(static_cast<size_t>(size) * size * 4 * 6);
+    for (uint32_t f = 0; f < 6; ++f) {
+        for (uint32_t y = 0; y < size; ++y) {
+            for (uint32_t x = 0; x < size; ++x) {
+                uint32_t sx, sy;
+                if (strip) {
+                    sx = f * size + x;
+                    sy = y;
+                } else {
+                    sx = x * width / size;
+                    sy = y * height / size;
+                }
+                std::memcpy(&faces[((static_cast<size_t>(f) * size + y) * size + x) * 4],
+                            &rgba[(static_cast<size_t>(sy) * width + sx) * 4], 4);
+            }
+        }
+    }
+    VkImageCreateInfo ii{};
+    ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ii.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    ii.imageType = VK_IMAGE_TYPE_2D;
+    ii.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ii.extent = {size, size, 1};
+    ii.mipLevels = 1;
+    ii.arrayLayers = 6;
+    ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation alloc = VK_NULL_HANDLE;
+    if (vmaCreateImage(vkCtx->getAllocator(), &ii, &aci, &image, &alloc, nullptr) != VK_SUCCESS) return false;
+
+    AllocatedBuffer staging = createBuffer(vkCtx->getAllocator(), faces.size(),
+                                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+    void* mapped = nullptr;
+    vmaMapMemory(vkCtx->getAllocator(), staging.allocation, &mapped);
+    std::memcpy(mapped, faces.data(), faces.size());
+    vmaUnmapMemory(vkCtx->getAllocator(), staging.allocation);
+    vkCtx->immediateSubmit([&](VkCommandBuffer cmd) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = image;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 6};
+        region.imageExtent = {size, size, 1};
+        vkCmdCopyBufferToImage(cmd, staging.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
+    });
+    if (vkCtx->isInUploadBatch()) {
+        vkCtx->deferStagingCleanup(staging);
+    } else {
+        destroyBuffer(vkCtx->getAllocator(), staging);
+    }
+
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+    VkImageView view = VK_NULL_HANDLE;
+    if (vkCreateImageView(vkCtx->getDevice(), &vi, nullptr, &view) != VK_SUCCESS) {
+        vmaDestroyImage(vkCtx->getAllocator(), image, alloc);
+        return false;
+    }
+    slot.cubeImages.push_back(image);
+    slot.cubeAllocs.push_back(alloc);
+    slot.cubeViews.push_back(view);
+    return true;
+}
+
+void WaterRenderer::loadProcCubeSlot(ClientTexSlot& slot, const std::string& name) {
+    slot.loaded = true;
+    // No name and the slot has no textures: 0x008a1d60 returns none and the
+    // material draws nothing.
+    if (name.empty() || !vkCtx || !assetManager_) return;
+    slot.procedural = client_liquid::proceduralTexFor(name);
+    if (slot.procedural != client_liquid::ProceduralTex::None) return;
+    std::vector<std::string> paths;
+    if (client_liquid::isFrameSequence(name)) {
+        for (int n = 1; n <= client_liquid::kMaxAnimFrames; ++n)
+            paths.push_back(client_liquid::frameName(name, n));
+    } else {
+        paths.push_back(name);
+    }
+    for (const auto& path : paths) {
+        pipeline::BLPImage blp = assetManager_->loadTexture(path, false);
+        if (!blp.isValid() || blp.data.size() < static_cast<size_t>(blp.width) * blp.height * 4) continue;
+        uploadCube(slot, blp.data.data(), static_cast<uint32_t>(blp.width), static_cast<uint32_t>(blp.height));
+    }
+}
+
 void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
                                  bool use1x, uint32_t frameIndex) {
     VkPipeline waterPipe = use1x && clientWater1xPipeline_ ? clientWater1xPipeline_ : clientWaterPipeline_;
     VkPipeline magmaPipe = use1x && clientMagma1xPipeline_ ? clientMagma1xPipeline_ : clientMagmaPipeline_;
+    VkPipeline procPipe = use1x && clientProc1xPipeline_ ? clientProc1xPipeline_ : clientProcPipeline_;
     if (!waterPipe || !magmaPipe || !clientPipelineLayout_) return;
 
     const uint32_t slot = frameIndex % 2;
@@ -2790,10 +3059,121 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
     Frustum frustum;
     frustum.extractFromMatrix(camera.getViewProjectionMatrix());
 
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clientPipelineLayout_,
-                            0, 1, &perFrameSet, 0, nullptr);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clientPipelineLayout_,
-                            3, 1, &clientRampSets_[slot], 0, nullptr);
+    auto bindClientSets = [&]() {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clientPipelineLayout_,
+                                0, 1, &perFrameSet, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clientPipelineLayout_,
+                                3, 1, &clientRampSets_[slot], 0, nullptr);
+    };
+    bindClientSets();
+
+    // Procedural water's waves: the one wave manager the chunk liquids share,
+    // stepped once a frame (0x007cf9a0 calls 0x007d62a0 with the camera,
+    // 0xcd8f5c, and its look-at point, 0xcd8f68).
+    const bool procReady = procPipe && procMapped_ && procPools_[slot];
+    std::unordered_map<uint32_t, VkDescriptorSet> procSets;
+    uint32_t procUsed = 0;
+    if (procReady) {
+        vkResetDescriptorPool(vkCtx->getDevice(), procPools_[slot], 0);
+        const glm::vec3 eye = core::coords::renderToCanonical(camera.getPosition());
+        const glm::vec3 target = eye + core::coords::renderToCanonical(camera.getForward());
+        waves_.update(timeMs, eye, target, waveRand_);
+    }
+    // The set a procedural water draws with: its six units (0x008a48f0 binds
+    // render states 0x15 to 0x1a) and its constants. None when a unit's
+    // LiquidType texture is unnamed - 0x008a1d60 returns none and the
+    // material draws nothing.
+    auto procSetFor = [&](ClientLiquid& liquid, uint32_t type, bool wmo) -> VkDescriptorSet {
+        const uint32_t key = type * 2 + (wmo ? 1u : 0u);
+        if (auto it = procSets.find(key); it != procSets.end()) return it->second;
+        procSets[key] = VK_NULL_HANDLE;
+        if (procUsed >= kProcSetsPerFrame) return VK_NULL_HANDLE;
+        const auto& rec = liquid.record;
+        std::array<VkDescriptorImageInfo, 6> imgs{};
+        for (int unit = 0; unit < 6; ++unit) {
+            const int t = client_proc_water::kUnitTexture[unit];
+            auto& sl = liquid.slots[t];
+            const std::string& name = rec.textures[t];
+            if (name.empty()) return VK_NULL_HANDLE;
+            const int periodInt = client_proc_water::kTexturePeriodInt[t];
+            const uint32_t period = periodInt < 0 ? client_liquid::kFixedSlotPeriodMs : rec.ints[periodInt];
+            if (unit < 2) {
+                if (!sl.loaded) loadProcCubeSlot(sl, name);
+                const auto& views = sl.cubeViews.empty() ? procGreenCube_.cubeViews : sl.cubeViews;
+                if (views.empty()) return VK_NULL_HANDLE;
+                imgs[unit] = {procCubeSampler_,
+                              views[client_liquid::animFrameIndex(timeMs, period, static_cast<uint32_t>(views.size()))],
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            } else {
+                if (!sl.loaded) loadClientSlot(sl, name);
+                if (sl.procedural != client_liquid::ProceduralTex::None) {
+                    // Unit 2 reads the ramps (depthParams.y); a procedural
+                    // name elsewhere is not one 3.3.5a's rows give.
+                    imgs[unit] = clientWhiteTex_->descriptorInfo();
+                } else if (sl.frames.empty()) {
+                    imgs[unit] = procGreenTex_->descriptorInfo();
+                } else {
+                    imgs[unit] = sl.frames[client_liquid::animFrameIndex(
+                        timeMs, period, static_cast<uint32_t>(sl.frames.size()))]->descriptorInfo();
+                }
+            }
+        }
+
+        ProcWaterUBO u{};
+        const auto mats = client_proc_water::normalMatrices(rec.floats);
+        for (int i = 0; i < 4; ++i) u.normalMat[i] = packMat2(mats[i]);
+        u.maskMat = packMat2(client_proc_water::maskMatrix(rec.floats));
+        // Float 8 times 0xb23f64 (1) scales the depth coordinate's v (c26).
+        u.depthParams = glm::vec4(rec.floats[8], depthSourceOf(liquid.slots[4].procedural), 0.0f, 0.0f);
+        // A WMO liquid's instance has no wave manager: every wave argument 0.
+        const auto r = wmo ? client_proc_water::rippleConstants(timeMs, {}, {})
+                           : client_proc_water::rippleConstants(timeMs, waves_.circularWaves(), waves_.waves());
+        u.c46 = r.circlePhase;
+        u.c47 = r.planePhase;
+        for (int i = 0; i < 3; ++i) {
+            u.circle[i] = r.circle[i];
+            u.plane[i] = r.plane[i];
+        }
+        u.c51 = r.circleFalloff;
+        u.c52 = r.planeFalloff;
+        u.c56 = r.planeFrequency;
+        u.c57 = r.planeAmplitude;
+        const glm::vec3 spec = hasLightWaterColors_ ? lightWaterColors_.sunColor : glm::vec3(1.0f);
+        u.c9 = glm::vec4(spec, client_proc_water::kSpecularPower);
+        const auto pc = client_proc_water::pixelConstants(rec.floats);
+        u.c10 = pc.c10;
+        u.c11 = pc.c11;
+        const VkDeviceSize offset = kProcUBOStride * (slot * kProcSetsPerFrame + procUsed);
+        std::memcpy(static_cast<uint8_t*>(procMapped_) + offset, &u, sizeof(u));
+
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = procPools_[slot];
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &procSetLayout_;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(vkCtx->getDevice(), &ai, &set) != VK_SUCCESS) return VK_NULL_HANDLE;
+        ++procUsed;
+        VkDescriptorBufferInfo buf{procUBO_, offset, sizeof(ProcWaterUBO)};
+        std::array<VkWriteDescriptorSet, 7> writes{};
+        for (uint32_t b = 0; b < 7; ++b) {
+            writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[b].dstSet = set;
+            writes[b].dstBinding = b;
+            writes[b].descriptorCount = 1;
+            if (b < 6) {
+                writes[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[b].pImageInfo = &imgs[b];
+            } else {
+                writes[b].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                writes[b].pBufferInfo = &buf;
+            }
+        }
+        vkUpdateDescriptorSets(vkCtx->getDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        procSets[key] = set;
+        return set;
+    };
+    VkPipeline boundPipe = VK_NULL_HANDLE;
 
     // The solid magma first, then the blended water over what is behind it.
     // The client draws its liquids together after the world's opaque passes
@@ -2801,7 +3181,6 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
     // settings (0x008a1980); opaque before blended here is this client's.
     for (int pass = 0; pass < 2; ++pass) {
         const bool magmaPass = pass == 0;
-        bool bound = false;
         for (auto& surface : surfaces) {
             if (!surface.clientVertexBuffer || !surface.indexBuffer || surface.indexCount == 0) continue;
             ClientLiquid* liquid = clientLiquidFor(surface.clientLiquidType);
@@ -2823,6 +3202,29 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
                 if (!frustum.intersectsAABB(lo, hi)) continue;
             }
 
+            if (liquid->kind == client_liquid::MaterialKind::ProcWater) {
+                // CMaterialProcWater (0x008a48f0) with vsLiquidProcWater and
+                // psLiquidProcWater; see liquid_proc.frag.glsl.
+                if (!procReady) continue;
+                VkDescriptorSet set = procSetFor(*liquid, surface.clientLiquidType, surface.wmoId != 0);
+                if (!set) continue;
+                if (boundPipe != procPipe) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, procPipe);
+                    boundPipe = procPipe;
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, procPipelineLayout_,
+                                            0, 1, &perFrameSet, 0, nullptr);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, procPipelineLayout_,
+                                            2, 1, &clientRampSets_[slot], 0, nullptr);
+                }
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, procPipelineLayout_,
+                                        1, 1, &set, 0, nullptr);
+                VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &surface.clientVertexBuffer, &offset);
+                vkCmdBindIndexBuffer(cmd, surface.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, static_cast<uint32_t>(surface.indexCount), 1, 0, 0, 0);
+                continue;
+            }
+
             const auto& rec = liquid->record;
             ClientLiquidPush push{};
             VkDescriptorSet animSet = VK_NULL_HANDLE;
@@ -2839,8 +3241,7 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
                 push.params = glm::vec4(1.0f, 2.0f, 1.0f, 4.0f);
                 push.scroll = glm::vec4(client_liquid::magmaScroll(timeMs, rec.floats[0], rec.floats[1]), 0.0f, 0.0f);
             } else {
-                const auto& st = liquid->kind == client_liquid::MaterialKind::ProcWater
-                    ? client_liquid::kProcWaterStages : client_liquid::kWaterStages;
+                const auto& st = client_liquid::kWaterStages;
                 auto& depthSlot = liquid->slots[st.depthSlot];
                 auto& animSlot = liquid->slots[st.animSlot];
                 if (!depthSlot.loaded) loadClientSlot(depthSlot, rec.textures[st.depthSlot]);
@@ -2866,17 +3267,19 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
                 // 'specular' option on: 0x00781430 sets 0xb23f68 from it
                 // (0xce04a0, 0x007bd8a0) and 0x008a1fa0 picks NoSpec without,
                 // vsLiquidWaterNoSpec/psLiquidWaterNoSpec - no highlight and
-                // no quarter lift. Procedural water is drawn as its
-                // fixed-function stand-in, which has none.
-                if (liquid->kind == client_liquid::MaterialKind::Water && clientSpecular_) {
+                // no quarter lift.
+                if (clientSpecular_) {
                     const glm::vec3 sun = hasLightWaterColors_ ? lightWaterColors_.sunColor : glm::vec3(1.0f);
                     push.specular = glm::vec4(sun, kLiquidSpecularPower);
                 }
             }
 
-            if (!bound) {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, magmaPass ? magmaPipe : waterPipe);
-                bound = true;
+            VkPipeline pipe = magmaPass ? magmaPipe : waterPipe;
+            if (boundPipe != pipe) {
+                // After procedural water's layout the shared sets go back on.
+                if (boundPipe == procPipe) bindClientSets();
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+                boundPipe = pipe;
             }
             VkDescriptorSet sets[2] = {animSet, depthSet};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clientPipelineLayout_,

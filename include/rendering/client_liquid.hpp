@@ -8,8 +8,8 @@
 /// with vsLiquidWater/psLiquidWater, magma 0x008a6090 with vsLiquidMagma/
 /// psLiquidMagma, procedural water 0x008a48f0) and a fixed-function stand-in
 /// (0x008a5c70, 0x008a6350, 0x008a5170) that binds the same slots, matrices
-/// and textures. Water and magma are drawn here by their .bls programs (see
-/// liquid.vert.glsl); procedural water by its stand-in. What is
+/// and textures. All three are drawn here by their .bls programs (see
+/// liquid.vert.glsl and liquid_proc.frag.glsl, client_proc_water.hpp). What is
 /// here is the setup both paths share and the data it reads: the LiquidType
 /// row's six textures, eighteen floats and four ints (copied by 0x008a27c0),
 /// the vertex a chunk or a WMO liquid builds (0x007ce390, 0x007a7b00), and the
