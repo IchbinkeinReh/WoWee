@@ -7,7 +7,9 @@
 
 #include "pipeline/detail_doodad_placement.hpp"
 
+#include <cstring>
 #include <map>
+#include <vector>
 
 using namespace wowee::pipeline;
 
@@ -167,4 +169,20 @@ TEST_CASE("a chunk's buffers hold four textures under the vertex limit", "[clutt
     size_t m = 0;
     for (bool k : applyDetailBatchLimits(many, 16, lookup)) m += k ? 1 : 0;
     CHECK(m == 4 * 85);
+}
+
+TEST_CASE("detail doodad buffer counts come from the model's skin") {
+    // 0x007b31e0 reads the skin's +0x4 (vertices) and +0xc (indices).
+    std::vector<uint8_t> skin(48, 0);
+    std::memcpy(skin.data(), "SKIN", 4);
+    const uint32_t nv = 37, ni = 120;
+    std::memcpy(skin.data() + 4, &nv, 4);
+    std::memcpy(skin.data() + 12, &ni, 4);
+    uint32_t v = 0, i = 0;
+    REQUIRE(wowee::pipeline::detailSkinCounts(skin, v, i));
+    CHECK(v == 37u);
+    CHECK(i == 120u);
+    skin[0] = 'X';
+    CHECK_FALSE(wowee::pipeline::detailSkinCounts(skin, v, i));
+    CHECK_FALSE(wowee::pipeline::detailSkinCounts(std::vector<uint8_t>(8, 0), v, i));
 }

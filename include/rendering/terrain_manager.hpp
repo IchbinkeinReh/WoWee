@@ -57,6 +57,7 @@ struct TileCoord {
 /// builds a chunk's detail doodads when it comes in range (0x007d3fe0).
 struct DetailChunk {
     float minX = 0.0f, minY = 0.0f, maxX = 0.0f, maxY = 0.0f;  ///< render space
+    float minZ = 0.0f, maxZ = 0.0f;  ///< the chunk's heights, for its box (+0x4c)
     struct Doodad {
         uint32_t modelId = 0;
         glm::vec3 position{0.0f};
@@ -583,7 +584,7 @@ private:
     std::mutex detailModelSizesMutex_;
     std::unordered_map<std::string, pipeline::DetailModelSize> detailModelSizes_;
     /// Instances the ground clutter of chunks in range, releases the rest.
-    void updateDetailDoodads(const glm::vec3& camPos);
+    void updateDetailDoodads(const glm::vec3& camPos, const glm::vec3& viewDir);
     std::unordered_map<std::string, TerrainTextureTones> terrainTextureTones_;
 };
 

@@ -185,10 +185,22 @@ std::vector<DetailDoodadPlacement> placeDetailDoodads(const MapChunk& chunk, uin
 
 /// What 0x007b31e0 needs of a doodad's model to file it in a chunk's buffers.
 struct DetailModelSize {
-    std::string texture;  ///< the batch key: one texture a buffer
+    std::string texture;  ///< the batch key: the model's first texture (0x007b1b10)
     uint32_t vertices = 0;
     uint32_t indices = 0;
 };
+
+/// The counts 0x007b31e0 and 0x007b2a80 read from the model's skin (the
+/// shared model's +0x170, the .skin file 0x0083cb40 loads): its vertex count
+/// at +0x4 and its index count at +0xc. False for a file too short or not a
+/// skin, which the client fails to load.
+inline bool detailSkinCounts(const std::vector<uint8_t>& skin, uint32_t& vertices,
+                             uint32_t& indices) {
+    if (skin.size() < 0x10 || std::memcmp(skin.data(), "SKIN", 4) != 0) return false;
+    std::memcpy(&vertices, skin.data() + 0x4, sizeof(vertices));
+    std::memcpy(&indices, skin.data() + 0xc, sizeof(indices));
+    return true;
+}
 
 /// 0x007b31e0's limits: a chunk has four buffers, one texture each, each
 /// holding fewer than cellPicks x 64 vertices (at most 4096, 0x007b2a80) and

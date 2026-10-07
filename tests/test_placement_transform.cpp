@@ -173,3 +173,14 @@ TEST_CASE("scale is applied inside the rotation, not after it", "[placement]") {
     CHECK(m[3][1] == Catch::Approx(0.0f).margin(1e-6));
     CHECK(m[3][2] == Catch::Approx(0.0f).margin(1e-6));
 }
+
+TEST_CASE("a yaw turns a model's x toward y, as the client's doodad matrix") {
+    // 0x004c3290 (MDDF's yaw) and 0x007b1b50 (ground cover) both take a
+    // model point to (x cos - y sin, x sin + y cos); ground cover's angle goes
+    // in as the yaw unchanged.
+    const float a = 0.7f;
+    const glm::mat4 m = wowee::rendering::placementModelMatrix(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, a), 1.0f);
+    const glm::vec4 p = m * glm::vec4(2.0f, 3.0f, 0.0f, 1.0f);
+    CHECK(p.x == Catch::Approx(2.0f * std::cos(a) - 3.0f * std::sin(a)).margin(1e-5));
+    CHECK(p.y == Catch::Approx(2.0f * std::sin(a) + 3.0f * std::cos(a)).margin(1e-5));
+}

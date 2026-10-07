@@ -242,7 +242,7 @@ void TerrainManager::update(const Camera& camera, float deltaTime) {
     unloadMs = elapsedMs(tUnloadStart, clock::now());
 
     // The ground clutter of the chunks in range (0x007d3fe0).
-    updateDetailDoodads(camera.getPosition());
+    updateDetailDoodads(camera.getPosition(), camera.getForward());
 
     timeSinceLastUpdate += deltaTime;
 
@@ -1910,9 +1910,17 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
             return nullptr;
         }
         pipeline::DetailModelSize size;
+        // The texture made from the model's first (0x007b1b10); the counts
+        // its skin holds (0x007b31e0 reads the shared model's +0x170).
         size.texture = m2Model.textures.empty() ? std::string() : toLowerCopy(m2Model.textures[0].filename);
-        size.vertices = static_cast<uint32_t>(m2Model.vertices.size());
-        size.indices = static_cast<uint32_t>(m2Model.indices.size());
+        if (m2Model.version < 264) {
+            // Pre-3.0 data has its skin inside the model; no 3.3.5a path.
+            size.vertices = static_cast<uint32_t>(m2Model.vertices.size());
+            size.indices = static_cast<uint32_t>(m2Model.indices.size());
+        } else if (!pipeline::detailSkinCounts(skinData, size.vertices, size.indices)) {
+            modelMissing++;
+            return nullptr;
+        }
         if (!preparedModelIds.count(modelId)) {
             PendingTile::M2Ready ready;
             ready.modelId = modelId;
@@ -1949,6 +1957,10 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
             dc.maxY = chunk.position[1];
             dc.minX = dc.maxX - CHUNK_SIZE;
             dc.minY = dc.maxY - CHUNK_SIZE;
+            const auto [lo, hi] = std::minmax_element(chunk.heightMap.heights.begin(),
+                                                      chunk.heightMap.heights.end());
+            dc.minZ = chunk.position[2] + *lo;
+            dc.maxZ = chunk.position[2] + *hi;
 
             // The chunk's +0x34/+0x38: its index across the map (0x007d6b30).
             const uint32_t globalCol = static_cast<uint32_t>(pending->coord.x * 16 + cx);
@@ -2003,11 +2015,14 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
               modelMissing, " models missing");
 }
 
-void TerrainManager::updateDetailDoodads(const glm::vec3& camPos) {
+void TerrainManager::updateDetailDoodads(const glm::vec3& camPos, const glm::vec3& viewDir) {
     if (!m2Renderer) return;
-    // groundEffectDist (0x0078db10; 0 to 140 yards). A chunk is built once it
-    // is in range (0x007d3fe0) and released a few yards past it, so standing
-    // on the line does not rebuild it every frame.
+    // groundEffectDist (0x0078db10; 0 to 140 yards). A chunk is built once its
+    // +0x88 is in range (0x007d3fe0): the view depth of its box's corner
+    // nearest along the view (0x007c3e70, 0x00790650). Releasing it is
+    // wowee's own, by distance a few yards past the range, so standing on the
+    // line or turning round does not rebuild it; DetailDoodad's fade has the
+    // doodads gone by the range's depth anyway.
     float range = m2Renderer->groundDetailDistance();
     if (range <= 0.0f) range = 140.0f;
     const float releaseRange = range + 16.0f;
@@ -2027,14 +2042,18 @@ void TerrainManager::updateDetailDoodads(const glm::vec3& camPos) {
         for (auto& dc : tile->detailChunks) {
             if (!tileNear && !dc.instanced) continue;
             const float d = distanceTo(dc.minX, dc.minY, dc.maxX, dc.maxY);
+            const float depth = m2ChunkViewDepth(glm::vec3(dc.minX, dc.minY, dc.minZ),
+                                                 glm::vec3(dc.maxX, dc.maxY, dc.maxZ), camPos, viewDir);
             if (dc.instanced && d > releaseRange) {
                 m2Renderer->removeInstances(dc.instanceIds);
                 dc.instanceIds.clear();
                 dc.instanced = false;
-            } else if (!dc.instanced && d < range && !outOfTime) {
+            } else if (!dc.instanced && depth < range && d <= releaseRange && !outOfTime) {
                 dc.instanceIds.reserve(dc.doodads.size());
                 for (const auto& doodad : dc.doodads) {
                     if (!m2Renderer->hasModel(doodad.modelId)) continue;
+                    // The angle about z as MDDF's yaw is (0x007b1b50: x cos - y sin,
+                    // x sin + y cos, as 0x004c3290's matrix for a doodad).
                     const uint32_t id = m2Renderer->createInstance(
                         doodad.modelId, doodad.position, glm::vec3(0.0f, 0.0f, doodad.rotation), doodad.scale);
                     if (!id) continue;

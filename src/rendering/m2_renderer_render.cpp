@@ -365,6 +365,13 @@ static bool skyBatchAllowed(bool skyMode, std::size_t index) {
 }
 
 float M2Renderer::instanceMaxDistSq(const M2Instance& inst) const {
+    // Ground cover on a chunk is held back by its chunk's view depth alone
+    // (0x007d3fe0, TerrainManager::updateDetailDoodads) and faded by its own
+    // (0x007b15d0); the client tests no doodad of it by distance.
+    if (inst.detailDoodad) {
+        const float d = cappedViewDistance();
+        return d * d;
+    }
     if (inst.noDistanceCull && !inst.isGameObject) {
         // Flag 0x800: only the chunk walk holds it back (0x00799980), by the
         // chunks it is listed in.
