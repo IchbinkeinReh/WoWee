@@ -1911,6 +1911,9 @@ struct ItemQueryResponseData {
     uint32_t displayInfoId = 0;
     uint32_t quality = 0;
     uint32_t itemFlags = 0;     // Item flag bitmask (Heroic=0x8, Unique-Equipped=0x1000000)
+    /// The template's Sheath: where the weapon hangs put away (1 two-hand,
+    /// 2 staff, 3 one-hand, 4 shield, ...); see core::weaponAttachmentPoint.
+    uint32_t sheath = 0;
     uint32_t inventoryType = 0;
     int32_t maxCount = 0;       // Max that can be carried (1 = Unique, 0 = unlimited)
     int32_t maxStack = 1;

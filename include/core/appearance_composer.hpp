@@ -99,6 +99,9 @@ private:
     /// Attach the equipped head item's model. Other players resolve this through
     /// EntitySpawner; the local character had no equivalent at all.
     void loadEquippedHelm(game::Inventory& inventory);
+    /// The helm, the shoulders and the three weapons, each where the sheath
+    /// state puts it; `rangedDrawn` is the ranged sheath state.
+    void attachEquippedWeapons(bool rangedDrawn);
 
     // Attach the enchant visual (sharpening-stone glint, weapon glow) of the item in
     // the given equipment slot to the weapon already attached at attachmentId.

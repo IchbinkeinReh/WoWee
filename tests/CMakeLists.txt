@@ -2634,6 +2634,11 @@ wowee_add_test(test_detail_doodad_placement
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
 
+# ── test_weapon_attachment ───────────────────────────────────
+# Where the client hangs weapons and shoulders (core/weapon_attachment.hpp).
+wowee_add_test(test_weapon_attachment
+    SOURCES test_weapon_attachment.cpp)
+
 # ── test_blob_shadow ─────────────────────────────────────────
 # The client's blob shadow under a unit (rendering/blob_shadow.hpp).
 wowee_add_test(test_blob_shadow
