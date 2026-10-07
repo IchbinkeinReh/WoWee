@@ -5,12 +5,14 @@
 /// A batch names up to two textures. The client folds its material's blend
 /// mode, the model's combiner table and each texture's coordinate source into
 /// one shader id per batch when the skin loads (0x00836980), and picks the
-/// vertex and pixel shader by that id (0x00836600, 0x00836c90). The pixel
-/// shaders themselves live in external .bls files; what the exe does carry is
-/// the fixed-function stand-in it configures for each one (0x008728c0): a
-/// colour and an alpha op per stage, from two tables indexed by the stage's
-/// combiner mode (0x00af5a08, 0x00af59e8), which the device turns into
-/// D3DTOP_* through 0x00a2f9cc. Those ops are what is drawn here.
+/// vertex and pixel programs by that id (0x00836600, 0x00836c90). The pixel
+/// programs (Combiners_*.bls) apply each stage to the running colour, the
+/// vertex colour first: Opaque multiplies the colour and keeps the alpha, Mod
+/// and Mod2x multiply both, Add adds both, the NA forms keep the alpha, Decal
+/// and Fade blend by the vertex alpha. That is the same as the exe's
+/// fixed-function stand-in for each (0x008728c0, tables 0x00af5a08 colour and
+/// 0x00af59e8 alpha), which is what the tables below hold. The three 0x8000
+/// programs are not stage-by-stage and have modes of their own.
 
 #include <cstdint>
 #include <vector>
@@ -22,6 +24,10 @@ enum class M2TexCoordSource : uint8_t {
     UV0 = 0,  ///< the vertex's first UV set ("T1")
     UV1 = 1,  ///< its second ("T2")
     Env = 2,  ///< the sphere/reflection map ("Env")
+    /// The first UV set through no matrix: Diffuse_Env_T2's second stage
+    /// reads attrib 6 through c6/c7, the slot the env stage left identity
+    /// (0x0081f450 calls 0x00873550 for it).
+    UV0Raw = 3,
 };
 
 /// A combiner mode, as a shader id's nibbles carry it (0x00836600).
@@ -34,6 +40,11 @@ enum M2CombinerMode : uint8_t {
     M2_COMBINE_FADE = 5,
     M2_COMBINE_MOD2X_NA = 6,
     M2_COMBINE_ADD_NA = 7,
+    /// The second stage of the three 0x8000 ids (0x00836c90), each a pixel
+    /// program of its own over Diffuse_T1_Env:
+    M2_COMBINE_MOD2X_NA_ALPHA = 8,   ///< Combiners_Opaque_Mod2xNA_Alpha
+    M2_COMBINE_ADD_ALPHA = 9,        ///< Combiners_Opaque_AddAlpha
+    M2_COMBINE_ADD_ALPHA_ALPHA = 10, ///< Combiners_Opaque_AddAlpha_Alpha
 };
 
 /// The device's combine ops (0x00a2f9cc maps them to D3DTOP, with arguments
@@ -105,13 +116,19 @@ inline M2BatchCombiner m2ResolveCombiner(uint16_t shaderId, uint16_t textureCoun
     M2BatchCombiner c;
     if ((shaderId & 0x8000) != 0) {
         // 1..3 are Combiners_Opaque_Mod2xNA_Alpha, _AddAlpha and
-        // _AddAlpha_Alpha on Diffuse_T1_Env, whose stand-in is one stage of
-        // MODULATE colour and SELECTARG2 alpha; 0 gets no shader and the
-        // batch is not drawn (0x00821e97 skips a null one).
-        c.drawn = (shaderId & 0x7FFF) != 0;
-        c.stages = 1;
+        // _AddAlpha_Alpha on Diffuse_T1_Env: the first texture on the first
+        // UV set, the second sphere-mapped. 0 gets no shader and the batch is
+        // not drawn (0x00821e97 skips a null one).
+        const uint16_t which = shaderId & 0x7FFF;
+        c.drawn = which != 0;
         c.mode[0] = M2_COMBINE_OPAQUE;
         c.source[0] = M2TexCoordSource::UV0;
+        c.stages = 1;
+        if (which >= 1 && which <= 3 && textureCount >= 2) {
+            c.stages = 2;
+            c.mode[1] = static_cast<uint8_t>(M2_COMBINE_MOD2X_NA_ALPHA + (which - 1));
+            c.source[1] = M2TexCoordSource::Env;
+        }
         return c;
     }
     const uint8_t hi = static_cast<uint8_t>((shaderId >> 4) & 0xF);
@@ -131,8 +148,11 @@ inline M2BatchCombiner m2ResolveCombiner(uint16_t shaderId, uint16_t textureCoun
         return c;
     }
     c.stages = 2;
+    // Diffuse_T1_T2, _T1_Env, _Env_T2 and _Env_Env (0x00836600). Env_T2's
+    // second stage is the first UV set, untransformed (see UV0Raw).
     c.source[0] = (hi & 8) ? M2TexCoordSource::Env : M2TexCoordSource::UV0;
-    c.source[1] = (lo & 8) ? M2TexCoordSource::Env : M2TexCoordSource::UV1;
+    c.source[1] = (lo & 8) ? M2TexCoordSource::Env
+                : (hi & 8) ? M2TexCoordSource::UV0Raw : M2TexCoordSource::UV1;
     const uint8_t m0 = hi & 7, m1 = lo & 7;
     auto second = [](uint8_t m) -> uint8_t {
         switch (m) {

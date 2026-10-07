@@ -297,7 +297,10 @@ void main() {
         if (hasVertexColors != 0) outside += texColor.rgb * mocv * 0.5;
     }
 
-    float dist = length(viewPos.xyz - FragPos);
+    // The fog's distance is the view depth: every vertex program takes it
+    // from the model-view matrix's z row (c33) into ((end - z) / (end - start))^exp
+    // (c30, 0x00873210), not the distance to the eye.
+    float dist = -(view * vec4(FragPos, 1.0)).z;
     // The camera's fog colour for an interior group in the camera's interior
     // pass, the zone's for the rest (0x007a9380 by way of 0x007a8440).
     vec3 insideFog = gp.interiorPass != 0 ? cameraFogColor.rgb : fogColor.rgb;

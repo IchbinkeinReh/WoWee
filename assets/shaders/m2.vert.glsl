@@ -116,21 +116,27 @@ void main() {
     FragPos = worldPos.xyz;
     Normal = mat3(model) * norm.xyz;
 
-    // Each stage's coordinates (0x00836600 names the vertex shader by them):
-    // a UV set through that texture's own matrix, or the environment map.
-    // The fixed-function stand-in for the map (0x00873550, 0x006a4af0) is the
-    // camera-space reflection vector, scaled and offset by a half.
+    // Each stage's coordinates (0x00836600 names the vertex program by them):
+    // a UV set through that stage's own matrix, or the sphere map. The client's
+    // view space looks down +z (its lookAt, 0x006bfe60), and Diffuse_Env takes
+    // R = -reflect(P, N) there - (-r.x, -r.y, r.z) in this view - and maps
+    // normalize(R + (0, 0, 1)).xy * 0.5 + 0.5.
     vec3 viewP = (view * worldPos).xyz;
     vec3 viewN = normalize(mat3(view) * Normal);
-    vec2 envUV = reflect(normalize(viewP), viewN).xy * 0.5 + 0.5;
+    vec3 r = reflect(normalize(viewP), viewN);
+    vec3 m = vec3(-r.x, -r.y, r.z + 1.0);
+    vec2 envUV = m.xy / max(length(m), 1e-5) * 0.5 + 0.5;
     int src0 = push.texCoordSet & 3;
     int src1 = (push.texCoordSet >> 2) & 3;
     vec2 uv0 = src0 == 1 ? aTexCoord2 : aTexCoord;
-    vec2 uv1 = src1 == 0 ? aTexCoord : aTexCoord2;
+    vec2 uv1 = src1 == 1 ? aTexCoord2 : aTexCoord;
     vec4 uvLin = instanceData[instIdx].uvLinear;
     TexCoord = src0 == 2 ? envUV : vec2(dot(uvLin.xy, uv0), dot(uvLin.zw, uv0)) + uvOff;
     vec4 uvLin2 = instanceData[instIdx].uvLinear2;
+    // 3: Diffuse_Env_T2's second stage, the first UV set through the identity
+    // the env stage left in its matrix slot (0x0081f450, 0x00873550).
     TexCoord2 = src1 == 2 ? envUV
+              : src1 == 3 ? aTexCoord
               : vec2(dot(uvLin2.xy, uv1), dot(uvLin2.zw, uv1)) + instanceData[instIdx].uvOffset2.xy;
 
     vFadeAlpha = fade;

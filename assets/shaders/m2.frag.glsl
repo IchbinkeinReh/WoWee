@@ -86,12 +86,13 @@ float sampleShadowPCF(sampler2DShadow smap, vec3 coords) {
     return shadow / 9.0;
 }
 
-// The client's texture stages. A batch's shader id names a pixel shader per
-// pair of combiner modes (0x00836600); the exe's own stand-in for each is a
-// colour and an alpha op per stage, by mode (0x00af5a08, 0x00af59e8), which
-// the device maps to D3DTOP (0x00a2f9cc): 0 MODULATE(tex, cur), 1 MODULATE2X,
-// 2 ADD, 3 SELECTARG2 (cur), 4 BLENDCURRENTALPHA(cur, tex),
-// 5 BLENDDIFFUSEALPHA(tex, cur). Stage 0's current is the diffuse.
+// The client's texture stages, as its Combiners_*.bls pixel programs apply
+// them: each stage to the running colour, the vertex colour first. A batch's
+// shader id names the program by its pair of modes (0x00836600). By mode, the
+// colour op (0x00af5a08) and the alpha op (0x00af59e8), which the exe's own
+// fixed-function stand-ins share (0x008728c0): 0 multiply, 1 multiply by two,
+// 2 add, 3 keep the current, 4 Decal: the current over the texture by the
+// current alpha, 5 Fade: the texture over the current by the vertex alpha.
 const int kCombinerColorOp[8] = int[8](0, 0, 4, 2, 1, 5, 1, 2);
 const int kCombinerAlphaOp[8] = int[8](3, 0, 3, 2, 1, 3, 3, 3);
 
@@ -108,7 +109,6 @@ float combineA(int op, float cur, float tex, float diffA) {
     if (op == 0) return tex * cur;
     if (op == 1) return tex * cur * 2.0;
     if (op == 2) return tex + cur;
-    if (op == 4) return cur * cur + tex * (1.0 - cur);
     if (op == 5) return tex * diffA + cur * (1.0 - diffA);
     return cur;
 }
@@ -119,9 +119,23 @@ vec4 combineStages(vec4 d, vec4 t0, vec4 t1) {
     vec4 cur = vec4(combineRgb(kCombinerColorOp[m0], d.rgb, d.a, t0.rgb, d.a),
                     combineA(kCombinerAlphaOp[m0], d.a, t0.a, d.a));
     if (((combiners >> 8) & 3) > 1) {
-        int m1 = (combiners >> 4) & 7;
-        cur = vec4(combineRgb(kCombinerColorOp[m1], cur.rgb, cur.a, t1.rgb, d.a),
-                   combineA(kCombinerAlphaOp[m1], cur.a, t1.a, d.a));
+        int m1 = (combiners >> 4) & 15;
+        if (m1 == 8) {
+            // Combiners_Opaque_Mod2xNA_Alpha (0x8001): the second texture
+            // doubled over the first where the first's alpha is clear.
+            cur.rgb = mix(cur.rgb * t1.rgb * 2.0, cur.rgb, t0.a);
+        } else if (m1 == 9) {
+            // Combiners_Opaque_AddAlpha (0x8002): the second added by its alpha.
+            cur.rgb += t1.rgb * t1.a;
+        } else if (m1 == 10) {
+            // Combiners_Opaque_AddAlpha_Alpha (0x8003): the same, lit, and only
+            // where the first texture's alpha is clear.
+            cur.rgb += t1.rgb * t1.a * (1.0 - t0.a) * d.rgb;
+        } else {
+            m1 &= 7;
+            cur = vec4(combineRgb(kCombinerColorOp[m1], cur.rgb, cur.a, t1.rgb, d.a),
+                       combineA(kCombinerAlphaOp[m1], cur.a, t1.a, d.a));
+        }
     }
     return cur;
 }
@@ -314,7 +328,10 @@ void main() {
     }
     vec3 result = combineStages(vec4(light * tint, batchFade), tex0, tex1).rgb;
 
-    float dist = length(viewPos.xyz - FragPos);
+    // The fog's distance is the view depth: every vertex program takes it
+    // from the model-view matrix's z row (c33) into ((end - z) / (end - start))^exp
+    // (c30, 0x00873210), not the distance to the eye.
+    float dist = -(view * vec4(FragPos, 1.0)).z;
     // The client's fog per blend mode (FUN_0081fb10, table at 0x00a45390):
     // the world's fog for opaque, alpha key and alpha; black for the adds,
     // white for Mod and grey for Mod2x - the colour that leaves the scene as

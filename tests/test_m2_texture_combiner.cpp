@@ -69,18 +69,38 @@ TEST_CASE("two textures: the client's pairs, and the fallback", "[m2]") {
     CHECK(c.mode[1] == M2_COMBINE_MOD);
     CHECK(c.source[0] == M2TexCoordSource::UV0);
     CHECK(c.source[1] == M2TexCoordSource::UV1);
-    // Env on the first stage, T2 on the second.
+    // Env on the first stage; Diffuse_Env_T2 then reads the first UV set.
     c = m2ResolveCombiner(0x0091, 2, 0);
     CHECK(c.source[0] == M2TexCoordSource::Env);
-    CHECK(c.source[1] == M2TexCoordSource::UV1);
+    CHECK(c.source[1] == M2TexCoordSource::UV0Raw);
 }
 
-TEST_CASE("0x8000 ids: 0 is not drawn, 1..3 one opaque stage", "[m2]") {
+TEST_CASE("0x8000 ids: 0 is not drawn, 1..3 their own programs on T1 and Env", "[m2]") {
     CHECK_FALSE(m2ResolveCombiner(0x8000, 1, 0).drawn);
-    const auto c = m2ResolveCombiner(0x8001, 2, 0);
-    CHECK(c.drawn);
-    CHECK(c.stages == 1);
-    CHECK(c.mode[0] == M2_COMBINE_OPAQUE);
+    // Combiners_Opaque_Mod2xNA_Alpha, _AddAlpha, _AddAlpha_Alpha on
+    // Diffuse_T1_Env (0x00836c90).
+    for (uint16_t i = 1; i <= 3; ++i) {
+        const auto c = m2ResolveCombiner(static_cast<uint16_t>(0x8000 | i), 2, 0);
+        CHECK(c.drawn);
+        CHECK(c.stages == 2);
+        CHECK(c.mode[0] == M2_COMBINE_OPAQUE);
+        CHECK(c.mode[1] == M2_COMBINE_MOD2X_NA_ALPHA + (i - 1));
+        CHECK(c.source[0] == M2TexCoordSource::UV0);
+        CHECK(c.source[1] == M2TexCoordSource::Env);
+    }
+    // With one texture there is no second stage to draw.
+    CHECK(m2ResolveCombiner(0x8002, 1, 0).stages == 1);
+}
+
+TEST_CASE("Diffuse_Env_T2's second stage is the first UV set, untransformed", "[m2]") {
+    const auto c = m2ResolveCombiner(0x0081, 2, 0);
+    CHECK(c.source[0] == M2TexCoordSource::Env);
+    CHECK(c.source[1] == M2TexCoordSource::UV0Raw);
+    CHECK(m2PackCoordSources(c) == (2 | (3 << 2)));
+    // Diffuse_T1_Env: the env map second.
+    const auto d = m2ResolveCombiner(0x0018, 2, 0);
+    CHECK(d.source[0] == M2TexCoordSource::UV0);
+    CHECK(d.source[1] == M2TexCoordSource::Env);
 }
 
 TEST_CASE("the ops each mode configures, from the exe's tables", "[m2]") {
@@ -98,5 +118,5 @@ TEST_CASE("the ops each mode configures, from the exe's tables", "[m2]") {
 TEST_CASE("packing for the shaders", "[m2]") {
     const auto c = m2ResolveCombiner(0x0094, 2, 0);
     CHECK(m2PackCombinerModes(c) == (M2_COMBINE_MOD | (M2_COMBINE_MOD2X << 4) | (2 << 8)));
-    CHECK(m2PackCoordSources(c) == (2 | (1 << 2)));
+    CHECK(m2PackCoordSources(c) == (2 | (3 << 2)));
 }

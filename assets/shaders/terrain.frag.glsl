@@ -128,7 +128,10 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
 }
 
 void main() {
-    float fragDist = length(viewPos.xyz - FragPos);
+    // The fog's distance is the view depth: the Terrain vertex program takes it
+    // from the model-view matrix's z row (c2) into ((end - z) / (end - start))^exp
+    // (c12), not the distance to the eye.
+    float fragDist = -(view * vec4(FragPos, 1.0)).z;
 
     // WoW terrain: layers are blended sequentially, each on top of the previous result.
     // Alpha=1 means the layer fully covers everything below; alpha=0 means invisible.

@@ -432,7 +432,10 @@ void main() {
     // The client's fog for this blend mode: the world's fog, or toward the
     // colour that leaves the scene unchanged - black for an add, white for
     // Mod, grey for Mod2x - or none for an unfogged material.
-    float dist = length(viewPos.xyz - FragPos);
+    // The fog's distance is the view depth: every vertex program takes it
+    // from the model-view matrix's z row (c33) into ((end - z) / (end - start))^exp
+    // (c30, 0x00873210), not the distance to the eye.
+    float dist = -(view * vec4(FragPos, 1.0)).z;
     float fogFactor = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
     if (fogMode == 1) {
         // In a group of the camera's interior pass, the camera's fog colour
