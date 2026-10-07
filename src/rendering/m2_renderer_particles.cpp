@@ -988,10 +988,11 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                 vkUpdateDescriptorSets(vkCtx_->getDevice(), 1, &write, 0, nullptr);
             }
         }
-        if (texSet != VK_NULL_HANDLE) {
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    particlePipelineLayout_, 1, 1, &texSet, 0, nullptr);
-        }
+        // No texture set (the pool was full): drawing without one reads an
+        // unbound set, which loses the device.
+        if (texSet == VK_NULL_HANDLE) continue;
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                particlePipelineLayout_, 1, 1, &texSet, 0, nullptr);
 
         // Push constants: tileCount + alphaKey
         struct { float tileX, tileY; int alphaKey; } pc = {
