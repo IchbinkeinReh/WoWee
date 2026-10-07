@@ -520,69 +520,8 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
         charRenderer->setTextureSlotOverride(st.instanceId, static_cast<uint16_t>(slots.skin), newTex);
     }
 
-    // --- Weapon model attachment ---
-    // Slot indices in the 19-element EquipSlot array:
-    //   15 = MAIN_HAND → attachment 1 (right hand)
-    //   16 = OFF_HAND  → attachment 2 (left hand)
-    struct OnlineWeaponSlot {
-        int slotIndex;
-        uint32_t attachmentId;
-    };
-    // NOLINTBEGIN(modernize-use-designated-initializers) - a table whose
-    // columns are its field names, with the struct in view directly above.
-    static constexpr OnlineWeaponSlot weaponSlots[] = {
-        { 15, 1 },  // MAIN_HAND → right hand
-        { 16, 2 },  // OFF_HAND  → left hand
-    };
-    // NOLINTEND(modernize-use-designated-initializers)
-
-    for (const auto& ws : weaponSlots) {
-        uint32_t weapDisplayId = displayInfoIds[ws.slotIndex];
-        if (weapDisplayId == 0) {
-            charRenderer->detachWeapon(st.instanceId, ws.attachmentId);
-            continue;
-        }
-
-        int32_t recIdx = displayInfoDbc->findRecordById(weapDisplayId);
-        if (recIdx < 0) {
-            charRenderer->detachWeapon(st.instanceId, ws.attachmentId);
-            continue;
-        }
-
-        const auto art = pipeline::readItemDisplayArt(*displayInfoDbc,
-                                                      static_cast<uint32_t>(recIdx));
-        if (art.modelFile.empty()) {
-            charRenderer->detachWeapon(st.instanceId, ws.attachmentId);
-            continue;
-        }
-        const std::string& modelFile = art.modelFile;
-        const std::string& textureName = art.textureName;
-
-        // Try Weapon directory first, then Shield
-        std::string m2Path = "Item\\ObjectComponents\\Weapon\\" + modelFile;
-        pipeline::M2Model weaponModel;
-        if (!loadWeaponM2(m2Path, weaponModel)) {
-            m2Path = "Item\\ObjectComponents\\Shield\\" + modelFile;
-            if (!loadWeaponM2(m2Path, weaponModel)) {
-                charRenderer->detachWeapon(st.instanceId, ws.attachmentId);
-                continue;
-            }
-        }
-
-        // Build texture path
-        std::string texturePath;
-        if (!textureName.empty()) {
-            texturePath = "Item\\ObjectComponents\\Weapon\\" + textureName + ".blp";
-            if (!assetManager_->fileExists(texturePath)) {
-                texturePath = "Item\\ObjectComponents\\Shield\\" + textureName + ".blp";
-                if (!assetManager_->fileExists(texturePath)) texturePath.clear();
-            }
-        }
-
-        uint32_t weaponModelId = nextWeaponModelId_++;
-        charRenderer->attachWeapon(st.instanceId, ws.attachmentId,
-                                   weaponModel, weaponModelId, texturePath);
-    }
+    // The weapons follow the visible item entries and the sheath state:
+    // updateUnitWeapons (0x0072dbc0).
 }
 
 void EntitySpawner::despawnPlayer(uint64_t guid) {
@@ -596,6 +535,7 @@ void EntitySpawner::despawnPlayer(uint64_t guid) {
             pendingPlayerSpawns_.end());
     }
     pendingOnlinePlayerEquipment_.erase(guid);
+    unitWeaponsShown_.erase(guid);
     if (!renderer_ || !renderer_->getCharacterRenderer()) return;
     pendingRemotePlayerMounts_.erase(guid);
     removeRemotePlayerMount(guid);
