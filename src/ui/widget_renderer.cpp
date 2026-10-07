@@ -2568,15 +2568,29 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // ignored it, which is what left chat pale over bright
                     // ground. No link rects filed for it - the pass above owns
                     // those, and filing them twice would double every click.
+                    //
+                    // Both from the same whole pixel, the offset whole too and
+                    // at least one: ImGui truncates a text position, so a
+                    // fraction-of-a-pixel offset (the 1,-1 under a UI scale
+                    // below one) landed the shadow in the text's own row on
+                    // some lines and a row lower on others, by where each
+                    // line's top fell - every other line looked unshadowed.
+                    const auto shadowPx = [](float v) {
+                        const float r = std::round(v);
+                        return (v != 0.0f && r == 0.0f) ? std::copysign(1.0f, v) : r;
+                    };
+                    const float bx = std::floor(x0);
+                    const float by = std::floor(top);
                     if (w->hasShadow) {
                         float sc[4] = {w->shadowColor[0], w->shadowColor[1],
                                        w->shadowColor[2], w->shadowColor[3]};
+                        // Fading with its line, not left behind it.
                         drawMarkupText(dl, font, size,
-                                       ImVec2(x0 + w->shadowX * s, top - w->shadowY * s),
-                                       packColor(sc, w->alpha * w->shadowColor[3]),
+                                       ImVec2(bx + shadowPx(w->shadowX * s), by - shadowPx(w->shadowY * s)),
+                                       packColor(sc, w->alpha * w->shadowColor[3] * rgba[3]),
                                        w->alpha, m.text, wrapW, false, nullptr, true);
                     }
-                    drawMarkupText(dl, font, size, ImVec2(x0, top),
+                    drawMarkupText(dl, font, size, ImVec2(bx, by),
                                    packColor(rgba, w->alpha), w->alpha, m.text,
                                    wrapW, false, nullptr, false, &tree, w->id);
                     y -= lineH * static_cast<float>(rows);
