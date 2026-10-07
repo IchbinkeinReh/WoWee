@@ -1464,6 +1464,10 @@ void EntitySpawner::processPendingTransportDoodads() {
                 continue;
             }
             m2Renderer->setSkipCollision(m2InstanceId, true);
+            if (doodadTemplate.interiorLit) {
+                m2Renderer->setInstanceInteriorLight(m2InstanceId, doodadTemplate.interiorAmbient,
+                                                     doodadTemplate.interiorDirect);
+            }
             // Ship WMO children use the dedicated transport animation states:
             // 162=ShipStart, 163=ShipMoving, 164=ShipStop. Leaving them on the
             // first sequence freezes the icebreaker paddle (its sequence 0 is

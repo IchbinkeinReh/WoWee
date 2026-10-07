@@ -172,6 +172,9 @@ struct WMOGroup {
     // Liquid data (MLIQ chunk)
     WMOLiquid liquid;
 
+    // MODR: indices into the model's MODD doodads that belong to this group
+    std::vector<uint16_t> doodadRefs;
+
     std::string name;
     std::string description;
 };
@@ -193,6 +196,7 @@ struct WMOModel {
     uint32_t nDoodadSets = 0;
 
     glm::vec3 ambientColor;     // MOHD ambient color (used for interior group lighting)
+    uint32_t flags = 0;         // MOHD flags
     glm::vec3 boundingBoxMin;
     glm::vec3 boundingBoxMax;
 

@@ -917,6 +917,14 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
     cmdPipelineBarrier2(cmd, dep);
 }
 
+void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) {
+    // Every field, every time: the entry is in write-combined memory and is
+    // never read back, so whatever the slot held last frame must not show.
+    e.flags = inst.interiorLit ? kInstanceInteriorLit : 0;
+    e.interiorAmbient = glm::vec4(inst.interiorAmbient, 0.0f);
+    e.interiorDirect = glm::vec4(inst.interiorDirect, 0.0f);
+}
+
 void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
                         const BlendedInterleave* interleave) {
     if (instances.empty() || !opaquePipeline_) {
@@ -1397,6 +1405,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 e.boneBase = p.useBones ? static_cast<int32_t>(inst.megaBoneOffset) : 0;
                 e.boneCount = static_cast<int32_t>(inst.boneMatrices.size());
                 e.highlight = inst.highlight;
+                writeInstanceLight(e, inst);
                 instanceDataCount_++;
                 ++writtenInstances;
             }
@@ -1546,6 +1555,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                             e.boneBase = p.useBones ? static_cast<int32_t>(inst.megaBoneOffset) : 0;
                             e.boneCount = static_cast<int32_t>(inst.boneMatrices.size());
                             e.highlight = inst.highlight;
+                            writeInstanceLight(e, inst);
                             instanceDataCount_++;
                         }
                     }
@@ -1575,10 +1585,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     // Update material UBO
                     if (batch.materialUBOMapped) {
                         auto* mat = static_cast<M2MaterialUBO*>(batch.materialUBOMapped);
-                        // interiorDarken is a camera-based flag - it darkens ALL M2s (incl.
-                        // outdoor trees) when the camera is inside a WMO.  Disable it; indoor
-                        // M2s already look correct from the darker ambient/lighting.
-                        mat->interiorDarken = 0.0f;
                         mat->alphaTest = forceCutout ? 1 : 0;
                         mat->blendMode = batch.blendMode;
                     }
@@ -1764,6 +1770,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             e.boneBase = needsBones ? static_cast<int32_t>(instance.megaBoneOffset) : 0;
             e.boneCount = static_cast<int32_t>(instance.boneMatrices.size());
             e.highlight = instance.highlight;
+            writeInstanceLight(e, instance);
             instanceDataCount_++;
 
             // Pipeline selection: the batch's own blend mode, spell or not.
@@ -1781,7 +1788,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             if (batch.materialUBOMapped) {
                 auto* mat = static_cast<M2MaterialUBO*>(batch.materialUBOMapped);
                 mat->blendMode = batch.blendMode;
-                mat->interiorDarken = 0.0f;
             }
 
             if (!batch.materialSet) continue;

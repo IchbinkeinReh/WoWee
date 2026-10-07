@@ -29,6 +29,7 @@
 #include "pipeline/dbc_layout.hpp"
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/wmo_loader.hpp"
+#include "pipeline/wmo_doodad_light.hpp"
 #include "pipeline/wmo_group_path.hpp"
 #include "pipeline/wdt_loader.hpp"
 #include "game/game_handler.hpp"
@@ -500,6 +501,8 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                             wmoMatrix = glm::rotate(wmoMatrix, wmoRot.x, glm::vec3(1, 0, 0));
 
                             uint32_t loadedDoodads = 0;
+                            const std::vector<uint8_t> interiorDoodads =
+                                pipeline::wmo_doodad_light::interiorDoodads(wmoModel);
                             for (uint32_t di = 0; di < doodadSet.count; di++) {
                                 uint32_t doodadIdx = doodadSet.startIndex + di;
                                 if (doodadIdx >= wmoModel.doodads.size()) break;
@@ -539,7 +542,17 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                                 uint32_t doodadModelId = static_cast<uint32_t>(std::hash<std::string>{}(m2Path));
                                 if (!m2Renderer->loadModel(m2Model, doodadModelId)) continue;
                                 uint32_t doodadInstId = m2Renderer->createInstanceWithMatrix(doodadModelId, worldMatrix, worldPos);
-                                if (doodadInstId) m2Renderer->setSkipWallCollision(doodadInstId, true);
+                                if (doodadInstId) {
+                                    m2Renderer->setSkipWallCollision(doodadInstId, true);
+                                    // An interior group's doodad is lit by its
+                                    // own colour (0x007bf740, 0x007c1150).
+                                    if (doodadIdx < interiorDoodads.size() && interiorDoodads[doodadIdx]) {
+                                        const auto light =
+                                            pipeline::wmo_doodad_light::doodadLight(doodad.color);
+                                        m2Renderer->setInstanceInteriorLight(doodadInstId, light.ambient,
+                                                                             light.direct);
+                                    }
+                                }
                                 loadedDoodads++;
                             }
                             LOG_INFO("Loaded ", loadedDoodads, " instance WMO doodads");

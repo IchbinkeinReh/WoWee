@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 #include "core/coordinates.hpp"
 
@@ -269,6 +270,26 @@ inline float wmoFogBlend(float distanceInside) {
     return b < 0.0f ? 0.0f : (b > 1.0f ? 1.0f : b);
 }
 
+/// Which of a WMO fog record's two fogs the camera gets (0x007f16f0): the
+/// air fog out of liquid. In liquid, the liquid fog - unless the LiquidType
+/// has flag 0x20 and the MFOG record lacks 0x100, or the LiquidType has
+/// 0x100 and the record lacks 0x10 - in which case the WMO adds no fog of its
+/// own and the zone's (underwater) fog stays.
+enum class WmoFogChoice { Air, Liquid, None };
+inline WmoFogChoice wmoFogChoice(bool cameraInLiquid, uint32_t liquidTypeFlags, uint32_t mfogFlags) {
+    if (!cameraInLiquid) return WmoFogChoice::Air;
+    if ((liquidTypeFlags & 0x20u) && !(mfogFlags & 0x100u)) return WmoFogChoice::None;
+    if ((liquidTypeFlags & 0x100u) && !(mfogFlags & 0x10u)) return WmoFogChoice::None;
+    return WmoFogChoice::Liquid;
+}
+
+/// Whether the WMO's liquid fog replaces the zone's fog outright rather than
+/// blending in over the first 25 yards: LiquidType flag 0x40 (0x007f16f0
+/// copies it over the base fog, 0x007f1885).
+inline bool wmoLiquidFogIsWhole(WmoFogChoice choice, uint32_t liquidTypeFlags) {
+    return choice == WmoFogChoice::Liquid && (liquidTypeFlags & 0x40u) != 0;
+}
+
 // ---------------------------------------------------------------------------
 // The sky dome.
 
@@ -276,6 +297,71 @@ inline float wmoFogBlend(float distanceInside) {
 /// (0xa41a90, read by 0x007f2470): zenith, the four bands, the horizon ring,
 /// the nadir. 0x007f0530 colours them ch2, ch3, ch4, ch5, ch6, ch7, ch7.
 inline constexpr float kSkyDomeRows[] = {0.0f, 0.17f, 0.20f, 0.23f, 0.24f, 0.25f, 1.0f};
+
+/// The dawn and dusk sky glow's clock (0xaf4b7c, read by 0x007f0530): none
+/// at 03:00, all of it at 06:30, none by 07:00; none at 20:30, all at 21:30,
+/// none again by midnight.
+inline constexpr CurveKey kSkyHighlightTime[] = {
+    {0.125f, 0.0f}, {0.27083334f, 1.0f}, {0.29166666f, 0.0f},
+    {0.85416669f, 0.0f}, {0.89583331f, 1.0f}, {0.99930555f, 0.0f}};
+/// How the glow runs round the dome (0xaf4bac), keyed by the turn fraction
+/// 0x007f0530 gives each of the dome's 24 columns.
+inline constexpr CurveKey kSkyHighlightAzimuth[] = {
+    {0.125f, 1.0f}, {0.375f, 0.0f}, {0.5f, -0.5f}, {0.625f, -0.7f}, {0.75f, -0.5f}, {0.875f, 0.0f}};
+/// How much of the glow is up at day fraction `t`, for a light whose
+/// LightParams.HighlightSky (DNInfo[0x15]) is `highlightSky` (0x007f0530:
+/// the time curve times 0xd38c28).
+inline float skyHighlightStrength(float t, float highlightSky) {
+    return sampleCurve(kSkyHighlightTime, t) * highlightSky;
+}
+/// Where the glow's azimuth curve starts, from the camera's forward in world
+/// space: atan2(y, x) of it as a turn fraction, plus a quarter (0x007f3920
+/// keeps the angle in 0xd38b3c; 0x007f0530 adds 0.25). Looking straight up or
+/// down the client takes atan2(z, x) instead. Column j of the dome, at world
+/// azimuth pi/2 - 2 pi j / 24, is keyed at this less j/24.
+inline float skyHighlightPhase(const glm::vec3& worldForward) {
+    constexpr float kTwoPi = 6.2831855f;
+    const float x = worldForward.x;
+    const float y = worldForward.y;
+    float a = (x * x + y * y <= 0.0001f) ? std::atan2(worldForward.z, x) : std::atan2(y, x);
+    if (a < 0.0f) a += kTwoPi;
+    float u = a * 0.15915494f + 0.25f;
+    if (u > 1.0f) u -= 1.0f;
+    return u;
+}
+/// One of the dome's banded rows (ch3..ch6) at a column whose azimuth curve
+/// reads `az`, with the glow at strength `h` (0x007f0530): the row's colour
+/// pulled toward ch3 by h, then toward the base colour as az rises to 1, or on
+/// toward ch2 as it goes below 0.
+inline glm::vec3 skyHighlightRow(const glm::vec3& row, const glm::vec3& skyMiddle,
+                                 const glm::vec3& skyTop, float h, float az) {
+    const glm::vec3 toward = row + (skyMiddle - row) * h;
+    if (az >= 0.0f) return row + (toward - row) * ((1.0f - az) * h);
+    const glm::vec3 lifted = toward + (skyTop - toward) * (0.7f * h);
+    return toward + (lifted - toward) * (-az * h);
+}
+
+// ---------------------------------------------------------------------------
+// The stars.
+
+/// The stars' clock (0xaf4c20, read by 0x007ee0d0): all of them to 03:00,
+/// gone by 04:30, back from 22:30 to all of them at midnight.
+inline constexpr CurveKey kStarsTime[] = {
+    {0.125f, 1.0f}, {0.1875f, 0.0f}, {0.9375f, 0.0f}, {1.0f, 1.0f}};
+/// The stars model's alpha byte at day fraction `t`: the curve times 254,
+/// plus one, truncated (0x007ee0d0). 0x009abd50 draws it only above 1.
+inline int starsAlphaByte(float t) {
+    return static_cast<int>(sampleCurve(kStarsTime, t) * 254.0f + 1.0f);
+}
+/// The stars model's opacity, 0 when the client would not draw it.
+inline float starsAlpha(float t) {
+    const int a = starsAlphaByte(t);
+    return a > 1 ? static_cast<float>(a) / 255.0f : 0.0f;
+}
+/// The client's stars: a sky model of their own, drawn at the eye under the
+/// procedural sky (0x009abb00 loads it, 0x009abd50 draws it). The name is
+/// the client's (0xaa9844); the .mdl is read as the .m2 beside it.
+inline constexpr const char* kStarsModelPath = "Environments\\Stars\\stars.mdl";
 
 /// Where a view direction meets the dome, as its polar angle over pi. The dome
 /// is a unit sphere centred cos(45 deg) below the eye (0x007f2470), which is

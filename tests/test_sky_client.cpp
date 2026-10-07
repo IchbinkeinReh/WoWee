@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace dn = wowee::rendering::daynight;
@@ -106,6 +107,75 @@ TEST_CASE("an interior's fog takes over 25 yards in", "[sky][mfog]") {
     CHECK(dn::wmoFogBlend(100.0f) == Catch::Approx(1.0f));
 }
 
+TEST_CASE("a WMO's fog under liquid follows the LiquidType's flags", "[sky][mfog]") {
+    using C = dn::WmoFogChoice;
+    // Out of liquid it is the air fog, whatever the flags (0x007f16f0).
+    CHECK(dn::wmoFogChoice(false, 0x160u, 0u) == C::Air);
+    // In liquid, the liquid fog by default.
+    CHECK(dn::wmoFogChoice(true, 0u, 0u) == C::Liquid);
+    // LiquidType 0x20: only if the fog record has 0x100.
+    CHECK(dn::wmoFogChoice(true, 0x20u, 0u) == C::None);
+    CHECK(dn::wmoFogChoice(true, 0x20u, 0x100u) == C::Liquid);
+    // LiquidType 0x100: not unless the fog record has 0x10.
+    CHECK(dn::wmoFogChoice(true, 0x100u, 0u) == C::None);
+    CHECK(dn::wmoFogChoice(true, 0x100u, 0x10u) == C::Liquid);
+    CHECK(dn::wmoFogChoice(true, 0x120u, 0x10u) == C::None);
+    CHECK(dn::wmoFogChoice(true, 0x120u, 0x110u) == C::Liquid);
+    // LiquidType 0x40 makes the liquid fog the whole of it, no 25-yard blend.
+    CHECK(dn::wmoLiquidFogIsWhole(C::Liquid, 0x40u));
+    CHECK_FALSE(dn::wmoLiquidFogIsWhole(C::Liquid, 0u));
+    CHECK_FALSE(dn::wmoLiquidFogIsWhole(C::Air, 0x40u));
+    CHECK_FALSE(dn::wmoLiquidFogIsWhole(C::None, 0x40u));
+}
+
+TEST_CASE("the sky glows at dawn and dusk where HighlightSky says", "[sky][highlight]") {
+    // 0xaf4b7c: none at 03:00, all at 06:30, none by 07:00; all at 21:30.
+    CHECK(dn::skyHighlightStrength(3.0f / 24.0f, 1.0f) == Catch::Approx(0.0f));
+    CHECK(dn::skyHighlightStrength(6.5f / 24.0f, 1.0f) == Catch::Approx(1.0f));
+    CHECK(dn::skyHighlightStrength(7.0f / 24.0f, 1.0f) == Catch::Approx(0.0f));
+    CHECK(dn::skyHighlightStrength(12.0f / 24.0f, 1.0f) == Catch::Approx(0.0f));
+    CHECK(dn::skyHighlightStrength(21.5f / 24.0f, 1.0f) == Catch::Approx(1.0f));
+    CHECK(dn::skyHighlightStrength(21.0f / 24.0f, 1.0f) == Catch::Approx(0.5f).margin(0.01f));
+    // Nothing without the LightParams switch.
+    CHECK(dn::skyHighlightStrength(6.5f / 24.0f, 0.0f) == Catch::Approx(0.0f));
+
+    // The azimuth curve starts at atan2(y, x) of the camera's heading, as a
+    // turn, plus a quarter (0x007f3920, 0x007f0530).
+    CHECK(dn::skyHighlightPhase(glm::vec3(1.0f, 0.0f, 0.0f)) == Catch::Approx(0.25f));
+    CHECK(dn::skyHighlightPhase(glm::vec3(0.0f, 1.0f, 0.0f)) == Catch::Approx(0.5f));
+    CHECK(dn::skyHighlightPhase(glm::vec3(-1.0f, 0.0f, 0.0f)) == Catch::Approx(0.75f));
+    CHECK(dn::skyHighlightPhase(glm::vec3(0.0f, -1.0f, 0.0f)) == Catch::Approx(1.0f));
+
+    // A band at az 1 is itself; at az 0 it is pulled toward ch3 by the
+    // strength; below 0 on toward ch2.
+    const glm::vec3 band(1.0f, 0.0f, 0.0f), middle(0.0f, 1.0f, 0.0f), top(0.0f, 0.0f, 1.0f);
+    const glm::vec3 same = dn::skyHighlightRow(band, middle, top, 1.0f, 1.0f);
+    CHECK(same.r == Catch::Approx(1.0f));
+    const glm::vec3 pulled = dn::skyHighlightRow(band, middle, top, 1.0f, 0.0f);
+    CHECK(pulled.g == Catch::Approx(1.0f));
+    CHECK(pulled.r == Catch::Approx(0.0f));
+    const glm::vec3 lifted = dn::skyHighlightRow(band, middle, top, 1.0f, -0.7f);
+    // ch3, then 0.7 of the way to ch2, 0.7 of that: 0.49 of ch2.
+    CHECK(lifted.b == Catch::Approx(0.49f));
+    CHECK(lifted.g == Catch::Approx(0.51f));
+    // No strength, no glow.
+    const glm::vec3 none = dn::skyHighlightRow(band, middle, top, 0.0f, -0.7f);
+    CHECK(none.r == Catch::Approx(1.0f));
+}
+
+TEST_CASE("the stars are out from 22:30 to 04:30", "[sky][stars]") {
+    // 0xaf4c20 through 0x007ee0d0: the curve times 254, plus one, truncated.
+    CHECK(dn::starsAlphaByte(0.0f) == 255);
+    CHECK(dn::starsAlphaByte(2.0f / 24.0f) == 255);
+    CHECK(dn::starsAlphaByte(4.5f / 24.0f) == 1);
+    CHECK(dn::starsAlphaByte(0.5f) == 1);
+    CHECK(dn::starsAlphaByte(23.25f / 24.0f) == 128);
+    // 0x009abd50 draws them only above 1.
+    CHECK(dn::starsAlpha(0.5f) == 0.0f);
+    CHECK(dn::starsAlpha(0.0f) == Catch::Approx(1.0f));
+    CHECK(std::string(dn::kStarsModelPath) == "Environments\\Stars\\stars.mdl");
+}
+
 TEST_CASE("a sky model hides the procedural sky only without flag 0x2", "[sky][skybox]") {
     using Layer = LightingManager::SkyboxLayer;
     // 0x007f09b0: past 0.99 and not 'combine with the procedural sky'.
@@ -187,6 +257,45 @@ TEST_CASE("MFOG is read into the model's fogs", "[wmo][mfog]") {
     CHECK(f.color1.b == Catch::Approx(0x30 / 255.0f));
     CHECK(f.endDist2 == Catch::Approx(50.0f));
     CHECK(f.color2.b == Catch::Approx(0x80 / 255.0f));
+}
+
+TEST_CASE("MODR and the MOHD flags are read", "[wmo][modr]") {
+    std::vector<uint8_t> root;
+    put32(root, 0x4D564552);  // MVER
+    put32(root, 4);
+    put32(root, 17);
+    put32(root, 0x4D4F4844);  // MOHD
+    put32(root, 64);
+    for (int i = 0; i < 7; ++i) put32(root, 0);  // counts
+    put32(root, 0x00102030);                     // ambient
+    put32(root, 0);                              // wmo id
+    for (int i = 0; i < 6; ++i) putF(root, 0.0f);
+    put32(root, 0x00010002);                     // flags 0x2, numLod 1
+    auto model = wowee::pipeline::WMOLoader::load(root);
+    CHECK(model.flags == 0x2u);
+
+    std::vector<uint8_t> group;
+    put32(group, 0x4D564552);  // MVER
+    put32(group, 4);
+    put32(group, 17);
+    put32(group, 0x4D4F4750);  // MOGP
+    put32(group, 68 + 12 + 4);
+    put32(group, 0);
+    put32(group, 0);
+    put32(group, 0x2000);      // flags
+    for (int i = 0; i < 14; ++i) put32(group, 0);  // rest of the header
+    put32(group, 0x4D4F4452);  // MODR
+    put32(group, 4);
+    put32(group, 0x00090003);  // refs 3 and 9
+    put32(group, 0);           // padding after it
+    model.groups.resize(1);
+    // No geometry, so the loader reports the group as empty; the refs are
+    // read all the same.
+    (void)wowee::pipeline::WMOLoader::loadGroup(group, model, 0);
+    CHECK(model.groups[0].flags == 0x2000u);
+    REQUIRE(model.groups[0].doodadRefs.size() == 2);
+    CHECK(model.groups[0].doodadRefs[0] == 3);
+    CHECK(model.groups[0].doodadRefs[1] == 9);
 }
 
 TEST_CASE("MCSH's bits are read low bit first, edges fixed", "[adt][mcsh]") {

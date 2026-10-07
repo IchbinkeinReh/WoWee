@@ -75,6 +75,13 @@ const float ALPHA_KEY_REF = 0.8784314;
 
 layout(set = 1, binding = 2) uniform sampler2D uNormalHeightMap;
 
+// After the vertex stage's model matrix: the light of the WMO interior floor
+// the character stands on, w = 1 when it has one (0x007a0d60, 0x007c1730).
+layout(push_constant) uniform Push {
+    layout(offset = 64) vec4 interiorAmbient;
+    vec4 interiorDirect;
+} pc;
+
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 
@@ -365,6 +372,13 @@ void main() {
         // colour as the emissive and no light (FUN_0081fb10). This was
         // texture * (1 + boost), twice the texture at the defaults.
         result = texColor.rgb;
+    } else if (pc.interiorAmbient.w > 0.5) {
+        // On an interior floor: its vertex colour as the ambient and as one
+        // light down from a fixed direction (0xaeedf0, the same in render
+        // space), nothing of the sun - neither its light nor its shadow.
+        const vec3 interiorDir = normalize(vec3(0.30822, 0.30822, 0.9));
+        float idiff = max(dot(norm, interiorDir), 0.0);
+        result = pc.interiorAmbient.rgb * texColor.rgb + idiff * pc.interiorDirect.rgb * texColor.rgb;
     } else {
         vec3 ldir = normalize(-lightDir.xyz);
         float diff = max(dot(norm, ldir), 0.0);

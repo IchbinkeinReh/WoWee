@@ -1,4 +1,5 @@
 #include "rendering/terrain_manager.hpp"
+#include "pipeline/wmo_doodad_light.hpp"
 
 #include <vector>
 
@@ -741,6 +742,8 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                     }
                     std::unordered_set<uint32_t> loadedDoodadIndices;
                     std::unordered_set<uint32_t> wmoPreparedModelIds;  // within-WMO model dedup
+                    const std::vector<uint8_t> interiorDoodads =
+                        pipeline::wmo_doodad_light::interiorDoodads(wmoModel);
                     for (uint32_t setIdx : setsToLoad) {
                         const auto& doodadSet = wmoModel.doodadSets[setIdx];
                     for (uint32_t di = 0; di < doodadSet.count; di++) {
@@ -850,6 +853,12 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                         doodadReady.model = std::move(m2Model);
                         doodadReady.worldPosition = worldPos;
                         doodadReady.modelMatrix = worldMatrix;
+                        if (doodadIdx < interiorDoodads.size() && interiorDoodads[doodadIdx]) {
+                            const auto light = pipeline::wmo_doodad_light::doodadLight(doodad.color);
+                            doodadReady.interiorLit = true;
+                            doodadReady.interiorAmbient = light.ambient;
+                            doodadReady.interiorDirect = light.direct;
+                        }
                         pending->wmoDoodads.push_back(std::move(doodadReady));
                     }
                     }
@@ -1246,6 +1255,10 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                     // blocking, but structural doodads such as Exodarplatform01
                     // carry the only authored floor for their walkable ramps.
                     m2Renderer->setSkipWallCollision(wmoDoodadInstId, true);
+                    if (doodad.interiorLit) {
+                        m2Renderer->setInstanceInteriorLight(wmoDoodadInstId, doodad.interiorAmbient,
+                                                             doodad.interiorDirect);
+                    }
                     ft.m2InstanceIds.push_back(wmoDoodadInstId);
                 }
                 ft.wmoDoodadIndex++;

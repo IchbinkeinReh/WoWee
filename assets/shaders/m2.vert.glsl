@@ -38,9 +38,10 @@ struct InstanceData {
     int boneBase;
     int boneCount;
     // 0 for an ordinary instance, 1 while the player is pressing on it. Sits
-    // in what was padding, so the entry is the same 96 bytes it always was.
+    // in what was padding.
     float highlight;
-    // Unused, and zero. Also in what was padding.
+    // 1: a WMO interior doodad, lit by the two colours below rather than
+    // the zone's light. Also in what was padding.
     int flags;
     // The texture matrix's linear part, rows (m00, m01) and (m10, m11);
     // uvOffset is its translation.
@@ -48,6 +49,8 @@ struct InstanceData {
     // The batch's animated colour and alpha for this instance; alpha below
     // zero means the material's static values apply.
     vec4 colorMul;
+    vec4 interiorAmbient;
+    vec4 interiorDirect;
 };
 layout(set = 3, binding = 0) readonly buffer InstanceSSBO {
     InstanceData instanceData[];
@@ -67,6 +70,9 @@ layout(location = 5) out float vFadeAlpha;
 layout(location = 6) flat out int vSkyMode;
 layout(location = 7) flat out float vHighlight;
 layout(location = 8) flat out vec4 vColorMul;
+layout(location = 9) flat out int vInteriorLit;
+layout(location = 10) flat out vec3 vInteriorAmbient;
+layout(location = 11) flat out vec3 vInteriorDirect;
 
 void main() {
     // Fetch per-instance data from SSBO
@@ -111,6 +117,9 @@ void main() {
     vColorMul = instanceData[instIdx].colorMul;
     vSkyMode = push.isFoliage < 0 ? 1 : 0;
     vHighlight = instanceData[instIdx].highlight;
+    vInteriorLit = instanceData[instIdx].flags & 1;
+    vInteriorAmbient = instanceData[instIdx].interiorAmbient.rgb;
+    vInteriorDirect = instanceData[instIdx].interiorDirect.rgb;
 
     gl_Position = projection * view * worldPos;
     // A sky model sits on the far plane whatever its radius, so the depth

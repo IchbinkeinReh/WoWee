@@ -13,8 +13,8 @@ class VkContext;
 /**
  * Star field renderer
  *
- * Renders a field of stars across the night sky.
- * Stars fade in at dusk and out at dawn.
+ * Sharp stars: a point field across the night sky, an option in place of
+ * the client's stars model, on the client's star clock.
  */
 class StarField {
 public:
@@ -30,10 +30,8 @@ public:
      * @param cmd         Command buffer to record into
      * @param perFrameSet Per-frame descriptor set (set 0, contains camera UBO)
      * @param timeOfDay   Time of day in hours (0-24)
-     * @param cloudDensity Optional cloud density from lighting (0-1, reduces star visibility)
      */
-    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, float timeOfDay,
-                float cloudDensity = 0.0f);
+    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, float timeOfDay);
 
     /**
      * Update star twinkle animation

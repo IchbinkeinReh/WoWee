@@ -121,14 +121,17 @@ void Skybox::shutdown() {
     vkCtx = nullptr;
 }
 
-void Skybox::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const SkyParams& params) {
+void Skybox::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const SkyParams& params,
+                    float highlightPhase) {
     if (pipeline == VK_NULL_HANDLE || !renderingEnabled) {
         return;
     }
 
     SkyPushConstants push{};
-    push.skyTop    = glm::vec4(params.skyTopColor, 1.0f);
-    push.skyMiddle = glm::vec4(params.skyMiddleColor, 1.0f);
+    // The HighlightSky glow rides in the spare w of the first two: its
+    // strength and where its azimuth curve starts (0x007f0530).
+    push.skyTop    = glm::vec4(params.skyTopColor, params.skyHighlight);
+    push.skyMiddle = glm::vec4(params.skyMiddleColor, highlightPhase);
     push.skyBand1  = glm::vec4(params.skyBand1Color, 1.0f);
     push.skyBand2  = glm::vec4(params.skyBand2Color, 1.0f);
     push.skySmog   = glm::vec4(params.skySmogColor, 1.0f);

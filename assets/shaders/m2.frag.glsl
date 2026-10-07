@@ -31,7 +31,7 @@ layout(set = 1, binding = 2) uniform M2Material {
     int unlit;
     int blendMode;
     float fadeAlpha;
-    float interiorDarken;
+    float unused4;     // was interiorDarken, always 0: the client has no such darkening
     float specularIntensity;
     float emissiveBoost;
     float tintR;
@@ -58,6 +58,9 @@ layout(location = 5) in float vFadeAlpha;
 layout(location = 6) flat in int vSkyMode;
 layout(location = 7) flat in float vHighlight;
 layout(location = 8) flat in vec4 vColorMul;
+layout(location = 9) flat in int vInteriorLit;
+layout(location = 10) flat in vec3 vInteriorAmbient;
+layout(location = 11) flat in vec3 vInteriorDirect;
 
 layout(location = 0) out vec4 outColor;
 
@@ -217,6 +220,14 @@ void main() {
         // client draws an unlit batch with no light and adds nothing
         // (FUN_0081fb10).
         result = texColor.rgb;
+    } else if (vInteriorLit != 0) {
+        // A doodad of a WMO interior group (0x007c1150): its MODD colour as
+        // the ambient and as one light down from a fixed direction (0xaeedf0,
+        // the same in render space), and nothing of the sun - neither its
+        // light nor its shadow.
+        const vec3 interiorDir = normalize(vec3(0.30822, 0.30822, 0.9));
+        float idiff = max(dot(norm, interiorDir), 0.0);
+        result = vInteriorAmbient * texColor.rgb + idiff * vInteriorDirect * texColor.rgb;
     } else {
         // Ambient and diffuse only. The client lights an M2 batch with the
         // fixed-function light (FUN_0081fb10) and no specular term; its
@@ -243,9 +254,6 @@ void main() {
         result = rtAmbient(rt, ambientColor.rgb) * texColor.rgb
                + shadow * (diff * lightColor.rgb * texColor.rgb);
 
-        if (interiorDarken > 0.0) {
-            result *= mix(1.0, 0.5, interiorDarken);
-        }
     }
 
     float dist = length(viewPos.xyz - FragPos);

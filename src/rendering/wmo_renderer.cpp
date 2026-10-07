@@ -5,6 +5,7 @@
 #include "rendering/wmo_vertex.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/wmo_renderer.hpp"
+#include "pipeline/wmo_doodad_light.hpp"
 #include "rendering/day_night.hpp"
 #include "rendering/rt_bvh.hpp"
 #include "rendering/rt_scene.hpp"
@@ -443,6 +444,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
     modelData.boundingBoxMin = model.boundingBoxMin;
     modelData.boundingBoxMax = model.boundingBoxMax;
     modelData.wmoAmbientColor = model.ambientColor;
+    modelData.mohdFlags = model.flags;
     std::string lowerSourcePath = model.sourcePath;
     std::replace(lowerSourcePath.begin(), lowerSourcePath.end(), '/', '\\');
     std::transform(lowerSourcePath.begin(), lowerSourcePath.end(), lowerSourcePath.begin(),
@@ -880,6 +882,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
     // Store doodad templates (M2 models placed in WMO) for instancing later
     if (!model.doodadSets.empty() && !model.doodads.empty()) {
         const auto& doodadSet = model.doodadSets[0];  // Use first doodad set
+        const std::vector<uint8_t> interiorDoodads = pipeline::wmo_doodad_light::interiorDoodads(model);
         for (uint32_t di = 0; di < doodadSet.count; di++) {
             uint32_t doodadIdx = doodadSet.startIndex + di;
             if (doodadIdx >= model.doodads.size()) break;
@@ -905,6 +908,12 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             DoodadTemplate doodadTemplate;
             doodadTemplate.m2Path = m2Path;
             doodadTemplate.localTransform = localTransform;
+            if (doodadIdx < interiorDoodads.size() && interiorDoodads[doodadIdx]) {
+                const auto light = pipeline::wmo_doodad_light::doodadLight(doodad.color);
+                doodadTemplate.interiorLit = true;
+                doodadTemplate.interiorAmbient = light.ambient;
+                doodadTemplate.interiorDirect = light.direct;
+            }
             modelData.doodadTemplates.push_back(doodadTemplate);
 
         }
@@ -1990,6 +1999,15 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
     resources.collisionVertices.reserve(group.vertices.size());
     for (const auto& v : group.vertices) {
         resources.collisionVertices.push_back(v.position);
+    }
+    // An interior group with vertex colours (MOGP 0x4) keeps them for the
+    // light of whoever stands on it (0x007c7fe0 reads the group's MOCV).
+    if (!(groupFlags & pipeline::wmo_doodad_light::kOutsideGroupFlags) && (groupFlags & 0x4u)) {
+        resources.collisionColors.reserve(group.vertices.size());
+        for (const auto& v : group.vertices) {
+            resources.collisionColors.push_back(
+                glm::u8vec3(glm::round(glm::clamp(glm::vec3(v.color), 0.0f, 1.0f) * 255.0f)));
+        }
     }
     if (!group.triFlags.empty()) {
         // Store all triangles but tag each with MOPY flags for collision filtering
@@ -3922,6 +3940,78 @@ bool WMORenderer::isInsideInteriorWMO(float glX, float glY, float glZ) const {
     return isInsideWMOGroups(glX, glY, glZ, /*interiorOnly=*/true, nullptr);
 }
 
+std::optional<WMORenderer::UnitInteriorLight> WMORenderer::unitInteriorLightAt(const glm::vec3& feet) const {
+    // The floor under the feet: from a yard above them to twelve below
+    // (0x007a0d60), the nearest across every WMO there.
+    constexpr float kAbove = 1.0f;
+    constexpr float kReach = 13.0f;
+    std::vector<size_t> candidates;
+    gatherCandidates(feet - glm::vec3(0.5f, 0.5f, kReach - kAbove), feet + glm::vec3(0.5f, 0.5f, kAbove),
+                     candidates);
+    const glm::vec3 worldOrigin = feet + glm::vec3(0.0f, 0.0f, kAbove);
+    float bestDrop = kReach;
+    const ModelData* bestModel = nullptr;
+    const GroupResources* bestGroup = nullptr;
+    uint32_t bestTri = 0;
+    glm::vec3 bestHit(0.0f);
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const ModelData& model = it->second;
+        const glm::vec3 localOrigin = glm::vec3(instance.invModelMatrix * glm::vec4(worldOrigin, 1.0f));
+        const glm::vec3 localDir =
+            glm::normalize(glm::vec3(instance.invModelMatrix * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+        for (const auto& group : model.groups) {
+            if (!trianglesAlongRay(group, localOrigin, localDir, tl_triScratch)) continue;
+            const auto& verts = group.collisionVertices;
+            const auto& indices = group.collisionIndices;
+            for (uint32_t triStart : tl_triScratch) {
+                const glm::vec3& v0 = verts[indices[triStart]];
+                const glm::vec3& v1 = verts[indices[triStart + 1]];
+                const glm::vec3& v2 = verts[indices[triStart + 2]];
+                const float t = rayTriangleIntersect(localOrigin, localDir, v0, v1, v2);
+                if (t <= 0.0f) continue;
+                const glm::vec3 hitLocal = localOrigin + localDir * t;
+                const glm::vec3 hitWorld = glm::vec3(instance.modelMatrix * glm::vec4(hitLocal, 1.0f));
+                const float drop = worldOrigin.z - hitWorld.z;
+                if (drop < 0.0f || drop >= bestDrop) continue;
+                bestDrop = drop;
+                bestModel = &model;
+                bestGroup = &group;
+                bestTri = triStart;
+                bestHit = hitLocal;
+            }
+        }
+    }
+    // A unit on an exterior or exterior-lit group's floor takes the zone's
+    // light (0x007c15f0), as does one on a group with no vertex colours.
+    if (!bestGroup || bestGroup->collisionColors.empty()) return std::nullopt;
+
+    // The vertex colours at the feet, by barycentric weight (0x007c7fe0).
+    const auto& indices = bestGroup->collisionIndices;
+    const uint16_t i0 = indices[bestTri];
+    const uint16_t i1 = indices[bestTri + 1];
+    const uint16_t i2 = indices[bestTri + 2];
+    const glm::vec3& a = bestGroup->collisionVertices[i0];
+    const glm::vec3& b = bestGroup->collisionVertices[i1];
+    const glm::vec3& c = bestGroup->collisionVertices[i2];
+    const glm::vec2 ab(b - a), ac(c - a), ap(bestHit - a);
+    const float den = ab.x * ac.y - ab.y * ac.x;
+    float wb = 0.0f, wc = 0.0f;
+    if (std::abs(den) > 1e-8f) {
+        wb = glm::clamp((ap.x * ac.y - ap.y * ac.x) / den, 0.0f, 1.0f);
+        wc = glm::clamp((ab.x * ap.y - ab.y * ap.x) / den, 0.0f, 1.0f - wb);
+    }
+    const float wa = 1.0f - wb - wc;
+    const auto& cols = bestGroup->collisionColors;
+    const glm::vec3 mocv = glm::vec3(cols[i0]) * wa + glm::vec3(cols[i1]) * wb + glm::vec3(cols[i2]) * wc;
+    const glm::ivec3 floor = pipeline::wmo_doodad_light::unitFloorColor(
+        mocv, bestModel->mohdFlags, glm::vec4(bestModel->wmoAmbientColor, 1.0f));
+    const auto light = pipeline::wmo_doodad_light::unitLight(floor);
+    return UnitInteriorLight{light.ambient, light.direct};
+}
+
 std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::vec3& pos) const {
     // Group flags the client treats as outside (0x007a1150 skips groups with
     // either): 0x8 exterior, 0x40 exterior-lit.
@@ -3952,11 +4042,18 @@ std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::ve
         if (groupIndex < 0) continue;
 
         // Fog 0, then the group's spheres around the camera, farthest first.
+        // Both of a record's fogs, air and liquid, go through the same blend
+        // (0x007a0cd0 lerps the two in one loop). The flags are fog 0's, or
+        // the nearest sphere's once one is applied - it is applied last.
         InteriorFog out;
         const pipeline::WMOFog& base = model.fogs[0];
         out.end = base.endDist;
         out.startScalar = base.startFactor;
         out.color = glm::vec3(base.color1);
+        out.liquidEnd = base.endDist2;
+        out.liquidStartScalar = base.startFactor2;
+        out.liquidColor = glm::vec3(base.color2);
+        out.flags = base.flags;
         if (static_cast<size_t>(groupIndex) < model.groupFogIndices.size()) {
             struct Near { const pipeline::WMOFog* fog; float dist; };
             std::vector<Near> near;
@@ -3973,6 +4070,10 @@ std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::ve
                 out.end = glm::mix(out.end, n.fog->endDist, w);
                 out.startScalar = glm::mix(out.startScalar, n.fog->startFactor, w);
                 out.color = glm::mix(out.color, glm::vec3(n.fog->color1), w);
+                out.liquidEnd = glm::mix(out.liquidEnd, n.fog->endDist2, w);
+                out.liquidStartScalar = glm::mix(out.liquidStartScalar, n.fog->startFactor2, w);
+                out.liquidColor = glm::mix(out.liquidColor, glm::vec3(n.fog->color2), w);
+                out.flags = n.fog->flags;
             }
         }
 

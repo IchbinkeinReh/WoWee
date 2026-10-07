@@ -332,6 +332,17 @@ private:
     /// Sky paths that did not resolve to a usable model, so a failing path is
     /// not read off disk again on every frame it is wanted.
     std::unordered_set<std::string> failedSkyboxPaths_;
+    /// The client's stars (Environments\\Stars\\stars.mdl), a sky model of
+    /// their own. 0x007f09b0 draws them first, under the dome, the sun, the
+    /// moons and the clouds, where the LightSkybox models go on top of all
+    /// of it - so they have a renderer of their own rather than a slot in
+    /// skyboxModelRenderer_ (0x009abb00, 0x009abd50).
+    std::unique_ptr<M2Renderer> starsModelRenderer_;
+    uint32_t starsInstanceId_ = 0;
+    bool starsModelTried_ = false;
+    /// How much of the stars shows this frame, 0 when the client would not
+    /// draw them (daynight::starsAlpha).
+    float starsAlpha_ = 0.0f;
     std::unique_ptr<Minimap> minimap;
     std::unique_ptr<WorldMap> worldMap;
     std::unique_ptr<QuestMarkerRenderer> questMarkerRenderer;
@@ -372,7 +383,7 @@ private:
     bool shadowsEnabled = false;
     float shadowDistance_ = 300.0f;  // Shadow frustum half-extent (default: 300 units)
     float viewDistance_ = 1200.0f;
-    bool sharpStars_ = true;
+    bool sharpStars_ = false;
     float diagTerrainFurthest_ = -1.0f;
     float diagM2Furthest_ = -1.0f;
 
@@ -428,6 +439,10 @@ private:
     void applyMsaaChange();
     bool updateSkyboxLayers();
     uint32_t loadSkyboxModel(const std::string& path);
+    /// Reads, parses and uploads one sky model into `target`; 0 on failure.
+    uint32_t uploadSkyModel(M2Renderer& target, const std::string& path);
+    /// The stars model at the eye, faded by the client's star clock.
+    void updateStarsModel(float deltaTime);
     VkSampleCountFlagBits pendingMsaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
     bool msaaChangePending_ = false;
     void renderShadowPass();

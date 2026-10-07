@@ -574,7 +574,7 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
     // Instance data SSBO - per-frame buffer holding per-instance transforms, fade, bones.
     // Shader reads instanceData[push.instanceDataOffset + gl_InstanceIndex].
     {
-        static_assert(sizeof(M2InstanceGPU) == 128, "M2InstanceGPU must be 128 bytes (std430)");
+        static_assert(sizeof(M2InstanceGPU) == 160, "M2InstanceGPU must be 160 bytes (std430)");
         const VkDeviceSize instBufSize = MAX_INSTANCE_DATA * sizeof(M2InstanceGPU);
 
         // Descriptor pool for 2 sets (double-buffered)
@@ -1961,7 +1961,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             aci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
             vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &bgpu.materialUBO, &bgpu.materialUBOAlloc, &matAllocInfo);
 
-            // Write initial material data (static per-batch - fadeAlpha/interiorDarken updated at draw time)
+            // Write initial material data (static per-batch - fadeAlpha updated at draw time)
             M2MaterialUBO mat{};
             mat.hasTexture = (bgpu.texture != nullptr && bgpu.texture != whiteTexture_.get()) ? 1 : 0;
             mat.alphaTest = m2BatchNeedsAlphaTest(bgpu.blendMode, bgpu.hasAlpha) ? 1 : 0;
@@ -1972,7 +1972,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             mat.unfogged = (bgpu.materialFlags & 0x02) ? 1 : 0;
             mat.blendMode = bgpu.blendMode;
             mat.fadeAlpha = bgpu.staticAlpha;
-            mat.interiorDarken = 0.0f;
             mat.specularIntensity = 0.5f;
             mat.emissiveBoost = 1.0f;
             memcpy(matAllocInfo.pMappedData, &mat, sizeof(mat));

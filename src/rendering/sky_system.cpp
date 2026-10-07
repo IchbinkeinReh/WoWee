@@ -40,13 +40,13 @@ bool SkySystem::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout)
         return false;
     }
 
-    // Procedural stars - fallback / debug (Vulkan)
+    // Sharp stars: an option in place of the client's stars model
     starField_ = std::make_unique<StarField>();
     if (!starField_->initialize(ctx, perFrameLayout)) {
         LOG_ERROR("Failed to initialize star field");
         return false;
     }
-    starField_->setEnabled(false); // Off by default; skybox is authoritative
+    starField_->setEnabled(false); // Off by default; the stars model is the client's
 
     // Clouds (Vulkan)
     clouds_ = std::make_unique<Clouds>();
@@ -101,39 +101,34 @@ void SkySystem::update(float deltaTime) {
 }
 
 void SkySystem::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
-                        const Camera& camera, const SkyParams& params) {
+                        const Camera& camera, const SkyParams& params,
+                        const std::function<void(VkCommandBuffer)>& drawStarModel) {
     if (!initialized_) {
         return;
     }
 
     // --- Skybox (authoritative sky gradient, DBC-driven colors) ---
     if (skybox_) {
-        skybox_->render(cmd, perFrameSet, params);
+        // The glow's azimuth runs from the camera's heading (0x007f3920).
+        skybox_->render(cmd, perFrameSet, params,
+                        daynight::skyHighlightPhase(core::coords::renderToCanonical(camera.getForward())));
     }
 
-    // Original client sky M2s supply their own celestial bodies, clouds, and
-    // nebula layers. The caller draws that model over the gradient underlay.
-
-    // --- Procedural stars ---
-    // Not only a fallback any more: with sharp stars on, the sky model keeps
-    // its clouds and planets while M2Renderer drops its star layer, and these
-    // are drawn in that layer's place. So the original-skybox path continues
-    // here rather than returning, and skyboxHasStars stops meaning "do not".
-    bool renderProceduralStars = false;
-    if (debugSkyMode_) {
-        renderProceduralStars = true;
-    } else if (proceduralStarsEnabled_) {
-        renderProceduralStars = true;
-    } else if (!params.useOriginalSkybox) {
-        renderProceduralStars = !params.skyboxHasStars;
-    }
-
+    // --- Stars ---
+    // The client's are a model of their own, drawn between the dome and the
+    // sun (0x007f09b0, 0x009abd50), and only with the procedural sky; the
+    // caller decides that and hands the draw in. Sharp stars, an option and
+    // off by default, are a point field in their place - and drawn under a
+    // sky model too, where M2Renderer drops that model's own star layer for
+    // them.
+    const bool renderProceduralStars = debugSkyMode_ || proceduralStarsEnabled_;
     if (starField_) {
         starField_->setEnabled(renderProceduralStars);
         if (renderProceduralStars) {
-            starField_->render(cmd, perFrameSet, params.timeOfDay, params.cloudDensity);
+            starField_->render(cmd, perFrameSet, params.timeOfDay);
         }
     }
+    if (!renderProceduralStars && drawStarModel) drawStarModel(cmd);
 
     // Under a sky model up past 0.99 without LightSkybox flag 0x2 - or the
     // death model - the client draws none of its own sky (0x007f09b0).

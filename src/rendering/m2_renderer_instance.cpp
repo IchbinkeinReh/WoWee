@@ -67,6 +67,16 @@ void M2Renderer::setInstanceFade(uint32_t instanceId, float alpha) {
     instances[idxIt->second].fade = std::clamp(alpha, 0.0f, 1.0f);
 }
 
+void M2Renderer::setInstanceInteriorLight(uint32_t instanceId, const glm::vec3& ambient,
+                                          const glm::vec3& direct) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    auto& inst = instances[idxIt->second];
+    inst.interiorLit = true;
+    inst.interiorAmbient = ambient;
+    inst.interiorDirect = direct;
+}
+
 void M2Renderer::setInstanceHighlight(uint32_t instanceId, float amount) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;

@@ -514,13 +514,14 @@ bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFram
 
     // --- Pipeline layout ---
     // set 0 = perFrame, set 1 = material, set 2 = bones
-    // Push constant: mat4 model = 64 bytes
+    // Push constant: CharPushConstants, the model matrix and an interior
+    // floor's light = 96 bytes
     {
         VkDescriptorSetLayout setLayouts[] = {perFrameLayout, materialSetLayout_, boneSetLayout_};
         VkPushConstantRange pushRange{};
-        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pushRange.offset = 0;
-        pushRange.size = 64; // mat4
+        pushRange.size = sizeof(CharPushConstants);
 
         VkPipelineLayoutCreateInfo ci{.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         ci.setLayoutCount = 3;
@@ -2918,8 +2919,16 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         // A mirrored instance turns its winding around, so it culls the other face.
         const bool mirroredInstance = glm::determinant(glm::mat3(modelMat)) < 0.0f;
 
-        // Push model matrix
-        vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &modelMat);
+        // The model matrix, and the interior floor's light when it has one
+        // (w = 1); the zone's light otherwise.
+        CharPushConstants charPush{};
+        charPush.model = modelMat;
+        if (instance.interiorLit) {
+            charPush.interiorAmbient = glm::vec4(instance.interiorAmbient, 1.0f);
+            charPush.interiorDirect = glm::vec4(instance.interiorDirect, 0.0f);
+        }
+        vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(charPush), &charPush);
 
         // Upload bone matrices to SSBO
         int numBones = std::min(static_cast<int>(instance.boneMatrices.size()), MAX_BONES);
@@ -4075,6 +4084,26 @@ void CharacterRenderer::clearTextureSlotOverride(uint32_t instanceId, uint16_t t
     auto it = instances.find(instanceId);
     if (it != instances.end()) {
         it->second.textureSlotOverrides.erase(textureSlot);
+    }
+}
+
+void CharacterRenderer::refreshInteriorLights(const InteriorLightQuery& lightAt) {
+    for (auto& [id, instance] : instances) {
+        const glm::vec3 feet = instance.hasOverrideModelMatrix
+            ? glm::vec3(instance.overrideModelMatrix[3])
+            : instance.position;
+        if (instance.interiorQueried) {
+            const glm::vec3 d = feet - instance.interiorQueryPos;
+            if (glm::dot(d, d) < 0.25f * 0.25f) continue;
+        }
+        instance.interiorQueried = true;
+        instance.interiorQueryPos = feet;
+        const auto light = lightAt(feet);
+        instance.interiorLit = light.has_value();
+        if (light) {
+            instance.interiorAmbient = light->first;
+            instance.interiorDirect = light->second;
+        }
     }
 }
 

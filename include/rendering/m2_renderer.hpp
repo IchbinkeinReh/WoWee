@@ -252,6 +252,12 @@ struct M2Instance {
     /// - so the press is the only thing that can say the click landed on this
     /// one and not the scenery beside it.
     float highlight = 0.0f;
+    /// Lit as a doodad of a WMO interior group (pipeline::wmo_doodad_light):
+    /// by its own ambient and one direct light from a fixed direction, with
+    /// no sun and no sun shadow (0x007c1150). Otherwise the zone's light.
+    bool interiorLit = false;
+    glm::vec3 interiorAmbient{0.0f};
+    glm::vec3 interiorDirect{0.0f};
     /// An alpha its owner sets on the whole model - the sky's crossfade
     /// between zones. Below one the instance is drawn in the blended pass
     /// alone, every layer of it, since an opaque layer cannot fade otherwise.
@@ -351,7 +357,10 @@ struct M2MaterialUBO {
     int32_t unlit;
     int32_t blendMode;
     float fadeAlpha;
-    float interiorDarken;
+    // Was interiorDarken, a darkening of every M2 while the camera was in a
+    // WMO, always 0: the client has none. Interior doodads are lit by their
+    // own colour instead (M2Instance::interiorLit).
+    float unused4;
     float specularIntensity;
     float emissiveBoost;
     // The batch's authored colour, from the M2's colour track, with any
@@ -499,6 +508,9 @@ public:
     void setInstanceHighlight(uint32_t instanceId, float amount);
     /// See M2Instance::fade.
     void setInstanceFade(uint32_t instanceId, float alpha);
+    /// Light an instance as a WMO interior doodad; see M2Instance::interiorLit.
+    void setInstanceInteriorLight(uint32_t instanceId, const glm::vec3& ambient,
+                                  const glm::vec3& direct);
     /// Take the light off whatever has it, whichever instance that was.
     void clearInstanceHighlights();
     /// Set the animation sequence by animation ID (e.g. anim::OPEN, anim::CLOSE).
@@ -640,7 +652,6 @@ public:
     [[nodiscard]] float particleDensity() const { return particleDensity_; }
 
     void setSuppressBakedStars(bool suppress) { suppressBakedStars_ = suppress; }
-    void setInsideInterior(bool inside) { insideInterior = inside; }
 
     /// Drop the ground clutter from this pass, for the ablation's clutter
     /// phase. Clutter is drawn by the thousand and shares this renderer with
@@ -706,7 +717,6 @@ public:
 
 private:
     bool initialized_ = false;
-    bool insideInterior = false;
     pipeline::AssetManager* assetManager = nullptr;
 
     // Vulkan context
@@ -863,14 +873,19 @@ private:
         int32_t boneBase;          //  4 bytes @ offset 80
         int32_t boneCount;         //  4 bytes @ offset 84 - clamps skinning reads
         float highlight = 0.0f;    //  4 bytes @ offset 88 - pressed-on lift
-        int32_t flags = {};        //  4 bytes @ offset 92 - unused, zero (was padding)
+        int32_t flags = {};        //  4 bytes @ offset 92 - kInstanceInteriorLit
         // The texture matrix's linear part, rows (m00, m01) and (m10, m11);
         // uvOffset is its translation. Identity is (1, 0, 0, 1).
         glm::vec4 uvLinear;        // 16 bytes @ offset 96
         // A batch's animated colour and alpha for this instance; alpha below
         // zero means the batch's static material values apply.
         glm::vec4 colorMul;        // 16 bytes @ offset 112
+        // An interior doodad's own light (flags & kInstanceInteriorLit).
+        glm::vec4 interiorAmbient; // 16 bytes @ offset 128
+        glm::vec4 interiorDirect;  // 16 bytes @ offset 144
     };
+    static constexpr int32_t kInstanceInteriorLit = 1;
+    static void writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst);
     // How many instances one frame may hand the GPU, not how many exist. Ground
     // clutter is what fills it: it is drawn by the thousand and every tuft
     // takes a slot of its own, so at 16384 a dwarf standing in Dun Morogh

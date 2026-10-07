@@ -11,6 +11,8 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <vector>
+#include <optional>
+#include <functional>
 #include <array>
 #include <unordered_map>
 #include <unordered_set>
@@ -157,6 +159,16 @@ public:
     void setTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot, VkTexture* texture);
     void clearTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot);
     void setInstanceVisible(uint32_t instanceId, bool visible);
+
+    /// The light of a unit standing at a point, when it is an interior
+    /// floor's rather than the zone's: ambient, then direct.
+    using InteriorLightQuery =
+        std::function<std::optional<std::pair<glm::vec3, glm::vec3>>(const glm::vec3&)>;
+    /// Asks `lightAt` for every instance that has moved since it was last
+    /// asked. The client keeps a unit's floor light as it walks (0x007a1bc0,
+    /// 0x007c2a70); in an interior a unit is lit by the floor's vertex colour
+    /// from a fixed direction and not by the sun.
+    void refreshInteriorLights(const InteriorLightQuery& lightAt);
     void removeInstance(uint32_t instanceId);
     bool getAnimationState(uint32_t instanceId, uint32_t& animationId, float& animationTimeMs, float& animationDurationMs) const;
     /// Everything an M2 instance needs to pose its particles as this one is
@@ -287,6 +299,16 @@ private:
     };
 
     // Character instance
+    /// What a draw pushes: character.vert reads the matrix, character.frag
+    /// the light of the interior floor under the instance (w = 1 when it is
+    /// lit by one).
+    struct CharPushConstants {
+        glm::mat4 model{1.0f};
+        glm::vec4 interiorAmbient{0.0f};
+        glm::vec4 interiorDirect{0.0f};
+    };
+    static_assert(sizeof(CharPushConstants) == 96, "CharPushConstants must match the shaders");
+
     struct CharacterInstance {
         uint32_t id;
         uint32_t modelId;
@@ -348,6 +370,15 @@ private:
         // Override model matrix (used for weapon instances positioned by parent bone)
         bool hasOverrideModelMatrix = false;
         glm::mat4 overrideModelMatrix{1.0f};
+
+        // Standing on a WMO interior floor: lit by the floor's colour rather
+        // than the zone's light (refreshInteriorLights, 0x007a0d60).
+        bool interiorLit = false;
+        glm::vec3 interiorAmbient{0.0f};
+        glm::vec3 interiorDirect{0.0f};
+        // Where that was last asked, so a unit standing still is not asked again.
+        bool interiorQueried = false;
+        glm::vec3 interiorQueryPos{0.0f};
 
         // Enchant visual attached to a weapon. Such a model is nothing but the
         // additive FX batches that attached weapons otherwise drop, and it still

@@ -32,6 +32,7 @@ constexpr uint32_t MOCV = 0x4D4F4356;  // Vertex colors
 constexpr uint32_t MONR = 0x4D4F4E52;  // Normals
 constexpr uint32_t MOTV = 0x4D4F5456;  // Texture coords
 constexpr uint32_t MLIQ = 0x4D4C4951;  // Liquid
+constexpr uint32_t MODR = 0x4D4F4452;  // Doodad references
 
 // Read utilities
 template<typename T>
@@ -131,8 +132,10 @@ WMOModel WMOLoader::load(const std::vector<uint8_t>& wmoData) {
                 model.boundingBoxMax.y = read<float>(wmoData, offset);
                 model.boundingBoxMax.z = read<float>(wmoData, offset);
 
-                // flags and numLod (uint16 each) - skip for now
-                offset += 4;
+                // flags and numLod (uint16 each). Flag 0x2 adds the ambient
+                // to the floor colour a unit is lit by (0x007c7fe0).
+                model.flags = read<uint16_t>(wmoData, offset);
+                offset += 2;
 
                 core::Logger::getInstance().debug("WMO header: nTextures=", model.nTextures, " nGroups=", model.nGroups);
                 break;
@@ -610,6 +613,16 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                     if (colorCount > 0 && !group.vertices.empty()) {
                         const auto& c = group.vertices[0].color;
                         core::Logger::getInstance().debug("    First color: (", c.r, ", ", c.g, ", ", c.b, ", ", c.a, ")");
+                    }
+                }
+                else if (subChunkId == MODR) { // Doodad references
+                    // The MODD entries this group owns. The client makes a
+                    // group's doodads from this list and lights them by the
+                    // group's interior or exterior flags (0x007bf740).
+                    const uint32_t refCount = subChunkSize / 2;
+                    group.doodadRefs.reserve(refCount);
+                    for (uint32_t i = 0; i < refCount; i++) {
+                        group.doodadRefs.push_back(read<uint16_t>(groupData, mogpOffset));
                     }
                 }
                 else if (subChunkId == MOBA) { // Batches

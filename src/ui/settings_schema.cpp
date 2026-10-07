@@ -119,10 +119,12 @@ constexpr SettingDesc kSchema[] = {
      "amber near the horizon for the dawn and dusk look. 0 removes it.\n"
      "Not in the original client, which has a glare of its own.",
      "", 0.0f},
+    // Off by default: the original client's stars are a model of their own
+    // (Environments\Stars\stars.mdl), which is what is drawn when this is off.
     {"sharpstars", "Sharp stars", SettingKind::Bool, 0, 0, 0, "Graphics", "",
-     "Draw the night sky's stars as crisp points. Off, they come from\n"
-     "the sky's own small star texture, which goes soft at high\n"
-     "resolutions.", "", 1},
+     "Draw the night sky's stars as crisp points. Off, they are the\n"
+     "original client's star model, which goes soft at high\n"
+     "resolutions.", "", 0},
     // A check box and not a strength slider: the page has room for the one
     // and not the other. Off by default: the original client has no sun
     // shafts, so they are an opt-in addition.

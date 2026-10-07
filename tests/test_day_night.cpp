@@ -206,3 +206,27 @@ TEST_CASE("Light.dbc's parameter columns are named for what the client reads", "
         CHECK(column("LightParamsIDRain") == -1);
     }
 }
+
+TEST_CASE("the light is this frame's blend, not eased toward it", "[daynight][smoothing]") {
+    // 0x007f3230 copies what it blended straight into the light it draws
+    // with (0x007ed910); nothing in DayNight eases over time but a scripted
+    // override (0x007f1360 modes 1 and 2). LightingManager chased the blend
+    // at exp(-5 dt), so a teleport or a death took a second to arrive.
+    const std::string src = wowee::test::slurp("src/rendering/lighting_manager.cpp");
+    REQUIRE(src.size() > 1000);
+    CHECK(src.find("std::exp(-deltaTime") == std::string::npos);
+    CHECK(src.find("blendFactor") == std::string::npos);
+    CHECK(src.find("currentParams_ = newParams;") != std::string::npos);
+}
+
+TEST_CASE("LiquidType's flags are read from column 2", "[daynight][dbc-layout]") {
+    // 0x007f16f0 reads the LiquidType row's +0x8: the flags, after the id and
+    // the name.
+    const std::string json = wowee::test::slurp("Data/expansions/wotlk/dbc_layouts.json");
+    const size_t at = json.find("\"LiquidType\": {");
+    REQUIRE(at != std::string::npos);
+    const std::string body = json.substr(at, json.find('}', at) - at);
+    std::smatch m;
+    REQUIRE(std::regex_search(body, m, std::regex(R"("Flags"\s*:\s*(\d+))")));
+    CHECK(std::stoi(m[1].str()) == 2);
+}

@@ -229,7 +229,7 @@ public:
     float pendingLensFlare = 0.0f;          // 0.0-2.0; off: the client has its glare instead
     int pendingFrameCap = 0;                // index into the frame-limit choices
     bool pendingPOM = false;            // off by default: not in the client
-    bool pendingSharpStars = true;
+    bool pendingSharpStars = false;
     bool pendingSunShafts = false;      // screen-space rays from the sun (opt-in)
     bool pendingScreenGlow = true;      // the client's ffxGlow, on by default
     int pendingPOMQuality = 1;          // 0=Low(16), 1=Medium(32), 2=High(64)

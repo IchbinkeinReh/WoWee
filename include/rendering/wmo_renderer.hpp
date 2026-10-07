@@ -11,6 +11,7 @@
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
+#include <glm/ext/vector_uint3_sized.hpp>
 #include <atomic>
 #include <memory>
 #include <unordered_map>
@@ -177,6 +178,11 @@ public:
     struct DoodadTemplate {
         std::string m2Path;
         glm::mat4 localTransform;
+        // A doodad of an interior group, lit by its MODD colour
+        // (pipeline::wmo_doodad_light).
+        bool interiorLit = false;
+        glm::vec3 interiorAmbient{0.0f};
+        glm::vec3 interiorDirect{0.0f};
     };
 
     /**
@@ -411,9 +417,25 @@ public:
         float end = 0.0f;           ///< yards
         float startScalar = 0.0f;   ///< start as a fraction of end
         glm::vec3 color{0.0f};
+        float liquidEnd = 0.0f;     ///< the second fog, for the camera in liquid
+        float liquidStartScalar = 0.0f;
+        glm::vec3 liquidColor{0.0f};
+        uint32_t flags = 0;         ///< MFOG flags
         float distanceInside = 0.0f;
     };
     [[nodiscard]] std::optional<InteriorFog> interiorFogAt(const glm::vec3& pos) const;
+
+    /// What a unit standing at `feet` is lit by when the floor under it is an
+    /// interior group's (pipeline::wmo_doodad_light::unitLight of the floor's
+    /// vertex colour there, 0x007a0d60 and 0x007c7fe0): the nearest floor
+    /// within a yard above and twelve below the feet, as the client looks. No
+    /// value on an exterior or exterior-lit group's floor, or off any WMO -
+    /// the zone's light then.
+    struct UnitInteriorLight {
+        glm::vec3 ambient{0.0f};
+        glm::vec3 direct{0.0f};
+    };
+    [[nodiscard]] std::optional<UnitInteriorLight> unitInteriorLightAt(const glm::vec3& feet) const;
 
     /**
      * Raycast against WMO bounding boxes for camera collision
@@ -561,6 +583,10 @@ private:
 
         // Per-collision-triangle MOPY flags (indexed by collision tri index, i.e. triStart/3)
         std::vector<uint8_t> triMopyFlags;
+        /// An interior group's vertex colours (MOCV, rgb 0..255), one per
+        /// collision vertex, for the light a unit standing on it takes
+        /// (unitInteriorLightAt). Empty for the other groups.
+        std::vector<glm::u8vec3> collisionColors;
         /// True when no triangle in this group blocks: no collision hull, and
         /// nothing rendered that is not detail. Detail never blocks, so such a
         /// group is walk-through in its entirety - which is a thing to be
@@ -618,6 +644,7 @@ private:
         glm::vec3 boundingBoxMin;
         glm::vec3 boundingBoxMax;
         glm::vec3 wmoAmbientColor{0.5f, 0.5f, 0.5f};  // From MOHD, used for interior lighting
+        uint32_t mohdFlags = 0;                        // MOHD flags (0x2: see unitInteriorLightAt)
         bool isLowPlatform = false;
 
         // Doodad templates (M2 models placed in WMO, stored for instancing)

@@ -36,7 +36,9 @@ public:
      * @param perFrameSet Per-frame descriptor set (set 0, contains camera UBO)
      * @param params Sky parameters with DBC colors and sun direction
      */
-    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const SkyParams& params);
+    /// `highlightPhase` is daynight::skyHighlightPhase of the camera's heading.
+    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const SkyParams& params,
+                float highlightPhase);
 
     /**
      * Enable/disable skybox rendering

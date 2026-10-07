@@ -1,4 +1,5 @@
 #include "rendering/starfield.hpp"
+#include "rendering/day_night.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_shader.hpp"
 #include "rendering/vk_pipeline.hpp"
@@ -12,14 +13,6 @@
 
 namespace wowee {
 namespace rendering {
-
-// Day/night cycle thresholds (hours, 24h clock) for star visibility.
-// Stars fade in over 2 hours at dusk, stay full during night, fade out at dawn.
-static constexpr float kDuskStart = 18.0f;  // stars begin fading in
-static constexpr float kNightStart = 20.0f; // full star visibility
-static constexpr float kDawnStart = 4.0f;   // stars begin fading out
-static constexpr float kDawnEnd = 6.0f;     // stars fully gone
-static constexpr float kFadeDuration = 2.0f;
 
 // One float more than positionPlusTwoFloatsAttrs(), which mount dust, swim
 // effects and the charge effect also use - hence a local list rather than a
@@ -141,15 +134,16 @@ void StarField::shutdown() {
 }
 
 void StarField::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
-                       float timeOfDay, float cloudDensity) {
+                       float timeOfDay) {
     if (!renderingEnabled || pipeline == VK_NULL_HANDLE || vertexBuffer == VK_NULL_HANDLE
         || stars.empty()) {
         return;
     }
 
     // Compute intensity from time of day then attenuate for clouds
-    float intensity = getStarIntensity(timeOfDay);
-    intensity *= (1.0f - glm::clamp(cloudDensity * 0.7f, 0.0f, 1.0f));
+    // Not dimmed by the cloud cover: the clouds are drawn over the stars and
+    // hide them where they are thick, as the client's do.
+    const float intensity = getStarIntensity(timeOfDay);
 
     if (intensity <= 0.01f) {
         return;
@@ -271,20 +265,10 @@ void StarField::destroyStarBuffers() {
 }
 
 float StarField::getStarIntensity(float timeOfDay) const {
-    // Full night
-    if (timeOfDay >= kNightStart || timeOfDay < kDawnStart) {
-        return 1.0f;
-    }
-    // Fade in at dusk
-    if (timeOfDay >= kDuskStart) {
-        return (timeOfDay - kDuskStart) / kFadeDuration;
-    }
-    // Fade out at dawn
-    if (timeOfDay < kDawnEnd) {
-        return 1.0f - (timeOfDay - kDawnStart) / kFadeDuration;
-    }
-    // Daytime: no stars
-    return 0.0f;
+    // The client's star clock (0xaf4c20, 0x007ee0d0): all of them to 03:00,
+    // gone by 04:30, back from 22:30. It was an invented 18:00-20:00 and
+    // 04:00-06:00 window.
+    return daynight::sampleCurve(daynight::kStarsTime, timeOfDay / 24.0f);
 }
 
 } // namespace rendering

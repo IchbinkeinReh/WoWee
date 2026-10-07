@@ -2116,14 +2116,22 @@ target_compile_definitions(test_day_night PRIVATE
 # ── test_sky_client ──────────────────────────────────────────
 # The rest of the client's sky (Wow.exe 3.3.5a): the sun and moons' sizes and
 # the Blue Child's clock, the glare, the cloud dome and its cover, liquid
-# darkening, WMO interior fog, which sky models hide the procedural sky, and
-# MFOG / MCSH as the loaders read them.
+# darkening, WMO interior fog and its liquid flags, the HighlightSky glow, the
+# stars' clock, which sky models hide the procedural sky, and MFOG / MCSH /
+# MODR / MOHD flags as the loaders read them.
 wowee_add_test(test_sky_client
     SOURCES test_sky_client.cpp
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/pipeline/wmo_loader.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+
+# ── test_wmo_doodad_light ────────────────────────────────────
+# How the client lights M2s inside a WMO interior (Wow.exe 3.3.5a): a doodad by
+# its MODD colour, a unit by the floor's vertex colour, each as an ambient and
+# one fixed light with no sun; which doodads an interior group alone owns.
+wowee_add_test(test_wmo_doodad_light
+    SOURCES test_wmo_doodad_light.cpp)
 
 # ── test_game_clock ──────────────────────────────────────────
 # The time of day running on from the server's time and speed. It was stored

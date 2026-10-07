@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <vector>
 #include <map>
 #include <optional>
@@ -305,6 +304,12 @@ public:
         float end = 0.0f;
         float startScalar = 0.0f;
         glm::vec3 color{0.0f};
+        /// The record's second fog, for the camera in liquid (MFOG +0x24).
+        float liquidEnd = 0.0f;
+        float liquidStartScalar = 0.0f;
+        glm::vec3 liquidColor{0.0f};
+        /// The MFOG flags (0x10, 0x100 read by 0x007f16f0).
+        uint32_t flags = 0;
         float distanceInside = 0.0f;
     };
     void setInteriorFog(const std::optional<InteriorFog>& fog) { interiorFog_ = fog; }
@@ -355,7 +360,7 @@ public:
     /// Every sky model the lights around the player name, heaviest first. The
     /// default light's model is up at 1; each nearby light adds its own weight
     /// to the model it names, at most 1, up to three models (0x007ed4c0).
-    /// Smoothed over time like the colours.
+    /// This frame's weights, as the client keeps them (0x007f3230).
     [[nodiscard]] const std::vector<SkyboxLayer>& getSkyboxLayers() const { return skyboxLayers_; }
 
     /**
@@ -455,6 +460,7 @@ private:
         float ambDarken = 0.0f;
         float dirDarken = 0.0f;
         uint32_t lightId = 0;
+        uint32_t flags = 0;
     };
     std::map<uint32_t, LiquidTypeLight> liquidTypes_;
 
@@ -463,8 +469,6 @@ private:
     std::vector<WeightedVolume> activeVolumes_;
     float timeOfDay_ = 0.5f;  // Start at noon
     std::vector<SkyboxLayer> skyboxLayers_;
-    /// When update last ran, for smoothing by real time rather than by frame.
-    std::chrono::steady_clock::time_point lastUpdate_{};
     float fogSkyBlend_ = 0.0f;
     float fogStrength_ = 1.0f;
     float farClip_ = 0.0f;

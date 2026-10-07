@@ -110,6 +110,11 @@ struct PendingTile {
         pipeline::M2Model model;
         glm::vec3 worldPosition;   // For frustum culling
         glm::mat4 modelMatrix;     // Pre-computed world transform
+        // A doodad of an interior group, lit by its MODD colour
+        // (pipeline::wmo_doodad_light).
+        bool interiorLit = false;
+        glm::vec3 interiorAmbient{0.0f};
+        glm::vec3 interiorDirect{0.0f};
     };
     std::vector<WMODoodadReady> wmoDoodads;
 

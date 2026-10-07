@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
@@ -37,6 +38,9 @@ struct SkyParams {
     glm::vec3 skyBand2Color{1.0f, 0.98f, 0.9f};
     glm::vec3 skySmogColor{0.7f, 0.7f, 0.7f};   // ch6
     glm::vec3 skyFogColor{0.7f, 0.7f, 0.7f};    // ch7: the horizon, the fog's colour
+    /// The dawn and dusk glow on the dome's bands, 0..1: the time curve
+    /// times LightParams.HighlightSky (0x007f0530).
+    float skyHighlight = 0.0f;
 
     /// The clouds' colours: ch10 sunlit, ch11 by thinness, ch12 base
     /// (0x007efae0).
@@ -68,7 +72,6 @@ struct SkyParams {
 
     // Skybox selection (future: from LightSkybox.dbc)
     uint32_t skyboxModelId = 0;
-    bool skyboxHasStars = false;  // Does loaded skybox include baked stars?
     bool useOriginalSkybox = false; // Original camera-centered client M2 is active
 };
 
@@ -107,9 +110,13 @@ public:
      * @param perFrameSet Per-frame descriptor set (set 0, camera UBO)
      * @param camera      Camera for legacy sub-renderers (lens flare, etc.)
      * @param params      Sky parameters from lighting system
+     * @param drawStarModel Draws the client's stars model, called right after
+     *                    the dome and before the sun, moons and clouds, which
+     *                    is where 0x007f09b0 draws them. Empty for none.
      */
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
-                const Camera& camera, const SkyParams& params);
+                const Camera& camera, const SkyParams& params,
+                const std::function<void(VkCommandBuffer)>& drawStarModel = {});
 
     /**
      * Enable/disable procedural stars (DEBUG/FALLBACK)

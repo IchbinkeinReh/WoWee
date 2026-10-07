@@ -12,6 +12,7 @@
 /// three fields were added to both copies by hand, and the fourth would have
 /// been too.
 
+#include "rendering/day_night.hpp"
 #include "rendering/lighting_manager.hpp"
 #include "rendering/sky_system.hpp"
 
@@ -44,10 +45,10 @@ inline SkyParams skyParamsFromLighting(float timeOfDay, float gameTime,
         params.cloudShadeColor = lighting->cloudShadeColor;
         params.cloudBaseColor = lighting->cloudBaseColor;
         params.cloudDensity = lighting->cloudDensity;
+        params.skyHighlight = daynight::skyHighlightStrength(timeOfDay / 24.0f, lighting->highlightSky);
     }
     params.weatherIntensity = weatherIntensity;
     params.skyboxModelId = 0;
-    params.skyboxHasStars = useOriginalSkybox;
     params.useOriginalSkybox = useOriginalSkybox;
     return params;
 }

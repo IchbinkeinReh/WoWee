@@ -242,6 +242,7 @@
   },
   "LiquidType": {
     "ID": 0,
+    "Flags": 2,
     "MaxDarkenDepth": 6,
     "FogDarkenIntensity": 7,
     "AmbDarkenIntensity": 8,

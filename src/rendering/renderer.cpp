@@ -17,6 +17,7 @@
 #include "rendering/skybox.hpp"
 #include "rendering/celestial.hpp"
 #include "rendering/starfield.hpp"
+#include "rendering/day_night.hpp"
 #include "rendering/clouds.hpp"
 #include "rendering/lens_flare.hpp"
 #include "rendering/weather.hpp"
@@ -981,6 +982,13 @@ void Renderer::shutdown() {
         skyLayers_.clear();
         loadedSkyModels_.clear();
     }
+    if (starsModelRenderer_) {
+        starsModelRenderer_->shutdown();
+        starsModelRenderer_.reset();
+        starsInstanceId_ = 0;
+        starsModelTried_ = false;
+        starsAlpha_ = 0.0f;
+    }
 
     // Audio shutdown is handled by AudioCoordinator (owned by Application).
     audioCoordinator_ = nullptr;
@@ -1096,6 +1104,7 @@ void Renderer::applyMsaaChange() {
     if (wmoRenderer) wmoRenderer->recreatePipelines();
     if (m2Renderer) m2Renderer->recreatePipelines();
     if (skyboxModelRenderer_) skyboxModelRenderer_->recreatePipelines();
+    if (starsModelRenderer_) starsModelRenderer_->recreatePipelines();
     if (characterRenderer) characterRenderer->recreatePipelines();
     if (questMarkerRenderer) questMarkerRenderer->recreatePipelines();
     if (footprintRenderer) footprintRenderer->recreatePipelines();
@@ -1747,7 +1756,16 @@ bool Renderer::updateSkyboxLayers() {
 uint32_t Renderer::loadSkyboxModel(const std::string& path) {
     if (auto it = loadedSkyModels_.find(path); it != loadedSkyModels_.end()) return it->second;
     if (failedSkyboxPaths_.count(path)) return 0;
+    const uint32_t modelId = uploadSkyModel(*skyboxModelRenderer_, path);
+    if (modelId == 0) {
+        failedSkyboxPaths_.insert(path);
+        return 0;
+    }
+    loadedSkyModels_[path] = modelId;
+    return modelId;
+}
 
+uint32_t Renderer::uploadSkyModel(M2Renderer& target, const std::string& path) {
     std::vector<std::string> candidates{path};
     const size_t dot = path.find_last_of('.');
     if (dot == std::string::npos) {
@@ -1769,8 +1787,7 @@ uint32_t Renderer::loadSkyboxModel(const std::string& path) {
         }
     }
     if (modelData.empty()) {
-        LOG_WARNING("Skybox model unavailable: ", path);
-        failedSkyboxPaths_.insert(path);
+        LOG_WARNING("Sky model unavailable: ", path);
         return 0;
     }
 
@@ -1782,20 +1799,44 @@ uint32_t Renderer::loadSkyboxModel(const std::string& path) {
         pipeline::M2Loader::loadSkin(skinData, model);
     }
     if (!model.isValid()) {
-        LOG_WARNING("Skybox model is invalid: ", resolvedPath);
-        failedSkyboxPaths_.insert(path);
+        LOG_WARNING("Sky model is invalid: ", resolvedPath);
         return 0;
     }
 
     const uint32_t modelId = static_cast<uint32_t>(std::hash<std::string>{}(model.name));
-    if (!skyboxModelRenderer_->loadModel(model, modelId)) {
-        LOG_WARNING("Failed to upload skybox model: ", resolvedPath);
-        failedSkyboxPaths_.insert(path);
+    if (!target.loadModel(model, modelId)) {
+        LOG_WARNING("Failed to upload sky model: ", resolvedPath);
         return 0;
     }
-    loadedSkyModels_[path] = modelId;
-    LOG_INFO("Skybox model loaded: ", resolvedPath);
+    LOG_INFO("Sky model loaded: ", resolvedPath);
     return modelId;
+}
+
+void Renderer::updateStarsModel(float deltaTime) {
+    // Loaded once, the first frame there is somewhere to put it (0x009abb00
+    // loads it with the rest of the sky).
+    if (!starsModelRenderer_ || !camera || !cachedAssetManager) return;
+    if (!starsModelTried_) {
+        starsModelTried_ = true;
+        const uint32_t modelId = uploadSkyModel(*starsModelRenderer_, daynight::kStarsModelPath);
+        if (modelId != 0) {
+            starsInstanceId_ = starsModelRenderer_->createInstance(
+                modelId, camera->getPosition(), glm::vec3(0.0f), 1.0f);
+            if (starsInstanceId_ != 0) starsModelRenderer_->setSkipCollision(starsInstanceId_, true);
+        }
+    }
+    if (starsInstanceId_ == 0) {
+        starsAlpha_ = 0.0f;
+        return;
+    }
+    // At the eye, at the alpha the star clock gives (0x007ee0d0), running on
+    // its own clock (0x009abd50 advances it by the frame's milliseconds).
+    const float dayFraction = lightingManager ? lightingManager->getTimeOfDay() : 0.5f;
+    starsAlpha_ = daynight::starsAlpha(dayFraction);
+    starsModelRenderer_->setInstanceFade(starsInstanceId_, starsAlpha_);
+    starsModelRenderer_->setInstancePosition(starsInstanceId_, camera->getPosition());
+    starsModelRenderer_->update(deltaTime, camera->getPosition(),
+                                camera->getProjectionMatrix() * camera->getViewMatrix());
 }
 
 bool Renderer::isOnOutdoorPvpObjective() const {
@@ -2009,11 +2050,24 @@ void Renderer::update(float deltaTime) {
             if (wmoRenderer && camera) {
                 if (auto f = wmoRenderer->interiorFogAt(camera->getPosition())) {
                     interiorFog = LightingManager::InteriorFog{
-                        .end = f->end, .startScalar = f->startScalar,
-                        .color = f->color, .distanceInside = f->distanceInside};
+                        .end = f->end, .startScalar = f->startScalar, .color = f->color,
+                        .liquidEnd = f->liquidEnd, .liquidStartScalar = f->liquidStartScalar,
+                        .liquidColor = f->liquidColor, .flags = f->flags,
+                        .distanceInside = f->distanceInside};
                 }
             }
             lightingManager->setInteriorFog(interiorFog);
+        }
+        // A unit on an interior floor is lit by that floor's vertex colour,
+        // not the zone's light (0x007a0d60, 0x007c7fe0).
+        if (characterRenderer && wmoRenderer) {
+            characterRenderer->refreshInteriorLights(
+                [&](const glm::vec3& feet) -> std::optional<std::pair<glm::vec3, glm::vec3>> {
+                    if (auto l = wmoRenderer->unitInteriorLightAt(feet)) {
+                        return std::make_pair(l->ambient, l->direct);
+                    }
+                    return std::nullopt;
+                });
         }
         lightingManager->update(characterPosition, mapId,
                                 gameTime, weatherIntensity, cameraLiquid, deathLight);
@@ -2131,6 +2185,7 @@ void Renderer::update(float deltaTime) {
         skyboxModelRenderer_->update(deltaTime, camera->getPosition(),
             camera->getProjectionMatrix() * camera->getViewMatrix());
     }
+    updateStarsModel(deltaTime);
 
     // Update weather particles
     if (weather && camera) {
@@ -2933,6 +2988,14 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     const bool drawSkyModels = skyboxModelRenderer_ && !skyLayers_.empty();
     const bool useOriginalSkybox = drawSkyModels && lightingManager &&
         LightingManager::skyboxHidesProceduralSky(lightingManager->getSkyboxLayers());
+    // The client's stars go with the procedural sky: drawn while it is, at
+    // the star clock's alpha, and not under a sharp-stars point field that
+    // stands in for them (0x007f09b0, 0x009abd50).
+    const bool drawStarsModel = starsModelRenderer_ && starsAlpha_ > 0.0f &&
+        !useOriginalSkybox && !sharpStars_;
+    const auto drawStars = [&](VkCommandBuffer starCmd) {
+        if (drawStarsModel && camera) starsModelRenderer_->render(starCmd, perFrameSet, *camera);
+    };
 
     // ── Multithreaded secondary command buffer recording ──
     // Terrain, WMO, and M2 record on worker threads while main thread handles
@@ -2940,17 +3003,14 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     // to handle thread-unsafe GPU allocations (descriptor pools, bone SSBOs).
     if (parallelRecordingEnabled_) {
         // --- Pre-compute state + GPU allocations on main thread (not thread-safe) ---
-        if (m2Renderer && cameraController) {
-            // Use isInsideInteriorWMO (flag 0x2000) - not isInsideWMO which includes
-            // outdoor WMO groups like archways/bridges that should receive shadows.
-            m2Renderer->setInsideInterior(cameraController->isInsideInteriorWMO());
-        }
         auto prepStart = std::chrono::steady_clock::now();
         if (wmoRenderer) wmoRenderer->prepareRender();
         auto prepWmoEnd = std::chrono::steady_clock::now();
         if (m2Renderer && camera) m2Renderer->prepareRender(frameIdx, *camera);
         if (drawSkyModels && camera)
             skyboxModelRenderer_->prepareRender(frameIdx, *camera);
+        if (drawStarsModel && camera)
+            starsModelRenderer_->prepareRender(frameIdx, *camera);
         auto prepM2End = std::chrono::steady_clock::now();
         if (characterRenderer) characterRenderer->prepareRender(frameIdx);
         auto prepEnd = std::chrono::steady_clock::now();
@@ -3055,7 +3115,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 skyParams.moonOcclusion = moonOcclusion_;
                 skyParams.skyboxWeight = drawSkyModels && lightingManager
                 ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers()) : 0.0f;
-                skySystem->render(cmd, perFrameSet, *camera, skyParams);
+                skySystem->render(cmd, perFrameSet, *camera, skyParams, drawStars);
                 if (drawSkyModels) {
                     skyboxModelRenderer_->render(cmd, perFrameSet, *camera);
                 }
@@ -3263,7 +3323,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             skyParams.moonOcclusion = moonOcclusion_;
             skyParams.skyboxWeight = drawSkyModels && lightingManager
                 ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers()) : 0.0f;
-            skySystem->render(currentCmd, perFrameSet, *camera, skyParams);
+            if (drawStarsModel) starsModelRenderer_->prepareRender(frameIdx, *camera);
+            skySystem->render(currentCmd, perFrameSet, *camera, skyParams, drawStars);
             if (drawSkyModels) {
                 skyboxModelRenderer_->prepareRender(frameIdx, *camera);
                 skyboxModelRenderer_->render(currentCmd, perFrameSet, *camera);
@@ -3295,10 +3356,6 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         }
 
         if (m2Renderer && camera && !skipM2) {
-            if (cameraController) {
-                // Use isInsideInteriorWMO (flag 0x2000) for correct indoor detection
-                m2Renderer->setInsideInterior(cameraController->isInsideInteriorWMO());
-            }
             m2Renderer->prepareRender(frameIdx, *camera);
             auto m2Start = std::chrono::steady_clock::now();
             renderM2Models(currentCmd, perFrameSet, !skipChars);
@@ -3737,6 +3794,14 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (!skyboxModelRenderer_->initialize(vkCtx, perFrameSetLayout, assetManager)) {
             LOG_WARNING("Sky M2 renderer initialization failed");
             skyboxModelRenderer_.reset();
+        }
+    }
+    if (!starsModelRenderer_) {
+        starsModelRenderer_ = std::make_unique<M2Renderer>();
+        starsModelRenderer_->setSkyMode(true);
+        if (!starsModelRenderer_->initialize(vkCtx, perFrameSetLayout, assetManager)) {
+            LOG_WARNING("Stars M2 renderer initialization failed");
+            starsModelRenderer_.reset();
         }
     }
 

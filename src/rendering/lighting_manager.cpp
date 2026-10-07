@@ -240,6 +240,7 @@ bool LightingManager::loadLiquidTypeDbc(pipeline::AssetManager* assetManager) {
     for (uint32_t c : cols) {
         if (c >= fields) return false;
     }
+    const uint32_t flagsCol = lqL->tryField("Flags");
     liquidTypes_.clear();
     for (uint32_t i = 0; i < dbc.getRecordCount(); ++i) {
         LiquidTypeLight l;
@@ -248,6 +249,9 @@ bool LightingManager::loadLiquidTypeDbc(pipeline::AssetManager* assetManager) {
         l.ambDarken = dbc.getFloat(i, cols[2]);
         l.dirDarken = dbc.getFloat(i, cols[3]);
         l.lightId = dbc.getUInt32(i, cols[4]);
+        // Flags 0x20, 0x40 and 0x100 decide a WMO's fog under this liquid
+        // (0x007f16f0 reads the row's +0x8).
+        if (flagsCol < fields) l.flags = dbc.getUInt32(i, flagsCol);
         liquidTypes_[dbc.getUInt32(i, lqL->tryField("ID") < fields ? lqL->tryField("ID") : 0)] = l;
     }
     LOG_INFO("Loaded LiquidType.dbc: ", liquidTypes_.size(), " liquids");
@@ -379,18 +383,6 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
     const uint16_t timeHalfMinutes = static_cast<uint16_t>(
         timeOfDay_ * static_cast<float>(kHalfMinutesPerDay)) % kHalfMinutesPerDay;
 
-    // Smoothing by real time. This assumed sixty frames a second, so on a
-    // display running at a hundred and twenty every blend below ran twice as
-    // fast, and at thirty half as fast.
-    const auto now = std::chrono::steady_clock::now();
-    float deltaTime = 0.016f;
-    if (lastUpdate_.time_since_epoch().count() != 0) {
-        deltaTime = std::clamp(std::chrono::duration<float>(now - lastUpdate_).count(),
-                               0.0f, 0.25f);
-    }
-    lastUpdate_ = now;
-    const float blendFactor = 1.0f - std::exp(-deltaTime * 5.0f);
-
     // The client's light at this spot (0x007f3230, 0x007f1360).
     //
     // It starts from the map's default light and lerps every light within its
@@ -502,16 +494,29 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
     // Inside a WMO with fog of its own (MFOG): its end within the far clip,
     // the start that fraction of it, the end then no nearer than 30 yards
     // (0x007ed1b0); blended in from the zone's fog by how far in the camera
-    // is, all of it 25 yards in (0x007f16f0).
+    // is, all of it 25 yards in (0x007f16f0). With the camera in liquid the
+    // record's second fog is the one, if the LiquidType and the fog's flags
+    // allow it, and LiquidType flag 0x40 makes it the whole of the fog
+    // rather than a blend (daynight::wmoFogChoice).
     if (interiorFog_) {
-        float end = interiorFog_->end;
-        if (farClip_ > 0.0f && end > farClip_) end = farClip_;
-        const float start = interiorFog_->startScalar * end;
-        if (end < 30.0f) end = 30.0f;
-        const float b = daynight::wmoFogBlend(interiorFog_->distanceInside);
-        newParams.fogEnd = glm::mix(newParams.fogEnd, end, b);
-        newParams.fogStart = glm::mix(newParams.fogStart, start, b);
-        newParams.fogColor = glm::mix(newParams.fogColor, interiorFog_->color, b);
+        const uint32_t liquidFlags = liquidRow ? liquidRow->flags : 0u;
+        const daynight::WmoFogChoice choice =
+            daynight::wmoFogChoice(cameraInLiquid, liquidFlags, interiorFog_->flags);
+        if (choice != daynight::WmoFogChoice::None) {
+            const bool liquidFog = choice == daynight::WmoFogChoice::Liquid;
+            float end = liquidFog ? interiorFog_->liquidEnd : interiorFog_->end;
+            if (farClip_ > 0.0f && end > farClip_) end = farClip_;
+            const float start =
+                (liquidFog ? interiorFog_->liquidStartScalar : interiorFog_->startScalar) * end;
+            if (end < 30.0f) end = 30.0f;
+            const glm::vec3 color = liquidFog ? interiorFog_->liquidColor : interiorFog_->color;
+            const float b = daynight::wmoLiquidFogIsWhole(choice, liquidFlags)
+                                ? 1.0f
+                                : daynight::wmoFogBlend(interiorFog_->distanceInside);
+            newParams.fogEnd = glm::mix(newParams.fogEnd, end, b);
+            newParams.fogStart = glm::mix(newParams.fogStart, start, b);
+            newParams.fogColor = glm::mix(newParams.fogColor, color, b);
+        }
     }
 
     // Optional, and off by default: fog pulled toward the sky's middle band.
@@ -540,58 +545,32 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
     // (0x007816f0 hands the raw colours to the shaders); it darkened most
     // zones at noon by up to half.
 
-    // Which sky models are overhead, smoothed like the colours so a border
-    // crossing fades rather than pops. A light with no sky model contributes
+    // Which sky models are overhead, and how much of each: this frame's
+    // weights as they are (0x007f3230 writes them to 0xd38b70 every frame).
+    // A border crossing still fades, because the light weights it comes from
+    // fall off linearly with distance. A light with no sky model contributes
     // to no layer.
     {
-        struct Target {
-            std::string path;
-            float weight;
-            uint32_t flags;
-            bool death;
-        };
-        std::vector<Target> target;
         const auto flagsOf = [&](uint32_t skyboxId) {
             auto f = lightSkyboxFlags_.find(skyboxId);
             return f == lightSkyboxFlags_.end() ? 0u : f->second;
         };
+        skyboxLayers_.clear();
         for (const auto& [skyboxId, weight] : skyTargets) {
             auto skyIt = lightSkyboxPaths_.find(skyboxId);
             if (skyIt == lightSkyboxPaths_.end() || skyIt->second.empty()) continue;
-            target.push_back({skyIt->second, weight, flagsOf(skyboxId), false});
+            skyboxLayers_.push_back({.path = skyIt->second, .weight = weight,
+                                     .flags = flagsOf(skyboxId), .deathOverride = false});
         }
         if (deathSkyboxId != 0) {
             auto skyIt = lightSkyboxPaths_.find(deathSkyboxId);
             if (skyIt != lightSkyboxPaths_.end() && !skyIt->second.empty()) {
-                std::erase_if(target, [&](const Target& t) { return t.path == skyIt->second; });
-                target.push_back({skyIt->second, 1.0f, flagsOf(deathSkyboxId), true});
+                std::erase_if(skyboxLayers_,
+                              [&](const SkyboxLayer& l) { return l.path == skyIt->second; });
+                skyboxLayers_.push_back({.path = skyIt->second, .weight = 1.0f,
+                                         .flags = flagsOf(deathSkyboxId), .deathOverride = true});
             }
         }
-        auto targetFor = [&](const std::string& path) -> const Target* {
-            for (const auto& t : target) if (t.path == path) return &t;
-            return nullptr;
-        };
-        for (auto& layer : skyboxLayers_) {
-            const Target* t = targetFor(layer.path);
-            layer.weight += ((t ? t->weight : 0.0f) - layer.weight) * blendFactor;
-            if (t) {
-                layer.flags = t->flags;
-                layer.deathOverride = t->death;
-            }
-        }
-        for (const auto& t : target) {
-            const bool present = std::any_of(skyboxLayers_.begin(), skyboxLayers_.end(),
-                                             [&](const SkyboxLayer& l) { return l.path == t.path; });
-            if (!present) {
-                skyboxLayers_.push_back({.path = t.path, .weight = t.weight * blendFactor,
-                                         .flags = t.flags, .deathOverride = t.death});
-            }
-        }
-        // Gone once faded out and not wanted - never while it is still wanted,
-        // so a model is not dropped and reloaded on its way in.
-        std::erase_if(skyboxLayers_, [&](const SkyboxLayer& l) {
-            return l.weight < 0.005f && !targetFor(l.path);
-        });
         std::sort(skyboxLayers_.begin(), skyboxLayers_.end(),
                   [](const SkyboxLayer& a, const SkyboxLayer& b) { return a.weight > b.weight; });
     }
@@ -630,14 +609,14 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
         }
     }
 
-    // Smooth temporal blending to avoid snapping (5.0 = blend rate); see
-    // blendFactor above. The directions are the client's curves, which move
-    // slowly on their own, and are taken as they are.
-    const LightingParams smoothedFrom = currentParams_;
-    currentParams_ = lerpLightingParams(smoothedFrom, newParams, blendFactor);
-    currentParams_.directionalDir = newParams.directionalDir;
-    currentParams_.sunDir = newParams.sunDir;
-    currentParams_.moonDir = newParams.moonDir;
+    // This frame's light as it is. The client copies what it blended
+    // straight into the light it draws with (0x007f3230 -> 0x007ed910) and
+    // eases nothing over time; only a scripted light override fades in and
+    // out (0x007f1360, modes 1 and 2). Moving between lights is already
+    // gradual through their linear falloff. This used to chase the blend at
+    // exp(-5 dt), so a teleport, a death or a cave mouth took a second or
+    // more to arrive at a light the client shows at once.
+    currentParams_ = newParams;
 }
 
 std::vector<LightingManager::WeightedVolume> LightingManager::findLightVolumes(const glm::vec3& playerPos, uint32_t mapId) const {
