@@ -3708,6 +3708,10 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         }
     }
 
+    // Which units have a blob shadow under them this frame, and how big.
+    if (entitySpawner_ && renderer) {
+        entitySpawner_->updateBlobShadows(renderer->getCharacterInstanceId());
+    }
 }
 
 void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {

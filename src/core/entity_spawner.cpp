@@ -679,6 +679,20 @@ void EntitySpawner::buildCreatureDisplayLookups() {
                 const float modelScale = cmd->getFloat(i, scaleField);
                 if (modelScale > 0.0f) modelIdToScale_[modelId] = modelScale;
             }
+            // MountHeight (+0x40) and the box (+0x44..+0x58) the client sizes
+            // a unit's blob shadow by (0x0071ed80).
+            const uint32_t mountField = cmdL ? (*cmdL)["MountHeight"] : 0xFFFFFFFF;
+            const uint32_t boxField = cmdL ? (*cmdL)["GeoBoxMinX"] : 0xFFFFFFFF;
+            if (mountField != 0xFFFFFFFF && boxField != 0xFFFFFFFF &&
+                boxField + 5 < cmd->getFieldCount() && mountField < cmd->getFieldCount()) {
+                ModelGeoBox g;
+                g.box.min = {cmd->getFloat(i, boxField), cmd->getFloat(i, boxField + 1),
+                             cmd->getFloat(i, boxField + 2)};
+                g.box.max = {cmd->getFloat(i, boxField + 3), cmd->getFloat(i, boxField + 4),
+                             cmd->getFloat(i, boxField + 5)};
+                g.mountHeight = cmd->getFloat(i, mountField);
+                modelIdToGeoBox_[modelId] = g;
+            }
         }
         LOG_INFO("Loaded ", modelIdToPath_.size(), " model→path mappings");
     }

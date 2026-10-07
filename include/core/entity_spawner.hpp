@@ -3,6 +3,7 @@
 #include "game/character.hpp"
 #include "game/game_services.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "rendering/blob_shadow.hpp"
 #include <memory>
 #include <string>
 #include <utility>
@@ -175,6 +176,12 @@ public:
     // only when this call consumed the caller's per-frame attachment budget.
     bool retryCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId,
                                      uint8_t maxAttempts);
+
+    /// Every unit's blob shadow for this frame (0x00793980): its
+    /// CreatureModelData box on the instance it is drawn with - the mount's
+    /// when it rides one - or none. `localPlayerInstance` is the renderer's
+    /// own character.
+    void updateBlobShadows(uint32_t localPlayerInstance);
 
     // Mount
     void setMountDisplayId(uint32_t displayId) { pendingMountDisplayId_ = displayId; }
@@ -384,6 +391,14 @@ private:
     std::unordered_map<uint32_t, HumanoidDisplayExtra> humanoidExtraMap_;  // extraDisplayId → humanoid data
     std::unordered_map<uint32_t, std::string> modelIdToPath_;   // modelId → M2 path (from CreatureModelData.dbc)
     std::unordered_map<uint32_t, float> modelIdToScale_;        // modelId → CreatureModelData.ModelScale
+    /// CreatureModelData's GeoBox (+0x44) and MountHeight (+0x40), by model id.
+    struct ModelGeoBox {
+        rendering::blob_shadow::Box box;
+        float mountHeight = 0.0f;
+    };
+    std::unordered_map<uint32_t, ModelGeoBox> modelIdToGeoBox_;
+    /// The CreatureModelData box of the model a display names, if it has one.
+    const ModelGeoBox* geoBoxForDisplay(uint32_t displayId) const;
     // CreatureFamily.dbc: the size range a beast family grows through by level.
     struct FamilyScale {
         float minScale = 1.0f;

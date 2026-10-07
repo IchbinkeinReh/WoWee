@@ -90,7 +90,9 @@
   "CreatureModelData": {
     "ID": 0,
     "ModelPath": 2,
-    "ModelScale": 4
+    "ModelScale": 4,
+    "MountHeight": 16,
+    "GeoBoxMinX": 17
   },
   "Emotes": {
     "AnimID": 2,

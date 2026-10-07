@@ -2,6 +2,7 @@
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_model_classifier.hpp"
+#include "rendering/blob_shadow.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_buffer.hpp"
 #include "rendering/vk_texture.hpp"
@@ -1038,6 +1039,60 @@ std::optional<float> M2Renderer::getInstanceFloorHeight(uint32_t instanceId,
         if (worldHit.z <= glZ && (!best || worldHit.z > *best)) best = worldHit.z;
     }
     return best;
+}
+
+void M2Renderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                        std::vector<glm::vec3>& out) const {
+    std::vector<size_t> candidates;
+    gatherCandidates(boxMin, boxMax, candidates);
+    std::vector<uint32_t> tris, walls;
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        // The map's doodads, in chunks and in buildings: not a game object,
+        // which is an entity of its own, and not the ground clutter.
+        if (!instance.cachedModel || instance.isGameObject || instance.detailDoodad) continue;
+        if (instance.scale <= 0.001f || instance.skipCollision) continue;
+        if (boxMax.x < instance.worldBoundsMin.x || boxMin.x > instance.worldBoundsMax.x ||
+            boxMax.y < instance.worldBoundsMin.y || boxMin.y > instance.worldBoundsMax.y ||
+            boxMax.z < instance.worldBoundsMin.z || boxMin.z > instance.worldBoundsMax.z) {
+            continue;
+        }
+        const M2ModelGPU& model = *instance.cachedModel;
+        if (!model.collision.valid() || model.isInvisibleTrap || model.isSpellEffect) continue;
+
+        // The box in the model's own space, for the mesh's cell grid.
+        glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
+        for (int c = 0; c < 8; ++c) {
+            const glm::vec3 corner((c & 1) ? boxMax.x : boxMin.x, (c & 2) ? boxMax.y : boxMin.y,
+                                   (c & 4) ? boxMax.z : boxMin.z);
+            const glm::vec3 local(instance.invModelMatrix * glm::vec4(corner, 1.0f));
+            lo = glm::min(lo, glm::vec2(local));
+            hi = glm::max(hi, glm::vec2(local));
+        }
+        // Every collision triangle the box reaches, floor or wall alike;
+        // facing up is the only test (0x007e32f0). Each query clears its list.
+        model.collision.getFloorTrisInRange(lo.x, lo.y, hi.x, hi.y, tris);
+        model.collision.getWallTrisInRange(lo.x, lo.y, hi.x, hi.y, walls);
+        tris.insert(tris.end(), walls.begin(), walls.end());
+        const auto& verts = model.collision.vertices;
+        const auto& indices = model.collision.indices;
+        for (uint32_t ti : tris) {
+            if (ti >= model.collision.triCount) continue;
+            const glm::vec3& a = verts[indices[ti * 3]];
+            const glm::vec3& b = verts[indices[ti * 3 + 1]];
+            const glm::vec3& c = verts[indices[ti * 3 + 2]];
+            if (!blob_shadow::facesUp(instance.modelMatrix, a, b, c)) continue;
+            const glm::vec3 wa(instance.modelMatrix * glm::vec4(a, 1.0f));
+            const glm::vec3 wb(instance.modelMatrix * glm::vec4(b, 1.0f));
+            const glm::vec3 wc(instance.modelMatrix * glm::vec4(c, 1.0f));
+            const glm::vec3 tMin = glm::min(wa, glm::min(wb, wc));
+            const glm::vec3 tMax = glm::max(wa, glm::max(wb, wc));
+            if (glm::any(glm::lessThan(tMax, boxMin)) || glm::any(glm::greaterThan(tMin, boxMax))) continue;
+            out.push_back(wa);
+            out.push_back(wb);
+            out.push_back(wc);
+        }
+    }
 }
 
 std::optional<float> M2Renderer::getFloorHeight(float glX, float glY, float glZ, float* outNormalZ) const {

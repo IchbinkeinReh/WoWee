@@ -361,6 +361,13 @@ public:
     /// closest to the feet - which is what keeps a player standing on the lower
     /// of two stacked floors under an overhang, rather than being snapped up to
     /// the level above them.
+    /// The triangles a blob shadow is laid on from the buildings in a world
+    /// box: each group's collision triangles that reach it and face up, less
+    /// those flagged 0x08 (0x007a6940, 0x007aef00, 0x007cb7b0 with the mask
+    /// 0x007ae140 makes, 0x007c9b10, 0x007e32f0). World-space corners, three
+    /// to a triangle.
+    void gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                std::vector<glm::vec3>& out) const;
     std::optional<float> getFloorHeight(float glX, float glY, float glZ,
                                         float* outNormalZ = nullptr,
                                         float referenceZ =

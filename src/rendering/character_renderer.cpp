@@ -4590,6 +4590,24 @@ bool CharacterRenderer::getInstancePosition(uint32_t instanceId, glm::vec3& outP
     return true;
 }
 
+void CharacterRenderer::setInstanceBlobShadow(uint32_t instanceId,
+                                              const std::optional<blob_shadow::Box>& box) {
+    auto it = instances.find(instanceId);
+    if (it != instances.end()) it->second.blobShadow = box;
+}
+
+void CharacterRenderer::collectBlobShadows(std::vector<blob_shadow::Caster>& out) const {
+    for (const auto& [id, inst] : instances) {
+        (void)id;
+        if (!inst.blobShadow || !inst.visible) continue;
+        blob_shadow::Caster c;
+        c.world = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
+        c.box = *inst.blobShadow;
+        c.alpha = inst.opacity;
+        out.push_back(c);
+    }
+}
+
 bool CharacterRenderer::getInstanceFrame(uint32_t instanceId, glm::mat4& outFrame) const {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return false;

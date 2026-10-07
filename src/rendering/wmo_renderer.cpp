@@ -1,4 +1,5 @@
 #include "rendering/collision_geometry.hpp"
+#include "rendering/blob_shadow.hpp"
 #include "rendering/pom_quality.hpp"
 #include "rendering/placement_transform.hpp"
 #include "rendering/spatial_grid.hpp"
@@ -3084,6 +3085,71 @@ void WMORenderer::GroupResources::getWallTrianglesInRange(
         float minX, float minY, float maxX, float maxY,
         std::vector<uint32_t>& out) const {
     gatherCellTriangles(cellWallTriangles, minX, minY, maxX, maxY, out);
+}
+
+void WMORenderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                         std::vector<glm::vec3>& out) const {
+    std::vector<size_t> candidates;
+    gatherCandidates(boxMin, boxMax, candidates);
+    std::vector<uint32_t> tris;
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        // The map's buildings (0x007a6940 walks the map objects), not a
+        // transport, which is a game object.
+        if (instance.isTransport || instance.hidden) continue;
+        if (boxMax.x < instance.worldBoundsMin.x || boxMin.x > instance.worldBoundsMax.x ||
+            boxMax.y < instance.worldBoundsMin.y || boxMin.y > instance.worldBoundsMax.y ||
+            boxMax.z < instance.worldBoundsMin.z || boxMin.z > instance.worldBoundsMax.z) {
+            continue;
+        }
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const ModelData& model = it->second;
+
+        glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
+        for (int c = 0; c < 8; ++c) {
+            const glm::vec3 corner((c & 1) ? boxMax.x : boxMin.x, (c & 2) ? boxMax.y : boxMin.y,
+                                   (c & 4) ? boxMax.z : boxMin.z);
+            const glm::vec3 local(instance.invModelMatrix * glm::vec4(corner, 1.0f));
+            lo = glm::min(lo, glm::vec2(local));
+            hi = glm::max(hi, glm::vec2(local));
+        }
+        for (size_t gi = 0; gi < model.groups.size(); ++gi) {
+            // 0x007aef00: a group whose box meets the query's.
+            if (gi < instance.worldGroupBounds.size()) {
+                const auto& [gMin, gMax] = instance.worldGroupBounds[gi];
+                if (boxMax.x < gMin.x || boxMin.x > gMax.x || boxMax.y < gMin.y ||
+                    boxMin.y > gMax.y || boxMax.z < gMin.z || boxMin.z > gMax.z) {
+                    continue;
+                }
+            }
+            const auto& group = model.groups[gi];
+            const auto& verts = group.collisionVertices;
+            const auto& indices = group.collisionIndices;
+            group.getTrianglesInRange(lo.x, lo.y, hi.x, hi.y, tris);
+            for (uint32_t triStart : tris) {
+                if (triStart + 2 >= indices.size()) continue;
+                // The mask 0x007ae140 makes for these flags is 0x88, and
+                // 0x007c9b10 keeps a triangle none of whose MOPY flags it
+                // shares: 0x80 marks one already taken, 0x08 is left out.
+                const uint32_t tri = triStart / 3;
+                if (tri < group.triMopyFlags.size() && (group.triMopyFlags[tri] & 0x08) != 0) continue;
+                const glm::vec3& a = verts[indices[triStart]];
+                const glm::vec3& b = verts[indices[triStart + 1]];
+                const glm::vec3& c = verts[indices[triStart + 2]];
+                if (!blob_shadow::facesUp(instance.modelMatrix, a, b, c)) continue;
+                const glm::vec3 wa(instance.modelMatrix * glm::vec4(a, 1.0f));
+                const glm::vec3 wb(instance.modelMatrix * glm::vec4(b, 1.0f));
+                const glm::vec3 wc(instance.modelMatrix * glm::vec4(c, 1.0f));
+                const glm::vec3 tMin = glm::min(wa, glm::min(wb, wc));
+                const glm::vec3 tMax = glm::max(wa, glm::max(wb, wc));
+                if (glm::any(glm::lessThan(tMax, boxMin)) || glm::any(glm::greaterThan(tMin, boxMax))) continue;
+                out.push_back(wa);
+                out.push_back(wb);
+                out.push_back(wc);
+            }
+        }
+    }
 }
 
 std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ, float* outNormalZ, float referenceZ) const {

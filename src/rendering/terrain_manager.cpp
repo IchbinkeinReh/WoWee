@@ -2209,6 +2209,51 @@ const pipeline::MapChunk* TerrainManager::findChunkAt(float glX, float glY,
     return nullptr;
 }
 
+void TerrainManager::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                            std::vector<glm::vec3>& out) const {
+    // The quads lie on one grid across the map, an eighth of a chunk each,
+    // counted from the map's corner; each is drawn as four triangles fanned
+    // from its centre vertex, and a hole drops the whole quad.
+    const float unit = CHUNK_SIZE / 8.0f;
+    const float origin = core::coords::ZEROPOINT;
+    const int kMin = static_cast<int>(std::floor((origin - boxMax.x) / unit));
+    const int kMax = static_cast<int>(std::floor((origin - boxMin.x) / unit));
+    const int lMin = static_cast<int>(std::floor((origin - boxMax.y) / unit));
+    const int lMax = static_cast<int>(std::floor((origin - boxMin.y) / unit));
+    if (kMax - kMin > 64 || lMax - lMin > 64) return;
+    // A corner is read a hair inside its quad, so the chunk it is read from
+    // is the quad's own even on a chunk's edge.
+    constexpr float kInset = 1e-3f;
+    for (int k = kMin; k <= kMax; ++k) {
+        const float x1 = origin - static_cast<float>(k) * unit;
+        const float x0 = x1 - unit;
+        for (int l = lMin; l <= lMax; ++l) {
+            const float y1 = origin - static_cast<float>(l) * unit;
+            const float y0 = y1 - unit;
+            const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
+            const auto hc = getHeightAt(cx, cy);
+            if (!hc || isHoleAt(cx, cy)) continue;
+            const auto h00 = getHeightAt(x0 + kInset, y0 + kInset);
+            const auto h10 = getHeightAt(x1 - kInset, y0 + kInset);
+            const auto h11 = getHeightAt(x1 - kInset, y1 - kInset);
+            const auto h01 = getHeightAt(x0 + kInset, y1 - kInset);
+            if (!h00 || !h10 || !h11 || !h01) continue;
+            const glm::vec3 c(cx, cy, *hc);
+            const glm::vec3 p[4] = {{x0, y0, *h00}, {x1, y0, *h10}, {x1, y1, *h11}, {x0, y1, *h01}};
+            for (int e = 0; e < 4; ++e) {
+                const glm::vec3& a = p[e];
+                const glm::vec3& b = p[(e + 1) & 3];
+                const float zLo = std::min(c.z, std::min(a.z, b.z));
+                const float zHi = std::max(c.z, std::max(a.z, b.z));
+                if (zHi < boxMin.z || zLo > boxMax.z) continue;
+                out.push_back(c);
+                out.push_back(a);
+                out.push_back(b);
+            }
+        }
+    }
+}
+
 std::optional<float> TerrainManager::getHeightAt(float glX, float glY) const {
     float fracX = 0.0f, fracY = 0.0f;
     const pipeline::MapChunk* chunk = findChunkAt(glX, glY, fracX, fracY);
