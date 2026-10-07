@@ -367,14 +367,14 @@ private:
     /// the shaders read the texel size from shadowParams.z each frame.
     uint32_t SHADOW_MAP_SIZE = 4096;
     /// The quality level's side, and the smallest the resolution setting
-    /// offers: its steps are this, twice it and four times it.
+    /// offers: its steps are this, twice, four and eight times it.
     uint32_t shadowMapBaseSize_ = 4096;
     /// A side asked for and not built yet; 0 when nothing is waiting.
     uint32_t pendingShadowMapSize_ = 0;
     /// The largest side the resolution setting goes to. Each doubling is four
-    /// times the memory: at 8192 a map is 256 MB, two in flight are 512 MB,
+    /// times the memory: at 16384 a map is 1 GB, two in flight are 2 GB,
     /// and past that is more than a player choosing "sharper" expects to pay.
-    static constexpr uint32_t kMaxShadowMapSize = 8192;
+    static constexpr uint32_t kMaxShadowMapSize = 16384;
     void setShadowMapSize(uint32_t side) {
         // Powers of two between 512 and 4096: the quality slider has five
         // steps and these are they.

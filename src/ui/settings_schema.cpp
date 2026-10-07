@@ -141,16 +141,17 @@ constexpr SettingDesc kSchema[] = {
      "shadows close to you.", "", 300, "shadows"},
     // Steps above the size the map has always been built at, which stays the
     // smallest and the default: 2048 a side on a desktop. Each step doubles
-    // the side, held to 8192 and to what the device can make
+    // the side, held to 16384 and to what the device can make
     // (Renderer::setShadowResolutionScale). Not in any preset: the top step
-    // is half a gigabyte of video memory, and nobody should be handed that
+    // is two gigabytes of video memory, and nobody should be handed that
     // by choosing Ultra.
-    {"shadowresolution", "Shadow resolution", SettingKind::Enum, 0, 2, 1, "Shadows", "",
+    {"shadowresolution", "Shadow resolution", SettingKind::Enum, 0, 3, 1, "Shadows", "",
      "How finely the shadow map is drawn. Higher gives crisper shadow\n"
      "edges with fewer jagged steps, most visible at long shadow\n"
      "distances. Each step doubles the map's size and takes four times\n"
-     "the video memory: 4x is 8192 by 8192 on most machines, 512 MB.",
-     "Standard|2x|4x", 0, "shadows"},
+     "the video memory: 4x is 8192 by 8192 on most machines, 512 MB;\n"
+     "8x is 16384 by 16384, 2 GB.",
+     "Standard|2x|4x|8x", 0, "shadows"},
 
     // ------------------------------------------------------------------ Detail
     //

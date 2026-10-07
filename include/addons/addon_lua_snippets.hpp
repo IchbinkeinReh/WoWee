@@ -47,6 +47,7 @@ local kCategoryHost = {
     ["Shadows"]      = "video",
     ["Detail"]       = "video",
     ["Grass"]        = "video",
+    ["Water"]        = "video",
     ["Ray Tracing"]  = "video",
     ["Upscaling"]    = "video",
     ["Display"]      = "video",

@@ -4883,7 +4883,7 @@ uint32_t Renderer::maxShadowMapSize() const {
 }
 
 void Renderer::setShadowResolutionScale(int step) {
-    step = std::clamp(step, 0, 2);
+    step = std::clamp(step, 0, 3);
     // Never below the quality level's size: it is at most 4096, which every
     // device has to support, and it was built at start-up.
     pendingShadowMapSize_ = std::max(std::min(shadowMapBaseSize_ << step, maxShadowMapSize()),

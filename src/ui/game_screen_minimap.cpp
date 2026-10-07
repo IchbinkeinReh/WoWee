@@ -2094,7 +2094,7 @@ void GameScreen::loadSettings() {
             else if (key == "grass_distance") settingsPanel_.pendingGrassDistance = std::clamp(std::stoi(val), 30, 800);
             else if (key == "shadows") settingsPanel_.pendingShadows = (std::stoi(val) != 0);
             else if (key == "shadow_distance") settingsPanel_.pendingShadowDistance = std::clamp(std::stof(val), 40.0f, 500.0f);
-            else if (key == "shadow_resolution") settingsPanel_.pendingShadowResolution = std::clamp(std::stoi(val), 0, 2);
+            else if (key == "shadow_resolution") settingsPanel_.pendingShadowResolution = std::clamp(std::stoi(val), 0, 3);
             else if (key == "view_distance") settingsPanel_.pendingViewDistance = std::clamp(std::stof(val), 400.0f, 2400.0f);
             else if (key == "fog_sky_blend") settingsPanel_.pendingFogSkyBlend = std::clamp(std::stof(val), 0.0f, 1.0f);
             else if (key == "fog_strength") settingsPanel_.pendingFogStrength = std::clamp(std::stof(val), 0.0f, 2.0f);
