@@ -214,12 +214,15 @@ struct M2RibbonEmitter {
     M2AnimationTrack heightAboveTrack; // Half-width above bone
     M2AnimationTrack heightBelowTrack; // Half-width below bone
     M2AnimationTrack visibilityTrack;  // 0=hidden, 1=visible
+    M2AnimationTrack texSlotTrack;     // +0x84, uint16: the cell of the texture grid
 
     float edgesPerSecond = 15.0f;   // How many edge points are generated per second
     float edgeLifetime   = 0.5f;    // Seconds before edges expire
     float gravity        = 0.0f;    // Downward pull on edges per s²
     uint16_t textureRows = 1;
     uint16_t textureCols = 1;
+    /// The blending mode of the material materialIndex names.
+    uint16_t blendMode = 2;
 };
 
 // Complete M2 model structure

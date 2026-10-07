@@ -660,7 +660,7 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         emitParticles(instance, *instance.cachedModel, deltaTime);
         updateParticles(instance, deltaTime);
         if (!instance.cachedModel->ribbonEmitters.empty()) {
-            updateRibbons(instance, *instance.cachedModel, deltaTime);
+            updateClientRibbons(instance, *instance.cachedModel, deltaTime);
         }
     }
 

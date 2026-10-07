@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/collision_geometry.hpp"
+#include "rendering/client_ribbon.hpp"
 #include "rendering/spatial_grid.hpp"
 #include "rendering/shadow_params.hpp"
 
@@ -315,6 +316,8 @@ struct M2Instance {
     // One deque of edges per ribbon emitter on this instance
     std::vector<std::deque<RibbonEdge>> ribbonEdges;
     std::vector<float> ribbonEdgeAccumulators; // fractional edge counter per emitter
+    /// The client's ribbon emitters, one per model emitter (0x00828a00).
+    std::vector<client_ribbon::Emitter> clientRibbons;
 
     // Cached model flags (set at creation to avoid per-frame hash lookups)
     bool cachedHasAnimation = false;
@@ -521,6 +524,8 @@ public:
      * Render M2 ribbon emitters (spell trails / wing effects)
      */
     void renderM2Ribbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
+    /// The client's ribbons, each emitter's strip oldest edge first (0x00980b70).
+    void renderClientRibbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
 
     void setInstancePosition(uint32_t instanceId, const glm::vec3& position);
     /// WOWEE_M2_CENSUS: what a model is actually drawn at, said once each.
@@ -1333,6 +1338,9 @@ private:
     void emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt);
     void updateParticles(M2Instance& inst, float dt);
     void updateRibbons(M2Instance& inst, const M2ModelGPU& gpu, float dt);
+    /// The client's ribbons on an instance, as 0x00828a00 drives them each
+    /// frame: the tracks, the bone's matrix, the update.
+    void updateClientRibbons(M2Instance& inst, const M2ModelGPU& gpu, float dt);
 
     // Helper to allocate descriptor sets
     VkDescriptorSet allocateMaterialSet();

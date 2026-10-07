@@ -2639,6 +2639,11 @@ wowee_add_test(test_detail_doodad_placement
 wowee_add_test(test_weapon_attachment
     SOURCES test_weapon_attachment.cpp)
 
+# ── test_client_ribbon ───────────────────────────────────────
+# The client's ribbon emitter (rendering/client_ribbon.hpp).
+wowee_add_test(test_client_ribbon
+    SOURCES test_client_ribbon.cpp)
+
 # ── test_blob_shadow ─────────────────────────────────────────
 # The client's blob shadow under a unit (rendering/blob_shadow.hpp).
 wowee_add_test(test_blob_shadow

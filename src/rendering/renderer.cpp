@@ -3195,7 +3195,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 const auto tModels = std::chrono::steady_clock::now();
                 m2Renderer->renderM2Particles(cmd, perFrameSet);
                 const auto tParts = std::chrono::steady_clock::now();
-                m2Renderer->renderM2Ribbons(cmd, perFrameSet);
+                m2Renderer->renderClientRibbons(cmd, perFrameSet);
                 const auto tParticles = std::chrono::steady_clock::now();
                 vkEndCommandBuffer(cmd);
 
@@ -3501,7 +3501,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             auto m2Start = std::chrono::steady_clock::now();
             renderM2Models(currentCmd, perFrameSet, !skipChars);
             m2Renderer->renderM2Particles(currentCmd, perFrameSet);
-            m2Renderer->renderM2Ribbons(currentCmd, perFrameSet);
+            m2Renderer->renderClientRibbons(currentCmd, perFrameSet);
             if (vkCtx) vkCtx->gpuMark(currentCmd, "m2");
             lastM2RenderMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - m2Start).count();

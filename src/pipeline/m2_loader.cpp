@@ -503,7 +503,8 @@ std::string readString(const std::vector<uint8_t>& data, uint32_t offset, uint32
 }
 
 enum class TrackType { VEC3, QUAT_COMPRESSED, FLOAT, FIXED16, BYTE_BOOL,
-                       QUAT_FLOAT };  // float x,y,z,w: a texture transform's rotation
+                       QUAT_FLOAT,   // float x,y,z,w: a texture transform's rotation
+                       UINT16 };     // a ribbon's texture slot  // float x,y,z,w: a texture transform's rotation
 
 // M2 sequence flag: when set, keyframe data is embedded in the M2 file.
 // When clear, data lives in an external .anim file and the M2 offsets are
@@ -559,6 +560,7 @@ void parseAnimTrack(const std::vector<uint8_t>& data,
         if (type == TrackType::FLOAT) keyElementSize = sizeof(float);
         else if (type == TrackType::FIXED16) keyElementSize = sizeof(int16_t);
         else if (type == TrackType::BYTE_BOOL) keyElementSize = sizeof(uint8_t);
+        else if (type == TrackType::UINT16) keyElementSize = sizeof(uint16_t);
         else if (type == TrackType::VEC3) keyElementSize = sizeof(float) * 3;
         else if (type == TrackType::QUAT_FLOAT) keyElementSize = sizeof(float) * 4;
         else keyElementSize = sizeof(int16_t) * 4;
@@ -588,6 +590,10 @@ void parseAnimTrack(const std::vector<uint8_t>& data,
                 track.sequences[i].floatValues.push_back(
                     readValue<uint8_t>(data, keyOffset + k) != 0 ? 1.0f : 0.0f);
             }
+        } else if (type == TrackType::UINT16) {
+            auto raw = readArray<uint16_t>(data, keyOffset, keyCount);
+            track.sequences[i].floatValues.reserve(raw.size());
+            for (uint16_t v : raw) track.sequences[i].floatValues.push_back(static_cast<float>(v));
         } else if (type == TrackType::QUAT_FLOAT) {
             // Uncompressed C4Quaternion, x y z w: the client steps a texture
             // transform's rotation keys 16 bytes apart (FUN_0082ad50).
@@ -1748,10 +1754,23 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                 rib.textureCols    = readValue<uint16_t>(m2Data, base + 0x82);
                 if (rib.textureRows == 0) rib.textureRows = 1;
                 if (rib.textureCols == 0) rib.textureCols = 1;
+                // The rate and lifetime as the file has them: the emitter
+                // rounds the rate up and holds the lifetime to a quarter of a
+                // second (0x009808a0). A rate that is not a number is none.
+                if (!std::isfinite(rib.edgesPerSecond) || rib.edgesPerSecond < 0.0f ||
+                    rib.edgesPerSecond > 10000.0f) {
+                    rib.edgesPerSecond = 0.0f;
+                }
+                if (!std::isfinite(rib.edgeLifetime) || rib.edgeLifetime > 1000.0f) rib.edgeLifetime = 0.0f;
+                if (rib.materialIndex < model.materials.size()) {
+                    rib.blendMode = model.materials[rib.materialIndex].blendMode;
+                }
 
-                // Clamp to sane values
-                if (rib.edgesPerSecond < 1.0f  || rib.edgesPerSecond > 200.0f) rib.edgesPerSecond = 15.0f;
-                if (rib.edgeLifetime   < 0.05f || rib.edgeLifetime   > 10.0f)  rib.edgeLifetime   = 0.5f;
+                // texSlotTrack M2TrackDisk at 0x84 (uint16)
+                if (base + 0x84 + sizeof(M2TrackDisk) <= m2Data.size()) {
+                    parseAnimTrack(m2Data, readValue<M2TrackDisk>(m2Data, base + 0x84),
+                                   rib.texSlotTrack, TrackType::UINT16, ribSeqFlags);
+                }
 
                 // visibilityTrack M2TrackDisk at 0x98 - keys are uint8 (0/1), NOT float.
                 // Must read as uint8 and convert to float, else 0x01 reads as
