@@ -564,8 +564,8 @@ inline float mistAlpha(const Mist& m, float now, float cornerDistance) {
     const float age = now - m.start;
     const float in = std::clamp(1.0f - age / kMistFade, 0.0f, 1.0f);
     const float out = std::clamp((m.end - m.start - age) / kMistFade, 0.0f, 1.0f);
-    const float near = std::clamp(1.5f - cornerDistance * 0.083333336f, 0.0f, 1.0f);
-    return (1.0f - near) * out * (1.0f - in);
+    const float nearFade = std::clamp(1.5f - cornerDistance * 0.083333336f, 0.0f, 1.0f);
+    return (1.0f - nearFade) * out * (1.0f - in);
 }
 
 /// Weather.dbc's columns the client reads (0x007846a0): EffectType at +8, a
