@@ -325,15 +325,6 @@ void SpellHandler::playSpellCastSound(uint32_t spellId) {
     ssm->playCast(resolveSpellSchool(spellId));
 }
 
-void SpellHandler::playSpellImpactSound(uint32_t spellId) {
-    auto* ac = owner_.services().audioCoordinator;
-    if (!ac) return;
-    auto* ssm = ac->getSpellSoundManager();
-    if (!ssm) return;
-    ssm->playImpact(resolveSpellSchool(spellId),
-                     audio::SpellSoundManager::SpellPower::MEDIUM);
-}
-
 // ---- Spell visual effect helpers ----
 
 uint32_t SpellHandler::resolveSpellVisualId(uint32_t spellId) {
@@ -2313,14 +2304,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         }
     }
 
-    // Impact sound
-    bool playerIsHit = false;
-    bool playerHitEnemy = false;
-    for (const auto& tgt : data.hitTargets) {
-        if (tgt == owner_.getPlayerGuid()) { playerIsHit = true; }
-        if (data.casterUnit == owner_.getPlayerGuid() && tgt != owner_.getPlayerGuid() && tgt != 0) { playerHitEnemy = true; }
-    }
-
     // Fire UNIT_SPELLCAST_SUCCEEDED
     if (owner_.addonEventCallbackRef()) {
         std::string unitId = owner_.guidToUnitId(data.casterUnit);
@@ -2328,8 +2311,10 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SUCCEEDED", spellcastArgs(unitId, data.spellId));
     }
 
-    if ((playerIsHit || playerHitEnemy) && !rangedWeaponAttack)
-        playSpellImpactSound(data.spellId);
+    // No impact sound of its own here: the impact kit plays its SoundID
+    // where and when it plays - on a missile's arrival for one that flies
+    // (SpellVisualSystem::playSpellVisual, 0x00745230). A sound by the
+    // spell's school was played here at SMSG_SPELL_GO instead.
 
     // Trigger spell visual effects: cast kit at caster + impact kit at each hit target.
     // Skip profession spells and melee (schoolMask == 1) abilities.

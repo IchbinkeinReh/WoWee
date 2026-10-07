@@ -4,15 +4,9 @@
 #include "pipeline/asset_manager.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
-#include <random>
 
 namespace wowee {
 namespace audio {
-
-namespace {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-}
 
 bool SpellSoundManager::initialize(pipeline::AssetManager* assets) {
     if (!assets) {
@@ -92,40 +86,12 @@ bool SpellSoundManager::initialize(pipeline::AssetManager* assets) {
     castShadowSounds_.resize(1);
     loadSound("Sound\\Spells\\Cast\\ShadowCast.wav", castShadowSounds_[0], assets);
 
-    // Load Impact sounds
-    impactFireballSounds_.resize(3);
-    loadSound("Sound\\Spells\\FireBallImpactA.wav", impactFireballSounds_[0], assets);
-    loadSound("Sound\\Spells\\FireBallImpactB.wav", impactFireballSounds_[1], assets);
-    loadSound("Sound\\Spells\\FireBallImpactC.wav", impactFireballSounds_[2], assets);
-
-    impactBlizzardSounds_.resize(6);
-    loadSound("Sound\\Spells\\BlizzardImpact1a.wav", impactBlizzardSounds_[0], assets);
-    loadSound("Sound\\Spells\\BlizzardImpact1b.wav", impactBlizzardSounds_[1], assets);
-    loadSound("Sound\\Spells\\BlizzardImpact1c.wav", impactBlizzardSounds_[2], assets);
-    loadSound("Sound\\Spells\\BlizzardImpact1d.wav", impactBlizzardSounds_[3], assets);
-    loadSound("Sound\\Spells\\BlizzardImpact1e.wav", impactBlizzardSounds_[4], assets);
-    loadSound("Sound\\Spells\\BlizzardImpact1f.wav", impactBlizzardSounds_[5], assets);
-
-    impactHolySounds_.resize(4);
-    loadSound("Sound\\Spells\\DirectDamage\\HolyImpactDDLow.wav", impactHolySounds_[0], assets);
-    loadSound("Sound\\Spells\\DirectDamage\\HolyImpactDDMedium.wav", impactHolySounds_[1], assets);
-    loadSound("Sound\\Spells\\DirectDamage\\HolyImpactDDHigh.wav", impactHolySounds_[2], assets);
-    loadSound("Sound\\Spells\\DirectDamage\\HolyImpactDDUber.wav", impactHolySounds_[3], assets);
-
-    impactArcaneMissileSounds_.resize(3);
-    loadSound("Sound\\Spells\\ArcaneMissileImpact1a.wav", impactArcaneMissileSounds_[0], assets);
-    loadSound("Sound\\Spells\\ArcaneMissileImpact1b.wav", impactArcaneMissileSounds_[1], assets);
-    loadSound("Sound\\Spells\\ArcaneMissileImpact1c.wav", impactArcaneMissileSounds_[2], assets);
-
     LOG_INFO("SpellSoundManager: Precast sounds - Fire: ", precastFireLowSounds_[0].loaded ? "YES" : "NO",
              ", Frost: ", precastFrostLowSounds_[0].loaded ? "YES" : "NO",
              ", Holy: ", precastHolyLowSounds_[0].loaded ? "YES" : "NO");
     LOG_INFO("SpellSoundManager: Cast sounds - Fire: ", castFireSounds_[0].loaded ? "YES" : "NO",
              ", Frost: ", castFrostSounds_[0].loaded ? "YES" : "NO",
              ", Shadow: ", castShadowSounds_[0].loaded ? "YES" : "NO");
-    LOG_INFO("SpellSoundManager: Impact sounds - Fireball: ", impactFireballSounds_[0].loaded ? "YES" : "NO",
-             ", Blizzard: ", impactBlizzardSounds_[0].loaded ? "YES" : "NO",
-             ", Holy: ", impactHolySounds_[0].loaded ? "YES" : "NO");
 
     initialized_ = true;
     LOG_INFO("SpellSoundManager: Initialization complete");
@@ -146,16 +112,6 @@ void SpellSoundManager::playSound(const std::vector<SpellSample>& library, float
 
     float volume = 0.75f * volumeScale_ * volumeMultiplier;
     AudioEngine::instance().playSound2D(library[0].data, volume, 1.0f);
-}
-
-void SpellSoundManager::playRandomSound(const std::vector<SpellSample>& library, float volumeMultiplier) {
-    if (!initialized_) return;
-    // Among the ones that loaded - see pickLoadedSample. The base volume is
-    // this bank's own and stays here.
-    const SpellSample* chosen = pickLoadedSample(library, gen);
-    if (!chosen) return;
-    const float volume = 0.75f * volumeScale_ * volumeMultiplier;
-    AudioEngine::instance().playSound2D(chosen->data, volume, 1.0f);
 }
 
 void SpellSoundManager::setVolumeScale(float scale) {
@@ -235,29 +191,5 @@ void SpellSoundManager::playCast(MagicSchool school) {
     }
 }
 
-void SpellSoundManager::playImpact(MagicSchool school, SpellPower power) {
-    switch (school) {
-        case MagicSchool::FIRE:
-            playRandomSound(impactFireballSounds_);
-            break;
-        case MagicSchool::FROST:
-            playRandomSound(impactBlizzardSounds_);
-            break;
-        case MagicSchool::HOLY:
-            if (power == SpellPower::LOW) {
-                playSound(impactHolySounds_);  // Use first (low)
-            } else if (power == SpellPower::MEDIUM && impactHolySounds_.size() > 1) {
-                playSound({impactHolySounds_[1]});
-            } else if (power == SpellPower::HIGH && impactHolySounds_.size() > 2) {
-                playSound({impactHolySounds_[2]});
-            }
-            break;
-        case MagicSchool::ARCANE:
-            playRandomSound(impactArcaneMissileSounds_);
-            break;
-        default:
-            break;
-    }
-}
 } // namespace audio
 } // namespace wowee

@@ -114,3 +114,14 @@ TEST_CASE("a missile faces along its travel", "[spell_missile]") {
     }
     CHECK(sm::facingEuler(glm::vec3(0.0f)) == glm::vec3(0.0f));
 }
+
+TEST_CASE("a missile's sound is its SoundEntries row's first file", "[spell_missile][sound]") {
+    std::array<std::string, 10> files{};
+    CHECK(sm::soundEntryFile("Sound\\Spells", files).empty());
+    files[2] = "FireBallMissileLoop.wav";
+    files[5] = "Other.wav";
+    CHECK(sm::soundEntryFile("Sound\\Spells", files) == "Sound\\Spells\\FireBallMissileLoop.wav");
+    CHECK(sm::soundEntryFile("", files) == "FireBallMissileLoop.wav");
+    // 0x00703410 fades it out over 0.15 s on arrival.
+    CHECK(sm::kMissileSoundFadeSeconds == Catch::Approx(0.15f));
+}

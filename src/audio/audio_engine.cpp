@@ -6,6 +6,7 @@
 
 #include "../../extern/miniaudio.h"
 
+#include <algorithm>
 #include <cstring>
 #include <cstdlib>
 #include <iterator>
@@ -549,6 +550,72 @@ bool AudioEngine::playSound3D(const std::string& mpqPath, const glm::vec3& posit
         return false;
     }
     return playSound3D(data, position, volume, pitch, maxDistance);
+}
+
+uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, const glm::vec3& position,
+                                         float volume, float maxDistance) {
+    if (!initialized_ || !engine_ || wavData.empty()) return 0;
+    if (masterVolume_ <= 0.0f) return 0;
+
+    DecodedWavCacheEntry decoded;
+    if (!decodeWavCached(wavData, decoded) || !decoded.pcmData || decoded.frames == 0) return 0;
+
+    ma_audio_buffer_config bufferConfig = ma_audio_buffer_config_init(
+        decoded.format, decoded.channels, decoded.frames, decoded.pcmData->data(), nullptr);
+    bufferConfig.sampleRate = decoded.sampleRate;
+
+    AudioBufferStorage audioBuffer;
+    if (!audioBuffer) return 0;
+    if (ma_audio_buffer_init(&bufferConfig, audioBuffer.get()) != MA_SUCCESS) return 0;
+    audioBuffer.markInitialised();
+
+    SoundStorage sound;
+    if (!sound) return 0;
+    if (ma_sound_init_from_data_source(engine_, audioBuffer.get(),
+                                       MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_ASYNC | MA_SOUND_FLAG_NO_PITCH,
+                                       nullptr, sound.get()) != MA_SUCCESS) {
+        return 0;
+    }
+    sound.markInitialised();
+
+    ma_sound_set_looping(sound.get(), MA_TRUE);
+    ma_sound_set_position(sound.get(), position.x, position.y, position.z);
+    ma_sound_set_volume(sound.get(), volume);
+    ma_sound_set_attenuation_model(sound.get(), ma_attenuation_model_inverse);
+    ma_sound_set_min_gain(sound.get(), 0.0f);
+    ma_sound_set_max_gain(sound.get(), 1.0f);
+    ma_sound_set_min_distance(sound.get(), 1.0f);
+    ma_sound_set_max_distance(sound.get(), maxDistance);
+    ma_sound_set_rolloff(sound.get(), 1.0f);
+    if (ma_sound_start(sound.get()) != MA_SUCCESS) return 0;
+
+    uint32_t id = nextSoundId_++;
+    if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
+    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, id});
+    return id;
+}
+
+void AudioEngine::setSoundPosition(uint32_t id, const glm::vec3& position) {
+    if (id == 0) return;
+    for (auto& active : activeSounds_) {
+        if (active.id == id) {
+            ma_sound_set_position(active.sound, position.x, position.y, position.z);
+            return;
+        }
+    }
+}
+
+void AudioEngine::stopSoundWithFade(uint32_t id, float seconds) {
+    if (id == 0) return;
+    for (auto& active : activeSounds_) {
+        if (active.id == id) {
+            // update() takes it away once it has stopped playing.
+            ma_sound_stop_with_fade_in_milliseconds(
+                active.sound, static_cast<ma_uint64>(std::max(seconds, 0.0f) * 1000.0f));
+            active.id = 0;
+            return;
+        }
+    }
 }
 
 bool AudioEngine::playMusic(std::shared_ptr<const std::vector<uint8_t>> musicData,

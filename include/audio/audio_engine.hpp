@@ -78,6 +78,17 @@ public:
     bool playSound3D(const std::string& mpqPath, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f);
 
+    /// A looping 3D sound that stays until stopped, for one that follows
+    /// something across the world - a spell missile's (0x007022d0). Returns
+    /// a non-zero handle, or 0 on failure.
+    uint32_t playSound3DLooping(const std::vector<uint8_t>& wavData, const glm::vec3& position,
+                                float volume = 1.0f, float maxDistance = 100.0f);
+    /// Move a sound started with a handle (no-op once it has finished).
+    void setSoundPosition(uint32_t id, const glm::vec3& position);
+    /// Stop a sound started with a handle over `seconds`, after which it is
+    /// cleaned up like a sound that ended (no-op once it has finished).
+    void stopSoundWithFade(uint32_t id, float seconds);
+
     // Music streaming (for background music)
     // Retains shared ownership: the decoder streams directly from encoded tracks that
     // run to several MB, so cached music must not be copied for every playback.

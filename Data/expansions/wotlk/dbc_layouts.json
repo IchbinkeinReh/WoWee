@@ -361,6 +361,7 @@
     "MissileImpactOffsetY": 30,
     "MissileImpactOffsetZ": 31,
     "MissileModel": 8,
+    "MissileSound": 11,
     "PrecastKit": 1
   },
   "SpellVisualEffectName": {
@@ -376,6 +377,7 @@
     "ID": 0,
     "LeftHandEffect": 6,
     "RightHandEffect": 7,
+    "SoundID": 15,
     "SpecialEffect0": 11,
     "SpecialEffect1": 12,
     "SpecialEffect2": 13

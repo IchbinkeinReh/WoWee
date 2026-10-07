@@ -400,9 +400,8 @@ private:
     // Returns MagicSchool from the spell name cache, defaulting to ARCANE.
     audio::SpellSoundManager::MagicSchool resolveSpellSchool(uint32_t spellId);
 
-    // Play a spell cast or impact sound via audioCoordinator, if available.
+    // Play a spell cast sound via audioCoordinator, if available.
     void playSpellCastSound(uint32_t spellId);
-    void playSpellImpactSound(uint32_t spellId);
 
     // Resolve SpellVisualID from Spell.dbc cache for a given spellId.
     uint32_t resolveSpellVisualId(uint32_t spellId);

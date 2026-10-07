@@ -10,7 +10,9 @@
 #include "pipeline/m2_loader.hpp"
 #include "core/application.hpp"
 #include "core/logger.hpp"
+#include "audio/audio_engine.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <glm/gtc/constants.hpp>
 
@@ -113,6 +115,19 @@ void SpellVisualSystem::loadSpellVisualDbc() {
         }
     }
 
+    // SpellVisualKit SoundID (column 15, 0x00745230 reads it at +0x3c): the
+    // sound the kit plays with its models.
+    std::unordered_map<uint32_t, uint32_t> kitSounds;  // kitId → SoundEntries id
+    if (kitDbc && kitDbc->isLoaded()) {
+        const uint32_t kitSoundField = kitLayout ? kitLayout->tryField("SoundID") : 0xFFFFFFFFu;
+        if (kitSoundField < kitDbc->getFieldCount()) {
+            for (uint32_t i = 0; i < kitDbc->getRecordCount(); ++i) {
+                const uint32_t sound = kitDbc->getUInt32(i, kitSoundField);
+                if (sound != 0) kitSounds[kitDbc->getUInt32(i, 0)] = sound;
+            }
+        }
+    }
+
     // Helper: resolve path for a given kit ID
     auto kitPath = [&](uint32_t kitId) -> std::string {
         if (!kitId) return {};
@@ -143,6 +158,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
     const uint32_t svFlagsField      = svColumn("Flags");
     const uint32_t svMissileAttField = svColumn("MissileAttachment");
     const uint32_t svMissileDstField = svColumn("MissileDestinationAttachment");
+    const uint32_t svMissileSoundField = svColumn("MissileSound");
     const uint32_t svCastOffField[3] = {svColumn("MissileCastOffsetX"), svColumn("MissileCastOffsetY"),
                                         svColumn("MissileCastOffsetZ")};
     const uint32_t svImpactOffField[3] = {svColumn("MissileImpactOffsetX"), svColumn("MissileImpactOffsetY"),
@@ -185,6 +201,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                     svInt(i, svMissileDstField, -1), missile.flags);
                 missile.castOffset = spell_missile::attachmentOffset(svVec(i, svCastOffField));
                 missile.impactOffset = spell_missile::attachmentOffset(svVec(i, svImpactOffField));
+                missile.soundId = static_cast<uint32_t>(std::max(svInt(i, svMissileSoundField, 0), 0));
                 missileVisuals_[vid] = std::move(missile);
             }
         }
@@ -205,6 +222,11 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             if (path.empty() && !missilesFly && svMissileField < svFc)
                 path = missilePath(svDbc->getUInt32(i, svMissileField));
             if (!path.empty()) { spellVisualCastPath_[vid] = path; ++loadedCast; }
+        }
+        // The impact kit's sound.
+        if (svImpactKitField < svFc) {
+            auto soundIt = kitSounds.find(svDbc->getUInt32(i, svImpactKitField));
+            if (soundIt != kitSounds.end()) impactKitSounds_[vid] = soundIt->second;
         }
         // Impact path: ImpactKit → SpecialEffect0/BaseEffect, fallback to MissileModel
         {
@@ -489,6 +511,15 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
 
     if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
 
+    // The impact kit's sound plays with it, where it plays, model or none
+    // (0x00745230 flags the kit to play its SoundID). For a missile that is
+    // on arrival, as the kit is (0x00700e20).
+    if (useImpactKit) {
+        auto soundIt = impactKitSounds_.find(visualId);
+        if (const LoadedSound* sound = soundIt != impactKitSounds_.end() ? soundEntry(soundIt->second) : nullptr)
+            audio::AudioEngine::instance().playSound3D(sound->data, worldPosition, sound->volume);
+    }
+
     // Select cast or impact path map; fall back to the other if missing
     auto& primaryMap = useImpactKit ? spellVisualImpactPath_ : spellVisualCastPath_;
     auto& fallbackMap = useImpactKit ? spellVisualCastPath_ : spellVisualImpactPath_;
@@ -728,10 +759,43 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
         modelId, missile.position, spell_missile::facingEuler(target - missile.position), missile.scale);
     if (missile.instanceId == 0) return false;
     m2Renderer_->restartInstanceAnimation(missile.instanceId);
+    missile.soundHandle = startMissileSound(visual->soundId, missile.position);
     activeMissiles_.push_back(missile);
     LOG_DEBUG("SpellVisual: missile visualId=", visualId, " speed=", speed, " flight=", flight,
               "s model=", visual->modelPath, " target attach=", missile.targetAttachment);
     return true;
+}
+
+// A SoundEntries row as a spell's sounds play it: the row's file at its
+// VolumeFloat. Null when it has none this install can read.
+const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t soundId) {
+    if (soundId == 0 || !cachedAssetManager_) return nullptr;
+    auto it = soundEntries_.find(soundId);
+    if (it == soundEntries_.end()) {
+        LoadedSound loaded;
+        auto dbc = cachedAssetManager_->loadDBC("SoundEntries.dbc");
+        const int32_t idx = dbc && dbc->isLoaded() ? dbc->findRecordById(soundId) : -1;
+        // 3.3.5a: 3..12 File, 23 DirectoryBase, 24 VolumeFloat (0x008b69c0).
+        if (idx >= 0 && dbc->getFieldCount() > 24) {
+            const uint32_t row = static_cast<uint32_t>(idx);
+            std::array<std::string, 10> files;
+            for (uint32_t f = 0; f < files.size(); ++f) files[f] = dbc->getString(row, 3 + f);
+            const std::string path = spell_missile::soundEntryFile(dbc->getString(row, 23), files);
+            if (!path.empty()) loaded.data = cachedAssetManager_->readFile(path);
+            const float volume = dbc->getFloat(row, 24);
+            if (volume > 0.0f) loaded.volume = volume;
+        }
+        // Remembered either way, so a row without a file is read once.
+        it = soundEntries_.emplace(soundId, std::move(loaded)).first;
+    }
+    return it->second.data.empty() ? nullptr : &it->second;
+}
+
+// The missile's sound (FUN_007022d0): looping, at the missile.
+uint32_t SpellVisualSystem::startMissileSound(uint32_t soundId, const glm::vec3& position) {
+    const LoadedSound* sound = soundEntry(soundId);
+    if (!sound) return 0;
+    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, sound->volume);
 }
 
 // One frame of every missile in flight (FUN_007015d0): home on the target,
@@ -750,10 +814,12 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
             m2Renderer_->setInstanceTransform(
                 it->instanceId,
                 placementModelMatrix(it->position, spell_missile::facingEuler(travel), it->scale));
+            audio::AudioEngine::instance().setSoundPosition(it->soundHandle, it->position);
             ++it;
             continue;
         }
         m2Renderer_->removeInstance(it->instanceId);
+        audio::AudioEngine::instance().stopSoundWithFade(it->soundHandle, spell_missile::kMissileSoundFadeSeconds);
         const uint32_t visualId = it->visualId;
         std::vector<MissileEnd> impacts = std::move(it->impacts);
         it = activeMissiles_.erase(it);
@@ -861,6 +927,7 @@ void SpellVisualSystem::reset() {
     activeSpellVisuals_.clear();
     for (const auto& missile : activeMissiles_) {
         if (m2Renderer_) m2Renderer_->removeInstance(missile.instanceId);
+        audio::AudioEngine::instance().stopSound(missile.soundHandle);
     }
     activeMissiles_.clear();
     if (renderer_ && renderer_->getCharacterRenderer()) {

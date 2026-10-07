@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
+#include <string>
 
 namespace wowee::rendering::spell_missile {
 
@@ -136,6 +137,22 @@ inline glm::vec3 facingEuler(const glm::vec3& direction) {
     const float horizontal = std::sqrt(direction.x * direction.x + direction.y * direction.y);
     if (horizontal < 1e-6f && std::abs(direction.z) < 1e-6f) return glm::vec3(0.0f);
     return {0.0f, -std::atan2(direction.z, horizontal), std::atan2(direction.y, direction.x)};
+}
+
+/// A missile's sound: SpellVisual MissileSound, a SoundEntries row, started
+/// at the missile when it is launched and kept looping wherever it flies
+/// (0x007022d0 starts it with the loop forced on; 0x007015d0 moves it each
+/// frame), then faded out over 0.15 s when it arrives (0x00703410).
+inline constexpr float kMissileSoundFadeSeconds = 0.15f;
+
+/// The file a SoundEntries row plays, from its DirectoryBase and its ten
+/// File columns: the first that is set. Empty when none is.
+inline std::string soundEntryFile(const std::string& directory, const std::array<std::string, 10>& files) {
+    for (const std::string& file : files) {
+        if (file.empty()) continue;
+        return directory.empty() ? file : directory + "\\" + file;
+    }
+    return {};
 }
 
 }  // namespace wowee::rendering::spell_missile

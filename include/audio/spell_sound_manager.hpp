@@ -47,7 +47,7 @@ public:
     void playPrecast(MagicSchool school, SpellPower power);  // Channeling/preparation
     void stopPrecast();                                       // Stop precast sound early
     void playCast(MagicSchool school);                        // When spell fires
-    void playImpact(MagicSchool school, SpellPower power);    // When spell hits target
+    // No impact sound: an impact kit plays its own SoundID (SpellVisualSystem).
 
 
 private:
@@ -82,11 +82,6 @@ private:
     std::vector<SpellSample> castNatureSounds_;
     std::vector<SpellSample> castShadowSounds_;
 
-    // Impact sound libraries (spell hits)
-    std::vector<SpellSample> impactFireballSounds_;
-    std::vector<SpellSample> impactBlizzardSounds_;
-    std::vector<SpellSample> impactHolySounds_;
-    std::vector<SpellSample> impactArcaneMissileSounds_;
 
     // State tracking
     float volumeScale_ = 1.0f;
@@ -96,7 +91,6 @@ private:
     // Helper methods
     bool loadSound(const std::string& path, SpellSample& sample, pipeline::AssetManager* assets);
     void playSound(const std::vector<SpellSample>& library, float volumeMultiplier = 1.0f);
-    void playRandomSound(const std::vector<SpellSample>& library, float volumeMultiplier = 1.0f);
 };
 
 } // namespace audio

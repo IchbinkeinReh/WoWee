@@ -58,6 +58,7 @@ public:
         int32_t destinationAttachment = -1;  ///< M2 attachment id; -1 = the fallbacks
         glm::vec3 castOffset{0.0f};          ///< in the source attachment's frame
         glm::vec3 impactOffset{0.0f};        ///< in the destination attachment's frame
+        uint32_t soundId = 0;                ///< SpellVisual MissileSound (SoundEntries), 0 = none
     };
 
     /// The visual's missile, or null when it flies none (no MissileModel, or
@@ -140,6 +141,7 @@ private:
         std::vector<MissileEnd> impacts;  // where the impact kit plays on arrival
         float elapsed = 0.0f;
         float maxLifetime = 0.0f;
+        uint32_t soundHandle = 0;  // its MissileSound, looping where it flies
     };
 
     void loadSpellVisualDbc();
@@ -150,6 +152,11 @@ private:
     /// Where the missile aims this frame; forgets a target that has gone.
     glm::vec3 missileTargetPoint(ActiveMissile& missile) const;
     void updateMissiles(float deltaTime);
+    /// Start the missile's looping sound where it is; 0 when it has none or
+    /// it cannot be played.
+    uint32_t startMissileSound(uint32_t soundId, const glm::vec3& position);
+    struct LoadedSound;
+    const LoadedSound* soundEntry(uint32_t soundId);
 
     M2Renderer* m2Renderer_ = nullptr;
     Renderer* renderer_ = nullptr;
@@ -159,6 +166,12 @@ private:
     std::vector<PhysicalProjectile> physicalProjectiles_;
     std::vector<ActiveMissile> activeMissiles_;
     std::unordered_map<uint32_t, MissileVisual> missileVisuals_;      // visualId → missile
+    struct LoadedSound {
+        std::vector<uint8_t> data;
+        float volume = 1.0f;
+    };
+    std::unordered_map<uint32_t, LoadedSound> soundEntries_;           // SoundEntries id → its file, empty if none
+    std::unordered_map<uint32_t, uint32_t> impactKitSounds_;           // visualId → its impact kit's SoundEntries id
     std::unordered_map<uint32_t, std::string> spellVisualPrecastPath_; // visualId → precast M2 path
     std::unordered_map<uint32_t, std::string> spellVisualCastPath_;   // visualId → cast M2 path
     std::unordered_map<uint32_t, std::string> spellVisualImpactPath_; // visualId → impact M2 path
