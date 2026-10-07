@@ -456,7 +456,6 @@ private:
     std::map<uint32_t, LightVolume> lightsById_;
     struct LiquidTypeLight {
         float maxDarkenDepth = 0.0f;
-        float fogDarken = 0.0f;
         float ambDarken = 0.0f;
         float dirDarken = 0.0f;
         uint32_t lightId = 0;

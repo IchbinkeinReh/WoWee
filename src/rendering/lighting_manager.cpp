@@ -245,7 +245,6 @@ bool LightingManager::loadLiquidTypeDbc(pipeline::AssetManager* assetManager) {
     for (uint32_t i = 0; i < dbc.getRecordCount(); ++i) {
         LiquidTypeLight l;
         l.maxDarkenDepth = dbc.getFloat(i, cols[0]);
-        l.fogDarken = dbc.getFloat(i, cols[1]);
         l.ambDarken = dbc.getFloat(i, cols[2]);
         l.dirDarken = dbc.getFloat(i, cols[3]);
         l.lightId = dbc.getUInt32(i, cols[4]);
@@ -464,13 +463,13 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
         }
     }
 
-    // Darker with depth, by the LiquidType's own amounts: the fog colour, the
-    // ambient and the direct light each scaled in HSV value - which for a
-    // colour is a plain scale - by 1 - min(depth, max)/max x intensity
-    // (0x007f3230 tail, 0x007ed790).
+    // Darker with depth, by the LiquidType's own amounts: the ambient and the
+    // direct light each scaled in HSV value - which for a colour is a plain
+    // scale - by 1 - min(depth, max)/max x intensity (0x007f3230 tail,
+    // 0x007ed790). That tail darkens the fog colour too, but FUN_007816f0
+    // calls 0x007f16f0 after it, which sets the fog colour afresh from ch7
+    // (DAT_00d38b8c = DAT_00d38bf4), so the fog is never darker for depth.
     if (liquidRow) {
-        newParams.fogColor *= daynight::liquidDarkenScale(liquid.depth, liquidRow->maxDarkenDepth,
-                                                          liquidRow->fogDarken);
         newParams.ambientColor *= daynight::liquidDarkenScale(liquid.depth, liquidRow->maxDarkenDepth,
                                                               liquidRow->ambDarken);
         newParams.diffuseColor *= daynight::liquidDarkenScale(liquid.depth, liquidRow->maxDarkenDepth,
