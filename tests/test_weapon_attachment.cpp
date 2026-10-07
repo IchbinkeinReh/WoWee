@@ -41,3 +41,33 @@ TEST_CASE("a shoulder display's first model is the left shoulder", "[attachment]
     CHECK(shoulderAttachmentPoint(0) == at::kShoulderLeft);
     CHECK(shoulderAttachmentPoint(1) == at::kShoulderRight);
 }
+
+TEST_CASE("a unit's sheath state puts its weapons away or draws them (0x0072dbc0)", "[attachment]") {
+    const UnitWeaponItem sword{.sheath = 3, .inventoryType = 13, .itemClass = 2, .subClass = 7};
+    const UnitWeaponItem bow{.sheath = 1, .inventoryType = 15, .itemClass = 2, .subClass = 2};
+    // Melee: held.
+    CHECK(unitWeaponPoint(WeaponSlot::MainHand, sword, SheathState::Melee, false, true, sword) ==
+          at::kHandRight);
+    // Unarmed and ranged: put away at the Sheath's point.
+    CHECK(unitWeaponPoint(WeaponSlot::MainHand, sword, SheathState::Unarmed, false, true, sword) ==
+          at::kHipWeaponLeft);
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, sword, SheathState::Ranged, false, true, sword) ==
+          at::kHipWeaponRight);
+    // The ranged weapon only in the ranged state, or just put away.
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, bow, SheathState::Ranged, false, true, sword) == at::kHandLeft);
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, bow, SheathState::Melee, false, true, sword) == at::kNone);
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, bow, SheathState::Melee, true, true, sword) ==
+          at::kSheathOffHand);
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, bow, SheathState::Unarmed, true, true, sword) == at::kNone);
+}
+
+TEST_CASE("a creature with a two-hander shows no off hand", "[attachment]") {
+    const UnitWeaponItem staff{.sheath = 2, .inventoryType = 17, .itemClass = 2, .subClass = 10};
+    const UnitWeaponItem dagger{.sheath = 3, .inventoryType = 13, .itemClass = 2, .subClass = 15};
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, dagger, SheathState::Melee, false, false, staff) == at::kNone);
+    // A player keeps it (titan's grip).
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, dagger, SheathState::Melee, false, true, staff) ==
+          at::kHandLeft);
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, dagger, SheathState::Melee, false, false, dagger) ==
+          at::kHandLeft);
+}

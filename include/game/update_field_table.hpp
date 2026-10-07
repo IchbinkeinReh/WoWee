@@ -130,6 +130,9 @@ enum class UF : uint16_t {
     // both duellists name - what the client reads to tell whether two players
     // may attack each other.
     UNIT_FIELD_BYTES_2,
+    /// WotLK: three item entries, main hand, off hand, ranged - what a
+    /// creature holds (0x0072dbc0).
+    UNIT_VIRTUAL_ITEM_SLOT_ID,
     PLAYER_DUEL_ARBITER,
     GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,

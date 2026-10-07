@@ -173,6 +173,12 @@ public:
     static std::string transportModelPath(uint32_t entry, uint32_t displayId);
     audio::VoiceType detectVoiceTypeFromDisplayId(uint32_t displayId) const;
 
+    /// Every other unit's weapons as its items and sheath state
+    /// (UNIT_FIELD_BYTES_2 byte 0) have them, re-dressed when either changes
+    /// (0x0072dbc0, 0x00731f40): creatures from UNIT_VIRTUAL_ITEM_SLOT_ID,
+    /// players from their PLAYER_VISIBLE_ITEM entries. Once a frame.
+    void updateUnitWeapons();
+
     // Attempts one deferred attachment and owns retry bookkeeping. Returns true
     // only when this call consumed the caller's per-frame attachment budget.
     bool retryCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId,
@@ -468,6 +474,18 @@ private:
     void syncCreatureParticleTwins();
     void removeCreatureParticleTwin(uint64_t guid);
     uint32_t scaleSyncFrameCounter_ = 0;  // throttles refreshCreatureScales()
+    /// What updateUnitWeapons last dressed each unit with.
+    struct UnitWeaponsShown {
+        uint32_t instanceId = 0;
+        uint32_t modelId = 0;
+        std::array<uint32_t, 3> entries{};
+        uint8_t sheathState = 0;
+    };
+    std::unordered_map<uint64_t, UnitWeaponsShown> unitWeaponsShown_;
+    /// Hangs a unit's three weapon slots as 0x0072dbc0 does. False while an
+    /// item is not known yet (its query is asked for).
+    bool dressUnitWeapons(uint32_t instanceId, const std::array<uint32_t, 3>& entries,
+                          uint8_t sheathState, bool rangedJustPutAway, bool isPlayer);
     std::unordered_set<uint64_t> creatureWeaponsAttached_;
     std::unordered_map<uint64_t, uint8_t> creatureWeaponAttachAttempts_;
     std::unordered_map<uint32_t, bool> modelIdIsWolfLike_;

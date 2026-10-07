@@ -1,5 +1,6 @@
 #include "core/entity_spawner.hpp"
 #include "core/item_attachments.hpp"
+#include "core/weapon_attachment.hpp"
 #include "rendering/m2_model_classifier.hpp"
 #include "core/appearance_composer.hpp"
 #include "pipeline/char_sections.hpp"
@@ -144,6 +145,7 @@ void EntitySpawner::shutdown() {
     creatureWasStealthed_.clear();
     creatureWeaponsAttached_.clear();
     creatureWeaponAttachAttempts_.clear();
+    unitWeaponsShown_.clear();
     playerInstances_.clear();
     onlinePlayerAppearance_.clear();
     remotePlayerMounts_.clear();
@@ -194,6 +196,7 @@ void EntitySpawner::resetAllState() {
     creatureWasStealthed_.clear();
     creatureWeaponsAttached_.clear();
     creatureWeaponAttachAttempts_.clear();
+    unitWeaponsShown_.clear();
     modelIdIsWolfLike_.clear();
 
     // Clear display/spawn caches
@@ -385,6 +388,9 @@ void EntitySpawner::despawnAllGameObjects() {
 // --- Methods extracted from Application (with comments preserved) ---
 
 bool EntitySpawner::tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId) {
+    // With UNIT_VIRTUAL_ITEM_SLOT_ID known, updateUnitWeapons dresses the
+    // creature as the client does; this guess is for layouts without it.
+    if (game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_ID) != 0xFFFF) return true;
     if (!renderer_ || !renderer_->getCharacterRenderer() || !assetManager_ || !gameHandler_) return false;
     auto* charRenderer = renderer_->getCharacterRenderer();
     if (!charRenderer) return false;
@@ -513,6 +519,126 @@ bool EntitySpawner::tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t inst
     charRenderer->detachWeapon(instanceId, 2);
     // Success if main-hand attached when there was at least one candidate.
     return hadWeaponCandidate && attachedMain;
+}
+
+bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint32_t, 3>& entries,
+                                    uint8_t sheathState, bool rangedJustPutAway, bool isPlayer) {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || !assetManager_ || !gameHandler_) return false;
+    auto displayDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
+    if (!displayDbc) return false;
+    auto itemDbc = assetManager_->loadDBCOptional("Item.dbc");
+    // WotLK's eight columns: id, class, subclass, sound, material, display,
+    // inventory type, sheath. Other layouts wait for the query.
+    if (itemDbc && itemDbc->getFieldCount() < 8) itemDbc.reset();
+
+    // Each slot's item: the item query's template, or Item.dbc's row (class,
+    // subclass, display, inventory type, sheath) while the query is out.
+    std::array<UnitWeaponItem, 3> items{};
+    std::array<uint32_t, 3> displays{};
+    for (size_t i = 0; i < 3; ++i) {
+        const uint32_t entry = entries[i];
+        if (entry == 0) continue;
+        if (const auto* info = gameHandler_->getItemInfo(entry); info && info->valid) {
+            items[i] = {.sheath = info->sheath,
+                        .inventoryType = static_cast<uint8_t>(info->inventoryType),
+                        .itemClass = info->itemClass,
+                        .subClass = info->subClass};
+            displays[i] = info->displayInfoId;
+            continue;
+        }
+        gameHandler_->ensureItemInfo(entry);
+        const int32_t row = itemDbc ? itemDbc->findRecordById(entry) : -1;
+        if (row < 0) return false;
+        const auto r = static_cast<uint32_t>(row);
+        items[i] = {.sheath = itemDbc->getUInt32(r, 7),
+                    .inventoryType = static_cast<uint8_t>(itemDbc->getUInt32(r, 6)),
+                    .itemClass = itemDbc->getUInt32(r, 1),
+                    .subClass = itemDbc->getUInt32(r, 2)};
+        displays[i] = itemDbc->getUInt32(r, 5);
+    }
+
+    // Every point a weapon can be on comes clear first; a change of state
+    // moves them between these.
+    for (uint32_t point : {attachment::kShield, attachment::kHandRight, attachment::kHandLeft,
+                           attachment::kSheathMainHand, attachment::kSheathOffHand,
+                           attachment::kSheathShield, attachment::kLargeWeaponLeft,
+                           attachment::kLargeWeaponRight, attachment::kHipWeaponLeft,
+                           attachment::kHipWeaponRight}) {
+        charRenderer->detachWeapon(instanceId, point);
+    }
+    constexpr WeaponSlot kSlots[3] = {WeaponSlot::MainHand, WeaponSlot::OffHand, WeaponSlot::Ranged};
+    for (size_t i = 0; i < 3; ++i) {
+        if (entries[i] == 0 || displays[i] == 0) continue;
+        const uint32_t point = unitWeaponPoint(kSlots[i], items[i], static_cast<SheathState>(sheathState),
+                                               rangedJustPutAway, isPlayer, items[0]);
+        if (point == attachment::kNone) continue;
+        const int32_t rec = displayDbc->findRecordById(displays[i]);
+        if (rec < 0) continue;
+        const auto art = pipeline::readItemDisplayArt(*displayDbc, static_cast<uint32_t>(rec));
+        if (art.modelFile.empty()) continue;
+        // A shield (inventory type 14) is a shield model; the rest weapons.
+        const bool shield = items[i].inventoryType == 14;
+        const std::string dir = shield ? "Item\\ObjectComponents\\Shield\\" : "Item\\ObjectComponents\\Weapon\\";
+        pipeline::M2Model model;
+        if (!loadWeaponM2(dir + art.modelFile, model)) continue;
+        std::string texturePath;
+        if (!art.textureName.empty()) texturePath = dir + art.textureName + ".blp";
+        charRenderer->attachWeapon(instanceId, point, model, nextWeaponModelId_++, texturePath);
+    }
+    return true;
+}
+
+void EntitySpawner::updateUnitWeapons() {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || !gameHandler_ || !assetManager_ || !assetManager_->isInitialized()) return;
+    const uint16_t bytes2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
+    const uint16_t virtualItems = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
+    const uint64_t localGuid = gameHandler_->getPlayerGuid();
+    int budget = MAX_WEAPON_ATTACHES_PER_TICK;
+
+    auto visit = [&](uint64_t guid, uint32_t instanceId, bool isPlayer) {
+        if (budget <= 0 || instanceId == 0) return;
+        auto entity = gameHandler_->getEntityManager().getEntity(guid);
+        if (!entity) return;
+        std::array<uint32_t, 3> entries{};
+        if (isPlayer) {
+            // Main hand, off hand, ranged: equipment slots 15 to 17.
+            const auto* visible = gameHandler_->getOtherPlayerVisibleEquipment(guid);
+            if (!visible) return;
+            entries = {(*visible)[15], (*visible)[16], (*visible)[17]};
+        } else {
+            if (virtualItems == 0xFFFF) return;
+            for (uint16_t i = 0; i < 3; ++i) entries[i] = entity->getField(static_cast<uint16_t>(virtualItems + i));
+        }
+        // No sheath field in this layout: held, as before.
+        const uint8_t state = bytes2 != 0xFFFF ? static_cast<uint8_t>(entity->getField(bytes2) & 0xFFu)
+                                               : static_cast<uint8_t>(SheathState::Melee);
+        const uint32_t modelId = charRenderer->getInstanceModelId(instanceId);
+        auto [it, fresh] = unitWeaponsShown_.try_emplace(guid);
+        UnitWeaponsShown& shown = it->second;
+        if (!fresh && shown.instanceId == instanceId && shown.modelId == modelId && shown.entries == entries &&
+            shown.sheathState == state) {
+            return;
+        }
+        // 0x00731f40: from ranged to melee the ranged weapon is put away;
+        // any other change, or new items, dresses the unit afresh.
+        const bool rangedJustPutAway = !fresh && shown.instanceId == instanceId && shown.entries == entries &&
+                                       shown.sheathState == static_cast<uint8_t>(SheathState::Ranged) &&
+                                       state == static_cast<uint8_t>(SheathState::Melee);
+        if (!dressUnitWeapons(instanceId, entries, state, rangedJustPutAway, isPlayer)) {
+            // An item not known yet: try again once its query is back.
+            if (fresh) unitWeaponsShown_.erase(it);
+            else shown.instanceId = 0;
+            return;
+        }
+        --budget;
+        shown = {.instanceId = instanceId, .modelId = modelId, .entries = entries, .sheathState = state};
+    };
+    for (const auto& [guid, instanceId] : creatureInstances_) visit(guid, instanceId, false);
+    for (const auto& [guid, instanceId] : playerInstances_) {
+        if (guid != localGuid) visit(guid, instanceId, true);
+    }
 }
 
 bool EntitySpawner::retryCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId,

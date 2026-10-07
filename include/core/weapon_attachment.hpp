@@ -56,6 +56,53 @@ constexpr bool rangedInRightHand(uint8_t inventoryType) {
     return inventoryType == 25 || inventoryType == 26;
 }
 
+/// A unit's sheath state, UNIT_FIELD_BYTES_2 byte 0 (0x00731f40 compares
+/// the old and new): weapons put away, melee drawn, ranged drawn.
+enum class SheathState : uint8_t { Unarmed = 0, Melee = 1, Ranged = 2 };
+
+/// What a unit's weapon slot is, from its item: Sheath, InventoryType and,
+/// for the main hand, class and subclass.
+struct UnitWeaponItem {
+    uint32_t sheath = 0;
+    uint8_t inventoryType = 0;
+    uint32_t itemClass = 0;
+    uint32_t subClass = 0;
+};
+
+/// 0x0072dbc0 (and 0x00731f40 for the ranged slot on a change of state):
+/// where a unit's weapon goes in a sheath state, or attachment::kNone.
+/// - The main and off hands are put away when the state is unarmed or
+///   ranged, held when it is melee.
+/// - The ranged weapon is only on the unit in the ranged state, held - or
+///   put away at its point when the state has just gone from ranged to
+///   melee (0x0072b7f0 with 1); a later dressing takes it off again.
+/// - A creature (not a player) whose main hand is a two-handed weapon -
+///   class 2, subclass 1, 5, 6, 8, 10, 12, 17 or 20 - shows no off hand.
+constexpr uint32_t unitWeaponPoint(WeaponSlot slot, const UnitWeaponItem& item, SheathState state,
+                                   bool rangedJustPutAway, bool isPlayer,
+                                   const UnitWeaponItem& mainHand) {
+    const bool shield = item.inventoryType == 14;
+    const bool rangedRight = rangedInRightHand(item.inventoryType);
+    if (slot == WeaponSlot::Ranged) {
+        if (state == SheathState::Ranged) {
+            return weaponAttachmentPoint(slot, item.sheath, false, shield, rangedRight);
+        }
+        if (state == SheathState::Melee && rangedJustPutAway) {
+            return weaponAttachmentPoint(slot, item.sheath, true, shield, rangedRight);
+        }
+        return attachment::kNone;
+    }
+    if (slot == WeaponSlot::OffHand && !isPlayer && mainHand.itemClass == 2) {
+        switch (mainHand.subClass) {
+            case 1: case 5: case 6: case 8: case 10: case 12: case 17: case 20:
+                return attachment::kNone;
+            default: break;
+        }
+    }
+    const bool sheathed = state != SheathState::Melee;
+    return weaponAttachmentPoint(slot, item.sheath, sheathed, shield, rangedRight);
+}
+
 /// 0x004ef840: a shoulder display's first model (ItemDisplayInfo +4, with
 /// its texture +0xc) goes on the left shoulder, 6; its second (+8, +0x10)
 /// on the right, 5.

@@ -3250,6 +3250,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         const bool npcWeaponRetryTick = (npcWeaponRetryTimer >= 1.0f);
         if (npcWeaponRetryTick) npcWeaponRetryTimer = 0.0f;
         int weaponAttachesThisTick = 0;
+        // Weapons drawn or put away as each unit's items and sheath state say.
+        entitySpawner_->updateUnitWeapons();
         glm::vec3 playerPos(0.0f);
         glm::vec3 playerRenderPos(0.0f);
         bool havePlayerPos = false;
