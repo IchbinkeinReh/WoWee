@@ -133,6 +133,11 @@ struct FacialHairFields {
     uint32_t geoset100 = 6;
     uint32_t geoset300 = 7;
     uint32_t geoset200 = 8;
+    /// The columns the client adds to groups 16 and 17 (0x004ee460: +0x18
+    /// and +0x1c of its row). Past the end - none - where the file keeps no
+    /// such columns.
+    uint32_t geoset1600 = 0xFFFFFFFFu;
+    uint32_t geoset1700 = 0xFFFFFFFFu;
 };
 
 /**

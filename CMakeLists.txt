@@ -610,9 +610,11 @@ set(WOWEE_SOURCES
     src/core/screen_recorder.cpp
     src/core/entity_spawner.cpp
     src/core/entity_spawner_player.cpp
+    src/core/entity_spawner_blob.cpp
     src/core/entity_spawner_processing.cpp
     src/core/appearance_composer.cpp
     src/core/helm_visual.cpp
+    src/core/character_geosets.cpp
     src/core/world_loader.cpp
     src/core/npc_interaction_callback_handler.cpp
     src/core/audio_callback_handler.cpp
@@ -947,6 +949,7 @@ set(WOWEE_SOURCES
     src/pipeline/grass_clearing.cpp
     src/rendering/quest_marker_renderer.cpp
     src/rendering/footprint_renderer.cpp
+    src/rendering/blob_shadow_renderer.cpp
     src/rendering/minimap.cpp
     src/rendering/aux_swapchain.cpp
     src/rendering/world_map/coordinate_projection.cpp

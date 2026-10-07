@@ -53,6 +53,7 @@
 #include "rendering/world_map.hpp"
 #include "rendering/quest_marker_renderer.hpp"
 #include "rendering/footprint_renderer.hpp"
+#include "rendering/blob_shadow_renderer.hpp"
 #include "game/game_handler.hpp"
 #include "pipeline/m2_loader.hpp"
 #include <algorithm>
@@ -818,6 +819,7 @@ bool Renderer::initialize(core::Window* win) {
 
     questMarkerRenderer = std::make_unique<QuestMarkerRenderer>();
     footprintRenderer = std::make_unique<FootprintRenderer>();
+    blobShadowRenderer = std::make_unique<BlobShadowRenderer>();
 
     LOG_INFO("Vulkan sub-renderers initialized (Phase 3)");
 
@@ -979,6 +981,10 @@ void Renderer::shutdown() {
         swimEffects.reset();
     }
 
+    if (blobShadowRenderer) {
+        blobShadowRenderer->shutdown();
+        blobShadowRenderer.reset();
+    }
     if (footprintRenderer) {
         footprintRenderer->shutdown();
         footprintRenderer.reset();
@@ -1164,6 +1170,7 @@ void Renderer::applyMsaaChange() {
     if (characterRenderer) characterRenderer->recreatePipelines();
     if (questMarkerRenderer) questMarkerRenderer->recreatePipelines();
     if (footprintRenderer) footprintRenderer->recreatePipelines();
+    if (blobShadowRenderer) blobShadowRenderer->recreatePipelines();
     if (weather) weather->recreatePipelines();
     if (lightning) lightning->recreatePipelines();
     if (swimEffects) {
@@ -2078,11 +2085,21 @@ void Renderer::update(float deltaTime) {
         const auto* gh = core::Application::getInstance().getGameHandler();
         uint32_t mapId    = gh ? gh->getCurrentMapId() : 0;
         float gameTime    = gh ? gh->getGameTime() : -1.0f;
-        // Any weather: the client blends the storm light sets in by
-        // min(1, 4 x intensity) whatever is falling (0x007f3920). Clear
-        // weather (state 0) carries no intensity.
-        const float weatherIntensity =
-            (gh && gh->getWeatherType() != 0) ? gh->getWeatherIntensity() : 0.0f;
+        // SMSG_WEATHER names a Weather.dbc row; the weather takes it from
+        // there (0x007846a0). Nothing falls without one: the client makes up
+        // no weather of its own, and draws it indoors as out, the ground it
+        // traces against stopping it at a roof.
+        if (weather && gh && gh->getWeatherSerial() != weatherSerialSeen_) {
+            weatherSerialSeen_ = gh->getWeatherSerial();
+            weather->setWeather(gh->getWeatherType(), gh->getWeatherIntensity(),
+                                gh->isWeatherAbrupt());
+        }
+        // The storm light sets blend in by min(1, 4 x what the weather hands
+        // the light) (0x007f3920): its eased intensity, held to 0.25, times
+        // the row's Weather.dbc +0xc (0x00784850), not the server's raw
+        // intensity.
+        weatherLight_ = weather ? weather->lightValue() : 0.0f;
+        const float weatherIntensity = weatherLight_;
         // The underwater sets are for the camera in liquid (0x007f3230 asks
         // 0x00780620 at the camera), not the player swimming.
         // How far under, and in what: the LiquidType row darkens the light
@@ -2187,15 +2204,6 @@ void Renderer::update(float deltaTime) {
             waterRenderer->setLightWaterColors(wc);
         }
 
-        // SMSG_WEATHER names a Weather.dbc row; the weather takes it from
-        // there (0x007846a0). Nothing falls without one: the client makes up
-        // no weather of its own, and draws it indoors as out, the ground it
-        // traces against stopping it at a roof.
-        if (weather && gh && gh->getWeatherSerial() != weatherSerialSeen_) {
-            weatherSerialSeen_ = gh->getWeatherSerial();
-            weather->setWeather(gh->getWeatherType(), gh->getWeatherIntensity(),
-                                gh->isWeatherAbrupt());
-        }
         if (lightning) lightning->setEnabled(false);
     }
 
@@ -2413,6 +2421,23 @@ void Renderer::update(float deltaTime) {
 
     // Footsteps: age visual prints, then let authored footfall events add new ones.
     if (footprintRenderer) footprintRenderer->update(deltaTime);
+
+    // The blob shadows under the units (0x007e49e0): with shadowLOD 1 and
+    // while extShadowQuality is below 1, which it is here whenever the
+    // dynamic shadows are off. The ground under each is gathered now, before
+    // the frame is recorded on other threads.
+    if (blobShadowRenderer) {
+        blobCasters_.clear();
+        const int shadowLOD = std::atoi(
+            addons::storedCVarValue("shadowLOD", "1").c_str());
+        const int extShadowQuality = shadowsEnabled ? extShadowQuality_ : 0;
+        if (characterRenderer && camera && blob_shadow::drawn(shadowLOD, extShadowQuality)) {
+            characterRenderer->collectBlobShadows(blobCasters_);
+        }
+        blobShadowRenderer->prepare(vkCtx ? vkCtx->getCurrentFrame() : 0, blobCasters_,
+                                    camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
+                                    terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
+    }
     if (animationController_) animationController_->updateFootsteps(deltaTime);
 
     // Activity SFX + mount ambient sounds: delegated to AnimationController (§4.2)
@@ -2504,6 +2529,8 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
             if (skySystem) skySystem->loadTextures(cachedAssetManager);
             if (footprintRenderer && !footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, cachedAssetManager))
                 LOG_WARNING("Footprint renderer re-init failed (non-fatal)");
+            if (blobShadowRenderer && !blobShadowRenderer->initialize(vkCtx, perFrameSetLayout, cachedAssetManager))
+                LOG_WARNING("Blob shadow renderer re-init failed (non-fatal)");
             if (weather) weather->loadAssets(cachedAssetManager);
             break;
         default:
@@ -3211,6 +3238,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                     gameHandler ? gameHandler->getWeatherIntensity() : 0.0f,
                     lightingManager ? &lightingManager->getLightingParams() : nullptr,
                     useOriginalSkybox);
+                skyParams.weatherLight = weatherLight_;
                 skyParams.sunOcclusion = sunOcclusion_;
                 skyParams.moonOcclusion = moonOcclusion_;
                 skyParams.skyboxWeight = drawSkyModels && lightingManager
@@ -3261,6 +3289,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             auto t0 = std::chrono::steady_clock::now();
             VkCommandBuffer cmd = beginSecondary(SEC_POST);
             setSecondaryViewportScissor(cmd);
+            // On the ground the world has drawn, under the liquid (the
+            // client draws them with its units, 0x00793980).
+            if (blobShadowRenderer && camera) blobShadowRenderer->render(cmd, perFrameSet);
             if (waterRenderer && camera && !waterDrawsInContinuePass()) {
                 waterRenderer->setRenderExtent(activeRenderExtent_);
                 waterRenderer->render(cmd, perFrameSet, *camera, globalTime, false, frameIdx);
@@ -3427,6 +3458,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 gameHandler ? gameHandler->getWeatherIntensity() : 0.0f,
                 lightingManager ? &lightingManager->getLightingParams() : nullptr,
                 useOriginalSkybox);
+            skyParams.weatherLight = weatherLight_;
             skyParams.sunOcclusion = sunOcclusion_;
             skyParams.moonOcclusion = moonOcclusion_;
             skyParams.skyboxWeight = drawSkyModels && lightingManager
@@ -3475,6 +3507,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 std::chrono::steady_clock::now() - m2Start).count();
         }
 
+        if (blobShadowRenderer && camera) blobShadowRenderer->render(currentCmd, perFrameSet);
         if (waterRenderer && camera && !waterDrawsInContinuePass()) {
             waterRenderer->setRenderExtent(activeRenderExtent_);
             waterRenderer->render(currentCmd, perFrameSet, *camera, globalTime, false, frameIdx);
@@ -4077,6 +4110,10 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             if (footprintRenderer) {
                 if (!footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, assetManager))
                     LOG_WARNING("Footprint renderer initialization failed (non-fatal)");
+            }
+            if (blobShadowRenderer) {
+                if (!blobShadowRenderer->initialize(vkCtx, perFrameSetLayout, assetManager))
+                    LOG_WARNING("Blob shadow renderer initialization failed (non-fatal)");
             }
 
             if (core::envFlagEnabled("WOWEE_PREWARM_ZONE_MUSIC", false)) {

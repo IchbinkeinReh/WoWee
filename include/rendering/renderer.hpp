@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/blob_shadow.hpp"
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -60,6 +61,7 @@ namespace world_map { class WorldMapFacade; }
 using WorldMap = world_map::WorldMapFacade;
 class QuestMarkerRenderer;
 class FootprintRenderer;
+class BlobShadowRenderer;
 class CharacterPreview;
 class AmdFsr3Runtime;
 class SpellVisualSystem;
@@ -351,6 +353,8 @@ private:
     std::unique_ptr<WorldMap> worldMap;
     std::unique_ptr<QuestMarkerRenderer> questMarkerRenderer;
     std::unique_ptr<FootprintRenderer> footprintRenderer;
+    std::unique_ptr<BlobShadowRenderer> blobShadowRenderer;
+    std::vector<blob_shadow::Caster> blobCasters_;
     audio::AudioCoordinator* audioCoordinator_ = nullptr;  // Owned by Application
     std::unique_ptr<AnimationController> animationController_;  // §4.2
     std::unique_ptr<game::ZoneManager> zoneManager;
@@ -418,6 +422,8 @@ private:
     uint32_t farClipMapId_ = 0;
     /// The last SMSG_WEATHER handed to the weather (GameHandler::getWeatherSerial).
     uint32_t weatherSerialSeen_ = 0;
+    /// Weather::lightValue as this frame's lighting took it.
+    float weatherLight_ = 0.0f;
     void applyFarClip(uint32_t mapId);
     bool sharpStars_ = false;
     float diagTerrainFurthest_ = -1.0f;

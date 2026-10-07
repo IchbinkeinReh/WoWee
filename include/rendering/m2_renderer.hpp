@@ -658,6 +658,12 @@ public:
     bool checkCollision(const glm::vec3& from, const glm::vec3& to,
                         glm::vec3& adjustedPos, float playerRadius = 0.5f) const;
     std::optional<float> getFloorHeight(float glX, float glY, float glZ, float* outNormalZ = nullptr) const;
+    /// The triangles a blob shadow is laid on from the doodads in a world
+    /// box: their collision meshes' triangles that reach it and face up
+    /// (0x007a6630 through 0x007ce960, 0x007e32f0), appended as world-space
+    /// corners, three to a triangle.
+    void gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                std::vector<glm::vec3>& out) const;
 
     /// Every doodad the floor query would consider here, and what each one
     /// contributes. The WMO side has had debugDumpGroupsAtPosition for this

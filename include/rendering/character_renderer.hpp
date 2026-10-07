@@ -2,6 +2,7 @@
 
 #include "rendering/vk_shader.hpp"
 #include "rendering/shadow_params.hpp"
+#include "rendering/blob_shadow.hpp"
 
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
@@ -248,6 +249,12 @@ public:
     /** Remove all enchant visuals from the weapon at the given attachment point. */
     void detachWeaponEffects(uint32_t charInstanceId, uint32_t attachmentId);
 
+    /// A unit's blob shadow (0x00793980): the CreatureModelData box it is
+    /// sized by, on the instance it is drawn with, or none.
+    void setInstanceBlobShadow(uint32_t instanceId, const std::optional<blob_shadow::Box>& box);
+    /// Every visible instance with a blob shadow, as this frame draws it.
+    void collectBlobShadows(std::vector<blob_shadow::Caster>& out) const;
+
     /** Mark an instance as a scene backdrop: no culling, no character material heuristics. */
     void setInstanceSceneModel(uint32_t instanceId, bool isScene);
 
@@ -416,6 +423,9 @@ private:
         // batches must ignore, exactly as the blend mode says.
         bool isSceneModel = false;
 
+        /// The unit's box its blob shadow is sized by, in this model's space,
+        /// when it has one (setInstanceBlobShadow).
+        std::optional<blob_shadow::Box> blobShadow;
 
         const M2ModelGPU* cachedModel = nullptr;  // Avoid per-frame hash lookups
 

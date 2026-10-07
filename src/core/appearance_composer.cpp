@@ -277,38 +277,34 @@ void AppearanceComposer::compositePlayerSkin(uint32_t modelSlotId, const PlayerT
     }
 }
 
-std::unordered_set<uint16_t> AppearanceComposer::buildDefaultPlayerGeosets(uint8_t raceId, uint8_t sexId,
-                                                                           uint8_t hairStyleId, uint8_t facialId) {
-    // Look up the hair scalp and the facial features this character wears, then
-    // ask for the bare set around them. Which geosets a character shows with
-    // nothing equipped is one answer, in core/geoset_rules.hpp, shared with the
-    // portrait - the two used to keep their own and had drifted.
-    uint16_t selectedHairScalp = 1;
-    uint16_t facial100 = 0, facial200 = 0, facial300 = 0;
-    bool haveFacial = false;
+core::CharacterLook AppearanceComposer::playerLook(const game::Character& ch) const {
+    core::CharacterLook look;
+    look.raceId = static_cast<uint8_t>(ch.race);
+    look.genderId = static_cast<uint8_t>(ch.gender);
+    look.classId = static_cast<uint8_t>(ch.characterClass);
+    // PLAYER_BYTES: skin, face, hair style, hair colour.
+    look.skinId = static_cast<uint8_t>(ch.appearanceBytes & 0xFF);
+    look.faceId = static_cast<uint8_t>((ch.appearanceBytes >> 8) & 0xFF);
+    const auto hairStyle = static_cast<uint8_t>((ch.appearanceBytes >> 16) & 0xFF);
     if (entitySpawner_) {
-        const auto& hairMap = entitySpawner_->getHairGeosetMap();
-        auto itHair = hairMap.find(appearanceKey(raceId, sexId, hairStyleId));
-        if (itHair != hairMap.end() && itHair->second > 0) selectedHairScalp = itHair->second;
-
-        const auto& facialMap = entitySpawner_->getFacialHairGeosetMap();
-        auto itFacial = facialMap.find(appearanceKey(raceId, sexId, facialId));
-        if (itFacial != facialMap.end()) {
-            facial100 = itFacial->second.geoset100;
-            facial200 = itFacial->second.geoset200;
-            facial300 = itFacial->second.geoset300;
-            haveFacial = true;
+        const auto& tables = entitySpawner_->getAppearanceGeosetTables();
+        look.hairGeoset = tables.hairGeoset(look.raceId, look.genderId, hairStyle);
+        if (const auto* f = tables.facialColumns(look.raceId, look.genderId, ch.facialFeatures)) {
+            look.facial = *f;
         }
     }
-    if (!haveFacial) {
-        // No row for this character: the "none" variant of all three channels.
-        facial100 = facial200 = facial300 = 1;
+    return look;
+}
+
+std::unordered_set<uint16_t> AppearanceComposer::playerGeosets(const core::CharacterLook& look,
+                                                               uint32_t instanceId) const {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || !assetManager_) return {};
+    std::vector<uint16_t> ids;
+    if (const auto* md = charRenderer->getInstanceModelData(instanceId)) {
+        for (const auto& batch : md->batches) ids.push_back(batch.submeshId);
     }
-
-    std::unordered_set<uint16_t> activeGeosets =
-        bareCharacterGeosets(selectedHairScalp, facial100, facial200, facial300, raceId);
-
-    return activeGeosets;
+    return core::modelGeosetsShown(core::characterLookGeosets(*assetManager_, look), ids);
 }
 
 void AppearanceComposer::applyEnchantVisuals(uint32_t charInstanceId, int equipSlotIndex,

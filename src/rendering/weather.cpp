@@ -261,6 +261,7 @@ void Weather::loadAssets(pipeline::AssetManager* assets) {
         cw::WeatherRow row;
         const uint32_t type = dbc->getUInt32(r, 2);
         row.effect = type <= 3 ? static_cast<Effect>(type) : Effect::None;
+        row.light = dbc->getFloat(r, 3);
         row.color = {dbc->getFloat(r, 4), dbc->getFloat(r, 5), dbc->getFloat(r, 6)};
         row.texture = dbc->getString(r, 7);
         rows_[dbc->getUInt32(r, 0)] = std::move(row);
@@ -289,6 +290,7 @@ void Weather::setWeather(uint32_t weatherId, float intensity, bool abrupt) {
     cw::WeatherRow row;
     if (auto it = rows_.find(weatherId); it != rows_.end()) row = it->second;
     const Effect effect = row.effect;
+    light_.set(effect, intensity, row.light, abrupt, active_, now_);
     smooth_ = !abrupt;
     color_ = row.color;
     std::string texture = row.texture;

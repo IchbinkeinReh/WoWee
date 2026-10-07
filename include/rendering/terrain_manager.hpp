@@ -302,6 +302,12 @@ public:
      * @param glY GL Y position
      * @return Height (GL Z) if terrain loaded at that position, empty otherwise
      */
+    /// The terrain's triangles in a world box, for a blob shadow
+    /// (0x007a6830, 0x007a6630, 0x007a6260): each quad of a chunk the box
+    /// reaches, as the four triangles fanned from its centre that the mesh
+    /// draws, holes left out. World-space corners, three to a triangle.
+    void gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                std::vector<glm::vec3>& out) const;
     [[nodiscard]] std::optional<float> getHeightAt(float glX, float glY) const;
 
     /// Whether a point lies in the terrain's baked shadow: the chunk's MCSH

@@ -261,3 +261,28 @@ TEST_CASE("a mist sheet fades in, out, and near the camera", "[weather]") {
     CHECK(cw::mistAlpha(m, 2.0f, 6.0f) == 0.0f);
     CHECK(cw::mistAlpha(m, 2.0f, 12.0f) == Catch::Approx(0.5f));
 }
+
+TEST_CASE("the weather's light is its intensity, held to 0.25, times the row's +0xc",
+          "[weather]") {
+    // 0x007846a0 / 0x00784850: out of clear weather the row's light applies
+    // at once and the intensity eases in over ten seconds per 0.25.
+    cw::WeatherLight w;
+    CHECK(w.value(0.0) == 0.0f);
+    w.set(cw::Effect::Rain, 0.8f, 0.6f, false, cw::Effect::None, 100.0);
+    CHECK(w.intensityTo == Catch::Approx(0.25f));
+    CHECK(w.value(100.0) == Catch::Approx(0.0f));
+    CHECK(w.value(105.0) == Catch::Approx(0.125f * 0.6f).epsilon(1e-3));
+    CHECK(w.value(200.0) == Catch::Approx(0.25f * 0.6f));
+    // A new row eases its light over five seconds per 0.25 it moves.
+    w.set(cw::Effect::Rain, 0.8f, 1.0f, false, cw::Effect::Rain, 200.0);
+    CHECK(w.value(200.0) == Catch::Approx(0.25f * 0.6f));
+    CHECK(w.value(204.0) == Catch::Approx(0.25f * 0.8f).epsilon(1e-3));
+    CHECK(w.value(300.0) == Catch::Approx(0.25f));
+    // Into clear weather the light stays the old row's; the intensity falls.
+    w.set(cw::Effect::None, 0.0f, 1.0f, false, cw::Effect::Rain, 300.0);
+    CHECK(w.lightTo == Catch::Approx(1.0f));
+    CHECK(w.value(305.0) == Catch::Approx(0.125f).epsilon(2e-3));
+    // Abrupt: at once.
+    w.set(cw::Effect::Snow, 0.1f, 0.5f, true, cw::Effect::None, 400.0);
+    CHECK(w.value(400.0) == Catch::Approx(0.05f));
+}

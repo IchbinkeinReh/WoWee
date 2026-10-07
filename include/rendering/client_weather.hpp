@@ -573,8 +573,60 @@ inline float mistAlpha(const Mist& m, float now, float cornerDistance) {
 /// +0x1c.
 struct WeatherRow {
     Effect effect = Effect::None;
+    /// +0xc; 1.0 where the server names no row (the packet handler's default,
+    /// 0x00526530 case 0x2f4).
+    float light = 1.0f;
     glm::vec3 color{1.0f};
     std::string texture;
+};
+
+/// What the weather hands the day's light. 0x007846a0 keeps the intensity
+/// (+0, +4), the row's +0xc light value (+0x2c to +0x30) and when they
+/// changed (+0x1c); 0x00784850 eases both and writes their product to the
+/// light (0xd38b4c), which 0x007f3920 reads as min(1, 4 x value) for the
+/// storm light sets. The intensity it eases is held to 0.25, so a light
+/// value of 1 reaches the full storm at a quarter of the server's intensity.
+struct WeatherLight {
+    float intensity = 0.0f;   ///< +0, as the server last sent it
+    float previous = 0.0f;    ///< +4, the one before
+    float intensityTo = 0.0f, intensityFrom = 0.0f;  ///< +0xc, +0x10
+    float lightFrom = 1.0f, lightTo = 1.0f;          ///< +0x2c, +0x30
+    double since = 0.0;       ///< +0x1c
+
+    /// `effect` is the new row's EffectType, `active` the effect falling now.
+    void set(Effect effect, float newIntensity, float light, bool abrupt, Effect active,
+             double now) {
+        const float i = std::clamp(newIntensity, 0.0f, 1.0f);
+        previous = intensity;
+        intensity = i;
+        // Out of clear weather the light is the row's at once; into clear
+        // weather it keeps the old row's while the old effect fades.
+        float l = light;
+        if (active == Effect::None) lightTo = light;
+        else if (effect == Effect::None) l = lightTo;
+        lightFrom = lightTo;
+        lightTo = l;
+        if (abrupt) {
+            previous = i;
+            lightFrom = l;
+        }
+        intensityTo = std::clamp(i, 0.0f, 0.25f);
+        intensityFrom = std::clamp(previous, 0.0f, 0.25f);
+        since = now;
+    }
+
+    /// 0x00784850: the intensity over ten seconds per 0.25 it moves, the
+    /// light over five per 0.25, and their product.
+    [[nodiscard]] float value(double now) const {
+        const float dt = static_cast<float>(now - since);
+        const float ti = std::clamp(
+            dt / ((std::abs((intensityTo - intensityFrom) * 4.0f) + 0.001f) * 10.0f), 0.0f, 1.0f);
+        const float tl = std::clamp(
+            dt / ((std::abs((lightTo - lightFrom) * 4.0f) + 0.001f) * 5.0f), 0.0f, 1.0f);
+        const float i = intensityFrom + (intensityTo - intensityFrom) * ti;
+        const float l = lightFrom + (lightTo - lightFrom) * tl;
+        return i * l;
+    }
 };
 
 /// The texture an effect draws with when its row names none (0x00783b90).

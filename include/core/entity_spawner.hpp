@@ -3,6 +3,8 @@
 #include "game/character.hpp"
 #include "game/game_services.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "rendering/blob_shadow.hpp"
+#include "core/character_geosets.hpp"
 #include <memory>
 #include <string>
 #include <utility>
@@ -176,6 +178,12 @@ public:
     bool retryCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId,
                                      uint8_t maxAttempts);
 
+    /// Every unit's blob shadow for this frame (0x00793980): its
+    /// CreatureModelData box on the instance it is drawn with - the mount's
+    /// when it rides one - or none. `localPlayerInstance` is the renderer's
+    /// own character.
+    void updateBlobShadows(uint32_t localPlayerInstance);
+
     // Mount
     void setMountDisplayId(uint32_t displayId) { pendingMountDisplayId_ = displayId; }
     uint32_t getMountInstanceId() const { return mountInstanceId_; }
@@ -289,10 +297,10 @@ public:
 
     std::string lookupCharSection(uint8_t race, uint8_t sex, uint8_t section,
                                   uint8_t variation, uint8_t color, int texIndex = 0) const;
-    const std::unordered_map<uint32_t, uint16_t>& getHairGeosetMap() const { return hairGeosetMap_; }
+    /// CharHairGeosets and CharacterFacialHairStyles, as the character
+    /// component reads them (core::characterGeosetDefaults).
+    const core::AppearanceGeosetTables& getAppearanceGeosetTables() const { return appearanceTables_; }
 
-    struct FacialHairGeosets { uint16_t geoset100 = 0; uint16_t geoset300 = 0; uint16_t geoset200 = 0; };
-    const std::unordered_map<uint32_t, FacialHairGeosets>& getFacialHairGeosetMap() const { return facialHairGeosetMap_; }
 
     // Creature M2 sync loader (used by spawnPlayerCharacter in Application)
 
@@ -384,6 +392,14 @@ private:
     std::unordered_map<uint32_t, HumanoidDisplayExtra> humanoidExtraMap_;  // extraDisplayId → humanoid data
     std::unordered_map<uint32_t, std::string> modelIdToPath_;   // modelId → M2 path (from CreatureModelData.dbc)
     std::unordered_map<uint32_t, float> modelIdToScale_;        // modelId → CreatureModelData.ModelScale
+    /// CreatureModelData's GeoBox (+0x44) and MountHeight (+0x40), by model id.
+    struct ModelGeoBox {
+        rendering::blob_shadow::Box box;
+        float mountHeight = 0.0f;
+    };
+    std::unordered_map<uint32_t, ModelGeoBox> modelIdToGeoBox_;
+    /// The CreatureModelData box of the model a display names, if it has one.
+    const ModelGeoBox* geoBoxForDisplay(uint32_t displayId) const;
     // CreatureFamily.dbc: the size range a beast family grows through by level.
     struct FamilyScale {
         float minScale = 1.0f;
@@ -392,10 +408,13 @@ private:
         int32_t maxScaleLevel = 0;
     };
     std::unordered_map<uint32_t, FamilyScale> familyScale_;      // familyId → scale range
-    // CharHairGeosets.dbc: key = (raceId<<16)|(sexId<<8)|variationId → geosetId (skinSectionId)
-    std::unordered_map<uint32_t, uint16_t> hairGeosetMap_;
-    // CharFacialHairStyles.dbc: key = (raceId<<16)|(sexId<<8)|variationId → {geoset100, geoset300, geoset200}
-    std::unordered_map<uint32_t, FacialHairGeosets> facialHairGeosetMap_;
+    core::AppearanceGeosetTables appearanceTables_;
+    /// A player's character component before its equipment: race, sex,
+    /// class, skin, face and the hair and facial rows (PLAYER_BYTES).
+    core::CharacterLook playerLook(uint64_t guid, uint8_t raceId, uint8_t genderId,
+                                   uint32_t appearanceBytes, uint8_t facialFeatures) const;
+    /// The geoset ids of a loaded model's batches.
+    std::vector<uint16_t> modelSubmeshIds(uint32_t modelId) const;
     bool creatureLookupsBuilt_ = false;
     bool tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId);
 

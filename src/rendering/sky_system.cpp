@@ -107,7 +107,7 @@ Celestial::Frame celestialFrame(const Camera& camera, const SkyParams& params) {
     frame.sunDir = params.sunDir;
     frame.moonDir = params.moonDir;
     frame.color = params.sunColor;
-    frame.storm = daynight::stormBlend(params.weatherIntensity);
+    frame.storm = daynight::stormBlend(params.weatherLight);
     frame.cameraForward = camera.getForward();
     frame.sunOcclusion = params.sunOcclusion;
     frame.moonOcclusion = params.moonOcclusion;

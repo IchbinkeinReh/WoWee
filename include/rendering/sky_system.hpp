@@ -51,6 +51,9 @@ struct SkyParams {
     // Atmospheric effects
     float cloudDensity = 0.0f;      // float band 3, the clouds' coverage
     float weatherIntensity = 0.0f;  // 0-1, any kind of weather
+    /// What the weather hands the light (Weather::lightValue, 0x00784850);
+    /// the storm sets blend in by min(1, 4 x this) (0x007f3920).
+    float weatherLight = 0.0f;
     // How much of the line from the eye to the sun is blocked, 0 clear to 1
     // solid. The lens flare had no such input: it asked only whether the sun
     // was in front of the camera and on screen, so a hillside, a building or a
