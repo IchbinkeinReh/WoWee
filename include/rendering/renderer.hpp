@@ -355,21 +355,45 @@ private:
     std::unique_ptr<AnimationController> animationController_;  // §4.2
     std::unique_ptr<game::ZoneManager> zoneManager;
     // Shadow mapping (Vulkan)
-    /// The shadow map is square and this is its side, chosen before the
-    /// per-frame resources are built and not changed after.
+    /// The shadow map is square and this is its side, as it is built now.
     ///
-    /// Deliberately not live. Those resources are created once at start-up and
-    /// destroyed at shutdown - they are not part of the swapchain-resize path,
-    /// so rebuilding them mid-session would be a new and unexercised one, and
-    /// this renderer has lost a device to exactly that before. The setting is
-    /// marked as needing a restart in the panel instead, which is what the
-    /// original client does for the settings it cannot change live.
+    /// It starts at the quality level's size, chosen before the per-frame
+    /// resources are built. The shadow resolution setting can raise it from
+    /// there mid-session: setShadowResolutionScale asks, and the next frame
+    /// starts by rebuilding the maps (applyPendingShadowMapSize). Only the
+    /// images, their views and framebuffers are rebuilt, after the device is
+    /// idle - the render pass, the sampler and the casters' pipelines do not
+    /// depend on the size, the viewport is set when the pass is recorded, and
+    /// the shaders read the texel size from shadowParams.z each frame.
     uint32_t SHADOW_MAP_SIZE = 4096;
+    /// The quality level's side, and the smallest the resolution setting
+    /// offers: its steps are this, twice it and four times it.
+    uint32_t shadowMapBaseSize_ = 4096;
+    /// A side asked for and not built yet; 0 when nothing is waiting.
+    uint32_t pendingShadowMapSize_ = 0;
+    /// The largest side the resolution setting goes to. Each doubling is four
+    /// times the memory: at 8192 a map is 256 MB, two in flight are 512 MB,
+    /// and past that is more than a player choosing "sharper" expects to pay.
+    static constexpr uint32_t kMaxShadowMapSize = 8192;
     void setShadowMapSize(uint32_t side) {
         // Powers of two between 512 and 4096: the quality slider has five
         // steps and these are they.
-        SHADOW_MAP_SIZE = std::clamp(side, 512u, 4096u);
+        shadowMapBaseSize_ = std::clamp(side, 512u, 4096u);
+        SHADOW_MAP_SIZE = shadowMapBaseSize_;
     }
+    /// kMaxShadowMapSize, or less where the device cannot make or draw into
+    /// an image that large.
+    uint32_t maxShadowMapSize() const;
+    /// The per-frame-slot images, views and framebuffers at SHADOW_MAP_SIZE.
+    /// shadowRenderPass has to exist first. On failure what was made is left
+    /// for destroyShadowMapImages.
+    bool createShadowMapImages();
+    void destroyShadowMapImages();
+    /// Binding 1 of every per-frame set, and the fog's own, after the views
+    /// have been made again.
+    void writeShadowMapBindings();
+    /// Rebuilds the maps at pendingShadowMapSize_. Between frames only.
+    void applyPendingShadowMapSize();
     // Per-frame shadow resources: each in-flight frame has its own depth image and
     // framebuffer so that frame N's shadow read and frame N+1's shadow write don't
     // race on the same image across concurrent GPU submissions.
@@ -410,6 +434,11 @@ public:
     bool areShadowsEnabled() const { return shadowsEnabled; }
     void setShadowDistance(float dist) { shadowDistance_ = glm::clamp(dist, 40.0f, 500.0f); }
     float getShadowDistance() const { return shadowDistance_; }
+    /// The shadow map's side as a step above the quality level's: 0 is that
+    /// size, 1 twice it and 2 four times it, held to maxShadowMapSize().
+    /// Applied at the start of the next frame.
+    void setShadowResolutionScale(int step);
+    uint32_t getShadowMapSize() const { return SHADOW_MAP_SIZE; }
     void setViewDistance(float distance);
     float getViewDistance() const { return viewDistance_; }
     /// What the world is actually drawn to on this map: the view distance

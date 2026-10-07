@@ -350,6 +350,12 @@ void VolumetricFog::writeComputeSets() {
     }
 }
 
+void VolumetricFog::setShadowViews(const VkImageView shadowViews[2]) {
+    for (uint32_t i = 0; i < MAX_FRAMES; i++) shadowViews_[i] = shadowViews[i];
+    // Without volumes the sets are written when they are made, from these.
+    if (volumesReady_) writeComputeSets();
+}
+
 bool VolumetricFog::applyPendingQuality() {
     if (!ctx_ || pendingQuality_ == builtQuality_) return false;
     const Quality wanted = pendingQuality_;

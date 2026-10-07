@@ -38,18 +38,7 @@ constexpr SettingDesc kSchema[] = {
      "anti-aliasing, surface detail, ground clutter and grass.\n"
      "Change any one of them afterwards and this reads Custom.",
      "Custom|Low|Medium|High|Ultra", 0},
-    // Off by default: the client's extShadowQuality defaults to 0, "baked
-    // terrain shadows and no dynamic ones" (0x0078e400). Turning them off
-    // used to lose the device; the casters are drawn either way now and only
-    // the lighting stops reading the map (Renderer::renderShadowPass).
-    {"shadows", "Dynamic shadows", SettingKind::Bool, 0, 0, 0, "Graphics", "Shadows",
-     "Shadows cast by the sun from everything in the world, from a\n"
-     "shadow map. Off is the original client's default look: the\n"
-     "terrain's own baked shadows.", "", 0},
-    {"shadowdistance", "Shadow distance", SettingKind::Float, 40, 500, 10, "Graphics", "",
-     "How far away things still cast shadows, in yards. The shadow map\n"
-     "covers this whole range, so a shorter distance also gives sharper\n"
-     "shadows close to you.", "", 300, "shadows"},
+    // The shadow rows are on a Shadows page of their own, after this one.
     {"viewdistance", "View distance", SettingKind::Float, 400, 2400, 50, "Graphics", "View",
      "How far into the distance the world is drawn, in yards. The single\n"
      "largest cost in the picture: terrain, buildings and creatures are all\n"
@@ -129,6 +118,39 @@ constexpr SettingDesc kSchema[] = {
      "Rays of light streaming from the sun through gaps in trees and\n"
      "between buildings when you look toward it. Cheap; drawn over\n"
      "the finished picture. Not in the original client.", "", 0},
+
+    // ----------------------------------------------------------------- Shadows
+    //
+    // Its own page for the reason Grass, Water and Ray Tracing have theirs:
+    // a shadow resolution row on Graphics put the Sky rows past the bottom of
+    // its second column, which test_settings_panel_layout catches. The two
+    // rows that were under Graphics' Shadows heading came with it, so the
+    // three are read together.
+    //
+    // Off by default: the client's extShadowQuality defaults to 0, "baked
+    // terrain shadows and no dynamic ones" (0x0078e400). Turning them off
+    // used to lose the device; the casters are drawn either way now and only
+    // the lighting stops reading the map (Renderer::renderShadowPass).
+    {"shadows", "Dynamic shadows", SettingKind::Bool, 0, 0, 0, "Shadows", "Shadows",
+     "Shadows cast by the sun from everything in the world, from a\n"
+     "shadow map. Off is the original client's default look: the\n"
+     "terrain's own baked shadows.", "", 0},
+    {"shadowdistance", "Shadow distance", SettingKind::Float, 40, 500, 10, "Shadows", "",
+     "How far away things still cast shadows, in yards. The shadow map\n"
+     "covers this whole range, so a shorter distance also gives sharper\n"
+     "shadows close to you.", "", 300, "shadows"},
+    // Steps above the size the map has always been built at, which stays the
+    // smallest and the default: 2048 a side on a desktop. Each step doubles
+    // the side, held to 8192 and to what the device can make
+    // (Renderer::setShadowResolutionScale). Not in any preset: the top step
+    // is half a gigabyte of video memory, and nobody should be handed that
+    // by choosing Ultra.
+    {"shadowresolution", "Shadow resolution", SettingKind::Enum, 0, 2, 1, "Shadows", "",
+     "How finely the shadow map is drawn. Higher gives crisper shadow\n"
+     "edges with fewer jagged steps, most visible at long shadow\n"
+     "distances. Each step doubles the map's size and takes four times\n"
+     "the video memory: 4x is 8192 by 8192 on most machines, 512 MB.",
+     "Standard|2x|4x", 0, "shadows"},
 
     // ------------------------------------------------------------------ Detail
     //

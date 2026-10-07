@@ -100,6 +100,11 @@ public:
 
     void shutdown();
 
+    /// The shadow maps again, after the renderer has made them at another
+    /// size. Rewrites the compute sets when there are volumes to bind them
+    /// with; the caller has already waited for the device.
+    void setShadowViews(const VkImageView shadowViews[2]);
+
     /// Takes effect at the next applyPendingQuality().
     void setQuality(Quality quality) { pendingQuality_ = quality; }
 

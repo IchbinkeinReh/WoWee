@@ -574,6 +574,9 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 // schema and nothing else, and that is the screen it was
                 // missing from. Ground clutter followed it there.
                 ImGui::Spacing();
+                ImGui::SeparatorText("Shadows");
+                drawSchemaCategory("Shadows", saveCallback);
+                ImGui::Spacing();
                 ImGui::SeparatorText("Detail");
                 drawSchemaCategory("Detail", saveCallback);
 
@@ -628,7 +631,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 if (ImGui::Button("Restore Video Defaults", ImVec2(-1, 0))) {
                     // Three categories, because the settings window puts on one
                     // tab what the options panels put on three.
-                    for (const char* category : {"Graphics", "Detail", "Water", "Ray Tracing", "Upscaling", "Display"}) {
+                    for (const char* category : {"Graphics", "Shadows", "Detail", "Water", "Ray Tracing", "Upscaling", "Display"}) {
                         restoreSchemaDefaults(category);
                     }
                     // Only the resolution is outside the schema now: it is the
@@ -859,7 +862,7 @@ static_assert(cameraDistanceFactor(50) - rendering::CameraController::kMaxDistan
               "the cameramaxdistance row's 50 yards is not the camera's own limit");
 
 constexpr const char* kGraphicsApplyKeys[] = {
-    "viewdistance", "shadows", "shadowdistance", "antialiasing", "fxaa",
+    "viewdistance", "shadows", "shadowdistance", "shadowresolution", "antialiasing", "fxaa",
     "normalmapping", "normalmapstrength", "parallax", "parallaxquality",
     "groundclutter", "grassenabled", "grassdensity", "grassheight",
     "grassdistance", "enhancedwater", "specular", "upscaling", "fsrquality",
@@ -1061,6 +1064,7 @@ constexpr FieldBinding kFieldBindings[] = {
     // --- Graphics ---
     {.key = "shadows",           .asBool  = &SettingsPanel::pendingShadows},
     {.key = "shadowdistance",    .asFloat = &SettingsPanel::pendingShadowDistance},
+    {.key = "shadowresolution",  .asInt   = &SettingsPanel::pendingShadowResolution},
     {.key = "enhancedwater",     .asBool  = &SettingsPanel::pendingEnhancedWater},
     {.key = "specular",          .asBool  = &SettingsPanel::pendingSpecular},
     {.key = "antialiasing",      .asInt   = &SettingsPanel::pendingAntiAliasing},
@@ -1256,6 +1260,10 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setShadowsEnabled(pendingShadows);
     } else if (key == "shadowdistance") {
         if (renderer) renderer->setShadowDistance(pendingShadowDistance);
+    } else if (key == "shadowresolution") {
+        // Asked for here and built at the start of the next frame, where the
+        // renderer can wait for the device before letting the old maps go.
+        if (renderer) renderer->setShadowResolutionScale(pendingShadowResolution);
     } else if (key == "enhancedwater") {
         if (renderer) renderer->setEnhancedWaterEnabled(pendingEnhancedWater);
     } else if (key == "specular") {
