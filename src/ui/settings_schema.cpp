@@ -141,17 +141,31 @@ constexpr SettingDesc kSchema[] = {
      "shadows close to you.", "", 300, "shadows"},
     // Steps above the size the map has always been built at, which stays the
     // smallest and the default: 2048 a side on a desktop. Each step doubles
-    // the side, held to 16384 and to what the device can make
-    // (Renderer::setShadowResolutionScale). Not in any preset: the top step
-    // is two gigabytes of video memory, and nobody should be handed that
-    // by choosing Ultra.
+    // the side of every cascade's tile, held to 16384 for one cascade, 8192
+    // for more, and to what the device can make
+    // (Renderer::setShadowResolutionScale). Not in any preset: the top steps
+    // are one to two gigabytes of video memory, and nobody should be handed
+    // that by choosing Ultra. The memory in the tooltip counts both frames in
+    // flight, as the renderer builds the atlas once for each.
     {"shadowresolution", "Shadow resolution", SettingKind::Enum, 0, 3, 1, "Shadows", "",
-     "How finely the shadow map is drawn. Higher gives crisper shadow\n"
-     "edges with fewer jagged steps, most visible at long shadow\n"
-     "distances. Each step doubles the map's size and takes four times\n"
-     "the video memory: 4x is 8192 by 8192 on most machines, 512 MB;\n"
-     "8x is 16384 by 16384, 2 GB.",
+     "How finely each shadow cascade is drawn. Higher gives crisper\n"
+     "shadow edges with fewer jagged steps. Each step doubles the side\n"
+     "of every cascade's map and takes four times the video memory.\n"
+     "With one cascade 4x is 8192 by 8192 on most machines, 512 MB,\n"
+     "and 8x 16384 by 16384, 2 GB. Two cascades take twice that and\n"
+     "three four times, and with more than one 8x is the same as 4x.",
      "Standard|2x|4x|8x", 0, "shadows"},
+    // How many cascades the shadow distance is split into, each a map of its
+    // own around the player (Renderer::setShadowCascadeCount). The index is
+    // the count less one. Two by default: the ground the camera is near
+    // gets a fine map of its own for twice the memory of one.
+    {"shadowcascades", "Shadow cascades", SettingKind::Enum, 0, 2, 1, "Shadows", "",
+     "How many maps the shadows are split into. The nearest covers the\n"
+     "ground around you with fine detail and the farther ones the rest,\n"
+     "so nearby shadows are much sharper. 1 is a single map over the whole\n"
+     "shadow distance. More cascades take more video memory (see Shadow\n"
+     "resolution), and every cascade draws the shadow casters again.",
+     "1|2|3", 1, "shadows"},
 
     // ------------------------------------------------------------------ Detail
     //

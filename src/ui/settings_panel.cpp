@@ -862,7 +862,8 @@ static_assert(cameraDistanceFactor(50) - rendering::CameraController::kMaxDistan
               "the cameramaxdistance row's 50 yards is not the camera's own limit");
 
 constexpr const char* kGraphicsApplyKeys[] = {
-    "viewdistance", "shadows", "shadowdistance", "shadowresolution", "antialiasing", "fxaa",
+    "viewdistance", "shadows", "shadowdistance", "shadowresolution", "shadowcascades",
+    "antialiasing", "fxaa",
     "normalmapping", "normalmapstrength", "parallax", "parallaxquality",
     "groundclutter", "grassenabled", "grassdensity", "grassheight",
     "grassdistance", "enhancedwater", "specular", "upscaling", "fsrquality",
@@ -1066,6 +1067,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "shadows",           .asBool  = &SettingsPanel::pendingShadows},
     {.key = "shadowdistance",    .asFloat = &SettingsPanel::pendingShadowDistance},
     {.key = "shadowresolution",  .asInt   = &SettingsPanel::pendingShadowResolution},
+    {.key = "shadowcascades",    .asInt   = &SettingsPanel::pendingShadowCascades},
     {.key = "enhancedwater",     .asBool  = &SettingsPanel::pendingEnhancedWater},
     {.key = "specular",          .asBool  = &SettingsPanel::pendingSpecular},
     {.key = "antialiasing",      .asInt   = &SettingsPanel::pendingAntiAliasing},
@@ -1267,6 +1269,9 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         // Asked for here and built at the start of the next frame, where the
         // renderer can wait for the device before letting the old maps go.
         if (renderer) renderer->setShadowResolutionScale(pendingShadowResolution);
+    } else if (key == "shadowcascades") {
+        // The same way: the atlas is rebuilt for the new count next frame.
+        if (renderer) renderer->setShadowCascadeCount(pendingShadowCascades + 1);
     } else if (key == "enhancedwater") {
         if (renderer) renderer->setEnhancedWaterEnabled(pendingEnhancedWater);
     } else if (key == "specular") {

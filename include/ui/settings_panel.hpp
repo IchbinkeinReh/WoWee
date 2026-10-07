@@ -61,6 +61,9 @@ public:
     /// has always been, 1 twice the side, 2 four times. See
     /// Renderer::setShadowResolutionScale.
     int pendingShadowResolution = 0;
+    /// The shadow cascades setting's index, the count less one: 1 is the
+    /// default two. See Renderer::setShadowCascadeCount.
+    int pendingShadowCascades = 1;
     float pendingViewDistance = kDefaultViewDistance;
     /// How far the distance fog takes the sky's colour. See
     /// LightingManager::setFogSkyBlend.
