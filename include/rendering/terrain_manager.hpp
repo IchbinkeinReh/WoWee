@@ -91,6 +91,10 @@ struct PendingTile {
         glm::vec3 rotation;
         float scale;
         uint16_t mddfFlags = 0;  // the MDDF record's flags; 0 for ground cover
+        // Ground cover: what DetailDoodad.bls lights it by (detail_doodad_shade.hpp).
+        bool detailDoodad = false;
+        glm::vec4 detailColor{1.0f};   // rgb MCCV doubled, a 0 in MCSH shadow
+        glm::vec3 detailNormal{0.0f, 0.0f, 1.0f};
     };
     std::vector<M2Placement> m2Placements;
 
@@ -558,6 +562,7 @@ private:
     bool groundEffectsLoaded_ = false;
     std::unordered_map<uint32_t, GroundEffectEntry> groundEffectById_; // effectId -> config
     std::unordered_map<uint32_t, std::string> groundDoodadModelById_;  // doodadId -> model path
+    std::unordered_map<uint32_t, uint32_t> groundDoodadFlagsById_;     // doodadId -> GroundEffectDoodad flags
     float groundClutterDensityScale_ = 1.0f;
     std::unordered_map<std::string, TerrainTextureTones> terrainTextureTones_;
 };

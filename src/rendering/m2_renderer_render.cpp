@@ -383,6 +383,8 @@ float M2Renderer::instanceMaxDistSq(const M2Instance& inst) const {
 float M2Renderer::instanceDistanceFade(const M2Instance& inst, float distSq) const {
     if (inst.isGameObject || inst.noDistanceCull) return 1.0f;
     const float dist = std::sqrt(distSq);
+    // Ground cover placed on a chunk fades in its shader, by view depth.
+    if (inst.detailDoodad) return 1.0f;
     if (inst.cachedIsGroundDetail && groundDetailMaxDistance_ > 0.0f) {
         // From 85% of groundEffectDist to all of it (0x007b15d0).
         const float d = groundDetailMaxDistance_;
@@ -913,9 +915,15 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
     cmdPipelineBarrier2(cmd, dep);
 }
 
-void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) {
+void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) const {
     // Every field, every time: the entry is in write-combined memory and is
     // never read back, so whatever the slot held last frame must not show.
+    if (inst.detailDoodad) {
+        e.flags = kInstanceDetailDoodad | (inst.interiorPass ? kInstanceInteriorPass : 0);
+        e.interiorAmbient = inst.detailColor;
+        e.interiorDirect = glm::vec4(inst.detailNormal, groundDetailMaxDistance_);
+        return;
+    }
     e.flags = (inst.interiorLit ? kInstanceInteriorLit : 0) | (inst.interiorPass ? kInstanceInteriorPass : 0) |
               (inst.worldObjectLit && !inst.interiorLit ? kInstanceWorldObject : 0);
     e.interiorAmbient = glm::vec4(inst.interiorAmbient, 0.0f);

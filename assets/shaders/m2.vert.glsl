@@ -80,6 +80,7 @@ layout(location = 8) flat out vec4 vColorMul;
 layout(location = 9) flat out int vInteriorLit;
 layout(location = 10) flat out vec3 vInteriorAmbient;
 layout(location = 11) flat out vec4 vInteriorDirect;
+layout(location = 12) flat out float vDetailLit;  // ground cover's baked shadow (flags & 8)
 
 void main() {
     // Fetch per-instance data from SSBO
@@ -146,6 +147,7 @@ void main() {
     vInteriorLit = instanceData[instIdx].flags;
     vInteriorAmbient = instanceData[instIdx].interiorAmbient.rgb;
     vInteriorDirect = instanceData[instIdx].interiorDirect;
+    vDetailLit = instanceData[instIdx].interiorAmbient.a;
 
     gl_Position = projection * view * worldPos;
     // A sky model sits on the far plane whatever its radius, so the depth

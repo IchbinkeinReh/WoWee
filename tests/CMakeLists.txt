@@ -708,6 +708,14 @@ wowee_add_test(test_chunk_surface
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
 
+# ── test_detail_doodad_shade ─────────────────────────────────
+# Ground cover's colour, baked shadow and normal (pipeline/detail_doodad_shade.hpp).
+wowee_add_test(test_detail_doodad_shade
+    SOURCES test_detail_doodad_shade.cpp
+            ${TEST_COMMON_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+
 # ── test_spline_body ─────────────────────────────────────────
 # The body of SMSG_MONSTER_MOVE, whose head two parsers shared and neither
 # covered. Checked against AzerothCore's own WriteCommonMonsterMovePart.

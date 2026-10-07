@@ -271,6 +271,10 @@ struct M2Instance {
     /// the zone's light on a transition face, with the direct light's
     /// direction turned toward the sun's by interiorTowardSun.
     bool interiorLit = false;
+    /// Ground cover placed on a chunk (setInstanceDetailShade).
+    bool detailDoodad = false;
+    glm::vec4 detailColor{1.0f};
+    glm::vec3 detailNormal{0.0f, 0.0f, 1.0f};
     glm::vec3 interiorAmbient{0.0f};
     glm::vec3 interiorDirect{0.0f};
     float interiorTowardSun = 0.0f;
@@ -544,6 +548,9 @@ public:
     /// See M2Instance::fade.
     void setInstanceFade(uint32_t instanceId, float alpha);
     /// Light an instance as a WMO interior doodad; see M2Instance::interiorLit.
+    /// Ground cover's colour (rgb, a = 0 in the baked shadow) and the
+    /// terrain's normal under it, as the client places it (0x007d3390).
+    void setInstanceDetailShade(uint32_t instanceId, const glm::vec4& color, const glm::vec3& normal);
     void setInstanceInteriorLight(uint32_t instanceId, const glm::vec3& ambient,
                                   const glm::vec3& direct);
     /// Take the light off whatever has it, whichever instance that was.
@@ -948,7 +955,11 @@ private:
     /// A game object lit as a world object outside: interiorAmbient is its
     /// eased ambient, interiorDirect its direct light, scale applied.
     static constexpr int32_t kInstanceWorldObject = 4;
-    static void writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst);
+    /// Ground cover, drawn as DetailDoodad.bls: interiorAmbient the terrain's
+    /// colour under it (a its MCSH shadow), interiorDirect.xyz the terrain's
+    /// face normal and w the distance it is gone by (groundEffectDist).
+    static constexpr int32_t kInstanceDetailDoodad = 8;
+    void writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) const;
     // How many instances one frame may hand the GPU, not how many exist. Ground
     // clutter is what fills it: it is drawn by the thousand and every tuft
     // takes a slot of its own, so at 16384 a dwarf standing in Dun Morogh

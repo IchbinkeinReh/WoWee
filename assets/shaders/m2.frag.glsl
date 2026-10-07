@@ -64,6 +64,7 @@ layout(location = 8) flat in vec4 vColorMul;
 layout(location = 9) flat in int vInteriorLit;
 layout(location = 10) flat in vec3 vInteriorAmbient;
 layout(location = 11) flat in vec4 vInteriorDirect;
+layout(location = 12) flat in float vDetailLit;
 
 layout(location = 0) out vec4 outColor;
 
@@ -246,6 +247,45 @@ void main() {
             skyColor = combineStages(vec4(vec3(blendMode == 5 ? 1.0 : 0.5), batchFade), tex0, tex1).rgb;
         }
         outColor = vec4(skyColor, skyAlpha * batchFade);
+        return;
+    }
+
+    if ((vInteriorLit & 8) != 0) {
+        // Ground cover, as DetailDoodad.bls draws it (0x007b2d30, 0x007b15d0):
+        // one texture, lit by the terrain's face normal under it and the
+        // terrain's colour there - clamp(c11 + sat(N.L) x c12) x colour - and
+        // 0.7 + 0.3 x its shadow, the colour's alpha (MCSH, 0x007d3390). Its
+        // alpha fades from 85% of groundEffectDist to all of it by view depth
+        // (c9) and is tested against 0x80 (0x00780f50 sets 0xcd766c).
+        float depth = -(view * vec4(FragPos, 1.0)).z;
+        float fadeDist = vInteriorDirect.w;
+        float fade = fadeDist > 0.0 ? clamp((fadeDist - depth) / (0.15 * fadeDist), 0.0, 1.0) : 1.0;
+        float alpha = tex0.a * fade;
+        if (alpha < 128.0 / 255.0) discard;
+        vec3 toSun = normalize(-lightDir.xyz);
+        vec3 terrainN = normalize(vInteriorDirect.xyz);
+        float nl = clamp(dot(terrainN, toSun), 0.0, 1.0);
+        RtLight rt = rtLightAt(FragPos);
+        vec3 light = min(rtAmbient(rt, ambientColor.rgb) + nl * lightColor.rgb, vec3(1.0)) * vInteriorAmbient.rgb;
+        float shade = vDetailLit;
+        if (shadowParams.x > 0.5) {
+            // The shadow variants: the shadow map's light, no more than the
+            // baked shadow lets through, and a face edge-on to the sun let
+            // out of it by sat(|1.2 - |N.L||^4).
+            vec4 lsPos = lightSpaceMatrix * vec4(FragPos, 1.0);
+            vec3 proj = lsPos.xyz / lsPos.w;
+            proj.xy = proj.xy * 0.5 + 0.5;
+            float mapLit = 1.0;
+            if (proj.x >= 0.0 && proj.x <= 1.0 && proj.y >= 0.0 && proj.y <= 1.0 &&
+                proj.z >= 0.0 && proj.z <= 1.0) {
+                mapLit = mix(1.0, sampleShadowPCF(uShadowMap, vec3(proj.xy, proj.z - 0.0005)), shadowParams.y);
+            }
+            float s = rtShadow(rt, min(shade, mapLit));
+            shade = mix(s, shade, clamp(pow(abs(1.2 - abs(dot(terrainN, toSun))), 4.0), 0.0, 1.0));
+        }
+        vec3 rgb = tex0.rgb * light * (0.7 + 0.3 * shade);
+        rgb = applyFog(rgb, FragPos, depth, (vInteriorLit & 2) != 0 ? cameraFogColor.rgb : fogColor.rgb);
+        outColor = vec4(rgb, alpha);
         return;
     }
 

@@ -1,4 +1,5 @@
 #include "rendering/terrain_manager.hpp"
+#include "pipeline/detail_doodad_shade.hpp"
 #include "rendering/m2_view_distance.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 
@@ -1102,6 +1103,8 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                 }
                 uint32_t instId = m2Renderer->createInstance(p.modelId, p.position, p.rotation, p.scale);
                 if (instId) {
+                    if (p.detailDoodad)
+                        m2Renderer->setInstanceDetailShade(instId, p.detailColor, p.detailNormal);
                     // MDDF 0x1: no distance culls it (0x007becd0).
                     if (p.mddfFlags & kMddfNoDistanceCull)
                         m2Renderer->setInstanceNoDistanceCull(instId, true);
@@ -1842,6 +1845,7 @@ void TerrainManager::ensureGroundEffectTablesLoaded() {
         uint32_t doodadId = groundEffectDoodad->getUInt32(i, 0);
         std::string modelName = groundEffectDoodad->getString(i, 1);
         if (doodadId == 0 || modelName.empty()) continue;
+        if (groundEffectDoodad->getFieldCount() > 2) groundDoodadFlagsById_[doodadId] = groundEffectDoodad->getUInt32(i, 2);
 
         std::string lower = toLowerCopy(modelName);
         if (lower.size() > 4 && lower.substr(lower.size() - 4) == ".mdl") {
@@ -1863,18 +1867,8 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
     if (taxiStreamingMode_) return;  // Skip clutter while on taxi flights.
     if (!pending || groundEffectById_.empty() || groundDoodadModelById_.empty()) return;
 
-    static const std::string kGroundClutterProxyModel = "World\\NoDXT\\Detail\\ElwGra01.m2";
-    static bool loggedProxy = false;
-    if (!loggedProxy) {
-        LOG_INFO("Ground clutter: forcing proxy model ", kGroundClutterProxyModel);
-        loggedProxy = true;
-    }
-
     size_t modelMissing = 0;
     size_t modelInvalid = 0;
-    // How many placements ended up as the Elwynn proxy because the doodad the
-    // texture actually asked for would not load.
-    size_t proxyFallbackUsed = 0;
     auto ensureModelPrepared = [&](const std::string& m2Path, uint32_t modelId) -> bool {
         if (preparedModelIds.count(modelId)) return true;
 
@@ -2077,13 +2071,9 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
                     }
                     const std::string& doodadModelPath = doodadIt->second;
                     uint32_t modelId = static_cast<uint32_t>(std::hash<std::string>{}(doodadModelPath));
-                    if (!ensureModelPrepared(doodadModelPath, modelId)) {
-                        modelId = static_cast<uint32_t>(std::hash<std::string>{}(kGroundClutterProxyModel));
-                        if (!ensureModelPrepared(kGroundClutterProxyModel, modelId)) {
-                            continue;
-                        }
-                        ++proxyFallbackUsed;
-                    }
+                    // A doodad whose model will not load is not drawn; the
+                    // client puts nothing in its place.
+                    if (!ensureModelPrepared(doodadModelPath, modelId)) continue;
 
                     const glm::vec3 surfacePoint = pipeline::TerrainMeshGenerator::chunkSurfacePoint(
                         chunk.position, chunk.heightMap, fracX, fracY, unitSize);
@@ -2097,9 +2087,19 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
                     // MCNK chunk.position is already in terrain/render world space.
                     // Do not convert via ADT placement mapping (that is for MDDF/MODF records).
                     p.rotation = glm::vec3(0.0f, 0.0f, (nextRand() & 0xFFFFu) / kRand16Max * (2.0f * pi));
-                    p.scale = 0.80f + ((nextRand() & 0xFFFFu) / kRand16Max) * 0.35f;
+                    // 1 give or take a third (0x007d3390: r x 0.33 + 1, r in -1..1).
+                    p.scale = 1.0f + (((nextRand() & 0xFFFFu) / kRand16Max) * 2.0f - 1.0f) * 0.33f;
                     // Snap directly to sampled terrain height.
                     p.position = glm::vec3(worldX, worldY, worldZ + 0.01f);
+                    // The colour, shadow and normal DetailDoodad.bls lights it by.
+                    {
+                        auto flagsIt = groundDoodadFlagsById_.find(doodadId);
+                        const bool colored = flagsIt == groundDoodadFlagsById_.end() || (flagsIt->second & 0x2) == 0;
+                        const auto shade = pipeline::detailDoodadShade(chunk, fracX, fracY, unitSize, colored);
+                        p.detailDoodad = true;
+                        p.detailColor = glm::vec4(shade.color, shade.lit);
+                        p.detailNormal = shade.normal;
+                    }
                     pending->m2Placements.push_back(p);
                     added++;
                     chunkAdded++;
@@ -2111,62 +2111,9 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
         }
     }
 
-    size_t fallbackAdded = 0;
-    const size_t kMinGroundClutterPerTile = static_cast<size_t>(std::lround(40.0f * densityScale));
-    size_t fallbackNeeded = (added < kMinGroundClutterPerTile) ? (kMinGroundClutterPerTile - added) : 0;
-    if (fallbackNeeded > 0) {
-        const uint32_t proxyModelId = static_cast<uint32_t>(std::hash<std::string>{}(kGroundClutterProxyModel));
-        if (ensureModelPrepared(kGroundClutterProxyModel, proxyModelId)) {
-            constexpr uint32_t kFallbackPerChunk = 2;
-            for (int cy = 0; cy < 16; ++cy) {
-                for (int cx = 0; cx < 16; ++cx) {
-                    if (fallbackAdded >= fallbackNeeded || added >= kMaxGroundClutterPerTile) break;
-                    const auto& chunk = pending->terrain.getChunk(cx, cy);
-                    if (!chunk.hasHeightMap()) continue;
-
-                    for (uint32_t i = 0; i < kFallbackPerChunk; ++i) {
-                        if (fallbackAdded >= fallbackNeeded || added >= kMaxGroundClutterPerTile) break;
-                        // Deterministic scatter so the tile stays visually stable.
-                        uint32_t seed = static_cast<uint32_t>(
-                            ((pending->coord.x & 0xFF) << 24) ^
-                            ((pending->coord.y & 0xFF) << 16) ^
-                            ((cx & 0x1F) << 8) ^
-                            ((cy & 0x1F) << 3) ^
-                            (i & 0x7));
-                        auto nextRand = [&seed]() -> uint32_t {
-                            seed = seed * 1664525u + 1013904223u;
-                            return seed;
-                        };
-
-                        float fracX = (nextRand() & 0xFFFFu) / kRand16Max * 8.0f;
-                        float fracY = (nextRand() & 0xFFFFu) / kRand16Max * 8.0f;
-                        if (hasRoadLikeTextureAt(chunk, fracX, fracY)) {
-                            roadRejected++;
-                            continue;
-                        }
-                        const glm::vec3 surfacePoint = pipeline::TerrainMeshGenerator::chunkSurfacePoint(
-                            chunk.position, chunk.heightMap, fracX, fracY, unitSize);
-                        const float worldX = surfacePoint.x;
-                        const float worldY = surfacePoint.y;
-                        const float worldZ = surfacePoint.z;
-
-                        PendingTile::M2Placement p;
-                        p.modelId = proxyModelId;
-                        p.uniqueId = 0;
-                        p.rotation = glm::vec3(0.0f, 0.0f, (nextRand() & 0xFFFFu) / kRand16Max * (2.0f * pi));
-                        p.scale = 0.75f + ((nextRand() & 0xFFFFu) / kRand16Max) * 0.40f;
-                        p.position = glm::vec3(worldX, worldY, worldZ + 0.01f);
-                        pending->m2Placements.push_back(p);
-                        fallbackAdded++;
-                        added++;
-                        perChunkAdded[cy * 16 + cx]++;
-                    }
-                }
-                if (fallbackAdded >= fallbackNeeded || added >= kMaxGroundClutterPerTile) break;
-            }
-        }
-    }
-
+    // No floor of clutter per tile: a tile grows what its layers' ground
+    // effects say and nothing else (0x007d3390). Elwynn grass was filling
+    // tiles that grow none - Hellfire Peninsula's among them.
     // Baseline pass disabled: one-per-chunk fill caused large instance spikes and hitches
     // when streaming tiles around the player.
     size_t baselineAdded = 0;
@@ -2182,8 +2129,6 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
             // A tile that got none says so at warning, below.
             LOG_DEBUG("Ground clutter tile [", pending->coord.x, ",", pending->coord.y,
                      "] added=", added, " attempts=", attemptsTotal,
-                     " proxyFallback=", proxyFallbackUsed,
-                     " fallbackAdded=", fallbackAdded,
                      " baselineAdded=", baselineAdded,
                      " roadRejected=", roadRejected);
             clutterLogCount++;
