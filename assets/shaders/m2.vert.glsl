@@ -17,7 +17,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
 
 // Per-draw push constants (batch-level data only)
 layout(push_constant) uniform Push {
-    int texCoordSet;         // UV set index (0 or 1)
+    int texCoordSet;         // per stage: 0 UV0, 1 UV1, 2 env map; stage 0 in bits 0-1, stage 1 in 2-3
     int isFoliage;           // -1 sky, 0 everything else
     int instanceDataOffset;  // Base index into InstanceSSBO for this draw group
     float swayRefHeight;     // Unused; kept so the push layout does not move
@@ -54,6 +54,9 @@ struct InstanceData {
     vec4 colorMul;
     vec4 interiorAmbient;
     vec4 interiorDirect;
+    // The second texture stage's matrix: linear rows, then the translation.
+    vec4 uvLinear2;
+    vec4 uvOffset2;
 };
 layout(set = 3, binding = 0) readonly buffer InstanceSSBO {
     InstanceData instanceData[];
@@ -69,6 +72,7 @@ layout(location = 5) in vec2 aTexCoord2;
 layout(location = 0) out vec3 FragPos;
 layout(location = 1) out vec3 Normal;
 layout(location = 2) out vec2 TexCoord;
+layout(location = 3) out vec2 TexCoord2;
 layout(location = 5) out float vFadeAlpha;
 layout(location = 6) flat out int vSkyMode;
 layout(location = 7) flat out float vHighlight;
@@ -112,9 +116,22 @@ void main() {
     FragPos = worldPos.xyz;
     Normal = mat3(model) * norm.xyz;
 
-    vec2 baseUV = push.texCoordSet == 1 ? aTexCoord2 : aTexCoord;
+    // Each stage's coordinates (0x00836600 names the vertex shader by them):
+    // a UV set through that texture's own matrix, or the environment map.
+    // The fixed-function stand-in for the map (0x00873550, 0x006a4af0) is the
+    // camera-space reflection vector, scaled and offset by a half.
+    vec3 viewP = (view * worldPos).xyz;
+    vec3 viewN = normalize(mat3(view) * Normal);
+    vec2 envUV = reflect(normalize(viewP), viewN).xy * 0.5 + 0.5;
+    int src0 = push.texCoordSet & 3;
+    int src1 = (push.texCoordSet >> 2) & 3;
+    vec2 uv0 = src0 == 1 ? aTexCoord2 : aTexCoord;
+    vec2 uv1 = src1 == 0 ? aTexCoord : aTexCoord2;
     vec4 uvLin = instanceData[instIdx].uvLinear;
-    TexCoord = vec2(dot(uvLin.xy, baseUV), dot(uvLin.zw, baseUV)) + uvOff;
+    TexCoord = src0 == 2 ? envUV : vec2(dot(uvLin.xy, uv0), dot(uvLin.zw, uv0)) + uvOff;
+    vec4 uvLin2 = instanceData[instIdx].uvLinear2;
+    TexCoord2 = src1 == 2 ? envUV
+              : vec2(dot(uvLin2.xy, uv1), dot(uvLin2.zw, uv1)) + instanceData[instIdx].uvOffset2.xy;
 
     vFadeAlpha = fade;
     vColorMul = instanceData[instIdx].colorMul;

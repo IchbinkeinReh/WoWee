@@ -59,6 +59,21 @@ void setUvTransform(glm::vec4& linear, glm::vec2& offset, const glm::mat4& m) {
     offset = glm::vec2(m[3][0], m[3][1]);
 }
 
+// A batch's texture transform for one of its stages, or null: the client
+// takes stage i's from the transform combos at the batch's index plus i, and
+// an index past the model's transforms is the identity (0x0081f450).
+const pipeline::M2TextureTransform* batchStageTransform(const M2ModelGPU& model,
+                                                        const M2ModelGPU::BatchGPU& batch,
+                                                        uint32_t stage) {
+    if (batch.textureAnimIndex == 0xFFFF || !model.hasTextureAnimation) return nullptr;
+    if (stage > 0 && ((batch.combinerModes >> 8) & 3) <= stage) return nullptr;
+    const uint32_t lookupIdx = static_cast<uint32_t>(batch.textureAnimIndex) + stage;
+    if (lookupIdx >= model.textureTransformLookup.size()) return nullptr;
+    const uint16_t transformIdx = model.textureTransformLookup[lookupIdx];
+    if (transformIdx >= model.textureTransforms.size()) return nullptr;
+    return &model.textureTransforms[transformIdx];
+}
+
 // A batch's colour and alpha for one instance's frame, for the shader's
 // colorMul; alpha -1 leaves the material's static values in charge. The
 // client samples both tracks on every draw (FUN_0081fe90).
@@ -1244,7 +1259,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
 
     // Push constants now carry per-batch data only; per-instance data is in instance SSBO.
     struct M2PushConstants {
-        int32_t texCoordSet;        // UV set index (0 or 1)
+        int32_t texCoordSet;        // each stage's coordinate source (m2PackCoordSources)
         int32_t isFoliage;          // -1 = sky, 0 = everything else
         int32_t instanceDataOffset; // Base index into instance SSBO for this draw group
         float swayRefHeight;        // Unused, zero; kept so the shader's layout holds
@@ -1400,6 +1415,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 e.model = inst.modelMatrix;
                 e.uvOffset = glm::vec2(0.0f);
                 e.uvLinear = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+                e.uvOffset2 = glm::vec4(0.0f);
+                e.uvLinear2 = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
                 e.colorMul = glm::vec4(1.0f, 1.0f, 1.0f, -1.0f);
                 e.fadeAlpha = p.fadeAlpha;
                 e.useBones = (p.useBones && !kM2NoSkinning) ? 1 : 0;
@@ -1520,24 +1537,24 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                         // Hoist per-batch lookups: the transform pointer is fixed for
                         // every instance in this group; only the sampled translation
                         // varies (per-instance animTime).
-                        const pipeline::M2TextureTransform* tt = nullptr;
-                        if (batch.textureAnimIndex != 0xFFFF && model.hasTextureAnimation) {
-                            uint16_t lookupIdx = batch.textureAnimIndex;
-                            if (lookupIdx < model.textureTransformLookup.size()) {
-                                uint16_t transformIdx = model.textureTransformLookup[lookupIdx];
-                                if (transformIdx < model.textureTransforms.size()) {
-                                    tt = &model.textureTransforms[transformIdx];
-                                }
-                            }
-                        }
+                        const pipeline::M2TextureTransform* tt = batchStageTransform(model, batch, 0);
+                        const pipeline::M2TextureTransform* tt2 = batchStageTransform(model, batch, 1);
                         for (size_t j = lodIdx; j < lodEnd; j++) {
                             const auto& p = pending[j];
                             auto& inst = instances[p.instanceIdx];
                             glm::vec2 uvOffset(0.0f);
                             glm::vec4 uvLinear(1.0f, 0.0f, 0.0f, 1.0f);
+                            glm::vec2 uvOffset2(0.0f);
+                            glm::vec4 uvLinear2(1.0f, 0.0f, 0.0f, 1.0f);
                             if (tt) {
                                 setUvTransform(uvLinear, uvOffset,
                                                m2_track::textureTransformMatrix(*tt, inst.currentSequenceIndex,
+                                                               inst.animTime, inst.globalSequenceTime,
+                                                               model.globalSequenceDurations));
+                            }
+                            if (tt2) {
+                                setUvTransform(uvLinear2, uvOffset2,
+                                               m2_track::textureTransformMatrix(*tt2, inst.currentSequenceIndex,
                                                                inst.animTime, inst.globalSequenceTime,
                                                                model.globalSequenceDurations));
                             }
@@ -1549,6 +1566,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                             e.model = inst.modelMatrix;
                             e.uvOffset = uvOffset;
                             e.uvLinear = uvLinear;
+                            e.uvOffset2 = glm::vec4(uvOffset2, 0.0f, 0.0f);
+                            e.uvLinear2 = uvLinear2;
                             e.colorMul = batchColorMul(model, batch, inst.currentSequenceIndex,
                                                        inst.animTime, inst.globalSequenceTime);
                             e.fadeAlpha = p.fadeAlpha;
@@ -1600,7 +1619,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
 
                     // Push constants + instanced draw
                     M2PushConstants pc;
-                    pc.texCoordSet = static_cast<int32_t>(batch.textureUnit);
+                    pc.texCoordSet = batch.coordSources;
                     fillModelPush(pc, skyMode_);
                     pc.instanceDataOffset = static_cast<int32_t>(drawOffset);
                     vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
@@ -1742,18 +1761,22 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 std::getenv("WOWEE_SKY_M2_NO_TEXANIM") != nullptr;
             glm::vec2 uvOffset(0.0f);
             glm::vec4 uvLinear(1.0f, 0.0f, 0.0f, 1.0f);
-            if (batch.textureAnimIndex != 0xFFFF && model.hasTextureAnimation &&
-                !(skyMode_ && skyNoTexAnim)) {
-                uint16_t lookupIdx = batch.textureAnimIndex;
-                if (lookupIdx < model.textureTransformLookup.size()) {
-                    uint16_t transformIdx = model.textureTransformLookup[lookupIdx];
-                    if (transformIdx < model.textureTransforms.size()) {
-                        setUvTransform(uvLinear, uvOffset,
-                                       m2_track::textureTransformMatrix(model.textureTransforms[transformIdx],
-                                                       instance.currentSequenceIndex,
-                                                       instance.animTime, instance.globalSequenceTime,
-                                                       model.globalSequenceDurations));
-                    }
+            glm::vec2 uvOffset2(0.0f);
+            glm::vec4 uvLinear2(1.0f, 0.0f, 0.0f, 1.0f);
+            if (!(skyMode_ && skyNoTexAnim)) {
+                if (const auto* tt = batchStageTransform(model, batch, 0)) {
+                    setUvTransform(uvLinear, uvOffset,
+                                   m2_track::textureTransformMatrix(*tt,
+                                                   instance.currentSequenceIndex,
+                                                   instance.animTime, instance.globalSequenceTime,
+                                                   model.globalSequenceDurations));
+                }
+                if (const auto* tt2 = batchStageTransform(model, batch, 1)) {
+                    setUvTransform(uvLinear2, uvOffset2,
+                                   m2_track::textureTransformMatrix(*tt2,
+                                                   instance.currentSequenceIndex,
+                                                   instance.animTime, instance.globalSequenceTime,
+                                                   model.globalSequenceDurations));
                 }
             }
 
@@ -1764,6 +1787,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             e.model = instance.modelMatrix;
             e.uvOffset = uvOffset;
             e.uvLinear = uvLinear;
+            e.uvOffset2 = glm::vec4(uvOffset2, 0.0f, 0.0f);
+            e.uvLinear2 = uvLinear2;
             e.colorMul = batchColorMul(model, batch, instance.currentSequenceIndex,
                                        instance.animTime, instance.globalSequenceTime);
             e.fadeAlpha = instanceFadeAlpha;
@@ -1800,7 +1825,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
 
             // Push constants + single-instance draw
             M2PushConstants pc;
-            pc.texCoordSet = static_cast<int32_t>(batch.textureUnit);
+            pc.texCoordSet = batch.coordSources;
             fillModelPush(pc, skyMode_);
             pc.instanceDataOffset = static_cast<int32_t>(drawOffset);
             vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);

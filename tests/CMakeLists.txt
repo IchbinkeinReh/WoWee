@@ -2141,6 +2141,12 @@ wowee_add_test(test_wmo_doodad_light
 wowee_add_test(test_game_clock
     SOURCES test_game_clock.cpp)
 
+# ── test_m2_texture_combiner ─────────────────────────────────
+# A batch's shader id (0x00836980) and the texture stages it selects
+# (0x00836600): which pairs the client has, and where each coordinate comes from.
+wowee_add_test(test_m2_texture_combiner
+    SOURCES test_m2_texture_combiner.cpp)
+
 # ── test_m2_blend_mode ───────────────────────────────────────
 # Whether an M2 batch is alpha tested. Additive batches were forced onto
 # the cutout pipeline when their texture had no alpha, which drew every

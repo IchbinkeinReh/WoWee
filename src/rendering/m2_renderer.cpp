@@ -6,6 +6,7 @@
 #include "core/env_flag.hpp"
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_blend_mode.hpp"
+#include "rendering/m2_texture_combiner.hpp"
 #include "pipeline/model_bounds.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/m2_model_classifier.hpp"
@@ -404,10 +405,11 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
 
     // --- Descriptor set layouts ---
 
-    // Material set layout (set 1): binding 0 = sampler2D, binding 2 = M2Material UBO
+    // Material set layout (set 1): binding 0 = sampler2D, binding 2 = M2Material UBO,
+    // binding 3 = the second texture stage's sampler2D
     // (M2Params moved to push constants alongside model matrix)
     {
-        VkDescriptorSetLayoutBinding bindings[2] = {};
+        VkDescriptorSetLayoutBinding bindings[3] = {};
         bindings[0].binding = 0;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[0].descriptorCount = 1;
@@ -416,9 +418,13 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
         bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         bindings[1].descriptorCount = 1;
         bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[2].binding = 3;
+        bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[2].descriptorCount = 1;
+        bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
         VkDescriptorSetLayoutCreateInfo ci{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 2;
+        ci.bindingCount = 3;
         ci.pBindings = bindings;
         vkCreateDescriptorSetLayout(device, &ci, nullptr, &materialSetLayout_);
     }
@@ -468,7 +474,7 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
     // --- Descriptor pools ---
     {
         VkDescriptorPoolSize sizes[] = {
-            {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_MATERIAL_SETS + 256},
+            {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 2 * MAX_MATERIAL_SETS + 256},
             {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = MAX_MATERIAL_SETS + 256},
         };
         VkDescriptorPoolCreateInfo ci{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -574,7 +580,7 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
     // Instance data SSBO - per-frame buffer holding per-instance transforms, fade, bones.
     // Shader reads instanceData[push.instanceDataOffset + gl_InstanceIndex].
     {
-        static_assert(sizeof(M2InstanceGPU) == 160, "M2InstanceGPU must be 160 bytes (std430)");
+        static_assert(sizeof(M2InstanceGPU) == 192, "M2InstanceGPU must be 192 bytes (std430)");
         const VkDeviceSize instBufSize = MAX_INSTANCE_DATA * sizeof(M2InstanceGPU);
 
         // Descriptor pool for 2 sets (double-buffered)
@@ -1815,13 +1821,39 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                     bgpu.alphaIsSilhouette = pit->second.alphaIsSilhouette;
                 }
             }
-            // textureCoordIndex is an index into a texture coord combo table, not directly
-            // a UV set selector. Most batches have index=0 (UV set 0). We always use UV set 0
-            // since we don't have the full combo table - dual-UV effects are rare edge cases.
-            bgpu.textureUnit = 0;
+            // The batch's shader (0x00836980, 0x00836c90): how many textures
+            // it combines, by what, and where each one's coordinates come from.
+            bool shaderless = false;
+            {
+                const uint16_t matBlend = batch.materialIndex < model.materials.size()
+                    ? model.materials[batch.materialIndex].blendMode : 0;
+                const uint16_t shaderId = m2BatchShaderId(
+                    batch.shader, matBlend, batch.textureCount, batch.textureUnit,
+                    model.globalFlags, model.textureCoordCombos, model.textureCombinerCombos);
+                const uint16_t firstCoord = batch.textureUnit < model.textureCoordCombos.size()
+                    ? model.textureCoordCombos[batch.textureUnit] : 0;
+                const M2BatchCombiner comb = m2ResolveCombiner(shaderId, batch.textureCount, firstCoord);
+                shaderless = !comb.drawn;
+                bgpu.combinerModes = m2PackCombinerModes(comb);
+                bgpu.coordSources = m2PackCoordSources(comb);
+                if (comb.stages > 1) {
+                    // The second texture, through the same lookup (0x0081f450).
+                    bgpu.texture2 = whiteTexture_.get();
+                    const uint32_t li = static_cast<uint32_t>(batch.textureIndex) + 1;
+                    if (li < model.textureLookup.size()) {
+                        const uint16_t texIdx2 = model.textureLookup[li];
+                        if (texIdx2 < allTextures.size() && allTextures[texIdx2]) {
+                            bgpu.texture2 = allTextures[texIdx2];
+                        }
+                    }
+                }
+            }
 
             // Start at full opacity; hide only if texture failed to load.
             bgpu.batchOpacity = texFailed ? 0.0f : 1.0f;
+            // Shader id 0x8000 gets no shader, and a batch with none is not
+            // drawn (0x00836c90, 0x00821e97).
+            if (shaderless) bgpu.batchOpacity = 0.0f;
 
             // And say so, because invisible is indistinguishable from absent.
             //
@@ -1964,6 +1996,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             // Write initial material data (static per-batch - fadeAlpha updated at draw time)
             M2MaterialUBO mat{};
             mat.hasTexture = (bgpu.texture != nullptr && bgpu.texture != whiteTexture_.get()) ? 1 : 0;
+            mat.combiners = bgpu.combinerModes;
             mat.alphaTest = m2BatchNeedsAlphaTest(bgpu.blendMode, bgpu.hasAlpha) ? 1 : 0;
             mat.tintR = bgpu.tint.r;
             mat.tintG = bgpu.tint.g;
@@ -2020,7 +2053,16 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             matBufInfo.offset = 0;
             matBufInfo.range = sizeof(M2MaterialUBO);
 
-            VkWriteDescriptorSet writes[2] = {};
+            // The second stage's texture, white for a batch of one (it is not
+            // sampled then) or one that would not load.
+            VkTexture* batchTex2 = (bgpu.texture2 && bgpu.texture2->isValid())
+                ? bgpu.texture2 : batchTex;
+            if (!bgpu.texture2 && whiteTexture_ && whiteTexture_->isValid()) {
+                batchTex2 = whiteTexture_.get();
+            }
+            VkDescriptorImageInfo imgInfo2 = batchTex2->descriptorInfo();
+
+            VkWriteDescriptorSet writes[3] = {};
             // binding 0: texture
             writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[0].dstSet = bgpu.materialSet;
@@ -2035,8 +2077,15 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             writes[1].descriptorCount = 1;
             writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             writes[1].pBufferInfo = &matBufInfo;
+            // binding 3: the second stage's texture
+            writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[2].dstSet = bgpu.materialSet;
+            writes[2].dstBinding = 3;
+            writes[2].descriptorCount = 1;
+            writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[2].pImageInfo = &imgInfo2;
 
-            vkUpdateDescriptorSets(vkCtx_->getDevice(), 2, writes, 0, nullptr);
+            vkUpdateDescriptorSets(vkCtx_->getDevice(), 3, writes, 0, nullptr);
         }
     }
 

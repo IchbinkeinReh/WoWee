@@ -55,6 +55,11 @@ inline constexpr uint32_t kMaxBonesPerInstance = 512;
 struct M2ModelGPU {
     struct BatchGPU {
         VkTexture* texture = nullptr;  // from cache, NOT owned
+        VkTexture* texture2 = nullptr; // the second stage's, NOT owned; null for one stage
+        // How the stages combine and where their coordinates come from, packed
+        // for the shaders (m2_texture_combiner.hpp).
+        int32_t combinerModes = 1 << 8;
+        int32_t coordSources = 0;
         VkDescriptorSet materialSet = VK_NULL_HANDLE;  // set 1
         ::VkBuffer materialUBO = VK_NULL_HANDLE;
         VmaAllocation materialUBOAlloc = VK_NULL_HANDLE;
@@ -69,7 +74,6 @@ struct M2ModelGPU {
         uint16_t blendMode = 0;   // 0=Opaque, 1=AlphaKey, 2=Alpha, 3=Add, etc.
         uint16_t materialFlags = 0; // M2 material flags (0x01=Unlit, 0x04=TwoSided, 0x10=NoDepthWrite)
         uint16_t submeshLevel = 0; // Skin section level: the high half of its starts, not an LOD
-        uint8_t textureUnit = 0;  // UV set index (0=texCoords[0], 1=texCoords[1])
         uint8_t texFlags = 0;     // M2Texture.flags (bit0=WrapS, bit1=WrapT)
         bool glowCardLike = false; // Batch looks like a flat emissive card (kept out of the ray traced scene)
         // A sky model's star-point layer. Suppressed when the client draws its
@@ -371,10 +375,10 @@ struct M2Instance {
 struct M2MaterialUBO {
     int32_t hasTexture;
     int32_t alphaTest;
-    // Was the black colour key and its threshold. The client draws a batch by
-    // its blend mode and never keys by colour; the slots stay so the layout
-    // matches m2.frag.glsl.
-    int32_t unused0;
+    // unused1 was the black colour key's threshold. The client draws a batch
+    // by its blend mode and never keys by colour; the slot stays so the
+    // layout matches m2.frag.glsl.
+    int32_t combiners;   // stage modes and count (m2PackCombinerModes)
     float unused1;
     int32_t unlit;
     int32_t blendMode;
@@ -924,6 +928,10 @@ private:
         // An interior doodad's own light (flags & kInstanceInteriorLit).
         glm::vec4 interiorAmbient; // 16 bytes @ offset 128
         glm::vec4 interiorDirect;  // 16 bytes @ offset 144
+        // The second texture stage's matrix, as uvLinear and uvOffset are the
+        // first's (each texture has its own transform, 0x0081f450).
+        glm::vec4 uvLinear2{1.0f, 0.0f, 0.0f, 1.0f};  // 16 bytes @ offset 160
+        glm::vec4 uvOffset2{0.0f};                    // 16 bytes @ offset 176
     };
     static constexpr int32_t kInstanceInteriorLit = 1;
     /// In a WMO group of the camera's interior pass: the camera's fog colour.
@@ -937,7 +945,7 @@ private:
     // takes a slot of its own, so at 16384 a dwarf standing in Dun Morogh
     // grass was already losing whole models for a frame at a time - which reads
     // as clutter blinking rather than as anything being over budget. Two
-    // buffers of 96 bytes a slot, so this costs 6 MB rather than 3.
+    // buffers of 192 bytes a slot, so this costs 12 MB rather than 6.
     static constexpr uint32_t MAX_INSTANCE_DATA = 32768;
     VkDescriptorSetLayout instanceSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool instanceDescPool_ = VK_NULL_HANDLE;

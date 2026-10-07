@@ -250,6 +250,13 @@ struct M2Model {
     std::vector<M2Batch> batches;
     std::vector<M2Texture> textures;
     std::vector<uint16_t> textureLookup;  // Batch texture index lookup
+    // Each texture's coordinate source, indexed by a batch's textureUnit and
+    // the stages after it: 0 = UV0, 1 = UV1, anything above 2 (0xFFFF) = the
+    // environment map (header +0x88, read by 0x00836980).
+    std::vector<uint16_t> textureCoordCombos;
+    // Each texture's combiner mode, indexed by a batch's shader field; only a
+    // model with global flag 0x8 has them (header +0x130, 0x00836980).
+    std::vector<uint16_t> textureCombinerCombos;
     std::vector<M2Material> materials;    // Render flags / blend modes
 
     // Texture transforms (UV animation)

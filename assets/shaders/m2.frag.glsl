@@ -23,11 +23,12 @@ layout(set = 0, binding = 0) uniform PerFrame {
 #include "rt_lighting.glsli"
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
+layout(set = 1, binding = 3) uniform sampler2D uTexture2;
 
 layout(set = 1, binding = 2) uniform M2Material {
     int hasTexture;
     int alphaTest;
-    int unused0;       // was the black colour key: the client never keys by colour
+    int combiners;     // stage modes in bits 0-3 and 4-7, stage count in 8-9
     float unused1;     // was the colour key's threshold
     int unlit;
     int blendMode;
@@ -55,6 +56,7 @@ layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 layout(location = 0) in vec3 FragPos;
 layout(location = 1) in vec3 Normal;
 layout(location = 2) in vec2 TexCoord;
+layout(location = 3) in vec2 TexCoord2;
 layout(location = 5) in float vFadeAlpha;
 layout(location = 6) flat in int vSkyMode;
 layout(location = 7) flat in float vHighlight;
@@ -82,6 +84,46 @@ float sampleShadowPCF(sampler2DShadow smap, vec3 coords) {
         }
     }
     return shadow / 9.0;
+}
+
+// The client's texture stages. A batch's shader id names a pixel shader per
+// pair of combiner modes (0x00836600); the exe's own stand-in for each is a
+// colour and an alpha op per stage, by mode (0x00af5a08, 0x00af59e8), which
+// the device maps to D3DTOP (0x00a2f9cc): 0 MODULATE(tex, cur), 1 MODULATE2X,
+// 2 ADD, 3 SELECTARG2 (cur), 4 BLENDCURRENTALPHA(cur, tex),
+// 5 BLENDDIFFUSEALPHA(tex, cur). Stage 0's current is the diffuse.
+const int kCombinerColorOp[8] = int[8](0, 0, 4, 2, 1, 5, 1, 2);
+const int kCombinerAlphaOp[8] = int[8](3, 0, 3, 2, 1, 3, 3, 3);
+
+vec3 combineRgb(int op, vec3 cur, float curA, vec3 tex, float diffA) {
+    if (op == 0) return tex * cur;
+    if (op == 1) return tex * cur * 2.0;
+    if (op == 2) return tex + cur;
+    if (op == 4) return cur * curA + tex * (1.0 - curA);
+    if (op == 5) return tex * diffA + cur * (1.0 - diffA);
+    return cur;
+}
+
+float combineA(int op, float cur, float tex, float diffA) {
+    if (op == 0) return tex * cur;
+    if (op == 1) return tex * cur * 2.0;
+    if (op == 2) return tex + cur;
+    if (op == 4) return cur * cur + tex * (1.0 - cur);
+    if (op == 5) return tex * diffA + cur * (1.0 - diffA);
+    return cur;
+}
+
+// The batch's textures over a diffuse of `d`, stage by stage.
+vec4 combineStages(vec4 d, vec4 t0, vec4 t1) {
+    int m0 = combiners & 7;
+    vec4 cur = vec4(combineRgb(kCombinerColorOp[m0], d.rgb, d.a, t0.rgb, d.a),
+                    combineA(kCombinerAlphaOp[m0], d.a, t0.a, d.a));
+    if (((combiners >> 8) & 3) > 1) {
+        int m1 = (combiners >> 4) & 7;
+        cur = vec4(combineRgb(kCombinerColorOp[m1], cur.rgb, cur.a, t1.rgb, d.a),
+                   combineA(kCombinerAlphaOp[m1], cur.a, t1.a, d.a));
+    }
+    return cur;
 }
 
 // 4x4 Bayer dither matrix (normalized to 0..1)
@@ -132,22 +174,25 @@ vec4 fogVolumeSky(vec2 uv) {
 }
 
 void main() {
-    vec4 texColor = hasTexture != 0 ? texture(uTexture, TexCoord) : vec4(1.0);
-    // A multiply takes the texture alone: the client's colour goes in through
-    // the diffuse, and a multiply has none.
-    const vec3 rawTexRgb = texColor.rgb;
+    const vec4 tex0 = hasTexture != 0 ? texture(uTexture, TexCoord) : vec4(1.0);
+    const vec4 tex1 = ((combiners >> 8) & 3) > 1 ? texture(uTexture2, TexCoord2) : vec4(1.0);
     // The batch's authored colour. A glow card is painted white and coloured
     // here - Orgrimmar's bonfire carries (1.0, 0.329, 0.0) - so without it
-    // every fire in the world burns white.
+    // every fire in the world burns white. It is the diffuse the stages
+    // combine over, with the light.
     //
     // The client takes the batch's colour and alpha every draw (FUN_0081fe90),
     // so a track that moves is sampled per frame and handed in per instance;
     // otherwise the material carries its one value.
     const bool batchAnimated = vColorMul.a >= 0.0;
-    texColor.rgb *= batchAnimated ? vColorMul.rgb : vec3(tintR, tintG, tintB);
+    const vec3 tint = batchAnimated ? vColorMul.rgb : vec3(tintR, tintG, tintB);
     // The distance fade and the batch's own alpha together: what a blended
-    // batch is drawn at.
+    // batch is drawn at, and the diffuse's alpha.
     const float batchFade = vFadeAlpha * (batchAnimated ? vColorMul.a : fadeAlpha);
+    // The stages' alpha, and the same over the batch's alpha: what the alpha
+    // reference (224/255 of the batch's alpha) is measured against.
+    const float stageAlpha = combineStages(vec4(1.0, 1.0, 1.0, batchFade), tex0, tex1).a;
+    vec4 texColor = vec4(1.0, 1.0, 1.0, stageAlpha / max(batchFade, 1e-6));
     // A batch whose alpha has run to zero is not drawn, whatever it blends
     // as: that is how a model hides a part for the length of a sequence.
     if (batchAnimated && vColorMul.a < 1.0 / 255.0) discard;
@@ -177,13 +222,15 @@ void main() {
         // Behind all the air there is, as the procedural sky is. An
         // additive layer only loses what the air hides of it; the air's own
         // light is already in the layer it is added to.
-        vec3 skyColor = texColor.rgb;
+        vec3 skyColor = combineStages(vec4(tint, batchFade), tex0, tex1).rgb;
         if (volumetricParams.x > 0.5) {
             vec4 clip = projection * view * vec4(FragPos, 1.0);
             vec4 air = fogVolumeSky(clip.xy / max(clip.w, 1e-4) * 0.5 + 0.5);
             skyColor = (blendAdds()) ? skyColor * air.a : skyColor * air.a + air.rgb;
         }
-        if (blendMultiplies()) skyColor = rawTexRgb * (blendMode == 5 ? 1.0 : 0.5);
+        if (blendMultiplies()) {
+            skyColor = combineStages(vec4(vec3(blendMode == 5 ? 1.0 : 0.5), batchFade), tex0, tex1).rgb;
+        }
         outColor = vec4(skyColor, skyAlpha * batchFade);
         return;
     }
@@ -201,7 +248,7 @@ void main() {
         float aGrad = fwidth(texColor.a);
         texColor.a = clamp((texColor.a - alphaCutoff) / max(aGrad, 0.001) * 0.5 + 0.5, 0.0, 1.0);
         if (texColor.a < 1.0 / 255.0) discard;
-    } else if (blendMode >= 2 && texColor.a * batchFade < 1.0 / 255.0) {
+    } else if (blendMode >= 2 && stageAlpha < 1.0 / 255.0) {
         // Every blended mode is alpha tested at 1/255 in the client: what is
         // fully transparent is not drawn at all, so it writes no depth.
         // Nothing is discarded for being dark: the client draws the batch by
@@ -218,12 +265,12 @@ void main() {
     vec3 ldir = normalize(-lightDir.xyz);
     float diff = max(dot(norm, ldir), 0.0);
 
-    vec3 result;
+    // The light the diffuse carries, which the stages then combine with.
+    vec3 light;
     if (unlit != 0) {
-        // The texture as it is, with the batch colour already in it: the
-        // client draws an unlit batch with no light and adds nothing
-        // (FUN_0081fb10).
-        result = texColor.rgb;
+        // No light: the client draws an unlit batch with the batch colour
+        // alone and adds nothing (FUN_0081fb10).
+        light = vec3(1.0);
     } else if ((vInteriorLit & 1) != 0) {
         // A doodad of a WMO interior group (0x007c1150): its MODD colour as
         // the ambient and as one light down from a fixed direction (0xaeedf0,
@@ -234,7 +281,7 @@ void main() {
         const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, vInteriorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
-        result = vInteriorAmbient * texColor.rgb + idiff * vInteriorDirect.rgb * texColor.rgb;
+        light = vInteriorAmbient + idiff * vInteriorDirect.rgb;
     } else {
         // Ambient and diffuse only. The client lights an M2 batch with the
         // fixed-function light (FUN_0081fb10) and no specular term; its
@@ -263,10 +310,9 @@ void main() {
         const bool worldObject = (vInteriorLit & 4) != 0;
         vec3 ambient = worldObject ? vInteriorAmbient : ambientColor.rgb;
         vec3 direct = worldObject ? vInteriorDirect.rgb : lightColor.rgb;
-        result = rtAmbient(rt, ambient) * texColor.rgb
-               + shadow * (diff * direct * texColor.rgb);
-
+        light = rtAmbient(rt, ambient) + shadow * (diff * direct);
     }
+    vec3 result = combineStages(vec4(light * tint, batchFade), tex0, tex1).rgb;
 
     float dist = length(viewPos.xyz - FragPos);
     // The client's fog per blend mode (FUN_0081fb10, table at 0x00a45390):
@@ -295,7 +341,7 @@ void main() {
         result = applyFog(result, FragPos, dist, (vInteriorLit & 2) != 0 ? cameraFogColor.rgb : fogColor.rgb);
     }
 
-    float outAlpha = texColor.a * batchFade;
+    float outAlpha = stageAlpha;
     // Cutout materials output the sharpened coverage alpha computed above -
     // alpha-to-coverage turns it into per-sample coverage for smooth edges.
     // The distance fade, for a batch drawn with no blending to fade through.
@@ -322,7 +368,7 @@ void main() {
         // The client (FUN_0081fe90) draws a multiply unlit, with no diffuse
         // and an emissive of 1.0 (Mod) or 0.5 (Mod2x), whatever the alpha:
         // Mod2x's doubling then makes its net effect dst * texture.
-        result = rawTexRgb * (blendMode == 5 ? 1.0 : 0.5);
+        result = combineStages(vec4(vec3(blendMode == 5 ? 1.0 : 0.5), batchFade), tex0, tex1).rgb;
         if (fogOn) result = mix(vec3(blendMode == 5 ? 1.0 : 0.5019608), result, fogFactor);
     } else if (blendMode == 3) {
         // NoAlphaAdd ignores alpha: the fade has to be in the colour.
