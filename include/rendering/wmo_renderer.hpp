@@ -510,25 +510,29 @@ private:
     struct WMOMaterialUBO {
         int32_t hasTexture;        // 0
         int32_t alphaTest;         // 4
-        int32_t unlit;             // 8
-        int32_t isInterior;        // 12
+        int32_t outsideLight;      // 8: a transition batch's first pass, 0x007a8b10's mode (BatchLight)
+        int32_t insideLight;       // 12: its second pass, or the only one
         float specularIntensity;   // 16
-        int32_t transition;        // 20: a transition batch, the two lights blended by the vertex alpha
+        int32_t transition;        // 20: a transition batch, its two passes blended by the output alpha
         int32_t enableNormalMap;   // 24
         int32_t enablePOM;         // 28
         float pomScale;            // 32 (height scale)
         int32_t pomMaxSamples;     // 36 (max ray-march steps)
         float heightMapVariance;   // 40 (low variance = skip POM)
         float normalMapStrength;   // 44 (0=flat, 1=full, 2=exaggerated)
-        int32_t unfogged;          // 48: a transition batch with F_UNFOGGED, drawn with no fog
+        int32_t fogs;              // 48: per pass, bits 0-1 the first and 2-3 the second: 0 none, 1 the zone's, 2 the group's inside fog
         float wmoAmbientR;         // 52 (interior ambient color R)
         float wmoAmbientG;         // 56 (interior ambient color G)
         float wmoAmbientB;         // 60 (interior ambient color B)
-        int32_t unused64;           // 64 (unused; was a per-texture-name emissive mode)
-        int32_t hasVertexColors;    // 68: the group carries MOCV (MOGP flag 0x4)
-        int32_t averagedLight;      // 72: material flag 0x20 lights it by light mode 2 (0x007a8b10)
-        int32_t padding2;           // 76
-    };  // 80 bytes total
+        int32_t unifiedPath;        // 64: MOHD flag 0x2, the MapObjU* programs (0x007a9380)
+        int32_t hasVertexColors;    // 68: 0 no MOCV, 1 as the MOCV has them (MOHD 0x8), 2 as 0x007d7380 left them
+        int32_t shadowed;           // 72: bit 0 the first pass samples the sun's shadow map, bit 1 the second
+        int32_t program;            // 76: the pixel program (wmo_doodad_light::SurfaceProgram)
+        float alphaRef;             // 80: the alpha test's reference (0x00ad8b7c), 0 for none
+        int32_t pad84;              // 84
+        int32_t pad88;              // 88
+        int32_t pad92;              // 92
+    };  // 96 bytes total
 
     /// What a group's draw pushes to wmo.frag after the model matrix:
     /// interiorPass 1 when the group is drawn in the camera's interior pass
@@ -564,6 +568,8 @@ private:
             /// One of MOGP's first transBatchCount batches, drawn as a blend
             /// of the outside and inside light (0x007a9380).
             bool transition = false;
+            /// One of the intBatchCount that follow them (0x007ac9f0).
+            bool interior = false;
         };
         std::vector<Batch> batches;
 
@@ -582,6 +588,8 @@ private:
             bool transition = false;        // Batch::transition
             bool unfogged = false;          // F_UNFOGGED (0x2), read only on a transition batch
             bool averaged = false;          // material flag 0x20 where 0x007a9380 reads it: light mode 2
+            VkTexture* envTexture = nullptr;  // MOMT texture_2 for MapObjEnv/EnvMetal, NOT owned
+            uint32_t surfaceKey = 0;        // the lights, fogs, shadows and program packed (WMOMaterialUBO)
             // For multi-draw: store index ranges
             struct DrawRange { uint32_t firstIndex; uint32_t indexCount; };
             std::vector<DrawRange> draws;
@@ -695,6 +703,13 @@ private:
 
         // Material flags (materialId -> flags; 0x01 = unlit)
         std::vector<uint32_t> materialFlags;
+
+        // MOMT's shader (materialId -> the effect table's index, 0x007afee0)
+        std::vector<uint32_t> materialShaders;
+
+        // MOMT's texture_2 (materialId -> texture index, ~0u for none): the
+        // map MapObjEnv and MapObjEnvMetal reflect.
+        std::vector<uint32_t> materialEnvTextureIndices;
 
         // Portal visibility data
         std::vector<PortalData> portals;
@@ -905,6 +920,7 @@ private:
         std::unique_ptr<VkTexture> texture;
         std::unique_ptr<VkTexture> normalHeightMap;  // generated normal+height from diffuse
         float heightMapVariance = 0.0f;  // variance of generated height map
+        bool alphaChannel = false;       // the BLP has alpha bits (0x004b54f0 reads the inverse)
         size_t approxBytes = 0;
         uint64_t lastUse = 0;
     };

@@ -29,6 +29,9 @@ layout(location = 2) out vec2 TexCoord;
 layout(location = 3) out vec4 VertColor;
 layout(location = 4) out vec3 Tangent;
 layout(location = 5) out vec3 Bitangent;
+// MapObjDiffuse_T1_Refl's second coordinates: reflect(P, N).xy in view space,
+// unnormalised (the client's +z-forward view gives the same x and y).
+layout(location = 6) out vec2 EnvCoord;
 
 void main() {
     // A building's geometry stays where it was authored. The client moves
@@ -50,6 +53,10 @@ void main() {
 
     Tangent = T;
     Bitangent = B;
+
+    vec3 viewP = (view * worldPos).xyz;
+    vec3 viewN = normalize(mat3(view) * Normal);
+    EnvCoord = reflect(normalize(viewP), viewN).xy;
 
     gl_Position = projection * view * worldPos;
 }

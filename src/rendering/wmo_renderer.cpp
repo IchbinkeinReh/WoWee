@@ -193,7 +193,8 @@ bool WMORenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayou
     // binding 0: sampler2D (diffuse texture)
     // binding 1: uniform buffer (WMOMaterial)
     // binding 2: sampler2D (normal+height map)
-    std::vector<VkDescriptorSetLayoutBinding> materialBindings(3);
+    // binding 3: sampler2D (MOMT texture_2, MapObjEnv's reflection)
+    std::vector<VkDescriptorSetLayoutBinding> materialBindings(4);
     materialBindings[0] = {};
     materialBindings[0].binding = 0;
     materialBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -209,6 +210,11 @@ bool WMORenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayou
     materialBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     materialBindings[2].descriptorCount = 1;
     materialBindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    materialBindings[3] = {};
+    materialBindings[3].binding = 3;
+    materialBindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    materialBindings[3].descriptorCount = 1;
+    materialBindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     materialSetLayout_ = createDescriptorSetLayout(device, materialBindings);
     if (!materialSetLayout_) {
@@ -218,7 +224,7 @@ bool WMORenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayou
 
     // --- Create descriptor pool ---
     VkDescriptorPoolSize poolSizes[] = {
-        { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_MATERIAL_SETS * 2 },  // diffuse + normal/height
+        { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_MATERIAL_SETS * 3 },  // diffuse, normal/height, env
         { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = MAX_MATERIAL_SETS },
     };
 
@@ -552,6 +558,12 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         modelData.materialTextureIndices.push_back(texIndex);
         modelData.materialBlendModes.push_back(mat.blendMode);
         modelData.materialFlags.push_back(mat.flags);
+        modelData.materialShaders.push_back(mat.shader);
+        // MapObjEnv and MapObjEnvMetal sample texture_2 as their reflection.
+        const bool envProgram = mat.shader == 3 || mat.shader == 5;
+        modelData.materialEnvTextureIndices.push_back(
+            envProgram && t2 < model.textures.size() && !model.textures[t2].empty()
+                ? t2 : std::numeric_limits<uint32_t>::max());
 
     }
 
@@ -650,28 +662,25 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         // Use pointer value as key for batching
         struct BatchKey {
             uintptr_t texPtr;
+            uintptr_t envPtr;
             bool alphaTest;
-            bool unlit;
             bool transparent;
             bool transition;
-            bool unfogged;
-            bool averaged;
+            uint32_t surface;
             bool operator==(const BatchKey& o) const {
-                return texPtr == o.texPtr && alphaTest == o.alphaTest &&
-                       unlit == o.unlit && transparent == o.transparent &&
-                       transition == o.transition && unfogged == o.unfogged &&
-                       averaged == o.averaged;
+                return texPtr == o.texPtr && envPtr == o.envPtr && alphaTest == o.alphaTest &&
+                       transparent == o.transparent && transition == o.transition &&
+                       surface == o.surface;
             }
         };
         struct BatchKeyHash {
             size_t operator()(const BatchKey& k) const {
                 return std::hash<uintptr_t>()(k.texPtr) ^
-                       (std::hash<bool>()(k.alphaTest) << 1) ^
-                       (std::hash<bool>()(k.unlit) << 2) ^
+                       (std::hash<uintptr_t>()(k.envPtr) << 1) ^
+                       (std::hash<bool>()(k.alphaTest) << 2) ^
                        (std::hash<bool>()(k.transparent) << 3) ^
                        (std::hash<bool>()(k.transition) << 4) ^
-                       (std::hash<bool>()(k.unfogged) << 5) ^
-                       (std::hash<bool>()(k.averaged) << 6);
+                       (std::hash<uint32_t>()(k.surface) << 5);
             }
         };
         std::unordered_map<BatchKey, GroupResources::MergedBatch, BatchKeyHash> batchMap;
@@ -704,38 +713,69 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 alphaTest = (blendMode == 1);
             }
 
-            bool unlit = false;
             uint32_t materialFlags = 0;
             if (batch.materialId < modelData.materialFlags.size()) {
                 materialFlags = modelData.materialFlags[batch.materialId];
-                unlit = (materialFlags & 0x01) != 0;
             }
-            // F_UNFOGGED counts on a transition batch alone: 0x007a9380 reads
-            // material flag 0x2 in that branch and nowhere else.
-            const bool unfogged = batch.transition && (materialFlags & 0x02) != 0;
-            // Material flag 0x20: lit by the zone's direct and ambient light
-            // averaged (0x007a8b10 mode 2) - a transition batch's outside
-            // pass, or any batch of an interior group (0x007a9380).
-            const auto lights = pipeline::wmo_doodad_light::batchLights(groupRes.groupFlags, batch.transition,
-                                                                        materialFlags);
-            const bool averaged = lights.outsidePass == pipeline::wmo_doodad_light::BatchLight::Averaged ||
-                                  lights.insidePass == pipeline::wmo_doodad_light::BatchLight::Averaged;
+            const bool unlit = (materialFlags & 0x01) != 0;
+            const uint32_t shader = batch.materialId < modelData.materialShaders.size()
+                ? modelData.materialShaders[batch.materialId] : 0;
+
+            // The group's draw (0x007abf50: 0x007a9380 for MOHD 0x2, else
+            // 0x007ac6a0 or 0x007ac9f0 by the group's MOCV), the batch's
+            // place in MOBA, and from those its passes' lights, fogs and
+            // shadows; the pixel program by MOMT's shader.
+            namespace wl = pipeline::wmo_doodad_light;
+            const wl::GroupDraw draw{ .unified = (modelData.mohdFlags & 0x2u) != 0,
+                                      .vertexColors = (groupRes.groupFlags & 0x4u) != 0,
+                                      .groupFlags = groupRes.groupFlags };
+            const wl::BatchKind kind = batch.transition ? wl::BatchKind::Transition
+                                     : batch.interior ? wl::BatchKind::Interior
+                                     : wl::BatchKind::Exterior;
+            const auto lights = wl::batchLights(draw, kind, materialFlags);
+            // Camera here stands for "the group's inside fog": the camera's in
+            // the camera's interior pass, the zone's otherwise (gp.interiorPass).
+            const auto fogs = wl::batchFogs(draw, kind, materialFlags, true);
+            bool texAlpha = false;
+            if (hasTexture) {
+                for (const auto& [cacheKey, cacheEntry] : textureCache) {
+                    if (cacheEntry.texture.get() == tex) { texAlpha = cacheEntry.alphaChannel; break; }
+                }
+            }
+            const wl::SurfaceProgram program = wl::surfaceProgram(shader, blendMode, texAlpha);
+            const bool averaged = lights.outsidePass == wl::BatchLight::Averaged ||
+                                  lights.insidePass == wl::BatchLight::Averaged;
+            const uint32_t surfaceKey =
+                static_cast<uint32_t>(lights.outsidePass) | (static_cast<uint32_t>(lights.insidePass) << 2) |
+                (static_cast<uint32_t>(fogs.outsidePass) << 4) | (static_cast<uint32_t>(fogs.insidePass) << 6) |
+                (lights.outsideShadowed ? 0x100u : 0u) | (lights.insideShadowed ? 0x200u : 0u) |
+                (static_cast<uint32_t>(program) << 12) | (blendMode << 16);
+            VkTexture* envTex = nullptr;
+            if (program == wl::SurfaceProgram::Env || program == wl::SurfaceProgram::EnvMetal) {
+                const uint32_t ei = batch.materialId < modelData.materialEnvTextureIndices.size()
+                    ? modelData.materialEnvTextureIndices[batch.materialId]
+                    : std::numeric_limits<uint32_t>::max();
+                if (ei < modelData.textures.size()) envTex = modelData.textures[ei];
+            }
 
             // Windows, lamp glass, clock faces and lava get no treatment of
             // their own: the client draws every batch from its MOMT material,
             // by blend mode and flags, whatever its texture is called.
 
-            BatchKey key{ .texPtr = reinterpret_cast<uintptr_t>(tex), .alphaTest = alphaTest, .unlit = unlit,
-                          .transparent = blendMode >= 2, .transition = batch.transition,
-                          .unfogged = unfogged, .averaged = averaged };
+            BatchKey key{ .texPtr = reinterpret_cast<uintptr_t>(tex),
+                          .envPtr = reinterpret_cast<uintptr_t>(envTex),
+                          .alphaTest = alphaTest, .transparent = blendMode >= 2,
+                          .transition = batch.transition, .surface = surfaceKey };
             auto& mb = batchMap[key];
             if (mb.draws.empty()) {
                 mb.texture = tex;
+                mb.envTexture = envTex;
+                mb.surfaceKey = surfaceKey;
                 mb.hasTexture = hasTexture;
                 mb.alphaTest = alphaTest;
                 mb.unlit = unlit;
                 mb.transition = batch.transition;
-                mb.unfogged = unfogged;
+                mb.unfogged = (materialFlags & 0x02) != 0;
                 mb.averaged = averaged;
                 mb.isTransparent = (blendMode >= 2);
                 // Look up normal/height map from texture cache
@@ -758,12 +798,6 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         // Allocate descriptor sets and UBOs for each merged batch
         groupRes.mergedBatches.reserve(batchMap.size());
         bool anyTextured = false;
-        // Lit and fogged as an interior unless the group is exterior or
-        // exterior-lit: 0x007a9380 tests 0x48, not the interior flag 0x2000,
-        // choosing the interior light (0x007a8b10 mode 3) and the camera's
-        // fog colour, or the outside light and the zone's fog colour
-        // (0x007a8440 with 2). A group with 0x2000 and 0x40 is lit by the sun.
-        const bool isInterior = (groupRes.groupFlags & pipeline::wmo_doodad_light::kOutsideGroupFlags) == 0;
         for (auto& [key, mb] : batchMap) {
             if (mb.hasTexture) anyTextured = true;
 
@@ -779,11 +813,16 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             WMOMaterialUBO matData{};
             matData.hasTexture = mb.hasTexture ? 1 : 0;
             matData.alphaTest = mb.alphaTest ? 1 : 0;
-            matData.unlit = mb.unlit ? 1 : 0;
-            matData.isInterior = isInterior ? 1 : 0;
+            // The passes' lights, fogs and shadows and the pixel program, as
+            // packed into the key above.
+            matData.outsideLight = static_cast<int32_t>(mb.surfaceKey & 3u);
+            matData.insideLight = static_cast<int32_t>((mb.surfaceKey >> 2) & 3u);
+            matData.fogs = static_cast<int32_t>((mb.surfaceKey >> 4) & 0xFu);
+            matData.shadowed = static_cast<int32_t>((mb.surfaceKey >> 8) & 3u);
+            matData.program = static_cast<int32_t>((mb.surfaceKey >> 12) & 0xFu);
+            matData.alphaRef = pipeline::wmo_doodad_light::alphaReference(mb.surfaceKey >> 16);
+            matData.unifiedPath = (modelData.mohdFlags & 0x2u) ? 1 : 0;
             matData.transition = mb.transition ? 1 : 0;
-            matData.unfogged = mb.unfogged ? 1 : 0;
-            matData.averagedLight = mb.averaged ? 1 : 0;
             // 2 when the colours are as 0x007d7380 left them, 1 as the
             // MOCV has them (MOHD flag 0x8, 0x007d7c30).
             matData.hasVertexColors = (groupRes.groupFlags & 0x4) == 0 ? 0
@@ -819,7 +858,8 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             };
             VkTexture* texToUse = pick(mb.texture, whiteTexture_.get());
             VkTexture* nhMap = pick(mb.normalHeightMap, flatNormalTexture_.get());
-            if ((!texToUse || !nhMap) && mb.materialSet) {
+            VkTexture* envMap = pick(mb.envTexture, whiteTexture_.get());
+            if ((!texToUse || !nhMap || !envMap) && mb.materialSet) {
                 vkFreeDescriptorSets(vkCtx_->getDevice(), materialDescPool_, 1,
                                      &mb.materialSet);
                 mb.materialSet = VK_NULL_HANDLE;
@@ -833,8 +873,9 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 bufInfo.range = sizeof(WMOMaterialUBO);
 
                 VkDescriptorImageInfo nhImgInfo = nhMap->descriptorInfo();
+                VkDescriptorImageInfo envImgInfo = envMap->descriptorInfo();
 
-                VkWriteDescriptorSet writes[3] = {};
+                VkWriteDescriptorSet writes[4] = {};
                 writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[0].dstSet = mb.materialSet;
                 writes[0].dstBinding = 0;
@@ -856,7 +897,14 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 writes[2].descriptorCount = 1;
                 writes[2].pImageInfo = &nhImgInfo;
 
-                vkUpdateDescriptorSets(vkCtx_->getDevice(), 3, writes, 0, nullptr);
+                writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[3].dstSet = mb.materialSet;
+                writes[3].dstBinding = 3;
+                writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[3].descriptorCount = 1;
+                writes[3].pImageInfo = &envImgInfo;
+
+                vkUpdateDescriptorSets(vkCtx_->getDevice(), 4, writes, 0, nullptr);
             }
 
             groupRes.mergedBatches.push_back(std::move(mb));
@@ -2140,6 +2188,8 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
             // 0x007a9380 draws batch i as a transition batch while i is below
             // MOGP's first count.
             resBatch.transition = bi < group.transBatchCount;
+            resBatch.interior = !resBatch.transition &&
+                                bi < static_cast<size_t>(group.transBatchCount) + group.intBatchCount;
             resources.batches.push_back(resBatch);
         }
     } else {
@@ -2711,6 +2761,7 @@ VkTexture* WMORenderer::loadTexture(const std::string& path) {
     e.texture = std::move(texture);
     e.normalHeightMap = std::move(nhMap);
     e.heightMapVariance = nhVariance;
+    e.alphaChannel = blp.alphaDepth != 0;
     textureCacheBytes_ += e.approxBytes;
     if (!resolvedKey.empty()) {
         textureCache[resolvedKey] = std::move(e);

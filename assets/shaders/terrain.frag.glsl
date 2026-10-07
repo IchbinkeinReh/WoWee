@@ -39,6 +39,7 @@ layout(set = 1, binding = 7) uniform TerrainParams {
     int hasLayer2;
     int hasLayer3;
     ivec4 layerFlags;  // MCLY flags of layers 0..3: 0x40 scrolls, 0x80 unlit
+    int weightedLayers;  // MPHD 0x4: Terrain1's weighted variants
 };
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
@@ -133,66 +134,60 @@ void main() {
     // (c12), not the distance to the eye.
     float fragDist = -(view * vec4(FragPos, 1.0)).z;
 
-    // WoW terrain: layers are blended sequentially, each on top of the previous result.
-    // Alpha=1 means the layer fully covers everything below; alpha=0 means invisible.
-    // A layer with MCLY 0x80 is drawn with the lighting off (0x007d0760), so
-    // the lit and the unlit layers are kept apart: each mix() is linear, and
-    // the two add up to the one blend.
-    vec4 baseColor = layerTexel(uBaseTexture, layerFlags.x);
-    bool unlit0 = (layerFlags.x & 0x80) != 0;
-    vec4 finalColor = unlit0 ? vec4(0.0) : baseColor;
-    vec3 unlitColor = unlit0 ? baseColor.rgb : vec3(0.0);
-    if (hasLayer1 != 0) {
-        float a1 = sampleAlpha(uLayer1Alpha, LayerUV);
-        // Where the layer is not painted, mix() returns what it was given and
-        // the fetch that fed it was work for nothing. A layer covers part of a
-        // chunk, so whole regions of the screen take this branch together.
-        if (a1 > 0.002) {
-            vec4 t = layerTexel(uLayer1Texture, layerFlags.y);
-            bool u = (layerFlags.y & 0x80) != 0;
-            finalColor = mix(finalColor, u ? vec4(0.0) : t, a1);
-            unlitColor = mix(unlitColor, u ? t.rgb : vec3(0.0), a1);
-        }
-    }
-    if (hasLayer2 != 0) {
-        float a2 = sampleAlpha(uLayer2Alpha, LayerUV);
-        if (a2 > 0.002) {
-            vec4 t = layerTexel(uLayer2Texture, layerFlags.z);
-            bool u = (layerFlags.z & 0x80) != 0;
-            finalColor = mix(finalColor, u ? vec4(0.0) : t, a2);
-            unlitColor = mix(unlitColor, u ? t.rgb : vec3(0.0), a2);
-        }
-    }
-    if (hasLayer3 != 0) {
-        float a3 = sampleAlpha(uLayer3Alpha, LayerUV);
-        if (a3 > 0.002) {
-            vec4 t = layerTexel(uLayer3Texture, layerFlags.w);
-            bool u = (layerFlags.w & 0x80) != 0;
-            finalColor = mix(finalColor, u ? vec4(0.0) : t, a3);
-            unlitColor = mix(unlitColor, u ? t.rgb : vec3(0.0), a3);
-        }
+    // The layers' weights, as the Terrain1 pixel programs blend them: one over
+    // another by its alpha (lerp after lerp), or on a map with MPHD flag 0x4
+    // the weighted variants' base x (1 - saturate(a1 + a2 + a3)) plus each
+    // layer by its own alpha (0x0079e5c0 picks the variant by 0x00cf08d0).
+    float a1 = hasLayer1 != 0 ? sampleAlpha(uLayer1Alpha, LayerUV) : 0.0;
+    float a2 = hasLayer2 != 0 ? sampleAlpha(uLayer2Alpha, LayerUV) : 0.0;
+    float a3 = hasLayer3 != 0 ? sampleAlpha(uLayer3Alpha, LayerUV) : 0.0;
+    vec4 w;
+    if (weightedLayers != 0) {
+        w = vec4(1.0 - clamp(a1 + a2 + a3, 0.0, 1.0), a1, a2, a3);
+    } else {
+        w = vec4((1.0 - a1) * (1.0 - a2) * (1.0 - a3), a1 * (1.0 - a2) * (1.0 - a3),
+                 a2 * (1.0 - a3), a3);
     }
 
-    // The chunk's vertex shading (MCCV) tints the textures.
-    finalColor.rgb *= Shading;
-    unlitColor *= Shading;
+    // A layer is lit - 2 x the vertex colour times its texel - or with MCLY
+    // 0x80 its texel as it is (the per-layer variants' c1, 0x007d0760). The
+    // blend is linear, so the lit and the unlit layers are summed apart. Where
+    // a layer has no weight its fetch is skipped; a layer covers part of a
+    // chunk, so whole regions of the screen take that branch together.
+    vec3 litColor = vec3(0.0);
+    vec3 unlitColor = vec3(0.0);
+    {
+        vec3 t = layerTexel(uBaseTexture, layerFlags.x).rgb * w.x;
+        if ((layerFlags.x & 0x80) != 0) unlitColor += t; else litColor += t;
+    }
+    if (w.y > 0.002) {
+        vec3 t = layerTexel(uLayer1Texture, layerFlags.y).rgb * w.y;
+        if ((layerFlags.y & 0x80) != 0) unlitColor += t; else litColor += t;
+    }
+    if (w.z > 0.002) {
+        vec3 t = layerTexel(uLayer2Texture, layerFlags.z).rgb * w.z;
+        if ((layerFlags.z & 0x80) != 0) unlitColor += t; else litColor += t;
+    }
+    if (w.w > 0.002) {
+        vec3 t = layerTexel(uLayer3Texture, layerFlags.w).rgb * w.w;
+        if ((layerFlags.w & 0x80) != 0) unlitColor += t; else litColor += t;
+    }
 
-    // The vertex normal as it is. A bump derived from the texture's own
-    // brightness was perturbed into it here; the client has nothing like it.
+    // The vertex colour, which the pixel program doubles: the Terrain vertex
+    // program's clamp(ambient + clamp(N.L) x direct) (c25, c24, c26), clamped
+    // to one before the chunk's vertex shading (MCCV) scales it.
     vec3 norm = normalize(Normal);
+    RtLight rt = rtLightAt(FragPos);
+    float ndl = clamp(dot(norm, normalize(-lightDir.xyz)), 0.0, 1.0);
+    vec3 light = clamp(rtAmbient(rt, ambientColor.rgb) + ndl * lightColor.rgb, 0.0, 1.0) * Shading;
 
-    vec3 lightDir2 = normalize(-lightDir.xyz);
-    vec3 ambient = ambientColor.rgb * finalColor.rgb;
-    // Lambert, as every other surface has it. This took abs() of the angle
-    // and floored it at 0.2, so a slope turned from the sun was lit as one
-    // turned toward it, and hills had no shape at low sun. The ambient term
-    // is what keeps the shaded side from black, as it does for the models
-    // standing on it.
-    float diff = max(dot(norm, lightDir2), 0.0);
-    vec3 diffuse = diff * lightColor.rgb * finalColor.rgb;
-
-    float shadow = 1.0;
+    // The shadow: the baked one (MCSH, the alpha texture's fourth channel)
+    // and, with the sun's shadow map on, the lesser of it and the map
+    // (Terrain2/Terrain3). Whatever is lit, lit and unlit layers alike, is
+    // scaled by 0.7 + 0.3 x the light let through.
+    float lit = texture(uBakedShadow, LayerUV).r;
     if (shadowParams.x > 0.5) {
+        float shadow = 1.0;
         vec3 ldir = normalize(-lightDir.xyz);
         float normalOffset = shadowTexel() * 2.0 * (1.0 - abs(dot(norm, ldir)));
         vec3 biasedPos = FragPos + norm * normalOffset;
@@ -204,28 +199,10 @@ void main() {
             shadow = sampleShadowPCF(uShadowMap, vec3(proj.xy, proj.z - bias));
             shadow = mix(1.0, shadow, shadowParams.y);
         }
+        lit = min(lit, rtShadow(rt, shadow));
     }
 
-    RtLight rt = rtLightAt(FragPos);
-    shadow = rtShadow(rt, shadow);
-    ambient = rtAmbient(rt, ambientColor.rgb) * finalColor.rgb;
-
-    vec3 result = ambient + shadow * diffuse;
-
-    // The baked terrain shadow (MCSH), drawn as the client draws it when its
-    // own dynamic shadows are off: toward the shadow colour, ambient / 3, by
-    // ch8's red (0x007ee750; ambientColor.w carries it). Not over the shadow
-    // map, which already darkens the same ground.
-    if (shadowParams.x < 0.5) {
-        float baked = 1.0 - texture(uBakedShadow, LayerUV).r;
-        if (baked > 0.0) {
-            result = mix(result, ambientColor.rgb / 3.0 * finalColor.rgb,
-                         baked * clamp(ambientColor.w, 0.0, 1.0));
-        }
-    }
-
-    // The unlit layers, as they are: no light, no shadow.
-    result += unlitColor;
+    vec3 result = (litColor * light + unlitColor) * (0.7 + 0.3 * lit);
 
     result = applyFog(result, FragPos, fragDist, fogColor.rgb);
 

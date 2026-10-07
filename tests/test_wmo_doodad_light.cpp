@@ -165,24 +165,52 @@ TEST_CASE("a group's drawn vertex colours are the ones the client fixed up", "[w
     CHECK(wl::transitionVertexEnd(group) == 0);
 }
 
+namespace {
+using K = wl::BatchKind;
+wl::GroupDraw unifiedGroup(uint32_t flags) { return {.unified = true, .vertexColors = true, .groupFlags = flags}; }
+wl::GroupDraw mocvGroup(uint32_t flags) { return {.unified = false, .vertexColors = true, .groupFlags = flags}; }
+wl::GroupDraw plainGroup(uint32_t flags) { return {.unified = false, .vertexColors = false, .groupFlags = flags}; }
+}  // namespace
+
+TEST_CASE("a WMO batch's place in MOBA", "[wmo][doodad-light]") {
+    CHECK(wl::batchKind(0, 2, 3) == K::Transition);
+    CHECK(wl::batchKind(1, 2, 3) == K::Transition);
+    CHECK(wl::batchKind(2, 2, 3) == K::Interior);
+    CHECK(wl::batchKind(4, 2, 3) == K::Interior);
+    CHECK(wl::batchKind(5, 2, 3) == K::Exterior);
+}
+
 TEST_CASE("a WMO batch's fog follows 0x007a9380", "[wmo][doodad-light][fog]") {
     using F = wl::BatchFog;
     // Exterior and exterior-lit groups: the zone's colour, F_UNFOGGED or not.
-    CHECK(wl::batchFogs(0x8, false, 0x2, true).insidePass == F::Zone);
-    CHECK(wl::batchFogs(0x40, false, 0x0, true).insidePass == F::Zone);
+    CHECK(wl::batchFogs(unifiedGroup(0x8), K::Exterior, 0x2, true).insidePass == F::Zone);
+    CHECK(wl::batchFogs(unifiedGroup(0x40), K::Exterior, 0x0, true).insidePass == F::Zone);
     // An interior group: the camera's in the camera's interior pass, the
     // zone's otherwise; F_UNFOGGED is not read off a transition batch.
-    CHECK(wl::batchFogs(0x2000, false, 0x2, true).insidePass == F::Camera);
-    CHECK(wl::batchFogs(0x2000, false, 0x0, false).insidePass == F::Zone);
+    CHECK(wl::batchFogs(unifiedGroup(0x2000), K::Exterior, 0x2, true).insidePass == F::Camera);
+    CHECK(wl::batchFogs(unifiedGroup(0x2000), K::Exterior, 0x0, false).insidePass == F::Zone);
     // A transition batch: the outside pass in the zone's fog, the inside pass
     // in the group's; F_UNFOGGED takes both away.
-    const auto t = wl::batchFogs(0x2000, true, 0x0, true);
+    const auto t = wl::batchFogs(unifiedGroup(0x2000), K::Transition, 0x0, true);
     CHECK(t.outsidePass == F::Zone);
     CHECK(t.insidePass == F::Camera);
-    CHECK(wl::batchFogs(0x2000, true, 0x0, false).insidePass == F::Zone);
-    const auto u = wl::batchFogs(0x2000, true, 0x2, true);
+    CHECK(wl::batchFogs(unifiedGroup(0x2000), K::Transition, 0x0, false).insidePass == F::Zone);
+    const auto u = wl::batchFogs(unifiedGroup(0x2000), K::Transition, 0x2, true);
     CHECK(u.outsidePass == F::None);
     CHECK(u.insidePass == F::None);
+}
+
+TEST_CASE("a WMO batch's fog without MOHD 0x2: 0x007ac6a0 and 0x007ac9f0", "[wmo][doodad-light][fog]") {
+    using F = wl::BatchFog;
+    // No vertex colours: the zone's, none with F_UNFOGGED, interior or not.
+    CHECK(wl::batchFogs(plainGroup(0x2000), K::Exterior, 0x0, true).insidePass == F::Zone);
+    CHECK(wl::batchFogs(plainGroup(0x8), K::Exterior, 0x2, true).insidePass == F::None);
+    // Vertex colours: every batch in the inside fog, F_UNFOGGED read on all.
+    CHECK(wl::batchFogs(mocvGroup(0x8), K::Exterior, 0x0, true).insidePass == F::Camera);
+    CHECK(wl::batchFogs(mocvGroup(0x2000), K::Interior, 0x2, true).insidePass == F::None);
+    const auto t = wl::batchFogs(mocvGroup(0x2000), K::Transition, 0x0, true);
+    CHECK(t.outsidePass == F::Zone);
+    CHECK(t.insidePass == F::Camera);
 }
 
 TEST_CASE("the camera's interior pass stops at exterior groups", "[wmo][doodad-light][fog]") {
@@ -235,19 +263,63 @@ TEST_CASE("a world object's direct light in the terrain's baked shadow", "[wmo][
 TEST_CASE("a WMO batch's light follows 0x007a9380", "[wmo][doodad-light][light-mode]") {
     using L = wl::BatchLight;
     // Exterior and exterior-lit groups: lit, or unlit with F_UNLIT; 0x20 is
-    // not read there.
-    CHECK(wl::batchLights(0x8, false, 0x20).insidePass == L::Outside);
-    CHECK(wl::batchLights(0x40, false, 0x21).insidePass == L::Unlit);
+    // not read there. They take the sun's shadow.
+    const auto e = wl::batchLights(unifiedGroup(0x8), K::Exterior, 0x20);
+    CHECK(e.insidePass == L::Outside);
+    CHECK(e.insideShadowed);
+    CHECK(wl::batchLights(unifiedGroup(0x40), K::Exterior, 0x21).insidePass == L::Unlit);
     // An interior group: the interior light, or the averaged one with 0x20;
-    // F_UNLIT is not read there.
-    CHECK(wl::batchLights(0x2000, false, 0x1).insidePass == L::Interior);
-    CHECK(wl::batchLights(0x2000, false, 0x21).insidePass == L::Averaged);
+    // F_UNLIT is not read there, and no shadow.
+    const auto i = wl::batchLights(unifiedGroup(0x2000), K::Exterior, 0x1);
+    CHECK(i.insidePass == L::Interior);
+    CHECK_FALSE(i.insideShadowed);
+    CHECK(wl::batchLights(unifiedGroup(0x2000), K::Exterior, 0x21).insidePass == L::Averaged);
     // A transition batch: unlit, averaged or lit outside, then the interior.
-    const auto t = wl::batchLights(0x2000, true, 0x20);
+    const auto t = wl::batchLights(unifiedGroup(0x2000), K::Transition, 0x20);
     CHECK(t.outsidePass == L::Averaged);
+    CHECK(t.outsideShadowed);
     CHECK(t.insidePass == L::Interior);
-    CHECK(wl::batchLights(0x2000, true, 0x21).outsidePass == L::Unlit);
-    CHECK(wl::batchLights(0x2000, true, 0x0).outsidePass == L::Outside);
+    CHECK_FALSE(t.insideShadowed);
+    CHECK(wl::batchLights(unifiedGroup(0x2000), K::Transition, 0x21).outsidePass == L::Unlit);
+    CHECK(wl::batchLights(unifiedGroup(0x2000), K::Transition, 0x0).outsidePass == L::Outside);
+}
+
+TEST_CASE("a WMO batch's light without MOHD 0x2: 0x007ac6a0 and 0x007ac9f0", "[wmo][doodad-light][light-mode]") {
+    using L = wl::BatchLight;
+    // No vertex colours: outside, or unlit with F_UNLIT, even in an interior
+    // group; shadowed only in an exterior one.
+    const auto p = wl::batchLights(plainGroup(0x2000), K::Exterior, 0x20);
+    CHECK(p.insidePass == L::Outside);
+    CHECK_FALSE(p.insideShadowed);
+    CHECK(wl::batchLights(plainGroup(0x8), K::Exterior, 0x1).insidePass == L::Unlit);
+    CHECK(wl::batchLights(plainGroup(0x8), K::Exterior, 0x0).insideShadowed);
+    // Vertex colours: an interior batch unlit, an exterior one outside or
+    // averaged, F_UNLIT not read, no shadow.
+    CHECK(wl::batchLights(mocvGroup(0x8), K::Interior, 0x0).insidePass == L::Unlit);
+    const auto x = wl::batchLights(mocvGroup(0x8), K::Exterior, 0x1);
+    CHECK(x.insidePass == L::Outside);
+    CHECK_FALSE(x.insideShadowed);
+    CHECK(wl::batchLights(mocvGroup(0x8), K::Exterior, 0x20).insidePass == L::Averaged);
+    // A transition batch: outside (shadowed) or averaged, then unlit.
+    const auto t = wl::batchLights(mocvGroup(0x2000), K::Transition, 0x1);
+    CHECK(t.outsidePass == L::Outside);
+    CHECK(t.outsideShadowed);
+    CHECK(t.insidePass == L::Unlit);
+}
+
+TEST_CASE("a WMO batch's pixel program and alpha reference", "[wmo][doodad-light]") {
+    using P = wl::SurfaceProgram;
+    // Shader 0, blend 0, over a texture with alpha bits: MapObjOpaque.
+    CHECK(wl::surfaceProgram(0, 0, true) == P::Opaque);
+    CHECK(wl::surfaceProgram(0, 0, false) == P::Diffuse);
+    CHECK(wl::surfaceProgram(0, 1, true) == P::Diffuse);
+    CHECK(wl::surfaceProgram(3, 0, true) == P::Env);
+    CHECK(wl::surfaceProgram(5, 2, false) == P::EnvMetal);
+    // 0x00ad8b7c: 224 for the alpha key, 1 for the blends, none otherwise.
+    CHECK(wl::alphaReference(0) == 0.0f);
+    CHECK(wl::alphaReference(1) == Catch::Approx(224.0f / 255.0f));
+    CHECK(wl::alphaReference(2) == Catch::Approx(1.0f / 255.0f));
+    CHECK(wl::alphaReference(7) == 0.0f);
 }
 
 TEST_CASE("light mode 2 averages the direct light and the ambient", "[wmo][doodad-light][light-mode]") {

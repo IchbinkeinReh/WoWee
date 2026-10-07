@@ -40,6 +40,10 @@ struct BLPImage {
     int mipLevels = 1;
     BLPFormat format = BLPFormat::UNKNOWN;
     BLPCompression compression = BLPCompression::NONE;
+    /// The header's alpha bit depth (0, 1, 4 or 8). The client flags a
+    /// texture whose depth is 0 as having no alpha (0x004b6xxx sets bit 1 of
+    /// +0x28, which 0x004b54f0 reads).
+    uint8_t alphaDepth = 0;
     std::vector<uint8_t> data;      // RGBA8 pixel data (decompressed)
     std::vector<std::vector<uint8_t>> mipmaps;  // Mipmap levels
 

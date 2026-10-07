@@ -191,71 +191,149 @@ inline std::vector<glm::vec4> loadedVertexColors(const WMOGroup& group, uint32_t
     return out;
 }
 
-/// Which fog a batch of a WMO group is drawn with (0x007a9380 by way of
-/// 0x007a8440): none, the zone's colour (0xd38b8c), or the camera's with its
-/// interior fog blended in (0xd38ba0).
+/// Which of the client's three group draws a WMO group goes through, and
+/// where a batch sits in its MOBA. A WMO with MOHD flag 0x2 takes 0x007a9380
+/// (the MapObjU* programs); any other takes 0x007ac6a0 for a group without
+/// vertex colours (MOGP 0x4) or 0x007ac9f0 for one with them (0x007abf50
+/// picks by the group's MOCV), whose MapObj* programs multiply the vertex
+/// colour by the light rather than add to it.
+enum class BatchKind : uint8_t { Transition, Interior, Exterior };
+struct GroupDraw {
+    bool unified = false;     // MOHD flag 0x2
+    bool vertexColors = true; // MOGP flag 0x4
+    uint32_t groupFlags = 0;
+};
+inline BatchKind batchKind(size_t index, uint16_t transBatchCount, uint16_t intBatchCount) {
+    if (index < transBatchCount) return BatchKind::Transition;
+    if (index < static_cast<size_t>(transBatchCount) + intBatchCount) return BatchKind::Interior;
+    return BatchKind::Exterior;
+}
+
+/// Which fog a batch of a WMO group is drawn with (0x007a8440): none, the
+/// zone's colour (0xd38b8c), or the camera's with its interior fog blended
+/// in (0xd38ba0).
 enum class BatchFog : uint8_t { None, Zone, Camera };
 
 /// A transition batch (one of MOGP's first transBatchCount) is drawn twice:
-/// lit by the outside light (0x007a8b10 mode 1, 2 or 0 unlit) with blend 9,
-/// colour times alpha, then by the interior light (mode 3) with blend 7,
-/// colour times one minus alpha, added. The alpha is the vertex colour's,
-/// which 0x007d7380 left on those vertices. Each pass has its own fog; the
-/// material's F_UNFOGGED (0x2) takes it off both, and it is the only place
-/// the client reads that flag. Every other batch is fogged by its group: the
-/// zone's colour for an exterior or exterior-lit group (0x48), and for an
-/// interior one the camera's when the group is drawn in the camera's
-/// interior pass (interiorPassGroups; 0x007a9380's local_14), the zone's
-/// otherwise.
+/// lit by the outside light with blend 9, colour times alpha, then by the
+/// inside light with blend 7, colour times one minus alpha, added. Each pass
+/// has its own fog. `interiorPass`: the group is drawn in the camera's
+/// interior pass (interiorPassGroups; the draws' local_14/local_20), which
+/// fogs in the camera's colour where the zone's would be.
+///
+/// 0x007a9380: F_UNFOGGED (0x2) takes the fog off a transition batch's two
+/// passes and nowhere else; any other batch is fogged by its group, in the
+/// zone's colour for an exterior or exterior-lit group (0x48).
+/// 0x007ac6a0: every batch in the zone's colour, none with F_UNFOGGED.
+/// 0x007ac9f0: a transition batch's first pass as 0x007a9380's; its second
+/// pass and every other batch as an interior one, none with F_UNFOGGED.
 struct BatchFogs {
     BatchFog outsidePass = BatchFog::Zone;  // the transition batch's first pass
     BatchFog insidePass = BatchFog::Zone;   // its second, or the only pass
 };
-inline BatchFogs batchFogs(uint32_t groupFlags, bool transitionBatch, uint32_t materialFlags,
+inline BatchFogs batchFogs(const GroupDraw& g, BatchKind kind, uint32_t materialFlags,
                            bool interiorPass) {
     const BatchFog inside = interiorPass ? BatchFog::Camera : BatchFog::Zone;
+    const bool unfogged = (materialFlags & 0x2u) != 0;
     BatchFogs out;
-    if (transitionBatch) {
-        const bool unfogged = (materialFlags & 0x2u) != 0;
+    if (g.unified) {
+        if (kind == BatchKind::Transition) {
+            out.outsidePass = unfogged ? BatchFog::None : BatchFog::Zone;
+            out.insidePass = unfogged ? BatchFog::None : inside;
+            return out;
+        }
+        out.insidePass = (g.groupFlags & kOutsideGroupFlags) ? BatchFog::Zone : inside;
+    } else if (!g.vertexColors) {
+        out.insidePass = unfogged ? BatchFog::None : BatchFog::Zone;
+    } else {
         out.outsidePass = unfogged ? BatchFog::None : BatchFog::Zone;
         out.insidePass = unfogged ? BatchFog::None : inside;
-        return out;
+        if (kind == BatchKind::Transition) return out;
     }
-    out.insidePass = (groupFlags & kOutsideGroupFlags) ? BatchFog::Zone : inside;
     out.outsidePass = out.insidePass;
     return out;
 }
 
-/// The light a pass of a WMO batch is drawn in: 0x007a8b10's mode, which
-/// 0x007a9380 picks from the group and the material. Unlit (0) none; Outside
+/// The light a pass of a WMO batch is drawn in: 0x007a8b10's mode. Unlit (0)
+/// takes the vertex program's unlit variant, the vertex colour alone; Outside
 /// (1) the zone's direct and ambient light; Averaged (2) the two averaged
 /// (averagedOutsideLight); Interior (3) the MOHD ambient and no direct light.
+/// `shadowed`: the pass samples the sun's shadow map; the others bind the
+/// blank one (0x008745d0(1)).
 enum class BatchLight : uint8_t { Unlit = 0, Outside = 1, Averaged = 2, Interior = 3 };
 struct BatchLights {
     BatchLight outsidePass = BatchLight::Outside;  // the transition batch's first pass
     BatchLight insidePass = BatchLight::Outside;   // its second, or the only pass
+    bool outsideShadowed = false;
+    bool insideShadowed = false;
 };
-/// A transition batch's first pass is unlit with F_UNLIT (0x1), averaged with
-/// material flag 0x20, outside otherwise; its second is the interior light.
-/// Any other batch of an exterior or exterior-lit group (0x48) is unlit with
-/// F_UNLIT and outside otherwise, 0x20 not read; of an interior group it is
-/// averaged with 0x20 and the interior light otherwise, F_UNLIT not read.
-inline BatchLights batchLights(uint32_t groupFlags, bool transitionBatch, uint32_t materialFlags) {
+/// 0x007a9380: a transition batch's first pass unlit with F_UNLIT (0x1),
+/// averaged with material flag 0x20, outside otherwise, and shadowed; its
+/// second the interior light. Any other batch of an exterior or exterior-lit
+/// group (0x48) unlit with F_UNLIT and outside otherwise, 0x20 not read, and
+/// shadowed; of an interior group averaged with 0x20 and the interior light
+/// otherwise, F_UNLIT not read.
+/// 0x007ac6a0: unlit with F_UNLIT, outside otherwise, shadowed in an
+/// exterior or exterior-lit group.
+/// 0x007ac9f0: a transition batch's first pass averaged with 0x20, outside
+/// otherwise, and shadowed, its second unlit; an interior batch unlit; an
+/// exterior one averaged with 0x20, outside otherwise. F_UNLIT not read.
+inline BatchLights batchLights(const GroupDraw& g, BatchKind kind, uint32_t materialFlags) {
     const bool unlit = (materialFlags & 0x1u) != 0;
     const bool averaged = (materialFlags & 0x20u) != 0;
+    const bool outsideGroup = (g.groupFlags & kOutsideGroupFlags) != 0;
+    const BatchLight lit = averaged ? BatchLight::Averaged : BatchLight::Outside;
     BatchLights out;
-    if (transitionBatch) {
-        out.outsidePass = unlit ? BatchLight::Unlit : averaged ? BatchLight::Averaged : BatchLight::Outside;
-        out.insidePass = BatchLight::Interior;
-        return out;
-    }
-    if (groupFlags & kOutsideGroupFlags) {
+    if (g.unified) {
+        if (kind == BatchKind::Transition) {
+            out.outsidePass = unlit ? BatchLight::Unlit : lit;
+            out.outsideShadowed = true;
+            out.insidePass = BatchLight::Interior;
+            return out;
+        }
+        if (outsideGroup) {
+            out.insidePass = unlit ? BatchLight::Unlit : BatchLight::Outside;
+            out.insideShadowed = true;
+        } else {
+            out.insidePass = averaged ? BatchLight::Averaged : BatchLight::Interior;
+        }
+    } else if (!g.vertexColors) {
         out.insidePass = unlit ? BatchLight::Unlit : BatchLight::Outside;
+        out.insideShadowed = outsideGroup;
+    } else if (kind == BatchKind::Transition) {
+        out.outsidePass = lit;
+        out.outsideShadowed = true;
+        out.insidePass = BatchLight::Unlit;
+        return out;
     } else {
-        out.insidePass = averaged ? BatchLight::Averaged : BatchLight::Interior;
+        out.insidePass = kind == BatchKind::Interior ? BatchLight::Unlit : lit;
     }
     out.outsidePass = out.insidePass;
+    out.outsideShadowed = out.insideShadowed;
     return out;
+}
+
+/// The pixel program a WMO batch is drawn with: MOMT's shader as an index
+/// into the effect table (0x007afee0 loads MapObj{U}Diffuse, Specular, Metal,
+/// Env, Opaque, EnvMetal and, unified only, Composite), except that shader 0
+/// with blend mode 0 over a texture with an alpha channel is drawn as Opaque
+/// (0x007a9380, 0x007ac9f0: 0x004b54f0 asks the texture). Only Diffuse takes
+/// the texture's alpha into the output; the rest output the vertex alpha.
+enum class SurfaceProgram : uint8_t {
+    Diffuse = 0, Specular = 1, Metal = 2, Env = 3, Opaque = 4, EnvMetal = 5, Composite = 6,
+};
+inline SurfaceProgram surfaceProgram(uint32_t shader, uint32_t blendMode, bool textureHasAlpha) {
+    if (shader == 0 && blendMode == 0 && textureHasAlpha) return SurfaceProgram::Opaque;
+    return shader <= 6 ? static_cast<SurfaceProgram>(shader) : SurfaceProgram::Diffuse;
+}
+
+/// The alpha reference by Gx blend mode (0x00ad8b7c, set by 0x00873ee0): the
+/// pixel programs' alpha-test variants discard below it. Alpha key 224/255,
+/// the blended modes 1/255, opaque and the transition blends (7, 9) none.
+inline float alphaReference(uint32_t blendMode) {
+    if (blendMode == 1) return 224.0f / 255.0f;
+    if (blendMode >= 2 && blendMode <= 6) return 1.0f / 255.0f;
+    return 0.0f;
 }
 
 /// Light mode 2's colours (0x007ee750 keeps them at 0xd38cb0/cb4): a direct

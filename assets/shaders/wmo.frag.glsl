@@ -29,27 +29,33 @@ layout(set = 1, binding = 0) uniform sampler2D uTexture;
 layout(set = 1, binding = 1) uniform WMOMaterial {
     int hasTexture;
     int alphaTest;
-    int unlit;
-    int isInterior;
+    int outsideLight;  // a transition batch's first pass: 0x007a8b10's mode, 0 unlit 1 outside 2 averaged 3 interior
+    int insideLight;   // its second pass, or the only one
     float specularIntensity;
-    int transition;    // a transition batch: the outside and inside light blended by the vertex alpha
+    int transition;    // a transition batch: its two passes blended by the output alpha (blends 9 and 7)
     int enableNormalMap;
     int enablePOM;
     float pomScale;
     int pomMaxSamples;
     float heightMapVariance;
     float normalMapStrength;
-    int unfogged;     // a transition batch whose material has F_UNFOGGED: no fog
+    int fogs;          // per pass, bits 0-1 and 2-3: 0 none, 1 the zone's, 2 the group's inside fog
     float wmoAmbientR;
     float wmoAmbientG;
     float wmoAmbientB;
-    int unused64;      // unused; was a per-texture-name emissive mode
+    int unifiedPath;   // MOHD flag 0x2: the MapObjU* programs (0x007a9380)
     int hasVertexColors;  // 0 none, 1 MOCV as it is (MOHD 0x8), 2 as 0x007d7380 left it
-    int averagedLight;  // material flag 0x20: lit by light mode 2 (0x007a8b10)
-    int padding2;
+    int shadowed;      // bit 0 the first pass samples the sun's shadow map, bit 1 the second
+    int program;       // the pixel program: 0 Diffuse 1 Specular 2 Metal 3 Env 4 Opaque 5 EnvMetal 6 Composite
+    float alphaRef;    // the alpha test's reference by blend mode (0x00ad8b7c), 0 for none
+    int pad84;
+    int pad88;
+    int pad92;
 };
 
 layout(set = 1, binding = 2) uniform sampler2D uNormalHeightMap;
+// MOMT texture_2: what MapObjEnv and MapObjEnvMetal reflect.
+layout(set = 1, binding = 3) uniform sampler2D uEnvTexture;
 
 // The group's draw, after the vertex stage's model matrix: 1 when the group
 // is drawn in the camera's interior pass (0x007a9380's local_14).
@@ -66,6 +72,7 @@ layout(location = 2) in vec2 TexCoord;
 layout(location = 3) in vec4 VertColor;
 layout(location = 4) in vec3 Tangent;
 layout(location = 5) in vec3 Bitangent;
+layout(location = 6) in vec2 EnvCoord;
 
 layout(location = 0) out vec4 outColor;
 
@@ -180,6 +187,48 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     return color;
 }
 
+// One pass's vertex colour, as the MapObj vertex programs work it out from
+// the vertex colour `v` (attrib 4). The unlit variant passes it through. The
+// lit ones take the light L = clamp(ambient + clamp(N.L) x direct) of
+// 0x007a8b10's mode and either multiply the vertex colour by it
+// (MapObjDiffuse_T1 and the rest, 0x007ac6a0/0x007ac9f0) or add half of it
+// (MapObjUDiffuse_T1 and the rest, unified, 0x007a9380: c28 is 0x7f7f7f, from
+// 0x007a8940), clamped. Mode 3 is the MOHD ambient with no direct light.
+vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt) {
+    if (mode == 0) return v;
+    vec3 ambient = vec3(wmoAmbientR, wmoAmbientG, wmoAmbientB);
+    vec3 direct = vec3(0.0);
+    if (mode == 1) {
+        ambient = rtAmbient(rt, ambientColor.rgb);
+        direct = lightColor.rgb;
+    } else if (mode == 2) {
+        ambient = rtAmbient(rt, averagedAmbientColor.rgb);
+        direct = averagedDirectColor.rgb;
+    }
+    float ndl = clamp(dot(norm, normalize(-lightDir.xyz)), 0.0, 1.0);
+    vec3 light = clamp(ambient + ndl * direct, 0.0, 1.0);
+    return unifiedPath != 0 ? clamp(light * 0.5 + v, 0.0, 1.0) : clamp(v * light, 0.0, 1.0);
+}
+
+// The pixel program over a pass's colour `c` (the vertex colour doubled, as
+// every MapObj program has it): MapObjEnv adds the reflection by the
+// texture's alpha, MapObjEnvMetal by the texture times its alpha. Specular
+// and Metal draw as Opaque: their programs read no specular.
+vec3 surface(vec3 c, vec4 tex, vec3 env) {
+    vec3 rgb = 2.0 * c * tex.rgb;
+    if (program == 3) rgb += tex.a * env;
+    else if (program == 5) rgb += tex.rgb * tex.a * env;
+    return rgb;
+}
+
+// A pass's fog: `which` 0 none, 1 the zone's, 2 the group's inside fog - the
+// camera's in the camera's interior pass, the zone's otherwise (0x007a8440).
+vec3 fogPass(vec3 color, int which, float dist) {
+    if (which == 0) return color;
+    vec3 colour = (which == 2 && gp.interiorPass != 0) ? cameraFogColor.rgb : fogColor.rgb;
+    return applyFog(color, FragPos, dist, colour);
+}
+
 void main() {
     float lodFactor = computeLodFactor();
     // Gradients of the authored UV, taken here where every pixel of the quad
@@ -188,8 +237,9 @@ void main() {
     vec2 uvDx = dFdx(TexCoord);
     vec2 uvDy = dFdy(TexCoord);
 
+    // The vertex normal as it is, on either face: the vertex programs light
+    // by it and never know which side of a two-sided batch is showing.
     vec3 vertexNormal = normalize(Normal);
-    if (!gl_FrontFacing) vertexNormal = -vertexNormal;
 
     // Compute final UV (with POM if enabled)
     vec2 finalUV = TexCoord;
@@ -208,7 +258,6 @@ void main() {
     }
 
     vec4 texColor = hasTexture != 0 ? textureGrad(uTexture, finalUV, uvDx, uvDy) : vec4(1.0);
-    if (alphaTest != 0 && texColor.a < 0.5) discard;
 
     // Compute normal (with normal mapping if enabled)
     vec3 norm = vertexNormal;
@@ -216,20 +265,29 @@ void main() {
         vec3 mapNormal = textureGrad(uNormalHeightMap, finalUV, uvDx, uvDy).rgb * 2.0 - 1.0;
         mapNormal = normalize(mapNormal);
         vec3 worldNormal = normalize(TBN * mapNormal);
-        if (!gl_FrontFacing) worldNormal = -worldNormal;
         // Linear blend: strength controls how much normal map detail shows,
         // LOD fades out at distance. Both multiply for smooth falloff.
         float blend = clamp(normalMapStrength, 0.0, 1.0) * (1.0 - lodFactor);
         norm = normalize(mix(vertexNormal, worldNormal, blend));
     }
 
-    vec3 result;
+    // The vertex colour the programs read: the MOCV as loaded, or for a
+    // group without one 0x7f7f7f, black in a unified WMO, alpha 255
+    // (0x007c8560).
+    vec4 v = hasVertexColors != 0 ? VertColor
+           : vec4(vec3(unifiedPath != 0 ? 0.0 : 127.0 / 255.0), 1.0);
 
-    // Sample shadow map for all groups.  Interior groups receive attenuated
-    // shadow (30%) so they get subtle light/shadow variation without the full
-    // outdoor darkening that makes them look wrong.
+    // The output alpha: the vertex alpha, times the texture's for
+    // MapObjDiffuse alone. It is what the alpha test reads and what blends a
+    // transition batch's two passes.
+    float alpha = v.a * (program == 0 ? texColor.a : 1.0);
+    if (transition == 0 && alphaRef > 0.0 && alpha < alphaRef) discard;
+
+    // The sun's shadow map, where the pass samples it: the shadow variants of
+    // the pixel programs scale the colour by 0.7 + 0.3 x the light let
+    // through. A pass that does not binds a blank map (0x008745d0(1)).
     float shadow = 1.0;
-    if (shadowParams.x > 0.5) {
+    if (shadowParams.x > 0.5 && shadowed != 0) {
         vec3 ldir = normalize(-lightDir.xyz);
         float normalOffset = shadowTexel() * 2.0 * (1.0 - abs(dot(norm, ldir)));
         vec3 biasedPos = FragPos + norm * normalOffset;
@@ -246,80 +304,28 @@ void main() {
     }
     RtLight rt = rtLightAt(FragPos);
     shadow = rtShadow(rt, shadow);
+    const float shadowScale = 0.7 + 0.3 * shadow;
 
-    // Windows, lamp glass and clock faces are lit like any other surface:
-    // the client draws a batch by its material's blend mode and flags.
-    //
-    // The vertex colour on the scale of the MOCV: 0x007d7380 halved it when
-    // the group was loaded (and brightened it by its alpha, off the
-    // transition batches), so twice what it left.
-    vec3 mocv = VertColor.rgb * (hasVertexColors == 2 ? 2.0 : 1.0);
-
-    // WMO interior: vertex colors (MOCV) are pre-baked lighting from the
-    // artist, floored by the root's MOHD ambient. No sun and no sun
-    // shadow: the client lights an interior pass with the MOHD ambient
-    // and a black direct light (Wow.exe 3.3.5a 0x007a8b10, mode 3). The
-    // 0.15 floor and the shadow clamp that were here are not the
-    // client's. How the two colours combine is in the MapObj shaders in
-    // the MPQs, not in Wow.exe; the max() is WoWee's reading.
-    vec3 wmoAmbient = vec3(wmoAmbientR, wmoAmbientG, wmoAmbientB);
-    vec3 inside = texColor.rgb * max(mocv, wmoAmbient);
-
-    // Light mode 1, or 2 for material flag 0x20 - the zone's direct and
-    // ambient light averaged - which an interior group's batch takes in
-    // place of the interior light, F_UNLIT not read (0x007a9380).
-    vec3 directLight = averagedLight != 0 ? averagedDirectColor.rgb : lightColor.rgb;
-    vec3 ambientLight = averagedLight != 0 ? averagedAmbientColor.rgb : ambientColor.rgb;
-    vec3 outside;
-    if (unlit != 0 && averagedLight == 0) {
-        // Outdoor unlit surface - still receives directional shadows
-        outside = texColor.rgb * shadow;
-    } else {
-        vec3 ldir = normalize(-lightDir.xyz);
-        float diff = max(dot(norm, ldir), 0.0);
-
-        // No specular: MapObjSpecular is used only with the client's
-        // 'specular' option, which is off by default.
-        outside = rtAmbient(rt, ambientLight) * texColor.rgb
-                + shadow * diff * directLight * texColor.rgb;
-
-        // An exterior group's vertex colour is light baked into it - a lamp's
-        // pool on a wall - and it adds to the sun, as it does in the client.
-        // It was multiplied in as if it were baked shadow, floored at a
-        // quarter: Stormwind has two exterior groups with vertex colours at
-        // all, both near black, and they drew at a quarter of the light the
-        // rest of the city had, shadows on or off - and so did 278 of the 362
-        // exterior groups in the game that carry any. A group without them has
-        // white filled in by the loader, which must add nothing.
-        //
-        // At half: a handful of Icecrown exteriors ship them pure white, and
-        // added at full those would double in brightness.
-        if (hasVertexColors != 0) outside += texColor.rgb * mocv * 0.5;
-    }
-
+    const vec3 env = (program == 3 || program == 5) ? texture(uEnvTexture, EnvCoord).rgb : vec3(0.0);
     // The fog's distance is the view depth: every vertex program takes it
     // from the model-view matrix's z row (c33) into ((end - z) / (end - start))^exp
     // (c30, 0x00873210), not the distance to the eye.
     float dist = -(view * vec4(FragPos, 1.0)).z;
-    // The camera's fog colour for an interior group in the camera's interior
-    // pass, the zone's for the rest (0x007a9380 by way of 0x007a8440).
-    vec3 insideFog = gp.interiorPass != 0 ? cameraFogColor.rgb : fogColor.rgb;
+
+    vec3 inside = passColour(insideLight, v.rgb, norm, rt);
+    if ((shadowed & 2) != 0) inside *= shadowScale;
+    inside = fogPass(surface(inside, texColor, env), (fogs >> 2) & 3, dist);
+
+    vec3 result = inside;
     if (transition != 0) {
-        // A transition batch, drawn twice by the client (0x007a9380): by the
-        // outside light in the zone's fog, colour times alpha (blend 9), then
-        // by the interior light in the group's fog, colour times one minus
-        // alpha, added (blend 7). The alpha is the vertex colour's, which
-        // 0x007d7380 kept on those vertices. F_UNFOGGED takes the fog off both.
-        if (unfogged == 0) {
-            outside = applyFog(outside, FragPos, dist, fogColor.rgb);
-            inside = applyFog(inside, FragPos, dist, insideFog);
-        }
-        result = outside * VertColor.a + inside * (1.0 - VertColor.a);
-    } else if (isInterior != 0) {
-        result = applyFog(averagedLight != 0 ? outside : inside, FragPos, dist, insideFog);
-    } else {
-        result = applyFog(outside, FragPos, dist, fogColor.rgb);
+        // A transition batch, drawn twice (0x007a9380, 0x007ac9f0): the
+        // first pass times the output alpha (blend 9), then the second times
+        // one minus it, added (blend 7).
+        vec3 outside = passColour(outsideLight, v.rgb, norm, rt);
+        if ((shadowed & 1) != 0) outside *= shadowScale;
+        outside = fogPass(surface(outside, texColor, env), fogs & 3, dist);
+        result = outside * alpha + inside * (1.0 - alpha);
     }
 
-    outColor = vec4(result, texColor.a);
+    outColor = vec4(result, alpha);
 }

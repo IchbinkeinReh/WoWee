@@ -164,6 +164,9 @@ struct WMOGroup {
     /// MOGP's first batch count: the transition batches, which come first
     /// in MOBA. The client keeps their vertex colours' alpha (0x007d7380).
     uint16_t transBatchCount = 0;
+    /// The second: the interior batches, which follow them. 0x007ac9f0 draws
+    /// these unlit in a group with vertex colours.
+    uint16_t intBatchCount = 0;
     uint32_t fogIndices[4];     // Fog references
     uint32_t liquidType;
     uint32_t groupId;

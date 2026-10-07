@@ -146,6 +146,8 @@ ChunkMesh TerrainMeshGenerator::generateChunkMesh(const MapChunk& chunk, int chu
         mesh.layers.push_back(layerInfo);
     }
 
+    mesh.weightedLayers = chunk.bigAlpha == 1;
+
     // The baked shadow, as a texture's bytes: how lit each texel is.
     if (chunk.shadowMap.size() == 64 * 64) {
         mesh.shadowMap.resize(64 * 64);

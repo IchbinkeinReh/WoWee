@@ -53,6 +53,7 @@ struct TerrainChunkGPU {
     VkTexture* shadowTexture = nullptr;  // MCSH, 255 lit; the opaque 1x1 for none
     int layerCount = 0;
     uint32_t layerFlags[4] = {0, 0, 0, 0};  // MCLY flags: 0x40 scrolls, 0x80 unlit
+    bool weightedLayers = false;            // ChunkMesh::weightedLayers
 
     // World position for culling
     float worldX = 0.0f;

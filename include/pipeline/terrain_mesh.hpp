@@ -99,6 +99,11 @@ struct ChunkMesh {
     /// MCSH, 64x64, one byte a texel: 0 shadowed, 255 lit. Empty for none.
     std::vector<uint8_t> shadowMap;
 
+    /// The map's MPHD flag 0x4 (0x00cf08d0): Terrain1's weighted variants
+    /// (0x0079e5c0 picks them) lay the layers over the base by their summed
+    /// alpha instead of one over another.
+    bool weightedLayers = false;
+
     [[nodiscard]] bool isValid() const { return !vertices.empty() && !indices.empty(); }
     [[nodiscard]] size_t getVertexCount() const { return vertices.size(); }
     [[nodiscard]] size_t getTriangleCount() const { return indices.size() / 3; }

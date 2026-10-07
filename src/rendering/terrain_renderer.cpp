@@ -31,6 +31,8 @@ struct TerrainParamsUBO {
     int32_t hasLayer2;
     int32_t hasLayer3;
     int32_t layerFlags[4];  // ivec4: MCLY flags of layers 0..3
+    int32_t weightedLayers; // MPHD 0x4: Terrain1's weighted variants
+    int32_t pad[3];
 };
 
 TerrainRenderer::TerrainRenderer() = default;
@@ -513,6 +515,7 @@ void TerrainRenderer::bindChunkTextures(TerrainChunkGPU& gpuChunk,
     }
 
     for (size_t i = 0; i < chunk.layers.size() && i < 4; ++i) gpuChunk.layerFlags[i] = chunk.layers[i].flags;
+    gpuChunk.weightedLayers = chunk.weightedLayers;
 
     uint32_t baseTexId = chunk.layers[0].textureId;
     if (baseTexId < texturePaths.size()) {
@@ -560,6 +563,7 @@ bool TerrainRenderer::createChunkParamsUBO(TerrainChunkGPU& gpuChunk) {
     params.hasLayer2 = gpuChunk.layerCount >= 2 ? 1 : 0;
     params.hasLayer3 = gpuChunk.layerCount >= 3 ? 1 : 0;
     for (int i = 0; i < 4; ++i) params.layerFlags[i] = static_cast<int32_t>(gpuChunk.layerFlags[i]);
+    params.weightedLayers = gpuChunk.weightedLayers ? 1 : 0;
 
     VkBufferCreateInfo bufCI{};
     bufCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;

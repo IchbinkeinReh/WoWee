@@ -249,6 +249,7 @@ BLPImage BLPLoader::loadBLP1(std::span<const uint8_t> data) {
 
     BLPImage image;
     image.format = BLPFormat::BLP1;
+    image.alphaDepth = static_cast<uint8_t>(header.alphaBits);
     image.width = header.width;
     image.height = header.height;
     image.channels = 4;
@@ -307,6 +308,7 @@ BLPImage BLPLoader::loadBLP2(std::span<const uint8_t> data, bool keepCompressed)
 
     BLPImage image;
     image.format = BLPFormat::BLP2;
+    image.alphaDepth = header.alphaDepth;
     image.width = header.width;
     image.height = header.height;
     image.channels = 4;
