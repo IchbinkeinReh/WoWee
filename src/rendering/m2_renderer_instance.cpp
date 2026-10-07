@@ -1653,8 +1653,7 @@ void M2Renderer::recreatePipelines() {
     destroy(device, particleNoAlphaAddPipeline_);
     destroy(device, particleModPipeline_);
     destroy(device, particleMod2xPipeline_);
-    destroy(device, ribbonPipeline_);
-    destroy(device, ribbonAdditivePipeline_);
+    destroyRibbonPipelines();
 
     // The same pipelines initialize() builds, built by the same
     // function. The layouts are untouched above, so it makes none.

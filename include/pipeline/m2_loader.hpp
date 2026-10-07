@@ -214,12 +214,23 @@ struct M2RibbonEmitter {
     M2AnimationTrack heightAboveTrack; // Half-width above bone
     M2AnimationTrack heightBelowTrack; // Half-width below bone
     M2AnimationTrack visibilityTrack;  // 0=hidden, 1=visible
+    M2AnimationTrack texSlotTrack;     // +0x84, uint16: the cell of the texture grid
 
     float edgesPerSecond = 15.0f;   // How many edge points are generated per second
     float edgeLifetime   = 0.5f;    // Seconds before edges expire
     float gravity        = 0.0f;    // Downward pull on edges per s²
     uint16_t textureRows = 1;
     uint16_t textureCols = 1;
+    /// Every texture and material pair, in the file's order: the client
+    /// draws the strip once with each (0x00832ea0, 0x00980b70). The texture
+    /// is a direct index into the model's textures; flags and blend are the
+    /// M2 material's.
+    struct Material {
+        uint16_t textureIndex = 0;
+        uint16_t flags = 0;
+        uint16_t blendMode = 0;
+    };
+    std::vector<Material> materials;
 };
 
 // Complete M2 model structure

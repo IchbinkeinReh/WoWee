@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/collision_geometry.hpp"
+#include "rendering/client_ribbon.hpp"
 #include "rendering/spatial_grid.hpp"
 #include "rendering/shadow_params.hpp"
 
@@ -186,8 +187,13 @@ struct M2ModelGPU {
 
     // Ribbon emitter data (kept from M2Model)
     std::vector<pipeline::M2RibbonEmitter> ribbonEmitters;
-    std::vector<VkTexture*> ribbonTextures;       // Resolved texture per ribbon emitter
-    std::vector<VkDescriptorSet> ribbonTexSets;   // Descriptor sets per ribbon emitter
+    /// Every emitter's texture and material pairs one after another, the
+    /// textures and their sets alike; emitter i's run from
+    /// ribbonMaterialStart[i] to ribbonMaterialStart[i + 1].
+    std::vector<VkTexture*> ribbonTextures;
+    std::vector<VkDescriptorSet> ribbonTexSets;
+    std::vector<client_ribbon::MaterialState> ribbonMaterials;
+    std::vector<uint32_t> ribbonMaterialStart;
 
     // Texture transform data for UV animation
     std::vector<pipeline::M2TextureTransform> textureTransforms;
@@ -315,6 +321,8 @@ struct M2Instance {
     // One deque of edges per ribbon emitter on this instance
     std::vector<std::deque<RibbonEdge>> ribbonEdges;
     std::vector<float> ribbonEdgeAccumulators; // fractional edge counter per emitter
+    /// The client's ribbon emitters, one per model emitter (0x00828a00).
+    std::vector<client_ribbon::Emitter> clientRibbons;
 
     // Cached model flags (set at creation to avoid per-frame hash lookups)
     bool cachedHasAnimation = false;
@@ -531,6 +539,8 @@ public:
      * Render M2 ribbon emitters (spell trails / wing effects)
      */
     void renderM2Ribbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
+    /// The client's ribbons, each emitter's strip oldest edge first (0x00980b70).
+    void renderClientRibbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
 
     void setInstancePosition(uint32_t instanceId, const glm::vec3& position);
     /// WOWEE_M2_CENSUS: what a model is actually drawn at, said once each.
@@ -910,9 +920,22 @@ private:
     VkPipeline particleMod2xPipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout particlePipelineLayout_ = VK_NULL_HANDLE;
 
-    // Ribbon pipelines (additive + alpha-blend)
-    VkPipeline ribbonPipeline_ = VK_NULL_HANDLE;          // Alpha-blend ribbons
-    VkPipeline ribbonAdditivePipeline_ = VK_NULL_HANDLE;  // Additive ribbons
+    /// The ribbon pipelines: one per M2 blend (0-6) and per combination of
+    /// the material's cull, depth-test and depth-write bits (0x00980b70).
+    static constexpr uint32_t kRibbonBlends = 7;
+    std::array<VkPipeline, kRibbonBlends * kPipelineVariantCount> ribbonPipelines_{};
+    [[nodiscard]] VkPipeline ribbonPipelineFor(const client_ribbon::MaterialState& m) const {
+        uint32_t v = 0;
+        if (m.cull) v |= kVariantCull;
+        if (!m.depthTest) v |= kVariantNoDepthTest;
+        if (!m.depthWrite) v |= kVariantNoDepthWrite;
+        return ribbonPipelines_[std::min<uint32_t>(m.blend, kRibbonBlends - 1) * kPipelineVariantCount + v];
+    }
+    void destroyRibbonPipelines();
+    // Two of the above, for the old ribbon path in m2_renderer_particles.cpp
+    // (no longer called): alpha and add, culled, tested, not written.
+    VkPipeline ribbonPipeline_ = VK_NULL_HANDLE;
+    VkPipeline ribbonAdditivePipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout ribbonPipelineLayout_ = VK_NULL_HANDLE;
     /// The per-frame set layout initialize() was given. recreatePipelines()
     /// runs long after that call and needs the same one.
@@ -1209,6 +1232,9 @@ private:
         VkPipeline      pipeline;
         uint32_t        firstVertex;
         uint32_t        vertexCount;
+        float           alphaRef = 0.0f;
+        int32_t         lit = 0;
+        int32_t         fogged = 0;
     };
     std::vector<RibbonDrawCall> ribbonDraws_;
 
@@ -1351,6 +1377,9 @@ private:
     void emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt);
     void updateParticles(M2Instance& inst, float dt);
     void updateRibbons(M2Instance& inst, const M2ModelGPU& gpu, float dt);
+    /// The client's ribbons on an instance, as 0x00828a00 drives them each
+    /// frame: the tracks, the bone's matrix, the update.
+    void updateClientRibbons(M2Instance& inst, const M2ModelGPU& gpu, float dt);
 
     // Helper to allocate descriptor sets
     VkDescriptorSet allocateMaterialSet();

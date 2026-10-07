@@ -3,6 +3,7 @@
 // M2 ribbon emitter vertex shader.
 // Ribbon geometry is generated CPU-side as a triangle strip.
 // Vertex format: pos(3) + color(3) + alpha(1) + uv(2) = 9 floats.
+// The material's state per draw (0x00980b70).
 
 layout(set = 0, binding = 0) uniform PerFrame {
     mat4 view;
@@ -21,6 +22,12 @@ layout(set = 0, binding = 0) uniform PerFrame {
 };
 
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
+
+layout(push_constant) uniform RibbonMaterial {
+    float alphaRef;
+    int lit;
+    int fogged;
+} mat;
 
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aColor;
@@ -50,14 +57,18 @@ void main() {
     vec4 viewPos4  = view * worldPos;
     gl_Position    = projection * viewPos4;
 
-    float dist      = length(viewPos4.xyz);
+    // The view depth, as the Color_T1 program takes it (c33 into c30).
+    float dist      = -viewPos4.z;
     float fogStart  = fogParams.x;
     float fogEnd    = fogParams.y;
     vFogFactor      = pow(clamp((fogEnd - dist) / max(fogEnd - fogStart, 0.001), 0.0, 1.0),
                           max(fogColor.w, 1.0));
     if (volumetricParams.x > 0.5) vFogFactor *= fogVolumeAt(aPos).a;
 
-    vColor = aColor;
+    // A lit material (0x008731c0) has the light on a strip with no normal,
+    // so only the ambient reaches it, times the vertex colour; an unlit one
+    // takes its colour as it is.
+    vColor = mat.lit != 0 ? aColor * clamp(ambientColor.rgb, 0.0, 1.0) : aColor;
     vAlpha = aAlpha;
     vUV    = aUV;
 }
