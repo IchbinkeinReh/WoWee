@@ -143,7 +143,7 @@ void Clouds::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const SkyP
     // its direction meets the dome, at 64 texels' height (flatter in
     // weather) and glowing less in it.
     const float dayFraction = params.timeOfDay / 24.0f;
-    const float storm = daynight::stormBlend(params.weatherIntensity);
+    const float storm = daynight::stormBlend(params.weatherLight);
     glm::vec3 lightDir = daynight::cloudsLitBySun(dayFraction) ? params.sunDir : params.moonDir;
     const float lenSq = glm::dot(lightDir, lightDir);
     lightDir = lenSq > 1e-8f ? lightDir * glm::inversesqrt(lenSq) : glm::vec3(0.0f, 0.0f, 1.0f);

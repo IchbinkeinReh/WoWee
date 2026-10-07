@@ -418,6 +418,8 @@ private:
     uint32_t farClipMapId_ = 0;
     /// The last SMSG_WEATHER handed to the weather (GameHandler::getWeatherSerial).
     uint32_t weatherSerialSeen_ = 0;
+    /// Weather::lightValue as this frame's lighting took it.
+    float weatherLight_ = 0.0f;
     void applyFarClip(uint32_t mapId);
     bool sharpStars_ = false;
     float diagTerrainFurthest_ = -1.0f;

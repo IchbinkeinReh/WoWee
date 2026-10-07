@@ -71,6 +71,10 @@ public:
     [[nodiscard]] Type getWeatherType() const;
     /// The intensity as it stands, eased toward the server's.
     [[nodiscard]] float getIntensity() const { return current_; }
+    /// What the weather hands the day's light now: the eased intensity, held
+    /// to 0.25, times the row's Weather.dbc +0xc (0x00784850). The storm
+    /// light sets blend in by min(1, 4 x this) (0x007f3920).
+    [[nodiscard]] float lightValue() const { return light_.value(now_); }
     [[nodiscard]] bool isEnabled() const { return active_ != client_weather::Effect::None; }
     [[nodiscard]] int getParticleCount() const;
 
@@ -135,6 +139,7 @@ private:
     std::string texture_;
     float target_ = 0.0f, from_ = 0.0f, current_ = 0.0f;
     double easeStart_ = 0.0;
+    client_weather::WeatherLight light_;
     int densityLevel_ = client_weather::kDefaultDensityLevel;
     bool haveWeather_ = false;
     uint32_t weatherId_ = 0;
