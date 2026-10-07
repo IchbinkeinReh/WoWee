@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <optional>
+
 // Where a helmet's model and texture live, given its ItemDisplayInfo id.
 //
 // Head gear is race and gender specific - Helm_Plate_B_01_HuM.m2 is the human
@@ -75,16 +78,13 @@ HelmVisual resolveHelmVisual(pipeline::AssetManager& assets,
                              uint8_t raceId,
                              uint8_t genderId);
 
-/// Whether this head item covers the hair.
-///
-/// Not every head slot item does: a circlet, tiara or crown sits over the hair
-/// and leaves it showing, and the data says which is which. ItemDisplayInfo
-/// points at a HelmetGeosetVisData row per gender, and that row carries the
-/// masks of what to hide - the row circlets and crowns use is all zeroes, while
-/// a plate helm's is not. An id of 0 likewise hides nothing.
-bool helmHidesHair(pipeline::AssetManager& assets,
-                   uint32_t itemDisplayInfoId,
-                   uint8_t genderId);
+/// A head item's HelmetGeosetVisData masks, the row's columns 1 to 7
+/// (0x004ef0d0); none when the item names no row. See
+/// core::applyHelmetGeosetVis.
+std::optional<std::array<uint32_t, 7>> helmetGeosetVisMasks(pipeline::AssetManager& assets,
+                                                            uint32_t itemDisplayInfoId,
+                                                            uint8_t genderId);
+
 
 } // namespace core
 } // namespace wowee

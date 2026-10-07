@@ -5363,23 +5363,14 @@ void Application::spawnPlayerCharacter() {
 	        renderer->getCharacterPosition() = spawnPos;
 	        renderer->setCharacterFollow(instanceId);
 
-	        // Build default geosets for the active character via AppearanceComposer
-	        uint8_t hairStyleId = 0;
-	        uint8_t facialId = 0;
-	        uint8_t raceId = 0;
-	        uint8_t sexId = 0;
-	        if (gameHandler) {
+	        // The character component's geosets before the equipment is known.
+	        if (appearanceComposer_ && gameHandler) {
 	            if (const game::Character* ch = gameHandler->getActiveCharacter()) {
-	                hairStyleId = static_cast<uint8_t>((ch->appearanceBytes >> 16) & 0xFF);
-	                facialId = ch->facialFeatures;
-	                raceId = static_cast<uint8_t>(ch->race);
-	                sexId = static_cast<uint8_t>(ch->gender);
+	                charRenderer->setActiveGeosets(
+	                    instanceId, appearanceComposer_->playerGeosets(appearanceComposer_->playerLook(*ch),
+	                                                                   instanceId));
 	            }
 	        }
-	        auto activeGeosets = appearanceComposer_
-	            ? appearanceComposer_->buildDefaultPlayerGeosets(raceId, sexId, hairStyleId, facialId)
-	            : std::unordered_set<uint16_t>{};
-	        charRenderer->setActiveGeosets(instanceId, activeGeosets);
 	        // The player's type 8 slot is filled from CharSections by
 	        // resolvePlayerTextures above, so the head-detail batch has art to
 	        // draw and is worth drawing. Nothing else is set up for it.

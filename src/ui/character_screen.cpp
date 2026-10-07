@@ -427,6 +427,7 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
                 uint8_t hairStyle = (character.appearanceBytes >> 16) & 0xFF;
                 uint8_t hairColor = (character.appearanceBytes >> 24) & 0xFF;
 
+                preview_->setCharacterClass(static_cast<uint8_t>(character.characterClass));
                 if (preview_->loadCharacter(character.race, character.gender,
                                             skin, face, hairStyle, hairColor,
                                             character.facialFeatures, character.useFemaleModel)) {

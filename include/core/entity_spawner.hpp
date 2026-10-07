@@ -4,6 +4,7 @@
 #include "game/game_services.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "rendering/blob_shadow.hpp"
+#include "core/character_geosets.hpp"
 #include <memory>
 #include <string>
 #include <utility>
@@ -296,10 +297,10 @@ public:
 
     std::string lookupCharSection(uint8_t race, uint8_t sex, uint8_t section,
                                   uint8_t variation, uint8_t color, int texIndex = 0) const;
-    const std::unordered_map<uint32_t, uint16_t>& getHairGeosetMap() const { return hairGeosetMap_; }
+    /// CharHairGeosets and CharacterFacialHairStyles, as the character
+    /// component reads them (core::characterGeosetDefaults).
+    const core::AppearanceGeosetTables& getAppearanceGeosetTables() const { return appearanceTables_; }
 
-    struct FacialHairGeosets { uint16_t geoset100 = 0; uint16_t geoset300 = 0; uint16_t geoset200 = 0; };
-    const std::unordered_map<uint32_t, FacialHairGeosets>& getFacialHairGeosetMap() const { return facialHairGeosetMap_; }
 
     // Creature M2 sync loader (used by spawnPlayerCharacter in Application)
 
@@ -407,10 +408,13 @@ private:
         int32_t maxScaleLevel = 0;
     };
     std::unordered_map<uint32_t, FamilyScale> familyScale_;      // familyId → scale range
-    // CharHairGeosets.dbc: key = (raceId<<16)|(sexId<<8)|variationId → geosetId (skinSectionId)
-    std::unordered_map<uint32_t, uint16_t> hairGeosetMap_;
-    // CharFacialHairStyles.dbc: key = (raceId<<16)|(sexId<<8)|variationId → {geoset100, geoset300, geoset200}
-    std::unordered_map<uint32_t, FacialHairGeosets> facialHairGeosetMap_;
+    core::AppearanceGeosetTables appearanceTables_;
+    /// A player's character component before its equipment: race, sex,
+    /// class, skin, face and the hair and facial rows (PLAYER_BYTES).
+    core::CharacterLook playerLook(uint64_t guid, uint8_t raceId, uint8_t genderId,
+                                   uint32_t appearanceBytes, uint8_t facialFeatures) const;
+    /// The geoset ids of a loaded model's batches.
+    std::vector<uint16_t> modelSubmeshIds(uint32_t modelId) const;
     bool creatureLookupsBuilt_ = false;
     bool tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId);
 

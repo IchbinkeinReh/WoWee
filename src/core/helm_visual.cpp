@@ -99,31 +99,26 @@ VisColumns findVisColumns(pipeline::DBCFile& displayInfo, pipeline::DBCFile& vis
 
 } // namespace
 
-bool helmHidesHair(pipeline::AssetManager& assets,
-                   uint32_t itemDisplayInfoId,
-                   uint8_t genderId) {
-    if (itemDisplayInfoId == 0) return false;
-
+std::optional<std::array<uint32_t, 7>> helmetGeosetVisMasks(pipeline::AssetManager& assets,
+                                                            uint32_t itemDisplayInfoId,
+                                                            uint8_t genderId) {
+    if (itemDisplayInfoId == 0) return std::nullopt;
     auto displayInfo = assets.loadDBC("ItemDisplayInfo.dbc");
     auto visData = assets.loadDBC("HelmetGeosetVisData.dbc");
-    if (!displayInfo || !visData) return true;  // no data: keep the old behaviour
-
+    if (!displayInfo || !visData || visData->getFieldCount() < 8) return std::nullopt;
     static VisColumns columns = findVisColumns(*displayInfo, *visData);
     const uint32_t column = (genderId == 0) ? columns.male : columns.female;
-    if (column == 0xFFFFFFFFu) return true;
-
+    if (column == 0xFFFFFFFFu) return std::nullopt;
     const int32_t row = displayInfo->findRecordById(itemDisplayInfoId);
-    if (row < 0) return true;
+    if (row < 0) return std::nullopt;
     const uint32_t visId = displayInfo->getUInt32(static_cast<uint32_t>(row), column);
-    if (visId == 0) return false;  // hides nothing
-
+    if (visId == 0) return std::nullopt;
     const int32_t visRow = visData->findRecordById(visId);
-    if (visRow < 0) return false;
-    // Every mask zero is the row circlets, tiaras and crowns point at.
-    for (uint32_t f = 1; f < visData->getFieldCount(); ++f) {
-        if (visData->getUInt32(static_cast<uint32_t>(visRow), f) != 0) return true;
-    }
-    return false;
+    if (visRow < 0) return std::nullopt;
+    // +4 to +0x1c (0x004ef0d0): the hair, facial 1-3, the ears, groups 16, 17.
+    std::array<uint32_t, 7> masks{};
+    for (uint32_t i = 0; i < 7; ++i) masks[i] = visData->getUInt32(static_cast<uint32_t>(visRow), i + 1);
+    return masks;
 }
 
 } // namespace core

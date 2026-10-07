@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/geoset_rules.hpp"
+#include "core/character_geosets.hpp"
 #include "game/character.hpp"
 #include "game/inventory.hpp"
 #include "rendering/animation/weapon_type.hpp"
@@ -57,9 +58,13 @@ public:
     // Call AFTER charRenderer->loadModel(). Saves skin state for re-compositing.
     void compositePlayerSkin(uint32_t modelSlotId, const PlayerTextureInfo& texInfo);
 
-    // Build default active geosets for player character
-    std::unordered_set<uint16_t> buildDefaultPlayerGeosets(uint8_t raceId, uint8_t sexId,
-                                                           uint8_t hairStyleId, uint8_t facialId);
+    /// The active character's character component before its equipment:
+    /// race, sex, class, skin, face and its hair and facial rows.
+    core::CharacterLook playerLook(const game::Character& ch) const;
+    /// What an instance of the player's model draws for that look, worn
+    /// items included (core::characterGeosets, 0x004ed900).
+    std::unordered_set<uint16_t> playerGeosets(const core::CharacterLook& look,
+                                               uint32_t instanceId) const;
 
     // Equipment weapon loading (reads inventory, attaches weapon M2 models)
     void loadEquippedWeapons();

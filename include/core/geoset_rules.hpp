@@ -1,231 +1,239 @@
 #pragma once
 
 /**
- * geoset_rules.hpp - how a character geoset id is chosen when a model does not
- * have the one that was asked for.
+ * geoset_rules.hpp - which of a character model's geosets are drawn.
  *
- * A geoset id is a group and a variant: group * 100 + variant. The members of a
- * group are alternatives for one part of a character - five kinds of boot, six
- * kinds of cloak - so when a model does not carry the exact variant asked for,
- * another member of the same group is usually the right answer.
- *
- * Usually. Variant 1 means NONE - bare feet, no cloak, no beard - and so does
- * variant 0 where a DBC stores the variant directly and uses zero for absent.
- * Every other member of the group is *something*, so substituting for none does
- * not approximate it, it contradicts it. That single mistake produced three
- * separate faults: a clean-shaven NPC with a beard, a character with no cloak
- * wearing an untextured one, and a player with no feet.
- *
- * It produced them three times because this rule was written five times, as a
- * local lambda in each place that needed it, and only some of them learned it.
- * It lives here now, with a test, and the call sites ask rather than decide.
+ * A geoset id is a group and a variant: group * 100 + variant. The client
+ * decides them in its character component (CCharacterComponent): one default
+ * per group from the customisation and the helmet, and then what the worn
+ * items' ItemDisplayInfo GeosetGroup columns add and take away (0x004ed900).
+ * Every character path here - the player, other players, dressed NPCs and the
+ * preview - asks the same function, so they cannot disagree about a body part.
  */
 
+#include <array>
 #include <cstdint>
 #include <unordered_set>
+#include <vector>
 
 namespace wowee {
 namespace core {
 
-// Default (bare) geoset IDs per equipment group.
-// Each group's base is groupNumber * 100; variant 01 is typically bare/default.
-constexpr uint16_t kGeosetDefaultConnector = 101;   // Group  1: default hair connector
-constexpr uint16_t kGeosetBareForearms     = 401;   // Group  4: no gloves
-constexpr uint16_t kGeosetBareShins        = 501;   // Group  5: no boots
-constexpr uint16_t kGeosetDefaultEars      = 702;   // Group  7: ears
-constexpr uint16_t kGeosetBareSleeves      = 801;   // Group  8: no chest armor sleeves
-constexpr uint16_t kGeosetDefaultKneepads  = 902;   // Group  9: kneepads
-constexpr uint16_t kGeosetDefaultTabard    = 1201;  // Group 12: tabard base
-constexpr uint16_t kGeosetBarePants        = 1301;  // Group 13: no leggings
-constexpr uint16_t kGeosetNoCape           = 1501;  // Group 15: no cape
-constexpr uint16_t kGeosetWithCape         = 1502;  // Group 15: with cape
-constexpr uint16_t kGeosetBareFeet         = 2002;  // Group 20: bare feet
-/// The other half of group 20. Models that split the feet out of the body do
-/// not agree on which number to use - an HD human male carries 2002 and an HD
-/// human female carries 2001 - so both are asked for and the model draws the
-/// one it has. Stock models carry neither and are unaffected.
-constexpr uint16_t kGeosetBareFeetAlt      = 2001;
-
-/// Group 17: the eye-glow overlay - the mesh that makes a night elf's eyes
-/// shine rather than sit there pale.
-///
-/// Off for everyone else, which is why the renderer strips group 17 from any
-/// model drawn without a geoset filter: an NPC given the whole model drew
-/// glowing eyes whatever it was.
-constexpr uint16_t kGeosetEyeGlow          = 1701;
-
-
-/// The body part a geoset id belongs to: 501 and 505 are both group 5, boots.
-constexpr uint16_t geosetGroup(uint16_t id) { return static_cast<uint16_t>(id / 100); }
-
-/// Which alternative within the group: 505 is variant 5.
-constexpr uint16_t geosetVariant(uint16_t id) { return static_cast<uint16_t>(id % 100); }
-
-/// Whether this id is the group's way of saying the character has none of it.
-///
-/// Both spellings appear. The geoset tables use variant 1 - 501 is bare feet,
-/// 1501 is no cloak, 101 is no beard. The DBCs that store a variant directly,
-/// CharFacialHairStyles among them, use 0 for absent, and 0 arrives here as
-/// group*100 + 0.
-constexpr bool geosetMeansNone(uint16_t id) {
-    const uint16_t variant = geosetVariant(id);
-    return variant == 0 || variant == 1;
-}
-
-/// The geoset a model should actually draw for `preferred`.
-///
-/// Returns `preferred` when the model has it; the group's lowest member when it
-/// does not and a substitute is meaningful; and 0 - draw nothing - when what was
-/// asked for was none and the model has no way to say so. A caller that gets 0
-/// adds nothing for that group.
-///
-/// `available` is what the model carries. An empty set means "unknown", and then
-/// `preferred` is returned unchanged rather than guessed at.
-inline uint16_t resolveGeoset(uint16_t preferred,
-                              const std::unordered_set<uint16_t>& available) {
-    if (available.empty()) return preferred;
-    if (available.count(preferred) > 0) return preferred;
-    if (geosetMeansNone(preferred)) return 0;
-
-    const uint16_t group = geosetGroup(preferred);
-    uint16_t lowest = 0;
-    for (uint16_t id : available) {
-        if (geosetGroup(id) != group) continue;
-        if (lowest == 0 || id < lowest) lowest = id;
-    }
-    return lowest;
-}
-
-/// Add a character's facial-hair geosets - beard, moustache, sideburns - to a set.
-///
-/// CharFacialHairStyles stores a variant per group and uses 0 for "this
-/// character has none of that". Zero must not be turned into an id: group*100+0
-/// is a geoset no model carries, and a caller that then substitutes within the
-/// group hands a beard to someone who asked for none. That happened, on NPCs.
-///
-/// A caller that inserts raw ids was only accidentally safe - the invalid id
-/// matched nothing - so both spellings of the mistake are removed by asking here
-/// instead.
-inline void addFacialHairGeosets(std::unordered_set<uint16_t>& out,
-                                 uint16_t variant100, uint16_t variant200,
-                                 uint16_t variant300) {
-    if (variant100 != 0) out.insert(static_cast<uint16_t>(100 + variant100));
-    if (variant200 != 0) out.insert(static_cast<uint16_t>(200 + variant200));
-    if (variant300 != 0) out.insert(static_cast<uint16_t>(300 + variant300));
-}
+/// Group 15's variant 1: the back with no cloak, which takes the body's
+/// texture rather than a cloak's.
+constexpr uint16_t kGeosetNoCape = 1501;
 
 /// Key for the (race, sex, variation) maps built from CharHairGeosets.dbc and
-/// CharFacialHairStyles.dbc.
-///
-/// It was packed by hand in ten places across three files. Every one of them had
-/// to agree bit for bit with every other, or a lookup would miss and say
-/// nothing - and a hair or beard lookup that misses does not report a fault, it
-/// quietly draws the default.
+/// CharacterFacialHairStyles.dbc.
 constexpr uint32_t appearanceKey(uint8_t race, uint8_t sex, uint8_t variation) {
     return (static_cast<uint32_t>(race) << 16) |
            (static_cast<uint32_t>(sex) << 8) |
            static_cast<uint32_t>(variation);
 }
 
-/// Whether a race's eyes glow.
-///
-/// Night elves', and only theirs among the playable races - it is not an option
-/// they choose, both sexes have it and always have. The NPC path had this rule
-/// and the player path did not, so a night elf player looked out of pale eyes
-/// while every night elf standing next to them glowed.
-///
-/// Death knights glow too, whatever their race, and are not handled here: that
-/// depends on the class rather than the model and the paths that build these
-/// sets do not all know it.
-inline bool raceHasGlowingEyes(uint8_t raceId) {
-    return raceId == 4;  // NightElf
+// ---------------------------------------------------------------------------
+// The client's own choice of a character's geosets (CCharacterComponent).
+//
+// The component keeps one geoset per group, 0 to 18 (+0x144..+0x18c), which
+// the customisation and the helmet set; 0x004ed900 then hides every geoset
+// up to 2000, shows the body and those nineteen, and lets the equipment's
+// ItemDisplayInfo GeosetGroup columns add to and take from them. Ids above
+// 2000 it never touches.
+// ---------------------------------------------------------------------------
+
+/// The nineteen per-group geosets, group 0 (the hair) to 18 (the belt).
+using CharacterGeosetDefaults = std::array<uint16_t, 19>;
+
+/// As the component starts them (0x004dfda0, at +0x12c of the data it
+/// copies to +0x18): the bald scalp 1, then variant 1 of every group except
+/// the ears, 702.
+constexpr CharacterGeosetDefaults kInitialCharacterGeosets = {
+    1, 101, 201, 301, 401, 501, 601, 702, 801, 901,
+    1001, 1101, 1201, 1301, 1401, 1501, 1601, 1701, 1801};
+
+/// A CharacterFacialHairStyles row's five geoset columns (3 to 7), in file
+/// order. 0x004ee460 adds them to groups 1, 3, 2, 16 and 17.
+struct FacialGeosetColumns {
+    std::array<uint32_t, 5> column{};
+};
+
+/// 0x004ee460 with the head bare: the hair is the CharHairGeosets row's
+/// geoset, 1 when the row names none or there is no row (0x004ea050 - its
+/// Showscalp column is not read); the facial groups come from the
+/// CharacterFacialHairStyles row (0x004ea000), left as they start when
+/// there is none; the ears are 702.
+inline CharacterGeosetDefaults characterGeosetDefaults(uint32_t hairGeoset,
+                                                       const FacialGeosetColumns* facial) {
+    CharacterGeosetDefaults d = kInitialCharacterGeosets;
+    d[0] = static_cast<uint16_t>(hairGeoset > 0 ? hairGeoset : 1);
+    if (facial) {
+        // 100 + a column the file leaves at 0 is an id no model carries, and
+        // so is one past 0xFFFF (a column of 0xCCCCCCCC); that one is kept
+        // as 0, the body, which is drawn anyway.
+        auto id = [](uint32_t base, uint32_t v) -> uint16_t {
+            const uint32_t sum = base + v;
+            return sum > 0xFFFFu ? 0 : static_cast<uint16_t>(sum);
+        };
+        d[1] = id(100, facial->column[0]);
+        d[3] = id(300, facial->column[1]);
+        d[2] = id(200, facial->column[2]);
+        d[16] = id(1600, facial->column[3]);
+        d[17] = id(1700, facial->column[4]);
+    }
+    d[7] = 702;
+    return d;
 }
 
-/// The geosets a character shows with nothing equipped, before any armour is
-/// known: the body, the chosen hair scalp, the chosen facial features, and the
-/// bare variant of every equipment group.
-///
-/// Written twice before this - once for the player and once for the portrait -
-/// and the two had drifted apart in exactly the ways that cost something. The
-/// portrait named one of the two feet variants, so an HD model spelling its feet
-/// the other way lost them there while the player kept his. The player named the
-/// cloak mesh and the portrait named the no-cloak panel.
-///
-/// `hairScalp` and the three facial variants come from the DBC maps; a zero
-/// facial variant means the character has none of that feature and adds nothing.
-inline std::unordered_set<uint16_t> bareCharacterGeosets(uint16_t hairScalp,
-                                                         uint16_t facial100,
-                                                         uint16_t facial200,
-                                                         uint16_t facial300,
-                                                         uint8_t raceId = 0) {
-    std::unordered_set<uint16_t> geosets;
-    geosets.insert(0);                      // the body
-    if (hairScalp != 0) geosets.insert(hairScalp);
-    addFacialHairGeosets(geosets, facial100, facial200, facial300);
-    if (raceHasGlowingEyes(raceId)) geosets.insert(kGeosetEyeGlow);
-
-    geosets.insert(kGeosetBareForearms);    // no gloves
-    geosets.insert(kGeosetBareShins);       // no boots
-    geosets.insert(kGeosetDefaultEars);
-    geosets.insert(kGeosetBareSleeves);     // no chest sleeves
-    geosets.insert(kGeosetDefaultKneepads);
-    geosets.insert(kGeosetBarePants);       // no leggings
-    // The feet, both spellings. The models the game shipped have no group 20 at
-    // all and are unaffected; the replacements split the feet out and do not
-    // agree on the number, so naming one loses them on half of them.
-    geosets.insert(kGeosetBareFeet);
-    geosets.insert(kGeosetBareFeetAlt);
-    // No cloak geoset at all. This set is built before equipment is known, so
-    // naming the cloak mesh gives an untextured cape to a character wearing
-    // none, and naming the no-cloak panel is wrong on the models that have no
-    // such panel. The equipment pass adds the cape when there is one.
-    return geosets;
+/// 0x004ef0d0: a helmet's HelmetGeosetVisData row (ItemDisplayInfo +0x34
+/// for a male, +0x38 for a female) holds seven masks by race bit; each set
+/// bit puts its group back to the variant that hides it - the hair to the
+/// bald scalp, the three facial groups to x01, the ears to 701, groups 16
+/// and 17 to x01.
+inline void applyHelmetGeosetVis(CharacterGeosetDefaults& d, const std::array<uint32_t, 7>& masks,
+                                 uint8_t raceId) {
+    const uint32_t bit = 1u << (raceId & 31);
+    if (masks[0] & bit) d[0] = 1;
+    if (masks[1] & bit) d[1] = 101;
+    if (masks[2] & bit) d[2] = 201;
+    if (masks[3] & bit) d[3] = 301;
+    if (masks[4] & bit) d[7] = 701;
+    if (masks[5] & bit) d[16] = 1601;
+    if (masks[6] & bit) d[17] = 1701;
 }
 
-/// The geoset a piece of equipment selects within its group.
-///
-/// ItemDisplayInfo's GeosetGroup columns hold a small number G meaning "the Gth
-/// variant after the bare one" - so a chest with G=2 wants group 8 variant 3,
-/// which is the bare sleeves id plus 2. The arithmetic is a single addition and
-/// was written out at a dozen call sites, half of them against the named bare
-/// constant and half against the literal number it holds, with the convention
-/// itself recorded nowhere.
-///
-/// G of zero means the item does not touch that group, and the caller keeps
-/// whatever it had.
-constexpr uint16_t equippedGeoset(uint16_t bareId, uint32_t geosetGroupValue) {
-    return static_cast<uint16_t>(bareId + geosetGroupValue);
+/// What one worn item's ItemDisplayInfo row hands the geosets.
+struct ItemGeosets {
+    bool worn = false;
+    std::array<uint32_t, 3> group{};  ///< GeosetGroup[0..2]
+    uint32_t flags = 0;               ///< Flags (+0x28)
+    /// Whether it textures any of the body regions 1 to 6 - lower arm to
+    /// lower leg. Read for the chest only, whose layer (1) carries that mask
+    /// at +0x244 (0x004ed900, table 0x009f6a00).
+    bool texturesArmsOrBody = false;
+};
+
+/// The worn items the geosets read, by the component's slots.
+struct CharacterEquipmentGeosets {
+    ItemGeosets shirt, chest, belt, legs, boots, gloves, tabard, cape;
+};
+
+/// The component's flags +8: 0x20 a chest whose display has flag 0x4
+/// (0x004f2640 case 3) - its legs are its own - and 0x40, which this
+/// client never sets.
+struct CharacterGeosetFlags {
+    bool chestOwnsLegs = false;
+    bool flag40 = false;
+};
+
+/// 0x004ed900: the geosets the client shows, of those up to 2000, for
+/// these defaults and this equipment. `deathKnightGlow` is the class being
+/// a death knight or the face's CharSections row having flag 4; it turns
+/// group 17 to 1703.
+inline std::unordered_set<uint16_t> characterGeosets(const CharacterGeosetDefaults& d,
+                                                     bool deathKnightGlow,
+                                                     const CharacterEquipmentGeosets& eq,
+                                                     const CharacterGeosetFlags& flags = {}) {
+    std::unordered_set<uint16_t> shown;
+    auto show = [&](uint32_t id) {
+        if (id <= 0xFFFFu) shown.insert(static_cast<uint16_t>(id));
+    };
+    auto hide = [&](uint32_t lo, uint32_t hi) {
+        for (auto it = shown.begin(); it != shown.end();) {
+            if (*it >= lo && *it <= hi) it = shown.erase(it);
+            else ++it;
+        }
+    };
+    show(0);
+    for (size_t i = 0; i < d.size(); ++i) {
+        show(i == 17 && deathKnightGlow ? 1703 : d[i]);
+    }
+
+    // Hands: the gloves' forearms, or else the chest's sleeves.
+    if (eq.gloves.worn && eq.gloves.group[0] != 0) {
+        hide(401, 499);
+        show(401 + eq.gloves.group[0]);
+    } else if (eq.chest.worn && eq.chest.group[0] != 0) {
+        show(801 + eq.chest.group[0]);
+    }
+    // The shirt's sleeves, unless the chest textures the arms or the body.
+    if (!(eq.chest.worn && eq.chest.texturesArmsOrBody) && eq.shirt.worn && eq.shirt.group[0] != 0) {
+        show(801 + eq.shirt.group[0]);
+    }
+
+    bool robe = false, legsRobe = false, tabard = false;
+    auto robeHides = [&] {
+        hide(501, 599);
+        hide(902, 999);
+        hide(1100, 1199);
+        hide(1300, 1399);
+    };
+    if (eq.chest.worn && eq.chest.group[2] != 0) {
+        // A robe: the chest's skirt over everything below the waist.
+        robeHides();
+        show(1301 + eq.chest.group[2]);
+        robe = true;
+    } else if (eq.legs.worn && eq.legs.group[2] != 0 && !flags.chestOwnsLegs) {
+        robeHides();
+        show(1301 + eq.legs.group[2]);
+        legsRobe = true;
+    } else {
+        if (eq.boots.worn && eq.boots.group[0] != 0) {
+            hide(501, 599);
+            show(901);
+            show(501 + eq.boots.group[0]);
+        } else if (eq.legs.worn && eq.legs.group[1] != 0 && !flags.chestOwnsLegs) {
+            show(901 + eq.legs.group[1]);
+        } else {
+            show(901);
+        }
+        if (eq.tabard.worn && eq.tabard.group[0] != 0) {
+            show(1201 + eq.tabard.group[0]);
+            tabard = true;
+        }
+    }
+
+    bool toBeltAndCape = false;
+    if (flags.flag40) {
+        show(1201);
+        if (robe) toBeltAndCape = true;
+        else if (!legsRobe) show(1202);
+    } else if (robe) {
+        toBeltAndCape = true;
+    }
+    if (!toBeltAndCape) {
+        if (!tabard && eq.shirt.worn && eq.shirt.group[1] != 0) show(1001 + eq.shirt.group[1]);
+        if (!flags.chestOwnsLegs && eq.legs.worn && eq.legs.group[0] != 0) {
+            const uint32_t g = eq.legs.group[0];
+            if (g >= 3) {
+                hide(1300, 1399);
+                show(1101 + g);
+            } else if (!tabard) {
+                show(1101 + g);
+            }
+        }
+    }
+
+    if (eq.cape.worn && eq.cape.group[0] != 0) {
+        hide(1500, 1599);
+        show(1501 + eq.cape.group[0]);
+    }
+    if (eq.belt.worn && eq.belt.group[0] != 0) {
+        hide(1800, 1899);
+        show(1801 + eq.belt.group[0]);
+    }
+    return shown;
 }
 
-/// The cape a cloak selects: its own variant, or the long cape when the item names none.
-constexpr uint16_t cloakGeoset(uint32_t geosetGroupValue) {
-    return geosetGroupValue > 0 ? equippedGeoset(kGeosetNoCape, geosetGroupValue) : kGeosetWithCape;
+/// What a model draws of what the component shows: a submesh up to 2000
+/// only when shown, and every one above 2000, which the client never hides.
+inline std::unordered_set<uint16_t> modelGeosetsShown(const std::unordered_set<uint16_t>& shown,
+                                                      const std::vector<uint16_t>& modelIds) {
+    std::unordered_set<uint16_t> out;
+    for (uint16_t id : modelIds) {
+        if (id > 2000 || shown.count(id)) out.insert(id);
+    }
+    return out;
 }
-
-/// Which geoset group each worn item drives, and the bare variant it replaces.
-///
-/// The two paths that read equipment come at it from different directions - a
-/// player's inventory is numbered one way and an NPC's CreatureDisplayInfoExtra
-/// array another - so the slot numbers cannot be shared. What they were both
-/// restating is this: which part of the body a given piece of armour changes.
-///
-/// Kept as named constants rather than a table, because each call site reads one
-/// of them and a table would only be looked up by an enum that says the same
-/// thing. What matters is that "a chest changes the sleeves" is written once.
-namespace equipment {
-constexpr uint16_t kChestBare  = kGeosetBareSleeves;   ///< group 8
-constexpr uint16_t kLegsBare   = kGeosetBarePants;     ///< group 13
-constexpr uint16_t kBootsBare  = kGeosetBareShins;     ///< group 5
-constexpr uint16_t kGlovesBare = kGeosetBareForearms;  ///< group 4
-constexpr uint16_t kWristBare  = kGeosetBareSleeves;   ///< group 8, same as chest
-constexpr uint16_t kBeltBase   = 1801;                 ///< group 18, the buckle
-constexpr uint16_t kTabardBase = 1200;                 ///< group 12
-
-/// A robe's chest piece also names the kilt over the legs, in its second geoset
-/// column rather than its first. Reading only the first is why an NPC in a robe
-/// wore trousers under it while a player in the same robe did not.
-constexpr uint16_t kRobeKiltBare = kGeosetBarePants;   ///< group 13
-}  // namespace equipment
 
 }  // namespace core
 }  // namespace wowee

@@ -1,246 +1,180 @@
-// Choosing a geoset when the model does not have the one asked for.
-//
-// The rule is one line and it was written five times, as a local lambda in each
-// place that needed it, and only some of them knew the exception. That produced
-// three faults in one evening: a clean-shaven NPC with a beard, a character
-// wearing an untextured cloak it did not own, and a player with no feet.
+// Which of a character model's geosets are drawn: the client's character
+// component (0x004dfda0, 0x004ee460, 0x004ef0d0, 0x004ed900).
 #include <catch_amalgamated.hpp>
 #include "core/geoset_rules.hpp"
 
+#include <algorithm>
+
 using namespace wowee::core;
 
-TEST_CASE("a geoset id is a group and a variant", "[geoset]") {
-    CHECK(geosetGroup(501) == 5);
-    CHECK(geosetVariant(501) == 1);
-    CHECK(geosetGroup(2001) == 20);
-    CHECK(geosetVariant(2001) == 1);
-    CHECK(geosetGroup(1506) == 15);
-    CHECK(geosetVariant(1506) == 6);
+namespace {
+bool has(const std::unordered_set<uint16_t>& s, uint16_t id) { return s.count(id) != 0; }
+size_t inGroup(const std::unordered_set<uint16_t>& s, uint16_t group) {
+    return static_cast<size_t>(std::count_if(s.begin(), s.end(),
+                                             [&](uint16_t id) { return id / 100 == group && id != 0; }));
 }
-
-TEST_CASE("none has two spellings and both are none", "[geoset]") {
-    // The geoset tables say variant 1: bare feet, no cloak, no beard.
-    CHECK(geosetMeansNone(501));
-    CHECK(geosetMeansNone(1501));
-    CHECK(geosetMeansNone(101));
-    // A DBC that stores the variant directly says 0, and it arrives as x00.
-    CHECK(geosetMeansNone(200));
-    CHECK(geosetMeansNone(300));
-    // Anything else is a thing the character has.
-    CHECK_FALSE(geosetMeansNone(1502));
-    CHECK_FALSE(geosetMeansNone(505));
-    CHECK_FALSE(geosetMeansNone(202));
+ItemGeosets item(uint32_t g0, uint32_t g1 = 0, uint32_t g2 = 0) {
+    ItemGeosets i;
+    i.worn = true;
+    i.group = {g0, g1, g2};
+    return i;
 }
-
-TEST_CASE("resolving against what a model actually carries", "[geoset]") {
-    SECTION("the exact geoset wins whenever the model has it") {
-        std::unordered_set<uint16_t> model{501, 502, 503};
-        CHECK(resolveGeoset(502, model) == 502);
-        CHECK(resolveGeoset(501, model) == 501);
-    }
-
-    SECTION("a missing variant falls back within its group") {
-        // Five kinds of boot, and the one asked for is not among them.
-        std::unordered_set<uint16_t> model{502, 503, 505};
-        CHECK(resolveGeoset(504, model) == 502);
-    }
-
-    SECTION("none never falls back - this is the whole point") {
-        // The HD models carry no 1501, the "no cloak" panel. Falling back
-        // inside group 15 hands a cloak to a character wearing none, and with
-        // no cloak texture bound, a white sheet.
-        std::unordered_set<uint16_t> hdModel{1502, 1503, 1504, 1505, 1506};
-        CHECK(resolveGeoset(1501, hdModel) == 0);
-
-        // CharFacialHairStyles stores 0 for a character with no beard, which
-        // arrives as group*100. Every other member of group 2 is facial hair.
-        std::unordered_set<uint16_t> bearded{201, 202, 203};
-        CHECK(resolveGeoset(200, bearded) == 0);
-    }
-
-    SECTION("a group the model has nothing in draws nothing") {
-        std::unordered_set<uint16_t> model{0, 1, 2};
-        CHECK(resolveGeoset(1802, model) == 0);
-    }
-
-    SECTION("an unknown model is not guessed at") {
-        // No geoset list means the model has not been read yet. Answering 0
-        // there would hide a part of a character for want of information.
-        std::unordered_set<uint16_t> unknown;
-        CHECK(resolveGeoset(1501, unknown) == 1501);
-        CHECK(resolveGeoset(504, unknown) == 504);
-    }
-
-    SECTION("the feet, which is where this was found") {
-        // Group 20 is split out of the body on the HD models and they do not
-        // agree on which member to use: an HD human female carries 2001 and an
-        // HD human male 2002. Asking for either resolves to the one present.
-        std::unordered_set<uint16_t> female{2001};
-        std::unordered_set<uint16_t> male{2002};
-        // 2002 is variant 2, so it is a thing rather than the absence of one,
-        // and substituting the 2001 the model does carry is exactly the fix:
-        // ask for feet, get the feet this model spells.
-        CHECK(resolveGeoset(2002, female) == 2001);
-        CHECK(resolveGeoset(2001, female) == 2001);
-        CHECK(resolveGeoset(2002, male) == 2002);
-        // 2001 is variant 1 and so reads as none, which is why the caller names
-        // both rather than relying on one to find the other.
-        CHECK(resolveGeoset(2001, male) == 0);
-        // A stock model has no group 20 at all - the feet are part of the body.
-        std::unordered_set<uint16_t> stock{0, 1, 501, 1501};
-        CHECK(resolveGeoset(2001, stock) == 0);
-        CHECK(resolveGeoset(2002, stock) == 0);
-    }
-}
-
-TEST_CASE("facial hair: zero is none, and none is not an id", "[geoset]") {
-    SECTION("a clean-shaven character adds nothing") {
-        std::unordered_set<uint16_t> set;
-        addFacialHairGeosets(set, 0, 0, 0);
-        CHECK(set.empty());
-    }
-
-    SECTION("each group takes its own variant") {
-        std::unordered_set<uint16_t> set;
-        addFacialHairGeosets(set, 2, 3, 4);
-        CHECK(set == std::unordered_set<uint16_t>{102, 203, 304});
-    }
-
-    SECTION("a character with a beard and no sideburns gets only the beard") {
-        // The fault this exists for: 200 + 0 was being asked for, no model
-        // carries 200, and the caller substituted the first geoset in group 2 -
-        // which is a beard on a character that has none.
-        std::unordered_set<uint16_t> set;
-        addFacialHairGeosets(set, 0, 5, 0);
-        CHECK(set == std::unordered_set<uint16_t>{205});
-        CHECK(set.count(200) == 0);
-        CHECK(set.count(100) == 0);
-        CHECK(set.count(300) == 0);
-    }
-}
+}  // namespace
 
 TEST_CASE("the appearance key packs three bytes and nothing else", "[geoset]") {
-    // Ten hand-written copies of this expression had to agree bit for bit. A
-    // lookup that misses because one of them did not does not report a fault -
-    // it quietly draws the default hair, or the default beard.
-    CHECK(appearanceKey(1, 1, 5) == ((1u << 16) | (1u << 8) | 5u));
-    CHECK(appearanceKey(0, 0, 0) == 0u);
-
-    SECTION("no two characters share a key") {
-        CHECK(appearanceKey(1, 0, 3) != appearanceKey(1, 1, 3));   // sex
-        CHECK(appearanceKey(1, 1, 3) != appearanceKey(2, 1, 3));   // race
-        CHECK(appearanceKey(1, 1, 3) != appearanceKey(1, 1, 4));   // variation
-    }
-
-    SECTION("a byte in one field cannot reach another") {
-        // Race 0 with variation 255 must not collide with race 0 sex 255.
-        CHECK(appearanceKey(0, 0, 255) != appearanceKey(0, 255, 0));
-        CHECK(appearanceKey(255, 0, 0) != appearanceKey(0, 255, 0));
-    }
+    CHECK(appearanceKey(1, 0, 3) == 0x010003u);
+    CHECK(appearanceKey(10, 1, 255) == 0x0A01FFu);
 }
 
-TEST_CASE("the bare set a character shows with nothing equipped", "[geoset]") {
-    const auto bare = bareCharacterGeosets(1, 1, 1, 1);
-
-    SECTION("the body and the chosen scalp") {
-        CHECK(bare.count(0) == 1);
-        CHECK(bare.count(1) == 1);
-    }
-
-    SECTION("both spellings of the feet") {
-        // The models the game shipped have no group 20 at all and are
-        // unaffected; the replacements split the feet out and do not agree on
-        // the number, so naming one loses them on half of them.
-        CHECK(bare.count(kGeosetBareFeet) == 1);
-        CHECK(bare.count(kGeosetBareFeetAlt) == 1);
-    }
-
-    SECTION("no cloak of any kind") {
-        // Built before equipment is known. Naming the cloak mesh gives an
-        // untextured cape to a character wearing none; naming the no-cloak
-        // panel is wrong on a model that has no such panel.
-        CHECK(bare.count(kGeosetWithCape) == 0);
-        CHECK(bare.count(kGeosetNoCape) == 0);
-    }
-
-    SECTION("a clean-shaven character adds no facial geoset") {
-        const auto shaven = bareCharacterGeosets(1, 0, 0, 0);
-        for (uint16_t id : shaven) {
-            const uint16_t group = geosetGroup(id);
-            CHECK((group < 1 || group > 3));
-        }
-    }
+TEST_CASE("the component starts at the bald scalp and variant 1, ears 702", "[geoset]") {
+    const auto d = kInitialCharacterGeosets;
+    CHECK(d[0] == 1);
+    CHECK(d[4] == 401);
+    CHECK(d[7] == 702);
+    CHECK(d[9] == 901);
+    CHECK(d[18] == 1801);
 }
 
-TEST_CASE("equipment selects a variant after the bare one", "[geoset]") {
-    // ItemDisplayInfo's GeosetGroup columns hold "the Gth variant after bare".
-    // A chest with G=2 wants group 8 variant 3.
-    CHECK(equippedGeoset(kGeosetBareSleeves, 2) == 803);
-    CHECK(equippedGeoset(kGeosetBareShins, 1) == 502);
-    CHECK(equippedGeoset(kGeosetBarePants, 4) == 1305);
-
-    SECTION("zero leaves the bare variant") {
-        // The caller only applies this when G is non-zero, and the identity is
-        // what makes that safe to read.
-        CHECK(equippedGeoset(kGeosetBareForearms, 0) == kGeosetBareForearms);
-    }
-
-    SECTION("it stays inside its group") {
-        // A group holds well under a hundred variants, so the arithmetic cannot
-        // carry into the next one for any value a table actually holds.
-        CHECK(geosetGroup(equippedGeoset(kGeosetBareSleeves, 9)) == 8);
-        CHECK(geosetGroup(equippedGeoset(kGeosetBareShins, 9)) == 5);
-    }
+TEST_CASE("the hair and facial rows set groups 0, 1, 3, 2, 16 and 17", "[geoset]") {
+    FacialGeosetColumns f;
+    f.column = {2, 3, 4, 0, 2};
+    const auto d = characterGeosetDefaults(5, &f);
+    CHECK(d[0] == 5);
+    CHECK(d[1] == 102);
+    CHECK(d[3] == 303);
+    CHECK(d[2] == 204);
+    CHECK(d[16] == 1600);
+    CHECK(d[17] == 1702);
+    // A hair row naming no geoset, or none at all: the bald scalp. No facial
+    // row leaves the facial groups as they start.
+    const auto bare = characterGeosetDefaults(0, nullptr);
+    CHECK(bare[0] == 1);
+    CHECK(bare[1] == 101);
+    CHECK(bare[17] == 1701);
 }
 
-TEST_CASE("a night elf's eyes glow and nobody else's do", "[geoset]") {
-    // Group 17 is the eye-glow overlay. The NPC path restored it for race 4 and
-    // the player path never added it at all, so a night elf player looked out of
-    // pale eyes while every night elf standing beside them glowed.
-    const auto nightElf = wowee::core::bareCharacterGeosets(1, 1, 1, 1, 4);
-    CHECK(nightElf.count(wowee::core::kGeosetEyeGlow) == 1);
-
-    SECTION("every other playable race has it off") {
-        for (uint8_t race : {1, 2, 3, 5, 6, 7, 8, 10, 11}) {
-            const auto other = wowee::core::bareCharacterGeosets(1, 1, 1, 1, race);
-            CHECK(other.count(wowee::core::kGeosetEyeGlow) == 0);
-        }
-    }
-
-    SECTION("a caller that does not say the race gets no glow") {
-        // The default, which is what a path with no race to hand asks for.
-        const auto unknown = wowee::core::bareCharacterGeosets(1, 1, 1, 1);
-        CHECK(unknown.count(wowee::core::kGeosetEyeGlow) == 0);
-    }
+TEST_CASE("a helmet's masks hide by race bit", "[geoset]") {
+    auto d = characterGeosetDefaults(5, nullptr);
+    std::array<uint32_t, 7> masks{};
+    masks[0] = 1u << 1;  // humans' hair
+    masks[4] = 1u << 4;  // night elves' ears
+    applyHelmetGeosetVis(d, masks, 1);
+    CHECK(d[0] == 1);
+    CHECK(d[7] == 702);
+    applyHelmetGeosetVis(d, masks, 4);
+    CHECK(d[7] == 701);
 }
 
-TEST_CASE("the ears are the variant that has ears on it", "[geoset]") {
-    // Three of the four places that built this set named 702 and the fourth
-    // named 701, which is the bare head. The character composed through that
-    // one lost its ears.
-    const auto bare = wowee::core::bareCharacterGeosets(1, 1, 1, 1, 4);
-    CHECK(bare.count(wowee::core::kGeosetDefaultEars) == 1);
-    CHECK(wowee::core::kGeosetDefaultEars == 702);
+TEST_CASE("bare, a character shows the body and the nineteen defaults", "[geoset]") {
+    const auto shown = characterGeosets(kInitialCharacterGeosets, false, {});
+    CHECK(has(shown, 0));
+    CHECK(has(shown, 401));
+    CHECK(has(shown, 501));
+    CHECK(has(shown, 901));
+    CHECK(has(shown, 1301));
+    CHECK(has(shown, 1501));
+    CHECK(shown.size() == 20);
+    // The death knight's eyes replace group 17's default.
+    const auto dk = characterGeosets(kInitialCharacterGeosets, true, {});
+    CHECK(has(dk, 1703));
+    CHECK_FALSE(has(dk, 1701));
 }
 
-TEST_CASE("no cloak group is chosen before the equipment is known", "[geoset]") {
-    // Naming the cloak mesh gives an untextured cape to someone wearing none,
-    // and naming the no-cloak panel is wrong on the models that have no such
-    // panel. The equipment pass decides.
-    const auto bare = wowee::core::bareCharacterGeosets(1, 1, 1, 1, 4);
-    CHECK(bare.count(wowee::core::kGeosetNoCape) == 0);
-    CHECK(bare.count(wowee::core::kGeosetWithCape) == 0);
+TEST_CASE("gloves take the forearms; without them the chest names the sleeves", "[geoset]") {
+    CharacterEquipmentGeosets eq;
+    eq.chest = item(2);
+    auto shown = characterGeosets(kInitialCharacterGeosets, false, eq);
+    CHECK(has(shown, 803));
+    CHECK(has(shown, 401));
+    eq.gloves = item(3);
+    shown = characterGeosets(kInitialCharacterGeosets, false, eq);
+    CHECK(has(shown, 404));
+    CHECK_FALSE(has(shown, 401));
+    CHECK_FALSE(has(shown, 803));
 }
 
-TEST_CASE("the belt's base variant is the waist, not nothing", "[geoset]") {
-    // Group 18 is erased and rebuilt on every equipment change. On the older
-    // human male the group holds only 1802, so erasing it and adding nothing
-    // costs nothing; the Legion model carries 1801, 1802 and 1803, and 1801 is
-    // the waist itself - dropped with nothing in its place, the torso floats
-    // above the legs.
-    CHECK(wowee::core::equipment::kBeltBase == 1801);
-    CHECK(geosetGroup(wowee::core::equipment::kBeltBase) == 18);
-    // A belt worn is the variant after it, which is what the model carries for
-    // a buckle on both asset sets.
-    CHECK(equippedGeoset(wowee::core::equipment::kBeltBase, 1) == 1802);
+TEST_CASE("the shirt's sleeves only where the chest leaves the arms bare", "[geoset]") {
+    CharacterEquipmentGeosets eq;
+    eq.shirt = item(1, 2);
+    auto shown = characterGeosets(kInitialCharacterGeosets, false, eq);
+    CHECK(has(shown, 802));
+    CHECK(has(shown, 1003));
+    eq.chest = item(0);
+    eq.chest.texturesArmsOrBody = true;
+    shown = characterGeosets(kInitialCharacterGeosets, false, eq);
+    CHECK_FALSE(has(shown, 802));
+}
+
+TEST_CASE("a robe's skirt replaces everything below the waist", "[geoset]") {
+    CharacterEquipmentGeosets eq;
+    eq.chest = item(0, 0, 2);
+    eq.boots = item(3);
+    eq.legs = item(2, 1);
+    eq.tabard = item(1);
+    const auto shown = characterGeosets(kInitialCharacterGeosets, false, eq);
+    CHECK(has(shown, 1303));
+    CHECK(inGroup(shown, 13) == 1);
+    CHECK(inGroup(shown, 5) == 0);
+    CHECK(has(shown, 901));     // 901 is not in the hidden 902-999
+    CHECK_FALSE(has(shown, 504));
+    CHECK_FALSE(has(shown, 1202));  // no tabard under a robe
+    CHECK(inGroup(shown, 11) == 0);
+}
+
+TEST_CASE("boots, kneepads, trousers and the tabard", "[geoset]") {
+    CharacterEquipmentGeosets eq;
+    eq.boots = item(2);
+    eq.legs = item(3, 2);
+    eq.tabard = item(1);
+    auto shown = characterGeosets(kInitialCharacterGeosets, false, eq);
+    CHECK(has(shown, 503));
+    CHECK_FALSE(has(shown, 501));
+    CHECK(has(shown, 901));
+    CHECK(has(shown, 1202));
+    // Trousers from 3 up hide group 13 and show group 11.
+    CHECK(has(shown, 1104));
+    CHECK(inGroup(shown, 13) == 0);
+    // Without boots the legs' second column names the kneepads.
+    eq.boots = {};
+    shown = characterGeosets(kInitialCharacterGeosets, false, eq);
+    CHECK(has(shown, 903));
+    // Short trousers under a tabard are left off.
+    eq.legs = item(1);
+    shown = characterGeosets(kInitialCharacterGeosets, false, eq);
+    CHECK_FALSE(has(shown, 1102));
+    eq.tabard = {};
+    shown = characterGeosets(kInitialCharacterGeosets, false, eq);
+    CHECK(has(shown, 1102));
+    CHECK(has(shown, 1301));
+}
+
+TEST_CASE("a chest with display flag 4 keeps the legs' columns out", "[geoset]") {
+    CharacterEquipmentGeosets eq;
+    eq.legs = item(4, 0, 2);
+    CharacterGeosetFlags flags;
+    flags.chestOwnsLegs = true;
+    const auto shown = characterGeosets(kInitialCharacterGeosets, false, eq, flags);
+    CHECK_FALSE(has(shown, 1303));
+    CHECK_FALSE(has(shown, 1105));
+}
+
+TEST_CASE("the cloak and the belt replace their groups' defaults", "[geoset]") {
+    CharacterEquipmentGeosets eq;
+    eq.cape = item(2);
+    eq.belt = item(1);
+    const auto shown = characterGeosets(kInitialCharacterGeosets, false, eq);
+    CHECK(has(shown, 1503));
+    CHECK_FALSE(has(shown, 1501));
+    CHECK(has(shown, 1802));
+    CHECK_FALSE(has(shown, 1801));
+    // A cloak naming no geoset leaves the bare back.
+    CharacterEquipmentGeosets plain;
+    plain.cape = item(0);
+    CHECK(has(characterGeosets(kInitialCharacterGeosets, false, plain), 1501));
+}
+
+TEST_CASE("a model draws what is shown, and everything above 2000", "[geoset]") {
+    const std::unordered_set<uint16_t> shown{0, 5, 401};
+    const auto drawn = modelGeosetsShown(shown, {0, 1, 5, 6, 401, 402, 2001, 2002});
+    CHECK(drawn == std::unordered_set<uint16_t>{0, 5, 401, 2001, 2002});
 }

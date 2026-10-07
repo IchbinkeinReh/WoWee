@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/character_geosets.hpp"
+
 #include "game/character.hpp"
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
@@ -104,19 +106,18 @@ public:
     [[nodiscard]] uint32_t getInstanceId() const { return instanceId_; }
     [[nodiscard]] uint32_t getModelId() const { return PREVIEW_MODEL_ID; }
     [[nodiscard]] bool isModelLoaded() const { return modelLoaded_; }
+    /// The class, for the death knight's eyes (0x004ed900). Set before
+    /// loadCharacter.
+    void setCharacterClass(uint8_t classId) { classId_ = classId; }
 
 private:
-    struct FacialHairGeosets {
-        uint16_t geoset100 = 0;
-        uint16_t geoset300 = 0;
-        uint16_t geoset200 = 0;
-    };
 
     void createFBO();
     void destroyFBO();
-    void ensureAppearanceGeosetsLoaded();
-    std::unordered_set<uint16_t> buildBaseGeosets();
-    [[nodiscard]] uint16_t selectedHairScalpGeoset() const;
+    /// The character component's look before its equipment.
+    core::CharacterLook characterLook();
+    /// What the preview model draws for a look (core::characterGeosets).
+    std::unordered_set<uint16_t> lookGeosets(const core::CharacterLook& look);
 
     // Read an M2 (plus its .skin for WotLK-era models) through the asset manager.
     bool loadPreviewM2(const std::string& m2Path, pipeline::M2Model& outModel);
@@ -218,9 +219,11 @@ private:
     std::vector<std::string> baseLayers_; // face + underwear, etc.
     uint32_t skinTextureSlotIndex_ = 0;
 
+    uint8_t skin_ = 0;
+    uint8_t face_ = 0;
+    uint8_t classId_ = 0;
     bool appearanceGeosetsLoaded_ = false;
-    std::unordered_map<uint32_t, uint16_t> hairGeosetMap_;
-    std::unordered_map<uint32_t, FacialHairGeosets> facialHairGeosetMap_;
+    core::AppearanceGeosetTables appearanceTables_;
 };
 
 } // namespace rendering

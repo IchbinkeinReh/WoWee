@@ -84,6 +84,7 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         // Declared before the model loads, so the racial backdrop is never
         // built in the first place.
         preview_->setTransparentBackground(true, framing_ == Framing::Face);
+        preview_->setCharacterClass(static_cast<uint8_t>(self->characterClass));
         if (preview_->loadCharacter(self->race, self->gender, skin, face,
                                     hairStyle, hairColor, self->facialFeatures,
                                     self->useFemaleModel)) {
@@ -149,6 +150,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
         const uint8_t hairColor = (appearanceBytes >> 24) & 0xFF;
 
         preview_->setTransparentBackground(true, framing_ == Framing::Face);
+        preview_->setCharacterClass(0);  // not known for another unit here
         if (preview_->loadCharacter(static_cast<game::Race>(race),
                                     static_cast<game::Gender>(gender),
                                     skin, face, hairStyle, hairColor,
