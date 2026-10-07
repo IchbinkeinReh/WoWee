@@ -4259,16 +4259,16 @@ std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::ve
         out.flags = base.flags;
         if (static_cast<size_t>(groupIndex) < model.groupFogIndices.size()) {
             struct Near { const pipeline::WMOFog* fog; float dist; };
-            std::vector<Near> near;
+            std::vector<Near> nearFogs;
             for (uint8_t fi : model.groupFogIndices[groupIndex]) {
                 if (fi == 0 || fi >= model.fogs.size()) continue;
                 const pipeline::WMOFog& f = model.fogs[fi];
                 if (f.flags & 0x1) continue;
                 const float d = glm::length(f.position - local);
-                if (d < f.largeRadius) near.push_back({&f, d});
+                if (d < f.largeRadius) nearFogs.push_back({&f, d});
             }
-            std::sort(near.begin(), near.end(), [](const Near& a, const Near& b) { return a.dist > b.dist; });
-            for (const Near& n : near) {
+            std::sort(nearFogs.begin(), nearFogs.end(), [](const Near& a, const Near& b) { return a.dist > b.dist; });
+            for (const Near& n : nearFogs) {
                 const float w = daynight::wmoFogSphereWeight(n.dist, n.fog->smallRadius, n.fog->largeRadius);
                 out.end = glm::mix(out.end, n.fog->endDist, w);
                 out.startScalar = glm::mix(out.startScalar, n.fog->startFactor, w);

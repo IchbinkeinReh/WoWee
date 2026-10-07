@@ -217,11 +217,11 @@ inline uint8_t toByte(float v) {
 /// ocean's last row is its colour's value taken down a tenth (to HSV and back,
 /// 0x00984f60 and 0x00985030) and fully opaque (0x009851a0 writes alpha 0xff).
 inline std::array<RampTexel, kRampRows> depthRamp(const glm::vec3& close, float closeAlpha,
-                                                  const glm::vec3& far, float farAlpha,
+                                                  const glm::vec3& farColor, float farAlpha,
                                                   bool ocean) {
     std::array<RampTexel, kRampRows> rows{};
     const uint8_t c0[3] = {toByte(close.r), toByte(close.g), toByte(close.b)};
-    const uint8_t c1[3] = {toByte(far.r), toByte(far.g), toByte(far.b)};
+    const uint8_t c1[3] = {toByte(farColor.r), toByte(farColor.g), toByte(farColor.b)};
     const uint8_t a0 = toByte(closeAlpha);
     const uint8_t a1 = toByte(farAlpha);
     for (int row = 0; row < kRampRows; ++row) {
