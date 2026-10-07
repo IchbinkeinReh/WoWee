@@ -20,13 +20,13 @@ class VkContext;
  *   supported (0x008b0000 registers the cvar; EffectGlow / PassGlow, blurred
  *   by FFXGauss4 and FFXBox4): a blurred copy of the frame added back at the
  *   light's LightParams.Glow strength.
- * - ffxDeath, "full screen death effect" (0x007e86a0, drawn by 0x007e87b0):
- *   the frame desaturated toward the client's constant (0x53, 0x93, 0xa8)
- *   while the death light is up.
+ * - ffxDeath, "full screen death effect" (0x007e86a0, drawn by 0x007e87b0
+ *   in the glow's place): the glowed frame's luminance, with the constant
+ *   (0x53, 0x93, 0xa8) laid over it by 4 x lum x (1 - lum).
  *
- * The pixel shaders themselves are in the MPQs (Shaders\Pixel\FFXGlow,
- * FFXDeath), not in Wow.exe; what they compute here is a reading of the
- * passes' inputs, not a copy of their code.
+ * Both composites are the FFXGlow and FFXDeath .bls programs (glow added,
+ * not screened). The blur is a stand-in: the client's FFXGauss4 (taps
+ * 1/8, 3/8, 3/8, 1/8) and FFXBox4 passes are one 9x9 Gaussian here.
  *
  * Built like SunShafts: the swapchain image is copied (full size, and a
  * quarter size for the glow), a compute pass blurs the quarter copy, and the

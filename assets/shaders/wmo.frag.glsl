@@ -304,6 +304,10 @@ void main() {
     }
     RtLight rt = rtLightAt(FragPos);
     shadow = rtShadow(rt, shadow);
+    // The shadow variants let a face turned edge-on to the sun out of the
+    // shadow: by |1.2 - |N.L||^4, saturated (c4 is the light's view-space
+    // direction, 0x00875c10).
+    shadow += (1.0 - shadow) * clamp(pow(abs(1.2 - abs(dot(norm, normalize(-lightDir.xyz)))), 4.0), 0.0, 1.0);
     const float shadowScale = 0.7 + 0.3 * shadow;
 
     const vec3 env = (program == 3 || program == 5) ? texture(uEnvTexture, EnvCoord).rgb : vec3(0.0);
