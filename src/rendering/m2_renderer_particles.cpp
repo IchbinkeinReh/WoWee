@@ -267,13 +267,12 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             const uint32_t tilesX = std::max<uint16_t>(em.textureCols, 1);
             const uint32_t tilesY = std::max<uint16_t>(em.textureRows, 1);
             const uint32_t totalTiles = tilesX * tilesY;
-            if ((em.flags & kParticleFlagTiled) && totalTiles > 1) {
-                if (em.flags & kParticleFlagRandomized) {
-                    distTile = std::uniform_int_distribution<int>(0, static_cast<int>(totalTiles - 1));
-                    p.tileIndex = static_cast<float>(distTile(particleRng_));
-                } else {
-                    p.tileIndex = 0.0f;
-                }
+            // A random cell only when the emitter asks (flag 0x100000); otherwise
+            // the cell comes from the emitter's head-cell track as the particle
+            // ages, or is the first (FUN_00979e90).
+            if ((em.flags & 0x100000) && totalTiles > 1) {
+                distTile = std::uniform_int_distribution<int>(0, static_cast<int>(totalTiles - 1));
+                p.tileIndex = static_cast<float>(distTile(particleRng_));
             }
 
             inst.particles.push_back(p);
@@ -703,12 +702,6 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         const glm::vec3* cachedColorOverride = nullptr;
         pipeline::M2FBlock cachedOverrideBlock;
         ParticleGroup* cachedGroup = nullptr;
-        // animFrame depends only on inst.animTime + totalTiles, so it's also
-        // emitter-stable within one frame.
-        uint32_t cachedAnimFrame = 0;
-        float cachedTilesFloat = 1.0f;
-        bool cachedIsTiled = false;
-        float invAnimMs = 1.0f / 1000.0f;
 
         // How far this instance's particles actually reach, against how far
         // the model says it extends. A fire twice the height of the hut behind
@@ -786,13 +779,6 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                     cachedGroup->preAllocSet = gpu.particleTexSets[p.emitterIndex];
                 }
 
-                cachedIsTiled = (cachedEm->flags & kParticleFlagTiled) && cachedTotalTiles > 1;
-                if (cachedIsTiled) {
-                    float animSeconds = inst.animTime * invAnimMs;
-                    cachedAnimFrame = static_cast<uint32_t>(std::floor(animSeconds * cachedTotalTiles))
-                                      % cachedTotalTiles;
-                    cachedTilesFloat = static_cast<float>(cachedTotalTiles);
-                }
             }
 
             const auto& em = *cachedEm;
@@ -867,13 +853,14 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             // the model's scale where the emitter is flagged 0x400.
             const float modelScale = (cachedEm->flags & 0x400) ? inst.scale : 1.0f;
             vd[7] = scale * p.sizeVary * modelScale * kPfxSize;
+            // The cell of the atlas: the head-cell track at this point of the
+            // particle's life, rounded (FUN_00979560), whatever the emitter's
+            // flags say; without one, the cell rolled at birth.
             float tileIndex = p.tileIndex;
-            if (cachedIsTiled) {
-                tileIndex = p.tileIndex + static_cast<float>(cachedAnimFrame);
-                while (tileIndex >= cachedTilesFloat) {
-                    tileIndex -= cachedTilesFloat;
-                }
+            if (cachedTotalTiles > 1 && !em.headCell.floatValues.empty()) {
+                tileIndex = std::round(interpFBlockFloat(em.headCell, lifeRatio));
             }
+            tileIndex = std::clamp(tileIndex, 0.0f, static_cast<float>(cachedTotalTiles) - 1.0f);
             vd[8] = tileIndex;
             ++vbWritten;
             ++particleRuns_.back().count;

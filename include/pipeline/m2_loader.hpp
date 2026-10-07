@@ -180,6 +180,9 @@ struct M2ParticleEmitter {
     M2FBlock particleColor;   // vec3 RGB at 3 timestamps
     M2FBlock particleAlpha;   // float (from uint16/32767) at 3 timestamps
     M2FBlock particleScale;   // float (x component of vec2) at 3 timestamps
+    // WotLK +0x13C: which cell of the texture atlas a particle shows, over its
+    // life (cell numbers, interpolated and rounded). Empty: the first cell.
+    M2FBlock headCell;
     // The spreads the client rolls per particle, after the tracks (WotLK):
     // lifespan +0xAC and emission rate +0xC4 are added to their track's value
     // by a random in -1..1; the scale spread +0x134 multiplies a particle's size

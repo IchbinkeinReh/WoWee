@@ -803,6 +803,12 @@ void parseFBlock(const std::vector<uint8_t>& data, uint32_t offset,
             float b = readValue<float>(data, ofsKeys + i * 12 + 8);
             fb.vec3Values.emplace_back(r / 255.0f, g / 255.0f, b / 255.0f);
         }
+    } else if (valueType == 3) {
+        // Cell numbers: uint16 per key, kept as they are
+        if (ofsKeys + nKeys * sizeof(uint16_t) > data.size()) return;
+        auto rawCells = readArray<uint16_t>(data, ofsKeys, nKeys);
+        fb.floatValues.reserve(nKeys);
+        for (auto c : rawCells) fb.floatValues.push_back(static_cast<float>(c));
     } else if (valueType == 1) {
         // Alpha: uint16 per key
         if (ofsKeys + nKeys * sizeof(uint16_t) > data.size()) return;
@@ -1657,6 +1663,7 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                 parseFBlock(m2Data, base + 0x104, em.particleColor, 0);
                 parseFBlock(m2Data, base + 0x114, em.particleAlpha, 1);
                 parseFBlock(m2Data, base + 0x124, em.particleScale, 2);
+                parseFBlock(m2Data, base + 0x13C, em.headCell, 3);
             }
 
             model.particleEmitters.push_back(std::move(em));
