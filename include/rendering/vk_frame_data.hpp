@@ -55,6 +55,10 @@ struct GPUPerFrameData {
     // into 0xd38cdc), which lights a WMO material's windows at night
     // (wmo_sidn.hpp). Only the WMO shader reads it.
     glm::vec4 windowLight{0.0f};
+    // The world light's specular colour (FUN_008355d0's fourth output), w 1
+    // with the client's 'specular' option on: the terrain's highlight
+    // (Terrain vertex program's c27, exponent 20). Off by default.
+    glm::vec4 specularColor{0.0f};
 };
 
 // Push constants for the model matrix (most common case)

@@ -17,6 +17,11 @@ layout(set = 0, binding = 0) uniform PerFrame {
     mat4 rtViewProj;
     vec4 rtCameraPos;
     vec4 rtParams;
+    vec4 cameraFogColor;
+    vec4 averagedDirectColor;
+    vec4 averagedAmbientColor;
+    vec4 windowLight;
+    vec4 specularColor;  // the light's specular colour; w 1 with the 'specular' option
 };
 
 #include "rt_lighting.glsli"
@@ -33,6 +38,9 @@ layout(set = 1, binding = 6) uniform sampler2D uLayer3Alpha;
 // chunk without one.
 layout(set = 1, binding = 8) uniform sampler2D uBakedShadow;
 
+// Layer 0 of an env chunk: a cube map sampled at the reflection.
+layout(set = 1, binding = 9) uniform samplerCube uEnvCube;
+
 layout(set = 1, binding = 7) uniform TerrainParams {
     int layerCount;
     int hasLayer1;
@@ -40,6 +48,7 @@ layout(set = 1, binding = 7) uniform TerrainParams {
     int hasLayer3;
     ivec4 layerFlags;  // MCLY flags of layers 0..3: 0x40 scrolls, 0x80 unlit
     int weightedLayers;  // MPHD 0x4: Terrain1's weighted variants
+    int envLayer;        // layer 0 from uEnvCube (MCLY 0x400, 0x007b9250)
 };
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
@@ -156,27 +165,43 @@ void main() {
     // chunk, so whole regions of the screen take that branch together.
     vec3 litColor = vec3(0.0);
     vec3 unlitColor = vec3(0.0);
+    vec3 norm = normalize(Normal);
+    // The texels' alpha, blended alike: the highlight's mask.
+    float specMask = 0.0;
     {
-        vec3 t = layerTexel(uBaseTexture, layerFlags.x).rgb * w.x;
+        // An env chunk's layer 0 is a cube at the reflection: the Terrain env
+        // vertex programs reflect the view-space position about the normal,
+        // back to the world by c8-c10, swizzled xzy (the client's z up).
+        vec4 t0;
+        if (envLayer != 0) {
+            vec3 r = reflect(FragPos - viewPos.xyz, norm);
+            t0 = texture(uEnvCube, vec3(r.y, r.x, r.z).xzy);
+        } else {
+            t0 = layerTexel(uBaseTexture, layerFlags.x);
+        }
+        vec3 t = t0.rgb * w.x;
+        specMask += t0.a * w.x;
         if ((layerFlags.x & 0x80) != 0) unlitColor += t; else litColor += t;
     }
     if (w.y > 0.002) {
-        vec3 t = layerTexel(uLayer1Texture, layerFlags.y).rgb * w.y;
-        if ((layerFlags.y & 0x80) != 0) unlitColor += t; else litColor += t;
+        vec4 t = layerTexel(uLayer1Texture, layerFlags.y) * w.y;
+        specMask += t.a;
+        if ((layerFlags.y & 0x80) != 0) unlitColor += t.rgb; else litColor += t.rgb;
     }
     if (w.z > 0.002) {
-        vec3 t = layerTexel(uLayer2Texture, layerFlags.z).rgb * w.z;
-        if ((layerFlags.z & 0x80) != 0) unlitColor += t; else litColor += t;
+        vec4 t = layerTexel(uLayer2Texture, layerFlags.z) * w.z;
+        specMask += t.a;
+        if ((layerFlags.z & 0x80) != 0) unlitColor += t.rgb; else litColor += t.rgb;
     }
     if (w.w > 0.002) {
-        vec3 t = layerTexel(uLayer3Texture, layerFlags.w).rgb * w.w;
-        if ((layerFlags.w & 0x80) != 0) unlitColor += t; else litColor += t;
+        vec4 t = layerTexel(uLayer3Texture, layerFlags.w) * w.w;
+        specMask += t.a;
+        if ((layerFlags.w & 0x80) != 0) unlitColor += t.rgb; else litColor += t.rgb;
     }
 
     // The vertex colour, which the pixel program doubles: the Terrain vertex
     // program's clamp(ambient + clamp(N.L) x direct) (c25, c24, c26), clamped
     // to one before the chunk's vertex shading (MCCV) scales it.
-    vec3 norm = normalize(Normal);
     RtLight rt = rtLightAt(FragPos);
     float ndl = clamp(dot(norm, normalize(-lightDir.xyz)), 0.0, 1.0);
     vec3 light = clamp(rtAmbient(rt, ambientColor.rgb) + ndl * lightColor.rgb, 0.0, 1.0) * Shading;
@@ -203,6 +228,16 @@ void main() {
     }
 
     vec3 result = (litColor * light + unlitColor) * (0.7 + 0.3 * lit);
+
+    // The 'specular' option (off by default): the specular vertex programs'
+    // secondary colour, pow(max(N.H, 0), 20) x the light's specular (c27),
+    // H halfway between the eye and the light, added by the texels' alpha
+    // and the shadow (Terrain1: secondary x tex.a x shadow).
+    if (specularColor.w > 0.5) {
+        vec3 h = normalize(normalize(viewPos.xyz - FragPos) + normalize(-lightDir.xyz));
+        float s = pow(max(dot(norm, h), 0.0), 20.0);
+        result += s * specularColor.rgb * specMask * lit;
+    }
 
     result = applyFog(result, FragPos, fragDist, fogColor.rgb);
 

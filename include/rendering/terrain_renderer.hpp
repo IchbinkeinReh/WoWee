@@ -8,6 +8,7 @@
 #include "pipeline/terrain_mesh.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "rendering/camera.hpp"
+#include "rendering/cube_texture.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -54,6 +55,10 @@ struct TerrainChunkGPU {
     int layerCount = 0;
     uint32_t layerFlags[4] = {0, 0, 0, 0};  // MCLY flags: 0x40 scrolls, 0x80 unlit
     bool weightedLayers = false;            // ChunkMesh::weightedLayers
+    /// Layer 0 drawn as a cube map at the reflection (Terrain0_env and the
+    /// Terrain1 env variants): a layer has MCLY 0x400 (0x007b9250) and layer
+    /// 0's texture is a cube (cube_texture.hpp). Owned by the cube cache.
+    const CubeTexture* envCube = nullptr;
 
     // World position for culling
     float worldX = 0.0f;
@@ -152,6 +157,10 @@ public:
     void setWireframe(bool enabled) { wireframe = enabled; }
     void setFrustumCulling(bool enabled) { frustumCullingEnabled = enabled; }
     void setFogEnabled(bool enabled) { fogEnabled = enabled; }
+    /// The client's 'specular' option (off by default): tileset textures are
+    /// loaded as their "_s.blp" versions, whose alpha the highlight is
+    /// masked by (0x007d6980). Takes effect for chunks loaded after it.
+    void setSpecular(bool on) { specular_ = on; }
     [[nodiscard]] bool isFogEnabled() const { return fogEnabled; }
     void setViewDistance(float distance) { maxViewDistance_ = std::clamp(distance, 400.0f, 2400.0f); }
 
@@ -257,6 +266,17 @@ private:
     /// image, so one still being drawn from must outlive the frame that
     /// referenced it.
     bool evictTexturesFor(size_t needBytes);
+
+    /// Cube maps by texture key (env layers), kept for the session.
+    std::unordered_map<std::string, CubeTexture> cubeCache_;
+    CubeTexture blankCube_;          // bound where a chunk has no env layer
+    VkSampler cubeSampler_ = VK_NULL_HANDLE;
+    bool specular_ = false;
+    const CubeTexture* loadCube(const std::string& path);
+    /// The texture loader's stand-in for a file it cannot open (0x004b9550
+    /// with 0xac3354): one opaque green texel.
+    std::unique_ptr<VkTexture> greenTexture_;
+    VkTexture* greenTexture();
 
     // Fallback textures
     std::unique_ptr<VkTexture> whiteTexture;

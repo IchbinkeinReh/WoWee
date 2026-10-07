@@ -32,7 +32,8 @@ struct TerrainParamsUBO {
     int32_t hasLayer3;
     int32_t layerFlags[4];  // ivec4: MCLY flags of layers 0..3
     int32_t weightedLayers; // MPHD 0x4: Terrain1's weighted variants
-    int32_t pad[3];
+    int32_t envLayer;       // layer 0 from the env cube at the reflection
+    int32_t pad[2];
 };
 
 TerrainRenderer::TerrainRenderer() = default;
@@ -130,7 +131,8 @@ bool TerrainRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
     // bindings 0-6: combined image samplers (base + 3 layer + 3 alpha)
     // binding 7: uniform buffer (TerrainParams)
     // binding 8: combined image sampler (the baked shadow, MCSH)
-    std::vector<VkDescriptorSetLayoutBinding> materialBindings(9);
+    // binding 9: samplerCube (layer 0 of an env chunk)
+    std::vector<VkDescriptorSetLayoutBinding> materialBindings(10);
     for (uint32_t i = 0; i < 7; i++) {
         materialBindings[i] = {};
         materialBindings[i].binding = i;
@@ -148,6 +150,8 @@ bool TerrainRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
     materialBindings[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     materialBindings[8].descriptorCount = 1;
     materialBindings[8].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    materialBindings[9] = materialBindings[8];
+    materialBindings[9].binding = 9;
 
     materialSetLayout = createDescriptorSetLayout(device, materialBindings);
     if (!materialSetLayout) {
@@ -157,7 +161,7 @@ bool TerrainRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
 
     // --- Create descriptor pool ---
     VkDescriptorPoolSize poolSizes[] = {
-        { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_MATERIAL_SETS * 8 },
+        { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_MATERIAL_SETS * 9 },
         { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = MAX_MATERIAL_SETS },
     };
 
@@ -219,6 +223,16 @@ bool TerrainRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
     opaqueAlphaTexture->upload(*vkCtx, &opaqueAlpha, 1, 1, VK_FORMAT_R8_UNORM, false);
     opaqueAlphaTexture->createSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR,
                                        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+    {
+        // The env layer's cube, and a blank one for chunks without.
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = VK_FILTER_LINEAR;
+        si.minFilter = VK_FILTER_LINEAR;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(device, &si, nullptr, &cubeSampler_) != VK_SUCCESS) return false;
+        if (!uploadCubeTexture(*vkCtx, whitePixel, 1, 1, blankCube_)) return false;
+    }
     textureCacheBudgetBytes_ =
         envSizeMBOrDefault("WOWEE_TERRAIN_TEX_CACHE_MB", 4096) * 1024ull * 1024ull;
     LOG_INFO("Terrain texture cache budget: ", textureCacheBudgetBytes_ / (1024 * 1024), " MB");
@@ -343,6 +357,11 @@ void TerrainRenderer::shutdown() {
 
     if (whiteTexture) { whiteTexture->destroy(device, allocator); whiteTexture.reset(); }
     if (opaqueAlphaTexture) { opaqueAlphaTexture->destroy(device, allocator); opaqueAlphaTexture.reset(); }
+    if (greenTexture_) { greenTexture_->destroy(device, allocator); greenTexture_.reset(); }
+    for (auto& [key, cube] : cubeCache_) destroyCubeTexture(*vkCtx, cube);
+    cubeCache_.clear();
+    destroyCubeTexture(*vkCtx, blankCube_);
+    if (cubeSampler_) { vkDestroySampler(device, cubeSampler_, nullptr); cubeSampler_ = VK_NULL_HANDLE; }
 
     destroy(device, pipeline);
     destroy(device, wireframePipeline);
@@ -517,9 +536,29 @@ void TerrainRenderer::bindChunkTextures(TerrainChunkGPU& gpuChunk,
     for (size_t i = 0; i < chunk.layers.size() && i < 4; ++i) gpuChunk.layerFlags[i] = chunk.layers[i].flags;
     gpuChunk.weightedLayers = chunk.weightedLayers;
 
+    // With the 'specular' option the client loads each tileset texture as its
+    // "_s.blp", the highlight's mask in its alpha (0x007d6980; a cube keeps
+    // its own). A file that is not there is the loader's green stand-in.
+    const auto layerTexture = [&](const std::string& path) -> VkTexture* {
+        if (!specular_) return loadTexture(path);
+        const size_t dot = path.find_last_of('.');
+        const std::string specPath = (dot == std::string::npos ? path : path.substr(0, dot)) + "_s.blp";
+        VkTexture* t = loadTexture(specPath);
+        return t == whiteTexture.get() ? greenTexture() : t;
+    };
+
+    // An env chunk (0x007b9250 sets its flag 4 for a layer with MCLY 0x400)
+    // draws layer 0 from a cube at the reflection; the texture is a cube when
+    // it is a six-wide strip (0x004b95b0).
+    bool envChunk = false;
+    for (size_t i = 0; i < chunk.layers.size() && i < 4; ++i)
+        if (chunk.layers[i].flags & 0x400u) envChunk = true;
+
     uint32_t baseTexId = chunk.layers[0].textureId;
+    if (envChunk && baseTexId < texturePaths.size()) gpuChunk.envCube = loadCube(texturePaths[baseTexId]);
     if (baseTexId < texturePaths.size()) {
-        gpuChunk.baseTexture = loadTexture(texturePaths[baseTexId]);
+        gpuChunk.baseTexture = gpuChunk.envCube ? loadTexture(texturePaths[baseTexId])
+                                                : layerTexture(texturePaths[baseTexId]);
     } else {
         LOG_WARNING("Terrain[", tileX, ",", tileY, "] chunk[", chunkX, ",", chunkY,
                     "] base textureId ", baseTexId, " >= texturePaths size ",
@@ -534,7 +573,7 @@ void TerrainRenderer::bindChunkTextures(TerrainChunkGPU& gpuChunk,
 
         VkTexture* layerTex = whiteTexture.get();
         if (layer.textureId < texturePaths.size()) {
-            layerTex = loadTexture(texturePaths[layer.textureId]);
+            layerTex = layerTexture(texturePaths[layer.textureId]);
         } else {
             LOG_WARNING("Terrain[", tileX, ",", tileY, "] chunk[", chunkX, ",", chunkY,
                         "] layer[", i, "] textureId ", layer.textureId,
@@ -564,6 +603,7 @@ bool TerrainRenderer::createChunkParamsUBO(TerrainChunkGPU& gpuChunk) {
     params.hasLayer3 = gpuChunk.layerCount >= 3 ? 1 : 0;
     for (int i = 0; i < 4; ++i) params.layerFlags[i] = static_cast<int32_t>(gpuChunk.layerFlags[i]);
     params.weightedLayers = gpuChunk.weightedLayers ? 1 : 0;
+    params.envLayer = gpuChunk.envCube ? 1 : 0;
 
     VkBufferCreateInfo bufCI{};
     bufCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -696,6 +736,36 @@ bool TerrainRenderer::evictTexturesFor(size_t needBytes) {
     }
 
     return textureCacheBytes_ + needBytes <= textureCacheBudgetBytes_;
+}
+
+VkTexture* TerrainRenderer::greenTexture() {
+    if (!greenTexture_) {
+        greenTexture_ = std::make_unique<VkTexture>();
+        const uint8_t green[4] = {0x00, 0xff, 0x00, 0xff};
+        if (!greenTexture_->upload(*vkCtx, green, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false)) return whiteTexture.get();
+        greenTexture_->createSampler(vkCtx->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+                                     VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    }
+    return greenTexture_.get();
+}
+
+const CubeTexture* TerrainRenderer::loadCube(const std::string& path) {
+    std::string key = path;
+    std::replace(key.begin(), key.end(), '/', '\\');
+    std::transform(key.begin(), key.end(), key.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (auto it = cubeCache_.find(key); it != cubeCache_.end()) return it->second.valid() ? &it->second : nullptr;
+    CubeTexture& cube = cubeCache_[key];
+    pipeline::BLPImage blp = assetManager->loadTexture(key, false);
+    if (!blp.isValid() || !isCubeStrip(static_cast<uint32_t>(blp.width), static_cast<uint32_t>(blp.height)) ||
+        blp.data.size() < static_cast<size_t>(blp.width) * blp.height * 4) {
+        return nullptr;
+    }
+    if (!uploadCubeTexture(*vkCtx, blp.data.data(), static_cast<uint32_t>(blp.width),
+                           static_cast<uint32_t>(blp.height), cube)) {
+        return nullptr;
+    }
+    return &cube;
 }
 
 VkTexture* TerrainRenderer::loadTexture(const std::string& path) {
@@ -901,7 +971,13 @@ bool TerrainRenderer::writeMaterialDescriptors(VkDescriptorSet set, const Terrai
     bufInfo.offset = 0;
     bufInfo.range = sizeof(TerrainParamsUBO);
 
-    VkWriteDescriptorSet writes[9] = {};
+    // Binding 9: the env cube, or a blank one.
+    const VkDescriptorImageInfo cubeInfo{
+        .sampler = cubeSampler_,
+        .imageView = (chunk.envCube && chunk.envCube->valid()) ? chunk.envCube->view : blankCube_.view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+    VkWriteDescriptorSet writes[10] = {};
     for (int i = 0; i < 7; i++) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
@@ -923,7 +999,14 @@ bool TerrainRenderer::writeMaterialDescriptors(VkDescriptorSet set, const Terrai
     writes[7].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[7].pBufferInfo = &bufInfo;
 
-    vkUpdateDescriptorSets(vkCtx->getDevice(), 9, writes, 0, nullptr);
+    writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[9].dstSet = set;
+    writes[9].dstBinding = 9;
+    writes[9].descriptorCount = 1;
+    writes[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[9].pImageInfo = &cubeInfo;
+
+    vkUpdateDescriptorSets(vkCtx->getDevice(), 10, writes, 0, nullptr);
     return true;
 }
 

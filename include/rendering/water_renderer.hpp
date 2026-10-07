@@ -14,6 +14,7 @@
 
 #include "rendering/client_liquid.hpp"
 #include "rendering/client_proc_water.hpp"
+#include "rendering/cube_texture.hpp"
 #include "rendering/vk_texture.hpp"
 
 namespace wowee {
@@ -228,6 +229,8 @@ public:
         /// psLiquidWater's highlight is tinted by.
         glm::vec3 sunColor{1.0f};
     };
+    /// The client's 'specular' option (off by default).
+    void setClientSpecular(bool on) { clientSpecular_ = on; }
     void setLightWaterColors(const LightWaterColors& colors) {
         lightWaterColors_ = colors;
         hasLightWaterColors_ = true;
@@ -250,10 +253,8 @@ private:
         client_liquid::ProceduralTex procedural = client_liquid::ProceduralTex::None;
         std::vector<std::unique_ptr<VkTexture>> frames;
         std::vector<VkDescriptorSet> sets;  // one per frame, set 1 or 2 layout
-        /// Procedural water's cube units (0 and 1): one cube image a frame.
-        std::vector<VkImage> cubeImages;
-        std::vector<VmaAllocation> cubeAllocs;
-        std::vector<VkImageView> cubeViews;
+        /// Procedural water's cube units (0 and 1): one cube a frame.
+        std::vector<CubeTexture> cubes;
     };
     struct ClientLiquid {
         client_liquid::LiquidTypeRecord record;
@@ -304,7 +305,6 @@ private:
     bool initProcWater(VkDescriptorSetLayout perFrameLayout);
     void destroyProcWater();
     void loadProcCubeSlot(ClientTexSlot& slot, const std::string& name);
-    bool uploadCube(ClientTexSlot& slot, const uint8_t* rgba, uint32_t width, uint32_t height);
 
     bool initClientLiquid(VkDescriptorSetLayout perFrameLayout);
     void destroyClientLiquid();

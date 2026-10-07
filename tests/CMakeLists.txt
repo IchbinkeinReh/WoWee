@@ -722,6 +722,12 @@ wowee_add_test(test_wmo_sidn
     SOURCES test_wmo_sidn.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_cube_texture ────────────────────────────────────────
+# Which BLPs the client loads as cube maps, and its face order.
+wowee_add_test(test_cube_texture
+    SOURCES test_cube_texture.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_spline_body ─────────────────────────────────────────
 # The body of SMSG_MONSTER_MOVE, whose head two parsers shared and neither
 # covered. Checked against AzerothCore's own WriteCommonMonsterMovePart.

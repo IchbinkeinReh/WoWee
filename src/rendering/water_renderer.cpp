@@ -2893,19 +2893,11 @@ bool WaterRenderer::initProcWater(VkDescriptorSetLayout perFrameLayout) {
     procGreenTex_ = std::make_unique<VkTexture>();
     if (!procGreenTex_->upload(*vkCtx, green, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false)) return false;
     procGreenTex_->createSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
-    return uploadCube(procGreenCube_, green, 1, 1);
+    CubeTexture greenCube;
+    if (!uploadCubeTexture(*vkCtx, green, 1, 1, greenCube)) return false;
+    procGreenCube_.cubes.push_back(greenCube);
+    return true;
 }
-
-namespace {
-void destroyCubes(VkDevice device, VmaAllocator allocator, std::vector<VkImage>& images,
-                  std::vector<VmaAllocation>& allocs, std::vector<VkImageView>& views) {
-    for (auto v : views) vkDestroyImageView(device, v, nullptr);
-    for (size_t i = 0; i < images.size(); ++i) vmaDestroyImage(allocator, images[i], allocs[i]);
-    views.clear();
-    images.clear();
-    allocs.clear();
-}
-}  // namespace
 
 void WaterRenderer::destroyProcWater() {
     if (!vkCtx) return;
@@ -2924,104 +2916,14 @@ void WaterRenderer::destroyProcWater() {
     }
     destroy(device, procCubeSampler_);
     procGreenTex_.reset();
-    destroyCubes(device, allocator, procGreenCube_.cubeImages, procGreenCube_.cubeAllocs, procGreenCube_.cubeViews);
+    for (auto& c : procGreenCube_.cubes) destroyCubeTexture(*vkCtx, c);
+    procGreenCube_.cubes.clear();
     for (auto& [type, liquid] : clientLiquids_) {
-        for (auto& slot : liquid.slots)
-            destroyCubes(device, allocator, slot.cubeImages, slot.cubeAllocs, slot.cubeViews);
-    }
-}
-
-bool WaterRenderer::uploadCube(ClientTexSlot& slot, const uint8_t* rgba, uint32_t width, uint32_t height) {
-    // A strip six faces wide is taken as the faces in order +X, -X, +Y, -Y,
-    // +Z, -Z; anything else is the one image on every face. Inferred: the
-    // client binds whatever 0x004b9760 loads to the cube unit, and 3.3.5a's
-    // data ships no file for it (only the green stand-in above).
-    const bool strip = width == height * 6;
-    const uint32_t size = strip ? height : std::max(width, height);
-    std::vector<uint8_t> faces(static_cast<size_t>(size) * size * 4 * 6);
-    for (uint32_t f = 0; f < 6; ++f) {
-        for (uint32_t y = 0; y < size; ++y) {
-            for (uint32_t x = 0; x < size; ++x) {
-                uint32_t sx, sy;
-                if (strip) {
-                    sx = f * size + x;
-                    sy = y;
-                } else {
-                    sx = x * width / size;
-                    sy = y * height / size;
-                }
-                std::memcpy(&faces[((static_cast<size_t>(f) * size + y) * size + x) * 4],
-                            &rgba[(static_cast<size_t>(sy) * width + sx) * 4], 4);
-            }
+        for (auto& slot : liquid.slots) {
+            for (auto& c : slot.cubes) destroyCubeTexture(*vkCtx, c);
+            slot.cubes.clear();
         }
     }
-    VkImageCreateInfo ii{};
-    ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    ii.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-    ii.imageType = VK_IMAGE_TYPE_2D;
-    ii.format = VK_FORMAT_R8G8B8A8_UNORM;
-    ii.extent = {size, size, 1};
-    ii.mipLevels = 1;
-    ii.arrayLayers = 6;
-    ii.samples = VK_SAMPLE_COUNT_1_BIT;
-    ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VmaAllocationCreateInfo aci{};
-    aci.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-    VkImage image = VK_NULL_HANDLE;
-    VmaAllocation alloc = VK_NULL_HANDLE;
-    if (vmaCreateImage(vkCtx->getAllocator(), &ii, &aci, &image, &alloc, nullptr) != VK_SUCCESS) return false;
-
-    AllocatedBuffer staging = createBuffer(vkCtx->getAllocator(), faces.size(),
-                                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
-    void* mapped = nullptr;
-    vmaMapMemory(vkCtx->getAllocator(), staging.allocation, &mapped);
-    std::memcpy(mapped, faces.data(), faces.size());
-    vmaUnmapMemory(vkCtx->getAllocator(), staging.allocation);
-    vkCtx->immediateSubmit([&](VkCommandBuffer cmd) {
-        VkImageMemoryBarrier b{};
-        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image = image;
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
-        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b);
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 6};
-        region.imageExtent = {size, size, 1};
-        vkCmdCopyBufferToImage(cmd, staging.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b);
-    });
-    if (vkCtx->isInUploadBatch()) {
-        vkCtx->deferStagingCleanup(staging);
-    } else {
-        destroyBuffer(vkCtx->getAllocator(), staging);
-    }
-
-    VkImageViewCreateInfo vi{};
-    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vi.image = image;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
-    vi.format = VK_FORMAT_R8G8B8A8_UNORM;
-    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
-    VkImageView view = VK_NULL_HANDLE;
-    if (vkCreateImageView(vkCtx->getDevice(), &vi, nullptr, &view) != VK_SUCCESS) {
-        vmaDestroyImage(vkCtx->getAllocator(), image, alloc);
-        return false;
-    }
-    slot.cubeImages.push_back(image);
-    slot.cubeAllocs.push_back(alloc);
-    slot.cubeViews.push_back(view);
-    return true;
 }
 
 void WaterRenderer::loadProcCubeSlot(ClientTexSlot& slot, const std::string& name) {
@@ -3041,7 +2943,11 @@ void WaterRenderer::loadProcCubeSlot(ClientTexSlot& slot, const std::string& nam
     for (const auto& path : paths) {
         pipeline::BLPImage blp = assetManager_->loadTexture(path, false);
         if (!blp.isValid() || blp.data.size() < static_cast<size_t>(blp.width) * blp.height * 4) continue;
-        uploadCube(slot, blp.data.data(), static_cast<uint32_t>(blp.width), static_cast<uint32_t>(blp.height));
+        // A six-wide strip is a cube (0x004b95b0); see cube_texture.hpp.
+        CubeTexture cube;
+        if (uploadCubeTexture(*vkCtx, blp.data.data(), static_cast<uint32_t>(blp.width),
+                              static_cast<uint32_t>(blp.height), cube))
+            slot.cubes.push_back(cube);
     }
 }
 
@@ -3099,10 +3005,10 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
             const uint32_t period = periodInt < 0 ? client_liquid::kFixedSlotPeriodMs : rec.ints[periodInt];
             if (unit < 2) {
                 if (!sl.loaded) loadProcCubeSlot(sl, name);
-                const auto& views = sl.cubeViews.empty() ? procGreenCube_.cubeViews : sl.cubeViews;
-                if (views.empty()) return VK_NULL_HANDLE;
+                const auto& cubes = sl.cubes.empty() ? procGreenCube_.cubes : sl.cubes;
+                if (cubes.empty()) return VK_NULL_HANDLE;
                 imgs[unit] = {procCubeSampler_,
-                              views[client_liquid::animFrameIndex(timeMs, period, static_cast<uint32_t>(views.size()))],
+                              cubes[client_liquid::animFrameIndex(timeMs, period, static_cast<uint32_t>(cubes.size()))].view,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             } else {
                 if (!sl.loaded) loadClientSlot(sl, name);

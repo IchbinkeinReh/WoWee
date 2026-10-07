@@ -451,6 +451,11 @@ public:
     /// and refraction copy.
     void setEnhancedWaterEnabled(bool enabled);
     [[nodiscard]] bool isEnhancedWaterEnabled() const { return enhancedWater_; }
+    /// The client's 'specular' option (0x0078de60 sets world flag 0x8000000;
+    /// off by default): water drawn as psLiquidWater rather than NoSpec, the
+    /// terrain's "_s.blp" textures and highlight. WOWEE_SPECULAR=1 turns it on;
+    /// read when the terrain and water renderers are made.
+    [[nodiscard]] static bool clientSpecular() { return envFlagEnabled("WOWEE_SPECULAR"); }
 
 private:
     void applyMsaaChange();
