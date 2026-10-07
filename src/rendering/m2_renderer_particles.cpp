@@ -437,7 +437,9 @@ void M2Renderer::updateRibbons(M2Instance& inst, const M2ModelGPU& gpu, float dt
 // Ribbon rendering
 // ---------------------------------------------------------------------------
 void M2Renderer::renderM2Ribbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
-    if (!ribbonPipeline_ || !ribbonAdditivePipeline_ || !ribbonVB_ || !ribbonVBMapped_) return;
+    // This frame's buffer: the other may still be in use by the GPU.
+    const uint32_t vbSlot = vkCtx_->getCurrentFrame() % kDynamicVBSlots;
+    if (!ribbonPipeline_ || !ribbonAdditivePipeline_ || !ribbonVB_[vbSlot] || !ribbonVBMapped_[vbSlot]) return;
     // Diagnostic: WOWEE_M2_NO_RIBBONS=1 drops every M2 ribbon trail draw.
     static const bool kNoRibbons = envFlagEnabled("WOWEE_M2_NO_RIBBONS");
     if (kNoRibbons) return;
@@ -455,7 +457,7 @@ void M2Renderer::renderM2Ribbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
     const glm::vec3 camPos = cachedCamPos_;
     const glm::vec3 upWorld(0.0f, 0.0f, 1.0f);
 
-    float* dst     = static_cast<float*>(ribbonVBMapped_);
+    float* dst     = static_cast<float*>(ribbonVBMapped_[vbSlot]);
     size_t written = 0;
 
     ribbonDraws_.clear();
@@ -608,13 +610,15 @@ void M2Renderer::renderM2Ribbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 ribbonPipelineLayout_, 1, 1, &dc.texSet, 0, nullptr);
         VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &ribbonVB_, &offset);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &ribbonVB_[vbSlot], &offset);
         vkCmdDraw(cmd, dc.vertexCount, 1, dc.firstVertex, 0);
     }
 }
 
 void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
-    if (!particlePipeline_ || !m2ParticleVB_) return;
+    // This frame's buffer: the other may still be in use by the GPU.
+    const uint32_t vbSlot = vkCtx_->getCurrentFrame() % kDynamicVBSlots;
+    if (!particlePipeline_ || !m2ParticleVB_[vbSlot]) return;
     // Diagnostic: WOWEE_M2_NO_PARTICLES=1 drops every M2 particle draw, which
     // tells a particle artifact apart from a skinned-geometry one.
     static const bool kNoParticles = envFlagEnabled("WOWEE_M2_NO_PARTICLES");
@@ -629,8 +633,8 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
 
     // Written straight into the mapped buffer rather than accumulated into a
     // vector per group and copied in afterwards; see ParticleRun.
-    if (!m2ParticleVBMapped_) return;
-    float* const vbBase = static_cast<float*>(m2ParticleVBMapped_);
+    if (!m2ParticleVBMapped_[vbSlot]) return;
+    float* const vbBase = static_cast<float*>(m2ParticleVBMapped_[vbSlot]);
     uint32_t vbWritten = 0;
     particleRuns_.clear();
     ParticleGroup* runGroup = nullptr;
@@ -913,7 +917,7 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                             particlePipelineLayout_, 0, 1, &perFrameSet, 0, nullptr);
 
     VkDeviceSize vbOffset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &m2ParticleVB_, &vbOffset);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &m2ParticleVB_[vbSlot], &vbOffset);
 
     VkPipeline currentPipeline = VK_NULL_HANDLE;
 

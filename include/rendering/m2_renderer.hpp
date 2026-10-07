@@ -1044,14 +1044,17 @@ private:
 
     // Dynamic ribbon vertex buffer (CPU-written triangle strip)
     static constexpr size_t MAX_RIBBON_VERTS = 2048;  // 9 floats each
-    ::VkBuffer ribbonVB_ = VK_NULL_HANDLE;
-    VmaAllocation ribbonVBAlloc_ = VK_NULL_HANDLE;
-    void* ribbonVBMapped_ = nullptr;
+    // One of each per frame in flight: the CPU writes the next frame's
+    // vertices while the GPU may still be drawing the last one's.
+    static constexpr uint32_t kDynamicVBSlots = 2;  // MAX_FRAMES_IN_FLIGHT
+    ::VkBuffer ribbonVB_[kDynamicVBSlots] = {};
+    VmaAllocation ribbonVBAlloc_[kDynamicVBSlots] = {};
+    void* ribbonVBMapped_[kDynamicVBSlots] = {};
 
     // Dynamic particle buffers
-    ::VkBuffer m2ParticleVB_ = VK_NULL_HANDLE;
-    VmaAllocation m2ParticleVBAlloc_ = VK_NULL_HANDLE;
-    void* m2ParticleVBMapped_ = nullptr;
+    ::VkBuffer m2ParticleVB_[kDynamicVBSlots] = {};
+    VmaAllocation m2ParticleVBAlloc_[kDynamicVBSlots] = {};
+    void* m2ParticleVBMapped_[kDynamicVBSlots] = {};
 
     std::unordered_map<uint32_t, M2ModelGPU> models;
     // Grace period for model cleanup: track when a model first became instanceless.

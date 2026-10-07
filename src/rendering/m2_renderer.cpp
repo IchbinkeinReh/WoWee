@@ -873,14 +873,20 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
         VmaAllocationInfo allocInfo{};
 
         // M2 particle buffer
-        bci.size = MAX_M2_PARTICLE_VERTS * 9 * sizeof(float);
-        vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &m2ParticleVB_, &m2ParticleVBAlloc_, &allocInfo);
-        m2ParticleVBMapped_ = allocInfo.pMappedData;
+        // One per frame in flight (see kDynamicVBSlots): with a single
+        // buffer the CPU rewrote what the GPU was still drawing from, and the
+        // particles flickered whenever the two overlapped.
+        static_assert(kDynamicVBSlots == MAX_FRAMES_IN_FLIGHT);
+        for (uint32_t i = 0; i < kDynamicVBSlots; ++i) {
+            bci.size = MAX_M2_PARTICLE_VERTS * 9 * sizeof(float);
+            vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &m2ParticleVB_[i], &m2ParticleVBAlloc_[i], &allocInfo);
+            m2ParticleVBMapped_[i] = allocInfo.pMappedData;
 
         // Ribbon vertex buffer - triangle strip: pos(3)+color(3)+alpha(1)+uv(2)=9 floats/vert
-        bci.size = MAX_RIBBON_VERTS * 9 * sizeof(float);
-        vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &ribbonVB_, &ribbonVBAlloc_, &allocInfo);
-        ribbonVBMapped_ = allocInfo.pMappedData;
+            bci.size = MAX_RIBBON_VERTS * 9 * sizeof(float);
+            vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &ribbonVB_[i], &ribbonVBAlloc_[i], &allocInfo);
+            ribbonVBMapped_[i] = allocInfo.pMappedData;
+        }
     }
 
     // --- Create white fallback texture ---
@@ -962,8 +968,10 @@ void M2Renderer::shutdown() {
     whiteTexture_.reset();
 
     // Clean up particle/ribbon buffers
-    destroy(alloc, m2ParticleVB_, m2ParticleVBAlloc_);
-    destroy(alloc, ribbonVB_, ribbonVBAlloc_);
+    for (uint32_t i = 0; i < kDynamicVBSlots; ++i) {
+        destroy(alloc, m2ParticleVB_[i], m2ParticleVBAlloc_[i]);
+        destroy(alloc, ribbonVB_[i], ribbonVBAlloc_[i]);
+    }
 
     // Destroy pipelines
     auto destroyPipeline = [&](VkPipeline& p) { if (p) { vkDestroyPipeline(device, p, nullptr); p = VK_NULL_HANDLE; } };
