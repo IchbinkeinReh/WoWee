@@ -66,6 +66,36 @@ TEST_CASE("a four-bit alpha map unpacks low nibble first", "[adt][alpha]") {
     CHECK(at(alpha, 5, 3) == 5 * 17);
 }
 
+TEST_CASE("the map's MPHD flag 0x4 decides the bit depth, not the layer's size",
+          "[adt][alpha]") {
+    // The client decodes every alpha map of a map by its WDT's flag
+    // (0x007b9890): eight bits a texel with it, four without.
+    MapChunk chunk;
+    chunk.layers.resize(2);
+    chunk.layers[1].flags = 0x100;
+    chunk.layers[1].offsetMCAL = 0;
+    chunk.alphaMap.assign(ALPHA_MAP_SIZE, 0);
+    chunk.alphaMap[1] = 0x21;
+    chunk.flags = 0x8000;  // no last row and column fix to muddy the texels
+
+    std::vector<uint8_t> alpha;
+    chunk.bigAlpha = 1;
+    REQUIRE(decodeLayerAlpha(chunk, 1, alpha, 0));
+    CHECK(at(alpha, 1, 0) == 0x21);
+    CHECK(at(alpha, 2, 0) == 0);
+
+    // The same bytes on a map without the flag are four bits a texel.
+    chunk.bigAlpha = 0;
+    REQUIRE(decodeLayerAlpha(chunk, 1, alpha, 0));
+    CHECK(at(alpha, 2, 0) == 1 * 17);
+    CHECK(at(alpha, 3, 0) == 2 * 17);
+
+    // A big-alpha map whose layer is too short for eight bits has none.
+    chunk.bigAlpha = 1;
+    chunk.alphaMap.resize(ALPHA_MAP_PACKED);
+    CHECK_FALSE(decodeLayerAlpha(chunk, 1, alpha, 0));
+}
+
 TEST_CASE("the last row and column are taken from the ones before them",
           "[adt][alpha]") {
     // 15 everywhere the file paints, and 0 in the row and column it does not -

@@ -56,7 +56,12 @@ bool decodeLayerAlpha(const MapChunk& chunk, size_t layerIdx,
         }
     }
 
-    if (layer.compressedAlpha()) {
+    // The client decides by the map's flag alone (0x007b9890 picks genformat
+    // 2 or 3 by MPHD 0x4); only a chunk whose map is unknown is guessed at.
+    const bool eightBit = chunk.bigAlpha == 1;
+    const bool fourBit = chunk.bigAlpha == 0;
+
+    if (layer.compressedAlpha() && !fourBit) {
         size_t readPos = offset;
         size_t writePos = 0;
         while (writePos < ALPHA_MAP_SIZE && readPos < chunk.alphaMap.size()) {
@@ -81,14 +86,15 @@ bool decodeLayerAlpha(const MapChunk& chunk, size_t layerIdx,
         return true;
     }
 
-    if (layerSize >= ALPHA_MAP_SIZE) {
+    if (!fourBit && (eightBit || layerSize >= ALPHA_MAP_SIZE) &&
+        offset + ALPHA_MAP_SIZE <= chunk.alphaMap.size()) {
         std::copy(chunk.alphaMap.begin() + static_cast<std::ptrdiff_t>(offset),
                   chunk.alphaMap.begin() + static_cast<std::ptrdiff_t>(offset + ALPHA_MAP_SIZE),
                   outAlpha.begin());
         return true;
     }
 
-    if (layerSize >= ALPHA_MAP_PACKED &&
+    if (!eightBit && (fourBit || layerSize >= ALPHA_MAP_PACKED) &&
         offset + ALPHA_MAP_PACKED <= chunk.alphaMap.size()) {
         // 4 bits per texel: low nibble first, scaled 0-15 to 0-255 by 17.
         for (size_t i = 0; i < ALPHA_MAP_PACKED; ++i) {

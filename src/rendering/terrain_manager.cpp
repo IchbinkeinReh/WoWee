@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "pipeline/adt_alpha.hpp"
+#include "pipeline/wdt_loader.hpp"
 #include "pipeline/grass_profile.hpp"
 #include "rendering/terrain_renderer.hpp"
 #include "rendering/vk_context.hpp"
@@ -421,6 +422,9 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
             LOG_ERROR("Failed to parse ADT terrain: ", adtPath);
             return nullptr;
         }
+        // Every alpha map of the map is decoded by its WDT's flag (0x007b9890).
+        const int8_t bigAlpha = mapBigAlpha();
+        for (auto& chunk : terrainPtr->chunks) chunk.bigAlpha = bigAlpha;
     }
 
     if (!workerRunning.load()) return nullptr;
@@ -2572,5 +2576,20 @@ void TerrainManager::precacheTiles(const std::vector<std::pair<int, int>>& tiles
     // Notify workers to start loading
     queueCV.notify_all();
 }
+
+int8_t TerrainManager::mapBigAlpha() {
+    std::lock_guard<std::mutex> lock(mapBigAlphaMutex_);
+    if (mapBigAlphaFor_ == mapName) return mapBigAlpha_;
+    mapBigAlphaFor_ = mapName;
+    mapBigAlpha_ = -1;
+    if (!assetManager) return mapBigAlpha_;
+    const auto wdtData = assetManager->readFile("World\\Maps\\" + mapName + "\\" + mapName + ".wdt");
+    if (!wdtData.empty()) {
+        // MPHD's flags, read by CMap::LoadWdt into 0x00cf08d0.
+        mapBigAlpha_ = (pipeline::parseWDT(wdtData).mphdFlags & 0x4) ? 1 : 0;
+    }
+    return mapBigAlpha_;
+}
+
 } // namespace rendering
 } // namespace wowee

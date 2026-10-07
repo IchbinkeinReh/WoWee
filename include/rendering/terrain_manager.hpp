@@ -422,6 +422,12 @@ private:
     audio::AmbientSoundManager* ambientSoundManager = nullptr;
 
     std::string mapName = "Azeroth";
+    /// The map's WDT MPHD flag 0x4 (8-bit alpha maps), read once per map:
+    /// 1 or 0, -1 with no WDT. See MapChunk::bigAlpha.
+    int8_t mapBigAlpha();
+    std::mutex mapBigAlphaMutex_;
+    std::string mapBigAlphaFor_;
+    int8_t mapBigAlpha_ = -1;
 
     // Loaded tiles (keyed by coordinate)
     std::unordered_map<TileCoord, std::unique_ptr<TerrainTile>, TileCoord::Hash> loadedTiles;

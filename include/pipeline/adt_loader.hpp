@@ -61,6 +61,11 @@ struct MapChunk {
     HeightMap heightMap;
     std::vector<TextureLayer> layers;
     std::vector<uint8_t> alphaMap;  // Alpha blend maps for layers
+    // The map's WDT MPHD flag 0x4, which the client reads into 0x00cf08d0 and
+    // decodes every alpha map by: 1 = eight bits a texel (raw, or RLE where
+    // the layer says 0x200), 0 = four bits (0x007b9890). -1 when the map's
+    // WDT was not read, and the layer's size has to say which.
+    int8_t bigAlpha = -1;
 
     // Normals (compressed)
     std::array<int8_t, 145 * 3> normals;  // X, Y, Z per vertex
