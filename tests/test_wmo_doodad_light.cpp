@@ -231,3 +231,32 @@ TEST_CASE("a world object's direct light in the terrain's baked shadow", "[wmo][
     for (int frame = 0; frame < 9; ++frame) s = wl::easeDirectScale(s, 0.5f, 1.0f / 60.0f);
     CHECK(s == Catch::Approx(0.5f));
 }
+
+TEST_CASE("a WMO batch's light follows 0x007a9380", "[wmo][doodad-light][light-mode]") {
+    using L = wl::BatchLight;
+    // Exterior and exterior-lit groups: lit, or unlit with F_UNLIT; 0x20 is
+    // not read there.
+    CHECK(wl::batchLights(0x8, false, 0x20).insidePass == L::Outside);
+    CHECK(wl::batchLights(0x40, false, 0x21).insidePass == L::Unlit);
+    // An interior group: the interior light, or the averaged one with 0x20;
+    // F_UNLIT is not read there.
+    CHECK(wl::batchLights(0x2000, false, 0x1).insidePass == L::Interior);
+    CHECK(wl::batchLights(0x2000, false, 0x21).insidePass == L::Averaged);
+    // A transition batch: unlit, averaged or lit outside, then the interior.
+    const auto t = wl::batchLights(0x2000, true, 0x20);
+    CHECK(t.outsidePass == L::Averaged);
+    CHECK(t.insidePass == L::Interior);
+    CHECK(wl::batchLights(0x2000, true, 0x21).outsidePass == L::Unlit);
+    CHECK(wl::batchLights(0x2000, true, 0x0).outsidePass == L::Outside);
+}
+
+TEST_CASE("light mode 2 averages the direct light and the ambient", "[wmo][doodad-light][light-mode]") {
+    // 0x007ee750: direct + (ambient - direct) / 2, rounded down; ambient +
+    // (direct - ambient) / 2 rounded down, then 16 brighter, clamped.
+    const auto a = wl::averagedOutsideLight(glm::ivec3(200, 101, 255), glm::ivec3(64, 0, 250));
+    CHECK(a.direct == glm::ivec3(132, 50, 252));
+    CHECK(a.ambient == glm::ivec3(148, 66, 255));
+    const auto b = wl::averagedOutsideLight(glm::ivec3(0), glm::ivec3(0));
+    CHECK(b.direct == glm::ivec3(0));
+    CHECK(b.ambient == glm::ivec3(16));
+}

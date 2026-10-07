@@ -585,6 +585,9 @@ void Renderer::updatePerFrameUBO() {
         // with, 1 before map 530 (0x00873210).
         currentFrameData.fogColor = glm::vec4(lp.zoneFogColor, lp.fogExponent);
         currentFrameData.cameraFogColor = glm::vec4(lp.fogColor, lp.fogExponent);
+        // Not dimmed by the glare: 0x007816f0 darkens only 0xd38ca8/cac.
+        currentFrameData.averagedDirectColor = glm::vec4(lp.averagedDirectColor, 1.0f);
+        currentFrameData.averagedAmbientColor = glm::vec4(lp.averagedAmbientColor, 1.0f);
         currentFrameData.fogParams.x = lp.fogStart;
         currentFrameData.fogParams.y = lp.fogEnd;
 
@@ -3235,8 +3238,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
             // The sun's and the White Lady's glare, over the whole world with
             // no depth test, last before the overlays (0x007f0870 runs after
-            // the world, 0x009ac400 turns the depth test off).
-            if (skySystem && camera && !skipSky) skySystem->renderGlare(cmd, perFrameSet);
+            // the world, 0x009ac400 turns the depth test off) - after the
+            // water's continuation pass when there is one.
+            if (skySystem && camera && !skipSky && !glareDrawsWithWater_) skySystem->renderGlare(cmd, perFrameSet);
             renderUnderwaterOverlay(cmd);
             renderPostSceneOverlays(cmd, gameHandler);
             vkEndCommandBuffer(cmd);
@@ -3455,7 +3459,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     // in the parallel path they were already recorded into SEC_POST above.
     if (!parallelRecordingEnabled_) {
         // The glare, over the finished world (0x007f0870, 0x009ac400).
-        if (skySystem && camera && !skipSky) skySystem->renderGlare(currentCmd, perFrameSet);
+        if (skySystem && camera && !skipSky && !glareDrawsWithWater_) skySystem->renderGlare(currentCmd, perFrameSet);
         renderUnderwaterOverlay(currentCmd);
         renderPostSceneOverlays(currentCmd, gameHandler);
     }
@@ -3530,6 +3534,10 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             swimEffects->render(currentCmd, perFrameSet);
         }
 
+        // The glare, after the water as after the rest of the world
+        // (0x004f8ea0: 0x007f0870 follows 0x0077f980's liquids).
+        if (skySystem && !skipSky && glareDrawsWithWater_) skySystem->renderGlare(currentCmd, perFrameSet);
+
         // And the minimap, last of all: it is the interface rather than the
         // world, and nothing in the world belongs over it.
         if (minimapDrawsWithWater_) renderMinimapOverlay(currentCmd, gameHandler);
@@ -3549,6 +3557,7 @@ void Renderer::syncSwimEffectsTargetPass() {
     VkSampleCountFlagBits samples = vkCtx->getMsaaSamples();
     swimEffectsDrawWithWater_ = false;
     minimapDrawsWithWater_ = false;
+    glareDrawsWithWater_ = false;
 
     if (waterDrawsInContinuePass()) {
         // Both continuation passes are single-sampled: with MSAA the water draws
@@ -3562,12 +3571,16 @@ void Renderer::syncSwimEffectsTargetPass() {
             samples = VK_SAMPLE_COUNT_1_BIT;
             swimEffectsDrawWithWater_ = true;
             minimapDrawsWithWater_ = true;
+            glareDrawsWithWater_ = true;
         } else {
             pass = vkCtx->getImGuiRenderPass();
         }
     }
 
     if (swimEffects) swimEffects->setTargetPass(pass, samples);
+    if (skySystem && skySystem->getCelestial()) {
+        skySystem->getCelestial()->setGlareTargetPass(glareDrawsWithWater_ ? pass : VK_NULL_HANDLE, samples);
+    }
     // The minimap for the same reason as the spray, and it is the more visible
     // of the two: it is a fixed disc in the corner of the screen, so any water
     // on screen behind it painted straight over the terrain it draws. The
@@ -4340,13 +4353,18 @@ void Renderer::refreshSwimEffectsPass() {
     if (!vkCtx) return;
     const bool sprayWasWithWater = swimEffectsDrawWithWater_;
     const bool minimapWasWithWater = minimapDrawsWithWater_;
+    const bool glareWasWithWater = glareDrawsWithWater_;
     syncSwimEffectsTargetPass();
     const bool sprayMoved = swimEffects && swimEffectsDrawWithWater_ != sprayWasWithWater;
     const bool minimapMoved = minimap && minimapDrawsWithWater_ != minimapWasWithWater;
-    if (!sprayMoved && !minimapMoved) return;
+    Celestial* celestial = skySystem ? skySystem->getCelestial() : nullptr;
+    const bool glareMoved = celestial && (glareDrawsWithWater_ != glareWasWithWater ||
+                                          celestial->glarePipelineStale());
+    if (!sprayMoved && !minimapMoved && !glareMoved) return;
     vkDeviceWaitIdle(vkCtx->getDevice());
     if (sprayMoved) swimEffects->recreatePipelines();
     if (minimapMoved) minimap->recreatePipelines();
+    if (glareMoved) celestial->recreateGlarePipeline();
 }
 
 // ========================= Multithreaded Secondary Command Buffers =========================

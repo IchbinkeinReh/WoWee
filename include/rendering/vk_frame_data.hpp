@@ -46,6 +46,11 @@ struct GPUPerFrameData {
     // both. Only an interior group, and what stands in one, takes this
     // (0x007a9380 by way of 0x007a8440, 0x007c1730).
     glm::vec4 cameraFogColor;
+    // Light mode 2 (0x007a8b10): the direct and ambient light a WMO batch
+    // whose material has flag 0x20 is lit by, the zone's two averaged
+    // (0x007ee750's 0xd38cb0/cb4). Only the WMO shader reads these.
+    glm::vec4 averagedDirectColor;
+    glm::vec4 averagedAmbientColor;
 };
 
 // Push constants for the model matrix (most common case)

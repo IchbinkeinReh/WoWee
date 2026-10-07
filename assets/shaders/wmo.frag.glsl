@@ -18,6 +18,8 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 rtCameraPos;
     vec4 rtParams;
     vec4 cameraFogColor;  // the camera's fog, its interior's blended in
+    vec4 averagedDirectColor;   // light mode 2's direct light (0xd38cb0)
+    vec4 averagedAmbientColor;  // and its ambient (0xd38cb4)
 };
 
 #include "rt_lighting.glsli"
@@ -43,7 +45,7 @@ layout(set = 1, binding = 1) uniform WMOMaterial {
     float wmoAmbientB;
     int unused64;      // unused; was a per-texture-name emissive mode
     int hasVertexColors;  // 0 none, 1 MOCV as it is (MOHD 0x8), 2 as 0x007d7380 left it
-    int padding1;
+    int averagedLight;  // material flag 0x20: lit by light mode 2 (0x007a8b10)
     int padding2;
 };
 
@@ -263,8 +265,13 @@ void main() {
     vec3 wmoAmbient = vec3(wmoAmbientR, wmoAmbientG, wmoAmbientB);
     vec3 inside = texColor.rgb * max(mocv, wmoAmbient);
 
+    // Light mode 1, or 2 for material flag 0x20 - the zone's direct and
+    // ambient light averaged - which an interior group's batch takes in
+    // place of the interior light, F_UNLIT not read (0x007a9380).
+    vec3 directLight = averagedLight != 0 ? averagedDirectColor.rgb : lightColor.rgb;
+    vec3 ambientLight = averagedLight != 0 ? averagedAmbientColor.rgb : ambientColor.rgb;
     vec3 outside;
-    if (unlit != 0) {
+    if (unlit != 0 && averagedLight == 0) {
         // Outdoor unlit surface - still receives directional shadows
         outside = texColor.rgb * shadow;
     } else {
@@ -273,8 +280,8 @@ void main() {
 
         // No specular: MapObjSpecular is used only with the client's
         // 'specular' option, which is off by default.
-        outside = rtAmbient(rt, ambientColor.rgb) * texColor.rgb
-                + shadow * diff * lightColor.rgb * texColor.rgb;
+        outside = rtAmbient(rt, ambientLight) * texColor.rgb
+                + shadow * diff * directLight * texColor.rgb;
 
         // An exterior group's vertex colour is light baked into it - a lamp's
         // pool on a wall - and it adds to the sun, as it does in the client.
@@ -306,7 +313,7 @@ void main() {
         }
         result = outside * VertColor.a + inside * (1.0 - VertColor.a);
     } else if (isInterior != 0) {
-        result = applyFog(inside, FragPos, dist, insideFog);
+        result = applyFog(averagedLight != 0 ? outside : inside, FragPos, dist, insideFog);
     } else {
         result = applyFog(outside, FragPos, dist, fogColor.rgb);
     }

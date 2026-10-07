@@ -6,6 +6,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/dbc_layout.hpp"
+#include "pipeline/wmo_doodad_light.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
 #include <cmath>
@@ -459,6 +460,18 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
             newParams = death;
             deathSkyboxId = it->second.lightSkyboxId;
         }
+    }
+
+    // Light mode 2's colours, from the blend before it is darkened
+    // (0x007ee750, called ahead of the 0x007f3230 tail).
+    {
+        const auto toByte = [](const glm::vec3& c) {
+            return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
+        };
+        const auto avg = pipeline::wmo_doodad_light::averagedOutsideLight(toByte(newParams.diffuseColor),
+                                                                           toByte(newParams.ambientColor));
+        newParams.averagedDirectColor = glm::vec3(avg.direct) / 255.0f;
+        newParams.averagedAmbientColor = glm::vec3(avg.ambient) / 255.0f;
     }
 
     // Darker with depth, by the LiquidType's own amounts: the ambient and the

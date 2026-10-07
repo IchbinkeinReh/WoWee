@@ -269,6 +269,10 @@ private:
     /// Whether the minimap follows water out of the scene pass, for the same
     /// reason the spray does - see syncSwimEffectsTargetPass.
     bool minimapDrawsWithWater_ = false;
+    /// Whether the sun's and the White Lady's glare follows water out of the
+    /// scene pass: the client draws it after all of the world, water too
+    /// (0x004f8ea0 calls 0x007f0870 after 0x0077f980 and the rest).
+    bool glareDrawsWithWater_ = false;
 
     void runDeferredWorldInitStep(float deltaTime);
 

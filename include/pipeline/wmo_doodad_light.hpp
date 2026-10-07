@@ -226,6 +226,60 @@ inline BatchFogs batchFogs(uint32_t groupFlags, bool transitionBatch, uint32_t m
     return out;
 }
 
+/// The light a pass of a WMO batch is drawn in: 0x007a8b10's mode, which
+/// 0x007a9380 picks from the group and the material. Unlit (0) none; Outside
+/// (1) the zone's direct and ambient light; Averaged (2) the two averaged
+/// (averagedOutsideLight); Interior (3) the MOHD ambient and no direct light.
+enum class BatchLight : uint8_t { Unlit = 0, Outside = 1, Averaged = 2, Interior = 3 };
+struct BatchLights {
+    BatchLight outsidePass = BatchLight::Outside;  // the transition batch's first pass
+    BatchLight insidePass = BatchLight::Outside;   // its second, or the only pass
+};
+/// A transition batch's first pass is unlit with F_UNLIT (0x1), averaged with
+/// material flag 0x20, outside otherwise; its second is the interior light.
+/// Any other batch of an exterior or exterior-lit group (0x48) is unlit with
+/// F_UNLIT and outside otherwise, 0x20 not read; of an interior group it is
+/// averaged with 0x20 and the interior light otherwise, F_UNLIT not read.
+inline BatchLights batchLights(uint32_t groupFlags, bool transitionBatch, uint32_t materialFlags) {
+    const bool unlit = (materialFlags & 0x1u) != 0;
+    const bool averaged = (materialFlags & 0x20u) != 0;
+    BatchLights out;
+    if (transitionBatch) {
+        out.outsidePass = unlit ? BatchLight::Unlit : averaged ? BatchLight::Averaged : BatchLight::Outside;
+        out.insidePass = BatchLight::Interior;
+        return out;
+    }
+    if (groupFlags & kOutsideGroupFlags) {
+        out.insidePass = unlit ? BatchLight::Unlit : BatchLight::Outside;
+    } else {
+        out.insidePass = averaged ? BatchLight::Averaged : BatchLight::Interior;
+    }
+    out.outsidePass = out.insidePass;
+    return out;
+}
+
+/// Light mode 2's colours (0x007ee750 keeps them at 0xd38cb0/cb4): a direct
+/// light half way from the zone's direct light toward its ambient, and an
+/// ambient half way from the ambient toward the direct light and 16/255
+/// brighter, clamped. Bytes (0..255 a channel), each step rounded down as the
+/// client's packed arithmetic does. Worked out before the liquid's darkening
+/// (0x007f3230 tail) and the glare's (0x007816f0), which touch only
+/// 0xd38ca8/cac.
+struct AveragedLight {
+    glm::ivec3 direct{0};
+    glm::ivec3 ambient{0};
+};
+inline AveragedLight averagedOutsideLight(glm::ivec3 direct, glm::ivec3 ambient) {
+    AveragedLight out;
+    for (int c = 0; c < 3; ++c) {
+        const int d = direct[c];
+        const int a = ambient[c];
+        out.direct[c] = d + ((a - d) >> 1);
+        out.ambient[c] = glm::min(a + ((d - a) >> 1) + 0x10, 0xff);
+    }
+    return out;
+}
+
 /// The groups of one WMO drawn in the camera's interior pass. 0x007ad1f0
 /// starts a portal walk (0x007ac060) from each group the camera is in with
 /// the pass flag set; a group with 0x8 or 0x40 clears it for itself and all

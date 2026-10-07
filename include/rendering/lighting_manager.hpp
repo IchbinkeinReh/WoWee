@@ -55,6 +55,12 @@ struct LightingParams {
     /// ch8's red: how opaque the terrain's baked shadows (MCSH) are drawn
     /// (0x007ee750 pairs it with ambient / 3 as the shadow colour).
     float shadowOpacity = 1.0f;
+    /// Light mode 2's direct and ambient colours (0x007ee750's 0xd38cb0/cb4),
+    /// for WMO batches whose material has flag 0x20: the two above averaged
+    /// (wmo_doodad_light::averagedOutsideLight), before the liquid's and the
+    /// glare's darkening. Not blended; worked out from the blend's result.
+    glm::vec3 averagedDirectColor{0.7f};
+    glm::vec3 averagedAmbientColor{0.7f};
     /// ch9: the sun and moon sprites' colour (0x007f3230 copies DNInfo[9]
     /// into the sun, moon and Blue Child quads, 0xd38e34/e54/f70).
     glm::vec3 sunColor{1.0f, 1.0f, 1.0f};

@@ -32,6 +32,8 @@ VkPipeline Celestial::buildPipeline(VkDevice device,
                                     const VkPipelineShaderStageCreateInfo& vertStage,
                                     const VkPipelineShaderStageCreateInfo& fragStage,
                                     bool glare) {
+    const VkRenderPass pass = glare && glareTargetPass_ ? glareTargetPass_ : vkCtx_->getImGuiRenderPass();
+    if (glare) glareBuiltFor_ = pass;
     // Vertex: vec3 pos + vec2 texCoord, stride = 20 bytes
     VkVertexInputBindingDescription binding = tightVertexBinding(5 * sizeof(float));
     std::vector<VkVertexInputAttributeDescription> attrs = positionPlusUvAttrs();
@@ -51,9 +53,9 @@ VkPipeline Celestial::buildPipeline(VkDevice device,
         .setDepthTest(!glare, false, VK_COMPARE_OP_LESS_OR_EQUAL)
         .setColorBlendAttachment(glare ? PipelineBuilder::blendAdditive()
                                        : PipelineBuilder::blendAlpha())
-        .setMultisample(vkCtx_->getMsaaSamples())
+        .setMultisample(glare && glareTargetPass_ ? glareTargetSamples_ : vkCtx_->getMsaaSamples())
         .setLayout(pipelineLayout_)
-        .setRenderPass(vkCtx_->getImGuiRenderPass())
+        .setRenderPass(pass)
         .setDynamicStates(dynamicStates)
         .build(device, vkCtx_->getPipelineCache());
 }
@@ -116,6 +118,23 @@ void Celestial::recreatePipelines() {
     glarePipeline_ = buildPipeline(device, shaders.vertStage, shaders.fragStage, true);
     if (pipeline_ == VK_NULL_HANDLE || glarePipeline_ == VK_NULL_HANDLE) {
         LOG_ERROR("Celestial::recreatePipelines: failed to create pipeline");
+    }
+}
+
+bool Celestial::glarePipelineStale() const {
+    if (!vkCtx_) return false;
+    return glareBuiltFor_ != (glareTargetPass_ ? glareTargetPass_ : vkCtx_->getImGuiRenderPass());
+}
+
+void Celestial::recreateGlarePipeline() {
+    if (!vkCtx_) return;
+    VkDevice device = vkCtx_->getDevice();
+    destroy(device, glarePipeline_);
+    auto shaders = loadShaderPair(device, "assets/shaders/celestial.vert.spv", "assets/shaders/celestial.frag.spv", "celestial");
+    if (!shaders) return;
+    glarePipeline_ = buildPipeline(device, shaders.vertStage, shaders.fragStage, true);
+    if (glarePipeline_ == VK_NULL_HANDLE) {
+        LOG_ERROR("Celestial::recreateGlarePipeline: failed to create pipeline");
     }
 }
 
@@ -304,12 +323,17 @@ void Celestial::renderGlare(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
 
 void Celestial::createQuad() {
     // The client's quad, a unit across (0x007edbe0), centred on the body.
+    // It lies in the sprite's YZ plane, u running 0 to 1 along +Y, and
+    // 0x009abb60 puts +Y at up x forward - the viewer's left, forward being
+    // the view matrix's third column (0x006bfe60 builds it as target - eye).
+    // So u is 1 on the left of the screen and 0 on the right: every sky
+    // sprite, the moons among them, is drawn mirrored left to right.
     float vertices[] = {
         // Position              TexCoord
-        -0.5f,  0.5f, 0.0f,    0.0f, 0.0f, // Top-left
-         0.5f,  0.5f, 0.0f,    1.0f, 0.0f, // Top-right
-         0.5f, -0.5f, 0.0f,    1.0f, 1.0f, // Bottom-right
-        -0.5f, -0.5f, 0.0f,    0.0f, 1.0f, // Bottom-left
+        -0.5f,  0.5f, 0.0f,    1.0f, 0.0f, // Top-left
+         0.5f,  0.5f, 0.0f,    0.0f, 0.0f, // Top-right
+         0.5f, -0.5f, 0.0f,    0.0f, 1.0f, // Bottom-right
+        -0.5f, -0.5f, 0.0f,    1.0f, 1.0f, // Bottom-left
     };
 
     uint32_t indices[] = { 0, 1, 2,  0, 2, 3 };

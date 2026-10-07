@@ -526,7 +526,7 @@ private:
         float wmoAmbientB;         // 60 (interior ambient color B)
         int32_t unused64;           // 64 (unused; was a per-texture-name emissive mode)
         int32_t hasVertexColors;    // 68: the group carries MOCV (MOGP flag 0x4)
-        int32_t padding1;           // 72
+        int32_t averagedLight;      // 72: material flag 0x20 lights it by light mode 2 (0x007a8b10)
         int32_t padding2;           // 76
     };  // 80 bytes total
 
@@ -581,6 +581,7 @@ private:
             bool isTransparent = false;     // blendMode >= 2
             bool transition = false;        // Batch::transition
             bool unfogged = false;          // F_UNFOGGED (0x2), read only on a transition batch
+            bool averaged = false;          // material flag 0x20 where 0x007a9380 reads it: light mode 2
             // For multi-draw: store index ranges
             struct DrawRange { uint32_t firstIndex; uint32_t indexCount; };
             std::vector<DrawRange> draws;

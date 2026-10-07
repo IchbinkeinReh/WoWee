@@ -655,10 +655,12 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             bool transparent;
             bool transition;
             bool unfogged;
+            bool averaged;
             bool operator==(const BatchKey& o) const {
                 return texPtr == o.texPtr && alphaTest == o.alphaTest &&
                        unlit == o.unlit && transparent == o.transparent &&
-                       transition == o.transition && unfogged == o.unfogged;
+                       transition == o.transition && unfogged == o.unfogged &&
+                       averaged == o.averaged;
             }
         };
         struct BatchKeyHash {
@@ -668,7 +670,8 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                        (std::hash<bool>()(k.unlit) << 2) ^
                        (std::hash<bool>()(k.transparent) << 3) ^
                        (std::hash<bool>()(k.transition) << 4) ^
-                       (std::hash<bool>()(k.unfogged) << 5);
+                       (std::hash<bool>()(k.unfogged) << 5) ^
+                       (std::hash<bool>()(k.averaged) << 6);
             }
         };
         std::unordered_map<BatchKey, GroupResources::MergedBatch, BatchKeyHash> batchMap;
@@ -710,6 +713,13 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             // F_UNFOGGED counts on a transition batch alone: 0x007a9380 reads
             // material flag 0x2 in that branch and nowhere else.
             const bool unfogged = batch.transition && (materialFlags & 0x02) != 0;
+            // Material flag 0x20: lit by the zone's direct and ambient light
+            // averaged (0x007a8b10 mode 2) - a transition batch's outside
+            // pass, or any batch of an interior group (0x007a9380).
+            const auto lights = pipeline::wmo_doodad_light::batchLights(groupRes.groupFlags, batch.transition,
+                                                                        materialFlags);
+            const bool averaged = lights.outsidePass == pipeline::wmo_doodad_light::BatchLight::Averaged ||
+                                  lights.insidePass == pipeline::wmo_doodad_light::BatchLight::Averaged;
 
             // Windows, lamp glass, clock faces and lava get no treatment of
             // their own: the client draws every batch from its MOMT material,
@@ -717,7 +727,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
 
             BatchKey key{ .texPtr = reinterpret_cast<uintptr_t>(tex), .alphaTest = alphaTest, .unlit = unlit,
                           .transparent = blendMode >= 2, .transition = batch.transition,
-                          .unfogged = unfogged };
+                          .unfogged = unfogged, .averaged = averaged };
             auto& mb = batchMap[key];
             if (mb.draws.empty()) {
                 mb.texture = tex;
@@ -726,6 +736,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 mb.unlit = unlit;
                 mb.transition = batch.transition;
                 mb.unfogged = unfogged;
+                mb.averaged = averaged;
                 mb.isTransparent = (blendMode >= 2);
                 // Look up normal/height map from texture cache
                 if (hasTexture && tex != whiteTexture_.get()) {
@@ -772,6 +783,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
             matData.isInterior = isInterior ? 1 : 0;
             matData.transition = mb.transition ? 1 : 0;
             matData.unfogged = mb.unfogged ? 1 : 0;
+            matData.averagedLight = mb.averaged ? 1 : 0;
             // 2 when the colours are as 0x007d7380 left them, 1 as the
             // MOCV has them (MOHD flag 0x8, 0x007d7c30).
             matData.hasVertexColors = (groupRes.groupFlags & 0x4) == 0 ? 0

@@ -68,6 +68,18 @@ public:
     /// The glare, added on over the finished world with no depth test
     /// (0x009ac400). Reads only what updateGlare left.
     void renderGlare(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
+    /// The pass the glare is drawn in: the scene's (null) or, when water is
+    /// drawn in a continuation pass, that one, since the client draws the
+    /// glare after the water (0x004f8ea0 calls 0x007f0870 last of the world).
+    /// Takes effect on the next recreateGlarePipeline().
+    void setGlareTargetPass(VkRenderPass pass, VkSampleCountFlagBits samples) {
+        glareTargetPass_ = pass;
+        glareTargetSamples_ = samples;
+    }
+    void recreateGlarePipeline();
+    /// Whether the glare pipeline was built for a pass other than the one it
+    /// is now set to.
+    [[nodiscard]] bool glarePipelineStale() const;
     /// How much the sun's glare takes off the world's ambient and direct
     /// light (daynight::sunGlareWorldDim, 0x007816f0).
     [[nodiscard]] float getSunGlareDim() const { return sunGlareDim_; }
@@ -101,6 +113,9 @@ private:
     VkContext*            vkCtx_          = nullptr;
     VkPipeline            pipeline_       = VK_NULL_HANDLE;  // sprites, alpha blended
     VkPipeline            glarePipeline_  = VK_NULL_HANDLE;  // glare, added, no depth test
+    VkRenderPass          glareTargetPass_ = VK_NULL_HANDLE;  // null: the scene pass
+    VkSampleCountFlagBits glareTargetSamples_ = VK_SAMPLE_COUNT_1_BIT;
+    VkRenderPass          glareBuiltFor_ = VK_NULL_HANDLE;  // the pass glarePipeline_ was built for
     VkPipelineLayout      pipelineLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout texSetLayout_   = VK_NULL_HANDLE;
     VkDescriptorPool      texPool_        = VK_NULL_HANDLE;
