@@ -218,22 +218,18 @@ std::vector<TerrainVertex> TerrainMeshGenerator::generateVertices(const MapChunk
             vertex.normal[2] = 1.0f;
         }
 
-        // Texture coordinates: world-aligned so patterns don't reset per chunk.
-        // Tile each texture 4× per chunk (one repeat every ~8 yards) so the
-        // texture's own pattern noise breaks up the chunk grid rather than
-        // syncing with it. At 1 repeat/chunk the per-chunk alpha differences
-        // read as obvious 33-yard squares; at 4× the pattern is small enough
-        // that the eye no longer locks onto the chunk boundary.
-        constexpr float texScale = 4.0f / CHUNK_SIZE;
+        // Texture coordinates, world-aligned: the client repeats a layer's
+        // texture eight times across a chunk, once a quad (0x007d0760). This
+        // was four, chosen to look better than once a chunk.
+        constexpr float texScale = kTerrainTextureRepeatsPerChunk / CHUNK_SIZE;
         vertex.texCoord[0] = -vertex.position[1] * texScale;
         vertex.texCoord[1] = -vertex.position[0] * texScale;
 
-        // Layer UV for alpha map sampling (0-1 range per chunk).
-        // Sample at texel centers of the 64x64 alpha map to avoid edge seams.
-        constexpr float alphaTexels = 64.0f;
-        constexpr float alphaStep = (alphaTexels - 1.0f) / 8.0f; // 63 texels across 8 quads
-        vertex.layerUV[0] = (offsetX * alphaStep + 0.5f) / alphaTexels;
-        vertex.layerUV[1] = (offsetY * alphaStep + 0.5f) / alphaTexels;
+        // The alpha maps, 0 to 1 across the chunk, all 64 texels of them
+        // (0x007d06b0: the texture scale over eight). This sampled 63 of them,
+        // centre to centre.
+        vertex.layerUV[0] = terrainLayerUV(offsetX);
+        vertex.layerUV[1] = terrainLayerUV(offsetY);
 
         // MCCV, BGRA, 0x7F neutral: the 3.3.5 terrain shaders multiply the
         // textures by twice the colour, which is byte / 127.5 - the scale is

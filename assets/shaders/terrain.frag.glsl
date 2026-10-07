@@ -38,6 +38,7 @@ layout(set = 1, binding = 7) uniform TerrainParams {
     int hasLayer1;
     int hasLayer2;
     int hasLayer3;
+    ivec4 layerFlags;  // MCLY flags of layers 0..3: 0x40 scrolls, 0x80 unlit
 };
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
@@ -70,39 +71,32 @@ float sampleShadowPCF(sampler2DShadow smap, vec3 coords) {
     return shadow / 9.0;
 }
 
-/// How much of the seam blur below is worth paying for at this distance.
-/// Set once in main() from the fragment's distance; see sampleAlpha.
-float gBlurDistFade = 1.0;
-
+// A layer's alpha, as the client samples it: the 64x64 map stretched over
+// the chunk, nothing more (0x007d06b0). A blur near the chunk's edges was
+// here to hide seams; the client has none.
 float sampleAlpha(sampler2D tex, vec2 uv) {
-    // Smooth 9-tap box near chunk edges to hide alpha-map seams;
-    // blends gradually to avoid a visible ring at the transition.
-    // Wider feather (8 texels) makes per-chunk alpha differences
-    // bleed across the boundary so the chunk grid stops reading
-    // as a hard step.
-    vec2 edge = min(uv, 1.0 - uv);
-    float border = min(edge.x, edge.y);
-    float blurWeight = 1.0 - smoothstep(1.0 / 64.0, 8.0 / 64.0, border);
-    // The seam this hides is a chunk edge seen close up. Far enough away a
-    // whole chunk is a few pixels across and the blur is hiding something
-    // nobody can see - while still costing four taps per layer, on the band
-    // that is 44% of every chunk, on the pass that covers the screen. At a
-    // 2400-yard view distance that is most of the terrain drawn.
-    blurWeight *= gBlurDistFade;
-    float center = texture(tex, uv).r;
-    if (blurWeight < 0.001) return center;
-    // Four taps at half-texel offsets, not nine at whole ones. The sampler
-    // is linear, so each tap already averages a 2x2 block, and the four
-    // together cover the same 3x3 footprint as a tent rather than a box.
-    // The band this runs in is 44% of every chunk, on the pass that
-    // covers most of the screen, so the tap count is what this costs.
-    vec2 h = vec2(0.5 / 64.0);
-    float avg = texture(tex, uv + vec2(-h.x, -h.y)).r
-              + texture(tex, uv + vec2( h.x, -h.y)).r
-              + texture(tex, uv + vec2(-h.x,  h.y)).r
-              + texture(tex, uv + vec2( h.x,  h.y)).r;
-    avg *= 0.25;
-    return mix(center, avg, blurWeight);
+    return texture(tex, uv).r;
+}
+
+// A scrolling layer's offset (MCLY 0x40), as terrainLayerAnimOffset in
+// pipeline/terrain_mesh.hpp works it out: the direction (flags & 7) times the
+// time, a positive component wrapping at 64 (0x00cd77f8), over the speed's
+// divisor (0x00af14f8), the y moving u and the x moving v, both against it.
+vec2 layerAnimOffset(int flags) {
+    if ((flags & 0x40) == 0) return vec2(0.0);
+    const vec2 kDir[8] = vec2[8](vec2(-1, 0), vec2(-1, 1), vec2(0, 1), vec2(1, 1),
+                                 vec2(1, 0), vec2(1, -1), vec2(0, -1), vec2(-1, -1));
+    const float kDivisor[8] = float[8](64.0, 48.0, 32.0, 16.0, 8.0, 4.0, 2.0, 1.0);
+    vec2 dir = kDir[flags & 7];
+    vec2 acc = dir * fogParams.z;
+    if (dir.x > 0.0) acc.x = mod(acc.x, 64.0);
+    if (dir.y > 0.0) acc.y = mod(acc.y, 64.0);
+    return -acc.yx / kDivisor[(flags >> 3) & 7];
+}
+
+// A layer's colour, its scroll applied.
+vec4 layerTexel(sampler2D tex, int flags) {
+    return texture(tex, TexCoord + layerAnimOffset(flags));
 }
 
 // The air between the camera and this point, out of the fog volume: rgb is
@@ -135,37 +129,50 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
 
 void main() {
     float fragDist = length(viewPos.xyz - FragPos);
-    gBlurDistFade = 1.0 - smoothstep(140.0, 260.0, fragDist);
-
-    vec4 baseColor = texture(uBaseTexture, TexCoord);
 
     // WoW terrain: layers are blended sequentially, each on top of the previous result.
     // Alpha=1 means the layer fully covers everything below; alpha=0 means invisible.
-    vec4 finalColor = baseColor;
+    // A layer with MCLY 0x80 is drawn with the lighting off (0x007d0760), so
+    // the lit and the unlit layers are kept apart: each mix() is linear, and
+    // the two add up to the one blend.
+    vec4 baseColor = layerTexel(uBaseTexture, layerFlags.x);
+    bool unlit0 = (layerFlags.x & 0x80) != 0;
+    vec4 finalColor = unlit0 ? vec4(0.0) : baseColor;
+    vec3 unlitColor = unlit0 ? baseColor.rgb : vec3(0.0);
     if (hasLayer1 != 0) {
         float a1 = sampleAlpha(uLayer1Alpha, LayerUV);
         // Where the layer is not painted, mix() returns what it was given and
         // the fetch that fed it was work for nothing. A layer covers part of a
         // chunk, so whole regions of the screen take this branch together.
-        if (a1 > 0.002) finalColor = mix(finalColor, texture(uLayer1Texture, TexCoord), a1);
+        if (a1 > 0.002) {
+            vec4 t = layerTexel(uLayer1Texture, layerFlags.y);
+            bool u = (layerFlags.y & 0x80) != 0;
+            finalColor = mix(finalColor, u ? vec4(0.0) : t, a1);
+            unlitColor = mix(unlitColor, u ? t.rgb : vec3(0.0), a1);
+        }
     }
     if (hasLayer2 != 0) {
         float a2 = sampleAlpha(uLayer2Alpha, LayerUV);
-        // Where the layer is not painted, mix() returns what it was given and
-        // the fetch that fed it was work for nothing. A layer covers part of a
-        // chunk, so whole regions of the screen take this branch together.
-        if (a2 > 0.002) finalColor = mix(finalColor, texture(uLayer2Texture, TexCoord), a2);
+        if (a2 > 0.002) {
+            vec4 t = layerTexel(uLayer2Texture, layerFlags.z);
+            bool u = (layerFlags.z & 0x80) != 0;
+            finalColor = mix(finalColor, u ? vec4(0.0) : t, a2);
+            unlitColor = mix(unlitColor, u ? t.rgb : vec3(0.0), a2);
+        }
     }
     if (hasLayer3 != 0) {
         float a3 = sampleAlpha(uLayer3Alpha, LayerUV);
-        // Where the layer is not painted, mix() returns what it was given and
-        // the fetch that fed it was work for nothing. A layer covers part of a
-        // chunk, so whole regions of the screen take this branch together.
-        if (a3 > 0.002) finalColor = mix(finalColor, texture(uLayer3Texture, TexCoord), a3);
+        if (a3 > 0.002) {
+            vec4 t = layerTexel(uLayer3Texture, layerFlags.w);
+            bool u = (layerFlags.w & 0x80) != 0;
+            finalColor = mix(finalColor, u ? vec4(0.0) : t, a3);
+            unlitColor = mix(unlitColor, u ? t.rgb : vec3(0.0), a3);
+        }
     }
 
     // The chunk's vertex shading (MCCV) tints the textures.
     finalColor.rgb *= Shading;
+    unlitColor *= Shading;
 
     // The vertex normal as it is. A bump derived from the texture's own
     // brightness was perturbed into it here; the client has nothing like it.
@@ -213,6 +220,9 @@ void main() {
                          baked * clamp(ambientColor.w, 0.0, 1.0));
         }
     }
+
+    // The unlit layers, as they are: no light, no shadow.
+    result += unlitColor;
 
     result = applyFog(result, FragPos, fragDist, fogColor.rgb);
 

@@ -16,6 +16,7 @@
 
 #include "pipeline/adt_alpha.hpp"
 #include "pipeline/adt_loader.hpp"
+#include "pipeline/terrain_mesh.hpp"
 
 using wowee::pipeline::ALPHA_MAP_DIM;
 using wowee::pipeline::ALPHA_MAP_PACKED;
@@ -97,4 +98,48 @@ TEST_CASE("a layer with no map of its own is left as the caller asked",
     CHECK_FALSE(decodeLayerAlpha(chunk, 0, alpha, 255));
     REQUIRE(alpha.size() == ALPHA_MAP_SIZE);
     CHECK(at(alpha, 10, 10) == 255);
+}
+
+TEST_CASE("a chunk with flag 0x8000 keeps its last row and column", "[adt][alpha]") {
+    // CMapChunk::CreateChunkLayerTex (0x007b9890) hands MCNK flag 0x8000 to
+    // 0x007b8e20, which then unpacks all 64 rows and columns as stored.
+    MapChunk chunk = packedChunk([](size_t x, size_t y) {
+        const bool edge = (x == ALPHA_MAP_DIM - 1) || (y == ALPHA_MAP_DIM - 1);
+        return edge ? 3 : 15;
+    });
+    chunk.flags = 0x8000;
+    std::vector<uint8_t> alpha;
+    REQUIRE(decodeLayerAlpha(chunk, 1, alpha, 0));
+    CHECK(at(alpha, 10, ALPHA_MAP_DIM - 1) == 3 * 17);
+    CHECK(at(alpha, ALPHA_MAP_DIM - 1, 10) == 3 * 17);
+    CHECK(at(alpha, 10, 10) == 15 * 17);
+}
+
+TEST_CASE("the alpha map spans the chunk, the textures repeat once a quad", "[adt][alpha][terrain]") {
+    namespace pl = wowee::pipeline;
+    // 0x007d06b0: the alpha maps 0 to 1 over the chunk, the textures eight
+    // times over it.
+    CHECK(pl::terrainLayerUV(0.0f) == 0.0f);
+    CHECK(pl::terrainLayerUV(8.0f) == 1.0f);
+    CHECK(pl::terrainLayerUV(4.5f) == Catch::Approx(0.5625f));
+    CHECK(pl::kTerrainTextureRepeatsPerChunk == 8.0f);
+    // The CPU reads agree: the far edge is texel 63, the near one texel 0.
+    CHECK(pl::alphaTexelIndex(1.0f, 0.0f) == ALPHA_MAP_DIM - 1);
+    CHECK(pl::alphaTexelIndex(0.0f, 0.0f) == 0);
+    CHECK(pl::alphaTexelIndex(0.5f, 0.0f) == 32);
+}
+
+TEST_CASE("a scrolling terrain layer moves as the client moves it", "[adt][terrain]") {
+    namespace pl = wowee::pipeline;
+    // No flag 0x40, no movement.
+    CHECK(pl::terrainLayerAnimOffset(0x07, 10.0f) == glm::vec2(0.0f));
+    // Direction 0 is (-1, 0): x falls, which moves v the other way; speed 0
+    // divides by 64.
+    const glm::vec2 a = pl::terrainLayerAnimOffset(0x40, 32.0f);
+    CHECK(a.x == Catch::Approx(0.0f));
+    CHECK(a.y == Catch::Approx(0.5f));
+    // Direction 2 is (0, 1) and wraps at 64; speed 7 divides by 1.
+    const glm::vec2 b = pl::terrainLayerAnimOffset(0x40 | (7u << 3) | 2u, 70.0f);
+    CHECK(b.x == Catch::Approx(-6.0f));
+    CHECK(b.y == Catch::Approx(0.0f));
 }

@@ -16,8 +16,10 @@ namespace {
 /// the boundary between two chunks is a hard line - which is the ground
 /// textures not quite lining up, in a grid across the whole world.
 ///
-/// Only the four-bit form. The eight-bit and compressed maps are what a map
-/// with "big alpha" carries, and those are painted to the edge.
+/// Only the four-bit form, and only for a chunk without flag 0x8000 (0x007b76f0
+/// does it, 0x007b75b0 for a chunk with the flag does not). The eight-bit and
+/// compressed maps are what a map with "big alpha" carries, and those are
+/// painted to the edge.
 void fixLastRowAndColumn(std::vector<uint8_t>& alpha) {
     if (alpha.size() < ALPHA_MAP_SIZE) return;
     constexpr size_t kLast = ALPHA_MAP_DIM - 1;
@@ -94,7 +96,10 @@ bool decodeLayerAlpha(const MapChunk& chunk, size_t layerIdx,
             outAlpha[i * 2] = static_cast<uint8_t>((v & 0x0F) * 17);
             outAlpha[i * 2 + 1] = static_cast<uint8_t>((v >> 4) * 17);
         }
-        fixLastRowAndColumn(outAlpha);
+        // Only without MCNK flag 0x8000: with it the 64th row and column
+        // are painted and read as they are (CMapChunk::CreateChunkLayerTex,
+        // 0x007b9890, picks 0x007b75b0 over 0x007b76f0 by that flag).
+        if ((chunk.flags & 0x8000u) == 0) fixLastRowAndColumn(outAlpha);
         return true;
     }
 
@@ -103,18 +108,23 @@ bool decodeLayerAlpha(const MapChunk& chunk, size_t layerIdx,
 
 size_t alphaTexelIndex(float u, float v) {
     const auto clamp01 = [](float t) { return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t); };
-    constexpr float kPainted = static_cast<float>(ALPHA_MAP_DIM - 1);
-    const auto x = static_cast<size_t>(clamp01(u) * kPainted);
-    const auto y = static_cast<size_t>(clamp01(v) * kPainted);
+    // The renderer stretches all 64 texels over the chunk (0x007d06b0), so a
+    // point falls on the texel whose 1/64 of it holds the point.
+    constexpr float kTexels = static_cast<float>(ALPHA_MAP_DIM);
+    const auto x = std::min(static_cast<size_t>(clamp01(u) * kTexels), ALPHA_MAP_DIM - 1);
+    const auto y = std::min(static_cast<size_t>(clamp01(v) * kTexels), ALPHA_MAP_DIM - 1);
     return y * ALPHA_MAP_DIM + x;
 }
 
 float sampleAlpha(const std::vector<uint8_t>& alpha, float u, float v) {
     if (alpha.size() < ALPHA_MAP_SIZE) return 0.0f;
-    const auto clamp01 = [](float t) { return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t); };
+    const auto clampTo = [](float t, float hi) { return t < 0.0f ? 0.0f : (t > hi ? hi : t); };
 
-    const float fx = clamp01(u) * static_cast<float>(ALPHA_MAP_DIM - 1);
-    const float fy = clamp01(v) * static_cast<float>(ALPHA_MAP_DIM - 1);
+    // Texel centres at (i + 0.5) / 64, as the renderer's linear filter sees
+    // them, clamped at the edges.
+    constexpr float kLast = static_cast<float>(ALPHA_MAP_DIM - 1);
+    const float fx = clampTo(u * static_cast<float>(ALPHA_MAP_DIM) - 0.5f, kLast);
+    const float fy = clampTo(v * static_cast<float>(ALPHA_MAP_DIM) - 0.5f, kLast);
     const auto x0 = static_cast<size_t>(fx);
     const auto y0 = static_cast<size_t>(fy);
     const size_t x1 = std::min(x0 + 1, ALPHA_MAP_DIM - 1);

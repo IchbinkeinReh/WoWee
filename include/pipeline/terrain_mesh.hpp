@@ -32,6 +32,41 @@ struct TerrainVertex {
     }
 };
 
+/// How the 3.3.5a client maps a chunk's textures (0x007d0760 builds the
+/// texture matrices, 0x007d06b0): the layers' textures once every 1/8 of a
+/// chunk - a quad, 4.1667 yards, the scale being 1 / 0x00d254a8 - and the
+/// alpha maps (and MCSH) exactly once over the chunk, 0 at its corner to 1 at
+/// the far one, with no half texel inset.
+inline constexpr float kTerrainTextureRepeatsPerChunk = 8.0f;
+inline float terrainLayerUV(float vertexOffset) { return vertexOffset / 8.0f; }
+
+/// MCLY flags the client draws by (0x007d0760, 0x007d0d70): 0x40 the layer's
+/// texture scrolls, 0x80 the layer is drawn with the lighting off.
+inline constexpr uint32_t kTerrainLayerAnimated = 0x40;
+inline constexpr uint32_t kTerrainLayerUnlit = 0x80;
+
+/// A scrolling layer's texture offset after `seconds` (MCLY flag 0x40). The
+/// client keeps one offset a direction (flags & 7, 45 degrees apart: the
+/// table at 0x00adee78), adds the direction times the frame time to it each
+/// frame and sets a component that reaches 64 back to 0 (0x0077ee80's caller,
+/// 0x00cd77f8). The texture is moved by that over the speed's divisor
+/// ((flags >> 3) & 7 picks 64, 48, 32, 16, 8, 4, 2 or 1, 0x00af14f8) in
+/// texture repeats: the offset's y moves u and its x moves v, since u runs
+/// along the world's Y (0x007d06b0 swaps the rows), both against the
+/// direction's sign. The terrain shader does the same with the frame time.
+inline glm::vec2 terrainLayerAnimOffset(uint32_t flags, float seconds) {
+    static constexpr float kDir[8][2] = {{-1, 0}, {-1, 1}, {0, 1}, {1, 1}, {1, 0}, {1, -1}, {0, -1}, {-1, -1}};
+    static constexpr float kDivisor[8] = {64, 48, 32, 16, 8, 4, 2, 1};
+    if ((flags & kTerrainLayerAnimated) == 0) return glm::vec2(0.0f);
+    const float* dir = kDir[flags & 7u];
+    glm::vec2 acc(dir[0] * seconds, dir[1] * seconds);
+    for (int c = 0; c < 2; ++c) {
+        if (dir[c] > 0.0f) acc[c] = acc[c] - 64.0f * static_cast<float>(static_cast<int>(acc[c] / 64.0f));
+    }
+    const float divisor = kDivisor[(flags >> 3) & 7u];
+    return glm::vec2(-acc.y, -acc.x) / divisor;
+}
+
 /**
  * Triangle index (3 vertices)
  */

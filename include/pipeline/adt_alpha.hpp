@@ -45,10 +45,8 @@ bool decodeLayerAlpha(const MapChunk& chunk, size_t layerIdx,
 
 /// The texel a point in a chunk falls on, as an index into a decoded map.
 ///
-/// `u` and `v` run 0 to 1 across the chunk. The span is the 63 painted texels
-/// rather than all 64 - the last row and column are a copy of the ones before
-/// them, see decodeLayerAlpha - so a point at the far edge lands on the last
-/// thing that was painted.
+/// `u` and `v` run 0 to 1 across the chunk, over all 64 texels, as the
+/// client stretches the map (0x007d06b0).
 ///
 /// Written three times in terrain_manager alone: once for the ground clutter's
 /// road test, once for its scatter, once for the footstep sound's dominant
