@@ -129,6 +129,156 @@ inline Step advance(const glm::vec3& position, const glm::vec3& target,
     return {position + toTarget * (stepLength / distance), false};
 }
 
+// ---------------------------------------------------------------------------
+// ADJUST_MISSILE: the arc.
+//
+// A cast with flag 0x20000 - siege engines, vehicles, a thrown barrel - names
+// in SMSG_SPELL_GO the missile's elevation and how long after the packet it
+// lands (0x0080e1b0). Such a missile is not homed: at launch the client works
+// out one ballistic flight from the launch point to where the target is then,
+// under the gravity of the spell's SpellMissile row (0x00700880), and every
+// frame puts the missile on it, landing when the time is up (0x007015d0).
+
+/// Gravity, yards per second squared, when the spell has no SpellMissile row
+/// (0x419a542f, 0x00700880).
+inline constexpr float kDefaultMissileGravity = 19.29f;
+
+/// What the arc reads of a SpellMissile.dbc row: its two speeds (+0x10,
+/// +0x14) and its gravity (+0x30) - columns 4, 5 and 12 of the fifteen the
+/// client loads (0x008b8310).
+struct SpellMissileRow {
+    float speeds[2] = {0.0f, 0.0f};
+    float gravity = kDefaultMissileGravity;
+};
+
+/// An elevation past straight up or down folded back into [-pi/2, pi/2]
+/// (0x00700880).
+inline float foldElevation(float pitch) {
+    constexpr float kHalfPi = 1.5707964f;
+    if (pitch > kHalfPi) return pitch - (pitch - kHalfPi) * 2.0f;
+    if (pitch < -kHalfPi) return pitch + (-kHalfPi - pitch) * 2.0f;
+    return pitch;
+}
+
+enum class ArcSolve { NoSolution = 0, Degenerate = 1, Solved = 2 };
+
+/// The flight that leaves at `pitch` and passes through `delta` under
+/// `gravity` (0x0076c070): its launch speed, its time and its velocity.
+/// Degenerate when the pitch is vertical, the target straight above or
+/// below, or there is no gravity; no solution when the target lies above the
+/// line the pitch points along.
+inline ArcSolve solveArcAtPitch(float pitch, const glm::vec3& delta, float gravity,
+                                float& speed, float& time, glm::vec3& velocity) {
+    const float c = std::cos(pitch);
+    const float s = std::sin(pitch);
+    const float horizontal = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+    if (std::abs(c) < 1e-4f || std::abs(horizontal) < 1e-4f || std::abs(gravity) < 1e-4f)
+        return ArcSolve::Degenerate;
+    const float timeSq = ((1.0f / c) * horizontal * s - delta.z) / gravity * 2.0f;
+    if (timeSq <= 0.01f) return ArcSolve::NoSolution;
+    time = std::sqrt(timeSq);
+    speed = (horizontal / time) * (1.0f / c);
+    velocity = {speed * delta.x * (1.0f / horizontal) * c,
+                speed * (1.0f / horizontal) * c * delta.y,
+                s * speed};
+    return ArcSolve::Solved;
+}
+
+/// The time a flight at `pitch` and `speed` takes to reach `delta`
+/// (0x0076bf80): by the horizontal distance when it moves sideways, else by
+/// the height under gravity, the earlier root that is not negative. -1 when
+/// it never gets there.
+inline float arcTimeAtSpeed(float pitch, float speed, const glm::vec3& delta, float gravity) {
+    const float horizontalSpeed = std::cos(pitch) * speed;
+    if (horizontalSpeed > 1e-4f)
+        return std::sqrt(delta.x * delta.x + delta.y * delta.y) / horizontalSpeed;
+    if (speed <= 1e-4f) {
+        if (std::abs(gravity) <= 1e-4f) return -1.0f;
+    } else if (std::abs(gravity) <= 1e-4f) {
+        return std::abs(delta.z) / speed;
+    }
+    const float vertical = std::sin(pitch) * speed;
+    const float disc = vertical * vertical - (delta.z * gravity + delta.z * gravity);
+    if (disc < 0.0f) return -1.0f;
+    const float root = std::sqrt(disc);
+    const float first = (root - vertical) * (-1.0f / gravity);
+    const float second = (-vertical - root) * (-1.0f / gravity);
+    if (first >= 0.0f && (second < 0.0f || first < second)) return first;
+    return second;
+}
+
+/// A missile's flight, as 0x00700880 plans it at launch.
+struct MissileArc {
+    /// On the arc. False when no arc reaches the target: the missile then
+    /// flies straight at `straightSpeed`, timed to land when the arc would.
+    bool onArc = false;
+    glm::vec3 velocity{0.0f};
+    float gravity = kDefaultMissileGravity;
+    /// Arc seconds per second of flight, so the arc's own time fits the
+    /// flight the server gave it; held to [0, 2].
+    float timeScale = 0.0f;
+    float straightSpeed = 0.0f;
+    /// Seconds from launch to landing.
+    float flightSeconds = 0.0f;
+};
+
+/// Plan the flight from a launch point to a target `delta` away, at the
+/// cast's `elevation`, landing `flightSeconds` after launch (0x00700880).
+/// `castSpeed` is the speed the cast carries - zero for another's cast, whose
+/// spell object starts cleared (0x009ab770). `row` is the spell's SpellMissile
+/// row, null when it has none.
+inline MissileArc planMissileArc(float elevation, float castSpeed, const glm::vec3& delta,
+                                 const SpellMissileRow* row, float flightSeconds) {
+    MissileArc arc;
+    arc.gravity = row ? row->gravity : kDefaultMissileGravity;
+    float pitch = foldElevation(elevation);
+    float speed = 0.0f;
+    float time = 0.0f;
+    glm::vec3 velocity(0.0f);
+    bool onArc = true;
+    ArcSolve solved = solveArcAtPitch(pitch, delta, arc.gravity, speed, time, velocity);
+    if (solved == ArcSolve::NoSolution) {
+        // Once more a hundredth of a radian further along the gravity.
+        const float nudge = (std::isnan(arc.gravity) || arc.gravity < 0.0f) ? -0.01f : 0.01f;
+        pitch = foldElevation(elevation + nudge);
+        solved = solveArcAtPitch(pitch, delta, arc.gravity, speed, time, velocity);
+        if (solved == ArcSolve::NoSolution) onArc = false;
+    }
+    if (onArc && solved == ArcSolve::Degenerate) {
+        // Timed by a speed instead: the cast's, then the row's two.
+        if (!row) {
+            onArc = false;
+        } else {
+            time = arcTimeAtSpeed(pitch, castSpeed, delta, arc.gravity);
+            if (time < 1e-4f) time = arcTimeAtSpeed(pitch, row->speeds[0], delta, arc.gravity);
+            if (time < 1e-4f) time = arcTimeAtSpeed(pitch, row->speeds[1], delta, arc.gravity);
+            if (time < 1e-4f) onArc = false;
+            else velocity = delta * (1.0f / time);
+        }
+    }
+    const float remaining = std::max(flightSeconds, 1e-4f);
+    arc.flightSeconds = std::max(flightSeconds, 0.0f);
+    arc.onArc = onArc;
+    if (!onArc) {
+        arc.straightSpeed = glm::length(delta) / remaining;
+        return arc;
+    }
+    arc.velocity = velocity;
+    const float scale = time / remaining;
+    arc.timeScale = scale < 0.0f ? 0.0f : (scale >= 2.0f ? 2.0f : scale);
+    return arc;
+}
+
+/// Where a missile on its arc is `elapsed` seconds after leaving `start`
+/// (0x007015d0): along the launch velocity, fallen under gravity, both in the
+/// arc's own time.
+inline glm::vec3 arcPosition(const glm::vec3& start, const MissileArc& arc, float elapsed) {
+    const float t = std::max(elapsed, 0.0f) * arc.timeScale;
+    glm::vec3 p = start + arc.velocity * t;
+    p.z -= arc.gravity * t * t * 0.5f;
+    return p;
+}
+
 /// Euler angles (render axes, the order placementModelMatrix composes) that
 /// turn an M2's forward axis, +x, onto `direction` - the client builds the
 /// missile's matrix from its travel direction each frame (FUN_00701230). A

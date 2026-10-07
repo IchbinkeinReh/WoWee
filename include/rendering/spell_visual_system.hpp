@@ -7,6 +7,8 @@
 #include <unordered_set>
 #include <glm/glm.hpp>
 
+#include "rendering/spell_missile.hpp"
+
 namespace wowee {
 namespace pipeline { class AssetManager; }
 namespace rendering {
@@ -75,13 +77,23 @@ public:
         glm::vec3 position{0.0f};
     };
 
+    /// What an ADJUST_MISSILE cast (flag 0x20000) hands its missile: the
+    /// elevation and flight time from SMSG_SPELL_GO and the spell's
+    /// SpellMissile row, which put it on an arc (0x00700880).
+    struct MissileTrajectory {
+        float elevation = 0.0f;
+        float flightSeconds = 0.0f;
+        uint32_t spellMissileId = 0;
+    };
+
     /// Launch the visual's missile from `from` to `to` at `speed` yards per
     /// second. On arrival the missile is removed and the visual's impact kit
     /// plays on each of `impacts` - the client plays them then, not at
     /// SMSG_SPELL_GO (FUN_00700e20). False when nothing was launched (no
     /// missile, no speed, no model), so the caller plays the impacts itself.
     bool launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
-                            const MissileEnd& to, std::vector<MissileEnd> impacts);
+                            const MissileEnd& to, std::vector<MissileEnd> impacts,
+                            const MissileTrajectory* trajectory = nullptr);
 
     // Advance lifetime timers and remove expired instances.
     void update(float deltaTime);
@@ -142,6 +154,10 @@ private:
         float elapsed = 0.0f;
         float maxLifetime = 0.0f;
         uint32_t soundHandle = 0;  // its MissileSound, looping where it flies
+        // An ADJUST_MISSILE cast's flight, planned at launch from `arcStart`.
+        bool adjusted = false;
+        spell_missile::MissileArc arc;
+        glm::vec3 arcStart{0.0f};
     };
 
     void loadSpellVisualDbc();
@@ -157,6 +173,10 @@ private:
     uint32_t startMissileSound(uint32_t soundId, const glm::vec3& position);
     struct LoadedSound;
     const LoadedSound* soundEntry(uint32_t soundId);
+    /// A SpellMissile.dbc row, null when there is none (or no file).
+    const spell_missile::SpellMissileRow* spellMissileRow(uint32_t id);
+    std::unordered_map<uint32_t, spell_missile::SpellMissileRow> spellMissileRows_;
+    bool spellMissileDbcLoaded_ = false;
 
     M2Renderer* m2Renderer_ = nullptr;
     Renderer* renderer_ = nullptr;

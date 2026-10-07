@@ -9,6 +9,7 @@
 #include "game/group_defines.hpp"
 #include "game/flat_field_map.hpp"
 #include <array>
+#include <optional>
 #include <vector>
 #include <cstdint>
 #include <cstdlib>
@@ -2292,6 +2293,22 @@ public:
     static bool parse(network::Packet& packet, SpellStartData& data);
 };
 
+/// SpellCastTargets as the 3.3.5a client reads them in SMSG_SPELL_START and
+/// SMSG_SPELL_GO (0x009ab9c0): the flags; an object GUID for 0x18a02 (unit,
+/// enemy and ally corpse, game object, minipet); an item GUID for 0x1010
+/// (item, trade item); for 0x20 the source and for 0x40 the destination,
+/// each a packed transport GUID and three floats; a string for 0x2000.
+struct SpellCastTargetsData {
+    uint32_t flags = 0;
+    uint64_t objectGuid = 0;
+    std::optional<std::array<float, 3>> source;  ///< 0x20, when it was read whole
+    std::optional<std::array<float, 3>> dest;    ///< 0x40, when it was read whole
+};
+
+/// Read one SpellCastTargets. False when the packet ends before what the
+/// flags promise; what was read by then is kept.
+bool readSpellCastTargets(network::Packet& packet, SpellCastTargetsData& out);
+
 /** SMSG_SPELL_GO data (simplified) */
 struct SpellGoMissEntry {
     uint64_t targetGuid = 0;
@@ -2318,6 +2335,12 @@ struct SpellGoData {
     float sourceX = 0.0f, sourceY = 0.0f, sourceZ = 0.0f;
     bool hasDestLocation = false;
     float destX = 0.0f, destY = 0.0f, destZ = 0.0f;
+    /// Cast flag 0x20000 (ADJUST_MISSILE): the missile's elevation, radians,
+    /// and how long after SMSG_SPELL_GO it lands, milliseconds (0x0080e1b0).
+    /// The client flies it on an arc between the two (0x00700880).
+    bool hasMissileTrajectory = false;
+    float missileElevation = 0.0f;
+    uint32_t missileDelayMs = 0;
 
     [[nodiscard]] bool isValid() const { return spellId != 0; }
 };

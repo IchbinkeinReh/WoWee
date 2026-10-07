@@ -73,3 +73,47 @@ TEST_CASE("a ground cast keeps its source and destination points", "[spell_go]")
     CHECK(data.destY == 250.25f);
     CHECK(data.destZ == 12.0f);
 }
+
+TEST_CASE("the targets' guid flags are the client's", "[spell_go]") {
+    // 0x009ab9c0: an object GUID for 0x18a02, an item GUID for 0x1010, a
+    // string for 0x2000. UNIT_RAID (0x4) carries nothing of its own.
+    auto p = spellGoHead(1);
+    p.writeUInt32(0x8000 | 0x4 | 0x1000 | 0x2000);  // CORPSE_ALLY, UNIT_RAID, TRADE_ITEM, STRING
+    p.writePackedGuid(kTarget);
+    p.writePackedGuid(0x77);
+    p.writeUInt8('a'); p.writeUInt8(0);
+    SpellGoData data;
+    REQUIRE(SpellGoParser::parse(p, data));
+    CHECK(data.targetGuid == kTarget);
+    CHECK(p.getRemainingSize() == 0);
+}
+
+TEST_CASE("an ADJUST_MISSILE cast keeps its elevation and delay", "[spell_go]") {
+    // castFlags 0x800 | 0x200000 | 0x20000: power, runes (two spent, each
+    // with its cooldown byte), then the trajectory (0x0080e1b0).
+    wowee::network::Packet p(0);
+    p.writePackedGuid(kCaster);
+    p.writePackedGuid(kCaster);
+    p.writeUInt8(0);
+    p.writeUInt32(57610);  // a cannon shot
+    p.writeUInt32(0x100 | 0x800 | 0x200000 | 0x20000);
+    p.writeUInt32(1000);
+    p.writeUInt8(0);       // hits
+    p.writeUInt8(0);       // misses
+    p.writeUInt32(0x40);   // DEST_LOCATION
+    p.writePackedGuid(0);
+    p.writeFloat(1.0f); p.writeFloat(2.0f); p.writeFloat(3.0f);
+    p.writeUInt32(500);    // power
+    p.writeUInt8(0x3F);    // runes before
+    p.writeUInt8(0x3C);    // runes after: 0 and 1 spent
+    p.writeUInt8(10); p.writeUInt8(20);
+    p.writeFloat(0.75f);   // elevation
+    p.writeUInt32(1800);   // delay
+    SpellGoData data;
+    REQUIRE(SpellGoParser::parse(p, data));
+    REQUIRE(data.hasDestLocation);
+    CHECK(data.destZ == 3.0f);
+    REQUIRE(data.hasMissileTrajectory);
+    CHECK(data.missileElevation == 0.75f);
+    CHECK(data.missileDelayMs == 1800);
+}

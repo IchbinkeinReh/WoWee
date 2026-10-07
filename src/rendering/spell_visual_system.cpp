@@ -709,7 +709,8 @@ glm::vec3 SpellVisualSystem::missileTargetPoint(ActiveMissile& missile) const {
 }
 
 bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
-                                           const MissileEnd& to, std::vector<MissileEnd> impacts) {
+                                           const MissileEnd& to, std::vector<MissileEnd> impacts,
+                                           const MissileTrajectory* trajectory) {
     if (!m2Renderer_ || visualId == 0 || !(speed > 0.0f)) return false;
     if (!cachedAssetManager_)
         cachedAssetManager_ = core::Application::getInstance().getAssetManager();
@@ -750,7 +751,19 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
         }
     }
     const glm::vec3 target = missileTargetPoint(missile);
-    const float flight = spell_missile::flightTime(glm::length(target - missile.position), speed);
+    float flight = spell_missile::flightTime(glm::length(target - missile.position), speed);
+    // ADJUST_MISSILE (0x007022d0 hands it to 0x00700880): one flight to where
+    // the target is now, timed by the server. Off the arc it flies straight,
+    // homing, at the speed that lands it then.
+    if (trajectory) {
+        missile.adjusted = true;
+        missile.arcStart = missile.position;
+        missile.arc = spell_missile::planMissileArc(trajectory->elevation, 0.0f, target - missile.position,
+                                                    spellMissileRow(trajectory->spellMissileId),
+                                                    trajectory->flightSeconds);
+        if (!missile.arc.onArc) missile.speed = missile.arc.straightSpeed;
+        flight = missile.arc.flightSeconds;
+    }
     // A missile chasing a unit that runs from it takes longer than this, so
     // the cap is generous; it only stops one that can never arrive.
     missile.maxLifetime = flight * 3.0f + 5.0f;
@@ -764,6 +777,29 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
     LOG_DEBUG("SpellVisual: missile visualId=", visualId, " speed=", speed, " flight=", flight,
               "s model=", visual->modelPath, " target attach=", missile.targetAttachment);
     return true;
+}
+
+// SpellMissile.dbc, all fifteen columns 4 bytes (0x008b8310): the arc reads
+// the two speeds at 4 and 5 and the gravity at 12 (0x00700880).
+const spell_missile::SpellMissileRow* SpellVisualSystem::spellMissileRow(uint32_t id) {
+    if (!spellMissileDbcLoaded_) {
+        spellMissileDbcLoaded_ = true;
+        if (!cachedAssetManager_)
+            cachedAssetManager_ = core::Application::getInstance().getAssetManager();
+        auto dbc = cachedAssetManager_ ? cachedAssetManager_->loadDBC("SpellMissile.dbc") : nullptr;
+        if (dbc && dbc->isLoaded() && dbc->getFieldCount() >= 15) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                spell_missile::SpellMissileRow row;
+                row.speeds[0] = dbc->getFloat(i, 4);
+                row.speeds[1] = dbc->getFloat(i, 5);
+                row.gravity = dbc->getFloat(i, 12);
+                spellMissileRows_[dbc->getUInt32(i, 0)] = row;
+            }
+        }
+    }
+    if (id == 0) return nullptr;
+    auto it = spellMissileRows_.find(id);
+    return it != spellMissileRows_.end() ? &it->second : nullptr;
 }
 
 // A SoundEntries row as a spell's sounds play it: the row's file at its
@@ -808,7 +844,15 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
         it->elapsed += deltaTime;
         const glm::vec3 target = missileTargetPoint(*it);
         const glm::vec3 travel = target - it->position;
-        const spell_missile::Step step = spell_missile::advance(it->position, target, it->speed, deltaTime);
+        spell_missile::Step step;
+        if (it->adjusted && it->arc.onArc) {
+            // On its arc it lands when its time is up, wherever the target
+            // has gone (0x007015d0, flag 0x10000).
+            step.arrived = it->elapsed >= it->arc.flightSeconds;
+            step.position = spell_missile::arcPosition(it->arcStart, it->arc, it->elapsed);
+        } else {
+            step = spell_missile::advance(it->position, target, it->speed, deltaTime);
+        }
         if (!step.arrived && it->elapsed < it->maxLifetime) {
             it->position = step.position;
             m2Renderer_->setInstanceTransform(

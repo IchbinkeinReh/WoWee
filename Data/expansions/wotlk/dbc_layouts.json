@@ -334,6 +334,7 @@
     "RecoveryTime": 29,
     "SchoolMask": 225,
     "Speed": 47,
+    "SpellMissileID": 227,
     "SpellVisualID": 131,
     "TargetAuraState": 21,
     "Targets": 16,

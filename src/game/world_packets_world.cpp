@@ -18,6 +18,38 @@
 namespace wowee {
 namespace game {
 
+bool readSpellCastTargets(network::Packet& packet, SpellCastTargetsData& out) {
+    out = SpellCastTargetsData{};
+    if (!packet.hasRemaining(4)) return false;
+    out.flags = packet.readUInt32();
+    auto readGuid = [&](uint64_t& guid) {
+        if (!packet.hasFullPackedGuid()) return false;
+        guid = packet.readPackedGuid();
+        return true;
+    };
+    auto readPoint = [&](std::optional<std::array<float, 3>>& point) {
+        uint64_t transport = 0;
+        if (!readGuid(transport) || !packet.hasRemaining(12)) return false;
+        std::array<float, 3> xyz{};
+        for (float& v : xyz) v = packet.readFloat();
+        point = xyz;
+        return true;
+    };
+    uint64_t item = 0;
+    if ((out.flags & 0x18a02u) && !readGuid(out.objectGuid)) return false;
+    if ((out.flags & 0x1010u) && !readGuid(item)) return false;
+    if ((out.flags & 0x20u) && !readPoint(out.source)) return false;
+    if ((out.flags & 0x40u) && !readPoint(out.dest)) return false;
+    if (out.flags & 0x2000u) {
+        bool terminated = false;
+        while (packet.hasData()) {
+            if (packet.readUInt8() == 0) { terminated = true; break; }
+        }
+        if (!terminated) return false;
+    }
+    return true;
+}
+
 bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
     // Always reset output to avoid stale targets when callers reuse buffers.
     data = SpellGoData{};
@@ -147,57 +179,53 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
         return true;
     }
 
-    // WotLK 3.3.5a SpellCastTargets - consume ALL target payload bytes so that
-    // any trailing fields after the target section are not misaligned for
-    // ground-targeted or AoE spells.  Same layout as SpellStartParser.
-    if (packet.hasData()) {
-        if (packet.hasRemaining(4)) {
-            uint32_t targetFlags = packet.readUInt32();
-            data.targetFlags = targetFlags;
+    // SpellCastTargets, then what the cast flags add after them (0x0080e1b0).
+    // The targets are optional here: a packet that ends before them is kept.
+    if (!packet.hasRemaining(4)) return true;
+    SpellCastTargetsData targets;
+    const bool targetsWhole = readSpellCastTargets(packet, targets);
+    data.targetFlags = targets.flags;
+    data.targetGuid = targets.objectGuid;
+    // The point is kept: a ground-targeted missile flies to it.
+    if (targets.source) {
+        data.hasSourceLocation = true;
+        data.sourceX = (*targets.source)[0];
+        data.sourceY = (*targets.source)[1];
+        data.sourceZ = (*targets.source)[2];
+    }
+    if (targets.dest) {
+        data.hasDestLocation = true;
+        data.destX = (*targets.dest)[0];
+        data.destY = (*targets.dest)[1];
+        data.destZ = (*targets.dest)[2];
+    }
+    if (!targetsWhole) return true;
 
-            auto readPackedTarget = [&](uint64_t* out) -> bool {
-                if (!packet.hasFullPackedGuid()) return false;
-                uint64_t g = packet.readPackedGuid();
-                if (out) *out = g;
-                return true;
-            };
-            // The point is kept: a ground-targeted missile flies to it.
-            auto readPackedAndFloats3 = [&](float (&xyz)[3]) -> bool {
-                if (!packet.hasFullPackedGuid()) return false;
-                packet.readPackedGuid(); // transport GUID
-                if (!packet.hasRemaining(12)) return false;
-                for (float& v : xyz) v = packet.readFloat();
-                return true;
-            };
-
-            // UNIT/UNIT_MINIPET/CORPSE_ALLY/GAMEOBJECT share one object target GUID
-            if (targetFlags & (0x0002u | 0x0004u | 0x0400u | 0x0800u)) {
-                readPackedTarget(&data.targetGuid);
-            }
-            // ITEM/TRADE_ITEM share one item target GUID
-            if (targetFlags & (0x0010u | 0x0100u)) {
-                readPackedTarget(nullptr);
-            }
-            // SOURCE_LOCATION: PackedGuid (transport) + float x,y,z
-            float point[3] = {};
-            if ((targetFlags & 0x0020u) && readPackedAndFloats3(point)) {
-                data.hasSourceLocation = true;
-                data.sourceX = point[0];
-                data.sourceY = point[1];
-                data.sourceZ = point[2];
-            }
-            // DEST_LOCATION: PackedGuid (transport) + float x,y,z
-            if ((targetFlags & 0x0040u) && readPackedAndFloats3(point)) {
-                data.hasDestLocation = true;
-                data.destX = point[0];
-                data.destY = point[1];
-                data.destZ = point[2];
-            }
-            // STRING: null-terminated
-            if (targetFlags & 0x0200u) {
-                while (packet.hasData() && packet.readUInt8() != 0) {}
+    // 0x800: the caster's power after the cast.
+    if (data.castFlags & 0x800u) {
+        if (!packet.hasRemaining(4)) return true;
+        packet.readUInt32();
+    }
+    // 0x200000: the runes before and after, then a cooldown byte for each of
+    // the six that was ready before and is not after.
+    if (data.castFlags & 0x200000u) {
+        if (!packet.hasRemaining(2)) return true;
+        const uint8_t before = packet.readUInt8();
+        const uint8_t after = packet.readUInt8();
+        for (uint32_t rune = 0; rune < 6; ++rune) {
+            const uint8_t bit = static_cast<uint8_t>(1u << rune);
+            if ((before & bit) && !(after & bit)) {
+                if (!packet.hasRemaining(1)) return true;
+                packet.readUInt8();
             }
         }
+    }
+    // 0x20000: the missile's elevation and its flight time.
+    if (data.castFlags & 0x20000u) {
+        if (!packet.hasRemaining(8)) return true;
+        data.missileElevation = packet.readFloat();
+        data.missileDelayMs = packet.readUInt32();
+        data.hasMissileTrajectory = true;
     }
 
     LOG_DEBUG("Spell go: spell=", data.spellId, " hits=", static_cast<int>(data.hitCount),

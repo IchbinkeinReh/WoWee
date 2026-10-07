@@ -3989,6 +3989,9 @@ public:
         // client's CMissile speed (FUN_00732ff0). Zero - most spells - means
         // it lands at once and sends no missile.
         float missileSpeed = 0.0f;
+        // Spell.dbc SpellMissileID: the SpellMissile row an ADJUST_MISSILE
+        // cast's arc takes its gravity from (0x00700880). 0 = none.
+        uint32_t spellMissileId = 0;
         uint32_t recoveryMs = 0;
         uint32_t categoryRecoveryMs = 0;
         uint32_t createdItemId = 0;

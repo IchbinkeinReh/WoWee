@@ -125,3 +125,96 @@ TEST_CASE("a missile's sound is its SoundEntries row's first file", "[spell_miss
     // 0x00703410 fades it out over 0.15 s on arrival.
     CHECK(sm::kMissileSoundFadeSeconds == Catch::Approx(0.15f));
 }
+
+// ADJUST_MISSILE (cast flag 0x20000): the arc 0x00700880 plans and 0x007015d0
+// flies. A catapult's boulder leaves at the elevation the server names and
+// lands when the server says, wherever the target has gone since.
+namespace {
+constexpr float kPi = 3.14159265f;
+}
+
+TEST_CASE("an arc solved at its pitch lands on the target", "[spell_missile][arc]") {
+    const glm::vec3 delta(30.0f, -40.0f, 5.0f);
+    float speed = 0.0f, time = 0.0f;
+    glm::vec3 velocity(0.0f);
+    REQUIRE(sm::solveArcAtPitch(kPi / 4.0f, delta, sm::kDefaultMissileGravity, speed, time, velocity) ==
+            sm::ArcSolve::Solved);
+    // Leaves at the pitch: rise over run is tan(45 degrees).
+    CHECK(velocity.z == Catch::Approx(std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y)).epsilon(1e-4));
+    CHECK(glm::length(velocity) == Catch::Approx(speed).epsilon(1e-4));
+    // Flown for its own time with no scaling, it is on the target.
+    const sm::MissileArc arc = sm::planMissileArc(kPi / 4.0f, 0.0f, delta, nullptr, time);
+    REQUIRE(arc.onArc);
+    CHECK(arc.gravity == Catch::Approx(19.29f));
+    CHECK(arc.timeScale == Catch::Approx(1.0f).epsilon(1e-4));
+    const glm::vec3 start(100.0f, 200.0f, 10.0f);
+    const glm::vec3 landed = sm::arcPosition(start, arc, time);
+    CHECK(landed.x == Catch::Approx(start.x + delta.x).margin(1e-2));
+    CHECK(landed.y == Catch::Approx(start.y + delta.y).margin(1e-2));
+    CHECK(landed.z == Catch::Approx(start.z + delta.z).margin(1e-2));
+    // Half way it is above the straight line between the ends.
+    CHECK(sm::arcPosition(start, arc, time * 0.5f).z > start.z + delta.z * 0.5f);
+}
+
+TEST_CASE("the arc is timed to the server's delay", "[spell_missile][arc]") {
+    const glm::vec3 delta(20.0f, 0.0f, 0.0f);
+    float speed = 0.0f, time = 0.0f;
+    glm::vec3 velocity(0.0f);
+    REQUIRE(sm::solveArcAtPitch(0.6f, delta, 19.29f, speed, time, velocity) == sm::ArcSolve::Solved);
+    // Twice the arc's own time: flown at half speed, still landing on it.
+    const sm::MissileArc slow = sm::planMissileArc(0.6f, 0.0f, delta, nullptr, time * 2.0f);
+    CHECK(slow.timeScale == Catch::Approx(0.5f).epsilon(1e-4));
+    const glm::vec3 landed = sm::arcPosition(glm::vec3(0.0f), slow, time * 2.0f);
+    CHECK(landed.x == Catch::Approx(20.0f).margin(1e-2));
+    CHECK(landed.z == Catch::Approx(0.0f).margin(1e-2));
+    // The rate is held to [0, 2]: a delay of nothing flies it at twice its time.
+    CHECK(sm::planMissileArc(0.6f, 0.0f, delta, nullptr, 0.0f).timeScale == 2.0f);
+}
+
+TEST_CASE("the row's gravity shapes the arc", "[spell_missile][arc]") {
+    sm::SpellMissileRow row;
+    row.gravity = 5.0f;
+    const glm::vec3 delta(10.0f, 0.0f, 0.0f);
+    const sm::MissileArc light = sm::planMissileArc(0.5f, 0.0f, delta, &row, 1.0f);
+    const sm::MissileArc heavy = sm::planMissileArc(0.5f, 0.0f, delta, nullptr, 1.0f);
+    REQUIRE(light.onArc);
+    REQUIRE(heavy.onArc);
+    CHECK(light.gravity == 5.0f);
+    // Less gravity at the same pitch: a slower, longer flight.
+    CHECK(glm::length(light.velocity) < glm::length(heavy.velocity));
+    CHECK(light.timeScale > heavy.timeScale);
+}
+
+TEST_CASE("a target above the pitch's line flies straight instead", "[spell_missile][arc]") {
+    // Level launch at a target 5 yards up: no arc reaches it, nor at a
+    // hundredth of a radian more, so the missile homes at the speed that
+    // lands it when the server says.
+    const glm::vec3 delta(10.0f, 0.0f, 5.0f);
+    float speed = 0.0f, time = 0.0f;
+    glm::vec3 velocity(0.0f);
+    CHECK(sm::solveArcAtPitch(0.0f, delta, 19.29f, speed, time, velocity) == sm::ArcSolve::NoSolution);
+    const sm::MissileArc arc = sm::planMissileArc(0.0f, 0.0f, delta, nullptr, 2.0f);
+    CHECK_FALSE(arc.onArc);
+    CHECK(arc.straightSpeed == Catch::Approx(glm::length(delta) / 2.0f));
+}
+
+TEST_CASE("a target straight below is timed by the fall", "[spell_missile][arc]") {
+    const glm::vec3 delta(0.0f, 0.0f, -10.0f);
+    float speed = 0.0f, time = 0.0f;
+    glm::vec3 velocity(0.0f);
+    CHECK(sm::solveArcAtPitch(0.3f, delta, 19.29f, speed, time, velocity) == sm::ArcSolve::Degenerate);
+    // No speed of its own: the time to drop 10 yards.
+    CHECK(sm::arcTimeAtSpeed(0.0f, 0.0f, delta, 19.29f) == Catch::Approx(std::sqrt(20.0f / 19.29f)));
+    // Without a SpellMissile row there is no arc.
+    CHECK_FALSE(sm::planMissileArc(0.0f, 0.0f, delta, nullptr, 1.0f).onArc);
+    sm::SpellMissileRow row;
+    const sm::MissileArc arc = sm::planMissileArc(0.0f, 0.0f, delta, &row, 1.0f);
+    REQUIRE(arc.onArc);
+    CHECK(arc.velocity.z < 0.0f);
+}
+
+TEST_CASE("an elevation past vertical folds back", "[spell_missile][arc]") {
+    CHECK(sm::foldElevation(0.3f) == 0.3f);
+    CHECK(sm::foldElevation(2.0f) == Catch::Approx(kPi - 2.0f).epsilon(1e-5));
+    CHECK(sm::foldElevation(-2.0f) == Catch::Approx(-(kPi - 2.0f)).epsilon(1e-5));
+}
