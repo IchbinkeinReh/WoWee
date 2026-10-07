@@ -81,3 +81,60 @@ TEST_CASE("an empty pick resolves to nothing") {
     CHECK(pick.resolve() == 0u);
     CHECK(pick.unitGuid() == 0u);
 }
+
+// Which game objects the client lets the pointer rest on, and so names in a
+// tooltip (0x0070f580 and the per-type classes behind it).
+TEST_CASE("scenery the client does not track shows no tooltip") {
+    using wowee::ui::gameObjectTakesMouseover;
+    const uint32_t noData[24] = {};
+    // A signpost or banner: generic, no highlight.
+    CHECK_FALSE(gameObjectTakesMouseover(5, noData, 0, 0, false));
+    CHECK_FALSE(gameObjectTakesMouseover(5, nullptr, 0, 0, false));
+    // ...one whose template asks to be highlighted is tracked.
+    uint32_t highlighted[24] = {};
+    highlighted[1] = 1;
+    CHECK(gameObjectTakesMouseover(5, highlighted, 0, 0, false));
+    // A capture point keeps its highlight in data19.
+    uint32_t capture[24] = {};
+    CHECK_FALSE(gameObjectTakesMouseover(29, capture, 0, 0, false));
+    capture[19] = 1;
+    CHECK(gameObjectTakesMouseover(29, capture, 0, 0, false));
+    // Transports, map objects, trap doors: never.
+    for (uint32_t t : {11u, 14u, 15u, 31u, 35u})
+        CHECK_FALSE(gameObjectTakesMouseover(t, noData, 0, 0, false));
+}
+
+TEST_CASE("an anvil is named though nothing uses it") {
+    using wowee::ui::gameObjectTakesMouseover;
+    using wowee::ui::gameObjectTakesClick;
+    // Spell focus, duel arbiter, fishing hole, aura generator.
+    for (uint32_t t : {8u, 16u, 25u, 30u}) {
+        CHECK(gameObjectTakesMouseover(t, nullptr, 0x10, 0x4, false));
+        CHECK_FALSE(gameObjectTakesClick(t, 0, 0));
+    }
+}
+
+TEST_CASE("usable objects are tracked only while usable") {
+    using wowee::ui::gameObjectTakesMouseover;
+    CHECK(gameObjectTakesMouseover(3, nullptr, 0, 0, false));          // chest
+    CHECK_FALSE(gameObjectTakesMouseover(3, nullptr, 0x10, 0, false)); // not selectable
+    CHECK_FALSE(gameObjectTakesMouseover(3, nullptr, 0x1, 0, false));  // in use
+    CHECK_FALSE(gameObjectTakesMouseover(10, nullptr, 0, 0x4, false)); // no-interact
+    CHECK_FALSE(gameObjectTakesMouseover(10, nullptr, 0x4, 0, false)); // conditional, unlit
+    CHECK(gameObjectTakesMouseover(10, nullptr, 0x4, 0x1, false));     // ...lit
+    // A fishing bobber: only the player's own.
+    CHECK_FALSE(gameObjectTakesMouseover(17, nullptr, 0, 0, false));
+    CHECK(gameObjectTakesMouseover(17, nullptr, 0, 0, true));
+}
+
+TEST_CASE("the quest an object is kept for comes from its type's data field") {
+    using wowee::ui::gameObjectRequiredQuest;
+    uint32_t data[24] = {};
+    for (uint32_t i = 0; i < 24; ++i) data[i] = 100 + i;
+    CHECK(gameObjectRequiredQuest(3, data) == 108);   // chest data8
+    CHECK(gameObjectRequiredQuest(5, data) == 105);   // generic data5
+    CHECK(gameObjectRequiredQuest(8, data) == 104);   // spell focus data4
+    CHECK(gameObjectRequiredQuest(10, data) == 101);  // goober data1
+    CHECK(gameObjectRequiredQuest(19, data) == 0u);   // mailbox: none
+    CHECK(gameObjectRequiredQuest(3, nullptr) == 0u);
+}

@@ -1316,14 +1316,13 @@ bool GameScreen::drawWorldObjectCursor(game::GameHandler& gameHandler,
     // would act on, and asking the hover a different question puts the two
     // back into disagreement.
     //
-    // ...and where a click would act on nothing, the object the pointer is on
-    // anyway. A signpost, a banner, a shop's board are generic scenery: WoW
-    // uses none of them either, and all three carry the name that is the whole
-    // point of them - "Mage Quarter", "Everyday Merchandise". Named, with no
-    // cursor of its own, since nothing will happen if it is clicked.
+    // ...and where a click would act on nothing, the object the client still
+    // lets the pointer rest on - an anvil, a forge - which it names without a
+    // cursor of its own. Scenery it does not track (a signpost, a banner) gets
+    // neither (0x004f8190, 0x0070f580).
     uint64_t guid = pick.resolve();
     const bool usable = guid != 0;
-    if (guid == 0) guid = pick.namedObjectGuid;
+    if (guid == 0) guid = pick.mouseoverObjectGuid;
     if (guid == 0) return false;
     auto entity = gameHandler.getEntityManager().getEntity(guid);
     if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;

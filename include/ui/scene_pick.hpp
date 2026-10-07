@@ -49,16 +49,26 @@ inline bool raySphereIntersect(const rendering::Ray& ray, const glm::vec3& cente
     return true;
 }
 
+/// The checks every usable object type shares in the 3.3.5a client
+/// (FUN_007112a0): not in use (0x1), not NOT_SELECTABLE (0x10), not marked
+/// no-interact (dynamic 0x4), and a conditional one (flag 0x4) only while it
+/// is lit (dynamic 0x1).
+inline bool gameObjectFlagsAllowUse(uint32_t flags, uint32_t dynamicLow) {
+    constexpr uint32_t kFlagInUse = 0x1, kFlagInteractCond = 0x4, kFlagNotSelectable = 0x10;
+    constexpr uint32_t kDynActivate = 0x1, kDynNoInteract = 0x4;
+    if (flags & (kFlagInUse | kFlagNotSelectable)) return false;
+    if (dynamicLow & kDynNoInteract) return false;
+    if ((flags & kFlagInteractCond) && !(dynamicLow & kDynActivate)) return false;
+    return true;
+}
+
 /// Whether the 3.3.5a client lets a game object be used by a click - gives it a
 /// cursor and answers the click - from its type, GAMEOBJECT_FLAGS and the low
 /// half of GAMEOBJECT_DYNAMIC. Read from the client's per-type object classes:
 /// the ones whose IsInteractable is a plain "no" (generic, spell focus,
 /// transport, map object, duel arbiter, fishing hole, capture point, aura
 /// generator, dungeon difficulty, destructible building, trap door, and the
-/// three types with no class at all), and the checks the others share
-/// (FUN_007112a0): not in use (0x1), not NOT_SELECTABLE (0x10), not marked
-/// no-interact (dynamic 0x4), and a conditional one (flag 0x4) only while it
-/// is lit (dynamic 0x1).
+/// three types with no class at all), and the checks the others share.
 inline bool gameObjectTakesClick(uint32_t goType, uint32_t flags, uint32_t dynamicLow) {
     switch (goType) {
         case 5: case 8: case 11: case 14: case 15: case 16: case 20: case 21:
@@ -67,12 +77,55 @@ inline bool gameObjectTakesClick(uint32_t goType, uint32_t flags, uint32_t dynam
         default:
             break;
     }
-    constexpr uint32_t kFlagInUse = 0x1, kFlagInteractCond = 0x4, kFlagNotSelectable = 0x10;
-    constexpr uint32_t kDynActivate = 0x1, kDynNoInteract = 0x4;
-    if (flags & (kFlagInUse | kFlagNotSelectable)) return false;
-    if (dynamicLow & kDynNoInteract) return false;
-    if ((flags & kFlagInteractCond) && !(dynamicLow & kDynActivate)) return false;
-    return true;
+    return gameObjectFlagsAllowUse(flags, dynamicLow);
+}
+
+/// The quest a game object of this type is only there for, from its template
+/// data, or 0. The client's per-type property table (0x00a36f34, property
+/// 0x14) puts it in a chest's data8, a generic object's data5, a spell focus's
+/// data4 and a goober's data1.
+inline uint32_t gameObjectRequiredQuest(uint32_t goType, const uint32_t* data) {
+    if (!data) return 0;
+    switch (goType) {
+        case 3:  return data[8];
+        case 5:  return data[5];
+        case 8:  return data[4];
+        case 10: return data[1];
+        default: return 0;
+    }
+}
+
+/// Whether the 3.3.5a client lets the pointer rest on a game object at all:
+/// makes it the mouseover, which is what shows its tooltip (FUN_00626720) and
+/// what a click then acts on. CGWorldFrame::OnLayerTrackObject (0x004f8190)
+/// drops any object whose virtual at 0xa4 says no, and for a game object that
+/// is 0x0070f580, which asks the object's type class (slot 0xc):
+///  - transport, map object, MO transport, dungeon difficulty, trap door, and
+///    the types with no class (auction house, guard post, lottery kiosk): never;
+///  - spell focus, duel arbiter, fishing hole, aura generator: always - an
+///    anvil names itself with no cursor of its own;
+///  - generic and capture point: only when the template's highlight is set
+///    (0x0070ff80; data1 and data19, property 0x12) - a signpost or a banner
+///    has none, and says nothing;
+///  - a fishing node: only the player's own (0x00712030), and only while usable;
+///  - destructible building: a vehicle test this client does not model, so no;
+///  - the rest: whenever they could be used (0x007112a0).
+/// The caller still owes the quest test that follows (see
+/// gameObjectRequiredQuest): an object with a quest is tracked only while that
+/// quest is in the player's log.
+inline bool gameObjectTakesMouseover(uint32_t goType, const uint32_t* data,
+                                     uint32_t flags, uint32_t dynamicLow,
+                                     bool createdByPlayer) {
+    switch (goType) {
+        case 11: case 14: case 15: case 20: case 21: case 28: case 31: case 33: case 35:
+            return false;
+        case 8: case 16: case 25: case 30:
+            return true;
+        case 5:  return data && data[1] != 0;
+        case 29: return data && data[19] != 0;
+        case 17: return createdByPlayer && gameObjectFlagsAllowUse(flags, dynamicLow);
+        default: return gameObjectFlagsAllowUse(flags, dynamicLow);
+    }
 }
 
 /// The parts of picking the two callers disagree about.
@@ -107,15 +160,12 @@ struct ScenePick {
     /// by - see the picker, and the scenery-at-the-elbow it exists to stop.
     float    objectAim = 1e30f;
 
-    /// The object best aimed at whether or not it can be used.
-    ///
-    /// A signpost, a banner, a shop's hanging board are GameObjectType 5 -
-    /// generic scenery - and nothing uses them in WoW either. What they do have
-    /// is a name, and reading it off the sign is the whole point of a sign:
-    /// "Mage Quarter", "Trias' Cheese", "Everyday Merchandise". Kept apart from
-    /// objectGuid so a click still cannot land on scenery.
-    uint64_t namedObjectGuid = 0;
-    float    namedObjectAim = 1e30f;
+    /// The object best aimed at that the client lets the pointer rest on
+    /// (gameObjectTakesMouseover), usable or not: an anvil or a forge is named
+    /// with no cursor of its own. Plain scenery - a signpost, a banner, a
+    /// shop's board - is not tracked by the client and shows no tooltip.
+    uint64_t mouseoverObjectGuid = 0;
+    float    mouseoverObjectAim = 1e30f;
 
     /// The living win; a corpse is still selectable, but only when nothing alive
     /// was under the cursor - which is what makes a player standing on a body
