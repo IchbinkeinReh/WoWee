@@ -2639,3 +2639,8 @@ wowee_add_test(test_detail_doodad_placement
 # density, rates, spawns, the ground cache and the lean with the player's movement.
 wowee_add_test(test_client_weather
     SOURCES test_client_weather.cpp)
+
+# ── test_player_display_flags ────────────────────────────────
+# PLAYER_FLAGS' hide-helm and hide-cloak bits on any player's model.
+wowee_add_test(test_player_display_flags
+    SOURCES test_player_display_flags.cpp)

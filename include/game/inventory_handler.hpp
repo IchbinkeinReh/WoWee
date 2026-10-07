@@ -561,6 +561,10 @@ public:
     void handleItemQueryResponse(network::Packet& packet);
 
 private:
+    /// Each other player's PLAYER_FLAGS hide-helm and hide-cloak bits.
+    std::unordered_map<uint64_t, uint32_t> otherPlayerHideBits_;
+    uint32_t hiddenFor(uint64_t guid) const;
+
     // --- Packet handlers ---
     void handleLootResponse(network::Packet& packet);
     void handleLootReleaseResponse(network::Packet& packet);

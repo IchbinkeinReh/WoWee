@@ -3,6 +3,7 @@
 #include "game/spell_classification.hpp"
 #include "game/item_text.hpp"
 #include "game/inventory_slots.hpp"
+#include "game/player_display_flags.hpp"
 #include "core/app_clock.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -4636,6 +4637,7 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                     displayIds[s] = infoIt->second.displayInfoId;
                     invTypes[s] = static_cast<uint8_t>(infoIt->second.inventoryType);
                 }
+                player_display::applyHidden(hiddenFor(guid), displayIds, invTypes);
                 owner_.playerEquipmentCallbackRef()(guid, displayIds, invTypes);
             }
         }
@@ -5590,6 +5592,17 @@ void InventoryHandler::updateOtherPlayerVisibleItems(uint64_t guid, const FlatFi
         old = newEntries;
         changed = true;
     }
+    // The helm and cloak switches dress the model too (0x006e0fd0).
+    {
+        auto fit = fields.find(fieldIndex(UF::PLAYER_FLAGS));
+        const uint32_t hide =
+            player_display::hideBits(fit != fields.end() ? fit->second : 0u);
+        auto [hit, inserted] = otherPlayerHideBits_.try_emplace(guid, hide);
+        if (!inserted && hit->second != hide) {
+            hit->second = hide;
+            changed = true;
+        }
+    }
 
     if (valuesAreDisplayIds) {
         if (sparseTbcVisible && hasInspectedEntries) {
@@ -5661,6 +5674,7 @@ void InventoryHandler::cacheInspectedPlayerEquipment(uint64_t guid, const std::a
               " mainhand=", displayIds[15], " offhand=", displayIds[16]);
 
     if (resolved > 0 && owner_.playerEquipmentCallbackRef()) {
+        player_display::applyHidden(hiddenFor(guid), displayIds, invTypes);
         owner_.playerEquipmentCallbackRef()(guid, displayIds, invTypes);
     }
 }
@@ -5729,10 +5743,10 @@ bool InventoryHandler::resolveOtherPlayerEquipment(
     if (usesVisibleItemDisplayIds()) {
         displayIds = it->second;
         invTypes = inferredVisibleInventoryTypes();
-        for (uint32_t displayId : displayIds) {
-            if (displayId != 0) return true;
-        }
-        return false;
+        bool any = false;
+        for (uint32_t displayId : displayIds) any = any || displayId != 0;
+        player_display::applyHidden(hiddenFor(guid), displayIds, invTypes);
+        return any;
     }
 
     bool anyEntry = false;
@@ -5747,9 +5761,15 @@ bool InventoryHandler::resolveOtherPlayerEquipment(
         invTypes[s] = static_cast<uint8_t>(infoIt->second.inventoryType);
         resolved++;
     }
+    player_display::applyHidden(hiddenFor(guid), displayIds, invTypes);
     // Entries with nothing resolved is "the item queries have not come back",
     // not "bare". Answering true there would dress the model in nothing.
     return !anyEntry || resolved > 0;
+}
+
+uint32_t InventoryHandler::hiddenFor(uint64_t guid) const {
+    auto it = otherPlayerHideBits_.find(guid);
+    return it != otherPlayerHideBits_.end() ? it->second : 0u;
 }
 
 void InventoryHandler::emitOtherPlayerEquipment(uint64_t guid) {
@@ -5774,6 +5794,7 @@ void InventoryHandler::emitOtherPlayerEquipment(uint64_t guid) {
                  " mainhand=", displayIds[15], " offhand=", displayIds[16]);
 
         if (nonZeroDisplay == 0) return;
+        player_display::applyHidden(hiddenFor(guid), displayIds, invTypes);
         owner_.playerEquipmentCallbackRef()(guid, displayIds, invTypes);
         owner_.otherPlayerVisibleDirtyRef().erase(guid);
         return;
@@ -5807,6 +5828,7 @@ void InventoryHandler::emitOtherPlayerEquipment(uint64_t guid) {
         return;
     }
 
+    player_display::applyHidden(hiddenFor(guid), displayIds, invTypes);
     owner_.playerEquipmentCallbackRef()(guid, displayIds, invTypes);
     owner_.otherPlayerVisibleDirtyRef().erase(guid);
 
