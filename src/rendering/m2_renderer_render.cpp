@@ -1612,18 +1612,9 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     currentPipeline = opaquePipeline_;
     currentMaterialSet = VK_NULL_HANDLE;
 
-    // Another renderer's blended models that stand behind the next doodad (or
-    // behind every one that is left) are drawn first. They bind a state of
-    // their own, so everything this loop keeps bound is bound again after.
-    const auto drawInterleavedBehind = [&](float distSq) {
-        if (!interleave || !interleave->peek || !interleave->draw) return;
-        float next = 0.0f;
-        bool drew = false;
-        while (interleave->peek(next) && next >= distSq) {
-            interleave->draw();
-            drew = true;
-        }
-        if (!drew) return;
+    // Everything the loop below keeps bound, bound again after another
+    // pipeline layout has been drawn with in its middle.
+    const auto rebindM2State = [&]() {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipelineLayout_, 0, 1, &perFrameSet, 0, nullptr);
         if (megaBoneSet_[frameIndex]) {
@@ -1644,8 +1635,27 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         currentMaterialSet = VK_NULL_HANDLE;
     };
 
+    // Another renderer's blended models that stand behind the next doodad (or
+    // behind every one that is left) are drawn first. They bind a state of
+    // their own, so everything this loop keeps bound is bound again after.
+    // The particles go among the doodads too (see drawM2ParticleRuns).
+    if (!skyMode_) prepareM2Particles();
+    const auto drawInterleavedBehind = [&](float distSq, uint32_t ownerIndex) {
+        bool drew = false;
+        if (interleave && interleave->peek && interleave->draw) {
+            float next = 0.0f;
+            while (interleave->peek(next) && next >= distSq) {
+                interleave->draw();
+                drew = true;
+            }
+        }
+        if (!skyMode_ && drawM2ParticleRuns(cmd, perFrameSet, distSq, ownerIndex)) drew = true;
+        if (!drew) return;
+        rebindM2State();
+    };
+
     for (const auto& entry : transparentVisible_) {
-        drawInterleavedBehind(entry.distSq);
+        drawInterleavedBehind(entry.distSq, UINT32_MAX);
         if (entry.index >= instances.size()) continue;
         auto& instance = instances[entry.index];
 
@@ -1678,7 +1688,22 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         bool needsBones = modelNeedsAnimation && !instance.boneMatrices.empty();
         if (needsBones && instance.megaBoneOffset == 0) continue;
 
+        // The model's blended batches on priority plane 0, then its particles,
+        // then the batches above 0: the demon crystal's smoke goes over its
+        // shell (plane 0) and under the eyes on its face (plane 8).
+        for (int plane = 0; plane < 2; ++plane) {
+        if (plane == 1 && !skyMode_ &&
+            drawM2ParticleRuns(cmd, perFrameSet, entry.distSq, static_cast<uint32_t>(entry.index))) {
+            rebindM2State();
+            currentModelId = entry.modelId;
+            currentModel = instance.cachedModel;
+            currentModelValid = true;
+            VkDeviceSize vbOff = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &currentModel->vertexBuffer, &vbOff);
+            vkCmdBindIndexBuffer(cmd, currentModel->indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+        }
         for (const auto& batch : model.batches) {
+            if ((batch.priorityPlane > 0) != (plane == 1)) continue;
             if (batch.indexCount == 0) continue;
             if (batch.batchOpacity < 0.01f) continue;
             if (!skyBatchAllowed(skyMode_, static_cast<std::size_t>(&batch - model.batches.data()))) continue;
@@ -1788,6 +1813,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.indexStart, 0, 0);
             if (skyMode_) ++skyDiagDrawsTransparent_;
             lastDrawCallCount++;
+        }
         }
     }
 

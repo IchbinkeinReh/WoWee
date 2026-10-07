@@ -18,6 +18,13 @@ layout(set = 0, binding = 0) uniform PerFrame {
 
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 
+layout(push_constant) uniform Push {
+    vec2 tileCount;
+    int alphaKey;
+    int lit;      // lit by the scene: no M2 flag 0x1, blends 0-4 (FUN_0081fb10)
+    int fogMode;  // 0 to black by alpha, 1 toward the fog, 2 none, 3 white, 4 grey
+} push;
+
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec4 aColor;
 layout(location = 2) in float aSize;
@@ -27,6 +34,7 @@ layout(location = 0) out vec4 vColor;
 layout(location = 1) out float vTile;
 layout(location = 2) out float vFogVisibility;
 layout(location = 3) out vec2 vCorner;
+layout(location = 4) flat out vec3 vFogColor;
 
 // The quad's corners in the order the client builds them (0x00b2d5b4): its
 // strip runs down the left edge and up the right, each corner one size from
@@ -55,6 +63,15 @@ void main() {
     vCorner = vec2(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5);
     viewPos4.xy += corner * aSize;
     vColor = aColor;
+    // Lit as the client lights a particle (FUN_0097a390, FUN_0081fe90): a
+    // white material whose normal is the view's third row - facing the
+    // camera - under the scene's ambient and sun.
+    if (push.lit != 0) {
+        vec3 n = normalize(vec3(view[0][2], view[1][2], view[2][2]));
+        vec3 light = ambientColor.rgb + lightColor.rgb * max(dot(n, normalize(-lightDir.xyz)), 0.0);
+        vColor.rgb *= clamp(light, 0.0, 1.0);
+    }
+    vFogColor = push.fogMode == 1 ? fogColor.rgb : (push.fogMode == 3 ? vec3(1.0) : vec3(0.5));
     vTile = aTile;
     float worldDist = length(viewPos.xyz - aPos);
     float fogRange = max(fogParams.y - fogParams.x, 0.001);

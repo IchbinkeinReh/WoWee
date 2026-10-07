@@ -846,9 +846,9 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
     {
         VkDescriptorSetLayout setLayouts[] = {perFrameLayout, particleTexLayout_};
         VkPushConstantRange pushRange{};
-        pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pushRange.offset = 0;
-        pushRange.size = 12; // vec2 + int
+        pushRange.size = 20; // vec2 tileCount + int alphaKey + int lit + int fogMode
 
         VkPipelineLayoutCreateInfo ci{.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         ci.setLayoutCount = 2;
@@ -1626,22 +1626,8 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     // Copy particle emitter data and resolve textures
     gpuModel.particleEmitters = model.particleEmitters;
     gpuModel.particleTextures.resize(model.particleEmitters.size(), whiteTexture_.get());
-    gpuModel.particleSkipGenericDimming.assign(model.particleEmitters.size(), 0);
     for (size_t ei = 0; ei < model.particleEmitters.size(); ei++) {
         uint16_t texIdx = model.particleEmitters[ei].texture;
-        if (texIdx < textureKeysLower.size() &&
-            textureKeysLower[texIdx].find("flame") != std::string::npos) {
-            gpuModel.particleSkipGenericDimming[ei] = 1;
-        }
-        // Strongly tinted somewhere in its life: orange, green, red. The washing
-        // toward white that the generic path does would erase exactly that, and
-        // plain dust never has it.
-        float strongestTint = 0.0f;
-        for (const glm::vec3& c : model.particleEmitters[ei].particleColor.vec3Values) {
-            strongestTint = std::max(strongestTint,
-                                     std::max({c.r, c.g, c.b}) - std::min({c.r, c.g, c.b}));
-        }
-        if (strongestTint > 0.4f) gpuModel.particleSkipGenericDimming[ei] = 1;
         if (texIdx < allTextures.size() && allTextures[texIdx] != nullptr) {
             gpuModel.particleTextures[ei] = allTextures[texIdx];
         } else {
@@ -1872,6 +1858,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
 
             // Start at full opacity; hide only if texture failed to load.
             bgpu.batchOpacity = texFailed ? 0.0f : 1.0f;
+            bgpu.priorityPlane = batch.priorityPlane;
             // Shader id 0x8000 gets no shader, and a batch with none is not
             // drawn (0x00836c90, 0x00821e97).
             if (shaderless) bgpu.batchOpacity = 0.0f;

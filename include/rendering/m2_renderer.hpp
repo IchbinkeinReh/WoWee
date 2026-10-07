@@ -82,6 +82,9 @@ struct M2ModelGPU {
         // softer at a high one.
         bool starLayer = false;
         float batchOpacity = 1.0f; // Resolved texture weight opacity (0=transparent, skip batch)
+        /// The batch's priority plane: a blended batch above 0 is drawn after
+        /// the model's particles, the rest before them.
+        int8_t priorityPlane = 0;
         // The batch's colour record and transparency track, for evaluating
         // them per frame as the client does (FUN_0081fe90 takes the batch's
         // colour and alpha each draw); 0xFFFF where it has none.
@@ -179,11 +182,6 @@ struct M2ModelGPU {
     // Particle emitter data (kept from M2Model)
     std::vector<pipeline::M2ParticleEmitter> particleEmitters;
     std::vector<VkTexture*> particleTextures;    // Resolved Vulkan textures per emitter
-    /// Per emitter: it is drawing fire or magic whatever the model is called -
-    /// its texture is a flame sprite sheet, or its authored colour is strongly
-    /// tinted - so it is spared the dimming meant for the generic clouds of
-    /// white and grey additive dust.
-    std::vector<uint8_t> particleSkipGenericDimming;
     std::vector<VkDescriptorSet> particleTexSets; // Pre-allocated descriptor sets per emitter (stable, avoids per-frame alloc)
 
     // Ribbon emitter data (kept from M2Model)
@@ -510,6 +508,14 @@ public:
      * Render M2 particle emitters (point sprites)
      */
     void renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
+    /// Fills this frame's particle buffer and runs, far instance to near.
+    /// render() calls it ahead of its blended pass, which draws each
+    /// doodad's particles before the doodad's blended batches.
+    void prepareM2Particles();
+    /// Draws the prepared runs from the cursor on that are farther than
+    /// behindDistSq or belong to instance ownerIndex; false if none were.
+    bool drawM2ParticleRuns(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
+                            float behindDistSq, uint32_t ownerIndex);
 
     /**
      * Render M2 ribbon emitters (spell trails / wing effects)
@@ -1188,18 +1194,24 @@ private:
         uint8_t blendType;
         uint16_t tilesX;
         uint16_t tilesY;
+        /// Lit by the scene (no M2 flag 0x1, blends 0-4) and how it is fogged;
+        /// see ParticleGroup.
+        uint8_t lit;
+        uint8_t fogMode;
         bool operator==(const ParticleGroupKey& other) const {
             return texture == other.texture &&
                    blendType == other.blendType &&
                    tilesX == other.tilesX &&
-                   tilesY == other.tilesY;
+                   tilesY == other.tilesY &&
+                   lit == other.lit &&
+                   fogMode == other.fogMode;
         }
     };
     struct ParticleGroupKeyHash {
         size_t operator()(const ParticleGroupKey& key) const {
             size_t h1 = std::hash<uintptr_t>{}(reinterpret_cast<uintptr_t>(key.texture));
             size_t h2 = std::hash<uint32_t>{}((static_cast<uint32_t>(key.tilesX) << 16) | key.tilesY);
-            size_t h3 = std::hash<uint8_t>{}(key.blendType);
+            size_t h3 = std::hash<uint32_t>{}(key.blendType | (key.lit << 8) | (key.fogMode << 16));
             return h1 ^ (h2 * 0x9e3779b9u) ^ (h3 * 0x85ebca6bu);
         }
     };
@@ -1208,6 +1220,12 @@ private:
         uint8_t blendType;
         uint16_t tilesX;
         uint16_t tilesY;
+        /// The client lights an emitter without M2 flag 0x1 when its blend is
+        /// one of 0-4 (FUN_0081fb10, table 0x00a45374).
+        uint8_t lit = 0;
+        /// 0: fogged to black by alpha (the adds), 1: toward the fog colour
+        /// (opaque, key, alpha), 2: none (M2 flag 0x8). Table 0x00a45390.
+        uint8_t fogMode = 0;
         VkDescriptorSet preAllocSet = VK_NULL_HANDLE;
     };
     std::unordered_map<ParticleGroupKey, ParticleGroup, ParticleGroupKeyHash> particleGroups_;
@@ -1227,8 +1245,18 @@ private:
         ParticleGroup* group = nullptr;
         uint32_t first = 0;
         uint32_t count = 0;
+        /// Which instance of particleDrawOrder_ it belongs to: the runs are
+        /// drawn far instance to near, each instance's in its emitters' order.
+        uint32_t instanceOrder = 0;
+        /// The instance it is of, and that instance's squared distance.
+        uint32_t instanceIndex = 0;
+        float distSq = 0.0f;
     };
+    bool particlesPrepared_ = false;
+    size_t particleRunCursor_ = 0;
     std::vector<ParticleRun> particleRuns_;
+    /// One instance's particles in drawing order, reused frame to frame.
+    std::vector<std::pair<float, uint32_t>> particleSortScratch_;
     /// Vertices the particle buffer holds. Not MAX_M2_PARTICLES, which is the
     /// cap on one instance's particles: this has to hold a whole frame's.
     static constexpr size_t MAX_M2_PARTICLE_VERTS = 131072;

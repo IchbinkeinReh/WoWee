@@ -90,23 +90,6 @@ std::vector<glm::vec3> M2Renderer::getWaterVegetationPositions(const glm::vec3& 
     return result;
 }
 
-namespace {
-
-/// TEMPORARY tuning for the emitters drawing fire or magic, read once from the
-/// environment so the right values can be found without rebuilding:
-/// WOWEE_PFX_RATE scales how many are emitted, WOWEE_PFX_GAIN how bright the
-/// additive ones are, WOWEE_PFX_SIZE how large they are drawn.
-float pfxTuning(const char* name) {
-    const char* v = std::getenv(name);
-    if (!v || !*v) return 1.0f;
-    const float f = static_cast<float>(std::atof(v));
-    return f > 0.0f ? f : 1.0f;
-}
-const float kPfxRate = pfxTuning("WOWEE_PFX_RATE");
-const float kPfxSize = pfxTuning("WOWEE_PFX_SIZE");
-
-} // namespace
-
 void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt) {
     if (inst.emitterAccumulators.size() != gpu.particleEmitters.size()) {
         inst.emitterAccumulators.resize(gpu.particleEmitters.size(), 0.0f);
@@ -136,9 +119,6 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
         // player asked for. Nothing raises it beyond what the model authors.
         rate += distN(particleRng_) * em.emissionRateVary;
         rate *= particleDensity_;
-        if (ei < gpu.particleSkipGenericDimming.size() && gpu.particleSkipGenericDimming[ei] != 0) {
-            rate *= kPfxRate;
-        }
 
         if (rate <= 0.0f || life <= 0.0f) {
             // Diagnostic: a lamp or flame whose emitter never fires produces a
@@ -180,12 +160,10 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             // Position: emitter position transformed by bone matrix
             glm::vec3 localPos = em.position;
             // A plane emitter scatters its particles across a rectangle rather
-            // than letting them all leave from one point. Left out, the demon
-            // crystal's fire was a single thin thread of sprites down its
-            // middle where the model draws a broad soft cloud. Kept to the
-            // emitters drawing fire or magic, like the other corrections here.
-            if (em.emitterType == 1 && ei < gpu.particleSkipGenericDimming.size() &&
-                gpu.particleSkipGenericDimming[ei] != 0) {
+            // than letting them all leave from one point, every one of them
+            // (FUN_009815c0): a roll of -1..1 times half the length and half
+            // the width.
+            if (em.emitterType == 1) {
                 const float areaLength = interpFloat(em.emissionAreaLength, inst.animTime,
                                                      inst.globalSequenceTime,
                                                      inst.currentSequenceIndex,
@@ -217,30 +195,18 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             float hRange = interpFloat(em.horizontalRange, inst.animTime, inst.globalSequenceTime,
                                        inst.currentSequenceIndex, gpu.globalSequenceDurations);
 
-            // Base direction: up in model space, transformed to world
-            glm::vec3 dir(0.0f, 0.0f, 1.0f);
-            if (hRange > 1.0f) {
-                // A horizontal range this wide is an azimuth sweep, not a
-                // spread: 6.283 is a full turn around the emission axis, and
-                // the vertical range is how far off that axis a particle may
-                // lean. Read as the width of a random offset it threw the
-                // demon crystal's flames out sideways at nearly right angles,
-                // when the model sends them almost straight up.
-                const float tilt = dist01(particleRng_) * std::abs(vRange);
-                const float azimuth = dist01(particleRng_) * hRange;
-                dir = glm::vec3(std::sin(tilt) * std::cos(azimuth),
-                                std::sin(tilt) * std::sin(azimuth),
-                                std::cos(tilt));
-            } else {
-                // Add random spread
-                dir.x += distN(particleRng_) * hRange;
-                dir.y += distN(particleRng_) * hRange;
-                dir.z += distN(particleRng_) * vRange;
-            }
-            float lenSq = glm::dot(dir, dir);
-            if (lenSq > 0.001f * 0.001f) dir *= glm::inversesqrt(lenSq);
+            // The direction as the client rolls it (FUN_009815c0): a lean off
+            // the emitter's up axis of -1..1 times the vertical range, turned
+            // about it by -1..1 times the horizontal range - polar angles,
+            // whatever their size.
+            const float pol = distN(particleRng_) * vRange;
+            const float az = distN(particleRng_) * hRange;
+            const glm::vec3 dir(std::cos(az) * std::sin(pol),
+                                std::sin(az) * std::sin(pol),
+                                std::cos(pol));
 
-            // Transform direction by bone + model orientation (rotation only)
+            // Through the bone and the model, scale and all, as the client
+            // multiplies it by the emitter's world matrix.
             glm::mat3 rotMat = glm::mat3(inst.modelMatrix * boneXform);
             p.velocity = rotMat * dir * speed;
 
@@ -615,7 +581,10 @@ void M2Renderer::renderM2Ribbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
     }
 }
 
-void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
+void M2Renderer::prepareM2Particles() {
+    particlesPrepared_ = true;
+    particleRunCursor_ = 0;
+    particleRuns_.clear();
     // This frame's buffer: the other may still be in use by the GPU.
     const uint32_t vbSlot = vkCtx_->getCurrentFrame() % kDynamicVBSlots;
     if (!particlePipeline_ || !m2ParticleVB_[vbSlot]) return;
@@ -659,7 +628,8 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
     std::sort(particleDrawOrder_.begin(), particleDrawOrder_.end());
     size_t droppedParticles = 0;
 
-    for (const auto& [instDistSq, idx] : particleDrawOrder_) {
+    for (uint32_t instOrder = 0; instOrder < particleDrawOrder_.size(); ++instOrder) {
+        const size_t idx = particleDrawOrder_[instOrder].second;
         auto& inst = instances[idx];
         const auto& gpu = *inst.cachedModel;
 
@@ -678,6 +648,8 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         const glm::vec3* cachedColorOverride = nullptr;
         pipeline::M2FBlock cachedOverrideBlock;
         ParticleGroup* cachedGroup = nullptr;
+        // Size times the emitter's world scale where it is flagged 0x20.
+        float cachedModelScale = 1.0f;
 
         // How far this instance's particles actually reach, against how far
         // the model says it extends. A fire twice the height of the hut behind
@@ -717,7 +689,32 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             }
         }
 
-        for (const auto& p : inst.particles) {
+        // Each emitter is its own batch in the client, the model's last
+        // emitter drawn first, and one flagged 0x2 sorts its particles back to
+        // front (FUN_0097e580). Swap-and-pop removal leaves them interleaved,
+        // so they are put in that order here. Last first is what the client
+        // shows: the demon crystal's flame sheet (emitter 1, added) lights up
+        // its dark smoke (emitter 2) rather than being buried under it.
+        particleSortScratch_.clear();
+        for (uint32_t pi = 0; pi < inst.particles.size(); ++pi) {
+            const auto& sp = inst.particles[pi];
+            float key = 0.0f;
+            if (sp.emitterIndex >= 0 && sp.emitterIndex < static_cast<int>(gpu.particleEmitters.size()) &&
+                (gpu.particleEmitters[sp.emitterIndex].flags & 0x2)) {
+                const glm::vec3 d = sp.position - cachedCamPos_;
+                key = -glm::dot(d, d);
+            }
+            particleSortScratch_.emplace_back(key, pi);
+        }
+        std::sort(particleSortScratch_.begin(), particleSortScratch_.end(),
+                  [&inst](const auto& a, const auto& b) {
+                      const int ea = inst.particles[a.second].emitterIndex;
+                      const int eb = inst.particles[b.second].emitterIndex;
+                      return ea != eb ? ea > eb : a.first < b.first;
+                  });
+
+        for (const auto& [sortKey, particleIdx] : particleSortScratch_) {
+            const auto& p = inst.particles[particleIdx];
             if (p.emitterIndex < 0 || p.emitterIndex >= static_cast<int>(gpu.particleEmitters.size())) continue;
 
             if (p.emitterIndex != lastEmitterIdx) {
@@ -744,12 +741,35 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                 cachedTotalTiles = static_cast<uint32_t>(cachedTilesX) *
                                    static_cast<uint32_t>(cachedTilesY);
                 cachedBlendType = cachedEm->blendingType;
-                ParticleGroupKey key{.texture = cachedTex, .blendType = static_cast<uint8_t>(cachedBlendType), .tilesX = cachedTilesX, .tilesY = cachedTilesY};
+                // Lit unless flagged 0x1, for blends 0-4 (FUN_0081fb10); fogged
+                // by blend - black for the adds, the fog's colour for opaque,
+                // key and alpha, white and grey for the modulates - unless
+                // flagged 0x8 (FUN_00832ea0, table 0x00a45390).
+                const uint8_t lit = (!(cachedEm->flags & 0x1) && cachedBlendType <= 4) ? 1 : 0;
+                uint8_t fogMode = 0;
+                if (cachedEm->flags & 0x8) fogMode = 2;
+                else if (cachedBlendType <= 2) fogMode = 1;
+                else if (cachedBlendType == 5) fogMode = 3;
+                else if (cachedBlendType >= 6) fogMode = 4;
+                // The client's M2 flag 0x20 is its size-by-scale bit (0x400
+                // inside it): the length of the emitter's world matrix's
+                // first row, the instance's scale among it (FUN_0097ac20).
+                cachedModelScale = 1.0f;
+                if (cachedEm->flags & 0x20) {
+                    glm::mat4 world = inst.modelMatrix;
+                    if (cachedEm->bone < inst.boneMatrices.size()) world = world * inst.boneMatrices[cachedEm->bone];
+                    cachedModelScale = glm::length(glm::vec3(world[0]));
+                }
+                ParticleGroupKey key{.texture = cachedTex, .blendType = static_cast<uint8_t>(cachedBlendType),
+                                     .tilesX = cachedTilesX, .tilesY = cachedTilesY,
+                                     .lit = lit, .fogMode = fogMode};
                 cachedGroup = &groups[key];
                 cachedGroup->texture = cachedTex;
                 cachedGroup->blendType = cachedBlendType;
                 cachedGroup->tilesX = cachedTilesX;
                 cachedGroup->tilesY = cachedTilesY;
+                cachedGroup->lit = lit;
+                cachedGroup->fogMode = fogMode;
                 if (cachedGroup->preAllocSet == VK_NULL_HANDLE &&
                     p.emitterIndex < static_cast<int>(gpu.particleTexSets.size())) {
                     cachedGroup->preAllocSet = gpu.particleTexSets[p.emitterIndex];
@@ -778,9 +798,13 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             // A run per stretch of particles sharing a group. The group only
             // changes when the emitter does, and particles from one emitter
             // are adjacent, so this closes a run about once per emitter.
-            if (cachedGroup != runGroup) {
+            if (cachedGroup != runGroup || particleRuns_.empty() ||
+                particleRuns_.back().instanceOrder != instOrder) {
                 runGroup = cachedGroup;
-                particleRuns_.push_back({.group = cachedGroup, .first = vbWritten, .count = 0});
+                particleRuns_.push_back({.group = cachedGroup, .first = vbWritten, .count = 0,
+                                         .instanceOrder = instOrder,
+                                         .instanceIndex = static_cast<uint32_t>(idx),
+                                         .distSq = particleDrawOrder_[instOrder].first});
             }
             highestParticleZ = std::max(highestParticleZ, p.position.z);
             if (!emitterDiag.empty()) {
@@ -826,9 +850,8 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
             vd[6] = alpha;
             // The quad is a size either side of the centre, so this is half its
             // width: the scale, times the particle's own roll of the spread, and
-            // the model's scale where the emitter is flagged 0x400.
-            const float modelScale = (cachedEm->flags & 0x400) ? inst.scale : 1.0f;
-            vd[7] = scale * p.sizeVary * modelScale * kPfxSize;
+            // the emitter's world scale where it is flagged 0x20.
+            vd[7] = scale * p.sizeVary * cachedModelScale;
             // The cell of the atlas: the head-cell track at this point of the
             // particle's life, rounded (FUN_00979560), whatever the emitter's
             // flags say; without one, the cell rolled at birth.
@@ -857,8 +880,7 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
                                 " alive=", dg.n, " avgAlpha=", dg.alpha / n,
                                 " avgSize=", dg.size / n, " z=[", dg.minZ, ",", dg.maxZ, "]",
                                 " blend=", static_cast<int>(gpu.particleEmitters[ei].blendingType),
-                                " skipDim=", ei < gpu.particleSkipGenericDimming.size()
-                                                 ? static_cast<int>(gpu.particleSkipGenericDimming[ei]) : -1);
+                                " flags=0x", std::hex, gpu.particleEmitters[ei].flags, std::dec);
                 }
             }
         }
@@ -910,7 +932,33 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         }
     }
 
-    if (totalParticles == 0) return;
+    if (totalParticles == 0) {
+        particleRuns_.clear();
+        return;
+    }
+
+    // Far instances first, as the client's scene list draws them back to
+    // front; each instance's runs keep their emitters' order. The buffer was
+    // filled nearest first, so that it is the far ones a full buffer drops.
+    std::stable_sort(particleRuns_.begin(), particleRuns_.end(),
+                     [](const ParticleRun& a, const ParticleRun& b) {
+                         return a.instanceOrder > b.instanceOrder;
+                     });
+}
+
+bool M2Renderer::drawM2ParticleRuns(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
+                                    float behindDistSq, uint32_t ownerIndex) {
+    if (particleRunCursor_ >= particleRuns_.size()) return false;
+    // The runs farther than the doodad about to be drawn, and the doodad's
+    // own: the client sorts emitters into the scene with every other blended
+    // batch, so a crystal's smoke inside it is drawn before the eyes on its
+    // face rather than over them.
+    const auto wanted = [&](const ParticleRun& run) {
+        return run.distSq > behindDistSq || run.instanceIndex == ownerIndex;
+    };
+    if (!wanted(particleRuns_[particleRunCursor_])) return false;
+
+    const uint32_t vbSlot = vkCtx_->getCurrentFrame() % kDynamicVBSlots;
 
     // Bind per-frame set (set 0) for particle pipeline
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -921,7 +969,9 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
 
     VkPipeline currentPipeline = VK_NULL_HANDLE;
 
-    for (auto& run : particleRuns_) {
+    for (; particleRunCursor_ < particleRuns_.size(); ++particleRunCursor_) {
+        auto& run = particleRuns_[particleRunCursor_];
+        if (!wanted(run)) break;
         if (run.count == 0 || !run.group) continue;
         ParticleGroup& group = *run.group;
 
@@ -970,12 +1020,14 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 particlePipelineLayout_, 1, 1, &texSet, 0, nullptr);
 
-        // Push constants: tileCount + alphaKey
-        struct { float tileX, tileY; int alphaKey; } pc = {
+        // Push constants: tileCount, alphaKey, lit, fogMode
+        struct { float tileX, tileY; int alphaKey; int lit; int fogMode; } pc = {
             .tileX = static_cast<float>(group.tilesX), .tileY = static_cast<float>(group.tilesY),
-            .alphaKey = (blendType == 1) ? 1 : 0
+            .alphaKey = (blendType == 1) ? 1 : 0,
+            .lit = group.lit, .fogMode = group.fogMode
         };
-        vkCmdPushConstants(cmd, particlePipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+        vkCmdPushConstants(cmd, particlePipelineLayout_,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(pc), &pc);
 
         // The vertices are already in the buffer, at this run's own offset.
@@ -985,6 +1037,15 @@ void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrame
         // A quad of four vertices for each particle of the run.
         vkCmdDraw(cmd, 4, run.count, 0, run.first);
     }
+    return true;
+}
+
+void M2Renderer::renderM2Particles(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
+    // What the doodads' blended pass left: every run when it drew none of
+    // them, or the ones nearer than its last doodad.
+    if (!particlesPrepared_) prepareM2Particles();
+    drawM2ParticleRuns(cmd, perFrameSet, -1.0f, UINT32_MAX);
+    particlesPrepared_ = false;
 }
 
 } // namespace rendering
