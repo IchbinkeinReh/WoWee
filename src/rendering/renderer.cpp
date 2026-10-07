@@ -1272,8 +1272,24 @@ void Renderer::beginFrame() {
 
     worldDrawnThisFrame_ = false;
 
+    // Nothing is drawn while the window has no area, and nothing sized from
+    // the swapchain is rebuilt. A minimised window on Windows has a 0x0
+    // surface, and rebuilding at that size failed every target from the depth
+    // buffer to FXAA's scene colour and then faulted on the next frame. The
+    // frame is skipped instead - currentCmd stays null, which every recording
+    // path already treats as "no frame", the same as an out-of-date acquire -
+    // while the caller keeps pumping events, so the window can come back.
+    // Anything queued (an MSAA change, a swapchain marked dirty) waits for it.
+    // After the ablation's clock, so the time spent minimised is not counted
+    // against the first frame drawn afterwards.
+    if (!window->hasDrawableArea()) return;
+
     // Apply deferred MSAA change between frames (before any rendering state is used)
-    if (msaaChangePending_) {
+    // Not onto a surface with no area: the rebuild would refuse it, and a
+    // refused rebuild reads to applyMsaaChange as the change having failed -
+    // which reverts the player's setting to 1x. Left pending, it applies when
+    // the surface comes back.
+    if (msaaChangePending_ && vkCtx->surfaceHasArea()) {
         applyMsaaChange();
         // The rebuild destroys and remakes the swapchain, every render pass and
         // every pipeline. The frame slots are left mid-cycle by it, and the
@@ -1316,8 +1332,17 @@ void Renderer::beginFrame() {
         // Skip recreation while window is minimized (0×0 extent is a Vulkan spec violation)
         // Pixels, like the extent below: a window with a surface behind it is
         // never rebuilt from the size the desktop places it at.
+        //
+        // The drawable size holds the last real size through a minimise, so
+        // it never answers zero here; the surface is asked as well, because
+        // it can be 0x0 while SDL still reports a size - a window something
+        // has hidden for a moment, as a screenshot tool does.
         if (window->getDrawableWidth() == 0 || window->getDrawableHeight() == 0) return;
-        (void)vkCtx->recreateSwapchain(window->getDrawableWidth(), window->getDrawableHeight());
+        if (!vkCtx->surfaceHasArea()) return;
+        // Nothing below is rebuilt against a swapchain that did not come back.
+        // It stays dirty and the next frame tries again; resizing the post
+        // effects at a size that failed is what disabled FXAA for good.
+        if (!vkCtx->recreateSwapchain(window->getDrawableWidth(), window->getDrawableHeight())) return;
         // Rebuild water resources that reference swapchain extent/views
         if (waterRenderer) {
             waterRenderer->recreatePipelines();

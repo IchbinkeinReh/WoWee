@@ -357,6 +357,14 @@ void Window::refreshDrawableSize() {
     }
 }
 
+bool Window::hasDrawableArea() const {
+    if (!window) return false;
+    if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) return false;
+    int dw = 0, dh = 0;
+    SDL_GetWindowSizeInPixels(window, &dw, &dh);
+    return dw > 0 && dh > 0;
+}
+
 void Window::applyResolution(int w, int h) {
     if (!window) return;
     if (w <= 0 || h <= 0) return;

@@ -57,7 +57,21 @@ public:
     /// display stretch it over 3024 - which is what this client did.
     [[nodiscard]] int getDrawableWidth() const { return drawableWidth; }
     [[nodiscard]] int getDrawableHeight() const { return drawableHeight; }
-    void setSize(int w, int h) { width = w; height = h; refreshDrawableSize(); }
+    /// A minimised window is resized to 0x0 on some desktops, and the last
+    /// real size is kept through it, the same as the drawable size: nothing
+    /// sized from a window of no area - an aspect ratio, an interface layout -
+    /// is worth having, and the size comes back with the window.
+    void setSize(int w, int h) {
+        if (w > 0 && h > 0) { width = w; height = h; }
+        refreshDrawableSize();
+    }
+    /// Whether there is anything to draw into right now.
+    ///
+    /// Asked of SDL on every call rather than read from the sizes above, which
+    /// deliberately hold the last real size through a minimise - so they can
+    /// never answer this. A minimised window has a surface of 0x0, and a
+    /// swapchain cannot be built at that size.
+    [[nodiscard]] bool hasDrawableArea() const;
     [[nodiscard]] float getAspectRatio() const { return static_cast<float>(width) / height; }
     [[nodiscard]] bool isFullscreen() const { return fullscreen; }
     [[nodiscard]] bool isVsyncEnabled() const { return vsync; }

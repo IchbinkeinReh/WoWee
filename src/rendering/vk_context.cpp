@@ -2606,7 +2606,33 @@ bool VkContext::restoreSurface(SDL_Window* window, int width, int height) {
     return true;
 }
 
+bool VkContext::surfaceHasArea() const {
+    if (physicalDevice == VK_NULL_HANDLE || surface == VK_NULL_HANDLE) return false;
+    VkSurfaceCapabilitiesKHR caps{};
+    // A failed query is left to the builder, which reports what went wrong;
+    // this only answers the one question of a surface with no area.
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &caps) != VK_SUCCESS) {
+        return true;
+    }
+    // UINT32_MAX is a surface that takes its size from the swapchain.
+    if (caps.currentExtent.width == UINT32_MAX) return true;
+    return caps.currentExtent.width > 0 && caps.currentExtent.height > 0;
+}
+
 bool VkContext::recreateSwapchain(int width, int height) {
+    // Before anything is destroyed. Minimising the window on Windows answers
+    // a 0x0 surface, vk-bootstrap builds the swapchain at that size whatever
+    // it is asked for, and then the depth buffer, the MSAA and depth-resolve
+    // images and every framebuffer failed to create. The rebuild returned
+    // with the old ones already gone, the next frame began a render pass with
+    // no render pass and no framebuffer, and the driver faulted - which the
+    // crash handler turns into exit code 3. Kept dirty and left alone, the
+    // first frame with a window again builds it at the real size.
+    if (width <= 0 || height <= 0 || !surfaceHasArea()) {
+        swapchainDirty = true;
+        return false;
+    }
+
     vkDeviceWaitIdle(device);
 
     // Destroy old framebuffers
@@ -2709,6 +2735,10 @@ bool VkContext::recreateSwapchain(int width, int height) {
         imguiRenderPass = VK_NULL_HANDLE;
     }
 
+    // Dirty on every early return, so whoever called this - not only the
+    // renderer, which marks it first - tries again rather than drawing with
+    // the half that was built.
+    swapchainDirty = true;
     if (!createSwapchainRenderTargets("recreate")) return false;
 
     if (!createOverlayRenderPass()) return false;
@@ -2830,6 +2860,16 @@ void VkContext::resetFrameSyncState() {
 VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     if (deviceLost_) return VK_NULL_HANDLE;
     if (swapchain == VK_NULL_HANDLE) return VK_NULL_HANDLE;  // Swapchain lost; recreate pending
+    // A rebuild that failed partway leaves the swapchain with no render pass
+    // and no framebuffers behind it. Every caller indexes the framebuffers by
+    // the image it is handed, so there is no frame to begin until a rebuild
+    // succeeds; the swapchain is still dirty and the next one is tried then.
+    // The framebuffers are made in order, so a null last one is a set that
+    // stopped short.
+    if (imguiRenderPass == VK_NULL_HANDLE || swapchainFramebuffers.empty() ||
+        swapchainFramebuffers.back() == VK_NULL_HANDLE) {
+        return VK_NULL_HANDLE;
+    }
 
     auto& frame = frames[currentFrame];
 
