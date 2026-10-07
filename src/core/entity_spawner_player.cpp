@@ -1255,10 +1255,8 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
             return;
         }
 
-        // Server game objects are gameplay props, not scenery: exempt them from the
-        // adaptive doodad render distance, which drops to ~200 units in a city and
-        // was hiding mailboxes/chests well inside the range the server still
-        // considers them visible.
+        // Server game objects are not doodads: the client's doodad size-class
+        // distances (0x00791cb0) do not hold them.
         m2Renderer->setInstanceIsGameObject(instanceId, true);
 
         // Deeprun Tram cars: riding never used real mesh collision to begin with (Z is

@@ -7,6 +7,7 @@
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_blend_mode.hpp"
 #include "rendering/m2_texture_combiner.hpp"
+#include "rendering/m2_view_distance.hpp"
 #include "pipeline/model_bounds.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/m2_model_classifier.hpp"
@@ -76,18 +77,23 @@ void M2Instance::recomputeCachedCullFactors() {
         }
         cachedCullCenter = (visualMin + visualMax) * 0.5f;
         cachedVisualRadius = glm::length(visualMax - visualMin) * 0.5f;
+        cachedVisualExtent = visualMax - visualMin;
     } else {
         cachedCullCenter = position;
         cachedVisualRadius = cachedBoundRadius * scale;
     }
 
+    // The size class by the largest side of the world box (0x007bdb10).
+    if (cachedModel) {
+        const glm::vec3 ext = cachedVisualExtent;
+        cachedSizeClass = m2DoodadSizeClass(std::max({ext.x, ext.y, ext.z}));
+    } else {
+        cachedSizeClass = m2DoodadSizeClass(cachedVisualRadius * 2.0f);
+    }
+
     float worldRadius = cachedVisualRadius;
     float cullRadius = worldRadius;
     if (cachedDisableAnimation) cullRadius = std::max(cullRadius, 3.0f);
-    float factor = std::max(1.0f, cullRadius / rendering::M2_CULL_RADIUS_SCALE_DIVISOR);
-    if (cachedDisableAnimation) factor *= 2.6f;
-    if (cachedIsGroundDetail)   factor *= 0.9f;
-    cachedEffectiveMaxDistSqFactor = factor;
     cachedPaddedRadius = std::max(cullRadius * rendering::M2_PADDED_RADIUS_SCALE,
                                   cullRadius + rendering::M2_PADDED_RADIUS_MIN_MARGIN);
 }

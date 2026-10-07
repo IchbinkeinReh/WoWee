@@ -318,7 +318,6 @@ struct M2Instance {
     bool cachedHasParticleEmitters = false;
     bool cachedIsGroundDetail = false;
     bool cachedIsInvisibleTrap = false;
-    bool cachedIsSkyBird = false;
     bool cachedIsLightBeam = false;
     bool cachedIsTransportDoodad = false;
     bool cachedIsValid = false;
@@ -327,10 +326,12 @@ struct M2Instance {
     float cachedBoundRadius = 0.0f;
     glm::vec3 cachedCullCenter{0.0f};              // transformed visual-bounds center
     float cachedVisualRadius = 0.0f;               // transformed visual-bounds half diagonal
-    // Pre-computed per-instance cull factors (depend only on static flags + scale +
-    // bound radius), populated by recomputeCachedCullFactors(). The per-frame SSBO
-    // upload just multiplies by the smoothed render distance and packs the rest.
-    float cachedEffectiveMaxDistSqFactor = 1.0f;  // multiplied by maxRenderDistanceSq each frame
+    glm::vec3 cachedVisualExtent{0.0f};            // transformed visual-bounds sides
+    // Pre-computed per-instance cull data (depend only on the model's box and the
+    // placement), populated by recomputeCachedCullFactors().
+    // The client's doodad size class, by the largest side of the world box
+    // (0x007bdb10): which distance it is drawn to (m2_view_distance.hpp).
+    uint8_t cachedSizeClass = 4;
     float cachedPaddedRadius = 0.0f;              // sphere radius used by the cull compute
     const M2ModelGPU* cachedModel = nullptr;  // Avoid per-frame hash lookups
 
@@ -345,10 +346,9 @@ struct M2Instance {
     // visible") so a freshly spawned instance skips the HiZ test rather than
     // being judged against depth data that never contained it.
     uint8_t hizPrevCulledFrames = 2;
-    // Server game object (mailbox, chest, node, door): exempt from the adaptive
-    // ambient-doodad distance, which collapses to ~200 units in a city and hid
-    // interactable objects long before the server stopped sending them.
-    // Set by the spawner; see M2_GAME_OBJECT_MIN_RENDER_DISTANCE.
+    // Server game object (mailbox, chest, node, door): not a doodad, so not
+    // held to a doodad's size-class distance; drawn as far as the world is.
+    // Set by the spawner.
     bool isGameObject = false;
 
     void recomputeCachedCullFactors();
@@ -594,8 +594,8 @@ public:
     /// M2Instance::particleColors.
     void setInstanceParticleColors(uint32_t instanceId, const std::array<glm::vec3, 9>& colors);
     void removeInstances(const std::vector<uint32_t>& instanceIds);
-    /// Mark an instance as a server game object so the adaptive doodad render
-    /// distance can't cull it while the server still considers it visible.
+    /// Mark an instance as a server game object, which the doodad size-class
+    /// distances do not hold.
     void setInstanceIsGameObject(uint32_t instanceId, bool isGameObject);
     /// What a game object's floor search finds: from `feet`, starting at
     /// `startZ` (0x007c2e70).
@@ -719,25 +719,20 @@ public:
                    ? std::min(viewDistanceAbsolute_, doodadDistanceCapYards_)
                    : viewDistanceAbsolute_;
     }
+    /// How far one instance is drawn, squared: a doodad by its size class
+    /// (0x00791cb0), the ground cover by its own radius, a game object to the
+    /// view distance; none past it.
+    float instanceMaxDistSq(const M2Instance& inst) const;
+    /// The instance's distance fade at that distance squared: a doodad's
+    /// class band (0x00791cb0), the ground cover's last 15% (0x007b15d0's
+    /// plane), none for a game object.
+    float instanceDistanceFade(const M2Instance& inst, float distSq) const;
+    /// The view distance, a ceiling on every instance: the terrain and the
+    /// WMOs stop there, so a doodad past it would stand on nothing.
     void setViewDistance(float distance) {
-        viewDistanceRaw_ = std::clamp(distance, 400.0f, 2400.0f);
-        // And the distance itself, as a ceiling. The scale multiplies a
-        // constant tuned for scene density - 2800 yards where models are
-        // sparse - so at 2400 it put doodads 5600 yards out while the terrain
-        // and the WMOs both stop at the 2400 the player asked for. Distant
-        // trees and buildings then stood on nothing.
-        viewDistanceAbsolute_ = viewDistanceRaw_;
-        recomputeViewDistanceScale();
+        viewDistanceAbsolute_ = std::clamp(distance, 400.0f, 2400.0f);
     }
 
-    /// How far the world's clutter is drawn, against how far the world is -
-    /// the game's Environment Detail.
-    ///
-    /// View distance is how far there is anything to see; this is how much of
-    /// the scenery inside that is worth drawing, and it only ever takes away.
-    /// Above 1 it changes nothing: the ceiling above is the terrain's own, and
-    /// a doodad past that is a tree standing on nothing, which is the fault
-    /// that ceiling was added for.
     /// How far the ground cover is drawn - the game's Ground Clutter Radius.
     ///
     /// Its own distance rather than a share of the doodad one: grass stops
@@ -748,9 +743,11 @@ public:
     }
     [[nodiscard]] float groundDetailDistance() const { return groundDetailMaxDistance_; }
 
+    /// The game's Environment Detail: it scales the distances of the middle
+    /// three doodad size classes (0x0078f570).
     void setEnvironmentDetail(float detail) {
-        environmentDetail_ = std::clamp(detail, 0.25f, 1.5f);
-        recomputeViewDistanceScale();
+        // The client's own range (0x0078dc60).
+        environmentDetail_ = std::clamp(detail, 0.5f, 1.5f);
     }
     [[nodiscard]] float environmentDetail() const { return environmentDetail_; }
 
@@ -960,7 +957,7 @@ private:
     // CPU reads back visibility to build sortedVisible_ without per-instance frustum/distance tests.
     struct CullInstanceGPU {        // matches CullInstance in m2_cull.comp.glsl (32 bytes, std430)
         glm::vec4 sphere;           // xyz = world position, w = padded radius
-        float effectiveMaxDistSq;   // adaptive distance cull threshold
+        float effectiveMaxDistSq;   // the instance's distance cull threshold
         uint32_t flags;             // bit 0 = valid, bit 1 unused, bit 2 = invisibleTrap
         float _pad[2] = {};
     };
@@ -1249,17 +1246,8 @@ private:
 
     // Cached camera state from update() for frustum-culling bones
     glm::vec3 cachedCamPos_ = glm::vec3(0.0f);
-    float cachedMaxRenderDistSq_ = 0.0f;
-    float smoothedRenderDist_ = 1000.0f;  // Smoothed render distance to prevent flickering
-    /// The distance as asked for, kept so the scale can be rebuilt when the
-    /// detail setting changes without the caller having to say it again.
-    float viewDistanceRaw_ = 1200.0f;
     float environmentDetail_ = 1.0f;
     float groundDetailMaxDistance_ = 0.0f;   // 0 = no cap of its own
-    void recomputeViewDistanceScale() {
-        viewDistanceScale_ = (viewDistanceRaw_ / 1200.0f) * environmentDetail_;
-    }
-    float viewDistanceScale_ = 1.0f;
     float viewDistanceAbsolute_ = 1200.0f;
     /// Drop the sky model's baked star layer, because something else is
     /// drawing stars. See BatchGPU::starLayer.

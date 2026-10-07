@@ -205,7 +205,6 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     instance.cachedBoundRadius = mdlRef.boundRadius;
     instance.cachedIsGroundDetail = mdlRef.isGroundDetail;
     instance.cachedIsInvisibleTrap = mdlRef.isInvisibleTrap;
-    instance.cachedIsSkyBird = mdlRef.isSkyBird;
     instance.cachedIsLightBeam = mdlRef.isLightBeam;
     instance.cachedIsTransportDoodad = mdlRef.isTransportDoodad;
     instance.cachedIsValid = mdlRef.isValid();
@@ -301,7 +300,6 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
     instance.cachedBoundRadius = mdl2.boundRadius;
     instance.cachedIsGroundDetail = mdl2.isGroundDetail;
     instance.cachedIsInvisibleTrap = mdl2.isInvisibleTrap;
-    instance.cachedIsSkyBird = mdl2.isSkyBird;
     instance.cachedIsLightBeam = mdl2.isLightBeam;
     instance.cachedIsTransportDoodad = mdl2.isTransportDoodad;
     instance.cachedIsValid = mdl2.isValid();
@@ -366,6 +364,23 @@ static bool skyBatchAllowed(bool skyMode, std::size_t index) {
     return maxBatch < 0 || static_cast<int>(index) < maxBatch;
 }
 
+float M2Renderer::instanceMaxDistSq(const M2Instance& inst) const {
+    return rendering::m2InstanceMaxDistSq(inst.cachedSizeClass, environmentDetail_,
+                                          inst.isGameObject, cappedViewDistance(),
+                                          inst.cachedIsGroundDetail, groundDetailMaxDistance_);
+}
+
+float M2Renderer::instanceDistanceFade(const M2Instance& inst, float distSq) const {
+    if (inst.isGameObject) return 1.0f;
+    const float dist = std::sqrt(distSq);
+    if (inst.cachedIsGroundDetail && groundDetailMaxDistance_ > 0.0f) {
+        // From 85% of groundEffectDist to all of it (0x007b15d0).
+        const float d = groundDetailMaxDistance_;
+        return std::clamp((d - dist) / (d * 0.15f), 0.0f, 1.0f);
+    }
+    return rendering::m2DoodadFade(dist, inst.cachedSizeClass, environmentDetail_);
+}
+
 void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::mat4& viewProjection) {
     ZoneScopedN("M2Renderer::update");
     if (spatialIndexDirty_) {
@@ -376,17 +391,6 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
 
     // Cache camera state for frustum-culling bone computation
     cachedCamPos_ = cameraPos;
-    // Never past the ground. The density constants are how far models are
-    // worth drawing, not how far there is anything to draw them on: the
-    // terrain and the WMOs stop at the view distance itself, so a doodad
-    // beyond it is a tree standing on nothing.
-    const float maxRenderDistance = std::min(
-        cappedViewDistance(),
-        viewDistanceScale_ *
-            ((instances.size() > rendering::M2_HIGH_DENSITY_INSTANCE_THRESHOLD)
-                 ? rendering::M2_MAX_RENDER_DISTANCE_HIGH_DENSITY
-                 : rendering::M2_MAX_RENDER_DISTANCE_LOW_DENSITY));
-    cachedMaxRenderDistSq_ = maxRenderDistance * maxRenderDistance;
 
     // Build frustum for culling bones
     Frustum updateFrustum;
@@ -545,19 +549,9 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         // Frustum + distance cull: skip expensive bone computation for off-screen instances.
         // Both effectiveMaxDistSq and paddedRadius are precomputed per instance in
         // recomputeCachedCullFactors(); we only need the per-frame distance and frustum test.
-        glm::vec3 toCam = instance.position - cachedCamPos_;
+        glm::vec3 toCam = instance.cachedCullCenter - cachedCamPos_;
         float distSq = glm::dot(toCam, toCam);
-        float effectiveMaxDistSq = rendering::m2InstanceMaxDistSq(
-            cachedMaxRenderDistSq_, instance.cachedEffectiveMaxDistSqFactor,
-            false, 0.0f, cappedViewDistance(),
-            instance.cachedIsGroundDetail, groundDetailMaxDistance_);
-        if (instance.cachedIsSkyBird) {
-            constexpr float kBirdMaxDistSq =
-                rendering::M2_SKY_BIRD_MAX_RENDER_DISTANCE *
-                rendering::M2_SKY_BIRD_MAX_RENDER_DISTANCE;
-            effectiveMaxDistSq = std::min(effectiveMaxDistSq, kBirdMaxDistSq);
-        }
-        if (distSq > effectiveMaxDistSq) continue;
+        if (distSq > instanceMaxDistSq(instance)) continue;
         float paddedRadius = instance.cachedPaddedRadius;
         if (paddedRadius > 0.0f && !updateFrustum.intersectsSphere(instance.cachedCullCenter, paddedRadius)) continue;
 
@@ -640,9 +634,9 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         if (idx >= instances.size()) continue;
         auto& instance = instances[idx];
         // Distance cull: only update particles within visible range
-        glm::vec3 toCam = instance.position - cachedCamPos_;
+        glm::vec3 toCam = instance.cachedCullCenter - cachedCamPos_;
         float distSq = glm::dot(toCam, toCam);
-        if (distSq > cachedMaxRenderDistSq_) continue;
+        if (distSq > instanceMaxDistSq(instance)) continue;
         if (!instance.cachedModel) continue;
         emitParticles(instance, *instance.cachedModel, deltaTime);
         updateParticles(instance, deltaTime);
@@ -757,24 +751,9 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
 
     const uint32_t numInstances = std::min(static_cast<uint32_t>(instances.size()), MAX_CULL_INSTANCES);
 
-    // --- Compute per-instance adaptive distances (same formula as old CPU cull) ---
-    const float targetRenderDist = viewDistanceScale_ *
-        ((instances.size() > 2000) ? 300.0f
-         : (instances.size() > 1000) ? 500.0f
-                                     : 1000.0f);
-    const float shrinkRate = 0.005f;
-    const float growRate   = 0.05f;
-    float blendRate = (targetRenderDist < smoothedRenderDist_) ? shrinkRate : growRate;
-    smoothedRenderDist_ = glm::mix(smoothedRenderDist_, targetRenderDist, blendRate);
-    const float maxRenderDistance = smoothedRenderDist_;
-    const float maxRenderDistanceSq = maxRenderDistance * maxRenderDistance;
-    // The shader rejects on this bound before it ever reads the per-instance
-    // distance, so it has to clear the game-object floor as well - otherwise
-    // that floor is silently capped at 2x the ambient doodad distance.
-    const float maxPossibleDistSq = std::max(
-        maxRenderDistanceSq * 4.0f,  // 2x safety margin
-        rendering::M2_GAME_OBJECT_MIN_RENDER_DISTANCE *
-        rendering::M2_GAME_OBJECT_MIN_RENDER_DISTANCE);
+    // The shader rejects on this bound before it reads the per-instance
+    // distance: nothing is drawn past the view distance.
+    const float maxPossibleDistSq = cappedViewDistance() * cappedViewDistance();
 
     // --- Upload frustum planes + camera (UBO, binding 0) ---
     const glm::mat4 vp = camera.getProjectionMatrix() * camera.getViewMatrix();
@@ -859,17 +838,7 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
         auto* input = static_cast<CullInstanceGPU*>(cullInputMapped_[frameIndex]);
         for (uint32_t i = 0; i < numInstances; i++) {
             const auto& inst = instances[i];
-            float effectiveMaxDistSq = rendering::m2InstanceMaxDistSq(
-                maxRenderDistanceSq, inst.cachedEffectiveMaxDistSqFactor,
-                inst.isGameObject, rendering::M2_GAME_OBJECT_MIN_RENDER_DISTANCE,
-                cappedViewDistance(),
-                inst.cachedIsGroundDetail, groundDetailMaxDistance_);
-            if (inst.cachedIsSkyBird && inst.cachedHasAnimation && !inst.cachedDisableAnimation) {
-                constexpr float kBirdMaxDistSq =
-                    rendering::M2_SKY_BIRD_MAX_RENDER_DISTANCE *
-                    rendering::M2_SKY_BIRD_MAX_RENDER_DISTANCE;
-                effectiveMaxDistSq = std::min(effectiveMaxDistSq, kBirdMaxDistSq);
-            }
+            const float effectiveMaxDistSq = instanceMaxDistSq(inst);
 
             uint32_t flags = 0;
             if (inst.cachedIsValid)          flags |= 1u;
@@ -978,8 +947,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
 
     lastDrawCallCount = 0;
 
-    // GPU cull results - dispatchCullCompute() already updated smoothedRenderDist_.
-    // Use the cached value (set by dispatchCullCompute or fallback below).
+    // GPU cull results from dispatchCullCompute(), or the CPU fallback below.
     const uint32_t frameIndex = vkCtx_->getCurrentFrame();
     const uint32_t numInstances = std::min(static_cast<uint32_t>(instances.size()), MAX_CULL_INSTANCES);
     const uint32_t* visibility = static_cast<const uint32_t*>(cullOutputMapped_[frameIndex]);
@@ -1032,23 +1000,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         }
     }
 
-    // If GPU culling was not dispatched, fallback: compute distances on CPU
-    float maxRenderDistanceSq;
-    if (!gpuCullAvailable) {
-        const float targetRenderDist = viewDistanceScale_ *
-            ((instances.size() > 2000) ? 300.0f
-             : (instances.size() > 1000) ? 500.0f
-                                         : 1000.0f);
-        const float shrinkRate = 0.005f;
-        const float growRate = 0.05f;
-        float blendRate = (targetRenderDist < smoothedRenderDist_) ? shrinkRate : growRate;
-        smoothedRenderDist_ = glm::mix(smoothedRenderDist_, targetRenderDist, blendRate);
-        maxRenderDistanceSq = smoothedRenderDist_ * smoothedRenderDist_;
-    } else {
-        maxRenderDistanceSq = smoothedRenderDist_ * smoothedRenderDist_;
-    }
-
-    const float fadeStartFraction = 0.75f;
     const glm::vec3 camPos = camera.getPosition();
 
     // Where this pass's three milliseconds go.
@@ -1078,12 +1029,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         const glm::mat4 vp = camera.getProjectionMatrix() * camera.getViewMatrix();
         frustum.extractFromMatrix(vp);
     }
-    // Matches the bound uploaded to the cull shader, including the headroom the
-    // game-object floor needs (see dispatchCullCompute).
-    const float maxPossibleDistSq = std::max(
-        maxRenderDistanceSq * 4.0f,
-        rendering::M2_GAME_OBJECT_MIN_RENDER_DISTANCE *
-        rendering::M2_GAME_OBJECT_MIN_RENDER_DISTANCE);
+    // Matches the bound uploaded to the cull shader (see dispatchCullCompute).
+    const float maxPossibleDistSq = cappedViewDistance() * cappedViewDistance();
 
     const uint32_t totalInstances = static_cast<uint32_t>(instances.size());
     struct VisibleChunk {
@@ -1108,18 +1055,12 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             float distSq;
             float effectiveMaxDistSq;
 
-            // Server game objects keep a distance floor instead of following the
-            // ambient doodad distance down; it also feeds the fade curve below,
-            // so a mailbox doesn't fade out at the doodad boundary either.
-            const float instanceMaxDistSq = rendering::m2InstanceMaxDistSq(
-                maxRenderDistanceSq, instance.cachedEffectiveMaxDistSqFactor,
-                instance.isGameObject, rendering::M2_GAME_OBJECT_MIN_RENDER_DISTANCE,
-                cappedViewDistance(),
-                instance.cachedIsGroundDetail, groundDetailMaxDistance_);
+            // A doodad by its size class, the rest as instanceMaxDistSq says.
+            const float instanceMaxDistSq = this->instanceMaxDistSq(instance);
 
             if (forceNoCull_) {
                 if (!instance.cachedIsValid) continue;
-                glm::vec3 toCam = instance.position - camPos;
+                glm::vec3 toCam = instance.cachedCullCenter - camPos;
                 distSq = glm::dot(toCam, toCam);
                 effectiveMaxDistSq = instanceMaxDistSq;
             } else if (gpuCullAvailable && i < numInstances) {
@@ -1127,26 +1068,18 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 // directly here would read the slot of whichever instance held
                 // this array position when the dispatch was recorded.
                 if (!instance.lastCullVisible) continue;
-                glm::vec3 toCam = instance.position - camPos;
+                glm::vec3 toCam = instance.cachedCullCenter - camPos;
                 distSq = glm::dot(toCam, toCam);
                 effectiveMaxDistSq = instanceMaxDistSq;
             } else {
                 if (!instance.cachedIsValid || instance.cachedIsInvisibleTrap) continue;
-                glm::vec3 toCam = instance.position - camPos;
+                glm::vec3 toCam = instance.cachedCullCenter - camPos;
                 distSq = glm::dot(toCam, toCam);
                 if (distSq > maxPossibleDistSq) continue;
                 effectiveMaxDistSq = instanceMaxDistSq;
                 if (distSq > effectiveMaxDistSq) continue;
                 float paddedRadius = instance.cachedPaddedRadius;
                 if (paddedRadius > 0.0f && !frustum.intersectsSphere(instance.cachedCullCenter, paddedRadius)) continue;
-            }
-
-            if (instance.cachedIsSkyBird && instance.cachedHasAnimation && !instance.cachedDisableAnimation) {
-                constexpr float kBirdMaxDistSq =
-                    rendering::M2_SKY_BIRD_MAX_RENDER_DISTANCE *
-                    rendering::M2_SKY_BIRD_MAX_RENDER_DISTANCE;
-                effectiveMaxDistSq = std::min(effectiveMaxDistSq, kBirdMaxDistSq);
-                if (distSq > effectiveMaxDistSq) continue;
             }
 
             VisibleEntry visible{.index = i, .modelId = instance.modelId, .distSq = distSq, .effectiveMaxDistSq = effectiveMaxDistSq};
@@ -1364,14 +1297,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 if (entry.index >= instances.size()) continue;
                 auto& instance = instances[entry.index];
 
-                // Distance-based fade alpha
-                float fadeFrac = model.disableAnimation ? 0.55f : fadeStartFraction;
-                float fadeStartDistSq = entry.effectiveMaxDistSq * fadeFrac * fadeFrac;
-                float fadeAlpha = 1.0f;
-                if (entry.distSq > fadeStartDistSq) {
-                    fadeAlpha = std::clamp((entry.effectiveMaxDistSq - entry.distSq) /
-                                          (entry.effectiveMaxDistSq - fadeStartDistSq), 0.0f, 1.0f);
-                }
+                // The distance fade, as the client takes it (0x00791cb0).
+                float fadeAlpha = instanceDistanceFade(instance, entry.distSq);
                 // Ground detail used to be held at 0.82 here. This is the
                 // opaque pass: nothing blended it, so it was a number with no
                 // effect - and now that the cutout pipeline turns alpha into
@@ -1706,14 +1633,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
 
         const M2ModelGPU& model = *currentModel;
 
-        // Fade alpha
-        float fadeAlpha = 1.0f;
-        float fadeFrac = model.disableAnimation ? 0.55f : fadeStartFraction;
-        float fadeStartDistSq = entry.effectiveMaxDistSq * fadeFrac * fadeFrac;
-        if (entry.distSq > fadeStartDistSq) {
-            fadeAlpha = std::clamp((entry.effectiveMaxDistSq - entry.distSq) /
-                                  (entry.effectiveMaxDistSq - fadeStartDistSq), 0.0f, 1.0f);
-        }
+        // The distance fade, as the client takes it (0x00791cb0).
+        float fadeAlpha = instanceDistanceFade(instance, entry.distSq);
         float instanceFadeAlpha = fadeAlpha * instance.fade;
         const bool instanceFaded = instance.fade < 0.999f;
 
