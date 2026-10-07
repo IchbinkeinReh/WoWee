@@ -2625,3 +2625,11 @@ endif()
 # the re-parsing it saved (950.8 s of CPU against 945.2 s without). The main
 # target benefits because it is one target over 413 objects; the tests are the
 # opposite shape. Do not re-add it without measuring.
+
+# ── test_detail_doodad_placement ─────────────────────────────
+# Where the client puts ground clutter on a chunk (0x007d3390, 0x007b31e0).
+wowee_add_test(test_detail_doodad_placement
+    SOURCES test_detail_doodad_placement.cpp
+            ${TEST_COMMON_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)

@@ -6,6 +6,7 @@
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/wmo_loader.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "pipeline/detail_doodad_placement.hpp"
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -51,6 +52,24 @@ struct TileCoord {
 /**
  * Loaded terrain tile data
  */
+/// One chunk's ground clutter, placed as the client places it (0x007d3390)
+/// and instanced only while the chunk is within groundEffectDist - the client
+/// builds a chunk's detail doodads when it comes in range (0x007d3fe0).
+struct DetailChunk {
+    float minX = 0.0f, minY = 0.0f, maxX = 0.0f, maxY = 0.0f;  ///< render space
+    struct Doodad {
+        uint32_t modelId = 0;
+        glm::vec3 position{0.0f};
+        float rotation = 0.0f;
+        float scale = 1.0f;
+        glm::vec4 color{1.0f};   ///< rgb MCCV doubled, a 0 in MCSH shadow
+        glm::vec3 normal{0.0f, 0.0f, 1.0f};
+    };
+    std::vector<Doodad> doodads;
+    std::vector<uint32_t> instanceIds;
+    bool instanced = false;
+};
+
 struct TerrainTile {
     TileCoord coord;
     pipeline::ADTTerrain terrain;
@@ -65,6 +84,7 @@ struct TerrainTile {
     std::vector<uint32_t> wmoUniqueIds;  // For WMO dedup cleanup on unload
     std::vector<uint32_t> m2InstanceIds;
     std::vector<uint32_t> doodadUniqueIds;  // For dedup cleanup on unload
+    std::vector<DetailChunk> detailChunks;  // ground clutter, by chunk
 };
 
 /**
@@ -90,13 +110,12 @@ struct PendingTile {
         glm::vec3 position;
         glm::vec3 rotation;
         float scale;
-        uint16_t mddfFlags = 0;  // the MDDF record's flags; 0 for ground cover
-        // Ground cover: what DetailDoodad.bls lights it by (detail_doodad_shade.hpp).
-        bool detailDoodad = false;
-        glm::vec4 detailColor{1.0f};   // rgb MCCV doubled, a 0 in MCSH shadow
-        glm::vec3 detailNormal{0.0f, 0.0f, 1.0f};
+        uint16_t mddfFlags = 0;  // the MDDF record's flags
     };
     std::vector<M2Placement> m2Placements;
+    /// Ground clutter by chunk, and the models it uses (kept resident).
+    std::vector<DetailChunk> detailChunks;
+    std::vector<uint32_t> detailModelIds;
 
     // Pre-loaded WMO data
     struct WMOReady {
@@ -554,16 +573,17 @@ private:
     // Tiles currently being incrementally finalized across frames
     std::deque<FinalizingTile> finalizingTiles_;
 
-    struct GroundEffectEntry {
-        std::array<uint32_t, 4> doodadIds{{0, 0, 0, 0}};
-        std::array<uint32_t, 4> weights{{0, 0, 0, 0}};
-        uint32_t density = 0;
-    };
+    using GroundEffectEntry = pipeline::GroundEffectRecord;
     bool groundEffectsLoaded_ = false;
     std::unordered_map<uint32_t, GroundEffectEntry> groundEffectById_; // effectId -> config
     std::unordered_map<uint32_t, std::string> groundDoodadModelById_;  // doodadId -> model path
     std::unordered_map<uint32_t, uint32_t> groundDoodadFlagsById_;     // doodadId -> GroundEffectDoodad flags
     float groundClutterDensityScale_ = 1.0f;
+    /// The model sizes 0x007b31e0 files a doodad by, by model path.
+    std::mutex detailModelSizesMutex_;
+    std::unordered_map<std::string, pipeline::DetailModelSize> detailModelSizes_;
+    /// Instances the ground clutter of chunks in range, releases the rest.
+    void updateDetailDoodads(const glm::vec3& camPos);
     std::unordered_map<std::string, TerrainTextureTones> terrainTextureTones_;
 };
 

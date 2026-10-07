@@ -101,7 +101,6 @@ glm::vec3 placementEuler(const float rotation[3]) {
 using pipeline::ALPHA_MAP_SIZE;
 
 // Random float normalization: mask to 16-bit then divide by max value to get [0..1]
-constexpr float kRand16Max = 65535.0f;
 
 // Placement transform constants
 constexpr float kInv1024  = 1.0f / 1024.0f;
@@ -241,6 +240,9 @@ void TerrainManager::update(const Camera& camera, float deltaTime) {
     const auto tUnloadStart = clock::now();
     processPendingUnloads();
     unloadMs = elapsedMs(tUnloadStart, clock::now());
+
+    // The ground clutter of the chunks in range (0x007d3fe0).
+    updateDetailDoodads(camera.getPosition());
 
     timeSinceLastUpdate += deltaTime;
 
@@ -1103,8 +1105,6 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                 }
                 uint32_t instId = m2Renderer->createInstance(p.modelId, p.position, p.rotation, p.scale);
                 if (instId) {
-                    if (p.detailDoodad)
-                        m2Renderer->setInstanceDetailShade(instId, p.detailColor, p.detailNormal);
                     // MDDF 0x1: no distance culls it (0x007becd0).
                     if (p.mddfFlags & kMddfNoDistanceCull)
                         m2Renderer->setInstanceNoDistanceCull(instId, true);
@@ -1344,6 +1344,14 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
         tile->wmoInstanceIds = std::move(ft.wmoInstanceIds);
         tile->wmoUniqueIds = std::move(ft.tileWmoUniqueIds);
         tile->doodadUniqueIds = std::move(ft.tileUniqueIds);
+        // Ground clutter is instanced by chunk as the camera comes in range
+        // (updateDetailDoodads); its few models stay resident meanwhile.
+        tile->detailChunks = std::move(pending->detailChunks);
+        if (m2Renderer) {
+            for (uint32_t id : pending->detailModelIds) {
+                if (m2Renderer->hasModel(id)) m2Renderer->setModelPinned(id, true);
+            }
+        }
         getTileBounds(coord, tile->minX, tile->minY, tile->maxX, tile->maxY);
         loadedTiles[coord] = std::move(tile);
         // NOTE: Don't cache pending here - std::move above empties terrain/mesh,
@@ -1684,6 +1692,9 @@ void TerrainManager::unloadTile(int x, int y) {
 
     // Remove M2 doodad instances
     if (m2Renderer) {
+        for (auto& dc : tile->detailChunks) {
+            if (!dc.instanceIds.empty()) m2Renderer->removeInstances(dc.instanceIds);
+        }
         m2Renderer->removeInstances(tile->m2InstanceIds);
         LOG_DEBUG("  Removed ", tile->m2InstanceIds.size(), " M2 instances");
     }
@@ -1867,17 +1878,26 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
     if (taxiStreamingMode_) return;  // Skip clutter while on taxi flights.
     if (!pending || groundEffectById_.empty() || groundDoodadModelById_.empty()) return;
 
-    size_t modelMissing = 0;
-    size_t modelInvalid = 0;
-    auto ensureModelPrepared = [&](const std::string& m2Path, uint32_t modelId) -> bool {
-        if (preparedModelIds.count(modelId)) return true;
+    // The client's groundEffectDensity: how many cells of a chunk it picks
+    // (0x0078dab0, 16 to 256). Zero is this client's "off".
+    const uint32_t cellPicks = pipeline::detailCellPicks(groundClutterDensityScale_);
+    if (cellPicks == 0) return;
 
+    size_t modelMissing = 0;
+    // Loads a doodad's model for upload once, and notes the size 0x007b31e0
+    // files it by. Null when the model will not load: the client puts nothing
+    // in its place.
+    auto prepareModel = [&](const std::string& m2Path, uint32_t modelId) -> const pipeline::DetailModelSize* {
+        {
+            std::lock_guard<std::mutex> lock(detailModelSizesMutex_);
+            auto it = detailModelSizes_.find(m2Path);
+            if (it != detailModelSizes_.end() && preparedModelIds.count(modelId)) return &it->second;
+        }
         std::vector<uint8_t> m2Data = assetManager->readFile(m2Path);
         if (m2Data.empty()) {
             modelMissing++;
-            return false;
+            return nullptr;
         }
-
         pipeline::M2Model m2Model = pipeline::M2Loader::load(m2Data);
         m2Model.name = m2Path;
         std::string skinPath = pipeline::skinPathForM2(m2Path);
@@ -1886,266 +1906,145 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
             pipeline::M2Loader::loadSkin(skinData, m2Model);
         }
         if (!m2Model.isValid()) {
-            modelInvalid++;
-            return false;
+            modelMissing++;
+            return nullptr;
         }
+        pipeline::DetailModelSize size;
+        size.texture = m2Model.textures.empty() ? std::string() : toLowerCopy(m2Model.textures[0].filename);
+        size.vertices = static_cast<uint32_t>(m2Model.vertices.size());
+        size.indices = static_cast<uint32_t>(m2Model.indices.size());
+        if (!preparedModelIds.count(modelId)) {
+            PendingTile::M2Ready ready;
+            ready.modelId = modelId;
+            ready.model = std::move(m2Model);
+            ready.path = m2Path;
+            pending->m2Models.push_back(std::move(ready));
+            preparedModelIds.insert(modelId);
+        }
+        std::lock_guard<std::mutex> lock(detailModelSizesMutex_);
+        auto& slot = detailModelSizes_[m2Path];
+        slot = size;
+        return &slot;
+    };
 
-        PendingTile::M2Ready ready;
-        ready.modelId = modelId;
-        ready.model = std::move(m2Model);
-        ready.path = m2Path;
-        pending->m2Models.push_back(std::move(ready));
-        preparedModelIds.insert(modelId);
-        return true;
+    const auto effectFor = [this](uint32_t effectId) -> const pipeline::GroundEffectRecord* {
+        const auto it = groundEffectById_.find(effectId);
+        return it == groundEffectById_.end() ? nullptr : &it->second;
     };
 
     constexpr float unitSize = CHUNK_SIZE / 8.0f;
-    constexpr float pi = core::coords::PI;
-    // The ceiling for a whole tile, and how many placements one texture layer
-    // of one chunk may try for.
-    //
-    // The ceiling used to be spent in chunk scan order: the loops below run
-    // cy 0..15, cx 0..15 and break the moment the running total reaches it, so
-    // a tile's whole allowance went to the first few rows of chunks and the
-    // rest of the tile got nothing at all. Measured against Mulgore's own
-    // layers that was about six of sixteen rows filled and ten empty, which is
-    // why standing in the wrong part of a tile showed no ground cover
-    // whatsoever. The ceiling is now shared out as a per-chunk budget, so it
-    // bounds the tile the same way while covering all of it.
-    constexpr size_t kBaseMaxGroundClutterPerTile = 880;
-    constexpr uint32_t kBaseMaxAttemptsPerLayer = 12;
-    const float densityScaleRaw = glm::clamp(groundClutterDensityScale_, 0.0f, 1.5f);
-    // Keep runtime density bounded to avoid large streaming spikes in dense tiles.
-    const float densityScale = std::min(densityScaleRaw, 1.0f);
-    const size_t kMaxGroundClutterPerTile = std::max<size_t>(
-        0, static_cast<size_t>(std::lround(static_cast<float>(kBaseMaxGroundClutterPerTile) * densityScale)));
-    const uint32_t kMaxAttemptsPerLayer = std::max<uint32_t>(
-        1u, static_cast<uint32_t>(std::lround(static_cast<float>(kBaseMaxAttemptsPerLayer) * densityScale)));
-    // A tile is 16x16 chunks. Dividing rather than rounding up keeps the sum of
-    // the chunk budgets under the tile ceiling, so the ceiling stays a backstop
-    // and never becomes the thing that decides where the cover stops.
-    const size_t kMaxGroundClutterPerChunk =
-        std::max<size_t>(1, kMaxGroundClutterPerTile / 256);
-    std::vector<uint8_t> alphaScratch;
-    std::vector<uint8_t> alphaScratchTex;
+    std::unordered_map<uint32_t, uint32_t> modelIdByDoodad;
+    std::unordered_map<uint32_t, const pipeline::DetailModelSize*> sizeByDoodad;
+    std::unordered_set<uint32_t> tileModelIds;
     size_t added = 0;
-    size_t attemptsTotal = 0;
-    size_t alphaRejected = 0;
-    size_t roadRejected = 0;
-    size_t noEffectMatch = 0;
-    size_t textureIdFallbackMatch = 0;
-    size_t noDoodadModel = 0;
-    std::array<uint16_t, 256> perChunkAdded{};
 
-    // pipeline::isRoadLikeTexture - shared with grass, which needs the same
-    // test for the same reason and used to lack it.
-    auto isRoadLikeTexture = [](const std::string& texPath) -> bool {
-        return pipeline::isRoadLikeTexture(texPath);
-    };
-
-    auto layerWeightAt = [&](const pipeline::MapChunk& chunk, size_t layerIdx, int alphaIndex) -> int {
-        if (layerIdx >= chunk.layers.size()) return 0;
-        if (layerIdx == 0) {
-            int accum = 0;
-            size_t numLayers = std::min(chunk.layers.size(), static_cast<size_t>(4));
-            for (size_t i = 1; i < numLayers; ++i) {
-                int a = 0;
-                if (decodeLayerAlpha(chunk, i, alphaScratchTex) &&
-                    alphaIndex >= 0 &&
-                    alphaIndex < static_cast<int>(alphaScratchTex.size())) {
-                    a = alphaScratchTex[alphaIndex];
-                }
-                accum += a;
-            }
-            return glm::clamp(255 - accum, 0, 255);
-        }
-        if (decodeLayerAlpha(chunk, layerIdx, alphaScratchTex) &&
-            alphaIndex >= 0 &&
-            alphaIndex < static_cast<int>(alphaScratchTex.size())) {
-            return alphaScratchTex[alphaIndex];
-        }
-        return 0;
-    };
-
-    auto hasRoadLikeTextureAt = [&](const pipeline::MapChunk& chunk, float fracX, float fracY) -> bool {
-        if (chunk.layers.empty()) return false;
-        const int alphaIndex =
-            static_cast<int>(pipeline::alphaTexelIndex(fracX / 8.0f, fracY / 8.0f));
-
-        size_t numLayers = std::min(chunk.layers.size(), static_cast<size_t>(4));
-        for (size_t layerIdx = 0; layerIdx < numLayers; ++layerIdx) {
-            uint32_t texId = chunk.layers[layerIdx].textureId;
-            if (texId >= pending->terrain.textures.size()) continue;
-            const std::string& texPath = pending->terrain.textures[texId];
-            if (!isRoadLikeTexture(texPath)) continue;
-            // Treat meaningful blend contribution as road occupancy.
-            int w = layerWeightAt(chunk, layerIdx, alphaIndex);
-            if (w >= 24) return true;
-        }
-        return false;
-    };
-
+    pending->detailChunks.assign(256, DetailChunk{});
     for (int cy = 0; cy < 16; ++cy) {
-        if (added >= kMaxGroundClutterPerTile) break;
         for (int cx = 0; cx < 16; ++cx) {
-            if (added >= kMaxGroundClutterPerTile) break;
             const auto& chunk = pending->terrain.getChunk(cx, cy);
-            if (!chunk.hasHeightMap() || chunk.layers.empty()) continue;
+            DetailChunk& dc = pending->detailChunks[static_cast<size_t>(cy * 16 + cx)];
+            if (!chunk.hasHeightMap()) continue;
+            // The chunk's rectangle, from its corner (chunkSurfacePoint).
+            dc.maxX = chunk.position[0];
+            dc.maxY = chunk.position[1];
+            dc.minX = dc.maxX - CHUNK_SIZE;
+            dc.minY = dc.maxY - CHUNK_SIZE;
 
-            size_t chunkAdded = 0;
-            for (size_t layerIdx = 0; layerIdx < chunk.layers.size(); ++layerIdx) {
-                if (added >= kMaxGroundClutterPerTile) break;
-                if (chunkAdded >= kMaxGroundClutterPerChunk) break;
-                const auto& layer = chunk.layers[layerIdx];
-                if (layer.effectId == 0) continue;
+            // The chunk's +0x34/+0x38: its index across the map (0x007d6b30).
+            const uint32_t globalCol = static_cast<uint32_t>(pending->coord.x * 16 + cx);
+            const uint32_t globalRow = static_cast<uint32_t>(pending->coord.y * 16 + cy);
+            const auto placed = pipeline::placeDetailDoodads(chunk, globalCol, globalRow, cellPicks,
+                                                             effectFor, unitSize);
+            if (placed.empty()) continue;
 
-                auto geIt = groundEffectById_.find(layer.effectId);
-                if (geIt == groundEffectById_.end() && layer.textureId != 0) {
-                    geIt = groundEffectById_.find(layer.textureId);
-                    if (geIt != groundEffectById_.end()) {
-                        textureIdFallbackMatch++;
-                    }
+            const auto sizeOf = [&](uint32_t doodadId) -> const pipeline::DetailModelSize* {
+                auto known = sizeByDoodad.find(doodadId);
+                if (known != sizeByDoodad.end()) return known->second;
+                const pipeline::DetailModelSize* size = nullptr;
+                auto path = groundDoodadModelById_.find(doodadId);
+                if (path != groundDoodadModelById_.end()) {
+                    const uint32_t modelId = static_cast<uint32_t>(std::hash<std::string>{}(path->second));
+                    size = prepareModel(path->second, modelId);
+                    if (size) modelIdByDoodad[doodadId] = modelId;
                 }
-                if (geIt == groundEffectById_.end()) {
-                    noEffectMatch++;
-                    continue;
-                }
-                const GroundEffectEntry& ge = geIt->second;
+                sizeByDoodad[doodadId] = size;
+                return size;
+            };
+            const auto keep = pipeline::applyDetailBatchLimits(placed, cellPicks, sizeOf);
 
-                uint32_t totalWeight = ge.weights[0] + ge.weights[1] + ge.weights[2] + ge.weights[3];
-                if (totalWeight == 0) totalWeight = 4;
-
-                uint32_t density = std::min<uint32_t>(ge.density, 16u);
-                density = static_cast<uint32_t>(std::lround(static_cast<float>(density) * densityScale));
-                if (density == 0) continue;
-                uint32_t attempts = std::max<uint32_t>(3u, density * 2u);
-                attempts = std::min<uint32_t>(attempts, kMaxAttemptsPerLayer);
-                attemptsTotal += attempts;
-
-                bool hasAlpha = decodeLayerAlpha(chunk, layerIdx, alphaScratch);
-                uint32_t seed = static_cast<uint32_t>(
-                    ((pending->coord.x & 0xFF) << 24) ^
-                    ((pending->coord.y & 0xFF) << 16) ^
-                    ((cx & 0x1F) << 8) ^
-                    ((cy & 0x1F) << 3) ^
-                    (layerIdx & 0x7));
-                auto nextRand = [&seed]() -> uint32_t {
-                    seed = seed * 1664525u + 1013904223u;
-                    return seed;
-                };
-
-                for (uint32_t a = 0; a < attempts; ++a) {
-                    float fracX = (nextRand() & 0xFFFFu) / kRand16Max * 8.0f;
-                    float fracY = (nextRand() & 0xFFFFu) / kRand16Max * 8.0f;
-
-                    if (hasAlpha && !alphaScratch.empty()) {
-                        const int alphaIndex = static_cast<int>(
-                            pipeline::alphaTexelIndex(fracX / 8.0f, fracY / 8.0f));
-                        if (alphaIndex < 0 || alphaIndex >= static_cast<int>(alphaScratch.size())) continue;
-                        if (alphaScratch[alphaIndex] < 64) {
-                            alphaRejected++;
-                            continue;
-                        }
-                    }
-
-                    if (hasRoadLikeTextureAt(chunk, fracX, fracY)) {
-                        roadRejected++;
-                        continue;
-                    }
-
-                    uint32_t roll = nextRand() % totalWeight;
-                    int pick = 0;
-                    uint32_t acc = 0;
-                    for (int i = 0; i < 4; ++i) {
-                        uint32_t w = ge.weights[i] > 0 ? ge.weights[i] : 1;
-                        acc += w;
-                        if (roll < acc) { pick = i; break; }
-                    }
-                    uint32_t doodadId = ge.doodadIds[pick];
-                    if (doodadId == 0) continue;
-
-                    auto doodadIt = groundDoodadModelById_.find(doodadId);
-                    if (doodadIt == groundDoodadModelById_.end()) {
-                        noDoodadModel++;
-                        continue;
-                    }
-                    const std::string& doodadModelPath = doodadIt->second;
-                    uint32_t modelId = static_cast<uint32_t>(std::hash<std::string>{}(doodadModelPath));
-                    // A doodad whose model will not load is not drawn; the
-                    // client puts nothing in its place.
-                    if (!ensureModelPrepared(doodadModelPath, modelId)) continue;
-
-                    const glm::vec3 surfacePoint = pipeline::TerrainMeshGenerator::chunkSurfacePoint(
-                        chunk.position, chunk.heightMap, fracX, fracY, unitSize);
-                    const float worldX = surfacePoint.x;
-                    const float worldY = surfacePoint.y;
-                    const float worldZ = surfacePoint.z;
-
-                    PendingTile::M2Placement p;
-                    p.modelId = modelId;
-                    p.uniqueId = 0;
-                    // MCNK chunk.position is already in terrain/render world space.
-                    // Do not convert via ADT placement mapping (that is for MDDF/MODF records).
-                    p.rotation = glm::vec3(0.0f, 0.0f, (nextRand() & 0xFFFFu) / kRand16Max * (2.0f * pi));
-                    // 1 give or take a third (0x007d3390: r x 0.33 + 1, r in -1..1).
-                    p.scale = 1.0f + (((nextRand() & 0xFFFFu) / kRand16Max) * 2.0f - 1.0f) * 0.33f;
-                    // Snap directly to sampled terrain height.
-                    p.position = glm::vec3(worldX, worldY, worldZ + 0.01f);
-                    // The colour, shadow and normal DetailDoodad.bls lights it by.
-                    {
-                        auto flagsIt = groundDoodadFlagsById_.find(doodadId);
-                        const bool colored = flagsIt == groundDoodadFlagsById_.end() || (flagsIt->second & 0x2) == 0;
-                        const auto shade = pipeline::detailDoodadShade(chunk, fracX, fracY, unitSize, colored);
-                        p.detailDoodad = true;
-                        p.detailColor = glm::vec4(shade.color, shade.lit);
-                        p.detailNormal = shade.normal;
-                    }
-                    pending->m2Placements.push_back(p);
-                    added++;
-                    chunkAdded++;
-                    perChunkAdded[cy * 16 + cx]++;
-                    if (added >= kMaxGroundClutterPerTile) break;
-                    if (chunkAdded >= kMaxGroundClutterPerChunk) break;
-                }
+            for (size_t k = 0; k < placed.size(); ++k) {
+                if (!keep[k]) continue;
+                const auto& p = placed[k];
+                const uint32_t modelId = modelIdByDoodad[p.doodadId];
+                const glm::vec3 surfacePoint = pipeline::TerrainMeshGenerator::chunkSurfacePoint(
+                    chunk.position, chunk.heightMap, p.fracX, p.fracY, unitSize);
+                DetailChunk::Doodad d;
+                d.modelId = modelId;
+                d.position = surfacePoint;
+                d.rotation = p.rotation;
+                d.scale = p.scale;
+                // The colour, shadow and normal DetailDoodad.bls lights it by;
+                // GroundEffectDoodad flag 0x2 asks for no colour.
+                auto flagsIt = groundDoodadFlagsById_.find(p.doodadId);
+                const bool colored = flagsIt == groundDoodadFlagsById_.end() || (flagsIt->second & 0x2) == 0;
+                const auto shade = pipeline::detailDoodadShade(chunk, p.fracX, p.fracY, unitSize, colored);
+                d.color = glm::vec4(shade.color, shade.lit);
+                d.normal = shade.normal;
+                dc.doodads.push_back(d);
+                tileModelIds.insert(modelId);
+                added++;
             }
         }
     }
+    pending->detailModelIds.assign(tileModelIds.begin(), tileModelIds.end());
 
-    // No floor of clutter per tile: a tile grows what its layers' ground
-    // effects say and nothing else (0x007d3390). Elwynn grass was filling
-    // tiles that grow none - Hellfire Peninsula's among them.
-    // Baseline pass disabled: one-per-chunk fill caused large instance spikes and hitches
-    // when streaming tiles around the player.
-    size_t baselineAdded = 0;
+    LOG_DEBUG("Ground clutter tile [", pending->coord.x, ",", pending->coord.y,
+              "]: ", added, " doodads at ", cellPicks, " cells a chunk, ",
+              modelMissing, " models missing");
+}
 
-    if (added > 0) {
-        static int clutterLogCount = 0;
-        if (clutterLogCount < 12) {
-            // With the counts beside it. Elwynn grass was reported growing in
-            // Hellfire Peninsula, and the two places that can put it there - a
-            // doodad whose model will not load, and the minimum-per-tile floor
-            // below - both report only here. At debug: a tile that got its
-            // clutter is the ordinary case, twelve lines of it every session.
-            // A tile that got none says so at warning, below.
-            LOG_DEBUG("Ground clutter tile [", pending->coord.x, ",", pending->coord.y,
-                     "] added=", added, " attempts=", attemptsTotal,
-                     " baselineAdded=", baselineAdded,
-                     " roadRejected=", roadRejected);
-            clutterLogCount++;
-        }
-    } else {
-        static int noClutterLogCount = 0;
-        if (noClutterLogCount < 8) {
-            LOG_WARNING("Ground clutter tile [", pending->coord.x, ",", pending->coord.y,
-                     "] added=0 attempts=", attemptsTotal,
-                     " alphaRejected=", alphaRejected,
-                     " roadRejected=", roadRejected,
-                     " noEffect=", noEffectMatch,
-                     " textureFallback=", textureIdFallbackMatch,
-                     " noDoodadModel=", noDoodadModel,
-                     " modelMissing=", modelMissing,
-                     " modelInvalid=", modelInvalid);
-            noClutterLogCount++;
+void TerrainManager::updateDetailDoodads(const glm::vec3& camPos) {
+    if (!m2Renderer) return;
+    // groundEffectDist (0x0078db10; 0 to 140 yards). A chunk is built once it
+    // is in range (0x007d3fe0) and released a few yards past it, so standing
+    // on the line does not rebuild it every frame.
+    float range = m2Renderer->groundDetailDistance();
+    if (range <= 0.0f) range = 140.0f;
+    const float releaseRange = range + 16.0f;
+    constexpr float kBudgetMs = 2.0f;
+    const auto start = std::chrono::steady_clock::now();
+    bool outOfTime = false;
+
+    auto distanceTo = [&](float minX, float minY, float maxX, float maxY) {
+        const float dx = std::max({minX - camPos.x, 0.0f, camPos.x - maxX});
+        const float dy = std::max({minY - camPos.y, 0.0f, camPos.y - maxY});
+        return std::sqrt(dx * dx + dy * dy);
+    };
+
+    for (auto& [coord, tile] : loadedTiles) {
+        if (!tile || tile->detailChunks.empty()) continue;
+        const bool tileNear = distanceTo(tile->minX, tile->minY, tile->maxX, tile->maxY) < releaseRange;
+        for (auto& dc : tile->detailChunks) {
+            if (!tileNear && !dc.instanced) continue;
+            const float d = distanceTo(dc.minX, dc.minY, dc.maxX, dc.maxY);
+            if (dc.instanced && d > releaseRange) {
+                m2Renderer->removeInstances(dc.instanceIds);
+                dc.instanceIds.clear();
+                dc.instanced = false;
+            } else if (!dc.instanced && d < range && !outOfTime) {
+                dc.instanceIds.reserve(dc.doodads.size());
+                for (const auto& doodad : dc.doodads) {
+                    if (!m2Renderer->hasModel(doodad.modelId)) continue;
+                    const uint32_t id = m2Renderer->createInstance(
+                        doodad.modelId, doodad.position, glm::vec3(0.0f, 0.0f, doodad.rotation), doodad.scale);
+                    if (!id) continue;
+                    m2Renderer->setInstanceDetailShade(id, doodad.color, doodad.normal);
+                    dc.instanceIds.push_back(id);
+                }
+                dc.instanced = true;
+                outOfTime = std::chrono::duration<float, std::milli>(
+                    std::chrono::steady_clock::now() - start).count() >= kBudgetMs;
+            }
         }
     }
 }

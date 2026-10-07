@@ -1536,8 +1536,12 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     // forces no batch additive and never keys by colour,
                     // spell, fire and ground clutter alike: the client draws
                     // a batch by its material.
+                    // Ground clutter is drawn by DetailDoodad's own state
+                    // (0x007b2d30): GxBlend_Alpha with the 0x80 alpha ref the
+                    // shader tests, depth written, nothing culled.
+                    const bool detailGroup = instances[firstEntry.index].detailDoodad;
                     const bool forceCutout =
-                        !m2BlendIsAdditive(batch.blendMode) &&
+                        !detailGroup && !m2BlendIsAdditive(batch.blendMode) &&
                         m2BatchNeedsAlphaTest(batch.blendMode, batch.hasAlpha);
                     const uint8_t effectiveBlendMode = forceCutout ? 1 : batch.blendMode;
 
@@ -1545,7 +1549,9 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                                                              : blendPipelineFor(effectiveBlendMode);
                     // Cull, depth test and depth write from the material's
                     // flags, as the client sets them for every blend mode.
-                    desiredPipeline = pipelineVariant(desiredPipeline, batch.materialFlags, false);
+                    desiredPipeline = detailGroup
+                        ? pipelineVariant(alphaTestPipeline_, 0x04, false)
+                        : pipelineVariant(desiredPipeline, batch.materialFlags, false);
                     if (desiredPipeline != currentPipeline) {
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
                         currentPipeline = desiredPipeline;
