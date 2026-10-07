@@ -25,13 +25,13 @@ class VkContext;
  *   (0x53, 0x93, 0xa8) laid over it by 4 x lum x (1 - lum).
  *
  * Both composites are the FFXGlow and FFXDeath .bls programs (glow added,
- * not screened). The blur is a stand-in: the client's FFXGauss4 (taps
- * 1/8, 3/8, 3/8, 1/8) and FFXBox4 passes are one 9x9 Gaussian here.
+ * not screened), over the client's blur (0x008bfe80, 0x008c1c20): FFXBox4
+ * down to a quarter a side, then FFXGauss4 across and down
+ * (screen_glow.comp.glsl).
  *
- * Built like SunShafts: the swapchain image is copied (full size, and a
- * quarter size for the glow), a compute pass blurs the quarter copy, and the
- * composite redraws the frame from the copy in the overlay pass, ahead of the
- * interface. The minimap is interface in the client, drawn after these; its
+ * Built like SunShafts: the swapchain image is copied, three compute passes
+ * make the blurred quarter, and the composite redraws the frame from the copy
+ * in the overlay pass, ahead of the interface. The minimap is interface in the client, drawn after these; its
  * ellipse is left as it was.
  */
 class ScreenEffects {
@@ -72,8 +72,8 @@ private:
     bool usable_ = false;
 
     Target frameCopy_[MAX_FRAMES];   // full size
-    Target smallCopy_[MAX_FRAMES];   // a quarter a side
-    Target glow_[MAX_FRAMES];        // the blurred quarter copy
+    Target glowTemp_[MAX_FRAMES];    // a quarter a side: the Gauss's first pass (0xd4582c)
+    Target glow_[MAX_FRAMES];        // a quarter a side: the box, then the blur (0xd45810)
     VkExtent2D smallExtent_{.width = 0, .height = 0};
     VkExtent2D sourceExtent_{.width = 0, .height = 0};
     bool drawThisFrame_[MAX_FRAMES] = {};
@@ -91,7 +91,8 @@ private:
     VkFormat compositeFormat_ = VK_FORMAT_UNDEFINED;
 
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
-    VkDescriptorSet blurSets_[MAX_FRAMES] = {};
+    /// Per frame: the box (frame -> glow), across (glow -> temp), down (temp -> glow).
+    VkDescriptorSet blurSets_[MAX_FRAMES][3] = {};
     VkDescriptorSet compositeSets_[MAX_FRAMES] = {};
 };
 

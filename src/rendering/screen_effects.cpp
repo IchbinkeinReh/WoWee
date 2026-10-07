@@ -15,6 +15,7 @@ namespace {
 constexpr VkFormat kCopyFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kGlowFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr uint32_t kBlurGroup = 8;  // 8x8, screen_glow.comp.glsl
+constexpr uint32_t kBlurPasses = 3;  // FFXBox4, FFXGauss4 across, FFXGauss4 down
 
 /// Must match Push in screen_effects_composite.frag.glsl.
 struct CompositePush {
@@ -74,7 +75,9 @@ bool ScreenEffects::initialize(VkContext* ctx) {
         return false;
     }
 
-    blurLayout_ = createPipelineLayout(device, {blurSetLayout_});
+    const VkPushConstantRange blurPush{.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT, .offset = 0,
+                                       .size = sizeof(int32_t)};
+    blurLayout_ = createPipelineLayout(device, {blurSetLayout_}, {blurPush});
     const VkPushConstantRange push{.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0,
                                    .size = sizeof(CompositePush)};
     compositeLayout_ = createPipelineLayout(device, {compositeSetLayout_}, {push});
@@ -102,11 +105,11 @@ bool ScreenEffects::initialize(VkContext* ctx) {
     }
 
     VkDescriptorPoolSize sizes[2] = {
-        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_FRAMES * 3},
-        {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = MAX_FRAMES},
+        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_FRAMES * (kBlurPasses + 2)},
+        {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = MAX_FRAMES * kBlurPasses},
     };
     VkDescriptorPoolCreateInfo poolCI{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    poolCI.maxSets = MAX_FRAMES * 2;
+    poolCI.maxSets = MAX_FRAMES * (kBlurPasses + 1);
     poolCI.poolSizeCount = 2;
     poolCI.pPoolSizes = sizes;
     if (vkCreateDescriptorPool(device, &poolCI, nullptr, &descPool_) != VK_SUCCESS) {
@@ -118,7 +121,9 @@ bool ScreenEffects::initialize(VkContext* ctx) {
         alloc.descriptorPool = descPool_;
         alloc.descriptorSetCount = 1;
         alloc.pSetLayouts = &blurSetLayout_;
-        if (vkAllocateDescriptorSets(device, &alloc, &blurSets_[i]) != VK_SUCCESS) return false;
+        for (uint32_t p = 0; p < kBlurPasses; ++p) {
+            if (vkAllocateDescriptorSets(device, &alloc, &blurSets_[i][p]) != VK_SUCCESS) return false;
+        }
         alloc.pSetLayouts = &compositeSetLayout_;
         if (vkAllocateDescriptorSets(device, &alloc, &compositeSets_[i]) != VK_SUCCESS) return false;
     }
@@ -169,7 +174,7 @@ bool ScreenEffects::ensureCompositePipeline() {
 void ScreenEffects::destroyTargets() {
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         destroyScreenTarget(*ctx_, frameCopy_[i]);
-        destroyScreenTarget(*ctx_, smallCopy_[i]);
+        destroyScreenTarget(*ctx_, glowTemp_[i]);
         destroyScreenTarget(*ctx_, glow_[i]);
         drawThisFrame_[i] = false;
     }
@@ -189,8 +194,8 @@ bool ScreenEffects::ensureTargets(VkExtent2D extent) {
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         if (!createScreenTarget(*ctx_, frameCopy_[i], extent, kCopyFormat,
                                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT) ||
-            !createScreenTarget(*ctx_, smallCopy_[i], smallExtent_, kCopyFormat,
-                                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT) ||
+            !createScreenTarget(*ctx_, glowTemp_[i], smallExtent_, kGlowFormat,
+                                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT) ||
             !createScreenTarget(*ctx_, glow_[i], smallExtent_, kGlowFormat,
                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
             LOG_WARNING("ScreenEffects: could not allocate targets for ", extent.width, "x",
@@ -201,11 +206,11 @@ bool ScreenEffects::ensureTargets(VkExtent2D extent) {
         }
     }
 
-    // The glow lives in GENERAL, written by the blur and sampled by the
-    // composite from the same layout.
+    // The glow and its temporary live in GENERAL, written by the blur passes
+    // and sampled by the next one and the composite from the same layout.
     ctx_->immediateSubmit([&](VkCommandBuffer cmd) {
-        VkImageMemoryBarrier2 b[MAX_FRAMES]{};
-        for (uint32_t i = 0; i < MAX_FRAMES; i++) {
+        VkImageMemoryBarrier2 b[MAX_FRAMES * 2]{};
+        for (uint32_t i = 0; i < MAX_FRAMES * 2; i++) {
             b[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             b[i].srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
             b[i].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -214,46 +219,53 @@ bool ScreenEffects::ensureTargets(VkExtent2D extent) {
             b[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
             b[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             b[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b[i].image = glow_[i].image;
+            b[i].image = i < MAX_FRAMES ? glow_[i].image : glowTemp_[i - MAX_FRAMES].image;
             b[i].subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
         }
         VkDependencyInfo dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dep.imageMemoryBarrierCount = MAX_FRAMES;
+        dep.imageMemoryBarrierCount = MAX_FRAMES * 2;
         dep.pImageMemoryBarriers = b;
         cmdPipelineBarrier2(cmd, dep);
     });
 
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
-        VkDescriptorImageInfo smallIn{.sampler = sampler_, .imageView = smallCopy_[i].view,
-                                      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkDescriptorImageInfo glowOut{.sampler = VK_NULL_HANDLE, .imageView = glow_[i].view,
-                                      .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
-        VkDescriptorImageInfo frameIn{.sampler = sampler_, .imageView = frameCopy_[i].view,
-                                      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkDescriptorImageInfo glowIn{.sampler = sampler_, .imageView = glow_[i].view,
-                                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
-        VkWriteDescriptorSet w[4]{};
+        const VkDescriptorImageInfo frameIn{.sampler = sampler_, .imageView = frameCopy_[i].view,
+                                            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        const VkDescriptorImageInfo glowIn{.sampler = sampler_, .imageView = glow_[i].view,
+                                           .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        const VkDescriptorImageInfo tempIn{.sampler = sampler_, .imageView = glowTemp_[i].view,
+                                           .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        const VkDescriptorImageInfo glowOut{.sampler = VK_NULL_HANDLE, .imageView = glow_[i].view,
+                                            .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        const VkDescriptorImageInfo tempOut{.sampler = VK_NULL_HANDLE, .imageView = glowTemp_[i].view,
+                                            .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        // Box: frame -> glow. Across: glow -> temp. Down: temp -> glow.
+        const VkDescriptorImageInfo* passIn[kBlurPasses] = {&frameIn, &glowIn, &tempIn};
+        const VkDescriptorImageInfo* passOut[kBlurPasses] = {&glowOut, &tempOut, &glowOut};
+        VkWriteDescriptorSet w[kBlurPasses * 2 + 2]{};
         for (auto& write : w) {
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write.descriptorCount = 1;
         }
-        w[0].dstSet = blurSets_[i];
-        w[0].dstBinding = 0;
-        w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w[0].pImageInfo = &smallIn;
-        w[1].dstSet = blurSets_[i];
-        w[1].dstBinding = 1;
-        w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        w[1].pImageInfo = &glowOut;
-        w[2].dstSet = compositeSets_[i];
-        w[2].dstBinding = 0;
-        w[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w[2].pImageInfo = &frameIn;
-        w[3].dstSet = compositeSets_[i];
-        w[3].dstBinding = 1;
-        w[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w[3].pImageInfo = &glowIn;
-        vkUpdateDescriptorSets(ctx_->getDevice(), 4, w, 0, nullptr);
+        for (uint32_t p = 0; p < kBlurPasses; ++p) {
+            w[p * 2].dstSet = blurSets_[i][p];
+            w[p * 2].dstBinding = 0;
+            w[p * 2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[p * 2].pImageInfo = passIn[p];
+            w[p * 2 + 1].dstSet = blurSets_[i][p];
+            w[p * 2 + 1].dstBinding = 1;
+            w[p * 2 + 1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[p * 2 + 1].pImageInfo = passOut[p];
+        }
+        w[kBlurPasses * 2].dstSet = compositeSets_[i];
+        w[kBlurPasses * 2].dstBinding = 0;
+        w[kBlurPasses * 2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[kBlurPasses * 2].pImageInfo = &frameIn;
+        w[kBlurPasses * 2 + 1].dstSet = compositeSets_[i];
+        w[kBlurPasses * 2 + 1].dstBinding = 1;
+        w[kBlurPasses * 2 + 1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[kBlurPasses * 2 + 1].pImageInfo = &glowIn;
+        vkUpdateDescriptorSets(ctx_->getDevice(), kBlurPasses * 2 + 2, w, 0, nullptr);
     }
     sourceExtent_ = extent;
     return true;
@@ -297,12 +309,8 @@ bool ScreenEffects::record(VkCommandBuffer cmd, uint32_t frame, VkImage swapchai
     // The copies' last readers were this slot's composite and blur, two
     // frames ago.
     barrier(frameCopy_[frame].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, 0,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-    barrier(smallCopy_[frame].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, 0,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
     VkImageBlit blit{};
     blit.srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1};
     blit.dstSubresource = blit.srcSubresource;
@@ -310,10 +318,6 @@ bool ScreenEffects::record(VkCommandBuffer cmd, uint32_t frame, VkImage swapchai
     blit.dstOffsets[1] = blit.srcOffsets[1];
     vkCmdBlitImage(cmd, swapchainImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    frameCopy_[frame].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
-    blit.dstOffsets[1] = {.x = static_cast<int32_t>(smallExtent_.width),
-                          .y = static_cast<int32_t>(smallExtent_.height), .z = 1};
-    vkCmdBlitImage(cmd, swapchainImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                   smallCopy_[frame].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
 
     barrier(swapchainImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0,
@@ -321,22 +325,33 @@ bool ScreenEffects::record(VkCommandBuffer cmd, uint32_t frame, VkImage swapchai
             VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
     barrier(frameCopy_[frame].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-    barrier(smallCopy_[frame].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_2_SHADER_READ_BIT);
+    // This slot's glow and temp were last read two frames ago.
     barrier(glow_[frame].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, 0,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+    barrier(glowTemp_[frame].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, 0,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 
+    // FFXBox4 into the glow, FFXGauss4 across into the temp and down back
+    // into the glow (0x008bfe80's passes).
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, blurPipeline_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, blurLayout_, 0, 1, &blurSets_[frame], 0, nullptr);
-    vkCmdDispatch(cmd, (smallExtent_.width + kBlurGroup - 1) / kBlurGroup,
-                  (smallExtent_.height + kBlurGroup - 1) / kBlurGroup, 1);
-
-    barrier(glow_[frame].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    Target* written[kBlurPasses] = {&glow_[frame], &glowTemp_[frame], &glow_[frame]};
+    for (uint32_t p = 0; p < kBlurPasses; ++p) {
+        const int32_t mode = static_cast<int32_t>(p);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, blurLayout_, 0, 1,
+                                &blurSets_[frame][p], 0, nullptr);
+        vkCmdPushConstants(cmd, blurLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(mode), &mode);
+        vkCmdDispatch(cmd, (smallExtent_.width + kBlurGroup - 1) / kBlurGroup,
+                      (smallExtent_.height + kBlurGroup - 1) / kBlurGroup, 1);
+        const bool last = p + 1 == kBlurPasses;
+        barrier(written[p]->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                last ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_READ_BIT);
+    }
 
     inputs_[frame] = in;
     drawThisFrame_[frame] = true;
@@ -362,7 +377,7 @@ void ScreenEffects::shutdown() {
     destroyTargets();
     destroy(device, descPool_);
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
-        blurSets_[i] = VK_NULL_HANDLE;
+        for (auto& set : blurSets_[i]) set = VK_NULL_HANDLE;
         compositeSets_[i] = VK_NULL_HANDLE;
     }
     destroy(device, blurPipeline_);
