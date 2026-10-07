@@ -24,6 +24,45 @@ struct Vertex {
     glm::vec2 uv{0.0f};
 };
 
+/// A ribbon's material as the client keeps and applies it. 0x00832ea0 turns
+/// each M2 material the emitter names into these bits - lit (not 0x1),
+/// fogged (not 0x2), depth test (not 0x8), depth write (not 0x10), culled
+/// (not 0x4) - and its blend through the table at 0x00a45570, the same
+/// entries as the M2 batches' 0x00a453b0 row; 0x00980b70 sets each before
+/// it draws the strip with that material's texture.
+struct MaterialState {
+    /// The M2 blend the pipeline is built for: 0 opaque, 1 alpha key, 2
+    /// alpha, 3 no-alpha add, 4 add, 5 mod, 6 mod2x. 7 has no entry in the
+    /// table (it reads past it) and is drawn as alpha, as the M2 batches are.
+    uint16_t blend = 2;
+    bool lit = true;
+    bool fogged = true;
+    bool depthTest = true;
+    bool depthWrite = true;
+    bool cull = true;
+    /// The alpha test's reference, from the Gx blend (0x00873ee0, table
+    /// 0x00ad8b7c): none for opaque and no-alpha add, 224/255 for alpha
+    /// key, 1/255 for the rest.
+    float alphaRef = 1.0f / 255.0f;
+};
+
+[[nodiscard]] inline MaterialState materialState(uint16_t m2Flags, uint16_t m2Blend) {
+    MaterialState m;
+    m.blend = m2Blend <= 6 ? m2Blend : 2;
+    m.lit = (m2Flags & 0x01u) == 0;
+    m.fogged = (m2Flags & 0x02u) == 0;
+    m.cull = (m2Flags & 0x04u) == 0;
+    m.depthTest = (m2Flags & 0x08u) == 0;
+    m.depthWrite = (m2Flags & 0x10u) == 0;
+    switch (m.blend) {
+        case 0:
+        case 3: m.alphaRef = 0.0f; break;            // Gx 0 and Gx 10
+        case 1: m.alphaRef = 224.0f / 255.0f; break; // Gx 1
+        default: m.alphaRef = 1.0f / 255.0f; break;  // Gx 2 to 5
+    }
+    return m;
+}
+
 class Emitter {
 public:
     /// 0x009808a0: the rate rounds up to a whole number of edges a second,

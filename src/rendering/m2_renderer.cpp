@@ -338,6 +338,12 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                 VkPipelineLayoutCreateInfo lci{.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
                 lci.setLayoutCount = 2;
                 lci.pSetLayouts = ribLayouts;
+                // The material's alpha reference, lit and fogged bits.
+                VkPushConstantRange pcr{};
+                pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+                pcr.size = 4 * sizeof(float);
+                lci.pushConstantRangeCount = 1;
+                lci.pPushConstantRanges = &pcr;
                 vkCreatePipelineLayout(device, &lci, nullptr, &ribbonPipelineLayout_);
             }
 
@@ -353,14 +359,15 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                 {.location = 3, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT,    .offset = 7 * sizeof(float)},    // uv
             };
 
-            auto buildRibbonPipeline = [&](VkPipelineColorBlendAttachmentState blend) -> VkPipeline {
+            auto buildRibbonPipeline = [&](VkPipelineColorBlendAttachmentState blend, VkCullModeFlags cull,
+                                           bool depthTest, bool depthWrite) -> VkPipeline {
                 return PipelineBuilder()
                     .setShaders(ribVert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
                                 ribFrag.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
                     .setVertexInput({rBind}, rAttrs)
                     .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
-                    .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-                    .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+                    .setRasterization(VK_POLYGON_MODE_FILL, cull, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+                    .setDepthTest(depthTest, depthWrite, VK_COMPARE_OP_LESS_OR_EQUAL)
                     .setColorBlendAttachment(blend)
                     .setMultisample(vkCtx_->getMsaaSamples())
                     .setLayout(ribbonPipelineLayout_)
@@ -368,9 +375,27 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                     .setDynamicStates(viewportAndScissorDynamic())
                     .build(device, vkCtx_->getPipelineCache());
             };
-
-            ribbonPipeline_         = buildRibbonPipeline(PipelineBuilder::blendAlpha());
-            ribbonAdditivePipeline_ = buildRibbonPipeline(PipelineBuilder::blendAdditive());
+            // Each M2 blend's Gx blend (0x00a45570) and its factors (0x00a2f964,
+            // 0x00a2f994): opaque and alpha key (one, zero), alpha, add by
+            // alpha, no-alpha add (one, one), mod, mod2x.
+            const VkPipelineColorBlendAttachmentState ribbonBlends[kRibbonBlends] = {
+                PipelineBuilder::blendDisabled(),
+                PipelineBuilder::blendDisabled(),
+                PipelineBuilder::blendAlpha(),
+                colourBlend(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE),
+                PipelineBuilder::blendAdditive(),
+                colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_ZERO),
+                colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_SRC_COLOR),
+            };
+            for (uint32_t b = 0; b < kRibbonBlends; ++b) {
+                for (uint32_t v = 0; v < kPipelineVariantCount; ++v) {
+                    ribbonPipelines_[b * kPipelineVariantCount + v] = buildRibbonPipeline(
+                        ribbonBlends[b], (v & kVariantCull) ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE,
+                        (v & kVariantNoDepthTest) == 0, (v & kVariantNoDepthWrite) == 0);
+                }
+            }
+            ribbonPipeline_ = ribbonPipelines_[2 * kPipelineVariantCount + (kVariantCull | kVariantNoDepthWrite)];
+            ribbonAdditivePipeline_ = ribbonPipelines_[4 * kPipelineVariantCount + (kVariantCull | kVariantNoDepthWrite)];
         }
         ribVert.destroy(); ribFrag.destroy();
     }
@@ -920,6 +945,16 @@ void M2Renderer::destroyPipelineVariants() {
     if (vkCtx_) rendering::destroyPipelineVariants(vkCtx_->getDevice(), pipelineVariants_);
 }
 
+void M2Renderer::destroyRibbonPipelines() {
+    ribbonPipeline_ = VK_NULL_HANDLE;
+    ribbonAdditivePipeline_ = VK_NULL_HANDLE;
+    if (!vkCtx_) return;
+    for (VkPipeline& p : ribbonPipelines_) {
+        if (p) vkDestroyPipeline(vkCtx_->getDevice(), p, nullptr);
+        p = VK_NULL_HANDLE;
+    }
+}
+
 void M2Renderer::shutdown() {
     LOG_INFO("Shutting down M2 renderer...");
     if (!vkCtx_) return;
@@ -989,8 +1024,7 @@ void M2Renderer::shutdown() {
     destroyPipeline(particleNoAlphaAddPipeline_);
     destroyPipeline(particleModPipeline_);
     destroyPipeline(particleMod2xPipeline_);
-    destroyPipeline(ribbonPipeline_);
-    destroyPipeline(ribbonAdditivePipeline_);
+    destroyRibbonPipelines();
 
     destroy(device, pipelineLayout_);
     destroy(device, particlePipelineLayout_);
@@ -1668,54 +1702,45 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
         }
     }
 
-    // Copy ribbon emitter data and resolve textures
+    // Copy ribbon emitter data and resolve each texture and material pair
+    // (0x00832ea0): the texture a direct index into the model's textures.
     gpuModel.ribbonEmitters = model.ribbonEmitters;
     if (!model.ribbonEmitters.empty()) {
         VkDevice device = vkCtx_->getDevice();
-        gpuModel.ribbonTextures.resize(model.ribbonEmitters.size(), whiteTexture_.get());
-        gpuModel.ribbonTexSets.resize(model.ribbonEmitters.size(), VK_NULL_HANDLE);
+        gpuModel.ribbonMaterialStart.assign(1, 0u);
         for (size_t ri = 0; ri < model.ribbonEmitters.size(); ri++) {
-            // Resolve texture: ribbon textureIndex is a direct index into the
-            // model's texture array (NOT through the textureLookup table).
-            uint16_t texDirect = model.ribbonEmitters[ri].textureIndex;
-            if (texDirect < allTextures.size() && allTextures[texDirect] != nullptr) {
-                gpuModel.ribbonTextures[ri] = allTextures[texDirect];
-            } else {
-                // Fallback: try through textureLookup table
-                uint32_t texIdx = (texDirect < model.textureLookup.size())
-                                  ? model.textureLookup[texDirect] : UINT32_MAX;
-                if (texIdx < allTextures.size() && allTextures[texIdx] != nullptr) {
-                    gpuModel.ribbonTextures[ri] = allTextures[texIdx];
-                } else {
-                    LOG_WARNING("M2 '", model.name, "' ribbon emitter[", ri,
-                                "] texIndex=", texDirect, " lookup failed"
-                                " (direct=", (texDirect < allTextures.size() ? "yes" : "OOB"),
-                                " lookup=", texIdx,
-                                " textures=", allTextures.size(),
-                                ") - using white fallback");
+            for (const auto& rm : model.ribbonEmitters[ri].materials) {
+                VkTexture* tex = rm.textureIndex < allTextures.size() ? allTextures[rm.textureIndex] : nullptr;
+                if (!tex) {
+                    LOG_WARNING("M2 '", model.name, "' ribbon emitter[", ri, "] texture ", rm.textureIndex,
+                                " of ", allTextures.size(), " missing - using white");
+                    tex = whiteTexture_.get();
                 }
-            }
-            // Allocate descriptor set (reuse particleTexLayout_ = single sampler)
-            if (particleTexLayout_ && materialDescPool_) {
-                VkDescriptorSetAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-                ai.descriptorPool = materialDescPool_;
-                ai.descriptorSetCount = 1;
-                ai.pSetLayouts = &particleTexLayout_;
-                if (vkAllocateDescriptorSets(device, &ai, &gpuModel.ribbonTexSets[ri]) == VK_SUCCESS) {
-                    VkTexture* tex = gpuModel.ribbonTextures[ri];
-                    if (!tex || !tex->isValid()) tex = whiteTexture_.get();
-                    if (!tex || !tex->isValid()) continue;
-                    VkDescriptorImageInfo imgInfo = tex->descriptorInfo();
-                    VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    write.dstSet = gpuModel.ribbonTexSets[ri];
-                    write.dstBinding = 0;
-                    write.descriptorCount = 1;
-                    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    write.pImageInfo = &imgInfo;
-                    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+                VkDescriptorSet set = VK_NULL_HANDLE;
+                // A set of its own (particleTexLayout_: a single sampler).
+                if (particleTexLayout_ && materialDescPool_) {
+                    VkDescriptorSetAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+                    ai.descriptorPool = materialDescPool_;
+                    ai.descriptorSetCount = 1;
+                    ai.pSetLayouts = &particleTexLayout_;
+                    VkTexture* bound = (tex && tex->isValid()) ? tex : whiteTexture_.get();
+                    if (bound && bound->isValid() &&
+                        vkAllocateDescriptorSets(device, &ai, &set) == VK_SUCCESS) {
+                        VkDescriptorImageInfo imgInfo = bound->descriptorInfo();
+                        VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                        write.dstSet = set;
+                        write.dstBinding = 0;
+                        write.descriptorCount = 1;
+                        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                        write.pImageInfo = &imgInfo;
+                        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+                    }
                 }
+                gpuModel.ribbonTextures.push_back(tex);
+                gpuModel.ribbonTexSets.push_back(set);
+                gpuModel.ribbonMaterials.push_back(client_ribbon::materialState(rm.flags, rm.blendMode));
             }
+            gpuModel.ribbonMaterialStart.push_back(static_cast<uint32_t>(gpuModel.ribbonTexSets.size()));
         }
         LOG_DEBUG("  Ribbon emitters loaded: ", model.ribbonEmitters.size());
     }

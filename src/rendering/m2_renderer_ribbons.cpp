@@ -77,7 +77,7 @@ void M2Renderer::updateClientRibbons(M2Instance& inst, const M2ModelGPU& gpu, fl
 
 void M2Renderer::renderClientRibbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
     const uint32_t vbSlot = vkCtx_->getCurrentFrame() % kDynamicVBSlots;
-    if (!ribbonPipeline_ || !ribbonAdditivePipeline_ || !ribbonVB_[vbSlot] || !ribbonVBMapped_[vbSlot]) return;
+    if (!ribbonPipelineLayout_ || !ribbonVB_[vbSlot] || !ribbonVBMapped_[vbSlot]) return;
 
     float* dst = static_cast<float*>(ribbonVBMapped_[vbSlot]);
     size_t written = 0;
@@ -88,12 +88,14 @@ void M2Renderer::renderClientRibbons(VkCommandBuffer cmd, VkDescriptorSet perFra
         if (!inst.cachedModel) continue;
         const auto& gpu = *inst.cachedModel;
         for (size_t ri = 0; ri < gpu.ribbonEmitters.size() && ri < inst.clientRibbons.size(); ++ri) {
+            if (ri + 1 >= gpu.ribbonMaterialStart.size()) break;
+            const uint32_t matBegin = gpu.ribbonMaterialStart[ri];
+            const uint32_t matEnd = gpu.ribbonMaterialStart[ri + 1];
+            if (matBegin == matEnd) continue;
             strip.clear();
             inst.clientRibbons[ri].appendStrip(strip);
             if (strip.size() < 4) continue;
             if (written + strip.size() > MAX_RIBBON_VERTS) break;
-            const VkDescriptorSet texSet = ri < gpu.ribbonTexSets.size() ? gpu.ribbonTexSets[ri] : VK_NULL_HANDLE;
-            if (!texSet) continue;
 
             const uint32_t first = static_cast<uint32_t>(written);
             for (const auto& v : strip) {
@@ -109,12 +111,21 @@ void M2Renderer::renderClientRibbons(VkCommandBuffer cmd, VkDescriptorSet perFra
                 o[8] = v.uv.y;
                 ++written;
             }
-            // The material's blending: additive from Add up, alpha otherwise.
-            const bool additive = gpu.ribbonEmitters[ri].blendMode >= 3;
-            ribbonDraws_.push_back({.texSet = texSet,
-                                    .pipeline = additive ? ribbonAdditivePipeline_ : ribbonPipeline_,
-                                    .firstVertex = first,
-                                    .vertexCount = static_cast<uint32_t>(strip.size())});
+            // 0x00980b70: the same strip once for each texture and material
+            // pair, in order, each with its material's state.
+            for (uint32_t m = matBegin; m < matEnd; ++m) {
+                const VkDescriptorSet texSet = gpu.ribbonTexSets[m];
+                const auto& mat = gpu.ribbonMaterials[m];
+                const VkPipeline pipe = ribbonPipelineFor(mat);
+                if (!texSet || !pipe) continue;
+                ribbonDraws_.push_back({.texSet = texSet,
+                                        .pipeline = pipe,
+                                        .firstVertex = first,
+                                        .vertexCount = static_cast<uint32_t>(strip.size()),
+                                        .alphaRef = mat.alphaRef,
+                                        .lit = mat.lit ? 1 : 0,
+                                        .fogged = mat.fogged ? 1 : 0});
+            }
         }
     }
     if (ribbonDraws_.empty()) return;
@@ -134,13 +145,23 @@ void M2Renderer::renderClientRibbons(VkCommandBuffer cmd, VkDescriptorSet perFra
     for (const auto& dc : ribbonDraws_) {
         if (dc.pipeline != lastPipe) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dc.pipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ribbonPipelineLayout_, 0, 1,
-                                    &perFrameSet, 0, nullptr);
-            vkCmdBindVertexBuffers(cmd, 0, 1, &ribbonVB_[vbSlot], &offset);
+            if (lastPipe == VK_NULL_HANDLE) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ribbonPipelineLayout_, 0, 1,
+                                        &perFrameSet, 0, nullptr);
+                vkCmdBindVertexBuffers(cmd, 0, 1, &ribbonVB_[vbSlot], &offset);
+            }
             lastPipe = dc.pipeline;
         }
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ribbonPipelineLayout_, 1, 1,
                                 &dc.texSet, 0, nullptr);
+        struct {
+            float alphaRef;
+            int32_t lit;
+            int32_t fogged;
+            int32_t pad;
+        } pc{dc.alphaRef, dc.lit, dc.fogged, 0};
+        vkCmdPushConstants(cmd, ribbonPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(pc), &pc);
         vkCmdDraw(cmd, dc.vertexCount, 1, dc.firstVertex, 0);
     }
 }

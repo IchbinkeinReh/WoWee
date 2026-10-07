@@ -88,3 +88,31 @@ TEST_CASE("gravity pulls an edge by its age squared", "[ribbon]") {
     // (0x00980090 adds (2 x age + dt) x g x dt each step).
     CHECK(strip.front().position.z == Catch::Approx(-2.0f * (1.0001f * 1.0001f - 1.0f)).margin(2e-4));
 }
+
+TEST_CASE("a ribbon material's bits are the M2 flags turned around (0x00832ea0)", "[ribbon]") {
+    using wowee::rendering::client_ribbon::materialState;
+    const auto plain = materialState(0x00, 2);
+    CHECK(plain.lit);
+    CHECK(plain.fogged);
+    CHECK(plain.cull);
+    CHECK(plain.depthTest);
+    CHECK(plain.depthWrite);
+    const auto all = materialState(0x1F, 4);
+    CHECK_FALSE(all.lit);
+    CHECK_FALSE(all.fogged);
+    CHECK_FALSE(all.cull);
+    CHECK_FALSE(all.depthTest);
+    CHECK_FALSE(all.depthWrite);
+    CHECK(all.blend == 4);
+}
+
+TEST_CASE("a ribbon material's alpha reference follows its Gx blend (0x00ad8b7c)", "[ribbon]") {
+    using wowee::rendering::client_ribbon::materialState;
+    CHECK(materialState(0, 0).alphaRef == 0.0f);
+    CHECK(materialState(0, 1).alphaRef == Catch::Approx(224.0f / 255.0f));
+    CHECK(materialState(0, 2).alphaRef == Catch::Approx(1.0f / 255.0f));
+    CHECK(materialState(0, 3).alphaRef == 0.0f);
+    CHECK(materialState(0, 5).alphaRef == Catch::Approx(1.0f / 255.0f));
+    // 7 is past the table: drawn as alpha.
+    CHECK(materialState(0, 7).blend == 2);
+}

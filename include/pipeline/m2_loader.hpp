@@ -221,8 +221,16 @@ struct M2RibbonEmitter {
     float gravity        = 0.0f;    // Downward pull on edges per s²
     uint16_t textureRows = 1;
     uint16_t textureCols = 1;
-    /// The blending mode of the material materialIndex names.
-    uint16_t blendMode = 2;
+    /// Every texture and material pair, in the file's order: the client
+    /// draws the strip once with each (0x00832ea0, 0x00980b70). The texture
+    /// is a direct index into the model's textures; flags and blend are the
+    /// M2 material's.
+    struct Material {
+        uint16_t textureIndex = 0;
+        uint16_t flags = 0;
+        uint16_t blendMode = 0;
+    };
+    std::vector<Material> materials;
 };
 
 // Complete M2 model structure

@@ -1704,21 +1704,35 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                 rib.position.y   = readValue<float>(m2Data, base + 0x0C);
                 rib.position.z   = readValue<float>(m2Data, base + 0x10);
 
-                // textureIndices M2Array (0x14): count + offset → first element = texture lookup index
+                // The texture (0x14) and material (0x1c) index arrays. The
+                // client pairs them up to the texture count, reading the
+                // material at the same place (0x00832ea0).
                 {
-                    uint32_t nTex = readValue<uint32_t>(m2Data, base + 0x14);
-                    uint32_t ofsTex = readValue<uint32_t>(m2Data, base + 0x18);
-                    if (nTex > 0 && ofsTex + sizeof(uint16_t) <= m2Data.size()) {
-                        rib.textureIndex = readValue<uint16_t>(m2Data, ofsTex);
-                    }
-                }
-
-                // materialIndices M2Array (0x1C): count + offset → first element = material index
-                {
-                    uint32_t nMat = readValue<uint32_t>(m2Data, base + 0x1C);
-                    uint32_t ofsMat = readValue<uint32_t>(m2Data, base + 0x20);
-                    if (nMat > 0 && ofsMat + sizeof(uint16_t) <= m2Data.size()) {
-                        rib.materialIndex = readValue<uint16_t>(m2Data, ofsMat);
+                    const uint32_t nTex = readValue<uint32_t>(m2Data, base + 0x14);
+                    const uint32_t ofsTex = readValue<uint32_t>(m2Data, base + 0x18);
+                    const uint32_t nMat = readValue<uint32_t>(m2Data, base + 0x1C);
+                    const uint32_t ofsMat = readValue<uint32_t>(m2Data, base + 0x20);
+                    const auto fits = [&](uint32_t ofs, uint32_t i) {
+                        return static_cast<size_t>(ofs) + (static_cast<size_t>(i) + 1) * sizeof(uint16_t) <=
+                               m2Data.size();
+                    };
+                    for (uint32_t i = 0; i < nTex && i < 64 && fits(ofsTex, i); ++i) {
+                        M2RibbonEmitter::Material m;
+                        m.textureIndex = readValue<uint16_t>(m2Data, ofsTex + i * 2);
+                        // Read whatever material index is there, as the
+                        // client does; with none, the default material.
+                        const uint16_t matIdx = (i < nMat && fits(ofsMat, i))
+                                                    ? readValue<uint16_t>(m2Data, ofsMat + i * 2)
+                                                    : UINT16_MAX;
+                        if (i == 0) {
+                            rib.textureIndex = m.textureIndex;
+                            if (matIdx != UINT16_MAX) rib.materialIndex = matIdx;
+                        }
+                        if (matIdx < model.materials.size()) {
+                            m.flags = model.materials[matIdx].flags;
+                            m.blendMode = model.materials[matIdx].blendMode;
+                        }
+                        rib.materials.push_back(m);
                     }
                 }
 
@@ -1762,9 +1776,6 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                     rib.edgesPerSecond = 0.0f;
                 }
                 if (!std::isfinite(rib.edgeLifetime) || rib.edgeLifetime > 1000.0f) rib.edgeLifetime = 0.0f;
-                if (rib.materialIndex < model.materials.size()) {
-                    rib.blendMode = model.materials[rib.materialIndex].blendMode;
-                }
 
                 // texSlotTrack M2TrackDisk at 0x84 (uint16)
                 if (base + 0x84 + sizeof(M2TrackDisk) <= m2Data.size()) {
