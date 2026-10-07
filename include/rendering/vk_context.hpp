@@ -70,7 +70,19 @@ public:
     void shutdown();
 
     // Swapchain management
+    /// False without touching anything - the old swapchain and every target
+    /// sized from it stay as they were - when the surface has no area to
+    /// build at (see surfaceHasArea). The swapchain stays dirty, so the
+    /// first frame that has a window again rebuilds it.
     [[nodiscard]] bool recreateSwapchain(int width, int height);
+
+    /// Whether the surface can hold a swapchain at all.
+    ///
+    /// A minimised window on Windows reports a current extent of 0x0, and so
+    /// can one that something has hidden for a moment. vk-bootstrap takes that
+    /// extent over the size it is asked for, so a rebuild then builds a 0x0
+    /// swapchain and every image sized from it fails to create.
+    [[nodiscard]] bool surfaceHasArea() const;
 
     /// Gives up the swapchain and the surface.
     ///
