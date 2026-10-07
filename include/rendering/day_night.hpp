@@ -101,6 +101,61 @@ inline constexpr CurveKey kMoonPhi[] = {
 /// 0x007eecc0's moon azimuth (0xd39188): pi/4 at every key.
 inline constexpr float kMoonTheta = 0.78539819f;
 
+/// 0x007eecc0's Blue Child azimuth (0xd39148): 135 degrees, 150 at 04:00,
+/// 165 at 22:00. Its polar angle is the White Lady's curve (0xd39160 holds
+/// the same keys as 0xd391a0).
+inline constexpr CurveKey kBlueChildTheta[] = {
+    {0.0f, 2.3561945f}, {0.16666667f, 2.6179938f}, {0.91666669f, 2.8797932f}};
+/// The Blue Child runs on a clock 1.7 times slower than the day
+/// (0xd38e84), counted from a day number the client leaves at 0 (0xd38b08).
+inline constexpr float kBlueChildPeriodDays = 1.7f;
+
+/// The sun sprite's size (0xd39128 x 0xd38e40 = 1): twice as large at 06:00
+/// and 21:00, normal from 06:45 to 20:15.
+inline constexpr CurveKey kSunSize[] = {
+    {0.25f, 2.0f}, {0.28125f, 1.0f}, {0.84375f, 1.0f}, {0.875f, 2.0f}};
+/// The moons' size curve (0xd39108): 1 around midnight, 1.5 from 04:00 to
+/// 22:00. The White Lady's is scaled by 1.75 (0xd38e60), the Blue Child's by
+/// 1 (0xd38e80).
+inline constexpr CurveKey kMoonSize[] = {
+    {0.041666668f, 1.0f}, {0.16666667f, 1.5f}, {0.91666669f, 1.5f}, {0.99930555f, 1.0f}};
+inline constexpr float kWhiteLadyScale = 1.75f;
+inline constexpr float kBlueChildScale = 1.0f;
+/// How far from the eye the client puts the sun and moons (0x007eecc0), the
+/// unit their sprite sizes are in.
+inline constexpr float kCelestialDistance = 12.0f;
+
+/// The sun and moon glare (0x007ee150, 0x007ee230, applied by 0x007ef6e0):
+/// how fast it rises to and falls from what it should be, per second; its
+/// size and alpha, lerped by how squarely the camera faces the body - from
+/// a facing of 0.7 (no more than about 45 degrees off) to 1; and the hours
+/// it shows.
+struct GlareDef {
+    float riseRate;
+    float fallRate;
+    float sizeBase;
+    float sizeNear;     ///< at a facing of 0.7 (sun), or the moon's own size
+    float sizeFacing;   ///< at a facing of 1
+    float alphaNear;
+    float alphaFacing;
+    CurveKey time[4];
+};
+inline constexpr float kGlareFacingThreshold = 0.7f;
+inline constexpr GlareDef kSunGlare = {
+    4.0f, 1.5151515f, 1.0f, 3.0f, 20.0f, 0.5f, 1.0f,
+    {{0.27083334f, 0.0f}, {0.3125f, 1.0f}, {0.8125f, 1.0f}, {0.875f, 0.0f}}};
+inline constexpr GlareDef kMoonGlare = {
+    3.0303030f, 1.5151515f, 2.0f, 1.0f, 1.0f, 0.1f, 1.0f,
+    {{0.083333336f, 1.0f}, {0.13541667f, 0.0f}, {0.94791669f, 0.0f}, {0.99930555f, 1.0f}}};
+
+/// How far into its size and alpha ranges a glare is for a camera facing
+/// `facing` (the dot of its forward with the way to the body): 0 at 0.7 or
+/// less, 1 looking straight at it (0x007ef6e0).
+inline float glareFacing(float facing) {
+    const float f = facing < kGlareFacingThreshold ? kGlareFacingThreshold : facing;
+    return (f - kGlareFacingThreshold) / (1.0f - kGlareFacingThreshold);
+}
+
 /// The way the directional light travels at day fraction `t` (0x007eea90).
 /// Always out of the north-west and downward: 37 degrees above the horizon at
 /// midnight and noon, 20 at 06:00 and 18:00. The moon's light at night comes
@@ -119,6 +174,20 @@ inline glm::vec3 sunDirection(float t) {
 /// horizon between about 22:15 and 03:20.
 inline glm::vec3 moonDirection(float t) {
     return polarDirection(sampleCurve(kMoonPhi, t), kMoonTheta);
+}
+
+/// The Blue Child's clock at day fraction `t`: t / 1.7, the day number being 0
+/// (0x007eecc0).
+inline float blueChildTime(float t) {
+    const float u = t / kBlueChildPeriodDays;
+    return u - std::floor(u);
+}
+
+/// From the eye toward the Blue Child at day fraction `t` (0x007eecc0). Up
+/// from midnight to about 05:45, low in the north.
+inline glm::vec3 blueChildDirection(float t) {
+    const float u = blueChildTime(t);
+    return polarDirection(sampleCurve(kMoonPhi, u), sampleCurve(kBlueChildTheta, u));
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +239,36 @@ inline FogRange clientFogRange(float fogEndYards, float startScalar, float farCl
     return {end * scalar, end};
 }
 
+/// How much of a colour is left `depth` yards under a liquid's surface, by
+/// its LiquidType row (0x007f3230's tail): the fraction of MaxDarkenDepth the
+/// camera is down, at most all of it, times the row's intensity for that
+/// colour, taken off one. The client scales the HSV value by this
+/// (0x007ed790), which for an RGB colour is the same as scaling it.
+inline float liquidDarkenScale(float depth, float maxDarkenDepth, float intensity) {
+    if (!(maxDarkenDepth > 0.0f)) return 1.0f;
+    const float d = depth < 0.0f ? 0.0f : (depth > maxDarkenDepth ? maxDarkenDepth : depth);
+    const float s = 1.0f - d / maxDarkenDepth * intensity;
+    return s > 0.0f ? s : 0.0f;
+}
+
+/// How much of one WMO fog sphere shows at `dist` from its centre
+/// (0x007a1150): all of it within the small radius, falling linearly to none
+/// at the large one.
+inline float wmoFogSphereWeight(float dist, float smallRadius, float largeRadius) {
+    float d = dist < 0.0f ? 0.0f : (dist > largeRadius ? largeRadius : dist);
+    if (d < smallRadius) return 1.0f;
+    const float span = largeRadius - smallRadius;
+    if (!(span > 0.0f)) return 0.0f;
+    return 1.0f - (d - smallRadius) / span;
+}
+
+/// How far the interior fog has taken over from the zone's, by the camera's
+/// distance from the way out: all of it 25 yards in (0x007f16f0, 0.04 a yard).
+inline float wmoFogBlend(float distanceInside) {
+    const float b = distanceInside * 0.04f;
+    return b < 0.0f ? 0.0f : (b > 1.0f ? 1.0f : b);
+}
+
 // ---------------------------------------------------------------------------
 // The sky dome.
 
@@ -189,5 +288,68 @@ inline float skyDomePolarFraction(const glm::vec3& unitDir) {
     const float cosPhi = std::clamp(t * unitDir.z + c, -1.0f, 1.0f);
     return std::acos(cosPhi) * 0.31830989f;
 }
+
+// ---------------------------------------------------------------------------
+// The clouds.
+
+/// The cloud dome's rows (0x007f20e0, table 0xa41ad4): polar angles over pi,
+/// zenith to the horizon ring, on the same sphere as the sky dome. Row i is
+/// i/11 of the way out from the cloud texture's centre to its edge.
+inline constexpr float kCloudDomeRows[12] = {0.0f,  0.025f, 0.05f, 0.075f, 0.1f,   0.125f,
+                                             0.15f, 0.175f, 0.205f, 0.23f, 0.245f, 0.25f};
+/// Each row's vertex alpha (0xa41b04): solid down to 8.8 degrees above the
+/// horizon, half at 3.7, none at the horizon.
+inline constexpr unsigned char kCloudDomeAlpha[12] = {255, 255, 255, 255, 255, 255,
+                                                      255, 255, 255, 128, 0,   0};
+
+/// How far from the cloud texture's centre (0 to 0.5 at the horizon ring) a
+/// point of the dome at polar fraction `p` lies: piecewise linear between the
+/// rows, as the mesh's UVs are. Past the horizon it runs on along the last
+/// row's slope, so a body below the horizon still lights the clouds from the
+/// right side (0x007ef920 places the sun and moon on the texture this way).
+inline float cloudTextureRadius(float p) {
+    constexpr int n = 12;
+    if (p <= 0.0f) return 0.0f;
+    for (int i = 1; i < n; ++i) {
+        if (p <= kCloudDomeRows[i]) {
+            const float a = kCloudDomeRows[i - 1];
+            const float b = kCloudDomeRows[i];
+            const float f = (p - a) / (b - a);
+            return 0.5f * (static_cast<float>(i - 1) + f) / static_cast<float>(n - 1);
+        }
+    }
+    const float slope = 0.5f / static_cast<float>(n - 1) / (kCloudDomeRows[n - 1] - kCloudDomeRows[n - 2]);
+    return 0.5f + (p - kCloudDomeRows[n - 1]) * slope;
+}
+
+/// The cloud texture's opacity, 0..1, for a noise byte `k` over the
+/// coverage threshold (0x007efd00 indexes the table 0x007edb50 builds:
+/// 255 - 255 x 0.96^(k x 153/256), the 153 being 255 less the 0.6 cover it
+/// was built for). At or under the threshold, none.
+inline float cloudCoverageAlpha(float k) {
+    if (k < 0.0f) return 0.0f;
+    return 1.0f - std::pow(0.96f, k * (153.0f / 256.0f));
+}
+
+/// The coverage threshold for cloud cover `density` (float band 3): the
+/// noise byte a texel has to clear, (1 - density) x 255. The client stores
+/// it in a byte; cover past 0..1 is held there rather than wrapped.
+inline float cloudCoverageThreshold(float density) {
+    const float d = density < 0.0f ? 0.0f : (density > 1.0f ? 1.0f : density);
+    return std::round((1.0f - d) * 255.0f);
+}
+
+/// Whether the clouds are lit by the sun at day fraction `t` rather than the
+/// moon: from 04:50 to 22:10 (0x007efae0).
+inline bool cloudsLitBySun(float t) { return t >= 0.2013889f && t < 0.9236111f; }
+
+/// How strongly the sun or moon lights the clouds in weather `storm` (0..1):
+/// 1 - 0.75 storm, the time curve at 0xaf4be0 being 1 at every key
+/// (0x007efae0).
+inline float cloudGlow(float storm) { return 1.0f - 0.75f * storm; }
+
+/// The height, in texels, of the light over the cloud texture: 64, flatter
+/// lighting in weather (0x007efae0: 64 + 192 storm).
+inline float cloudLightHeight(float storm) { return 64.0f + 192.0f * storm; }
 
 }  // namespace wowee::rendering::daynight

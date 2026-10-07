@@ -141,16 +141,15 @@ void StarField::shutdown() {
 }
 
 void StarField::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
-                       float timeOfDay, float cloudDensity, float fogDensity) {
+                       float timeOfDay, float cloudDensity) {
     if (!renderingEnabled || pipeline == VK_NULL_HANDLE || vertexBuffer == VK_NULL_HANDLE
         || stars.empty()) {
         return;
     }
 
-    // Compute intensity from time of day then attenuate for clouds/fog
+    // Compute intensity from time of day then attenuate for clouds
     float intensity = getStarIntensity(timeOfDay);
     intensity *= (1.0f - glm::clamp(cloudDensity * 0.7f, 0.0f, 1.0f));
-    intensity *= (1.0f - glm::clamp(fogDensity * 0.3f, 0.0f, 1.0f));
 
     if (intensity <= 0.01f) {
         return;

@@ -19,7 +19,11 @@ layout(set = 0, binding = 0) uniform PerFrame {
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 
 layout(push_constant) uniform Push {
-    mat4 model;
+    // The light's ramp for this liquid (Wow.exe 3.3.5a 0x008a2bf0): rgb and
+    // alpha in the shallows, then in the deep - ch14/ch15 with the ocean
+    // alphas for an ocean, ch16/ch17 with the water alphas for the rest.
+    vec4 closeColor;
+    vec4 farColor;
     float waveAmp;
     float waveFreq;
     float waveSpeed;
@@ -27,7 +31,8 @@ layout(push_constant) uniform Push {
     vec2 screenSize;  // size of the target being drawn into
     vec2 depthRange;  // the camera's own near and far, for linearising SceneDepth
     float sceneValid; // 1 once the refraction capture holds a frame, 0 before it
-    float pad0, pad1, pad2;
+    float lightColors; // 1: closeColor and farColor hold the light's ramp
+    float pad1, pad2;
 } push;
 
 layout(set = 1, binding = 0) uniform WaterMaterial {
@@ -391,12 +396,16 @@ void main() {
 
     // Underwater blue fog - geometry below the waterline fades to a blue haze
     // with depth, masking occlusion edge artifacts and giving a natural look.
-    vec3 underwaterFogColor = waterColor.rgb * 0.5 + vec3(0.04, 0.10, 0.20);
+    // The light's own water colours where it has them - they darken at night
+    // and differ by zone - and the material's otherwise (magma, slime).
+    bool lightRamp = push.lightColors > 0.5;
+    vec3 underwaterFogColor = lightRamp ? push.farColor.rgb
+                                        : waterColor.rgb * 0.5 + vec3(0.04, 0.10, 0.20);
     float underwaterFogFade = 1.0 - exp(-verticalDepth * 0.35);
     vec3 foggedScene = mix(sceneRefract, underwaterFogColor, underwaterFogFade);
 
-    vec3 shallowColor = waterColor.rgb * 1.2;
-    vec3 deepColor = waterColor.rgb * vec3(0.3, 0.5, 0.7);
+    vec3 shallowColor = lightRamp ? push.closeColor.rgb : waterColor.rgb * 1.2;
+    vec3 deepColor = lightRamp ? push.farColor.rgb : waterColor.rgb * vec3(0.3, 0.5, 0.7);
     float depthFade = max(1.0 - exp(-verticalDepth * 0.15), bodyFloor);
     vec3 waterBody = mix(shallowColor, deepColor, depthFade);
 
@@ -703,7 +712,9 @@ void main() {
     // ============================================================
     // Alpha and fog
     // ============================================================
-    float baseAlpha = mix(waterAlpha, min(1.0, waterAlpha * 1.5), depthFade);
+    float baseAlpha = lightRamp
+        ? mix(push.closeColor.a, push.farColor.a, depthFade)
+        : mix(waterAlpha, min(1.0, waterAlpha * 1.5), depthFade);
     float alpha = mix(baseAlpha, min(1.0, baseAlpha * 1.3), fresnel) * alphaScale;
     alpha = clamp(alpha, 0.15, 0.92);
     // Wet sand is a band on the beach, not a film of water, so it needs enough

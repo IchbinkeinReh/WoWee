@@ -35,7 +35,10 @@ struct WaterMaterialUBO {
 
 // Push constants matching water.vert.glsl
 struct WaterPushConstants {
-    glm::mat4 model;
+    // The light's ramp for this liquid: the shallows' colour and alpha, then
+    // the deep's (LightWaterColors). Only read when lightColors is set.
+    glm::vec4 closeColor;
+    glm::vec4 farColor;
     float waveAmp;
     float waveFreq;
     float waveSpeed;
@@ -43,9 +46,10 @@ struct WaterPushConstants {
     glm::vec2 screenSize;  // target size, for screen-space UVs
     glm::vec2 depthRange;  // camera near, far - the shader linearises SceneDepth with these
     float sceneValid = 0.0f; // 1 once captureSceneHistory has run; the shader used to guess this per pixel
-    float pad0 = 0.0f, pad1 = 0.0f, pad2 = 0.0f;
+    float lightColors = 0.0f; // 1: water and ocean take the light's colours above
+    float pad1 = 0.0f, pad2 = 0.0f;
 };
-static_assert(sizeof(WaterPushConstants) == 112, "the two shader declarations of this range are laid out for 112 bytes");
+static_assert(sizeof(WaterPushConstants) == 80, "the two shader declarations of this range are laid out for 80 bytes");
 
 
 
@@ -1166,7 +1170,13 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         float waveSpeed = canalProfile ? 1.00f : (basicType == 1 ? 1.20f : 1.40f);
 
         WaterPushConstants push{};
-        push.model = glm::mat4(1.0f);
+        // Ocean or river, from the light (0x008a2bf0); magma and slime are
+        // not lit by these and keep their material colour.
+        if (hasLightWaterColors_ && basicType < 2) {
+            push.closeColor = basicType == 1 ? lightWaterColors_.oceanClose : lightWaterColors_.riverClose;
+            push.farColor = basicType == 1 ? lightWaterColors_.oceanFar : lightWaterColors_.riverFar;
+            push.lightColors = 1.0f;
+        }
         push.waveAmp = waveAmp;
         push.waveFreq = waveFreq;
         push.waveSpeed = waveSpeed;

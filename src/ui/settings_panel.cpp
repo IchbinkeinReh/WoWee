@@ -860,7 +860,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "fsrsharpness", "framegen", "brightness", "uiopacity", "minimapsquare",
     "minimapnpcdots", "minimapclock", "minimapcoords", "minimaprotate", "latencymeter", "showfps",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
-    "raytracedlighting",
+    "screenglow", "raytracedlighting",
     // Moved off the game's own Effects panel, so this list is now what
     // applies them at startup; the cvar store used to do it.
     "groundclutterdistance", "particledensity", "weatherdetail",
@@ -1050,6 +1050,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "parallax",          .asBool  = &SettingsPanel::pendingPOM},
     {.key = "sharpstars",        .asBool  = &SettingsPanel::pendingSharpStars},
     {.key = "sunshafts",         .asBool  = &SettingsPanel::pendingSunShafts},
+    {.key = "screenglow",        .asBool  = &SettingsPanel::pendingScreenGlow},
     {.key = "parallaxquality",   .asInt   = &SettingsPanel::pendingPOMQuality},
 
     // --- Upscaling ---
@@ -1364,6 +1365,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setSharpStars(pendingSharpStars);
     } else if (key == "sunshafts") {
         if (renderer) renderer->setSunShaftsEnabled(pendingSunShafts);
+    } else if (key == "screenglow") {
+        if (renderer) renderer->setScreenGlowEnabled(pendingScreenGlow);
     } else if (key == "parallaxquality") {
         if (wmo) wmo->setPOMQuality(pendingPOMQuality);
         if (chars) chars->setPOMQuality(pendingPOMQuality);

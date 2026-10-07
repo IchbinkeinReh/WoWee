@@ -49,6 +49,7 @@ bool LightingManager::initialize(pipeline::AssetManager* assetManager) {
     loadLightParamsDbc(assetManager);
     loadLightSkyboxDbc(assetManager);
     loadLightBandDbcs(assetManager);
+    loadLiquidTypeDbc(assetManager);
 
     initialized_ = true;
     LOG_INFO("LightingManager initialized: ", lightVolumesByMap_.size(), " maps with lighting");
@@ -126,6 +127,7 @@ bool LightingManager::loadLightDbc(pipeline::AssetManager* assetManager) {
         // usually is - fell to invented constants.
         //
         // Light ID 1 stands in for a map that has no default of its own.
+        lightsById_[volume.lightId] = volume;
         if (volume.lightId == 1) {
             globalDefaultLight_ = volume;
             hasGlobalDefaultLight_ = true;
@@ -159,14 +161,32 @@ bool LightingManager::loadLightParamsDbc(pipeline::AssetManager* assetManager) {
     uint32_t recordCount = dbc->getRecordCount();
     LOG_INFO("Loaded LightParams.dbc: ", recordCount, " profiles");
 
-    // Create profile entries (will be populated by band loading)
+    // Create profile entries (will be populated by band loading). The
+    // constants 0x007ebff0 copies out of the row: HighlightSky, Glow and the
+    // four water alphas. 3.x put CloudTypeID before Glow, which the layouts
+    // say per expansion.
     const auto* lpL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("LightParams") : nullptr;
+    const uint32_t fieldCount = dbc->getFieldCount();
+    const auto column = [&](const char* name) -> uint32_t {
+        const uint32_t f = lpL ? lpL->tryField(name) : 0xFFFFFFFFu;
+        return f < fieldCount ? f : 0xFFFFFFFFu;
+    };
+    const uint32_t skyboxCol = lpL ? column("LightSkyboxID") : (fieldCount > 2 ? 2u : 0xFFFFFFFFu);
+    const uint32_t highlightCol = column("HighlightSky");
+    const uint32_t glowCol = column("Glow");
+    const uint32_t alphaCols[4] = {column("WaterShallowAlpha"), column("WaterDeepAlpha"),
+                                   column("OceanShallowAlpha"), column("OceanDeepAlpha")};
     for (uint32_t i = 0; i < recordCount; ++i) {
         uint32_t paramId = dbc->getUInt32(i, lpL ? (*lpL)["LightParamsID"] : 0);
         LightParamsProfile profile;
         profile.lightParamsId = paramId;
-        if (dbc->getFieldCount() > 2) {
-            profile.lightSkyboxId = dbc->getUInt32(i, 2);
+        if (skyboxCol != 0xFFFFFFFFu) profile.lightSkyboxId = dbc->getUInt32(i, skyboxCol);
+        if (highlightCol != 0xFFFFFFFFu) profile.highlightSky = static_cast<float>(dbc->getUInt32(i, highlightCol));
+        if (glowCol != 0xFFFFFFFFu) profile.glow = dbc->getFloat(i, glowCol);
+        float* alphas[4] = {&profile.waterShallowAlpha, &profile.waterDeepAlpha,
+                            &profile.oceanShallowAlpha, &profile.oceanDeepAlpha};
+        for (int a = 0; a < 4; ++a) {
+            if (alphaCols[a] != 0xFFFFFFFFu) *alphas[a] = dbc->getFloat(i, alphaCols[a]);
         }
         lightParamsProfiles_[paramId] = profile;
     }
@@ -188,13 +208,50 @@ bool LightingManager::loadLightSkyboxDbc(pipeline::AssetManager* assetManager) {
     }
 
     lightSkyboxPaths_.clear();
+    lightSkyboxFlags_.clear();
+    // Flags (3.x, field 2): 0x1 runs the model's animation with the time of
+    // day (0x007ecf20), 0x2 keeps the procedural sky under it (0x007f3230
+    // reads +8 of the row).
+    const auto* skL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("LightSkybox") : nullptr;
+    const uint32_t flagsCol = skL ? skL->tryField("Flags") : 0xFFFFFFFFu;
     for (uint32_t i = 0; i < dbc.getRecordCount(); ++i) {
         const uint32_t id = dbc.getUInt32(i, 0);
         std::string path = dbc.getString(i, 1);
         if (id != 0 && !path.empty()) lightSkyboxPaths_[id] = std::move(path);
+        if (id != 0 && flagsCol < dbc.getFieldCount()) lightSkyboxFlags_[id] = dbc.getUInt32(i, flagsCol);
     }
     LOG_INFO("Loaded LightSkybox.dbc: ", lightSkyboxPaths_.size(), " model paths");
     return !lightSkyboxPaths_.empty();
+}
+
+bool LightingManager::loadLiquidTypeDbc(pipeline::AssetManager* assetManager) {
+    // Only 3.x has the darkening columns; older layouts name none of them and
+    // the client of those days had no such code.
+    const auto* lqL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("LiquidType") : nullptr;
+    if (!lqL || lqL->tryField("MaxDarkenDepth") == 0xFFFFFFFFu) return false;
+    auto dbcData = assetManager->readFile("DBFilesClient\\LiquidType.dbc");
+    if (dbcData.empty()) return false;
+    pipeline::DBCFile dbc;
+    if (!dbc.load(dbcData)) return false;
+    const uint32_t fields = dbc.getFieldCount();
+    const uint32_t cols[5] = {lqL->tryField("MaxDarkenDepth"), lqL->tryField("FogDarkenIntensity"),
+                              lqL->tryField("AmbDarkenIntensity"), lqL->tryField("DirDarkenIntensity"),
+                              lqL->tryField("LightID")};
+    for (uint32_t c : cols) {
+        if (c >= fields) return false;
+    }
+    liquidTypes_.clear();
+    for (uint32_t i = 0; i < dbc.getRecordCount(); ++i) {
+        LiquidTypeLight l;
+        l.maxDarkenDepth = dbc.getFloat(i, cols[0]);
+        l.fogDarken = dbc.getFloat(i, cols[1]);
+        l.ambDarken = dbc.getFloat(i, cols[2]);
+        l.dirDarken = dbc.getFloat(i, cols[3]);
+        l.lightId = dbc.getUInt32(i, cols[4]);
+        liquidTypes_[dbc.getUInt32(i, lqL->tryField("ID") < fields ? lqL->tryField("ID") : 0)] = l;
+    }
+    LOG_INFO("Loaded LiquidType.dbc: ", liquidTypes_.size(), " liquids");
+    return true;
 }
 
 bool LightingManager::loadLightBandDbcs(pipeline::AssetManager* assetManager) {
@@ -293,7 +350,9 @@ bool LightingManager::loadLightBandDbcs(pipeline::AssetManager* assetManager) {
 
 void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
                               float gameTime,
-                              float weatherIntensity, bool cameraInLiquid) {
+                              float weatherIntensity, const CameraLiquid& liquid,
+                              bool deathOverride) {
+    const bool cameraInLiquid = liquid.submerged;
     if (!initialized_) return;
 
     // Update time
@@ -362,7 +421,26 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
         if (skyTargets.size() < 3) skyTargets.emplace_back(skyboxId, w);
     };
 
-    if (const LightVolume* base = defaultLight(mapId)) {
+    const LightVolume* base = defaultLight(mapId);
+    // Under a liquid whose LiquidType names a light of its own, that light is
+    // the whole of it, in place of the default and the nearby lights
+    // (0x007f3230: the row's +0x28 decides the branch).
+    const LiquidTypeLight* liquidRow = nullptr;
+    if (cameraInLiquid) {
+        auto lq = liquidTypes_.find(liquid.liquidType);
+        if (lq != liquidTypes_.end()) liquidRow = &lq->second;
+    }
+    const LightVolume* liquidLight = nullptr;
+    if (liquidRow && liquidRow->lightId != 0) {
+        auto ll = lightsById_.find(liquidRow->lightId);
+        if (ll != lightsById_.end()) liquidLight = &ll->second;
+    }
+    if (liquidLight) {
+        activeVolumes_.clear();
+        uint32_t skyboxId = 0;
+        newParams = sampleLight(*liquidLight, true, storm, timeHalfMinutes, skyboxId);
+        addSky(skyboxId, 1.0f);
+    } else if (base) {
         uint32_t skyboxId = 0;
         newParams = sampleLight(*base, cameraInLiquid, storm, timeHalfMinutes, skyboxId);
         addSky(skyboxId, 1.0f);
@@ -373,6 +451,38 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
             sampleLight(*wv.volume, cameraInLiquid, storm, timeHalfMinutes, skyboxId);
         newParams = lerpLightingParams(newParams, sampled, wv.weight);
         addSky(skyboxId, wv.weight);
+    }
+
+    // The death light (0x007f3230, override index 4 from ScreenEffect via
+    // 0x007ecec0): the map default light's death set replaces everything the
+    // blend gave, except the glow, the water alphas and the sky models, which
+    // are kept; the death set's own sky model goes up on top at full weight.
+    uint32_t deathSkyboxId = 0;
+    if (deathOverride && !liquidLight && base && base->lightParamsIds[LightVolume::PARAMS_DEATH] != 0) {
+        auto it = lightParamsProfiles_.find(base->lightParamsIds[LightVolume::PARAMS_DEATH]);
+        if (it != lightParamsProfiles_.end()) {
+            LightingParams death = sampleLightParams(&it->second, timeHalfMinutes);
+            death.glow = newParams.glow;
+            death.waterShallowAlpha = newParams.waterShallowAlpha;
+            death.waterDeepAlpha = newParams.waterDeepAlpha;
+            death.oceanShallowAlpha = newParams.oceanShallowAlpha;
+            death.oceanDeepAlpha = newParams.oceanDeepAlpha;
+            newParams = death;
+            deathSkyboxId = it->second.lightSkyboxId;
+        }
+    }
+
+    // Darker with depth, by the LiquidType's own amounts: the fog colour, the
+    // ambient and the direct light each scaled in HSV value - which for a
+    // colour is a plain scale - by 1 - min(depth, max)/max x intensity
+    // (0x007f3230 tail, 0x007ed790).
+    if (liquidRow) {
+        newParams.fogColor *= daynight::liquidDarkenScale(liquid.depth, liquidRow->maxDarkenDepth,
+                                                          liquidRow->fogDarken);
+        newParams.ambientColor *= daynight::liquidDarkenScale(liquid.depth, liquidRow->maxDarkenDepth,
+                                                              liquidRow->ambDarken);
+        newParams.diffuseColor *= daynight::liquidDarkenScale(liquid.depth, liquidRow->maxDarkenDepth,
+                                                              liquidRow->dirDarken);
     }
 
     // The light's direction and the sun and moon are not in the DBC: the
@@ -388,6 +498,21 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
         daynight::clientFogRange(newParams.fogEnd, newParams.fogStartScalar, farClip_);
     newParams.fogStart = fog.start;
     newParams.fogEnd = fog.end;
+
+    // Inside a WMO with fog of its own (MFOG): its end within the far clip,
+    // the start that fraction of it, the end then no nearer than 30 yards
+    // (0x007ed1b0); blended in from the zone's fog by how far in the camera
+    // is, all of it 25 yards in (0x007f16f0).
+    if (interiorFog_) {
+        float end = interiorFog_->end;
+        if (farClip_ > 0.0f && end > farClip_) end = farClip_;
+        const float start = interiorFog_->startScalar * end;
+        if (end < 30.0f) end = 30.0f;
+        const float b = daynight::wmoFogBlend(interiorFog_->distanceInside);
+        newParams.fogEnd = glm::mix(newParams.fogEnd, end, b);
+        newParams.fogStart = glm::mix(newParams.fogStart, start, b);
+        newParams.fogColor = glm::mix(newParams.fogColor, interiorFog_->color, b);
+    }
 
     // Optional, and off by default: fog pulled toward the sky's middle band.
     // The client's fog is ch7 exactly; this was on at 0.7 to make up for a sky
@@ -419,28 +544,53 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
     // crossing fades rather than pops. A light with no sky model contributes
     // to no layer.
     {
-        std::vector<std::pair<std::string, float>> target;
+        struct Target {
+            std::string path;
+            float weight;
+            uint32_t flags;
+            bool death;
+        };
+        std::vector<Target> target;
+        const auto flagsOf = [&](uint32_t skyboxId) {
+            auto f = lightSkyboxFlags_.find(skyboxId);
+            return f == lightSkyboxFlags_.end() ? 0u : f->second;
+        };
         for (const auto& [skyboxId, weight] : skyTargets) {
             auto skyIt = lightSkyboxPaths_.find(skyboxId);
             if (skyIt == lightSkyboxPaths_.end() || skyIt->second.empty()) continue;
-            target.emplace_back(skyIt->second, weight);
+            target.push_back({skyIt->second, weight, flagsOf(skyboxId), false});
         }
-        auto targetFor = [&](const std::string& path) {
-            for (const auto& [p, w] : target) if (p == path) return w;
-            return 0.0f;
+        if (deathSkyboxId != 0) {
+            auto skyIt = lightSkyboxPaths_.find(deathSkyboxId);
+            if (skyIt != lightSkyboxPaths_.end() && !skyIt->second.empty()) {
+                std::erase_if(target, [&](const Target& t) { return t.path == skyIt->second; });
+                target.push_back({skyIt->second, 1.0f, flagsOf(deathSkyboxId), true});
+            }
+        }
+        auto targetFor = [&](const std::string& path) -> const Target* {
+            for (const auto& t : target) if (t.path == path) return &t;
+            return nullptr;
         };
         for (auto& layer : skyboxLayers_) {
-            layer.weight += (targetFor(layer.path) - layer.weight) * blendFactor;
+            const Target* t = targetFor(layer.path);
+            layer.weight += ((t ? t->weight : 0.0f) - layer.weight) * blendFactor;
+            if (t) {
+                layer.flags = t->flags;
+                layer.deathOverride = t->death;
+            }
         }
-        for (const auto& [path, w] : target) {
+        for (const auto& t : target) {
             const bool present = std::any_of(skyboxLayers_.begin(), skyboxLayers_.end(),
-                                             [&](const SkyboxLayer& l) { return l.path == path; });
-            if (!present) skyboxLayers_.push_back({.path = path, .weight = w * blendFactor});
+                                             [&](const SkyboxLayer& l) { return l.path == t.path; });
+            if (!present) {
+                skyboxLayers_.push_back({.path = t.path, .weight = t.weight * blendFactor,
+                                         .flags = t.flags, .deathOverride = t.death});
+            }
         }
         // Gone once faded out and not wanted - never while it is still wanted,
         // so a model is not dropped and reloaded on its way in.
         std::erase_if(skyboxLayers_, [&](const SkyboxLayer& l) {
-            return l.weight < 0.005f && targetFor(l.path) <= 0.0f;
+            return l.weight < 0.005f && !targetFor(l.path);
         });
         std::sort(skyboxLayers_.begin(), skyboxLayers_.end(),
                   [](const SkyboxLayer& a, const SkyboxLayer& b) { return a.weight > b.weight; });
@@ -600,6 +750,15 @@ LightingParams LightingManager::sampleLightParams(const LightParamsProfile* prof
     params.skyBand1Color = sampleColorBand(profile->colorBands[LightParamsProfile::SKY_BAND1_COLOR], timeHalfMinutes);
     params.skyBand2Color = sampleColorBand(profile->colorBands[LightParamsProfile::SKY_BAND2_COLOR], timeHalfMinutes);
     params.skySmogColor = sampleColorBand(profile->colorBands[LightParamsProfile::SKY_SMOG_COLOR], timeHalfMinutes);
+    params.shadowOpacity = sampleColorBand(profile->colorBands[LightParamsProfile::SHADOW_COLOR], timeHalfMinutes).r;
+    params.sunColor = sampleColorBand(profile->colorBands[LightParamsProfile::SUN_COLOR], timeHalfMinutes);
+    params.cloudSunColor = sampleColorBand(profile->colorBands[LightParamsProfile::CLOUD_SUN_COLOR], timeHalfMinutes);
+    params.cloudShadeColor = sampleColorBand(profile->colorBands[LightParamsProfile::CLOUD_SHADE_COLOR], timeHalfMinutes);
+    params.cloudBaseColor = sampleColorBand(profile->colorBands[LightParamsProfile::CLOUD_BASE_COLOR], timeHalfMinutes);
+    params.oceanCloseColor = sampleColorBand(profile->colorBands[LightParamsProfile::OCEAN_CLOSE_COLOR], timeHalfMinutes);
+    params.oceanFarColor = sampleColorBand(profile->colorBands[LightParamsProfile::OCEAN_FAR_COLOR], timeHalfMinutes);
+    params.riverCloseColor = sampleColorBand(profile->colorBands[LightParamsProfile::RIVER_CLOSE_COLOR], timeHalfMinutes);
+    params.riverFarColor = sampleColorBand(profile->colorBands[LightParamsProfile::RIVER_FAR_COLOR], timeHalfMinutes);
 
     // Sample float bands. The fog distance is stored in the same
     // thirty-sixths of a yard as the light positions, and was being used raw:
@@ -613,15 +772,21 @@ LightingParams LightingManager::sampleLightParams(const LightParamsProfile* prof
     params.fogStartScalar = sampleFloatBand(
         profile->floatBands[LightParamsProfile::FOG_START_SCALAR], timeHalfMinutes);
     params.fogStart = params.fogEnd * params.fogStartScalar;
-    params.fogDensity = sampleFloatBand(profile->floatBands[LightParamsProfile::FOG_DENSITY], timeHalfMinutes);
     params.cloudDensity = sampleFloatBand(profile->floatBands[LightParamsProfile::CLOUD_DENSITY], timeHalfMinutes);
+
+    params.highlightSky = profile->highlightSky;
+    params.glow = profile->glow;
+    params.waterShallowAlpha = profile->waterShallowAlpha;
+    params.waterDeepAlpha = profile->waterDeepAlpha;
+    params.oceanShallowAlpha = profile->oceanShallowAlpha;
+    params.oceanDeepAlpha = profile->oceanDeepAlpha;
 
     return params;
 }
 
 glm::vec3 LightingManager::sampleColorBand(const ColorBand& band, uint16_t timeHalfMinutes) const {
     if (band.numKeyframes == 0) {
-        return glm::vec3(0.5f);  // Fallback gray
+        return glm::vec3(0.0f);  // black, as 0x007eb070 answers for no keys
     }
 
     if (band.numKeyframes == 1) {
@@ -658,7 +823,7 @@ glm::vec3 LightingManager::sampleColorBand(const ColorBand& band, uint16_t timeH
 
 float LightingManager::sampleFloatBand(const FloatBand& band, uint16_t timeHalfMinutes) const {
     if (band.numKeyframes == 0) {
-        return 1.0f;  // Fallback
+        return 0.0f;  // as 0x007eaef0 answers for no keys
     }
 
     if (band.numKeyframes == 1) {

@@ -5,6 +5,8 @@
 #include <glm/glm.hpp>
 #include <cstdint>
 
+#include "rendering/screen_target.hpp"
+
 namespace wowee {
 namespace rendering {
 
@@ -68,14 +70,7 @@ public:
 private:
     static constexpr uint32_t MAX_FRAMES = 2;
 
-    struct Target {
-        VkImage image = VK_NULL_HANDLE;
-        VmaAllocation alloc = VK_NULL_HANDLE;
-        VkImageView view = VK_NULL_HANDLE;
-    };
-
-    bool createTarget(Target& t, VkFormat format, VkImageUsageFlags usage);
-    void destroyTarget(Target& t);
+    using Target = ScreenTarget;
     bool ensureTargets(VkExtent2D extent);
     void destroyTargets();
     bool ensureCompositePipeline();

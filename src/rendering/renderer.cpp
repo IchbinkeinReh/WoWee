@@ -40,6 +40,7 @@
 #include "rendering/hiz_system.hpp"
 #include "rendering/volumetric_fog.hpp"
 #include "rendering/sun_shafts.hpp"
+#include "rendering/screen_effects.hpp"
 #include "rendering/rt_lighting.hpp"
 #include "rendering/rt_scene.hpp"
 #include "rendering/screen_capture.hpp"
@@ -569,27 +570,15 @@ void Renderer::updatePerFrameUBO() {
         const auto& lp = lightingManager->getLightingParams();
         currentFrameData.lightDir = glm::vec4(lp.directionalDir, 0.0f);
         currentFrameData.lightColor = glm::vec4(lp.diffuseColor, 1.0f);
-        currentFrameData.ambientColor = glm::vec4(lp.ambientColor, 1.0f);
+        // w: ch8's red, how dark the terrain's baked shadows are drawn.
+        currentFrameData.ambientColor = glm::vec4(lp.ambientColor, lp.shadowOpacity);
         currentFrameData.fogColor = glm::vec4(lp.fogColor, 1.0f);
         currentFrameData.fogParams.x = lp.fogStart;
         currentFrameData.fogParams.y = lp.fogEnd;
 
-        // Shift fog to blue when camera is significantly underwater (terrain water only).
-        if (waterRenderer && camera) {
-            glm::vec3 camPos = camera->getPosition();
-            auto waterH = waterRenderer->getNearestWaterHeightAt(camPos.x, camPos.y, camPos.z);
-            constexpr float MIN_SUBMERSION = 2.0f;
-            if (waterH && camPos.z < (*waterH - MIN_SUBMERSION)
-                       && !waterRenderer->isWmoWaterAt(camPos.x, camPos.y)) {
-                float depth = *waterH - camPos.z - MIN_SUBMERSION;
-                float blend = glm::clamp(1.0f - std::exp(-depth * 0.08f), 0.0f, 0.7f);
-                glm::vec3 underwaterFog(0.03f, 0.09f, 0.18f);
-                glm::vec3 blendedFog = glm::mix(lp.fogColor, underwaterFog, blend);
-                currentFrameData.fogColor = glm::vec4(blendedFog, 1.0f);
-                currentFrameData.fogParams.x = glm::mix(lp.fogStart, 20.0f, blend);
-                currentFrameData.fogParams.y = glm::mix(lp.fogEnd, 200.0f, blend);
-            }
-        }
+        // Under water the fog is the light's own: the underwater set, darkened
+        // with depth by the liquid's LiquidType row (LightingManager::update,
+        // 0x007f3230). There is no fixed blue fog in the client.
     }
 
     currentFrameData.lightSpaceMatrix = lightSpaceMatrix;
@@ -832,6 +821,14 @@ bool Renderer::initialize(core::Window* win) {
                          postProcessPipeline_->sceneDepthIsMsaa());
     });
 
+    // Not fatal: without them the picture is only missing its glow.
+    screenEffects_ = std::make_unique<ScreenEffects>();
+    if (!screenEffects_->initialize(vkCtx)) {
+        LOG_WARNING("Screen effects failed to initialise - glow and the death effect unavailable");
+        screenEffects_->shutdown();
+        screenEffects_.reset();
+    }
+
     // Not fatal: without them the picture is only missing its rays.
     sunShafts_ = std::make_unique<SunShafts>();
     if (!sunShafts_->initialize(vkCtx)) {
@@ -897,6 +894,10 @@ void Renderer::shutdown() {
     if (sunShafts_) {
         sunShafts_->shutdown();
         sunShafts_.reset();
+    }
+    if (screenEffects_) {
+        screenEffects_->shutdown();
+        screenEffects_.reset();
     }
 
     LOG_DEBUG("Renderer::shutdown - skySystem...");
@@ -1416,6 +1417,7 @@ void Renderer::endFrame() {
 
     // The picture is finished and out of every pass that drew it: the one
     // point where the shafts can copy it down, before the overlay pass opens.
+    recordScreenEffects();
     recordSunShafts();
 
     const auto& overlayFbs = vkCtx->getOverlayFramebuffers();
@@ -1437,7 +1439,9 @@ void Renderer::endFrame() {
         sc.extent = ext;
         vkCmdSetScissor(currentCmd, 0, 1, &sc);
 
-        // Under the interface, over everything else.
+        // Under the interface, over everything else: the frame redrawn with
+        // the glow and death passes, then the shafts screened over it.
+        if (screenEffects_) screenEffects_->composite(currentCmd, vkCtx->getCurrentFrame());
         if (sunShafts_) sunShafts_->composite(currentCmd, vkCtx->getCurrentFrame());
 
         // ImGui's pipelines are built against the overlay pass, so it always
@@ -1730,6 +1734,12 @@ bool Renderer::updateSkyboxLayers() {
         }
         skyboxModelRenderer_->setInstanceFade(it->instanceId, layer.weight);
         skyboxModelRenderer_->setInstancePosition(it->instanceId, camera->getPosition());
+        // Flag 0x1: the model's animation is the time of day, game minutes
+        // over 1440 of its length (0x007ecf20), not a clock of its own.
+        if (layer.flags & LightingManager::kSkyboxFlagTimeOfDayAnim) {
+            skyboxModelRenderer_->setInstanceAnimationFraction(
+                it->instanceId, lightingManager->getTimeOfDay());
+        }
     }
     return !skyLayers_.empty();
 }
@@ -1844,14 +1854,10 @@ uint32_t Renderer::getCurrentZoneId() const {
     return tileZoneId;
 }
 
-float Renderer::sampleSunOcclusion() const {
+float Renderer::sampleSunOcclusion(const glm::vec3& sunDir) const {
     if (!camera) return 1.0f;
     const glm::vec3 eye = camera->getPosition();
 
-    // The same direction the flare itself is drawn around, from the same rule.
-    const glm::vec3 sunDir = lightingManager
-        ? lightingManager->getLightingParams().sunDir
-        : glm::vec3(0.0f, 0.0f, -1.0f);
     // Below the horizon there is nothing to be occluded by, and nothing to
     // flare either - the time-of-day gate in LensFlare covers the same ground.
     if (sunDir.z <= 0.0f) return 1.0f;
@@ -1897,9 +1903,12 @@ void Renderer::update(float deltaTime) {
     // flare on and off; a quarter second of travel reads as the sun going
     // behind something.
     {
-        const float target = sampleSunOcclusion();
-        const float rate = 1.0f - std::exp(-deltaTime / 0.25f);
-        sunOcclusion_ += (target - sunOcclusion_) * glm::clamp(rate, 0.0f, 1.0f);
+        const LightingParams* lp = lightingManager ? &lightingManager->getLightingParams() : nullptr;
+        const float rate = glm::clamp(1.0f - std::exp(-deltaTime / 0.25f), 0.0f, 1.0f);
+        const float sunTarget = lp ? sampleSunOcclusion(lp->sunDir) : 1.0f;
+        sunOcclusion_ += (sunTarget - sunOcclusion_) * rate;
+        const float moonTarget = lp ? sampleSunOcclusion(lp->moonDir) : 1.0f;
+        moonOcclusion_ += (moonTarget - moonOcclusion_) * rate;
     }
 
     auto updateStart = std::chrono::steady_clock::now();
@@ -1976,16 +1985,47 @@ void Renderer::update(float deltaTime) {
             (gh && gh->getWeatherType() != 0) ? gh->getWeatherIntensity() : 0.0f;
         // The underwater sets are for the camera in liquid (0x007f3230 asks
         // 0x00780620 at the camera), not the player swimming.
-        bool cameraInLiquid = false;
+        // How far under, and in what: the LiquidType row darkens the light
+        // with depth or names a light of its own (0x007f3230).
+        LightingManager::CameraLiquid cameraLiquid;
         if (waterRenderer && camera) {
             const glm::vec3 eye = camera->getPosition();
             const auto surface = waterRenderer->getNearestWaterHeightAt(eye.x, eye.y, eye.z);
-            cameraInLiquid = surface && eye.z < *surface;
+            if (surface && eye.z < *surface) {
+                cameraLiquid.submerged = true;
+                cameraLiquid.depth = *surface - eye.z;
+                if (auto lt = waterRenderer->getWaterTypeAt(eye.x, eye.y)) cameraLiquid.liquidType = *lt;
+            }
         }
+        // The death light is up for a ghost: ScreenEffect's light override
+        // (0x004f7020 -> 0x007ecec0), with the ffxDeath pass over the frame.
+        const bool deathLight = gh && gh->isPlayerGhost();
 
         lightingManager->setFarClip(viewDistance_);
+        // The interior fog of the WMO group the camera is in (MFOG,
+        // 0x007a1150).
+        {
+            std::optional<LightingManager::InteriorFog> interiorFog;
+            if (wmoRenderer && camera) {
+                if (auto f = wmoRenderer->interiorFogAt(camera->getPosition())) {
+                    interiorFog = LightingManager::InteriorFog{
+                        .end = f->end, .startScalar = f->startScalar,
+                        .color = f->color, .distanceInside = f->distanceInside};
+                }
+            }
+            lightingManager->setInteriorFog(interiorFog);
+        }
         lightingManager->update(characterPosition, mapId,
-                                gameTime, weatherIntensity, cameraInLiquid);
+                                gameTime, weatherIntensity, cameraLiquid, deathLight);
+        if (waterRenderer) {
+            const auto& wl = lightingManager->getLightingParams();
+            WaterRenderer::LightWaterColors wc;
+            wc.oceanClose = glm::vec4(wl.oceanCloseColor, wl.oceanShallowAlpha);
+            wc.oceanFar = glm::vec4(wl.oceanFarColor, wl.oceanDeepAlpha);
+            wc.riverClose = glm::vec4(wl.riverCloseColor, wl.waterShallowAlpha);
+            wc.riverFar = glm::vec4(wl.riverFarColor, wl.waterDeepAlpha);
+            waterRenderer->setLightWaterColors(wc);
+        }
 
         // Sync weather visual renderer with game state
         if (weather && gh) {
@@ -2307,6 +2347,7 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
         case 5:
             if (questMarkerRenderer && !questMarkerRenderer->initialize(vkCtx, perFrameSetLayout, cachedAssetManager))
                 LOG_WARNING("Quest marker renderer re-init failed (non-fatal)");
+            if (skySystem) skySystem->loadTextures(cachedAssetManager);
             if (footprintRenderer && !footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, cachedAssetManager))
                 LOG_WARNING("Footprint renderer re-init failed (non-fatal)");
             break;
@@ -2882,16 +2923,16 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     float timeOfDay = lightingManager
         ? lightingManager->getTimeOfDayHours()
         : (skybox ? skybox->getTimeOfDay() : 12.0f);
-    // Two questions, apart while the sky crossfades. The sky models are drawn
-    // whenever any is up at all; the procedural sun, moons and clouds they
-    // stand in for hand over halfway, where both are at half and a switch is
-    // least visible - rather than staying away until the last model has faded.
+    // Two questions. The sky models are drawn whenever any is up at all, each
+    // at its own weight. The procedural sky - sun, moons, stars and clouds -
+    // stays under them unless one is up past 0.99 without LightSkybox flag
+    // 0x2 'combine with the procedural sky', or the death model is
+    // (0x007f09b0, 0x007efd00). Most Northrend models carry 0x2 and show the
+    // client's sun and clouds through them; they used to be hidden at half
+    // coverage whatever the flags said.
     const bool drawSkyModels = skyboxModelRenderer_ && !skyLayers_.empty();
-    float skyModelCoverage = 0.0f;
-    if (lightingManager) {
-        for (const auto& layer : lightingManager->getSkyboxLayers()) skyModelCoverage += layer.weight;
-    }
-    const bool useOriginalSkybox = drawSkyModels && skyModelCoverage >= 0.5f;
+    const bool useOriginalSkybox = drawSkyModels && lightingManager &&
+        LightingManager::skyboxHidesProceduralSky(lightingManager->getSkyboxLayers());
 
     // ── Multithreaded secondary command buffer recording ──
     // Terrain, WMO, and M2 record on worker threads while main thread handles
@@ -3011,6 +3052,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                     lightingManager ? &lightingManager->getLightingParams() : nullptr,
                     useOriginalSkybox);
                 skyParams.sunOcclusion = sunOcclusion_;
+                skyParams.moonOcclusion = moonOcclusion_;
+                skyParams.skyboxWeight = drawSkyModels && lightingManager
+                ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers()) : 0.0f;
                 skySystem->render(cmd, perFrameSet, *camera, skyParams);
                 if (drawSkyModels) {
                     skyboxModelRenderer_->render(cmd, perFrameSet, *camera);
@@ -3216,6 +3260,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 lightingManager ? &lightingManager->getLightingParams() : nullptr,
                 useOriginalSkybox);
             skyParams.sunOcclusion = sunOcclusion_;
+            skyParams.moonOcclusion = moonOcclusion_;
+            skyParams.skyboxWeight = drawSkyModels && lightingManager
+                ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers()) : 0.0f;
             skySystem->render(currentCmd, perFrameSet, *camera, skyParams);
             if (drawSkyModels) {
                 skyboxModelRenderer_->prepareRender(frameIdx, *camera);
@@ -3493,9 +3540,13 @@ if (overlaySystem_ && waterRenderer && camera) {
             const float depthFog = 1.0f - std::exp(-depth * (canal ? 0.25f : 0.12f));
             float fogStrength = kSurfaceHandoff + depthFog * (0.75f - kSurfaceHandoff);
             fogStrength = glm::clamp(fogStrength, kSurfaceHandoff, 0.75f);
-            glm::vec4 tint = canal
-                ? glm::vec4(0.01f, 0.04f, 0.10f, fogStrength)
-                : glm::vec4(0.03f, 0.09f, 0.18f, fogStrength);
+            // In the light's fog colour - under water that is the underwater
+            // set's ch7, darkened with depth by the LiquidType row (0x007f3230)
+            // - rather than a fixed blue of our own.
+            const glm::vec3 waterFog = lightingManager
+                ? lightingManager->getLightingParams().fogColor
+                : glm::vec3(0.03f, 0.09f, 0.18f);
+            glm::vec4 tint(waterFog, fogStrength);
 
             // The seam is worked out per pixel from the surface height, so
             // there is no screen-space line to place here. Once the eye is
@@ -3518,10 +3569,8 @@ if (overlaySystem_ && waterRenderer && camera) {
 
 void Renderer::renderPostSceneOverlays(VkCommandBuffer cmd,
                                        game::GameHandler* gameHandler) {
-    // Ghost mode desaturation: cold blue-grey overlay when dead/ghost
-    if (ghostMode_ && overlaySystem_) {
-        overlaySystem_->renderOverlay(glm::vec4(0.30f, 0.35f, 0.42f, 0.45f), cmd);
-    }
+    // A ghost's world is the death light plus ffxDeath's desaturation
+    // (LightingManager::update, ScreenEffects), not a tint laid over it.
 
     // Brightness overlay, applied before the minimap so it doesn't affect UI.
     if (overlaySystem_) {
@@ -3831,6 +3880,7 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
                 if (!questMarkerRenderer->initialize(vkCtx, perFrameSetLayout, assetManager))
                     LOG_WARNING("Quest marker renderer initialization failed (non-fatal)");
             }
+            if (skySystem) skySystem->loadTextures(assetManager);
             if (footprintRenderer) {
                 if (!footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, assetManager))
                     LOG_WARNING("Footprint renderer initialization failed (non-fatal)");
@@ -4361,6 +4411,8 @@ void Renderer::renderReflectionPass() {
             // A flare is an artefact of the lens, so it belongs to the camera
             // and not to what the water is showing it.
             skyParams.sunOcclusion = 1.0f;
+            skyParams.moonOcclusion = 1.0f;
+            skyParams.drawGlare = false;
             skySystem->render(currentCmd, reflDescSet, *camera, skyParams);
         }
         if (terrainRenderer && terrainEnabled) {
@@ -4381,12 +4433,12 @@ void Renderer::renderShadowPass() {
     if (passAblation_ && passAblation_->skip(AblationPass::Shadows)) return;
     if (shadowDepthImage[0] == VK_NULL_HANDLE) return;
     if (currentCmd == VK_NULL_HANDLE) return;
-    // Shadows off still runs the pass, and the pass still clears the map and
-    // leaves it in the layout its readers expect - it simply draws nothing
-    // into it. Returning here instead left the image untransitioned while it
-    // stayed bound for sampling, which is the shape of fault that takes the
-    // device down rather than drawing something wrong.
-    const bool drawCasters = shadowsEnabled;
+    // Shadows off still runs the whole pass, casters and all: the shaders
+    // stop reading the map (shadowParams.x), and that is the only difference.
+    // Skipping the casters lost the device within a second - something they
+    // record each frame is read later in the frame, and it was not found -
+    // and returning here instead left the image untransitioned while it
+    // stayed bound for sampling. The cost is a shadow pass nobody sees.
 
     // Shadows render every frame - throttling causes visible flicker on player/NPCs
 
@@ -4476,9 +4528,7 @@ void Renderer::renderShadowPass() {
 
     // Phase 7/8: render shadow casters
     const float shadowCullRadius = shadowDistance_ * 1.35f;
-    // With shadows off the pass still begins and ends, so the map is cleared
-    // and left where its readers expect it; only the casters are skipped.
-    if (drawCasters) {
+    {
     if (terrainRenderer) {
         terrainRenderer->renderShadow(currentCmd, lightSpaceMatrix, shadowCenter, shadowCullRadius);
     }
@@ -4491,7 +4541,7 @@ void Renderer::renderShadowPass() {
     if (characterRenderer) {
         characterRenderer->renderShadow(currentCmd, lightSpaceMatrix, shadowCenter, shadowCullRadius);
     }
-    }  // drawCasters
+    }
 
     if (dynamicRendering) {
         vkCmdEndRendering(currentCmd);
@@ -4701,6 +4751,24 @@ void Renderer::renderVolumetricFog() {
         LOG_INFO("volumetricFog: extinction=", fogExtinction_, "/yd (target ", target,
                  ") layerBase=", fogLayerBase_);
     }
+}
+
+void Renderer::recordScreenEffects() {
+    if (!screenEffects_ || currentCmd == VK_NULL_HANDLE) return;
+    ScreenEffects::FrameInputs in;
+    const auto& images = vkCtx->getSwapchainImages();
+    if (worldDrawnThisFrame_ && lightingManager && currentImageIndex < images.size()) {
+        // ffxGlow at the light's LightParams.Glow, and ffxDeath while the
+        // death light is up (ScreenEffect's override, 0x004f7020).
+        if (screenGlowEnabled_) in.glow = lightingManager->getLightingParams().glow;
+        in.death = ghostMode_ ? 1.0f : 0.0f;
+        if (minimap && minimap->isEnabled() && window && window->getWidth() > 0 && window->getHeight() > 0) {
+            in.keepRect = minimap->screenUvRect(window->getWidth(), window->getHeight());
+        }
+    }
+    screenEffects_->record(currentCmd, vkCtx->getCurrentFrame(),
+                           currentImageIndex < images.size() ? images[currentImageIndex] : VK_NULL_HANDLE,
+                           vkCtx->getSwapchainExtent(), in);
 }
 
 void Renderer::recordSunShafts() {

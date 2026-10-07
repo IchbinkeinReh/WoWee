@@ -399,6 +399,27 @@ void ADTLoader::parseMCNK(std::span<const uint8_t> data, int chunkIndex, ADTTerr
         }
     }
 
+    // Baked shadow (MCSH): MCNK offsets 0x2C and 0x30, present with flag 0x1.
+    const uint32_t ofsShadow = readUInt32(data, 44);
+    const uint32_t sizeShadow = readUInt32(data, 48);
+    if ((chunk.flags & 0x1) && ofsShadow > 0 && ofsShadow + 8 <= data.size()) {
+        const uint32_t possibleMagic = readUInt32(data, ofsShadow);
+        const uint32_t skip = (possibleMagic == MCSH) ? 8 : 0;
+        const uint32_t size = skip ? readUInt32(data, ofsShadow + 4) : sizeShadow;
+        if (size >= 512 && ofsShadow + skip + 512 <= data.size()) {
+            parseMCSH(data.subspan(ofsShadow + skip, 512), (chunk.flags & 0x8000) == 0, chunk);
+        }
+    }
+
+    // Vertex shading (MCCV): MCNK offset 0x74, 145 BGRA colours.
+    const uint32_t ofsMCCV = readUInt32(data, 116);
+    if (ofsMCCV > 0 && ofsMCCV + 8 + 145 * 4 <= data.size()) {
+        const uint32_t possibleMagic = readUInt32(data, ofsMCCV);
+        const uint32_t skip = (possibleMagic == MCCV) ? 8 : 0;
+        std::copy_n(data.begin() + ofsMCCV + skip, 145 * 4, chunk.vertexShading.begin());
+        chunk.hasVertexShading = true;
+    }
+
     // Liquid (MCLQ) - vanilla/TBC per-chunk water (no MH2O in these expansions)
     // ofsLiquid at MCNK header offset 0x60, sizeLiquid at 0x64
     uint32_t ofsLiquid = readUInt32(data, 0x60);
@@ -409,6 +430,23 @@ void ADTLoader::parseMCNK(std::span<const uint8_t> data, int chunkIndex, ADTTerr
         if (sizeLiquid > skip) {
             parseMCLQ(data.subspan(ofsLiquid + skip, sizeLiquid - skip),
                       chunkIndex, chunk.flags, terrain);
+        }
+    }
+}
+
+void ADTLoader::parseMCSH(std::span<const uint8_t> data, bool fixEdges, MapChunk& chunk) {
+    if (data.size() < 512) return;
+    chunk.shadowMap.assign(64 * 64, 0);
+    for (int y = 0; y < 64; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            const uint8_t byte = data[static_cast<size_t>(y * 8 + x / 8)];
+            chunk.shadowMap[static_cast<size_t>(y * 64 + x)] = (byte >> (x % 8)) & 1u;
+        }
+    }
+    if (fixEdges) {
+        for (int i = 0; i < 64; ++i) {
+            chunk.shadowMap[static_cast<size_t>(i * 64 + 63)] = chunk.shadowMap[static_cast<size_t>(i * 64 + 62)];
+            chunk.shadowMap[static_cast<size_t>(63 * 64 + i)] = chunk.shadowMap[static_cast<size_t>(62 * 64 + i)];
         }
     }
 }

@@ -167,7 +167,26 @@ public:
 
     int getSurfaceCount() const { return static_cast<int>(surfaces.size()); }
 
+    /// The light's water colours and alphas this frame (0x008a2bf0 builds
+    /// the liquid ramps from them): an ocean runs from ch14 at alpha
+    /// OceanShallowAlpha in the shallows to ch15 at OceanDeepAlpha in the
+    /// deep, rivers and lakes from ch16 / WaterShallowAlpha to ch17 /
+    /// WaterDeepAlpha. Magma and slime keep their own.
+    struct LightWaterColors {
+        glm::vec4 oceanClose{0.0f};   // rgb, a = alpha
+        glm::vec4 oceanFar{0.0f};
+        glm::vec4 riverClose{0.0f};
+        glm::vec4 riverFar{0.0f};
+    };
+    void setLightWaterColors(const LightWaterColors& colors) {
+        lightWaterColors_ = colors;
+        hasLightWaterColors_ = true;
+    }
+
 private:
+    LightWaterColors lightWaterColors_;
+    bool hasLightWaterColors_ = false;
+
     void createWaterMesh(WaterSurface& surface);
     void destroyWaterMesh(WaterSurface& surface);
 

@@ -16,7 +16,8 @@ layout(set = 0, binding = 0) uniform PerFrame {
 };
 
 layout(push_constant) uniform Push {
-    mat4 model;
+    vec4 closeColor;  // the light's water colours, fragment stage only
+    vec4 farColor;
     float waveAmp;
     float waveFreq;
     float waveSpeed;
@@ -29,7 +30,8 @@ layout(push_constant) uniform Push {
     vec2 screenSize;
     vec2 depthRange;
     float sceneValid;
-    float pad0, pad1, pad2;
+    float lightColors;
+    float pad1, pad2;
 } push;
 
 layout(location = 0) in vec3 aPos;
@@ -144,7 +146,7 @@ GerstnerResult evaluateGerstnerWaves(vec2 pos, float time, float amp, float freq
 
 void main() {
     float time = fogParams.z;
-    vec4 worldPos = push.model * vec4(aPos, 1.0);
+    vec4 worldPos = vec4(aPos, 1.0);
 
     // Evaluate Gerstner waves using X,Y horizontal plane
     GerstnerResult waves = evaluateGerstnerWaves(

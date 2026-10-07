@@ -22,6 +22,7 @@ constexpr uint32_t MODS = 0x4D4F4453;  // Doodad sets
 constexpr uint32_t MOPV = 0x4D4F5056;  // Portal vertices
 constexpr uint32_t MOPT = 0x4D4F5054;  // Portal info
 constexpr uint32_t MOPR = 0x4D4F5052;  // Portal references
+constexpr uint32_t MFOG = 0x4D464F47;  // Fog
 
 // WMO group chunk identifiers
 constexpr uint32_t MOGP = 0x4D4F4750;  // Group header
@@ -386,6 +387,35 @@ WMOModel WMOLoader::load(const std::vector<uint8_t>& wmoData) {
                     model.portalRefs.push_back(ref);
                 }
                 core::Logger::getInstance().debug("WMO portal refs: ", model.portalRefs.size());
+                break;
+            }
+
+            case MFOG: {
+                // Fog spheres, 48 bytes each (0x007a1150 reads them as twelve
+                // dwords). Colours are BGRA, red in the third byte.
+                const auto bgra = [](uint32_t c) {
+                    return glm::vec4(static_cast<float>((c >> 16) & 0xFF) / 255.0f,
+                                     static_cast<float>((c >> 8) & 0xFF) / 255.0f,
+                                     static_cast<float>(c & 0xFF) / 255.0f,
+                                     static_cast<float>((c >> 24) & 0xFF) / 255.0f);
+                };
+                const uint32_t nFogs = chunkSize / 48;
+                for (uint32_t i = 0; i < nFogs; i++) {
+                    WMOFog fog;
+                    fog.flags = read<uint32_t>(wmoData, offset);
+                    fog.position.x = read<float>(wmoData, offset);
+                    fog.position.y = read<float>(wmoData, offset);
+                    fog.position.z = read<float>(wmoData, offset);
+                    fog.smallRadius = read<float>(wmoData, offset);
+                    fog.largeRadius = read<float>(wmoData, offset);
+                    fog.endDist = read<float>(wmoData, offset);
+                    fog.startFactor = read<float>(wmoData, offset);
+                    fog.color1 = bgra(read<uint32_t>(wmoData, offset));
+                    fog.endDist2 = read<float>(wmoData, offset);
+                    fog.startFactor2 = read<float>(wmoData, offset);
+                    fog.color2 = bgra(read<uint32_t>(wmoData, offset));
+                    model.fogs.push_back(fog);
+                }
                 break;
             }
 

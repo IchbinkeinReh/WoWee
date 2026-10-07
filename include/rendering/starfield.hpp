@@ -31,10 +31,9 @@ public:
      * @param perFrameSet Per-frame descriptor set (set 0, contains camera UBO)
      * @param timeOfDay   Time of day in hours (0-24)
      * @param cloudDensity Optional cloud density from lighting (0-1, reduces star visibility)
-     * @param fogDensity   Optional fog density from lighting (reduces star visibility)
      */
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, float timeOfDay,
-                float cloudDensity = 0.0f, float fogDensity = 0.0f);
+                float cloudDensity = 0.0f);
 
     /**
      * Update star twinkle animation

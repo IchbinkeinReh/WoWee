@@ -7,6 +7,7 @@
 
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/grass_clearing.hpp"
+#include "pipeline/wmo_loader.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -14,6 +15,7 @@
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <array>
 #include <vector>
 #include <string>
 #include <optional>
@@ -398,6 +400,21 @@ public:
      */
     bool isInsideInteriorWMO(float glX, float glY, float glZ) const;
 
+    /// The fog of the WMO interior the camera is in, as 0x007a1150 finds it:
+    /// the first group around `pos` that is neither exterior nor exterior-lit
+    /// (flags 0x48), the model's fog 0 lerped toward each of that group's fog
+    /// spheres the camera is within, farthest first, and how far the camera
+    /// is from the way out - the client walks portals to an exterior group
+    /// (0x007d8010); this is the straight distance to the nearest portal of
+    /// the group that opens onto one.
+    struct InteriorFog {
+        float end = 0.0f;           ///< yards
+        float startScalar = 0.0f;   ///< start as a fraction of end
+        glm::vec3 color{0.0f};
+        float distanceInside = 0.0f;
+    };
+    [[nodiscard]] std::optional<InteriorFog> interiorFogAt(const glm::vec3& pos) const;
+
     /**
      * Raycast against WMO bounding boxes for camera collision
      * @param origin Ray origin (e.g., character head position)
@@ -626,6 +643,9 @@ private:
         std::vector<PortalRef> portalRefs;
         // For each group: which portal refs belong to it (start index, count)
         std::vector<std::pair<uint16_t, uint16_t>> groupPortalRefs;
+        // MFOG, and each group's four indices into it (0 = none)
+        std::vector<pipeline::WMOFog> fogs;
+        std::vector<std::array<uint8_t, 4>> groupFogIndices;
 
         // Set once the textures and materials below have been populated, so a
         // resumed load skips straight to the groups it has left.
@@ -859,10 +879,10 @@ private:
     bool initialized_ = false;
 
     // Normal mapping / POM settings
-    bool normalMappingEnabled_ = true;   // on by default
+    bool normalMappingEnabled_ = false;  // off by default: the client has none
     bool deferNormalMaps_ = false;       // skip normal map gen during streaming
     float normalMapStrength_ = 0.8f;     // 0.0 = flat, 1.0 = full, 2.0 = exaggerated
-    bool pomEnabled_ = true;             // on by default
+    bool pomEnabled_ = false;            // off by default: the client has none
     int pomQuality_ = 1;                 // 0=Low(16), 1=Medium(32), 2=High(64)
     bool materialSettingsDirty_ = false; // rebuild UBOs when settings change
 

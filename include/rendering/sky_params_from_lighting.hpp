@@ -33,16 +33,17 @@ inline SkyParams skyParamsFromLighting(float timeOfDay, float gameTime,
         params.directionalDir = lighting->directionalDir;
         params.sunDir = lighting->sunDir;
         params.moonDir = lighting->moonDir;
-        params.sunColor = lighting->diffuseColor;
+        params.sunColor = lighting->sunColor;
         params.skyTopColor = lighting->skyTopColor;
         params.skyMiddleColor = lighting->skyMiddleColor;
         params.skyBand1Color = lighting->skyBand1Color;
         params.skyBand2Color = lighting->skyBand2Color;
         params.skySmogColor = lighting->skySmogColor;
         params.skyFogColor = lighting->fogColor;
+        params.cloudSunColor = lighting->cloudSunColor;
+        params.cloudShadeColor = lighting->cloudShadeColor;
+        params.cloudBaseColor = lighting->cloudBaseColor;
         params.cloudDensity = lighting->cloudDensity;
-        params.fogDensity = lighting->fogDensity;
-        params.horizonGlow = lighting->horizonGlow;
     }
     params.weatherIntensity = weatherIntensity;
     params.skyboxModelId = 0;

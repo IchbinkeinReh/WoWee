@@ -54,7 +54,8 @@ public:
     int pendingResolutionWidth = 1920;
     int pendingResolutionHeight = 1080;
     bool displaySettingsLoaded_ = false;
-    bool pendingShadows = true;
+    /// Off by default, as the client's extShadowQuality 0 (0x0078e400).
+    bool pendingShadows = false;
     float pendingShadowDistance = 300.0f;
     float pendingViewDistance = kDefaultViewDistance;
     /// How far the distance fog takes the sky's colour. See
@@ -223,13 +224,14 @@ public:
     /// default: a bug reported against a version fixed weeks ago costs both
     /// sides the whole exchange to find that out.
     bool pendingCheckForUpdates = true;
-    bool pendingNormalMapping = true;   // on by default
+    bool pendingNormalMapping = false;  // off by default: not in the client
     float pendingNormalMapStrength = 0.8f;  // 0.0-2.0
-    float pendingLensFlare = 1.0f;          // 0.0-2.0, sun flare strength
+    float pendingLensFlare = 0.0f;          // 0.0-2.0; off: the client has its glare instead
     int pendingFrameCap = 0;                // index into the frame-limit choices
-    bool pendingPOM = true;             // on by default
+    bool pendingPOM = false;            // off by default: not in the client
     bool pendingSharpStars = true;
     bool pendingSunShafts = false;      // screen-space rays from the sun (opt-in)
+    bool pendingScreenGlow = true;      // the client's ffxGlow, on by default
     int pendingPOMQuality = 1;          // 0=Low(16), 1=Medium(32), 2=High(64)
     bool pendingFSR = false;
     int pendingUpscalingMode = 0;       // 0=Off, 1=FSR1, 2=FSR3

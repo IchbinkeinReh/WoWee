@@ -94,6 +94,8 @@ public:
     /// to whatever rect the Minimap widget occupies. Blips computed against
     /// the old corner land beside the map rather than on it.
     [[nodiscard]] bool hasScreenRect() const { return haveRect_; }
+    /// Where render() puts the map, as a fraction of the window (x, y, w, h).
+    [[nodiscard]] glm::vec4 screenUvRect(int screenWidth, int screenHeight) const;
     [[nodiscard]] float screenRectX() const { return rectX_; }
     [[nodiscard]] float screenRectY() const { return rectY_; }
     [[nodiscard]] float screenRectW() const { return rectW_; }

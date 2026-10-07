@@ -29,6 +29,10 @@ layout(set = 1, binding = 4) uniform sampler2D uLayer1Alpha;
 layout(set = 1, binding = 5) uniform sampler2D uLayer2Alpha;
 layout(set = 1, binding = 6) uniform sampler2D uLayer3Alpha;
 
+// The chunk's baked shadow (MCSH), 1 lit and 0 shadowed; 1 everywhere for a
+// chunk without one.
+layout(set = 1, binding = 8) uniform sampler2D uBakedShadow;
+
 layout(set = 1, binding = 7) uniform TerrainParams {
     int layerCount;
     int hasLayer1;
@@ -43,6 +47,7 @@ layout(location = 0) in vec3 FragPos;
 layout(location = 1) in vec3 Normal;
 layout(location = 2) in vec2 TexCoord;
 layout(location = 3) in vec2 LayerUV;
+layout(location = 4) in vec3 Shading;  // MCCV, 1 neutral
 
 layout(location = 0) out vec4 outColor;
 
@@ -157,54 +162,12 @@ void main() {
         if (a3 > 0.002) finalColor = mix(finalColor, texture(uLayer3Texture, TexCoord), a3);
     }
 
-    vec3 norm = normalize(Normal);
+    // The chunk's vertex shading (MCCV) tints the textures.
+    finalColor.rgb *= Shading;
 
-    // Derivative-based normal mapping: perturb vertex normal using texture detail.
-    // Fade out with distance and near chunk edges (dFdx/dFdy are invalid across
-    // chunk draw-call boundaries, producing visible seams if not faded).
-    float bumpFade = 1.0 - smoothstep(50.0, 125.0, fragDist);
-    float edgeDist = min(min(LayerUV.x, 1.0 - LayerUV.x), min(LayerUV.y, 1.0 - LayerUV.y));
-    bumpFade *= smoothstep(0.0, 0.06, edgeDist);
-    if (bumpFade > 0.001) {
-        float lum = dot(finalColor.rgb, vec3(0.299, 0.587, 0.114));
-        float dLdx = dFdx(lum);
-        float dLdy = dFdy(lum);
-        vec3 dpdx = dFdx(FragPos);
-        vec3 dpdy = dFdy(FragPos);
-        // Unit tangents, not the raw position derivatives.
-        //
-        // cross(norm, dpdy) is as long as a pixel is wide in world space, and
-        // multiplying a luminance step by it made the perturbation grow with
-        // the size of the pixel's footprint on the ground. Standing in an inn
-        // a pixel covers a centimetre and this is invisible; looking out
-        // across a Dragonblight snowfield it covers tens of yards, so a
-        // luminance step of 0.02 became a perturbation many times longer than
-        // the unit normal it was subtracted from. The normal then pointed
-        // wherever the derivative did - constant across each triangle, because
-        // dFdx of a planar surface is - and the ground broke into hard-edged
-        // facets and streaks. Snow shows it worst: it has no real detail to
-        // enhance, so all that is amplified is sampling noise.
-        //
-        // Normalised, the strength means what it says: how far the normal
-        // tilts per unit of luminance change from one pixel to the next,
-        // whatever the pixel happens to cover.
-        vec3 tangentU = cross(norm, dpdy);
-        vec3 tangentV = cross(dpdx, norm);
-        float lenU = length(tangentU);
-        float lenV = length(tangentV);
-        if (lenU > 1e-6 && lenV > 1e-6) {
-            vec3 perturbation = (dLdx * (tangentU / lenU) + dLdy * (tangentV / lenV))
-                              * (9.0 * bumpFade);
-            // A texture edge is a step, not a slope. Left unbounded, one
-            // crossing a sharp boundary still turns the normal further than
-            // any real ground ever slopes.
-            float amount = length(perturbation);
-            if (amount > 0.7) perturbation *= 0.7 / amount;
-            vec3 candidate = norm - perturbation;
-            float len2 = dot(candidate, candidate);
-            norm = (len2 > 1e-8) ? candidate * inversesqrt(len2) : norm;
-        }
-    }
+    // The vertex normal as it is. A bump derived from the texture's own
+    // brightness was perturbed into it here; the client has nothing like it.
+    vec3 norm = normalize(Normal);
 
     vec3 lightDir2 = normalize(-lightDir.xyz);
     vec3 ambient = ambientColor.rgb * finalColor.rgb;
@@ -236,6 +199,18 @@ void main() {
     ambient = rtAmbient(rt, ambientColor.rgb) * finalColor.rgb;
 
     vec3 result = ambient + shadow * diffuse;
+
+    // The baked terrain shadow (MCSH), drawn as the client draws it when its
+    // own dynamic shadows are off: toward the shadow colour, ambient / 3, by
+    // ch8's red (0x007ee750; ambientColor.w carries it). Not over the shadow
+    // map, which already darkens the same ground.
+    if (shadowParams.x < 0.5) {
+        float baked = 1.0 - texture(uBakedShadow, LayerUV).r;
+        if (baked > 0.0) {
+            result = mix(result, ambientColor.rgb / 3.0 * finalColor.rgb,
+                         baked * clamp(ambientColor.w, 0.0, 1.0));
+        }
+    }
 
     result = applyFog(result, FragPos, fragDist);
 

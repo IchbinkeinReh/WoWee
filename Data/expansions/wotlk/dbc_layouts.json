@@ -225,7 +225,28 @@
     "Value0": 18
   },
   "LightParams": {
-    "LightParamsID": 0
+    "LightParamsID": 0,
+    "HighlightSky": 1,
+    "LightSkyboxID": 2,
+    "CloudTypeID": 3,
+    "Glow": 4,
+    "WaterShallowAlpha": 5,
+    "WaterDeepAlpha": 6,
+    "OceanShallowAlpha": 7,
+    "OceanDeepAlpha": 8
+  },
+  "LightSkybox": {
+    "ID": 0,
+    "Name": 1,
+    "Flags": 2
+  },
+  "LiquidType": {
+    "ID": 0,
+    "MaxDarkenDepth": 6,
+    "FogDarkenIntensity": 7,
+    "AmbDarkenIntensity": 8,
+    "DirDarkenIntensity": 9,
+    "LightID": 10
   },
   "Map": {
     "ID": 0,

@@ -65,6 +65,14 @@ struct MapChunk {
     // Normals (compressed)
     std::array<int8_t, 145 * 3> normals;  // X, Y, Z per vertex
 
+    // MCCV: a colour per vertex, BGRA, 0x7F the neutral value. Absent, the
+    // chunk is drawn as its textures are.
+    std::array<uint8_t, 145 * 4> vertexShading{};
+    bool hasVertexShading = false;
+    // MCSH: the baked shadow map, 64x64, one byte a texel - 1 shadowed, 0
+    // lit. Empty when the chunk has none (MCNK flag 0x1 clear).
+    std::vector<uint8_t> shadowMap;
+
     [[nodiscard]] bool hasHeightMap() const { return heightMap.isLoaded(); }
     [[nodiscard]] bool hasLayers() const { return !layers.empty(); }
 
@@ -206,6 +214,7 @@ private:
     static constexpr uint32_t MCLY = 0x4D434C59;  // Layers (ASCII "MCLY")
     static constexpr uint32_t MCRF = 0x4D435246;  // References (ASCII "MCRF")
     static constexpr uint32_t MCSH = 0x4D435348;  // Shadow map (ASCII "MCSH")
+    static constexpr uint32_t MCCV = 0x4D434356;  // Vertex shading (ASCII "MCCV")
     static constexpr uint32_t MCAL = 0x4D43414C;  // Alpha maps (ASCII "MCAL")
     static constexpr uint32_t MCLQ = 0x4D434C51;  // Liquid (deprecated) (ASCII "MCLQ")
 
@@ -230,6 +239,12 @@ private:
     static void parseMCVT(std::span<const uint8_t> data, MapChunk& chunk);
     static void parseMCNR(std::span<const uint8_t> data, MapChunk& chunk);
     static void parseMCLY(std::span<const uint8_t> data, MapChunk& chunk);
+public:
+    /// MCSH's 64 rows of 8 bytes, bit i of byte j being texel j * 8 + i, into
+    /// one byte a texel. Without MCNK flag 0x8000 the last row and column are
+    /// the ones before them, as the alpha maps' are.
+    static void parseMCSH(std::span<const uint8_t> data, bool fixEdges, MapChunk& chunk);
+private:
     static void parseMCAL(std::span<const uint8_t> data, MapChunk& chunk);
     static void parseMH2O(std::span<const uint8_t> data, ADTTerrain& terrain);
     static void parseMCLQ(std::span<const uint8_t> data, int chunkIndex,

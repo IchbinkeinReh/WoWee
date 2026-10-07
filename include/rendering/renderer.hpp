@@ -77,6 +77,7 @@ class RtScene;
 class RtLighting;
 class LootSparkles;
 class SunShafts;
+class ScreenEffects;
 class ScreenCapture;
 
 class Renderer {
@@ -242,7 +243,7 @@ private:
     // the scene pass itself (see renderWorld).
     bool waterDrawsInContinuePass() const;
 
-    /// Ghost tint, brightness and the minimap, in that order, at the end of
+    /// Brightness and the minimap, in that order, at the end of
     /// the scene pass. The threaded and single-threaded paths both finish this
     /// way and differ only in which command buffer they are recording into.
     /// The underwater tint and its waterline. One implementation, called
@@ -280,9 +281,12 @@ private:
     /// Sampled once a frame in update() and eased, because the raw answer is a
     /// yes or a no and a hill edge crossing it would snap the flare on and off.
     float sunOcclusion_ = 0.0f;
+    /// The same toward the White Lady, for her glare.
+    float moonOcclusion_ = 0.0f;
 
-    /// That line, asked of the terrain, the buildings and where the camera is.
-    [[nodiscard]] float sampleSunOcclusion() const;
+    /// The line toward `dir`, asked of the terrain, the buildings and where
+    /// the camera is. The client asks a hardware occlusion query (0x009abe00).
+    [[nodiscard]] float sampleSunOcclusion(const glm::vec3& dir) const;
 
     std::unique_ptr<TerrainManager> terrainManager;
     std::unique_ptr<PerformanceHUD> performanceHUD;
@@ -365,7 +369,7 @@ private:
     glm::mat4 lightSpaceMatrix = glm::mat4(1.0f);
     glm::vec3 shadowCenter = glm::vec3(0.0f);
     bool shadowCenterInitialized = false;
-    bool shadowsEnabled = true;
+    bool shadowsEnabled = false;
     float shadowDistance_ = 300.0f;  // Shadow frustum half-extent (default: 300 units)
     float viewDistance_ = 1200.0f;
     bool sharpStars_ = true;
@@ -378,10 +382,10 @@ public:
     void registerPreview(CharacterPreview* preview);
     void unregisterPreview(CharacterPreview* preview);
 
-    /// Held on. Turning shadows off loses the device within a second - see
-    /// the note in settings_schema.cpp - so a saved 0 from before that was
-    /// known, or any other caller, cannot switch them off.
-    void setShadowsEnabled(bool /*enabled*/) { shadowsEnabled = true; }
+    /// Whether the lighting reads the shadow map. Off, as the client's
+    /// extShadowQuality 0 is, the casters are still drawn - skipping them is
+    /// the path that lost the device - and only the shaders stop applying it.
+    void setShadowsEnabled(bool enabled) { shadowsEnabled = enabled; }
     bool areShadowsEnabled() const { return shadowsEnabled; }
     void setShadowDistance(float dist) { shadowDistance_ = glm::clamp(dist, 40.0f, 500.0f); }
     float getShadowDistance() const { return shadowDistance_; }
@@ -406,6 +410,9 @@ public:
     void setVolumetricFogDensity(float density) { volumetricFogDensity_ = glm::clamp(density, 0.0f, 3.0f); }
     /// Rays streaming from the sun across the finished picture. See SunShafts.
     void setSunShaftsEnabled(bool enabled) { sunShaftsEnabled_ = enabled; }
+    /// The client's full-screen glow, ffxGlow (on by default where shaders
+    /// are supported). See ScreenEffects.
+    void setScreenGlowEnabled(bool enabled) { screenGlowEnabled_ = enabled; }
     int getTerrainLoadRadius() const;
     int getTerrainUnloadRadius() const { return getTerrainLoadRadius() + 3; }
     void setMsaaSamples(VkSampleCountFlagBits samples);
@@ -587,6 +594,12 @@ private:
     /// picture, and a login screen or a loading screen is not one.
     bool worldDrawnThisFrame_ = false;
     void recordSunShafts();
+
+    // The client's glow and death passes (ffxGlow, ffxDeath), built from the
+    // finished frame like the shafts and drawn in the overlay pass under them.
+    std::unique_ptr<ScreenEffects> screenEffects_;
+    bool screenGlowEnabled_ = true;
+    void recordScreenEffects();
 
     // GPU-driven grass: compute cull with atomic compaction feeding an
     // indirect draw, over a population generated from terrain suitability.

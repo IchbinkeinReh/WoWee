@@ -506,6 +506,19 @@ void Minimap::compositePass(VkCommandBuffer cmd, const glm::vec3& centerWorldPos
 // Display quad (call INSIDE main render pass)
 // --------------------------------------------------------
 
+glm::vec4 Minimap::screenUvRect(int screenWidth, int screenHeight) const {
+    const float sw = static_cast<float>(screenWidth);
+    const float sh = static_cast<float>(screenHeight);
+    if (haveRect_ && rectW_ > 0.0f && rectH_ > 0.0f) {
+        return {rectX_ / sw, rectY_ / sh, rectW_ / sw, rectH_ / sh};
+    }
+    // The top-right corner at its own size, as render() places it.
+    constexpr float margin = 10.0f;
+    const float w = static_cast<float>(mapSize) / sw;
+    const float h = static_cast<float>(mapSize) / sh;
+    return {1.0f - w - margin / sw, margin / sh, w, h};
+}
+
 void Minimap::render(VkCommandBuffer cmd, const Camera& playerCamera,
                      const glm::vec3& centerWorldPos,
                      int screenWidth, int screenHeight,

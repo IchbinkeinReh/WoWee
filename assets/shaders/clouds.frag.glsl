@@ -18,15 +18,27 @@ layout(set = 0, binding = 0) uniform PerFrame {
 
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 
+// The client's clouds (Wow.exe 3.3.5a): a 128-texel texture of fractal noise
+// built on the CPU ("DNClouds0/1", 0x007efd00), cut at the light's cloud
+// cover and lit by its three cloud colours (0x007efae0):
+//   colour = ch12 + ch11 x shade + ch10 x max(0, n.l) x glow
+// with shade thinner-is-brighter and n.l the noise's slope against the sun or
+// moon, placed over the texture at a height of 64 texels. Here the texture is
+// worked out per pixel instead of uploaded; the formula is the client's.
 layout(push_constant) uniform Push {
-    vec4 cloudColor;      // xyz = DBC-derived base cloud color, w = unused
-    vec4 sunDirDensity;   // xyz = sun direction, w = density
-    vec4 windAndLight;    // x = windOffset, y = sunIntensity, z = ambient, w = unused
+    vec4 sunLit;     // rgb = ch10, w = glow (1 - 0.75 storm)
+    vec4 shade;      // rgb = ch11, w = coverage threshold, a noise byte
+    vec4 base;       // rgb = ch12, w = the light's height over the texture, texels
+    vec4 light;      // xy = the sun's or moon's texel on the texture, z = noise time
 } push;
 
 layout(location = 0) in vec3 vWorldDir;
+layout(location = 1) in vec2 vUV;
+layout(location = 2) in float vAlpha;
 
 layout(location = 0) out vec4 outColor;
+
+const float kTexels = 128.0;  // SkyCloudLOD 0, the default (0x007f1b10, 0xa41aac)
 
 // The whole depth of the fog volume at this point of the screen, for the sky:
 // it lies behind everything, so it takes all the air there is.
@@ -34,122 +46,84 @@ vec4 fogVolumeSky(vec2 uv) {
     return textureLod(uFogVolume, vec3(uv, 1.0), 0.0);
 }
 
-// --- Gradient noise (smoother than hash-based) ---
-vec2 hash2(vec2 p) {
-    p = vec2(dot(p, vec2(127.1, 311.7)),
-             dot(p, vec2(269.5, 183.3)));
-    return fract(sin(p) * 43758.5453);
+vec3 hash3(vec3 p) {
+    p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+             dot(p, vec3(269.5, 183.3, 246.1)),
+             dot(p, vec3(113.5, 271.9, 124.6)));
+    return fract(sin(p) * 43758.5453) * 2.0 - 1.0;
 }
 
-float gradientNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-
-    // Quintic interpolation for smoother results
-    vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-
-    float a = dot(hash2(i + vec2(0.0, 0.0)) * 2.0 - 1.0, f - vec2(0.0, 0.0));
-    float b = dot(hash2(i + vec2(1.0, 0.0)) * 2.0 - 1.0, f - vec2(1.0, 0.0));
-    float c = dot(hash2(i + vec2(0.0, 1.0)) * 2.0 - 1.0, f - vec2(0.0, 1.0));
-    float d = dot(hash2(i + vec2(1.0, 1.0)) * 2.0 - 1.0, f - vec2(1.0, 1.0));
-
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 0.5 + 0.5;
+// Gradient noise in about -1..1, smooth between lattice points, as the
+// client's table-driven lattice noise is (0xd38188 fades, 0xd38688 values).
+float latticeNoise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    vec3 u = f * f * (3.0 - 2.0 * f);
+    float n000 = dot(hash3(i + vec3(0, 0, 0)), f - vec3(0, 0, 0));
+    float n100 = dot(hash3(i + vec3(1, 0, 0)), f - vec3(1, 0, 0));
+    float n010 = dot(hash3(i + vec3(0, 1, 0)), f - vec3(0, 1, 0));
+    float n110 = dot(hash3(i + vec3(1, 1, 0)), f - vec3(1, 1, 0));
+    float n001 = dot(hash3(i + vec3(0, 0, 1)), f - vec3(0, 0, 1));
+    float n101 = dot(hash3(i + vec3(1, 0, 1)), f - vec3(1, 0, 1));
+    float n011 = dot(hash3(i + vec3(0, 1, 1)), f - vec3(0, 1, 1));
+    float n111 = dot(hash3(i + vec3(1, 1, 1)), f - vec3(1, 1, 1));
+    float nx00 = mix(n000, n100, u.x);
+    float nx10 = mix(n010, n110, u.x);
+    float nx01 = mix(n001, n101, u.x);
+    float nx11 = mix(n011, n111, u.x);
+    return mix(mix(nx00, nx10, u.y), mix(nx01, nx11, u.y), u.z) * 1.6;
 }
 
-// Octave count per call: the shape and its sun-ward re-sample keep all five,
-// because the self-shadow is their difference and the two have to match.
-// The warp, the erosion and the cirrus are modulators on top of it, and
-// their fourth and fifth octaves were below a pixel from any distance the
-// sky is seen at. Seven evaluations a pixel became about five.
-float fbm(vec2 p, int octaves) {
-    float val = 0.0;
-    float amp = 0.5;
-    // Rotate between octaves so ridge artifacts don't align to the axes
-    const mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
-    for (int i = 0; i < octaves; i++) {
-        val += amp * gradientNoise(p);
-        p = rot * p * 2.02;
+// The texture's octaves at texel `t`: 8, 16, 32, 64 and 128 lattice cells
+// across it, each half the last (0xaf4dc4 for LOD 0), evolving through the
+// third lattice axis rather than drifting.
+float cloudNoise(vec2 t, int octaves) {
+    float sum = 0.0;
+    float amp = 1.0;
+    float scale = 1.0 / 16.0;
+    for (int o = 0; o < octaves; ++o) {
+        sum += latticeNoise(vec3(t * scale, push.light.z + float(o) * 17.0)) * amp;
         amp *= 0.5;
+        scale *= 2.0;
     }
-    return val;
+    return sum;
 }
 
 void main() {
-    vec3 dir = normalize(vWorldDir);
-    float altitude = dir.z;
-    if (altitude < 0.0) discard;
+    vec2 t = vUV * kTexels;
 
-    vec3 sunDir = normalize(push.sunDirDensity.xyz);
-    float density = push.sunDirDensity.w;
-    float windOffset = push.windAndLight.x;
-    float sunIntensity = push.windAndLight.y;
-    float ambient = push.windAndLight.z;
+    // The noise as the texture's byte, over the cover threshold.
+    float h = cloudNoise(t, 5);
+    float k = round(clamp(h * 64.0 + 128.0, 0.0, 255.0)) - push.shade.w;
+    if (k <= 0.0) discard;
+    // 255 - 255 x 0.96^(k x 153/256) (0x007edb50).
+    float alphaByte = round(255.0 - 255.0 * pow(0.96, k * (153.0 / 256.0)));
+    if (alphaByte <= 0.0) discard;
 
-    // Project the view ray onto a flat cloud layer. The +0.08 bias tempers the
-    // extreme UV stretching right at the horizon.
-    vec2 uv = dir.xy / (altitude + 0.08);
-    vec2 wind = vec2(windOffset, windOffset * 0.6);
+    // Thinner cloud is the brighter: ((255 - alpha) / 2 + 64) / 255.
+    float shadeAmount = (floor((255.0 - alphaByte) * 0.5) + 64.0) / 255.0;
+    vec3 rgb = push.base.rgb + push.shade.rgb * shadeAmount;
 
-    // --- Cumulus layer: domain-warped FBM for billowy, irregular shapes ---
-    vec2 p = uv * 0.8 + wind;
-    vec2 q = vec2(fbm(p, 4), fbm(p + vec2(5.2, 1.3), 4));
-    float shape = fbm(p + q * 1.4, 5);
+    // The slope of the first three octaves, a texel back on each axis, as
+    // the normal; the sun or moon over the texture as the light.
+    float h3 = cloudNoise(t, 3);
+    vec2 slope = vec2(cloudNoise(t - vec2(1.0, 0.0), 3) - h3,
+                      cloudNoise(t - vec2(0.0, 1.0), 3) - h3);
+    vec3 n = vec3(slope, 1.0);
+    vec3 l = vec3(push.light.xy - t, push.base.w);
+    float lit = dot(n, l) * inversesqrt(dot(n, n) * dot(l, l));
+    if (lit > 0.0) rgb += push.sunLit.rgb * lit * push.sunLit.w;
+    rgb = min(rgb, vec3(1.0));
 
-    // Coverage: density opens the threshold; erosion breaks up the edges
-    float coverage = smoothstep(0.42 - density * 0.22, 0.74 - density * 0.10, shape);
-    float erosion = fbm(uv * 3.1 + wind * 1.6 + q, 3);
-    float cumulus = coverage * smoothstep(0.22, 0.55, erosion + coverage * 0.4);
-
-    // --- Cirrus layer: thin, stretched, faster-drifting streaks ---
-    vec2 cuv = vec2(uv.x * 0.32, uv.y * 1.5) + wind * 1.8 + vec2(3.7, 9.1);
-    float cirrus = fbm(cuv, 3) * fbm(cuv * 2.3 + 4.0, 3);
-    cirrus = smoothstep(0.16, 0.5, cirrus) * 0.30 * (0.35 + 0.65 * density);
-
-    float cloud = clamp(cumulus + cirrus * (1.0 - cumulus), 0.0, 1.0);
-
-    // Overall visibility still follows DBC density (0 = clear sky)
-    cloud *= clamp(density * 1.6, 0.0, 1.0);
-
-    // Horizon fade
-    cloud *= smoothstep(0.0, 0.15, altitude);
-    if (cloud < 0.01) discard;
-
-    // --- Lighting ---
-    float sunUp = clamp(sunDir.z, 0.0, 1.0);      // day factor
-    float sunView = max(dot(dir, sunDir), 0.0);   // view alignment with the sun
-
-    // Self-shadowing: re-sample the shape a step toward the sun; if the cloud
-    // is denser upstream, this point sits in its own shadow.
-    float towardSun = fbm(p + q * 1.4 + sunDir.xy * 0.35, 5);
-    float shadow = clamp(1.0 - (towardSun - shape) * 2.2, 0.35, 1.0);
-
-    // Thick cores read darker - sunlight doesn't penetrate deep cloud
-    float coreDarken = mix(1.0, 0.55, cumulus * cumulus);
-
-    vec3 baseColor = push.cloudColor.rgb;
-    vec3 shadowColor = baseColor * ambient * 0.75;
-    vec3 litColor = baseColor * (ambient + sunIntensity * 0.85 * sunUp);
-    vec3 cloudRgb = mix(shadowColor, litColor, shadow) * coreDarken;
-
-    // Forward scattering: thin cloud near the sun glows warm
-    float scatter = pow(sunView, 6.0) * sunIntensity * sunUp;
-    cloudRgb += vec3(1.0, 0.92, 0.82) * (1.0 - cumulus) * scatter * 0.9;
-
-    // Silver lining on sunlit cloud edges
-    float edge = smoothstep(0.0, 0.35, cloud) * (1.0 - smoothstep(0.35, 0.85, cloud));
-    cloudRgb += vec3(1.0, 0.95, 0.88) * edge * scatter * 0.6;
-
-    // --- Edge softness for alpha ---
-    float alpha = cloud * smoothstep(0.0, 0.25, cloud);
-
-    if (alpha < 0.01) discard;
+    float alpha = alphaByte / 255.0 * vAlpha;
+    if (alpha < 0.004) discard;
 
     // Behind the air, as the sky it is drawn over is: blended by alpha, so
     // the cloud and the dome under it come out with the same air in front.
     if (volumetricParams.x > 0.5) {
         vec4 clip = projection * mat4(mat3(view)) * vec4(vWorldDir, 1.0);
         vec4 air = fogVolumeSky(clip.xy / max(clip.w, 1e-4) * 0.5 + 0.5);
-        cloudRgb = cloudRgb * air.a + air.rgb;
+        rgb = rgb * air.a + air.rgb;
     }
-    outColor = vec4(cloudRgb, alpha);
+    outColor = vec4(rgb, alpha);
 }

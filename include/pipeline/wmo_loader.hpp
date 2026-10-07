@@ -72,18 +72,21 @@ struct WMODoodad {
     glm::vec4 color;           // BGRA color
 };
 
-// WMO Fog
+// WMO Fog (MFOG, 48 bytes an entry). Entry 0 is the model's own fog; the
+// others are spheres a group names in its MOGP fog indices. The client reads
+// the whole record (Wow.exe 3.3.5a 0x007a1150) and uses the first fog for
+// air and the second for liquid.
 struct WMOFog {
-    uint32_t flags;
-    glm::vec3 position;
-    float smallRadius;
-    float largeRadius;
-    float endDist;
-    float startFactor;
-    glm::vec4 color1;          // End fog color
-    float endDist2;
-    float startFactor2;
-    glm::vec4 color2;          // Start fog color (blend with color1)
+    uint32_t flags = 0;          // 0x01: radius ignored (not a sphere)
+    glm::vec3 position{0.0f};    // model space
+    float smallRadius = 0.0f;    // full weight inside this
+    float largeRadius = 0.0f;    // none outside this
+    float endDist = 0.0f;        // fog end, yards
+    float startFactor = 0.0f;    // fog start as a fraction of the end
+    glm::vec4 color1{0.0f};      // fog colour, rgb 0..1
+    float endDist2 = 0.0f;       // the same under liquid
+    float startFactor2 = 0.0f;
+    glm::vec4 color2{0.0f};
 };
 
 // WMO Portal
@@ -180,14 +183,14 @@ struct WMOModel {
     std::string sourcePath;
 
     // Root WMO data (from MOHD chunk)
-    uint32_t version;
-    uint32_t nTextures;  // Added - was missing, caused offset issues
-    uint32_t nGroups;
-    uint32_t nPortals;
-    uint32_t nLights;
-    uint32_t nDoodadNames;
-    uint32_t nDoodadDefs;
-    uint32_t nDoodadSets;
+    uint32_t version = 0;
+    uint32_t nTextures = 0;  // Added - was missing, caused offset issues
+    uint32_t nGroups = 0;
+    uint32_t nPortals = 0;
+    uint32_t nLights = 0;
+    uint32_t nDoodadNames = 0;
+    uint32_t nDoodadDefs = 0;
+    uint32_t nDoodadSets = 0;
 
     glm::vec3 ambientColor;     // MOHD ambient color (used for interior group lighting)
     glm::vec3 boundingBoxMin;

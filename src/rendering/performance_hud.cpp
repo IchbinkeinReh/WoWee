@@ -316,21 +316,6 @@ void PerformanceHUD::render(const Renderer* renderer, const Camera* camera) {
             auto* celestial = renderer->getCelestial();
             if (celestial) {
                 ImGui::Text("Sun/Moon: %s", celestial->isEnabled() ? "YES" : "NO");
-
-                // Moon phase info
-                float phase = celestial->getMoonPhase();
-                const char* phaseName = "Unknown";
-                if (phase < 0.0625f || phase >= 0.9375f) phaseName = "New";
-                else if (phase < 0.1875f) phaseName = "Wax Cresc";
-                else if (phase < 0.3125f) phaseName = "1st Qtr";
-                else if (phase < 0.4375f) phaseName = "Wax Gibb";
-                else if (phase < 0.5625f) phaseName = "Full";
-                else if (phase < 0.6875f) phaseName = "Wan Gibb";
-                else if (phase < 0.8125f) phaseName = "Last Qtr";
-                else phaseName = "Wan Cresc";
-
-                ImGui::Text("Moon: %s (%.0f%%)", phaseName, phase * 100.0f);
-                ImGui::Text("Cycling: %s", celestial->isMoonPhaseCycling() ? "YES" : "NO");
             }
 
             // Star field info

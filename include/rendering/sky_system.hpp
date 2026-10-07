@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.h>
 
 namespace wowee {
+namespace pipeline { class AssetManager; }
 namespace rendering {
 
 class Camera;
@@ -26,6 +27,7 @@ struct SkyParams {
     /// curves for them (LightingParams::sunDir, moonDir; 0x007eecc0).
     glm::vec3 sunDir{0.0f, 0.0f, 1.0f};
     glm::vec3 moonDir{0.0f, 0.0f, -1.0f};
+    /// ch9: the sun's and moons' sprite colour (0x007f3230).
     glm::vec3 sunColor{1.0f, 1.0f, 0.9f};
 
     // Sky colors (for skybox tinting/blending)
@@ -36,17 +38,29 @@ struct SkyParams {
     glm::vec3 skySmogColor{0.7f, 0.7f, 0.7f};   // ch6
     glm::vec3 skyFogColor{0.7f, 0.7f, 0.7f};    // ch7: the horizon, the fog's colour
 
+    /// The clouds' colours: ch10 sunlit, ch11 by thinness, ch12 base
+    /// (0x007efae0).
+    glm::vec3 cloudSunColor{1.0f, 1.0f, 1.0f};
+    glm::vec3 cloudShadeColor{0.5f, 0.5f, 0.5f};
+    glm::vec3 cloudBaseColor{0.3f, 0.3f, 0.3f};
+
     // Atmospheric effects
-    float cloudDensity = 0.0f;      // 0-1
-    float fogDensity = 0.0f;        // 0-1
-    float horizonGlow = 0.3f;       // 0-1
-    float weatherIntensity = 0.0f;  // 0-1 (rain/snow intensity, attenuates lens flare)
+    float cloudDensity = 0.0f;      // float band 3, the clouds' coverage
+    float weatherIntensity = 0.0f;  // 0-1, any kind of weather
     // How much of the line from the eye to the sun is blocked, 0 clear to 1
     // solid. The lens flare had no such input: it asked only whether the sun
     // was in front of the camera and on screen, so a hillside, a building or a
     // ceiling between the two changed nothing and the flare hung over the
     // terrain that was covering it.
     float sunOcclusion = 0.0f;
+    /// The same for the White Lady, for her glare.
+    float moonOcclusion = 0.0f;
+    /// The heaviest sky model up, 0..1: the glare fades under it
+    /// (0x007ef6e0).
+    float skyboxWeight = 0.0f;
+    /// Whether the sun and moon glare is drawn: it belongs to the camera, not
+    /// to a reflection of the sky.
+    bool drawGlare = true;
 
     // Time
     float timeOfDay = 12.0f;    // 0-24 hours
@@ -115,14 +129,8 @@ public:
      */
     [[nodiscard]] glm::vec3 getSunPosition(const SkyParams& params) const;
 
-    /**
-     * Enable/disable moon phase cycling
-     */
-    void setMoonPhaseCycling(bool enabled);
-
-    void setBlueChildPhase(float phase);
-
-    [[nodiscard]] float getBlueChildPhase() const;
+    /// The sun's and moons' textures, once there is an asset manager.
+    void loadTextures(pipeline::AssetManager* assetManager);
 
     // Component accessors (for direct control if needed)
     [[nodiscard]] Skybox*    getSkybox()    const { return skybox_.get(); }

@@ -1834,15 +1834,9 @@ void Application::run() {
                         LOG_INFO("Performance HUD: ", enabled ? "ON" : "OFF");
                     }
                 }
-                // No F4 shadow toggle.
-                //
-                // setShadowsEnabled ignores what it is passed and holds
-                // shadows on, because turning them off loses the device -
-                // which is why the settings panel has no control for it
-                // either. So the key did nothing, and said the opposite in
-                // the log every time: it read the flag back to decide what
-                // to print, the flag never moved, and every press logged
-                // "Shadows: OFF" while they stayed on.
+                // No F4 shadow toggle: shadows are a setting on the
+                // Graphics page (off by default, as the client's
+                // extShadowQuality 0).
 #endif
                 // F8: Debug WMO floor at current position
                 if (event.key.scancode == SDL_SCANCODE_F8 && event.key.repeat == 0) {

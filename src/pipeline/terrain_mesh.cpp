@@ -146,6 +146,14 @@ ChunkMesh TerrainMeshGenerator::generateChunkMesh(const MapChunk& chunk, int chu
         mesh.layers.push_back(layerInfo);
     }
 
+    // The baked shadow, as a texture's bytes: how lit each texel is.
+    if (chunk.shadowMap.size() == 64 * 64) {
+        mesh.shadowMap.resize(64 * 64);
+        for (size_t i = 0; i < mesh.shadowMap.size(); ++i) {
+            mesh.shadowMap[i] = chunk.shadowMap[i] ? 0 : 255;
+        }
+    }
+
     return mesh;
 }
 
@@ -226,6 +234,17 @@ std::vector<TerrainVertex> TerrainMeshGenerator::generateVertices(const MapChunk
         constexpr float alphaStep = (alphaTexels - 1.0f) / 8.0f; // 63 texels across 8 quads
         vertex.layerUV[0] = (offsetX * alphaStep + 0.5f) / alphaTexels;
         vertex.layerUV[1] = (offsetY * alphaStep + 0.5f) / alphaTexels;
+
+        // MCCV, BGRA, 0x7F neutral: the 3.3.5 terrain shaders multiply the
+        // textures by twice the colour, which is byte / 127.5 - the scale is
+        // the known behaviour of those shaders (they are in the MPQs, not
+        // Wow.exe).
+        if (chunk.hasVertexShading) {
+            const uint8_t* c = &chunk.vertexShading[static_cast<size_t>(index) * 4];
+            vertex.shading[0] = static_cast<float>(c[2]) / 127.5f;
+            vertex.shading[1] = static_cast<float>(c[1]) / 127.5f;
+            vertex.shading[2] = static_cast<float>(c[0]) / 127.5f;
+        }
 
         vertices.push_back(vertex);
     }

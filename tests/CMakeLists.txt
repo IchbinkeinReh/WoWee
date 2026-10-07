@@ -2113,6 +2113,18 @@ wowee_add_test(test_day_night
 target_compile_definitions(test_day_night PRIVATE
     WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
+# ── test_sky_client ──────────────────────────────────────────
+# The rest of the client's sky (Wow.exe 3.3.5a): the sun and moons' sizes and
+# the Blue Child's clock, the glare, the cloud dome and its cover, liquid
+# darkening, WMO interior fog, which sky models hide the procedural sky, and
+# MFOG / MCSH as the loaders read them.
+wowee_add_test(test_sky_client
+    SOURCES test_sky_client.cpp
+            ${TEST_COMMON_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/pipeline/wmo_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+
 # ── test_game_clock ──────────────────────────────────────────
 # The time of day running on from the server's time and speed. It was stored
 # at login and never advanced, so the sky stayed at the login hour.

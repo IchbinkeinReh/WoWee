@@ -238,20 +238,16 @@ void main() {
     // Windows, lamp glass and clock faces are lit like any other surface:
     // the client draws a batch by its material's blend mode and flags.
     if (isInterior != 0) {
-        // WMO interior: vertex colors (MOCV) are pre-baked lighting from the artist.
-        // The MOHD ambient color floors the vertex colors so dark spots don't go
-        // completely black.  Full shadow strength is applied but clamped so
-        // interiors never go darker than a minimum brightness.
-        // The floor is the map's own MOHD ambient, which is what the artists
-        // set as the darkest an interior gets. It used to be raised to 0.35
-        // regardless, which lifted every dark corner in every building to
-        // the same grey. A small safety floor stays for the few roots that
-        // carry no ambient at all.
+        // WMO interior: vertex colors (MOCV) are pre-baked lighting from the
+        // artist, floored by the root's MOHD ambient. No sun and no sun
+        // shadow: the client lights an interior pass with the MOHD ambient
+        // and a black direct light (Wow.exe 3.3.5a 0x007a8b10, mode 3). The
+        // 0.15 floor and the shadow clamp that were here are not the
+        // client's. How the two colours combine is in the MapObj shaders in
+        // the MPQs, not in Wow.exe; the max() is WoWee's reading.
         vec3 wmoAmbient = vec3(wmoAmbientR, wmoAmbientG, wmoAmbientB);
-        wmoAmbient = max(wmoAmbient, vec3(0.15));
         vec3 mocv = max(VertColor.rgb, wmoAmbient);
-        float clampedShadow = max(shadow, 0.45);
-        result = texColor.rgb * mocv * clampedShadow;
+        result = texColor.rgb * mocv;
     } else if (unlit != 0) {
         // Outdoor unlit surface - still receives directional shadows
         result = texColor.rgb * shadow;

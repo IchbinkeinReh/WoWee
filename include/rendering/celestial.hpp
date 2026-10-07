@@ -4,141 +4,104 @@
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
+#include "rendering/vk_texture.hpp"
+
 namespace wowee {
+namespace pipeline { class AssetManager; }
 namespace rendering {
 
 class VkContext;
 
 /**
- * Celestial body renderer (Vulkan)
+ * The client's sun and moons (Wow.exe 3.3.5a, DayNight).
  *
- * Renders sun and moon that move across the sky based on time of day.
- * Sun rises at dawn, sets at dusk. Moon is visible at night.
+ * Three textured sprites 12 units from the eye on their own time curves
+ * (0x007eecc0): Textures\sunCenter.blp, the White Lady (moon.blp) and the
+ * Blue Child (moon02.blp), all in the light's ch9 at alpha 1 - storm, cut at
+ * the horizon and faded over the last 0.4 units above it (0x007edbe0,
+ * 0x007edee0, drawn by 0x009ac660). Over them one glare each for the sun and
+ * the White Lady, Textures\sunGlare.blp and moonGlare.blp, added on: shown
+ * by the hour, by whether the body is in view and by how little sky model
+ * covers it, and growing as the camera turns to face it (0x007ee150,
+ * 0x007ee230, 0x007ef6e0, 0x009ac400). No phases, no procedural discs.
  *
  * Pipeline layout:
- *   set 0  = perFrameLayout  (camera UBO - view, projection, etc.)
- *   push   = CelestialPush   (mat4 model + vec4 celestialColor + float intensity
- *                              + float moonPhase + float animTime = 96 bytes)
+ *   set 0  = perFrameLayout  (camera UBO)
+ *   set 1  = one texture
+ *   push   = CelestialPush   (direction and size, colour)
  */
 class Celestial {
 public:
     Celestial();
     ~Celestial();
 
-    /**
-     * Initialize the renderer.
-     * @param ctx           Vulkan context
-     * @param perFrameLayout Descriptor set layout for set 0 (camera UBO)
-     */
     bool initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout);
     void shutdown();
     void recreatePipelines();
 
-private:
-    /// The one pipeline description, so the first build and every rebuild
-    /// after it cannot disagree. They did: initialize() asked for no depth
-    /// test and recreatePipelines() asked for one, so the sun and moon changed
-    /// behaviour the first time the swapchain was rebuilt.
-    VkPipeline buildPipeline(VkDevice device,
-                             const VkPipelineShaderStageCreateInfo& vertStage,
-                             const VkPipelineShaderStageCreateInfo& fragStage);
+    /// The five textures. Needs the asset manager, which arrives after the
+    /// sky is built; nothing is drawn until it has run.
+    void loadTextures(pipeline::AssetManager* assetManager);
 
-public:
+    /// What one frame draws from.
+    struct Frame {
+        float dayFraction = 0.5f;            ///< 0..1
+        glm::vec3 sunDir{0.0f, 0.0f, 1.0f};  ///< eye toward the sun, unit
+        glm::vec3 moonDir{0.0f, 0.0f, -1.0f};
+        glm::vec3 color{1.0f};               ///< ch9
+        float storm = 0.0f;                  ///< min(1, 4 x weather)
+        glm::vec3 cameraForward{0.0f, 1.0f, 0.0f};
+        float sunOcclusion = 0.0f;           ///< 0 in view, 1 hidden
+        float moonOcclusion = 0.0f;
+        float skyboxWeight = 0.0f;           ///< the heaviest sky model up
+        bool drawGlare = true;               ///< false for a reflection
+    };
 
-    /**
-     * Render celestial bodies (sun and moons).
-     * @param cmd         Command buffer to record into
-     * @param perFrameSet Per-frame descriptor set (set 0, camera UBO)
-     * @param timeOfDay   Time of day in hours (0-24)
-     * @param sunDir      From the eye toward the sun, unit length: the client's
-     *                    sun curve (daynight::sunDirection, 0x007eecc0)
-     * @param moonDir     From the eye toward the moon, the same way
-     * @param sunColor    Optional sun colour from lighting system
-     * @param gameTime    Optional server game time in seconds (deterministic moon phases)
-     */
-    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
-                float timeOfDay,
-                const glm::vec3& sunDir,
-                const glm::vec3& moonDir,
-                const glm::vec3* sunColor = nullptr,
-                float gameTime = -1.0f,
-                float nightFactor = 1.0f);
+    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Frame& frame);
 
-    /**
-     * Update celestial bodies (moon phase cycling, haze timer).
-     */
-    void update(float deltaTime);
+    /// Steps the glare toward what it should show (0x007ef6e0 by frame time).
+    void update(float deltaTime) { deltaTime_ = deltaTime; }
 
-    // --- Enable / disable ---
     void setEnabled(bool enabled) { renderingEnabled_ = enabled; }
     [[nodiscard]] bool isEnabled() const { return renderingEnabled_; }
 
-    // --- Moon phases ---
-    [[nodiscard]] float getMoonPhase() const { return whiteLadyPhase_; }
-
-    /** Set Blue Child phase (secondary moon, 0 = new, 0.5 = full, 1 = new). */
-    void setBlueChildPhase(float phase);
-    [[nodiscard]] float getBlueChildPhase() const { return blueChildPhase_; }
-
-    void setMoonPhaseCycling(bool enabled) { moonPhaseCycling_ = enabled; }
-    [[nodiscard]] bool isMoonPhaseCycling() const { return moonPhaseCycling_; }
-
-    /** Enable / disable two-moon rendering (White Lady + Blue Child). */
-    void setDualMoonMode(bool enabled) { dualMoonMode_ = enabled; }
-    [[nodiscard]] bool isDualMoonMode() const { return dualMoonMode_; }
-
-    // --- Colour query (unchanged from GL version) ---
-    [[nodiscard]] glm::vec3 getSunColor(float timeOfDay) const;
-
 private:
-    // Push constant block - MUST match celestial.vert.glsl / celestial.frag.glsl
     struct CelestialPush {
-        glm::mat4 model;         // 64 bytes
-        glm::vec4 celestialColor; // 16 bytes (xyz = colour, w unused)
-        float     intensity;     //  4 bytes
-        float     moonPhase;     //  4 bytes
-        float     animTime;      //  4 bytes
-        float     _pad;          //  4 bytes  (round to 16-byte boundary = 96 bytes total)
+        glm::vec4 dirSize;  // xyz = toward the body, w = sprite size (client units)
+        glm::vec4 color;    // rgb, a
     };
-    static_assert(sizeof(CelestialPush) == 96, "CelestialPush size mismatch");
+    static_assert(sizeof(CelestialPush) == 32, "CelestialPush size mismatch");
 
+    enum Tex { TEX_SUN = 0, TEX_MOON, TEX_BLUE_CHILD, TEX_SUN_GLARE, TEX_MOON_GLARE, TEX_COUNT };
+
+    VkPipeline buildPipeline(VkDevice device,
+                             const VkPipelineShaderStageCreateInfo& vertStage,
+                             const VkPipelineShaderStageCreateInfo& fragStage,
+                             bool additive);
     void createQuad();
     void destroyQuad();
+    void destroyTextures();
+    void drawSprite(VkCommandBuffer cmd, Tex tex, const glm::vec3& dir, float size,
+                    const glm::vec4& color);
 
-    void renderSun(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
-                   float timeOfDay,
-                   const glm::vec3& sunDir, const glm::vec3* sunColor);
-    void renderMoon(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
-                    const glm::vec3& moonDir, float nightFactor);
-    void renderBlueChild(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
-                         const glm::vec3& moonDir, float nightFactor);
-
-    [[nodiscard]] float computePhaseFromGameTime(float gameTime, float cycleDays) const;
-    void  updatePhasesFromGameTime(float gameTime);
-
-    // Vulkan objects
-    VkContext*        vkCtx_          = nullptr;
-    VkPipeline        pipeline_       = VK_NULL_HANDLE;
-    VkPipelineLayout  pipelineLayout_ = VK_NULL_HANDLE;
-    VkBuffer          vertexBuffer_   = VK_NULL_HANDLE;
-    VmaAllocation     vertexAlloc_    = VK_NULL_HANDLE;
-    VkBuffer          indexBuffer_    = VK_NULL_HANDLE;
-    VmaAllocation     indexAlloc_     = VK_NULL_HANDLE;
+    VkContext*            vkCtx_          = nullptr;
+    VkPipeline            pipeline_       = VK_NULL_HANDLE;  // sprites, alpha blended
+    VkPipeline            glarePipeline_  = VK_NULL_HANDLE;  // glare, added
+    VkPipelineLayout      pipelineLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout texSetLayout_   = VK_NULL_HANDLE;
+    VkDescriptorPool      texPool_        = VK_NULL_HANDLE;
+    VkDescriptorSet       texSets_[TEX_COUNT] = {};
+    VkTexture             textures_[TEX_COUNT];
+    VkBuffer              vertexBuffer_   = VK_NULL_HANDLE;
+    VmaAllocation         vertexAlloc_    = VK_NULL_HANDLE;
+    VkBuffer              indexBuffer_    = VK_NULL_HANDLE;
+    VmaAllocation         indexAlloc_     = VK_NULL_HANDLE;
 
     bool renderingEnabled_ = true;
-
-    // Moon phase system (two moons in Azeroth lore)
-    float whiteLadyPhase_ = 0.5f;   // 0-1, 0=new, 0.5=full
-    float blueChildPhase_ = 0.25f;  // 0-1
-    bool  moonPhaseCycling_ = true;
-    float moonPhaseTimer_   = 0.0f; // Fallback deltaTime mode
-    float sunHazeTimer_     = 0.0f; // Always-running haze animation timer
-    bool  dualMoonMode_     = true;
-
-    // WoW lunar cycle constants (game days; 1 game day = 24 real minutes)
-    static constexpr float WHITE_LADY_CYCLE_DAYS = 30.0f;
-    static constexpr float BLUE_CHILD_CYCLE_DAYS = 27.0f;
-    static constexpr float MOON_CYCLE_DURATION   = 240.0f; // Fallback: 4 minutes
+    float deltaTime_ = 0.0f;
+    // How much of each glare shows, stepped toward its target each frame.
+    float sunGlare_ = 0.0f;
+    float moonGlare_ = 0.0f;
 };
 
 } // namespace rendering

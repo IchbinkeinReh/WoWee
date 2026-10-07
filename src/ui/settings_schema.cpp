@@ -38,23 +38,18 @@ constexpr SettingDesc kSchema[] = {
      "anti-aliasing, surface detail, ground clutter and grass.\n"
      "Change any one of them afterwards and this reads Custom.",
      "Custom|Low|Medium|High|Ultra", 0},
-    // No shadows row, because turning them off crashes the client.
-    //
-    // With the casters skipped the shadow pass still begins, clears and
-    // transitions its map - all of which was written deliberately, and none of
-    // which is enough: the GPU faults within a second or so and the device is
-    // lost. GPU-assisted validation reports nothing at all before it goes, so
-    // the fault is inside a shader rather than in an API call, and it is not
-    // found yet. Until it is, the control is off the panel and shadows are held
-    // on: a setting whose only effect is to end the session is worse than a
-    // setting that is missing.
-    {"shadowdistance", "Shadow distance", SettingKind::Float, 40, 500, 10, "Graphics", "Shadows",
-     // No longer conditional on a shadows toggle: there is not one, and the
-     // stored value it used to read may still say 0 from before it went, which
-     // would grey this out for good.
+    // Off by default: the client's extShadowQuality defaults to 0, "baked
+    // terrain shadows and no dynamic ones" (0x0078e400). Turning them off
+    // used to lose the device; the casters are drawn either way now and only
+    // the lighting stops reading the map (Renderer::renderShadowPass).
+    {"shadows", "Dynamic shadows", SettingKind::Bool, 0, 0, 0, "Graphics", "Shadows",
+     "Shadows cast by the sun from everything in the world, from a\n"
+     "shadow map. Off is the original client's default look: the\n"
+     "terrain's own baked shadows.", "", 0},
+    {"shadowdistance", "Shadow distance", SettingKind::Float, 40, 500, 10, "Graphics", "",
      "How far away things still cast shadows, in yards. The shadow map\n"
      "covers this whole range, so a shorter distance also gives sharper\n"
-     "shadows close to you.", "", 300},
+     "shadows close to you.", "", 300, "shadows"},
     {"viewdistance", "View distance", SettingKind::Float, 400, 2400, 50, "Graphics", "View",
      "How far into the distance the world is drawn, in yards. The single\n"
      "largest cost in the picture: terrain, buildings and creatures are all\n"
@@ -121,8 +116,9 @@ constexpr SettingDesc kSchema[] = {
 
     {"lensflare", "Lens flare", SettingKind::Float, 0, 2, 0.1f, "Graphics", "Sky",
      "How strong the sun's flare is when it is in view. It warms to\n"
-     "amber near the horizon for the dawn and dusk look. 0 removes it.",
-     "", 1.0f},
+     "amber near the horizon for the dawn and dusk look. 0 removes it.\n"
+     "Not in the original client, which has a glare of its own.",
+     "", 0.0f},
     {"sharpstars", "Sharp stars", SettingKind::Bool, 0, 0, 0, "Graphics", "",
      "Draw the night sky's stars as crisp points. Off, they come from\n"
      "the sky's own small star texture, which goes soft at high\n"
@@ -152,13 +148,15 @@ constexpr SettingDesc kSchema[] = {
 
     {"normalmapping", "Surface bumps (normal mapping)", SettingKind::Bool, 0, 0, 0, "Detail", "Surfaces",
      "Light stone, wood, cloth and metal by their surface texture, so\n"
-     "they catch the light like the real material rather than flat paint.", "", 1},
+     "they catch the light like the real material rather than flat paint.\n"
+     "Not in the original client.", "", 0},
     {"normalmapstrength", "Bump strength", SettingKind::Float, 0, 2, 0.1f, "Detail", "",
      "How pronounced those surface bumps look. 1 is as the textures\n"
      "were made; higher exaggerates them.", "", 0.8f, "normalmapping"},
     {"parallax", "Surface depth (parallax)", SettingKind::Bool, 0, 0, 0, "Detail", "",
      "Gives bricks, cobbles and planks real depth when seen at an\n"
-     "angle, so mortar lines sink and stones stand out.", "", 1},
+     "angle, so mortar lines sink and stones stand out. Not in the\n"
+     "original client.", "", 0},
     {"parallaxquality", "Surface depth quality", SettingKind::Enum, 0, 2, 1, "Detail", "",
      "How finely each surface is traced for that depth: 16, 32 or 64\n"
      "steps. Higher looks steadier up close and costs more on big walls.",
@@ -296,6 +294,10 @@ constexpr SettingDesc kSchema[] = {
     // Gamma, on the game's own panel, is this same value on another scale -
     // GetGamma answers it divided by 50 - and both end in SetGamma, so the
     // two cannot disagree whichever a player reaches for.
+    {"screenglow", "Full-screen glow", SettingKind::Bool, 0, 0, 0, "Display", "",
+     "A soft bloom over the bright parts of the picture, as strong as\n"
+     "the zone's light asks for. The original client's ffxGlow, on by\n"
+     "default.", "", 1},
 
     // ------------------------------------------------------------------ Camera
     {"fov", "Field of view", SettingKind::Float, 45, 110, 1, "Camera", "View",

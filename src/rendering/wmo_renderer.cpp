@@ -5,6 +5,7 @@
 #include "rendering/wmo_vertex.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/wmo_renderer.hpp"
+#include "rendering/day_night.hpp"
 #include "rendering/rt_bvh.hpp"
 #include "rendering/rt_scene.hpp"
 #include "rendering/normal_map.hpp"
@@ -862,6 +863,13 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
     modelData.groupPortalRefs.resize(model.groups.size(), {0, 0});
     for (size_t gi = 0; gi < model.groups.size(); gi++) {
         modelData.groupPortalRefs[gi] = {model.groups[gi].portalStart, model.groups[gi].portalCount};
+    }
+    modelData.fogs = model.fogs;
+    modelData.groupFogIndices.resize(model.groups.size());
+    for (size_t gi = 0; gi < model.groups.size(); gi++) {
+        for (int k = 0; k < 4; ++k) {
+            modelData.groupFogIndices[gi][k] = static_cast<uint8_t>(model.groups[gi].fogIndices[k]);
+        }
     }
 
     if (!modelData.portals.empty()) {
@@ -3912,6 +3920,101 @@ bool WMORenderer::isInsideWMO(float glX, float glY, float glZ, uint32_t* outMode
 
 bool WMORenderer::isInsideInteriorWMO(float glX, float glY, float glZ) const {
     return isInsideWMOGroups(glX, glY, glZ, /*interiorOnly=*/true, nullptr);
+}
+
+std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::vec3& pos) const {
+    // Group flags the client treats as outside (0x007a1150 skips groups with
+    // either): 0x8 exterior, 0x40 exterior-lit.
+    constexpr uint32_t kOutsideFlags = 0x8 | 0x40;
+    constexpr uint32_t kExteriorFlag = 0x8;
+
+    std::vector<size_t> candidates;
+    gatherCandidates(pos - glm::vec3(0.5f), pos + glm::vec3(0.5f), candidates);
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        if (!withinWorldBounds(instance, pos.x, pos.y, pos.z)) continue;
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const ModelData& model = it->second;
+        if (model.fogs.empty()) continue;
+
+        const glm::vec3 local = glm::vec3(instance.invModelMatrix * glm::vec4(pos, 1.0f));
+        int groupIndex = -1;
+        for (size_t gi = 0; gi < model.groups.size(); ++gi) {
+            const auto& g = model.groups[gi];
+            if (g.groupFlags & kOutsideFlags) continue;
+            if (glm::all(glm::greaterThanEqual(local, g.boundingBoxMin)) &&
+                glm::all(glm::lessThanEqual(local, g.boundingBoxMax))) {
+                groupIndex = static_cast<int>(gi);
+                break;
+            }
+        }
+        if (groupIndex < 0) continue;
+
+        // Fog 0, then the group's spheres around the camera, farthest first.
+        InteriorFog out;
+        const pipeline::WMOFog& base = model.fogs[0];
+        out.end = base.endDist;
+        out.startScalar = base.startFactor;
+        out.color = glm::vec3(base.color1);
+        if (static_cast<size_t>(groupIndex) < model.groupFogIndices.size()) {
+            struct Near { const pipeline::WMOFog* fog; float dist; };
+            std::vector<Near> near;
+            for (uint8_t fi : model.groupFogIndices[groupIndex]) {
+                if (fi == 0 || fi >= model.fogs.size()) continue;
+                const pipeline::WMOFog& f = model.fogs[fi];
+                if (f.flags & 0x1) continue;
+                const float d = glm::length(f.position - local);
+                if (d < f.largeRadius) near.push_back({&f, d});
+            }
+            std::sort(near.begin(), near.end(), [](const Near& a, const Near& b) { return a.dist > b.dist; });
+            for (const Near& n : near) {
+                const float w = daynight::wmoFogSphereWeight(n.dist, n.fog->smallRadius, n.fog->largeRadius);
+                out.end = glm::mix(out.end, n.fog->endDist, w);
+                out.startScalar = glm::mix(out.startScalar, n.fog->startFactor, w);
+                out.color = glm::mix(out.color, glm::vec3(n.fog->color1), w);
+            }
+        }
+
+        // How far in: through the portals, centre to centre, to the nearest
+        // exterior group (0x007d8010 walks the portals the same way).
+        const auto portalCentre = [&](uint16_t portalIndex) {
+            glm::vec3 c(0.0f);
+            if (portalIndex >= model.portals.size()) return c;
+            const PortalData& p = model.portals[portalIndex];
+            uint32_t n = 0;
+            for (uint32_t v = p.startVertex; v < static_cast<uint32_t>(p.startVertex) + p.vertexCount &&
+                                             v < model.portalVertices.size(); ++v, ++n) {
+                c += model.portalVertices[v];
+            }
+            return n ? c / static_cast<float>(n) : c;
+        };
+        struct Step { int group; glm::vec3 at; float dist; int depth; };
+        std::vector<Step> open{{groupIndex, local, 0.0f, 0}};
+        float best = std::numeric_limits<float>::max();
+        while (!open.empty()) {
+            const Step s = open.back();
+            open.pop_back();
+            if (s.dist >= best || s.depth > 6 ||
+                static_cast<size_t>(s.group) >= model.groupPortalRefs.size()) continue;
+            const auto [start, count] = model.groupPortalRefs[s.group];
+            for (uint32_t r = start; r < static_cast<uint32_t>(start) + count && r < model.portalRefs.size(); ++r) {
+                const PortalRef& ref = model.portalRefs[r];
+                const glm::vec3 c = portalCentre(ref.portalIndex);
+                const float d = s.dist + glm::length(c - s.at);
+                if (ref.groupIndex >= model.groups.size()) continue;
+                if (model.groups[ref.groupIndex].groupFlags & kExteriorFlag) {
+                    best = std::min(best, d);
+                } else if (ref.groupIndex != s.group) {
+                    open.push_back({ref.groupIndex, c, d, s.depth + 1});
+                }
+            }
+        }
+        // No way out found: as far in as the blend goes.
+        out.distanceInside = best == std::numeric_limits<float>::max() ? 25.0f : best;
+        return out;
+    }
+    return std::nullopt;
 }
 
 float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const {

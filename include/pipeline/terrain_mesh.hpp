@@ -18,6 +18,9 @@ struct TerrainVertex {
     float normal[3];       // Normal vector
     float texCoord[2];     // Base texture coordinates
     float layerUV[2];      // Layer texture coordinates
+    /// MCCV's colour for this vertex, 1 neutral: the textures are multiplied
+    /// by it. White where the chunk has none.
+    float shading[3];
     uint8_t chunkIndex = 0;    // Which chunk this vertex belongs to
 
     TerrainVertex()  {
@@ -25,6 +28,7 @@ struct TerrainVertex {
         normal[0] = normal[1] = normal[2] = 0.0f;
         texCoord[0] = texCoord[1] = 0.0f;
         layerUV[0] = layerUV[1] = 0.0f;
+        shading[0] = shading[1] = shading[2] = 1.0f;
     }
 };
 
@@ -56,6 +60,9 @@ struct ChunkMesh {
         std::vector<uint8_t> alphaData;  // 64x64 alpha map
     };
     std::vector<LayerInfo> layers;
+
+    /// MCSH, 64x64, one byte a texel: 0 shadowed, 255 lit. Empty for none.
+    std::vector<uint8_t> shadowMap;
 
     [[nodiscard]] bool isValid() const { return !vertices.empty() && !indices.empty(); }
     [[nodiscard]] size_t getVertexCount() const { return vertices.size(); }

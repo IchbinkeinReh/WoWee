@@ -207,7 +207,18 @@
     "Value0": 18
   },
   "LightParams": {
-    "LightParamsID": 0
+    "LightParamsID": 0,
+    "HighlightSky": 1,
+    "LightSkyboxID": 2,
+    "Glow": 3,
+    "WaterShallowAlpha": 4,
+    "WaterDeepAlpha": 5,
+    "OceanShallowAlpha": 6,
+    "OceanDeepAlpha": 7
+  },
+  "LightSkybox": {
+    "ID": 0,
+    "Name": 1
   },
   "Map": {
     "ID": 0,

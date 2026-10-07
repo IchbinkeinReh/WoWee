@@ -91,6 +91,18 @@ void M2Renderer::setInstanceAnimationFrozen(uint32_t instanceId, bool frozen) {
     }
 }
 
+void M2Renderer::setInstanceAnimationFraction(uint32_t instanceId, float fraction) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    auto& inst = instances[idxIt->second];
+    inst.animSpeed = 0.0f;
+    inst.holdAtEnd = false;
+    if (inst.animDuration > 0.0f) {
+        const float f = std::clamp(fraction, 0.0f, 1.0f);
+        inst.animTime = std::min(f * inst.animDuration, inst.animDuration - 1.0f);
+    }
+}
+
 void M2Renderer::restartInstanceAnimation(uint32_t instanceId) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;

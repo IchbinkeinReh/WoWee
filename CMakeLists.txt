@@ -934,6 +934,7 @@ set(WOWEE_SOURCES
     src/rendering/hiz_system.cpp
     src/rendering/volumetric_fog.cpp
     src/rendering/sun_shafts.cpp
+    src/rendering/screen_effects.cpp
     src/rendering/screen_capture.cpp
     src/rendering/loot_sparkles.cpp
     src/rendering/grass_renderer.cpp

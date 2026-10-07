@@ -477,6 +477,10 @@ public:
 
     void setInstanceTransform(uint32_t instanceId, const glm::mat4& transform);
     void setInstanceAnimationFrozen(uint32_t instanceId, bool frozen);
+    /// Hold the current sequence at `fraction` (0..1) of its length instead of
+    /// running it on: a LightSkybox model with flag 0x1, whose animation is
+    /// the time of day (0x007ecf20).
+    void setInstanceAnimationFraction(uint32_t instanceId, float fraction);
     /// Play from the first frame, with bones to match.
     ///
     /// New instances start at a random point so placed doodads don't animate

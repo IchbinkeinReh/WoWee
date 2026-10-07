@@ -3,6 +3,7 @@
 #include <chrono>
 #include <vector>
 #include <map>
+#include <optional>
 #include <memory>
 #include <string>
 #include <glm/glm.hpp>
@@ -33,7 +34,6 @@ struct LightingParams {
     /// Float band 1: fogStart as a fraction of fogEnd. The client blends the
     /// lights' end and fraction and only then works out the start (0x007f16f0).
     float fogStartScalar = 0.1f;
-    float fogDensity = 0.001f;                      // Fog density
 
     glm::vec3 skyTopColor{0.5f, 0.7f, 1.0f};       // ch2: sky zenith
     glm::vec3 skyMiddleColor{0.7f, 0.85f, 1.0f};   // ch3
@@ -41,8 +41,37 @@ struct LightingParams {
     glm::vec3 skyBand2Color{1.0f, 0.98f, 0.9f};    // ch5
     glm::vec3 skySmogColor{0.7f, 0.7f, 0.7f};      // ch6: the band just above the horizon
 
-    float cloudDensity = 0.3f;                      // Cloud density/opacity
-    float horizonGlow = 0.3f;                       // Horizon glow intensity
+    /// ch8's red: how opaque the terrain's baked shadows (MCSH) are drawn
+    /// (0x007ee750 pairs it with ambient / 3 as the shadow colour).
+    float shadowOpacity = 1.0f;
+    /// ch9: the sun and moon sprites' colour (0x007f3230 copies DNInfo[9]
+    /// into the sun, moon and Blue Child quads, 0xd38e34/e54/f70).
+    glm::vec3 sunColor{1.0f, 1.0f, 1.0f};
+    /// The cloud texture's three colours (0x007efae0): ch10 where the sun
+    /// lights it, ch11 by how thin the cloud is, ch12 underneath everything.
+    glm::vec3 cloudSunColor{1.0f, 1.0f, 1.0f};     // ch10
+    glm::vec3 cloudShadeColor{0.5f, 0.5f, 0.5f};   // ch11
+    glm::vec3 cloudBaseColor{0.3f, 0.3f, 0.3f};    // ch12
+    /// The water's colours (0x008a2bf0 builds the liquid colour ramps from
+    /// them): ocean from ch14 in the shallows to ch15 in the deep, rivers and
+    /// lakes from ch16 to ch17.
+    glm::vec3 oceanCloseColor{0.1f, 0.3f, 0.5f};   // ch14
+    glm::vec3 oceanFarColor{0.04f, 0.16f, 0.38f};  // ch15
+    glm::vec3 riverCloseColor{0.1f, 0.3f, 0.5f};   // ch16
+    glm::vec3 riverFarColor{0.1f, 0.28f, 0.55f};   // ch17
+
+    /// Float band 3: cloud cover, 0 clear to 1 overcast (0x007efd00 reads it
+    /// at 0xd38c34 as the cloud texture's coverage).
+    float cloudDensity = 0.3f;
+
+    /// LightParams' own values, lerped with the rest (0x007ec220). Defaults
+    /// are what 0x007f3230 puts in when there is no light at all.
+    float highlightSky = 0.0f;       ///< field 1: the dawn and dusk sky glow
+    float glow = 0.5f;               ///< field 4: the full-screen glow's strength
+    float waterShallowAlpha = 0.5f;  ///< field 5
+    float waterDeepAlpha = 1.0f;     ///< field 6
+    float oceanShallowAlpha = 0.75f; ///< field 7
+    float oceanDeepAlpha = 1.0f;     ///< field 8
 };
 
 /// `a` moved `w` of the way toward `b`, as the client applies one light over
@@ -58,12 +87,25 @@ inline LightingParams lerpLightingParams(const LightingParams& a, const Lighting
     out.skyBand1Color = glm::mix(a.skyBand1Color, b.skyBand1Color, w);
     out.skyBand2Color = glm::mix(a.skyBand2Color, b.skyBand2Color, w);
     out.skySmogColor = glm::mix(a.skySmogColor, b.skySmogColor, w);
+    out.shadowOpacity = glm::mix(a.shadowOpacity, b.shadowOpacity, w);
+    out.sunColor = glm::mix(a.sunColor, b.sunColor, w);
+    out.cloudSunColor = glm::mix(a.cloudSunColor, b.cloudSunColor, w);
+    out.cloudShadeColor = glm::mix(a.cloudShadeColor, b.cloudShadeColor, w);
+    out.cloudBaseColor = glm::mix(a.cloudBaseColor, b.cloudBaseColor, w);
+    out.oceanCloseColor = glm::mix(a.oceanCloseColor, b.oceanCloseColor, w);
+    out.oceanFarColor = glm::mix(a.oceanFarColor, b.oceanFarColor, w);
+    out.riverCloseColor = glm::mix(a.riverCloseColor, b.riverCloseColor, w);
+    out.riverFarColor = glm::mix(a.riverFarColor, b.riverFarColor, w);
     out.fogStart = glm::mix(a.fogStart, b.fogStart, w);
     out.fogEnd = glm::mix(a.fogEnd, b.fogEnd, w);
     out.fogStartScalar = glm::mix(a.fogStartScalar, b.fogStartScalar, w);
-    out.fogDensity = glm::mix(a.fogDensity, b.fogDensity, w);
     out.cloudDensity = glm::mix(a.cloudDensity, b.cloudDensity, w);
-    out.horizonGlow = glm::mix(a.horizonGlow, b.horizonGlow, w);
+    out.highlightSky = glm::mix(a.highlightSky, b.highlightSky, w);
+    out.glow = glm::mix(a.glow, b.glow, w);
+    out.waterShallowAlpha = glm::mix(a.waterShallowAlpha, b.waterShallowAlpha, w);
+    out.waterDeepAlpha = glm::mix(a.waterDeepAlpha, b.waterDeepAlpha, w);
+    out.oceanShallowAlpha = glm::mix(a.oceanShallowAlpha, b.oceanShallowAlpha, w);
+    out.oceanDeepAlpha = glm::mix(a.oceanDeepAlpha, b.oceanDeepAlpha, w);
     return out;
 }
 
@@ -116,6 +158,14 @@ struct FloatBand {
 struct LightParamsProfile {
     uint32_t lightParamsId = 0;
     uint32_t lightSkyboxId = 0;
+    /// LightParams.dbc's constants (0x007ebff0 copies them into DNInfo
+    /// 0x15, 0x16 and 0x1b-0x1e), defaults as 0x007f3230 has them.
+    float highlightSky = 0.0f;
+    float glow = 0.5f;
+    float waterShallowAlpha = 0.5f;
+    float waterDeepAlpha = 1.0f;
+    float oceanShallowAlpha = 0.75f;
+    float oceanDeepAlpha = 1.0f;
 
     // 18 color channels (IntBand)
     //
@@ -145,8 +195,15 @@ struct LightParamsProfile {
         SKY_BAND2_COLOR = 5,
         SKY_SMOG_COLOR = 6,
         FOG_COLOR = 7,
+        SHADOW_COLOR = 8,
         SUN_COLOR = 9,
-        // ... more channels exist (clouds, ocean, river)
+        CLOUD_SUN_COLOR = 10,
+        CLOUD_SHADE_COLOR = 11,
+        CLOUD_BASE_COLOR = 12,
+        OCEAN_CLOSE_COLOR = 14,
+        OCEAN_FAR_COLOR = 15,
+        RIVER_CLOSE_COLOR = 16,
+        RIVER_FAR_COLOR = 17,
         COLOR_CHANNEL_COUNT = 18
     };
 
@@ -164,7 +221,6 @@ struct LightParamsProfile {
         CELESTIAL_GLOW_THROUGH = 2,
         // Channel 3 is the curve that actually varies: 0 to 5, mean 0.50.
         CLOUD_DENSITY = 3,
-        FOG_DENSITY = 3,
         // ... more channels
         FLOAT_CHANNEL_COUNT = 6
     };
@@ -184,8 +240,17 @@ struct LightParamsProfile {
  * - Places the light, the sun and the moon on the client's time curves
  *   (0x007eea90, 0x007eecc0)
  */
+/// The liquid at the camera, as 0x00780620 reports it to 0x007f3230.
+struct CameraLiquid {
+    bool submerged = false;     ///< the camera is under the surface
+    uint32_t liquidType = 0;    ///< LiquidType.dbc ID, 0 if not known
+    float depth = 0.0f;         ///< yards from the surface down to the camera
+};
+
 class LightingManager {
 public:
+    using CameraLiquid = rendering::CameraLiquid;
+
     LightingManager();
     ~LightingManager();
 
@@ -201,12 +266,18 @@ public:
      * @param gameTime Server game time in hours since midnight (-1: local time)
      * @param weatherIntensity Weather intensity 0-1, any kind of weather; the
      *        storm sets are blended in by min(1, 4 * intensity)
-     * @param cameraInLiquid Whether the camera is under a liquid surface; picks
-     *        the underwater sets
+     * @param liquid The liquid the camera is under, if any: picks the
+     *        underwater sets, and its LiquidType row darkens the light with
+     *        depth or replaces it (0x007f3230)
+     * @param deathOverride Whether the death light is up (the player is a
+     *        ghost): the map default light's death set replaces the blend
+     *        and its sky model goes up at full weight (0x007f3230 with the
+     *        override index ScreenEffect sets, 0x007ecec0)
      */
     void update(const glm::vec3& playerPos, uint32_t mapId,
                 float gameTime = -1.0f,
-                float weatherIntensity = 0.0f, bool cameraInLiquid = false);
+                float weatherIntensity = 0.0f, const CameraLiquid& liquid = {},
+                bool deathOverride = false);
 
     /**
      * Get current lighting parameters
@@ -227,6 +298,17 @@ public:
     /// (0x007f16f0). 0 or less leaves the fog end alone.
     void setFarClip(float farClip) { farClip_ = farClip; }
 
+    /// The WMO interior fog (MFOG) at the camera, if it is inside one: the
+    /// zone's fog gives way to it over the first 25 yards in (0x007f16f0,
+    /// 0x007ed1b0). Taken by the next update().
+    struct InteriorFog {
+        float end = 0.0f;
+        float startScalar = 0.0f;
+        glm::vec3 color{0.0f};
+        float distanceInside = 0.0f;
+    };
+    void setInteriorFog(const std::optional<InteriorFog>& fog) { interiorFog_ = fog; }
+
     /**
      * Get current time of day (0.0-1.0)
      */
@@ -239,7 +321,37 @@ public:
     struct SkyboxLayer {
         std::string path;
         float weight = 0.0f;   ///< 0..1, as the client accumulates it
+        /// LightSkybox.dbc's flags (field 2). 0x1: the model's animation runs
+        /// with the time of day (0x007ecf20). 0x2: the procedural sky - dome,
+        /// sun, moons and clouds - is drawn under it too (0x007f09b0).
+        uint32_t flags = 0;
+        /// The death light's model: up at full weight whatever the flags say,
+        /// and the procedural sky goes (0x007efd00 tests 0xd38b5c alone).
+        bool deathOverride = false;
     };
+    static constexpr uint32_t kSkyboxFlagTimeOfDayAnim = 0x1;
+    static constexpr uint32_t kSkyboxFlagCombineProcedural = 0x2;
+    /// Whether the procedural sky - the dome, the sun and moons, the clouds -
+    /// stays down under these models: some model is up past 0.99 without
+    /// flag 0x2, or the death model is (0x007f09b0, 0x007efd00).
+    [[nodiscard]] static bool skyboxHidesProceduralSky(const std::vector<SkyboxLayer>& layers) {
+        for (const auto& l : layers) {
+            if (l.weight > 0.99f && (l.deathOverride || (l.flags & kSkyboxFlagCombineProcedural) == 0)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    /// How much the sun and moon glare is faded by the sky models: the death
+    /// model's weight while it is up, else the heaviest one's (0x007ef6e0).
+    [[nodiscard]] static float skyboxGlareWeight(const std::vector<SkyboxLayer>& layers) {
+        float heaviest = 0.0f;
+        for (const auto& l : layers) {
+            if (l.deathOverride && l.weight > 0.0f) return l.weight < 1.0f ? l.weight : 1.0f;
+            if (l.weight > heaviest) heaviest = l.weight;
+        }
+        return heaviest < 1.0f ? heaviest : 1.0f;
+    }
     /// Every sky model the lights around the player name, heaviest first. The
     /// default light's model is up at 1; each nearby light adds its own weight
     /// to the model it names, at most 1, up to three models (0x007ed4c0).
@@ -268,6 +380,8 @@ private:
     bool loadLightParamsDbc(pipeline::AssetManager* assetManager);
 
     bool loadLightSkyboxDbc(pipeline::AssetManager* assetManager);
+    /// LiquidType.dbc's darkening and light columns (6-10).
+    bool loadLiquidTypeDbc(pipeline::AssetManager* assetManager);
 
     /**
      * Load LightIntBand.dbc and LightFloatBand.dbc for time curves
@@ -332,6 +446,17 @@ private:
     // LightParams profiles by ID
     std::map<uint32_t, LightParamsProfile> lightParamsProfiles_;
     std::map<uint32_t, std::string> lightSkyboxPaths_;
+    std::map<uint32_t, uint32_t> lightSkyboxFlags_;
+    // Every Light row by ID, for a LiquidType's own light
+    std::map<uint32_t, LightVolume> lightsById_;
+    struct LiquidTypeLight {
+        float maxDarkenDepth = 0.0f;
+        float fogDarken = 0.0f;
+        float ambDarken = 0.0f;
+        float dirDarken = 0.0f;
+        uint32_t lightId = 0;
+    };
+    std::map<uint32_t, LiquidTypeLight> liquidTypes_;
 
     // Current state
     LightingParams currentParams_;
@@ -343,6 +468,7 @@ private:
     float fogSkyBlend_ = 0.0f;
     float fogStrength_ = 1.0f;
     float farClip_ = 0.0f;
+    std::optional<InteriorFog> interiorFog_;
 
     // Last values the sky diagnostic reported, so it prints on a change
     // rather than every frame. See LightingManager::update.

@@ -1,4 +1,5 @@
 #include "rendering/sky_system.hpp"
+#include "rendering/day_night.hpp"
 #include "rendering/skybox.hpp"
 #include "rendering/celestial.hpp"
 #include "rendering/starfield.hpp"
@@ -127,50 +128,43 @@ void SkySystem::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         renderProceduralStars = !params.skyboxHasStars;
     }
 
-    if (params.useOriginalSkybox && !renderProceduralStars) {
-        if (starField_) starField_->setEnabled(false);
-        return;
-    }
-
     if (starField_) {
         starField_->setEnabled(renderProceduralStars);
         if (renderProceduralStars) {
-            const float cloudDensity = params.cloudDensity;
-            const float fogDensity   = params.fogDensity;
-            starField_->render(cmd, perFrameSet, params.timeOfDay, cloudDensity, fogDensity);
+            starField_->render(cmd, perFrameSet, params.timeOfDay, params.cloudDensity);
         }
     }
 
-    // --- Celestial bodies (sun + White Lady + Blue Child) ---
+    // Under a sky model up past 0.99 without LightSkybox flag 0x2 - or the
+    // death model - the client draws none of its own sky (0x007f09b0).
+    if (params.useOriginalSkybox) return;
+
+    // --- The sun, the White Lady and the Blue Child, and their glare ---
     if (celestial_) {
-        // Gate moon visibility on how dark the DBC sky actually is. The
-        // hardcoded 19:00 night window can precede sky darkening by hours,
-        // and full-brightness moons on a daylight sky read as extra suns.
-        float skyLum = glm::dot(params.skyTopColor, glm::vec3(0.2126f, 0.7152f, 0.0722f));
-        float nightFactor = 1.0f - glm::smoothstep(0.08f, 0.25f, skyLum);
-        celestial_->render(cmd, perFrameSet, params.timeOfDay,
-                           params.sunDir, params.moonDir, &params.sunColor, params.gameTime,
-                           nightFactor);
+        Celestial::Frame frame;
+        frame.dayFraction = params.timeOfDay / 24.0f;
+        frame.sunDir = params.sunDir;
+        frame.moonDir = params.moonDir;
+        frame.color = params.sunColor;
+        frame.storm = daynight::stormBlend(params.weatherIntensity);
+        frame.cameraForward = camera.getForward();
+        frame.sunOcclusion = params.sunOcclusion;
+        frame.moonOcclusion = params.moonOcclusion;
+        frame.skyboxWeight = params.skyboxWeight;
+        frame.drawGlare = params.drawGlare;
+        celestial_->render(cmd, perFrameSet, frame);
     }
 
-    // --- Clouds (DBC-driven colors + sun lighting) ---
+    // --- Clouds: the light's cloud colours and cover (0x007efd00) ---
     if (clouds_) {
-        // Sync cloud density with weather/DBC-driven cloud coverage.
-        // Active weather (rain/snow/storm) increases cloud density for visual consistency.
-        float effectiveDensity = params.cloudDensity;
-        if (params.weatherIntensity > 0.05f) {
-            float weatherBoost = params.weatherIntensity * 0.4f;  // storms add up to 0.4 density
-            effectiveDensity = glm::min(1.0f, effectiveDensity + weatherBoost);
-        }
-        clouds_->setDensity(effectiveDensity);
         clouds_->render(cmd, perFrameSet, params);
     }
 
-    // --- Lens flare (attenuated by atmosphere) ---
+    // --- Lens flare: not the client's, off unless chosen ---
     if (lensFlare_) {
         glm::vec3 sunPos = getSunPosition(params);
         lensFlare_->render(cmd, camera, sunPos, params.timeOfDay,
-                           params.fogDensity, params.cloudDensity,
+                           0.0f, params.cloudDensity,
                            params.weatherIntensity, params.sunOcclusion);
     }
 }
@@ -184,14 +178,8 @@ glm::vec3 SkySystem::getSunPosition(const SkyParams& params) const {
     return params.sunDir * glm::inversesqrt(lenSq) * 800.0f;
 }
 
-void SkySystem::setMoonPhaseCycling(bool enabled) {
-    if (celestial_) celestial_->setMoonPhaseCycling(enabled);
-}
-void SkySystem::setBlueChildPhase(float phase) {
-    if (celestial_) celestial_->setBlueChildPhase(phase);
-}
-float SkySystem::getBlueChildPhase() const {
-    return celestial_ ? celestial_->getBlueChildPhase() : 0.25f;
+void SkySystem::loadTextures(pipeline::AssetManager* assetManager) {
+    if (celestial_) celestial_->loadTextures(assetManager);
 }
 
 } // namespace rendering

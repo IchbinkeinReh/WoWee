@@ -569,9 +569,9 @@ public:
 private:
 
     // Normal mapping / POM settings
-    bool normalMappingEnabled_ = true;
+    bool normalMappingEnabled_ = false;  // the client has no normal maps
     float normalMapStrength_ = 0.8f;
-    bool pomEnabled_ = true;
+    bool pomEnabled_ = false;  // nor parallax
     int pomQuality_ = 1;  // 0=Low(16), 1=Medium(32), 2=High(64)
 
     // Maximum bones supported
