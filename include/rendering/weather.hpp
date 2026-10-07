@@ -1,185 +1,147 @@
 #pragma once
 
-#include <algorithm>
+#include "rendering/client_weather.hpp"
+#include "rendering/vk_texture.hpp"
 
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
-#include <vector>
+
+#include <cstdint>
+#include <memory>
+#include <random>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace wowee {
+namespace pipeline { class AssetManager; }
 namespace rendering {
 
-class Camera;
 class VkContext;
 
-/**
- * @brief Weather particle system for rain and snow
- *
- * Features:
- * - Rain particles (fast vertical drops)
- * - Snow particles (slow floating flakes)
- * - Particle recycling for efficiency
- * - Camera-relative positioning (follows player)
- * - Adjustable intensity (light, medium, heavy)
- * - Vulkan point-sprite rendering
- */
+/// The client's weather (MapWeather.cpp): rain with its splashes, snow and
+/// sand, made in packets around the camera and drawn by ports of the client's
+/// rain, patter, snowpoint and sand vertex programs. The arithmetic is in
+/// client_weather.hpp; this holds the state, the packets and the drawing.
+///
+/// The client's mist sheets (SnowMist01, WeatherMistGrainy01; 0x00786560,
+/// 0x00786e10) are not drawn.
 class Weather {
 public:
-    enum class Type {
-        NONE,
-        RAIN,
-        SNOW,
-        STORM
+    enum class Type { NONE, RAIN, SNOW, SAND };
+
+    /// What one frame tells the weather. Positions are the renderer's.
+    struct FrameInput {
+        float deltaTime = 0.0f;
+        glm::vec3 cameraPosition{0.0f};
+        glm::vec3 playerPosition{0.0f};
+        float playerYawDeg = 0.0f;   ///< the renderer's character yaw
+        bool riding = false;         ///< on a taxi
+        uint32_t viewportWidth = 0;  ///< for sand's grain size
     };
 
     Weather();
     ~Weather();
 
-    /**
-     * @brief Initialize weather system
-     * @param ctx Vulkan context
-     * @param perFrameLayout Descriptor set layout for the per-frame UBO (set 0)
-     * @return true if initialization succeeded
-     */
     [[nodiscard]] bool initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout);
+    /// Weather.dbc, read once the assets are there.
+    void loadAssets(pipeline::AssetManager* assets);
     void recreatePipelines();
-    /// The pipeline state both initialize() and recreatePipelines() need.
-    void buildPipelines(VkDevice device,
-                        const VkPipelineShaderStageCreateInfo& vertStage,
-                        const VkPipelineShaderStageCreateInfo& fragStage);
-
-    /**
-     * @brief Update weather particles
-     * @param camera Camera for particle positioning
-     * @param deltaTime Time since last frame
-     */
-    void update(const Camera& camera, float deltaTime);
-
-    /**
-     * @brief Render weather particles
-     * @param cmd Command buffer to record into
-     * @param perFrameSet Per-frame descriptor set (set 0, contains camera UBO)
-     */
-    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
-
-    /**
-     * @brief Set weather type
-     */
-    void setWeatherType(Type type) { weatherType = type; }
-    [[nodiscard]] Type getWeatherType() const { return weatherType; }
-
-    /**
-     * @brief Set weather intensity (0.0 = none, 1.0 = heavy)
-     */
-    void setIntensity(float intensity);
-    [[nodiscard]] float getIntensity() const { return intensity; }
-
-    /// How much of the weather to draw, as a fraction of what the current
-    /// weather would use. The game's Weather Detail setting, which is a
-    /// quality knob rather than a forecast: it says how heavily to draw the
-    /// rain, not how hard it is raining.
-    ///
-    /// Intensity is the weather itself and comes from the server; this
-    /// multiplies it, so turning the setting down thins every storm without
-    /// making any of them a different storm.
-    void setDensityScale(float scale) {
-        densityScale_ = std::clamp(scale, 0.0f, 1.0f);
-    }
-    [[nodiscard]] float densityScale() const { return densityScale_; }
-
-    /**
-     * @brief Enable or disable weather
-     */
-    void setEnabled(bool enabled) { this->enabled = enabled; }
-    [[nodiscard]] bool isEnabled() const { return enabled; }
-
-    /**
-     * @brief Get active particle count
-     */
-    [[nodiscard]] int getParticleCount() const;
-
-    /**
-     * @brief Zone weather configuration
-     * Provides default weather per zone for single-player mode.
-     * When connected to a server, SMSG_WEATHER overrides these.
-     */
-    struct ZoneWeather {
-        Type type = Type::NONE;
-        float minIntensity = 0.0f;     // Min intensity (varies over time)
-        float maxIntensity = 0.0f;     // Max intensity
-        float probability = 0.0f;      // Chance of weather being active (0-1)
-    };
-
-    /**
-     * @brief Set weather for a zone (used for zone-based weather configuration)
-     */
-    void setZoneWeather(uint32_t zoneId, Type type, float minIntensity, float maxIntensity, float probability);
-
-    /**
-     * @brief Update weather based on current zone (single-player mode)
-     * @param zoneId Current zone ID
-     * @param deltaTime Time since last frame
-     */
-    void updateZoneWeather(uint32_t zoneId, float deltaTime);
-
-    /**
-     * @brief Initialize default zone weather table
-     */
-    void initializeZoneWeatherDefaults();
-
-    /**
-     * @brief Clean up Vulkan resources
-     */
     void shutdown();
 
+    /// SMSG_WEATHER (0x007846a0): the Weather.dbc row the server names, how
+    /// hard, and whether to cut straight to it rather than ease over.
+    void setWeather(uint32_t weatherId, float intensity, bool abrupt);
+
+    /// The surface under a point, as the renderer can find it: the highest
+    /// within 200 yards above or below `z`, or `z - 200` (0x007ade10).
+    /// Renderer coordinates in and out.
+    void setGroundQuery(client_weather::HeightCache::Query query);
+
+    void update(const FrameInput& frame);
+    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
+
+    /// The weatherDensity setting, 0-3 (0x00784040).
+    void setDensityLevel(int level);
+    [[nodiscard]] int densityLevel() const { return densityLevel_; }
+
+    [[nodiscard]] Type getWeatherType() const;
+    /// The intensity as it stands, eased toward the server's.
+    [[nodiscard]] float getIntensity() const { return current_; }
+    [[nodiscard]] bool isEnabled() const { return active_ != client_weather::Effect::None; }
+    [[nodiscard]] int getParticleCount() const;
+
 private:
-    struct Particle {
-        glm::vec3 position;
-        glm::vec3 velocity;
-        float lifetime;
-        float maxLifetime;
+    using Effect = client_weather::Effect;
+
+    struct Packet {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
+        void* mapped = nullptr;
+        VkBuffer splashBuffer = VK_NULL_HANDLE;
+        VmaAllocation splashAllocation = VK_NULL_HANDLE;
+        void* splashMapped = nullptr;
+        uint32_t count = 0;
+        uint32_t splashCount = 0;
+        double base = 0.0;   ///< the weather clock it counts from
+        float gone = 0.0f;   ///< from base, when its last particle is gone
+        bool open = true;
+        uint64_t freeAfterFrame = 0;
     };
 
-    void resetParticles(const Camera& camera);
-    void updateParticle(Particle& particle, const glm::vec3& cameraPos, float deltaTime);
-    [[nodiscard]] glm::vec3 getRandomPosition(const glm::vec3& center) const;
+    struct Texture {
+        VkTexture texture;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+    };
 
-    // Vulkan objects
-    VkContext* vkCtx = nullptr;
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    bool buildPipelines();
+    Packet* takePacket();
+    void retire(std::unique_ptr<Packet> packet);
+    void clearPackets();
+    void spawn(float dt, const client_weather::SpawnContext& ctx);
+    VkDescriptorSet textureSet(const std::string& path);
+    VkDescriptorSet loadedSet(const std::string& path) const;
 
-    // Dynamic mapped buffer for particle positions (updated every frame)
-    ::VkBuffer dynamicVB = VK_NULL_HANDLE;
-    VmaAllocation dynamicVBAlloc = VK_NULL_HANDLE;
-    VmaAllocationInfo dynamicVBAllocInfo{};
-    VkDeviceSize dynamicVBSize = 0;
+    VkContext* vkCtx_ = nullptr;
+    VkDescriptorSetLayout perFrameLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout textureLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
+    VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline streakPipeline_ = VK_NULL_HANDLE;
+    VkPipeline splashPipeline_ = VK_NULL_HANDLE;
+    VkPipeline pointPipeline_ = VK_NULL_HANDLE;
 
-    // Particles
-    std::vector<Particle> particles;
-    std::vector<glm::vec3> particlePositions;  // For rendering
+    pipeline::AssetManager* assets_ = nullptr;
+    std::unordered_map<uint32_t, client_weather::WeatherRow> rows_;
+    std::unordered_map<std::string, std::unique_ptr<Texture>> textures_;
+    std::unique_ptr<Texture> blank_;
 
-    // Weather parameters
-    bool enabled = false;
-    Type weatherType = Type::NONE;
-    float intensity = 0.5f;
-    float densityScale_ = 1.0f;
+    // The state 0x007846a0 and 0x0078d170 keep.
+    Effect active_ = Effect::None;    ///< the effect whose packets these are
+    Effect pending_ = Effect::None;   ///< to change to, when changePending_
+    bool changePending_ = false;
+    bool smooth_ = true;              ///< not abrupt: wait for the old to fall
+    bool stopping_ = false;           ///< the old effect makes no more
+    glm::vec3 color_{1.0f};
+    std::string texture_;
+    float target_ = 0.0f, from_ = 0.0f, current_ = 0.0f;
+    double easeStart_ = 0.0;
+    int densityLevel_ = client_weather::kDefaultDensityLevel;
+    bool haveWeather_ = false;
+    uint32_t weatherId_ = 0;
 
-    // Particle system parameters
-    static constexpr int MAX_PARTICLES = 2000;
-    static constexpr float SPAWN_VOLUME_SIZE = 100.0f;  // Size of spawn area around camera
-    static constexpr float SPAWN_HEIGHT = 80.0f;        // Height above camera to spawn
+    double now_ = 0.0;
+    uint64_t frame_ = 0;
+    uint32_t viewportWidth_ = 0;
+    std::vector<std::unique_ptr<Packet>> packets_;
+    std::vector<std::unique_ptr<Packet>> freePackets_;
 
-    // Zone-based weather
-    std::unordered_map<uint32_t, ZoneWeather> zoneWeatherTable_;
-    uint32_t currentWeatherZone_ = 0;
-    float zoneWeatherTimer_ = 0.0f;         // Time accumulator for weather cycling
-    float zoneWeatherCycleDuration_ = 0.0f;  // Current cycle length
-    bool zoneWeatherActive_ = false;         // Is zone weather currently active?
-    float targetIntensity_ = 0.0f;           // Target intensity for smooth transitions
-    bool zoneWeatherInitialized_ = false;
+    client_weather::HeightCache ground_;
+    client_weather::VelocityWindow velocity_;
+    glm::vec3 lastPlayer_{0.0f};
+    bool havePlayer_ = false;
+    std::mt19937 rng_;
 };
 
 } // namespace rendering

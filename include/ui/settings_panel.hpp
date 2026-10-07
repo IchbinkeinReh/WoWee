@@ -210,7 +210,7 @@ public:
     /// another store beside the one the panel wrote.
     int pendingGroundClutterDistance = 140;   ///< yards
     int pendingParticleDensity = 100;         ///< percent of what an effect asks for
-    int pendingWeatherDetail = 3;             ///< 0 none, 3 full
+    int pendingWeatherDetail = 2;             ///< weatherDensity 0-3, "2" as the client (0x00787780)
     int pendingEnvironmentDetail = 100;       ///< percent
     int pendingTextureFiltering = 4;          ///< 0 off, then 2x 4x 8x 16x
     // Grass, as percentages of the generator's own defaults. Separate from
