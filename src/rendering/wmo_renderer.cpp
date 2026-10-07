@@ -512,48 +512,25 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
     // IMPORTANT: mat.texture1 is a byte offset into MOTX, not an array index!
     // We need to convert it using the textureOffsetToIndex map
     core::Logger::getInstance().debug("  textureOffsetToIndex map has ", model.textureOffsetToIndex.size(), " entries");
-    static int matLogCount = 0;
-    auto resolveTextureIndex = [&](uint32_t textureField) -> uint32_t {
-        auto it = model.textureOffsetToIndex.find(textureField);
-        if (it != model.textureOffsetToIndex.end()) {
-            return it->second;
-        }
-        // Some files may store direct index instead of MOTX byte offset.
-        if (textureField < model.textures.size()) {
-            return textureField;
-        }
-        return std::numeric_limits<uint32_t>::max();
-    };
-
+    // 0x007d7710: a material's texture is texture_1's name, MOTX plus its
+    // offset, as it is - or "createcrappygreentexture.blp" when that name is
+    // empty. Nothing falls back to texture_2 or texture_3. MOTX's empty
+    // entries are not in textureOffsetToIndex, so an offset missing from it
+    // names nothing.
+    uint32_t emptyNameTexture = std::numeric_limits<uint32_t>::max();
     for (size_t i = 0; i < model.materials.size(); i++) {
         const auto& mat = model.materials[i];
-        uint32_t texIndex = 0;  // Default to first texture
-        const uint32_t t1 = resolveTextureIndex(mat.texture1);
-        const uint32_t t2 = resolveTextureIndex(mat.texture2);
-        const uint32_t t3 = resolveTextureIndex(mat.texture3);
-
-        // Prefer first valid non-empty texture among texture1/2/3.
-        auto pickValid = [&](uint32_t idx) -> bool {
-            if (idx == std::numeric_limits<uint32_t>::max()) return false;
-            if (idx >= model.textures.size()) return false;
-            if (model.textures[idx].empty()) return false;
-            texIndex = idx;
-            return true;
-        };
-        if (!pickValid(t1)) {
-            if (!pickValid(t2)) {
-                pickValid(t3);
-            }
+        if (!model.textureOffsetToIndex.count(mat.texture1) &&
+            emptyNameTexture == std::numeric_limits<uint32_t>::max()) {
+            emptyNameTexture = static_cast<uint32_t>(modelData.textures.size());
+            modelData.textures.push_back(loadTexture(pipeline::wmo_doodad_light::kEmptyTextureName));
+            modelData.textureNames.push_back(pipeline::wmo_doodad_light::kEmptyTextureName);
         }
-
-        if (matLogCount < 20) {
-            core::Logger::getInstance().debug("  Material ", i,
-                ": tex1=", mat.texture1, "->", t1,
-                " tex2=", mat.texture2, "->", t2,
-                " tex3=", mat.texture3, "->", t3,
-                " chosen=", texIndex);
-            matLogCount++;
-        }
+        const uint32_t texIndex = pipeline::wmo_doodad_light::materialTextureIndex(
+            model.textureOffsetToIndex, mat.texture1, emptyNameTexture);
+        const auto t2It = model.textureOffsetToIndex.find(mat.texture2);
+        const uint32_t t2 = t2It != model.textureOffsetToIndex.end()
+                                ? t2It->second : std::numeric_limits<uint32_t>::max();
 
         modelData.materialTextureIndices.push_back(texIndex);
         modelData.materialBlendModes.push_back(mat.blendMode);

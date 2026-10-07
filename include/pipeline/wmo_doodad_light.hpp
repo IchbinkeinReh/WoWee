@@ -27,6 +27,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <unordered_map>
 #include <optional>
 #include <vector>
 
@@ -325,6 +326,20 @@ inline BatchLights batchLights(const GroupDraw& g, BatchKind kind, uint32_t mate
 inline uint32_t materialShader(uint32_t momtShader, bool texture2Named) {
     if ((momtShader == 3 || momtShader == 5 || momtShader == 6) && !texture2Named) return 4;
     return momtShader;
+}
+
+/// What 0x007d7710 makes a material's texture from when texture_1's name is
+/// empty.
+inline constexpr char kEmptyTextureName[] = "createcrappygreentexture.blp";
+
+/// The texture a material draws with (0x007d7710): texture_1's, found by its
+/// MOTX offset, and never texture_2's or texture_3's. An offset that names no
+/// texture (MOTX's empty entries are not in the map) is the empty name, whose
+/// texture is emptyNameIndex.
+inline uint32_t materialTextureIndex(const std::unordered_map<uint32_t, uint32_t>& offsetToIndex,
+                                     uint32_t texture1Offset, uint32_t emptyNameIndex) {
+    const auto it = offsetToIndex.find(texture1Offset);
+    return it != offsetToIndex.end() ? it->second : emptyNameIndex;
 }
 
 enum class SurfaceProgram : uint8_t {

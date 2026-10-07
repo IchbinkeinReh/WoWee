@@ -7,6 +7,9 @@
 
 #include "pipeline/wmo_doodad_light.hpp"
 
+#include <string>
+#include <unordered_map>
+
 namespace wl = wowee::pipeline::wmo_doodad_light;
 
 TEST_CASE("a MODD colour splits into a dim ambient and a bright light", "[wmo][doodad-light]") {
@@ -343,4 +346,15 @@ TEST_CASE("Env, EnvMetal and Composite without a texture_2 are Opaque", "[wmo]")
     CHECK(wl::materialShader(0, false) == 0);
     CHECK(wl::materialShader(1, false) == 1);
     CHECK(wl::materialShader(4, false) == 4);
+}
+
+TEST_CASE("a WMO material draws texture_1, or the empty name's texture") {
+    // 0x007d7710: MOTX + texture_1, "createcrappygreentexture.blp" if empty.
+    using wowee::pipeline::wmo_doodad_light::materialTextureIndex;
+    const std::unordered_map<uint32_t, uint32_t> offsets{{0u, 0u}, {20u, 1u}, {44u, 2u}};
+    CHECK(materialTextureIndex(offsets, 20u, 9u) == 1u);
+    // An empty texture_1 (an offset at MOTX padding) never takes texture_2.
+    CHECK(materialTextureIndex(offsets, 43u, 9u) == 9u);
+    CHECK(std::string(wowee::pipeline::wmo_doodad_light::kEmptyTextureName) ==
+          "createcrappygreentexture.blp");
 }
