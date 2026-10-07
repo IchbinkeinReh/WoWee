@@ -132,12 +132,10 @@ public:
     // Render bounds lookup (for click targeting / selection) - delegates to EntitySpawner
     bool getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, float& outRadius) const;
     bool getRenderFootZForGuid(uint64_t guid, float& outFootZ) const;
-    /// Light a game object's model while the player is pressing on it.
-    ///
-    /// A game object is used rather than selected, so it has no circle under
-    /// it; the press lighting the model is what says the click landed on this
-    /// one. Guid 0 takes the light off whatever had it.
-    void setPressedGameObject(uint64_t guid);
+    /// The game object highlight on the mouseover (0x0051f790 calls
+    /// 0x00743c70 on the new mouseover, 0x00743bc0 on the old). Guid 0, or
+    /// anything not a game object, takes it off whatever had it.
+    void setHighlightedGameObject(uint64_t guid);
     bool getRenderPositionForGuid(uint64_t guid, glm::vec3& outPos) const;
 
     // Character skin composite state - delegated to AppearanceComposer
@@ -371,6 +369,10 @@ private:
     game::Gender playerGender_ = game::Gender::MALE;
     game::Class playerClass_ = game::Class::WARRIOR;
     uint64_t spawnedPlayerGuid_ = 0;
+    /// What setHighlightedGameObject last lit: the instance and whether it is
+    /// a WMO, so a frame with the same mouseover does no work.
+    uint32_t highlightedInstance_ = 0;
+    int highlightedKind_ = 0;  ///< 0 none, 1 M2, 2 WMO
     uint32_t spawnedAppearanceBytes_ = 0;
     uint8_t spawnedFacialFeatures_ = 0;
 

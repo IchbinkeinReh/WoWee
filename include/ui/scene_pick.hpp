@@ -200,6 +200,14 @@ struct ScenePick {
         if (objectGuid != 0) return objectGuid;
         return 0;
     }
+
+    /// The one object the pointer rests on, the client's mouseover: what a
+    /// click would act on, or else the tracked object a click would not use
+    /// (an anvil, a forge).
+    [[nodiscard]] uint64_t mouseover() const {
+        const uint64_t guid = resolve();
+        return guid != 0 ? guid : mouseoverObjectGuid;
+    }
 };
 
 /// Called for every entity the ray hits, so a caller can gather what only it

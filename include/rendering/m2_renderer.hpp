@@ -256,11 +256,8 @@ struct M2Instance {
     /// open door swung open and shut itself, over and over.
     bool holdAtEnd = false;
 
-    /// Lit while the player is pressing on this instance: 0 none, 1 full.
-    ///
-    /// A game object has no selection circle - it is used rather than selected
-    /// - so the press is the only thing that can say the click landed on this
-    /// one and not the scenery beside it.
+    /// The game object highlight, 0 or 1: the light's ambient added to the
+    /// model's (0x00743c70 sets +0x18c..0x194, 0x0082e140 adds them).
     float highlight = 0.0f;
     /// Lit as a doodad of a WMO interior group (pipeline::wmo_doodad_light):
     /// by its own ambient and one direct light from a fixed direction, with
@@ -543,7 +540,7 @@ public:
     void setInstanceAnimationHeld(uint32_t instanceId, uint32_t animationId,
                                   bool skipToEnd);
 
-    /// Light an instance while it is being pressed on. 0 clears it.
+    /// The game object highlight (M2Instance::highlight). 0 clears it.
     void setInstanceHighlight(uint32_t instanceId, float amount);
     /// See M2Instance::fade.
     void setInstanceFade(uint32_t instanceId, float alpha);
@@ -933,7 +930,7 @@ private:
         int32_t useBones;          //  4 bytes @ offset 76
         int32_t boneBase;          //  4 bytes @ offset 80
         int32_t boneCount;         //  4 bytes @ offset 84 - clamps skinning reads
-        float highlight = 0.0f;    //  4 bytes @ offset 88 - pressed-on lift
+        float highlight = 0.0f;    //  4 bytes @ offset 88 - game object highlight
         int32_t flags = {};        //  4 bytes @ offset 92 - kInstanceInteriorLit
         // The texture matrix's linear part, rows (m00, m01) and (m10, m11);
         // uvOffset is its translation. Identity is (1, 0, 0, 1).

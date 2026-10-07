@@ -5484,26 +5484,34 @@ bool Application::getRenderFootZForGuid(uint64_t guid, float& outFootZ) const {
     return false;
 }
 
-void Application::setPressedGameObject(uint64_t guid) {
+void Application::setHighlightedGameObject(uint64_t guid) {
     if (!renderer) return;
     auto* m2 = renderer->getM2Renderer();
     auto* wmo = renderer->getWMORenderer();
-    if (!m2) return;
-    // Cleared first, always: a press that moves from one object to another has
-    // to take the light off the first, and the release clears with guid 0.
-    m2->clearInstanceHighlights();
-    if (wmo) wmo->clearInstanceHighlights();
-    if (guid == 0 || !entitySpawner_) return;
-    const auto& objects = entitySpawner_->getGameObjectInstances();
-    auto it = objects.find(guid);
-    if (it == objects.end()) return;
-    // A building drawn as a WMO gets the light's ambient added into its c29
-    // (0x007964a0 compares the WMO's GUID with 0x00743c70's, 0x007a8430).
-    if (it->second.isWmo) {
-        if (wmo) wmo->setInstanceHighlight(it->second.instanceId, true);
-        return;
+    // Resolved every frame: the object's model can arrive, or be replaced,
+    // while the pointer rests on it.
+    uint32_t instance = 0;
+    int kind = 0;
+    if (guid != 0 && entitySpawner_) {
+        const auto& objects = entitySpawner_->getGameObjectInstances();
+        auto it = objects.find(guid);
+        if (it != objects.end()) {
+            instance = it->second.instanceId;
+            kind = it->second.isWmo ? 2 : 1;
+        }
     }
-    m2->setInstanceHighlight(it->second.instanceId, 1.0f);
+    if (instance == highlightedInstance_ && kind == highlightedKind_) return;
+    highlightedInstance_ = instance;
+    highlightedKind_ = kind;
+    // 0x00743bc0 on the old one: a walk rather than the remembered id, which
+    // a despawn could have handed to another model.
+    if (m2) m2->clearInstanceHighlights();
+    if (wmo) wmo->clearInstanceHighlights();
+    // 0x00743c70 on the new one. A WMO gets the light's ambient added into
+    // its c29 (0x007964a0 compares its GUID with the one recorded here,
+    // 0x007a8430); an M2 gets it in +0x18c..0x194, added to its ambient.
+    if (kind == 2 && wmo) wmo->setInstanceHighlight(instance, true);
+    if (kind == 1 && m2) m2->setInstanceHighlight(instance, 1.0f);
 }
 
 bool Application::getRenderPositionForGuid(uint64_t guid, glm::vec3& outPos) const {

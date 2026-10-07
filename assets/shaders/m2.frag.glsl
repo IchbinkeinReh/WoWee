@@ -319,6 +319,12 @@ void main() {
     vec3 ldir = normalize(-lightDir.xyz);
     float diff = max(dot(norm, ldir), 0.0);
 
+    // The game object highlight: 0x00743c70 sets the model's +0x18c..0x194
+    // to the light's ambient bytes (0xd38cac / 255), and 0x0082e140 adds
+    // that into the model's ambient (+0x1ac) on top of the scene's.
+    const vec3 highlightAmbient = vHighlight > 0.0
+        ? round(clamp(ambientColor.rgb, 0.0, 1.0) * 255.0) / 255.0 : vec3(0.0);
+
     // The light the diffuse carries, which the stages then combine with.
     vec3 light;
     if (unlit != 0) {
@@ -336,7 +342,7 @@ void main() {
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, vInteriorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
         // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct).
-        light = clamp(vInteriorAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0);
+        light = clamp(vInteriorAmbient + highlightAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0);
     } else {
         // Ambient and diffuse only. The client lights an M2 batch with the
         // fixed-function light (FUN_0081fb10) and no specular term; its
@@ -367,7 +373,7 @@ void main() {
         // A game object takes its own: its ambient as it eases, its direct
         // light as scaled in the terrain's baked shadow (0x007a1e90).
         const bool worldObject = (vInteriorLit & 4) != 0;
-        vec3 ambient = worldObject ? vInteriorAmbient : ambientColor.rgb;
+        vec3 ambient = (worldObject ? vInteriorAmbient : ambientColor.rgb) + highlightAmbient;
         vec3 direct = worldObject ? vInteriorDirect.rgb : lightColor.rgb;
         // The Diffuse_* programs' light: clamp(ambient + clamp(N.L) x direct),
         // the direct light no more than one a channel (0x00873ca0), then the
@@ -422,15 +428,6 @@ void main() {
         if (vFadeAlpha <= bayerDither4x4(ivec2(gl_FragCoord.xy))) discard;
         outAlpha = texColor.a;
     }
-    // Pressed on. The real client lifts the whole model while the button is
-    // down over it, which is what says "this one, and the click landed": a
-    // warm brightening rather than a tint, so a dark door reads as lit and a
-    // pale one does not blow out.
-    if (vHighlight > 0.0) {
-        float lift = clamp(vHighlight, 0.0, 1.0);
-        result = result * (1.0 + 0.6 * lift) + vec3(0.22, 0.19, 0.10) * lift;
-    }
-
     if (blendMultiplies()) {
         // The client (FUN_0081fe90) draws a multiply unlit, with no diffuse
         // and an emissive of 1.0 (Mod) or 0.5 (Mod2x), whatever the alpha:

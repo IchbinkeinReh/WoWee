@@ -1320,9 +1320,8 @@ bool GameScreen::drawWorldObjectCursor(game::GameHandler& gameHandler,
     // lets the pointer rest on - an anvil, a forge - which it names without a
     // cursor of its own. Scenery it does not track (a signpost, a banner) gets
     // neither (0x004f8190, 0x0070f580).
-    uint64_t guid = pick.resolve();
-    const bool usable = guid != 0;
-    if (guid == 0) guid = pick.mouseoverObjectGuid;
+    const bool usable = pick.resolve() != 0;
+    const uint64_t guid = pick.mouseover();
     if (guid == 0) return false;
     auto entity = gameHandler.getEntityManager().getEntity(guid);
     if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
@@ -1949,6 +1948,11 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
     // Cursor affordance: show hand cursor over interactable entities.
     // Not while the cursor is over a frame FrameXML owns: ImGui has never heard
     // of those, so its own answer is no wherever they are.
+    // The game object highlight follows the mouseover (0x0051f790 calls
+    // 0x00743c70 on the new one, 0x00743bc0 on the old) when the interface is
+    // shown (0x00ac80a8, SetUIVisibility, 0x00517c20) or the unitHighlights
+    // cvar is set. The interface is always shown here, so always.
+    uint64_t highlightGuid = 0;
     if (!io.WantCaptureMouse && !frameXmlOwnsMouse()) {
         auto* renderer = services_.renderer;
         auto* camera = renderer ? renderer->getCamera() : nullptr;
@@ -1969,7 +1973,14 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             if (!drawVendorCursor(gameHandler, hoverPick)) {
                 drawWorldObjectCursor(gameHandler, hoverPick);
             }
+            highlightGuid = hoverPick.mouseover();
         }
+    }
+    {
+        auto entity = highlightGuid ? gameHandler.getEntityManager().getEntity(highlightGuid)
+                                    : nullptr;
+        core::Application::getInstance().setHighlightedGameObject(
+            entity && entity->getType() == game::ObjectType::GAMEOBJECT ? highlightGuid : 0);
     }
 
     // Left-click targeting: only on mouse-up if the mouse didn't drag (camera rotate)
@@ -1978,38 +1989,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
         input.isMouseButtonJustPressed(SDL_BUTTON_LEFT) && !input.isMouseButtonPressed(SDL_BUTTON_RIGHT)) {
         leftClickPressPos_ = input.getMousePosition();
         leftClickWasPress_ = true;
-
-        // Light the object being pressed on.
-        //
-        // A game object is used rather than selected, so nothing else says the
-        // press landed on it - a unit has its circle and its frame, and an
-        // object had only the cursor, which does not change when the button
-        // goes down. Lit on the press and dark again on the release, which is
-        // where the real client puts it too.
-        if (auto* camera = services_.renderer ? services_.renderer->getCamera() : nullptr) {
-            if (auto* window = services_.window) {
-                const rendering::Ray pressRay = camera->screenToWorldRay(
-                    leftClickPressPos_.x, leftClickPressPos_.y,
-                    static_cast<float>(window->getWidth()),
-                    static_cast<float>(window->getHeight()));
-                const uint64_t pressed =
-                    ui::pickScene(gameHandler, pressRay, ui::ScenePickParams{}).resolve();
-                auto entity = pressed ? gameHandler.getEntityManager().getEntity(pressed)
-                                      : nullptr;
-                core::Application::getInstance().setPressedGameObject(
-                    entity && entity->getType() == game::ObjectType::GAMEOBJECT ? pressed : 0);
-            }
-        }
     }
 
     // On mouse-up, check if it was a click (not a drag)
-    if (input.isMouseButtonJustReleased(SDL_BUTTON_LEFT)) {
-        // Dark again the moment the button comes up, whatever the release
-        // turns out to mean - a click, a drag that turned the camera, or a
-        // press that ended somewhere else entirely.
-        core::Application::getInstance().setPressedGameObject(0);
-    }
-
     if (leftClickWasPress_ && input.isMouseButtonJustReleased(SDL_BUTTON_LEFT)) {
         leftClickWasPress_ = false;
         glm::vec2 releasePos = input.getMousePosition();

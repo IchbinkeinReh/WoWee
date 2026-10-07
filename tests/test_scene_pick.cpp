@@ -138,3 +138,16 @@ TEST_CASE("the quest an object is kept for comes from its type's data field") {
     CHECK(gameObjectRequiredQuest(19, data) == 0u);   // mailbox: none
     CHECK(gameObjectRequiredQuest(3, nullptr) == 0u);
 }
+
+TEST_CASE("the mouseover is the click's object, else the tracked one") {
+    // What the game object highlight follows (0x0051f790): one object.
+    ScenePick pick;
+    CHECK(pick.mouseover() == 0u);
+    // An anvil a click would not use is still the mouseover.
+    pick.mouseoverObjectGuid = kStall;
+    CHECK(pick.mouseover() == kStall);
+    // A unit a click would act on takes it.
+    pick.livingUnitGuid = kVendor;
+    pick.livingUnitCenterT = 5.0f;
+    CHECK(pick.mouseover() == kVendor);
+}
