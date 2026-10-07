@@ -244,26 +244,6 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             glm::mat3 rotMat = glm::mat3(inst.modelMatrix * boneXform);
             p.velocity = rotMat * dir * speed;
 
-            // When emission speed is ~0 and bone animation isn't loaded (.anim files),
-            // particles pile up at the same position. Give them a drift so they
-            // spread outward like a mist/spray effect instead of clustering.
-            if (std::abs(speed) < 0.01f) {
-                if (gpu.isFireflyEffect) {
-                    // Fireflies: gentle random drift in all directions
-                    p.velocity = rotMat * glm::vec3(
-                        distN(particleRng_) * 0.6f,
-                        distN(particleRng_) * 0.6f,
-                        distN(particleRng_) * 0.3f
-                    );
-                } else {
-                    p.velocity = rotMat * glm::vec3(
-                        distN(particleRng_) * 1.0f,
-                        distN(particleRng_) * 1.0f,
-                        -dist01(particleRng_) * 0.5f
-                    );
-                }
-            }
-
             const uint32_t tilesX = std::max<uint16_t>(em.textureCols, 1);
             const uint32_t tilesY = std::max<uint16_t>(em.textureRows, 1);
             const uint32_t totalTiles = tilesX * tilesY;
@@ -315,22 +295,11 @@ void M2Renderer::updateParticles(M2Instance& inst, float dt) {
         }
         for (size_t e = 0; e < numEm; ++e) {
             const auto& pem = gpu.particleEmitters[e];
-            float grav = interpFloat(pem.gravity,
-                                      inst.animTime, inst.globalSequenceTime,
-                                      inst.currentSequenceIndex, gpu.globalSequenceDurations);
-            // Zero is an answer when the emitter is drawing fire or magic: the
-            // demon crystal's clouds are meant to keep climbing for their six
-            // seconds, and the stand-in below pulled them back down past
-            // where they began.
-            const bool authoredGravity =
-                e < gpu.particleSkipGenericDimming.size() &&
-                gpu.particleSkipGenericDimming[e] != 0;
-            if (grav == 0.0f && !gpu.isFireflyEffect && !authoredGravity) {
-                float emSpeed = interpFloat(pem.emissionSpeed,
-                                             inst.animTime, inst.globalSequenceTime,
-                                             inst.currentSequenceIndex, gpu.globalSequenceDurations);
-                grav = (std::abs(emSpeed) > 0.1f) ? 4.0f : 1.5f;
-            }
+            // The gravity track's value, zero included (FUN_00979bb0 applies
+            // +0xb4 as it is).
+            const float grav = interpFloat(pem.gravity,
+                                           inst.animTime, inst.globalSequenceTime,
+                                           inst.currentSequenceIndex, gpu.globalSequenceDurations);
             emitterGrav[e] = grav;
         }
     }
@@ -344,10 +313,13 @@ void M2Renderer::updateParticles(M2Instance& inst, float dt) {
             inst.particles.pop_back();
             continue;
         }
-        if (p.emitterIndex >= 0 && static_cast<size_t>(p.emitterIndex) < numEm) {
-            p.velocity.z -= emitterGrav[p.emitterIndex] * dt;
-        }
+        // FUN_00979bb0: the move over the step with gravity's half-square
+        // term, then gravity on the velocity.
+        const float g = (p.emitterIndex >= 0 && static_cast<size_t>(p.emitterIndex) < numEm)
+                            ? emitterGrav[p.emitterIndex] : 0.0f;
         p.position += p.velocity * dt;
+        p.position.z -= g * dt * dt * 0.5f;
+        p.velocity.z -= g * dt;
         i++;
     }
 }
