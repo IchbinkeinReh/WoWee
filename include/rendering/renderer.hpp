@@ -453,9 +453,11 @@ public:
     [[nodiscard]] bool isEnhancedWaterEnabled() const { return enhancedWater_; }
     /// The client's 'specular' option (0x0078de60 sets world flag 0x8000000;
     /// off by default): water drawn as psLiquidWater rather than NoSpec, the
-    /// terrain's "_s.blp" textures and highlight. WOWEE_SPECULAR=1 turns it on;
-    /// read when the terrain and water renderers are made.
-    [[nodiscard]] static bool clientSpecular() { return envFlagEnabled("WOWEE_SPECULAR"); }
+    /// terrain's "_s.blp" textures and highlight. As in the client it takes
+    /// effect "on restart": the value is latched when the terrain and water
+    /// renderers are made, and a later change waits for the next start.
+    void setClientSpecular(bool on) { pendingClientSpecular_ = on; }
+    [[nodiscard]] bool clientSpecular() const { return clientSpecular_; }
 
 private:
     void applyMsaaChange();
@@ -631,6 +633,8 @@ private:
     std::unique_ptr<SunShafts> sunShafts_;
     bool sunShaftsEnabled_ = false;  // opt-in: the original client has none
     bool enhancedWater_ = false;     // opt-in: the original client draws its own liquid
+    bool pendingClientSpecular_ = false;  // the 'specular' setting as last set
+    bool clientSpecular_ = false;         // ...as latched at the first world load
     /// renderWorld ran this frame. The shafts are built from the world's
     /// picture, and a login screen or a loading screen is not one.
     bool worldDrawnThisFrame_ = false;

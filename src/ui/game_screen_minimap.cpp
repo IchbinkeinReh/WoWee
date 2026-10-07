@@ -1830,6 +1830,7 @@ void GameScreen::saveSettings() {
     out << "screen_glow=" << (settingsPanel_.pendingScreenGlow ? 1 : 0) << "\n";
     out << "brightness=" << settingsPanel_.pendingBrightness << "\n";
     out << "enhanced_water=" << (settingsPanel_.pendingEnhancedWater ? 1 : 0) << "\n";
+    out << "specular=" << (settingsPanel_.pendingSpecular ? 1 : 0) << "\n";
     out << "antialiasing=" << settingsPanel_.pendingAntiAliasing << "\n";
     out << "fxaa=" << (settingsPanel_.pendingFXAA ? 1 : 0) << "\n";
     out << "normal_mapping=" << (settingsPanel_.pendingNormalMapping ? 1 : 0) << "\n";
@@ -2109,6 +2110,7 @@ void GameScreen::loadSettings() {
             // as 1 for a feature that was always on: read as this, it would
             // turn the enhanced water on for everyone who had played before.
             else if (key == "enhanced_water") settingsPanel_.pendingEnhancedWater = (std::stoi(val) != 0);
+            else if (key == "specular") settingsPanel_.pendingSpecular = (std::stoi(val) != 0);
             else if (key == "antialiasing") settingsPanel_.pendingAntiAliasing = std::clamp(std::stoi(val), 0, 3);
             else if (key == "fxaa") settingsPanel_.pendingFXAA = (std::stoi(val) != 0);
             else if (key == "check_for_updates") settingsPanel_.pendingCheckForUpdates = (std::stoi(val) != 0);

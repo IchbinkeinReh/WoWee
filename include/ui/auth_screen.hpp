@@ -266,6 +266,8 @@ private:
         int  upscalingMode   = 0;   // 0=Off 1=FSR1 2=FSR3
         /// This client's procedural water; off is the client's own liquid.
         bool enhancedWater   = false;
+        /// The client's 'specular' option, off as its cvar is (0x0078e1a0).
+        bool specular        = false;
         int  groundClutter   = kDefaultGroundClutter; // 0-150
         // Ground cover, so that a preset picked here means what the same
         // preset means in game. Ultra grows it; the others do not.

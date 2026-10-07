@@ -203,6 +203,16 @@ constexpr SettingDesc kSchema[] = {
      "This client's own water: waves, reflections of the world, the\n"
      "bed seen through it and foam at the shore. Off is the original\n"
      "client's animated water. Costs a reflection pass each frame.", "", 0},
+    // The client's own 'specular' option, not an extra: its cvar registered
+    // at 0x0078e1a0, default "0" (0x009e14a0), whose handler 0x0078de60 sets
+    // world flag 0x8000000 "on restart". Off in every preset: the exe has
+    // none, only the hardware rows of VideoHardware.dbc (0x0076b3f0). Here
+    // beside the water because the water is most of what it changes.
+    {"specular", "Specular highlights", SettingKind::Bool, 0, 0, 0,
+     "Water", "Lighting",
+     "The original client's Specular option: the sun glints off water\n"
+     "and off the ground textures made to shine. Takes effect the next\n"
+     "time the game starts, as in the original client.", "", 0},
 
     // Off by default: the compute tracer is what most machines get, and it
     // costs real frames. One row rather than three switches, because each

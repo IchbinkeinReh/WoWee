@@ -701,3 +701,15 @@ TEST_CASE("nothing writes a live setting without the field it is saved from", "[
         }
     }
 }
+
+TEST_CASE("no preset turns the client's specular option on", "[settings]") {
+    // The client's cvar defaults to "0" (0x0078e1a0) and the exe holds no
+    // quality presets that would set it; only VideoHardware.dbc rows do.
+    for (int i = 0; i < wowee::ui::kGraphicsPresetCount; ++i) {
+        INFO("preset index " << i);
+        CHECK_FALSE(wowee::ui::kGraphicsPresets[i].specular);
+    }
+    const auto applyKeys =
+        namesIn(wowee::test::slurp("src/ui/settings_panel.cpp"), "ApplyKeys");
+    CHECK(applyKeys.count("specular") == 1);
+}

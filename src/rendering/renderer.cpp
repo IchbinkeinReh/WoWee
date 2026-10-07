@@ -591,7 +591,7 @@ void Renderer::updatePerFrameUBO() {
         currentFrameData.averagedAmbientColor = glm::vec4(lp.averagedAmbientColor, 1.0f);
         currentFrameData.windowLight = glm::vec4(
             wmo_sidn::windowLevel(lightingManager->getTimeOfDay()), 0.0f, 0.0f, 0.0f);
-        currentFrameData.specularColor = glm::vec4(lp.sunColor, clientSpecular() ? 1.0f : 0.0f);
+        currentFrameData.specularColor = glm::vec4(lp.sunColor, clientSpecular_ ? 1.0f : 0.0f);
         currentFrameData.fogParams.x = lp.fogStart;
         currentFrameData.fogParams.y = lp.fogEnd;
 
@@ -3820,7 +3820,9 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             return false;
         }
         terrainRenderer->setRtScene(rtScene_.get());
-        terrainRenderer->setSpecular(clientSpecular());
+        // 0x0078de60: "Specular enabled on restart." - latched here, once.
+        clientSpecular_ = pendingClientSpecular_;
+        terrainRenderer->setSpecular(clientSpecular_);
         if (shadowRenderPass != VK_NULL_HANDLE) {
             terrainRenderer->initializeShadow(shadowRenderPass);
         }
@@ -3838,7 +3840,7 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             waterRenderer->loadClientLiquids(assetManager);
             waterRenderer->setEnhancedWater(enhancedWater_);
             waterRenderer->setRefractionEnabled(enhancedWater_);
-            waterRenderer->setClientSpecular(clientSpecular());
+            waterRenderer->setClientSpecular(clientSpecular_);
         }
     }
 

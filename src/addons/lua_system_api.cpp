@@ -1238,6 +1238,8 @@ constexpr ClientCVarBinding kClientCVars[] = {
     // as well as within one. The branch it replaces wrote the handler directly
     // and never saved.
     {"autolootdefault",      "autoloot"},
+    // The client's own cvar of that name (0x0078e1a0), read at start-up.
+    {"specular",             "specular"},
     // How far back the camera may be pulled. The row counts yards; the CVar
     // the game's slider wrote counts multiples of the 22 the original client
     // gives, so a 1 here is 22 there and the slider's 2 is 44.

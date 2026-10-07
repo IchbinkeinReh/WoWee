@@ -843,7 +843,7 @@ constexpr const char* kGraphicsPresetKeys[] = {
     "groundclutter",
     "grassenabled", "grassdensity", "grassheight", "grassdistance",
     "lensflare", "sharpstars", "sunshafts", "lightshafts", "fogskyblend",
-    "enhancedwater",
+    "enhancedwater", "specular",
 };
 
 /// Every graphics setting that has to reach something when it is loaded.
@@ -862,7 +862,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "viewdistance", "shadows", "shadowdistance", "antialiasing", "fxaa",
     "normalmapping", "normalmapstrength", "parallax", "parallaxquality",
     "groundclutter", "grassenabled", "grassdensity", "grassheight",
-    "grassdistance", "enhancedwater", "upscaling", "fsrquality",
+    "grassdistance", "enhancedwater", "specular", "upscaling", "fsrquality",
     "fsrsharpness", "framegen", "brightness", "uiopacity", "minimapsquare",
     "minimapnpcdots", "minimapclock", "minimapcoords", "minimaprotate", "latencymeter", "showfps",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
@@ -927,6 +927,7 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
         pendingVolumetricFog     = p.lightShafts;
         pendingFogSkyBlend       = p.fogSkyBlend;
         pendingEnhancedWater     = p.enhancedWater;
+        pendingSpecular          = p.specular;
         // Each one goes to the thing it affects through the one function that
         // knows where that is, rather than through a second copy of the same
         // renderer calls written out here.
@@ -972,6 +973,7 @@ void SettingsPanel::updateGraphicsPresetFromCurrentSettings() {
             pendingVolumetricFog == p.lightShafts &&
             std::abs(pendingFogSkyBlend - p.fogSkyBlend) <= 0.025f &&
             pendingEnhancedWater == p.enhancedWater &&
+            pendingSpecular == p.specular &&
             // As with shadows: a preset that grows no grass says nothing about
             // how dense, how tall or how far it would have been.
             (!p.grass || (std::abs(pendingGrassDensity - p.grassDensity) <= 5 &&
@@ -1060,6 +1062,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "shadows",           .asBool  = &SettingsPanel::pendingShadows},
     {.key = "shadowdistance",    .asFloat = &SettingsPanel::pendingShadowDistance},
     {.key = "enhancedwater",     .asBool  = &SettingsPanel::pendingEnhancedWater},
+    {.key = "specular",          .asBool  = &SettingsPanel::pendingSpecular},
     {.key = "antialiasing",      .asInt   = &SettingsPanel::pendingAntiAliasing},
     {.key = "fxaa",              .asBool  = &SettingsPanel::pendingFXAA},
     {.key = "normalmapping",     .asBool  = &SettingsPanel::pendingNormalMapping},
@@ -1255,6 +1258,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setShadowDistance(pendingShadowDistance);
     } else if (key == "enhancedwater") {
         if (renderer) renderer->setEnhancedWaterEnabled(pendingEnhancedWater);
+    } else if (key == "specular") {
+        if (renderer) renderer->setClientSpecular(pendingSpecular);
     } else if (key == "groundclutter") {
         if (renderer) {
             if (auto* tm = renderer->getTerrainManager()) {
