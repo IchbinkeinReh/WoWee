@@ -1,471 +1,675 @@
 #include "rendering/weather.hpp"
-#include "rendering/camera.hpp"
-#include "rendering/vk_context.hpp"
-#include "rendering/vk_shader.hpp"
-#include "rendering/vk_pipeline.hpp"
-#include "rendering/vk_frame_data.hpp"
-#include "rendering/vk_utils.hpp"
+
+#include "core/coordinates.hpp"
 #include "core/logger.hpp"
-#include <glm/gtc/matrix_transform.hpp>
-#include <random>
+#include "pipeline/asset_manager.hpp"
+#include "pipeline/blp_loader.hpp"
+#include "pipeline/dbc_loader.hpp"
+#include "rendering/vk_context.hpp"
+#include "rendering/vk_pipeline.hpp"
+#include "rendering/vk_shader.hpp"
+#include "rendering/vk_utils.hpp"
+
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
 namespace wowee {
 namespace rendering {
 
+namespace cw = client_weather;
+
 namespace {
-// Seeded RNG for weather particle positions and cycle durations.
-// Replaces bare rand() which defaults to seed 1 without srand(),
-// producing identical weather patterns on every launch.
-std::mt19937& weatherRng() {
-    static std::mt19937 gen(std::random_device{}());
-    return gen;
+
+// What a packet holds on the device: the particle as the vertex programs read
+// it, in the renderer's coordinates.
+struct GpuParticle {
+    float position[3];
+    float velocity[3];
+    float times[2];
+};
+static_assert(sizeof(GpuParticle) == 32);
+
+struct GpuSplash {
+    float position[3];
+    float times[2];
+};
+static_assert(sizeof(GpuSplash) == 20);
+
+struct WeatherPush {
+    glm::vec4 color;
+    glm::vec4 params;
+};
+
+constexpr uint32_t kMaxTextures = 16;
+
+// A mist sheet's corner: where, which texel, how opaque.
+struct GpuMistVertex {
+    float position[3];
+    float uv[2];
+    float alpha;
+};
+static_assert(sizeof(GpuMistVertex) == 24);
+constexpr uint32_t kMistVertices = cw::kMistSlots * 6;
+
+glm::vec3 toRender(const glm::vec3& c) { return core::coords::canonicalToRender(c); }
+glm::vec3 toCanonical(const glm::vec3& r) { return core::coords::renderToCanonical(r); }
+
+GpuParticle gpuParticle(const cw::Particle& p) {
+    const glm::vec3 pos = toRender(p.position);
+    const glm::vec3 vel = toRender(p.velocity);
+    return {{pos.x, pos.y, pos.z}, {vel.x, vel.y, vel.z}, {p.start, p.end}};
 }
-float weatherRandFloat() {
-    return std::uniform_real_distribution<float>(0.0f, 1.0f)(weatherRng());
-}
+
 } // namespace
 
-Weather::Weather() {
-}
+Weather::Weather() : rng_(std::random_device{}()) {}
 
 Weather::~Weather() {
     shutdown();
 }
 
-/// Builds the one pipeline this effect draws with, vertex layout and all.
-///
-/// initialize() and recreatePipelines() described it identically, which is two
-/// statements of what a weather particle vertex is in one file.
-void Weather::buildPipelines(VkDevice device,
-                             const VkPipelineShaderStageCreateInfo& vertStage,
-                             const VkPipelineShaderStageCreateInfo& fragStage) {
-    // Vertex input: position only (vec3), stride = 3 * sizeof(float)
-    VkVertexInputBindingDescription binding{};
-    binding.binding = 0;
-    binding.stride = 3 * sizeof(float);
-    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    VkVertexInputAttributeDescription posAttr{};
-    posAttr.location = 0;
-    posAttr.binding = 0;
-    posAttr.format = VK_FORMAT_R32G32B32_SFLOAT;
-    posAttr.offset = 0;
-
-    // Dynamic viewport and scissor
-    std::vector<VkDynamicState> dynamicStates = viewportAndScissorDynamic();
-
-    pipeline = PipelineBuilder()
-        .setShaders(vertStage, fragStage)
-        .setVertexInput({binding}, {posAttr})
-        .setTopology(VK_PRIMITIVE_TOPOLOGY_POINT_LIST)
-        .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS)  // depth test on, write off (transparent particles)
-        .setColorBlendAttachment(PipelineBuilder::blendAlpha())
-        .setMultisample(vkCtx->getMsaaSamples())
-        .setLayout(pipelineLayout)
-        .setRenderPass(vkCtx->getImGuiRenderPass())
-        .setDynamicStates(dynamicStates)
-        .build(device, vkCtx->getPipelineCache());
-}
-
 bool Weather::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout) {
-    LOG_INFO("Initializing weather system");
+    vkCtx_ = ctx;
+    perFrameLayout_ = perFrameLayout;
+    VkDevice device = vkCtx_->getDevice();
 
-    vkCtx = ctx;
-    VkDevice device = vkCtx->getDevice();
+    VkDescriptorSetLayoutBinding sampler{};
+    sampler.binding = 0;
+    sampler.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    sampler.descriptorCount = 1;
+    sampler.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    textureLayout_ = createDescriptorSetLayout(device, {sampler});
 
-    // Load SPIR-V shaders
-    auto shaders = loadShaderPair(device, "assets/shaders/weather.vert.spv", "assets/shaders/weather.frag.spv", "weather");
-    if (!shaders) return false;
-    const auto& vertStage = shaders.vertStage;
-    const auto& fragStage = shaders.fragStage;
-
-    // Push constant range: { float particleSize; float pad0; float pad1; float pad2; vec4 particleColor; } = 32 bytes
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushRange.offset = 0;
-    pushRange.size = 32;  // 4 floats + vec4
-
-    // Create pipeline layout with perFrameLayout (set 0) + push constants
-    pipelineLayout = createPipelineLayout(device, {perFrameLayout}, {pushRange});
-    if (pipelineLayout == VK_NULL_HANDLE) {
-        LOG_ERROR("Failed to create weather pipeline layout");
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTextures};
+    VkDescriptorPoolCreateInfo pool{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pool.maxSets = kMaxTextures;
+    pool.poolSizeCount = 1;
+    pool.pPoolSizes = &size;
+    if (!textureLayout_ || vkCreateDescriptorPool(device, &pool, nullptr, &descriptorPool_) != VK_SUCCESS) {
+        LOG_ERROR("Weather: failed to create descriptor resources");
         return false;
     }
 
-    buildPipelines(device, vertStage, fragStage);
-
-
-    if (pipeline == VK_NULL_HANDLE) {
-        LOG_ERROR("Failed to create weather pipeline");
+    VkPushConstantRange push{};
+    push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    push.size = sizeof(WeatherPush);
+    pipelineLayout_ = createPipelineLayout(device, {perFrameLayout_, textureLayout_}, {push});
+    if (!pipelineLayout_ || !buildPipelines()) {
+        LOG_ERROR("Weather: failed to create pipelines");
         return false;
     }
 
-    // Create a dynamic mapped vertex buffer large enough for MAX_PARTICLES
-    dynamicVBSize = MAX_PARTICLES * sizeof(glm::vec3);
-    AllocatedBuffer buf = createBuffer(vkCtx->getAllocator(), dynamicVBSize,
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
-    dynamicVB = buf.buffer;
-    dynamicVBAlloc = buf.allocation;
-    dynamicVBAllocInfo = buf.info;
-
-    if (dynamicVB == VK_NULL_HANDLE) {
-        LOG_ERROR("Failed to create weather dynamic vertex buffer");
-        return false;
+    for (int i = 0; i < kMistFrames; ++i) {
+        AllocatedBuffer buf = createBuffer(vkCtx_->getAllocator(), kMistVertices * sizeof(GpuMistVertex),
+                                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+        mistBuffer_[i] = buf.buffer;
+        mistAllocation_[i] = buf.allocation;
+        mistMapped_[i] = buf.info.pMappedData;
     }
+    mists_.assign(cw::kMistSlots, cw::Mist{});
 
-    // Reserve space for particles
-    particles.reserve(MAX_PARTICLES);
-    particlePositions.reserve(MAX_PARTICLES);
-
-    LOG_INFO("Weather system initialized");
+    // What sand binds: its program reads no texture, but the set must be there.
+    blank_ = std::make_unique<Texture>();
+    const uint8_t white[4] = {255, 255, 255, 255};
+    if (blank_->texture.upload(*vkCtx_, white, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false) &&
+        blank_->texture.createSampler(device)) {
+        VkDescriptorSetAllocateInfo alloc{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        alloc.descriptorPool = descriptorPool_;
+        alloc.descriptorSetCount = 1;
+        alloc.pSetLayouts = &textureLayout_;
+        if (vkAllocateDescriptorSets(device, &alloc, &blank_->set) == VK_SUCCESS) {
+            VkDescriptorImageInfo info = blank_->texture.descriptorInfo();
+            VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = blank_->set;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &info;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
+    }
     return true;
 }
 
+bool Weather::buildPipelines() {
+    VkDevice device = vkCtx_->getDevice();
+
+    // Rain and its splashes: Mod2x (0x0078a640 and 0x0078a030 set blend mode
+    // 5), the destination's alpha left alone; no depth write, no culling.
+    VkPipelineColorBlendAttachmentState mod2x = PipelineBuilder::blendAdditive();
+    mod2x.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
+    mod2x.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR;
+    mod2x.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    mod2x.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+
+    {
+        auto shaders = loadShaderPair(device, "assets/shaders/weather_streak.vert.spv",
+                                      "assets/shaders/weather.frag.spv", "weather rain");
+        if (!shaders) return false;
+        VkVertexInputBindingDescription binding{0, sizeof(GpuParticle), VK_VERTEX_INPUT_RATE_INSTANCE};
+        std::vector<VkVertexInputAttributeDescription> attrs = {
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+            {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},
+            {2, 0, VK_FORMAT_R32G32_SFLOAT, 24},
+        };
+        streakPipeline_ = PipelineBuilder()
+            .setShaders(shaders.vertStage, shaders.fragStage)
+            .setVertexInput({binding}, attrs)
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+            .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setColorBlendAttachment(mod2x)
+            .setMultisample(vkCtx_->getMsaaSamples())
+            .setLayout(pipelineLayout_)
+            .setRenderPass(vkCtx_->getImGuiRenderPass())
+            .setDynamicStates(viewportAndScissorDynamic())
+            .build(device, vkCtx_->getPipelineCache());
+    }
+    {
+        auto shaders = loadShaderPair(device, "assets/shaders/weather_splash.vert.spv",
+                                      "assets/shaders/weather.frag.spv", "weather splash");
+        if (!shaders) return false;
+        VkVertexInputBindingDescription binding{0, sizeof(GpuSplash), VK_VERTEX_INPUT_RATE_INSTANCE};
+        std::vector<VkVertexInputAttributeDescription> attrs = {
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+            {1, 0, VK_FORMAT_R32G32_SFLOAT, 12},
+        };
+        splashPipeline_ = PipelineBuilder()
+            .setShaders(shaders.vertStage, shaders.fragStage)
+            .setVertexInput({binding}, attrs)
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+            .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setColorBlendAttachment(mod2x)
+            .setMultisample(vkCtx_->getMsaaSamples())
+            .setLayout(pipelineLayout_)
+            .setRenderPass(vkCtx_->getImGuiRenderPass())
+            .setDynamicStates(viewportAndScissorDynamic())
+            .build(device, vkCtx_->getPipelineCache());
+    }
+    {
+        // Snow and sand: alpha blended (blend mode 2, 0x0078aee0 and
+        // 0x0078bee0), no depth write, points.
+        auto shaders = loadShaderPair(device, "assets/shaders/weather_point.vert.spv",
+                                      "assets/shaders/weather_point.frag.spv", "weather points");
+        if (!shaders) return false;
+        VkVertexInputBindingDescription binding{0, sizeof(GpuParticle), VK_VERTEX_INPUT_RATE_VERTEX};
+        std::vector<VkVertexInputAttributeDescription> attrs = {
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+            {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},
+            {2, 0, VK_FORMAT_R32G32_SFLOAT, 24},
+        };
+        pointPipeline_ = PipelineBuilder()
+            .setShaders(shaders.vertStage, shaders.fragStage)
+            .setVertexInput({binding}, attrs)
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_POINT_LIST)
+            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+            .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setColorBlendAttachment(PipelineBuilder::blendAlpha())
+            .setMultisample(vkCtx_->getMsaaSamples())
+            .setLayout(pipelineLayout_)
+            .setRenderPass(vkCtx_->getImGuiRenderPass())
+            .setDynamicStates(viewportAndScissorDynamic())
+            .build(device, vkCtx_->getPipelineCache());
+    }
+    {
+        // The mist: alpha blended, no depth write, no fog (0x00786e10).
+        auto shaders = loadShaderPair(device, "assets/shaders/weather_mist.vert.spv",
+                                      "assets/shaders/weather_mist.frag.spv", "weather mist");
+        if (!shaders) return false;
+        VkVertexInputBindingDescription binding{0, sizeof(GpuMistVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        std::vector<VkVertexInputAttributeDescription> attrs = {
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+            {1, 0, VK_FORMAT_R32G32_SFLOAT, 12},
+            {2, 0, VK_FORMAT_R32_SFLOAT, 20},
+        };
+        mistPipeline_ = PipelineBuilder()
+            .setShaders(shaders.vertStage, shaders.fragStage)
+            .setVertexInput({binding}, attrs)
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+            .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setColorBlendAttachment(PipelineBuilder::blendAlpha())
+            .setMultisample(vkCtx_->getMsaaSamples())
+            .setLayout(pipelineLayout_)
+            .setRenderPass(vkCtx_->getImGuiRenderPass())
+            .setDynamicStates(viewportAndScissorDynamic())
+            .build(device, vkCtx_->getPipelineCache());
+    }
+    return streakPipeline_ && splashPipeline_ && pointPipeline_ && mistPipeline_;
+}
+
 void Weather::recreatePipelines() {
-    if (!vkCtx) return;
-    VkDevice device = vkCtx->getDevice();
-
-    destroy(device, pipeline);
-
-    auto shaders = loadShaderPair(device, "assets/shaders/weather.vert.spv", "assets/shaders/weather.frag.spv", "weather");
-    if (!shaders) return;
-    const auto& vertStage = shaders.vertStage;
-    const auto& fragStage = shaders.fragStage;
-
-    buildPipelines(device, vertStage, fragStage);
-
-
-    if (pipeline == VK_NULL_HANDLE) {
-        LOG_ERROR("Weather::recreatePipelines: failed to create pipeline");
-    }
+    if (!vkCtx_) return;
+    VkDevice device = vkCtx_->getDevice();
+    destroy(device, streakPipeline_);
+    destroy(device, splashPipeline_);
+    destroy(device, pointPipeline_);
+    destroy(device, mistPipeline_);
+    if (!buildPipelines()) LOG_ERROR("Weather::recreatePipelines: failed to create pipelines");
 }
 
-void Weather::update(const Camera& camera, float deltaTime) {
-    if (!enabled || weatherType == Type::NONE) {
+void Weather::loadAssets(pipeline::AssetManager* assets) {
+    if (!assets || assets_) return;
+    assets_ = assets;
+    auto dbc = assets->loadDBC("Weather.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 8) {
+        LOG_WARNING("Weather: Weather.dbc unavailable - no weather will be drawn");
         return;
     }
-
-    // Initialize particles if needed
-    if (particles.empty()) {
-        resetParticles(camera);
+    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+        cw::WeatherRow row;
+        const uint32_t type = dbc->getUInt32(r, 2);
+        row.effect = type <= 3 ? static_cast<Effect>(type) : Effect::None;
+        row.color = {dbc->getFloat(r, 4), dbc->getFloat(r, 5), dbc->getFloat(r, 6)};
+        row.texture = dbc->getString(r, 7);
+        rows_[dbc->getUInt32(r, 0)] = std::move(row);
     }
-
-    // Calculate active particle count based on intensity
-    int targetParticleCount =
-        static_cast<int>(MAX_PARTICLES * intensity * densityScale_);
-
-    // Adjust particle count
-    while (static_cast<int>(particles.size()) < targetParticleCount) {
-        Particle p;
-        p.position = getRandomPosition(camera.getPosition());
-        p.position.y = camera.getPosition().y + SPAWN_HEIGHT;
-        p.lifetime = 0.0f;
-
-        if (weatherType == Type::RAIN) {
-            p.velocity = glm::vec3(0.0f, -50.0f, 0.0f);  // Fast downward
-            p.maxLifetime = 5.0f;
-        } else if (weatherType == Type::STORM) {
-            // Storm: faster, angled rain with wind
-            p.velocity = glm::vec3(15.0f, -70.0f, 8.0f);
-            p.maxLifetime = 3.5f;
-        } else {  // SNOW
-            p.velocity = glm::vec3(0.0f, -5.0f, 0.0f);   // Slow downward
-            p.maxLifetime = 10.0f;
-        }
-
-        particles.push_back(p);
-    }
-
-    while (static_cast<int>(particles.size()) > targetParticleCount) {
-        particles.pop_back();
-    }
-
-    // Combined update + position copy. Hoist camera.getPosition() out of
-    // the per-particle call (each was re-reading the camera member) and
-    // fold the position-copy pass into the update loop so we only walk
-    // the particle vector once.
-    const glm::vec3 cameraPos = camera.getPosition();
-    particlePositions.clear();
-    particlePositions.reserve(particles.size());
-    for (auto& particle : particles) {
-        updateParticle(particle, cameraPos, deltaTime);
-        particlePositions.push_back(particle.position);
-    }
+    LOG_INFO("Weather: ", rows_.size(), " Weather.dbc rows");
+    // Weather the server sent before the table was read.
+    if (haveWeather_) setWeather(weatherId_, target_, true);
 }
 
-void Weather::updateParticle(Particle& particle, const glm::vec3& cameraPos, float deltaTime) {
-    // Update lifetime
-    particle.lifetime += deltaTime;
-
-    // Reset if lifetime exceeded or too far from camera
-    glm::vec3 toCamera = particle.position - cameraPos;
-    float distSq = glm::dot(toCamera, toCamera);
-
-    if (particle.lifetime >= particle.maxLifetime || distSq > SPAWN_VOLUME_SIZE * SPAWN_VOLUME_SIZE ||
-        particle.position.y < cameraPos.y - 20.0f) {
-        // Respawn at top
-        particle.position = getRandomPosition(cameraPos);
-        particle.position.y = cameraPos.y + SPAWN_HEIGHT;
-        particle.lifetime = 0.0f;
-    }
-
-    // Add wind effect for snow
-    if (weatherType == Type::SNOW) {
-        float windX = std::sin(particle.lifetime * 0.5f) * 2.0f;
-        float windZ = std::cos(particle.lifetime * 0.3f) * 2.0f;
-        particle.velocity.x = windX;
-        particle.velocity.z = windZ;
-    }
-    // Storm: gusty, turbulent wind with varying direction
-    if (weatherType == Type::STORM) {
-        float gust = std::sin(particle.lifetime * 1.5f + particle.position.x * 0.1f) * 5.0f;
-        particle.velocity.x = 15.0f + gust;
-        particle.velocity.z = 8.0f + std::cos(particle.lifetime * 2.0f) * 3.0f;
-    }
-
-    // Update position
-    particle.position += particle.velocity * deltaTime;
+void Weather::setGroundQuery(cw::HeightCache::Query query) {
+    // The cache asks in the client's coordinates; the renderer answers in its own.
+    ground_.setQuery([q = std::move(query)](float x, float y, float z) {
+        const glm::vec3 r = toRender({x, y, z});
+        return q ? q(r.x, r.y, r.z) : z - 200.0f;
+    });
 }
 
-void Weather::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
-    if (!enabled || weatherType == Type::NONE || particlePositions.empty() ||
-        pipeline == VK_NULL_HANDLE) {
-        return;
-    }
-
-    // Upload particle positions to mapped buffer
-    VkDeviceSize uploadSize = particlePositions.size() * sizeof(glm::vec3);
-    if (uploadSize > 0 && dynamicVBAllocInfo.pMappedData) {
-        std::memcpy(dynamicVBAllocInfo.pMappedData, particlePositions.data(), uploadSize);
-    }
-
-    // Push constant data: { float particleSize; float pad0; float pad1; float pad2; vec4 particleColor; }
-    struct WeatherPush {
-        float particleSize;
-        float pad0;
-        float pad1;
-        float pad2;
-        glm::vec4 particleColor;
-    };
-
-    WeatherPush push{};
-    if (weatherType == Type::RAIN) {
-        push.particleSize = 3.0f;
-        push.particleColor = glm::vec4(0.7f, 0.8f, 0.9f, 0.6f);
-    } else if (weatherType == Type::STORM) {
-        push.particleSize = 3.5f;
-        push.particleColor = glm::vec4(0.6f, 0.65f, 0.75f, 0.7f);  // Darker, more opaque
-    } else {  // SNOW
-        push.particleSize = 8.0f;
-        push.particleColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.9f);
-    }
-
-    // Bind pipeline
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-
-    // Bind per-frame descriptor set (set 0 - camera UBO)
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
-        0, 1, &perFrameSet, 0, nullptr);
-
-    // Push constants
-    vkCmdPushConstants(cmd, pipelineLayout,
-        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        0, sizeof(push), &push);
-
-    // Bind vertex buffer
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &dynamicVB, &offset);
-
-    // Draw particles as points
-    vkCmdDraw(cmd, static_cast<uint32_t>(particlePositions.size()), 1, 0, 0);
+void Weather::setDensityLevel(int level) {
+    densityLevel_ = std::clamp(level, 0, 3);
 }
 
-void Weather::resetParticles(const Camera& camera) {
-    particles.clear();
-
-    int particleCount = static_cast<int>(MAX_PARTICLES * intensity * densityScale_);
-    glm::vec3 cameraPos = camera.getPosition();
-
-    for (int i = 0; i < particleCount; ++i) {
-        Particle p;
-        p.position = getRandomPosition(cameraPos);
-        p.position.y = cameraPos.y + SPAWN_HEIGHT * (weatherRandFloat());
-        p.lifetime = 0.0f;
-
-        if (weatherType == Type::RAIN) {
-            p.velocity = glm::vec3(0.0f, -50.0f, 0.0f);
-            p.maxLifetime = 5.0f;
-        } else {  // SNOW
-            p.velocity = glm::vec3(0.0f, -5.0f, 0.0f);
-            p.maxLifetime = 10.0f;
-        }
-
-        particles.push_back(p);
+void Weather::setWeather(uint32_t weatherId, float intensity, bool abrupt) {
+    // 0x007846a0. The row decides the effect, its colour and its texture.
+    haveWeather_ = true;
+    weatherId_ = weatherId;
+    cw::WeatherRow row;
+    if (auto it = rows_.find(weatherId); it != rows_.end()) row = it->second;
+    const Effect effect = row.effect;
+    smooth_ = !abrupt;
+    color_ = row.color;
+    std::string texture = row.texture;
+    if (texture.empty()) texture = cw::defaultTexture(effect);
+    if (effect != active_ || texture != texture_) {
+        pending_ = effect;
+        changePending_ = true;
+        texture_ = texture;
     }
+    from_ = target_;
+    target_ = std::clamp(intensity, 0.0f, 1.0f);
+    if (abrupt) {
+        from_ = target_;
+        current_ = target_;
+    }
+    easeStart_ = now_;
 }
 
-glm::vec3 Weather::getRandomPosition(const glm::vec3& center) const {
-    // Reuse the shared weather RNG to avoid duplicate generator state
-    static std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-
-    float x = center.x + dist(weatherRng()) * SPAWN_VOLUME_SIZE;
-    float z = center.z + dist(weatherRng()) * SPAWN_VOLUME_SIZE;
-    float y = center.y;
-
-    return glm::vec3(x, y, z);
-}
-
-void Weather::setIntensity(float intensity) {
-    this->intensity = glm::clamp(intensity, 0.0f, 1.0f);
+Weather::Type Weather::getWeatherType() const {
+    switch (active_) {
+        case Effect::Rain: return Type::RAIN;
+        case Effect::Snow: return Type::SNOW;
+        case Effect::Sand: return Type::SAND;
+        default: return Type::NONE;
+    }
 }
 
 int Weather::getParticleCount() const {
-    return static_cast<int>(particles.size());
+    int n = 0;
+    for (const auto& p : packets_) n += static_cast<int>(p->count);
+    return n;
+}
+
+Weather::Packet* Weather::takePacket() {
+    std::unique_ptr<Packet> packet;
+    for (auto it = freePackets_.begin(); it != freePackets_.end(); ++it) {
+        if ((*it)->freeAfterFrame <= frame_) {
+            packet = std::move(*it);
+            freePackets_.erase(it);
+            break;
+        }
+    }
+    if (!packet) {
+        packet = std::make_unique<Packet>();
+        AllocatedBuffer buf = createBuffer(vkCtx_->getAllocator(), cw::kPacketSize * sizeof(GpuParticle),
+                                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+        AllocatedBuffer splash = createBuffer(vkCtx_->getAllocator(), cw::kPacketSize * sizeof(GpuSplash),
+                                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+        packet->buffer = buf.buffer;
+        packet->allocation = buf.allocation;
+        packet->mapped = buf.info.pMappedData;
+        packet->splashBuffer = splash.buffer;
+        packet->splashAllocation = splash.allocation;
+        packet->splashMapped = splash.info.pMappedData;
+        if (!packet->mapped || !packet->splashMapped) {
+            destroy(vkCtx_->getAllocator(), packet->buffer, packet->allocation);
+            destroy(vkCtx_->getAllocator(), packet->splashBuffer, packet->splashAllocation);
+            return nullptr;
+        }
+    }
+    packet->count = 0;
+    packet->splashCount = 0;
+    packet->gone = 0.0f;
+    packet->open = true;
+    packets_.push_back(std::move(packet));
+    return packets_.back().get();
+}
+
+void Weather::retire(std::unique_ptr<Packet> packet) {
+    // Still read by the frames in flight that drew it.
+    packet->freeAfterFrame = frame_ + 3;
+    freePackets_.push_back(std::move(packet));
+}
+
+void Weather::clearPackets() {
+    for (auto& p : packets_) retire(std::move(p));
+    packets_.clear();
+}
+
+void Weather::spawn(float dt, const cw::SpawnContext& ctx) {
+    const float rate = cw::spawnRate(active_, cw::densityScale(densityLevel_), ctx.strength);
+    int n = cw::spawnCount(dt, rate);
+    if (n <= 0) return;
+
+    Packet* packet = packets_.empty() || !packets_.back()->open ? nullptr : packets_.back().get();
+    if (!packet) {
+        packet = takePacket();
+        if (!packet) return;
+        packet->base = now_ - dt;
+    }
+    // The packet's own clock: the frame just gone runs from `from` to `from + dt`.
+    const float from = static_cast<float>(now_ - dt - packet->base);
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+    const cw::Random rnd = [&]() { return uni(rng_); };
+
+    n = std::min<int>(n, static_cast<int>(cw::kPacketSize - packet->count));
+    auto* out = static_cast<GpuParticle*>(packet->mapped);
+    auto* splashes = static_cast<GpuSplash*>(packet->splashMapped);
+    for (int i = 0; i < n; ++i) {
+        const float start = rnd() * dt + from;
+        cw::Particle p;
+        float gone = 0.0f;
+        switch (active_) {
+            case Effect::Rain:
+                p = cw::spawnRain(rnd, ctx, ground_, start);
+                gone = cw::rainGone(p);
+                if (cw::splashes(p, ctx.riding)) {
+                    const cw::Splash s = cw::splashOf(p);
+                    const glm::vec3 pos = toRender(s.position);
+                    splashes[packet->splashCount++] = {{pos.x, pos.y, pos.z}, {s.start, s.end}};
+                    gone = std::max(gone, s.end);
+                }
+                break;
+            case Effect::Snow:
+                p = cw::spawnSnow(rnd, ctx, ground_, start);
+                gone = cw::snowGone(p);
+                break;
+            case Effect::Sand:
+                p = cw::spawnSand(rnd, ctx, ground_, start);
+                gone = cw::sandGone(p);
+                break;
+            default:
+                return;
+        }
+        out[packet->count++] = gpuParticle(p);
+        packet->gone = std::max(packet->gone, gone);
+    }
+    // Closed when full or when it has been filling for its window (0x00787ce0).
+    if (packet->count >= cw::kPacketSize ||
+        static_cast<float>(now_ - packet->base) > cw::packetWindow(active_)) {
+        packet->open = false;
+    }
+}
+
+void Weather::update(const FrameInput& frame) {
+    const float dt = std::max(frame.deltaTime, 0.0f);
+    now_ += dt;
+    ++frame_;
+    viewportWidth_ = frame.viewportWidth;
+
+    // The player's movement, from where it has been (0x0078c500).
+    const glm::vec3 player = toCanonical(frame.playerPosition);
+    if (havePlayer_) velocity_.add(player - lastPlayer_, static_cast<int>(std::lround(dt * 1000.0f)));
+    lastPlayer_ = player;
+    havePlayer_ = true;
+
+    // Close a packet left open past its window, then retire what has all
+    // fallen (0x00787ce0).
+    if (!packets_.empty() && packets_.back()->open &&
+        static_cast<float>(now_ - packets_.back()->base) > cw::packetWindow(active_)) {
+        packets_.back()->open = false;
+    }
+    for (auto it = packets_.begin(); it != packets_.end();) {
+        if (!(*it)->open && static_cast<float>(now_ - (*it)->base) > (*it)->gone) {
+            retire(std::move(*it));
+            it = packets_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // 0x0078d170: a change of effect waits for the old one's particles to be
+    // gone unless it came abruptly, the old one making no more meanwhile and
+    // easing toward a quarter.
+    bool fading = false;
+    if (changePending_) {
+        const bool mistsLive = std::any_of(mists_.begin(), mists_.end(), [&](const cw::Mist& m) {
+            return m.live() && m.start < now_ && now_ <= m.end;
+        });
+        if ((packets_.empty() && !mistsLive) || !smooth_) {
+            clearPackets();
+            std::fill(mists_.begin(), mists_.end(), cw::Mist{});
+            mistAccum_ = 0.0f;
+            active_ = pending_;
+            changePending_ = false;
+            stopping_ = false;
+            from_ = current_;
+            easeStart_ = now_;
+            ground_.clear();
+            // Loaded here, on the frame's own thread, not while recording.
+            if (active_ != Effect::None) textureSet(texture_);
+            if (active_ == Effect::Rain) textureSet(cw::kSplashTexture);
+            if (active_ != Effect::None) textureSet(cw::mistSpec(active_).texture);
+        } else {
+            stopping_ = true;
+            fading = true;
+            current_ = cw::easedIntensity(from_, std::min(target_, 0.25f),
+                                          static_cast<float>(now_ - easeStart_));
+            if (!packets_.empty()) packets_.back()->open = false;
+        }
+    }
+    if (!fading) current_ = cw::easedIntensity(from_, target_, static_cast<float>(now_ - easeStart_));
+
+    cameraRender_ = frame.cameraPosition;
+    right_ = frame.cameraRight * (cw::kMistSize * 0.5f);
+    up_ = frame.cameraUp * (cw::kMistSize * 0.5f);
+    if (active_ == Effect::None) return;
+
+    const glm::vec3 camera = toCanonical(frame.cameraPosition);
+    ground_.recenter(glm::vec2(camera));
+
+    cw::SpawnContext ctx;
+    ctx.camera = camera;
+    ctx.playerVelocity = velocity_.velocity();
+    const float facing = core::coords::characterYawDegToCanonical(frame.playerYawDeg);
+    ctx.wind = cw::windFor(ctx.playerVelocity, facing < 0.0f ? facing + 6.2831855f : facing);
+    ctx.strength = cw::effectStrength(current_);
+    ctx.riding = frame.riding;
+    updateMists(dt, ctx);
+    if (!stopping_) spawn(dt, ctx);
+}
+
+void Weather::updateMists(float dt, const cw::SpawnContext& ctx) {
+    // 0x00786e10: the sheets made a second, never more banked than slots.
+    const float before = static_cast<float>(now_ - dt);
+    const float now = static_cast<float>(now_);
+    mistAccum_ = std::min(mistAccum_ + dt * cw::mistRate(active_, cw::densityScale(densityLevel_),
+                                                         ctx.strength),
+                          static_cast<float>(cw::kMistSlots));
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+    const cw::Random rnd = [&]() { return uni(rng_); };
+    const cw::MistSpec spec = cw::mistSpec(active_);
+    for (cw::Mist& m : mists_) {
+        if (m.live() && m.end < now) m = cw::Mist{};
+        if (stopping_ && m.live() && now <= m.start) m = cw::Mist{};
+        if (!m.live() && mistAccum_ >= 1.0f && !stopping_) {
+            mistAccum_ -= 1.0f;
+            m = cw::spawnMist(rnd, spec, ctx, ground_, before + rnd() * dt);
+        }
+        if (m.live()) cw::stepMist(m, before, now);
+    }
+}
+
+VkDescriptorSet Weather::textureSet(const std::string& path) {
+    if (path.empty()) return blank_ ? blank_->set : VK_NULL_HANDLE;
+    auto it = textures_.find(path);
+    if (it != textures_.end()) return it->second ? it->second->set : VK_NULL_HANDLE;
+    std::unique_ptr<Texture> tex;
+    if (assets_ && textures_.size() + 1 < kMaxTextures) {
+        pipeline::BLPImage image = assets_->loadTexture(path);
+        auto t = std::make_unique<Texture>();
+        VkDevice device = vkCtx_->getDevice();
+        if (image.isValid() &&
+            t->texture.upload(*vkCtx_, image.data.data(), image.width, image.height,
+                              VK_FORMAT_R8G8B8A8_UNORM, true) &&
+            t->texture.createSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+                                     VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE) &&
+            t->texture.isValid()) {
+            VkDescriptorSetAllocateInfo alloc{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            alloc.descriptorPool = descriptorPool_;
+            alloc.descriptorSetCount = 1;
+            alloc.pSetLayouts = &textureLayout_;
+            if (vkAllocateDescriptorSets(device, &alloc, &t->set) == VK_SUCCESS) {
+                VkDescriptorImageInfo info = t->texture.descriptorInfo();
+                VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                write.dstSet = t->set;
+                write.descriptorCount = 1;
+                write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                write.pImageInfo = &info;
+                vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+                tex = std::move(t);
+            }
+        }
+        if (!tex) LOG_WARNING("Weather: failed to load ", path);
+    }
+    VkDescriptorSet set = tex ? tex->set : VK_NULL_HANDLE;
+    textures_[path] = std::move(tex);
+    return set;
+}
+
+VkDescriptorSet Weather::loadedSet(const std::string& path) const {
+    if (path.empty()) return blank_ ? blank_->set : VK_NULL_HANDLE;
+    auto it = textures_.find(path);
+    return it != textures_.end() && it->second ? it->second->set : VK_NULL_HANDLE;
+}
+
+void Weather::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
+    if (!vkCtx_) return;
+    const Effect effect = active_;
+    if (effect == Effect::None) return;
+
+    WeatherPush push{};
+    push.color = glm::vec4(color_, 1.0f);
+    const VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDeviceSize offset = 0;
+
+    auto drawPackets = [&](VkPipeline pipeline, VkDescriptorSet set, bool splash) {
+        if (!pipeline || !set) return;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        VkDescriptorSet sets[2] = {perFrameSet, set};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 2, sets, 0, nullptr);
+        for (const auto& p : packets_) {
+            const uint32_t n = splash ? p->splashCount : p->count;
+            if (n == 0) continue;
+            push.params.x = static_cast<float>(now_ - p->base);
+            vkCmdPushConstants(cmd, pipelineLayout_, stages, 0, sizeof(push), &push);
+            vkCmdBindVertexBuffers(cmd, 0, 1, splash ? &p->splashBuffer : &p->buffer, &offset);
+            if (pipeline == pointPipeline_) vkCmdDraw(cmd, n, 1, 0, 0);
+            else vkCmdDraw(cmd, 3, n, 0, 0);
+        }
+    };
+
+    switch (effect) {
+        case Effect::Rain:
+            // 0x0078ae20: the drops (0x0078a640), then the splashes (0x0078a030).
+            drawPackets(streakPipeline_, loadedSet(texture_), false);
+            drawPackets(splashPipeline_, loadedSet(cw::kSplashTexture), true);
+            break;
+        case Effect::Snow:
+            push.params.y = 0.0f;
+            drawPackets(pointPipeline_, loadedSet(texture_), false);
+            break;
+        case Effect::Sand:
+            // c9.z: the viewport's width by 0.0025 (0x0078bee0). Its colour, c0,
+            // is the zone's fog colour, which the program reads from the frame.
+            push.params.y = 1.0f;
+            push.params.z = static_cast<float>(viewportWidth_) * 0.0025f;
+            drawPackets(pointPipeline_, loadedSet(""), false);
+            break;
+        default:
+            break;
+    }
+
+    // The mist, after the particles (0x0078ae20 and its siblings end with
+    // 0x00786e10): a quad a sheet facing the camera, in the fog's colour.
+    const VkDescriptorSet mistSet = loadedSet(cw::mistSpec(effect).texture);
+    if (!mistPipeline_ || !mistSet) return;
+    mistFrame_ = (mistFrame_ + 1) % kMistFrames;
+    auto* out = static_cast<GpuMistVertex*>(mistMapped_[mistFrame_]);
+    if (!out) return;
+    const float now = static_cast<float>(now_);
+    const glm::vec3 camera = toCanonical(cameraRender_);
+    uint32_t n = 0;
+    for (const cw::Mist& m : mists_) {
+        if (!m.live() || now < m.start) continue;
+        const glm::vec3 centre = toRender(m.position);
+        const glm::vec3 c[4] = {centre - right_ + up_, centre + right_ + up_,
+                                centre + right_ - up_, centre - right_ - up_};
+        const glm::vec2 uv[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+        float a[4];
+        for (int k = 0; k < 4; ++k) a[k] = cw::mistAlpha(m, now, glm::length(toCanonical(c[k]) - camera));
+        const int order[6] = {0, 1, 2, 0, 2, 3};
+        for (int k : order) {
+            out[n++] = {{c[k].x, c[k].y, c[k].z}, {uv[k].x, uv[k].y}, a[k]};
+        }
+    }
+    if (n == 0) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mistPipeline_);
+    VkDescriptorSet sets[2] = {perFrameSet, mistSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 2, sets, 0, nullptr);
+    vkCmdPushConstants(cmd, pipelineLayout_, stages, 0, sizeof(push), &push);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &mistBuffer_[mistFrame_], &offset);
+    vkCmdDraw(cmd, n, 1, 0, 0);
 }
 
 void Weather::shutdown() {
-    if (vkCtx) {
-        destroyParticleResources(vkCtx->getDevice(), vkCtx->getAllocator(),
-                                 pipeline, pipelineLayout, dynamicVB,
-                                 dynamicVBAlloc);
-    }
-
-    vkCtx = nullptr;
-    particles.clear();
-    particlePositions.clear();
-}
-
-// ---------------------------------------------------------------------------
-// Zone-based weather configuration
-// ---------------------------------------------------------------------------
-
-void Weather::setZoneWeather(uint32_t zoneId, Type type, float minIntensity, float maxIntensity, float probability) {
-    zoneWeatherTable_[zoneId] = {.type = type, .minIntensity = minIntensity, .maxIntensity = maxIntensity, .probability = probability};
-}
-
-void Weather::initializeZoneWeatherDefaults() {
-    if (zoneWeatherInitialized_) return;
-    zoneWeatherInitialized_ = true;
-
-    // Eastern Kingdoms zones
-    // Duskwood's persistent atmosphere is supplied by its lighting fog profile.
-    // Do not synthesize rain here: the streak particles read as wind-blown fog.
-    // Renderer also suppresses server rain in Duskwood so its fog stays legible.
-    setZoneWeather(11,   Type::RAIN, 0.1f, 0.4f, 0.15f);  // Wetlands - moderate rain
-    setZoneWeather(8,    Type::RAIN, 0.1f, 0.5f, 0.2f);   // Swamp of Sorrows
-    setZoneWeather(33,   Type::RAIN, 0.2f, 0.7f, 0.25f);  // Stranglethorn Vale
-    setZoneWeather(44,   Type::RAIN, 0.1f, 0.3f, 0.1f);   // Redridge Mountains - light rain
-    setZoneWeather(36,   Type::RAIN, 0.1f, 0.4f, 0.15f);  // Alterac Mountains
-    setZoneWeather(45,   Type::RAIN, 0.1f, 0.3f, 0.1f);   // Arathi Highlands
-    setZoneWeather(267,  Type::RAIN, 0.2f, 0.5f, 0.2f);   // Hillsbrad Foothills
-    setZoneWeather(28,   Type::RAIN, 0.1f, 0.3f, 0.1f);   // Western Plaguelands - occasional rain
-    setZoneWeather(139,  Type::RAIN, 0.1f, 0.3f, 0.1f);   // Eastern Plaguelands
-
-    // Snowy zones
-    setZoneWeather(1,    Type::SNOW, 0.2f, 0.6f, 0.3f);   // Dun Morogh
-    setZoneWeather(51,   Type::SNOW, 0.1f, 0.5f, 0.2f);   // Searing Gorge (occasional)
-    setZoneWeather(41,   Type::SNOW, 0.1f, 0.4f, 0.15f);  // Deadwind Pass
-    setZoneWeather(2817, Type::SNOW, 0.3f, 0.7f, 0.4f);   // Crystalsong Forest
-    setZoneWeather(67,   Type::SNOW, 0.2f, 0.6f, 0.35f);  // Storm Peaks
-    setZoneWeather(65,   Type::SNOW, 0.2f, 0.5f, 0.3f);   // Dragonblight
-    setZoneWeather(394,  Type::SNOW, 0.1f, 0.4f, 0.2f);   // Grizzly Hills
-    setZoneWeather(495,  Type::SNOW, 0.3f, 0.8f, 0.5f);   // Howling Fjord
-    setZoneWeather(210,  Type::SNOW, 0.2f, 0.5f, 0.25f);  // Icecrown
-    setZoneWeather(3537, Type::SNOW, 0.2f, 0.6f, 0.3f);   // Borean Tundra
-    setZoneWeather(4742, Type::SNOW, 0.2f, 0.5f, 0.3f);   // Hrothgar's Landing
-
-    // Kalimdor zones
-    setZoneWeather(15,   Type::RAIN, 0.1f, 0.4f, 0.15f);  // Dustwallow Marsh
-    setZoneWeather(16,   Type::RAIN, 0.1f, 0.3f, 0.1f);   // Azshara
-    setZoneWeather(148,  Type::RAIN, 0.1f, 0.4f, 0.15f);  // Darkshore
-    setZoneWeather(331,  Type::RAIN, 0.1f, 0.3f, 0.1f);   // Ashenvale
-    setZoneWeather(405,  Type::RAIN, 0.1f, 0.3f, 0.1f);   // Desolace
-    setZoneWeather(490,  Type::RAIN, 0.1f, 0.4f, 0.15f);  // Un'Goro Crater
-    setZoneWeather(493,  Type::RAIN, 0.1f, 0.3f, 0.1f);   // Moonglade
-
-    // Winterspring is snowy
-    setZoneWeather(618,  Type::SNOW, 0.2f, 0.6f, 0.3f);   // Winterspring
-
-    // Outland
-    setZoneWeather(3483, Type::RAIN, 0.1f, 0.3f, 0.1f);   // Hellfire Peninsula (occasional)
-    setZoneWeather(3521, Type::RAIN, 0.1f, 0.4f, 0.15f);  // Zangarmarsh
-    setZoneWeather(3519, Type::RAIN, 0.1f, 0.3f, 0.1f);   // Terokkar Forest
-}
-
-void Weather::updateZoneWeather(uint32_t zoneId, float deltaTime) {
-    if (!zoneWeatherInitialized_) {
-        initializeZoneWeatherDefaults();
-    }
-
-    // Zone changed - reset weather cycle
-    if (zoneId != currentWeatherZone_) {
-        currentWeatherZone_ = zoneId;
-        zoneWeatherTimer_ = 0.0f;
-
-        auto it = zoneWeatherTable_.find(zoneId);
-        if (it == zoneWeatherTable_.end()) {
-            // Zone has no configured weather - clear gradually
-            targetIntensity_ = 0.0f;
-        } else {
-            // Roll whether weather is active based on probability
-            float roll = weatherRandFloat();
-            zoneWeatherActive_ = (roll < it->second.probability);
-
-            if (zoneWeatherActive_) {
-                weatherType = it->second.type;
-                // Random intensity within configured range
-                float t = weatherRandFloat();
-                targetIntensity_ = glm::mix(it->second.minIntensity, it->second.maxIntensity, t);
-                // Random cycle duration: 3-8 minutes
-                zoneWeatherCycleDuration_ = 180.0f + weatherRandFloat() * 300.0f;
-            } else {
-                targetIntensity_ = 0.0f;
-                zoneWeatherCycleDuration_ = 120.0f + weatherRandFloat() * 180.0f;
-            }
-        }
-    }
-
-    // Smooth intensity transitions
-    float transitionSpeed = 0.15f * deltaTime; // ~7 seconds to full transition
-    if (intensity < targetIntensity_) {
-        intensity = std::min(intensity + transitionSpeed, targetIntensity_);
-    } else if (intensity > targetIntensity_) {
-        intensity = std::max(intensity - transitionSpeed, targetIntensity_);
-    }
-
-    // If intensity reached zero and target is zero, clear weather type
-    if (intensity <= 0.01f && targetIntensity_ <= 0.01f) {
-        if (weatherType != Type::NONE) {
-            weatherType = Type::NONE;
-            particles.clear();
-        }
-    }
-
-    // Weather cycling - periodically re-roll weather
-    zoneWeatherTimer_ += deltaTime;
-    if (zoneWeatherTimer_ >= zoneWeatherCycleDuration_ && zoneWeatherCycleDuration_ > 0.0f) {
-        zoneWeatherTimer_ = 0.0f;
-
-        auto it = zoneWeatherTable_.find(zoneId);
-        if (it != zoneWeatherTable_.end()) {
-            float roll = weatherRandFloat();
-            zoneWeatherActive_ = (roll < it->second.probability);
-
-            if (zoneWeatherActive_) {
-                weatherType = it->second.type;
-                float t = weatherRandFloat();
-                targetIntensity_ = glm::mix(it->second.minIntensity, it->second.maxIntensity, t);
-            } else {
-                targetIntensity_ = 0.0f;
-            }
-
-            // New cycle duration
-            zoneWeatherCycleDuration_ = 180.0f + weatherRandFloat() * 300.0f;
-        }
-    }
+    if (!vkCtx_) return;
+    VkDevice device = vkCtx_->getDevice();
+    VmaAllocator allocator = vkCtx_->getAllocator();
+    vkDeviceWaitIdle(device);
+    auto release = [&](std::unique_ptr<Packet>& p) {
+        destroy(allocator, p->buffer, p->allocation);
+        destroy(allocator, p->splashBuffer, p->splashAllocation);
+    };
+    for (auto& p : packets_) release(p);
+    for (auto& p : freePackets_) release(p);
+    packets_.clear();
+    freePackets_.clear();
+    for (auto& [path, t] : textures_) if (t) t->texture.destroy(device, allocator);
+    textures_.clear();
+    if (blank_) blank_->texture.destroy(device, allocator);
+    blank_.reset();
+    destroy(device, streakPipeline_);
+    destroy(device, splashPipeline_);
+    destroy(device, pointPipeline_);
+    destroy(device, mistPipeline_);
+    for (int i = 0; i < kMistFrames; ++i) destroy(allocator, mistBuffer_[i], mistAllocation_[i]);
+    destroy(device, pipelineLayout_);
+    destroy(device, descriptorPool_);
+    destroy(device, textureLayout_);
+    vkCtx_ = nullptr;
 }
 
 } // namespace rendering

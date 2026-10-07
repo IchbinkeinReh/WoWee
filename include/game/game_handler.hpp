@@ -1500,9 +1500,13 @@ public:
     bool isGCDActive() const { return getGCDRemaining() > 0.0f; }
 
     // Weather state (updated by SMSG_WEATHER)
-    // weatherType: 0=clear, 1=rain, 2=snow, 3=storm/fog
+    // weatherType: the Weather.dbc row id (the server's WeatherState)
     uint32_t getWeatherType() const { return weatherType_; }
     float getWeatherIntensity() const { return weatherIntensity_; }
+    /// SMSG_WEATHER's last byte: cut straight to the new weather (0x007846a0).
+    bool isWeatherAbrupt() const { return weatherAbrupt_; }
+    /// Counts SMSG_WEATHER packets, so a repeat of the same weather is seen.
+    uint32_t getWeatherSerial() const { return weatherSerial_; }
     bool isRaining() const { return weatherType_ == 1 && weatherIntensity_ > 0.05f; }
     bool isSnowing() const { return weatherType_ == 2 && weatherIntensity_ > 0.05f; }
     uint32_t getOverrideLightId() const { return overrideLightId_; }
@@ -4994,8 +4998,10 @@ private:
     std::chrono::steady_clock::time_point gcdStartedAt_{};
 
     // ---- Weather state (SMSG_WEATHER) ----
-    uint32_t weatherType_ = 0;       // 0=clear, 1=rain, 2=snow, 3=storm
+    uint32_t weatherType_ = 0;       // the Weather.dbc row the server names
     float weatherIntensity_ = 0.0f;  // 0.0 to 1.0
+    bool weatherAbrupt_ = false;
+    uint32_t weatherSerial_ = 0;
 
     // ---- Light override (SMSG_OVERRIDE_LIGHT) ----
     uint32_t overrideLightId_ = 0;      // 0 = no override

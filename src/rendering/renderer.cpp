@@ -773,6 +773,20 @@ bool Renderer::initialize(core::Window* win) {
     weather = std::make_unique<Weather>();
     if (!weather->initialize(vkCtx, perFrameSetLayout))
         LOG_WARNING("Weather effect initialization failed (non-fatal)");
+    // The ground the weather falls to: the highest of the terrain, the liquid
+    // on it and anything standing there, within 200 yards above or below
+    // (0x007ade10).
+    weather->setGroundQuery([this](float x, float y, float z) {
+        float h = -std::numeric_limits<float>::infinity();
+        auto take = [&](std::optional<float> v) {
+            if (v && *v <= z + 200.0f && *v >= z - 200.0f) h = std::max(h, *v);
+        };
+        if (terrainManager) take(terrainManager->getHeightAt(x, y));
+        if (waterRenderer) take(waterRenderer->getNearestWaterHeightAt(x, y, z, 200.0f));
+        if (wmoRenderer) take(wmoRenderer->getFloorHeight(x, y, z + 200.0f));
+        if (m2Renderer) take(m2Renderer->getFloorHeight(x, y, z + 200.0f));
+        return std::isfinite(h) ? h : z - 200.0f;
+    });
 
     lightning = std::make_unique<Lightning>();
     if (!lightning->initialize(vkCtx, perFrameSetLayout))
@@ -2042,9 +2056,7 @@ void Renderer::update(float deltaTime) {
         }
     }
 
-    // Resolve WMO containment before weather and ambience consume it. Server
-    // weather remains authoritative outdoors, but particles must not follow the
-    // camera through a roof into Ironforge or other enclosed WMOs.
+    // Resolve WMO containment before the ambience consumes it.
     const bool canQueryWmo = (camera && wmoRenderer);
     const glm::vec3 camPos = camera ? camera->getPosition() : glm::vec3(0.0f);
     uint32_t insideWmoId = 0;
@@ -2175,32 +2187,16 @@ void Renderer::update(float deltaTime) {
             waterRenderer->setLightWaterColors(wc);
         }
 
-        // Sync weather visual renderer with game state
-        if (weather && gh) {
-            uint32_t wType = gh->getWeatherType();
-            float wInt = gh->getWeatherIntensity();
-            if (wType != 0) {
-                // Server-driven weather (SMSG_WEATHER) - authoritative
-                if (wType == 1)      weather->setWeatherType(Weather::Type::RAIN);
-                else if (wType == 2) weather->setWeatherType(Weather::Type::SNOW);
-                else if (wType == 3) weather->setWeatherType(Weather::Type::STORM);
-                else                 weather->setWeatherType(Weather::Type::NONE);
-                weather->setIntensity(wInt);
-            } else {
-                // No server weather - use zone-based weather configuration
-                weather->updateZoneWeather(getCurrentZoneId(), deltaTime);
-            }
-            weather->setEnabled(!insideWmo);
-
-            // Lightning flash disabled
-            if (lightning) {
-                lightning->setEnabled(false);
-            }
-        } else if (weather) {
-            // No game handler (single-player without network) - zone weather only
-            weather->updateZoneWeather(getCurrentZoneId(), deltaTime);
-            weather->setEnabled(!insideWmo);
+        // SMSG_WEATHER names a Weather.dbc row; the weather takes it from
+        // there (0x007846a0). Nothing falls without one: the client makes up
+        // no weather of its own, and draws it indoors as out, the ground it
+        // traces against stopping it at a roof.
+        if (weather && gh && gh->getWeatherSerial() != weatherSerialSeen_) {
+            weatherSerialSeen_ = gh->getWeatherSerial();
+            weather->setWeather(gh->getWeatherType(), gh->getWeatherIntensity(),
+                                gh->isWeatherAbrupt());
         }
+        if (lightning) lightning->setEnabled(false);
     }
 
     // Sync character model position/rotation and animation with follow target
@@ -2283,7 +2279,17 @@ void Renderer::update(float deltaTime) {
 
     // Update weather particles
     if (weather && camera) {
-        weather->update(*camera, deltaTime);
+        Weather::FrameInput in;
+        in.deltaTime = deltaTime;
+        in.cameraPosition = camera->getPosition();
+        in.cameraRight = camera->getRight();
+        in.cameraUp = camera->getUp();
+        in.playerPosition = characterPosition;
+        in.playerYawDeg = characterYaw;
+        in.riding = animationController_ && animationController_->isTaxiFlight();
+        in.viewportWidth = activeRenderExtent_.width ? activeRenderExtent_.width
+                                                     : (vkCtx ? vkCtx->getSwapchainExtent().width : 0);
+        weather->update(in);
     }
 
     // Update lightning (storm / heavy rain)
@@ -2424,7 +2430,6 @@ void Renderer::update(float deltaTime) {
             auto wt = weather->getWeatherType();
             if (wt == Weather::Type::RAIN)       zctx.weatherType = 1;
             else if (wt == Weather::Type::SNOW)  zctx.weatherType = 2;
-            else if (wt == Weather::Type::STORM) zctx.weatherType = 3;
             zctx.weatherIntensity = weather->getIntensity();
         }
         if (lightingManager) {
@@ -2499,6 +2504,7 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
             if (skySystem) skySystem->loadTextures(cachedAssetManager);
             if (footprintRenderer && !footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, cachedAssetManager))
                 LOG_WARNING("Footprint renderer re-init failed (non-fatal)");
+            if (weather) weather->loadAssets(cachedAssetManager);
             break;
         default:
             deferredWorldInitPending_ = false;
@@ -4989,7 +4995,6 @@ float Renderer::volumetricFogExtinction() const {
         switch (weather->getWeatherType()) {
             case Weather::Type::RAIN:  extinction *= 1.0f + 1.2f * w; break;
             case Weather::Type::SNOW:  extinction *= 1.0f + 0.8f * w; break;
-            case Weather::Type::STORM: extinction *= 1.0f + 2.0f * w; break;
             default: break;
         }
     }

@@ -63,7 +63,7 @@ struct LuaServices {
     /// the game's Particle Density.
     std::function<void(float)> setParticleDensity;
 
-    /// How much of the weather to draw, 0 to 1 - the game's Weather Detail.
+    /// The weatherDensity setting, 0 to 3 (0x00784040).
     std::function<void(float)> setWeatherDensity;
 
     /// Ask for the interface to be reloaded, as ReloadUI() does.

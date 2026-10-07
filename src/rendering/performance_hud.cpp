@@ -357,6 +357,7 @@ void PerformanceHUD::render(const Renderer* renderer, const Camera* camera) {
             auto type = weather->getWeatherType();
             if (type == WeatherType::RAIN) typeName = "Rain";
             else if (type == WeatherType::SNOW) typeName = "Snow";
+            else if (type == WeatherType::SAND) typeName = "Sand";
 
             ImGui::Text("Type: %s", typeName);
             if (weather->isEnabled()) {

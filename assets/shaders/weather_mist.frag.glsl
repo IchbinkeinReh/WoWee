@@ -1,9 +1,7 @@
 #version 450
 
-// Rain drops and their splashes: the texture by the vertex colour, the
-// fixed-function stage's modulate. Drawn Mod2x with the 1/255 alpha reference
-// that blend mode carries (0x00ad8b7c), which is also what hides a drop that
-// is not alive.
+// SnowMist01 or WeatherMistGrainy01 by the corner's colour, alpha blended
+// with that mode's 1/255 alpha reference (0x00ad8b7c).
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 

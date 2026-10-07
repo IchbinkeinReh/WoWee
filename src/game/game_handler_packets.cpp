@@ -1600,35 +1600,19 @@ void GameHandler::registerRemainingOpcodes() {
         if (packet.hasRemaining(8)) {
             uint32_t wType = packet.readUInt32();
             float wIntensity = packet.readFloat();
+            bool abrupt = false;
             if (packet.hasRemaining(1))
-                /*uint8_t isAbrupt =*/ packet.readUInt8();
-            uint32_t prevWeatherType = weatherType_;
+                abrupt = packet.readUInt8() != 0;
+            // A Weather.dbc row, not an effect: its EffectType says rain, snow
+            // or sand (0x007846a0). The client says nothing in chat and
+            // shakes nothing; it logs the change.
             weatherType_ = wType;
             weatherIntensity_ = wIntensity;
-            const char* typeName = (wType == 1) ? "Rain" : (wType == 2) ? "Snow" : (wType == 3) ? "Storm" : "Clear";
-            LOG_INFO("Weather changed: type=", wType, " (", typeName, "), intensity=", wIntensity);
-            // Announce weather changes (including initial zone weather)
-            if (wType != prevWeatherType) {
-                const char* weatherMsg = nullptr;
-                if (wIntensity < 0.05f || wType == 0) {
-                    if (prevWeatherType != 0)
-                        weatherMsg = "The weather clears.";
-                } else if (wType == 1) {
-                    weatherMsg = "It begins to rain.";
-                } else if (wType == 2) {
-                    weatherMsg = "It begins to snow.";
-                } else if (wType == 3) {
-                    weatherMsg = "A storm rolls in.";
-                }
-                if (weatherMsg) addSystemChatMessage(weatherMsg);
-            }
+            weatherAbrupt_ = abrupt;
+            ++weatherSerial_;
+            LOG_INFO("Weather changed to ", wType, ", intensity ", wIntensity);
             // Notify addons of weather change
-                            fireAddonEvent("WEATHER_CHANGED", {std::to_string(wType), std::to_string(wIntensity)});
-            // Storm transition: trigger a low-frequency thunder rumble shake
-            if (wType == 3 && wIntensity > 0.3f && cameraShakeCallback_) {
-                float mag = 0.03f + wIntensity * 0.04f; // 0.03–0.07 units
-                cameraShakeCallback_(mag, 6.0f, 0.6f);
-            }
+            fireAddonEvent("WEATHER_CHANGED", {std::to_string(wType), std::to_string(wIntensity)});
         }
     };
     // Server-script text message - display in system chat
@@ -3482,6 +3466,8 @@ void GameHandler::handlePacket(network::Packet& packet) {
             if (plausibleWeather) {
                 weatherType_ = wType;
                 weatherIntensity_ = wIntensity;
+                weatherAbrupt_ = abrupt != 0;
+                ++weatherSerial_;
                 const char* typeName =
                     (wType == 1) ? "Rain" :
                     (wType == 2) ? "Snow" :

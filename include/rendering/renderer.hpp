@@ -416,6 +416,8 @@ private:
     /// out for, so a map change reapplies it.
     float farClip_ = 1200.0f;
     uint32_t farClipMapId_ = 0;
+    /// The last SMSG_WEATHER handed to the weather (GameHandler::getWeatherSerial).
+    uint32_t weatherSerialSeen_ = 0;
     void applyFarClip(uint32_t mapId);
     bool sharpStars_ = false;
     float diagTerrainFurthest_ = -1.0f;
