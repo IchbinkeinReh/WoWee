@@ -29,12 +29,15 @@ layout(location = 2) in uvec4 aBoneIndices;
 layout(location = 3) in vec3 aNormal;
 layout(location = 4) in vec2 aTexCoord;
 layout(location = 5) in vec4 aTangent;
+layout(location = 6) in vec2 aTexCoord2;
 
 layout(location = 0) out vec3 FragPos;
 layout(location = 1) out vec3 Normal;
 layout(location = 2) out vec2 TexCoord;
 layout(location = 3) out vec3 Tangent;
 layout(location = 4) out vec3 Bitangent;
+layout(location = 5) out vec2 TexCoord2;
+layout(location = 6) out vec2 EnvCoord;
 
 vec3 safeNormalize(vec3 v, vec3 fallback) {
     float len2 = dot(v, v);
@@ -67,6 +70,15 @@ void main() {
     FragPos = worldPos.xyz;
     Normal = modelMat3 * skinnedNorm;
     TexCoord = aTexCoord;
+    TexCoord2 = aTexCoord2;
+    // The sphere map, as m2.vert.glsl: the client's view space looks down +z
+    // (0x006bfe60), and Diffuse_Env takes R = -reflect(P, N) there and maps
+    // normalize(R + (0, 0, 1)).xy * 0.5 + 0.5.
+    vec3 viewP = (view * worldPos).xyz;
+    vec3 viewN = normalize(mat3(view) * Normal);
+    vec3 r = reflect(normalize(viewP), viewN);
+    vec3 m = vec3(-r.x, -r.y, r.z + 1.0);
+    EnvCoord = m.xy / max(length(m), 1e-5) * 0.5 + 0.5;
 
     // Gram-Schmidt re-orthogonalize tangent w.r.t. normal
     vec3 N = safeNormalize(Normal, vec3(0.0, 0.0, 1.0));

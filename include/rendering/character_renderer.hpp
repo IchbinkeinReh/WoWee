@@ -516,6 +516,8 @@ private:
         VkImageView normal = VK_NULL_HANDLE;
         VkSampler diffuseSampler = VK_NULL_HANDLE;
         VkSampler normalSampler = VK_NULL_HANDLE;
+        VkImageView second = VK_NULL_HANDLE;
+        VkSampler secondSampler = VK_NULL_HANDLE;
         bool operator==(const MaterialDescriptorKey&) const = default;
     };
     struct MaterialDescriptorKeyHash {
@@ -524,7 +526,9 @@ private:
             const size_t b = std::hash<VkImageView>{}(key.normal);
             const size_t c = std::hash<VkSampler>{}(key.diffuseSampler);
             const size_t d = std::hash<VkSampler>{}(key.normalSampler);
-            return a ^ (b << 1) ^ (c << 2) ^ (d << 3);
+            const size_t e = std::hash<VkImageView>{}(key.second);
+            const size_t f = std::hash<VkSampler>{}(key.secondSampler);
+            return a ^ (b << 1) ^ (c << 2) ^ (d << 3) ^ (e << 4) ^ (f << 5);
         }
     };
     std::unordered_map<MaterialDescriptorKey, VkDescriptorSet, MaterialDescriptorKeyHash>
@@ -646,6 +650,10 @@ private:
     [[nodiscard]] VkTexture* resolveBatchTexture(const CharacterInstance& inst,
                                    const M2ModelGPU& gm,
                                    const pipeline::M2Batch& b) const;
+    /// A stage's texture: the batch's lookup entry `stage` on, with the
+    /// instance's slot overrides.
+    VkTexture* resolveStageTexture(const CharacterInstance& inst, const M2ModelGPU& gm,
+                                   const pipeline::M2Batch& b, uint32_t stage) const;
 
     /// Per-batch texture sets for alpha-keyed shadow casters, one pool per
     /// frame in flight and reset at the top of each frame's shadow pass. Same

@@ -55,7 +55,27 @@ layout(set = 1, binding = 1) uniform CharMaterial {
     float uvM11;
     float uvTx;
     float uvTy;
+    int combiners;     // stage modes in bits 0-3 and 4-7, stage count in 8-9 (as m2.frag)
+    int coordSources;  // per stage: 0 UV0, 1 UV1, 2 env, 3 UV0 untransformed
+    float tintR;       // the batch's colour track
+    float tintG;
+    float tintB;
+    float uv2M00;      // the second stage's texture matrix
+    float uv2M01;
+    float uv2M10;
+    float uv2M11;
+    float uv2Tx;
+    float uv2Ty;
 };
+
+layout(set = 1, binding = 3) uniform sampler2D uTexture2;
+
+// The client's texture stages, as its Combiners_*.bls pixel programs apply
+// them (see m2.frag.glsl): each stage to the running colour, the diffuse
+// first, by the colour op (0x00af5a08) and alpha op (0x00af59e8) of its mode.
+const int kCombinerColorOp[8] = int[8](0, 0, 4, 2, 1, 5, 1, 2);
+const int kCombinerAlphaOp[8] = int[8](3, 0, 3, 2, 1, 3, 3, 3);
+
 
 // What a colour-only blend (Mod, Mod2x, NoAlphaAdd) is handed. The 3.3.5a
 // client (FUN_0081fe90) draws Mod and Mod2x unlit, with no diffuse and a
@@ -75,6 +95,51 @@ vec4 colourBlendOutput(vec3 lit, vec3 tex, float alpha) {
 const float ALPHA_KEY_REF = 0.8784314;
 
 layout(set = 1, binding = 2) uniform sampler2D uNormalHeightMap;
+
+vec3 combineRgb(int op, vec3 cur, float curA, vec3 tex, float diffA) {
+    if (op == 0) return tex * cur;
+    if (op == 1) return tex * cur * 2.0;
+    if (op == 2) return tex + cur;
+    if (op == 4) return cur * curA + tex * (1.0 - curA);
+    if (op == 5) return tex * diffA + cur * (1.0 - diffA);
+    return cur;
+}
+
+float combineA(int op, float cur, float tex, float diffA) {
+    if (op == 0) return tex * cur;
+    if (op == 1) return tex * cur * 2.0;
+    if (op == 2) return tex + cur;
+    if (op == 5) return tex * diffA + cur * (1.0 - diffA);
+    return cur;
+}
+
+// The batch's textures over a diffuse of `d`, stage by stage.
+vec4 combineStages(vec4 d, vec4 t0, vec4 t1) {
+    int m0 = combiners & 7;
+    vec4 cur = vec4(combineRgb(kCombinerColorOp[m0], d.rgb, d.a, t0.rgb, d.a),
+                    combineA(kCombinerAlphaOp[m0], d.a, t0.a, d.a));
+    if (((combiners >> 8) & 3) > 1) {
+        int m1 = (combiners >> 4) & 15;
+        if (m1 == 8) {
+            // Combiners_Opaque_Mod2xNA_Alpha (0x8001): the second texture
+            // doubled over the first where the first's alpha is clear.
+            cur.rgb = mix(cur.rgb * t1.rgb * 2.0, cur.rgb, t0.a);
+        } else if (m1 == 9) {
+            // Combiners_Opaque_AddAlpha (0x8002): the second added by its alpha.
+            cur.rgb += t1.rgb * t1.a;
+        } else if (m1 == 10) {
+            // Combiners_Opaque_AddAlpha_Alpha (0x8003): the same, lit, and only
+            // where the first texture's alpha is clear.
+            cur.rgb += t1.rgb * t1.a * (1.0 - t0.a) * d.rgb;
+        } else {
+            m1 &= 7;
+            cur = vec4(combineRgb(kCombinerColorOp[m1], cur.rgb, cur.a, t1.rgb, d.a),
+                       combineA(kCombinerAlphaOp[m1], cur.a, t1.a, d.a));
+        }
+    }
+    return cur;
+}
+
 
 // After the vertex stage's model matrix: the light of the WMO interior floor
 // the character stands on, w = 1 when it has one (0x007a0d60, 0x007c1730).
@@ -97,6 +162,10 @@ layout(location = 2) in vec2 inTexCoord;
 vec2 TexCoord;
 layout(location = 3) in vec3 Tangent;
 layout(location = 4) in vec3 Bitangent;
+layout(location = 5) in vec2 inTexCoord2;
+layout(location = 6) in vec2 inEnvCoord;
+// The second stage's coordinate, set with TexCoord.
+vec2 TexCoord2;
 
 layout(location = 0) out vec4 outColor;
 
@@ -266,8 +335,17 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
 }
 
 void main() {
-    TexCoord = vec2(uvM00 * inTexCoord.x + uvM01 * inTexCoord.y + uvTx,
-                    uvM10 * inTexCoord.x + uvM11 * inTexCoord.y + uvTy);
+    // Each stage's coordinates (0x00836600): a UV set through the stage's
+    // matrix, or the sphere map.
+    const int src0 = coordSources & 3;
+    const int src1 = (coordSources >> 2) & 3;
+    const vec2 set0 = src0 == 1 ? inTexCoord2 : inTexCoord;
+    const vec2 set1 = src1 == 1 ? inTexCoord2 : inTexCoord;
+    TexCoord = src0 == 2 ? inEnvCoord
+             : vec2(uvM00 * set0.x + uvM01 * set0.y + uvTx, uvM10 * set0.x + uvM11 * set0.y + uvTy);
+    TexCoord2 = src1 == 2 ? inEnvCoord
+              : src1 == 3 ? inTexCoord
+              : vec2(uv2M00 * set1.x + uv2M01 * set1.y + uv2Tx, uv2M10 * set1.x + uv2M11 * set1.y + uv2Ty);
     if (enablePOM == PREVIEW_SIMPLE_TEXTURE_MODE) {
         vec4 texColor = samplePreviewTexture(uTexture, TexCoord);
         if (isMagentaKeyColor(texColor)) {
@@ -293,8 +371,10 @@ void main() {
     vec2 uvDx = dFdx(TexCoord);
     vec2 uvDy = dFdy(TexCoord);
 
+    // The vertex normal as it is, on either face: the client lights a model
+    // per vertex (the Diffuse_* programs), which never knows which side of a
+    // two-sided batch is showing.
     vec3 vertexNormal = safeNormalize(Normal, vec3(0.0, 0.0, 1.0));
-    if (!gl_FrontFacing) vertexNormal = -vertexNormal;
 
     vec2 finalUV = TexCoord;
 
@@ -321,24 +401,13 @@ void main() {
         finalUV = parallaxOcclusionMap(TexCoord, viewDirTS, lodFactor);
     }
 
-    vec4 texColor = textureGrad(uTexture, finalUV, uvDx, uvDy);
-    // Repair dark DXT fringes on alpha-cut character textures such as hair.
-    // Transparent edge texels can carry black/garbage RGB even when alpha is
-    // valid; pull color from a coarser mip and trust the source more as alpha
-    // approaches opaque. This matches the generic M2 path.
-    if (alphaTest == 1 && texColor.a > 0.01 && texColor.a < 1.0) {
-        vec3 mipColor = textureLod(uTexture, finalUV, 4.0).rgb;
-        float trust = smoothstep(0.0, 0.9, texColor.a);
-        texColor.rgb = mix(mipColor, texColor.rgb, trust);
-    }
-
-    // Some classic/TBC character textures use bright magenta as a color key.
-    // Apply this before any material-specific alpha path because a few preview
-    // batches report as opaque/blended even when their texture still carries
-    // mask-color texels.
-    if (texColor.r > 0.78 && texColor.g < 0.28 && texColor.b > 0.78) {
-        discard;
-    }
+    const vec4 tex0 = textureGrad(uTexture, finalUV, uvDx, uvDy);
+    const vec4 tex1 = ((combiners >> 8) & 3) > 1 ? texture(uTexture2, TexCoord2) : vec4(1.0);
+    // The stages' alpha over the batch's (opacity), and the same divided back
+    // out: what the alpha reference, 224/255 of the batch's alpha, is
+    // measured against. An Opaque stage keeps the diffuse's alpha.
+    const float stageAlpha = combineStages(vec4(1.0, 1.0, 1.0, opacity), tex0, tex1).a;
+    vec4 texColor = vec4(tex0.rgb, stageAlpha / max(opacity, 1e-6));
 
     if (alphaTest == 1 && hairMaterial != 0) {
         if (texColor.a < ALPHA_KEY_REF) {
@@ -367,18 +436,17 @@ void main() {
         mapNormal.xy *= normalMapStrength;
         mapNormal = safeNormalize(mapNormal, vec3(0.0, 0.0, 1.0));
         vec3 worldNormal = safeNormalize(TBN * mapNormal, vertexNormal);
-        if (!gl_FrontFacing) worldNormal = -worldNormal;
         float blendFactor = max(lodFactor, 1.0 - normalMapStrength);
         norm = safeNormalize(mix(worldNormal, vertexNormal, blendFactor), vertexNormal);
     }
 
-    vec3 result;
+    // The light the diffuse carries, which the stages then combine with.
+    vec3 light;
 
     if (unlit != 0) {
-        // The texture as it is: the client draws an unlit batch with its
-        // colour as the emissive and no light (FUN_0081fb10). This was
-        // texture * (1 + boost), twice the texture at the defaults.
-        result = texColor.rgb;
+        // No light: the client draws an unlit batch with its colour as the
+        // emissive and nothing else (FUN_0081fb10).
+        light = vec3(1.0);
     } else if (pc.interiorAmbient.w > 1.5) {
         // On an interior floor: its vertex colour as the ambient and as one
         // light down from a fixed direction (0xaeedf0, the same in render
@@ -389,8 +457,8 @@ void main() {
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, pc.interiorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
         // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct).
-        result = clamp(pc.interiorAmbient.rgb + idiff * pc.interiorDirect.rgb * pc.lightFlags.y,
-                       0.0, 1.0) * texColor.rgb;
+        light = clamp(pc.interiorAmbient.rgb + idiff * pc.interiorDirect.rgb * pc.lightFlags.y,
+                      0.0, 1.0);
     } else {
         vec3 ldir = normalize(-lightDir.xyz);
         float diff = max(dot(norm, ldir), 0.0);
@@ -429,14 +497,19 @@ void main() {
         // the direct light no more than one a channel (0x00873ca0), then the
         // shadow variants' 0.7 + 0.3 x the light the shadow map lets through.
         vec3 direct = min(lightColor.rgb * pc.lightFlags.y, vec3(1.0));
-        result = clamp(rtAmbient(rt, ambient) + diff * direct, 0.0, 1.0)
-               * (0.7 + 0.3 * shadow) * texColor.rgb;
+        light = clamp(rtAmbient(rt, ambient) + diff * direct, 0.0, 1.0)
+              * (0.7 + 0.3 * shadow);
     }
 
+    // The batch's colour times the light is the diffuse the stages combine
+    // over (0x0081fe90).
+    vec3 result = combineStages(vec4(light * vec3(tintR, tintG, tintB), opacity), tex0, tex1).rgb;
     if (!finiteVec3(result)) {
         result = texColor.rgb;
     }
-    vec4 shaded = colourBlendOutput(result, texColor.rgb, texColor.a * opacity);
+    // A multiply is drawn unlit, over a diffuse of 1 (Mod) or 0.5 (Mod2x).
+    vec3 unlitStages = combineStages(vec4(1.0, 1.0, 1.0, opacity), tex0, tex1).rgb;
+    vec4 shaded = colourBlendOutput(result, unlitStages, texColor.a * opacity);
 
     // The client's fog for this blend mode: the world's fog, or toward the
     // colour that leaves the scene unchanged - black for an add, white for
