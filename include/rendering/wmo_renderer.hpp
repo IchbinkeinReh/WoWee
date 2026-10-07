@@ -166,6 +166,11 @@ public:
     /// continent. Hidden instances are skipped by drawing and by every spatial
     /// query, which is where collision comes from.
     void setInstanceHidden(uint32_t instanceId, bool hidden);
+    /// The game object highlight (0x00743c70 records the object's GUID; the
+    /// WMO whose GUID it is gets the light's ambient added into c29 by
+    /// 0x007964a0 / 0x007a8430). One at a time: clear, then set.
+    void setInstanceHighlight(uint32_t instanceId, bool on);
+    void clearInstanceHighlights();
 
     /**
      * Add doodad (child M2) to WMO instance
@@ -540,7 +545,8 @@ private:
     /// client fogs in the camera's colour (0x007a9380).
     struct WMOGroupPush {
         int32_t interiorPass = 0;
-        int32_t pad[3] = {};
+        int32_t highlight = 0;  ///< the light's ambient added into c29
+        int32_t pad[2] = {};
     };
 
     /**
@@ -779,6 +785,8 @@ private:
         /// Loaded, positioned, and not in the world right now. See
         /// setInstanceHidden.
         bool hidden = false;
+        /// The game object highlight (setInstanceHighlight).
+        bool highlighted = false;
 
         void updateModelMatrix();
     };

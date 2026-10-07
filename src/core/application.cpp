@@ -5487,16 +5487,22 @@ bool Application::getRenderFootZForGuid(uint64_t guid, float& outFootZ) const {
 void Application::setPressedGameObject(uint64_t guid) {
     if (!renderer) return;
     auto* m2 = renderer->getM2Renderer();
+    auto* wmo = renderer->getWMORenderer();
     if (!m2) return;
     // Cleared first, always: a press that moves from one object to another has
     // to take the light off the first, and the release clears with guid 0.
     m2->clearInstanceHighlights();
+    if (wmo) wmo->clearInstanceHighlights();
     if (guid == 0 || !entitySpawner_) return;
     const auto& objects = entitySpawner_->getGameObjectInstances();
     auto it = objects.find(guid);
-    // A building drawn as a WMO has no M2 instance to light; it keeps the
-    // cursor and the name, which is what it had before.
-    if (it == objects.end() || it->second.isWmo) return;
+    if (it == objects.end()) return;
+    // A building drawn as a WMO gets the light's ambient added into its c29
+    // (0x007964a0 compares the WMO's GUID with 0x00743c70's, 0x007a8430).
+    if (it->second.isWmo) {
+        if (wmo) wmo->setInstanceHighlight(it->second.instanceId, true);
+        return;
+    }
     m2->setInstanceHighlight(it->second.instanceId, 1.0f);
 }
 

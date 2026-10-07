@@ -62,6 +62,7 @@ layout(set = 1, binding = 3) uniform sampler2D uEnvTexture;
 // is drawn in the camera's interior pass (0x007a9380's local_14).
 layout(push_constant) uniform GroupPush {
     layout(offset = 64) int interiorPass;
+    int highlight;   // the game object highlight: the light's ambient into c29
 } gp;
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
@@ -201,12 +202,15 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
 // The lit programs add c29 as well: half the material's frameSidnColor - its
 // sidnColor times the light's window level, a byte at a time (0x007a8520) -
 // which 0x007ac6a0, 0x007ac9f0 and 0x007a9380 hand them (0x007a8940). It
-// lights a window at night. The client adds the light's ambient into it too
-// for the WMO of the game object under the cursor.
+// lights a window at night. For the WMO of the highlighted game object the
+// light's ambient (0xd38cac, via 0x007964a0 / 0x007a8430) is added to it
+// first, byte by byte and saturating.
 vec3 windowEmissive() {
     vec3 sidn = round(vec3(sidnR, sidnG, sidnB) * 255.0);
     float level = max(roundEven(windowLight.x * 255.0 - 0.5), 0.0);
     vec3 frameSidn = floor(sidn * level / 256.0);
+    if (gp.highlight != 0)
+        frameSidn = min(frameSidn + round(clamp(ambientColor.rgb, 0.0, 1.0) * 255.0), vec3(255.0));
     return floor(frameSidn * 0.5) / 255.0;
 }
 
@@ -332,6 +336,12 @@ void main() {
     // The shadow variants let a face turned edge-on to the sun out of the
     // shadow: by |1.2 - |N.L||^4, saturated (c4 is the light's view-space
     // direction, 0x00875c10).
+    // Not here: their sat(dot(P, c3.xyz) + c3.w) lift. 0x008745d0 sets c3 to
+    // 0x007bb670's plane (normal from the world matrix, through the player
+    // two yards up) for groups without flags 0x48, and to zero for the rest
+    // at shadow levels above 2; the M2 and terrain variants always get zero
+    // (0x00874760, 0xd431ac is never written). The plane's space is not
+    // pinned down, so it is left out.
     shadow += (1.0 - shadow) * clamp(pow(abs(1.2 - abs(dot(norm, normalize(-lightDir.xyz)))), 4.0), 0.0, 1.0);
     const float shadowScale = 0.7 + 0.3 * shadow;
 

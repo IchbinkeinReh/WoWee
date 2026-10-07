@@ -332,3 +332,15 @@ TEST_CASE("light mode 2 averages the direct light and the ambient", "[wmo][dooda
     CHECK(b.direct == glm::ivec3(0));
     CHECK(b.ambient == glm::ivec3(16));
 }
+
+TEST_CASE("Env, EnvMetal and Composite without a texture_2 are Opaque", "[wmo]") {
+    // 0x007d7710 rewrites the material's shader as it makes its textures.
+    CHECK(wl::materialShader(3, false) == 4);
+    CHECK(wl::materialShader(5, false) == 4);
+    CHECK(wl::materialShader(6, false) == 4);
+    CHECK(wl::materialShader(3, true) == 3);
+    CHECK(wl::materialShader(6, true) == 6);
+    CHECK(wl::materialShader(0, false) == 0);
+    CHECK(wl::materialShader(1, false) == 1);
+    CHECK(wl::materialShader(4, false) == 4);
+}

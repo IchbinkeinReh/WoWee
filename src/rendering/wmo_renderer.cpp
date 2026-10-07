@@ -558,12 +558,20 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         modelData.materialTextureIndices.push_back(texIndex);
         modelData.materialBlendModes.push_back(mat.blendMode);
         modelData.materialFlags.push_back(mat.flags);
-        modelData.materialShaders.push_back(mat.shader);
+        // 0x007d7710, making the material's textures: shaders 3, 5 and 6
+        // (Env, EnvMetal, Composite) with no texture_2 name are rewritten to
+        // 4, Opaque - unified or not. A non-unified group's table has no
+        // entry 6 at all (0x007afee0 leaves 0x00d1c408 null, and 0x00873060
+        // would read through it), so a shader-6 material that keeps its
+        // texture_2 exists only in unified WMOs.
+        const uint32_t shader = pipeline::wmo_doodad_light::materialShader(
+            mat.shader, model.textureOffsetToIndex.count(mat.texture2) != 0);
+        modelData.materialShaders.push_back(shader);
         modelData.materialSidn.push_back((mat.flags & 0x10u) != 0 ? mat.color1 : 0u);
         // MapObjEnv and MapObjEnvMetal sample texture_2 as their reflection,
         // MapObjComposite as its second layer (0x007ac6a0 binds it to stage
         // 1 for every material).
-        const bool envProgram = mat.shader == 3 || mat.shader == 5 || mat.shader == 6;
+        const bool envProgram = shader == 3 || shader == 5 || shader == 6;
         modelData.materialEnvTextureIndices.push_back(
             envProgram && t2 < model.textures.size() && !model.textures[t2].empty()
                 ? t2 : std::numeric_limits<uint32_t>::max());
@@ -1194,6 +1202,16 @@ void WMORenderer::setInstanceHidden(uint32_t instanceId, bool hidden) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;
     instances[idxIt->second].hidden = hidden;
+}
+
+void WMORenderer::setInstanceHighlight(uint32_t instanceId, bool on) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    instances[idxIt->second].highlighted = on;
+}
+
+void WMORenderer::clearInstanceHighlights() {
+    for (auto& inst : instances) inst.highlighted = false;
 }
 
 void WMORenderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& transform) {
@@ -1830,6 +1848,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
             // (0x007a9380, local_14), the zone's otherwise.
             WMOGroupPush groupPush{};
             groupPush.interiorPass = (passGroups && gi < passGroups->size() && (*passGroups)[gi]) ? 1 : 0;
+            groupPush.highlight = instance.highlighted ? 1 : 0;
             vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
                                sizeof(GPUPushConstants), sizeof(WMOGroupPush), &groupPush);
 

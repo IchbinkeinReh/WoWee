@@ -319,6 +319,14 @@ inline BatchLights batchLights(const GroupDraw& g, BatchKind kind, uint32_t mate
 /// with blend mode 0 over a texture with an alpha channel is drawn as Opaque
 /// (0x007a9380, 0x007ac9f0: 0x004b54f0 asks the texture). Only Diffuse takes
 /// the texture's alpha into the output; the rest output the vertex alpha.
+/// A material's shader as 0x007d7710 leaves it when it makes the material's
+/// textures: Env, EnvMetal and Composite (3, 5, 6) with no texture_2 name
+/// become Opaque (4), unified WMO or not.
+inline uint32_t materialShader(uint32_t momtShader, bool texture2Named) {
+    if ((momtShader == 3 || momtShader == 5 || momtShader == 6) && !texture2Named) return 4;
+    return momtShader;
+}
+
 enum class SurfaceProgram : uint8_t {
     Diffuse = 0, Specular = 1, Metal = 2, Env = 3, Opaque = 4, EnvMetal = 5, Composite = 6,
 };
