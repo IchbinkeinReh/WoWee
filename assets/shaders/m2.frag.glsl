@@ -112,7 +112,8 @@ vec4 fogVolumeAt(vec3 worldPos) {
 // the far haze the sky is painted to meet, so it goes on first; the volume is
 // everything between the camera and that, sunlit shafts included.
 vec3 applyFog(vec3 color, vec3 worldPos, float dist) {
-    float fogFactor = clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0);
+    // Raised to fogColor.w: 1 before map 530, the later fog's exponent after (0x00873210).
+    float fogFactor = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
     color = mix(fogColor.rgb, color, fogFactor);
     if (volumetricParams.x > 0.5) {
         vec4 air = fogVolumeAt(worldPos);
@@ -263,7 +264,7 @@ void main() {
     // it is - and none at all for an unfogged material (flag 0x2). Mode 7
     // reads past the table's end and gets none.
     const bool fogOn = unfogged == 0 && blendMode != 7;
-    const float fogFactor = clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0);
+    const float fogFactor = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
     if (!fogOn) {
         // Drawn as it is.
     } else if (blendAdds()) {

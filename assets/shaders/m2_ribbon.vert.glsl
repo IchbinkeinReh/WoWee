@@ -53,7 +53,8 @@ void main() {
     float dist      = length(viewPos4.xyz);
     float fogStart  = fogParams.x;
     float fogEnd    = fogParams.y;
-    vFogFactor      = clamp((fogEnd - dist) / max(fogEnd - fogStart, 0.001), 0.0, 1.0);
+    vFogFactor      = pow(clamp((fogEnd - dist) / max(fogEnd - fogStart, 0.001), 0.0, 1.0),
+                          max(fogColor.w, 1.0));
     if (volumetricParams.x > 0.5) vFogFactor *= fogVolumeAt(aPos).a;
 
     vColor = aColor;

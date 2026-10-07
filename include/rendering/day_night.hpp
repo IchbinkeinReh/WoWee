@@ -240,6 +240,57 @@ inline FogRange clientFogRange(float fogEndYards, float startScalar, float farCl
     return {end * scalar, end};
 }
 
+/// Whether a map takes the client's later fog: map 530 and up, Outland and
+/// Northrend among them, with vertex shaders (0x007816f0 sets 0xd38acc from
+/// the map id against 0x212). Every map before it keeps the linear fog.
+inline bool mapUsesFogExponent(uint32_t mapId) {
+    return mapId >= 530u;
+}
+
+/// The power that fog is drawn with for a light whose authored fog runs from
+/// `start` to `end` yards (0x007ecd00): 1.5 for a range of 500 yards or more
+/// (700 or the far clip, whichever is nearer, less 200), rising to 7 as the
+/// range closes to nothing. The denser the fog the zone asked for, the faster
+/// it thickens once its end has moved out to the far clip.
+inline float clientFogExponent(float start, float end, float farClip) {
+    const float reach = (farClip < 700.0f ? farClip : 700.0f) - 200.0f;
+    const float range = end - start;
+    if (range <= reach) return (1.0f - range / reach) * 5.5f + 1.5f;
+    return 1.5f;
+}
+
+/// One light's fog as the client keeps it for blending (0x007ebff0, then
+/// 0x007ecd80): the end no nearer than 10 yards, the start fraction kept to
+/// [-1, 1], the exponent 1 - plain linear fog. On a map with the later fog an
+/// end past 1000/36 yards moves out to the far clip and the authored range
+/// becomes the exponent instead, and the start fraction is no less than zero.
+struct LightFog {
+    float end;
+    float startScalar;
+    float exponent;
+};
+inline LightFog clientLightFog(float endYards, float startScalar, float farClip, bool fogExponent) {
+    LightFog f{endYards < 10.0f ? 10.0f : endYards,
+               startScalar < -1.0f ? -1.0f : (startScalar > 1.0f ? 1.0f : startScalar), 1.0f};
+    if (!fogExponent) return f;
+    if (f.end > 27.777779f && farClip > 0.0f) {
+        f.exponent = clientFogExponent(f.startScalar * f.end, f.end, farClip);
+        f.end = farClip;
+    }
+    if (f.startScalar < 0.0f) f.startScalar = 0.0f;
+    return f;
+}
+
+/// How much of a surface shows through the fog at `dist`, as the shaders
+/// work it out: linear from the start to the end, raised to the exponent the
+/// light blend gave (0x00873210 hands it to them beside the range).
+inline float clientFogVisibility(float dist, float start, float end, float exponent) {
+    const float span = end - start;
+    float v = span > 0.0f ? (end - dist) / span : (dist < end ? 1.0f : 0.0f);
+    v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+    return std::pow(v, exponent < 1.0f ? 1.0f : exponent);
+}
+
 /// How much of a colour is left `depth` yards under a liquid's surface, by
 /// its LiquidType row (0x007f3230's tail): the fraction of MaxDarkenDepth the
 /// camera is down, at most all of it, times the row's intensity for that

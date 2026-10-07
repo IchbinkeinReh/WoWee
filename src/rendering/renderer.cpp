@@ -573,7 +573,8 @@ void Renderer::updatePerFrameUBO() {
         currentFrameData.lightColor = glm::vec4(lp.diffuseColor, 1.0f);
         // w: ch8's red, how dark the terrain's baked shadows are drawn.
         currentFrameData.ambientColor = glm::vec4(lp.ambientColor, lp.shadowOpacity);
-        currentFrameData.fogColor = glm::vec4(lp.fogColor, 1.0f);
+        // w: the power the fog is drawn with, 1 before map 530 (0x00873210).
+        currentFrameData.fogColor = glm::vec4(lp.fogColor, lp.fogExponent);
         currentFrameData.fogParams.x = lp.fogStart;
         currentFrameData.fogParams.y = lp.fogEnd;
 

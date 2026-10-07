@@ -33,6 +33,10 @@ struct LightingParams {
     /// Float band 1: fogStart as a fraction of fogEnd. The client blends the
     /// lights' end and fraction and only then works out the start (0x007f16f0).
     float fogStartScalar = 0.1f;
+    /// The power the fog is drawn with (DNInfo[0x14]): 1, linear, before map
+    /// 530; from there on worked out from each light's authored range and
+    /// lerped with the rest (0x007ecd80, 0x007ed4c0).
+    float fogExponent = 1.0f;
 
     glm::vec3 skyTopColor{0.5f, 0.7f, 1.0f};       // ch2: sky zenith
     glm::vec3 skyMiddleColor{0.7f, 0.85f, 1.0f};   // ch3
@@ -98,6 +102,7 @@ inline LightingParams lerpLightingParams(const LightingParams& a, const Lighting
     out.fogStart = glm::mix(a.fogStart, b.fogStart, w);
     out.fogEnd = glm::mix(a.fogEnd, b.fogEnd, w);
     out.fogStartScalar = glm::mix(a.fogStartScalar, b.fogStartScalar, w);
+    out.fogExponent = glm::mix(a.fogExponent, b.fogExponent, w);
     out.cloudDensity = glm::mix(a.cloudDensity, b.cloudDensity, w);
     out.highlightSky = glm::mix(a.highlightSky, b.highlightSky, w);
     out.glow = glm::mix(a.glow, b.glow, w);
@@ -471,6 +476,8 @@ private:
     float fogSkyBlend_ = 0.0f;
     float fogStrength_ = 1.0f;
     float farClip_ = 0.0f;
+    /// This map draws the later fog (daynight::mapUsesFogExponent).
+    bool fogExponent_ = false;
     std::optional<InteriorFog> interiorFog_;
 
     // Last values the sky diagnostic reported, so it prints on a change

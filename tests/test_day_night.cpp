@@ -167,6 +167,84 @@ TEST_CASE("the fog ends inside the far clip at the authored fraction", "[daynigh
     CHECK(dn::clientFogRange(100.0f, -2.0f, 1000.0f).start == Catch::Approx(-100.0f));
 }
 
+TEST_CASE("map 530 and up draw the later fog", "[daynight][fog]") {
+    // 0x007816f0: the mode is the map id against 0x212. Eversong, Silvermoon
+    // and the Ghostlands are on map 530 and had the old linear fog.
+    CHECK_FALSE(dn::mapUsesFogExponent(0));
+    CHECK_FALSE(dn::mapUsesFogExponent(1));
+    CHECK_FALSE(dn::mapUsesFogExponent(529));
+    CHECK(dn::mapUsesFogExponent(530));
+    CHECK(dn::mapUsesFogExponent(571));
+}
+
+TEST_CASE("the later fog turns the authored range into an exponent", "[daynight][fog]") {
+    // 0x007ecd00: 1.5 past 500 yards of range (700 less 200), 7 at none.
+    CHECK(dn::clientFogExponent(0.0f, 0.0f, 1000.0f) == Catch::Approx(7.0f));
+    CHECK(dn::clientFogExponent(0.0f, 500.0f, 1000.0f) == Catch::Approx(1.5f));
+    CHECK(dn::clientFogExponent(0.0f, 900.0f, 1000.0f) == Catch::Approx(1.5f));
+    CHECK(dn::clientFogExponent(75.0f, 300.0f, 1000.0f) == Catch::Approx(4.525f));
+    // A far clip under 700 shortens the reach: 400 less 200.
+    CHECK(dn::clientFogExponent(0.0f, 100.0f, 400.0f) == Catch::Approx(4.25f));
+
+    // Old maps: linear, the end and fraction as authored (0x007ebff0's clamps).
+    const dn::LightFog old = dn::clientLightFog(300.0f, 0.25f, 1000.0f, false);
+    CHECK(old.end == Catch::Approx(300.0f));
+    CHECK(old.startScalar == Catch::Approx(0.25f));
+    CHECK(old.exponent == 1.0f);
+    CHECK(dn::clientLightFog(5.0f, -3.0f, 1000.0f, false).end == Catch::Approx(10.0f));
+    CHECK(dn::clientLightFog(5.0f, -3.0f, 1000.0f, false).startScalar == Catch::Approx(-1.0f));
+
+    // Map 530: the end out at the far clip, the range in the exponent
+    // (0x007ecd80).
+    const dn::LightFog later = dn::clientLightFog(300.0f, 0.25f, 1000.0f, true);
+    CHECK(later.end == Catch::Approx(1000.0f));
+    CHECK(later.startScalar == Catch::Approx(0.25f));
+    CHECK(later.exponent == Catch::Approx(4.525f));
+    // An end of 1000/36 yards or less stays put, and a negative fraction
+    // goes to zero either way.
+    const dn::LightFog close = dn::clientLightFog(20.0f, -0.5f, 1000.0f, true);
+    CHECK(close.end == Catch::Approx(20.0f));
+    CHECK(close.exponent == 1.0f);
+    CHECK(close.startScalar == 0.0f);
+}
+
+TEST_CASE("the fog's visibility is the linear ramp raised to its exponent", "[daynight][fog]") {
+    CHECK(dn::clientFogVisibility(0.0f, 100.0f, 300.0f, 1.0f) == 1.0f);
+    CHECK(dn::clientFogVisibility(200.0f, 100.0f, 300.0f, 1.0f) == Catch::Approx(0.5f));
+    CHECK(dn::clientFogVisibility(400.0f, 100.0f, 300.0f, 1.0f) == 0.0f);
+    CHECK(dn::clientFogVisibility(200.0f, 100.0f, 300.0f, 2.0f) == Catch::Approx(0.25f));
+    // Eversong's fog at 300 yards with a quarter clear, on a 1000 yard clip:
+    // the old linear fog had everything past 300 yards gone, the later fog
+    // keeps a third of a hill 400 yards out.
+    const dn::LightFog f = dn::clientLightFog(300.0f, 0.25f, 1000.0f, true);
+    CHECK(dn::clientFogVisibility(400.0f, f.end * f.startScalar, f.end, f.exponent) ==
+          Catch::Approx(0.364f).margin(0.002f));
+    CHECK(dn::clientFogVisibility(400.0f, 75.0f, 300.0f, 1.0f) == 0.0f);
+}
+
+TEST_CASE("the fog shaders raise the ramp to the exponent in fogColor.w", "[daynight][fog]") {
+    // 0x00873210 hands the exponent to the shaders beside the range; the
+    // renderer puts it in the per-frame block's fogColor.w.
+    for (const char* shader : {"terrain.frag.glsl", "wmo.frag.glsl", "m2.frag.glsl", "water.frag.glsl",
+                               "character.frag.glsl", "grass.frag.glsl", "m2_particle.vert.glsl",
+                               "m2_ribbon.vert.glsl"}) {
+        const std::string src = wowee::test::slurp(std::string("assets/shaders/") + shader);
+        INFO(shader);
+        REQUIRE(src.size() > 100);
+        CHECK(src.find("max(fogColor.w, 1.0)") != std::string::npos);
+    }
+    const std::string renderer = wowee::test::slurp("src/rendering/renderer.cpp");
+    CHECK(renderer.find("glm::vec4(lp.fogColor, lp.fogExponent)") != std::string::npos);
+}
+
+TEST_CASE("the fog exponent is lerped with the rest of the light", "[daynight][fog]") {
+    wowee::rendering::LightingParams a;
+    wowee::rendering::LightingParams b;
+    a.fogExponent = 1.5f;
+    b.fogExponent = 5.5f;
+    CHECK(wowee::rendering::lerpLightingParams(a, b, 0.25f).fogExponent == Catch::Approx(2.5f));
+}
+
 TEST_CASE("the sky dome's bands sit low over the horizon", "[daynight][sky]") {
     // Seen from the eye, the rows are at 90, 16.8, 9.8, 3.7, 1.8 and 0 degrees
     // of elevation - the fog colour exactly at the horizon.

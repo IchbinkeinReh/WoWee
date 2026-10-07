@@ -17,7 +17,7 @@ struct GPUPerFrameData {
     glm::vec4 lightColor;     // xyz = color, w = unused
     glm::vec4 ambientColor;   // xyz = color, w = the baked terrain shadows' opacity (ch8.r)
     glm::vec4 viewPos;        // xyz = camera pos, w = unused
-    glm::vec4 fogColor;       // xyz = color, w = unused
+    glm::vec4 fogColor;       // xyz = color, w = fog exponent (1 = linear)
     glm::vec4 fogParams;      // x = fogStart, y = fogEnd, z = time, w = water ripple strength
     glm::vec4 shadowParams;   // x = enabled(0/1), y = strength, z = one shadow-map texel, w = unused
     // The player, for effects that react to where they are standing: water

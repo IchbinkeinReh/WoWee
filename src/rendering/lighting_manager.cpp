@@ -398,6 +398,10 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
     // intensity) for any weather (0x007f3920, 0x007ee510).
     const float storm = daynight::stormBlend(weatherIntensity);
     activeVolumes_ = findLightVolumes(playerPos, mapId);
+    // Map 530 and up draw the later fog: each light's end out at the far
+    // clip and its authored range turned into an exponent (0x007816f0 sets
+    // the mode, 0x007ecd80 applies it to every light it samples).
+    fogExponent_ = daynight::mapUsesFogExponent(mapId);
 
     LightingParams newParams = fallbackParams_;
     // Sky models and how much of each, as 0x007ed4c0 keeps them: the default
@@ -505,9 +509,18 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
             const bool liquidFog = choice == daynight::WmoFogChoice::Liquid;
             float end = liquidFog ? interiorFog_->liquidEnd : interiorFog_->end;
             if (farClip_ > 0.0f && end > farClip_) end = farClip_;
-            const float start =
+            float start =
                 (liquidFog ? interiorFog_->liquidStartScalar : interiorFog_->startScalar) * end;
             if (end < 30.0f) end = 30.0f;
+            // With the later fog the record's range becomes its exponent and
+            // its end the far clip, the start no nearer than the eye
+            // (0x007ed1b0).
+            float exponent = 1.0f;
+            if (fogExponent_ && farClip_ > 0.0f) {
+                exponent = daynight::clientFogExponent(start, end, farClip_);
+                end = farClip_;
+                if (start < 0.0f) start = 0.0f;
+            }
             const glm::vec3 color = liquidFog ? interiorFog_->liquidColor : interiorFog_->color;
             const float b = daynight::wmoLiquidFogIsWhole(choice, liquidFlags)
                                 ? 1.0f
@@ -515,8 +528,13 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
             newParams.fogEnd = glm::mix(newParams.fogEnd, end, b);
             newParams.fogStart = glm::mix(newParams.fogStart, start, b);
             newParams.fogColor = glm::mix(newParams.fogColor, color, b);
+            newParams.fogExponent = glm::mix(newParams.fogExponent, exponent, b);
         }
     }
+
+    // With the later fog, the camera in liquid doubles the exponent
+    // (0x007f16f0, after the WMO blend).
+    if (fogExponent_ && cameraInLiquid) newParams.fogExponent *= 2.0f;
 
     // Optional, and off by default: fog pulled toward the sky's middle band.
     // The client's fog is ch7 exactly; this was on at 0.7 to make up for a sky
@@ -742,13 +760,18 @@ LightingParams LightingManager::sampleLightParams(const LightParamsProfile* prof
     // thirty-sixths of a yard as the light positions, and was being used raw:
     // Tirisfal's 12000 became 12000 yards, so the fog ended six times further
     // out than the far clip and nothing was ever hazed. It is 333 yards.
-    params.fogEnd = sampleFloatBand(profile->floatBands[LightParamsProfile::FOG_END],
-                                    timeHalfMinutes) / LIGHT_COORD_UNITS_PER_YARD;
+    //
     // The start is a fraction of the end rather than a distance. It is kept
     // as the fraction through the blend and turned into a distance at the
     // end, as the client does (0x007ebff0 stores it, 0x007f16f0 applies it).
-    params.fogStartScalar = sampleFloatBand(
-        profile->floatBands[LightParamsProfile::FOG_START_SCALAR], timeHalfMinutes);
+    const daynight::LightFog fog = daynight::clientLightFog(
+        sampleFloatBand(profile->floatBands[LightParamsProfile::FOG_END], timeHalfMinutes) /
+            LIGHT_COORD_UNITS_PER_YARD,
+        sampleFloatBand(profile->floatBands[LightParamsProfile::FOG_START_SCALAR], timeHalfMinutes),
+        farClip_, fogExponent_);
+    params.fogEnd = fog.end;
+    params.fogStartScalar = fog.startScalar;
+    params.fogExponent = fog.exponent;
     params.fogStart = params.fogEnd * params.fogStartScalar;
     params.cloudDensity = sampleFloatBand(profile->floatBands[LightParamsProfile::CLOUD_DENSITY], timeHalfMinutes);
 
