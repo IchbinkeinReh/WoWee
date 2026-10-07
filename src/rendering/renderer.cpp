@@ -124,7 +124,7 @@ namespace rendering {
 Renderer::Renderer() = default;
 Renderer::~Renderer() = default;
 
-bool Renderer::createPerFrameResources() {
+bool Renderer::createShadowMapImages() {
     VkDevice device = vkCtx->getDevice();
 
     // --- Create per-frame shadow depth images (one per in-flight frame) ---
@@ -145,7 +145,8 @@ bool Renderer::createPerFrameResources() {
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         if (vmaCreateImage(vkCtx->getAllocator(), &imgCI, &imgAllocCI,
                 &shadowDepthImage[i], &shadowDepthAlloc[i], nullptr) != VK_SUCCESS) {
-            LOG_ERROR("Failed to create shadow depth image [", i, "]");
+            LOG_ERROR("Failed to create shadow depth image [", i, "] at ",
+                      SHADOW_MAP_SIZE, "x", SHADOW_MAP_SIZE);
             return false;
         }
         shadowDepthLayout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -164,6 +165,37 @@ bool Renderer::createPerFrameResources() {
             return false;
         }
     }
+
+    // --- Create per-frame shadow framebuffers ---
+    VkFramebufferCreateInfo fbCI{};
+    fbCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbCI.renderPass = shadowRenderPass;
+    fbCI.attachmentCount = 1;
+    fbCI.width = SHADOW_MAP_SIZE;
+    fbCI.height = SHADOW_MAP_SIZE;
+    fbCI.layers = 1;
+    for (uint32_t i = 0; i < MAX_FRAMES; i++) {
+        fbCI.pAttachments = &shadowDepthView[i];
+        if (vkCreateFramebuffer(device, &fbCI, nullptr, &shadowFramebuffer[i]) != VK_SUCCESS) {
+            LOG_ERROR("Failed to create shadow framebuffer [", i, "]");
+            return false;
+        }
+    }
+    return true;
+}
+
+void Renderer::destroyShadowMapImages() {
+    VkDevice device = vkCtx->getDevice();
+    for (uint32_t i = 0; i < MAX_FRAMES; i++) {
+        if (shadowFramebuffer[i]) { vkDestroyFramebuffer(device, shadowFramebuffer[i], nullptr); shadowFramebuffer[i] = VK_NULL_HANDLE; }
+        if (shadowDepthView[i]) { vkDestroyImageView(device, shadowDepthView[i], nullptr); shadowDepthView[i] = VK_NULL_HANDLE; }
+        if (shadowDepthImage[i]) { vmaDestroyImage(vkCtx->getAllocator(), shadowDepthImage[i], shadowDepthAlloc[i]); shadowDepthImage[i] = VK_NULL_HANDLE; shadowDepthAlloc[i] = VK_NULL_HANDLE; }
+        shadowDepthLayout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+}
+
+bool Renderer::createPerFrameResources() {
+    VkDevice device = vkCtx->getDevice();
 
     // --- Create shadow sampler (shared - read-only, no per-frame needed) ---
     VkSamplerCreateInfo sampCI{};
@@ -223,21 +255,10 @@ bool Renderer::createPerFrameResources() {
         return false;
     }
 
-    // --- Create per-frame shadow framebuffers ---
-    VkFramebufferCreateInfo fbCI{};
-    fbCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    fbCI.renderPass = shadowRenderPass;
-    fbCI.attachmentCount = 1;
-    fbCI.width = SHADOW_MAP_SIZE;
-    fbCI.height = SHADOW_MAP_SIZE;
-    fbCI.layers = 1;
-    for (uint32_t i = 0; i < MAX_FRAMES; i++) {
-        fbCI.pAttachments = &shadowDepthView[i];
-        if (vkCreateFramebuffer(device, &fbCI, nullptr, &shadowFramebuffer[i]) != VK_SUCCESS) {
-            LOG_ERROR("Failed to create shadow framebuffer [", i, "]");
-            return false;
-        }
-    }
+    // --- Create the per-frame shadow maps themselves ---
+    // After the render pass, which their framebuffers are made against. The
+    // same function rebuilds them when the resolution setting changes.
+    if (!createShadowMapImages()) return false;
 
     // The fog's sampler and neutral volume come first: the layout below bakes
     // the one in, and every set written below binds the other until the fog
@@ -551,12 +572,7 @@ void Renderer::destroyPerFrameResources() {
     }
 
     // Destroy per-frame shadow resources
-    for (uint32_t i = 0; i < MAX_FRAMES; i++) {
-        if (shadowFramebuffer[i]) { vkDestroyFramebuffer(device, shadowFramebuffer[i], nullptr); shadowFramebuffer[i] = VK_NULL_HANDLE; }
-        if (shadowDepthView[i]) { vkDestroyImageView(device, shadowDepthView[i], nullptr); shadowDepthView[i] = VK_NULL_HANDLE; }
-        if (shadowDepthImage[i]) { vmaDestroyImage(vkCtx->getAllocator(), shadowDepthImage[i], shadowDepthAlloc[i]); shadowDepthImage[i] = VK_NULL_HANDLE; shadowDepthAlloc[i] = VK_NULL_HANDLE; }
-        shadowDepthLayout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
-    }
+    destroyShadowMapImages();
     if (shadowRenderPass) { vkDestroyRenderPass(device, shadowRenderPass, nullptr); shadowRenderPass = VK_NULL_HANDLE; }
     shadowSampler = VK_NULL_HANDLE; // Owned by VkContext sampler cache
 }
@@ -708,7 +724,9 @@ bool Renderer::initialize(core::Window* win) {
         // VRAM for shadows alone - not a step a machine that can run this is
         // certain to have spare, and the allocation failing at start-up is not
         // a path this renderer handles gently. setShadowMapSize clamps to 4096
-        // for the same reason.
+        // for the same reason. Larger is the shadow resolution setting's to
+        // ask for, as a step above this size, and that path falls back to a
+        // smaller map when the allocation fails (applyPendingShadowMapSize).
         constexpr uint32_t kShadowSideForLevel[] = {512, 1024, 2048, 4096, 4096};
         // 4096 was the default, and the arithmetic above says what that costs:
         // 64 MB a map, two of them in flight, 128 MB of depth before anything
@@ -1243,6 +1261,11 @@ void Renderer::beginFrame() {
         // driver answers by losing the device.
         if (vkCtx) vkCtx->resetFrameSyncState();
     }
+
+    // A shadow resolution change remakes the maps the per-frame sets and the
+    // fog's sets bind. Between frames for the same reason as the fog below,
+    // and before it, so a fog rebuild in the same frame binds the new views.
+    applyPendingShadowMapSize();
 
     // A fog quality change builds or frees its volumes, which the per-frame
     // sets bind - so between frames, before this one's set is used.
@@ -4835,6 +4858,103 @@ void Renderer::writeFogVolumeBindings() {
         write.pImageInfo = &fogImgInfo;
         vkUpdateDescriptorSets(vkCtx->getDevice(), 1, &write, 0, nullptr);
     }
+}
+
+uint32_t Renderer::maxShadowMapSize() const {
+    if (!vkCtx) return kMaxShadowMapSize;
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(vkCtx->getPhysicalDevice(), &props);
+    // The image has to be made, drawn into as a framebuffer and covered by
+    // the viewport; the spec only promises 4096 for each.
+    const VkPhysicalDeviceLimits& lim = props.limits;
+    uint32_t side = std::min({kMaxShadowMapSize, lim.maxImageDimension2D,
+                              lim.maxFramebufferWidth, lim.maxFramebufferHeight,
+                              lim.maxViewportDimensions[0], lim.maxViewportDimensions[1]});
+    // A power of two, as every size the map is built at is.
+    uint32_t pow2 = 512;
+    while (pow2 * 2 <= side) pow2 *= 2;
+    return pow2;
+}
+
+void Renderer::setShadowResolutionScale(int step) {
+    step = std::clamp(step, 0, 2);
+    // Never below the quality level's size: it is at most 4096, which every
+    // device has to support, and it was built at start-up.
+    pendingShadowMapSize_ = std::max(std::min(shadowMapBaseSize_ << step, maxShadowMapSize()),
+                                     shadowMapBaseSize_);
+}
+
+void Renderer::writeShadowMapBindings() {
+    // The views are new, so every set naming the old ones is written again:
+    // both frame slots' sets and the reflection's, binding 1 each. The
+    // character preview binds a dummy view of its own and is not one of them.
+    for (uint32_t i = 0; i < MAX_FRAMES; i++) {
+        VkDescriptorImageInfo shadowImgInfo{};
+        // sampler is ignored: binding 1 declares it immutable in the layout.
+        shadowImgInfo.imageView = shadowDepthView[i];
+        shadowImgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet writes[2]{};
+        const VkDescriptorSet sets[2] = {perFrameDescSets[i], reflPerFrameDescSet[i]};
+        uint32_t count = 0;
+        for (VkDescriptorSet set : sets) {
+            if (set == VK_NULL_HANDLE) continue;
+            writes[count].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[count].dstSet = set;
+            writes[count].dstBinding = 1;
+            writes[count].descriptorCount = 1;
+            writes[count].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[count].pImageInfo = &shadowImgInfo;
+            ++count;
+        }
+        if (count > 0) vkUpdateDescriptorSets(vkCtx->getDevice(), count, writes, 0, nullptr);
+    }
+    // The fog's inject pass reads the map through a set of its own.
+    if (volumetricFog_) volumetricFog_->setShadowViews(shadowDepthView);
+}
+
+void Renderer::applyPendingShadowMapSize() {
+    if (pendingShadowMapSize_ == 0 || !vkCtx) return;
+    const uint32_t wanted = pendingShadowMapSize_;
+    pendingShadowMapSize_ = 0;
+    // Nothing to remake before the per-frame resources exist, or when the
+    // map is already this size.
+    if (wanted == SHADOW_MAP_SIZE || shadowRenderPass == VK_NULL_HANDLE) return;
+
+    // Both slots' maps are bound in sets a frame still in flight may read,
+    // and one may be mid-write - so nothing goes until the device is idle,
+    // as for the fog's volumes and the ray traced lighting's images.
+    vkDeviceWaitIdle(vkCtx->getDevice());
+    const uint32_t previous = SHADOW_MAP_SIZE;
+    destroyShadowMapImages();
+
+    // The larger sizes are a lot of memory, and a failed allocation here
+    // must not leave the world without a map to sample. What was built a
+    // moment ago is tried next, then smaller again.
+    uint32_t side = wanted;
+    bool built = false;
+    for (;;) {
+        SHADOW_MAP_SIZE = side;
+        if (createShadowMapImages()) { built = true; break; }
+        destroyShadowMapImages();
+        if (side > previous) side = previous;
+        else if (side > 512) side /= 2;
+        else break;
+        LOG_WARNING("Shadow map: ", SHADOW_MAP_SIZE, "x", SHADOW_MAP_SIZE,
+                    " could not be made - trying ", side, "x", side);
+    }
+    if (!built) {
+        // Not even 512 a side: the device is out of memory, and more than the
+        // shadows will fail with it. The shadow pass skips itself without an
+        // image; said at error level, since this is what the log has to show.
+        LOG_ERROR("Shadow map: no size could be made, down to 512x512");
+        return;
+    }
+    // computeLightSpaceMatrix snaps to the texel of whatever SHADOW_MAP_SIZE
+    // is, and updatePerFrameUBO hands the shaders its texel size, both each
+    // frame - so the views are all that is left to hand on.
+    writeShadowMapBindings();
+    LOG_WARNING("Shadow map: rebuilt at ", SHADOW_MAP_SIZE, "x", SHADOW_MAP_SIZE,
+                " (was ", previous, "x", previous, ")");
 }
 
 float Renderer::volumetricFogExtinction() const {

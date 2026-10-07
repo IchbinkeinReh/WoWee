@@ -57,6 +57,10 @@ public:
     /// Off by default, as the client's extShadowQuality 0 (0x0078e400).
     bool pendingShadows = false;
     float pendingShadowDistance = 300.0f;
+    /// The shadow map's size as a step above the quality level's: 0 as it
+    /// has always been, 1 twice the side, 2 four times. See
+    /// Renderer::setShadowResolutionScale.
+    int pendingShadowResolution = 0;
     float pendingViewDistance = kDefaultViewDistance;
     /// How far the distance fog takes the sky's colour. See
     /// LightingManager::setFogSkyBlend.
