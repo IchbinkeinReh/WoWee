@@ -19,7 +19,7 @@ struct GPUPerFrameData {
     glm::vec4 viewPos;        // xyz = camera pos, w = unused
     glm::vec4 fogColor;       // xyz = color, w = fog exponent (1 = linear)
     glm::vec4 fogParams;      // x = fogStart, y = fogEnd, z = time, w = water ripple strength
-    glm::vec4 shadowParams;   // x = enabled(0/1), y = strength, z = one shadow-map texel, w = unused
+    glm::vec4 shadowParams;   // x = enabled(0/1), y = strength, z = one texel of a cascade's tile, w = unused
     // The player, for effects that react to where they are standing: water
     // ripples and the procedural grass the player brushes past. playerWake
     // trails the player by a fixed time constant, so grass the player has
@@ -59,7 +59,29 @@ struct GPUPerFrameData {
     // with the client's 'specular' option on: the terrain's highlight
     // (Terrain vertex program's c27, exponent 20). Off by default.
     glm::vec4 specularColor{0.0f};
+    // The sun's shadow cascades (shadow_csm.glsli), last so that the shaders
+    // declaring only the start of this block keep their offsets. Each is a
+    // square tile of one depth atlas, centred on the player; see
+    // Renderer::computeLightSpaceMatrix.
+    //
+    // cascadeMatrix: world to the tile's atlas UV (xy) and depth (z), the
+    //   tile's scale and offset baked in.
+    // cascadeRect: the tile in atlas UV, min xy and max zw.
+    // cascadeTexel: x one texel in yards, y and z one atlas texel in u and v.
+    // cascadeInfo: x how many cascades there are (0: none, everything lit),
+    //   y the fraction of a tile over which it blends into the next one,
+    //   z where the last cascade starts fading out, as a fraction of its
+    //   half-width.
+    static constexpr int kMaxShadowCascades = 4;
+    glm::mat4 cascadeMatrix[kMaxShadowCascades]{};
+    glm::vec4 cascadeRect[kMaxShadowCascades]{};
+    glm::vec4 cascadeTexel[kMaxShadowCascades]{};
+    glm::vec4 cascadeInfo{0.0f};
 };
+// std140 adds no padding between mat4 and vec4 members, so this is the block's
+// size on the GPU as well. A change here is a change to every PerFrame block
+// that declares the members it touches.
+static_assert(sizeof(GPUPerFrameData) == 928, "GPUPerFrameData no longer matches the shaders' PerFrame");
 
 // Push constants for the model matrix (most common case)
 struct GPUPushConstants {

@@ -499,7 +499,17 @@ public:
     [[nodiscard]] bool hasShadowPipeline() const { return shadowPipeline_ != VK_NULL_HANDLE; }
 
     /**
-     * Render depth-only pass for shadow casting
+     * Once a frame, before the first renderShadow: hands back this frame
+     * slot's foliage texture sets and starts its instance buffer from the
+     * top. renderShadow is called once per shadow cascade after it, and each
+     * call appends - its draws are read when the GPU runs them, after every
+     * cascade has been recorded.
+     */
+    void beginShadowFrame(uint32_t frameIndex);
+
+    /**
+     * Render depth-only pass for shadow casting: one cascade, culled to its
+     * footprint (shadowRadius is its half-extent with a margin).
      */
     void renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
                       const glm::vec3& shadowCenter = glm::vec3(0), float shadowRadius = 1e9f);
@@ -807,6 +817,9 @@ private:
     /// Foliage casters drawn into the shadow map last frame, for spotting a
     /// caster count that swings while nothing is moving.
     uint32_t lastFoliageCasters_ = 0;
+    /// This frame's casters so far, solid and foliage, across its cascades;
+    /// beginShadowFrame compares them with the frame before.
+    uint32_t shadowCastersThisFrame_[2] = {0, 0};
     VkPipeline alphaTestPipeline_ = VK_NULL_HANDLE;     // blend mode 1
     VkPipeline alphaPipeline_ = VK_NULL_HANDLE;         // blend mode 2
     VkPipeline additivePipeline_ = VK_NULL_HANDLE;      // blend mode 4 (Add)
@@ -870,7 +883,12 @@ private:
     // caster one instance at a time.
     VkPipeline shadowInstancedPipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout shadowInstancedLayout_ = VK_NULL_HANDLE;
-    static constexpr uint32_t kMaxShadowInstances = 32768;  // 2 MB a frame
+    // Shared by every cascade of a frame, which can draw the same tree into
+    // two or three of them.
+    static constexpr uint32_t kMaxShadowInstances = 65536;  // 4 MB a frame
+    /// How much of this frame's instance buffer the cascades drawn so far
+    /// have used; beginShadowFrame starts it at 0.
+    uint32_t shadowInstancesUsed_ = 0;
     VkDescriptorPool shadowInstanceDescPool_ = VK_NULL_HANDLE;
     ::VkBuffer shadowInstanceBuffer_[2] = {};
     VmaAllocation shadowInstanceAlloc_[2] = {};

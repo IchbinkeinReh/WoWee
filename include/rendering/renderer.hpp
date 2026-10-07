@@ -359,17 +359,59 @@ private:
     std::unique_ptr<AnimationController> animationController_;  // §4.2
     std::unique_ptr<game::ZoneManager> zoneManager;
     // Shadow mapping (Vulkan)
-    /// The shadow map is square and this is its side, as it is built now.
+    /// The side of one cascade's tile of the shadow atlas, as it is built now.
+    /// With one cascade the atlas is this square and nothing else, which is
+    /// the single map this renderer always had.
     ///
     /// It starts at the quality level's size, chosen before the per-frame
     /// resources are built. The shadow resolution setting can raise it from
     /// there mid-session: setShadowResolutionScale asks, and the next frame
-    /// starts by rebuilding the maps (applyPendingShadowMapSize). Only the
-    /// images, their views and framebuffers are rebuilt, after the device is
-    /// idle - the render pass, the sampler and the casters' pipelines do not
-    /// depend on the size, the viewport is set when the pass is recorded, and
-    /// the shaders read the texel size from shadowParams.z each frame.
+    /// starts by rebuilding the atlas (applyPendingShadowMapSize). The cascade
+    /// count is changed the same way. Only the images, their views and
+    /// framebuffers are rebuilt, after the device is idle - the render pass,
+    /// the sampler and the casters' pipelines do not depend on the size, the
+    /// viewports are set when the pass is recorded, and the shaders read the
+    /// tiles and their texel sizes from the per-frame block each frame.
     uint32_t SHADOW_MAP_SIZE = 4096;
+    /// Cascades: concentric squares centred on the player, each its own tile
+    /// of one depth atlas. One is the single map as it always was, two (the
+    /// default) put a fine tile over the ground the camera is near, three
+    /// split that once more. See computeLightSpaceMatrix and shadow_csm.glsli.
+    static constexpr int kMaxShadowCascades = 3;
+    /// How many cascades the atlas is built for now.
+    int shadowCascadeCount_ = 2;
+    /// What the shadow cascades setting last asked for, built or not.
+    int shadowCascadesWanted_ = 2;
+    /// The resolution setting's step, kept so a cascade change can work the
+    /// tile out again from it.
+    int shadowResolutionStep_ = 0;
+    /// A cascade count asked for and not built yet; 0 when nothing is
+    /// waiting. Goes with pendingShadowMapSize_.
+    int pendingShadowCascades_ = 0;
+    /// The atlas the tiles are laid out in: N by N for one cascade, 2N by N
+    /// for two and 2N by 2N for three, the fourth quarter unused.
+    static uint32_t shadowAtlasWidth(int cascades, uint32_t tile) { return cascades > 1 ? tile * 2 : tile; }
+    static uint32_t shadowAtlasHeight(int cascades, uint32_t tile) { return cascades > 2 ? tile * 2 : tile; }
+    /// The largest tile allowed with two or more cascades: an 8192 tile is
+    /// already a 16384 by 8192 atlas, 512 MB, twice over for the frames in
+    /// flight.
+    static constexpr uint32_t kMaxCascadeTileSize = 8192;
+    /// One cascade as this frame draws and reads it.
+    struct ShadowCascade {
+        glm::mat4 lightSpace{0.0f};  ///< world to the cascade's clip space, what the casters draw with
+        glm::mat4 atlas{0.0f};       ///< world to atlas UV and depth, what the shaders read with
+        glm::vec3 center{0.0f};      ///< texel-snapped, as the casters cull around it
+        float halfExtent = 0.0f;     ///< yards from the centre to a side
+        float texelWorld = 0.0f;     ///< one texel of its tile, in yards
+        VkRect2D tile{};             ///< where it is drawn in the atlas
+    };
+    ShadowCascade shadowCascades_[kMaxShadowCascades];
+    /// How many of shadowCascades_ this frame filled; 0 before the player has
+    /// a position, when the shadow pass is skipped.
+    int activeShadowCascades_ = 0;
+    /// Works out the tile for the wanted cascade count and resolution step
+    /// and leaves it for the next frame to build.
+    void requestShadowAtlas();
     /// The quality level's side, and the smallest the resolution setting
     /// offers: its steps are this, twice, four and eight times it.
     uint32_t shadowMapBaseSize_ = 4096;
@@ -387,18 +429,21 @@ private:
         shadowMapBaseSize_ = std::clamp(side, 512u, 4096u);
         SHADOW_MAP_SIZE = shadowMapBaseSize_;
     }
-    /// kMaxShadowMapSize, or less where the device cannot make or draw into
-    /// an image that large.
-    uint32_t maxShadowMapSize() const;
-    /// The per-frame-slot images, views and framebuffers at SHADOW_MAP_SIZE.
-    /// shadowRenderPass has to exist first. On failure what was made is left
-    /// for destroyShadowMapImages.
+    /// The largest tile side for this many cascades: kMaxShadowMapSize for
+    /// one and kMaxCascadeTileSize for more, or less where the device cannot
+    /// make or draw into an atlas that large.
+    uint32_t maxShadowMapSize(int cascades) const;
+    /// The per-frame-slot atlases, views and framebuffers, for
+    /// shadowCascadeCount_ tiles of SHADOW_MAP_SIZE. shadowRenderPass has to
+    /// exist first. On failure what was made is left for
+    /// destroyShadowMapImages.
     bool createShadowMapImages();
     void destroyShadowMapImages();
     /// Binding 1 of every per-frame set, and the fog's own, after the views
     /// have been made again.
     void writeShadowMapBindings();
-    /// Rebuilds the maps at pendingShadowMapSize_. Between frames only.
+    /// Rebuilds the atlas at pendingShadowMapSize_ and pendingShadowCascades_.
+    /// Between frames only.
     void applyPendingShadowMapSize();
     // Per-frame shadow resources: each in-flight frame has its own depth image and
     // framebuffer so that frame N's shadow read and frame N+1's shadow write don't
@@ -411,7 +456,10 @@ private:
     VkRenderPass shadowRenderPass = VK_NULL_HANDLE;
     VkFramebuffer shadowFramebuffer[2] = {};
     VkImageLayout shadowDepthLayout_[2] = {};
+    /// The outer cascade's clip-space matrix, zero before the player has a
+    /// position; the cascades themselves are in shadowCascades_.
     glm::mat4 lightSpaceMatrix = glm::mat4(1.0f);
+    /// The outer cascade's centre.
     glm::vec3 shadowCenter = glm::vec3(0.0f);
     bool shadowCenterInitialized = false;
     bool shadowsEnabled = false;
@@ -446,8 +494,13 @@ public:
     float getShadowDistance() const { return shadowDistance_; }
     /// The shadow map's side as a step above the quality level's: 0 is that
     /// size, 1 twice it and 2 four times it, held to maxShadowMapSize().
-    /// Applied at the start of the next frame.
+    /// Applied at the start of the next frame. With cascades the step is the
+    /// side of each cascade's tile, held to kMaxCascadeTileSize.
     void setShadowResolutionScale(int step);
+    /// How many shadow cascades, 1 to kMaxShadowCascades. Rebuilds the atlas
+    /// at the start of the next frame, as the resolution does.
+    void setShadowCascadeCount(int count);
+    int getShadowCascadeCount() const { return shadowCascadeCount_; }
     /// How a magnified texture is filtered: 0 bilinear (the client's),
     /// 1 cubic B-spline, 2 Catmull-Rom. See texture_filter.glsli.
     void setTextureMagnification(int mode) { textureMagnification_ = std::clamp(mode, 0, 2); }

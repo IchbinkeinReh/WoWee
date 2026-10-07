@@ -274,12 +274,13 @@ bool TerrainRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
             LOG_WARNING("TerrainRenderer: mega IB allocation failed, per-chunk fallback");
         }
 
-        // The shadow pass's draw commands, one buffer per frame in flight.
+        // The shadow pass's draw commands, one buffer per frame in flight,
+        // room in each for every shadow cascade's.
         static_assert(kIndirectFrames == MAX_FRAMES_IN_FLIGHT,
                       "one indirect buffer per frame in flight");
         VkBufferCreateInfo indCI{};
         indCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        indCI.size = MAX_INDIRECT_DRAWS * sizeof(VkDrawIndexedIndirectCommand);
+        indCI.size = kIndirectCapacity * sizeof(VkDrawIndexedIndirectCommand);
         indCI.usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
         VmaAllocationCreateInfo indAllocCI{};
         indAllocCI.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
@@ -1190,6 +1191,23 @@ bool TerrainRenderer::initializeShadow(VkRenderPass shadowRenderPass) {
     return true;
 }
 
+void TerrainRenderer::beginShadowFrame(uint32_t /*frameIndex*/) {
+    // How many chunks cast, said when it moves by a quarter: the count is the
+    // cost of this pass, and the cull that decides it is not obvious. The
+    // frame before's, every cascade together, so it is one frame's count
+    // against another's rather than one cascade's against the next.
+    const uint32_t drawn = shadowChunksThisFrame_;
+    if (drawn > shadowChunksReported_ + shadowChunksReported_ / 4 + 16 ||
+        drawn + shadowChunksReported_ / 4 + 16 < shadowChunksReported_) {
+        LOG_WARNING("Terrain shadow pass: ", drawn, " chunk draws over the cascades, of ",
+                    chunks.size(), " chunks");
+        shadowChunksReported_ = drawn;
+    }
+    shadowChunksThisFrame_ = 0;
+    // The frame slot's fence has been waited on, so its buffer is free again.
+    indirectUsed_ = 0;
+}
+
 void TerrainRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
                                     const glm::vec3& shadowCenter, float shadowRadius) {
     if (!shadowPipeline_ || !shadowParams_.set) return;
@@ -1242,10 +1260,16 @@ void TerrainRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSp
     // the loop, where they used to be a draw call each - thousands of them
     // with the sun low. A chunk outside the mega buffers, or a device without
     // multi-draw, draws on its own as before.
+    //
+    // This cascade's draws go after the ones the cascades before it queued
+    // this frame (beginShadowFrame starts the buffer over), which those
+    // cascades' indirect draws still have to read.
     const uint32_t frame = vkCtx->getCurrentFrame();
+    const uint32_t queueBase = std::min(indirectUsed_, kIndirectCapacity);
+    const uint32_t queueRoom = std::min(MAX_INDIRECT_DRAWS, kIndirectCapacity - queueBase);
     auto* queuedDraws = (useMegaShadow && vkCtx->isMultiDrawIndirectSupported() &&
-                         frame < kIndirectFrames)
-        ? static_cast<VkDrawIndexedIndirectCommand*>(indirectMapped_[frame])
+                         frame < kIndirectFrames && indirectMapped_[frame] && queueRoom > 0)
+        ? static_cast<VkDrawIndexedIndirectCommand*>(indirectMapped_[frame]) + queueBase
         : nullptr;
     uint32_t queuedCount = 0;
 
@@ -1262,7 +1286,7 @@ void TerrainRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSp
         if (ls.z > centreLs.z + (shadowRadius + chunk.boundingSphereRadius) * scaleZ) continue;
         ++shadowChunksDrawn;
 
-        if (queuedDraws && chunk.megaBaseVertex >= 0 && queuedCount < MAX_INDIRECT_DRAWS) {
+        if (queuedDraws && chunk.megaBaseVertex >= 0 && queuedCount < queueRoom) {
             queuedDraws[queuedCount++] = VkDrawIndexedIndirectCommand{
                 .indexCount = chunk.indexCount,
                 .instanceCount = 1,
@@ -1295,7 +1319,9 @@ void TerrainRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSp
     if (queuedCount > 0) {
         constexpr VkDeviceSize stride = sizeof(VkDrawIndexedIndirectCommand);
         // A no-op on coherent memory, which CPU_TO_GPU nearly always is.
-        vmaFlushAllocation(vkCtx->getAllocator(), indirectAlloc_[frame], 0, queuedCount * stride);
+        vmaFlushAllocation(vkCtx->getAllocator(), indirectAlloc_[frame], queueBase * stride,
+                           queuedCount * stride);
+        indirectUsed_ = queueBase + queuedCount;
         // A fallback chunk above may have left its own buffers bound.
         if (!megaShadowBound) {
             VkDeviceSize megaOffset = 0;
@@ -1306,20 +1332,12 @@ void TerrainRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSp
         // multi-draw that is at least 2^16, so in practice this is one draw.
         const uint32_t perCall = std::max(vkCtx->getMaxDrawIndirectCount(), 1u);
         for (uint32_t first = 0; first < queuedCount; first += perCall) {
-            vkCmdDrawIndexedIndirect(cmd, indirectBuffer_[frame], first * stride,
+            vkCmdDrawIndexedIndirect(cmd, indirectBuffer_[frame], (queueBase + first) * stride,
                                      std::min(perCall, queuedCount - first),
                                      static_cast<uint32_t>(stride));
         }
     }
-    // How many chunks cast, said when it moves by a quarter: the count is the
-    // cost of this pass, and the cull that decides it is not obvious.
-    static uint32_t lastReported = 0;
-    if (shadowChunksDrawn > lastReported + lastReported / 4 + 16 ||
-        shadowChunksDrawn + lastReported / 4 + 16 < lastReported) {
-        LOG_WARNING("Terrain shadow pass: ", shadowChunksDrawn, " of ", chunks.size(),
-                    " chunks cast");
-        lastReported = shadowChunksDrawn;
-    }
+    shadowChunksThisFrame_ += shadowChunksDrawn;
 }
 
 void TerrainRenderer::removeTile(int tileX, int tileY) {

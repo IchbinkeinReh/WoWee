@@ -25,6 +25,20 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerPos;
     vec4 playerWake;
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
+    // Unread here; declared so the cascades below land where the renderer writes them.
+    mat4 rtViewProj;
+    vec4 rtCameraPos;
+    vec4 rtParams;
+    vec4 cameraFogColor;
+    vec4 averagedDirectColor;
+    vec4 averagedAmbientColor;
+    vec4 windowLight;
+    vec4 specularColor;
+    // The shadow cascades (shadow_csm.glsli); GPUPerFrameData ends with them.
+    mat4 cascadeMatrix[4];
+    vec4 cascadeRect[4];
+    vec4 cascadeTexel[4];
+    vec4 cascadeInfo;
 };
 
 layout(set = 1, binding = 0) uniform VolumeParams {
@@ -93,22 +107,44 @@ float airDensity(vec3 p, float depth) {
     return vol.medium.x * layer * banks * near;
 }
 
+// Where a point lies across cascade c's tile: -1..1, 0 at its centre. A
+// cascade's matrix gives atlas UV (shadow_csm.glsli), so the edge fade below
+// is measured in these rather than in the matrix's output.
+vec2 cascadeTileCoord(int c, vec2 uv) {
+    vec4 rect = cascadeRect[c];
+    return (uv - rect.xy) / (rect.zw - rect.xy) * 2.0 - 1.0;
+}
+
 // Whether the sun reaches this point, off the same shadow map the surfaces
-// use. One tap and no filter: the jitter and the history do the softening.
-// Fades out toward the edge of the map rather than ending on a wall of lit
-// air where its coverage stops.
+// use: the finest cascade whose tile holds it. One tap and no filter: the
+// jitter and the history do the softening. Fades out toward the edge of the
+// outer cascade rather than ending on a wall of lit air where its coverage
+// stops.
 float sunVisibility(vec3 p) {
     if (shadowParams.x < 0.5) return 1.0;
-    vec4 ls = lightSpaceMatrix * vec4(p, 1.0);
-    vec3 proj = ls.xyz / ls.w;
-    vec2 uv = proj.xy * 0.5 + 0.5;
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || proj.z < 0.0 || proj.z > 1.0) {
-        return 1.0;
+    int count = min(int(cascadeInfo.x + 0.5), 4);
+    if (count < 1) return 1.0;
+
+    // The outer cascade decides the fade, whichever one is read.
+    int last = count - 1;
+    vec4 lsOuter = cascadeMatrix[last] * vec4(p, 1.0);
+    vec2 outer = abs(cascadeTileCoord(last, lsOuter.xy / lsOuter.w));
+    float edge = max(outer.x, outer.y);
+    if (edge > 1.0) return 1.0;
+
+    for (int c = 0; c < count; ++c) {
+        vec4 ls = cascadeMatrix[c] * vec4(p, 1.0);
+        vec3 proj = ls.xyz / ls.w;
+        vec2 tile = abs(cascadeTileCoord(c, proj.xy));
+        // A texel in from the tile's edge, so the tap stays on it.
+        vec2 inset = 2.0 * cascadeTexel[c].yz / (cascadeRect[c].zw - cascadeRect[c].xy);
+        if (tile.x > 1.0 - inset.x || tile.y > 1.0 - inset.y) continue;
+        if (proj.z < 0.0 || proj.z > 1.0) return 1.0;
+        float stored = textureLod(uShadowDepth, proj.xy, 0.0).r;
+        float lit = (proj.z - 0.0005 <= stored) ? 1.0 : 0.0;
+        return mix(lit, 1.0, smoothstep(0.8, 1.0, edge));
     }
-    float stored = textureLod(uShadowDepth, uv, 0.0).r;
-    float lit = (proj.z - 0.0005 <= stored) ? 1.0 : 0.0;
-    vec2 edge = abs(proj.xy);
-    return mix(lit, 1.0, smoothstep(0.8, 1.0, max(edge.x, edge.y)));
+    return 1.0;
 }
 
 // Henyey-Greenstein, scaled so scattering evenly in every direction is 1.

@@ -130,12 +130,15 @@ bool Renderer::createShadowMapImages() {
 
     // --- Create per-frame shadow depth images (one per in-flight frame) ---
     // Each frame slot has its own depth image so that frame N's shadow read and
-    // frame N+1's shadow write cannot race on the same image.
+    // frame N+1's shadow write cannot race on the same image. Each is the
+    // whole atlas, every cascade's tile in it.
+    const uint32_t atlasW = shadowAtlasWidth(shadowCascadeCount_, SHADOW_MAP_SIZE);
+    const uint32_t atlasH = shadowAtlasHeight(shadowCascadeCount_, SHADOW_MAP_SIZE);
     VkImageCreateInfo imgCI{};
     imgCI.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imgCI.imageType = VK_IMAGE_TYPE_2D;
     imgCI.format = VK_FORMAT_D32_SFLOAT;
-    imgCI.extent = {.width = SHADOW_MAP_SIZE, .height = SHADOW_MAP_SIZE, .depth = 1};
+    imgCI.extent = {.width = atlasW, .height = atlasH, .depth = 1};
     imgCI.mipLevels = 1;
     imgCI.arrayLayers = 1;
     imgCI.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -147,7 +150,7 @@ bool Renderer::createShadowMapImages() {
         if (vmaCreateImage(vkCtx->getAllocator(), &imgCI, &imgAllocCI,
                 &shadowDepthImage[i], &shadowDepthAlloc[i], nullptr) != VK_SUCCESS) {
             LOG_ERROR("Failed to create shadow depth image [", i, "] at ",
-                      SHADOW_MAP_SIZE, "x", SHADOW_MAP_SIZE);
+                      atlasW, "x", atlasH);
             return false;
         }
         shadowDepthLayout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -172,8 +175,8 @@ bool Renderer::createShadowMapImages() {
     fbCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fbCI.renderPass = shadowRenderPass;
     fbCI.attachmentCount = 1;
-    fbCI.width = SHADOW_MAP_SIZE;
-    fbCI.height = SHADOW_MAP_SIZE;
+    fbCI.width = atlasW;
+    fbCI.height = atlasH;
     fbCI.layers = 1;
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         fbCI.pAttachments = &shadowDepthView[i];
@@ -259,6 +262,9 @@ bool Renderer::createPerFrameResources() {
     // --- Create the per-frame shadow maps themselves ---
     // After the render pass, which their framebuffers are made against. The
     // same function rebuilds them when the resolution setting changes.
+    // The quality level's side is at most 4096, which every device makes; two
+    // cascades side by side are twice that across, which not every one does.
+    SHADOW_MAP_SIZE = std::min(SHADOW_MAP_SIZE, maxShadowMapSize(shadowCascadeCount_));
     if (!createShadowMapImages()) return false;
 
     // The fog's sampler and neutral volume come first: the layout below bakes
@@ -537,7 +543,10 @@ bool Renderer::createPerFrameResources() {
         LOG_WARNING("Volumetric fog pipelines failed to build - volumetric fog unavailable");
     }
 
-    LOG_INFO("Per-frame Vulkan resources created (shadow map ", SHADOW_MAP_SIZE, "x", SHADOW_MAP_SIZE, ")");
+    LOG_INFO("Per-frame Vulkan resources created (shadow atlas ",
+             shadowAtlasWidth(shadowCascadeCount_, SHADOW_MAP_SIZE), "x",
+             shadowAtlasHeight(shadowCascadeCount_, SHADOW_MAP_SIZE), ", ",
+             shadowCascadeCount_, " cascade(s) of ", SHADOW_MAP_SIZE, ")");
     return true;
 }
 
@@ -618,11 +627,44 @@ void Renderer::updatePerFrameUBO() {
         // 0x007f3230). There is no fixed blue fog in the client.
     }
 
-    currentFrameData.lightSpaceMatrix = lightSpaceMatrix;
+    // The cascades, as shadow_csm.glsli reads them. None before the player
+    // has a position (computeLightSpaceMatrix gave a zero matrix and the
+    // shadow pass skips itself), which the shaders read as lit.
+    {
+        const int cascades = (lightSpaceMatrix == glm::mat4(0.0f)) ? 0 : activeShadowCascades_;
+        const uint32_t atlasW = shadowAtlasWidth(shadowCascadeCount_, SHADOW_MAP_SIZE);
+        const uint32_t atlasH = shadowAtlasHeight(shadowCascadeCount_, SHADOW_MAP_SIZE);
+        for (int c = 0; c < GPUPerFrameData::kMaxShadowCascades; ++c) {
+            if (c < cascades) {
+                const ShadowCascade& sc = shadowCascades_[c];
+                currentFrameData.cascadeMatrix[c] = sc.atlas;
+                currentFrameData.cascadeRect[c] = glm::vec4(
+                    static_cast<float>(sc.tile.offset.x) / static_cast<float>(atlasW),
+                    static_cast<float>(sc.tile.offset.y) / static_cast<float>(atlasH),
+                    static_cast<float>(sc.tile.offset.x + static_cast<int32_t>(sc.tile.extent.width)) /
+                        static_cast<float>(atlasW),
+                    static_cast<float>(sc.tile.offset.y + static_cast<int32_t>(sc.tile.extent.height)) /
+                        static_cast<float>(atlasH));
+                currentFrameData.cascadeTexel[c] = glm::vec4(
+                    sc.texelWorld, 1.0f / static_cast<float>(atlasW), 1.0f / static_cast<float>(atlasH), 0.0f);
+            } else {
+                currentFrameData.cascadeMatrix[c] = glm::mat4(0.0f);
+                currentFrameData.cascadeRect[c] = glm::vec4(0.0f);
+                currentFrameData.cascadeTexel[c] = glm::vec4(0.0f);
+            }
+        }
+        // y: a cascade blends into the next over its outer 12%; z: the last
+        // one fades out from 90% of its half-width to its edge.
+        currentFrameData.cascadeInfo = glm::vec4(static_cast<float>(cascades), 0.12f, 0.9f, 0.0f);
+        // The outer cascade's, in the same atlas terms, for anything that
+        // reads the one matrix rather than the cascades.
+        currentFrameData.lightSpaceMatrix = cascades > 0 ? shadowCascades_[cascades - 1].atlas
+                                                         : lightSpaceMatrix;
+    }
     // Scale shadow bias proportionally to ortho extent to avoid acne at close range / gaps at far range
     float shadowBias = glm::clamp(0.8f * (shadowDistance_ / 300.0f), 0.0f, 1.0f);
-    // z carries one texel of the shadow map. The shaders used to hold that as
-    // a constant for 4096, and the map is 512 to 4096 by the quality level.
+    // z carries one texel of a cascade's tile, as it carried one of the single
+    // map; the cascades' own are in cascadeTexel.
     currentFrameData.shadowParams = glm::vec4(shadowsEnabled ? 1.0f : 0.0f, shadowBias,
                                               1.0f / static_cast<float>(SHADOW_MAP_SIZE), 0.0f);
 
@@ -738,11 +780,15 @@ bool Renderer::initialize(core::Window* win) {
         // quarter of the fill and 32 MB for the pair, and the slider still
         // reaches the top for anyone who wants to spend it.
         //
+        // These are the side of one cascade's tile. The default two cascades
+        // sit side by side in an atlas twice as wide, so twice the memory:
+        // 64 MB the pair at 2048 (see shadowAtlasWidth).
+        //
         // A phone starts lower again: its GPU memory is the system's memory.
 #ifdef __ANDROID__
-        constexpr const char* kDefaultShadowLevel = "1";   // 1024, 8 MB the pair
+        constexpr const char* kDefaultShadowLevel = "1";   // 1024, 8 MB the pair a cascade
 #else
-        constexpr const char* kDefaultShadowLevel = "2";   // 2048, 32 MB the pair
+        constexpr const char* kDefaultShadowLevel = "2";   // 2048, 32 MB the pair a cascade
 #endif
         const int level = std::clamp(
             std::atoi(addons::storedCVarValue("extShadowQuality", kDefaultShadowLevel).c_str()),
@@ -4341,8 +4387,35 @@ void Renderer::renderHUD() {
 // initShadowMap() and compileShadowShader() removed - shadow resources now created
 // in createPerFrameResources() as part of the Vulkan shadow infrastructure.
 
+namespace {
+
+/// How far out cascade `i` of `count` reaches, in yards, for a shadow
+/// distance of `distance`: the practical split (Zhang et al.), a mix of the
+/// logarithmic split from a yard out and the even one, three parts to one.
+/// The last is the distance itself. Two cascades at the default 300 yards
+/// split at about 50; three at about 30 and 85.
+float shadowCascadeSplit(int i, int count, float distance) {
+    if (i + 1 >= count) return distance;
+    constexpr float kLambda = 0.75f;
+    constexpr float kFirst = 1.0f;
+    const float f = static_cast<float>(i + 1) / static_cast<float>(count);
+    const float logSplit = kFirst * std::pow(distance / kFirst, f);
+    const float evenSplit = kFirst + (distance - kFirst) * f;
+    return kLambda * logSplit + (1.0f - kLambda) * evenSplit;
+}
+
+}  // namespace
+
+// The cascades: shadowCascadeCount_ squares, all centred on the player, all
+// looking down the same light direction over the same depth range - the
+// light 3 x the shadow distance back from the centre and 6.5 x it deep - so a
+// point has the same depth in every one of them. Only the half-extent
+// differs, from the split above. Each is snapped to its own texel grid and
+// drawn into its own tile of the atlas. Returns the outer cascade's matrix,
+// which is the single map's as it always was, or zero before the player has
+// a position.
 glm::mat4 Renderer::computeLightSpaceMatrix() {
-    const float kShadowHalfExtent = shadowDistance_;
+    activeShadowCascades_ = 0;
     const float kShadowLightDistance = shadowDistance_ * 3.0f;
     constexpr float kShadowNearPlane = 1.0f;
     const float kShadowFarPlane = shadowDistance_ * 6.5f;
@@ -4384,16 +4457,6 @@ glm::mat4 Renderer::computeLightSpaceMatrix() {
         }
         shadowCenterInitialized = true;
     }
-    shadowCenter = desiredCenter;
-    glm::vec3 center = shadowCenter;
-
-    // Snap shadow frustum to texel grid so the projection is perfectly stable
-    // while moving. We compute the light's right/up axes from the sun direction
-    // (these are constant per frame regardless of center) and snap center along
-    // them before building the view matrix.
-    float halfExtent = kShadowHalfExtent;
-    float texelWorld = (2.0f * halfExtent) / static_cast<float>(SHADOW_MAP_SIZE);
-
     // Stable light-space axes (independent of center position)
     glm::vec3 up(0.0f, 0.0f, 1.0f);
     if (std::abs(glm::dot(sunDir, up)) > 0.99f) {
@@ -4402,22 +4465,58 @@ glm::mat4 Renderer::computeLightSpaceMatrix() {
     glm::vec3 lightRight = glm::normalize(glm::cross(sunDir, up));
     glm::vec3 lightUp = glm::normalize(glm::cross(lightRight, sunDir));
 
-    // Snap center along light's right and up axes to align with texel grid.
-    // This eliminates sub-texel shifts that cause shadow shimmer.
-    float dotR = glm::dot(center, lightRight);
-    float dotU = glm::dot(center, lightUp);
-    dotR = std::floor(dotR / texelWorld) * texelWorld;
-    dotU = std::floor(dotU / texelWorld) * texelWorld;
-    float dotD = glm::dot(center, sunDir);  // depth axis unchanged
-    center = lightRight * dotR + lightUp * dotU + sunDir * dotD;
-    shadowCenter = center;
+    const int cascades = std::clamp(shadowCascadeCount_, 1, kMaxShadowCascades);
+    const uint32_t tileSide = SHADOW_MAP_SIZE;
+    const float atlasW = static_cast<float>(shadowAtlasWidth(cascades, tileSide));
+    const float atlasH = static_cast<float>(shadowAtlasHeight(cascades, tileSide));
+    for (int c = 0; c < cascades; ++c) {
+        ShadowCascade& sc = shadowCascades_[c];
+        const float halfExtent = shadowCascadeSplit(c, cascades, shadowDistance_);
 
-    glm::mat4 lightView = glm::lookAt(center - sunDir * kShadowLightDistance, center, up);
-    glm::mat4 lightProj = glm::ortho(-halfExtent, halfExtent, -halfExtent, halfExtent,
-                                     kShadowNearPlane, kShadowFarPlane);
-    lightProj[1][1] *= -1.0f; // Vulkan Y-flip for shadow pass
+        // Snap the centre to this cascade's texel grid so its projection is
+        // perfectly stable while moving: along the light's right and up axes
+        // (constant for the frame whatever the centre), and not along its
+        // depth, which every cascade shares. This eliminates the sub-texel
+        // shifts that cause shadow shimmer.
+        const float texelWorld = (2.0f * halfExtent) / static_cast<float>(tileSide);
+        glm::vec3 center = desiredCenter;
+        float dotR = glm::dot(center, lightRight);
+        float dotU = glm::dot(center, lightUp);
+        dotR = std::floor(dotR / texelWorld) * texelWorld;
+        dotU = std::floor(dotU / texelWorld) * texelWorld;
+        float dotD = glm::dot(center, sunDir);  // depth axis unchanged
+        center = lightRight * dotR + lightUp * dotU + sunDir * dotD;
 
-    return lightProj * lightView;
+        glm::mat4 lightView = glm::lookAt(center - sunDir * kShadowLightDistance, center, up);
+        glm::mat4 lightProj = glm::ortho(-halfExtent, halfExtent, -halfExtent, halfExtent,
+                                         kShadowNearPlane, kShadowFarPlane);
+        lightProj[1][1] *= -1.0f; // Vulkan Y-flip for shadow pass
+
+        // Its tile: left to right, then the row below.
+        const uint32_t tileX = static_cast<uint32_t>(c % 2) * tileSide;
+        const uint32_t tileY = static_cast<uint32_t>(c / 2) * tileSide;
+
+        // Clip space to the tile's atlas UV, the way the viewport puts it
+        // there: x from -1..1 to tileX..tileX+side over the atlas width, and
+        // y the same (the projection's flip already matches the viewport's
+        // downward y). Depth is left alone.
+        glm::mat4 toTile(1.0f);
+        toTile[0][0] = 0.5f * static_cast<float>(tileSide) / atlasW;
+        toTile[1][1] = 0.5f * static_cast<float>(tileSide) / atlasH;
+        toTile[3][0] = (static_cast<float>(tileX) + 0.5f * static_cast<float>(tileSide)) / atlasW;
+        toTile[3][1] = (static_cast<float>(tileY) + 0.5f * static_cast<float>(tileSide)) / atlasH;
+
+        sc.lightSpace = lightProj * lightView;
+        sc.atlas = toTile * sc.lightSpace;
+        sc.center = center;
+        sc.halfExtent = halfExtent;
+        sc.texelWorld = texelWorld;
+        sc.tile = VkRect2D{.offset = {.x = static_cast<int32_t>(tileX), .y = static_cast<int32_t>(tileY)},
+                           .extent = {.width = tileSide, .height = tileSide}};
+    }
+    activeShadowCascades_ = cascades;
+    shadowCenter = shadowCascades_[cascades - 1].center;
+    return shadowCascades_[cascades - 1].lightSpace;
 }
 
 void Renderer::setupWater1xPass() {
@@ -4719,8 +4818,10 @@ void Renderer::renderShadowPass() {
 
     // lightSpaceMatrix was already computed at frame start (before updatePerFrameUBO).
     // Zero matrix means character position isn't set yet - skip shadow pass entirely.
-    if (lightSpaceMatrix == glm::mat4(0.0f)) return;
+    if (lightSpaceMatrix == glm::mat4(0.0f) || activeShadowCascades_ < 1) return;
     uint32_t frame = vkCtx->getCurrentFrame();
+    const uint32_t atlasW = shadowAtlasWidth(shadowCascadeCount_, SHADOW_MAP_SIZE);
+    const uint32_t atlasH = shadowAtlasHeight(shadowCascadeCount_, SHADOW_MAP_SIZE);
 
     // Barrier 1: transition this frame's shadow map into writable depth layout.
     VkImageMemoryBarrier2 b1{};
@@ -4779,7 +4880,7 @@ void Renderer::renderShadowPass() {
 
         VkRenderingInfo renderInfo{};
         renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        renderInfo.renderArea = {.offset = {.x = 0, .y = 0}, .extent = {.width = SHADOW_MAP_SIZE, .height = SHADOW_MAP_SIZE}};
+        renderInfo.renderArea = {.offset = {.x = 0, .y = 0}, .extent = {.width = atlasW, .height = atlasH}};
         renderInfo.layerCount = 1;
         renderInfo.pDepthAttachment = &depthAttach;
         vkCmdBeginRendering(currentCmd, &renderInfo);
@@ -4788,7 +4889,7 @@ void Renderer::renderShadowPass() {
         rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpInfo.renderPass = shadowRenderPass;
         rpInfo.framebuffer = shadowFramebuffer[frame];
-        rpInfo.renderArea = {.offset = {.x = 0, .y = 0}, .extent = {.width = SHADOW_MAP_SIZE, .height = SHADOW_MAP_SIZE}};
+        rpInfo.renderArea = {.offset = {.x = 0, .y = 0}, .extent = {.width = atlasW, .height = atlasH}};
         VkClearValue clear{};
         clear.depthStencil = {.depth = 1.0f, .stencil = 0};
         rpInfo.clearValueCount = 1;
@@ -4796,26 +4897,39 @@ void Renderer::renderShadowPass() {
         vkCmdBeginRenderPass(currentCmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
     }
 
-    VkViewport vp{.x = 0, .y = 0, .width = static_cast<float>(SHADOW_MAP_SIZE), .height = static_cast<float>(SHADOW_MAP_SIZE), .minDepth = 0.0f, .maxDepth = 1.0f};
-    vkCmdSetViewport(currentCmd, 0, 1, &vp);
-    VkRect2D sc{.offset = {.x = 0, .y = 0}, .extent = {.width = SHADOW_MAP_SIZE, .height = SHADOW_MAP_SIZE}};
-    vkCmdSetScissor(currentCmd, 0, 1, &sc);
+    // Phase 7/8: render shadow casters, once per cascade into its own tile.
+    //
+    // What the casters keep for the frame - descriptor pools, the instance and
+    // indirect buffers they write their draws into, the bones - is reset here,
+    // once, and the cascades after the first append to it. Reset per call, the
+    // second cascade's writes would replace what the first one's draws read
+    // when the GPU gets to them.
+    if (terrainRenderer) terrainRenderer->beginShadowFrame(frame);
+    if (m2Renderer) m2Renderer->beginShadowFrame(frame);
+    if (characterRenderer) characterRenderer->beginShadowFrame(frame);
+    for (int c = 0; c < activeShadowCascades_; ++c) {
+        const ShadowCascade& cascade = shadowCascades_[c];
+        VkViewport vp{.x = static_cast<float>(cascade.tile.offset.x),
+                      .y = static_cast<float>(cascade.tile.offset.y),
+                      .width = static_cast<float>(cascade.tile.extent.width),
+                      .height = static_cast<float>(cascade.tile.extent.height),
+                      .minDepth = 0.0f, .maxDepth = 1.0f};
+        vkCmdSetViewport(currentCmd, 0, 1, &vp);
+        vkCmdSetScissor(currentCmd, 0, 1, &cascade.tile);
 
-    // Phase 7/8: render shadow casters
-    const float shadowCullRadius = shadowDistance_ * 1.35f;
-    {
-    if (terrainRenderer) {
-        terrainRenderer->renderShadow(currentCmd, lightSpaceMatrix, shadowCenter, shadowCullRadius);
-    }
-    if (wmoRenderer) {
-        wmoRenderer->renderShadow(currentCmd, lightSpaceMatrix, shadowCenter, shadowCullRadius);
-    }
-    if (m2Renderer) {
-        m2Renderer->renderShadow(currentCmd, lightSpaceMatrix, shadowCenter, shadowCullRadius);
-    }
-    if (characterRenderer) {
-        characterRenderer->renderShadow(currentCmd, lightSpaceMatrix, shadowCenter, shadowCullRadius);
-    }
+        const float cullRadius = cascade.halfExtent * 1.35f;
+        if (terrainRenderer) {
+            terrainRenderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
+        }
+        if (wmoRenderer) {
+            wmoRenderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
+        }
+        if (m2Renderer) {
+            m2Renderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
+        }
+        if (characterRenderer) {
+            characterRenderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
+        }
     }
 
     if (dynamicRendering) {
@@ -4929,16 +5043,24 @@ void Renderer::writeFogVolumeBindings() {
     }
 }
 
-uint32_t Renderer::maxShadowMapSize() const {
-    if (!vkCtx) return kMaxShadowMapSize;
-    VkPhysicalDeviceProperties props{};
-    vkGetPhysicalDeviceProperties(vkCtx->getPhysicalDevice(), &props);
-    // The image has to be made, drawn into as a framebuffer and covered by
-    // the viewport; the spec only promises 4096 for each.
-    const VkPhysicalDeviceLimits& lim = props.limits;
-    uint32_t side = std::min({kMaxShadowMapSize, lim.maxImageDimension2D,
-                              lim.maxFramebufferWidth, lim.maxFramebufferHeight,
-                              lim.maxViewportDimensions[0], lim.maxViewportDimensions[1]});
+uint32_t Renderer::maxShadowMapSize(int cascades) const {
+    cascades = std::clamp(cascades, 1, kMaxShadowCascades);
+    // The tile is held to 16384 alone and to 8192 with company: past that the
+    // atlas is more memory than a player choosing "sharper" expects to pay.
+    uint32_t side = cascades > 1 ? kMaxCascadeTileSize : kMaxShadowMapSize;
+    if (vkCtx) {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(vkCtx->getPhysicalDevice(), &props);
+        // The atlas has to be made, drawn into as a framebuffer and covered by
+        // the viewport; the spec only promises 4096 for each. It is two tiles
+        // across with two or more cascades, and two down with three.
+        const VkPhysicalDeviceLimits& lim = props.limits;
+        const uint32_t across = std::min({lim.maxImageDimension2D, lim.maxFramebufferWidth,
+                                          lim.maxViewportDimensions[0]});
+        const uint32_t down = std::min({lim.maxImageDimension2D, lim.maxFramebufferHeight,
+                                        lim.maxViewportDimensions[1]});
+        side = std::min({side, across / (cascades > 1 ? 2u : 1u), down / (cascades > 2 ? 2u : 1u)});
+    }
     // A power of two, as every size the map is built at is.
     uint32_t pow2 = 512;
     while (pow2 * 2 <= side) pow2 *= 2;
@@ -4946,11 +5068,23 @@ uint32_t Renderer::maxShadowMapSize() const {
 }
 
 void Renderer::setShadowResolutionScale(int step) {
-    step = std::clamp(step, 0, 3);
-    // Never below the quality level's size: it is at most 4096, which every
-    // device has to support, and it was built at start-up.
-    pendingShadowMapSize_ = std::max(std::min(shadowMapBaseSize_ << step, maxShadowMapSize()),
-                                     shadowMapBaseSize_);
+    shadowResolutionStep_ = std::clamp(step, 0, 3);
+    requestShadowAtlas();
+}
+
+void Renderer::setShadowCascadeCount(int count) {
+    shadowCascadesWanted_ = std::clamp(count, 1, kMaxShadowCascades);
+    requestShadowAtlas();
+}
+
+void Renderer::requestShadowAtlas() {
+    // Never below the quality level's size where the device can draw the
+    // atlas at it: alone that is at most 4096, which every device has to
+    // support. Two cascades side by side at 4096 are 8192 across, which a
+    // device need not, and then the tile gives way rather than the cascades.
+    pendingShadowMapSize_ = std::min(shadowMapBaseSize_ << shadowResolutionStep_,
+                                     maxShadowMapSize(shadowCascadesWanted_));
+    pendingShadowCascades_ = shadowCascadesWanted_;
 }
 
 void Renderer::writeShadowMapBindings() {
@@ -4982,34 +5116,46 @@ void Renderer::writeShadowMapBindings() {
 }
 
 void Renderer::applyPendingShadowMapSize() {
-    if (pendingShadowMapSize_ == 0 || !vkCtx) return;
+    if (pendingShadowCascades_ == 0 || !vkCtx) return;
     const uint32_t wanted = pendingShadowMapSize_;
+    const int wantedCascades = pendingShadowCascades_;
     pendingShadowMapSize_ = 0;
-    // Nothing to remake before the per-frame resources exist, or when the
-    // map is already this size.
-    if (wanted == SHADOW_MAP_SIZE || shadowRenderPass == VK_NULL_HANDLE) return;
+    pendingShadowCascades_ = 0;
+    // Nothing to remake when the atlas is already this.
+    if (wanted == SHADOW_MAP_SIZE && wantedCascades == shadowCascadeCount_) return;
+    // Nor before the per-frame resources exist: they are built from these.
+    if (shadowRenderPass == VK_NULL_HANDLE) {
+        SHADOW_MAP_SIZE = wanted;
+        shadowCascadeCount_ = wantedCascades;
+        return;
+    }
 
     // Both slots' maps are bound in sets a frame still in flight may read,
     // and one may be mid-write - so nothing goes until the device is idle,
     // as for the fog's volumes and the ray traced lighting's images.
     vkDeviceWaitIdle(vkCtx->getDevice());
     const uint32_t previous = SHADOW_MAP_SIZE;
+    const int previousCascades = shadowCascadeCount_;
     destroyShadowMapImages();
 
     // The larger sizes are a lot of memory, and a failed allocation here
-    // must not leave the world without a map to sample. What was built a
-    // moment ago is tried next, then smaller again.
+    // must not leave the world without a map to sample. The tile that was
+    // built a moment ago is tried next, then smaller again, and at the
+    // smallest a single cascade.
     uint32_t side = wanted;
+    int cascades = wantedCascades;
     bool built = false;
     for (;;) {
         SHADOW_MAP_SIZE = side;
+        shadowCascadeCount_ = cascades;
         if (createShadowMapImages()) { built = true; break; }
         destroyShadowMapImages();
-        if (side > previous) side = previous;
+        if (side > previous) side = std::min(previous, maxShadowMapSize(cascades));
         else if (side > 512) side /= 2;
+        else if (cascades > 1) cascades = 1;
         else break;
-        LOG_WARNING("Shadow map: ", SHADOW_MAP_SIZE, "x", SHADOW_MAP_SIZE,
-                    " could not be made - trying ", side, "x", side);
+        LOG_WARNING("Shadow map: ", shadowCascadeCount_, " cascade(s) of ", SHADOW_MAP_SIZE,
+                    " could not be made - trying ", cascades, " of ", side);
     }
     if (!built) {
         // Not even 512 a side: the device is out of memory, and more than the
@@ -5018,12 +5164,15 @@ void Renderer::applyPendingShadowMapSize() {
         LOG_ERROR("Shadow map: no size could be made, down to 512x512");
         return;
     }
-    // computeLightSpaceMatrix snaps to the texel of whatever SHADOW_MAP_SIZE
-    // is, and updatePerFrameUBO hands the shaders its texel size, both each
-    // frame - so the views are all that is left to hand on.
+    // computeLightSpaceMatrix lays the cascades out in the atlas and snaps
+    // them to the texel of whatever SHADOW_MAP_SIZE is, and updatePerFrameUBO
+    // hands the shaders the tiles, both each frame - so the views are all
+    // that is left to hand on.
     writeShadowMapBindings();
-    LOG_WARNING("Shadow map: rebuilt at ", SHADOW_MAP_SIZE, "x", SHADOW_MAP_SIZE,
-                " (was ", previous, "x", previous, ")");
+    LOG_WARNING("Shadow map: rebuilt as ", shadowCascadeCount_, " cascade(s) of ", SHADOW_MAP_SIZE,
+                " in a ", shadowAtlasWidth(shadowCascadeCount_, SHADOW_MAP_SIZE), "x",
+                shadowAtlasHeight(shadowCascadeCount_, SHADOW_MAP_SIZE), " atlas (was ",
+                previousCascades, " of ", previous, ")");
 }
 
 float Renderer::volumetricFogExtinction() const {

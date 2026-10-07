@@ -2027,20 +2027,59 @@ bool M2Renderer::initializeInstancedShadow(
     return true;
 }
 
+void M2Renderer::beginShadowFrame(uint32_t frameIndex) {
+    // A shadow that flickers is a caster that was drawn last frame and is not
+    // drawn this one. The cull is in light space and the light turns with the
+    // hour, so a tree on the boundary can cross it while the player stands
+    // still - and from the ground that reads as the shadow blinking. Said at
+    // most once a second, and only when the count actually swings, so an
+    // ordinary walk through a forest stays quiet. Counted over the whole
+    // frame, every cascade together, and compared here, where the frame
+    // before is finished: compared per call it would be one cascade's count
+    // against another's.
+    {
+        const uint32_t foliageNow = shadowCastersThisFrame_[1];
+        const uint32_t foliageWas = lastFoliageCasters_;
+        lastFoliageCasters_ = foliageNow;
+        const uint32_t larger = std::max(foliageNow, foliageWas);
+        const uint32_t delta = larger - std::min(foliageNow, foliageWas);
+        if (foliageWas != 0 && larger >= 8 && delta * 10 > larger) {
+            static std::chrono::steady_clock::time_point lastLog{};
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastLog > std::chrono::seconds(1)) {
+                lastLog = now;
+                LOG_WARNING("Shadow casters swung ", foliageWas, " -> ", foliageNow,
+                            " foliage instances in one frame (", shadowCastersThisFrame_[0],
+                            " solid). A shadow that blinks with the player standing "
+                            "still is one of these crossing the light-space cull.");
+            }
+        }
+    }
+    shadowCastersThisFrame_[0] = shadowCastersThisFrame_[1] = 0;
+    shadowInstancesUsed_ = 0;
+
+    // This frame slot's fence was waited on in beginFrame, so the texture sets
+    // its last shadow pass used are finished with. Not per cascade: the sets a
+    // cascade binds have to outlive the cascades recorded after it.
+    if (frameIndex < kShadowTexPoolFrames && shadowTexPool_[frameIndex]) {
+        vkResetDescriptorPool(vkCtx_->getDevice(), shadowTexPool_[frameIndex], 0);
+    }
+    // Cache: texture imageView -> allocated descriptor set (avoids duplicates
+    // within the frame, across its cascades too). The pool reset above has
+    // invalidated what it held.
+    shadowTexSetCache_.clear();
+}
+
 void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
                               const glm::vec3& /*shadowCenter*/, float shadowRadius) {
     if (!shadowPipeline_ || !shadowParams_.set) return;
     if (instances.empty() || models.empty()) return;
 
-    // Reset this frame slot's texture descriptor pool (safe: fence was waited on in beginFrame)
+    // The pool and the cache were reset in beginShadowFrame; this cascade adds
+    // to them.
     const uint32_t frameIdx = vkCtx_->getCurrentFrame();
-    VkDescriptorPool curShadowTexPool = shadowTexPool_[frameIdx];
-    if (curShadowTexPool) {
-        vkResetDescriptorPool(vkCtx_->getDevice(), curShadowTexPool, 0);
-    }
-    // Cache: texture imageView -> allocated descriptor set (avoids duplicates within frame)
-    // Reuse persistent map - pool reset already invalidated the sets.
-    shadowTexSetCache_.clear();
+    VkDescriptorPool curShadowTexPool = frameIdx < kShadowTexPoolFrames ? shadowTexPool_[frameIdx]
+                                                                        : VK_NULL_HANDLE;
     auto& texSetCache = shadowTexSetCache_;
 
     auto getTexDescSet = [&](VkTexture* tex) -> VkDescriptorSet {
@@ -2048,6 +2087,7 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
         auto cacheIt = texSetCache.find(iv);
         if (cacheIt != texSetCache.end()) return cacheIt->second;
 
+        if (curShadowTexPool == VK_NULL_HANDLE) return shadowParams_.set;
         VkDescriptorSet set = VK_NULL_HANDLE;
         VkDescriptorSetAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -2113,7 +2153,7 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
         const glm::vec4 clip = lightSpaceMatrix * glm::vec4(instance.position, 1.0f);
         // Orthographic projection: w == 1, NDC directly comparable.
         // Inflate by the model's bounding sphere converted to NDC
-        // (shadowRadius ≈ frustum half-extent; overshoot is harmless).
+        // (shadowRadius ≈ this cascade's half-extent; overshoot is harmless).
         const float margin = (model.boundRadius * instance.scale) / shadowRadius * 1.5f;
         if (std::abs(clip.x) > 1.0f + margin || std::abs(clip.y) > 1.0f + margin) continue;
         if (clip.z < -margin || clip.z > 1.0f + margin) continue;
@@ -2129,11 +2169,15 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
     // (m2_shadow.vert). A forest was a draw call per tree per batch. Models
     // that no longer fit in the buffer, or every model when the instanced
     // pipeline could not be built, draw one instance at a time as before.
+    //
+    // The buffer is the frame's, shared by its cascades: this one writes after
+    // what the cascades before it wrote, which their draws still have to read.
     auto* shadowModels = (shadowInstancedPipeline_ && frameIdx < 2 &&
                           shadowInstanceSet_[frameIdx])
         ? static_cast<glm::mat4*>(shadowInstanceMapped_[frameIdx])
         : nullptr;
-    uint32_t shadowInstanceCount = 0;
+    const uint32_t firstInstanceThisCall = shadowInstancesUsed_;
+    uint32_t shadowInstanceCount = shadowInstancesUsed_;
 
     // Helper lambda to draw one of the two passes: solid casters, or foliage
     // whose leaf cards are cut out of their texture by the alpha test.
@@ -2265,36 +2309,16 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
     // casts its cutout rather than its quad
     drawPass(true);
 
-    if (shadowInstanceCount > 0) {
-        // A no-op on coherent memory, which CPU_TO_GPU nearly always is.
-        vmaFlushAllocation(vkCtx_->getAllocator(), shadowInstanceAlloc_[frameIdx], 0,
-                           shadowInstanceCount * sizeof(glm::mat4));
+    if (shadowInstanceCount > firstInstanceThisCall) {
+        // What this cascade wrote. A no-op on coherent memory, which
+        // CPU_TO_GPU nearly always is.
+        vmaFlushAllocation(vkCtx_->getAllocator(), shadowInstanceAlloc_[frameIdx],
+                           firstInstanceThisCall * sizeof(glm::mat4),
+                           (shadowInstanceCount - firstInstanceThisCall) * sizeof(glm::mat4));
     }
-
-    // A shadow that flickers is a caster that was drawn last frame and is not
-    // drawn this one. The cull is in light space and the light turns with the
-    // hour, so a tree on the boundary can cross it while the player stands
-    // still - and from the ground that reads as the shadow blinking. Said at
-    // most once a second, and only when the count actually swings, so an
-    // ordinary walk through a forest stays quiet.
-    {
-        const uint32_t foliageNow = castersDrawn[1];
-        const uint32_t foliageWas = lastFoliageCasters_;
-        lastFoliageCasters_ = foliageNow;
-        const uint32_t larger = std::max(foliageNow, foliageWas);
-        const uint32_t delta = larger - std::min(foliageNow, foliageWas);
-        if (foliageWas != 0 && larger >= 8 && delta * 10 > larger) {
-            static std::chrono::steady_clock::time_point lastLog{};
-            const auto now = std::chrono::steady_clock::now();
-            if (now - lastLog > std::chrono::seconds(1)) {
-                lastLog = now;
-                LOG_WARNING("Shadow casters swung ", foliageWas, " -> ", foliageNow,
-                            " foliage instances in one frame (", castersDrawn[0],
-                            " solid). A shadow that blinks with the player standing "
-                            "still is one of these crossing the light-space cull.");
-            }
-        }
-    }
+    shadowInstancesUsed_ = shadowInstanceCount;
+    shadowCastersThisFrame_[0] += castersDrawn[0];
+    shadowCastersThisFrame_[1] += castersDrawn[1];
 }
 
 } // namespace rendering

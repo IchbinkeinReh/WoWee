@@ -3685,6 +3685,18 @@ bool CharacterRenderer::initializeShadow(VkRenderPass shadowRenderPass) {
     return true;
 }
 
+void CharacterRenderer::beginShadowFrame(uint32_t frameIndex) {
+    ++shadowFrameSerial_;
+    // This frame slot's fence was waited on in beginFrame, so last time's sets
+    // are finished with and the pool can be handed back whole. Once a frame
+    // and not per cascade: a set one cascade binds is read when the GPU runs
+    // its draws, after the later cascades have been recorded.
+    if (frameIndex < kShadowTexPoolFrames && shadowTexPool_[frameIndex]) {
+        vkResetDescriptorPool(vkCtx_->getDevice(), shadowTexPool_[frameIndex], 0);
+    }
+    shadowTexSetCache_.clear();
+}
+
 void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
                                      const glm::vec3& shadowCenter, float shadowRadius) {
     if (!shadowPipeline_ || !shadowParams_.set) return;
@@ -3694,13 +3706,6 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
     uint32_t frameIndex = vkCtx_->getCurrentFrame();
     if (frameIndex >= 2) return;
     VkDevice device = vkCtx_->getDevice();
-
-    // This frame slot's fence was waited on in beginFrame, so last time's sets
-    // are finished with and the pool can be handed back whole.
-    if (frameIndex < kShadowTexPoolFrames && shadowTexPool_[frameIndex]) {
-        vkResetDescriptorPool(device, shadowTexPool_[frameIndex], 0);
-    }
-    shadowTexSetCache_.clear();
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
 
@@ -3782,9 +3787,11 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
                     vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
                 }
             }
-            if (inst.boneMapped[frameIndex]) {
+            // Once a frame: the cascades after the first draw the same pose.
+            if (inst.boneMapped[frameIndex] && inst.shadowBonesFrame != shadowFrameSerial_) {
                 memcpy(inst.boneMapped[frameIndex], inst.boneMatrices.data(),
                        numBones * sizeof(glm::mat4));
+                inst.shadowBonesFrame = shadowFrameSerial_;
             }
         }
 

@@ -1234,6 +1234,10 @@ void CharacterPreview::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
     // the global shadow binding here can produce unstable fragments on some
     // drivers, so keep the portrait on studio lighting only.
     ubo.shadowParams = glm::vec4(0.0f);
+    // No cascades either (ubo{} has zeroed their matrices and tiles): with a
+    // count of 0 shadow_csm.glsli reads everything as lit, whatever the
+    // binding holds.
+    ubo.cascadeInfo = glm::vec4(0.0f);
 
     std::memcpy(previewUBOMapped_[fi], &ubo, sizeof(GPUPerFrameData));
 

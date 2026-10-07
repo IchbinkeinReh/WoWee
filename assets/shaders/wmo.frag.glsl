@@ -21,10 +21,18 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 averagedDirectColor;   // light mode 2's direct light (0xd38cb0)
     vec4 averagedAmbientColor;  // and its ambient (0xd38cb4)
     vec4 windowLight;           // x: the light's window level (0xd38cdc, wmo_sidn.hpp)
+    // Unread here; declared so the cascades below land where the renderer writes them.
+    vec4 specularColor;
+    // The shadow cascades (shadow_csm.glsli); GPUPerFrameData ends with them.
+    mat4 cascadeMatrix[4];
+    vec4 cascadeRect[4];
+    vec4 cascadeTexel[4];
+    vec4 cascadeInfo;
 };
 
 #include "rt_lighting.glsli"
 #include "texture_filter.glsli"
+#include "shadow_csm.glsli"
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 
@@ -80,25 +88,6 @@ layout(location = 7) in vec2 TexCoord2;   // the second MOTV
 layout(location = 8) in vec4 VertColor2;  // the second MOCV
 
 layout(location = 0) out vec4 outColor;
-
-// One texel of the shadow map, handed in by the renderer. The map is 512,
-// 1024, 2048 or 4096 a side by the quality setting; this used to be a
-// constant for 4096, so at 512 the filter taps all landed inside one texel
-// and the bias shrank eightfold. The fallback covers a per-frame block that
-// never filled the slot in, such as the character preview's.
-float shadowTexel() {
-    return shadowParams.z > 0.0 ? shadowParams.z : 1.0 / 4096.0;
-}
-
-float sampleShadowPCF(sampler2DShadow smap, vec3 coords) {
-    float shadow = 0.0;
-    for (int x = -1; x <= 1; ++x) {
-        for (int y = -1; y <= 1; ++y) {
-            shadow += texture(smap, vec3(coords.xy + vec2(x, y) * shadowTexel(), coords.z));
-        }
-    }
-    return shadow / 9.0;
-}
 
 // LOD factor from screen-space UV derivatives
 float computeLodFactor() {
@@ -320,17 +309,9 @@ void main() {
     float shadow = 1.0;
     if (shadowParams.x > 0.5 && shadowed != 0) {
         vec3 ldir = normalize(-lightDir.xyz);
-        float normalOffset = shadowTexel() * 2.0 * (1.0 - abs(dot(norm, ldir)));
-        vec3 biasedPos = FragPos + norm * normalOffset;
-        vec4 lsPos = lightSpaceMatrix * vec4(biasedPos, 1.0);
-        vec3 proj = lsPos.xyz / lsPos.w;
-        proj.xy = proj.xy * 0.5 + 0.5;
-        if (proj.x >= 0.0 && proj.x <= 1.0 &&
-            proj.y >= 0.0 && proj.y <= 1.0 &&
-            proj.z >= 0.0 && proj.z <= 1.0) {
-            float bias = max(0.0005 * (1.0 - abs(dot(norm, ldir))), 0.00005);
-            shadow = sampleShadowPCF(uShadowMap, vec3(proj.xy, proj.z - bias));
-        }
+        float nl = dot(norm, ldir);
+        float bias = max(0.0005 * (1.0 - abs(nl)), 0.00005);
+        shadow = csmShadow(uShadowMap, FragPos, norm, nl, bias);
         shadow = mix(1.0, shadow, shadowParams.y);
     }
     RtLight rt = rtLightAt(FragPos);

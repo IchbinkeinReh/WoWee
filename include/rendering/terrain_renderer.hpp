@@ -143,6 +143,13 @@ public:
     void renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
                       const glm::vec3& shadowCenter, float shadowRadius);
 
+    /**
+     * Once a frame, before the first renderShadow: starts this frame's
+     * indirect buffer from the top. renderShadow is then called once per
+     * shadow cascade and each call appends to it.
+     */
+    void beginShadowFrame(uint32_t frameIndex);
+
     [[nodiscard]] bool hasShadowPipeline() const { return shadowPipeline_ != VK_NULL_HANDLE; }
 
     void clear();
@@ -313,7 +320,19 @@ private:
     VkBuffer indirectBuffer_[kIndirectFrames] = {};
     VmaAllocation indirectAlloc_[kIndirectFrames] = {};
     void* indirectMapped_[kIndirectFrames] = {};
+    /// Indirect draws one cascade can queue.
     static constexpr uint32_t MAX_INDIRECT_DRAWS = 8192;
+    /// The buffer holds every cascade of a frame, each after the one before:
+    /// a cascade's draws are read when the GPU runs them, after the later
+    /// cascades have been recorded, so none may start again from the top.
+    static constexpr uint32_t kIndirectCascades = 3;  // Renderer::kMaxShadowCascades
+    static constexpr uint32_t kIndirectCapacity = MAX_INDIRECT_DRAWS * kIndirectCascades;
+    /// How much of this frame's buffer the cascades so far have used.
+    uint32_t indirectUsed_ = 0;
+    /// Chunks cast into this frame's cascades so far, and into the last
+    /// frame's, for the log line in beginShadowFrame.
+    uint32_t shadowChunksThisFrame_ = 0;
+    uint32_t shadowChunksReported_ = 0;
 };
 
 } // namespace rendering

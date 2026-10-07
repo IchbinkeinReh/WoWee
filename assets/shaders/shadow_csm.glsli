@@ -1,0 +1,87 @@
+// The sun's cascaded shadow map, as every lit surface reads it.
+//
+// The renderer draws one to three cascades into tiles of a single depth atlas
+// (Renderer::computeLightSpaceMatrix): concentric squares centred on the
+// player, the same light direction and the same depth range for all of them,
+// only the half-extent differs - about 50 and 300 yards with two at the
+// default shadow distance. A cascade's matrix takes a world position straight
+// to its tile's atlas UV and to a depth, so nothing here scales or offsets.
+//
+// The including shader declares, in its PerFrame block, after everything the
+// renderer's GPUPerFrameData has before them:
+//     mat4 cascadeMatrix[4];  // world -> atlas uv.xy, depth z
+//     vec4 cascadeRect[4];    // the tile: uv min xy, uv max zw
+//     vec4 cascadeTexel[4];   // x one texel in yards, yz one atlas texel in u, v
+//     vec4 cascadeInfo;       // x count (0 = no map), y blend band, z fade start
+//
+// cascadeInfo.x is 0 in the character preview, whose block is zeroed, and
+// before the player has a position; everything then reads as lit.
+
+// How far into a tile, as a fraction of its half-width from the centre: 0 at
+// the centre, 1 on the edge. And the inset the tile is trusted up to: two
+// atlas texels, so the 3x3 filter and the normal offset stay on the tile.
+float csmTileDistance(int c, vec2 uv, out float dMax) {
+    const vec4 rect = cascadeRect[c];
+    const vec2 size = rect.zw - rect.xy;
+    const vec2 t = (uv - rect.xy) / size;
+    const vec2 insetT = 2.0 * cascadeTexel[c].yz / size;
+    dMax = 1.0 - 2.0 * max(insetT.x, insetT.y);
+    const vec2 d = abs(t * 2.0 - 1.0);
+    return max(d.x, d.y);
+}
+
+// One cascade's 3x3 filter, the taps held to its tile so none reads the
+// neighbouring one. The point is moved along the surface normal by up to one
+// and a half of this cascade's texels, in yards, before it is projected.
+float csmSampleCascade(sampler2DShadow smap, int c, vec3 worldPos, vec3 n, float nl,
+                       float depthBias) {
+    const float offset = 1.5 * cascadeTexel[c].x * clamp(1.0 - abs(nl), 0.3, 1.0);
+    const vec4 ls = cascadeMatrix[c] * vec4(worldPos + n * offset, 1.0);
+    const vec3 proj = ls.xyz / ls.w;
+    if (proj.z < 0.0 || proj.z > 1.0) return 1.0;
+    const vec2 texel = cascadeTexel[c].yz;
+    // Half a texel in, so a bilinear compare stays inside the tile too.
+    const vec2 lo = cascadeRect[c].xy + 0.5 * texel;
+    const vec2 hi = cascadeRect[c].zw - 0.5 * texel;
+    const float ref = proj.z - depthBias;
+    float sum = 0.0;
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            const vec2 uv = clamp(proj.xy + vec2(x, y) * texel, lo, hi);
+            sum += texture(smap, vec3(uv, ref));
+        }
+    }
+    return sum / 9.0;
+}
+
+// The light let through at worldPos, 1 lit and 0 shadowed, before the shadow
+// strength. n is the surface normal, nl its dot with the direction to the sun
+// and depthBias what is taken off the depth (the shader's own, as before).
+//
+// The finest cascade whose tile holds the point is used; over the outer 12%
+// of that tile it blends into the next one, so the step in sharpness is a
+// ramp rather than a line; and over the outer 10% of the last cascade the
+// shadow fades out, so the map's coverage ends without an edge.
+float csmShadow(sampler2DShadow smap, vec3 worldPos, vec3 n, float nl, float depthBias) {
+    const int count = min(int(cascadeInfo.x + 0.5), 4);
+    for (int c = 0; c < count; ++c) {
+        const vec4 ls = cascadeMatrix[c] * vec4(worldPos, 1.0);
+        float dMax;
+        const float d = csmTileDistance(c, ls.xy / ls.w, dMax);
+        if (d > dMax) continue;
+
+        float shadow = csmSampleCascade(smap, c, worldPos, n, nl, depthBias);
+        if (c + 1 < count) {
+            const float band = max(cascadeInfo.y, 1e-3);
+            const float w = clamp((d - (dMax - band)) / band, 0.0, 1.0);
+            if (w > 0.0) {
+                shadow = mix(shadow, csmSampleCascade(smap, c + 1, worldPos, n, nl, depthBias), w);
+            }
+        } else {
+            const float start = min(cascadeInfo.z, dMax - 1e-3);
+            shadow = mix(shadow, 1.0, clamp((d - start) / (dMax - start), 0.0, 1.0));
+        }
+        return shadow;
+    }
+    return 1.0;
+}

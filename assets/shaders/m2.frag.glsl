@@ -18,10 +18,21 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 rtCameraPos;
     vec4 rtParams;
     vec4 cameraFogColor;  // the camera's fog, its interior's blended in
+    // Unread here; declared so the cascades below land where the renderer writes them.
+    vec4 averagedDirectColor;
+    vec4 averagedAmbientColor;
+    vec4 windowLight;
+    vec4 specularColor;
+    // The shadow cascades (shadow_csm.glsli); GPUPerFrameData ends with them.
+    mat4 cascadeMatrix[4];
+    vec4 cascadeRect[4];
+    vec4 cascadeTexel[4];
+    vec4 cascadeInfo;
 };
 
 #include "rt_lighting.glsli"
 #include "texture_filter.glsli"
+#include "shadow_csm.glsli"
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 layout(set = 1, binding = 3) uniform sampler2D uTexture2;
@@ -68,25 +79,6 @@ layout(location = 11) flat in vec4 vInteriorDirect;
 layout(location = 12) flat in float vDetailLit;
 
 layout(location = 0) out vec4 outColor;
-
-// One texel of the shadow map, handed in by the renderer. The map is 512,
-// 1024, 2048 or 4096 a side by the quality setting; this used to be a
-// constant for 4096, so at 512 the filter taps all landed inside one texel
-// and the bias shrank eightfold. The fallback covers a per-frame block that
-// never filled the slot in, such as the character preview's.
-float shadowTexel() {
-    return shadowParams.z > 0.0 ? shadowParams.z : 1.0 / 4096.0;
-}
-
-float sampleShadowPCF(sampler2DShadow smap, vec3 coords) {
-    float shadow = 0.0;
-    for (int x = -1; x <= 1; ++x) {
-        for (int y = -1; y <= 1; ++y) {
-            shadow += texture(smap, vec3(coords.xy + vec2(x, y) * shadowTexel(), coords.z));
-        }
-    }
-    return shadow / 9.0;
-}
 
 // The client's texture stages, as its Combiners_*.bls pixel programs apply
 // them: each stage to the running colour, the vertex colour first. A batch's
@@ -274,14 +266,9 @@ void main() {
             // The shadow variants: the shadow map's light, no more than the
             // baked shadow lets through, and a face edge-on to the sun let
             // out of it by sat(|1.2 - |N.L||^4).
-            vec4 lsPos = lightSpaceMatrix * vec4(FragPos, 1.0);
-            vec3 proj = lsPos.xyz / lsPos.w;
-            proj.xy = proj.xy * 0.5 + 0.5;
-            float mapLit = 1.0;
-            if (proj.x >= 0.0 && proj.x <= 1.0 && proj.y >= 0.0 && proj.y <= 1.0 &&
-                proj.z >= 0.0 && proj.z <= 1.0) {
-                mapLit = mix(1.0, sampleShadowPCF(uShadowMap, vec3(proj.xy, proj.z - 0.0005)), shadowParams.y);
-            }
+            // Offset along the terrain's normal, as the ground under it is.
+            float mapLit = mix(1.0, csmShadow(uShadowMap, FragPos, terrainN,
+                                              dot(terrainN, toSun), 0.0005), shadowParams.y);
             float s = rtShadow(rt, min(shade, mapLit));
             shade = mix(s, shade, clamp(pow(abs(1.2 - abs(dot(terrainN, toSun))), 4.0), 0.0, 1.0));
         }
@@ -352,17 +339,9 @@ void main() {
         float shadow = 1.0;
 
         if (shadowParams.x > 0.5) {
-            float normalOffset = shadowTexel() * 2.0 * (1.0 - abs(dot(norm, ldir)));
-            vec3 biasedPos = FragPos + norm * normalOffset;
-            vec4 lsPos = lightSpaceMatrix * vec4(biasedPos, 1.0);
-            vec3 proj = lsPos.xyz / lsPos.w;
-            proj.xy = proj.xy * 0.5 + 0.5;
-            if (proj.x >= 0.0 && proj.x <= 1.0 &&
-                proj.y >= 0.0 && proj.y <= 1.0 &&
-                proj.z >= 0.0 && proj.z <= 1.0) {
-                float bias = max(0.0005 * (1.0 - abs(dot(norm, ldir))), 0.00005);
-                shadow = sampleShadowPCF(uShadowMap, vec3(proj.xy, proj.z - bias));
-            }
+            float nl = dot(norm, ldir);
+            float bias = max(0.0005 * (1.0 - abs(nl)), 0.00005);
+            shadow = csmShadow(uShadowMap, FragPos, norm, nl, bias);
             shadow = mix(1.0, shadow, shadowParams.y);
         }
 

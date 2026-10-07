@@ -131,6 +131,10 @@ public:
                                 wowee::rendering::VkShaderModule& charVert,
                                 wowee::rendering::VkShaderModule& charFrag);
     [[nodiscard]] bool initializeShadow(VkRenderPass shadowRenderPass);
+    /// Once a frame, before the first renderShadow: hands back this frame
+    /// slot's texture sets and marks a new frame for the bone copies.
+    /// renderShadow is then called once per shadow cascade.
+    void beginShadowFrame(uint32_t frameIndex);
     void renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
                       const glm::vec3& shadowCenter = glm::vec3(0), float shadowRadius = 1e9f);
 
@@ -434,6 +438,9 @@ private:
         VmaAllocation boneAlloc[2] = {};
         void* boneMapped[2] = {};
         VkDescriptorSet boneSet[2] = {};
+        /// The shadow frame (shadowFrameSerial_) that last copied the bones,
+        /// so the second and third cascades do not copy them again.
+        uint64_t shadowBonesFrame = 0;
     };
 
     void setupModelBuffers(M2ModelGPU& gpuModel);
@@ -668,6 +675,8 @@ private:
     /// frame in flight and reset at the top of each frame's shadow pass. Same
     /// arrangement M2Renderer uses for its foliage shadows.
     static constexpr uint32_t kShadowTexPoolFrames = 2;
+    /// Counts beginShadowFrame calls; see CharacterInstance::shadowBonesFrame.
+    uint64_t shadowFrameSerial_ = 0;
     VkDescriptorPool shadowTexPool_[kShadowTexPoolFrames] = {};
     std::unordered_map<VkImageView, VkDescriptorSet> shadowTexSetCache_;
     VkDescriptorSet shadowTexDescSet(VkTexture* tex, uint32_t frameIndex);
