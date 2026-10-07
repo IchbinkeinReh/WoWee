@@ -32,6 +32,17 @@ inline SampleTime resolveTime(const pipeline::M2AnimationTrack& track,
     return {.sequenceIndex = animationSequenceIndex, .timeMs = animationTimeMs};
 }
 
+/// The timeline a sequence reads: its own, or the first where the track has
+/// fewer timelines than that - the client's samplers all start
+/// idx = seq < nTimelines ? seq : 0 (0x0082af40 and its siblings), and give
+/// the default only for a timeline with no keys. A Blood Elf's eye-glow
+/// transparency has one timeline at 0.2; read as missing in every other
+/// sequence it was 1, five times the glow.
+inline int resolveTimeline(const pipeline::M2AnimationTrack& track, int sequenceIndex) {
+    if (sequenceIndex < 0 || track.sequences.empty()) return -1;
+    return static_cast<size_t>(sequenceIndex) < track.sequences.size() ? sequenceIndex : 0;
+}
+
 inline size_t lowerKeyIndex(const std::vector<uint32_t>& timestamps,
                             size_t keyCount, float timeMs) {
     keyCount = std::min(keyCount, timestamps.size());
@@ -66,11 +77,9 @@ inline float sampleFloat(const pipeline::M2AnimationTrack& track,
     const auto sampleTime = resolveTime(track, animationSequenceIndex,
                                         animationTimeMs, globalTimeMs,
                                         globalSequenceDurations);
-    if (sampleTime.sequenceIndex < 0 ||
-        static_cast<size_t>(sampleTime.sequenceIndex) >= track.sequences.size()) {
-        return defaultValue;
-    }
-    const auto& keys = track.sequences[static_cast<size_t>(sampleTime.sequenceIndex)];
+    const int timeline = resolveTimeline(track, sampleTime.sequenceIndex);
+    if (timeline < 0) return defaultValue;
+    const auto& keys = track.sequences[static_cast<size_t>(timeline)];
     const size_t count = std::min(keys.timestamps.size(), keys.floatValues.size());
     if (count == 0) return defaultValue;
     const size_t lower = lowerKeyIndex(keys.timestamps, count, sampleTime.timeMs);
@@ -89,11 +98,9 @@ inline glm::vec3 sampleVec3(const pipeline::M2AnimationTrack& track,
     const auto sampleTime = resolveTime(track, animationSequenceIndex,
                                         animationTimeMs, globalTimeMs,
                                         globalSequenceDurations);
-    if (sampleTime.sequenceIndex < 0 ||
-        static_cast<size_t>(sampleTime.sequenceIndex) >= track.sequences.size()) {
-        return defaultValue;
-    }
-    const auto& keys = track.sequences[static_cast<size_t>(sampleTime.sequenceIndex)];
+    const int timeline = resolveTimeline(track, sampleTime.sequenceIndex);
+    if (timeline < 0) return defaultValue;
+    const auto& keys = track.sequences[static_cast<size_t>(timeline)];
     const size_t count = std::min(keys.timestamps.size(), keys.vec3Values.size());
     if (count == 0) return defaultValue;
     const auto safe = [&](const glm::vec3& value) {
@@ -116,11 +123,9 @@ inline glm::quat sampleQuat(const pipeline::M2AnimationTrack& track,
     const auto sampleTime = resolveTime(track, animationSequenceIndex,
                                         animationTimeMs, globalTimeMs,
                                         globalSequenceDurations);
-    if (sampleTime.sequenceIndex < 0 ||
-        static_cast<size_t>(sampleTime.sequenceIndex) >= track.sequences.size()) {
-        return identity;
-    }
-    const auto& keys = track.sequences[static_cast<size_t>(sampleTime.sequenceIndex)];
+    const int timeline = resolveTimeline(track, sampleTime.sequenceIndex);
+    if (timeline < 0) return identity;
+    const auto& keys = track.sequences[static_cast<size_t>(timeline)];
     const size_t count = std::min(keys.timestamps.size(), keys.quatValues.size());
     if (count == 0) return identity;
     const auto safe = [&](const glm::quat& value) {

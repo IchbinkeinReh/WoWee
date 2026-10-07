@@ -29,14 +29,6 @@ namespace rendering {
 float M2Renderer::interpFloat(const pipeline::M2AnimationTrack& track, float animTime,
                                 float globalTime, int seqIdx,
                                 const std::vector<uint32_t>& globalSeqDurations) {
-    // An emitter track with a single sequence holds for every sequence: the
-    // Eversong brooms' lifespan has one and their emission rate five, and
-    // read as nothing outside the first their dust lived for no time at all
-    // while they walked, where the client raises it.
-    if (track.globalSequence < 0 && track.sequences.size() == 1 &&
-        (seqIdx < 0 || seqIdx >= 1)) {
-        seqIdx = 0;
-    }
     return m2_track::sampleFloat(track, seqIdx, animTime, globalTime,
                                  globalSeqDurations, 0.0f);
 }
