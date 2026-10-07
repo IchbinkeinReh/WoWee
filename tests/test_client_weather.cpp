@@ -225,3 +225,39 @@ TEST_CASE("a row with no texture takes the effect's own", "[weather]") {
     CHECK(std::string(cw::defaultTexture(cw::Effect::Snow)) == "textures\\Weather\\SnowFlake01.blp");
     CHECK(std::string(cw::defaultTexture(cw::Effect::Sand)).empty());
 }
+
+TEST_CASE("mist is made past half strength for rain and snow", "[weather]") {
+    CHECK(cw::mistRate(cw::Effect::Rain, 1.0f, 0.5f) == 0.0f);
+    CHECK(cw::mistRate(cw::Effect::Rain, 1.0f, 1.0f) == Catch::Approx(38.0f));
+    CHECK(cw::mistRate(cw::Effect::Snow, 0.66f, 1.0f) == Catch::Approx(48.0f * 0.66f));
+    CHECK(cw::mistRate(cw::Effect::Sand, 1.0f, 0.5f) == Catch::Approx(32.0f));
+}
+
+TEST_CASE("a mist sheet sits on the ground and climbs over it", "[weather]") {
+    cw::HeightCache ground = flatGround(-3.0f);
+    cw::SpawnContext ctx;
+    Sequence rnd{{0.5f}};
+    cw::Mist m = cw::spawnMist(std::ref(rnd), cw::mistSpec(cw::Effect::Rain), ctx, ground, 10.0f);
+    REQUIRE(m.live());
+    // Six yards above the higher of the ground and where it was put, which
+    // is a second and a half back along its path: half a yard down.
+    CHECK(m.position.z == Catch::Approx(5.5f));
+    CHECK(m.end - m.start == Catch::Approx(2.7f));
+    // 5 yards a second for 2.7 seconds, a cell a step.
+    CHECK(m.steps == static_cast<int>(std::lround(5.0f * 2.7f / 1.0416666f)));
+    CHECK(m.velocity.z == Catch::Approx(0.33333334f));
+    cw::stepMist(m, 10.0f, 10.1f);
+    CHECK(m.position.z == Catch::Approx(5.5f + 0.033333f).margin(1e-4));
+}
+
+TEST_CASE("a mist sheet fades in, out, and near the camera", "[weather]") {
+    cw::Mist m;
+    m.start = 1.0f;
+    m.end = 3.7f;
+    CHECK(cw::mistAlpha(m, 1.0f, 50.0f) == 0.0f);
+    CHECK(cw::mistAlpha(m, 1.2f, 50.0f) == Catch::Approx(0.5f));
+    CHECK(cw::mistAlpha(m, 2.0f, 50.0f) == Catch::Approx(1.0f));
+    CHECK(cw::mistAlpha(m, 3.5f, 50.0f) == Catch::Approx(0.5f));
+    CHECK(cw::mistAlpha(m, 2.0f, 6.0f) == 0.0f);
+    CHECK(cw::mistAlpha(m, 2.0f, 12.0f) == Catch::Approx(0.5f));
+}

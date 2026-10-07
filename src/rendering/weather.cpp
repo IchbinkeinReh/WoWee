@@ -43,6 +43,15 @@ struct WeatherPush {
 
 constexpr uint32_t kMaxTextures = 16;
 
+// A mist sheet's corner: where, which texel, how opaque.
+struct GpuMistVertex {
+    float position[3];
+    float uv[2];
+    float alpha;
+};
+static_assert(sizeof(GpuMistVertex) == 24);
+constexpr uint32_t kMistVertices = cw::kMistSlots * 6;
+
 glm::vec3 toRender(const glm::vec3& c) { return core::coords::canonicalToRender(c); }
 glm::vec3 toCanonical(const glm::vec3& r) { return core::coords::renderToCanonical(r); }
 
@@ -90,6 +99,15 @@ bool Weather::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout) {
         LOG_ERROR("Weather: failed to create pipelines");
         return false;
     }
+
+    for (int i = 0; i < kMistFrames; ++i) {
+        AllocatedBuffer buf = createBuffer(vkCtx_->getAllocator(), kMistVertices * sizeof(GpuMistVertex),
+                                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+        mistBuffer_[i] = buf.buffer;
+        mistAllocation_[i] = buf.allocation;
+        mistMapped_[i] = buf.info.pMappedData;
+    }
+    mists_.assign(cw::kMistSlots, cw::Mist{});
 
     // What sand binds: its program reads no texture, but the set must be there.
     blank_ = std::make_unique<Texture>();
@@ -194,7 +212,31 @@ bool Weather::buildPipelines() {
             .setDynamicStates(viewportAndScissorDynamic())
             .build(device, vkCtx_->getPipelineCache());
     }
-    return streakPipeline_ && splashPipeline_ && pointPipeline_;
+    {
+        // The mist: alpha blended, no depth write, no fog (0x00786e10).
+        auto shaders = loadShaderPair(device, "assets/shaders/weather_mist.vert.spv",
+                                      "assets/shaders/weather_mist.frag.spv", "weather mist");
+        if (!shaders) return false;
+        VkVertexInputBindingDescription binding{0, sizeof(GpuMistVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        std::vector<VkVertexInputAttributeDescription> attrs = {
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+            {1, 0, VK_FORMAT_R32G32_SFLOAT, 12},
+            {2, 0, VK_FORMAT_R32_SFLOAT, 20},
+        };
+        mistPipeline_ = PipelineBuilder()
+            .setShaders(shaders.vertStage, shaders.fragStage)
+            .setVertexInput({binding}, attrs)
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+            .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setColorBlendAttachment(PipelineBuilder::blendAlpha())
+            .setMultisample(vkCtx_->getMsaaSamples())
+            .setLayout(pipelineLayout_)
+            .setRenderPass(vkCtx_->getImGuiRenderPass())
+            .setDynamicStates(viewportAndScissorDynamic())
+            .build(device, vkCtx_->getPipelineCache());
+    }
+    return streakPipeline_ && splashPipeline_ && pointPipeline_ && mistPipeline_;
 }
 
 void Weather::recreatePipelines() {
@@ -203,6 +245,7 @@ void Weather::recreatePipelines() {
     destroy(device, streakPipeline_);
     destroy(device, splashPipeline_);
     destroy(device, pointPipeline_);
+    destroy(device, mistPipeline_);
     if (!buildPipelines()) LOG_ERROR("Weather::recreatePipelines: failed to create pipelines");
 }
 
@@ -412,8 +455,13 @@ void Weather::update(const FrameInput& frame) {
     // easing toward a quarter.
     bool fading = false;
     if (changePending_) {
-        if (packets_.empty() || !smooth_) {
+        const bool mistsLive = std::any_of(mists_.begin(), mists_.end(), [&](const cw::Mist& m) {
+            return m.live() && m.start < now_ && now_ <= m.end;
+        });
+        if ((packets_.empty() && !mistsLive) || !smooth_) {
             clearPackets();
+            std::fill(mists_.begin(), mists_.end(), cw::Mist{});
+            mistAccum_ = 0.0f;
             active_ = pending_;
             changePending_ = false;
             stopping_ = false;
@@ -423,6 +471,7 @@ void Weather::update(const FrameInput& frame) {
             // Loaded here, on the frame's own thread, not while recording.
             if (active_ != Effect::None) textureSet(texture_);
             if (active_ == Effect::Rain) textureSet(cw::kSplashTexture);
+            if (active_ != Effect::None) textureSet(cw::mistSpec(active_).texture);
         } else {
             stopping_ = true;
             fading = true;
@@ -433,7 +482,10 @@ void Weather::update(const FrameInput& frame) {
     }
     if (!fading) current_ = cw::easedIntensity(from_, target_, static_cast<float>(now_ - easeStart_));
 
-    if (active_ == Effect::None || stopping_) return;
+    cameraRender_ = frame.cameraPosition;
+    right_ = frame.cameraRight * (cw::kMistSize * 0.5f);
+    up_ = frame.cameraUp * (cw::kMistSize * 0.5f);
+    if (active_ == Effect::None) return;
 
     const glm::vec3 camera = toCanonical(frame.cameraPosition);
     ground_.recenter(glm::vec2(camera));
@@ -445,7 +497,29 @@ void Weather::update(const FrameInput& frame) {
     ctx.wind = cw::windFor(ctx.playerVelocity, facing < 0.0f ? facing + 6.2831855f : facing);
     ctx.strength = cw::effectStrength(current_);
     ctx.riding = frame.riding;
-    spawn(dt, ctx);
+    updateMists(dt, ctx);
+    if (!stopping_) spawn(dt, ctx);
+}
+
+void Weather::updateMists(float dt, const cw::SpawnContext& ctx) {
+    // 0x00786e10: the sheets made a second, never more banked than slots.
+    const float before = static_cast<float>(now_ - dt);
+    const float now = static_cast<float>(now_);
+    mistAccum_ = std::min(mistAccum_ + dt * cw::mistRate(active_, cw::densityScale(densityLevel_),
+                                                         ctx.strength),
+                          static_cast<float>(cw::kMistSlots));
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+    const cw::Random rnd = [&]() { return uni(rng_); };
+    const cw::MistSpec spec = cw::mistSpec(active_);
+    for (cw::Mist& m : mists_) {
+        if (m.live() && m.end < now) m = cw::Mist{};
+        if (stopping_ && m.live() && now <= m.start) m = cw::Mist{};
+        if (!m.live() && mistAccum_ >= 1.0f && !stopping_) {
+            mistAccum_ -= 1.0f;
+            m = cw::spawnMist(rnd, spec, ctx, ground_, before + rnd() * dt);
+        }
+        if (m.live()) cw::stepMist(m, before, now);
+    }
 }
 
 VkDescriptorSet Weather::textureSet(const std::string& path) {
@@ -492,7 +566,7 @@ VkDescriptorSet Weather::loadedSet(const std::string& path) const {
 }
 
 void Weather::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
-    if (packets_.empty() || !vkCtx_) return;
+    if (!vkCtx_) return;
     const Effect effect = active_;
     if (effect == Effect::None) return;
 
@@ -537,6 +611,37 @@ void Weather::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
         default:
             break;
     }
+
+    // The mist, after the particles (0x0078ae20 and its siblings end with
+    // 0x00786e10): a quad a sheet facing the camera, in the fog's colour.
+    const VkDescriptorSet mistSet = loadedSet(cw::mistSpec(effect).texture);
+    if (!mistPipeline_ || !mistSet) return;
+    mistFrame_ = (mistFrame_ + 1) % kMistFrames;
+    auto* out = static_cast<GpuMistVertex*>(mistMapped_[mistFrame_]);
+    if (!out) return;
+    const float now = static_cast<float>(now_);
+    const glm::vec3 camera = toCanonical(cameraRender_);
+    uint32_t n = 0;
+    for (const cw::Mist& m : mists_) {
+        if (!m.live() || now < m.start) continue;
+        const glm::vec3 centre = toRender(m.position);
+        const glm::vec3 c[4] = {centre - right_ + up_, centre + right_ + up_,
+                                centre + right_ - up_, centre - right_ - up_};
+        const glm::vec2 uv[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+        float a[4];
+        for (int k = 0; k < 4; ++k) a[k] = cw::mistAlpha(m, now, glm::length(toCanonical(c[k]) - camera));
+        const int order[6] = {0, 1, 2, 0, 2, 3};
+        for (int k : order) {
+            out[n++] = {{c[k].x, c[k].y, c[k].z}, {uv[k].x, uv[k].y}, a[k]};
+        }
+    }
+    if (n == 0) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mistPipeline_);
+    VkDescriptorSet sets[2] = {perFrameSet, mistSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 2, sets, 0, nullptr);
+    vkCmdPushConstants(cmd, pipelineLayout_, stages, 0, sizeof(push), &push);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &mistBuffer_[mistFrame_], &offset);
+    vkCmdDraw(cmd, n, 1, 0, 0);
 }
 
 void Weather::shutdown() {
@@ -559,6 +664,8 @@ void Weather::shutdown() {
     destroy(device, streakPipeline_);
     destroy(device, splashPipeline_);
     destroy(device, pointPipeline_);
+    destroy(device, mistPipeline_);
+    for (int i = 0; i < kMistFrames; ++i) destroy(allocator, mistBuffer_[i], mistAllocation_[i]);
     destroy(device, pipelineLayout_);
     destroy(device, descriptorPool_);
     destroy(device, textureLayout_);

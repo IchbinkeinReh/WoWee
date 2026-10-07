@@ -2259,6 +2259,8 @@ void Renderer::update(float deltaTime) {
         Weather::FrameInput in;
         in.deltaTime = deltaTime;
         in.cameraPosition = camera->getPosition();
+        in.cameraRight = camera->getRight();
+        in.cameraUp = camera->getUp();
         in.playerPosition = characterPosition;
         in.playerYawDeg = characterYaw;
         in.riding = animationController_ && animationController_->isTaxiFlight();

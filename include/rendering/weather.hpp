@@ -25,8 +25,8 @@ class VkContext;
 /// rain, patter, snowpoint and sand vertex programs. The arithmetic is in
 /// client_weather.hpp; this holds the state, the packets and the drawing.
 ///
-/// The client's mist sheets (SnowMist01, WeatherMistGrainy01; 0x00786560,
-/// 0x00786e10) are not drawn.
+/// Each effect also drifts mist sheets through a smaller box (SnowMist01,
+/// WeatherMistGrainy01; 0x00786560, 0x00786e10).
 class Weather {
 public:
     enum class Type { NONE, RAIN, SNOW, SAND };
@@ -35,6 +35,8 @@ public:
     struct FrameInput {
         float deltaTime = 0.0f;
         glm::vec3 cameraPosition{0.0f};
+        glm::vec3 cameraRight{1.0f, 0.0f, 0.0f};  ///< for the mist's billboards
+        glm::vec3 cameraUp{0.0f, 0.0f, 1.0f};
         glm::vec3 playerPosition{0.0f};
         float playerYawDeg = 0.0f;   ///< the renderer's character yaw
         bool riding = false;         ///< on a taxi
@@ -111,6 +113,12 @@ private:
     VkPipeline streakPipeline_ = VK_NULL_HANDLE;
     VkPipeline splashPipeline_ = VK_NULL_HANDLE;
     VkPipeline pointPipeline_ = VK_NULL_HANDLE;
+    VkPipeline mistPipeline_ = VK_NULL_HANDLE;
+    static constexpr int kMistFrames = 3;
+    VkBuffer mistBuffer_[kMistFrames] = {};
+    VmaAllocation mistAllocation_[kMistFrames] = {};
+    void* mistMapped_[kMistFrames] = {};
+    int mistFrame_ = 0;
 
     pipeline::AssetManager* assets_ = nullptr;
     std::unordered_map<uint32_t, client_weather::WeatherRow> rows_;
@@ -138,6 +146,11 @@ private:
     std::vector<std::unique_ptr<Packet>> freePackets_;
 
     client_weather::HeightCache ground_;
+    std::vector<client_weather::Mist> mists_;
+    float mistAccum_ = 0.0f;
+    glm::vec3 cameraRender_{0.0f};
+    glm::vec3 right_{0.0f}, up_{0.0f};  ///< half a sheet across and up
+    void updateMists(float dt, const client_weather::SpawnContext& ctx);
     client_weather::VelocityWindow velocity_;
     glm::vec3 lastPlayer_{0.0f};
     bool havePlayer_ = false;

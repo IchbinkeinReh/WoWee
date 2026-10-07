@@ -436,6 +436,138 @@ inline Wind windFor(const glm::vec3& velocity, float facing) {
     return w;
 }
 
+/// The mist sheets every effect drifts through the box (0x0078c420 makes
+/// them, 0x00786560 and 0x00786330 start one, 0x00786e10 moves and draws
+/// them): 12-yard billboards of SnowMist01 (WeatherMistGrainy01 for sand) in
+/// the fog's colour, a few dozen a second at most, each crossing the 44 x 44
+/// x 25 box for about 2.7 seconds and climbing over the ground it meets.
+struct MistSpec {
+    const char* texture = "";
+    float angle = -1.57f, angleSpread = 0.34906587f;  ///< +0x24, +0x28
+    float speed = 0.0f, speedSpread = 0.0f;           ///< +0x34, +0x38
+};
+inline MistSpec mistSpec(Effect e) {
+    switch (e) {
+        case Effect::Rain: return {"textures\\Weather\\SnowMist01.blp", -1.57f, 0.34906587f, 5.0f, 1.2f};
+        case Effect::Snow: return {"textures\\Weather\\SnowMist01.blp", -1.57f, 0.34906587f, 9.0f, 3.0f};
+        case Effect::Sand: return {"textures\\Weather\\WeatherMistGrainy01.blp", -1.57f, 0.34906587f, 15.0f, 4.5f};
+        default: return {};
+    }
+}
+constexpr float kMistSize = 12.0f;
+constexpr float kMistFade = 0.4f;
+constexpr int kMistSlots = 0x80;
+constexpr int kMistPathSteps = 64;
+inline glm::vec3 mistBox() { return {44.0f, 44.0f, 25.0f}; }
+
+/// Mist sheets made a second (0x007840b0, 0x007844f0, 0x00784580): rain's
+/// and snow's only past half strength.
+inline float mistRate(Effect e, float density, float strength) {
+    switch (e) {
+        case Effect::Rain: return std::max(strength - 0.5f, 0.0f) * 2.0f * density * 38.0f;
+        case Effect::Snow: return std::max(strength - 0.5f, 0.0f) * 2.0f * density * 48.0f;
+        case Effect::Sand: return density * 64.0f * strength;
+        default: return 0.0f;
+    }
+}
+
+struct Mist {
+    glm::vec3 position{0.0f};
+    glm::vec3 velocity{0.0f};
+    float rise = 0.0f;   ///< +0x128, gaining 5/3 each time the ground lifts it
+    float start = 0.0f;  ///< 0 when the slot is free
+    float end = 0.0f;
+    int steps = 0;
+    float ground[kMistPathSteps] = {};
+    bool live() const { return start != 0.0f || end != 0.0f; }
+};
+
+/// A sheet starting at `start` (0x00786560, then 0x00786330): sent across the
+/// box against the way the player is going, set on the ground, its path's
+/// ground heights read ahead a cell at a time; cut short where the ground
+/// climbs too steeply, and dropped if that is at once.
+inline Mist spawnMist(const Random& rnd, const MistSpec& spec, const SpawnContext& ctx,
+                      HeightCache& ground, float start) {
+    Mist m;
+    m.start = start;
+    const float angle = (rnd() - 0.5f) * spec.angleSpread + spec.angle;
+    const float speed = (rnd() - 0.5f) * spec.speedSpread + spec.speed;
+    glm::vec3 v(std::sin(angle) * speed, std::cos(angle) * speed,
+                (rnd() - 0.5f) * 0.033333335f + 0.33333334f);
+    const Mat3 turn = yawRotation(-ctx.wind.angle);
+    m.velocity = turn.apply(v);
+    const glm::vec3 box = mistBox();
+    const float rz = rnd(), ry = rnd(), rx = rnd();
+    glm::vec3 pos = turn.apply({(rx - 0.5f) * box.x, (ry - 0.5f) * box.y, (rz - 0.5f) * box.z});
+    pos += ctx.camera - m.velocity * 1.5f;
+    const float h = std::max(ground.heightAt(pos), pos.z);
+    pos.z = kMistSize * 0.5f + h;
+    m.position = pos;
+    m.rise = (rnd() - 0.5f) * 3.3333333f;
+    const float life = (rnd() - 0.5f) * 0.3f + 2.7f;
+    m.end = start + life;
+
+    // 0x00786330: the ground along the way, a cell apart.
+    const float flat = std::sqrt(m.velocity.x * m.velocity.x + m.velocity.y * m.velocity.y);
+    if (flat <= 0.0f) { m.start = m.end = 0.0f; return m; }
+    const glm::vec2 step = glm::vec2(m.velocity) / flat * HeightCache::kCellSize;
+    int count = static_cast<int>(std::lround(flat * life / glm::length(step)));
+    if (count > kMistPathSteps - 1) count = kMistPathSteps;
+    m.steps = count;
+    glm::vec3 at = pos;
+    for (int i = 0; i < count; ++i) {
+        m.ground[i] = ground.heightAt(at);
+        at.x += step.x;
+        at.y += step.y;
+    }
+    for (int i = 0; count != 3 && i < count - 3; ++i) {
+        const float* g = m.ground + i;
+        if (g[3] - g[0] > 1.0f || g[2] - g[0] > 0.75f || g[1] - g[0] > 0.5f) {
+            const float cut = (static_cast<float>(i + 1) / static_cast<float>(count)) * life;
+            m.steps = i;
+            m.end = m.start + cut;
+            if (i == 0) m.start = m.end = 0.0f;
+            break;
+        }
+    }
+    return m;
+}
+
+/// One frame of a sheet from `before` to `now` (0x00786e10): it drifts,
+/// accelerating up or down by its rise, and is pushed up - a quarter of its
+/// size a frame at most - when the ground under its path is above it.
+inline void stepMist(Mist& m, float before, float now) {
+    const float dt = now - before;
+    const float life = m.end - m.start;
+    const float lift = dt * dt * m.rise * 0.5f;
+    m.position += m.velocity * dt + glm::vec3(lift);
+    if (m.steps <= 0 || life <= 0.0f) return;
+    const float from = m.start < before ? (before - m.start) / life : 0.0f;
+    const float to = std::min((now - m.start) / life, 1.0f);
+    const float n = static_cast<float>(m.steps);
+    const int a = std::clamp(static_cast<int>(std::lround(from * n)), 0, m.steps - 1);
+    int b = static_cast<int>(std::lround(n * to));
+    if (b == a) b = a + 1;
+    b = std::clamp(b, 0, m.steps - 1);
+    const float g = kMistSize * 0.5f + (n * from - static_cast<float>(a)) * (m.ground[b] - m.ground[a]) +
+                    m.ground[a];
+    if (m.position.z < g) {
+        m.rise += 1.6666666f;
+        m.position.z += std::min(g - m.position.z, kMistSize * 0.25f);
+    }
+}
+
+/// How opaque a sheet is (0x00786e10): in over its first 0.4 seconds, out over
+/// its last, and fading toward a corner as that corner nears the camera,
+/// gone within six yards.
+inline float mistAlpha(const Mist& m, float now, float cornerDistance) {
+    const float age = now - m.start;
+    const float in = std::clamp(1.0f - age / kMistFade, 0.0f, 1.0f);
+    const float out = std::clamp((m.end - m.start - age) / kMistFade, 0.0f, 1.0f);
+    const float near = std::clamp(1.5f - cornerDistance * 0.083333336f, 0.0f, 1.0f);
+    return (1.0f - near) * out * (1.0f - in);
+}
+
 /// Weather.dbc's columns the client reads (0x007846a0): EffectType at +8, a
 /// float at +0xc it hands the light, EffectColor at +0x10, EffectTexture at
 /// +0x1c.
