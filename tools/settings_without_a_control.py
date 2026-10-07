@@ -25,7 +25,6 @@ CVARS = ROOT / "src/addons/lua_system_api.cpp"
 
 # Reachable by nothing, on purpose. Each names the file that says why.
 KNOWN = {
-    "shadows": "no control: turning shadows off loses the GPU (settings_schema.cpp)",
     "waterrefraction": "not a choice: the shoreline and underwater work assume it "
                        "(settings_schema.cpp)",
 }

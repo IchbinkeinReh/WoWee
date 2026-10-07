@@ -47,6 +47,12 @@ WINDOW = 12
 # Pairs looked at and left alone, with the reason. A pair listed here is not
 # reported; anything else is either new or was never judged.
 SETTLED = {
+    ("include/rendering/screen_effects.hpp", "include/rendering/sun_shafts.hpp"):
+        "Two full-screen passes built the same way: copy the finished frame "
+        "outside the render pass, then composite in the overlay pass. The "
+        "shared lines are that interface and the target helpers' "
+        "declarations; the targets themselves are already one type "
+        "(screen_target.hpp) and the passes' bodies differ.",
     ("include/game/game_handler.hpp", "include/game/social_handler.hpp"):
         "GameHandler forwards the guild and mail calls to SocialHandler. The "
         "declarations match because it is a facade; the bodies do not, and "
