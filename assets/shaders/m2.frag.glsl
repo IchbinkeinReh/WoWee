@@ -21,6 +21,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
 };
 
 #include "rt_lighting.glsli"
+#include "texture_filter.glsli"
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 layout(set = 1, binding = 3) uniform sampler2D uTexture2;
@@ -189,8 +190,9 @@ vec4 fogVolumeSky(vec2 uv) {
 }
 
 void main() {
-    const vec4 tex0 = hasTexture != 0 ? texture(uTexture, TexCoord) : vec4(1.0);
-    const vec4 tex1 = ((combiners >> 8) & 3) > 1 ? texture(uTexture2, TexCoord2) : vec4(1.0);
+    const int filterMode = textureFilterMode(viewPos.w);
+    const vec4 tex0 = hasTexture != 0 ? textureFiltered(uTexture, TexCoord, filterMode) : vec4(1.0);
+    const vec4 tex1 = ((combiners >> 8) & 3) > 1 ? textureFiltered(uTexture2, TexCoord2, filterMode) : vec4(1.0);
     // The batch's authored colour. A glow card is painted white and coloured
     // here - Orgrimmar's bonfire carries (1.0, 0.329, 0.0) - so without it
     // every fire in the world burns white. It is the diffuse the stages

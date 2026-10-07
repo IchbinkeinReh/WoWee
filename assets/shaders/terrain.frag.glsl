@@ -25,6 +25,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
 };
 
 #include "rt_lighting.glsli"
+#include "texture_filter.glsli"
 
 layout(set = 1, binding = 0) uniform sampler2D uBaseTexture;
 layout(set = 1, binding = 1) uniform sampler2D uLayer1Texture;
@@ -106,7 +107,10 @@ vec2 layerAnimOffset(int flags) {
 
 // A layer's colour, its scroll applied.
 vec4 layerTexel(sampler2D tex, int flags) {
-    return texture(tex, TexCoord + layerAnimOffset(flags));
+    // The scroll does not change across a pixel, so the coordinate's own
+    // derivatives are the layer's.
+    return textureFilteredGrad(tex, TexCoord + layerAnimOffset(flags), dFdx(TexCoord), dFdy(TexCoord),
+                               textureFilterMode(viewPos.w));
 }
 
 // The air between the camera and this point, out of the fog volume: rgb is

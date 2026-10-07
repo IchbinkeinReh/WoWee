@@ -24,6 +24,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
 };
 
 #include "rt_lighting.glsli"
+#include "texture_filter.glsli"
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 
@@ -284,7 +285,8 @@ void main() {
         finalUV = parallaxOcclusionMap(TexCoord, viewDirTS, lodFactor);
     }
 
-    vec4 texColor = hasTexture != 0 ? textureGrad(uTexture, finalUV, uvDx, uvDy) : vec4(1.0);
+    vec4 texColor = hasTexture != 0
+        ? textureFilteredGrad(uTexture, finalUV, uvDx, uvDy, textureFilterMode(viewPos.w)) : vec4(1.0);
 
     // Compute normal (with normal mapping if enabled)
     vec3 norm = vertexNormal;

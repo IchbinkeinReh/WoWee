@@ -1813,6 +1813,7 @@ void GameScreen::saveSettings() {
     out << "weather_detail=" << settingsPanel_.pendingWeatherDetail << "\n";
     out << "environment_detail=" << settingsPanel_.pendingEnvironmentDetail << "\n";
     out << "texture_filtering=" << settingsPanel_.pendingTextureFiltering << "\n";
+    out << "texture_magnification=" << settingsPanel_.pendingTextureMagnification << "\n";
     out << "grass_enabled=" << (settingsPanel_.pendingGrassEnabled ? 1 : 0) << "\n";
     out << "grass_density=" << settingsPanel_.pendingGrassDensity << "\n";
     out << "grass_height=" << settingsPanel_.pendingGrassHeight << "\n";
@@ -2088,6 +2089,7 @@ void GameScreen::loadSettings() {
             else if (key == "weather_detail") settingsPanel_.pendingWeatherDetail = std::clamp(std::stoi(val), 0, 3);
             else if (key == "environment_detail") settingsPanel_.pendingEnvironmentDetail = std::clamp(std::stoi(val), 50, 150);
             else if (key == "texture_filtering") settingsPanel_.pendingTextureFiltering = std::clamp(std::stoi(val), 0, 4);
+            else if (key == "texture_magnification") settingsPanel_.pendingTextureMagnification = std::clamp(std::stoi(val), 0, 2);
             else if (key == "grass_enabled") settingsPanel_.pendingGrassEnabled = (std::stoi(val) != 0);
             else if (key == "grass_density") settingsPanel_.pendingGrassDensity = std::clamp(std::stoi(val), 0, 300);
             else if (key == "grass_height") settingsPanel_.pendingGrassHeight = std::clamp(std::stoi(val), 50, 300);

@@ -21,6 +21,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
 };
 
 #include "rt_lighting.glsli"
+#include "texture_filter.glsli"
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 
@@ -401,8 +402,9 @@ void main() {
         finalUV = parallaxOcclusionMap(TexCoord, viewDirTS, lodFactor);
     }
 
-    const vec4 tex0 = textureGrad(uTexture, finalUV, uvDx, uvDy);
-    const vec4 tex1 = ((combiners >> 8) & 3) > 1 ? texture(uTexture2, TexCoord2) : vec4(1.0);
+    const int filterMode = textureFilterMode(viewPos.w);
+    const vec4 tex0 = textureFilteredGrad(uTexture, finalUV, uvDx, uvDy, filterMode);
+    const vec4 tex1 = ((combiners >> 8) & 3) > 1 ? textureFiltered(uTexture2, TexCoord2, filterMode) : vec4(1.0);
     // The stages' alpha over the batch's (opacity), and the same divided back
     // out: what the alpha reference, 224/255 of the batch's alpha, is
     // measured against. An Opaque stage keeps the diffuse's alpha.

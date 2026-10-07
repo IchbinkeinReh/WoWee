@@ -583,7 +583,8 @@ void Renderer::updatePerFrameUBO() {
 
     currentFrameData.view = camera->getViewMatrix();
     currentFrameData.projection = camera->getProjectionMatrix();
-    currentFrameData.viewPos = glm::vec4(camera->getPosition(), 1.0f);
+    // w: the close-up texture filter, 1 + the mode (texture_filter.glsli).
+    currentFrameData.viewPos = glm::vec4(camera->getPosition(), 1.0f + static_cast<float>(textureMagnification_));
     currentFrameData.fogParams.z = globalTime;
 
     // Lighting from LightingManager

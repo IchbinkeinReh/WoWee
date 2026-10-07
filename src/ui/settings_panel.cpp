@@ -874,7 +874,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     // Moved off the game's own Effects panel, so this list is now what
     // applies them at startup; the cvar store used to do it.
     "groundclutterdistance", "particledensity", "weatherdetail",
-    "environmentdetail", "texturefiltering",
+    "environmentdetail", "texturefiltering", "texturemagnification",
     // The sound switches off the game's own panel. The stored cvars are
     // replayed at startup and reach them that way too, but a setting whose
     // only route in is the cvar behind it is one rename away from silence.
@@ -1051,6 +1051,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "weatherdetail",     .asInt = &SettingsPanel::pendingWeatherDetail},
     {.key = "environmentdetail", .asInt = &SettingsPanel::pendingEnvironmentDetail},
     {.key = "texturefiltering",  .asInt = &SettingsPanel::pendingTextureFiltering},
+    {.key = "texturemagnification", .asInt = &SettingsPanel::pendingTextureMagnification},
     {.key = "effectsvolume",  .asInt   = &SettingsPanel::pendingEffectsVolume},
     {.key = "mastervolume",  .asInt  = &SettingsPanel::pendingMasterVolume},
     {.key = "mutesound",     .asBool = &SettingsPanel::soundMuted_},
@@ -1260,6 +1261,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setShadowsEnabled(pendingShadows);
     } else if (key == "shadowdistance") {
         if (renderer) renderer->setShadowDistance(pendingShadowDistance);
+    } else if (key == "texturemagnification") {
+        if (renderer) renderer->setTextureMagnification(pendingTextureMagnification);
     } else if (key == "shadowresolution") {
         // Asked for here and built at the start of the next frame, where the
         // renderer can wait for the device before letting the old maps go.
