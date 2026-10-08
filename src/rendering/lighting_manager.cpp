@@ -3,6 +3,7 @@
 #include "rendering/light_coords.hpp"
 #include "rendering/light_band_block.hpp"
 #include "rendering/day_night.hpp"
+#include "rendering/spell_kit.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -485,6 +486,18 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
                                                               liquidRow->ambDarken);
         newParams.diffuseColor *= daynight::liquidDarkenScale(liquid.depth, liquidRow->maxDarkenDepth,
                                                               liquidRow->dirDarken);
+    }
+
+    // A spell kit's light tint (CharProc 6) after the darkening: the sky's
+    // colours (0x007f0530), the ambient and direct light and the sun and
+    // moon (0x007f3230). Not the fog: 0x007f16f0 sets that afresh from ch7.
+    newParams.spellTintColour = spellTintColour_;
+    newParams.spellTintAmount = spellTintAmount_;
+    if (spellTintAmount_ != 0) {
+        for (glm::vec3* colour : {&newParams.skyTopColor, &newParams.skyMiddleColor, &newParams.skyBand1Color,
+                                  &newParams.skyBand2Color, &newParams.skySmogColor, &newParams.ambientColor,
+                                  &newParams.diffuseColor, &newParams.sunColor})
+            *colour = spell_kit::tintColour(*colour, spellTintColour_, spellTintAmount_);
     }
 
     // The light's direction and the sun and moon are not in the DBC: the

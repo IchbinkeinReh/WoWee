@@ -358,7 +358,7 @@ uint32_t SpellVisualSystem::acquireEffectModel(const std::string& modelPath) {
 }
 
 void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec3& worldPosition,
-                                                uint32_t castTimeMs, uint32_t attachInstanceId) {
+                                                uint32_t castTimeMs, uint32_t attachInstanceId, uint32_t spellId) {
     if (!m2Renderer_ || visualId == 0) return;
     if (!cachedAssetManager_) cachedAssetManager_ = core::Application::getInstance().getAssetManager();
     if (!cachedAssetManager_) return;
@@ -369,11 +369,12 @@ void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec
     auto it = visualKits_.find(visualId);
     if (it == visualKits_.end() || it->second.precast == 0) return;
     playKitOnUnit(it->second.precast, spell_kit::KitType::Precast, attachInstanceId, worldPosition,
-                  attachInstanceId == 0 ? &worldPosition : nullptr, castTimeMs);
+                  attachInstanceId == 0 ? &worldPosition : nullptr, castTimeMs, spellId);
 }
 
 void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worldPosition,
-                                         bool useImpactKit, uint32_t attachInstanceId, bool onCaster) {
+                                         bool useImpactKit, uint32_t attachInstanceId, bool onCaster,
+                                         uint32_t spellId) {
     if (!m2Renderer_ || visualId == 0) return;
     if (!cachedAssetManager_) cachedAssetManager_ = core::Application::getInstance().getAssetManager();
     if (!cachedAssetManager_) return;
@@ -395,7 +396,7 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
             audio::AudioEngine::instance().playSound3D(sound->data, worldPosition, sound->volume);
     }
     playKitOnUnit(kitId, spell_kit::KitType::Cast, attachInstanceId, worldPosition,
-                  attachInstanceId == 0 ? &worldPosition : nullptr);
+                  attachInstanceId == 0 ? &worldPosition : nullptr, 0, spellId);
 }
 
 void SpellVisualSystem::playKit(uint32_t kitId, spell_kit::KitType type, const glm::vec3& worldPosition,
@@ -407,7 +408,8 @@ void SpellVisualSystem::playKit(uint32_t kitId, spell_kit::KitType type, const g
     playKitOnUnit(kitId, type, renderInstanceId, worldPosition, renderInstanceId == 0 ? &worldPosition : nullptr);
 }
 
-void SpellVisualSystem::playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact) {
+void SpellVisualSystem::playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
+                                          uint32_t spellId) {
     if (!m2Renderer_ || visualId == 0) return;
     if (!cachedAssetManager_) cachedAssetManager_ = core::Application::getInstance().getAssetManager();
     if (!cachedAssetManager_) return;
@@ -416,14 +418,14 @@ void SpellVisualSystem::playSpellAreaKits(uint32_t visualId, const glm::vec3& pl
     if (it == visualKits_.end()) return;
     // 0x0080e1b0: type 3 at the destination.
     if (it->second.instantArea != 0)
-        playKitOnUnit(it->second.instantArea, spell_kit::KitType::Area, 0, place, &place);
+        playKitOnUnit(it->second.instantArea, spell_kit::KitType::Area, 0, place, &place, 0, spellId);
     if (it->second.impactArea != 0 && !missileCarriesImpact)
-        playKitOnUnit(it->second.impactArea, spell_kit::KitType::Area, 0, place, &place);
+        playKitOnUnit(it->second.impactArea, spell_kit::KitType::Area, 0, place, &place, 0, spellId);
 }
 
 std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUnit(
     uint32_t kitId, spell_kit::KitType type, uint32_t renderInstanceId, const glm::vec3& position,
-    const glm::vec3* place, uint32_t castTimeMs) {
+    const glm::vec3* place, uint32_t castTimeMs, uint32_t spellId) {
     auto it = kitId ? kits_.find(kitId) : kits_.end();
     if (it == kits_.end()) return {};
     const KitRecord& kit = it->second;
@@ -431,7 +433,7 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
     // cast kit (0x0073a6c0), the kit's colour and its camera shake.
     if (type == spell_kit::KitType::Precast || type == spell_kit::KitType::Cast)
         playKitWeaponEffects(kit.weaponEffects, renderInstanceId, type == spell_kit::KitType::Precast, castTimeMs);
-    playKitColourFade(kitId, renderInstanceId);
+    playKitColourFade(kitId, renderInstanceId, spellId);
     playKitShake(kitId, place ? *place : position);
     return playKitModels(kit, type, renderInstanceId, position, place, castTimeMs);
 }
@@ -596,7 +598,7 @@ glm::vec3 SpellVisualSystem::missileTargetPoint(ActiveMissile& missile) const {
 
 bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                                            const MissileEnd& to, std::vector<MissileEnd> impacts,
-                                           const MissileTrajectory* trajectory) {
+                                           const MissileTrajectory* trajectory, uint32_t spellId) {
     if (!m2Renderer_ || visualId == 0 || !(speed > 0.0f)) return false;
     if (!cachedAssetManager_)
         cachedAssetManager_ = core::Application::getInstance().getAssetManager();
@@ -614,6 +616,7 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
     missile.impactOffset = visual->impactOffset;
     missile.position = missileSource(*visual, from);
     missile.casterInstanceId = from.renderInstanceId;
+    missile.spellId = spellId;
     missile.lastTarget = to.position;
 
     // The attachment is settled once, at launch, as FUN_007022d0 settles it:
@@ -753,12 +756,14 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
         audio::AudioEngine::instance().stopSoundWithFade(it->soundHandle, spell_missile::kMissileSoundFadeSeconds);
         const uint32_t visualId = it->visualId;
         const uint32_t casterInstance = it->casterInstanceId;
+        const uint32_t missileSpell = it->spellId;
         const glm::vec3 landedAt = it->position;
         std::vector<MissileEnd> impacts = std::move(it->impacts);
         it = activeMissiles_.erase(it);
         // 0x00700e20: the visual's ImpactAreaKit (+0x60) where it lands.
         if (auto kitsIt = visualKits_.find(visualId); kitsIt != visualKits_.end() && kitsIt->second.impactArea != 0)
-            playKitOnUnit(kitsIt->second.impactArea, spell_kit::KitType::Area, 0, landedAt, &landedAt);
+            playKitOnUnit(kitsIt->second.impactArea, spell_kit::KitType::Area, 0, landedAt, &landedAt, 0,
+                          missileSpell);
         // Impact kits are placed from a unit's feet like every other impact
         // here (the kit's own model carries its height), so a unit still
         // standing hands over its origin; one that has gone, where it was.
@@ -774,7 +779,7 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
                     glm::vec3 unitPos;
                     if (charRenderer && charRenderer->getInstancePosition(unitInstance, unitPos))
                         playKitShake(aura.kitId, unitPos);
-                    playKitColourFade(aura.kitId, unitInstance);
+                    playKitColourFade(aura.kitId, unitInstance, aura.spellId);
                 }
             }
         }
@@ -789,7 +794,7 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
             }
             // The caster's own CasterImpactKit where it is one of them.
             playSpellVisual(visualId, impactPos, /*useImpactKit=*/true, impactInstance,
-                            impactInstance != 0 && impactInstance == casterInstance);
+                            impactInstance != 0 && impactInstance == casterInstance, missileSpell);
         }
     }
 }
@@ -942,7 +947,7 @@ void SpellVisualSystem::applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, u
         if (renderer_ && renderer_->getCharacterRenderer() &&
             renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos))
             playKitShake(aura.kitId, unitPos);
-        playKitColourFade(aura.kitId, instance);
+        playKitColourFade(aura.kitId, instance, spellId);
     }
     unit.auras.push_back(std::move(aura));
     // Then 0x00720400(1, 1) for a Flags 8 visual.
@@ -973,7 +978,7 @@ void SpellVisualSystem::removeAuraStateKit(uint64_t unitGuid, uint32_t spellId, 
     glm::vec3 unitPos(0.0f);
     if (renderer_ && renderer_->getCharacterRenderer())
         renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos);
-    playKitOnUnit(kitIt->first, spell_kit::KitType::StateDone, instance, unitPos, nullptr);
+    playKitOnUnit(kitIt->first, spell_kit::KitType::StateDone, instance, unitPos, nullptr, 0, spellId);
 }
 
 void SpellVisualSystem::playKitShake(uint32_t kitId, const glm::vec3& origin) {
@@ -981,12 +986,27 @@ void SpellVisualSystem::playKitShake(uint32_t kitId, const glm::vec3& origin) {
     if (it != kits_.end() && it->second.shakeId > 0) playCameraShakes(it->second.shakeId, origin);
 }
 
-void SpellVisualSystem::playKitColourFade(uint32_t kitId, uint32_t renderInstanceId) {
-    auto it = kitId && renderInstanceId ? kits_.find(kitId) : kits_.end();
+bool SpellVisualSystem::kitColoursUnit(uint32_t renderInstanceId, uint32_t spellId) const {
+    const uint32_t typeFlags = unitTypeFlags_ ? unitTypeFlags_(renderInstanceId) : 0u;
+    const uint32_t targetKind = kitSpellResolver_ && spellId ? kitSpellResolver_(spellId).targetKind : 0u;
+    return spell_kit::kitColoursUnit((typeFlags & 0x40u) != 0, targetKind);
+}
+
+void SpellVisualSystem::playKitColourFade(uint32_t kitId, uint32_t renderInstanceId, uint32_t spellId) {
+    auto it = kitId ? kits_.find(kitId) : kits_.end();
     if (it == kits_.end()) return;
     const KitRecord& kit = it->second;
     for (uint32_t k = 0; k < 4; ++k) {
-        if (kit.charProc[k] != spell_kit::kCharProcColourFade) continue;
+        if (kit.charProc[k] == spell_kit::kCharProcLightTint) {
+            // 0x007265c0 case 6 (0x007fa450): the light toward ParamZero
+            // for the spell's cast time, reaching it at ParamOne of it.
+            const uint32_t castMs = kitSpellResolver_ && spellId ? kitSpellResolver_(spellId).castTimeMs : 0u;
+            lightTint_ = spell_kit::lightTint(static_cast<uint32_t>(std::lround(kit.charParam[k][0])),
+                                              kit.charParam[k][1], castMs, colourClockMs_);
+            continue;
+        }
+        if (kit.charProc[k] != spell_kit::kCharProcColourFade || renderInstanceId == 0) continue;
+        if (!kitColoursUnit(renderInstanceId, spellId)) continue;
         // 0x007265c0 case 13: the colour, held ParamOne seconds and faded
         // over ParamTwo.
         colourFades_[renderInstanceId] = spell_kit::ColourFade{
@@ -994,6 +1014,58 @@ void SpellVisualSystem::playKitColourFade(uint32_t kitId, uint32_t renderInstanc
             .colour = static_cast<uint32_t>(std::lround(kit.charParam[k][0])) | 0xff000000u,
             .holdMs = static_cast<uint32_t>(std::lround(kit.charParam[k][1] * 1000.0f)),
             .fadeMs = static_cast<uint32_t>(std::lround(kit.charParam[k][2] * 1000.0f))};
+    }
+}
+
+void SpellVisualSystem::updateLightTint() {
+    float amount = 0.0f;
+    if (lightTint_ && !spell_kit::lightTintAmount(*lightTint_, colourClockMs_, amount)) lightTint_.reset();
+    if (!lightTintSink_) return;
+    if (lightTint_) {
+        // 0x007ee300: the amount as a byte.
+        lightTintSink_(spell_kit::colourToRgb(lightTint_->colour),
+                       static_cast<uint32_t>(std::clamp(std::lround(amount * 255.0f), 0L, 255L)));
+        lightTinted_ = true;
+    } else if (lightTinted_) {
+        lightTintSink_(glm::vec3(1.0f), 0u);
+        lightTinted_ = false;
+    }
+}
+
+void SpellVisualSystem::updateUnitAlphas() {
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer) return;
+    // 0x007265c0 case 14: the alpha of the latest aura's kit that has one
+    // (the list's head, 0x0071abe0), faded to over its ParamTwo.
+    std::unordered_map<uint32_t, std::pair<float, uint32_t>> wanted;  // instance → alpha, fade ms
+    for (const auto& [guid, unit] : unitAuraKits_) {
+        if (unit.auras.empty()) continue;
+        const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(guid) : 0;
+        if (instance == 0) continue;
+        for (const AuraKit& aura : unit.auras) {
+            auto kitIt = kits_.find(aura.kitId);
+            if (kitIt == kits_.end() || aura.awaitingMissile) continue;
+            for (uint32_t k = 0; k < 4; ++k) {
+                const auto& param = kitIt->second.charParam[k];
+                if (kitIt->second.charProc[k] == spell_kit::kCharProcAlpha && spell_kit::kitAlphaTaken(param[0]))
+                    wanted[instance] = {param[0], spell_kit::kitAlphaFadeMs(param[2])};
+            }
+        }
+    }
+    for (auto it = unitKitAlphas_.begin(); it != unitKitAlphas_.end();) {
+        if (wanted.count(it->first) == 0) {
+            // Gone: back to the unit's own over a second.
+            charRenderer->setInstanceKitAlpha(it->first, 1.0f, 1.0f);
+            it = unitKitAlphas_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (const auto& [instance, alphaFade] : wanted) {
+        auto [it, added] = unitKitAlphas_.try_emplace(instance, alphaFade.first);
+        if (!added && it->second == alphaFade.first) continue;
+        it->second = alphaFade.first;
+        charRenderer->setInstanceKitAlpha(instance, alphaFade.first, static_cast<float>(alphaFade.second) * 0.001f);
     }
 }
 
@@ -1009,7 +1081,7 @@ void SpellVisualSystem::updateUnitColours() {
         if (instance == 0) continue;
         for (const AuraKit& aura : unit.auras) {
             auto kitIt = kits_.find(aura.kitId);
-            if (kitIt == kits_.end()) continue;
+            if (kitIt == kits_.end() || !kitColoursUnit(instance, aura.spellId)) continue;
             for (uint32_t k = 0; k < 4; ++k) {
                 if (kitIt->second.charProc[k] == spell_kit::kCharProcColour)
                     colours[instance] = static_cast<uint32_t>(std::lround(kitIt->second.charParam[k][0])) | 0xff000000u;
@@ -1176,6 +1248,8 @@ void SpellVisualSystem::update(float deltaTime) {
     updateMissiles(deltaTime);
     updateAuraKits(deltaTime);
     updateUnitColours();
+    updateUnitAlphas();
+    updateLightTint();
     if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
 
     // Get character bone tracking context (once per frame)
@@ -1257,6 +1331,9 @@ void SpellVisualSystem::reset() {
     unitAuraKits_.clear();
     colourFades_.clear();
     updateUnitColours();
+    updateUnitAlphas();
+    lightTint_.reset();
+    updateLightTint();
     for (const auto& missile : activeMissiles_) {
         if (m2Renderer_) m2Renderer_->removeInstance(missile.instanceId);
         audio::AudioEngine::instance().stopSound(missile.soundHandle);

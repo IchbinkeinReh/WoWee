@@ -2310,6 +2310,23 @@ void Application::setState(AppState newState) {
                     svs->setWorldEffectScale([this](uint32_t renderInstanceId) {
                         return entitySpawner_ ? entitySpawner_->kitWorldEffectScale(renderInstanceId) : 1.0f;
                     });
+                    // What a kit's CharProc procedures read: its spell's cast
+                    // time and aim, the unit's creature type flags, and the
+                    // light the tint goes to.
+                    svs->setKitSpellResolver([this](uint32_t spellId) {
+                        rendering::SpellVisualSystem::KitSpellInfo info;
+                        if (!gameHandler) return info;
+                        info.castTimeMs = gameHandler->getSpellData(spellId).castTimeMs;
+                        info.targetKind = gameHandler->getSpellTargetKind(spellId);
+                        return info;
+                    });
+                    svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
+                        return entitySpawner_ ? entitySpawner_->creatureTypeFlags(renderInstanceId) : 0u;
+                    });
+                    svs->setLightTintSink([this](const glm::vec3& colour, uint32_t amount) {
+                        if (renderer && renderer->getLightingManager())
+                            renderer->getLightingManager()->setSpellLightTint(colour, amount);
+                    });
                     svs->setUnitInstanceResolver([this](uint64_t guid) -> uint32_t {
                         return gameHandler ? gameHandler->resolveUnitRenderInstance(guid) : 0;
                     });

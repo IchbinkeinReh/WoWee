@@ -359,7 +359,7 @@ void SpellHandler::triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint
     if (!resolveUnitPosition(casterGuid, casterPos)) { LOG_DEBUG("SpellVisual: triggerCastVisual - cannot resolve caster position for guid=0x", std::hex, casterGuid, std::dec); return; }
     LOG_INFO("SpellVisual: triggerCastVisual visualId=", visualId, " pos=(", casterPos.x, ",", casterPos.y, ",", casterPos.z, ") castTimeMs=", castTimeMs);
     svs->playSpellVisualPrecast(visualId, casterPos, castTimeMs,
-                                owner_.resolveUnitRenderInstance(casterGuid));
+                                owner_.resolveUnitRenderInstance(casterGuid), spellId);
 }
 
 void SpellHandler::triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, uint64_t casterGuid) {
@@ -375,7 +375,7 @@ void SpellHandler::triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, ui
     LOG_INFO("SpellVisual: triggerImpactVisual visualId=", visualId, " pos=(", targetPos.x, ",", targetPos.y, ",", targetPos.z, ")");
     // 0x00801f10: the CasterImpactKit on the caster, else the TargetImpactKit.
     svs->playSpellVisual(visualId, targetPos, /*useImpactKit=*/true,
-                         owner_.resolveUnitRenderInstance(targetGuid), targetGuid == casterGuid);
+                         owner_.resolveUnitRenderInstance(targetGuid), targetGuid == casterGuid, spellId);
 }
 
 void SpellHandler::launchRangedWeaponProjectile(uint32_t spellId, uint64_t targetGuid) {
@@ -487,12 +487,12 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     case sm::Targeting::EachTarget: {
         for (uint64_t guid : data.hitTargets) {
             MissileEnd to;
-            if (unitEnd(guid, to) && svs->launchSpellMissile(visualId, speed, from, to, {to}, trajectory))
+            if (unitEnd(guid, to) && svs->launchSpellMissile(visualId, speed, from, to, {to}, trajectory, data.spellId))
                 carried.push_back(guid);
         }
         for (const auto& miss : data.missTargets) {
             MissileEnd to;
-            if (unitEnd(miss.targetGuid, to)) svs->launchSpellMissile(visualId, speed, from, to, {}, trajectory);
+            if (unitEnd(miss.targetGuid, to)) svs->launchSpellMissile(visualId, speed, from, to, {}, trajectory, data.spellId);
         }
         break;
     }
@@ -515,7 +515,7 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
             if (unitEnd(guid, end)) impacts.push_back(end);
         }
         if (impacts.empty()) impacts.push_back(to);
-        if (svs->launchSpellMissile(visualId, speed, from, to, std::move(impacts), trajectory)) {
+        if (svs->launchSpellMissile(visualId, speed, from, to, std::move(impacts), trajectory, data.spellId)) {
             carried = data.hitTargets;
             if (flewToPlace) *flewToPlace = true;
         }
@@ -2348,7 +2348,8 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                 if (auto* renderer = owner_.services().renderer) {
                     if (auto* svs = renderer->getSpellVisualSystem()) {
                         svs->playSpellVisual(visualId, casterPos, /*useImpactKit=*/false,
-                                             owner_.resolveUnitRenderInstance(data.casterUnit));
+                                             owner_.resolveUnitRenderInstance(data.casterUnit), false,
+                                             data.spellId);
                     }
                 }
             }
@@ -2365,7 +2366,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                         svs->playSpellAreaKits(
                             visualId,
                             core::coords::canonicalToRender(glm::vec3(data.destX, data.destY, data.destZ)),
-                            flewToPlace);
+                            flewToPlace, data.spellId);
                 }
             }
             for (const auto& tgt : data.hitTargets) {
@@ -3378,6 +3379,8 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t aura2Field = spellL ? spellL->field("EffectApplyAuraName2") : 0xFFFFFFFF;
     const uint32_t implicitTargetAField =
         spellL ? spellL->field("EffectImplicitTargetA") : 0xFFFFFFFF;
+    const uint32_t implicitTargetBField =
+        spellL ? spellL->tryField("EffectImplicitTargetB") : 0xFFFFFFFF;
     const uint32_t durIdxField = spellL ? spellL->field("DurationIndex") : 0xFFFFFFFF;
     const uint32_t rangeIdxField = spellL ? spellL->field("RangeIndex") : 0xFFFFFFFF;
     const uint32_t targetAuraStateField = spellL ? spellL->field("TargetAuraState") : 0xFFFFFFFF;
@@ -3440,6 +3443,13 @@ void SpellHandler::loadSpellNameCache() const {
             if (ebp2Field != 0xFFFFFFFF) entry.effectBasePoints[2] = static_cast<int32_t>(dbc->getUInt32(i, ebp2Field));
             if (implicitTargetAField != 0xFFFFFFFF && implicitTargetAField < fieldCount) {
                 entry.implicitTargetA = dbc->getUInt32(i, implicitTargetAField);
+            }
+            // The three effects' columns follow each other.
+            for (uint32_t effect = 0; effect < 3; ++effect) {
+                if (implicitTargetAField != 0xFFFFFFFF && implicitTargetAField + effect < fieldCount)
+                    entry.implicitTargetsA[effect] = dbc->getUInt32(i, implicitTargetAField + effect);
+                if (implicitTargetBField != 0xFFFFFFFF && implicitTargetBField + effect < fieldCount)
+                    entry.implicitTargetsB[effect] = dbc->getUInt32(i, implicitTargetBField + effect);
             }
             const uint32_t effectFields[3] = {effect0Field, effect1Field, effect2Field};
             const uint32_t auraFields[3]   = {aura0Field, aura1Field, aura2Field};

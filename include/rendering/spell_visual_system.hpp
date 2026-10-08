@@ -38,13 +38,14 @@ public:
     /// by attachInstanceId, the WorldEffect where it stands. With no instance
     /// the kit's models go to worldPosition.
     void playSpellVisual(uint32_t visualId, const glm::vec3& worldPosition,
-                         bool useImpactKit = false, uint32_t attachInstanceId = 0, bool onCaster = false);
+                         bool useImpactKit = false, uint32_t attachInstanceId = 0, bool onCaster = false,
+                         uint32_t spellId = 0);
 
     /// The visual's PrecastKit on its caster while the cast runs
     /// (0x007fa2e0): its models repeat until castTimeMs has passed or the
     /// cast is cancelled.
     void playSpellVisualPrecast(uint32_t visualId, const glm::vec3& worldPosition,
-                                uint32_t castTimeMs = 0, uint32_t attachInstanceId = 0);
+                                uint32_t castTimeMs = 0, uint32_t attachInstanceId = 0, uint32_t spellId = 0);
 
     /// A SpellVisualKit by its id, as SMSG_PLAY_SPELL_VISUAL (type 1,
     /// 0x008006c0) and SMSG_PLAY_SPELL_IMPACT (type 0, 0x00800610) play one
@@ -54,7 +55,8 @@ public:
     /// A ground-aimed cast's area kits at its destination (0x0080e1b0): the
     /// InstantAreaKit (+0x5c), and the ImpactAreaKit (+0x60) unless a
     /// missile carries it there (0x00700e20 plays it as that lands).
-    void playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact);
+    void playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
+                           uint32_t spellId = 0);
 
     // Launch a physical weapon projectile (arrow, bullet, or thrown item)
     // without invoking the spell visual pipeline.
@@ -108,7 +110,7 @@ public:
     /// missile, no speed, no model), so the caller plays the impacts itself.
     bool launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                             const MissileEnd& to, std::vector<MissileEnd> impacts,
-                            const MissileTrajectory* trajectory = nullptr);
+                            const MissileTrajectory* trajectory = nullptr, uint32_t spellId = 0);
 
     /// Whether the unit drawn by a CharacterRenderer instance holds a kit's
     /// weapon effects - its CreatureModelData +4 lacks 0x10 (0x0073a6c0,
@@ -150,6 +152,22 @@ public:
     void setAttachedEffectScale(AttachedEffectScale scale) { attachedEffectScale_ = std::move(scale); }
     /// A unit's CreatureModelData WorldEffectScale (+0x5c) (0x006f7950).
     void setWorldEffectScale(AttachedEffectScale scale) { worldEffectScale_ = std::move(scale); }
+    /// What a kit's CharProc procedures read of its spell: its cast time
+    /// (0x007ff180) and what it is aimed at (0x007fe1b0).
+    struct KitSpellInfo {
+        uint32_t castTimeMs = 0;
+        uint32_t targetKind = 0;  ///< 2 enemies, 1 friends, 0 neither
+    };
+    using KitSpellResolver = std::function<KitSpellInfo(uint32_t spellId)>;
+    void setKitSpellResolver(KitSpellResolver resolver) { kitSpellResolver_ = std::move(resolver); }
+    /// The creature cache's type flags (+0x964 +0xc) of the unit an instance
+    /// draws; 0 for a player or a unit with no row.
+    using UnitTypeFlags = std::function<uint32_t(uint32_t renderInstanceId)>;
+    void setUnitTypeFlags(UnitTypeFlags flags) { unitTypeFlags_ = std::move(flags); }
+    /// Where the light tint goes (CharProc 6): its colour and how far toward
+    /// it, 0..255 (0x007ee300's 0xd38b51 and 0xd38b50).
+    using LightTintSink = std::function<void(const glm::vec3& colour, uint32_t amount)>;
+    void setLightTintSink(LightTintSink sink) { lightTintSink_ = std::move(sink); }
 
     /// Where a camera shake goes: the camera's list (0x00606330).
     using CameraShakeSink = std::function<void(const camera_shake::Shake&, const glm::vec3& origin)>;
@@ -276,11 +294,25 @@ private:
     /// camera shake and its colour. Returns a state kit's models.
     std::vector<KitModelInstance> playKitOnUnit(uint32_t kitId, spell_kit::KitType type,
                                                uint32_t renderInstanceId, const glm::vec3& position,
-                                               const glm::vec3* place, uint32_t castTimeMs = 0);
+                                               const glm::vec3* place, uint32_t castTimeMs = 0,
+                                               uint32_t spellId = 0);
     /// A kit's camera shake where it plays (0x0073b140, 0x006f9840).
     void playKitShake(uint32_t kitId, const glm::vec3& origin);
-    /// A kit's colour fade (CharProc 13) on the unit drawn by an instance.
-    void playKitColourFade(uint32_t kitId, uint32_t renderInstanceId);
+    /// A kit's colour fade (CharProc 13) on the unit drawn by an instance,
+    /// and its light tint (CharProc 6), for its spell.
+    void playKitColourFade(uint32_t kitId, uint32_t renderInstanceId, uint32_t spellId);
+    /// Whether a kit's CharProc 1 and 13 colour this unit for this spell.
+    bool kitColoursUnit(uint32_t renderInstanceId, uint32_t spellId) const;
+    /// Each unit's alpha from its auras' kits (CharProc 14), the latest's.
+    void updateUnitAlphas();
+    std::unordered_map<uint32_t, float> unitKitAlphas_;  // render instance → the alpha it was given
+    /// The light tint playing (CharProc 6), and handed to the sink.
+    std::optional<spell_kit::LightTint> lightTint_;
+    bool lightTinted_ = false;
+    void updateLightTint();
+    KitSpellResolver kitSpellResolver_;
+    UnitTypeFlags unitTypeFlags_;
+    LightTintSink lightTintSink_;
     /// The unit's colour from its auras' kits (CharProc 1) - the latest's -
     /// or its fade, set on each unit's model; white once neither is left.
     void updateUnitColours();
@@ -351,6 +383,7 @@ private:
         // missile lands if the target despawns, as FUN_006ff320 keeps it.
         uint32_t targetInstanceId = 0;
         uint32_t casterInstanceId = 0;  // whose impact kit is its CasterImpactKit (0x00700e20)
+        uint32_t spellId = 0;
         int32_t targetAttachment = -1;
         glm::vec3 impactOffset{0.0f};
         glm::vec3 lastTarget{0.0f};

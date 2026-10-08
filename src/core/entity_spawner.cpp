@@ -721,6 +721,19 @@ float EntitySpawner::kitWorldEffectScale(uint32_t renderInstanceId) const {
     return kitModelDataScale(renderInstanceId, "WorldEffectScale");
 }
 
+uint32_t EntitySpawner::creatureTypeFlags(uint32_t renderInstanceId) const {
+    if (!gameHandler_ || renderInstanceId == 0) return 0;
+    for (const auto& [guid, instanceId] : creatureInstances_) {
+        if (instanceId != renderInstanceId) continue;
+        auto entity = gameHandler_->getEntityManager().getEntity(guid);
+        if (!entity || entity->getType() != game::ObjectType::UNIT) return 0;
+        const auto& creatures = gameHandler_->getCreatureInfoCache();
+        const auto it = creatures.find(static_cast<const game::Unit&>(*entity).getEntry());
+        return it != creatures.end() ? it->second.typeFlags : 0u;
+    }
+    return 0;
+}
+
 float EntitySpawner::kitModelDataScale(uint32_t renderInstanceId, const char* column) const {
     if (!gameHandler_ || !assetManager_ || renderInstanceId == 0) return 1.0f;
     uint64_t guid = 0;

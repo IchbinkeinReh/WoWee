@@ -180,6 +180,10 @@ public:
     void setLocomotionSpeed(uint32_t instanceId, float yardsPerSecond);
     void startFadeIn(uint32_t instanceId, float durationSeconds);
     void setInstanceOpacity(uint32_t instanceId, float opacity);
+    /// A spell kit's alpha on the unit (0x007265c0 case 14), on top of its
+    /// own: faded to over `seconds`, or set at once where that is 0 or it is
+    /// already there (0x00744030). Its weapons take it too.
+    void setInstanceKitAlpha(uint32_t instanceId, float alpha, float seconds);
     /// The unit's colour, which its direct light is multiplied by: a spell
     /// kit's (0x007265c0 cases 1 and 13, 0x00720db0); white for none.
     void setInstanceDiffuseColour(uint32_t instanceId, const glm::vec3& colour);
@@ -426,6 +430,12 @@ private:
 
         // Opacity (for fade-in)
         float opacity = 1.0f;
+        /// A spell kit's alpha (setInstanceKitAlpha), multiplying opacity.
+        float kitAlpha = 1.0f;
+        float kitAlphaFrom = 1.0f;
+        float kitAlphaTo = 1.0f;
+        float kitAlphaElapsed = 0.0f;
+        float kitAlphaSeconds = 0.0f;
         float fadeInTime = 0.0f;     // elapsed fade time (seconds)
         float fadeInDuration = 0.0f; // total fade duration (0 = no fade)
 

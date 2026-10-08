@@ -3478,6 +3478,8 @@ public:
     std::optional<uint32_t> getSpellAttributes(uint32_t spellId) const;
     /// Spell.dbc SpellVisual (the first); 0 for none.
     uint32_t getSpellVisualId(uint32_t spellId) const;
+    /// What a spell is aimed at (0x007fe1b0): 2 enemies, 1 friends, 0 neither.
+    uint32_t getSpellTargetKind(uint32_t spellId) const;
     /// Returns the school bitmask for the spell from Spell.dbc
     /// (0x01=Physical, 0x02=Holy, 0x04=Fire, 0x08=Nature, 0x10=Frost, 0x20=Shadow, 0x40=Arcane).
     /// Returns 0 if unknown.
@@ -4026,6 +4028,10 @@ public:
         // at. 21 means a friendly unit, which is how heals and buffs are told
         // apart from damage that shares the same effect and school.
         uint32_t implicitTargetA = 0;
+        /// Every effect's ImplicitTargetA and ImplicitTargetB, which with
+        /// Targets say what the spell is aimed at (0x007fe1b0).
+        uint32_t implicitTargetsA[3] = {0, 0, 0};
+        uint32_t implicitTargetsB[3] = {0, 0, 0};
         float durationSec = 0.0f;
         uint32_t spellVisualId = 0;
         // Spell.dbc Speed: yards per second the spell's missile flies at, the

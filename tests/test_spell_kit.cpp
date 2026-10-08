@@ -8,6 +8,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "core/weapon_attachment.hpp"
+#include "game/spell_target_kind.hpp"
 #include "rendering/spell_kit.hpp"
 
 #include <glm/glm.hpp>
@@ -236,4 +237,53 @@ TEST_CASE("a kit model placed in the world is sized by the unit and its effect",
     CHECK(m[3].x == Catch::Approx(10.0f).margin(1e-5));
     CHECK(m[3].y == Catch::Approx(21.0f));
     CHECK(glm::length(glm::vec3(m[0])) == Catch::Approx(3.0f));
+}
+
+TEST_CASE("what a spell is aimed at, as 0x007fe1b0 reads it", "[spell_kit]") {
+    using wowee::game::spellTargetKind;
+    const std::array<uint32_t, 3> none{};
+    // Targets 0x100 is friendly before anything else; 0x80 an enemy.
+    CHECK(spellTargetKind(0x180, {6, 0, 0}, none, none) == 1);
+    CHECK(spellTargetKind(0x80, none, none, none) == 2);
+    // An enemy target in any effect's A or B.
+    CHECK(spellTargetKind(0, {6, 0, 0}, none, none) == 2);
+    CHECK(spellTargetKind(0, {21, 0, 0}, {0, 0, 16}, none) == 2);
+    // A friendly one, or the caster with any aura but 4.
+    CHECK(spellTargetKind(0, {21, 0, 0}, none, none) == 1);
+    CHECK(spellTargetKind(0, {1, 0, 0}, none, {3, 0, 0}) == 1);
+    CHECK(spellTargetKind(0, {1, 0, 0}, none, {4, 0, 0}) == 0);
+    CHECK(spellTargetKind(0, none, none, none) == 0);
+}
+
+TEST_CASE("CharProc 1 and 13 spare a flagged creature from a harmful spell", "[spell_kit]") {
+    CHECK(sk::kitColoursUnit(false, 2));
+    CHECK(sk::kitColoursUnit(true, 1));
+    CHECK_FALSE(sk::kitColoursUnit(true, 2));
+}
+
+TEST_CASE("CharProc 14 takes an alpha in (0, 1] and fades over ParamTwo", "[spell_kit]") {
+    CHECK_FALSE(sk::kitAlphaTaken(0.0f));
+    CHECK(sk::kitAlphaTaken(0.5f));
+    CHECK(sk::kitAlphaTaken(1.0f));
+    CHECK_FALSE(sk::kitAlphaTaken(1.5f));
+    CHECK(sk::kitAlphaFadeMs(0.0f) == 1000u);
+    CHECK(sk::kitAlphaFadeMs(2.5f) == 2500u);
+}
+
+TEST_CASE("CharProc 6 tints the light up to its peak, holds it, and lets it go", "[spell_kit]") {
+    // A 2 s cast, at full tint half way through it.
+    const auto tint = sk::lightTint(0x00ff0000u, 0.5f, 2000, 1000);
+    CHECK(tint.colour == 0xffff0000u);
+    float amount = 0.0f;
+    REQUIRE(sk::lightTintAmount(tint, 1500, amount));
+    CHECK(amount == Catch::Approx(0.5f));
+    REQUIRE(sk::lightTintAmount(tint, 2500, amount));
+    CHECK(amount == Catch::Approx(1.0f));
+    REQUIRE(sk::lightTintAmount(tint, 3050, amount));
+    CHECK(amount == Catch::Approx(0.5f));
+    CHECK_FALSE(sk::lightTintAmount(tint, 3100, amount));
+    // 0x006acc50: alpha/256 of the way, all of it at 255.
+    const glm::vec3 half = sk::tintColour(glm::vec3(0.0f), glm::vec3(1.0f), 128);
+    CHECK(half.x == Catch::Approx(0.5f));
+    CHECK(sk::tintColour(glm::vec3(0.0f), glm::vec3(1.0f), 255).x == Catch::Approx(1.0f));
 }

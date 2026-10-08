@@ -176,6 +176,70 @@ inline constexpr uint32_t kAnimDecay = 159;
 inline constexpr uint32_t kCharProcColour = 1;
 inline constexpr uint32_t kCharProcColourFade = 13;
 
+/// 6: the world's light tinted ParamZero (0xRRGGBB) for the spell's cast
+///    time, reaching it at ParamOne of that time (0x007fa450);
+/// 14: the unit's alpha, ParamZero in (0, 1], faded to over ParamTwo
+///    seconds (or one) while the effect lasts (0x0071abe0).
+inline constexpr uint32_t kCharProcLightTint = 6;
+inline constexpr uint32_t kCharProcAlpha = 14;
+
+/// 0x007265c0 cases 1 and 13 colour the unit unless it is a creature whose
+/// cache row has type flag 0x40 (+0x964 +0xc) and the spell is aimed at
+/// enemies (0x007fe1b0 answers 2).
+constexpr bool kitColoursUnit(bool creatureTypeFlag40, uint32_t spellTargetKind) {
+    return !creatureTypeFlag40 || spellTargetKind != 2;
+}
+
+/// 0x007265c0 case 14: whether ParamZero is an alpha it takes.
+constexpr bool kitAlphaTaken(float alpha) { return alpha > 0.0f && alpha <= 1.0f; }
+/// 0x0071abe0: how long the unit takes to reach its kit's alpha - ParamTwo
+/// seconds, or one where that is 0 (and one back to its own once the kit
+/// is gone).
+constexpr uint32_t kitAlphaFadeMs(float paramTwo) {
+    const auto ms = paramTwo > 0.0f ? static_cast<uint32_t>(paramTwo * 1000.0f + 0.5f) : 0u;
+    return ms != 0 ? ms : 1000u;
+}
+
+/// 0x007fa450: the light tint's colour and times, from the kit's ParamZero
+/// and ParamOne and the spell's cast time (0x007ff180).
+struct LightTint {
+    uint32_t colour = 0;  ///< 0xAARRGGBB, alpha forced to 0xff
+    uint32_t startMs = 0;
+    uint32_t peakMs = 0;     ///< start + cast time x ParamOne
+    uint32_t holdEndMs = 0;  ///< start + cast time
+    uint32_t endMs = 0;      ///< then 100 ms out
+};
+constexpr LightTint lightTint(uint32_t colourParam, float paramOne, uint32_t castTimeMs, uint32_t nowMs) {
+    return LightTint{.colour = colourParam | 0xff000000u,
+                     .startMs = nowMs,
+                     .peakMs = nowMs + static_cast<uint32_t>(static_cast<float>(castTimeMs) * paramOne + 0.5f),
+                     .holdEndMs = nowMs + castTimeMs,
+                     .endMs = nowMs + castTimeMs + 100u};
+}
+/// 0x007f9e10: how far toward the tint the light is at `nowMs` - up to the
+/// peak, held to the cast's end, then out; false once it is over.
+constexpr bool lightTintAmount(const LightTint& tint, uint32_t nowMs, float& amount) {
+    if (nowMs < tint.peakMs) {
+        amount = static_cast<float>(nowMs - tint.startMs) / static_cast<float>(tint.peakMs - tint.startMs);
+        return true;
+    }
+    if (nowMs < tint.holdEndMs) {
+        amount = 1.0f;
+        return true;
+    }
+    if (nowMs < tint.endMs) {
+        amount = 1.0f - static_cast<float>(nowMs - tint.holdEndMs) / static_cast<float>(tint.endMs - tint.holdEndMs);
+        return true;
+    }
+    return false;
+}
+/// 0x006acc50 on a float colour: `from` moved toward `to` by alpha/256, all
+/// the way at 255 (the light's colours, 0x007f3230 and 0x007f0530).
+inline glm::vec3 tintColour(const glm::vec3& from, const glm::vec3& to, uint32_t alpha) {
+    if (alpha >= 0xffu) return to;
+    return from + (to - from) * (static_cast<float>(alpha) / 256.0f);
+}
+
 /// 0x007265c0 case 13: the unit's colour fade (+0xb10 .. +0xb1c).
 struct ColourFade {
     uint32_t startMs = 0;

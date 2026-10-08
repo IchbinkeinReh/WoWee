@@ -81,6 +81,11 @@ struct LightingParams {
     /// at 0xd38c34 as the cloud texture's coverage).
     float cloudDensity = 0.3f;
 
+    /// A spell kit's light tint (CharProc 6), which the sky's horizon takes
+    /// as the rest of the sky does (0x007f0530); 0 for none.
+    glm::vec3 spellTintColour{1.0f};
+    uint32_t spellTintAmount = 0;
+
     /// LightParams' own values, lerped with the rest (0x007ec220). Defaults
     /// are what 0x007f3230 puts in when there is no light at all.
     float highlightSky = 0.0f;       ///< field 1: the dawn and dusk sky glow
@@ -348,6 +353,12 @@ public:
     /// something the client does (its fog is ch7 exactly, 0x007f16f0): an
     /// opt-in setting, 0 by default.
     void setFogSkyBlend(float blend) { fogSkyBlend_ = blend; }
+    /// A spell kit's light tint (CharProc 6, 0x007ee300): the colour and how
+    /// far toward it, 0..255; 0 for none.
+    void setSpellLightTint(const glm::vec3& colour, uint32_t amount) {
+        spellTintColour_ = colour;
+        spellTintAmount_ = amount;
+    }
     [[nodiscard]] float getFogSkyBlend() const { return fogSkyBlend_; }
     /// How much distance fog, as a multiplier on the zone's own fog distances.
     /// 1 is the client's fog unchanged and the default, above 1 is thicker,
@@ -530,6 +541,8 @@ private:
     float timeOfDay_ = 0.5f;  // Start at noon
     std::vector<SkyboxLayer> skyboxLayers_;
     float fogSkyBlend_ = 0.0f;
+    glm::vec3 spellTintColour_{1.0f};
+    uint32_t spellTintAmount_ = 0;
     float fogStrength_ = 1.0f;
     float farClip_ = 0.0f;
     /// This map draws the later fog (daynight::mapUsesFogExponent).

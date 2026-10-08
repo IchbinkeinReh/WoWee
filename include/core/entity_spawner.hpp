@@ -244,6 +244,9 @@ public:
     /// Its WorldEffectScale (+0x5c), which sizes the kit models it places
     /// in the world (0x006f7950).
     float kitWorldEffectScale(uint32_t renderInstanceId) const;
+    /// The creature cache's type flags (+0x964 +0xc) of the creature an
+    /// instance draws; 0 for a player or one not cached.
+    uint32_t creatureTypeFlags(uint32_t renderInstanceId) const;
     /// Whether another unit shows its SpellVisual Flags 8 state kits
     /// (0x00720400): idle, its weapons away and casting nothing.
     bool unarmedKitsShown(uint64_t guid) const;
