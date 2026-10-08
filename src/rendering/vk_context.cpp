@@ -149,6 +149,7 @@ void VkContext::shutdown() {
     for (auto& frame : frames) {
         if (frame.inFlightFence) vkDestroyFence(device, frame.inFlightFence, nullptr);
         if (frame.commandPool) vkDestroyCommandPool(device, frame.commandPool, nullptr);
+        if (frame.prologuePool) vkDestroyCommandPool(device, frame.prologuePool, nullptr);
         frame = {};
     }
     for (auto& pool : gpuQueryPools_) {
@@ -1338,6 +1339,17 @@ bool VkContext::createCommandPools() {
 
         if (vkAllocateCommandBuffers(device, &allocInfo, &frames[i].commandBuffer) != VK_SUCCESS) {
             LOG_ERROR("Failed to allocate command buffer for frame ", i);
+            return false;
+        }
+
+        // The prologue, from a pool of its own (see FrameData::prologueBuffer).
+        if (vkCreateCommandPool(device, &poolInfo, nullptr, &frames[i].prologuePool) != VK_SUCCESS) {
+            LOG_ERROR("Failed to create prologue command pool for frame ", i);
+            return false;
+        }
+        allocInfo.commandPool = frames[i].prologuePool;
+        if (vkAllocateCommandBuffers(device, &allocInfo, &frames[i].prologueBuffer) != VK_SUCCESS) {
+            LOG_ERROR("Failed to allocate prologue command buffer for frame ", i);
             return false;
         }
     }
@@ -2864,6 +2876,9 @@ void VkContext::resetFrameSyncState() {
         if (frames[i].commandBuffer) {
             vkResetCommandBuffer(frames[i].commandBuffer, 0);
         }
+        if (frames[i].prologueBuffer) {
+            vkResetCommandBuffer(frames[i].prologueBuffer, 0);
+        }
     }
     // The semaphores go the same way, and for the same reason the fences do.
     //
@@ -2992,12 +3007,18 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
         vkResetFences(device, 1, &frame.inFlightFence);
     }
     vkResetCommandBuffer(frame.commandBuffer, 0);
+    vkResetCommandBuffer(frame.prologueBuffer, 0);
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     vkBeginCommandBuffer(frame.commandBuffer, &beginInfo);
+    // What the frame opens with goes into the prologue, which executes first:
+    // the shadow pass is recorded into it after this, on another thread, and
+    // its timestamps need the reset below ahead of them and its foliage
+    // textures the upload barrier.
+    vkBeginCommandBuffer(frame.prologueBuffer, &beginInfo);
 
     // Reset outside any render pass, which is where this sits, and before the
     // first mark. A pool that is written without being reset returns stale
@@ -3008,14 +3029,14 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     gpuMarksPending_[currentFrame] = gpuTimingSupported_ &&
         (core::FrameProfiler::enabled() || gpuTimingForStageReport_);
     if (gpuMarksPending_[currentFrame]) {
-        vkCmdResetQueryPool(frame.commandBuffer, gpuQueryPools_[currentFrame],
+        vkCmdResetQueryPool(frame.prologueBuffer, gpuQueryPools_[currentFrame],
                             0, kMaxGpuMarks);
         gpuMarkCount_[currentFrame] = 0;
         // Reserved marks that are never written must not keep a label from
         // an earlier frame, or readback would pair it with a stale index.
         std::fill(std::begin(gpuMarkLabels_[currentFrame]),
                   std::end(gpuMarkLabels_[currentFrame]), nullptr);
-        gpuMark(frame.commandBuffer, "frame start");
+        gpuMark(frame.prologueBuffer, "frame start");
     }
 
     // If async upload batches are still in flight (submitted to the transfer queue),
@@ -3036,7 +3057,7 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
         VkDependencyInfo memDep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
         memDep.memoryBarrierCount = 1;
         memDep.pMemoryBarriers = &memBarrier;
-        cmdPipelineBarrier2(frame.commandBuffer, memDep);
+        cmdPipelineBarrier2(frame.prologueBuffer, memDep);
     }
 
     return frame.commandBuffer;
@@ -3046,12 +3067,17 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     static int endFrameCounter = 0;
     endFrameCounter++;
 
+    auto& frame = frames[currentFrame];
+
+    const VkResult prologueResult = vkEndCommandBuffer(frame.prologueBuffer);
+    if (prologueResult != VK_SUCCESS) {
+        LOG_ERROR("endFrame[", endFrameCounter, "] vkEndCommandBuffer FAILED for the prologue: ",
+                  static_cast<int>(prologueResult));
+    }
     VkResult endResult = vkEndCommandBuffer(cmd);
     if (endResult != VK_SUCCESS) {
         LOG_ERROR("endFrame[", endFrameCounter, "] vkEndCommandBuffer FAILED: ", static_cast<int>(endResult));
     }
-
-    auto& frame = frames[currentFrame];
 
     // Use per-image semaphores: acquire semaphore was swapped into the per-image
     // slot in beginFrame; renderFinished is also indexed by the acquired image.
@@ -3076,8 +3102,12 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     submitInfo.waitSemaphoreCount = static_cast<uint32_t>(waitSemaphores.size());
     submitInfo.pWaitSemaphores = waitSemaphores.data();
     submitInfo.pWaitDstStageMask = waitStages.data();
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
+    // The prologue first: within one batch the command buffers execute in
+    // submission order, so its barriers and passes come before everything
+    // the frame's own buffer records.
+    const VkCommandBuffer frameBuffers[2] = {frame.prologueBuffer, cmd};
+    submitInfo.commandBufferCount = 2;
+    submitInfo.pCommandBuffers = frameBuffers;
 
     // Present still needs the binary renderFinished semaphore -- WSI does not
     // take a timeline. So the submit signals both: the binary one for

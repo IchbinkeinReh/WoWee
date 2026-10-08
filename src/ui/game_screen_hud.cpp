@@ -893,7 +893,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // geometry between them streams in and out - the same treatment the
         // selection circle gives its floor query.
         static SightCache sight;
-        if (sight.blocked(services_.renderer ? services_.renderer->getWMORenderer() : nullptr,
+        if (sight.blocked(services_.renderer ? services_.renderer->queryWMORenderer() : nullptr,
                           guid, camPos, renderPos)) {
             continue;
         }

@@ -1328,6 +1328,9 @@ void Renderer::beginFrame() {
         LOG_WARNING("renderWorld was never finished; dropping its recording");
         pendingWorld_.pending = false;
     }
+    // The same for a shadow pass planned and never recorded: its prologue is
+    // reset with the rest of the slot below.
+    shadowPlan_.pending = false;
     syncWorldRecording();
     if (!vkCtx) return;
     if (vkCtx->isDeviceLost()) return;
@@ -1486,6 +1489,12 @@ void Renderer::beginFrame() {
     // Update per-frame UBO with current camera/lighting state
     updatePerFrameUBO();
 
+    // The shadow pass, planned now and recorded later into the prologue (see
+    // planShadowPass). Before anything else marks the frame: its timestamps
+    // are reserved here so that they read back in the order they execute,
+    // and the prologue executes ahead of everything this buffer records.
+    planShadowPass();
+
     // ── Early compute: M2 frustum culling ──
     // beginFrame() has already waited for this frame slot's previous fence, so
     // its mapped visibility output is complete and safe for the CPU to reuse.
@@ -1580,8 +1589,15 @@ void Renderer::beginFrame() {
 void Renderer::endFrame() {
     ZoneScopedN("Renderer::endFrame");
     // Normally already done by the caller, which times it as its own stage.
+    // It joins the shadow worker too.
     finishRenderWorld();
-    if (!vkCtx || currentCmd == VK_NULL_HANDLE) return;
+    if (!vkCtx || currentCmd == VK_NULL_HANDLE) {
+        shadowPlan_.pending = false;
+        return;
+    }
+    // A shadow pass no worker took - no world this frame, or the world drawn
+    // inline - is recorded here, before the prologue it goes into is ended.
+    flushShadowPass();
 
     logViewDistanceDiag();
 
@@ -3610,6 +3626,14 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         catch (const std::exception& e) { LOG_ERROR("Post render worker: ", e.what()); }
         joinScope.reset();
 
+        // The shadow pass, recorded through the interface as the doodads are.
+        // Not before this point: prepareRender above is what changes the
+        // casters' state on this thread - the characters' bone buffers, the
+        // doodads' bone offsets - and the terrain, WMO and character workers
+        // read the same renderers. Joined, they leave only the doodad worker
+        // running beside it; see launchShadowWorker for what the two share.
+        launchShadowWorker();
+
         pendingWorld_.queueTerrain = drawTerrain || drawGrass;
         pendingWorld_.queueWmo = wmoRenderer && camera && !skipWMO;
         pendingWorld_.queueM2 = m2Renderer && camera && !skipM2;
@@ -5068,7 +5092,7 @@ void Renderer::renderReflectionPass() {
 }
 
 bool Renderer::shadowPassDrawsThisFrame() const {
-    // One answer for renderShadowPass and for the fog, which samples what it
+    // One answer for planShadowPass and for the fog, which samples what it
     // draws: two copies of these conditions could disagree, and a fog
     // dispatched on a frame whose map was not drawn reads whatever the slot
     // was left holding - or, before the first drawn frame, an image that has
@@ -5087,9 +5111,31 @@ bool Renderer::shadowPassDrawsThisFrame() const {
     return lightSpaceMatrix != glm::mat4(0.0f) && activeShadowCascades_ >= 1;
 }
 
-void Renderer::renderShadowPass() {
-    ZoneScopedN("Renderer::renderShadowPass");
-    WOWEE_PROFILE_SCOPE("record shadows", Cpu);
+// The shadow pass is recorded off the main thread.
+//
+// It cost the main thread some 2.5ms a frame - the doodads' cull and sort
+// most of it - inside beginFrame, ahead of everything that reads the map, and
+// so it could only be recorded there. It is recorded into the frame's
+// prologue now (VkContext::getFramePrologue), a second command buffer that is
+// submitted ahead of this one in the same batch: whatever goes into it
+// executes first, whenever it is recorded, so the map is drawn and readable
+// before the fog, the reflection and the scene sample it however late in the
+// frame its recording finishes. A secondary executed into this buffer would
+// not do: it has to be recorded before the command that executes it, and that
+// command would have to sit here in beginFrame.
+//
+// beginFrame plans the pass (planShadowPass): it settles the layout, the
+// cascades and the timestamps, which the fog recorded right after it needs.
+// renderWorld hands the plan to a frame worker once the world's preparation is
+// done, and the worker records it while the interface runs, beside the doodad
+// worker. Without a world, or with the world drawn inline, endFrame records
+// it on the main thread instead, exactly as beginFrame used to.
+//
+// What the worker reads is fenced the way the doodad worker's is (see
+// launchShadowWorker): the getters of every renderer it draws wait for it.
+
+void Renderer::planShadowPass() {
+    shadowPlan_ = {};
     if (shadowDepthImage[0] == VK_NULL_HANDLE) return;
     if (currentCmd == VK_NULL_HANDLE) return;
     // Shadows off still runs the whole pass, casters and all: the shaders
@@ -5104,46 +5150,39 @@ void Renderer::renderShadowPass() {
     // Before the character has a position, or with the pass switched off for
     // measuring (WOWEE_SKIP_SHADOWS, the ablation), there is nothing to draw.
     if (!shadowPassDrawsThisFrame()) return;
-    uint32_t frame = vkCtx->getCurrentFrame();
-    const uint32_t atlasW = shadowAtlasWidth(shadowCascadeCount_, SHADOW_MAP_SIZE);
-    const uint32_t atlasH = shadowAtlasHeight(shadowCascadeCount_, SHADOW_MAP_SIZE);
+    const uint32_t frame = vkCtx->getCurrentFrame();
 
-    // Barrier 1: transition this frame's shadow map into writable depth layout.
-    VkImageMemoryBarrier2 b1{};
-    b1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    b1.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    b1.oldLayout = shadowDepthLayout_[frame];
-    b1.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    b1.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b1.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b1.srcAccessMask = (shadowDepthLayout_[frame] == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-        ? VK_ACCESS_SHADER_READ_BIT
-        : 0;
-    b1.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    b1.image = shadowDepthImage[frame];
-    b1.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
-    // The fog's compute pass reads the map as well as the fragment shaders.
-    VkPipelineStageFlags srcStage = (shadowDepthLayout_[frame] == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-        ? (VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)
-        : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-    b1.srcStageMask = srcStage;
-    VkDependencyInfo b1Dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    b1Dep.dependencyFlags = 0;
-    b1Dep.imageMemoryBarrierCount = 1;
-    b1Dep.pImageMemoryBarriers = &b1;
-    cmdPipelineBarrier2(currentCmd, b1Dep);
+    ShadowPlan& plan = shadowPlan_;
+    plan.cmd = vkCtx->getFramePrologue();
+    if (plan.cmd == VK_NULL_HANDLE) return;
+    plan.frame = frame;
+    plan.image = shadowDepthImage[frame];
+    plan.view = shadowDepthView[frame];
+    plan.framebuffer = shadowFramebuffer[frame];
+    plan.renderPass = shadowRenderPass;
+    plan.oldLayout = shadowDepthLayout_[frame];
+    plan.atlas = {.width = shadowAtlasWidth(shadowCascadeCount_, SHADOW_MAP_SIZE),
+                  .height = shadowAtlasHeight(shadowCascadeCount_, SHADOW_MAP_SIZE)};
+    // Copied, and the renderers' pointers with them: a worker reads nothing of
+    // this object's that the main thread can change while it records.
+    plan.cascadeCount = std::min(activeShadowCascades_, kMaxShadowCascades);
+    for (int c = 0; c < plan.cascadeCount; ++c) plan.cascades[c] = shadowCascades_[c];
+    plan.terrain = terrainRenderer.get();
+    plan.wmo = wmoRenderer.get();
+    plan.m2 = m2Renderer.get();
+    plan.characters = characterRenderer.get();
+    plan.marks = vkCtx->gpuReserveMarks(kMaxShadowCascades + 1);
 
-    // Begin the shadow pass, one way or the other.
+    // How recordShadowPass begins the pass, one way or the other.
     //
     // The first pass converted to dynamic rendering, and the one with least
     // to lose by it: one attachment, no colour, no resolve, a single
     // begin/end, and pipelines nothing else shares. Its render pass declared
     // an EXTERNAL->0 dependency covering the same fragment-read to
-    // depth-write hazard that barrier 1 above already covers explicitly, so
+    // depth-write hazard that barrier 1 already covers explicitly, so
     // nothing is lost by dropping the implicit half - the layout it wants is
     // the layout b1 leaves it in.
-    const bool dynamicRendering = vkCtx->useDynamicRendering();
+    plan.dynamicRendering = vkCtx->useDynamicRendering();
     // Said once, at warning level, because a bug report arrives with a
     // warnings-only log and "are the shadows drawn the new way" is the first
     // question this change makes anyone ask. A line here answers it without
@@ -5152,12 +5191,118 @@ void Renderer::renderShadowPass() {
     if (!saidWhichPath) {
         saidWhichPath = true;
         LOG_WARNING("Shadow pass records with ",
-                    dynamicRendering ? "vkCmdBeginRendering" : "a VkRenderPass");
+                    plan.dynamicRendering ? "vkCmdBeginRendering" : "a VkRenderPass",
+                    ", into the frame's prologue on ",
+                    parallelRecordingEnabled_ ? "a frame worker while in the world"
+                                              : "the main thread");
     }
-    if (dynamicRendering) {
+
+    // The layout the map is in once the prologue has run, which is before
+    // anything in this frame's own buffer - the fog recorded a moment from
+    // now included - reads it.
+    shadowDepthLayout_[frame] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    plan.pending = true;
+}
+
+void Renderer::launchShadowWorker() {
+    if (!shadowPlan_.pending) return;
+    const ShadowPlan plan = shadowPlan_;
+    shadowPlan_.pending = false;
+    // What it shares, and why none of it races:
+    //
+    // - The doodad worker records the same model and character renderers at
+    //   the same time. The model renderer's shadow state - the packed cull
+    //   copy, the candidate and caster lists, the shadow instance buffer,
+    //   its texture-set pool and cache - is touched by nothing but
+    //   renderShadow and beginShadowFrame; the main pass writes only its own
+    //   lists and each instance's cull verdict, fields the shadow pass does
+    //   not read. Both only read the instance table, the models and their
+    //   textures. The character renderer's two passes share the bone
+    //   buffers they both copy the pose into, so renderShadow takes the same
+    //   lock render() does.
+    // - The main thread, through the interface, changes nothing either of
+    //   them reads except through the getters, which wait (syncWorldRecording
+    //   for the model and character renderers, syncShadowRecording for the
+    //   terrain and the buildings). The const query accessors that do not
+    //   wait read positions and bounds; the shadow pass writes none.
+    // - Everything of the Renderer's own it needs is in the plan, by value.
+    // - The prologue is recorded by this worker alone, from a pool of its own,
+    //   and endFrame submits it only after finishRenderWorld has joined it.
+    shadowFuture_ = core::ThreadPool::frameWorkers().submit([this, plan]() {
+        WOWEE_PROFILE_SCOPE("worker: shadows", Worker);
+        recordShadowPass(plan, true);
+    });
+    shadowWorkerInFlight_.store(true, std::memory_order_release);
+}
+
+void Renderer::joinShadowWorker() const {
+    // The main thread only, for the reason joinM2Worker gives.
+    if (std::this_thread::get_id() != mainThreadId_) return;
+    if (!shadowWorkerInFlight_.load(std::memory_order_acquire)) return;
+    std::optional<core::ProfileScope> joinScope;
+    if (core::FrameProfiler::enabled()) {
+        joinScope.emplace("join shadow worker", core::ProfileKind::Cpu);
+    }
+    try { if (shadowFuture_.valid()) shadowFuture_.get(); }
+    catch (const std::exception& e) { LOG_ERROR("Shadow render worker: ", e.what()); }
+    shadowWorkerInFlight_.store(false, std::memory_order_release);
+}
+
+void Renderer::flushShadowPass() {
+    if (!shadowPlan_.pending) return;
+    const ShadowPlan plan = shadowPlan_;
+    shadowPlan_.pending = false;
+    WOWEE_PROFILE_SCOPE("record shadows", Cpu);
+    recordShadowPass(plan, false);
+}
+
+void Renderer::recordShadowPass(const ShadowPlan& plan, bool onWorker) {
+    ZoneScopedN("Renderer::recordShadowPass");
+    const VkCommandBuffer cmd = plan.cmd;
+    // The stages below are filed with the thread that runs them, so the
+    // profile shows them under the render workers when a worker does.
+    const core::ProfileKind kind = onWorker ? core::ProfileKind::Worker : core::ProfileKind::Cpu;
+    // Written into the indices beginFrame reserved, in the order they draw.
+    uint32_t markIndex = 0;
+    const auto mark = [&](uint32_t index, const char* label) {
+        vkCtx->checkpoint(cmd, label);
+        if (plan.marks != VkContext::kNoGpuMark) vkCtx->gpuMarkAt(cmd, plan.marks + index, label);
+    };
+
+    // Barrier 1: transition this frame's shadow map into writable depth layout.
+    VkImageMemoryBarrier2 b1{};
+    b1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    b1.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    b1.oldLayout = plan.oldLayout;
+    b1.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    b1.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b1.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b1.srcAccessMask = (plan.oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        ? VK_ACCESS_SHADER_READ_BIT
+        : 0;
+    b1.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    b1.image = plan.image;
+    b1.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
+    // The fog's compute pass reads the map as well as the fragment shaders.
+    // Those reads are the previous use of this slot's map, two frames back,
+    // and a barrier orders against everything submitted before it on the
+    // queue, so being in another command buffer than they were changes
+    // nothing.
+    VkPipelineStageFlags srcStage = (plan.oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        ? (VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)
+        : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    b1.srcStageMask = srcStage;
+    VkDependencyInfo b1Dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    b1Dep.dependencyFlags = 0;
+    b1Dep.imageMemoryBarrierCount = 1;
+    b1Dep.pImageMemoryBarriers = &b1;
+    cmdPipelineBarrier2(cmd, b1Dep);
+
+    if (plan.dynamicRendering) {
         VkRenderingAttachmentInfo depthAttach{};
         depthAttach.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depthAttach.imageView = shadowDepthView[frame];
+        depthAttach.imageView = plan.view;
         depthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         depthAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         depthAttach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -5165,21 +5310,21 @@ void Renderer::renderShadowPass() {
 
         VkRenderingInfo renderInfo{};
         renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        renderInfo.renderArea = {.offset = {.x = 0, .y = 0}, .extent = {.width = atlasW, .height = atlasH}};
+        renderInfo.renderArea = {.offset = {.x = 0, .y = 0}, .extent = plan.atlas};
         renderInfo.layerCount = 1;
         renderInfo.pDepthAttachment = &depthAttach;
-        vkCmdBeginRendering(currentCmd, &renderInfo);
+        vkCmdBeginRendering(cmd, &renderInfo);
     } else {
         VkRenderPassBeginInfo rpInfo{};
         rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        rpInfo.renderPass = shadowRenderPass;
-        rpInfo.framebuffer = shadowFramebuffer[frame];
-        rpInfo.renderArea = {.offset = {.x = 0, .y = 0}, .extent = {.width = atlasW, .height = atlasH}};
+        rpInfo.renderPass = plan.renderPass;
+        rpInfo.framebuffer = plan.framebuffer;
+        rpInfo.renderArea = {.offset = {.x = 0, .y = 0}, .extent = plan.atlas};
         VkClearValue clear{};
         clear.depthStencil = {.depth = 1.0f, .stencil = 0};
         rpInfo.clearValueCount = 1;
         rpInfo.pClearValues = &clear;
-        vkCmdBeginRenderPass(currentCmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
     }
 
     // Phase 7/8: render shadow casters, once per cascade into its own tile.
@@ -5189,51 +5334,51 @@ void Renderer::renderShadowPass() {
     // once, and the cascades after the first append to it. Reset per call, the
     // second cascade's writes would replace what the first one's draws read
     // when the GPU gets to them.
-    if (terrainRenderer) terrainRenderer->beginShadowFrame(frame);
-    if (m2Renderer) m2Renderer->beginShadowFrame(frame);
-    if (characterRenderer) characterRenderer->beginShadowFrame(frame);
+    if (plan.terrain) plan.terrain->beginShadowFrame(plan.frame);
+    if (plan.m2) plan.m2->beginShadowFrame(plan.frame);
+    if (plan.characters) plan.characters->beginShadowFrame(plan.frame);
     // Largest first: each cascade lies inside the one before it, so the M2
     // renderer culls the first one against every instance and the rest
     // against that list (M2Renderer::shadowCandidates_).
-    for (int c = activeShadowCascades_ - 1; c >= 0; --c) {
-        const ShadowCascade& cascade = shadowCascades_[c];
+    for (int c = plan.cascadeCount - 1; c >= 0; --c) {
+        const ShadowCascade& cascade = plan.cascades[c];
         VkViewport vp{.x = static_cast<float>(cascade.tile.offset.x),
                       .y = static_cast<float>(cascade.tile.offset.y),
                       .width = static_cast<float>(cascade.tile.extent.width),
                       .height = static_cast<float>(cascade.tile.extent.height),
                       .minDepth = 0.0f, .maxDepth = 1.0f};
-        vkCmdSetViewport(currentCmd, 0, 1, &vp);
-        vkCmdSetScissor(currentCmd, 0, 1, &cascade.tile);
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &cascade.tile);
 
         const float cullRadius = cascade.halfExtent * 1.35f;
-        if (terrainRenderer) {
-            WOWEE_PROFILE_SCOPE("shadow: terrain", Cpu);
-            terrainRenderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
+        if (plan.terrain) {
+            const core::ProfileScope scope("shadow: terrain", kind);
+            plan.terrain->renderShadow(cmd, cascade.lightSpace, cascade.center, cullRadius);
         }
-        if (wmoRenderer) {
-            WOWEE_PROFILE_SCOPE("shadow: wmo", Cpu);
-            wmoRenderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
+        if (plan.wmo) {
+            const core::ProfileScope scope("shadow: wmo", kind);
+            plan.wmo->renderShadow(cmd, cascade.lightSpace, cascade.center, cullRadius);
         }
-        if (m2Renderer) {
-            WOWEE_PROFILE_SCOPE("shadow: m2", Cpu);
-            m2Renderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
+        if (plan.m2) {
+            const core::ProfileScope scope("shadow: m2", kind);
+            plan.m2->renderShadow(cmd, cascade.lightSpace, cascade.center, cullRadius);
         }
-        if (characterRenderer) {
-            WOWEE_PROFILE_SCOPE("shadow: characters", Cpu);
-            characterRenderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
+        if (plan.characters) {
+            const core::ProfileScope scope("shadow: characters", kind);
+            plan.characters->renderShadow(cmd, cascade.lightSpace, cascade.center, cullRadius);
         }
         // One mark per cascade: the far one covers the most ground and is
         // usually the expensive one, which a single shadow total cannot say.
         // The first also carries the clear of the atlas.
         static constexpr const char* kCascadeLabels[kMaxShadowCascades] = {
             "shadow cascade 0 (near)", "shadow cascade 1", "shadow cascade 2 (far)"};
-        vkCtx->gpuMark(currentCmd, kCascadeLabels[c]);
+        mark(markIndex++, kCascadeLabels[c]);
     }
 
-    if (dynamicRendering) {
-        vkCmdEndRendering(currentCmd);
+    if (plan.dynamicRendering) {
+        vkCmdEndRendering(cmd);
     } else {
-        vkCmdEndRenderPass(currentCmd);
+        vkCmdEndRenderPass(cmd);
     }
 
     // Barrier 2: DEPTH_STENCIL_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL
@@ -5248,17 +5393,16 @@ void Renderer::renderShadowPass() {
     b2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b2.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     b2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    b2.image = shadowDepthImage[frame];
+    b2.image = plan.image;
     b2.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
     VkDependencyInfo b2Dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     b2Dep.dependencyFlags = 0;
     b2Dep.imageMemoryBarrierCount = 1;
     b2Dep.pImageMemoryBarriers = &b2;
-    cmdPipelineBarrier2(currentCmd, b2Dep);
-    shadowDepthLayout_[frame] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    cmdPipelineBarrier2(cmd, b2Dep);
     // The end of the pass, outside it: what the cascades add up to even on a
     // driver that will not split a render pass between its marks.
-    if (vkCtx) vkCtx->gpuMark(currentCmd, "shadows (pass end)");
+    mark(kMaxShadowCascades, "shadows (pass end)");
 }
 
 VkImageView Renderer::getNeutralRtLightingView() const {
@@ -5721,26 +5865,11 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
     // The character previews are not a pre-pass: endFrame records them once
     // the scene's passes are closed (recordPreviewComposites says why).
 
-    // Shadow pre-pass → outputs shadow_depth
-    renderGraph_->addPass("shadow_pass", {}, {shadowDepth},
-        [this](VkCommandBuffer) {
-            // Not gated on shadowsEnabled: renderShadowPass is what clears the
-            // map and leaves it in the layout its readers expect, and it
-            // already skips the casters on its own when shadows are off.
-            // Declining to call it here put the transition back where it was
-            // before, which is the whole of the fault this was meant to end.
-            if (shadowDepthImage[0] != VK_NULL_HANDLE)
-                renderShadowPass();
-        });
-    // Left enabled even with shadows off, as long as the image exists.
-    //
-    // A disabled pass is skipped whole, and that includes the image barriers
-    // declared on it - so turning shadows off stopped the shadow map ever
-    // being transitioned, while the passes that read it kept it bound and
-    // sampled it in whatever layout it was last left in. The lambda above
-    // already declines to draw anything; what has to keep happening is the
-    // transition.
-    renderGraph_->setPassEnabled("shadow_pass", shadowDepthImage[0] != VK_NULL_HANDLE);
+    // The shadow map has no pass here any more: it is drawn into the frame's
+    // prologue (planShadowPass), which is submitted ahead of this buffer, so
+    // it is complete and readable before anything below reads it. The two
+    // passes below still name it as their input, which costs nothing and
+    // says what they read.
 
     // Volumetric fog → reads this frame's shadow map, outputs the fog volume
     // every world shader samples.

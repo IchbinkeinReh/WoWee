@@ -3869,6 +3869,11 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
     uint32_t frameIndex = vkCtx_->getCurrentFrame();
     if (frameIndex >= 2) return;
     VkDevice device = vkCtx_->getDevice();
+    // The shadow worker records this while the doodad worker draws the
+    // blended characters through render(), and both copy each instance's pose
+    // into the same bone buffer - here, and on the path below that makes one
+    // where prepareRender could not, from the same descriptor pool.
+    std::lock_guard<std::mutex> renderLock(renderMutex_);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
 

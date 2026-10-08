@@ -77,7 +77,7 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
         // in front of it - the same fault the nameplates had, answered by the
         // same query.
         static SightCache sight;
-        if (sight.blocked(renderer->getWMORenderer(), bubble.senderGuid,
+        if (sight.blocked(renderer->queryWMORenderer(), bubble.senderGuid,
                           camera->getPosition(), renderPos)) {
             continue;
         }

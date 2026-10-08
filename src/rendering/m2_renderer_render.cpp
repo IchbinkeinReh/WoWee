@@ -2157,7 +2157,11 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
     // batch. With tens of thousands of instances resident that is the cost of
     // this pass, and none of it is drawing.
     {
-    WOWEE_PROFILE_SCOPE("m2 shadow: cull + sort", Cpu);
+    // Filed with whichever thread records the pass - the shadow worker in the
+    // world, the main thread without one - so the profile shows it under the
+    // pass that contains it.
+    const core::ProfileScope cullScope("m2 shadow: cull + sort",
+        core::FrameProfiler::isMainThread() ? core::ProfileKind::Cpu : core::ProfileKind::Worker);
     shadowCasters_[0].clear();
     shadowCasters_[1].clear();
     // The test a caster passes, the same for the full walk and the filter.

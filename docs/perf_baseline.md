@@ -31,7 +31,7 @@ When enabled, zero-cost zone markers instrument the following critical paths.
 | `Renderer::endFrame` | src/rendering/renderer.cpp | Post-process + present |
 | `Renderer::update` | src/rendering/renderer.cpp | Renderer per-frame update |
 | `Renderer::renderWorld` | src/rendering/renderer.cpp | Main world draw call |
-| `Renderer::renderShadowPass` | src/rendering/renderer.cpp | Shadow depth pass |
+| `Renderer::recordShadowPass` | src/rendering/renderer.cpp | Shadow depth pass (a frame worker, in the world) |
 | `PostProcess::execute` | src/rendering/post_process_pipeline.cpp | FSR/FXAA post-process |
 | `HiZSystem::buildPyramid` | src/rendering/hiz_system.cpp | Hi-Z depth pyramid build dispatch |
 | `M2::computeBoneMatrices` | src/rendering/m2_renderer_internal.h | CPU skeletal animation |
