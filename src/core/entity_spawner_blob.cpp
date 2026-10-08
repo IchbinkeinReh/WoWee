@@ -52,10 +52,25 @@ void EntitySpawner::updateBlobShadows(uint32_t localPlayerInstance) {
         return own->box;
     };
 
+    // A corpse that is not bones carries the flag too (0x00743760), and not
+    // being a unit, 0x00793980 sizes its blob by the bounds of the sequence
+    // its model plays (0x0082ced0).
+    auto corpseBox = [&](const game::Entity& entity,
+                         uint32_t instanceId) -> std::optional<rendering::blob_shadow::Box> {
+        const uint16_t flagsField = game::fieldIndex(game::UF::CORPSE_FIELD_FLAGS);
+        const uint32_t flags = flagsField != 0xFFFF ? entity.getField(flagsField) : 0u;
+        if (!rendering::blob_shadow::carriesBlobFlag(rendering::blob_shadow::WorldObjectKind::Corpse, false, flags)) {
+            return std::nullopt;
+        }
+        return cr->instanceSequenceBounds(instanceId);
+    };
+
     for (const auto& [guid, instanceId] : creatureInstances_) {
         std::optional<rendering::blob_shadow::Box> box;
         auto entity = entities.getEntity(guid);
-        if (entity && entity->getType() == game::ObjectType::UNIT) {
+        if (entity && entity->getType() == game::ObjectType::CORPSE) {
+            box = corpseBox(*entity, instanceId);
+        } else if (entity && entity->getType() == game::ObjectType::UNIT) {
             const auto& unit = static_cast<const game::Unit&>(*entity);
             bool blob = true;
             if (auto it = creatureInfo.find(unit.getEntry()); it != creatureInfo.end()) {
@@ -84,15 +99,7 @@ void EntitySpawner::updateBlobShadows(uint32_t localPlayerInstance) {
             const auto& unit = static_cast<const game::Unit&>(*entity);
             box = unitBox(unit, unit.getDisplayId(), mountInstance != 0 ? mountDisplayId : 0);
         } else if (entity && entity->getType() == game::ObjectType::CORPSE) {
-            // A corpse that is not bones carries the flag too (0x00743760),
-            // and not being a unit, 0x00793980 sizes its blob by the bounds
-            // of the sequence its model plays (0x0082ced0).
-            const uint16_t flagsField = game::fieldIndex(game::UF::CORPSE_FIELD_FLAGS);
-            const uint32_t flags = flagsField != 0xFFFF ? entity->getField(flagsField) : 0u;
-            if (rendering::blob_shadow::carriesBlobFlag(rendering::blob_shadow::WorldObjectKind::Corpse, false,
-                                                        flags)) {
-                box = cr->instanceSequenceBounds(riderInstance);
-            }
+            box = corpseBox(*entity, riderInstance);
         }
         if (mountInstance != 0) {
             cr->setInstanceBlobShadow(mountInstance, box);

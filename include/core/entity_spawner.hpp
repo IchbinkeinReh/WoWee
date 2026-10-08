@@ -26,7 +26,7 @@ namespace wowee {
 namespace rendering { class Renderer; }
 namespace pipeline { class AssetManager; class DBCFile; struct M2Model; struct WMOModel; }
 namespace audio { enum class VoiceType; }
-namespace game { class GameHandler; class Entity; }
+namespace game { class GameHandler; class Entity; struct CorpseLook; }
 
 namespace core {
 
@@ -64,6 +64,15 @@ public:
     void despawnCreature(uint64_t guid);
     void despawnPlayer(uint64_t guid);
     void despawnGameObject(uint64_t guid);
+
+    /// A CORPSE object as CGCorpse_C draws it (0x00705670, 0x00705b20):
+    /// bones as the race's death skeleton; otherwise its display's model,
+    /// laid down dead and, for a character model, dressed in its items.
+    void spawnCorpse(uint64_t guid, const game::CorpseLook& look, float x, float y, float z, float orientation);
+    /// Takes away what spawnCorpse drew besides a character model.
+    void despawnCorpse(uint64_t guid);
+    /// Whether spawnCorpse drew this guid through the player or creature path.
+    bool isCorpse(uint64_t guid) const { return corpseGuids_.count(guid) > 0; }
 
     // A GAMEOBJECT_QUERY_RESPONSE arrived. Game object animation does not
     // depend on the type, so there is nothing to revisit; kept as the hook.
@@ -490,6 +499,17 @@ private:
         bool offHandFollowsAnimation = false;
     };
     std::unordered_map<uint64_t, UnitWeaponsShown> unitWeaponsShown_;
+    /// Corpses drawn through the player or creature paths, those through the
+    /// creature path, and bones: M2 instances and their models by path.
+    std::unordered_set<uint64_t> corpseGuids_;
+    std::unordered_set<uint64_t> corpseCreatureGuids_;
+    std::unordered_map<uint64_t, uint32_t> corpseBonesInstances_;
+    std::unordered_map<std::string, uint32_t> corpseBonesModelIds_;
+    /// Whether a corpse's display is a character model (CreatureModelData
+    /// flag 4, 0x00705b20); nothing when its records are missing.
+    std::optional<bool> corpseDisplayIsCharacter(uint32_t displayId) const;
+    void spawnCorpseBones(uint64_t guid, const std::string& modelPath, float x, float y, float z,
+                          float orientation);
     /// AnimationData.dbc, for animationBehavior; loaded on first use.
     mutable std::shared_ptr<pipeline::DBCFile> animationDataDbc_;
     mutable bool animationDataLoaded_ = false;

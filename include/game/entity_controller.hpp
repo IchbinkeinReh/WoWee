@@ -317,7 +317,11 @@ private:
     void onCreatePlayer(const UpdateBlock& block, std::shared_ptr<Entity>& entity);
     void onCreateGameObject(const UpdateBlock& block, std::shared_ptr<Entity>& entity);
     void onCreateItem(const UpdateBlock& block, bool& newItemCreated);
-    void onCreateCorpse(const UpdateBlock& block);
+    void onCreateCorpse(const UpdateBlock& block, const std::shared_ptr<Entity>& entity);
+    void onValuesUpdateCorpse(const UpdateBlock& block, const std::shared_ptr<Entity>& entity);
+    /// Draws a corpse from its fields (0x00705670, 0x00705b20); false when
+    /// the field layout does not have them.
+    bool spawnCorpseFromFields(uint64_t guid, const Entity& entity);
     void handleDisplayIdChange(const UpdateBlock& block,
                                const std::shared_ptr<Entity>& entity,
                                const std::shared_ptr<Unit>& unit,

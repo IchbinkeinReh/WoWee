@@ -2639,6 +2639,11 @@ wowee_add_test(test_detail_doodad_placement
 wowee_add_test(test_weapon_attachment
     SOURCES test_weapon_attachment.cpp)
 
+# ── test_corpse_look ─────────────────────────────────────────
+# What a corpse's fields say it looks like (game/corpse_look.hpp).
+wowee_add_test(test_corpse_look
+    SOURCES test_corpse_look.cpp)
+
 # ── test_client_ribbon ───────────────────────────────────────
 # The client's ribbon emitter (rendering/client_ribbon.hpp).
 wowee_add_test(test_client_ribbon

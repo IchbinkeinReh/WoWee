@@ -253,7 +253,10 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
                                                 modelSubmeshIds(modelId)));
     }
 
-    if (deadCreatureGuids_.count(guid)) {
+    if (corpseGuids_.count(guid) && charRenderer->hasAnimation(instanceId, rendering::anim::DEAD)) {
+        // A corpse lies in Dead (0x00705b20 plays 6).
+        charRenderer->playAnimation(instanceId, rendering::anim::DEAD, true);
+    } else if (deadCreatureGuids_.count(guid)) {
         charRenderer->playAnimation(instanceId, rendering::anim::DEATH, false);
     } else {
         // A player already seated when we first see them stays seated.

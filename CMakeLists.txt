@@ -611,6 +611,7 @@ set(WOWEE_SOURCES
     src/core/entity_spawner.cpp
     src/core/entity_spawner_player.cpp
     src/core/entity_spawner_blob.cpp
+    src/core/entity_spawner_corpse.cpp
     src/core/entity_spawner_processing.cpp
     src/core/appearance_composer.cpp
     src/core/helm_visual.cpp

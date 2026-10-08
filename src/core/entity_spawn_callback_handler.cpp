@@ -84,7 +84,13 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
     });
 
     gameHandler_.setPlayerDespawnCallback([this](uint64_t guid) {
+        entitySpawner_.despawnCorpse(guid);
         entitySpawner_.despawnPlayer(guid);
+    });
+
+    gameHandler_.setCorpseSpawnCallback([this](uint64_t guid, const game::CorpseLook& look, float x, float y,
+                                               float z, float orientation) {
+        entitySpawner_.spawnCorpse(guid, look, x, y, z, orientation);
     });
 
     // GameObject spawn callback (online mode) - spawn static models (mailboxes, etc.)

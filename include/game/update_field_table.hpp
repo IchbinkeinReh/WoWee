@@ -135,6 +135,14 @@ enum class UF : uint16_t {
     UNIT_VIRTUAL_ITEM_SLOT_ID,
     /// WotLK: a corpse's flags; 1 is bones (0x00743760 gives those no blob).
     CORPSE_FIELD_FLAGS,
+    /// WotLK: what a corpse looks like (0x00705670, 0x00705b20) - its
+    /// display id, its 19 item display ids (inventory type in the top
+    /// byte), race, sex and skin in BYTES_1 bytes 1-3, face, hair style,
+    /// hair colour and facial hair in BYTES_2.
+    CORPSE_FIELD_DISPLAY_ID,
+    CORPSE_FIELD_ITEM,
+    CORPSE_FIELD_BYTES_1,
+    CORPSE_FIELD_BYTES_2,
     PLAYER_DUEL_ARBITER,
     GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,

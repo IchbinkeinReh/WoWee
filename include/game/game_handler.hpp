@@ -6,6 +6,7 @@
 #include "game/world_packets.hpp"
 #include "game/character.hpp"
 #include "game/opcode_table.hpp"
+#include "game/corpse_look.hpp"
 #include "game/update_field_table.hpp"
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
@@ -1599,6 +1600,12 @@ public:
                                                       const std::array<uint32_t, 19>& displayInfoIds,
                                                       const std::array<uint8_t, 19>& inventoryTypes)>;
     void setPlayerEquipmentCallback(PlayerEquipmentCallback cb) { playerEquipmentCallback_ = std::move(cb); }
+
+    /// A CORPSE object to draw, from its fields (0x00705670, 0x00705b20).
+    /// Removed through the player despawn callback.
+    using CorpseSpawnCallback = std::function<void(uint64_t guid, const CorpseLook& look,
+                                                   float x, float y, float z, float orientation)>;
+    void setCorpseSpawnCallback(CorpseSpawnCallback cb) { corpseSpawnCallback_ = std::move(cb); }
 
     // GameObject spawn callback (online mode - triggered when gameobject enters view)
     // Parameters: guid, entry, displayId, x, y, z (canonical), orientation, scale (OBJECT_FIELD_SCALE_X)
@@ -3844,6 +3851,7 @@ public:
     auto& playerEquipmentCallbackRef() { return playerEquipmentCallback_; }
     auto& playerHealthCallbackRef() { return playerHealthCallback_; }
     auto& playerSpawnCallbackRef() { return playerSpawnCallback_; }
+    auto& corpseSpawnCallbackRef() { return corpseSpawnCallback_; }
     auto& pvpHonorCallbackRef() { return pvpHonorCallback_; }
     auto& questCompleteCallbackRef() { return questCompleteCallback_; }
     auto& questProgressCallbackRef() { return questProgressCallback_; }
@@ -4454,6 +4462,7 @@ private:
     CreatureSpawnCallback creatureSpawnCallback_;
     CreatureDespawnCallback creatureDespawnCallback_;
     PlayerSpawnCallback playerSpawnCallback_;
+    CorpseSpawnCallback corpseSpawnCallback_;
     PlayerDespawnCallback playerDespawnCallback_;
     PlayerEquipmentCallback playerEquipmentCallback_;
     CreatureMoveCallback creatureMoveCallback_;

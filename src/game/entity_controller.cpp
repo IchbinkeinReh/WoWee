@@ -1991,7 +1991,8 @@ struct EntityController::ItemTypeHandler : EntityController::IObjectTypeHandler 
 struct EntityController::CorpseTypeHandler : EntityController::IObjectTypeHandler {
     EntityController& ctl_;
     explicit CorpseTypeHandler(EntityController& c) : ctl_(c) {}
-    void onCreate(const UpdateBlock& block, std::shared_ptr<Entity>& /*entity*/, bool&) override { ctl_.onCreateCorpse(block); }
+    void onCreate(const UpdateBlock& block, std::shared_ptr<Entity>& entity, bool&) override { ctl_.onCreateCorpse(block, entity); }
+    void onValuesUpdate(const UpdateBlock& block, std::shared_ptr<Entity>& entity) override { ctl_.onValuesUpdateCorpse(block, entity); }
 };
 
 // ============================================================
@@ -2231,7 +2232,40 @@ void EntityController::onCreateItem(const UpdateBlock& block, bool& newItemCreat
     trackItemOnCreate(block, newItemCreated);
 }
 
-void EntityController::onCreateCorpse(const UpdateBlock& block) {
+bool EntityController::spawnCorpseFromFields(uint64_t guid, const Entity& entity) {
+    const uint16_t displayField = fieldIndex(UF::CORPSE_FIELD_DISPLAY_ID);
+    const uint16_t itemField = fieldIndex(UF::CORPSE_FIELD_ITEM);
+    const uint16_t bytes1Field = fieldIndex(UF::CORPSE_FIELD_BYTES_1);
+    const uint16_t bytes2Field = fieldIndex(UF::CORPSE_FIELD_BYTES_2);
+    const uint16_t flagsField = fieldIndex(UF::CORPSE_FIELD_FLAGS);
+    if (displayField == 0xFFFF || itemField == 0xFFFF || bytes1Field == 0xFFFF || bytes2Field == 0xFFFF ||
+        flagsField == 0xFFFF) {
+        return false;
+    }
+    if (!owner_.corpseSpawnCallbackRef()) return true;
+    // A create block without a position leaves nowhere to draw it.
+    if (entity.getX() == 0.0f && entity.getY() == 0.0f && entity.getZ() == 0.0f) return true;
+    std::array<uint32_t, 19> items{};
+    for (uint16_t i = 0; i < 19; ++i) items[i] = entity.getField(static_cast<uint16_t>(itemField + i));
+    const CorpseLook look = corpseLook(entity.getField(displayField), items, entity.getField(bytes1Field),
+                                       entity.getField(bytes2Field), entity.getField(flagsField));
+    owner_.corpseSpawnCallbackRef()(guid, look, entity.getX(), entity.getY(), entity.getZ(),
+                                    entity.getOrientation());
+    return true;
+}
+
+void EntityController::onValuesUpdateCorpse(const UpdateBlock& block, const std::shared_ptr<Entity>& entity) {
+    // 0x00706240: a change of CORPSE_FIELD_FLAGS builds the corpse's model
+    // again (0x00706120) - bones, a hidden helm or cloak.
+    const uint16_t flagsField = fieldIndex(UF::CORPSE_FIELD_FLAGS);
+    if (!entity || flagsField == 0xFFFF || block.fields.find(flagsField) == block.fields.end()) return;
+    if (owner_.playerDespawnCallbackRef()) owner_.playerDespawnCallbackRef()(block.guid);
+    spawnCorpseFromFields(block.guid, *entity);
+}
+
+void EntityController::onCreateCorpse(const UpdateBlock& block, const std::shared_ptr<Entity>& entity) {
+    // Every corpse is drawn from its own fields, the player's own included.
+    const bool drawnFromFields = entity && spawnCorpseFromFields(block.guid, *entity);
     // Detect player's own corpse object so we have the position even when
     // SMSG_DEATH_RELEASE_LOC hasn't been received (e.g. login as ghost).
     //
@@ -2268,9 +2302,11 @@ void EntityController::onCreateCorpse(const UpdateBlock& block) {
             // Corpse objects carry ownership and position but not a standalone
             // render model. Reuse the owning character's appearance and equipment
             // under the corpse GUID, then force the queued instance into DEATH.
+            // A field layout without the corpse's own fields falls back on that.
             auto characterIt = std::find_if(owner_.charactersRef().begin(), owner_.charactersRef().end(),
                 [&](const Character& character) { return character.guid == owner_.getPlayerGuid(); });
-            if (characterIt != owner_.charactersRef().end() && owner_.playerSpawnCallbackRef()) {
+            if (!drawnFromFields && characterIt != owner_.charactersRef().end() &&
+                owner_.playerSpawnCallbackRef()) {
                 glm::vec3 canonical = core::coords::serverToCanonical(
                     glm::vec3(block.x, block.y, block.z));
                 float orientation = core::coords::serverToCanonicalYaw(block.orientation);
@@ -2293,7 +2329,7 @@ void EntityController::onCreateCorpse(const UpdateBlock& block) {
                     owner_.playerEquipmentCallbackRef()(block.guid, displayInfoIds, inventoryTypes);
                 }
             }
-            if (owner_.npcDeathCallbackRef()) {
+            if (!drawnFromFields && owner_.npcDeathCallbackRef()) {
                 owner_.npcDeathCallbackRef()(block.guid);
             }
             LOG_INFO("Corpse object detected: guid=0x", std::hex, owner_.corpseGuidRef(), std::dec,

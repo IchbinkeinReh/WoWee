@@ -146,6 +146,10 @@ void EntitySpawner::shutdown() {
     creatureWeaponsAttached_.clear();
     creatureWeaponAttachAttempts_.clear();
     unitWeaponsShown_.clear();
+    corpseGuids_.clear();
+    corpseCreatureGuids_.clear();
+    corpseBonesInstances_.clear();
+    corpseBonesModelIds_.clear();
     animationDataDbc_.reset();
     animationDataLoaded_ = false;
     playerInstances_.clear();
@@ -199,6 +203,10 @@ void EntitySpawner::resetAllState() {
     creatureWeaponsAttached_.clear();
     creatureWeaponAttachAttempts_.clear();
     unitWeaponsShown_.clear();
+    corpseGuids_.clear();
+    corpseCreatureGuids_.clear();
+    corpseBonesInstances_.clear();
+    corpseBonesModelIds_.clear();
     animationDataDbc_.reset();
     animationDataLoaded_ = false;
     modelIdIsWolfLike_.clear();
@@ -1441,7 +1449,10 @@ void EntitySpawner::playCreatureSpawnPose(uint64_t guid, uint32_t instanceId) {
     if (!charRenderer) return;
 // Spawn in the correct pose. If the server marked this creature dead before
 // the queued spawn was processed, start directly in death animation.
-if (deadCreatureGuids_.count(guid)) {
+if (corpseGuids_.count(guid) && charRenderer->hasAnimation(instanceId, rendering::anim::DEAD)) {
+    // A corpse lies in Dead (0x00705b20 plays 6).
+    charRenderer->playAnimation(instanceId, rendering::anim::DEAD, true);
+} else if (deadCreatureGuids_.count(guid)) {
     charRenderer->playAnimation(instanceId, rendering::anim::DEATH, false);
 } else {
     // Check if this NPC has a persistent emote state (e.g. working, eating, dancing)
