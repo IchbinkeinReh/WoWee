@@ -31,20 +31,30 @@ public:
     void initialize(M2Renderer* m2Renderer, Renderer* renderer);
     void shutdown();
 
-    // Spawn a spell visual at a world position.
-    // useImpactKit=false → CastKit path; useImpactKit=true → ImpactKit path
-    // attachInstanceId: the CASTER's CharacterRenderer instance for hand/chest/
-    // head bone tracking (0 = static effect at worldPosition). Effects used to
-    // attach to the local player unconditionally, so every nearby unit's cast
-    // kit landed on the player's hands.
+    /// A visual's cast kit on its caster (0x0080e1b0), or its impact kit on
+    /// a unit it hit (0x00801f10): CasterImpactKit where that unit is the
+    /// caster, TargetImpactKit on any other, else the ImpactKit. Played as
+    /// 0x00745230 plays a kit: each model at its attachment on the unit drawn
+    /// by attachInstanceId, the WorldEffect where it stands. With no instance
+    /// the kit's models go to worldPosition.
     void playSpellVisual(uint32_t visualId, const glm::vec3& worldPosition,
-                         bool useImpactKit = false, uint32_t attachInstanceId = 0);
+                         bool useImpactKit = false, uint32_t attachInstanceId = 0, bool onCaster = false);
 
-    // Spawn a precast visual effect at a world position.
-    // castTimeMs: server cast time in milliseconds (0 = use anim duration).
-    // attachInstanceId: see playSpellVisual.
+    /// The visual's PrecastKit on its caster while the cast runs
+    /// (0x007fa2e0): its models repeat until castTimeMs has passed or the
+    /// cast is cancelled.
     void playSpellVisualPrecast(uint32_t visualId, const glm::vec3& worldPosition,
                                 uint32_t castTimeMs = 0, uint32_t attachInstanceId = 0);
+
+    /// A SpellVisualKit by its id, as SMSG_PLAY_SPELL_VISUAL (type 1,
+    /// 0x008006c0) and SMSG_PLAY_SPELL_IMPACT (type 0, 0x00800610) play one
+    /// on a unit.
+    void playKit(uint32_t kitId, spell_kit::KitType type, const glm::vec3& worldPosition, uint32_t renderInstanceId);
+
+    /// A ground-aimed cast's area kits at its destination (0x0080e1b0): the
+    /// InstantAreaKit (+0x5c), and the ImpactAreaKit (+0x60) unless a
+    /// missile carries it there (0x00700e20 plays it as that lands).
+    void playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact);
 
     // Launch a physical weapon projectile (arrow, bullet, or thrown item)
     // without invoking the spell visual pipeline.
@@ -138,6 +148,8 @@ public:
     /// every kit model on it (0x006f8c50).
     using AttachedEffectScale = std::function<float(uint32_t renderInstanceId)>;
     void setAttachedEffectScale(AttachedEffectScale scale) { attachedEffectScale_ = std::move(scale); }
+    /// A unit's CreatureModelData WorldEffectScale (+0x5c) (0x006f7950).
+    void setWorldEffectScale(AttachedEffectScale scale) { worldEffectScale_ = std::move(scale); }
 
     /// Where a camera shake goes: the camera's list (0x00606330).
     using CameraShakeSink = std::function<void(const camera_shake::Shake&, const glm::vec3& origin)>;
@@ -159,22 +171,21 @@ public:
     void reset();
 
 private:
-    // Spell visual effects - transient M2 instances spawned by SMSG_PLAY_SPELL_VISUAL/IMPACT
+    // A kit model that plays once (or for the cast, a precast kit's).
     struct SpellVisualInstance {
         uint32_t instanceId;
         float elapsed;
-        float duration;  // per-instance lifetime in seconds (from M2 anim or default)
+        float duration;  // its lifetime in seconds
         bool isPrecast;  // true for precast effects (removed on cancel/interrupt)
-        uint32_t attachmentId;  // character attachment point to track (0=none/static)
+        uint32_t attachmentId;  // the attachment it rides, where `attached`
         uint32_t attachInstanceId;  // CharacterRenderer instance the attachment belongs to
-        // An effect with no bone of its own - an aura, an impact - is parented
-        // to the unit it was cast on, as the client's CEffect::UpdateAttachment
-        // parents the effect's model to the unit's: it keeps its spot in the
-        // unit's own frame, so it moves and turns with it.
-        bool followsUnit = false;
-        glm::vec3 followOffset{0.0f};  // in the unit's frame
+        bool attached = false;  // false: it stays where it was put in the world
         float scale = 1.0f;  // a kit weapon effect's, in its attachment's frame
         glm::mat4 local{1.0f};  // a SpellVisualKitModelAttach offset, in the attachment's frame
+        /// 0x00744870: when its Stand has run once (seconds), its Decay,
+        /// where `decays`, else its end; below 0 none.
+        float switchAt = -1.0f;
+        bool decays = false;
     };
 
     /// A model a kit hangs on a unit: a model column at its attachment
@@ -184,13 +195,25 @@ private:
     struct KitModel {
         std::string path;
         int32_t attachment = -1;
+        spell_kit::KitModelKind kind = spell_kit::KitModelKind::Column;
         glm::mat4 local{1.0f};
+        float scale = 1.0f;
+        float minScale = 0.0f;
+        float maxScale = 1e30f;
+    };
+    /// A kit's LeftWeaponEffect or RightWeaponEffect: its
+    /// SpellVisualEffectName model, Scale and allowed scales.
+    struct KitWeaponEffect {
+        std::string modelPath;
+        bool left = false;
         float scale = 1.0f;
         float minScale = 0.0f;
         float maxScale = 1e30f;
     };
     struct KitRecord {
         std::vector<KitModel> models;
+        std::vector<KitWeaponEffect> weaponEffects;  ///< +0x24, +0x28 (0x0073a6c0)
+        uint32_t soundId = 0;  ///< SoundID (+0x3c), SoundEntries
         uint32_t flags = 0;  ///< SpellVisualKit Flags (+0x94)
         uint32_t shakeId = 0;  ///< ShakeID (+0x40), SpellEffectCameraShakes
         /// CharProc (+0x44) and its CharParamZero..Three (+0x54..+0x84).
@@ -208,9 +231,13 @@ private:
     /// A kit model shown on a unit.
     struct KitModelInstance {
         uint32_t instanceId = 0;
-        int32_t attachment = -1;
+        int32_t attachment = -1;  ///< -1: in the world, where it was put
         glm::mat4 local{1.0f};
         float scale = 1.0f;
+        /// 0x007449c0: when its Stand has run once (seconds since it was put
+        /// on), it holds its Hold; below 0 when it plays on as it is.
+        float holdAt = -1.0f;
+        float elapsed = 0.0f;
     };
     /// An aura's state kit on a unit.
     struct AuraKit {
@@ -231,8 +258,25 @@ private:
     std::unordered_map<uint64_t, UnitAuraKits> unitAuraKits_;
     UnitInstanceResolver unitInstanceResolver_;
     CameraShakeSink cameraShakeSink_;
-    /// The precast, cast and impact kits of each visual, for their shakes.
-    std::unordered_map<uint32_t, std::array<uint32_t, 3>> visualKitIds_;
+    /// A SpellVisual's kits for a cast: PrecastKit (+4), CastKit (+8),
+    /// ImpactKit (+0xc), CasterImpactKit (+0x38), TargetImpactKit (+0x3c),
+    /// InstantAreaKit (+0x5c) and ImpactAreaKit (+0x60).
+    struct VisualKits {
+        uint32_t precast = 0;
+        uint32_t cast = 0;
+        uint32_t impact = 0;
+        uint32_t casterImpact = 0;
+        uint32_t targetImpact = 0;
+        uint32_t instantArea = 0;
+        uint32_t impactArea = 0;
+    };
+    std::unordered_map<uint32_t, VisualKits> visualKits_;
+    /// 0x00745230 on a unit (renderInstanceId, 0 for none) or at a place:
+    /// the kit's models, its weapon effects (precast and cast kits), its
+    /// camera shake and its colour. Returns a state kit's models.
+    std::vector<KitModelInstance> playKitOnUnit(uint32_t kitId, spell_kit::KitType type,
+                                               uint32_t renderInstanceId, const glm::vec3& position,
+                                               const glm::vec3* place, uint32_t castTimeMs = 0);
     /// A kit's camera shake where it plays (0x0073b140, 0x006f9840).
     void playKitShake(uint32_t kitId, const glm::vec3& origin);
     /// A kit's colour fade (CharProc 13) on the unit drawn by an instance.
@@ -255,33 +299,34 @@ private:
     void hideAuraKit(AuraKit& aura);
     /// Each frame: the unit's kits follow it, onto a new model when it has
     /// one, and its Flags 8 kits show as 0x00720400 has them.
-    void updateAuraKits();
+    void updateAuraKits(float deltaTime);
     /// A kit model's place this frame on the unit drawn by renderInstanceId;
     /// false when it has no such attachment (0x006f8c50 removes the effect).
     bool kitModelTransform(uint32_t renderInstanceId, int32_t attachment, const glm::mat4& local,
                            float effectScale, float minScale, float maxScale, glm::mat4& out, float& scale);
-    /// Play a kit's models on a unit: looping until removed (a state kit),
-    /// or once into activeSpellVisuals_.
-    std::vector<KitModelInstance> playKitModels(const KitRecord& kit, uint32_t renderInstanceId, bool loops);
+    /// Where a world-placed kit model goes (0x006f8ae0): where the unit
+    /// stands, turned as it faces and sized by it, or at `place`.
+    glm::mat4 worldKitModelTransform(const KitModel& model, uint32_t renderInstanceId, const glm::vec3& position,
+                                     const glm::vec3* place);
+    /// Play a kit's models (0x00745230) of the given type on a unit or at a
+    /// place: a state kit's returned, held until removed; the others into
+    /// activeSpellVisuals_, once or (precast) for the cast.
+    std::vector<KitModelInstance> playKitModels(const KitRecord& kit, spell_kit::KitType type,
+                                                uint32_t renderInstanceId, const glm::vec3& position,
+                                                const glm::vec3* place, uint32_t castTimeMs = 0);
 
-    /// A kit's LeftWeaponEffect or RightWeaponEffect: its
-    /// SpellVisualEffectName model, Scale and allowed scales.
-    struct KitWeaponEffect {
-        std::string modelPath;
-        bool left = false;
-        float scale = 1.0f;
-        float minScale = 0.0f;
-        float maxScale = 1e30f;
-    };
+    /// A one-shot or precast kit model just put on: its animation and
+    /// lifetime as its kit's callback has them (0x00744870, 0x007435a0).
+    void addKitModel(uint32_t instanceId, spell_kit::KitModelLife life, bool isPrecast, uint32_t castTimeMs,
+                     bool attached, uint32_t attachment, uint32_t attachInstanceId, float scale,
+                     const glm::mat4& local);
     /// 0x0073a6c0: hang a kit's weapon effects in the caster's hands.
     void playKitWeaponEffects(const std::vector<KitWeaponEffect>& effects, uint32_t attachInstanceId,
                               bool isPrecast, uint32_t castTimeMs);
-    std::unordered_map<uint32_t, std::vector<KitWeaponEffect>> precastWeaponEffects_;  // visualId → its precast kit's
-    std::unordered_map<uint32_t, std::vector<KitWeaponEffect>> castWeaponEffects_;     // visualId → its cast kit's
     WeaponEffectHolder weaponEffectHolder_;
-
-    /// Parent the effect just added to its unit, from where it was placed.
-    void followUnitFromSpawn(const glm::vec3& spawnPos);
+    /// A unit's CreatureModelData WorldEffectScale (+0x5c), which sizes
+    /// the kit models it places in the world (0x006f7950).
+    AttachedEffectScale worldEffectScale_;
 
     struct PhysicalProjectile {
         uint32_t instanceId = 0;
@@ -305,6 +350,7 @@ private:
         // origin), and where the aim point was last seen - which is where the
         // missile lands if the target despawns, as FUN_006ff320 keeps it.
         uint32_t targetInstanceId = 0;
+        uint32_t casterInstanceId = 0;  // whose impact kit is its CasterImpactKit (0x00700e20)
         int32_t targetAttachment = -1;
         glm::vec3 impactOffset{0.0f};
         glm::vec3 lastTarget{0.0f};
@@ -349,24 +395,14 @@ private:
         float volume = 1.0f;
     };
     std::unordered_map<uint32_t, LoadedSound> soundEntries_;           // SoundEntries id → its file, empty if none
-    std::unordered_map<uint32_t, uint32_t> impactKitSounds_;           // visualId → its impact kit's SoundEntries id
-    std::unordered_map<uint32_t, std::string> spellVisualPrecastPath_; // visualId → precast M2 path
-    std::unordered_map<uint32_t, std::string> spellVisualCastPath_;   // visualId → cast M2 path
-    std::unordered_map<uint32_t, std::string> spellVisualImpactPath_; // visualId → impact M2 path
     std::unordered_map<std::string, uint32_t> spellVisualModelIds_;   // M2 path → M2Renderer modelId
     std::unordered_set<uint32_t> spellVisualFailedModels_;           // modelIds that failed to load (negative cache)
     uint32_t nextSpellVisualModelId_ = 999000; // Reserved range 999000-999799
     uint32_t nextProjectileModelId_ = 998000;  // Reserved range 998000-998999
     std::unordered_map<std::string, uint32_t> projectileModelIds_;
     bool spellVisualDbcLoaded_ = false;
-    static constexpr float SPELL_VISUAL_MAX_DURATION = 5.0f;
+    /// A one-shot model whose sequence has no length: what it is given.
     static constexpr float SPELL_VISUAL_DEFAULT_DURATION = 2.0f;
-
-    // Determine character attachment point from model path keywords
-    static uint32_t classifyAttachmentId(const std::string& modelPath);
-
-    // Apply height offset based on model path keywords (Hand → hands, Chest → chest, Base → ground)
-    static glm::vec3 applyEffectHeightOffset(const glm::vec3& basePos, const std::string& modelPath);
 };
 
 } // namespace rendering

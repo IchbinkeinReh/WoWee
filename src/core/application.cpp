@@ -2307,6 +2307,9 @@ void Application::setState(AppState newState) {
                     svs->setAttachedEffectScale([this](uint32_t renderInstanceId) {
                         return entitySpawner_ ? entitySpawner_->kitAttachedEffectScale(renderInstanceId) : 1.0f;
                     });
+                    svs->setWorldEffectScale([this](uint32_t renderInstanceId) {
+                        return entitySpawner_ ? entitySpawner_->kitWorldEffectScale(renderInstanceId) : 1.0f;
+                    });
                     svs->setUnitInstanceResolver([this](uint64_t guid) -> uint32_t {
                         return gameHandler ? gameHandler->resolveUnitRenderInstance(guid) : 0;
                     });

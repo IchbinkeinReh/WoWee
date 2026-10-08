@@ -362,7 +362,7 @@ void SpellHandler::triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint
                                 owner_.resolveUnitRenderInstance(casterGuid));
 }
 
-void SpellHandler::triggerImpactVisual(uint32_t spellId, uint64_t targetGuid) {
+void SpellHandler::triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, uint64_t casterGuid) {
     LOG_INFO("SpellVisual: triggerImpactVisual spellId=", spellId, " targetGuid=0x", std::hex, targetGuid, std::dec);
     auto* renderer = owner_.services().renderer;
     if (!renderer) return;
@@ -373,8 +373,9 @@ void SpellHandler::triggerImpactVisual(uint32_t spellId, uint64_t targetGuid) {
     glm::vec3 targetPos;
     if (!resolveUnitPosition(targetGuid, targetPos)) return;
     LOG_INFO("SpellVisual: triggerImpactVisual visualId=", visualId, " pos=(", targetPos.x, ",", targetPos.y, ",", targetPos.z, ")");
+    // 0x00801f10: the CasterImpactKit on the caster, else the TargetImpactKit.
     svs->playSpellVisual(visualId, targetPos, /*useImpactKit=*/true,
-                         owner_.resolveUnitRenderInstance(targetGuid));
+                         owner_.resolveUnitRenderInstance(targetGuid), targetGuid == casterGuid);
 }
 
 void SpellHandler::launchRangedWeaponProjectile(uint32_t spellId, uint64_t targetGuid) {
@@ -445,7 +446,8 @@ void SpellHandler::launchRangedWeaponProjectile(uint32_t spellId, uint64_t targe
 // names one too. The impact kit waits for the missile: on the target it flew
 // to, or for a ground missile on everything it hit (FUN_00700c80 hands the
 // hit list to it).
-std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data, uint32_t visualId) {
+std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data, uint32_t visualId,
+                                                       bool* flewToPlace) {
     namespace sm = rendering::spell_missile;
     using MissileEnd = rendering::SpellVisualSystem::MissileEnd;
     std::vector<uint64_t> carried;
@@ -513,8 +515,10 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
             if (unitEnd(guid, end)) impacts.push_back(end);
         }
         if (impacts.empty()) impacts.push_back(to);
-        if (svs->launchSpellMissile(visualId, speed, from, to, std::move(impacts), trajectory))
+        if (svs->launchSpellMissile(visualId, speed, from, to, std::move(impacts), trajectory)) {
             carried = data.hitTargets;
+            if (flewToPlace) *flewToPlace = true;
+        }
         break;
     }
     case sm::Targeting::None:
@@ -2350,10 +2354,23 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             }
             // Impact visual at each hit target - when a missile carries it,
             // on the missile's arrival instead.
-            const std::vector<uint64_t> carried = launchSpellMissiles(data, visualId);
+            bool flewToPlace = false;
+            const std::vector<uint64_t> carried = launchSpellMissiles(data, visualId, &flewToPlace);
+            // A cast at a place (target flag 0x40) plays its area kits there;
+            // the ImpactAreaKit as its missile lands where one flies
+            // (0x0080e1b0, 0x00700e20).
+            if ((data.targetFlags & 0x40u) && data.hasDestLocation) {
+                if (auto* renderer = owner_.services().renderer) {
+                    if (auto* svs = renderer->getSpellVisualSystem())
+                        svs->playSpellAreaKits(
+                            visualId,
+                            core::coords::canonicalToRender(glm::vec3(data.destX, data.destY, data.destZ)),
+                            flewToPlace);
+                }
+            }
             for (const auto& tgt : data.hitTargets) {
                 if (tgt != 0 && std::find(carried.begin(), carried.end(), tgt) == carried.end()) {
-                    triggerImpactVisual(data.spellId, tgt);
+                    triggerImpactVisual(data.spellId, tgt, data.casterUnit);
                 }
             }
         }
@@ -4197,9 +4214,11 @@ void SpellHandler::handlePlaySpellVisual(network::Packet& packet) {
         glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
         spawnPos = core::coords::canonicalToRender(canonical);
     }
+    // The packet names a SpellVisualKit, played on the unit as type 1
+    // (0x008006c0).
     if (auto* sv = renderer->getSpellVisualSystem())
-        sv->playSpellVisual(visualId, spawnPos, /*useImpactKit=*/false,
-                            owner_.resolveUnitRenderInstance(casterGuid));
+        sv->playKit(visualId, rendering::spell_kit::KitType::Cast, spawnPos,
+                    owner_.resolveUnitRenderInstance(casterGuid));
 }
 
 void SpellHandler::handleSpellModifier(network::Packet& packet, bool isFlat) {

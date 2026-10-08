@@ -17,18 +17,116 @@
 
 namespace wowee::rendering::spell_kit {
 
-/// The kinds 0x00745230 switches on (the request's +8).
+/// The kinds 0x00745230 switches on (the request's +8), by who asks.
 enum class KitType : uint32_t {
-    Precast = 0,
+    PlayImpact = 0,  ///< SMSG_PLAY_SPELL_IMPACT's kit (0x00800610)
+    /// A cast kit (0x0080e1b0), a unit's impact kit (0x00801f10, 0x00700e20)
+    /// and SMSG_PLAY_SPELL_VISUAL's kit (0x008006c0).
     Cast = 1,
-    State = 2,        ///< an aura's StateKit (0x00724820)
-    Impact = 3,
-    StateDone = 8,    ///< an aura's StateDoneKit as it goes (0x0071e930)
+    State = 2,       ///< an aura's StateKit (0x00724820)
+    Area = 3,        ///< an area kit at a place (0x0080e1b0, 0x00700e20)
+    Precast = 4,     ///< the PrecastKit while the cast runs (0x007fa2e0)
+    StateDone = 8,   ///< an aura's StateDoneKit as it goes (0x0071e930)
 };
 
 /// Whether a kit's models stay until removed: a state kit's callback
 /// (0x007449c0) loops them, the others' (0x00744870) play them once.
 constexpr bool kitLoops(KitType type) { return type == KitType::State; }
+
+/// How a kit's model plays, by the callback 0x00745230 gives it.
+enum class KitModelLife {
+    Once,    ///< 0x00744870: its Stand once, then its Decay where it has one, then gone
+    Repeat,  ///< 0x007435a0: its animation again each time it ends, until removed
+    Hold,    ///< 0x007449c0: its Stand once, then its Hold (or Stand) until removed
+};
+constexpr KitModelLife kitModelLife(KitType type) {
+    switch (type) {
+        case KitType::State: return KitModelLife::Hold;
+        case KitType::Precast: return KitModelLife::Repeat;
+        default: return KitModelLife::Once;
+    }
+}
+
+/// Which of a kit's models a model is, as 0x00745230 treats it.
+enum class KitModelKind : uint8_t {
+    Head,       ///< HeadEffect (+0x0c), played first and by every kit
+    Base,       ///< BaseEffect (+0x14)
+    Column,     ///< the other model columns
+    World,      ///< WorldEffect (+0x38)
+    AttachRow,  ///< a SpellVisualKitModelAttach row (0x007fa9f0)
+};
+
+/// Where a kit's model goes.
+enum class KitModelPlace {
+    None,        ///< not played
+    Attachment,  ///< on the unit at its attachment (0x00744790)
+    AtUnit,      ///< in the world where the unit stands (0x006f7c40, flag 0x200)
+    AtPlace,     ///< in the world at the place the request names (+0x0c)
+};
+
+/// 0x00745230: an area kit (3, 7: flag 0x2000) plays its HeadEffect and its
+/// WorldEffect, and its BaseEffect and model-attach rows only at a place it
+/// was given; every other kit plays each model, at the place where it has
+/// one, else on the unit - at the model's attachment, or where the unit
+/// stands for the WorldEffect and a row without an attachment.
+constexpr KitModelPlace kitModelPlace(KitType type, KitModelKind kind, int32_t attachment, bool hasPlace) {
+    const bool area = type == KitType::Area || static_cast<uint32_t>(type) == 7;
+    if (area && kind != KitModelKind::Head && kind != KitModelKind::World) {
+        const bool atPlace = kind == KitModelKind::Base || kind == KitModelKind::AttachRow;
+        return atPlace && hasPlace ? KitModelPlace::AtPlace : KitModelPlace::None;
+    }
+    if (hasPlace) return KitModelPlace::AtPlace;
+    if (kind == KitModelKind::World || attachment < 0) return KitModelPlace::AtUnit;
+    return KitModelPlace::Attachment;
+}
+
+/// 0x006f7950: a unit's size for the effects it places in the world - 0.3
+/// of the narrower side of its model's box (the M2 header's +0xa0), at least
+/// 1, times its CreatureModelData WorldEffectScale (+0x5c).
+inline float unitWorldEffectSize(float worldEffectScale, const glm::vec3& boxMin, const glm::vec3& boxMax) {
+    float extent = boxMax.y - boxMin.y;
+    if (boxMax.x - boxMin.x < extent) extent = boxMax.x - boxMin.x;
+    const float size = extent * 0.3f;
+    return (size <= 1.0f ? 1.0f : size) * worldEffectScale;
+}
+
+/// 0x006f8ae0: a world-placed kit model's scale - the unit's size and scale
+/// where it stands at the unit (`unitSize`, 1 at a place), times the
+/// effect's Scale, held within its allowed scales; 1 where that is not
+/// above 0.
+constexpr float worldKitModelScale(float unitSize, float effectScale, float minScale, float maxScale) {
+    float scale = unitSize * effectScale;
+    if (scale < minScale) scale = minScale;
+    else if (!(scale < maxScale)) scale = maxScale;
+    return scale > 0.0f ? scale : 1.0f;
+}
+
+/// 0x006f8ae0 with 0x006f84f0: a world-placed kit model's transform - at
+/// `position`, turned to `facing` about Z, a model-attach row's offset and
+/// turn (`local`) taken in that facing, at `scale`.
+inline glm::mat4 worldKitModelMatrix(const glm::vec3& position, float facing, const glm::mat4& local, float scale) {
+    glm::mat4 m = glm::translate(glm::mat4(1.0f), position);
+    m = glm::rotate(m, facing, glm::vec3(0.0f, 0.0f, 1.0f));
+    return m * local * glm::scale(glm::mat4(1.0f), glm::vec3(scale));
+}
+
+/// SpellVisual's kits for a cast's targets (0x00800d00): CasterImpactKit
+/// (+0x38) on the caster, TargetImpactKit (+0x3c) on any other, each the
+/// ImpactKit (+0x0c) where the visual has none.
+constexpr uint32_t impactKitFor(bool onCaster, uint32_t impactKit, uint32_t casterImpactKit, uint32_t targetImpactKit) {
+    const uint32_t kit = onCaster ? casterImpactKit : targetImpactKit;
+    return kit != 0 ? kit : impactKit;
+}
+
+/// One-shot timing (0x00744870): when a model's Stand has run once it plays
+/// its Decay, where it has one, and goes when that ends.
+struct OnceTiming {
+    float switchAt = 0.0f;  ///< seconds: the Stand's end
+    bool decays = false;    ///< then its Decay
+};
+constexpr OnceTiming onceTiming(float standMs, bool hasDecay) {
+    return OnceTiming{.switchAt = standMs * 0.001f, .decays = hasDecay};
+}
 
 /// A model column of SpellVisualKit and the M2 attachment 0x00745230 hangs
 /// it on (0x00744790's first argument), in the order it plays them.
@@ -60,6 +158,7 @@ inline glm::mat4 modelAttachMatrix(const glm::vec3& offset, float yaw, float pit
     if (roll != 0.0f) m = glm::rotate(m, roll, glm::vec3(1.0f, 0.0f, 0.0f));
     return m;
 }
+/// 0x006f84f0: where a SpellVisualKitModelAttach row puts its model in its
 
 /// SpellVisualKit Flags (+0x94) 0x20: a state kit's model plays its Stand
 /// rather than its Hold (0x007449c0).

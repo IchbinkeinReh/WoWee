@@ -241,6 +241,9 @@ public:
     /// The unit's CreatureModelData AttachedEffectScale (+0x60), which sizes
     /// every kit model hung on it (0x006f8c50); 1 when it has none.
     float kitAttachedEffectScale(uint32_t renderInstanceId) const;
+    /// Its WorldEffectScale (+0x5c), which sizes the kit models it places
+    /// in the world (0x006f7950).
+    float kitWorldEffectScale(uint32_t renderInstanceId) const;
     /// Whether another unit shows its SpellVisual Flags 8 state kits
     /// (0x00720400): idle, its weapons away and casting nothing.
     bool unarmedKitsShown(uint64_t guid) const;
@@ -373,6 +376,9 @@ public:
     // Creature M2 sync loader (used by spawnPlayerCharacter in Application)
 
 private:
+    /// A CreatureModelData float of the unit an instance draws, 1 where
+    /// it has none.
+    float kitModelDataScale(uint32_t renderInstanceId, const char* column) const;
     // Dependencies (non-owning)
     rendering::Renderer* renderer_;
     pipeline::AssetManager* assetManager_;

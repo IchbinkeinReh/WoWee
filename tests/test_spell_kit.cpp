@@ -172,3 +172,68 @@ TEST_CASE("a kit's colour fade holds, then fades to white", "[spell_kit]") {
     // A whole alpha takes the colour outright, keeping the alpha it had.
     CHECK(sk::lerpColour(0x80FFFFFFu, 0xFF102030u, 0xff) == 0x80102030u);
 }
+
+TEST_CASE("0x00745230 places a kit's models by the kit's type", "[spell_kit]") {
+    using sk::KitModelKind;
+    using sk::KitModelPlace;
+    using sk::KitType;
+    // A cast or impact kit on a unit: columns at their attachments, the
+    // WorldEffect and an attachment-less row where the unit stands.
+    CHECK(sk::kitModelPlace(KitType::Cast, KitModelKind::Column, 21, false) == KitModelPlace::Attachment);
+    CHECK(sk::kitModelPlace(KitType::Cast, KitModelKind::Base, 19, false) == KitModelPlace::Attachment);
+    CHECK(sk::kitModelPlace(KitType::Precast, KitModelKind::World, -1, false) == KitModelPlace::AtUnit);
+    CHECK(sk::kitModelPlace(KitType::Cast, KitModelKind::AttachRow, -1, false) == KitModelPlace::AtUnit);
+    CHECK(sk::kitModelPlace(KitType::Cast, KitModelKind::AttachRow, 0, false) == KitModelPlace::Attachment);
+    // Given a place, every model goes there.
+    CHECK(sk::kitModelPlace(KitType::Cast, KitModelKind::Column, 22, true) == KitModelPlace::AtPlace);
+    // An area kit (flag 0x2000): its head and world effects, and its base
+    // and rows only at a place.
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::Head, 20, false) == KitModelPlace::Attachment);
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::World, -1, false) == KitModelPlace::AtUnit);
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::Base, 19, false) == KitModelPlace::None);
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::Base, 19, true) == KitModelPlace::AtPlace);
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::AttachRow, 5, true) == KitModelPlace::AtPlace);
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::Column, 21, true) == KitModelPlace::None);
+}
+
+TEST_CASE("a kit's models play once, repeat for the cast, or hold for the aura", "[spell_kit]") {
+    CHECK(sk::kitModelLife(sk::KitType::Precast) == sk::KitModelLife::Repeat);
+    CHECK(sk::kitModelLife(sk::KitType::State) == sk::KitModelLife::Hold);
+    for (auto type : {sk::KitType::PlayImpact, sk::KitType::Cast, sk::KitType::Area, sk::KitType::StateDone})
+        CHECK(sk::kitModelLife(type) == sk::KitModelLife::Once);
+    // 0x00744870: the Stand runs once, then the Decay where there is one.
+    const auto timing = sk::onceTiming(1500.0f, true);
+    CHECK(timing.switchAt == Catch::Approx(1.5f));
+    CHECK(timing.decays);
+    CHECK_FALSE(sk::onceTiming(800.0f, false).decays);
+}
+
+TEST_CASE("a unit's impact kit is its caster's or its target's", "[spell_kit]") {
+    // 0x00800d00: CasterImpactKit on the caster, TargetImpactKit on any
+    // other, the ImpactKit where the visual lacks one.
+    CHECK(sk::impactKitFor(true, 10, 11, 12) == 11);
+    CHECK(sk::impactKitFor(false, 10, 11, 12) == 12);
+    CHECK(sk::impactKitFor(true, 10, 0, 12) == 10);
+    CHECK(sk::impactKitFor(false, 10, 11, 0) == 10);
+}
+
+TEST_CASE("a kit model placed in the world is sized by the unit and its effect", "[spell_kit]") {
+    // 0x006f7950: 0.3 of the narrower side of the model's box, at least 1.
+    CHECK(sk::unitWorldEffectSize(1.0f, glm::vec3(-1.0f), glm::vec3(1.0f)) == Catch::Approx(1.0f));
+    CHECK(sk::unitWorldEffectSize(1.0f, glm::vec3(-5.0f, -10.0f, 0.0f), glm::vec3(5.0f, 10.0f, 3.0f)) ==
+          Catch::Approx(3.0f));
+    CHECK(sk::unitWorldEffectSize(0.5f, glm::vec3(-5.0f, -10.0f, 0.0f), glm::vec3(5.0f, 10.0f, 3.0f)) ==
+          Catch::Approx(1.5f));
+    // 0x006f8ae0: times the effect's Scale, within its allowed scales.
+    CHECK(sk::worldKitModelScale(1.0f, 1.0f, 0.1f, 10.0f) == Catch::Approx(1.0f));
+    CHECK(sk::worldKitModelScale(3.0f, 2.0f, 0.1f, 4.0f) == Catch::Approx(4.0f));
+    CHECK(sk::worldKitModelScale(1.0f, 0.01f, 0.5f, 4.0f) == Catch::Approx(0.5f));
+    // No allowed scales at all: 0, which is taken as 1.
+    CHECK(sk::worldKitModelScale(2.0f, 1.0f, 0.0f, 0.0f) == Catch::Approx(1.0f));
+    // Its offset turns with the facing and is not scaled.
+    const glm::mat4 local = sk::modelAttachMatrix(glm::vec3(1.0f, 0.0f, 0.0f), 0.0f, 0.0f, 0.0f);
+    const glm::mat4 m = sk::worldKitModelMatrix(glm::vec3(10.0f, 20.0f, 0.0f), glm::radians(90.0f), local, 3.0f);
+    CHECK(m[3].x == Catch::Approx(10.0f).margin(1e-5));
+    CHECK(m[3].y == Catch::Approx(21.0f));
+    CHECK(glm::length(glm::vec3(m[0])) == Catch::Approx(3.0f));
+}

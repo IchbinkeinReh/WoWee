@@ -410,11 +410,13 @@ private:
     // Play the cast/precast visual effect at the caster's position.
     void triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint32_t castTimeMs = 0);
     // Play the impact visual effect at the target's position.
-    void triggerImpactVisual(uint32_t spellId, uint64_t targetGuid);
+    void triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, uint64_t casterGuid);
     void launchRangedWeaponProjectile(uint32_t spellId, uint64_t targetGuid);
     // Send the spell's missiles, as the client does from SMSG_SPELL_GO.
     // Returns the hit targets whose impact now waits for a missile to land.
-    std::vector<uint64_t> launchSpellMissiles(const SpellGoData& data, uint32_t visualId);
+    /// flewToPlace: set when a missile flies to the cast's place.
+    std::vector<uint64_t> launchSpellMissiles(const SpellGoData& data, uint32_t visualId,
+                                              bool* flewToPlace = nullptr);
     void refreshRestorationFromPlayerAuras();
     void stopRestorationPresentation();
 

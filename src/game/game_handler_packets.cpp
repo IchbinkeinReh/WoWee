@@ -2394,15 +2394,15 @@ void GameHandler::registerRemainingOpcodes() {
             if (playSoundCallback_) playSoundCallback_(soundId);
         }
     };
-    // uint64 targetGuid + uint32 visualId (same structure as SMSG_PLAY_SPELL_VISUAL)
+    // uint64 unit + uint32 SpellVisualKit id: the kit on the unit, type 0
+    // (0x00800610).
     dispatchTable_[Opcode::SMSG_PLAY_SPELL_IMPACT] = [this](network::Packet& packet) {
-        // uint64 targetGuid + uint32 visualId (same structure as SMSG_PLAY_SPELL_VISUAL)
         if (!packet.hasRemaining(12)) {
             packet.skipAll(); return;
         }
         uint64_t impTargetGuid = packet.readUInt64();
-        uint32_t impVisualId   = packet.readUInt32();
-        if (impVisualId == 0) return;
+        uint32_t kitId = packet.readUInt32();
+        if (kitId == 0) return;
         auto* renderer = services_.renderer;
         if (!renderer) return;
         glm::vec3 spawnPos;
@@ -2414,8 +2414,9 @@ void GameHandler::registerRemainingOpcodes() {
             glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
             spawnPos = core::coords::canonicalToRender(canonical);
         }
-        if (auto* sv = renderer->getSpellVisualSystem()) sv->playSpellVisual(impVisualId, spawnPos, /*useImpactKit=*/true,
-                                                                       resolveUnitRenderInstance(impTargetGuid));
+        if (auto* sv = renderer->getSpellVisualSystem())
+            sv->playKit(kitId, rendering::spell_kit::KitType::PlayImpact, spawnPos,
+                        resolveUnitRenderInstance(impTargetGuid));
     };
     // SMSG_READ_ITEM_OK - moved to InventoryHandler::registerOpcodes
     // SMSG_READ_ITEM_FAILED - moved to InventoryHandler::registerOpcodes

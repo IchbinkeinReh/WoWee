@@ -714,6 +714,14 @@ bool EntitySpawner::unarmedKitsShown(uint64_t guid) const {
 }
 
 float EntitySpawner::kitAttachedEffectScale(uint32_t renderInstanceId) const {
+    return kitModelDataScale(renderInstanceId, "AttachedEffectScale");
+}
+
+float EntitySpawner::kitWorldEffectScale(uint32_t renderInstanceId) const {
+    return kitModelDataScale(renderInstanceId, "WorldEffectScale");
+}
+
+float EntitySpawner::kitModelDataScale(uint32_t renderInstanceId, const char* column) const {
     if (!gameHandler_ || !assetManager_ || renderInstanceId == 0) return 1.0f;
     uint64_t guid = 0;
     if (renderer_ && renderer_->getCharacterInstanceId() == renderInstanceId) guid = gameHandler_->getPlayerGuid();
@@ -730,7 +738,7 @@ float EntitySpawner::kitAttachedEffectScale(uint32_t renderInstanceId) const {
     const auto* layouts = pipeline::getActiveDBCLayout();
     const auto* displayLayout = layouts ? layouts->getLayout("CreatureDisplayInfo") : nullptr;
     const auto* modelLayout = layouts ? layouts->getLayout("CreatureModelData") : nullptr;
-    const uint32_t scaleField = modelLayout ? modelLayout->tryField("AttachedEffectScale") : 0xFFFFFFFFu;
+    const uint32_t scaleField = modelLayout ? modelLayout->tryField(column) : 0xFFFFFFFFu;
     const int32_t displayRow = displays ? displays->findRecordById(displayId) : -1;
     if (displayRow < 0 || !models || scaleField >= models->getFieldCount()) return 1.0f;
     const int32_t modelRow = models->findRecordById(

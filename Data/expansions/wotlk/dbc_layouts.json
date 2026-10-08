@@ -103,6 +103,7 @@
     "ModelScale": 4,
     "MountHeight": 16,
     "GeoBoxMinX": 17,
+    "WorldEffectScale": 23,
     "AttachedEffectScale": 24
   },
   "Emotes": {
@@ -379,11 +380,14 @@
     "ID": 0
   },
   "SpellVisual": {
+    "CasterImpactKit": 14,
     "CastKit": 2,
     "Flags": 13,
     "HasMissile": 7,
     "ID": 0,
+    "ImpactAreaKit": 24,
     "ImpactKit": 3,
+    "InstantAreaKit": 23,
     "MissileAttachment": 16,
     "MissileCastOffsetX": 26,
     "MissileCastOffsetY": 27,
@@ -396,7 +400,8 @@
     "MissileSound": 11,
     "PrecastKit": 1,
     "StateDoneKit": 5,
-    "StateKit": 4
+    "StateKit": 4,
+    "TargetImpactKit": 15
   },
   "SpellVisualEffectName": {
     "FilePath": 2,
