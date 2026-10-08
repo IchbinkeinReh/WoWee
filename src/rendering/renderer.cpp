@@ -274,6 +274,13 @@ bool Renderer::createPerFrameResources() {
     // same function rebuilds them when the resolution setting changes.
     // The quality level's side is at most 4096, which every device makes; two
     // cascades side by side are twice that across, which not every one does.
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(vkCtx->getPhysicalDevice(), &props);
+        shadowAtlasMaxWidth_ = std::min({props.limits.maxImageDimension2D,
+                                         props.limits.maxFramebufferWidth,
+                                         props.limits.maxViewportDimensions[0]});
+    }
     SHADOW_MAP_SIZE = std::min(SHADOW_MAP_SIZE, maxShadowMapSize(shadowCascadeCount_));
     if (!createShadowMapImages()) return false;
 
@@ -4748,9 +4755,10 @@ glm::mat4 Renderer::computeLightSpaceMatrix() {
                                          kShadowNearPlane, kShadowFarPlane);
         lightProj[1][1] *= -1.0f; // Vulkan Y-flip for shadow pass
 
-        // Its tile: left to right, then the row below.
-        const uint32_t tileX = static_cast<uint32_t>(c % 2) * tileSide;
-        const uint32_t tileY = static_cast<uint32_t>(c / 2) * tileSide;
+        // Its tile: left to right, in one row or two (shadowAtlasInRow).
+        const bool inRow = shadowAtlasInRow(cascades, tileSide);
+        const uint32_t tileX = static_cast<uint32_t>(inRow ? c : c % 2) * tileSide;
+        const uint32_t tileY = static_cast<uint32_t>(inRow ? 0 : c / 2) * tileSide;
 
         // Clip space to the tile's atlas UV, the way the viewport puts it
         // there: x from -1..1 to tileX..tileX+side over the atlas width, and

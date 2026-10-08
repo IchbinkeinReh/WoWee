@@ -425,8 +425,24 @@ private:
     int pendingShadowCascades_ = 0;
     /// The atlas the tiles are laid out in: N by N for one cascade, 2N by N
     /// for two and 2N by 2N for three, the fourth quarter unused.
-    static uint32_t shadowAtlasWidth(int cascades, uint32_t tile) { return cascades > 1 ? tile * 2 : tile; }
-    static uint32_t shadowAtlasHeight(int cascades, uint32_t tile) { return cascades > 2 ? tile * 2 : tile; }
+    /// The tiles lie in one row when the device takes an atlas that wide, and
+    /// two across otherwise. Three in a row leave no quarter of the atlas
+    /// empty: at 8192 a tile that quarter was 256 MB cleared every frame for
+    /// nothing, 0.6 ms of a 2070's bandwidth, and held twice over.
+    bool shadowAtlasInRow(int cascades, uint32_t tile) const {
+        return static_cast<uint64_t>(tile) * static_cast<uint32_t>(cascades) <= shadowAtlasMaxWidth_;
+    }
+    uint32_t shadowAtlasWidth(int cascades, uint32_t tile) const {
+        if (shadowAtlasInRow(cascades, tile)) return tile * static_cast<uint32_t>(cascades);
+        return cascades > 1 ? tile * 2 : tile;
+    }
+    uint32_t shadowAtlasHeight(int cascades, uint32_t tile) const {
+        if (shadowAtlasInRow(cascades, tile)) return tile;
+        return cascades > 2 ? tile * 2 : tile;
+    }
+    /// The widest atlas the device draws into: image, framebuffer and
+    /// viewport limits, read at initialisation.
+    uint32_t shadowAtlasMaxWidth_ = 4096;
     /// The largest tile allowed with two or more cascades: an 8192 tile is
     /// already a 16384 by 8192 atlas, 512 MB, twice over for the frames in
     /// flight.
