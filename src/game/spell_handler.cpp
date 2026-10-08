@@ -2038,6 +2038,8 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     };
     const SpellCastType castType = classifyCast(data.targetGuid, data.casterUnit);
     const bool rangedWeaponAttack = spellclass::isRangedWeaponAutoAttack(data.spellId);
+    // 0x00805330: the cast's beginning on the caster (0x007fa2e0).
+    if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
 
     // Track cast bar for any non-player caster
     if (data.casterUnit != owner_.getPlayerGuid() && data.castTime > 0 && !rangedWeaponAttack) {
@@ -2127,6 +2129,8 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     SpellGoData data;
     if (!owner_.getPacketParsers()->parseSpellGo(packet, data)) return;
     const bool rangedWeaponAttack = spellclass::isRangedWeaponAutoAttack(data.spellId);
+    // 0x00805330 for a cast that had no start (instant), as for one that had.
+    if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
 
     if (data.casterUnit == owner_.getPlayerGuid()) {
         owner_.loadSpellNameCache();

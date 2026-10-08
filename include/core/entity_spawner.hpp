@@ -192,6 +192,18 @@ public:
     /// The BehaviorID (AnimationData +0x18) of the animation an instance
     /// plays, or kNoAnimationBehavior (0x00721ed0's reading of it).
     uint32_t animationBehavior(uint32_t instanceId) const;
+    /// The animation an instance plays as 0x00738180 reads it: its id, and
+    /// its AnimationData WeaponFlags (+8) and BehaviorID (+0x18).
+    struct AnimationRecord {
+        uint32_t animId = 0xFFFFFFFFu;
+        bool known = false;
+        uint32_t weaponFlags = 0;
+        uint32_t behavior = kNoAnimationBehavior;
+    };
+    AnimationRecord animationRecord(uint32_t instanceId) const;
+    /// A display's CreatureModelData Flags (+4); nothing when a record is
+    /// missing (0x00717a20).
+    std::optional<uint32_t> creatureModelFlags(uint32_t displayId) const;
 
     /// Every unit's and corpse's blob shadow for this frame (0x00793980): a
     /// corpse that is not bones by the bounds of its model's sequence; a unit by its

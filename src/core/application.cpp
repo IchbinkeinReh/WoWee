@@ -2260,28 +2260,20 @@ void Application::setState(AppState newState) {
                     if (renderer) {
                         // Ranged auto-attack spells: Auto Shot (75), Shoot (5019), Throw (2764)
                         if (game::spellclass::isRangedWeaponAutoAttack(spellId)) {
-                            if (appearanceComposer_ && !appearanceComposer_->isShowingRanged())
-                                appearanceComposer_->showRangedWeapon(true);
                             if (auto* ac = renderer->getAnimationController()) ac->triggerRangedShot();
                         } else if (spellId != 0) {
-                            if (appearanceComposer_ && appearanceComposer_->isShowingRanged())
-                                appearanceComposer_->showRangedWeapon(false);
                             if (auto* ac = renderer->getAnimationController()) ac->triggerSpecialAttack(spellId);
                         } else {
-                            if (appearanceComposer_ && appearanceComposer_->isShowingRanged())
-                                appearanceComposer_->showRangedWeapon(false);
                             if (auto* ac = renderer->getAnimationController()) ac->triggerMeleeSwing();
                         }
                     }
                 });
-                gameHandler->setRangedWeaponSwapCallback([this](bool show) {
-                    if (appearanceComposer_) appearanceComposer_->showRangedWeapon(show);
+                // The player's casts set its sheath state (0x007fa2e0): a
+                // ranged spell such as Auto Shot draws the ranged weapon.
+                gameHandler->setSpellCastBeginCallback([this](uint64_t caster, uint32_t spellId) {
+                    if (appearanceComposer_ && gameHandler && caster == gameHandler->getPlayerGuid())
+                        appearanceComposer_->onSpellCastBegin(spellId);
                 });
-                if (renderer && renderer->getAnimationController()) {
-                    renderer->getAnimationController()->setRangedShotCompleteCallback([this]() {
-                        if (appearanceComposer_) appearanceComposer_->showRangedWeapon(false);
-                    });
-                }
                 // The logout countdown finishing is not the end of it: the server
                 // confirms with SMSG_LOGOUT_COMPLETE, and only then does the client
                 // leave. Without this the countdown ran out and nothing happened.
@@ -3747,38 +3739,18 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     if (addonManager_ && addonsLoaded_) {
         addonManager_->update(deltaTime);
     }
-    // Always unsheath on combat engage.
     inGameStep = "auto-unsheathe";
     updateCheckpoint = "in_game: auto-unsheathe";
     if (gameHandler) {
-        const bool autoAttacking = gameHandler->isAutoAttacking();
-        // Keep the attachment state consistent with the ongoing attack, not
-        // just the initial false -> true transition. Z can be pressed after
-        // combat has already started, and pre-WotLK servers briefly send
-        // ATTACKSTOP while the client retains attack intent for a retry.
-        const bool attackWeaponNeeded = autoAttacking || gameHandler->hasAutoAttackIntent();
-        const auto& inventory = gameHandler->getInventory();
-        const auto& mainHand = inventory.getEquipSlot(game::EquipSlot::MAIN_HAND);
-        const auto& offHand = inventory.getEquipSlot(game::EquipSlot::OFF_HAND);
-        const auto& ranged = inventory.getEquipSlot(game::EquipSlot::RANGED);
-        const bool hasOffHandWeapon = !offHand.empty() &&
-            game::isOffHandWeaponInventoryType(offHand.item.inventoryType);
-        const bool hasRangedWeapon = !ranged.empty() &&
-            (ranged.item.inventoryType == game::InvType::RANGED_BOW ||
-             ranged.item.inventoryType == game::InvType::RANGED_GUN ||
-             ranged.item.inventoryType == game::InvType::THROWN);
-        const bool hasDrawableWeapon = !mainHand.empty() || hasOffHandWeapon || hasRangedWeapon;
-        // Attacking draws the melee weapons (0x00738180 sets melee, with no
-        // sheath animation); the server's field then moves them.
-        if (attackWeaponNeeded && hasDrawableWeapon && appearanceComposer_ &&
-            appearanceComposer_->sheathState() == core::SheathState::Unarmed) {
+        // Pre-WotLK servers briefly send ATTACKSTOP while the client keeps
+        // its attack intent for a retry: that is no new attack.
+        const bool attackWeaponNeeded = gameHandler->isAutoAttacking() || gameHandler->hasAutoAttackIntent();
+        // Starting an attack draws melee (0x006e2610, with no sheath
+        // animation).
+        if (attackWeaponNeeded && !wasAutoAttacking_ && appearanceComposer_) {
             appearanceComposer_->requestSheathState(core::SheathState::Melee);
         }
-        // Swap back to melee weapon when auto-attack stops
-        if (!autoAttacking && wasAutoAttacking_ && appearanceComposer_ && appearanceComposer_->isShowingRanged()) {
-            appearanceComposer_->showRangedWeapon(false);
-        }
-        wasAutoAttacking_ = autoAttacking;
+        wasAutoAttacking_ = attackWeaponNeeded;
     }
 
     // Weapons go away on entering the water. You cannot swim with a sword out,

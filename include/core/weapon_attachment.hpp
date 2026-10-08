@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace wowee::core {
 
@@ -227,6 +228,95 @@ constexpr SheathState toggledSheathState(SheathState current, bool hasMainOrOff,
         case SheathState::Melee: return rangedDrawable ? SheathState::Ranged : SheathState::Unarmed;
         default: return SheathState::Unarmed;
     }
+}
+
+/// 0x0071d2e0: the ranged behaviors (AnimationData +0x18) - shooting,
+/// loading and the ranged ready stances.
+constexpr bool rangedBehavior(uint32_t behavior) {
+    switch (behavior) {
+        case 0x2e: case 0x31: case 0x69: case 0x6a: case 0x6b: case 0x6c: case 0x6d: case 0x6e:
+        case 0x6f: case 0x70:
+            return true;
+        default: return false;
+    }
+}
+
+/// What 0x00738180 reads once the unit's animation has been chosen.
+struct AnimationSheathInput {
+    SheathState current = SheathState::Unarmed;  ///< the client's own, +0xb5c
+    uint32_t animId = 0xFFFFFFFFu;                ///< the model's, -1 for none
+    bool animKnown = false;                       ///< AnimationData has a row for it
+    uint32_t weaponFlags = 0;                     ///< AnimationData +8
+    uint32_t behavior = kNoAnimationBehavior;     ///< AnimationData +0x18
+    bool keepWeapons = false;                     ///< its argument
+    bool casting = false;                         ///< a spell on the unit, +0xa60
+    bool castSheathes = false;  ///< Spell.dbc has it, without Attributes 0x40000
+    bool attacking = false;     ///< a melee target, +0xa20
+    bool activePlayer = false;
+    SheathState field = SheathState::Unarmed;     ///< UNIT_FIELD_BYTES_2 byte 0
+};
+
+/// 0x00738180: the state the animation, cast or attack sets (0x00736d30
+/// is called with it), or none.
+/// - An animation with WeaponFlags 4 puts the weapons away.
+/// - In the ranged state only an animation that is no load (105, 106, 112)
+///   nor ranged behavior moves it: WeaponFlags 0x10 away, 0x20 melee.
+/// - Otherwise a cast puts them away unless its spell has Attributes
+///   0x40000; attacking in a combat behavior (0x0071d590) draws melee;
+///   WeaponFlags 0x10 away, 0x20 melee; attacking melee; and any unit but
+///   the active player takes the field's state.
+constexpr std::optional<SheathState> animationSheathState(const AnimationSheathInput& in) {
+    const uint32_t wf = in.animKnown ? in.weaponFlags : 0;
+    if ((wf & 4) != 0 && !in.keepWeapons) return SheathState::Unarmed;
+    if (in.current == SheathState::Ranged) {
+        if (in.animId == 105 || in.animId == 106 || in.animId == 112) return std::nullopt;
+        if (rangedBehavior(in.behavior) || !in.animKnown) return std::nullopt;
+        if ((wf & 0x10) != 0) return SheathState::Unarmed;
+        if ((wf & 0x20) != 0) return SheathState::Melee;
+        return std::nullopt;
+    }
+    if (in.casting) {
+        if (in.castSheathes) return SheathState::Unarmed;
+        return std::nullopt;
+    }
+    if (in.attacking && emptyHandBehavior(in.behavior)) return SheathState::Melee;
+    if ((wf & 0x10) != 0 && !in.keepWeapons) return SheathState::Unarmed;
+    if ((wf & 0x20) != 0 || in.attacking) return SheathState::Melee;
+    if (!in.activePlayer && in.field != in.current) return in.field;
+    return std::nullopt;
+}
+
+/// 0x00737aa0, on a change of UNIT_FIELD_BYTES_2 byte 0: every unit but
+/// the active player takes the new state; the active player only when it
+/// was in the old one (it has moved on by itself otherwise).
+constexpr std::optional<SheathState> fieldSheathChange(SheathState current, SheathState oldField,
+                                                       SheathState newField, bool activePlayer) {
+    if (activePlayer && current != oldField) return std::nullopt;
+    return newField;
+}
+
+/// What 0x007fa2e0 (a spell's cast beginning on the unit) and 0x0073a6c0
+/// (a visual kit on it) read of the spell.
+struct SpellSheathInput {
+    bool known = false;                 ///< Spell.dbc has it
+    uint32_t attributes = 0;            ///< Spell.dbc Attributes
+    int32_t missileModel = 0;           ///< SpellVisual +0x20 with +0x1c set
+    bool kitWeaponEffect = false;       ///< a kit's Left/RightWeaponEffect
+    bool modelHoldsEffects = true;      ///< CreatureModelData +4 without 0x10
+};
+
+/// 0x007fa2e0, with 0x0073a6c0 for the kit its visual plays: a ranged
+/// spell (Attributes 2) draws the ranged weapon; a kit with a weapon effect
+/// puts the weapons away unless the spell has 0x40000; a visual that throws
+/// the weapon (missile model -1 or -2) draws melee. The last call wins.
+constexpr std::optional<SheathState> spellSheathState(const SpellSheathInput& in) {
+    std::optional<SheathState> out;
+    if (in.known && (in.attributes & 2u) != 0) out = SheathState::Ranged;
+    if (in.kitWeaponEffect && in.modelHoldsEffects && (!in.known || (in.attributes & 0x40000u) == 0)) {
+        out = SheathState::Unarmed;
+    }
+    if (in.missileModel == -1 || in.missileModel == -2) out = SheathState::Melee;
+    return out;
 }
 
 /// 0x004ef840: a shoulder display's first model (ItemDisplayInfo +4, with

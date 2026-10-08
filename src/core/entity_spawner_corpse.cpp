@@ -17,7 +17,7 @@
 
 namespace wowee::core {
 
-std::optional<bool> EntitySpawner::corpseDisplayIsCharacter(uint32_t displayId) const {
+std::optional<uint32_t> EntitySpawner::creatureModelFlags(uint32_t displayId) const {
     if (!assetManager_) return std::nullopt;
     auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
     auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
@@ -30,9 +30,15 @@ std::optional<bool> EntitySpawner::corpseDisplayIsCharacter(uint32_t displayId) 
         displays->getUInt32(static_cast<uint32_t>(displayRow), displayLayout ? (*displayLayout)["ModelID"] : 1);
     const int32_t modelRow = models->findRecordById(modelId);
     if (modelRow < 0) return std::nullopt;
-    // CreatureModelData +4, its Flags: 4 is a model a character component
-    // dresses.
-    return (models->getUInt32(static_cast<uint32_t>(modelRow), 1) & 4u) != 0;
+    // CreatureModelData +4, its Flags.
+    return models->getUInt32(static_cast<uint32_t>(modelRow), 1);
+}
+
+std::optional<bool> EntitySpawner::corpseDisplayIsCharacter(uint32_t displayId) const {
+    // Flag 4 is a model a character component dresses.
+    const auto flags = creatureModelFlags(displayId);
+    if (!flags) return std::nullopt;
+    return (*flags & 4u) != 0;
 }
 
 void EntitySpawner::spawnCorpse(uint64_t guid, const game::CorpseLook& look, float x, float y, float z,

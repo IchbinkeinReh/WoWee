@@ -362,6 +362,7 @@
   "SpellVisual": {
     "CastKit": 2,
     "Flags": 13,
+    "HasMissile": 7,
     "ID": 0,
     "ImpactKit": 3,
     "MissileAttachment": 16,
@@ -388,7 +389,9 @@
     "HeadEffect": 3,
     "ID": 0,
     "LeftHandEffect": 6,
+    "LeftWeaponEffect": 9,
     "RightHandEffect": 7,
+    "RightWeaponEffect": 10,
     "SoundID": 15,
     "SpecialEffect0": 11,
     "SpecialEffect1": 12,

@@ -10,6 +10,8 @@
 #include <vector>
 #include <unordered_set>
 #include <cstdint>
+#include <optional>
+#include <array>
 
 namespace wowee {
 
@@ -70,25 +72,29 @@ public:
     // Equipment weapon loading (reads inventory, attaches weapon M2 models)
     void loadEquippedWeapons();
 
-    /// The local player's sheath state, UNIT_FIELD_BYTES_2 byte 0 - the
-    /// server's, as for every other unit (0x0072dbc0, 0x00731f40).
-    [[nodiscard]] SheathState sheathState() const;
-    /// Asks the server for a sheath state when it is not the current one
-    /// (CMSG_SET_SHEATHED); the weapons move when the field comes back.
-    void requestSheathState(SheathState state);
-    /// The sheath key (0x006e23a0): the next state asked for, and false
-    /// when the player may not change it now or has nothing to change to.
+    /// The local player's sheath state: the client's own (CGUnit_C +0xb5c),
+    /// set by the client and told to the server (0x00736d30), taken from
+    /// UNIT_FIELD_BYTES_2 byte 0 at spawn and when the server moves it
+    /// (0x00737aa0).
+    [[nodiscard]] SheathState sheathState() const { return sheath_; }
+    /// 0x00736d30: sets the state when it changes - the ranged state only
+    /// for a class that may draw a ranged weapon - and tells the server
+    /// (CMSG_SET_SHEATHED) unless `fromServer`.
+    void setSheathState(SheathState state, bool fromServer = false);
+    /// Sets a state as the client asks for it (0x00736d30 with its sending).
+    void requestSheathState(SheathState state) { setSheathState(state); }
+    /// The sheath key (0x006e23a0): the next state, and false when the
+    /// player may not change it now or has nothing to change to.
     bool toggleSheath();
-    /// Re-dresses the weapons when what 0x0072dbc0 reads - the sheath
-    /// state, the disarm bits, the animation's hands - has changed. Once a
-    /// frame.
+    /// A spell's cast beginning on the player (0x007fa2e0, 0x0073a6c0).
+    void onSpellCastBegin(uint32_t spellId);
+    /// Once a frame: the field's changes (0x00737aa0), the animation's,
+    /// cast's and attack's (0x00738180), then the weapons dressed again
+    /// when what 0x0072dbc0 reads - the sheath state, the disarm bits, the
+    /// animation's hands - has changed.
     void updateWeaponsFromFields();
     /// Where the item in a hand is put away; NONE when the hand is empty.
     [[nodiscard]] rendering::SheathSpot sheathSpot(game::EquipSlot slot) const;
-
-    // Ranged weapon swap: temporarily show ranged weapon in right hand
-    void showRangedWeapon(bool show);
-    [[nodiscard]] bool isShowingRanged() const { return showingRanged_; }
 
     // Mining casts temporarily replace the held main-hand model with a pickaxe.
     void showMiningPick(bool show);
@@ -110,8 +116,15 @@ private:
     /// EntitySpawner; the local character had no equivalent at all.
     void loadEquippedHelm(game::Inventory& inventory);
     /// The helm, the shoulders and the three weapons, each where the sheath
-    /// state puts it; `rangedDrawn` is the ranged sheath state.
-    void attachEquippedWeapons(bool rangedDrawn);
+    /// state puts it.
+    void attachEquippedWeapons();
+    /// The player's main hand, off hand and ranged item as 0x0072dbc0
+    /// reads them; `storage` holds them.
+    UnitWeaponItems playerWeaponItems(std::array<UnitWeaponItem, 3>& storage) const;
+    /// ChrClasses +0x24 without 8: the class may draw a ranged weapon.
+    bool classMayDrawRanged() const;
+    /// The field's state for the player, or nothing without the field.
+    std::optional<SheathState> fieldSheathState() const;
 
     // Attach the enchant visual (sharpening-stone glint, weapon glow) of the item in
     // the given equipment slot to the weapon already attached at attachmentId.
@@ -142,11 +155,21 @@ private:
     DressedKey currentDressKey() const;
     /// From ranged to melee since the last dressing (0x00731f40).
     bool rangedJustPutAway_ = false;
-    /// The last state asked for and the state it was asked from: asked
-    /// once until the field changes.
-    uint8_t requestedState_ = 0xFF;
-    uint8_t requestedFrom_ = 0xFF;
-    bool showingRanged_ = false;
+    /// The client's own state and the instance it is kept for: taken from
+    /// the field when the player's model is made (0x0073f660).
+    SheathState sheath_ = SheathState::Melee;
+    uint32_t sheathInstanceId_ = 0;
+    /// The field's state as last seen, for 0x00737aa0.
+    std::optional<SheathState> fieldSheathSeen_;
+    /// What 0x00738180 last ran for; it runs again when the animation, the
+    /// cast or the attack changes.
+    struct AnimationSheathKey {
+        uint32_t animId = 0xFFFFFFFFu;
+        uint32_t castSpellId = 0;
+        bool attacking = false;
+        bool operator==(const AnimationSheathKey&) const = default;
+    };
+    AnimationSheathKey animationSheathKey_;
     bool showingMiningPick_ = false;
     uint32_t miningPickInstanceId_ = 0;
     bool showingFishingPole_ = false;

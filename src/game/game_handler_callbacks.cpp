@@ -3933,6 +3933,21 @@ bool GameHandler::isSpellPassive(uint32_t spellId) const {
     return false;
 }
 
+std::optional<uint32_t> GameHandler::getSpellAttributes(uint32_t spellId) const {
+    if (spellId == 0) return std::nullopt;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return std::nullopt;
+    return it->second.attr;
+}
+
+uint32_t GameHandler::getSpellVisualId(uint32_t spellId) const {
+    if (spellId == 0) return 0;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    return it != spellNameCache_.end() ? it->second.spellVisualId : 0;
+}
+
 uint32_t GameHandler::getSpellSchoolMask(uint32_t spellId) const {
     if (spellHandler_) return spellHandler_->getSpellSchoolMask(spellId);
     return 0;

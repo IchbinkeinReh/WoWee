@@ -396,24 +396,34 @@ void EntitySpawner::despawnAllGameObjects() {
 // --- Methods extracted from Application (with comments preserved) ---
 
 uint32_t EntitySpawner::animationBehavior(uint32_t instanceId) const {
+    return animationRecord(instanceId).behavior;
+}
+
+EntitySpawner::AnimationRecord EntitySpawner::animationRecord(uint32_t instanceId) const {
+    AnimationRecord out;
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     uint32_t animId = 0;
     float time = 0.0f, duration = 0.0f;
     if (!charRenderer || !assetManager_ ||
         !charRenderer->getAnimationState(instanceId, animId, time, duration)) {
-        return kNoAnimationBehavior;
+        return out;
     }
-    // AnimationData +0x18, BehaviorID (0x0071d450); an id not in the table
-    // reads as 0x1fa.
+    out.animId = animId;
+    // AnimationData +8 WeaponFlags and +0x18 BehaviorID (0x0071d450); an
+    // id not in the table reads as behavior 0x1fa.
     if (!animationDataLoaded_) {
         animationDataDbc_ = assetManager_->loadDBCOptional("AnimationData.dbc");
         animationDataLoaded_ = true;
     }
     const auto& dbc = animationDataDbc_;
-    if (!dbc) return kNoAnimationBehavior;
+    if (!dbc) return out;
     const int32_t row = dbc->findRecordById(animId);
-    if (row < 0) return kNoAnimationBehavior;
-    return dbc->getFieldCount() > 6 ? dbc->getUInt32(static_cast<uint32_t>(row), 6) : animId;
+    if (row < 0) return out;
+    const auto r = static_cast<uint32_t>(row);
+    out.known = true;
+    out.weaponFlags = dbc->getFieldCount() > 2 ? dbc->getUInt32(r, 2) : 0;
+    out.behavior = dbc->getFieldCount() > 6 ? dbc->getUInt32(r, 6) : animId;
+    return out;
 }
 
 bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint32_t, 3>& entries,

@@ -707,8 +707,8 @@ public:
     bool isSitting() const { return standState_ >= 1 && standState_ <= 6; }
     bool isDead() const { return standState_ == 7; }
     bool isKneeling() const { return standState_ == 8; }
-    /// Asks the server for a sheath state (CMSG_SET_SHEATHED, 0x00736d30);
-    /// the model follows UNIT_FIELD_BYTES_2 byte 0 when it comes back.
+    /// Tells the server the player's sheath state (CMSG_SET_SHEATHED, as
+    /// 0x00736d30 sends it when the client changes its own).
     void requestSheathState(uint8_t state);
 
     // Display toggles
@@ -1400,9 +1400,10 @@ public:
         return faceCameraProvider_ ? faceCameraProvider_() : getMovementInfo().orientation;
     }
 
-    // Ranged weapon swap callback - show=true: swap to ranged weapon, false: back to melee
-    using RangedWeaponSwapCallback = std::function<void(bool show)>;
-    void setRangedWeaponSwapCallback(RangedWeaponSwapCallback cb) { rangedWeaponSwapCallback_ = std::move(cb); }
+    /// A spell's cast beginning on a unit (SMSG_SPELL_START, or
+    /// SMSG_SPELL_GO), where 0x00805330 calls 0x007fa2e0.
+    using SpellCastBeginCallback = std::function<void(uint64_t casterGuid, uint32_t spellId)>;
+    void setSpellCastBeginCallback(SpellCastBeginCallback cb) { spellCastBeginCallback_ = std::move(cb); }
 
     // Spell cast animation callbacks - true=start cast/channel, false=finish/cancel
     // guid: caster (may be player or another unit), isChannel: channel vs regular cast
@@ -3452,6 +3453,10 @@ public:
     /// permanent aura. The spell book draws these without a cast border and
     /// refuses to put them on the action bar.
     bool isSpellPassive(uint32_t spellId) const;
+    /// Spell.dbc Attributes, the base word; nothing for a spell not in it.
+    std::optional<uint32_t> getSpellAttributes(uint32_t spellId) const;
+    /// Spell.dbc SpellVisual (the first); 0 for none.
+    uint32_t getSpellVisualId(uint32_t spellId) const;
     /// Returns the school bitmask for the spell from Spell.dbc
     /// (0x01=Physical, 0x02=Holy, 0x04=Fire, 0x08=Nature, 0x10=Frost, 0x20=Shadow, 0x40=Arcane).
     /// Returns 0 if unknown.
@@ -3829,7 +3834,7 @@ public:
     auto& knockBackCallbackRef() { return knockBackCallback_; }
     auto& lootWindowCallbackRef() { return lootWindowCallback_; }
     auto& meleeSwingCallbackRef() { return meleeSwingCallback_; }
-    auto& rangedWeaponSwapCallbackRef() { return rangedWeaponSwapCallback_; }
+    auto& spellCastBeginCallbackRef() { return spellCastBeginCallback_; }
     void suppressNextMeleeSwingAnim() { suppressMeleeSwingAnim_ = true; }
     bool consumeSuppressMeleeSwingAnim() {
         bool v = suppressMeleeSwingAnim_;
@@ -5058,7 +5063,7 @@ private:
     GhostStateCallback ghostStateCallback_;
     MeleeSwingCallback meleeSwingCallback_;
     FaceCameraProvider faceCameraProvider_;
-    RangedWeaponSwapCallback rangedWeaponSwapCallback_;
+    SpellCastBeginCallback spellCastBeginCallback_;
     bool suppressMeleeSwingAnim_ = false;
     // lastMeleeSwingMs_ moved to CombatHandler
     SpellCastAnimCallback spellCastAnimCallback_;

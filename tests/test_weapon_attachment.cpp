@@ -208,3 +208,100 @@ TEST_CASE("the create screen's hunter wears its quiver (0x004e0fd0 case 0x12)", 
     // Only a hunter's.
     CHECK(characterCreateDress(outfit, 1).quivers.empty());
 }
+
+TEST_CASE("the animation changes the sheath state (0x00738180)", "[attachment]") {
+    using S = SheathState;
+    AnimationSheathInput in{.current = S::Melee, .animId = 0, .animKnown = true, .activePlayer = true};
+    // WeaponFlags 4 puts the weapons away, in any state.
+    in.weaponFlags = 4;
+    CHECK(animationSheathState(in) == S::Unarmed);
+    in.keepWeapons = true;
+    CHECK(animationSheathState(in) == std::nullopt);
+    in.keepWeapons = false;
+    // 0x10 away, 0x20 melee.
+    in.current = S::Unarmed;
+    in.weaponFlags = 0x20;
+    CHECK(animationSheathState(in) == S::Melee);
+    in.current = S::Melee;
+    in.weaponFlags = 0x10;
+    CHECK(animationSheathState(in) == S::Unarmed);
+    // Nothing for the active player otherwise; another unit takes the field.
+    in.weaponFlags = 0;
+    in.field = S::Unarmed;
+    CHECK(animationSheathState(in) == std::nullopt);
+    in.activePlayer = false;
+    CHECK(animationSheathState(in) == S::Unarmed);
+}
+
+TEST_CASE("casting and attacking set the sheath state (0x00738180)", "[attachment]") {
+    using S = SheathState;
+    AnimationSheathInput in{.current = S::Melee, .animId = 0, .animKnown = true, .weaponFlags = 0x20,
+                            .activePlayer = true};
+    // A cast puts the weapons away - not one whose spell has 0x40000 - and
+    // the animation's flags then count for nothing.
+    in.casting = true;
+    in.castSheathes = true;
+    CHECK(animationSheathState(in) == S::Unarmed);
+    in.castSheathes = false;
+    CHECK(animationSheathState(in) == std::nullopt);
+    in.casting = false;
+    // Attacking draws melee.
+    in.current = S::Unarmed;
+    in.weaponFlags = 0x10;
+    in.attacking = true;
+    in.behavior = 0x10;  // a combat behavior (0x0071d590)
+    CHECK(animationSheathState(in) == S::Melee);
+    in.behavior = kNoAnimationBehavior;
+    CHECK(animationSheathState(in) == S::Unarmed);
+    in.weaponFlags = 0;
+    CHECK(animationSheathState(in) == S::Melee);
+}
+
+TEST_CASE("the ranged state holds through loading and shooting (0x00738180)", "[attachment]") {
+    using S = SheathState;
+    AnimationSheathInput in{.current = S::Ranged, .animKnown = true, .weaponFlags = 0x20,
+                            .casting = true, .castSheathes = true, .attacking = true, .activePlayer = true};
+    for (uint32_t load : {105u, 106u, 112u}) {
+        in.animId = load;
+        CHECK(animationSheathState(in) == std::nullopt);
+    }
+    in.animId = 46;
+    in.behavior = 0x2e;  // a ranged behavior (0x0071d2e0)
+    CHECK(animationSheathState(in) == std::nullopt);
+    // Any other animation with the flags moves it; the cast and the attack
+    // do not.
+    in.behavior = kNoAnimationBehavior;
+    CHECK(animationSheathState(in) == S::Melee);
+    in.weaponFlags = 0x10;
+    CHECK(animationSheathState(in) == S::Unarmed);
+    in.weaponFlags = 0;
+    CHECK(animationSheathState(in) == std::nullopt);
+    in.animKnown = false;
+    in.weaponFlags = 0x10;
+    CHECK(animationSheathState(in) == std::nullopt);
+}
+
+TEST_CASE("the field moves the active player only from the state it left (0x00737aa0)", "[attachment]") {
+    using S = SheathState;
+    CHECK(fieldSheathChange(S::Melee, S::Melee, S::Unarmed, true) == S::Unarmed);
+    CHECK(fieldSheathChange(S::Ranged, S::Melee, S::Unarmed, true) == std::nullopt);
+    CHECK(fieldSheathChange(S::Ranged, S::Melee, S::Unarmed, false) == S::Unarmed);
+}
+
+TEST_CASE("a spell's cast sets the sheath state (0x007fa2e0, 0x0073a6c0)", "[attachment]") {
+    using S = SheathState;
+    // Auto Shot: Attributes 2.
+    CHECK(spellSheathState({.known = true, .attributes = 2}) == S::Ranged);
+    CHECK(spellSheathState({.known = true, .attributes = 0}) == std::nullopt);
+    // A weapon thrown as the missile.
+    CHECK(spellSheathState({.known = true, .missileModel = -1}) == S::Melee);
+    CHECK(spellSheathState({.known = true, .missileModel = -2}) == S::Melee);
+    // A kit with a weapon effect, unless the spell has 0x40000 or the model
+    // CreatureModelData flag 0x10.
+    CHECK(spellSheathState({.known = true, .kitWeaponEffect = true}) == S::Unarmed);
+    CHECK(spellSheathState({.known = false, .kitWeaponEffect = true}) == S::Unarmed);
+    CHECK(spellSheathState({.known = true, .attributes = 0x40000, .kitWeaponEffect = true}) == std::nullopt);
+    CHECK(spellSheathState({.known = true, .kitWeaponEffect = true, .modelHoldsEffects = false}) ==
+          std::nullopt);
+    CHECK(spellSheathState({.known = true, .attributes = 2, .kitWeaponEffect = true}) == S::Unarmed);
+}
