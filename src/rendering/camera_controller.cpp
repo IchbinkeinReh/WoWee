@@ -32,6 +32,14 @@ namespace rendering {
 
 namespace {
 
+/// The longest single step the character's movement and grounding take.
+///
+/// A step, not a clamp on the frame: a longer frame is split into steps no
+/// longer than this (updateThirdPersonCamera), so the floor probes still see
+/// the feet move at most this far at once and nothing tunnels, but all of the
+/// frame's time is spent. Clamping the frame to it instead threw the rest of
+/// the time away, and below 30 fps everything the character did - a jump
+/// above all, whose arc has a known length - ran slower than the wall clock.
 constexpr float kMaxPhysicsDelta = 1.0f / 30.0f;
 
 /// WoW's own key bone id for the head, as the M2 skeleton names it.
@@ -821,6 +829,16 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         // them should be fallen through. Entering the world is faster than
         // streaming the tile under it on a slow device, so without this the
         // character falls from the spawn point until the server kills it.
+        //
+        // The height moved this step is at the mean of the step's start and
+        // end velocities. Under constant gravity that is exact - v*t + g*t*t/2,
+        // the closed form the client evaluates from the fall time (FUN_00986f00
+        // at 0x00986f00; its 9.645553 is half of 19.291105) - so the arc's
+        // height and length do not depend on the step. Moving at the end
+        // velocity, as this did, took v0*t/2 off the apex: 0.07 yd of a 1.64 yd
+        // jump at 60 fps, 0.13 yd at 30.
+        const float startVerticalVelocity = verticalVelocity;
+        bool underGravity = false;
         if (seatedInChair_) {
             // In a chair, and the chair's height is the server's to decide.
             //
@@ -846,8 +864,12 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             // Feather Fall / Slow Fall: cap downward terminal velocity to ~2 m/s
             if (featherFallActive_ && verticalVelocity < -2.0f)
                 verticalVelocity = -2.0f;
+            underGravity = true;
         }
-        targetPos.z += verticalVelocity * f.physicsDeltaTime;
+        const float stepVerticalVelocity = underGravity
+            ? 0.5f * (startVerticalVelocity + verticalVelocity)
+            : verticalVelocity;
+        targetPos.z += stepVerticalVelocity * f.physicsDeltaTime;
         } // end ground physics (not airborne in flight)
         } // end !inWater
     } else {
@@ -2511,17 +2533,52 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
 }
 
 void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
-    glm::vec3 prevTargetPos(0.0f);
-    glm::vec3 targetPos = moveFollowedCharacter(deltaTime, f, prevTargetPos);
-    groundFollowedCharacter(deltaTime, f, targetPos, prevTargetPos);
-    // Landing: flying down onto real ground, or skimming it, without climbing.
-    // Grounding has just put the feet on the floor if they were within reach
-    // of it; on a floor that was actually found, that is touching down.
-    if (isFlightAirborne() && grounded && hasRealGround_ && !f.spaceHeld &&
-        std::abs(targetPos.z - lastGroundZ) < 0.3f) {
-        flightAirborne_ = false;
-        LOG_WARNING("Flight: landed");
+    // The whole frame's time, in steps of at most kMaxPhysicsDelta.
+    //
+    // The client moves a unit by the real time that has passed - a fall is
+    // evaluated from its fall time in milliseconds (CMovement, FUN_00986f00
+    // at 0x00986f00) - so a jump lasts the same 0.82 seconds however fast
+    // the frames come. This used to run once with the frame clamped to
+    // 1/30 s, which at 20 fps spent two thirds of the frame and dropped the
+    // rest: the jump took half as long again and looked like slow motion,
+    // and running lost ground the same way. The frame is already capped at
+    // 0.1 s (FramePacer::toSeconds), so this is at most three steps.
+    int steps = 1;
+    if (deltaTime > kMaxPhysicsDelta) {
+        // Less a hair, so a frame of exactly n steps' length is not n + 1.
+        steps = static_cast<int>(std::ceil(deltaTime / kMaxPhysicsDelta - 1e-3f));
+        steps = std::max(steps, 1);
     }
+    const float stepTime = deltaTime / static_cast<float>(steps);
+
+    // Each step starts from this frame's input, as the next frame would:
+    // moving overwrites f.movement and f.speed (the jump's held takeoff
+    // direction, the swim clamp), and a jump pressed this frame is pressed
+    // once, in the first step - the jump buffer carries it on from there.
+    const glm::vec3 inputMovement = f.movement;
+    const float inputSpeed = f.speed;
+    const bool inputJump = f.nowJump;
+
+    glm::vec3 targetPos(0.0f);
+    for (int step = 0; step < steps; ++step) {
+        f.physicsDeltaTime = stepTime;
+        f.movement = inputMovement;
+        f.speed = inputSpeed;
+        f.nowJump = inputJump && step == 0;
+
+        glm::vec3 prevTargetPos(0.0f);
+        targetPos = moveFollowedCharacter(stepTime, f, prevTargetPos);
+        groundFollowedCharacter(stepTime, f, targetPos, prevTargetPos);
+        // Landing: flying down onto real ground, or skimming it, without climbing.
+        // Grounding has just put the feet on the floor if they were within reach
+        // of it; on a floor that was actually found, that is touching down.
+        if (isFlightAirborne() && grounded && hasRealGround_ && !f.spaceHeld &&
+            std::abs(targetPos.z - lastGroundZ) < 0.3f) {
+            flightAirborne_ = false;
+            LOG_WARNING("Flight: landed");
+        }
+    }
+    f.nowJump = inputJump;
     updateOrbitCamera(deltaTime, f, targetPos);
 }
 
@@ -2738,6 +2795,8 @@ void CameraController::update(float deltaTime) {
         return;
     }
     // Keep physics integration stable during render hitches to avoid floor tunneling.
+    // Only the free-fly camera takes this clamped step; the followed character
+    // spends the whole frame in steps of it (updateThirdPersonCamera).
     const float physicsDeltaTime = std::min(deltaTime, kMaxPhysicsDelta);
     intoxicationTime_ += deltaTime;
 
