@@ -266,6 +266,8 @@ void GameScreen::setServices(const UIServices& services) {
 void GameScreen::applyCameraControlSettings() {
     auto* renderer = services_.renderer;
     if (!renderer) return;
+    // The camera is read by the doodad worker, which may still be recording.
+    renderer->syncWorldRecording();
 
     // Field of view is on the camera rather than its controller, and the
     // camera is built asking for 60 - so a saved fov, and the 70 the schema
@@ -867,18 +869,21 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         if (auto* ac = renderer->getAnimationController()) ac->setInCombat(gameHandler.isInCombat() &&
                               !gameHandler.isPlayerDead() &&
                               !gameHandler.isPlayerGhost());
-        if (auto* cr = renderer->getCharacterRenderer()) {
-            uint32_t charInstId = renderer->getCharacterInstanceId();
-            if (charInstId != 0) {
-                const bool isGhost = gameHandler.isPlayerGhost();
-                if (!ghostOpacityStateKnown_ ||
-                    ghostOpacityLastState_ != isGhost ||
-                    ghostOpacityLastInstanceId_ != charInstId) {
-                    cr->setInstanceOpacity(charInstId, isGhost ? 0.5f : 1.0f);
-                    ghostOpacityStateKnown_ = true;
-                    ghostOpacityLastState_ = isGhost;
-                    ghostOpacityLastInstanceId_ = charInstId;
-                }
+        // The renderer is asked for only once there is something to change.
+        // Asking for it waits for the world's doodads to finish recording, and
+        // asking every frame made this the point where the interface stopped
+        // overlapping them.
+        const uint32_t charInstId = renderer->getCharacterInstanceId();
+        const bool isGhost = gameHandler.isPlayerGhost();
+        if (charInstId != 0 &&
+            (!ghostOpacityStateKnown_ ||
+             ghostOpacityLastState_ != isGhost ||
+             ghostOpacityLastInstanceId_ != charInstId)) {
+            if (auto* cr = renderer->getCharacterRenderer()) {
+                cr->setInstanceOpacity(charInstId, isGhost ? 0.5f : 1.0f);
+                ghostOpacityStateKnown_ = true;
+                ghostOpacityLastState_ = isGhost;
+                ghostOpacityLastInstanceId_ = charInstId;
             }
         }
         static glm::vec3 targetGLPos;

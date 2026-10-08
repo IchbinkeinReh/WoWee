@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <vector>
 #include <future>
+#include <atomic>
+#include <thread>
 #include <cstddef>
 #include <unordered_map>
 #include <unordered_set>
@@ -101,7 +103,24 @@ public:
         afterInterface_ = std::move(recorder);
     }
 
+    /// Records the world. On the parallel path this only starts it: the doodad
+    /// worker is still recording when this returns, and finishRenderWorld is
+    /// what waits for it and puts the world into the frame. The interface's
+    /// CPU work goes in between, which is the point - it used to sit idle here
+    /// for the whole of the doodads' recording.
     void renderWorld(game::World* world, game::GameHandler* gameHandler = nullptr);
+    /// Joins the world's recording and executes it into the frame, then the
+    /// passes that follow the scene. Does nothing when there is nothing
+    /// pending, so endFrame calls it too in case the caller did not.
+    void finishRenderWorld();
+    /// Waits for the doodad worker, if one is still recording, without putting
+    /// anything into the frame. Anything that is about to change the model or
+    /// character renderers' state calls this first; the getters below do it
+    /// for every caller. Only the main thread waits - see joinM2Worker's
+    /// definition for why another thread does not.
+    void syncWorldRecording() const {
+        if (m2WorkerInFlight_.load(std::memory_order_acquire)) joinM2Worker();
+    }
 
     /**
      * Update renderer (camera, etc.)
@@ -148,7 +167,9 @@ public:
     void renderHUD();
 
     Camera* getCamera() { return camera.get(); }
-    CameraController* getCameraController() { return cameraController.get(); }
+    /// Waits like the renderers' getters below: the doodad worker reads the
+    /// camera, and the controller is what moves it.
+    CameraController* getCameraController() { syncWorldRecording(); return cameraController.get(); }
     TerrainRenderer* getTerrainRenderer() const { return terrainRenderer.get(); }
     TerrainManager* getTerrainManager() const { return terrainManager.get(); }
     PerformanceHUD* getPerformanceHUD() { return performanceHUD.get(); }
@@ -160,9 +181,17 @@ public:
     LensFlare* getLensFlare() const { return skySystem ? skySystem->getLensFlare() : nullptr; }
     Weather* getWeather() const { return weather.get(); }
     Lightning* getLightning() const { return lightning.get(); }
-    CharacterRenderer* getCharacterRenderer() const { return characterRenderer.get(); }
+    CharacterRenderer* getCharacterRenderer() const { syncWorldRecording(); return characterRenderer.get(); }
     WMORenderer* getWMORenderer() const { return wmoRenderer.get(); }
-    M2Renderer* getM2Renderer() const { return m2Renderer.get(); }
+    M2Renderer* getM2Renderer() const { syncWorldRecording(); return m2Renderer.get(); }
+    /// The same two, for reading only, and so without waiting for the doodad
+    /// worker. Its recording reads these renderers and writes nothing a const
+    /// query reads back - the instance tables, positions and bounds all
+    /// change on the main thread - so asking where a unit is can overlap it.
+    /// Picking and the target's selection circle ask that every frame, and
+    /// through the waiting getters they ended the overlap where they did.
+    const CharacterRenderer* queryCharacterRenderer() const { return characterRenderer.get(); }
+    const M2Renderer* queryM2Renderer() const { return m2Renderer.get(); }
     Minimap* getMinimap() const { return minimap.get(); }
     WorldMap* getWorldMap() const { return worldMap.get(); }
     QuestMarkerRenderer* getQuestMarkerRenderer() const { return questMarkerRenderer.get(); }
@@ -209,17 +238,17 @@ public:
 
     // Spell visual effects (SMSG_PLAY_SPELL_VISUAL / SMSG_PLAY_SPELL_IMPACT)
     // Delegates to SpellVisualSystem (owned by Renderer)
-    SpellVisualSystem* getSpellVisualSystem() const { return spellVisualSystem_.get(); }
+    SpellVisualSystem* getSpellVisualSystem() const { syncWorldRecording(); return spellVisualSystem_.get(); }
 
     // Combat visual state (compound: resets AnimationController + SpellVisualSystem)
     void resetCombatVisualState();
 
     // Sub-system accessors (§4.2)
     AnimationController* getAnimationController() const { return animationController_.get(); }
-    LevelUpEffect* getLevelUpEffect() const { return levelUpEffect.get(); }
-    LootSparkles* getLootSparkles() const { return lootSparkles_.get(); }
-    ChargeEffect* getChargeEffect() const { return chargeEffect.get(); }
-    SwimEffects* getSwimEffects() const { return swimEffects.get(); }
+    LevelUpEffect* getLevelUpEffect() const { syncWorldRecording(); return levelUpEffect.get(); }
+    LootSparkles* getLootSparkles() const { syncWorldRecording(); return lootSparkles_.get(); }
+    ChargeEffect* getChargeEffect() const { syncWorldRecording(); return chargeEffect.get(); }
+    SwimEffects* getSwimEffects() const { syncWorldRecording(); return swimEffects.get(); }
 
     // Selection circle for targeted entity
     void setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec3& color);
@@ -669,6 +698,32 @@ private:
     VkCommandBuffer secondaryCmds_[NUM_SECONDARIES][MAX_FRAMES] = {};
 
     bool parallelRecordingEnabled_ = false;  // set true after pools/buffers created
+
+    // What renderWorld leaves for finishRenderWorld. The doodad worker is the
+    // one recording still running when renderWorld returns - every other
+    // worker is joined there, and only it runs past the interface (see
+    // renderWorld for why the others are not let).
+    //
+    // Mutable because the getters that hand out the model and character
+    // renderers are const and wait on it.
+    mutable std::future<double> m2Future_;
+    mutable std::atomic<bool> m2WorkerInFlight_{false};
+    std::thread::id mainThreadId_{};
+    void joinM2Worker() const;
+    struct PendingWorld {
+        bool pending = false;
+        bool parallel = false;      // recorded into secondaries, not inline
+        bool queueTerrain = false;
+        bool queueWmo = false;
+        bool queueM2 = false;
+        bool skipSky = false;
+        uint32_t frameIdx = 0;
+        VkDescriptorSet perFrameSet = VK_NULL_HANDLE;
+        game::GameHandler* gameHandler = nullptr;
+        uint32_t overlaysMark = UINT32_MAX;  // the fallback's, recorded in finish
+        double prepWmoMs = 0.0, prepM2Ms = 0.0, prepCharMs = 0.0;
+        double launchMs = 0.0;      // renderWorld's own time, for lastRenderMs
+    } pendingWorld_;
     // WOWEE_PASS_ABLATION: switches one world pass off at a time and reports
     // what the frame did without it. See pass_ablation.hpp for why the GPU's
     // own timestamps cannot answer that on this platform.

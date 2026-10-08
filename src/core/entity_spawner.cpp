@@ -1490,31 +1490,36 @@ bool EntitySpawner::getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, 
     if (goIt != gameObjectInstances_.end()) {
         const auto& go = goIt->second;
         if (go.isWmo) return false;
-        auto* m2 = renderer_->getM2Renderer();
+        const auto* m2 = renderer_->queryM2Renderer();
         return m2 && m2->getInstanceBounds(go.instanceId, outCenter, outRadius);
     }
 
-    if (!renderer_->getCharacterRenderer()) return false;
+    // The query accessors: these three run from the interface every frame
+    // while the world may still be recording, and only read.
+    const auto* characters = renderer_->queryCharacterRenderer();
+    if (!characters) return false;
     const uint32_t instanceId = characterInstanceIdForGuid(guid);
     if (instanceId == 0) return false;
 
-    return renderer_->getCharacterRenderer()->getInstanceBounds(instanceId, outCenter, outRadius);
+    return characters->getInstanceBounds(instanceId, outCenter, outRadius);
 }
 
 bool EntitySpawner::getRenderFootZForGuid(uint64_t guid, float& outFootZ) const {
-    if (!renderer_ || !renderer_->getCharacterRenderer()) return false;
+    const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
+    if (!characters) return false;
     const uint32_t instanceId = characterInstanceIdForGuid(guid);
     if (instanceId == 0) return false;
 
-    return renderer_->getCharacterRenderer()->getInstanceFootZ(instanceId, outFootZ);
+    return characters->getInstanceFootZ(instanceId, outFootZ);
 }
 
 bool EntitySpawner::getRenderPositionForGuid(uint64_t guid, glm::vec3& outPos) const {
-    if (!renderer_ || !renderer_->getCharacterRenderer()) return false;
+    const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
+    if (!characters) return false;
     const uint32_t instanceId = characterInstanceIdForGuid(guid);
     if (instanceId == 0) return false;
 
-    return renderer_->getCharacterRenderer()->getInstancePosition(instanceId, outPos);
+    return characters->getInstancePosition(instanceId, outPos);
 }
 
 EntitySpawner::CachedAttachmentModel

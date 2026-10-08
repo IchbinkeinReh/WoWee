@@ -5144,6 +5144,14 @@ void Application::render() {
         runRenderStage("mapWindow", [&] { updateMapWindow(); });
     }
 
+    // The world, put into the frame only now. renderWorld left the doodads
+    // recording on a worker, and everything above - the HUD, the addon
+    // widgets, the game screen and FrameXML - is CPU work on draw lists and
+    // offscreen views that neither records into this frame's command buffer
+    // nor reads what the world recorded, so it runs while that worker does.
+    // What in it would change the model or character renderers reaches them
+    // through Renderer's getters, which wait for the worker first.
+    runRenderStage("finishWorld", [&] { renderer->finishRenderWorld(); });
     runRenderStage("endFrame", [&] { renderer->endFrame(); });
 
     // A picture of the client, written once and then done with.
@@ -5631,8 +5639,6 @@ bool Application::getRenderFootZForGuid(uint64_t guid, float& outFootZ) const {
 
 void Application::setHighlightedGameObject(uint64_t guid) {
     if (!renderer) return;
-    auto* m2 = renderer->getM2Renderer();
-    auto* wmo = renderer->getWMORenderer();
     // Resolved every frame: the object's model can arrive, or be replaced,
     // while the pointer rests on it.
     uint32_t instance = 0;
@@ -5648,6 +5654,11 @@ void Application::setHighlightedGameObject(uint64_t guid) {
     if (instance == highlightedInstance_ && kind == highlightedKind_) return;
     highlightedInstance_ = instance;
     highlightedKind_ = kind;
+    // Only now, with a change to make. This runs from the interface every
+    // frame, and asking for the model renderer waits for the world's doodads
+    // to finish recording - which the highlight they draw does need.
+    auto* m2 = renderer->getM2Renderer();
+    auto* wmo = renderer->getWMORenderer();
     // 0x00743bc0 on the old one: a walk rather than the remembered id, which
     // a despawn could have handed to another model.
     if (m2) m2->clearInstanceHighlights();

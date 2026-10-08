@@ -113,6 +113,7 @@
 #include <unordered_set>
 #include <set>
 #include <future>
+#include <thread>
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__linux__)
@@ -755,6 +756,9 @@ void Renderer::updatePerFrameUBO() {
 
 bool Renderer::initialize(core::Window* win) {
     window = win;
+    // The thread that records frames, and so the one that waits on the doodad
+    // worker when something reaches for the renderers it is reading.
+    mainThreadId_ = std::this_thread::get_id();
     vkCtx = win->getVkContext();
     deferredWorldInitEnabled_ = core::envFlagEnabled("WOWEE_DEFER_WORLD_SYSTEMS", true);
     LOG_INFO("Initializing renderer (Vulkan)");
@@ -980,6 +984,7 @@ bool Renderer::initialize(core::Window* win) {
 }
 
 void Renderer::shutdown() {
+    syncWorldRecording();
     // A recording in progress is finished, not abandoned: the file is only
     // playable once its index is written.
     if (recorder_) stopRecording();
@@ -1309,6 +1314,14 @@ void Renderer::applyMsaaChange() {
 
 void Renderer::beginFrame() {
     ZoneScopedN("Renderer::beginFrame");
+    // A world still pending here belongs to a frame that never reached
+    // endFrame - an exception out of the interface, say. Its command buffer
+    // is not going to be submitted; only its worker has to be waited for.
+    if (pendingWorld_.pending) {
+        LOG_WARNING("renderWorld was never finished; dropping its recording");
+        pendingWorld_.pending = false;
+    }
+    syncWorldRecording();
     if (!vkCtx) return;
     if (vkCtx->isDeviceLost()) return;
 
@@ -1559,6 +1572,8 @@ void Renderer::beginFrame() {
 
 void Renderer::endFrame() {
     ZoneScopedN("Renderer::endFrame");
+    // Normally already done by the caller, which times it as its own stage.
+    finishRenderWorld();
     if (!vkCtx || currentCmd == VK_NULL_HANDLE) return;
 
     logViewDistanceDiag();
@@ -3309,7 +3324,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     };
     const uint32_t sceneMarks = vkCtx ? vkCtx->gpuReserveMarks(kSceneMarkCount)
                                       : VkContext::kNoGpuMark;
-    const auto sceneMark = [&](VkCommandBuffer cmd, uint32_t which, const char* label) {
+    // By value: the doodad worker carries a copy past the end of this function.
+    const auto sceneMark = [this, sceneMarks](VkCommandBuffer cmd, uint32_t which, const char* label) {
         if (sceneMarks != VkContext::kNoGpuMark) vkCtx->gpuMarkAt(cmd, sceneMarks + which, label);
     };
     // The model renderer marks the end of its opaque half itself, from inside
@@ -3349,7 +3365,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         const double prepCharMs = std::chrono::duration<double, std::milli>(prepEnd - prepM2End).count();
 
         // --- Dispatch worker threads (terrain + WMO + M2) ---
-        std::future<double> terrainFuture, wmoFuture, charFuture, m2Future, postFuture;
+        std::future<double> terrainFuture, wmoFuture, charFuture, postFuture;
 
         // Grass rides in the terrain secondary: it sits on the ground, and
         // that buffer is executed after the sky and before WMO, which is
@@ -3393,8 +3409,12 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             });
         }
 
+        // This one outlives renderWorld - finishRenderWorld joins it, after the
+        // interface - so it captures by value and touches nothing of this
+        // function's but what it was handed.
         if (m2Renderer && camera && !skipM2) {
-            m2Future = core::ThreadPool::frameWorkers().submit([&]() -> double {
+            m2Future_ = core::ThreadPool::frameWorkers().submit(
+                    [this, perFrameSet, skipChars, sceneMark]() -> double {
                 WOWEE_PROFILE_SCOPE("worker: m2", Worker);
                 auto t0 = std::chrono::steady_clock::now();
                 VkCommandBuffer cmd = beginSecondary(SEC_M2);
@@ -3449,6 +3469,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 return std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - t0).count();
             });
+            m2WorkerInFlight_.store(true, std::memory_order_release);
         }
 
         // --- Main thread: record sky (SEC_SKY) ---
@@ -3554,13 +3575,20 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 std::chrono::steady_clock::now() - t0).count();
         });
 
-        // --- Wait for workers ---
+        // --- Wait for the workers, all but the doodads ---
         // Guard with try-catch: future::get() re-throws any exception from the
         // async task. Without this, a single bad_alloc in a render worker would
         // propagate as an unhandled exception and terminate the process.
         //
         // Profiled as main-thread work, not as a wait on the GPU: what shows
         // through here is the slowest worker's recording, which is CPU time.
+        //
+        // The doodad worker is left running through the interface, and these
+        // are not, though nothing they record is needed before it either:
+        // they finish in a fraction of its time, so letting them run on would
+        // save nothing, and joining them here keeps what the interface can
+        // race small. The post worker in particular draws the minimap, whose
+        // rect and zoom the interface sets in addonWidgets.
         std::optional<core::ProfileScope> joinScope;
         if (core::FrameProfiler::enabled()) {
             joinScope.emplace("join render workers", core::ProfileKind::Cpu);
@@ -3569,99 +3597,18 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         catch (const std::exception& e) { LOG_ERROR("Terrain render worker: ", e.what()); }
         try { if (wmoFuture.valid()) lastWMORenderMs = wmoFuture.get(); }
         catch (const std::exception& e) { LOG_ERROR("WMO render worker: ", e.what()); }
-        try { if (m2Future.valid()) lastM2RenderMs = m2Future.get(); }
-        catch (const std::exception& e) { LOG_ERROR("M2 render worker: ", e.what()); }
         try { if (charFuture.valid()) (void)charFuture.get(); }
         catch (const std::exception& e) { LOG_ERROR("Character render worker: ", e.what()); }
         try { if (postFuture.valid()) (void)postFuture.get(); }
         catch (const std::exception& e) { LOG_ERROR("Post render worker: ", e.what()); }
         joinScope.reset();
 
-        // prepareRender() does the GPU allocations that are not thread-safe, so it runs
-        // on the main thread and is not covered by the worker timings. Name the culprit
-        // when a frame runs long instead of leaving renderWorld as one opaque number.
-        const double prepTotalMs = prepWmoMs + prepM2Ms + prepCharMs;
-        const double worstWorkerMs = std::max({lastTerrainRenderMs, lastWMORenderMs, lastM2RenderMs});
-
-        // The same breakdown on a timer, not only when a frame runs long.
-        //
-        // renderWorld is 3.3ms of a 15.8ms frame and the CPU and the GPU are
-        // within a millisecond of each other now, so what the main thread
-        // spends here decides the frame as much as any pass does - and the
-        // 40ms threshold below only ever speaks when something has already
-        // gone wrong. This says where the steady state goes.
-        static const bool frameProfile = core::envFlagEnabled("WOWEE_FRAME_PROFILE", false);
-        if (frameProfile) {
-            static auto lastSaid = std::chrono::steady_clock::now();
-            const auto sayNow = std::chrono::steady_clock::now();
-            if (sayNow - lastSaid > std::chrono::seconds(10)) {
-                lastSaid = sayNow;
-                LOG_WARNING("  renderWorld: prepare ", prepTotalMs,
-                            "ms (wmo ", prepWmoMs, " m2 ", prepM2Ms,
-                            " char ", prepCharMs, "), workers terrain ",
-                            lastTerrainRenderMs, " wmo ", lastWMORenderMs,
-                            " m2 ", lastM2RenderMs, " (worst ", worstWorkerMs,
-                            "), terrain chunks drawn ",
-                            terrainRenderer ? terrainRenderer->getRenderedChunkCount() : 0,
-                            " culled ",
-                            terrainRenderer ? terrainRenderer->getCulledChunkCount() : 0);
-            }
-        }
-
-        if (prepTotalMs + worstWorkerMs > 40.0) {
-            LOG_WARNING("SLOW renderWorld breakdown: prepare=", prepTotalMs,
-                        "ms (wmo=", prepWmoMs, " m2=", prepM2Ms, " char=", prepCharMs,
-                        ") workers: terrain=", lastTerrainRenderMs,
-                        " wmo=", lastWMORenderMs, " m2=", lastM2RenderMs,
-                        // Terrain is usually the critical path here, and its cost
-                        // is one descriptor bind plus one draw per surviving
-                        // chunk - so the counts say whether a slow frame is draw
-                        // volume or something else entirely.
-                        " | terrain chunks drawn=",
-                        terrainRenderer ? terrainRenderer->getRenderedChunkCount() : 0,
-                        " culled=",
-                        terrainRenderer ? terrainRenderer->getCulledChunkCount() : 0,
-                        " resident=",
-                        terrainRenderer ? terrainRenderer->getChunkCount() : 0);
-        }
-
-        // --- Execute all secondary buffers in correct draw order ---
-        VkCommandBuffer validCmds[8];
-        const char* validLabels[8];
-        uint32_t numCmds = 0;
-        // Terrain first, then the sky. Every sky layer sits on the far plane
-        // and depth-tests against what is already there, so drawing it after
-        // the ground skips the clouds' noise on every pixel a hill covers,
-        // which outdoors is most of them. Only the terrain goes ahead of it:
-        // it is the one pass that is opaque throughout. Buildings carry
-        // blended windows and doodads carry leaves and particles, and blended
-        // pixels leave no depth behind, so a sky drawn after them would paint
-        // over whichever of them stood against it.
-        const auto queue = [&](VkCommandBuffer buffer, const char* label) {
-            validLabels[numCmds] = label;
-            validCmds[numCmds++] = buffer;
-        };
-        if (drawTerrain || drawGrass)
-            queue(secondaryCmds_[SEC_TERRAIN][frameIdx], "terrain");
-        queue(secondaryCmds_[SEC_SKY][frameIdx], "sky");
-        if (wmoRenderer && camera && !skipWMO)
-            queue(secondaryCmds_[SEC_WMO][frameIdx], "wmo");
-        queue(secondaryCmds_[SEC_SELECTION][frameIdx], "selection");
-        queue(secondaryCmds_[SEC_CHARS][frameIdx], "characters");
-        if (m2Renderer && camera && !skipM2)
-            queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
-        queue(secondaryCmds_[SEC_POST][frameIdx], "water/effects");
-
-        // In one call. The marks that used to follow each of these were
-        // written from the primary, which a subpass begun with
-        // SECONDARY_COMMAND_BUFFERS contents does not allow - only
-        // vkCmdExecuteCommands may be recorded there - so what those
-        // timestamps read was undefined on every driver, not only on
-        // MoltenVK, which resolves any mark to its render pass anyway. The
-        // secondaries mark themselves now (sceneMark above), in the indices
-        // reserved for them in this same order.
-        (void)validLabels;
-        if (numCmds > 0) vkCmdExecuteCommands(currentCmd, numCmds, validCmds);
+        pendingWorld_.queueTerrain = drawTerrain || drawGrass;
+        pendingWorld_.queueWmo = wmoRenderer && camera && !skipWMO;
+        pendingWorld_.queueM2 = m2Renderer && camera && !skipM2;
+        pendingWorld_.prepWmoMs = prepWmoMs;
+        pendingWorld_.prepM2Ms = prepM2Ms;
+        pendingWorld_.prepCharMs = prepCharMs;
 
     } else {
         // ── Fallback: single-threaded inline recording (original path) ──
@@ -3760,14 +3707,159 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         sceneMark(currentCmd, kMarkWorldEffects, "weather, dust, footprints, quest markers");
     }
 
+    pendingWorld_.pending = true;
+    pendingWorld_.parallel = parallelRecordingEnabled_;
+    pendingWorld_.skipSky = skipSky;
+    pendingWorld_.frameIdx = frameIdx;
+    pendingWorld_.perFrameSet = perFrameSet;
+    pendingWorld_.gameHandler = gameHandler;
+    pendingWorld_.overlaysMark = sceneMarks != VkContext::kNoGpuMark
+        ? sceneMarks + kMarkOverlays : VkContext::kNoGpuMark;
+    pendingWorld_.launchMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - renderStart).count();
+
+    // Inline recording has nothing still running to wait for, and the overlays
+    // it draws read state the interface is about to change (the minimap's rect),
+    // so it finishes now, exactly as it always did.
+    if (!pendingWorld_.parallel) finishRenderWorld();
+}
+
+void Renderer::joinM2Worker() const {
+    // Only the main thread. The others that reach the getters are the render
+    // workers themselves - the post worker asks for the model renderer for its
+    // fishing lines and footprints - and one of them waiting on the doodads
+    // would only serialise two recordings that are meant to overlap. Nothing
+    // off the main thread changes these renderers' state while a frame
+    // records; anything that did would race the main thread just the same.
+    if (std::this_thread::get_id() != mainThreadId_) return;
+    if (!m2WorkerInFlight_.load(std::memory_order_acquire)) return;
+    std::optional<core::ProfileScope> joinScope;
+    if (core::FrameProfiler::enabled()) {
+        joinScope.emplace("join m2 worker", core::ProfileKind::Cpu);
+    }
+    // Written only here, on the main thread, which is also the only reader.
+    auto* self = const_cast<Renderer*>(this);
+    try { if (m2Future_.valid()) self->lastM2RenderMs = m2Future_.get(); }
+    catch (const std::exception& e) { LOG_ERROR("M2 render worker: ", e.what()); }
+    m2WorkerInFlight_.store(false, std::memory_order_release);
+}
+
+void Renderer::finishRenderWorld() {
+    syncWorldRecording();
+    if (!pendingWorld_.pending) return;
+    const PendingWorld pw = pendingWorld_;
+    pendingWorld_.pending = false;
+
+    // The frame may have gone since renderWorld: a lost device clears the
+    // command buffer. The worker is joined above either way.
+    if (currentCmd == VK_NULL_HANDLE) return;
+
+    const auto finishStart = std::chrono::steady_clock::now();
+    const uint32_t frameIdx = pw.frameIdx;
+    const VkDescriptorSet perFrameSet = pw.perFrameSet;
+    game::GameHandler* gameHandler = pw.gameHandler;
+    const bool skipSky = pw.skipSky;
+
+    if (pw.parallel) {
+        // prepareRender() does the GPU allocations that are not thread-safe, so it runs
+        // on the main thread and is not covered by the worker timings. Name the culprit
+        // when a frame runs long instead of leaving renderWorld as one opaque number.
+        const double prepWmoMs = pw.prepWmoMs;
+        const double prepM2Ms = pw.prepM2Ms;
+        const double prepCharMs = pw.prepCharMs;
+        const double prepTotalMs = prepWmoMs + prepM2Ms + prepCharMs;
+        const double worstWorkerMs = std::max({lastTerrainRenderMs, lastWMORenderMs, lastM2RenderMs});
+
+        // The same breakdown on a timer, not only when a frame runs long.
+        //
+        // renderWorld is 3.3ms of a 15.8ms frame and the CPU and the GPU are
+        // within a millisecond of each other now, so what the main thread
+        // spends here decides the frame as much as any pass does - and the
+        // 40ms threshold below only ever speaks when something has already
+        // gone wrong. This says where the steady state goes.
+        static const bool frameProfile = core::envFlagEnabled("WOWEE_FRAME_PROFILE", false);
+        if (frameProfile) {
+            static auto lastSaid = std::chrono::steady_clock::now();
+            const auto sayNow = std::chrono::steady_clock::now();
+            if (sayNow - lastSaid > std::chrono::seconds(10)) {
+                lastSaid = sayNow;
+                LOG_WARNING("  renderWorld: prepare ", prepTotalMs,
+                            "ms (wmo ", prepWmoMs, " m2 ", prepM2Ms,
+                            " char ", prepCharMs, "), workers terrain ",
+                            lastTerrainRenderMs, " wmo ", lastWMORenderMs,
+                            " m2 ", lastM2RenderMs, " (worst ", worstWorkerMs,
+                            "), terrain chunks drawn ",
+                            terrainRenderer ? terrainRenderer->getRenderedChunkCount() : 0,
+                            " culled ",
+                            terrainRenderer ? terrainRenderer->getCulledChunkCount() : 0);
+            }
+        }
+
+        if (prepTotalMs + worstWorkerMs > 40.0) {
+            LOG_WARNING("SLOW renderWorld breakdown: prepare=", prepTotalMs,
+                        "ms (wmo=", prepWmoMs, " m2=", prepM2Ms, " char=", prepCharMs,
+                        ") workers: terrain=", lastTerrainRenderMs,
+                        " wmo=", lastWMORenderMs, " m2=", lastM2RenderMs,
+                        // Terrain is usually the critical path here, and its cost
+                        // is one descriptor bind plus one draw per surviving
+                        // chunk - so the counts say whether a slow frame is draw
+                        // volume or something else entirely.
+                        " | terrain chunks drawn=",
+                        terrainRenderer ? terrainRenderer->getRenderedChunkCount() : 0,
+                        " culled=",
+                        terrainRenderer ? terrainRenderer->getCulledChunkCount() : 0,
+                        " resident=",
+                        terrainRenderer ? terrainRenderer->getChunkCount() : 0);
+        }
+
+        // --- Execute all secondary buffers in correct draw order ---
+        VkCommandBuffer validCmds[8];
+        const char* validLabels[8];
+        uint32_t numCmds = 0;
+        // Terrain first, then the sky. Every sky layer sits on the far plane
+        // and depth-tests against what is already there, so drawing it after
+        // the ground skips the clouds' noise on every pixel a hill covers,
+        // which outdoors is most of them. Only the terrain goes ahead of it:
+        // it is the one pass that is opaque throughout. Buildings carry
+        // blended windows and doodads carry leaves and particles, and blended
+        // pixels leave no depth behind, so a sky drawn after them would paint
+        // over whichever of them stood against it.
+        const auto queue = [&](VkCommandBuffer buffer, const char* label) {
+            validLabels[numCmds] = label;
+            validCmds[numCmds++] = buffer;
+        };
+        if (pw.queueTerrain)
+            queue(secondaryCmds_[SEC_TERRAIN][frameIdx], "terrain");
+        queue(secondaryCmds_[SEC_SKY][frameIdx], "sky");
+        if (pw.queueWmo)
+            queue(secondaryCmds_[SEC_WMO][frameIdx], "wmo");
+        queue(secondaryCmds_[SEC_SELECTION][frameIdx], "selection");
+        queue(secondaryCmds_[SEC_CHARS][frameIdx], "characters");
+        if (pw.queueM2)
+            queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
+        queue(secondaryCmds_[SEC_POST][frameIdx], "water/effects");
+
+        // In one call. The marks that used to follow each of these were
+        // written from the primary, which a subpass begun with
+        // SECONDARY_COMMAND_BUFFERS contents does not allow - only
+        // vkCmdExecuteCommands may be recorded there - so what those
+        // timestamps read was undefined on every driver, not only on
+        // MoltenVK, which resolves any mark to its render pass anyway. The
+        // secondaries mark themselves now (sceneMark above), in the indices
+        // reserved for them in this same order.
+        (void)validLabels;
+        if (numCmds > 0) vkCmdExecuteCommands(currentCmd, numCmds, validCmds);
+    }
+
     // Underwater overlay and minimap - in the fallback path these run inline;
     // in the parallel path they were already recorded into SEC_POST above.
-    if (!parallelRecordingEnabled_) {
+    if (!pw.parallel) {
         // The glare, over the finished world (0x007f0870, 0x009ac400).
         if (skySystem && camera && !skipSky && !glareDrawsWithWater_) skySystem->renderGlare(currentCmd, perFrameSet);
         renderUnderwaterOverlay(currentCmd);
         renderPostSceneOverlays(currentCmd, gameHandler);
-        sceneMark(currentCmd, kMarkOverlays, "glare, underwater, minimap overlay");
+        if (pw.overlaysMark != VkContext::kNoGpuMark)
+            vkCtx->gpuMarkAt(currentCmd, pw.overlaysMark, "glare, underwater, minimap overlay");
     }
 
     // Water is drawn last, in a continuation of the scene pass, so that the
@@ -3853,8 +3945,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         if (vkCtx) vkCtx->gpuMark(currentCmd, "spray, glare, minimap over water");
     }
 
-    auto renderEnd = std::chrono::steady_clock::now();
-    lastRenderMs = std::chrono::duration<double, std::milli>(renderEnd - renderStart).count();
+    lastRenderMs = pw.launchMs + std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - finishStart).count();
 }
 
 // Water can leave the scene pass only when there is a continuation pass to draw
@@ -4090,6 +4182,7 @@ void Renderer::setActiveMapName(const std::string& name) {
 }
 
 bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const std::string& mapName) {
+    syncWorldRecording();
     if (!assetManager) {
         LOG_ERROR("Asset manager is null");
         return false;
@@ -4503,6 +4596,7 @@ void Renderer::logViewDistanceDiag() {
 }
 
 void Renderer::setSharpStars(bool enabled) {
+    syncWorldRecording();
     sharpStars_ = enabled;
     // Two halves of one switch: the sky model stops drawing its star layer and
     // the client's own point stars take its place. Setting either alone gives a
@@ -4512,6 +4606,7 @@ void Renderer::setSharpStars(bool enabled) {
 }
 
 void Renderer::setViewDistance(float distance) {
+    syncWorldRecording();
     viewDistance_ = glm::clamp(distance, 400.0f, 2400.0f);
     applyFarClip(farClipMapId_);
 }
@@ -4799,6 +4894,8 @@ bool Renderer::createSecondaryCommandResources() {
 }
 
 void Renderer::destroySecondaryCommandResources() {
+    // The doodad worker records into one of these pools.
+    syncWorldRecording();
     if (!vkCtx) return;
     VkDevice device = vkCtx->getDevice();
     vkDeviceWaitIdle(device);

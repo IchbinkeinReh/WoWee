@@ -1238,6 +1238,12 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
     // whose only effect is to be read later, like auto-repair, has no line here
     // and needs none.
     auto* renderer = services_.renderer;
+    // This runs from the interface, while the world's doodads may still be
+    // recording on a worker, and most of what follows changes something that
+    // worker reads - the camera, the draw distance, the model renderers. The
+    // getters below would wait for it anyway; this says so rather than leave
+    // it to whichever of them happens to come first.
+    if (renderer) renderer->syncWorldRecording();
     auto* camera = renderer ? renderer->getCamera() : nullptr;
     auto* cameraController = renderer ? renderer->getCameraController() : nullptr;
     auto* post = renderer ? renderer->getPostProcessPipeline() : nullptr;
