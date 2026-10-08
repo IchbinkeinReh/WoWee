@@ -10,6 +10,7 @@ namespace {
 // CharSections' BaseSection column: which part of a character a row describes.
 constexpr uint32_t kSectionSkin = 0;
 constexpr uint32_t kSectionFace = 1;
+constexpr uint32_t kSectionFacialHair = 2;
 constexpr uint32_t kSectionHair = 3;
 constexpr uint32_t kSectionUnderwear = 4;
 }  // namespace
@@ -34,6 +35,8 @@ CharacterSectionTextures resolveCharacterSections(
     bool haveAltFace = false;
 
     bool foundSkin = false, foundUnderwear = false;
+    // A caller without the facial hair has nothing to find.
+    bool foundFacial = who.facialHairId < 0;
 
     for (uint32_t r = 0; r < charSections->getRecordCount(); r++) {
         if (charSections->getUInt32(r, f.raceId) != who.raceId) continue;
@@ -54,6 +57,13 @@ CharacterSectionTextures resolveCharacterSections(
                    variation == who.hairStyleId && colour == who.hairColorId) {
             out.hair = charSections->getString(r, f.texture1);
             out.haveHair = !out.hair.empty();
+            out.scalpLower = charSections->getString(r, f.texture2);
+            out.scalpUpper = charSections->getString(r, f.texture3);
+        } else if (section == kSectionFacialHair && !foundFacial && who.facialHairId >= 0 &&
+                   variation == static_cast<uint32_t>(who.facialHairId) && colour == who.hairColorId) {
+            out.facialLower = charSections->getString(r, f.texture1);
+            out.facialUpper = charSections->getString(r, f.texture2);
+            foundFacial = true;
         } else if (section == kSectionFace && !out.exactFace &&
                    variation == who.faceId && colour == who.skinId) {
             out.faceLower = charSections->getString(r, f.texture1);
@@ -81,13 +91,23 @@ CharacterSectionTextures resolveCharacterSections(
             foundUnderwear = !out.underwear.empty();
         }
 
-        if (foundSkin && out.haveHair && out.exactFace && foundUnderwear) break;
+        if (foundSkin && out.haveHair && out.exactFace && foundUnderwear && foundFacial) break;
     }
 
     if (!out.exactFace && haveAltFace) {
         out.faceLower = altFaceLower;
         out.faceUpper = altFaceUpper;
         out.haveFace = true;
+    }
+    return out;
+}
+
+std::vector<FaceRegionLayer> faceRegionLayers(const CharacterSectionTextures& textures) {
+    std::vector<FaceRegionLayer> out;
+    for (const auto& [path, lower] : {std::pair{&textures.faceLower, true}, std::pair{&textures.faceUpper, false},
+                                      std::pair{&textures.facialLower, true}, std::pair{&textures.facialUpper, false},
+                                      std::pair{&textures.scalpLower, true}, std::pair{&textures.scalpUpper, false}}) {
+        if (!path->empty()) out.push_back({.path = *path, .lower = lower});
     }
     return out;
 }

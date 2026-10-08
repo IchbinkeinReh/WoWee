@@ -5,6 +5,7 @@
 #include "core/weapon_attachment.hpp"
 #include "game/character.hpp"
 #include "game/inventory.hpp"
+#include "pipeline/char_sections.hpp"
 #include "rendering/animation/weapon_type.hpp"
 #include <string>
 #include <vector>
@@ -34,6 +35,8 @@ struct PlayerTextureInfo {
     /// which have no type-8 texture and never look for one.
     std::string skinExtraPath;
     std::vector<std::string> underwearPaths;
+    /// The head's layers in the client's order: face, facial hair, scalp.
+    std::vector<pipeline::FaceRegionLayer> faceLayers;
 };
 
 /// Handles player character visual appearance: skin compositing, geoset selection,
@@ -55,7 +58,8 @@ public:
     PlayerTextureInfo resolvePlayerTextures(pipeline::M2Model& model,
                                             game::Race race, game::Gender gender,
                                             uint32_t appearanceBytes,
-                                            bool useFemaleModel = false);
+                                            bool useFemaleModel = false,
+                                            int facialHairId = -1);
 
     // Apply composited textures to loaded model instance.
     // Call AFTER charRenderer->loadModel(). Saves skin state for re-compositing.

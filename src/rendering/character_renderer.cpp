@@ -1278,10 +1278,21 @@ int impliedScale(const AtlasRegion256& region, int overlayWidth) {
 
 }  // namespace
 
+void CharacterRenderer::setFaceRegionLayer(const std::string& path, bool lower) {
+    if (!path.empty()) faceRegionLayers_[lowerPath(path)] = lower;
+}
+
 VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& layerPaths) {
     if (layerPaths.empty() || !assetManager || !assetManager->isInitialized()) {
         return whiteTexture_.get();
     }
+    // A layer's region: the head's where a caller has said so, else by name.
+    auto layerRegion = [this](const std::string& path) {
+        const std::string lower = lowerPath(path);
+        if (auto it = faceRegionLayers_.find(lower); it != faceRegionLayers_.end())
+            return regionFor(it->second ? "facelower" : "faceupper");
+        return regionFor(lower);
+    };
 
     // Composite key is deterministic from layer set; if we've already built it,
     // reuse the existing GPU texture to keep live instance pointers valid.
@@ -1380,7 +1391,7 @@ VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& 
         applyMagentaKeyIfNeeded(overlay, layerPaths[layer]);
         // A full-atlas layer speaks for itself and is not a region at all.
         if (overlay.width != width || overlay.height != height) {
-            const AtlasRegion256 region = regionFor(lowerPath(layerPaths[layer]));
+            const AtlasRegion256 region = layerRegion(layerPaths[layer]);
             if (region.known) {
                 const int want = impliedScale(region, overlay.width);
                 if (want > largestRegionScale) largestRegionScale = want;
@@ -1445,7 +1456,7 @@ VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& 
         } else {
             // Where this layer belongs, from the one table that also sized the
             // canvas above.
-            const AtlasRegion256 region = regionFor(lowerPath(loaded.path));
+            const AtlasRegion256 region = layerRegion(loaded.path);
             if (!region.known) {
                 // Unknown -- center placement as fallback
                 const int cx = (width - overlay.width) / 2;

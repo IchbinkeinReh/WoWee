@@ -514,6 +514,7 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
     std::string faceLowerPath;
     std::string faceUpperPath;
     std::string hairScalpPath;
+    std::vector<pipeline::FaceRegionLayer> faceLayers;
     std::vector<std::string> underwearPaths;
     bodySkinPath_.clear();
     baseLayers_.clear();
@@ -537,6 +538,7 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
         who.faceId = static_cast<uint8_t>(face);
         who.hairStyleId = static_cast<uint8_t>(hairStyle);
         who.hairColorId = static_cast<uint8_t>(hairColor);
+        who.facialHairId = facialHair;
 
         const auto sections = pipeline::resolveCharacterSections(
             charSectionsDbc.get(), csF, who,
@@ -549,6 +551,7 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
         skinExtraPath_  = sections.skinExtra;
         faceLowerPath   = sections.faceLower;
         faceUpperPath   = sections.faceUpper;
+        faceLayers      = pipeline::faceRegionLayers(sections);
         hairScalpPath   = sections.hair;
         underwearPaths  = sections.underwear;
 
@@ -601,12 +604,10 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
     if (!bodySkinPath_.empty()) {
         std::vector<std::string> layers;
         layers.push_back(bodySkinPath_);
-        // Face lower texture composited onto body at the face region
-        if (!faceLowerPath.empty()) {
-            layers.push_back(faceLowerPath);
-        }
-        if (!faceUpperPath.empty()) {
-            layers.push_back(faceUpperPath);
+        // The head's layers - face, facial hair, scalp - on its two regions.
+        for (const auto& fl : faceLayers) {
+            charRenderer_->setFaceRegionLayer(fl.path, fl.lower);
+            layers.push_back(fl.path);
         }
         for (const auto& up : underwearPaths) {
             layers.push_back(up);
@@ -614,8 +615,7 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
 
         // Cache for later equipment compositing.
         // Keep baseLayers_ without the base skin (compositeWithRegions takes basePath separately).
-        if (!faceLowerPath.empty()) baseLayers_.push_back(faceLowerPath);
-        if (!faceUpperPath.empty()) baseLayers_.push_back(faceUpperPath);
+        for (const auto& fl : faceLayers) baseLayers_.push_back(fl.path);
         for (const auto& up : underwearPaths) baseLayers_.push_back(up);
 
         if (layers.size() > 1) {

@@ -5307,14 +5307,16 @@ void Application::spawnPlayerCharacter() {
                 bool useCharSections = true;
                 if (appearanceComposer_) {
                     uint32_t appearanceBytes = 0;
+                    int facialHairId = -1;
                     if (gameHandler) {
                         const game::Character* activeChar = gameHandler->getActiveCharacter();
                         if (activeChar) {
                             appearanceBytes = activeChar->appearanceBytes;
+                            facialHairId = activeChar->facialFeatures;
                         }
                     }
                     texInfo = appearanceComposer_->resolvePlayerTextures(
-                        model, playerRace_, playerGender_, appearanceBytes, useFemaleModel);
+                        model, playerRace_, playerGender_, appearanceBytes, useFemaleModel, facialHairId);
                 }
 
                 // Load external .anim files for sequences with external data.

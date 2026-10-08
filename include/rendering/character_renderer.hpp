@@ -506,6 +506,9 @@ public:
      * layers onto a base skin BLP. Returns the resulting VkTexture*.
      */
     VkTexture* compositeTextures(const std::vector<std::string>& layerPaths);
+    /// Which of the head's two regions a layer goes on, for art whose name
+    /// does not say - a scalp or facial hair (0x004e90e0, 0x004e8ff0).
+    void setFaceRegionLayer(const std::string& path, bool lower);
 
     /**
      * Build a composited character skin with explicit region-based equipment overlays.
@@ -516,6 +519,7 @@ public:
 
     /** Clear the composite texture cache (forces re-compositing on next call). */
     void clearCompositeCache();
+    std::unordered_map<std::string, bool> faceRegionLayers_;  // lowercased path → on FaceLower
 
     /** Load a BLP texture from MPQ and return VkTexture* (cached). */
     /// texFlags: the M2 texture's wrap flags (bit 0 repeat U, bit 1 repeat V;

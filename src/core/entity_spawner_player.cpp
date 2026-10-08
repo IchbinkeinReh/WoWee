@@ -158,8 +158,9 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
     const AppearanceBytes look = unpackAppearanceBytes(appearanceBytes);
 
     std::string bodySkinPath = defaultSkin;
-    std::string skinExtraPath, hairTexturePath, faceLowerPath, faceUpperPath;
+    std::string skinExtraPath, hairTexturePath;
     std::vector<std::string> underwearPaths;
+    std::vector<pipeline::FaceRegionLayer> faceLayers;
 
     if (auto charSectionsDbc = assetManager_->loadDBC("CharSections.dbc");
         charSectionsDbc && charSectionsDbc->isLoaded()) {
@@ -174,6 +175,7 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
         who.faceId = look.faceId;
         who.hairStyleId = look.hairStyleId;
         who.hairColorId = look.hairColorId;
+        who.facialHairId = facialFeatures;
 
         // The underwear rows name art that was never shipped for some skin
         // colours - Draenei 10 to 16 among them - and this caller can check.
@@ -186,8 +188,7 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
 
         if (!sections.bodySkin.empty()) bodySkinPath = sections.bodySkin;
         skinExtraPath = sections.skinExtra;
-        faceLowerPath = sections.faceLower;
-        faceUpperPath = sections.faceUpper;
+        faceLayers = pipeline::faceRegionLayers(sections);
         hairTexturePath = sections.hair;
         underwearPaths = sections.underwear;
 
@@ -211,8 +212,11 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
     {
         std::vector<std::string> layers;
         layers.push_back(bodySkinPath);
-        if (!faceLowerPath.empty()) layers.push_back(faceLowerPath);
-        if (!faceUpperPath.empty()) layers.push_back(faceUpperPath);
+        // The head's layers - face, facial hair, scalp - on its two regions.
+        for (const auto& fl : faceLayers) {
+            charRenderer->setFaceRegionLayer(fl.path, fl.lower);
+            layers.push_back(fl.path);
+        }
         for (const auto& up : underwearPaths) layers.push_back(up);
         if (layers.size() > 1) {
             compositeTex = charRenderer->compositeTextures(layers);
@@ -298,8 +302,7 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
     st.facialFeatures = facialFeatures;
     st.bodySkinPath = bodySkinPath;
     // Include face textures so compositeWithRegions can rebuild the full base
-    if (!faceLowerPath.empty()) st.underwearPaths.push_back(faceLowerPath);
-    if (!faceUpperPath.empty()) st.underwearPaths.push_back(faceUpperPath);
+    for (const auto& fl : faceLayers) st.underwearPaths.push_back(fl.path);
     for (const auto& up : underwearPaths) st.underwearPaths.push_back(up);
     onlinePlayerAppearance_[guid] = std::move(st);
 }
