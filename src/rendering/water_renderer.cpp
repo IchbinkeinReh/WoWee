@@ -1757,6 +1757,7 @@ void WaterRenderer::createReflectionResources() {
         LOG_ERROR("WaterRenderer: failed to create reflection depth image");
         return;
     }
+    setObjectName(vkCtx->getDevice(), VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(reflectionDepthImage), "water reflection depth");
 
     VkImageViewCreateInfo depthViewCI{};
     depthViewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

@@ -1699,6 +1699,7 @@ bool VkContext::createDepthBuffer() {
         LOG_ERROR("Failed to create depth image");
         return false;
     }
+    setObjectName(device, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(depthImage), "scene depth");
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -1813,6 +1814,7 @@ bool VkContext::createDepthResolveImage() {
         LOG_ERROR("Failed to create depth resolve image");
         return false;
     }
+    setObjectName(device, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(depthResolveImage), "scene depth resolve");
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

@@ -1,6 +1,7 @@
 #include "core/character_component.hpp"
 #include "rendering/character_preview.hpp"
 #include "rendering/imgui_texture.hpp"
+#include "rendering/vk_utils.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/vk_render_target.hpp"
@@ -244,6 +245,7 @@ void CharacterPreview::createFBO() {
             LOG_ERROR("CharacterPreview: failed to create dummy shadow image");
             return;
         }
+        setObjectName(vkCtx_->getDevice(), VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(dummyShadowImage_), "character preview dummy shadow");
         VkImageViewCreateInfo viewCI{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         viewCI.image = dummyShadowImage_;
         viewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;

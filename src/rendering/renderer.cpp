@@ -163,6 +163,7 @@ bool Renderer::createShadowMapImages() {
                       atlasW, "x", atlasH);
             return false;
         }
+        setObjectName(device, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(shadowDepthImage[i]), "shadow atlas");
         shadowDepthLayout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
     }
 
