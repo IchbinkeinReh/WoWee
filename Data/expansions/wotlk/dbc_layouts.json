@@ -24,6 +24,16 @@
     "SexID": 2,
     "Variation": 3
   },
+  "CameraShakes": {
+    "Amplitude": 3,
+    "Coefficient": 7,
+    "Direction": 2,
+    "Duration": 5,
+    "Frequency": 4,
+    "ID": 0,
+    "Phase": 6,
+    "ShakeType": 1
+  },
   "CharSections": {
     "BaseSection": 3,
     "ColorIndex": 5,
@@ -93,6 +103,7 @@
     "ModelScale": 4,
     "MountHeight": 16,
     "GeoBoxMinX": 17,
+    "WorldEffectScale": 23,
     "AttachedEffectScale": 24
   },
   "Emotes": {
@@ -304,6 +315,7 @@
     "EffectBasePoints1": 81,
     "EffectBasePoints2": 82,
     "EffectImplicitTargetA": 86,
+    "EffectImplicitTargetB": 89,
     "EffectItemType0": 107,
     "EffectItemType1": 108,
     "EffectItemType2": 109,
@@ -362,12 +374,21 @@
     "ID": 0,
     "Name": 2
   },
+  "SpellEffectCameraShakes": {
+    "CameraShake0": 1,
+    "CameraShake1": 2,
+    "CameraShake2": 3,
+    "ID": 0
+  },
   "SpellVisual": {
+    "CasterImpactKit": 14,
     "CastKit": 2,
     "Flags": 13,
     "HasMissile": 7,
     "ID": 0,
+    "ImpactAreaKit": 24,
     "ImpactKit": 3,
+    "InstantAreaKit": 23,
     "MissileAttachment": 16,
     "MissileCastOffsetX": 26,
     "MissileCastOffsetY": 27,
@@ -380,7 +401,8 @@
     "MissileSound": 11,
     "PrecastKit": 1,
     "StateDoneKit": 5,
-    "StateKit": 4
+    "StateKit": 4,
+    "TargetImpactKit": 15
   },
   "SpellVisualEffectName": {
     "FilePath": 2,
@@ -405,7 +427,28 @@
     "SpecialEffect1": 12,
     "SpecialEffect2": 13,
     "Flags": 37,
-    "WorldEffect": 14
+    "ShakeID": 16,
+    "WorldEffect": 14,
+    "CharProc0": 17,
+    "CharProc1": 18,
+    "CharProc2": 19,
+    "CharProc3": 20,
+    "CharParamZero0": 21,
+    "CharParamZero1": 22,
+    "CharParamZero2": 23,
+    "CharParamZero3": 24,
+    "CharParamOne0": 25,
+    "CharParamOne1": 26,
+    "CharParamOne2": 27,
+    "CharParamOne3": 28,
+    "CharParamTwo0": 29,
+    "CharParamTwo1": 30,
+    "CharParamTwo2": 31,
+    "CharParamTwo3": 32,
+    "CharParamThree0": 33,
+    "CharParamThree1": 34,
+    "CharParamThree2": 35,
+    "CharParamThree3": 36
   },
   "SpellVisualKitModelAttach": {
     "AttachmentID": 3,

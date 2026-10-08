@@ -38,6 +38,8 @@ struct CharacterAppearance {
     uint8_t faceId = 0;
     uint8_t hairStyleId = 0;
     uint8_t hairColorId = 0;
+    /// PLAYER_BYTES_2's facial hair, -1 where the caller has none.
+    int facialHairId = -1;
 };
 
 /// The textures CharSections names for that character.
@@ -50,6 +52,14 @@ struct CharacterSectionTextures {
     std::string faceLower;
     std::string faceUpper;
     std::string hair;
+    /// The hair row's second and third textures, the scalp painted on the
+    /// head's two regions (0x004ea1f0 section 3, textures 1 and 2).
+    std::string scalpLower;
+    std::string scalpUpper;
+    /// The facial hair row's (section 2, the style and the hair colour)
+    /// two textures, for the same two regions.
+    std::string facialLower;
+    std::string facialUpper;
     std::vector<std::string> underwear;
 
     /// True when the exact (face, skin) pair was found rather than approximated.
@@ -70,6 +80,17 @@ CharacterSectionTextures resolveCharacterSections(
     const CharacterAppearance& who,
     bool (*keepUnderwear)(const std::string&, void*) = nullptr,
     void* keepUnderwearContext = nullptr);
+
+/// A layer on one of the head's two regions of the body texture.
+struct FaceRegionLayer {
+    std::string path;
+    bool lower = false;  ///< FaceLower (0, 192, 128x64 at 256); else FaceUpper
+};
+
+/// The head's layers in the order the client composites them: in each of
+/// the two regions the face, then the facial hair, then the scalp
+/// (0x004e90e0 for FaceLower, 0x004e8ff0 for FaceUpper).
+std::vector<FaceRegionLayer> faceRegionLayers(const CharacterSectionTextures& textures);
 
 /// Put the resolved textures into a character model's runtime texture slots.
 ///

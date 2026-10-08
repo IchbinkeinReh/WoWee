@@ -2300,8 +2300,32 @@ void Application::setState(AppState newState) {
                     // The aura state kits: the unit's model, its spell's
                     // visual, its kits' scale, and whether it shows its
                     // Flags 8 kits (0x00720400).
+                    svs->setCameraShakeSink([this](const rendering::camera_shake::Shake& shake, const glm::vec3& at) {
+                        if (renderer && renderer->getCameraController())
+                            renderer->getCameraController()->addCameraShake(shake, at);
+                    });
                     svs->setAttachedEffectScale([this](uint32_t renderInstanceId) {
                         return entitySpawner_ ? entitySpawner_->kitAttachedEffectScale(renderInstanceId) : 1.0f;
+                    });
+                    svs->setWorldEffectScale([this](uint32_t renderInstanceId) {
+                        return entitySpawner_ ? entitySpawner_->kitWorldEffectScale(renderInstanceId) : 1.0f;
+                    });
+                    // What a kit's CharProc procedures read: its spell's cast
+                    // time and aim, the unit's creature type flags, and the
+                    // light the tint goes to.
+                    svs->setKitSpellResolver([this](uint32_t spellId) {
+                        rendering::SpellVisualSystem::KitSpellInfo info;
+                        if (!gameHandler) return info;
+                        info.castTimeMs = gameHandler->getSpellData(spellId).castTimeMs;
+                        info.targetKind = gameHandler->getSpellTargetKind(spellId);
+                        return info;
+                    });
+                    svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
+                        return entitySpawner_ ? entitySpawner_->creatureTypeFlags(renderInstanceId) : 0u;
+                    });
+                    svs->setLightTintSink([this](const glm::vec3& colour, uint32_t amount) {
+                        if (renderer && renderer->getLightingManager())
+                            renderer->getLightingManager()->setSpellLightTint(colour, amount);
                     });
                     svs->setUnitInstanceResolver([this](uint64_t guid) -> uint32_t {
                         return gameHandler ? gameHandler->resolveUnitRenderInstance(guid) : 0;
@@ -2346,10 +2370,12 @@ void Application::setState(AppState newState) {
                         renderer->getCameraController()->applyKnockBack(vcos, vsin, hspeed, vspeed);
                     }
                 });
-                gameHandler->setCameraShakeCallback([this](float magnitude, float frequency, float duration) {
-                    if (renderer && renderer->getCameraController()) {
-                        renderer->getCameraController()->triggerShake(magnitude, frequency, duration);
-                    }
+                gameHandler->setCameraShakeCallback([this](uint32_t shakesId, uint32_t soundId) {
+                    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+                    if (!svs) return;
+                    const glm::vec3 at = renderer->getCharacterPosition();
+                    svs->playCameraShakes(shakesId, at);
+                    svs->playSoundAt(soundId, at);
                 });
                 gameHandler->setAutoFollowCallback([this](const glm::vec3* renderPos) {
                     if (renderer && renderer->getCameraController()) {
@@ -5301,14 +5327,16 @@ void Application::spawnPlayerCharacter() {
                 bool useCharSections = true;
                 if (appearanceComposer_) {
                     uint32_t appearanceBytes = 0;
+                    int facialHairId = -1;
                     if (gameHandler) {
                         const game::Character* activeChar = gameHandler->getActiveCharacter();
                         if (activeChar) {
                             appearanceBytes = activeChar->appearanceBytes;
+                            facialHairId = activeChar->facialFeatures;
                         }
                     }
                     texInfo = appearanceComposer_->resolvePlayerTextures(
-                        model, playerRace_, playerGender_, appearanceBytes, useFemaleModel);
+                        model, playerRace_, playerGender_, appearanceBytes, useFemaleModel, facialHairId);
                 }
 
                 // Load external .anim files for sequences with external data.

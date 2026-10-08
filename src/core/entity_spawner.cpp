@@ -714,6 +714,27 @@ bool EntitySpawner::unarmedKitsShown(uint64_t guid) const {
 }
 
 float EntitySpawner::kitAttachedEffectScale(uint32_t renderInstanceId) const {
+    return kitModelDataScale(renderInstanceId, "AttachedEffectScale");
+}
+
+float EntitySpawner::kitWorldEffectScale(uint32_t renderInstanceId) const {
+    return kitModelDataScale(renderInstanceId, "WorldEffectScale");
+}
+
+uint32_t EntitySpawner::creatureTypeFlags(uint32_t renderInstanceId) const {
+    if (!gameHandler_ || renderInstanceId == 0) return 0;
+    for (const auto& [guid, instanceId] : creatureInstances_) {
+        if (instanceId != renderInstanceId) continue;
+        auto entity = gameHandler_->getEntityManager().getEntity(guid);
+        if (!entity || entity->getType() != game::ObjectType::UNIT) return 0;
+        const auto& creatures = gameHandler_->getCreatureInfoCache();
+        const auto it = creatures.find(static_cast<const game::Unit&>(*entity).getEntry());
+        return it != creatures.end() ? it->second.typeFlags : 0u;
+    }
+    return 0;
+}
+
+float EntitySpawner::kitModelDataScale(uint32_t renderInstanceId, const char* column) const {
     if (!gameHandler_ || !assetManager_ || renderInstanceId == 0) return 1.0f;
     uint64_t guid = 0;
     if (renderer_ && renderer_->getCharacterInstanceId() == renderInstanceId) guid = gameHandler_->getPlayerGuid();
@@ -730,7 +751,7 @@ float EntitySpawner::kitAttachedEffectScale(uint32_t renderInstanceId) const {
     const auto* layouts = pipeline::getActiveDBCLayout();
     const auto* displayLayout = layouts ? layouts->getLayout("CreatureDisplayInfo") : nullptr;
     const auto* modelLayout = layouts ? layouts->getLayout("CreatureModelData") : nullptr;
-    const uint32_t scaleField = modelLayout ? modelLayout->tryField("AttachedEffectScale") : 0xFFFFFFFFu;
+    const uint32_t scaleField = modelLayout ? modelLayout->tryField(column) : 0xFFFFFFFFu;
     const int32_t displayRow = displays ? displays->findRecordById(displayId) : -1;
     if (displayRow < 0 || !models || scaleField >= models->getFieldCount()) return 1.0f;
     const int32_t modelRow = models->findRecordById(

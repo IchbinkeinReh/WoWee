@@ -8,6 +8,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "core/weapon_attachment.hpp"
+#include "game/spell_target_kind.hpp"
 #include "rendering/spell_kit.hpp"
 
 #include <glm/glm.hpp>
@@ -104,4 +105,185 @@ TEST_CASE("0x00738180 sets the unit's idle bit where it runs to its end", "[spel
     other.activePlayer = false;
     other.field = SheathState::Melee;
     CHECK_FALSE(animationKitIdle(other).has_value());
+}
+
+#include "rendering/camera_shake.hpp"
+
+namespace cs = wowee::rendering::camera_shake;
+
+TEST_CASE("a camera shake fades with the camera's distance", "[camera_shake]") {
+    // 0x006004b0: whole within 9 yards, 0.7 per 9 yards beyond, none past 80.
+    CHECK(*cs::attenuated(1.0f, 8.0f * 8.0f) == Catch::Approx(1.0f));
+    CHECK(*cs::attenuated(1.0f, 18.0f * 18.0f) == Catch::Approx(0.7f));
+    CHECK(*cs::attenuated(1.0f, 27.0f * 27.0f) == Catch::Approx(0.49f));
+    CHECK_FALSE(cs::attenuated(1.0f, 81.0f * 81.0f).has_value());
+    // The row's amplitude is in 36ths.
+    CHECK(cs::fromRow(0, 0, 36.0f, 1.0f, 1.0f, 0.0f, 0.0f).amplitude == Catch::Approx(1.0f));
+}
+
+TEST_CASE("a camera shake moves along the facing, its left or up", "[camera_shake]") {
+    // A quarter cycle in, a 1 Hz shake is at its peak.
+    std::vector<cs::Active> shakes;
+    const cs::Shake up = cs::fromRow(0, 2, 36.0f, 1.0f, 2.0f, 0.0f, 0.0f);
+    shakes.push_back({.shake = up, .origin = glm::vec3(0.0f), .startSeconds = 0.0f});
+    glm::vec3 o = cs::offset(shakes, 0.25f, glm::vec3(0.0f), 0.0f);
+    CHECK(o.z == Catch::Approx(1.0f));
+    CHECK(o.x == Catch::Approx(0.0f));
+    // Forward at a facing of a quarter turn is +Y; left of it is -X.
+    shakes.clear();
+    shakes.push_back({.shake = cs::fromRow(0, 0, 36.0f, 1.0f, 2.0f, 0.0f, 0.0f), .startSeconds = 0.0f});
+    shakes.push_back({.shake = cs::fromRow(0, 1, 18.0f, 1.0f, 2.0f, 0.0f, 0.0f), .startSeconds = 0.0f});
+    o = cs::offset(shakes, 0.25f, glm::vec3(0.0f), glm::radians(90.0f));
+    CHECK(o.y == Catch::Approx(1.0f));
+    CHECK(o.x == Catch::Approx(-0.5f));
+    // Only the strongest in a direction moves it.
+    shakes.clear();
+    shakes.push_back({.shake = cs::fromRow(0, 2, 36.0f, 1.0f, 2.0f, 0.0f, 0.0f), .startSeconds = 0.0f});
+    shakes.push_back({.shake = cs::fromRow(0, 2, 72.0f, 1.0f, 2.0f, 0.0f, 0.0f), .startSeconds = 0.0f});
+    CHECK(cs::offset(shakes, 0.25f, glm::vec3(0.0f), 0.0f).z == Catch::Approx(2.0f));
+    // Type 1 decays by e^(-t c).
+    const cs::Shake decaying = cs::fromRow(1, 2, 36.0f, 1.0f, 2.0f, 0.0f, 2.0f);
+    CHECK(cs::displacement(decaying, 1.0f, 0.25f) == Catch::Approx(std::exp(-0.5f)));
+    // Run out (Phase counts toward Duration), it is dropped.
+    shakes.clear();
+    shakes.push_back({.shake = cs::fromRow(0, 2, 36.0f, 1.0f, 1.0f, 0.5f, 0.0f), .startSeconds = 0.0f});
+    CHECK(cs::offset(shakes, 0.6f, glm::vec3(0.0f), 0.0f) == glm::vec3(0.0f));
+    CHECK(shakes.empty());
+}
+
+TEST_CASE("a kit's colour fade holds, then fades to white", "[spell_kit]") {
+    // 0x007265c0 case 13: red held a second, faded over two.
+    const sk::ColourFade fade{.startMs = 1000, .colour = 0xFFFF0000u, .holdMs = 1000, .fadeMs = 2000};
+    uint32_t c = 0;
+    REQUIRE(sk::fadeColour(fade, 1500, c));
+    CHECK(c == 0xFFFF0000u);
+    // Half-way through the fade: half way back to white, in 0x006acc50's
+    // unsigned byte arithmetic (alpha 128 takes 255 to 0x7f).
+    REQUIRE(sk::fadeColour(fade, 3000, c));
+    CHECK(((c >> 16) & 0xff) == 0xff);
+    CHECK((c & 0xff) == 0x7f);
+    CHECK(((c >> 8) & 0xff) == 0x7f);
+    // Run out.
+    CHECK_FALSE(sk::fadeColour(fade, 4001, c));
+    // The model's colour from 0xRRGGBB.
+    const glm::vec3 rgb = sk::colourToRgb(0xFF336699u);
+    CHECK(rgb.r == Catch::Approx(0x33 / 255.0f));
+    CHECK(rgb.g == Catch::Approx(0x66 / 255.0f));
+    CHECK(rgb.b == Catch::Approx(0x99 / 255.0f));
+    // A whole alpha takes the colour outright, keeping the alpha it had.
+    CHECK(sk::lerpColour(0x80FFFFFFu, 0xFF102030u, 0xff) == 0x80102030u);
+}
+
+TEST_CASE("0x00745230 places a kit's models by the kit's type", "[spell_kit]") {
+    using sk::KitModelKind;
+    using sk::KitModelPlace;
+    using sk::KitType;
+    // A cast or impact kit on a unit: columns at their attachments, the
+    // WorldEffect and an attachment-less row where the unit stands.
+    CHECK(sk::kitModelPlace(KitType::Cast, KitModelKind::Column, 21, false) == KitModelPlace::Attachment);
+    CHECK(sk::kitModelPlace(KitType::Cast, KitModelKind::Base, 19, false) == KitModelPlace::Attachment);
+    CHECK(sk::kitModelPlace(KitType::Precast, KitModelKind::World, -1, false) == KitModelPlace::AtUnit);
+    CHECK(sk::kitModelPlace(KitType::Cast, KitModelKind::AttachRow, -1, false) == KitModelPlace::AtUnit);
+    CHECK(sk::kitModelPlace(KitType::Cast, KitModelKind::AttachRow, 0, false) == KitModelPlace::Attachment);
+    // Given a place, every model goes there.
+    CHECK(sk::kitModelPlace(KitType::Cast, KitModelKind::Column, 22, true) == KitModelPlace::AtPlace);
+    // An area kit (flag 0x2000): its head and world effects, and its base
+    // and rows only at a place.
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::Head, 20, false) == KitModelPlace::Attachment);
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::World, -1, false) == KitModelPlace::AtUnit);
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::Base, 19, false) == KitModelPlace::None);
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::Base, 19, true) == KitModelPlace::AtPlace);
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::AttachRow, 5, true) == KitModelPlace::AtPlace);
+    CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::Column, 21, true) == KitModelPlace::None);
+}
+
+TEST_CASE("a kit's models play once, repeat for the cast, or hold for the aura", "[spell_kit]") {
+    CHECK(sk::kitModelLife(sk::KitType::Precast) == sk::KitModelLife::Repeat);
+    CHECK(sk::kitModelLife(sk::KitType::State) == sk::KitModelLife::Hold);
+    for (auto type : {sk::KitType::PlayImpact, sk::KitType::Cast, sk::KitType::Area, sk::KitType::StateDone})
+        CHECK(sk::kitModelLife(type) == sk::KitModelLife::Once);
+    // 0x00744870: the Stand runs once, then the Decay where there is one.
+    const auto timing = sk::onceTiming(1500.0f, true);
+    CHECK(timing.switchAt == Catch::Approx(1.5f));
+    CHECK(timing.decays);
+    CHECK_FALSE(sk::onceTiming(800.0f, false).decays);
+}
+
+TEST_CASE("a unit's impact kit is its caster's or its target's", "[spell_kit]") {
+    // 0x00800d00: CasterImpactKit on the caster, TargetImpactKit on any
+    // other, the ImpactKit where the visual lacks one.
+    CHECK(sk::impactKitFor(true, 10, 11, 12) == 11);
+    CHECK(sk::impactKitFor(false, 10, 11, 12) == 12);
+    CHECK(sk::impactKitFor(true, 10, 0, 12) == 10);
+    CHECK(sk::impactKitFor(false, 10, 11, 0) == 10);
+}
+
+TEST_CASE("a kit model placed in the world is sized by the unit and its effect", "[spell_kit]") {
+    // 0x006f7950: 0.3 of the narrower side of the model's box, at least 1.
+    CHECK(sk::unitWorldEffectSize(1.0f, glm::vec3(-1.0f), glm::vec3(1.0f)) == Catch::Approx(1.0f));
+    CHECK(sk::unitWorldEffectSize(1.0f, glm::vec3(-5.0f, -10.0f, 0.0f), glm::vec3(5.0f, 10.0f, 3.0f)) ==
+          Catch::Approx(3.0f));
+    CHECK(sk::unitWorldEffectSize(0.5f, glm::vec3(-5.0f, -10.0f, 0.0f), glm::vec3(5.0f, 10.0f, 3.0f)) ==
+          Catch::Approx(1.5f));
+    // 0x006f8ae0: times the effect's Scale, within its allowed scales.
+    CHECK(sk::worldKitModelScale(1.0f, 1.0f, 0.1f, 10.0f) == Catch::Approx(1.0f));
+    CHECK(sk::worldKitModelScale(3.0f, 2.0f, 0.1f, 4.0f) == Catch::Approx(4.0f));
+    CHECK(sk::worldKitModelScale(1.0f, 0.01f, 0.5f, 4.0f) == Catch::Approx(0.5f));
+    // No allowed scales at all: 0, which is taken as 1.
+    CHECK(sk::worldKitModelScale(2.0f, 1.0f, 0.0f, 0.0f) == Catch::Approx(1.0f));
+    // Its offset turns with the facing and is not scaled.
+    const glm::mat4 local = sk::modelAttachMatrix(glm::vec3(1.0f, 0.0f, 0.0f), 0.0f, 0.0f, 0.0f);
+    const glm::mat4 m = sk::worldKitModelMatrix(glm::vec3(10.0f, 20.0f, 0.0f), glm::radians(90.0f), local, 3.0f);
+    CHECK(m[3].x == Catch::Approx(10.0f).margin(1e-5));
+    CHECK(m[3].y == Catch::Approx(21.0f));
+    CHECK(glm::length(glm::vec3(m[0])) == Catch::Approx(3.0f));
+}
+
+TEST_CASE("what a spell is aimed at, as 0x007fe1b0 reads it", "[spell_kit]") {
+    using wowee::game::spellTargetKind;
+    const std::array<uint32_t, 3> none{};
+    // Targets 0x100 is friendly before anything else; 0x80 an enemy.
+    CHECK(spellTargetKind(0x180, {6, 0, 0}, none, none) == 1);
+    CHECK(spellTargetKind(0x80, none, none, none) == 2);
+    // An enemy target in any effect's A or B.
+    CHECK(spellTargetKind(0, {6, 0, 0}, none, none) == 2);
+    CHECK(spellTargetKind(0, {21, 0, 0}, {0, 0, 16}, none) == 2);
+    // A friendly one, or the caster with any aura but 4.
+    CHECK(spellTargetKind(0, {21, 0, 0}, none, none) == 1);
+    CHECK(spellTargetKind(0, {1, 0, 0}, none, {3, 0, 0}) == 1);
+    CHECK(spellTargetKind(0, {1, 0, 0}, none, {4, 0, 0}) == 0);
+    CHECK(spellTargetKind(0, none, none, none) == 0);
+}
+
+TEST_CASE("CharProc 1 and 13 spare a flagged creature from a harmful spell", "[spell_kit]") {
+    CHECK(sk::kitColoursUnit(false, 2));
+    CHECK(sk::kitColoursUnit(true, 1));
+    CHECK_FALSE(sk::kitColoursUnit(true, 2));
+}
+
+TEST_CASE("CharProc 14 takes an alpha in (0, 1] and fades over ParamTwo", "[spell_kit]") {
+    CHECK_FALSE(sk::kitAlphaTaken(0.0f));
+    CHECK(sk::kitAlphaTaken(0.5f));
+    CHECK(sk::kitAlphaTaken(1.0f));
+    CHECK_FALSE(sk::kitAlphaTaken(1.5f));
+    CHECK(sk::kitAlphaFadeMs(0.0f) == 1000u);
+    CHECK(sk::kitAlphaFadeMs(2.5f) == 2500u);
+}
+
+TEST_CASE("CharProc 6 tints the light up to its peak, holds it, and lets it go", "[spell_kit]") {
+    // A 2 s cast, at full tint half way through it.
+    const auto tint = sk::lightTint(0x00ff0000u, 0.5f, 2000, 1000);
+    CHECK(tint.colour == 0xffff0000u);
+    float amount = 0.0f;
+    REQUIRE(sk::lightTintAmount(tint, 1500, amount));
+    CHECK(amount == Catch::Approx(0.5f));
+    REQUIRE(sk::lightTintAmount(tint, 2500, amount));
+    CHECK(amount == Catch::Approx(1.0f));
+    REQUIRE(sk::lightTintAmount(tint, 3050, amount));
+    CHECK(amount == Catch::Approx(0.5f));
+    CHECK_FALSE(sk::lightTintAmount(tint, 3100, amount));
+    // 0x006acc50: alpha/256 of the way, all of it at 255.
+    const glm::vec3 half = sk::tintColour(glm::vec3(0.0f), glm::vec3(1.0f), 128);
+    CHECK(half.x == Catch::Approx(0.5f));
+    CHECK(sk::tintColour(glm::vec3(0.0f), glm::vec3(1.0f), 255).x == Catch::Approx(1.0f));
 }

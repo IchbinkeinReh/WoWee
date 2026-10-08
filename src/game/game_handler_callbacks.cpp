@@ -3,6 +3,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "game/spell_description_eval.hpp"
 #include "game/gather_spells.hpp"
+#include "game/spell_target_kind.hpp"
 #include "game/packed_time.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/game_utils.hpp"
@@ -3977,6 +3978,18 @@ uint32_t GameHandler::getSpellVisualId(uint32_t spellId) const {
     loadSpellNameCache();
     auto it = spellNameCache_.find(spellId);
     return it != spellNameCache_.end() ? it->second.spellVisualId : 0;
+}
+
+uint32_t GameHandler::getSpellTargetKind(uint32_t spellId) const {
+    if (spellId == 0) return 0;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return 0;
+    const auto& e = it->second;
+    return spellTargetKind(e.targetFlags,
+                           {e.implicitTargetsA[0], e.implicitTargetsA[1], e.implicitTargetsA[2]},
+                           {e.implicitTargetsB[0], e.implicitTargetsB[1], e.implicitTargetsB[2]},
+                           {e.effectAuraIds[0], e.effectAuraIds[1], e.effectAuraIds[2]});
 }
 
 uint32_t GameHandler::getSpellSchoolMask(uint32_t spellId) const {

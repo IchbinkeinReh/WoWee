@@ -180,6 +180,13 @@ public:
     void setLocomotionSpeed(uint32_t instanceId, float yardsPerSecond);
     void startFadeIn(uint32_t instanceId, float durationSeconds);
     void setInstanceOpacity(uint32_t instanceId, float opacity);
+    /// A spell kit's alpha on the unit (0x007265c0 case 14), on top of its
+    /// own: faded to over `seconds`, or set at once where that is 0 or it is
+    /// already there (0x00744030). Its weapons take it too.
+    void setInstanceKitAlpha(uint32_t instanceId, float alpha, float seconds);
+    /// The unit's colour, which its direct light is multiplied by: a spell
+    /// kit's (0x007265c0 cases 1 and 13, 0x00720db0); white for none.
+    void setInstanceDiffuseColour(uint32_t instanceId, const glm::vec3& colour);
     void setInstanceScale(uint32_t instanceId, float scale);
     [[nodiscard]] const pipeline::M2Model* getModelData(uint32_t modelId) const;
     [[nodiscard]] const pipeline::M2Model* getInstanceModelData(uint32_t instanceId) const;
@@ -360,13 +367,16 @@ private:
     /// (its fog colour, 0x007c1730), y the scale on the direct light
     /// (0x007a1e90's +0x8c), z the depth in yards within which the model
     /// does not receive the sun's shadow (its own extent: no self-shadow).
+    /// diffuseColour: the unit's colour, which its
+    /// direct light is multiplied by (CM2Model +0x180, 0x00720db0).
     struct CharPushConstants {
         glm::mat4 model{1.0f};
         glm::vec4 interiorAmbient{0.0f};
         glm::vec4 interiorDirect{0.0f};
         glm::vec4 lightFlags{0.0f, 1.0f, 0.0f, 0.0f};
+        glm::vec4 diffuseColour{1.0f};
     };
-    static_assert(sizeof(CharPushConstants) == 112, "CharPushConstants must match the shaders");
+    static_assert(sizeof(CharPushConstants) == 128, "CharPushConstants must match the shaders");
 
     struct CharacterInstance {
         uint32_t id;
@@ -417,8 +427,17 @@ private:
         // Weapon attachments (weapons parented to this instance's bones)
         std::vector<WeaponAttachment> weaponAttachments;
 
+        // The unit's colour (setInstanceDiffuseColour).
+        glm::vec3 diffuseColour{1.0f};
+
         // Opacity (for fade-in)
         float opacity = 1.0f;
+        /// A spell kit's alpha (setInstanceKitAlpha), multiplying opacity.
+        float kitAlpha = 1.0f;
+        float kitAlphaFrom = 1.0f;
+        float kitAlphaTo = 1.0f;
+        float kitAlphaElapsed = 0.0f;
+        float kitAlphaSeconds = 0.0f;
         float fadeInTime = 0.0f;     // elapsed fade time (seconds)
         float fadeInDuration = 0.0f; // total fade duration (0 = no fade)
 
@@ -499,6 +518,9 @@ public:
      * layers onto a base skin BLP. Returns the resulting VkTexture*.
      */
     VkTexture* compositeTextures(const std::vector<std::string>& layerPaths);
+    /// Which of the head's two regions a layer goes on, for art whose name
+    /// does not say - a scalp or facial hair (0x004e90e0, 0x004e8ff0).
+    void setFaceRegionLayer(const std::string& path, bool lower);
 
     /**
      * Build a composited character skin with explicit region-based equipment overlays.
@@ -509,6 +531,7 @@ public:
 
     /** Clear the composite texture cache (forces re-compositing on next call). */
     void clearCompositeCache();
+    std::unordered_map<std::string, bool> faceRegionLayers_;  // lowercased path → on FaceLower
 
     /** Load a BLP texture from MPQ and return VkTexture* (cached). */
     /// texFlags: the M2 texture's wrap flags (bit 0 repeat U, bit 1 repeat V;

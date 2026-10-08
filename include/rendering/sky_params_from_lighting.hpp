@@ -13,6 +13,7 @@
 /// been too.
 
 #include "rendering/day_night.hpp"
+#include "rendering/spell_kit.hpp"
 #include "rendering/lighting_manager.hpp"
 #include "rendering/sky_system.hpp"
 
@@ -40,7 +41,11 @@ inline SkyParams skyParamsFromLighting(float timeOfDay, float gameTime,
         params.skyBand1Color = lighting->skyBand1Color;
         params.skyBand2Color = lighting->skyBand2Color;
         params.skySmogColor = lighting->skySmogColor;
-        params.skyFogColor = lighting->fogColor;
+        // The horizon in the fog colour, tinted with the sky (0x007f0530).
+        params.skyFogColor = lighting->spellTintAmount != 0
+                                 ? spell_kit::tintColour(lighting->fogColor, lighting->spellTintColour,
+                                                         lighting->spellTintAmount)
+                                 : lighting->fogColor;
         params.cloudSunColor = lighting->cloudSunColor;
         params.cloudShadeColor = lighting->cloudShadeColor;
         params.cloudBaseColor = lighting->cloudBaseColor;

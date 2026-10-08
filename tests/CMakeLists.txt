@@ -2596,9 +2596,19 @@ wowee_add_test(test_pass_ablation
 wowee_add_test(test_spell_missile
     SOURCES test_spell_missile.cpp)
 
+# ── test_char_sections ───────────────────────────────
+# CharSections' head layers - face, facial hair, scalp - in the client's order.
+wowee_add_test(test_char_sections
+    SOURCES test_char_sections.cpp
+            ${TEST_COMMON_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/pipeline/char_sections.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_layout.cpp)
+
 # ── test_spell_kit ───────────────────────────────────
 # A spell visual kit on a unit: its models' attachments, a model-attach row's
-# offset and turn, and when an aura's Flags 8 state kit shows (0x00720400).
+# offset and turn, when an aura's Flags 8 state kit shows (0x00720400), and
+# the camera shakes a kit starts (0x00606970).
 wowee_add_test(test_spell_kit
     SOURCES test_spell_kit.cpp)
 

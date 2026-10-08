@@ -267,18 +267,10 @@ std::optional<float> CameraController::cameraTerrainFloor(float x, float y,
     return best;
 }
 
-void CameraController::triggerShake(float magnitude, float frequency, float duration) {
-    // Scaled here rather than at each caller, so the setting covers the sources
-    // that exist - a spell's shake and a thunderstorm's - and any added later.
-    magnitude *= shakeScale_;
-    // Allow stronger shake to override weaker; don't allow zero magnitude.
-    if (magnitude <= 0.0f || duration <= 0.0f) return;
-    if (magnitude > shakeMagnitude_ || shakeElapsed_ >= shakeDuration_) {
-        shakeMagnitude_ = magnitude;
-        shakeFrequency_ = frequency;
-        shakeDuration_  = duration;
-        shakeElapsed_   = 0.0f;
-    }
+void CameraController::addCameraShake(const camera_shake::Shake& shake, const glm::vec3& origin) {
+    // A shake the setting turns off is not kept at all.
+    if (shakeScale_ <= 0.0f) return;
+    shakes_.push_back({.shake = shake, .origin = origin, .startSeconds = shakeClock_});
 }
 
 glm::vec3 CameraController::sweepAgainstWalls(const glm::vec3& from, const glm::vec3& to,
@@ -3322,21 +3314,13 @@ void CameraController::update(float deltaTime) {
 
     // R key is now handled above with chat safeguard (WantTextInput check)
 
-    // Camera shake (SMSG_CAMERA_SHAKE): apply sinusoidal offset to final camera position.
-    if (shakeElapsed_ < shakeDuration_) {
-        shakeElapsed_ += deltaTime;
-        float t = shakeElapsed_ / shakeDuration_;
-        // Envelope: fade out over the last 30% of shake duration
-        float envelope = (t < 0.7f) ? 1.0f : (1.0f - (t - 0.7f) / 0.3f);
-        float theta = shakeElapsed_ * shakeFrequency_ * core::coords::TWO_PI;
-        glm::vec3 offset(
-            shakeMagnitude_ * envelope * std::sin(theta),
-            shakeMagnitude_ * envelope * std::cos(theta * 1.3f),
-            shakeMagnitude_ * envelope * std::sin(theta * 0.7f) * 0.5f
-        );
-        if (camera) {
-            camera->setPosition(camera->getPosition() + offset);
-        }
+    // The camera's shakes move it, the strongest in each direction as the
+    // camera's distance fades it, along the character's facing (0x00606970).
+    shakeClock_ += deltaTime;
+    if (!shakes_.empty() && camera) {
+        const glm::vec3 offset = camera_shake::offset(shakes_, shakeClock_, camera->getPosition(),
+                                                      glm::radians(facingYaw));
+        camera->setPosition(camera->getPosition() + offset * shakeScale_);
     }
 
     // Scaled by the same setting as the shake above, because it is the same

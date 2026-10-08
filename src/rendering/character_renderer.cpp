@@ -584,8 +584,8 @@ bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFram
 
     // --- Pipeline layout ---
     // set 0 = perFrame, set 1 = material, set 2 = bones
-    // Push constant: CharPushConstants, the model matrix and an interior
-    // floor's light = 96 bytes
+    // Push constant: CharPushConstants, the model matrix, an interior
+    // floor's light and the unit's colour = 128 bytes
     {
         VkDescriptorSetLayout setLayouts[] = {perFrameLayout, materialSetLayout_, boneSetLayout_};
         VkPushConstantRange pushRange{};
@@ -1328,10 +1328,21 @@ int impliedScale(const AtlasRegion256& region, int overlayWidth) {
 
 }  // namespace
 
+void CharacterRenderer::setFaceRegionLayer(const std::string& path, bool lower) {
+    if (!path.empty()) faceRegionLayers_[lowerPath(path)] = lower;
+}
+
 VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& layerPaths) {
     if (layerPaths.empty() || !assetManager || !assetManager->isInitialized()) {
         return whiteTexture_.get();
     }
+    // A layer's region: the head's where a caller has said so, else by name.
+    auto layerRegion = [this](const std::string& path) {
+        const std::string lower = lowerPath(path);
+        if (auto it = faceRegionLayers_.find(lower); it != faceRegionLayers_.end())
+            return regionFor(it->second ? "facelower" : "faceupper");
+        return regionFor(lower);
+    };
 
     // Composite key is deterministic from layer set; if we've already built it,
     // reuse the existing GPU texture to keep live instance pointers valid.
@@ -1430,7 +1441,7 @@ VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& 
         applyMagentaKeyIfNeeded(overlay, layerPaths[layer]);
         // A full-atlas layer speaks for itself and is not a region at all.
         if (overlay.width != width || overlay.height != height) {
-            const AtlasRegion256 region = regionFor(lowerPath(layerPaths[layer]));
+            const AtlasRegion256 region = layerRegion(layerPaths[layer]);
             if (region.known) {
                 const int want = impliedScale(region, overlay.width);
                 if (want > largestRegionScale) largestRegionScale = want;
@@ -1495,7 +1506,7 @@ VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& 
         } else {
             // Where this layer belongs, from the one table that also sized the
             // canvas above.
-            const AtlasRegion256 region = regionFor(lowerPath(loaded.path));
+            const AtlasRegion256 region = layerRegion(loaded.path);
             if (!region.known) {
                 // Unknown -- center placement as fallback
                 const int cx = (width - overlay.width) / 2;
@@ -2352,6 +2363,14 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
             }
         }
 
+        // A spell kit's alpha on its way (0x00744030).
+        if (inst.kitAlphaSeconds > 0.0f) {
+            inst.kitAlphaElapsed += deltaTime;
+            const float t = std::min(1.0f, inst.kitAlphaElapsed / inst.kitAlphaSeconds);
+            inst.kitAlpha = inst.kitAlphaFrom + (inst.kitAlphaTo - inst.kitAlphaFrom) * t;
+            if (t >= 1.0f) inst.kitAlphaSeconds = 0.0f;
+        }
+
         // Interpolate creature movement
         if (inst.isMoving) {
             inst.moveElapsed += deltaTime;
@@ -2977,7 +2996,7 @@ bool CharacterRenderer::isDrawCandidate(const CharacterInstance& instance, const
     // Skip models without GPU buffers
     if (!instance.cachedModel->vertexBuffer) return false;
     // Skip fully transparent instances
-    return instance.opacity > 0.0f;
+    return instance.opacity * instance.kitAlpha > 0.0f;
 }
 
 std::vector<CharacterRenderer::BlendedDraw> CharacterRenderer::planBlended(const Camera& camera) const {
@@ -3143,6 +3162,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             float extent = 2.0f * gpuModel.data.boundRadius * std::max(instance.scale, 0.001f);
             charPush.lightFlags.z = glm::clamp(extent, kSelfShadowMinExtent, kSelfShadowMaxExtent);
         }
+        charPush.diffuseColour = glm::vec4(instance.diffuseColour, 1.0f);
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(charPush), &charPush);
 
@@ -3429,7 +3449,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     // frame the pulse was not at full, and the cards showed as
                     // black roughly half the time.
                     desiredPipeline = blendMode == 3 ? noAlphaAddPipeline_ : additivePipeline_;
-                } else if (instance.opacity * batchColorAlpha < 0.999f) {
+                } else if (instance.opacity * instance.kitAlpha * batchColorAlpha < 0.999f) {
                     // Whole-instance fade (ghost form, spawn fade-in): the opaque and
                     // alpha-test pipelines have blending disabled, so the shader's
                     // texColor.a * opacity output is discarded and only hair (via
@@ -3493,7 +3513,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
                 // Create per-batch material UBO
                 CharMaterialUBO matData{};
-                matData.opacity = instance.opacity * batchColorAlpha;
+                matData.opacity = instance.opacity * instance.kitAlpha * batchColorAlpha;
                 // 1: the client's alpha-key test. 2: a blended mode, which the
                 // client tests at 1/255 - only what is fully transparent goes.
                 matData.alphaTest = blendNeedsCutout ? 1 : (blendMode >= 2 ? 2 : 0);
@@ -3647,7 +3667,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
             // Whole-model fallback inherits whatever pipeline was bound last;
             // pick it explicitly so instance fades blend here too.
-            VkPipeline fallbackPipeline = (instance.opacity < 0.999f)
+            VkPipeline fallbackPipeline = (instance.opacity * instance.kitAlpha < 0.999f)
                 ? translucentPipeline_ : opaquePipeline_;
             if (fallbackPipeline != currentPipeline) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fallbackPipeline);
@@ -3655,7 +3675,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             }
 
             CharMaterialUBO matData{};
-            matData.opacity = instance.opacity;
+            matData.opacity = instance.opacity * instance.kitAlpha;
             matData.alphaTest = 0;
             matData.unlit = 0;
             matData.emissiveBoost = 1.0f;
@@ -4301,6 +4321,37 @@ void CharacterRenderer::setInstanceScale(uint32_t instanceId, float scale) {
     if (it != instances.end() && scale > 0.0f) it->second.scale = scale;
 }
 
+void CharacterRenderer::setInstanceDiffuseColour(uint32_t instanceId, const glm::vec3& colour) {
+    auto it = instances.find(instanceId);
+    if (it != instances.end()) it->second.diffuseColour = colour;
+}
+
+void CharacterRenderer::setInstanceKitAlpha(uint32_t instanceId, float alpha, float seconds) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto fadeTo = [&](CharacterInstance& inst) {
+        // 0x00744030: as bytes; already there, or no time, is at once.
+        const long now = std::lround(inst.kitAlpha * 255.0f);
+        if (std::lround(alpha * 255.0f) == now || !(seconds > 0.0f)) {
+            inst.kitAlpha = inst.kitAlphaTo = alpha;
+            inst.kitAlphaSeconds = 0.0f;
+            return;
+        }
+        inst.kitAlphaFrom = inst.kitAlpha;
+        inst.kitAlphaTo = alpha;
+        inst.kitAlphaElapsed = 0.0f;
+        inst.kitAlphaSeconds = seconds;
+    };
+    fadeTo(it->second);
+    for (const auto& attachment : it->second.weaponAttachments) {
+        if (auto weaponIt = instances.find(attachment.weaponInstanceId); weaponIt != instances.end())
+            fadeTo(weaponIt->second);
+        for (const auto& fx : attachment.effects) {
+            if (auto fxIt = instances.find(fx.effectInstanceId); fxIt != instances.end()) fadeTo(fxIt->second);
+        }
+    }
+}
+
 void CharacterRenderer::setInstanceOpacity(uint32_t instanceId, float opacity) {
     auto it = instances.find(instanceId);
     if (it != instances.end()) {
@@ -4677,6 +4728,7 @@ bool CharacterRenderer::attachWeapon(uint32_t charInstanceId, uint32_t attachmen
     if (weapIt != instances.end()) {
         weapIt->second.hasOverrideModelMatrix = true;
         weapIt->second.opacity = charInstance.opacity;
+        weapIt->second.kitAlpha = weapIt->second.kitAlphaTo = charInstance.kitAlpha;
     }
 
     // Store attachment on parent character instance
@@ -4805,7 +4857,7 @@ void CharacterRenderer::collectBlobShadows(std::vector<blob_shadow::Caster>& out
         blob_shadow::Caster c;
         c.world = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
         c.box = *inst.blobShadow;
-        c.alpha = inst.opacity;
+        c.alpha = inst.opacity * inst.kitAlpha;
         out.push_back(c);
     }
 }
@@ -4892,6 +4944,7 @@ bool CharacterRenderer::attachWeaponEffect(uint32_t charInstanceId, uint32_t att
     fxIt->second.isEffectModel = true;
     fxIt->second.animationLoop = true;
     fxIt->second.opacity = charIt->second.opacity;
+    fxIt->second.kitAlpha = fxIt->second.kitAlphaTo = charIt->second.kitAlpha;
 
     WeaponEffectAttachment fx;
     fx.effectModelId = effectModelId;

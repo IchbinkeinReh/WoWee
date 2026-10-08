@@ -36,7 +36,8 @@ AppearanceComposer::AppearanceComposer(rendering::Renderer* renderer,
 PlayerTextureInfo AppearanceComposer::resolvePlayerTextures(pipeline::M2Model& model,
                                                             game::Race race, game::Gender gender,
                                                             uint32_t appearanceBytes,
-                                                            bool useFemaleModel) {
+                                                            bool useFemaleModel,
+                                                            int facialHairId) {
     PlayerTextureInfo result;
 
     uint32_t targetRaceId = static_cast<uint32_t>(race);
@@ -78,6 +79,7 @@ PlayerTextureInfo AppearanceComposer::resolvePlayerTextures(pipeline::M2Model& m
         who.faceId = charFaceId;
         who.hairStyleId = charHairStyleId;
         who.hairColorId = charHairColorId;
+        who.facialHairId = facialHairId;
 
         // The underwear rows name art that is not always on disk, and this
         // caller can ask.
@@ -92,6 +94,7 @@ PlayerTextureInfo AppearanceComposer::resolvePlayerTextures(pipeline::M2Model& m
         result.skinExtraPath = sections.skinExtra;
         result.faceLowerPath = sections.faceLower;
         result.faceUpperPath = sections.faceUpper;
+        result.faceLayers = pipeline::faceRegionLayers(sections);
         if (!sections.hair.empty()) result.hairTexturePath = sections.hair;
         result.underwearPaths = sections.underwear;
 
@@ -152,16 +155,18 @@ void AppearanceComposer::compositePlayerSkin(uint32_t modelSlotId, const PlayerT
     // Include face textures so compositeWithRegions can rebuild the full base
     bodySkinPath_ = texInfo.bodySkinPath;
     underwearPaths_.clear();
-    if (!texInfo.faceLowerPath.empty()) underwearPaths_.push_back(texInfo.faceLowerPath);
-    if (!texInfo.faceUpperPath.empty()) underwearPaths_.push_back(texInfo.faceUpperPath);
+    // The head's layers - face, facial hair, scalp - on its two regions.
+    for (const auto& fl : texInfo.faceLayers) {
+        charRenderer->setFaceRegionLayer(fl.path, fl.lower);
+        underwearPaths_.push_back(fl.path);
+    }
     for (const auto& up : texInfo.underwearPaths) underwearPaths_.push_back(up);
 
     // Composite body skin + face + underwear overlays
     {
         std::vector<std::string> layers;
         layers.push_back(texInfo.bodySkinPath);
-        if (!texInfo.faceLowerPath.empty()) layers.push_back(texInfo.faceLowerPath);
-        if (!texInfo.faceUpperPath.empty()) layers.push_back(texInfo.faceUpperPath);
+        for (const auto& fl : texInfo.faceLayers) layers.push_back(fl.path);
         for (const auto& up : texInfo.underwearPaths) {
             layers.push_back(up);
         }
