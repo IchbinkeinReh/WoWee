@@ -2350,7 +2350,8 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
                     ShadowPush push{
                         .lightSpaceModel = lightSpaceMatrix * instance.modelMatrix,
                         .flags = passFlags};
-                    vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                    vkCmdPushConstants(cmd, shadowPipelineLayout_,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,  // as the layout declares
                                        0, sizeof(ShadowPush), &push);
                     vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.indexStart, 0, 0);
                 }

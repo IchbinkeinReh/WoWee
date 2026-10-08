@@ -1960,7 +1960,8 @@ void WMORenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceM
 
         // A building does not move, so the unused slots stay zero.
         ShadowPush push{.lightSpaceModel = lightSpaceMatrix * instance.modelMatrix};
-        vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+        vkCmdPushConstants(cmd, shadowPipelineLayout_,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,  // as the layout declares
                            0, sizeof(ShadowPush), &push);
 
         for (size_t gi = 0; gi < model.groups.size(); ++gi) {
