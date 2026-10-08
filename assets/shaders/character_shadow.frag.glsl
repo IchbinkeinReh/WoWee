@@ -11,5 +11,8 @@ layout(location = 0) in vec2 TexCoord;
 
 void main() {
     vec4 texColor = texture(uTexture, TexCoord);
-    if (alphaTest != 0 && texColor.a < 0.5) discard;
+    // The client's alpha reference, 224/255, as character.frag cuts the
+    // batch on screen; at 0.5 the cast silhouette was fatter than the drawn
+    // one, hair cards most of all.
+    if (alphaTest != 0 && texColor.a < 0.8784314) discard;
 }

@@ -121,6 +121,13 @@
 namespace wowee {
 namespace rendering {
 
+namespace {
+/// The light-space depth every cascade shares, near and far, in yards from
+/// the light: from a yard in front of it to 6.5 x the shadow distance.
+constexpr float kShadowNearPlane = 1.0f;
+float shadowFarPlane(float distance) { return distance * 6.5f; }
+float shadowDepthRange(float distance) { return shadowFarPlane(distance) - kShadowNearPlane; }
+}  // namespace
 
 
 Renderer::Renderer() = default;
@@ -656,7 +663,10 @@ void Renderer::updatePerFrameUBO() {
         }
         // y: a cascade blends into the next over its outer 12%; z: the last
         // one fades out from 90% of its half-width to its edge.
-        currentFrameData.cascadeInfo = glm::vec4(static_cast<float>(cascades), 0.12f, 0.9f, 0.0f);
+        // w: one yard of the shared light-space depth range in depth units,
+        // so a shader can bias by a distance (character.frag's self-shadow).
+        currentFrameData.cascadeInfo = glm::vec4(static_cast<float>(cascades), 0.12f, 0.9f,
+                                                 1.0f / shadowDepthRange(shadowDistance_));
         // The outer cascade's, in the same atlas terms, for anything that
         // reads the one matrix rather than the cascades.
         currentFrameData.lightSpaceMatrix = cascades > 0 ? shadowCascades_[cascades - 1].atlas
@@ -4429,8 +4439,7 @@ float shadowCascadeSplit(int i, int count, float distance) {
 glm::mat4 Renderer::computeLightSpaceMatrix() {
     activeShadowCascades_ = 0;
     const float kShadowLightDistance = shadowDistance_ * 3.0f;
-    constexpr float kShadowNearPlane = 1.0f;
-    const float kShadowFarPlane = shadowDistance_ * 6.5f;
+    const float kShadowFarPlane = shadowFarPlane(shadowDistance_);
 
     // Use active lighting direction so shadow projection matches main shading.
     // Fragment shaders derive lighting with `ldir = normalize(-lightDir.xyz)`,

@@ -71,7 +71,8 @@ struct GPUPerFrameData {
     // cascadeInfo: x how many cascades there are (0: none, everything lit),
     //   y the fraction of a tile over which it blends into the next one,
     //   z where the last cascade starts fading out, as a fraction of its
-    //   half-width.
+    //   half-width, w one yard along the light in the cascades' depth (they
+    //   all share one depth range), for a bias a shader wants in yards.
     static constexpr int kMaxShadowCascades = 4;
     glm::mat4 cascadeMatrix[kMaxShadowCascades]{};
     glm::vec4 cascadeRect[kMaxShadowCascades]{};

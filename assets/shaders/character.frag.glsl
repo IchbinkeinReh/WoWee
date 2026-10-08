@@ -159,7 +159,8 @@ layout(push_constant) uniform Push {
     layout(offset = 64) vec4 interiorAmbient;
     vec4 interiorDirect;
     // x: 1 in a WMO group of the camera's interior pass, y: the scale on the
-    // direct light (CharPushConstants::lightFlags).
+    // direct light, z: the model's own depth in yards, within which it does
+    // not receive the sun's shadow (CharPushConstants::lightFlags).
     vec4 lightFlags;
 } pc;
 
@@ -463,9 +464,23 @@ void main() {
 
         float shadow = 1.0;
         if (shadowParams.x > 0.5) {
-            float nl = dot(norm, ldir);
+            // The interpolated vertex normal, not the normal-mapped one, for
+            // the normal offset: a map's per-texel tilt moves the sample
+            // point about and speckles the result.
+            float nl = dot(vertexNormal, ldir);
             float bias = max(0.0005 * (1.0 - abs(nl)), 0.00005);
-            shadow = csmShadow(uShadowMap, FragPos, norm, nl, bias);
+            // No shadow from the model's own body. With the near cascade at
+            // three or four hundredths of a yard a texel, the normal offset
+            // no longer carries a fragment out of its own limb as the single
+            // 0.29-yard map's did, and a constant bias of about a tenth of a
+            // yard is near an arm's or a shin's thickness: blotches where the
+            // body is a little thicker, none where it is thinner. The client
+            // never self-shadows a model, so the bias is the model's whole
+            // depth along the ray (lightFlags.z yards, cascadeInfo.w a yard in
+            // depth units); only what is farther toward the sun than that -
+            // a roof, a tree, a cliff - shadows a character.
+            bias = max(bias, pc.lightFlags.z * cascadeInfo.w);
+            shadow = csmShadow(uShadowMap, FragPos, vertexNormal, nl, bias);
             shadow = mix(1.0, shadow, shadowParams.y);
         }
         RtLight rt = rtLightAt(FragPos);

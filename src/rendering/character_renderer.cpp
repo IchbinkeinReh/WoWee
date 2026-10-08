@@ -248,6 +248,44 @@ static float evalBatchTextureWeight(const pipeline::M2Model& model,
                                  model.globalSequenceDurations, 1.0f);
 }
 
+// Whether any texture the batch combines is of the given type.
+static bool batchUsesTextureType(const pipeline::M2Model& model, const pipeline::M2Batch& b,
+                                 uint32_t wantedType) {
+    if (b.textureIndex == 0xFFFF || model.textureLookup.empty()) return false;
+    uint32_t comboCount = b.textureCount ? static_cast<uint32_t>(b.textureCount) : 1u;
+    comboCount = std::min<uint32_t>(comboCount, 8u);
+    for (uint32_t i = 0; i < comboCount; ++i) {
+        const uint32_t lookupPos = static_cast<uint32_t>(b.textureIndex) + i;
+        if (lookupPos >= model.textureLookup.size()) break;
+        const uint16_t texSlot = model.textureLookup[lookupPos];
+        if (texSlot < model.textures.size() && model.textures[texSlot].type == wantedType) return true;
+    }
+    return false;
+}
+
+// Whether a batch is drawn as alpha-cut hair cards whatever its blend mode
+// says. The main pass and the shadow pass both ask, so that what casts is the
+// silhouette that is drawn: hair cut out on screen but cast as solid quads put
+// a dark slab on the character's own back below the hair.
+static bool batchIsHairCard(const pipeline::M2Model& model, const pipeline::M2Batch& batch,
+                            uint16_t blendMode, bool isSceneModel) {
+    // Scene models have no hair, and their submesh ids are all 0, which
+    // would otherwise satisfy the hair-geoset guess for every batch.
+    // The geoset-id guess is for player-style models, whose hair has
+    // a texture slot of its own. A creature has none, and its
+    // submesh ids land in the same ranges by accident: a translucent
+    // body part (Mana Wyrm) was taken for hair, alpha-cut, and drawn
+    // solid.
+    if (isSceneModel) return false;
+    if (batchUsesTextureType(model, batch, 6)) return true;
+    const uint16_t submeshGroup = static_cast<uint16_t>(batch.submeshId / 100);
+    const bool hairGeoset = (submeshGroup >= 1 && submeshGroup <= 3) ||
+                            (submeshGroup == 0 && batch.submeshId > 0 && batch.submeshId <= 99);
+    if (!hairGeoset || (blendMode == 0 && batch.textureCount <= 1)) return false;
+    return std::any_of(model.textures.begin(), model.textures.end(),
+                       [](const auto& t) { return t.type == 6; });
+}
+
 // CharMaterial UBO layout (matches character.frag.glsl set=1 binding=1)
 struct CharMaterialUBO {
     float opacity;
@@ -2868,6 +2906,14 @@ void CharacterRenderer::prepareRender(uint32_t frameIndex) {
 
 namespace {
 
+// The depth, in yards, within which a character does not receive the sun's
+// shadow from what is in front of it (CharPushConstants::lightFlags.z): its
+// own diameter, held to these. The floor covers a person and anything
+// attached to one (a weapon's own bounds are small, but it sits on a body);
+// the ceiling keeps a dragon from ignoring a tree's shadow.
+constexpr float kSelfShadowMinExtent = 2.5f;
+constexpr float kSelfShadowMaxExtent = 15.0f;
+
 // Default frustum-cull radius when model bounds aren't available.
 // 4.0 covers Tauren, mounted characters, and most creature models.
 constexpr float kDefaultCharacterCullRadius = 4.0f;
@@ -3070,6 +3116,19 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             charPush.interiorDirect = instance.drawDirect;
             charPush.lightFlags = instance.drawFlags;
         }
+        // z: how deep the instance can be along any ray, in yards - its
+        // bounding sphere's diameter, and no less than a person's. The
+        // shader takes at least that off a fragment's depth before testing
+        // the sun's shadow map, so nothing within the model's own extent can
+        // shadow it. The client has no self-shadowing on a model at all, and
+        // the fine near cascade otherwise darkens limbs, the back below the
+        // hair and the legs wherever the body happens to be about as thick
+        // as the bias. Shadows from anything farther up the ray - buildings,
+        // trees, terrain - land as before.
+        {
+            float extent = 2.0f * gpuModel.data.boundRadius * std::max(instance.scale, 0.001f);
+            charPush.lightFlags.z = glm::clamp(extent, kSelfShadowMinExtent, kSelfShadowMaxExtent);
+        }
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(charPush), &charPush);
 
@@ -3120,21 +3179,6 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             }
 
 
-            auto batchUsesTextureType = [](const M2ModelGPU& gm, const pipeline::M2Batch& b, uint32_t wantedType) {
-                if (b.textureIndex == 0xFFFF || gm.data.textureLookup.empty()) return false;
-
-                uint32_t comboCount = b.textureCount ? static_cast<uint32_t>(b.textureCount) : 1u;
-                comboCount = std::min<uint32_t>(comboCount, 8u);
-                for (uint32_t i = 0; i < comboCount; ++i) {
-                    uint32_t lookupPos = static_cast<uint32_t>(b.textureIndex) + i;
-                    if (lookupPos >= gm.data.textureLookup.size()) break;
-                    uint16_t texSlot = gm.data.textureLookup[lookupPos];
-                    if (texSlot < gm.data.textures.size() && gm.data.textures[texSlot].type == wantedType)
-                        return true;
-                }
-                return false;
-            };
-
             const bool previewMainModel = renderPassOverride_ != VK_NULL_HANDLE &&
                                           !instance.hasOverrideModelMatrix;
 
@@ -3150,10 +3194,6 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             // Use precomputed batch render order (cached on gpuModel at load time;
             // depends only on static batch metadata, so per-frame re-sorting was waste).
             const auto& sortedBatchIndices = gpuModel.sortedBatchIndices;
-
-            const bool modelHasHairTexture = std::any_of(
-                gpuModel.data.textures.begin(), gpuModel.data.textures.end(),
-                [](const auto& t) { return t.type == 6; });
 
             for (int pass = 0; pass < 2; pass++) {
             for (size_t bi : sortedBatchIndices) {
@@ -3259,21 +3299,8 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     materialFlags = gpuModel.data.materials[batch.materialIndex].flags;
                 }
 
-                const uint16_t submeshGroup = static_cast<uint16_t>(batch.submeshId / 100);
-                const bool hairTexture = batchUsesTextureType(gpuModel, batch, 6);
-                const bool hairGeoset = (submeshGroup >= 1 && submeshGroup <= 3) ||
-                                        (submeshGroup == 0 && batch.submeshId > 0 && batch.submeshId <= 99);
-                // Scene models have no hair, and their submesh ids are all 0, which
-                // would otherwise satisfy the hair-geoset guess for every batch.
-                // The geoset-id guess is for player-style models, whose hair has
-                // a texture slot of its own. A creature has none, and its
-                // submesh ids land in the same ranges by accident: a translucent
-                // body part (Mana Wyrm) was taken for hair, alpha-cut, and drawn
-                // solid.
-                const bool hairMaterial = !instance.isSceneModel &&
-                                          (hairTexture ||
-                                           (modelHasHairTexture && hairGeoset &&
-                                            (blendMode != 0 || batch.textureCount > 1)));
+                const bool hairMaterial = batchIsHairCard(gpuModel.data, batch, blendMode,
+                                                          instance.isSceneModel);
 
                 // The batch's shader (0x00836980, 0x00836c90): how many
                 // textures it combines, by what, and where each one's
@@ -3922,7 +3949,19 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
         vkCmdBindVertexBuffers(cmd, 0, 1, &gpuModel.vertexBuffer, &offset);
         vkCmdBindIndexBuffer(cmd, gpuModel.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
+        // The batches cast exactly what the main pass draws, by the same
+        // choices: the same geoset filter (and its fallback when it matches
+        // nothing), the same groups skipped without one, nothing whose colour
+        // or transparency track has it gone this frame, nothing the client has
+        // no shader for, and hair cut by the texture it is drawn with. A batch
+        // that casts but is not drawn, or casts solid where it is drawn cut
+        // out, puts a shadow on the character that nothing on screen throws.
         bool applyGeosetFilter = !inst.activeGeosets.empty();
+        if (applyGeosetFilter) {
+            applyGeosetFilter = std::any_of(
+                gpuModel.data.batches.begin(), gpuModel.data.batches.end(),
+                [&](const pipeline::M2Batch& b) { return inst.activeGeosets.count(b.submeshId) != 0; });
+        }
         for (const auto& batch : gpuModel.data.batches) {
             uint16_t blendMode = 0;
             if (batch.materialIndex < gpuModel.data.materials.size()) {
@@ -3933,15 +3972,42 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
                 inst.activeGeosets.find(batch.submeshId) == inst.activeGeosets.end()) continue;
             if (!applyGeosetFilter) {
                 uint16_t grp = batch.submeshId / 100;
-                if (grp == 17 || grp == 18) continue;
+                if (grp == 17 || grp == 18 || grp == 15) continue;
             }
+            const float batchAlpha =
+                evalBatchColorAlpha(gpuModel.data, batch, inst.currentSequenceIndex,
+                                    inst.animationTime, inst.globalSequenceTime) *
+                evalBatchTextureWeight(gpuModel.data, batch, inst.currentSequenceIndex,
+                                       inst.animationTime, inst.globalSequenceTime);
+            if (glm::clamp(batchAlpha, 0.0f, 1.0f) <= 0.01f) continue;
+            if (inst.opacity <= 0.01f) continue;
 
-            // An alpha-keyed batch casts the shape of its texture; everything
-            // else keeps the white fallback and casts solid. Only the set at
-            // binding 0 changes, so the bones stay bound from above.
+            const uint16_t shaderId = m2BatchShaderId(
+                batch.shader, blendMode, batch.textureCount, batch.textureUnit,
+                gpuModel.data.globalFlags, gpuModel.data.textureCoordCombos,
+                gpuModel.data.textureCombinerCombos);
+            const uint16_t firstCoord = batch.textureUnit < gpuModel.data.textureCoordCombos.size()
+                ? gpuModel.data.textureCoordCombos[batch.textureUnit] : 0;
+            const M2BatchCombiner combiner = m2ResolveCombiner(shaderId, batch.textureCount, firstCoord);
+            if (!combiner.drawn) continue;
+
+            // An alpha-keyed batch, or hair, casts the shape of its texture;
+            // everything else keeps the white fallback and casts solid. Only
+            // the set at binding 0 changes, so the bones stay bound from above.
             VkDescriptorSet texSet = shadowParams_.set;
-            if (blendMode == 1) {
-                VkTexture* tex = resolveBatchTexture(inst, gpuModel, batch);
+            if (blendMode == 1 || batchIsHairCard(gpuModel.data, batch, blendMode, inst.isSceneModel)) {
+                // The texture the main pass binds: the group's override, else
+                // the first stage's for a multi-stage batch, else the pick.
+                VkTexture* tex = nullptr;
+                auto groupTexIt = inst.groupTextureOverrides.find(
+                    static_cast<uint16_t>(batch.submeshId / 100));
+                if (groupTexIt != inst.groupTextureOverrides.end() && groupTexIt->second != nullptr) {
+                    tex = groupTexIt->second;
+                } else if (combiner.stages > 1) {
+                    tex = resolveStageTexture(inst, gpuModel, batch, 0);
+                } else {
+                    tex = resolveBatchTexture(inst, gpuModel, batch);
+                }
                 if (tex && tex != whiteTexture_.get()) {
                     texSet = shadowTexDescSet(tex, frameIndex);
                 }

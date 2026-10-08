@@ -358,7 +358,8 @@ private:
     /// floor's direct colour, w = how far its direction has turned toward
     /// the sun's. lightFlags: x 1 in a group of the camera's interior pass
     /// (its fog colour, 0x007c1730), y the scale on the direct light
-    /// (0x007a1e90's +0x8c).
+    /// (0x007a1e90's +0x8c), z the depth in yards within which the model
+    /// does not receive the sun's shadow (its own extent: no self-shadow).
     struct CharPushConstants {
         glm::mat4 model{1.0f};
         glm::vec4 interiorAmbient{0.0f};
