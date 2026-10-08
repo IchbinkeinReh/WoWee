@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -189,6 +190,42 @@ inline constexpr uint32_t kCharProcAlpha = 14;
 inline constexpr uint32_t kCharProcChain = 0;
 inline constexpr uint32_t kCharProcChainToo = 12;
 constexpr bool isChainProc(uint32_t proc) { return proc == kCharProcChain || proc == kCharProcChainToo; }
+
+/// 11: the unit's animation held where it is - or ParamZero seconds into
+///    its sequence, chopped to ms (0x00407930), no further than its length -
+///    while the effect lasts (0x006f80b0, 0x00735bb0, 0x00735dd0).
+inline constexpr uint32_t kCharProcFreeze = 11;
+inline std::optional<float> freezeAtMs(float paramZero) {
+    if (!(paramZero > 0.0f)) return std::nullopt;
+    return static_cast<float>(static_cast<int32_t>(paramZero * 1000.0f));
+}
+
+/// 15: the unit faded over half a second to its own alpha times ParamZero,
+///    chopped to a whole byte (0x00407930) - so to nothing or to all - held
+///    ParamThree ms more, then back to its own over ParamTwo ms; only where
+///    ParamOne, chopped, is below 12 (0x0071a940, 0x0073dab0).
+inline constexpr uint32_t kCharProcTimedAlpha = 15;
+struct TimedAlpha {
+    float alpha = 1.0f;
+    uint32_t inMs = 500;
+    uint32_t endMs = 0;   ///< when it goes back
+    uint32_t backMs = 0;  ///< over how long
+};
+inline std::optional<TimedAlpha> timedAlpha(const std::array<float, 4>& param, float unitAlpha, uint32_t nowMs) {
+    const auto chop = [](float v) { return static_cast<int32_t>(v); };
+    if (static_cast<uint32_t>(chop(param[1])) >= 12u) return std::nullopt;
+    const auto byte = static_cast<uint8_t>(chop(unitAlpha * param[0]));
+    // 0x00744030 takes that byte for an alpha and makes a byte of it again.
+    const auto alpha = static_cast<uint8_t>(static_cast<int32_t>(static_cast<float>(byte) * 255.0f));
+    TimedAlpha t;
+    t.alpha = static_cast<float>(alpha) / 255.0f;
+    t.endMs = nowMs + t.inMs + static_cast<uint32_t>(chop(param[3]));
+    t.backMs = static_cast<uint32_t>(chop(param[2]));
+    return t;
+}
+constexpr bool timedAlphaOver(const TimedAlpha& t, uint32_t nowMs) {
+    return static_cast<int32_t>(nowMs - t.endMs) >= 0;
+}
 
 /// 0x007265c0 cases 1 and 13 colour the unit unless it is a creature whose
 /// cache row has type flag 0x40 (+0x964 +0xc) and the spell is aimed at

@@ -344,6 +344,17 @@ private:
     /// Each unit's alpha from its auras' kits (CharProc 14), the latest's.
     void updateUnitAlphas();
     std::unordered_map<uint32_t, float> unitKitAlphas_;  // render instance → the alpha it was given
+    /// CharProc 15's fades (0x0071a940), by render instance, until they go back.
+    std::unordered_map<uint32_t, spell_kit::TimedAlpha> timedAlphas_;
+    /// CharProc 11's holds (0x006f80b0): the unit's animation held until its
+    /// effects of the spell go, and whether it was held already.
+    struct AnimationHold {
+        uint64_t unitGuid = 0;
+        uint32_t spellId = 0;
+        uint32_t renderInstanceId = 0;
+        bool wasHeld = false;
+    };
+    std::vector<AnimationHold> animationHolds_;
     /// The light tint playing (CharProc 6), and handed to the sink.
     std::optional<spell_kit::LightTint> lightTint_;
     bool lightTinted_ = false;

@@ -1030,6 +1030,31 @@ void SpellVisualSystem::playKitColourFade(uint32_t kitId, uint32_t renderInstanc
                                               kit.charParam[k][1], castMs, colourClockMs_);
             continue;
         }
+        if (kit.charProc[k] == spell_kit::kCharProcTimedAlpha && renderInstanceId != 0) {
+            // 0x007265c0 case 15 (0x0071a940): out over half a second, held,
+            // then back.
+            if (const auto fade = spell_kit::timedAlpha(kit.charParam[k], 1.0f, colourClockMs_)) {
+                if (auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
+                    charRenderer->setInstanceKitAlpha(renderInstanceId, fade->alpha,
+                                                      static_cast<float>(fade->inMs) * 0.001f);
+                    timedAlphas_[renderInstanceId] = *fade;
+                }
+            }
+            continue;
+        }
+        if (kit.charProc[k] == spell_kit::kCharProcFreeze && renderInstanceId != 0) {
+            // 0x007265c0 case 11 (0x006f80b0): the animation held while the
+            // unit's effects of the spell last.
+            auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+            const uint64_t unitGuid = instanceUnitResolver_ ? instanceUnitResolver_(renderInstanceId) : 0;
+            if (charRenderer && unitGuid != 0) {
+                const bool was = charRenderer->setInstanceAnimationFrozen(
+                    renderInstanceId, true, spell_kit::freezeAtMs(kit.charParam[k][0]));
+                animationHolds_.push_back(
+                    {.unitGuid = unitGuid, .spellId = spellId, .renderInstanceId = renderInstanceId, .wasHeld = was});
+            }
+            continue;
+        }
         if (kit.charProc[k] != spell_kit::kCharProcColourFade || renderInstanceId == 0) continue;
         if (!kitColoursUnit(renderInstanceId, spellId)) continue;
         // 0x007265c0 case 13: the colour, held ParamOne seconds and faded
@@ -1091,6 +1116,15 @@ void SpellVisualSystem::updateUnitAlphas() {
         if (!added && it->second == alphaFade.first) continue;
         it->second = alphaFade.first;
         charRenderer->setInstanceKitAlpha(instance, alphaFade.first, static_cast<float>(alphaFade.second) * 0.001f);
+    }
+    // 0x0073dab0: a case 15 fade, its time up, back to the unit's own alpha.
+    for (auto it = timedAlphas_.begin(); it != timedAlphas_.end();) {
+        if (!spell_kit::timedAlphaOver(it->second, colourClockMs_)) {
+            ++it;
+            continue;
+        }
+        charRenderer->setInstanceKitAlpha(it->first, 1.0f, static_cast<float>(it->second.backMs) * 0.001f);
+        it = timedAlphas_.erase(it);
     }
 }
 
@@ -1237,6 +1271,17 @@ void SpellVisualSystem::releaseChains(uint64_t unitGuid, uint32_t spellId) {
 
 void SpellVisualSystem::removeUnitSpellEffects(uint64_t unitGuid, uint32_t spellId) {
     releaseChains(unitGuid, spellId);
+    // A held animation runs again, unless it was held before (0x006f80b0's
+    // +0xd4).
+    for (auto it = animationHolds_.begin(); it != animationHolds_.end();) {
+        if (it->unitGuid != unitGuid || it->spellId != spellId) {
+            ++it;
+            continue;
+        }
+        if (!it->wasHeld && renderer_ && renderer_->getCharacterRenderer())
+            renderer_->getCharacterRenderer()->setInstanceAnimationFrozen(it->renderInstanceId, false);
+        it = animationHolds_.erase(it);
+    }
     if (auto it = unitAuraKits_.find(unitGuid); it != unitAuraKits_.end()) {
         auto& auras = it->second.auras;
         for (auto a = auras.begin(); a != auras.end();) {
@@ -1675,6 +1720,16 @@ void SpellVisualSystem::reset() {
     chains_.clear();
     castTargets_.clear();
     unitChannels_.clear();
+    if (renderer_ && renderer_->getCharacterRenderer()) {
+        for (const auto& [instance, fade] : timedAlphas_)
+            renderer_->getCharacterRenderer()->setInstanceKitAlpha(instance, 1.0f, 0.0f);
+        for (const AnimationHold& hold : animationHolds_) {
+            if (!hold.wasHeld)
+                renderer_->getCharacterRenderer()->setInstanceAnimationFrozen(hold.renderInstanceId, false);
+        }
+    }
+    animationHolds_.clear();
+    timedAlphas_.clear();
     publishClientStrips();
     colourFades_.clear();
     updateUnitColours();

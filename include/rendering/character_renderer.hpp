@@ -184,6 +184,12 @@ public:
     /// own: faded to over `seconds`, or set at once where that is 0 or it is
     /// already there (0x00744030). Its weapons take it too.
     void setInstanceKitAlpha(uint32_t instanceId, float alpha, float seconds);
+    /// Stop the instance's animation where it is, or `atMs` into its
+    /// sequence (no further than its length), or let it run again
+    /// (0x00735bb0, 0x00735dd0: the model's sequences held while its pause
+    /// time is set; its global sequences run on). Answers whether it was
+    /// stopped already.
+    bool setInstanceAnimationFrozen(uint32_t instanceId, bool frozen, std::optional<float> atMs = std::nullopt);
     /// The unit's colour, which its direct light is multiplied by: a spell
     /// kit's (0x007265c0 cases 1 and 13, 0x00720db0); white for none.
     void setInstanceDiffuseColour(uint32_t instanceId, const glm::vec3& colour);
@@ -403,6 +409,7 @@ private:
         uint8_t armEvents = 0;                 // kArmEvent*/kArmEnd* bits not yet taken
         std::vector<int8_t> boneArm;  // Per bone: 0 left arm, 1 right arm, -1 neither; built by playArmAnimation
         float animationTime = 0.0f;
+        bool animationFrozen = false;  ///< setInstanceAnimationFrozen: the sequence held
         float locomotionSpeed = 0.0f;  // yards a second the unit moves at; see setLocomotionSpeed
         float playbackRate = 1.0f;     // the rate animationTime last advanced at
         float globalSequenceTime = 0.0f; // Separate timer for global sequences (accumulates without wrapping at sequence duration)

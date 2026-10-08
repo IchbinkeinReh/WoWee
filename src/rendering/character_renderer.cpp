@@ -2395,7 +2395,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
 
         // An arm on its own animation runs at rate 1 (0x00735820) to its
         // event and its end, and then follows the body again.
-        for (int arm = 0; arm < 2 && inst.cachedModel; ++arm) {
+        for (int arm = 0; arm < 2 && inst.cachedModel && !inst.animationFrozen; ++arm) {
             const int seq = inst.armSequenceIndex[arm];
             if (seq < 0 || static_cast<size_t>(seq) >= inst.cachedModel->data.sequences.size()) continue;
             const float before = inst.armTime[arm];
@@ -2411,7 +2411,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
         }
 
         // Always advance animation time (cheap)
-        if (inst.cachedModel && !inst.cachedModel->data.sequences.empty()) {
+        if (inst.cachedModel && !inst.cachedModel->data.sequences.empty() && !inst.animationFrozen) {
             if (inst.currentSequenceIndex < 0) {
                 inst.currentSequenceIndex = 0;
                 inst.currentAnimationId = inst.cachedModel->data.sequences[0].id;
@@ -4324,6 +4324,21 @@ void CharacterRenderer::setInstanceScale(uint32_t instanceId, float scale) {
 void CharacterRenderer::setInstanceDiffuseColour(uint32_t instanceId, const glm::vec3& colour) {
     auto it = instances.find(instanceId);
     if (it != instances.end()) it->second.diffuseColour = colour;
+}
+
+bool CharacterRenderer::setInstanceAnimationFrozen(uint32_t instanceId, bool frozen, std::optional<float> atMs) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return false;
+    CharacterInstance& inst = it->second;
+    const bool was = inst.animationFrozen;
+    inst.animationFrozen = frozen;
+    if (frozen && atMs && inst.cachedModel && inst.currentSequenceIndex >= 0 &&
+        static_cast<size_t>(inst.currentSequenceIndex) < inst.cachedModel->data.sequences.size()) {
+        const auto duration =
+            static_cast<float>(inst.cachedModel->data.sequences[inst.currentSequenceIndex].duration);
+        inst.animationTime = std::min(*atMs, duration);
+    }
+    return was;
 }
 
 void CharacterRenderer::setInstanceKitAlpha(uint32_t instanceId, float alpha, float seconds) {
