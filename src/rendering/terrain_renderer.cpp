@@ -1176,7 +1176,7 @@ bool TerrainRenderer::initializeShadow(VkRenderPass shadowRenderPass) {
     shadowPipeline_ = buildShadowPipeline(
         device, vkCtx->getPipelineCache(),
         vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
-        fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT),
+        noFragmentStage(),  // never alpha-tested: depth only
         vertBind, vertAttrs, shadowPipelineLayout_, shadowRenderPass,
         vkCtx->useDynamicRendering());
 

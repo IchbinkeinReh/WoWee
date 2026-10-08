@@ -1985,6 +1985,12 @@ bool M2Renderer::initializeInstancedShadow(
         vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT), fragStage,
         vertBind, vertAttrs, shadowInstancedLayout_, shadowRenderPass,
         vkCtx_->useDynamicRendering());
+    // Optional: without it the solid casters use the pipeline above.
+    shadowInstancedDepthOnlyPipeline_ = buildShadowPipeline(
+        device, vkCtx_->getPipelineCache(),
+        vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT), noFragmentStage(),
+        vertBind, vertAttrs, shadowInstancedLayout_, shadowRenderPass,
+        vkCtx_->useDynamicRendering());
     vertShader.destroy();
     if (!shadowInstancedPipeline_) return false;
     // Half-built is not built: without its pipeline renderShadow never looks
@@ -2245,6 +2251,9 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
         VkPipelineLayout boundLayout = shadowPipelineLayout_;
         auto usePipeline = [&](bool instanced) {
             VkPipeline want = instanced ? shadowInstancedPipeline_ : shadowPipeline_;
+            if (instanced && !foliagePass && shadowInstancedDepthOnlyPipeline_) {
+                want = shadowInstancedDepthOnlyPipeline_;
+            }
             if (want == boundPipeline) return;
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
             boundLayout = instanced ? shadowInstancedLayout_ : shadowPipelineLayout_;

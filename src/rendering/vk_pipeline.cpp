@@ -15,7 +15,9 @@ PipelineBuilder::PipelineBuilder() {
 PipelineBuilder& PipelineBuilder::setShaders(
     VkPipelineShaderStageCreateInfo vert, VkPipelineShaderStageCreateInfo frag)
 {
-    shaderStages_ = {vert, frag};
+    // A null fragment module is a depth-only pipeline: no fragment stage.
+    if (frag.module == VK_NULL_HANDLE) shaderStages_ = {vert};
+    else shaderStages_ = {vert, frag};
     return *this;
 }
 

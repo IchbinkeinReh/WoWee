@@ -916,6 +916,10 @@ private:
     // pipeline means it could not be built, and renderShadow then draws every
     // caster one instance at a time.
     VkPipeline shadowInstancedPipeline_ = VK_NULL_HANDLE;
+    /// The instanced pipeline without a fragment stage, for the solid
+    /// casters: shadow.frag's discard, though never taken for them, kept the
+    /// GPU testing depth after the shader for every one of their fragments.
+    VkPipeline shadowInstancedDepthOnlyPipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout shadowInstancedLayout_ = VK_NULL_HANDLE;
     // Shared by every cascade of a frame, which can draw the same tree into
     // two or three of them.

@@ -1082,6 +1082,7 @@ void M2Renderer::shutdown() {
     destroyPipeline(shadowPipeline_);
     destroy(device, shadowPipelineLayout_);
     destroyPipeline(shadowInstancedPipeline_);
+    destroyPipeline(shadowInstancedDepthOnlyPipeline_);
     destroy(device, shadowInstancedLayout_);
     for (int i = 0; i < 2; i++) {
         destroy(alloc, shadowInstanceBuffer_[i], shadowInstanceAlloc_[i]);

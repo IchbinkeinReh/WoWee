@@ -240,6 +240,17 @@ inline constexpr VkFormat kShadowDepthFormat = VK_FORMAT_D32_SFLOAT;
 /// Culling is off rather than front-face, because foliage and leaf cards are
 /// effectively two-sided and front-face culling drops them out of the shadow
 /// map depending on where the light is.
+/// The fragment stage of a depth-only pipeline: none (PipelineBuilder leaves
+/// a null module out). A shadow caster that never alpha-tests is cheaper
+/// without shadow.frag: its discard, even untaken, keeps the GPU from testing
+/// and writing depth before the shader runs.
+inline VkPipelineShaderStageCreateInfo noFragmentStage() {
+    VkPipelineShaderStageCreateInfo stage{};
+    stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    return stage;
+}
+
 inline VkPipeline buildShadowPipeline(
         VkDevice device, VkPipelineCache cache,
         const VkPipelineShaderStageCreateInfo& vertStage,
