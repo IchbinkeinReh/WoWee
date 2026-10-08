@@ -1144,21 +1144,33 @@ static void blitOverlay(std::vector<uint8_t>& composite, int compW, int compH,
     }
 }
 
+// A composite channel value rounded to its byte. Every value here is at or
+// above zero, where adding a half and truncating rounds as std::lround does
+// (bar a float a hair under some half, which may go up) - but lround is a
+// library call on MinGW, not an instruction, and the interpolated composite
+// makes four of them for each of a 512 atlas's quarter million pixels, layer
+// after layer. With them, a creature's skin took about three times as long
+// to build as the nearest copy it replaced, on the main thread, for every NPC
+// a crowded city spawns.
+static inline uint8_t compositeByte(float v) {
+    return static_cast<uint8_t>(static_cast<int>(v + 0.5f));
+}
+
 // One overlay texel blended over a composite pixel, by the overlay's alpha.
 static void blendCompositePixel(std::vector<uint8_t>& composite, size_t dstIdx, const float rgba[4]) {
     const float a = rgba[3];
     if (a <= 0.0f) return;
     if (a >= 255.0f) {
-        for (int c = 0; c < 3; ++c) composite[dstIdx + c] = static_cast<uint8_t>(std::lround(rgba[c]));
+        for (int c = 0; c < 3; ++c) composite[dstIdx + c] = compositeByte(rgba[c]);
         composite[dstIdx + 3] = 255;
         return;
     }
     const float alpha = a / 255.0f;
     const float inv = 1.0f - alpha;
     for (int c = 0; c < 3; ++c) {
-        composite[dstIdx + c] = static_cast<uint8_t>(std::lround(rgba[c] * alpha + composite[dstIdx + c] * inv));
+        composite[dstIdx + c] = compositeByte(rgba[c] * alpha + composite[dstIdx + c] * inv);
     }
-    composite[dstIdx + 3] = std::max(composite[dstIdx + 3], static_cast<uint8_t>(std::lround(a)));
+    composite[dstIdx + 3] = std::max(composite[dstIdx + 3], compositeByte(a));
 }
 
 // The overlay at a texel-space point, bilinear, clamped to its edges. The
@@ -1690,8 +1702,10 @@ VkTexture* CharacterRenderer::compositeWithRegions(const std::string& basePath,
             for (int x = 0; x < kUpscaleTexSize; x++) {
                 const float fx = (static_cast<float>(x) + 0.5f) * 0.5f - 0.5f;
                 const float fy = (static_cast<float>(y) + 0.5f) * 0.5f - 0.5f;
-                const int x0 = std::clamp(static_cast<int>(std::floor(fx)), 0, kBaseTexSize - 1);
-                const int y0 = std::clamp(static_cast<int>(std::floor(fy)), 0, kBaseTexSize - 1);
+                // The floor, without std::floor's call: fx and fy are never
+                // below -0.25, so shifting by one truncates the same way.
+                const int x0 = std::clamp(static_cast<int>(fx + 1.0f) - 1, 0, kBaseTexSize - 1);
+                const int y0 = std::clamp(static_cast<int>(fy + 1.0f) - 1, 0, kBaseTexSize - 1);
                 const int x1 = std::min(x0 + 1, kBaseTexSize - 1);
                 const int y1 = std::min(y0 + 1, kBaseTexSize - 1);
                 const auto alphaAt = [&](int sx, int sy) {
@@ -1703,7 +1717,7 @@ VkTexture* CharacterRenderer::compositeWithRegions(const std::string& basePath,
                     float rgba[4];
                     sampleImageBilinear(base.data.data(), kBaseTexSize, kBaseTexSize, fx, fy, rgba);
                     for (int c = 0; c < 4; ++c) {
-                        composite[dstIdx + c] = static_cast<uint8_t>(std::lround(std::clamp(rgba[c], 0.0f, 255.0f)));
+                        composite[dstIdx + c] = compositeByte(std::clamp(rgba[c], 0.0f, 255.0f));
                     }
                 } else {
                     const int srcIdx = ((y / 2) * kBaseTexSize + (x / 2)) * 4;

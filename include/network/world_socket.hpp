@@ -38,6 +38,11 @@ public:
     WorldSocket();
     ~WorldSocket() override;
 
+    /// The most packets one update() hands to the packet callback. The
+    /// callback's owner keeps this much room in its own queue before it calls
+    /// update(), so a hand-over never has to drop anything.
+    static constexpr size_t kMaxPacketCallbacksPerUpdate = 64;
+
     bool connect(const std::string& host, uint16_t port) override;
     void disconnect() override;
     [[nodiscard]] bool isConnected() const override;
@@ -85,7 +90,7 @@ private:
     /**
      * Try to parse complete packets from receive buffer
      */
-    void tryParsePackets();
+    void tryParsePackets(size_t callbackRoom);
     void pumpNetworkIO();
     void dispatchQueuedPackets();
     void asyncPumpLoop();
@@ -127,6 +132,12 @@ private:
     // THREAD-SAFE: protected by callbackMutex_.
     // Parsed packets waiting for callback dispatch; drained with a strict per-update budget.
     std::deque<Packet> pendingPacketCallbacks_;
+    // THREAD-SAFE: protected by ioMutex_.
+    // The last parse stopped on its budget or the queue's room with complete
+    // packets still buffered, so the next pump parses even if it reads nothing.
+    bool parseDeferred_ = false;
+    // A full callback queue is said once until it has room again.
+    bool callbackQueueFullLogged_ = false;
 
     // Runtime-gated network optimization toggles (default off).
     bool useFastRecvAppend_ = false;
