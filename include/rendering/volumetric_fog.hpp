@@ -75,9 +75,12 @@ public:
         float layerFloor = 0.1f;
         /// 0 is even mist; 1 lets it thin to nothing and pile to double.
         float noiseAmount = 0.6f;
+        /// The way the sunlight travels (Renderer::sunTravelDirection), so the
+        /// shafts lean from the sun the sky draws.
+        glm::vec3 sunTravel{0.0f, 0.0f, -1.0f};
         /// Brightness of the sunlit air. Most of it goes forward, so this is
         /// mostly what the air toward the sun does.
-        float sunScatter = 0.8f;
+        float sunScatter = 0.4f;
         /// Brightness of the air the sun does not reach, lit by the zone's fog
         /// colour. Half, so a shaft stands against the shade beside it rather
         /// than against a haze nearly as bright.

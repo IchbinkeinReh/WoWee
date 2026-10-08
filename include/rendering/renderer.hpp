@@ -500,6 +500,10 @@ public:
     /// Applied at the start of the next frame. With cascades the step is the
     /// side of each cascade's tile, held to kMaxCascadeTileSize.
     void setShadowResolutionScale(int step);
+    /// The way sunlight travels for the shadow map and the mist's shafts:
+    /// from the sun as the sky draws it while it is up, the light's own
+    /// direction otherwise.
+    [[nodiscard]] glm::vec3 sunTravelDirection() const;
     /// How many shadow cascades, 1 to kMaxShadowCascades. Rebuilds the atlas
     /// at the start of the next frame, as the resolution does.
     void setShadowCascadeCount(int count);

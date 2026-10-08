@@ -50,6 +50,7 @@ layout(set = 1, binding = 0) uniform VolumeParams {
     vec4 drift;          // xyz = how far the mist has blown, w = noise amount
     vec4 jitter;         // xyz = sample point inside the cell, w = history weight
     ivec4 dims;
+    vec4 sunTravel;      // xyz = the way the sunlight travels, from the drawn sun
 } vol;
 
 layout(set = 1, binding = 1) uniform sampler2D uShadowDepth;
@@ -178,7 +179,7 @@ void main() {
     // from under the ground; the shadow map flips it to build its projection,
     // but flipped here the forward lobe would glow in the night sky at a
     // mirrored sun that is not there. It fades out as the sun sets instead.
-    vec3 travel = normalize(lightDir.xyz);
+    vec3 travel = normalize(vol.sunTravel.xyz);
     float sunUp = smoothstep(0.0, 0.08, -travel.z);
     vec3 toCamera = normalize(vol.rayOrigin.xyz - p);
     float phase = mix(1.0, phaseHG(dot(travel, toCamera), 0.75), 0.65);

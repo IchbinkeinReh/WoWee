@@ -4441,17 +4441,8 @@ glm::mat4 Renderer::computeLightSpaceMatrix() {
     const float kShadowLightDistance = shadowDistance_ * 3.0f;
     const float kShadowFarPlane = shadowFarPlane(shadowDistance_);
 
-    // Use active lighting direction so shadow projection matches main shading.
-    // Fragment shaders derive lighting with `ldir = normalize(-lightDir.xyz)`,
-    // therefore shadow rays must use -directionalDir to stay aligned.
-    glm::vec3 sunDir = glm::normalize(glm::vec3(-0.3f, -0.7f, -0.6f));
-    if (lightingManager) {
-        const auto& lighting = lightingManager->getLightingParams();
-        float ldirLenSq = glm::dot(lighting.directionalDir, lighting.directionalDir);
-        if (ldirLenSq > 1e-6f) {
-            sunDir = -lighting.directionalDir * glm::inversesqrt(ldirLenSq);
-        }
-    }
+    // The way the light travels: from the sun as it is drawn on the sky.
+    glm::vec3 sunDir = sunTravelDirection();
     // Shadow camera expects light rays pointing downward in render space (Z up).
     // Some profiles/opcode paths provide the opposite convention; normalize here.
     if (sunDir.z > 0.0f) {
@@ -5013,6 +5004,28 @@ void Renderer::writeRtLightingBindings() {
     }
 }
 
+glm::vec3 Renderer::sunTravelDirection() const {
+    // Away from the sun as the sky draws it (the sun curve, 0x007eecc0), so
+    // the shadows and the shafts through the mist fall from where the sun is
+    // seen. The light the surfaces are shaded by keeps its own direction, the
+    // light's (Light.dbc), which can stand well apart from it - the shadows
+    // used to follow that one, and lay across the sun the player looked at.
+    // Below the horizon there is no sun to follow, and the light's direction
+    // stands in, as before.
+    if (lightingManager) {
+        const auto& lp = lightingManager->getLightingParams();
+        const float sunLenSq = glm::dot(lp.sunDir, lp.sunDir);
+        if (sunLenSq > 1e-6f && lp.sunDir.z > 0.0f) {
+            return -lp.sunDir * glm::inversesqrt(sunLenSq);
+        }
+        const float ldirLenSq = glm::dot(lp.directionalDir, lp.directionalDir);
+        if (ldirLenSq > 1e-6f) {
+            return -lp.directionalDir * glm::inversesqrt(ldirLenSq);
+        }
+    }
+    return glm::normalize(glm::vec3(-0.3f, -0.7f, -0.6f));
+}
+
 VkExtent2D Renderer::sceneRenderExtent() const {
     if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {
         return postProcessPipeline_->getSceneRenderExtent();
@@ -5275,6 +5288,7 @@ void Renderer::renderVolumetricFog() {
     fogExtinction_ += (target - fogExtinction_) * (1.0f - std::exp(-dt / 1.0f));
 
     VolumetricFog::FrameInputs in;
+    in.sunTravel = sunTravelDirection();
     in.view = currentFrameData.view;
     in.projection = currentFrameData.projection;
     in.cameraPos = glm::vec3(currentFrameData.viewPos);
