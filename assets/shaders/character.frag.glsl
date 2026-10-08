@@ -161,6 +161,9 @@ layout(push_constant) uniform Push {
     // x: 1 in a WMO group of the camera's interior pass, y: the scale on the
     // direct light (CharPushConstants::lightFlags).
     vec4 lightFlags;
+    // The unit's colour, which its direct light is multiplied by (CM2Model
+    // +0x180: a spell kit's, 0x00720db0); white for none.
+    vec4 diffuseColour;
 } pc;
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
@@ -451,7 +454,8 @@ void main() {
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, pc.interiorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
         // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct).
-        light = clamp(pc.interiorAmbient.rgb + idiff * pc.interiorDirect.rgb * pc.lightFlags.y,
+        light = clamp(pc.interiorAmbient.rgb
+                          + idiff * pc.interiorDirect.rgb * pc.diffuseColour.rgb * pc.lightFlags.y,
                       0.0, 1.0);
     } else {
         vec3 ldir = normalize(-lightDir.xyz);
@@ -482,7 +486,7 @@ void main() {
         // The Diffuse_* programs' light: clamp(ambient + clamp(N.L) x direct),
         // the direct light no more than one a channel (0x00873ca0), then the
         // shadow variants' 0.7 + 0.3 x the light the shadow map lets through.
-        vec3 direct = min(lightColor.rgb * pc.lightFlags.y, vec3(1.0));
+        vec3 direct = min(lightColor.rgb * pc.diffuseColour.rgb * pc.lightFlags.y, vec3(1.0));
         light = clamp(rtAmbient(rt, ambient) + diff * direct, 0.0, 1.0)
               * (0.7 + 0.3 * shadow);
     }

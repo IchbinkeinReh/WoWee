@@ -193,6 +193,9 @@ private:
         std::vector<KitModel> models;
         uint32_t flags = 0;  ///< SpellVisualKit Flags (+0x94)
         uint32_t shakeId = 0;  ///< ShakeID (+0x40), SpellEffectCameraShakes
+        /// CharProc (+0x44) and its CharParamZero..Three (+0x54..+0x84).
+        std::array<uint32_t, 4> charProc{};
+        std::array<std::array<float, 4>, 4> charParam{};  // [proc][param]
     };
     std::unordered_map<uint32_t, KitRecord> kits_;  // SpellVisualKit id → its models
     struct VisualAuraKits {
@@ -232,6 +235,14 @@ private:
     std::unordered_map<uint32_t, std::array<uint32_t, 3>> visualKitIds_;
     /// A kit's camera shake where it plays (0x0073b140, 0x006f9840).
     void playKitShake(uint32_t kitId, const glm::vec3& origin);
+    /// A kit's colour fade (CharProc 13) on the unit drawn by an instance.
+    void playKitColourFade(uint32_t kitId, uint32_t renderInstanceId);
+    /// The unit's colour from its auras' kits (CharProc 1) - the latest's -
+    /// or its fade, set on each unit's model; white once neither is left.
+    void updateUnitColours();
+    std::unordered_map<uint32_t, spell_kit::ColourFade> colourFades_;  // render instance → its fade
+    std::unordered_set<uint32_t> colouredInstances_;  // instances last given a colour
+    uint32_t colourClockMs_ = 0;
     /// SpellEffectCameraShakes id → its CameraShakes rows, loaded on first use.
     std::unordered_map<uint32_t, std::vector<camera_shake::Shake>> spellEffectShakes_;
     bool cameraShakesLoaded_ = false;

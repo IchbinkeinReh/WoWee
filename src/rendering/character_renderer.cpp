@@ -546,8 +546,8 @@ bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFram
 
     // --- Pipeline layout ---
     // set 0 = perFrame, set 1 = material, set 2 = bones
-    // Push constant: CharPushConstants, the model matrix and an interior
-    // floor's light = 96 bytes
+    // Push constant: CharPushConstants, the model matrix, an interior
+    // floor's light and the unit's colour = 128 bytes
     {
         VkDescriptorSetLayout setLayouts[] = {perFrameLayout, materialSetLayout_, boneSetLayout_};
         VkPushConstantRange pushRange{};
@@ -3070,6 +3070,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             charPush.interiorDirect = instance.drawDirect;
             charPush.lightFlags = instance.drawFlags;
         }
+        charPush.diffuseColour = glm::vec4(instance.diffuseColour, 1.0f);
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(charPush), &charPush);
 
@@ -4219,6 +4220,11 @@ void CharacterRenderer::setInstanceScale(uint32_t instanceId, float scale) {
     // Attachments take the parent's model matrix each frame, so they follow.
     auto it = instances.find(instanceId);
     if (it != instances.end() && scale > 0.0f) it->second.scale = scale;
+}
+
+void CharacterRenderer::setInstanceDiffuseColour(uint32_t instanceId, const glm::vec3& colour) {
+    auto it = instances.find(instanceId);
+    if (it != instances.end()) it->second.diffuseColour = colour;
 }
 
 void CharacterRenderer::setInstanceOpacity(uint32_t instanceId, float opacity) {

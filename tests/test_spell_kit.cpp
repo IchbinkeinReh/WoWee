@@ -149,3 +149,26 @@ TEST_CASE("a camera shake moves along the facing, its left or up", "[camera_shak
     CHECK(cs::offset(shakes, 0.6f, glm::vec3(0.0f), 0.0f) == glm::vec3(0.0f));
     CHECK(shakes.empty());
 }
+
+TEST_CASE("a kit's colour fade holds, then fades to white", "[spell_kit]") {
+    // 0x007265c0 case 13: red held a second, faded over two.
+    const sk::ColourFade fade{.startMs = 1000, .colour = 0xFFFF0000u, .holdMs = 1000, .fadeMs = 2000};
+    uint32_t c = 0;
+    REQUIRE(sk::fadeColour(fade, 1500, c));
+    CHECK(c == 0xFFFF0000u);
+    // Half-way through the fade: half way back to white, in 0x006acc50's
+    // unsigned byte arithmetic (alpha 128 takes 255 to 0x7f).
+    REQUIRE(sk::fadeColour(fade, 3000, c));
+    CHECK(((c >> 16) & 0xff) == 0xff);
+    CHECK((c & 0xff) == 0x7f);
+    CHECK(((c >> 8) & 0xff) == 0x7f);
+    // Run out.
+    CHECK_FALSE(sk::fadeColour(fade, 4001, c));
+    // The model's colour from 0xRRGGBB.
+    const glm::vec3 rgb = sk::colourToRgb(0xFF336699u);
+    CHECK(rgb.r == Catch::Approx(0x33 / 255.0f));
+    CHECK(rgb.g == Catch::Approx(0x66 / 255.0f));
+    CHECK(rgb.b == Catch::Approx(0x99 / 255.0f));
+    // A whole alpha takes the colour outright, keeping the alpha it had.
+    CHECK(sk::lerpColour(0x80FFFFFFu, 0xFF102030u, 0xff) == 0x80102030u);
+}

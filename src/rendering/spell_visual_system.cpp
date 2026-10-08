@@ -185,6 +185,15 @@ void SpellVisualSystem::loadSpellVisualDbc() {
         const uint32_t worldField = kitColumn("WorldEffect", 14);
         const uint32_t kitFlagsField = kitColumn("Flags", 37);
         const uint32_t kitShakeField = kitColumn("ShakeID", 16);
+        std::array<uint32_t, 4> procFields{};
+        std::array<std::array<uint32_t, 4>, 4> paramFields{};  // [proc][param]
+        static constexpr const char* kParamNames[4] = {"CharParamZero", "CharParamOne", "CharParamTwo",
+                                                       "CharParamThree"};
+        for (uint32_t k = 0; k < 4; ++k) {
+            procFields[k] = kitColumn(("CharProc" + std::to_string(k)).c_str(), 17 + k);
+            for (uint32_t p = 0; p < 4; ++p)
+                paramFields[k][p] = kitColumn((kParamNames[p] + std::to_string(k)).c_str(), 21 + p * 4 + k);
+        }
         for (uint32_t i = 0; i < kitDbc->getRecordCount(); ++i) {
             const uint32_t kitId = kitDbc->getUInt32(i, 0);
             if (!kitId) continue;
@@ -202,7 +211,17 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             if (kitFlagsField != 0xFFFFFFFFu) kit.flags = kitDbc->getUInt32(i, kitFlagsField);
             if (kitShakeField != 0xFFFFFFFFu)
                 kit.shakeId = static_cast<uint32_t>(std::max(kitDbc->getInt32(i, kitShakeField), 0));
-            if (!kit.models.empty() || kit.flags != 0 || kit.shakeId != 0) kits_[kitId] = std::move(kit);
+            bool hasProc = false;
+            for (uint32_t k = 0; k < 4; ++k) {
+                if (procFields[k] == 0xFFFFFFFFu) continue;
+                kit.charProc[k] = kitDbc->getUInt32(i, procFields[k]);
+                for (uint32_t p = 0; p < 4; ++p) {
+                    if (paramFields[k][p] != 0xFFFFFFFFu) kit.charParam[k][p] = kitDbc->getFloat(i, paramFields[k][p]);
+                }
+                hasProc = hasProc || kit.charProc[k] == spell_kit::kCharProcColour ||
+                          kit.charProc[k] == spell_kit::kCharProcColourFade;
+            }
+            if (!kit.models.empty() || kit.flags != 0 || kit.shakeId != 0 || hasProc) kits_[kitId] = std::move(kit);
         }
     }
     const pipeline::DBCFieldMap* attachLayout = layout ? layout->getLayout("SpellVisualKitModelAttach") : nullptr;
@@ -491,9 +510,11 @@ void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec
 
     if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
 
-    // The precast kit's camera shake.
-    if (auto kitIt = visualKitIds_.find(visualId); kitIt != visualKitIds_.end())
+    // The precast kit's camera shake and colour.
+    if (auto kitIt = visualKitIds_.find(visualId); kitIt != visualKitIds_.end()) {
         playKitShake(kitIt->second[0], worldPosition);
+        playKitColourFade(kitIt->second[0], attachInstanceId);
+    }
 
     // The precast kit's weapon effects, for as long as it plays.
     if (auto fxIt = precastWeaponEffects_.find(visualId); fxIt != precastWeaponEffects_.end()) {
@@ -658,9 +679,11 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
             audio::AudioEngine::instance().playSound3D(sound->data, worldPosition, sound->volume);
     }
 
-    // The cast or impact kit's camera shake.
-    if (auto kitIt = visualKitIds_.find(visualId); kitIt != visualKitIds_.end())
+    // The cast or impact kit's camera shake and colour.
+    if (auto kitIt = visualKitIds_.find(visualId); kitIt != visualKitIds_.end()) {
         playKitShake(kitIt->second[useImpactKit ? 2 : 1], worldPosition);
+        playKitColourFade(kitIt->second[useImpactKit ? 2 : 1], attachInstanceId);
+    }
 
     // The cast kit's weapon effects.
     if (!useImpactKit) {
@@ -1071,6 +1094,7 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
                     glm::vec3 unitPos;
                     if (charRenderer && charRenderer->getInstancePosition(unitInstance, unitPos))
                         playKitShake(aura.kitId, unitPos);
+                    playKitColourFade(aura.kitId, unitInstance);
                 }
             }
         }
@@ -1218,6 +1242,7 @@ void SpellVisualSystem::applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, u
         if (renderer_ && renderer_->getCharacterRenderer() &&
             renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos))
             playKitShake(aura.kitId, unitPos);
+        playKitColourFade(aura.kitId, instance);
     }
     unit.auras.push_back(std::move(aura));
     // Then 0x00720400(1, 1) for a Flags 8 visual.
@@ -1246,6 +1271,7 @@ void SpellVisualSystem::removeAuraStateKit(uint64_t unitGuid, uint32_t spellId, 
     const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitGuid) : 0;
     if (kitIt == kits_.end() || instance == 0) return;
     playKitModels(kitIt->second, instance, false);
+    playKitColourFade(kitIt->first, instance);
     glm::vec3 unitPos;
     if (renderer_ && renderer_->getCharacterRenderer() &&
         renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos))
@@ -1255,6 +1281,61 @@ void SpellVisualSystem::removeAuraStateKit(uint64_t unitGuid, uint32_t spellId, 
 void SpellVisualSystem::playKitShake(uint32_t kitId, const glm::vec3& origin) {
     auto it = kitId ? kits_.find(kitId) : kits_.end();
     if (it != kits_.end() && it->second.shakeId > 0) playCameraShakes(it->second.shakeId, origin);
+}
+
+void SpellVisualSystem::playKitColourFade(uint32_t kitId, uint32_t renderInstanceId) {
+    auto it = kitId && renderInstanceId ? kits_.find(kitId) : kits_.end();
+    if (it == kits_.end()) return;
+    const KitRecord& kit = it->second;
+    for (uint32_t k = 0; k < 4; ++k) {
+        if (kit.charProc[k] != spell_kit::kCharProcColourFade) continue;
+        // 0x007265c0 case 13: the colour, held ParamOne seconds and faded
+        // over ParamTwo.
+        colourFades_[renderInstanceId] = spell_kit::ColourFade{
+            .startMs = colourClockMs_,
+            .colour = static_cast<uint32_t>(std::lround(kit.charParam[k][0])) | 0xff000000u,
+            .holdMs = static_cast<uint32_t>(std::lround(kit.charParam[k][1] * 1000.0f)),
+            .fadeMs = static_cast<uint32_t>(std::lround(kit.charParam[k][2] * 1000.0f))};
+    }
+}
+
+void SpellVisualSystem::updateUnitColours() {
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer) return;
+    std::unordered_map<uint32_t, uint32_t> colours;  // render instance → colour
+    // The auras' colours (case 1), the latest on top as the client's list
+    // has it (0x00720db0 reads its head).
+    for (const auto& [guid, unit] : unitAuraKits_) {
+        if (unit.auras.empty()) continue;
+        const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(guid) : 0;
+        if (instance == 0) continue;
+        for (const AuraKit& aura : unit.auras) {
+            auto kitIt = kits_.find(aura.kitId);
+            if (kitIt == kits_.end()) continue;
+            for (uint32_t k = 0; k < 4; ++k) {
+                if (kitIt->second.charProc[k] == spell_kit::kCharProcColour)
+                    colours[instance] = static_cast<uint32_t>(std::lround(kitIt->second.charParam[k][0])) | 0xff000000u;
+            }
+        }
+    }
+    // A fade comes first (0x0071a9a0), and goes when it has run out.
+    for (auto it = colourFades_.begin(); it != colourFades_.end();) {
+        uint32_t colour = 0;
+        if (spell_kit::fadeColour(it->second, colourClockMs_, colour)) {
+            colours[it->first] = colour;
+            ++it;
+        } else {
+            it = colourFades_.erase(it);
+        }
+    }
+    for (uint32_t instance : colouredInstances_) {
+        if (colours.count(instance) == 0) charRenderer->setInstanceDiffuseColour(instance, glm::vec3(1.0f));
+    }
+    colouredInstances_.clear();
+    for (const auto& [instance, colour] : colours) {
+        charRenderer->setInstanceDiffuseColour(instance, spell_kit::colourToRgb(colour));
+        colouredInstances_.insert(instance);
+    }
 }
 
 void SpellVisualSystem::playCameraShakes(uint32_t spellEffectCameraShakesId, const glm::vec3& origin) {
@@ -1395,8 +1476,10 @@ void SpellVisualSystem::followUnitFromSpawn(const glm::vec3& spawnPos) {
 
 void SpellVisualSystem::update(float deltaTime) {
     // First: an arrival plays its impact kit, which joins activeSpellVisuals_.
+    colourClockMs_ += static_cast<uint32_t>(std::lround(deltaTime * 1000.0f));
     updateMissiles(deltaTime);
     updateAuraKits();
+    updateUnitColours();
     if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
 
     // Get character bone tracking context (once per frame)
@@ -1474,6 +1557,8 @@ void SpellVisualSystem::reset() {
         for (AuraKit& aura : unit.auras) hideAuraKit(aura);
     }
     unitAuraKits_.clear();
+    colourFades_.clear();
+    updateUnitColours();
     for (const auto& missile : activeMissiles_) {
         if (m2Renderer_) m2Renderer_->removeInstance(missile.instanceId);
         audio::AudioEngine::instance().stopSound(missile.soundHandle);

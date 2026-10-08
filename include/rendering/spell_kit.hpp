@@ -69,6 +69,60 @@ inline constexpr uint32_t kKitFlagStateStand = 0x20;
 inline constexpr uint32_t kAnimHold = 158;
 inline constexpr uint32_t kAnimDecay = 159;
 
+/// SpellVisualKit CharProc (+0x44, four of them, with CharParamZero..Three
+/// at +0x54, +0x64, +0x74, +0x84) as 0x007265c0 runs them on the unit.
+/// 1: the unit's colour - ParamZero as 0xRRGGBB - while the effect lasts
+///    (an aura's, until 0x0071e930 takes it off);
+/// 13: the colour held for ParamOne seconds, then faded out over ParamTwo.
+inline constexpr uint32_t kCharProcColour = 1;
+inline constexpr uint32_t kCharProcColourFade = 13;
+
+/// 0x007265c0 case 13: the unit's colour fade (+0xb10 .. +0xb1c).
+struct ColourFade {
+    uint32_t startMs = 0;
+    uint32_t colour = 0xFFFFFFFFu;  ///< 0xAARRGGBB, alpha forced to 0xff
+    uint32_t holdMs = 0;
+    uint32_t fadeMs = 0;
+};
+
+/// 0x006acc50: `from` moved toward `to` by alpha/256, a byte a channel.
+constexpr uint32_t lerpColour(uint32_t from, uint32_t to, uint32_t alpha) {
+    if (alpha == 0xff) return (from & 0xff000000u) | (to & 0x00ffffffu);
+    uint32_t out = from & 0xff000000u;
+    for (uint32_t shift = 0; shift < 24; shift += 8) {
+        const uint32_t f = (from >> shift) & 0xffu;
+        const uint32_t t = (to >> shift) & 0xffu;
+        const uint32_t channel = ((((t - f) * alpha) >> 8) + f) & 0xffu;
+        out |= channel << shift;
+    }
+    return out;
+}
+
+/// 0x0071a9a0: the fade's colour at `nowMs` over white, or nothing once it
+/// has run out.
+constexpr bool fadeColour(const ColourFade& fade, uint32_t nowMs, uint32_t& out) {
+    const int32_t sinceHold = static_cast<int32_t>(nowMs - (fade.startMs + fade.holdMs));
+    if (sinceHold < 0) {
+        out = fade.colour;
+        return true;
+    }
+    if (static_cast<int32_t>(nowMs - fade.fadeMs - (fade.startMs + fade.holdMs)) < 0) {
+        const float t = static_cast<float>(sinceHold) / static_cast<float>(fade.fadeMs);
+        const auto alpha = static_cast<int32_t>((1.0f - t) * 255.0f + 0.5f);
+        out = 0xFFFFFFFFu;
+        if (alpha != 0) out = lerpColour(out, fade.colour, static_cast<uint32_t>(alpha));
+        return true;
+    }
+    return false;
+}
+
+/// 0x00720db0: the colour the unit's model multiplies its diffuse light by
+/// (CM2Model +0x180, 0x00820000's +0x1a0).
+inline glm::vec3 colourToRgb(uint32_t argb) {
+    return glm::vec3(static_cast<float>((argb >> 16) & 0xffu), static_cast<float>((argb >> 8) & 0xffu),
+                     static_cast<float>(argb & 0xffu)) * 0.003921569f;
+}
+
 /// SpellVisual Flags (+0x34) 0x8: the aura's state kit shows only while the
 /// unit has its weapons away, casts nothing and is idle (0x00720400).
 inline constexpr uint32_t kVisualFlagUnarmedStateKit = 0x8;

@@ -180,6 +180,9 @@ public:
     void setLocomotionSpeed(uint32_t instanceId, float yardsPerSecond);
     void startFadeIn(uint32_t instanceId, float durationSeconds);
     void setInstanceOpacity(uint32_t instanceId, float opacity);
+    /// The unit's colour, which its direct light is multiplied by: a spell
+    /// kit's (0x007265c0 cases 1 and 13, 0x00720db0); white for none.
+    void setInstanceDiffuseColour(uint32_t instanceId, const glm::vec3& colour);
     void setInstanceScale(uint32_t instanceId, float scale);
     [[nodiscard]] const pipeline::M2Model* getModelData(uint32_t modelId) const;
     [[nodiscard]] const pipeline::M2Model* getInstanceModelData(uint32_t instanceId) const;
@@ -358,14 +361,16 @@ private:
     /// floor's direct colour, w = how far its direction has turned toward
     /// the sun's. lightFlags: x 1 in a group of the camera's interior pass
     /// (its fog colour, 0x007c1730), y the scale on the direct light
-    /// (0x007a1e90's +0x8c).
+    /// (0x007a1e90's +0x8c). diffuseColour: the unit's colour, which its
+    /// direct light is multiplied by (CM2Model +0x180, 0x00720db0).
     struct CharPushConstants {
         glm::mat4 model{1.0f};
         glm::vec4 interiorAmbient{0.0f};
         glm::vec4 interiorDirect{0.0f};
         glm::vec4 lightFlags{0.0f, 1.0f, 0.0f, 0.0f};
+        glm::vec4 diffuseColour{1.0f};
     };
-    static_assert(sizeof(CharPushConstants) == 112, "CharPushConstants must match the shaders");
+    static_assert(sizeof(CharPushConstants) == 128, "CharPushConstants must match the shaders");
 
     struct CharacterInstance {
         uint32_t id;
@@ -415,6 +420,9 @@ private:
 
         // Weapon attachments (weapons parented to this instance's bones)
         std::vector<WeaponAttachment> weaponAttachments;
+
+        // The unit's colour (setInstanceDiffuseColour).
+        glm::vec3 diffuseColour{1.0f};
 
         // Opacity (for fade-in)
         float opacity = 1.0f;
