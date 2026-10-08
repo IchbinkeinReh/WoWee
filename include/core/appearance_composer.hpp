@@ -77,6 +77,11 @@ public:
     /// UNIT_FIELD_BYTES_2 byte 0 at spawn and when the server moves it
     /// (0x00737aa0).
     [[nodiscard]] SheathState sheathState() const { return sheath_; }
+    /// Whether the player shows its SpellVisual Flags 8 state kits
+    /// (0x00720400): idle, its weapons away and casting nothing.
+    [[nodiscard]] bool unarmedKitsShown() const {
+        return kitIdle_ && sheath_ == SheathState::Unarmed && animationSheathKey_.castSpellId == 0;
+    }
     /// 0x00736d30: sets the state when it changes - the ranged state only
     /// for a class that may draw a ranged weapon - and tells the server
     /// (CMSG_SET_SHEATHED) unless `fromServer`.
@@ -170,6 +175,8 @@ private:
         bool operator==(const AnimationSheathKey&) const = default;
     };
     AnimationSheathKey animationSheathKey_;
+    /// +0xa30 0x10000 (animationKitIdle).
+    bool kitIdle_ = false;
     /// The sheath key's reach while its arms play (0x00736b60); the
     /// weapons are where it has left them.
     std::optional<SheathReach> reach_;

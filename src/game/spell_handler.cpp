@@ -2496,6 +2496,20 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
         }
         mirrorAurasByGuid(data.guid, *auraList);
 
+        // The auras' state kits on the unit, as each slot changes
+        // (0x00724820, 0x0071e930).
+        if (auto* renderer = owner_.services().renderer) {
+            if (auto* svs = renderer->getSpellVisualSystem()) {
+                if (isAll) {
+                    std::vector<std::pair<uint32_t, uint32_t>> slots;
+                    for (const auto& [slot, aura] : data.updates) slots.emplace_back(slot, aura.spellId);
+                    svs->setUnitAuraSlots(data.guid, slots);
+                } else {
+                    for (const auto& [slot, aura] : data.updates) svs->setUnitAuraSlot(data.guid, slot, aura.spellId);
+                }
+            }
+        }
+
         if (owner_.addonEventCallbackRef()) {
             std::string unitId;
             if (data.guid == owner_.getPlayerGuid()) unitId = "player";

@@ -702,6 +702,29 @@ std::optional<float> EntitySpawner::kitWeaponEffectHolder(uint32_t renderInstanc
     // weapon effect; +0x60, AttachedEffectScale, sizes one.
     const auto flags = creatureModelFlags(displayId);
     if (flags && (*flags & 0x10u) != 0) return std::nullopt;
+    return kitAttachedEffectScale(renderInstanceId);
+}
+
+bool EntitySpawner::unarmedKitsShown(uint64_t guid) const {
+    // 0x00720400: +0xa30 0x10000, the weapons away (+0xb5c) and no cast (+0xa60).
+    auto it = unitSheath_.find(guid);
+    if (it == unitSheath_.end()) return false;
+    const UnitSheath& sheath = it->second;
+    return sheath.kitIdle && sheath.state == SheathState::Unarmed && sheath.castSpellId == 0;
+}
+
+float EntitySpawner::kitAttachedEffectScale(uint32_t renderInstanceId) const {
+    if (!gameHandler_ || !assetManager_ || renderInstanceId == 0) return 1.0f;
+    uint64_t guid = 0;
+    if (renderer_ && renderer_->getCharacterInstanceId() == renderInstanceId) guid = gameHandler_->getPlayerGuid();
+    for (const auto* instances : {&creatureInstances_, &playerInstances_}) {
+        for (const auto& [unitGuid, instanceId] : *instances) {
+            if (guid == 0 && instanceId == renderInstanceId) guid = unitGuid;
+        }
+    }
+    auto entity = guid ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
+    if (!entity || !entity->isUnit()) return 1.0f;
+    const uint32_t displayId = static_cast<const game::Unit&>(*entity).getDisplayId();
     auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
     auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
     const auto* layouts = pipeline::getActiveDBCLayout();
@@ -825,6 +848,7 @@ void EntitySpawner::updateUnitWeapons() {
                 in.castSheathes = attributes && (*attributes & 0x40000u) == 0;
             }
             if (const auto state = animationSheathState(in)) setUnitSheathState(guid, sheath, *state, false);
+            if (const auto idle = animationKitIdle(in)) sheath.kitIdle = *idle;
         }
         return sheath;
     };

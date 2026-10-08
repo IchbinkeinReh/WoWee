@@ -378,7 +378,9 @@
     "MissileImpactOffsetZ": 31,
     "MissileModel": 8,
     "MissileSound": 11,
-    "PrecastKit": 1
+    "PrecastKit": 1,
+    "StateDoneKit": 5,
+    "StateKit": 4
   },
   "SpellVisualEffectName": {
     "FilePath": 2,
@@ -401,7 +403,21 @@
     "SoundID": 15,
     "SpecialEffect0": 11,
     "SpecialEffect1": 12,
-    "SpecialEffect2": 13
+    "SpecialEffect2": 13,
+    "Flags": 37,
+    "WorldEffect": 14
+  },
+  "SpellVisualKitModelAttach": {
+    "AttachmentID": 3,
+    "ID": 0,
+    "OffsetX": 4,
+    "OffsetY": 5,
+    "OffsetZ": 6,
+    "ParentSpellVisualKitID": 1,
+    "Pitch": 8,
+    "Roll": 9,
+    "SpellVisualEffectNameID": 2,
+    "Yaw": 7
   },
   "Talent": {
     "Column": 3,

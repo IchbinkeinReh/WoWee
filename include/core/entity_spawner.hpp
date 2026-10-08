@@ -238,6 +238,12 @@ public:
     /// weapon effects (CreatureModelData +4 without 0x10, 0x0073a6c0), and
     /// then its AttachedEffectScale (+0x60, 0x006f8c50).
     std::optional<float> kitWeaponEffectHolder(uint32_t renderInstanceId) const;
+    /// The unit's CreatureModelData AttachedEffectScale (+0x60), which sizes
+    /// every kit model hung on it (0x006f8c50); 1 when it has none.
+    float kitAttachedEffectScale(uint32_t renderInstanceId) const;
+    /// Whether another unit shows its SpellVisual Flags 8 state kits
+    /// (0x00720400): idle, its weapons away and casting nothing.
+    bool unarmedKitsShown(uint64_t guid) const;
 
     /// Every unit's and corpse's blob shadow for this frame (0x00793980): a
     /// corpse that is not bones by the bounds of its model's sequence; a unit by its
@@ -553,6 +559,8 @@ private:
         uint32_t animId = 0xFFFFFFFFu;
         uint32_t castSpellId = 0;
         bool attacking = false;
+        /// +0xa30 0x10000 (animationKitIdle).
+        bool kitIdle = false;
     };
     std::unordered_map<uint64_t, UnitSheath> unitSheath_;
     /// A unit's weapon slots as updateUnitWeapons reads them: item entries,

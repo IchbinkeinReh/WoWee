@@ -10,6 +10,7 @@
 #include <glm/glm.hpp>
 
 #include "rendering/spell_missile.hpp"
+#include "rendering/spell_kit.hpp"
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -104,6 +105,38 @@ public:
     using WeaponEffectHolder = std::function<std::optional<float>(uint32_t renderInstanceId)>;
     void setWeaponEffectHolder(WeaponEffectHolder holder) { weaponEffectHolder_ = std::move(holder); }
 
+    /// An aura's state kit (0x00724820): when a slot of the unit's auras
+    /// takes a spell it did not have, the StateKit (SpellVisual +0x10) of
+    /// the spell's visual goes on the unit, its models at their attachments,
+    /// looping until the aura goes. Held back while a missile carrying the
+    /// visual flies at the unit; it plays as the missile lands (0x00700e20).
+    void applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, uint32_t visualId);
+    /// The aura gone from its slot (0x0071e930): every state kit of the spell
+    /// leaves the unit (0x00743b40) and the visual's StateDoneKit (+0x14)
+    /// plays once.
+    void removeAuraStateKit(uint64_t unitGuid, uint32_t spellId, uint32_t visualId);
+    /// SMSG_AURA_UPDATE's slots as the client takes each: one taking a spell
+    /// it did not hold plays the spell's state kit (0x00724820), one losing
+    /// its spell removes it (0x0071e930). The slots are kept here, so a
+    /// refresh of the same spell plays nothing.
+    void setUnitAuraSlot(uint64_t unitGuid, uint32_t slot, uint32_t spellId);
+    /// SMSG_AURA_UPDATE_ALL: the slots it names, and every other one empty.
+    void setUnitAuraSlots(uint64_t unitGuid, const std::vector<std::pair<uint32_t, uint32_t>>& slotSpells);
+    /// Spell.dbc SpellVisual of a spell, 0 for none.
+    using SpellVisualResolver = std::function<uint32_t(uint32_t spellId)>;
+    void setSpellVisualResolver(SpellVisualResolver resolver) { spellVisualResolver_ = std::move(resolver); }
+    /// The CharacterRenderer instance drawing a unit, 0 while it has none.
+    using UnitInstanceResolver = std::function<uint32_t(uint64_t unitGuid)>;
+    void setUnitInstanceResolver(UnitInstanceResolver resolver) { unitInstanceResolver_ = std::move(resolver); }
+    /// Whether a unit shows its SpellVisual Flags 8 state kits (0x00720400):
+    /// +0xa30 0x10000, its weapons away and no cast.
+    using UnarmedKitsQuery = std::function<bool(uint64_t unitGuid)>;
+    void setUnarmedKitsQuery(UnarmedKitsQuery query) { unarmedKitsQuery_ = std::move(query); }
+    /// A unit's CreatureModelData AttachedEffectScale (+0x60), which sizes
+    /// every kit model on it (0x006f8c50).
+    using AttachedEffectScale = std::function<float(uint32_t renderInstanceId)>;
+    void setAttachedEffectScale(AttachedEffectScale scale) { attachedEffectScale_ = std::move(scale); }
+
     // Advance lifetime timers and remove expired instances.
     void update(float deltaTime);
 
@@ -130,7 +163,74 @@ private:
         bool followsUnit = false;
         glm::vec3 followOffset{0.0f};  // in the unit's frame
         float scale = 1.0f;  // a kit weapon effect's, in its attachment's frame
+        glm::mat4 local{1.0f};  // a SpellVisualKitModelAttach offset, in the attachment's frame
     };
+
+    /// A model a kit hangs on a unit: a model column at its attachment
+    /// (0x00744790), or a SpellVisualKitModelAttach row with its offset and
+    /// turn (0x006f84f0). Attachment -1 is placed in the world at the unit
+    /// (the kit's WorldEffect, +0x38, or a row without an attachment).
+    struct KitModel {
+        std::string path;
+        int32_t attachment = -1;
+        glm::mat4 local{1.0f};
+        float scale = 1.0f;
+        float minScale = 0.0f;
+        float maxScale = 1e30f;
+    };
+    struct KitRecord {
+        std::vector<KitModel> models;
+        uint32_t flags = 0;  ///< SpellVisualKit Flags (+0x94)
+    };
+    std::unordered_map<uint32_t, KitRecord> kits_;  // SpellVisualKit id → its models
+    struct VisualAuraKits {
+        uint32_t stateKit = 0;      ///< SpellVisual +0x10
+        uint32_t stateDoneKit = 0;  ///< SpellVisual +0x14
+        uint32_t flags = 0;         ///< SpellVisual Flags (+0x34)
+    };
+    std::unordered_map<uint32_t, VisualAuraKits> visualAuraKits_;  // visualId → its aura kits
+
+    /// A kit model shown on a unit.
+    struct KitModelInstance {
+        uint32_t instanceId = 0;
+        int32_t attachment = -1;
+        glm::mat4 local{1.0f};
+        float scale = 1.0f;
+    };
+    /// An aura's state kit on a unit.
+    struct AuraKit {
+        uint32_t spellId = 0;
+        uint32_t visualId = 0;
+        uint32_t kitId = 0;
+        bool unarmedOnly = false;      ///< its visual has Flags 8
+        bool playing = true;           ///< its kit is on the unit (not removed by 0x00720400)
+        bool awaitingMissile = false;  ///< a missile carrying it is still flying at the unit
+        uint32_t boundInstance = 0;    ///< the instance its models hang on
+        std::vector<KitModelInstance> models;
+    };
+    struct UnitAuraKits {
+        std::unordered_map<uint32_t, uint32_t> slots;  // aura slot → its spell
+        std::vector<AuraKit> auras;
+        spell_kit::UnarmedKitBits unarmedBits;
+    };
+    std::unordered_map<uint64_t, UnitAuraKits> unitAuraKits_;
+    UnitInstanceResolver unitInstanceResolver_;
+    SpellVisualResolver spellVisualResolver_;
+    UnarmedKitsQuery unarmedKitsQuery_;
+    AttachedEffectScale attachedEffectScale_;
+    /// 0x00720400 for a unit: hide or show its Flags 8 kits as asked.
+    void stepUnarmedKits(uint64_t unitGuid, UnitAuraKits& unit, bool force);
+    void hideAuraKit(AuraKit& aura);
+    /// Each frame: the unit's kits follow it, onto a new model when it has
+    /// one, and its Flags 8 kits show as 0x00720400 has them.
+    void updateAuraKits();
+    /// A kit model's place this frame on the unit drawn by renderInstanceId;
+    /// false when it has no such attachment (0x006f8c50 removes the effect).
+    bool kitModelTransform(uint32_t renderInstanceId, int32_t attachment, const glm::mat4& local,
+                           float effectScale, float minScale, float maxScale, glm::mat4& out, float& scale);
+    /// Play a kit's models on a unit: looping until removed (a state kit),
+    /// or once into activeSpellVisuals_.
+    std::vector<KitModelInstance> playKitModels(const KitRecord& kit, uint32_t renderInstanceId, bool loops);
 
     /// A kit's LeftWeaponEffect or RightWeaponEffect: its
     /// SpellVisualEffectName model, Scale and allowed scales.
