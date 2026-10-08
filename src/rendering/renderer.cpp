@@ -5079,7 +5079,10 @@ void Renderer::renderShadowPass() {
     if (terrainRenderer) terrainRenderer->beginShadowFrame(frame);
     if (m2Renderer) m2Renderer->beginShadowFrame(frame);
     if (characterRenderer) characterRenderer->beginShadowFrame(frame);
-    for (int c = 0; c < activeShadowCascades_; ++c) {
+    // Largest first: each cascade lies inside the one before it, so the M2
+    // renderer culls the first one against every instance and the rest
+    // against that list (M2Renderer::shadowCandidates_).
+    for (int c = activeShadowCascades_ - 1; c >= 0; --c) {
         const ShadowCascade& cascade = shadowCascades_[c];
         VkViewport vp{.x = static_cast<float>(cascade.tile.offset.x),
                       .y = static_cast<float>(cascade.tile.offset.y),
@@ -5091,15 +5094,19 @@ void Renderer::renderShadowPass() {
 
         const float cullRadius = cascade.halfExtent * 1.35f;
         if (terrainRenderer) {
+            WOWEE_PROFILE_SCOPE("shadow: terrain", Cpu);
             terrainRenderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
         }
         if (wmoRenderer) {
+            WOWEE_PROFILE_SCOPE("shadow: wmo", Cpu);
             wmoRenderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
         }
         if (m2Renderer) {
+            WOWEE_PROFILE_SCOPE("shadow: m2", Cpu);
             m2Renderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
         }
         if (characterRenderer) {
+            WOWEE_PROFILE_SCOPE("shadow: characters", Cpu);
             characterRenderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
         }
         // One mark per cascade: the far one covers the most ground and is

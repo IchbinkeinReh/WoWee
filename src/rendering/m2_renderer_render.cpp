@@ -429,7 +429,17 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
     // waterfall with no bones of its own scrolled once after it loaded and
     // then stood still, and one with emitters - wrapped at a fixed 3.3 s
     // below, whatever its sequence - stopped for the rest of each lap.
-    for (auto& instance : instances) {
+    shadowCull_.clear();
+    shadowCullInstanceCount_ = instances.size();
+    for (uint32_t ii = 0; ii < instances.size(); ++ii) {
+        auto& instance = instances[ii];
+        if (instance.cachedIsValid && !instance.cachedIsInvisibleTrap && instance.cachedModel) {
+            shadowCull_.push_back({instance.position,
+                                   instance.cachedModel->boundRadius * instance.scale,
+                                   instance.modelId, ii,
+                                   instance.cachedModel->shadowWindFoliage ? 1u : 0u,
+                                   (instance.cachedIsGroundDetail || instance.detailDoodad) ? 1u : 0u});
+        }
         instance.animTime += dtMs;
         instance.globalSequenceTime += dtMs;
         const bool steppedBelow = instance.cachedHasAnimation && !instance.cachedDisableAnimation;
@@ -2067,6 +2077,7 @@ void M2Renderer::beginShadowFrame(uint32_t frameIndex) {
         }
     }
     shadowCastersThisFrame_[0] = shadowCastersThisFrame_[1] = 0;
+    shadowCandidatesValid_ = false;
     shadowInstancesUsed_ = 0;
 
     // This frame slot's fence was waited on in beginFrame, so the texture sets
@@ -2147,8 +2158,67 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
     // and a batch's texture was bound once per instance rather than once per
     // batch. With tens of thousands of instances resident that is the cost of
     // this pass, and none of it is drawing.
+    {
+    WOWEE_PROFILE_SCOPE("m2 shadow: cull + sort", Cpu);
     shadowCasters_[0].clear();
     shadowCasters_[1].clear();
+    // The test a caster passes, the same for the full walk and the filter.
+    const auto castsHere = [&](const M2Instance& instance, const M2ModelGPU& model) {
+        const glm::vec4 clip = lightSpaceMatrix * glm::vec4(instance.position, 1.0f);
+        const float margin = (model.boundRadius * instance.scale) / shadowRadius * 1.5f;
+        if (std::abs(clip.x) > 1.0f + margin || std::abs(clip.y) > 1.0f + margin) return false;
+        return !(clip.z < -margin || clip.z > 1.0f + margin);
+    };
+    if (shadowCandidatesValid_) {
+        // A later, smaller cascade: the first one's list holds every caster
+        // it can have, already sorted by model, and filtering keeps the order.
+        // Walking all instances again for each cascade was most of what the
+        // shadow pass cost the main thread - some 6 of its 8 ms with three.
+        for (int b = 0; b < 2; ++b) {
+            for (const auto& entry : shadowCandidates_[b]) {
+                const auto& instance = instances[entry.second];
+                if (!instance.cachedModel) continue;
+                if (castsHere(instance, *instance.cachedModel)) shadowCasters_[b].push_back(entry);
+            }
+            // The ground clutter, in a cascade small enough to show it: few
+            // enough here that sorting them in afresh costs nothing.
+            if (shadowRadius <= kGroundCoverShadowRadius && !shadowGroundCandidates_[b].empty()) {
+                for (const auto& entry : shadowGroundCandidates_[b]) {
+                    const auto& instance = instances[entry.second];
+                    if (!instance.cachedModel) continue;
+                    if (castsHere(instance, *instance.cachedModel)) shadowCasters_[b].push_back(entry);
+                }
+                std::sort(shadowCasters_[b].begin(), shadowCasters_[b].end());
+            }
+        }
+    } else if (shadowCullInstanceCount_ == instances.size() && !shadowCull_.empty()) {
+        // The packed copy update() made this frame (see shadowCull_).
+        shadowGroundCandidates_[0].clear();
+        shadowGroundCandidates_[1].clear();
+        const bool groundCasts = shadowRadius <= kGroundCoverShadowRadius;
+        for (const auto& e : shadowCull_) {
+            if (e.index >= instances.size() || instances[e.index].modelId != e.modelId) continue;
+            const glm::vec4 clip = lightSpaceMatrix * glm::vec4(e.position, 1.0f);
+            const float margin = e.radius / shadowRadius * 1.5f;
+            if (std::abs(clip.x) > 1.0f + margin || std::abs(clip.y) > 1.0f + margin) continue;
+            if (clip.z < -margin || clip.z > 1.0f + margin) continue;
+            // Ground clutter only where it is close enough to see its shadow
+            // (kGroundCoverShadowRadius); kept for the cascades after this.
+            // In the far cascade it was 33,000 of 35,000 casters, sorted and
+            // drawn into a map where each tuft is under a texel.
+            if (e.groundCover && !groundCasts) {
+                shadowGroundCandidates_[e.foliage ? 1 : 0].emplace_back(e.modelId, e.index);
+                continue;
+            }
+            shadowCasters_[e.foliage ? 1 : 0].emplace_back(e.modelId, e.index);
+        }
+        for (auto& bucket : shadowCasters_) {
+            std::sort(bucket.begin(), bucket.end());
+        }
+        shadowCandidates_[0] = shadowCasters_[0];
+        shadowCandidates_[1] = shadowCasters_[1];
+        shadowCandidatesValid_ = true;
+    } else {
     for (uint32_t i = 0; i < instances.size(); ++i) {
         const auto& instance = instances[i];
         if (!instance.cachedIsValid || instance.cachedIsInvisibleTrap) continue;
@@ -2173,6 +2243,11 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
     }
     for (auto& bucket : shadowCasters_) {
         std::sort(bucket.begin(), bucket.end());
+    }
+    shadowCandidates_[0] = shadowCasters_[0];
+    shadowCandidates_[1] = shadowCasters_[1];
+    shadowCandidatesValid_ = true;
+    }
     }
 
     // Instanced where it can be: every copy of a model is one draw per batch,

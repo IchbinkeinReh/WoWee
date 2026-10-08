@@ -1249,6 +1249,32 @@ private:
     ///
     /// Kept as members so a frame's worth of casters costs no allocation.
     std::vector<std::pair<uint32_t, uint32_t>> shadowCasters_[2];
+    /// The first cascade's casters this frame, sorted: the cascades are
+    /// drawn largest first and every one lies inside the one before it (same
+    /// centre, light and depth range, a smaller square), so the later ones
+    /// only filter this list instead of walking every instance again.
+    std::vector<std::pair<uint32_t, uint32_t>> shadowCandidates_[2];
+    bool shadowCandidatesValid_ = false;
+    /// What the shadow cull reads of each instance, packed: written by
+    /// update() in the loop that already walks every instance on a worker,
+    /// so the main thread's cull reads 24 bytes a caster instead of
+    /// touching each M2Instance - with tens of thousands resident, those
+    /// cache misses were most of the shadow pass.
+    struct ShadowCullEntry {
+        glm::vec3 position;
+        float radius;       ///< boundRadius x scale
+        uint32_t modelId;
+        uint32_t index;     ///< into instances, checked against modelId on use
+        uint32_t foliage;   ///< the model casts in the foliage pass
+        uint32_t groundCover; ///< ground clutter: casts in the near cascade only
+    };
+    std::vector<ShadowCullEntry> shadowCull_;
+    /// Ground clutter inside the first cascade, kept apart: tens of thousands
+    /// of grass tufts, whose shadows nobody sees past a few dozen yards.
+    std::vector<std::pair<uint32_t, uint32_t>> shadowGroundCandidates_[2];
+    /// The largest cascade half-extent that still takes ground clutter.
+    static constexpr float kGroundCoverShadowRadius = 60.0f;
+    size_t shadowCullInstanceCount_ = 0;  ///< instances.size() when it was built
 
     // Ribbon draw-call list (reused each frame)
     struct RibbonDrawCall {
