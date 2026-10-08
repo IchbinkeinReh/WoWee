@@ -192,6 +192,10 @@ public:
     /// (classic and TBC: _SLOT_DISPLAY and _INFO), players from their
     /// PLAYER_VISIBLE_ITEM entries. Once a frame.
     void updateUnitWeapons();
+    /// Paints again the players and corpses whose guild tabard waited on
+    /// its guild's design, once it has come (0x006d2840, 0x00705950).
+    /// Once a frame.
+    void refreshGuildTabards();
     /// The BehaviorID (AnimationData +0x18) of the animation an instance
     /// plays, or kNoAnimationBehavior (0x00721ed0's reading of it).
     uint32_t animationBehavior(uint32_t instanceId) const;
@@ -522,6 +526,7 @@ private:
         glm::vec3 position{0.0f};  ///< canonical
         uint32_t pose = 0;
         uint32_t sparkleInstance = 0;
+        uint32_t guildId = 0;  ///< CORPSE_FIELD_GUILD
     };
     std::unordered_map<uint64_t, CorpseSite> corpseSites_;
     /// The loot sparkle's model ("HARDCODED Loot Art", 0x006f7520), loaded
@@ -672,6 +677,10 @@ private:
     };
     std::unordered_map<uint64_t, OnlinePlayerAppearanceState> onlinePlayerAppearance_;
     std::unordered_map<uint64_t, std::pair<std::array<uint32_t, 19>, std::array<uint8_t, 19>>> pendingOnlinePlayerEquipment_;
+    /// Players and corpses painted without their guild tabard's emblem, with
+    /// what they wear, and the design count they were painted at.
+    std::unordered_map<uint64_t, std::pair<std::array<uint32_t, 19>, std::array<uint8_t, 19>>> tabardEmblemWaits_;
+    uint32_t tabardEmblemGeneration_ = 0;
     std::deque<std::pair<uint64_t, std::pair<std::array<uint32_t, 19>, std::array<uint8_t, 19>>>> deferredEquipmentQueue_;
     void processDeferredEquipmentQueue();
     struct PreparedEquipmentUpdate {

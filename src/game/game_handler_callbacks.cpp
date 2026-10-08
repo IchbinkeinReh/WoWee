@@ -2640,6 +2640,14 @@ void GameHandler::queryGuildInfo(uint32_t guildId) {
     if (socialHandler_) socialHandler_->queryGuildInfo(guildId);
 }
 
+std::optional<GuildEmblem> GameHandler::lookupGuildEmblem(uint32_t guildId) {
+    return socialHandler_ ? socialHandler_->lookupGuildEmblem(guildId) : std::nullopt;
+}
+
+uint32_t GameHandler::guildEmblemGeneration() const {
+    return socialHandler_ ? socialHandler_->guildEmblemGeneration() : 0;
+}
+
 const std::string& GameHandler::lookupGuildName(uint32_t guildId) {
     static const std::string kEmpty;
     if (socialHandler_) return socialHandler_->lookupGuildName(guildId);

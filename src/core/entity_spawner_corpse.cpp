@@ -49,6 +49,7 @@ void EntitySpawner::spawnCorpse(uint64_t guid, const game::CorpseLook& look, flo
     // thirds of a yard over it; the loot sparkle when it is lootable.
     CorpseSite& site = corpseSites_[guid];
     site.position = glm::vec3(x, y, z);
+    site.guildId = look.guildId;
     std::optional<float> liquid;
     if (auto* water = renderer_ ? renderer_->getWaterRenderer() : nullptr) {
         const glm::vec3 renderPos = core::coords::canonicalToRender(site.position);

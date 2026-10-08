@@ -1067,6 +1067,19 @@ uint32_t SocialHandler::getEntityGuildId(uint64_t guid) const {
     return entity->getField(ufUnitEnd + 3);
 }
 
+std::optional<GuildEmblem> SocialHandler::lookupGuildEmblem(uint32_t guildId) {
+    if (guildId == 0) return std::nullopt;
+    if (auto it = guildEmblems_.find(guildId); it != guildEmblems_.end()) return it->second;
+    const auto now = std::chrono::steady_clock::now();
+    auto pendingIt = pendingGuildNameQueries_.find(guildId);
+    if (pendingIt == pendingGuildNameQueries_.end() ||
+        std::chrono::duration_cast<std::chrono::seconds>(now - pendingIt->second).count() >= 2) {
+        pendingGuildNameQueries_[guildId] = now;
+        queryGuildInfo(guildId);
+    }
+    return std::nullopt;
+}
+
 const std::string& SocialHandler::lookupGuildName(uint32_t guildId) {
     if (guildId == 0) return kEmptyString;
     auto it = guildNameCache_.find(guildId);
@@ -2591,6 +2604,16 @@ void SocialHandler::handleGuildQueryResponse(network::Packet& packet) {
         pendingGuildNameQueries_.erase(data.guildId);
         if (!data.guildName.empty()) {
             rememberGuildName(data.guildId, data.guildName);
+        }
+        const GuildEmblem emblem{.emblemStyle = data.emblemStyle,
+                                 .emblemColor = data.emblemColor,
+                                 .borderStyle = data.borderStyle,
+                                 .borderColor = data.borderColor,
+                                 .backgroundColor = data.backgroundColor};
+        auto [it, fresh] = guildEmblems_.try_emplace(data.guildId, emblem);
+        if (fresh || !(it->second == emblem)) {
+            it->second = emblem;
+            ++guildEmblemGeneration_;
         }
     }
     // Ours when it names the guild this character is actually in - which is

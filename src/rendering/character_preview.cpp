@@ -1,3 +1,4 @@
+#include "core/character_component.hpp"
 #include "rendering/character_preview.hpp"
 #include "rendering/imgui_texture.hpp"
 #include "rendering/character_renderer.hpp"
@@ -845,9 +846,6 @@ bool CharacterPreview::dress(const std::vector<game::EquipmentItem>& equipment, 
         return 0;
     };
 
-    const auto* idiL = pipeline::getActiveDBCLayout()
-        ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
-
     // --- Geosets ---
     // The client's character component (0x004ed900), by inventory type, and
     // the helmet's masks when it wears one.
@@ -867,28 +865,15 @@ bool CharacterPreview::dress(const std::vector<game::EquipmentItem>& equipment, 
     if (bodySkinPath_.empty()) return true; // geosets applied, but can't composite
 
 
-    // Texture component region fields - use DBC layout when available, fall back to binary offsets.
-    uint32_t texRegionFields[8];
-    pipeline::getItemDisplayInfoTextureFields(*displayInfoDbc, idiL, texRegionFields);
-
-    std::vector<std::pair<int, std::string>> regionLayers;
-    regionLayers.reserve(32);
-
+    // The character component's layers (0x004f2880), with a guild
+    // tabard's emblem from the guild's design (0x004e3cd0).
+    std::vector<core::ComponentItem> componentItems;
     for (const auto& it : equipment) {
         if (it.displayModel == 0) continue;
-        int32_t recIdx = displayInfoDbc->findRecordById(it.displayModel);
-        if (recIdx < 0) continue;
-
-        for (int region = 0; region < 8; region++) {
-            std::string texName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), texRegionFields[region]);
-            if (texName.empty()) continue;
-
-            const std::string fullPath = pipeline::resolveItemRegionTexture(
-                *assetManager_, region, texName, gender_ == game::Gender::FEMALE);
-            if (fullPath.empty()) continue;
-            regionLayers.emplace_back(region, fullPath);
-        }
+        componentItems.push_back({core::componentItemForInventoryType(it.inventoryType), it.displayModel});
     }
+    const std::vector<std::pair<int, std::string>> regionLayers = core::characterComponentLayers(
+        *assetManager_, *displayInfoDbc, componentItems, gender_ == game::Gender::FEMALE, guildEmblem_);
 
     if (!regionLayers.empty()) {
         VkTexture* newTex = charRenderer_->compositeWithRegions(bodySkinPath_, baseLayers_, regionLayers);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/guild_emblem.hpp"
+#include <optional>
 #include "core/character_geosets.hpp"
 #include "core/preview_dressing.hpp"
 
@@ -69,6 +71,9 @@ public:
     /// The character-select model (0x004e0fd0): SMSG_CHAR_ENUM's 23 slots,
     /// by slot, and the character's flags. No head item.
     bool applyCharacterSelectEquipment(const std::vector<game::EquipmentItem>& slots, uint32_t characterFlags);
+    /// The guild's tabard design a guild tabard is painted with (0x004e3cd0),
+    /// or none; set before dressing.
+    void setGuildEmblem(const std::optional<game::GuildEmblem>& emblem) { guildEmblem_ = emblem; }
     /// The character-create model (0x004e0fd0 with none selected): the
     /// race, class and sex's CharStartOutfit row. After loadCharacter.
     bool applyStartOutfit();
@@ -240,6 +245,7 @@ private:
     uint8_t classId_ = 0;
     bool appearanceGeosetsLoaded_ = false;
     core::AppearanceGeosetTables appearanceTables_;
+    std::optional<game::GuildEmblem> guildEmblem_;
 };
 
 } // namespace rendering

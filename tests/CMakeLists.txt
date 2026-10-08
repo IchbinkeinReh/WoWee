@@ -2644,6 +2644,11 @@ wowee_add_test(test_weapon_attachment
 wowee_add_test(test_pvp_flags
     SOURCES test_pvp_flags.cpp)
 
+# ── test_character_component ─────────────────────────────────
+# How worn items and a guild tabard layer on the body (core/character_component.hpp).
+wowee_add_test(test_character_component
+    SOURCES test_character_component.cpp)
+
 # ── test_corpse_look ─────────────────────────────────────────
 # What a corpse's fields say it looks like (game/corpse_look.hpp).
 wowee_add_test(test_corpse_look

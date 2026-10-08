@@ -37,6 +37,7 @@
 #include "game/game_clock.hpp"
 #include <map>
 #include <optional>
+#include "game/guild_emblem.hpp"
 #include <algorithm>
 #include <chrono>
 #include <future>
@@ -905,6 +906,10 @@ public:
     const std::string& lookupGuildName(uint32_t guildId);
     // Returns the guildId for a player entity (from PLAYER_GUILDID update field).
     uint32_t getEntityGuildId(uint64_t guid) const;
+    /// A guild's tabard design, asked of the server when not known yet.
+    std::optional<GuildEmblem> lookupGuildEmblem(uint32_t guildId);
+    /// Changes each time a guild's design arrives.
+    uint32_t guildEmblemGeneration() const;
 
     using ReadyCheckResult = game::ReadyCheckResult;
     void initiateReadyCheck();

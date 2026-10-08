@@ -149,6 +149,7 @@ void EntitySpawner::shutdown() {
     corpseBonesInstances_.clear();
     corpseBonesModelIds_.clear();
     corpseSites_.clear();
+    tabardEmblemWaits_.clear();
     lootSparkleModelId_ = 0;
     lootSparkleModelTried_ = false;
     animationDataDbc_.reset();
@@ -207,6 +208,7 @@ void EntitySpawner::resetAllState() {
     corpseBonesInstances_.clear();
     corpseBonesModelIds_.clear();
     corpseSites_.clear();
+    tabardEmblemWaits_.clear();
     lootSparkleModelId_ = 0;
     lootSparkleModelTried_ = false;
     animationDataDbc_.reset();
@@ -505,6 +507,16 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint3
         charRenderer->attachWeapon(instanceId, point, model, nextWeaponModelId_++, texturePath);
     }
     return true;
+}
+
+void EntitySpawner::refreshGuildTabards() {
+    if (!gameHandler_ || tabardEmblemWaits_.empty()) return;
+    const uint32_t generation = gameHandler_->guildEmblemGeneration();
+    if (generation == tabardEmblemGeneration_) return;
+    tabardEmblemGeneration_ = generation;
+    auto waits = std::move(tabardEmblemWaits_);
+    tabardEmblemWaits_.clear();
+    for (const auto& [guid, worn] : waits) queuePlayerEquipment(guid, worn.first, worn.second);
 }
 
 void EntitySpawner::updateUnitWeapons() {

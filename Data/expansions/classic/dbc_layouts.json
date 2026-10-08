@@ -124,6 +124,7 @@
     "ModelName": 1
   },
   "ItemDisplayInfo": {
+    "Flags": 9,
     "GeosetGroup1": 6,
     "GeosetGroup3": 8,
     "ID": 0,

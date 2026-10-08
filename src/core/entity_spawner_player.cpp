@@ -1,4 +1,5 @@
 #include "core/entity_spawner.hpp"
+#include "core/character_component.hpp"
 #include "core/helm_visual.hpp"
 #include "core/geoset_rules.hpp"
 #include "core/character_geosets.hpp"
@@ -490,30 +491,24 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
 
     // --- Textures (skin atlas compositing) ---
 
-    uint32_t texRegionFields[8];
-    pipeline::getItemDisplayInfoTextureFields(*displayInfoDbc, idiL, texRegionFields);
-
-    std::vector<std::pair<int, std::string>> regionLayers;
-    const bool isFemale = (st.genderId == 1);
-
+    // The character component's layers (0x004f2880), and a guild tabard's
+    // emblem from its guild's design (0x006db510; a corpse's guild,
+    // 0x007059a0) - asked for, and painted again on its answer.
+    std::vector<core::ComponentItem> componentItems;
     for (int s = 0; s < 19; s++) {
-        uint32_t did = displayInfoIds[s];
-        if (did == 0) continue;
-        int32_t recIdx = displayInfoDbc->findRecordById(did);
-        if (recIdx < 0) continue;
-
-        for (int region = 0; region < 8; region++) {
-            std::string texName = displayInfoDbc->getString(
-                static_cast<uint32_t>(recIdx), texRegionFields[region]);
-            if (texName.empty()) continue;
-
-            std::string fullPath = pipeline::resolveItemRegionTexture(
-                *assetManager_, region, texName, isFemale);
-            if (fullPath.empty()) continue;
-
-            regionLayers.emplace_back(region, fullPath);
-        }
+        if (displayInfoIds[s] != 0) componentItems.push_back({core::componentItemIndex(s), displayInfoIds[s]});
     }
+    std::optional<game::GuildEmblem> emblem;
+    tabardEmblemWaits_.erase(guid);
+    if (displayInfoIds[18] != 0 && gameHandler_) {
+        const auto siteIt = corpseSites_.find(guid);
+        const uint32_t guildId =
+            siteIt != corpseSites_.end() ? siteIt->second.guildId : gameHandler_->getEntityGuildId(guid);
+        emblem = gameHandler_->lookupGuildEmblem(guildId);
+        if (guildId != 0 && !emblem) tabardEmblemWaits_[guid] = {displayInfoIds, inventoryTypes};
+    }
+    const std::vector<std::pair<int, std::string>> regionLayers = core::characterComponentLayers(
+        *assetManager_, *displayInfoDbc, componentItems, st.genderId == 1, emblem);
 
     const auto slotsIt = playerTextureSlotsByModelId_.find(st.modelId);
     if (slotsIt == playerTextureSlotsByModelId_.end()) return;

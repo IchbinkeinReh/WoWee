@@ -238,6 +238,11 @@ private:
      * Re-composite character skin texture from current equipment
      */
     void updateCharacterTextures(game::Inventory& inventory);
+    /// The guild whose tabard design the player's body was last painted
+    /// with, and whether the design was known then; a change of either
+    /// paints it again (0x006d2840).
+    uint32_t playerTabardGuildId_ = 0;
+    bool playerTabardEmblemKnown_ = false;
 
 
     void renderMinimapMarkers(game::GameHandler& gameHandler);

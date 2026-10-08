@@ -797,7 +797,16 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         }
     }
 
-    if (inventoryScreen.consumeEquipmentDirty() || gameHandler.consumeOnlineEquipmentDirty()) {
+    // The player's guild, and its tabard design arriving (0x006d2840).
+    bool tabardEmblemChanged = false;
+    if (!gameHandler.getInventory().getEquipSlot(game::EquipSlot::TABARD).empty()) {
+        uint32_t guildId = gameHandler.getEntityGuildId(gameHandler.getPlayerGuid());
+        if (guildId == 0 && gameHandler.getActiveCharacter()) guildId = gameHandler.getActiveCharacter()->guildId;
+        const bool known = gameHandler.lookupGuildEmblem(guildId).has_value();
+        tabardEmblemChanged = guildId != playerTabardGuildId_ || known != playerTabardEmblemKnown_;
+    }
+    if (inventoryScreen.consumeEquipmentDirty() || gameHandler.consumeOnlineEquipmentDirty() ||
+        tabardEmblemChanged) {
         updateCharacterGeosets(gameHandler.getInventory());
         updateCharacterTextures(gameHandler.getInventory());
         if (appearanceComposer_) appearanceComposer_->loadEquippedWeapons();
