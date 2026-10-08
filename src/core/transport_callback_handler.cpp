@@ -47,10 +47,7 @@ void TransportCallbackHandler::setupCallbacks() {
         entitySpawner_.setMountDisplayId(mountDisplayId);
 
         // Mounting stows drawn weapons, matching the original client.
-        if (appearanceComposer_ && !appearanceComposer_->isWeaponsSheathed()) {
-            appearanceComposer_->setWeaponsSheathed(true);
-            appearanceComposer_->loadEquippedWeapons();
-        }
+        if (appearanceComposer_) appearanceComposer_->requestSheathState(SheathState::Unarmed);
     });
 
     // Taxi precache callback - preload terrain tiles along flight path

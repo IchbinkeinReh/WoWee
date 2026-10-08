@@ -706,6 +706,9 @@ public:
     bool isSitting() const { return standState_ >= 1 && standState_ <= 6; }
     bool isDead() const { return standState_ == 7; }
     bool isKneeling() const { return standState_ == 8; }
+    /// Asks the server for a sheath state (CMSG_SET_SHEATHED, 0x00736d30);
+    /// the model follows UNIT_FIELD_BYTES_2 byte 0 when it comes back.
+    void requestSheathState(uint8_t state);
 
     // Display toggles
     void toggleHelm();

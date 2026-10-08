@@ -2,6 +2,7 @@
 
 #include "core/geoset_rules.hpp"
 #include "core/character_geosets.hpp"
+#include "core/weapon_attachment.hpp"
 #include "game/character.hpp"
 #include "game/inventory.hpp"
 #include "rendering/animation/weapon_type.hpp"
@@ -69,10 +70,19 @@ public:
     // Equipment weapon loading (reads inventory, attaches weapon M2 models)
     void loadEquippedWeapons();
 
-    // Weapon sheathe state
-    void setWeaponsSheathed(bool sheathed) { weaponsSheathed_ = sheathed; }
-    [[nodiscard]] bool isWeaponsSheathed() const { return weaponsSheathed_; }
-    void toggleWeaponsSheathed() { weaponsSheathed_ = !weaponsSheathed_; }
+    /// The local player's sheath state, UNIT_FIELD_BYTES_2 byte 0 - the
+    /// server's, as for every other unit (0x0072dbc0, 0x00731f40).
+    [[nodiscard]] SheathState sheathState() const;
+    /// Asks the server for a sheath state when it is not the current one
+    /// (CMSG_SET_SHEATHED); the weapons move when the field comes back.
+    void requestSheathState(SheathState state);
+    /// The sheath key (0x006e23a0): the next state asked for, and false
+    /// when the player may not change it now or has nothing to change to.
+    bool toggleSheath();
+    /// Re-dresses the weapons when what 0x0072dbc0 reads - the sheath
+    /// state, the disarm bits, the animation's hands - has changed. Once a
+    /// frame.
+    void updateWeaponsFromFields();
     /// Where the item in a hand is put away; NONE when the hand is empty.
     [[nodiscard]] rendering::SheathSpot sheathSpot(game::EquipSlot slot) const;
 
@@ -118,7 +128,24 @@ private:
     uint32_t skinTextureSlotIndex_ = 0;
     uint32_t cloakTextureSlotIndex_ = 0;
 
-    bool weaponsSheathed_ = false;
+    /// What the weapons were last dressed by.
+    struct DressedKey {
+        uint32_t instanceId = 0;
+        uint8_t state = 0xFF;
+        uint32_t unitFlags = 0;
+        uint32_t unitFlags2 = 0;
+        bool offHandFollowsAnimation = false;
+        bool operator==(const DressedKey&) const = default;
+    };
+    DressedKey dressedKey_;
+    /// The key the fields give now.
+    DressedKey currentDressKey() const;
+    /// From ranged to melee since the last dressing (0x00731f40).
+    bool rangedJustPutAway_ = false;
+    /// The last state asked for and the state it was asked from: asked
+    /// once until the field changes.
+    uint8_t requestedState_ = 0xFF;
+    uint8_t requestedFrom_ = 0xFF;
     bool showingRanged_ = false;
     bool showingMiningPick_ = false;
     uint32_t miningPickInstanceId_ = 0;

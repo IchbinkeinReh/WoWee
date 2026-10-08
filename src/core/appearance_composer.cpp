@@ -459,19 +459,41 @@ void AppearanceComposer::attachEquippedWeapons(bool rangedDrawn) {
         charRenderer->detachWeapon(charInstanceId, point);
     }
 
-    // The main hand, the off hand and the ranged weapon are all on the
-    // character at once (0x004eacd0 for each, 0x0072b7f0 for the ranged one):
-    // in the hands as the sheath state draws them, put away otherwise.
-    for (game::EquipSlot slot : {game::EquipSlot::MAIN_HAND, game::EquipSlot::OFF_HAND,
-                                 game::EquipSlot::RANGED}) {
-        const auto& equipSlot = inventory.getEquipSlot(slot);
-        if (equipSlot.empty() || equipSlot.item.displayInfoId == 0) continue;
+    // 0x0072dbc0 for each slot, as for every other unit: the three items,
+    // the sheath state and the rest of what it reads.
+    constexpr game::EquipSlot kSlots[3] = {game::EquipSlot::MAIN_HAND, game::EquipSlot::OFF_HAND,
+                                           game::EquipSlot::RANGED};
+    constexpr WeaponSlot kWeaponSlots[3] = {WeaponSlot::MainHand, WeaponSlot::OffHand, WeaponSlot::Ranged};
+    std::array<UnitWeaponItem, 3> items{};
+    UnitWeaponItems present{};
+    for (size_t i = 0; i < 3; ++i) {
+        const auto& equipSlot = inventory.getEquipSlot(kSlots[i]);
+        if (equipSlot.empty()) continue;
+        const auto* info = gameHandler_->getItemInfo(equipSlot.item.itemId);
+        const bool known = info && info->valid;
+        items[i] = {.sheath = known ? info->sheath : 0,
+                    .inventoryType = static_cast<uint8_t>(equipSlot.item.inventoryType),
+                    .itemClass = known ? info->itemClass : 0,
+                    .subClass = known ? info->subClass : 0};
+        present[i] = &items[i];
+    }
+    const DressedKey key = currentDressKey();
+    const UnitWeaponDress dress{
+        .state = rangedDrawn ? SheathState::Ranged : static_cast<SheathState>(key.state),
+        .rangedJustPutAway = !rangedDrawn && rangedJustPutAway_,
+        .isPlayer = true,
+        .unitFlags = key.unitFlags,
+        .unitFlags2 = key.unitFlags2,
+        .offHandFollowsAnimation = key.offHandFollowsAnimation};
+    dressedKey_ = key;
+    rangedJustPutAway_ = false;
 
-        const DrawnWeapon w = drawnWeapon(slot, equipSlot, gameHandler_);
-        const bool sheathed = slot == game::EquipSlot::RANGED ? !rangedDrawn
-                                                              : (rangedDrawn || weaponsSheathed_);
-        const uint32_t attachmentId =
-            weaponAttachmentPoint(w.slot, w.sheath, sheathed, w.shield, w.rangedRight);
+    for (size_t i = 0; i < 3; ++i) {
+        const game::EquipSlot slot = kSlots[i];
+        const auto& equipSlot = inventory.getEquipSlot(slot);
+        if (!present[i] || equipSlot.item.displayInfoId == 0) continue;
+
+        const uint32_t attachmentId = unitWeaponPoint(kWeaponSlots[i], present, dress);
         if (attachmentId == attachment::kNone) continue;
 
         const int32_t recIdx = displayInfoDbc->findRecordById(equipSlot.item.displayInfoId);
@@ -481,10 +503,9 @@ void AppearanceComposer::attachEquippedWeapons(bool rangedDrawn) {
 
         // A shield in the off hand is a shield model (0x004eacd0); the rest
         // are weapons - with the shield folder still tried for anything else.
-        const char* firstDir = (w.shield && w.slot == WeaponSlot::OffHand)
-            ? "Item\\ObjectComponents\\Shield\\" : "Item\\ObjectComponents\\Weapon\\";
-        const char* secondDir = (w.shield && w.slot == WeaponSlot::OffHand)
-            ? "Item\\ObjectComponents\\Weapon\\" : "Item\\ObjectComponents\\Shield\\";
+        const bool shield = items[i].inventoryType == 14 && kWeaponSlots[i] == WeaponSlot::OffHand;
+        const char* firstDir = shield ? "Item\\ObjectComponents\\Shield\\" : "Item\\ObjectComponents\\Weapon\\";
+        const char* secondDir = shield ? "Item\\ObjectComponents\\Weapon\\" : "Item\\ObjectComponents\\Shield\\";
         std::string m2Path = firstDir + art.modelFile;
         std::string dir = firstDir;
         pipeline::M2Model weaponModel;
@@ -507,11 +528,99 @@ void AppearanceComposer::attachEquippedWeapons(bool rangedDrawn) {
         const uint32_t weaponModelId = entitySpawner_->allocateWeaponModelId();
         if (charRenderer->attachWeapon(charInstanceId, attachmentId, weaponModel, weaponModelId,
                                        texturePath)) {
-            LOG_INFO("Equipped weapon: ", m2Path, " at attachment ", attachmentId,
-                     sheathed ? " (sheathed)" : " (held)");
+            LOG_INFO("Equipped weapon: ", m2Path, " at attachment ", attachmentId);
             applyEnchantVisuals(charInstanceId, static_cast<int>(slot), attachmentId);
         }
     }
+}
+
+AppearanceComposer::DressedKey AppearanceComposer::currentDressKey() const {
+    DressedKey key;
+    key.instanceId = renderer_ ? renderer_->getCharacterInstanceId() : 0;
+    // Without a sheath field in the layout the weapons are held.
+    key.state = static_cast<uint8_t>(SheathState::Melee);
+    if (!gameHandler_) return key;
+    auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
+    if (entity) {
+        const uint16_t bytes2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
+        const uint16_t flags = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+        const uint16_t flags2 = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
+        if (bytes2 != 0xFFFF) key.state = static_cast<uint8_t>(entity->getField(bytes2) & 0xFFu);
+        if (flags != 0xFFFF) key.unitFlags = entity->getField(flags) & kUnitFlagDisarmed;
+        if (flags2 != 0xFFFF) key.unitFlags2 = entity->getField(flags2) & kUnitFlag2DisarmOffhand;
+    }
+    if (entitySpawner_ && key.instanceId != 0) {
+        const bool hasMainHand = !gameHandler_->getInventory().getEquipSlot(game::EquipSlot::MAIN_HAND).empty();
+        key.offHandFollowsAnimation =
+            offHandFollowsAnimation(entitySpawner_->animationBehavior(key.instanceId), hasMainHand);
+    }
+    return key;
+}
+
+SheathState AppearanceComposer::sheathState() const {
+    return static_cast<SheathState>(currentDressKey().state);
+}
+
+void AppearanceComposer::requestSheathState(SheathState state) {
+    if (!gameHandler_) return;
+    const auto current = static_cast<uint8_t>(sheathState());
+    const auto wanted = static_cast<uint8_t>(state);
+    if (wanted == current || (wanted == requestedState_ && current == requestedFrom_)) return;
+    requestedState_ = wanted;
+    requestedFrom_ = current;
+    gameHandler_->requestSheathState(wanted);
+}
+
+bool AppearanceComposer::toggleSheath() {
+    if (!gameHandler_) return false;
+    // 0x006e23a0: not while channelling (+0x40) or casting, stunned
+    // (UNIT_FIELD_FLAGS 0x40000) or dead (health +0x48 below 1).
+    if (gameHandler_->isCasting() || gameHandler_->isChanneling()) return false;
+    auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
+    if (!entity) return false;
+    const uint16_t flags = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+    const uint16_t health = game::fieldIndex(game::UF::UNIT_FIELD_HEALTH);
+    if (flags != 0xFFFF && (entity->getField(flags) & 0x40000u) != 0) return false;
+    if (health != 0xFFFF && entity->getField(health) == 0) return false;
+
+    const auto& inventory = gameHandler_->getInventory();
+    const bool hasMainOrOff = !inventory.getEquipSlot(game::EquipSlot::MAIN_HAND).empty() ||
+                              !inventory.getEquipSlot(game::EquipSlot::OFF_HAND).empty();
+    // The ranged weapon counts when the class's ChrClasses row (+0x24, the
+    // Flags column) does not have 8.
+    bool rangedDrawable = !inventory.getEquipSlot(game::EquipSlot::RANGED).empty();
+    if (rangedDrawable) {
+        const uint16_t bytes0 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0);
+        const uint32_t classId = bytes0 != 0xFFFF ? (entity->getField(bytes0) >> 8) & 0xFFu : 0;
+        auto classes = assetManager_ ? assetManager_->loadDBCOptional("ChrClasses.dbc") : nullptr;
+        const int32_t row = classes ? classes->findRecordById(classId) : -1;
+        if (row < 0) {
+            rangedDrawable = false;
+        } else if (classes->getFieldCount() == 60) {
+            // WotLK's layout: Flags is column 57.
+            rangedDrawable = (classes->getUInt32(static_cast<uint32_t>(row), 57) & 8u) == 0;
+        }
+    }
+    const SheathState current = sheathState();
+    const SheathState next = toggledSheathState(current, hasMainOrOff, rangedDrawable);
+    if (next == current) return false;
+    requestedState_ = static_cast<uint8_t>(next);
+    requestedFrom_ = static_cast<uint8_t>(current);
+    gameHandler_->requestSheathState(requestedState_);
+    return true;
+}
+
+void AppearanceComposer::updateWeaponsFromFields() {
+    // A tool or the ranged swap in the hands keeps them until it ends,
+    // which dresses the weapons again.
+    if (showingMiningPick_ || showingFishingPole_ || showingRanged_) return;
+    const DressedKey key = currentDressKey();
+    if (key.instanceId == 0 || key == dressedKey_) return;
+    // 0x00731f40: from ranged to melee the ranged weapon is put away.
+    rangedJustPutAway_ = dressedKey_.instanceId == key.instanceId &&
+                         dressedKey_.state == static_cast<uint8_t>(SheathState::Ranged) &&
+                         key.state == static_cast<uint8_t>(SheathState::Melee);
+    loadEquippedWeapons();
 }
 
 void AppearanceComposer::showMiningPick(bool show) {

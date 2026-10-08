@@ -1697,6 +1697,12 @@ void GameHandler::setStandState(uint8_t standState) {
     if (socialHandler_) socialHandler_->setStandState(standState);
 }
 
+void GameHandler::requestSheathState(uint8_t state) {
+    if (!isInWorld()) return;
+    auto packet = SetSheathedPacket::build(state);
+    socket->send(packet);
+}
+
 void GameHandler::toggleHelm() {
     if (socialHandler_) socialHandler_->toggleHelm();
 }

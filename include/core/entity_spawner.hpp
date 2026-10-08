@@ -5,6 +5,7 @@
 #include "pipeline/blp_loader.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "core/character_geosets.hpp"
+#include "core/weapon_attachment.hpp"
 #include <memory>
 #include <string>
 #include <utility>
@@ -23,7 +24,7 @@ namespace wowee {
 
 // Forward declarations
 namespace rendering { class Renderer; }
-namespace pipeline { class AssetManager; struct M2Model; struct WMOModel; }
+namespace pipeline { class AssetManager; class DBCFile; struct M2Model; struct WMOModel; }
 namespace audio { enum class VoiceType; }
 namespace game { class GameHandler; class Entity; }
 
@@ -178,6 +179,9 @@ public:
     /// (0x0072dbc0, 0x00731f40): creatures from UNIT_VIRTUAL_ITEM_SLOT_ID,
     /// players from their PLAYER_VISIBLE_ITEM entries. Once a frame.
     void updateUnitWeapons();
+    /// The BehaviorID (AnimationData +0x18) of the animation an instance
+    /// plays, or kNoAnimationBehavior (0x00721ed0's reading of it).
+    uint32_t animationBehavior(uint32_t instanceId) const;
 
     // Attempts one deferred attachment and owns retry bookkeeping. Returns true
     // only when this call consumed the caller's per-frame attachment budget.
@@ -481,12 +485,18 @@ private:
         uint32_t modelId = 0;
         std::array<uint32_t, 3> entries{};
         uint8_t sheathState = 0;
+        uint32_t unitFlags = 0;
+        uint32_t unitFlags2 = 0;
+        bool offHandFollowsAnimation = false;
     };
     std::unordered_map<uint64_t, UnitWeaponsShown> unitWeaponsShown_;
+    /// AnimationData.dbc, for animationBehavior; loaded on first use.
+    mutable std::shared_ptr<pipeline::DBCFile> animationDataDbc_;
+    mutable bool animationDataLoaded_ = false;
     /// Hangs a unit's three weapon slots as 0x0072dbc0 does. False while an
     /// item is not known yet (its query is asked for).
     bool dressUnitWeapons(uint32_t instanceId, const std::array<uint32_t, 3>& entries,
-                          uint8_t sheathState, bool rangedJustPutAway, bool isPlayer);
+                          const UnitWeaponDress& dress);
     std::unordered_set<uint64_t> creatureWeaponsAttached_;
     std::unordered_map<uint64_t, uint8_t> creatureWeaponAttachAttempts_;
     std::unordered_map<uint32_t, bool> modelIdIsWolfLike_;

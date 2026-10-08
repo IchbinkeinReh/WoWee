@@ -146,6 +146,8 @@ void EntitySpawner::shutdown() {
     creatureWeaponsAttached_.clear();
     creatureWeaponAttachAttempts_.clear();
     unitWeaponsShown_.clear();
+    animationDataDbc_.reset();
+    animationDataLoaded_ = false;
     playerInstances_.clear();
     onlinePlayerAppearance_.clear();
     remotePlayerMounts_.clear();
@@ -197,6 +199,8 @@ void EntitySpawner::resetAllState() {
     creatureWeaponsAttached_.clear();
     creatureWeaponAttachAttempts_.clear();
     unitWeaponsShown_.clear();
+    animationDataDbc_.reset();
+    animationDataLoaded_ = false;
     modelIdIsWolfLike_.clear();
 
     // Clear display/spawn caches
@@ -521,8 +525,29 @@ bool EntitySpawner::tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t inst
     return hadWeaponCandidate && attachedMain;
 }
 
+uint32_t EntitySpawner::animationBehavior(uint32_t instanceId) const {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    uint32_t animId = 0;
+    float time = 0.0f, duration = 0.0f;
+    if (!charRenderer || !assetManager_ ||
+        !charRenderer->getAnimationState(instanceId, animId, time, duration)) {
+        return kNoAnimationBehavior;
+    }
+    // AnimationData +0x18, BehaviorID (0x0071d450); an id not in the table
+    // reads as 0x1fa.
+    if (!animationDataLoaded_) {
+        animationDataDbc_ = assetManager_->loadDBCOptional("AnimationData.dbc");
+        animationDataLoaded_ = true;
+    }
+    const auto& dbc = animationDataDbc_;
+    if (!dbc) return kNoAnimationBehavior;
+    const int32_t row = dbc->findRecordById(animId);
+    if (row < 0) return kNoAnimationBehavior;
+    return dbc->getFieldCount() > 6 ? dbc->getUInt32(static_cast<uint32_t>(row), 6) : animId;
+}
+
 bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint32_t, 3>& entries,
-                                    uint8_t sheathState, bool rangedJustPutAway, bool isPlayer) {
+                                    const UnitWeaponDress& dress) {
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!charRenderer || !assetManager_ || !gameHandler_) return false;
     auto displayDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
@@ -568,10 +593,11 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint3
         charRenderer->detachWeapon(instanceId, point);
     }
     constexpr WeaponSlot kSlots[3] = {WeaponSlot::MainHand, WeaponSlot::OffHand, WeaponSlot::Ranged};
+    UnitWeaponItems present{};
+    for (size_t i = 0; i < 3; ++i) present[i] = entries[i] != 0 ? &items[i] : nullptr;
     for (size_t i = 0; i < 3; ++i) {
         if (entries[i] == 0 || displays[i] == 0) continue;
-        const uint32_t point = unitWeaponPoint(kSlots[i], items[i], static_cast<SheathState>(sheathState),
-                                               rangedJustPutAway, isPlayer, items[0]);
+        const uint32_t point = unitWeaponPoint(kSlots[i], present, dress);
         if (point == attachment::kNone) continue;
         const int32_t rec = displayDbc->findRecordById(displays[i]);
         if (rec < 0) continue;
@@ -594,6 +620,8 @@ void EntitySpawner::updateUnitWeapons() {
     if (!charRenderer || !gameHandler_ || !assetManager_ || !assetManager_->isInitialized()) return;
     const uint16_t bytes2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
     const uint16_t virtualItems = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
+    const uint16_t flagsIndex = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+    const uint16_t flags2Index = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
     const uint64_t localGuid = gameHandler_->getPlayerGuid();
     int budget = MAX_WEAPON_ATTACHES_PER_TICK;
 
@@ -614,11 +642,18 @@ void EntitySpawner::updateUnitWeapons() {
         // No sheath field in this layout: held, as before.
         const uint8_t state = bytes2 != 0xFFFF ? static_cast<uint8_t>(entity->getField(bytes2) & 0xFFu)
                                                : static_cast<uint8_t>(SheathState::Melee);
+        // What else 0x0072dbc0 reads: the disarm bits (0x00718fc0) and
+        // whether the animation playing dresses the off hand (0x00721ed0).
+        const uint32_t unitFlags = flagsIndex != 0xFFFF ? entity->getField(flagsIndex) & kUnitFlagDisarmed : 0;
+        const uint32_t unitFlags2 =
+            flags2Index != 0xFFFF ? entity->getField(flags2Index) & kUnitFlag2DisarmOffhand : 0;
+        const bool followsAnim = offHandFollowsAnimation(animationBehavior(instanceId), entries[0] != 0);
         const uint32_t modelId = charRenderer->getInstanceModelId(instanceId);
         auto [it, fresh] = unitWeaponsShown_.try_emplace(guid);
         UnitWeaponsShown& shown = it->second;
         if (!fresh && shown.instanceId == instanceId && shown.modelId == modelId && shown.entries == entries &&
-            shown.sheathState == state) {
+            shown.sheathState == state && shown.unitFlags == unitFlags && shown.unitFlags2 == unitFlags2 &&
+            shown.offHandFollowsAnimation == followsAnim) {
             return;
         }
         // 0x00731f40: from ranged to melee the ranged weapon is put away;
@@ -626,14 +661,26 @@ void EntitySpawner::updateUnitWeapons() {
         const bool rangedJustPutAway = !fresh && shown.instanceId == instanceId && shown.entries == entries &&
                                        shown.sheathState == static_cast<uint8_t>(SheathState::Ranged) &&
                                        state == static_cast<uint8_t>(SheathState::Melee);
-        if (!dressUnitWeapons(instanceId, entries, state, rangedJustPutAway, isPlayer)) {
+        const UnitWeaponDress dress{.state = static_cast<SheathState>(state),
+                                    .rangedJustPutAway = rangedJustPutAway,
+                                    .isPlayer = isPlayer,
+                                    .unitFlags = unitFlags,
+                                    .unitFlags2 = unitFlags2,
+                                    .offHandFollowsAnimation = followsAnim};
+        if (!dressUnitWeapons(instanceId, entries, dress)) {
             // An item not known yet: try again once its query is back.
             if (fresh) unitWeaponsShown_.erase(it);
             else shown.instanceId = 0;
             return;
         }
         --budget;
-        shown = {.instanceId = instanceId, .modelId = modelId, .entries = entries, .sheathState = state};
+        shown = {.instanceId = instanceId,
+                 .modelId = modelId,
+                 .entries = entries,
+                 .sheathState = state,
+                 .unitFlags = unitFlags,
+                 .unitFlags2 = unitFlags2,
+                 .offHandFollowsAnimation = followsAnim};
     };
     for (const auto& [guid, instanceId] : creatureInstances_) visit(guid, instanceId, false);
     for (const auto& [guid, instanceId] : playerInstances_) {

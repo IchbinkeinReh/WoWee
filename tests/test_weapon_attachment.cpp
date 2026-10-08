@@ -42,34 +42,106 @@ TEST_CASE("a shoulder display's first model is the left shoulder", "[attachment]
     CHECK(shoulderAttachmentPoint(1) == at::kShoulderRight);
 }
 
+namespace {
+UnitWeaponDress dressed(SheathState state, bool isPlayer = true, bool justPutAway = false) {
+    return {.state = state, .rangedJustPutAway = justPutAway, .isPlayer = isPlayer};
+}
+}  // namespace
+
 TEST_CASE("a unit's sheath state puts its weapons away or draws them (0x0072dbc0)", "[attachment]") {
     const UnitWeaponItem sword{.sheath = 3, .inventoryType = 13, .itemClass = 2, .subClass = 7};
     const UnitWeaponItem bow{.sheath = 1, .inventoryType = 15, .itemClass = 2, .subClass = 2};
+    const UnitWeaponItems items{&sword, &sword, &bow};
     // Melee: held.
-    CHECK(unitWeaponPoint(WeaponSlot::MainHand, sword, SheathState::Melee, false, true, sword) ==
-          at::kHandRight);
+    CHECK(unitWeaponPoint(WeaponSlot::MainHand, items, dressed(SheathState::Melee)) == at::kHandRight);
     // Unarmed and ranged: put away at the Sheath's point.
-    CHECK(unitWeaponPoint(WeaponSlot::MainHand, sword, SheathState::Unarmed, false, true, sword) ==
-          at::kHipWeaponLeft);
-    CHECK(unitWeaponPoint(WeaponSlot::OffHand, sword, SheathState::Ranged, false, true, sword) ==
-          at::kHipWeaponRight);
+    CHECK(unitWeaponPoint(WeaponSlot::MainHand, items, dressed(SheathState::Unarmed)) == at::kHipWeaponLeft);
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, items, dressed(SheathState::Ranged)) == at::kHipWeaponRight);
     // The ranged weapon only in the ranged state, or just put away.
-    CHECK(unitWeaponPoint(WeaponSlot::Ranged, bow, SheathState::Ranged, false, true, sword) == at::kHandLeft);
-    CHECK(unitWeaponPoint(WeaponSlot::Ranged, bow, SheathState::Melee, false, true, sword) == at::kNone);
-    CHECK(unitWeaponPoint(WeaponSlot::Ranged, bow, SheathState::Melee, true, true, sword) ==
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, items, dressed(SheathState::Ranged)) == at::kHandLeft);
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, items, dressed(SheathState::Melee)) == at::kNone);
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, items, dressed(SheathState::Melee, true, true)) ==
           at::kSheathOffHand);
-    CHECK(unitWeaponPoint(WeaponSlot::Ranged, bow, SheathState::Unarmed, true, true, sword) == at::kNone);
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, items, dressed(SheathState::Unarmed, true, true)) == at::kNone);
+    // An empty slot shows nothing.
+    const UnitWeaponItems bare{nullptr, nullptr, nullptr};
+    CHECK(unitWeaponPoint(WeaponSlot::MainHand, bare, dressed(SheathState::Melee)) == at::kNone);
 }
 
 TEST_CASE("a creature with a two-hander shows no off hand", "[attachment]") {
     const UnitWeaponItem staff{.sheath = 2, .inventoryType = 17, .itemClass = 2, .subClass = 10};
     const UnitWeaponItem dagger{.sheath = 3, .inventoryType = 13, .itemClass = 2, .subClass = 15};
-    CHECK(unitWeaponPoint(WeaponSlot::OffHand, dagger, SheathState::Melee, false, false, staff) == at::kNone);
+    const UnitWeaponItems twoHander{&staff, &dagger, nullptr};
+    const UnitWeaponItems daggers{&dagger, &dagger, nullptr};
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, twoHander, dressed(SheathState::Melee, false)) == at::kNone);
     // A player keeps it (titan's grip).
-    CHECK(unitWeaponPoint(WeaponSlot::OffHand, dagger, SheathState::Melee, false, true, staff) ==
-          at::kHandLeft);
-    CHECK(unitWeaponPoint(WeaponSlot::OffHand, dagger, SheathState::Melee, false, false, dagger) ==
-          at::kHandLeft);
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, twoHander, dressed(SheathState::Melee, true)) == at::kHandLeft);
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, daggers, dressed(SheathState::Melee, false)) == at::kHandLeft);
+}
+
+TEST_CASE("a disarmed unit's weapon is gone (0x00718fc0)", "[attachment]") {
+    const UnitWeaponItem sword{.sheath = 3, .inventoryType = 13, .itemClass = 2, .subClass = 7};
+    const UnitWeaponItem shield{.sheath = 4, .inventoryType = 14, .itemClass = 4, .subClass = 6};
+    const UnitWeaponItem gun{.sheath = 1, .inventoryType = 26, .itemClass = 2, .subClass = 3};
+    const UnitWeaponItem bow{.sheath = 1, .inventoryType = 15, .itemClass = 2, .subClass = 2};
+    UnitWeaponDress d = dressed(SheathState::Melee);
+    d.unitFlags = kUnitFlagDisarmed;
+    // The main hand's weapon goes; a shield stays.
+    const UnitWeaponItems swordShield{&sword, &shield, &gun};
+    CHECK(unitWeaponPoint(WeaponSlot::MainHand, swordShield, d) == at::kNone);
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, swordShield, d) == at::kShield);
+    // With no weapon in the main hand, the off hand's goes instead.
+    const UnitWeaponItems offOnly{nullptr, &sword, &bow};
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, offOnly, d) == at::kNone);
+    // Drawn ranged: a gun is held in the disarmed main hand, a bow in the
+    // off hand - here the one taken.
+    d.state = SheathState::Ranged;
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, swordShield, d) == at::kNone);
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, offOnly, d) == at::kNone);
+    const UnitWeaponItems swordBow{&sword, nullptr, &bow};
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, swordBow, d) == at::kHandLeft);
+    // FLAGS_2 0x80 takes the off hand alone.
+    UnitWeaponDress off = dressed(SheathState::Melee);
+    off.unitFlags2 = kUnitFlag2DisarmOffhand;
+    const UnitWeaponItems daggers{&sword, &sword, nullptr};
+    CHECK(unitWeaponPoint(WeaponSlot::MainHand, daggers, off) == at::kHandRight);
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, daggers, off) == at::kNone);
+}
+
+TEST_CASE("an unarmed animation dresses the off hand by 0x00715d00", "[attachment]") {
+    const UnitWeaponItem sword{.sheath = 3, .inventoryType = 13, .itemClass = 2, .subClass = 7};
+    const UnitWeaponItem book{.sheath = 0, .inventoryType = 23, .itemClass = 4, .subClass = 0};
+    const UnitWeaponItem shield{.sheath = 4, .inventoryType = 14, .itemClass = 4, .subClass = 6};
+    // 0x00721ed0: unarmed attack / parry / ready, or an empty-handed one
+    // with nothing in the main hand.
+    CHECK(offHandFollowsAnimation(16, true));
+    CHECK(offHandFollowsAnimation(25, true));
+    CHECK(offHandFollowsAnimation(17, false));
+    CHECK_FALSE(offHandFollowsAnimation(17, true));
+    CHECK_FALSE(offHandFollowsAnimation(0, false));
+    CHECK_FALSE(offHandFollowsAnimation(kNoAnimationBehavior, false));
+    // Melee with an empty main hand: a held item is put away.
+    UnitWeaponDress d = dressed(SheathState::Melee);
+    d.offHandFollowsAnimation = true;
+    const UnitWeaponItems bookOnly{nullptr, &book, nullptr};
+    CHECK(offHandAnimationSheath(SheathState::Melee, bookOnly) == SheathState::Unarmed);
+    // Unarmed with a shield in the off hand: drawn.
+    d.state = SheathState::Unarmed;
+    const UnitWeaponItems shieldOnly{nullptr, &shield, nullptr};
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, shieldOnly, d) == at::kShield);
+    const UnitWeaponItems swordSword{&sword, &sword, nullptr};
+    CHECK(unitWeaponPoint(WeaponSlot::OffHand, swordSword, d) == at::kHandLeft);
+    // The main hand is not affected.
+    CHECK(unitWeaponPoint(WeaponSlot::MainHand, swordSword, d) == at::kHipWeaponLeft);
+}
+
+TEST_CASE("the sheath key cycles as 0x006e23a0 does", "[attachment]") {
+    CHECK(toggledSheathState(SheathState::Unarmed, true, true) == SheathState::Melee);
+    CHECK(toggledSheathState(SheathState::Unarmed, false, true) == SheathState::Ranged);
+    CHECK(toggledSheathState(SheathState::Unarmed, false, false) == SheathState::Unarmed);
+    CHECK(toggledSheathState(SheathState::Melee, true, true) == SheathState::Ranged);
+    CHECK(toggledSheathState(SheathState::Melee, true, false) == SheathState::Unarmed);
+    CHECK(toggledSheathState(SheathState::Ranged, true, true) == SheathState::Unarmed);
 }
 
 #include "core/preview_dressing.hpp"

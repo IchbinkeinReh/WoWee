@@ -2179,7 +2179,6 @@ void Application::setState(AppState newState) {
             // If we reuse a previously spawned instance without forcing a respawn, appearance (notably hair) can desync.
             npcsSpawned = false;
             playerCharacterSpawned = false;
-            if (appearanceComposer_) appearanceComposer_->setWeaponsSheathed(false);
             wasAutoAttacking_ = false;
             if (worldLoader_) worldLoader_->resetLoadedMap();
             spawnedPlayerGuid_ = 0;
@@ -2525,7 +2524,6 @@ void Application::performLogoutToLogin() {
     // --- Per-session flags ---
     npcsSpawned = false;
     playerCharacterSpawned = false;
-    if (appearanceComposer_) appearanceComposer_->setWeaponsSheathed(false);
     wasAutoAttacking_ = false;
     if (worldLoader_) worldLoader_->resetLoadedMap();
     if (worldEntryCallbacks_) worldEntryCallbacks_->resetState();
@@ -3782,15 +3780,11 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
              ranged.item.inventoryType == game::InvType::RANGED_GUN ||
              ranged.item.inventoryType == game::InvType::THROWN);
         const bool hasDrawableWeapon = !mainHand.empty() || hasOffHandWeapon || hasRangedWeapon;
+        // Attacking draws the melee weapons (0x00738180 sets melee, with no
+        // sheath animation); the server's field then moves them.
         if (attackWeaponNeeded && hasDrawableWeapon && appearanceComposer_ &&
-            appearanceComposer_->isWeaponsSheathed()) {
-            if (renderer && renderer->getAnimationController()) {
-                renderer->getAnimationController()->playWeaponSheathAnimation(
-                    appearanceComposer_->sheathSpot(game::EquipSlot::MAIN_HAND),
-                    appearanceComposer_->sheathSpot(game::EquipSlot::OFF_HAND));
-            }
-            appearanceComposer_->setWeaponsSheathed(false);
-            appearanceComposer_->loadEquippedWeapons();
+            appearanceComposer_->sheathState() == core::SheathState::Unarmed) {
+            appearanceComposer_->requestSheathState(core::SheathState::Melee);
         }
         // Swap back to melee weapon when auto-attack stops
         if (!autoAttacking && wasAutoAttacking_ && appearanceComposer_ && appearanceComposer_->isShowingRanged()) {
@@ -3806,10 +3800,8 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     {
         auto* cc = renderer ? renderer->getCameraController() : nullptr;
         const bool swimmingNow = cc && cc->isSwimming();
-        if (swimmingNow && !wasSwimmingForSheath_ && appearanceComposer_
-            && !appearanceComposer_->isWeaponsSheathed()) {
-            appearanceComposer_->setWeaponsSheathed(true);
-            appearanceComposer_->loadEquippedWeapons();
+        if (swimmingNow && !wasSwimmingForSheath_ && appearanceComposer_) {
+            appearanceComposer_->requestSheathState(core::SheathState::Unarmed);
         }
         wasSwimmingForSheath_ = swimmingNow;
     }
@@ -3821,15 +3813,17 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
         const bool uiWantsKeyboard = ImGui::GetIO().WantCaptureKeyboard ||
                                      ui::interfaceTakingTypedInput();
         auto& input = Input::getInstance();
-        if (!uiWantsKeyboard && input.isKeyJustPressed(SDL_SCANCODE_Z) && appearanceComposer_) {
+        // The key asks the server (0x006e23a0, CMSG_SET_SHEATHED) and plays
+        // the reach; the weapons follow UNIT_FIELD_BYTES_2 when it answers.
+        if (!uiWantsKeyboard && input.isKeyJustPressed(SDL_SCANCODE_Z) && appearanceComposer_ &&
+            appearanceComposer_->toggleSheath()) {
             if (renderer && renderer->getAnimationController()) {
                 renderer->getAnimationController()->playWeaponSheathAnimation(
                     appearanceComposer_->sheathSpot(game::EquipSlot::MAIN_HAND),
                     appearanceComposer_->sheathSpot(game::EquipSlot::OFF_HAND));
             }
-            appearanceComposer_->toggleWeaponsSheathed();
-            appearanceComposer_->loadEquippedWeapons();
         }
+        if (appearanceComposer_) appearanceComposer_->updateWeaponsFromFields();
     }
 
     inGameStep = "world update";
@@ -5455,7 +5449,6 @@ void Application::refreshPlayerCharacterModel() {
     spawnedFacialFeatures_ = 0;
 
     spawnSnapToGround = false; // don't snap Z - stay at the current position
-    if (appearanceComposer_) appearanceComposer_->setWeaponsSheathed(false);
     spawnPlayerCharacter();
 
     if (renderer) renderer->getCharacterPosition() = savedPos;

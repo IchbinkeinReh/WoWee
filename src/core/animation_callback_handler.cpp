@@ -566,13 +566,10 @@ void AnimationCallbackHandler::setupCallbacks() {
                             ac->startSpellCast(0, swigAnim, false, 0);
                         }
                     } else {
-                        // Weapons go straight to the back before the sit - the real
-                        // client auto-sheathes on consume with no sheath animation
-                        // (playing one here would fight the FSM's sit-down one-shot).
-                        if (!appearanceComposer_.isWeaponsSheathed()) {
-                            appearanceComposer_.setWeaponsSheathed(true);
-                            appearanceComposer_.loadEquippedWeapons();
-                        }
+                        // Weapons go to the back before the sit: the client puts them
+                        // away with no sheath animation (0x00736d30 with 1); asked of
+                        // the server, whose field moves them.
+                        appearanceComposer_.requestSheathState(SheathState::Unarmed);
                         // Food and water keep the player seated (UNIT_FIELD_BYTES_1)
                         // with the plain seated idle, exactly like the real client:
                         // player models ship NO seated eating animation - EmoteEat is
@@ -626,14 +623,10 @@ void AnimationCallbackHandler::setupCallbacks() {
                     ac->startSpellCast(useStart, useLoop ? useLoop : rendering::anim::STAND, true, useEnd);
                 }
             } else if (isFishing && cr->hasAnimation(instanceId, rendering::anim::FISHING_LOOP)) {
-                // Fishing is a one-shot pole cast followed by the channel idle. If the
-                // player had weapons sheathed, move the equipped pole into their hand
-                // before starting so the cast animation actually swings it.
+                // Fishing is a one-shot pole cast followed by the channel idle. The
+                // pole goes into the hand whatever the sheath state, so the cast
+                // animation swings it.
                 if (isLocalPlayer) {
-                    if (appearanceComposer_.isWeaponsSheathed()) {
-                        appearanceComposer_.setWeaponsSheathed(false);
-                        appearanceComposer_.loadEquippedWeapons();
-                    }
                     appearanceComposer_.showFishingPole(true);
                     auto* ac = renderer_.getAnimationController();
                     if (ac) {
