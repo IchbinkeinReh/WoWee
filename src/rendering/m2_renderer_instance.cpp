@@ -494,6 +494,10 @@ void M2Renderer::clear() {
         if (materialDescPool_) {
             vkResetDescriptorPool(device, materialDescPool_, 0);
         }
+        // Their sets went with the pool and their textures go below.
+        stripTextures_.clear();
+        clientStrips_.clear();
+        clientStripSets_.clear();
         if (boneDescPool_) {
             if (boneDescPoolGeneration_) boneDescPoolGeneration_->fetch_add(1, std::memory_order_relaxed);
             vkResetDescriptorPool(device, boneDescPool_, 0);
@@ -765,6 +769,9 @@ size_t M2Renderer::evictUnreferencedTextures(size_t bytesNeeded) {
         for (const VkTexture* tex : model.ribbonTextures) {
             if (tex) inUse.insert(tex);
         }
+    }
+    for (const auto& [path, strip] : stripTextures_) {
+        if (strip.texture) inUse.insert(strip.texture);
     }
 
     std::vector<std::pair<uint64_t, std::string>> candidates;

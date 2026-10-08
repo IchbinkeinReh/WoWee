@@ -2395,7 +2395,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
 
         // An arm on its own animation runs at rate 1 (0x00735820) to its
         // event and its end, and then follows the body again.
-        for (int arm = 0; arm < 2 && inst.cachedModel; ++arm) {
+        for (int arm = 0; arm < 2 && inst.cachedModel && !inst.animationFrozen; ++arm) {
             const int seq = inst.armSequenceIndex[arm];
             if (seq < 0 || static_cast<size_t>(seq) >= inst.cachedModel->data.sequences.size()) continue;
             const float before = inst.armTime[arm];
@@ -2411,7 +2411,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
         }
 
         // Always advance animation time (cheap)
-        if (inst.cachedModel && !inst.cachedModel->data.sequences.empty()) {
+        if (inst.cachedModel && !inst.cachedModel->data.sequences.empty() && !inst.animationFrozen) {
             if (inst.currentSequenceIndex < 0) {
                 inst.currentSequenceIndex = 0;
                 inst.currentAnimationId = inst.cachedModel->data.sequences[0].id;
@@ -4326,6 +4326,21 @@ void CharacterRenderer::setInstanceDiffuseColour(uint32_t instanceId, const glm:
     if (it != instances.end()) it->second.diffuseColour = colour;
 }
 
+bool CharacterRenderer::setInstanceAnimationFrozen(uint32_t instanceId, bool frozen, std::optional<float> atMs) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return false;
+    CharacterInstance& inst = it->second;
+    const bool was = inst.animationFrozen;
+    inst.animationFrozen = frozen;
+    if (frozen && atMs && inst.cachedModel && inst.currentSequenceIndex >= 0 &&
+        static_cast<size_t>(inst.currentSequenceIndex) < inst.cachedModel->data.sequences.size()) {
+        const auto duration =
+            static_cast<float>(inst.cachedModel->data.sequences[inst.currentSequenceIndex].duration);
+        inst.animationTime = std::min(*atMs, duration);
+    }
+    return was;
+}
+
 void CharacterRenderer::setInstanceKitAlpha(uint32_t instanceId, float alpha, float seconds) {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return;
@@ -4867,6 +4882,22 @@ bool CharacterRenderer::getInstanceFrame(uint32_t instanceId, glm::mat4& outFram
     if (it == instances.end()) return false;
     outFrame = it->second.hasOverrideModelMatrix ? it->second.overrideModelMatrix
                                                  : getModelMatrix(it->second);
+    return true;
+}
+
+bool CharacterRenderer::getEventPosition(uint32_t instanceId, uint32_t eventId, glm::vec3& out) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return false;
+    const auto& instance = it->second;
+    auto modelIt = models.find(instance.modelId);
+    if (modelIt == models.end()) return false;
+    const auto* event = modelIt->second.data.findEvent(eventId);
+    if (!event) return false;
+    glm::vec4 p(event->position, 1.0f);
+    if (event->bone < instance.boneMatrices.size()) p = instance.boneMatrices[event->bone] * p;
+    const glm::mat4 placement =
+        instance.hasOverrideModelMatrix ? instance.overrideModelMatrix : getModelMatrix(instance);
+    out = glm::vec3(placement * p);
     return true;
 }
 

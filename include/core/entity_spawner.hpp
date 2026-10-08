@@ -16,6 +16,7 @@
 #include <unordered_set>
 #include <array>
 #include <chrono>
+#include <map>
 #include <optional>
 #include <future>
 #include <mutex>
@@ -60,6 +61,14 @@ public:
     void queuePlayerEquipment(uint64_t guid,
                               const std::array<uint32_t, 19>& displayInfoIds,
                               const std::array<uint8_t, 19>& inventoryTypes);
+    /// The server's word on what a player wears: kept, and queued with any
+    /// spell's worn items over it.
+    void queuePlayerEquipmentFromServer(uint64_t guid,
+                                        const std::array<uint32_t, 19>& displayInfoIds,
+                                        const std::array<uint8_t, 19>& inventoryTypes);
+    /// A spell's worn item over what a player wears in an equipment slot
+    /// (CharProc 17, 0x006f82d0); display 0 gives it its own back (0x00723730).
+    void setPlayerItemOverride(uint64_t guid, int equipSlot, uint32_t displayId, uint8_t inventoryType);
 
     // Immediate despawn
     void despawnCreature(uint64_t guid);
@@ -250,6 +259,13 @@ public:
     /// Whether another unit shows its SpellVisual Flags 8 state kits
     /// (0x00720400): idle, its weapons away and casting nothing.
     bool unarmedKitsShown(uint64_t guid) const;
+    /// The unit a CharacterRenderer instance draws, 0 for none.
+    uint64_t unitGuidForInstance(uint32_t renderInstanceId) const;
+    /// Whether another unit has its melee weapons in its hands (+0xb5c 1).
+    bool unitMeleeDrawn(uint64_t guid) const;
+    /// Its CreatureModelData GeoBox height, +0x58 less +0x4c (0x00717ad0);
+    /// 0 when it has none.
+    float unitGeoBoxHeight(uint32_t renderInstanceId) const;
 
     /// Every unit's and corpse's blob shadow for this frame (0x00793980): a
     /// corpse that is not bones by the bounds of its model's sequence; a unit by its
@@ -382,6 +398,17 @@ private:
     /// A CreatureModelData float of the unit an instance draws, 1 where
     /// it has none.
     float kitModelDataScale(uint32_t renderInstanceId, const char* column) const;
+    /// Each player's equipment as the server last said, and the spell's
+    /// worn items over it.
+    struct ServerEquipment {
+        std::array<uint32_t, 19> displayInfoIds{};
+        std::array<uint8_t, 19> inventoryTypes{};
+    };
+    std::unordered_map<uint64_t, ServerEquipment> serverEquipment_;
+    std::unordered_map<uint64_t, std::map<int, std::pair<uint32_t, uint8_t>>> playerItemOverrides_;
+    void queueDressedEquipment(uint64_t guid);
+    /// A CreatureModelData float column of the unit an instance draws.
+    std::optional<float> modelDataColumn(uint32_t renderInstanceId, const char* column) const;
     // Dependencies (non-owning)
     rendering::Renderer* renderer_;
     pipeline::AssetManager* assetManager_;

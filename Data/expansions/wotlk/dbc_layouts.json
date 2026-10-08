@@ -103,6 +103,8 @@
     "ModelScale": 4,
     "MountHeight": 16,
     "GeoBoxMinX": 17,
+    "GeoBoxMinZ": 19,
+    "GeoBoxMaxZ": 22,
     "WorldEffectScale": 23,
     "AttachedEffectScale": 24
   },
@@ -383,6 +385,7 @@
   "SpellVisual": {
     "CasterImpactKit": 14,
     "CastKit": 2,
+    "ChannelKit": 6,
     "Flags": 13,
     "HasMissile": 7,
     "ID": 0,

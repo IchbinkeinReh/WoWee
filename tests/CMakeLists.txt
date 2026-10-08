@@ -2612,6 +2612,17 @@ wowee_add_test(test_char_sections
 wowee_add_test(test_spell_kit
     SOURCES test_spell_kit.cpp)
 
+# ── test_spell_chain ─────────────────────────────────
+# SpellChainEffects beams: the row, a chain's bolts (0x007fa4d0) and the
+# lightning strip (Common Lightning.cpp, 0x009a8c00 to 0x009ab730).
+wowee_add_test(test_spell_chain
+    SOURCES test_spell_chain.cpp)
+
+# ── test_swing_trail ─────────────────────────────────
+# A weapon's swing trail, which a kit's CharProc 8 starts (0x007e4ce0).
+wowee_add_test(test_swing_trail
+    SOURCES test_swing_trail.cpp)
+
 # ── test_spell_go_targets ────────────────────────────
 # SMSG_SPELL_GO's target flags and points, which a ground missile flies to.
 wowee_add_packet_test(test_spell_go_targets)

@@ -4,6 +4,7 @@
 #include "rendering/m2_renderer.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/character_renderer.hpp"
+#include "rendering/camera.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -226,6 +227,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
     const uint32_t svMissileSoundField = svColumn("MissileSound");
     const uint32_t svStateKitField     = svColumn("StateKit");
     const uint32_t svStateDoneKitField = svColumn("StateDoneKit");
+    const uint32_t svChannelKitField   = svColumn("ChannelKit");
     const uint32_t svCastOffField[3] = {svColumn("MissileCastOffsetX"), svColumn("MissileCastOffsetY"),
                                         svColumn("MissileCastOffsetZ")};
     const uint32_t svImpactOffField[3] = {svColumn("MissileImpactOffsetX"), svColumn("MissileImpactOffsetY"),
@@ -288,15 +290,30 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                                               .instantArea = ids[5], .impactArea = ids[6]};
         }
         // The aura kits: StateKit and StateDoneKit, and the Flags that
-        // keep a state kit to an unarmed, idle unit.
+        // keep a state kit to an unarmed, idle unit; and the ChannelKit a
+        // channel holds on its caster (0x0072bc70).
         {
             VisualAuraKits auraKits;
             auraKits.stateKit = static_cast<uint32_t>(std::max(svInt(i, svStateKitField, 0), 0));
             auraKits.stateDoneKit = static_cast<uint32_t>(std::max(svInt(i, svStateDoneKitField, 0), 0));
+            auraKits.channelKit = static_cast<uint32_t>(std::max(svInt(i, svChannelKitField, 0), 0));
             auraKits.flags = static_cast<uint32_t>(svInt(i, svFlagsField, 0));
             if (kits_.count(auraKits.stateKit) == 0) auraKits.stateKit = 0;
             if (kits_.count(auraKits.stateDoneKit) == 0) auraKits.stateDoneKit = 0;
-            if (auraKits.stateKit != 0 || auraKits.stateDoneKit != 0) visualAuraKits_[vid] = auraKits;
+            if (kits_.count(auraKits.channelKit) == 0) auraKits.channelKit = 0;
+            if (auraKits.stateKit != 0 || auraKits.stateDoneKit != 0 || auraKits.channelKit != 0)
+                visualAuraKits_[vid] = auraKits;
+        }
+        // Where a chain leaves and meets a unit (0x007fc5f0, 0x007fabf0).
+        {
+            const auto visualFlags = static_cast<uint32_t>(svInt(i, svFlagsField, 0));
+            VisualEnds ends;
+            ends.sourceAttachment = spell_missile::m2AttachmentFor(svInt(i, svMissileAttField, -1), visualFlags);
+            ends.destinationAttachment = spell_missile::m2AttachmentFor(svInt(i, svMissileDstField, -1), visualFlags);
+            ends.castOffset = spell_missile::attachmentOffset(svVec(i, svCastOffField));
+            ends.impactOffset = spell_missile::attachmentOffset(svVec(i, svImpactOffField));
+            ends.flags = visualFlags;
+            visualEnds_[vid] = ends;
         }
     }
     LOG_INFO("SpellVisual: loaded ", kits_.size(), " kits, ", visualKits_.size(), " visuals' cast kits, ",
@@ -435,6 +452,10 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
         playKitWeaponEffects(kit.weaponEffects, renderInstanceId, type == spell_kit::KitType::Precast, castTimeMs);
     playKitColourFade(kitId, renderInstanceId, spellId);
     playKitShake(kitId, place ? *place : position);
+    // CharProc 0 and 12 on the unit (0x007265c0); a state kit's start with
+    // its aura or channel, which knows the chain's other end.
+    if (renderInstanceId != 0 && type != spell_kit::KitType::State && instanceUnitResolver_)
+        startKitChains(kit, instanceUnitResolver_(renderInstanceId), spellId, 0);
     return playKitModels(kit, type, renderInstanceId, position, place, castTimeMs);
 }
 
@@ -780,6 +801,8 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
                     if (charRenderer && charRenderer->getInstancePosition(unitInstance, unitPos))
                         playKitShake(aura.kitId, unitPos);
                     playKitColourFade(aura.kitId, unitInstance, aura.spellId);
+                    if (auto kitIt = kits_.find(aura.kitId); kitIt != kits_.end())
+                        startKitChains(kitIt->second, guid, aura.spellId, aura.casterGuid);
                 }
             }
         }
@@ -900,7 +923,7 @@ void SpellVisualSystem::hideAuraKit(AuraKit& aura) {
     aura.boundInstance = 0;
 }
 
-void SpellVisualSystem::setUnitAuraSlot(uint64_t unitGuid, uint32_t slot, uint32_t spellId) {
+void SpellVisualSystem::setUnitAuraSlot(uint64_t unitGuid, uint32_t slot, uint32_t spellId, uint64_t casterGuid) {
     if (unitGuid == 0) return;
     auto& slots = unitAuraKits_[unitGuid].slots;
     auto it = slots.find(slot);
@@ -910,25 +933,25 @@ void SpellVisualSystem::setUnitAuraSlot(uint64_t unitGuid, uint32_t slot, uint32
     else slots.erase(slot);
     auto visualOf = [&](uint32_t spell) { return spellVisualResolver_ ? spellVisualResolver_(spell) : 0u; };
     if (old != 0) removeAuraStateKit(unitGuid, old, visualOf(old));
-    if (spellId != 0) applyAuraStateKit(unitGuid, spellId, visualOf(spellId));
+    if (spellId != 0) applyAuraStateKit(unitGuid, spellId, visualOf(spellId), casterGuid);
 }
 
-void SpellVisualSystem::setUnitAuraSlots(uint64_t unitGuid,
-                                         const std::vector<std::pair<uint32_t, uint32_t>>& slotSpells) {
+void SpellVisualSystem::setUnitAuraSlots(uint64_t unitGuid, const std::vector<AuraSlotSpell>& slotSpells) {
     if (unitGuid == 0) return;
     std::vector<uint32_t> emptied;
     if (auto it = unitAuraKits_.find(unitGuid); it != unitAuraKits_.end()) {
         for (const auto& [slot, spell] : it->second.slots) {
             const bool named = std::any_of(slotSpells.begin(), slotSpells.end(),
-                                           [slot = slot](const auto& entry) { return entry.first == slot; });
+                                           [slot = slot](const AuraSlotSpell& entry) { return entry.slot == slot; });
             if (!named) emptied.push_back(slot);
         }
     }
     for (uint32_t slot : emptied) setUnitAuraSlot(unitGuid, slot, 0);
-    for (const auto& [slot, spell] : slotSpells) setUnitAuraSlot(unitGuid, slot, spell);
+    for (const AuraSlotSpell& entry : slotSpells) setUnitAuraSlot(unitGuid, entry.slot, entry.spellId, entry.casterGuid);
 }
 
-void SpellVisualSystem::applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, uint32_t visualId) {
+void SpellVisualSystem::applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, uint32_t visualId,
+                                          uint64_t casterGuid) {
     if (unitGuid == 0 || spellId == 0 || visualId == 0) return;
     if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
     auto visualIt = visualAuraKits_.find(visualId);
@@ -936,7 +959,8 @@ void SpellVisualSystem::applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, u
     const VisualAuraKits& visual = visualIt->second;
     UnitAuraKits& unit = unitAuraKits_[unitGuid];
     AuraKit aura{.spellId = spellId, .visualId = visualId, .kitId = visual.stateKit,
-                 .unarmedOnly = (visual.flags & spell_kit::kVisualFlagUnarmedStateKit) != 0};
+                 .unarmedOnly = (visual.flags & spell_kit::kVisualFlagUnarmedStateKit) != 0,
+                 .casterGuid = casterGuid};
     // 0x00724820: not while a missile carrying the spell is still on its way
     // to the unit - the missile plays the kit as it lands (0x00700e20).
     const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitGuid) : 0;
@@ -955,6 +979,12 @@ void SpellVisualSystem::applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, u
             playKitShake(aura.kitId, unitPos);
         playKitColourFade(aura.kitId, instance, spellId);
     }
+    // Its chains (0x007265c0): from the aura's caster where the kit names
+    // another unit (flag 0x1000 with the slot's caster, 0x00724820).
+    if (!aura.awaitingMissile) {
+        if (auto kitIt = kits_.find(aura.kitId); kitIt != kits_.end())
+            startKitChains(kitIt->second, unitGuid, spellId, casterGuid);
+    }
     unit.auras.push_back(std::move(aura));
     // Then 0x00720400(1, 1) for a Flags 8 visual.
     if (unit.auras.back().unarmedOnly) stepUnarmedKits(unitGuid, unit, true);
@@ -963,18 +993,7 @@ void SpellVisualSystem::applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, u
 void SpellVisualSystem::removeAuraStateKit(uint64_t unitGuid, uint32_t spellId, uint32_t visualId) {
     if (unitGuid == 0 || spellId == 0) return;
     if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
-    // 0x00743b40: every one of the spell's kits leaves the unit.
-    if (auto it = unitAuraKits_.find(unitGuid); it != unitAuraKits_.end()) {
-        auto& auras = it->second.auras;
-        for (auto a = auras.begin(); a != auras.end();) {
-            if (a->spellId == spellId) {
-                hideAuraKit(*a);
-                a = auras.erase(a);
-            } else {
-                ++a;
-            }
-        }
-    }
+    removeUnitSpellEffects(unitGuid, spellId);
     // Then the visual's StateDoneKit, once (kit type 8).
     auto visualIt = visualId ? visualAuraKits_.find(visualId) : visualAuraKits_.end();
     if (visualIt == visualAuraKits_.end() || visualIt->second.stateDoneKit == 0) return;
@@ -1009,6 +1028,57 @@ void SpellVisualSystem::playKitColourFade(uint32_t kitId, uint32_t renderInstanc
             const uint32_t castMs = kitSpellResolver_ && spellId ? kitSpellResolver_(spellId).castTimeMs : 0u;
             lightTint_ = spell_kit::lightTint(static_cast<uint32_t>(std::lround(kit.charParam[k][0])),
                                               kit.charParam[k][1], castMs, colourClockMs_);
+            continue;
+        }
+        if (kit.charProc[k] == spell_kit::kCharProcSwingTrail && renderInstanceId != 0) {
+            // 0x007265c0 case 8, applied after the kit's procedures by
+            // 0x0073b140 where its time is not 0 (0x00715ba0).
+            const auto start = swing_trail::startFor(kit.charParam[k][0], kit.charParam[k][2], kit.charParam[k][3]);
+            if (start.durationMs != 0) startSwingTrails(renderInstanceId, start);
+            continue;
+        }
+        if (kit.charProc[k] == spell_kit::kCharProcWearItem && renderInstanceId != 0) {
+            // 0x007265c0 case 17 (0x006f8650, 0x006f8600): Item.dbc's row
+            // for ParamOne, its display in its inventory type's slot.
+            const uint64_t unitGuid = instanceUnitResolver_ ? instanceUnitResolver_(renderInstanceId) : 0;
+            if (!wornItemSink_ || unitGuid == 0 || !cachedAssetManager_) continue;
+            auto itemDbc = cachedAssetManager_->loadDBCOptional("Item.dbc");
+            // WotLK's eight columns: display at 5, inventory type at 6.
+            const auto itemId = static_cast<uint32_t>(static_cast<int32_t>(kit.charParam[k][1]));
+            const int32_t row = itemDbc && itemDbc->getFieldCount() >= 8 ? itemDbc->findRecordById(itemId) : -1;
+            if (row < 0) continue;
+            const uint32_t display = itemDbc->getUInt32(static_cast<uint32_t>(row), 5);
+            const uint32_t inventoryType = itemDbc->getUInt32(static_cast<uint32_t>(row), 6);
+            const int equipSlot =
+                spell_kit::equipSlotForComponentSlot(spell_kit::componentSlotForInventoryType(inventoryType));
+            if (equipSlot < 0 || display == 0) continue;
+            wornItemSink_(unitGuid, equipSlot, display, static_cast<uint8_t>(inventoryType));
+            wornItems_.push_back({.unitGuid = unitGuid, .spellId = spellId, .equipSlot = equipSlot});
+            continue;
+        }
+        if (kit.charProc[k] == spell_kit::kCharProcTimedAlpha && renderInstanceId != 0) {
+            // 0x007265c0 case 15 (0x0071a940): out over half a second, held,
+            // then back.
+            if (const auto fade = spell_kit::timedAlpha(kit.charParam[k], 1.0f, colourClockMs_)) {
+                if (auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
+                    charRenderer->setInstanceKitAlpha(renderInstanceId, fade->alpha,
+                                                      static_cast<float>(fade->inMs) * 0.001f);
+                    timedAlphas_[renderInstanceId] = *fade;
+                }
+            }
+            continue;
+        }
+        if (kit.charProc[k] == spell_kit::kCharProcFreeze && renderInstanceId != 0) {
+            // 0x007265c0 case 11 (0x006f80b0): the animation held while the
+            // unit's effects of the spell last.
+            auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+            const uint64_t unitGuid = instanceUnitResolver_ ? instanceUnitResolver_(renderInstanceId) : 0;
+            if (charRenderer && unitGuid != 0) {
+                const bool was = charRenderer->setInstanceAnimationFrozen(
+                    renderInstanceId, true, spell_kit::freezeAtMs(kit.charParam[k][0]));
+                animationHolds_.push_back(
+                    {.unitGuid = unitGuid, .spellId = spellId, .renderInstanceId = renderInstanceId, .wasHeld = was});
+            }
             continue;
         }
         if (kit.charProc[k] != spell_kit::kCharProcColourFade || renderInstanceId == 0) continue;
@@ -1073,6 +1143,15 @@ void SpellVisualSystem::updateUnitAlphas() {
         it->second = alphaFade.first;
         charRenderer->setInstanceKitAlpha(instance, alphaFade.first, static_cast<float>(alphaFade.second) * 0.001f);
     }
+    // 0x0073dab0: a case 15 fade, its time up, back to the unit's own alpha.
+    for (auto it = timedAlphas_.begin(); it != timedAlphas_.end();) {
+        if (!spell_kit::timedAlphaOver(it->second, colourClockMs_)) {
+            ++it;
+            continue;
+        }
+        charRenderer->setInstanceKitAlpha(it->first, 1.0f, static_cast<float>(it->second.backMs) * 0.001f);
+        it = timedAlphas_.erase(it);
+    }
 }
 
 void SpellVisualSystem::updateUnitColours() {
@@ -1112,6 +1191,387 @@ void SpellVisualSystem::updateUnitColours() {
         charRenderer->setInstanceDiffuseColour(instance, spell_kit::colourToRgb(colour));
         colouredInstances_.insert(instance);
     }
+}
+
+const spell_chain::ChainEffect* SpellVisualSystem::chainEffect(uint32_t id) {
+    if (!chainEffectsLoaded_) {
+        auto* am = cachedAssetManager_ ? cachedAssetManager_ : core::Application::getInstance().getAssetManager();
+        if (!am || !am->isInitialized()) return nullptr;
+        cachedAssetManager_ = am;
+        chainEffectsLoaded_ = true;  // a real attempt follows
+        auto dbc = cachedAssetManager_->loadDBCOptional("SpellChainEffects.dbc");
+        if (dbc && dbc->isLoaded()) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                auto row = spell_chain::parseChainEffect(dbc->getRecord(i), dbc->getRecordSize(),
+                                                         [&](uint32_t offset) { return dbc->getStringByOffset(offset); });
+                if (row && row->id != 0) chainEffects_[row->id] = std::move(*row);
+            }
+        }
+        LOG_INFO("SpellVisual: loaded ", chainEffects_.size(), " chain effects");
+    }
+    auto it = id ? chainEffects_.find(id) : chainEffects_.end();
+    return it != chainEffects_.end() ? &it->second : nullptr;
+}
+
+const SpellVisualSystem::VisualEnds* SpellVisualSystem::visualEndsForSpell(uint32_t spellId) const {
+    const uint32_t visualId = spellVisualResolver_ && spellId ? spellVisualResolver_(spellId) : 0u;
+    auto it = visualId ? visualEnds_.find(visualId) : visualEnds_.end();
+    return it != visualEnds_.end() ? &it->second : nullptr;
+}
+
+void SpellVisualSystem::startKitChains(const KitRecord& kit, uint64_t unitGuid, uint32_t spellId,
+                                       uint64_t otherSource) {
+    if (unitGuid == 0) return;
+    for (uint32_t k = 0; k < 4; ++k) {
+        if (!spell_kit::isChainProc(kit.charProc[k])) continue;
+        const auto& param = kit.charParam[k];
+        // 0x0088b9c0 chops ParamZero to the row's id.
+        const spell_chain::ChainEffect* effect = chainEffect(static_cast<uint32_t>(static_cast<int32_t>(param[0])));
+        if (!effect) continue;
+        const auto castIt = castTargets_.find(unitGuid);
+        const CastTargets* cast = castIt != castTargets_.end() ? &castIt->second : nullptr;
+        const auto channelIt = unitChannels_.find(unitGuid);
+        const bool channelMatches = channelIt != unitChannels_.end() && channelIt->second.spellId == spellId &&
+                                    channelIt->second.object != 0;
+        ChainObject chain;
+        chain.effect = effect;
+        chain.spellId = spellId;
+        uint64_t source = unitGuid;
+        std::vector<uint64_t> targets;
+        switch (spell_chain::chainTargets(otherSource != 0 && otherSource != unitGuid, cast && cast->place,
+                                          channelMatches, cast ? cast->hits.size() : 0)) {
+            case spell_chain::ChainTargets::FromOther:
+                source = otherSource;
+                targets.push_back(unitGuid);
+                break;
+            case spell_chain::ChainTargets::Place:
+                chain.place = cast->place;
+                break;
+            case spell_chain::ChainTargets::Channel:
+                targets.push_back(channelIt->second.object);
+                break;
+            case spell_chain::ChainTargets::Hits:
+                targets = cast->hits;
+                break;
+            case spell_chain::ChainTargets::None:
+                continue;
+        }
+        // 0x007fc5f0: the spell's visual's ends.
+        if (const VisualEnds* ends = visualEndsForSpell(spellId)) {
+            chain.sourceAttachment = ends->sourceAttachment;
+            chain.castOffset = ends->castOffset;
+            chain.impactOffset = ends->impactOffset;
+        }
+        chain.nodes.push_back(source);
+        if (chain.place) {
+            // One node with no unit; the place carries the impact offset,
+            // turned as the unit faces (flag 2).
+            chain.nodes.push_back(0);
+            CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+            const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(source) : 0;
+            glm::mat4 frame(1.0f);
+            if (charRenderer && instance) charRenderer->getInstanceFrame(instance, frame);
+            chain.place = *chain.place + glm::mat3(frame) * chain.impactOffset;
+        } else {
+            chain.nodes.insert(chain.nodes.end(), targets.begin(), targets.end());
+        }
+        // ParamThree: every bolt from the unit; ParamTwo: held by its effect.
+        chain.bolts = spell_chain::planBolts(*effect, chain.nodes.size() - 1, param[3] != 0.0f, colourClockMs_,
+                                             chain.endMs);
+        chain.lightning.resize(chain.bolts.size());
+        chain.held = param[2] != 0.0f;
+        chain.ownerUnit = unitGuid;
+        chain.ownerSpell = spellId;
+        chains_.push_back(std::move(chain));
+    }
+}
+
+void SpellVisualSystem::releaseChains(uint64_t unitGuid, uint32_t spellId) {
+    // 0x007fc990: no longer held, its time up now.
+    for (ChainObject& chain : chains_) {
+        if (!chain.held || chain.ownerUnit != unitGuid || chain.ownerSpell != spellId) continue;
+        chain.held = false;
+        chain.endMs = colourClockMs_;
+    }
+}
+
+void SpellVisualSystem::removeUnitSpellEffects(uint64_t unitGuid, uint32_t spellId) {
+    releaseChains(unitGuid, spellId);
+    // 0x006f8700: a worn item off again, the unit's own back (0x00723730).
+    for (auto it = wornItems_.begin(); it != wornItems_.end();) {
+        if (it->unitGuid != unitGuid || it->spellId != spellId) {
+            ++it;
+            continue;
+        }
+        if (wornItemSink_) wornItemSink_(unitGuid, it->equipSlot, 0, 0);
+        it = wornItems_.erase(it);
+    }
+    // A held animation runs again, unless it was held before (0x006f80b0's
+    // +0xd4).
+    for (auto it = animationHolds_.begin(); it != animationHolds_.end();) {
+        if (it->unitGuid != unitGuid || it->spellId != spellId) {
+            ++it;
+            continue;
+        }
+        if (!it->wasHeld && renderer_ && renderer_->getCharacterRenderer())
+            renderer_->getCharacterRenderer()->setInstanceAnimationFrozen(it->renderInstanceId, false);
+        it = animationHolds_.erase(it);
+    }
+    if (auto it = unitAuraKits_.find(unitGuid); it != unitAuraKits_.end()) {
+        auto& auras = it->second.auras;
+        for (auto a = auras.begin(); a != auras.end();) {
+            if (a->spellId == spellId) {
+                hideAuraKit(*a);
+                a = auras.erase(a);
+            } else {
+                ++a;
+            }
+        }
+    }
+}
+
+void SpellVisualSystem::setUnitCastTargets(uint64_t unitGuid, uint32_t spellId, const std::vector<uint64_t>& hits,
+                                           const std::optional<glm::vec3>& destination) {
+    if (unitGuid == 0) return;
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    CastTargets& cast = castTargets_[unitGuid];
+    // 0x00724f50: the hits less the unit itself, kept in the order they came.
+    cast.hits.clear();
+    for (uint64_t guid : hits) {
+        if (guid != 0 && guid != unitGuid) cast.hits.push_back(guid);
+    }
+    // 0x00715400: the place, unless the visual's Flags 0x1 hands the chain
+    // to the hits.
+    const VisualEnds* ends = visualEndsForSpell(spellId);
+    const bool hitsInstead = ends && (ends->flags & 0x1u) != 0 && !hits.empty();
+    cast.place = hitsInstead ? std::nullopt : destination;
+}
+
+void SpellVisualSystem::setUnitChannel(uint64_t unitGuid, uint32_t spellId, uint64_t channelObject) {
+    if (unitGuid == 0) return;
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    UnitChannel& channel = unitChannels_[unitGuid];
+    channel.object = channelObject;
+    if (channel.spellId == spellId) {
+        if (spellId == 0) unitChannels_.erase(unitGuid);
+        return;
+    }
+    const uint32_t old = channel.spellId;
+    channel.spellId = spellId;
+    // 0x0073eb50: the old channel's effects leave the unit.
+    if (old != 0) removeUnitSpellEffects(unitGuid, old);
+    if (spellId == 0) {
+        unitChannels_.erase(unitGuid);
+        return;
+    }
+    // 0x0072bc70: the visual's ChannelKit, type 2.
+    const uint32_t visualId = spellVisualResolver_ ? spellVisualResolver_(spellId) : 0;
+    auto visualIt = visualId ? visualAuraKits_.find(visualId) : visualAuraKits_.end();
+    if (visualIt == visualAuraKits_.end() || visualIt->second.channelKit == 0) return;
+    auto kitIt = kits_.find(visualIt->second.channelKit);
+    if (kitIt == kits_.end()) return;
+    AuraKit aura{.spellId = spellId, .visualId = visualId, .kitId = kitIt->first};
+    if (const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitGuid) : 0) {
+        glm::vec3 unitPos;
+        if (renderer_ && renderer_->getCharacterRenderer() &&
+            renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos))
+            playKitShake(aura.kitId, unitPos);
+        playKitColourFade(aura.kitId, instance, spellId);
+    }
+    startKitChains(kitIt->second, unitGuid, spellId, 0);
+    unitAuraKits_[unitGuid].auras.push_back(std::move(aura));
+}
+
+void SpellVisualSystem::setUnitChannels(const std::vector<ChannelState>& channels) {
+    std::vector<uint64_t> ended;
+    for (const auto& [guid, channel] : unitChannels_) {
+        const bool named = std::any_of(channels.begin(), channels.end(),
+                                       [guid = guid](const ChannelState& c) { return c.unitGuid == guid; });
+        if (!named) ended.push_back(guid);
+    }
+    for (uint64_t guid : ended) setUnitChannel(guid, 0, 0);
+    for (const ChannelState& c : channels) setUnitChannel(c.unitGuid, c.spellId, c.channelObject);
+}
+
+bool SpellVisualSystem::unitMiddle(uint32_t renderInstanceId, glm::vec3& middle, glm::mat4& frame) const {
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || renderInstanceId == 0 || !charRenderer->getInstanceFrame(renderInstanceId, frame))
+        return false;
+    // 0x00717ad0: the GeoBox's height times the unit's scale; the model's
+    // own box where the unit has no CreatureModelData row.
+    float height = unitHeight_ ? unitHeight_(renderInstanceId) : 0.0f;
+    if (!(height > 0.0f)) {
+        const pipeline::M2Model* model = charRenderer->getInstanceModelData(renderInstanceId);
+        height = model && model->hasVertexBox ? model->vertexBoxMax.z - model->vertexBoxMin.z : 0.0f;
+    }
+    middle = spell_chain::unitMiddle(glm::vec3(frame[3]), height * glm::length(glm::vec3(frame[0])));
+    return true;
+}
+
+bool SpellVisualSystem::chainSourcePoint(uint32_t renderInstanceId, const ChainObject& chain, glm::vec3& out) const {
+    glm::vec3 middle;
+    glm::mat4 frame;
+    if (!unitMiddle(renderInstanceId, middle, frame)) return false;
+    CharacterRenderer* charRenderer = renderer_->getCharacterRenderer();
+    // 0x007faa40: MissileAttachment with the cast offset, else the cast
+    // model's $CSL event, else the middle carried by the offset.
+    glm::mat4 attach;
+    if (chain.sourceAttachment >= 0 &&
+        charRenderer->getAttachmentTransform(renderInstanceId, static_cast<uint32_t>(chain.sourceAttachment), attach)) {
+        out = glm::vec3(attach * glm::vec4(chain.castOffset, 1.0f));
+        return true;
+    }
+    if (charRenderer->getEventPosition(renderInstanceId, 0x4C534324u /* $CSL */, out)) return true;
+    out = middle + glm::mat3(frame) * chain.castOffset;
+    return true;
+}
+
+bool SpellVisualSystem::chainUnitPoint(uint32_t renderInstanceId, uint32_t spellId, glm::vec3& out) const {
+    glm::vec3 middle;
+    glm::mat4 frame;
+    if (!unitMiddle(renderInstanceId, middle, frame)) return false;
+    CharacterRenderer* charRenderer = renderer_->getCharacterRenderer();
+    glm::mat4 attach;
+    const VisualEnds* ends = visualEndsForSpell(spellId);
+    if (!ends) {
+        // 0x007fabf0 with no spell: the chest (34).
+        out = charRenderer->getAttachmentTransform(renderInstanceId, 34, attach) ? glm::vec3(attach[3]) : middle;
+        return true;
+    }
+    // MissileDestinationAttachment with the impact offset, else the middle
+    // carried by it.
+    if (ends->destinationAttachment >= 0 &&
+        charRenderer->getAttachmentTransform(renderInstanceId, static_cast<uint32_t>(ends->destinationAttachment),
+                                             attach)) {
+        out = glm::vec3(attach * glm::vec4(ends->impactOffset, 1.0f));
+        return true;
+    }
+    out = middle + glm::mat3(frame) * ends->impactOffset;
+    return true;
+}
+
+void SpellVisualSystem::updateChains(float deltaTime) {
+    const uint32_t now = colourClockMs_;
+    for (auto it = chains_.begin(); it != chains_.end();) {
+        ChainObject& chain = *it;
+        for (size_t b = 0; b < chain.bolts.size(); ++b) {
+            const spell_chain::Bolt& bolt = chain.bolts[b];
+            auto& lightning = chain.lightning[b];
+            // 0x007fae90: a bolt that shows has its ends found and its
+            // lightning made; it shows only with a source and somewhere to go.
+            if (spell_chain::boltShows(bolt, chain.held, now)) {
+                const uint64_t from = bolt.from < chain.nodes.size() ? chain.nodes[bolt.from] : 0;
+                const uint64_t to = bolt.to < chain.nodes.size() ? chain.nodes[bolt.to] : 0;
+                glm::vec3 start(0.0f), end(0.0f);
+                bool haveStart = false;
+                bool haveEnd = false;
+                glm::mat4 objectFrame;
+                if (const uint32_t inst = from && unitInstanceResolver_ ? unitInstanceResolver_(from) : 0) {
+                    haveStart = bolt.from == 0 ? chainSourcePoint(inst, chain, start)
+                                               : chainUnitPoint(inst, chain.spellId, start);
+                } else if (from && objectFrameResolver_ && objectFrameResolver_(from, objectFrame)) {
+                    start = glm::vec3(objectFrame * glm::vec4(chain.castOffset, 1.0f));
+                    haveStart = true;
+                }
+                if (const uint32_t inst = to && unitInstanceResolver_ ? unitInstanceResolver_(to) : 0) {
+                    haveEnd = chainUnitPoint(inst, chain.spellId, end);
+                } else if (to && objectFrameResolver_ && objectFrameResolver_(to, objectFrame)) {
+                    end = glm::vec3(objectFrame * glm::vec4(chain.impactOffset, 1.0f));
+                    haveEnd = true;
+                } else if (chain.place) {
+                    end = *chain.place;
+                    haveEnd = true;
+                }
+                if (!lightning) {
+                    lightning.emplace();
+                    lightning->init(chain.effect, chainRng_);
+                }
+                lightning->setEnds(start, end);
+                lightning->setVisible(haveStart && haveEnd);
+            }
+            if (!chain.held && static_cast<int32_t>(now - bolt.endMs) >= 0) lightning.reset();
+        }
+        if (!chain.held && static_cast<int32_t>(now - chain.endMs) >= 0) {
+            it = chains_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // 0x009ab730: every lightning a frame on.
+    for (ChainObject& chain : chains_) {
+        for (auto& lightning : chain.lightning) {
+            if (lightning) lightning->update(deltaTime, chainRng_);
+        }
+    }
+}
+
+void SpellVisualSystem::startSwingTrails(uint32_t renderInstanceId, const swing_trail::Start& start) {
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer) return;
+    // 0x00715ba0: only with the melee weapons drawn (+0xb5c 1), on the one
+    // in each hand (+0xb50, +0xb54).
+    const uint64_t unitGuid = instanceUnitResolver_ ? instanceUnitResolver_(renderInstanceId) : 0;
+    if (!meleeDrawnQuery_ || unitGuid == 0 || !meleeDrawnQuery_(unitGuid)) return;
+    for (uint32_t attachment : {1u /* HandRight */, 2u /* HandLeft */}) {
+        if (!charRenderer->heldModelEvent(renderInstanceId, attachment, swing_trail::kEventBladeTop) ||
+            !charRenderer->heldModelEvent(renderInstanceId, attachment, swing_trail::kEventBladeBottom))
+            continue;
+        auto it = std::find_if(swings_.begin(), swings_.end(), [&](const WeaponSwing& w) {
+            return w.renderInstanceId == renderInstanceId && w.attachment == attachment;
+        });
+        if (it == swings_.end()) {
+            swings_.push_back({.renderInstanceId = renderInstanceId, .attachment = attachment});
+            it = std::prev(swings_.end());
+        }
+        // 0x007e4ff0: started again, emptied.
+        it->trail.start(start, colourClockMs_);
+    }
+}
+
+void SpellVisualSystem::publishClientStrips() {
+    if (!m2Renderer_) return;
+    std::vector<M2Renderer::ClientStrip> strips;
+    // The swing trails, drawn with their weapons (0x007e4f50), each frame
+    // laying the blade's bottom and top down until they have faded.
+    if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
+        for (auto it = swings_.begin(); it != swings_.end();) {
+            const auto top = charRenderer->heldModelEvent(it->renderInstanceId, it->attachment,
+                                                          swing_trail::kEventBladeTop);
+            const auto bottom = charRenderer->heldModelEvent(it->renderInstanceId, it->attachment,
+                                                             swing_trail::kEventBladeBottom);
+            M2Renderer::ClientStrip strip;
+            if (!top || !bottom || !it->trail.step(colourClockMs_, top->position, bottom->position, strip.vertices)) {
+                it = swings_.erase(it);
+                continue;
+            }
+            if (!strip.vertices.empty()) {
+                strip.material = swing_trail::material();
+                strips.push_back(std::move(strip));
+            }
+            ++it;
+        }
+    } else {
+        swings_.clear();
+    }
+    const glm::vec3 camera = renderer_ && renderer_->getCamera() ? renderer_->getCamera()->getPosition() : glm::vec3(0.0f);
+    // 0x009ab070: render layers 0 to 3 in turn, each the lightning last
+    // made first.
+    for (int32_t layer = 0; layer < 4; ++layer) {
+        for (auto chainIt = chains_.rbegin(); chainIt != chains_.rend(); ++chainIt) {
+            if (chainIt->effect->renderLayer != layer) continue;
+            for (auto lightIt = chainIt->lightning.rbegin(); lightIt != chainIt->lightning.rend(); ++lightIt) {
+                if (!*lightIt) continue;
+                M2Renderer::ClientStrip strip;
+                if (!(*lightIt)->build(camera, strip.vertices)) continue;
+                strip.texturePath = chainIt->effect->texture;
+                strip.material = spell_chain::materialFor(*chainIt->effect);
+                strips.push_back(std::move(strip));
+            }
+        }
+    }
+    if (strips.empty() && !publishedStrips_) return;
+    publishedStrips_ = !strips.empty();
+    m2Renderer_->setClientStrips(std::move(strips));
 }
 
 void SpellVisualSystem::playCameraShakes(uint32_t spellEffectCameraShakesId, const glm::vec3& origin) {
@@ -1256,6 +1716,8 @@ void SpellVisualSystem::update(float deltaTime) {
     updateUnitColours();
     updateUnitAlphas();
     updateLightTint();
+    updateChains(deltaTime);
+    publishClientStrips();
     if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
 
     // Get character bone tracking context (once per frame)
@@ -1335,6 +1797,25 @@ void SpellVisualSystem::reset() {
         for (AuraKit& aura : unit.auras) hideAuraKit(aura);
     }
     unitAuraKits_.clear();
+    chains_.clear();
+    swings_.clear();
+    castTargets_.clear();
+    unitChannels_.clear();
+    if (renderer_ && renderer_->getCharacterRenderer()) {
+        for (const auto& [instance, fade] : timedAlphas_)
+            renderer_->getCharacterRenderer()->setInstanceKitAlpha(instance, 1.0f, 0.0f);
+        for (const AnimationHold& hold : animationHolds_) {
+            if (!hold.wasHeld)
+                renderer_->getCharacterRenderer()->setInstanceAnimationFrozen(hold.renderInstanceId, false);
+        }
+    }
+    animationHolds_.clear();
+    timedAlphas_.clear();
+    for (const WornItem& worn : wornItems_) {
+        if (wornItemSink_) wornItemSink_(worn.unitGuid, worn.equipSlot, 0, 0);
+    }
+    wornItems_.clear();
+    publishClientStrips();
     colourFades_.clear();
     updateUnitColours();
     updateUnitAlphas();

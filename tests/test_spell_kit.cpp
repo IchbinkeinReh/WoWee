@@ -287,3 +287,51 @@ TEST_CASE("CharProc 6 tints the light up to its peak, holds it, and lets it go",
     CHECK(half.x == Catch::Approx(0.5f));
     CHECK(sk::tintColour(glm::vec3(0.0f), glm::vec3(1.0f), 255).x == Catch::Approx(1.0f));
 }
+
+TEST_CASE("CharProc 15 fades the unit out, holds and comes back (0x0071a940)", "[spell_kit]") {
+    // ParamOne chopped below 12; the alpha chopped to a byte, so out.
+    auto t = sk::timedAlpha({0.5f, 3.0f, 750.0f, 1200.9f}, 1.0f, 1000);
+    REQUIRE(t);
+    CHECK(t->alpha == 0.0f);
+    CHECK(t->inMs == 500);
+    CHECK(t->endMs == 1000 + 500 + 1200);
+    CHECK(t->backMs == 750);
+    CHECK_FALSE(sk::timedAlphaOver(*t, 2699));
+    CHECK(sk::timedAlphaOver(*t, 2700));
+    // A whole ParamZero keeps the unit as it is.
+    t = sk::timedAlpha({1.0f, 0.0f, 0.0f, 0.0f}, 1.0f, 0);
+    REQUIRE(t);
+    CHECK(t->alpha == 1.0f);
+    // ParamOne of 12 or more, or below 0, does nothing.
+    CHECK_FALSE(sk::timedAlpha({0.0f, 12.0f, 0.0f, 0.0f}, 1.0f, 0));
+    CHECK_FALSE(sk::timedAlpha({0.0f, -1.0f, 0.0f, 0.0f}, 1.0f, 0));
+}
+
+TEST_CASE("CharProc 11 holds the animation at ParamZero seconds (0x006f80b0)", "[spell_kit]") {
+    CHECK_FALSE(sk::freezeAtMs(0.0f));
+    CHECK_FALSE(sk::freezeAtMs(-1.0f));
+    REQUIRE(sk::freezeAtMs(0.25f));
+    CHECK(*sk::freezeAtMs(0.25f) == 250.0f);
+    CHECK(*sk::freezeAtMs(1.0009f) == 1000.0f);
+}
+
+TEST_CASE("CharProc 17 wears an item in its inventory type's slot (0x004e7a30)", "[spell_kit]") {
+    // Head, shoulders, shirt, chest and robe, belt, legs, boots, wrists,
+    // gloves, tabard and cape have a slot; weapons, rings and the rest none.
+    CHECK(sk::componentSlotForInventoryType(1) == 0);
+    CHECK(sk::componentSlotForInventoryType(3) == 1);
+    CHECK(sk::componentSlotForInventoryType(4) == 2);
+    CHECK(sk::componentSlotForInventoryType(5) == 3);
+    CHECK(sk::componentSlotForInventoryType(20) == 3);
+    CHECK(sk::componentSlotForInventoryType(16) == 10);
+    CHECK(sk::componentSlotForInventoryType(19) == 9);
+    for (uint32_t none : {0u, 2u, 11u, 12u, 13u, 14u, 15u, 17u, 21u, 22u, 23u, 25u, 26u})
+        CHECK(sk::componentSlotForInventoryType(none) == 12);
+    // And the equipment slot each of those shows.
+    CHECK(sk::equipSlotForComponentSlot(0) == 0);
+    CHECK(sk::equipSlotForComponentSlot(1) == 2);
+    CHECK(sk::equipSlotForComponentSlot(3) == 4);
+    CHECK(sk::equipSlotForComponentSlot(9) == 18);
+    CHECK(sk::equipSlotForComponentSlot(10) == 14);
+    CHECK(sk::equipSlotForComponentSlot(12) == -1);
+}

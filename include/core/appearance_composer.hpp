@@ -11,6 +11,7 @@
 #include <vector>
 #include <unordered_set>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <array>
 
@@ -116,7 +117,16 @@ public:
     [[nodiscard]] uint32_t getSkinTextureSlotIndex() const { return skinTextureSlotIndex_; }
     [[nodiscard]] uint32_t getCloakTextureSlotIndex() const { return cloakTextureSlotIndex_; }
 
+    /// A spell's worn item over what the player wears in an equipment slot
+    /// (CharProc 17, 0x006f82d0); display 0 takes it off again (0x00723730).
+    void setItemOverride(int equipSlot, uint32_t displayId, uint8_t inventoryType);
+    /// The player's inventory as it is drawn: those items over the equipped.
+    [[nodiscard]] game::Inventory dressedInventory(const game::Inventory& inventory) const;
+    /// The display worn over an equipment slot, if a spell put one there.
+    [[nodiscard]] std::optional<uint32_t> itemOverrideDisplay(int equipSlot) const;
+
 private:
+    std::map<int, std::pair<uint32_t, uint8_t>> itemOverrides_;  ///< equipment slot → display, inventory type
     bool loadWeaponM2(const std::string& m2Path, pipeline::M2Model& outModel);
 
     /// Attach the equipped head item's model. Other players resolve this through

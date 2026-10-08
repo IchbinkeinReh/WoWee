@@ -12,6 +12,8 @@
 
 #include "rendering/spell_missile.hpp"
 #include "rendering/spell_kit.hpp"
+#include "rendering/spell_chain.hpp"
+#include "rendering/swing_trail.hpp"
 #include "rendering/camera_shake.hpp"
 
 namespace wowee {
@@ -124,7 +126,9 @@ public:
     /// the spell's visual goes on the unit, its models at their attachments,
     /// looping until the aura goes. Held back while a missile carrying the
     /// visual flies at the unit; it plays as the missile lands (0x00700e20).
-    void applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, uint32_t visualId);
+    /// `casterGuid` is the aura's caster (0 for the unit itself), from which
+    /// the kit's chains reach the unit (kit flag 0x1000, 0x007265c0).
+    void applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, uint32_t visualId, uint64_t casterGuid = 0);
     /// The aura gone from its slot (0x0071e930): every state kit of the spell
     /// leaves the unit (0x00743b40) and the visual's StateDoneKit (+0x14)
     /// plays once.
@@ -133,9 +137,52 @@ public:
     /// it did not hold plays the spell's state kit (0x00724820), one losing
     /// its spell removes it (0x0071e930). The slots are kept here, so a
     /// refresh of the same spell plays nothing.
-    void setUnitAuraSlot(uint64_t unitGuid, uint32_t slot, uint32_t spellId);
+    void setUnitAuraSlot(uint64_t unitGuid, uint32_t slot, uint32_t spellId, uint64_t casterGuid = 0);
     /// SMSG_AURA_UPDATE_ALL: the slots it names, and every other one empty.
-    void setUnitAuraSlots(uint64_t unitGuid, const std::vector<std::pair<uint32_t, uint32_t>>& slotSpells);
+    struct AuraSlotSpell {
+        uint32_t slot = 0;
+        uint32_t spellId = 0;
+        uint64_t casterGuid = 0;
+    };
+    void setUnitAuraSlots(uint64_t unitGuid, const std::vector<AuraSlotSpell>& slotSpells);
+    /// SMSG_SPELL_GO for a unit (0x0080e1b0): where its kits' chains go -
+    /// the hit list less the unit itself (0x00724f50), and the place it was
+    /// cast at (target flag 0x40), unless the visual has Flags 0x1 and there
+    /// are hits (0x00715400).
+    void setUnitCastTargets(uint64_t unitGuid, uint32_t spellId, const std::vector<uint64_t>& hits,
+                            const std::optional<glm::vec3>& destination);
+    /// A unit's channel, UNIT_CHANNEL_SPELL and UNIT_FIELD_CHANNEL_OBJECT
+    /// (0x0073eb50): as the spell changes, the old one's effects leave the
+    /// unit (0x00743b40) and the new one's ChannelKit (SpellVisual +0x18)
+    /// goes on it, held like a state kit (0x0072bc70).
+    void setUnitChannel(uint64_t unitGuid, uint32_t spellId, uint64_t channelObject);
+    /// Every unit's channel this frame; a unit not named has none.
+    struct ChannelState {
+        uint64_t unitGuid = 0;
+        uint32_t spellId = 0;
+        uint64_t channelObject = 0;
+    };
+    void setUnitChannels(const std::vector<ChannelState>& channels);
+    /// The unit a CharacterRenderer instance draws, 0 for none.
+    using InstanceUnitResolver = std::function<uint64_t(uint32_t renderInstanceId)>;
+    void setInstanceUnitResolver(InstanceUnitResolver resolver) { instanceUnitResolver_ = std::move(resolver); }
+    /// A unit's CreatureModelData GeoBox height (+0x58 less +0x4c), which
+    /// with its scale sets where a chain meets it (0x00717ad0).
+    void setUnitHeight(std::function<float(uint32_t renderInstanceId)> height) { unitHeight_ = std::move(height); }
+    /// Whether a unit has its melee weapons in its hands (+0xb5c 1), which a
+    /// kit's swing trails need (0x00715ba0).
+    using MeleeDrawnQuery = std::function<bool(uint64_t unitGuid)>;
+    void setMeleeDrawnQuery(MeleeDrawnQuery query) { meleeDrawnQuery_ = std::move(query); }
+    /// Where a kit's worn item goes (CharProc 17): the unit, the equipment
+    /// slot, the item's display and inventory type; display 0 gives the
+    /// unit its own back (0x006f82d0, 0x00723730).
+    using WornItemSink = std::function<void(uint64_t unitGuid, int equipSlot, uint32_t displayId,
+                                            uint8_t inventoryType)>;
+    void setWornItemSink(WornItemSink sink) { wornItemSink_ = std::move(sink); }
+    /// Where an object that is not a unit stands and faces (a game object a
+    /// channel is aimed at), for a chain's end (0x007fae90).
+    using ObjectFrameResolver = std::function<bool(uint64_t guid, glm::mat4& frame)>;
+    void setObjectFrameResolver(ObjectFrameResolver resolver) { objectFrameResolver_ = std::move(resolver); }
     /// Spell.dbc SpellVisual of a spell, 0 for none.
     using SpellVisualResolver = std::function<uint32_t(uint32_t spellId)>;
     void setSpellVisualResolver(SpellVisualResolver resolver) { spellVisualResolver_ = std::move(resolver); }
@@ -242,6 +289,7 @@ private:
     struct VisualAuraKits {
         uint32_t stateKit = 0;      ///< SpellVisual +0x10
         uint32_t stateDoneKit = 0;  ///< SpellVisual +0x14
+        uint32_t channelKit = 0;    ///< SpellVisual +0x18
         uint32_t flags = 0;         ///< SpellVisual Flags (+0x34)
     };
     std::unordered_map<uint32_t, VisualAuraKits> visualAuraKits_;  // visualId → its aura kits
@@ -265,6 +313,7 @@ private:
         bool unarmedOnly = false;      ///< its visual has Flags 8
         bool playing = true;           ///< its kit is on the unit (not removed by 0x00720400)
         bool awaitingMissile = false;  ///< a missile carrying it is still flying at the unit
+        uint64_t casterGuid = 0;       ///< the aura's caster, its chains' other end
         uint32_t boundInstance = 0;    ///< the instance its models hang on
         std::vector<KitModelInstance> models;
     };
@@ -306,10 +355,114 @@ private:
     /// Each unit's alpha from its auras' kits (CharProc 14), the latest's.
     void updateUnitAlphas();
     std::unordered_map<uint32_t, float> unitKitAlphas_;  // render instance → the alpha it was given
+    /// CharProc 15's fades (0x0071a940), by render instance, until they go back.
+    std::unordered_map<uint32_t, spell_kit::TimedAlpha> timedAlphas_;
+    /// CharProc 11's holds (0x006f80b0): the unit's animation held until its
+    /// effects of the spell go, and whether it was held already.
+    struct AnimationHold {
+        uint64_t unitGuid = 0;
+        uint32_t spellId = 0;
+        uint32_t renderInstanceId = 0;
+        bool wasHeld = false;
+    };
+    std::vector<AnimationHold> animationHolds_;
+    /// CharProc 17's worn items, until the unit's effects of the spell go.
+    struct WornItem {
+        uint64_t unitGuid = 0;
+        uint32_t spellId = 0;
+        int equipSlot = -1;
+    };
+    std::vector<WornItem> wornItems_;
+    WornItemSink wornItemSink_;
     /// The light tint playing (CharProc 6), and handed to the sink.
     std::optional<spell_kit::LightTint> lightTint_;
     bool lightTinted_ = false;
     void updateLightTint();
+
+    /// The SpellChainEffects rows, loaded on first use.
+    std::unordered_map<uint32_t, spell_chain::ChainEffect> chainEffects_;
+    bool chainEffectsLoaded_ = false;
+    const spell_chain::ChainEffect* chainEffect(uint32_t id);
+    /// What a chain reads of a SpellVisual: MissileAttachment (+0x40) with
+    /// MissileCastOffset, MissileDestinationAttachment (+0x28) with
+    /// MissileImpactOffset (y negated), Flags 0x200 (0x007fc5f0, 0x007fabf0).
+    struct VisualEnds {
+        int32_t sourceAttachment = -1;
+        int32_t destinationAttachment = -1;
+        glm::vec3 castOffset{0.0f};
+        glm::vec3 impactOffset{0.0f};
+        uint32_t flags = 0;  ///< SpellVisual Flags (+0x34)
+    };
+    std::unordered_map<uint32_t, VisualEnds> visualEnds_;
+    const VisualEnds* visualEndsForSpell(uint32_t spellId) const;
+    /// A LightningObject (0x007fc5f0): node 0 the unit, the rest its targets
+    /// (0 for the place), a bolt from node to node, each drawn by a
+    /// CLightning while it shows.
+    struct ChainObject {
+        const spell_chain::ChainEffect* effect = nullptr;
+        uint32_t spellId = 0;
+        std::vector<uint64_t> nodes;
+        std::optional<glm::vec3> place;  ///< flag 2: the place, with the impact offset
+        int32_t sourceAttachment = -1;
+        glm::vec3 castOffset{0.0f};
+        glm::vec3 impactOffset{0.0f};  ///< where it meets an object that is not a unit
+        std::vector<spell_chain::Bolt> bolts;
+        std::vector<std::optional<spell_chain::Lightning>> lightning;  ///< one a bolt
+        uint32_t endMs = 0;
+        /// Flag 1 (the kit's ParamTwo): held by the effect that made it until
+        /// that goes (0x007fc990), the unit and spell it belongs to.
+        bool held = false;
+        uint64_t ownerUnit = 0;
+        uint32_t ownerSpell = 0;
+    };
+    std::vector<ChainObject> chains_;
+    spell_chain::Rng chainRng_;
+    /// SMSG_SPELL_GO's targets of each unit's last cast.
+    struct CastTargets {
+        std::vector<uint64_t> hits;
+        std::optional<glm::vec3> place;
+    };
+    std::unordered_map<uint64_t, CastTargets> castTargets_;
+    struct UnitChannel {
+        uint32_t spellId = 0;
+        uint64_t object = 0;
+    };
+    std::unordered_map<uint64_t, UnitChannel> unitChannels_;
+    InstanceUnitResolver instanceUnitResolver_;
+    std::function<float(uint32_t)> unitHeight_;
+    ObjectFrameResolver objectFrameResolver_;
+    /// 0x007265c0 cases 0 and 12 for a kit on `unitGuid` for `spellId`;
+    /// `otherSource` names the unit kit flag 0x1000 draws from.
+    void startKitChains(const KitRecord& kit, uint64_t unitGuid, uint32_t spellId, uint64_t otherSource);
+    /// 0x00743b40's part for chains: those the unit's effects of the spell
+    /// held let go (0x007fc990).
+    void releaseChains(uint64_t unitGuid, uint32_t spellId);
+    /// 0x00743b40: every effect of the spell leaves the unit.
+    void removeUnitSpellEffects(uint64_t unitGuid, uint32_t spellId);
+    /// 0x007fca30 with 0x007fae90 and 0x009ab730: each bolt's ends, its
+    /// lightning made, moved and dropped, and the strips handed on.
+    void updateChains(float deltaTime);
+    /// CharProc 8's swing trails (0x007e4ff0): one a weapon in the unit's
+    /// hands, at its hand attachment.
+    struct WeaponSwing {
+        uint32_t renderInstanceId = 0;
+        uint32_t attachment = 0;
+        swing_trail::Trail trail;
+    };
+    std::vector<WeaponSwing> swings_;
+    MeleeDrawnQuery meleeDrawnQuery_;
+    /// 0x00715ba0: a trail on each weapon in the unit's hands.
+    void startSwingTrails(uint32_t renderInstanceId, const swing_trail::Start& start);
+    /// The strips of this frame - the swing trails, then the chains by their render layer
+    /// (0x009ab070) - handed to the M2 renderer.
+    void publishClientStrips();
+    bool publishedStrips_ = false;
+    /// 0x007faa40: where a chain leaves its unit.
+    bool chainSourcePoint(uint32_t renderInstanceId, const ChainObject& chain, glm::vec3& out) const;
+    /// 0x007fabf0: where a chain meets a unit for its spell.
+    bool chainUnitPoint(uint32_t renderInstanceId, uint32_t spellId, glm::vec3& out) const;
+    /// The unit's feet raised three quarters of its height, and its frame.
+    bool unitMiddle(uint32_t renderInstanceId, glm::vec3& middle, glm::mat4& frame) const;
     KitSpellResolver kitSpellResolver_;
     UnitTypeFlags unitTypeFlags_;
     LightTintSink lightTintSink_;

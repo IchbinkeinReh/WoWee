@@ -807,8 +807,11 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     }
     if (inventoryScreen.consumeEquipmentDirty() || gameHandler.consumeOnlineEquipmentDirty() ||
         tabardEmblemChanged) {
-        updateCharacterGeosets(gameHandler.getInventory());
-        updateCharacterTextures(gameHandler.getInventory());
+        // With any spell's worn items over the equipped (CharProc 17).
+        game::Inventory dressed = appearanceComposer_ ? appearanceComposer_->dressedInventory(gameHandler.getInventory())
+                                                      : gameHandler.getInventory();
+        updateCharacterGeosets(dressed);
+        updateCharacterTextures(dressed);
         if (appearanceComposer_) appearanceComposer_->loadEquippedWeapons();
         // Update renderer weapon type for animation selection
         auto* r = services_.renderer;
