@@ -431,7 +431,7 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
                 if (preview_->loadCharacter(character.race, character.gender,
                                             skin, face, hairStyle, hairColor,
                                             character.facialFeatures, character.useFemaleModel)) {
-                    preview_->applyEquipment(character.equipment);
+                    preview_->applyCharacterSelectEquipment(character.equipment, character.flags);
                 }
 
                 previewGuid_ = character.guid;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/character_geosets.hpp"
+#include "core/preview_dressing.hpp"
 
 #include "game/character.hpp"
 #include <glm/glm.hpp>
@@ -62,8 +63,15 @@ public:
     bool loadCreature(const std::string& m2Path,
                       const std::vector<std::pair<uint32_t, std::string>>& skins = {});
 
-    // Apply equipment overlays/geosets using SMSG_CHAR_ENUM equipment data (ItemDisplayInfo.dbc).
+    /// A unit's worn items, as the world draws it: armour, the helmet's
+    /// model and masks (0x004ef0d0), shoulders and the weapons in hand.
     bool applyEquipment(const std::vector<game::EquipmentItem>& equipment);
+    /// The character-select model (0x004e0fd0): SMSG_CHAR_ENUM's 23 slots,
+    /// by slot, and the character's flags. No head item.
+    bool applyCharacterSelectEquipment(const std::vector<game::EquipmentItem>& slots, uint32_t characterFlags);
+    /// The character-create model (0x004e0fd0 with none selected): the
+    /// race, class and sex's CharStartOutfit row. After loadCharacter.
+    bool applyStartOutfit();
 
     void update(float deltaTime);
     void render();
@@ -122,7 +130,11 @@ private:
     // Read an M2 (plus its .skin for WotLK-era models) through the asset manager.
     bool loadPreviewM2(const std::string& m2Path, pipeline::M2Model& outModel);
     // Hang the character's weapons off the preview model's hand attachments.
-    void attachWeapons(const std::vector<game::EquipmentItem>& equipment);
+    void attachWeapons(const std::vector<core::PreviewWeapon>& held);
+    /// Armour, shoulders and - with `headDisplay` - the helmet, then the
+    /// held weapons.
+    bool dress(const std::vector<game::EquipmentItem>& worn, uint32_t headDisplay,
+               const std::vector<core::PreviewWeapon>& held);
     // Put the weapon's enchant glint on it (char enum reports the ItemVisual id directly).
     void attachWeaponEnchantVisual(uint32_t attachmentId, uint32_t itemVisualId);
     // Load the race's glue scene (Stormwind for humans, Orgrimmar for orcs, ...) as a backdrop.

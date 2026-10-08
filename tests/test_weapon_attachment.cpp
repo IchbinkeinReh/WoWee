@@ -71,3 +71,42 @@ TEST_CASE("a creature with a two-hander shows no off hand", "[attachment]") {
     CHECK(unitWeaponPoint(WeaponSlot::OffHand, dagger, SheathState::Melee, false, false, dagger) ==
           at::kHandLeft);
 }
+
+#include "core/preview_dressing.hpp"
+
+TEST_CASE("the select screen leaves the head off and draws the weapons (0x004e0fd0)", "[attachment]") {
+    std::vector<PreviewItem> slots(23);
+    slots[0] = {.display = 100, .inventoryType = 1};
+    slots[4] = {.display = 104, .inventoryType = 5};
+    slots[14] = {.display = 114, .inventoryType = 16};
+    slots[15] = {.display = 115, .inventoryType = 13};
+    slots[16] = {.display = 116, .inventoryType = 14};
+    slots[17] = {.display = 117, .inventoryType = 15};
+    const PreviewDress warrior = characterSelectDress(slots, 1, 0);
+    REQUIRE(warrior.worn.size() == 2);  // chest and cloak, no head
+    REQUIRE(warrior.held.size() == 2);
+    CHECK(warrior.held[0].point == at::kHandRight);
+    CHECK(warrior.held[1].point == at::kShield);
+    CHECK(warrior.held[1].shield);
+    // A hidden cloak stays off; a hunter holds the bow alone, left hand.
+    CHECK(characterSelectDress(slots, 1, kCharacterFlagHideCloak).worn.size() == 1);
+    const PreviewDress hunter = characterSelectDress(slots, kClassHunter, 0);
+    REQUIRE(hunter.held.size() == 1);
+    CHECK(hunter.held[0].display == 117);
+    CHECK(hunter.held[0].point == at::kHandLeft);
+}
+
+TEST_CASE("the create screen wears the start outfit, no head", "[attachment]") {
+    const std::vector<PreviewItem> outfit = {
+        {.display = 1, .inventoryType = 1},  {.display = 5, .inventoryType = 5},
+        {.display = 17, .inventoryType = 17}, {.display = 26, .inventoryType = 26},
+        {.display = 22, .inventoryType = 22}};
+    const PreviewDress dk = characterCreateDress(outfit, 6);
+    REQUIRE(dk.worn.size() == 1);
+    REQUIRE(dk.held.size() == 2);
+    CHECK(dk.held[0].point == at::kHandRight);
+    CHECK(dk.held[1].point == at::kHandLeft);
+    const PreviewDress hunter = characterCreateDress(outfit, kClassHunter);
+    REQUIRE(hunter.held.size() == 1);
+    CHECK(hunter.held[0].point == at::kHandRight);  // a gun, in the right hand
+}
