@@ -146,7 +146,7 @@ TEST_CASE("the sheath key cycles as 0x006e23a0 does", "[attachment]") {
 
 #include "core/preview_dressing.hpp"
 
-TEST_CASE("the select screen leaves the head off and draws the weapons (0x004e0fd0)", "[attachment]") {
+TEST_CASE("the select screen wears the head and draws the weapons (0x004e3cd0)", "[attachment]") {
     std::vector<PreviewItem> slots(23);
     slots[0] = {.display = 100, .inventoryType = 1};
     slots[4] = {.display = 104, .inventoryType = 5};
@@ -154,14 +154,22 @@ TEST_CASE("the select screen leaves the head off and draws the weapons (0x004e0f
     slots[15] = {.display = 115, .inventoryType = 13};
     slots[16] = {.display = 116, .inventoryType = 14};
     slots[17] = {.display = 117, .inventoryType = 15};
+    slots[19] = {.display = 119, .inventoryType = 18};
+    slots[21] = {.display = 121, .inventoryType = 18};
     const PreviewDress warrior = characterSelectDress(slots, 1, 0);
-    REQUIRE(warrior.worn.size() == 2);  // chest and cloak, no head
+    CHECK(warrior.head == 100);
+    REQUIRE(warrior.worn.size() == 2);  // chest and cloak
     REQUIRE(warrior.held.size() == 2);
     CHECK(warrior.held[0].point == at::kHandRight);
     CHECK(warrior.held[1].point == at::kShield);
     CHECK(warrior.held[1].shield);
-    // A hidden cloak stays off; a hunter holds the bow alone, left hand.
-    CHECK(characterSelectDress(slots, 1, kCharacterFlagHideCloak).worn.size() == 1);
+    // The bags go to the quiver slot, in order.
+    CHECK(warrior.quivers == std::vector<uint32_t>{119, 121});
+    // A hidden helm and cloak stay off; a hunter holds the bow alone, left hand.
+    const PreviewDress hidden =
+        characterSelectDress(slots, 1, kCharacterFlagHideCloak | kCharacterFlagHideHelm);
+    CHECK(hidden.worn.size() == 1);
+    CHECK(hidden.head == 0);
     const PreviewDress hunter = characterSelectDress(slots, kClassHunter, 0);
     REQUIRE(hunter.held.size() == 1);
     CHECK(hunter.held[0].display == 117);
@@ -181,4 +189,13 @@ TEST_CASE("the create screen wears the start outfit, no head", "[attachment]") {
     const PreviewDress hunter = characterCreateDress(outfit, kClassHunter);
     REQUIRE(hunter.held.size() == 1);
     CHECK(hunter.held[0].point == at::kHandRight);  // a gun, in the right hand
+    CHECK(hunter.quivers.empty());
+}
+
+TEST_CASE("the create screen's hunter wears its quiver (0x004e0fd0 case 0x12)", "[attachment]") {
+    const std::vector<PreviewItem> outfit = {{.display = 15, .inventoryType = 15},
+                                             {.display = 18, .inventoryType = 18}};
+    CHECK(characterCreateDress(outfit, kClassHunter).quivers == std::vector<uint32_t>{18});
+    // Only a hunter's.
+    CHECK(characterCreateDress(outfit, 1).quivers.empty());
 }

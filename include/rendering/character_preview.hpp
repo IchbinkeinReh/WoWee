@@ -131,10 +131,14 @@ private:
     bool loadPreviewM2(const std::string& m2Path, pipeline::M2Model& outModel);
     // Hang the character's weapons off the preview model's hand attachments.
     void attachWeapons(const std::vector<core::PreviewWeapon>& held);
+    /// The quiver slot (0x004f2640 case 0xb): the last of `displays` whose
+    /// ItemDisplayInfo has a left model, from the Quiver folder, at
+    /// attachment 26 (0x004ef250, 0x004ef3b0).
+    void attachQuiver(const std::vector<uint32_t>& displays);
     /// Armour, shoulders and - with `headDisplay` - the helmet, then the
-    /// held weapons.
+    /// held weapons and the quiver.
     bool dress(const std::vector<game::EquipmentItem>& worn, uint32_t headDisplay,
-               const std::vector<core::PreviewWeapon>& held);
+               const std::vector<core::PreviewWeapon>& held, const std::vector<uint32_t>& quivers = {});
     // Put the weapon's enchant glint on it (char enum reports the ItemVisual id directly).
     void attachWeaponEnchantVisual(uint32_t attachmentId, uint32_t itemVisualId);
     // Load the race's glue scene (Stormwind for humans, Orgrimmar for orcs, ...) as a backdrop.

@@ -753,7 +753,7 @@ std::vector<game::EquipmentItem> equipmentItems(const std::vector<core::PreviewI
 bool CharacterPreview::applyCharacterSelectEquipment(const std::vector<game::EquipmentItem>& slots,
                                                      uint32_t characterFlags) {
     const core::PreviewDress d = core::characterSelectDress(previewItems(slots), classId_, characterFlags);
-    return dress(equipmentItems(d.worn), 0, d.held);
+    return dress(equipmentItems(d.worn), d.head, d.held, d.quivers);
 }
 
 bool CharacterPreview::applyStartOutfit() {
@@ -780,11 +780,11 @@ bool CharacterPreview::applyStartOutfit() {
         }
     }
     const core::PreviewDress d = core::characterCreateDress(outfit, classId_);
-    return dress(equipmentItems(d.worn), 0, d.held);
+    return dress(equipmentItems(d.worn), d.head, d.held, d.quivers);
 }
 
 bool CharacterPreview::dress(const std::vector<game::EquipmentItem>& equipment, uint32_t headDisplay,
-                             const std::vector<core::PreviewWeapon>& held) {
+                             const std::vector<core::PreviewWeapon>& held, const std::vector<uint32_t>& quivers) {
     if (!modelLoaded_ || instanceId_ == 0 || !charRenderer_ || !assetManager_ || !assetManager_->isInitialized()) {
         return false;
     }
@@ -793,6 +793,7 @@ bool CharacterPreview::dress(const std::vector<game::EquipmentItem>& equipment, 
     // geoset/skin work that follows bails out early on characters whose body skin
     // could not be composited.
     attachWeapons(held);
+    attachQuiver(quivers);
 
     // The helmet (0x004ef0d0) and shoulders (0x004ef840), each by its
     // display; none clears the point.
@@ -1128,6 +1129,43 @@ void CharacterPreview::attachWeapons(const std::vector<core::PreviewWeapon>& hel
         // SMSG_CHAR_ENUM already reports the enchant as its ItemVisual id.
         attachWeaponEnchantVisual(w.point, w.enchant);
     }
+}
+
+void CharacterPreview::attachQuiver(const std::vector<uint32_t>& displays) {
+    if (!charRenderer_ || !assetManager_ || instanceId_ == 0) return;
+    charRenderer_->detachWeapon(instanceId_, core::attachment::kSheathMainHand);
+    auto displayInfoDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
+    if (!displayInfoDbc || !displayInfoDbc->isLoaded()) return;
+    const auto* layout = pipeline::getActiveDBCLayout()
+        ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
+    const uint32_t modelField = layout ? (*layout)["LeftModel"] : 1u;
+    const uint32_t textureField = layout ? (*layout)["LeftModelTexture"] : 3u;
+    // 0x004ef250: a display without a left model (+4) puts nothing on, and
+    // leaves what an earlier one put there.
+    std::string modelName;
+    std::string textureName;
+    for (uint32_t display : displays) {
+        const int32_t rec = displayInfoDbc->findRecordById(display);
+        if (rec < 0) continue;
+        std::string model = displayInfoDbc->getString(static_cast<uint32_t>(rec), modelField);
+        if (model.empty()) continue;
+        modelName = std::move(model);
+        textureName = displayInfoDbc->getString(static_cast<uint32_t>(rec), textureField);
+    }
+    if (modelName.empty()) return;
+    const size_t dot = modelName.rfind('.');
+    if (dot != std::string::npos) modelName.resize(dot);
+    // 0x004ef3b0: the model and its texture (+0xc) from the Quiver folder.
+    const std::string dir = "Item\\ObjectComponents\\Quiver\\";
+    const std::string m2Path = dir + modelName + ".m2";
+    pipeline::M2Model quiverModel;
+    if (!loadPreviewM2(m2Path, quiverModel)) {
+        LOG_WARNING("CharacterPreview: failed to load quiver model ", m2Path);
+        return;
+    }
+    const std::string texturePath = textureName.empty() ? std::string() : dir + textureName + ".blp";
+    charRenderer_->attachWeapon(instanceId_, core::attachment::kSheathMainHand, quiverModel,
+                                previewModelIdFor(m2Path), texturePath);
 }
 
 uint32_t CharacterPreview::previewModelIdFor(const std::string& assetKey) {
