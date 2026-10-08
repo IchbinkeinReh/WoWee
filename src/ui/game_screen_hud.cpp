@@ -156,7 +156,7 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
         playerTabardGuildId_ = gh->getEntityGuildId(gh->getPlayerGuid());
         if (playerTabardGuildId_ == 0 && gh->getActiveCharacter()) playerTabardGuildId_ = gh->getActiveCharacter()->guildId;
         emblem = gh->lookupGuildEmblem(playerTabardGuildId_);
-        playerTabardEmblemKnown_ = emblem.has_value();
+        playerTabardEmblem_ = emblem;
     }
     const std::vector<std::pair<int, std::string>> regionLayers =
         core::characterComponentLayers(*assetManager, *displayInfoDbc, componentItems, isFemale, emblem);

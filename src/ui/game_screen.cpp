@@ -802,8 +802,8 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     if (!gameHandler.getInventory().getEquipSlot(game::EquipSlot::TABARD).empty()) {
         uint32_t guildId = gameHandler.getEntityGuildId(gameHandler.getPlayerGuid());
         if (guildId == 0 && gameHandler.getActiveCharacter()) guildId = gameHandler.getActiveCharacter()->guildId;
-        const bool known = gameHandler.lookupGuildEmblem(guildId).has_value();
-        tabardEmblemChanged = guildId != playerTabardGuildId_ || known != playerTabardEmblemKnown_;
+        const auto emblem = gameHandler.lookupGuildEmblem(guildId);
+        tabardEmblemChanged = game::tabardNeedsRepaint(playerTabardGuildId_, playerTabardEmblem_, guildId, emblem);
     }
     if (inventoryScreen.consumeEquipmentDirty() || gameHandler.consumeOnlineEquipmentDirty() ||
         tabardEmblemChanged) {

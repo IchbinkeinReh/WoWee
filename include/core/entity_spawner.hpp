@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game/character.hpp"
+#include "game/guild_emblem.hpp"
 #include "game/game_services.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "rendering/blob_shadow.hpp"
@@ -211,9 +212,12 @@ public:
     /// ChrClasses Flags (+0x24) without 8: the class may draw a ranged
     /// weapon (0x00736d30).
     bool classMayDrawRanged(uint32_t classId) const;
-    /// Paints again the players and corpses whose guild tabard waited on
-    /// its guild's design, once it has come (0x006d2840, 0x00705950).
-    /// Once a frame.
+    /// Paints a tabard again as the client does (0x006db510): a player's
+    /// when its guild changes (0x006e1bb0), a player's or corpse's when its
+    /// guild's design arrives or changes (0x006d2840, 0x00705950, and
+    /// 0x006e1b40 for the guild's members after a PLAYER_GUILD_TIMESTAMP
+    /// the client had not seen asked for it again, 0x006e1c60). Once a
+    /// frame.
     void refreshGuildTabards();
     /// The BehaviorID (AnimationData +0x18) of the animation an instance
     /// plays, or kNoAnimationBehavior (0x00721ed0's reading of it).
@@ -728,9 +732,17 @@ private:
     };
     std::unordered_map<uint64_t, OnlinePlayerAppearanceState> onlinePlayerAppearance_;
     std::unordered_map<uint64_t, std::pair<std::array<uint32_t, 19>, std::array<uint8_t, 19>>> pendingOnlinePlayerEquipment_;
-    /// Players and corpses painted without their guild tabard's emblem, with
-    /// what they wear, and the design count they were painted at.
-    std::unordered_map<uint64_t, std::pair<std::array<uint32_t, 19>, std::array<uint8_t, 19>>> tabardEmblemWaits_;
+    /// Players and corpses painted wearing a tabard: what they wear, and
+    /// the guild and design it was painted with.
+    struct PaintedTabard {
+        std::array<uint32_t, 19> displayIds{};
+        std::array<uint8_t, 19> inventoryTypes{};
+        uint32_t guildId = 0;
+        std::optional<game::GuildEmblem> emblem;
+        /// Frames left before a repaint that has not landed is asked again.
+        uint16_t repaintWait = 0;
+    };
+    std::unordered_map<uint64_t, PaintedTabard> paintedTabards_;
     uint32_t tabardEmblemGeneration_ = 0;
     std::deque<std::pair<uint64_t, std::pair<std::array<uint32_t, 19>, std::array<uint8_t, 19>>>> deferredEquipmentQueue_;
     void processDeferredEquipmentQueue();

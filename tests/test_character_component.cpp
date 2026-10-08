@@ -83,3 +83,21 @@ TEST_CASE("an NPC's display slots name the component's items as a player's do", 
     // Cape: a model.
     CHECK(componentItemForNpcSlot(10) == -1);
 }
+
+TEST_CASE("a tabard is painted again on a new guild or a new design", "[component]") {
+    using wowee::game::tabardNeedsRepaint;
+    const GuildEmblem a{.emblemStyle = 1, .emblemColor = 2, .borderStyle = 3, .borderColor = 4, .backgroundColor = 5};
+    GuildEmblem b = a;
+    b.emblemColor = 7;
+    // Joining, leaving or changing guild (0x006e1bb0).
+    CHECK(tabardNeedsRepaint(0, std::nullopt, 12, std::nullopt));
+    CHECK(tabardNeedsRepaint(12, a, 0, std::nullopt));
+    CHECK(tabardNeedsRepaint(12, a, 13, a));
+    // The design arriving, or changing (0x006d2840, 0x006e1b40).
+    CHECK(tabardNeedsRepaint(12, std::nullopt, 12, a));
+    CHECK(tabardNeedsRepaint(12, a, 12, b));
+    // Nothing new: the same design, or none known yet.
+    CHECK_FALSE(tabardNeedsRepaint(12, a, 12, a));
+    CHECK_FALSE(tabardNeedsRepaint(12, a, 12, std::nullopt));
+    CHECK_FALSE(tabardNeedsRepaint(0, std::nullopt, 0, std::nullopt));
+}

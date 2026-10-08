@@ -1,5 +1,8 @@
 #pragma once
 
+#include "game/guild_emblem.hpp"
+#include <optional>
+
 #include "game/game_handler.hpp"
 #include "game/inventory.hpp"
 // WorldMap is now owned by Renderer, accessed via getWorldMap()
@@ -239,10 +242,10 @@ private:
      */
     void updateCharacterTextures(game::Inventory& inventory);
     /// The guild whose tabard design the player's body was last painted
-    /// with, and whether the design was known then; a change of either
-    /// paints it again (0x006d2840).
+    /// with, and the design then; a change of the guild (0x006e1bb0) or of
+    /// its design once known (0x006d2840, 0x006e1b40) paints it again.
     uint32_t playerTabardGuildId_ = 0;
-    bool playerTabardEmblemKnown_ = false;
+    std::optional<game::GuildEmblem> playerTabardEmblem_;
 
 
     void renderMinimapMarkers(game::GameHandler& gameHandler);

@@ -151,7 +151,7 @@ void EntitySpawner::shutdown() {
     corpseBonesInstances_.clear();
     corpseBonesModelIds_.clear();
     corpseSites_.clear();
-    tabardEmblemWaits_.clear();
+    paintedTabards_.clear();
     lootSparkleModelId_ = 0;
     lootSparkleModelTried_ = false;
     animationDataDbc_.reset();
@@ -211,7 +211,7 @@ void EntitySpawner::resetAllState() {
     corpseBonesInstances_.clear();
     corpseBonesModelIds_.clear();
     corpseSites_.clear();
-    tabardEmblemWaits_.clear();
+    paintedTabards_.clear();
     lootSparkleModelId_ = 0;
     lootSparkleModelTried_ = false;
     animationDataDbc_.reset();
@@ -523,13 +523,50 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const UnitWeaponEntrie
 }
 
 void EntitySpawner::refreshGuildTabards() {
-    if (!gameHandler_ || tabardEmblemWaits_.empty()) return;
+    if (!gameHandler_) return;
+    // 0x006e1c60 for every player in view, the active one too:
+    // PLAYER_GUILD_TIMESTAMP (UNIT_END + 9) beside PLAYER_GUILDID (+3).
+    const uint16_t unitEnd = game::fieldIndex(game::UF::UNIT_END);
+    if (unitEnd != 0xFFFF) {
+        auto note = [&](uint64_t guid) {
+            auto entity = gameHandler_->getEntityManager().getEntity(guid);
+            if (!entity || entity->getType() != game::ObjectType::PLAYER) return;
+            const uint32_t guildId = entity->getField(static_cast<uint16_t>(unitEnd + 3));
+            if (guildId != 0) gameHandler_->noteGuildTimestamp(guildId, entity->getField(static_cast<uint16_t>(unitEnd + 9)));
+        };
+        note(gameHandler_->getPlayerGuid());
+        for (const auto& [guid, instanceId] : playerInstances_) note(guid);
+    }
+
     const uint32_t generation = gameHandler_->guildEmblemGeneration();
-    if (generation == tabardEmblemGeneration_) return;
+    const bool designsArrived = generation != tabardEmblemGeneration_;
     tabardEmblemGeneration_ = generation;
-    auto waits = std::move(tabardEmblemWaits_);
-    tabardEmblemWaits_.clear();
-    for (const auto& [guid, worn] : waits) queuePlayerEquipment(guid, worn.first, worn.second);
+    for (auto it = paintedTabards_.begin(); it != paintedTabards_.end();) {
+        const uint64_t guid = it->first;
+        PaintedTabard& painted = it->second;
+        const auto siteIt = corpseSites_.find(guid);
+        if (siteIt == corpseSites_.end() && !playerInstances_.count(guid)) {
+            it = paintedTabards_.erase(it);
+            continue;
+        }
+        ++it;
+        if (painted.repaintWait > 0) {
+            --painted.repaintWait;
+            continue;
+        }
+        // A corpse's guild is CORPSE_FIELD_GUILD; a player's PLAYER_GUILDID.
+        const uint32_t guildId =
+            siteIt != corpseSites_.end() ? siteIt->second.guildId : gameHandler_->getEntityGuildId(guid);
+        bool repaint = guildId != painted.guildId;
+        if (!repaint && designsArrived) {
+            repaint = game::tabardNeedsRepaint(painted.guildId, painted.emblem, guildId,
+                                               gameHandler_->lookupGuildEmblem(guildId));
+        }
+        if (repaint) {
+            painted.repaintWait = 120;
+            queuePlayerEquipment(guid, painted.displayIds, painted.inventoryTypes);
+        }
+    }
 }
 
 std::optional<EntitySpawner::UnitWeaponEntries> EntitySpawner::unitWeaponEntries(uint64_t guid,

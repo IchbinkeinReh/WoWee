@@ -499,13 +499,18 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
         if (displayInfoIds[s] != 0) componentItems.push_back({core::componentItemIndex(s), displayInfoIds[s]});
     }
     std::optional<game::GuildEmblem> emblem;
-    tabardEmblemWaits_.erase(guid);
+    paintedTabards_.erase(guid);
     if (displayInfoIds[18] != 0 && gameHandler_) {
         const auto siteIt = corpseSites_.find(guid);
         const uint32_t guildId =
             siteIt != corpseSites_.end() ? siteIt->second.guildId : gameHandler_->getEntityGuildId(guid);
         emblem = gameHandler_->lookupGuildEmblem(guildId);
-        if (guildId != 0 && !emblem) tabardEmblemWaits_[guid] = {displayInfoIds, inventoryTypes};
+        // Painted again on a change of its guild or its guild's design
+        // (refreshGuildTabards).
+        paintedTabards_[guid] = {.displayIds = displayInfoIds,
+                                 .inventoryTypes = inventoryTypes,
+                                 .guildId = guildId,
+                                 .emblem = emblem};
     }
     const std::vector<std::pair<int, std::string>> regionLayers = core::characterComponentLayers(
         *assetManager_, *displayInfoDbc, componentItems, st.genderId == 1, emblem);

@@ -910,6 +910,8 @@ public:
     std::optional<GuildEmblem> lookupGuildEmblem(uint32_t guildId);
     /// Changes each time a guild's design arrives.
     uint32_t guildEmblemGeneration() const;
+    /// A player's PLAYER_GUILD_TIMESTAMP as seen (0x006e1c60).
+    void noteGuildTimestamp(uint32_t guildId, uint32_t timestamp);
 
     using ReadyCheckResult = game::ReadyCheckResult;
     void initiateReadyCheck();

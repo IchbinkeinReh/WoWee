@@ -1704,6 +1704,17 @@ void SocialHandler::declineGuildInvite() {
     owner_.getSocket()->send(packet);
 }
 
+void SocialHandler::noteGuildTimestamp(uint32_t guildId, uint32_t timestamp) {
+    if (guildId == 0) return;
+    auto [it, fresh] = guildTimestamps_.try_emplace(guildId, timestamp);
+    if (!fresh && it->second == timestamp) return;
+    it->second = timestamp;
+    // The record stays until the answer replaces it; a design that has not
+    // changed paints nothing new.
+    pendingGuildNameQueries_[guildId] = std::chrono::steady_clock::now();
+    queryGuildInfo(guildId);
+}
+
 void SocialHandler::queryGuildInfo(uint32_t guildId) {
     // Allow guild queries at the character screen too - the socket is
     // connected and the server accepts CMSG_GUILD_QUERY before login.

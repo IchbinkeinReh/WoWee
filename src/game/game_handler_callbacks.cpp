@@ -2650,6 +2650,10 @@ std::optional<GuildEmblem> GameHandler::lookupGuildEmblem(uint32_t guildId) {
     return socialHandler_ ? socialHandler_->lookupGuildEmblem(guildId) : std::nullopt;
 }
 
+void GameHandler::noteGuildTimestamp(uint32_t guildId, uint32_t timestamp) {
+    if (socialHandler_) socialHandler_->noteGuildTimestamp(guildId, timestamp);
+}
+
 uint32_t GameHandler::guildEmblemGeneration() const {
     return socialHandler_ ? socialHandler_->guildEmblemGeneration() : 0;
 }

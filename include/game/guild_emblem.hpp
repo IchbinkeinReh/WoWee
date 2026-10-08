@@ -4,6 +4,7 @@
 /// client's guild cache keeps it (+0x2e4..+0x2f4 of its record, 0x007eada0).
 
 #include <cstdint>
+#include <optional>
 
 namespace wowee::game {
 
@@ -22,5 +23,15 @@ struct GuildEmblem {
     }
     bool operator==(const GuildEmblem&) const = default;
 };
+
+/// Whether a tabard painted for `paintedGuild` with `paintedEmblem` is
+/// painted again: its wearer's guild has changed (0x006e1bb0), or the
+/// guild's design is known and is not the one it wears (0x006d2840, and
+/// 0x006e1b40 once a guild asked for again has answered).
+constexpr bool tabardNeedsRepaint(uint32_t paintedGuild, const std::optional<GuildEmblem>& paintedEmblem,
+                                  uint32_t guild, const std::optional<GuildEmblem>& emblem) {
+    if (guild != paintedGuild) return true;
+    return guild != 0 && emblem.has_value() && emblem != paintedEmblem;
+}
 
 }  // namespace wowee::game
