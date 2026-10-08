@@ -512,6 +512,19 @@ static std::unordered_map<std::string, std::string>& cvarStore() {
     return store;
 }
 
+/// The file as storedCVarValue last read it, for the CVars the store does not
+/// hold: one never set is not in it, and asking for one read the whole file
+/// every time - twice a frame for the nameplates alone, ~0.9 ms on Windows.
+/// Dropped whenever this process loads or writes the file.
+struct CVarFileSnapshot {
+    std::unordered_map<std::string, std::string> values;
+    bool valid = false;
+};
+static CVarFileSnapshot& cvarFileSnapshot() {
+    static CVarFileSnapshot snapshot;
+    return snapshot;
+}
+
 /// Where the CVars live between runs.
 ///
 /// Its own file rather than settings.cfg, which this client's own panel writes
@@ -531,6 +544,7 @@ static std::string cvarStorePath() {
 /// on VARIABLES_LOADED - so it came back off on every login, and so did every
 /// other option the player had set.
 static void loadStoredCVars() {
+    cvarFileSnapshot().valid = false;
     std::ifstream in(cvarStorePath());
     if (!in.is_open()) return;
     std::string line;
@@ -571,6 +585,7 @@ static void saveStoredCVars() {
         if (kv->second.find('\n') != std::string::npos) continue;
         out << kv->first << '=' << kv->second << '\n';
     }
+    cvarFileSnapshot().valid = false;
 }
 
 /// Tutorials the player has already been shown.
@@ -1726,22 +1741,28 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
 /// indistinguishable from the fault this exists to fix.
 std::string storedCVarValue(const std::string& key, const std::string& fallback) {
     // The store first, for a call made after the interface is up; the file
-    // otherwise, which is the case this exists for. Reading the file twice
-    // costs nothing and keeps the two answers the same.
+    // otherwise, which is the case this exists for - read once and kept
+    // (cvarFileSnapshot) until this process loads or writes it again.
     std::string wanted = key;
     toLowerInPlace(wanted);
     if (auto it = cvarStore().find(wanted); it != cvarStore().end()) return it->second;
 
-    std::ifstream in(cvarStorePath());
-    if (!in.is_open()) return fallback;
-    std::string line;
-    while (std::getline(in, line)) {
-        const size_t eq = line.find('=');
-        if (eq == std::string::npos || eq == 0) continue;
-        std::string k = line.substr(0, eq);
-        toLowerInPlace(k);
-        if (k == wanted) return line.substr(eq + 1);
+    CVarFileSnapshot& snapshot = cvarFileSnapshot();
+    if (!snapshot.valid) {
+        snapshot.values.clear();
+        snapshot.valid = true;
+        std::ifstream in(cvarStorePath());
+        std::string line;
+        while (in.is_open() && std::getline(in, line)) {
+            const size_t eq = line.find('=');
+            if (eq == std::string::npos || eq == 0) continue;
+            std::string k = line.substr(0, eq);
+            toLowerInPlace(k);
+            // The first row for a key, as reading line by line answered.
+            snapshot.values.emplace(std::move(k), line.substr(eq + 1));
+        }
     }
+    if (auto it = snapshot.values.find(wanted); it != snapshot.values.end()) return it->second;
     return fallback;
 }
 
