@@ -9,6 +9,7 @@
 // afterwards without being torn down.
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 struct ImFont;
@@ -18,6 +19,10 @@ namespace wowee::ui {
 /// Records a face under a path or filename. Later registrations of the same
 /// face replace the earlier one.
 void registerInterfaceFace(const std::string& pathOrName, ImFont* font);
+
+/// Changes whenever a face is registered. Anything measured against the faces
+/// - every label that sizes itself from its text - is stale once it moves.
+uint64_t interfaceFaceGeneration();
 
 /// The face for a path a font object named, or null if it was never loaded -
 /// in which case the caller should draw with whatever it was already using.

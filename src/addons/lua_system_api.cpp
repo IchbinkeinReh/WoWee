@@ -7153,6 +7153,8 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             w->texturePath = "Interface\\TaxiFrame\\TaxiMap" +
                              std::to_string(gh ? gh->getCurrentMapId() : 0u);
+            // A texture is sized from its file; see WidgetTree::markMeasureDirty.
+            tree->markMeasureDirty(id);
             return 0;
         }},
                 {"CloseTaxiMap", [](lua_State* L) -> int {

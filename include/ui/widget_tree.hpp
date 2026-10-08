@@ -18,6 +18,8 @@
 // grows upward. Converting at the point of drawing keeps every anchor rule here
 // readable against Blizzard's own documentation, rather than mirrored.
 
+#include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -81,6 +83,59 @@ struct Anchor {
 /// agree: an axis that reports a span here and is then solved some other way,
 /// or the reverse, is a region sized twice or not at all.
 bool anchorsSpanAxis(const std::vector<Anchor>& anchors, bool xAxis);
+
+/// A set of widget ids, one bit each, read back in ascending order.
+///
+/// What the per-frame passes keep instead of walking every widget. Of the
+/// 28,000 widgets FrameXML builds a few hundred are on screen and fewer still
+/// change in a given frame, and a Widget is a large struct - so a pass that
+/// asks each one "did you change?" pays a cache miss per widget to hear "no"
+/// almost every time. A bit per widget is 3.5KB for the whole tree.
+///
+/// Ascending order is why this is a bitmap and not a list: the passes that
+/// read it fire scripts, and they fire them in widget id order, which is the
+/// order the full walks always had. takeFrom also sees a bit set above where
+/// it is reading, so a handler that changes a later widget has that widget
+/// picked up in the same pass - again as the walk did.
+class IdBits {
+public:
+    void set(uint32_t id) {
+        const std::size_t word = id >> 6;
+        if (word >= words_.size()) words_.resize(word + 1, 0);
+        words_[word] |= uint64_t{1} << (id & 63);
+    }
+    void reset(uint32_t id) {
+        const std::size_t word = id >> 6;
+        if (word < words_.size()) words_[word] &= ~(uint64_t{1} << (id & 63));
+    }
+    void clear() { words_.clear(); }
+    [[nodiscard]] bool test(uint32_t id) const {
+        const std::size_t word = id >> 6;
+        return word < words_.size() && ((words_[word] >> (id & 63)) & 1u) != 0;
+    }
+    /// The lowest id at or above `from` whose bit is set, or zero when there
+    /// is none. Id zero is never a widget, so it is free to mean "done".
+    [[nodiscard]] uint32_t nextFrom(uint32_t from) const {
+        std::size_t word = from >> 6;
+        if (word >= words_.size()) return 0;
+        uint64_t bits = words_[word] & (~uint64_t{0} << (from & 63));
+        while (bits == 0) {
+            if (++word >= words_.size()) return 0;
+            bits = words_[word];
+        }
+        return static_cast<uint32_t>((word << 6) |
+                                     static_cast<unsigned>(std::countr_zero(bits)));
+    }
+    /// nextFrom, clearing the bit it hands back.
+    uint32_t takeFrom(uint32_t from) {
+        const uint32_t id = nextFrom(from);
+        if (id != 0) reset(id);
+        return id;
+    }
+
+private:
+    std::vector<uint64_t> words_;
+};
 
 struct Widget {
     uint32_t id = 0;
@@ -845,6 +900,49 @@ public:
     /// Something moved, resized or changed parent - every rect is stale.
     void markLayoutDirty() { ++layoutGeneration_; }
 
+    /// Whether an id names a widget. The marks below take ids from Lua, and a
+    /// set grows to hold whatever it is given - a stray huge number would be
+    /// half a gigabyte of bits.
+    [[nodiscard]] bool isWidgetId(uint32_t id) const {
+        return id != 0 && id < widgets_.size();
+    }
+
+    // ── What changed since the per-frame passes last looked ─────────────────
+    //
+    // Each of these passes used to walk all 28,000 widgets every frame to find
+    // the handful that had anything to do. They now read a set of ids instead,
+    // and everything that can change the answer for a widget puts it in the
+    // set. Putting a widget in that has nothing to do is harmless - each pass
+    // asks the same question of it the walk did, and gets "nothing" - so the
+    // rule is to mark generously and never to miss.
+
+    /// A label or texture whose size may need measuring again: its text,
+    /// face, font height, anchors, declared size, texture, wrap flags or
+    /// button role changed. The tree's own setters mark this; Lua bindings
+    /// that write those fields directly must call it. See
+    /// WidgetRenderer::sizeArtAndText.
+    void markMeasureDirty(uint32_t id) { if (isWidgetId(id)) measureDirty_.set(id); }
+    /// Every widget, for a change that is not any one widget's - a face
+    /// registered late, a different default font size.
+    void markAllMeasureDirty() {
+        for (uint32_t id = 1; id < widgets_.size(); ++id) measureDirty_.set(id);
+    }
+    /// The next widget at or above `from` waiting to be measured, taken off
+    /// the list; zero when there are no more.
+    uint32_t takeMeasureDirty(uint32_t from) { return measureDirty_.takeFrom(from); }
+
+    /// A widget whose `visible` may differ from what the interface was last
+    /// told, or whose `shownToggles` is not zero. Set wherever either changes;
+    /// read by LuaEngine::updateVisibility.
+    void markVisibilityPending(uint32_t id) { if (isWidgetId(id)) visibilityPending_.set(id); }
+    uint32_t takeVisibilityPending(uint32_t from) { return visibilityPending_.takeFrom(from); }
+
+    /// A widget whose rect may have changed size since OnSizeChanged was last
+    /// considered for it, or that has never been considered. Read by
+    /// LuaEngine::updateSizeChanges.
+    void markResizePending(uint32_t id) { if (isWidgetId(id)) resizePending_.set(id); }
+    uint32_t takeResizePending(uint32_t from) { return resizePending_.takeFrom(from); }
+
     /// Pixels per interface unit, from the last layout.
     /// How many pixels one interface unit is worth, after the player's own
     /// scale. Everything that converts between units and pixels uses this, so
@@ -1026,6 +1124,22 @@ private:
     /// subtree that has been marked once stays marked.
     uint64_t visibilityRaises_ = 1;
     uint32_t lastVisibleCount_ = 0;
+    /// See markMeasureDirty, markVisibilityPending and markResizePending.
+    IdBits measureDirty_;
+    IdBits visibilityPending_;
+    IdBits resizePending_;
+    /// Every widget that has been `visible` since collectDrawOrder last saw it
+    /// hidden: a superset of the visible ones, kept so the draw order is
+    /// collected from a few hundred widgets rather than from all of them. Set
+    /// wherever `visible` becomes true, and trimmed by collectDrawOrder.
+    IdBits mayBeVisible_;
+    /// Write `visible`, keeping the sets above in step with it.
+    void setVisible(Widget& w, bool visible) {
+        if (w.visible == visible) return;
+        w.visible = visible;
+        visibilityPending_.set(w.id);
+        if (visible) mayBeVisible_.set(w.id);
+    }
 
 public:
     /// The anchor walk and the draw-order collection of the last full pass,

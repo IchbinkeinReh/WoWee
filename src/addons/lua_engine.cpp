@@ -354,6 +354,22 @@ wowee::ui::Widget* widgetOf(lua_State* L, int index) {
     return tree->get(widgetIdOf(L, index));
 }
 
+/// The same widget, for a setter about to write something it is measured
+/// from - its text, face, font height, texture, wrap or button role.
+///
+/// The sizing pass only looks at widgets the tree has been told about (see
+/// WidgetTree::markMeasureDirty), and these fields are written here directly
+/// rather than through the tree, so the setter has to say so itself. A setter
+/// that skips this leaves the label at the size of what it said before.
+wowee::ui::Widget* widgetToRemeasure(lua_State* L, int index) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    if (!tree) return nullptr;
+    const uint32_t id = widgetIdOf(L, index);
+    auto* w = tree->get(id);
+    if (w) tree->markMeasureDirty(id);
+    return w;
+}
+
 /// The same widget, with its rect resolved first.
 ///
 /// For the getters that answer a measurement. A rect used to be whatever the
@@ -1401,7 +1417,7 @@ int lua_Button_UnlockHighlight(lua_State* L) {
 }
 
 int lua_Texture_SetButtonArt(lua_State* L) {
-    auto* w = widgetOf(L, 1);
+    auto* w = widgetToRemeasure(L, 1);
     if (!w) return 0;
     const std::string slot = luaL_optstring(L, 2, "");
     using wowee::ui::ButtonArt;
@@ -1538,7 +1554,7 @@ int lua_FontString_CanWordWrap(lua_State* L) {
     return 1;
 }
 int lua_FontString_SetNonSpaceWrap(lua_State* L) {
-    auto* w = widgetOf(L, 1);
+    auto* w = widgetToRemeasure(L, 1);
     if (w) w->nonSpaceWrap = lua_toboolean(L, 2) != 0;
     return 0;
 }
@@ -3444,6 +3460,8 @@ int lua_Region_Show(lua_State* L) {
         // comparing against the last state it reported - so the rebuild the
         // interface asked for is invisible to it. See Widget::shownToggles.
         if (!w->shown && w->shownToggles < 200) ++w->shownToggles;
+        // Owed a look from updateVisibility, which reads only marked frames.
+        if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markVisibilityPending(w->id);
         becameShown = !w->shown;
         w->shown = true;
     }
@@ -3504,6 +3522,9 @@ int lua_Region_Hide(lua_State* L) {
         // the startTime its OnShow was going to set. Reported in #132.
         if (w->shown && frameScriptSet(L, 1, "OnHide") && w->shownToggles < 200) {
             ++w->shownToggles;
+            if (auto* tree = wowee::addons::getWidgetTree(L)) {
+                tree->markVisibilityPending(w->id);
+            }
         }
         // A hidden tooltip belongs to nobody.
         //
@@ -3581,7 +3602,7 @@ int lua_Region_GetAlpha(lua_State* L) {
 
 // SetTexture takes either a path or a colour, and addons use both freely.
 int lua_Texture_SetTexture(lua_State* L) {
-    auto* w = widgetOf(L, 1);
+    auto* w = widgetToRemeasure(L, 1);
     if (!w) return 0;
     if (lua_isnumber(L, 2)) {
         w->solidColor = true;
@@ -3753,7 +3774,7 @@ int lua_FontString_SetText(lua_State* L) {
     // chatconfigframe's whole OnEvent.
     const char* text = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
     const std::string shown = wowee::ui::resolvePluralEscapes(text);
-    if (auto* w = widgetOf(L, 1)) w->text = shown;
+    if (auto* w = widgetToRemeasure(L, 1)) w->text = shown;
     // GetText answers what was set, not what is drawn. WoW resolves the escape
     // on the way to the screen and hands the original back, and FrameXML reads
     // its own labels back in a few places to re-format them.
@@ -3854,7 +3875,7 @@ int lua_FontString_SetTextColor(lua_State* L) {
 }
 
 int lua_FontString_SetFont(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
+    if (auto* w = widgetToRemeasure(L, 1)) {
         if (lua_isstring(L, 2)) w->fontFace = lua_tostring(L, 2);
         // The flags argument, where "OUTLINE" and "THICKOUTLINE" arrive.
         if (const char* flags = lua_isstring(L, 4) ? lua_tostring(L, 4) : nullptr) {
@@ -3924,6 +3945,8 @@ int lua_FontString_SetSpacing(lua_State* L) {
 /// the font string it holds.
 static void applyFontObject(lua_State* L, int fontIndex, wowee::ui::Widget* w) {
     if (!w) return;
+    // A face and a height, both of which the label is measured from.
+    if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markMeasureDirty(w->id);
     if (lua_isstring(L, fontIndex)) {       // by name
         // Remembered, not only unpacked. GetFontObject has to hand the object
         // back, and the fields copied out of it cannot be reassembled into the
@@ -4013,7 +4036,7 @@ int lua_FontString_SetShadowColor(lua_State* L) {
 /// its template carried and sat there. Combat feedback sizes its numbers by
 /// hit type through the same call, and the scrolling combat text its crits.
 int lua_FontString_SetTextHeight(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
+    if (auto* w = widgetToRemeasure(L, 1)) {
         const double h = luaL_optnumber(L, 2, 0.0);
         if (h > 0.0) w->fontHeight = static_cast<float>(h);
     }
@@ -10205,10 +10228,18 @@ void LuaEngine::reportEventListenersOnce() {
 /// fired from SetWidth, because a frame is far more often resized by its
 /// anchors than by anyone calling a setter - a scroll child stretched by its
 /// parent never goes near SetWidth.
+///
+/// Only the frames the tree saw resized, or never reported: every write of a
+/// rect marks the widget (WidgetTree::markResizePending), so the rest would
+/// compare equal and be skipped anyway. Walking all 28,000 to find that out
+/// was most of this pass. Taken in ascending id order, re-reading the set as
+/// it goes, so handlers run in the order the full walk ran them and a frame a
+/// handler resizes further on is reached in the same pass, as it was.
 void LuaEngine::updateSizeChanges() {
     if (!L_) return;
-    for (size_t id = 1; id < widgets_.size(); ++id) {
-        const ui::Widget* wp = widgets_.get(static_cast<uint32_t>(id));
+    for (uint32_t id = widgets_.takeResizePending(1); id != 0;
+         id = widgets_.takeResizePending(id + 1)) {
+        const ui::Widget* wp = widgets_.get(id);
         if (!wp) continue;
         const ui::Widget& w = *wp;
         if (w.id == 0 || w.kind != ui::WidgetKind::Frame) continue;
@@ -10272,7 +10303,16 @@ void LuaEngine::updateVisibility() {
     // handlers is worth the risk of waking the rest.
     //
     // (UIParent looks like a seventh and is not: it carries setAllPoints.)
-    for (uint32_t id = 1; id < widgets_.size(); ++id) {
+    //
+    // Only the frames marked as owing a look - `visible` changed, or Lua
+    // toggled `shown` (WidgetTree::markVisibilityPending). Any other frame
+    // has nothing to report and no toggles to clear, which is the first
+    // `continue` below; walking all 28,000 to arrive there was the cost of
+    // this pass. Ascending, and re-reading the set as it goes, so scripts run
+    // in the order the full walk ran them and a frame a handler changes
+    // further on is still reached this pass.
+    for (uint32_t id = widgets_.takeVisibilityPending(1); id != 0;
+         id = widgets_.takeVisibilityPending(id + 1)) {
         auto* w = widgets_.get(id);
         if (!w || w->id == 0) continue;
         const uint8_t toggles = w->shownToggles;

@@ -601,15 +601,70 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
 /// dispatching on kind gives the same result.
 ///
 /// Tooltips are deliberately not in here; see sizeTooltipWidget.
+///
+/// And only the widgets that changed. One scan was still 2.3ms a frame, over
+/// 28,215 widgets of which nearly every one had been measured already and
+/// answered "same text, same face, same size" - a cache miss apiece to learn
+/// nothing. A measurement reads only the widget's own fields plus a few
+/// things every widget shares, so the tree marks a widget whenever one of its
+/// fields changes (WidgetTree::markMeasureDirty), and everything is marked
+/// whenever one of the shared things does. Measuring a widget that did not
+/// need it changes nothing, so marking too much is only ever slower.
 void WidgetRenderer::sizeArtAndText(WidgetTree& tree) {
     ImFont* font = interfaceFace("frizqt__");
     if (!font) font = ImGui::GetFont();
 
-    for (size_t id = 1; id < tree.size(); ++id) {
-        Widget* w = tree.get(static_cast<uint32_t>(id));
-        if (!w) continue;
+    // What the measurements depend on beyond the widget itself. The
+    // interface's own typeface is registered after the first frames have been
+    // laid out, a label with no height of its own takes the current font
+    // size, and a texture cannot be sized until there are assets to read it
+    // from - any of those moving means every earlier answer may be wrong.
+    const SizingInputs inputs{
+        .tree = &tree,
+        .assets = assets_,
+        .defaultFace = font,
+        .currentFont = ImGui::GetCurrentContext() ? ImGui::GetFont() : nullptr,
+        .currentFontSize = ImGui::GetCurrentContext() ? ImGui::GetFontSize() : 0.0f,
+        .uiScale = tree.uiScale(),
+        .faceGeneration = interfaceFaceGeneration(),
+    };
+    if (!(inputs == sizingInputs_)) {
+        sizingInputs_ = inputs;
+        tree.markAllMeasureDirty();
+    }
+
+    const auto measure = [&](Widget* w) {
         if (font && w->kind == WidgetKind::FontString) sizeFontStringWidget(w, font);
         else if (w->kind == WidgetKind::Texture) sizeTextureWidget(w);
+    };
+    for (uint32_t id = tree.takeMeasureDirty(1); id != 0;
+         id = tree.takeMeasureDirty(id + 1)) {
+        Widget* w = tree.get(id);
+        if (!w) continue;
+        // No face to measure with is not a measurement; keep it for when
+        // there is one. The scan used to retry it every frame the same way.
+        if (!font && w->kind == WidgetKind::FontString) {
+            measureDeferred_.push_back(id);
+            continue;
+        }
+        measure(w);
+    }
+    for (uint32_t id : measureDeferred_) tree.markMeasureDirty(id);
+    measureDeferred_.clear();
+
+    // A slow sweep under the marks, as a net. Every field a measurement reads
+    // is written in a handful of places that mark the widget, but a new
+    // binding that writes one directly and forgets to would leave a label at a
+    // stale size for good. This re-measures a slice of the tree each frame,
+    // all of it every second or so at the frame rates this runs at, so such a
+    // miss costs a moment of a wrong size rather than the session. 512 of
+    // 28,000 widgets is about 2% of what the full scan cost.
+    constexpr uint32_t kSweepPerFrame = 512;
+    const uint32_t count = static_cast<uint32_t>(tree.size());
+    for (uint32_t n = 0; n < kSweepPerFrame && count > 1; ++n) {
+        if (sizingSweepAt_ == 0 || sizingSweepAt_ >= count) sizingSweepAt_ = 1;
+        if (Widget* w = tree.get(sizingSweepAt_)) measure(w);
+        ++sizingSweepAt_;
     }
 }
 

@@ -2,8 +2,10 @@
 
 #include "ui/widget_tree.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <string>
+#include <vector>
 
 using namespace wowee::ui;
 
@@ -3060,4 +3062,170 @@ TEST_CASE("a hidden frame still answers for its own rect") {
     tree.resolveWidget(inner);
     CHECK(tree.get(inner)->rectW == Catch::Approx(200.0f));
     CHECK(tree.get(inner)->rectH == Catch::Approx(60.0f));
+}
+
+// The per-frame passes - measuring labels and textures, reporting OnShow and
+// OnHide, reporting OnSizeChanged, collecting the draw order - read sets of
+// changed widgets instead of walking all 28,000. Each is only as correct as
+// the marking behind it: a change that does not mark its widget is a change
+// those passes never see. Pin the marks the tree itself is responsible for.
+namespace {
+std::vector<uint32_t> drain(WidgetTree& tree, uint32_t (WidgetTree::*take)(uint32_t)) {
+    std::vector<uint32_t> ids;
+    for (uint32_t id = (tree.*take)(1); id != 0; id = (tree.*take)(id + 1)) {
+        ids.push_back(id);
+    }
+    return ids;
+}
+bool contains(const std::vector<uint32_t>& ids, uint32_t id) {
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+}  // namespace
+
+TEST_CASE("An id set hands ids back in ascending order", "[widget][dirty]") {
+    IdBits bits;
+    bits.set(200);
+    bits.set(3);
+    bits.set(64);
+    bits.set(63);
+    std::vector<uint32_t> seen;
+    for (uint32_t id = bits.takeFrom(1); id != 0; id = bits.takeFrom(id + 1)) {
+        seen.push_back(id);
+        // Set during the walk, the way a script changes another widget: one
+        // further on is reached in this walk, one already passed waits.
+        if (id == 63) { bits.set(150); bits.set(10); }
+    }
+    CHECK(seen == std::vector<uint32_t>{3, 63, 64, 150, 200});
+    CHECK(bits.test(10));
+    CHECK(bits.takeFrom(1) == 10);
+    CHECK(bits.takeFrom(1) == 0);
+}
+
+TEST_CASE("Changing what a region is sized from marks it to be measured",
+          "[widget][dirty]") {
+    WidgetTree tree;
+    const uint32_t label = tree.create(WidgetKind::FontString, tree.uiParentId(), "L");
+    const uint32_t art = tree.create(WidgetKind::Texture, tree.uiParentId(), "T");
+    // New widgets have never been measured.
+    auto first = drain(tree, &WidgetTree::takeMeasureDirty);
+    CHECK(contains(first, label));
+    CHECK(contains(first, art));
+
+    // A layout pass changes nothing a measurement reads.
+    tree.layout(kScreenW, kScreenH);
+    CHECK(drain(tree, &WidgetTree::takeMeasureDirty).empty());
+
+    tree.setWidth(label, 0.0f);
+    tree.addPoint(art, Anchor{});
+    auto second = drain(tree, &WidgetTree::takeMeasureDirty);
+    CHECK(second == std::vector<uint32_t>{label, art});
+
+    tree.setHeight(label, 10.0f);
+    CHECK(drain(tree, &WidgetTree::takeMeasureDirty) == std::vector<uint32_t>{label});
+    tree.clearPoints(art);
+    CHECK(drain(tree, &WidgetTree::takeMeasureDirty) == std::vector<uint32_t>{art});
+    tree.setAllPoints(art, 0);
+    CHECK(drain(tree, &WidgetTree::takeMeasureDirty) == std::vector<uint32_t>{art});
+
+    tree.markAllMeasureDirty();
+    CHECK(drain(tree, &WidgetTree::takeMeasureDirty).size() == tree.size() - 1);
+}
+
+TEST_CASE("A frame that appears or disappears is marked for the visibility pass",
+          "[widget][dirty]") {
+    WidgetTree tree;
+    const uint32_t panel = tree.create(WidgetKind::Frame, tree.uiParentId(), "Panel");
+    tree.addPoint(panel, Anchor{});
+    tree.setWidth(panel, 100.0f);
+    tree.setHeight(panel, 100.0f);
+    const uint32_t child = tree.create(WidgetKind::Frame, panel, "Child");
+    tree.addPoint(child, Anchor{});
+    const uint32_t other = tree.create(WidgetKind::Frame, tree.uiParentId(), "Other");
+    tree.addPoint(other, Anchor{});
+
+    tree.layout(kScreenW, kScreenH);
+    auto shown = drain(tree, &WidgetTree::takeVisibilityPending);
+    CHECK(contains(shown, panel));
+    CHECK(contains(shown, child));
+    CHECK(contains(shown, other));
+
+    // Nothing changed, nothing owed.
+    tree.layout(kScreenW, kScreenH);
+    CHECK(drain(tree, &WidgetTree::takeVisibilityPending).empty());
+
+    // Hiding the panel takes its child with it; the frame beside it is
+    // untouched and is not marked.
+    tree.get(panel)->shown = false;
+    tree.layout(kScreenW, kScreenH);
+    auto hidden = drain(tree, &WidgetTree::takeVisibilityPending);
+    CHECK(hidden == std::vector<uint32_t>{panel, child});
+    CHECK_FALSE(tree.get(child)->visible);
+}
+
+TEST_CASE("A frame whose rect changes size is marked for OnSizeChanged",
+          "[widget][dirty]") {
+    WidgetTree tree;
+    const uint32_t panel = tree.create(WidgetKind::Frame, tree.uiParentId(), "Panel");
+    tree.addPoint(panel, Anchor{});
+    tree.setWidth(panel, 100.0f);
+    tree.setHeight(panel, 100.0f);
+    // Stretched by its anchors, so its size changes without a setter of its own.
+    const uint32_t fill = tree.create(WidgetKind::Frame, panel, "Fill");
+    tree.setAllPoints(fill, 0);
+    const uint32_t still = tree.create(WidgetKind::Frame, tree.uiParentId(), "Still");
+    tree.addPoint(still, Anchor{});
+    tree.setWidth(still, 10.0f);
+    tree.setHeight(still, 10.0f);
+
+    tree.layout(kScreenW, kScreenH);
+    // New frames are owed their first report, whatever their size.
+    auto first = drain(tree, &WidgetTree::takeResizePending);
+    CHECK(contains(first, panel));
+    CHECK(contains(first, fill));
+    CHECK(contains(first, still));
+
+    tree.layout(kScreenW, kScreenH);
+    CHECK(drain(tree, &WidgetTree::takeResizePending).empty());
+
+    tree.setWidth(panel, 150.0f);
+    tree.layout(kScreenW, kScreenH);
+    CHECK(drain(tree, &WidgetTree::takeResizePending) ==
+          std::vector<uint32_t>{panel, fill});
+    CHECK(tree.get(fill)->rectW == Catch::Approx(150.0f));
+
+    // Moved but not resized: no size change to report.
+    tree.nudge(panel, 5.0f, 5.0f);
+    tree.layout(kScreenW, kScreenH);
+    CHECK(drain(tree, &WidgetTree::takeResizePending).empty());
+}
+
+TEST_CASE("The draw order follows a frame hidden and shown again",
+          "[widget][dirty]") {
+    WidgetTree tree;
+    const uint32_t a = tree.create(WidgetKind::Frame, tree.uiParentId(), "A");
+    tree.addPoint(a, Anchor{});
+    tree.setWidth(a, 50.0f);
+    tree.setHeight(a, 50.0f);
+    tree.get(a)->hasBackdrop = true;
+    const uint32_t b = tree.create(WidgetKind::Frame, tree.uiParentId(), "B");
+    tree.addPoint(b, Anchor{});
+    tree.setWidth(b, 50.0f);
+    tree.setHeight(b, 50.0f);
+    tree.get(b)->hasBackdrop = true;
+
+    const auto drawn = [&] {
+        std::vector<uint32_t> ids;
+        for (const Widget* w : tree.drawOrder()) ids.push_back(w->id);
+        return ids;
+    };
+    tree.layout(kScreenW, kScreenH);
+    CHECK(drawn() == std::vector<uint32_t>{a, b});
+
+    tree.get(a)->shown = false;
+    tree.layout(kScreenW, kScreenH);
+    CHECK(drawn() == std::vector<uint32_t>{b});
+
+    tree.get(a)->shown = true;
+    tree.layout(kScreenW, kScreenH);
+    CHECK(drawn() == std::vector<uint32_t>{a, b});
 }

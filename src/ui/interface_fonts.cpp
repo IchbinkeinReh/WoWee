@@ -36,6 +36,11 @@ std::unordered_map<std::string, ImFont*>& faces() {
     return map;
 }
 
+uint64_t& faceGeneration() {
+    static uint64_t generation = 0;
+    return generation;
+}
+
 /// A big-endian field out of a font file, or zero past the end.
 ///
 /// Bounds-checked on every read rather than once at the top: a truncated font
@@ -53,6 +58,11 @@ uint32_t beAt(const uint8_t* d, size_t n, size_t at, int bytes) {
 void registerInterfaceFace(const std::string& pathOrName, ImFont* font) {
     if (!font) return;
     faces()[faceKey(pathOrName)] = font;
+    ++faceGeneration();
+}
+
+uint64_t interfaceFaceGeneration() {
+    return faceGeneration();
 }
 
 ImFont* interfaceFace(const std::string& pathOrName) {

@@ -118,6 +118,10 @@ void WidgetTree::reset() {
     lastPixelW_ = 0.0f;
     lastPixelH_ = 0.0f;
     layingOut_ = false;
+    measureDirty_.clear();
+    visibilityPending_.clear();
+    resizePending_.clear();
+    mayBeVisible_.clear();
     markLayoutDirty();
 
     widgets_.emplace_back();          // id 0 is "none"
@@ -137,6 +141,12 @@ uint32_t WidgetTree::create(WidgetKind kind, uint32_t parent, const std::string&
     w.kind = kind;
     w.name = name;
     w.creationOrder = nextOrder_++;
+    // New, so everything about it is unmeasured and unreported: a label or
+    // texture that sizes itself has not done so, and a frame has never had
+    // its first size recorded - updateSizeChanges has to see it once to know
+    // what a later change is a change from.
+    measureDirty_.set(id);
+    resizePending_.set(id);
     // Regions belong to the frame that made them; a widget with no parent
     // hangs off the screen, which is the root and sits above UIParent.
     if (parent == 0 && id != rootId_ && rootId_ != 0) parent = rootId_;
@@ -223,7 +233,7 @@ void WidgetTree::hideOrphanedTooltips() {
         // own right after LootFrame hides above it.
         if (owner && owner->visibleChain) continue;
         tip->shown = false;
-        tip->visible = false;
+        setVisible(*tip, false);
         tip->visibleChain = false;
     }
 }
@@ -304,11 +314,14 @@ const Widget* WidgetTree::get(uint32_t id) const {
 
 void WidgetTree::clearPoints(uint32_t id) {
     markLayoutDirty();
+    markMeasureDirty(id);
     if (Widget* w = get(id)) w->anchors.clear();
 }
 
 void WidgetTree::setWidth(uint32_t id, float width) {
     markLayoutDirty();
+    markMeasureDirty(id);
+    markResizePending(id);
     Widget* w = get(id);
     if (!w || !std::isfinite(width)) return;
     // Zero on a font string means "as wide as your text", not "no width".
@@ -338,6 +351,8 @@ void WidgetTree::setWidth(uint32_t id, float width) {
 
 void WidgetTree::setHeight(uint32_t id, float height) {
     markLayoutDirty();
+    markMeasureDirty(id);
+    markResizePending(id);
     Widget* w = get(id);
     if (!w || !std::isfinite(height)) return;
     // Zero height on a font string is "be as tall as your text needs", the
@@ -365,6 +380,7 @@ void WidgetTree::setHeight(uint32_t id, float height) {
 
 void WidgetTree::pinToCurrentPosition(uint32_t id) {
     markLayoutDirty();
+    markMeasureDirty(id);
     Widget* w = get(id);
     if (!w) return;
     const Widget* parent = get(w->parent);
@@ -433,6 +449,7 @@ void clampInside(const Widget& screen, float rectW, float rectH,
 void WidgetTree::resizeBy(uint32_t id, const std::string& point,
                           float dx, float dy) {
     markLayoutDirty();
+    markMeasureDirty(id);
     Widget* w = get(id);
     if (!w) return;
 
@@ -479,6 +496,7 @@ void WidgetTree::resizeBy(uint32_t id, const std::string& point,
 
 void WidgetTree::nudge(uint32_t id, float dx, float dy) {
     markLayoutDirty();
+    markMeasureDirty(id);
     Widget* w = get(id);
     if (!w) return;
     // A clamped frame stops at the screen edge. The rect used is the one the
@@ -582,6 +600,7 @@ void WidgetTree::lower(uint32_t id) {
 
 void WidgetTree::addPoint(uint32_t id, const Anchor& anchor) {
     markLayoutDirty();
+    markMeasureDirty(id);
     Widget* w = get(id);
     if (!w) return;
     // Geometry that is not a number never enters the tree. Once one does it
@@ -619,6 +638,7 @@ void WidgetTree::addPoint(uint32_t id, const Anchor& anchor) {
 
 void WidgetTree::setAllPoints(uint32_t id, uint32_t relativeTo) {
     markLayoutDirty();
+    markMeasureDirty(id);
     Widget* w = get(id);
     if (!w) return;
     w->anchors.clear();
@@ -754,11 +774,13 @@ void WidgetTree::layout(float pixelW, float pixelH) {
     Widget& rootW = widgets_[rootId_];
     rootW.left = 0.0f;
     rootW.bottom = 0.0f;
+    if (rootW.rectW != screenW || rootW.rectH != screenH) markResizePending(rootId_);
     rootW.rectW = screenW;
     rootW.rectH = screenH;
     if ((!rootW.visibleChain || !rootW.visible) && rootW.shown) ++visibilityRaises_;
     rootW.visibleChain = rootW.shown;
-    rootW.visible = rootW.shown;
+    setVisible(rootW, rootW.shown);
+    if (rootW.visible) mayBeVisible_.set(rootId_);
     rootW.effStrata = rootW.strata;
     rootW.effLevel = 0;
     rootW.effScale = 1.0f;
@@ -770,12 +792,14 @@ void WidgetTree::layout(float pixelW, float pixelH) {
     if (Widget* ui = get(uiParentId_); ui && ui != &rootW) {
         ui->left = 0.0f;
         ui->bottom = 0.0f;
+        if (ui->rectW != screenW || ui->rectH != screenH) markResizePending(ui->id);
         ui->rectW = screenW;
         ui->rectH = screenH;
         const bool uiVisible = rootW.visible && ui->shown;
         if (uiVisible && (!ui->visibleChain || !ui->visible)) ++visibilityRaises_;
         ui->visibleChain = uiVisible;
-        ui->visible = uiVisible;
+        setVisible(*ui, uiVisible);
+        if (ui->visible) mayBeVisible_.set(ui->id);
         ui->effStrata = ui->strata;
         ui->effLevel = 0;
         ui->effScale = 1.0f;
@@ -825,7 +849,7 @@ void WidgetTree::markSubtreeHidden(uint32_t id) {
             // answer, because resolveWidget re-derives whatever the last full
             // pass did not claim.
             c->visibleChain = false;
-            c->visible = false;
+            setVisible(*c, false);
         }
         markSubtreeHidden(child);
     }
@@ -875,6 +899,10 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     Widget* w = get(id);
     if (!w) return;
     w->resolvedGen = layoutGeneration_;
+    // Compared at the end, so OnSizeChanged is considered for this widget only
+    // when the solve below gave it a different size. A nan compares unequal to
+    // itself and so is marked every time, which is what the full walk did too.
+    const float oldRectW = w->rectW, oldRectH = w->rectH;
     const Widget* parent = get(w->parent);
 
     // A frame with no anchor points is not displayed. That is WoW's rule, and
@@ -916,7 +944,10 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     // anchored child of an unanchored frame has nowhere to be either, because
     // the thing it is anchored to has no position. Deriving this from the
     // chain instead put those children back on screen.
-    w->visible = w->shown && (!parent || parent->visible) && !unanchoredFrame;
+    setVisible(*w, w->shown && (!parent || parent->visible) && !unanchoredFrame);
+    // Every pass and not only on the change, so the draw order cannot lose a
+    // widget whose flag was written some other way - a test sets it directly.
+    if (w->visible) mayBeVisible_.set(id);
     if ((w->visibleChain && !wasChain) || (w->visible && !wasVisible)) ++visibilityRaises_;
     // Clipping is inherited: anything under a scroll frame is bounded by it,
     // however deep, because a scroll child holds frames of its own.
@@ -1167,6 +1198,7 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
         }
     }
 
+    if (w->rectW != oldRectW || w->rectH != oldRectH) resizePending_.set(id);
 }
 
 uint32_t WidgetTree::hitTest(float x, float y) const {
@@ -1277,9 +1309,16 @@ bool WidgetTree::buttonArtVisible(const Widget& w) const {
 
 void WidgetTree::collectDrawOrder() {
     drawOrder_.clear();
-    for (const Widget& w : widgets_) {
-        if (w.id == 0) continue;
-        if (!w.visible) continue;
+    // Only what has been visible since the last look, in id order - the order
+    // the walk over every widget went in, so the sort below is handed the same
+    // list it always was. That walk was most of a millisecond a frame to find
+    // the few hundred widgets on screen among 28,000. A widget found hidden
+    // here leaves the set until something makes it visible again.
+    for (uint32_t id = mayBeVisible_.nextFrom(1); id != 0;
+         id = mayBeVisible_.nextFrom(id + 1)) {
+        const Widget* wp = get(id);
+        if (!wp || !wp->visible) { mayBeVisible_.reset(id); continue; }
+        const Widget& w = *wp;
         if (w.alpha <= 0.001f) continue;
         // Frames are containers, except when they carry a backdrop or are a
         // status bar - then the frame itself has something to paint, and it

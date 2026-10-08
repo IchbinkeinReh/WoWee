@@ -169,6 +169,25 @@ private:
     std::unordered_map<std::string, std::pair<float, float>> textureSizes_;
     /// Which incarnation of ImGui's backend the cache above belongs to.
     uint32_t uiTextureGenerationSeen_ = 0;
+
+    /// Everything a measurement depends on that is not a field of the widget
+    /// being measured. When any of it moves, every label and texture is
+    /// measured again; see sizeArtAndText.
+    struct SizingInputs {
+        const WidgetTree* tree = nullptr;
+        const pipeline::AssetManager* assets = nullptr;
+        const ImFont* defaultFace = nullptr;
+        const ImFont* currentFont = nullptr;
+        float currentFontSize = 0.0f;
+        float uiScale = 0.0f;
+        uint64_t faceGeneration = ~uint64_t{0};
+        bool operator==(const SizingInputs&) const = default;
+    };
+    SizingInputs sizingInputs_;
+    /// Where the round-robin re-measure in sizeArtAndText picks up next.
+    uint32_t sizingSweepAt_ = 1;
+    /// Ids sizeArtAndText could not measure this frame, put back after it.
+    std::vector<uint32_t> measureDeferred_;
 };
 
 } // namespace ui
