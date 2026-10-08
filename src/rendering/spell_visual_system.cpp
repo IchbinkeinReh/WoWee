@@ -783,7 +783,13 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
                 }
             }
         }
+        // 0x00700e20 plays a destination point's kit only while the caster
+        // is still about.
+        glm::mat4 casterFrame;
+        const bool casterAbout = casterInstance != 0 && charRenderer &&
+                                 charRenderer->getInstanceFrame(casterInstance, casterFrame);
         for (const MissileEnd& impact : impacts) {
+            if (impact.renderInstanceId == 0 && !casterAbout) continue;
             glm::vec3 impactPos = impact.position;
             uint32_t impactInstance = 0;
             glm::mat4 unitFrame;

@@ -445,7 +445,7 @@ void SpellHandler::launchRangedWeaponProjectile(uint32_t spellId, uint64_t targe
 // cast at the ground, one to the point, from the source point when the cast
 // names one too. The impact kit waits for the missile: on the target it flew
 // to, or for a ground missile on everything it hit (FUN_00700c80 hands the
-// hit list to it).
+// hit list to it) and on the point itself (0x00700e20).
 std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data, uint32_t visualId,
                                                        bool* flewToPlace) {
     namespace sm = rendering::spell_missile;
@@ -514,7 +514,8 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
             MissileEnd end;
             if (unitEnd(guid, end)) impacts.push_back(end);
         }
-        if (impacts.empty()) impacts.push_back(to);
+        // 0x00700e20: and at the point it flies to, whatever it hit.
+        impacts.push_back(to);
         if (svs->launchSpellMissile(visualId, speed, from, to, std::move(impacts), trajectory, data.spellId)) {
             carried = data.hitTargets;
             if (flewToPlace) *flewToPlace = true;
