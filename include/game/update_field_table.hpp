@@ -125,8 +125,9 @@ enum class UF : uint16_t {
 
     // GameObject fields
     GAMEOBJECT_DISPLAYID,
-    // WotLK: byte 1 of UNIT_FIELD_BYTES_2 is the unit's PvP flags (1 PvP, 4
-    // free-for-all, 8 sanctuary), and PLAYER_DUEL_ARBITER, a guid, is the duel flag
+    // UNIT_FIELD_BYTES_2: byte 0 is the sheath state in every layout (164 in
+    // Classic, 208 in TBC). In WotLK byte 1 is the unit's PvP flags (1 PvP, 4
+    // free-for-all, 8 sanctuary; game::unitPvpFlags), and PLAYER_DUEL_ARBITER, a guid, is the duel flag
     // both duellists name - what the client reads to tell whether two players
     // may attack each other.
     UNIT_FIELD_BYTES_2,

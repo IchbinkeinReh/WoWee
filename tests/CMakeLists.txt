@@ -2639,6 +2639,11 @@ wowee_add_test(test_detail_doodad_placement
 wowee_add_test(test_weapon_attachment
     SOURCES test_weapon_attachment.cpp)
 
+# ── test_pvp_flags ───────────────────────────────────────────
+# The PvP flags and where each version keeps them (game/pvp_flags.hpp).
+wowee_add_test(test_pvp_flags
+    SOURCES test_pvp_flags.cpp)
+
 # ── test_corpse_look ─────────────────────────────────────────
 # What a corpse's fields say it looks like (game/corpse_look.hpp).
 wowee_add_test(test_corpse_look
