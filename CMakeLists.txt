@@ -1625,6 +1625,19 @@ if(NOT WIN32)
             $<TARGET_FILE_DIR:wowee>/Data
         COMMENT "Symlinking Data to $<TARGET_FILE_DIR:wowee>/Data"
     )
+else()
+    # Copied on Windows, where a symlink needs rights a build does not have.
+    # Without it a build ran with no Data/ beside it, so syncClientTables had
+    # nothing to copy into the extraction, and the extraction's own tables -
+    # copied by whatever build last had them - went on answering: a
+    # dbc_layouts.json from before Spell.dbc's Speed column was named left
+    # every missile speed at zero, and no spell missile ever flew.
+    add_custom_command(TARGET wowee POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/Data
+            $<TARGET_FILE_DIR:wowee>/Data
+        COMMENT "Syncing Data to $<TARGET_FILE_DIR:wowee>/Data"
+    )
 endif()
 
 # On Windows, SDL 2.28+ uses LoadLibraryExW with LOAD_LIBRARY_SEARCH_DEFAULT_DIRS

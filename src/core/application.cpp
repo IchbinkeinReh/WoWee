@@ -5255,6 +5255,32 @@ void Application::render() {
         }
     }
 
+    // A line of Lua run in the world without anyone at the keys, for checking
+    // what only a cast or a click shows: WOWEE_AUTO_LUA=<code>, run
+    // WOWEE_AUTO_LUA_DELAY seconds (ten by default) after entering the world
+    // and again every WOWEE_AUTO_LUA_REPEAT seconds if that is set. With
+    // WOWEE_AUTO_LOGIN=2 a run needs no one there at all. __WoweeWarn(text)
+    // puts a line in the log, where print() puts it in the chat.
+    if (const char* autoLua = std::getenv("WOWEE_AUTO_LUA"); autoLua != nullptr && *autoLua != '\0') {
+        static double inWorldSince = -1.0;
+        static double nextRun = -1.0;
+        const bool inWorld = gameHandler && gameHandler->getState() == game::WorldState::IN_WORLD;
+        const double now = core::appTimeSeconds();
+        if (!inWorld) {
+            inWorldSince = -1.0;
+        } else if (inWorldSince < 0.0) {
+            inWorldSince = now;
+            const char* delay = std::getenv("WOWEE_AUTO_LUA_DELAY");
+            nextRun = now + ((delay && *delay) ? std::atof(delay) : 10.0);
+        } else if (nextRun >= 0.0 && now >= nextRun && addonManager_ && addonManager_->getLuaEngine()) {
+            LOG_WARNING("WOWEE_AUTO_LUA: running ", autoLua);
+            addonManager_->getLuaEngine()->executeString(autoLua);
+            const char* repeat = std::getenv("WOWEE_AUTO_LUA_REPEAT");
+            const double every = (repeat && *repeat) ? std::atof(repeat) : 0.0;
+            nextRun = every > 0.0 ? now + every : -1.0;
+        }
+    }
+
     // A recording of the client, from start-up, then done with - the recorder
     // checked end to end without a world to stand in or a key to press:
     // WOWEE_RECORD=<file.mp4>, for WOWEE_RECORD_SECONDS (five by default).
