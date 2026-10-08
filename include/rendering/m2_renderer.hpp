@@ -218,6 +218,9 @@ struct M2Particle {
     int emitterIndex;  // which emitter spawned this
     float tileIndex = 0.0f; // texture atlas tile index
     float sizeVary = 1.0f;  // this particle's roll of the emitter's scale spread
+    /// Emitter flag 0x10 (the client's model-space bit, 0x200): position and
+    /// velocity are in the emitter bone's space, carried along as it moves.
+    bool modelSpace = false;
 };
 
 /**

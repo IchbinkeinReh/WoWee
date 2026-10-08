@@ -180,8 +180,7 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             if (em.bone < inst.boneMatrices.size()) {
                 boneXform = inst.boneMatrices[em.bone];
             }
-            glm::vec3 worldPos = glm::vec3(inst.modelMatrix * boneXform * glm::vec4(localPos, 1.0f));
-            p.position = worldPos;
+            glm::vec3 spawnLocal = localPos;
 
             // Velocity: emission speed in upward direction + random spread
             float speed = interpFloat(em.emissionSpeed, inst.animTime, inst.globalSequenceTime,
@@ -230,10 +229,22 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
                 dir = glm::vec3(std::cos(az) * std::cos(pol),
                                 std::sin(az) * std::cos(pol),
                                 std::sin(pol));
-                p.position = glm::vec3(inst.modelMatrix * boneXform *
-                                       glm::vec4(em.position + dir * radius, 1.0f));
+                spawnLocal = em.position + dir * radius;
             }
-            p.velocity = rotMat * dir * speed;
+            // Flag 0x10 keeps the particle in the emitter bone's space
+            // (FUN_00832ea0 maps it to 0x200; FUN_00981950 then leaves the
+            // position and velocity untransformed), drawn through the bone as
+            // it is at that frame: the Eversong lamps' motes, on a bone that
+            // turns once every 1.4 s, circle the flame with it. Kept in the
+            // world, they stayed where they were born and only drifted.
+            if (em.flags & 0x10) {
+                p.modelSpace = true;
+                p.position = spawnLocal;
+                p.velocity = dir * speed;
+            } else {
+                p.position = glm::vec3(inst.modelMatrix * boneXform * glm::vec4(spawnLocal, 1.0f));
+                p.velocity = rotMat * dir * speed;
+            }
 
             const uint32_t tilesX = std::max<uint16_t>(em.textureCols, 1);
             const uint32_t tilesY = std::max<uint16_t>(em.textureRows, 1);
@@ -720,13 +731,24 @@ void M2Renderer::prepareM2Particles() {
         // so they are put in that order here. Last first is what the client
         // shows: the demon crystal's flame sheet (emitter 1, added) lights up
         // its dark smoke (emitter 2) rather than being buried under it.
+        // Where a particle is in the world: a model-space one (flag 0x10)
+        // through its emitter's bone as it is this frame.
+        const auto particleWorld = [&inst, &gpu](const M2Particle& q) -> glm::vec3 {
+            if (!q.modelSpace) return q.position;
+            glm::mat4 world = inst.modelMatrix;
+            if (q.emitterIndex >= 0 && q.emitterIndex < static_cast<int>(gpu.particleEmitters.size())) {
+                const uint16_t bone = gpu.particleEmitters[q.emitterIndex].bone;
+                if (bone < inst.boneMatrices.size()) world = world * inst.boneMatrices[bone];
+            }
+            return glm::vec3(world * glm::vec4(q.position, 1.0f));
+        };
         particleSortScratch_.clear();
         for (uint32_t pi = 0; pi < inst.particles.size(); ++pi) {
             const auto& sp = inst.particles[pi];
             float key = 0.0f;
             if (sp.emitterIndex >= 0 && sp.emitterIndex < static_cast<int>(gpu.particleEmitters.size()) &&
                 (gpu.particleEmitters[sp.emitterIndex].flags & 0x2)) {
-                const glm::vec3 d = sp.position - cachedCamPos_;
+                const glm::vec3 d = particleWorld(sp) - cachedCamPos_;
                 key = -glm::dot(d, d);
             }
             particleSortScratch_.emplace_back(key, pi);
@@ -740,6 +762,7 @@ void M2Renderer::prepareM2Particles() {
 
         for (const auto& [sortKey, particleIdx] : particleSortScratch_) {
             const auto& p = inst.particles[particleIdx];
+            const glm::vec3 pWorld = particleWorld(p);
             if (p.emitterIndex < 0 || p.emitterIndex >= static_cast<int>(gpu.particleEmitters.size())) continue;
 
             if (p.emitterIndex != lastEmitterIdx) {
@@ -831,14 +854,14 @@ void M2Renderer::prepareM2Particles() {
                                          .instanceIndex = static_cast<uint32_t>(idx),
                                          .distSq = particleDrawOrder_[instOrder].first});
             }
-            highestParticleZ = std::max(highestParticleZ, p.position.z);
+            highestParticleZ = std::max(highestParticleZ, pWorld.z);
             if (!emitterDiag.empty()) {
                 auto& dg = emitterDiag[static_cast<size_t>(p.emitterIndex)];
                 ++dg.n;
                 dg.alpha += alpha;
                 dg.size += scale * inst.scale;
-                dg.minZ = std::min(dg.minZ, p.position.z - inst.position.z);
-                dg.maxZ = std::max(dg.maxZ, p.position.z - inst.position.z);
+                dg.minZ = std::min(dg.minZ, pWorld.z - inst.position.z);
+                dg.maxZ = std::max(dg.maxZ, pWorld.z - inst.position.z);
                 // The first particle of each emitter, whole, once in a while:
                 // what is drawn and from what.
                 static float lastDump = -10.0f;
@@ -849,9 +872,9 @@ void M2Renderer::prepareM2Particles() {
                         lastDump = nowDump;
                     }
                     LOG_WARNING("PFX FIRST '", gpu.name, "' emitter=", p.emitterIndex,
-                                " at=(", p.position.x - inst.position.x, ",",
-                                p.position.y - inst.position.y, ",",
-                                p.position.z - inst.position.z, ")",
+                                " at=(", pWorld.x - inst.position.x, ",",
+                                pWorld.y - inst.position.y, ",",
+                                pWorld.z - inst.position.z, ")",
                                 " life=", p.life, "/", p.maxLife,
                                 " color=(", color.r, ",", color.g, ",", color.b, ")",
                                 " alpha=", alpha, " half=", scale * p.sizeVary,
@@ -866,9 +889,9 @@ void M2Renderer::prepareM2Particles() {
             widestParticle = std::max(widestParticle, scale);
 
             float* vd = vbBase + static_cast<size_t>(vbWritten) * 9;
-            vd[0] = p.position.x;
-            vd[1] = p.position.y;
-            vd[2] = p.position.z;
+            vd[0] = pWorld.x;
+            vd[1] = pWorld.y;
+            vd[2] = pWorld.z;
             vd[3] = color.r;
             vd[4] = color.g;
             vd[5] = color.b;
