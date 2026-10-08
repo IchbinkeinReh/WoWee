@@ -105,3 +105,47 @@ TEST_CASE("0x00738180 sets the unit's idle bit where it runs to its end", "[spel
     other.field = SheathState::Melee;
     CHECK_FALSE(animationKitIdle(other).has_value());
 }
+
+#include "rendering/camera_shake.hpp"
+
+namespace cs = wowee::rendering::camera_shake;
+
+TEST_CASE("a camera shake fades with the camera's distance", "[camera_shake]") {
+    // 0x006004b0: whole within 9 yards, 0.7 per 9 yards beyond, none past 80.
+    CHECK(*cs::attenuated(1.0f, 8.0f * 8.0f) == Catch::Approx(1.0f));
+    CHECK(*cs::attenuated(1.0f, 18.0f * 18.0f) == Catch::Approx(0.7f));
+    CHECK(*cs::attenuated(1.0f, 27.0f * 27.0f) == Catch::Approx(0.49f));
+    CHECK_FALSE(cs::attenuated(1.0f, 81.0f * 81.0f).has_value());
+    // The row's amplitude is in 36ths.
+    CHECK(cs::fromRow(0, 0, 36.0f, 1.0f, 1.0f, 0.0f, 0.0f).amplitude == Catch::Approx(1.0f));
+}
+
+TEST_CASE("a camera shake moves along the facing, its left or up", "[camera_shake]") {
+    // A quarter cycle in, a 1 Hz shake is at its peak.
+    std::vector<cs::Active> shakes;
+    const cs::Shake up = cs::fromRow(0, 2, 36.0f, 1.0f, 2.0f, 0.0f, 0.0f);
+    shakes.push_back({.shake = up, .origin = glm::vec3(0.0f), .startSeconds = 0.0f});
+    glm::vec3 o = cs::offset(shakes, 0.25f, glm::vec3(0.0f), 0.0f);
+    CHECK(o.z == Catch::Approx(1.0f));
+    CHECK(o.x == Catch::Approx(0.0f));
+    // Forward at a facing of a quarter turn is +Y; left of it is -X.
+    shakes.clear();
+    shakes.push_back({.shake = cs::fromRow(0, 0, 36.0f, 1.0f, 2.0f, 0.0f, 0.0f), .startSeconds = 0.0f});
+    shakes.push_back({.shake = cs::fromRow(0, 1, 18.0f, 1.0f, 2.0f, 0.0f, 0.0f), .startSeconds = 0.0f});
+    o = cs::offset(shakes, 0.25f, glm::vec3(0.0f), glm::radians(90.0f));
+    CHECK(o.y == Catch::Approx(1.0f));
+    CHECK(o.x == Catch::Approx(-0.5f));
+    // Only the strongest in a direction moves it.
+    shakes.clear();
+    shakes.push_back({.shake = cs::fromRow(0, 2, 36.0f, 1.0f, 2.0f, 0.0f, 0.0f), .startSeconds = 0.0f});
+    shakes.push_back({.shake = cs::fromRow(0, 2, 72.0f, 1.0f, 2.0f, 0.0f, 0.0f), .startSeconds = 0.0f});
+    CHECK(cs::offset(shakes, 0.25f, glm::vec3(0.0f), 0.0f).z == Catch::Approx(2.0f));
+    // Type 1 decays by e^(-t c).
+    const cs::Shake decaying = cs::fromRow(1, 2, 36.0f, 1.0f, 2.0f, 0.0f, 2.0f);
+    CHECK(cs::displacement(decaying, 1.0f, 0.25f) == Catch::Approx(std::exp(-0.5f)));
+    // Run out (Phase counts toward Duration), it is dropped.
+    shakes.clear();
+    shakes.push_back({.shake = cs::fromRow(0, 2, 36.0f, 1.0f, 1.0f, 0.5f, 0.0f), .startSeconds = 0.0f});
+    CHECK(cs::offset(shakes, 0.6f, glm::vec3(0.0f), 0.0f) == glm::vec3(0.0f));
+    CHECK(shakes.empty());
+}

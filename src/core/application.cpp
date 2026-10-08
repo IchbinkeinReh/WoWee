@@ -2300,6 +2300,10 @@ void Application::setState(AppState newState) {
                     // The aura state kits: the unit's model, its spell's
                     // visual, its kits' scale, and whether it shows its
                     // Flags 8 kits (0x00720400).
+                    svs->setCameraShakeSink([this](const rendering::camera_shake::Shake& shake, const glm::vec3& at) {
+                        if (renderer && renderer->getCameraController())
+                            renderer->getCameraController()->addCameraShake(shake, at);
+                    });
                     svs->setAttachedEffectScale([this](uint32_t renderInstanceId) {
                         return entitySpawner_ ? entitySpawner_->kitAttachedEffectScale(renderInstanceId) : 1.0f;
                     });
@@ -2346,10 +2350,12 @@ void Application::setState(AppState newState) {
                         renderer->getCameraController()->applyKnockBack(vcos, vsin, hspeed, vspeed);
                     }
                 });
-                gameHandler->setCameraShakeCallback([this](float magnitude, float frequency, float duration) {
-                    if (renderer && renderer->getCameraController()) {
-                        renderer->getCameraController()->triggerShake(magnitude, frequency, duration);
-                    }
+                gameHandler->setCameraShakeCallback([this](uint32_t shakesId, uint32_t soundId) {
+                    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+                    if (!svs) return;
+                    const glm::vec3 at = renderer->getCharacterPosition();
+                    svs->playCameraShakes(shakesId, at);
+                    svs->playSoundAt(soundId, at);
                 });
                 gameHandler->setAutoFollowCallback([this](const glm::vec3* renderPos) {
                     if (renderer && renderer->getCameraController()) {

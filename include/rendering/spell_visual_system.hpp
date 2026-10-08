@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -11,6 +12,7 @@
 
 #include "rendering/spell_missile.hpp"
 #include "rendering/spell_kit.hpp"
+#include "rendering/camera_shake.hpp"
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -137,6 +139,15 @@ public:
     using AttachedEffectScale = std::function<float(uint32_t renderInstanceId)>;
     void setAttachedEffectScale(AttachedEffectScale scale) { attachedEffectScale_ = std::move(scale); }
 
+    /// Where a camera shake goes: the camera's list (0x00606330).
+    using CameraShakeSink = std::function<void(const camera_shake::Shake&, const glm::vec3& origin)>;
+    void setCameraShakeSink(CameraShakeSink sink) { cameraShakeSink_ = std::move(sink); }
+    /// A SpellEffectCameraShakes row's shakes at `origin` (0x007fa620): a
+    /// kit's ShakeID, or SMSG_CAMERA_SHAKE's.
+    void playCameraShakes(uint32_t spellEffectCameraShakesId, const glm::vec3& origin);
+    /// A SoundEntries sound at a place, once.
+    void playSoundAt(uint32_t soundId, const glm::vec3& position);
+
     // Advance lifetime timers and remove expired instances.
     void update(float deltaTime);
 
@@ -181,6 +192,7 @@ private:
     struct KitRecord {
         std::vector<KitModel> models;
         uint32_t flags = 0;  ///< SpellVisualKit Flags (+0x94)
+        uint32_t shakeId = 0;  ///< ShakeID (+0x40), SpellEffectCameraShakes
     };
     std::unordered_map<uint32_t, KitRecord> kits_;  // SpellVisualKit id → its models
     struct VisualAuraKits {
@@ -215,6 +227,15 @@ private:
     };
     std::unordered_map<uint64_t, UnitAuraKits> unitAuraKits_;
     UnitInstanceResolver unitInstanceResolver_;
+    CameraShakeSink cameraShakeSink_;
+    /// The precast, cast and impact kits of each visual, for their shakes.
+    std::unordered_map<uint32_t, std::array<uint32_t, 3>> visualKitIds_;
+    /// A kit's camera shake where it plays (0x0073b140, 0x006f9840).
+    void playKitShake(uint32_t kitId, const glm::vec3& origin);
+    /// SpellEffectCameraShakes id → its CameraShakes rows, loaded on first use.
+    std::unordered_map<uint32_t, std::vector<camera_shake::Shake>> spellEffectShakes_;
+    bool cameraShakesLoaded_ = false;
+    void loadCameraShakes();
     SpellVisualResolver spellVisualResolver_;
     UnarmedKitsQuery unarmedKitsQuery_;
     AttachedEffectScale attachedEffectScale_;

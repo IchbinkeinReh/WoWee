@@ -839,13 +839,12 @@ void GameHandler::registerCoreOpcodes() {
 
     // Camera shake
     dispatchTable_[Opcode::SMSG_CAMERA_SHAKE] = [this](network::Packet& packet) {
+        // A SpellEffectCameraShakes id and a SoundEntries id, both at the
+        // active player (0x006e2e90 case 0x50a).
         if (packet.hasRemaining(8)) {
-            uint32_t shakeId   = packet.readUInt32();
-            uint32_t shakeType = packet.readUInt32();
-            (void)shakeType;
-            float magnitude = (shakeId < 50) ? 0.04f : 0.08f;
-            if (cameraShakeCallback_)
-                cameraShakeCallback_(magnitude, 18.0f, 0.5f);
+            const uint32_t shakesId = packet.readUInt32();
+            const uint32_t soundId = packet.readUInt32();
+            if (cameraShakeCallback_) cameraShakeCallback_(shakesId, soundId);
         }
     };
 

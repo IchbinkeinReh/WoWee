@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/camera_shake.hpp"
 #include "rendering/camera.hpp"
 #include "core/input.hpp"
 #include <SDL3/SDL.h>
@@ -299,11 +300,9 @@ public:
     // vspeed: raw packet vspeed field (server sends negative for upward launch)
     void applyKnockBack(float vcos, float vsin, float hspeed, float vspeed);
 
-    // Trigger a camera shake effect (e.g. from SMSG_CAMERA_SHAKE).
-    // magnitude: peak positional offset in world units
-    // frequency: oscillation frequency in Hz
-    // duration: shake duration in seconds
-    void triggerShake(float magnitude, float frequency, float duration);
+    /// A CameraShakes row added to the camera where it happened (0x00606330):
+    /// a spell kit's shake, or SMSG_CAMERA_SHAKE's at the player.
+    void addCameraShake(const camera_shake::Shake& shake, const glm::vec3& origin);
 
     /// How much of a shake to actually apply, 0 to 1.
     ///
@@ -311,7 +310,7 @@ public:
     /// thunderstorms and for drunkenness, and had no control over any of it.
     /// Nothing in 2004 offered one; every game does now, because for some
     /// people it is the difference between playing and feeling ill. Zero stops
-    /// it outright - triggerShake drops a magnitude of zero on the floor.
+    /// it outright.
     ///
     /// It does not touch the weave a drunk character walks with. That is what
     /// being drunk does to the character rather than to the picture, and taking
@@ -875,11 +874,9 @@ private:
     // Horizontal velocity decays via WoW-like drag so the player doesn't slide forever.
     static constexpr float KNOCKBACK_HORIZ_DRAG = 4.5f; // exponential decay rate (1/s)
 
-    // Camera shake state (SMSG_CAMERA_SHAKE)
-    float shakeElapsed_   = 0.0f;
-    float shakeDuration_  = 0.0f;
-    float shakeMagnitude_ = 0.0f;
-    float shakeFrequency_ = 0.0f;
+    // The camera's shakes (0x00606970) and the clock they run on.
+    std::vector<camera_shake::Active> shakes_;
+    float shakeClock_     = 0.0f;
     float shakeScale_     = 1.0f;  ///< the player's Camera shake setting
 
     // Server-authored drunkenness (0 sober, 1 smashed).

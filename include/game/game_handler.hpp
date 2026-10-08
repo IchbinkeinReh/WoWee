@@ -1564,9 +1564,8 @@ public:
     using KnockBackCallback = std::function<void(float vcos, float vsin, float hspeed, float vspeed)>;
     void setKnockBackCallback(KnockBackCallback cb) { knockBackCallback_ = std::move(cb); }
 
-    // Camera shake callback: called when server sends SMSG_CAMERA_SHAKE.
-    // Parameters: magnitude (world units), frequency (Hz), duration (seconds).
-    using CameraShakeCallback = std::function<void(float magnitude, float frequency, float duration)>;
+    // SMSG_CAMERA_SHAKE: its SpellEffectCameraShakes and SoundEntries ids.
+    using CameraShakeCallback = std::function<void(uint32_t spellEffectCameraShakesId, uint32_t soundId)>;
     void setCameraShakeCallback(CameraShakeCallback cb) { cameraShakeCallback_ = std::move(cb); }
 
     // Auto-follow callback: pass render-space position pointer to start, nullptr to cancel.

@@ -184,6 +184,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             slotFields[k] = kitColumn(spell_kit::kKitSlots[k].column, spell_kit::kKitSlots[k].fallbackField);
         const uint32_t worldField = kitColumn("WorldEffect", 14);
         const uint32_t kitFlagsField = kitColumn("Flags", 37);
+        const uint32_t kitShakeField = kitColumn("ShakeID", 16);
         for (uint32_t i = 0; i < kitDbc->getRecordCount(); ++i) {
             const uint32_t kitId = kitDbc->getUInt32(i, 0);
             if (!kitId) continue;
@@ -199,7 +200,9 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                     kit.models.push_back(std::move(*model));
             }
             if (kitFlagsField != 0xFFFFFFFFu) kit.flags = kitDbc->getUInt32(i, kitFlagsField);
-            if (!kit.models.empty() || kit.flags != 0) kits_[kitId] = std::move(kit);
+            if (kitShakeField != 0xFFFFFFFFu)
+                kit.shakeId = static_cast<uint32_t>(std::max(kitDbc->getInt32(i, kitShakeField), 0));
+            if (!kit.models.empty() || kit.flags != 0 || kit.shakeId != 0) kits_[kitId] = std::move(kit);
         }
     }
     const pipeline::DBCFieldMap* attachLayout = layout ? layout->getLayout("SpellVisualKitModelAttach") : nullptr;
@@ -307,6 +310,14 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             }
         }
 
+        // The precast, cast and impact kits, for their shakes.
+        {
+            const std::array<uint32_t, 3> kitIds = {
+                svPrecastKitField < svFc ? svDbc->getUInt32(i, svPrecastKitField) : 0u,
+                svCastKitField < svFc ? svDbc->getUInt32(i, svCastKitField) : 0u,
+                svImpactKitField < svFc ? svDbc->getUInt32(i, svImpactKitField) : 0u};
+            if (kitIds[0] != 0 || kitIds[1] != 0 || kitIds[2] != 0) visualKitIds_[vid] = kitIds;
+        }
         // The aura kits: StateKit and StateDoneKit, and the Flags that
         // keep a state kit to an unarmed, idle unit.
         {
@@ -480,6 +491,10 @@ void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec
 
     if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
 
+    // The precast kit's camera shake.
+    if (auto kitIt = visualKitIds_.find(visualId); kitIt != visualKitIds_.end())
+        playKitShake(kitIt->second[0], worldPosition);
+
     // The precast kit's weapon effects, for as long as it plays.
     if (auto fxIt = precastWeaponEffects_.find(visualId); fxIt != precastWeaponEffects_.end()) {
         playKitWeaponEffects(fxIt->second, attachInstanceId, true, castTimeMs);
@@ -642,6 +657,10 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
         if (const LoadedSound* sound = soundIt != impactKitSounds_.end() ? soundEntry(soundIt->second) : nullptr)
             audio::AudioEngine::instance().playSound3D(sound->data, worldPosition, sound->volume);
     }
+
+    // The cast or impact kit's camera shake.
+    if (auto kitIt = visualKitIds_.find(visualId); kitIt != visualKitIds_.end())
+        playKitShake(kitIt->second[useImpactKit ? 2 : 1], worldPosition);
 
     // The cast kit's weapon effects.
     if (!useImpactKit) {
@@ -1047,7 +1066,11 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
             for (const MissileEnd& impact : impacts) {
                 if (impact.renderInstanceId != unitInstance) continue;
                 for (AuraKit& aura : unit.auras) {
-                    if (aura.visualId == visualId) aura.awaitingMissile = false;
+                    if (aura.visualId != visualId || !aura.awaitingMissile) continue;
+                    aura.awaitingMissile = false;
+                    glm::vec3 unitPos;
+                    if (charRenderer && charRenderer->getInstancePosition(unitInstance, unitPos))
+                        playKitShake(aura.kitId, unitPos);
                 }
             }
         }
@@ -1190,6 +1213,12 @@ void SpellVisualSystem::applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, u
             }
         }
     }
+    if (!aura.awaitingMissile && instance != 0) {
+        glm::vec3 unitPos;
+        if (renderer_ && renderer_->getCharacterRenderer() &&
+            renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos))
+            playKitShake(aura.kitId, unitPos);
+    }
     unit.auras.push_back(std::move(aura));
     // Then 0x00720400(1, 1) for a Flags 8 visual.
     if (unit.auras.back().unarmedOnly) stepUnarmedKits(unitGuid, unit, true);
@@ -1215,7 +1244,75 @@ void SpellVisualSystem::removeAuraStateKit(uint64_t unitGuid, uint32_t spellId, 
     if (visualIt == visualAuraKits_.end() || visualIt->second.stateDoneKit == 0) return;
     auto kitIt = kits_.find(visualIt->second.stateDoneKit);
     const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitGuid) : 0;
-    if (kitIt != kits_.end() && instance != 0) playKitModels(kitIt->second, instance, false);
+    if (kitIt == kits_.end() || instance == 0) return;
+    playKitModels(kitIt->second, instance, false);
+    glm::vec3 unitPos;
+    if (renderer_ && renderer_->getCharacterRenderer() &&
+        renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos))
+        playKitShake(kitIt->first, unitPos);
+}
+
+void SpellVisualSystem::playKitShake(uint32_t kitId, const glm::vec3& origin) {
+    auto it = kitId ? kits_.find(kitId) : kits_.end();
+    if (it != kits_.end() && it->second.shakeId > 0) playCameraShakes(it->second.shakeId, origin);
+}
+
+void SpellVisualSystem::playCameraShakes(uint32_t spellEffectCameraShakesId, const glm::vec3& origin) {
+    if (!cameraShakeSink_ || spellEffectCameraShakesId == 0) return;
+    if (!cameraShakesLoaded_) loadCameraShakes();
+    auto it = spellEffectShakes_.find(spellEffectCameraShakesId);
+    if (it == spellEffectShakes_.end()) return;
+    for (const camera_shake::Shake& shake : it->second) cameraShakeSink_(shake, origin);
+}
+
+void SpellVisualSystem::loadCameraShakes() {
+    auto* am = cachedAssetManager_ ? cachedAssetManager_ : core::Application::getInstance().getAssetManager();
+    if (!am || !am->isInitialized()) return;
+    cachedAssetManager_ = am;
+    cameraShakesLoaded_ = true;  // a real attempt follows
+    {
+        auto* layouts = pipeline::getActiveDBCLayout();
+        const auto* shakeLayout = layouts ? layouts->getLayout("CameraShakes") : nullptr;
+        const auto* setLayout = layouts ? layouts->getLayout("SpellEffectCameraShakes") : nullptr;
+        auto shakeDbc = cachedAssetManager_->loadDBCOptional("CameraShakes.dbc");
+        auto setDbc = cachedAssetManager_->loadDBCOptional("SpellEffectCameraShakes.dbc");
+        std::unordered_map<uint32_t, camera_shake::Shake> rows;
+        if (shakeLayout && shakeDbc && shakeDbc->isLoaded()) {
+            const uint32_t fc = shakeDbc->getFieldCount();
+            const std::array<uint32_t, 7> f = {
+                shakeLayout->tryField("ShakeType"), shakeLayout->tryField("Direction"),
+                shakeLayout->tryField("Amplitude"), shakeLayout->tryField("Frequency"),
+                shakeLayout->tryField("Duration"),  shakeLayout->tryField("Phase"),
+                shakeLayout->tryField("Coefficient")};
+            if (std::all_of(f.begin(), f.end(), [fc](uint32_t x) { return x < fc; })) {
+                for (uint32_t i = 0; i < shakeDbc->getRecordCount(); ++i) {
+                    rows[shakeDbc->getUInt32(i, 0)] = camera_shake::fromRow(
+                        shakeDbc->getUInt32(i, f[0]), shakeDbc->getUInt32(i, f[1]), shakeDbc->getFloat(i, f[2]),
+                        shakeDbc->getFloat(i, f[3]), shakeDbc->getFloat(i, f[4]), shakeDbc->getFloat(i, f[5]),
+                        shakeDbc->getFloat(i, f[6]));
+                }
+            }
+        }
+        if (setLayout && setDbc && setDbc->isLoaded()) {
+            const uint32_t fc = setDbc->getFieldCount();
+            const std::array<uint32_t, 3> f = {setLayout->tryField("CameraShake0"), setLayout->tryField("CameraShake1"),
+                                               setLayout->tryField("CameraShake2")};
+            for (uint32_t i = 0; i < setDbc->getRecordCount(); ++i) {
+                std::vector<camera_shake::Shake> shakes;
+                for (uint32_t col : f) {
+                    if (col >= fc) continue;
+                    auto row = rows.find(setDbc->getUInt32(i, col));
+                    if (row != rows.end()) shakes.push_back(row->second);
+                }
+                if (!shakes.empty()) spellEffectShakes_[setDbc->getUInt32(i, 0)] = std::move(shakes);
+            }
+        }
+    }
+}
+
+void SpellVisualSystem::playSoundAt(uint32_t soundId, const glm::vec3& position) {
+    if (const LoadedSound* sound = soundId ? soundEntry(soundId) : nullptr)
+        audio::AudioEngine::instance().playSound3D(sound->data, position, sound->volume);
 }
 
 void SpellVisualSystem::stepUnarmedKits(uint64_t unitGuid, UnitAuraKits& unit, bool force) {

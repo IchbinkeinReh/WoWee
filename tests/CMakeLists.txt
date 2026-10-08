@@ -2598,7 +2598,8 @@ wowee_add_test(test_spell_missile
 
 # ── test_spell_kit ───────────────────────────────────
 # A spell visual kit on a unit: its models' attachments, a model-attach row's
-# offset and turn, and when an aura's Flags 8 state kit shows (0x00720400).
+# offset and turn, when an aura's Flags 8 state kit shows (0x00720400), and
+# the camera shakes a kit starts (0x00606970).
 wowee_add_test(test_spell_kit
     SOURCES test_spell_kit.cpp)
 
