@@ -726,6 +726,8 @@ void AppearanceComposer::updateWeaponsFromFields() {
         // 0x0073f660: a new model starts in the field's state; held without
         // the field.
         sheathInstanceId_ = instanceId;
+        // A new model has no reach going: its shoulders start on the body.
+        reach_.reset();
         sheath_ = field.value_or(SheathState::Melee);
         fieldSheathSeen_ = field;
         animationSheathKey_ = {};
