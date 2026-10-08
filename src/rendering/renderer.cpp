@@ -683,8 +683,17 @@ void Renderer::updatePerFrameUBO() {
     // Whether this frame builds the fog volume. Decided here, beside the
     // switch in the block the shaders read, and the frame graph dispatches by
     // the same flag - so no shader reads a volume its frame did not build.
+    //
+    // Only on a frame whose shadow pass draws. The inject pass samples this
+    // slot's shadow map, and before the player has a position - the login,
+    // realm and character screens - there is none: computeLightSpaceMatrix
+    // gives a zero matrix and the shadow pass skips itself. Those frames used
+    // to switch the volume on in this block and enable the fog's pass anyway,
+    // leaving a layout check made while recording as the only thing between
+    // the dispatch and a map that was never drawn. Decided here instead, the
+    // screens with no world never record the fog at all.
     volumetricThisFrame_ = volumetricFog_ && volumetricFog_->isOn() &&
-                           volumetricFogDensity_ > 0.0f &&
+                           volumetricFogDensity_ > 0.0f && shadowPassDrawsThisFrame() &&
                            !(passAblation_ && passAblation_->skip(AblationPass::VolumetricFog));
     currentFrameData.volumetricParams = volumetricThisFrame_ ? volumetricFog_->frameParams()
                                                              : glm::vec4(0.0f);
@@ -4942,12 +4951,29 @@ void Renderer::renderReflectionPass() {
     waterRenderer->endReflectionPass(currentCmd);
 }
 
+bool Renderer::shadowPassDrawsThisFrame() const {
+    // One answer for renderShadowPass and for the fog, which samples what it
+    // draws: two copies of these conditions could disagree, and a fog
+    // dispatched on a frame whose map was not drawn reads whatever the slot
+    // was left holding - or, before the first drawn frame, an image that has
+    // never left UNDEFINED.
+    static const bool skipShadows = (std::getenv("WOWEE_SKIP_SHADOWS") != nullptr);
+    if (skipShadows) return false;
+    if (passAblation_ && passAblation_->skip(AblationPass::Shadows)) return false;
+    if (!vkCtx) return false;
+    const uint32_t frame = vkCtx->getCurrentFrame();
+    if (frame >= MAX_FRAMES || shadowDepthImage[frame] == VK_NULL_HANDLE ||
+        shadowDepthView[frame] == VK_NULL_HANDLE) {
+        return false;
+    }
+    // lightSpaceMatrix is computed at frame start, before updatePerFrameUBO.
+    // A zero matrix means the character has no position yet.
+    return lightSpaceMatrix != glm::mat4(0.0f) && activeShadowCascades_ >= 1;
+}
+
 void Renderer::renderShadowPass() {
     ZoneScopedN("Renderer::renderShadowPass");
     WOWEE_PROFILE_SCOPE("record shadows", Cpu);
-    static const bool skipShadows = (std::getenv("WOWEE_SKIP_SHADOWS") != nullptr);
-    if (skipShadows) return;
-    if (passAblation_ && passAblation_->skip(AblationPass::Shadows)) return;
     if (shadowDepthImage[0] == VK_NULL_HANDLE) return;
     if (currentCmd == VK_NULL_HANDLE) return;
     // Shadows off still runs the whole pass, casters and all: the shaders
@@ -4959,9 +4985,9 @@ void Renderer::renderShadowPass() {
 
     // Shadows render every frame - throttling causes visible flicker on player/NPCs
 
-    // lightSpaceMatrix was already computed at frame start (before updatePerFrameUBO).
-    // Zero matrix means character position isn't set yet - skip shadow pass entirely.
-    if (lightSpaceMatrix == glm::mat4(0.0f) || activeShadowCascades_ < 1) return;
+    // Before the character has a position, or with the pass switched off for
+    // measuring (WOWEE_SKIP_SHADOWS, the ablation), there is nothing to draw.
+    if (!shadowPassDrawsThisFrame()) return;
     uint32_t frame = vkCtx->getCurrentFrame();
     const uint32_t atlasW = shadowAtlasWidth(shadowCascadeCount_, SHADOW_MAP_SIZE);
     const uint32_t atlasH = shadowAtlasHeight(shadowCascadeCount_, SHADOW_MAP_SIZE);
@@ -5335,6 +5361,9 @@ void Renderer::applyPendingShadowMapSize() {
         // shadows will fail with it. The shadow pass skips itself without an
         // image; said at error level, since this is what the log has to show.
         LOG_ERROR("Shadow map: no size could be made, down to 512x512");
+        // The fog's sets still name the maps just destroyed. Handed the empty
+        // views, it switches itself off rather than sample them.
+        if (volumetricFog_) volumetricFog_->setShadowViews(shadowDepthView);
         return;
     }
     // computeLightSpaceMatrix lays the cascades out in the atlas and snaps

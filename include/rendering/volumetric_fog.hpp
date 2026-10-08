@@ -152,7 +152,8 @@ private:
     void destroyVolume(Volume& v);
     bool createVolumes(glm::uvec3 size);
     void destroyVolumes();
-    void writeComputeSets();
+    /// False, writing nothing, while any view the passes use is missing.
+    bool writeComputeSets();
 
     VkContext* ctx_ = nullptr;
     VkSampler sampler_ = VK_NULL_HANDLE;       // trilinear, clamped; owned by the context cache
@@ -166,6 +167,7 @@ private:
     bool volumesReady_ = false;
     bool formatSupported_ = true;
     bool pipelinesReady_ = false;
+    bool computeSetsWritten_ = false;  // both slots' sets name real views
 
     Quality pendingQuality_ = Quality::Off;
     Quality builtQuality_ = Quality::Off;
