@@ -1205,6 +1205,16 @@ private:
     /// Whether a state texture should be drawn given what the mouse is doing.
     [[nodiscard]] bool buttonArtVisible(const Widget& w) const;
     std::deque<Widget> widgets_;   ///< Index 0 is a placeholder; id == index.
+    /// What findByName last answered for a name, and how far up widgets_ it
+    /// had looked: the next lookup reads only the widgets made since. The
+    /// application asks every frame for frames a load-on-demand addon has
+    /// not made yet (the inspect frame, the dressing rooms), and each miss
+    /// was a string compare against all 28,000 widgets.
+    struct NameMemo {
+        uint32_t id = 0;       ///< 0 when nothing had the name
+        size_t scanned = 0;    ///< widgets_ below this were looked at
+    };
+    std::map<std::string, NameMemo, std::less<>> nameMemo_;
     /// The screen itself, above UIParent. Everything FrameXML draws hangs off
     /// UIParent, but not quite everything: a frame declared at XML top level
     /// with no parent of its own is parentless in WoW, and that is load

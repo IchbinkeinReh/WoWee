@@ -3229,3 +3229,21 @@ TEST_CASE("The draw order follows a frame hidden and shown again",
     tree.layout(kScreenW, kScreenH);
     CHECK(drawn() == std::vector<uint32_t>{a, b});
 }
+
+// findByName remembers its answers (WidgetTree::nameMemo_); a frame made after
+// a lookup, under a name that missed or that an older frame holds, still wins.
+TEST_CASE("findByName sees frames made after an earlier lookup", "[widget][name]") {
+    WidgetTree tree;
+    CHECK(tree.findByName("InspectFrame") == nullptr);
+    CHECK(tree.findByName("InspectFrame") == nullptr);
+    const uint32_t inspect = tree.create(WidgetKind::Frame, tree.uiParentId(), "InspectFrame");
+    REQUIRE(tree.findByName("InspectFrame") != nullptr);
+    CHECK(tree.findByName("InspectFrame")->id == inspect);
+
+    const uint32_t older = tree.create(WidgetKind::Frame, tree.uiParentId(), "Dup");
+    CHECK(tree.findByName("Dup")->id == older);
+    tree.create(WidgetKind::Frame, tree.uiParentId(), "Other");
+    const uint32_t newer = tree.create(WidgetKind::Frame, tree.uiParentId(), "Dup");
+    CHECK(tree.findByName("Dup")->id == newer);
+    CHECK(tree.findByName("Other") != nullptr);
+}

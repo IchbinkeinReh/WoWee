@@ -98,6 +98,7 @@ WidgetTree::WidgetTree() {
 
 void WidgetTree::reset() {
     widgets_.clear();
+    nameMemo_.clear();
     drawOrder_.clear();
     linkRects_.clear();
     scrollFrames_.clear();
@@ -291,9 +292,32 @@ const std::vector<uint32_t>& WidgetTree::portraitsFor(const std::string& unit) c
 Widget* WidgetTree::findByName(std::string_view name) {
     if (name.empty()) return nullptr;
     // Backwards, so the last frame to take the name is the one found - the
-    // same rule as the global it was published under.
-    for (auto& widget : std::views::reverse(widgets_)) {
-        if (widget.id != 0 && widget.name == name) return &widget;
+    // same rule as the global it was published under. Only the widgets made
+    // since the last lookup of this name can change the answer (nameMemo_):
+    // widgets are only ever appended, and a name is given at creation.
+    auto it = nameMemo_.find(name);
+    if (it == nameMemo_.end()) it = nameMemo_.emplace(std::string(name), NameMemo{}).first;
+    NameMemo& memo = it->second;
+    const auto matches = [&](size_t i) {
+        return widgets_[i].id != 0 && widgets_[i].name == name;
+    };
+    for (size_t i = widgets_.size(); i > memo.scanned; --i) {
+        if (matches(i - 1)) {
+            memo.id = static_cast<uint32_t>(i - 1);
+            memo.scanned = widgets_.size();
+            return &widgets_[memo.id];
+        }
+    }
+    memo.scanned = widgets_.size();
+    if (memo.id == 0) return nullptr;
+    if (memo.id < widgets_.size() && matches(memo.id)) return &widgets_[memo.id];
+    // The remembered one no longer answers to it: look through the rest.
+    memo.id = 0;
+    for (size_t i = widgets_.size(); i > 1; --i) {
+        if (matches(i - 1)) {
+            memo.id = static_cast<uint32_t>(i - 1);
+            return &widgets_[memo.id];
+        }
     }
     return nullptr;
 }
