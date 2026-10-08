@@ -184,7 +184,8 @@ public:
     bool retryCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId,
                                      uint8_t maxAttempts);
 
-    /// Every unit's blob shadow for this frame (0x00793980): its
+    /// Every unit's and corpse's blob shadow for this frame (0x00793980): a
+    /// corpse that is not bones by the bounds of its model's sequence; a unit by its
     /// CreatureModelData box on the instance it is drawn with - the mount's
     /// when it rides one - or none. `localPlayerInstance` is the renderer's
     /// own character.

@@ -1,9 +1,10 @@
-// Which units the client puts a blob shadow under, and how big
-// (0x00743760, 0x00793980, 0x0071ed80).
+// Which units and corpses the client puts a blob shadow under, and how big
+// (0x00743760, 0x00793980, 0x0071ed80, 0x0082ced0).
 #include "core/entity_spawner.hpp"
 
 #include "game/entity.hpp"
 #include "game/game_handler.hpp"
+#include "game/update_field_table.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/renderer.hpp"
 
@@ -58,7 +59,9 @@ void EntitySpawner::updateBlobShadows(uint32_t localPlayerInstance) {
             const auto& unit = static_cast<const game::Unit&>(*entity);
             bool blob = true;
             if (auto it = creatureInfo.find(unit.getEntry()); it != creatureInfo.end()) {
-                blob = (it->second.typeFlags & kTypeFlagNoShadowBlob) == 0;
+                blob = rendering::blob_shadow::carriesBlobFlag(rendering::blob_shadow::WorldObjectKind::Unit,
+                                                               (it->second.typeFlags & kTypeFlagNoShadowBlob) != 0,
+                                                               0);
             }
             if (blob) {
                 auto dIt = creatureDisplayIds_.find(guid);
@@ -80,6 +83,16 @@ void EntitySpawner::updateBlobShadows(uint32_t localPlayerInstance) {
         if (entity && entity->isUnit()) {
             const auto& unit = static_cast<const game::Unit&>(*entity);
             box = unitBox(unit, unit.getDisplayId(), mountInstance != 0 ? mountDisplayId : 0);
+        } else if (entity && entity->getType() == game::ObjectType::CORPSE) {
+            // A corpse that is not bones carries the flag too (0x00743760),
+            // and not being a unit, 0x00793980 sizes its blob by the bounds
+            // of the sequence its model plays (0x0082ced0).
+            const uint16_t flagsField = game::fieldIndex(game::UF::CORPSE_FIELD_FLAGS);
+            const uint32_t flags = flagsField != 0xFFFF ? entity->getField(flagsField) : 0u;
+            if (rendering::blob_shadow::carriesBlobFlag(rendering::blob_shadow::WorldObjectKind::Corpse, false,
+                                                        flags)) {
+                box = cr->instanceSequenceBounds(riderInstance);
+            }
         }
         if (mountInstance != 0) {
             cr->setInstanceBlobShadow(mountInstance, box);

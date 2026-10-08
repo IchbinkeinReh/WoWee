@@ -256,6 +256,9 @@ public:
     /// A unit's blob shadow (0x00793980): the CreatureModelData box it is
     /// sized by, on the instance it is drawn with, or none.
     void setInstanceBlobShadow(uint32_t instanceId, const std::optional<blob_shadow::Box>& box);
+    /// The bounds of the sequence an instance is playing (M2Sequence +0x20),
+    /// which 0x0082ced0 gives 0x00793980 for an entity that is not a unit.
+    [[nodiscard]] std::optional<blob_shadow::Box> instanceSequenceBounds(uint32_t instanceId) const;
     /// Every visible instance with a blob shadow, as this frame draws it.
     void collectBlobShadows(std::vector<blob_shadow::Caster>& out) const;
 

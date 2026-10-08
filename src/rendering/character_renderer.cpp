@@ -4603,6 +4603,19 @@ void CharacterRenderer::setInstanceBlobShadow(uint32_t instanceId,
     if (it != instances.end()) it->second.blobShadow = box;
 }
 
+std::optional<blob_shadow::Box> CharacterRenderer::instanceSequenceBounds(uint32_t instanceId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return std::nullopt;
+    auto m = models.find(it->second.modelId);
+    if (m == models.end()) return std::nullopt;
+    const auto& seqs = m->second.data.sequences;
+    const int si = it->second.currentSequenceIndex;
+    // No sequence: 0x0082ced0 gives an empty box.
+    if (si < 0 || static_cast<size_t>(si) >= seqs.size()) return blob_shadow::Box{};
+    return blob_shadow::Box{.min = seqs[static_cast<size_t>(si)].boundMin,
+                            .max = seqs[static_cast<size_t>(si)].boundMax};
+}
+
 void CharacterRenderer::collectBlobShadows(std::vector<blob_shadow::Caster>& out) const {
     for (const auto& [id, inst] : instances) {
         (void)id;

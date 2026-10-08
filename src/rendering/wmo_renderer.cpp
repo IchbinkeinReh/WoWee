@@ -3094,9 +3094,11 @@ void WMORenderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec
     std::vector<uint32_t> tris;
     for (size_t idx : candidates) {
         const auto& instance = instances[idx];
-        // The map's buildings (0x007a6940 walks the map objects), not a
-        // transport, which is a game object.
-        if (instance.isTransport || instance.hidden) continue;
+        // Every map object 0x007a6940 walks: the map's buildings and a game
+        // object's WMO alike - doors and transports are map objects too,
+        // shown and hidden by the game object (0x00783a60 from 0x0070e750,
+        // 0x00710be0). Only a hidden one (+0xc 0x20) is passed over.
+        if (instance.hidden) continue;
         if (boxMax.x < instance.worldBoundsMin.x || boxMin.x > instance.worldBoundsMax.x ||
             boxMax.y < instance.worldBoundsMin.y || boxMin.y > instance.worldBoundsMax.y ||
             boxMax.z < instance.worldBoundsMin.z || boxMin.z > instance.worldBoundsMax.z) {

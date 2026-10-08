@@ -133,6 +133,8 @@ enum class UF : uint16_t {
     /// WotLK: three item entries, main hand, off hand, ranged - what a
     /// creature holds (0x0072dbc0).
     UNIT_VIRTUAL_ITEM_SLOT_ID,
+    /// WotLK: a corpse's flags; 1 is bones (0x00743760 gives those no blob).
+    CORPSE_FIELD_FLAGS,
     PLAYER_DUEL_ARBITER,
     GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,
