@@ -2550,6 +2550,7 @@ add_executable(wowee_editor
     src/rendering/vk_pipeline.cpp
     src/rendering/camera.cpp
     src/rendering/terrain_renderer.cpp
+    src/rendering/cube_texture.cpp
     src/rendering/shadow_params.cpp
     src/rendering/m2_renderer.cpp
     src/rendering/m2_renderer_instance.cpp
