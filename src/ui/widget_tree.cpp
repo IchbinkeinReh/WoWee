@@ -1235,7 +1235,12 @@ uint32_t WidgetTree::hitTestWheel(float x, float y) const {
 
 uint32_t WidgetTree::hitTestFor(float x, float y, bool forWheel) const {
     const Widget* best = nullptr;
-    for (const Widget& w : widgets_) {
+    // Over the widgets that may be visible, in id order as the walk over all
+    // of them went: only a visible frame takes the mouse, and touching every
+    // one of 28,000 widgets to find the few hundred was ~1.4 ms a frame.
+    for (uint32_t id = mayBeVisible_.nextFrom(1); id != 0; id = mayBeVisible_.nextFrom(id + 1)) {
+        if (id >= widgets_.size()) break;
+        const Widget& w = widgets_[id];
         if (w.id == 0 || w.kind != WidgetKind::Frame) continue;
         if (!w.visible) continue;
         // The wheel is enabled separately from the mouse and a scroll frame

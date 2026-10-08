@@ -1894,15 +1894,26 @@ TEST_CASE("A rect that is not a number is never hit", "[widget][hittest]") {
     const uint32_t good = tree.create(WidgetKind::Frame, tree.uiParentId(), "Good");
     Widget* g = tree.get(good);
     g->mouseEnabled = true;
-    g->visible = true;
-    g->left = 10.0f; g->bottom = 10.0f; g->rectW = 20.0f; g->rectH = 20.0f;
+    g->width = 20.0f;
+    g->height = 20.0f;
+    tree.addPoint(good, Anchor{.point = "BOTTOMLEFT", .relativePoint = "BOTTOMLEFT",
+                               .x = 10.0f, .y = 10.0f});
+    // Shown by the layout, as every frame is: the hit test looks only among
+    // the frames the tree has seen become visible.
+    const uint32_t bad = tree.create(WidgetKind::Frame, tree.uiParentId(), "Bad");
+    tree.get(bad)->width = 100.0f;
+    tree.get(bad)->height = 100.0f;
+    tree.addPoint(bad, Anchor{});
+    tree.get(bad)->mouseEnabled = false;
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.get(good)->visible);
+    REQUIRE(tree.get(good)->left == 10.0f);
     REQUIRE(tree.hitTest(15.0f, 15.0f) == good);
     REQUIRE(tree.hitTest(500.0f, 500.0f) == 0);
 
-    const uint32_t bad = tree.create(WidgetKind::Frame, tree.uiParentId(), "Bad");
     Widget* b = tree.get(bad);
+    REQUIRE(b->visible);
     b->mouseEnabled = true;
-    b->visible = true;
     b->left = std::numeric_limits<float>::quiet_NaN();
     b->bottom = 0.0f; b->rectW = 100.0f; b->rectH = 100.0f;
 
