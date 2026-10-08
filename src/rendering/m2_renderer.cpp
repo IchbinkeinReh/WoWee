@@ -975,6 +975,7 @@ void M2Renderer::shutdown() {
         destroyInstanceBones(inst);
     }
     instances.clear();
+    shadowCullDirty_ = true;
     spatialGrid.clear();
     instanceIndexById.clear();
     instanceDedupMap_.clear();

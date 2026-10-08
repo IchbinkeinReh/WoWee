@@ -420,17 +420,24 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     }
 
     // WOWEE_AUTO_LOGIN=1 (or 2, which also enters the world) presses Login
-    // once, for unattended test runs that have to reach character select.
+    // for unattended test runs that have to reach character select.
     // Only with an account this screen already remembers: it takes the same
     // path as the button, with the stored hash, and never sees a password.
-    // Once per session, so a failed or dropped login waits for a person.
+    // A few tries, five seconds apart, then it waits for a person: a client
+    // relaunched straight after the last one is now and then refused by the
+    // server ("Account not found") and let in on the next try.
     {
         static const bool autoLogin = core::envIntClamped("WOWEE_AUTO_LOGIN", 0, 0, 2) > 0;
-        static bool autoLoginTried = false;
-        if (autoLogin && !autoLoginTried && loginInfoLoaded && !authenticating &&
-            !settingsOpen_ && usingStoredHash && password_.text() == PASSWORD_PLACEHOLDER) {
-            autoLoginTried = true;
-            LOG_WARNING("WOWEE_AUTO_LOGIN: logging in with the remembered account");
+        static int autoLoginTries = 0;
+        static double lastAutoLogin = -1e9;
+        const double now = ImGui::GetTime();
+        if (autoLogin && autoLoginTries < 5 && now - lastAutoLogin > 5.0 && loginInfoLoaded &&
+            !authenticating && !settingsOpen_ && usingStoredHash &&
+            password_.text() == PASSWORD_PLACEHOLDER) {
+            ++autoLoginTries;
+            lastAutoLogin = now;
+            LOG_WARNING("WOWEE_AUTO_LOGIN: logging in with the remembered account (try ",
+                        autoLoginTries, ")");
             attemptAuth(authHandler);
         }
     }

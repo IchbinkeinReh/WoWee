@@ -1255,11 +1255,11 @@ private:
     /// only filter this list instead of walking every instance again.
     std::vector<std::pair<uint32_t, uint32_t>> shadowCandidates_[2];
     bool shadowCandidatesValid_ = false;
-    /// What the shadow cull reads of each instance, packed: written by
-    /// update() in the loop that already walks every instance on a worker,
-    /// so the main thread's cull reads 24 bytes a caster instead of
-    /// touching each M2Instance - with tens of thousands resident, those
-    /// cache misses were most of the shadow pass.
+    /// What the shadow cull reads of each instance, packed, one entry per
+    /// instance at its index: the cull reads these instead of touching each
+    /// M2Instance - with tens of thousands resident, those cache misses were
+    /// most of the shadow pass. Rebuilt whole only when instances come, go or
+    /// change model (shadowCullDirty_); a move updates its own entry.
     struct ShadowCullEntry {
         glm::vec3 position;
         float radius;       ///< boundRadius x scale
@@ -1267,6 +1267,7 @@ private:
         uint32_t index;     ///< into instances, checked against modelId on use
         uint32_t foliage;   ///< the model casts in the foliage pass
         uint32_t groundCover; ///< ground clutter: casts in the near cascade only
+        uint32_t casts;       ///< valid, visible and has a model
     };
     std::vector<ShadowCullEntry> shadowCull_;
     /// Ground clutter inside the first cascade, kept apart: tens of thousands
@@ -1274,7 +1275,9 @@ private:
     std::vector<std::pair<uint32_t, uint32_t>> shadowGroundCandidates_[2];
     /// The largest cascade half-extent that still takes ground clutter.
     static constexpr float kGroundCoverShadowRadius = 60.0f;
-    size_t shadowCullInstanceCount_ = 0;  ///< instances.size() when it was built
+    bool shadowCullDirty_ = true;
+    void rebuildShadowCull();
+    void refreshShadowCullEntry(size_t index);
 
     // Ribbon draw-call list (reused each frame)
     struct RibbonDrawCall {

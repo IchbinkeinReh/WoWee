@@ -2298,6 +2298,7 @@ void Renderer::update(float deltaTime) {
             }
             lightingManager->setInteriorFog(interiorFog);
         }
+        WOWEE_PROFILE_SCOPE("lighting", Cpu);
         lightingManager->update(characterPosition, mapId,
                                 gameTime, weatherIntensity, cameraLiquid, deathLight);
         // A world object - unit, player or game object - on an interior floor
@@ -2310,6 +2311,7 @@ void Renderer::update(float deltaTime) {
             if (camera) {
                 Frustum frustum;
                 frustum.extractFromMatrix(camera->getProjectionMatrix() * camera->getViewMatrix());
+                WOWEE_PROFILE_SCOPE("wmo interior pass", Cpu);
                 wmoRenderer->updateInteriorPass(camera->getPosition(), &frustum);
             }
             const auto& zl = lightingManager->getLightingParams();
@@ -2416,6 +2418,7 @@ void Renderer::update(float deltaTime) {
 
         // Update animation based on movement state (delegated to AnimationController §4.2)
         if (animationController_) {
+            WOWEE_PROFILE_SCOPE("player animation", Cpu);
             animationController_->updateMeleeTimers(deltaTime);
             animationController_->setDeltaTime(deltaTime);
             animationController_->updateCharacterAnimation();
@@ -2435,13 +2438,14 @@ void Renderer::update(float deltaTime) {
 
     // Update sky system (skybox time, star twinkle, clouds, celestial moon phases)
     if (skySystem) {
+        WOWEE_PROFILE_SCOPE("sky", Cpu);
         skySystem->update(deltaTime);
     }
     if (updateSkyboxLayers() && skyboxModelRenderer_ && camera) {
         skyboxModelRenderer_->update(deltaTime, camera->getPosition(),
             camera->getProjectionMatrix() * camera->getViewMatrix());
     }
-    updateStarsModel(deltaTime);
+    { WOWEE_PROFILE_SCOPE("stars", Cpu); updateStarsModel(deltaTime); }
 
     // Update weather particles
     if (weather && camera) {
@@ -2455,6 +2459,7 @@ void Renderer::update(float deltaTime) {
         in.riding = animationController_ && animationController_->isTaxiFlight();
         in.viewportWidth = activeRenderExtent_.width ? activeRenderExtent_.width
                                                      : (vkCtx ? vkCtx->getSwapchainExtent().width : 0);
+        WOWEE_PROFILE_SCOPE("weather", Cpu);
         weather->update(in);
     }
 
@@ -2465,6 +2470,7 @@ void Renderer::update(float deltaTime) {
 
     // Update swim effects
     if (swimEffects && camera && cameraController && waterRenderer) {
+        WOWEE_PROFILE_SCOPE("swim effects", Cpu);
         swimEffects->update(*camera, *cameraController, *waterRenderer, deltaTime);
     }
 
@@ -2503,6 +2509,7 @@ void Renderer::update(float deltaTime) {
 
         const float yawRad = glm::radians(cameraController->getYaw());
         const glm::vec2 travelDir(std::sin(yawRad), -std::cos(yawRad));
+        WOWEE_PROFILE_SCOPE("water wake", Cpu);
         waterRenderer->updateWake(deltaTime, glm::vec2(charPos.x, charPos.y),
                                   travelDir, intensity, wading);
     }
@@ -2539,7 +2546,7 @@ void Renderer::update(float deltaTime) {
         chargeEffect->update(deltaTime);
     }
     // Update transient spell visual instances (delegated to SpellVisualSystem §4.4)
-    if (spellVisualSystem_) spellVisualSystem_->update(deltaTime);
+    { WOWEE_PROFILE_SCOPE("spell visuals", Cpu); if (spellVisualSystem_) spellVisualSystem_->update(deltaTime); }
 
 
     // Launch M2 doodad animation on background thread (overlaps with character animation + audio)
@@ -2580,7 +2587,7 @@ void Renderer::update(float deltaTime) {
     }
 
     // Footsteps: age visual prints, then let authored footfall events add new ones.
-    if (footprintRenderer) footprintRenderer->update(deltaTime);
+    { WOWEE_PROFILE_SCOPE("footprints", Cpu); if (footprintRenderer) footprintRenderer->update(deltaTime); }
 
     // The blob shadows under the units (0x007e49e0): with shadowLOD 1 and
     // while extShadowQuality is below 1, which it is here whenever the
@@ -2598,10 +2605,10 @@ void Renderer::update(float deltaTime) {
                                     camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
                                     terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
     }
-    if (animationController_) animationController_->updateFootsteps(deltaTime);
+    { WOWEE_PROFILE_SCOPE("footsteps", Cpu); if (animationController_) animationController_->updateFootsteps(deltaTime); }
 
     // Activity SFX + mount ambient sounds: delegated to AnimationController (§4.2)
-    if (animationController_) animationController_->updateSfxState(deltaTime);
+    { WOWEE_PROFILE_SCOPE("sfx state", Cpu); if (animationController_) animationController_->updateSfxState(deltaTime); }
 
     // Ambient environmental sounds + zone/music transitions (delegated to AudioCoordinator)
     if (audioCoordinator_) {
@@ -2630,6 +2637,7 @@ void Renderer::update(float deltaTime) {
         // stale server world-state zones and whole-ADT ambiguity at river banks.
         zctx.serverZoneId = getCurrentZoneId();
         zctx.zoneManager = zoneManager.get();
+        WOWEE_PROFILE_SCOPE("zone audio", Cpu);
         audioCoordinator_->updateZoneAudio(zctx);
     }
 

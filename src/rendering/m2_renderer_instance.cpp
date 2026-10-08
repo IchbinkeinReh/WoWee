@@ -34,6 +34,26 @@ thread_local std::unordered_set<uint32_t> tl_m2_candidateIdScratch;
 thread_local std::vector<uint32_t> tl_m2_collisionTriScratch;
 } // namespace m2_internal
 
+void M2Renderer::rebuildShadowCull() {
+    shadowCull_.resize(instances.size());
+    for (size_t i = 0; i < instances.size(); ++i) refreshShadowCullEntry(i);
+    shadowCullDirty_ = false;
+}
+
+void M2Renderer::refreshShadowCullEntry(size_t index) {
+    if (index >= shadowCull_.size() || index >= instances.size()) return;
+    const M2Instance& inst = instances[index];
+    ShadowCullEntry& e = shadowCull_[index];
+    const bool casts = inst.cachedIsValid && !inst.cachedIsInvisibleTrap && inst.cachedModel;
+    e.position = inst.position;
+    e.radius = casts ? inst.cachedModel->boundRadius * inst.scale : 0.0f;
+    e.modelId = inst.modelId;
+    e.index = static_cast<uint32_t>(index);
+    e.foliage = (casts && inst.cachedModel->shadowWindFoliage) ? 1u : 0u;
+    e.groundCover = (inst.cachedIsGroundDetail || inst.detailDoodad) ? 1u : 0u;
+    e.casts = casts ? 1u : 0u;
+}
+
 void M2Renderer::setInstancePosition(uint32_t instanceId, const glm::vec3& position) {
     if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
         !std::isfinite(position.z)) return;
@@ -60,6 +80,7 @@ void M2Renderer::setInstancePosition(uint32_t instanceId, const glm::vec3& posit
     // Incrementally update spatial grid
     refileBounds(spatialGrid, oldBoundsMin, oldBoundsMax,
                  inst.worldBoundsMin, inst.worldBoundsMax, instanceId);
+    refreshShadowCullEntry(idxIt->second);
 }
 
 void M2Renderer::setInstanceFade(uint32_t instanceId, float alpha) {
@@ -279,6 +300,7 @@ bool M2Renderer::getInstanceHeight(uint32_t instanceId, glm::vec3& outPosition, 
 }
 
 void M2Renderer::setModelParticlesOnly(uint32_t modelId) {
+    shadowCullDirty_ = true;
     auto it = models.find(modelId);
     if (it == models.end()) return;
     // Every path that would draw, shadow or collide with it already skips an
@@ -296,6 +318,7 @@ void M2Renderer::setInstanceExternalPose(uint32_t instanceId, const glm::mat4& m
     auto& inst = instances[idxIt->second];
     inst.scale = glm::length(glm::vec3(model[0]));
     inst.boneMatrices = bones;
+    refreshShadowCullEntry(idxIt->second);
     inst.currentSequenceIndex = sequenceIndex;
     inst.animTime = animTimeMs;
     inst.globalSequenceTime = globalTimeMs;
@@ -335,6 +358,7 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
 
     // Extract position from transform for bounds
     inst.position = glm::vec3(transform[3]);
+    refreshShadowCullEntry(idxIt->second);
 
     // The dedup map is keyed on position, so it has to move with the instance.
     // It did not, and only rebuildSpatialIndex ever put it right - which this
@@ -378,6 +402,7 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
 }
 
 void M2Renderer::removeInstance(uint32_t instanceId) {
+    shadowCullDirty_ = true;
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;
     size_t idx = idxIt->second;
@@ -456,6 +481,7 @@ void M2Renderer::setSkipWallCollision(uint32_t instanceId, bool skip) {
 }
 
 void M2Renderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
+    shadowCullDirty_ = true;
     if (instanceIds.empty() || instances.empty()) {
         return;
     }
@@ -538,6 +564,7 @@ void M2Renderer::clear() {
     models.clear();
     pinnedModelIds_.clear();
     instances.clear();
+    shadowCullDirty_ = true;
     spatialGrid.clear();
     instanceIndexById.clear();
     boneSeedInstanceByModel_.clear();
@@ -567,6 +594,7 @@ void M2Renderer::clearInstances() {
     if (vkCtx_) vkDeviceWaitIdle(vkCtx_->getDevice());
     for (auto& inst : instances) destroyInstanceBones(inst);
     instances.clear();
+    shadowCullDirty_ = true;
     spatialGrid.clear();
     instanceIndexById.clear();
     boneSeedInstanceByModel_.clear();
@@ -588,6 +616,7 @@ void M2Renderer::resetQueryStats() {
 }
 
 void M2Renderer::rebuildSpatialIndex() {
+    shadowCullDirty_ = true;
     spatialGrid.clear();
     instanceIndexById.clear();
     boneSeedInstanceByModel_.clear();
@@ -730,6 +759,7 @@ std::vector<uint32_t> M2Renderer::drainReapedModelIds() {
 }
 
 void M2Renderer::unloadModel(uint32_t modelId) {
+    shadowCullDirty_ = true;
     auto it = models.find(modelId);
     if (it == models.end()) return;
     if (vkCtx_) vkDeviceWaitIdle(vkCtx_->getDevice());
