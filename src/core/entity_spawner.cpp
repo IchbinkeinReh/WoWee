@@ -261,7 +261,31 @@ void EntitySpawner::clearMountState() {
     }
     mountInstanceId_ = 0;
     mountModelId_ = 0;
+    mountDisplayId_ = 0;
     pendingMountDisplayId_ = 0;
+}
+
+uint32_t EntitySpawner::loadMountModel(uint32_t displayId) {
+    uint32_t modelId = 0;
+    float riderHeight = 0.0f;
+    std::string modelPath;
+    return loadRemoteMountModel(displayId, modelId, modelPath, riderHeight) ? modelId : 0u;
+}
+
+void EntitySpawner::mountUnitNow(uint64_t guid, uint32_t displayId, bool localPlayer) {
+    if (localPlayer) {
+        if (displayId == 0) {
+            clearMountState();
+            if (renderer_)
+                if (auto* ac = renderer_->getAnimationController()) ac->clearMount();
+            return;
+        }
+        pendingMountDisplayId_ = displayId;
+        processPendingMount();
+        return;
+    }
+    pendingRemotePlayerMounts_.erase(guid);
+    if (!applyRemotePlayerMount(guid, displayId)) pendingRemotePlayerMounts_[guid] = displayId;
 }
 
 void EntitySpawner::setRemotePlayerMountDisplayId(uint64_t guid, uint32_t displayId) {

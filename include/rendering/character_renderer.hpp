@@ -261,6 +261,15 @@ public:
     /// (0x008318a0): its position through its bone, then the model's
     /// placement. False when the model has no such event.
     bool getEventPosition(uint32_t instanceId, uint32_t eventId, glm::vec3& out) const;
+    /// 0x00827780: an event's first time in the sequence an animation plays
+    /// on the instance's model (the primary one, as playAnimation picks it),
+    /// in ms from its start; 0 where the model has no such sequence or the
+    /// event no time in it. Null for no instance.
+    [[nodiscard]] std::optional<uint32_t> getAnimationEventTime(uint32_t instanceId, uint32_t animationId,
+                                                                uint32_t eventId) const;
+    /// Where the instance is drawn is moved by this, on top of its position
+    /// (a mount transition carrying its rider, 0x007193f0); zero for none.
+    void setInstanceRenderOffset(uint32_t instanceId, const glm::vec3& offset);
 
     /** Debug: Log all available animations for an instance */
     void dumpAnimations(uint32_t instanceId) const;
@@ -393,6 +402,7 @@ private:
         uint32_t modelId;
 
         glm::vec3 position;
+        glm::vec3 renderOffset{0.0f};  ///< setInstanceRenderOffset
         glm::vec3 rotation;
         float scale;
         bool visible = true;  // For first-person camera hiding

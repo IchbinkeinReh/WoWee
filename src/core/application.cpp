@@ -2362,6 +2362,72 @@ void Application::setState(AppState newState) {
                         if (guid == gameHandler->getPlayerGuid()) return entitySpawner_->getMountInstanceId();
                         return entitySpawner_->remotePlayerMountInstance(guid);
                     });
+                    // CharProc 16's mount transition (0x006f9670): the
+                    // spell's mount, its model, whether the unit rides, and
+                    // where it is handed over.
+                    svs->setMountDisplayResolver([this](uint32_t spellId) -> std::optional<uint32_t> {
+                        if (!gameHandler) return std::nullopt;
+                        const uint32_t entry = gameHandler->getSpellMountCreature(spellId);
+                        if (entry == 0) return std::nullopt;
+                        const auto& cache = gameHandler->getCreatureInfoCache();
+                        auto it = cache.find(entry);
+                        if (it == cache.end()) {
+                            gameHandler->queryCreatureInfo(entry, 0);
+                            return 0u;
+                        }
+                        if (it->second.displayId[0] == 0) return std::nullopt;
+                        return it->second.displayId[0];
+                    });
+                    svs->setMountModelLoader([this](uint32_t displayId) -> uint32_t {
+                        return entitySpawner_ ? entitySpawner_->loadMountModel(displayId) : 0u;
+                    });
+                    auto mountField = [this](uint64_t guid) -> uint32_t {
+                        if (!gameHandler) return 0;
+                        if (guid == gameHandler->getPlayerGuid()) return gameHandler->isMounted() ? 1u : 0u;
+                        auto entity = gameHandler->getEntityManager().getEntity(guid);
+                        if (!entity || !entity->isUnit()) return 0;
+                        return static_cast<const game::Unit&>(*entity).getMountDisplayId();
+                    };
+                    svs->setUnitMountedQuery([mountField](uint64_t guid) { return mountField(guid) != 0; });
+                    svs->setUnitMountFieldQuery([this](uint64_t guid) -> uint32_t {
+                        if (!gameHandler) return 0;
+                        if (guid == gameHandler->getPlayerGuid()) return gameHandler->currentMountDisplayIdRef();
+                        auto entity = gameHandler->getEntityManager().getEntity(guid);
+                        if (!entity || !entity->isUnit()) return 0;
+                        return static_cast<const game::Unit&>(*entity).getMountDisplayId();
+                    });
+                    svs->setMountSink([this](uint64_t guid, uint32_t displayId) {
+                        if (!entitySpawner_ || !gameHandler) return;
+                        const bool player = guid == gameHandler->getPlayerGuid();
+                        if (player || entitySpawner_->isPlayerSpawned(guid))
+                            entitySpawner_->mountUnitNow(guid, displayId, player);
+                    });
+                    svs->setGroundQuery([this](const glm::vec3& top, const glm::vec3& bottom)
+                                            -> std::optional<rendering::mount_transition::GroundHit> {
+                        if (!renderer) return std::nullopt;
+                        std::optional<float> best;
+                        glm::vec3 normal(0.0f, 0.0f, 1.0f);
+                        auto consider = [&](std::optional<float> z, const glm::vec3& n) {
+                            if (z && *z <= top.z && *z >= bottom.z && (!best || *z > *best)) {
+                                best = z;
+                                normal = n;
+                            }
+                        };
+                        if (auto* terrain = renderer->getTerrainManager()) {
+                            const auto z = terrain->getHeightAt(top.x, top.y);
+                            const auto zx = terrain->getHeightAt(top.x + 0.5f, top.y);
+                            const auto zy = terrain->getHeightAt(top.x, top.y + 0.5f);
+                            glm::vec3 n(0.0f, 0.0f, 1.0f);
+                            if (z && zx && zy) n = glm::normalize(glm::vec3((*z - *zx) * 2.0f, (*z - *zy) * 2.0f, 1.0f));
+                            consider(z, n);
+                        }
+                        if (auto* wmo = renderer->getWMORenderer()) consider(wmo->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
+                        if (auto* m2 = renderer->getM2Renderer()) consider(m2->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
+                        if (!best) return std::nullopt;
+                        const float span = top.z - bottom.z;
+                        return rendering::mount_transition::GroundHit{
+                            .fraction = span > 0.0f ? (top.z - *best) / span : 0.0f, .normal = normal};
+                    });
                     svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
                         return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
                     });

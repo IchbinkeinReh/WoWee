@@ -290,6 +290,12 @@ public:
     /// CreatureDisplayInfoExtra (CharProc 17, 0x006f82d0); 0 gives it its
     /// own NPCItemDisplay head back (0x00723730).
     void setNpcHeadItem(uint64_t guid, uint32_t displayId);
+    /// A display's model for the character renderer, as a mount's is loaded
+    /// (its skins from CreatureDisplayInfo); 0 where it cannot be.
+    uint32_t loadMountModel(uint32_t displayId);
+    /// A unit mounted on a display now, or put down for 0 - a mount
+    /// transition handing it over (0x007412b0, 0x00740450).
+    void mountUnitNow(uint64_t guid, uint32_t displayId, bool localPlayer);
     /// The instance drawing another player's mount, 0 while it rides none.
     uint32_t remotePlayerMountInstance(uint64_t guid) const {
         auto it = remotePlayerMounts_.find(guid);
@@ -946,11 +952,14 @@ private:
     // --- Mount ---
     uint32_t mountInstanceId_ = 0;
     uint32_t mountModelId_ = 0;
+    uint32_t mountDisplayId_ = 0;  ///< the display mountInstanceId_ draws
     uint32_t pendingMountDisplayId_ = 0;
     void processPendingMount();
     std::unordered_map<uint64_t, RemotePlayerMount> remotePlayerMounts_;
     std::unordered_map<uint64_t, uint32_t> pendingRemotePlayerMounts_;
     void processPendingRemotePlayerMounts();
+    /// One player's mount set; false where the player is not drawn yet.
+    bool applyRemotePlayerMount(uint64_t guid, uint32_t displayId);
     bool loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
                               std::string& modelPath, float& riderHeight);
     void removeRemotePlayerMount(uint64_t guid);

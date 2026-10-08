@@ -7,6 +7,7 @@
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/animation_controller.hpp"
 #include "rendering/vk_context.hpp"
@@ -1499,6 +1500,15 @@ void EntitySpawner::processPendingMount() {
     if (pendingMountDisplayId_ == 0) return;
     uint32_t mountDisplayId = pendingMountDisplayId_;
     pendingMountDisplayId_ = 0;
+    // On it already - a mount transition handed the player over before the
+    // server said so (0x00740450 does nothing for the same display) - or
+    // on another, which goes first.
+    if (mountInstanceId_ != 0) {
+        if (mountDisplayId_ == mountDisplayId) return;
+        if (renderer_ && renderer_->getCharacterRenderer())
+            renderer_->getCharacterRenderer()->removeInstance(mountInstanceId_);
+        mountInstanceId_ = 0;
+    }
     LOG_INFO("processPendingMount: loading displayId ", mountDisplayId);
 
     if (!renderer_ || !renderer_->getCharacterRenderer() || !assetManager_) return;
@@ -1764,6 +1774,10 @@ void EntitySpawner::processPendingMount() {
     }
 
     mountInstanceId_ = instanceId;
+    mountDisplayId_ = mountDisplayId;
+    // Its own mount drawn now: a mount transition's ends (0x0073d5d0).
+    if (auto* svs = renderer_->getSpellVisualSystem(); svs && gameHandler_)
+        svs->onUnitMounted(gameHandler_->getPlayerGuid());
 
     // Compute height offset - place player above mount's back.
     //
@@ -1925,69 +1939,68 @@ bool EntitySpawner::loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
 
 void EntitySpawner::processPendingRemotePlayerMounts() {
     if (pendingRemotePlayerMounts_.empty() || !renderer_) return;
-    auto* cr = renderer_->getCharacterRenderer();
-    if (!cr) return;
+    if (!renderer_->getCharacterRenderer()) return;
 
     // Mount model loading can touch disk and upload GPU resources. Process at
     // most one transition per frame, consistent with the other spawn queues.
     for (auto it = pendingRemotePlayerMounts_.begin();
          it != pendingRemotePlayerMounts_.end(); ++it) {
-        const uint64_t guid = it->first;
-        const uint32_t displayId = it->second;
-
-        if (displayId == 0) {
-            removeRemotePlayerMount(guid);
-            pendingRemotePlayerMounts_.erase(it);
-            return;
-        }
-        auto playerIt = playerInstances_.find(guid);
-        if (playerIt == playerInstances_.end()) continue; // initial fields can precede rendering
-
-        auto current = remotePlayerMounts_.find(guid);
-        if (current != remotePlayerMounts_.end() && current->second.displayId == displayId) {
-            pendingRemotePlayerMounts_.erase(it);
-            return;
-        }
-        removeRemotePlayerMount(guid);
-
-        uint32_t modelId = 0;
-        float riderHeight = 0.0f;
-        std::string modelPath;
-        if (!loadRemoteMountModel(displayId, modelId, modelPath, riderHeight)) {
-            LOG_WARNING("Failed to load remote player mount: guid=0x", std::hex, guid,
-                        std::dec, " displayId=", displayId);
-            pendingRemotePlayerMounts_.erase(it);
-            return;
-        }
-
-        glm::vec3 pos(0.0f);
-        cr->getInstancePosition(playerIt->second, pos);
-        uint32_t mountInstance = cr->createInstance(modelId, pos, glm::vec3(0.0f), 1.0f);
-        if (mountInstance != 0) {
-            const bool moving = gameHandler_ && [&] {
-                auto entity = gameHandler_->getEntityManager().getEntity(guid);
-                return entity && entity->isActivelyMoving();
-            }();
-            const bool flying = creatureFlyingState_.count(guid) > 0;
-            const bool walking = creatureWalkingState_.count(guid) > 0;
-            uint32_t mountAnim = moving
-                ? (flying ? rendering::anim::FLY_FORWARD
-                          : (walking ? rendering::anim::WALK : rendering::anim::RUN))
-                : (flying ? rendering::anim::FLY_IDLE : rendering::anim::STAND);
-            if (!cr->hasAnimation(mountInstance, mountAnim)) {
-                mountAnim = moving ? rendering::anim::RUN : rendering::anim::STAND;
-            }
-            cr->playAnimation(mountInstance, mountAnim, true);
-            cr->playAnimation(playerIt->second, rendering::anim::MOUNT, true);
-            remotePlayerMounts_[guid] = {.displayId = displayId, .modelId = modelId,
-                                         .instanceId = mountInstance, .riderHeight = riderHeight};
-            LOG_INFO("Remote player mounted: guid=0x", std::hex, guid, std::dec,
-                     " displayId=", displayId, " riderHeight=", riderHeight,
-                     " model=", modelPath);
-        }
+        if (!applyRemotePlayerMount(it->first, it->second)) continue;  // initial fields can precede rendering
         pendingRemotePlayerMounts_.erase(it);
         return;
     }
+}
+
+bool EntitySpawner::applyRemotePlayerMount(uint64_t guid, uint32_t displayId) {
+    auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!cr) return true;
+    if (displayId == 0) {
+        removeRemotePlayerMount(guid);
+        return true;
+    }
+    auto playerIt = playerInstances_.find(guid);
+    if (playerIt == playerInstances_.end()) return false;
+
+    auto current = remotePlayerMounts_.find(guid);
+    if (current != remotePlayerMounts_.end() && current->second.displayId == displayId) return true;
+    removeRemotePlayerMount(guid);
+
+    uint32_t modelId = 0;
+    float riderHeight = 0.0f;
+    std::string modelPath;
+    if (!loadRemoteMountModel(displayId, modelId, modelPath, riderHeight)) {
+        LOG_WARNING("Failed to load remote player mount: guid=0x", std::hex, guid,
+                    std::dec, " displayId=", displayId);
+        return true;
+    }
+    glm::vec3 pos(0.0f);
+    cr->getInstancePosition(playerIt->second, pos);
+    uint32_t mountInstance = cr->createInstance(modelId, pos, glm::vec3(0.0f), 1.0f);
+    if (mountInstance != 0) {
+        const bool moving = gameHandler_ && [&] {
+            auto entity = gameHandler_->getEntityManager().getEntity(guid);
+            return entity && entity->isActivelyMoving();
+        }();
+        const bool flying = creatureFlyingState_.count(guid) > 0;
+        const bool walking = creatureWalkingState_.count(guid) > 0;
+        uint32_t mountAnim = moving
+            ? (flying ? rendering::anim::FLY_FORWARD
+                      : (walking ? rendering::anim::WALK : rendering::anim::RUN))
+            : (flying ? rendering::anim::FLY_IDLE : rendering::anim::STAND);
+        if (!cr->hasAnimation(mountInstance, mountAnim)) {
+            mountAnim = moving ? rendering::anim::RUN : rendering::anim::STAND;
+        }
+        cr->playAnimation(mountInstance, mountAnim, true);
+        cr->playAnimation(playerIt->second, rendering::anim::MOUNT, true);
+        remotePlayerMounts_[guid] = {.displayId = displayId, .modelId = modelId,
+                                     .instanceId = mountInstance, .riderHeight = riderHeight};
+        // Its own mount drawn now: a mount transition's ends (0x0073d5d0).
+        if (auto* svs = renderer_->getSpellVisualSystem()) svs->onUnitMounted(guid);
+        LOG_INFO("Remote player mounted: guid=0x", std::hex, guid, std::dec,
+                 " displayId=", displayId, " riderHeight=", riderHeight,
+                 " model=", modelPath);
+    }
+    return true;
 }
 
 void EntitySpawner::erasePendingGuidIfUnqueued(uint64_t guid) {

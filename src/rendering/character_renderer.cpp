@@ -4217,7 +4217,7 @@ glm::mat4 CharacterRenderer::getModelMatrix(const CharacterInstance& instance) c
     glm::mat4 model = glm::mat4(1.0f);
 
     // Apply transformations: T * R * S
-    model = glm::translate(model, instance.position);
+    model = glm::translate(model, instance.position + instance.renderOffset);
 
     // Apply rotation (euler angles, Z-up)
     // Convention: yaw around Z, pitch around X, roll around Y.
@@ -4888,6 +4888,31 @@ bool CharacterRenderer::getInstanceFrame(uint32_t instanceId, glm::mat4& outFram
     outFrame = it->second.hasOverrideModelMatrix ? it->second.overrideModelMatrix
                                                  : getModelMatrix(it->second);
     return true;
+}
+
+std::optional<uint32_t> CharacterRenderer::getAnimationEventTime(uint32_t instanceId, uint32_t animationId,
+                                                                uint32_t eventId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return std::nullopt;
+    auto modelIt = models.find(it->second.modelId);
+    if (modelIt == models.end()) return std::nullopt;
+    const pipeline::M2Model& model = modelIt->second.data;
+    int sequence = -1;
+    for (size_t i = 0; i < model.sequences.size(); ++i) {
+        if (model.sequences[i].id != animationId) continue;
+        if (sequence < 0 || model.sequences[i].variationIndex == 0) sequence = static_cast<int>(i);
+        if (model.sequences[i].variationIndex == 0) break;
+    }
+    const auto* event = model.findEvent(eventId);
+    if (sequence < 0 || !event || static_cast<size_t>(sequence) >= event->times.size() ||
+        event->times[static_cast<size_t>(sequence)].empty())
+        return 0u;
+    return event->times[static_cast<size_t>(sequence)].front();
+}
+
+void CharacterRenderer::setInstanceRenderOffset(uint32_t instanceId, const glm::vec3& offset) {
+    auto it = instances.find(instanceId);
+    if (it != instances.end()) it->second.renderOffset = offset;
 }
 
 bool CharacterRenderer::getEventPosition(uint32_t instanceId, uint32_t eventId, glm::vec3& out) const {

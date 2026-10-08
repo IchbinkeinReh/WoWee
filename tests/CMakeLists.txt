@@ -2627,6 +2627,11 @@ wowee_add_test(test_spell_kit
 wowee_add_test(test_spell_chain
     SOURCES test_spell_chain.cpp)
 
+# ── test_mount_transition ────────────────────────────
+# CharProc 16's mount transition (0x007fa6a0, 0x007fb7f0).
+wowee_add_test(test_mount_transition
+    SOURCES test_mount_transition.cpp)
+
 # ── test_spell_chain_targets_packet ──────────────────
 # SMSG_SPELL_UPDATE_CHAIN_TARGETS as 0x00800470 reads it.
 wowee_add_packet_test(test_spell_chain_targets_packet)

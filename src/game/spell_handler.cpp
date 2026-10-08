@@ -3386,6 +3386,7 @@ void SpellHandler::loadSpellNameCache() const {
                     "extracted and does not refresh itself.");
     }
     const uint32_t aura0Field = spellL ? spellL->field("EffectApplyAuraName0") : 0xFFFFFFFF;
+    const uint32_t misc0Field = spellL ? spellL->tryField("EffectMiscValue0") : 0xFFFFFFFF;
     const uint32_t aura1Field = spellL ? spellL->field("EffectApplyAuraName1") : 0xFFFFFFFF;
     const uint32_t aura2Field = spellL ? spellL->field("EffectApplyAuraName2") : 0xFFFFFFFF;
     const uint32_t implicitTargetAField =
@@ -3471,6 +3472,9 @@ void SpellHandler::loadSpellNameCache() const {
                 if (auraFields[effect] != 0xFFFFFFFF && auraFields[effect] < fieldCount) {
                     entry.effectAuraIds[effect] = dbc->getUInt32(i, auraFields[effect]);
                 }
+                // The three effects' misc values follow each other.
+                if (misc0Field != 0xFFFFFFFF && misc0Field + effect < fieldCount)
+                    entry.effectMiscValues[effect] = dbc->getUInt32(i, misc0Field + static_cast<uint32_t>(effect));
             }
             // Duration: read DurationIndex and resolve via SpellDuration.dbc later
             if (durIdxField != 0xFFFFFFFF)

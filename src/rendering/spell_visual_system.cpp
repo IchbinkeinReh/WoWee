@@ -473,6 +473,10 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
     if (type == spell_kit::KitType::Precast || type == spell_kit::KitType::Cast)
         playKitWeaponEffects(kit.weaponEffects, renderInstanceId, type == spell_kit::KitType::Precast, castTimeMs);
     playKitColourFade(kitId, renderInstanceId, spellId);
+    for (uint32_t k = 0; k < 4 && renderInstanceId != 0; ++k) {
+        if (kit.charProc[k] == spell_kit::kCharProcMountTransition)
+            startMountTransition(renderInstanceId, spellId, type, castTimeMs);
+    }
     playKitShake(kitId, place ? *place : position);
     // CharProc 0 and 12 on the unit (0x007265c0); a state kit's start with
     // its aura or channel, which knows the chain's other end.
@@ -1415,6 +1419,14 @@ void SpellVisualSystem::releaseChains(uint64_t unitGuid, uint32_t spellId) {
 
 void SpellVisualSystem::removeUnitSpellEffects(uint64_t unitGuid, uint32_t spellId) {
     releaseChains(unitGuid, spellId);
+    // 0x006f87c0: a mount transition of the spell ends, the unit mounted
+    // where its rider arrived.
+    for (size_t i = 0; i < mountTransitions_.size();) {
+        if (mountTransitions_[i].unitGuid == unitGuid && mountTransitions_[i].spellId == spellId)
+            endMountTransition(i, false);
+        else
+            ++i;
+    }
     // 0x006f8700: a worn item off again, the unit's own back (0x00723730).
     for (auto it = wornItems_.begin(); it != wornItems_.end();) {
         if (it->unitGuid != unitGuid || it->spellId != spellId) {
@@ -1669,6 +1681,185 @@ void SpellVisualSystem::updateChains(float deltaTime) {
     }
 }
 
+void SpellVisualSystem::startMountTransition(uint32_t renderInstanceId, uint32_t spellId, spell_kit::KitType type,
+                                             uint32_t castTimeMs) {
+    const uint64_t unitGuid = instanceUnitResolver_ ? instanceUnitResolver_(renderInstanceId) : 0;
+    if (unitGuid == 0 || spellId == 0 || !mountDisplayResolver_) return;
+    // 0x007265c0 case 16: only a unit on no mount (0x0051a230, +0x98c).
+    if (unitMountedQuery_ && unitMountedQuery_(unitGuid)) return;
+    if (unitMountInstanceResolver_ && unitMountInstanceResolver_(unitGuid) != 0) return;
+    // 0x006f9670: the spell's mount, or none to make.
+    const std::optional<uint32_t> display = mountDisplayResolver_(spellId);
+    if (!display) return;
+    // The unit holds one (+0x9c4, 0x00715670): a new one takes the old's place.
+    for (size_t i = 0; i < mountTransitions_.size();) {
+        if (mountTransitions_[i].unitGuid != unitGuid) {
+            ++i;
+            continue;
+        }
+        if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
+            if (mountTransitions_[i].modelInstance) charRenderer->removeInstance(mountTransitions_[i].modelInstance);
+            charRenderer->setInstanceRenderOffset(mountTransitions_[i].riderInstance, glm::vec3(0.0f));
+        }
+        mountTransitions_.erase(mountTransitions_.begin() + static_cast<std::ptrdiff_t>(i));
+    }
+    MountTransition t;
+    t.unitGuid = unitGuid;
+    t.spellId = spellId;
+    t.precast = type == spell_kit::KitType::Precast;
+    t.castEndMs = colourClockMs_ + castTimeMs;
+    t.displayId = *display;
+    t.riderInstance = renderInstanceId;
+    // 0x007fbe00: where the unit stands, its ground normal, now.
+    t.state = mount_transition::begin(colourClockMs_, glm::vec3(0.0f, 0.0f, 1.0f));
+    mountTransitions_.push_back(t);
+}
+
+void SpellVisualSystem::onUnitMounted(uint64_t unitGuid) {
+    // 0x0073d5d0: the unit's own mount now; its transition's effect ends
+    // (0x006f87c0) - the hand over (0x007412b0) a mount the unit has.
+    for (size_t i = 0; i < mountTransitions_.size();) {
+        if (mountTransitions_[i].unitGuid != unitGuid) {
+            ++i;
+            continue;
+        }
+        if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
+            if (mountTransitions_[i].modelInstance) charRenderer->removeInstance(mountTransitions_[i].modelInstance);
+            charRenderer->setInstanceRenderOffset(mountTransitions_[i].riderInstance, glm::vec3(0.0f));
+        }
+        mountTransitions_.erase(mountTransitions_.begin() + static_cast<std::ptrdiff_t>(i));
+    }
+}
+
+void SpellVisualSystem::endMountTransition(size_t index, bool resync) {
+    if (index >= mountTransitions_.size()) return;
+    const MountTransition t = mountTransitions_[index];
+    mountTransitions_.erase(mountTransitions_.begin() + static_cast<std::ptrdiff_t>(index));
+    if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
+        if (t.modelInstance) charRenderer->removeInstance(t.modelInstance);
+        charRenderer->setInstanceRenderOffset(t.riderInstance, glm::vec3(0.0f));
+    }
+    if (!mountSink_ || t.displayId == 0 || t.modelInstance == 0) return;
+    // 0x007412b0: arrived, the unit is mounted on the display at once -
+    // and where the cast is over, 0x007fec00 sets it to the server's right
+    // after, so the server's it is.
+    if (!(t.state.flags & mount_transition::kArrived)) return;
+    const uint32_t display = resync && unitMountFieldQuery_ ? unitMountFieldQuery_(t.unitGuid) : t.displayId;
+    mountSink_(t.unitGuid, display);
+}
+
+void SpellVisualSystem::updateMountTransitions() {
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer) return;
+    using namespace mount_transition;
+    const uint32_t now = colourClockMs_;
+    for (size_t i = 0; i < mountTransitions_.size();) {
+        MountTransition& t = mountTransitions_[i];
+        const uint32_t rider = unitInstanceResolver_ ? unitInstanceResolver_(t.unitGuid) : 0u;
+        // 0x007fb7f0: gone with its unit.
+        if (rider == 0) {
+            if (t.modelInstance) charRenderer->removeInstance(t.modelInstance);
+            mountTransitions_.erase(mountTransitions_.begin() + static_cast<std::ptrdiff_t>(i));
+            continue;
+        }
+        // A precast kit's effect goes as its cast runs out.
+        if (t.precast && static_cast<int32_t>(now - t.castEndMs) >= 0) {
+            endMountTransition(i, true);
+            continue;
+        }
+        if (rider != t.riderInstance) {
+            charRenderer->setInstanceRenderOffset(t.riderInstance, glm::vec3(0.0f));
+            t.riderInstance = rider;
+        }
+        // 0x006f9610: the creature's answer gives the display, and then
+        // the model (0x006f83d0) - Birth playing, unseen until it touches
+        // the ground.
+        if (t.displayId == 0) {
+            const std::optional<uint32_t> display = mountDisplayResolver_ ? mountDisplayResolver_(t.spellId) : std::nullopt;
+            if (!display) {
+                mountTransitions_.erase(mountTransitions_.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            t.displayId = *display;
+        }
+        if (t.displayId != 0 && t.modelInstance == 0) {
+            const uint32_t modelId = mountModelLoader_ ? mountModelLoader_(t.displayId) : 0u;
+            glm::vec3 at(0.0f);
+            charRenderer->getInstancePosition(rider, at);
+            t.modelInstance = modelId ? charRenderer->createInstance(modelId, at, glm::vec3(0.0f), 1.0f) : 0u;
+            if (t.modelInstance == 0) {
+                mountTransitions_.erase(mountTransitions_.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            charRenderer->setInstanceOpacity(t.modelInstance, 0.0f);
+            charRenderer->playAnimation(t.modelInstance, kAnimBirth, false);
+        }
+        if (t.modelInstance == 0) {
+            ++i;
+            continue;
+        }
+        glm::mat4 riderFrame(1.0f);
+        glm::vec3 riderPos(0.0f);
+        charRenderer->getInstanceFrame(rider, riderFrame);
+        charRenderer->getInstancePosition(rider, riderPos);
+        const float riderFacing = std::atan2(riderFrame[0][1], riderFrame[0][0]);
+        // 0x007fa6a0, until it takes: the rider's sequence and its events,
+        // the mount's Birth's, and the mount's $STB put by the rider.
+        if (!(t.state.flags & kSetUp)) {
+            uint32_t riderAnim = 0;
+            float riderTime = 0.0f, riderLength = 0.0f;
+            const pipeline::M2Model* mountModel = charRenderer->getInstanceModelData(t.modelInstance);
+            if (!mountModel || !charRenderer->getAnimationState(rider, riderAnim, riderTime, riderLength)) {
+                ++i;
+                continue;
+            }
+            SetupInput in;
+            in.riderSequenceMs = static_cast<uint32_t>(riderLength);
+            in.riderStbMs = charRenderer->getAnimationEventTime(rider, riderAnim, kEventStartBegin).value_or(0u);
+            in.riderSteMs = charRenderer->getAnimationEventTime(rider, riderAnim, kEventStartEnd).value_or(0u);
+            in.birthStbMs =
+                charRenderer->getAnimationEventTime(t.modelInstance, kAnimBirth, kEventStartBegin).value_or(0u);
+            in.birthSteMs =
+                charRenderer->getAnimationEventTime(t.modelInstance, kAnimBirth, kEventStartEnd).value_or(0u);
+            const auto* stb = mountModel->findEvent(kEventStartBegin);
+            in.mountStbWorld = glm::vec3(riderFrame * glm::vec4(stb ? stb->position : glm::vec3(0.0f), 1.0f));
+            in.riderTranslation = riderPos;
+            in.riderFacing = riderFacing;
+            if (in.riderSequenceMs == 0 || !setup(t.state, in)) {
+                ++i;
+                continue;
+            }
+        }
+        // 0x006f7480: the Birth run out sets it arrived (0x007f9f60).
+        uint32_t mountAnim = 0;
+        float mountTime = 0.0f, mountLength = 0.0f;
+        if (charRenderer->getAnimationState(t.modelInstance, mountAnim, mountTime, mountLength)) {
+            if (mountAnim == kAnimBirth) {
+                t.birthSeen = true;
+                if (mountTime >= mountLength) t.state.flags |= kArrived;
+            } else if (t.birthSeen) {
+                t.state.flags |= kArrived;
+            }
+        }
+        step(t.state, now, riderFacing, riderPos, glm::vec3(0.0f, 0.0f, 1.0f),
+             [this](const glm::vec3& top, const glm::vec3& bottom) -> std::optional<GroundHit> {
+                 return groundQuery_ ? groundQuery_(top, bottom) : std::nullopt;
+             });
+        // 0x0071fbf0: the mount where the transition has it, turned, tilted
+        // and faded in.
+        charRenderer->setInstancePosition(t.modelInstance, t.state.position);
+        charRenderer->setInstanceRotation(t.modelInstance, mountRotation(t.state));
+        charRenderer->setInstanceOpacity(t.modelInstance, t.state.fade);
+        // 0x007193f0: the rider lifted toward the seat by its progress.
+        glm::vec3 lift(0.0f);
+        glm::mat4 seat;
+        if (t.state.riderProgress != 0.0f && charRenderer->getAttachmentTransform(t.modelInstance, 0, seat))
+            lift = riderLift(t.state, glm::vec3(seat[3]), t.state.position);
+        charRenderer->setInstanceRenderOffset(rider, lift);
+        ++i;
+    }
+}
+
 void SpellVisualSystem::startSwingTrails(uint32_t renderInstanceId, const swing_trail::Start& start) {
     CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!charRenderer) return;
@@ -1881,6 +2072,7 @@ void SpellVisualSystem::update(float deltaTime) {
     updateUnitAlphas();
     updateLightTint();
     updateChains(deltaTime);
+    updateMountTransitions();
     expireWaitingKits();
     publishClientStrips();
     if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
@@ -1940,6 +2132,15 @@ void SpellVisualSystem::update(float deltaTime) {
 }
 
 void SpellVisualSystem::cancelAllPrecastVisuals() {
+    // 0x007fec00: the cast's precast kits' effects go (0x00744bd0), a mount
+    // transition's handing its unit over, which is then set to the
+    // server's mount.
+    for (size_t i = 0; i < mountTransitions_.size();) {
+        if (mountTransitions_[i].precast)
+            endMountTransition(i, true);
+        else
+            ++i;
+    }
     if (!m2Renderer_) return;
     for (auto it = activeSpellVisuals_.begin(); it != activeSpellVisuals_.end(); ) {
         if (it->isPrecast) {
@@ -1963,6 +2164,13 @@ void SpellVisualSystem::reset() {
     }
     unitAuraKits_.clear();
     chains_.clear();
+    if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
+        for (const MountTransition& t : mountTransitions_) {
+            if (t.modelInstance) charRenderer->removeInstance(t.modelInstance);
+            if (t.riderInstance) charRenderer->setInstanceRenderOffset(t.riderInstance, glm::vec3(0.0f));
+        }
+    }
+    mountTransitions_.clear();
     waitingKits_.clear();
     unitChainCounters_.clear();
     swings_.clear();

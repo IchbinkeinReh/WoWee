@@ -1,3 +1,4 @@
+#include "rendering/mount_transition.hpp"
 #include "game/game_handler.hpp"
 #include "game/reputation_standing.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -3978,6 +3979,19 @@ uint32_t GameHandler::getSpellVisualId(uint32_t spellId) const {
     loadSpellNameCache();
     auto it = spellNameCache_.find(spellId);
     return it != spellNameCache_.end() ? it->second.spellVisualId : 0;
+}
+
+uint32_t GameHandler::getSpellMountCreature(uint32_t spellId) const {
+    if (spellId == 0) return 0;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return 0;
+    for (int i = 0; i < 3; ++i) {
+        if (it->second.effectIds[i] == rendering::mount_transition::kEffectApplyAura &&
+            it->second.effectAuraIds[i] == rendering::mount_transition::kAuraMounted)
+            return it->second.effectMiscValues[i];
+    }
+    return 0;
 }
 
 uint32_t GameHandler::getSpellTargetKind(uint32_t spellId) const {

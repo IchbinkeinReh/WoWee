@@ -245,6 +245,11 @@ constexpr bool timedAlphaOver(const TimedAlpha& t, uint32_t nowMs) {
     return static_cast<int32_t>(nowMs - t.endMs) >= 0;
 }
 
+/// 16: the spell's mount rising where the rider will sit, the rider carried
+///    onto it and the unit mounted as the effect ends, where the unit rides
+///    nothing (0x006f9670, mount_transition.hpp).
+inline constexpr uint32_t kCharProcMountTransition = 16;
+
 /// 17: an item, ParamOne chopped, worn in its armour slot while the effect
 ///    lasts (0x006f8650, 0x006f8600, 0x006f82d0): Item.dbc's display (+0x14)
 ///    in the character component's slot for its inventory type (+0x18,

@@ -15,6 +15,7 @@
 #include "rendering/spell_chain.hpp"
 #include "rendering/swing_trail.hpp"
 #include "rendering/camera_shake.hpp"
+#include "rendering/mount_transition.hpp"
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -210,6 +211,32 @@ public:
     void setUnitMountInstanceResolver(UnitInstanceResolver resolver) {
         unitMountInstanceResolver_ = std::move(resolver);
     }
+    /// A mount spell's mount (CharProc 16, 0x006f9670): the display of the
+    /// creature its first aura-78 effect names - 0 while the creature is
+    /// asked for (0x0067b6a0, 0x006f9610) - or nothing where it has none.
+    using MountDisplayResolver = std::function<std::optional<uint32_t>(uint32_t spellId)>;
+    void setMountDisplayResolver(MountDisplayResolver resolver) { mountDisplayResolver_ = std::move(resolver); }
+    /// A display's model loaded for the character renderer, 0 where it
+    /// cannot be (0x006f83d0).
+    using MountModelLoader = std::function<uint32_t(uint32_t displayId)>;
+    void setMountModelLoader(MountModelLoader loader) { mountModelLoader_ = std::move(loader); }
+    /// Whether a unit rides (0x0051a230: its mount display, not leaving it).
+    using UnitMountedQuery = std::function<bool(uint64_t unitGuid)>;
+    void setUnitMountedQuery(UnitMountedQuery query) { unitMountedQuery_ = std::move(query); }
+    /// The unit's mount display as the server has it (UNIT_FIELD_MOUNTDISPLAYID).
+    using UnitMountFieldQuery = std::function<uint32_t(uint64_t unitGuid)>;
+    void setUnitMountFieldQuery(UnitMountFieldQuery query) { unitMountFieldQuery_ = std::move(query); }
+    /// Where a mount transition hands its unit over (0x007412b0, 0x00740450):
+    /// the unit mounted on the display now, or 0 to put it down again.
+    using MountSink = std::function<void(uint64_t unitGuid, uint32_t displayId)>;
+    void setMountSink(MountSink sink) { mountSink_ = std::move(sink); }
+    /// A unit was given its mount (0x0073d5d0): its transition ends there,
+    /// its mount drawn from then on by the unit's own.
+    void onUnitMounted(uint64_t unitGuid);
+    /// Ground for a transition's mount: the highest floor in a column.
+    using GroundQuery = std::function<std::optional<mount_transition::GroundHit>(const glm::vec3& top,
+                                                                                 const glm::vec3& bottom)>;
+    void setGroundQuery(GroundQuery query) { groundQuery_ = std::move(query); }
     /// Whether a unit shows its SpellVisual Flags 8 state kits (0x00720400):
     /// +0xa30 0x10000, its weapons away and no cast.
     using UnarmedKitsQuery = std::function<bool(uint64_t unitGuid)>;
@@ -424,6 +451,37 @@ private:
     };
     std::vector<WornItem> wornItems_;
     WornItemSink wornItemSink_;
+    /// CharProc 16's transitions (0x006f9670), one a unit: the effect (its
+    /// unit, spell and kit) owning the mount's model (+0x98's, effect +0)
+    /// and the AUMountTransitionObject (+0x90).
+    struct MountTransition {
+        uint64_t unitGuid = 0;
+        uint32_t spellId = 0;
+        bool precast = false;      ///< a precast kit's: it goes as the cast does
+        uint32_t castEndMs = 0;
+        uint32_t displayId = 0;    ///< 0 while its creature is asked for
+        uint32_t modelInstance = 0;
+        uint32_t riderInstance = 0;
+        bool birthSeen = false;
+        mount_transition::State state;
+    };
+    std::vector<MountTransition> mountTransitions_;
+    MountDisplayResolver mountDisplayResolver_;
+    MountModelLoader mountModelLoader_;
+    UnitMountedQuery unitMountedQuery_;
+    UnitMountFieldQuery unitMountFieldQuery_;
+    MountSink mountSink_;
+    GroundQuery groundQuery_;
+    /// 0x007265c0 case 16 for a kit on a unit.
+    void startMountTransition(uint32_t renderInstanceId, uint32_t spellId, spell_kit::KitType type,
+                              uint32_t castTimeMs);
+    /// 0x007fca30's walk: each transition stepped (0x007fb7f0), its mount
+    /// placed (0x0071fbf0) and its rider carried (0x007193f0).
+    void updateMountTransitions();
+    /// 0x006f87c0's part: the transition goes - the unit mounted where it
+    /// arrived (0x007412b0), `resync` then setting it to the server's
+    /// (0x007fec00) - and its mount's model with it.
+    void endMountTransition(size_t index, bool resync);
     /// The light tint playing (CharProc 6), and handed to the sink.
     std::optional<spell_kit::LightTint> lightTint_;
     bool lightTinted_ = false;
