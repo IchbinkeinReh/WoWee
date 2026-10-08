@@ -201,13 +201,38 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             // whatever their size.
             const float pol = distN(particleRng_) * vRange;
             const float az = distN(particleRng_) * hRange;
-            const glm::vec3 dir(std::cos(az) * std::sin(pol),
-                                std::sin(az) * std::sin(pol),
-                                std::cos(pol));
+            glm::vec3 dir(std::cos(az) * std::sin(pol),
+                          std::sin(az) * std::sin(pol),
+                          std::cos(pol));
 
             // Through the bone and the model, scale and all, as the client
             // multiplies it by the emitter's world matrix.
             glm::mat3 rotMat = glm::mat3(inst.modelMatrix * boneXform);
+
+            // A sphere emitter (FUN_00981950) is another shape: the particle
+            // starts on a shell between the area's length and width from
+            // the emitter, at an elevation of -1..1 times the vertical range
+            // above its plane and an azimuth of -1..1 times the horizontal
+            // range, and leaves straight out from the centre - in, when the
+            // speed is negative. Treated as a plane, every one of them left
+            // from the centre itself: the Eversong lamps' motes, which drift
+            // in toward the flame from all round it, crept out of one point.
+            if (em.emitterType == 2) {
+                const float areaLength = interpFloat(em.emissionAreaLength, inst.animTime,
+                                                     inst.globalSequenceTime,
+                                                     inst.currentSequenceIndex,
+                                                     gpu.globalSequenceDurations);
+                const float areaWidth = interpFloat(em.emissionAreaWidth, inst.animTime,
+                                                    inst.globalSequenceTime,
+                                                    inst.currentSequenceIndex,
+                                                    gpu.globalSequenceDurations);
+                const float radius = areaLength + dist01(particleRng_) * (areaWidth - areaLength);
+                dir = glm::vec3(std::cos(az) * std::cos(pol),
+                                std::sin(az) * std::cos(pol),
+                                std::sin(pol));
+                p.position = glm::vec3(inst.modelMatrix * boneXform *
+                                       glm::vec4(em.position + dir * radius, 1.0f));
+            }
             p.velocity = rotMat * dir * speed;
 
             const uint32_t tilesX = std::max<uint16_t>(em.textureCols, 1);
