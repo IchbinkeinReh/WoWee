@@ -88,6 +88,8 @@ static const UFNameEntry kUFNames[] = {
     {.name = "CORPSE_FIELD_ITEM", .field = UF::CORPSE_FIELD_ITEM},
     {.name = "CORPSE_FIELD_BYTES_1", .field = UF::CORPSE_FIELD_BYTES_1},
     {.name = "CORPSE_FIELD_BYTES_2", .field = UF::CORPSE_FIELD_BYTES_2},
+    {.name = "CORPSE_FIELD_GUILD", .field = UF::CORPSE_FIELD_GUILD},
+    {.name = "CORPSE_FIELD_DYNAMIC_FLAGS", .field = UF::CORPSE_FIELD_DYNAMIC_FLAGS},
     {.name = "PLAYER_DUEL_ARBITER", .field = UF::PLAYER_DUEL_ARBITER},
     {.name = "GAMEOBJECT_FLAGS", .field = UF::GAMEOBJECT_FLAGS},
     {.name = "GAMEOBJECT_BYTES_1", .field = UF::GAMEOBJECT_BYTES_1},

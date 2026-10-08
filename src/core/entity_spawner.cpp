@@ -148,6 +148,9 @@ void EntitySpawner::shutdown() {
     corpseCreatureGuids_.clear();
     corpseBonesInstances_.clear();
     corpseBonesModelIds_.clear();
+    corpseSites_.clear();
+    lootSparkleModelId_ = 0;
+    lootSparkleModelTried_ = false;
     animationDataDbc_.reset();
     animationDataLoaded_ = false;
     playerInstances_.clear();
@@ -203,6 +206,9 @@ void EntitySpawner::resetAllState() {
     corpseCreatureGuids_.clear();
     corpseBonesInstances_.clear();
     corpseBonesModelIds_.clear();
+    corpseSites_.clear();
+    lootSparkleModelId_ = 0;
+    lootSparkleModelTried_ = false;
     animationDataDbc_.reset();
     animationDataLoaded_ = false;
     modelIdIsWolfLike_.clear();
@@ -1322,9 +1328,11 @@ void EntitySpawner::playCreatureSpawnPose(uint64_t guid, uint32_t instanceId) {
     if (!charRenderer) return;
 // Spawn in the correct pose. If the server marked this creature dead before
 // the queued spawn was processed, start directly in death animation.
-if (corpseGuids_.count(guid) && charRenderer->hasAnimation(instanceId, rendering::anim::DEAD)) {
-    // A corpse lies in Dead (0x00705b20 plays 6).
-    charRenderer->playAnimation(instanceId, rendering::anim::DEAD, true);
+if (const auto pose = corpsePose(guid); pose && corpseGuids_.count(guid) &&
+    charRenderer->hasAnimation(instanceId, rendering::anim::DEAD)) {
+    // A corpse lies in Dead, or Drowned under water (0x00705b20).
+    charRenderer->playAnimation(instanceId, charRenderer->hasAnimation(instanceId, *pose) ? *pose : rendering::anim::DEAD,
+                                true);
 } else if (deadCreatureGuids_.count(guid)) {
     charRenderer->playAnimation(instanceId, rendering::anim::DEATH, false);
 } else {

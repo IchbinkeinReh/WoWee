@@ -12,6 +12,7 @@
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/water_renderer.hpp"
 
 #include <glm/gtc/constants.hpp>
 
@@ -44,6 +45,17 @@ std::optional<bool> EntitySpawner::corpseDisplayIsCharacter(uint32_t displayId) 
 void EntitySpawner::spawnCorpse(uint64_t guid, const game::CorpseLook& look, float x, float y, float z,
                                 float orientation) {
     despawnCorpse(guid);
+    // 0x00705b20: Dead, or Drowned when the liquid there is more than two
+    // thirds of a yard over it; the loot sparkle when it is lootable.
+    CorpseSite& site = corpseSites_[guid];
+    site.position = glm::vec3(x, y, z);
+    std::optional<float> liquid;
+    if (auto* water = renderer_ ? renderer_->getWaterRenderer() : nullptr) {
+        const glm::vec3 renderPos = core::coords::canonicalToRender(site.position);
+        liquid = water->getNearestWaterHeightAt(renderPos.x, renderPos.y, renderPos.z);
+    }
+    site.pose = game::corpsePoseAnimation(liquid, z);
+    if (look.lootable()) setCorpseLootable(guid, true);
     if (look.bones()) {
         spawnCorpseBones(guid, game::corpseBonesModelPath(look.race, look.gender), x, y, z, orientation);
         return;
@@ -103,7 +115,70 @@ void EntitySpawner::spawnCorpseBones(uint64_t guid, const std::string& modelPath
     corpseBonesInstances_[guid] = instanceId;
 }
 
+std::optional<uint32_t> EntitySpawner::corpsePose(uint64_t guid) const {
+    const auto it = corpseSites_.find(guid);
+    if (it == corpseSites_.end()) return std::nullopt;
+    return it->second.pose;
+}
+
+void EntitySpawner::setCorpseLootable(uint64_t guid, bool lootable) {
+    auto siteIt = corpseSites_.find(guid);
+    auto* m2Renderer = renderer_ ? renderer_->getM2Renderer() : nullptr;
+    if (siteIt == corpseSites_.end() || !m2Renderer || !assetManager_) return;
+    CorpseSite& site = siteIt->second;
+    if (!lootable) {
+        if (site.sparkleInstance != 0) m2Renderer->removeInstance(site.sparkleInstance);
+        site.sparkleInstance = 0;
+        return;
+    }
+    if (site.sparkleInstance != 0) return;
+    // 0x00705900: SpellVisualEffectName "HARDCODED Loot Art" (0x006f7520
+    // finds it by name), its file's model hung at the corpse's Base, 19 -
+    // the model's origin.
+    if (!lootSparkleModelTried_) {
+        lootSparkleModelTried_ = true;
+        auto effects = assetManager_->loadDBCOptional("SpellVisualEffectName.dbc");
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        const auto* layout = layouts ? layouts->getLayout("SpellVisualEffectName") : nullptr;
+        const uint32_t nameField = layout ? layout->tryField("Name") : 1u;
+        const uint32_t fileField = layout ? layout->tryField("FilePath") : 2u;
+        std::string path;
+        if (effects && nameField < effects->getFieldCount() && fileField < effects->getFieldCount()) {
+            for (uint32_t r = 0; r < effects->getRecordCount(); ++r) {
+                if (effects->getString(r, nameField) == "HARDCODED Loot Art") {
+                    path = pipeline::modelPathToM2(effects->getString(r, fileField));
+                    break;
+                }
+            }
+        }
+        auto data = path.empty() ? std::vector<uint8_t>{} : assetManager_->readFile(path);
+        if (!data.empty()) {
+            pipeline::M2Model model = pipeline::M2Loader::load(data);
+            model.name = path;
+            if (model.version >= 264) {
+                auto skin = assetManager_->readFile(pipeline::skinPathForM2(path));
+                if (!skin.empty()) pipeline::M2Loader::loadSkin(skin, model);
+            }
+            const uint32_t modelId = nextGameObjectModelId_++;
+            if (m2Renderer->loadModel(model, modelId)) lootSparkleModelId_ = modelId;
+        }
+        if (lootSparkleModelId_ == 0) LOG_WARNING("Corpse loot sparkle model missing: ", path);
+    }
+    if (lootSparkleModelId_ == 0) return;
+    const glm::vec3 renderPos = core::coords::canonicalToRender(site.position);
+    site.sparkleInstance = m2Renderer->createInstance(lootSparkleModelId_, renderPos, glm::vec3(0.0f), 1.0f);
+    if (site.sparkleInstance != 0) m2Renderer->setSkipCollision(site.sparkleInstance, true);
+}
+
 void EntitySpawner::despawnCorpse(uint64_t guid) {
+    if (auto it = corpseSites_.find(guid); it != corpseSites_.end()) {
+        if (it->second.sparkleInstance != 0) {
+            if (auto* m2Renderer = renderer_ ? renderer_->getM2Renderer() : nullptr) {
+                m2Renderer->removeInstance(it->second.sparkleInstance);
+            }
+        }
+        corpseSites_.erase(it);
+    }
     if (auto it = corpseBonesInstances_.find(guid); it != corpseBonesInstances_.end()) {
         if (auto* m2Renderer = renderer_ ? renderer_->getM2Renderer() : nullptr) {
             m2Renderer->removeInstance(it->second);

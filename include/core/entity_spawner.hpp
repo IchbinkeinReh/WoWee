@@ -71,6 +71,9 @@ public:
     void spawnCorpse(uint64_t guid, const game::CorpseLook& look, float x, float y, float z, float orientation);
     /// Takes away what spawnCorpse drew besides a character model.
     void despawnCorpse(uint64_t guid);
+    /// A corpse's lootable bit changed: the loot sparkle added or taken
+    /// away (0x007061e0).
+    void setCorpseLootable(uint64_t guid, bool lootable);
     /// Whether spawnCorpse drew this guid through the player or creature path.
     bool isCorpse(uint64_t guid) const { return corpseGuids_.count(guid) > 0; }
 
@@ -513,6 +516,20 @@ private:
     std::unordered_set<uint64_t> corpseCreatureGuids_;
     std::unordered_map<uint64_t, uint32_t> corpseBonesInstances_;
     std::unordered_map<std::string, uint32_t> corpseBonesModelIds_;
+    /// Every corpse drawn: where it lies, the animation it lies in, and its
+    /// loot sparkle's M2 instance (0 for none).
+    struct CorpseSite {
+        glm::vec3 position{0.0f};  ///< canonical
+        uint32_t pose = 0;
+        uint32_t sparkleInstance = 0;
+    };
+    std::unordered_map<uint64_t, CorpseSite> corpseSites_;
+    /// The loot sparkle's model ("HARDCODED Loot Art", 0x006f7520), loaded
+    /// on first use; 0 when there is none.
+    uint32_t lootSparkleModelId_ = 0;
+    bool lootSparkleModelTried_ = false;
+    /// The animation a corpse lies in, or nothing for a guid that is none.
+    std::optional<uint32_t> corpsePose(uint64_t guid) const;
     /// Whether a corpse's display is a character model (CreatureModelData
     /// flag 4, 0x00705b20); nothing when its records are missing.
     std::optional<bool> corpseDisplayIsCharacter(uint32_t displayId) const;

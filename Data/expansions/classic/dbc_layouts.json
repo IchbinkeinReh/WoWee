@@ -271,7 +271,8 @@
   },
   "SpellVisualEffectName": {
     "FilePath": 2,
-    "ID": 0
+    "ID": 0,
+    "Name": 1
   },
   "SpellVisualKit": {
     "BaseEffect": 5,

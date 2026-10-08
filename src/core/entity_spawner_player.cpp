@@ -253,9 +253,11 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
                                                 modelSubmeshIds(modelId)));
     }
 
-    if (corpseGuids_.count(guid) && charRenderer->hasAnimation(instanceId, rendering::anim::DEAD)) {
-        // A corpse lies in Dead (0x00705b20 plays 6).
-        charRenderer->playAnimation(instanceId, rendering::anim::DEAD, true);
+    if (const auto pose = corpsePose(guid); pose && corpseGuids_.count(guid) &&
+        charRenderer->hasAnimation(instanceId, rendering::anim::DEAD)) {
+        // A corpse lies in Dead, or Drowned under water (0x00705b20).
+        charRenderer->playAnimation(instanceId,
+                                    charRenderer->hasAnimation(instanceId, *pose) ? *pose : rendering::anim::DEAD, true);
     } else if (deadCreatureGuids_.count(guid)) {
         charRenderer->playAnimation(instanceId, rendering::anim::DEATH, false);
     } else {

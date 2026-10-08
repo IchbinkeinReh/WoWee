@@ -48,3 +48,19 @@ TEST_CASE("bones are the race's death skeleton (0x00705670)", "[corpse]") {
     CHECK(corpseBonesModelPath(10, 1) ==
           "World\\Generic\\PassiveDoodads\\DeathSkeletons\\BloodElfFemaleDeathSkeleton.m2");
 }
+
+TEST_CASE("a corpse lies drowned under more than two thirds of a yard of liquid (0x00705b20)", "[corpse]") {
+    CHECK(corpsePoseAnimation(std::nullopt, 10.0f) == kCorpseAnimDead);
+    CHECK(corpsePoseAnimation(10.5f, 10.0f) == kCorpseAnimDead);
+    CHECK(corpsePoseAnimation(10.6f, 10.0f) == kCorpseAnimDead);
+    CHECK(corpsePoseAnimation(10.7f, 10.0f) == kCorpseAnimDrowned);
+    // Liquid below it is no matter.
+    CHECK(corpsePoseAnimation(5.0f, 10.0f) == kCorpseAnimDead);
+}
+
+TEST_CASE("a corpse's dynamic flag 1 is lootable (0x00705900)", "[corpse]") {
+    CorpseLook look;
+    CHECK_FALSE(look.lootable());
+    look.dynamicFlags = kCorpseDynamicFlagLootable;
+    CHECK(look.lootable());
+}

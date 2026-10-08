@@ -148,6 +148,12 @@ enum class UF : uint16_t {
     CORPSE_FIELD_ITEM,
     CORPSE_FIELD_BYTES_1,
     CORPSE_FIELD_BYTES_2,
+    /// WotLK: the guild whose emblem a corpse's guild tabard carries
+    /// (0x007059a0).
+    CORPSE_FIELD_GUILD,
+    /// WotLK: a corpse's dynamic flags; 1 is lootable, which draws the loot
+    /// sparkle (0x00705900).
+    CORPSE_FIELD_DYNAMIC_FLAGS,
     PLAYER_DUEL_ARBITER,
     GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,

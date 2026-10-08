@@ -2247,18 +2247,31 @@ bool EntityController::spawnCorpseFromFields(uint64_t guid, const Entity& entity
     if (entity.getX() == 0.0f && entity.getY() == 0.0f && entity.getZ() == 0.0f) return true;
     std::array<uint32_t, 19> items{};
     for (uint16_t i = 0; i < 19; ++i) items[i] = entity.getField(static_cast<uint16_t>(itemField + i));
-    const CorpseLook look = corpseLook(entity.getField(displayField), items, entity.getField(bytes1Field),
+    CorpseLook look = corpseLook(entity.getField(displayField), items, entity.getField(bytes1Field),
                                        entity.getField(bytes2Field), entity.getField(flagsField));
+    const uint16_t dynamicFlagsField = fieldIndex(UF::CORPSE_FIELD_DYNAMIC_FLAGS);
+    const uint16_t guildField = fieldIndex(UF::CORPSE_FIELD_GUILD);
+    if (dynamicFlagsField != 0xFFFF) look.dynamicFlags = entity.getField(dynamicFlagsField);
+    if (guildField != 0xFFFF) look.guildId = entity.getField(guildField);
     owner_.corpseSpawnCallbackRef()(guid, look, entity.getX(), entity.getY(), entity.getZ(),
                                     entity.getOrientation());
     return true;
 }
 
 void EntityController::onValuesUpdateCorpse(const UpdateBlock& block, const std::shared_ptr<Entity>& entity) {
+    if (!entity) return;
+    // 0x007061e0: a change of CORPSE_FIELD_DYNAMIC_FLAGS' lootable bit adds or
+    // takes away the loot sparkle.
+    const uint16_t dynamicFlagsField = fieldIndex(UF::CORPSE_FIELD_DYNAMIC_FLAGS);
+    if (dynamicFlagsField != 0xFFFF && block.fields.find(dynamicFlagsField) != block.fields.end() &&
+        owner_.corpseLootableCallbackRef()) {
+        owner_.corpseLootableCallbackRef()(
+            block.guid, (entity->getField(dynamicFlagsField) & kCorpseDynamicFlagLootable) != 0);
+    }
     // 0x00706240: a change of CORPSE_FIELD_FLAGS builds the corpse's model
     // again (0x00706120) - bones, a hidden helm or cloak.
     const uint16_t flagsField = fieldIndex(UF::CORPSE_FIELD_FLAGS);
-    if (!entity || flagsField == 0xFFFF || block.fields.find(flagsField) == block.fields.end()) return;
+    if (flagsField == 0xFFFF || block.fields.find(flagsField) == block.fields.end()) return;
     if (owner_.playerDespawnCallbackRef()) owner_.playerDespawnCallbackRef()(block.guid);
     spawnCorpseFromFields(block.guid, *entity);
 }

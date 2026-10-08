@@ -92,6 +92,9 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
                                                float z, float orientation) {
         entitySpawner_.spawnCorpse(guid, look, x, y, z, orientation);
     });
+    gameHandler_.setCorpseLootableCallback([this](uint64_t guid, bool lootable) {
+        entitySpawner_.setCorpseLootable(guid, lootable);
+    });
 
     // GameObject spawn callback (online mode) - spawn static models (mailboxes, etc.)
     gameHandler_.setGameObjectSpawnCallback([this](uint64_t guid, uint32_t entry, uint32_t displayId, float x, float y, float z, float orientation, float scale) {

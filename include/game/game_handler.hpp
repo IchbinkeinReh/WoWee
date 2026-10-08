@@ -1607,6 +1607,9 @@ public:
     using CorpseSpawnCallback = std::function<void(uint64_t guid, const CorpseLook& look,
                                                    float x, float y, float z, float orientation)>;
     void setCorpseSpawnCallback(CorpseSpawnCallback cb) { corpseSpawnCallback_ = std::move(cb); }
+    /// A corpse's lootable bit changed (0x007061e0).
+    using CorpseLootableCallback = std::function<void(uint64_t guid, bool lootable)>;
+    void setCorpseLootableCallback(CorpseLootableCallback cb) { corpseLootableCallback_ = std::move(cb); }
 
     // GameObject spawn callback (online mode - triggered when gameobject enters view)
     // Parameters: guid, entry, displayId, x, y, z (canonical), orientation, scale (OBJECT_FIELD_SCALE_X)
@@ -3857,6 +3860,7 @@ public:
     auto& playerHealthCallbackRef() { return playerHealthCallback_; }
     auto& playerSpawnCallbackRef() { return playerSpawnCallback_; }
     auto& corpseSpawnCallbackRef() { return corpseSpawnCallback_; }
+    auto& corpseLootableCallbackRef() { return corpseLootableCallback_; }
     auto& pvpHonorCallbackRef() { return pvpHonorCallback_; }
     auto& questCompleteCallbackRef() { return questCompleteCallback_; }
     auto& questProgressCallbackRef() { return questProgressCallback_; }
@@ -4468,6 +4472,7 @@ private:
     CreatureDespawnCallback creatureDespawnCallback_;
     PlayerSpawnCallback playerSpawnCallback_;
     CorpseSpawnCallback corpseSpawnCallback_;
+    CorpseLootableCallback corpseLootableCallback_;
     PlayerDespawnCallback playerDespawnCallback_;
     PlayerEquipmentCallback playerEquipmentCallback_;
     CreatureMoveCallback creatureMoveCallback_;

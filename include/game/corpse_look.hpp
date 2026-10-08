@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace wowee::game {
@@ -16,6 +17,9 @@ namespace wowee::game {
 constexpr uint32_t kCorpseFlagBones = 0x01;
 constexpr uint32_t kCorpseFlagHideHelm = 0x08;
 constexpr uint32_t kCorpseFlagHideCloak = 0x10;
+/// CORPSE_FIELD_DYNAMIC_FLAGS 1: lootable, drawn with the loot sparkle
+/// (0x00705900, 0x007061e0).
+constexpr uint32_t kCorpseDynamicFlagLootable = 0x01;
 
 struct CorpseLook {
     uint32_t flags = 0;
@@ -31,8 +35,13 @@ struct CorpseLook {
     /// their inventory types; 0 where nothing is drawn.
     std::array<uint32_t, 19> displayIds{};
     std::array<uint8_t, 19> inventoryTypes{};
+    /// CORPSE_FIELD_DYNAMIC_FLAGS.
+    uint32_t dynamicFlags = 0;
+    /// CORPSE_FIELD_GUILD: whose emblem a guild tabard carries (0x007059a0).
+    uint32_t guildId = 0;
 
     [[nodiscard]] bool bones() const { return (flags & kCorpseFlagBones) != 0; }
+    [[nodiscard]] bool lootable() const { return (dynamicFlags & kCorpseDynamicFlagLootable) != 0; }
     /// The same four bytes PLAYER_BYTES carries: skin, face, hair style,
     /// hair colour.
     [[nodiscard]] uint32_t appearanceBytes() const {
@@ -69,6 +78,16 @@ inline CorpseLook corpseLook(uint32_t displayId, const std::array<uint32_t, 19>&
         look.inventoryTypes[slot] = static_cast<uint8_t>(items[slot] >> 24);
     }
     return look;
+}
+
+/// 0x00705b20: a corpse lies in Dead (6), or Drowned (132) when the liquid
+/// over it (the area's level, +0x80 with flag 0x20 at +0x7c, 0x0077f1e0)
+/// is more than two thirds of a yard above it.
+constexpr uint32_t kCorpseAnimDead = 6;
+constexpr uint32_t kCorpseAnimDrowned = 132;
+constexpr uint32_t corpsePoseAnimation(std::optional<float> liquidLevel, float z) {
+    if (liquidLevel && *liquidLevel - z > 0.6666667f) return kCorpseAnimDrowned;
+    return kCorpseAnimDead;
 }
 
 /// 0x00705670: bones are the race's death skeleton - ChrRaces +0x2c, the
