@@ -6,6 +6,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "core/application.hpp"
 #include "core/config_paths.hpp"
+#include "core/env_flag.hpp"
 #include "core/logger.hpp"
 #include "addons/addon_manager.hpp"
 #include <imgui.h>
@@ -259,6 +260,27 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
 
     const bool haveSelection = selectedCharacterIndex >= 0 &&
                                selectedCharacterIndex < static_cast<int>(characters.size());
+
+    // WOWEE_AUTO_LOGIN=2 carries an unattended test run on into the world
+    // with the selected character. Not at once: a few seconds on this screen
+    // first, so a run still shows whether character select itself holds up.
+    {
+        static const bool autoEnter = core::envIntClamped("WOWEE_AUTO_LOGIN", 0, 0, 2) >= 2;
+        static bool autoEntered = false;
+        static double firstSeen = -1.0;
+        if (autoEnter && !autoEntered && haveSelection && !modalUp && !characterSelected &&
+            (gameHandler.getState() == game::WorldState::READY ||
+             gameHandler.getState() == game::WorldState::CHAR_LIST_RECEIVED)) {
+            const double now = ImGui::GetTime();
+            if (firstSeen < 0.0) firstSeen = now;
+            if (now - firstSeen >= 5.0) {
+                autoEntered = true;
+                LOG_WARNING("WOWEE_AUTO_LOGIN: entering the world");
+                enterWorld(characters[static_cast<size_t>(selectedCharacterIndex)]);
+            }
+        }
+    }
+
     if (haveSelection) {
         renderDetails(gameHandler, characters[static_cast<size_t>(selectedCharacterIndex)],
                       ImVec2(detailX, bodyTop), ImVec2(col.x1, bodyBottom));

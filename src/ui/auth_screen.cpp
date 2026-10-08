@@ -9,6 +9,7 @@
 #include "core/application.hpp"
 #include "pipeline/asset_inventory.hpp"
 #include "core/config_paths.hpp"
+#include "core/env_flag.hpp"
 #include "core/logger.hpp"
 #include "core/open_url.hpp"
 #include "core/version.hpp"
@@ -416,6 +417,22 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
         (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
          ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) {
         attemptAuth(authHandler);
+    }
+
+    // WOWEE_AUTO_LOGIN=1 (or 2, which also enters the world) presses Login
+    // once, for unattended test runs that have to reach character select.
+    // Only with an account this screen already remembers: it takes the same
+    // path as the button, with the stored hash, and never sees a password.
+    // Once per session, so a failed or dropped login waits for a person.
+    {
+        static const bool autoLogin = core::envIntClamped("WOWEE_AUTO_LOGIN", 0, 0, 2) > 0;
+        static bool autoLoginTried = false;
+        if (autoLogin && !autoLoginTried && loginInfoLoaded && !authenticating &&
+            !settingsOpen_ && usingStoredHash && password_.text() == PASSWORD_PLACEHOLDER) {
+            autoLoginTried = true;
+            LOG_WARNING("WOWEE_AUTO_LOGIN: logging in with the remembered account");
+            attemptAuth(authHandler);
+        }
     }
 
     // Build version, bottom-left over the login art, as the retail client
