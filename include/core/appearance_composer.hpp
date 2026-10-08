@@ -80,11 +80,12 @@ public:
     /// 0x00736d30: sets the state when it changes - the ranged state only
     /// for a class that may draw a ranged weapon - and tells the server
     /// (CMSG_SET_SHEATHED) unless `fromServer`.
-    void setSheathState(SheathState state, bool fromServer = false);
+    void setSheathState(SheathState state, bool fromServer = false, bool animated = false);
     /// Sets a state as the client asks for it (0x00736d30 with its sending).
     void requestSheathState(SheathState state) { setSheathState(state); }
-    /// The sheath key (0x006e23a0): the next state, and false when the
-    /// player may not change it now or has nothing to change to.
+    /// The sheath key (0x006e23a0): the next state, reached for with the
+    /// arms (0x00736b60), and false when the player may not change it now
+    /// or has nothing to change to.
     bool toggleSheath();
     /// A spell's cast beginning on the player (0x007fa2e0, 0x0073a6c0).
     void onSpellCastBegin(uint32_t spellId);
@@ -97,8 +98,6 @@ public:
     /// when what 0x0072dbc0 reads - the sheath state, the disarm bits, the
     /// animation's hands - has changed.
     void updateWeaponsFromFields();
-    /// Where the item in a hand is put away; NONE when the hand is empty.
-    [[nodiscard]] rendering::SheathSpot sheathSpot(game::EquipSlot slot) const;
 
 
 
@@ -171,6 +170,18 @@ private:
         bool operator==(const AnimationSheathKey&) const = default;
     };
     AnimationSheathKey animationSheathKey_;
+    /// The sheath key's reach while its arms play (0x00736b60); the
+    /// weapons are where it has left them.
+    std::optional<SheathReach> reach_;
+    /// Start the arms' reaches; a hand whose arm cannot play one moves at
+    /// once.
+    void playReach(const ReachPlay& play, const UnitWeaponItems& items);
+    /// A hand's event or its reach's end (0x00732500, 0x00737bd0).
+    void reachHandEvent(int hand, bool ended, const UnitWeaponItems& items);
+    /// The reach's arms, their events and its end, once a frame.
+    void updateSheathReach();
+    /// Any reach stopped where it is (0x00736d30's immediate change).
+    void stopSheathReach();
     /// The stand state and channel object last seen, for 0x0073f060 and
     /// 0x0073a520.
     uint8_t standSeen_ = 0;

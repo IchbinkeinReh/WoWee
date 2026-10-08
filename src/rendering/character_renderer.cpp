@@ -2179,7 +2179,6 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
     instance.currentAnimationId = animationId;
     instance.currentSequenceIndex = -1;
     instance.primarySequenceIndex = -1;
-    instance.armSequenceIndex[0] = instance.armSequenceIndex[1] = -1;
     instance.animationTime = 0.0f;
     instance.animationLoop = loop;
 
@@ -2300,6 +2299,23 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
 
         // Advance global sequence timer (accumulates independently of animation wrapping)
         inst.globalSequenceTime += deltaTime * 1000.0f;
+
+        // An arm on its own animation runs at rate 1 (0x00735820) to its
+        // event and its end, and then follows the body again.
+        for (int arm = 0; arm < 2 && inst.cachedModel; ++arm) {
+            const int seq = inst.armSequenceIndex[arm];
+            if (seq < 0 || static_cast<size_t>(seq) >= inst.cachedModel->data.sequences.size()) continue;
+            const float before = inst.armTime[arm];
+            inst.armTime[arm] += deltaTime * 1000.0f;
+            const float eventTime = inst.armEventTime[arm];
+            if (eventTime >= 0.0f && before <= eventTime && inst.armTime[arm] > eventTime) {
+                inst.armEvents |= arm == 0 ? kArmEventLeft : kArmEventRight;
+            }
+            if (inst.armTime[arm] >= static_cast<float>(inst.cachedModel->data.sequences[seq].duration)) {
+                inst.armSequenceIndex[arm] = -1;
+                inst.armEvents |= arm == 0 ? kArmEndLeft : kArmEndRight;
+            }
+        }
 
         // Always advance animation time (cheap)
         if (inst.cachedModel && !inst.cachedModel->data.sequences.empty()) {
@@ -2526,34 +2542,77 @@ constexpr int32_t kKeyBoneShoulderL = 2;
 constexpr int32_t kKeyBoneShoulderR = 3;
 constexpr int32_t kKeyBoneSpineLow = 4;
 
-void CharacterRenderer::setArmAnimations(uint32_t instanceId, uint32_t leftArmAnim, uint32_t rightArmAnim) {
+bool CharacterRenderer::playArmAnimation(uint32_t instanceId, int arm, uint32_t animationId, uint32_t eventId) {
     auto it = instances.find(instanceId);
-    if (it == instances.end()) return;
+    if (it == instances.end() || arm < 0 || arm > 1) return false;
     auto& instance = it->second;
     const auto& model = models[instance.modelId].data;
-    const auto& sequences = model.sequences;
-    const uint32_t anims[2] = {leftArmAnim, rightArmAnim};
-    for (int arm = 0; arm < 2; arm++) {
-        instance.armSequenceIndex[arm] = -1;
-        instance.armSequenceLoops[arm] = anims[arm] == anim::STAND;
-        for (size_t i = 0; i < sequences.size(); i++) {
-            if (sequences[i].id == anims[arm] && sequences[i].variationIndex == 0) {
-                instance.armSequenceIndex[arm] = static_cast<int>(i);
-                break;
-            }
+    if (!hasKeyBone(instanceId, arm == 0 ? kKeyBoneShoulderL : kKeyBoneShoulderR)) return false;
+    int sequence = -1;
+    for (size_t i = 0; i < model.sequences.size(); i++) {
+        if (model.sequences[i].id == animationId && model.sequences[i].variationIndex == 0) {
+            sequence = static_cast<int>(i);
+            break;
         }
     }
+    if (sequence < 0) return false;
 
     // Which arm each bone is in - a shoulder and everything below it. Parents
     // come first, so one pass finds both.
-    instance.boneArm.assign(model.bones.size(), -1);
-    for (size_t i = 0; i < model.bones.size(); i++) {
-        const auto& bone = model.bones[i];
-        instance.boneArm[i] = bone.keyBoneId == kKeyBoneShoulderL ? 0
-                            : bone.keyBoneId == kKeyBoneShoulderR ? 1
-                            : bone.parentBone >= 0 && static_cast<size_t>(bone.parentBone) < i
-                                ? instance.boneArm[bone.parentBone] : -1;
+    if (instance.boneArm.size() != model.bones.size()) {
+        instance.boneArm.assign(model.bones.size(), -1);
+        for (size_t i = 0; i < model.bones.size(); i++) {
+            const auto& bone = model.bones[i];
+            instance.boneArm[i] = bone.keyBoneId == kKeyBoneShoulderL ? 0
+                                : bone.keyBoneId == kKeyBoneShoulderR ? 1
+                                : bone.parentBone >= 0 && static_cast<size_t>(bone.parentBone) < i
+                                    ? instance.boneArm[bone.parentBone] : -1;
+        }
     }
+    instance.armSequenceIndex[arm] = sequence;
+    instance.armAnimationId[arm] = animationId;
+    instance.armTime[arm] = 0.0f;
+    instance.armEventTime[arm] = -1.0f;
+    if (const auto* event = model.findEvent(eventId);
+        event && static_cast<size_t>(sequence) < event->times.size() && !event->times[sequence].empty()) {
+        instance.armEventTime[arm] = static_cast<float>(event->times[sequence].front());
+    }
+    instance.armEvents &= static_cast<uint8_t>(~((arm == 0 ? kArmEventLeft : kArmEventRight) |
+                                                  (arm == 0 ? kArmEndLeft : kArmEndRight)));
+    return true;
+}
+
+void CharacterRenderer::stopArmAnimations(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    instance.armSequenceIndex[0] = instance.armSequenceIndex[1] = -1;
+    instance.armEvents = 0;
+}
+
+std::optional<uint32_t> CharacterRenderer::armAnimation(uint32_t instanceId, int arm) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || arm < 0 || arm > 1 || it->second.armSequenceIndex[arm] < 0) return std::nullopt;
+    return it->second.armAnimationId[arm];
+}
+
+bool CharacterRenderer::hasKeyBone(uint32_t instanceId, int32_t keyBoneId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return false;
+    auto modelIt = models.find(it->second.modelId);
+    if (modelIt == models.end()) return false;
+    for (const auto& bone : modelIt->second.data.bones) {
+        if (bone.keyBoneId == keyBoneId) return true;
+    }
+    return false;
+}
+
+uint8_t CharacterRenderer::takeArmAnimationEvents(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return 0;
+    const uint8_t events = it->second.armEvents;
+    it->second.armEvents = 0;
+    return events;
 }
 
 void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
@@ -2607,10 +2666,7 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
             // An arm on a sequence of its own does not take the body's old pose.
             blend = {};
             sequence = instance.armSequenceIndex[arm];
-            const float duration = static_cast<float>(model.sequences[sequence].duration);
-            if (duration > 0.0f) {
-                time = instance.armSequenceLoops[arm] ? std::fmod(time, duration) : std::min(time, duration);
-            }
+            time = std::min(instance.armTime[arm], static_cast<float>(model.sequences[sequence].duration));
         }
 
         // Local transform includes pivot bracket: T(pivot)*T*R*S*T(-pivot)

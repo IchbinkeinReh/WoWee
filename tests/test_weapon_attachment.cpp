@@ -415,3 +415,122 @@ TEST_CASE("an attached effect is sized as 0x006f8c50 sizes it", "[attachment]") 
     // Nothing to hold when nothing shows.
     CHECK(kitEffectScale(1.0f, 0.0f, 1.0f, 0.5f, 4.0f) == Catch::Approx(0.0f));
 }
+
+TEST_CASE("the sheath key's reach draws from unarmed (0x007369b0)", "[attachment][reach]") {
+    const UnitWeaponItem sword{.sheath = 3, .inventoryType = 13, .itemClass = 2};
+    const UnitWeaponItem axe{.sheath = 1, .inventoryType = 13, .itemClass = 2};
+    const UnitWeaponItems items{&sword, &axe, nullptr};
+    ReachPlay play;
+    SheathReach reach = beginSheathReach(SheathState::Unarmed, SheathState::Melee, items, play);
+    // A hip weapon (Sheath 3) reaches with HipSheath, one on the back with Sheath.
+    CHECK(play.play[0]);
+    CHECK(play.animId[0] == kAnimHipSheath);
+    CHECK(play.play[1]);
+    CHECK(play.animId[1] == kAnimSheath);
+    CHECK(reach.drawing[0]);
+    CHECK(reach.drawing[1]);
+    CHECK(reach.shown == weaponsShownFor(SheathState::Unarmed));
+    // Each weapon comes to the hand at its own event.
+    sheathReachSwap(reach, 0, items);
+    CHECK(reach.shown.mainHeld);
+    CHECK_FALSE(reach.shown.offHeld);
+    sheathReachSwap(reach, 1, items);
+    CHECK(reach.shown.offHeld);
+    const ReachPlay after = sheathReachEnded(reach, 0, items);
+    CHECK_FALSE(after.play[0]);
+}
+
+TEST_CASE("the sheath key's reach puts the weapons away and stops (0x00736b60)", "[attachment][reach]") {
+    const UnitWeaponItem sword{.sheath = 1, .inventoryType = 17, .itemClass = 2};
+    const UnitWeaponItems items{&sword, nullptr, nullptr};
+    ReachPlay play;
+    SheathReach reach = beginSheathReach(SheathState::Melee, SheathState::Unarmed, items, play);
+    CHECK(play.play[0]);
+    CHECK_FALSE(play.play[1]);
+    CHECK_FALSE(reach.drawing[0]);
+    // The empty hand went straight to its second half.
+    CHECK(reach.drawing[1]);
+    CHECK(reach.shown.mainHeld);
+    sheathReachSwap(reach, 0, items);
+    CHECK_FALSE(reach.shown.mainHeld);
+    // Ended: the second half has nothing to draw.
+    const ReachPlay after = sheathReachEnded(reach, 0, items);
+    CHECK_FALSE(after.play[0]);
+    CHECK(reach.drawing[0]);
+}
+
+TEST_CASE("from melee to a gun: away, then a second reach draws it (0x007367b0)", "[attachment][reach]") {
+    const UnitWeaponItem sword{.sheath = 3, .inventoryType = 13, .itemClass = 2};
+    const UnitWeaponItem shield{.sheath = 4, .inventoryType = 14, .itemClass = 4};
+    const UnitWeaponItem gun{.sheath = 1, .inventoryType = 26, .itemClass = 2};
+    const UnitWeaponItems items{&sword, &shield, &gun};
+    ReachPlay play;
+    SheathReach reach = beginSheathReach(SheathState::Melee, SheathState::Ranged, items, play);
+    CHECK(play.play[0]);
+    CHECK(play.play[1]);
+    sheathReachSwap(reach, 0, items);
+    sheathReachSwap(reach, 1, items);
+    CHECK_FALSE(reach.shown.mainHeld);
+    CHECK_FALSE(reach.shown.offHeld);
+    CHECK(reach.shown.ranged == RangedShown::None);
+    // The right hand's reach ends and the gun, put at its point, is reached for.
+    ReachPlay second = sheathReachEnded(reach, 0, items);
+    CHECK(second.play[0]);
+    CHECK(second.animId[0] == kAnimSheath);
+    CHECK(reach.shown.ranged == RangedShown::Away);
+    sheathReachSwap(reach, 0, items);
+    CHECK(reach.shown.ranged == RangedShown::Held);
+    // The left hand has nothing of the ranged state's.
+    second = sheathReachEnded(reach, 1, items);
+    CHECK_FALSE(second.play[1]);
+}
+
+TEST_CASE("from a bow to melee the right hand draws at once (0x00736b60)", "[attachment][reach]") {
+    const UnitWeaponItem sword{.sheath = 1, .inventoryType = 17, .itemClass = 2};
+    const UnitWeaponItem bow{.sheath = 2, .inventoryType = 15, .itemClass = 2};
+    const UnitWeaponItems items{&sword, nullptr, &bow};
+    ReachPlay play;
+    SheathReach reach = beginSheathReach(SheathState::Ranged, SheathState::Melee, items, play);
+    // The left hand puts the bow away; the right draws the sword alongside.
+    CHECK(play.play[1]);
+    CHECK_FALSE(reach.drawing[1]);
+    CHECK(play.play[0]);
+    CHECK(reach.drawing[0]);
+    CHECK(reach.shown.ranged == RangedShown::Held);
+    sheathReachSwap(reach, 1, items);
+    CHECK(reach.shown.ranged == RangedShown::Away);
+    // From ranged the main hand is dressed for the new state (0x0072dbc0).
+    CHECK(reach.shown.mainHeld);
+    // The right hand does not move the bow.
+    reach.shown.ranged = RangedShown::Held;
+    reach.drawing[0] = false;
+    sheathReachSwap(reach, 0, items);
+    CHECK(reach.shown.ranged == RangedShown::Held);
+}
+
+TEST_CASE("from unarmed to a bow: put at its point, drawn by the left hand", "[attachment][reach]") {
+    const UnitWeaponItem bow{.sheath = 2, .inventoryType = 15, .itemClass = 2};
+    const UnitWeaponItems items{nullptr, nullptr, &bow};
+    ReachPlay play;
+    SheathReach reach = beginSheathReach(SheathState::Unarmed, SheathState::Ranged, items, play);
+    CHECK_FALSE(play.play[0]);
+    CHECK(play.play[1]);
+    CHECK(reach.shown.ranged == RangedShown::Away);
+    sheathReachSwap(reach, 1, items);
+    CHECK(reach.shown.ranged == RangedShown::Held);
+}
+
+TEST_CASE("a reach's weapons are dressed where it left them", "[attachment][reach]") {
+    const UnitWeaponItem sword{.sheath = 3, .inventoryType = 13, .itemClass = 2};
+    const UnitWeaponItem bow{.sheath = 2, .inventoryType = 15, .itemClass = 2};
+    const UnitWeaponItems items{&sword, nullptr, &bow};
+    UnitWeaponDress dress{.state = SheathState::Melee, .isPlayer = true};
+    dress.reachShown = WeaponsShown{.mainHeld = false, .ranged = RangedShown::Away};
+    CHECK(unitWeaponPoint(WeaponSlot::MainHand, items, dress) == at::kHipWeaponLeft);
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, items, dress) == at::kLargeWeaponRight);
+    dress.reachShown = WeaponsShown{.mainHeld = true, .ranged = RangedShown::None};
+    CHECK(unitWeaponPoint(WeaponSlot::MainHand, items, dress) == at::kHandRight);
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, items, dress) == at::kNone);
+    dress.reachShown = WeaponsShown{.ranged = RangedShown::Held};
+    CHECK(unitWeaponPoint(WeaponSlot::Ranged, items, dress) == at::kHandLeft);
+}

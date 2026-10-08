@@ -22,34 +22,6 @@
 namespace wowee {
 namespace core {
 
-namespace {
-
-constexpr uint32_t kAttachRightHand = attachment::kHandRight;
-
-/// The slot a weapon is drawn from, and its item's Sheath and kind, for
-/// core::weaponAttachmentPoint (0x004eacd0).
-struct DrawnWeapon {
-    WeaponSlot slot;
-    uint32_t sheath;
-    bool shield;
-    bool rangedRight;
-};
-
-DrawnWeapon drawnWeapon(game::EquipSlot slot, const game::ItemSlot& item,
-                        const game::GameHandler* gameHandler) {
-    DrawnWeapon w{};
-    w.slot = slot == game::EquipSlot::MAIN_HAND ? WeaponSlot::MainHand
-           : slot == game::EquipSlot::OFF_HAND  ? WeaponSlot::OffHand
-                                                : WeaponSlot::Ranged;
-    const auto* info = gameHandler ? gameHandler->getItemInfo(item.item.itemId) : nullptr;
-    w.sheath = info && info->valid ? info->sheath : 0;
-    w.shield = item.item.inventoryType == game::InvType::SHIELD;
-    w.rangedRight = rangedInRightHand(item.item.inventoryType);
-    return w;
-}
-
-} // namespace
-
 AppearanceComposer::AppearanceComposer(rendering::Renderer* renderer,
                                        pipeline::AssetManager* assetManager,
                                        game::GameHandler* gameHandler,
@@ -387,23 +359,6 @@ void AppearanceComposer::loadEquippedHelm(game::Inventory& inventory) {
     }
 }
 
-rendering::SheathSpot AppearanceComposer::sheathSpot(game::EquipSlot slot) const {
-    if (!gameHandler_) return rendering::SheathSpot::NONE;
-    const auto& equipped = gameHandler_->getInventory().getEquipSlot(slot);
-    if (equipped.empty()) return rendering::SheathSpot::NONE;
-    const DrawnWeapon w = drawnWeapon(slot, equipped, gameHandler_);
-    switch (weaponAttachmentPoint(w.slot, w.sheath, true, w.shield, w.rangedRight)) {
-        case attachment::kHipWeaponLeft:
-        case attachment::kHipWeaponRight: return rendering::SheathSpot::HIP;
-        case attachment::kSheathMainHand:
-        case attachment::kSheathOffHand:
-        case attachment::kSheathShield:
-        case attachment::kLargeWeaponLeft:
-        case attachment::kLargeWeaponRight: return rendering::SheathSpot::BACK;
-        default:                            return rendering::SheathSpot::NONE;
-    }
-}
-
 void AppearanceComposer::loadEquippedWeapons() {
     attachEquippedWeapons();
 }
@@ -488,7 +443,8 @@ void AppearanceComposer::attachEquippedWeapons() {
         .isPlayer = true,
         .unitFlags = key.unitFlags,
         .unitFlags2 = key.unitFlags2,
-        .offHandFollowsAnimation = key.offHandFollowsAnimation};
+        .offHandFollowsAnimation = key.offHandFollowsAnimation,
+        .reachShown = reach_ ? std::optional<WeaponsShown>(reach_->shown) : std::nullopt};
     dressedKey_ = key;
     rangedJustPutAway_ = false;
 
@@ -585,7 +541,7 @@ bool AppearanceComposer::classMayDrawRanged() const {
     return entitySpawner_->classMayDrawRanged(classId);
 }
 
-void AppearanceComposer::setSheathState(SheathState state, bool fromServer) {
+void AppearanceComposer::setSheathState(SheathState state, bool fromServer, bool animated) {
     // 0x00736d30, for the active player: a player, never a creature.
     SheathSetInput in{.current = sheath_,
                       .isPlayer = true,
@@ -600,8 +556,76 @@ void AppearanceComposer::setSheathState(SheathState state, bool fromServer) {
     }
     const auto next = sheathStateChange(state, items, in);
     if (!next) return;
+    const SheathState from = sheath_;
     sheath_ = *next;
     if (!fromServer && gameHandler_) gameHandler_->requestSheathState(static_cast<uint8_t>(*next));
+    if (!animated) {
+        // An immediate change stops the shoulders' reaches (0x00832840 on
+        // key bones 3 and 2) and dresses the weapons at once (0x00731f40).
+        stopSheathReach();
+        return;
+    }
+    // 0x00736b60: the arms reach; the weapons move with them.
+    ReachPlay play;
+    reach_ = beginSheathReach(from, *next, items, play);
+    playReach(play, items);
+    loadEquippedWeapons();
+}
+
+void AppearanceComposer::playReach(const ReachPlay& play, const UnitWeaponItems& items) {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    const uint32_t instanceId = renderer_ ? renderer_->getCharacterInstanceId() : 0;
+    for (int hand = 0; hand < 2; ++hand) {
+        if (!play.play[hand] || !reach_) continue;
+        // Hand 0 is the right arm, the renderer's arm 1.
+        const bool playing = charRenderer && instanceId != 0 &&
+            charRenderer->playArmAnimation(instanceId, 1 - hand, play.animId[hand],
+                                           hand == 0 ? kEventSheathRight : kEventSheathLeft);
+        if (!playing) reachHandEvent(hand, true, items);
+    }
+}
+
+void AppearanceComposer::reachHandEvent(int hand, bool ended, const UnitWeaponItems& items) {
+    if (!reach_) return;
+    sheathReachSwap(*reach_, hand, items);
+    if (ended) playReach(sheathReachEnded(*reach_, hand, items), items);
+}
+
+void AppearanceComposer::updateSheathReach() {
+    if (!reach_) return;
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    const uint32_t instanceId = renderer_ ? renderer_->getCharacterInstanceId() : 0;
+    std::array<UnitWeaponItem, 3> storage{};
+    const UnitWeaponItems items = playerWeaponItems(storage);
+    const WeaponsShown before = reach_->shown;
+    if (charRenderer && instanceId != 0) {
+        using CR = rendering::CharacterRenderer;
+        const uint8_t events = charRenderer->takeArmAnimationEvents(instanceId);
+        // The right arm is hand 0.
+        if (events & CR::kArmEventRight) reachHandEvent(0, false, items);
+        if (events & CR::kArmEventLeft) reachHandEvent(1, false, items);
+        if (events & CR::kArmEndRight) reachHandEvent(0, true, items);
+        if (events & CR::kArmEndLeft) reachHandEvent(1, true, items);
+    }
+    const bool armsIdle = !charRenderer || instanceId == 0 ||
+                          (!charRenderer->armAnimation(instanceId, 0) && !charRenderer->armAnimation(instanceId, 1));
+    if (armsIdle) {
+        // Done: the weapons stay where the reach left them - a ranged
+        // weapon put away until the next dressing.
+        rangedJustPutAway_ = reach_->shown.ranged == RangedShown::Away && sheath_ == SheathState::Melee;
+        reach_.reset();
+        loadEquippedWeapons();
+    } else if (!(reach_->shown == before)) {
+        loadEquippedWeapons();
+    }
+}
+
+void AppearanceComposer::stopSheathReach() {
+    if (!reach_) return;
+    reach_.reset();
+    if (renderer_ && renderer_->getCharacterRenderer() && renderer_->getCharacterInstanceId() != 0) {
+        renderer_->getCharacterRenderer()->stopArmAnimations(renderer_->getCharacterInstanceId());
+    }
 }
 
 bool AppearanceComposer::toggleSheath() {
@@ -623,10 +647,22 @@ bool AppearanceComposer::toggleSheath() {
     // Flags column) does not have 8.
     const bool rangedDrawable =
         !inventory.getEquipSlot(game::EquipSlot::RANGED).empty() && classMayDrawRanged();
+    // Not without both reaches, Sheath and HipSheath, and both shoulders
+    // (key bones 3 and 2), nor while either shoulder reaches.
+    if (auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
+        const uint32_t instanceId = renderer_->getCharacterInstanceId();
+        if (instanceId == 0) return false;
+        if (!cr->hasAnimation(instanceId, kAnimHipSheath) || !cr->hasAnimation(instanceId, kAnimSheath)) return false;
+        if (!cr->hasKeyBone(instanceId, 3) || !cr->hasKeyBone(instanceId, 2)) return false;
+        for (int arm = 0; arm < 2; ++arm) {
+            const auto playing = cr->armAnimation(instanceId, arm);
+            if (playing && (*playing == kAnimSheath || *playing == kAnimHipSheath)) return false;
+        }
+    }
     const SheathState current = sheath_;
     const SheathState next = toggledSheathState(current, hasMainOrOff, rangedDrawable);
     if (next == current) return false;
-    setSheathState(next);
+    setSheathState(next, false, true);
     return sheath_ != current;
 }
 
@@ -733,6 +769,9 @@ void AppearanceComposer::updateWeaponsFromFields() {
             if (const auto state = channelSheathState(sheath_, objectType, channelSpell)) setSheathState(*state);
         }
     }
+
+    // The sheath key's reach: its arms' events and ends.
+    updateSheathReach();
 
     // 0x00738180 after each change of animation, cast or attack.
     if (gameHandler_ && entitySpawner_) {

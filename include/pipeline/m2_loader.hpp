@@ -262,6 +262,23 @@ struct M2Model {
     // Empty inner list = no footfall events for that sequence.
     std::vector<std::vector<uint32_t>> footstepEventTimes;
 
+    /// The header's events (+0x100): each one's id - its four characters,
+    /// "$SHR", read as a little-endian word (0x52485324) as the client
+    /// compares them - and its times in each sequence (ms from the
+    /// sequence's start, sorted).
+    struct M2Event {
+        uint32_t id = 0;
+        std::vector<std::vector<uint32_t>> times;
+    };
+    std::vector<M2Event> events;
+    /// The event with this id, or null.
+    [[nodiscard]] const M2Event* findEvent(uint32_t id) const {
+        for (const auto& e : events) {
+            if (e.id == id) return &e;
+        }
+        return nullptr;
+    }
+
     // Bone lookup table (vertex bone indices reference this to get global bone index)
     std::vector<uint16_t> boneLookupTable;
 

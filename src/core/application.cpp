@@ -3795,15 +3795,11 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
         const bool uiWantsKeyboard = ImGui::GetIO().WantCaptureKeyboard ||
                                      ui::interfaceTakingTypedInput();
         auto& input = Input::getInstance();
-        // The key asks the server (0x006e23a0, CMSG_SET_SHEATHED) and plays
-        // the reach; the weapons follow UNIT_FIELD_BYTES_2 when it answers.
-        if (!uiWantsKeyboard && input.isKeyJustPressed(SDL_SCANCODE_Z) && appearanceComposer_ &&
-            appearanceComposer_->toggleSheath()) {
-            if (renderer && renderer->getAnimationController()) {
-                renderer->getAnimationController()->playWeaponSheathAnimation(
-                    appearanceComposer_->sheathSpot(game::EquipSlot::MAIN_HAND),
-                    appearanceComposer_->sheathSpot(game::EquipSlot::OFF_HAND));
-            }
+        // The key (0x006e23a0) changes the client's own state, tells the
+        // server (CMSG_SET_SHEATHED) and reaches for the weapons with the
+        // shoulders' Sheath and HipSheath (0x00736b60).
+        if (!uiWantsKeyboard && input.isKeyJustPressed(SDL_SCANCODE_Z) && appearanceComposer_) {
+            appearanceComposer_->toggleSheath();
         }
         if (appearanceComposer_) appearanceComposer_->updateWeaponsFromFields();
     }

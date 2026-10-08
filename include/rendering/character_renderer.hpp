@@ -93,8 +93,27 @@ public:
     /// kneeling...) or 0 for Stand. A one-shot played with no return anim
     /// goes back to it, so a seated unit that is hit stays seated.
     void setRestAnimation(uint32_t instanceId, uint32_t restAnim);
-    /// Play other animations on each arm alone, until the next playAnimation.
-    void setArmAnimations(uint32_t instanceId, uint32_t leftArmAnim, uint32_t rightArmAnim);
+    /// An arm on an animation of its own, as the client plays one on a key
+    /// bone and the bones below it (0x00735820 -> 0x00832ab0): 0 the left,
+    /// from ShoulderL (key bone 2), 1 the right, from ShoulderR (3). It
+    /// plays once at its own rate from its own start, whatever the body
+    /// does, and the arm follows the body again when it ends. `eventId`
+    /// names the M2 event ("$SHL", "$SHR") reported when the arm's
+    /// animation reaches it. False when the model has no such animation
+    /// or no such shoulder.
+    bool playArmAnimation(uint32_t instanceId, int arm, uint32_t animationId, uint32_t eventId);
+    /// Both arms back to the body's animation (0x00832840 on key bones 3
+    /// and 2).
+    void stopArmAnimations(uint32_t instanceId);
+    /// The animation an arm plays on its own; nothing when it follows the
+    /// body.
+    [[nodiscard]] std::optional<uint32_t> armAnimation(uint32_t instanceId, int arm) const;
+    /// Whether the model has the key bone.
+    [[nodiscard]] bool hasKeyBone(uint32_t instanceId, int32_t keyBoneId) const;
+    /// What the arms' animations reached since the last call: bit 0 the
+    /// left arm's event, 1 the right's; bit 2 the left's end, 3 the right's.
+    uint8_t takeArmAnimationEvents(uint32_t instanceId);
+    static constexpr uint8_t kArmEventLeft = 1, kArmEventRight = 2, kArmEndLeft = 4, kArmEndRight = 8;
 
     void update(float deltaTime, const glm::vec3& cameraPos = glm::vec3(0.0f));
 
@@ -353,8 +372,11 @@ private:
         int currentSequenceIndex = -1;  // Index into M2Model::sequences
         int primarySequenceIndex = -1;  // variationIndex 0 of currentAnimationId; head of the variation chain
         int armSequenceIndex[2] = {-1, -1};  // Left, right arm on their own sequences; -1 follows the body
-        bool armSequenceLoops[2] = {false, false};  // Idle arm loops; a reaching arm holds its last frame
-        std::vector<int8_t> boneArm;  // Per bone: 0 left arm, 1 right arm, -1 neither; built by setArmAnimations
+        uint32_t armAnimationId[2] = {0, 0};  // the animation each arm plays, while it has a sequence
+        float armTime[2] = {0.0f, 0.0f};      // ms into each arm's sequence
+        float armEventTime[2] = {-1.0f, -1.0f};  // when each arm's event comes, -1 for none
+        uint8_t armEvents = 0;                 // kArmEvent*/kArmEnd* bits not yet taken
+        std::vector<int8_t> boneArm;  // Per bone: 0 left arm, 1 right arm, -1 neither; built by playArmAnimation
         float animationTime = 0.0f;
         float locomotionSpeed = 0.0f;  // yards a second the unit moves at; see setLocomotionSpeed
         float playbackRate = 1.0f;     // the rate animationTime last advanced at

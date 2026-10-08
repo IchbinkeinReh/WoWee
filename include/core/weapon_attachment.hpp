@@ -156,6 +156,24 @@ constexpr SheathState offHandAnimationSheath(SheathState state, const UnitWeapon
     return state;
 }
 
+/// Where a sheath reach has left each weapon (0x007310a0 holds the main or
+/// off hand or puts it away; 0x0072b7f0 the ranged weapon; 0x0072dbc0 takes
+/// the ranged weapon off the unit).
+enum class RangedShown : uint8_t { None, Away, Held };
+struct WeaponsShown {
+    bool mainHeld = false;
+    bool offHeld = false;
+    RangedShown ranged = RangedShown::None;
+    bool operator==(const WeaponsShown&) const = default;
+};
+
+/// How a state, dressed, shows the weapons.
+constexpr WeaponsShown weaponsShownFor(SheathState state) {
+    return {.mainHeld = state == SheathState::Melee,
+            .offHeld = state == SheathState::Melee,
+            .ranged = state == SheathState::Ranged ? RangedShown::Held : RangedShown::None};
+}
+
 /// What 0x0072dbc0 reads of the unit besides its items.
 struct UnitWeaponDress {
     SheathState state = SheathState::Unarmed;
@@ -166,6 +184,9 @@ struct UnitWeaponDress {
     uint32_t unitFlags2 = 0;  // UNIT_FIELD_FLAGS_2
     /// 0x00721ed0 for the animation playing.
     bool offHandFollowsAnimation = false;
+    /// While a sheath reach plays: where it has left each weapon, in place
+    /// of the state's dressing.
+    std::optional<WeaponsShown> reachShown;
 };
 
 /// 0x0072dbc0 (and 0x00731f40 for the ranged slot on a change of state):
@@ -186,6 +207,16 @@ constexpr uint32_t unitWeaponPoint(WeaponSlot slot, const UnitWeaponItems& items
     if (!item) return attachment::kNone;
     const bool shield = item->inventoryType == 14;
     const bool rangedRight = rangedInRightHand(item->inventoryType);
+    if (slot == WeaponSlot::Ranged && dress.reachShown) {
+        switch (dress.reachShown->ranged) {
+            case RangedShown::None: return attachment::kNone;
+            case RangedShown::Away: return weaponAttachmentPoint(slot, item->sheath, true, shield, rangedRight);
+            case RangedShown::Held: break;
+        }
+        const WeaponSlot hand = rangedRight ? WeaponSlot::MainHand : WeaponSlot::OffHand;
+        if (unitSlotDisarmed(hand, dress.unitFlags, dress.unitFlags2, items)) return attachment::kNone;
+        return weaponAttachmentPoint(slot, item->sheath, false, shield, rangedRight);
+    }
     if (slot == WeaponSlot::Ranged) {
         if (dress.state == SheathState::Ranged) {
             const WeaponSlot hand = rangedRight ? WeaponSlot::MainHand : WeaponSlot::OffHand;
@@ -198,7 +229,9 @@ constexpr uint32_t unitWeaponPoint(WeaponSlot slot, const UnitWeaponItems& items
         return attachment::kNone;
     }
     bool sheathed = true;
-    if (dress.state != SheathState::Ranged) {
+    if (dress.reachShown) {
+        sheathed = !(slot == WeaponSlot::MainHand ? dress.reachShown->mainHeld : dress.reachShown->offHeld);
+    } else if (dress.state != SheathState::Ranged) {
         SheathState state = dress.state;
         if (slot == WeaponSlot::OffHand && dress.offHandFollowsAnimation) {
             state = offHandAnimationSheath(state, items);
@@ -228,6 +261,159 @@ constexpr SheathState toggledSheathState(SheathState current, bool hasMainOrOff,
         case SheathState::Melee: return rangedDrawable ? SheathState::Ranged : SheathState::Unarmed;
         default: return SheathState::Unarmed;
     }
+}
+
+/// The sheath key's reach (0x00736d30 without its immediate argument,
+/// 0x00736b60): the arms put the weapons away and draw them with the
+/// shoulders' own animations, and each weapon moves when its arm's
+/// animation reaches its event or ends. Hand 0 is the right - the main
+/// hand, ShoulderR (key bone 3), +0xa38 0x100000, "$SHR" (0x00732650) -
+/// and hand 1 the left - the off hand, ShoulderL (2), 0x200000, "$SHL".
+struct SheathReach {
+    SheathState from = SheathState::Unarmed;  ///< +0xb58
+    SheathState to = SheathState::Unarmed;    ///< +0xb5c
+    /// +0xa38 0x100000 and 0x200000: the hand's reach is drawing the new
+    /// state's weapon, not putting the old one away.
+    bool drawing[2] = {false, false};
+    WeaponsShown shown;
+};
+
+/// A reach each hand's arm starts: Sheath (89), or HipSheath (90) for an
+/// item whose Sheath is 3 or 7 (0x88).
+struct ReachPlay {
+    bool play[2] = {false, false};
+    uint32_t animId[2] = {0, 0};
+};
+
+constexpr uint32_t kAnimSheath = 89;
+constexpr uint32_t kAnimHipSheath = 90;
+/// The events the reach's weapons move at (0x00732650).
+constexpr uint32_t kEventSheathRight = 0x52485324;  // "$SHR"
+constexpr uint32_t kEventSheathLeft = 0x4c485324;   // "$SHL"
+
+constexpr uint32_t reachAnimation(const UnitWeaponItem& item) {
+    return ((1u << (item.sheath & 31u)) & 0x88u) != 0 ? kAnimHipSheath : kAnimSheath;
+}
+
+namespace detail {
+constexpr void playReach(ReachPlay& play, int hand, const UnitWeaponItem& item) {
+    play.play[hand] = true;
+    play.animId[hand] = reachAnimation(item);
+}
+
+/// 0x007367b0 (hand 0) and 0x007368b0 (hand 1): the hand's reach turns to
+/// drawing; from anything but unarmed it draws the new state's weapon in
+/// that hand - the main or off hand, or a ranged weapon held there, put at
+/// its point first (0x0072b7f0 with 1). True when it starts a reach.
+constexpr bool reachSecondHalf(SheathReach& reach, ReachPlay& play, int hand, const UnitWeaponItems& items) {
+    reach.drawing[hand] = true;
+    if (reach.from == SheathState::Unarmed) return false;
+    if (reach.to == SheathState::Melee) {
+        if (const UnitWeaponItem* item = items[static_cast<size_t>(hand)]) {
+            playReach(play, hand, *item);
+            return true;
+        }
+    } else if (reach.to == SheathState::Ranged) {
+        const UnitWeaponItem* ranged = items[2];
+        if (ranged && rangedInRightHand(ranged->inventoryType) == (hand == 0)) {
+            reach.shown.ranged = RangedShown::Away;
+            playReach(play, hand, *ranged);
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 0x007369b0: from unarmed, each hand with something to draw reaches.
+/// A ranged weapon is put at its point first and reached for by the hand
+/// that holds it.
+constexpr void reachFromUnarmed(SheathReach& reach, ReachPlay& play, const UnitWeaponItems& items) {
+    if (reach.to == SheathState::Melee) {
+        for (int hand = 0; hand < 2; ++hand) {
+            if (const UnitWeaponItem* item = items[static_cast<size_t>(hand)]) {
+                playReach(play, hand, *item);
+                reach.drawing[hand] = true;
+            }
+        }
+    } else if (reach.to == SheathState::Ranged && items[2]) {
+        const int hand = rangedInRightHand(items[2]->inventoryType) ? 0 : 1;
+        reach.shown.ranged = RangedShown::Away;
+        playReach(play, hand, *items[2]);
+        reach.drawing[hand] = true;
+    }
+}
+}  // namespace detail
+
+/// 0x00736b60: the reach a change from `from` to `to` starts.
+/// - From unarmed, 0x007369b0.
+/// - From melee, each hand with a weapon puts it away; an empty hand goes
+///   straight to its second half.
+/// - From ranged, the hand that holds the ranged weapon puts it away and
+///   the other goes straight to its second half; with no ranged weapon,
+///   as from unarmed.
+constexpr SheathReach beginSheathReach(SheathState from, SheathState to, const UnitWeaponItems& items,
+                                       ReachPlay& play) {
+    SheathReach reach{.from = from, .to = to};
+    reach.shown = weaponsShownFor(from);
+    play = {};
+    switch (from) {
+        case SheathState::Unarmed:
+            detail::reachFromUnarmed(reach, play, items);
+            break;
+        case SheathState::Melee:
+            for (int hand = 0; hand < 2; ++hand) {
+                if (const UnitWeaponItem* item = items[static_cast<size_t>(hand)]) {
+                    detail::playReach(play, hand, *item);
+                    reach.drawing[hand] = false;
+                } else {
+                    detail::reachSecondHalf(reach, play, hand, items);
+                }
+            }
+            break;
+        case SheathState::Ranged:
+            if (const UnitWeaponItem* ranged = items[2]) {
+                const int hand = rangedInRightHand(ranged->inventoryType) ? 0 : 1;
+                detail::playReach(play, hand, *ranged);
+                reach.drawing[hand] = false;
+                detail::reachSecondHalf(reach, play, 1 - hand, items);
+            } else {
+                detail::reachFromUnarmed(reach, play, items);
+            }
+            break;
+    }
+    return reach;
+}
+
+/// 0x00732500, at the hand's event ("$SHR", "$SHL") or its reach's end
+/// (0x0073bbd0): a drawing hand holds the new state's weapon, any other
+/// puts the old state's away - a ranged weapon only by the hand it is held
+/// in (a bow by the left, a gun, crossbow, wand or thrown weapon by the
+/// right). From ranged, the main hand is then dressed for the new state
+/// (0x0072dbc0 with 0).
+constexpr void sheathReachSwap(SheathReach& reach, int hand, const UnitWeaponItems& items) {
+    const bool draw = reach.drawing[hand] && reach.to != SheathState::Unarmed;
+    const SheathState state = draw ? reach.to : reach.from;
+    if (state == SheathState::Ranged) {
+        bool skip = false;
+        if (const UnitWeaponItem* ranged = items[2]) {
+            if (ranged->inventoryType == 15) skip = hand == 0;
+            else if (rangedInRightHand(ranged->inventoryType)) skip = hand == 1;
+        }
+        if (!skip) reach.shown.ranged = draw ? RangedShown::Held : RangedShown::Away;
+    } else if (hand == 0) {
+        reach.shown.mainHeld = draw;
+    } else {
+        reach.shown.offHeld = draw;
+    }
+    if (reach.from == SheathState::Ranged) reach.shown.mainHeld = reach.to == SheathState::Melee;
+}
+
+/// 0x00737bd0, a hand's reach ended: one that was putting away turns to
+/// drawing (0x007367b0, 0x007368b0) and may start a second reach.
+constexpr ReachPlay sheathReachEnded(SheathReach& reach, int hand, const UnitWeaponItems& items) {
+    ReachPlay play;
+    if (!reach.drawing[hand]) detail::reachSecondHalf(reach, play, hand, items);
+    return play;
 }
 
 /// 0x0071d2e0: the ranged behaviors (AnimationData +0x18) - shooting,
