@@ -634,6 +634,7 @@ set(WOWEE_SOURCES
     src/core/app_clock.cpp
     src/core/config_paths.cpp
     src/core/frame_pacer.cpp
+    src/core/frame_profiler.cpp
     src/core/https_get.cpp
     src/core/update_check.cpp
 
@@ -1090,6 +1091,7 @@ set(WOWEE_HEADERS
     include/core/window.hpp
     include/core/input.hpp
     include/core/logger.hpp
+    include/core/frame_profiler.hpp
 
     include/network/socket.hpp
     include/network/packet.hpp

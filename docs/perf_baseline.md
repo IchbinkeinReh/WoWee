@@ -65,6 +65,20 @@ cd bin && ./wowee
 
 The client also measures itself, with no build option needed:
 
+- `WOWEE_PROFILE=1`, or `/profile` (alias `/perf`) or Ctrl+F12 in game - the
+  frame profiler. An overlay lists every GPU pass (from timestamp queries: each
+  shadow cascade, terrain, grass, sky, WMO, characters, M2 opaque and
+  transparent, particles, ribbons, water, volumetric fog, sun shafts, screen
+  effects, post-processing, the interface, the compute culls) and every CPU
+  stage (main thread, each render worker, the waits on the GPU and the
+  display), averaged over a second with the worst frame beside it, and says
+  whether the frame is GPU-bound, CPU-bound or capped by vsync or the frame
+  limiter. With `WOWEE_PROFILE=1` the same table is logged at warning level
+  every `WOWEE_PROFILE_LOG_SECONDS` (default 10, 0 for never); `/profile dump`
+  logs the next one on demand. `WOWEE_PROFILE_CSV=path` (or `=1` for
+  `wowee_profile.csv`), or `/profile csv [path]` / `/profile csv off`, writes
+  one row per stage per second for longer captures. Off, it costs one branch
+  per scope and writes no GPU queries.
 - `WOWEE_FRAME_PROFILE=1` - every 10 seconds, logs the average and worst
   time of each CPU stage of the frame and the GPU's per-pass timestamps from
   the last completed frame, at warning level instead of info.
@@ -73,8 +87,8 @@ The client also measures itself, with no build option needed:
   for a few seconds each, with a baseline at both ends, and logs what the
   frame did without each. Stand still outdoors until the table is logged.
 - `WOWEE_SINGLE_THREAD_RECORD=1` - records the world inline on the main thread
-  instead of into parallel secondary command buffers, so each pass gets its
-  own GPU mark (grass is otherwise counted inside terrain).
+  instead of into parallel secondary command buffers. Both paths now mark the
+  same passes: the secondaries write their own timestamps.
 
 On MoltenVK a GPU timestamp resolves to the render pass containing it, so
 every mark inside the scene pass reads the same clock: the first holds the

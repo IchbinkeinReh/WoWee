@@ -185,6 +185,7 @@ bool PostProcessPipeline::executePostProcessing(VkCommandBuffer cmd, uint32_t im
     if (fsr2_.enabled && fsr2_.sceneFramebuffer) {
         // End the off-screen scene render pass
         vkCmdEndRenderPass(currentCmd_);
+        vkCtx_->gpuMark(currentCmd_, "scene pass end (store / resolve)");
         if (sceneClosedHook_) sceneClosedHook_(currentCmd_);
 
         if (fsr2_.useAmdBackend) {
@@ -198,6 +199,7 @@ bool PostProcessPipeline::executePostProcessing(VkCommandBuffer cmd, uint32_t im
             } else {
                 dispatchAmdFsr2();
             }
+            vkCtx_->gpuMark(currentCmd_, "FSR 2/3 upscale (compute)");
 
             // Transition post-FSR input for sharpen pass.
             if (fsr2_.amdFsr3FramegenRuntimeActive && fsr2_.framegenOutput.image) {
@@ -252,6 +254,7 @@ bool PostProcessPipeline::executePostProcessing(VkCommandBuffer cmd, uint32_t im
             vkCmdSetScissor(currentCmd_, 0, 1, &sharpenSc);
             renderFSR2Sharpen();
             vkCmdEndRenderPass(currentCmd_);
+            vkCtx_->gpuMark(currentCmd_, "FSR sharpen (before FXAA)");
             // The pass leaves it in PRESENT_SRC; FXAA samples it as read-only.
             transitionImageLayout(currentCmd_, fxaa_.sceneColor.image,
                 VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -308,6 +311,7 @@ bool PostProcessPipeline::executePostProcessing(VkCommandBuffer cmd, uint32_t im
         inlineMode = true;
         // End the off-screen scene render pass
         vkCmdEndRenderPass(currentCmd_);
+        vkCtx_->gpuMark(currentCmd_, "scene pass end (store / resolve)");
         if (sceneClosedHook_) sceneClosedHook_(currentCmd_);
 
         // Transition resolved scene color: PRESENT_SRC_KHR → SHADER_READ_ONLY
@@ -350,6 +354,7 @@ bool PostProcessPipeline::executePostProcessing(VkCommandBuffer cmd, uint32_t im
         // FSR1 upscale path - only runs when FXAA is not active.
         // When both FSR1 and FXAA are enabled, FXAA took priority above.
         vkCmdEndRenderPass(currentCmd_);
+        vkCtx_->gpuMark(currentCmd_, "scene pass end (store / resolve)");
         if (sceneClosedHook_) sceneClosedHook_(currentCmd_);
 
         // Transition scene color (1x resolve/color target): PRESENT_SRC_KHR → SHADER_READ_ONLY

@@ -36,6 +36,14 @@ public:
     void render(const Renderer* renderer, const Camera* camera);
 
     /**
+     * The frame profiler's table (core::FrameProfiler): every GPU pass and
+     * CPU stage, averaged over the last second, and whether the frame is
+     * waiting on the GPU or the CPU. A window of its own, drawn whenever the
+     * profiler is on, whatever this HUD's own toggle says.
+     */
+    void renderFrameProfile(const Renderer* renderer);
+
+    /**
      * Enable/disable HUD display
      */
     void setEnabled(bool enabled) { this->enabled = enabled; }

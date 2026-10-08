@@ -6,6 +6,7 @@
 #include "auth/crypto.hpp"
 #include "core/logger.hpp"
 #include "core/profiler.hpp"
+#include "core/frame_profiler.hpp"
 #include <iomanip>
 #include <sstream>
 #include <cstdio>
@@ -441,6 +442,7 @@ void WorldSocket::send(const Packet& packet) {
 
 void WorldSocket::update() {
     ZoneScopedN("WorldSocket::update");
+    WOWEE_PROFILE_SCOPE("network: world socket", Cpu);
     if (!useAsyncPump_) {
         pumpNetworkIO();
     }
