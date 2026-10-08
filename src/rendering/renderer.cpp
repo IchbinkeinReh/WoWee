@@ -53,6 +53,7 @@
 #include "rendering/world_map.hpp"
 #include "rendering/quest_marker_renderer.hpp"
 #include "rendering/footprint_renderer.hpp"
+#include "rendering/fishing_line.hpp"
 #include "rendering/blob_shadow_renderer.hpp"
 #include "game/game_handler.hpp"
 #include "pipeline/m2_loader.hpp"
@@ -853,6 +854,10 @@ bool Renderer::initialize(core::Window* win) {
     if (!chargeEffect->initialize(vkCtx, perFrameSetLayout))
         LOG_WARNING("Charge effect initialization failed (non-fatal)");
 
+    fishingLines_ = std::make_unique<FishingLineRenderer>();
+    if (!fishingLines_->initialize(this, vkCtx, perFrameSetLayout))
+        LOG_WARNING("Fishing line initialization failed (non-fatal)");
+
     levelUpEffect = std::make_unique<LevelUpEffect>();
     lootSparkles_ = std::make_unique<LootSparkles>();
 
@@ -1035,6 +1040,10 @@ void Renderer::shutdown() {
     if (footprintRenderer) {
         footprintRenderer->shutdown();
         footprintRenderer.reset();
+    }
+    if (fishingLines_) {
+        fishingLines_->shutdown();
+        fishingLines_.reset();
     }
 
     LOG_DEBUG("Renderer::shutdown - characterRenderer...");
@@ -1226,6 +1235,7 @@ void Renderer::applyMsaaChange() {
     }
     if (mountDust) mountDust->recreatePipelines();
     if (chargeEffect) chargeEffect->recreatePipelines();
+    if (fishingLines_) fishingLines_->recreatePipelines();
 
     // Sky system sub-renderers
     if (skySystem) {
@@ -3375,6 +3385,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             }
             if (mountDust && camera) mountDust->render(cmd, perFrameSet);
             if (chargeEffect && camera) chargeEffect->render(cmd, perFrameSet);
+            if (fishingLines_ && camera) fishingLines_->render(cmd, perFrameSet);
             if (footprintRenderer && camera) footprintRenderer->render(cmd, perFrameSet, *camera);
             if (questMarkerRenderer && camera) questMarkerRenderer->render(cmd, perFrameSet, *camera);
 
@@ -3592,6 +3603,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         }
         if (mountDust && camera) mountDust->render(currentCmd, perFrameSet);
         if (chargeEffect && camera) chargeEffect->render(currentCmd, perFrameSet);
+        if (fishingLines_ && camera) fishingLines_->render(currentCmd, perFrameSet);
         if (footprintRenderer && camera) footprintRenderer->render(currentCmd, perFrameSet, *camera);
         if (questMarkerRenderer && camera) questMarkerRenderer->render(currentCmd, perFrameSet, *camera);
         // The same one-line total the parallel path reports, so a profile taken

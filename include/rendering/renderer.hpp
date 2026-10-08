@@ -51,6 +51,7 @@ class Lightning;
 class LightingManager;
 class SwimEffects;
 class MountDust;
+class FishingLineRenderer;
 class LevelUpEffect;
 class ChargeEffect;
 class CharacterRenderer;
@@ -166,6 +167,7 @@ public:
     WorldMap* getWorldMap() const { return worldMap.get(); }
     QuestMarkerRenderer* getQuestMarkerRenderer() const { return questMarkerRenderer.get(); }
     FootprintRenderer* getFootprintRenderer() const { return footprintRenderer.get(); }
+    FishingLineRenderer* getFishingLineRenderer() const { return fishingLines_.get(); }
     SkySystem* getSkySystem() const { return skySystem.get(); }
     const std::string& getCurrentZoneName() const;
     uint32_t getCurrentZoneId() const;
@@ -311,6 +313,7 @@ private:
     std::unique_ptr<LevelUpEffect> levelUpEffect;
     std::unique_ptr<LootSparkles> lootSparkles_;
     std::unique_ptr<ChargeEffect> chargeEffect;
+    std::unique_ptr<FishingLineRenderer> fishingLines_;
     std::unique_ptr<CharacterRenderer> characterRenderer;
     std::unique_ptr<WMORenderer> wmoRenderer;
     std::unique_ptr<M2Renderer> m2Renderer;

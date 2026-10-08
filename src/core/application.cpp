@@ -27,6 +27,7 @@
 #include "core/logger.hpp"
 #include "core/memory_monitor.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/fishing_line.hpp"
 #include "rendering/spell_visual_system.hpp"
 #include "rendering/loot_sparkles.hpp"
 #include "rendering/vk_context.hpp"
@@ -3819,6 +3820,40 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
             cr->processPendingNormalMaps(4);
         }
     });
+    // Fishing lines (0x007221d0): every unit channelling a spell at a
+    // bobber - its UNIT_FIELD_CHANNEL_OBJECT a game object of type 17 - with
+    // something in its right hand.
+    if (auto* lines = renderer ? renderer->getFishingLineRenderer() : nullptr; lines && gameHandler && entitySpawner_) {
+        std::vector<rendering::FishingLineRenderer::Line> found;
+        const uint16_t channelField = game::fieldIndex(game::UF::UNIT_FIELD_CHANNEL_OBJECT);
+        const uint16_t spellField = game::fieldIndex(game::UF::UNIT_CHANNEL_SPELL);
+        const uint16_t goBytes1 = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
+        auto& entities = gameHandler->getEntityManager();
+        if (channelField != 0xFFFF && spellField != 0xFFFF) {
+            for (const auto& [guid, entity] : entities.getEntities()) {
+                if (!entity || (entity->getType() != game::ObjectType::UNIT &&
+                                entity->getType() != game::ObjectType::PLAYER)) continue;
+                if (entity->getField(spellField) == 0) continue;
+                const uint64_t object = static_cast<uint64_t>(entity->getField(channelField)) |
+                    (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(channelField + 1))) << 32);
+                if (object == 0) continue;
+                auto bobber = entities.getEntity(object);
+                if (!bobber || bobber->getType() != game::ObjectType::GAMEOBJECT) continue;
+                const auto* info = gameHandler->getCachedGameObjectInfo(
+                    static_cast<const game::GameObject&>(*bobber).getEntry());
+                const uint32_t type = info ? info->type
+                                           : (goBytes1 != 0xFFFF ? (bobber->getField(goBytes1) >> 8) & 0xFFu : 0);
+                if (type != core::kGameObjectTypeFishingNode) continue;
+                const auto& objects = entitySpawner_->getGameObjectInstances();
+                auto goIt = objects.find(object);
+                if (goIt == objects.end() || goIt->second.isWmo) continue;
+                const uint32_t unitInstance = gameHandler->resolveUnitRenderInstance(guid);
+                if (unitInstance == 0) continue;
+                found.push_back({.unitInstance = unitInstance, .bobberInstance = goIt->second.instanceId});
+            }
+        }
+        lines->setLines(std::move(found));
+    }
     // Self-heal missing creature visuals: if a nearby UNIT exists in
     // entity state but has no render instance, queue a spawn retry.
     inGameStep = "creature resync scan";

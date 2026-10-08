@@ -2639,6 +2639,11 @@ wowee_add_test(test_detail_doodad_placement
 wowee_add_test(test_weapon_attachment
     SOURCES test_weapon_attachment.cpp)
 
+# ── test_fishing_line ────────────────────────────────────────
+# The line from a fishing pole to its bobber (rendering/fishing_line_geometry.hpp).
+wowee_add_test(test_fishing_line
+    SOURCES test_fishing_line.cpp)
+
 # ── test_pvp_flags ───────────────────────────────────────────
 # The PvP flags and where each version keeps them (game/pvp_flags.hpp).
 wowee_add_test(test_pvp_flags

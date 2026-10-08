@@ -2607,6 +2607,30 @@ bool CharacterRenderer::hasKeyBone(uint32_t instanceId, int32_t keyBoneId) const
     return false;
 }
 
+std::optional<CharacterRenderer::HeldModelEvent> CharacterRenderer::heldModelEvent(
+    uint32_t instanceId, uint32_t attachmentId, uint32_t eventId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return std::nullopt;
+    for (const auto& held : it->second.weaponAttachments) {
+        if (held.attachmentId != attachmentId) continue;
+        auto weaponIt = instances.find(held.weaponInstanceId);
+        if (weaponIt == instances.end()) return std::nullopt;
+        const auto& weapon = weaponIt->second;
+        auto modelIt = models.find(weapon.modelId);
+        if (modelIt == models.end()) return std::nullopt;
+        const auto* event = modelIt->second.data.findEvent(eventId);
+        if (!event) return std::nullopt;
+        // 0x008317e0: the event's position through its bone, then the
+        // model's own placement.
+        glm::vec4 p(event->position, 1.0f);
+        if (event->bone < weapon.boneMatrices.size()) p = weapon.boneMatrices[event->bone] * p;
+        const glm::mat4 placement = weapon.hasOverrideModelMatrix ? weapon.overrideModelMatrix
+                                                                  : glm::translate(glm::mat4(1.0f), weapon.position);
+        return HeldModelEvent{.position = glm::vec3(placement * p), .ambient = glm::vec3(weapon.drawAmbient)};
+    }
+    return std::nullopt;
+}
+
 uint8_t CharacterRenderer::takeArmAnimationEvents(uint32_t instanceId) {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return 0;

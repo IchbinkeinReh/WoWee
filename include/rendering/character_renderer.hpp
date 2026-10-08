@@ -113,6 +113,16 @@ public:
     /// What the arms' animations reached since the last call: bit 0 the
     /// left arm's event, 1 the right's; bit 2 the left's end, 3 the right's.
     uint8_t takeArmAnimationEvents(uint32_t instanceId);
+    /// The model held at an attachment of the instance - a weapon - with
+    /// one of its events: where the event is in the world, and the ambient
+    /// light the held model is drawn in. Nothing when nothing is held there
+    /// or its model has no such event.
+    struct HeldModelEvent {
+        glm::vec3 position{0.0f};
+        glm::vec3 ambient{0.0f};
+    };
+    [[nodiscard]] std::optional<HeldModelEvent> heldModelEvent(uint32_t instanceId, uint32_t attachmentId,
+                                                               uint32_t eventId) const;
     static constexpr uint8_t kArmEventLeft = 1, kArmEventRight = 2, kArmEndLeft = 4, kArmEndRight = 8;
 
     void update(float deltaTime, const glm::vec3& cameraPos = glm::vec3(0.0f));

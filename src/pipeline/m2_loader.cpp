@@ -1108,6 +1108,8 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
             if (base + eventSize > m2Data.size()) break;
             M2Model::M2Event event;
             event.id = rd32(base);
+            event.bone = rd32(base + 8);
+            std::memcpy(&event.position, m2Data.data() + base + 12, sizeof(glm::vec3));
             event.times.resize(model.sequences.size());
 
             if (wotlkEvents) {
