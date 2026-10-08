@@ -645,6 +645,9 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_CAST_FAILED] = [this](network::Packet& packet) { handleCastFailed(packet); };
     table[Opcode::SMSG_SPELL_START] = [this](network::Packet& packet) { handleSpellStart(packet); };
     table[Opcode::SMSG_SPELL_GO] = [this](network::Packet& packet) { handleSpellGo(packet); };
+    table[Opcode::SMSG_SPELL_UPDATE_CHAIN_TARGETS] = [this](network::Packet& packet) {
+        handleSpellUpdateChainTargets(packet);
+    };
     table[Opcode::SMSG_SPELL_COOLDOWN] = [this](network::Packet& packet) { handleSpellCooldown(packet); };
     table[Opcode::SMSG_COOLDOWN_EVENT] = [this](network::Packet& packet) { handleCooldownEvent(packet); };
     table[Opcode::SMSG_AURA_UPDATE] = [this](network::Packet& packet) {
@@ -2372,7 +2375,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                         svs->playSpellAreaKits(
                             visualId,
                             core::coords::canonicalToRender(glm::vec3(data.destX, data.destY, data.destZ)),
-                            flewToPlace, data.spellId);
+                            flewToPlace, data.spellId, data.casterUnit);
                 }
             }
             for (const auto& tgt : data.hitTargets) {
@@ -3806,6 +3809,40 @@ uint8_t SpellHandler::getSpellDispelType(uint32_t spellId) const {
     loadSpellNameCache();
     auto it = owner_.spellNameCacheRef().find(spellId);
     return (it != owner_.spellNameCacheRef().end()) ? it->second.dispelType : 0;
+}
+
+void SpellHandler::handleSpellUpdateChainTargets(network::Packet& packet) {
+    SpellUpdateChainTargetsData data;
+    if (!SpellUpdateChainTargetsParser::parse(packet, data)) {
+        packet.skipAll();
+        return;
+    }
+    const uint64_t casterGuid = data.casterGuid;
+    const uint32_t spellId = data.spellId;
+    const std::vector<uint64_t>& targets = data.targets;
+    auto entity = owner_.getEntityManager().getEntity(casterGuid);
+    if (!entity || !entity->isUnit()) return;
+    // 0x00741210: a channelled spell's (AttributesEx 0x4) channel object
+    // becomes the first target where it is another.
+    const uint16_t channelField = fieldIndex(UF::UNIT_FIELD_CHANNEL_OBJECT);
+    uint64_t movedChannelObject = 0;
+    if (!targets.empty() && targets[0] != 0 && channelField != 0xFFFF) {
+        const uint64_t channelObject = static_cast<uint64_t>(entity->getField(channelField)) |
+                                       (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(channelField + 1)))
+                                        << 32);
+        loadSpellNameCache();
+        auto it = owner_.spellNameCacheRef().find(spellId);
+        if (channelObject != targets[0] && it != owner_.spellNameCacheRef().end() && (it->second.attrEx & 0x4u)) {
+            entity->setField(channelField, static_cast<uint32_t>(targets[0]));
+            entity->setField(static_cast<uint16_t>(channelField + 1), static_cast<uint32_t>(targets[0] >> 32));
+            movedChannelObject = targets[0];
+        }
+    }
+    // Then the unit's hits (0x00724f50) and the spell's effects on it again
+    // (0x0073eb50).
+    if (auto* renderer = owner_.services().renderer) {
+        if (auto* svs = renderer->getSpellVisualSystem()) svs->updateChainTargets(casterGuid, spellId, targets, movedChannelObject);
+    }
 }
 
 bool SpellHandler::isSpellInterruptible(uint32_t spellId) const {

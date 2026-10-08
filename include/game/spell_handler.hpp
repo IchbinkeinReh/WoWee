@@ -363,6 +363,9 @@ private:
     void handleCastFailed(network::Packet& packet);
     void handleSpellStart(network::Packet& packet);
     void handleSpellGo(network::Packet& packet);
+    /// SMSG_SPELL_UPDATE_CHAIN_TARGETS (0x00800470): a cast's targets
+    /// changed while its chains run.
+    void handleSpellUpdateChainTargets(network::Packet& packet);
     void handleSpellCooldown(network::Packet& packet);
     void handleCooldownEvent(network::Packet& packet);
     void handleAuraUpdate(network::Packet& packet, bool isAll);

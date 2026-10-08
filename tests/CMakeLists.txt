@@ -2627,6 +2627,10 @@ wowee_add_test(test_spell_kit
 wowee_add_test(test_spell_chain
     SOURCES test_spell_chain.cpp)
 
+# ── test_spell_chain_targets_packet ──────────────────
+# SMSG_SPELL_UPDATE_CHAIN_TARGETS as 0x00800470 reads it.
+wowee_add_packet_test(test_spell_chain_targets_packet)
+
 # ── test_swing_trail ─────────────────────────────────
 # A weapon's swing trail, which a kit's CharProc 8 starts (0x007e4ce0).
 wowee_add_test(test_swing_trail

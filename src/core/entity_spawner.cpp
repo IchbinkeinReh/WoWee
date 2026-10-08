@@ -365,6 +365,17 @@ void EntitySpawner::setPlayerItemOverride(uint64_t guid, int equipSlot, uint32_t
     queueDressedEquipment(guid);
 }
 
+void EntitySpawner::setNpcHeadItem(uint64_t guid, uint32_t displayId) {
+    auto inst = creatureInstances_.find(guid);
+    if (inst == creatureInstances_.end() || !renderer_) return;
+    if (displayId == 0) npcHeadItems_.erase(inst->second);
+    else npcHeadItems_[inst->second] = displayId;
+    const auto model = creatureModelIds_.find(guid);
+    const auto display = creatureDisplayIds_.find(guid);
+    if (model == creatureModelIds_.end() || display == creatureDisplayIds_.end()) return;
+    normalizeHumanoidClothingGeosets(inst->second, model->second, display->second);
+}
+
 void EntitySpawner::queueDressedEquipment(uint64_t guid) {
     auto base = serverEquipment_.find(guid);
     if (base == serverEquipment_.end()) return;
@@ -1813,7 +1824,11 @@ void EntitySpawner::normalizeHumanoidClothingGeosets(uint32_t instanceId, uint32
     }
     // CreatureDisplayInfoExtra's NPCItemDisplay: head, shoulder, shirt, chest,
     // belt, legs, feet, wrist, hands, tabard, cape.
-    look.worn.head = extra.equipDisplayId[0];
+    // A kit's worn head item over it (0x006f82d0), its own back after
+    // (0x00723730: NPCItemDisplay[0]).
+    const auto headIt = npcHeadItems_.find(instanceId);
+    const uint32_t headDisplayId = headIt != npcHeadItems_.end() ? headIt->second : extra.equipDisplayId[0];
+    look.worn.head = headDisplayId;
     look.worn.shirt = extra.equipDisplayId[2];
     look.worn.chest = extra.equipDisplayId[3];
     look.worn.belt = extra.equipDisplayId[4];
@@ -1827,7 +1842,7 @@ void EntitySpawner::normalizeHumanoidClothingGeosets(uint32_t instanceId, uint32
                                             modelSubmeshIds(modelId)));
     // The helm and the shoulders, as the component hangs them on any character
     // (0x004ef0d0, 0x004ef840).
-    core::attachHelm(*charRenderer, *assetManager_, instanceId, extra.equipDisplayId[0], extra.raceId,
+    core::attachHelm(*charRenderer, *assetManager_, instanceId, headDisplayId, extra.raceId,
                      extra.sexId, [this] { return nextWeaponModelId_++; });
     core::attachShoulders(*charRenderer, *assetManager_, instanceId, extra.equipDisplayId[1],
                           [this] { return nextWeaponModelId_++; });

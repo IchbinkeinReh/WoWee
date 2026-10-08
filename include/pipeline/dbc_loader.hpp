@@ -55,6 +55,8 @@ public:
      * Get string block size
      */
     uint32_t getStringBlockSize() const { return stringBlockSize; }
+    /// The string block's bytes as the file holds them (stringBlockSize).
+    const uint8_t* getStringBlockData() const { return stringBlock.data(); }
 
     /**
      * Get a record by index

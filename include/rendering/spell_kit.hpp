@@ -190,6 +190,18 @@ inline constexpr uint32_t kCharProcAlpha = 14;
 inline constexpr uint32_t kCharProcChain = 0;
 inline constexpr uint32_t kCharProcChainToo = 12;
 constexpr bool isChainProc(uint32_t proc) { return proc == kCharProcChain || proc == kCharProcChainToo; }
+/// 0x007fe470: whether any of a kit's four CharProcs runs a chain.
+constexpr bool kitRunsChain(const std::array<uint32_t, 4>& charProc) {
+    for (uint32_t proc : charProc) {
+        if (isChainProc(proc)) return true;
+    }
+    return false;
+}
+/// SpellVisualKit Flags (+0x94) 0x1: of a spell whose visual runs a chain
+/// (0x00800bf0), the kit waits on its unit for the chain's pulse to reach
+/// it (0x0072af60, 0x00728050) - ten seconds at most (0x00728140).
+inline constexpr uint32_t kKitFlagWaitsForChain = 0x1;
+inline constexpr uint32_t kWaitingKitMs = 10000;
 
 /// 8: a swing trail on each weapon in the unit's hands, ParamZero its colour
 ///    under ParamThree's alpha, laid for ParamTwo ms (0x007265c0 case 8,
@@ -198,7 +210,8 @@ inline constexpr uint32_t kCharProcSwingTrail = 8;
 
 /// 11: the unit's animation held where it is - or ParamZero seconds into
 ///    its sequence, chopped to ms (0x00407930), no further than its length -
-///    while the effect lasts (0x006f80b0, 0x00735bb0, 0x00735dd0).
+///    and its mount's the same, while the effect lasts (0x006f80b0,
+///    0x00735bb0, 0x00735dd0).
 inline constexpr uint32_t kCharProcFreeze = 11;
 inline std::optional<float> freezeAtMs(float paramZero) {
     if (!(paramZero > 0.0f)) return std::nullopt;
@@ -235,8 +248,9 @@ constexpr bool timedAlphaOver(const TimedAlpha& t, uint32_t nowMs) {
 /// 17: an item, ParamOne chopped, worn in its armour slot while the effect
 ///    lasts (0x006f8650, 0x006f8600, 0x006f82d0): Item.dbc's display (+0x14)
 ///    in the character component's slot for its inventory type (+0x18,
-///    0x004e7a30); the unit's own comes back as it goes (0x006f8700,
-///    0x00723730).
+///    0x004e7a30) - any slot on a player in its own form, only the head on
+///    an NPC dressed by CreatureDisplayInfoExtra; the unit's own comes back
+///    as it goes (0x006f8700, 0x00723730: NPCItemDisplay for the NPC).
 inline constexpr uint32_t kCharProcWearItem = 17;
 /// 0x004e7a30: the character component's item slot for an inventory type -
 /// head, shoulders, shirt, chest (and robe), belt, legs, boots, wrists,

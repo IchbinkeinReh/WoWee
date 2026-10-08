@@ -2357,6 +2357,11 @@ void Application::setState(AppState newState) {
                     svs->setUnitInstanceResolver([this](uint64_t guid) -> uint32_t {
                         return gameHandler ? gameHandler->resolveUnitRenderInstance(guid) : 0;
                     });
+                    svs->setUnitMountInstanceResolver([this](uint64_t guid) -> uint32_t {
+                        if (!entitySpawner_ || !gameHandler) return 0;
+                        if (guid == gameHandler->getPlayerGuid()) return entitySpawner_->getMountInstanceId();
+                        return entitySpawner_->remotePlayerMountInstance(guid);
+                    });
                     svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
                         return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
                     });
@@ -2384,7 +2389,13 @@ void Application::setState(AppState newState) {
                             gameHandler->markOnlineEquipmentDirty();
                             return;
                         }
-                        if (entitySpawner_) entitySpawner_->setPlayerItemOverride(guid, equipSlot, displayId, inventoryType);
+                        if (!entitySpawner_) return;
+                        if (entitySpawner_->isPlayerSpawned(guid)) {
+                            entitySpawner_->setPlayerItemOverride(guid, equipSlot, displayId, inventoryType);
+                        } else if (equipSlot == rendering::spell_kit::equipSlotForComponentSlot(0)) {
+                            // Any other unit's head only (0x006f82d0).
+                            entitySpawner_->setNpcHeadItem(guid, displayId);
+                        }
                     });
                     svs->setObjectFrameResolver([this](uint64_t guid, glm::mat4& frame) {
                         auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;

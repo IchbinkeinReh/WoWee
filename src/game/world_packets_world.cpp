@@ -1827,5 +1827,17 @@ network::Packet ResurrectResponsePacket::build(uint64_t casterGuid, bool accept)
 // Taxi / Flight Paths
 // ============================================================
 
+bool SpellUpdateChainTargetsParser::parse(network::Packet& packet, SpellUpdateChainTargetsData& data) {
+    data = {};
+    if (!packet.hasRemaining(16)) return false;
+    data.casterGuid = packet.readUInt64();
+    data.spellId = packet.readUInt32();
+    const uint32_t count = packet.readUInt32();
+    if (!packet.hasRemaining(static_cast<size_t>(count) * 8u)) return false;
+    data.targets.resize(count);
+    for (uint64_t& guid : data.targets) guid = packet.readUInt64();
+    return true;
+}
+
 } // namespace game
 } // namespace wowee

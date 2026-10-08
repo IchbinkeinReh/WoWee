@@ -335,3 +335,11 @@ TEST_CASE("CharProc 17 wears an item in its inventory type's slot (0x004e7a30)",
     CHECK(sk::equipSlotForComponentSlot(10) == 14);
     CHECK(sk::equipSlotForComponentSlot(12) == -1);
 }
+
+TEST_CASE("a kit runs a chain where any of its CharProcs is 0 or 12 (0x007fe470)", "[spell_kit]") {
+    CHECK(sk::kitRunsChain({0xffffffffu, 0xffffffffu, 0u, 0xffffffffu}));
+    CHECK(sk::kitRunsChain({1u, 12u, 0xffffffffu, 0xffffffffu}));
+    CHECK_FALSE(sk::kitRunsChain({1u, 13u, 0xffffffffu, 0xffffffffu}));
+    CHECK(sk::kKitFlagWaitsForChain == 0x1u);
+    CHECK(sk::kWaitingKitMs == 10000u);
+}

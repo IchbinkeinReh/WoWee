@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <glm/gtc/constants.hpp>
 
 namespace wowee {
@@ -136,6 +137,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             const uint32_t kitId = kitDbc->getUInt32(i, 0);
             if (!kitId) continue;
             KitRecord kit;
+            kit.id = kitId;
             for (size_t k = 0; k < slotFields.size(); ++k) {
                 if (slotFields[k] == 0xFFFFFFFFu) continue;
                 const auto& slot = spell_kit::kKitSlots[k];
@@ -426,26 +428,46 @@ void SpellVisualSystem::playKit(uint32_t kitId, spell_kit::KitType type, const g
 }
 
 void SpellVisualSystem::playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
-                                          uint32_t spellId) {
+                                          uint32_t spellId, uint64_t casterGuid) {
     if (!m2Renderer_ || visualId == 0) return;
     if (!cachedAssetManager_) cachedAssetManager_ = core::Application::getInstance().getAssetManager();
     if (!cachedAssetManager_) return;
     if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
     auto it = visualKits_.find(visualId);
     if (it == visualKits_.end()) return;
-    // 0x0080e1b0: type 3 at the destination.
+    // 0x0080e1b0: type 3 at the destination, played by the caster.
+    const KitPlayExtra byCaster{.unitGuid = casterGuid};
     if (it->second.instantArea != 0)
-        playKitOnUnit(it->second.instantArea, spell_kit::KitType::Area, 0, place, &place, 0, spellId);
+        playKitOnUnit(it->second.instantArea, spell_kit::KitType::Area, 0, place, &place, 0, spellId, byCaster);
     if (it->second.impactArea != 0 && !missileCarriesImpact)
-        playKitOnUnit(it->second.impactArea, spell_kit::KitType::Area, 0, place, &place, 0, spellId);
+        playKitOnUnit(it->second.impactArea, spell_kit::KitType::Area, 0, place, &place, 0, spellId, byCaster);
 }
 
 std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUnit(
     uint32_t kitId, spell_kit::KitType type, uint32_t renderInstanceId, const glm::vec3& position,
-    const glm::vec3* place, uint32_t castTimeMs, uint32_t spellId) {
+    const glm::vec3* place, uint32_t castTimeMs, uint32_t spellId, const KitPlayExtra& extra) {
     auto it = kitId ? kits_.find(kitId) : kits_.end();
     if (it == kits_.end()) return {};
     const KitRecord& kit = it->second;
+    // 0x0072af60: a kit of a chain spell with Flags 0x1 waits on its unit
+    // for the chain's pulse. A state kit is held by its aura here and plays
+    // as it comes.
+    const uint64_t unitGuid =
+        renderInstanceId != 0 && instanceUnitResolver_ ? instanceUnitResolver_(renderInstanceId) : extra.unitGuid;
+    if (!extra.replay && unitGuid != 0 && spellId != 0 && type != spell_kit::KitType::State &&
+        (kit.flags & spell_kit::kKitFlagWaitsForChain) != 0 &&
+        visualHasChainKit(spellVisualResolver_ ? spellVisualResolver_(spellId) : 0u)) {
+        waitingKits_.push_back({.unitGuid = unitGuid,
+                                .spellId = spellId,
+                                .kitId = kitId,
+                                .type = type,
+                                .hasPlace = place != nullptr,
+                                .place = place ? *place : position,
+                                .castTimeMs = castTimeMs,
+                                .counter = extra.counter,
+                                .deadlineMs = colourClockMs_ + spell_kit::kWaitingKitMs});
+        return {};
+    }
     // 0x0073b140: the unit's own part - the weapon effects of a precast or
     // cast kit (0x0073a6c0), the kit's colour and its camera shake.
     if (type == spell_kit::KitType::Precast || type == spell_kit::KitType::Cast)
@@ -1074,10 +1096,20 @@ void SpellVisualSystem::playKitColourFade(uint32_t kitId, uint32_t renderInstanc
             auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
             const uint64_t unitGuid = instanceUnitResolver_ ? instanceUnitResolver_(renderInstanceId) : 0;
             if (charRenderer && unitGuid != 0) {
+                // The mount first (+0x98c), then the unit (+0xb4), each at
+                // ParamZero into its own sequence; +0xd8 and +0xd4 keep
+                // whether each still has to be let go.
+                const uint32_t mount = unitMountInstanceResolver_ ? unitMountInstanceResolver_(unitGuid) : 0u;
+                const bool mountWas =
+                    mount == 0 ||
+                    charRenderer->setInstanceAnimationFrozen(mount, true, spell_kit::freezeAtMs(kit.charParam[k][0]));
                 const bool was = charRenderer->setInstanceAnimationFrozen(
                     renderInstanceId, true, spell_kit::freezeAtMs(kit.charParam[k][0]));
-                animationHolds_.push_back(
-                    {.unitGuid = unitGuid, .spellId = spellId, .renderInstanceId = renderInstanceId, .wasHeld = was});
+                animationHolds_.push_back({.unitGuid = unitGuid,
+                                           .spellId = spellId,
+                                           .renderInstanceId = renderInstanceId,
+                                           .wasHeld = was,
+                                           .mountWasHeld = mount != 0 && mountWas});
             }
             continue;
         }
@@ -1204,13 +1236,68 @@ const spell_chain::ChainEffect* SpellVisualSystem::chainEffect(uint32_t id) {
             for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
                 auto row = spell_chain::parseChainEffect(dbc->getRecord(i), dbc->getRecordSize(),
                                                          [&](uint32_t offset) { return dbc->getStringByOffset(offset); });
-                if (row && row->id != 0) chainEffects_[row->id] = std::move(*row);
+                if (!row || row->id == 0) continue;
+                // The Combo string's own bytes (0x007fc5f0 reads them as words).
+                uint32_t comboOffset = 0;
+                std::memcpy(&comboOffset, dbc->getRecord(i) + dbc->getRecordSize() - 16, 4);
+                if (comboOffset < dbc->getStringBlockSize() && dbc->getStringBlockData())
+                    row->comboWords = spell_chain::comboWordsAt(dbc->getStringBlockData() + comboOffset,
+                                                                dbc->getStringBlockSize() - comboOffset);
+                chainEffects_[row->id] = std::move(*row);
             }
         }
         LOG_INFO("SpellVisual: loaded ", chainEffects_.size(), " chain effects");
     }
     auto it = id ? chainEffects_.find(id) : chainEffects_.end();
     return it != chainEffects_.end() ? &it->second : nullptr;
+}
+
+bool SpellVisualSystem::visualHasChainKit(uint32_t visualId) const {
+    if (visualId == 0) return false;
+    auto runsChain = [this](uint32_t kitId) {
+        auto it = kitId ? kits_.find(kitId) : kits_.end();
+        return it != kits_.end() && spell_kit::kitRunsChain(it->second.charProc);
+    };
+    if (auto it = visualKits_.find(visualId); it != visualKits_.end()) {
+        const VisualKits& k = it->second;
+        if (runsChain(k.cast) || runsChain(k.impact) || runsChain(k.casterImpact) || runsChain(k.targetImpact))
+            return true;
+    }
+    if (auto it = visualAuraKits_.find(visualId); it != visualAuraKits_.end())
+        return runsChain(it->second.stateKit) || runsChain(it->second.channelKit);
+    return false;
+}
+
+void SpellVisualSystem::releaseWaitingKits(uint64_t unitGuid, uint32_t spellId, int32_t counter) {
+    if (unitGuid == 0) return;
+    // Taken out first: a kit played here may start chains of its own.
+    std::vector<WaitingKit> due;
+    for (auto it = waitingKits_.begin(); it != waitingKits_.end();) {
+        if (it->unitGuid == unitGuid && it->spellId == spellId && it->counter == counter) {
+            due.push_back(*it);
+            it = waitingKits_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (const WaitingKit& w : due) {
+        // Played as it was asked for, and not held again (+0x20 1).
+        const uint32_t instance = !w.hasPlace && unitInstanceResolver_ ? unitInstanceResolver_(unitGuid) : 0u;
+        if (!w.hasPlace && instance == 0) continue;
+        glm::vec3 at = w.place;
+        if (instance != 0 && renderer_ && renderer_->getCharacterRenderer())
+            renderer_->getCharacterRenderer()->getInstancePosition(instance, at);
+        playKitOnUnit(w.kitId, w.type, instance, at, w.hasPlace ? &w.place : nullptr, w.castTimeMs, w.spellId,
+                      {.unitGuid = unitGuid, .counter = w.counter, .replay = true});
+    }
+}
+
+void SpellVisualSystem::expireWaitingKits() {
+    waitingKits_.erase(std::remove_if(waitingKits_.begin(), waitingKits_.end(),
+                                      [this](const WaitingKit& w) {
+                                          return static_cast<int32_t>(colourClockMs_ - w.deadlineMs) >= 0;
+                                      }),
+                       waitingKits_.end());
 }
 
 const SpellVisualSystem::VisualEnds* SpellVisualSystem::visualEndsForSpell(uint32_t spellId) const {
@@ -1238,6 +1325,7 @@ void SpellVisualSystem::startKitChains(const KitRecord& kit, uint64_t unitGuid, 
         chain.spellId = spellId;
         uint64_t source = unitGuid;
         std::vector<uint64_t> targets;
+        bool toPlace = false;
         switch (spell_chain::chainTargets(otherSource != 0 && otherSource != unitGuid, cast && cast->place,
                                           channelMatches, cast ? cast->hits.size() : 0)) {
             case spell_chain::ChainTargets::FromOther:
@@ -1246,6 +1334,7 @@ void SpellVisualSystem::startKitChains(const KitRecord& kit, uint64_t unitGuid, 
                 break;
             case spell_chain::ChainTargets::Place:
                 chain.place = cast->place;
+                toPlace = true;
                 break;
             case spell_chain::ChainTargets::Channel:
                 targets.push_back(channelIt->second.object);
@@ -1275,14 +1364,43 @@ void SpellVisualSystem::startKitChains(const KitRecord& kit, uint64_t unitGuid, 
         } else {
             chain.nodes.insert(chain.nodes.end(), targets.begin(), targets.end());
         }
+        // The unit's chain counter (+0xf58) names this kit's bolts, two on
+        // for the next.
+        int32_t& unitCounter = unitChainCounters_[unitGuid];
+        const int32_t counter = unitCounter;
+        unitCounter += 2;
         // ParamThree: every bolt from the unit; ParamTwo: held by its effect.
-        chain.bolts = spell_chain::planBolts(*effect, chain.nodes.size() - 1, param[3] != 0.0f, colourClockMs_,
-                                             chain.endMs);
-        chain.lightning.resize(chain.bolts.size());
         chain.held = param[2] != 0.0f;
         chain.ownerUnit = unitGuid;
         chain.ownerSpell = spellId;
-        chains_.push_back(std::move(chain));
+        // 0x007fc5f0: a LightningObject for the row, then one for each row
+        // its Combo names (the first row's words, twelve at most), while
+        // the effect holds fewer than twelve (+0x4c).
+        const spell_chain::ChainEffect* first = effect;
+        uint32_t heldCount = 0;
+        for (size_t word = 0;; ++word) {
+            ChainObject object = chain;
+            object.effect = effect;
+            object.bolts = spell_chain::planBolts(*effect, object.nodes.size() - 1, param[3] != 0.0f,
+                                                  colourClockMs_, object.endMs, counter);
+            object.lightning.resize(object.bolts.size());
+            chains_.push_back(std::move(object));
+            if (chain.held) ++heldCount;
+            if (heldCount >= 12 || word >= first->comboWords.size()) break;
+            effect = chainEffect(spell_chain::comboRow(first->comboWords[word]));
+            if (!effect) break;
+        }
+        // 0x007265c0 case 0 at a place: the visual's ImpactAreaKit (+0x60)
+        // there, the unit's and named by the counter - unless it is this
+        // kit - to wait for the bolt's pulse.
+        const uint32_t visualId = spellVisualResolver_ ? spellVisualResolver_(spellId) : 0u;
+        const auto kitsIt = visualId ? visualKits_.find(visualId) : visualKits_.end();
+        if (toPlace && kitsIt != visualKits_.end() && kitsIt->second.impactArea != 0 &&
+            kitsIt->second.impactArea != kit.id) {
+            const glm::vec3 at = *cast->place;
+            playKitOnUnit(kitsIt->second.impactArea, spell_kit::KitType::Area, 0, at, &at, 0, spellId,
+                          {.unitGuid = unitGuid, .counter = counter});
+        }
     }
 }
 
@@ -1313,8 +1431,12 @@ void SpellVisualSystem::removeUnitSpellEffects(uint64_t unitGuid, uint32_t spell
             ++it;
             continue;
         }
-        if (!it->wasHeld && renderer_ && renderer_->getCharacterRenderer())
-            renderer_->getCharacterRenderer()->setInstanceAnimationFrozen(it->renderInstanceId, false);
+        if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
+            // 0x006f87c0: the mount the unit has now, then the unit.
+            const uint32_t mount = unitMountInstanceResolver_ ? unitMountInstanceResolver_(unitGuid) : 0u;
+            if (!it->mountWasHeld && mount != 0) charRenderer->setInstanceAnimationFrozen(mount, false);
+            if (!it->wasHeld) charRenderer->setInstanceAnimationFrozen(it->renderInstanceId, false);
+        }
         it = animationHolds_.erase(it);
     }
     if (auto it = unitAuraKits_.find(unitGuid); it != unitAuraKits_.end()) {
@@ -1364,6 +1486,10 @@ void SpellVisualSystem::setUnitChannel(uint64_t unitGuid, uint32_t spellId, uint
         unitChannels_.erase(unitGuid);
         return;
     }
+    applyChannelKit(unitGuid, spellId);
+}
+
+void SpellVisualSystem::applyChannelKit(uint64_t unitGuid, uint32_t spellId) {
     // 0x0072bc70: the visual's ChannelKit, type 2.
     const uint32_t visualId = spellVisualResolver_ ? spellVisualResolver_(spellId) : 0;
     auto visualIt = visualId ? visualAuraKits_.find(visualId) : visualAuraKits_.end();
@@ -1380,6 +1506,27 @@ void SpellVisualSystem::setUnitChannel(uint64_t unitGuid, uint32_t spellId, uint
     }
     startKitChains(kitIt->second, unitGuid, spellId, 0);
     unitAuraKits_[unitGuid].auras.push_back(std::move(aura));
+}
+
+void SpellVisualSystem::updateChainTargets(uint64_t unitGuid, uint32_t spellId, const std::vector<uint64_t>& targets,
+                                           uint64_t channelObject) {
+    if (unitGuid == 0) return;
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    // 0x00724f50: the hits less the unit; the place stays as it was.
+    CastTargets& cast = castTargets_[unitGuid];
+    cast.hits.clear();
+    for (uint64_t guid : targets) {
+        if (guid != 0 && guid != unitGuid) cast.hits.push_back(guid);
+    }
+    auto channel = unitChannels_.find(unitGuid);
+    if (channel != unitChannels_.end() && channelObject != 0) channel->second.object = channelObject;
+    if (spellId == 0) return;
+    // 0x0073eb50: the spell's effects leave the unit, its chains with them,
+    // and while it channels its channel's kit goes on again, to the new
+    // targets (0x0072bc70).
+    removeUnitSpellEffects(unitGuid, spellId);
+    if (channel != unitChannels_.end() && channel->second.spellId != 0)
+        applyChannelKit(unitGuid, channel->second.spellId);
 }
 
 void SpellVisualSystem::setUnitChannels(const std::vector<ChannelState>& channels) {
@@ -1452,6 +1599,13 @@ bool SpellVisualSystem::chainUnitPoint(uint32_t renderInstanceId, uint32_t spell
 
 void SpellVisualSystem::updateChains(float deltaTime) {
     const uint32_t now = colourClockMs_;
+    // Played after the walk: a kit played may start chains of its own.
+    struct Release {
+        uint64_t unit;
+        uint32_t spellId;
+        int32_t counter;
+    };
+    std::vector<Release> releases;
     for (auto it = chains_.begin(); it != chains_.end();) {
         ChainObject& chain = *it;
         for (size_t b = 0; b < chain.bolts.size(); ++b) {
@@ -1488,6 +1642,15 @@ void SpellVisualSystem::updateChains(float deltaTime) {
                 }
                 lightning->setEnds(start, end);
                 lightning->setVisible(haveStart && haveEnd);
+                // As its pulse was when last laid out: the kits waiting at
+                // either end play (the objects' virtual 0xc0).
+                const auto release =
+                    spell_chain::pulseRelease(lightning->pulseAtSource(), lightning->pulseAtEnd(), to != 0);
+                if (from != 0) {
+                    if (release.source) releases.push_back({from, chain.spellId, -1});
+                    if (release.target) releases.push_back({to, chain.spellId, -1});
+                    if (release.sourceCounter) releases.push_back({from, chain.spellId, bolt.counter});
+                }
             }
             if (!chain.held && static_cast<int32_t>(now - bolt.endMs) >= 0) lightning.reset();
         }
@@ -1497,6 +1660,7 @@ void SpellVisualSystem::updateChains(float deltaTime) {
             ++it;
         }
     }
+    for (const Release& r : releases) releaseWaitingKits(r.unit, r.spellId, r.counter);
     // 0x009ab730: every lightning a frame on.
     for (ChainObject& chain : chains_) {
         for (auto& lightning : chain.lightning) {
@@ -1717,6 +1881,7 @@ void SpellVisualSystem::update(float deltaTime) {
     updateUnitAlphas();
     updateLightTint();
     updateChains(deltaTime);
+    expireWaitingKits();
     publishClientStrips();
     if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
 
@@ -1798,6 +1963,8 @@ void SpellVisualSystem::reset() {
     }
     unitAuraKits_.clear();
     chains_.clear();
+    waitingKits_.clear();
+    unitChainCounters_.clear();
     swings_.clear();
     castTargets_.clear();
     unitChannels_.clear();
@@ -1805,6 +1972,9 @@ void SpellVisualSystem::reset() {
         for (const auto& [instance, fade] : timedAlphas_)
             renderer_->getCharacterRenderer()->setInstanceKitAlpha(instance, 1.0f, 0.0f);
         for (const AnimationHold& hold : animationHolds_) {
+            const uint32_t mount = unitMountInstanceResolver_ ? unitMountInstanceResolver_(hold.unitGuid) : 0u;
+            if (!hold.mountWasHeld && mount != 0)
+                renderer_->getCharacterRenderer()->setInstanceAnimationFrozen(mount, false);
             if (!hold.wasHeld)
                 renderer_->getCharacterRenderer()->setInstanceAnimationFrozen(hold.renderInstanceId, false);
         }

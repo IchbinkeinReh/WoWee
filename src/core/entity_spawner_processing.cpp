@@ -2021,6 +2021,7 @@ void EntitySpawner::despawnCreature(uint64_t guid) {
     if (renderer_ && renderer_->getCharacterRenderer()) {
         renderer_->getCharacterRenderer()->removeInstance(it->second);
     }
+    npcHeadItems_.erase(it->second);
 
     creatureInstances_.erase(it);
     creatureAppliedScale_.erase(guid);

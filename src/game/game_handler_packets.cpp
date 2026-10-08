@@ -3370,7 +3370,6 @@ void GameHandler::registerRemainingOpcodes() {
         Opcode::SMSG_SET_PLAYER_DECLINED_NAMES_RESULT,
         Opcode::SMSG_SET_PROJECTILE_POSITION,
         Opcode::SMSG_SPELL_CHANCE_RESIST_PUSHBACK,
-        Opcode::SMSG_SPELL_UPDATE_CHAIN_TARGETS,
         Opcode::SMSG_STOP_DANCE,
         Opcode::SMSG_TEST_DROP_RATE_RESULT,
         Opcode::SMSG_UPDATE_ACCOUNT_DATA,

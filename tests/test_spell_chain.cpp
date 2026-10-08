@@ -254,3 +254,94 @@ TEST_CASE("a flickering strip goes off for its off time", "[spell_chain]") {
     CHECK_FALSE(bolt.flickeredOff());
     CHECK(bolt.build(glm::vec3(0.0f, -10.0f, 0.0f), strip));
 }
+
+TEST_CASE("the Combo string's words name rows as 0x009a8ce0 gathers them", "[spell_chain]") {
+    CHECK(sc::comboRow(0) == 0);
+    CHECK(sc::comboRow(0x00000004u) == 4);
+    // Each byte's low bit is dropped.
+    CHECK(sc::comboRow(0x00000105u) == 4);
+    CHECK(sc::comboRow(0x00003231u) == 0x3230);
+    // The high bits gathered down.
+    CHECK(sc::comboRow(0x20000000u) == 0x100);
+    CHECK(sc::comboRow(0x02000000u) == 0x80);
+    CHECK(sc::comboRow(0x40000000u) == 0x10000);
+    CHECK(sc::comboRow(0x04000000u) == 0x8000);
+    CHECK(sc::comboRow(0xffffffffu) == 0xffffff);
+}
+
+TEST_CASE("the Combo words are read four bytes at a time, zeros past the block", "[spell_chain]") {
+    const uint8_t bytes[6] = {0x04, 0x00, 0x00, 0x00, 0x08, 0x01};
+    const auto words = sc::comboWordsAt(bytes, sizeof(bytes));
+    CHECK(words[0] == 4);
+    CHECK(words[1] == 0x0108u);
+    CHECK(words[2] == 0);
+    CHECK(words[11] == 0);
+    // An empty Combo, the next string's first letters after its terminator.
+    const uint8_t empty[5] = {0x00, 'S', 'p', 'e', 'l'};
+    CHECK(sc::comboRow(sc::comboWordsAt(empty, sizeof(empty))[0]) == 0x71d300u);
+}
+
+TEST_CASE("the first bolt carries the unit's chain counter", "[spell_chain]") {
+    sc::ChainEffect e = plainEffect();
+    uint32_t end = 0;
+    const auto bolts = sc::planBolts(e, 3, false, 0, end, 6);
+    REQUIRE(bolts.size() == 3);
+    CHECK(bolts[0].counter == 6);
+    CHECK(bolts[1].counter == -1);
+    CHECK(bolts[2].counter == -1);
+    CHECK(sc::planBolts(e, 1, false, 0, end)[0].counter == -1);
+}
+
+TEST_CASE("a bolt's pulse lets the kits at its ends play", "[spell_chain]") {
+    // At the source: the source's, counter -1.
+    auto r = sc::pulseRelease(true, false, true);
+    CHECK(r.source);
+    CHECK_FALSE(r.target);
+    CHECK_FALSE(r.sourceCounter);
+    // At a unit's end: the target's.
+    r = sc::pulseRelease(false, true, true);
+    CHECK_FALSE(r.source);
+    CHECK(r.target);
+    CHECK_FALSE(r.sourceCounter);
+    // At a place: the source's kits waiting on the bolt's counter.
+    r = sc::pulseRelease(false, true, false);
+    CHECK_FALSE(r.target);
+    CHECK(r.sourceCounter);
+}
+
+TEST_CASE("a strip without a pulse shows both ends; a pulse only where it is", "[spell_chain]") {
+    sc::ChainEffect e = plainEffect();
+    sc::Rng rng(3);
+    sc::Lightning bolt;
+    bolt.init(&e, rng);
+    bolt.setEnds(glm::vec3(0.0f), glm::vec3(10.0f, 0.0f, 0.0f));
+    bolt.setVisible(true);
+    std::vector<wowee::rendering::client_ribbon::Vertex> strip;
+    bolt.update(0.01f, rng);
+    REQUIRE(bolt.build(glm::vec3(0.0f, -10.0f, 0.0f), strip));
+    CHECK(bolt.pulseAtSource());
+    CHECK(bolt.pulseAtEnd());
+
+    sc::ChainEffect p = plainEffect();
+    p.flags = sc::kFlagPulse;
+    p.pulseSpeed = 2.0f;
+    p.pulseOnLength = 1.0f;
+    p.pulseFadeLength = 0.5f;
+    sc::Lightning pulsed;
+    pulsed.init(&p, rng);
+    pulsed.setEnds(glm::vec3(0.0f), glm::vec3(10.0f, 0.0f, 0.0f));
+    pulsed.setVisible(true);
+    pulsed.update(0.5f, rng);  // its head a yard out
+    pulsed.build(glm::vec3(0.0f, -10.0f, 0.0f), strip);
+    CHECK(pulsed.pulseAtSource());
+    CHECK_FALSE(pulsed.pulseAtEnd());
+    pulsed.update(5.5f, rng);  // its head at the far end
+    pulsed.build(glm::vec3(0.0f, -10.0f, 0.0f), strip);
+    CHECK_FALSE(pulsed.pulseAtSource());
+    CHECK(pulsed.pulseAtEnd());
+    // Not shown: neither.
+    pulsed.setVisible(false);
+    pulsed.build(glm::vec3(0.0f, -10.0f, 0.0f), strip);
+    CHECK_FALSE(pulsed.pulseAtSource());
+    CHECK_FALSE(pulsed.pulseAtEnd());
+}

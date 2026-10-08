@@ -286,6 +286,15 @@ public:
         float riderHeight = 0.0f;
     };
     void setRemotePlayerMountDisplayId(uint64_t guid, uint32_t displayId);
+    /// A kit's worn head item on an NPC dressed by its
+    /// CreatureDisplayInfoExtra (CharProc 17, 0x006f82d0); 0 gives it its
+    /// own NPCItemDisplay head back (0x00723730).
+    void setNpcHeadItem(uint64_t guid, uint32_t displayId);
+    /// The instance drawing another player's mount, 0 while it rides none.
+    uint32_t remotePlayerMountInstance(uint64_t guid) const {
+        auto it = remotePlayerMounts_.find(guid);
+        return it != remotePlayerMounts_.end() ? it->second.instanceId : 0u;
+    }
     const RemotePlayerMount* getRemotePlayerMount(uint64_t guid) const {
         auto it = remotePlayerMounts_.find(guid);
         return it != remotePlayerMounts_.end() ? &it->second : nullptr;
@@ -543,6 +552,7 @@ private:
 
     std::unordered_map<uint64_t, uint32_t> creatureInstances_;  // guid → render instanceId
     std::unordered_map<uint64_t, uint32_t> creatureModelIds_;   // guid → loaded modelId
+    std::unordered_map<uint32_t, uint32_t> npcHeadItems_;  // instance → a kit's head item display
     std::unordered_map<uint64_t, uint32_t> creatureDisplayIds_; // guid → active displayId
     // Latest server-requested display, including creatures whose async model load
     // has not completed yet. This prevents an older queued display from winning.

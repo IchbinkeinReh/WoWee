@@ -1827,6 +1827,18 @@ struct CreatureQueryResponseData {
     [[nodiscard]] bool isValid() const { return entry != 0 && !name.empty(); }
 };
 
+/// SMSG_SPELL_UPDATE_CHAIN_TARGETS as 0x00800470 reads it: the caster's
+/// guid, the spell, the count and each target's guid, none packed.
+struct SpellUpdateChainTargetsData {
+    uint64_t casterGuid = 0;
+    uint32_t spellId = 0;
+    std::vector<uint64_t> targets;
+};
+class SpellUpdateChainTargetsParser {
+public:
+    static bool parse(network::Packet& packet, SpellUpdateChainTargetsData& data);
+};
+
 /** SMSG_CREATURE_QUERY_RESPONSE parser */
 class CreatureQueryResponseParser {
 public:

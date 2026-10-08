@@ -24,6 +24,16 @@ class M2Renderer;
 class Renderer;
 class CharacterRenderer;
 
+/// What else a kit's play names (0x00745230's struct): the unit it plays
+/// for where it has no instance (a place kit's caster), its chain counter
+/// (+0x24, -1 for none) and whether it is a waiting kit played at last
+/// (+0x20).
+struct SpellKitPlayExtra {
+    uint64_t unitGuid = 0;
+    int32_t counter = -1;
+    bool replay = false;
+};
+
 class SpellVisualSystem {
 public:
     SpellVisualSystem() = default;
@@ -58,7 +68,7 @@ public:
     /// InstantAreaKit (+0x5c), and the ImpactAreaKit (+0x60) unless a
     /// missile carries it there (0x00700e20 plays it as that lands).
     void playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
-                           uint32_t spellId = 0);
+                           uint32_t spellId = 0, uint64_t casterGuid = 0);
 
     // Launch a physical weapon projectile (arrow, bullet, or thrown item)
     // without invoking the spell visual pipeline.
@@ -156,6 +166,12 @@ public:
     /// unit (0x00743b40) and the new one's ChannelKit (SpellVisual +0x18)
     /// goes on it, held like a state kit (0x0072bc70).
     void setUnitChannel(uint64_t unitGuid, uint32_t spellId, uint64_t channelObject);
+    /// SMSG_SPELL_UPDATE_CHAIN_TARGETS for a unit (0x00741210): its hits
+    /// are the new targets (0x00724f50), its channel object the first where
+    /// the handler moved it (0 for unchanged), and the spell's effects go
+    /// and its channel's kit comes again (0x0073eb50).
+    void updateChainTargets(uint64_t unitGuid, uint32_t spellId, const std::vector<uint64_t>& targets,
+                            uint64_t channelObject = 0);
     /// Every unit's channel this frame; a unit not named has none.
     struct ChannelState {
         uint64_t unitGuid = 0;
@@ -189,6 +205,11 @@ public:
     /// The CharacterRenderer instance drawing a unit, 0 while it has none.
     using UnitInstanceResolver = std::function<uint32_t(uint64_t unitGuid)>;
     void setUnitInstanceResolver(UnitInstanceResolver resolver) { unitInstanceResolver_ = std::move(resolver); }
+    /// The CharacterRenderer instance drawing a unit's mount (+0x98c), 0
+    /// while it rides none.
+    void setUnitMountInstanceResolver(UnitInstanceResolver resolver) {
+        unitMountInstanceResolver_ = std::move(resolver);
+    }
     /// Whether a unit shows its SpellVisual Flags 8 state kits (0x00720400):
     /// +0xa30 0x10000, its weapons away and no cast.
     using UnarmedKitsQuery = std::function<bool(uint64_t unitGuid)>;
@@ -276,6 +297,7 @@ private:
         float maxScale = 1e30f;
     };
     struct KitRecord {
+        uint32_t id = 0;
         std::vector<KitModel> models;
         std::vector<KitWeaponEffect> weaponEffects;  ///< +0x24, +0x28 (0x0073a6c0)
         uint32_t soundId = 0;  ///< SoundID (+0x3c), SoundEntries
@@ -324,6 +346,7 @@ private:
     };
     std::unordered_map<uint64_t, UnitAuraKits> unitAuraKits_;
     UnitInstanceResolver unitInstanceResolver_;
+    UnitInstanceResolver unitMountInstanceResolver_;
     CameraShakeSink cameraShakeSink_;
     /// A SpellVisual's kits for a cast: PrecastKit (+4), CastKit (+8),
     /// ImpactKit (+0xc), CasterImpactKit (+0x38), TargetImpactKit (+0x3c),
@@ -341,10 +364,36 @@ private:
     /// 0x00745230 on a unit (renderInstanceId, 0 for none) or at a place:
     /// the kit's models, its weapon effects (precast and cast kits), its
     /// camera shake and its colour. Returns a state kit's models.
+    using KitPlayExtra = SpellKitPlayExtra;
     std::vector<KitModelInstance> playKitOnUnit(uint32_t kitId, spell_kit::KitType type,
                                                uint32_t renderInstanceId, const glm::vec3& position,
                                                const glm::vec3* place, uint32_t castTimeMs = 0,
-                                               uint32_t spellId = 0);
+                                               uint32_t spellId = 0, const KitPlayExtra& extra = {});
+    /// The unit's virtual 0x104 (0x0072af60): a kit with Flags 0x1 of a
+    /// spell whose visual has a chain kit (0x00800bf0) waits on its unit
+    /// (0x00728050) for a chain's pulse to reach it, ten seconds at most.
+    struct WaitingKit {
+        uint64_t unitGuid = 0;
+        uint32_t spellId = 0;
+        uint32_t kitId = 0;
+        spell_kit::KitType type = spell_kit::KitType::Cast;
+        bool hasPlace = false;
+        glm::vec3 place{0.0f};
+        uint32_t castTimeMs = 0;
+        int32_t counter = -1;
+        uint32_t deadlineMs = 0;
+    };
+    std::vector<WaitingKit> waitingKits_;
+    /// 0x00800bf0: whether any of the visual's cast, impact, state, channel,
+    /// caster and target impact kits runs a chain (0x007fe470).
+    bool visualHasChainKit(uint32_t visualId) const;
+    /// The unit's virtual 0xc0 (0x00722760): its kits waiting on the spell
+    /// with this counter play.
+    void releaseWaitingKits(uint64_t unitGuid, uint32_t spellId, int32_t counter);
+    /// 0x00728140: the waits run out unplayed.
+    void expireWaitingKits();
+    /// Each unit's chain counter (+0xf58), two on for each chain kit.
+    std::unordered_map<uint64_t, int32_t> unitChainCounters_;
     /// A kit's camera shake where it plays (0x0073b140, 0x006f9840).
     void playKitShake(uint32_t kitId, const glm::vec3& origin);
     /// A kit's colour fade (CharProc 13) on the unit drawn by an instance,
@@ -364,6 +413,7 @@ private:
         uint32_t spellId = 0;
         uint32_t renderInstanceId = 0;
         bool wasHeld = false;
+        bool mountWasHeld = false;  ///< its mount's, or none had to be held
     };
     std::vector<AnimationHold> animationHolds_;
     /// CharProc 17's worn items, until the unit's effects of the spell go.
@@ -437,6 +487,8 @@ private:
     /// 0x00743b40's part for chains: those the unit's effects of the spell
     /// held let go (0x007fc990).
     void releaseChains(uint64_t unitGuid, uint32_t spellId);
+    /// 0x0072bc70: the channel spell's ChannelKit on the unit.
+    void applyChannelKit(uint64_t unitGuid, uint32_t spellId);
     /// 0x00743b40: every effect of the spell leaves the unit.
     void removeUnitSpellEffects(uint64_t unitGuid, uint32_t spellId);
     /// 0x007fca30 with 0x007fae90 and 0x009ab730: each bolt's ends, its

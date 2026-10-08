@@ -18,6 +18,7 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -74,6 +75,10 @@ struct ChainEffect {
     uint8_t blue = 0;                 ///< +0x9f
     uint8_t blendMode = 0;            ///< +0xa0: the Gx blend
     std::string combo;                ///< +0xa4
+    /// The Combo string's bytes read four at a time, as 0x007fc5f0 does
+    /// (past its end into the string block), each a SpellChainEffects row
+    /// after 0x009a8ce0; see comboRow.
+    std::array<uint32_t, 12> comboWords{};
     int32_t renderLayer = 0;          ///< +0xa8: 0 to 3, drawn in that order
     float textureLength = 0.0f;       ///< +0xac: yards a texture repeat, flag 0x100
     float wavePhase = 0.0f;           ///< +0xb0: the wave's phase, flag 0x400
@@ -104,6 +109,33 @@ inline float f32At(const uint8_t* p) {
     return v;
 }
 }  // namespace detail
+
+/// 0x009a8ce0: the SpellChainEffects id one of the Combo string's words
+/// names - each byte's low bit dropped and the bits gathered as the client
+/// gathers them; 0 for none.
+constexpr uint32_t comboRow(uint32_t word) {
+    const uint32_t v = word & 0xfefefefeu;
+    uint32_t a = ((v >> 7) & 0x200000u) | (v & 0x20000000u);
+    a = (a >> 3) | (v & 0x2000000u);
+    a = (a >> 4) | (v & 0x40000000u);
+    a = (a >> 3) | (v & 0x4000000u);
+    const uint32_t d = (((v >> 4) & 0xff800000u) | v) & 0xffffffu;
+    return (a >> 11) | d;
+}
+/// The twelve words from `bytes` (the string block from the Combo string's
+/// offset; short is read as zeros).
+inline std::array<uint32_t, 12> comboWordsAt(const uint8_t* bytes, size_t available) {
+    std::array<uint32_t, 12> words{};
+    for (size_t w = 0; w < words.size(); ++w) {
+        uint32_t v = 0;
+        for (size_t b = 0; b < 4; ++b) {
+            const size_t at = w * 4 + b;
+            if (bytes && at < available) v |= static_cast<uint32_t>(bytes[at]) << (8 * b);
+        }
+        words[w] = v;
+    }
+    return words;
+}
 
 /// 0x008b73b0: a row from its record. The first 39 columns are four bytes
 /// each and the five colour and blend columns one byte, then the Combo
@@ -372,6 +404,9 @@ public:
     bool flickeredOff() const { return (flags_ & 4u) != 0; }
     size_t jointCount() const { return joints_.size(); }
     float pulse() const { return pulse_; }
+    /// As its last build left them (+0x90 0x10, 0x20).
+    bool pulseAtSource() const { return (flags_ & 0x10u) != 0; }
+    bool pulseAtEnd() const { return (flags_ & 0x20u) != 0; }
 
     /// 0x009ab3b0: a frame of `dt` seconds.
     void update(float dt, Rng& rng) {
@@ -426,6 +461,7 @@ public:
     /// for a triangle strip; false when it shows nothing.
     bool build(const glm::vec3& camera, std::vector<client_ribbon::Vertex>& out) {
         out.clear();
+        flags_ &= ~0x30u;
         if (!e_ || (flags_ & 6u) != 2u || joints_.size() < 2) return false;
         const ChainEffect& e = *e_;
         const size_t n = joints_.size();
@@ -486,6 +522,9 @@ public:
         std::vector<uint8_t> alphas;
         const float segment = len / static_cast<float>(n - 1);
         const PulseSpan span = pulseAlphas(e, pulse_, segment, static_cast<uint32_t>(2 * n), alphas);
+        // +0x90 0x10 and 0x20: the pulse at the first vertex, at the last.
+        if (span.first == 0) flags_ |= 0x10u;
+        if (span.first + span.count >= 2 * n) flags_ |= 0x20u;
         if (span.count <= 2) return false;
         const TexU tex = textureU(e, len, randomStart_, scroll_);
         const uint32_t rgb = (static_cast<uint32_t>(e.red) << 16) | (static_cast<uint32_t>(e.green) << 8) | e.blue;
@@ -671,7 +710,8 @@ private:
     }
 
     const ChainEffect* e_ = nullptr;
-    uint32_t flags_ = 0;  ///< +0x90: 1 joints laid, 2 shown, 4 flickered off, 8 pulse backward
+    uint32_t flags_ = 0;  ///< +0x90: 1 joints laid, 2 shown, 4 flickered off, 8 pulse backward,
+                          ///< 0x10 pulse at the first vertex, 0x20 at the last
     glm::vec3 start_{0.0f};
     glm::vec3 end_{0.0f};
     std::vector<Joint> joints_;
@@ -694,6 +734,10 @@ struct Bolt {
     uint16_t to = 0;
     uint32_t startMs = 0;
     uint32_t endMs = 0;
+    /// +0x10: the first bolt's carries the unit's chain counter (0x007265c0's
+    /// +0xf58), which names the kits waiting at a place for its pulse; the
+    /// rest -1.
+    int32_t counter = -1;
 };
 
 /// 0x007fa4d0: node 0 is the unit and nodes 1.. its targets in order; a bolt
@@ -702,7 +746,7 @@ struct Bolt {
 /// SegDelay after `nowMs` and each DelayBetweenEffects (chopped) after the
 /// one before, each showing SegDuration. `objectEndMs` is when the last ends.
 inline std::vector<Bolt> planBolts(const ChainEffect& e, size_t targetCount, bool fromFirst, uint32_t nowMs,
-                                   uint32_t& objectEndMs) {
+                                   uint32_t& objectEndMs, int32_t counter = -1) {
     std::vector<Bolt> bolts;
     uint32_t at = nowMs + e.segDelay;
     objectEndMs = at;
@@ -713,11 +757,31 @@ inline std::vector<Bolt> planBolts(const ChainEffect& e, size_t targetCount, boo
         b.to = static_cast<uint16_t>(i + 1);
         b.startMs = at;
         b.endMs = at + e.segDuration;
+        b.counter = i == 0 ? counter : -1;
         if (static_cast<int32_t>(b.endMs - objectEndMs) >= 0) objectEndMs = b.endMs;
         bolts.push_back(b);
         at += gap;
     }
     return bolts;
+}
+
+/// 0x007fae90 after a bolt's lightning was last laid out (0x009aa210 sets
+/// +0x90 0x10 where the pulse shows the first vertex, 0x20 where it shows
+/// the last): whose waiting kits for the spell play (the unit's virtual
+/// 0xc0, 0x00722760) - the source's where the pulse is at it; the target's
+/// where it has reached the far end, or, the far end a place, the source's
+/// that wait on the bolt's counter.
+struct PulseRelease {
+    bool source = false;          ///< the source's, counter -1
+    bool target = false;          ///< the target object's, counter -1
+    bool sourceCounter = false;   ///< the source's, the bolt's counter
+};
+constexpr PulseRelease pulseRelease(bool pulseAtSource, bool pulseAtEnd, bool endIsObject) {
+    PulseRelease r;
+    r.source = pulseAtSource;
+    r.target = pulseAtEnd && endIsObject;
+    r.sourceCounter = pulseAtEnd && !endIsObject;
+    return r;
 }
 
 /// 0x007fae90: whether a bolt shows at `nowMs` - always while its object is
