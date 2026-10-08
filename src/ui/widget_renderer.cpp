@@ -304,12 +304,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
     //
     // Same face too - the widget's own, then the interface default -
     // rather than whichever face this measure happened to be handed.
-    ImFont* runFont = interfaceFaceOrDefault(w->fontFace);
-    if (!runFont) runFont = font;
     const float size = interfaceFontSize(w->fontHeight);
-    const auto measureRun = [&](const std::string& piece) {
-        return runFont->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
-    };
 
     // Already the right size for this text, measured the way it would be
     // measured now. A label that has changed what it says is measured
@@ -332,6 +327,17 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
         if (w->autoSized && sameMeasurement) return;
         if (!w->autoSized && w->width > 0.0f && w->height > 0.0f) return;
     }
+
+    // The face only once there is something to measure: looking it up
+    // normalises the name and searches a map, and this runs over every
+    // FontString of the interface each frame - nearly all of them already
+    // measured. Ahead of the checks above, it was most of the 2.5 ms the
+    // sizing pass took over 28,000 widgets.
+    ImFont* runFont = interfaceFaceOrDefault(w->fontFace);
+    if (!runFont) runFont = font;
+    const auto measureRun = [&](const std::string& piece) {
+        return runFont->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
+    };
 
     if (paragraph) {
         // The width stays as declared and the height follows the wrap.
