@@ -696,7 +696,8 @@ wowee_add_test(test_tile_size_agreement
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/pipeline/terrain_mesh.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
-            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
 
 # ── test_chunk_surface ───────────────────────────────────────
 # Where a point inside a terrain chunk sits in the world. The clutter and
@@ -706,7 +707,8 @@ wowee_add_test(test_chunk_surface
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/pipeline/terrain_mesh.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
-            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
 
 # ── test_detail_doodad_shade ─────────────────────────────────
 # Ground cover's colour, baked shadow and normal (pipeline/detail_doodad_shade.hpp).
@@ -714,7 +716,8 @@ wowee_add_test(test_detail_doodad_shade
     SOURCES test_detail_doodad_shade.cpp
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
-            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
 
 # ── test_wmo_sidn ────────────────────────────────────────────
 # A WMO material's window light and the emissive the MapObj programs add.
@@ -1521,6 +1524,7 @@ add_executable(test_open_format_emitter
     ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
     ${CMAKE_SOURCE_DIR}/src/pipeline/wmo_loader.cpp
     ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp  # adt_loader times its parse
     ${CMAKE_SOURCE_DIR}/src/pipeline/wowee_model.cpp
     ${CMAKE_SOURCE_DIR}/src/pipeline/wowee_building.cpp
     ${CMAKE_SOURCE_DIR}/src/pipeline/wowee_collision.cpp
@@ -1615,6 +1619,7 @@ if(STORMLIB_LIBRARY AND STORMLIB_INCLUDE_DIR)
         ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
         ${CMAKE_SOURCE_DIR}/src/pipeline/wmo_loader.cpp
         ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp  # adt_loader times its parse
         ${CMAKE_SOURCE_DIR}/src/pipeline/wowee_model.cpp
         ${CMAKE_SOURCE_DIR}/src/pipeline/wowee_building.cpp
         ${CMAKE_SOURCE_DIR}/src/pipeline/wowee_collision.cpp
@@ -2158,7 +2163,8 @@ wowee_add_test(test_sky_client
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/pipeline/wmo_loader.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
-            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
 target_compile_definitions(test_sky_client PRIVATE
     WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
@@ -2494,7 +2500,8 @@ wowee_add_test(test_spell_mod_ops
 wowee_add_test(test_adt_truncation
     SOURCES test_adt_truncation.cpp
             ${TEST_COMMON_SOURCES}
-            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
 
 # ── test_blp_truncation ──────────────────────────────────────
 # What the BLP loader does with a texture that lies about its own sizes. The
@@ -2522,7 +2529,8 @@ wowee_add_test(test_adt_alpha
     SOURCES test_adt_alpha.cpp
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
-            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
 
 # ── test_grass_terrain ─────────────────────────────────
 # Whether grass grows at a point, answered from the ADT's own ground-effect
@@ -2535,7 +2543,8 @@ wowee_add_test(test_grass_terrain
             ${CMAKE_SOURCE_DIR}/src/pipeline/grass_profile.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/terrain_mesh.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
-            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
 
 # ── test_grass_population ──────────────────────────────
 # Blades generated from terrain suitability. Most of these cases are one
@@ -2659,7 +2668,8 @@ wowee_add_test(test_detail_doodad_placement
     SOURCES test_detail_doodad_placement.cpp
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_alpha.cpp
-            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp)
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
 
 # ── test_weapon_attachment ───────────────────────────────────
 # Where the client hangs weapons and shoulders (core/weapon_attachment.hpp).

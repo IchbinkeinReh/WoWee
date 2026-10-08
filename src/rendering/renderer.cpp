@@ -5136,7 +5136,7 @@ bool Renderer::shadowPassDrawsThisFrame() const {
 // launchShadowWorker): the getters of every renderer it draws wait for it.
 
 void Renderer::planShadowPass() {
-    shadowPlan_ = {};
+    shadowPlan_ = ShadowPlan();
     if (shadowDepthImage[0] == VK_NULL_HANDLE) return;
     if (currentCmd == VK_NULL_HANDLE) return;
     // Shadows off still runs the whole pass, casters and all: the shaders

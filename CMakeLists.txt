@@ -1840,6 +1840,7 @@ if(STORMLIB_LIBRARY AND STORMLIB_INCLUDE_DIR)
         src/pipeline/m2_loader.cpp
         src/pipeline/wmo_loader.cpp
         src/pipeline/adt_loader.cpp
+        src/core/frame_profiler.cpp  # adt_loader times its parse
         src/pipeline/wowee_model.cpp
         src/pipeline/wowee_building.cpp
         src/pipeline/wowee_collision.cpp
@@ -1927,6 +1928,7 @@ if(STORMLIB_LIBRARY AND STORMLIB_INCLUDE_DIR AND SDL3_FOUND AND EXISTS ${IMGUI_D
         src/pipeline/m2_loader.cpp
         src/pipeline/wmo_loader.cpp
         src/pipeline/adt_loader.cpp
+        src/core/frame_profiler.cpp  # adt_loader times its parse
         src/pipeline/wowee_model.cpp
         src/pipeline/wowee_building.cpp
         src/pipeline/wowee_collision.cpp
@@ -2391,6 +2393,7 @@ add_executable(wowee_editor
     src/pipeline/m2_loader.cpp
     src/pipeline/wmo_loader.cpp
     src/pipeline/adt_loader.cpp
+    src/core/frame_profiler.cpp  # adt_loader times its parse
     src/pipeline/wdt_loader.cpp
     src/pipeline/wowee_terrain_loader.cpp
     src/pipeline/wowee_model.cpp
