@@ -269,8 +269,10 @@ void main() {
             // Offset along the terrain's normal, as the ground under it is.
             float mapLit = mix(1.0, csmShadow(uShadowMap, FragPos, terrainN,
                                               dot(terrainN, toSun), 0.0005), shadowParams.y);
-            float s = rtShadow(rt, min(shade, mapLit));
-            shade = mix(s, shade, clamp(pow(abs(1.2 - abs(dot(terrainN, toSun))), 4.0), 0.0, 1.0));
+            // The map alone, as on the ground under it (terrain.frag): the
+            // baked mask beside it is a second, offline sun's shadows.
+            float s = rtShadow(rt, mapLit);
+            shade = mix(s, 1.0, clamp(pow(abs(1.2 - abs(dot(terrainN, toSun))), 4.0), 0.0, 1.0));
         }
         vec3 rgb = tex0.rgb * light * (0.7 + 0.3 * shade);
         rgb = applyFog(rgb, FragPos, depth, (vInteriorLit & 2) != 0 ? cameraFogColor.rgb : fogColor.rgb);

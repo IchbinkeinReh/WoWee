@@ -197,10 +197,16 @@ void main() {
     float ndl = clamp(dot(norm, normalize(-lightDir.xyz)), 0.0, 1.0);
     vec3 light = clamp(rtAmbient(rt, ambientColor.rgb) + ndl * lightColor.rgb, 0.0, 1.0) * Shading;
 
-    // The shadow: the baked one (MCSH, the alpha texture's fourth channel)
-    // and, with the sun's shadow map on, the lesser of it and the map
-    // (Terrain2/Terrain3). Whatever is lit, lit and unlit layers alike, is
-    // scaled by 0.7 + 0.3 x the light let through.
+    // The shadow: the baked one (MCSH, the alpha texture's fourth channel),
+    // or with the sun's shadow map on, the map alone. Whatever is lit, lit
+    // and unlit layers alike, is scaled by 0.7 + 0.3 x the light let through
+    // (Terrain2/Terrain3).
+    //
+    // The client takes the lesser of the two, but its map is a coarse one
+    // and off by default. Beside this one the baked mask - laid down offline
+    // for one sun, trees and buildings included - is a second set of
+    // shadows that matches neither the sun overhead nor anything standing
+    // there, soft streaks across open ground with no caster in sight.
     float lit = texture(uBakedShadow, LayerUV).r;
     if (shadowParams.x > 0.5) {
         vec3 ldir = normalize(-lightDir.xyz);
@@ -208,7 +214,7 @@ void main() {
         float bias = max(0.0005 * (1.0 - abs(nl)), 0.00005);
         float shadow = csmShadow(uShadowMap, FragPos, norm, nl, bias);
         shadow = mix(1.0, shadow, shadowParams.y);
-        lit = min(lit, rtShadow(rt, shadow));
+        lit = rtShadow(rt, shadow);
     }
 
     vec3 result = (litColor * light + unlitColor) * (0.7 + 0.3 * lit);
