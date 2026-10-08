@@ -2596,6 +2596,12 @@ wowee_add_test(test_pass_ablation
 wowee_add_test(test_spell_missile
     SOURCES test_spell_missile.cpp)
 
+# ── test_spell_kit ───────────────────────────────────
+# A spell visual kit on a unit: its models' attachments, a model-attach row's
+# offset and turn, and when an aura's Flags 8 state kit shows (0x00720400).
+wowee_add_test(test_spell_kit
+    SOURCES test_spell_kit.cpp)
+
 # ── test_spell_go_targets ────────────────────────────
 # SMSG_SPELL_GO's target flags and points, which a ground missile flies to.
 wowee_add_packet_test(test_spell_go_targets)

@@ -2297,6 +2297,23 @@ void Application::setState(AppState newState) {
                         if (!entitySpawner_) return 1.0f;
                         return entitySpawner_->kitWeaponEffectHolder(renderInstanceId);
                     });
+                    // The aura state kits: the unit's model, its spell's
+                    // visual, its kits' scale, and whether it shows its
+                    // Flags 8 kits (0x00720400).
+                    svs->setAttachedEffectScale([this](uint32_t renderInstanceId) {
+                        return entitySpawner_ ? entitySpawner_->kitAttachedEffectScale(renderInstanceId) : 1.0f;
+                    });
+                    svs->setUnitInstanceResolver([this](uint64_t guid) -> uint32_t {
+                        return gameHandler ? gameHandler->resolveUnitRenderInstance(guid) : 0;
+                    });
+                    svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
+                        return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
+                    });
+                    svs->setUnarmedKitsQuery([this](uint64_t guid) {
+                        if (gameHandler && guid == gameHandler->getPlayerGuid())
+                            return appearanceComposer_ && appearanceComposer_->unarmedKitsShown();
+                        return entitySpawner_ && entitySpawner_->unarmedKitsShown(guid);
+                    });
                 }
                 // Whether a text emote is sent, and the player's weapons put
                 // away when it is (0x006dd9e0).

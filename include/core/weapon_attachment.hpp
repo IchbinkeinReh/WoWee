@@ -472,6 +472,23 @@ constexpr std::optional<SheathState> animationSheathState(const AnimationSheathI
     return std::nullopt;
 }
 
+/// 0x00738180's other result: the unit's +0xa30 0x10000, which with its
+/// weapons away and no cast lets a SpellVisual Flags 8 state kit show
+/// (0x00720400). Cleared by an animation with WeaponFlags 4, by a cast and
+/// by attacking in a combat behavior; set (0x00726090) where the function
+/// runs to its end - no other state taken; unchanged otherwise.
+constexpr std::optional<bool> animationKitIdle(const AnimationSheathInput& in) {
+    const uint32_t wf = in.animKnown ? in.weaponFlags : 0;
+    if ((wf & 4) != 0 && !in.keepWeapons) return false;
+    if (in.current == SheathState::Ranged) return std::nullopt;
+    if (in.casting) return false;
+    if (in.attacking && emptyHandBehavior(in.behavior)) return false;
+    if ((wf & 0x10) != 0 && !in.keepWeapons) return std::nullopt;
+    if ((wf & 0x20) != 0 || in.attacking) return std::nullopt;
+    if (!in.activePlayer && in.field != in.current) return std::nullopt;
+    return true;
+}
+
 /// 0x00737aa0, on a change of UNIT_FIELD_BYTES_2 byte 0: every unit but
 /// the active player takes the new state; the active player only when it
 /// was in the old one (it has moved on by itself otherwise).

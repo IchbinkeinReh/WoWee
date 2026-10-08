@@ -800,6 +800,7 @@ void AppearanceComposer::updateWeaponsFromFields() {
                 in.castSheathes = attributes && (*attributes & 0x40000u) == 0;
             }
             if (const auto state = animationSheathState(in)) setSheathState(*state);
+            if (const auto idle = animationKitIdle(in)) kitIdle_ = *idle;
         }
     }
 
