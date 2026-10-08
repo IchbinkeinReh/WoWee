@@ -71,6 +71,17 @@ struct UnitWeaponItem {
     uint32_t subClass = 0;
 };
 
+/// Before WotLK a creature's slot is a display id
+/// (UNIT_VIRTUAL_ITEM_SLOT_DISPLAY) with two UNIT_VIRTUAL_ITEM_INFO fields:
+/// the first's bytes class, subclass, material and inventory type, the
+/// second's first byte the Sheath.
+constexpr UnitWeaponItem virtualItemInfo(uint32_t info0, uint32_t info1) {
+    return {.sheath = info1 & 0xFFu,
+            .inventoryType = static_cast<uint8_t>(info0 >> 24),
+            .itemClass = info0 & 0xFFu,
+            .subClass = (info0 >> 8) & 0xFFu};
+}
+
 /// A unit's main hand, off hand and ranged item; null for an empty slot.
 using UnitWeaponItems = std::array<const UnitWeaponItem*, 3>;
 

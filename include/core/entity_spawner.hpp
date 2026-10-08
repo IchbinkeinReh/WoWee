@@ -185,17 +185,13 @@ public:
 
     /// Every other unit's weapons as its items and sheath state
     /// (UNIT_FIELD_BYTES_2 byte 0) have them, re-dressed when either changes
-    /// (0x0072dbc0, 0x00731f40): creatures from UNIT_VIRTUAL_ITEM_SLOT_ID,
-    /// players from their PLAYER_VISIBLE_ITEM entries. Once a frame.
+    /// (0x0072dbc0, 0x00731f40): creatures from UNIT_VIRTUAL_ITEM_SLOT_ID
+    /// (classic and TBC: _SLOT_DISPLAY and _INFO), players from their
+    /// PLAYER_VISIBLE_ITEM entries. Once a frame.
     void updateUnitWeapons();
     /// The BehaviorID (AnimationData +0x18) of the animation an instance
     /// plays, or kNoAnimationBehavior (0x00721ed0's reading of it).
     uint32_t animationBehavior(uint32_t instanceId) const;
-
-    // Attempts one deferred attachment and owns retry bookkeeping. Returns true
-    // only when this call consumed the caller's per-frame attachment budget.
-    bool retryCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId,
-                                     uint8_t maxAttempts);
 
     /// Every unit's and corpse's blob shadow for this frame (0x00793980): a
     /// corpse that is not bones by the bounds of its model's sequence; a unit by its
@@ -436,7 +432,6 @@ private:
     /// The geoset ids of a loaded model's batches.
     std::vector<uint16_t> modelSubmeshIds(uint32_t modelId) const;
     bool creatureLookupsBuilt_ = false;
-    bool tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId);
 
     // CharSections.dbc lookup cache
     std::unordered_map<uint64_t, std::string> charSectionsCache_;
@@ -493,6 +488,7 @@ private:
         uint32_t instanceId = 0;
         uint32_t modelId = 0;
         std::array<uint32_t, 3> entries{};
+        std::array<uint32_t, 6> info{};
         uint8_t sheathState = 0;
         uint32_t unitFlags = 0;
         uint32_t unitFlags2 = 0;
@@ -515,10 +511,10 @@ private:
     mutable bool animationDataLoaded_ = false;
     /// Hangs a unit's three weapon slots as 0x0072dbc0 does. False while an
     /// item is not known yet (its query is asked for).
+    /// `entries` are item entries, or with `virtualInfo` (before WotLK)
+    /// display ids whose UNIT_VIRTUAL_ITEM_INFO pairs say the rest.
     bool dressUnitWeapons(uint32_t instanceId, const std::array<uint32_t, 3>& entries,
-                          const UnitWeaponDress& dress);
-    std::unordered_set<uint64_t> creatureWeaponsAttached_;
-    std::unordered_map<uint64_t, uint8_t> creatureWeaponAttachAttempts_;
+                          const UnitWeaponDress& dress, const std::array<uint32_t, 6>* virtualInfo = nullptr);
     std::unordered_map<uint32_t, bool> modelIdIsWolfLike_;
 
     void syncCreatureStealthVisuals();

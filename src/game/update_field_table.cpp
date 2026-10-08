@@ -81,6 +81,8 @@ static const UFNameEntry kUFNames[] = {
     {.name = "GAMEOBJECT_DISPLAYID", .field = UF::GAMEOBJECT_DISPLAYID},
     {.name = "UNIT_FIELD_BYTES_2", .field = UF::UNIT_FIELD_BYTES_2},
     {.name = "UNIT_VIRTUAL_ITEM_SLOT_ID", .field = UF::UNIT_VIRTUAL_ITEM_SLOT_ID},
+    {.name = "UNIT_VIRTUAL_ITEM_SLOT_DISPLAY", .field = UF::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY},
+    {.name = "UNIT_VIRTUAL_ITEM_INFO", .field = UF::UNIT_VIRTUAL_ITEM_INFO},
     {.name = "CORPSE_FIELD_FLAGS", .field = UF::CORPSE_FIELD_FLAGS},
     {.name = "CORPSE_FIELD_DISPLAY_ID", .field = UF::CORPSE_FIELD_DISPLAY_ID},
     {.name = "CORPSE_FIELD_ITEM", .field = UF::CORPSE_FIELD_ITEM},

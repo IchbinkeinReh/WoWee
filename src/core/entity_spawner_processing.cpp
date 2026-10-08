@@ -2054,8 +2054,6 @@ void EntitySpawner::despawnCreature(uint64_t guid) {
     creatureModelIds_.erase(guid);
     creatureDisplayIds_.erase(guid);
     creatureRenderPosCache_.erase(guid);
-    creatureWeaponsAttached_.erase(guid);
-    creatureWeaponAttachAttempts_.erase(guid);
     unitWeaponsShown_.erase(guid);
     creatureWasMoving_.erase(guid);
     creatureWasSwimming_.erase(guid);

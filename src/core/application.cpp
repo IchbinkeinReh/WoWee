@@ -3239,15 +3239,10 @@ void Application::applyServerMovementState(float deltaTime) {
 // ring sliding off an NPC that never moved. Player instances need the same for
 // a different reason: without it they never leave the run animation when they
 // stop.
-void Application::syncRenderInstancesToEntities(float deltaTime) {
+void Application::syncRenderInstancesToEntities() {
     auto creatureSyncStart = std::chrono::steady_clock::now();
     if (renderer && gameHandler && renderer->getCharacterRenderer()) {
         auto* charRenderer = renderer->getCharacterRenderer();
-        static float npcWeaponRetryTimer = 0.0f;
-        npcWeaponRetryTimer += deltaTime;
-        const bool npcWeaponRetryTick = (npcWeaponRetryTimer >= 1.0f);
-        if (npcWeaponRetryTick) npcWeaponRetryTimer = 0.0f;
-        int weaponAttachesThisTick = 0;
         // Weapons drawn or put away as each unit's items and sheath state say.
         entitySpawner_->updateUnitWeapons();
         glm::vec3 playerPos(0.0f);
@@ -3281,13 +3276,6 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         for (const auto& [guid, instanceId] : _creatureInstances) {
             auto entity = gameHandler->getEntityManager().getEntity(guid);
             if (!entity || entity->getType() != game::ObjectType::UNIT) continue;
-
-            if (npcWeaponRetryTick &&
-                weaponAttachesThisTick < EntitySpawner::MAX_WEAPON_ATTACHES_PER_TICK) {
-                if (entitySpawner_->retryCreatureVirtualWeapons(guid, instanceId, 30)) {
-                    weaponAttachesThisTick++;
-                }
-            }
 
             // Distance check uses getLatestX/Y/Z (server-authoritative destination) to
             // avoid false-culling entities that moved while getX/Y/Z was stale.
@@ -3952,7 +3940,7 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     // creature models remain at stale spawn positions.
     inGameStep = "creature render sync";
     updateCheckpoint = "in_game: creature render sync";
-    syncRenderInstancesToEntities(deltaTime);
+    syncRenderInstancesToEntities();
     // Movement heartbeat is sent from GameHandler::update() to avoid
     // duplicate packets from multiple update loops.
 

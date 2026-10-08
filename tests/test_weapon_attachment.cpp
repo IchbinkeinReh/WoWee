@@ -135,6 +135,15 @@ TEST_CASE("an unarmed animation dresses the off hand by 0x00715d00", "[attachmen
     CHECK(unitWeaponPoint(WeaponSlot::MainHand, swordSword, d) == at::kHipWeaponLeft);
 }
 
+TEST_CASE("a pre-WotLK creature's slot reads from its INFO pair", "[attachment]") {
+    // Class 2, subclass 7, material 1, inventory type 13; Sheath 3.
+    const UnitWeaponItem sword = virtualItemInfo(0x0D010702u, 0x00000003u);
+    CHECK(sword.itemClass == 2);
+    CHECK(sword.subClass == 7);
+    CHECK(sword.inventoryType == 13);
+    CHECK(sword.sheath == 3);
+}
+
 TEST_CASE("the sheath key cycles as 0x006e23a0 does", "[attachment]") {
     CHECK(toggledSheathState(SheathState::Unarmed, true, true) == SheathState::Melee);
     CHECK(toggledSheathState(SheathState::Unarmed, false, true) == SheathState::Ranged);
