@@ -1106,83 +1106,90 @@ static void blitOverlay(std::vector<uint8_t>& composite, int compW, int compH,
     }
 }
 
-// Nearest-neighbor NxN scale blit of overlay onto composite at (dstX, dstY)
-// Blit an overlay resampled to an explicit destination size. The integer-scale
-// version below only grows an overlay, and only by a whole factor, so an overlay
-// that arrives larger than the region it belongs in was pasted at its own size
-// and covered several regions of the atlas. Nearest-neighbour is enough here:
-// these are small atlas patches, and the alternative was no resize at all.
+// One overlay texel blended over a composite pixel, by the overlay's alpha.
+static void blendCompositePixel(std::vector<uint8_t>& composite, size_t dstIdx, const float rgba[4]) {
+    const float a = rgba[3];
+    if (a <= 0.0f) return;
+    if (a >= 255.0f) {
+        for (int c = 0; c < 3; ++c) composite[dstIdx + c] = static_cast<uint8_t>(std::lround(rgba[c]));
+        composite[dstIdx + 3] = 255;
+        return;
+    }
+    const float alpha = a / 255.0f;
+    const float inv = 1.0f - alpha;
+    for (int c = 0; c < 3; ++c) {
+        composite[dstIdx + c] = static_cast<uint8_t>(std::lround(rgba[c] * alpha + composite[dstIdx + c] * inv));
+    }
+    composite[dstIdx + 3] = std::max(composite[dstIdx + 3], static_cast<uint8_t>(std::lround(a)));
+}
+
+// The overlay at a texel-space point, bilinear, clamped to its edges. The
+// colour is interpolated premultiplied, so a texel's transparent neighbours
+// do not darken the edge it fades out on.
+static void sampleImageBilinear(const uint8_t* data, int w, int h, float fx, float fy, float out[4]) {
+    fx = std::clamp(fx, 0.0f, static_cast<float>(w - 1));
+    fy = std::clamp(fy, 0.0f, static_cast<float>(h - 1));
+    const int x0 = static_cast<int>(fx);
+    const int y0 = static_cast<int>(fy);
+    const int x1 = std::min(x0 + 1, w - 1);
+    const int y1 = std::min(y0 + 1, h - 1);
+    const float tx = fx - static_cast<float>(x0);
+    const float ty = fy - static_cast<float>(y0);
+    const float wts[4] = {(1 - tx) * (1 - ty), tx * (1 - ty), (1 - tx) * ty, tx * ty};
+    const size_t idx[4] = {(static_cast<size_t>(y0) * w + x0) * 4, (static_cast<size_t>(y0) * w + x1) * 4,
+                           (static_cast<size_t>(y1) * w + x0) * 4, (static_cast<size_t>(y1) * w + x1) * 4};
+    float pre[3] = {0.0f, 0.0f, 0.0f};
+    float alpha = 0.0f;
+    for (int k = 0; k < 4; ++k) {
+        const float a = data[idx[k] + 3] * wts[k];
+        alpha += a;
+        for (int c = 0; c < 3; ++c) pre[c] += data[idx[k] + c] * a;
+    }
+    for (int c = 0; c < 3; ++c) out[c] = alpha > 0.0f ? pre[c] / alpha : 0.0f;
+    out[3] = alpha;
+}
+
+// Blit an overlay resampled to an explicit destination size.
+//
+// Grown, it is interpolated: the nearest-neighbour copy this was made every
+// texel of a 256 atlas patch a hard 2x2 (or bigger) block in the 512
+// composite, and no filter on the GPU can take those steps back out - a
+// close-up of any armour showed them. Shrunk, it keeps the plain pick.
 static void blitOverlayResampled(std::vector<uint8_t>& composite, int compW, int compH,
                                  const pipeline::BLPImage& overlay,
                                  int dstX, int dstY, int dstW, int dstH) {
     if (dstW <= 0 || dstH <= 0 || overlay.width <= 0 || overlay.height <= 0) return;
+    const bool grows = dstW > overlay.width || dstH > overlay.height;
+    const float sxScale = static_cast<float>(overlay.width) / static_cast<float>(dstW);
+    const float syScale = static_cast<float>(overlay.height) / static_cast<float>(dstH);
     for (int y = 0; y < dstH; ++y) {
         const int dy = dstY + y;
         if (dy < 0 || dy >= compH) continue;
-        const int sy = std::min(overlay.height - 1, y * overlay.height / dstH);
         for (int x = 0; x < dstW; ++x) {
             const int dx = dstX + x;
             if (dx < 0 || dx >= compW) continue;
-            const int sx = std::min(overlay.width - 1, x * overlay.width / dstW);
-
-            const size_t srcIdx = (static_cast<size_t>(sy) * overlay.width + sx) * 4;
-            const uint8_t srcA = overlay.data[srcIdx + 3];
-            if (srcA == 0) continue;
-
-            const size_t dstIdx = (static_cast<size_t>(dy) * compW + dx) * 4;
-            if (srcA == 255) {
-                composite[dstIdx + 0] = overlay.data[srcIdx + 0];
-                composite[dstIdx + 1] = overlay.data[srcIdx + 1];
-                composite[dstIdx + 2] = overlay.data[srcIdx + 2];
-                composite[dstIdx + 3] = 255;
+            float rgba[4];
+            if (grows) {
+                sampleImageBilinear(overlay.data.data(), overlay.width, overlay.height,
+                                    (static_cast<float>(x) + 0.5f) * sxScale - 0.5f,
+                                    (static_cast<float>(y) + 0.5f) * syScale - 0.5f, rgba);
             } else {
-                const float alpha = srcA / 255.0f;
-                const float inv = 1.0f - alpha;
-                for (int c = 0; c < 3; ++c) {
-                    composite[dstIdx + c] = static_cast<uint8_t>(
-                        overlay.data[srcIdx + c] * alpha + composite[dstIdx + c] * inv);
-                }
-                composite[dstIdx + 3] = std::max(composite[dstIdx + 3], srcA);
+                const int sx = std::min(overlay.width - 1, x * overlay.width / dstW);
+                const int sy = std::min(overlay.height - 1, y * overlay.height / dstH);
+                const size_t srcIdx = (static_cast<size_t>(sy) * overlay.width + sx) * 4;
+                for (int c = 0; c < 4; ++c) rgba[c] = overlay.data[srcIdx + c];
             }
+            blendCompositePixel(composite, (static_cast<size_t>(dy) * compW + dx) * 4, rgba);
         }
     }
 }
 
+// An overlay grown by a whole factor, interpolated (see blitOverlayResampled).
 static void blitOverlayScaledN(std::vector<uint8_t>& composite, int compW, int compH,
                                 const pipeline::BLPImage& overlay, int dstX, int dstY, int scale) {
     if (scale < 1) scale = 1;
-    for (int sy = 0; sy < overlay.height; sy++) {
-        for (int sx = 0; sx < overlay.width; sx++) {
-            size_t srcIdx = (static_cast<size_t>(sy) * overlay.width + sx) * 4;
-            uint8_t srcA = overlay.data[srcIdx + 3];
-            if (srcA == 0) continue;
-
-            // Write to scale x scale block of destination pixels
-            for (int dy2 = 0; dy2 < scale; dy2++) {
-                int dy = dstY + sy * scale + dy2;
-                if (dy < 0 || dy >= compH) continue;
-                for (int dx2 = 0; dx2 < scale; dx2++) {
-                    int dx = dstX + sx * scale + dx2;
-                    if (dx < 0 || dx >= compW) continue;
-
-                    size_t dstIdx = (static_cast<size_t>(dy) * compW + dx) * 4;
-                    if (srcA == 255) {
-                        composite[dstIdx + 0] = overlay.data[srcIdx + 0];
-                        composite[dstIdx + 1] = overlay.data[srcIdx + 1];
-                        composite[dstIdx + 2] = overlay.data[srcIdx + 2];
-                        composite[dstIdx + 3] = 255;
-                    } else {
-                        float alpha = srcA / 255.0f;
-                        float invAlpha = 1.0f - alpha;
-                        composite[dstIdx + 0] = static_cast<uint8_t>(overlay.data[srcIdx + 0] * alpha + composite[dstIdx + 0] * invAlpha);
-                        composite[dstIdx + 1] = static_cast<uint8_t>(overlay.data[srcIdx + 1] * alpha + composite[dstIdx + 1] * invAlpha);
-                        composite[dstIdx + 2] = static_cast<uint8_t>(overlay.data[srcIdx + 2] * alpha + composite[dstIdx + 2] * invAlpha);
-                        composite[dstIdx + 3] = std::max(composite[dstIdx + 3], srcA);
-                    }
-                }
-            }
-        }
-    }
+    blitOverlayResampled(composite, compW, compH, overlay, dstX, dstY,
+                         overlay.width * scale, overlay.height * scale);
 }
 
 // Legacy 2x wrapper
@@ -1638,17 +1645,32 @@ VkTexture* CharacterRenderer::compositeWithRegions(const std::string& basePath,
         width = kUpscaleTexSize;
         height = kUpscaleTexSize;
         composite.resize(width * height * 4);
-        // Simple 2x nearest-neighbor upscale
+        // 2x, interpolated rather than each texel doubled into a block -
+        // among opaque texels only: next to a cut-out one (alpha 0, or the
+        // magenta key) the plain pick keeps the key and the edge exact.
         for (int y = 0; y < kUpscaleTexSize; y++) {
             for (int x = 0; x < kUpscaleTexSize; x++) {
-                int srcX = x / 2;
-                int srcY = y / 2;
-                int srcIdx = (srcY * kBaseTexSize + srcX) * 4;
-                int dstIdx = (y * kUpscaleTexSize + x) * 4;
-                composite[dstIdx + 0] = base.data[srcIdx + 0];
-                composite[dstIdx + 1] = base.data[srcIdx + 1];
-                composite[dstIdx + 2] = base.data[srcIdx + 2];
-                composite[dstIdx + 3] = base.data[srcIdx + 3];
+                const float fx = (static_cast<float>(x) + 0.5f) * 0.5f - 0.5f;
+                const float fy = (static_cast<float>(y) + 0.5f) * 0.5f - 0.5f;
+                const int x0 = std::clamp(static_cast<int>(std::floor(fx)), 0, kBaseTexSize - 1);
+                const int y0 = std::clamp(static_cast<int>(std::floor(fy)), 0, kBaseTexSize - 1);
+                const int x1 = std::min(x0 + 1, kBaseTexSize - 1);
+                const int y1 = std::min(y0 + 1, kBaseTexSize - 1);
+                const auto alphaAt = [&](int sx, int sy) {
+                    return base.data[(static_cast<size_t>(sy) * kBaseTexSize + sx) * 4 + 3];
+                };
+                const int dstIdx = (y * kUpscaleTexSize + x) * 4;
+                if (alphaAt(x0, y0) == 255 && alphaAt(x1, y0) == 255 &&
+                    alphaAt(x0, y1) == 255 && alphaAt(x1, y1) == 255) {
+                    float rgba[4];
+                    sampleImageBilinear(base.data.data(), kBaseTexSize, kBaseTexSize, fx, fy, rgba);
+                    for (int c = 0; c < 4; ++c) {
+                        composite[dstIdx + c] = static_cast<uint8_t>(std::lround(std::clamp(rgba[c], 0.0f, 255.0f)));
+                    }
+                } else {
+                    const int srcIdx = ((y / 2) * kBaseTexSize + (x / 2)) * 4;
+                    for (int c = 0; c < 4; ++c) composite[dstIdx + c] = base.data[srcIdx + c];
+                }
             }
         }
         core::Logger::getInstance().debug("compositeWithRegions: upscaled 256x256 to 512x512");
