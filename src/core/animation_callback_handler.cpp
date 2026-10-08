@@ -566,10 +566,6 @@ void AnimationCallbackHandler::setupCallbacks() {
                             ac->startSpellCast(0, swigAnim, false, 0);
                         }
                     } else {
-                        // Weapons go to the back before the sit: the client puts them
-                        // away with no sheath animation (0x00736d30 with 1); asked of
-                        // the server, whose field moves them.
-                        appearanceComposer_.requestSheathState(SheathState::Unarmed);
                         // Food and water keep the player seated (UNIT_FIELD_BYTES_1)
                         // with the plain seated idle, exactly like the real client:
                         // player models ship NO seated eating animation - EmoteEat is
@@ -623,11 +619,10 @@ void AnimationCallbackHandler::setupCallbacks() {
                     ac->startSpellCast(useStart, useLoop ? useLoop : rendering::anim::STAND, true, useEnd);
                 }
             } else if (isFishing && cr->hasAnimation(instanceId, rendering::anim::FISHING_LOOP)) {
-                // Fishing is a one-shot pole cast followed by the channel idle. The
-                // pole goes into the hand whatever the sheath state, so the cast
-                // animation swings it.
+                // Fishing is a one-shot pole cast followed by the channel idle.
+                // The pole is the main hand, drawn by the channel at the bobber
+                // (0x0073a520).
                 if (isLocalPlayer) {
-                    appearanceComposer_.showFishingPole(true);
                     auto* ac = renderer_.getAnimationController();
                     if (ac) {
                         uint32_t castAnim = cr->hasAnimation(instanceId, rendering::anim::FISHING_CAST)
@@ -732,7 +727,6 @@ void AnimationCallbackHandler::setupCallbacks() {
             // Cast/channel ended - plays finalization anim completely then returns to idle
             if (isLocalPlayer) {
                 appearanceComposer_.showMiningPick(false);
-                appearanceComposer_.showFishingPole(false);
                 auto* ac = renderer_.getAnimationController();
                 if (ac) {
                     ac->setSeatedLoopAnimation(0);

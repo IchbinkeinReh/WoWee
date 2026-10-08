@@ -1503,6 +1503,8 @@ void GameHandler::sendAddonMessage(ChatType type, const std::string& message, co
 }
 
 void GameHandler::sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid) {
+    // 0x006dd9e0 puts the weapons away as it sends.
+    if (textEmoteSentCallback_ && state == WorldState::IN_WORLD) textEmoteSentCallback_(textEmoteId);
     if (chatHandler_) chatHandler_->sendTextEmote(textEmoteId, targetGuid);
 }
 
@@ -2144,6 +2146,10 @@ bool GameHandler::isInCombatWith(uint64_t guid) const {
 
 uint64_t GameHandler::getAutoAttackTargetGuid() const {
     return combatHandler_ ? combatHandler_->getAutoAttackTargetGuid() : 0;
+}
+
+uint64_t GameHandler::getUnitMeleeTarget(uint64_t guid) const {
+    return combatHandler_ ? combatHandler_->getUnitMeleeTarget(guid) : 0;
 }
 
 bool GameHandler::isAggressiveTowardPlayer(uint64_t guid) const {

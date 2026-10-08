@@ -1037,6 +1037,9 @@ public:
     bool isInCombatWith(uint64_t guid) const;
     uint64_t getAutoAttackTargetGuid() const;
     bool isAggressiveTowardPlayer(uint64_t guid) const;
+    /// Another unit's melee target from its SMSG_ATTACKSTART (CGUnit_C
+    /// +0xa20); 0 for none.
+    uint64_t getUnitMeleeTarget(uint64_t guid) const;
     // Timestamp (ms since epoch) of the most recent player melee auto-attack.
     // Zero if no swing has occurred this session.
     uint64_t getLastMeleeSwingMs() const;
@@ -1409,6 +1412,12 @@ public:
     /// SMSG_SPELL_GO), where 0x00805330 calls 0x007fa2e0.
     using SpellCastBeginCallback = std::function<void(uint64_t casterGuid, uint32_t spellId)>;
     void setSpellCastBeginCallback(SpellCastBeginCallback cb) { spellCastBeginCallback_ = std::move(cb); }
+    /// Any unit's melee swing (SMSG_ATTACKERSTATEUPDATE, 0x00756800).
+    using UnitAttackSwingCallback = std::function<void(uint64_t attackerGuid)>;
+    void setUnitAttackSwingCallback(UnitAttackSwingCallback cb) { unitAttackSwingCallback_ = std::move(cb); }
+    /// The active player sending a text emote (0x006dd9e0).
+    using TextEmoteSentCallback = std::function<void(uint32_t textEmoteId)>;
+    void setTextEmoteSentCallback(TextEmoteSentCallback cb) { textEmoteSentCallback_ = std::move(cb); }
 
     // Spell cast animation callbacks - true=start cast/channel, false=finish/cancel
     // guid: caster (may be player or another unit), isChannel: channel vs regular cast
@@ -3843,6 +3852,7 @@ public:
     auto& lootWindowCallbackRef() { return lootWindowCallback_; }
     auto& meleeSwingCallbackRef() { return meleeSwingCallback_; }
     auto& spellCastBeginCallbackRef() { return spellCastBeginCallback_; }
+    auto& unitAttackSwingCallbackRef() { return unitAttackSwingCallback_; }
     void suppressNextMeleeSwingAnim() { suppressMeleeSwingAnim_ = true; }
     bool consumeSuppressMeleeSwingAnim() {
         bool v = suppressMeleeSwingAnim_;
@@ -5074,6 +5084,8 @@ private:
     MeleeSwingCallback meleeSwingCallback_;
     FaceCameraProvider faceCameraProvider_;
     SpellCastBeginCallback spellCastBeginCallback_;
+    UnitAttackSwingCallback unitAttackSwingCallback_;
+    TextEmoteSentCallback textEmoteSentCallback_;
     bool suppressMeleeSwingAnim_ = false;
     // lastMeleeSwingMs_ moved to CombatHandler
     SpellCastAnimCallback spellCastAnimCallback_;

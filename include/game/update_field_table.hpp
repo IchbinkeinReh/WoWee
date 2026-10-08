@@ -19,6 +19,8 @@ enum class UF : uint16_t {
     // Unit fields
     UNIT_FIELD_TARGET_LO,
     UNIT_FIELD_TARGET_HI,
+    UNIT_FIELD_CHANNEL_OBJECT,  // the low word of the guid the unit channels at (0x0073a520)
+    UNIT_CHANNEL_SPELL,
     UNIT_FIELD_BYTES_0,
     UNIT_FIELD_BYTES_1,  // byte2 = visibility flags; byte3 is expansion-dependent
     UNIT_FIELD_HEALTH,

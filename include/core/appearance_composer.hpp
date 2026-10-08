@@ -88,7 +88,10 @@ public:
     bool toggleSheath();
     /// A spell's cast beginning on the player (0x007fa2e0, 0x0073a6c0).
     void onSpellCastBegin(uint32_t spellId);
-    /// Once a frame: the field's changes (0x00737aa0), the animation's,
+    /// The player sending a text emote: its weapons put away (0x006dd9e0).
+    void onTextEmote(uint32_t textEmoteId);
+    /// Once a frame: the field's changes (0x00737aa0), the stand state's
+    /// (0x0073f060), the channel object's (0x0073a520), the animation's,
     /// cast's and attack's (0x00738180), then the weapons dressed again
     /// when what 0x0072dbc0 reads - the sheath state, the disarm bits, the
     /// animation's hands - has changed.
@@ -99,9 +102,6 @@ public:
     // Mining casts temporarily replace the held main-hand model with a pickaxe.
     void showMiningPick(bool show);
 
-    // Fishing casts temporarily replace the held main-hand model with a pole
-    // found in the player's equipped slots or bags.
-    void showFishingPole(bool show);
 
     // Saved skin state accessors (used by game_screen.cpp for equipment re-compositing)
     [[nodiscard]] const std::string& getBodySkinPath() const { return bodySkinPath_; }
@@ -123,6 +123,8 @@ private:
     UnitWeaponItems playerWeaponItems(std::array<UnitWeaponItem, 3>& storage) const;
     /// ChrClasses +0x24 without 8: the class may draw a ranged weapon.
     bool classMayDrawRanged() const;
+    /// UNIT_FIELD_CHANNEL_OBJECT of the player; 0 for none.
+    uint64_t playerChannelObject() const;
     /// The field's state for the player, or nothing without the field.
     std::optional<SheathState> fieldSheathState() const;
 
@@ -172,7 +174,10 @@ private:
     AnimationSheathKey animationSheathKey_;
     bool showingMiningPick_ = false;
     uint32_t miningPickInstanceId_ = 0;
-    bool showingFishingPole_ = false;
+    /// The stand state and channel object last seen, for 0x0073f060 and
+    /// 0x0073a520.
+    uint8_t standSeen_ = 0;
+    uint64_t channelObjectSeen_ = 0;
 };
 
 } // namespace core

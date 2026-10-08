@@ -186,12 +186,31 @@ public:
     static std::string transportModelPath(uint32_t entry, uint32_t displayId);
     audio::VoiceType detectVoiceTypeFromDisplayId(uint32_t displayId) const;
 
-    /// Every other unit's weapons as its items and sheath state
-    /// (UNIT_FIELD_BYTES_2 byte 0) have them, re-dressed when either changes
-    /// (0x0072dbc0, 0x00731f40): creatures from UNIT_VIRTUAL_ITEM_SLOT_ID
-    /// (classic and TBC: _SLOT_DISPLAY and _INFO), players from their
-    /// PLAYER_VISIBLE_ITEM entries. Once a frame.
+    /// Every other unit's weapons as its items and sheath state have them,
+    /// re-dressed when either changes (0x0072dbc0, 0x00731f40): creatures
+    /// from UNIT_VIRTUAL_ITEM_SLOT_ID (classic and TBC: _SLOT_DISPLAY and
+    /// _INFO), players from their PLAYER_VISIBLE_ITEM entries. The state is
+    /// the client's own for each unit (CGUnit_C +0xb5c), taken from
+    /// UNIT_FIELD_BYTES_2 byte 0 when its model is made (0x0073f660) and
+    /// whenever the field changes (0x00737aa0), and changed as the client
+    /// changes it: by its animation, cast or attack (0x00738180), its stand
+    /// state (0x0073f060) and a channel at a fishing bobber (0x0073a520).
+    /// Once a frame.
     void updateUnitWeapons();
+    /// A spell's cast beginning on a unit other than the active player
+    /// (0x007fa2e0, with 0x0073a6c0 for its kits).
+    void onUnitSpellCastBegin(uint64_t guid, uint32_t spellId);
+    /// A unit's melee swing (SMSG_ATTACKERSTATEUPDATE): melee drawn
+    /// (0x00756800 case 0x14a).
+    void onUnitAttackSwing(uint64_t guid);
+    /// What 0x007fa2e0 and 0x0073a6c0 read of a spell cast by a unit of
+    /// this display: Spell.dbc's Attributes, its visual's missile model and
+    /// whether its precast or cast kit has a weapon effect, and the
+    /// display's CreatureModelData flag 0x10.
+    SpellSheathInput spellSheathInput(uint32_t spellId, uint32_t displayId) const;
+    /// ChrClasses Flags (+0x24) without 8: the class may draw a ranged
+    /// weapon (0x00736d30).
+    bool classMayDrawRanged(uint32_t classId) const;
     /// Paints again the players and corpses whose guild tabard waited on
     /// its guild's design, once it has come (0x006d2840, 0x00705950).
     /// Once a frame.
@@ -514,6 +533,37 @@ private:
         bool offHandFollowsAnimation = false;
     };
     std::unordered_map<uint64_t, UnitWeaponsShown> unitWeaponsShown_;
+    /// Each other unit's sheath state as the client keeps it (+0xb5c), and
+    /// what it last saw of what changes it.
+    struct UnitSheath {
+        uint32_t instanceId = 0;
+        SheathState state = SheathState::Melee;
+        std::optional<SheathState> fieldSeen;
+        uint8_t standSeen = 0;
+        uint64_t channelObjectSeen = 0;
+        /// What 0x00738180 last ran for.
+        uint32_t animId = 0xFFFFFFFFu;
+        uint32_t castSpellId = 0;
+        bool attacking = false;
+    };
+    std::unordered_map<uint64_t, UnitSheath> unitSheath_;
+    /// A unit's weapon slots as updateUnitWeapons reads them: item entries,
+    /// or before WotLK displays with their UNIT_VIRTUAL_ITEM_INFO pairs.
+    struct UnitWeaponEntries {
+        std::array<uint32_t, 3> entries{};
+        std::array<uint32_t, 6> info{};
+        bool byDisplay = false;
+    };
+    std::optional<UnitWeaponEntries> unitWeaponEntries(uint64_t guid, const game::Entity& entity,
+                                                       bool isPlayer) const;
+    /// The slots' items (Sheath, InventoryType, class, subclass) and
+    /// displays; false while an item is not known yet (its query is asked
+    /// for).
+    bool resolveUnitWeaponItems(const UnitWeaponEntries& slots, std::array<UnitWeaponItem, 3>& items,
+                                std::array<uint32_t, 3>& displays) const;
+    /// 0x00736d30 for another unit: its state changes to `requested` when
+    /// the client lets it.
+    void setUnitSheathState(uint64_t guid, UnitSheath& sheath, SheathState requested, bool fromServer);
     /// Corpses drawn through the player or creature paths, those through the
     /// creature path, and bones: M2 instances and their models by path.
     std::unordered_set<uint64_t> corpseGuids_;
@@ -545,10 +595,7 @@ private:
     mutable bool animationDataLoaded_ = false;
     /// Hangs a unit's three weapon slots as 0x0072dbc0 does. False while an
     /// item is not known yet (its query is asked for).
-    /// `entries` are item entries, or with `virtualInfo` (before WotLK)
-    /// display ids whose UNIT_VIRTUAL_ITEM_INFO pairs say the rest.
-    bool dressUnitWeapons(uint32_t instanceId, const std::array<uint32_t, 3>& entries,
-                          const UnitWeaponDress& dress, const std::array<uint32_t, 6>* virtualInfo = nullptr);
+    bool dressUnitWeapons(uint32_t instanceId, const UnitWeaponEntries& slots, const UnitWeaponDress& dress);
     std::unordered_map<uint32_t, bool> modelIdIsWolfLike_;
 
     void syncCreatureStealthVisuals();

@@ -41,6 +41,13 @@ public:
     }
     [[nodiscard]] uint64_t getAutoAttackTargetGuid() const { return autoAttackTarget_; }
     [[nodiscard]] bool isAggressiveTowardPlayer(uint64_t guid) const { return hostileAttackers_.count(guid) > 0; }
+    /// Another unit's melee target (CGUnit_C +0xa20): set by its
+    /// SMSG_ATTACKSTART (0x00754ff0), cleared by its SMSG_ATTACKSTOP
+    /// (0x00756770); 0 for none.
+    [[nodiscard]] uint64_t getUnitMeleeTarget(uint64_t guid) const {
+        auto it = unitMeleeTargets_.find(guid);
+        return it != unitMeleeTargets_.end() ? it->second : 0;
+    }
     [[nodiscard]] uint64_t getLastMeleeSwingMs() const { return lastMeleeSwingMs_; }
 
     // Floating combat text
@@ -204,6 +211,7 @@ private:
     float autoAttackRangeWarnCooldown_ = 0.0f;
     float autoAttackResendTimer_ = 0.0f;
     std::unordered_set<uint64_t> hostileAttackers_;
+    std::unordered_map<uint64_t, uint64_t> unitMeleeTargets_;
     std::vector<CombatTextEntry> combatText_;
     static constexpr size_t MAX_COMBAT_LOG = 500;
     std::deque<CombatLogEntry> combatLog_;

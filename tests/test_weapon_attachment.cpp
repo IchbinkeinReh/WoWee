@@ -305,3 +305,88 @@ TEST_CASE("a spell's cast sets the sheath state (0x007fa2e0, 0x0073a6c0)", "[att
           std::nullopt);
     CHECK(spellSheathState({.known = true, .attributes = 2, .kitWeaponEffect = true}) == S::Unarmed);
 }
+
+TEST_CASE("a state asked for is taken as 0x00736d30 lets it", "[attachment]") {
+    using S = SheathState;
+    const UnitWeaponItem sword{.sheath = 3, .inventoryType = 13, .itemClass = 2, .subClass = 7};
+    const UnitWeaponItems items{&sword, nullptr, nullptr};
+    SheathSetInput in{.current = S::Melee};
+    CHECK(sheathStateChange(S::Unarmed, items, in) == S::Unarmed);
+    // Unchanged: nothing.
+    CHECK(sheathStateChange(S::Melee, items, in) == std::nullopt);
+    // Ranged: a player only when its class may; a creature always.
+    in.isPlayer = true;
+    CHECK(sheathStateChange(S::Ranged, items, in) == std::nullopt);
+    in.classMayDrawRanged = true;
+    CHECK(sheathStateChange(S::Ranged, items, in) == S::Ranged);
+    in.isPlayer = false;
+    in.classMayDrawRanged = false;
+    CHECK(sheathStateChange(S::Ranged, items, in) == S::Ranged);
+    // CREATURE_TYPEFLAGS 0x10000000: only the server's.
+    in.doNotSheathe = true;
+    CHECK(sheathStateChange(S::Unarmed, items, in) == std::nullopt);
+    in.fromServer = true;
+    CHECK(sheathStateChange(S::Unarmed, items, in) == S::Unarmed);
+    // No model: nothing.
+    in = {.current = S::Melee, .hasModel = false};
+    CHECK(sheathStateChange(S::Unarmed, items, in) == std::nullopt);
+}
+
+TEST_CASE("an unarmed animation decides the state asked for (0x00736d30 with 0x00715d00)", "[attachment]") {
+    using S = SheathState;
+    // Melee with nothing in the hands is unarmed: no change from unarmed.
+    const UnitWeaponItems empty{nullptr, nullptr, nullptr};
+    const SheathSetInput in{.current = S::Unarmed, .offHandFollowsAnimation = true};
+    CHECK(sheathStateChange(S::Melee, empty, in) == std::nullopt);
+    CHECK(sheathStateChange(S::Melee, empty, SheathSetInput{.current = S::Unarmed}) == S::Melee);
+}
+
+TEST_CASE("a stand state but standing or a chair puts the weapons away (0x0073f060)", "[attachment]") {
+    using S = SheathState;
+    CHECK_FALSE(standStateSheathes(S::Melee, 0));
+    CHECK(standStateSheathes(S::Melee, 1));
+    CHECK_FALSE(standStateSheathes(S::Melee, 2));
+    CHECK(standStateSheathes(S::Ranged, 3));
+    CHECK(standStateSheathes(S::Melee, 8));
+    CHECK_FALSE(standStateSheathes(S::Unarmed, 1));
+}
+
+TEST_CASE("a channel at a fishing bobber draws the pole (0x0073a520)", "[attachment]") {
+    using S = SheathState;
+    CHECK(channelSheathState(S::Unarmed, kGameObjectTypeFishingNode, 7620) == S::Melee);
+    CHECK(channelSheathState(S::Ranged, kGameObjectTypeFishingNode, 7620) == S::Melee);
+    CHECK(channelSheathState(S::Melee, kGameObjectTypeFishingNode, 7620) == std::nullopt);
+    CHECK(channelSheathState(S::Unarmed, kGameObjectTypeFishingNode, 0) == std::nullopt);
+    CHECK(channelSheathState(S::Unarmed, 3, 7620) == std::nullopt);
+}
+
+TEST_CASE("a text emote puts the weapons away as 0x006dd9e0 does", "[attachment]") {
+    TextEmoteSheathInput in{.emoteKnown = true};
+    CHECK(textEmoteSheathes(in));
+    // No Emotes row, or possessed: nothing.
+    CHECK_FALSE(textEmoteSheathes({.emoteKnown = false}));
+    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .unitFlags = 0x1000000}));
+    // Asleep: only an emote whose EmoteSpecProc is 1, and one allowed asleep.
+    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x200, .standState = 3}));
+    CHECK(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x200, .specProc = 1, .standState = 3}));
+    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .specProc = 1, .standState = 3}));
+    // 1: only standing; 0x80: not swimming; 0x8000: not flying.
+    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 1, .standState = 1}));
+    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x80, .moveFlags = 0x200000}));
+    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x8000, .moveFlags = 0x2000000}));
+    // 0x4000 refused while moving, unless the player is not its own master.
+    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x4000, .moveFlags = 1}));
+    CHECK(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x4000, .moveFlags = 1, .charmed = true}));
+    CHECK(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x4000}));
+    // 0x400: never.
+    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x400}));
+}
+
+TEST_CASE("another unit takes the field's state whatever it was in (0x00737aa0)", "[attachment]") {
+    using S = SheathState;
+    CHECK(fieldSheathChange(S::Unarmed, S::Melee, S::Ranged, false) == S::Ranged);
+    // 0x00738180 brings it back to the field after its own change.
+    AnimationSheathInput in{.current = S::Unarmed, .animId = 0, .animKnown = true,
+                            .behavior = 0, .activePlayer = false, .field = S::Melee};
+    CHECK(animationSheathState(in) == S::Melee);
+}

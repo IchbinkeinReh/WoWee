@@ -575,34 +575,41 @@ std::optional<SheathState> AppearanceComposer::fieldSheathState() const {
     return static_cast<SheathState>(entity->getField(bytes2) & 0xFFu);
 }
 
+uint64_t AppearanceComposer::playerChannelObject() const {
+    if (!gameHandler_) return 0;
+    const uint16_t field = game::fieldIndex(game::UF::UNIT_FIELD_CHANNEL_OBJECT);
+    auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
+    if (!entity || field == 0xFFFF) return 0;
+    return static_cast<uint64_t>(entity->getField(field)) |
+           (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(field + 1))) << 32);
+}
+
 bool AppearanceComposer::classMayDrawRanged() const {
-    if (!gameHandler_ || !assetManager_) return false;
+    if (!gameHandler_ || !entitySpawner_) return false;
     auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
     if (!entity) return false;
     const uint16_t bytes0 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0);
     const uint32_t classId = bytes0 != 0xFFFF ? (entity->getField(bytes0) >> 8) & 0xFFu : 0;
-    auto classes = assetManager_->loadDBCOptional("ChrClasses.dbc");
-    const int32_t row = classes ? classes->findRecordById(classId) : -1;
-    if (row < 0) return false;
-    // WotLK's layout: Flags (+0x24) is column 57.
-    if (classes->getFieldCount() != 60) return true;
-    return (classes->getUInt32(static_cast<uint32_t>(row), 57) & 8u) == 0;
+    return entitySpawner_->classMayDrawRanged(classId);
 }
 
 void AppearanceComposer::setSheathState(SheathState state, bool fromServer) {
-    // 0x00736d30: while the animation dresses the off hand (0x00721ed0) the
-    // state is 0x00715d00's for the items held.
+    // 0x00736d30, for the active player: a player, never a creature.
+    SheathSetInput in{.current = sheath_,
+                      .isPlayer = true,
+                      .classMayDrawRanged = state == SheathState::Ranged && classMayDrawRanged(),
+                      .fromServer = fromServer,
+                      .hasModel = sheathInstanceId_ != 0};
+    std::array<UnitWeaponItem, 3> storage{};
+    const UnitWeaponItems items = playerWeaponItems(storage);
     if (entitySpawner_ && sheathInstanceId_ != 0) {
-        std::array<UnitWeaponItem, 3> storage{};
-        const UnitWeaponItems items = playerWeaponItems(storage);
-        if (offHandFollowsAnimation(entitySpawner_->animationBehavior(sheathInstanceId_), items[0] != nullptr)) {
-            state = offHandAnimationSheath(state, items);
-        }
+        in.offHandFollowsAnimation =
+            offHandFollowsAnimation(entitySpawner_->animationBehavior(sheathInstanceId_), items[0] != nullptr);
     }
-    if (state == SheathState::Ranged && !classMayDrawRanged()) return;
-    if (state == sheath_) return;
-    sheath_ = state;
-    if (!fromServer && gameHandler_) gameHandler_->requestSheathState(static_cast<uint8_t>(state));
+    const auto next = sheathStateChange(state, items, in);
+    if (!next) return;
+    sheath_ = *next;
+    if (!fromServer && gameHandler_) gameHandler_->requestSheathState(static_cast<uint8_t>(*next));
 }
 
 bool AppearanceComposer::toggleSheath() {
@@ -632,58 +639,48 @@ bool AppearanceComposer::toggleSheath() {
 }
 
 void AppearanceComposer::onSpellCastBegin(uint32_t spellId) {
+    if (!gameHandler_ || !entitySpawner_ || sheathInstanceId_ == 0) return;
+    uint32_t displayId = 0;
+    auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
+    const uint16_t displayField = game::fieldIndex(game::UF::UNIT_FIELD_DISPLAYID);
+    if (entity && displayField != 0xFFFF) displayId = entity->getField(displayField);
+    if (const auto state = spellSheathState(entitySpawner_->spellSheathInput(spellId, displayId))) {
+        setSheathState(*state);
+    }
+}
+
+void AppearanceComposer::onTextEmote(uint32_t textEmoteId) {
     if (!gameHandler_ || !assetManager_ || sheathInstanceId_ == 0) return;
-    SpellSheathInput in;
-    if (const auto attributes = gameHandler_->getSpellAttributes(spellId)) {
-        in.known = true;
-        in.attributes = *attributes;
+    auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
+    if (!entity) return;
+    TextEmoteSheathInput in;
+    // EmotesText +8 (EmoteRef) names the Emotes row: its EmoteFlags (+0xc)
+    // and EmoteSpecProc (+0x10).
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* textLayout = layouts ? layouts->getLayout("EmotesText") : nullptr;
+    const auto* emoteLayout = layouts ? layouts->getLayout("Emotes") : nullptr;
+    auto texts = assetManager_->loadDBCOptional("EmotesText.dbc");
+    auto emotes = assetManager_->loadDBCOptional("Emotes.dbc");
+    const int32_t textRow = texts ? texts->findRecordById(textEmoteId) : -1;
+    if (textRow < 0 || !emotes) return;
+    const uint32_t refField = textLayout ? textLayout->tryField("EmoteRef") : 2;
+    if (refField >= texts->getFieldCount()) return;
+    const int32_t emoteRow = emotes->findRecordById(texts->getUInt32(static_cast<uint32_t>(textRow), refField));
+    if (emoteRow < 0) return;
+    in.emoteKnown = true;
+    const uint32_t flagsField = emoteLayout ? emoteLayout->tryField("EmoteFlags") : 3;
+    const uint32_t procField = emoteLayout ? emoteLayout->tryField("EmoteSpecProc") : 4;
+    const auto r = static_cast<uint32_t>(emoteRow);
+    if (flagsField < emotes->getFieldCount()) in.emoteFlags = emotes->getUInt32(r, flagsField);
+    if (procField < emotes->getFieldCount()) in.specProc = emotes->getUInt32(r, procField);
+    in.standState = gameHandler_->getStandState();
+    in.moveFlags = gameHandler_->getMovementInfo().flags;
+    const uint16_t flags = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+    if (flags != 0xFFFF) in.unitFlags = entity->getField(flags);
+    if (const uint16_t charmedBy = game::fieldIndex(game::UF::UNIT_FIELD_CHARMEDBY); charmedBy != 0xFFFF) {
+        in.charmed = entity->getField(charmedBy) != 0 || entity->getField(static_cast<uint16_t>(charmedBy + 1)) != 0;
     }
-    // The visual: SpellVisual +0x1c (HasMissile) with +0x20 (MissileModel),
-    // and its precast and cast kits' LeftWeaponEffect and RightWeaponEffect
-    // (SpellVisualKit +0x24, +0x28) naming a SpellVisualEffectName record.
-    const uint32_t visualId = gameHandler_->getSpellVisualId(spellId);
-    const auto* layout = pipeline::getActiveDBCLayout();
-    const auto* visualLayout = layout ? layout->getLayout("SpellVisual") : nullptr;
-    const auto* kitLayout = layout ? layout->getLayout("SpellVisualKit") : nullptr;
-    auto visuals = visualId ? assetManager_->loadDBCOptional("SpellVisual.dbc") : nullptr;
-    const int32_t visualRow = visuals ? visuals->findRecordById(visualId) : -1;
-    if (visualRow >= 0 && visualLayout) {
-        const auto row = static_cast<uint32_t>(visualRow);
-        const uint32_t hasMissile = visualLayout->tryField("HasMissile");
-        const uint32_t missileModel = visualLayout->tryField("MissileModel");
-        if (hasMissile < visuals->getFieldCount() && missileModel < visuals->getFieldCount() &&
-            visuals->getUInt32(row, hasMissile) != 0) {
-            in.missileModel = static_cast<int32_t>(visuals->getUInt32(row, missileModel));
-        }
-        auto kits = kitLayout ? assetManager_->loadDBCOptional("SpellVisualKit.dbc") : nullptr;
-        auto effects = kits ? assetManager_->loadDBCOptional("SpellVisualEffectName.dbc") : nullptr;
-        if (effects) {
-            for (const char* kitField : {"PrecastKit", "CastKit"}) {
-                const uint32_t kitColumn = visualLayout->tryField(kitField);
-                if (kitColumn >= visuals->getFieldCount()) continue;
-                const int32_t kitRow = kits->findRecordById(visuals->getUInt32(row, kitColumn));
-                if (kitRow < 0) continue;
-                for (const char* effectField : {"LeftWeaponEffect", "RightWeaponEffect"}) {
-                    const uint32_t column = kitLayout->tryField(effectField);
-                    if (column >= kits->getFieldCount()) continue;
-                    const uint32_t effect = kits->getUInt32(static_cast<uint32_t>(kitRow), column);
-                    if (effect != 0 && effects->findRecordById(effect) >= 0) in.kitWeaponEffect = true;
-                }
-            }
-        }
-    }
-    // 0x00717a20: the player's CreatureModelData, whose +4 flag 0x10 keeps
-    // the weapons where they are.
-    if (in.kitWeaponEffect && entitySpawner_) {
-        auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
-        const uint16_t displayField = game::fieldIndex(game::UF::UNIT_FIELD_DISPLAYID);
-        if (entity && displayField != 0xFFFF) {
-            if (const auto flags = entitySpawner_->creatureModelFlags(entity->getField(displayField))) {
-                in.modelHoldsEffects = (*flags & 0x10u) == 0;
-            }
-        }
-    }
-    if (const auto state = spellSheathState(in)) setSheathState(*state);
+    if (textEmoteSheathes(in)) setSheathState(SheathState::Unarmed);
 }
 
 void AppearanceComposer::updateWeaponsFromFields() {
@@ -696,6 +693,8 @@ void AppearanceComposer::updateWeaponsFromFields() {
         sheath_ = field.value_or(SheathState::Melee);
         fieldSheathSeen_ = field;
         animationSheathKey_ = {};
+        standSeen_ = gameHandler_ ? gameHandler_->getStandState() : 0;
+        channelObjectSeen_ = playerChannelObject();
     } else if (field && fieldSheathSeen_ && *field != *fieldSheathSeen_) {
         // 0x00737aa0: the server's change, taken when the player was in the
         // state it changed from.
@@ -707,6 +706,33 @@ void AppearanceComposer::updateWeaponsFromFields() {
         fieldSheathSeen_ = field;
     }
     if (instanceId == 0) return;
+
+    if (gameHandler_) {
+        // 0x0073f060 on a change of the player's stand state: its own
+        // (0x006dcb40) or the server's (SMSG_STANDSTATE_UPDATE).
+        if (const uint8_t stand = gameHandler_->getStandState(); stand != standSeen_) {
+            standSeen_ = stand;
+            if (standStateSheathes(sheath_, stand)) setSheathState(SheathState::Unarmed);
+        }
+        // 0x0073f4f0 -> 0x0073a520 on a change of its channel object: a
+        // channel at a fishing bobber draws the pole.
+        if (const uint64_t channelObject = playerChannelObject(); channelObject != channelObjectSeen_) {
+            channelObjectSeen_ = channelObject;
+            uint32_t objectType = 0;
+            if (auto object = channelObject ? gameHandler_->getEntityManager().getEntity(channelObject) : nullptr;
+                object && object->getType() == game::ObjectType::GAMEOBJECT) {
+                const auto* info = gameHandler_->getCachedGameObjectInfo(
+                    static_cast<const game::GameObject&>(*object).getEntry());
+                const uint16_t goBytes1 = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
+                objectType = info ? info->type : (goBytes1 != 0xFFFF ? (object->getField(goBytes1) >> 8) & 0xFFu : 0);
+            }
+            uint32_t channelSpell = 0;
+            const uint16_t spellField = game::fieldIndex(game::UF::UNIT_CHANNEL_SPELL);
+            auto self = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
+            if (self && spellField != 0xFFFF) channelSpell = self->getField(spellField);
+            if (const auto state = channelSheathState(sheath_, objectType, channelSpell)) setSheathState(*state);
+        }
+    }
 
     // 0x00738180 after each change of animation, cast or attack.
     if (gameHandler_ && entitySpawner_) {
@@ -738,7 +764,7 @@ void AppearanceComposer::updateWeaponsFromFields() {
 
     // A tool in the hands keeps them until it ends, which dresses the
     // weapons again.
-    if (showingMiningPick_ || showingFishingPole_) return;
+    if (showingMiningPick_) return;
     const DressedKey key = currentDressKey();
     if (key == dressedKey_) return;
     // 0x00731f40: from ranged to melee the ranged weapon is put away.
@@ -812,84 +838,6 @@ void AppearanceComposer::showMiningPick(bool show) {
         LOG_INFO("Mining pick attached at right hand: ", m2Path);
     } else {
         // Do not leave the player empty-handed if the temporary model failed.
-        loadEquippedWeapons();
-    }
-}
-
-void AppearanceComposer::showFishingPole(bool show) {
-    if (show == showingFishingPole_) return;
-
-    if (!show) {
-        showingFishingPole_ = false;
-        loadEquippedWeapons();
-        return;
-    }
-    if (!renderer_ || !renderer_->getCharacterRenderer() || !gameHandler_ ||
-        !assetManager_ || !assetManager_->isInitialized() || !entitySpawner_) {
-        return;
-    }
-
-    const auto isFishingPole = [this](const game::ItemSlot& slot) {
-        if (slot.empty()) return false;
-        if (slot.item.subclassName == "Fishing Pole") return true;
-        const auto* info = gameHandler_->getItemInfo(slot.item.itemId);
-        return info && info->valid && info->itemClass == 2 && info->subClass == 20;
-    };
-
-    const game::ItemSlot* pole = nullptr;
-    const auto& inventory = gameHandler_->getInventory();
-    const auto& mainHand = inventory.getEquipSlot(game::EquipSlot::MAIN_HAND);
-    if (isFishingPole(mainHand)) pole = &mainHand;
-    for (int i = 0; !pole && i < inventory.getBackpackSize(); ++i) {
-        const auto& slot = inventory.getBackpackSlot(i);
-        if (isFishingPole(slot)) pole = &slot;
-    }
-    for (int bag = 0; !pole && bag < game::Inventory::NUM_BAG_SLOTS; ++bag) {
-        for (int slotIndex = 0; !pole && slotIndex < inventory.getBagSize(bag); ++slotIndex) {
-            const auto& slot = inventory.getBagSlot(bag, slotIndex);
-            if (isFishingPole(slot)) pole = &slot;
-        }
-    }
-    if (!pole || pole->item.displayInfoId == 0) {
-        LOG_WARNING("showFishingPole: no fishing pole with display data found in inventory");
-        return;
-    }
-
-    auto displayInfoDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
-    if (!displayInfoDbc) return;
-    const int32_t recIdx = displayInfoDbc->findRecordById(pole->item.displayInfoId);
-    if (recIdx < 0) return;
-
-    const auto* idiL = pipeline::getActiveDBCLayout()
-        ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
-    std::string modelName = displayInfoDbc->getString(
-        static_cast<uint32_t>(recIdx), idiL ? (*idiL)["LeftModel"] : 1);
-    std::string textureName = displayInfoDbc->getString(
-        static_cast<uint32_t>(recIdx), idiL ? (*idiL)["LeftModelTexture"] : 3);
-    if (modelName.empty()) return;
-
-    const size_t dotPos = modelName.rfind('.');
-    const std::string modelFile = dotPos == std::string::npos
-        ? modelName + ".m2" : modelName.substr(0, dotPos) + ".m2";
-    std::string m2Path = "Item\\ObjectComponents\\Weapon\\" + modelFile;
-    pipeline::M2Model poleModel;
-    if (!loadWeaponM2(m2Path, poleModel)) return;
-
-    std::string texturePath;
-    if (!textureName.empty()) {
-        texturePath = "Item\\ObjectComponents\\Weapon\\" + textureName + ".blp";
-    }
-
-    auto* charRenderer = renderer_->getCharacterRenderer();
-    const uint32_t charInstanceId = renderer_->getCharacterInstanceId();
-    if (charInstanceId == 0) return;
-    charRenderer->detachWeapon(charInstanceId, kAttachRightHand);
-    const uint32_t modelId = entitySpawner_->allocateWeaponModelId();
-    if (charRenderer->attachWeapon(charInstanceId, kAttachRightHand, poleModel,
-                                   modelId, texturePath)) {
-        showingFishingPole_ = true;
-        LOG_INFO("Fishing pole attached at right hand: ", m2Path);
-    } else {
         loadEquippedWeapons();
     }
 }

@@ -144,6 +144,7 @@ void EntitySpawner::shutdown() {
     creatureActiveEmotes_.clear();
     creatureWasStealthed_.clear();
     unitWeaponsShown_.clear();
+    unitSheath_.clear();
     corpseGuids_.clear();
     corpseCreatureGuids_.clear();
     corpseBonesInstances_.clear();
@@ -203,6 +204,7 @@ void EntitySpawner::resetAllState() {
     // back fully opaque after a relog. shutdown() already cleared this.
     creatureWasStealthed_.clear();
     unitWeaponsShown_.clear();
+    unitSheath_.clear();
     corpseGuids_.clear();
     corpseCreatureGuids_.clear();
     corpseBonesInstances_.clear();
@@ -434,12 +436,9 @@ EntitySpawner::AnimationRecord EntitySpawner::animationRecord(uint32_t instanceI
     return out;
 }
 
-bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint32_t, 3>& entries,
-                                    const UnitWeaponDress& dress, const std::array<uint32_t, 6>* virtualInfo) {
-    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
-    if (!charRenderer || !assetManager_ || !gameHandler_) return false;
-    auto displayDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
-    if (!displayDbc) return false;
+bool EntitySpawner::resolveUnitWeaponItems(const UnitWeaponEntries& slots, std::array<UnitWeaponItem, 3>& items,
+                                           std::array<uint32_t, 3>& displays) const {
+    if (!assetManager_ || !gameHandler_) return false;
     auto itemDbc = assetManager_->loadDBCOptional("Item.dbc");
     // WotLK's eight columns: id, class, subclass, sound, material, display,
     // inventory type, sheath. Other layouts wait for the query.
@@ -447,14 +446,14 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint3
 
     // Each slot's item: the item query's template, or Item.dbc's row (class,
     // subclass, display, inventory type, sheath) while the query is out.
-    std::array<UnitWeaponItem, 3> items{};
-    std::array<uint32_t, 3> displays{};
+    items = {};
+    displays = {};
     for (size_t i = 0; i < 3; ++i) {
-        const uint32_t entry = entries[i];
+        const uint32_t entry = slots.entries[i];
         if (entry == 0) continue;
-        if (virtualInfo) {
+        if (slots.byDisplay) {
             // Before WotLK the slot is the display, its INFO pair the rest.
-            items[i] = virtualItemInfo((*virtualInfo)[i * 2], (*virtualInfo)[i * 2 + 1]);
+            items[i] = virtualItemInfo(slots.info[i * 2], slots.info[i * 2 + 1]);
             displays[i] = entry;
             continue;
         }
@@ -476,6 +475,19 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint3
                     .subClass = itemDbc->getUInt32(r, 2)};
         displays[i] = itemDbc->getUInt32(r, 5);
     }
+    return true;
+}
+
+bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const UnitWeaponEntries& slots,
+                                     const UnitWeaponDress& dress) {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || !assetManager_ || !gameHandler_) return false;
+    auto displayDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
+    if (!displayDbc) return false;
+    std::array<UnitWeaponItem, 3> items{};
+    std::array<uint32_t, 3> displays{};
+    if (!resolveUnitWeaponItems(slots, items, displays)) return false;
+    const auto& entries = slots.entries;
 
     // Every point a weapon can be on comes clear first; a change of state
     // moves them between these.
@@ -519,45 +531,246 @@ void EntitySpawner::refreshGuildTabards() {
     for (const auto& [guid, worn] : waits) queuePlayerEquipment(guid, worn.first, worn.second);
 }
 
+std::optional<EntitySpawner::UnitWeaponEntries> EntitySpawner::unitWeaponEntries(uint64_t guid,
+                                                                             const game::Entity& entity,
+                                                                             bool isPlayer) const {
+    UnitWeaponEntries out;
+    const uint16_t virtualItems = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
+    const uint16_t virtualDisplays = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY);
+    const uint16_t virtualInfoIndex = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_INFO);
+    if (isPlayer) {
+        // Main hand, off hand, ranged: equipment slots 15 to 17.
+        const auto* visible = gameHandler_->getOtherPlayerVisibleEquipment(guid);
+        if (!visible) return std::nullopt;
+        out.entries = {(*visible)[15], (*visible)[16], (*visible)[17]};
+    } else if (virtualItems != 0xFFFF) {
+        for (uint16_t i = 0; i < 3; ++i) out.entries[i] = entity.getField(static_cast<uint16_t>(virtualItems + i));
+    } else if (virtualDisplays != 0xFFFF && virtualInfoIndex != 0xFFFF) {
+        // Classic and TBC: UNIT_VIRTUAL_ITEM_SLOT_DISPLAY and _INFO.
+        out.byDisplay = true;
+        for (uint16_t i = 0; i < 3; ++i) {
+            out.entries[i] = entity.getField(static_cast<uint16_t>(virtualDisplays + i));
+        }
+        for (uint16_t i = 0; i < 6; ++i) out.info[i] = entity.getField(static_cast<uint16_t>(virtualInfoIndex + i));
+    } else {
+        return std::nullopt;
+    }
+    return out;
+}
+
+bool EntitySpawner::classMayDrawRanged(uint32_t classId) const {
+    if (!assetManager_) return false;
+    auto classes = assetManager_->loadDBCOptional("ChrClasses.dbc");
+    const int32_t row = classes ? classes->findRecordById(classId) : -1;
+    if (row < 0) return false;
+    // WotLK's layout: Flags (+0x24) is column 57.
+    if (classes->getFieldCount() != 60) return true;
+    return (classes->getUInt32(static_cast<uint32_t>(row), 57) & 8u) == 0;
+}
+
+void EntitySpawner::setUnitSheathState(uint64_t guid, UnitSheath& sheath, SheathState requested, bool fromServer) {
+    if (!gameHandler_) return;
+    auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    if (!entity || !entity->isUnit()) return;
+    const bool isPlayer = entity->getType() == game::ObjectType::PLAYER;
+    SheathSetInput in{.current = sheath.state, .isPlayer = isPlayer, .fromServer = fromServer,
+                      .hasModel = sheath.instanceId != 0};
+    std::array<UnitWeaponItem, 3> storage{};
+    UnitWeaponItems items{};
+    if (const auto slots = unitWeaponEntries(guid, *entity, isPlayer)) {
+        std::array<uint32_t, 3> displays{};
+        if (resolveUnitWeaponItems(*slots, storage, displays)) {
+            for (size_t i = 0; i < 3; ++i) items[i] = slots->entries[i] != 0 ? &storage[i] : nullptr;
+        }
+    }
+    // 0x00721ed0 for the animation the unit plays.
+    in.offHandFollowsAnimation = offHandFollowsAnimation(animationBehavior(sheath.instanceId), items[0] != nullptr);
+    if (isPlayer) {
+        const uint16_t bytes0 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0);
+        in.classMayDrawRanged =
+            bytes0 != 0xFFFF && classMayDrawRanged((entity->getField(bytes0) >> 8) & 0xFFu);
+    } else {
+        // The creature cache's row (+0x964) and its type flags (+0xc).
+        const auto& creatures = gameHandler_->getCreatureInfoCache();
+        const auto it = creatures.find(static_cast<const game::Unit&>(*entity).getEntry());
+        in.doNotSheathe = it != creatures.end() && (it->second.typeFlags & kCreatureTypeFlagDoNotSheathe) != 0;
+    }
+    if (const auto state = sheathStateChange(requested, items, in)) sheath.state = *state;
+}
+
+SpellSheathInput EntitySpawner::spellSheathInput(uint32_t spellId, uint32_t displayId) const {
+    SpellSheathInput in;
+    if (!gameHandler_ || !assetManager_) return in;
+    if (const auto attributes = gameHandler_->getSpellAttributes(spellId)) {
+        in.known = true;
+        in.attributes = *attributes;
+    }
+    // The visual: SpellVisual +0x1c (HasMissile) with +0x20 (MissileModel),
+    // and its precast and cast kits' LeftWeaponEffect and RightWeaponEffect
+    // (SpellVisualKit +0x24, +0x28) naming a SpellVisualEffectName record.
+    const uint32_t visualId = gameHandler_->getSpellVisualId(spellId);
+    const auto* layout = pipeline::getActiveDBCLayout();
+    const auto* visualLayout = layout ? layout->getLayout("SpellVisual") : nullptr;
+    const auto* kitLayout = layout ? layout->getLayout("SpellVisualKit") : nullptr;
+    auto visuals = visualId ? assetManager_->loadDBCOptional("SpellVisual.dbc") : nullptr;
+    const int32_t visualRow = visuals ? visuals->findRecordById(visualId) : -1;
+    if (visualRow >= 0 && visualLayout) {
+        const auto row = static_cast<uint32_t>(visualRow);
+        const uint32_t hasMissile = visualLayout->tryField("HasMissile");
+        const uint32_t missileModel = visualLayout->tryField("MissileModel");
+        if (hasMissile < visuals->getFieldCount() && missileModel < visuals->getFieldCount() &&
+            visuals->getUInt32(row, hasMissile) != 0) {
+            in.missileModel = static_cast<int32_t>(visuals->getUInt32(row, missileModel));
+        }
+        auto kits = kitLayout ? assetManager_->loadDBCOptional("SpellVisualKit.dbc") : nullptr;
+        auto effects = kits ? assetManager_->loadDBCOptional("SpellVisualEffectName.dbc") : nullptr;
+        if (effects) {
+            for (const char* kitField : {"PrecastKit", "CastKit"}) {
+                const uint32_t kitColumn = visualLayout->tryField(kitField);
+                if (kitColumn >= visuals->getFieldCount()) continue;
+                const int32_t kitRow = kits->findRecordById(visuals->getUInt32(row, kitColumn));
+                if (kitRow < 0) continue;
+                for (const char* effectField : {"LeftWeaponEffect", "RightWeaponEffect"}) {
+                    const uint32_t column = kitLayout->tryField(effectField);
+                    if (column >= kits->getFieldCount()) continue;
+                    const uint32_t effect = kits->getUInt32(static_cast<uint32_t>(kitRow), column);
+                    if (effect != 0 && effects->findRecordById(effect) >= 0) in.kitWeaponEffect = true;
+                }
+            }
+        }
+    }
+    // 0x00717a20: the unit's CreatureModelData, whose +4 flag 0x10 keeps
+    // the weapons where they are.
+    if (in.kitWeaponEffect) {
+        if (const auto flags = creatureModelFlags(displayId)) in.modelHoldsEffects = (*flags & 0x10u) == 0;
+    }
+    return in;
+}
+
+void EntitySpawner::onUnitSpellCastBegin(uint64_t guid, uint32_t spellId) {
+    auto it = unitSheath_.find(guid);
+    if (it == unitSheath_.end() || it->second.instanceId == 0 || !gameHandler_) return;
+    auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    if (!entity || !entity->isUnit()) return;
+    const uint32_t displayId = static_cast<const game::Unit&>(*entity).getDisplayId();
+    // 0x007fa2e0 calls 0x00736d30 for each of its reasons; the last stands.
+    if (const auto state = spellSheathState(spellSheathInput(spellId, displayId))) {
+        setUnitSheathState(guid, it->second, *state, false);
+    }
+}
+
+void EntitySpawner::onUnitAttackSwing(uint64_t guid) {
+    auto it = unitSheath_.find(guid);
+    if (it == unitSheath_.end() || it->second.instanceId == 0) return;
+    if (it->second.state != SheathState::Melee) setUnitSheathState(guid, it->second, SheathState::Melee, false);
+}
+
 void EntitySpawner::updateUnitWeapons() {
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!charRenderer || !gameHandler_ || !assetManager_ || !assetManager_->isInitialized()) return;
     const uint16_t bytes2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
-    const uint16_t virtualItems = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
-    const uint16_t virtualDisplays = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY);
-    const uint16_t virtualInfoIndex = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_INFO);
     const uint16_t flagsIndex = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
     const uint16_t flags2Index = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
+    const uint16_t channelObjectIndex = game::fieldIndex(game::UF::UNIT_FIELD_CHANNEL_OBJECT);
+    const uint16_t channelSpellIndex = game::fieldIndex(game::UF::UNIT_CHANNEL_SPELL);
+    const uint16_t goBytes1Index = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
+    const uint16_t healthIndex = game::fieldIndex(game::UF::UNIT_FIELD_HEALTH);
     const uint64_t localGuid = gameHandler_->getPlayerGuid();
     int budget = MAX_WEAPON_ATTACHES_PER_TICK;
 
+    // The client's own state for a unit, as each of its paths moves it.
+    auto updateSheath = [&](uint64_t guid, uint32_t instanceId, const game::Unit& unit) -> UnitSheath& {
+        const std::optional<SheathState> field =
+            bytes2 != 0xFFFF ? std::optional(static_cast<SheathState>(unit.getField(bytes2) & 0xFFu)) : std::nullopt;
+        uint64_t channelObject = 0;
+        if (channelObjectIndex != 0xFFFF) {
+            channelObject = static_cast<uint64_t>(unit.getField(channelObjectIndex)) |
+                            (static_cast<uint64_t>(unit.getField(static_cast<uint16_t>(channelObjectIndex + 1))) << 32);
+        }
+        auto [it, fresh] = unitSheath_.try_emplace(guid);
+        UnitSheath& sheath = it->second;
+        if (fresh || sheath.instanceId != instanceId) {
+            // 0x0073f660: a new model starts in the field's state; held
+            // without the field.
+            sheath = {.instanceId = instanceId,
+                      .state = field.value_or(SheathState::Melee),
+                      .fieldSeen = field,
+                      .standSeen = unit.getStandState(),
+                      .channelObjectSeen = channelObject};
+            return sheath;
+        }
+        // 0x00737aa0: every unit but the active player takes the field's
+        // change, as the server's (CREATURE_TYPEFLAGS 0x10000000 or not).
+        if (field && sheath.fieldSeen != field) {
+            if (sheath.fieldSeen) {
+                if (const auto state = fieldSheathChange(sheath.state, *sheath.fieldSeen, *field, false)) {
+                    setUnitSheathState(guid, sheath, *state, true);
+                }
+            }
+            sheath.fieldSeen = field;
+        }
+        // 0x0073f460 -> 0x0073f060 on a change of its stand state.
+        if (unit.getStandState() != sheath.standSeen) {
+            sheath.standSeen = unit.getStandState();
+            if (standStateSheathes(sheath.state, sheath.standSeen)) {
+                setUnitSheathState(guid, sheath, SheathState::Unarmed, false);
+            }
+        }
+        // 0x0073f4f0 -> 0x0073a520 on a change of its channel object.
+        if (channelObject != sheath.channelObjectSeen) {
+            sheath.channelObjectSeen = channelObject;
+            uint32_t objectType = 0;
+            if (auto object = channelObject ? gameHandler_->getEntityManager().getEntity(channelObject) : nullptr;
+                object && object->getType() == game::ObjectType::GAMEOBJECT) {
+                const auto* info = gameHandler_->getCachedGameObjectInfo(
+                    static_cast<const game::GameObject&>(*object).getEntry());
+                objectType = info ? info->type
+                                  : (goBytes1Index != 0xFFFF ? (object->getField(goBytes1Index) >> 8) & 0xFFu : 0);
+            }
+            const uint32_t channelSpell = channelSpellIndex != 0xFFFF ? unit.getField(channelSpellIndex) : 0;
+            if (const auto state = channelSheathState(sheath.state, objectType, channelSpell)) {
+                setUnitSheathState(guid, sheath, *state, false);
+            }
+        }
+        // 0x00738180 after each change of animation, cast or attack.
+        const auto anim = animationRecord(instanceId);
+        const auto* cast = gameHandler_->getUnitCastState(guid);
+        const uint32_t castSpellId = cast && cast->casting ? cast->spellId : 0;
+        const bool alive = healthIndex == 0xFFFF || unit.getField(healthIndex) > 0;
+        const bool attacking = alive && gameHandler_->getUnitMeleeTarget(guid) != 0;
+        if (anim.animId != sheath.animId || castSpellId != sheath.castSpellId || attacking != sheath.attacking) {
+            sheath.animId = anim.animId;
+            sheath.castSpellId = castSpellId;
+            sheath.attacking = attacking;
+            AnimationSheathInput in{.current = sheath.state,
+                                    .animId = anim.animId,
+                                    .animKnown = anim.known,
+                                    .weaponFlags = anim.weaponFlags,
+                                    .behavior = anim.behavior,
+                                    .casting = castSpellId != 0,
+                                    .attacking = attacking,
+                                    .activePlayer = false,
+                                    .field = field.value_or(sheath.state)};
+            if (castSpellId != 0) {
+                const auto attributes = gameHandler_->getSpellAttributes(castSpellId);
+                in.castSheathes = attributes && (*attributes & 0x40000u) == 0;
+            }
+            if (const auto state = animationSheathState(in)) setUnitSheathState(guid, sheath, *state, false);
+        }
+        return sheath;
+    };
+
     auto visit = [&](uint64_t guid, uint32_t instanceId, bool isPlayer) {
-        if (budget <= 0 || instanceId == 0) return;
+        if (instanceId == 0) return;
         auto entity = gameHandler_->getEntityManager().getEntity(guid);
         if (!entity || !entity->isUnit()) return;
-        std::array<uint32_t, 3> entries{};
-        std::array<uint32_t, 6> info{};
-        bool byDisplay = false;
-        if (isPlayer) {
-            // Main hand, off hand, ranged: equipment slots 15 to 17.
-            const auto* visible = gameHandler_->getOtherPlayerVisibleEquipment(guid);
-            if (!visible) return;
-            entries = {(*visible)[15], (*visible)[16], (*visible)[17]};
-        } else if (virtualItems != 0xFFFF) {
-            for (uint16_t i = 0; i < 3; ++i) entries[i] = entity->getField(static_cast<uint16_t>(virtualItems + i));
-        } else if (virtualDisplays != 0xFFFF && virtualInfoIndex != 0xFFFF) {
-            // Classic and TBC: UNIT_VIRTUAL_ITEM_SLOT_DISPLAY and _INFO.
-            byDisplay = true;
-            for (uint16_t i = 0; i < 3; ++i) {
-                entries[i] = entity->getField(static_cast<uint16_t>(virtualDisplays + i));
-            }
-            for (uint16_t i = 0; i < 6; ++i) info[i] = entity->getField(static_cast<uint16_t>(virtualInfoIndex + i));
-        } else {
-            return;
-        }
-        // No sheath field in this layout: held, as before.
-        const uint8_t state = bytes2 != 0xFFFF ? static_cast<uint8_t>(entity->getField(bytes2) & 0xFFu)
-                                               : static_cast<uint8_t>(SheathState::Melee);
+        const auto& unit = static_cast<const game::Unit&>(*entity);
+        const uint8_t state = static_cast<uint8_t>(updateSheath(guid, instanceId, unit).state);
+        if (budget <= 0) return;
+        const auto slots = unitWeaponEntries(guid, *entity, isPlayer);
+        if (!slots) return;
+        const auto& entries = slots->entries;
+        const auto& info = slots->info;
         // What else 0x0072dbc0 reads: the disarm bits (0x00718fc0) and
         // whether the animation playing dresses the off hand (0x00721ed0).
         const uint32_t unitFlags = flagsIndex != 0xFFFF ? entity->getField(flagsIndex) & kUnitFlagDisarmed : 0;
@@ -583,7 +796,7 @@ void EntitySpawner::updateUnitWeapons() {
                                     .unitFlags = unitFlags,
                                     .unitFlags2 = unitFlags2,
                                     .offHandFollowsAnimation = followsAnim};
-        if (!dressUnitWeapons(instanceId, entries, dress, byDisplay ? &info : nullptr)) {
+        if (!dressUnitWeapons(instanceId, *slots, dress)) {
             // An item not known yet: try again once its query is back.
             if (fresh) unitWeaponsShown_.erase(it);
             else shown.instanceId = 0;
@@ -602,6 +815,11 @@ void EntitySpawner::updateUnitWeapons() {
     for (const auto& [guid, instanceId] : creatureInstances_) visit(guid, instanceId, false);
     for (const auto& [guid, instanceId] : playerInstances_) {
         if (guid != localGuid) visit(guid, instanceId, true);
+    }
+    // Units gone from the world take their state with them.
+    for (auto it = unitSheath_.begin(); it != unitSheath_.end();) {
+        if (!creatureInstances_.count(it->first) && !playerInstances_.count(it->first)) it = unitSheath_.erase(it);
+        else ++it;
     }
 }
 

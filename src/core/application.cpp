@@ -2271,8 +2271,26 @@ void Application::setState(AppState newState) {
                 // The player's casts set its sheath state (0x007fa2e0): a
                 // ranged spell such as Auto Shot draws the ranged weapon.
                 gameHandler->setSpellCastBeginCallback([this](uint64_t caster, uint32_t spellId) {
-                    if (appearanceComposer_ && gameHandler && caster == gameHandler->getPlayerGuid())
-                        appearanceComposer_->onSpellCastBegin(spellId);
+                    if (!gameHandler) return;
+                    if (caster == gameHandler->getPlayerGuid()) {
+                        if (appearanceComposer_) appearanceComposer_->onSpellCastBegin(spellId);
+                    } else if (entitySpawner_) {
+                        entitySpawner_->onUnitSpellCastBegin(caster, spellId);
+                    }
+                });
+                // Any unit's swing draws its melee weapons (0x00756800).
+                gameHandler->setUnitAttackSwingCallback([this](uint64_t attacker) {
+                    if (!gameHandler) return;
+                    if (attacker == gameHandler->getPlayerGuid()) {
+                        if (appearanceComposer_ && appearanceComposer_->sheathState() != core::SheathState::Melee)
+                            appearanceComposer_->requestSheathState(core::SheathState::Melee);
+                    } else if (entitySpawner_) {
+                        entitySpawner_->onUnitAttackSwing(attacker);
+                    }
+                });
+                // A text emote puts the player's weapons away (0x006dd9e0).
+                gameHandler->setTextEmoteSentCallback([this](uint32_t textEmoteId) {
+                    if (appearanceComposer_) appearanceComposer_->onTextEmote(textEmoteId);
                 });
                 // The logout countdown finishing is not the end of it: the server
                 // confirms with SMSG_LOGOUT_COMPLETE, and only then does the client
@@ -3754,19 +3772,6 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
         wasAutoAttacking_ = attackWeaponNeeded;
     }
 
-    // Weapons go away on entering the water. You cannot swim with a sword out,
-    // and retail puts them away for you rather than leaving them drawn through
-    // the swim cycle. No reach animation: the character is already swimming, and
-    // the sheathe reach would be played over a stroke it does not fit.
-    {
-        auto* cc = renderer ? renderer->getCameraController() : nullptr;
-        const bool swimmingNow = cc && cc->isSwimming();
-        if (swimmingNow && !wasSwimmingForSheath_ && appearanceComposer_) {
-            appearanceComposer_->requestSheathState(core::SheathState::Unarmed);
-        }
-        wasSwimmingForSheath_ = swimmingNow;
-    }
-
     // Toggle weapon sheathe state with Z (ignored while UI captures keyboard).
     inGameStep = "weapon-toggle input";
     updateCheckpoint = "in_game: weapon-toggle input";
@@ -5169,7 +5174,7 @@ void Application::setupUICallbacks() {
 
     // ── Transport: mount, taxi, transport spawn/move ──
     transportCallbacks_ = std::make_unique<TransportCallbackHandler>(
-        *entitySpawner_, *renderer, *gameHandler, appearanceComposer_.get());
+        *entitySpawner_, *renderer, *gameHandler);
     transportCallbacks_->setupCallbacks();
 }
 

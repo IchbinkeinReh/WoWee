@@ -23,6 +23,8 @@ static const UFNameEntry kUFNames[] = {
     {.name = "OBJECT_FIELD_SCALE_X", .field = UF::OBJECT_FIELD_SCALE_X},
     {.name = "UNIT_FIELD_TARGET_LO", .field = UF::UNIT_FIELD_TARGET_LO},
     {.name = "UNIT_FIELD_TARGET_HI", .field = UF::UNIT_FIELD_TARGET_HI},
+    {.name = "UNIT_FIELD_CHANNEL_OBJECT", .field = UF::UNIT_FIELD_CHANNEL_OBJECT},
+    {.name = "UNIT_CHANNEL_SPELL", .field = UF::UNIT_CHANNEL_SPELL},
     {.name = "UNIT_FIELD_BYTES_0", .field = UF::UNIT_FIELD_BYTES_0},
     {.name = "UNIT_FIELD_BYTES_1", .field = UF::UNIT_FIELD_BYTES_1},
     {.name = "UNIT_FIELD_HEALTH", .field = UF::UNIT_FIELD_HEALTH},

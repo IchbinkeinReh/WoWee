@@ -597,6 +597,8 @@ void CombatHandler::handleAttackStart(network::Packet& packet) {
     };
     revealCombatant(data.attackerGuid);
     revealCombatant(data.victimGuid);
+    // 0x00756800 case 0x143: the attacker's melee target (0x00754ff0).
+    if (data.attackerGuid != owner_.getPlayerGuid()) unitMeleeTargets_[data.attackerGuid] = data.victimGuid;
 
     if (data.attackerGuid == owner_.getPlayerGuid()) {
         autoAttackRequested_ = true;
@@ -638,6 +640,8 @@ void CombatHandler::handleAttackStop(network::Packet& packet) {
     AttackStopData data;
     if (!AttackStopParser::parse(packet, data)) return;
 
+    // 0x00756770: the attacker's melee target is gone.
+    unitMeleeTargets_.erase(data.attackerGuid);
     // Keep intent, but clear server-confirmed active state until ATTACKSTART resumes.
     if (data.attackerGuid == owner_.getPlayerGuid()) {
         autoAttacking_ = false;
@@ -655,6 +659,10 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
 
     bool isPlayerAttacker = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
+    // 0x00756800 case 0x14a: any attacker's swing draws its melee weapons.
+    if (data.attackerGuid != 0 && owner_.unitAttackSwingCallbackRef()) {
+        owner_.unitAttackSwingCallbackRef()(data.attackerGuid);
+    }
     if (!isPlayerAttacker && !isPlayerTarget) return;  // Not our combat
 
     if (isPlayerAttacker) {
@@ -922,6 +930,7 @@ void CombatHandler::updateAutoAttack(float deltaTime) {
 
 void CombatHandler::resetAllCombatState() {
     hostileAttackers_.clear();
+    unitMeleeTargets_.clear();
     combatText_.clear();
     autoAttacking_ = false;
     autoAttackRequested_ = false;

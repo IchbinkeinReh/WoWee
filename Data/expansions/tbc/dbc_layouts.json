@@ -80,6 +80,7 @@
   },
   "Emotes": {
     "AnimID": 2,
+    "EmoteFlags": 3,
     "EmoteSpecProc": 4,
     "ID": 0
   },
