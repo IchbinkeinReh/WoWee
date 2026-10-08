@@ -403,13 +403,12 @@ void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec
         playKitWeaponEffects(fxIt->second, attachInstanceId, true, castTimeMs);
     }
 
-    // Try precast path first, fall back to cast path
+    // The precast kit's model. A visual without one shows nothing more at
+    // the cast's start: the cast kit plays at SMSG_SPELL_GO and only then
+    // (0x007fa2e0 plays SpellVisual +4 alone; 0x00809f80's 0x00800dd0 the
+    // cast kit, +8).
     auto pathIt = spellVisualPrecastPath_.find(visualId);
-    if (pathIt == spellVisualPrecastPath_.end()) {
-        // No precast kit - fall back to playing cast kit
-        playSpellVisual(visualId, worldPosition, false, attachInstanceId);
-        return;
-    }
+    if (pathIt == spellVisualPrecastPath_.end()) return;
 
     const std::string& modelPath = pathIt->second;
     LOG_INFO("SpellVisual: precast path resolved to: ", modelPath);
@@ -438,8 +437,6 @@ void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec
         if (m2Data.empty()) {
             LOG_WARNING("SpellVisual: could not read precast model: ", modelPath);
             spellVisualFailedModels_.insert(modelId);
-            // Fall back to cast kit
-            playSpellVisual(visualId, worldPosition, false, attachInstanceId);
             return;
         }
         LOG_INFO("SpellVisual: precast M2 data read OK, size=", m2Data.size(), " bytes");
@@ -453,7 +450,6 @@ void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec
         if (model.vertices.empty() && model.particleEmitters.empty()) {
             LOG_WARNING("SpellVisual: empty precast model: ", modelPath);
             spellVisualFailedModels_.insert(modelId);
-            playSpellVisual(visualId, worldPosition, false, attachInstanceId);
             return;
         }
         if (model.version >= 264) {
@@ -467,7 +463,6 @@ void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec
         if (!m2Renderer_->loadModel(model, modelId)) {
             LOG_WARNING("SpellVisual: failed to load precast model to GPU: ", modelPath);
             spellVisualFailedModels_.insert(modelId);
-            playSpellVisual(visualId, worldPosition, false, attachInstanceId);
             return;
         }
         m2Renderer_->markModelAsSpellEffect(modelId);
