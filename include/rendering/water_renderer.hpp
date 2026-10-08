@@ -146,7 +146,8 @@ public:
                              VkImage srcDepthImage,
                              VkExtent2D srcExtent,
                              bool srcDepthIsMsaa,
-                             uint32_t frameIndex = 0);
+                             uint32_t frameIndex = 0,
+                             VkExtent2D srcDepthExtent = {});  ///< zero: srcExtent
 
     // --- Planar reflection pass ---
     // Call sequence: beginReflectionPass → [render scene] → endReflectionPass

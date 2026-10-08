@@ -1301,7 +1301,8 @@ void WaterRenderer::captureSceneHistory(VkCommandBuffer cmd,
                                         VkImage srcDepthImage,
                                         VkExtent2D srcExtent,
                                         bool srcDepthIsMsaa,
-                                        uint32_t frameIndex) {
+                                        uint32_t frameIndex,
+                                        VkExtent2D srcDepthExtent) {
     uint32_t fi = frameIndex % SCENE_HISTORY_FRAMES;
     auto& sh = sceneHistory[fi];
     if (!vkCtx || !cmd || !sh.colorImage || !sh.depthImage || srcExtent.width == 0 || srcExtent.height == 0) {
@@ -1320,6 +1321,16 @@ void WaterRenderer::captureSceneHistory(VkCommandBuffer cmd,
         .height = std::min(srcExtent.height, sceneHistoryExtent.height)
     };
     if (copyExtent.width == 0 || copyExtent.height == 0) return;
+    // The depth can come at its own size: with MSAA and an upscaler the colour
+    // is the finished swapchain image and the depth the scene's, rendered
+    // smaller. Each is copied or scaled by its own size.
+    if (srcDepthExtent.width == 0 || srcDepthExtent.height == 0) srcDepthExtent = srcExtent;
+    const bool depthNeedsScaling = (srcDepthExtent.width != sceneHistoryExtent.width ||
+                                    srcDepthExtent.height != sceneHistoryExtent.height);
+    const VkExtent2D depthCopyExtent{
+        .width = std::min(srcDepthExtent.width, sceneHistoryExtent.width),
+        .height = std::min(srcDepthExtent.height, sceneHistoryExtent.height)
+    };
 
     auto barrier2 = [&](VkImage image,
                         VkImageAspectFlags aspect,
@@ -1405,14 +1416,14 @@ void WaterRenderer::captureSceneHistory(VkCommandBuffer cmd,
                  VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-        if (needsScaling) {
+        if (depthNeedsScaling) {
             // Depth must not be filtered - an interpolated depth is a surface
             // that exists nowhere.
             VkImageBlit depthBlit{};
             depthBlit.srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1};
             depthBlit.dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1};
-            depthBlit.srcOffsets[1] = {.x = static_cast<int32_t>(srcExtent.width),
-                                       .y = static_cast<int32_t>(srcExtent.height), .z = 1};
+            depthBlit.srcOffsets[1] = {.x = static_cast<int32_t>(srcDepthExtent.width),
+                                       .y = static_cast<int32_t>(srcDepthExtent.height), .z = 1};
             depthBlit.dstOffsets[1] = {.x = static_cast<int32_t>(sceneHistoryExtent.width),
                                        .y = static_cast<int32_t>(sceneHistoryExtent.height), .z = 1};
             vkCmdBlitImage(cmd, srcDepthImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -1422,7 +1433,7 @@ void WaterRenderer::captureSceneHistory(VkCommandBuffer cmd,
             VkImageCopy depthCopy{};
             depthCopy.srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1};
             depthCopy.dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1};
-            depthCopy.extent = {.width = copyExtent.width, .height = copyExtent.height, .depth = 1};
+            depthCopy.extent = {.width = depthCopyExtent.width, .height = depthCopyExtent.height, .depth = 1};
             vkCmdCopyImage(cmd, srcDepthImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            sh.depthImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &depthCopy);
         }

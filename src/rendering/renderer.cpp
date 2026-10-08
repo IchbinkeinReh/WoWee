@@ -1637,13 +1637,28 @@ void Renderer::endFrame() {
     if (!waterDrawsInContinuePass()
         && waterRenderer && waterRenderer->isRefractionEnabled() && waterRenderer->hasSurfaces()
         && currentImageIndex < vkCtx->getSwapchainImages().size()) {
+        // The depth is the scene's, wherever the scene went. With MSAA and FXAA
+        // or FSR the scene renders into the post-processing target and nothing
+        // in the frame touches the context's own depth: this copied that image,
+        // never written, into the water's depth - which is what its absorption
+        // and its shoreline foam are measured against - and validation caught
+        // the first frame reading it from UNDEFINED.
+        VkImage depthSrc = vkCtx->getDepthCopySourceImage();
+        bool depthIsMsaa = vkCtx->isDepthCopySourceMsaa();
+        VkExtent2D depthExtent = vkCtx->getSwapchainExtent();
+        if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {
+            depthSrc = postProcessPipeline_->getSceneDepthImage();
+            depthIsMsaa = postProcessPipeline_->sceneDepthIsMsaa();
+            depthExtent = postProcessPipeline_->getSceneRenderExtent();
+        }
         waterRenderer->captureSceneHistory(
             currentCmd,
             vkCtx->getSwapchainImages()[currentImageIndex],
-            vkCtx->getDepthCopySourceImage(),
+            depthSrc,
             vkCtx->getSwapchainExtent(),
-            vkCtx->isDepthCopySourceMsaa(),
-            vkCtx->getCurrentFrame());
+            depthIsMsaa,
+            vkCtx->getCurrentFrame(),
+            depthExtent);
         vkCtx->gpuMark(currentCmd, "water refraction copy");
     }
 
