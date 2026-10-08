@@ -250,6 +250,11 @@ public:
     /// Whether another unit shows its SpellVisual Flags 8 state kits
     /// (0x00720400): idle, its weapons away and casting nothing.
     bool unarmedKitsShown(uint64_t guid) const;
+    /// The unit a CharacterRenderer instance draws, 0 for none.
+    uint64_t unitGuidForInstance(uint32_t renderInstanceId) const;
+    /// Its CreatureModelData GeoBox height, +0x58 less +0x4c (0x00717ad0);
+    /// 0 when it has none.
+    float unitGeoBoxHeight(uint32_t renderInstanceId) const;
 
     /// Every unit's and corpse's blob shadow for this frame (0x00793980): a
     /// corpse that is not bones by the bounds of its model's sequence; a unit by its
@@ -382,6 +387,8 @@ private:
     /// A CreatureModelData float of the unit an instance draws, 1 where
     /// it has none.
     float kitModelDataScale(uint32_t renderInstanceId, const char* column) const;
+    /// A CreatureModelData float column of the unit an instance draws.
+    std::optional<float> modelDataColumn(uint32_t renderInstanceId, const char* column) const;
     // Dependencies (non-owning)
     rendering::Renderer* renderer_;
     pipeline::AssetManager* assetManager_;

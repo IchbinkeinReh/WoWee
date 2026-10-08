@@ -183,6 +183,13 @@ inline constexpr uint32_t kCharProcColourFade = 13;
 inline constexpr uint32_t kCharProcLightTint = 6;
 inline constexpr uint32_t kCharProcAlpha = 14;
 
+/// 0 and 12: a SpellChainEffects chain (ParamZero, chopped) from the unit to
+///    its targets, held by the effect while ParamTwo is set and all from the
+///    unit while ParamThree is (0x007fc5f0, spell_chain.hpp).
+inline constexpr uint32_t kCharProcChain = 0;
+inline constexpr uint32_t kCharProcChainToo = 12;
+constexpr bool isChainProc(uint32_t proc) { return proc == kCharProcChain || proc == kCharProcChainToo; }
+
 /// 0x007265c0 cases 1 and 13 colour the unit unless it is a creature whose
 /// cache row has type flag 0x40 (+0x964 +0xc) and the spell is aimed at
 /// enemies (0x007fe1b0 answers 2).

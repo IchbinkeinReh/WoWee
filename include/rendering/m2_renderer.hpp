@@ -542,6 +542,17 @@ public:
     /// The client's ribbons, each emitter's strip oldest edge first (0x00980b70).
     void renderClientRibbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
 
+    /// A strip built outside the M2s and drawn with the ribbons' state: a
+    /// spell's chain effects (0x009aa210) and weapon swing trails
+    /// (0x007e4ce0).
+    struct ClientStrip {
+        std::vector<client_ribbon::Vertex> vertices;  ///< a triangle strip
+        std::string texturePath;                       ///< empty: untextured
+        client_ribbon::MaterialState material;
+    };
+    /// This frame's strips, drawn after the ribbons in the order given.
+    void setClientStrips(std::vector<ClientStrip> strips);
+
     void setInstancePosition(uint32_t instanceId, const glm::vec3& position);
     /// WOWEE_M2_CENSUS: what a model is actually drawn at, said once each.
     void censusInstance(const M2Instance& instance);
@@ -1100,7 +1111,7 @@ private:
     std::vector<uint32_t> cullReadableIds_[2];
 
     // Dynamic ribbon vertex buffer (CPU-written triangle strip)
-    static constexpr size_t MAX_RIBBON_VERTS = 2048;  // 9 floats each
+    static constexpr size_t MAX_RIBBON_VERTS = 8192;  // 9 floats each
     // One of each per frame in flight: the CPU writes the next frame's
     // vertices while the GPU may still be drawing the last one's.
     static constexpr uint32_t kDynamicVBSlots = 2;  // MAX_FRAMES_IN_FLIGHT
@@ -1241,6 +1252,17 @@ private:
         int32_t         fogged = 0;
     };
     std::vector<RibbonDrawCall> ribbonDraws_;
+    /// The client strips of this frame, each with its texture's set.
+    std::vector<ClientStrip> clientStrips_;
+    std::vector<VkDescriptorSet> clientStripSets_;
+    /// A strip texture's set, kept by path; its texture is held from
+    /// eviction while it is here.
+    struct StripTexture {
+        VkTexture* texture = nullptr;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+    };
+    std::unordered_map<std::string, StripTexture> stripTextures_;
+    VkDescriptorSet stripTextureSet(const std::string& path);
 
     // Particle group structures (reused each frame)
     struct ParticleGroupKey {

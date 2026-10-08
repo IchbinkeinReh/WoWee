@@ -7,6 +7,7 @@
 #include "rendering/m2_track_sampler.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_pipeline.hpp"
+#include "rendering/vk_texture.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -128,6 +129,35 @@ void M2Renderer::renderClientRibbons(VkCommandBuffer cmd, VkDescriptorSet perFra
             }
         }
     }
+    // The strips built outside the M2s, after them, with their own state.
+    for (size_t i = 0; i < clientStrips_.size() && i < clientStripSets_.size(); ++i) {
+        const ClientStrip& cs = clientStrips_[i];
+        const VkDescriptorSet texSet = clientStripSets_[i];
+        const VkPipeline pipe = ribbonPipelineFor(cs.material);
+        if (!texSet || !pipe || cs.vertices.size() < 3) continue;
+        if (written + cs.vertices.size() > MAX_RIBBON_VERTS) break;
+        const uint32_t first = static_cast<uint32_t>(written);
+        for (const auto& v : cs.vertices) {
+            float* o = dst + written * 9;
+            o[0] = v.position.x;
+            o[1] = v.position.y;
+            o[2] = v.position.z;
+            o[3] = static_cast<float>((v.color >> 16) & 0xFF) / 255.0f;
+            o[4] = static_cast<float>((v.color >> 8) & 0xFF) / 255.0f;
+            o[5] = static_cast<float>(v.color & 0xFF) / 255.0f;
+            o[6] = static_cast<float>((v.color >> 24) & 0xFF) / 255.0f;
+            o[7] = v.uv.x;
+            o[8] = v.uv.y;
+            ++written;
+        }
+        ribbonDraws_.push_back({.texSet = texSet,
+                                .pipeline = pipe,
+                                .firstVertex = first,
+                                .vertexCount = static_cast<uint32_t>(cs.vertices.size()),
+                                .alphaRef = cs.material.alphaRef,
+                                .lit = cs.material.lit ? 1 : 0,
+                                .fogged = cs.material.fogged ? 1 : 0});
+    }
     if (ribbonDraws_.empty()) return;
 
     VkExtent2D ext = vkCtx_->getSwapchainExtent();
@@ -164,6 +194,43 @@ void M2Renderer::renderClientRibbons(VkCommandBuffer cmd, VkDescriptorSet perFra
                            0, sizeof(pc), &pc);
         vkCmdDraw(cmd, dc.vertexCount, 1, dc.firstVertex, 0);
     }
+}
+
+void M2Renderer::setClientStrips(std::vector<ClientStrip> strips) {
+    clientStrips_ = std::move(strips);
+    clientStripSets_.clear();
+    clientStripSets_.reserve(clientStrips_.size());
+    for (const ClientStrip& cs : clientStrips_) clientStripSets_.push_back(stripTextureSet(cs.texturePath));
+}
+
+VkDescriptorSet M2Renderer::stripTextureSet(const std::string& path) {
+    auto it = stripTextures_.find(path);
+    if (it != stripTextures_.end()) return it->second.set;
+    StripTexture entry;
+    // Untextured (0x007e4ce0 sets no texture): white. A chain's texture
+    // repeats along the strip (0x009aa210's texture matrix).
+    entry.texture = path.empty() ? whiteTexture_.get() : loadTexture(path, 0x3);
+    if (!entry.texture || !entry.texture->isValid()) entry.texture = whiteTexture_.get();
+    if (entry.texture && entry.texture->isValid() && particleTexLayout_ && materialDescPool_) {
+        VkDescriptorSetAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool = materialDescPool_;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &particleTexLayout_;
+        if (vkAllocateDescriptorSets(vkCtx_->getDevice(), &ai, &entry.set) == VK_SUCCESS) {
+            VkDescriptorImageInfo imgInfo = entry.texture->descriptorInfo();
+            VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = entry.set;
+            write.dstBinding = 0;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &imgInfo;
+            vkUpdateDescriptorSets(vkCtx_->getDevice(), 1, &write, 0, nullptr);
+        } else {
+            entry.set = VK_NULL_HANDLE;
+        }
+    }
+    stripTextures_[path] = entry;
+    return entry.set;
 }
 
 }  // namespace rendering

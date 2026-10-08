@@ -251,6 +251,10 @@ public:
     /// The instance's world matrix - position, facing and scale - which an
     /// effect parented to the unit rides on.
     bool getInstanceFrame(uint32_t instanceId, glm::mat4& outFrame) const;
+    /// Where one of the instance's own model's events is this frame
+    /// (0x008318a0): its position through its bone, then the model's
+    /// placement. False when the model has no such event.
+    bool getEventPosition(uint32_t instanceId, uint32_t eventId, glm::vec3& out) const;
 
     /** Debug: Log all available animations for an instance */
     void dumpAnimations(uint32_t instanceId) const;

@@ -734,17 +734,32 @@ uint32_t EntitySpawner::creatureTypeFlags(uint32_t renderInstanceId) const {
     return 0;
 }
 
-float EntitySpawner::kitModelDataScale(uint32_t renderInstanceId, const char* column) const {
-    if (!gameHandler_ || !assetManager_ || renderInstanceId == 0) return 1.0f;
-    uint64_t guid = 0;
-    if (renderer_ && renderer_->getCharacterInstanceId() == renderInstanceId) guid = gameHandler_->getPlayerGuid();
+uint64_t EntitySpawner::unitGuidForInstance(uint32_t renderInstanceId) const {
+    if (!gameHandler_ || renderInstanceId == 0) return 0;
+    if (renderer_ && renderer_->getCharacterInstanceId() == renderInstanceId) return gameHandler_->getPlayerGuid();
     for (const auto* instances : {&creatureInstances_, &playerInstances_}) {
         for (const auto& [unitGuid, instanceId] : *instances) {
-            if (guid == 0 && instanceId == renderInstanceId) guid = unitGuid;
+            if (instanceId == renderInstanceId) return unitGuid;
         }
     }
+    return 0;
+}
+
+float EntitySpawner::unitGeoBoxHeight(uint32_t renderInstanceId) const {
+    const auto minZ = modelDataColumn(renderInstanceId, "GeoBoxMinZ");
+    const auto maxZ = modelDataColumn(renderInstanceId, "GeoBoxMaxZ");
+    return minZ && maxZ ? *maxZ - *minZ : 0.0f;
+}
+
+float EntitySpawner::kitModelDataScale(uint32_t renderInstanceId, const char* column) const {
+    return modelDataColumn(renderInstanceId, column).value_or(1.0f);
+}
+
+std::optional<float> EntitySpawner::modelDataColumn(uint32_t renderInstanceId, const char* column) const {
+    if (!gameHandler_ || !assetManager_ || renderInstanceId == 0) return std::nullopt;
+    const uint64_t guid = unitGuidForInstance(renderInstanceId);
     auto entity = guid ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
-    if (!entity || !entity->isUnit()) return 1.0f;
+    if (!entity || !entity->isUnit()) return std::nullopt;
     const uint32_t displayId = static_cast<const game::Unit&>(*entity).getDisplayId();
     auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
     auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
@@ -753,10 +768,10 @@ float EntitySpawner::kitModelDataScale(uint32_t renderInstanceId, const char* co
     const auto* modelLayout = layouts ? layouts->getLayout("CreatureModelData") : nullptr;
     const uint32_t scaleField = modelLayout ? modelLayout->tryField(column) : 0xFFFFFFFFu;
     const int32_t displayRow = displays ? displays->findRecordById(displayId) : -1;
-    if (displayRow < 0 || !models || scaleField >= models->getFieldCount()) return 1.0f;
+    if (displayRow < 0 || !models || scaleField >= models->getFieldCount()) return std::nullopt;
     const int32_t modelRow = models->findRecordById(
         displays->getUInt32(static_cast<uint32_t>(displayRow), displayLayout ? (*displayLayout)["ModelID"] : 1));
-    if (modelRow < 0) return 1.0f;
+    if (modelRow < 0) return std::nullopt;
     return models->getFloat(static_cast<uint32_t>(modelRow), scaleField);
 }
 

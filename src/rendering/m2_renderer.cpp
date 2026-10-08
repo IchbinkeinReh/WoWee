@@ -989,6 +989,9 @@ void M2Renderer::shutdown() {
         if (entry.texture) entry.texture->destroy(device, alloc);
     }
     textureCache.clear();
+    stripTextures_.clear();
+    clientStrips_.clear();
+    clientStripSets_.clear();
     // The singletons the cache never held. Same reason as above: a
     // unique_ptr<VkTexture> releases nothing on its own.
     if (whiteTexture_) { whiteTexture_->destroy(device, alloc); whiteTexture_.reset(); }

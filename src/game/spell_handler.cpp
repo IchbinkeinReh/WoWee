@@ -2348,6 +2348,11 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             if (resolveUnitPosition(data.casterUnit, casterPos)) {
                 if (auto* renderer = owner_.services().renderer) {
                     if (auto* svs = renderer->getSpellVisualSystem()) {
+                        // Where its kits' chains go (0x00724f50, 0x00715400).
+                        std::optional<glm::vec3> destination;
+                        if ((data.targetFlags & 0x40u) && data.hasDestLocation)
+                            destination = core::coords::canonicalToRender(glm::vec3(data.destX, data.destY, data.destZ));
+                        svs->setUnitCastTargets(data.casterUnit, data.spellId, data.hitTargets, destination);
                         svs->playSpellVisual(visualId, casterPos, /*useImpactKit=*/false,
                                              owner_.resolveUnitRenderInstance(data.casterUnit), false,
                                              data.spellId);
@@ -2520,11 +2525,13 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
         if (auto* renderer = owner_.services().renderer) {
             if (auto* svs = renderer->getSpellVisualSystem()) {
                 if (isAll) {
-                    std::vector<std::pair<uint32_t, uint32_t>> slots;
-                    for (const auto& [slot, aura] : data.updates) slots.emplace_back(slot, aura.spellId);
+                    std::vector<rendering::SpellVisualSystem::AuraSlotSpell> slots;
+                    for (const auto& [slot, aura] : data.updates)
+                        slots.push_back({.slot = slot, .spellId = aura.spellId, .casterGuid = aura.casterGuid});
                     svs->setUnitAuraSlots(data.guid, slots);
                 } else {
-                    for (const auto& [slot, aura] : data.updates) svs->setUnitAuraSlot(data.guid, slot, aura.spellId);
+                    for (const auto& [slot, aura] : data.updates)
+                        svs->setUnitAuraSlot(data.guid, slot, aura.spellId, aura.casterGuid);
                 }
             }
         }

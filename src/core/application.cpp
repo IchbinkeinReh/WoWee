@@ -24,6 +24,8 @@
 #include <chrono>
 #include <limits>
 #include <utility>
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include "core/logger.hpp"
 #include "core/memory_monitor.hpp"
 #include "rendering/renderer.hpp"
@@ -2333,6 +2335,23 @@ void Application::setState(AppState newState) {
                     svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
                         return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
                     });
+                    // A chain's ends (0x007fae90): the unit an instance
+                    // draws, its height, and a game object's place.
+                    svs->setInstanceUnitResolver([this](uint32_t renderInstanceId) -> uint64_t {
+                        return entitySpawner_ ? entitySpawner_->unitGuidForInstance(renderInstanceId) : 0;
+                    });
+                    svs->setUnitHeight([this](uint32_t renderInstanceId) {
+                        return entitySpawner_ ? entitySpawner_->unitGeoBoxHeight(renderInstanceId) : 0.0f;
+                    });
+                    svs->setObjectFrameResolver([this](uint64_t guid, glm::mat4& frame) {
+                        auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
+                        if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
+                        const glm::vec3 at = core::coords::canonicalToRender(
+                            glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
+                        frame = glm::rotate(glm::translate(glm::mat4(1.0f), at),
+                                            entity->getOrientation() + glm::half_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
+                        return true;
+                    });
                     svs->setUnarmedKitsQuery([this](uint64_t guid) {
                         if (gameHandler && guid == gameHandler->getPlayerGuid())
                             return appearanceComposer_ && appearanceComposer_->unarmedKitsShown();
@@ -3863,6 +3882,24 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
             cr->processPendingNormalMaps(4);
         }
     });
+    // Every unit's channel, whose ChannelKit it holds while the channel
+    // lasts (0x0073eb50, 0x0072bc70).
+    if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr; svs && gameHandler) {
+        std::vector<rendering::SpellVisualSystem::ChannelState> channels;
+        const uint16_t channelField = game::fieldIndex(game::UF::UNIT_FIELD_CHANNEL_OBJECT);
+        const uint16_t spellField = game::fieldIndex(game::UF::UNIT_CHANNEL_SPELL);
+        if (channelField != 0xFFFF && spellField != 0xFFFF) {
+            for (const auto& [guid, entity] : gameHandler->getEntityManager().getEntities()) {
+                if (!entity || !entity->isUnit()) continue;
+                const uint32_t spell = entity->getField(spellField);
+                if (spell == 0) continue;
+                const uint64_t object = static_cast<uint64_t>(entity->getField(channelField)) |
+                    (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(channelField + 1))) << 32);
+                channels.push_back({.unitGuid = guid, .spellId = spell, .channelObject = object});
+            }
+        }
+        svs->setUnitChannels(channels);
+    }
     // Fishing lines (0x007221d0): every unit channelling a spell at a
     // bobber - its UNIT_FIELD_CHANNEL_OBJECT a game object of type 17 - with
     // something in its right hand.

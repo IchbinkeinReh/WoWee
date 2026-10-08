@@ -4870,6 +4870,22 @@ bool CharacterRenderer::getInstanceFrame(uint32_t instanceId, glm::mat4& outFram
     return true;
 }
 
+bool CharacterRenderer::getEventPosition(uint32_t instanceId, uint32_t eventId, glm::vec3& out) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return false;
+    const auto& instance = it->second;
+    auto modelIt = models.find(instance.modelId);
+    if (modelIt == models.end()) return false;
+    const auto* event = modelIt->second.data.findEvent(eventId);
+    if (!event) return false;
+    glm::vec4 p(event->position, 1.0f);
+    if (event->bone < instance.boneMatrices.size()) p = instance.boneMatrices[event->bone] * p;
+    const glm::mat4 placement =
+        instance.hasOverrideModelMatrix ? instance.overrideModelMatrix : getModelMatrix(instance);
+    out = glm::vec3(placement * p);
+    return true;
+}
+
 void CharacterRenderer::detachWeapon(uint32_t charInstanceId, uint32_t attachmentId) {
     auto charIt = instances.find(charInstanceId);
     if (charIt == instances.end()) return;
