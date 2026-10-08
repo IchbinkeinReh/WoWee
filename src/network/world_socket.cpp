@@ -12,6 +12,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <chrono>
 #include <thread>
 
@@ -24,10 +25,14 @@ constexpr int kDefaultMaxParsedPacketsPerUpdate = 64;
 constexpr int kAbsoluteMaxParsedPacketsPerUpdate = 220;
 constexpr int kMinParsedPacketsPerUpdate = 8;
 constexpr int kDefaultMaxPacketCallbacksPerUpdate = 48;
-constexpr int kAbsoluteMaxPacketCallbacksPerUpdate = 64;
+constexpr int kAbsoluteMaxPacketCallbacksPerUpdate =
+    static_cast<int>(wowee::network::WorldSocket::kMaxPacketCallbacksPerUpdate);
 constexpr int kMinPacketCallbacksPerUpdate = 1;
 constexpr int kMaxRecvCallsPerUpdate = 64;
 constexpr size_t kMaxRecvBytesPerUpdate = 512 * 1024;
+// Parsed packets the main thread has not taken yet. At this many the pump
+// stops reading the socket rather than going on queueing (see pumpNetworkIO),
+// so it bounds memory without throwing a session away.
 constexpr size_t kMaxQueuedPacketCallbacks = 4096;
 constexpr int kAsyncPumpSleepMs = 2;
 constexpr size_t kRecentPacketHistoryLimit = 96;
@@ -215,6 +220,8 @@ void WorldSocket::disconnect() {
         receiveReadOffset_ = 0;
         parsedPacketsScratch_.clear();
         headerBytesDecrypted = 0;
+        parseDeferred_ = false;
+        callbackQueueFullLogged_ = false;
         packetTraceStart_ = {};
         packetTraceUntil_ = {};
         packetTraceReason_.clear();
@@ -492,15 +499,45 @@ void WorldSocket::pumpNetworkIO() {
         receiveReadOffset_ = 0;
     };
 
+    // Backpressure. The main thread takes packets only between its frames, and
+    // a world load holds it for as long as the load takes - a cold one into
+    // Silvermoon ran 35 seconds - while the server goes on sending. Queueing
+    // all of that overflowed the callback queue, and the overflow disconnected
+    // the session. A full queue now stops the reading instead: what is
+    // unread waits in the kernel, TCP's window holds the server, and nothing
+    // is lost. The reading picks up once the main thread has taken some.
+    size_t queuedCallbacks = 0;
+    {
+        std::lock_guard<std::mutex> callbackLock(callbackMutex_);
+        queuedCallbacks = pendingPacketCallbacks_.size();
+    }
+    if (queuedCallbacks >= kMaxQueuedPacketCallbacks) {
+        if (!callbackQueueFullLogged_) {
+            callbackQueueFullLogged_ = true;
+            LOG_WARNING("World socket callback queue full (", queuedCallbacks,
+                        " packets the main thread has not taken) - reading paused until it catches up");
+        }
+        return;
+    }
+    // Said again only after the queue has properly drained: while the main
+    // thread works off a backlog the queue touches full every few frames.
+    if (queuedCallbacks < kMaxQueuedPacketCallbacks / 2) callbackQueueFullLogged_ = false;
+    const size_t callbackRoom = kMaxQueuedPacketCallbacks - queuedCallbacks;
+
     // Drain the socket. Some servers send an auth response and immediately close; a single recv()
     // may read the response, and a subsequent recv() can return 0 (FIN). If we disconnect right
     // away we lose the buffered response and the UI ends up with a generic "no characters" symptom.
+    //
+    // Not while a recv budget's worth is still waiting to be parsed: with the
+    // parse held to the queue's room, reading on would only move the backlog
+    // from the kernel into the receive buffer until that overflowed.
     bool sawClose = false;
     bool receivedAny = false;
     size_t bytesReadThisTick = 0;
     int readOps = 0;
     while (connected && readOps < kMaxRecvCallsPerUpdate &&
-           bytesReadThisTick < kMaxRecvBytesPerUpdate) {
+           bytesReadThisTick < kMaxRecvBytesPerUpdate &&
+           bufferedBytes() < kMaxRecvBytesPerUpdate) {
         uint8_t buffer[4096];
         ssize_t received = net::portableRecv(sockfd, buffer, sizeof(buffer));
 
@@ -584,19 +621,22 @@ void WorldSocket::pumpNetworkIO() {
         return;
     }
 
-    if (receivedAny) {
+    // Parsed also with nothing new read when the last parse stopped short of
+    // complete packets: once reading has paused, nothing new arrives to start
+    // it again, and those packets would wait on the server's next one.
+    if (receivedAny || parseDeferred_) {
         const bool debugLog = core::Logger::getInstance().shouldLog(core::LogLevel::DEBUG);
-        if (debugLog) {
+        if (debugLog && receivedAny) {
             LOG_DEBUG("World socket read ", bytesReadThisTick, " bytes in ", readOps,
                       " recv call(s), buffered=", bufferedBytes());
         }
         // Hex dump received bytes for auth debugging (debug-only to avoid per-frame string work)
-        if (debugLog && bytesReadThisTick <= 128) {
+        if (debugLog && receivedAny && bytesReadThisTick <= 128) {
             LOG_DEBUG("World socket raw bytes: ",
                       core::toHexString(receiveBuffer.data() + receiveReadOffset_,
                                         receiveBuffer.size() - receiveReadOffset_, true));
         }
-        tryParsePackets();
+        tryParsePackets(callbackRoom);
         if (debugLog && connected && bufferedBytes() > 0) {
             LOG_DEBUG("World socket parse left ", bufferedBytes(),
                      " bytes buffered (awaiting complete packet)");
@@ -617,8 +657,9 @@ void WorldSocket::pumpNetworkIO() {
     }
 }
 
-void WorldSocket::tryParsePackets() {
+void WorldSocket::tryParsePackets(size_t callbackRoom) {
     // World server packets have 4-byte incoming header: size(2) + opcode(2)
+    parseDeferred_ = false;
     int parsedThisTick = 0;
     size_t parseOffset = receiveReadOffset_;
     size_t localHeaderBytesDecrypted = headerBytesDecrypted;
@@ -637,7 +678,10 @@ void WorldSocket::tryParsePackets() {
     } else {
         parsedPacketsLocal.reserve(32);
     }
-    const int maxParsedThisTick = parsedPacketsBudgetPerUpdate();
+    // No more than the callback queue has room for, so it never passes its
+    // bound; the rest stays in the receive buffer for the next tick.
+    const int maxParsedThisTick = static_cast<int>(
+        std::min<size_t>(static_cast<size_t>(parsedPacketsBudgetPerUpdate()), callbackRoom));
     while ((receiveBuffer.size() - parseOffset) >= 4 && parsedThisTick < maxParsedThisTick) {
         uint8_t rawHeader[4] = {0, 0, 0, 0};
         std::memcpy(rawHeader, receiveBuffer.data() + parseOffset, 4);
@@ -771,19 +815,13 @@ void WorldSocket::tryParsePackets() {
         for (auto& packet : *parsedPackets) {
             pendingPacketCallbacks_.push_back(std::move(packet));
         }
-        if (pendingPacketCallbacks_.size() > kMaxQueuedPacketCallbacks) {
-            LOG_ERROR("World socket callback queue overflow (", pendingPacketCallbacks_.size(),
-                      " packets). Disconnecting to recover.");
-            pendingPacketCallbacks_.clear();
-            closeSocketNoJoin();
-            return;
-        }
     }
 
     const size_t buffered = (receiveBuffer.size() >= receiveReadOffset_)
         ? (receiveBuffer.size() - receiveReadOffset_)
         : 0;
     if (parsedThisTick >= maxParsedThisTick && buffered >= 4) {
+        parseDeferred_ = true;
         LOG_DEBUG("World socket parse budget reached (", parsedThisTick,
                  " packets); deferring remaining buffered data=", buffered, " bytes");
     }

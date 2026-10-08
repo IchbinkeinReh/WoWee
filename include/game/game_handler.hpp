@@ -4125,6 +4125,7 @@ private:
     void registerHandler(LogicalOpcode op, void (GameHandler::*handler)(network::Packet&));
     void enqueueIncomingPacket(const network::Packet& packet);
     void enqueueIncomingPacketFront(network::Packet&& packet);
+    [[nodiscard]] bool incomingQueueHasRoomForSocket() const;
     void processQueuedIncomingPackets();
 
     /**

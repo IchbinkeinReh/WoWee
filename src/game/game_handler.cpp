@@ -331,8 +331,10 @@ void GameHandler::updateNetworking() {
     // a line waits one extra tick at most.
     if (chatHandler_) chatHandler_->expireChatAwaitingName();
 
-    // Update socket (processes incoming data and triggers callbacks)
-    if (socket) {
+    // Update socket (processes incoming data and triggers callbacks). Not while
+    // our own queue is too full to take what it would hand over; see
+    // incomingQueueHasRoomForSocket.
+    if (socket && incomingQueueHasRoomForSocket()) {
         auto socketStart = std::chrono::steady_clock::now();
         socket->update();
         float socketMs = std::chrono::duration<float, std::milli>(

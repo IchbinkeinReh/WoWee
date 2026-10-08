@@ -3627,6 +3627,16 @@ void GameHandler::enqueueIncomingPacket(const network::Packet& packet) {
     rxSilence15sLogged_ = false;
 }
 
+// Whether one more socket update could hand over all it may without this
+// queue dropping any of it. A dropped packet is lost for good - a create
+// block, a field update - and nothing notices, while one left with the socket
+// only waits: the socket stops reading once its own queue fills, and TCP holds
+// the server until there is room again.
+bool GameHandler::incomingQueueHasRoomForSocket() const {
+    return pendingIncomingPackets_.size() + network::WorldSocket::kMaxPacketCallbacksPerUpdate <=
+           kMaxQueuedInboundPackets;
+}
+
 void GameHandler::enqueueIncomingPacketFront(network::Packet&& packet) {
     if (pendingIncomingPackets_.size() >= kMaxQueuedInboundPackets) {
         LOG_ERROR("Inbound packet queue overflow while prepending (", pendingIncomingPackets_.size(),
