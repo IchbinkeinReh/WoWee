@@ -1037,6 +1037,25 @@ void SpellVisualSystem::playKitColourFade(uint32_t kitId, uint32_t renderInstanc
             if (start.durationMs != 0) startSwingTrails(renderInstanceId, start);
             continue;
         }
+        if (kit.charProc[k] == spell_kit::kCharProcWearItem && renderInstanceId != 0) {
+            // 0x007265c0 case 17 (0x006f8650, 0x006f8600): Item.dbc's row
+            // for ParamOne, its display in its inventory type's slot.
+            const uint64_t unitGuid = instanceUnitResolver_ ? instanceUnitResolver_(renderInstanceId) : 0;
+            if (!wornItemSink_ || unitGuid == 0 || !cachedAssetManager_) continue;
+            auto itemDbc = cachedAssetManager_->loadDBCOptional("Item.dbc");
+            // WotLK's eight columns: display at 5, inventory type at 6.
+            const auto itemId = static_cast<uint32_t>(static_cast<int32_t>(kit.charParam[k][1]));
+            const int32_t row = itemDbc && itemDbc->getFieldCount() >= 8 ? itemDbc->findRecordById(itemId) : -1;
+            if (row < 0) continue;
+            const uint32_t display = itemDbc->getUInt32(static_cast<uint32_t>(row), 5);
+            const uint32_t inventoryType = itemDbc->getUInt32(static_cast<uint32_t>(row), 6);
+            const int equipSlot =
+                spell_kit::equipSlotForComponentSlot(spell_kit::componentSlotForInventoryType(inventoryType));
+            if (equipSlot < 0 || display == 0) continue;
+            wornItemSink_(unitGuid, equipSlot, display, static_cast<uint8_t>(inventoryType));
+            wornItems_.push_back({.unitGuid = unitGuid, .spellId = spellId, .equipSlot = equipSlot});
+            continue;
+        }
         if (kit.charProc[k] == spell_kit::kCharProcTimedAlpha && renderInstanceId != 0) {
             // 0x007265c0 case 15 (0x0071a940): out over half a second, held,
             // then back.
@@ -1278,6 +1297,15 @@ void SpellVisualSystem::releaseChains(uint64_t unitGuid, uint32_t spellId) {
 
 void SpellVisualSystem::removeUnitSpellEffects(uint64_t unitGuid, uint32_t spellId) {
     releaseChains(unitGuid, spellId);
+    // 0x006f8700: a worn item off again, the unit's own back (0x00723730).
+    for (auto it = wornItems_.begin(); it != wornItems_.end();) {
+        if (it->unitGuid != unitGuid || it->spellId != spellId) {
+            ++it;
+            continue;
+        }
+        if (wornItemSink_) wornItemSink_(unitGuid, it->equipSlot, 0, 0);
+        it = wornItems_.erase(it);
+    }
     // A held animation runs again, unless it was held before (0x006f80b0's
     // +0xd4).
     for (auto it = animationHolds_.begin(); it != animationHolds_.end();) {
@@ -1783,6 +1811,10 @@ void SpellVisualSystem::reset() {
     }
     animationHolds_.clear();
     timedAlphas_.clear();
+    for (const WornItem& worn : wornItems_) {
+        if (wornItemSink_) wornItemSink_(worn.unitGuid, worn.equipSlot, 0, 0);
+    }
+    wornItems_.clear();
     publishClientStrips();
     colourFades_.clear();
     updateUnitColours();

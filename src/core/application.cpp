@@ -2348,6 +2348,19 @@ void Application::setState(AppState newState) {
                             return appearanceComposer_ && appearanceComposer_->sheathState() == core::SheathState::Melee;
                         return entitySpawner_ && entitySpawner_->unitMeleeDrawn(guid);
                     });
+                    // A kit's worn item (CharProc 17): the player's own
+                    // drawing, or another player's equipment.
+                    svs->setWornItemSink([this](uint64_t guid, int equipSlot, uint32_t displayId,
+                                                uint8_t inventoryType) {
+                        if (!gameHandler) return;
+                        if (guid == gameHandler->getPlayerGuid()) {
+                            if (appearanceComposer_)
+                                appearanceComposer_->setItemOverride(equipSlot, displayId, inventoryType);
+                            gameHandler->markOnlineEquipmentDirty();
+                            return;
+                        }
+                        if (entitySpawner_) entitySpawner_->setPlayerItemOverride(guid, equipSlot, displayId, inventoryType);
+                    });
                     svs->setObjectFrameResolver([this](uint64_t guid, glm::mat4& frame) {
                         auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
                         if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;

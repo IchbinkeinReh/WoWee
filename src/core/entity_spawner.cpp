@@ -349,6 +349,35 @@ void EntitySpawner::queuePlayerEquipment(uint64_t guid,
     deferredEquipmentQueue_.push_back({guid, {displayInfoIds, inventoryTypes}});
 }
 
+void EntitySpawner::queuePlayerEquipmentFromServer(uint64_t guid,
+                                                    const std::array<uint32_t, 19>& displayInfoIds,
+                                                    const std::array<uint8_t, 19>& inventoryTypes) {
+    serverEquipment_[guid] = {displayInfoIds, inventoryTypes};
+    queueDressedEquipment(guid);
+}
+
+void EntitySpawner::setPlayerItemOverride(uint64_t guid, int equipSlot, uint32_t displayId, uint8_t inventoryType) {
+    if (equipSlot < 0 || equipSlot >= 19) return;
+    auto& worn = playerItemOverrides_[guid];
+    if (displayId == 0) worn.erase(equipSlot);
+    else worn[equipSlot] = {displayId, inventoryType};
+    if (worn.empty()) playerItemOverrides_.erase(guid);
+    queueDressedEquipment(guid);
+}
+
+void EntitySpawner::queueDressedEquipment(uint64_t guid) {
+    auto base = serverEquipment_.find(guid);
+    if (base == serverEquipment_.end()) return;
+    ServerEquipment dressed = base->second;
+    if (auto worn = playerItemOverrides_.find(guid); worn != playerItemOverrides_.end()) {
+        for (const auto& [slot, item] : worn->second) {
+            dressed.displayInfoIds[static_cast<size_t>(slot)] = item.first;
+            dressed.inventoryTypes[static_cast<size_t>(slot)] = item.second;
+        }
+    }
+    queuePlayerEquipment(guid, dressed.displayInfoIds, dressed.inventoryTypes);
+}
+
 // --- Immediate despawn wrappers ---
 
 void EntitySpawner::clearAllQueues() {

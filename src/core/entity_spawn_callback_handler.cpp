@@ -70,7 +70,7 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
         // Queue equipment compositing instead of doing it immediately -
         // compositeWithRegions is expensive (file I/O + CPU blit + GPU upload)
         // and causes frame stutters if multiple players update at once.
-        entitySpawner_.queuePlayerEquipment(guid, displayInfoIds, inventoryTypes);
+        entitySpawner_.queuePlayerEquipmentFromServer(guid, displayInfoIds, inventoryTypes);
     });
 
     gameHandler_.setOtherPlayerMountCallback([this](uint64_t guid, uint32_t mountDisplayId) {

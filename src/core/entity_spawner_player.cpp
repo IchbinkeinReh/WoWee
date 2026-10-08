@@ -533,6 +533,8 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
 }
 
 void EntitySpawner::despawnPlayer(uint64_t guid) {
+    serverEquipment_.erase(guid);
+    playerItemOverrides_.erase(guid);
     // A player still waiting on its model leaves the queue too. The wait can now
     // be the length of a model load, and one that walked out of range during it
     // was otherwise drawn when the load finished, where it was last seen.

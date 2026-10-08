@@ -315,6 +315,32 @@ bool AppearanceComposer::loadWeaponM2(const std::string& m2Path, pipeline::M2Mod
 // appearance is assembled here while everyone else's goes through
 // EntitySpawner, and the head slot was simply missing from this side: no
 // helmet model, and hair left showing through where one should be.
+void AppearanceComposer::setItemOverride(int equipSlot, uint32_t displayId, uint8_t inventoryType) {
+    if (displayId == 0) itemOverrides_.erase(equipSlot);
+    else itemOverrides_[equipSlot] = {displayId, inventoryType};
+}
+
+std::optional<uint32_t> AppearanceComposer::itemOverrideDisplay(int equipSlot) const {
+    auto it = itemOverrides_.find(equipSlot);
+    if (it == itemOverrides_.end()) return std::nullopt;
+    return it->second.first;
+}
+
+game::Inventory AppearanceComposer::dressedInventory(const game::Inventory& inventory) const {
+    game::Inventory dressed = inventory;
+    for (const auto& [equipSlot, worn] : itemOverrides_) {
+        const auto slot = static_cast<game::EquipSlot>(equipSlot);
+        game::ItemDef item = inventory.getEquipSlot(slot).item;
+        // Shown, whether or not anything is equipped there: only the
+        // display and inventory type are read to draw it.
+        if (item.itemId == 0) item.itemId = 1;
+        item.displayInfoId = worn.first;
+        item.inventoryType = worn.second;
+        dressed.setEquipSlot(slot, item);
+    }
+    return dressed;
+}
+
 void AppearanceComposer::loadEquippedHelm(game::Inventory& inventory) {
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     const uint32_t charInstanceId = renderer_ ? renderer_->getCharacterInstanceId() : 0;
@@ -328,10 +354,13 @@ void AppearanceComposer::loadEquippedHelm(game::Inventory& inventory) {
     if (!gameHandler_->isHelmVisible()) return;
 
     const auto& headSlot = inventory.getEquipSlot(game::EquipSlot::HEAD);
-    if (headSlot.empty()) return;
-    const auto* info = gameHandler_->getItemInfo(headSlot.item.itemId);
-    const uint32_t displayId = info && info->valid ? info->displayInfoId
-                                                   : headSlot.item.displayInfoId;
+    // A spell's worn helm (CharProc 17) over the equipped one.
+    uint32_t displayId = itemOverrideDisplay(static_cast<int>(game::EquipSlot::HEAD)).value_or(0);
+    if (displayId == 0) {
+        if (headSlot.empty()) return;
+        const auto* info = gameHandler_->getItemInfo(headSlot.item.itemId);
+        displayId = info && info->valid ? info->displayInfoId : headSlot.item.displayInfoId;
+    }
     if (displayId == 0) return;
 
     uint8_t raceId = 0;
@@ -404,8 +433,8 @@ void AppearanceComposer::attachEquippedWeapons() {
     // The shoulders (0x004ef840).
     {
         const auto& shoulders = inventory.getEquipSlot(game::EquipSlot::SHOULDERS);
-        uint32_t shoulderDisplay = 0;
-        if (!shoulders.empty()) {
+        uint32_t shoulderDisplay = itemOverrideDisplay(static_cast<int>(game::EquipSlot::SHOULDERS)).value_or(0);
+        if (shoulderDisplay == 0 && !shoulders.empty()) {
             const auto* info = gameHandler_->getItemInfo(shoulders.item.itemId);
             shoulderDisplay = info && info->valid ? info->displayInfoId : shoulders.item.displayInfoId;
         }

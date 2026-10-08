@@ -232,6 +232,40 @@ constexpr bool timedAlphaOver(const TimedAlpha& t, uint32_t nowMs) {
     return static_cast<int32_t>(nowMs - t.endMs) >= 0;
 }
 
+/// 17: an item, ParamOne chopped, worn in its armour slot while the effect
+///    lasts (0x006f8650, 0x006f8600, 0x006f82d0): Item.dbc's display (+0x14)
+///    in the character component's slot for its inventory type (+0x18,
+///    0x004e7a30); the unit's own comes back as it goes (0x006f8700,
+///    0x00723730).
+inline constexpr uint32_t kCharProcWearItem = 17;
+/// 0x004e7a30: the character component's item slot for an inventory type -
+/// head, shoulders, shirt, chest (and robe), belt, legs, boots, wrists,
+/// gloves, tabard, cape - and 12, none, for the rest.
+constexpr uint32_t componentSlotForInventoryType(uint32_t inventoryType) {
+    switch (inventoryType) {
+        case 1: return 0;
+        case 3: return 1;
+        case 4: return 2;
+        case 5:
+        case 20: return 3;
+        case 6: return 4;
+        case 7: return 5;
+        case 8: return 6;
+        case 9: return 7;
+        case 10: return 8;
+        case 19: return 9;
+        case 16: return 10;
+        default: return 12;
+    }
+}
+/// The equipment slot each of those component slots shows; -1 for none.
+constexpr int equipSlotForComponentSlot(uint32_t slot) {
+    constexpr int kEquip[11] = {0 /* head */,  2 /* shoulders */, 3 /* shirt */, 4 /* chest */,
+                                5 /* waist */, 6 /* legs */,      7 /* feet */,  8 /* wrists */,
+                                9 /* hands */, 18 /* tabard */,   14 /* back */};
+    return slot < 11 ? kEquip[slot] : -1;
+}
+
 /// 0x007265c0 cases 1 and 13 colour the unit unless it is a creature whose
 /// cache row has type flag 0x40 (+0x964 +0xc) and the spell is aimed at
 /// enemies (0x007fe1b0 answers 2).

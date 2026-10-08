@@ -173,6 +173,12 @@ public:
     /// kit's swing trails need (0x00715ba0).
     using MeleeDrawnQuery = std::function<bool(uint64_t unitGuid)>;
     void setMeleeDrawnQuery(MeleeDrawnQuery query) { meleeDrawnQuery_ = std::move(query); }
+    /// Where a kit's worn item goes (CharProc 17): the unit, the equipment
+    /// slot, the item's display and inventory type; display 0 gives the
+    /// unit its own back (0x006f82d0, 0x00723730).
+    using WornItemSink = std::function<void(uint64_t unitGuid, int equipSlot, uint32_t displayId,
+                                            uint8_t inventoryType)>;
+    void setWornItemSink(WornItemSink sink) { wornItemSink_ = std::move(sink); }
     /// Where an object that is not a unit stands and faces (a game object a
     /// channel is aimed at), for a chain's end (0x007fae90).
     using ObjectFrameResolver = std::function<bool(uint64_t guid, glm::mat4& frame)>;
@@ -360,6 +366,14 @@ private:
         bool wasHeld = false;
     };
     std::vector<AnimationHold> animationHolds_;
+    /// CharProc 17's worn items, until the unit's effects of the spell go.
+    struct WornItem {
+        uint64_t unitGuid = 0;
+        uint32_t spellId = 0;
+        int equipSlot = -1;
+    };
+    std::vector<WornItem> wornItems_;
+    WornItemSink wornItemSink_;
     /// The light tint playing (CharProc 6), and handed to the sink.
     std::optional<spell_kit::LightTint> lightTint_;
     bool lightTinted_ = false;
