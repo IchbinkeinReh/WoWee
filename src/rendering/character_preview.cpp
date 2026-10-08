@@ -441,8 +441,9 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
     }
 
     // Remove existing instance.
-    // Must wait for GPU to finish - compositePass() may have recorded draw commands
-    // referencing this instance's bone buffers earlier in the current frame.
+    // Must wait for GPU to finish - an earlier frame's compositePass() may still
+    // be drawing this instance's bone buffers. This frame's is recorded after
+    // the interface, so it sees the instance as it is left here.
     if (instanceId_ > 0) {
         if (vkCtx_) vkDeviceWaitIdle(vkCtx_->getDevice());
         charRenderer_->removeInstance(instanceId_);
@@ -1295,7 +1296,8 @@ void CharacterPreview::update(float deltaTime) {
 }
 
 void CharacterPreview::render() {
-    // No-op - actual rendering happens in compositePass() called from Renderer::beginFrame()
+    // No-op - actual rendering happens in compositePass(), which Renderer::endFrame
+    // records after the scene's passes
 }
 
 void CharacterPreview::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {

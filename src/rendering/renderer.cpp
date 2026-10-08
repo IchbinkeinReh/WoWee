@@ -1607,6 +1607,9 @@ void Renderer::endFrame() {
         vkCtx->gpuMark(currentCmd, "water refraction copy");
     }
 
+    // After the scene's passes, before the overlay pass that shows them.
+    recordPreviewComposites();
+
     // The picture is finished and out of every pass that drew it: the one
     // point where the shafts can copy it down, before the overlay pass opens.
     recordScreenEffects();
@@ -5495,6 +5498,29 @@ void Renderer::recordScreenEffects() {
                            vkCtx->getSwapchainExtent(), in);
 }
 
+void Renderer::recordPreviewComposites() {
+    // Here, outside every pass of the scene, and not as a pre-pass ahead of it.
+    //
+    // A preview draws 4x multisampled into its own target. As a pre-pass it
+    // left its pipeline bound when the scene pass opened, and at character
+    // select - no world, so no shadow pass and no draw in the scene pass to
+    // bind anything else - nothing replaced it. With the scene at 2x, NVIDIA
+    // (591.86, RTX 2070 SUPER) then lost the device inside the empty scene
+    // pass on every launch: "invalid write at 0x0", the queue last reaching
+    // the scene pass and not its end. Leaving the pipeline unbound, drawing
+    // the preview at the scene's 2x, or a scene at 1x or 4x, each kept the
+    // device; validation has nothing to say, since a pipeline bound across
+    // passes is legal until something draws with it. After the scene, the
+    // only pass left to open is the single-sampled overlay - which is also
+    // the pass that samples the previews, so they are still drawn first.
+    if (activePreviews_.empty() || !vkCtx || currentCmd == VK_NULL_HANDLE) return;
+    const uint32_t frame = vkCtx->getCurrentFrame();
+    for (auto* preview : activePreviews_) {
+        if (preview && preview->isModelLoaded()) preview->compositePass(currentCmd, frame);
+    }
+    vkCtx->gpuMark(currentCmd, "character previews");
+}
+
 void Renderer::recordSunShafts() {
     if (!sunShafts_ || currentCmd == VK_NULL_HANDLE) return;
     SunShafts::FrameInputs in;
@@ -5572,16 +5598,8 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
             }
         });
 
-    // Character preview composites (standalone)
-    renderGraph_->addPass("preview_composite", {}, {},
-        [this](VkCommandBuffer cmd) {
-            uint32_t frame = vkCtx->getCurrentFrame();
-            for (auto* preview : activePreviews_) {
-                if (preview && preview->isModelLoaded())
-                    preview->compositePass(cmd, frame);
-            }
-            if (!activePreviews_.empty()) vkCtx->gpuMark(cmd, "character previews");
-        });
+    // The character previews are not a pre-pass: endFrame records them once
+    // the scene's passes are closed (recordPreviewComposites says why).
 
     // Shadow pre-pass → outputs shadow_depth
     renderGraph_->addPass("shadow_pass", {}, {shadowDepth},

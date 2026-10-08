@@ -749,6 +749,10 @@ private:
     bool worldDrawnThisFrame_ = false;
     void recordSunShafts();
 
+    /// The character previews' off-screen passes (character select, the
+    /// paperdoll, portraits), recorded once the scene's passes are closed.
+    void recordPreviewComposites();
+
     // The client's glow and death passes (ffxGlow, ffxDeath), built from the
     // finished frame like the shafts and drawn in the overlay pass under them.
     std::unique_ptr<ScreenEffects> screenEffects_;
