@@ -128,6 +128,7 @@ private:
 
     bool renderingEnabled_ = true;
     float deltaTime_ = 0.0f;
+    float glareDiagTimer_ = 0.0f;  // WOWEE_GLARE_DIAG: seconds to the next log
     // How much of each glare shows, stepped toward its target each frame.
     float sunGlare_ = 0.0f;
     float moonGlare_ = 0.0f;
