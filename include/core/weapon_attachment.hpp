@@ -408,6 +408,30 @@ constexpr std::optional<SheathState> spellSheathState(const SpellSheathInput& in
     return out;
 }
 
+/// 0x0073a6c0: a kit's LeftWeaponEffect (SpellVisualKit +0x24) hangs at the
+/// left hand, 2, its RightWeaponEffect (+0x28) at the right, 1 - the hands
+/// of the unit's model, where the weapons were before the kit put them
+/// away (0x00744790, 0x006f8c50).
+constexpr uint32_t kitWeaponEffectAttachment(bool left) {
+    return left ? attachment::kHandLeft : attachment::kHandRight;
+}
+
+/// 0x006f8c50 (CEffect::UpdateAttachment): an effect's model scale on a
+/// unit - its CreatureModelData AttachedEffectScale (+0x60) times the
+/// SpellVisualEffectName Scale (+0x10) - kept within the effect's
+/// MinAllowedScale and MaxAllowedScale (+0x14, +0x18) as the attachment
+/// point's own scale makes it.
+constexpr float kitEffectScale(float attachedEffectScale, float effectScale, float attachmentScale,
+                               float minScale, float maxScale) {
+    float scale = attachedEffectScale * effectScale;
+    const float shown = attachmentScale * scale;
+    if (shown > 1e-6f) {
+        if (maxScale < shown) scale = scale / shown * maxScale;
+        else if (shown < minScale) scale = scale * (minScale / shown);
+    }
+    return scale;
+}
+
 /// 0x004ef840: a shoulder display's first model (ItemDisplayInfo +4, with
 /// its texture +0xc) goes on the left shoulder, 6; its second (+8, +0x10)
 /// on the right, 5.

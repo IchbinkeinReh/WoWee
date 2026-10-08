@@ -10,6 +10,7 @@
 #include "pipeline/m2_loader.hpp"
 #include "core/application.hpp"
 #include "core/logger.hpp"
+#include "core/weapon_attachment.hpp"
 #include "audio/audio_engine.hpp"
 #include <algorithm>
 #include <array>
@@ -84,6 +85,11 @@ void SpellVisualSystem::loadSpellVisualDbc() {
     const uint32_t fxScaleField = fxLayout ? fxLayout->tryField("Scale") : 0xFFFFFFFFu;
     std::unordered_map<uint32_t, std::string> effectPaths; // effectNameId → path
     std::unordered_map<uint32_t, float> effectScales;      // effectNameId → Scale
+    // MinAllowedScale and MaxAllowedScale (+0x14, +0x18), which 0x006f8c50
+    // keeps an attached effect within.
+    const uint32_t fxMinScaleField = fxLayout ? fxLayout->tryField("MinAllowedScale") : 0xFFFFFFFFu;
+    const uint32_t fxMaxScaleField = fxLayout ? fxLayout->tryField("MaxAllowedScale") : 0xFFFFFFFFu;
+    std::unordered_map<uint32_t, std::pair<float, float>> effectAllowedScales;
     for (uint32_t i = 0; i < fxDbc->getRecordCount(); ++i) {
         uint32_t id   = fxDbc->getUInt32(i, 0);
         std::string p = fxDbc->getString(i, fxFilePathField);
@@ -94,6 +100,8 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             effectPaths[id] = p;
             if (fxScaleField < fxDbc->getFieldCount())
                 effectScales[id] = fxDbc->getFloat(i, fxScaleField);
+            if (fxMinScaleField < fxDbc->getFieldCount() && fxMaxScaleField < fxDbc->getFieldCount())
+                effectAllowedScales[id] = {fxDbc->getFloat(i, fxMinScaleField), fxDbc->getFloat(i, fxMaxScaleField)};
         }
     }
 
@@ -112,6 +120,29 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                     eff = kitDbc->getUInt32(i, kitFields[k]);
             }
             if (eff) kitToEffectName[kitId] = eff;
+        }
+    }
+
+    // A kit's LeftWeaponEffect and RightWeaponEffect (+0x24, +0x28), which
+    // 0x0073a6c0 hangs in the hands.
+    std::unordered_map<uint32_t, std::vector<KitWeaponEffect>> kitWeaponEffects;  // kitId → its
+    if (kitDbc && kitDbc->isLoaded() && kitLayout) {
+        const uint32_t leftField = kitLayout->tryField("LeftWeaponEffect");
+        const uint32_t rightField = kitLayout->tryField("RightWeaponEffect");
+        for (uint32_t i = 0; i < kitDbc->getRecordCount(); ++i) {
+            for (const auto& [field, left] : {std::pair{leftField, true}, std::pair{rightField, false}}) {
+                if (field >= kitDbc->getFieldCount()) continue;
+                const uint32_t effect = kitDbc->getUInt32(i, field);
+                auto pathIt = effect ? effectPaths.find(effect) : effectPaths.end();
+                if (pathIt == effectPaths.end()) continue;
+                KitWeaponEffect fx{.modelPath = pathIt->second, .left = left};
+                if (auto it = effectScales.find(effect); it != effectScales.end()) fx.scale = it->second;
+                if (auto it = effectAllowedScales.find(effect); it != effectAllowedScales.end()) {
+                    fx.minScale = it->second.first;
+                    fx.maxScale = it->second.second;
+                }
+                kitWeaponEffects[kitDbc->getUInt32(i, 0)].push_back(std::move(fx));
+            }
         }
     }
 
@@ -204,6 +235,16 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                 missile.soundId = static_cast<uint32_t>(std::max(svInt(i, svMissileSoundField, 0), 0));
                 missileVisuals_[vid] = std::move(missile);
             }
+        }
+
+        // The precast and cast kits' weapon effects.
+        if (svPrecastKitField < svFc) {
+            auto fxIt = kitWeaponEffects.find(svDbc->getUInt32(i, svPrecastKitField));
+            if (fxIt != kitWeaponEffects.end()) precastWeaponEffects_[vid] = fxIt->second;
+        }
+        if (svCastKitField < svFc) {
+            auto fxIt = kitWeaponEffects.find(svDbc->getUInt32(i, svCastKitField));
+            if (fxIt != kitWeaponEffects.end()) castWeaponEffects_[vid] = fxIt->second;
         }
 
         // Precast path: PrecastKit → SpecialEffect0/BaseEffect
@@ -356,6 +397,11 @@ void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec
     if (!cachedAssetManager_) { LOG_WARNING("SpellVisual: no AssetManager"); return; }
 
     if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+
+    // The precast kit's weapon effects, for as long as it plays.
+    if (auto fxIt = precastWeaponEffects_.find(visualId); fxIt != precastWeaponEffects_.end()) {
+        playKitWeaponEffects(fxIt->second, attachInstanceId, true, castTimeMs);
+    }
 
     // Try precast path first, fall back to cast path
     auto pathIt = spellVisualPrecastPath_.find(visualId);
@@ -520,6 +566,13 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
             audio::AudioEngine::instance().playSound3D(sound->data, worldPosition, sound->volume);
     }
 
+    // The cast kit's weapon effects.
+    if (!useImpactKit) {
+        if (auto fxIt = castWeaponEffects_.find(visualId); fxIt != castWeaponEffects_.end()) {
+            playKitWeaponEffects(fxIt->second, attachInstanceId, false, 0);
+        }
+    }
+
     // Select cast or impact path map; fall back to the other if missing
     auto& primaryMap = useImpactKit ? spellVisualImpactPath_ : spellVisualCastPath_;
     auto& fallbackMap = useImpactKit ? spellVisualCastPath_ : spellVisualImpactPath_;
@@ -600,6 +653,46 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
             m2Renderer_->restartInstanceAnimation(leftId);
             activeSpellVisuals_.push_back({.instanceId = leftId, .elapsed = 0.0f, .duration = duration, .isPrecast = false, .attachmentId = 2 /* LeftHand */, .attachInstanceId = attachInstanceId});
         }
+    }
+}
+
+void SpellVisualSystem::playKitWeaponEffects(const std::vector<KitWeaponEffect>& effects,
+                                             uint32_t attachInstanceId, bool isPrecast, uint32_t castTimeMs) {
+    // 0x0073a6c0: only on a unit, and one whose model holds them
+    // (CreatureModelData +4 without 0x10).
+    if (effects.empty() || attachInstanceId == 0 || !renderer_ || !m2Renderer_) return;
+    auto* charRenderer = renderer_->getCharacterRenderer();
+    if (!charRenderer) return;
+    const std::optional<float> attachedEffectScale =
+        weaponEffectHolder_ ? weaponEffectHolder_(attachInstanceId) : std::optional<float>(1.0f);
+    if (!attachedEffectScale) return;
+    for (const KitWeaponEffect& fx : effects) {
+        const uint32_t attachId = core::kitWeaponEffectAttachment(fx.left);
+        glm::mat4 attachMat;
+        if (!charRenderer->getAttachmentTransform(attachInstanceId, attachId, attachMat)) continue;
+        const uint32_t modelId = acquireEffectModel(fx.modelPath);
+        if (modelId == 0) continue;
+        // 0x006f8c50: the model's scale, held within the effect's allowed
+        // scales as the hand's scale makes it.
+        const float scale = core::kitEffectScale(*attachedEffectScale, fx.scale, glm::length(glm::vec3(attachMat[0])),
+                                                 fx.minScale, fx.maxScale);
+        const uint32_t instanceId = m2Renderer_->createInstance(modelId, glm::vec3(attachMat[3]), glm::vec3(0.0f), 1.0f);
+        if (instanceId == 0) continue;
+        m2Renderer_->restartInstanceAnimation(instanceId);
+        m2Renderer_->setInstanceTransform(instanceId, attachMat * glm::scale(glm::mat4(1.0f), glm::vec3(scale)));
+        // With its kit: a precast kit's for the cast, a cast kit's as its
+        // model plays.
+        float duration;
+        const float animDurMs = m2Renderer_->getInstanceAnimDuration(instanceId);
+        if (isPrecast && castTimeMs >= 500) {
+            duration = std::clamp(static_cast<float>(castTimeMs) / 1000.0f, 0.5f, 30.0f);
+        } else {
+            duration = animDurMs > 100.0f ? std::clamp(animDurMs / 1000.0f, 0.5f, SPELL_VISUAL_MAX_DURATION)
+                                          : SPELL_VISUAL_DEFAULT_DURATION;
+        }
+        activeSpellVisuals_.push_back({.instanceId = instanceId, .elapsed = 0.0f, .duration = duration,
+                                       .isPrecast = isPrecast, .attachmentId = attachId,
+                                       .attachInstanceId = attachInstanceId, .scale = scale});
     }
 }
 
@@ -915,6 +1008,7 @@ void SpellVisualSystem::update(float deltaTime) {
             if (it->attachmentId != 0 && it->attachInstanceId != 0 && charRenderer) {
                 glm::mat4 attachMat;
                 if (charRenderer->getAttachmentTransform(it->attachInstanceId, it->attachmentId, attachMat)) {
+                    if (it->scale != 1.0f) attachMat = attachMat * glm::scale(glm::mat4(1.0f), glm::vec3(it->scale));
                     m2Renderer_->setInstanceTransform(it->instanceId, attachMat);
                 }
             } else if (it->followsUnit && charRenderer) {

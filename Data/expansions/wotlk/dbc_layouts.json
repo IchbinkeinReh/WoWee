@@ -92,7 +92,8 @@
     "ModelPath": 2,
     "ModelScale": 4,
     "MountHeight": 16,
-    "GeoBoxMinX": 17
+    "GeoBoxMinX": 17,
+    "AttachedEffectScale": 24
   },
   "Emotes": {
     "AnimID": 2,
@@ -382,6 +383,8 @@
   "SpellVisualEffectName": {
     "FilePath": 2,
     "ID": 0,
+    "MaxAllowedScale": 6,
+    "MinAllowedScale": 5,
     "Name": 1,
     "Scale": 4
   },

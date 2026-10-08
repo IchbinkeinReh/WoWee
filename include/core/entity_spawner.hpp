@@ -230,6 +230,10 @@ public:
     /// A display's CreatureModelData Flags (+4); nothing when a record is
     /// missing (0x00717a20).
     std::optional<uint32_t> creatureModelFlags(uint32_t displayId) const;
+    /// Whether the unit a CharacterRenderer instance draws holds a kit's
+    /// weapon effects (CreatureModelData +4 without 0x10, 0x0073a6c0), and
+    /// then its AttachedEffectScale (+0x60, 0x006f8c50).
+    std::optional<float> kitWeaponEffectHolder(uint32_t renderInstanceId) const;
 
     /// Every unit's and corpse's blob shadow for this frame (0x00793980): a
     /// corpse that is not bones by the bounds of its model's sequence; a unit by its

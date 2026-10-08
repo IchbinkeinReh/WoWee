@@ -647,6 +647,37 @@ SpellSheathInput EntitySpawner::spellSheathInput(uint32_t spellId, uint32_t disp
     return in;
 }
 
+std::optional<float> EntitySpawner::kitWeaponEffectHolder(uint32_t renderInstanceId) const {
+    if (!gameHandler_ || !assetManager_ || renderInstanceId == 0) return std::nullopt;
+    // The unit the instance draws: the player's own, or another's.
+    uint64_t guid = 0;
+    if (renderer_ && renderer_->getCharacterInstanceId() == renderInstanceId) guid = gameHandler_->getPlayerGuid();
+    for (const auto* instances : {&creatureInstances_, &playerInstances_}) {
+        for (const auto& [unitGuid, instanceId] : *instances) {
+            if (guid == 0 && instanceId == renderInstanceId) guid = unitGuid;
+        }
+    }
+    auto entity = guid ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
+    if (!entity || !entity->isUnit()) return 1.0f;
+    const uint32_t displayId = static_cast<const game::Unit&>(*entity).getDisplayId();
+    // 0x0073a6c0 and 0x006f8c50: CreatureModelData +4 flag 0x10 holds no
+    // weapon effect; +0x60, AttachedEffectScale, sizes one.
+    const auto flags = creatureModelFlags(displayId);
+    if (flags && (*flags & 0x10u) != 0) return std::nullopt;
+    auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
+    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* displayLayout = layouts ? layouts->getLayout("CreatureDisplayInfo") : nullptr;
+    const auto* modelLayout = layouts ? layouts->getLayout("CreatureModelData") : nullptr;
+    const uint32_t scaleField = modelLayout ? modelLayout->tryField("AttachedEffectScale") : 0xFFFFFFFFu;
+    const int32_t displayRow = displays ? displays->findRecordById(displayId) : -1;
+    if (displayRow < 0 || !models || scaleField >= models->getFieldCount()) return 1.0f;
+    const int32_t modelRow = models->findRecordById(
+        displays->getUInt32(static_cast<uint32_t>(displayRow), displayLayout ? (*displayLayout)["ModelID"] : 1));
+    if (modelRow < 0) return 1.0f;
+    return models->getFloat(static_cast<uint32_t>(modelRow), scaleField);
+}
+
 void EntitySpawner::onUnitSpellCastBegin(uint64_t guid, uint32_t spellId) {
     auto it = unitSheath_.find(guid);
     if (it == unitSheath_.end() || it->second.instanceId == 0 || !gameHandler_) return;

@@ -27,6 +27,7 @@
 #include "core/logger.hpp"
 #include "core/memory_monitor.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "rendering/loot_sparkles.hpp"
 #include "rendering/vk_context.hpp"
 #include "audio/npc_voice_manager.hpp"
@@ -2288,6 +2289,14 @@ void Application::setState(AppState newState) {
                         entitySpawner_->onUnitAttackSwing(attacker);
                     }
                 });
+                // Which units hold a kit's weapon effects, and at what scale
+                // (0x0073a6c0, 0x006f8c50).
+                if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr) {
+                    svs->setWeaponEffectHolder([this](uint32_t renderInstanceId) -> std::optional<float> {
+                        if (!entitySpawner_) return 1.0f;
+                        return entitySpawner_->kitWeaponEffectHolder(renderInstanceId);
+                    });
+                }
                 // A text emote puts the player's weapons away (0x006dd9e0).
                 gameHandler->setTextEmoteSentCallback([this](uint32_t textEmoteId) {
                     if (appearanceComposer_) appearanceComposer_->onTextEmote(textEmoteId);
@@ -5158,7 +5167,7 @@ void Application::setupUICallbacks() {
 
     // ── Animation: death, respawn, swing, hit, spell, emote, charge, etc. ──
     animationCallbacks_ = std::make_unique<AnimationCallbackHandler>(
-        *entitySpawner_, *renderer, *gameHandler, *appearanceComposer_);
+        *entitySpawner_, *renderer, *gameHandler);
     animationCallbacks_->setupCallbacks();
 
     // ── NPC interaction: greeting, farewell, vendor, aggro voice ──

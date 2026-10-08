@@ -5,6 +5,8 @@
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
+#include <functional>
+#include <optional>
 #include <glm/glm.hpp>
 
 #include "rendering/spell_missile.hpp"
@@ -95,6 +97,13 @@ public:
                             const MissileEnd& to, std::vector<MissileEnd> impacts,
                             const MissileTrajectory* trajectory = nullptr);
 
+    /// Whether the unit drawn by a CharacterRenderer instance holds a kit's
+    /// weapon effects - its CreatureModelData +4 lacks 0x10 (0x0073a6c0,
+    /// 0x006f8c50) - and then its AttachedEffectScale (+0x60); nothing when
+    /// it does not.
+    using WeaponEffectHolder = std::function<std::optional<float>(uint32_t renderInstanceId)>;
+    void setWeaponEffectHolder(WeaponEffectHolder holder) { weaponEffectHolder_ = std::move(holder); }
+
     // Advance lifetime timers and remove expired instances.
     void update(float deltaTime);
 
@@ -120,7 +129,24 @@ private:
         // unit's own frame, so it moves and turns with it.
         bool followsUnit = false;
         glm::vec3 followOffset{0.0f};  // in the unit's frame
+        float scale = 1.0f;  // a kit weapon effect's, in its attachment's frame
     };
+
+    /// A kit's LeftWeaponEffect or RightWeaponEffect: its
+    /// SpellVisualEffectName model, Scale and allowed scales.
+    struct KitWeaponEffect {
+        std::string modelPath;
+        bool left = false;
+        float scale = 1.0f;
+        float minScale = 0.0f;
+        float maxScale = 1e30f;
+    };
+    /// 0x0073a6c0: hang a kit's weapon effects in the caster's hands.
+    void playKitWeaponEffects(const std::vector<KitWeaponEffect>& effects, uint32_t attachInstanceId,
+                              bool isPrecast, uint32_t castTimeMs);
+    std::unordered_map<uint32_t, std::vector<KitWeaponEffect>> precastWeaponEffects_;  // visualId → its precast kit's
+    std::unordered_map<uint32_t, std::vector<KitWeaponEffect>> castWeaponEffects_;     // visualId → its cast kit's
+    WeaponEffectHolder weaponEffectHolder_;
 
     /// Parent the effect just added to its unit, from where it was placed.
     void followUnitFromSpawn(const glm::vec3& spawnPos);

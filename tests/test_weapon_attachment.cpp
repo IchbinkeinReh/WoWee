@@ -390,3 +390,19 @@ TEST_CASE("another unit takes the field's state whatever it was in (0x00737aa0)"
                             .behavior = 0, .activePlayer = false, .field = S::Melee};
     CHECK(animationSheathState(in) == S::Melee);
 }
+
+TEST_CASE("a kit's weapon effects hang in the hands (0x0073a6c0)", "[attachment]") {
+    CHECK(kitWeaponEffectAttachment(true) == at::kHandLeft);
+    CHECK(kitWeaponEffectAttachment(false) == at::kHandRight);
+}
+
+TEST_CASE("an attached effect is sized as 0x006f8c50 sizes it", "[attachment]") {
+    // The model's AttachedEffectScale times the effect's Scale.
+    CHECK(kitEffectScale(1.5f, 2.0f, 1.0f, 0.0f, 100.0f) == Catch::Approx(3.0f));
+    // Held within the allowed scales as the attachment shows it.
+    CHECK(kitEffectScale(1.0f, 4.0f, 2.0f, 0.0f, 4.0f) == Catch::Approx(2.0f));
+    CHECK(kitEffectScale(1.0f, 0.1f, 1.0f, 0.5f, 4.0f) == Catch::Approx(0.5f));
+    CHECK(kitEffectScale(1.0f, 0.1f, 2.0f, 0.5f, 4.0f) == Catch::Approx(0.25f));
+    // Nothing to hold when nothing shows.
+    CHECK(kitEffectScale(1.0f, 0.0f, 1.0f, 0.5f, 4.0f) == Catch::Approx(0.0f));
+}

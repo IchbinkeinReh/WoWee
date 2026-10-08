@@ -2118,9 +2118,10 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         }
     }
 
-    // Trigger cast visual effect (precast/cast kit M2) at the caster's position.
-    // Skip profession spells (crafting has no flashy cast effects).
-    if (!owner_.isProfessionSpell(data.spellId) && !rangedWeaponAttack) {
+    // Trigger cast visual effect (precast/cast kit M2) at the caster's position:
+    // every spell's, a profession's too - its kit hangs the tool in the hand
+    // (0x0073a6c0).
+    if (!rangedWeaponAttack) {
         triggerCastVisual(data.spellId, data.casterUnit, data.castTime);
     }
 }
@@ -2332,9 +2333,9 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // (SpellVisualSystem::playSpellVisual, 0x00745230). A sound by the
     // spell's school was played here at SMSG_SPELL_GO instead.
 
-    // Trigger spell visual effects: cast kit at caster + impact kit at each hit target.
-    // Skip profession spells and melee (schoolMask == 1) abilities.
-    if (!owner_.isProfessionSpell(data.spellId) && !rangedWeaponAttack) {
+    // Trigger spell visual effects: cast kit at caster + impact kit at each
+    // hit target, for every spell but a ranged weapon's shot.
+    if (!rangedWeaponAttack) {
         uint32_t visualId = resolveSpellVisualId(data.spellId);
         if (visualId != 0) {
             // Cast-complete visual at caster (for instant spells that skip SPELL_START)

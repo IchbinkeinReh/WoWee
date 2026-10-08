@@ -99,8 +99,6 @@ public:
     /// Where the item in a hand is put away; NONE when the hand is empty.
     [[nodiscard]] rendering::SheathSpot sheathSpot(game::EquipSlot slot) const;
 
-    // Mining casts temporarily replace the held main-hand model with a pickaxe.
-    void showMiningPick(bool show);
 
 
     // Saved skin state accessors (used by game_screen.cpp for equipment re-compositing)
@@ -172,8 +170,6 @@ private:
         bool operator==(const AnimationSheathKey&) const = default;
     };
     AnimationSheathKey animationSheathKey_;
-    bool showingMiningPick_ = false;
-    uint32_t miningPickInstanceId_ = 0;
     /// The stand state and channel object last seen, for 0x0073f060 and
     /// 0x0073a520.
     uint8_t standSeen_ = 0;

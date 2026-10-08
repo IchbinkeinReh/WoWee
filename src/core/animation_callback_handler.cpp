@@ -26,12 +26,10 @@ namespace wowee { namespace core {
 AnimationCallbackHandler::AnimationCallbackHandler(
     EntitySpawner& entitySpawner,
     rendering::Renderer& renderer,
-    game::GameHandler& gameHandler,
-    AppearanceComposer& appearanceComposer)
+    game::GameHandler& gameHandler)
     : entitySpawner_(entitySpawner)
     , renderer_(renderer)
     , gameHandler_(gameHandler)
-    , appearanceComposer_(appearanceComposer)
 {
 }
 
@@ -588,7 +586,7 @@ void AnimationCallbackHandler::setupCallbacks() {
                     }
                 }
             } else if (isMining) {
-                appearanceComposer_.showMiningPick(true);
+                // The pick is the mining kit's weapon effect (0x0073a6c0).
                 uint32_t mineAnim = pickFirst({
                     rendering::anim::ATTACK_1H,
                     rendering::anim::EMOTE_WORK,
@@ -726,7 +724,6 @@ void AnimationCallbackHandler::setupCallbacks() {
         } else {
             // Cast/channel ended - plays finalization anim completely then returns to idle
             if (isLocalPlayer) {
-                appearanceComposer_.showMiningPick(false);
                 auto* ac = renderer_.getAnimationController();
                 if (ac) {
                     ac->setSeatedLoopAnimation(0);
