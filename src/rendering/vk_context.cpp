@@ -7,6 +7,8 @@
 #include <fstream>
 #include "rendering/vk_utils.hpp"
 #include "core/logger.hpp"
+#include "core/env_flag.hpp"
+#include "core/frame_profiler.hpp"
 #include "pipeline/blp_loader.hpp"
 #include <VkBootstrap.h>
 #include <SDL3/SDL_vulkan.h>
@@ -15,6 +17,8 @@
 #include <cstring>
 #include <cstdio>
 #include <filesystem>
+#include <iterator>
+#include <optional>
 #include <string>
 
 namespace wowee {
@@ -1395,8 +1399,9 @@ void VkContext::createGpuQueryPools() {
             return;
         }
     }
-    LOG_INFO("GPU timing enabled: ", timestampPeriodNs_, "ns per tick, ",
-             kMaxGpuMarks, " marks per frame");
+    gpuTimingForStageReport_ = core::envFlagEnabled("WOWEE_FRAME_PROFILE", false);
+    LOG_INFO("GPU timing available: ", timestampPeriodNs_, "ns per tick, ",
+             kMaxGpuMarks, " marks per frame, written while profiling");
 }
 
 void VkContext::checkpoint(VkCommandBuffer cmd, const char* label) {
@@ -1505,40 +1510,82 @@ void VkContext::gpuMark(VkCommandBuffer cmd, const char* label) {
     // A mark is also a checkpoint, so the two name the same places and a
     // fault report reads against the same labels as the timing overlay.
     checkpoint(cmd, label);
-    if (!gpuTimingSupported_ || cmd == VK_NULL_HANDLE) return;
+    if (cmd == VK_NULL_HANDLE) return;
+    gpuMarkAt(cmd, gpuReserveMarks(1), label);
+}
+
+uint32_t VkContext::gpuReserveMarks(uint32_t count) {
+    // Pending is set at the top of a frame that records timestamps, which is
+    // the whole of "is anyone profiling" as far as recording is concerned.
+    if (!gpuMarksPending_[currentFrame]) return kNoGpuMark;
     uint32_t& n = gpuMarkCount_[currentFrame];
-    if (n >= kMaxGpuMarks) return;   // the tail of a frame is lost, not the frame
-    gpuMarkLabels_[currentFrame][n] = label;
+    if (count == 0 || n + count > kMaxGpuMarks) return kNoGpuMark;   // the tail of a frame is lost, not the frame
+    const uint32_t base = n;
+    n += count;
+    return base;
+}
+
+void VkContext::gpuMarkAt(VkCommandBuffer cmd, uint32_t index, const char* label) {
+    if (index == kNoGpuMark || index >= kMaxGpuMarks || cmd == VK_NULL_HANDLE) return;
+    // A query that was not reset this frame may not be written.
+    if (!gpuMarksPending_[currentFrame]) return;
+    gpuMarkLabels_[currentFrame][index] = label;
     // Bottom of pipe: the mark is "everything before this has finished", which
     // is what makes the gap to the next mark the cost of the pass between them.
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                        gpuQueryPools_[currentFrame], n);
-    ++n;
+                        gpuQueryPools_[currentFrame], index);
 }
 
 void VkContext::readGpuTimings(uint32_t slot) {
     const uint32_t n = gpuMarkCount_[slot];
-    if (!gpuTimingSupported_ || !gpuMarksPending_[slot] || n < 2) return;
+    if (!gpuTimingSupported_ || !gpuMarksPending_[slot]) {
+        // Not profiling: say nothing rather than repeat a frame from whenever
+        // profiling last stopped.
+        gpuTimings_.clear();
+        return;
+    }
+    if (n < 2) return;
 
-    uint64_t stamps[kMaxGpuMarks]{};
+    // A value and an availability word per query. A mark reserved for a
+    // secondary that was never recorded this frame - its pass was skipped -
+    // stays unavailable, and is passed over rather than failing the read.
+    uint64_t stamps[kMaxGpuMarks * 2]{};
     // No WAIT bit: this slot's fence has already been waited on by the caller,
     // so the results are there. Asking the driver to wait here would put a
-    // second block in the frame for something already finished.
+    // second block in the frame for something already finished. NOT_READY
+    // only means one of the queries above was never written.
     const VkResult r = vkGetQueryPoolResults(
         device, gpuQueryPools_[slot], 0, n, sizeof(stamps), stamps,
-        sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
-    if (r != VK_SUCCESS) return;   // VK_NOT_READY on a frame that never ran
+        sizeof(uint64_t) * 2, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    if (r != VK_SUCCESS && r != VK_NOT_READY) return;
 
     gpuTimings_.clear();
-    for (uint32_t i = 1; i < n; ++i) {
+    bool havePrev = false;
+    uint64_t prev = 0;
+    uint64_t first = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint64_t value = stamps[i * 2];
+        const bool available = stamps[i * 2 + 1] != 0;
+        if (!available || gpuMarkLabels_[slot][i] == nullptr) continue;
+        if (!havePrev) {
+            havePrev = true;
+            prev = first = value;
+            continue;
+        }
         // Unsigned subtraction, so a wrapped or out-of-order pair reads as an
         // enormous positive number rather than a negative one. Drop those
         // rather than reporting a pass that took four seconds.
-        if (stamps[i] < stamps[i - 1]) continue;
-        const double ms = static_cast<double>(stamps[i] - stamps[i - 1]) *
+        if (value < prev) continue;
+        const double ms = static_cast<double>(value - prev) *
                           static_cast<double>(timestampPeriodNs_) / 1.0e6;
+        prev = value;
         if (ms > 1000.0) continue;
         gpuTimings_.emplace_back(gpuMarkLabels_[slot][i], ms);
+    }
+    if (havePrev && prev > first) {
+        const double frameMs = static_cast<double>(prev - first) *
+                               static_cast<double>(timestampPeriodNs_) / 1.0e6;
+        if (frameMs < 1000.0) core::FrameProfiler::get().addGpuFrame(gpuTimings_, frameMs);
     }
 }
 
@@ -2877,15 +2924,21 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     static int beginFrameCounter = 0;
     beginFrameCounter++;
     VkResult fenceResult;
-    if (frameTimeline_ != VK_NULL_HANDLE) {
-        VkSemaphoreWaitInfo waitInfo{};
-        waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
-        waitInfo.semaphoreCount = 1;
-        waitInfo.pSemaphores = &frameTimeline_;
-        waitInfo.pValues = &frame.timelineValue;
-        fenceResult = vkWaitSemaphores(device, &waitInfo, 5000000000ULL); // 5 second timeout
-    } else {
-        fenceResult = vkWaitForFences(device, 1, &frame.inFlightFence, VK_TRUE, 5000000000ULL); // 5 second timeout
+    {
+        // The number that tells a GPU-bound frame from a CPU-bound one: the GPU
+        // still has the frame from two frames ago, and the CPU sits here until it
+        // has finished.
+        WOWEE_PROFILE_SCOPE("wait: GPU (frame fence)", Wait);
+        if (frameTimeline_ != VK_NULL_HANDLE) {
+            VkSemaphoreWaitInfo waitInfo{};
+            waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+            waitInfo.semaphoreCount = 1;
+            waitInfo.pSemaphores = &frameTimeline_;
+            waitInfo.pValues = &frame.timelineValue;
+            fenceResult = vkWaitSemaphores(device, &waitInfo, 5000000000ULL); // 5 second timeout
+        } else {
+            fenceResult = vkWaitForFences(device, 1, &frame.inFlightFence, VK_TRUE, 5000000000ULL); // 5 second timeout
+        }
     }
     if (fenceResult == VK_TIMEOUT) {
         LOG_ERROR("beginFrame[", beginFrameCounter, "] FENCE TIMEOUT (5s) on frame slot ", currentFrame,
@@ -2908,8 +2961,14 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     // Acquire next swapchain image using the free semaphore.
     // After acquiring we swap it into the per-image slot so the old per-image
     // semaphore (now released by the presentation engine) becomes the free one.
-    VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
-        nextAcquireSemaphore_, VK_NULL_HANDLE, &imageIndex);
+    VkResult result;
+    {
+        // Blocks when every image is queued for the display - vsync with
+        // the frames already in flight.
+        WOWEE_PROFILE_SCOPE("wait: swapchain acquire", Wait);
+        result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
+            nextAcquireSemaphore_, VK_NULL_HANDLE, &imageIndex);
+    }
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         swapchainDirty = true;
@@ -2943,11 +3002,19 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     // Reset outside any render pass, which is where this sits, and before the
     // first mark. A pool that is written without being reset returns stale
     // results for the queries that were not rewritten.
-    if (gpuTimingSupported_) {
+    //
+    // Only while someone is looking. The reset and the writes are cheap, but
+    // not free, and a client nobody is profiling has no reason to make them.
+    gpuMarksPending_[currentFrame] = gpuTimingSupported_ &&
+        (core::FrameProfiler::enabled() || gpuTimingForStageReport_);
+    if (gpuMarksPending_[currentFrame]) {
         vkCmdResetQueryPool(frame.commandBuffer, gpuQueryPools_[currentFrame],
                             0, kMaxGpuMarks);
         gpuMarkCount_[currentFrame] = 0;
-        gpuMarksPending_[currentFrame] = true;
+        // Reserved marks that are never written must not keep a label from
+        // an earlier frame, or readback would pair it with a stale index.
+        std::fill(std::begin(gpuMarkLabels_[currentFrame]),
+                  std::end(gpuMarkLabels_[currentFrame]), nullptr);
         gpuMark(frame.commandBuffer, "frame start");
     }
 
@@ -2955,7 +3022,10 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     // wait for their fences and insert a memory barrier so the graphics queue sees
     // the completed layout transitions and transfer writes.
     if (!inFlightBatches_.empty()) {
-        waitAllUploads();
+        {
+            WOWEE_PROFILE_SCOPE("wait: texture/mesh uploads", Wait);
+            waitAllUploads();
+        }
 
         VkMemoryBarrier2 memBarrier{};
         memBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -3031,9 +3101,13 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     submitInfo.signalSemaphoreCount = static_cast<uint32_t>(signalSemaphores.size());
     submitInfo.pSignalSemaphores = signalSemaphores.data();
 
-    VkResult submitResult = vkQueueSubmit(graphicsQueue, 1, &submitInfo,
-                                          frameTimeline_ != VK_NULL_HANDLE ? VK_NULL_HANDLE
-                                                                           : frame.inFlightFence);
+    VkResult submitResult;
+    {
+        WOWEE_PROFILE_SCOPE("submit", Cpu);
+        submitResult = vkQueueSubmit(graphicsQueue, 1, &submitInfo,
+                                     frameTimeline_ != VK_NULL_HANDLE ? VK_NULL_HANDLE
+                                                                      : frame.inFlightFence);
+    }
     if (submitResult == VK_SUCCESS && frameTimeline_ != VK_NULL_HANDLE) {
         // Only once the submit is in: on failure the timeline is never
         // signalled, and a slot left waiting on an unreachable value would
@@ -3090,7 +3164,13 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     presentInfo.pSwapchains = &swapchain;
     presentInfo.pImageIndices = &imageIndex;
 
-    VkResult result = vkQueuePresentKHR(presentQueue, &presentInfo);
+    VkResult result;
+    {
+        // A wait, not work: with FIFO the driver may hold the thread here
+        // until a vblank frees an image.
+        WOWEE_PROFILE_SCOPE("wait: present", Wait);
+        result = vkQueuePresentKHR(presentQueue, &presentInfo);
+    }
     // Presenting unrotated onto a rotated surface is suboptimal by definition,
     // and says so on every frame for as long as the swapchain lives. Rebuilding
     // on that answer rebuilds every frame, which is what stopped the client
@@ -3182,6 +3262,15 @@ void VkContext::endSingleTimeCommands(VkCommandBuffer cmd) {
     // Said once. If the device is gone, every subsequent call fails the same
     // way and a log full of it buries the first one.
     static bool reported = false;
+    // A whole GPU round trip, synchronously. On the main thread it is frame
+    // time spent waiting on the GPU like the frame fence is; anywhere else it
+    // is only that thread's.
+    const bool onMain = core::FrameProfiler::isMainThread();
+    std::optional<core::ProfileScope> immScope;
+    if (core::FrameProfiler::enabled()) {
+        if (onMain) immScope.emplace("wait: immediate submit (sync upload)", core::ProfileKind::Wait);
+        else immScope.emplace("immediate submit (sync upload)", core::ProfileKind::Background);
+    }
     const VkResult submitted = vkQueueSubmit(graphicsQueue, 1, &submitInfo, immFence);
     if (submitted != VK_SUCCESS && !reported) {
         reported = true;
@@ -3189,6 +3278,7 @@ void VkContext::endSingleTimeCommands(VkCommandBuffer cmd) {
                   " - this is the first failure, whatever follows is its wake");
     }
     const VkResult waited = vkWaitForFences(device, 1, &immFence, VK_TRUE, UINT64_MAX);
+    immScope.reset();
     if (waited != VK_SUCCESS && !reported) {
         reported = true;
         LOG_ERROR("immediate wait failed: ", static_cast<int>(waited),

@@ -27,6 +27,7 @@
 #include "rendering/lightning.hpp"
 #include "rendering/lighting_manager.hpp"
 #include "core/profiler.hpp"
+#include "core/frame_profiler.hpp"
 #include "core/thread_pool.hpp"
 #include "rendering/sky_system.hpp"
 #include "rendering/swim_effects.hpp"
@@ -1467,6 +1468,7 @@ void Renderer::beginFrame() {
         uint32_t frame = vkCtx->getCurrentFrame();
         m2Renderer->invalidateCullOutput(frame);
         m2Renderer->dispatchCullCompute(currentCmd, frame, *camera);
+        vkCtx->gpuMark(currentCmd, "m2 cull (compute)");
     }
 
     // Grass culls here too, for the same reason: a dispatch has to be recorded
@@ -1477,6 +1479,7 @@ void Renderer::beginFrame() {
         grassRenderer_->reportCullResult();
         grassRenderer_->dispatchCull(currentCmd, vkCtx->getCurrentFrame(), *camera,
                                      characterPosition);
+        vkCtx->gpuMark(currentCmd, "grass cull (compute)");
     }
 
     // --- Off-screen pre-passes ---
@@ -1555,10 +1558,17 @@ void Renderer::endFrame() {
     // it swapped the scene pass for an INLINE one no longer matters to the
     // caller: the UI is drawn in the overlay pass, which this function opens
     // itself once whichever pass is current has been closed.
+    bool postProcessed = false;
     if (postProcessPipeline_) {
-        postProcessPipeline_->executePostProcessing(
-            currentCmd, currentImageIndex, camera.get(), lastDeltaTime_);
-        if (vkCtx) vkCtx->gpuMark(currentCmd, "post-process");
+        // True when it closed the scene pass and opened its own output pass,
+        // which is when there is something of its own to mark - and a pass
+        // the primary may record into. Otherwise the scene pass, perhaps one
+        // that takes only secondaries, is still open.
+        if (postProcessPipeline_->executePostProcessing(
+                currentCmd, currentImageIndex, camera.get(), lastDeltaTime_)) {
+            postProcessed = true;
+            if (vkCtx) vkCtx->gpuMark(currentCmd, "post-process output (FXAA / FSR / sharpen)");
+        }
     }
 
     // The scene is complete: close its pass so the water refraction copy can run
@@ -1567,6 +1577,9 @@ void Renderer::endFrame() {
     // the water. The overlay pass is single-sampled and colour-only, which is
     // also why the UI costs the same here whatever MSAA the scene uses.
     vkCmdEndRenderPass(currentCmd);
+    // The scene's own store and resolve, when no post-processing took the
+    // pass over and marked its end itself.
+    if (vkCtx && !postProcessed) vkCtx->gpuMark(currentCmd, "scene pass end (store / resolve)");
 
     // Only when water could not be moved out of the scene pass (MSAA). Otherwise
     // renderWorld already took the copy at the one point in the frame where the
@@ -1582,12 +1595,15 @@ void Renderer::endFrame() {
             vkCtx->getSwapchainExtent(),
             vkCtx->isDepthCopySourceMsaa(),
             vkCtx->getCurrentFrame());
+        vkCtx->gpuMark(currentCmd, "water refraction copy");
     }
 
     // The picture is finished and out of every pass that drew it: the one
     // point where the shafts can copy it down, before the overlay pass opens.
     recordScreenEffects();
+    if (vkCtx) vkCtx->gpuMark(currentCmd, "screen effects (glow, death)");
     recordSunShafts();
+    if (vkCtx) vkCtx->gpuMark(currentCmd, "sun shafts");
 
     const auto& overlayFbs = vkCtx->getOverlayFramebuffers();
     if (vkCtx->getOverlayRenderPass() != VK_NULL_HANDLE && currentImageIndex < overlayFbs.size()) {
@@ -1612,12 +1628,16 @@ void Renderer::endFrame() {
         // the glow and death passes, then the shafts screened over it.
         if (screenEffects_) screenEffects_->composite(currentCmd, vkCtx->getCurrentFrame());
         if (sunShafts_) sunShafts_->composite(currentCmd, vkCtx->getCurrentFrame());
+        vkCtx->gpuMark(currentCmd, "effects composite");
 
         // ImGui's pipelines are built against the overlay pass, so it always
         // records inline here rather than into a scene-pass secondary buffer.
-        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), currentCmd);
+        {
+            WOWEE_PROFILE_SCOPE("record interface (ImGui)", Cpu);
+            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), currentCmd);
+        }
         vkCmdEndRenderPass(currentCmd);
-        if (vkCtx) vkCtx->gpuMark(currentCmd, "interface");
+        if (vkCtx) vkCtx->gpuMark(currentCmd, "interface (ImGui)");
     } else {
         LOG_ERROR("Overlay render pass missing - UI not drawn this frame");
     }
@@ -1629,6 +1649,7 @@ void Renderer::endFrame() {
     // Last, so the recording holds everything the player sees - and then the
     // recording dot, which it does not.
     recordScreenCapture();
+    if (afterInterface_ || recorder_) vkCtx->gpuMark(currentCmd, "capture / after interface");
 
     // Submit and present
     vkCtx->endFrame(currentCmd, currentImageIndex);
@@ -2152,6 +2173,7 @@ void Renderer::update(float deltaTime) {
 
     if (cameraController) {
         auto cameraStart = std::chrono::steady_clock::now();
+        WOWEE_PROFILE_SCOPE("camera + movement", Cpu);
         cameraController->update(deltaTime);
         auto cameraEnd = std::chrono::steady_clock::now();
         lastCameraUpdateMs = std::chrono::duration<double, std::milli>(cameraEnd - cameraStart).count();
@@ -2524,6 +2546,7 @@ void Renderer::update(float deltaTime) {
 
     // Update character animations (runs in parallel with M2 animation above)
     if (characterRenderer && camera) {
+        WOWEE_PROFILE_SCOPE("animation: characters", Cpu);
         characterRenderer->update(deltaTime, camera->getPosition());
     }
 
@@ -2538,6 +2561,7 @@ void Renderer::update(float deltaTime) {
     // the useful overlap with character animation and audio above, but finish
     // structural M2 work before any main-thread collision query.
     if (m2AnimLaunched) {
+        WOWEE_PROFILE_SCOPE("join m2 animation", Cpu);
         try { m2AnimFuture.get(); }
         catch (const std::exception& e) { LOG_ERROR("M2 animation worker: ", e.what()); }
         m2AnimLaunched = false;
@@ -2606,6 +2630,9 @@ void Renderer::update(float deltaTime) {
     static float modelCleanupTimer = 0.0f;
     modelCleanupTimer += deltaTime;
     if (modelCleanupTimer >= 5.0f) {
+        // Both can wait for the device to go idle when there is something to
+        // free, which shows up as a worst-case spike every five seconds.
+        WOWEE_PROFILE_SCOPE("model cache cleanup (every 5s)", Cpu);
         if (wmoRenderer) {
             wmoRenderer->cleanupUnusedModels();
         }
@@ -3248,6 +3275,33 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         if (drawStarsModel && camera) starsModelRenderer_->render(starCmd, perFrameSet, *camera);
     };
 
+    // GPU marks for the passes inside the scene pass, reserved in the order
+    // they execute. Both paths use the same set so a profile taken either way
+    // reads the same; on the parallel path each mark is written by whichever
+    // thread records its pass, into its own secondary (see gpuReserveMarks
+    // for why the primary cannot). A pass that is skipped leaves its mark
+    // unwritten, and readback steps over it.
+    enum SceneMark : uint32_t {
+        kMarkTerrain, kMarkGrass, kMarkSky, kMarkWmo, kMarkSelection, kMarkChars,
+        kMarkM2Opaque, kMarkM2Blended, kMarkM2Particles, kMarkRibbons,
+        kMarkBlobShadows, kMarkWater, kMarkWorldEffects, kMarkOverlays,
+        kSceneMarkCount
+    };
+    const uint32_t sceneMarks = vkCtx ? vkCtx->gpuReserveMarks(kSceneMarkCount)
+                                      : VkContext::kNoGpuMark;
+    const auto sceneMark = [&](VkCommandBuffer cmd, uint32_t which, const char* label) {
+        if (sceneMarks != VkContext::kNoGpuMark) vkCtx->gpuMarkAt(cmd, sceneMarks + which, label);
+    };
+    // The model renderer marks the end of its opaque half itself, from inside
+    // the one call that draws both halves. Set every frame, none included, so
+    // a mark left over from a frame whose model pass returned early is never
+    // written into a frame that is not profiling.
+    if (m2Renderer) {
+        m2Renderer->setGpuOpaqueMark(sceneMarks != VkContext::kNoGpuMark
+                                         ? sceneMarks + kMarkM2Opaque
+                                         : VkContext::kNoGpuMark);
+    }
+
     // ── Multithreaded secondary command buffer recording ──
     // Terrain, WMO, and M2 record on worker threads while main thread handles
     // sky, characters, water, and effects.  prepareRender() on main thread first
@@ -3255,6 +3309,10 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     if (parallelRecordingEnabled_) {
         // --- Pre-compute state + GPU allocations on main thread (not thread-safe) ---
         auto prepStart = std::chrono::steady_clock::now();
+        std::optional<core::ProfileScope> prepScope;
+        if (core::FrameProfiler::enabled()) {
+            prepScope.emplace("prepare (wmo, m2, sky, characters)", core::ProfileKind::Cpu);
+        }
         if (wmoRenderer) wmoRenderer->prepareRender();
         auto prepWmoEnd = std::chrono::steady_clock::now();
         if (m2Renderer && camera) m2Renderer->prepareRender(frameIdx, *camera);
@@ -3265,6 +3323,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         auto prepM2End = std::chrono::steady_clock::now();
         if (characterRenderer) characterRenderer->prepareRender(frameIdx);
         auto prepEnd = std::chrono::steady_clock::now();
+        prepScope.reset();
         const double prepWmoMs  = std::chrono::duration<double, std::milli>(prepWmoEnd - prepStart).count();
         const double prepM2Ms   = std::chrono::duration<double, std::milli>(prepM2End - prepWmoEnd).count();
         const double prepCharMs = std::chrono::duration<double, std::milli>(prepEnd - prepM2End).count();
@@ -3286,11 +3345,14 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         const bool drawGrass = grassRenderer_ && !skipGrass;
         if (drawTerrain || drawGrass) {
             terrainFuture = core::ThreadPool::frameWorkers().submit([&]() -> double {
+                WOWEE_PROFILE_SCOPE("worker: terrain + grass", Worker);
                 auto t0 = std::chrono::steady_clock::now();
                 VkCommandBuffer cmd = beginSecondary(SEC_TERRAIN);
                 setSecondaryViewportScissor(cmd);
                 if (drawTerrain) terrainRenderer->render(cmd, perFrameSet, *camera);
+                sceneMark(cmd, kMarkTerrain, "terrain");
                 if (drawGrass) grassRenderer_->render(cmd, frameIdx, perFrameSet);
+                sceneMark(cmd, kMarkGrass, "grass");
                 vkEndCommandBuffer(cmd);
                 return std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - t0).count();
@@ -3299,10 +3361,12 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
         if (wmoRenderer && camera && !skipWMO) {
             wmoFuture = core::ThreadPool::frameWorkers().submit([&]() -> double {
+                WOWEE_PROFILE_SCOPE("worker: wmo", Worker);
                 auto t0 = std::chrono::steady_clock::now();
                 VkCommandBuffer cmd = beginSecondary(SEC_WMO);
                 setSecondaryViewportScissor(cmd);
                 wmoRenderer->render(cmd, perFrameSet, *camera, &characterPosition);
+                sceneMark(cmd, kMarkWmo, "wmo");
                 vkEndCommandBuffer(cmd);
                 return std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - t0).count();
@@ -3311,17 +3375,33 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
         if (m2Renderer && camera && !skipM2) {
             m2Future = core::ThreadPool::frameWorkers().submit([&]() -> double {
+                WOWEE_PROFILE_SCOPE("worker: m2", Worker);
                 auto t0 = std::chrono::steady_clock::now();
                 VkCommandBuffer cmd = beginSecondary(SEC_M2);
                 setSecondaryViewportScissor(cmd);
                 const auto tBegin = std::chrono::steady_clock::now();
-                renderM2Models(cmd, perFrameSet, !skipChars);
+                {
+                    WOWEE_PROFILE_SCOPE("m2 models (cull, sort, record)", Worker);
+                    renderM2Models(cmd, perFrameSet, !skipChars);
+                }
+                sceneMark(cmd, kMarkM2Blended, "m2 transparent + blended characters");
                 const auto tModels = std::chrono::steady_clock::now();
-                m2Renderer->renderM2Particles(cmd, perFrameSet);
+                {
+                    WOWEE_PROFILE_SCOPE("m2 particles", Worker);
+                    m2Renderer->renderM2Particles(cmd, perFrameSet);
+                }
+                sceneMark(cmd, kMarkM2Particles, "m2 particles");
                 const auto tParts = std::chrono::steady_clock::now();
-                m2Renderer->renderClientRibbons(cmd, perFrameSet);
+                {
+                    WOWEE_PROFILE_SCOPE("ribbons", Worker);
+                    m2Renderer->renderClientRibbons(cmd, perFrameSet);
+                }
+                sceneMark(cmd, kMarkRibbons, "ribbons");
                 const auto tParticles = std::chrono::steady_clock::now();
-                vkEndCommandBuffer(cmd);
+                {
+                    WOWEE_PROFILE_SCOPE("m2 end command buffer", Worker);
+                    vkEndCommandBuffer(cmd);
+                }
 
                 // This worker is the critical path of renderWorld, and the
                 // model pass inside it accounts for barely a fifth of what it
@@ -3353,6 +3433,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
         // --- Main thread: record sky (SEC_SKY) ---
         {
+            WOWEE_PROFILE_SCOPE("record sky", Cpu);
             VkCommandBuffer cmd = beginSecondary(SEC_SKY);
             setSecondaryViewportScissor(cmd);
             if (skySystem && camera && !skipSky) {
@@ -3375,11 +3456,13 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 // the end of the world by the post worker (0x007f0870).
                 skySystem->updateGlare(*camera, skyParams);
             }
+            sceneMark(cmd, kMarkSky, "sky");
             vkEndCommandBuffer(cmd);
         }
 
         // --- Main thread: record selection circle before overlay state is used by post ---
         {
+            WOWEE_PROFILE_SCOPE("record selection circle", Cpu);
             VkCommandBuffer cmd = beginSecondary(SEC_SELECTION);
             setSecondaryViewportScissor(cmd);
             if (overlaySystem_) {
@@ -3388,12 +3471,14 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                     wmoRenderer ? OverlaySystem::HeightQuery3D([&](float x, float y, float z) { return wmoRenderer->getFloorHeight(x, y, z); }) : OverlaySystem::HeightQuery3D{},
                     m2Renderer ? OverlaySystem::HeightQuery3D([&](float x, float y, float z) { return m2Renderer->getFloorHeight(x, y, z); }) : OverlaySystem::HeightQuery3D{});
             }
+            sceneMark(cmd, kMarkSelection, "selection circle");
             vkEndCommandBuffer(cmd);
         }
 
         // Character recording is independent after prepareRender() and no
         // longer shares the selection-circle overlay command buffer.
         charFuture = core::ThreadPool::frameWorkers().submit([&]() -> double {
+            WOWEE_PROFILE_SCOPE("worker: characters", Worker);
             auto t0 = std::chrono::steady_clock::now();
             VkCommandBuffer cmd = beginSecondary(SEC_CHARS);
             setSecondaryViewportScissor(cmd);
@@ -3401,6 +3486,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 characterRenderer->render(cmd, perFrameSet, *camera,
                                           CharacterRenderer::Phase::Opaque);
             }
+            sceneMark(cmd, kMarkChars, "characters (opaque)");
             vkEndCommandBuffer(cmd);
             return std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
@@ -3410,15 +3496,18 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         // this after selection recording so OverlaySystem is never used from
         // two threads at once.
         postFuture = core::ThreadPool::frameWorkers().submit([&]() -> double {
+            WOWEE_PROFILE_SCOPE("worker: water + effects", Worker);
             auto t0 = std::chrono::steady_clock::now();
             VkCommandBuffer cmd = beginSecondary(SEC_POST);
             setSecondaryViewportScissor(cmd);
             // On the ground the world has drawn, under the liquid (the
             // client draws them with its units, 0x00793980).
             if (blobShadowRenderer && camera) blobShadowRenderer->render(cmd, perFrameSet);
+            sceneMark(cmd, kMarkBlobShadows, "blob shadows");
             if (waterRenderer && camera && !waterDrawsInContinuePass()) {
                 waterRenderer->setRenderExtent(activeRenderExtent_);
                 waterRenderer->render(cmd, perFrameSet, *camera, globalTime, false, frameIdx);
+                sceneMark(cmd, kMarkWater, "water");
             }
             if (weather && camera) weather->render(cmd, perFrameSet);
             if (lightning && camera && lightning->isEnabled()) lightning->render(cmd, perFrameSet);
@@ -3430,6 +3519,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             if (fishingLines_ && camera) fishingLines_->render(cmd, perFrameSet);
             if (footprintRenderer && camera) footprintRenderer->render(cmd, perFrameSet, *camera);
             if (questMarkerRenderer && camera) questMarkerRenderer->render(cmd, perFrameSet, *camera);
+            sceneMark(cmd, kMarkWorldEffects, "weather, dust, footprints, quest markers");
 
             // The sun's and the White Lady's glare, over the whole world with
             // no depth test, last before the overlays (0x007f0870 runs after
@@ -3438,6 +3528,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             if (skySystem && camera && !skipSky && !glareDrawsWithWater_) skySystem->renderGlare(cmd, perFrameSet);
             renderUnderwaterOverlay(cmd);
             renderPostSceneOverlays(cmd, gameHandler);
+            sceneMark(cmd, kMarkOverlays, "glare, underwater, minimap overlay");
             vkEndCommandBuffer(cmd);
             return std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0).count();
@@ -3447,6 +3538,13 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         // Guard with try-catch: future::get() re-throws any exception from the
         // async task. Without this, a single bad_alloc in a render worker would
         // propagate as an unhandled exception and terminate the process.
+        //
+        // Profiled as main-thread work, not as a wait on the GPU: what shows
+        // through here is the slowest worker's recording, which is CPU time.
+        std::optional<core::ProfileScope> joinScope;
+        if (core::FrameProfiler::enabled()) {
+            joinScope.emplace("join render workers", core::ProfileKind::Cpu);
+        }
         try { if (terrainFuture.valid()) lastTerrainRenderMs = terrainFuture.get(); }
         catch (const std::exception& e) { LOG_ERROR("Terrain render worker: ", e.what()); }
         try { if (wmoFuture.valid()) lastWMORenderMs = wmoFuture.get(); }
@@ -3457,6 +3555,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         catch (const std::exception& e) { LOG_ERROR("Character render worker: ", e.what()); }
         try { if (postFuture.valid()) (void)postFuture.get(); }
         catch (const std::exception& e) { LOG_ERROR("Post render worker: ", e.what()); }
+        joinScope.reset();
 
         // prepareRender() does the GPU allocations that are not thread-safe, so it runs
         // on the main thread and is not covered by the worker timings. Name the culprit
@@ -3533,29 +3632,16 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
         queue(secondaryCmds_[SEC_POST][frameIdx], "water/effects");
 
-        // One at a time, with a mark after each.
-        //
-        // Batched, the whole world was a single gap in the timeline and its
-        // 43 of 48 milliseconds could not be attributed to a pass. The
-        // secondaries execute in this order either way; issuing them
-        // separately costs six calls on the CPU and nothing on the GPU, and
-        // buys the breakdown that says which pass to look at. The marks are
-        // written from the primary buffer, so the threads that recorded the
-        // secondaries never touch the shared mark counter.
-        for (uint32_t i = 0; i < numCmds; ++i) {
-            vkCmdExecuteCommands(currentCmd, 1, &validCmds[i]);
-            if (vkCtx) vkCtx->gpuMark(currentCmd, validLabels[i]);
-        }
-        // The world, as one mark.
-        //
-        // Every pass inside it is marked on the single-threaded path below and
-        // none of them are here, because these were recorded into secondary
-        // buffers. So on the path this machine actually takes, the next mark
-        // after shadows was post-process - and the gap to it, which is the
-        // whole scene, was being read as the cost of post-processing. 46 of a
-        // 50ms frame landed under a label that did not earn it.
-        // ...and the whole of it, for the one-line answer.
-        if (vkCtx) vkCtx->gpuMark(currentCmd, "world total");
+        // In one call. The marks that used to follow each of these were
+        // written from the primary, which a subpass begun with
+        // SECONDARY_COMMAND_BUFFERS contents does not allow - only
+        // vkCmdExecuteCommands may be recorded there - so what those
+        // timestamps read was undefined on every driver, not only on
+        // MoltenVK, which resolves any mark to its render pass anyway. The
+        // secondaries mark themselves now (sceneMark above), in the indices
+        // reserved for them in this same order.
+        (void)validLabels;
+        if (numCmds > 0) vkCmdExecuteCommands(currentCmd, numCmds, validCmds);
 
     } else {
         // ── Fallback: single-threaded inline recording (original path) ──
@@ -3563,7 +3649,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         if (terrainRenderer && camera && terrainEnabled && !skipTerrain) {
             auto terrainStart = std::chrono::steady_clock::now();
             terrainRenderer->render(currentCmd, perFrameSet, *camera);
-            if (vkCtx) vkCtx->gpuMark(currentCmd, "terrain");
+            sceneMark(currentCmd, kMarkTerrain, "terrain");
             lastTerrainRenderMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - terrainStart).count();
         }
@@ -3572,7 +3658,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         // is occluded by everything standing on it.
         if (grassRenderer_ && vkCtx && !skipGrass) {
             grassRenderer_->render(currentCmd, vkCtx->getCurrentFrame(), perFrameSet);
-            if (vkCtx) vkCtx->gpuMark(currentCmd, "grass");
+            sceneMark(currentCmd, kMarkGrass, "grass");
         }
 
         // Sky after the ground, for the reason given on the parallel path.
@@ -3595,14 +3681,14 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 skyboxModelRenderer_->render(currentCmd, perFrameSet, *camera);
             }
             skySystem->updateGlare(*camera, skyParams);
-            if (vkCtx) vkCtx->gpuMark(currentCmd, "sky");
+            sceneMark(currentCmd, kMarkSky, "sky");
         }
 
         if (wmoRenderer && camera && !skipWMO) {
             wmoRenderer->prepareRender();
             auto wmoStart = std::chrono::steady_clock::now();
             wmoRenderer->render(currentCmd, perFrameSet, *camera, &characterPosition);
-            if (vkCtx) vkCtx->gpuMark(currentCmd, "wmo");
+            sceneMark(currentCmd, kMarkWmo, "wmo");
             lastWMORenderMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - wmoStart).count();
         }
@@ -3618,25 +3704,28 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             characterRenderer->prepareRender(frameIdx);
             characterRenderer->render(currentCmd, perFrameSet, *camera,
                                       CharacterRenderer::Phase::Opaque);
-            if (vkCtx) vkCtx->gpuMark(currentCmd, "characters");
+            sceneMark(currentCmd, kMarkChars, "characters (opaque)");
         }
 
         if (m2Renderer && camera && !skipM2) {
             m2Renderer->prepareRender(frameIdx, *camera);
             auto m2Start = std::chrono::steady_clock::now();
             renderM2Models(currentCmd, perFrameSet, !skipChars);
+            sceneMark(currentCmd, kMarkM2Blended, "m2 transparent + blended characters");
             m2Renderer->renderM2Particles(currentCmd, perFrameSet);
+            sceneMark(currentCmd, kMarkM2Particles, "m2 particles");
             m2Renderer->renderClientRibbons(currentCmd, perFrameSet);
-            if (vkCtx) vkCtx->gpuMark(currentCmd, "m2");
+            sceneMark(currentCmd, kMarkRibbons, "ribbons");
             lastM2RenderMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - m2Start).count();
         }
 
         if (blobShadowRenderer && camera) blobShadowRenderer->render(currentCmd, perFrameSet);
+        sceneMark(currentCmd, kMarkBlobShadows, "blob shadows");
         if (waterRenderer && camera && !waterDrawsInContinuePass()) {
             waterRenderer->setRenderExtent(activeRenderExtent_);
             waterRenderer->render(currentCmd, perFrameSet, *camera, globalTime, false, frameIdx);
-            if (vkCtx) vkCtx->gpuMark(currentCmd, "water");
+            sceneMark(currentCmd, kMarkWater, "water");
         }
         if (weather && camera) weather->render(currentCmd, perFrameSet);
         if (lightning && camera && lightning->isEnabled()) lightning->render(currentCmd, perFrameSet);
@@ -3648,9 +3737,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         if (fishingLines_ && camera) fishingLines_->render(currentCmd, perFrameSet);
         if (footprintRenderer && camera) footprintRenderer->render(currentCmd, perFrameSet, *camera);
         if (questMarkerRenderer && camera) questMarkerRenderer->render(currentCmd, perFrameSet, *camera);
-        // The same one-line total the parallel path reports, so a profile taken
-        // either way can be compared against the other.
-        if (vkCtx) vkCtx->gpuMark(currentCmd, "world total");
+        sceneMark(currentCmd, kMarkWorldEffects, "weather, dust, footprints, quest markers");
     }
 
     // Underwater overlay and minimap - in the fallback path these run inline;
@@ -3660,6 +3747,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         if (skySystem && camera && !skipSky && !glareDrawsWithWater_) skySystem->renderGlare(currentCmd, perFrameSet);
         renderUnderwaterOverlay(currentCmd);
         renderPostSceneOverlays(currentCmd, gameHandler);
+        sceneMark(currentCmd, kMarkOverlays, "glare, underwater, minimap overlay");
     }
 
     // Water is drawn last, in a continuation of the scene pass, so that the
@@ -3669,6 +3757,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     // brightness applied to the water compounded through the loop and pumped.
     if (waterDrawsInContinuePass() && camera) {
         vkCmdEndRenderPass(currentCmd);
+        if (vkCtx) vkCtx->gpuMark(currentCmd, "scene pass end (store / resolve)");
 
         VkImage sceneColor = VK_NULL_HANDLE;
         VkImage sceneDepth = VK_NULL_HANDLE;
@@ -3692,6 +3781,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             waterRenderer->captureSceneHistory(currentCmd, sceneColor, sceneDepth,
                                                sceneExtent, depthIsMsaa,
                                                vkCtx->getCurrentFrame());
+            vkCtx->gpuMark(currentCmd, "water refraction copy");
         }
 
         // Without MSAA the water continues into the scene's own framebuffer. With
@@ -3723,6 +3813,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
         waterRenderer->setRenderExtent(waterExtent);
         waterRenderer->render(currentCmd, perFrameSet, *camera, globalTime, msaaOn, frameIdx);
+        if (vkCtx) vkCtx->gpuMark(currentCmd, "water");
 
         // Spray belongs on top of the surface it is thrown off. Recorded in the
         // scene pass it went under the water instead, which the sheet then hid -
@@ -3739,6 +3830,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         // And the minimap, last of all: it is the interface rather than the
         // world, and nothing in the world belongs over it.
         if (minimapDrawsWithWater_) renderMinimapOverlay(currentCmd, gameHandler);
+        if (vkCtx) vkCtx->gpuMark(currentCmd, "spray, glare, minimap over water");
     }
 
     auto renderEnd = std::chrono::steady_clock::now();
@@ -4432,6 +4524,11 @@ void Renderer::renderHUD() {
     if (performanceHUD && camera) {
         performanceHUD->render(this, camera.get());
     }
+    // Its own window, and not only with the HUD above: the HUD is a debug
+    // build's F1, and the profiler has to work in the build that is slow.
+    if (performanceHUD && core::FrameProfiler::enabled()) {
+        performanceHUD->renderFrameProfile(this);
+    }
 }
 
 // ──────────────────────────────────────────────────────
@@ -4766,6 +4863,7 @@ void Renderer::setSecondaryViewportScissor(VkCommandBuffer cmd) {
 }
 
 void Renderer::renderReflectionPass() {
+    WOWEE_PROFILE_SCOPE("record water reflection", Cpu);
     if (!waterRenderer || !camera || !waterRenderer->hasReflectionPass() || !waterRenderer->hasSurfaces()) return;
     if (!waterRenderer->isEnhancedWater()) return;  // the client's liquid reflects nothing
     if (currentCmd == VK_NULL_HANDLE || !reflPerFrameUBOMapped) return;
@@ -4846,6 +4944,7 @@ void Renderer::renderReflectionPass() {
 
 void Renderer::renderShadowPass() {
     ZoneScopedN("Renderer::renderShadowPass");
+    WOWEE_PROFILE_SCOPE("record shadows", Cpu);
     static const bool skipShadows = (std::getenv("WOWEE_SKIP_SHADOWS") != nullptr);
     if (skipShadows) return;
     if (passAblation_ && passAblation_->skip(AblationPass::Shadows)) return;
@@ -4974,6 +5073,12 @@ void Renderer::renderShadowPass() {
         if (characterRenderer) {
             characterRenderer->renderShadow(currentCmd, cascade.lightSpace, cascade.center, cullRadius);
         }
+        // One mark per cascade: the far one covers the most ground and is
+        // usually the expensive one, which a single shadow total cannot say.
+        // The first also carries the clear of the atlas.
+        static constexpr const char* kCascadeLabels[kMaxShadowCascades] = {
+            "shadow cascade 0 (near)", "shadow cascade 1", "shadow cascade 2 (far)"};
+        vkCtx->gpuMark(currentCmd, kCascadeLabels[c]);
     }
 
     if (dynamicRendering) {
@@ -5002,7 +5107,9 @@ void Renderer::renderShadowPass() {
     b2Dep.pImageMemoryBarriers = &b2;
     cmdPipelineBarrier2(currentCmd, b2Dep);
     shadowDepthLayout_[frame] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    if (vkCtx) vkCtx->gpuMark(currentCmd, "shadows");
+    // The end of the pass, outside it: what the cascades add up to even on a
+    // driver that will not split a render pass between its marks.
+    if (vkCtx) vkCtx->gpuMark(currentCmd, "shadows (pass end)");
 }
 
 VkImageView Renderer::getNeutralRtLightingView() const {
@@ -5285,6 +5392,7 @@ float Renderer::volumetricFogExtinction() const {
 
 void Renderer::renderVolumetricFog() {
     ZoneScopedN("Renderer::renderVolumetricFog");
+    WOWEE_PROFILE_SCOPE("record volumetric fog", Cpu);
     if (!volumetricThisFrame_ || !volumetricFog_ || !camera || currentCmd == VK_NULL_HANDLE) return;
     const uint32_t frame = vkCtx->getCurrentFrame();
     // The inject pass samples this slot's shadow map, so not before the shadow
@@ -5422,13 +5530,17 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
                 if (cameraController && cameraController->isThirdPerson())
                     minimapCenter = characterPosition;
                 minimap->compositePass(cmd, minimapCenter);
+                vkCtx->gpuMark(cmd, "minimap composite");
             }
         });
 
     // World map composite (standalone)
     renderGraph_->addPass("worldmap_composite", {}, {},
         [this](VkCommandBuffer cmd) {
-            if (worldMap) worldMap->compositePass(cmd);
+            if (worldMap) {
+                worldMap->compositePass(cmd);
+                vkCtx->gpuMark(cmd, "world map composite");
+            }
         });
 
     // Character preview composites (standalone)
@@ -5439,6 +5551,7 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
                 if (preview && preview->isModelLoaded())
                     preview->compositePass(cmd, frame);
             }
+            if (!activePreviews_.empty()) vkCtx->gpuMark(cmd, "character previews");
         });
 
     // Shadow pre-pass → outputs shadow_depth
@@ -5473,8 +5586,9 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
 
     // Reflection pre-pass → outputs reflection_texture (reads scene, so after shadow)
     renderGraph_->addPass("reflection_pass", {shadowDepth}, {reflTex},
-        [this](VkCommandBuffer) {
+        [this](VkCommandBuffer cmd) {
             renderReflectionPass();
+            vkCtx->gpuMark(cmd, "water reflection");
         });
 
     renderGraph_->compile();

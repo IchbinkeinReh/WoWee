@@ -17,8 +17,11 @@
 #include "rendering/m2_renderer.hpp"
 #include "rendering/camera.hpp"
 #include "ui/ui_colors.hpp"
+#include "core/frame_profiler.hpp"
 #include <imgui.h>
 #include <algorithm>
+#include <vector>
+#include <cstring>
 #include <sstream>
 #include <iomanip>
 
@@ -486,6 +489,143 @@ void PerformanceHUD::render(const Renderer* renderer, const Camera* camera) {
         ImGui::TextColored(kHelpText, "Esc: Settings/Close");
     }
 
+    ImGui::End();
+}
+
+namespace {
+
+/// One section of the profile table: the rows `wanted` picks, each level of
+/// the tree sorted by cost with children under their parent, so the line to
+/// look at is the first under its heading.
+template <typename Pred>
+void profileSection(const core::FrameProfiler::Snapshot& snap, const char* id,
+                    const char* title, Pred wanted) {
+    std::vector<int> order;
+    const auto walk = [&](const auto& self, int parent) -> void {
+        std::vector<int> kids;
+        for (size_t i = 0; i < snap.rows.size(); ++i) {
+            const auto& r = snap.rows[i];
+            if (r.parent == parent && r.callsPerFrame > 0.0 && wanted(r)) {
+                kids.push_back(static_cast<int>(i));
+            }
+        }
+        std::sort(kids.begin(), kids.end(), [&](int a, int b) {
+            return snap.rows[static_cast<size_t>(a)].avgMs > snap.rows[static_cast<size_t>(b)].avgMs;
+        });
+        for (int k : kids) {
+            order.push_back(k);
+            self(self, k);
+        }
+    };
+    walk(walk, -1);
+    if (order.empty()) return;
+
+    ImGui::Spacing();
+    ImGui::TextColored(kSectionHeader, "%s", title);
+    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit |
+                                  ImGuiTableFlags_BordersInnerV;
+    if (!ImGui::BeginTable(id, 3, flags)) return;
+    ImGui::TableSetupColumn("stage", ImGuiTableColumnFlags_WidthFixed, 300.0f);
+    ImGui::TableSetupColumn("avg ms", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+    ImGui::TableSetupColumn("max ms", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+    ImGui::TableHeadersRow();
+    // The frame's average, for shading a row by its share of it.
+    const double frameMs = snap.frameAvgMs > 0.0 ? snap.frameAvgMs : 1.0;
+    for (int i : order) {
+        const auto& r = snap.rows[static_cast<size_t>(i)];
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        const float indent = 12.0f * static_cast<float>(r.depth);
+        if (indent > 0.0f) ImGui::Indent(indent);
+        const bool waiting = r.kind == core::ProfileKind::Wait || r.kind == core::ProfileKind::Idle;
+        const ImVec4 nameColor = waiting ? ImVec4(0.55f, 0.75f, 1.0f, 1.0f)
+                                         : ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
+        if (r.callsPerFrame > 1.5) {
+            ImGui::TextColored(nameColor, "%s  (x%.0f)", r.label, r.callsPerFrame);
+        } else {
+            ImGui::TextColored(nameColor, "%s", r.label);
+        }
+        if (indent > 0.0f) ImGui::Unindent(indent);
+        ImGui::TableSetColumnIndex(1);
+        // A fifth of the frame or more is where the time is.
+        const double share = r.avgMs / frameMs;
+        const ImVec4 costColor = share >= 0.2 ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
+                               : share >= 0.07 ? ImVec4(1.0f, 0.85f, 0.35f, 1.0f)
+                                               : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+        ImGui::TextColored(costColor, "%6.2f", r.avgMs);
+        ImGui::TableSetColumnIndex(2);
+        ImGui::TextColored(kHelpText, "%6.2f", r.maxMs);
+    }
+    ImGui::EndTable();
+}
+
+} // namespace
+
+void PerformanceHUD::renderFrameProfile(const Renderer* renderer) {
+    const auto snap = core::FrameProfiler::get().snapshot();
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 10.0f,
+                                   viewport->WorkPos.y + 40.0f),
+                            ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.8f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize |
+                                   ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav;
+    if (!ImGui::Begin("Frame profile", nullptr, flags)) {
+        ImGui::End();
+        return;
+    }
+
+    if (!snap.valid) {
+        ImGui::TextColored(kHelpText, "Measuring - the first second is on its way.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("%.1f fps   frame %.2f ms avg, %.2f ms worst   (over %.1f s)",
+                snap.fps, snap.frameAvgMs, snap.frameMaxMs, snap.windowSeconds);
+    ImVec4 verdictColor = ImVec4(0.5f, 1.0f, 0.5f, 1.0f);
+    if (std::strstr(snap.verdict, "GPU-bound") != nullptr) {
+        verdictColor = ImVec4(1.0f, 0.45f, 0.35f, 1.0f);
+    } else if (std::strcmp(snap.verdict, "CPU-bound") == 0) {
+        verdictColor = ImVec4(1.0f, 0.75f, 0.3f, 1.0f);
+    }
+    ImGui::TextColored(verdictColor, "%s", snap.verdict);
+    ImGui::SameLine();
+    ImGui::TextColored(kHelpText, "- %s", snap.reason);
+    if (snap.gpuFrames > 0) {
+        ImGui::Text("GPU %.2f ms (worst %.2f)   main thread busy %.2f ms, waiting %.2f, sleeping %.2f",
+                    snap.gpuAvgMs, snap.gpuMaxMs, snap.cpuBusyAvgMs, snap.waitAvgMs, snap.idleAvgMs);
+    } else {
+        ImGui::Text("GPU not measured   main thread busy %.2f ms, waiting %.2f, sleeping %.2f",
+                    snap.cpuBusyAvgMs, snap.waitAvgMs, snap.idleAvgMs);
+        const auto* ctx = renderer ? renderer->getVkContext() : nullptr;
+        if (ctx && !ctx->gpuTimingSupported()) {
+            ImGui::TextColored(kHelpText, "(this device or queue cannot write timestamps)");
+        }
+    }
+
+    using K = core::ProfileKind;
+    profileSection(snap, "##gpu", "GPU passes (each: from the previous mark to its own)",
+                   [](const auto& r) { return r.kind == K::Gpu; });
+    if (snap.collapsedGpuPasses >= 2 && snap.gpuAvgMs > 1.0) {
+        ImGui::TextColored(kHelpText,
+                           "%d passes read ~0. If they really draw something, this driver puts a\n"
+                           "whole render pass on its first mark; WOWEE_PASS_ABLATION=1 measures\n"
+                           "the scene pass by switching passes off instead.",
+                           snap.collapsedGpuPasses);
+    }
+    profileSection(snap, "##cpu", "CPU, main thread (blue: waiting or sleeping)", [](const auto& r) {
+        return r.kind == K::Cpu || r.kind == K::Wait || r.kind == K::Idle;
+    });
+    profileSection(snap, "##workers", "CPU, render workers (alongside the main thread)",
+                   [](const auto& r) { return r.kind == K::Worker; });
+    profileSection(snap, "##background", "CPU, background threads (not on the frame's path)",
+                   [](const auto& r) { return r.kind == K::Background; });
+
+    ImGui::Spacing();
+    ImGui::TextColored(kHelpText, "Ctrl+F12 or /profile hides this; /profile dump writes it to the log");
     ImGui::End();
 }
 

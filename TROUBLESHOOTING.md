@@ -77,7 +77,8 @@ This guide covers common issues and solutions for WoWee.
   3. Reduce View distance on the Graphics page
   4. Close other applications consuming GPU memory
   5. Check CPU usage - if high, reduce number of visible entities
-  6. For a per-pass cost breakdown, run with `WOWEE_PASS_ABLATION=1`: it switches each pass off for a few seconds and reports what each was worth
+  6. To see where the frame goes, type `/profile` (or press Ctrl+F12, or start with `WOWEE_PROFILE=1`): a table of GPU and CPU milliseconds per pass, and whether the frame is GPU-bound or CPU-bound. `/profile dump` writes it to the log for a bug report
+  7. For a per-pass cost breakdown, run with `WOWEE_PASS_ABLATION=1`: it switches each pass off for a few seconds and reports what each was worth
 
 ### Water/Terrain Flickering
 - **Cause**: Shadow mapping artifacts, terrain LOD issues, or GPU memory pressure

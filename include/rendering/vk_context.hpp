@@ -191,6 +191,26 @@ public:
     /// cannot timestamp, which is checked once at device selection.
     void gpuMark(VkCommandBuffer cmd, const char* label);
     [[nodiscard]] bool gpuTimingSupported() const { return gpuTimingSupported_; }
+
+    // Marks recorded into secondary command buffers.
+    //
+    // A pass recorded on a worker thread cannot be marked from the primary:
+    // the scene pass is begun with SECONDARY_COMMAND_BUFFERS contents, inside
+    // which vkCmdExecuteCommands is the only command the primary may record.
+    // The secondary writes its own timestamp instead. Workers record in no
+    // particular order, so the main thread reserves the query indices up front
+    // in the order the secondaries will execute, and each worker writes into
+    // the indices it was handed. Indices then read back in execution order, and
+    // the gap between consecutive marks is still the cost of what lies between.
+    static constexpr uint32_t kNoGpuMark = UINT32_MAX;
+    /// `count` consecutive indices, or kNoGpuMark when nothing is recorded this
+    /// frame - timestamps are written only while the frame profiler or
+    /// WOWEE_FRAME_PROFILE wants them. Main thread, in execution order
+    /// relative to gpuMark.
+    uint32_t gpuReserveMarks(uint32_t count);
+    /// Writes a reserved index. Any thread; each index from one thread only.
+    /// An index that is never written is skipped at readback.
+    void gpuMarkAt(VkCommandBuffer cmd, uint32_t index, const char* label);
     /// A named point the driver reports as the last one each queue reached
     /// when the device is lost. Nothing without
     /// VK_NV_device_diagnostic_checkpoints, which is NVIDIA - where every
@@ -396,7 +416,9 @@ private:
     /// One pool per frame slot, read back when that slot comes round again -
     /// by then its fence has been waited on, so the results are ready and the
     /// read never blocks.
-    static constexpr uint32_t kMaxGpuMarks = 32;
+    /// Room for every cascade, the scene secondaries' sub-passes and the post
+    /// chain with some to spare; a timestamp query costs a few bytes.
+    static constexpr uint32_t kMaxGpuMarks = 128;
     VkQueryPool gpuQueryPools_[MAX_FRAMES_IN_FLIGHT]{};
     const char* gpuMarkLabels_[MAX_FRAMES_IN_FLIGHT][kMaxGpuMarks]{};
     uint32_t gpuMarkCount_[MAX_FRAMES_IN_FLIGHT]{};
@@ -406,6 +428,9 @@ private:
     std::vector<std::pair<const char*, double>> gpuTimings_;
     float timestampPeriodNs_ = 0.0f;
     bool gpuTimingSupported_ = false;
+    /// WOWEE_FRAME_PROFILE keeps its ten-second GPU breakdown with the
+    /// profiler itself off.
+    bool gpuTimingForStageReport_ = false;
     void createGpuQueryPools();
     void readGpuTimings(uint32_t slot);
     uint32_t presentQueueFamily = 0;

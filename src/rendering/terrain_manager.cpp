@@ -23,6 +23,7 @@
 #include "pipeline/wowee_collision.hpp"
 #include "core/memory_monitor.hpp"
 #include "core/profiler.hpp"
+#include "core/frame_profiler.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/adt_loader.hpp"
 #include "pipeline/m2_loader.hpp"
@@ -184,6 +185,7 @@ bool TerrainManager::initialize(pipeline::AssetManager* assets, TerrainRenderer*
 
 void TerrainManager::update(const Camera& camera, float deltaTime) {
     ZoneScopedN("TerrainManager::update");
+    WOWEE_PROFILE_SCOPE("terrain streaming", Cpu);
     if (!streamingEnabled || !assetManager || !terrainRenderer) {
         return;
     }
@@ -1462,6 +1464,7 @@ void TerrainManager::workerLoop() {
 
 void TerrainManager::processReadyTiles() {
     ZoneScopedN("TerrainManager::processReadyTiles");
+    WOWEE_PROFILE_SCOPE("terrain: finalize ready tiles", Cpu);
     // Move newly ready tiles into the finalizing deque.
     // Keep them in pendingTiles so streamTiles() won't re-enqueue them.
     {
@@ -1557,6 +1560,7 @@ void TerrainManager::processReadyTiles() {
 
 void TerrainManager::processPendingUnloads() {
     ZoneScopedN("TerrainManager::processPendingUnloads");
+    WOWEE_PROFILE_SCOPE("terrain: unload tiles", Cpu);
     if (pendingUnloadQueue_.empty()) return;
 
     // Time-budgeted rather than count-capped (see pendingUnloadQueue_'s comment) so

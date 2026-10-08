@@ -20,6 +20,7 @@
 #include "pipeline/blp_loader.hpp"
 #include "core/logger.hpp"
 #include "core/profiler.hpp"
+#include "core/frame_profiler.hpp"
 #include <chrono>
 #include <cctype>
 #include <glm/gtc/matrix_transform.hpp>
@@ -402,6 +403,9 @@ float M2Renderer::instanceDistanceFade(const M2Instance& inst, float distSq) con
 
 void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::mat4& viewProjection) {
     ZoneScopedN("M2Renderer::update");
+    // On a frame worker, alongside the characters' animation on the main
+    // thread; the main thread waits for it before the footprints.
+    WOWEE_PROFILE_SCOPE("animation: m2 doodads", Worker);
     if (spatialIndexDirty_) {
         rebuildSpatialIndex();
     }
@@ -1595,6 +1599,13 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
 
             visStart = groupEnd;
         }
+    }
+
+    // The opaque half ends here, for the frame profiler. Taken and cleared so
+    // the sky's model renderers, which share this code, never write it.
+    if (gpuOpaqueMark_ != UINT32_MAX) {
+        vkCtx_->gpuMarkAt(cmd, gpuOpaqueMark_, "m2 opaque");
+        gpuOpaqueMark_ = UINT32_MAX;
     }
 
     // =====================================================================

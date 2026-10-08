@@ -11,6 +11,7 @@
 #include "ui/chat/chat_utils.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/renderer.hpp"
+#include "core/frame_profiler.hpp"
 #include <algorithm>
 #include <cctype>
 
@@ -248,7 +249,65 @@ public:
     }
 };
 
+// --- /profile [on|off|dump|csv [path|off]] ---
+class ProfileCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        auto& prof = core::FrameProfiler::get();
+        std::string arg = ctx.args;
+        for (char& c : arg) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        while (!arg.empty() && std::isspace(static_cast<unsigned char>(arg.front()))) arg.erase(arg.begin());
+        while (!arg.empty() && std::isspace(static_cast<unsigned char>(arg.back()))) arg.pop_back();
+        const auto say = [&](const std::string& text) {
+            ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(text));
+        };
+
+        if (arg.empty() || arg == "on" || arg == "off") {
+            const bool want = arg.empty() ? !core::FrameProfiler::enabled() : arg == "on";
+            prof.setEnabled(want);
+            say(want ? "Frame profiler: on. The table fills in after a second; /profile dump "
+                       "writes it to the log."
+                     : "Frame profiler: off.");
+        } else if (arg == "dump") {
+            // A dump of nothing is no use, so asking for one starts it, and
+            // the table lands in the log once a second has been measured.
+            if (!core::FrameProfiler::enabled()) prof.setEnabled(true);
+            prof.requestDump();
+            say("Frame profiler: the next second's table goes to the log.");
+        } else if (arg.rfind("csv", 0) == 0) {
+            // The path as typed, not lowercased.
+            std::string path = ctx.args;
+            const size_t at = path.find_first_not_of(" \t");
+            path = (at == std::string::npos) ? std::string() : path.substr(at + 3);
+            while (!path.empty() && std::isspace(static_cast<unsigned char>(path.front()))) path.erase(path.begin());
+            while (!path.empty() && std::isspace(static_cast<unsigned char>(path.back()))) path.pop_back();
+            if (path == "off" || path == "stop") {
+                prof.stopCsv();
+                say("Frame profiler: CSV closed.");
+            } else {
+                if (path.empty()) path = "wowee_profile.csv";
+                std::string error;
+                if (prof.startCsv(path, error)) {
+                    if (!core::FrameProfiler::enabled()) prof.setEnabled(true);
+                    say("Frame profiler: a row per stage per second to " + path +
+                        " until /profile csv off.");
+                } else {
+                    say("Frame profiler: " + error);
+                }
+            }
+        } else {
+            say("Usage: /profile [on|off|dump|csv [path|off]]");
+        }
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"profile", "perf"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "Frame time by pass, CPU and GPU (/profile on|off|dump|csv [path|off]; Ctrl+F12)";
+    }
+};
+
 void registerSystemCommands(ChatCommandRegistry& reg) {
+    reg.registerCommand(std::make_unique<ProfileCommand>());
     reg.registerCommand(std::make_unique<ClimbCommand>());
     reg.registerCommand(std::make_unique<RunCommand>());
     reg.registerCommand(std::make_unique<DumpCommand>());

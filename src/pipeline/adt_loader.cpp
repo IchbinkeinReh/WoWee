@@ -3,6 +3,7 @@
 #include <span>
 #include "core/logger.hpp"
 #include "core/profiler.hpp"
+#include "core/frame_profiler.hpp"
 #include <cstring>
 #include <cmath>
 #include <algorithm>
@@ -32,6 +33,9 @@ float HeightMap::getHeight(int x, int y) const {
 // ADTLoader implementation
 ADTTerrain ADTLoader::load(const std::vector<uint8_t>& adtData) {
     ZoneScopedN("ADTLoader::load");
+    // On the streaming workers, off the frame's path; here so a hitch that
+    // lines up with a tile arriving can be told from one that does not.
+    WOWEE_PROFILE_SCOPE("terrain: parse ADT", Background);
     ADTTerrain terrain;
 
     if (adtData.empty()) {

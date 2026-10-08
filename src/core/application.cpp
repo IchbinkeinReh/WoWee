@@ -7,6 +7,7 @@
 #include "core/coordinates.hpp"
 #include "ui/minimap_projection.hpp"
 #include "core/profiler.hpp"
+#include "core/frame_profiler.hpp"
 #include "core/npc_interaction_callback_handler.hpp"
 #include "core/audio_callback_handler.hpp"
 #include "core/entity_spawn_callback_handler.hpp"
@@ -1364,6 +1365,8 @@ void Application::run() {
         LOG_WARNING("Frame timing profile enabled (WOWEE_FRAME_PROFILE=1) - "
                     "the per-stage breakdown will be reported at warning");
     }
+    // The live breakdown: WOWEE_PROFILE=1, or /profile and Ctrl+F12 later.
+    core::FrameProfiler::get().configureFromEnvironment();
 
     // Integer nanoseconds off a monotonic clock, and the finest sleep the
     // platform will give for as long as the loop runs. See frame_pacer.hpp
@@ -1446,6 +1449,7 @@ void Application::run() {
         // granularity is a millisecond or so, which is close enough for a
         // cap and far cheaper than spinning.
         if (window) {
+            WOWEE_PROFILE_SCOPE("sleep: frame cap", Idle);
             pacer.waitForCap(window->frameCap());
         }
 
@@ -1461,6 +1465,12 @@ void Application::run() {
         if (renderer && renderer->getCameraController() && ImGui::GetIO().WantCaptureMouse) {
             renderer->getCameraController()->releaseMouseCapture();
         }
+
+        // Events and input, up to the update. A scope held in an optional
+        // rather than a block, because what it covers is a hundred lines of
+        // loop body with its own continues and breaks.
+        std::optional<core::ProfileScope> eventsScope;
+        if (core::FrameProfiler::enabled()) eventsScope.emplace("events + input", core::ProfileKind::Cpu);
 
         // Poll events
         //
@@ -1841,6 +1851,14 @@ void Application::run() {
                 // Graphics page (off by default, as the client's
                 // extShadowQuality 0).
 #endif
+                // Ctrl+F12: the frame profiler. Not behind NDEBUG like the
+                // HUD above - the build that is slow is the release one, and
+                // it is the one this has to answer for. With Ctrl, because
+                // a bare F-key belongs to the player's bindings.
+                if (event.key.scancode == SDL_SCANCODE_F12 && event.key.repeat == 0 &&
+                    (event.key.mod & SDL_KMOD_CTRL)) {
+                    core::FrameProfiler::get().toggle();
+                }
                 // F8: Debug WMO floor at current position
                 if (event.key.scancode == SDL_SCANCODE_F8 && event.key.repeat == 0) {
                     if (renderer && renderer->getWMORenderer()) {
@@ -1876,10 +1894,12 @@ void Application::run() {
 
         // Update input
         Input::getInstance().update();
+        eventsScope.reset();
 
         // Update application state
         try {
             FrameMark;
+            WOWEE_PROFILE_SCOPE("update", Cpu);
             update(deltaTime);
         } catch (const std::bad_alloc& e) {
             LOG_ERROR("OOM during Application::update (state=", static_cast<int>(state),
@@ -1905,6 +1925,7 @@ void Application::run() {
         }
         // Swap buffers
         try {
+            WOWEE_PROFILE_SCOPE("swapBuffers", Cpu);
             window->swapBuffers();
         } catch (const std::bad_alloc& e) {
             LOG_ERROR("OOM during swapBuffers: ", e.what());
@@ -1933,8 +1954,12 @@ void Application::run() {
         const auto deadline = frameStart + targetFrame;
         const auto now = std::chrono::steady_clock::now();
         if (now < deadline) {
+            WOWEE_PROFILE_SCOPE("sleep: frame pacing", Idle);
             std::this_thread::sleep_until(deadline);
         }
+        // Last thing in the loop, so the frame it closes is the whole of it,
+        // sleeps included.
+        core::FrameProfiler::get().endFrame();
     }
 
     LOG_INFO("Main loop ended");
@@ -3779,6 +3804,7 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     try {
     auto runInGameStage = [&](const char* stageName, auto&& fn) {
         auto stageStart = std::chrono::steady_clock::now();
+        const core::ProfileScope profileScope(stageName, core::ProfileKind::Cpu);
         try {
             fn();
         } catch (const std::bad_alloc& e) {
@@ -4120,6 +4146,7 @@ void Application::update(float deltaTime) {
     updateCheckpoint = "renderer update";
     if (renderer && state == AppState::IN_GAME) {
         auto rendererUpdateStart = std::chrono::steady_clock::now();
+        WOWEE_PROFILE_SCOPE("renderer->update", Cpu);
         try {
             renderer->update(deltaTime);
         } catch (const std::bad_alloc& e) {
@@ -4138,6 +4165,7 @@ void Application::update(float deltaTime) {
     // Update UI
     updateCheckpoint = "ui update";
     if (uiManager) {
+        WOWEE_PROFILE_SCOPE("uiManager->update", Cpu);
         try {
             uiManager->update(deltaTime);
         } catch (const std::bad_alloc& e) {
@@ -4194,6 +4222,7 @@ void Application::render() {
     // watchdog needs to say which phase did it.
     auto runRenderStage = [this](const char* stageName, auto&& fn) {
         auto stageStart = std::chrono::steady_clock::now();
+        const core::ProfileScope profileScope(stageName, core::ProfileKind::Cpu);
         fn();
         float stageMs = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - stageStart).count();

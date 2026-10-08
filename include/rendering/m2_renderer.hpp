@@ -483,6 +483,11 @@ public:
     };
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
                 const BlendedInterleave* interleave = nullptr);
+    /// A GPU timestamp index (VkContext::gpuReserveMarks) the next render()
+    /// writes between its opaque and its blended halves, so the frame profiler
+    /// can tell the two apart. Used once and forgotten; set before the
+    /// recording thread starts.
+    void setGpuOpaqueMark(uint32_t index) { gpuOpaqueMark_ = index; }
 
     /** Set the HiZ system for occlusion culling (Phase 6.3). nullptr disables HiZ. */
     void setHiZSystem(HiZSystem* hiz) { hizSystem_ = hiz; }
@@ -815,6 +820,7 @@ private:
 
     // Vulkan context
     VkContext* vkCtx_ = nullptr;
+    uint32_t gpuOpaqueMark_ = UINT32_MAX;
 
     // Vulkan pipelines (one per blend mode)
     VkPipeline opaquePipeline_ = VK_NULL_HANDLE;       // blend mode 0
