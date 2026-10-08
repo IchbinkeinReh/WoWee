@@ -1,6 +1,9 @@
 #pragma once
 
+#include "game/guild_emblem.hpp"
+#include <optional>
 #include "core/character_geosets.hpp"
+#include "core/preview_dressing.hpp"
 
 #include "game/character.hpp"
 #include <glm/glm.hpp>
@@ -62,8 +65,18 @@ public:
     bool loadCreature(const std::string& m2Path,
                       const std::vector<std::pair<uint32_t, std::string>>& skins = {});
 
-    // Apply equipment overlays/geosets using SMSG_CHAR_ENUM equipment data (ItemDisplayInfo.dbc).
+    /// A unit's worn items, as the world draws it: armour, the helmet's
+    /// model and masks (0x004ef0d0), shoulders and the weapons in hand.
     bool applyEquipment(const std::vector<game::EquipmentItem>& equipment);
+    /// The character-select model (0x004e0fd0): SMSG_CHAR_ENUM's 23 slots,
+    /// by slot, and the character's flags. No head item.
+    bool applyCharacterSelectEquipment(const std::vector<game::EquipmentItem>& slots, uint32_t characterFlags);
+    /// The guild's tabard design a guild tabard is painted with (0x004e3cd0),
+    /// or none; set before dressing.
+    void setGuildEmblem(const std::optional<game::GuildEmblem>& emblem) { guildEmblem_ = emblem; }
+    /// The character-create model (0x004e0fd0 with none selected): the
+    /// race, class and sex's CharStartOutfit row. After loadCharacter.
+    bool applyStartOutfit();
 
     void update(float deltaTime);
     void render();
@@ -122,7 +135,15 @@ private:
     // Read an M2 (plus its .skin for WotLK-era models) through the asset manager.
     bool loadPreviewM2(const std::string& m2Path, pipeline::M2Model& outModel);
     // Hang the character's weapons off the preview model's hand attachments.
-    void attachWeapons(const std::vector<game::EquipmentItem>& equipment);
+    void attachWeapons(const std::vector<core::PreviewWeapon>& held);
+    /// The quiver slot (0x004f2640 case 0xb): the last of `displays` whose
+    /// ItemDisplayInfo has a left model, from the Quiver folder, at
+    /// attachment 26 (0x004ef250, 0x004ef3b0).
+    void attachQuiver(const std::vector<uint32_t>& displays);
+    /// Armour, shoulders and - with `headDisplay` - the helmet, then the
+    /// held weapons and the quiver.
+    bool dress(const std::vector<game::EquipmentItem>& worn, uint32_t headDisplay,
+               const std::vector<core::PreviewWeapon>& held, const std::vector<uint32_t>& quivers = {});
     // Put the weapon's enchant glint on it (char enum reports the ItemVisual id directly).
     void attachWeaponEnchantVisual(uint32_t attachmentId, uint32_t itemVisualId);
     // Load the race's glue scene (Stormwind for humans, Orgrimmar for orcs, ...) as a backdrop.
@@ -224,6 +245,7 @@ private:
     uint8_t classId_ = 0;
     bool appearanceGeosetsLoaded_ = false;
     core::AppearanceGeosetTables appearanceTables_;
+    std::optional<game::GuildEmblem> guildEmblem_;
 };
 
 } // namespace rendering

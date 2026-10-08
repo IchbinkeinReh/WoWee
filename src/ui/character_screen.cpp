@@ -414,8 +414,12 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
         }
         if (preview_) {
             const uint64_t equipHash = game::hashEquipmentAppearance(character.equipment);
+            // The guild's tabard design, asked for and dressed again when it
+            // comes (0x004e3cd0, 0x004e27c0).
+            const std::optional<game::GuildEmblem> emblem = gameHandler.lookupGuildEmblem(character.guildId);
             const bool changed =
                 (previewGuid_ != character.guid) ||
+                (previewEmblem_ != emblem) ||
                 (previewAppearanceBytes_ != character.appearanceBytes) ||
                 (previewFacialFeatures_ != character.facialFeatures) ||
                 (previewUseFemaleModel_ != character.useFemaleModel) ||
@@ -428,10 +432,11 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
                 uint8_t hairColor = (character.appearanceBytes >> 24) & 0xFF;
 
                 preview_->setCharacterClass(static_cast<uint8_t>(character.characterClass));
+                preview_->setGuildEmblem(emblem);
                 if (preview_->loadCharacter(character.race, character.gender,
                                             skin, face, hairStyle, hairColor,
                                             character.facialFeatures, character.useFemaleModel)) {
-                    preview_->applyEquipment(character.equipment);
+                    preview_->applyCharacterSelectEquipment(character.equipment, character.flags);
                 }
 
                 previewGuid_ = character.guid;
@@ -439,6 +444,7 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
                 previewFacialFeatures_ = character.facialFeatures;
                 previewUseFemaleModel_ = character.useFemaleModel;
                 previewEquipHash_ = equipHash;
+                previewEmblem_ = emblem;
             }
 
             // Drive preview animation and request composite for next beginFrame.

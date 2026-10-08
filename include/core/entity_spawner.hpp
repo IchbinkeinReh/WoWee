@@ -1,10 +1,12 @@
 #pragma once
 
 #include "game/character.hpp"
+#include "game/guild_emblem.hpp"
 #include "game/game_services.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "core/character_geosets.hpp"
+#include "core/weapon_attachment.hpp"
 #include <memory>
 #include <string>
 #include <utility>
@@ -23,9 +25,9 @@ namespace wowee {
 
 // Forward declarations
 namespace rendering { class Renderer; }
-namespace pipeline { class AssetManager; struct M2Model; struct WMOModel; }
+namespace pipeline { class AssetManager; class DBCFile; struct M2Model; struct WMOModel; }
 namespace audio { enum class VoiceType; }
-namespace game { class GameHandler; class Entity; }
+namespace game { class GameHandler; class Entity; struct CorpseLook; }
 
 namespace core {
 
@@ -63,6 +65,18 @@ public:
     void despawnCreature(uint64_t guid);
     void despawnPlayer(uint64_t guid);
     void despawnGameObject(uint64_t guid);
+
+    /// A CORPSE object as CGCorpse_C draws it (0x00705670, 0x00705b20):
+    /// bones as the race's death skeleton; otherwise its display's model,
+    /// laid down dead and, for a character model, dressed in its items.
+    void spawnCorpse(uint64_t guid, const game::CorpseLook& look, float x, float y, float z, float orientation);
+    /// Takes away what spawnCorpse drew besides a character model.
+    void despawnCorpse(uint64_t guid);
+    /// A corpse's lootable bit changed: the loot sparkle added or taken
+    /// away (0x007061e0).
+    void setCorpseLootable(uint64_t guid, bool lootable);
+    /// Whether spawnCorpse drew this guid through the player or creature path.
+    bool isCorpse(uint64_t guid) const { return corpseGuids_.count(guid) > 0; }
 
     // A GAMEOBJECT_QUERY_RESPONSE arrived. Game object animation does not
     // depend on the type, so there is nothing to revisit; kept as the hook.
@@ -173,18 +187,60 @@ public:
     static std::string transportModelPath(uint32_t entry, uint32_t displayId);
     audio::VoiceType detectVoiceTypeFromDisplayId(uint32_t displayId) const;
 
-    /// Every other unit's weapons as its items and sheath state
-    /// (UNIT_FIELD_BYTES_2 byte 0) have them, re-dressed when either changes
-    /// (0x0072dbc0, 0x00731f40): creatures from UNIT_VIRTUAL_ITEM_SLOT_ID,
-    /// players from their PLAYER_VISIBLE_ITEM entries. Once a frame.
+    /// Every other unit's weapons as its items and sheath state have them,
+    /// re-dressed when either changes (0x0072dbc0, 0x00731f40): creatures
+    /// from UNIT_VIRTUAL_ITEM_SLOT_ID (classic and TBC: _SLOT_DISPLAY and
+    /// _INFO), players from their PLAYER_VISIBLE_ITEM entries. The state is
+    /// the client's own for each unit (CGUnit_C +0xb5c), taken from
+    /// UNIT_FIELD_BYTES_2 byte 0 when its model is made (0x0073f660) and
+    /// whenever the field changes (0x00737aa0), and changed as the client
+    /// changes it: by its animation, cast or attack (0x00738180), its stand
+    /// state (0x0073f060) and a channel at a fishing bobber (0x0073a520).
+    /// Once a frame.
     void updateUnitWeapons();
+    /// A spell's cast beginning on a unit other than the active player
+    /// (0x007fa2e0, with 0x0073a6c0 for its kits).
+    void onUnitSpellCastBegin(uint64_t guid, uint32_t spellId);
+    /// A unit's melee swing (SMSG_ATTACKERSTATEUPDATE): melee drawn
+    /// (0x00756800 case 0x14a).
+    void onUnitAttackSwing(uint64_t guid);
+    /// What 0x007fa2e0 and 0x0073a6c0 read of a spell cast by a unit of
+    /// this display: Spell.dbc's Attributes, its visual's missile model and
+    /// whether its precast or cast kit has a weapon effect, and the
+    /// display's CreatureModelData flag 0x10.
+    SpellSheathInput spellSheathInput(uint32_t spellId, uint32_t displayId) const;
+    /// ChrClasses Flags (+0x24) without 8: the class may draw a ranged
+    /// weapon (0x00736d30).
+    bool classMayDrawRanged(uint32_t classId) const;
+    /// Paints a tabard again as the client does (0x006db510): a player's
+    /// when its guild changes (0x006e1bb0), a player's or corpse's when its
+    /// guild's design arrives or changes (0x006d2840, 0x00705950, and
+    /// 0x006e1b40 for the guild's members after a PLAYER_GUILD_TIMESTAMP
+    /// the client had not seen asked for it again, 0x006e1c60). Once a
+    /// frame.
+    void refreshGuildTabards();
+    /// The BehaviorID (AnimationData +0x18) of the animation an instance
+    /// plays, or kNoAnimationBehavior (0x00721ed0's reading of it).
+    uint32_t animationBehavior(uint32_t instanceId) const;
+    /// The animation an instance plays as 0x00738180 reads it: its id, and
+    /// its AnimationData WeaponFlags (+8) and BehaviorID (+0x18).
+    struct AnimationRecord {
+        uint32_t animId = 0xFFFFFFFFu;
+        bool known = false;
+        uint32_t weaponFlags = 0;
+        uint32_t behavior = kNoAnimationBehavior;
+    };
+    AnimationRecord animationRecord(uint32_t instanceId) const;
+    /// A display's CreatureModelData Flags (+4); nothing when a record is
+    /// missing (0x00717a20).
+    std::optional<uint32_t> creatureModelFlags(uint32_t displayId) const;
+    /// Whether the unit a CharacterRenderer instance draws holds a kit's
+    /// weapon effects (CreatureModelData +4 without 0x10, 0x0073a6c0), and
+    /// then its AttachedEffectScale (+0x60, 0x006f8c50).
+    std::optional<float> kitWeaponEffectHolder(uint32_t renderInstanceId) const;
 
-    // Attempts one deferred attachment and owns retry bookkeeping. Returns true
-    // only when this call consumed the caller's per-frame attachment budget.
-    bool retryCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId,
-                                     uint8_t maxAttempts);
-
-    /// Every unit's blob shadow for this frame (0x00793980): its
+    /// Every unit's and corpse's blob shadow for this frame (0x00793980): a
+    /// corpse that is not bones by the bounds of its model's sequence; a unit by its
     /// CreatureModelData box on the instance it is drawn with - the mount's
     /// when it rides one - or none. `localPlayerInstance` is the renderer's
     /// own character.
@@ -422,7 +478,6 @@ private:
     /// The geoset ids of a loaded model's batches.
     std::vector<uint16_t> modelSubmeshIds(uint32_t modelId) const;
     bool creatureLookupsBuilt_ = false;
-    bool tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId);
 
     // CharSections.dbc lookup cache
     std::unordered_map<uint64_t, std::string> charSectionsCache_;
@@ -479,15 +534,76 @@ private:
         uint32_t instanceId = 0;
         uint32_t modelId = 0;
         std::array<uint32_t, 3> entries{};
+        std::array<uint32_t, 6> info{};
         uint8_t sheathState = 0;
+        uint32_t unitFlags = 0;
+        uint32_t unitFlags2 = 0;
+        bool offHandFollowsAnimation = false;
     };
     std::unordered_map<uint64_t, UnitWeaponsShown> unitWeaponsShown_;
+    /// Each other unit's sheath state as the client keeps it (+0xb5c), and
+    /// what it last saw of what changes it.
+    struct UnitSheath {
+        uint32_t instanceId = 0;
+        SheathState state = SheathState::Melee;
+        std::optional<SheathState> fieldSeen;
+        uint8_t standSeen = 0;
+        uint64_t channelObjectSeen = 0;
+        /// What 0x00738180 last ran for.
+        uint32_t animId = 0xFFFFFFFFu;
+        uint32_t castSpellId = 0;
+        bool attacking = false;
+    };
+    std::unordered_map<uint64_t, UnitSheath> unitSheath_;
+    /// A unit's weapon slots as updateUnitWeapons reads them: item entries,
+    /// or before WotLK displays with their UNIT_VIRTUAL_ITEM_INFO pairs.
+    struct UnitWeaponEntries {
+        std::array<uint32_t, 3> entries{};
+        std::array<uint32_t, 6> info{};
+        bool byDisplay = false;
+    };
+    std::optional<UnitWeaponEntries> unitWeaponEntries(uint64_t guid, const game::Entity& entity,
+                                                       bool isPlayer) const;
+    /// The slots' items (Sheath, InventoryType, class, subclass) and
+    /// displays; false while an item is not known yet (its query is asked
+    /// for).
+    bool resolveUnitWeaponItems(const UnitWeaponEntries& slots, std::array<UnitWeaponItem, 3>& items,
+                                std::array<uint32_t, 3>& displays) const;
+    /// 0x00736d30 for another unit: its state changes to `requested` when
+    /// the client lets it.
+    void setUnitSheathState(uint64_t guid, UnitSheath& sheath, SheathState requested, bool fromServer);
+    /// Corpses drawn through the player or creature paths, those through the
+    /// creature path, and bones: M2 instances and their models by path.
+    std::unordered_set<uint64_t> corpseGuids_;
+    std::unordered_set<uint64_t> corpseCreatureGuids_;
+    std::unordered_map<uint64_t, uint32_t> corpseBonesInstances_;
+    std::unordered_map<std::string, uint32_t> corpseBonesModelIds_;
+    /// Every corpse drawn: where it lies, the animation it lies in, and its
+    /// loot sparkle's M2 instance (0 for none).
+    struct CorpseSite {
+        glm::vec3 position{0.0f};  ///< canonical
+        uint32_t pose = 0;
+        uint32_t sparkleInstance = 0;
+        uint32_t guildId = 0;  ///< CORPSE_FIELD_GUILD
+    };
+    std::unordered_map<uint64_t, CorpseSite> corpseSites_;
+    /// The loot sparkle's model ("HARDCODED Loot Art", 0x006f7520), loaded
+    /// on first use; 0 when there is none.
+    uint32_t lootSparkleModelId_ = 0;
+    bool lootSparkleModelTried_ = false;
+    /// The animation a corpse lies in, or nothing for a guid that is none.
+    std::optional<uint32_t> corpsePose(uint64_t guid) const;
+    /// Whether a corpse's display is a character model (CreatureModelData
+    /// flag 4, 0x00705b20); nothing when its records are missing.
+    std::optional<bool> corpseDisplayIsCharacter(uint32_t displayId) const;
+    void spawnCorpseBones(uint64_t guid, const std::string& modelPath, float x, float y, float z,
+                          float orientation);
+    /// AnimationData.dbc, for animationBehavior; loaded on first use.
+    mutable std::shared_ptr<pipeline::DBCFile> animationDataDbc_;
+    mutable bool animationDataLoaded_ = false;
     /// Hangs a unit's three weapon slots as 0x0072dbc0 does. False while an
     /// item is not known yet (its query is asked for).
-    bool dressUnitWeapons(uint32_t instanceId, const std::array<uint32_t, 3>& entries,
-                          uint8_t sheathState, bool rangedJustPutAway, bool isPlayer);
-    std::unordered_set<uint64_t> creatureWeaponsAttached_;
-    std::unordered_map<uint64_t, uint8_t> creatureWeaponAttachAttempts_;
+    bool dressUnitWeapons(uint32_t instanceId, const UnitWeaponEntries& slots, const UnitWeaponDress& dress);
     std::unordered_map<uint32_t, bool> modelIdIsWolfLike_;
 
     void syncCreatureStealthVisuals();
@@ -616,6 +732,18 @@ private:
     };
     std::unordered_map<uint64_t, OnlinePlayerAppearanceState> onlinePlayerAppearance_;
     std::unordered_map<uint64_t, std::pair<std::array<uint32_t, 19>, std::array<uint8_t, 19>>> pendingOnlinePlayerEquipment_;
+    /// Players and corpses painted wearing a tabard: what they wear, and
+    /// the guild and design it was painted with.
+    struct PaintedTabard {
+        std::array<uint32_t, 19> displayIds{};
+        std::array<uint8_t, 19> inventoryTypes{};
+        uint32_t guildId = 0;
+        std::optional<game::GuildEmblem> emblem;
+        /// Frames left before a repaint that has not landed is asked again.
+        uint16_t repaintWait = 0;
+    };
+    std::unordered_map<uint64_t, PaintedTabard> paintedTabards_;
+    uint32_t tabardEmblemGeneration_ = 0;
     std::deque<std::pair<uint64_t, std::pair<std::array<uint32_t, 19>, std::array<uint8_t, 19>>>> deferredEquipmentQueue_;
     void processDeferredEquipmentQueue();
     struct PreparedEquipmentUpdate {

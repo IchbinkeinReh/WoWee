@@ -167,6 +167,7 @@ void CharacterCreateScreen::reset() {
     prevHairStyle_ = -1;
     prevHairColor_ = -1;
     prevFacialHair_ = -1;
+    prevClass_ = -1;
     prevRangeRace_ = -1;
     prevRangeGender_ = -1;
     prevRangeBodyType_ = -1;
@@ -240,10 +241,16 @@ void CharacterCreateScreen::updatePreviewIfNeeded() {
                     hairStyle != prevHairStyle_ ||
                     hairColor != prevHairColor_ ||
                     facialHair != prevFacialHair_);
+    // The chosen class: a death knight's eyes glow (0x004ed900).
+    const int cls = availableClasses.empty()
+        ? 0 : static_cast<int>(availableClasses[static_cast<size_t>(classIndex)]);
+    changed = changed || cls != prevClass_;
 
     if (changed) {
+        preview_->setCharacterClass(static_cast<uint8_t>(cls));
         bool useFemaleModel = (genderIndex == 2 && bodyTypeIndex == 1);  // Nonbinary + Feminine
-        preview_->loadCharacter(
+        // Dressed in the start outfit, as the client's create screen is.
+        if (preview_->loadCharacter(
             availableRaces_[raceIndex],
             static_cast<game::Gender>(genderIndex),
             selectedAppearanceId(skinIds_, skin),
@@ -251,7 +258,9 @@ void CharacterCreateScreen::updatePreviewIfNeeded() {
             selectedAppearanceId(hairStyleIds_, hairStyle),
             selectedAppearanceId(hairColorIds_, hairColor),
             selectedAppearanceId(facialHairIds_, facialHair),
-            useFemaleModel);
+            useFemaleModel)) {
+            preview_->applyStartOutfit();
+        }
 
         prevRaceIndex_ = raceIndex;
         prevGenderIndex_ = genderIndex;
@@ -261,6 +270,7 @@ void CharacterCreateScreen::updatePreviewIfNeeded() {
         prevHairStyle_ = hairStyle;
         prevHairColor_ = hairColor;
         prevFacialHair_ = facialHair;
+        prevClass_ = cls;
     }
 }
 

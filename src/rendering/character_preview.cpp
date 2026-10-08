@@ -1,3 +1,4 @@
+#include "core/character_component.hpp"
 #include "rendering/character_preview.hpp"
 #include "rendering/imgui_texture.hpp"
 #include "rendering/character_renderer.hpp"
@@ -15,6 +16,7 @@
 #include "pipeline/dbc_layout.hpp"
 #include "core/appearance_composer.hpp"
 #include "core/geoset_rules.hpp"
+#include "core/item_attachments.hpp"
 #include "pipeline/item_textures.hpp"
 #include "pipeline/m2_asset_loader.hpp"
 #include "core/logger.hpp"
@@ -698,16 +700,122 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
 }
 
 bool CharacterPreview::applyEquipment(const std::vector<game::EquipmentItem>& equipment) {
+    // As the world has the unit: the first main-hand kind in the right hand,
+    // the first off-hand kind in the left - a shield at the shield point.
+    std::vector<game::EquipmentItem> worn;
+    std::vector<core::PreviewWeapon> held;
+    uint32_t head = 0;
+    bool haveMain = false, haveOff = false;
+    for (const auto& it : equipment) {
+        if (it.displayModel == 0) continue;
+        switch (it.inventoryType) {
+            case 1: if (head == 0) head = it.displayModel; break;
+            case 13: case 15: case 17: case 21: case 25: case 26:
+                if (!haveMain) {
+                    held.push_back({.display = it.displayModel, .enchant = it.enchantment,
+                                    .point = core::attachment::kHandRight});
+                    haveMain = true;
+                }
+                break;
+            case 14: case 22: case 23:
+                if (!haveOff) {
+                    const bool shield = it.inventoryType == 14;
+                    held.push_back({.display = it.displayModel, .enchant = it.enchantment,
+                                    .point = shield ? core::attachment::kShield : core::attachment::kHandLeft,
+                                    .shield = shield});
+                    haveOff = true;
+                }
+                break;
+            default: worn.push_back(it); break;
+        }
+    }
+    return dress(worn, head, held);
+}
+
+namespace {
+std::vector<core::PreviewItem> previewItems(const std::vector<game::EquipmentItem>& items) {
+    std::vector<core::PreviewItem> out;
+    out.reserve(items.size());
+    for (const auto& it : items) {
+        out.push_back({.display = it.displayModel, .inventoryType = it.inventoryType, .enchant = it.enchantment});
+    }
+    return out;
+}
+std::vector<game::EquipmentItem> equipmentItems(const std::vector<core::PreviewItem>& items) {
+    std::vector<game::EquipmentItem> out;
+    out.reserve(items.size());
+    for (const auto& it : items) {
+        out.push_back({.displayModel = it.display, .inventoryType = it.inventoryType, .enchantment = it.enchant});
+    }
+    return out;
+}
+}  // namespace
+
+bool CharacterPreview::applyCharacterSelectEquipment(const std::vector<game::EquipmentItem>& slots,
+                                                     uint32_t characterFlags) {
+    const core::PreviewDress d = core::characterSelectDress(previewItems(slots), classId_, characterFlags);
+    return dress(equipmentItems(d.worn), d.head, d.held, d.quivers);
+}
+
+bool CharacterPreview::applyStartOutfit() {
+    if (!assetManager_ || !assetManager_->isInitialized()) return false;
+    // CharStartOutfit.dbc: id, then race, class, sex and outfit as the bytes
+    // of one field (the row match at 0x004e0fd0 reads +4, +5, +6), then 24
+    // item ids, 24 displays and 24 inventory types.
+    auto dbc = assetManager_->loadDBCOptional("CharStartOutfit.dbc");
+    std::vector<core::PreviewItem> outfit;
+    if (dbc && dbc->isLoaded() && dbc->getFieldCount() >= 74) {
+        const uint32_t race = static_cast<uint8_t>(race_);
+        const uint32_t sex = (gender_ == game::Gender::FEMALE ||
+                              (gender_ == game::Gender::NONBINARY && useFemaleModel_)) ? 1u : 0u;
+        for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+            const uint32_t key = dbc->getUInt32(r, 1);
+            if ((key & 0xFFu) != race || ((key >> 8) & 0xFFu) != classId_ || ((key >> 16) & 0xFFu) != sex) continue;
+            for (uint32_t i = 0; i < 24; ++i) {
+                const auto display = static_cast<int32_t>(dbc->getUInt32(r, 26 + i));
+                if (display <= 0) continue;
+                outfit.push_back({.display = static_cast<uint32_t>(display),
+                                  .inventoryType = static_cast<uint8_t>(dbc->getUInt32(r, 50 + i))});
+            }
+            break;
+        }
+    }
+    const core::PreviewDress d = core::characterCreateDress(outfit, classId_);
+    return dress(equipmentItems(d.worn), d.head, d.held, d.quivers);
+}
+
+bool CharacterPreview::dress(const std::vector<game::EquipmentItem>& equipment, uint32_t headDisplay,
+                             const std::vector<core::PreviewWeapon>& held, const std::vector<uint32_t>& quivers) {
     if (!modelLoaded_ || instanceId_ == 0 || !charRenderer_ || !assetManager_ || !assetManager_->isInitialized()) {
         return false;
     }
 
     // Weapons first, and unconditionally: they depend on nothing below, while the
     // geoset/skin work that follows bails out early on characters whose body skin
-    // could not be composited. Attaching last meant those characters showed no
-    // weapon at all - and kept the previously selected character's weapon and
-    // enchant, since detaching happens here too.
-    attachWeapons(equipment);
+    // could not be composited.
+    attachWeapons(held);
+    attachQuiver(quivers);
+
+    // The helmet (0x004ef0d0) and shoulders (0x004ef840), each by its
+    // display; none clears the point.
+    const uint8_t raceId = static_cast<uint8_t>(race_);
+    const uint8_t sexId = (gender_ == game::Gender::FEMALE ||
+                           (gender_ == game::Gender::NONBINARY && useFemaleModel_)) ? 1u : 0u;
+    core::attachHelm(*charRenderer_, *assetManager_, instanceId_, headDisplay, raceId, sexId,
+                     [this, headDisplay, raceId, sexId] {
+                         return previewModelIdFor("helm:" + std::to_string(headDisplay) + ":" +
+                                                  std::to_string(raceId) + ":" + std::to_string(sexId));
+                     });
+    uint32_t shoulderDisplay = 0;
+    for (const auto& it : equipment) {
+        if (it.displayModel != 0 && it.inventoryType == 3) { shoulderDisplay = it.displayModel; break; }
+    }
+    int shoulderModel = 0;
+    core::attachShoulders(*charRenderer_, *assetManager_, instanceId_, shoulderDisplay,
+                          [this, shoulderDisplay, &shoulderModel] {
+                              return previewModelIdFor("shoulder:" + std::to_string(shoulderDisplay) + ":" +
+                                                       std::to_string(shoulderModel++));
+                          });
 
     charRenderer_->clearTextureSlotOverride(instanceId_, static_cast<uint16_t>(skinTextureSlotIndex_));
     charRenderer_->setGroupTextureOverride(instanceId_, 15, nullptr);
@@ -738,14 +846,11 @@ bool CharacterPreview::applyEquipment(const std::vector<game::EquipmentItem>& eq
         return 0;
     };
 
-    const auto* idiL = pipeline::getActiveDBCLayout()
-        ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
-
     // --- Geosets ---
-    // The client's character component (0x004ed900), by inventory type. No
-    // head item: this preview draws no helmet model, and the helmet's masks
-    // would leave the character bald under nothing.
+    // The client's character component (0x004ed900), by inventory type, and
+    // the helmet's masks when it wears one.
     core::CharacterLook look = characterLook();
+    look.worn.head = headDisplay;
     look.worn.shirt = findDisplayId({4});
     look.worn.chest = findDisplayId({5, 20});
     look.worn.belt = findDisplayId({6});
@@ -760,28 +865,15 @@ bool CharacterPreview::applyEquipment(const std::vector<game::EquipmentItem>& eq
     if (bodySkinPath_.empty()) return true; // geosets applied, but can't composite
 
 
-    // Texture component region fields - use DBC layout when available, fall back to binary offsets.
-    uint32_t texRegionFields[8];
-    pipeline::getItemDisplayInfoTextureFields(*displayInfoDbc, idiL, texRegionFields);
-
-    std::vector<std::pair<int, std::string>> regionLayers;
-    regionLayers.reserve(32);
-
+    // The character component's layers (0x004f2880), with a guild
+    // tabard's emblem from the guild's design (0x004e3cd0).
+    std::vector<core::ComponentItem> componentItems;
     for (const auto& it : equipment) {
         if (it.displayModel == 0) continue;
-        int32_t recIdx = displayInfoDbc->findRecordById(it.displayModel);
-        if (recIdx < 0) continue;
-
-        for (int region = 0; region < 8; region++) {
-            std::string texName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), texRegionFields[region]);
-            if (texName.empty()) continue;
-
-            const std::string fullPath = pipeline::resolveItemRegionTexture(
-                *assetManager_, region, texName, gender_ == game::Gender::FEMALE);
-            if (fullPath.empty()) continue;
-            regionLayers.emplace_back(region, fullPath);
-        }
+        componentItems.push_back({core::componentItemForInventoryType(it.inventoryType), it.displayModel});
     }
+    const std::vector<std::pair<int, std::string>> regionLayers = core::characterComponentLayers(
+        *assetManager_, *displayInfoDbc, componentItems, gender_ == game::Gender::FEMALE, guildEmblem_);
 
     if (!regionLayers.empty()) {
         VkTexture* newTex = charRenderer_->compositeWithRegions(bodySkinPath_, baseLayers_, regionLayers);
@@ -987,78 +1079,78 @@ bool CharacterPreview::loadPreviewM2(const std::string& m2Path, pipeline::M2Mode
     return pipeline::loadM2WithSkin(*assetManager_, m2Path, outModel);  // m2_asset_loader.hpp
 }
 
-void CharacterPreview::attachWeapons(const std::vector<game::EquipmentItem>& equipment) {
+void CharacterPreview::attachWeapons(const std::vector<core::PreviewWeapon>& held) {
     if (!charRenderer_ || !assetManager_ || instanceId_ == 0) return;
 
-    // Attachment 1 = right hand, 2 = left hand.
-    charRenderer_->detachWeapon(instanceId_, 1);
-    charRenderer_->detachWeapon(instanceId_, 2);
+    for (uint32_t point : {core::attachment::kShield, core::attachment::kHandRight, core::attachment::kHandLeft}) {
+        charRenderer_->detachWeapon(instanceId_, point);
+    }
 
     auto displayInfoDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
     if (!displayInfoDbc || !displayInfoDbc->isLoaded()) return;
 
-
-    struct WeaponSlot {
-        std::initializer_list<uint8_t> invTypes;
-        uint32_t attachmentId;
-    };
-    // Main hand also covers two-handers and ranged; off hand covers shields and held items.
-    const WeaponSlot slots[] = {
-        { .invTypes = {13, 17, 21, 15, 25, 26}, .attachmentId = 1 },
-        { .invTypes = {14, 22, 23},             .attachmentId = 2 },
-    };
-
-    for (const auto& ws : slots) {
-        uint32_t displayId = 0;
-        uint32_t itemVisualId = 0;
-        for (const auto& item : equipment) {
-            if (item.displayModel == 0) continue;
-            for (uint8_t t : ws.invTypes) {
-                if (item.inventoryType == t) {
-                    displayId = item.displayModel;
-                    // SMSG_CHAR_ENUM already reports the enchant as its ItemVisual id.
-                    itemVisualId = item.enchantment;
-                    break;
-                }
-            }
-            if (displayId != 0) break;
-        }
-        if (displayId == 0) continue;
-
-        int32_t recIdx = displayInfoDbc->findRecordById(displayId);
+    for (const auto& w : held) {
+        if (w.display == 0 || w.point == core::attachment::kNone) continue;
+        const int32_t recIdx = displayInfoDbc->findRecordById(w.display);
         if (recIdx < 0) continue;
-
-        const auto art = pipeline::readItemDisplayArt(*displayInfoDbc,
-                                                      static_cast<uint32_t>(recIdx));
+        const auto art = pipeline::readItemDisplayArt(*displayInfoDbc, static_cast<uint32_t>(recIdx));
         if (art.modelFile.empty()) continue;
-        const std::string& modelFile = art.modelFile;
-        const std::string& textureName = art.textureName;
 
+        // 0x004eacd0: a shield's model from the Shield folder, the rest
+        // from Weapon.
+        const std::string dir = w.shield ? "Item\\ObjectComponents\\Shield\\"
+                                         : "Item\\ObjectComponents\\Weapon\\";
+        const std::string m2Path = dir + art.modelFile;
         pipeline::M2Model weaponModel;
-        std::string m2Path = "Item\\ObjectComponents\\Weapon\\" + modelFile;
         if (!loadPreviewM2(m2Path, weaponModel)) {
-            m2Path = "Item\\ObjectComponents\\Shield\\" + modelFile;
-            if (!loadPreviewM2(m2Path, weaponModel)) {
-                LOG_WARNING("CharacterPreview: failed to load weapon model ", modelFile);
-                continue;
-            }
-        }
-
-        std::string texturePath;
-        if (!textureName.empty()) {
-            texturePath = "Item\\ObjectComponents\\Weapon\\" + textureName + ".blp";
-            if (!assetManager_->fileExists(texturePath)) {
-                texturePath = "Item\\ObjectComponents\\Shield\\" + textureName + ".blp";
-            }
-        }
-
-        const uint32_t weaponModelId = previewModelIdFor(m2Path);
-        if (!charRenderer_->attachWeapon(instanceId_, ws.attachmentId, weaponModel,
-                                         weaponModelId, texturePath)) {
+            LOG_WARNING("CharacterPreview: failed to load weapon model ", m2Path);
             continue;
         }
-        attachWeaponEnchantVisual(ws.attachmentId, itemVisualId);
+        const std::string texturePath = art.textureName.empty() ? std::string() : dir + art.textureName + ".blp";
+        if (!charRenderer_->attachWeapon(instanceId_, w.point, weaponModel, previewModelIdFor(m2Path),
+                                         texturePath)) {
+            continue;
+        }
+        // SMSG_CHAR_ENUM already reports the enchant as its ItemVisual id.
+        attachWeaponEnchantVisual(w.point, w.enchant);
     }
+}
+
+void CharacterPreview::attachQuiver(const std::vector<uint32_t>& displays) {
+    if (!charRenderer_ || !assetManager_ || instanceId_ == 0) return;
+    charRenderer_->detachWeapon(instanceId_, core::attachment::kSheathMainHand);
+    auto displayInfoDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
+    if (!displayInfoDbc || !displayInfoDbc->isLoaded()) return;
+    const auto* layout = pipeline::getActiveDBCLayout()
+        ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
+    const uint32_t modelField = layout ? (*layout)["LeftModel"] : 1u;
+    const uint32_t textureField = layout ? (*layout)["LeftModelTexture"] : 3u;
+    // 0x004ef250: a display without a left model (+4) puts nothing on, and
+    // leaves what an earlier one put there.
+    std::string modelName;
+    std::string textureName;
+    for (uint32_t display : displays) {
+        const int32_t rec = displayInfoDbc->findRecordById(display);
+        if (rec < 0) continue;
+        std::string model = displayInfoDbc->getString(static_cast<uint32_t>(rec), modelField);
+        if (model.empty()) continue;
+        modelName = std::move(model);
+        textureName = displayInfoDbc->getString(static_cast<uint32_t>(rec), textureField);
+    }
+    if (modelName.empty()) return;
+    const size_t dot = modelName.rfind('.');
+    if (dot != std::string::npos) modelName.resize(dot);
+    // 0x004ef3b0: the model and its texture (+0xc) from the Quiver folder.
+    const std::string dir = "Item\\ObjectComponents\\Quiver\\";
+    const std::string m2Path = dir + modelName + ".m2";
+    pipeline::M2Model quiverModel;
+    if (!loadPreviewM2(m2Path, quiverModel)) {
+        LOG_WARNING("CharacterPreview: failed to load quiver model ", m2Path);
+        return;
+    }
+    const std::string texturePath = textureName.empty() ? std::string() : dir + textureName + ".blp";
+    charRenderer_->attachWeapon(instanceId_, core::attachment::kSheathMainHand, quiverModel,
+                                previewModelIdFor(m2Path), texturePath);
 }
 
 uint32_t CharacterPreview::previewModelIdFor(const std::string& assetKey) {

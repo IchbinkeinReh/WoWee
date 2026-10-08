@@ -1,4 +1,5 @@
 #include "core/entity_spawner.hpp"
+#include "core/character_component.hpp"
 #include "core/item_attachments.hpp"
 #include "core/weapon_attachment.hpp"
 #include "rendering/m2_model_classifier.hpp"
@@ -143,9 +144,18 @@ void EntitySpawner::shutdown() {
     creatureFlyingState_.clear();
     creatureActiveEmotes_.clear();
     creatureWasStealthed_.clear();
-    creatureWeaponsAttached_.clear();
-    creatureWeaponAttachAttempts_.clear();
     unitWeaponsShown_.clear();
+    unitSheath_.clear();
+    corpseGuids_.clear();
+    corpseCreatureGuids_.clear();
+    corpseBonesInstances_.clear();
+    corpseBonesModelIds_.clear();
+    corpseSites_.clear();
+    paintedTabards_.clear();
+    lootSparkleModelId_ = 0;
+    lootSparkleModelTried_ = false;
+    animationDataDbc_.reset();
+    animationDataLoaded_ = false;
     playerInstances_.clear();
     onlinePlayerAppearance_.clear();
     remotePlayerMounts_.clear();
@@ -194,9 +204,18 @@ void EntitySpawner::resetAllState() {
     // suppresses the opacity call that would apply it, so a stealthed NPC came
     // back fully opaque after a relog. shutdown() already cleared this.
     creatureWasStealthed_.clear();
-    creatureWeaponsAttached_.clear();
-    creatureWeaponAttachAttempts_.clear();
     unitWeaponsShown_.clear();
+    unitSheath_.clear();
+    corpseGuids_.clear();
+    corpseCreatureGuids_.clear();
+    corpseBonesInstances_.clear();
+    corpseBonesModelIds_.clear();
+    corpseSites_.clear();
+    paintedTabards_.clear();
+    lootSparkleModelId_ = 0;
+    lootSparkleModelTried_ = false;
+    animationDataDbc_.reset();
+    animationDataLoaded_ = false;
     modelIdIsWolfLike_.clear();
 
     // Clear display/spawn caches
@@ -387,146 +406,40 @@ void EntitySpawner::despawnAllGameObjects() {
 
 // --- Methods extracted from Application (with comments preserved) ---
 
-bool EntitySpawner::tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId) {
-    // With UNIT_VIRTUAL_ITEM_SLOT_ID known, updateUnitWeapons dresses the
-    // creature as the client does; this guess is for layouts without it.
-    if (game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_ID) != 0xFFFF) return true;
-    if (!renderer_ || !renderer_->getCharacterRenderer() || !assetManager_ || !gameHandler_) return false;
-    auto* charRenderer = renderer_->getCharacterRenderer();
-    if (!charRenderer) return false;
-
-    auto entity = gameHandler_->getEntityManager().getEntity(guid);
-    if (!entity || entity->getType() != game::ObjectType::UNIT) return false;
-    auto unit = std::static_pointer_cast<game::Unit>(entity);
-    if (!unit) return false;
-
-    // Virtual weapons are only appropriate for humanoid-style displays.
-    // Non-humanoids (wolves/boars/etc.) can expose non-zero virtual item fields
-    // and otherwise end up with comedic floating weapons.
-    uint32_t displayId = unit->getDisplayId();
-    auto dIt = displayDataMap_.find(displayId);
-    if (dIt == displayDataMap_.end()) return false;
-    uint32_t extraDisplayId = dIt->second.extraDisplayId;
-    if (extraDisplayId == 0 || humanoidExtraMap_.find(extraDisplayId) == humanoidExtraMap_.end()) {
-        return false;
-    }
-
-    auto itemDisplayDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
-    if (!itemDisplayDbc) return false;
-    // Item.dbc is not distributed to clients in Vanilla 1.12; on those expansions
-    // item display IDs are resolved via the server-sent item cache instead.
-    auto itemDbc = assetManager_->loadDBCOptional("Item.dbc");
-    const auto* itemL = pipeline::getActiveDBCLayout()
-        ? pipeline::getActiveDBCLayout()->getLayout("Item") : nullptr;
-
-    auto resolveDisplayInfoId = [&](uint32_t rawId) -> uint32_t {
-        if (rawId == 0) return 0;
-        // Primary path: AzerothCore uses item entries in UNIT_VIRTUAL_ITEM_SLOT_ID.
-        // Resolve strictly through Item.dbc entry -> DisplayID to avoid
-        // accidental ItemDisplayInfo ID collisions (staff/hilt mismatches).
-        if (itemDbc) {
-            int32_t itemRec = itemDbc->findRecordById(rawId); // treat as item entry
-            if (itemRec >= 0) {
-                const uint32_t dispFieldPrimary = itemL ? (*itemL)["DisplayID"] : 5u;
-                uint32_t displayIdA = itemDbc->getUInt32(static_cast<uint32_t>(itemRec), dispFieldPrimary);
-                if (displayIdA != 0 && itemDisplayDbc->findRecordById(displayIdA) >= 0) {
-                    return displayIdA;
-                }
-            }
-        }
-        // Fallback: Vanilla 1.12 does not distribute Item.dbc to clients.
-        // Items arrive via SMSG_ITEM_QUERY_SINGLE_RESPONSE and are cached in
-        // itemInfoCache_. Use the server-sent displayInfoId when available.
-        if (!itemDbc && gameHandler_) {
-            if (const auto* info = gameHandler_->getItemInfo(rawId)) {
-                uint32_t displayIdB = info->displayInfoId;
-                if (displayIdB != 0 && itemDisplayDbc->findRecordById(displayIdB) >= 0) {
-                    return displayIdB;
-                }
-            }
-        }
-        return 0;
-    };
-
-    auto attachNpcWeaponDisplay = [&](uint32_t itemDisplayId, uint32_t attachmentId) -> bool {
-        uint32_t resolvedDisplayId = resolveDisplayInfoId(itemDisplayId);
-        if (resolvedDisplayId == 0) return false;
-        int32_t recIdx = itemDisplayDbc->findRecordById(resolvedDisplayId);
-        if (recIdx < 0) return false;
-
-        const auto art = pipeline::readItemDisplayArt(*itemDisplayDbc,
-                                                      static_cast<uint32_t>(recIdx));
-        if (art.modelFile.empty()) return false;
-        const std::string& modelFile = art.modelFile;
-        const std::string& textureName = art.textureName;
-
-        // Main-hand NPC weapon path: only use actual weapon models.
-        std::string m2Path = "Item\\ObjectComponents\\Weapon\\" + modelFile;
-        pipeline::M2Model weaponModel;
-        if (!loadWeaponM2(m2Path, weaponModel)) return false;
-
-        std::string texturePath;
-        if (!textureName.empty()) {
-            texturePath = "Item\\ObjectComponents\\Weapon\\" + textureName + ".blp";
-            if (!assetManager_->fileExists(texturePath)) texturePath.clear();
-        }
-
-        uint32_t weaponModelId = nextWeaponModelId_++;
-        return charRenderer->attachWeapon(instanceId, attachmentId, weaponModel, weaponModelId, texturePath);
-    };
-
-    auto hasResolvableWeaponModel = [&](uint32_t itemDisplayId) -> bool {
-        uint32_t resolvedDisplayId = resolveDisplayInfoId(itemDisplayId);
-        if (resolvedDisplayId == 0) return false;
-        int32_t recIdx = itemDisplayDbc->findRecordById(resolvedDisplayId);
-        if (recIdx < 0) return false;
-        const auto art = pipeline::readItemDisplayArt(*itemDisplayDbc,
-                                                      static_cast<uint32_t>(recIdx));
-        if (art.modelFile.empty()) return false;
-        const std::string& modelFile = art.modelFile;
-        return assetManager_->fileExists("Item\\ObjectComponents\\Weapon\\" + modelFile);
-    };
-
-    bool attachedMain = false;
-    bool hadWeaponCandidate = false;
-
-    const uint16_t candidateBases[] = {56, 57, 58, 70, 148, 149, 150, 151, 152};
-    for (uint16_t base : candidateBases) {
-        uint32_t v0 = entity->getField(static_cast<uint16_t>(base + 0));
-        if (v0 != 0) hadWeaponCandidate = true;
-        if (!attachedMain && v0 != 0) attachedMain = attachNpcWeaponDisplay(v0, 1);
-        if (attachedMain) break;
-    }
-
-    uint16_t unitEnd = game::fieldIndex(game::UF::UNIT_END);
-    uint16_t scanLo = 60;
-    uint16_t scanHi = (unitEnd != 0xFFFF) ? static_cast<uint16_t>(unitEnd + 96) : 320;
-    std::map<uint16_t, uint32_t> candidateByIndex;
-    for (const auto& [idx, val] : entity->getFields()) {
-        if (idx < scanLo || idx > scanHi) continue;
-        if (val == 0) continue;
-        if (hasResolvableWeaponModel(val)) {
-            candidateByIndex[idx] = val;
-            hadWeaponCandidate = true;
-        }
-    }
-    for (const auto& [idx, val] : candidateByIndex) {
-        if (!attachedMain) attachedMain = attachNpcWeaponDisplay(val, 1);
-        if (attachedMain) break;
-    }
-
-    // Force off-hand clear in NPC path to avoid incorrect shields/placeholder hilts.
-    charRenderer->detachWeapon(instanceId, 2);
-    // Success if main-hand attached when there was at least one candidate.
-    return hadWeaponCandidate && attachedMain;
+uint32_t EntitySpawner::animationBehavior(uint32_t instanceId) const {
+    return animationRecord(instanceId).behavior;
 }
 
-bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint32_t, 3>& entries,
-                                    uint8_t sheathState, bool rangedJustPutAway, bool isPlayer) {
+EntitySpawner::AnimationRecord EntitySpawner::animationRecord(uint32_t instanceId) const {
+    AnimationRecord out;
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
-    if (!charRenderer || !assetManager_ || !gameHandler_) return false;
-    auto displayDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
-    if (!displayDbc) return false;
+    uint32_t animId = 0;
+    float time = 0.0f, duration = 0.0f;
+    if (!charRenderer || !assetManager_ ||
+        !charRenderer->getAnimationState(instanceId, animId, time, duration)) {
+        return out;
+    }
+    out.animId = animId;
+    // AnimationData +8 WeaponFlags and +0x18 BehaviorID (0x0071d450); an
+    // id not in the table reads as behavior 0x1fa.
+    if (!animationDataLoaded_) {
+        animationDataDbc_ = assetManager_->loadDBCOptional("AnimationData.dbc");
+        animationDataLoaded_ = true;
+    }
+    const auto& dbc = animationDataDbc_;
+    if (!dbc) return out;
+    const int32_t row = dbc->findRecordById(animId);
+    if (row < 0) return out;
+    const auto r = static_cast<uint32_t>(row);
+    out.known = true;
+    out.weaponFlags = dbc->getFieldCount() > 2 ? dbc->getUInt32(r, 2) : 0;
+    out.behavior = dbc->getFieldCount() > 6 ? dbc->getUInt32(r, 6) : animId;
+    return out;
+}
+
+bool EntitySpawner::resolveUnitWeaponItems(const UnitWeaponEntries& slots, std::array<UnitWeaponItem, 3>& items,
+                                           std::array<uint32_t, 3>& displays) const {
+    if (!assetManager_ || !gameHandler_) return false;
     auto itemDbc = assetManager_->loadDBCOptional("Item.dbc");
     // WotLK's eight columns: id, class, subclass, sound, material, display,
     // inventory type, sheath. Other layouts wait for the query.
@@ -534,11 +447,17 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint3
 
     // Each slot's item: the item query's template, or Item.dbc's row (class,
     // subclass, display, inventory type, sheath) while the query is out.
-    std::array<UnitWeaponItem, 3> items{};
-    std::array<uint32_t, 3> displays{};
+    items = {};
+    displays = {};
     for (size_t i = 0; i < 3; ++i) {
-        const uint32_t entry = entries[i];
+        const uint32_t entry = slots.entries[i];
         if (entry == 0) continue;
+        if (slots.byDisplay) {
+            // Before WotLK the slot is the display, its INFO pair the rest.
+            items[i] = virtualItemInfo(slots.info[i * 2], slots.info[i * 2 + 1]);
+            displays[i] = entry;
+            continue;
+        }
         if (const auto* info = gameHandler_->getItemInfo(entry); info && info->valid) {
             items[i] = {.sheath = info->sheath,
                         .inventoryType = static_cast<uint8_t>(info->inventoryType),
@@ -557,6 +476,19 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint3
                     .subClass = itemDbc->getUInt32(r, 2)};
         displays[i] = itemDbc->getUInt32(r, 5);
     }
+    return true;
+}
+
+bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const UnitWeaponEntries& slots,
+                                     const UnitWeaponDress& dress) {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || !assetManager_ || !gameHandler_) return false;
+    auto displayDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
+    if (!displayDbc) return false;
+    std::array<UnitWeaponItem, 3> items{};
+    std::array<uint32_t, 3> displays{};
+    if (!resolveUnitWeaponItems(slots, items, displays)) return false;
+    const auto& entries = slots.entries;
 
     // Every point a weapon can be on comes clear first; a change of state
     // moves them between these.
@@ -568,10 +500,11 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint3
         charRenderer->detachWeapon(instanceId, point);
     }
     constexpr WeaponSlot kSlots[3] = {WeaponSlot::MainHand, WeaponSlot::OffHand, WeaponSlot::Ranged};
+    UnitWeaponItems present{};
+    for (size_t i = 0; i < 3; ++i) present[i] = entries[i] != 0 ? &items[i] : nullptr;
     for (size_t i = 0; i < 3; ++i) {
         if (entries[i] == 0 || displays[i] == 0) continue;
-        const uint32_t point = unitWeaponPoint(kSlots[i], items[i], static_cast<SheathState>(sheathState),
-                                               rangedJustPutAway, isPlayer, items[0]);
+        const uint32_t point = unitWeaponPoint(kSlots[i], present, dress);
         if (point == attachment::kNone) continue;
         const int32_t rec = displayDbc->findRecordById(displays[i]);
         if (rec < 0) continue;
@@ -589,36 +522,336 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const std::array<uint3
     return true;
 }
 
+void EntitySpawner::refreshGuildTabards() {
+    if (!gameHandler_) return;
+    // 0x006e1c60 for every player in view, the active one too:
+    // PLAYER_GUILD_TIMESTAMP (UNIT_END + 9) beside PLAYER_GUILDID (+3).
+    const uint16_t unitEnd = game::fieldIndex(game::UF::UNIT_END);
+    if (unitEnd != 0xFFFF) {
+        auto note = [&](uint64_t guid) {
+            auto entity = gameHandler_->getEntityManager().getEntity(guid);
+            if (!entity || entity->getType() != game::ObjectType::PLAYER) return;
+            const uint32_t guildId = entity->getField(static_cast<uint16_t>(unitEnd + 3));
+            if (guildId != 0) gameHandler_->noteGuildTimestamp(guildId, entity->getField(static_cast<uint16_t>(unitEnd + 9)));
+        };
+        note(gameHandler_->getPlayerGuid());
+        for (const auto& [guid, instanceId] : playerInstances_) note(guid);
+    }
+
+    const uint32_t generation = gameHandler_->guildEmblemGeneration();
+    const bool designsArrived = generation != tabardEmblemGeneration_;
+    tabardEmblemGeneration_ = generation;
+    for (auto it = paintedTabards_.begin(); it != paintedTabards_.end();) {
+        const uint64_t guid = it->first;
+        PaintedTabard& painted = it->second;
+        const auto siteIt = corpseSites_.find(guid);
+        if (siteIt == corpseSites_.end() && !playerInstances_.count(guid)) {
+            it = paintedTabards_.erase(it);
+            continue;
+        }
+        ++it;
+        if (painted.repaintWait > 0) {
+            --painted.repaintWait;
+            continue;
+        }
+        // A corpse's guild is CORPSE_FIELD_GUILD; a player's PLAYER_GUILDID.
+        const uint32_t guildId =
+            siteIt != corpseSites_.end() ? siteIt->second.guildId : gameHandler_->getEntityGuildId(guid);
+        bool repaint = guildId != painted.guildId;
+        if (!repaint && designsArrived) {
+            repaint = game::tabardNeedsRepaint(painted.guildId, painted.emblem, guildId,
+                                               gameHandler_->lookupGuildEmblem(guildId));
+        }
+        if (repaint) {
+            painted.repaintWait = 120;
+            queuePlayerEquipment(guid, painted.displayIds, painted.inventoryTypes);
+        }
+    }
+}
+
+std::optional<EntitySpawner::UnitWeaponEntries> EntitySpawner::unitWeaponEntries(uint64_t guid,
+                                                                             const game::Entity& entity,
+                                                                             bool isPlayer) const {
+    UnitWeaponEntries out;
+    const uint16_t virtualItems = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
+    const uint16_t virtualDisplays = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY);
+    const uint16_t virtualInfoIndex = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_INFO);
+    if (isPlayer) {
+        // Main hand, off hand, ranged: equipment slots 15 to 17.
+        const auto* visible = gameHandler_->getOtherPlayerVisibleEquipment(guid);
+        if (!visible) return std::nullopt;
+        out.entries = {(*visible)[15], (*visible)[16], (*visible)[17]};
+    } else if (virtualItems != 0xFFFF) {
+        for (uint16_t i = 0; i < 3; ++i) out.entries[i] = entity.getField(static_cast<uint16_t>(virtualItems + i));
+    } else if (virtualDisplays != 0xFFFF && virtualInfoIndex != 0xFFFF) {
+        // Classic and TBC: UNIT_VIRTUAL_ITEM_SLOT_DISPLAY and _INFO.
+        out.byDisplay = true;
+        for (uint16_t i = 0; i < 3; ++i) {
+            out.entries[i] = entity.getField(static_cast<uint16_t>(virtualDisplays + i));
+        }
+        for (uint16_t i = 0; i < 6; ++i) out.info[i] = entity.getField(static_cast<uint16_t>(virtualInfoIndex + i));
+    } else {
+        return std::nullopt;
+    }
+    return out;
+}
+
+bool EntitySpawner::classMayDrawRanged(uint32_t classId) const {
+    if (!assetManager_) return false;
+    auto classes = assetManager_->loadDBCOptional("ChrClasses.dbc");
+    const int32_t row = classes ? classes->findRecordById(classId) : -1;
+    if (row < 0) return false;
+    // WotLK's layout: Flags (+0x24) is column 57.
+    if (classes->getFieldCount() != 60) return true;
+    return (classes->getUInt32(static_cast<uint32_t>(row), 57) & 8u) == 0;
+}
+
+void EntitySpawner::setUnitSheathState(uint64_t guid, UnitSheath& sheath, SheathState requested, bool fromServer) {
+    if (!gameHandler_) return;
+    auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    if (!entity || !entity->isUnit()) return;
+    const bool isPlayer = entity->getType() == game::ObjectType::PLAYER;
+    SheathSetInput in{.current = sheath.state, .isPlayer = isPlayer, .fromServer = fromServer,
+                      .hasModel = sheath.instanceId != 0};
+    std::array<UnitWeaponItem, 3> storage{};
+    UnitWeaponItems items{};
+    if (const auto slots = unitWeaponEntries(guid, *entity, isPlayer)) {
+        std::array<uint32_t, 3> displays{};
+        if (resolveUnitWeaponItems(*slots, storage, displays)) {
+            for (size_t i = 0; i < 3; ++i) items[i] = slots->entries[i] != 0 ? &storage[i] : nullptr;
+        }
+    }
+    // 0x00721ed0 for the animation the unit plays.
+    in.offHandFollowsAnimation = offHandFollowsAnimation(animationBehavior(sheath.instanceId), items[0] != nullptr);
+    if (isPlayer) {
+        const uint16_t bytes0 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0);
+        in.classMayDrawRanged =
+            bytes0 != 0xFFFF && classMayDrawRanged((entity->getField(bytes0) >> 8) & 0xFFu);
+    } else {
+        // The creature cache's row (+0x964) and its type flags (+0xc).
+        const auto& creatures = gameHandler_->getCreatureInfoCache();
+        const auto it = creatures.find(static_cast<const game::Unit&>(*entity).getEntry());
+        in.doNotSheathe = it != creatures.end() && (it->second.typeFlags & kCreatureTypeFlagDoNotSheathe) != 0;
+    }
+    if (const auto state = sheathStateChange(requested, items, in)) sheath.state = *state;
+}
+
+SpellSheathInput EntitySpawner::spellSheathInput(uint32_t spellId, uint32_t displayId) const {
+    SpellSheathInput in;
+    if (!gameHandler_ || !assetManager_) return in;
+    if (const auto attributes = gameHandler_->getSpellAttributes(spellId)) {
+        in.known = true;
+        in.attributes = *attributes;
+    }
+    // The visual: SpellVisual +0x1c (HasMissile) with +0x20 (MissileModel),
+    // and its precast and cast kits' LeftWeaponEffect and RightWeaponEffect
+    // (SpellVisualKit +0x24, +0x28) naming a SpellVisualEffectName record.
+    const uint32_t visualId = gameHandler_->getSpellVisualId(spellId);
+    const auto* layout = pipeline::getActiveDBCLayout();
+    const auto* visualLayout = layout ? layout->getLayout("SpellVisual") : nullptr;
+    const auto* kitLayout = layout ? layout->getLayout("SpellVisualKit") : nullptr;
+    auto visuals = visualId ? assetManager_->loadDBCOptional("SpellVisual.dbc") : nullptr;
+    const int32_t visualRow = visuals ? visuals->findRecordById(visualId) : -1;
+    if (visualRow >= 0 && visualLayout) {
+        const auto row = static_cast<uint32_t>(visualRow);
+        const uint32_t hasMissile = visualLayout->tryField("HasMissile");
+        const uint32_t missileModel = visualLayout->tryField("MissileModel");
+        if (hasMissile < visuals->getFieldCount() && missileModel < visuals->getFieldCount() &&
+            visuals->getUInt32(row, hasMissile) != 0) {
+            in.missileModel = static_cast<int32_t>(visuals->getUInt32(row, missileModel));
+        }
+        auto kits = kitLayout ? assetManager_->loadDBCOptional("SpellVisualKit.dbc") : nullptr;
+        auto effects = kits ? assetManager_->loadDBCOptional("SpellVisualEffectName.dbc") : nullptr;
+        if (effects) {
+            for (const char* kitField : {"PrecastKit", "CastKit"}) {
+                const uint32_t kitColumn = visualLayout->tryField(kitField);
+                if (kitColumn >= visuals->getFieldCount()) continue;
+                const int32_t kitRow = kits->findRecordById(visuals->getUInt32(row, kitColumn));
+                if (kitRow < 0) continue;
+                for (const char* effectField : {"LeftWeaponEffect", "RightWeaponEffect"}) {
+                    const uint32_t column = kitLayout->tryField(effectField);
+                    if (column >= kits->getFieldCount()) continue;
+                    const uint32_t effect = kits->getUInt32(static_cast<uint32_t>(kitRow), column);
+                    if (effect != 0 && effects->findRecordById(effect) >= 0) in.kitWeaponEffect = true;
+                }
+            }
+        }
+    }
+    // 0x00717a20: the unit's CreatureModelData, whose +4 flag 0x10 keeps
+    // the weapons where they are.
+    if (in.kitWeaponEffect) {
+        if (const auto flags = creatureModelFlags(displayId)) in.modelHoldsEffects = (*flags & 0x10u) == 0;
+    }
+    return in;
+}
+
+std::optional<float> EntitySpawner::kitWeaponEffectHolder(uint32_t renderInstanceId) const {
+    if (!gameHandler_ || !assetManager_ || renderInstanceId == 0) return std::nullopt;
+    // The unit the instance draws: the player's own, or another's.
+    uint64_t guid = 0;
+    if (renderer_ && renderer_->getCharacterInstanceId() == renderInstanceId) guid = gameHandler_->getPlayerGuid();
+    for (const auto* instances : {&creatureInstances_, &playerInstances_}) {
+        for (const auto& [unitGuid, instanceId] : *instances) {
+            if (guid == 0 && instanceId == renderInstanceId) guid = unitGuid;
+        }
+    }
+    auto entity = guid ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
+    if (!entity || !entity->isUnit()) return 1.0f;
+    const uint32_t displayId = static_cast<const game::Unit&>(*entity).getDisplayId();
+    // 0x0073a6c0 and 0x006f8c50: CreatureModelData +4 flag 0x10 holds no
+    // weapon effect; +0x60, AttachedEffectScale, sizes one.
+    const auto flags = creatureModelFlags(displayId);
+    if (flags && (*flags & 0x10u) != 0) return std::nullopt;
+    auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
+    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* displayLayout = layouts ? layouts->getLayout("CreatureDisplayInfo") : nullptr;
+    const auto* modelLayout = layouts ? layouts->getLayout("CreatureModelData") : nullptr;
+    const uint32_t scaleField = modelLayout ? modelLayout->tryField("AttachedEffectScale") : 0xFFFFFFFFu;
+    const int32_t displayRow = displays ? displays->findRecordById(displayId) : -1;
+    if (displayRow < 0 || !models || scaleField >= models->getFieldCount()) return 1.0f;
+    const int32_t modelRow = models->findRecordById(
+        displays->getUInt32(static_cast<uint32_t>(displayRow), displayLayout ? (*displayLayout)["ModelID"] : 1));
+    if (modelRow < 0) return 1.0f;
+    return models->getFloat(static_cast<uint32_t>(modelRow), scaleField);
+}
+
+void EntitySpawner::onUnitSpellCastBegin(uint64_t guid, uint32_t spellId) {
+    auto it = unitSheath_.find(guid);
+    if (it == unitSheath_.end() || it->second.instanceId == 0 || !gameHandler_) return;
+    auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    if (!entity || !entity->isUnit()) return;
+    const uint32_t displayId = static_cast<const game::Unit&>(*entity).getDisplayId();
+    // 0x007fa2e0 calls 0x00736d30 for each of its reasons; the last stands.
+    if (const auto state = spellSheathState(spellSheathInput(spellId, displayId))) {
+        setUnitSheathState(guid, it->second, *state, false);
+    }
+}
+
+void EntitySpawner::onUnitAttackSwing(uint64_t guid) {
+    auto it = unitSheath_.find(guid);
+    if (it == unitSheath_.end() || it->second.instanceId == 0) return;
+    if (it->second.state != SheathState::Melee) setUnitSheathState(guid, it->second, SheathState::Melee, false);
+}
+
 void EntitySpawner::updateUnitWeapons() {
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!charRenderer || !gameHandler_ || !assetManager_ || !assetManager_->isInitialized()) return;
     const uint16_t bytes2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
-    const uint16_t virtualItems = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
+    const uint16_t flagsIndex = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+    const uint16_t flags2Index = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
+    const uint16_t channelObjectIndex = game::fieldIndex(game::UF::UNIT_FIELD_CHANNEL_OBJECT);
+    const uint16_t channelSpellIndex = game::fieldIndex(game::UF::UNIT_CHANNEL_SPELL);
+    const uint16_t goBytes1Index = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
+    const uint16_t healthIndex = game::fieldIndex(game::UF::UNIT_FIELD_HEALTH);
     const uint64_t localGuid = gameHandler_->getPlayerGuid();
     int budget = MAX_WEAPON_ATTACHES_PER_TICK;
 
-    auto visit = [&](uint64_t guid, uint32_t instanceId, bool isPlayer) {
-        if (budget <= 0 || instanceId == 0) return;
-        auto entity = gameHandler_->getEntityManager().getEntity(guid);
-        if (!entity) return;
-        std::array<uint32_t, 3> entries{};
-        if (isPlayer) {
-            // Main hand, off hand, ranged: equipment slots 15 to 17.
-            const auto* visible = gameHandler_->getOtherPlayerVisibleEquipment(guid);
-            if (!visible) return;
-            entries = {(*visible)[15], (*visible)[16], (*visible)[17]};
-        } else {
-            if (virtualItems == 0xFFFF) return;
-            for (uint16_t i = 0; i < 3; ++i) entries[i] = entity->getField(static_cast<uint16_t>(virtualItems + i));
+    // The client's own state for a unit, as each of its paths moves it.
+    auto updateSheath = [&](uint64_t guid, uint32_t instanceId, const game::Unit& unit) -> UnitSheath& {
+        const std::optional<SheathState> field =
+            bytes2 != 0xFFFF ? std::optional(static_cast<SheathState>(unit.getField(bytes2) & 0xFFu)) : std::nullopt;
+        uint64_t channelObject = 0;
+        if (channelObjectIndex != 0xFFFF) {
+            channelObject = static_cast<uint64_t>(unit.getField(channelObjectIndex)) |
+                            (static_cast<uint64_t>(unit.getField(static_cast<uint16_t>(channelObjectIndex + 1))) << 32);
         }
-        // No sheath field in this layout: held, as before.
-        const uint8_t state = bytes2 != 0xFFFF ? static_cast<uint8_t>(entity->getField(bytes2) & 0xFFu)
-                                               : static_cast<uint8_t>(SheathState::Melee);
+        auto [it, fresh] = unitSheath_.try_emplace(guid);
+        UnitSheath& sheath = it->second;
+        if (fresh || sheath.instanceId != instanceId) {
+            // 0x0073f660: a new model starts in the field's state; held
+            // without the field.
+            sheath = {.instanceId = instanceId,
+                      .state = field.value_or(SheathState::Melee),
+                      .fieldSeen = field,
+                      .standSeen = unit.getStandState(),
+                      .channelObjectSeen = channelObject};
+            return sheath;
+        }
+        // 0x00737aa0: every unit but the active player takes the field's
+        // change, as the server's (CREATURE_TYPEFLAGS 0x10000000 or not).
+        if (field && sheath.fieldSeen != field) {
+            if (sheath.fieldSeen) {
+                if (const auto state = fieldSheathChange(sheath.state, *sheath.fieldSeen, *field, false)) {
+                    setUnitSheathState(guid, sheath, *state, true);
+                }
+            }
+            sheath.fieldSeen = field;
+        }
+        // 0x0073f460 -> 0x0073f060 on a change of its stand state.
+        if (unit.getStandState() != sheath.standSeen) {
+            sheath.standSeen = unit.getStandState();
+            if (standStateSheathes(sheath.state, sheath.standSeen)) {
+                setUnitSheathState(guid, sheath, SheathState::Unarmed, false);
+            }
+        }
+        // 0x0073f4f0 -> 0x0073a520 on a change of its channel object.
+        if (channelObject != sheath.channelObjectSeen) {
+            sheath.channelObjectSeen = channelObject;
+            uint32_t objectType = 0;
+            if (auto object = channelObject ? gameHandler_->getEntityManager().getEntity(channelObject) : nullptr;
+                object && object->getType() == game::ObjectType::GAMEOBJECT) {
+                const auto* info = gameHandler_->getCachedGameObjectInfo(
+                    static_cast<const game::GameObject&>(*object).getEntry());
+                objectType = info ? info->type
+                                  : (goBytes1Index != 0xFFFF ? (object->getField(goBytes1Index) >> 8) & 0xFFu : 0);
+            }
+            const uint32_t channelSpell = channelSpellIndex != 0xFFFF ? unit.getField(channelSpellIndex) : 0;
+            if (const auto state = channelSheathState(sheath.state, objectType, channelSpell)) {
+                setUnitSheathState(guid, sheath, *state, false);
+            }
+        }
+        // 0x00738180 after each change of animation, cast or attack.
+        const auto anim = animationRecord(instanceId);
+        const auto* cast = gameHandler_->getUnitCastState(guid);
+        const uint32_t castSpellId = cast && cast->casting ? cast->spellId : 0;
+        const bool alive = healthIndex == 0xFFFF || unit.getField(healthIndex) > 0;
+        const bool attacking = alive && gameHandler_->getUnitMeleeTarget(guid) != 0;
+        if (anim.animId != sheath.animId || castSpellId != sheath.castSpellId || attacking != sheath.attacking) {
+            sheath.animId = anim.animId;
+            sheath.castSpellId = castSpellId;
+            sheath.attacking = attacking;
+            AnimationSheathInput in{.current = sheath.state,
+                                    .animId = anim.animId,
+                                    .animKnown = anim.known,
+                                    .weaponFlags = anim.weaponFlags,
+                                    .behavior = anim.behavior,
+                                    .casting = castSpellId != 0,
+                                    .attacking = attacking,
+                                    .activePlayer = false,
+                                    .field = field.value_or(sheath.state)};
+            if (castSpellId != 0) {
+                const auto attributes = gameHandler_->getSpellAttributes(castSpellId);
+                in.castSheathes = attributes && (*attributes & 0x40000u) == 0;
+            }
+            if (const auto state = animationSheathState(in)) setUnitSheathState(guid, sheath, *state, false);
+        }
+        return sheath;
+    };
+
+    auto visit = [&](uint64_t guid, uint32_t instanceId, bool isPlayer) {
+        if (instanceId == 0) return;
+        auto entity = gameHandler_->getEntityManager().getEntity(guid);
+        if (!entity || !entity->isUnit()) return;
+        const auto& unit = static_cast<const game::Unit&>(*entity);
+        const uint8_t state = static_cast<uint8_t>(updateSheath(guid, instanceId, unit).state);
+        if (budget <= 0) return;
+        const auto slots = unitWeaponEntries(guid, *entity, isPlayer);
+        if (!slots) return;
+        const auto& entries = slots->entries;
+        const auto& info = slots->info;
+        // What else 0x0072dbc0 reads: the disarm bits (0x00718fc0) and
+        // whether the animation playing dresses the off hand (0x00721ed0).
+        const uint32_t unitFlags = flagsIndex != 0xFFFF ? entity->getField(flagsIndex) & kUnitFlagDisarmed : 0;
+        const uint32_t unitFlags2 =
+            flags2Index != 0xFFFF ? entity->getField(flags2Index) & kUnitFlag2DisarmOffhand : 0;
+        const bool followsAnim = offHandFollowsAnimation(animationBehavior(instanceId), entries[0] != 0);
         const uint32_t modelId = charRenderer->getInstanceModelId(instanceId);
         auto [it, fresh] = unitWeaponsShown_.try_emplace(guid);
         UnitWeaponsShown& shown = it->second;
         if (!fresh && shown.instanceId == instanceId && shown.modelId == modelId && shown.entries == entries &&
-            shown.sheathState == state) {
+            shown.info == info && shown.sheathState == state && shown.unitFlags == unitFlags && shown.unitFlags2 == unitFlags2 &&
+            shown.offHandFollowsAnimation == followsAnim) {
             return;
         }
         // 0x00731f40: from ranged to melee the ranged weapon is put away;
@@ -626,38 +859,38 @@ void EntitySpawner::updateUnitWeapons() {
         const bool rangedJustPutAway = !fresh && shown.instanceId == instanceId && shown.entries == entries &&
                                        shown.sheathState == static_cast<uint8_t>(SheathState::Ranged) &&
                                        state == static_cast<uint8_t>(SheathState::Melee);
-        if (!dressUnitWeapons(instanceId, entries, state, rangedJustPutAway, isPlayer)) {
+        const UnitWeaponDress dress{.state = static_cast<SheathState>(state),
+                                    .rangedJustPutAway = rangedJustPutAway,
+                                    .isPlayer = isPlayer,
+                                    .unitFlags = unitFlags,
+                                    .unitFlags2 = unitFlags2,
+                                    .offHandFollowsAnimation = followsAnim};
+        if (!dressUnitWeapons(instanceId, *slots, dress)) {
             // An item not known yet: try again once its query is back.
             if (fresh) unitWeaponsShown_.erase(it);
             else shown.instanceId = 0;
             return;
         }
         --budget;
-        shown = {.instanceId = instanceId, .modelId = modelId, .entries = entries, .sheathState = state};
+        shown = {.instanceId = instanceId,
+                 .modelId = modelId,
+                 .entries = entries,
+                 .info = info,
+                 .sheathState = state,
+                 .unitFlags = unitFlags,
+                 .unitFlags2 = unitFlags2,
+                 .offHandFollowsAnimation = followsAnim};
     };
     for (const auto& [guid, instanceId] : creatureInstances_) visit(guid, instanceId, false);
     for (const auto& [guid, instanceId] : playerInstances_) {
         if (guid != localGuid) visit(guid, instanceId, true);
     }
-}
-
-bool EntitySpawner::retryCreatureVirtualWeapons(uint64_t guid, uint32_t instanceId,
-                                                uint8_t maxAttempts) {
-    if (creatureWeaponsAttached_.count(guid)) return false;
-    const auto attemptIt = creatureWeaponAttachAttempts_.find(guid);
-    const uint8_t attempts = attemptIt != creatureWeaponAttachAttempts_.end()
-        ? attemptIt->second : 0;
-    if (attempts >= maxAttempts) return false;
-
-    if (tryAttachCreatureVirtualWeapons(guid, instanceId)) {
-        creatureWeaponsAttached_.insert(guid);
-        creatureWeaponAttachAttempts_.erase(guid);
-    } else {
-        creatureWeaponAttachAttempts_[guid] = static_cast<uint8_t>(attempts + 1);
+    // Units gone from the world take their state with them.
+    for (auto it = unitSheath_.begin(); it != unitSheath_.end();) {
+        if (!creatureInstances_.count(it->first) && !playerInstances_.count(it->first)) it = unitSheath_.erase(it);
+        else ++it;
     }
-    return true;
 }
-
 
 void EntitySpawner::buildCharSectionsCache() {
     if (charSectionsCacheBuilt_ || !assetManager_ || !assetManager_->isInitialized()) return;
@@ -1394,7 +1627,12 @@ void EntitySpawner::playCreatureSpawnPose(uint64_t guid, uint32_t instanceId) {
     if (!charRenderer) return;
 // Spawn in the correct pose. If the server marked this creature dead before
 // the queued spawn was processed, start directly in death animation.
-if (deadCreatureGuids_.count(guid)) {
+if (const auto pose = corpsePose(guid); pose && corpseGuids_.count(guid) &&
+    charRenderer->hasAnimation(instanceId, rendering::anim::DEAD)) {
+    // A corpse lies in Dead, or Drowned under water (0x00705b20).
+    charRenderer->playAnimation(instanceId, charRenderer->hasAnimation(instanceId, *pose) ? *pose : rendering::anim::DEAD,
+                                true);
+} else if (deadCreatureGuids_.count(guid)) {
     charRenderer->playAnimation(instanceId, rendering::anim::DEATH, false);
 } else {
     // Check if this NPC has a persistent emote state (e.g. working, eating, dancing)
@@ -1834,66 +2072,21 @@ void EntitySpawner::applyCreatureDisplayTextures(uint32_t displayId, uint32_t mo
                     }
 
                     // --- Equipment region layers (ItemDisplayInfo DBC) ---
+                    // The character component's layers (0x004f2880, the table
+                    // at 0x009f6a00), drawn layer by layer (0x004e8f00):
+                    // CreatureDisplayInfoExtra's shirt, chest, belt, legs,
+                    // boots, wrists, gloves and tabard are its items 2 to 9;
+                    // the helm, shoulders and cape are models.
                     auto idiDbc = am->loadDBC("ItemDisplayInfo.dbc");
                     if (idiDbc) {
-                        const auto* idiL = pipeline::getActiveDBCLayout()
-                            ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
-                        uint32_t texRegionFields[8];
-                        pipeline::getItemDisplayInfoTextureFields(*idiDbc, idiL, texRegionFields);
-                        const bool npcIsFemale = (extraCopy.sexId == 1);
-                        const bool npcHasArmArmor = (extraCopy.equipDisplayId[7] != 0 || extraCopy.equipDisplayId[8] != 0);
-
-                        // Which regions of the skin atlas a piece of equipment paints.
-                        //
-                        // ItemDisplayInfo already answers that: a row names a
-                        // texture for each region the item covers and leaves
-                        // the rest empty. It is why the player path reads all
-                        // eight and filters nothing at all - see the loop in
-                        // entity_spawner_player.cpp, which the same items go
-                        // through when a player wears them.
-                        //
-                        // The list here was narrower and dropped texture the
-                        // items do name: across a 3.3.5 install's NPC displays,
-                        // every belt's LegUpper (12790 of them), every boot's
-                        // LegLower (10597), every glove's ArmLower (7908) and
-                        // every bracer's ArmLower (3814). The bracers are where
-                        // it was noticed - forearms wearing nothing on an NPC
-                        // whose CreatureDisplayInfoExtra names a bracer and
-                        // whose bracer names a texture.
-                        //
-                        // Helm, shoulder and cape stay out. Those are geometry
-                        // rather than skin, they name no regions to begin with,
-                        // and a helm painting a face would be worse than a helm
-                        // that does not paint at all.
-                        auto regionAllowedForNpcSlot = [](int eqSlot, int region) -> bool {
-                            (void)region;
-                            switch (eqSlot) {
-                                case 0: case 1: case 10: return false;
-                                default: return true;
-                            }
-                        };
-
-                        for (int eqSlot = 0; eqSlot < 11; eqSlot++) {
-                            uint32_t did = extraCopy.equipDisplayId[eqSlot];
-                            if (did == 0) continue;
-                            int32_t recIdx = idiDbc->findRecordById(did);
-                            if (recIdx < 0) continue;
-
-                            for (int region = 0; region < 8; region++) {
-                                if (!regionAllowedForNpcSlot(eqSlot, region)) continue;
-                                if (eqSlot == 2 && !npcHasArmArmor && !(region == 3 || region == 4)) continue;
-                                std::string texName = idiDbc->getString(
-                                    static_cast<uint32_t>(recIdx), texRegionFields[region]);
-                                if (texName.empty()) continue;
-
-                                std::string fullPath = pipeline::resolveItemRegionTexture(
-                                    *am, region, texName, npcIsFemale);
-                                if (fullPath.empty()) continue;
-
-                                def.regionLayers.emplace_back(region, fullPath);
-                                allPaths.push_back(fullPath);
-                            }
+                        std::vector<core::ComponentItem> componentItems;
+                        for (int eqSlot = 2; eqSlot <= 9; ++eqSlot) {
+                            const uint32_t did = extraCopy.equipDisplayId[eqSlot];
+                            if (did != 0) componentItems.push_back({core::componentItemForNpcSlot(eqSlot), did});
                         }
+                        def.regionLayers = core::characterComponentLayers(*am, *idiDbc, componentItems,
+                                                                          extraCopy.sexId == 1, std::nullopt);
+                        for (const auto& layer : def.regionLayers) allPaths.push_back(layer.second);
                     }
 
                     // Determine compositing mode
@@ -2360,10 +2553,6 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
     // clothing group and leave every other batch of the model alone.
     normalizeHumanoidClothingGeosets(instanceId, modelId, displayId);
 
-    // Try attaching NPC held weapons; if update fields are not ready yet,
-    // IN_GAME retry loop will attempt again shortly.
-    bool weaponsAttachedNow = tryAttachCreatureVirtualWeapons(guid, instanceId);
-
     // Start the creature in the pose the server says it is already in: dead,
     // mid-emote, or newly arrived.
     playCreatureSpawnPose(guid, instanceId);
@@ -2375,13 +2564,6 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
     creatureModelIds_[guid] = modelId;
     creatureDisplayIds_[guid] = displayId;
     creatureRenderPosCache_[guid] = renderPos;
-    if (weaponsAttachedNow) {
-        creatureWeaponsAttached_.insert(guid);
-        creatureWeaponAttachAttempts_.erase(guid);
-    } else {
-        creatureWeaponsAttached_.erase(guid);
-        creatureWeaponAttachAttempts_[guid] = 1;
-    }
     LOG_DEBUG("Spawned creature: guid=0x", std::hex, guid, std::dec,
              " displayId=", displayId, " at (", x, ", ", y, ", ", z, ")");
 }

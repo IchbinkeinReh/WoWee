@@ -70,11 +70,19 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         if (worn.empty()) worn = self->equipment;
     }
 
+    // The guild tabard's design (0x006db510): the guild's, once known.
+    {
+        uint32_t guildId = gameHandler.getEntityGuildId(self->guid);
+        if (guildId == 0) guildId = self->guildId;
+        pendingEmblem_ = gameHandler.lookupGuildEmblem(guildId);
+    }
+
     const uint64_t equipHash = game::hashEquipmentAppearance(worn);
     const bool changed = (loadedGuid_ != self->guid) ||
                          (loadedAppearance_ != self->appearanceBytes) ||
                          (loadedFacialFeatures_ != self->facialFeatures) ||
-                         (loadedEquipHash_ != equipHash);
+                         (loadedEquipHash_ != equipHash) ||
+                         (loadedEmblem_ != pendingEmblem_);
     if (changed) {
         const uint8_t skin      =  self->appearanceBytes        & 0xFF;
         const uint8_t face      = (self->appearanceBytes >> 8)  & 0xFF;
@@ -88,6 +96,7 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         if (preview_->loadCharacter(self->race, self->gender, skin, face,
                                     hairStyle, hairColor, self->facialFeatures,
                                     self->useFemaleModel)) {
+            preview_->setGuildEmblem(pendingEmblem_);
             preview_->applyEquipment(worn);
             // After the model, because its bounds are what the framing is
             // measured against.
@@ -108,6 +117,7 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         loadedAppearance_ = self->appearanceBytes;
         loadedFacialFeatures_ = self->facialFeatures;
         loadedEquipHash_ = equipHash;
+        loadedEmblem_ = pendingEmblem_;
     }
 
     preview_->update(deltaTime);
@@ -142,6 +152,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
                          (loadedRace_ != race) || (loadedGender_ != gender) ||
                          (loadedEquipHash_ != equipHash) ||
                          (loadedBake_ != pendingBake_) ||
+                         (loadedEmblem_ != pendingEmblem_) ||
                          !loadedCreaturePath_.empty();
     if (changed) {
         const uint8_t skin      =  appearanceBytes        & 0xFF;
@@ -158,6 +169,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
             // After the model, because applyEquipment reads its geosets, and
             // only where there is something to apply - an empty list is
             // "nothing known yet", and dressing a model in it strips it.
+            preview_->setGuildEmblem(pendingEmblem_);
             if (!equipment.empty()) preview_->applyEquipment(equipment);
             // After the equipment, because both write the skin slot and the
             // bake is the more complete answer: it already has the armour on
@@ -176,6 +188,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
         loadedFacialFeatures_ = facialFeatures;
         loadedEquipHash_ = equipHash;
         loadedBake_ = pendingBake_;
+        loadedEmblem_ = pendingEmblem_;
     }
 
     preview_->update(deltaTime);

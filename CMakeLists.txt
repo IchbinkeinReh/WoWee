@@ -611,11 +611,13 @@ set(WOWEE_SOURCES
     src/core/entity_spawner.cpp
     src/core/entity_spawner_player.cpp
     src/core/entity_spawner_blob.cpp
+    src/core/entity_spawner_corpse.cpp
     src/core/entity_spawner_processing.cpp
     src/core/appearance_composer.cpp
     src/core/helm_visual.cpp
     src/core/character_geosets.cpp
     src/core/item_attachments.cpp
+    src/core/character_component.cpp
     src/core/world_loader.cpp
     src/core/npc_interaction_callback_handler.cpp
     src/core/audio_callback_handler.cpp
@@ -976,6 +978,7 @@ set(WOWEE_SOURCES
     src/rendering/world_map/layers/subzone_tooltip_layer.cpp
     src/rendering/swim_effects.cpp
     src/rendering/mount_dust.cpp
+    src/rendering/fishing_line.cpp
     src/rendering/levelup_effect.cpp
     src/rendering/charge_effect.cpp
     src/rendering/spell_visual_system.cpp

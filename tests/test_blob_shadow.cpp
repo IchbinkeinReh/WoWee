@@ -111,3 +111,14 @@ TEST_CASE("only triangles facing up take the blob", "[blob_shadow]") {
     const glm::mat4 flip = glm::rotate(id, glm::radians(180.0f), glm::vec3(1, 0, 0));
     CHECK_FALSE(bs::facesUp(flip, a, b, c));
 }
+
+TEST_CASE("which world objects carry the blob flag (0x00743760, 0x00781a10)", "[blob_shadow]") {
+    using wowee::rendering::blob_shadow::carriesBlobFlag;
+    using K = wowee::rendering::blob_shadow::WorldObjectKind;
+    CHECK(carriesBlobFlag(K::Unit, false, 0));
+    CHECK_FALSE(carriesBlobFlag(K::Unit, true, 0));
+    CHECK(carriesBlobFlag(K::Corpse, false, 0));
+    CHECK_FALSE(carriesBlobFlag(K::Corpse, false, 1));  // bones
+    CHECK_FALSE(carriesBlobFlag(K::GameObject, false, 0));
+    CHECK_FALSE(carriesBlobFlag(K::DynamicObject, false, 0));
+}

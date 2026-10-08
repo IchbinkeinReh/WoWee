@@ -1102,10 +1102,15 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         };
 
         size_t footfallStamps = 0;
+        model.events.reserve(header.nEvents);
         for (uint32_t e = 0; e < header.nEvents; e++) {
             size_t base = header.ofsEvents + e * eventSize;
             if (base + eventSize > m2Data.size()) break;
-            if (std::memcmp(m2Data.data() + base, "$FSD", 4) != 0) continue;
+            M2Model::M2Event event;
+            event.id = rd32(base);
+            event.bone = rd32(base + 8);
+            std::memcpy(&event.position, m2Data.data() + base + 12, sizeof(glm::vec3));
+            event.times.resize(model.sequences.size());
 
             if (wotlkEvents) {
                 uint32_t nArrays = rd32(base + trackOfs + 4);
@@ -1116,31 +1121,33 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                     uint32_t ofsTs = rd32(ofsArrays + s * 8 + 4);
                     if (nTs == 0 || nTs > 1024) continue;
                     if (ofsTs + nTs * sizeof(uint32_t) > m2Data.size()) continue;
-                    auto stamps = readArray<uint32_t>(m2Data, ofsTs, nTs);
-                    auto& out = model.footstepEventTimes[s];
-                    out.insert(out.end(), stamps.begin(), stamps.end());
-                    footfallStamps += stamps.size();
+                    event.times[s] = readArray<uint32_t>(m2Data, ofsTs, nTs);
                 }
             } else {
                 uint32_t nTs = rd32(base + trackOfs + 12);
                 uint32_t ofsTs = rd32(base + trackOfs + 16);
-                if (nTs == 0 || nTs > 100000) continue;
-                if (ofsTs + nTs * sizeof(uint32_t) > m2Data.size()) continue;
-                auto stamps = readArray<uint32_t>(m2Data, ofsTs, nTs);
-                for (size_t s = 0; s < vanillaSeqWindows.size() &&
-                                   s < model.footstepEventTimes.size(); s++) {
-                    uint32_t start = vanillaSeqWindows[s].first;
-                    uint32_t end = vanillaSeqWindows[s].second;
-                    if (start >= end) continue;
-                    auto& out = model.footstepEventTimes[s];
-                    for (uint32_t ts : stamps) {
-                        if (ts >= start && ts < end) {
-                            out.push_back(ts - start);
-                            footfallStamps++;
+                if (nTs != 0 && nTs <= 100000 && ofsTs + nTs * sizeof(uint32_t) <= m2Data.size()) {
+                    auto stamps = readArray<uint32_t>(m2Data, ofsTs, nTs);
+                    for (size_t s = 0; s < vanillaSeqWindows.size() && s < event.times.size(); s++) {
+                        uint32_t start = vanillaSeqWindows[s].first;
+                        uint32_t end = vanillaSeqWindows[s].second;
+                        if (start >= end) continue;
+                        for (uint32_t ts : stamps) {
+                            if (ts >= start && ts < end) event.times[s].push_back(ts - start);
                         }
                     }
                 }
             }
+            for (auto& list : event.times) std::sort(list.begin(), list.end());
+
+            if (std::memcmp(m2Data.data() + base, "$FSD", 4) == 0) {
+                for (size_t s = 0; s < event.times.size(); s++) {
+                    auto& out = model.footstepEventTimes[s];
+                    out.insert(out.end(), event.times[s].begin(), event.times[s].end());
+                    footfallStamps += event.times[s].size();
+                }
+            }
+            model.events.push_back(std::move(event));
         }
 
         for (auto& list : model.footstepEventTimes) {

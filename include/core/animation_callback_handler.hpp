@@ -18,8 +18,7 @@ class AnimationCallbackHandler {
 public:
     AnimationCallbackHandler(EntitySpawner& entitySpawner,
                              rendering::Renderer& renderer,
-                             game::GameHandler& gameHandler,
-                             AppearanceComposer& appearanceComposer);
+                             game::GameHandler& gameHandler);
 
     void setupCallbacks();
 
@@ -37,7 +36,6 @@ private:
     EntitySpawner& entitySpawner_;
     rendering::Renderer& renderer_;
     game::GameHandler& gameHandler_;
-    AppearanceComposer& appearanceComposer_;
 
     // Charge rush state (moved from Application)
     bool chargeActive_ = false;

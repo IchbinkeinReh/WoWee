@@ -19,6 +19,8 @@ enum class UF : uint16_t {
     // Unit fields
     UNIT_FIELD_TARGET_LO,
     UNIT_FIELD_TARGET_HI,
+    UNIT_FIELD_CHANNEL_OBJECT,  // the low word of the guid the unit channels at (0x0073a520)
+    UNIT_CHANNEL_SPELL,
     UNIT_FIELD_BYTES_0,
     UNIT_FIELD_BYTES_1,  // byte2 = visibility flags; byte3 is expansion-dependent
     UNIT_FIELD_HEALTH,
@@ -125,14 +127,35 @@ enum class UF : uint16_t {
 
     // GameObject fields
     GAMEOBJECT_DISPLAYID,
-    // WotLK: byte 1 of UNIT_FIELD_BYTES_2 is the unit's PvP flags (1 PvP, 4
-    // free-for-all, 8 sanctuary), and PLAYER_DUEL_ARBITER, a guid, is the duel flag
+    // UNIT_FIELD_BYTES_2: byte 0 is the sheath state in every layout (164 in
+    // Classic, 208 in TBC). In WotLK byte 1 is the unit's PvP flags (1 PvP, 4
+    // free-for-all, 8 sanctuary; game::unitPvpFlags), and PLAYER_DUEL_ARBITER, a guid, is the duel flag
     // both duellists name - what the client reads to tell whether two players
     // may attack each other.
     UNIT_FIELD_BYTES_2,
     /// WotLK: three item entries, main hand, off hand, ranged - what a
     /// creature holds (0x0072dbc0).
     UNIT_VIRTUAL_ITEM_SLOT_ID,
+    /// Classic and TBC: three display ids, then six UNIT_VIRTUAL_ITEM_INFO
+    /// fields, two a slot (between BYTES_0 and FLAGS in their tables).
+    UNIT_VIRTUAL_ITEM_SLOT_DISPLAY,
+    UNIT_VIRTUAL_ITEM_INFO,
+    /// WotLK: a corpse's flags; 1 is bones (0x00743760 gives those no blob).
+    CORPSE_FIELD_FLAGS,
+    /// WotLK: what a corpse looks like (0x00705670, 0x00705b20) - its
+    /// display id, its 19 item display ids (inventory type in the top
+    /// byte), race, sex and skin in BYTES_1 bytes 1-3, face, hair style,
+    /// hair colour and facial hair in BYTES_2.
+    CORPSE_FIELD_DISPLAY_ID,
+    CORPSE_FIELD_ITEM,
+    CORPSE_FIELD_BYTES_1,
+    CORPSE_FIELD_BYTES_2,
+    /// WotLK: the guild whose emblem a corpse's guild tabard carries
+    /// (0x007059a0).
+    CORPSE_FIELD_GUILD,
+    /// WotLK: a corpse's dynamic flags; 1 is lootable, which draws the loot
+    /// sparkle (0x00705900).
+    CORPSE_FIELD_DYNAMIC_FLAGS,
     PLAYER_DUEL_ARBITER,
     GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,

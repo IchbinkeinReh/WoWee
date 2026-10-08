@@ -27,6 +27,8 @@
 #include "core/logger.hpp"
 #include "core/memory_monitor.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/fishing_line.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "rendering/loot_sparkles.hpp"
 #include "rendering/vk_context.hpp"
 #include "audio/npc_voice_manager.hpp"
@@ -2179,7 +2181,6 @@ void Application::setState(AppState newState) {
             // If we reuse a previously spawned instance without forcing a respawn, appearance (notably hair) can desync.
             npcsSpawned = false;
             playerCharacterSpawned = false;
-            if (appearanceComposer_) appearanceComposer_->setWeaponsSheathed(false);
             wasAutoAttacking_ = false;
             if (worldLoader_) worldLoader_->resetLoadedMap();
             spawnedPlayerGuid_ = 0;
@@ -2261,28 +2262,53 @@ void Application::setState(AppState newState) {
                     if (renderer) {
                         // Ranged auto-attack spells: Auto Shot (75), Shoot (5019), Throw (2764)
                         if (game::spellclass::isRangedWeaponAutoAttack(spellId)) {
-                            if (appearanceComposer_ && !appearanceComposer_->isShowingRanged())
-                                appearanceComposer_->showRangedWeapon(true);
                             if (auto* ac = renderer->getAnimationController()) ac->triggerRangedShot();
                         } else if (spellId != 0) {
-                            if (appearanceComposer_ && appearanceComposer_->isShowingRanged())
-                                appearanceComposer_->showRangedWeapon(false);
                             if (auto* ac = renderer->getAnimationController()) ac->triggerSpecialAttack(spellId);
                         } else {
-                            if (appearanceComposer_ && appearanceComposer_->isShowingRanged())
-                                appearanceComposer_->showRangedWeapon(false);
                             if (auto* ac = renderer->getAnimationController()) ac->triggerMeleeSwing();
                         }
                     }
                 });
-                gameHandler->setRangedWeaponSwapCallback([this](bool show) {
-                    if (appearanceComposer_) appearanceComposer_->showRangedWeapon(show);
+                // The player's casts set its sheath state (0x007fa2e0): a
+                // ranged spell such as Auto Shot draws the ranged weapon.
+                gameHandler->setSpellCastBeginCallback([this](uint64_t caster, uint32_t spellId) {
+                    if (!gameHandler) return;
+                    if (caster == gameHandler->getPlayerGuid()) {
+                        if (appearanceComposer_) appearanceComposer_->onSpellCastBegin(spellId);
+                    } else if (entitySpawner_) {
+                        entitySpawner_->onUnitSpellCastBegin(caster, spellId);
+                    }
                 });
-                if (renderer && renderer->getAnimationController()) {
-                    renderer->getAnimationController()->setRangedShotCompleteCallback([this]() {
-                        if (appearanceComposer_) appearanceComposer_->showRangedWeapon(false);
+                // Any unit's swing draws its melee weapons (0x00756800).
+                gameHandler->setUnitAttackSwingCallback([this](uint64_t attacker) {
+                    if (!gameHandler) return;
+                    if (attacker == gameHandler->getPlayerGuid()) {
+                        if (appearanceComposer_ && appearanceComposer_->sheathState() != core::SheathState::Melee)
+                            appearanceComposer_->requestSheathState(core::SheathState::Melee);
+                    } else if (entitySpawner_) {
+                        entitySpawner_->onUnitAttackSwing(attacker);
+                    }
+                });
+                // Which units hold a kit's weapon effects, and at what scale
+                // (0x0073a6c0, 0x006f8c50).
+                if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr) {
+                    svs->setWeaponEffectHolder([this](uint32_t renderInstanceId) -> std::optional<float> {
+                        if (!entitySpawner_) return 1.0f;
+                        return entitySpawner_->kitWeaponEffectHolder(renderInstanceId);
                     });
                 }
+                // Whether a text emote is sent, and the player's weapons put
+                // away when it is (0x006dd9e0).
+                gameHandler->setTextEmoteGateCallback([this](uint32_t textEmoteId) {
+                    using Gate = game::GameHandler::TextEmoteGate;
+                    if (!appearanceComposer_) return Gate::Send;
+                    switch (appearanceComposer_->onTextEmote(textEmoteId)) {
+                        case core::TextEmoteVerdict::Refused: return Gate::Refuse;
+                        case core::TextEmoteVerdict::RefusedWhileMoving: return Gate::RefuseWhileMoving;
+                        default: return Gate::Send;
+                    }
+                });
                 // The logout countdown finishing is not the end of it: the server
                 // confirms with SMSG_LOGOUT_COMPLETE, and only then does the client
                 // leave. Without this the countdown ran out and nothing happened.
@@ -2525,7 +2551,6 @@ void Application::performLogoutToLogin() {
     // --- Per-session flags ---
     npcsSpawned = false;
     playerCharacterSpawned = false;
-    if (appearanceComposer_) appearanceComposer_->setWeaponsSheathed(false);
     wasAutoAttacking_ = false;
     if (worldLoader_) worldLoader_->resetLoadedMap();
     if (worldEntryCallbacks_) worldEntryCallbacks_->resetState();
@@ -3241,17 +3266,13 @@ void Application::applyServerMovementState(float deltaTime) {
 // ring sliding off an NPC that never moved. Player instances need the same for
 // a different reason: without it they never leave the run animation when they
 // stop.
-void Application::syncRenderInstancesToEntities(float deltaTime) {
+void Application::syncRenderInstancesToEntities() {
     auto creatureSyncStart = std::chrono::steady_clock::now();
     if (renderer && gameHandler && renderer->getCharacterRenderer()) {
         auto* charRenderer = renderer->getCharacterRenderer();
-        static float npcWeaponRetryTimer = 0.0f;
-        npcWeaponRetryTimer += deltaTime;
-        const bool npcWeaponRetryTick = (npcWeaponRetryTimer >= 1.0f);
-        if (npcWeaponRetryTick) npcWeaponRetryTimer = 0.0f;
-        int weaponAttachesThisTick = 0;
         // Weapons drawn or put away as each unit's items and sheath state say.
         entitySpawner_->updateUnitWeapons();
+        entitySpawner_->refreshGuildTabards();
         glm::vec3 playerPos(0.0f);
         glm::vec3 playerRenderPos(0.0f);
         bool havePlayerPos = false;
@@ -3283,13 +3304,6 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         for (const auto& [guid, instanceId] : _creatureInstances) {
             auto entity = gameHandler->getEntityManager().getEntity(guid);
             if (!entity || entity->getType() != game::ObjectType::UNIT) continue;
-
-            if (npcWeaponRetryTick &&
-                weaponAttachesThisTick < EntitySpawner::MAX_WEAPON_ATTACHES_PER_TICK) {
-                if (entitySpawner_->retryCreatureVirtualWeapons(guid, instanceId, 30)) {
-                    weaponAttachesThisTick++;
-                }
-            }
 
             // Distance check uses getLatestX/Y/Z (server-authoritative destination) to
             // avoid false-culling entities that moved while getX/Y/Z was stale.
@@ -3761,57 +3775,18 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     if (addonManager_ && addonsLoaded_) {
         addonManager_->update(deltaTime);
     }
-    // Always unsheath on combat engage.
     inGameStep = "auto-unsheathe";
     updateCheckpoint = "in_game: auto-unsheathe";
     if (gameHandler) {
-        const bool autoAttacking = gameHandler->isAutoAttacking();
-        // Keep the attachment state consistent with the ongoing attack, not
-        // just the initial false -> true transition. Z can be pressed after
-        // combat has already started, and pre-WotLK servers briefly send
-        // ATTACKSTOP while the client retains attack intent for a retry.
-        const bool attackWeaponNeeded = autoAttacking || gameHandler->hasAutoAttackIntent();
-        const auto& inventory = gameHandler->getInventory();
-        const auto& mainHand = inventory.getEquipSlot(game::EquipSlot::MAIN_HAND);
-        const auto& offHand = inventory.getEquipSlot(game::EquipSlot::OFF_HAND);
-        const auto& ranged = inventory.getEquipSlot(game::EquipSlot::RANGED);
-        const bool hasOffHandWeapon = !offHand.empty() &&
-            game::isOffHandWeaponInventoryType(offHand.item.inventoryType);
-        const bool hasRangedWeapon = !ranged.empty() &&
-            (ranged.item.inventoryType == game::InvType::RANGED_BOW ||
-             ranged.item.inventoryType == game::InvType::RANGED_GUN ||
-             ranged.item.inventoryType == game::InvType::THROWN);
-        const bool hasDrawableWeapon = !mainHand.empty() || hasOffHandWeapon || hasRangedWeapon;
-        if (attackWeaponNeeded && hasDrawableWeapon && appearanceComposer_ &&
-            appearanceComposer_->isWeaponsSheathed()) {
-            if (renderer && renderer->getAnimationController()) {
-                renderer->getAnimationController()->playWeaponSheathAnimation(
-                    appearanceComposer_->sheathSpot(game::EquipSlot::MAIN_HAND),
-                    appearanceComposer_->sheathSpot(game::EquipSlot::OFF_HAND));
-            }
-            appearanceComposer_->setWeaponsSheathed(false);
-            appearanceComposer_->loadEquippedWeapons();
+        // Pre-WotLK servers briefly send ATTACKSTOP while the client keeps
+        // its attack intent for a retry: that is no new attack.
+        const bool attackWeaponNeeded = gameHandler->isAutoAttacking() || gameHandler->hasAutoAttackIntent();
+        // Starting an attack draws melee (0x006e2610, with no sheath
+        // animation).
+        if (attackWeaponNeeded && !wasAutoAttacking_ && appearanceComposer_) {
+            appearanceComposer_->requestSheathState(core::SheathState::Melee);
         }
-        // Swap back to melee weapon when auto-attack stops
-        if (!autoAttacking && wasAutoAttacking_ && appearanceComposer_ && appearanceComposer_->isShowingRanged()) {
-            appearanceComposer_->showRangedWeapon(false);
-        }
-        wasAutoAttacking_ = autoAttacking;
-    }
-
-    // Weapons go away on entering the water. You cannot swim with a sword out,
-    // and retail puts them away for you rather than leaving them drawn through
-    // the swim cycle. No reach animation: the character is already swimming, and
-    // the sheathe reach would be played over a stroke it does not fit.
-    {
-        auto* cc = renderer ? renderer->getCameraController() : nullptr;
-        const bool swimmingNow = cc && cc->isSwimming();
-        if (swimmingNow && !wasSwimmingForSheath_ && appearanceComposer_
-            && !appearanceComposer_->isWeaponsSheathed()) {
-            appearanceComposer_->setWeaponsSheathed(true);
-            appearanceComposer_->loadEquippedWeapons();
-        }
-        wasSwimmingForSheath_ = swimmingNow;
+        wasAutoAttacking_ = attackWeaponNeeded;
     }
 
     // Toggle weapon sheathe state with Z (ignored while UI captures keyboard).
@@ -3821,15 +3796,13 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
         const bool uiWantsKeyboard = ImGui::GetIO().WantCaptureKeyboard ||
                                      ui::interfaceTakingTypedInput();
         auto& input = Input::getInstance();
+        // The key (0x006e23a0) changes the client's own state, tells the
+        // server (CMSG_SET_SHEATHED) and reaches for the weapons with the
+        // shoulders' Sheath and HipSheath (0x00736b60).
         if (!uiWantsKeyboard && input.isKeyJustPressed(SDL_SCANCODE_Z) && appearanceComposer_) {
-            if (renderer && renderer->getAnimationController()) {
-                renderer->getAnimationController()->playWeaponSheathAnimation(
-                    appearanceComposer_->sheathSpot(game::EquipSlot::MAIN_HAND),
-                    appearanceComposer_->sheathSpot(game::EquipSlot::OFF_HAND));
-            }
-            appearanceComposer_->toggleWeaponsSheathed();
-            appearanceComposer_->loadEquippedWeapons();
+            appearanceComposer_->toggleSheath();
         }
+        if (appearanceComposer_) appearanceComposer_->updateWeaponsFromFields();
     }
 
     inGameStep = "world update";
@@ -3847,6 +3820,40 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
             cr->processPendingNormalMaps(4);
         }
     });
+    // Fishing lines (0x007221d0): every unit channelling a spell at a
+    // bobber - its UNIT_FIELD_CHANNEL_OBJECT a game object of type 17 - with
+    // something in its right hand.
+    if (auto* lines = renderer ? renderer->getFishingLineRenderer() : nullptr; lines && gameHandler && entitySpawner_) {
+        std::vector<rendering::FishingLineRenderer::Line> found;
+        const uint16_t channelField = game::fieldIndex(game::UF::UNIT_FIELD_CHANNEL_OBJECT);
+        const uint16_t spellField = game::fieldIndex(game::UF::UNIT_CHANNEL_SPELL);
+        const uint16_t goBytes1 = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
+        auto& entities = gameHandler->getEntityManager();
+        if (channelField != 0xFFFF && spellField != 0xFFFF) {
+            for (const auto& [guid, entity] : entities.getEntities()) {
+                if (!entity || (entity->getType() != game::ObjectType::UNIT &&
+                                entity->getType() != game::ObjectType::PLAYER)) continue;
+                if (entity->getField(spellField) == 0) continue;
+                const uint64_t object = static_cast<uint64_t>(entity->getField(channelField)) |
+                    (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(channelField + 1))) << 32);
+                if (object == 0) continue;
+                auto bobber = entities.getEntity(object);
+                if (!bobber || bobber->getType() != game::ObjectType::GAMEOBJECT) continue;
+                const auto* info = gameHandler->getCachedGameObjectInfo(
+                    static_cast<const game::GameObject&>(*bobber).getEntry());
+                const uint32_t type = info ? info->type
+                                           : (goBytes1 != 0xFFFF ? (bobber->getField(goBytes1) >> 8) & 0xFFu : 0);
+                if (type != core::kGameObjectTypeFishingNode) continue;
+                const auto& objects = entitySpawner_->getGameObjectInstances();
+                auto goIt = objects.find(object);
+                if (goIt == objects.end() || goIt->second.isWmo) continue;
+                const uint32_t unitInstance = gameHandler->resolveUnitRenderInstance(guid);
+                if (unitInstance == 0) continue;
+                found.push_back({.unitInstance = unitInstance, .bobberInstance = goIt->second.instanceId});
+            }
+        }
+        lines->setLines(std::move(found));
+    }
     // Self-heal missing creature visuals: if a nearby UNIT exists in
     // entity state but has no render instance, queue a spawn retry.
     inGameStep = "creature resync scan";
@@ -3958,7 +3965,7 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     // creature models remain at stale spawn positions.
     inGameStep = "creature render sync";
     updateCheckpoint = "in_game: creature render sync";
-    syncRenderInstancesToEntities(deltaTime);
+    syncRenderInstancesToEntities();
     // Movement heartbeat is sent from GameHandler::update() to avoid
     // duplicate packets from multiple update loops.
 
@@ -4444,6 +4451,12 @@ void Application::render() {
                                   self->useFemaleModel)) ? 1 : 0;
                             sizeFor(*room.model, dressUp);
                             room.model->setFraming(ui::UnitPortrait::Framing::FullBody);
+                            // The guild tabard's design (0x006db510).
+                            {
+                                uint32_t guildId = gameHandler->getEntityGuildId(self->guid);
+                                if (guildId == 0) guildId = self->guildId;
+                                room.model->setGuildEmblem(gameHandler->lookupGuildEmblem(guildId));
+                            }
                             shown = room.model->updatePlayer(
                                 static_cast<uint8_t>(self->race), gender,
                                 self->appearanceBytes, self->facialFeatures, worn,
@@ -4570,6 +4583,8 @@ void Application::render() {
                             }
                             sizeFor(inspectModel_, inspectModel);
                             inspectModel_.setFraming(ui::UnitPortrait::Framing::FullBody);
+                            inspectModel_.setGuildEmblem(
+                                gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(result->guid)));
                             shown = inspectModel_.updatePlayer(
                                 race, gender, appearance, facial, worn,
                                 assetManager.get(), renderer.get(), io.DeltaTime);
@@ -4690,6 +4705,9 @@ void Application::render() {
                         // rather than stripping it.
                         // A real player composites their own skin; no bake.
                         face.portrait->setBakedSkin("");
+                        // Their guild tabard's design (0x006db510).
+                        face.portrait->setGuildEmblem(
+                            gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(face.guid)));
                         std::vector<game::EquipmentItem> worn;
                         std::array<uint32_t, 19> displayIds{};
                         std::array<uint8_t, 19> invTypes{};
@@ -4747,6 +4765,7 @@ void Application::render() {
                             // bake only paints what they draw.
                             face.portrait->setBakedSkin(
                                 entitySpawner_->getHumanoidBakePath(displayId));
+                            face.portrait->setGuildEmblem(std::nullopt);
                             built = face.portrait->updatePlayer(
                                 nRace, nSex, nBytes, nFacial, npcWorn,
                                 assetManager.get(), renderer.get(), io.DeltaTime);
@@ -5198,7 +5217,7 @@ void Application::setupUICallbacks() {
 
     // ── Animation: death, respawn, swing, hit, spell, emote, charge, etc. ──
     animationCallbacks_ = std::make_unique<AnimationCallbackHandler>(
-        *entitySpawner_, *renderer, *gameHandler, *appearanceComposer_);
+        *entitySpawner_, *renderer, *gameHandler);
     animationCallbacks_->setupCallbacks();
 
     // ── NPC interaction: greeting, farewell, vendor, aggro voice ──
@@ -5214,7 +5233,7 @@ void Application::setupUICallbacks() {
 
     // ── Transport: mount, taxi, transport spawn/move ──
     transportCallbacks_ = std::make_unique<TransportCallbackHandler>(
-        *entitySpawner_, *renderer, *gameHandler, appearanceComposer_.get());
+        *entitySpawner_, *renderer, *gameHandler);
     transportCallbacks_->setupCallbacks();
 }
 
@@ -5455,7 +5474,6 @@ void Application::refreshPlayerCharacterModel() {
     spawnedFacialFeatures_ = 0;
 
     spawnSnapToGround = false; // don't snap Z - stay at the current position
-    if (appearanceComposer_) appearanceComposer_->setWeaponsSheathed(false);
     spawnPlayerCharacter();
 
     if (renderer) renderer->getCharacterPosition() = savedPos;

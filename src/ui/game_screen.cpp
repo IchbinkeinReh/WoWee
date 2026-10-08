@@ -51,6 +51,8 @@
 #include "game/expansion_profile.hpp"
 #include "game/character.hpp"
 #include "game/shapeshift_forms.hpp"
+#include "game/pvp_flags.hpp"
+#include "game/game_utils.hpp"
 #include "core/logger.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -795,7 +797,16 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         }
     }
 
-    if (inventoryScreen.consumeEquipmentDirty() || gameHandler.consumeOnlineEquipmentDirty()) {
+    // The player's guild, and its tabard design arriving (0x006d2840).
+    bool tabardEmblemChanged = false;
+    if (!gameHandler.getInventory().getEquipSlot(game::EquipSlot::TABARD).empty()) {
+        uint32_t guildId = gameHandler.getEntityGuildId(gameHandler.getPlayerGuid());
+        if (guildId == 0 && gameHandler.getActiveCharacter()) guildId = gameHandler.getActiveCharacter()->guildId;
+        const auto emblem = gameHandler.lookupGuildEmblem(guildId);
+        tabardEmblemChanged = game::tabardNeedsRepaint(playerTabardGuildId_, playerTabardEmblem_, guildId, emblem);
+    }
+    if (inventoryScreen.consumeEquipmentDirty() || gameHandler.consumeOnlineEquipmentDirty() ||
+        tabardEmblemChanged) {
         updateCharacterGeosets(gameHandler.getInventory());
         updateCharacterTextures(gameHandler.getInventory());
         if (appearanceComposer_) appearanceComposer_->loadEquippedWeapons();
@@ -1191,8 +1202,8 @@ std::string unableCursorPath(const char* path) {
 /// not a friendly faction; the same duel (both name one duel flag); otherwise
 /// the target flagged for PvP, or either side marked contested (flag 2), and
 /// neither in a sanctuary (8) - or both in free-for-all (4). The flags are byte 1
-/// of UNIT_FIELD_BYTES_2. Without those fields (before WotLK) a PvP flag on the
-/// unit itself stands in.
+/// of UNIT_FIELD_BYTES_2 in WotLK; before it, UNIT_FIELD_FLAGS' PvP flag
+/// (game::unitPvpFlags).
 bool playerMayAttackPlayer(game::GameHandler& gameHandler, const game::Unit& other) {
     if (other.getHealth() == 0) return false;
     if (other.getUnitFlags() & (0x00000002u | game::UNIT_FLAG_NOT_SELECTABLE)) return false;
@@ -1208,20 +1219,17 @@ bool playerMayAttackPlayer(game::GameHandler& gameHandler, const game::Unit& oth
         if (mine != 0 && mine == theirs) return true;
     }
 
+    if (!me) return (other.getUnitFlags() & game::kUnitFlagPvp) != 0;
+    // Byte 1 of UNIT_FIELD_BYTES_2 is the PvP flags only from WotLK on.
     const uint16_t bytes2Field = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
-    if (!me || bytes2Field == 0xFFFF) {
-        constexpr uint32_t kUnitFlagPvp = 0x00001000;
-        return (other.getUnitFlags() & kUnitFlagPvp) != 0;
-    }
-    constexpr uint32_t kPvp = 1, kContested = 2, kFfa = 4, kSanctuary = 8;
-    const uint32_t mine = (me->getField(bytes2Field) >> 8) & 0xFF;
-    const uint32_t theirs = (other.getField(bytes2Field) >> 8) & 0xFF;
-    if (!(theirs & kPvp)) {
-        if ((mine & kFfa) && (theirs & kFfa)) return true;
-        if (!(mine & kContested) && !(theirs & kContested)) return false;
-    }
-    if (mine & kSanctuary) return false;
-    return !(theirs & kSanctuary);
+    const bool bytes2HoldsPvp = bytes2Field != 0xFFFF && !game::isPreWotlk();
+    const auto flagsOf = [&](const game::Entity& unit) {
+        const uint32_t bytes2 = bytes2HoldsPvp ? unit.getField(bytes2Field) : 0;
+        const uint16_t flagsField = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+        const uint32_t unitFlags = flagsField != 0xFFFF ? unit.getField(flagsField) : 0;
+        return game::unitPvpFlags(bytes2HoldsPvp, bytes2, unitFlags);
+    };
+    return game::pvpFlagsAllowAttack(flagsOf(*me), flagsOf(other));
 }
 
 /// The cursor over a unit or another player, as the client picks it: the sword

@@ -1502,8 +1502,23 @@ void GameHandler::sendAddonMessage(ChatType type, const std::string& message, co
     if (chatHandler_) chatHandler_->sendAddonMessage(type, message, target);
 }
 
-void GameHandler::sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid) {
+bool GameHandler::sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid) {
+    // 0x006dd9e0: an emote the player may not do now is not sent; one
+    // refused for moving says so (ERR_NOEMOTEWHILERUNNING, 0x005216f0 with
+    // 0x14c). One that is sent puts the weapons away first.
+    if (textEmoteGateCallback_ && state == WorldState::IN_WORLD) {
+        switch (textEmoteGateCallback_(textEmoteId)) {
+            case TextEmoteGate::Send: break;
+            case TextEmoteGate::RefuseWhileMoving:
+                raiseUiError("You can't do that while moving!");
+                return false;
+            case TextEmoteGate::Refuse: return false;
+        }
+    }
+    // Aimed at the player itself, it is aimed at nobody.
+    if (targetGuid == playerGuid) targetGuid = 0;
     if (chatHandler_) chatHandler_->sendTextEmote(textEmoteId, targetGuid);
+    return true;
 }
 
 void GameHandler::joinChannel(const std::string& channelName, const std::string& password) {
@@ -1695,6 +1710,12 @@ void GameHandler::sendSetDifficulty(uint32_t difficulty, bool raid) {
 
 void GameHandler::setStandState(uint8_t standState) {
     if (socialHandler_) socialHandler_->setStandState(standState);
+}
+
+void GameHandler::requestSheathState(uint8_t state) {
+    if (!isInWorld()) return;
+    auto packet = SetSheathedPacket::build(state);
+    socket->send(packet);
 }
 
 void GameHandler::toggleHelm() {
@@ -2138,6 +2159,10 @@ bool GameHandler::isInCombatWith(uint64_t guid) const {
 
 uint64_t GameHandler::getAutoAttackTargetGuid() const {
     return combatHandler_ ? combatHandler_->getAutoAttackTargetGuid() : 0;
+}
+
+uint64_t GameHandler::getUnitMeleeTarget(uint64_t guid) const {
+    return combatHandler_ ? combatHandler_->getUnitMeleeTarget(guid) : 0;
 }
 
 bool GameHandler::isAggressiveTowardPlayer(uint64_t guid) const {
@@ -2632,6 +2657,18 @@ const std::vector<GuildEventLogEntry>& GameHandler::getGuildEventLog() const {
 
 void GameHandler::queryGuildInfo(uint32_t guildId) {
     if (socialHandler_) socialHandler_->queryGuildInfo(guildId);
+}
+
+std::optional<GuildEmblem> GameHandler::lookupGuildEmblem(uint32_t guildId) {
+    return socialHandler_ ? socialHandler_->lookupGuildEmblem(guildId) : std::nullopt;
+}
+
+void GameHandler::noteGuildTimestamp(uint32_t guildId, uint32_t timestamp) {
+    if (socialHandler_) socialHandler_->noteGuildTimestamp(guildId, timestamp);
+}
+
+uint32_t GameHandler::guildEmblemGeneration() const {
+    return socialHandler_ ? socialHandler_->guildEmblemGeneration() : 0;
 }
 
 const std::string& GameHandler::lookupGuildName(uint32_t guildId) {
@@ -3925,6 +3962,21 @@ bool GameHandler::isSpellInterruptible(uint32_t spellId) const {
 bool GameHandler::isSpellPassive(uint32_t spellId) const {
     if (spellHandler_) return spellHandler_->isSpellPassive(spellId);
     return false;
+}
+
+std::optional<uint32_t> GameHandler::getSpellAttributes(uint32_t spellId) const {
+    if (spellId == 0) return std::nullopt;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return std::nullopt;
+    return it->second.attr;
+}
+
+uint32_t GameHandler::getSpellVisualId(uint32_t spellId) const {
+    if (spellId == 0) return 0;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    return it != spellNameCache_.end() ? it->second.spellVisualId : 0;
 }
 
 uint32_t GameHandler::getSpellSchoolMask(uint32_t spellId) const {

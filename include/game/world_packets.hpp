@@ -1084,6 +1084,13 @@ public:
     static network::Packet build(uint8_t state);
 };
 
+/** CMSG_SET_SHEATHED: the sheath state the player asks for, a uint32
+ *  (0x00736d30 writes 0x1e0 and the state). */
+class SetSheathedPacket {
+public:
+    static network::Packet build(uint32_t sheathState);
+};
+
 // ============================================================
 // Action Bar
 // ============================================================

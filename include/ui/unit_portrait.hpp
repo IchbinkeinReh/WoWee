@@ -13,8 +13,11 @@
 // names. The party frames want the same thing and are left out on cost: each
 // of these is a 640x800 offscreen target and a character pass every frame.
 
+#include "game/guild_emblem.hpp"
+
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -86,6 +89,10 @@ public:
     /// of what decides a rebuild, so changing it is enough to apply it.
     void setBakedSkin(const std::string& path) { pendingBake_ = path; }
 
+    /// The guild's design for a player's guild tabard (0x006db510), or none.
+    /// Set before the update that should use it; a change rebuilds.
+    void setGuildEmblem(const std::optional<game::GuildEmblem>& emblem) { pendingEmblem_ = emblem; }
+
     /// Set before the first update, since framing is applied when the model
     /// loads and the model loads once.
     void setFraming(Framing framing) { framing_ = framing; }
@@ -129,6 +136,9 @@ private:
     /// The bake asked for, and the one already on the model.
     std::string pendingBake_;
     std::string loadedBake_;
+    /// The guild design asked for, and the one painted.
+    std::optional<game::GuildEmblem> pendingEmblem_;
+    std::optional<game::GuildEmblem> loadedEmblem_;
 
     uint64_t loadedGuid_ = 0;
     /// Race and gender as well, because another player is identified by these

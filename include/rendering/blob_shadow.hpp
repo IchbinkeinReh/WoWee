@@ -47,6 +47,23 @@ inline Box mountedBox(Box rider, const Box& mount, float mountHeight) {
 
 /// The default of the client's shadowLOD cvar (0x007e4a40) and the only
 /// other value its handler accepts (0x007e3a20).
+/// 0x00743760: the map entity flags of a world object, and whether that
+/// gives it the blob flag 0x800 (0x00781a10 sets it unless bit 0x2 of its
+/// argument): a unit (0x10, 0x30 for a player) unless its creature type
+/// flags have 0x02000000 (0x00715db0); a corpse unless it is bones
+/// (CORPSE_FIELD_FLAGS 1); never a game object (0xb) or dynamic object (10).
+enum class WorldObjectKind : uint8_t { Unit, Corpse, GameObject, DynamicObject };
+constexpr bool carriesBlobFlag(WorldObjectKind kind, bool noShadowTypeFlag, uint32_t corpseFlags) {
+    uint32_t addFlags = 0;
+    switch (kind) {
+        case WorldObjectKind::Unit: addFlags = noShadowTypeFlag ? 0x12u : 0x10u; break;
+        case WorldObjectKind::Corpse: addFlags = (corpseFlags & 1u) != 0 ? 2u : 0u; break;
+        case WorldObjectKind::GameObject: addFlags = 0xBu; break;
+        case WorldObjectKind::DynamicObject: addFlags = 10u; break;
+    }
+    return (addFlags & 2u) == 0;
+}
+
 constexpr int kDefaultShadowLOD = 1;
 
 /// 0x007e49e0: drawn with shadowLOD 1, and only while extShadowQuality is

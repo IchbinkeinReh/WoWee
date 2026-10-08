@@ -178,7 +178,7 @@ private:
     /// Keep render instances on top of what the server says. A model is placed
     /// once at spawn and would otherwise stay there while its target circle
     /// follows the entity, which reads as a ring sliding off a still NPC.
-    void syncRenderInstancesToEntities(float deltaTime);
+    void syncRenderInstancesToEntities();
     void render();
     void performLogoutToLogin();
     void processDeferredLogoutToLogin();
@@ -402,9 +402,6 @@ private:
     bool deckFloorPending_ = false;
 
     bool wasAutoAttacking_ = false;
-    /// Whether the player was swimming last frame, so weapons are put away
-    /// once on entering the water rather than every frame in it.
-    bool wasSwimmingForSheath_ = false;
 
     // Quest marker billboard sprites (above NPCs)
     void loadQuestMarkerModels();  // Now loads BLP textures

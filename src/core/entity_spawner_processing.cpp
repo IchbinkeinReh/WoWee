@@ -1,4 +1,5 @@
 #include "core/entity_spawner.hpp"
+#include "core/character_component.hpp"
 
 #include <set>
 #include "rendering/m2_model_classifier.hpp"
@@ -479,34 +480,19 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
                                 }
                                 for (const auto& uw : sections.underwear) displaySkinPaths.push_back(uw);
                             }
-                            // Equipment region textures
+                            // Equipment region textures: the character
+                            // component's (0x004f2880), CreatureDisplayInfoExtra's
+                            // shirt to tabard as its items 2 to 9.
                             auto idiDbc = am->loadDBC("ItemDisplayInfo.dbc");
                             if (idiDbc) {
-                                const auto* idiL = pipeline::getActiveDBCLayout()
-                                    ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
-                                // Through the shared resolver, which reconciles
-                                // the layout against the file's own field count.
-                                // Written out here instead, this path read the
-                                // eight names one column to the left of where
-                                // the 25-field file keeps them - the chest
-                                // texture on the legs, the sleeves on the
-                                // hands, and nothing on the upper arm - while
-                                // the other reader of the same eight columns
-                                // went through the resolver and was right.
-                                uint32_t trf[8];
-                                pipeline::getItemDisplayInfoTextureFields(*idiDbc, idiL, trf);
-                                const bool isFem = (he.sexId == 1);
-                                for (uint32_t did : he.equipDisplayId) {
-                                    if (did == 0) continue;
-                                    int32_t recIdx = idiDbc->findRecordById(did);
-                                    if (recIdx < 0) continue;
-                                    for (int region = 0; region < 8; region++) {
-                                        std::string texName = idiDbc->getString(static_cast<uint32_t>(recIdx), trf[region]);
-                                        if (texName.empty()) continue;
-                                        std::string path = pipeline::resolveItemRegionTexture(
-                                            *am, region, texName, isFem);
-                                        if (!path.empty()) displaySkinPaths.push_back(path);
-                                    }
+                                std::vector<core::ComponentItem> componentItems;
+                                for (int eqSlot = 2; eqSlot <= 9; ++eqSlot) {
+                                    const uint32_t did = he.equipDisplayId[eqSlot];
+                                    if (did != 0) componentItems.push_back({core::componentItemForNpcSlot(eqSlot), did});
+                                }
+                                for (auto& layer : core::characterComponentLayers(*am, *idiDbc, componentItems,
+                                                                                  he.sexId == 1, std::nullopt)) {
+                                    displaySkinPaths.push_back(std::move(layer.second));
                                 }
                             }
                         }
@@ -806,29 +792,17 @@ std::vector<std::string> EntitySpawner::resolveEquipmentTexturePaths(uint64_t gu
         if (!up.empty()) paths.push_back(up);
     }
 
-    // Resolve equipment region texture paths (same logic as setOnlinePlayerEquipment)
+    // Resolve equipment region texture paths (as setOnlinePlayerEquipment
+    // layers them, 0x004f2880).
     auto displayInfoDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
     if (!displayInfoDbc) return paths;
-    const auto* idiL = pipeline::getActiveDBCLayout()
-        ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
-
-    uint32_t texRegionFields[8];
-    pipeline::getItemDisplayInfoTextureFields(*displayInfoDbc, idiL, texRegionFields);
-    const bool isFemale = (st.genderId == 1);
-
+    std::vector<core::ComponentItem> componentItems;
     for (int s = 0; s < 19; s++) {
-        uint32_t did = displayInfoIds[s];
-        if (did == 0) continue;
-        int32_t recIdx = displayInfoDbc->findRecordById(did);
-        if (recIdx < 0) continue;
-        for (int region = 0; region < 8; region++) {
-            std::string texName = displayInfoDbc->getString(
-                static_cast<uint32_t>(recIdx), texRegionFields[region]);
-            if (texName.empty()) continue;
-            std::string path = pipeline::resolveItemRegionTexture(
-                *assetManager_, region, texName, isFemale);
-            if (!path.empty()) paths.push_back(path);
-        }
+        if (displayInfoIds[s] != 0) componentItems.push_back({core::componentItemIndex(s), displayInfoIds[s]});
+    }
+    for (auto& layer : core::characterComponentLayers(*assetManager_, *displayInfoDbc, componentItems,
+                                                      st.genderId == 1, std::nullopt)) {
+        paths.push_back(std::move(layer.second));
     }
     return paths;
 }
@@ -2054,8 +2028,6 @@ void EntitySpawner::despawnCreature(uint64_t guid) {
     creatureModelIds_.erase(guid);
     creatureDisplayIds_.erase(guid);
     creatureRenderPosCache_.erase(guid);
-    creatureWeaponsAttached_.erase(guid);
-    creatureWeaponAttachAttempts_.erase(guid);
     unitWeaponsShown_.erase(guid);
     creatureWasMoving_.erase(guid);
     creatureWasSwimming_.erase(guid);

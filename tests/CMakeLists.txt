@@ -2639,6 +2639,26 @@ wowee_add_test(test_detail_doodad_placement
 wowee_add_test(test_weapon_attachment
     SOURCES test_weapon_attachment.cpp)
 
+# ── test_fishing_line ────────────────────────────────────────
+# The line from a fishing pole to its bobber (rendering/fishing_line_geometry.hpp).
+wowee_add_test(test_fishing_line
+    SOURCES test_fishing_line.cpp)
+
+# ── test_pvp_flags ───────────────────────────────────────────
+# The PvP flags and where each version keeps them (game/pvp_flags.hpp).
+wowee_add_test(test_pvp_flags
+    SOURCES test_pvp_flags.cpp)
+
+# ── test_character_component ─────────────────────────────────
+# How worn items and a guild tabard layer on the body (core/character_component.hpp).
+wowee_add_test(test_character_component
+    SOURCES test_character_component.cpp)
+
+# ── test_corpse_look ─────────────────────────────────────────
+# What a corpse's fields say it looks like (game/corpse_look.hpp).
+wowee_add_test(test_corpse_look
+    SOURCES test_corpse_look.cpp)
+
 # ── test_client_ribbon ───────────────────────────────────────
 # The client's ribbon emitter (rendering/client_ribbon.hpp).
 wowee_add_test(test_client_ribbon

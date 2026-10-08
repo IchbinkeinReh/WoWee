@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/guild_emblem.hpp"
+#include <optional>
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
 #include "game/group_defines.hpp"
@@ -277,6 +279,16 @@ public:
 
     // Guild name lookup
     const std::string& lookupGuildName(uint32_t guildId);
+    /// A guild's tabard design from its query answer, asking for it when
+    /// it is not known yet (the guild cache, 0x0067d930).
+    std::optional<GuildEmblem> lookupGuildEmblem(uint32_t guildId);
+    /// Counts the designs that have arrived, for whoever waits on one.
+    [[nodiscard]] uint32_t guildEmblemGeneration() const { return guildEmblemGeneration_; }
+    /// A player's PLAYER_GUILD_TIMESTAMP, which the client keeps per guild
+    /// (0x006e1c60): one it has not seen for the guild asks for the guild
+    /// again (its cache record dropped, 0x0067a5f0), whose answer paints
+    /// the guild's members again.
+    void noteGuildTimestamp(uint32_t guildId, uint32_t timestamp);
     [[nodiscard]] uint32_t getEntityGuildId(uint64_t guid) const;
 
     // Ready check
@@ -643,6 +655,9 @@ private:
     bool hasGuildRoster_ = false;
     std::unordered_map<uint32_t, std::string> guildNameCache_;
     std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> pendingGuildNameQueries_;
+    std::unordered_map<uint32_t, GuildEmblem> guildEmblems_;
+    uint32_t guildEmblemGeneration_ = 0;
+    std::unordered_map<uint32_t, uint32_t> guildTimestamps_;
     bool pendingGuildInvite_ = false;
     std::string pendingGuildInviterName_;
     std::string pendingGuildInviteGuildName_;

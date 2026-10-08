@@ -6,6 +6,7 @@
 #include "game/world_packets.hpp"
 #include "game/character.hpp"
 #include "game/opcode_table.hpp"
+#include "game/corpse_look.hpp"
 #include "game/update_field_table.hpp"
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
@@ -36,6 +37,7 @@
 #include "game/game_clock.hpp"
 #include <map>
 #include <optional>
+#include "game/guild_emblem.hpp"
 #include <algorithm>
 #include <chrono>
 #include <future>
@@ -324,7 +326,8 @@ public:
      */
     void sendChatMessage(ChatType type, const std::string& message, const std::string& target = "");
     void sendAddonMessage(ChatType type, const std::string& message, const std::string& target = "");
-    void sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid = 0);
+    /// 0x006dd9e0: false when the client sends nothing.
+    bool sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid = 0);
     void joinChannel(const std::string& channelName, const std::string& password = "");
     void leaveChannel(const std::string& channelName);
     void requestChannelList(const std::string& channelName);
@@ -706,6 +709,9 @@ public:
     bool isSitting() const { return standState_ >= 1 && standState_ <= 6; }
     bool isDead() const { return standState_ == 7; }
     bool isKneeling() const { return standState_ == 8; }
+    /// Tells the server the player's sheath state (CMSG_SET_SHEATHED, as
+    /// 0x00736d30 sends it when the client changes its own).
+    void requestSheathState(uint8_t state);
 
     // Display toggles
     void toggleHelm();
@@ -901,6 +907,12 @@ public:
     const std::string& lookupGuildName(uint32_t guildId);
     // Returns the guildId for a player entity (from PLAYER_GUILDID update field).
     uint32_t getEntityGuildId(uint64_t guid) const;
+    /// A guild's tabard design, asked of the server when not known yet.
+    std::optional<GuildEmblem> lookupGuildEmblem(uint32_t guildId);
+    /// Changes each time a guild's design arrives.
+    uint32_t guildEmblemGeneration() const;
+    /// A player's PLAYER_GUILD_TIMESTAMP as seen (0x006e1c60).
+    void noteGuildTimestamp(uint32_t guildId, uint32_t timestamp);
 
     using ReadyCheckResult = game::ReadyCheckResult;
     void initiateReadyCheck();
@@ -1028,6 +1040,9 @@ public:
     bool isInCombatWith(uint64_t guid) const;
     uint64_t getAutoAttackTargetGuid() const;
     bool isAggressiveTowardPlayer(uint64_t guid) const;
+    /// Another unit's melee target from its SMSG_ATTACKSTART (CGUnit_C
+    /// +0xa20); 0 for none.
+    uint64_t getUnitMeleeTarget(uint64_t guid) const;
     // Timestamp (ms since epoch) of the most recent player melee auto-attack.
     // Zero if no swing has occurred this session.
     uint64_t getLastMeleeSwingMs() const;
@@ -1396,9 +1411,18 @@ public:
         return faceCameraProvider_ ? faceCameraProvider_() : getMovementInfo().orientation;
     }
 
-    // Ranged weapon swap callback - show=true: swap to ranged weapon, false: back to melee
-    using RangedWeaponSwapCallback = std::function<void(bool show)>;
-    void setRangedWeaponSwapCallback(RangedWeaponSwapCallback cb) { rangedWeaponSwapCallback_ = std::move(cb); }
+    /// A spell's cast beginning on a unit (SMSG_SPELL_START, or
+    /// SMSG_SPELL_GO), where 0x00805330 calls 0x007fa2e0.
+    using SpellCastBeginCallback = std::function<void(uint64_t casterGuid, uint32_t spellId)>;
+    void setSpellCastBeginCallback(SpellCastBeginCallback cb) { spellCastBeginCallback_ = std::move(cb); }
+    /// Any unit's melee swing (SMSG_ATTACKERSTATEUPDATE, 0x00756800).
+    using UnitAttackSwingCallback = std::function<void(uint64_t attackerGuid)>;
+    void setUnitAttackSwingCallback(UnitAttackSwingCallback cb) { unitAttackSwingCallback_ = std::move(cb); }
+    /// The active player sending a text emote (0x006dd9e0): whether it is
+    /// sent, refused, or refused with ERR_NOEMOTEWHILERUNNING.
+    enum class TextEmoteGate : uint8_t { Send, Refuse, RefuseWhileMoving };
+    using TextEmoteGateCallback = std::function<TextEmoteGate(uint32_t textEmoteId)>;
+    void setTextEmoteGateCallback(TextEmoteGateCallback cb) { textEmoteGateCallback_ = std::move(cb); }
 
     // Spell cast animation callbacks - true=start cast/channel, false=finish/cancel
     // guid: caster (may be player or another unit), isChannel: channel vs regular cast
@@ -1596,6 +1620,15 @@ public:
                                                       const std::array<uint32_t, 19>& displayInfoIds,
                                                       const std::array<uint8_t, 19>& inventoryTypes)>;
     void setPlayerEquipmentCallback(PlayerEquipmentCallback cb) { playerEquipmentCallback_ = std::move(cb); }
+
+    /// A CORPSE object to draw, from its fields (0x00705670, 0x00705b20).
+    /// Removed through the player despawn callback.
+    using CorpseSpawnCallback = std::function<void(uint64_t guid, const CorpseLook& look,
+                                                   float x, float y, float z, float orientation)>;
+    void setCorpseSpawnCallback(CorpseSpawnCallback cb) { corpseSpawnCallback_ = std::move(cb); }
+    /// A corpse's lootable bit changed (0x007061e0).
+    using CorpseLootableCallback = std::function<void(uint64_t guid, bool lootable)>;
+    void setCorpseLootableCallback(CorpseLootableCallback cb) { corpseLootableCallback_ = std::move(cb); }
 
     // GameObject spawn callback (online mode - triggered when gameobject enters view)
     // Parameters: guid, entry, displayId, x, y, z (canonical), orientation, scale (OBJECT_FIELD_SCALE_X)
@@ -3442,6 +3475,10 @@ public:
     /// permanent aura. The spell book draws these without a cast border and
     /// refuses to put them on the action bar.
     bool isSpellPassive(uint32_t spellId) const;
+    /// Spell.dbc Attributes, the base word; nothing for a spell not in it.
+    std::optional<uint32_t> getSpellAttributes(uint32_t spellId) const;
+    /// Spell.dbc SpellVisual (the first); 0 for none.
+    uint32_t getSpellVisualId(uint32_t spellId) const;
     /// Returns the school bitmask for the spell from Spell.dbc
     /// (0x01=Physical, 0x02=Holy, 0x04=Fire, 0x08=Nature, 0x10=Frost, 0x20=Shadow, 0x40=Arcane).
     /// Returns 0 if unknown.
@@ -3819,7 +3856,8 @@ public:
     auto& knockBackCallbackRef() { return knockBackCallback_; }
     auto& lootWindowCallbackRef() { return lootWindowCallback_; }
     auto& meleeSwingCallbackRef() { return meleeSwingCallback_; }
-    auto& rangedWeaponSwapCallbackRef() { return rangedWeaponSwapCallback_; }
+    auto& spellCastBeginCallbackRef() { return spellCastBeginCallback_; }
+    auto& unitAttackSwingCallbackRef() { return unitAttackSwingCallback_; }
     void suppressNextMeleeSwingAnim() { suppressMeleeSwingAnim_ = true; }
     bool consumeSuppressMeleeSwingAnim() {
         bool v = suppressMeleeSwingAnim_;
@@ -3841,6 +3879,8 @@ public:
     auto& playerEquipmentCallbackRef() { return playerEquipmentCallback_; }
     auto& playerHealthCallbackRef() { return playerHealthCallback_; }
     auto& playerSpawnCallbackRef() { return playerSpawnCallback_; }
+    auto& corpseSpawnCallbackRef() { return corpseSpawnCallback_; }
+    auto& corpseLootableCallbackRef() { return corpseLootableCallback_; }
     auto& pvpHonorCallbackRef() { return pvpHonorCallback_; }
     auto& questCompleteCallbackRef() { return questCompleteCallback_; }
     auto& questProgressCallbackRef() { return questProgressCallback_; }
@@ -4451,6 +4491,8 @@ private:
     CreatureSpawnCallback creatureSpawnCallback_;
     CreatureDespawnCallback creatureDespawnCallback_;
     PlayerSpawnCallback playerSpawnCallback_;
+    CorpseSpawnCallback corpseSpawnCallback_;
+    CorpseLootableCallback corpseLootableCallback_;
     PlayerDespawnCallback playerDespawnCallback_;
     PlayerEquipmentCallback playerEquipmentCallback_;
     CreatureMoveCallback creatureMoveCallback_;
@@ -5046,7 +5088,9 @@ private:
     GhostStateCallback ghostStateCallback_;
     MeleeSwingCallback meleeSwingCallback_;
     FaceCameraProvider faceCameraProvider_;
-    RangedWeaponSwapCallback rangedWeaponSwapCallback_;
+    SpellCastBeginCallback spellCastBeginCallback_;
+    UnitAttackSwingCallback unitAttackSwingCallback_;
+    TextEmoteGateCallback textEmoteGateCallback_;
     bool suppressMeleeSwingAnim_ = false;
     // lastMeleeSwingMs_ moved to CombatHandler
     SpellCastAnimCallback spellCastAnimCallback_;

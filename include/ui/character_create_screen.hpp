@@ -80,6 +80,8 @@ private:
     int prevHairStyle_ = -1;
     int prevHairColor_ = -1;
     int prevFacialHair_ = -1;
+    /// The class the preview was dressed for (its eyes: 0x004ed900).
+    int prevClass_ = -1;
     int prevRangeRace_ = -1;
     int prevRangeGender_ = -1;
     int prevRangeBodyType_ = -1;

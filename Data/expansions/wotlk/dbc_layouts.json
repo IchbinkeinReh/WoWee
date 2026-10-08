@@ -92,10 +92,12 @@
     "ModelPath": 2,
     "ModelScale": 4,
     "MountHeight": 16,
-    "GeoBoxMinX": 17
+    "GeoBoxMinX": 17,
+    "AttachedEffectScale": 24
   },
   "Emotes": {
     "AnimID": 2,
+    "EmoteFlags": 3,
     "EmoteSpecProc": 4,
     "ID": 0
   },
@@ -145,6 +147,7 @@
     "ModelName": 1
   },
   "ItemDisplayInfo": {
+    "Flags": 10,
     "GeosetGroup1": 7,
     "GeosetGroup3": 9,
     "ID": 0,
@@ -362,6 +365,7 @@
   "SpellVisual": {
     "CastKit": 2,
     "Flags": 13,
+    "HasMissile": 7,
     "ID": 0,
     "ImpactKit": 3,
     "MissileAttachment": 16,
@@ -379,6 +383,9 @@
   "SpellVisualEffectName": {
     "FilePath": 2,
     "ID": 0,
+    "MaxAllowedScale": 6,
+    "MinAllowedScale": 5,
+    "Name": 1,
     "Scale": 4
   },
   "SpellVisualKit": {
@@ -388,7 +395,9 @@
     "HeadEffect": 3,
     "ID": 0,
     "LeftHandEffect": 6,
+    "LeftWeaponEffect": 9,
     "RightHandEffect": 7,
+    "RightWeaponEffect": 10,
     "SoundID": 15,
     "SpecialEffect0": 11,
     "SpecialEffect1": 12,

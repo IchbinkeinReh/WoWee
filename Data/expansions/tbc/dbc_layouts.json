@@ -80,6 +80,7 @@
   },
   "Emotes": {
     "AnimID": 2,
+    "EmoteFlags": 3,
     "EmoteSpecProc": 4,
     "ID": 0
   },
@@ -129,6 +130,7 @@
     "ModelName": 1
   },
   "ItemDisplayInfo": {
+    "Flags": 10,
     "GeosetGroup1": 7,
     "GeosetGroup3": 9,
     "ID": 0,
@@ -310,7 +312,8 @@
   },
   "SpellVisualEffectName": {
     "FilePath": 2,
-    "ID": 0
+    "ID": 0,
+    "Name": 1
   },
   "SpellVisualKit": {
     "BaseEffect": 5,

@@ -26,12 +26,10 @@ namespace wowee { namespace core {
 AnimationCallbackHandler::AnimationCallbackHandler(
     EntitySpawner& entitySpawner,
     rendering::Renderer& renderer,
-    game::GameHandler& gameHandler,
-    AppearanceComposer& appearanceComposer)
+    game::GameHandler& gameHandler)
     : entitySpawner_(entitySpawner)
     , renderer_(renderer)
     , gameHandler_(gameHandler)
-    , appearanceComposer_(appearanceComposer)
 {
 }
 
@@ -566,13 +564,6 @@ void AnimationCallbackHandler::setupCallbacks() {
                             ac->startSpellCast(0, swigAnim, false, 0);
                         }
                     } else {
-                        // Weapons go straight to the back before the sit - the real
-                        // client auto-sheathes on consume with no sheath animation
-                        // (playing one here would fight the FSM's sit-down one-shot).
-                        if (!appearanceComposer_.isWeaponsSheathed()) {
-                            appearanceComposer_.setWeaponsSheathed(true);
-                            appearanceComposer_.loadEquippedWeapons();
-                        }
                         // Food and water keep the player seated (UNIT_FIELD_BYTES_1)
                         // with the plain seated idle, exactly like the real client:
                         // player models ship NO seated eating animation - EmoteEat is
@@ -595,7 +586,7 @@ void AnimationCallbackHandler::setupCallbacks() {
                     }
                 }
             } else if (isMining) {
-                appearanceComposer_.showMiningPick(true);
+                // The pick is the mining kit's weapon effect (0x0073a6c0).
                 uint32_t mineAnim = pickFirst({
                     rendering::anim::ATTACK_1H,
                     rendering::anim::EMOTE_WORK,
@@ -626,15 +617,10 @@ void AnimationCallbackHandler::setupCallbacks() {
                     ac->startSpellCast(useStart, useLoop ? useLoop : rendering::anim::STAND, true, useEnd);
                 }
             } else if (isFishing && cr->hasAnimation(instanceId, rendering::anim::FISHING_LOOP)) {
-                // Fishing is a one-shot pole cast followed by the channel idle. If the
-                // player had weapons sheathed, move the equipped pole into their hand
-                // before starting so the cast animation actually swings it.
+                // Fishing is a one-shot pole cast followed by the channel idle.
+                // The pole is the main hand, drawn by the channel at the bobber
+                // (0x0073a520).
                 if (isLocalPlayer) {
-                    if (appearanceComposer_.isWeaponsSheathed()) {
-                        appearanceComposer_.setWeaponsSheathed(false);
-                        appearanceComposer_.loadEquippedWeapons();
-                    }
-                    appearanceComposer_.showFishingPole(true);
                     auto* ac = renderer_.getAnimationController();
                     if (ac) {
                         uint32_t castAnim = cr->hasAnimation(instanceId, rendering::anim::FISHING_CAST)
@@ -738,8 +724,6 @@ void AnimationCallbackHandler::setupCallbacks() {
         } else {
             // Cast/channel ended - plays finalization anim completely then returns to idle
             if (isLocalPlayer) {
-                appearanceComposer_.showMiningPick(false);
-                appearanceComposer_.showFishingPole(false);
                 auto* ac = renderer_.getAnimationController();
                 if (ac) {
                     ac->setSeatedLoopAnimation(0);

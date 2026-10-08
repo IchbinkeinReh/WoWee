@@ -263,6 +263,21 @@ bool M2Renderer::getInstanceBounds(uint32_t instanceId, glm::vec3& outCenter, fl
     return outRadius > 0.0f;
 }
 
+bool M2Renderer::getInstanceHeight(uint32_t instanceId, glm::vec3& outPosition, float& outScale,
+                                   float& outModelHeight) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return false;
+    const auto& inst = instances[idxIt->second];
+    auto modelIt = models.find(inst.modelId);
+    if (modelIt == models.end()) return false;
+    outPosition = inst.position;
+    outScale = inst.scale;
+    const auto& model = modelIt->second;
+    outModelHeight = model.hasVertexBox ? model.vertexBoxMax.z - model.vertexBoxMin.z
+                                        : model.boundMax.z - model.boundMin.z;
+    return true;
+}
+
 void M2Renderer::setModelParticlesOnly(uint32_t modelId) {
     auto it = models.find(modelId);
     if (it == models.end()) return;

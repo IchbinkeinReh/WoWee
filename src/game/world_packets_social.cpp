@@ -611,6 +611,12 @@ network::Packet StandStateChangePacket::build(uint8_t state) {
     return packet;
 }
 
+network::Packet SetSheathedPacket::build(uint32_t sheathState) {
+    network::Packet packet(wireOpcode(Opcode::CMSG_SET_SHEATHED));
+    packet.writeUInt32(sheathState);
+    return packet;
+}
+
 // ============================================================
 // Action Bar
 // ============================================================

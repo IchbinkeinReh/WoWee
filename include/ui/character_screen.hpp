@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/guild_emblem.hpp"
+#include <optional>
 #include "ui/paper_ui.hpp"
 #include "ui/ui_services.hpp"
 #include "game/game_handler.hpp"
@@ -155,6 +157,7 @@ private:
     uint8_t previewFacialFeatures_ = 0;
     bool previewUseFemaleModel_ = false;
     uint64_t previewEquipHash_ = 0;
+    std::optional<game::GuildEmblem> previewEmblem_;
 };
 
 } // namespace ui

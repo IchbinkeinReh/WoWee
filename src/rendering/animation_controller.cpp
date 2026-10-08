@@ -101,38 +101,6 @@ void AnimationController::playEmote(const std::string& emoteName) {
     }
 }
 
-void AnimationController::playWeaponSheathAnimation(SheathSpot mainHand, SheathSpot offHand) {
-    if (!renderer_) return;
-    auto* characterRenderer = renderer_->getCharacterRenderer();
-    const uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
-    if (!characterRenderer || characterInstanceId == 0) return;
-
-    // One animation both ways: 3.3.5 has Sheath and HipSheath and no unsheathe,
-    // and plays the reach for drawing as well as for putting away. Each arm
-    // reaches for its own hand's item and an empty hand stays still; the rest
-    // of the body follows whichever hand holds something.
-    auto reach = [](SheathSpot spot) {
-        return spot == SheathSpot::HIP  ? anim::HIP_SHEATHE
-             : spot == SheathSpot::BACK ? anim::SHEATHE
-                                        : anim::STAND;
-    };
-    const SheathSpot body = mainHand != SheathSpot::NONE ? mainHand : offHand;
-    if (body == SheathSpot::NONE) return;
-    uint32_t animId = reach(body);
-    if (!characterRenderer->hasAnimation(characterInstanceId, animId)) {
-        animId = body == SheathSpot::HIP ? anim::SHEATHE : anim::HIP_SHEATHE;
-        if (!characterRenderer->hasAnimation(characterInstanceId, animId)) return;
-    }
-
-    // ActivityFSM owns the one-shot until completion so locomotion/combat does
-    // not replace the reach animation on the next frame.
-    characterAnimator_.playEmote(animId, false);
-    characterRenderer->playAnimation(characterInstanceId, animId, false);
-    characterRenderer->setArmAnimations(characterInstanceId, reach(offHand), reach(mainHand));
-    lastPlayerAnimRequest_ = animId;
-    lastPlayerAnimLoopRequest_ = false;
-}
-
 void AnimationController::cancelEmote() {
     characterAnimator_.cancelEmote();
 }
@@ -257,7 +225,6 @@ void AnimationController::resetCombatVisualState() {
     specialAttackAnimId_ = 0;
     rangedShootTimer_ = 0.0f;
     rangedAnimId_ = 0;
-    restoreWeaponAfterRangedShot_ = false;
     characterAnimator_.setRangedWeaponActive(false);
     stunned_ = false;
     charging_ = false;
@@ -444,8 +411,6 @@ void AnimationController::triggerRangedShot() {
     if (dur < 0.25f) dur = 0.25f;
     if (dur > 1.5f) dur = 1.5f;
     rangedShootTimer_ = dur;
-    restoreWeaponAfterRangedShot_ =
-        (weaponLoadout_.rangedType == RangedWeaponType::THROWN);
 }
 
 uint32_t AnimationController::resolveMeleeAnimId() {
@@ -899,10 +864,6 @@ void AnimationController::updateMeleeTimers(float deltaTime) {
     // Ranged shot timer (same pattern as melee)
     if (rangedShootTimer_ > 0.0f) {
         rangedShootTimer_ = std::max(0.0f, rangedShootTimer_ - deltaTime);
-        if (rangedShootTimer_ <= 0.0f && restoreWeaponAfterRangedShot_) {
-            restoreWeaponAfterRangedShot_ = false;
-            if (rangedShotCompleteCallback_) rangedShotCompleteCallback_();
-        }
     }
 }
 
