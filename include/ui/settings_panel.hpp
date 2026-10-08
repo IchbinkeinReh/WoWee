@@ -220,7 +220,7 @@ public:
     int pendingWeatherDetail = 2;             ///< weatherDensity 0-3, "2" as the client (0x00787780)
     int pendingEnvironmentDetail = 100;       ///< percent
     int pendingTextureFiltering = 4;          ///< 0 off, then 2x 4x 8x 16x
-    int pendingTextureMagnification = 0;      ///< 0 bilinear, 1 B-spline, 2 Catmull-Rom
+    int pendingTextureMagnification = 1;      ///< 0 bilinear, 1 cubic B-spline
     // Grass, as percentages of the generator's own defaults. Separate from
     // ground clutter: clutter is M2 doodads with per-instance cost, grass is
     // one indirect draw, and a player who turns one down does not necessarily

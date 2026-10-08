@@ -416,7 +416,7 @@ private:
     /// offers: its steps are this, twice, four and eight times it.
     uint32_t shadowMapBaseSize_ = 4096;
     /// setTextureMagnification's mode, handed to the shaders in viewPos.w.
-    int textureMagnification_ = 0;
+    int textureMagnification_ = 1;
     /// A side asked for and not built yet; 0 when nothing is waiting.
     uint32_t pendingShadowMapSize_ = 0;
     /// The largest side the resolution setting goes to. Each doubling is four
@@ -502,8 +502,8 @@ public:
     void setShadowCascadeCount(int count);
     int getShadowCascadeCount() const { return shadowCascadeCount_; }
     /// How a magnified texture is filtered: 0 bilinear (the client's),
-    /// 1 cubic B-spline, 2 Catmull-Rom. See texture_filter.glsli.
-    void setTextureMagnification(int mode) { textureMagnification_ = std::clamp(mode, 0, 2); }
+    /// 1 cubic B-spline. See texture_filter.glsli.
+    void setTextureMagnification(int mode) { textureMagnification_ = std::clamp(mode, 0, 1); }
     uint32_t getShadowMapSize() const { return SHADOW_MAP_SIZE; }
     void setViewDistance(float distance);
     float getViewDistance() const { return viewDistance_; }

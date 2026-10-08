@@ -355,15 +355,14 @@ constexpr SettingDesc kSchema[] = {
      "A soft bloom over the bright parts of the picture, as strong as\n"
      "the zone's light asks for. The original client's ffxGlow, on by\n"
      "default.", "", 1},
-    // Not the client's: it filters every magnified texture bilinearly, which
-    // is the first choice and the default. The others only change a texture
-    // seen up close, where one texel covers several pixels.
-    {"texturemagnification", "Close-up filtering", SettingKind::Enum, 0, 2, 1, "Display", "",
+    // Not the client's, which filters every magnified texture bilinearly -
+    // the first choice. Smooth, the default, only changes a texture seen up
+    // close, where one texel covers several pixels.
+    {"texturemagnification", "Close-up filtering", SettingKind::Enum, 0, 1, 1, "Display", "",
      "How a texture looks when you are close enough that its pixels\n"
      "show. Bilinear is the original game's; Smooth rounds the blocky\n"
-     "steps away; Sharp does the same and keeps more contrast, with a\n"
-     "faint halo on hard edges. Costs a little on close-up surfaces.",
-     "Bilinear|Smooth|Sharp", 0},
+     "steps away. Costs a little on close-up surfaces.",
+     "Bilinear|Smooth", 1},
 
     // ------------------------------------------------------------------ Camera
     {"fov", "Field of view", SettingKind::Float, 45, 110, 1, "Camera", "View",
