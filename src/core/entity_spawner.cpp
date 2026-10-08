@@ -1,4 +1,5 @@
 #include "core/entity_spawner.hpp"
+#include "core/character_component.hpp"
 #include "core/item_attachments.hpp"
 #include "core/weapon_attachment.hpp"
 #include "rendering/m2_model_classifier.hpp"
@@ -2034,66 +2035,21 @@ void EntitySpawner::applyCreatureDisplayTextures(uint32_t displayId, uint32_t mo
                     }
 
                     // --- Equipment region layers (ItemDisplayInfo DBC) ---
+                    // The character component's layers (0x004f2880, the table
+                    // at 0x009f6a00), drawn layer by layer (0x004e8f00):
+                    // CreatureDisplayInfoExtra's shirt, chest, belt, legs,
+                    // boots, wrists, gloves and tabard are its items 2 to 9;
+                    // the helm, shoulders and cape are models.
                     auto idiDbc = am->loadDBC("ItemDisplayInfo.dbc");
                     if (idiDbc) {
-                        const auto* idiL = pipeline::getActiveDBCLayout()
-                            ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
-                        uint32_t texRegionFields[8];
-                        pipeline::getItemDisplayInfoTextureFields(*idiDbc, idiL, texRegionFields);
-                        const bool npcIsFemale = (extraCopy.sexId == 1);
-                        const bool npcHasArmArmor = (extraCopy.equipDisplayId[7] != 0 || extraCopy.equipDisplayId[8] != 0);
-
-                        // Which regions of the skin atlas a piece of equipment paints.
-                        //
-                        // ItemDisplayInfo already answers that: a row names a
-                        // texture for each region the item covers and leaves
-                        // the rest empty. It is why the player path reads all
-                        // eight and filters nothing at all - see the loop in
-                        // entity_spawner_player.cpp, which the same items go
-                        // through when a player wears them.
-                        //
-                        // The list here was narrower and dropped texture the
-                        // items do name: across a 3.3.5 install's NPC displays,
-                        // every belt's LegUpper (12790 of them), every boot's
-                        // LegLower (10597), every glove's ArmLower (7908) and
-                        // every bracer's ArmLower (3814). The bracers are where
-                        // it was noticed - forearms wearing nothing on an NPC
-                        // whose CreatureDisplayInfoExtra names a bracer and
-                        // whose bracer names a texture.
-                        //
-                        // Helm, shoulder and cape stay out. Those are geometry
-                        // rather than skin, they name no regions to begin with,
-                        // and a helm painting a face would be worse than a helm
-                        // that does not paint at all.
-                        auto regionAllowedForNpcSlot = [](int eqSlot, int region) -> bool {
-                            (void)region;
-                            switch (eqSlot) {
-                                case 0: case 1: case 10: return false;
-                                default: return true;
-                            }
-                        };
-
-                        for (int eqSlot = 0; eqSlot < 11; eqSlot++) {
-                            uint32_t did = extraCopy.equipDisplayId[eqSlot];
-                            if (did == 0) continue;
-                            int32_t recIdx = idiDbc->findRecordById(did);
-                            if (recIdx < 0) continue;
-
-                            for (int region = 0; region < 8; region++) {
-                                if (!regionAllowedForNpcSlot(eqSlot, region)) continue;
-                                if (eqSlot == 2 && !npcHasArmArmor && !(region == 3 || region == 4)) continue;
-                                std::string texName = idiDbc->getString(
-                                    static_cast<uint32_t>(recIdx), texRegionFields[region]);
-                                if (texName.empty()) continue;
-
-                                std::string fullPath = pipeline::resolveItemRegionTexture(
-                                    *am, region, texName, npcIsFemale);
-                                if (fullPath.empty()) continue;
-
-                                def.regionLayers.emplace_back(region, fullPath);
-                                allPaths.push_back(fullPath);
-                            }
+                        std::vector<core::ComponentItem> componentItems;
+                        for (int eqSlot = 2; eqSlot <= 9; ++eqSlot) {
+                            const uint32_t did = extraCopy.equipDisplayId[eqSlot];
+                            if (did != 0) componentItems.push_back({core::componentItemForNpcSlot(eqSlot), did});
                         }
+                        def.regionLayers = core::characterComponentLayers(*am, *idiDbc, componentItems,
+                                                                          extraCopy.sexId == 1, std::nullopt);
+                        for (const auto& layer : def.regionLayers) allPaths.push_back(layer.second);
                     }
 
                     // Determine compositing mode

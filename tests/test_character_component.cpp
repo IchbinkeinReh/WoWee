@@ -70,3 +70,16 @@ TEST_CASE("one texture a layer, the last set, drawn layer by layer (0x004e8f00)"
     CHECK(layers[6].second.find("Emblem_01_01_TL") != std::string::npos);
     CHECK(layers[7].second == "belt");
 }
+
+TEST_CASE("an NPC's display slots name the component's items as a player's do", "[component]") {
+    // Helm, shoulders: models.
+    CHECK(componentItemForNpcSlot(0) == -1);
+    CHECK(componentItemForNpcSlot(1) == -1);
+    // Shirt to tabard: the same items the equipment slots name.
+    CHECK(componentItemForNpcSlot(2) == componentItemIndex(3));
+    CHECK(componentItemForNpcSlot(3) == componentItemIndex(4));
+    CHECK(componentItemForNpcSlot(6) == componentItemIndex(7));
+    CHECK(componentItemForNpcSlot(9) == componentItemIndex(18));
+    // Cape: a model.
+    CHECK(componentItemForNpcSlot(10) == -1);
+}

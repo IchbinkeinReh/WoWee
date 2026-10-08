@@ -4413,6 +4413,12 @@ void Application::render() {
                                   self->useFemaleModel)) ? 1 : 0;
                             sizeFor(*room.model, dressUp);
                             room.model->setFraming(ui::UnitPortrait::Framing::FullBody);
+                            // The guild tabard's design (0x006db510).
+                            {
+                                uint32_t guildId = gameHandler->getEntityGuildId(self->guid);
+                                if (guildId == 0) guildId = self->guildId;
+                                room.model->setGuildEmblem(gameHandler->lookupGuildEmblem(guildId));
+                            }
                             shown = room.model->updatePlayer(
                                 static_cast<uint8_t>(self->race), gender,
                                 self->appearanceBytes, self->facialFeatures, worn,
@@ -4539,6 +4545,8 @@ void Application::render() {
                             }
                             sizeFor(inspectModel_, inspectModel);
                             inspectModel_.setFraming(ui::UnitPortrait::Framing::FullBody);
+                            inspectModel_.setGuildEmblem(
+                                gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(result->guid)));
                             shown = inspectModel_.updatePlayer(
                                 race, gender, appearance, facial, worn,
                                 assetManager.get(), renderer.get(), io.DeltaTime);
@@ -4659,6 +4667,9 @@ void Application::render() {
                         // rather than stripping it.
                         // A real player composites their own skin; no bake.
                         face.portrait->setBakedSkin("");
+                        // Their guild tabard's design (0x006db510).
+                        face.portrait->setGuildEmblem(
+                            gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(face.guid)));
                         std::vector<game::EquipmentItem> worn;
                         std::array<uint32_t, 19> displayIds{};
                         std::array<uint8_t, 19> invTypes{};
@@ -4716,6 +4727,7 @@ void Application::render() {
                             // bake only paints what they draw.
                             face.portrait->setBakedSkin(
                                 entitySpawner_->getHumanoidBakePath(displayId));
+                            face.portrait->setGuildEmblem(std::nullopt);
                             built = face.portrait->updatePlayer(
                                 nRace, nSex, nBytes, nFacial, npcWorn,
                                 assetManager.get(), renderer.get(), io.DeltaTime);

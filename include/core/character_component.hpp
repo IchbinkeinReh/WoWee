@@ -55,6 +55,14 @@ constexpr int componentItemForInventoryType(uint8_t inventoryType) {
     }
 }
 
+/// The same for CreatureDisplayInfoExtra's NPCItemDisplay slots - helm,
+/// shoulders, shirt, chest, belt, legs, boots, wrists, gloves, tabard,
+/// cape: the shirt to the tabard are items 2 to 9; the helm, shoulders and
+/// cape are models.
+constexpr int componentItemForNpcSlot(int npcSlot) {
+    return npcSlot >= 2 && npcSlot <= 9 ? npcSlot : -1;
+}
+
 /// 0x009f6a00: the layer a component item's texture takes in each of the
 /// eight regions (ItemDisplayInfo's texture columns: upper arm, lower arm,
 /// hand, upper torso, lower torso, upper leg, lower leg, foot); -1 where it
