@@ -2297,9 +2297,16 @@ void Application::setState(AppState newState) {
                         return entitySpawner_->kitWeaponEffectHolder(renderInstanceId);
                     });
                 }
-                // A text emote puts the player's weapons away (0x006dd9e0).
-                gameHandler->setTextEmoteSentCallback([this](uint32_t textEmoteId) {
-                    if (appearanceComposer_) appearanceComposer_->onTextEmote(textEmoteId);
+                // Whether a text emote is sent, and the player's weapons put
+                // away when it is (0x006dd9e0).
+                gameHandler->setTextEmoteGateCallback([this](uint32_t textEmoteId) {
+                    using Gate = game::GameHandler::TextEmoteGate;
+                    if (!appearanceComposer_) return Gate::Send;
+                    switch (appearanceComposer_->onTextEmote(textEmoteId)) {
+                        case core::TextEmoteVerdict::Refused: return Gate::Refuse;
+                        case core::TextEmoteVerdict::RefusedWhileMoving: return Gate::RefuseWhileMoving;
+                        default: return Gate::Send;
+                    }
                 });
                 // The logout countdown finishing is not the end of it: the server
                 // confirms with SMSG_LOGOUT_COMPLETE, and only then does the client

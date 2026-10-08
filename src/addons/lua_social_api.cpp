@@ -2369,7 +2369,8 @@ void registerSocialLuaAPI(lua_State* L) {
             if (target == 0 && (!aimedAt || !*aimedAt)) {
                 target = gh->hasTarget() ? gh->getTargetGuid() : 0;
             }
-            gh->sendTextEmote(emoteId, target);
+            // 0x006dd9e0: an emote the client does not send it does not play.
+            if (!gh->sendTextEmote(emoteId, target)) return 0;
             // And the animation, which this did not do. Telling the server is
             // the half that is seen by everyone else; playing it is the half
             // seen by the player, and standing still while the room is told you

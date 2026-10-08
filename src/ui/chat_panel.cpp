@@ -296,19 +296,20 @@ void ChatPanel::sendChatMessage(game::GameHandler& gameHandler) {
 
             std::string emoteText = rendering::AnimationController::getEmoteText(cmdLower, targetNamePtr);
             if (!emoteText.empty()) {
-                auto* renderer = services_.renderer;
-                if (renderer) {
-                    if (auto* ac = renderer->getAnimationController()) ac->playEmote(cmdLower);
-                }
-
                 uint32_t dbcId = rendering::AnimationController::getEmoteDbcId(cmdLower);
+                bool played = true;
                 if (dbcId != 0) {
                     // The server's echo is the line, as it is for an emote
                     // sent from the interface; one made here as well was the
-                    // same emote twice.
+                    // same emote twice. One the client does not send it does
+                    // not play either (0x006dd9e0).
                     uint64_t targetGuid = gameHandler.hasTarget() ? gameHandler.getTargetGuid() : 0;
-                    gameHandler.sendTextEmote(dbcId, targetGuid);
-                } else {
+                    played = gameHandler.sendTextEmote(dbcId, targetGuid);
+                }
+                if (auto* renderer = services_.renderer; renderer && played) {
+                    if (auto* ac = renderer->getAnimationController()) ac->playEmote(cmdLower);
+                }
+                if (dbcId == 0) {
                     game::MessageChatData msg;
                     msg.type = game::ChatType::TEXT_EMOTE;
                     msg.language = game::ChatLanguage::UNIVERSAL;

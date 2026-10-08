@@ -1502,10 +1502,23 @@ void GameHandler::sendAddonMessage(ChatType type, const std::string& message, co
     if (chatHandler_) chatHandler_->sendAddonMessage(type, message, target);
 }
 
-void GameHandler::sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid) {
-    // 0x006dd9e0 puts the weapons away as it sends.
-    if (textEmoteSentCallback_ && state == WorldState::IN_WORLD) textEmoteSentCallback_(textEmoteId);
+bool GameHandler::sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid) {
+    // 0x006dd9e0: an emote the player may not do now is not sent; one
+    // refused for moving says so (ERR_NOEMOTEWHILERUNNING, 0x005216f0 with
+    // 0x14c). One that is sent puts the weapons away first.
+    if (textEmoteGateCallback_ && state == WorldState::IN_WORLD) {
+        switch (textEmoteGateCallback_(textEmoteId)) {
+            case TextEmoteGate::Send: break;
+            case TextEmoteGate::RefuseWhileMoving:
+                raiseUiError("You can't do that while moving!");
+                return false;
+            case TextEmoteGate::Refuse: return false;
+        }
+    }
+    // Aimed at the player itself, it is aimed at nobody.
+    if (targetGuid == playerGuid) targetGuid = 0;
     if (chatHandler_) chatHandler_->sendTextEmote(textEmoteId, targetGuid);
+    return true;
 }
 
 void GameHandler::joinChannel(const std::string& channelName, const std::string& password) {

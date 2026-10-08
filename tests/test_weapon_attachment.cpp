@@ -360,26 +360,35 @@ TEST_CASE("a channel at a fishing bobber draws the pole (0x0073a520)", "[attachm
     CHECK(channelSheathState(S::Unarmed, 3, 7620) == std::nullopt);
 }
 
-TEST_CASE("a text emote puts the weapons away as 0x006dd9e0 does", "[attachment]") {
-    TextEmoteSheathInput in{.emoteKnown = true};
-    CHECK(textEmoteSheathes(in));
+TEST_CASE("a text emote is sent, or refused, as 0x006dd9e0 decides", "[attachment]") {
+    using V = TextEmoteVerdict;
+    auto v = [](TextEmoteSheathInput in) { return textEmoteVerdict(in); };
+    CHECK(v({.emoteKnown = true}) == V::Send);
     // No Emotes row, or possessed: nothing.
-    CHECK_FALSE(textEmoteSheathes({.emoteKnown = false}));
-    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .unitFlags = 0x1000000}));
+    CHECK(v({.emoteKnown = false}) == V::Refused);
+    CHECK(v({.emoteKnown = true, .unitFlags = 0x1000000}) == V::Refused);
     // Asleep: only an emote whose EmoteSpecProc is 1, and one allowed asleep.
-    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x200, .standState = 3}));
-    CHECK(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x200, .specProc = 1, .standState = 3}));
-    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .specProc = 1, .standState = 3}));
-    // 1: only standing; 0x80: not swimming; 0x8000: not flying.
-    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 1, .standState = 1}));
-    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x80, .moveFlags = 0x200000}));
-    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x8000, .moveFlags = 0x2000000}));
-    // 0x4000 refused while moving, unless the player is not its own master.
-    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x4000, .moveFlags = 1}));
-    CHECK(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x4000, .moveFlags = 1, .charmed = true}));
-    CHECK(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x4000}));
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x200, .standState = 3}) == V::Refused);
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x200, .specProc = 1, .standState = 3}) == V::Send);
+    CHECK(v({.emoteKnown = true, .specProc = 1, .standState = 3}) == V::Refused);
+    // 1: only standing; 0x80: not swimming; 0x8000: not flying, nor on a
+    // flying spline (0x004f5260).
+    CHECK(v({.emoteKnown = true, .emoteFlags = 1, .standState = 1}) == V::Refused);
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x80, .moveFlags = 0x200000}) == V::Refused);
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x8000, .moveFlags = 0x2000000}) == V::Refused);
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x8000, .onFlyingSpline = true}) == V::Refused);
+    CHECK(v({.emoteKnown = true, .onFlyingSpline = true}) == V::Send);
+    // 0x4000 refused while moving with ERR_NOEMOTEWHILERUNNING, unless the
+    // player is not its own master.
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x4000, .moveFlags = 1}) == V::RefusedWhileMoving);
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x4000, .moveFlags = 1, .charmed = true}) == V::Send);
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x4000, .moveFlags = 1, .unitFlags = 0x800000}) ==
+          V::Send);
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x4000}) == V::Send);
+    // An emote not allowed at all is refused before the moving check.
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x4001, .standState = 1, .moveFlags = 1}) == V::Refused);
     // 0x400: never.
-    CHECK_FALSE(textEmoteSheathes({.emoteKnown = true, .emoteFlags = 0x400}));
+    CHECK(v({.emoteKnown = true, .emoteFlags = 0x400}) == V::Refused);
 }
 
 TEST_CASE("another unit takes the field's state whatever it was in (0x00737aa0)", "[attachment]") {

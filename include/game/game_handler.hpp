@@ -326,7 +326,8 @@ public:
      */
     void sendChatMessage(ChatType type, const std::string& message, const std::string& target = "");
     void sendAddonMessage(ChatType type, const std::string& message, const std::string& target = "");
-    void sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid = 0);
+    /// 0x006dd9e0: false when the client sends nothing.
+    bool sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid = 0);
     void joinChannel(const std::string& channelName, const std::string& password = "");
     void leaveChannel(const std::string& channelName);
     void requestChannelList(const std::string& channelName);
@@ -1417,9 +1418,11 @@ public:
     /// Any unit's melee swing (SMSG_ATTACKERSTATEUPDATE, 0x00756800).
     using UnitAttackSwingCallback = std::function<void(uint64_t attackerGuid)>;
     void setUnitAttackSwingCallback(UnitAttackSwingCallback cb) { unitAttackSwingCallback_ = std::move(cb); }
-    /// The active player sending a text emote (0x006dd9e0).
-    using TextEmoteSentCallback = std::function<void(uint32_t textEmoteId)>;
-    void setTextEmoteSentCallback(TextEmoteSentCallback cb) { textEmoteSentCallback_ = std::move(cb); }
+    /// The active player sending a text emote (0x006dd9e0): whether it is
+    /// sent, refused, or refused with ERR_NOEMOTEWHILERUNNING.
+    enum class TextEmoteGate : uint8_t { Send, Refuse, RefuseWhileMoving };
+    using TextEmoteGateCallback = std::function<TextEmoteGate(uint32_t textEmoteId)>;
+    void setTextEmoteGateCallback(TextEmoteGateCallback cb) { textEmoteGateCallback_ = std::move(cb); }
 
     // Spell cast animation callbacks - true=start cast/channel, false=finish/cancel
     // guid: caster (may be player or another unit), isChannel: channel vs regular cast
@@ -5087,7 +5090,7 @@ private:
     FaceCameraProvider faceCameraProvider_;
     SpellCastBeginCallback spellCastBeginCallback_;
     UnitAttackSwingCallback unitAttackSwingCallback_;
-    TextEmoteSentCallback textEmoteSentCallback_;
+    TextEmoteGateCallback textEmoteGateCallback_;
     bool suppressMeleeSwingAnim_ = false;
     // lastMeleeSwingMs_ moved to CombatHandler
     SpellCastAnimCallback spellCastAnimCallback_;

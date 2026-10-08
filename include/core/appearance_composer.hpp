@@ -88,8 +88,9 @@ public:
     bool toggleSheath();
     /// A spell's cast beginning on the player (0x007fa2e0, 0x0073a6c0).
     void onSpellCastBegin(uint32_t spellId);
-    /// The player sending a text emote: its weapons put away (0x006dd9e0).
-    void onTextEmote(uint32_t textEmoteId);
+    /// The player sending a text emote (0x006dd9e0): whether it is sent,
+    /// and its weapons put away when it is.
+    TextEmoteVerdict onTextEmote(uint32_t textEmoteId);
     /// Once a frame: the field's changes (0x00737aa0), the stand state's
     /// (0x0073f060), the channel object's (0x0073a520), the animation's,
     /// cast's and attack's (0x00738180), then the weapons dressed again

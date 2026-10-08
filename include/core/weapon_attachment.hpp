@@ -353,35 +353,49 @@ struct TextEmoteSheathInput {
     uint32_t moveFlags = 0;     ///< the movement flags
     uint32_t unitFlags = 0;     ///< UNIT_FIELD_FLAGS
     bool charmed = false;       ///< UNIT_FIELD_CHARMEDBY set
+    /// On a move spline with Flying (0x2000) and without NO_SPLINE (0x400):
+    /// the movement's +0xbc spline, which 0x004f5260 tests.
+    bool onFlyingSpline = false;
 };
 
 /// 0x004f5410 with its second argument 1: whether the emote may be done
 /// now. 0x400 never; 1 only standing; 0x80 not swimming (0x200000);
-/// 0x8000 not flying (0x2000000); without 0x200 not asleep (3) or dead (7).
+/// 0x8000 neither on a flying spline (0x004f5260) nor flying (0x2000000);
+/// without 0x200 not asleep (3) or dead (7).
 constexpr bool textEmoteAllowed(const TextEmoteSheathInput& in) {
     const uint32_t f = in.emoteFlags;
     if ((f & 0x400u) != 0) return false;
     if ((f & 1u) != 0 && in.standState != 0) return false;
     if ((f & 0x80u) != 0 && (in.moveFlags & 0x200000u) != 0) return false;
-    if ((f & 0x8000u) != 0 && (in.moveFlags & 0x2000000u) != 0) return false;
+    if ((f & 0x8000u) != 0 && (in.onFlyingSpline || (in.moveFlags & 0x2000000u) != 0)) return false;
     if ((f & 0x200u) == 0 && (in.standState == 3 || in.standState == 7)) return false;
     return true;
 }
 
-/// 0x006dd9e0: a text emote puts the active player's weapons away - not
-/// while possessed (UNIT_FIELD_FLAGS 0x1000000), when the emote may not be
-/// done (0x004f5410), when one marked 0x4000 is refused for moving
-/// (0xc010ff) by a player in control of itself (0x00716710), nor asleep
-/// unless the emote's EmoteSpecProc is 1.
-constexpr bool textEmoteSheathes(const TextEmoteSheathInput& in) {
-    if (!in.emoteKnown || (in.unitFlags & 0x1000000u) != 0) return false;
-    if (!textEmoteAllowed(in)) return false;
+/// What 0x006dd9e0 does with a text emote the active player sends.
+enum class TextEmoteVerdict : uint8_t {
+    Send,                ///< weapons put away, played and sent
+    Refused,             ///< nothing, nothing sent
+    RefusedWhileMoving,  ///< ERR_NOEMOTEWHILERUNNING (0x14c), nothing sent
+};
+
+/// 0x006dd9e0: nothing for a player possessed (UNIT_FIELD_FLAGS 0x1000000)
+/// or an emote that may not be done (0x004f5410); a 0x4000 emote while
+/// moving (0xc010ff) by a player in control of itself (0x00716710) is
+/// refused with ERR_NOEMOTEWHILERUNNING; asleep only an emote whose
+/// EmoteSpecProc is 1. Otherwise the weapons are put away and it is sent.
+constexpr TextEmoteVerdict textEmoteVerdict(const TextEmoteSheathInput& in) {
+    if (!in.emoteKnown || (in.unitFlags & 0x1000000u) != 0) return TextEmoteVerdict::Refused;
+    if (!textEmoteAllowed(in)) return TextEmoteVerdict::Refused;
     // 0x00716710: neither confused, fleeing nor held (0xc00004) unless
     // non-attackable (2); not charmed; not server controlled (1).
     const bool held = (in.unitFlags & 2u) == 0 && (in.unitFlags & 0xc00004u) != 0;
     const bool inControl = !held && !in.charmed && (in.unitFlags & 1u) == 0;
-    if ((in.emoteFlags & 0x4000u) != 0 && (in.moveFlags & 0xc010ffu) != 0 && inControl) return false;
-    return in.standState != 3 || in.specProc == 1;
+    if ((in.emoteFlags & 0x4000u) != 0 && (in.moveFlags & 0xc010ffu) != 0 && inControl) {
+        return TextEmoteVerdict::RefusedWhileMoving;
+    }
+    if (in.standState == 3 && in.specProc != 1) return TextEmoteVerdict::Refused;
+    return TextEmoteVerdict::Send;
 }
 
 /// What 0x007fa2e0 (a spell's cast beginning on the unit) and 0x0073a6c0

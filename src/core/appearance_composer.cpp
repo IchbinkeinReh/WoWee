@@ -641,10 +641,11 @@ void AppearanceComposer::onSpellCastBegin(uint32_t spellId) {
     }
 }
 
-void AppearanceComposer::onTextEmote(uint32_t textEmoteId) {
-    if (!gameHandler_ || !assetManager_ || sheathInstanceId_ == 0) return;
+TextEmoteVerdict AppearanceComposer::onTextEmote(uint32_t textEmoteId) {
+    // Without the player or the tables there is nothing to judge it by.
+    if (!gameHandler_ || !assetManager_) return TextEmoteVerdict::Send;
     auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
-    if (!entity) return;
+    if (!entity) return TextEmoteVerdict::Send;
     TextEmoteSheathInput in;
     // EmotesText +8 (EmoteRef) names the Emotes row: its EmoteFlags (+0xc)
     // and EmoteSpecProc (+0x10).
@@ -653,26 +654,33 @@ void AppearanceComposer::onTextEmote(uint32_t textEmoteId) {
     const auto* emoteLayout = layouts ? layouts->getLayout("Emotes") : nullptr;
     auto texts = assetManager_->loadDBCOptional("EmotesText.dbc");
     auto emotes = assetManager_->loadDBCOptional("Emotes.dbc");
-    const int32_t textRow = texts ? texts->findRecordById(textEmoteId) : -1;
-    if (textRow < 0 || !emotes) return;
+    if (!texts || !emotes) return TextEmoteVerdict::Send;
+    const int32_t textRow = texts->findRecordById(textEmoteId);
     const uint32_t refField = textLayout ? textLayout->tryField("EmoteRef") : 2;
-    if (refField >= texts->getFieldCount()) return;
-    const int32_t emoteRow = emotes->findRecordById(texts->getUInt32(static_cast<uint32_t>(textRow), refField));
-    if (emoteRow < 0) return;
-    in.emoteKnown = true;
-    const uint32_t flagsField = emoteLayout ? emoteLayout->tryField("EmoteFlags") : 3;
-    const uint32_t procField = emoteLayout ? emoteLayout->tryField("EmoteSpecProc") : 4;
-    const auto r = static_cast<uint32_t>(emoteRow);
-    if (flagsField < emotes->getFieldCount()) in.emoteFlags = emotes->getUInt32(r, flagsField);
-    if (procField < emotes->getFieldCount()) in.specProc = emotes->getUInt32(r, procField);
+    if (textRow >= 0 && refField < texts->getFieldCount()) {
+        const int32_t emoteRow =
+            emotes->findRecordById(texts->getUInt32(static_cast<uint32_t>(textRow), refField));
+        if (emoteRow >= 0) {
+            in.emoteKnown = true;
+            const uint32_t flagsField = emoteLayout ? emoteLayout->tryField("EmoteFlags") : 3;
+            const uint32_t procField = emoteLayout ? emoteLayout->tryField("EmoteSpecProc") : 4;
+            const auto r = static_cast<uint32_t>(emoteRow);
+            if (flagsField < emotes->getFieldCount()) in.emoteFlags = emotes->getUInt32(r, flagsField);
+            if (procField < emotes->getFieldCount()) in.specProc = emotes->getUInt32(r, procField);
+        }
+    }
     in.standState = gameHandler_->getStandState();
     in.moveFlags = gameHandler_->getMovementInfo().flags;
+    // A flight path is the server's flying spline on the player (0x004f5260).
+    in.onFlyingSpline = gameHandler_->isOnTaxiFlight();
     const uint16_t flags = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
     if (flags != 0xFFFF) in.unitFlags = entity->getField(flags);
     if (const uint16_t charmedBy = game::fieldIndex(game::UF::UNIT_FIELD_CHARMEDBY); charmedBy != 0xFFFF) {
         in.charmed = entity->getField(charmedBy) != 0 || entity->getField(static_cast<uint16_t>(charmedBy + 1)) != 0;
     }
-    if (textEmoteSheathes(in)) setSheathState(SheathState::Unarmed);
+    const TextEmoteVerdict verdict = textEmoteVerdict(in);
+    if (verdict == TextEmoteVerdict::Send && sheathInstanceId_ != 0) setSheathState(SheathState::Unarmed);
+    return verdict;
 }
 
 void AppearanceComposer::updateWeaponsFromFields() {
