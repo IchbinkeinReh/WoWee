@@ -1030,6 +1030,13 @@ void SpellVisualSystem::playKitColourFade(uint32_t kitId, uint32_t renderInstanc
                                               kit.charParam[k][1], castMs, colourClockMs_);
             continue;
         }
+        if (kit.charProc[k] == spell_kit::kCharProcSwingTrail && renderInstanceId != 0) {
+            // 0x007265c0 case 8, applied after the kit's procedures by
+            // 0x0073b140 where its time is not 0 (0x00715ba0).
+            const auto start = swing_trail::startFor(kit.charParam[k][0], kit.charParam[k][2], kit.charParam[k][3]);
+            if (start.durationMs != 0) startSwingTrails(renderInstanceId, start);
+            continue;
+        }
         if (kit.charProc[k] == spell_kit::kCharProcTimedAlpha && renderInstanceId != 0) {
             // 0x007265c0 case 15 (0x0071a940): out over half a second, held,
             // then back.
@@ -1470,9 +1477,54 @@ void SpellVisualSystem::updateChains(float deltaTime) {
     }
 }
 
+void SpellVisualSystem::startSwingTrails(uint32_t renderInstanceId, const swing_trail::Start& start) {
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer) return;
+    // 0x00715ba0: only with the melee weapons drawn (+0xb5c 1), on the one
+    // in each hand (+0xb50, +0xb54).
+    const uint64_t unitGuid = instanceUnitResolver_ ? instanceUnitResolver_(renderInstanceId) : 0;
+    if (!meleeDrawnQuery_ || unitGuid == 0 || !meleeDrawnQuery_(unitGuid)) return;
+    for (uint32_t attachment : {1u /* HandRight */, 2u /* HandLeft */}) {
+        if (!charRenderer->heldModelEvent(renderInstanceId, attachment, swing_trail::kEventBladeTop) ||
+            !charRenderer->heldModelEvent(renderInstanceId, attachment, swing_trail::kEventBladeBottom))
+            continue;
+        auto it = std::find_if(swings_.begin(), swings_.end(), [&](const WeaponSwing& w) {
+            return w.renderInstanceId == renderInstanceId && w.attachment == attachment;
+        });
+        if (it == swings_.end()) {
+            swings_.push_back({.renderInstanceId = renderInstanceId, .attachment = attachment});
+            it = std::prev(swings_.end());
+        }
+        // 0x007e4ff0: started again, emptied.
+        it->trail.start(start, colourClockMs_);
+    }
+}
+
 void SpellVisualSystem::publishClientStrips() {
     if (!m2Renderer_) return;
     std::vector<M2Renderer::ClientStrip> strips;
+    // The swing trails, drawn with their weapons (0x007e4f50), each frame
+    // laying the blade's bottom and top down until they have faded.
+    if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
+        for (auto it = swings_.begin(); it != swings_.end();) {
+            const auto top = charRenderer->heldModelEvent(it->renderInstanceId, it->attachment,
+                                                          swing_trail::kEventBladeTop);
+            const auto bottom = charRenderer->heldModelEvent(it->renderInstanceId, it->attachment,
+                                                             swing_trail::kEventBladeBottom);
+            M2Renderer::ClientStrip strip;
+            if (!top || !bottom || !it->trail.step(colourClockMs_, top->position, bottom->position, strip.vertices)) {
+                it = swings_.erase(it);
+                continue;
+            }
+            if (!strip.vertices.empty()) {
+                strip.material = swing_trail::material();
+                strips.push_back(std::move(strip));
+            }
+            ++it;
+        }
+    } else {
+        swings_.clear();
+    }
     const glm::vec3 camera = renderer_ && renderer_->getCamera() ? renderer_->getCamera()->getPosition() : glm::vec3(0.0f);
     // 0x009ab070: render layers 0 to 3 in turn, each the lightning last
     // made first.
@@ -1718,6 +1770,7 @@ void SpellVisualSystem::reset() {
     }
     unitAuraKits_.clear();
     chains_.clear();
+    swings_.clear();
     castTargets_.clear();
     unitChannels_.clear();
     if (renderer_ && renderer_->getCharacterRenderer()) {

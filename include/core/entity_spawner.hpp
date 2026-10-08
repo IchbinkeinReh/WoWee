@@ -252,6 +252,8 @@ public:
     bool unarmedKitsShown(uint64_t guid) const;
     /// The unit a CharacterRenderer instance draws, 0 for none.
     uint64_t unitGuidForInstance(uint32_t renderInstanceId) const;
+    /// Whether another unit has its melee weapons in its hands (+0xb5c 1).
+    bool unitMeleeDrawn(uint64_t guid) const;
     /// Its CreatureModelData GeoBox height, +0x58 less +0x4c (0x00717ad0);
     /// 0 when it has none.
     float unitGeoBoxHeight(uint32_t renderInstanceId) const;

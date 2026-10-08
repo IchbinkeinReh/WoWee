@@ -191,6 +191,11 @@ inline constexpr uint32_t kCharProcChain = 0;
 inline constexpr uint32_t kCharProcChainToo = 12;
 constexpr bool isChainProc(uint32_t proc) { return proc == kCharProcChain || proc == kCharProcChainToo; }
 
+/// 8: a swing trail on each weapon in the unit's hands, ParamZero its colour
+///    under ParamThree's alpha, laid for ParamTwo ms (0x007265c0 case 8,
+///    0x00715ba0, swing_trail.hpp).
+inline constexpr uint32_t kCharProcSwingTrail = 8;
+
 /// 11: the unit's animation held where it is - or ParamZero seconds into
 ///    its sequence, chopped to ms (0x00407930), no further than its length -
 ///    while the effect lasts (0x006f80b0, 0x00735bb0, 0x00735dd0).

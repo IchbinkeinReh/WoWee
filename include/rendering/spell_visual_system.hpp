@@ -13,6 +13,7 @@
 #include "rendering/spell_missile.hpp"
 #include "rendering/spell_kit.hpp"
 #include "rendering/spell_chain.hpp"
+#include "rendering/swing_trail.hpp"
 #include "rendering/camera_shake.hpp"
 
 namespace wowee {
@@ -168,6 +169,10 @@ public:
     /// A unit's CreatureModelData GeoBox height (+0x58 less +0x4c), which
     /// with its scale sets where a chain meets it (0x00717ad0).
     void setUnitHeight(std::function<float(uint32_t renderInstanceId)> height) { unitHeight_ = std::move(height); }
+    /// Whether a unit has its melee weapons in its hands (+0xb5c 1), which a
+    /// kit's swing trails need (0x00715ba0).
+    using MeleeDrawnQuery = std::function<bool(uint64_t unitGuid)>;
+    void setMeleeDrawnQuery(MeleeDrawnQuery query) { meleeDrawnQuery_ = std::move(query); }
     /// Where an object that is not a unit stands and faces (a game object a
     /// channel is aimed at), for a chain's end (0x007fae90).
     using ObjectFrameResolver = std::function<bool(uint64_t guid, glm::mat4& frame)>;
@@ -423,7 +428,18 @@ private:
     /// 0x007fca30 with 0x007fae90 and 0x009ab730: each bolt's ends, its
     /// lightning made, moved and dropped, and the strips handed on.
     void updateChains(float deltaTime);
-    /// The strips of this frame - the chains by their render layer
+    /// CharProc 8's swing trails (0x007e4ff0): one a weapon in the unit's
+    /// hands, at its hand attachment.
+    struct WeaponSwing {
+        uint32_t renderInstanceId = 0;
+        uint32_t attachment = 0;
+        swing_trail::Trail trail;
+    };
+    std::vector<WeaponSwing> swings_;
+    MeleeDrawnQuery meleeDrawnQuery_;
+    /// 0x00715ba0: a trail on each weapon in the unit's hands.
+    void startSwingTrails(uint32_t renderInstanceId, const swing_trail::Start& start);
+    /// The strips of this frame - the swing trails, then the chains by their render layer
     /// (0x009ab070) - handed to the M2 renderer.
     void publishClientStrips();
     bool publishedStrips_ = false;

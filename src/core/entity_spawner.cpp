@@ -745,6 +745,11 @@ uint64_t EntitySpawner::unitGuidForInstance(uint32_t renderInstanceId) const {
     return 0;
 }
 
+bool EntitySpawner::unitMeleeDrawn(uint64_t guid) const {
+    auto it = unitSheath_.find(guid);
+    return it != unitSheath_.end() && it->second.state == SheathState::Melee;
+}
+
 float EntitySpawner::unitGeoBoxHeight(uint32_t renderInstanceId) const {
     const auto minZ = modelDataColumn(renderInstanceId, "GeoBoxMinZ");
     const auto maxZ = modelDataColumn(renderInstanceId, "GeoBoxMaxZ");

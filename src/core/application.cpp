@@ -2343,6 +2343,11 @@ void Application::setState(AppState newState) {
                     svs->setUnitHeight([this](uint32_t renderInstanceId) {
                         return entitySpawner_ ? entitySpawner_->unitGeoBoxHeight(renderInstanceId) : 0.0f;
                     });
+                    svs->setMeleeDrawnQuery([this](uint64_t guid) {
+                        if (gameHandler && guid == gameHandler->getPlayerGuid())
+                            return appearanceComposer_ && appearanceComposer_->sheathState() == core::SheathState::Melee;
+                        return entitySpawner_ && entitySpawner_->unitMeleeDrawn(guid);
+                    });
                     svs->setObjectFrameResolver([this](uint64_t guid, glm::mat4& frame) {
                         auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
                         if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
