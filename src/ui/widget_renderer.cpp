@@ -2114,8 +2114,12 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
         // six rounds of reasoning about the code had each been wrong.
         static const bool tipDiag = std::getenv("WOWEE_TOOLTIP_DIAG") != nullptr;
         int seenTooltip = 0, seenVisible = 0, seenWithLines = 0, sized = 0;
-        for (size_t id = 1; id < tree.size(); ++id) {
-            Widget* w = tree.get(static_cast<uint32_t>(id));
+        // Over the widgets that may be visible, not all of them: only a
+        // visible tooltip is sized, and reading isTooltip out of each of
+        // 28,000 widgets was a cache miss apiece - 1.1 ms a frame.
+        for (uint32_t id = tree.nextMaybeVisible(1); id != 0;
+             id = tree.nextMaybeVisible(id + 1)) {
+            Widget* w = tree.get(id);
             if (!w || !w->isTooltip) continue;
             ++seenTooltip;
             if (w->visible) ++seenVisible;

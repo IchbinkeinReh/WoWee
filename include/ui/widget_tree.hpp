@@ -1147,6 +1147,12 @@ public:
     [[nodiscard]] double lastWalkMs() const { return lastWalkMs_; }
     [[nodiscard]] double lastDrawOrderMs() const { return lastDrawOrderMs_; }
     [[nodiscard]] uint64_t cleanPasses() const { return cleanPasses_; }
+    /// The next id at or after `from` that may be visible (mayBeVisible_), or
+    /// 0: every visible widget is among them, so a pass that wants only the
+    /// visible ones walks a few hundred ids instead of all 28,000 widgets.
+    [[nodiscard]] uint32_t nextMaybeVisible(uint32_t from) const {
+        return mayBeVisible_.nextFrom(from);
+    }
     [[nodiscard]] uint64_t totalPasses() const { return totalPasses_; }
     /// How many widgets the last full pass placed that were actually visible.
     [[nodiscard]] uint32_t lastVisibleCount() const { return lastVisibleCount_; }
