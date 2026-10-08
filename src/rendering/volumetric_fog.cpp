@@ -311,9 +311,23 @@ void VolumetricFog::destroyVolumes() {
     }
     size_ = glm::uvec3(0);
     volumesReady_ = false;
+    computeSetsWritten_ = false;
 }
 
-void VolumetricFog::writeComputeSets() {
+bool VolumetricFog::writeComputeSets() {
+    // Every view the two passes write or sample, or nothing is written. A set
+    // holding a null view is not a valid set on a device without the null
+    // descriptor feature, and the passes write through two of these: a store
+    // through a descriptor that names nothing is a GPU write to address zero,
+    // which is how a device is lost rather than how a frame goes wrong.
+    for (uint32_t f = 0; f < MAX_FRAMES; f++) {
+        if (computeSets_[f] == VK_NULL_HANDLE || paramsUBO_[f] == VK_NULL_HANDLE ||
+            shadowViews_[f] == VK_NULL_HANDLE || scatter_[f].view == VK_NULL_HANDLE ||
+            integrated_[f].view == VK_NULL_HANDLE) {
+            computeSetsWritten_ = false;
+            return false;
+        }
+    }
     for (uint32_t f = 0; f < MAX_FRAMES; f++) {
         const uint32_t other = (f + 1) % MAX_FRAMES;
         VkDescriptorBufferInfo params{.buffer = paramsUBO_[f], .offset = 0, .range = sizeof(VolumeParamsGPU)};
@@ -349,12 +363,19 @@ void VolumetricFog::writeComputeSets() {
         w[5].pImageInfo = &sumOut;
         vkUpdateDescriptorSets(ctx_->getDevice(), 6, w, 0, nullptr);
     }
+    computeSetsWritten_ = true;
+    return true;
 }
 
 void VolumetricFog::setShadowViews(const VkImageView shadowViews[2]) {
     for (uint32_t i = 0; i < MAX_FRAMES; i++) shadowViews_[i] = shadowViews[i];
     // Without volumes the sets are written when they are made, from these.
-    if (volumesReady_) writeComputeSets();
+    // With them, a map that could not be remade leaves the fog with nothing to
+    // sample, and it goes off rather than dispatch against a null view.
+    if (volumesReady_ && !writeComputeSets()) {
+        LOG_WARNING("VolumetricFog: the shadow map went away under it - off until the quality is set again");
+        destroyVolumes();
+    }
 }
 
 bool VolumetricFog::applyPendingQuality() {
@@ -388,7 +409,12 @@ bool VolumetricFog::applyPendingQuality() {
                     " volumes - staying off");
         return wasOn;
     }
-    writeComputeSets();
+    if (!writeComputeSets()) {
+        LOG_WARNING("VolumetricFog: asked for quality ", static_cast<int>(wanted),
+                    " but there is no shadow map to bind - staying off");
+        destroyVolumes();
+        return wasOn;
+    }
     volumesReady_ = true;
     historyValid_ = false;
     lastRecordedFrame_ = -1;
@@ -411,6 +437,13 @@ void VolumetricFog::record(VkCommandBuffer cmd, uint32_t frame, VkDescriptorSet 
                            const FrameInputs& in) {
     ZoneScopedN("VolumetricFog::record");
     if (!volumesReady_ || frame >= MAX_FRAMES || cmd == VK_NULL_HANDLE) return;
+    // Never against a set that names nothing: see writeComputeSets. The
+    // renderer only asks on frames whose shadow pass drew, so this is the
+    // backstop, not the switch.
+    if (!pipelinesReady_ || !computeSetsWritten_ || computeSets_[frame] == VK_NULL_HANDLE ||
+        perFrameSet == VK_NULL_HANDLE || paramsMapped_[frame] == nullptr) {
+        return;
+    }
 
     // The inject pass interpolates between these to place every cell.
     VolumeParamsGPU p{};

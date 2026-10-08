@@ -575,6 +575,10 @@ private:
     VkSampleCountFlagBits pendingMsaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
     bool msaaChangePending_ = false;
     void renderShadowPass();
+    /// Whether this frame's shadow pass draws this slot's map and leaves it
+    /// readable. The volumetric fog samples that map, so it runs by the same
+    /// answer. Valid after computeLightSpaceMatrix for the frame.
+    [[nodiscard]] bool shadowPassDrawsThisFrame() const;
     glm::mat4 computeLightSpaceMatrix();
 
     std::vector<pipeline::CustomZoneInfo> customZones_;

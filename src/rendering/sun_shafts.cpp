@@ -277,6 +277,14 @@ bool SunShafts::record(VkCommandBuffer cmd, uint32_t frame, VkImage swapchainIma
         return false;
     }
     if (!ensureTargets(extent) || !ensureCompositePipeline()) return false;
+    // The march stores into this slot's ray image through its set. Neither may
+    // name nothing: a store through an empty descriptor is a GPU write to
+    // address zero, which loses the device instead of a frame's rays.
+    if (marchSets_[frame] == VK_NULL_HANDLE || compositeSets_[frame] == VK_NULL_HANDLE ||
+        rays_[frame].view == VK_NULL_HANDLE || frameCopy_[frame].image == VK_NULL_HANDLE ||
+        frameCopy_[frame].view == VK_NULL_HANDLE || marchPipeline_ == VK_NULL_HANDLE) {
+        return false;
+    }
 
     const auto barrier = [&](VkImage image, VkImageLayout from, VkImageLayout to,
                              VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
