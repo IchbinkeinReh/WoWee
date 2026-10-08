@@ -30,7 +30,7 @@ public:
     /// both of the places this is used. Each caller keeps its own cache, so
     /// two views of the same unit at different heights do not fight over one
     /// entry.
-    bool blocked(rendering::WMORenderer* wmo, uint64_t key,
+    bool blocked(const rendering::WMORenderer* wmo, uint64_t key,
                  const glm::vec3& from, const glm::vec3& to) {
         if (!wmo) return false;
         // Bounded, because every unit ever seen would otherwise keep an entry

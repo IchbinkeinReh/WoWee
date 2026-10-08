@@ -113,13 +113,21 @@ public:
     /// passes that follow the scene. Does nothing when there is nothing
     /// pending, so endFrame calls it too in case the caller did not.
     void finishRenderWorld();
-    /// Waits for the doodad worker, if one is still recording, without putting
-    /// anything into the frame. Anything that is about to change the model or
-    /// character renderers' state calls this first; the getters below do it
-    /// for every caller. Only the main thread waits - see joinM2Worker's
-    /// definition for why another thread does not.
+    /// Waits for the doodad worker and the shadow worker, if either is still
+    /// recording, without putting anything into the frame. Anything that is
+    /// about to change the model or character renderers' state calls this
+    /// first; the getters below do it for every caller. Only the main thread
+    /// waits - see joinM2Worker's definition for why another thread does not.
     void syncWorldRecording() const {
         if (m2WorkerInFlight_.load(std::memory_order_acquire)) joinM2Worker();
+        syncShadowRecording();
+    }
+    /// Waits for the shadow worker alone. It reads the terrain and the WMO
+    /// renderers as well as the two the doodad worker reads, so their getters
+    /// wait on it - and only on it, so a caller after a building does not end
+    /// the doodads' overlap with the interface too.
+    void syncShadowRecording() const {
+        if (shadowWorkerInFlight_.load(std::memory_order_acquire)) joinShadowWorker();
     }
 
     /**
@@ -170,8 +178,11 @@ public:
     /// Waits like the renderers' getters below: the doodad worker reads the
     /// camera, and the controller is what moves it.
     CameraController* getCameraController() { syncWorldRecording(); return cameraController.get(); }
-    TerrainRenderer* getTerrainRenderer() const { return terrainRenderer.get(); }
-    TerrainManager* getTerrainManager() const { return terrainManager.get(); }
+    /// These three wait for the shadow worker, which draws the ground and the
+    /// buildings into the shadow map while the interface runs. The manager
+    /// is what streams the ground in and out of the renderer.
+    TerrainRenderer* getTerrainRenderer() const { syncShadowRecording(); return terrainRenderer.get(); }
+    TerrainManager* getTerrainManager() const { syncShadowRecording(); return terrainManager.get(); }
     PerformanceHUD* getPerformanceHUD() { return performanceHUD.get(); }
     WaterRenderer* getWaterRenderer() const { return waterRenderer.get(); }
     Skybox* getSkybox() const { return skySystem ? skySystem->getSkybox() : nullptr; }
@@ -182,7 +193,7 @@ public:
     Weather* getWeather() const { return weather.get(); }
     Lightning* getLightning() const { return lightning.get(); }
     CharacterRenderer* getCharacterRenderer() const { syncWorldRecording(); return characterRenderer.get(); }
-    WMORenderer* getWMORenderer() const { return wmoRenderer.get(); }
+    WMORenderer* getWMORenderer() const { syncShadowRecording(); return wmoRenderer.get(); }
     M2Renderer* getM2Renderer() const { syncWorldRecording(); return m2Renderer.get(); }
     /// The same two, for reading only, and so without waiting for the doodad
     /// worker. Its recording reads these renderers and writes nothing a const
@@ -192,6 +203,10 @@ public:
     /// through the waiting getters they ended the overlap where they did.
     const CharacterRenderer* queryCharacterRenderer() const { return characterRenderer.get(); }
     const M2Renderer* queryM2Renderer() const { return m2Renderer.get(); }
+    /// The buildings, for reading only, past the shadow worker for the same
+    /// reason: the nameplates and the chat bubbles ask through walls every
+    /// frame, and the shadow pass writes nothing a collision query reads.
+    const WMORenderer* queryWMORenderer() const { return wmoRenderer.get(); }
     Minimap* getMinimap() const { return minimap.get(); }
     WorldMap* getWorldMap() const { return worldMap.get(); }
     QuestMarkerRenderer* getQuestMarkerRenderer() const { return questMarkerRenderer.get(); }
@@ -619,7 +634,48 @@ private:
     void updateStarsModel(float deltaTime);
     VkSampleCountFlagBits pendingMsaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
     bool msaaChangePending_ = false;
-    void renderShadowPass();
+    /// What the frame's shadow pass draws, worked out on the main thread in
+    /// beginFrame: the image and its layout, the cascades, the renderers, and
+    /// the prologue it is recorded into (VkContext::getFramePrologue). The
+    /// recording itself happens later - on a worker launched by renderWorld,
+    /// or on the main thread in endFrame when nothing launched one.
+    struct ShadowPlan {
+        bool pending = false;
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        uint32_t frame = 0;
+        VkImage image = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        VkRenderPass renderPass = VK_NULL_HANDLE;
+        VkImageLayout oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkExtent2D atlas{};
+        bool dynamicRendering = false;
+        int cascadeCount = 0;
+        ShadowCascade cascades[kMaxShadowCascades]{};
+        /// kMaxShadowCascades + 1 timestamp indices, one per cascade in the
+        /// order they are drawn and the pass end last, reserved in beginFrame
+        /// right after the frame's first mark, which is where the prologue
+        /// executes. kNoGpuMark when nothing is timed.
+        uint32_t marks = UINT32_MAX;
+        TerrainRenderer* terrain = nullptr;
+        WMORenderer* wmo = nullptr;
+        M2Renderer* m2 = nullptr;
+        CharacterRenderer* characters = nullptr;
+    };
+    ShadowPlan shadowPlan_;
+    /// Fills shadowPlan_ for this frame, or leaves it empty when the pass does
+    /// not draw. Main thread, in beginFrame.
+    void planShadowPass();
+    /// Starts recording shadowPlan_ on a frame worker. renderWorld, once the
+    /// world's preparation is done.
+    void launchShadowWorker();
+    /// Records shadowPlan_ on the main thread if no worker took it. endFrame.
+    void flushShadowPass();
+    /// The pass itself, into plan.cmd. Any one thread at a time.
+    void recordShadowPass(const ShadowPlan& plan, bool onWorker);
+    mutable std::future<void> shadowFuture_;
+    mutable std::atomic<bool> shadowWorkerInFlight_{false};
+    void joinShadowWorker() const;
     /// Whether this frame's shadow pass draws this slot's map and leaves it
     /// readable. The volumetric fog samples that map, so it runs by the same
     /// answer. Valid after computeLightSpaceMatrix for the frame.

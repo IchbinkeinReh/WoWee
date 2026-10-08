@@ -21,6 +21,14 @@ static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 struct FrameData {
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    /// Submitted ahead of commandBuffer, in the same batch. It holds what
+    /// the frame opens with - the timestamp reset, the first mark, the upload
+    /// barrier - and then whatever the renderer records into it from another
+    /// thread while the main thread records commandBuffer: the shadow pass,
+    /// which everything in commandBuffer reads. Its own pool, because one
+    /// pool's buffers may not be recorded from two threads at once.
+    VkCommandPool prologuePool = VK_NULL_HANDLE;
+    VkCommandBuffer prologueBuffer = VK_NULL_HANDLE;
     /// Signalled by this slot's submit. Unused when the timeline is available.
     VkFence inFlightFence = VK_NULL_HANDLE;
     /// The timeline value this slot's last submit signals. Reaching it means
@@ -100,6 +108,12 @@ public:
     // Frame operations
     VkCommandBuffer beginFrame(uint32_t& imageIndex);
     void endFrame(VkCommandBuffer cmd, uint32_t imageIndex);
+    /// The current frame's prologue (FrameData::prologueBuffer), recording
+    /// from beginFrame until endFrame ends it and submits it ahead of the
+    /// frame's own buffer. What is recorded into it executes before anything
+    /// in that buffer, whenever in the frame it was recorded. A thread that
+    /// records into it has to be done before endFrame.
+    [[nodiscard]] VkCommandBuffer getFramePrologue() const { return frames[currentFrame].prologueBuffer; }
 
     /// A second window presented by this frame, recorded into its command buffer.
     ///

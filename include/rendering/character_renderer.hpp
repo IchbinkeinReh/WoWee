@@ -673,6 +673,8 @@ private:
     /// render() is called from two recording threads - the characters' own and
     /// the one that draws the doodads and takes the blended characters among
     /// them - and shares the material ring, descriptor cache and drawOrder_.
+    /// renderShadow takes it too: the shadow worker runs beside the doodad
+    /// worker, and the two passes copy the pose into the same bone buffers.
     std::mutex renderMutex_;
     /// Whether an instance is drawn this frame: visible, in range and view, and
     /// with geometry.
