@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <vector>
 
 namespace wowee {
@@ -307,6 +308,21 @@ void Celestial::updateGlare(const Frame& frame) {
     // (0x007ef6e0 keeps it at 0xd38f4c, 0x007816f0 applies it).
     sunGlareDim_ = sunGlareWorldDim(glm::dot(frame.cameraForward, frame.sunDir), sunGlare_);
     glareReady_ = true;
+
+    // WOWEE_GLARE_DIAG: every few seconds, each factor of the sun glare's
+    // target and what it comes to on screen.
+    static const bool glareDiag = std::getenv("WOWEE_GLARE_DIAG") != nullptr;
+    if (glareDiag && (glareDiagTimer_ -= deltaTime_) <= 0.0f) {
+        glareDiagTimer_ = 3.0f;
+        LOG_INFO("[glare-diag] t=", t, " sunDir.z=", frame.sunDir.z,
+                 " occlusion=", frame.sunOcclusion, " skyboxWeight=", frame.skyboxWeight,
+                 " curve=", sampleCurve(kSunGlare.time, t), " -> target=", sunTarget,
+                 " glare=", sunGlare_, " facing=", glm::dot(frame.cameraForward, frame.sunDir),
+                 " storm=", frame.storm, " size=", glare_[0].size, " alpha=", glare_[0].color.a,
+                 " colour=(", frame.color.r, ",", frame.color.g, ",", frame.color.b, ")",
+                 " texture=", texSets_[TEX_SUN_GLARE] != VK_NULL_HANDLE ? "loaded" : "MISSING",
+                 " pipeline=", glarePipeline_ != VK_NULL_HANDLE ? "ok" : "MISSING");
+    }
 }
 
 void Celestial::renderGlare(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {

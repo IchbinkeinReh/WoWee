@@ -294,7 +294,10 @@ private:
 
     /// The line toward `dir`, asked of the terrain, the buildings and where
     /// the camera is. The client asks a hardware occlusion query (0x009abe00).
-    [[nodiscard]] float sampleSunOcclusion(const glm::vec3& dir) const;
+    /// `why`, when given, is told which test decided it (WOWEE_GLARE_DIAG).
+    [[nodiscard]] float sampleSunOcclusion(const glm::vec3& dir, std::string* why = nullptr) const;
+    /// WOWEE_GLARE_DIAG: seconds until the next log of the sun's occlusion.
+    float glareDiagTimer_ = 0.0f;
 
     std::unique_ptr<TerrainManager> terrainManager;
     std::unique_ptr<PerformanceHUD> performanceHUD;

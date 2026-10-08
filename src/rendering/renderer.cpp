@@ -2055,25 +2055,38 @@ uint32_t Renderer::getCurrentZoneId() const {
     return tileZoneId;
 }
 
-float Renderer::sampleSunOcclusion(const glm::vec3& sunDir) const {
-    if (!camera) return 1.0f;
+float Renderer::sampleSunOcclusion(const glm::vec3& sunDir, std::string* why) const {
+    const auto because = [why](std::string reason) { if (why) *why = std::move(reason); };
+    if (!camera) { because("no camera"); return 1.0f; }
     const glm::vec3 eye = camera->getPosition();
 
     // Below the horizon there is nothing to be occluded by, and nothing to
     // flare either - the time-of-day gate in LensFlare covers the same ground.
-    if (sunDir.z <= 0.0f) return 1.0f;
+    if (sunDir.z <= 0.0f) { because("below the horizon"); return 1.0f; }
 
     // Indoors the sun is behind a roof by definition, and a roof is the one
-    // occluder the terrain march below cannot see.
-    if (wmoRenderer && wmoRenderer->isInsideWMO(eye.x, eye.y, eye.z)) return 1.0f;
+    // occluder the terrain march below cannot see. Indoors means an interior
+    // group (MOGP 0x2000): a building's outdoor groups - courtyards, bridges,
+    // the open plazas of Silvermoon and Sunstrider Isle - have bounding boxes
+    // that take in open sky, and counting those put out the sun's glare for
+    // anyone standing near one. The client asks an occlusion query of the
+    // sun itself (0x009abe00), which an open courtyard does not block.
+    if (wmoRenderer && wmoRenderer->isInsideInteriorWMO(eye.x, eye.y, eye.z)) {
+        because("inside an interior WMO group");
+        return 1.0f;
+    }
 
     // How far to look. Far enough to clear the hill the camera is standing
     // under, and no further: past a few hundred yards a ridge on the horizon
     // is the sky's business, not the flare's.
     constexpr float kReach = 600.0f;
 
-    if (wmoRenderer && wmoRenderer->raycastBoundingBoxes(eye, sunDir, kReach) < kReach) {
-        return 1.0f;
+    if (wmoRenderer) {
+        const float hit = wmoRenderer->raycastBoundingBoxes(eye, sunDir, kReach);
+        if (hit < kReach) {
+            because("WMO in the way at " + std::to_string(hit));
+            return 1.0f;
+        }
     }
 
     // The terrain, marched rather than intersected: the heightmap is what
@@ -2088,9 +2101,13 @@ float Renderer::sampleSunOcclusion(const glm::vec3& sunDir) const {
         for (float t = 1.0f; t < kReach; t *= 1.4f) {
             const glm::vec3 p = eye + sunDir * t;
             const std::optional<float> ground = terrainManager->getHeightAt(p.x, p.y);
-            if (ground && *ground > p.z) return 1.0f;
+            if (ground && *ground > p.z) {
+                because("terrain in the way at " + std::to_string(t));
+                return 1.0f;
+            }
         }
     }
+    because("clear");
     return 0.0f;
 }
 
@@ -2106,8 +2123,23 @@ void Renderer::update(float deltaTime) {
     {
         const LightingParams* lp = lightingManager ? &lightingManager->getLightingParams() : nullptr;
         const float rate = glm::clamp(1.0f - std::exp(-deltaTime / 0.25f), 0.0f, 1.0f);
-        const float sunTarget = lp ? sampleSunOcclusion(lp->sunDir) : 1.0f;
+        // WOWEE_GLARE_DIAG: say every few seconds what decided the sun's
+        // occlusion, the factor the glare is most often put out by.
+        static const bool glareDiag = std::getenv("WOWEE_GLARE_DIAG") != nullptr;
+        std::string why;
+        const float sunTarget = lp ? sampleSunOcclusion(lp->sunDir, glareDiag ? &why : nullptr) : 1.0f;
         sunOcclusion_ += (sunTarget - sunOcclusion_) * rate;
+        if (glareDiag && (glareDiagTimer_ -= deltaTime) <= 0.0f) {
+            glareDiagTimer_ = 3.0f;
+            const bool anyGroup = camera && wmoRenderer &&
+                wmoRenderer->isInsideWMO(camera->getPosition().x, camera->getPosition().y,
+                                         camera->getPosition().z);
+            LOG_INFO("[glare-diag] sun occlusion target=", sunTarget, " eased=", sunOcclusion_,
+                     " (", lp ? why : std::string("no lighting"), "); inside any WMO group=",
+                     anyGroup ? "yes" : "no", " skyboxWeight=",
+                     lightingManager ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers())
+                                     : 0.0f);
+        }
         const float moonTarget = lp ? sampleSunOcclusion(lp->moonDir) : 1.0f;
         moonOcclusion_ += (moonTarget - moonOcclusion_) * rate;
     }
