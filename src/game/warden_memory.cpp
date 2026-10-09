@@ -1,11 +1,14 @@
 #include "game/warden_memory.hpp"
 #include "core/logger.hpp"
 #include "core/data_paths.hpp"
+#include "game/warden_constants.hpp"
+#include "game/warden_formats.hpp"
 #include <chrono>
 #include <fstream>
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <sstream>
 #include <iomanip>
@@ -18,59 +21,170 @@ namespace game {
 // Bounds-checked little-endian reads for PE parsing - malformed Warden modules
 // must not cause out-of-bounds access.
 static inline uint32_t readLE32(const std::vector<uint8_t>& data, size_t offset) {
-    if (offset + 4 > data.size()) return 0;
-    return data[offset] | (uint32_t(data[offset+1]) << 8)
-         | (uint32_t(data[offset+2]) << 16) | (uint32_t(data[offset+3]) << 24);
+    if (offset + sizeof(uint32_t) > data.size()) return 0;
+    return loadRecord<uint32_t>(data.data() + offset);
 }
 
 static inline uint16_t readLE16(const std::vector<uint8_t>& data, size_t offset) {
-    if (offset + 2 > data.size()) return 0;
-    return data[offset] | (uint16_t(data[offset+1]) << 8);
+    if (offset + sizeof(uint16_t) > data.size()) return 0;
+    return loadRecord<uint16_t>(data.data() + offset);
 }
+
+namespace {
+
+#pragma pack(push, 1)
+
+/// KSYSTEM_TIME: a 64-bit time split so user mode can read it without a lock.
+struct KSystemTime {
+    uint32_t lowPart;
+    uint32_t high1Time;
+    uint32_t high2Time;
+};
+static_assert(sizeof(KSystemTime) == 12);
+
+/// _KUSER_SHARED_DATA, Windows 7 SP1 x86 (from ntddk.h PDB), as far as
+/// +0x338. Everything after that is typically zero on Win7 x86, and is left
+/// to the zero-fill of the 4KB page this is copied into.
+struct KUserSharedDataWin7x86 {
+    uint32_t    tickCountLowDeprecated;          // +0x000
+    uint32_t    tickCountMultiplier;             // +0x004
+    KSystemTime interruptTime;                   // +0x008
+    KSystemTime systemTime;                      // +0x014
+    KSystemTime timeZoneBias;                    // +0x020
+    uint16_t    imageNumberLow;                  // +0x02C
+    uint16_t    imageNumberHigh;                 // +0x02E
+    char16_t    ntSystemRoot[260];               // +0x030 WCHAR[MAX_PATH], ends at +0x238
+    uint32_t    maxStackTraceDepth;              // +0x238
+    uint32_t    cryptoExponent;                  // +0x23C
+    uint32_t    timeZoneId;                      // +0x240
+    uint32_t    largePageMinimum;                // +0x244
+    uint32_t    reserved2[7];                    // +0x248
+    uint32_t    ntProductType;                   // +0x264 NT_PRODUCT_TYPE
+    uint8_t     productTypeIsValid;              // +0x268 BOOLEAN
+    uint8_t     reserved9[3];                    // +0x269
+    uint32_t    ntMajorVersion;                  // +0x26C
+    uint32_t    ntMinorVersion;                  // +0x270
+    uint8_t     processorFeatures[64];           // +0x274 BOOLEAN[64], indexed by PF_*
+    uint32_t    reserved1;                       // +0x2B4
+    uint32_t    reserved3;                       // +0x2B8
+    uint32_t    timeSlip;                        // +0x2BC
+    uint32_t    alternativeArchitecture;         // +0x2C0
+    uint32_t    altArchitecturePad;              // +0x2C4
+    uint64_t    systemExpirationDate;            // +0x2C8 LARGE_INTEGER
+    uint32_t    suiteMask;                       // +0x2D0
+    uint8_t     kdDebuggerEnabled;               // +0x2D4 BOOLEAN
+    uint8_t     nxSupportPolicy;                 // +0x2D5
+    uint8_t     reserved6[2];                    // +0x2D6
+    uint32_t    activeConsoleId;                 // +0x2D8
+    uint32_t    dismountCount;                   // +0x2DC
+    uint32_t    comPlusPackage;                  // +0x2E0
+    uint32_t    lastSystemRITEventTickCount;     // +0x2E4
+    uint32_t    numberOfPhysicalPages;           // +0x2E8
+    uint8_t     safeBootMode;                    // +0x2EC BOOLEAN
+    uint8_t     reserved12[3];                   // +0x2ED
+    uint32_t    sharedDataFlags;                 // +0x2F0 SharedDataFlags / TraceLogging
+    uint32_t    dataFlagsPad;                    // +0x2F4
+    uint64_t    testRetInstruction;              // +0x2F8
+    uint32_t    systemCall;                      // +0x300
+    uint32_t    systemCallReturn;                // +0x304
+    uint64_t    systemCallPad[3];                // +0x308
+    KSystemTime tickCount;                       // +0x320
+    uint32_t    tickCountPad;                    // +0x32C
+    uint32_t    cookie;                          // +0x330
+    uint32_t    consoleSessionForegroundProcessId; // +0x334
+};
+static_assert(sizeof(KUserSharedDataWin7x86) == 0x338);
+static_assert(offsetof(KUserSharedDataWin7x86, imageNumberLow) == 0x02C);
+static_assert(offsetof(KUserSharedDataWin7x86, ntSystemRoot) == 0x030);
+static_assert(offsetof(KUserSharedDataWin7x86, maxStackTraceDepth) == 0x238);
+static_assert(offsetof(KUserSharedDataWin7x86, ntProductType) == 0x264);
+static_assert(offsetof(KUserSharedDataWin7x86, ntMajorVersion) == 0x26C);
+static_assert(offsetof(KUserSharedDataWin7x86, processorFeatures) == 0x274);
+static_assert(offsetof(KUserSharedDataWin7x86, suiteMask) == 0x2D0);
+static_assert(offsetof(KUserSharedDataWin7x86, activeConsoleId) == 0x2D8);
+static_assert(offsetof(KUserSharedDataWin7x86, safeBootMode) == 0x2EC);
+static_assert(offsetof(KUserSharedDataWin7x86, sharedDataFlags) == 0x2F0);
+static_assert(offsetof(KUserSharedDataWin7x86, testRetInstruction) == 0x2F8);
+static_assert(offsetof(KUserSharedDataWin7x86, tickCount) == 0x320);
+static_assert(offsetof(KUserSharedDataWin7x86, cookie) == 0x330);
+
+/// SYSTEM_INFO as a 32-bit process sees it (pointers are 4 bytes).
+struct Win32SystemInfo {
+    uint16_t wProcessorArchitecture;
+    uint16_t wReserved;
+    uint32_t dwPageSize;
+    uint32_t lpMinimumApplicationAddress;
+    uint32_t lpMaximumApplicationAddress;
+    uint32_t dwActiveProcessorMask;
+    uint32_t dwNumberOfProcessors;
+    uint32_t dwProcessorType;
+    uint32_t dwAllocationGranularity;
+    uint16_t wProcessorLevel;
+    uint16_t wProcessorRevision;
+};
+static_assert(sizeof(Win32SystemInfo) == 36, "SYSTEM_INFO must be 36 bytes");
+
+#pragma pack(pop)
+
+// ProcessorFeatures indices. Not spelled PF_*: those are winnt.h macros.
+constexpr size_t kPfCompareExchangeDouble   = 2;   // PF_COMPARE_EXCHANGE_DOUBLE
+constexpr size_t kPfMmx                     = 3;   // PF_MMX_INSTRUCTIONS_AVAILABLE
+constexpr size_t kPfSse                     = 6;   // PF_XMMI_INSTRUCTIONS_AVAILABLE
+constexpr size_t kPfRdtsc                   = 8;   // PF_RDTSC_INSTRUCTION_AVAILABLE
+constexpr size_t kPfPaeEnabled              = 9;   // PF_PAE_ENABLED
+constexpr size_t kPfSse2                    = 10;  // PF_XMMI64_INSTRUCTIONS_AVAILABLE
+constexpr size_t kPfNxEnabled               = 12;  // PF_NX_ENABLED
+constexpr size_t kPfSse3                    = 13;  // PF_SSE3_INSTRUCTIONS_AVAILABLE
+
+}  // namespace
 
 WardenMemory::WardenMemory() = default;
 WardenMemory::~WardenMemory() = default;
 
 bool WardenMemory::parsePE(const std::vector<uint8_t>& fileData) {
     // DOS header: MZ magic
-    if (fileData.size() < 64) return false;
-    if (fileData[0] != 'M' || fileData[1] != 'Z') {
+    if (fileData.size() < sizeof(PeDosHeader)) return false;
+    const auto dosHeader = loadRecord<PeDosHeader>(fileData.data());
+    if (dosHeader.magic != PE_DOS_MAGIC) {
         LOG_ERROR("WardenMemory: Not a valid PE file (no MZ header)");
         return false;
     }
 
-    // e_lfanew at offset 0x3C -> PE signature offset
-    uint32_t peOffset = readLE32(fileData, 0x3C);
-    if (peOffset + 4 > fileData.size()) return false;
+    // e_lfanew -> PE signature offset. Widened before adding: a uint32 offset
+    // near 4GB wrapped past the check and read the signature out of bounds.
+    const size_t peOffset = dosHeader.peHeaderOffset;
+    if (peOffset + sizeof(PE_SIGNATURE) > fileData.size()) return false;
 
     // PE signature "PE\0\0"
-    if (fileData[peOffset] != 'P' || fileData[peOffset+1] != 'E'
-        || fileData[peOffset+2] != 0 || fileData[peOffset+3] != 0) {
+    if (loadRecord<uint32_t>(fileData.data() + peOffset) != PE_SIGNATURE) {
         LOG_ERROR("WardenMemory: Invalid PE signature");
         return false;
     }
 
-    // COFF header at peOffset + 4
-    size_t coffOfs = peOffset + 4;
-    if (coffOfs + 20 > fileData.size()) return false;
+    // COFF file header follows the signature
+    const size_t fileHeaderOfs = peOffset + sizeof(PE_SIGNATURE);
+    if (fileHeaderOfs + sizeof(PeFileHeader) > fileData.size()) return false;
+    const auto fileHeader = loadRecord<PeFileHeader>(fileData.data() + fileHeaderOfs);
 
-    uint16_t numSections = readLE16(fileData, coffOfs + 2);
-    uint16_t optHeaderSize = readLE16(fileData, coffOfs + 16);
+    uint16_t numSections = fileHeader.numberOfSections;
+    uint16_t optHeaderSize = fileHeader.sizeOfOptionalHeader;
 
-    // Optional header
-    size_t optOfs = coffOfs + 20;
+    // Optional header. Its length is whatever the file header says, so the
+    // fields needed are read one by one, each bounds-checked against the file,
+    // rather than as a whole PeOptionalHeader32 a short header does not hold.
+    size_t optOfs = fileHeaderOfs + sizeof(PeFileHeader);
     if (optOfs + optHeaderSize > fileData.size()) return false;
 
-    uint16_t magic = readLE16(fileData, optOfs);
-    if (magic != 0x10B) {
+    uint16_t magic = readLE16(fileData, optOfs + offsetof(PeOptionalHeader32, magic));
+    if (magic != PE32_MAGIC) {
         LOG_ERROR("WardenMemory: Not PE32 (magic=0x", std::hex, magic, std::dec, ")");
         return false;
     }
 
     // PE32 fields
-    imageBase_ = readLE32(fileData, optOfs + 28);
-    imageSize_ = readLE32(fileData, optOfs + 56);
-    uint32_t sizeOfHeaders = readLE32(fileData, optOfs + 60);
+    imageBase_ = readLE32(fileData, optOfs + offsetof(PeOptionalHeader32, imageBase));
+    imageSize_ = readLE32(fileData, optOfs + offsetof(PeOptionalHeader32, sizeOfImage));
+    uint32_t sizeOfHeaders = readLE32(fileData, optOfs + offsetof(PeOptionalHeader32, sizeOfHeaders));
 
     LOG_INFO("WardenMemory: PE ImageBase=0x", std::hex, imageBase_,
              " ImageSize=0x", imageSize_,
@@ -87,16 +201,17 @@ bool WardenMemory::parsePE(const std::vector<uint8_t>& fileData) {
     size_t secTableOfs = optOfs + optHeaderSize;
 
     for (uint16_t i = 0; i < numSections; i++) {
-        size_t secOfs = secTableOfs + i * 40;
-        if (secOfs + 40 > fileData.size()) break;
+        size_t secOfs = secTableOfs + i * sizeof(PeSectionHeader);
+        if (secOfs + sizeof(PeSectionHeader) > fileData.size()) break;
+        const auto section = loadRecord<PeSectionHeader>(fileData.data() + secOfs);
 
-        char secName[9] = {};
-        std::memcpy(secName, fileData.data() + secOfs, 8);
+        char secName[sizeof(section.name) + 1] = {};
+        std::memcpy(secName, section.name, sizeof(section.name));
 
-        uint32_t virtualSize   = readLE32(fileData, secOfs + 8);
-        uint32_t virtualAddr   = readLE32(fileData, secOfs + 12);
-        uint32_t rawDataSize   = readLE32(fileData, secOfs + 16);
-        uint32_t rawDataOffset = readLE32(fileData, secOfs + 20);
+        uint32_t virtualSize   = section.virtualSize;
+        uint32_t virtualAddr   = section.virtualAddress;
+        uint32_t rawDataSize   = section.sizeOfRawData;
+        uint32_t rawDataOffset = section.pointerToRawData;
 
         if (rawDataSize == 0 || rawDataOffset == 0) continue;
 
@@ -129,74 +244,41 @@ void WardenMemory::initKuserSharedData() {
     // -------------------------------------------------------------------
     // KUSER_SHARED_DATA layout - Windows 7 SP1 x86 (from ntddk.h PDB)
     // Warden reads this in 238-byte chunks for OS fingerprinting.
-    // All offsets verified against the canonical _KUSER_SHARED_DATA struct.
+    // All offsets verified against the canonical _KUSER_SHARED_DATA struct
+    // (KUserSharedDataWin7x86 asserts them). Fields not set stay zero.
     // -------------------------------------------------------------------
+    static_assert(sizeof(KUserSharedDataWin7x86) <= KUSER_SIZE);
+    KUserSharedDataWin7x86 kuser{};
 
-    auto w32 = [&](uint32_t off, uint32_t v) { std::memcpy(kuserData_ + off, &v, 4); };
-    auto w16 = [&](uint32_t off, uint16_t v) { std::memcpy(kuserData_ + off, &v, 2); };
-    auto w8  = [&](uint32_t off, uint8_t  v) { kuserData_[off] = v; };
+    kuser.tickCountLowDeprecated = 0x003F4A00; // ~70 min uptime
+    kuser.tickCountMultiplier = 0x0FA00000;
 
-    // +0x000 TickCountLowDeprecated (ULONG)
-    w32(0x0000, 0x003F4A00); // ~70 min uptime
+    kuser.interruptTime = {.lowPart = 0x6B49D200, .high1Time = 0x00000029, .high2Time = 0x00000029};
 
-    // +0x004 TickCountMultiplier (ULONG)
-    w32(0x0004, 0x0FA00000);
+    // ~2024 epoch FILETIME
+    kuser.systemTime = {.lowPart = 0xA0B71B00, .high1Time = 0x01DA5E80, .high2Time = 0x01DA5E80};
 
-    // +0x008 InterruptTime (KSYSTEM_TIME: Low4 + High1_4 + High2_4)
-    w32(0x0008, 0x6B49D200);
-    w32(0x000C, 0x00000029);
-    w32(0x0010, 0x00000029);
+    // timeZoneBias: 0 = UTC (left zero)
 
-    // +0x014 SystemTime (KSYSTEM_TIME) - ~2024 epoch FILETIME
-    w32(0x0014, 0xA0B71B00);
-    w32(0x0018, 0x01DA5E80);
-    w32(0x001C, 0x01DA5E80);
+    kuser.imageNumberLow = 0x014C;  // IMAGE_FILE_MACHINE_I386
+    kuser.imageNumberHigh = 0x014C;
 
-    // +0x020 TimeZoneBias (KSYSTEM_TIME) - 0 = UTC
-    // (leave zeros)
+    // NtSystemRoot, without its terminator: the rest of the array is zero.
+    constexpr char16_t kSystemRoot[] = u"C:\\WINDOWS";
+    std::memcpy(kuser.ntSystemRoot, kSystemRoot, sizeof(kSystemRoot) - sizeof(char16_t));
 
-    // +0x02C ImageNumberLow / ImageNumberHigh (USHORT each)
-    w16(0x002C, 0x014C); // IMAGE_FILE_MACHINE_I386
-    w16(0x002E, 0x014C);
+    kuser.maxStackTraceDepth = 0;
+    kuser.cryptoExponent = 0x00010001;  // 65537
+    kuser.timeZoneId = 0;               // TIME_ZONE_ID_UNKNOWN
+    kuser.largePageMinimum = 0x00200000; // 2 MB
 
-    // +0x030 NtSystemRoot (WCHAR[260] = 520 bytes, ends at +0x238)
-    const wchar_t* sysRoot = L"C:\\WINDOWS";
-    for (size_t i = 0; i < 10; i++) {
-        w16(0x0030 + static_cast<uint32_t>(i) * 2, static_cast<uint16_t>(sysRoot[i]));
-    }
+    kuser.ntProductType = 1;            // VER_NT_WORKSTATION
+    kuser.productTypeIsValid = 1;
 
-    // +0x238 MaxStackTraceDepth (ULONG)
-    w32(0x0238, 0);
+    kuser.ntMajorVersion = 6;           // Windows Vista/7/8/10
+    kuser.ntMinorVersion = 1;           // Windows 7
 
-    // +0x23C CryptoExponent (ULONG) - 65537
-    w32(0x023C, 0x00010001);
-
-    // +0x240 TimeZoneId (ULONG) - TIME_ZONE_ID_UNKNOWN
-    w32(0x0240, 0);
-
-    // +0x244 LargePageMinimum (ULONG) - 2 MB
-    w32(0x0244, 0x00200000);
-
-    // +0x248 Reserved2[7] (28 bytes) - zeros
-    // (leave zeros)
-
-    // +0x264 NtProductType (NT_PRODUCT_TYPE = ULONG) - VER_NT_WORKSTATION
-    w32(0x0264, 1);
-
-    // +0x268 ProductTypeIsValid (BOOLEAN = UCHAR)
-    w8(0x0268, 1);
-
-    // +0x269 Reserved9[3] - padding
-    // (leave zeros)
-
-    // +0x26C NtMajorVersion (ULONG) - 6 (Windows Vista/7/8/10)
-    w32(0x026C, 6);
-
-    // +0x270 NtMinorVersion (ULONG) - 1 (Windows 7)
-    w32(0x0270, 1);
-
-    // +0x274 ProcessorFeatures (BOOLEAN[64] = 64 bytes, ends at +0x2B4)
-    //   Each entry is a single UCHAR (0 or 1).
+    // ProcessorFeatures - each entry is a single UCHAR (0 or 1).
     //   Index  Name                                 Value
     //   [0]    PF_FLOATING_POINT_PRECISION_ERRATA    0
     //   [1]    PF_FLOATING_POINT_EMULATED            0
@@ -216,95 +298,52 @@ void WardenMemory::initKuserSharedData() {
     //   [15]   PF_COMPARE64_EXCHANGE128              0
     //   [16]   PF_CHANNELS_ENABLED                   0
     //   [17]   PF_XSAVE_ENABLED                      0
-    w8(0x0274 +  2, 1); // PF_COMPARE_EXCHANGE_DOUBLE
-    w8(0x0274 +  3, 1); // PF_MMX
-    w8(0x0274 +  6, 1); // PF_SSE
-    w8(0x0274 +  8, 1); // PF_RDTSC
-    w8(0x0274 +  9, 1); // PF_PAE_ENABLED
-    w8(0x0274 + 10, 1); // PF_SSE2
-    w8(0x0274 + 12, 1); // PF_NX_ENABLED
-    w8(0x0274 + 13, 1); // PF_SSE3
+    kuser.processorFeatures[kPfCompareExchangeDouble] = 1;
+    kuser.processorFeatures[kPfMmx] = 1;
+    kuser.processorFeatures[kPfSse] = 1;
+    kuser.processorFeatures[kPfRdtsc] = 1;
+    kuser.processorFeatures[kPfPaeEnabled] = 1;
+    kuser.processorFeatures[kPfSse2] = 1;
+    kuser.processorFeatures[kPfNxEnabled] = 1;
+    kuser.processorFeatures[kPfSse3] = 1;
 
-    // +0x2B4 Reserved1 (ULONG)
-    // +0x2B8 Reserved3 (ULONG)
-    // +0x2BC TimeSlip (ULONG)
-    // +0x2C0 AlternativeArchitecture (ULONG) = 0 (StandardDesign)
-    // +0x2C4 AltArchitecturePad[1] (ULONG)
-    // +0x2C8 SystemExpirationDate (LARGE_INTEGER = 8 bytes)
-    // (leave zeros)
+    // alternativeArchitecture = 0 (StandardDesign); the rest of that run zero.
 
-    // +0x2D0 SuiteMask (ULONG) - VER_SUITE_SINGLEUSERTS | VER_SUITE_TERMINAL
-    w32(0x02D0, 0x0110); // 0x0100=SINGLEUSERTS, 0x0010=TERMINAL
+    kuser.suiteMask = 0x0110;           // 0x0100=SINGLEUSERTS, 0x0010=TERMINAL
+    kuser.kdDebuggerEnabled = 0;
+    kuser.nxSupportPolicy = 2;          // OptIn
 
-    // +0x2D4 KdDebuggerEnabled (BOOLEAN = UCHAR)
-    w8(0x02D4, 0);
+    kuser.activeConsoleId = 1;          // session 0 or 1
+    kuser.dismountCount = 0;
+    kuser.comPlusPackage = 0;
+    kuser.lastSystemRITEventTickCount = 0x003F4900; // recent input tick
+    kuser.numberOfPhysicalPages = 0x000FF000;       // 4GB / 4KB ≈ 1M pages
+    kuser.safeBootMode = 0;             // normal boot
+    kuser.sharedDataFlags = 0;
 
-    // +0x2D5 NXSupportPolicy (UCHAR) - 2 = OptIn
-    w8(0x02D5, 2);
+    kuser.testRetInstruction = 0xC3;    // x86 RET opcode, in the low byte
 
-    // +0x2D6 Reserved6[2]
-    // (leave zeros)
+    kuser.systemCall = 0;
+    kuser.systemCallReturn = 0;
 
-    // +0x2D8 ActiveConsoleId (ULONG) - session 0 or 1
-    w32(0x02D8, 1);
+    kuser.tickCount.lowPart = 0x003F4A00; // matches TickCountLowDeprecated
 
-    // +0x2DC DismountCount (ULONG)
-    w32(0x02DC, 0);
+    kuser.cookie = 0x4A2F8C15;          // stack cookie, random-looking value
+    kuser.consoleSessionForegroundProcessId = 0x00001234; // some PID
 
-    // +0x2E0 ComPlusPackage (ULONG)
-    w32(0x02E0, 0);
-
-    // +0x2E4 LastSystemRITEventTickCount (ULONG) - recent input tick
-    w32(0x02E4, 0x003F4900);
-
-    // +0x2E8 NumberOfPhysicalPages (ULONG) - 4GB / 4KB ≈ 1M pages
-    w32(0x02E8, 0x000FF000);
-
-    // +0x2EC SafeBootMode (BOOLEAN) - 0 = normal boot
-    w8(0x02EC, 0);
-
-    // +0x2F0 SharedDataFlags / TraceLogging (ULONG)
-    w32(0x02F0, 0);
-
-    // +0x2F8 TestRetInstruction (ULONGLONG = 8 bytes) - RET opcode
-    w8(0x02F8, 0xC3); // x86 RET instruction
-
-    // +0x300 SystemCall (ULONG)
-    w32(0x0300, 0);
-
-    // +0x304 SystemCallReturn (ULONG)
-    w32(0x0304, 0);
-
-    // +0x308 SystemCallPad[3] (24 bytes)
-    // (leave zeros)
-
-    // +0x320 TickCount (KSYSTEM_TIME) - matches TickCountLowDeprecated
-    w32(0x0320, 0x003F4A00);
-
-    // +0x32C TickCountPad[1]
-    // (leave zeros)
-
-    // +0x330 Cookie (ULONG) - stack cookie, random-looking value
-    w32(0x0330, 0x4A2F8C15);
-
-    // +0x334 ConsoleSessionForegroundProcessId (ULONG) - some PID
-    w32(0x0334, 0x00001234);
-
-    // Everything after +0x338 is typically zero on Win7 x86
+    std::memcpy(kuserData_, &kuser, sizeof(kuser));
 }
 
 void WardenMemory::writeLE32(uint32_t va, uint32_t value) {
     if (va < imageBase_) return;
     uint32_t rva = va - imageBase_;
-    if (rva + 4 > imageSize_) return;
-    image_[rva]   = value & 0xFF;
-    image_[rva+1] = (value >> 8) & 0xFF;
-    image_[rva+2] = (value >> 16) & 0xFF;
-    image_[rva+3] = (value >> 24) & 0xFF;
+    // Widened: with an image based at 0..3, rva + 4 wrapped and passed.
+    if (static_cast<size_t>(rva) + sizeof(value) > imageSize_) return;
+    storeRecord(image_.data() + rva, value);
 }
 
 void WardenMemory::patchRuntimeGlobals() {
-    if (imageBase_ != 0x00400000) {
+    if (imageBase_ != PE_DEFAULT_IMAGE_BASE) {
         LOG_WARNING("WardenMemory: unexpected imageBase=0x", std::hex, imageBase_, std::dec,
                     " - skipping runtime global patches");
         return;
@@ -329,18 +368,24 @@ void WardenMemory::patchRuntimeGlobals() {
 
     // === Runtime global patches (applied unconditionally for all image variants) ===
 
-    // Warden SYSTEM_INFO chain
+    // Warden SYSTEM_INFO chain:
+    //   [WARDEN_MODULE_PTR] -> fake Warden base
+    //   [base + kSysInfoContainerPtrOffset] -> fake container
+    //   container + kSysInfoOffsetInContainer = SYSTEM_INFO
     constexpr uint32_t WARDEN_MODULE_PTR = 0xCE897C;
     constexpr uint32_t FAKE_WARDEN_BASE  = 0xCE8000;
+    constexpr uint32_t kSysInfoContainerPtrOffset = 0x228;
     writeLE32(WARDEN_MODULE_PTR, FAKE_WARDEN_BASE);
     constexpr uint32_t FAKE_SYSINFO_CONTAINER = 0xCE8300;
-    writeLE32(FAKE_WARDEN_BASE + 0x228, FAKE_SYSINFO_CONTAINER);
+    writeLE32(FAKE_WARDEN_BASE + kSysInfoContainerPtrOffset, FAKE_SYSINFO_CONTAINER);
 
     // Write SYSINFO pointer at many offsets from FAKE_WARDEN_BASE so the
     // chain works regardless of which module-specific offset the server uses.
     // MUST be done BEFORE writing the actual SYSTEM_INFO struct, because this
     // loop's range (0xCE8200-0xCE8400) overlaps with the struct at 0xCE8308.
-    for (uint32_t off = 0x200; off <= 0x400; off += 4) {
+    constexpr uint32_t kSysInfoPtrFillFirst = 0x200;
+    constexpr uint32_t kSysInfoPtrFillLast  = 0x400;
+    for (uint32_t off = kSysInfoPtrFillFirst; off <= kSysInfoPtrFillLast; off += sizeof(uint32_t)) {
         uint32_t addr = FAKE_WARDEN_BASE + off;
         if (addr >= imageBase_ && (addr - imageBase_) + 4 <= imageSize_) {
             writeLE32(addr, FAKE_SYSINFO_CONTAINER);
@@ -349,32 +394,18 @@ void WardenMemory::patchRuntimeGlobals() {
 
     // Now write the actual WIN_SYSTEM_INFO struct AFTER the pointer fill loop,
     // so it overwrites any values the loop placed in the 0xCE8308+ range.
-    uint32_t sysInfoAddr = FAKE_SYSINFO_CONTAINER + 0x08;
-#pragma pack(push, 1)
-    struct {
-        uint16_t wProcessorArchitecture;
-        uint16_t wReserved;
-        uint32_t dwPageSize;
-        uint32_t lpMinimumApplicationAddress;
-        uint32_t lpMaximumApplicationAddress;
-        uint32_t dwActiveProcessorMask;
-        uint32_t dwNumberOfProcessors;
-        uint32_t dwProcessorType;
-        uint32_t dwAllocationGranularity;
-        uint16_t wProcessorLevel;
-        uint16_t wProcessorRevision;
-    } sysInfo = {.wProcessorArchitecture = 0, .wReserved = 0, .dwPageSize = 4096, .lpMinimumApplicationAddress = 0x00010000, .lpMaximumApplicationAddress = 0x7FFEFFFF, .dwActiveProcessorMask = 0x0F, .dwNumberOfProcessors = 4, .dwProcessorType = 586, .dwAllocationGranularity = 65536, .wProcessorLevel = 6, .wProcessorRevision = 0x3A09};
-#pragma pack(pop)
-    static_assert(sizeof(sysInfo) == 36, "SYSTEM_INFO must be 36 bytes");
+    constexpr uint32_t kSysInfoOffsetInContainer = 0x08;
+    uint32_t sysInfoAddr = FAKE_SYSINFO_CONTAINER + kSysInfoOffsetInContainer;
+    const Win32SystemInfo sysInfo = {.wProcessorArchitecture = 0, .wReserved = 0, .dwPageSize = 4096, .lpMinimumApplicationAddress = 0x00010000, .lpMaximumApplicationAddress = 0x7FFEFFFF, .dwActiveProcessorMask = 0x0F, .dwNumberOfProcessors = 4, .dwProcessorType = 586, .dwAllocationGranularity = 65536, .wProcessorLevel = 6, .wProcessorRevision = 0x3A09};
     uint32_t rva = sysInfoAddr - imageBase_;
-    if (rva + 36 <= imageSize_) {
-        std::memcpy(image_.data() + rva, &sysInfo, 36);
+    if (rva + sizeof(sysInfo) <= imageSize_) {
+        storeRecord(image_.data() + rva, sysInfo);
     }
 
     // Fallback: if the pointer chain breaks and stage 3 reads from address
     // 0x00000000 + 0x08 = 8, write valid SYSINFO at RVA 8 (PE DOS header area).
-    if (8 + 36 <= imageSize_) {
-        std::memcpy(image_.data() + 8, &sysInfo, 36);
+    if (kSysInfoOffsetInContainer + sizeof(sysInfo) <= imageSize_) {
+        storeRecord(image_.data() + kSysInfoOffsetInContainer, sysInfo);
     }
 
     LOG_WARNING("WardenMemory: Patched SYSINFO chain @0x", std::hex, WARDEN_MODULE_PTR, std::dec);
@@ -385,20 +416,28 @@ void WardenMemory::patchRuntimeGlobals() {
     // We set API=1 (Direct3D) and provide the full pointer chain.
     constexpr uint32_t GX_DEVICE_PTR = 0xC0ED38;
     constexpr uint32_t FAKE_DEVICE   = 0xCE8400;
+    constexpr uint32_t kGxDeviceApiKindOffset = 0x1FC;
+    constexpr uint32_t kGxApiDirect3D         = 1;
+    constexpr uint32_t kGxDeviceD3DDeviceOffset = 0x38A8;  // sOfsDevice2
+    // IDirect3DDevice9::EndScene is vtable slot 42.
+    constexpr uint32_t kEndSceneVtableOffset  = 42 * sizeof(uint32_t);
+    static_assert(kEndSceneVtableOffset == 0xA8);
     writeLE32(GX_DEVICE_PTR, FAKE_DEVICE);
-    writeLE32(FAKE_DEVICE + 0x1FC, 1);                 // API kind = Direct3D
+    writeLE32(FAKE_DEVICE + kGxDeviceApiKindOffset, kGxApiDirect3D);
     // Set up the full EndScene pointer chain at the canonical offsets.
     constexpr uint32_t FAKE_VTABLE1 = 0xCE8500;
     constexpr uint32_t FAKE_VTABLE2 = 0xCE8600;
     constexpr uint32_t FAKE_ENDSCENE = 0x00401000; // start of .text
-    writeLE32(FAKE_DEVICE + 0x38A8, FAKE_VTABLE1);
+    writeLE32(FAKE_DEVICE + kGxDeviceD3DDeviceOffset, FAKE_VTABLE1);
     writeLE32(FAKE_VTABLE1, FAKE_VTABLE2);
-    writeLE32(FAKE_VTABLE2 + 0xA8, FAKE_ENDSCENE);
+    writeLE32(FAKE_VTABLE2 + kEndSceneVtableOffset, FAKE_ENDSCENE);
 
     // The EndScene device+sOfsDevice2 offset may differ from 0x38A8 in Turtle WoW.
     // Also set API=1 (Direct3D) at multiple offsets so the API kind check passes.
     // Fill the entire fake device area with the vtable pointer for robustness.
-    for (uint32_t off = 0x3800; off <= 0x3A00; off += 4) {
+    constexpr uint32_t kD3DDevicePtrFillFirst = 0x3800;
+    constexpr uint32_t kD3DDevicePtrFillLast  = 0x3A00;
+    for (uint32_t off = kD3DDevicePtrFillFirst; off <= kD3DDevicePtrFillLast; off += sizeof(uint32_t)) {
         uint32_t addr = FAKE_DEVICE + off;
         if (addr >= imageBase_ && (addr - imageBase_) + 4 <= imageSize_) {
             writeLE32(addr, FAKE_VTABLE1);
@@ -416,27 +455,20 @@ void WardenMemory::patchRuntimeGlobals() {
 
     // LastHardwareAction - must be a recent GetTickCount()-style timestamp
     // so the anti-AFK scan sees (currentTime - lastAction) < threshold.
-    constexpr uint32_t LAST_HARDWARE_ACTION = 0xCF0BC8;
+    constexpr uint32_t LAST_HARDWARE_ACTION = WARDEN_TICKCOUNT_ADDRESS;
     uint32_t nowMs = static_cast<uint32_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
-    writeLE32(LAST_HARDWARE_ACTION, nowMs - 2000);
+    writeLE32(LAST_HARDWARE_ACTION, nowMs - WARDEN_LAST_HARDWARE_ACTION_AGE_MS);
     LOG_WARNING("WardenMemory: Patched LastHardwareAction @0x", std::hex, LAST_HARDWARE_ACTION, std::dec);
 
     // Embed the 37-byte Warden module memcpy pattern in BSS so that
     // FIND_CODE_BY_HASH (PAGE_B) brute-force search can find it.
     // This is the pattern VMaNGOS's "Warden Memory Read check" looks for.
     constexpr uint32_t MEMCPY_PATTERN_VA = 0xCE8700;
-    static constexpr uint8_t kWardenMemcpyPattern[37] = {
-        0x56, 0x57, 0xFC, 0x8B, 0x54, 0x24, 0x14, 0x8B,
-        0x74, 0x24, 0x10, 0x8B, 0x44, 0x24, 0x0C, 0x8B,
-        0xCA, 0x8B, 0xF8, 0xC1, 0xE9, 0x02, 0x74, 0x02,
-        0xF3, 0xA5, 0xB1, 0x03, 0x23, 0xCA, 0x74, 0x02,
-        0xF3, 0xA4, 0x5F, 0x5E, 0xC3
-    };
     uint32_t patRva = MEMCPY_PATTERN_VA - imageBase_;
-    if (patRva + sizeof(kWardenMemcpyPattern) <= imageSize_) {
-        std::memcpy(image_.data() + patRva, kWardenMemcpyPattern, sizeof(kWardenMemcpyPattern));
+    if (patRva + sizeof(WARDEN_MEMCPY_PATTERN) <= imageSize_) {
+        std::memcpy(image_.data() + patRva, WARDEN_MEMCPY_PATTERN, sizeof(WARDEN_MEMCPY_PATTERN));
         LOG_WARNING("WardenMemory: Embedded Warden memcpy pattern at 0x", std::hex, MEMCPY_PATTERN_VA, std::dec);
     }
 }
@@ -664,13 +696,18 @@ std::string WardenMemory::findWowExe(uint16_t build) const {
             f.seekg(0, std::ios::end);
             auto fileSize = f.tellg();
             if (fileSize < 256) continue;
-            f.seekg(0x3C);
+            f.seekg(offsetof(PeDosHeader, peHeaderOffset));
             uint32_t peOfs = 0;
-            f.read(reinterpret_cast<char*>(&peOfs), 4);
-            if (peOfs + 4 + 20 + 60 > static_cast<uint32_t>(fileSize)) continue;
-            f.seekg(peOfs + 4 + 20 + 56); // OptionalHeader + 56 = SizeOfImage
+            f.read(reinterpret_cast<char*>(&peOfs), sizeof(peOfs));
+            // SizeOfImage sits in the optional header, after the signature and
+            // the file header.
+            const uint32_t sizeOfImageOfs = static_cast<uint32_t>(
+                peOfs + sizeof(PE_SIGNATURE) + sizeof(PeFileHeader) +
+                offsetof(PeOptionalHeader32, sizeOfImage));
+            if (sizeOfImageOfs + sizeof(uint32_t) > static_cast<uint32_t>(fileSize)) continue;
+            f.seekg(sizeOfImageOfs);
             uint32_t imgSize = 0;
-            f.read(reinterpret_cast<char*>(&imgSize), 4);
+            f.read(reinterpret_cast<char*>(&imgSize), sizeof(imgSize));
             if (imgSize == expectedSize) {
                 LOG_INFO("WardenMemory: Matched build ", build, " to ", path,
                          " (imageSize=0x", std::hex, imgSize, std::dec, ")");
@@ -891,7 +928,9 @@ bool WardenMemory::searchCodePattern(const uint8_t seed[4], const uint8_t expect
 
     // --- Fast path: check the hint offset directly (single HMAC) ---
     // The PAGE_A offset field is the RVA where the server expects the pattern.
-    if (hintOffset > 0 && hintOffset + patternLen <= imageSize_) {
+    // Widened before adding: the offset is the server's, and one near 4GB
+    // wrapped the uint32 sum past this check into a read outside the image.
+    if (hintOffset > 0 && static_cast<size_t>(hintOffset) + patternLen <= imageSize_) {
         uint8_t hmacOut[20];
         unsigned int hmacLen = 0;
         HMAC(EVP_sha1(), seed, 4,
@@ -935,20 +974,25 @@ bool WardenMemory::searchCodePattern(const uint8_t seed[4], const uint8_t expect
     struct Range { size_t start; size_t end; };
     std::vector<Range> ranges;
 
-    if (imageOnly && image_.size() >= 64) {
-        uint32_t peOffset = image_[0x3C] | (uint32_t(image_[0x3D]) << 8)
-                          | (uint32_t(image_[0x3E]) << 16) | (uint32_t(image_[0x3F]) << 24);
-        if (peOffset + 4 + 20 <= image_.size()) {
-            uint16_t numSections = image_[peOffset+4+2] | (uint16_t(image_[peOffset+4+3]) << 8);
-            uint16_t optHeaderSize = image_[peOffset+4+16] | (uint16_t(image_[peOffset+4+17]) << 8);
-            size_t secTable = peOffset + 4 + 20 + optHeaderSize;
+    if (imageOnly && image_.size() >= sizeof(PeDosHeader)) {
+        // The headers parsePE copied into the image, read back from there.
+        const auto dosHeader = loadRecord<PeDosHeader>(image_.data());
+        // Widened before adding, as in parsePE: a uint32 e_lfanew near 4GB
+        // wrapped past this check and the reads below left the image.
+        const size_t fileHeaderOfs = static_cast<size_t>(dosHeader.peHeaderOffset) + sizeof(PE_SIGNATURE);
+        if (fileHeaderOfs + sizeof(PeFileHeader) <= image_.size()) {
+            const auto fileHeader = loadRecord<PeFileHeader>(image_.data() + fileHeaderOfs);
+            uint16_t numSections = fileHeader.numberOfSections;
+            uint16_t optHeaderSize = fileHeader.sizeOfOptionalHeader;
+            size_t secTable = fileHeaderOfs + sizeof(PeFileHeader) + optHeaderSize;
             for (uint16_t i = 0; i < numSections; i++) {
-                size_t secOfs = secTable + i * 40;
-                if (secOfs + 40 > image_.size()) break;
-                uint32_t va = image_[secOfs+12] | (uint32_t(image_[secOfs+13]) << 8)
-                            | (uint32_t(image_[secOfs+14]) << 16) | (uint32_t(image_[secOfs+15]) << 24);
-                uint32_t vsize = image_[secOfs+8] | (uint32_t(image_[secOfs+9]) << 8)
-                               | (uint32_t(image_[secOfs+10]) << 16) | (uint32_t(image_[secOfs+11]) << 24);
+                size_t secOfs = secTable + i * sizeof(PeSectionHeader);
+                if (secOfs + sizeof(PeSectionHeader) > image_.size()) break;
+                const auto section = loadRecord<PeSectionHeader>(image_.data() + secOfs);
+                uint32_t va = section.virtualAddress;
+                uint32_t vsize = section.virtualSize;
+                // va + vsize stays a uint32 sum: a section whose end wraps is
+                // skipped by the check below, as it always has been.
                 size_t rEnd = std::min(static_cast<size_t>(va + vsize), static_cast<size_t>(imageSize_));
                 if (va + patternLen <= rEnd)
                     ranges.push_back({.start = va, .end = rEnd});
