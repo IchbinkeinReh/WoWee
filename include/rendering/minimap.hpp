@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rendering/minimap_zoom.hpp"
+
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -62,7 +64,6 @@ public:
     [[nodiscard]] bool isEnabled() const { return enabled; }
     void toggle() { enabled = !enabled; }
 
-    void setViewRadius(float radius) { viewRadius = radius; }
     void setRotateWithCamera(bool rotate) { rotateWithCamera = rotate; }
     [[nodiscard]] bool isRotateWithCamera() const { return rotateWithCamera; }
 
@@ -70,8 +71,14 @@ public:
     [[nodiscard]] bool isSquareShape() const { return squareShape; }
     [[nodiscard]] float getViewRadius() const { return viewRadius; }
 
-    void zoomIn() { viewRadius = std::max(100.0f, viewRadius - 50.0f); }
-    void zoomOut() { viewRadius = std::min(800.0f, viewRadius + 50.0f); }
+    /// One of the client's six levels (minimap_zoom), 0 furthest out.
+    void setZoomLevel(int level) {
+        zoomLevel_ = minimap_zoom::clampLevel(level);
+        viewRadius = minimap_zoom::radius(zoomLevel_);
+    }
+    [[nodiscard]] int getZoomLevel() const { return zoomLevel_; }
+    void zoomIn() { if (zoomLevel_ < minimap_zoom::kLevels - 1) setZoomLevel(zoomLevel_ + 1); }
+    void zoomOut() { if (zoomLevel_ > 0) setZoomLevel(zoomLevel_ - 1); }
 
     void setOpacity(float opacity) { opacity_ = opacity; }
 
@@ -128,15 +135,14 @@ private:
     std::deque<std::string> tileInsertionOrder;  // hashes of successfully loaded tiles, oldest first
     std::unique_ptr<VkTexture> noDataTexture;
 
-    // Composite render target (3x3 tiles = 768x768)
+    // Composite render target (GRID x GRID tiles)
     std::unique_ptr<VkRenderTarget> compositeTarget;
     static constexpr int TILE_PX = 256;
-    // The composite is a square of GRID x GRID tiles around the player's own. The
-    // furthest zoom shows 800 yards each way and the player can stand anywhere in
-    // the middle tile, so the grid has to reach 800 yards past its edge: three
-    // tiles (a tile is 533 yards) left the sides empty, which is where the map
-    // only worked in the middle; five reach 1067 yards at the least.
-    static constexpr int GRID = 5;
+    // The composite is a square of GRID x GRID tiles around the player's own.
+    // The furthest zoom reaches 233 yards each way (minimap_zoom) and the
+    // player can stand anywhere in the middle tile, so one tile (533 yards)
+    // past it on every side is enough.
+    static constexpr int GRID = 3;
     static constexpr int COMPOSITE_PX = TILE_PX * GRID;
 
     // Shared quad vertex buffer (6 verts, pos2 + uv2 = 16 bytes/vert)
@@ -159,7 +165,8 @@ private:
     VkDescriptorSet displayDescSet = VK_NULL_HANDLE;
 
     int mapSize = 200;
-    float viewRadius = 400.0f;
+    int zoomLevel_ = minimap_zoom::kDefaultLevel;
+    float viewRadius = minimap_zoom::radius(minimap_zoom::kDefaultLevel);
     bool enabled = true;
     bool rotateWithCamera = false;
     bool squareShape = false;

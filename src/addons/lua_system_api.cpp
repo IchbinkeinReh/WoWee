@@ -48,6 +48,7 @@
 #include <SDL3/SDL.h>
 #include "game/expansion_profile.hpp"
 #include "core/coordinates.hpp"
+#include "rendering/minimap_zoom.hpp"
 #include "rendering/world_map/coordinate_projection.hpp"
 #include "core/local_time.hpp"
 
@@ -1555,7 +1556,7 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
         if (auto* tree = getWidgetTree(L)) {
             if (auto* mm = tree->findByName("Minimap")) {
                 const int z = std::atoi(value.c_str());
-                mm->zoomLevel = (z < 0) ? 0 : (z > 4 ? 4 : z);
+                mm->zoomLevel = rendering::minimap_zoom::clampLevel(z);
                 lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
                 auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
                 lua_pop(L, 1);

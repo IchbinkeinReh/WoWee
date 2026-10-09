@@ -2720,6 +2720,11 @@ wowee_add_test(test_blob_shadow
 wowee_add_test(test_selection_circle
     SOURCES test_selection_circle.cpp)
 
+# ── test_minimap_zoom ────────────────────────────────────────
+# The minimap's six zoom levels and their reach (rendering/minimap_zoom.hpp).
+wowee_add_test(test_minimap_zoom
+    SOURCES test_minimap_zoom.cpp)
+
 # ── test_client_weather ──────────────────────────────────────
 # The client's rain, snow and sand (MapWeather.cpp, rendering/client_weather.hpp):
 # density, rates, spawns, the ground cache and the lean with the player's movement.
