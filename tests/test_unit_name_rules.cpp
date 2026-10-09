@@ -164,3 +164,32 @@ TEST_CASE("name text height and the raid icon's fade", "[unit_names]") {
     CHECK(un::playerNamePrefix(0x8, "<AFK>", "<DND>", "<GM>") == "<GM>");
     CHECK(un::playerNamePrefix(0x8 | 0x8000, "<AFK>", "<DND>", "<GM>") == "<Dev>");
 }
+
+TEST_CASE("the line under a made unit's name (0x0061e830)", "[unit_names]") {
+    // A summon's SummonProperties Title, 0 for none; -1 or none falls back to
+    // the creature type: a beast's Pet, anything else's Minion.
+    CHECK(un::summonTitle(std::nullopt, un::kCreatureTypeBeast) == 1);
+    CHECK(un::summonTitle(std::nullopt, 3) == 3);
+    CHECK(un::summonTitle(-1, un::kCreatureTypeBeast) == 1);
+    CHECK(un::summonTitle(2, 3) == 2);
+    CHECK(un::summonTitle(0, 3) == 0);
+    CHECK(un::summonTitleText(1, "Thrall") == "Thrall's Pet");
+    CHECK(un::summonTitleText(4, "Thrall") == "Thrall's Totem");
+    CHECK(un::summonTitleText(0, "Thrall").empty());
+    CHECK(un::summonTitleText(99, "Thrall").empty());
+}
+
+TEST_CASE("the plate's threat flash and name colours", "[unit_names][nameplate]") {
+    CHECK(un::threatWarningOn(3, false, false));
+    CHECK_FALSE(un::threatWarningOn(0, true, true));
+    CHECK(un::threatWarningOn(1, true, false));
+    CHECK_FALSE(un::threatWarningOn(1, false, true));
+    CHECK(un::threatWarningOn(2, false, true));
+    CHECK(un::plateThreatColor(0) == 0u);
+    CHECK(un::plateThreatColor(1) == 0xffffff77u);
+    CHECK(un::plateThreatColor(2) == 0xffff9900u);
+    CHECK(un::plateThreatColor(3) == 0xffff0000u);
+    CHECK(un::plateNameColor(true, true) == 0xffff0000u);
+    CHECK(un::plateNameColor(false, true) == 0xffffff00u);
+    CHECK(un::plateNameColor(false, false) == 0xffffffffu);
+}

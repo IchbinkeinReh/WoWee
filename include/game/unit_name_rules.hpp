@@ -6,6 +6,8 @@
 /// read (0x007e6150, 0x00511xxx). Arithmetic only; the drawing is the HUD's.
 
 #include <cstdint>
+#include <cstdio>
+#include <optional>
 #include <string>
 
 namespace wowee::game::unit_names {
@@ -216,5 +218,73 @@ inline std::string playerNamePrefix(uint32_t playerFlags, const std::string& afk
     if (playerFlags & 0x8000) out += "<Dev>";
     return out;
 }
+
+/// 0x0061e830: the line under the name of a unit something made - "<%s's
+/// Pet>" and the like, the %s its owner (UNIT_FIELD_CHARMEDBY, else
+/// CREATEDBY; that unit's own owner where it has one). UNITNAME_SUMMON_TITLE1
+/// to 12, enUS GlobalStrings.
+inline constexpr const char* kSummonTitles[] = {
+    nullptr,          "%s's Pet",       "%s's Guardian", "%s's Minion",   "%s's Totem",
+    "%s's Companion", "%s's Runeblade", "%s's Construct", "%s's Opponent", "%s's Vehicle",
+    "%s's Mount",     "%s's Lightwell", "%s's Butler",
+};
+inline constexpr uint32_t kEffectSummon = 28;
+inline constexpr uint32_t kCreatureTypeBeast = 1;
+
+/// Which title: the SummonProperties Title (+0xc) of the creating spell's
+/// (UNIT_CREATED_BY_SPELL) first SUMMON effect's EffectMiscValueB, where
+/// there is such a row and its Title is not -1 - 0 meaning none; otherwise a
+/// beast's is Pet (1) and anything else's Minion (3).
+constexpr int summonTitle(std::optional<int32_t> propertiesTitle, uint32_t creatureType) {
+    if (propertiesTitle && *propertiesTitle != -1) return *propertiesTitle;
+    return creatureType == kCreatureTypeBeast ? 1 : 3;
+}
+
+/// The title's text for the owner, empty for none.
+inline std::string summonTitleText(int title, const std::string& owner) {
+    if (title <= 0 || title >= static_cast<int>(sizeof(kSummonTitles) / sizeof(kSummonTitles[0]))) return {};
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), kSummonTitles[title], owner.c_str());
+    return buf;
+}
+
+/// 0x00519df0: whether a plate shows its threat flash, by threatWarning
+/// (default 3): 0 never, 1 in a dungeon or raid map (Map.dbc InstanceType 1
+/// or 2), 2 in a party or raid, 3 always.
+constexpr bool threatWarningOn(int mode, bool inDungeon, bool inGroup) {
+    switch (mode) {
+        case 1: return inDungeon;
+        case 2: return inGroup;
+        case 3: return true;
+        default: return false;
+    }
+}
+
+/// 0x0098e9f0: the plate's UI-TargetingFrame-Flash, tinted by the player's
+/// threat status on the unit - 1 yellow, 2 orange, 3 red (0x00ad2d70 by the
+/// status plus one, the table GetThreatStatusColor reads, 0x00511fe0); none
+/// at 0 or off the list. ARGB.
+constexpr uint32_t plateThreatColor(int status) {
+    switch (status) {
+        case 1: return 0xffffff77u;
+        case 2: return 0xffff9900u;
+        case 3: return 0xffff0000u;
+        default: return 0;
+    }
+}
+
+/// The plate name's colour: red for 5 s after the unit is hurt (0x0098e5b0
+/// from 0x0073f330 and AddCombatLogEntry), else yellow under the pointer's
+/// glow (0x0098e910), else white (0x0098e980). ARGB.
+inline constexpr float kPlateHurtSeconds = 5.0f;
+constexpr uint32_t plateNameColor(bool hurt, bool glow) {
+    if (hurt) return 0xffff0000u;
+    return glow ? 0xffffff00u : 0xffffffffu;
+}
+
+/// FOREIGN_SERVER_LABEL (enUS GlobalStrings): 0x0072d4f0 ends another
+/// player's name with it when the name query gave a realm - one from another
+/// server in a battleground.
+inline constexpr const char* kForeignServerLabel = " (*)";
 
 }  // namespace wowee::game::unit_names

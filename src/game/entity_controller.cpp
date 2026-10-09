@@ -107,6 +107,7 @@ void EntityController::registerOpcodes(DispatchTable& table) {
 void EntityController::clearAll() {
     pendingUpdateObjectWork_.clear();
     playerNameCache.clear();
+    playerRealmCache_.clear();
     playerClassRaceCache_.clear();
     pendingNameQueries.clear();
     creatureInfoCache.clear();
@@ -2963,6 +2964,8 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
 
     if (data.isValid()) {
         playerNameCache[data.guid] = data.name;
+        if (data.realmName.empty()) playerRealmCache_.erase(data.guid);
+        else playerRealmCache_[data.guid] = data.realmName;
         // Cache class/race from name query for UnitClass/UnitRace fallback,
         // and the gender an NPC's $g switch chooses by.
         if (data.classId != 0 || data.race != 0) {

@@ -143,6 +143,9 @@ enum class UF : uint16_t {
     /// the client asks about (0x004f5f20), and a unit made but neither
     /// charmed nor summoned is a guardian to it (0x0071b600).
     UNIT_FIELD_CREATEDBY,
+    /// The spell that made the unit (0x0061e830 reads it for the line under
+    /// a pet's or minion's name). WotLK: 0x51.
+    UNIT_CREATED_BY_SPELL,
 
     // GameObject fields
     GAMEOBJECT_DISPLAYID,

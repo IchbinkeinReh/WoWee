@@ -1838,6 +1838,10 @@ public:
     const std::string& lookupName(uint64_t guid) const {
         return entityController_->lookupName(guid);
     }
+    /// The realm a name query gave for a player of another server, else empty.
+    const std::string& getCachedPlayerRealm(uint64_t guid) const {
+        return entityController_->getCachedPlayerRealm(guid);
+    }
 
     uint8_t getPlayerClass() const {
         const Character* ch = getActiveCharacter();
@@ -4055,6 +4059,8 @@ public:
         uint32_t effectAuraIds[3] = {0, 0, 0};
         /// Spell.dbc EffectMiscValue: an aura's or a summon's creature.
         uint32_t effectMiscValues[3] = {0, 0, 0};
+        /// Spell.dbc EffectMiscValueB: a summon's SummonProperties row.
+        uint32_t effectMiscValuesB[3] = {0, 0, 0};
         // Spell.dbc EffectImplicitTargetA - what the spell expects to be aimed
         // at. 21 means a friendly unit, which is how heals and buffs are told
         // apart from damage that shares the same effect and school.
