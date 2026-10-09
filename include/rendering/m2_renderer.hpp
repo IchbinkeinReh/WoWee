@@ -549,10 +549,6 @@ public:
     bool drawM2ParticleRuns(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                             float behindDistSq, uint32_t ownerIndex);
 
-    /**
-     * Render M2 ribbon emitters (spell trails / wing effects)
-     */
-    void renderM2Ribbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
     /// The client's ribbons, each emitter's strip oldest edge first (0x00980b70).
     void renderClientRibbons(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
 
@@ -966,10 +962,6 @@ private:
         return ribbonPipelines_[std::min<uint32_t>(m.blend, kRibbonBlends - 1) * kPipelineVariantCount + v];
     }
     void destroyRibbonPipelines();
-    // Two of the above, for the old ribbon path in m2_renderer_particles.cpp
-    // (no longer called): alpha and add, culled, tested, not written.
-    VkPipeline ribbonPipeline_ = VK_NULL_HANDLE;
-    VkPipeline ribbonAdditivePipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout ribbonPipelineLayout_ = VK_NULL_HANDLE;
     /// The per-frame set layout initialize() was given. recreatePipelines()
     /// runs long after that call and needs the same one.
@@ -1461,7 +1453,6 @@ private:
     glm::vec3 interpFBlockVec3(const pipeline::M2FBlock& fb, float lifeRatio);
     void emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt);
     void updateParticles(M2Instance& inst, float dt);
-    void updateRibbons(M2Instance& inst, const M2ModelGPU& gpu, float dt);
     /// The client's ribbons on an instance, as 0x00828a00 drives them each
     /// frame: the tracks, the bone's matrix, the update.
     void updateClientRibbons(M2Instance& inst, const M2ModelGPU& gpu, float dt);
