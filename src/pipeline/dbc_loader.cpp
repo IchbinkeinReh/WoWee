@@ -12,6 +12,11 @@ namespace wowee {
 namespace pipeline {
 
 namespace {
+
+// Every WDBC field is four bytes: a uint32, an int32, a float or a string
+// block offset. uint32 so record arithmetic stays in the header's own width.
+constexpr uint32_t kFieldBytes = sizeof(uint32_t);
+
 std::string trimAscii(std::string s) {
     size_t b = 0;
     while (b < s.size() && std::isspace(static_cast<unsigned char>(s[b]))) {
@@ -74,7 +79,7 @@ bool DBCFile::load(const std::vector<uint8_t>& dbcData) {
     // computation below - the resize would be tiny but the memcpy would
     // read TB of memory.
     if (recordCount > 10'000'000 || fieldCount > 1024 ||
-        recordSize > 1024 * 4 ||
+        recordSize > 1024 * kFieldBytes ||
         stringBlockSize > 256u * 1024 * 1024) {
         LOG_ERROR("DBC header rejected: recordCount=", recordCount,
                   " fieldCount=", fieldCount, " recordSize=", recordSize,
@@ -94,9 +99,9 @@ bool DBCFile::load(const std::vector<uint8_t>& dbcData) {
 
     // DBC fields are fixed-width uint32 (4 bytes each); record size must match.
     // Mismatches indicate a corrupted header or unsupported DBC variant.
-    if (recordSize != fieldCount * 4) {
+    if (recordSize != fieldCount * kFieldBytes) {
         LOG_WARNING("DBC record size mismatch: recordSize=", recordSize,
-                    " but fieldCount*4=", fieldCount * 4);
+                    " but fieldCount*4=", fieldCount * kFieldBytes);
     }
 
     LOG_DEBUG("Loading DBC: ", recordCount, " records, ",
@@ -129,7 +134,7 @@ bool DBCFile::load(const std::vector<uint8_t>& dbcData) {
 }
 
 void DBCFile::promoteLocalizedStrings() {
-    if (!loaded || recordCount == 0 || fieldCount < 9 || recordSize < fieldCount * 4) return;
+    if (!loaded || recordCount == 0 || fieldCount < 9 || recordSize < fieldCount * kFieldBytes) return;
 
     // Per column: every record zero, and every value a string offset (the
     // start of a string in the block) with at least one non-empty string.
@@ -140,7 +145,7 @@ void DBCFile::promoteLocalizedStrings() {
         const uint8_t* rec = recordData.data() + static_cast<size_t>(r) * recordSize;
         for (uint32_t f = 0; f < fieldCount; ++f) {
             uint32_t v;
-            std::memcpy(&v, rec + f * 4, 4);
+            std::memcpy(&v, rec + f * kFieldBytes, kFieldBytes);
             if (v == 0) continue;
             allZero[f] = false;
             if (!stringCol[f]) continue;
@@ -214,7 +219,7 @@ void DBCFile::promoteLocalizedStrings() {
             if (l != locale) continue;
             for (uint32_t r = 0; r < recordCount; ++r) {
                 uint8_t* rec = recordData.data() + static_cast<size_t>(r) * recordSize;
-                std::memcpy(rec + start * 4, rec + (start + l) * 4, 4);
+                std::memcpy(rec + start * kFieldBytes, rec + (start + l) * kFieldBytes, kFieldBytes);
             }
             ++promoted;
         }
@@ -243,7 +248,7 @@ uint32_t DBCFile::getUInt32(uint32_t recordIndex, uint32_t fieldIndex) const {
     }
 
     uint32_t value;
-    std::memcpy(&value, record + (fieldIndex * 4), sizeof(uint32_t));
+    std::memcpy(&value, record + fieldIndex * kFieldBytes, sizeof(uint32_t));
     return value;
 }
 
@@ -262,7 +267,7 @@ float DBCFile::getFloat(uint32_t recordIndex, uint32_t fieldIndex) const {
     }
 
     float value;
-    std::memcpy(&value, record + (fieldIndex * 4), sizeof(float));
+    std::memcpy(&value, record + fieldIndex * kFieldBytes, sizeof(float));
     return value;
 }
 
@@ -376,7 +381,7 @@ bool DBCFile::loadCSV(const std::vector<uint8_t>& csvData) {
         LOG_DEBUG("CSV DBC: removed field 0 from string columns (always numeric ID)");
     }
 
-    recordSize = fieldCount * 4;
+    recordSize = fieldCount * kFieldBytes;
 
     // --- Build string block with initial null byte ---
     stringBlock.clear();
@@ -481,7 +486,7 @@ bool DBCFile::loadCSV(const std::vector<uint8_t>& csvData) {
         uint8_t* dst = recordData.data() + static_cast<size_t>(i) * recordSize;
         for (uint32_t f = 0; f < fieldCount; ++f) {
             uint32_t val = rows[i].fields[f];
-            std::memcpy(dst + f * 4, &val, 4);
+            std::memcpy(dst + f * kFieldBytes, &val, kFieldBytes);
         }
     }
 
@@ -525,7 +530,7 @@ bool DBCFile::loadJSON(const std::vector<uint8_t>& jsonData) {
             return false;
         }
 
-        recordSize = fieldCount * 4;
+        recordSize = fieldCount * kFieldBytes;
         recordCount = static_cast<uint32_t>(records.size());
         if (recordCount > 5'000'000 ||
             static_cast<uint64_t>(recordCount) * recordSize > (256ull << 20)) {
@@ -546,8 +551,12 @@ bool DBCFile::loadJSON(const std::vector<uint8_t>& jsonData) {
             // hard load failure for the whole file. Empty record stays
             // zero-initialized from the resize() above.
             if (!row.is_array()) continue;
-            uint32_t* fields = reinterpret_cast<uint32_t*>(
-                recordData.data() + static_cast<size_t>(i) * recordSize);
+            // Written with memcpy: the record is bytes, and a uint32_t*
+            // over it would alias them.
+            uint8_t* record = recordData.data() + static_cast<size_t>(i) * recordSize;
+            const auto setField = [record](uint32_t col, const void* value) {
+                std::memcpy(record + col * kFieldBytes, value, kFieldBytes);
+            };
 
             uint32_t cols = std::min(fieldCount, static_cast<uint32_t>(row.size()));
             for (uint32_t col = 0; col < cols; col++) {
@@ -557,27 +566,26 @@ bool DBCFile::loadJSON(const std::vector<uint8_t>& jsonData) {
                     // Cap individual string at 4KB and total stringBlock at
                     // 64MB to prevent OOM from a malicious JSON DBC stuffing
                     // huge strings into every field.
-                    if (str.empty()) {
-                        fields[col] = 0;
-                    } else if (str.size() > 4096 ||
-                               stringBlock.size() + str.size() > 64ull * 1024 * 1024) {
-                        fields[col] = 0;
-                    } else {
-                        fields[col] = static_cast<uint32_t>(stringBlock.size());
+                    uint32_t offset = 0;  // empty, or over a cap: the empty string
+                    if (!str.empty() && str.size() <= 4096 &&
+                        stringBlock.size() + str.size() <= 64ull * 1024 * 1024) {
+                        offset = static_cast<uint32_t>(stringBlock.size());
                         stringBlock.insert(stringBlock.end(), str.begin(), str.end());
                         stringBlock.push_back(0);
                     }
+                    setField(col, &offset);
                 } else if (val.is_number_float()) {
                     float f = val.get<float>();
                     if (!std::isfinite(f)) f = 0.0f;
-                    std::memcpy(&fields[col], &f, 4);
+                    setField(col, &f);
                 } else if (val.is_number_integer()) {
                     // Range-check: nlohmann throws on out-of-range get<uint32_t>
                     // (negative or > UINT32_MAX). Catching at the field level
                     // keeps a single bad cell from killing the whole DBC load.
                     int64_t raw = val.get<int64_t>();
                     if (raw < 0 || raw > 0xFFFFFFFFll) raw = 0;
-                    fields[col] = static_cast<uint32_t>(raw);
+                    const uint32_t value = static_cast<uint32_t>(raw);
+                    setField(col, &value);
                 }
             }
         }
