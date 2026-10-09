@@ -27,8 +27,9 @@ namespace network {
  * Supports vanilla/classic raw XOR, CMaNGOS TBC HMAC-derived XOR, and WotLK RC4.
  *
  * Key Differences from Auth Server:
- * - Outgoing: 6-byte header (2 bytes size + 4 bytes opcode, big-endian)
- * - Incoming: 4-byte header (2 bytes size + 2 bytes opcode)
+ * - Outgoing: 6-byte header (2 bytes size big-endian + 4 bytes opcode little-endian)
+ * - Incoming: 4-byte header (2 bytes size big-endian + 2 bytes opcode little-endian)
+ *   (both layouts are spelled out in network/wire_format.hpp)
  * - Headers are encrypted after CMSG_AUTH_SESSION
  * - Packet bodies remain unencrypted
  * - Size field includes opcode bytes (payloadLen = size - 2)

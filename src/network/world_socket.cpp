@@ -2,6 +2,7 @@
 #include "core/env_flag.hpp"
 #include "network/packet.hpp"
 #include "network/net_platform.hpp"
+#include "network/wire_format.hpp"
 #include "game/opcode_table.hpp"
 #include "auth/crypto.hpp"
 #include "core/logger.hpp"
@@ -14,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <iterator>
 #include <chrono>
 #include <thread>
 
@@ -37,6 +39,11 @@ constexpr size_t kMaxRecvBytesPerUpdate = 512 * 1024;
 constexpr size_t kMaxQueuedPacketCallbacks = 4096;
 constexpr int kAsyncPumpSleepMs = 2;
 constexpr size_t kRecentPacketHistoryLimit = 96;
+// Parsed bytes left at the front of the receive buffer before they are moved
+// out, so a steady trickle does not memmove the buffer every update.
+constexpr size_t kCompactAfterReadBytes = 64 * 1024;
+// WotLK's RC4 header cipher throws away this much keystream before first use.
+constexpr size_t kRc4KeystreamDropBytes = 1024;
 constexpr auto kRecentPacketHistoryWindow = std::chrono::seconds(15);
 
 inline int parsedPacketsBudgetPerUpdate() {
@@ -369,35 +376,20 @@ void WorldSocket::send(const Packet& packet) {
                   " reason='", packetTraceReason_, "'");
     }
 
-    // WotLK 3.3.5 CMSG header (6 bytes total):
-    // - size (2 bytes, big-endian) = payloadLen + 4 (opcode is 4 bytes for CMSG)
-    // - opcode (4 bytes, little-endian)
-    // Note: Client-to-server uses 4-byte opcode, server-to-client uses 2-byte
-    uint16_t sizeField = payloadLen + 4;
+    // CMSG header: big-endian size (counting the 4-byte opcode), then the
+    // opcode widened to 4 bytes - the server sends only 2 (see wire_format.hpp).
+    const auto header = wire::encodeClientHeader(opcode, payloadLen);
 
     std::vector<uint8_t> sendData;
-    sendData.reserve(6 + payloadLen);
+    sendData.reserve(wire::kClientHeaderBytes + payloadLen);
+    sendData.insert(sendData.end(), header.begin(), header.end());
 
-    // Size (2 bytes, big-endian)
-    uint8_t size_hi = (sizeField >> 8) & 0xFF;
-    uint8_t size_lo = sizeField & 0xFF;
-    sendData.push_back(size_hi);
-    sendData.push_back(size_lo);
-
-    // Opcode (4 bytes, little-endian)
-    sendData.push_back(opcode & 0xFF);
-    sendData.push_back((opcode >> 8) & 0xFF);
-    sendData.push_back(0);  // High bytes are 0 for all WoW opcodes
-    sendData.push_back(0);
-
-    // Debug logging disabled - too spammy
-
-    // Encrypt header if encryption is enabled (all 6 bytes)
+    // Encrypt the header if encryption is enabled (all of it, opcode included)
     if (encryptionEnabled) {
         if (useVanillaCrypt) {
-            vanillaCrypt.encrypt(sendData.data(), 6);
+            vanillaCrypt.encrypt(sendData.data(), wire::kClientHeaderBytes);
         } else {
-            encryptCipher.process(sendData.data(), 6);
+            encryptCipher.process(sendData.data(), wire::kClientHeaderBytes);
         }
     }
 
@@ -660,7 +652,7 @@ void WorldSocket::pumpNetworkIO() {
 }
 
 void WorldSocket::tryParsePackets(size_t callbackRoom) {
-    // World server packets have 4-byte incoming header: size(2) + opcode(2)
+    // World server packets have a 4-byte header: size(2, BE) + opcode(2, LE)
     parseDeferred_ = false;
     int parsedThisTick = 0;
     size_t parseOffset = receiveReadOffset_;
@@ -684,28 +676,30 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
     // bound; the rest stays in the receive buffer for the next tick.
     const int maxParsedThisTick = static_cast<int>(
         std::min<size_t>(static_cast<size_t>(parsedPacketsBudgetPerUpdate()), callbackRoom));
-    while ((receiveBuffer.size() - parseOffset) >= 4 && parsedThisTick < maxParsedThisTick) {
-        uint8_t rawHeader[4] = {0, 0, 0, 0};
-        std::memcpy(rawHeader, receiveBuffer.data() + parseOffset, 4);
+    while ((receiveBuffer.size() - parseOffset) >= wire::kServerHeaderBytes &&
+           parsedThisTick < maxParsedThisTick) {
+        // The header as it came off the wire, kept for the desync logs below.
+        std::array<uint8_t, wire::kServerHeaderBytes> rawHeader{};
+        std::memcpy(rawHeader.data(), &receiveBuffer[parseOffset], rawHeader.size());
 
         // Decrypt header bytes in-place if encryption is enabled
         // Only decrypt bytes we haven't already decrypted
-        if (encryptionEnabled && localHeaderBytesDecrypted < 4) {
-            size_t toDecrypt = 4 - localHeaderBytesDecrypted;
+        if (encryptionEnabled && localHeaderBytesDecrypted < wire::kServerHeaderBytes) {
+            uint8_t* stillEncrypted = &receiveBuffer[parseOffset + localHeaderBytesDecrypted];
+            const size_t toDecrypt = wire::kServerHeaderBytes - localHeaderBytesDecrypted;
             if (useVanillaCrypt) {
-                vanillaCrypt.decrypt(receiveBuffer.data() + parseOffset + localHeaderBytesDecrypted, toDecrypt);
+                vanillaCrypt.decrypt(stillEncrypted, toDecrypt);
             } else {
-                decryptCipher.process(receiveBuffer.data() + parseOffset + localHeaderBytesDecrypted, toDecrypt);
+                decryptCipher.process(stillEncrypted, toDecrypt);
             }
-            localHeaderBytesDecrypted = 4;
+            localHeaderBytesDecrypted = wire::kServerHeaderBytes;
         }
 
-        // Parse header (now decrypted in-place).
-        // Size: 2 bytes big-endian. For world packets, this includes opcode bytes.
-        uint16_t size = (receiveBuffer[parseOffset + 0] << 8) | receiveBuffer[parseOffset + 1];
-        // Opcode: 2 bytes little-endian.
-        uint16_t opcode = receiveBuffer[parseOffset + 2] | (receiveBuffer[parseOffset + 3] << 8);
-        if (size < 2) {
+        // Parse header (now decrypted in-place). The size counts the opcode.
+        const wire::ServerHeader header = wire::decodeServerHeader(receiveBuffer, parseOffset);
+        const uint16_t size = header.size;
+        const uint16_t opcode = header.opcode;
+        if (size < wire::kServerOpcodeBytes) {
             LOG_ERROR("World packet framing desync: invalid size=", size,
                       " rawHdr=", std::hex,
                       static_cast<int>(rawHeader[0]), " ",
@@ -729,8 +723,9 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
             return;
         }
 
-        const uint16_t payloadLen = size - 2;
-        const size_t totalSize = 4 + payloadLen;
+        const uint16_t payloadLen = static_cast<uint16_t>(size - wire::kServerOpcodeBytes);
+        const size_t totalSize = wire::kServerHeaderBytes + payloadLen;
+        const size_t payloadStart = parseOffset + wire::kServerHeaderBytes;
 
         if (headerTracePacketsLeft > 0) {
             LOG_INFO("WS HDR TRACE raw=",
@@ -779,7 +774,7 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
         try {
             std::vector<uint8_t> packetData(payloadLen);
             if (payloadLen > 0) {
-                std::memcpy(packetData.data(), receiveBuffer.data() + parseOffset + 4, payloadLen);
+                std::memcpy(packetData.data(), &receiveBuffer[payloadStart], payloadLen);
             }
             // Queue packet; callbacks run after buffer state is finalized.
             parsedPackets->emplace_back(opcode, std::move(packetData));
@@ -802,7 +797,7 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
         if (receiveReadOffset_ >= receiveBuffer.size()) {
             receiveBuffer.clear();
             receiveReadOffset_ = 0;
-        } else if (receiveReadOffset_ >= 64 * 1024 || receiveReadOffset_ * 2 >= receiveBuffer.size()) {
+        } else if (receiveReadOffset_ >= kCompactAfterReadBytes || receiveReadOffset_ * 2 >= receiveBuffer.size()) {
             const size_t remaining = receiveBuffer.size() - receiveReadOffset_;
             std::memmove(receiveBuffer.data(), receiveBuffer.data() + receiveReadOffset_, remaining);
             receiveBuffer.resize(remaining);
@@ -822,7 +817,7 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
     const size_t buffered = (receiveBuffer.size() >= receiveReadOffset_)
         ? (receiveBuffer.size() - receiveReadOffset_)
         : 0;
-    if (parsedThisTick >= maxParsedThisTick && buffered >= 4) {
+    if (parsedThisTick >= maxParsedThisTick && buffered >= wire::kServerHeaderBytes) {
         parseDeferred_ = true;
         LOG_DEBUG("World socket parse budget reached (", parsedThisTick,
                  " packets); deferring remaining buffered data=", buffered, " bytes");
@@ -879,13 +874,13 @@ void WorldSocket::initEncryption(const std::vector<uint8_t>& sessionKey, uint32_
             0x38, 0xA7, 0x83, 0x15, 0xF8, 0x92, 0x25, 0x30,
             0x71, 0x98, 0x67, 0xB1, 0x8C, 0x04, 0xE2, 0xAA
         };
-        std::vector<uint8_t> seed(kCmangosTbcSeed, kCmangosTbcSeed + sizeof(kCmangosTbcSeed));
+        std::vector<uint8_t> seed(std::begin(kCmangosTbcSeed), std::end(kCmangosTbcSeed));
         std::vector<uint8_t> headerKey = auth::Crypto::hmacSHA1(seed, sessionKey);
         vanillaCrypt.init(headerKey);
     } else {
         // WotLK: HMAC-SHA1(hardcoded seed, sessionKey) -> RC4 key
-        std::vector<uint8_t> encryptKey(ENCRYPT_KEY, ENCRYPT_KEY + 16);
-        std::vector<uint8_t> decryptKey(DECRYPT_KEY, DECRYPT_KEY + 16);
+        std::vector<uint8_t> encryptKey(std::begin(ENCRYPT_KEY), std::end(ENCRYPT_KEY));
+        std::vector<uint8_t> decryptKey(std::begin(DECRYPT_KEY), std::end(DECRYPT_KEY));
 
         std::vector<uint8_t> encryptHash = auth::Crypto::hmacSHA1(encryptKey, sessionKey);
         std::vector<uint8_t> decryptHash = auth::Crypto::hmacSHA1(decryptKey, sessionKey);
@@ -896,8 +891,8 @@ void WorldSocket::initEncryption(const std::vector<uint8_t>& sessionKey, uint32_
         decryptCipher.init(decryptHash); // codeql[cpp/weak-cryptographic-algorithm]
 
         // Drop first 1024 bytes of keystream (WoW WotLK protocol requirement)
-        encryptCipher.drop(1024);
-        decryptCipher.drop(1024);
+        encryptCipher.drop(kRc4KeystreamDropBytes);
+        decryptCipher.drop(kRc4KeystreamDropBytes);
     }
 
     encryptionEnabled = true;

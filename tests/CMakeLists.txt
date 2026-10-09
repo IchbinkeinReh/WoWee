@@ -626,6 +626,11 @@ wowee_add_test(test_monster_move_facing
             ${CMAKE_SOURCE_DIR}/src/network/packet.cpp
             ${CMAKE_SOURCE_DIR}/src/game/spline_packet.cpp)
 
+# ── test_wire_format ─────────────────────────────────────────
+# World packet header layouts (network/wire_format.hpp). Header-only.
+wowee_add_test(test_wire_format
+    SOURCES test_wire_format.cpp)
+
 # ── test_packet ──────────────────────────────────────────────
 add_executable(test_packet
     test_packet.cpp
