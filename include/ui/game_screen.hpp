@@ -314,7 +314,9 @@ private:
     void renderMinimapChests(const MinimapFrame& frame, const EntityList& objects,
                              game::GameHandler& gameHandler);
 
-    void renderMinimapQuestGivers(const MinimapFrame& frame, const QuestStatusMap& statuses,
+    void renderMinimapObjectBlips(const MinimapFrame& frame, const EntityList& units,
+                                  const EntityList& players, const EntityList& gameObjects,
+                                  const QuestStatusMap& statuses,
                                   game::GameHandler& gameHandler);
     void renderMinimapGossipPois(const MinimapFrame& frame, game::GameHandler& gameHandler);
     void renderMinimapPings(const MinimapFrame& frame, game::GameHandler& gameHandler);

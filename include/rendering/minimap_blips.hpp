@@ -62,10 +62,70 @@ constexpr Cell partyRaidCell(int index) {
 /// The ObjectIcons cells 0x0057f7f0 sorts objects into (the list index is the
 /// cell, 0x00580380 draws lists 2 to 15 with cells 2 to 15).
 enum ObjectIcon : int {
-    kQuestAvailable = 9,       ///< the yellow !
-    kQuestReward = 10,         ///< the yellow ?
-    kQuestAvailableRep = 11,   ///< the blue !
+    kTrackedPlayerOtherTeam = 3,  ///< a tracked player of the other side
+    kTrackedPlayerSameTeam = 4,   ///< a tracked player of the player's side
+    kTrackedHostile = 5,          ///< a tracked creature, hostile
+    kTrackedNeutral = 6,          ///< unfriendly or neutral
+    kTrackedFriendly = 7,         ///< friendly or better
+    kTrackedResource = 8,         ///< a herb, a vein, treasure, a school of fish
+    kQuestAvailable = 9,          ///< the yellow !
+    kQuestReward = 10,            ///< the yellow ?
+    kQuestAvailableRep = 11,      ///< the blue !
+    kOwnMinion = 15,              ///< what the player charms or summoned
 };
+
+/// A tracked creature's cell by its reaction to the player, 0 hated to 7
+/// exalted: friendly and better 7, unfriendly and neutral 6, the rest 5
+/// (0x0057f7f0 on 0x007251c0).
+constexpr int trackedCreatureIcon(int reaction) {
+    return reaction >= 4 ? kTrackedFriendly : reaction > 1 ? kTrackedNeutral : kTrackedHostile;
+}
+
+/// The side a player race is on: 0 the Alliance, 1 the Horde, -1 unknown.
+constexpr int raceTeam(uint8_t race) {
+    switch (race) {
+        case 1: case 3: case 4: case 7: case 11: return 0;
+        case 2: case 5: case 6: case 8: case 10: return 1;
+        default: return -1;
+    }
+}
+
+/// Whether a creature type (from 1) is one PLAYER_TRACK_CREATURES has a bit
+/// for (0x006dca00).
+constexpr bool creatureTypeTracked(uint32_t creatureType, uint32_t trackCreatures) {
+    return creatureType >= 1 && creatureType <= 32 &&
+           ((trackCreatures >> (creatureType - 1)) & 1u) != 0;
+}
+
+/// UNIT_FIELD_BYTES_1's third byte, 0x4: never tracked. And
+/// UNIT_DYNAMIC_FLAGS 0x2: tracked whatever its type (0x006dca00).
+constexpr uint32_t kUnitUntrackable = 0x4;
+constexpr uint32_t kDynamicTrackUnit = 0x2;
+
+/// Whether a unit shows to the player's creature tracking (0x006dca00).
+constexpr bool unitTracked(uint32_t bytes1, uint32_t dynamicFlags, uint32_t creatureType,
+                           uint32_t trackCreatures) {
+    if (((bytes1 >> 16) & kUnitUntrackable) != 0) return false;
+    if ((dynamicFlags & kDynamicTrackUnit) != 0) return true;
+    return creatureTypeTracked(creatureType, trackCreatures);
+}
+
+/// The LockType bits a Lock.dbc row opens to skill: 1 << (Index - 1) for each
+/// of its eight slots of Type 2 (0x006dca90).
+constexpr uint32_t lockSkillMask(const uint32_t (&types)[8], const uint32_t (&indices)[8]) {
+    uint32_t mask = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (types[i] == 2 && indices[i] >= 1 && indices[i] <= 32) mask |= 1u << (indices[i] - 1);
+    }
+    return mask;
+}
+
+/// Which of a game object's data fields holds its lock, for the two types
+/// tracking finds things of: a chest (herbs and veins are chests too) and a
+/// fishing hole. -1 for the rest.
+constexpr int lockDataIndex(uint32_t gameObjectType) {
+    return gameObjectType == 3 ? 0 : gameObjectType == 25 ? 4 : -1;
+}
 
 /// The quest-giver status (DIALOG_STATUS_*) to its ObjectIcons cell, or -1
 /// for none. 0x0057f7f0: 10 is the ?, 8 the !, 7 the blue !; 2 and 4, the

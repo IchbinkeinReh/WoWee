@@ -104,3 +104,43 @@ TEST_CASE("rim arrow art lands where the corners' coordinates put it", "[minimap
         }
     }
 }
+
+TEST_CASE("tracked creatures by reaction", "[minimap_blips]") {
+    CHECK(mb::trackedCreatureIcon(0) == 5);
+    CHECK(mb::trackedCreatureIcon(1) == 5);
+    CHECK(mb::trackedCreatureIcon(2) == 6);
+    CHECK(mb::trackedCreatureIcon(3) == 6);
+    CHECK(mb::trackedCreatureIcon(4) == 7);
+    CHECK(mb::trackedCreatureIcon(7) == 7);
+}
+
+TEST_CASE("what creature tracking finds", "[minimap_blips]") {
+    constexpr uint32_t beasts = 1u << 0;     // Track Beasts
+    constexpr uint32_t humanoids = 1u << 6;  // Track Humanoids
+    CHECK(mb::unitTracked(0, 0, 1, beasts));
+    CHECK_FALSE(mb::unitTracked(0, 0, 7, beasts));
+    CHECK(mb::unitTracked(0, 0, 7, humanoids));
+    CHECK_FALSE(mb::unitTracked(0, 0, 0, 0xFFFFFFFFu));
+    // Marked by the server, whatever the tracking.
+    CHECK(mb::unitTracked(0, mb::kDynamicTrackUnit, 1, 0));
+    // Untrackable beats both.
+    CHECK_FALSE(mb::unitTracked(mb::kUnitUntrackable << 16, mb::kDynamicTrackUnit, 1, beasts));
+}
+
+TEST_CASE("a lock's skill types, and where the lock is", "[minimap_blips]") {
+    // Herbalism (LockType 2) in the first slot, a key item in the second.
+    const uint32_t types[8] = {2, 1, 0, 0, 0, 0, 0, 0};
+    const uint32_t indices[8] = {2, 1234, 0, 0, 0, 0, 0, 0};
+    CHECK(mb::lockSkillMask(types, indices) == (1u << 1));
+    CHECK(mb::lockDataIndex(3) == 0);
+    CHECK(mb::lockDataIndex(25) == 4);
+    CHECK(mb::lockDataIndex(2) == -1);
+}
+
+TEST_CASE("sides by race", "[minimap_blips]") {
+    CHECK(mb::raceTeam(1) == 0);
+    CHECK(mb::raceTeam(11) == 0);
+    CHECK(mb::raceTeam(2) == 1);
+    CHECK(mb::raceTeam(10) == 1);
+    CHECK(mb::raceTeam(0) == -1);
+}

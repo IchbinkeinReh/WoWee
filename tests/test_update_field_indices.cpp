@@ -64,6 +64,10 @@ TEST_CASE("the WotLK field indices are what the server sends", "[update-fields]"
         {"PLAYER_EXPLORED_ZONES_START", 1041},
         {"PLAYER_QUEST_LOG_START", 158},
         {"PLAYER_SKILL_INFO_START", 636},
+        // And the client's own reads, 0xda8 and 0xdac past UNIT_END
+        // (0x006dca00, 0x006dca90).
+        {"PLAYER_TRACK_CREATURES", 1022},
+        {"PLAYER_TRACK_RESOURCES", 1023},
     };
 
     const auto ours = declaredFields("wotlk");

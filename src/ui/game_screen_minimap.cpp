@@ -134,6 +134,31 @@ namespace {
         return art;
     }
 
+    /// The LockType bits a Lock.dbc row opens to skill
+    /// (minimap_blips::lockSkillMask), every row read once.
+    uint32_t lockSkillMask(wowee::pipeline::AssetManager* assets, uint32_t lockId) {
+        static std::unordered_map<uint32_t, uint32_t> masks;
+        static bool read = false;
+        if (!read && assets) {
+            read = true;
+            auto dbc = assets->loadDBC("Lock.dbc");
+            // Type[8] at columns 1-8, Index[8] at 9-16.
+            if (dbc && dbc->isLoaded() && dbc->getFieldCount() >= 17) {
+                for (uint32_t row = 0; row < dbc->getRecordCount(); ++row) {
+                    uint32_t types[8], indices[8];
+                    for (uint32_t i = 0; i < 8; ++i) {
+                        types[i] = dbc->getUInt32(row, 1 + i);
+                        indices[i] = dbc->getUInt32(row, 9 + i);
+                    }
+                    const uint32_t mask = wowee::rendering::minimap_blips::lockSkillMask(types, indices);
+                    if (mask != 0) masks[dbc->getUInt32(row, 0)] = mask;
+                }
+            }
+        }
+        const auto it = masks.find(lockId);
+        return it == masks.end() ? 0 : it->second;
+    }
+
     /// One cell of an atlas, upright and `size` pixels square about (sx, sy),
     /// in the white 0x00580380 and 0x0057ff70 draw them in.
     void drawAtlasBlip(ImDrawList* drawList, VkDescriptorSet texture, float sx, float sy,
@@ -857,38 +882,124 @@ void GameScreen::renderMinimapChests(const MinimapFrame& frame, const EntityList
 
 }
 
-// The ! and ? of a quest giver, as ObjectIcons cells (0x0057f7f0, drawn by
-// 0x00580380): the yellow ! for 8, the ? for 10 and the blue ! for 7. The
-// low-level 2 and 4 need the "Low Level Quests" tracking, which this client
-// does not offer, and nothing else a quest giver says has a blip.
-void GameScreen::renderMinimapQuestGivers(const MinimapFrame& frame, const QuestStatusMap& statuses,
-                                         game::GameHandler& gameHandler) {
+// The objects the client gives an ObjectIcons blip (0x0057f7f0, drawn by
+// 0x00580380 a cell at a time, 2 to 15, so the later cells lie on top):
+//
+//   - a unit the player charms or summoned, cell 15, whatever else it is;
+//   - a quest giver, by its status: the ! for 8, the ? for 10, the blue !
+//     for 7 (questGiverIcon) - a dead unit never;
+//   - what the player's tracking finds: a creature of a tracked type, or one
+//     the server marks, by its reaction (5 to 7), a player by side (3, 4);
+//     a chest or fishing hole whose lock tracking opens (8).
+//
+// Party and raid members are not among them: they are PartyRaidBlips.
+void GameScreen::renderMinimapObjectBlips(const MinimapFrame& frame, const EntityList& units,
+                                          const EntityList& players,
+                                          const EntityList& gameObjects,
+                                          const QuestStatusMap& statuses,
+                                          game::GameHandler& gameHandler) {
     const MinimapArt& art = minimapArt(services_.assetManager, services_.window);
     if (!art.objectIcons) return;
     const float size = minimap_blips::kBlipSize * frame.unitPixels();
-    for (const auto& [guid, status] : statuses) {
-        const int icon = minimap_blips::questGiverIcon(static_cast<uint8_t>(status),
-                                                       /*trackingLowLevel=*/false);
-        if (icon < 0) continue;
 
-        auto entity = gameHandler.getEntityManager().getEntity(guid);
-        if (!entity) continue;
+    const uint64_t selfGuid = gameHandler.getPlayerGuid();
+    const auto self = gameHandler.getEntityManager().getEntity(selfGuid);
+    const uint32_t trackCreatures =
+        self ? self->getField(game::fieldIndex(game::UF::PLAYER_TRACK_CREATURES)) : 0;
+    const uint32_t trackResources =
+        self ? self->getField(game::fieldIndex(game::UF::PLAYER_TRACK_RESOURCES)) : 0;
+    const int ownTeam = minimap_blips::raceTeam(gameHandler.getPlayerRace());
+    std::unordered_set<uint64_t> group;
+    for (const auto& member : gameHandler.getPartyData().members) group.insert(member.guid);
 
+    const auto guidField = [](const game::Entity& e, game::UF low) -> uint64_t {
+        const uint16_t idx = game::fieldIndex(low);
+        if (idx == 0xFFFF) return 0;
+        return static_cast<uint64_t>(e.getField(idx)) |
+               (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
+    };
+    const auto questIcon = [&](uint64_t guid) {
+        const auto it = statuses.find(guid);
+        return it == statuses.end()
+            ? -1 : minimap_blips::questGiverIcon(static_cast<uint8_t>(it->second),
+                                                 /*trackingLowLevel=*/false);
+    };
+
+    struct Blip {
+        int icon;
+        float sx, sy;
+        const std::string* name;
+    };
+    std::vector<Blip> blips;
+    const auto place = [&](const game::Entity& e, int icon, const std::string* name) {
         float sx = 0.0f, sy = 0.0f;
         if (!frame.projectBlip(core::coords::canonicalToRender(
-                glm::vec3(entity->getX(), entity->getY(), entity->getZ())), sx, sy)) {
-            continue;
+                glm::vec3(e.getX(), e.getY(), e.getZ())), sx, sy)) {
+            return;
         }
-        drawAtlasBlip(frame.drawList, art.objectIcons, sx, sy, size,
-                      minimap_blips::objectIconCell(icon));
+        blips.push_back({icon, sx, sy, name});
+    };
 
-        if (cursorNearBlip(sx, sy, size * 0.5f) &&
-            entity->getType() == game::ObjectType::UNIT) {
-            const std::string& npcName =
-                std::static_pointer_cast<game::Unit>(entity)->getName();
-            if (!npcName.empty()) ImGui::SetTooltip("%s", npcName.c_str());
+    const auto classifyUnit = [&](const std::shared_ptr<game::Entity>& entity) {
+        const uint64_t guid = entity->getGuid();
+        if (guid == selfGuid || group.count(guid)) return;
+        auto unit = std::static_pointer_cast<game::Unit>(entity);
+        int icon = -1;
+        if (guidField(*unit, game::UF::UNIT_FIELD_CHARMEDBY) == selfGuid ||
+            guidField(*unit, game::UF::UNIT_FIELD_SUMMONEDBY_LO) == selfGuid) {
+            icon = minimap_blips::kOwnMinion;
+        } else if (unit->getHealth() == 0) {
+            return;
+        } else if ((icon = questIcon(guid)) < 0) {
+            const bool isPlayer = entity->getType() == game::ObjectType::PLAYER;
+            // Every player race is humanoid.
+            const uint32_t creatureType = isPlayer ? 7u : gameHandler.getCreatureType(unit->getEntry());
+            const uint32_t bytes1 = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1));
+            if (!minimap_blips::unitTracked(bytes1, unit->getDynamicFlags(), creatureType,
+                                            trackCreatures)) {
+                return;
+            }
+            if (isPlayer) {
+                const uint32_t bytes0 = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
+                const int team = minimap_blips::raceTeam(static_cast<uint8_t>(bytes0 & 0xFF));
+                icon = team == ownTeam ? minimap_blips::kTrackedPlayerSameTeam
+                                       : minimap_blips::kTrackedPlayerOtherTeam;
+            } else {
+                // unitReactionToPlayer counts from 1, the client's from 0.
+                icon = minimap_blips::trackedCreatureIcon(gameHandler.unitReactionToPlayer(*unit) - 1);
+            }
+        }
+        place(*entity, icon, &unit->getName());
+    };
+    for (const auto& entity : units) classifyUnit(entity);
+    for (const auto& entity : players) classifyUnit(entity);
+
+    for (const auto& entity : gameObjects) {
+        int icon = questIcon(entity->getGuid());
+        const auto* info = gameHandler.getCachedGameObjectInfo(
+            std::static_pointer_cast<game::GameObject>(entity)->getEntry());
+        if (icon < 0 && trackResources != 0 && info && info->hasData) {
+            const int lockField = minimap_blips::lockDataIndex(info->type);
+            if (lockField >= 0 &&
+                (lockSkillMask(services_.assetManager, info->data[lockField]) & trackResources) != 0) {
+                icon = minimap_blips::kTrackedResource;
+            }
+        }
+        if (icon < 0) continue;
+        place(*entity, icon, info ? &info->name : nullptr);
+    }
+
+    std::stable_sort(blips.begin(), blips.end(),
+                     [](const Blip& a, const Blip& b) { return a.icon < b.icon; });
+    const char* tooltip = nullptr;
+    for (const Blip& b : blips) {
+        drawAtlasBlip(frame.drawList, art.objectIcons, b.sx, b.sy, size,
+                      minimap_blips::objectIconCell(b.icon));
+        if (b.name && !b.name->empty() && cursorNearBlip(b.sx, b.sy, size * 0.5f)) {
+            tooltip = b.name->c_str();
         }
     }
+    if (tooltip) ImGui::SetTooltip("%s", tooltip);
 }
 
 // The points a gossip window has pointed at - quest and service targets.
@@ -1563,10 +1674,13 @@ void GameScreen::renderMinimapMarkers(game::GameHandler& gameHandler) {
     renderMinimapObjectDots(frame, minimapGameObjects, minimapQuestGoEntries, gameHandler);
     renderMinimapChests(frame, minimapGameObjects, gameHandler);
 
-    renderMinimapQuestGivers(frame, statuses, gameHandler);
     renderMinimapGossipPois(frame, gameHandler);
     renderMinimapPings(frame, gameHandler);
+    // The group's blips go down before the objects' (0x00581e80 calls
+    // 0x0057ff70 first).
     renderMinimapPartyDots(frame, gameHandler);
+    renderMinimapObjectBlips(frame, minimapUnits, minimapPlayers, minimapGameObjects,
+                             statuses, gameHandler);
     renderMinimapBattlegroundPositions(frame, gameHandler);
     renderMinimapCorpseMarker(frame, gameHandler);
     renderMinimapPlayerArrow(frame);

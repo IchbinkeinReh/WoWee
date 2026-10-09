@@ -94,6 +94,12 @@ enum class UF : uint16_t {
     PLAYER_RANGED_CRIT_PERCENTAGE,   // Ranged crit chance %
     PLAYER_SPELL_CRIT_PERCENTAGE1,   // Spell crit chance % (first school; 7 consecutive float fields)
     PLAYER_FIELD_COMBAT_RATING_1,    // First of 25 int32 combat rating slots (CR_* indices)
+    // What the player's tracking finds, as bit masks: creature types from
+    // 1, and LockType ids from 1 (herbs, minerals, treasure, fish). The
+    // minimap blips what they match (0x006dca00, 0x006dca90 read them at
+    // 0xda8 and 0xdac past UNIT_END, which is 1022 and 1023). WotLK only.
+    PLAYER_TRACK_CREATURES,
+    PLAYER_TRACK_RESOURCES,
     // Expertise, in expertise *points* rather than percent - the character
     // sheet prints the points and works the percent out at a quarter of one
     // each. Ints, not floats, unlike the percentages above. WotLK only here:
