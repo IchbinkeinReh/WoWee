@@ -56,6 +56,7 @@ public:
     /// client cannot composite an NPC's armour, and does not have to.
     ///
     /// After loadCharacter, because it overrides the slot that one fills.
+    /// False where it was not put on (no file, or an HD model it does not fit).
     bool setBakedSkin(const std::string& bakePath);
 
     /// skins are (M2 texture type, path) pairs - a creature's model declares
@@ -67,7 +68,9 @@ public:
 
     /// A unit's worn items, as the world draws it: armour, the helmet's
     /// model and masks (0x004ef0d0), shoulders and the weapons in hand.
-    bool applyEquipment(const std::vector<game::EquipmentItem>& equipment);
+    /// paintArmour false is a baked component (+0x3c & 1): the items set
+    /// geosets, models and the cape, but no layers on the skin (0x004f2640).
+    bool applyEquipment(const std::vector<game::EquipmentItem>& equipment, bool paintArmour = true);
     /// The character-select model (0x004e0fd0): SMSG_CHAR_ENUM's 23 slots,
     /// by slot, and the character's flags. No head item.
     bool applyCharacterSelectEquipment(const std::vector<game::EquipmentItem>& slots, uint32_t characterFlags);
@@ -141,9 +144,10 @@ private:
     /// attachment 26 (0x004ef250, 0x004ef3b0).
     void attachQuiver(const std::vector<uint32_t>& displays);
     /// Armour, shoulders and - with `headDisplay` - the helmet, then the
-    /// held weapons and the quiver.
+    /// held weapons and the quiver. paintArmour as applyEquipment's.
     bool dress(const std::vector<game::EquipmentItem>& worn, uint32_t headDisplay,
-               const std::vector<core::PreviewWeapon>& held, const std::vector<uint32_t>& quivers = {});
+               const std::vector<core::PreviewWeapon>& held, const std::vector<uint32_t>& quivers = {},
+               bool paintArmour = true);
     // Put the weapon's enchant glint on it (char enum reports the ItemVisual id directly).
     void attachWeaponEnchantVisual(uint32_t attachmentId, uint32_t itemVisualId);
     // Load the race's glue scene (Stormwind for humans, Orgrimmar for orcs, ...) as a backdrop.

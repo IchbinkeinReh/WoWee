@@ -702,7 +702,7 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
     return true;
 }
 
-bool CharacterPreview::applyEquipment(const std::vector<game::EquipmentItem>& equipment) {
+bool CharacterPreview::applyEquipment(const std::vector<game::EquipmentItem>& equipment, bool paintArmour) {
     // As the world has the unit: the first main-hand kind in the right hand,
     // the first off-hand kind in the left - a shield at the shield point.
     std::vector<game::EquipmentItem> worn;
@@ -732,7 +732,7 @@ bool CharacterPreview::applyEquipment(const std::vector<game::EquipmentItem>& eq
             default: worn.push_back(it); break;
         }
     }
-    return dress(worn, head, held);
+    return dress(worn, head, held, {}, paintArmour);
 }
 
 namespace {
@@ -788,7 +788,8 @@ bool CharacterPreview::applyStartOutfit() {
 }
 
 bool CharacterPreview::dress(const std::vector<game::EquipmentItem>& equipment, uint32_t headDisplay,
-                             const std::vector<core::PreviewWeapon>& held, const std::vector<uint32_t>& quivers) {
+                             const std::vector<core::PreviewWeapon>& held, const std::vector<uint32_t>& quivers,
+                             bool paintArmour) {
     if (!modelLoaded_ || instanceId_ == 0 || !charRenderer_ || !assetManager_ || !assetManager_->isInitialized()) {
         return false;
     }
@@ -820,7 +821,8 @@ bool CharacterPreview::dress(const std::vector<game::EquipmentItem>& equipment, 
                                                        std::to_string(shoulderModel++));
                           });
 
-    charRenderer_->clearTextureSlotOverride(instanceId_, static_cast<uint16_t>(skinTextureSlotIndex_));
+    // A baked skin stays: the component paints nothing over it.
+    if (paintArmour) charRenderer_->clearTextureSlotOverride(instanceId_, static_cast<uint16_t>(skinTextureSlotIndex_));
     charRenderer_->setGroupTextureOverride(instanceId_, 15, nullptr);
 
     auto displayInfoDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
@@ -869,10 +871,11 @@ bool CharacterPreview::dress(const std::vector<game::EquipmentItem>& equipment, 
 
 
     // The character component's layers (0x004f2880), with a guild
-    // tabard's emblem from the guild's design (0x004e3cd0).
+    // tabard's emblem from the guild's design (0x004e3cd0); none on a baked
+    // component (0x004f2640 tests +0x3c & 1).
     std::vector<core::ComponentItem> componentItems;
     for (const auto& it : equipment) {
-        if (it.displayModel == 0) continue;
+        if (it.displayModel == 0 || !paintArmour) continue;
         componentItems.push_back({core::componentItemForInventoryType(it.inventoryType), it.displayModel});
     }
     const std::vector<std::pair<int, std::string>> regionLayers = core::characterComponentLayers(

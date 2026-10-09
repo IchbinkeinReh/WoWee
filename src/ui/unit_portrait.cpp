@@ -170,11 +170,12 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
             // only where there is something to apply - an empty list is
             // "nothing known yet", and dressing a model in it strips it.
             preview_->setGuildEmblem(pendingEmblem_);
-            if (!equipment.empty()) preview_->applyEquipment(equipment);
-            // After the equipment, because both write the skin slot and the
-            // bake is the more complete answer: it already has the armour on
-            // it, which is the half applyEquipment cannot composite for an NPC.
-            if (!pendingBake_.empty()) preview_->setBakedSkin(pendingBake_);
+            // An NPC's bake makes the component a baked one (0x00598xxx sets
+            // +0x3c bit 1 with Textures\BakedNpcTextures\): its items then
+            // set geosets, models and the cape, and paint no layers on the
+            // skin (0x004f2640); the bake already wears them.
+            const bool baked = !pendingBake_.empty() && preview_->setBakedSkin(pendingBake_);
+            if (!equipment.empty()) preview_->applyEquipment(equipment, !baked);
             if (framing_ == Framing::Face) preview_->setPortraitFraming();
             else                           preview_->resetView();
         }
