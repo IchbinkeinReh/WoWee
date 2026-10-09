@@ -1933,18 +1933,26 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 if (weightIdx < model.textureWeightTracks.size()) bgpu.weightTrackIndex = weightIdx;
 
                 // A track moves if a sequence has more than one key, two
-                // sequences hold keys (each its own value), or it runs on a
-                // global clock.
+                // sequences hold keys (each its own value), it runs on a
+                // global clock - or some sequences hold a key and others none,
+                // since an empty one is the default (1) rather than the key.
+                // Dalaran's fountain is that: its water, basin and crystals
+                // are keyed to 0 in sequence 149 alone and so visible in
+                // Stand, its Tirion statue keyed to 0 in Stand and visible in
+                // 149. Taken as still, each batch got the one key there was,
+                // 0 for nearly all of it, and the fountain drew as nothing but
+                // its particles.
                 auto animates = [](const std::vector<pipeline::M2AnimationTrack>& tracks, uint16_t idx) {
                     if (idx >= tracks.size()) return false;
                     const auto& t = tracks[idx];
                     if (t.globalSequence >= 0) return true;
                     int keyed = 0;
+                    int empty = 0;
                     for (const auto& seq : t.sequences) {
                         if (seq.timestamps.size() > 1) return true;
-                        if (!seq.timestamps.empty()) ++keyed;
+                        if (!seq.timestamps.empty()) ++keyed; else ++empty;
                     }
-                    return keyed > 1;
+                    return keyed > 1 || (keyed > 0 && empty > 0);
                 };
                 bgpu.colorAnimated = animates(model.colorAlphaTracks, bgpu.colorTrackIndex) ||
                                      animates(model.colorRGBTracks, bgpu.colorTrackIndex) ||
