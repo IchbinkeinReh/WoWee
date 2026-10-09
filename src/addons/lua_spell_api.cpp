@@ -6,6 +6,7 @@
 #include "addons/lua_engine.hpp"
 #include "core/logger.hpp"
 #include <set>
+#include <unordered_map>
 
 namespace wowee::addons {
 
@@ -572,6 +573,42 @@ static int lua_GetNumSpellTabs(lua_State* L) {
     return 1;
 }
 
+// The book's second numbering: one slot per spell at its highest rank, which
+// is what it shows with ShowAllSpellRanks off (SpellBook_GetTabInfo takes
+// GetSpellTabInfo's last pair, SpellBook_GetSpellID maps back through
+// GetKnownSlotFromHighestRankSlot). For each tab, the indices into its list
+// that survive: of the spells sharing a name whose rank carries a number
+// ("Rank 5"), the highest; every spell without one. Both answered the whole
+// tab, so the book showed every rank whatever the box said.
+static std::vector<size_t> highestRankIndices(const game::GameHandler& gh,
+                                              const std::vector<uint32_t>& spellIds) {
+    const auto rankNumber = [&](uint32_t id) {
+        int n = 0;
+        bool any = false;
+        for (char c : gh.getSpellRank(id)) {
+            if (c >= '0' && c <= '9') { n = n * 10 + (c - '0'); any = true; }
+            else if (any) break;
+        }
+        return any ? n : -1;
+    };
+    std::unordered_map<std::string, size_t> best;  // name -> index of its highest rank
+    for (size_t i = 0; i < spellIds.size(); ++i) {
+        const int r = rankNumber(spellIds[i]);
+        if (r < 0) continue;
+        const std::string& name = gh.getSpellName(spellIds[i]);
+        auto [it, inserted] = best.emplace(name, i);
+        if (!inserted && r > rankNumber(spellIds[it->second])) it->second = i;
+    }
+    std::vector<size_t> out;
+    out.reserve(spellIds.size());
+    for (size_t i = 0; i < spellIds.size(); ++i) {
+        if (rankNumber(spellIds[i]) < 0) { out.push_back(i); continue; }
+        auto it = best.find(gh.getSpellName(spellIds[i]));
+        if (it != best.end() && it->second == i) out.push_back(i);
+    }
+    return out;
+}
+
 // GetSpellTabInfo(tabIndex) → name, texture, offset, numSpells,
 //                             highestRankOffset, highestRankNumSpells
 // tabIndex is 1-based; offset is 1-based global spell book slot
@@ -618,8 +655,11 @@ static int lua_GetSpellTabInfo(lua_State* L) {
     }
     // Compute offset: sum of spells in all preceding tabs (1-based)
     int offset = 0;
-    for (int i = 0; i < tabIdx - 1; ++i)
+    int highestOffset = 0;
+    for (int i = 0; i < tabIdx - 1; ++i) {
         offset += static_cast<int>(tabs[i].spellIds.size());
+        highestOffset += static_cast<int>(highestRankIndices(*gh, tabs[i].spellIds).size());
+    }
     const auto& tab = tabs[tabIdx - 1];
     lua_pushstring(L, tab.name.c_str());           // name
     lua_pushstring(L, tab.texture.c_str());        // texture
@@ -628,10 +668,10 @@ static int lua_GetSpellTabInfo(lua_State* L) {
     // The highest-rank pair, which is what FrameXML actually reads: with
     // ShowAllSpellRanks off - the default - SpellBook_GetTabInfo throws away
     // the first offset and count and keeps these. Returning four values left
-    // numSpells nil and the page count divided by nothing. This client does
-    // not track ranks separately, so the whole tab is the highest rank.
-    lua_pushnumber(L, offset);                     // highestRankOffset
-    lua_pushnumber(L, tab.spellIds.size());        // highestRankNumSpells
+    // numSpells nil and the page count divided by nothing. See
+    // highestRankIndices for the numbering.
+    lua_pushnumber(L, highestOffset);              // highestRankOffset
+    lua_pushnumber(L, highestRankIndices(*gh, tab.spellIds).size());  // highestRankNumSpells
     return 6;
 }
 
@@ -701,7 +741,8 @@ static int lua_GetSpellName(lua_State* L) {
     if (id == 0) { return luaReturnNil(L); }
     const std::string& name = gh->getSpellName(id);
     lua_pushstring(L, name.empty() ? "Unknown" : name.c_str());
-    lua_pushstring(L, "");
+    // Its Spell.dbc rank ("Rank 5"), which the book prints under the name.
+    lua_pushstring(L, gh->getSpellRank(id).c_str());
     return 2;
 }
 
@@ -756,10 +797,25 @@ static int lua_GetSpellAutocast(lua_State* L) {
     lua_pushboolean(L, 0);
     return 2;
 }
-/// GetKnownSlotFromHighestRankSlot(slot) → the slot actually known. The book
-/// shows the highest rank and this maps back; with one entry per spell here
-/// the two are the same slot.
+/// GetKnownSlotFromHighestRankSlot(slot) → the slot actually known: a slot
+/// of the highest-rank numbering (highestRankIndices) back to the book's.
 static int lua_GetKnownSlotFromHighestRankSlot(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
+    if (!gh || slot < 1) {
+        lua_pushnumber(L, slot);
+        return 1;
+    }
+    int bookOffset = 0;
+    for (const auto& tab : gh->getSpellBookTabs()) {
+        const auto kept = highestRankIndices(*gh, tab.spellIds);
+        if (slot <= static_cast<int>(kept.size())) {
+            lua_pushnumber(L, bookOffset + static_cast<int>(kept[slot - 1]) + 1);
+            return 1;
+        }
+        slot -= static_cast<int>(kept.size());
+        bookOffset += static_cast<int>(tab.spellIds.size());
+    }
     lua_pushnumber(L, luaL_optnumber(L, 1, 0));
     return 1;
 }
