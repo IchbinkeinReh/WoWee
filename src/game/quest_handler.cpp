@@ -11,6 +11,7 @@
 #include "game/quest_text.hpp"
 #include "game/packet_parsers.hpp"
 #include "network/world_socket.hpp"
+#include "network/wire_format.hpp"
 #include "rendering/renderer.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
@@ -18,6 +19,8 @@
 #include "core/application.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
+#include <bit>
+#include <cstring>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -440,11 +443,42 @@ struct QuestQueryObjectives {
     bool valid = false;
 };
 
-static uint32_t readU32At(const std::vector<uint8_t>& d, size_t pos) {
-    return static_cast<uint32_t>(d[pos])
-         | (static_cast<uint32_t>(d[pos + 1]) << 8)
-         | (static_cast<uint32_t>(d[pos + 2]) << 16)
-         | (static_cast<uint32_t>(d[pos + 3]) << 24);
+// The objective records as SMSG_QUEST_QUERY_RESPONSE lays them out, every
+// field a little-endian 32-bit word - so no padding, and a memcpy reads them
+// on the little-endian hosts this builds for.
+static_assert(std::endian::native == std::endian::little);
+
+/// Wrath: one of the four creature/object records.
+struct WotlkKillObjectiveRecord {
+    uint32_t npcOrGoId;      ///< high bit set: a game object
+    uint32_t required;
+    uint32_t itemDrop;       ///< ItemDrop + its count: not inventory objectives
+    uint32_t itemDropCount;
+};
+static_assert(sizeof(WotlkKillObjectiveRecord) == 16);
+
+/// Wrath: one of the six required-item records, after the four above.
+struct WotlkItemObjectiveRecord {
+    uint32_t itemId;
+    uint32_t required;
+};
+static_assert(sizeof(WotlkItemObjectiveRecord) == 8);
+
+/// Classic/TBC: a creature/object and a required item, interleaved.
+struct ClassicObjectiveRecord {
+    uint32_t npcOrGoId;
+    uint32_t killsRequired;
+    uint32_t itemId;
+    uint32_t itemsRequired;
+};
+static_assert(sizeof(ClassicObjectiveRecord) == 16);
+
+/// The record at `pos`; the caller has checked that it fits.
+template <class Record>
+static Record objectiveRecordAt(const std::vector<uint8_t>& data, size_t pos) {
+    Record record;
+    std::memcpy(&record, &data[pos], sizeof(record));
+    return record;
 }
 
 static int32_t decodeQuestNpcOrGo(uint32_t raw) {
@@ -475,17 +509,20 @@ static QuestQueryObjectives tryParseQuestObjectivesAt(const std::vector<uint8_t>
         // Wrath: four {npc/go, count, sourceItem, sourceCount} records,
         // followed by six {requiredItem, count} records.
         for (int i = 0; i < 4; ++i) {
-            if (pos + 16 > data.size()) return out;
-            out.kills[i].npcOrGoId = decodeQuestNpcOrGo(readU32At(data, pos)); pos += 4;
-            out.kills[i].required  = readU32At(data, pos);                     pos += 4;
-            pos += 8; // ItemDrop + source count (not inventory objectives)
+            if (pos + sizeof(WotlkKillObjectiveRecord) > data.size()) return out;
+            const auto kill = objectiveRecordAt<WotlkKillObjectiveRecord>(data, pos);
+            pos += sizeof(kill);
+            out.kills[i].npcOrGoId = decodeQuestNpcOrGo(kill.npcOrGoId);
+            out.kills[i].required  = kill.required;
             if (!plausibleQuestObjective(out.kills[i].npcOrGoId, out.kills[i].required))
                 return {};
         }
         for (int i = 0; i < 6; ++i) {
-            if (pos + 8 > data.size()) return out;
-            out.items[i].itemId   = readU32At(data, pos); pos += 4;
-            out.items[i].required = readU32At(data, pos); pos += 4;
+            if (pos + sizeof(WotlkItemObjectiveRecord) > data.size()) return out;
+            const auto item = objectiveRecordAt<WotlkItemObjectiveRecord>(data, pos);
+            pos += sizeof(item);
+            out.items[i].itemId   = item.itemId;
+            out.items[i].required = item.required;
             if (!plausibleQuestObjective(static_cast<int32_t>(out.items[i].itemId),
                                          out.items[i].required))
                 return {};
@@ -493,11 +530,13 @@ static QuestQueryObjectives tryParseQuestObjectivesAt(const std::vector<uint8_t>
     } else {
         // Classic/TBC: four interleaved {npc/go, count, requiredItem, count} records.
         for (int i = 0; i < 4; ++i) {
-            if (pos + 16 > data.size()) return out;
-            out.kills[i].npcOrGoId = decodeQuestNpcOrGo(readU32At(data, pos)); pos += 4;
-            out.kills[i].required  = readU32At(data, pos);                     pos += 4;
-            out.items[i].itemId    = readU32At(data, pos);                     pos += 4;
-            out.items[i].required  = readU32At(data, pos);                     pos += 4;
+            if (pos + sizeof(ClassicObjectiveRecord) > data.size()) return out;
+            const auto record = objectiveRecordAt<ClassicObjectiveRecord>(data, pos);
+            pos += sizeof(record);
+            out.kills[i].npcOrGoId = decodeQuestNpcOrGo(record.npcOrGoId);
+            out.kills[i].required  = record.killsRequired;
+            out.items[i].itemId    = record.itemId;
+            out.items[i].required  = record.itemsRequired;
             if (!plausibleQuestObjective(out.kills[i].npcOrGoId, out.kills[i].required) ||
                 !plausibleQuestObjective(static_cast<int32_t>(out.items[i].itemId),
                                          out.items[i].required))
@@ -1103,9 +1142,10 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
 
         // questLevel is the third field (after questId + questMethod) in every
         // expansion's SMSG_QUEST_QUERY_RESPONSE; -1 = player-scaling (WotLK)
+        constexpr size_t kQuestLevelOffset = 8;
         int32_t questLevel = 0;
-        if (packet.getData().size() >= 12) {
-            questLevel = static_cast<int32_t>(readU32At(packet.getData(), 8));
+        if (packet.getData().size() >= kQuestLevelOffset + 4) {
+            questLevel = static_cast<int32_t>(network::wire::loadLE32(packet.getData(), kQuestLevelOffset));
             if (questLevel < -1 || questLevel > 255) questLevel = 0; // sanity: wrong layout
         }
 
@@ -1116,7 +1156,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
         {
             const size_t zosOffset = (questLogStride >= 5) ? 16 : 12;
             if (packet.getData().size() >= zosOffset + 4) {
-                zoneOrSort = static_cast<int32_t>(readU32At(packet.getData(), zosOffset));
+                zoneOrSort = static_cast<int32_t>(network::wire::loadLE32(packet.getData(), zosOffset));
                 if (zoneOrSort < -100000 || zoneOrSort > 100000) zoneOrSort = 0; // sanity
             }
         }

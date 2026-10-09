@@ -3,6 +3,7 @@
 #include "game/opcodes.hpp"
 #include "game/game_utils.hpp"
 #include "game/character.hpp"
+#include "network/wire_format.hpp"
 #include "auth/crypto.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
@@ -1367,6 +1368,7 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     //   TBC      (cmangos-tbc):            money=abs11, pairs at abs19, choice abs27
     //   WotLK    (AzerothCore GossipDef):  money=abs13, pairs at abs26, choice abs34
     const size_t base = 8;
+    constexpr size_t kFieldBytes = 4;
     size_t moneyField, rewardPairsField, choicePairsField;
     // The quest's start item. Counted from the same base, at abs19 for WotLK:
     // money(13), maxLevel(14), rewSpell(15), rewSpellCast(16), honorAddition(17),
@@ -1405,24 +1407,22 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
         moneyField = 8;  rewardPairsField = 13; choicePairsField = 21;
     }
     const size_t lastField = choicePairsField + 6 * 2; // exclusive end of choice pairs
-    if (data.size() < base + lastField * 4u) return {};
+    if (data.size() < base + lastField * kFieldBytes) return {};
 
-    auto readU32At = [&data](size_t pos) -> uint32_t {
-        return static_cast<uint32_t>(data[pos])
-             | (static_cast<uint32_t>(data[pos + 1]) << 8)
-             | (static_cast<uint32_t>(data[pos + 2]) << 16)
-             | (static_cast<uint32_t>(data[pos + 3]) << 24);
+    // Every field is one little-endian 32-bit word, numbered from `base`.
+    auto fieldAt = [&data, base](size_t fieldIndex) -> uint32_t {
+        return network::wire::loadLE32(data, base + fieldIndex * kFieldBytes);
     };
 
     QuestQueryRewardsData out;
-    out.rewardMoney = static_cast<int32_t>(readU32At(base + moneyField * 4u));
+    out.rewardMoney = static_cast<int32_t>(fieldAt(moneyField));
     for (size_t i = 0; i < 4; ++i) {
-        out.itemId[i]    = readU32At(base + (rewardPairsField + i * 2) * 4u);
-        out.itemCount[i] = readU32At(base + (rewardPairsField + i * 2 + 1) * 4u);
+        out.itemId[i]    = fieldAt(rewardPairsField + i * 2);
+        out.itemCount[i] = fieldAt(rewardPairsField + i * 2 + 1);
     }
     for (size_t i = 0; i < 6; ++i) {
-        out.choiceItemId[i]    = readU32At(base + (choicePairsField + i * 2) * 4u);
-        out.choiceItemCount[i] = readU32At(base + (choicePairsField + i * 2 + 1) * 4u);
+        out.choiceItemId[i]    = fieldAt(choicePairsField + i * 2);
+        out.choiceItemCount[i] = fieldAt(choicePairsField + i * 2 + 1);
     }
     // Plausibility gate: a layout mismatch lands in string data or floats and
     // produces absurd ids/counts - better to keep no reward data than garbage.
@@ -1431,7 +1431,7 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     for (size_t i = 0; i < 6; ++i)
         if (out.choiceItemId[i] > 0x00FFFFFFu || out.choiceItemCount[i] > 0xFFFFu) return {};
     if (rewardSpellField) {
-        const uint32_t spell = readU32At(base + rewardSpellField * 4u);
+        const uint32_t spell = fieldAt(rewardSpellField);
         // The same plausibility gate the items get: a layout that has slipped
         // lands in float or string data and answers something enormous.
         if (spell <= 0x000FFFFFu) out.rewardSpellId = spell;
@@ -1439,7 +1439,7 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     if (xpIdField) {
         // QuestXP.dbc has ten difficulty columns (indices 0..9), so a valid index
         // is small; a slipped layout lands on an id or count and is far larger.
-        const uint32_t xp = readU32At(base + xpIdField * 4u);
+        const uint32_t xp = fieldAt(xpIdField);
         if (xp <= 9u) out.xpId = xp;
     }
     // Honor, talents and arena points are direct amounts. A slipped layout lands
@@ -1447,35 +1447,35 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     // a generous ceiling - real quest honor is in the hundreds, talents are one
     // or two, arena points a few hundred.
     if (honorField) {
-        const uint32_t h = readU32At(base + honorField * 4u);
+        const uint32_t h = fieldAt(honorField);
         if (h <= 100000u) out.rewardHonor = h;
     }
     if (talentsField) {
-        const uint32_t t = readU32At(base + talentsField * 4u);
+        const uint32_t t = fieldAt(talentsField);
         if (t <= 20u) out.bonusTalents = t;
     }
     if (arenaField) {
-        const uint32_t a = readU32At(base + arenaField * 4u);
+        const uint32_t a = fieldAt(arenaField);
         if (a <= 100000u) out.arenaPoints = a;
     }
     if (titleField) {
         // A CharTitles.dbc id - a few hundred rows, so small; a slipped layout
         // reads far larger and is dropped.
-        const uint32_t t = readU32At(base + titleField * 4u);
+        const uint32_t t = fieldAt(titleField);
         if (t <= 500u) out.rewardTitleId = t;
     }
     // The three reputation arrays, once the packet is long enough to hold the
     // last override at field repOverrideField+4. Values are signed (a quest can
     // cost reputation), so no plausibility gate beyond the length check.
-    if (repFactionField && data.size() >= base + (repOverrideField + 5) * 4u) {
+    if (repFactionField && data.size() >= base + (repOverrideField + 5) * kFieldBytes) {
         for (size_t i = 0; i < 5; ++i) {
-            out.factionId[i]           = readU32At(base + (repFactionField + i) * 4u);
-            out.factionValueId[i]      = static_cast<int32_t>(readU32At(base + (repValueField + i) * 4u));
-            out.factionValueOverride[i]= static_cast<int32_t>(readU32At(base + (repOverrideField + i) * 4u));
+            out.factionId[i]           = fieldAt(repFactionField + i);
+            out.factionValueId[i]      = static_cast<int32_t>(fieldAt(repValueField + i));
+            out.factionValueOverride[i]= static_cast<int32_t>(fieldAt(repOverrideField + i));
         }
     }
     if (sourceItemField) {
-        const uint32_t srcItem = readU32At(base + sourceItemField * 4u);
+        const uint32_t srcItem = fieldAt(sourceItemField);
         // Same plausibility gate the rewards use: a layout mismatch lands in a
         // float or a string and reads as an enormous item id.
         if (srcItem <= 0x00FFFFFFu) out.sourceItemId = srcItem;
