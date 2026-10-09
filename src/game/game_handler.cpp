@@ -1946,6 +1946,28 @@ void GameHandler::updateM2TransportBoarding(const glm::vec3& playerCanonical) {
         return;
     }
 
+    // Off the car as soon as the ground under the feet is not the car's.
+    //
+    // The client decides it the same way it decides boarding, and does so
+    // after every step: 0x007620f0 sweeps the feet down onto the face they
+    // stand on and hands that face's owner to 0x006ec7b0, which makes it the
+    // transport (0x006ec400) - the world's own ground being no transport at
+    // all. A jump, with nothing underfoot until it lands, changes nothing.
+    //
+    // This let go only twenty-eight yards from the car's origin instead, and
+    // an Undercity landing is well inside that. Stepping off left the player
+    // attached, and when the car set off it took them with it: lifted on the
+    // spot beside the shaft until gravity, or the car being sixteen yards
+    // away, ended it.
+    if (const std::optional<bool> overDeck = tm->isPointOverM2Footprint(
+            getPlayerTransportGuid(), playerCanonical);
+        overDeck && !*overDeck &&
+        !movementInfo.hasFlag(MovementFlags::FALLING)) {
+        clearPlayerTransport();
+        LOG_DEBUG("M2 transport disembark: no deck underfoot");
+        return;
+    }
+
     constexpr float kM2DisembarkHorizDistSq = 15.0f * 15.0f;
     constexpr float kTbLiftDisembarkHorizDistSq = 28.0f * 28.0f;
     constexpr float kM2DisembarkVertDist = 18.0f;
