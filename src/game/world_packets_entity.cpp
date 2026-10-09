@@ -296,6 +296,7 @@ bool parseGameObjectQueryBody(network::Packet& packet,
                         " strings read before them is one too few (entry=",
                         data.entry, ")");
         }
+        if (packet.hasRemaining(4)) data.size = packet.readFloat();
     } else if (remaining > 0) {
         // Partial data field; read what we can
         uint32_t fieldsToRead = remaining / 4;

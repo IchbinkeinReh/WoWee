@@ -921,6 +921,15 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
                 groundTarget_.spellId = spellId;
                 groundTarget_.required = required &
                     (ground_target::kTargetFlagSourceLocation | ground_target::kTargetFlagDestLocation);
+                // The first effect that summons a game object shows its
+                // model at the place (0x0080cce0).
+                for (int k = 0; k < 3; ++k) {
+                    if (!ground_target::summonsObject(it->second.effectIds[k])) continue;
+                    groundTarget_.objectEntry = it->second.effectMiscValues[k];
+                    groundTarget_.objectFixedFacing = it->second.effectIds[k] == ground_target::kEffectObjectFixedFacing;
+                    if (groundTarget_.objectEntry != 0) owner_.queryGameObjectInfo(groundTarget_.objectEntry, 0);
+                    break;
+                }
                 LOG_INFO("Ground targeting: spell ", spellId, " waits for a place (targets 0x",
                          std::hex, it->second.targetFlags, std::dec, ")");
                 if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});

@@ -38,6 +38,17 @@ constexpr uint32_t requiredTargets(uint32_t targets, uint32_t implicitTargetA0, 
     return required;
 }
 
+/// 0x0080cce0: a spell with one of these effects - TRANS_DOOR (50),
+/// SUMMON_OBJECT_WILD (76), SUMMON_OBJECT_SLOT1-4 (104-107) or 81 - shows the
+/// game object its EffectMiscValue names at the place, scaled by the
+/// template's size, facing as the player does; effect 81's keeps a facing of
+/// its own (0x00d397d4, 0x007fff60), turned a quarter at a time
+/// (0x007fd800).
+inline constexpr uint32_t kEffectObjectFixedFacing = 81;
+constexpr bool summonsObject(uint32_t effect) {
+    return effect == 50 || effect == 76 || (effect >= 104 && effect <= 107) || effect == kEffectObjectFixedFacing;
+}
+
 /// 0x007fd750: the cursor waits for a location while either is still wanted.
 constexpr bool wantsLocation(uint32_t required) {
     return (required & (kTargetFlagSourceLocation | kTargetFlagDestLocation)) != 0;

@@ -88,6 +88,49 @@ void EntitySpawner::update() {
     syncCreatureStealthVisuals();
     refreshCreatureScales();
     syncCreatureParticleTwins();
+    syncGroundTargetModel();
+}
+
+void EntitySpawner::syncGroundTargetModel() {
+    // A guid no server object has: the client's own query for it runs under
+    // a high part of 0x1FE (0x0080cce0).
+    constexpr uint64_t kPreviewGuid = 0x1FE0000000000000ull;
+    auto drop = [&] {
+        if (groundTargetModelEntry_ == 0) return;
+        despawnGameObject(kPreviewGuid);
+        groundTargetModelEntry_ = 0;
+    };
+    if (!gameHandler_ || !renderer_) return drop();
+    const uint32_t entry = gameHandler_->groundTargetObjectEntry();
+    const auto place = gameHandler_->groundTargetCursor();
+    const auto* info = entry != 0 ? gameHandler_->getCachedGameObjectInfo(entry) : nullptr;
+    if (!place || !info || info->displayId == 0) return drop();
+    // Only a doodad model: a building would be in the way of the very ray
+    // that places it.
+    std::string path = getGameObjectModelPathForDisplayId(info->displayId);
+    std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (path.size() < 4 || path.compare(path.size() - 4, 4, ".wmo") == 0) return drop();
+
+    const float facing = gameHandler_->groundTargetObjectFacing();
+    const float size = info->size > 0.0f ? info->size : 1.0f;
+    auto* m2 = renderer_->getM2Renderer();
+    if (!m2) return;
+    auto it = gameObjectInstances_.find(kPreviewGuid);
+    if (groundTargetModelEntry_ != entry || it == gameObjectInstances_.end() || !m2->hasInstance(it->second.instanceId)) {
+        drop();
+        spawnOnlineGameObject(kPreviewGuid, entry, info->displayId, place->canonical.x, place->canonical.y,
+                              place->canonical.z, facing, size);
+        it = gameObjectInstances_.find(kPreviewGuid);
+        if (it == gameObjectInstances_.end() || it->second.isWmo) return;
+        groundTargetModelEntry_ = entry;
+        m2->setSkipCollision(it->second.instanceId, true);
+    }
+    // At the place, turned as the player faces, at the template's size
+    // (0x004f66c0: 0x007fd7e0, 0x007fff60, 0x004c1bf0 with 0x00d3f4d8).
+    glm::mat4 transform = glm::translate(glm::mat4(1.0f), core::coords::canonicalToRender(place->canonical));
+    transform = glm::rotate(transform, facing + glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    transform = glm::scale(transform, glm::vec3(size));
+    m2->setInstanceTransform(it->second.instanceId, transform);
 }
 
 void EntitySpawner::syncCreatureStealthVisuals() {

@@ -2425,6 +2425,14 @@ std::optional<GameHandler::GroundTargetAim> GameHandler::aimGroundTarget(std::op
                                                    spellHandler_->groundTargetSpellArea());
     return aim;
 }
+uint32_t GameHandler::groundTargetObjectEntry() const {
+    return spellHandler_ ? spellHandler_->groundTargetObjectEntry() : 0;
+}
+float GameHandler::groundTargetObjectFacing() const {
+    // Effect 81's starts at 0 (0x0080cce0 clears 0x00d3f4dc).
+    if (spellHandler_ && spellHandler_->groundTargetObjectFixedFacing()) return 0.0f;
+    return movementInfo.orientation;
+}
 std::optional<ground_target::Place> GameHandler::groundTargetCursor() const {
     return spellHandler_ ? spellHandler_->groundTargetCursor() : std::nullopt;
 }

@@ -1863,6 +1863,9 @@ struct GameObjectQueryResponseData {
     uint32_t displayId = 0;
     uint32_t data[24] = {};  // Type-specific data fields (e.g. data[0]=taxiPathId for MO_TRANSPORT)
     bool hasData = false;    // Whether data[] was parsed
+    /// The template's size, after the data fields (+0x74 in the client's
+    /// cache record): the model's scale.
+    float size = 1.0f;
 
     [[nodiscard]] bool isValid() const { return entry != 0 && !name.empty(); }
 };

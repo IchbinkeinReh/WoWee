@@ -1081,6 +1081,11 @@ public:
     bool cancelGroundTargeting();
     void placeGroundTarget(const ground_target::Place& place);
     [[nodiscard]] std::optional<ground_target::Place> groundTargetCursor() const;
+    /// The game object whose model the cursor's place shows, 0 for none, and
+    /// the facing it takes (canonical yaw): the player's, or for effect 81
+    /// its own (0x007fff60).
+    [[nodiscard]] uint32_t groundTargetObjectEntry() const;
+    [[nodiscard]] float groundTargetObjectFacing() const;
     /// The place a click on the world at this renderer point lands, with
     /// the transport whose building it hit (wmoInstanceId, 0 for none) and
     /// the point in its frame (0x00527360's event).

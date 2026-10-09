@@ -601,6 +601,10 @@ private:
     void spawnCreatureParticleTwin(uint64_t guid, uint32_t displayId, uint32_t charModelId,
                                    uint32_t charInstanceId);
     void syncCreatureParticleTwins();
+    /// The model of the game object a held ground-targeted spell summons, at
+    /// the cursor's place (0x0080cce0 -> 0x007fe9e0, drawn by 0x004f66c0).
+    void syncGroundTargetModel();
+    uint32_t groundTargetModelEntry_ = 0;
     void removeCreatureParticleTwin(uint64_t guid);
     uint32_t scaleSyncFrameCounter_ = 0;  // throttles refreshCreatureScales()
     /// What updateUnitWeapons last dressed each unit with.

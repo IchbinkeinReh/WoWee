@@ -72,6 +72,11 @@ public:
     /// CameraOrSelectOrMoveStop.
     void setGroundTargetCursor(std::optional<ground_target::Place> place) { groundTarget_.cursor = place; }
     [[nodiscard]] std::optional<ground_target::Place> groundTargetCursor() const { return groundTarget_.cursor; }
+    /// The game object a held spell summons, whose model the cursor's place
+    /// shows (0x0080cce0 -> 0x007fe9e0), 0 for none; and whether it keeps a
+    /// fixed facing rather than the player's (effect 81, 0x00d397d4).
+    [[nodiscard]] uint32_t groundTargetObjectEntry() const { return groundTarget_.objectEntry; }
+    [[nodiscard]] bool groundTargetObjectFixedFacing() const { return groundTarget_.objectFixedFacing; }
     /// The circle's radius, and whether the place is in range, for the
     /// cursor's place (0x008019c0, 0x00803ee0).
     [[nodiscard]] float groundTargetSpellArea() const;
@@ -495,6 +500,8 @@ private:
         uint32_t required = 0;
         glm::vec3 source{0.0f};
         std::optional<ground_target::Place> cursor;
+        uint32_t objectEntry = 0;
+        bool objectFixedFacing = false;
     };
     GroundTarget groundTarget_;
     /// ChrClasses SpellClassSet for the player's class (0x008007a0), and

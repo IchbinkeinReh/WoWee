@@ -130,3 +130,8 @@ TEST_CASE("spell modifiers as 0x007fd970 sums and applies them", "[ground_target
     auto cut = [](uint8_t, uint8_t) -> std::pair<int32_t, int32_t> { return {0, -150}; };
     CHECK(sm::apply(8.0f, sm::modifiers(7, flags, 0, 7, sm::kOpRange, cut)) == 0.0f);
 }
+
+TEST_CASE("the spells that show a game object at the place", "[ground_target]") {
+    for (uint32_t e : {50u, 76u, 104u, 105u, 106u, 107u, 81u}) CHECK(gt::summonsObject(e));
+    for (uint32_t e : {0u, 2u, 28u, 75u, 103u, 108u}) CHECK_FALSE(gt::summonsObject(e));
+}

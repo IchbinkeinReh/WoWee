@@ -69,7 +69,7 @@ std::vector<uint8_t> buildResponse(uint32_t entry, uint32_t type,
     const char* extras[] = {"Attack", "Collecting", ""};
     for (int i = 0; i < extraStrings; ++i) w.cstr(extras[i]);
     for (uint32_t i = 0; i < 24; ++i) w.u32(0xA000 + i);
-    w.f32(1.5f);                   // size, which this client does not read
+    w.f32(1.5f);                   // size
     return w.bytes;
 }
 
@@ -95,6 +95,8 @@ TEST_CASE("the WotLK gameobject query reads three strings before the data",
     // strings, and one string too few or too many puts something else there.
     CHECK(data.data[0] == 0xA000);
     CHECK(data.data[23] == 0xA017);
+    // The size after them scales the ground-targeting model (0x0080cce0).
+    CHECK(data.size == 1.5f);
 }
 
 TEST_CASE("TBC reads two, Classic reads none", "[gameobject][wire]") {
