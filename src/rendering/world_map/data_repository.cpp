@@ -538,28 +538,41 @@ void DataRepository::loadPOIs(pipeline::AssetManager& assetManager) {
         return;
     }
 
+    // Columns from the active layout, falling back to 3.3.5a's: 0 ID,
+    // 1 Importance, 2-10 Icon[9], 11 FactionID, 12-14 X/Y/Z, 15 ContinentID,
+    // 16 Flags, 17 AreaID, 18 Name_lang (enUS). The name is 18, not 16 -
+    // 16 is Flags, read as a string offset it named every POI wrongly or
+    // not at all.
+    const auto* activeLayout = pipeline::getActiveDBCLayout();
+    const auto* poiL = activeLayout ? activeLayout->getLayout("AreaPOI") : nullptr;
+    const uint32_t colId         = poiL ? (*poiL)["ID"]          : 0;
+    const uint32_t colImportance = poiL ? (*poiL)["Importance"]  : 1;
+    const uint32_t colIcon       = poiL ? (*poiL)["Icon0"]       : 2;
+    const uint32_t colFaction    = poiL ? (*poiL)["FactionID"]   : 11;
+    const uint32_t colX          = poiL ? (*poiL)["X"]           : 12;
+    const uint32_t colY          = poiL ? (*poiL)["Y"]           : 13;
+    const uint32_t colZ          = poiL ? (*poiL)["Z"]           : 14;
+    const uint32_t colMap        = poiL ? (*poiL)["ContinentID"] : 15;
+    const uint32_t colName       = poiL ? (*poiL)["Name"]        : 18;
+
     const uint32_t fieldCount = poiDbc->getFieldCount();
-    if (fieldCount < 17) {
+    if (fieldCount <= colName) {
         LOG_WARNING("DataRepository: AreaPOI.dbc has too few fields (", fieldCount, ")");
         return;
     }
 
-    // AreaPOI.dbc field layout (WotLK 3.3.5a):
-    // 0:ID, 1:Importance, 2-10:Icon[9], 11:FactionID,
-    // 12:X, 13:Y, 14:Z, 15:MapID,
-    // 16:Name_lang (enUS), ...
     int loaded = 0;
     for (uint32_t i = 0; i < poiDbc->getRecordCount(); i++) {
         POI poi;
-        poi.id = poiDbc->getUInt32(i, 0);
-        poi.importance = poiDbc->getUInt32(i, 1);
-        poi.iconType = poiDbc->getUInt32(i, 2);
-        poi.factionId = poiDbc->getUInt32(i, 11);
-        poi.wowX = poiDbc->getFloat(i, 12);
-        poi.wowY = poiDbc->getFloat(i, 13);
-        poi.wowZ = poiDbc->getFloat(i, 14);
-        poi.mapId = poiDbc->getUInt32(i, 15);
-        poi.name = poiDbc->getString(i, 16);
+        poi.id = poiDbc->getUInt32(i, colId);
+        poi.importance = poiDbc->getUInt32(i, colImportance);
+        poi.iconType = poiDbc->getUInt32(i, colIcon);
+        poi.factionId = poiDbc->getUInt32(i, colFaction);
+        poi.wowX = poiDbc->getFloat(i, colX);
+        poi.wowY = poiDbc->getFloat(i, colY);
+        poi.wowZ = poiDbc->getFloat(i, colZ);
+        poi.mapId = poiDbc->getUInt32(i, colMap);
+        poi.name = poiDbc->getString(i, colName);
 
         if (poi.name.empty()) continue;
 
