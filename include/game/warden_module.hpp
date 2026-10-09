@@ -8,6 +8,9 @@
 #include <unordered_map>
 #include <map>
 
+#include "game/warden_constants.hpp"
+#include "game/warden_formats.hpp"
+
 namespace wowee {
 namespace game {
 
@@ -62,13 +65,13 @@ struct WardenFuncList {
 /// at image + 0xFFFFFFFF. Both are reachable from a hostile server.
 inline constexpr uint32_t wardenAbsoluteRelocTarget(uint8_t first, uint8_t b1,
                                                     uint8_t b2, uint8_t b3) {
-    return (static_cast<uint32_t>(first & 0x7Fu) << 24) |
+    return (static_cast<uint32_t>(first & ~WARDEN_RELOC_ABSOLUTE_FLAG & 0xFFu) << 24) |
            (static_cast<uint32_t>(b1) << 16) |
            (static_cast<uint32_t>(b2) << 8) | b3;
 }
 
 inline constexpr bool wardenRelocTargetFits(uint32_t target, size_t moduleSize) {
-    return static_cast<size_t>(target) + 4u <= moduleSize;
+    return static_cast<size_t>(target) + sizeof(uint32_t) <= moduleSize;
 }
 
 class WardenModule {
@@ -180,7 +183,7 @@ private:
     size_t moduleSize_ = 0;                // Size of loaded code
     // 0x400000 is the default PE image base for 32-bit Windows executables.
     // Warden modules are loaded as if they were PE DLLs at this base address.
-    uint32_t moduleBase_ = 0x400000;       // Module base address (for emulator)
+    uint32_t moduleBase_ = PE_DEFAULT_IMAGE_BASE; // Module base address (for emulator)
     // Native Warden-image header fields. Private-server modules place these
     // tables inside the mapped image rather than after the copy stream.
     uint32_t relocOffset_ = 0;

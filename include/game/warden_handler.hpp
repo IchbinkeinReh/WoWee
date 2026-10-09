@@ -79,15 +79,18 @@ private:
     std::vector<uint8_t> wardenModuleData_;    // Downloaded module chunks
     std::shared_ptr<WardenModule> wardenLoadedModule_; // Loaded Warden module
 
-    // Pre-computed challenge/response entries from .cr file
+    // Pre-computed challenge/response entries from .cr file. Read from the
+    // file as it stands, one record after the 17-byte header.
     struct WardenCREntry {
         uint8_t seed[16];
         uint8_t reply[20];
         uint8_t clientKey[16];  // Encrypt key (client→server)
         uint8_t serverKey[16]; // Decrypt key (server→client)
     };
+    static_assert(sizeof(WardenCREntry) == 68, "WardenCREntry is read straight from the .cr file");
     std::vector<WardenCREntry> wardenCREntries_;
-    // Module-specific check type opcodes [9]: MEM, PAGE_A, PAGE_B, MPQ, LUA, DRIVER, TIMING, PROC, MODULE
+    // Module-specific check type opcodes, indexed by WardenScanType (CMaNGOS
+    // WindowsScanType order): MEM, MODULE, PAGE_A, PAGE_B, MPQ, LUA, PROC, DRIVER, TIMING
     uint8_t wardenCheckOpcodes_[9] = {};
 
     // Async Warden response: avoids 5-second main-loop stalls from PAGE_A/PAGE_B code pattern searches
