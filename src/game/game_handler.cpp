@@ -22,6 +22,7 @@
 #include "game/transport_manager.hpp"
 #include "game/opcodes.hpp"
 #include "game/update_field_table.hpp"
+#include "game/pvp_flags.hpp"
 #include "game/expansion_profile.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/spell_visual_system.hpp"
@@ -2878,6 +2879,45 @@ int GameHandler::unitReactionToPlayer(const Unit& unit) const {
     }
     if (unit.isHostile()) return 2;
     return isFriendlyFaction(ft) ? 5 : 4;
+}
+
+int GameHandler::playerReactionTo(const Unit& unit) const {
+    // 0x007251c0 asked by the player about a unit no player is behind: the
+    // unit's faction, if it has a standing, answers friendly (4) unless at
+    // war (1, 0x005d04b0); otherwise the player's template asks about the
+    // unit's (0x0071f770, 0x00715440). isFriendlyFaction already reads a
+    // standing's faction as "not at war".
+    if (unit.isHostile()) return 2;
+    return isFriendlyFaction(unit.getFactionTemplate()) ? 5 : 4;
+}
+
+bool GameHandler::playerMayAttackCreature(const Unit& unit) const {
+    // 0x00729740 with the player attacking. The victim's flags first:
+    // non-attackable (0x2), 0x80, 0x10000, 0x100000, not selectable.
+    constexpr uint32_t kNonAttackable = 0x2, kPvpAttackable = 0x8, kFlag80 = 0x80,
+                       kImmuneToPc = 0x100, kImmuneToNpc = 0x200, kFlag10000 = 0x10000,
+                       kFlag100000 = 0x100000;
+    const uint32_t theirs = unit.getUnitFlags();
+    if (theirs & (kNonAttackable | kFlag80 | kFlag10000 | kFlag100000 | UNIT_FLAG_NOT_SELECTABLE)) {
+        return false;
+    }
+    // Immunity, each side against the other's kind: a player carries 0x8,
+    // so a victim immune to players is out of reach; and a player immune to
+    // NPCs cannot strike one.
+    auto me = getEntityManager().getEntity(getPlayerGuid());
+    const uint32_t mine = me && me->isUnit() ? static_cast<const Unit&>(*me).getUnitFlags() : kPvpAttackable;
+    if ((mine & kPvpAttackable) && (theirs & kImmuneToPc)) return false;
+    if (!(mine & kPvpAttackable) && (theirs & kImmuneToNpc)) return false;
+    if ((theirs & kPvpAttackable) && (mine & kImmuneToPc)) return false;
+    if (!(theirs & kPvpAttackable) && (mine & kImmuneToNpc)) return false;
+    // A unit in a sanctuary, against a player.
+    const uint16_t bytes2Field = fieldIndex(UF::UNIT_FIELD_BYTES_2);
+    if ((mine & kPvpAttackable) && bytes2Field != 0xFFFF && !isPreWotlk()) {
+        const uint32_t pvp = unitPvpFlags(true, unit.getField(bytes2Field), theirs);
+        if (pvp & pvp::kSanctuary) return false;
+    }
+    // Last, 0x00514050: not if the player regards it as friendly.
+    return playerReactionTo(unit) <= 4;
 }
 
 int GameHandler::factionReactionToPlayer(uint32_t ft) const {

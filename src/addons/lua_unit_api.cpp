@@ -696,13 +696,23 @@ static int lua_UnitCanAttack(lua_State* L) {
     uint64_t g1 = resolveUnitGuid(gh, u1);
     uint64_t g2 = resolveUnitGuid(gh, u2);
     if (g1 == 0 || g2 == 0 || g1 == g2) { return luaReturnFalse(L); }
-    // Check if unit2 is hostile to unit1
+    // 0x0060d730 asks 0x00729740 with unit1 attacking. The player attacking
+    // a creature has the whole rule; a creature attacking the player may
+    // unless it regards the player as friendly (0x00514050 asked by it).
+    auto* unit1 = resolveUnit(L, uid1);
     auto* unit2 = resolveUnit(L, uid2);
-    if (unit2 && unit2->isHostile()) {
-        lua_pushboolean(L, 1);
+    if (!unit1 || !unit2) { return luaReturnFalse(L); }
+    const uint64_t me = gh->getPlayerGuid();
+    bool can = false;
+    if (g1 == me && unit2->getType() == game::ObjectType::UNIT) {
+        can = gh->playerMayAttackCreature(*unit2);
+    } else if (g2 == me && unit1->getType() == game::ObjectType::UNIT) {
+        can = gh->unitReactionToPlayer(*unit1) <= 4;
     } else {
-        lua_pushboolean(L, 0);
+        // Between players: hostility to the player, as before.
+        can = (g1 == me ? unit2 : unit1)->isHostile();
     }
+    lua_pushboolean(L, can);
     return 1;
 }
 
@@ -2101,39 +2111,35 @@ static int lua_UnitIsUnit(lua_State* L) {
     return 1;
 }
 
-/// UnitIsFriend(unit1, unit2) - is unit2 friendly to unit1.
-///
-/// Two units, and the answer is about the *second*. This read only the first,
-/// which every caller in the interface passes as "player" - and the player is
-/// never hostile, so it answered true for whatever was being asked about.
-/// targetframe.lua colours the name from it, picks the debuff layout from it
-/// and filters with it, so every target read as a friend.
-///
-/// Hostility is modelled relative to the player, so the unit that carries the
-/// answer is whichever of the pair is *not* the player - and the interface
-/// passes both orders: UnitIsFriend("player", self.unit) beside
-/// UnitIsEnemy(self.unit, "player"). Keying on position would be right for one
-/// of them and wrong for the other.
-static game::Unit* unitAskedAbout(lua_State* L) {
+/// How the first unit regards the second, numbered as UnitReaction numbers
+/// it - 0x007251c0 asked by the first, which is what UnitReaction (0x0060d280),
+/// UnitIsEnemy (0x0060d330) and UnitIsFriend (0x0060d3d0) all ask. Not
+/// symmetric: Dalaran's Kirin Tor regard a player at a neutral standing as
+/// neutral, and the player, not at war with them, regards them as friendly.
+/// The interface passes both orders - UnitIsFriend("player", self.unit)
+/// beside UnitIsEnemy(self.unit, "player") - so which side is asking matters.
+/// 0 when either unit is unknown.
+static int reactionBetween(lua_State* L, const char* first, const char* second) {
     auto* gh = getGameHandler(L);
-    const char* a = luaL_optstring(L, 1, "player");
-    const char* b = luaL_optstring(L, 2, nullptr);
-    if (!b) return resolveUnit(L, a);
-    if (!gh) return resolveUnit(L, b);
-    std::string ua(a), ub(b);
-    toLowerInPlace(ua);
-    toLowerInPlace(ub);
-    const uint64_t player = gh->getPlayerGuid();
-    if (resolveUnitGuid(gh, ua) == player) return resolveUnit(L, b);
-    if (resolveUnitGuid(gh, ub) == player) return resolveUnit(L, a);
-    // Neither is the player: answered about the second, which is the one the
-    // question is grammatically about.
-    return resolveUnit(L, b);
+    auto* a = resolveUnit(L, first);
+    auto* b = resolveUnit(L, second);
+    if (!gh || !a || !b) return 0;
+    if (a == b) return 5;
+    const uint64_t me = gh->getPlayerGuid();
+    if (a->getGuid() == me && b->getType() == game::ObjectType::UNIT) return gh->playerReactionTo(*b);
+    if (b->getGuid() == me && a->getType() == game::ObjectType::UNIT) return gh->unitReactionToPlayer(*a);
+    // Between players, or two units neither of which is the player: what is
+    // known is each unit's hostility to the player, asked of the other one.
+    const game::Unit* other = a->getGuid() == me ? b : a;
+    return other->isHostile() ? 2 : 5;
 }
 
+/// UnitIsFriend(unit1, unit2): unit1 regards unit2 as friendly (0x00514050).
 static int lua_UnitIsFriend(lua_State* L) {
-    auto* unit = unitAskedAbout(L);
-    lua_pushboolean(L, unit && !unit->isHostile());
+    const char* a = luaL_optstring(L, 1, "player");
+    const char* b = luaL_optstring(L, 2, nullptr);
+    if (!b) { b = a; a = "player"; }
+    lua_pushboolean(L, reactionBetween(L, a, b) >= 5);
     return 1;
 }
 
@@ -2141,8 +2147,12 @@ static int lua_UnitIsFriend(lua_State* L) {
 /// UnitIsFriend above, and it was wrong the same way: asked about the player it
 /// answered false for every enemy.
 static int lua_UnitIsEnemy(lua_State* L) {
-    auto* unit = unitAskedAbout(L);
-    lua_pushboolean(L, unit && unit->isHostile());
+    // 0x0060d330: unit1's reaction to unit2 below 2, which is hostile or worse.
+    const char* a = luaL_optstring(L, 1, "player");
+    const char* b = luaL_optstring(L, 2, nullptr);
+    if (!b) { b = a; a = "player"; }
+    const int reaction = reactionBetween(L, a, b);
+    lua_pushboolean(L, reaction != 0 && reaction <= 2);
     return 1;
 }
 
@@ -2269,22 +2279,16 @@ static int lua_UnitReaction(lua_State* L) {
     uint64_t g1 = resolveUnitGuid(gh, u1);
     uint64_t g2 = resolveUnitGuid(gh, u2);
     if (g1 == g2) { lua_pushnumber(L, 5); return 1; } // same unit = friendly
-    // How a creature regards the player, which is the question the tooltip
-    // and the name colours ask - UnitReaction(unit, "player"). For a faction
-    // with a standing that is the standing: answered hostile-or-friendly, the
-    // Kurenai read as friendly to an Alliance player at Unfriendly, who could
-    // not then find out why Telaar would not speak to them.
-    const uint64_t me = gh->getPlayerGuid();
-    auto* unit1 = resolveUnit(L, uid1);
-    if (g2 == me && unit1 && unit1->getType() == game::ObjectType::UNIT) {
-        lua_pushnumber(L, gh->unitReactionToPlayer(*unit1));
-        return 1;
-    }
-    if (unit2->isHostile()) {
-        lua_pushnumber(L, 2); // hostile
-    } else {
-        lua_pushnumber(L, 5); // friendly
-    }
+    // 0x0060d280: how unit1 regards unit2, plus one. How a creature regards
+    // the player, which is the question the tooltip and the name colours ask
+    // - UnitReaction(unit, "player") - is its standing for a faction with
+    // one: the Kurenai read as friendly to an Alliance player at Unfriendly
+    // when answered hostile-or-friendly, who could not then find out why
+    // Telaar would not speak to them. The other way round the standing does
+    // not count, only whether the player is at war (reactionBetween).
+    const int reaction = reactionBetween(L, uid1, uid2);
+    if (reaction == 0) { return luaReturnNil(L); }
+    lua_pushnumber(L, reaction);
     return 1;
 }
 

@@ -59,16 +59,11 @@ uint64_t guidAt(const game::Entity& e, game::UF low) {
 bool isPlayerGuid(uint64_t guid) { return guid != 0 && (guid >> 48) == 0; }
 
 /// The player may attack this unit (0x00729740): for another player the duel
-/// and PvP rules, for anything else not flagged out of reach and not friendly.
+/// and PvP rules, for anything else not flagged out of reach and not regarded
+/// by the player as friendly.
 bool mayAttack(game::GameHandler& gh, const game::Unit& unit, bool isPlayer) {
     if (isPlayer) return playerMayAttackPlayer(gh, unit);
-    constexpr uint32_t kNonAttackable = 0x00000002, kNotAttackable1 = 0x00000080,
-                       kImmuneToPlayers = 0x00000100;
-    if (unit.getUnitFlags() & (kNonAttackable | kNotAttackable1 | kImmuneToPlayers |
-                               game::UNIT_FLAG_NOT_SELECTABLE)) {
-        return false;
-    }
-    return unit.isHostile() || gh.unitReactionToPlayer(unit) <= 4;
+    return gh.playerMayAttackCreature(unit);
 }
 
 /// What 0x00729c70 and 0x0072b060 read off a unit.

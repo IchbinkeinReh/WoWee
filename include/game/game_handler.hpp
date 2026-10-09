@@ -1731,6 +1731,21 @@ public:
     /// any standing, but at Unfriendly they will not talk to one either, and
     /// the server refuses the conversation on exactly this number.
     [[nodiscard]] int unitReactionToPlayer(const Unit& unit) const;
+    /// How the player regards a unit - the other way round from
+    /// unitReactionToPlayer, and what deciding to attack asks (0x007251c0
+    /// with the player asking). For a faction the player has a standing
+    /// with the standing does not count: at war is 2 hostile and anything
+    /// else 5 friendly, so Dalaran's Kirin Tor, yellow at a neutral
+    /// standing, are not the player's to fight. Otherwise 2 hostile, 5
+    /// friendly, 4 neither, as the templates have it.
+    [[nodiscard]] int playerReactionTo(const Unit& unit) const;
+    /// Whether the player may attack a unit no player is behind
+    /// (0x00729740, the player attacking): not one flagged out of reach of
+    /// attack or of players, not one in a sanctuary, and not one the player
+    /// regards as friendly (playerReactionTo above 4). A neutral boar may
+    /// be attacked; a neutral standing's guard may not. Another player
+    /// goes by the duel and PvP rules instead.
+    [[nodiscard]] bool playerMayAttackCreature(const Unit& unit) const;
 
     // Creature move callback (online mode - triggered by SMSG_MONSTER_MOVE)
     // Parameters: guid, x, y, z (canonical), duration_ms (0 = instant)

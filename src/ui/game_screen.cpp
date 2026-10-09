@@ -1310,9 +1310,7 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
     const float reach = unit->getCombatReach() + 4.0f;
     const bool outOfReach = dx * dx + dy * dy + dz * dz > reach * reach;
 
-    constexpr uint32_t kNonAttackable = 0x00000002, kNotAttackable1 = 0x00000080,
-                       kImmuneToPlayers = 0x00000100, kUnk16 = 0x00010000,
-                       kUnk20 = 0x00100000, kSkinnable = 0x04000000;
+    constexpr uint32_t kSkinnable = 0x04000000;
     const uint32_t flags = unit->getUnitFlags();
     std::string path;
 
@@ -1341,13 +1339,13 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
         }
         if (outOfReach) path = unableCursorPath(path.c_str());
     } else if (isPlayer ? playerMayAttackPlayer(gameHandler, *unit)
-                        : ((flags & (kNonAttackable | kNotAttackable1 | kImmuneToPlayers | kUnk16 |
-                                     kUnk20 | game::UNIT_FLAG_NOT_SELECTABLE)) == 0 &&
-                           (unit->isHostile() || gameHandler.unitReactionToPlayer(*unit) <= 4))) {
-        // The sword over whatever the player may attack: alive, not flagged
-        // non-attackable, immune to players or not selectable, and not friendly
-        // - so a neutral boar wears it as a hostile wolf does. No "can't" for
-        // it: the client sets it whatever the distance.
+                        : gameHandler.playerMayAttackCreature(*unit)) {
+        // The sword over whatever the player may attack (0x00729a70): alive,
+        // not flagged out of reach, and not regarded as friendly by the player
+        // - so a neutral boar wears it as a hostile wolf does, and Dalaran's
+        // Kirin Tor, yellow at a neutral standing the player is not at war
+        // with, do not. No "can't" for it: the client sets it whatever the
+        // distance.
         path = "Interface\\Cursor\\Attack.blp";
     } else {
         const char* friendly = isPlayer ? nullptr : friendlyUnitCursorPath(unit->getNpcFlags());
