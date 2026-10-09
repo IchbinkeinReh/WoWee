@@ -2725,6 +2725,11 @@ wowee_add_test(test_selection_circle
 wowee_add_test(test_minimap_zoom
     SOURCES test_minimap_zoom.cpp)
 
+# ── test_unit_name_anchor ────────────────────────────────────
+# Where names and plates go, their range and dimming (rendering/unit_name_anchor.hpp).
+wowee_add_test(test_unit_name_anchor
+    SOURCES test_unit_name_anchor.cpp)
+
 # ── test_client_weather ──────────────────────────────────────
 # The client's rain, snow and sand (MapWeather.cpp, rendering/client_weather.hpp):
 # density, rates, spawns, the ground cache and the lean with the player's movement.

@@ -137,6 +137,8 @@ public:
     /// anything not a game object, takes it off whatever had it.
     void setHighlightedGameObject(uint64_t guid);
     bool getRenderPositionForGuid(uint64_t guid, glm::vec3& outPos) const;
+    /// Where the client puts a unit's name (EntitySpawner::unitNamePosition).
+    std::optional<glm::vec3> getUnitNamePosition(uint64_t guid) const;
     /// Where the circle under a unit goes and its radius (EntitySpawner::selectionCircle).
     std::optional<std::pair<glm::vec3, float>> getSelectionCircle(uint64_t guid) const;
 

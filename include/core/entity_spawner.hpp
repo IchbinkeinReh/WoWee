@@ -135,6 +135,12 @@ public:
     bool getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, float& outRadius) const;
     uint32_t characterInstanceIdForGuid(uint64_t guid) const;
     bool getRenderFootZForGuid(uint64_t guid, float& outFootZ) const;
+    /// Where the client puts a unit's name (0x0071fef0): its model's
+    /// PlayerNameMounted attachment while it rides (the mount's model),
+    /// else PlayerName, else its position raised by 1.25 of its
+    /// CreatureModelData height times its scale. Nothing when it has no
+    /// model drawn, or neither attachment nor a height.
+    std::optional<glm::vec3> unitNamePosition(uint64_t guid) const;
     /// Where the circle under a unit goes and how big it is (0x00725980,
     /// 0x00720330): at the unit's position - its mount's while it rides - and
     /// sized by its CreatureModelData box, joined to its mount's when riding

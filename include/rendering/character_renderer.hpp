@@ -322,7 +322,7 @@ public:
 
 
     /** Get the world-space transform of an attachment point on an instance. */
-    bool getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& outTransform);
+    bool getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& outTransform) const;
 
     [[nodiscard]] size_t getInstanceCount() const { return instances.size(); }
 

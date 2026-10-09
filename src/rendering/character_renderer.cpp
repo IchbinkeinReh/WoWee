@@ -5035,7 +5035,7 @@ void CharacterRenderer::detachWeaponEffects(uint32_t charInstanceId, uint32_t at
     }
 }
 
-bool CharacterRenderer::getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& outTransform) {
+bool CharacterRenderer::getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& outTransform) const {
     auto instIt = instances.find(instanceId);
     if (instIt == instances.end()) return false;
     const auto& instance = instIt->second;

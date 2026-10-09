@@ -9,6 +9,7 @@
 #include "rendering/character_renderer.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/selection_circle.hpp"
+#include "rendering/unit_name_anchor.hpp"
 
 namespace wowee::core {
 
@@ -169,6 +170,47 @@ std::optional<EntitySpawner::SelectionCirclePlacement> EntitySpawner::selectionC
     }
     placement.radius = rendering::selection_circle::radius(box, scale);
     return placement;
+}
+
+std::optional<glm::vec3> EntitySpawner::unitNamePosition(uint64_t guid) const {
+    namespace una = rendering::unit_name_anchor;
+    const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
+    if (!characters || !gameHandler_) return std::nullopt;
+    const uint32_t instanceId = characterInstanceIdForGuid(guid);
+    glm::mat4 frame;
+    if (instanceId == 0 || !characters->getInstanceFrame(instanceId, frame)) return std::nullopt;
+
+    // Riding, the unit's model is its mount's (the rider is attached to it).
+    uint32_t mountInstance = 0;
+    if (guid == gameHandler_->getPlayerGuid()) {
+        mountInstance = mountInstanceId_;
+    } else if (const RemotePlayerMount* mount = getRemotePlayerMount(guid)) {
+        mountInstance = mount->instanceId;
+    }
+    glm::mat4 attachment;
+    if (mountInstance != 0) {
+        if (characters->getAttachmentTransform(mountInstance, una::kAttachmentPlayerNameMounted, attachment) ||
+            characters->getAttachmentTransform(mountInstance, una::kAttachmentPlayerName, attachment)) {
+            return glm::vec3(attachment[3]);
+        }
+    } else if (characters->getAttachmentTransform(instanceId, una::kAttachmentPlayerName, attachment)) {
+        return glm::vec3(attachment[3]);
+    }
+
+    glm::vec3 position(frame[3]);
+    glm::mat4 mountFrame;
+    if (mountInstance != 0 && characters->getInstanceFrame(mountInstance, mountFrame)) {
+        position = glm::vec3(mountFrame[3]);
+    }
+    const float scale = glm::length(glm::vec3(frame[0]));
+    float height = 0.0f;
+    if (auto entity = gameHandler_->getEntityManager().getEntity(guid); entity && entity->isUnit()) {
+        uint32_t displayId = static_cast<const game::Unit&>(*entity).getDisplayId();
+        if (auto d = creatureDisplayIds_.find(guid); d != creatureDisplayIds_.end()) displayId = d->second;
+        if (const ModelGeoBox* box = geoBoxForDisplay(displayId)) height = box->box.max.z - box->box.min.z;
+    }
+    if (!(height > 0.0f)) return std::nullopt;
+    return una::fallbackNamePosition(position, height, scale);
 }
 
 }  // namespace wowee::core

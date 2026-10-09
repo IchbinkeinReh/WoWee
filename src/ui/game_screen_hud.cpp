@@ -22,6 +22,7 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/terrain_manager.hpp"
 #include "rendering/minimap.hpp"
+#include "rendering/unit_name_anchor.hpp"
 #include "rendering/world_map.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/camera.hpp"
@@ -868,19 +869,28 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
 
         // Prefer the renderer's actual instance position so the nameplate tracks the
         // rendered model exactly (avoids drift from the parallel entity interpolator).
-        glm::vec3 renderPos;
-        if (!core::Application::getInstance().getRenderPositionForGuid(guid, renderPos)) {
-            renderPos = core::coords::canonicalToRender(
+        glm::vec3 unitPos;
+        if (!core::Application::getInstance().getRenderPositionForGuid(guid, unitPos)) {
+            unitPos = core::coords::canonicalToRender(
                 glm::vec3(unit->getX(), unit->getY(), unit->getZ()));
         }
-        renderPos.z += 2.3f;
 
-        // Cull distance: the current target stays visible to 60 units so its
-        // bar doesn't vanish at combat range; players 40; other NPCs 20.
-        glm::vec3 nameDelta = renderPos - camPos;
-        float distSq = glm::dot(nameDelta, nameDelta);
-        float cullDist = isTarget ? 60.0f : (isPlayer ? 40.0f : 20.0f);
-        if (distSq > cullDist * cullDist) continue;
+        // Within 41 yards of the player, unit to unit (0x0072b060). The
+        // target keeps this client's longer reach: the plate is what names
+        // it here, and the client names its target at any distance
+        // (0x00729c70).
+        const glm::vec3 playerRenderPos = core::coords::canonicalToRender(playerCanonical);
+        if (!isTarget && !rendering::unit_name_anchor::plateInRange(playerRenderPos, unitPos)) continue;
+        if (isTarget) {
+            const glm::vec3 d = unitPos - playerRenderPos;
+            if (glm::dot(d, d) > 60.0f * 60.0f) continue;
+        }
+
+        // Two thirds of a yard over the unit's name (0x00715720), which is its
+        // model's PlayerName attachment (0x0071fef0).
+        glm::vec3 renderPos = unitPos + glm::vec3(0.0f, 0.0f, 2.3f);
+        if (auto name = core::Application::getInstance().getUnitNamePosition(guid)) renderPos = *name;
+        renderPos.z += rendering::unit_name_anchor::kPlateLift;
 
         // Behind a building is out of sight, and a name that reads through a
         // wall is worse than no name: it puts a player in a room they are not
@@ -912,10 +922,10 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         float sx = (ndc.x * 0.5f + 0.5f) * screenW;
         float sy = (ndc.y * 0.5f + 0.5f) * screenH;
 
-        // Fade out in the last 5 units of cull range
-        float fadeSq = (cullDist - 5.0f) * (cullDist - 5.0f);
-        float dist = std::sqrt(distSq);
-        float alpha = distSq < fadeSq ? 1.0f : 1.0f - (dist - (cullDist - 5.0f)) / 5.0f;
+        // No fade with distance: the plate is there inside the range and gone
+        // outside it. With a target, every other plate is drawn at half
+        // alpha (0x0098e9f0).
+        const float alpha = rendering::unit_name_anchor::plateAlpha(targetGuid != 0, isTarget);
         auto A = [&](int v) { return static_cast<int>(v * alpha); };
 
         // Bar colour by hostility (grey for corpses)
@@ -1453,12 +1463,17 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         if (self && self->isUnit()) {
             const std::string& ownName = static_cast<game::Unit*>(self.get())->getName();
             if (!ownName.empty()) {
+                // At the name's place on the model (0x0071fef0).
                 glm::vec3 ownPos;
-                if (!core::Application::getInstance().getRenderPositionForGuid(playerGuid, ownPos)) {
-                    ownPos = core::coords::canonicalToRender(
-                        glm::vec3(self->getX(), self->getY(), self->getZ()));
+                if (auto name = core::Application::getInstance().getUnitNamePosition(playerGuid)) {
+                    ownPos = *name;
+                } else {
+                    if (!core::Application::getInstance().getRenderPositionForGuid(playerGuid, ownPos)) {
+                        ownPos = core::coords::canonicalToRender(
+                            glm::vec3(self->getX(), self->getY(), self->getZ()));
+                    }
+                    ownPos.z += 2.3f;
                 }
-                ownPos.z += 2.3f;
                 const glm::vec4 clip = viewProj * glm::vec4(ownPos, 1.0f);
                 if (clip.w > 0.01f) {
                     const glm::vec3 ndc = glm::vec3(clip) / clip.w;
