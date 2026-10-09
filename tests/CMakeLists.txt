@@ -2740,6 +2740,11 @@ wowee_add_test(test_texture_variants
 wowee_add_test(test_screen_effect_state
     SOURCES test_screen_effect_state.cpp)
 
+# ── test_minimap_tracking ────────────────────────────────────
+# The tracking menu's own entries: town services, the mailbox, low-level quests.
+wowee_add_test(test_minimap_tracking
+    SOURCES test_minimap_tracking.cpp)
+
 # ── test_minimap_indoor ──────────────────────────────────────
 # The indoor minimap's WMO pictures: tiles, names, area and groups (rendering/minimap_indoor.hpp).
 wowee_add_test(test_minimap_indoor

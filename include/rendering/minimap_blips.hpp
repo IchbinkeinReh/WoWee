@@ -6,6 +6,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <algorithm>
+#include <vector>
 
 namespace wowee::rendering::minimap_blips {
 
@@ -62,17 +64,26 @@ constexpr Cell partyRaidCell(int index) {
 /// The ObjectIcons cells 0x0057f7f0 sorts objects into (the list index is the
 /// cell, 0x00580380 draws lists 2 to 15 with cells 2 to 15).
 enum ObjectIcon : int {
+    kTrackedPlayerAttackable = 2, ///< a tracked player the player may attack (0x00729740)
     kTrackedPlayerOtherTeam = 3,  ///< a tracked player of the other side
     kTrackedPlayerSameTeam = 4,   ///< a tracked player of the player's side
     kTrackedHostile = 5,          ///< a tracked creature, hostile
     kTrackedNeutral = 6,          ///< unfriendly or neutral
     kTrackedFriendly = 7,         ///< friendly or better
-    kTrackedResource = 8,         ///< a herb, a vein, treasure, a school of fish
+    kTrackedResource = 8,         ///< a herb, a vein, treasure, a school of fish;
+                                  ///< and what the menu's town tracking finds
     kQuestAvailable = 9,          ///< the yellow !
     kQuestReward = 10,            ///< the yellow ?
     kQuestAvailableRep = 11,      ///< the blue !
+    kTaxiUnknown = 13,            ///< a flight master whose node the player lacks
     kOwnMinion = 15,              ///< what the player charms or summoned
 };
+// Cells 12 and 14 are filled by nothing in this client: 0x0057f7f0 sorts
+// into 2 to 11, 13 and 15, and no other code writes those two lists.
+
+/// The colour 0x00580380 draws a blip in that stands in another indoor area
+/// than the player's (0x0057f7f0's +0x18): grey, 0xb0 of white.
+constexpr uint8_t kOtherAreaGrey = 0xb0;
 
 /// A tracked creature's cell by its reaction to the player, 0 hated to 7
 /// exalted: friendly and better 7, unfriendly and neutral 6, the rest 5
@@ -150,6 +161,48 @@ constexpr Cell poiIconCell(int icon, int textureWidth) {
     return {column * cell + px, row * cell + px, (column + 1.0f) * cell, (row + 1.0f) * cell};
 }
 
+/// A point of interest's flags (AreaPOI.dbc's, a gossip point's, the
+/// corpse's 2): 0x1 an AreaPOI the minimap takes at all (0x007f6730), 0x2 its
+/// icon drawn within the blip reach (0x007f44a0), 0x100 its rim arrow kept
+/// indoors (0x007f4b60).
+constexpr uint32_t kPoiOnMinimap = 0x1;
+constexpr uint32_t kPoiShowIcon = 0x2;
+constexpr uint32_t kPoiArrowIndoors = 0x100;
+
+/// An AreaPOI's icon (0x00581e80): with a world state, Icon[value - 1] for a
+/// value of 1 to 9 and Icon[0] for any other; without one, Icon[0]. -1 while
+/// its world state is 0 or unknown, when 0x007f44a0 shows nothing of it.
+inline int areaPoiIcon(const std::array<int32_t, 9>& icons, uint32_t worldStateId,
+                       const uint32_t* worldStateValue) {
+    if (worldStateId == 0) return icons[0];
+    if (!worldStateValue || *worldStateValue == 0) return -1;
+    const uint32_t i = *worldStateValue - 1;
+    return icons[i <= 8 ? i : 0];
+}
+
+/// A point beyond the blip reach, as 0x007f44a0 weighs it for a rim arrow.
+struct PoiCandidate {
+    int32_t importance = 0;  ///< lower first; the corpse is -1
+    float distance = 0.0f;   ///< yards
+    bool anyDistance = false;  ///< the corpse: kept however far
+};
+
+/// Which points get the rim arrows (0x007f44a0): up to three, out to
+/// kPoiArrowReach unless anyDistance, the lowest importance first and the
+/// nearest of equal importance; on a tie, the earlier. Indices into `c`.
+inline std::vector<size_t> chooseRimArrows(const std::vector<PoiCandidate>& c) {
+    std::vector<size_t> eligible;
+    for (size_t i = 0; i < c.size(); ++i) {
+        if (c[i].anyDistance || c[i].distance <= kPoiArrowReach) eligible.push_back(i);
+    }
+    std::stable_sort(eligible.begin(), eligible.end(), [&](size_t a, size_t b) {
+        if (c[a].importance != c[b].importance) return c[a].importance < c[b].importance;
+        return c[a].distance < c[b].distance;
+    });
+    if (eligible.size() > 3) eligible.resize(3);
+    return eligible;
+}
+
 /// The quest-giver status (DIALOG_STATUS_*) to its ObjectIcons cell, or -1
 /// for none. 0x0057f7f0: 10 is the ?, 8 the !, 7 the blue !; 2 and 4, the
 /// low-level ones, only while the "Low Level Quests" tracking is chosen.
@@ -164,6 +217,74 @@ constexpr int questGiverIcon(uint8_t status, bool trackingLowLevel) {
         case 4:  return trackingLowLevel ? kQuestAvailableRep : -1;
         default: return -1;
     }
+}
+
+/// What 0x0057f7f0 asks of a unit, in the order it asks.
+struct UnitFacts {
+    /// UNIT_FIELD_CHARMEDBY is the player, or with no charmer
+    /// UNIT_FIELD_SUMMONEDBY is.
+    bool ownMinion = false;
+    bool dead = false;          ///< UNIT_FIELD_HEALTH below 1
+    /// The creature's type flags have 0x80, interactable dead (0x00715e30):
+    /// a dead one is still marked.
+    bool deadInteract = false;
+    /// The tracking menu's town entry finds it: one of its UNIT_NPC_FLAGS,
+    /// and not hostile (0x0071acf0, 0x00729530).
+    bool otherTracked = false;
+    uint8_t questStatus = 0;    ///< DIALOG_STATUS_*, 0 none
+    /// A flight master whose node the player has not learned:
+    /// SMSG_TAXINODE_STATUS said 0 (0x006d5fc0 sets the unit's +0x94).
+    bool taxiUnknown = false;
+    bool tracked = false;       ///< unitTracked (0x006dca00)
+    bool isPlayer = false;
+    bool attackable = false;    ///< the player may attack it (0x00729740)
+    bool sameTeam = false;      ///< its race's side is the player's (0x006d6e90)
+    int reaction = 0;           ///< 0 hated .. 7 exalted (0x007251c0)
+};
+
+/// The unit's ObjectIcons cell, or -1 for no blip (0x0057f7f0).
+constexpr int unitIcon(const UnitFacts& f, bool trackingLowLevel) {
+    if (f.ownMinion) return kOwnMinion;
+    if (f.dead && !f.deadInteract) return -1;
+    if (f.otherTracked) return kTrackedResource;
+    const int quest = questGiverIcon(f.questStatus, trackingLowLevel);
+    if (quest >= 0) return quest;
+    if (f.taxiUnknown) return kTaxiUnknown;
+    if (!f.tracked) return -1;
+    if (f.isPlayer) {
+        if (f.attackable) return kTrackedPlayerAttackable;
+        return f.sameTeam ? kTrackedPlayerSameTeam : kTrackedPlayerOtherTeam;
+    }
+    return trackedCreatureIcon(f.reaction);
+}
+
+/// What 0x0057f7f0 asks of a game object.
+struct GameObjectFacts {
+    /// The menu's mailbox entry finds it: its type, the player not a ghost
+    /// and it not hostile (0x0070f850, 0x0071f8b0).
+    bool otherTracked = false;
+    uint8_t questStatus = 0;
+    bool resourceTracked = false;  ///< its lock in PLAYER_TRACK_RESOURCES (0x006dca90)
+};
+constexpr int gameObjectIcon(const GameObjectFacts& f, bool trackingLowLevel) {
+    if (f.otherTracked) return kTrackedResource;
+    const int quest = questGiverIcon(f.questStatus, trackingLowLevel);
+    if (quest >= 0) return quest;
+    return f.resourceTracked ? kTrackedResource : -1;
+}
+
+/// Whether an object gets a blip, and grey, by the indoor areas (0x0057f7f0
+/// on 0x0077f090 and 0x0077f160): with the player inside a building's
+/// interior group, only what is inside the same building; otherwise all,
+/// what stands inside some building greyed. `playerArea` and `objectArea`
+/// are the building instance, 0 for none.
+struct AreaVerdict {
+    bool shown = true;
+    bool grey = false;
+};
+constexpr AreaVerdict areaVerdict(uint32_t playerArea, uint32_t objectArea) {
+    if (playerArea != 0) return {objectArea == playerArea, false};
+    return {true, objectArea != 0};
 }
 
 /// A group member's PartyRaidBlips cell (0x0057ff70): the class, from 1, in

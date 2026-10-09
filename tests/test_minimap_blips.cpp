@@ -155,3 +155,91 @@ TEST_CASE("POIIcons is 14 icons of 18 pixels to a row", "[minimap_blips]") {
     CHECK(second.u0 == Catch::Approx(19.0f / 256.0f));
     CHECK(second.v0 == Catch::Approx(19.0f / 256.0f));
 }
+
+TEST_CASE("a unit's cell, in 0x0057f7f0's order", "[minimap_blips]") {
+    mb::UnitFacts f;
+    CHECK(mb::unitIcon(f, false) == -1);
+    // Tracked creatures by reaction, players by attackability and side.
+    f.tracked = true;
+    f.reaction = 3;
+    CHECK(mb::unitIcon(f, false) == mb::kTrackedNeutral);
+    f.isPlayer = true;
+    CHECK(mb::unitIcon(f, false) == mb::kTrackedPlayerOtherTeam);
+    f.sameTeam = true;
+    CHECK(mb::unitIcon(f, false) == mb::kTrackedPlayerSameTeam);
+    f.attackable = true;
+    CHECK(mb::unitIcon(f, false) == mb::kTrackedPlayerAttackable);
+    // An unlearned flight master before tracking, a quest giver before that,
+    // the menu's town tracking before that.
+    f = {};
+    f.taxiUnknown = true;
+    CHECK(mb::unitIcon(f, false) == mb::kTaxiUnknown);
+    f.questStatus = 8;
+    CHECK(mb::unitIcon(f, false) == mb::kQuestAvailable);
+    f.otherTracked = true;
+    CHECK(mb::unitIcon(f, false) == mb::kTrackedResource);
+    // Dead: nothing, unless interactable dead; one's own minion always.
+    f.dead = true;
+    CHECK(mb::unitIcon(f, false) == -1);
+    f.deadInteract = true;
+    CHECK(mb::unitIcon(f, false) == mb::kTrackedResource);
+    f.deadInteract = false;
+    f.ownMinion = true;
+    CHECK(mb::unitIcon(f, false) == mb::kOwnMinion);
+    // Low-level quests only with the menu's entry chosen.
+    f = {};
+    f.questStatus = 2;
+    CHECK(mb::unitIcon(f, false) == -1);
+    CHECK(mb::unitIcon(f, true) == mb::kQuestAvailable);
+}
+
+TEST_CASE("a game object's cell", "[minimap_blips]") {
+    mb::GameObjectFacts f;
+    CHECK(mb::gameObjectIcon(f, false) == -1);
+    f.resourceTracked = true;
+    CHECK(mb::gameObjectIcon(f, false) == mb::kTrackedResource);
+    f.questStatus = 10;
+    CHECK(mb::gameObjectIcon(f, false) == mb::kQuestReward);
+    f.otherTracked = true;
+    CHECK(mb::gameObjectIcon(f, false) == mb::kTrackedResource);
+}
+
+TEST_CASE("indoor areas: the same building only, or grey", "[minimap_blips]") {
+    // Outside: everything, what is inside a building grey.
+    CHECK(mb::areaVerdict(0, 0).shown);
+    CHECK_FALSE(mb::areaVerdict(0, 0).grey);
+    CHECK(mb::areaVerdict(0, 7).shown);
+    CHECK(mb::areaVerdict(0, 7).grey);
+    // Inside: the same building's, never grey; nothing else.
+    CHECK(mb::areaVerdict(7, 7).shown);
+    CHECK_FALSE(mb::areaVerdict(7, 7).grey);
+    CHECK_FALSE(mb::areaVerdict(7, 0).shown);
+    CHECK_FALSE(mb::areaVerdict(7, 9).shown);
+    CHECK(mb::kOtherAreaGrey == 0xb0);
+}
+
+TEST_CASE("an AreaPOI's icon by its world state", "[minimap_blips]") {
+    const std::array<int32_t, 9> icons = {6, 7, 8, 9, 10, 11, 12, 13, 14};
+    CHECK(mb::areaPoiIcon(icons, 0, nullptr) == 6);
+    uint32_t v = 0;
+    CHECK(mb::areaPoiIcon(icons, 55, nullptr) == -1);
+    CHECK(mb::areaPoiIcon(icons, 55, &v) == -1);
+    v = 3;
+    CHECK(mb::areaPoiIcon(icons, 55, &v) == 8);
+    v = 9;
+    CHECK(mb::areaPoiIcon(icons, 55, &v) == 14);
+    v = 10;
+    CHECK(mb::areaPoiIcon(icons, 55, &v) == 6);
+}
+
+TEST_CASE("three rim arrows: lowest importance, then nearest; the corpse at any distance",
+          "[minimap_blips]") {
+    std::vector<mb::PoiCandidate> c = {
+        {5, 100.0f, false}, {1, 600.0f, false}, {1, 300.0f, false},
+        {0, 800.0f, false}, {-1, 5000.0f, true}, {5, 50.0f, false}};
+    const auto chosen = mb::chooseRimArrows(c);
+    // 3 is too far; the corpse first, then the two of importance 1, nearer first.
+    CHECK(chosen == std::vector<size_t>{4, 2, 1});
+    c.resize(2);
+    CHECK(mb::chooseRimArrows(c) == std::vector<size_t>{1, 0});
+}

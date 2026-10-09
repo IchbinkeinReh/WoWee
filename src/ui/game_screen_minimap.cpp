@@ -10,6 +10,7 @@
 #include "ui/minimap_projection.hpp"
 #include "ui/ui_texture_load.hpp"
 #include "rendering/minimap_blips.hpp"
+#include "game/minimap_tracking.hpp"
 #include "rendering/vk_context.hpp"
 #include "core/application.hpp"
 #include "core/appearance_composer.hpp"
@@ -115,12 +116,13 @@ namespace {
         int poiIconsHeight = 0;
         VkDescriptorSet corpseArrow = VK_NULL_HANDLE;
         VkDescriptorSet guideArrow = VK_NULL_HANDLE;
+        VkDescriptorSet poiArrow = VK_NULL_HANDLE;
     };
 
     const MinimapArt& minimapArt(wowee::pipeline::AssetManager* assets,
                                  wowee::core::Window* window) {
         static MinimapArt art;
-        static bool gaveUp[7] = {};
+        static bool gaveUp[8] = {};
         const auto load = [&](int slot, VkDescriptorSet& set, const char* path,
                               int* width = nullptr, int* height = nullptr) {
             if (set || gaveUp[slot] || !assets) return;
@@ -140,6 +142,7 @@ namespace {
              &art.poiIconsWidth, &art.poiIconsHeight);
         load(5, art.corpseArrow, "Interface\\Minimap\\Rotating-MinimapCorpseArrow.blp");
         load(6, art.guideArrow, "Interface\\Minimap\\Rotating-MinimapGuideArrow.blp");
+        load(7, art.poiArrow, "Interface\\Minimap\\Rotating-MinimapArrow.blp");
         return art;
     }
 
@@ -921,14 +924,23 @@ void GameScreen::renderMinimapChests(const MinimapFrame& frame, const EntityList
 }
 
 // The objects the client gives an ObjectIcons blip (0x0057f7f0, drawn by
-// 0x00580380 a cell at a time, 2 to 15, so the later cells lie on top):
+// 0x00580380 a cell at a time, 2 to 15, so the later cells lie on top), in
+// the order it decides (minimap_blips::unitIcon, gameObjectIcon):
 //
 //   - a unit the player charms or summoned, cell 15, whatever else it is;
+//   - a dead unit nothing, unless its creature is interactable dead;
+//   - what the tracking menu's town entry finds, cell 8: a creature with one
+//     of its NPC flags, not hostile; the mailbox;
 //   - a quest giver, by its status: the ! for 8, the ? for 10, the blue !
-//     for 7 (questGiverIcon) - a dead unit never;
+//     for 7, and 2 and 4 too with the menu's low-level quests chosen;
+//   - a flight master whose node the player has not learned, cell 13;
 //   - what the player's tracking finds: a creature of a tracked type, or one
-//     the server marks, by its reaction (5 to 7), a player by side (3, 4);
-//     a chest or fishing hole whose lock tracking opens (8).
+//     the server marks, by its reaction (5 to 7); a player, 2 if the player
+//     may attack it, else by side (3, 4); a chest or fishing hole whose lock
+//     tracking opens (8).
+//
+// Inside a building's interior group only what is inside the same building
+// is marked; outside, what stands inside one is marked grey (0xb0).
 //
 // Party and raid members are not among them: they are PartyRaidBlips.
 void GameScreen::renderMinimapObjectBlips(const MinimapFrame& frame, const EntityList& units,
@@ -950,79 +962,101 @@ void GameScreen::renderMinimapObjectBlips(const MinimapFrame& frame, const Entit
     std::unordered_set<uint64_t> group;
     for (const auto& member : gameHandler.getPartyData().members) group.insert(member.guid);
 
+    // The tracking menu's own entry (0xbeba64).
+    namespace mt = game::minimap_tracking;
+    const int other = gameHandler.minimapOtherTracking();
+    const mt::Other* otherEntry = other >= 0 && other < static_cast<int>(mt::kOther.size())
+        ? &mt::kOther[static_cast<size_t>(other)] : nullptr;
+    const bool trackingLowLevel = otherEntry && otherEntry->kind == mt::Kind::TrivialQuests;
+
+    // Which building's interior the player stands in, if any (0x0077f090).
+    auto* wmo = services_.renderer ? services_.renderer->getWMORenderer() : nullptr;
+    const auto indoorArea = [&](const glm::vec3& render) -> uint32_t {
+        if (!wmo) return 0;
+        const auto area = wmo->indoorAreaAt(render);
+        return area ? area->instanceId : 0;
+    };
+    const uint32_t playerArea = indoorArea(frame.playerRender);
+
     const auto guidField = [](const game::Entity& e, game::UF low) -> uint64_t {
         const uint16_t idx = game::fieldIndex(low);
         if (idx == 0xFFFF) return 0;
         return static_cast<uint64_t>(e.getField(idx)) |
                (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
     };
-    const auto questIcon = [&](uint64_t guid) {
+    const auto questStatus = [&](uint64_t guid) -> uint8_t {
         const auto it = statuses.find(guid);
-        return it == statuses.end()
-            ? -1 : minimap_blips::questGiverIcon(static_cast<uint8_t>(it->second),
-                                                 /*trackingLowLevel=*/false);
+        return it == statuses.end() ? 0 : static_cast<uint8_t>(it->second);
     };
 
     struct Blip {
         int icon;
+        bool grey;
         float sx, sy;
         const std::string* name;
     };
     std::vector<Blip> blips;
     const auto place = [&](const game::Entity& e, int icon, const std::string* name) {
+        const glm::vec3 render = core::coords::canonicalToRender(glm::vec3(e.getX(), e.getY(), e.getZ()));
         float sx = 0.0f, sy = 0.0f;
-        if (!frame.projectBlip(core::coords::canonicalToRender(
-                glm::vec3(e.getX(), e.getY(), e.getZ())), sx, sy)) {
-            return;
-        }
-        blips.push_back({icon, sx, sy, name});
+        if (!frame.projectBlip(render, sx, sy)) return;
+        const auto verdict = minimap_blips::areaVerdict(playerArea, indoorArea(render));
+        if (!verdict.shown) return;
+        blips.push_back({icon, verdict.grey, sx, sy, name});
     };
 
+    constexpr uint32_t kCreatureTypeFlagDeadInteract = 0x80;
+    const auto& creatureInfo = gameHandler.getCreatureInfoCache();
     const auto classifyUnit = [&](const std::shared_ptr<game::Entity>& entity) {
         const uint64_t guid = entity->getGuid();
         if (guid == selfGuid || group.count(guid)) return;
         auto unit = std::static_pointer_cast<game::Unit>(entity);
-        int icon = -1;
-        if (guidField(*unit, game::UF::UNIT_FIELD_CHARMEDBY) == selfGuid ||
-            guidField(*unit, game::UF::UNIT_FIELD_SUMMONEDBY_LO) == selfGuid) {
-            icon = minimap_blips::kOwnMinion;
-        } else if (unit->getHealth() == 0) {
-            return;
-        } else if ((icon = questIcon(guid)) < 0) {
-            const bool isPlayer = entity->getType() == game::ObjectType::PLAYER;
-            // Every player race is humanoid.
-            const uint32_t creatureType = isPlayer ? 7u : gameHandler.getCreatureType(unit->getEntry());
-            const uint32_t bytes1 = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1));
-            if (!minimap_blips::unitTracked(bytes1, unit->getDynamicFlags(), creatureType,
-                                            trackCreatures)) {
-                return;
-            }
-            if (isPlayer) {
-                const uint32_t bytes0 = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
-                const int team = minimap_blips::raceTeam(static_cast<uint8_t>(bytes0 & 0xFF));
-                icon = team == ownTeam ? minimap_blips::kTrackedPlayerSameTeam
-                                       : minimap_blips::kTrackedPlayerOtherTeam;
-            } else {
-                // unitReactionToPlayer counts from 1, the client's from 0.
-                icon = minimap_blips::trackedCreatureIcon(gameHandler.unitReactionToPlayer(*unit) - 1);
-            }
+        minimap_blips::UnitFacts f;
+        const uint64_t charmer = guidField(*unit, game::UF::UNIT_FIELD_CHARMEDBY);
+        f.ownMinion = charmer != 0 ? charmer == selfGuid
+                                   : guidField(*unit, game::UF::UNIT_FIELD_SUMMONEDBY_LO) == selfGuid;
+        f.dead = unit->getHealth() == 0;
+        f.isPlayer = entity->getType() == game::ObjectType::PLAYER;
+        if (!f.isPlayer) {
+            const auto info = creatureInfo.find(unit->getEntry());
+            f.deadInteract = info != creatureInfo.end() &&
+                             (info->second.typeFlags & kCreatureTypeFlagDeadInteract) != 0;
         }
-        place(*entity, icon, &unit->getName());
+        // unitReactionToPlayer counts from 1, the client's from 0.
+        f.reaction = gameHandler.unitReactionToPlayer(*unit) - 1;
+        f.otherTracked = otherEntry && otherEntry->kind == mt::Kind::NpcFlag &&
+                         (unit->getNpcFlags() & otherEntry->mask) != 0 && f.reaction > 2;
+        f.questStatus = questStatus(guid);
+        f.taxiUnknown = gameHandler.taxiNodeUnknown(guid);
+        // Every player race is humanoid.
+        const uint32_t creatureType = f.isPlayer ? 7u : gameHandler.getCreatureType(unit->getEntry());
+        const uint32_t bytes1 = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1));
+        f.tracked = minimap_blips::unitTracked(bytes1, unit->getDynamicFlags(), creatureType, trackCreatures);
+        if (f.isPlayer) {
+            const uint32_t bytes0 = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
+            f.sameTeam = minimap_blips::raceTeam(static_cast<uint8_t>(bytes0 & 0xFF)) == ownTeam;
+            f.attackable = unit->isHostile();
+        }
+        const int icon = minimap_blips::unitIcon(f, trackingLowLevel);
+        if (icon >= 0) place(*entity, icon, &unit->getName());
     };
     for (const auto& entity : units) classifyUnit(entity);
     for (const auto& entity : players) classifyUnit(entity);
 
+    const bool ghost = gameHandler.isPlayerGhost();
     for (const auto& entity : gameObjects) {
-        int icon = questIcon(entity->getGuid());
         const auto* info = gameHandler.getCachedGameObjectInfo(
             std::static_pointer_cast<game::GameObject>(entity)->getEntry());
-        if (icon < 0 && trackResources != 0 && info && info->hasData) {
+        minimap_blips::GameObjectFacts f;
+        f.otherTracked = otherEntry && otherEntry->kind == mt::Kind::GameObjectType && info &&
+                         info->type == otherEntry->mask && !ghost;
+        f.questStatus = questStatus(entity->getGuid());
+        if (trackResources != 0 && info && info->hasData) {
             const int lockField = minimap_blips::lockDataIndex(info->type);
-            if (lockField >= 0 &&
-                (lockSkillMask(services_.assetManager, info->data[lockField]) & trackResources) != 0) {
-                icon = minimap_blips::kTrackedResource;
-            }
+            f.resourceTracked = lockField >= 0 &&
+                (lockSkillMask(services_.assetManager, info->data[lockField]) & trackResources) != 0;
         }
+        const int icon = minimap_blips::gameObjectIcon(f, trackingLowLevel);
         if (icon < 0) continue;
         place(*entity, icon, info ? &info->name : nullptr);
     }
@@ -1030,52 +1064,19 @@ void GameScreen::renderMinimapObjectBlips(const MinimapFrame& frame, const Entit
     std::stable_sort(blips.begin(), blips.end(),
                      [](const Blip& a, const Blip& b) { return a.icon < b.icon; });
     const char* tooltip = nullptr;
+    constexpr uint8_t g = minimap_blips::kOtherAreaGrey;
     for (const Blip& b : blips) {
-        drawAtlasBlip(frame.drawList, art.objectIcons, b.sx, b.sy, size,
-                      minimap_blips::objectIconCell(b.icon));
+        const auto cell = minimap_blips::objectIconCell(b.icon);
+        const float h = size * 0.5f;
+        frame.drawList->AddImage((ImTextureID)(uintptr_t)art.objectIcons, ImVec2(b.sx - h, b.sy - h),
+                                 ImVec2(b.sx + h, b.sy + h), ImVec2(cell.u0, cell.v0),
+                                 ImVec2(cell.u1, cell.v1),
+                                 b.grey ? IM_COL32(g, g, g, 255) : IM_COL32_WHITE);
         if (b.name && !b.name->empty() && cursorNearBlip(b.sx, b.sy, size * 0.5f)) {
             tooltip = b.name->c_str();
         }
     }
     if (tooltip) ImGui::SetTooltip("%s", tooltip);
-}
-
-// The point a gossip window has pointed at (SMSG_GOSSIP_POI), as the client
-// keeps it: one of the static points of interest (0x007f4870), drawn as its
-// POIIcons icon within 0.8 of the reach and as a Rotating-MinimapGuideArrow
-// at the rim beyond it, out to 694 yards (0x007f44a0, 0x0057d860).
-//
-// A quest's points are not drawn: SMSG_QUEST_POI is the world map's, and
-// the minimap draws nothing of it.
-void GameScreen::renderMinimapGossipPois(const MinimapFrame& frame, game::GameHandler& gameHandler) {
-    const MinimapArt& art = minimapArt(services_.assetManager, services_.window);
-    const float unitPx = frame.unitPixels();
-    const float size = minimap_blips::kBlipSize * unitPx;
-    for (const auto& poi : gameHandler.getGossipPois()) {
-        if (poi.questObjectiveIndex != -2) continue;
-        const glm::vec3 render = core::coords::canonicalToRender(glm::vec3(poi.x, poi.y, 0.0f));
-        const glm::vec2 offset = renderDeltaToMinimapOffset(
-            render.x - frame.playerRender.x, render.y - frame.playerRender.y, frame.view);
-        const float offsetLen = std::sqrt(offset.x * offset.x + offset.y * offset.y);
-        if (offsetLen <= frame.mapRadius * minimap_blips::kBlipReach) {
-            if (!art.poiIcons || poi.icon >= static_cast<uint32_t>(minimap_blips::kPoiIconCount)) continue;
-            const float sx = frame.centerX + offset.x;
-            const float sy = frame.centerY + offset.y;
-            drawAtlasBlip(frame.drawList, art.poiIcons, sx, sy, size,
-                          minimap_blips::poiIconCell(static_cast<int>(poi.icon), art.poiIconsWidth));
-            if (!poi.name.empty() && cursorNearBlip(sx, sy, size * 0.5f)) {
-                ImGui::SetTooltip("%s", poi.name.c_str());
-            }
-            continue;
-        }
-        const float yards = offsetLen / frame.mapRadius * frame.view.viewRadius;
-        if (!art.guideArrow || yards > minimap_blips::kPoiArrowReach) continue;
-        const ImVec2 mid = drawRimArrow(frame.drawList, art.guideArrow, frame.centerX,
-                                        frame.centerY, unitPx, offsetBearing(offset));
-        if (!poi.name.empty() && cursorNearBlip(mid.x, mid.y, kArrowHoverRadius)) {
-            ImGui::SetTooltip("%s", poi.name.c_str());
-        }
-    }
 }
 
 // What a party member pinged, for as long as the ping lasts.
@@ -1209,42 +1210,161 @@ void GameScreen::renderMinimapBattlegroundPositions(const MinimapFrame& frame, g
 
 }
 
-// Where the corpse is, while the player is a ghost: the static point of
-// interest 0x007f4990 sets, POIIcons' icon 8, within 0.8 of the reach, and a
-// Rotating-MinimapCorpseArrow at the rim beyond it - at any distance, the
-// corpse being the one point 0x007f44a0 keeps an arrow for however far.
-void GameScreen::renderMinimapCorpseMarker(const MinimapFrame& frame, game::GameHandler& gameHandler) {
-    if (!gameHandler.isPlayerGhost()) return;
-    float corpseCanX = 0.0f, corpseCanY = 0.0f;
-    if (!gameHandler.getCorpseCanonicalPos(corpseCanX, corpseCanY)) return;
-
+// The minimap's points of interest (0x007f6730 gathers them, 0x007f44a0
+// sorts them, 0x00581e80 and 0x0057d860 draw them):
+//
+//   - AreaPOI.dbc's rows on this map with flag 0x1 - town and landmark icons
+//     - each its Icon by its world state's value (Icon[value - 1]), none at
+//     all while that state is 0;
+//   - the last SMSG_GOSSIP_POI's point (static slot 1, 0x007f4870), for eight
+//     minutes or until the player is within 10 yards of it;
+//   - the corpse, while a ghost (static slot 2, 0x007f4990): icon 8, flag 0x2,
+//     importance -1.
+//
+// Within 0.8 of the reach a point with flag 0x2 is its POIIcons icon. Beyond
+// it, up to three take a rim arrow - the lowest importance first, the nearest
+// of equals, out to 694 yards but the corpse at any distance - the corpse's
+// Rotating-MinimapCorpseArrow, the gossip point's Rotating-MinimapGuideArrow,
+// an AreaPOI's Rotating-MinimapArrow. On the indoor map only the static
+// points' and those with flag 0x100 keep theirs.
+//
+// A quest's points are not drawn: SMSG_QUEST_POI is the world map's, and the
+// minimap draws nothing of it.
+void GameScreen::renderMinimapPois(const MinimapFrame& frame, game::GameHandler& gameHandler) {
+    namespace mb = minimap_blips;
     const MinimapArt& art = minimapArt(services_.assetManager, services_.window);
     const float unitPx = frame.unitPixels();
-    const glm::vec3 corpse = core::coords::canonicalToRender(glm::vec3(corpseCanX, corpseCanY, 0.0f));
-    const glm::vec2 offset = renderDeltaToMinimapOffset(
-        corpse.x - frame.playerRender.x, corpse.y - frame.playerRender.y, frame.view);
-    const float offsetLen = std::sqrt(offset.x * offset.x + offset.y * offset.y);
+    const float size = mb::kBlipSize * unitPx;
 
-    ImVec2 at;
-    float hover = kBlipHoverRadius;
-    if (offsetLen <= frame.mapRadius * minimap_blips::kBlipReach) {
-        if (!art.poiIcons) return;
-        const float size = minimap_blips::kBlipSize * unitPx;
-        at = ImVec2(frame.centerX + offset.x, frame.centerY + offset.y);
-        drawAtlasBlip(frame.drawList, art.poiIcons, at.x, at.y, size,
-                      minimap_blips::poiIconCell(minimap_blips::kCorpsePoiIcon, art.poiIconsWidth));
-        hover = size * 0.5f;
-    } else {
-        if (!art.corpseArrow) return;
-        at = drawRimArrow(frame.drawList, art.corpseArrow, frame.centerX, frame.centerY, unitPx,
-                          offsetBearing(offset));
-        hover = kArrowHoverRadius;
+    // AreaPOI.dbc, read once (3.x's layout).
+    struct AreaPoiRow {
+        std::array<int32_t, 9> icons{};
+        float x = 0.0f, y = 0.0f;
+        int32_t importance = 0;
+        uint32_t map = 0, flags = 0, worldState = 0;
+        std::string name;
+    };
+    static std::vector<AreaPoiRow> areaPois;
+    static bool areaPoisRead = false;
+    if (!areaPoisRead && services_.assetManager) {
+        areaPoisRead = true;
+        const auto* layout = pipeline::getActiveDBCLayout()
+            ? pipeline::getActiveDBCLayout()->getLayout("AreaPOI") : nullptr;
+        auto dbc = layout ? services_.assetManager->loadDBC("AreaPOI.dbc") : nullptr;
+        if (dbc && dbc->isLoaded()) {
+            const uint32_t cols[8] = {layout->tryField("Importance"), layout->tryField("Icon0"),
+                                      layout->tryField("X"), layout->tryField("Y"),
+                                      layout->tryField("ContinentID"), layout->tryField("Flags"),
+                                      layout->tryField("WorldStateID"), layout->tryField("Name")};
+            bool ok = cols[1] + 8 < dbc->getFieldCount();
+            for (uint32_t c : cols) ok = ok && c < dbc->getFieldCount();
+            for (uint32_t row = 0; ok && row < dbc->getRecordCount(); ++row) {
+                AreaPoiRow r;
+                r.importance = static_cast<int32_t>(dbc->getUInt32(row, cols[0]));
+                for (uint32_t i = 0; i < 9; ++i) r.icons[i] = static_cast<int32_t>(dbc->getUInt32(row, cols[1] + i));
+                r.x = dbc->getFloat(row, cols[2]);
+                r.y = dbc->getFloat(row, cols[3]);
+                r.map = dbc->getUInt32(row, cols[4]);
+                r.flags = dbc->getUInt32(row, cols[5]);
+                r.worldState = dbc->getUInt32(row, cols[6]);
+                r.name = dbc->getString(row, cols[7]);
+                if ((r.flags & mb::kPoiOnMinimap) != 0) areaPois.push_back(std::move(r));
+            }
+        }
     }
-    if (cursorNearBlip(at.x, at.y, hover)) {
-        const float dist = gameHandler.getCorpseDistance();
-        if (dist >= 0.0f) ImGui::SetTooltip("Your corpse (%.0f yd)", dist);
-        else ImGui::SetTooltip("Your corpse");
+
+    enum class Kind { Area, Gossip, Corpse };
+    struct Point {
+        Kind kind;
+        float x, y;  // canonical
+        int32_t importance;
+        int icon;
+        uint32_t flags;
+        std::string name;
+    };
+    std::vector<Point> points;
+    const uint32_t mapId = gameHandler.getCurrentMapId();
+    for (const auto& r : areaPois) {
+        if (r.map != mapId || (r.x == 0.0f && r.y == 0.0f)) continue;
+        std::optional<uint32_t> state;
+        if (r.worldState != 0) {
+            const auto& states = gameHandler.getWorldStates();
+            if (auto it = states.find(r.worldState); it != states.end()) state = it->second;
+        }
+        const int icon = mb::areaPoiIcon(r.icons, r.worldState, state ? &*state : nullptr);
+        if (r.worldState != 0 && icon < 0) continue;
+        points.push_back({Kind::Area, r.x, r.y, r.importance, icon, r.flags, r.name});
     }
+    // The last gossip point, until it lapses or is reached.
+    const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    const auto& gossip = gameHandler.getGossipPois();
+    for (auto it = gossip.rbegin(); it != gossip.rend(); ++it) {
+        if (it->questObjectiveIndex != -2) continue;
+        if (nowMs - it->receivedMs < 480000u && it->receivedMs != gossipPoiReachedMs_) {
+            points.push_back({Kind::Gossip, it->x, it->y, static_cast<int32_t>(it->data),
+                              static_cast<int>(it->icon), it->flags, it->name});
+        }
+        break;
+    }
+    float corpseX = 0.0f, corpseY = 0.0f;
+    if (gameHandler.isPlayerGhost() && gameHandler.getCorpseCanonicalPos(corpseX, corpseY)) {
+        points.push_back({Kind::Corpse, corpseX, corpseY, -1, mb::kCorpsePoiIcon, mb::kPoiShowIcon,
+                          std::string()});
+    }
+
+    const bool indoors = services_.renderer && services_.renderer->getMinimap() &&
+                         services_.renderer->getMinimap()->isIndoors();
+    std::vector<mb::PoiCandidate> candidates;
+    std::vector<size_t> candidatePoint;
+    std::vector<glm::vec2> offsets(points.size());
+    const char* tooltip = nullptr;
+    std::string tooltipText;
+    for (size_t i = 0; i < points.size(); ++i) {
+        const Point& p = points[i];
+        const glm::vec3 render = core::coords::canonicalToRender(glm::vec3(p.x, p.y, 0.0f));
+        offsets[i] = renderDeltaToMinimapOffset(render.x - frame.playerRender.x,
+                                                render.y - frame.playerRender.y, frame.view);
+        const float offsetLen = std::sqrt(offsets[i].x * offsets[i].x + offsets[i].y * offsets[i].y);
+        const float yards = frame.mapRadius > 0.0f ? offsetLen / frame.mapRadius * frame.view.viewRadius : 0.0f;
+        if (p.kind == Kind::Gossip && yards < 10.0f) {
+            // Arrived: the point is let go (0x007f5ba0).
+            for (auto it = gossip.rbegin(); it != gossip.rend(); ++it) {
+                if (it->questObjectiveIndex == -2) { gossipPoiReachedMs_ = it->receivedMs; break; }
+            }
+            continue;
+        }
+        if (offsetLen <= frame.mapRadius * mb::kBlipReach) {
+            if ((p.flags & mb::kPoiShowIcon) == 0 || !art.poiIcons || p.icon < 0 ||
+                p.icon >= mb::kPoiIconCount) {
+                continue;
+            }
+            const float sx = frame.centerX + offsets[i].x;
+            const float sy = frame.centerY + offsets[i].y;
+            drawAtlasBlip(frame.drawList, art.poiIcons, sx, sy, size, mb::poiIconCell(p.icon, art.poiIconsWidth));
+            if (cursorNearBlip(sx, sy, size * 0.5f)) {
+                tooltipText = p.kind == Kind::Corpse ? std::string("Your corpse") : p.name;
+            }
+            continue;
+        }
+        candidates.push_back({p.importance, yards, p.kind == Kind::Corpse});
+        candidatePoint.push_back(i);
+    }
+    for (size_t c : mb::chooseRimArrows(candidates)) {
+        const Point& p = points[candidatePoint[c]];
+        // Indoors only the static points' arrows, and those flagged 0x100.
+        if (indoors && p.kind == Kind::Area && (p.flags & mb::kPoiArrowIndoors) == 0) continue;
+        const VkDescriptorSet texture = p.kind == Kind::Corpse ? art.corpseArrow
+                                      : p.kind == Kind::Gossip ? art.guideArrow : art.poiArrow;
+        if (!texture) continue;
+        const ImVec2 mid = drawRimArrow(frame.drawList, texture, frame.centerX, frame.centerY, unitPx,
+                                        offsetBearing(offsets[candidatePoint[c]]));
+        if (cursorNearBlip(mid.x, mid.y, kArrowHoverRadius)) {
+            tooltipText = p.kind == Kind::Corpse ? std::string("Your corpse") : p.name;
+        }
+    }
+    if (!tooltipText.empty()) tooltip = tooltipText.c_str();
+    if (tooltip) ImGui::SetTooltip("%s", tooltip);
 }
 
 // The player: Interface\Minimap\MinimapArrow at the centre, at the size of
@@ -1663,7 +1783,6 @@ void GameScreen::renderMinimapMarkers(game::GameHandler& gameHandler) {
     renderMinimapObjectDots(frame, minimapGameObjects, minimapQuestGoEntries, gameHandler);
     renderMinimapChests(frame, minimapGameObjects, gameHandler);
 
-    renderMinimapGossipPois(frame, gameHandler);
     renderMinimapPings(frame, gameHandler);
     // The group's blips go down before the objects' (0x00581e80 calls
     // 0x0057ff70 first).
@@ -1671,7 +1790,7 @@ void GameScreen::renderMinimapMarkers(game::GameHandler& gameHandler) {
     renderMinimapObjectBlips(frame, minimapUnits, minimapPlayers, minimapGameObjects,
                              statuses, gameHandler);
     renderMinimapBattlegroundPositions(frame, gameHandler);
-    renderMinimapCorpseMarker(frame, gameHandler);
+    renderMinimapPois(frame, gameHandler);
     renderMinimapPlayerArrow(frame);
     // Blocked by any window in front, and entirely when FrameXML draws the
     // minimap - then the ring is a widget with its own handlers, and running

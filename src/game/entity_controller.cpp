@@ -1720,6 +1720,16 @@ void EntityController::dispatchEntitySpawn(uint64_t guid, ObjectType objectType,
         qsPkt.writeUInt64(guid);
         owner_.getSocket()->send(qsPkt);
     }
+    // Ask whether a flight master's node is known (0x006d5130, from the
+    // unit's 0x00729f40 when it is not hostile): the minimap marks one that
+    // is not (SMSG_TAXINODE_STATUS, 0x006d5fc0).
+    constexpr uint32_t kNpcFlagFlightMaster = 0x2000;
+    if (objectType == ObjectType::UNIT && (unit->getNpcFlags() & kNpcFlagFlightMaster) &&
+        owner_.getSocket() && owner_.unitReactionToPlayer(*unit) > 2) {
+        network::Packet tnPkt(wireOpcode(Opcode::CMSG_TAXINODE_STATUS_QUERY));
+        tnPkt.writeUInt64(guid);
+        owner_.getSocket()->send(tnPkt);
+    }
 }
 
 // Track online item/container objects during CREATE.

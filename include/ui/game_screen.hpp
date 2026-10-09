@@ -316,12 +316,13 @@ private:
                                   const EntityList& players, const EntityList& gameObjects,
                                   const QuestStatusMap& statuses,
                                   game::GameHandler& gameHandler);
-    void renderMinimapGossipPois(const MinimapFrame& frame, game::GameHandler& gameHandler);
     void renderMinimapPings(const MinimapFrame& frame, game::GameHandler& gameHandler);
     void renderMinimapPartyDots(const MinimapFrame& frame, game::GameHandler& gameHandler);
     void renderMinimapBattlegroundPositions(const MinimapFrame& frame,
                                             game::GameHandler& gameHandler);
-    void renderMinimapCorpseMarker(const MinimapFrame& frame, game::GameHandler& gameHandler);
+    void renderMinimapPois(const MinimapFrame& frame, game::GameHandler& gameHandler);
+    /// The gossip point the player has walked to, by when it came: let go.
+    uint64_t gossipPoiReachedMs_ = 0;
     void renderMinimapPlayerArrow(const MinimapFrame& frame);
 
     /// The wheel and the ctrl+click, when this client owns the ring.

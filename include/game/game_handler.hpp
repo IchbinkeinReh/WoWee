@@ -3144,6 +3144,18 @@ public:
         auto it = taxiNpcHasRoutes_.find(guid);
         return it != taxiNpcHasRoutes_.end() && it->second;
     }
+    /// A flight master SMSG_TAXINODE_STATUS said the player has not learned
+    /// (0x006d5fc0: status 0 sets the unit's +0x94, which the minimap marks
+    /// with ObjectIcons' cell 13).
+    bool taxiNodeUnknown(uint64_t guid) const {
+        auto it = taxiNpcHasRoutes_.find(guid);
+        return it != taxiNpcHasRoutes_.end() && !it->second;
+    }
+
+    /// The minimap tracking menu's own entry chosen, an index into
+    /// minimap_tracking::kOther, -1 for none (0xbeba64).
+    int minimapOtherTracking() const { return minimapOtherTracking_; }
+    void setMinimapOtherTracking(int index) { minimapOtherTracking_ = index; }
 
     // Vehicle (WotLK)
     bool isInVehicle() const { return vehicleId_ != 0; }
@@ -4807,6 +4819,7 @@ private:
 
     // Taxi / Flight Paths
     std::unordered_map<uint64_t, bool> taxiNpcHasRoutes_;  // guid -> has new/available routes
+    int minimapOtherTracking_ = -1;
     std::unordered_map<uint32_t, TaxiNode> taxiNodes_;
     std::vector<TaxiPathEdge> taxiPathEdges_;
     std::unordered_map<uint32_t, std::vector<TaxiPathNode>> taxiPathNodes_;  // pathId -> ordered waypoints

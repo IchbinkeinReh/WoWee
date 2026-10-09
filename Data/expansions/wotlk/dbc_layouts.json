@@ -12,6 +12,20 @@
     "ID": 0,
     "Quantity": 4
   },
+  "AreaPOI": {
+    "ID": 0,
+    "Importance": 1,
+    "Icon0": 2,
+    "FactionID": 11,
+    "X": 12,
+    "Y": 13,
+    "Z": 14,
+    "ContinentID": 15,
+    "Flags": 16,
+    "AreaID": 17,
+    "Name": 18,
+    "WorldStateID": 52
+  },
   "AreaTable": {
     "ExploreFlag": 3,
     "ID": 0,
