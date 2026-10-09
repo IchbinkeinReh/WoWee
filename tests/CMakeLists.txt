@@ -2725,6 +2725,11 @@ wowee_add_test(test_selection_circle
 wowee_add_test(test_minimap_zoom
     SOURCES test_minimap_zoom.cpp)
 
+# ── test_minimap_blips ───────────────────────────────────────
+# The minimap's blips: atlas cells, sizes, reach and rim arrows (rendering/minimap_blips.hpp).
+wowee_add_test(test_minimap_blips
+    SOURCES test_minimap_blips.cpp)
+
 # ── test_unit_name_anchor ────────────────────────────────────
 # Where names and plates go, their range and dimming (rendering/unit_name_anchor.hpp).
 wowee_add_test(test_unit_name_anchor

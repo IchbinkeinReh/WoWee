@@ -3598,7 +3598,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             // water's continuation pass when there is one.
             if (skySystem && camera && !skipSky && !glareDrawsWithWater_) skySystem->renderGlare(cmd, perFrameSet);
             renderUnderwaterOverlay(cmd);
-            renderPostSceneOverlays(cmd, gameHandler);
+            renderPostSceneOverlays(cmd);
             sceneMark(cmd, kMarkOverlays, "glare, underwater, minimap overlay");
             vkEndCommandBuffer(cmd);
             return std::chrono::duration<double, std::milli>(
@@ -3746,7 +3746,6 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     pendingWorld_.skipSky = skipSky;
     pendingWorld_.frameIdx = frameIdx;
     pendingWorld_.perFrameSet = perFrameSet;
-    pendingWorld_.gameHandler = gameHandler;
     pendingWorld_.overlaysMark = sceneMarks != VkContext::kNoGpuMark
         ? sceneMarks + kMarkOverlays : VkContext::kNoGpuMark;
     pendingWorld_.launchMs = std::chrono::duration<double, std::milli>(
@@ -3791,7 +3790,6 @@ void Renderer::finishRenderWorld() {
     const auto finishStart = std::chrono::steady_clock::now();
     const uint32_t frameIdx = pw.frameIdx;
     const VkDescriptorSet perFrameSet = pw.perFrameSet;
-    game::GameHandler* gameHandler = pw.gameHandler;
     const bool skipSky = pw.skipSky;
 
     if (pw.parallel) {
@@ -3893,7 +3891,7 @@ void Renderer::finishRenderWorld() {
         // The glare, over the finished world (0x007f0870, 0x009ac400).
         if (skySystem && camera && !skipSky && !glareDrawsWithWater_) skySystem->renderGlare(currentCmd, perFrameSet);
         renderUnderwaterOverlay(currentCmd);
-        renderPostSceneOverlays(currentCmd, gameHandler);
+        renderPostSceneOverlays(currentCmd);
         if (pw.overlaysMark != VkContext::kNoGpuMark)
             vkCtx->gpuMarkAt(currentCmd, pw.overlaysMark, "glare, underwater, minimap overlay");
     }
@@ -3977,7 +3975,7 @@ void Renderer::finishRenderWorld() {
 
         // And the minimap, last of all: it is the interface rather than the
         // world, and nothing in the world belongs over it.
-        if (minimapDrawsWithWater_) renderMinimapOverlay(currentCmd, gameHandler);
+        if (minimapDrawsWithWater_) renderMinimapOverlay(currentCmd);
         if (vkCtx) vkCtx->gpuMark(currentCmd, "spray, glare, minimap over water");
     }
 
@@ -4143,8 +4141,7 @@ if (overlaySystem_ && waterRenderer && camera) {
     }
 }
 
-void Renderer::renderPostSceneOverlays(VkCommandBuffer cmd,
-                                       game::GameHandler* gameHandler) {
+void Renderer::renderPostSceneOverlays(VkCommandBuffer cmd) {
     // A ghost's world is the death light plus ffxDeath's desaturation
     // (LightingManager::update, ScreenEffects), not a tint laid over it.
 
@@ -4164,34 +4161,19 @@ void Renderer::renderPostSceneOverlays(VkCommandBuffer cmd,
 
     // Unless it is following water into the pass after this one, where it is
     // drawn instead - see renderMinimapOverlay's caller below the water.
-    if (!minimapDrawsWithWater_) renderMinimapOverlay(cmd, gameHandler);
+    if (!minimapDrawsWithWater_) renderMinimapOverlay(cmd);
 }
 
 /// The minimap disc, over whatever has been drawn so far.
-void Renderer::renderMinimapOverlay(VkCommandBuffer cmd,
-                                    game::GameHandler* gameHandler) {
+void Renderer::renderMinimapOverlay(VkCommandBuffer cmd) {
     if (minimap && minimap->isEnabled() && camera && window) {
         glm::vec3 minimapCenter = camera->getPosition();
         if (cameraController && cameraController->isThirdPerson())
             minimapCenter = characterPosition;
-        float minimapPlayerOrientation = 0.0f;
-        bool hasMinimapPlayerOrientation = false;
-        if (cameraController) {
-            // Render-space character yaw faces north at 180 degrees; the
-            // minimap shader arrow faces north at 0. Match the mirrored
-            // minimap texture by flipping the visual arrow vertically.
-            minimapPlayerOrientation = glm::radians(characterYaw);
-            hasMinimapPlayerOrientation = true;
-        } else if (gameHandler) {
-            // movementInfo.orientation is canonical yaw: north is 0, east is +pi/2.
-            // Match the mirrored minimap texture by flipping the visual
-            // arrow vertically.
-            minimapPlayerOrientation = glm::pi<float>() - gameHandler->getMovementInfo().orientation;
-            hasMinimapPlayerOrientation = true;
-        }
+        // The player's arrow is the interface's (MinimapArrow, drawn with the
+        // blips), not part of the map.
         minimap->render(cmd, *camera, minimapCenter,
-                        window->getWidth(), window->getHeight(),
-                        minimapPlayerOrientation, hasMinimapPlayerOrientation);
+                        window->getWidth(), window->getHeight());
     }
 }
 

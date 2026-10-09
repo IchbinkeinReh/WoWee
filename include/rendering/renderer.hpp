@@ -300,8 +300,8 @@ private:
     /// from both the parallel and the fallback recording paths, which had
     /// carried different ones.
     void renderUnderwaterOverlay(VkCommandBuffer cmd);
-    void renderPostSceneOverlays(VkCommandBuffer cmd, game::GameHandler* gameHandler);
-    void renderMinimapOverlay(VkCommandBuffer cmd, game::GameHandler* gameHandler);
+    void renderPostSceneOverlays(VkCommandBuffer cmd);
+    void renderMinimapOverlay(VkCommandBuffer cmd);
 
     /// Point the swim spray at whichever pass the water ends up drawing in, so
     /// it can be recorded after the water rather than under it. Must run before
@@ -799,7 +799,6 @@ private:
         bool skipSky = false;
         uint32_t frameIdx = 0;
         VkDescriptorSet perFrameSet = VK_NULL_HANDLE;
-        game::GameHandler* gameHandler = nullptr;
         uint32_t overlaysMark = UINT32_MAX;  // the fallback's, recorded in finish
         double prepWmoMs = 0.0, prepM2Ms = 0.0, prepCharMs = 0.0;
         double launchMs = 0.0;      // renderWorld's own time, for lastRenderMs

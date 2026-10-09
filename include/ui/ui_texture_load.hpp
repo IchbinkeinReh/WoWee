@@ -45,12 +45,14 @@ enum class UiTextureLoad {
 
 /// Decode `path` as a BLP and upload it as a UI texture.
 ///
-/// Returns VK_NULL_HANDLE on any failure, with `why` set when it is given.
+/// Returns VK_NULL_HANDLE on any failure, with `why` set when it is given,
+/// and the image's size in `width` and `height` when those are.
 /// Callers own the caching: this does none.
 VkDescriptorSet uploadUiTextureFromBlp(pipeline::AssetManager* assetManager,
                                        const std::string& path,
                                        core::Window* window,
-                                       UiTextureLoad* why = nullptr);
+                                       UiTextureLoad* why = nullptr,
+                                       int* width = nullptr, int* height = nullptr);
 
 /// One icon, uploaded at most once and at most one per frame's budget.
 ///

@@ -15,8 +15,8 @@
 /// mark off the minimap - so the mark simply stopped appearing over exactly
 /// the NPCs a player has most of by mid-level, and appeared over the rest.
 ///
-/// Four places mapped the status to a symbol and a colour, and they are one
-/// mapping: the nameplate, the target frame, the focus frame and the minimap.
+/// Three places mapped the status to a symbol and a colour, and they are one
+/// mapping: the nameplate, the target frame and the focus frame.
 
 #include <cstdint>
 
@@ -42,31 +42,28 @@ struct QuestGiverMarker {
     const char* symbol = nullptr;  ///< "!", "?", or null to draw nothing
     bool dim = false;              ///< grey rather than gold
     const char* tooltip = nullptr;
-    /// Whether this also earns a dot on the minimap. Status 9 is the one that
-    /// does not, which is the only thing separating it from 10.
-    bool onMinimap = false;
 };
 
-/// One mapping, so the nameplate and the minimap cannot disagree about what an
-/// NPC is offering.
+/// One mapping, for the nameplate, the target frame and the focus frame. The
+/// minimap's blip is a different table (minimap_blips::questGiverIcon).
 inline QuestGiverMarker questGiverMarker(QuestGiverStatus status) {
     switch (status) {
         case QuestGiverStatus::AVAILABLE:
         case QuestGiverStatus::AVAILABLE_REP:
-            return {.symbol = "!", .dim = false, .tooltip = "Has a quest available", .onMinimap = true};
+            return {.symbol = "!", .dim = false, .tooltip = "Has a quest available"};
         case QuestGiverStatus::LOW_LEVEL_AVAILABLE:
         case QuestGiverStatus::LOW_LEVEL_AVAILABLE_REP:
-            return {.symbol = "!", .dim = true, .tooltip = "Has a low-level quest available", .onMinimap = true};
+            return {.symbol = "!", .dim = true, .tooltip = "Has a low-level quest available"};
         case QuestGiverStatus::REWARD:
         case QuestGiverStatus::REWARD_REP:
-            return {.symbol = "?", .dim = false, .tooltip = "Quest ready to turn in", .onMinimap = true};
-        // The same mark, and deliberately not on the minimap.
+            return {.symbol = "?", .dim = false, .tooltip = "Quest ready to turn in"};
+        // The same mark as 10.
         case QuestGiverStatus::REWARD2:
-            return {.symbol = "?", .dim = false, .tooltip = "Quest ready to turn in", .onMinimap = false};
+            return {.symbol = "?", .dim = false, .tooltip = "Quest ready to turn in"};
         case QuestGiverStatus::LOW_LEVEL_REWARD_REP:
-            return {.symbol = "?", .dim = true, .tooltip = "Quest ready to turn in", .onMinimap = true};
+            return {.symbol = "?", .dim = true, .tooltip = "Quest ready to turn in"};
         case QuestGiverStatus::INCOMPLETE:
-            return {.symbol = "?", .dim = true, .tooltip = "Quest in progress", .onMinimap = true};
+            return {.symbol = "?", .dim = true, .tooltip = "Quest in progress"};
         case QuestGiverStatus::NONE:
         case QuestGiverStatus::UNAVAILABLE:
             break;

@@ -13,7 +13,8 @@ namespace wowee::ui {
 VkDescriptorSet uploadUiTextureFromBlp(pipeline::AssetManager* assetManager,
                                        const std::string& path,
                                        core::Window* window,
-                                       UiTextureLoad* why) {
+                                       UiTextureLoad* why,
+                                       int* width, int* height) {
     const auto fail = [&](UiTextureLoad reason) {
         if (why) *why = reason;
         return VK_NULL_HANDLE;
@@ -31,6 +32,8 @@ VkDescriptorSet uploadUiTextureFromBlp(pipeline::AssetManager* assetManager,
     if (!vkCtx) return fail(UiTextureLoad::NoContext);
 
     if (why) *why = UiTextureLoad::Ok;
+    if (width) *width = image.width;
+    if (height) *height = image.height;
     return vkCtx->uploadImGuiTexture(image.data.data(), image.width, image.height);
 }
 

@@ -272,6 +272,14 @@ private:
         /// The rim minus three units, which keeps a blip off the border.
         bool project(const glm::vec3& worldRenderPos, float& sx, float& sy) const;
 
+        /// The same for a blip, which the client draws only within 0.8 of the
+        /// map's reach (minimap_blips::kBlipReach) and not out to the rim.
+        bool projectBlip(const glm::vec3& worldRenderPos, float& sx, float& sy) const;
+
+        /// Pixels to one unit of the 140-unit Minimap frame the client's sizes
+        /// are in (minimap_blips::kFrameSize).
+        [[nodiscard]] float unitPixels() const { return mapRadius * 2.0f / 140.0f; }
+
         /// An entity's own position, converted on the way. The conversion is one
         /// fact - these two coordinate systems are not the same one - and it was
         /// written at fourteen call sites before it was here.
@@ -296,12 +304,10 @@ private:
 
     void renderMinimapNpcDots(const MinimapFrame& frame, const EntityList& units,
                               const EntrySet& questEntries);
-    void renderMinimapFlightMasters(const MinimapFrame& frame, const EntityList& units);
     void renderMinimapRares(const MinimapFrame& frame, const EntityList& units,
                             game::GameHandler& gameHandler);
     void renderMinimapPlayerDots(const MinimapFrame& frame, const EntityList& players,
                                  game::GameHandler& gameHandler);
-    void renderMinimapLootCorpses(const MinimapFrame& frame, const EntityList& units);
     void renderMinimapObjectDots(const MinimapFrame& frame, const EntityList& objects,
                                  const EntrySet& questGoEntries,
                                  game::GameHandler& gameHandler);
@@ -310,9 +316,6 @@ private:
 
     void renderMinimapQuestGivers(const MinimapFrame& frame, const QuestStatusMap& statuses,
                                   game::GameHandler& gameHandler);
-    void renderMinimapQuestKills(const MinimapFrame& frame, const EntityList& units,
-                                 const QuestStatusMap& statuses,
-                                 game::GameHandler& gameHandler);
     void renderMinimapGossipPois(const MinimapFrame& frame, game::GameHandler& gameHandler);
     void renderMinimapPings(const MinimapFrame& frame, game::GameHandler& gameHandler);
     void renderMinimapPartyDots(const MinimapFrame& frame, game::GameHandler& gameHandler);

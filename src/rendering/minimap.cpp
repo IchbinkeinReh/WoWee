@@ -16,7 +16,10 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <array>
 #include <sstream>
+#include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
 
 namespace wowee {
 namespace rendering {
@@ -32,11 +35,10 @@ struct MinimapDisplayPush {
     glm::vec4 rect;         // x, y, w, h in 0..1 screen space
     glm::vec2 playerUV;
     float rotation;
-    float arrowRotation;
     float zoomRadius;
     int32_t squareShape;
     float opacity;
-};  // 44 bytes
+};  // 40 bytes
 
 Minimap::Minimap() = default;
 
@@ -305,6 +307,14 @@ void Minimap::setMapName(const std::string& name) {
     }
 }
 
+namespace {
+std::string lowerKey(std::string key) {
+    std::transform(key.begin(), key.end(), key.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return key;
+}
+}  // namespace
+
 // --------------------------------------------------------
 // TRS parsing
 // --------------------------------------------------------
@@ -339,7 +349,9 @@ void Minimap::parseTRS() {
         if (hashFile.size() > 4 && hashFile.substr(hashFile.size() - 4) == ".blp")
             hashFile = hashFile.substr(0, hashFile.size() - 4);
 
-        trsLookup[key] = hashFile;
+        // The client's table is keyed case-insensitively (SStrHashHT and
+        // SStrCmpI in 0x0055f4d0), so this one is too.
+        trsLookup[lowerKey(key)] = hashFile;
         count++;
     }
 
@@ -351,13 +363,19 @@ void Minimap::parseTRS() {
 // --------------------------------------------------------
 
 VkTexture* Minimap::getOrLoadTileTexture(int tileX, int tileY) {
+    // "%s\\map%d_%02d.blp" (0x007f5240): the second number is two digits,
+    // so map30_09 and not map30_9.
+    char name[32];
+    std::snprintf(name, sizeof(name), "\\map%d_%02d", tileX, tileY);
+    VkTexture* tex = loadTrsTexture(mapName + name);
+    return tex ? tex : noDataTexture.get();
+}
+
+VkTexture* Minimap::loadTrsTexture(const std::string& key) {
     if (!trsParsed) parseTRS();
-
-    std::string key = mapName + "\\map" + std::to_string(tileX) + "_" + std::to_string(tileY);
-
-    auto trsIt = trsLookup.find(key);
+    auto trsIt = trsLookup.find(lowerKey(key));
     if (trsIt == trsLookup.end())
-        return noDataTexture.get();
+        return nullptr;
 
     const std::string& hash = trsIt->second;
 
@@ -370,7 +388,7 @@ VkTexture* Minimap::getOrLoadTileTexture(int tileX, int tileY) {
     auto blpImage = assetManager->loadTexture(blpPath);
     if (!blpImage.isValid()) {
         tileTextureCache[hash] = nullptr;  // Mark as failed
-        return noDataTexture.get();
+        return nullptr;
     }
 
     auto tex = std::make_unique<VkTexture>();
@@ -521,8 +539,7 @@ glm::vec4 Minimap::screenUvRect(int screenWidth, int screenHeight) const {
 
 void Minimap::render(VkCommandBuffer cmd, const Camera& playerCamera,
                      const glm::vec3& centerWorldPos,
-                     int screenWidth, int screenHeight,
-                     float playerOrientation, bool hasPlayerOrientation) {
+                     int screenWidth, int screenHeight) {
     if (!enabled || !hasCachedFrame || !displayPipeline) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, displayPipeline);
@@ -593,24 +610,10 @@ void Minimap::render(VkCommandBuffer cmd, const Camera& playerCamera,
         rotation = std::atan2(-fwd.x, fwd.y);
     }
 
-    float arrowRotation = 0.0f;
-    if (!rotateWithCamera) {
-        if (hasPlayerOrientation) {
-            arrowRotation = playerOrientation;
-        } else {
-            glm::vec3 fwd = playerCamera.getForward();
-            arrowRotation = glm::pi<float>() - std::atan2(-fwd.x, fwd.y);
-        }
-    } else if (hasPlayerOrientation) {
-        // Show character facing relative to the rotated map
-        arrowRotation = playerOrientation + rotation;
-    }
-
     MinimapDisplayPush push{};
     push.rect = glm::vec4(x, y, pixelW, pixelH);
     push.playerUV = glm::vec2(playerU, playerV);
     push.rotation = rotation;
-    push.arrowRotation = arrowRotation;
     push.zoomRadius = zoomRadius;
     push.squareShape = squareShape ? 1 : 0;
     push.opacity = opacity_;

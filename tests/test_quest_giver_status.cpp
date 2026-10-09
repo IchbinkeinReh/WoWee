@@ -88,11 +88,7 @@ TEST_CASE("a question mark means something is in progress or ready", "[questgive
     }
 }
 
-TEST_CASE("status 9 is the one that keeps off the minimap", "[questgiver]") {
-    // It is the only thing separating 9 from 10, and drawing it as a dot would
-    // put a marker on the map for a turn-in the server is hiding there.
-    CHECK_FALSE(questGiverMarker(wire(9)).onMinimap);
-    CHECK(questGiverMarker(wire(10)).onMinimap);
+TEST_CASE("status 9 draws the same ? as 10", "[questgiver]") {
     CHECK(std::string(questGiverMarker(wire(9)).symbol) ==
           std::string(questGiverMarker(wire(10)).symbol));
 }

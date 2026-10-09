@@ -57,8 +57,7 @@ public:
 
     /// Display quad - call INSIDE the main render pass.
     void render(VkCommandBuffer cmd, const Camera& playerCamera,
-                const glm::vec3& centerWorldPos, int screenWidth, int screenHeight,
-                float playerOrientation = 0.0f, bool hasPlayerOrientation = false);
+                const glm::vec3& centerWorldPos, int screenWidth, int screenHeight);
 
     void setEnabled(bool enabled) { this->enabled = enabled; }
     [[nodiscard]] bool isEnabled() const { return enabled; }
@@ -115,6 +114,9 @@ public:
 
 private:
     void parseTRS();
+    /// A minimap texture by its md5translate name ("Azeroth\\map32_49",
+    /// without .blp), or null when the table or the archive has none.
+    VkTexture* loadTrsTexture(const std::string& key);
     void updateTileDescriptors(uint32_t frameIdx, int centerTileX, int centerTileY);
 
     VkContext* vkCtx = nullptr;
@@ -185,13 +187,8 @@ private:
     int lastCenterTileX = -1;
     int lastCenterTileY = -1;
 
-    // No arrow texture: the player arrow is a triangle the display shader
-    // draws from push.arrowRotation. A MinimapArrow.blp was loaded here once
-    // and the members outlived the drawing - never assigned, so the teardown
-    // that freed them could not run, and the two accessors that read them had
-    // no callers. Kept as a note rather than as fields, because the real
-    // client draws the texture and honours SetPlayerTextureWidth/Height on it,
-    // which this cannot: those two are still no-ops.
+    // No arrow here: the player's arrow is the interface's MinimapArrow,
+    // drawn with the blips (GameScreen::renderMinimapPlayerArrow).
 };
 
 } // namespace rendering
