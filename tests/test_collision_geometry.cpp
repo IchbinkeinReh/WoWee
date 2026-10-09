@@ -9,7 +9,9 @@
 // hand for the ray test - rather than by calling the functions a second way.
 #include <catch_amalgamated.hpp>
 
+#include <array>
 #include <cmath>
+#include <vector>
 #include <limits>
 
 #include <glm/glm.hpp>
@@ -17,6 +19,7 @@
 #include "rendering/collision_geometry.hpp"
 
 using wowee::rendering::CollisionFocus;
+using wowee::rendering::holdCylinderOffWallTriangle;
 using wowee::rendering::pointAABBDistanceSq;
 using wowee::rendering::rayTriangleIntersect;
 
@@ -195,4 +198,103 @@ TEST_CASE("a focus measures to the box, not to its centre", "[collision]") {
         CHECK_FALSE(focus.excludes({10.0f, 0.0f, 0.0f}, {10.0f, 0.0f, 0.0f}));
         CHECK(focus.excludes({10.001f, 0.0f, 0.0f}, {10.001f, 0.0f, 0.0f}));
     }
+}
+
+namespace {
+
+/// A plate as the collision mesh has it: an upright quad in the plane x = `x`,
+/// from y -2..2 and z 0..4, once facing each way - a door's two faces, back to
+/// back with nothing between.
+struct Plate {
+    float x;
+    std::vector<std::array<glm::vec3, 3>> tris() const {
+        const glm::vec3 a(x, -2, 0), b(x, 2, 0), c(x, 2, 4), d(x, -2, 4);
+        return {{a, b, c}, {a, c, d}, {a, c, b}, {a, d, c}};
+    }
+};
+
+/// Walk a character in steps the size of a running frame, every face holding
+/// it off as the renderer does, and answer where it ends.
+glm::vec3 walk(const std::vector<std::array<glm::vec3, 3>>& tris, glm::vec3 pos,
+               const glm::vec3& step, int frames) {
+    for (int f = 0; f < frames; ++f) {
+        glm::vec3 to = pos + step;
+        for (int pass = 0; pass < 2; ++pass) {
+            for (const auto& t : tris) {
+                holdCylinderOffWallTriangle(pos, to, 0.5f, 2.0f, t[0], t[1], t[2]);
+            }
+        }
+        pos = to;
+    }
+    return pos;
+}
+
+}  // namespace
+
+TEST_CASE("a plate holds a running character on the side it came from", "[collision]") {
+    // Seven yards a second at sixty frames, at a door with nothing behind its
+    // face: the step ends past the middle of the plate, nearest the far face.
+    const auto tris = Plate{0.0f}.tris();
+    const glm::vec3 end = walk(tris, {-3.0f, 0.0f, 0.0f}, {0.117f, 0.0f, 0.0f}, 120);
+    CHECK(end.x < -0.49f);
+    CHECK(end.x > -0.52f);
+
+    SECTION("from the other side as well") {
+        const glm::vec3 back = walk(tris, {3.0f, 0.0f, 0.0f}, {-0.117f, 0.0f, 0.0f}, 120);
+        CHECK(back.x > 0.49f);
+    }
+    SECTION("however long the step") {
+        // A hitch of a quarter second: the whole step is past the plate.
+        const glm::vec3 far = walk(tris, {-1.0f, 0.0f, 0.0f}, {3.0f, 0.0f, 0.0f}, 1);
+        CHECK(far.x < -0.49f);
+    }
+}
+
+TEST_CASE("a character walking into a plate at an angle slides along it", "[collision]") {
+    const auto tris = Plate{0.0f}.tris();
+    const glm::vec3 end = walk(tris, {-1.0f, -1.5f, 0.0f}, {0.08f, 0.08f, 0.0f}, 10);
+    // Held off the face, and the part of each step along it kept.
+    CHECK(end.x < -0.49f);
+    CHECK(end.y == Catch::Approx(-1.5f + 0.8f).margin(1e-3));
+}
+
+TEST_CASE("a plate does not reach past its edge or over its top", "[collision]") {
+    const auto tris = Plate{0.0f}.tris();
+    SECTION("a step that passes a radius beyond the end goes on") {
+        const glm::vec3 end = walk(tris, {-3.0f, 2.6f, 0.0f}, {0.117f, 0.0f, 0.0f}, 60);
+        CHECK(end.x > 3.0f);
+    }
+    SECTION("a plate held up out of the way - an open door - is walked under") {
+        const auto raised = [] {
+            auto t = Plate{0.0f}.tris();
+            for (auto& tri : t) for (auto& v : tri) v.z += 2.5f;
+            return t;
+        }();
+        const glm::vec3 end = walk(raised, {-3.0f, 0.0f, 0.0f}, {0.117f, 0.0f, 0.0f}, 60);
+        CHECK(end.x > 3.0f);
+    }
+    SECTION("a character standing clear is not touched") {
+        glm::vec3 to(-0.6f, 0.0f, 0.0f);
+        const auto t = tris.front();
+        CHECK_FALSE(holdCylinderOffWallTriangle({-0.7f, 0.0f, 0.0f}, to, 0.5f, 2.0f,
+                                                t[0], t[1], t[2]));
+        CHECK(to.x == -0.6f);
+    }
+}
+
+TEST_CASE("a face holds back only what is in front of it", "[collision]") {
+    // The client tests a face only when the step runs into its front. A face
+    // toward +x, walked into from behind, lets the character through.
+    const glm::vec3 a(0, -2, 0), b(0, 2, 0), c(0, 2, 4);   // `front` says which way it faces
+    const glm::vec3 n = glm::cross(b - a, c - a);
+    const float front = n.x > 0.0f ? 1.0f : -1.0f;
+
+    glm::vec3 to(front * 0.2f, 0.0f, 0.0f);
+    CHECK(holdCylinderOffWallTriangle({front * 1.0f, 0.0f, 0.0f}, to, 0.5f, 2.0f, a, b, c));
+    CHECK(to.x * front > 0.5f);
+
+    glm::vec3 behind(-front * 0.2f, 0.0f, 0.0f);
+    CHECK_FALSE(holdCylinderOffWallTriangle({-front * 1.0f, 0.0f, 0.0f}, behind, 0.5f, 2.0f,
+                                            a, b, c));
+    CHECK(behind.x == -front * 0.2f);
 }

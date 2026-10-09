@@ -3,6 +3,7 @@
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_model_classifier.hpp"
 #include "rendering/blob_shadow.hpp"
+#include "rendering/movement_limits.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_buffer.hpp"
 #include "rendering/vk_texture.hpp"
@@ -1379,7 +1380,7 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
         if (instance.skipCollision || instance.skipWallCollision) continue;
         if (instance.scale <= 0.001f) continue;
 
-        // --- Mesh-based wall collision: closest-point push ---
+        // --- Mesh-based wall collision ---
         if (model.collision.valid()) {
             glm::vec3 localFrom = glm::vec3(instance.invModelMatrix * glm::vec4(from, 1.0f));
             glm::vec3 localPos  = glm::vec3(instance.invModelMatrix * glm::vec4(adjustedPos, 1.0f));
@@ -1392,61 +1393,38 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
                 std::max(localFrom.y, localPos.y) + localRadius + 1.0f,
                 tl_m2_collisionTriScratch);
 
-            constexpr float PLAYER_HEIGHT = 2.0f;
-            constexpr float MAX_TOTAL_PUSH = 0.02f; // Cap total push per instance
+            const float localHeight = 2.0f / instance.scale;
+            // A face no higher than a step is stepped onto, not walked into:
+            // the floor query lifts the feet over it.
+            const float localStepUp = movement::kMaxStepUp / instance.scale;
             bool pushed = false;
-            float totalPushX = 0.0f, totalPushY = 0.0f;
 
-            for (uint32_t ti : tl_m2_collisionTriScratch) {
-                if (ti >= model.collision.triCount) continue;
-                if (localPos.z + PLAYER_HEIGHT < model.collision.triBounds[ti].minZ ||
-                    localPos.z > model.collision.triBounds[ti].maxZ) continue;
+            // Each face holds back what is in front of it and takes away all
+            // of its overlap (holdCylinderOffWallTriangle). This was a push of
+            // 8% of the overlap, at most 0.015 a face and 0.02 an instance - a
+            // sixth of a running character's step - so every authored
+            // collision mesh was something to walk through a little slower:
+            // the Undercity lift doors, a box 2.7 deep, were crossed at full
+            // speed from either side. A second pass settles a corner, where
+            // taking one face's overlap away can push into the other.
+            for (int pass = 0; pass < 2; ++pass) {
+                bool movedThisPass = false;
+                for (uint32_t ti : tl_m2_collisionTriScratch) {
+                    if (ti >= model.collision.triCount) continue;
+                    const auto& tb = model.collision.triBounds[ti];
+                    if (localPos.z + localHeight < tb.minZ || localPos.z > tb.maxZ) continue;
+                    if (tb.maxZ <= localPos.z + localStepUp) continue;
 
-                // Step-up: only skip wall when player is rising (jumping over it)
-                constexpr float MAX_STEP_UP = 1.2f;
-                bool rising = (localPos.z > localFrom.z + 0.05f);
-                if (rising && localPos.z + MAX_STEP_UP >= model.collision.triBounds[ti].maxZ) continue;
-
-                // Early out if we already pushed enough this instance
-                float totalPushSoFar = std::sqrt(totalPushX * totalPushX + totalPushY * totalPushY);
-                if (totalPushSoFar >= MAX_TOTAL_PUSH) break;
-
-                const auto& verts = model.collision.vertices;
-                const auto& idx   = model.collision.indices;
-                const auto& v0 = verts[idx[ti * 3]];
-                const auto& v1 = verts[idx[ti * 3 + 1]];
-                const auto& v2 = verts[idx[ti * 3 + 2]];
-
-                glm::vec3 closest = closestPointOnTriangle(localPos, v0, v1, v2);
-                glm::vec3 diff = localPos - closest;
-                float distXY = std::sqrt(diff.x * diff.x + diff.y * diff.y);
-
-                if (distXY < localRadius && distXY > 1e-4f) {
-                    // Gentle push - very small fraction of penetration
-                    float penetration = localRadius - distXY;
-                    float pushDist = std::clamp(penetration * 0.08f, 0.001f, 0.015f);
-                    float dx = (diff.x / distXY) * pushDist;
-                    float dy = (diff.y / distXY) * pushDist;
-                    localPos.x += dx;
-                    localPos.y += dy;
-                    totalPushX += dx;
-                    totalPushY += dy;
-                    pushed = true;
-                } else if (distXY < 1e-4f) {
-                    // On the plane - soft push along triangle normal XY
-                    glm::vec3 n = glm::cross(v1 - v0, v2 - v0);
-                    float nxyLen = std::sqrt(n.x * n.x + n.y * n.y);
-                    if (nxyLen > 1e-4f) {
-                        float pushDist = std::min(localRadius, 0.015f);
-                        float dx = (n.x / nxyLen) * pushDist;
-                        float dy = (n.y / nxyLen) * pushDist;
-                        localPos.x += dx;
-                        localPos.y += dy;
-                        totalPushX += dx;
-                        totalPushY += dy;
+                    const auto& verts = model.collision.vertices;
+                    const auto& idx   = model.collision.indices;
+                    if (holdCylinderOffWallTriangle(localFrom, localPos, localRadius, localHeight,
+                                                    verts[idx[ti * 3]], verts[idx[ti * 3 + 1]],
+                                                    verts[idx[ti * 3 + 2]])) {
                         pushed = true;
+                        movedThisPass = true;
                     }
                 }
+                if (!movedThisPass) break;
             }
 
             if (pushed) {
