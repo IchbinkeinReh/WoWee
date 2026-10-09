@@ -1194,8 +1194,12 @@ void WMORenderer::setInstancePosition(uint32_t instanceId, const glm::vec3& posi
     auto& inst = instances[idxIt->second];
     inst.position = position;
     inst.updateModelMatrix();
+    const glm::vec3 oldBoundsMin = inst.worldBoundsMin;
+    const glm::vec3 oldBoundsMax = inst.worldBoundsMax;
     refreshInstanceBounds(inst);
-    rebuildSpatialIndex();
+    // This instance alone, as setInstanceTransform does.
+    refileBounds(spatialGrid, oldBoundsMin, oldBoundsMax,
+                 inst.worldBoundsMin, inst.worldBoundsMax, instanceId);
 }
 
 void WMORenderer::setInstanceIsTransport(uint32_t instanceId, bool isTransport) {
@@ -1245,6 +1249,8 @@ void WMORenderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tra
     inst.modelMatrix = transform;
     inst.invModelMatrix = glm::inverse(transform);
 
+    const glm::vec3 oldBoundsMin = inst.worldBoundsMin;
+    const glm::vec3 oldBoundsMax = inst.worldBoundsMax;
     refreshInstanceBounds(inst);
 
     // Propagate transform to child M2 doodads (chairs, furniture on transports)
@@ -1255,7 +1261,12 @@ void WMORenderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tra
         }
     }
 
-    rebuildSpatialIndex();
+    // Only this instance moves in the grid, as the M2 renderer does it. Every
+    // transport calls this every frame, and rebuilding the whole index for
+    // each - every WMO instance filed again into every cell it covers - was
+    // 70 ms a frame in Dalaran, a city of large WMOs on a continent of them.
+    refileBounds(spatialGrid, oldBoundsMin, oldBoundsMax,
+                 inst.worldBoundsMin, inst.worldBoundsMax, instanceId);
 }
 
 void WMORenderer::addDoodadToInstance(uint32_t instanceId, uint32_t m2InstanceId, const glm::mat4& localTransform) {
