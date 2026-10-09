@@ -142,6 +142,7 @@ TEST_CASE("a pre-WotLK creature's slot reads from its INFO pair", "[attachment]"
     CHECK(sword.subClass == 7);
     CHECK(sword.inventoryType == 13);
     CHECK(sword.sheath == 3);
+    CHECK(sword.material == 1);
 }
 
 TEST_CASE("the sheath key cycles as 0x006e23a0 does", "[attachment]") {
@@ -533,4 +534,33 @@ TEST_CASE("a reach's weapons are dressed where it left them", "[attachment][reac
     CHECK(unitWeaponPoint(WeaponSlot::Ranged, items, dress) == at::kNone);
     dress.reachShown = WeaponsShown{.ranged = RangedShown::Held};
     CHECK(unitWeaponPoint(WeaponSlot::Ranged, items, dress) == at::kHandLeft);
+}
+
+TEST_CASE("each swap sounds the weapon it moved (0x00732500, 0x004d07b0)", "[attachment][reach]") {
+    const UnitWeaponItem sword{.sheath = 3, .inventoryType = 13, .itemClass = 2, .material = 1};
+    const UnitWeaponItem bow{.sheath = 2, .inventoryType = 15, .itemClass = 2, .material = 2};
+    const UnitWeaponItem gun{.sheath = 2, .inventoryType = 26, .itemClass = 2, .material = 1};
+    // Drawing melee: the hand's weapon, its unsheathe sound.
+    SheathReach reach{.from = SheathState::Unarmed, .to = SheathState::Melee};
+    reach.drawing[0] = true;
+    const UnitWeaponItems melee{&sword, nullptr, &bow};
+    SheathSwapSound s = sheathSwapSound(reach, 0, melee);
+    CHECK(s.item == &sword);
+    CHECK_FALSE(s.sheathing);
+    CHECK(materialSheathSoundField(s.sheathing) == 4);
+    // Putting melee away: the sheathe sound; an empty hand none.
+    reach = {.from = SheathState::Melee, .to = SheathState::Unarmed};
+    s = sheathSwapSound(reach, 0, melee);
+    CHECK(s.item == &sword);
+    CHECK(s.sheathing);
+    CHECK(materialSheathSoundField(s.sheathing) == 3);
+    CHECK(sheathSwapSound(reach, 1, melee).item == nullptr);
+    // Ranged: only the hand holding it - a bow the left, a gun the right.
+    reach = {.from = SheathState::Unarmed, .to = SheathState::Ranged};
+    reach.drawing[0] = reach.drawing[1] = true;
+    CHECK(sheathSwapSound(reach, 0, melee).item == nullptr);
+    CHECK(sheathSwapSound(reach, 1, melee).item == &bow);
+    const UnitWeaponItems guns{&sword, nullptr, &gun};
+    CHECK(sheathSwapSound(reach, 0, guns).item == &gun);
+    CHECK(sheathSwapSound(reach, 1, guns).item == nullptr);
 }

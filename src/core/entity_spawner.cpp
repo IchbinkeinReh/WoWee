@@ -526,7 +526,8 @@ bool EntitySpawner::resolveUnitWeaponItems(const UnitWeaponEntries& slots, std::
             items[i] = {.sheath = info->sheath,
                         .inventoryType = static_cast<uint8_t>(info->inventoryType),
                         .itemClass = info->itemClass,
-                        .subClass = info->subClass};
+                        .subClass = info->subClass,
+                        .material = static_cast<uint8_t>(info->material)};
             displays[i] = info->displayInfoId;
             continue;
         }
@@ -537,7 +538,8 @@ bool EntitySpawner::resolveUnitWeaponItems(const UnitWeaponEntries& slots, std::
         items[i] = {.sheath = itemDbc->getUInt32(r, 7),
                     .inventoryType = static_cast<uint8_t>(itemDbc->getUInt32(r, 6)),
                     .itemClass = itemDbc->getUInt32(r, 1),
-                    .subClass = itemDbc->getUInt32(r, 2)};
+                    .subClass = itemDbc->getUInt32(r, 2),
+                    .material = static_cast<uint8_t>(itemDbc->getUInt32(r, 4))};
         displays[i] = itemDbc->getUInt32(r, 5);
     }
     return true;

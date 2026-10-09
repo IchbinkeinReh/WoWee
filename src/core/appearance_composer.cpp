@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/character_renderer.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "rendering/animation_controller.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/m2_loader.hpp"
@@ -412,7 +413,8 @@ UnitWeaponItems AppearanceComposer::playerWeaponItems(std::array<UnitWeaponItem,
         storage[i] = {.sheath = known ? info->sheath : 0,
                       .inventoryType = static_cast<uint8_t>(equipSlot.item.inventoryType),
                       .itemClass = known ? info->itemClass : 0,
-                      .subClass = known ? info->subClass : 0};
+                      .subClass = known ? info->subClass : 0,
+                      .material = static_cast<uint8_t>(known ? info->material : 0)};
         present[i] = &storage[i];
     }
     return present;
@@ -611,6 +613,7 @@ void AppearanceComposer::playReach(const ReachPlay& play, const UnitWeaponItems&
     const uint32_t instanceId = renderer_ ? renderer_->getCharacterInstanceId() : 0;
     for (int hand = 0; hand < 2; ++hand) {
         if (!play.play[hand] || !reach_) continue;
+        reachSounded_[hand] = false;
         // Hand 0 is the right arm, the renderer's arm 1.
         const bool playing = charRenderer && instanceId != 0 &&
             charRenderer->playArmAnimation(instanceId, 1 - hand, play.animId[hand],
@@ -622,7 +625,29 @@ void AppearanceComposer::playReach(const ReachPlay& play, const UnitWeaponItems&
 void AppearanceComposer::reachHandEvent(int hand, bool ended, const UnitWeaponItems& items) {
     if (!reach_) return;
     sheathReachSwap(*reach_, hand, items);
+    if (!reachSounded_[hand]) {
+        reachSounded_[hand] = true;
+        playSheathSwapSound(hand, items);
+    }
     if (ended) playReach(sheathReachEnded(*reach_, hand, items), items);
+}
+
+void AppearanceComposer::playSheathSwapSound(int hand, const UnitWeaponItems& items) {
+    const SheathSwapSound sound = sheathSwapSound(*reach_, hand, items);
+    if (!sound.item || !assetManager_ || !renderer_) return;
+    auto* visuals = renderer_->getSpellVisualSystem();
+    auto* charRenderer = renderer_->getCharacterRenderer();
+    const uint32_t instanceId = renderer_->getCharacterInstanceId();
+    glm::vec3 position;
+    if (!visuals || !charRenderer || instanceId == 0 || !charRenderer->getInstancePosition(instanceId, position)) return;
+    // Material.dbc, indexed by the item's material byte (0x004d07b0).
+    auto material = assetManager_->loadDBCOptional("Material.dbc");
+    const int32_t row = material && material->getFieldCount() >= 5 ? material->findRecordById(sound.item->material) : -1;
+    if (row < 0) return;
+    const uint32_t soundId =
+        material->getUInt32(static_cast<uint32_t>(row), materialSheathSoundField(sound.sheathing));
+    // The unit's position, 2 higher.
+    visuals->playSoundAt(soundId, position + glm::vec3(0.0f, 0.0f, 2.0f));
 }
 
 void AppearanceComposer::updateSheathReach() {

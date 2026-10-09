@@ -1933,6 +1933,9 @@ struct ItemQueryResponseData {
     /// The template's Sheath: where the weapon hangs put away (1 two-hand,
     /// 2 staff, 3 one-hand, 4 shield, ...); see core::weaponAttachmentPoint.
     uint32_t sheath = 0;
+    /// The template's Material (Material.dbc): its sheathe and unsheathe
+    /// sounds (0x004d07b0).
+    uint32_t material = 0;
     uint32_t inventoryType = 0;
     int32_t maxCount = 0;       // Max that can be carried (1 = Unique, 0 = unlimited)
     int32_t maxStack = 1;
