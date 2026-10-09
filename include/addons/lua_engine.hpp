@@ -240,6 +240,10 @@ public:
     ui::WidgetTree& widgets() { return widgets_; }
 
     lua_State* getState() { return L_; }
+    /// A global string of the interface's - GlobalStrings.lua's, which is
+    /// where the client's FrameScript_GetText (0x00819d40) looks its text
+    /// up. Empty when there is no such string or no interface.
+    [[nodiscard]] std::string globalText(const char* name) const;
     [[nodiscard]] bool isInitialized() const { return L_ != nullptr; }
 
     /// Abort a chunk that runs longer than this many milliseconds, naming the

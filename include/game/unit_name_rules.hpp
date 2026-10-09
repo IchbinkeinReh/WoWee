@@ -221,13 +221,20 @@ inline std::string playerNamePrefix(uint32_t playerFlags, const std::string& afk
 
 /// 0x0061e830: the line under the name of a unit something made - "<%s's
 /// Pet>" and the like, the %s its owner (UNIT_FIELD_CHARMEDBY, else
-/// CREATEDBY; that unit's own owner where it has one). UNITNAME_SUMMON_TITLE1
-/// to 12, enUS GlobalStrings.
-inline constexpr const char* kSummonTitles[] = {
+/// CREATEDBY; that unit's own owner where it has one). The text is the
+/// interface's UNITNAME_SUMMON_TITLE1 to 12 (FrameScript_GetText,
+/// 0x00819d40); these are enUS GlobalStrings', for want of an interface.
+inline constexpr int kSummonTitleCount = 12;
+inline constexpr const char* kSummonTitlesEnUS[] = {
     nullptr,          "%s's Pet",       "%s's Guardian", "%s's Minion",   "%s's Totem",
     "%s's Companion", "%s's Runeblade", "%s's Construct", "%s's Opponent", "%s's Vehicle",
     "%s's Mount",     "%s's Lightwell", "%s's Butler",
 };
+/// The global the title's text is, "UNITNAME_SUMMON_TITLE<n>"; empty for none.
+inline std::string summonTitleKey(int title) {
+    if (title <= 0 || title > kSummonTitleCount) return {};
+    return "UNITNAME_SUMMON_TITLE" + std::to_string(title);
+}
 inline constexpr uint32_t kEffectSummon = 28;
 inline constexpr uint32_t kCreatureTypeBeast = 1;
 
@@ -240,12 +247,41 @@ constexpr int summonTitle(std::optional<int32_t> propertiesTitle, uint32_t creat
     return creatureType == kCreatureTypeBeast ? 1 : 3;
 }
 
-/// The title's text for the owner, empty for none.
-inline std::string summonTitleText(int title, const std::string& owner) {
-    if (title <= 0 || title >= static_cast<int>(sizeof(kSummonTitles) / sizeof(kSummonTitles[0]))) return {};
-    char buf[128];
-    std::snprintf(buf, sizeof(buf), kSummonTitles[title], owner.c_str());
-    return buf;
+/// A localized format with the owner put in for its %s (or %1$s), as the
+/// client's sprintf does; a "%%" is a percent sign. Nothing else in it is
+/// taken as a conversion, so a string from the interface cannot ask for
+/// arguments there are not.
+inline std::string formatOwner(const std::string& format, const std::string& owner) {
+    std::string out;
+    bool placed = false;
+    for (size_t i = 0; i < format.size(); ++i) {
+        if (format[i] != '%' || i + 1 >= format.size()) {
+            out += format[i];
+            continue;
+        }
+        if (format[i + 1] == '%') {
+            out += '%';
+            ++i;
+        } else if (format[i + 1] == 's' && !placed) {
+            out += owner;
+            placed = true;
+            ++i;
+        } else if (format.compare(i + 1, 3, "1$s") == 0 && !placed) {
+            out += owner;
+            placed = true;
+            i += 3;
+        } else {
+            out += format[i];
+        }
+    }
+    return out;
+}
+
+/// The title's text for the owner, empty for none: the interface's string
+/// where it has one, else enUS.
+inline std::string summonTitleText(int title, const std::string& owner, const std::string& localized = {}) {
+    if (title <= 0 || title > kSummonTitleCount) return {};
+    return formatOwner(localized.empty() ? kSummonTitlesEnUS[title] : localized, owner);
 }
 
 /// 0x00519df0: whether a plate shows its threat flash, by threatWarning
@@ -282,9 +318,9 @@ constexpr uint32_t plateNameColor(bool hurt, bool glow) {
     return glow ? 0xffffff00u : 0xffffffffu;
 }
 
-/// FOREIGN_SERVER_LABEL (enUS GlobalStrings): 0x0072d4f0 ends another
-/// player's name with it when the name query gave a realm - one from another
-/// server in a battleground.
-inline constexpr const char* kForeignServerLabel = " (*)";
+/// FOREIGN_SERVER_LABEL: 0x0072d4f0 ends another player's name with it
+/// when the name query gave a realm - one from another server in a
+/// battleground. This is enUS GlobalStrings', for want of an interface.
+inline constexpr const char* kForeignServerLabelEnUS = " (*)";
 
 }  // namespace wowee::game::unit_names

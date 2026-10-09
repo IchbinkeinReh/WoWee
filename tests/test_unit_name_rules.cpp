@@ -177,6 +177,14 @@ TEST_CASE("the line under a made unit's name (0x0061e830)", "[unit_names]") {
     CHECK(un::summonTitleText(4, "Thrall") == "Thrall's Totem");
     CHECK(un::summonTitleText(0, "Thrall").empty());
     CHECK(un::summonTitleText(99, "Thrall").empty());
+    // The interface's string where it has one: deDE's, and a format with no
+    // room for anything but the owner.
+    CHECK(un::summonTitleKey(1) == "UNITNAME_SUMMON_TITLE1");
+    CHECK(un::summonTitleKey(12) == "UNITNAME_SUMMON_TITLE12");
+    CHECK(un::summonTitleKey(13).empty());
+    CHECK(un::summonTitleText(1, "Thrall", "Begleiter von %s") == "Begleiter von Thrall");
+    CHECK(un::summonTitleText(3, "Thrall", "%1$s - Diener") == "Thrall - Diener");
+    CHECK(un::formatOwner("%s %d %s 100%%", "A") == "A %d %s 100%");
 }
 
 TEST_CASE("the plate's threat flash and name colours", "[unit_names][nameplate]") {

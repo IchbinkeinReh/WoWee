@@ -10,7 +10,9 @@
 
 #include "ui/game_screen.hpp"
 
+#include "addons/addon_manager.hpp"
 #include "addons/lua_api_registrations.hpp"
+#include "addons/lua_engine.hpp"
 #include "core/application.hpp"
 #include "core/coordinates.hpp"
 #include "game/game_handler.hpp"
@@ -108,6 +110,14 @@ un::UnitFacts unitFacts(game::GameHandler& gh, const game::Entity& e, const game
     return f;
 }
 
+/// One of the interface's global strings (FrameScript_GetText, 0x00819d40),
+/// empty without an interface or such a string.
+std::string interfaceText(const char* name) {
+    auto* addons = core::Application::getInstance().getAddonManager();
+    auto* engine = addons ? addons->getLuaEngine() : nullptr;
+    return engine && engine->isInitialized() ? engine->globalText(name) : std::string{};
+}
+
 /// 0x0061e830: the "<Owner's Pet>" line under a unit something made, empty
 /// for none.
 std::string summonTitleLine(game::GameHandler& gh, const game::Entity& e, const game::Unit& unit) {
@@ -142,7 +152,7 @@ std::string summonTitleLine(game::GameHandler& gh, const game::Entity& e, const 
         if (isPlayerGuid(owner)) gh.queryPlayerName(owner);
         return {};
     }
-    return un::summonTitleText(title, ownerName);
+    return un::summonTitleText(title, ownerName, interfaceText(un::summonTitleKey(title).c_str()));
 }
 
 /// 0x0098e5f0: the level's colour on a plate, against the player's level -
@@ -301,8 +311,10 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                 }
             }
             // Another server's player, as the name query named a realm.
-            if (guid != playerGuid && !gameHandler.getCachedPlayerRealm(guid).empty())
-                text += un::kForeignServerLabel;
+            if (guid != playerGuid && !gameHandler.getCachedPlayerRealm(guid).empty()) {
+                const std::string label = interfaceText("FOREIGN_SERVER_LABEL");
+                text += label.empty() ? un::kForeignServerLabelEnUS : label;
+            }
         } else {
             text = name;
             const uint16_t petNumber = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
