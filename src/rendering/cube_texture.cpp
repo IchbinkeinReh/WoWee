@@ -9,20 +9,27 @@
 namespace wowee {
 namespace rendering {
 
+namespace {
+constexpr uint32_t kFaceCount = 6;
+}  // namespace
+
 bool uploadCubeTexture(VkContext& ctx, const uint8_t* rgba, uint32_t width, uint32_t height,
                        CubeTexture& out) {
     if (!rgba || width == 0 || height == 0) return false;
     const bool strip = isCubeStrip(width, height);
     const uint32_t size = strip ? height : std::max(width, height);
-    std::vector<uint8_t> faces(static_cast<size_t>(size) * size * 4 * 6);
-    for (uint32_t f = 0; f < 6; ++f) {
+    constexpr size_t kBytesPerPixel = 4;  // RGBA8
+    std::vector<uint8_t> faces(static_cast<size_t>(size) * size * kBytesPerPixel * kFaceCount);
+    for (uint32_t f = 0; f < kFaceCount; ++f) {
         const uint32_t square = static_cast<uint32_t>(cubeStripSquare(static_cast<int>(f)));
         for (uint32_t y = 0; y < size; ++y) {
             for (uint32_t x = 0; x < size; ++x) {
                 const uint32_t sx = strip ? square * size + x : x * width / size;
                 const uint32_t sy = strip ? y : y * height / size;
-                std::memcpy(&faces[((static_cast<size_t>(f) * size + y) * size + x) * 4],
-                            &rgba[(static_cast<size_t>(sy) * width + sx) * 4], 4);
+                const size_t facePixel = (static_cast<size_t>(f) * size + y) * size + x;
+                const size_t sourcePixel = static_cast<size_t>(sy) * width + sx;
+                std::memcpy(&faces[facePixel * kBytesPerPixel], &rgba[sourcePixel * kBytesPerPixel],
+                            kBytesPerPixel);
             }
         }
     }
@@ -34,7 +41,7 @@ bool uploadCubeTexture(VkContext& ctx, const uint8_t* rgba, uint32_t width, uint
     ii.format = VK_FORMAT_R8G8B8A8_UNORM;
     ii.extent = {size, size, 1};
     ii.mipLevels = 1;
-    ii.arrayLayers = 6;
+    ii.arrayLayers = kFaceCount;
     ii.samples = VK_SAMPLE_COUNT_1_BIT;
     ii.tiling = VK_IMAGE_TILING_OPTIMAL;
     ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -57,14 +64,14 @@ bool uploadCubeTexture(VkContext& ctx, const uint8_t* rgba, uint32_t width, uint
         b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.image = image;
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, kFaceCount};
         b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              0, 0, nullptr, 0, nullptr, 1, &b);
         VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 6};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, kFaceCount};
         region.imageExtent = {size, size, 1};
         vkCmdCopyBufferToImage(cmd, staging.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
         b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -85,7 +92,7 @@ bool uploadCubeTexture(VkContext& ctx, const uint8_t* rgba, uint32_t width, uint
     vi.image = cube.image;
     vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
     vi.format = VK_FORMAT_R8G8B8A8_UNORM;
-    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, kFaceCount};
     if (vkCreateImageView(ctx.getDevice(), &vi, nullptr, &cube.view) != VK_SUCCESS) {
         vmaDestroyImage(ctx.getAllocator(), cube.image, cube.allocation);
         return false;

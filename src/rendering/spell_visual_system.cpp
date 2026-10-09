@@ -1242,8 +1242,9 @@ const spell_chain::ChainEffect* SpellVisualSystem::chainEffect(uint32_t id) {
                                                          [&](uint32_t offset) { return dbc->getStringByOffset(offset); });
                 if (!row || row->id == 0) continue;
                 // The Combo string's own bytes (0x007fc5f0 reads them as words).
-                uint32_t comboOffset = 0;
-                std::memcpy(&comboOffset, dbc->getRecord(i) + dbc->getRecordSize() - 16, 4);
+                // parseChainEffect has checked the record holds the tail.
+                const uint32_t comboOffset =
+                    spell_chain::chainEffectTail(dbc->getRecord(i), dbc->getRecordSize()).comboString;
                 if (comboOffset < dbc->getStringBlockSize() && dbc->getStringBlockData())
                     row->comboWords = spell_chain::comboWordsAt(dbc->getStringBlockData() + comboOffset,
                                                                 dbc->getStringBlockSize() - comboOffset);

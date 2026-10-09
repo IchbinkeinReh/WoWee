@@ -34,6 +34,7 @@
 #include <fstream>
 #include <future>
 #include <limits>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
 
@@ -568,9 +569,12 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         if (groupIdx < model.groupInfo.size()) {
             int32_t nameOff = model.groupInfo[groupIdx].nameOffset;
             if (nameOff >= 0 && static_cast<size_t>(nameOff) < model.groupNameRaw.size()) {
-                const char* str = reinterpret_cast<const char*>(model.groupNameRaw.data() + nameOff);
-                size_t maxLen = model.groupNameRaw.size() - nameOff;
-                return std::string(str, strnlen(str, maxLen));
+                // MOGN is a block of null-terminated names; the last may run
+                // to the block's end unterminated.
+                const std::string_view nameBlock(reinterpret_cast<const char*>(model.groupNameRaw.data()),
+                                                 model.groupNameRaw.size());
+                const std::string_view fromName = nameBlock.substr(static_cast<size_t>(nameOff));
+                return std::string(fromName.substr(0, fromName.find('\0')));
             }
         }
         return {};

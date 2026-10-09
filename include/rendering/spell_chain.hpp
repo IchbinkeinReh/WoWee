@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -97,18 +98,83 @@ inline constexpr uint32_t kFlagTextureLength = 0x100;    ///< the texture repeat
 inline constexpr uint32_t kFlagTextureFromEnd = 0x200;   ///< and is laid from the far end
 inline constexpr uint32_t kFlagFixedWavePhase = 0x400;   ///< the wave starts at WavePhase
 
-namespace detail {
-inline uint32_t u32At(const uint8_t* p) {
-    uint32_t v;
-    std::memcpy(&v, p, 4);
-    return v;
+/// The record's first 39 columns as the file lays them out (0x008b73b0),
+/// four bytes each. The ChainEffect fields above carry the same offsets.
+struct ChainEffectRecordHead {
+    uint32_t id;
+    float avgSegLen;
+    float width;
+    float noiseScale;
+    float texCoordScale;
+    uint32_t segDuration;
+    uint32_t segDelay;
+    uint32_t textureString;    ///< string block offset
+    uint32_t flags;
+    uint32_t jointCount;
+    float jointOffsetRadius;
+    uint32_t jointsPerMinorJoint;
+    uint32_t minorJointsPerMajorJoint;
+    float minorJointScale;
+    float majorJointScale;
+    float jointMoveSpeed;
+    float jointSmoothness;
+    float minDurationBetweenJointJumps;
+    float maxDurationBetweenJointJumps;
+    float waveHeight;
+    float waveFreq;
+    float waveSpeed;
+    float minWaveAngle;
+    float maxWaveAngle;
+    float minWaveSpin;
+    float maxWaveSpin;
+    float arcHeight;
+    float minArcAngle;
+    float maxArcAngle;
+    float minArcSpin;
+    float maxArcSpin;
+    float delayBetweenEffects;
+    float minFlickerOnDuration;
+    float maxFlickerOnDuration;
+    float minFlickerOffDuration;
+    float maxFlickerOffDuration;
+    float pulseSpeed;
+    float pulseOnLength;
+    float pulseFadeLength;
+};
+/// Where the colour and blend bytes start, right after the head.
+inline constexpr uint32_t kColourColumnsOffset = 0x9c;
+static_assert(sizeof(ChainEffectRecordHead) == kColourColumnsOffset);
+static_assert(offsetof(ChainEffectRecordHead, textureString) == 0x1c);
+static_assert(offsetof(ChainEffectRecordHead, delayBetweenEffects) == 0x7c);
+
+/// The four columns after the colour bytes. They are read back from the
+/// record's end, because where they start moves with how wide the file
+/// stores the colour bytes (one each, or four in 192-byte records).
+struct ChainEffectRecordTail {
+    uint32_t comboString;      ///< string block offset
+    int32_t renderLayer;
+    float textureLength;
+    float wavePhase;
+};
+static_assert(sizeof(ChainEffectRecordTail) == 16);
+
+/// The colour and blend columns: alpha, red, green, blue, blend mode.
+inline constexpr uint32_t kColourColumnCount = 5;
+/// The smallest record that holds all of the above, colour bytes one wide.
+inline constexpr uint32_t kMinRecordSize =
+    kColourColumnsOffset + kColourColumnCount + sizeof(ChainEffectRecordTail);
+
+inline ChainEffectRecordHead chainEffectHead(const uint8_t* rec) {
+    ChainEffectRecordHead head;
+    std::memcpy(&head, rec, sizeof(head));
+    return head;
 }
-inline float f32At(const uint8_t* p) {
-    float v;
-    std::memcpy(&v, p, 4);
-    return v;
+/// `recordSize` must be at least kMinRecordSize.
+inline ChainEffectRecordTail chainEffectTail(const uint8_t* rec, uint32_t recordSize) {
+    ChainEffectRecordTail tail;
+    std::memcpy(&tail, rec + (recordSize - sizeof(tail)), sizeof(tail));
+    return tail;
 }
-}  // namespace detail
 
 /// 0x009a8ce0: the SpellChainEffects id one of the Combo string's words
 /// names - each byte's low bit dropped and the bits gathered as the client
@@ -144,59 +210,63 @@ inline std::array<uint32_t, 12> comboWordsAt(const uint8_t* bytes, size_t availa
 /// column's offset into its text.
 template <class StringAt>
 std::optional<ChainEffect> parseChainEffect(const uint8_t* rec, uint32_t recordSize, StringAt stringAt) {
-    if (!rec || recordSize < 0x9c + 5 + 16) return std::nullopt;
-    using detail::f32At;
-    using detail::u32At;
+    if (!rec || recordSize < kMinRecordSize) return std::nullopt;
+    const ChainEffectRecordHead head = chainEffectHead(rec);
+    const ChainEffectRecordTail tail = chainEffectTail(rec, recordSize);
     ChainEffect e;
-    e.id = u32At(rec + 0x00);
-    e.avgSegLen = f32At(rec + 0x04);
-    e.width = f32At(rec + 0x08);
-    e.noiseScale = f32At(rec + 0x0c);
-    e.texCoordScale = f32At(rec + 0x10);
-    e.segDuration = u32At(rec + 0x14);
-    e.segDelay = u32At(rec + 0x18);
-    e.texture = stringAt(u32At(rec + 0x1c));
-    e.flags = u32At(rec + 0x20);
-    e.jointCount = u32At(rec + 0x24);
-    e.jointOffsetRadius = f32At(rec + 0x28);
-    e.jointsPerMinorJoint = u32At(rec + 0x2c);
-    e.minorJointsPerMajorJoint = u32At(rec + 0x30);
-    e.minorJointScale = f32At(rec + 0x34);
-    e.majorJointScale = f32At(rec + 0x38);
-    e.jointMoveSpeed = f32At(rec + 0x3c);
-    e.jointSmoothness = f32At(rec + 0x40);
-    e.minDurationBetweenJointJumps = f32At(rec + 0x44);
-    e.maxDurationBetweenJointJumps = f32At(rec + 0x48);
-    e.waveHeight = f32At(rec + 0x4c);
-    e.waveFreq = f32At(rec + 0x50);
-    e.waveSpeed = f32At(rec + 0x54);
-    e.minWaveAngle = f32At(rec + 0x58);
-    e.maxWaveAngle = f32At(rec + 0x5c);
-    e.minWaveSpin = f32At(rec + 0x60);
-    e.maxWaveSpin = f32At(rec + 0x64);
-    e.arcHeight = f32At(rec + 0x68);
-    e.minArcAngle = f32At(rec + 0x6c);
-    e.maxArcAngle = f32At(rec + 0x70);
-    e.minArcSpin = f32At(rec + 0x74);
-    e.maxArcSpin = f32At(rec + 0x78);
-    e.delayBetweenEffects = f32At(rec + 0x7c);
-    e.minFlickerOnDuration = f32At(rec + 0x80);
-    e.maxFlickerOnDuration = f32At(rec + 0x84);
-    e.minFlickerOffDuration = f32At(rec + 0x88);
-    e.maxFlickerOffDuration = f32At(rec + 0x8c);
-    e.pulseSpeed = f32At(rec + 0x90);
-    e.pulseOnLength = f32At(rec + 0x94);
-    e.pulseFadeLength = f32At(rec + 0x98);
-    const uint32_t byteStride = recordSize >= 0x9c + 5 * 4 + 16 ? 4u : 1u;
-    e.alpha = rec[0x9c + 0 * byteStride];
-    e.red = rec[0x9c + 1 * byteStride];
-    e.green = rec[0x9c + 2 * byteStride];
-    e.blue = rec[0x9c + 3 * byteStride];
-    e.blendMode = rec[0x9c + 4 * byteStride];
-    e.combo = stringAt(u32At(rec + recordSize - 16));
-    e.renderLayer = static_cast<int32_t>(u32At(rec + recordSize - 12));
-    e.textureLength = f32At(rec + recordSize - 8);
-    e.wavePhase = f32At(rec + recordSize - 4);
+    e.id = head.id;
+    e.avgSegLen = head.avgSegLen;
+    e.width = head.width;
+    e.noiseScale = head.noiseScale;
+    e.texCoordScale = head.texCoordScale;
+    e.segDuration = head.segDuration;
+    e.segDelay = head.segDelay;
+    e.texture = stringAt(head.textureString);
+    e.flags = head.flags;
+    e.jointCount = head.jointCount;
+    e.jointOffsetRadius = head.jointOffsetRadius;
+    e.jointsPerMinorJoint = head.jointsPerMinorJoint;
+    e.minorJointsPerMajorJoint = head.minorJointsPerMajorJoint;
+    e.minorJointScale = head.minorJointScale;
+    e.majorJointScale = head.majorJointScale;
+    e.jointMoveSpeed = head.jointMoveSpeed;
+    e.jointSmoothness = head.jointSmoothness;
+    e.minDurationBetweenJointJumps = head.minDurationBetweenJointJumps;
+    e.maxDurationBetweenJointJumps = head.maxDurationBetweenJointJumps;
+    e.waveHeight = head.waveHeight;
+    e.waveFreq = head.waveFreq;
+    e.waveSpeed = head.waveSpeed;
+    e.minWaveAngle = head.minWaveAngle;
+    e.maxWaveAngle = head.maxWaveAngle;
+    e.minWaveSpin = head.minWaveSpin;
+    e.maxWaveSpin = head.maxWaveSpin;
+    e.arcHeight = head.arcHeight;
+    e.minArcAngle = head.minArcAngle;
+    e.maxArcAngle = head.maxArcAngle;
+    e.minArcSpin = head.minArcSpin;
+    e.maxArcSpin = head.maxArcSpin;
+    e.delayBetweenEffects = head.delayBetweenEffects;
+    e.minFlickerOnDuration = head.minFlickerOnDuration;
+    e.maxFlickerOnDuration = head.maxFlickerOnDuration;
+    e.minFlickerOffDuration = head.minFlickerOffDuration;
+    e.maxFlickerOffDuration = head.maxFlickerOffDuration;
+    e.pulseSpeed = head.pulseSpeed;
+    e.pulseOnLength = head.pulseOnLength;
+    e.pulseFadeLength = head.pulseFadeLength;
+    // A file whose records have room for four-byte colour columns stores them so.
+    const uint32_t byteStride = recordSize >= kColourColumnsOffset + kColourColumnCount * 4 +
+                                                 sizeof(ChainEffectRecordTail)
+                                    ? 4u : 1u;
+    const uint8_t* colour = rec + kColourColumnsOffset;
+    e.alpha = colour[0 * byteStride];
+    e.red = colour[1 * byteStride];
+    e.green = colour[2 * byteStride];
+    e.blue = colour[3 * byteStride];
+    e.blendMode = colour[4 * byteStride];
+    e.combo = stringAt(tail.comboString);
+    e.renderLayer = tail.renderLayer;
+    e.textureLength = tail.textureLength;
+    e.wavePhase = tail.wavePhase;
     return e;
 }
 
