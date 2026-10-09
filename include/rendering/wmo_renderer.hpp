@@ -494,7 +494,7 @@ public:
      * @return Distance to first intersection, or maxDistance if no hit
      */
     float raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
-                               bool ignoreCollisionFocus = false) const;
+                               bool ignoreCollisionFocus = false, uint32_t* hitInstanceId = nullptr) const;
 
     /**
      * Limit expensive collision/raycast queries to objects near a focus point.

@@ -323,6 +323,7 @@
   "Spell": {
     "Attributes": 4,
     "AttributesEx": 5,
+    "AttributesEx3": 7,
     "CasterAuraState": 20,
     "CasterAuraStateNot": 22,
     "CastingTimeIndex": 28,
@@ -375,6 +376,8 @@
     "ReagentCount7": 67,
     "RecoveryTime": 29,
     "SchoolMask": 225,
+    "SpellFamilyFlags": 209,
+    "SpellFamilyName": 208,
     "Speed": 47,
     "SpellMissileID": 227,
     "SpellVisualID": 131,

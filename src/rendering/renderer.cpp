@@ -2815,15 +2815,17 @@ void Renderer::clearSpellTargetCircle() {
 }
 
 std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm::vec3& dir,
-                                              float maxDistance) const {
+                                              float maxDistance, uint32_t* wmoInstanceId) const {
     const glm::vec3 d = glm::normalize(dir);
     float best = maxDistance;
     bool hit = false;
+    uint32_t building = 0;
     // Buildings and doodads, by their collision triangles, whatever the
     // collision focus around the player.
     if (wmoRenderer) {
-        const float t = wmoRenderer->raycastBoundingBoxes(origin, d, best, true);
-        if (t < best) { best = t; hit = true; }
+        uint32_t id = 0;
+        const float t = wmoRenderer->raycastBoundingBoxes(origin, d, best, true, &id);
+        if (t < best) { best = t; hit = true; building = id; }
     }
     // The terrain, marched in half-yard steps and the crossing halved down.
     if (terrainManager) {
@@ -2841,7 +2843,7 @@ std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm
                     const float mid = 0.5f * (lo + hi);
                     (below(mid) ? hi : lo) = mid;
                 }
-                if (hi < best) { best = hi; hit = true; }
+                if (hi < best) { best = hi; hit = true; building = 0; }
                 break;
             }
             prev = t;
@@ -2868,10 +2870,11 @@ std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm
             const float v = glm::dot(d, qv) * inv;
             if (v < 0.0f || u + v > 1.0f) continue;
             const float t = glm::dot(e2, qv) * inv;
-            if (t > 0.0f && t < best) { best = t; hit = true; }
+            if (t > 0.0f && t < best) { best = t; hit = true; building = 0; }
         }
     }
     if (!hit) return std::nullopt;
+    if (wmoInstanceId) *wmoInstanceId = building;
     return origin + d * best;
 }
 

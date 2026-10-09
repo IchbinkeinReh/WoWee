@@ -2392,21 +2392,40 @@ bool GameHandler::isGroundTargeting() const { return spellHandler_ && spellHandl
 uint32_t GameHandler::groundTargetSpellId() const {
     return spellHandler_ ? spellHandler_->groundTargetSpellId() : 0;
 }
-bool GameHandler::cancelGroundTargeting() { return spellHandler_ && spellHandler_->cancelGroundTargeting(); }
-void GameHandler::placeGroundTarget(const glm::vec3& canonical) {
-    if (spellHandler_) spellHandler_->placeGroundTarget(canonical);
+spell_mods::Sum GameHandler::getSpellModifiers(uint32_t spellId, SpellModOp op) const {
+    return spellHandler_ ? spellHandler_->spellModifiers(spellId, static_cast<uint8_t>(op)) : spell_mods::Sum{};
 }
-std::optional<GameHandler::GroundTargetAim> GameHandler::aimGroundTarget(std::optional<glm::vec3> canonical) {
+bool GameHandler::cancelGroundTargeting() { return spellHandler_ && spellHandler_->cancelGroundTargeting(); }
+void GameHandler::placeGroundTarget(const ground_target::Place& place) {
+    if (spellHandler_) spellHandler_->placeGroundTarget(place);
+}
+ground_target::Place GameHandler::groundPlaceAt(const glm::vec3& renderPos, uint32_t wmoInstanceId) const {
+    ground_target::Place place;
+    place.canonical = core::coords::renderToCanonical(renderPos);
+    if (wmoInstanceId == 0 || !transportManager_) return place;
+    // A building that is an MO_TRANSPORT's (high guid 0x1FC, as 0x004f66c0
+    // tests it): the place in its frame, the axes its movement offsets use
+    // (TransportManager::serverToTransportLocal).
+    for (const auto& [guid, transport] : transportManager_->getTransports()) {
+        if (transport.isM2 || transport.wmoInstanceId != wmoInstanceId) continue;
+        if ((guid >> 52) != 0x1FCu) continue;
+        place.transportGuid = guid;
+        place.transportOffset = glm::vec3(transport.invTransform * glm::vec4(renderPos, 1.0f));
+        break;
+    }
+    return place;
+}
+std::optional<GameHandler::GroundTargetAim> GameHandler::aimGroundTarget(std::optional<ground_target::Place> place) {
     if (!spellHandler_) return std::nullopt;
-    spellHandler_->setGroundTargetCursor(canonical);
-    if (!canonical || !spellHandler_->isGroundTargeting()) return std::nullopt;
+    spellHandler_->setGroundTargetCursor(place);
+    if (!place || !spellHandler_->isGroundTargeting()) return std::nullopt;
     GroundTargetAim aim;
-    aim.placement = spellHandler_->groundTargetPlacement(*canonical);
+    aim.placement = spellHandler_->groundTargetPlacement(place->canonical);
     aim.circleRadius = ground_target::circleRadius(static_cast<ground_target::Placement>(aim.placement),
                                                    spellHandler_->groundTargetSpellArea());
     return aim;
 }
-std::optional<glm::vec3> GameHandler::groundTargetCursor() const {
+std::optional<ground_target::Place> GameHandler::groundTargetCursor() const {
     return spellHandler_ ? spellHandler_->groundTargetCursor() : std::nullopt;
 }
 

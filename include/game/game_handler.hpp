@@ -1,6 +1,8 @@
 #pragma once
 
 #include "game/quest_giver_status.hpp"
+#include "game/spell_mods.hpp"
+#include "game/ground_target.hpp"
 #include "game/calendar_data.hpp"
 #include "game/game_interfaces.hpp"
 #include "game/world_packets.hpp"
@@ -1077,8 +1079,12 @@ public:
     [[nodiscard]] bool isGroundTargeting() const;
     [[nodiscard]] uint32_t groundTargetSpellId() const;
     bool cancelGroundTargeting();
-    void placeGroundTarget(const glm::vec3& canonical);
-    [[nodiscard]] std::optional<glm::vec3> groundTargetCursor() const;
+    void placeGroundTarget(const ground_target::Place& place);
+    [[nodiscard]] std::optional<ground_target::Place> groundTargetCursor() const;
+    /// The place a click on the world at this renderer point lands, with
+    /// the transport whose building it hit (wmoInstanceId, 0 for none) and
+    /// the point in its frame (0x00527360's event).
+    [[nodiscard]] ground_target::Place groundPlaceAt(const glm::vec3& renderPos, uint32_t wmoInstanceId) const;
     /// The pointer's place on the ground this frame (canonical; none when it
     /// is over no ground), remembered for CameraOrSelectOrMoveStop. Answers
     /// what the place is to the spell (0x00803ee0: 0 acceptable, 1 not, 2 too
@@ -1087,7 +1093,7 @@ public:
         int placement = 1;
         float circleRadius = 0.0f;
     };
-    std::optional<GroundTargetAim> aimGroundTarget(std::optional<glm::vec3> canonical);
+    std::optional<GroundTargetAim> aimGroundTarget(std::optional<ground_target::Place> place);
     void cancelAura(uint32_t spellId);
     void dismissPet();
     void renamePet(const std::string& newName);
@@ -2454,29 +2460,10 @@ public:
         }
     };
 
-    // Returns the sum of all flat modifiers for a given op across all groups.
-    // (Callers that need per-group resolution can use getSpellFlatMods() directly.)
-    int32_t getSpellFlatMod(SpellModOp op) const {
-        int32_t total = 0;
-        for (const auto& [k, v] : spellFlatMods_)
-            if (k.op == op) total += v;
-        return total;
-    }
-    // Returns the sum of all pct modifiers for a given op across all groups (in %).
-    int32_t getSpellPctMod(SpellModOp op) const {
-        int32_t total = 0;
-        for (const auto& [k, v] : spellPctMods_)
-            if (k.op == op) total += v;
-        return total;
-    }
-
-    // Convenience: apply flat+pct modifier to a base value.
-    // result = (base + flatMod) * (1.0 + pctMod/100.0), clamped to >= 0.
-    static int32_t applySpellMod(int32_t base, int32_t flat, int32_t pct) {
-        int64_t v = static_cast<int64_t>(base) + flat;
-        if (pct != 0) v = v + (v * pct + 50) / 100;  // round half-up
-        return static_cast<int32_t>(v < 0 ? 0 : v);
-    }
+    /// The modifiers a spell of the player's takes for an op (0x007fd970):
+    /// those of the SpellFamilyFlags bits it has, where its family is the
+    /// class's. spell_mods::apply makes the value.
+    [[nodiscard]] spell_mods::Sum getSpellModifiers(uint32_t spellId, SpellModOp op) const;
 
     struct FactionStandingInit {
         uint8_t flags = 0;
@@ -4038,6 +4025,11 @@ public:
         uint32_t schoolMask = 0; uint8_t dispelType = 0; uint32_t attrEx = 0;
         /// Spell.dbc Attributes, the base word. Bit 6 (0x40) is passive.
         uint32_t attr = 0;
+        /// Spell.dbc AttributesEx3 (+0x1c), SpellFamilyName (+0x240) and
+        /// SpellFamilyFlags (+0x244): which modifiers it takes (0x007fd970).
+        uint32_t attrEx3 = 0;
+        uint32_t spellFamily = 0;
+        uint32_t spellFamilyFlags[3] = {0, 0, 0};
         // Spell.dbc Targets bitmask (SpellCastTargetFlags) - 0x10 = TARGET_FLAG_ITEM
         uint32_t targetFlags = 0;
         // Spell.dbc RangeIndex resolved against SpellRange.dbc. A max range of 0

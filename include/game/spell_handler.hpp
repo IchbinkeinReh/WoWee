@@ -3,6 +3,8 @@
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
 #include "game/spell_defines.hpp"
+#include "game/spell_mods.hpp"
+#include "game/ground_target.hpp"
 #include "game/handler_types.hpp"
 #include "audio/spell_sound_manager.hpp"
 #include "network/packet.hpp"
@@ -64,15 +66,17 @@ public:
     bool cancelGroundTargeting();
     /// A click on the world at this place, canonical: fills the location the
     /// spell wants (0x0080c340) and casts once nothing more is wanted.
-    void placeGroundTarget(const glm::vec3& canonical);
+    void placeGroundTarget(const ground_target::Place& place);
     /// The ground under the cursor this frame, canonical, or none - where a
     /// click would land. Set by the world view, read by
     /// CameraOrSelectOrMoveStop.
-    void setGroundTargetCursor(std::optional<glm::vec3> canonical) { groundTarget_.cursor = canonical; }
-    [[nodiscard]] std::optional<glm::vec3> groundTargetCursor() const { return groundTarget_.cursor; }
+    void setGroundTargetCursor(std::optional<ground_target::Place> place) { groundTarget_.cursor = place; }
+    [[nodiscard]] std::optional<ground_target::Place> groundTargetCursor() const { return groundTarget_.cursor; }
     /// The circle's radius, and whether the place is in range, for the
     /// cursor's place (0x008019c0, 0x00803ee0).
     [[nodiscard]] float groundTargetSpellArea() const;
+    /// 0x007fd970 for a spell of the player's.
+    [[nodiscard]] spell_mods::Sum spellModifiers(uint32_t spellId, uint8_t op) const;
     [[nodiscard]] int groundTargetPlacement(const glm::vec3& canonical) const;
 
     /// Spell.dbc EffectImplicitTargetA, or 0 when the spell is unknown. 21 means
@@ -490,11 +494,15 @@ private:
         uint32_t spellId = 0;
         uint32_t required = 0;
         glm::vec3 source{0.0f};
-        std::optional<glm::vec3> cursor;
+        std::optional<ground_target::Place> cursor;
     };
     GroundTarget groundTarget_;
+    /// ChrClasses SpellClassSet for the player's class (0x008007a0), and
+    /// the class it was read for.
+    mutable uint32_t classSpellFamily_ = 0;
+    mutable uint8_t classSpellFamilyFor_ = 0xFF;
     /// Send the cast at the destination the targeting gathered.
-    void castAtLocation(uint32_t spellId, const glm::vec3& canonical);
+    void castAtLocation(uint32_t spellId, const ground_target::Place& place);
     bool casting_ = false;
     bool castIsChannel_ = false;
     uint32_t currentCastSpellId_ = 0;

@@ -280,8 +280,10 @@ public:
     /// The first terrain, building or doodad surface along a ray from the
     /// camera, renderer coordinates - the ground a click on the world lands
     /// on (CWorld's intersect, 0x004f66c0's place).
+    /// wmoInstanceId, where given, is the building the place is on, 0 for
+    /// none.
     [[nodiscard]] std::optional<glm::vec3> pickGround(const glm::vec3& origin, const glm::vec3& dir,
-                                                      float maxDistance) const;
+                                                      float maxDistance, uint32_t* wmoInstanceId = nullptr) const;
 
     // CPU timing stats (milliseconds, last frame).
     double getLastUpdateMs() const { return lastUpdateMs; }

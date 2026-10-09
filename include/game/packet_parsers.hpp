@@ -94,8 +94,8 @@ public:
     /** Build CMSG_CAST_SPELL aimed at a place on the ground (TARGET_FLAG_DEST_LOCATION),
      *  the position in the server's (canonical) coordinates. */
     virtual network::Packet buildCastSpellAtLocation(uint32_t spellId, float x, float y, float z,
-                                                     uint8_t castCount) {
-        return CastSpellPacket::buildDestination(spellId, x, y, z, castCount);
+                                                     uint8_t castCount, uint64_t transportGuid = 0) {
+        return CastSpellPacket::buildDestination(spellId, x, y, z, castCount, transportGuid);
     }
 
     /** Build CMSG_CAST_SPELL with SpellCastTargets targeting an item - Disenchant,
@@ -391,8 +391,9 @@ public:
     network::Packet buildAcceptQuestPacket(uint64_t npcGuid, uint32_t questId) override;
     // TBC 2.4.3 CMSG_CAST_SPELL has no castFlags byte (WotLK added it)
     network::Packet buildCastSpell(uint32_t spellId, uint64_t targetGuid, uint8_t castCount) override;
+    // No transport before WotLK: x, y, z are the world's.
     network::Packet buildCastSpellAtLocation(uint32_t spellId, float x, float y, float z,
-                                             uint8_t castCount) override;
+                                             uint8_t castCount, uint64_t transportGuid = 0) override;
     network::Packet buildCastGameObjectSpell(uint32_t spellId, uint64_t targetGuid, uint8_t castCount) override;
     // TBC 2.4.3 CMSG_USE_ITEM uses spellIndex + castCount + itemGuid + targets.
     network::Packet buildUseItem(uint8_t bagIndex, uint8_t slotIndex,
@@ -485,8 +486,9 @@ public:
                                          uint64_t playerGuid = 0) override;
     network::Packet buildCastSpell(uint32_t spellId, uint64_t targetGuid, uint8_t castCount) override;
     network::Packet buildCastGameObjectSpell(uint32_t spellId, uint64_t targetGuid, uint8_t castCount) override;
+    // No transport before WotLK: x, y, z are the world's.
     network::Packet buildCastSpellAtLocation(uint32_t spellId, float x, float y, float z,
-                                             uint8_t castCount) override;
+                                             uint8_t castCount, uint64_t transportGuid = 0) override;
     network::Packet buildUseItem(uint8_t bagIndex, uint8_t slotIndex,
                                  uint64_t itemGuid, uint32_t spellId = 0,
                                  uint64_t targetGuid = 0, uint64_t itemTargetGuid = 0) override;

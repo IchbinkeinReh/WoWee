@@ -2236,7 +2236,9 @@ public:
     static network::Packet buildItemTarget(uint32_t spellId, uint64_t itemGuid, uint8_t castCount);
     /// Cast at a place on the ground: SpellCastTargets with only
     /// TARGET_FLAG_DEST_LOCATION, written as 0x009ab8b0 writes it.
-    static network::Packet buildDestination(uint32_t spellId, float x, float y, float z, uint8_t castCount);
+    /// x, y, z in the transport's frame when transportGuid is set (0x009ab8b0).
+    static network::Packet buildDestination(uint32_t spellId, float x, float y, float z, uint8_t castCount,
+                                            uint64_t transportGuid = 0);
 };
 
 /** CMSG_CANCEL_AURA packet builder */

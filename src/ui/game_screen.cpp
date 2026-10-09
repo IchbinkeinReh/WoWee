@@ -2032,9 +2032,11 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 const rendering::Ray ray = camera->screenToWorldRay(
                     mousePos.x, mousePos.y, static_cast<float>(window->getWidth()),
                     static_cast<float>(window->getHeight()));
-                const auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance);
+                uint32_t building = 0;
+                const auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building);
                 const auto aim = gameHandler.aimGroundTarget(
-                    ground ? std::optional<glm::vec3>(core::coords::renderToCanonical(*ground)) : std::nullopt);
+                    ground ? std::optional<game::ground_target::Place>(gameHandler.groundPlaceAt(*ground, building))
+                           : std::nullopt);
                 if (ground && aim) {
                     namespace gt = game::ground_target;
                     const auto where = static_cast<gt::Placement>(aim->placement);
@@ -2118,8 +2120,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 // the ground under the pointer, whatever unit stands there
                 // (0x00527360 -> 0x0080c340).
                 if (gameHandler.isGroundTargeting()) {
-                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance)) {
-                        gameHandler.placeGroundTarget(core::coords::renderToCanonical(*ground));
+                    uint32_t building = 0;
+                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building)) {
+                        gameHandler.placeGroundTarget(gameHandler.groundPlaceAt(*ground, building));
                     }
                     return;
                 }

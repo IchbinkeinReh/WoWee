@@ -903,8 +903,18 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         loadSpellNameCache();
         auto it = owner_.spellNameCacheRef().find(spellId);
         if (it != owner_.spellNameCacheRef().end()) {
+            // TARGET_DEST_TRAJ's exception reads the spell's SpellMissile
+            // row, its Flags (+4) bit 1 (0x0080c790 case 0x59).
+            bool trajectory = false;
+            if (it->second.implicitTargetsA[0] == 89 && it->second.spellMissileId != 0) {
+                auto* am = core::Application::getInstance().getAssetManager();
+                auto missiles = am ? am->loadDBCOptional("SpellMissile.dbc") : nullptr;
+                const int32_t row = missiles && missiles->getFieldCount() > 1
+                                        ? missiles->findRecordById(it->second.spellMissileId) : -1;
+                trajectory = row >= 0 && (missiles->getUInt32(static_cast<uint32_t>(row), 1) & 1u) != 0;
+            }
             const uint32_t required = ground_target::requiredTargets(
-                it->second.targetFlags, it->second.implicitTargetsA[0], false);
+                it->second.targetFlags, it->second.implicitTargetsA[0], trajectory);
             if (ground_target::wantsLocation(required)) {
                 if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
                 groundTarget_ = GroundTarget{};
@@ -1239,17 +1249,17 @@ bool SpellHandler::cancelGroundTargeting() {
     return true;
 }
 
-void SpellHandler::placeGroundTarget(const glm::vec3& canonical) {
+void SpellHandler::placeGroundTarget(const ground_target::Place& place) {
     if (groundTarget_.spellId == 0) return;
     // 0x0080c340: the source location first when both are wanted.
     const uint32_t filled = ground_target::locationFilledByClick(groundTarget_.required);
-    if (filled == ground_target::kTargetFlagSourceLocation) groundTarget_.source = canonical;
+    if (filled == ground_target::kTargetFlagSourceLocation) groundTarget_.source = place.canonical;
     groundTarget_.required &= ~filled;
     if (groundTarget_.required != 0) return;
     const uint32_t spellId = groundTarget_.spellId;
     groundTarget_ = GroundTarget{};
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
-    castAtLocation(spellId, canonical);
+    castAtLocation(spellId, place);
 }
 
 float SpellHandler::groundTargetSpellArea() const {
@@ -1257,9 +1267,40 @@ float SpellHandler::groundTargetSpellArea() const {
     loadSpellNameCache();
     auto it = owner_.spellNameCacheRef().find(groundTarget_.spellId);
     if (it == owner_.spellNameCacheRef().end()) return 0.0f;
-    // 0x008019c0: the first two effects, grown by the caster's level.
-    return ground_target::spellRadius(it->second.effectRadius, it->second.effectRadiusPerLevel,
-                                      owner_.getPlayerLevel());
+    // 0x008019c0: the first two effects, grown by the caster's level, then
+    // the spell's Radius modifiers.
+    const float area = ground_target::spellRadius(it->second.effectRadius, it->second.effectRadiusPerLevel,
+                                                  owner_.getPlayerLevel());
+    return spell_mods::apply(area, spellModifiers(groundTarget_.spellId, spell_mods::kOpRadius));
+}
+
+spell_mods::Sum SpellHandler::spellModifiers(uint32_t spellId, uint8_t op) const {
+    loadSpellNameCache();
+    auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return {};
+    // The class's spell family, ChrClasses SpellClassSet (+0x20, WotLK
+    // column 56), set when the player enters the world (0x008007a0).
+    const uint8_t classId = owner_.getPlayerClass();
+    if (classSpellFamilyFor_ != classId) {
+        classSpellFamilyFor_ = classId;
+        classSpellFamily_ = 0;
+        auto* am = core::Application::getInstance().getAssetManager();
+        auto classes = am ? am->loadDBCOptional("ChrClasses.dbc") : nullptr;
+        const int32_t row = classes && classes->getFieldCount() == 60 ? classes->findRecordById(classId) : -1;
+        if (row >= 0) classSpellFamily_ = classes->getUInt32(static_cast<uint32_t>(row), 56);
+    }
+    const auto& flat = owner_.spellFlatModsRef();
+    const auto& pct = owner_.spellPctModsRef();
+    const auto& e = it->second;
+    return spell_mods::modifiers(e.spellFamily, e.spellFamilyFlags, e.attrEx3, classSpellFamily_, op,
+                                 [&](uint8_t bit, uint8_t o) {
+                                     const GameHandler::SpellModKey key{.op = static_cast<GameHandler::SpellModOp>(o),
+                                                                        .group = bit};
+                                     const auto f = flat.find(key);
+                                     const auto p = pct.find(key);
+                                     return std::pair<int32_t, int32_t>{f != flat.end() ? f->second : 0,
+                                                                        p != pct.end() ? p->second : 0};
+                                 });
 }
 
 int SpellHandler::groundTargetPlacement(const glm::vec3& canonical) const {
@@ -1276,21 +1317,35 @@ int SpellHandler::groundTargetPlacement(const glm::vec3& canonical) const {
     const int k = spellTargetKind(e.targetFlags, {e.implicitTargetsA[0], e.implicitTargetsA[1], e.implicitTargetsA[2]},
                                   {e.implicitTargetsB[0], e.implicitTargetsB[1], e.implicitTargetsB[2]},
                                   {e.effectAuraIds[0], e.effectAuraIds[1], e.effectAuraIds[2]}) == 1 ? 1 : 0;
+    // 0x007ff480: Attributes 0x404 is 0 to 100; else the table's, the
+    // maximum through the spell's Range modifiers.
+    float minRange = e.rangeMin[k];
+    float maxRange = spell_mods::apply(e.rangeMax[k], spellModifiers(groundTarget_.spellId, spell_mods::kOpRange));
+    if ((e.attr & 0x404u) != 0) {
+        minRange = 0.0f;
+        maxRange = 100.0f;
+    }
     const auto& me = owner_.movementInfoRef();
     const glm::vec3 d = canonical - glm::vec3(me.x, me.y, me.z);
-    return static_cast<int>(ground_target::placement(glm::dot(d, d), e.rangeMin[k], e.rangeMax[k]));
+    return static_cast<int>(ground_target::placement(glm::dot(d, d), minRange, maxRange));
 }
 
-void SpellHandler::castAtLocation(uint32_t spellId, const glm::vec3& canonical) {
+void SpellHandler::castAtLocation(uint32_t spellId, const ground_target::Place& place) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // Sent where the click landed, whatever the range: the client only paints
-    // the circle by it (0x00803ee0), and the server answers out of range.
+    // the circle by it (0x00803ee0), and the server answers out of range. On
+    // a transport, its guid and the place in its frame (0x009ab8b0); before
+    // WotLK there is no transport to name, and the place is the world's.
+    const bool onTransport = place.transportGuid != 0 && !isPreWotlk();
+    const glm::vec3 wire = onTransport ? place.transportOffset : core::coords::canonicalToServer(place.canonical);
+    const uint64_t transportGuid = onTransport ? place.transportGuid : 0;
     auto packet = owner_.getPacketParsers()
-        ? owner_.getPacketParsers()->buildCastSpellAtLocation(spellId, canonical.x, canonical.y,
-                                                              canonical.z, ++castCount_)
-        : CastSpellPacket::buildDestination(spellId, canonical.x, canonical.y, canonical.z, ++castCount_);
+        ? owner_.getPacketParsers()->buildCastSpellAtLocation(spellId, wire.x, wire.y, wire.z, ++castCount_,
+                                                              transportGuid)
+        : CastSpellPacket::buildDestination(spellId, wire.x, wire.y, wire.z, ++castCount_, transportGuid);
     owner_.getSocket()->send(packet);
-    LOG_INFO("Casting spell: ", spellId, " at (", canonical.x, ", ", canonical.y, ", ", canonical.z, ")");
+    LOG_INFO("Casting spell: ", spellId, " at (", wire.x, ", ", wire.y, ", ", wire.z, ") transport 0x", std::hex,
+             transportGuid, std::dec);
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT", {"player", "", std::to_string(spellId)});
     if (!isGCDActive()) {
@@ -3351,6 +3406,11 @@ void SpellHandler::loadSpellNameCache() const {
         if (f != 0xFFFFFFFF && f < dbc->getFieldCount()) { attrExField = f; hasAttrExField = true; }
     }
 
+    // AttributesEx3 and the spell family, for the modifiers (0x007fd970).
+    const uint32_t attrEx3Field = spellL ? spellL->tryField("AttributesEx3") : 0xFFFFFFFF;
+    const uint32_t familyField = spellL ? spellL->tryField("SpellFamilyName") : 0xFFFFFFFF;
+    const uint32_t familyFlagsField = spellL ? spellL->tryField("SpellFamilyFlags") : 0xFFFFFFFF;
+
     // The base attribute word, beside the Ex one that was already read. Bit 6
     // marks a passive, which is the only thing asked of it so far.
     uint32_t attrField = 0xFFFFFFFF;
@@ -3541,6 +3601,12 @@ void SpellHandler::loadSpellNameCache() const {
             }
             if (hasAttrField) {
                 entry.attr = dbc->getUInt32(i, attrField);
+            }
+            if (attrEx3Field < fieldCount) entry.attrEx3 = dbc->getUInt32(i, attrEx3Field);
+            if (familyField < fieldCount) entry.spellFamily = dbc->getUInt32(i, familyField);
+            for (uint32_t w = 0; w < 3; ++w) {
+                if (familyFlagsField != 0xFFFFFFFF && familyFlagsField + w < fieldCount)
+                    entry.spellFamilyFlags[w] = dbc->getUInt32(i, familyFlagsField + w);
             }
             if (targetsField != 0xFFFFFFFF) {
                 entry.targetFlags = dbc->getUInt32(i, targetsField);
@@ -4436,7 +4502,8 @@ void SpellHandler::handleSpellModifier(network::Packet& packet, bool isFlat) {
         uint8_t groupIndex = packet.readUInt8();
         uint8_t modOpRaw   = packet.readUInt8();
         int32_t value      = static_cast<int32_t>(packet.readUInt32());
-        if (groupIndex > 5 || modOpRaw >= GameHandler::SPELL_MOD_OP_COUNT) continue;
+        // The group is a SpellFamilyFlags bit, 0 to 95 (0x007fdc60).
+        if (groupIndex >= spell_mods::kFamilyFlagBits || modOpRaw >= GameHandler::SPELL_MOD_OP_COUNT) continue;
         GameHandler::SpellModKey key{ .op = static_cast<GameHandler::SpellModOp>(modOpRaw), .group = groupIndex };
         modMap[key] = value;
     }

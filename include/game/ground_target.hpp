@@ -8,8 +8,19 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <glm/vec3.hpp>
 
 namespace wowee::game::ground_target {
+
+/// Where a click on the world lands (CGGameUI::OnTerrainClick's event,
+/// 0x00527360 -> 0x0080c340): the transport it is on, if any, with the place
+/// in the transport's own frame - the frame the server reads the
+/// destination in (0x009ab8b0 writes the guid before it).
+struct Place {
+    glm::vec3 canonical{0.0f};        ///< in the world
+    uint64_t transportGuid = 0;
+    glm::vec3 transportOffset{0.0f};  ///< on the transport, wire axes
+};
 
 /// SpellCastTargets flags (0x009ab8b0 writes them).
 inline constexpr uint32_t kTargetFlagUnit = 0x2;

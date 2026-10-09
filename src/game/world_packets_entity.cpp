@@ -1182,17 +1182,18 @@ network::Packet CastSpellPacket::buildItemTarget(uint32_t spellId, uint64_t item
 }
 
 network::Packet CastSpellPacket::buildDestination(uint32_t spellId, float x, float y, float z,
-                                                  uint8_t castCount) {
+                                                  uint8_t castCount, uint64_t transportGuid) {
     // 0x0080ac90: castCount, spell, cast flags (0: no trajectory), then the
     // targets as 0x009ab8b0 writes them - the flags, and for
     // TARGET_FLAG_DEST_LOCATION (0x40) the transport the place is on as a
-    // packed guid (none here: one zero mask byte) and the position.
+    // packed guid (none: one zero mask byte) and the position, on a
+    // transport in its own frame.
     network::Packet packet(wireOpcode(Opcode::CMSG_CAST_SPELL));
     packet.writeUInt8(castCount);
     packet.writeUInt32(spellId);
     packet.writeUInt8(0x00);
     packet.writeUInt32(0x40);
-    packet.writePackedGuid(0);
+    packet.writePackedGuid(transportGuid);
     packet.writeFloat(x);
     packet.writeFloat(y);
     packet.writeFloat(z);
