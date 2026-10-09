@@ -1669,7 +1669,7 @@ void Renderer::endFrame() {
     // The picture is finished and out of every pass that drew it: the one
     // point where the shafts can copy it down, before the overlay pass opens.
     recordScreenEffects();
-    if (vkCtx) vkCtx->gpuMark(currentCmd, "screen effects (glow, death)");
+    if (vkCtx) vkCtx->gpuMark(currentCmd, "screen effects");
     recordSunShafts();
     if (vkCtx) vkCtx->gpuMark(currentCmd, "sun shafts");
 
@@ -2328,9 +2328,21 @@ void Renderer::update(float deltaTime) {
                 if (auto lt = waterRenderer->getWaterTypeAt(eye.x, eye.y)) cameraLiquid.liquidType = *lt;
             }
         }
-        // The death light is up for a ghost: ScreenEffect's light override
-        // (0x004f7020 -> 0x007ecec0), with the ffxDeath pass over the frame.
-        const bool deathLight = gh && gh->isPlayerGhost();
+        // ScreenEffect's row: its light slot (0x004f7020 -> 0x007ecec0) - the
+        // death set for a ghost - and the nether world's fog (0x007ed870).
+        updateScreenEffect(deltaTime);
+        cameraInLiquid_ = cameraLiquid.submerged;
+        const bool ghost = gh && gh->isPlayerGhost();
+        if (screenEffectState_.kind() == screen_effect::Kind::NetherWorld) {
+            // White with the full-screen effects on (0xd45774's ffx, 1 by
+            // default), as they always are here.
+            lightingManager->setFogOverride(LightingManager::FogOverride{
+                .end = screen_effect::kNetherFogEnd,
+                .startScalar = screen_effect::kNetherFogStartScalar,
+                .colour = glm::vec3(1.0f)});
+        } else {
+            lightingManager->setFogOverride(std::nullopt);
+        }
 
         // The far clip for this map, and the fog's end held inside it
         // (0x00780770, 0x007f16f0).
@@ -2343,7 +2355,7 @@ void Renderer::update(float deltaTime) {
             // None for a ghost: 0x0077fb90 returns before looking when
             // PLAYER_FLAGS (the player's +0x1008 fields, +8) has 0x10,
             // PLAYER_FLAGS_GHOST.
-            if (wmoRenderer && camera && !deathLight) {
+            if (wmoRenderer && camera && !ghost) {
                 if (auto f = wmoRenderer->interiorFogAt(camera->getPosition())) {
                     interiorFog = LightingManager::InteriorFog{
                         .end = f->end, .startScalar = f->startScalar, .color = f->color,
@@ -2356,7 +2368,7 @@ void Renderer::update(float deltaTime) {
         }
         WOWEE_PROFILE_SCOPE("lighting", Cpu);
         lightingManager->update(characterPosition, mapId,
-                                gameTime, weatherIntensity, cameraLiquid, deathLight);
+                                gameTime, weatherIntensity, cameraLiquid, screenEffectLightOverride_);
         // A world object - unit, player or game object - on an interior floor
         // is lit by that floor's vertex colour, not the zone's light, and on
         // a transition face partly by the zone's (0x007a0d60, 0x007c7fe0); a
@@ -5826,21 +5838,150 @@ void Renderer::renderVolumetricFog() {
     }
 }
 
+void Renderer::loadScreenEffectRows() {
+    if (screenEffectRowsLoaded_) return;
+    screenEffectRowsLoaded_ = true;
+    auto* assetManager = core::Application::getInstance().getAssetManager();
+    const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ScreenEffect")
+                                                        : nullptr;
+    if (!assetManager || !layout) return;
+    const uint32_t effectCol = layout->tryField("Effect");
+    const uint32_t paramCol = layout->tryField("Param0");
+    const uint32_t lightCol = layout->tryField("LightParametersID");
+    auto data = assetManager->readFile("DBFilesClient\\ScreenEffect.dbc");
+    pipeline::DBCFile dbc;
+    if (data.empty() || !dbc.load(data) || effectCol >= dbc.getFieldCount() ||
+        paramCol + 3 >= dbc.getFieldCount() || lightCol >= dbc.getFieldCount()) {
+        LOG_WARNING("ScreenEffect.dbc not read - a ghost keeps the death effect, nothing else");
+        return;
+    }
+    for (uint32_t i = 0; i < dbc.getRecordCount(); ++i) {
+        screen_effect::Row row;
+        row.id = dbc.getUInt32(i, 0);
+        row.kind = static_cast<screen_effect::Kind>(dbc.getUInt32(i, effectCol));
+        for (uint32_t p = 0; p < 4; ++p) row.params[p] = static_cast<int32_t>(dbc.getUInt32(i, paramCol + p));
+        row.lightOverride = dbc.getUInt32(i, lightCol);
+        screenEffectRows_[row.id] = row;
+    }
+    LOG_INFO("Loaded ScreenEffect.dbc: ", screenEffectRows_.size(), " rows");
+}
+
+void Renderer::updateScreenEffect(float deltaTime) {
+    namespace se = screen_effect;
+    loadScreenEffectRows();
+    auto* gh = core::Application::getInstance().getGameHandler();
+    std::vector<se::AuraEffects> slots;
+    bool ghost = false;
+    bool inArena = false;
+    uint32_t bytes2 = 0, bytes3 = 0, fakeDrunk = 0;
+    screenEffectHavePlayer_ = false;
+    if (gh) {
+        ghost = gh->isPlayerGhost();
+        inArena = ghost && gh->isArenaMap(gh->getCurrentMapId());
+        // The aura slots and their spells' three effects (0x004f88b0 reads
+        // EffectApplyAuraName and EffectMiscValue).
+        for (const auto& aura : gh->getPlayerAuras()) {
+            se::AuraEffects a;
+            if (!aura.isEmpty()) {
+                gh->getSpellName(aura.spellId);  // fills the cache
+                auto it = gh->spellNameCacheRef().find(aura.spellId);
+                if (it != gh->spellNameCacheRef().end()) {
+                    a.spellId = aura.spellId;
+                    for (int i = 0; i < 3; ++i) {
+                        a.auraType[i] = it->second.effectAuraIds[i];
+                        a.miscValue[i] = it->second.effectMiscValues[i];
+                    }
+                }
+            }
+            slots.push_back(a);
+        }
+        if (auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
+            screenEffectHavePlayer_ = true;
+            bytes2 = player->getField(game::fieldIndex(game::UF::PLAYER_FIELD_BYTES2));
+            bytes3 = player->getField(game::fieldIndex(game::UF::PLAYER_BYTES_3));
+            fakeDrunk = player->getField(game::fieldIndex(game::UF::PLAYER_FAKE_INEBRIATION));
+        }
+    }
+    const uint32_t id = se::chooseRow(slots, ghost, inArena, bytes2);
+    const se::Row* row = nullptr;
+    if (id != 0) {
+        auto it = screenEffectRows_.find(id);
+        if (it != screenEffectRows_.end()) row = &it->second;
+    }
+    // Without the table a ghost still gets what row 1 holds: the death
+    // effect over the death light (slot 4).
+    static const se::Row kDeathRow{.id = se::kRowDeath, .kind = se::Kind::Death, .params = {0, 0, 0, 0},
+                                   .lightOverride = 4};
+    if (!row && id == se::kRowDeath && screenEffectRows_.empty()) row = &kDeathRow;
+    screenEffectState_.select(row);
+    screenEffectState_.advance(deltaTime);
+    screenEffectLightOverride_ = row && row->lightOverride < 8 ? static_cast<int>(row->lightOverride) : -1;
+    screenEffectDrunk_ = se::drunkAmount(bytes3, fakeDrunk);
+}
+
 void Renderer::recordScreenEffects() {
     if (!screenEffects_ || currentCmd == VK_NULL_HANDLE) return;
+    namespace se = screen_effect;
     ScreenEffects::FrameInputs in;
     const auto& images = vkCtx->getSwapchainImages();
+    bool draw = false;
     if (worldDrawnThisFrame_ && lightingManager && currentImageIndex < images.size()) {
-        // ffxGlow at the light's LightParams.Glow, and ffxDeath while the
-        // death light is up (ScreenEffect's override, 0x004f7020).
-        if (screenGlowEnabled_) in.glow = lightingManager->getLightingParams().glow;
-        in.death = ghostMode_ ? 1.0f : 0.0f;
+        const float lightGlow = lightingManager->getLightingParams().glow;
+        switch (screenEffectState_.kind()) {
+            case se::Kind::Death:
+                // ffxDeath in the glow's place (0x007ea260).
+                in.mode = ScreenEffects::Mode::Death;
+                in.glow = screenGlowEnabled_ ? lightGlow : 0.0f;
+                draw = true;
+                break;
+            case se::Kind::NetherWorld: {
+                in.mode = ScreenEffects::Mode::Nether;
+                const auto& field = screenEffectState_.nether();
+                for (int k = 0; k < se::NetherField::kPoints; ++k) in.netherValues[k] = field.pointValue(k);
+                // The world's x axis in the view (the view matrix's first row
+                // to the client), its z turned to the client's forward.
+                if (camera) {
+                    const glm::mat4& v = camera->getViewMatrix();
+                    in.netherAngle = field.angle(v[0][0], v[0][1], -v[0][2]);
+                }
+                in.netherFade = screenEffectState_.netherFade();
+                draw = true;
+                break;
+            }
+            case se::Kind::Special: {
+                in.mode = ScreenEffects::Mode::Fog;
+                const uint32_t c = screenEffectState_.fogColour();
+                in.fogColour = glm::vec3(static_cast<float>((c >> 16) & 0xFFu), static_cast<float>((c >> 8) & 0xFFu),
+                                         static_cast<float>(c & 0xFFu)) / 255.0f;
+                in.fogDecay = screenEffectState_.fogDecay();
+                in.fogNoiseRow = screenEffectState_.fogNoiseRow();
+                in.fogDesaturate = screenEffectState_.fogDesaturate();
+                in.fogBrighten = screenEffectState_.fogBrighten();
+                draw = true;
+                break;
+            }
+            default: {
+                // ffxGlow (0x004f8770): the light's glow, and the blend toward
+                // the blur - the camera in liquid, with the wave, or drunk.
+                if (!screenGlowEnabled_) break;
+                const se::GlowBlend g = se::glowBlend(lightGlow, screenEffectHavePlayer_, screenEffectDrunk_,
+                                                      cameraInLiquid_);
+                in.mode = ScreenEffects::Mode::Glow;
+                in.glow = static_cast<float>(g.glow) / 255.0f;
+                in.blend = static_cast<float>(g.blend) / 255.0f;
+                in.wave = g.wave;
+                in.timeMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+                draw = true;
+                break;
+            }
+        }
         if (minimap && minimap->isEnabled() && window && window->getWidth() > 0 && window->getHeight() > 0) {
             in.keepRect = minimap->screenUvRect(window->getWidth(), window->getHeight());
         }
     }
     screenEffects_->record(currentCmd, vkCtx->getCurrentFrame(),
-                           currentImageIndex < images.size() ? images[currentImageIndex] : VK_NULL_HANDLE,
+                           draw && currentImageIndex < images.size() ? images[currentImageIndex] : VK_NULL_HANDLE,
                            vkCtx->getSwapchainExtent(), in);
 }
 

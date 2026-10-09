@@ -2730,6 +2730,11 @@ wowee_add_test(test_minimap_zoom
 wowee_add_test(test_minimap_blips
     SOURCES test_minimap_blips.cpp)
 
+# ── test_screen_effect_state ─────────────────────────────────
+# The full-screen effects' CPU side: rows, drunk blur, wave, nether field, fog noise.
+wowee_add_test(test_screen_effect_state
+    SOURCES test_screen_effect_state.cpp)
+
 # ── test_minimap_indoor ──────────────────────────────────────
 # The indoor minimap's WMO pictures: tiles, names, area and groups (rendering/minimap_indoor.hpp).
 wowee_add_test(test_minimap_indoor

@@ -286,6 +286,15 @@
     "Mid": 4,
     "Start": 1
   },
+  "ScreenEffect": {
+    "ID": 0,
+    "Name": 1,
+    "Effect": 2,
+    "Param0": 3,
+    "LightParametersID": 7,
+    "SoundAmbienceID": 8,
+    "ZoneMusicID": 9
+  },
   "SkillLine": {
     "Category": 1,
     "Description": 20,

@@ -619,7 +619,6 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     if (spellHandler_) spellHandler_->resetAllState();
     if (auto* renderer = services_.renderer) {
         if (auto* camera = renderer->getCameraController()) camera->setIntoxication(0.0f);
-        if (auto* post = renderer->getPostProcessPipeline()) post->setIntoxication(0.0f);
     }
     spellFlatMods_.clear();
     spellPctMods_.clear();

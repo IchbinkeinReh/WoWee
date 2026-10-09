@@ -81,6 +81,14 @@ enum class UF : uint16_t {
     PLAYER_SKILL_INFO_START,
     PLAYER_EXPLORED_ZONES_START,
     PLAYER_CHOSEN_TITLE,         // Active title index (-1 = no title)
+    // How drunk: PLAYER_BYTES_3's byte 1 (0..100), and the fake inebriation
+    // an item can add (0x004f7290 reads +0x1d and +0x2b8 of the player's
+    // fields). WotLK only here.
+    PLAYER_BYTES_3,
+    PLAYER_FAKE_INEBRIATION,
+    // Byte 3, 0x40: the invisibility glow, which puts up ScreenEffect 0x51
+    // (0x004f88b0 reads +0x10e7). WotLK only here.
+    PLAYER_FIELD_BYTES2,
 
     // Player spell power / healing bonus (WotLK: PRIVATE - int32 per school)
     PLAYER_FIELD_MOD_DAMAGE_DONE_POS,  // Spell damage bonus (first of 7 schools)

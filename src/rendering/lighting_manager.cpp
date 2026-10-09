@@ -350,7 +350,7 @@ bool LightingManager::loadLightBandDbcs(pipeline::AssetManager* assetManager) {
 void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
                               float gameTime,
                               float weatherIntensity, const CameraLiquid& liquid,
-                              bool deathOverride) {
+                              int lightOverride) {
     const bool cameraInLiquid = liquid.submerged;
     if (!initialized_) return;
 
@@ -444,13 +444,15 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
         addSky(skyboxId, wv.weight);
     }
 
-    // The death light (0x007f3230, override index 4 from ScreenEffect via
-    // 0x007ecec0): the map default light's death set replaces everything the
-    // blend gave, except the glow, the water alphas and the sky models, which
-    // are kept; the death set's own sky model goes up on top at full weight.
+    // ScreenEffect's light (0x007f3230, the override slot from 0x007ecec0 -
+    // 4, the death set, for a ghost): the map default light's set in that
+    // slot replaces everything the blend gave, except the glow, the water
+    // alphas and the sky models, which are kept; the set's own sky model goes
+    // up on top at full weight.
     uint32_t deathSkyboxId = 0;
-    if (deathOverride && !liquidLight && base && base->lightParamsIds[LightVolume::PARAMS_DEATH] != 0) {
-        auto it = lightParamsProfiles_.find(base->lightParamsIds[LightVolume::PARAMS_DEATH]);
+    if (lightOverride >= 0 && lightOverride < static_cast<int>(LightVolume::PARAMS_SLOT_COUNT) && !liquidLight && base &&
+        base->lightParamsIds[lightOverride] != 0) {
+        auto it = lightParamsProfiles_.find(base->lightParamsIds[lightOverride]);
         if (it != lightParamsProfiles_.end()) {
             LightingParams death = sampleLightParams(&it->second, timeHalfMinutes);
             death.glow = newParams.glow;
@@ -513,6 +515,18 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
         daynight::clientFogRange(newParams.fogEnd, newParams.fogStartScalar, farClip_);
     newParams.fogStart = fog.start;
     newParams.fogEnd = fog.end;
+    // ScreenEffect's fog in the light's place (0x007f16f0 takes 0xd38ab0,
+    // 0xd38aac, 0xd38d18 and 0xd38aa8 while 0xd38ad0 is set): its end held to
+    // the far clip, its own start fraction, colour and exponent.
+    if (fogOverride_) {
+        float end = fogOverride_->end;
+        if (farClip_ > 0.0f && end > farClip_) end = farClip_;
+        newParams.fogEnd = end;
+        newParams.fogStart = end * fogOverride_->startScalar;
+        newParams.fogColor = fogOverride_->colour;
+        newParams.fogExponent = fogExponent_ ? daynight::clientFogExponent(
+            fogOverride_->end * fogOverride_->startScalar, fogOverride_->end, farClip_) : 1.0f;
+    }
 
     // Inside a WMO with fog of its own (MFOG): its end within the far clip,
     // the start that fraction of it, the end then no nearer than 30 yards

@@ -505,12 +505,11 @@ void GameHandler::registerCoreOpcodes() {
                 else if (threshold == 2) addSystemChatMessage("You feel drunk.");
                 else if (threshold >= 3) addSystemChatMessage("You feel completely smashed.");
                 else addSystemChatMessage("You feel sober again.");
+                // The picture's blur is the glow's, from PLAYER_BYTES_3
+                // (0x004f8770); this only sways the camera.
                 if (auto* renderer = services_.renderer) {
                     if (auto* camera = renderer->getCameraController()) {
                         camera->setIntoxication(amount);
-                    }
-                    if (auto* post = renderer->getPostProcessPipeline()) {
-                        post->setIntoxication(amount);
                     }
                 }
             }

@@ -334,15 +334,25 @@ public:
      * @param liquid The liquid the camera is under, if any: picks the
      *        underwater sets, and its LiquidType row darkens the light with
      *        depth or replaces it (0x007f3230)
-     * @param deathOverride Whether the death light is up (the player is a
-     *        ghost): the map default light's death set replaces the blend
-     *        and its sky model goes up at full weight (0x007f3230 with the
-     *        override index ScreenEffect sets, 0x007ecec0)
+     * @param lightOverride The Light param slot ScreenEffect's row puts up
+     *        (0x007ecec0; 4, the death set, for a ghost), -1 for none: the
+     *        map default light's set in that slot replaces the blend and its
+     *        sky model goes up at full weight (0x007f3230)
      */
     void update(const glm::vec3& playerPos, uint32_t mapId,
                 float gameTime = -1.0f,
                 float weatherIntensity = 0.0f, const CameraLiquid& liquid = {},
-                bool deathOverride = false);
+                int lightOverride = -1);
+
+    /// A fog put up in place of the light's (0x007ed870; 0x007ed820 takes it
+    /// down): to `end` yards or the far clip, from `startScalar` of that, in
+    /// `colour`. The WMO fog still blends over it (0x007f16f0).
+    struct FogOverride {
+        float end = 0.0f;
+        float startScalar = 0.0f;
+        glm::vec3 colour{1.0f};
+    };
+    void setFogOverride(const std::optional<FogOverride>& fog) { fogOverride_ = fog; }
 
     /**
      * Get current lighting parameters
@@ -540,6 +550,7 @@ private:
     std::vector<WeightedVolume> activeVolumes_;
     float timeOfDay_ = 0.5f;  // Start at noon
     std::vector<SkyboxLayer> skyboxLayers_;
+    std::optional<FogOverride> fogOverride_;
     float fogSkyBlend_ = 0.0f;
     glm::vec3 spellTintColour_{1.0f};
     uint32_t spellTintAmount_ = 0;

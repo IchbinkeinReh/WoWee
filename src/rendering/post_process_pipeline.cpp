@@ -72,7 +72,6 @@ void PostProcessPipeline::manageResources() {
         if (!initFXAAResources()) {
             LOG_ERROR("FXAA: initialization failed, disabling");
             if (fxaa_.enabled) fxaa_.enabled = false;
-            intoxication_ = 0.0f;
         }
     }
 }
@@ -1887,7 +1886,7 @@ void PostProcessPipeline::renderFXAAPass() {
         1.0f / static_cast<float>(ext.width),
         1.0f / static_cast<float>(ext.height),
         sharpness,
-        intoxication_
+        0.0f
     };
     vkCmdPushConstants(currentCmd_, fxaa_.pipelineLayout,
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16, pc);

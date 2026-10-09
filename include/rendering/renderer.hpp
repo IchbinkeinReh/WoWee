@@ -20,6 +20,7 @@
 #include "rendering/vk_frame_data.hpp"
 #include "rendering/vk_utils.hpp"
 #include "rendering/sky_system.hpp"
+#include "rendering/screen_effect_state.hpp"
 #include "core/screen_recorder.hpp"
 #include "pipeline/custom_zone_discovery.hpp"
 
@@ -903,11 +904,23 @@ private:
     /// paperdoll, portraits), recorded once the scene's passes are closed.
     void recordPreviewComposites();
 
-    // The client's glow and death passes (ffxGlow, ffxDeath), built from the
-    // finished frame like the shafts and drawn in the overlay pass under them.
+    // The client's full-screen effects (ffxGlow, ffxDeath, ffxNetherWorld,
+    // ffxSpecial), built from the finished frame like the shafts and drawn in
+    // the overlay pass under them; ScreenEffect.dbc's row picks which.
     std::unique_ptr<ScreenEffects> screenEffects_;
     bool screenGlowEnabled_ = true;
     void recordScreenEffects();
+    /// The row for the player this frame (0x004f88b0, 0x004f7020), its
+    /// effect's state moved on by `deltaTime`.
+    void updateScreenEffect(float deltaTime);
+    void loadScreenEffectRows();
+    std::unordered_map<uint32_t, screen_effect::Row> screenEffectRows_;
+    bool screenEffectRowsLoaded_ = false;
+    screen_effect::State screenEffectState_;
+    int screenEffectLightOverride_ = -1;  ///< the row's Light slot, -1 for none
+    float screenEffectDrunk_ = 0.0f;      ///< 0x004f7290
+    bool screenEffectHavePlayer_ = false;
+    bool cameraInLiquid_ = false;         ///< 0x00780620, for the glow's wave
 
     // GPU-driven grass: compute cull with atomic compaction feeding an
     // indirect draw, over a population generated from terrain suitability.

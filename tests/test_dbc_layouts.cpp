@@ -217,3 +217,22 @@ TEST_CASE("Pre-WotLK expansions publish no companion field", "[update_fields]") 
         REQUIRE_FALSE(j.contains("UNIT_FIELD_CRITTER"));
     }
 }
+
+// PLAYER_FIELD_BYTES2 is the field right before the two the WotLK table
+// already pins it against (WATCHED_FACTION_INDEX, then COMBAT_RATING_1), and
+// PLAYER_FAKE_INEBRIATION the one after PLAYER_CHOSEN_TITLE; 0x004f7290 and
+// 0x004f88b0 read them at +0x2b8 and +0x10e4 past UNIT_END.
+TEST_CASE("The screen effect's player fields sit where the client reads them",
+          "[update_fields]") {
+    const std::string path = (std::filesystem::path(WOWEE_SOURCE_DIR) /
+        "Data" / "expansions" / "wotlk" / "update_fields.json").string();
+    std::ifstream in(path);
+    REQUIRE(in.good());
+    nlohmann::json j;
+    in >> j;
+    const uint32_t unitEnd = j["UNIT_END"].get<uint32_t>();
+    CHECK(j["PLAYER_FAKE_INEBRIATION"].get<uint32_t>() == unitEnd + 0x2b8 / 4);
+    CHECK(j["PLAYER_FIELD_BYTES2"].get<uint32_t>() == unitEnd + 0x10e4 / 4);
+    CHECK(j["PLAYER_BYTES_3"].get<uint32_t>() == unitEnd + 0x1c / 4);
+    CHECK(j["PLAYER_FIELD_BYTES2"].get<uint32_t>() + 2 == j["PLAYER_FIELD_COMBAT_RATING_1"].get<uint32_t>());
+}

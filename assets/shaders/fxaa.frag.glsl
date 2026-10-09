@@ -2,7 +2,7 @@
 
 // FXAA 3.11, quality preset 12 (Timothy Lottes). Reads the resolved scene
 // colour and writes the smoothed result.
-// Push constants: rcpFrame, sharpness, intoxication (0 = sober, 1 = smashed).
+// Push constants: rcpFrame, sharpness.
 //
 // A port of the reference rather than a paraphrase of it. The pass this
 // replaces had the shape of FXAA and two of its numbers wrong. Its
@@ -24,7 +24,7 @@ layout(location = 0) out vec4 outColor;
 layout(push_constant) uniform PC {
     vec2  rcpFrame;
     float sharpness;    // 0 = no sharpen, 2 = max (matches FSR2 RCAS range)
-    float intoxication;
+    float pad;
 } pc;
 
 // The reference's default tuning. Subpix 0.75 is what it calls the default
@@ -45,27 +45,13 @@ float luma(vec3 c) {
 }
 
 void main() {
-    float drunk = clamp(pc.intoxication, 0.0, 1.0);
-    vec2 uv     = TexCoord + vec2(
-        sin(TexCoord.y * 34.0) * pc.rcpFrame.x,
-        cos(TexCoord.x * 29.0) * pc.rcpFrame.y) * (3.0 * drunk);
-    vec2 rcp    = pc.rcpFrame;
+    vec2 uv  = TexCoord;
+    vec2 rcp = pc.rcpFrame;
 
-    // --- Centre, with the drunk blur folded in before anything reads it ---
+    // --- Centre ---
+    // Drunkenness is not drawn here: the client blurs the frame for it in
+    // its glow (0x004f8770, ScreenEffects).
     vec3 rgbM = texture(uScene, uv).rgb;
-    if (drunk > 0.0) {
-        vec2 radius = rcp * mix(1.0, 5.0, drunk);
-        vec3 blur = rgbM;
-        blur += texture(uScene, uv + vec2( radius.x, 0.0)).rgb;
-        blur += texture(uScene, uv + vec2(-radius.x, 0.0)).rgb;
-        blur += texture(uScene, uv + vec2(0.0,  radius.y)).rgb;
-        blur += texture(uScene, uv + vec2(0.0, -radius.y)).rgb;
-        blur += texture(uScene, uv + radius).rgb;
-        blur += texture(uScene, uv - radius).rgb;
-        blur += texture(uScene, uv + vec2(radius.x, -radius.y)).rgb;
-        blur += texture(uScene, uv + vec2(-radius.x, radius.y)).rgb;
-        rgbM = mix(rgbM, blur / 9.0, 0.75 * drunk);
-    }
 
     // --- Cardinal neighbours: is there an edge here at all ---
     float lumaM = luma(rgbM);
@@ -172,7 +158,6 @@ void main() {
     if (!horzSpan) finalUV.x += pixelOffsetFinal * lengthSign;
 
     vec3 fxaaResult = texture(uScene, finalUV).rgb;
-    fxaaResult = mix(fxaaResult, rgbM, 0.75 * drunk);
 
     // Post-FXAA contrast-adaptive sharpening (unsharp mask), only when FSR2
     // hands over its sharpness: it restores what the upscale softened.
