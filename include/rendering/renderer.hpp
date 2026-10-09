@@ -21,6 +21,7 @@
 #include "rendering/vk_utils.hpp"
 #include "rendering/sky_system.hpp"
 #include "rendering/screen_effect_state.hpp"
+#include "rendering/minimap_indoor.hpp"
 #include "core/screen_recorder.hpp"
 #include "pipeline/custom_zone_discovery.hpp"
 
@@ -921,6 +922,12 @@ private:
     float screenEffectDrunk_ = 0.0f;      ///< 0x004f7290
     bool screenEffectHavePlayer_ = false;
     bool cameraInLiquid_ = false;         ///< 0x00780620, for the glow's wave
+
+    /// WMOAreaTable's flags by building, name set and group, which decide
+    /// where the minimap is the indoor one (0x007f5ba0). Read once.
+    minimap_indoor::AreaFlags wmoAreaFlags_;
+    bool wmoAreaFlagsLoaded_ = false;
+    void loadWmoAreaFlags();
 
     // GPU-driven grass: compute cull with atomic compaction feeding an
     // indirect draw, over a population generated from terrain suitability.

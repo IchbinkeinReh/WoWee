@@ -126,6 +126,7 @@ struct PendingTile {
         glm::vec3 position;
         glm::vec3 rotation;
         float scale = 1.0f;
+        uint16_t nameSet = 0;  ///< MODF's, for WMOAreaTable
     };
     std::vector<WMOReady> wmoModels;
 

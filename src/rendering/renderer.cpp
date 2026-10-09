@@ -5838,6 +5838,29 @@ void Renderer::renderVolumetricFog() {
     }
 }
 
+void Renderer::loadWmoAreaFlags() {
+    if (wmoAreaFlagsLoaded_ || !wmoRenderer) return;
+    wmoAreaFlagsLoaded_ = true;
+    auto* assetManager = core::Application::getInstance().getAssetManager();
+    const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("WMOAreaTable")
+                                                        : nullptr;
+    if (!assetManager || !layout) return;
+    const uint32_t cols[4] = {layout->tryField("WMOID"), layout->tryField("NameSetID"),
+                              layout->tryField("WMOGroupID"), layout->tryField("Flags")};
+    auto data = assetManager->readFile("DBFilesClient\\WMOAreaTable.dbc");
+    pipeline::DBCFile dbc;
+    if (data.empty() || !dbc.load(data)) return;
+    for (uint32_t c : cols) {
+        if (c >= dbc.getFieldCount()) return;
+    }
+    for (uint32_t i = 0; i < dbc.getRecordCount(); ++i) {
+        wmoAreaFlags_[minimap_indoor::areaKey(dbc.getUInt32(i, cols[0]), dbc.getUInt32(i, cols[1]),
+                                              static_cast<int32_t>(dbc.getUInt32(i, cols[2])))] =
+            dbc.getUInt32(i, cols[3]);
+    }
+    LOG_INFO("Loaded WMOAreaTable.dbc: ", wmoAreaFlags_.size(), " rows");
+}
+
 void Renderer::loadScreenEffectRows() {
     if (screenEffectRowsLoaded_) return;
     screenEffectRowsLoaded_ = true;
@@ -6071,6 +6094,8 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
         glm::vec3 minimapCenter = camera->getPosition();
         if (cameraController && cameraController->isThirdPerson())
             minimapCenter = characterPosition;
+        loadWmoAreaFlags();
+        if (wmoRenderer) wmoRenderer->setAreaFlags(wmoAreaFlags_.empty() ? nullptr : &wmoAreaFlags_);
         minimap->setIndoorScene(wmoRenderer
             ? wmoRenderer->indoorMinimapAt(minimapCenter, minimap->insideViewRadius())
             : std::nullopt);

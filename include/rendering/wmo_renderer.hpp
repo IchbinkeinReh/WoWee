@@ -470,6 +470,19 @@ public:
     /// None outdoors, and none for a building whose name is not known.
     [[nodiscard]] std::optional<minimap_indoor::Scene>
     indoorMinimapAt(const glm::vec3& pos, float radius) const;
+    /// WMOAreaTable's flags, which decide what is indoors (0x007f5ba0). Not
+    /// owned; null for none.
+    void setAreaFlags(const minimap_indoor::AreaFlags* table) { areaFlags_ = table; }
+    /// The ADT placement's name set (MODF), for WMOAreaTable.
+    void setInstanceNameSet(uint32_t instanceId, uint32_t nameSet);
+    /// The building and interior group `pos` stands in, as the minimap tells
+    /// one indoor area from another (0x007a1480, 0x007a18d0): none outside or
+    /// in a group open to the sky.
+    struct IndoorArea {
+        uint32_t instanceId = 0;
+        uint32_t group = 0;
+    };
+    [[nodiscard]] std::optional<IndoorArea> indoorAreaAt(const glm::vec3& pos) const;
     /// Changes whenever the set of those groups does.
     [[nodiscard]] uint64_t interiorPassGeneration() const { return interiorPassGeneration_; }
 
@@ -749,7 +762,10 @@ private:
         /// portals.
         std::string minimapBase;
         std::vector<minimap_indoor::GroupInfo> minimapGroups;
-        std::vector<std::vector<uint32_t>> minimapNeighbours;
+        std::vector<std::vector<minimap_indoor::PortalLink>> minimapLinks;
+        std::vector<std::vector<glm::vec3>> minimapPortals;
+        /// MOHD's WMOAreaTable WMOID.
+        uint32_t wmoId = 0;
         // MFOG, and each group's four indices into it (0 = none)
         std::vector<pipeline::WMOFog> fogs;
         std::vector<std::array<uint8_t, 4>> groupFogIndices;
@@ -804,6 +820,8 @@ private:
         // this deck, so a lift cycling past a bystander cannot become their ground
         // (the Undercity elevator yo-yo).
         bool isTransport = false;
+        /// MODF's name set: WMOAreaTable's NameSetID (setInstanceNameSet).
+        uint32_t nameSet = 0;
 
         /// Loaded, positioned, and not in the world right now. See
         /// setInstanceHidden.
@@ -1051,6 +1069,7 @@ private:
     /// flag per group, and the world bounds of the groups flagged.
     std::unordered_map<uint32_t, std::vector<uint8_t>> interiorPass_;
     std::vector<std::pair<glm::vec3, glm::vec3>> interiorPassBounds_;
+    const minimap_indoor::AreaFlags* areaFlags_ = nullptr;
     uint64_t interiorPassGeneration_ = 0;
 
     // Collision query profiling - atomic because getFloorHeight is dispatched

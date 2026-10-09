@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -154,49 +155,132 @@ constexpr uint32_t kGroupExteriorLit = 0x40;
 constexpr uint32_t kGroupUnreachable = 0x80;
 constexpr uint32_t kGroupInterior = 0x2000;
 
-/// A group as MOGI has it, in the WMO's coordinates.
+/// A group as MOGI has it, in the WMO's coordinates, and MOGP's WMOAreaTable
+/// group id (the group object's +0x180).
 struct GroupInfo {
     uint32_t flags = 0;
     glm::vec3 min{0.0f};
     glm::vec3 max{0.0f};
+    int32_t areaGroupId = 0;
 };
 
-/// Whether a group is one the indoor map is drawn for: inside, and not open
-/// to the sky.
-constexpr bool isIndoorGroup(uint32_t flags) {
-    return (flags & kGroupInterior) != 0 && (flags & kGroupExterior) == 0;
+/// WMOAreaTable's rows by WMO, name set and group (0x00990560 looks them up
+/// exactly; the group -1 is the building's own row): their Flags.
+using AreaFlags = std::unordered_map<uint64_t, uint32_t>;
+inline uint64_t areaKey(uint32_t wmoId, uint32_t nameSet, int32_t groupId) {
+    return (static_cast<uint64_t>(wmoId) << 40) ^ (static_cast<uint64_t>(nameSet & 0xFFu) << 32) ^
+           static_cast<uint32_t>(groupId);
+}
+inline const uint32_t* areaFlags(const AreaFlags* table, uint32_t wmoId, uint32_t nameSet, int32_t groupId) {
+    if (!table) return nullptr;
+    const auto it = table->find(areaKey(wmoId, nameSet, groupId));
+    return it == table->end() ? nullptr : &it->second;
 }
 
-/// The groups whose pictures make up the map (0x007b00a0, 0x007afc70): from
-/// the player's group through the portals, into every group lit the way it is
-/// - (flags & 0x48) equal to the player's group's 0x40, so inside stays inside
-/// - that reaches the area, and never into one marked unreachable (0x80).
-/// `neighbours[g]` are the groups on the far side of g's portals.
-inline std::vector<uint32_t> connectedGroups(const std::vector<GroupInfo>& groups,
-                                             const std::vector<std::vector<uint32_t>>& neighbours,
-                                             uint32_t start, const glm::vec2& areaMin,
-                                             const glm::vec2& areaMax) {
-    std::vector<uint32_t> out;
-    if (start >= groups.size()) return out;
-    const uint32_t lit = groups[start].flags & kGroupExteriorLit;
-    std::vector<uint8_t> seen(groups.size(), 0);
-    std::vector<uint32_t> stack{start};
-    while (!stack.empty()) {
-        const uint32_t g = stack.back();
-        stack.pop_back();
-        if (g >= groups.size() || seen[g]) continue;
-        seen[g] = 1;
-        const GroupInfo& info = groups[g];
-        if ((info.flags & (kGroupExterior | kGroupExteriorLit)) != lit) continue;
-        if (!reaches(glm::vec2(info.min), glm::vec2(info.max), areaMin, areaMax)) continue;
-        out.push_back(g);
-        if (g >= neighbours.size()) continue;
-        for (uint32_t n : neighbours[g]) {
-            if (n < groups.size() && !seen[n] && (groups[n].flags & kGroupUnreachable) == 0) {
-                stack.push_back(n);
-            }
-        }
+/// Whether the player's group counts as inside to 0x007a1480: it is not
+/// open to the sky.
+constexpr bool isInteriorGroup(uint32_t flags) {
+    return (flags & kGroupExterior) == 0;
+}
+
+/// Whether the minimap is the indoor one (0x007f5ba0, from 0x007a1640's two
+/// WMOAreaTable rows): never where the group's own row has flag 0x20; else
+/// where the building's row (group -1) has 0x1, 0x8 or 0x10, or the group is
+/// an inside one. `groupRow` and `rootRow` are the rows' Flags, null for none.
+inline bool isIndoors(uint32_t groupFlags, const uint32_t* groupRow, const uint32_t* rootRow) {
+    if (groupRow && (*groupRow & 0x20u) != 0) return false;
+    return (rootRow && (*rootRow & 0x19u) != 0) || isInteriorGroup(groupFlags);
+}
+
+/// With the building's row's 0x8 or 0x10 and the group exterior or lit as
+/// one (0x48), the map is that group's own pictures alone (0x007a17e0 into
+/// 0x007afe70) rather than the walk through the portals.
+inline bool ownGroupOnly(uint32_t groupFlags, const uint32_t* rootRow) {
+    return rootRow && (*rootRow & 0x18u) != 0 && (groupFlags & 0x48u) != 0;
+}
+
+/// A portal out of a group (MOPR): the group past it and the portal.
+struct PortalLink {
+    uint32_t group = 0;
+    uint32_t portal = 0;
+};
+
+/// minimapPortalMax, "Max Number of Portals to traverse for minimap": 99
+/// by default (0x00510000's registration).
+constexpr uint32_t kPortalMax = 99;
+
+/// The two WMOAreaTable group ids the walk goes neither on from nor into
+/// (0x007afc70 tests 0x59e7 and 0x59e8).
+constexpr bool walkStopsAt(int32_t areaGroupId) {
+    return areaGroupId == 0x59e7 || areaGroupId == 0x59e8;
+}
+
+/// Which faces of a box a point is outside, a bit each (0x007ae1f0): 1, 2, 4
+/// below its x, y, z; 8, 0x10, 0x20 above them.
+inline uint32_t outcode(const glm::vec3& v, const glm::vec3& lo, const glm::vec3& hi) {
+    return (v.x < lo.x ? 1u : 0u) | (v.y < lo.y ? 2u : 0u) | (v.z < lo.z ? 4u : 0u) |
+           (v.x > hi.x ? 8u : 0u) | (v.y > hi.y ? 0x10u : 0u) | (v.z > hi.z ? 0x20u : 0u);
+}
+
+/// What the walk reads of a building.
+struct WalkModel {
+    const std::vector<GroupInfo>* groups = nullptr;
+    /// Per group, its portals in MOPR's order.
+    const std::vector<std::vector<PortalLink>>* links = nullptr;
+    /// Per portal (MOPT), its vertices (MOPV), in the WMO's coordinates.
+    const std::vector<std::vector<glm::vec3>>* portals = nullptr;
+};
+
+namespace detail {
+inline void walk(const WalkModel& m, uint32_t g, uint32_t from, const glm::vec3& areaMin,
+                 const glm::vec3& areaMax, bool interior, uint32_t mask, uint32_t depth,
+                 uint32_t portalMax, std::vector<uint8_t>& seen, std::vector<uint32_t>& out) {
+    const auto& groups = *m.groups;
+    if (g >= groups.size()) return;
+    const GroupInfo& info = groups[g];
+    const uint32_t lit = interior ? (info.flags & (kGroupExterior | kGroupExteriorLit))
+                                  : (info.flags & kGroupExterior);
+    if (lit != mask || seen[g]) return;
+    seen[g] = 1;
+    if (!reaches(glm::vec2(info.min), glm::vec2(info.max), glm::vec2(areaMin), glm::vec2(areaMax))) return;
+    out.push_back(g);
+    if (walkStopsAt(info.areaGroupId) || !m.links || g >= m.links->size() || !(depth < portalMax)) return;
+    for (const PortalLink& link : (*m.links)[g]) {
+        const uint32_t t = link.group;
+        if (t == 0xFFFFu || t == from || t >= groups.size()) continue;
+        if ((groups[t].flags & kGroupUnreachable) != 0) continue;
+        // Into the group only where the portal is not wholly beyond one face
+        // of the area, its height included.
+        if (!m.portals || link.portal >= m.portals->size()) continue;
+        const auto& verts = (*m.portals)[link.portal];
+        if (verts.empty()) continue;
+        uint32_t code = 0xFFFFFFFFu;
+        for (const glm::vec3& v : verts) code &= outcode(v, areaMin, areaMax);
+        if (code != 0 || walkStopsAt(groups[t].areaGroupId)) continue;
+        // The client counts each portal it goes through against the limit,
+        // the siblings' included (its depth argument is incremented in place).
+        ++depth;
+        walk(m, t, g, areaMin, areaMax, interior, mask, depth, portalMax, seen, out);
     }
+}
+}  // namespace detail
+
+/// The groups whose pictures make up the map (0x007b00a0, 0x007afc70), in the
+/// order they are reached: from the player's group through the portals, into
+/// groups lit as it is - inside, (flags & 0x48) equal to its 0x40, so inside
+/// stays inside; not inside, every exterior group - that reach the area
+/// across, never into one marked unreachable (0x80), only through a portal
+/// that is not wholly outside the area's box (its height the player's, down
+/// half the zoom radius), never past WMOAreaTable groups 0x59e7 and 0x59e8,
+/// and no more than `portalMax` portals in.
+inline std::vector<uint32_t> connectedGroups(const WalkModel& m, uint32_t start, const glm::vec3& areaMin,
+                                             const glm::vec3& areaMax, bool interior,
+                                             uint32_t portalMax = kPortalMax) {
+    std::vector<uint32_t> out;
+    if (!m.groups || start >= m.groups->size()) return out;
+    const uint32_t mask = interior ? ((*m.groups)[start].flags & kGroupExteriorLit) : kGroupExterior;
+    std::vector<uint8_t> seen(m.groups->size(), 0);
+    detail::walk(m, start, start, areaMin, areaMax, interior, mask, 0, portalMax, seen, out);
     return out;
 }
 

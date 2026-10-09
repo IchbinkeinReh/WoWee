@@ -122,7 +122,7 @@ WMOModel WMOLoader::load(const std::vector<uint8_t>& wmoData) {
                 model.ambientColor.r = ((ambColor >> 16) & 0xFF) / 255.0f;
                 model.ambientColor.g = ((ambColor >>  8) & 0xFF) / 255.0f;
                 model.ambientColor.b = ((ambColor >>  0) & 0xFF) / 255.0f;
-                [[maybe_unused]] uint32_t wmoID = read<uint32_t>(wmoData, offset);
+                model.wmoId = read<uint32_t>(wmoData, offset);  // WMOAreaTable's WMOID
 
                 model.boundingBoxMin.x = read<float>(wmoData, offset);
                 model.boundingBoxMin.y = read<float>(wmoData, offset);
@@ -512,6 +512,8 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
             group.fogIndices[2] = read<uint8_t>(groupData, mogpOffset);
             group.fogIndices[3] = read<uint8_t>(groupData, mogpOffset);
             group.liquidType = read<uint32_t>(groupData, mogpOffset);
+            // WMOAreaTable's WMOGroupID (the client's group +0x180).
+            group.areaGroupId = read<int32_t>(groupData, mogpOffset);
             // Skip to end of 68-byte header
             mogpOffset = offset + 68;
 

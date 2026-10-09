@@ -176,6 +176,8 @@ struct WMOGroup {
     uint32_t fogIndices[4];     // Fog references
     uint32_t liquidType;
     uint32_t groupId;
+    /// MOGP's WMOAreaTable group id (+0x38).
+    int32_t areaGroupId = 0;
 
     // Geometry
     std::vector<WMOVertex> vertices;
@@ -215,6 +217,8 @@ struct WMOModel {
     uint32_t nDoodadNames = 0;
     uint32_t nDoodadDefs = 0;
     uint32_t nDoodadSets = 0;
+    /// MOHD's WMOAreaTable WMOID.
+    uint32_t wmoId = 0;
 
     glm::vec3 ambientColor;     // MOHD ambient color (used for interior group lighting)
     uint32_t flags = 0;         // MOHD flags

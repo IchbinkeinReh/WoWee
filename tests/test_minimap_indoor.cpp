@@ -84,6 +84,13 @@ TEST_CASE("lower groups go down first and the player's own last", "[minimap_indo
     CHECK(mi::drawKey(1e6f, 10.0f, false) < mi::drawKey(0.0f, 10.0f, true));
 }
 
+namespace {
+// A portal square in the plane x = `x`, from y0 to y1, z 0 to 5.
+std::vector<glm::vec3> doorway(float x, float y0, float y1, float z0 = 0.0f, float z1 = 5.0f) {
+    return {{x, y0, z0}, {x, y1, z0}, {x, y1, z1}, {x, y0, z1}};
+}
+}  // namespace
+
 TEST_CASE("the groups through the portals, inside staying inside", "[minimap_indoor]") {
     using G = mi::GroupInfo;
     // 0 the player's room, 1 the next room, 2 a courtyard open to the sky,
@@ -96,8 +103,72 @@ TEST_CASE("the groups through the portals, inside staying inside", "[minimap_ind
         {mi::kGroupInterior | mi::kGroupUnreachable, {0, 10, 0}, {10, 20, 5}},
         {mi::kGroupInterior, {500, 500, 0}, {510, 510, 5}},
     };
-    std::vector<std::vector<uint32_t>> neighbours = {{1, 4}, {0, 2, 5}, {1, 3}, {2}, {0}, {1}};
-    auto found = mi::connectedGroups(groups, neighbours, 0, {-100, -100}, {100, 100});
+    // Portal p links the groups either side of it.
+    std::vector<std::vector<glm::vec3>> portals = {
+        doorway(10, 2, 8), doorway(20, 2, 8), doorway(30, 2, 8), doorway(5, 10, 10.5f), doorway(15, 9, 10)};
+    std::vector<std::vector<mi::PortalLink>> links = {
+        {{1, 0}, {4, 3}}, {{0, 0}, {2, 1}, {5, 4}}, {{1, 1}, {3, 2}}, {{2, 2}}, {{0, 3}}, {{1, 4}}};
+    const mi::WalkModel m{&groups, &links, &portals};
+    auto found = mi::connectedGroups(m, 0, {-100, -100, -2.5f}, {100, 100, 2.5f}, true);
     std::sort(found.begin(), found.end());
     CHECK(found == std::vector<uint32_t>{0, 1});
+
+    // Not inside: the exterior groups, through the portals, from an exterior one.
+    found = mi::connectedGroups(m, 2, {-100, -100, -2.5f}, {100, 100, 2.5f}, false);
+    CHECK(found == std::vector<uint32_t>{2});
+}
+
+TEST_CASE("the walk: portals wholly outside the area, the stop groups, the limit", "[minimap_indoor]") {
+    using G = mi::GroupInfo;
+    std::vector<G> groups = {
+        {mi::kGroupInterior, {0, 0, 0}, {10, 10, 5}},
+        {mi::kGroupInterior, {10, 0, 0}, {20, 10, 5}},
+        {mi::kGroupInterior, {20, 0, 0}, {30, 10, 5}},
+        {mi::kGroupInterior, {30, 0, 0}, {40, 10, 5}},
+    };
+    std::vector<std::vector<glm::vec3>> portals = {doorway(10, 2, 8), doorway(20, 2, 8), doorway(30, 2, 8)};
+    std::vector<std::vector<mi::PortalLink>> links = {{{1, 0}}, {{0, 0}, {2, 1}}, {{1, 1}, {3, 2}}, {{2, 2}}};
+    const mi::WalkModel m{&groups, &links, &portals};
+
+    // All four through the doorways.
+    auto found = mi::connectedGroups(m, 0, {-100, -100, -2.5f}, {100, 100, 2.5f}, true);
+    CHECK(found == std::vector<uint32_t>{0, 1, 2, 3});
+    // A doorway wholly above the area's height is not gone through.
+    portals[1] = doorway(20, 2, 8, 10.0f, 12.0f);
+    found = mi::connectedGroups(m, 0, {-100, -100, -2.5f}, {100, 100, 2.5f}, true);
+    CHECK(found == std::vector<uint32_t>{0, 1});
+    portals[1] = doorway(20, 2, 8);
+    // No further than the limit.
+    found = mi::connectedGroups(m, 0, {-100, -100, -2.5f}, {100, 100, 2.5f}, true, 2);
+    CHECK(found == std::vector<uint32_t>{0, 1, 2});
+    // Never past or into WMOAreaTable groups 0x59e7 and 0x59e8.
+    groups[1].areaGroupId = 0x59e7;
+    found = mi::connectedGroups(m, 0, {-100, -100, -2.5f}, {100, 100, 2.5f}, true);
+    CHECK(found == std::vector<uint32_t>{0});
+}
+
+TEST_CASE("indoors by the area tables", "[minimap_indoor]") {
+    const uint32_t blocked = 0x20, outdoorsHere = 0x1, open = 0x4;
+    // An inside group is indoors without any rows.
+    CHECK(mi::isIndoors(mi::kGroupInterior, nullptr, nullptr));
+    CHECK(mi::isIndoors(0, nullptr, nullptr));
+    // An exterior one only by the building's row.
+    CHECK_FALSE(mi::isIndoors(mi::kGroupExterior, nullptr, nullptr));
+    CHECK(mi::isIndoors(mi::kGroupExterior, nullptr, &outdoorsHere));
+    CHECK_FALSE(mi::isIndoors(mi::kGroupExterior, nullptr, &open));
+    // The group's row's 0x20 rules it out.
+    CHECK_FALSE(mi::isIndoors(mi::kGroupInterior, &blocked, &outdoorsHere));
+    // 0x8/0x10 on the building with an exterior group: its own pictures alone.
+    const uint32_t own = 0x10;
+    CHECK(mi::ownGroupOnly(mi::kGroupExterior, &own));
+    CHECK_FALSE(mi::ownGroupOnly(mi::kGroupInterior, &own));
+    CHECK_FALSE(mi::ownGroupOnly(mi::kGroupExterior, &outdoorsHere));
+}
+
+TEST_CASE("the outcode", "[minimap_indoor]") {
+    const glm::vec3 lo(0.0f), hi(1.0f);
+    CHECK(mi::outcode({0.5f, 0.5f, 0.5f}, lo, hi) == 0u);
+    CHECK(mi::outcode({-1.0f, 0.5f, 2.0f}, lo, hi) == (1u | 0x20u));
+    CHECK(mi::outcode({2.0f, -1.0f, -1.0f}, lo, hi) == (8u | 2u | 4u));
+    CHECK(mi::outcode({0.5f, 2.0f, 0.5f}, lo, hi) == 0x10u);
 }

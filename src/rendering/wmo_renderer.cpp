@@ -962,7 +962,8 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
     {
         const size_t count = std::max(model.groupInfo.size(), model.groups.size());
         modelData.minimapGroups.assign(count, {});
-        modelData.minimapNeighbours.assign(count, {});
+        modelData.minimapLinks.assign(count, {});
+        modelData.wmoId = model.wmoId;
         for (size_t gi = 0; gi < count; ++gi) {
             auto& info = modelData.minimapGroups[gi];
             if (gi < model.groupInfo.size()) {
@@ -975,10 +976,20 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 info.max = model.groups[gi].boundingBoxMax;
             }
             if (gi >= model.groups.size()) continue;
+            info.areaGroupId = model.groups[gi].areaGroupId;
             const uint32_t first = model.groups[gi].portalStart;
             const uint32_t end = first + model.groups[gi].portalCount;
             for (uint32_t r = first; r < end && r < model.portalRefs.size(); ++r) {
-                modelData.minimapNeighbours[gi].push_back(model.portalRefs[r].groupIndex);
+                modelData.minimapLinks[gi].push_back({model.portalRefs[r].groupIndex, model.portalRefs[r].portalIndex});
+            }
+        }
+        // Each portal's corners, which 0x007afc70 tests against the area.
+        modelData.minimapPortals.assign(model.portals.size(), {});
+        for (size_t pi = 0; pi < model.portals.size(); ++pi) {
+            const auto& portal = model.portals[pi];
+            for (uint32_t v = 0; v < portal.vertexCount; ++v) {
+                const size_t at = static_cast<size_t>(portal.startVertex) + v;
+                if (at < model.portalVertices.size()) modelData.minimapPortals[pi].push_back(model.portalVertices[at]);
             }
         }
     }
@@ -4171,8 +4182,7 @@ WMORenderer::indoorMinimapAt(const glm::vec3& pos, float radius) const {
     gatherCandidates(pos - glm::vec3(0.5f), pos + glm::vec3(0.5f), tl_candidateScratch);
 
     // The group the player is in: the smallest whose box holds them, of any
-    // building there, as findContainingGroup has it. Indoors when that one
-    // is an interior group.
+    // building there.
     const WMOInstance* bestInstance = nullptr;
     const ModelData* bestModel = nullptr;
     uint32_t bestGroup = 0;
@@ -4203,9 +4213,15 @@ WMORenderer::indoorMinimapAt(const glm::vec3& pos, float radius) const {
             }
         }
     }
-    if (!bestInstance || !mi::isIndoorGroup(bestModel->minimapGroups[bestGroup].flags)) {
-        return std::nullopt;
-    }
+    if (!bestInstance) return std::nullopt;
+
+    // Indoors as the client asks its area tables (0x007f5ba0 on 0x007a1640's
+    // two WMOAreaTable rows, the group's and the building's).
+    const mi::GroupInfo& playerGroup = bestModel->minimapGroups[bestGroup];
+    const uint32_t* groupRow = mi::areaFlags(areaFlags_, bestModel->wmoId, bestInstance->nameSet,
+                                             playerGroup.areaGroupId);
+    const uint32_t* rootRow = mi::areaFlags(areaFlags_, bestModel->wmoId, bestInstance->nameSet, -1);
+    if (!mi::isIndoors(playerGroup.flags, groupRow, rootRow)) return std::nullopt;
 
     mi::Scene scene;
     scene.wmoBase = bestModel->minimapBase;
@@ -4216,25 +4232,72 @@ WMORenderer::indoorMinimapAt(const glm::vec3& pos, float radius) const {
     scene.area = mi::area(glm::vec2(pos), radius);
 
     // The area into the WMO's coordinates, as the box of its corners
-    // (0x007f9430).
-    glm::vec2 lo(std::numeric_limits<float>::max());
-    glm::vec2 hi(-std::numeric_limits<float>::max());
-    for (int c = 0; c < 4; ++c) {
+    // (0x007f9430), its height from half the radius under the player to the
+    // player (0x007f5ba0's 0xd39468 and 0xd39474).
+    glm::vec3 lo(std::numeric_limits<float>::max());
+    glm::vec3 hi(-std::numeric_limits<float>::max());
+    for (int c = 0; c < 8; ++c) {
         const glm::vec3 corner((c & 1) ? scene.area.max.x : scene.area.min.x,
-                               (c & 2) ? scene.area.max.y : scene.area.min.y, pos.z);
-        const glm::vec2 local(bestInstance->invModelMatrix * glm::vec4(corner, 1.0f));
+                               (c & 2) ? scene.area.max.y : scene.area.min.y,
+                               (c & 4) ? pos.z : pos.z - radius * 0.5f);
+        const glm::vec3 local(bestInstance->invModelMatrix * glm::vec4(corner, 1.0f));
         lo = glm::min(lo, local);
         hi = glm::max(hi, local);
     }
-    scene.localMin = lo;
-    scene.localMax = hi;
+    scene.localMin = glm::vec2(lo);
+    scene.localMax = glm::vec2(hi);
 
-    for (uint32_t gi : mi::connectedGroups(bestModel->minimapGroups, bestModel->minimapNeighbours,
-                                           bestGroup, lo, hi)) {
+    std::vector<uint32_t> groups;
+    if (mi::ownGroupOnly(playerGroup.flags, rootRow)) {
+        groups.push_back(bestGroup);
+    } else {
+        const mi::WalkModel walk{&bestModel->minimapGroups, &bestModel->minimapLinks,
+                                 &bestModel->minimapPortals};
+        groups = mi::connectedGroups(walk, bestGroup, lo, hi, mi::isInteriorGroup(playerGroup.flags));
+    }
+    for (uint32_t gi : groups) {
         const auto& g = bestModel->minimapGroups[gi];
         scene.groups.push_back({gi, g.min, g.max});
     }
     return scene;
+}
+
+std::optional<WMORenderer::IndoorArea> WMORenderer::indoorAreaAt(const glm::vec3& pos) const {
+    std::vector<size_t> candidates;
+    gatherCandidates(pos - glm::vec3(0.5f), pos + glm::vec3(0.5f), candidates);
+    std::optional<IndoorArea> best;
+    float bestVolume = std::numeric_limits<float>::max();
+    bool bestInterior = false;
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        if (instance.hidden || instance.isTransport) continue;
+        if (!withinWorldBounds(instance, pos.x, pos.y, pos.z)) continue;
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const glm::vec3 local = glm::vec3(instance.invModelMatrix * glm::vec4(pos, 1.0f));
+        const auto& groups = it->second.minimapGroups;
+        for (uint32_t gi = 0; gi < groups.size(); ++gi) {
+            const auto& g = groups[gi];
+            if (local.x < g.min.x || local.y < g.min.y || local.z < g.min.z ||
+                local.x > g.max.x || local.y > g.max.y || local.z > g.max.z) {
+                continue;
+            }
+            const glm::vec3 e = g.max - g.min;
+            const float volume = e.x * e.y * e.z;
+            if (volume < bestVolume) {
+                bestVolume = volume;
+                best = IndoorArea{instance.id, gi};
+                bestInterior = minimap_indoor::isInteriorGroup(g.flags);
+            }
+        }
+    }
+    if (!best || !bestInterior) return std::nullopt;
+    return best;
+}
+
+void WMORenderer::setInstanceNameSet(uint32_t instanceId, uint32_t nameSet) {
+    auto it = instanceIndexById.find(instanceId);
+    if (it != instanceIndexById.end() && it->second < instances.size()) instances[it->second].nameSet = nameSet;
 }
 
 bool WMORenderer::isInsideWMO(float glX, float glY, float glZ, uint32_t* outModelId) const {
