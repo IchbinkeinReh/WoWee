@@ -1179,8 +1179,13 @@ std::optional<float> M2Renderer::getFloorHeight(float glX, float glY, float glZ,
         // through. Every bush and rug beside it ships zero collision triangles,
         // so they stay soft on their own evidence and need no rule at all.
         const bool authoredCollision = model.collision.valid();
-        if ((model.collisionNoBlock && !authoredCollision) ||
-            model.isInvisibleTrap || model.isSpellEffect) continue;
+        // And one that ships none does not block or bear weight at all, as
+        // in the client, whatever its name or bounds: a doodad collides by
+        // its M2's own collision triangles and nothing else. A box made up
+        // from the bounds of everything the name test did not call soft is
+        // how a campfire - elwynncampfire.m2, with no collision triangles -
+        // came to stop a character the client walks straight through.
+        if (!authoredCollision || model.isInvisibleTrap || model.isSpellEffect) continue;
         if (instance.skipCollision) continue;
 
         // --- Mesh-based floor: vertical ray vs collision triangles ---
@@ -1364,8 +1369,13 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
         // through. Every bush and rug beside it ships zero collision triangles,
         // so they stay soft on their own evidence and need no rule at all.
         const bool authoredCollision = model.collision.valid();
-        if ((model.collisionNoBlock && !authoredCollision) ||
-            model.isInvisibleTrap || model.isSpellEffect) continue;
+        // And one that ships none does not block or bear weight at all, as
+        // in the client, whatever its name or bounds: a doodad collides by
+        // its M2's own collision triangles and nothing else. A box made up
+        // from the bounds of everything the name test did not call soft is
+        // how a campfire - elwynncampfire.m2, with no collision triangles -
+        // came to stop a character the client walks straight through.
+        if (!authoredCollision || model.isInvisibleTrap || model.isSpellEffect) continue;
         if (instance.skipCollision || instance.skipWallCollision) continue;
         if (instance.scale <= 0.001f) continue;
 
@@ -1649,8 +1659,13 @@ float M2Renderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3&
         // through. Every bush and rug beside it ships zero collision triangles,
         // so they stay soft on their own evidence and need no rule at all.
         const bool authoredCollision = model.collision.valid();
-        if ((model.collisionNoBlock && !authoredCollision) ||
-            model.isInvisibleTrap || model.isSpellEffect) continue;
+        // And one that ships none does not block or bear weight at all, as
+        // in the client, whatever its name or bounds: a doodad collides by
+        // its M2's own collision triangles and nothing else. A box made up
+        // from the bounds of everything the name test did not call soft is
+        // how a campfire - elwynncampfire.m2, with no collision triangles -
+        // came to stop a character the client walks straight through.
+        if (!authoredCollision || model.isInvisibleTrap || model.isSpellEffect) continue;
         glm::vec3 localMin, localMax;
         getTightCollisionBounds(model, localMin, localMax);
         // Skip tiny doodads for camera occlusion; they cause jitter and false hits.
