@@ -2880,6 +2880,18 @@ int GameHandler::unitReactionToPlayer(const Unit& unit) const {
     return isFriendlyFaction(ft) ? 5 : 4;
 }
 
+int GameHandler::factionReactionToPlayer(uint32_t ft) const {
+    // 0x0071f770 and 0x00715440: the standing for a faction that has one
+    // (0x005d0600), else the template's own enemies, else neutral.
+    if (ft == 0) return 4;
+    if (auto it = factionTemplateRepList_.find(ft);
+        it != factionTemplateRepList_.end() && it->second < initialFactions_.size()) {
+        return reputationStandingFor(initialFactions_[it->second].standing).id;
+    }
+    auto it = factionRegardsPlayerHostile_.find(ft);
+    return it != factionRegardsPlayerHostile_.end() && it->second ? 2 : 4;
+}
+
 void GameHandler::refreshUnitHostility() {
     if (factionTemplateRepList_.empty()) return;
     for (const auto& [guid, entity] : getEntityManager().getEntities()) {

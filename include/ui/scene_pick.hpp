@@ -62,14 +62,45 @@ inline bool gameObjectFlagsAllowUse(uint32_t flags, uint32_t dynamicLow) {
     return true;
 }
 
+/// GAMEOBJECT_TYPE_TRAP.
+inline constexpr uint32_t kGameObjectTypeTrap = 6;
+
+/// Whether the player could use a game object at all (FUN_007112a0), from
+/// its flags and from how it regards the player - `reactionToPlayer`
+/// numbered as UnitReaction numbers it, and taken (0x0070edd0) from the unit
+/// that made it, else its GAMEOBJECT_FACTION, else neutral.
+///
+/// An object that counts the player as an enemy (hostile or worse) is not
+/// for the player's hands. Dalaran's fountain is a button, but it belongs to
+/// "Creature" (114), which names the player's side as its enemy - so the
+/// client never lets the pointer rest on it, and it shows no tooltip, no
+/// glow and no cursor. Dalaran's lamps (1375) the same.
+///
+/// A trap reads it the other way round: only a hostile one, and only one
+/// with a lock to open (its data0, 0x0070ef30), can be used. Past that the
+/// client asks whether a trap a player set may be fought over, which is not
+/// modelled here.
+inline bool gameObjectUsable(uint32_t goType, const uint32_t* data, uint32_t flags,
+                             uint32_t dynamicLow, int reactionToPlayer) {
+    const bool regardsPlayerAsEnemy = reactionToPlayer <= 2;
+    if (goType == kGameObjectTypeTrap) {
+        if (!regardsPlayerAsEnemy || !data || data[0] == 0) return false;
+    } else if (regardsPlayerAsEnemy) {
+        return false;
+    }
+    return gameObjectFlagsAllowUse(flags, dynamicLow);
+}
+
 /// Whether the 3.3.5a client lets a game object be used by a click - gives it a
 /// cursor and answers the click - from its type, GAMEOBJECT_FLAGS and the low
 /// half of GAMEOBJECT_DYNAMIC. Read from the client's per-type object classes:
 /// the ones whose IsInteractable is a plain "no" (generic, spell focus,
 /// transport, map object, duel arbiter, fishing hole, capture point, aura
 /// generator, dungeon difficulty, destructible building, trap door, and the
-/// three types with no class at all), and the checks the others share.
-inline bool gameObjectTakesClick(uint32_t goType, uint32_t flags, uint32_t dynamicLow) {
+/// three types with no class at all), and the checks the others share
+/// (gameObjectUsable).
+inline bool gameObjectTakesClick(uint32_t goType, const uint32_t* data, uint32_t flags,
+                                 uint32_t dynamicLow, int reactionToPlayer) {
     switch (goType) {
         case 5: case 8: case 11: case 14: case 15: case 16: case 20: case 21:
         case 25: case 28: case 29: case 30: case 31: case 33: case 35:
@@ -77,7 +108,7 @@ inline bool gameObjectTakesClick(uint32_t goType, uint32_t flags, uint32_t dynam
         default:
             break;
     }
-    return gameObjectFlagsAllowUse(flags, dynamicLow);
+    return gameObjectUsable(goType, data, flags, dynamicLow, reactionToPlayer);
 }
 
 /// The quest a game object of this type is only there for, from its template
@@ -109,13 +140,20 @@ inline uint32_t gameObjectRequiredQuest(uint32_t goType, const uint32_t* data) {
 ///    has none, and says nothing;
 ///  - a fishing node: only the player's own (0x00712030), and only while usable;
 ///  - destructible building: a vehicle test this client does not model, so no;
-///  - the rest: whenever they could be used (0x007112a0).
+///  - the rest: whenever they could be used (0x007112a0, gameObjectUsable).
 /// The caller still owes the quest test that follows (see
 /// gameObjectRequiredQuest): an object with a quest is tracked only while that
 /// quest is in the player's log.
+///
+/// Even then the object is only under the pointer where its model draws
+/// (FUN_004f9550 hands the tracked ones to the M2 scene, whose ray test,
+/// 0x0081daf0, walks the triangles of the batches that draw): an aura
+/// generator is always tracked, and the one in Dalaran's fountain is still
+/// never pointed at, wearing the invisible trap model. That is the picker's
+/// to apply.
 inline bool gameObjectTakesMouseover(uint32_t goType, const uint32_t* data,
                                      uint32_t flags, uint32_t dynamicLow,
-                                     bool createdByPlayer) {
+                                     bool createdByPlayer, int reactionToPlayer) {
     switch (goType) {
         case 11: case 14: case 15: case 20: case 21: case 28: case 31: case 33: case 35:
             return false;
@@ -123,8 +161,8 @@ inline bool gameObjectTakesMouseover(uint32_t goType, const uint32_t* data,
             return true;
         case 5:  return data && data[1] != 0;
         case 29: return data && data[19] != 0;
-        case 17: return createdByPlayer && gameObjectFlagsAllowUse(flags, dynamicLow);
-        default: return gameObjectFlagsAllowUse(flags, dynamicLow);
+        case 17: return createdByPlayer && gameObjectUsable(goType, data, flags, dynamicLow, reactionToPlayer);
+        default: return gameObjectUsable(goType, data, flags, dynamicLow, reactionToPlayer);
     }
 }
 

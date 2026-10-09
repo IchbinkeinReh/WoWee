@@ -613,6 +613,10 @@ public:
     /// used for cursor picking and selection circles. Returns false for an
     /// unknown instance or a degenerate (zero-radius) model.
     bool getInstanceBounds(uint32_t instanceId, glm::vec3& outCenter, float& outRadius) const;
+    /// Whether an instance's model draws no triangles at all - the invisible
+    /// trap, or a model reduced to its particles. Nothing of it can be under
+    /// the pointer. False for an unknown instance.
+    [[nodiscard]] bool instanceDrawsNothing(uint32_t instanceId) const;
     /// An instance's position and scale, and its model's height - the
     /// header's vertex box, as a game object keeps it (0x00713f50, +0xac).
     bool getInstanceHeight(uint32_t instanceId, glm::vec3& outPosition, float& outScale,

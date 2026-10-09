@@ -1539,6 +1539,13 @@ bool EntitySpawner::getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, 
     return characters->getInstanceBounds(instanceId, outCenter, outRadius);
 }
 
+bool EntitySpawner::gameObjectDrawsNothing(uint64_t guid) const {
+    auto goIt = gameObjectInstances_.find(guid);
+    if (goIt == gameObjectInstances_.end() || goIt->second.isWmo || !renderer_) return false;
+    const auto* m2 = renderer_->queryM2Renderer();
+    return m2 && m2->instanceDrawsNothing(goIt->second.instanceId);
+}
+
 bool EntitySpawner::getRenderFootZForGuid(uint64_t guid, float& outFootZ) const {
     const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
     if (!characters) return false;

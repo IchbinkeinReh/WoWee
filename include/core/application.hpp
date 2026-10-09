@@ -131,6 +131,7 @@ public:
 
     // Render bounds lookup (for click targeting / selection) - delegates to EntitySpawner
     bool getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, float& outRadius) const;
+    [[nodiscard]] bool gameObjectDrawsNothing(uint64_t guid) const;
     bool getRenderFootZForGuid(uint64_t guid, float& outFootZ) const;
     /// The game object highlight on the mouseover (0x0051f790 calls
     /// 0x00743c70 on the new mouseover, 0x00743bc0 on the old). Guid 0, or

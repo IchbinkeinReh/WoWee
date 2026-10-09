@@ -133,6 +133,9 @@ public:
 
     // Render bounds/position queries (used by click targeting, etc.)
     bool getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, float& outRadius) const;
+    /// A game object whose model is loaded and draws nothing (M2Renderer::
+    /// instanceDrawsNothing). False while there is no model yet.
+    [[nodiscard]] bool gameObjectDrawsNothing(uint64_t guid) const;
     uint32_t characterInstanceIdForGuid(uint64_t guid) const;
     bool getRenderFootZForGuid(uint64_t guid, float& outFootZ) const;
     /// Where the client puts a unit's name (0x0071fef0): its model's

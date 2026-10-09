@@ -122,6 +122,8 @@
     "EnemyGroup": 5,
     "Faction": 1,
     "FactionGroup": 3,
+    "Flags": 2,
+    "Friend0": 10,
     "FriendGroup": 4,
     "ID": 0
   },

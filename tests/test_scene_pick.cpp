@@ -82,26 +82,30 @@ TEST_CASE("an empty pick resolves to nothing") {
     CHECK(pick.unitGuid() == 0u);
 }
 
+// How the object regards the player, numbered as UnitReaction numbers it.
+constexpr int kNeutral = 4;
+constexpr int kHostile = 2;
+
 // Which game objects the client lets the pointer rest on, and so names in a
 // tooltip (0x0070f580 and the per-type classes behind it).
 TEST_CASE("scenery the client does not track shows no tooltip") {
     using wowee::ui::gameObjectTakesMouseover;
     const uint32_t noData[24] = {};
     // A signpost or banner: generic, no highlight.
-    CHECK_FALSE(gameObjectTakesMouseover(5, noData, 0, 0, false));
-    CHECK_FALSE(gameObjectTakesMouseover(5, nullptr, 0, 0, false));
+    CHECK_FALSE(gameObjectTakesMouseover(5, noData, 0, 0, false, kNeutral));
+    CHECK_FALSE(gameObjectTakesMouseover(5, nullptr, 0, 0, false, kNeutral));
     // ...one whose template asks to be highlighted is tracked.
     uint32_t highlighted[24] = {};
     highlighted[1] = 1;
-    CHECK(gameObjectTakesMouseover(5, highlighted, 0, 0, false));
+    CHECK(gameObjectTakesMouseover(5, highlighted, 0, 0, false, kNeutral));
     // A capture point keeps its highlight in data19.
     uint32_t capture[24] = {};
-    CHECK_FALSE(gameObjectTakesMouseover(29, capture, 0, 0, false));
+    CHECK_FALSE(gameObjectTakesMouseover(29, capture, 0, 0, false, kNeutral));
     capture[19] = 1;
-    CHECK(gameObjectTakesMouseover(29, capture, 0, 0, false));
+    CHECK(gameObjectTakesMouseover(29, capture, 0, 0, false, kNeutral));
     // Transports, map objects, trap doors: never.
     for (uint32_t t : {11u, 14u, 15u, 31u, 35u})
-        CHECK_FALSE(gameObjectTakesMouseover(t, noData, 0, 0, false));
+        CHECK_FALSE(gameObjectTakesMouseover(t, noData, 0, 0, false, kNeutral));
 }
 
 TEST_CASE("an anvil is named though nothing uses it") {
@@ -109,22 +113,45 @@ TEST_CASE("an anvil is named though nothing uses it") {
     using wowee::ui::gameObjectTakesClick;
     // Spell focus, duel arbiter, fishing hole, aura generator.
     for (uint32_t t : {8u, 16u, 25u, 30u}) {
-        CHECK(gameObjectTakesMouseover(t, nullptr, 0x10, 0x4, false));
-        CHECK_FALSE(gameObjectTakesClick(t, 0, 0));
+        CHECK(gameObjectTakesMouseover(t, nullptr, 0x10, 0x4, false, kNeutral));
+        CHECK_FALSE(gameObjectTakesClick(t, nullptr, 0, 0, kNeutral));
     }
 }
 
 TEST_CASE("usable objects are tracked only while usable") {
     using wowee::ui::gameObjectTakesMouseover;
-    CHECK(gameObjectTakesMouseover(3, nullptr, 0, 0, false));          // chest
-    CHECK_FALSE(gameObjectTakesMouseover(3, nullptr, 0x10, 0, false)); // not selectable
-    CHECK_FALSE(gameObjectTakesMouseover(3, nullptr, 0x1, 0, false));  // in use
-    CHECK_FALSE(gameObjectTakesMouseover(10, nullptr, 0, 0x4, false)); // no-interact
-    CHECK_FALSE(gameObjectTakesMouseover(10, nullptr, 0x4, 0, false)); // conditional, unlit
-    CHECK(gameObjectTakesMouseover(10, nullptr, 0x4, 0x1, false));     // ...lit
+    CHECK(gameObjectTakesMouseover(3, nullptr, 0, 0, false, kNeutral));          // chest
+    CHECK_FALSE(gameObjectTakesMouseover(3, nullptr, 0x10, 0, false, kNeutral)); // not selectable
+    CHECK_FALSE(gameObjectTakesMouseover(3, nullptr, 0x1, 0, false, kNeutral));  // in use
+    CHECK_FALSE(gameObjectTakesMouseover(10, nullptr, 0, 0x4, false, kNeutral)); // no-interact
+    CHECK_FALSE(gameObjectTakesMouseover(10, nullptr, 0x4, 0, false, kNeutral)); // conditional, unlit
+    CHECK(gameObjectTakesMouseover(10, nullptr, 0x4, 0x1, false, kNeutral));     // ...lit
     // A fishing bobber: only the player's own.
-    CHECK_FALSE(gameObjectTakesMouseover(17, nullptr, 0, 0, false));
-    CHECK(gameObjectTakesMouseover(17, nullptr, 0, 0, true));
+    CHECK_FALSE(gameObjectTakesMouseover(17, nullptr, 0, 0, false, kNeutral));
+    CHECK(gameObjectTakesMouseover(17, nullptr, 0, 0, true, kNeutral));
+}
+
+TEST_CASE("an object that counts the player as an enemy is not for the player's hands") {
+    using wowee::ui::gameObjectTakesMouseover;
+    using wowee::ui::gameObjectTakesClick;
+    const uint32_t noData[24] = {};
+    // Dalaran's fountain: a button of "Creature" (114), which names the
+    // player's side as its enemy. Neither tracked nor clickable.
+    CHECK_FALSE(gameObjectTakesMouseover(1, noData, 0x20, 0, false, kHostile));
+    CHECK_FALSE(gameObjectTakesClick(1, noData, 0x20, 0, kHostile));
+    // ...the same button of no faction, or a neutral one, is.
+    CHECK(gameObjectTakesMouseover(1, noData, 0x20, 0, false, kNeutral));
+    CHECK(gameObjectTakesClick(1, noData, 0x20, 0, kNeutral));
+    // Unfriendly is not yet an enemy.
+    CHECK(gameObjectTakesMouseover(3, nullptr, 0, 0, false, 3));
+    // A spell focus is tracked whatever its faction: its class never asks.
+    CHECK(gameObjectTakesMouseover(8, nullptr, 0, 0, false, kHostile));
+    // A trap the other way round: only a hostile one, and one with a lock.
+    uint32_t locked[24] = {};
+    locked[0] = 1;
+    CHECK_FALSE(gameObjectTakesMouseover(6, locked, 0, 0, false, kNeutral));
+    CHECK_FALSE(gameObjectTakesMouseover(6, noData, 0, 0, false, kHostile));
+    CHECK(gameObjectTakesMouseover(6, locked, 0, 0, false, kHostile));
 }
 
 TEST_CASE("the quest an object is kept for comes from its type's data field") {

@@ -184,6 +184,8 @@ enum class UF : uint16_t {
     // transport's phase, so those expansions keep animating on their own clock.
     GAMEOBJECT_DYNAMIC,
     GAMEOBJECT_LEVEL,
+    /// The object's faction template, how it regards the player (0x0070edd0).
+    GAMEOBJECT_FACTION,
 
     // Item fields
     ITEM_FIELD_STACK_COUNT,

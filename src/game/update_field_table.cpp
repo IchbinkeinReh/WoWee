@@ -98,6 +98,7 @@ static const UFNameEntry kUFNames[] = {
     {.name = "GAMEOBJECT_BYTES_1", .field = UF::GAMEOBJECT_BYTES_1},
     {.name = "GAMEOBJECT_DYNAMIC", .field = UF::GAMEOBJECT_DYNAMIC},
     {.name = "GAMEOBJECT_LEVEL", .field = UF::GAMEOBJECT_LEVEL},
+    {.name = "GAMEOBJECT_FACTION", .field = UF::GAMEOBJECT_FACTION},
     {.name = "ITEM_FIELD_STACK_COUNT", .field = UF::ITEM_FIELD_STACK_COUNT},
     {.name = "ITEM_FIELD_DURABILITY", .field = UF::ITEM_FIELD_DURABILITY},
     {.name = "ITEM_FIELD_MAXDURABILITY", .field = UF::ITEM_FIELD_MAXDURABILITY},

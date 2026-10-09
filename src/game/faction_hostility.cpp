@@ -3,6 +3,8 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "core/logger.hpp"
+#include <algorithm>
+#include <array>
 #include <unordered_map>
 
 namespace wowee {
@@ -103,9 +105,23 @@ void buildFactionHostilityMap(pipeline::AssetManager& assetManager, GameHandler&
     // Kept apart from playerFriendGroup, which folds the two together: the
     // friendly test below needs to ask each direction on its own.
     uint32_t playerFactionGroup = 0;
+    // The rest of the player's template, for asking a template how it regards
+    // the player (0x00715440): its own friend group, and the factions it
+    // names as friends. Flags and the friends list sit in the same columns in
+    // every expansion's FactionTemplate.dbc; an installed layout copied before
+    // they were named still has them there.
+    const uint32_t ftFlags = ftL && ftL->tryField("Flags") != 0xFFFFFFFFu ? ftL->tryField("Flags") : 2;
+    const uint32_t ftFriend0 = ftL && ftL->tryField("Friend0") != 0xFFFFFFFFu ? ftL->tryField("Friend0") : 10;
+    const bool hasFriendList = ftDbc->getFieldCount() > ftFriend0 + 3;
+    uint32_t playerOwnFriendGroup = 0;
+    std::array<uint32_t, 4> playerFriends{};
     for (uint32_t i = 0; i < ftDbc->getRecordCount(); i++) {
         if (ftDbc->getUInt32(i, ftID) == playerFtId) {
             playerFriendGroup = ftDbc->getUInt32(i, ftFriend) | ftDbc->getUInt32(i, ftFG);
+            playerOwnFriendGroup = ftDbc->getUInt32(i, ftFriend);
+            if (hasFriendList) {
+                for (uint32_t f = 0; f < 4; ++f) playerFriends[f] = ftDbc->getUInt32(i, ftFriend0 + f);
+            }
             playerFactionGroup = ftDbc->getUInt32(i, ftFG);
             playerEnemyGroup = ftDbc->getUInt32(i, ftEnemy);
             playerFactionId = ftDbc->getUInt32(i, ftFaction);
@@ -124,12 +140,45 @@ void buildFactionHostilityMap(pipeline::AssetManager& assetManager, GameHandler&
     // Each template whose faction carries a standing, by the server's index for
     // that standing, so the live at-war flag can be asked for later.
     std::unordered_map<uint32_t, uint32_t> templateRepList;
+    // How each template regards the player from its own side, which is not
+    // the symmetric answer above: "Creature" (114) names the player's group
+    // as its enemy, while the player's template has nothing against it.
+    std::unordered_map<uint32_t, bool> regardsPlayerHostile;
     for (uint32_t i = 0; i < ftDbc->getRecordCount(); i++) {
         uint32_t id = ftDbc->getUInt32(i, ftID);
         uint32_t parentFaction = ftDbc->getUInt32(i, ftFaction);
         uint32_t factionGroup = ftDbc->getUInt32(i, ftFG);
         uint32_t friendGroup = ftDbc->getUInt32(i, ftFriend);
         uint32_t enemyGroup = ftDbc->getUInt32(i, ftEnemy);
+
+        // 0x00715440 with this template asking about the player's: an enemy
+        // by group or by name; else a friend by group or by name, either way
+        // round; else hostile only when the template is hostile by default
+        // (flag 0x2000), and neutral otherwise.
+        {
+            const auto names = [&](uint32_t first, uint32_t faction) {
+                for (uint32_t f = first; f < first + 4; ++f) {
+                    const uint32_t v = ftDbc->getUInt32(i, f);
+                    if (v == 0) break;
+                    if (v == faction) return true;
+                }
+                return false;
+            };
+            bool regards = false;
+            if ((enemyGroup & playerFactionGroup) != 0 ||
+                (playerFactionId != 0 && names(ftEnemy0, playerFactionId))) {
+                regards = true;
+            } else {
+                const bool isFriend =
+                    (friendGroup & playerFactionGroup) != 0 ||
+                    (hasFriendList && playerFactionId != 0 && names(ftFriend0, playerFactionId)) ||
+                    (playerOwnFriendGroup & factionGroup) != 0 ||
+                    (parentFaction != 0 &&
+                     std::find(playerFriends.begin(), playerFriends.end(), parentFaction) != playerFriends.end());
+                regards = !isFriend && (ftDbc->getUInt32(i, ftFlags) & 0x2000u) != 0;
+            }
+            regardsPlayerHostile[id] = regards;
+        }
 
         // 1. Symmetric group check
         bool hostile = (enemyGroup & playerFriendGroup) != 0
@@ -180,6 +229,7 @@ void buildFactionHostilityMap(pipeline::AssetManager& assetManager, GameHandler&
     LOG_INFO("Faction friendliness: ", friendlyCount, "/", friendlyMap.size(),
              " templates friendly; the rest are hostile or neutral");
     gameHandler.setFactionTemplateRepList(std::move(templateRepList));
+    gameHandler.setFactionRegardsPlayerHostileMap(std::move(regardsPlayerHostile));
     gameHandler.setFactionFriendlyMap(std::move(friendlyMap));
     gameHandler.setFactionHostileMap(std::move(factionMap));
     LOG_INFO("Faction hostility for race ", static_cast<int>(playerRace), " (FT ", playerFtId, "): ",

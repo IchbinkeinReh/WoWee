@@ -1691,6 +1691,23 @@ public:
     void setFactionTemplateRepList(std::unordered_map<uint32_t, uint32_t> map) {
         factionTemplateRepList_ = std::move(map);
     }
+    /// The templates that regard the player as an enemy from their own side
+    /// of FactionTemplate (0x00715440 asked with the template first), for
+    /// those whose faction carries no standing. See factionReactionToPlayer.
+    void setFactionRegardsPlayerHostileMap(std::unordered_map<uint32_t, bool> map) {
+        factionRegardsPlayerHostile_ = std::move(map);
+    }
+    /// How a faction template regards the player (0x0071f770 with the player
+    /// as the other side), numbered as UnitReaction numbers it. For a faction
+    /// the player has a standing with, that standing; otherwise 2 when the
+    /// template names the player's side as an enemy, else 4. No template at
+    /// all is neutral, as the client's 3 is.
+    ///
+    /// Asked from the template's side, and not the same as isHostileFaction,
+    /// which is the player's side: Dalaran's fountain belongs to "Creature"
+    /// (114), which counts the player among its enemies while the player has
+    /// nothing against it.
+    [[nodiscard]] int factionReactionToPlayer(uint32_t factionTemplateId) const;
     /// Whether a beneficial spell may be aimed at this faction.
     ///
     /// Not the negation of isHostileFaction: a faction can be neither, and most
@@ -4809,6 +4826,7 @@ private:
     std::unordered_map<uint32_t, bool> factionHostileMap_;
     std::unordered_map<uint32_t, bool> factionFriendlyMap_;
     std::unordered_map<uint32_t, uint32_t> factionTemplateRepList_;
+    std::unordered_map<uint32_t, bool> factionRegardsPlayerHostile_;
 
     // Vehicle (WotLK): non-zero when player is seated in a vehicle
     uint32_t vehicleId_ = 0;

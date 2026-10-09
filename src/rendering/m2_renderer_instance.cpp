@@ -285,6 +285,13 @@ bool M2Renderer::getInstanceBounds(uint32_t instanceId, glm::vec3& outCenter, fl
     return outRadius > 0.0f;
 }
 
+bool M2Renderer::instanceDrawsNothing(uint32_t instanceId) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return false;
+    auto modelIt = models.find(instances[idxIt->second].modelId);
+    return modelIt != models.end() && modelIt->second.isInvisibleTrap;
+}
+
 bool M2Renderer::getInstanceHeight(uint32_t instanceId, glm::vec3& outPosition, float& outScale,
                                    float& outModelHeight) const {
     auto idxIt = instanceIndexById.find(instanceId);

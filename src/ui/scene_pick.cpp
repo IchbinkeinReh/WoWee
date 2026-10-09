@@ -29,6 +29,25 @@ bool isDeadUnit(const std::shared_ptr<game::Entity>& entity) {
     return unit && unit->getHealth() == 0 && unit->getMaxHealth() > 0;
 }
 
+/// How a game object regards the player (0x0070edd0), numbered as
+/// UnitReaction numbers it: as the unit that made it does, if that unit is
+/// here; else as its GAMEOBJECT_FACTION does; else neutral.
+int gameObjectReactionToPlayer(game::GameHandler& gameHandler, const game::Entity& object,
+                               uint64_t createdBy) {
+    if (createdBy != 0) {
+        // The player's own: 0x007251c0 answers a unit asked about itself
+        // with friendly.
+        if (createdBy == gameHandler.getPlayerGuid()) return 5;
+        auto maker = gameHandler.getEntityManager().getEntity(createdBy);
+        if (maker && maker->isUnit()) {
+            return gameHandler.unitReactionToPlayer(static_cast<const game::Unit&>(*maker));
+        }
+    }
+    const uint16_t factionField = game::fieldIndex(game::UF::GAMEOBJECT_FACTION);
+    if (factionField == 0xFFFF) return 4;
+    return gameHandler.factionReactionToPlayer(object.getField(factionField));
+}
+
 } // namespace
 
 ScenePick pickScene(game::GameHandler& gameHandler,
@@ -83,6 +102,10 @@ ScenePick pickScene(game::GameHandler& gameHandler,
             auto go = std::static_pointer_cast<game::GameObject>(entity);
             goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
             if (params.skipChairs && goInfo && goInfo->type == kGoTypeChair) continue;
+            // The client finds an object only on the triangles its model
+            // draws (0x004f9550, 0x0081daf0), so a model that draws none is
+            // never under the pointer, whatever its type would allow.
+            if (core::Application::getInstance().gameObjectDrawsNothing(guid)) continue;
         }
 
         glm::vec3 hitCenter;
@@ -166,14 +189,16 @@ ScenePick pickScene(game::GameHandler& gameHandler,
             const uint32_t goFlags = ufFlags == 0xFFFF ? 0u : entity->getField(ufFlags);
             const uint32_t goDynamicLow = ufDynamic == 0xFFFF ? 0u : (entity->getField(ufDynamic) & 0xFFFFu);
             bool tracked = false;
+            int reaction = 4;
             if (goInfo) {
                 const uint32_t* data = goInfo->hasData ? goInfo->data : nullptr;
                 // GAMEOBJECT_FIELD_CREATED_BY, fields 6 and 7 (OBJECT_END is 6
                 // in every expansion), as the bobber's bite handler reads it.
                 const uint64_t createdBy = static_cast<uint64_t>(entity->getField(6)) |
                                            (static_cast<uint64_t>(entity->getField(7)) << 32);
+                reaction = gameObjectReactionToPlayer(gameHandler, *entity, createdBy);
                 tracked = gameObjectTakesMouseover(goInfo->type, data, goFlags, goDynamicLow,
-                                                   createdBy == myGuid);
+                                                   createdBy == myGuid, reaction);
                 // 0x0070f580: an object kept for a quest is tracked only while
                 // that quest is in the log.
                 const uint32_t quest = gameObjectRequiredQuest(goInfo->type, data);
@@ -184,7 +209,9 @@ ScenePick pickScene(game::GameHandler& gameHandler,
                 }
             }
             const bool interactive =
-                !goInfo || (tracked && gameObjectTakesClick(goInfo->type, goFlags, goDynamicLow));
+                !goInfo || (tracked && gameObjectTakesClick(goInfo->type,
+                                                            goInfo->hasData ? goInfo->data : nullptr,
+                                                            goFlags, goDynamicLow, reaction));
             // How well the ray is aimed at this one, as a fraction of its own
             // size: nought is dead centre and one is a graze. Ranked by that
             // rather than by which centre is nearest along the ray, because
