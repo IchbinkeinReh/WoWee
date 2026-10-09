@@ -112,13 +112,17 @@ bool BigNum::isZero() const {
 }
 
 std::vector<uint8_t> BigNum::toArray(bool littleEndian, int minSize) const {
-    int size = BN_num_bytes(bn);
+    const int valueBytes = BN_num_bytes(bn);
+    int size = valueBytes;
     if (minSize > size) {
         size = minSize;
     }
 
+    // BN_bn2bin writes big-endian with no leading zeros, so the value goes at
+    // the end and the padding up to minSize stays zero in front of it.
     std::vector<uint8_t> bytes(size, 0);
-    [[maybe_unused]] int actualSize = BN_bn2bin(bn, bytes.data() + (size - BN_num_bytes(bn)));
+    const size_t leadingZeroBytes = static_cast<size_t>(size - valueBytes);
+    BN_bn2bin(bn, bytes.data() + leadingZeroBytes);
 
     if (littleEndian) {
         std::reverse(bytes.begin(), bytes.end());

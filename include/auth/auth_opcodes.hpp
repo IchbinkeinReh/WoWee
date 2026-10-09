@@ -49,5 +49,13 @@ enum class AuthResult : uint8_t {
 
 const char* getAuthResultString(AuthResult result);
 
+// WoW login security flags (CMD_AUTH_LOGON_CHALLENGE response, securityFlags byte).
+// Multiple flags can be set simultaneously; the client must satisfy all of them.
+// Each set bit appends its own block after the flags byte in the challenge,
+// which the auth socket's framing has to count.
+inline constexpr uint8_t kSecurityFlagPin           = 0x01;  // PIN grid: seed(4) + salt(16)
+inline constexpr uint8_t kSecurityFlagMatrixCard    = 0x02;  // Matrix card (unused by most servers): w, h, digits, challenges, seed(8)
+inline constexpr uint8_t kSecurityFlagAuthenticator = 0x04;  // TOTP authenticator token: required(1)
+
 } // namespace auth
 } // namespace wowee

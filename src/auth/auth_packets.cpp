@@ -191,14 +191,14 @@ bool LogonChallengeResponseParser::parse(network::Packet& packet, LogonChallenge
     response.securityFlags = packet.readUInt8();
 
     // Optional security extensions (protocol v8+)
-    if (response.securityFlags & 0x01) {
+    if (response.securityFlags & kSecurityFlagPin) {
         // PIN required: u32 pin_grid_seed + u8[16] pin_salt
         response.pinGridSeed = packet.readUInt32();
         for (uint8_t& byte : response.pinSalt) {
             byte = packet.readUInt8();
         }
     }
-    if (response.securityFlags & 0x04) {
+    if (response.securityFlags & kSecurityFlagAuthenticator) {
         // Authenticator required (TrinityCore): u8 requiredFlag (usually 1)
         response.authenticatorRequired = packet.readUInt8();
     }
@@ -209,7 +209,7 @@ bool LogonChallengeResponseParser::parse(network::Packet& packet, LogonChallenge
     LOG_DEBUG("  N size: ", response.N.size(), " bytes");
     LOG_DEBUG("  salt size: ", response.salt.size(), " bytes");
     LOG_DEBUG("  Security flags: ", static_cast<int>(response.securityFlags));
-    if (response.securityFlags & 0x01) {
+    if (response.securityFlags & kSecurityFlagPin) {
         LOG_DEBUG("  PIN grid seed: ", response.pinGridSeed);
     }
 
@@ -287,7 +287,7 @@ network::Packet LogonProofPacket::build(const std::vector<uint8_t>& A,
     // Security flags
     packet.writeUInt8(securityFlags);
 
-    if (securityFlags & 0x01) {
+    if (securityFlags & kSecurityFlagPin) {
         if (!pinClientSalt || !pinHash) {
             LOG_ERROR("LOGON_PROOF: PIN flag set but PIN data missing");
         } else {
@@ -379,8 +379,7 @@ void readRealmEntry(network::Packet& packet, Realm& realm, bool legacyVanilla) {
     realm.address = packet.readString();
 
     // Four bytes of little-endian float.
-    uint32_t populationBits = packet.readUInt32();
-    std::memcpy(&realm.population, &populationBits, sizeof(float));
+    realm.population = packet.readFloat();
 
     realm.characters = packet.readUInt8();
     realm.timezone = packet.readUInt8();

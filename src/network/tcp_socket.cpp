@@ -1,10 +1,41 @@
 #include "network/tcp_socket.hpp"
 #include "network/packet.hpp"
 #include "network/net_platform.hpp"
+#include "network/wire_format.hpp"
+#include "auth/auth_opcodes.hpp"
 #include "core/logger.hpp"
 
 namespace wowee {
 namespace network {
+
+namespace {
+// Auth server packet framing: the offsets and lengths getExpectedPacketSize
+// walks to find where one response ends. The parsers in auth_packets.cpp read
+// the same fields by name once the whole packet is in.
+
+// LOGON_CHALLENGE: opcode(1) + unk(1) + status(1) + B(32), then g's length.
+constexpr size_t kChallengeStatusOffset = 2;
+constexpr size_t kChallengeGLenOffset = 1 + 1 + 1 + 32;
+constexpr size_t kChallengeFailureBytes = kChallengeStatusOffset + 1;
+constexpr size_t kChallengeSaltBytes = 32;
+constexpr size_t kChallengeCrcSaltBytes = 16;
+constexpr size_t kSecurityFlagsBytes = 1;
+// What each security flag (auth_opcodes.hpp) appends after the flags byte.
+using auth::kSecurityFlagAuthenticator;
+using auth::kSecurityFlagMatrixCard;
+using auth::kSecurityFlagPin;
+constexpr size_t kPinExtensionBytes = 4 + 16;              // seed + salt
+constexpr size_t kMatrixExtensionBytes = 1 + 1 + 1 + 1 + 8; // w, h, digits, challenges, seed
+constexpr size_t kAuthenticatorExtensionBytes = 1;         // required
+
+// LOGON_PROOF success, by the server build the challenge named (see below).
+constexpr size_t kProofSuccessBytesTbcWotlk = 32;
+constexpr size_t kProofSuccessBytesLateVanilla = 28;
+constexpr size_t kProofSuccessBytesEarlyVanilla = 26;
+
+// REALM_LIST: opcode(1) + payload size(2).
+constexpr size_t kRealmListHeaderBytes = 3;
+}  // namespace
 
 TCPSocket::TCPSocket() {
     net::ensureInit();
@@ -206,32 +237,33 @@ size_t TCPSocket::getExpectedPacketSize(uint8_t opcode) {
     switch (opcode) {
         case 0x00:  // LOGON_CHALLENGE response
             // Need to read status byte to determine success/failure
-            if (receiveBuffer.size() >= 3) {
-                uint8_t status = receiveBuffer[2];
+            if (receiveBuffer.size() > kChallengeStatusOffset) {
+                uint8_t status = receiveBuffer[kChallengeStatusOffset];
                 if (status == 0x00) {
                     // Success: opcode(1) + unk(1) + status(1) + B(32) + gLen(1) + g(gLen) +
                     //          nLen(1) + N(nLen) + salt(32) + crcHash(16) + securityFlags(1)
                     //          + optional security flag data
-                    if (receiveBuffer.size() >= 36) {  // enough to read g_len
-                        uint8_t gLen = receiveBuffer[35];
-                        size_t minSize = 36 + gLen + 1;  // up to N_len
-                        if (receiveBuffer.size() >= minSize) {
-                            uint8_t nLen = receiveBuffer[36 + gLen];
-                            size_t baseSize = 36 + gLen + 1 + nLen + 32 + 16 + 1;
+                    if (receiveBuffer.size() > kChallengeGLenOffset) {  // enough to read g_len
+                        uint8_t gLen = receiveBuffer[kChallengeGLenOffset];
+                        const size_t nLenOffset = kChallengeGLenOffset + 1 + gLen;
+                        if (receiveBuffer.size() > nLenOffset) {
+                            uint8_t nLen = receiveBuffer[nLenOffset];
+                            size_t baseSize = nLenOffset + 1 + nLen + kChallengeSaltBytes +
+                                              kChallengeCrcSaltBytes + kSecurityFlagsBytes;
                             // Need to read securityFlags to account for extra data
                             if (receiveBuffer.size() >= baseSize) {
-                                uint8_t secFlags = receiveBuffer[baseSize - 1];
+                                uint8_t secFlags = receiveBuffer[baseSize - kSecurityFlagsBytes];
                                 size_t extra = 0;
-                                if (secFlags & 0x01) extra += 20;  // PIN: seed(4) + salt(16)
-                                if (secFlags & 0x02) extra += 12;  // Matrix: w(1)+h(1)+digits(1)+challenges(1)+seed(8)
-                                if (secFlags & 0x04) extra += 1;   // Authenticator: required(1)
+                                if (secFlags & kSecurityFlagPin) extra += kPinExtensionBytes;
+                                if (secFlags & kSecurityFlagMatrixCard) extra += kMatrixExtensionBytes;
+                                if (secFlags & kSecurityFlagAuthenticator) extra += kAuthenticatorExtensionBytes;
                                 return baseSize + extra;
                             }
                         }
                     }
                     return 0;  // Need more data
                 }                     // Failure - just opcode + unknown + status
-                    return 3;
+                    return kChallengeFailureBytes;
                
             }
             return 0;  // Need more data to determine
@@ -245,9 +277,9 @@ size_t TCPSocket::getExpectedPacketSize(uint8_t opcode) {
             if (receiveBuffer.size() >= 2) {
                 uint8_t status = receiveBuffer[1];
                 if (status == 0x00) {
-                    if (receiveBuffer.size() >= 32) return 32;
-                    if (receiveBuffer.size() >= 28) return 28;
-                    if (receiveBuffer.size() >= 26) return 26;
+                    if (receiveBuffer.size() >= kProofSuccessBytesTbcWotlk) return kProofSuccessBytesTbcWotlk;
+                    if (receiveBuffer.size() >= kProofSuccessBytesLateVanilla) return kProofSuccessBytesLateVanilla;
+                    if (receiveBuffer.size() >= kProofSuccessBytesEarlyVanilla) return kProofSuccessBytesEarlyVanilla;
                     return 0;
                 }                     // Consume up to 4 bytes if available, minimum 2
                     return (receiveBuffer.size() >= 4) ? 4 : 2;
@@ -256,12 +288,10 @@ size_t TCPSocket::getExpectedPacketSize(uint8_t opcode) {
             return 0;  // Need more data
 
         case 0x10:  // REALM_LIST response
-            // Variable length - format: opcode(1) + size(2) + payload(size)
-            // Need to read size field (little-endian uint16 at offset 1-2)
-            if (receiveBuffer.size() >= 3) {
-                uint16_t size = receiveBuffer[1] | (receiveBuffer[2] << 8);
-                // Total packet size is: opcode(1) + size field(2) + payload(size)
-                return 1 + 2 + size;
+            // Variable length - format: opcode(1) + size(2, little-endian) + payload(size)
+            if (receiveBuffer.size() >= kRealmListHeaderBytes) {
+                const uint16_t size = wire::loadLE16(receiveBuffer, 1);
+                return kRealmListHeaderBytes + size;
             }
             return 0;  // Need more data to read size field
 

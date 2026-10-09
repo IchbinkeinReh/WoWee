@@ -198,22 +198,16 @@ network::Packet AuthSessionPacket::build(uint32_t build,
             "Blizzard_TalentUI", "Blizzard_TradeSkillUI", "Blizzard_TrainerUI"
         };
         static constexpr uint32_t standardModulusCRC = 0x4C1C776D;
+        // Written with a Packet's writers for their little-endian layout; the
+        // block is compressed below, not sent as a packet of its own.
+        network::Packet addonBlock(0);
         for (const char* name : vanillaAddons) {
-            // string (null-terminated)
-            size_t len = strlen(name);
-            addonData.insert(addonData.end(), reinterpret_cast<const uint8_t*>(name),
-                             reinterpret_cast<const uint8_t*>(name) + len + 1);
-            // uint8 flags = 1 (enabled)
-            addonData.push_back(0x01);
-            // uint32 modulusCRC (little-endian)
-            addonData.push_back(static_cast<uint8_t>(standardModulusCRC & 0xFF));
-            addonData.push_back(static_cast<uint8_t>((standardModulusCRC >> 8) & 0xFF));
-            addonData.push_back(static_cast<uint8_t>((standardModulusCRC >> 16) & 0xFF));
-            addonData.push_back(static_cast<uint8_t>((standardModulusCRC >> 24) & 0xFF));
-            // uint32 urlCRC = 0
-            addonData.push_back(0); addonData.push_back(0);
-            addonData.push_back(0); addonData.push_back(0);
+            addonBlock.writeString(name);                 // null-terminated
+            addonBlock.writeUInt8(0x01);                  // flags: enabled
+            addonBlock.writeUInt32(standardModulusCRC);   // modulusCRC
+            addonBlock.writeUInt32(0);                    // urlCRC
         }
+        addonData = addonBlock.getData();
     } else {
         // WotLK: uint32 addonCount + entries + uint32 clientTime
         // Send 0 addons
@@ -263,22 +257,17 @@ std::vector<uint8_t> AuthSessionPacket::computeAuthHash(
     // Account name (as bytes)
     hashInput.insert(hashInput.end(), accountName.begin(), accountName.end());
 
+    auto appendLE32 = [&hashInput](uint32_t value) {
+        for (int shift = 0; shift < 32; shift += 8)
+            hashInput.push_back(static_cast<uint8_t>((value >> shift) & 0xFF));
+    };
+
     // 4 null bytes
-    for (int i = 0; i < 4; ++i) {
-        hashInput.push_back(0);
-    }
+    appendLE32(0);
 
-    // Client seed (little-endian)
-    hashInput.push_back(clientSeed & 0xFF);
-    hashInput.push_back((clientSeed >> 8) & 0xFF);
-    hashInput.push_back((clientSeed >> 16) & 0xFF);
-    hashInput.push_back((clientSeed >> 24) & 0xFF);
-
-    // Server seed (little-endian)
-    hashInput.push_back(serverSeed & 0xFF);
-    hashInput.push_back((serverSeed >> 8) & 0xFF);
-    hashInput.push_back((serverSeed >> 16) & 0xFF);
-    hashInput.push_back((serverSeed >> 24) & 0xFF);
+    // Client seed, then server seed (little-endian)
+    appendLE32(clientSeed);
+    appendLE32(serverSeed);
 
     // Session key (40 bytes)
     hashInput.insert(hashInput.end(), sessionKey.begin(), sessionKey.end());

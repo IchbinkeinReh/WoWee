@@ -14,12 +14,6 @@
 namespace wowee {
 namespace auth {
 
-// WoW login security flags (CMD_AUTH_LOGON_CHALLENGE response, securityFlags byte).
-// Multiple flags can be set simultaneously; the client must satisfy all of them.
-constexpr uint8_t kSecurityFlagPin           = 0x01;  // PIN grid challenge
-constexpr uint8_t kSecurityFlagMatrixCard    = 0x02;  // Matrix card (unused by most servers)
-constexpr uint8_t kSecurityFlagAuthenticator = 0x04;  // TOTP authenticator token
-
 bool isLegacyVanillaAuth(const ClientInfo& info) {
     return info.majorVersion == 1 && info.protocolVersion < 8;
 }
