@@ -42,6 +42,11 @@ struct ZoneAudioContext {
     uint32_t serverZoneId = 0;
     // Zone manager pointer (for zone info and music queries)
     game::ZoneManager* zoneManager = nullptr;
+    // The screen effect's SoundAmbience and ZoneMusic rows, 0 for none
+    // (ScreenEffect.dbc +0x20, +0x24; 0x004f7020).
+    uint32_t screenEffectAmbienceId = 0;
+    uint32_t screenEffectZoneMusicId = 0;
+    pipeline::AssetManager* assetManager = nullptr;
 };
 
 /// Coordinates all audio subsystems.
@@ -92,6 +97,9 @@ public:
 
 private:
     void playZoneMusic(const std::string& music);
+    /// The screen effect's slot (0x004c8fa0, slot 10): its ambience and
+    /// music over the zone's. True while its music plays.
+    bool updateScreenEffectAudio(const ZoneAudioContext& ctx);
 
     std::unique_ptr<MusicManager> musicManager_;
     std::unique_ptr<FootstepManager> footstepManager_;
@@ -113,6 +121,16 @@ private:
     bool inTavern_ = false;
     bool inBlacksmith_ = false;
     float musicSwitchCooldown_ = 0.0f;
+    // The screen effect's sounds as last resolved, and its ambience's loop.
+    struct ScreenEffectSounds {
+        uint32_t ambienceId = 0, zoneMusicId = 0;
+        bool isDay = true;
+        std::string ambience, music;
+    };
+    ScreenEffectSounds screenEffectSounds_;
+    std::string screenEffectAmbiencePlaying_;
+    uint32_t screenEffectAmbienceHandle_ = 0;
+    std::string screenEffectMusicPlaying_;
 };
 
 } // namespace audio

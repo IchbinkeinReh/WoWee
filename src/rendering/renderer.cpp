@@ -2723,6 +2723,9 @@ void Renderer::update(float deltaTime) {
         // stale server world-state zones and whole-ADT ambiguity at river banks.
         zctx.serverZoneId = getCurrentZoneId();
         zctx.zoneManager = zoneManager.get();
+        zctx.screenEffectAmbienceId = screenEffectAmbience_;
+        zctx.screenEffectZoneMusicId = screenEffectZoneMusic_;
+        zctx.assetManager = core::Application::getInstance().getAssetManager();
         WOWEE_PROFILE_SCOPE("zone audio", Cpu);
         audioCoordinator_->updateZoneAudio(zctx);
     }
@@ -5871,6 +5874,8 @@ void Renderer::loadScreenEffectRows() {
     const uint32_t effectCol = layout->tryField("Effect");
     const uint32_t paramCol = layout->tryField("Param0");
     const uint32_t lightCol = layout->tryField("LightParametersID");
+    const uint32_t ambienceCol = layout->tryField("SoundAmbienceID");
+    const uint32_t musicCol = layout->tryField("ZoneMusicID");
     auto data = assetManager->readFile("DBFilesClient\\ScreenEffect.dbc");
     pipeline::DBCFile dbc;
     if (data.empty() || !dbc.load(data) || effectCol >= dbc.getFieldCount() ||
@@ -5884,6 +5889,8 @@ void Renderer::loadScreenEffectRows() {
         row.kind = static_cast<screen_effect::Kind>(dbc.getUInt32(i, effectCol));
         for (uint32_t p = 0; p < 4; ++p) row.params[p] = static_cast<int32_t>(dbc.getUInt32(i, paramCol + p));
         row.lightOverride = dbc.getUInt32(i, lightCol);
+        if (ambienceCol < dbc.getFieldCount()) row.soundAmbience = dbc.getUInt32(i, ambienceCol);
+        if (musicCol < dbc.getFieldCount()) row.zoneMusic = dbc.getUInt32(i, musicCol);
         screenEffectRows_[row.id] = row;
     }
     LOG_INFO("Loaded ScreenEffect.dbc: ", screenEffectRows_.size(), " rows");
@@ -5939,6 +5946,9 @@ void Renderer::updateScreenEffect(float deltaTime) {
     screenEffectState_.select(row);
     screenEffectState_.advance(deltaTime);
     screenEffectLightOverride_ = row && row->lightOverride < 8 ? static_cast<int>(row->lightOverride) : -1;
+    // Its sounds take the top sound slot (0x004f7020 -> 0x004c8fa0).
+    screenEffectAmbience_ = row ? row->soundAmbience : 0;
+    screenEffectZoneMusic_ = row ? row->zoneMusic : 0;
     screenEffectDrunk_ = se::drunkAmount(bytes3, fakeDrunk);
 }
 

@@ -11,9 +11,11 @@
 #include "audio/combat_sound_manager.hpp"
 #include "audio/spell_sound_manager.hpp"
 #include "audio/movement_sound_manager.hpp"
+#include "audio/screen_effect_audio.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "game/zone_manager.hpp"
 #include "core/logger.hpp"
+#include "pipeline/dbc_loader.hpp"
 
 namespace wowee {
 namespace audio {
@@ -103,6 +105,89 @@ void AudioCoordinator::onOriginalSoundtrackDisabled(game::ZoneManager* zm) {
     }
 }
 
+namespace {
+
+// The file a SoundEntries row plays: its DirectoryBase (23) and the first of
+// its ten File columns (3-12) that is set.
+std::string soundEntryFile(pipeline::AssetManager& assets, uint32_t soundId) {
+    if (soundId == 0) return {};
+    auto dbc = assets.loadDBCOptional("SoundEntries.dbc");
+    const int32_t idx = dbc && dbc->getFieldCount() >= 24 ? dbc->findRecordById(soundId) : -1;
+    if (idx < 0) return {};
+    const auto row = static_cast<uint32_t>(idx);
+    const std::string dir = dbc->getString(row, 23);
+    for (uint32_t f = 3; f <= 12; ++f) {
+        const std::string name = dbc->getString(row, f);
+        if (!name.empty()) return dir.empty() ? name : dir + "\\" + name;
+    }
+    return {};
+}
+
+// A SoundAmbience or ZoneMusic row's sound for the time.
+std::string daySoundFile(pipeline::AssetManager& assets, const char* table, uint32_t id, uint32_t dayCol,
+                         uint32_t nightCol, bool isDay) {
+    if (id == 0) return {};
+    auto dbc = assets.loadDBCOptional(table);
+    const int32_t idx = dbc && dbc->getFieldCount() > nightCol ? dbc->findRecordById(id) : -1;
+    if (idx < 0) return {};
+    const auto row = static_cast<uint32_t>(idx);
+    return soundEntryFile(assets, screen_effect_audio::dayOrNight(dbc->getUInt32(row, dayCol),
+                                                                  dbc->getUInt32(row, nightCol), isDay));
+}
+
+}  // namespace
+
+bool AudioCoordinator::updateScreenEffectAudio(const ZoneAudioContext& ctx) {
+    namespace sea = screen_effect_audio;
+    const bool isDay = sea::isSoundDaytime(ctx.gameTimeHours);
+    ScreenEffectSounds& want = screenEffectSounds_;
+    if (ctx.assetManager &&
+        (want.ambienceId != ctx.screenEffectAmbienceId || want.zoneMusicId != ctx.screenEffectZoneMusicId ||
+         want.isDay != isDay)) {
+        want.ambienceId = ctx.screenEffectAmbienceId;
+        want.zoneMusicId = ctx.screenEffectZoneMusicId;
+        want.isDay = isDay;
+        want.ambience = daySoundFile(*ctx.assetManager, "SoundAmbience.dbc", want.ambienceId,
+                                     sea::kSoundAmbienceDayCol, sea::kSoundAmbienceNightCol, isDay);
+        want.music = daySoundFile(*ctx.assetManager, "ZoneMusic.dbc", want.zoneMusicId, sea::kZoneMusicDayCol,
+                                  sea::kZoneMusicNightCol, isDay);
+    }
+
+    // The ambience: a loop kept on the listener.
+    auto& engine = AudioEngine::instance();
+    if (want.ambience != screenEffectAmbiencePlaying_) {
+        if (screenEffectAmbienceHandle_ != 0) engine.stopSoundWithFade(screenEffectAmbienceHandle_, 1.0f);
+        screenEffectAmbienceHandle_ = 0;
+        screenEffectAmbiencePlaying_ = want.ambience;
+        if (!want.ambience.empty() && ctx.assetManager) {
+            const auto data = ctx.assetManager->readFileOptional(want.ambience);
+            const float volume = ambientSoundManager_ ? ambientSoundManager_->getVolumeScale() : 1.0f;
+            if (!data.empty()) screenEffectAmbienceHandle_ = engine.playSound3DLooping(data, ctx.cameraPosition, volume);
+        }
+    } else if (screenEffectAmbienceHandle_ != 0) {
+        engine.setSoundPosition(screenEffectAmbienceHandle_, ctx.cameraPosition);
+    }
+    if (ambientSoundManager_) ambientSoundManager_->setAmbienceOverridden(!screenEffectAmbiencePlaying_.empty());
+
+    // The music: at once, and again whenever it ends.
+    if (!musicManager_) return false;
+    if (!want.music.empty()) {
+        if (want.music != screenEffectMusicPlaying_ || (!musicManager_->isPlaying() && !musicManager_->isLoading())) {
+            playZoneMusic(want.music);
+            screenEffectMusicPlaying_ = want.music;
+        }
+        musicManager_->update(ctx.deltaTime);
+        return true;
+    }
+    if (!screenEffectMusicPlaying_.empty()) {
+        // The slot emptied: the zone's music again.
+        screenEffectMusicPlaying_.clear();
+        musicManager_->stopMusic();
+        musicSwitchCooldown_ = 0.0f;
+    }
+    return false;
+}
+
 void AudioCoordinator::updateZoneAudio(const ZoneAudioContext& ctx) {
     float deltaTime = ctx.deltaTime;
     if (musicSwitchCooldown_ > 0.0f) {
@@ -143,6 +228,9 @@ void AudioCoordinator::updateZoneAudio(const ZoneAudioContext& ctx) {
         ambientSoundManager_->setWeather(audioWeatherType);
         ambientSoundManager_->update(deltaTime, ctx.cameraPosition, ctx.insideWmo, ctx.isSwimming, isBlacksmith);
     }
+
+    // The screen effect's slot is above all the zone's.
+    if (updateScreenEffectAudio(ctx)) return;
 
     // ── Zone detection and music transitions ──
     if (!zm || !musicManager_ || !ctx.hasTile) return;

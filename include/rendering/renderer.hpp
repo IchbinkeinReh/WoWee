@@ -918,6 +918,8 @@ private:
     bool screenEffectRowsLoaded_ = false;
     screen_effect::State screenEffectState_;
     int screenEffectLightOverride_ = -1;  ///< the row's Light slot, -1 for none
+    uint32_t screenEffectAmbience_ = 0;   ///< the row's SoundAmbience, 0 for none
+    uint32_t screenEffectZoneMusic_ = 0;  ///< the row's ZoneMusic, 0 for none
     float screenEffectDrunk_ = 0.0f;      ///< 0x004f7290
     bool screenEffectHavePlayer_ = false;
     bool cameraInLiquid_ = false;         ///< 0x00780620, for the glow's wave

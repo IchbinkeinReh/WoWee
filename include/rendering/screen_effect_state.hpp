@@ -31,6 +31,8 @@ struct Row {
     Kind kind = Kind::Glow;
     int32_t params[4] = {0, 0, 0, 0};
     uint32_t lightOverride = 0xFFFFFFFFu;  ///< 0..7 a Light param slot, else none (0x007ecec0)
+    uint32_t soundAmbience = 0;  ///< +0x20, SoundAmbience.dbc (0x004c8fa0 -> 0x004c8c90, slot 10)
+    uint32_t zoneMusic = 0;      ///< +0x24, ZoneMusic.dbc (0x004c8fa0 -> 0x004c8d80, slot 10)
 };
 
 /// SPELL_AURA_SCREEN_EFFECT: the aura's EffectMiscValue names the row
