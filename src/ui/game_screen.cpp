@@ -1,5 +1,6 @@
 #include "ui/graphics_choices.hpp"
 #include "ui/game_screen.hpp"
+#include "game/ground_target.hpp"
 #include "ui/gamepad_controls.hpp"
 #include "core/gamepad.hpp"
 
@@ -73,6 +74,9 @@
 namespace {
     using namespace wowee::ui::colors;
     using namespace wowee::ui::helpers;
+    /// How far along the pointer's ray the ground is looked for while a
+    /// spell waits for a place.
+    constexpr float kGroundPickDistance = 300.0f;
     constexpr auto& kColorRed        = kRed;
     constexpr auto& kColorBrightGreen= kBrightGreen;
     constexpr auto& kColorYellow     = kYellow;
@@ -1681,6 +1685,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             st.holdingItem           = inventoryScreen.isHoldingItem() ||
                                        !frameXmlCursorItem().empty();
             st.casting               = gameHandler.isCasting();
+            st.spellTargeting        = gameHandler.isGroundTargeting();
             st.lootOpen              = gameHandler.isLootWindowOpen();
             st.gossipOpen            = gameHandler.isGossipWindowOpen();
             st.vendorOpen            = gameHandler.isVendorWindowOpen();
@@ -1714,6 +1719,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     settingsPanel_.showSettingsWindow = false;
                     break;
                 case EscapeAction::CancelCast:             gameHandler.cancelCast(); break;
+                case EscapeAction::StopTargeting:          gameHandler.cancelGroundTargeting(); break;
                 case EscapeAction::CloseLoot:              gameHandler.closeLoot(); break;
                 case EscapeAction::CloseGossip:            gameHandler.closeGossip(); break;
                 case EscapeAction::ReturnHeldItem:
@@ -2012,7 +2018,46 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
     // shown (0x00ac80a8, SetUIVisibility, 0x00517c20) or the unitHighlights
     // cvar is set. The interface is always shown here, so always.
     uint64_t highlightGuid = 0;
-    if (!io.WantCaptureMouse && !frameXmlOwnsMouse()) {
+    // A spell waiting for a place (0x004f66c0, each frame the pointer is
+    // over the world): the ground under the pointer, the circle there in the
+    // spell's area held to 20, or the small one where the place is out of
+    // reach, and the Cast or UnableCast cursor.
+    if (auto* renderer = services_.renderer) {
+        bool placed = false;
+        if (gameHandler.isGroundTargeting() && !io.WantCaptureMouse && !frameXmlOwnsMouse()) {
+            auto* camera = renderer->getCamera();
+            auto* window = services_.window;
+            if (camera && window) {
+                const glm::vec2 mousePos = input.getMousePosition();
+                const rendering::Ray ray = camera->screenToWorldRay(
+                    mousePos.x, mousePos.y, static_cast<float>(window->getWidth()),
+                    static_cast<float>(window->getHeight()));
+                const auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance);
+                const auto aim = gameHandler.aimGroundTarget(
+                    ground ? std::optional<glm::vec3>(core::coords::renderToCanonical(*ground)) : std::nullopt);
+                if (ground && aim) {
+                    namespace gt = game::ground_target;
+                    const auto where = static_cast<gt::Placement>(aim->placement);
+                    if (where != gt::Placement::TooFar) {
+                        renderer->setSpellTargetCircle(*ground, aim->circleRadius,
+                                                       where != gt::Placement::Acceptable);
+                    } else {
+                        renderer->clearSpellTargetCircle();
+                    }
+                    if (VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window,
+                                                            gt::cursorFor(where))) {
+                        drawCursorTexture(tex);
+                    }
+                    placed = true;
+                }
+            }
+        }
+        if (!placed) {
+            renderer->clearSpellTargetCircle();
+            if (gameHandler.isGroundTargeting()) gameHandler.aimGroundTarget(std::nullopt);
+        }
+    }
+    if (!io.WantCaptureMouse && !frameXmlOwnsMouse() && !gameHandler.isGroundTargeting()) {
         auto* renderer = services_.renderer;
         auto* camera = renderer ? renderer->getCamera() : nullptr;
         auto* window = services_.window;
@@ -2068,6 +2113,16 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 float screenH = static_cast<float>(window->getHeight());
 
                 rendering::Ray ray = camera->screenToWorldRay(leftClickPressPos_.x, leftClickPressPos_.y, screenW, screenH);
+
+                // With a spell waiting for a place, the click is that place:
+                // the ground under the pointer, whatever unit stands there
+                // (0x00527360 -> 0x0080c340).
+                if (gameHandler.isGroundTargeting()) {
+                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance)) {
+                        gameHandler.placeGroundTarget(core::coords::renderToCanonical(*ground));
+                    }
+                    return;
+                }
 
                 // Use the same authoritative position and forgiving click volume
                 // as right-click for a hooked bobber. Its tiny, partly submerged
@@ -2181,6 +2236,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             // Treated as a camera rotate - do not interact/attack.
             return;
         }
+        // A right click puts a spell waiting for a place down
+        // (TurnOrActionStop) and does nothing else.
+        if (gameHandler.cancelGroundTargeting()) return;
         // Fishing bobbers are tiny and partly submerged, so their model bounds can
         // miss a cursor ray that visibly lands on the float. Test the authoritative
         // water position first with a forgiving sphere and reel directly, before

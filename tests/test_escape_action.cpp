@@ -77,6 +77,7 @@ TEST_CASE("Each window closes itself when it is the only one open", "[escape]") 
     static const Case kCases[] = {
         {&EscapeState::settingsWindowShown,   EscapeAction::CloseSettingsWindow,     "settings"},
         {&EscapeState::casting,               EscapeAction::CancelCast,              "casting"},
+        {&EscapeState::spellTargeting,        EscapeAction::StopTargeting,           "targeting"},
         {&EscapeState::lootOpen,              EscapeAction::CloseLoot,               "loot"},
         {&EscapeState::gossipOpen,            EscapeAction::CloseGossip,             "gossip"},
         {&EscapeState::vendorOpen,            EscapeAction::CloseVendor,             "vendor"},
@@ -97,9 +98,9 @@ TEST_CASE("Each window closes itself when it is the only one open", "[escape]") 
         INFO("only open: " << c.what);
         CHECK(resolveEscape(s) == c.want);
     }
-    // Fifteen, and the count is asserted: a branch added without a case here
+    // Sixteen, and the count is asserted: a branch added without a case here
     // would be untested and would look tested.
-    CHECK(sizeof(kCases) / sizeof(kCases[0]) == 15u);
+    CHECK(sizeof(kCases) / sizeof(kCases[0]) == 16u);
 }
 
 TEST_CASE("This client's own window is closed before anything under it",

@@ -2755,3 +2755,7 @@ wowee_add_test(test_player_display_flags
 # Which units are named and plated, and the name cvars' defaults (game/unit_name_rules.hpp).
 wowee_add_test(test_unit_name_rules
     SOURCES test_unit_name_rules.cpp)
+
+# ── test_ground_target ───────────────────────────────────────
+# Casting at a place on the ground: packet, radius, range (game/ground_target.hpp).
+wowee_add_packet_test(test_ground_target)

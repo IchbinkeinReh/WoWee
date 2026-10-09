@@ -271,6 +271,16 @@ public:
     void setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec4& color);
     void clearSelectionCircle();
 
+    /// The circle of a spell waiting for a place (0x004f8a40): where, its
+    /// radius, and whether the place is out of the spell's reach.
+    void setSpellTargetCircle(const glm::vec3& pos, float radius, bool unacceptable);
+    void clearSpellTargetCircle();
+    /// The first terrain, building or doodad surface along a ray from the
+    /// camera, renderer coordinates - the ground a click on the world lands
+    /// on (CWorld's intersect, 0x004f66c0's place).
+    [[nodiscard]] std::optional<glm::vec3> pickGround(const glm::vec3& origin, const glm::vec3& dir,
+                                                      float maxDistance) const;
+
     // CPU timing stats (milliseconds, last frame).
     double getLastUpdateMs() const { return lastUpdateMs; }
     double getLastRenderMs() const { return lastRenderMs; }
@@ -413,6 +423,12 @@ private:
         glm::vec4 color{0.0f};
     };
     std::optional<SelectionCircle> selectionCircle_;
+    struct SpellTargetCircle {
+        glm::vec3 position{0.0f};
+        float radius = 0.0f;
+        bool unacceptable = false;
+    };
+    std::optional<SpellTargetCircle> spellTargetCircle_;
     audio::AudioCoordinator* audioCoordinator_ = nullptr;  // Owned by Application
     std::unique_ptr<AnimationController> animationController_;  // §4.2
     std::unique_ptr<game::ZoneManager> zoneManager;

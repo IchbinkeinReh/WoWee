@@ -10,6 +10,7 @@
 #include <array>
 #include <chrono>
 #include <functional>
+#include <optional>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -49,6 +50,30 @@ public:
 
     // --- Public API (delegated from GameHandler) ---
     void castSpell(uint32_t spellId, uint64_t targetGuid = 0);
+
+    // --- A spell waiting for a place on the ground (Spell_C.cpp) ---
+    /// The spell the cursor holds while it waits for a location, or 0
+    /// (0x00d3f4e4 with 0x00d3f4e0 & 0x60, 0x007fd750).
+    [[nodiscard]] uint32_t groundTargetSpellId() const { return groundTarget_.spellId; }
+    [[nodiscard]] bool isGroundTargeting() const { return groundTarget_.spellId != 0; }
+    /// The location still wanted: TARGET_FLAG_SOURCE_LOCATION, then
+    /// TARGET_FLAG_DEST_LOCATION.
+    [[nodiscard]] uint32_t groundTargetRequired() const { return groundTarget_.required; }
+    /// Put the spell down without casting it (SpellStopTargeting, 0x0080ac90's
+    /// clean-up). True when there was one.
+    bool cancelGroundTargeting();
+    /// A click on the world at this place, canonical: fills the location the
+    /// spell wants (0x0080c340) and casts once nothing more is wanted.
+    void placeGroundTarget(const glm::vec3& canonical);
+    /// The ground under the cursor this frame, canonical, or none - where a
+    /// click would land. Set by the world view, read by
+    /// CameraOrSelectOrMoveStop.
+    void setGroundTargetCursor(std::optional<glm::vec3> canonical) { groundTarget_.cursor = canonical; }
+    [[nodiscard]] std::optional<glm::vec3> groundTargetCursor() const { return groundTarget_.cursor; }
+    /// The circle's radius, and whether the place is in range, for the
+    /// cursor's place (0x008019c0, 0x00803ee0).
+    [[nodiscard]] float groundTargetSpellArea() const;
+    [[nodiscard]] int groundTargetPlacement(const glm::vec3& canonical) const;
 
     /// Spell.dbc EffectImplicitTargetA, or 0 when the spell is unknown. 21 means
     /// the spell has to be aimed at a friendly unit.
@@ -460,6 +485,16 @@ private:
     // whenever anything else is cast.
     std::unordered_map<uint32_t, float> spellCooldownTotals_;
     uint8_t castCount_ = 0;
+
+    struct GroundTarget {
+        uint32_t spellId = 0;
+        uint32_t required = 0;
+        glm::vec3 source{0.0f};
+        std::optional<glm::vec3> cursor;
+    };
+    GroundTarget groundTarget_;
+    /// Send the cast at the destination the targeting gathered.
+    void castAtLocation(uint32_t spellId, const glm::vec3& canonical);
     bool casting_ = false;
     bool castIsChannel_ = false;
     uint32_t currentCastSpellId_ = 0;

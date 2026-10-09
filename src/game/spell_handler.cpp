@@ -3,6 +3,8 @@
 #include "game/protocol_constants.hpp"
 #include "game/gather_spells.hpp"
 #include "game/spell_classification.hpp"
+#include "game/ground_target.hpp"
+#include "game/spell_target_kind.hpp"
 #include "game/pet_action.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -893,6 +895,30 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         }
     }
 
+    // A spell that wants a place on the ground (Spell.dbc Targets 0x20/0x40,
+    // 0x0080c790) is not sent: the cursor holds it until the world is
+    // clicked (0x0080c340) or it is put down (SpellStopTargeting). A second
+    // such spell replaces the first.
+    if (spellId != 0) {
+        loadSpellNameCache();
+        auto it = owner_.spellNameCacheRef().find(spellId);
+        if (it != owner_.spellNameCacheRef().end()) {
+            const uint32_t required = ground_target::requiredTargets(
+                it->second.targetFlags, it->second.implicitTargetsA[0], false);
+            if (ground_target::wantsLocation(required)) {
+                if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
+                groundTarget_ = GroundTarget{};
+                groundTarget_.spellId = spellId;
+                groundTarget_.required = required &
+                    (ground_target::kTargetFlagSourceLocation | ground_target::kTargetFlagDestLocation);
+                LOG_INFO("Ground targeting: spell ", spellId, " waits for a place (targets 0x",
+                         std::hex, it->second.targetFlags, std::dec, ")");
+                if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
+                return;
+            }
+        }
+    }
+
     if (casting_) {
         // Spell queue: if we're within 400ms of the cast completing (and not channeling),
         // store the spell so it fires automatically when the cast finishes.
@@ -1199,6 +1225,74 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     }
 
     // Optimistically start GCD immediately on cast
+    if (!isGCDActive()) {
+        gcdTotal_ = 1.5f;
+        gcdStartedAt_ = std::chrono::steady_clock::now();
+    }
+}
+
+bool SpellHandler::cancelGroundTargeting() {
+    if (groundTarget_.spellId == 0) return false;
+    LOG_INFO("Ground targeting: spell ", groundTarget_.spellId, " put down");
+    groundTarget_ = GroundTarget{};
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
+    return true;
+}
+
+void SpellHandler::placeGroundTarget(const glm::vec3& canonical) {
+    if (groundTarget_.spellId == 0) return;
+    // 0x0080c340: the source location first when both are wanted.
+    const uint32_t filled = ground_target::locationFilledByClick(groundTarget_.required);
+    if (filled == ground_target::kTargetFlagSourceLocation) groundTarget_.source = canonical;
+    groundTarget_.required &= ~filled;
+    if (groundTarget_.required != 0) return;
+    const uint32_t spellId = groundTarget_.spellId;
+    groundTarget_ = GroundTarget{};
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
+    castAtLocation(spellId, canonical);
+}
+
+float SpellHandler::groundTargetSpellArea() const {
+    if (groundTarget_.spellId == 0) return 0.0f;
+    loadSpellNameCache();
+    auto it = owner_.spellNameCacheRef().find(groundTarget_.spellId);
+    if (it == owner_.spellNameCacheRef().end()) return 0.0f;
+    // 0x008019c0: the first two effects, grown by the caster's level.
+    return ground_target::spellRadius(it->second.effectRadius, it->second.effectRadiusPerLevel,
+                                      owner_.getPlayerLevel());
+}
+
+int SpellHandler::groundTargetPlacement(const glm::vec3& canonical) const {
+    if (groundTarget_.spellId == 0) return static_cast<int>(ground_target::Placement::Unacceptable);
+    loadSpellNameCache();
+    auto it = owner_.spellNameCacheRef().find(groundTarget_.spellId);
+    if (it == owner_.spellNameCacheRef().end() || it->second.rangeMax[0] < 0.0f) {
+        return static_cast<int>(ground_target::Placement::Acceptable);
+    }
+    const auto& e = it->second;
+    // 0x00801650: the friendly range for a spell aimed at friends
+    // (0x007fe1b0 answering 1), else the hostile one. A place is no unit, so
+    // no combat reach is added (0x007ff480).
+    const int k = spellTargetKind(e.targetFlags, {e.implicitTargetsA[0], e.implicitTargetsA[1], e.implicitTargetsA[2]},
+                                  {e.implicitTargetsB[0], e.implicitTargetsB[1], e.implicitTargetsB[2]},
+                                  {e.effectAuraIds[0], e.effectAuraIds[1], e.effectAuraIds[2]}) == 1 ? 1 : 0;
+    const auto& me = owner_.movementInfoRef();
+    const glm::vec3 d = canonical - glm::vec3(me.x, me.y, me.z);
+    return static_cast<int>(ground_target::placement(glm::dot(d, d), e.rangeMin[k], e.rangeMax[k]));
+}
+
+void SpellHandler::castAtLocation(uint32_t spellId, const glm::vec3& canonical) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // Sent where the click landed, whatever the range: the client only paints
+    // the circle by it (0x00803ee0), and the server answers out of range.
+    auto packet = owner_.getPacketParsers()
+        ? owner_.getPacketParsers()->buildCastSpellAtLocation(spellId, canonical.x, canonical.y,
+                                                              canonical.z, ++castCount_)
+        : CastSpellPacket::buildDestination(spellId, canonical.x, canonical.y, canonical.z, ++castCount_);
+    owner_.getSocket()->send(packet);
+    LOG_INFO("Casting spell: ", spellId, " at (", canonical.x, ", ", canonical.y, ", ", canonical.z, ")");
+    if (owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT", {"player", "", std::to_string(spellId)});
     if (!isGCDActive()) {
         gcdTotal_ = 1.5f;
         gcdStartedAt_ = std::chrono::steady_clock::now();
@@ -3393,6 +3487,11 @@ void SpellHandler::loadSpellNameCache() const {
         spellL ? spellL->field("EffectImplicitTargetA") : 0xFFFFFFFF;
     const uint32_t implicitTargetBField =
         spellL ? spellL->tryField("EffectImplicitTargetB") : 0xFFFFFFFF;
+    // The three radius indices follow the three ImplicitTargetB columns in
+    // every layout (Spell.dbc 92-94 in WotLK, 88-90 in vanilla).
+    uint32_t radiusIndexField = spellL ? spellL->tryField("EffectRadiusIndex") : 0xFFFFFFFF;
+    if (radiusIndexField == 0xFFFFFFFF && implicitTargetBField != 0xFFFFFFFF)
+        radiusIndexField = implicitTargetBField + 3;
     const uint32_t durIdxField = spellL ? spellL->field("DurationIndex") : 0xFFFFFFFF;
     const uint32_t rangeIdxField = spellL ? spellL->field("RangeIndex") : 0xFFFFFFFF;
     const uint32_t targetAuraStateField = spellL ? spellL->field("TargetAuraState") : 0xFFFFFFFF;
@@ -3463,6 +3562,10 @@ void SpellHandler::loadSpellNameCache() const {
                 if (implicitTargetBField != 0xFFFFFFFF && implicitTargetBField + effect < fieldCount)
                     entry.implicitTargetsB[effect] = dbc->getUInt32(i, implicitTargetBField + effect);
             }
+            for (uint32_t effect = 0; effect < 3; ++effect) {
+                if (radiusIndexField != 0xFFFFFFFF && radiusIndexField + effect < fieldCount)
+                    entry.effectRadiusIndex[effect] = dbc->getUInt32(i, radiusIndexField + effect);
+            }
             const uint32_t effectFields[3] = {effect0Field, effect1Field, effect2Field};
             const uint32_t auraFields[3]   = {aura0Field, aura1Field, aura2Field};
             for (size_t effect = 0; effect < 3; ++effect) {
@@ -3480,8 +3583,10 @@ void SpellHandler::loadSpellNameCache() const {
             if (durIdxField != 0xFFFFFFFF)
                 entry.durationSec = static_cast<float>(dbc->getUInt32(i, durIdxField)); // store index temporarily
             // Range: read RangeIndex and resolve via SpellRange.dbc later
-            if (rangeIdxField != 0xFFFFFFFF)
-                entry.maxRange = static_cast<float>(dbc->getUInt32(i, rangeIdxField)); // store index temporarily
+            if (rangeIdxField != 0xFFFFFFFF) {
+                entry.rangeIndex = dbc->getUInt32(i, rangeIdxField);
+                entry.maxRange = static_cast<float>(entry.rangeIndex); // store index temporarily
+            }
             // SpellVisualID: references SpellVisual.dbc for cast/impact M2 effects
             if (spellVisualIdField != 0xFFFFFFFF && spellVisualIdField < dbc->getFieldCount())
                 entry.spellVisualId = dbc->getUInt32(i, spellVisualIdField);
@@ -3547,6 +3652,51 @@ void SpellHandler::loadSpellNameCache() const {
         if (entry.maxRange < 0.0f) continue; // no RangeIndex field in this layout
         auto it = rangeMap.find(static_cast<uint32_t>(entry.maxRange));
         entry.maxRange = (it != rangeMap.end()) ? it->second : -1.0f;
+    }
+    // Both ends of the range, hostile and friendly. TBC and WotLK keep the
+    // two apart (min hostile, min friendly, max hostile, max friendly);
+    // vanilla has one of each.
+    if (rangeDbc && rangeDbc->isLoaded()) {
+        struct Ends { float min[2]; float max[2]; };
+        std::unordered_map<uint32_t, Ends> ends;
+        const uint32_t n = rangeDbc->getFieldCount();
+        for (uint32_t ri = 0; ri < rangeDbc->getRecordCount(); ++ri) {
+            Ends e{};
+            if (n >= 5) {
+                e = {{rangeDbc->getFloat(ri, 1), rangeDbc->getFloat(ri, 2)},
+                     {rangeDbc->getFloat(ri, 3), rangeDbc->getFloat(ri, 4)}};
+            } else if (n >= 3) {
+                e = {{rangeDbc->getFloat(ri, 1), rangeDbc->getFloat(ri, 1)},
+                     {rangeDbc->getFloat(ri, 2), rangeDbc->getFloat(ri, 2)}};
+            } else {
+                continue;
+            }
+            ends[rangeDbc->getUInt32(ri, 0)] = e;
+        }
+        for (auto& [sid, entry] : owner_.spellNameCacheRef()) {
+            auto it = ends.find(entry.rangeIndex);
+            if (it == ends.end()) continue;
+            for (int k = 0; k < 2; ++k) {
+                entry.rangeMin[k] = it->second.min[k];
+                entry.rangeMax[k] = it->second.max[k];
+            }
+        }
+    }
+    // SpellRadius.dbc: ID, Radius, RadiusPerLevel, RadiusMax.
+    if (auto radiusDbc = am->loadDBC("SpellRadius.dbc"); radiusDbc && radiusDbc->isLoaded() &&
+                                                         radiusDbc->getFieldCount() >= 3) {
+        std::unordered_map<uint32_t, std::pair<float, float>> radii;
+        for (uint32_t ri = 0; ri < radiusDbc->getRecordCount(); ++ri) {
+            radii[radiusDbc->getUInt32(ri, 0)] = {radiusDbc->getFloat(ri, 1), radiusDbc->getFloat(ri, 2)};
+        }
+        for (auto& [sid, entry] : owner_.spellNameCacheRef()) {
+            for (int k = 0; k < 3; ++k) {
+                auto it = radii.find(entry.effectRadiusIndex[k]);
+                if (it == radii.end()) continue;
+                entry.effectRadius[k] = it->second.first;
+                entry.effectRadiusPerLevel[k] = it->second.second;
+            }
+        }
     }
     LOG_INFO("Trainer: Loaded ", owner_.spellNameCacheRef().size(), " spell names from Spell.dbc");
 }

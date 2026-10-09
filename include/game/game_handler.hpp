@@ -1071,6 +1071,23 @@ public:
 
     void castSpell(uint32_t spellId, uint64_t targetGuid = 0);
     void cancelCast();
+
+    // A spell held on the cursor until a place on the ground is clicked
+    // (SpellHandler; Spell_C.cpp 0x0080c790, 0x0080c340).
+    [[nodiscard]] bool isGroundTargeting() const;
+    [[nodiscard]] uint32_t groundTargetSpellId() const;
+    bool cancelGroundTargeting();
+    void placeGroundTarget(const glm::vec3& canonical);
+    [[nodiscard]] std::optional<glm::vec3> groundTargetCursor() const;
+    /// The pointer's place on the ground this frame (canonical; none when it
+    /// is over no ground), remembered for CameraOrSelectOrMoveStop. Answers
+    /// what the place is to the spell (0x00803ee0: 0 acceptable, 1 not, 2 too
+    /// far for any circle) and the circle's radius there (0x004f66c0).
+    struct GroundTargetAim {
+        int placement = 1;
+        float circleRadius = 0.0f;
+    };
+    std::optional<GroundTargetAim> aimGroundTarget(std::optional<glm::vec3> canonical);
     void cancelAura(uint32_t spellId);
     void dismissPet();
     void renamePet(const std::string& newName);
@@ -4037,6 +4054,20 @@ public:
         /// Targets say what the spell is aimed at (0x007fe1b0).
         uint32_t implicitTargetsA[3] = {0, 0, 0};
         uint32_t implicitTargetsB[3] = {0, 0, 0};
+        /// Spell.dbc EffectRadiusIndex resolved against SpellRadius.dbc: each
+        /// effect's radius and its growth per caster level (0x008019c0 reads
+        /// the first two).
+        float effectRadius[3] = {0.0f, 0.0f, 0.0f};
+        float effectRadiusPerLevel[3] = {0.0f, 0.0f, 0.0f};
+        /// SpellRange.dbc's minimum and maximum, hostile [0] and friendly [1]
+        /// (0x007ff480 picks by what the spell is aimed at). Negative when
+        /// unknown.
+        float rangeMin[2] = {-1.0f, -1.0f};
+        float rangeMax[2] = {-1.0f, -1.0f};
+        /// Spell.dbc RangeIndex, kept for the two above.
+        uint32_t rangeIndex = 0;
+        /// Spell.dbc EffectRadiusIndex, kept for the radius above.
+        uint32_t effectRadiusIndex[3] = {0, 0, 0};
         float durationSec = 0.0f;
         uint32_t spellVisualId = 0;
         // Spell.dbc Speed: yards per second the spell's missile flies at, the

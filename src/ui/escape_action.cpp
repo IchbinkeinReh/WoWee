@@ -24,6 +24,7 @@ EscapeAction resolveEscape(const EscapeState& s) {
     // what the key is most often for, and a window that happens to be open
     // should not eat it.
     if (s.casting)                 return EscapeAction::CancelCast;
+    if (s.spellTargeting)          return EscapeAction::StopTargeting;
     // Then everything the server believes is open, each closed through the
     // client so the closing packet is sent.
     if (s.lootOpen)                return EscapeAction::CloseLoot;
@@ -62,6 +63,7 @@ const char* escapeActionName(EscapeAction action) {
         case EscapeAction::ReturnHeldItem:          return "put the held item back";
         case EscapeAction::CloseSettingsWindow:     return "close the settings window";
         case EscapeAction::CancelCast:              return "cancel the cast";
+        case EscapeAction::StopTargeting:           return "put the spell down";
         case EscapeAction::CloseLoot:               return "close loot";
         case EscapeAction::CloseGossip:             return "close gossip";
         case EscapeAction::CloseVendor:             return "close the vendor";

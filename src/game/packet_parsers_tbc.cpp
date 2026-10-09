@@ -612,6 +612,20 @@ network::Packet TbcPacketParsers::buildCastSpell(uint32_t spellId, uint64_t targ
     return packet;
 }
 
+// TBC 2.4.3: spellId + castCount, then the targets - a destination is the
+// three floats with no transport guid before them (WotLK added that).
+network::Packet TbcPacketParsers::buildCastSpellAtLocation(uint32_t spellId, float x, float y, float z,
+                                                           uint8_t castCount) {
+    network::Packet packet(wireOpcode(LogicalOpcode::CMSG_CAST_SPELL));
+    packet.writeUInt32(spellId);
+    packet.writeUInt8(castCount);
+    packet.writeUInt32(0x40); // TARGET_FLAG_DEST_LOCATION
+    packet.writeFloat(x);
+    packet.writeFloat(y);
+    packet.writeFloat(z);
+    return packet;
+}
+
 network::Packet TbcPacketParsers::buildCastGameObjectSpell(uint32_t spellId, uint64_t targetGuid, uint8_t castCount) {
     network::Packet packet(wireOpcode(LogicalOpcode::CMSG_CAST_SPELL));
     packet.writeUInt32(spellId);

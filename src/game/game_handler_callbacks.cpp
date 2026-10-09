@@ -1,3 +1,4 @@
+#include "game/ground_target.hpp"
 #include "rendering/mount_transition.hpp"
 #include "game/game_handler.hpp"
 #include "game/reputation_standing.hpp"
@@ -2387,6 +2388,29 @@ void GameHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
 void GameHandler::cancelCast() {
     if (spellHandler_) spellHandler_->cancelCast();
 }
+
+bool GameHandler::isGroundTargeting() const { return spellHandler_ && spellHandler_->isGroundTargeting(); }
+uint32_t GameHandler::groundTargetSpellId() const {
+    return spellHandler_ ? spellHandler_->groundTargetSpellId() : 0;
+}
+bool GameHandler::cancelGroundTargeting() { return spellHandler_ && spellHandler_->cancelGroundTargeting(); }
+void GameHandler::placeGroundTarget(const glm::vec3& canonical) {
+    if (spellHandler_) spellHandler_->placeGroundTarget(canonical);
+}
+std::optional<GameHandler::GroundTargetAim> GameHandler::aimGroundTarget(std::optional<glm::vec3> canonical) {
+    if (!spellHandler_) return std::nullopt;
+    spellHandler_->setGroundTargetCursor(canonical);
+    if (!canonical || !spellHandler_->isGroundTargeting()) return std::nullopt;
+    GroundTargetAim aim;
+    aim.placement = spellHandler_->groundTargetPlacement(*canonical);
+    aim.circleRadius = ground_target::circleRadius(static_cast<ground_target::Placement>(aim.placement),
+                                                   spellHandler_->groundTargetSpellArea());
+    return aim;
+}
+std::optional<glm::vec3> GameHandler::groundTargetCursor() const {
+    return spellHandler_ ? spellHandler_->groundTargetCursor() : std::nullopt;
+}
+
 
 void GameHandler::startCraftQueue(uint32_t spellId, int count) {
     if (spellHandler_) spellHandler_->startCraftQueue(spellId, count);

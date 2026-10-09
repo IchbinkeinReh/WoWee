@@ -53,6 +53,15 @@ public:
     /// world is down (0x004f6f90 from CGWorldFrame::Render).
     void renderSelection(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
 
+    /// Gather the ground under the circle of a spell waiting for a place
+    /// (0x004f8a40), `unacceptable` choosing Spell-Shadow-Unacceptable. After
+    /// prepare and on the same thread; nothing when `circle` is empty.
+    void prepareSpellTarget(const std::optional<blob_shadow::Projection>& circle, bool unacceptable,
+                            const glm::mat4& viewProj, const TerrainManager* terrain,
+                            const WMORenderer* wmo, const M2Renderer* m2);
+    /// Draw it, once the world is down, as the target's circle is.
+    void renderSpellTarget(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
+
 private:
     struct Push {
         glm::vec4 uRow;
@@ -68,6 +77,7 @@ private:
 
     bool createPipeline();
     bool createSelectionPipeline();
+    bool createSpellTargetPipeline();
     /// Gather the ground in a projection's box into the frame's buffer.
     std::optional<Draw> gather(const blob_shadow::Projection& projection, const TerrainManager* terrain,
                                const WMORenderer* wmo, const M2Renderer* m2, glm::vec3* dst);
@@ -85,6 +95,13 @@ private:
     VkDescriptorSet selectionSet_ = VK_NULL_HANDLE;
     VkPipeline selectionPipeline_ = VK_NULL_HANDLE;
     std::optional<Draw> selectionDraw_;
+    // The spell's circle: its two textures, their sets, and the pipeline
+    // (blend mode 2).
+    VkTexture spellTargetTextures_[2];
+    VkDescriptorSet spellTargetSets_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkPipeline spellTargetPipeline_ = VK_NULL_HANDLE;
+    std::optional<Draw> spellTargetDraw_;
+    int spellTargetTexture_ = 0;
 
     static constexpr uint32_t kMaxVertices = 0xC000 * 4;
     std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> vertexBuffer_{};

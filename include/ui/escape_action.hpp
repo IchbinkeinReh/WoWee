@@ -30,6 +30,9 @@ enum class EscapeAction {
     ReturnHeldItem,
     CloseSettingsWindow,
     CancelCast,
+    /// Put down a spell waiting for a place on the ground (ToggleGameMenu's
+    /// SpellStopTargeting, after SpellStopCasting).
+    StopTargeting,
     CloseLoot,
     CloseGossip,
     CloseVendor,
@@ -83,6 +86,8 @@ struct EscapeState {
     // the client so the closing packet is sent - hiding the frame instead
     // would leave the server believing the window is still open.
     bool casting = false;
+    /// A spell is on the cursor waiting for a place.
+    bool spellTargeting = false;
     bool lootOpen = false;
     bool gossipOpen = false;
     bool vendorOpen = false;

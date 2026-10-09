@@ -1215,16 +1215,39 @@ void registerSpellLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"SpellStopTargeting", [](lua_State* L) -> int {
-            // No AoE reticle, but the item cursor a stone or an oil arms is a
-            // kind of targeting and escape has to put it down.
+            // Puts down whatever the cursor holds for a target: a spell
+            // waiting for a place on the ground, or the item cursor a stone
+            // or an oil arms.
             auto* gh = getGameHandler(L);
+            if (gh) gh->cancelGroundTargeting();
             if (gh && gh->isAwaitingItemTarget()) gh->cancelItemTargeting();
             return 0;
         }},
                 {"SpellIsTargeting", [](lua_State* L) -> int {
+            // 0x00d3f4e4: a spell is on the cursor waiting for its target.
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && gh->isAwaitingItemTarget());
+            lua_pushboolean(L, gh && (gh->isGroundTargeting() || gh->isAwaitingItemTarget()));
             return 1;
+        }},
+                // The world clicks the left and right buttons are bound to
+                // (CAMERAORSELECTORMOVE, TURNORACTION). The mouse itself is
+                // read by the client; these are what a macro or an addon calls.
+                // Releasing the left one with a spell waiting for a place casts
+                // it at the ground under the cursor (0x00527360 -> 0x0080c340);
+                // releasing the right one puts the spell down.
+                {"CameraOrSelectOrMoveStart", [](lua_State*) -> int { return 0; }},
+                {"CameraOrSelectOrMoveStop", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (gh && gh->isGroundTargeting()) {
+                if (auto at = gh->groundTargetCursor()) gh->placeGroundTarget(*at);
+            }
+            return 0;
+        }},
+                {"TurnOrActionStart", [](lua_State*) -> int { return 0; }},
+                {"TurnOrActionStop", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (gh) gh->cancelGroundTargeting();
+            return 0;
         }},
                 {"IsSpellInRange",    lua_IsSpellInRange},
                 {"UnitBuff",          lua_UnitBuff},

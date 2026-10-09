@@ -57,6 +57,7 @@
 #include "rendering/fishing_line.hpp"
 #include "rendering/blob_shadow_renderer.hpp"
 #include "rendering/selection_circle.hpp"
+#include "rendering/spell_target_circle.hpp"
 #include "game/game_handler.hpp"
 #include "pipeline/m2_loader.hpp"
 #include <algorithm>
@@ -2669,6 +2670,14 @@ void Renderer::update(float deltaTime) {
         blobShadowRenderer->prepareSelection(circle, selectionCircle_ ? selectionCircle_->color : glm::vec4(0.0f),
                                              camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
                                              terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
+        // A spell's circle on the place under the cursor (0x004f8a40).
+        std::optional<blob_shadow::Projection> spellCircle;
+        if (spellTargetCircle_) {
+            spellCircle = spell_target_circle::project(spellTargetCircle_->position, spellTargetCircle_->radius);
+        }
+        blobShadowRenderer->prepareSpellTarget(spellCircle, spellTargetCircle_ && spellTargetCircle_->unacceptable,
+                                               camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
+                                               terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
     }
     { WOWEE_PROFILE_SCOPE("footsteps", Cpu); if (animationController_) animationController_->updateFootsteps(deltaTime); }
 
@@ -2780,6 +2789,75 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
 
 void Renderer::setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec4& color) {
     selectionCircle_ = SelectionCircle{pos, radius, color};
+}
+
+void Renderer::setSpellTargetCircle(const glm::vec3& pos, float radius, bool unacceptable) {
+    spellTargetCircle_ = SpellTargetCircle{pos, radius, unacceptable};
+}
+
+void Renderer::clearSpellTargetCircle() {
+    spellTargetCircle_.reset();
+}
+
+std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm::vec3& dir,
+                                              float maxDistance) const {
+    const glm::vec3 d = glm::normalize(dir);
+    float best = maxDistance;
+    bool hit = false;
+    // Buildings and doodads, by their collision triangles, whatever the
+    // collision focus around the player.
+    if (wmoRenderer) {
+        const float t = wmoRenderer->raycastBoundingBoxes(origin, d, best, true);
+        if (t < best) { best = t; hit = true; }
+    }
+    // The terrain, marched in half-yard steps and the crossing halved down.
+    if (terrainManager) {
+        constexpr float kStep = 0.5f;
+        auto below = [&](float t) {
+            const glm::vec3 p = origin + d * t;
+            const auto h = terrainManager->getHeightAt(p.x, p.y);
+            return h && p.z <= *h;
+        };
+        float prev = 0.0f;
+        for (float t = kStep; t <= best; t += kStep) {
+            if (below(t)) {
+                float lo = prev, hi = t;
+                for (int i = 0; i < 16; ++i) {
+                    const float mid = 0.5f * (lo + hi);
+                    (below(mid) ? hi : lo) = mid;
+                }
+                if (hi < best) { best = hi; hit = true; }
+                break;
+            }
+            prev = t;
+        }
+    }
+    // Doodads by the upward faces of their collision meshes along the ray.
+    if (m2Renderer) {
+        const glm::vec3 end = origin + d * best;
+        std::vector<glm::vec3> tris;
+        m2Renderer->gatherBlobShadowGround(glm::min(origin, end) - glm::vec3(0.5f),
+                                           glm::max(origin, end) + glm::vec3(0.5f), tris);
+        for (size_t i = 0; i + 2 < tris.size(); i += 3) {
+            // Moller-Trumbore, both faces.
+            const glm::vec3 e1 = tris[i + 1] - tris[i];
+            const glm::vec3 e2 = tris[i + 2] - tris[i];
+            const glm::vec3 pv = glm::cross(d, e2);
+            const float det = glm::dot(e1, pv);
+            if (std::abs(det) < 1e-8f) continue;
+            const float inv = 1.0f / det;
+            const glm::vec3 tv = origin - tris[i];
+            const float u = glm::dot(tv, pv) * inv;
+            if (u < 0.0f || u > 1.0f) continue;
+            const glm::vec3 qv = glm::cross(tv, e1);
+            const float v = glm::dot(d, qv) * inv;
+            if (v < 0.0f || u + v > 1.0f) continue;
+            const float t = glm::dot(e2, qv) * inv;
+            if (t > 0.0f && t < best) { best = t; hit = true; }
+        }
+    }
+    if (!hit) return std::nullopt;
+    return origin + d * best;
 }
 
 void Renderer::clearSelectionCircle() {
@@ -3557,6 +3635,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             // On the finished world, depth tested (0x004f6f90 late in
             // CGWorldFrame::Render); queued after the world's passes below.
             if (blobShadowRenderer && camera) blobShadowRenderer->renderSelection(cmd, perFrameSet);
+            if (blobShadowRenderer && camera) blobShadowRenderer->renderSpellTarget(cmd, perFrameSet);
             sceneMark(cmd, kMarkSelection, "selection circle");
             vkEndCommandBuffer(cmd);
         }
@@ -3753,6 +3832,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         sceneMark(currentCmd, kMarkWorldEffects, "weather, dust, footprints, quest markers");
         // The circle under the target, on the finished world (0x004f6f90).
         if (blobShadowRenderer && camera) blobShadowRenderer->renderSelection(currentCmd, perFrameSet);
+        if (blobShadowRenderer && camera) blobShadowRenderer->renderSpellTarget(currentCmd, perFrameSet);
         sceneMark(currentCmd, kMarkSelection, "selection circle");
     }
 

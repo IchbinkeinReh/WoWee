@@ -480,7 +480,8 @@ public:
      * @param maxDistance Maximum ray distance to check
      * @return Distance to first intersection, or maxDistance if no hit
      */
-    float raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;
+    float raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
+                               bool ignoreCollisionFocus = false) const;
 
     /**
      * Limit expensive collision/raycast queries to objects near a focus point.
