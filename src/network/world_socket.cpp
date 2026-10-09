@@ -684,20 +684,30 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
 
         // Decrypt header bytes in-place if encryption is enabled
         // Only decrypt bytes we haven't already decrypted
-        if (encryptionEnabled && localHeaderBytesDecrypted < wire::kServerHeaderBytes) {
+        auto decryptHeaderUpTo = [&](size_t headerBytes) {
+            if (!encryptionEnabled || localHeaderBytesDecrypted >= headerBytes) return;
             uint8_t* stillEncrypted = &receiveBuffer[parseOffset + localHeaderBytesDecrypted];
-            const size_t toDecrypt = wire::kServerHeaderBytes - localHeaderBytesDecrypted;
+            const size_t toDecrypt = headerBytes - localHeaderBytesDecrypted;
             if (useVanillaCrypt) {
                 vanillaCrypt.decrypt(stillEncrypted, toDecrypt);
             } else {
                 decryptCipher.process(stillEncrypted, toDecrypt);
             }
-            localHeaderBytesDecrypted = wire::kServerHeaderBytes;
+            localHeaderBytesDecrypted = headerBytes;
+        };
+        decryptHeaderUpTo(wire::kServerHeaderBytes);
+
+        // A large packet's header is a byte longer; its first byte says so.
+        // Wait for that byte the way a short payload is waited for - the four
+        // already decrypted stay so in the buffer.
+        if (wire::isLargeServerHeader(receiveBuffer[parseOffset])) {
+            if ((receiveBuffer.size() - parseOffset) < wire::kLargeServerHeaderBytes) break;
+            decryptHeaderUpTo(wire::kLargeServerHeaderBytes);
         }
 
         // Parse header (now decrypted in-place). The size counts the opcode.
-        const wire::ServerHeader header = wire::decodeServerHeader(receiveBuffer, parseOffset);
-        const uint16_t size = header.size;
+        const wire::ServerHeaderAny header = wire::decodeServerHeaderAny(receiveBuffer, parseOffset);
+        const uint32_t size = header.size;
         const uint16_t opcode = header.opcode;
         if (size < wire::kServerOpcodeBytes) {
             LOG_ERROR("World packet framing desync: invalid size=", size,
@@ -710,7 +720,9 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
             closeSocketNoJoin();
             return;
         }
-        constexpr uint16_t kMaxWorldPacketSize = 0x8000;  // 32KB - allows large guild rosters, auction lists
+        // A short header tops out at 0x7FFF by construction; a large one can
+        // say up to 8 MB, more than any packet a server sends.
+        constexpr uint32_t kMaxWorldPacketSize = 0x400000;
         if (size > kMaxWorldPacketSize) {
             LOG_ERROR("World packet framing desync: oversized packet size=", size,
                       " rawHdr=", std::hex,
@@ -723,9 +735,9 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
             return;
         }
 
-        const uint16_t payloadLen = static_cast<uint16_t>(size - wire::kServerOpcodeBytes);
-        const size_t totalSize = wire::kServerHeaderBytes + payloadLen;
-        const size_t payloadStart = parseOffset + wire::kServerHeaderBytes;
+        const size_t payloadLen = size - wire::kServerOpcodeBytes;
+        const size_t totalSize = header.headerBytes + payloadLen;
+        const size_t payloadStart = parseOffset + header.headerBytes;
 
         if (headerTracePacketsLeft > 0) {
             LOG_INFO("WS HDR TRACE raw=",
@@ -752,7 +764,7 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
                      " buffered=", (receiveBuffer.size() - parseOffset),
                      " enc=", encryptionEnabled ? "yes" : "no");
         }
-        recordRecentPacket(false, opcode, payloadLen);
+        recordRecentPacket(false, opcode, static_cast<uint16_t>(std::min<size_t>(payloadLen, 0xFFFF)));
         const auto traceNow = std::chrono::steady_clock::now();
         if (packetTraceUntil_ > traceNow) {
             const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(

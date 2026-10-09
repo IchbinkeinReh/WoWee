@@ -18,6 +18,23 @@ TEST_CASE("a server header is a big-endian size and a little-endian opcode", "[w
     CHECK(wire::kServerHeaderBytes == 4);
 }
 
+TEST_CASE("a server header with 0x80 in its first byte has a 24-bit size", "[wire_format]") {
+    // 0x8000 + 0x9F bytes of opcode and payload, opcode 0x00A9 (SMSG_UPDATE_OBJECT)
+    const std::vector<uint8_t> large = {0x80, 0x80, 0x9F, 0xA9, 0x00};
+    const wire::ServerHeaderAny header = wire::decodeServerHeaderAny(large);
+    CHECK(header.size == 0x809Fu);
+    CHECK(header.opcode == 0x00A9);
+    CHECK(header.headerBytes == wire::kLargeServerHeaderBytes);
+    CHECK(wire::kLargeServerHeaderBytes == 5);
+
+    // Without the flag it is the four-byte header it always was.
+    const std::vector<uint8_t> small = {0x7F, 0xFF, 0xA9, 0x00};
+    const wire::ServerHeaderAny smallHeader = wire::decodeServerHeaderAny(small);
+    CHECK(smallHeader.size == 0x7FFFu);
+    CHECK(smallHeader.opcode == 0x00A9);
+    CHECK(smallHeader.headerBytes == wire::kServerHeaderBytes);
+}
+
 TEST_CASE("a client header counts its four opcode bytes in the size", "[wire_format]") {
     // What WorldSocket::send wrote byte by byte before the header had a name.
     const uint16_t opcode = 0x1ED;  // CMSG_AUTH_SESSION

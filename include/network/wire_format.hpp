@@ -62,6 +62,41 @@ struct ServerHeader {
             .opcode = loadLE16(bytes, offset + kSizeFieldBytes)};
 }
 
+// A server packet whose opcode and payload pass 0x7FFF bytes - a crowded
+// SMSG_UPDATE_OBJECT, a long guild roster - gets one more size byte: the size
+// is then 24 bits big-endian with 0x80 set in its first byte, and the header
+// is five bytes. The flag is readable from the first decrypted byte, which is
+// how the receiver knows to decrypt one byte more before the opcode.
+inline constexpr size_t kLargeSizeFieldBytes = 3;
+inline constexpr size_t kLargeServerHeaderBytes = kLargeSizeFieldBytes + kServerOpcodeBytes;
+inline constexpr uint8_t kLargeSizeFlag = 0x80;
+
+[[nodiscard]] inline bool isLargeServerHeader(uint8_t firstHeaderByte) {
+    return (firstHeaderByte & kLargeSizeFlag) != 0;
+}
+
+/// A server header in either form, decoded once its bytes are decrypted.
+struct ServerHeaderAny {
+    uint32_t size = 0;          ///< opcode + payload bytes
+    uint16_t opcode = 0;
+    size_t headerBytes = kServerHeaderBytes;
+};
+
+/// The header at `offset`: kServerHeaderBytes, or kLargeServerHeaderBytes when
+/// the first byte carries kLargeSizeFlag, must be there.
+[[nodiscard]] inline ServerHeaderAny decodeServerHeaderAny(std::span<const uint8_t> bytes, size_t offset = 0) {
+    if (!isLargeServerHeader(bytes[offset])) {
+        const ServerHeader small = decodeServerHeader(bytes, offset);
+        return {.size = small.size, .opcode = small.opcode, .headerBytes = kServerHeaderBytes};
+    }
+    const uint32_t size = (static_cast<uint32_t>(bytes[offset] & ~kLargeSizeFlag) << 16) |
+                          (static_cast<uint32_t>(bytes[offset + 1]) << 8) |
+                          static_cast<uint32_t>(bytes[offset + 2]);
+    return {.size = size,
+            .opcode = loadLE16(bytes, offset + kLargeSizeFieldBytes),
+            .headerBytes = kLargeServerHeaderBytes};
+}
+
 /// The header that goes in front of a client packet's payload, in the clear.
 [[nodiscard]] inline std::array<uint8_t, kClientHeaderBytes> encodeClientHeader(uint16_t opcode,
                                                                                uint16_t payloadLen) {
