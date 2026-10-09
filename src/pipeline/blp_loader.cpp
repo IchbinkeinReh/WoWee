@@ -9,6 +9,16 @@
 namespace wowee {
 namespace pipeline {
 
+namespace {
+
+// A DXT block covers 4x4 texels. DXT1 is the eight-byte colour half alone;
+// DXT3 and DXT5 put eight bytes of alpha ahead of the same colour half.
+constexpr size_t kDxt1BlockBytes = 8;
+constexpr size_t kDxt35BlockBytes = 16;
+constexpr size_t kDxtColorHalfOffset = 8;  // in a DXT3/DXT5 block
+
+}  // namespace
+
 bool BLPImage::hasTransparency() const {
     if (!isBlockCompressed()) {
         for (size_t i = 3; i < data.size(); i += 4) {
@@ -388,8 +398,8 @@ BLPImage BLPLoader::loadBLP2(std::span<const uint8_t> data, bool keepCompressed)
                             image.mipmaps.size(), " level(s)");
                 break;
             }
-            const auto* first = data.data() + levelOffset;
-            image.mipmaps.emplace_back(first, first + levelSize);
+            const std::span<const uint8_t> levelData = data.subspan(levelOffset, levelSize);
+            image.mipmaps.emplace_back(levelData.begin(), levelData.end());
             if (levelW == 1 && levelH == 1) break;
             levelW = std::max(1u, levelW / 2);
             levelH = std::max(1u, levelH / 2);
@@ -449,8 +459,8 @@ void BLPLoader::decompressDXT1(std::span<const uint8_t> src, uint8_t* dst, int w
 
     for (int by = 0; by < blockHeight; by++) {
         for (int bx = 0; bx < blockWidth; bx++) {
-            const size_t blockOffset = static_cast<size_t>(by * blockWidth + bx) * 8;
-            if (blockOffset + 8 > src.size()) continue;
+            const size_t blockOffset = static_cast<size_t>(by * blockWidth + bx) * kDxt1BlockBytes;
+            if (blockOffset + kDxt1BlockBytes > src.size()) continue;
             const uint8_t* block = src.data() + blockOffset;
 
             // DXT1 reads the endpoint order as a mode flag, which is how a
@@ -516,8 +526,8 @@ void BLPLoader::decompressDXT3(std::span<const uint8_t> src, uint8_t* dst, int w
 
     for (int by = 0; by < blockHeight; by++) {
         for (int bx = 0; bx < blockWidth; bx++) {
-            const size_t blockOffset = static_cast<size_t>(by * blockWidth + bx) * 16;
-            if (blockOffset + 16 > src.size()) continue;
+            const size_t blockOffset = static_cast<size_t>(by * blockWidth + bx) * kDxt35BlockBytes;
+            if (blockOffset + kDxt35BlockBytes > src.size()) continue;
             const uint8_t* block = src.data() + blockOffset;
 
             // First 8 bytes: 4-bit alpha values
@@ -530,7 +540,7 @@ void BLPLoader::decompressDXT3(std::span<const uint8_t> src, uint8_t* dst, int w
             // Alpha is carried separately here, so the endpoint order is not a
             // mode flag and there is no transparent index.
             const DxtColorBlock colors =
-                decodeDxtColorBlock(block + 8, /*allowPunchThrough=*/false);
+                decodeDxtColorBlock(block + kDxtColorHalfOffset, /*allowPunchThrough=*/false);
 
             // Four bits a pixel, scaled from [0..15] to [0..255].
             writeBlockPixels(colors, dst, width, height, bx, by,
@@ -549,8 +559,8 @@ void BLPLoader::decompressDXT5(std::span<const uint8_t> src, uint8_t* dst, int w
 
     for (int by = 0; by < blockHeight; by++) {
         for (int bx = 0; bx < blockWidth; bx++) {
-            const size_t blockOffset = static_cast<size_t>(by * blockWidth + bx) * 16;
-            if (blockOffset + 16 > src.size()) continue;
+            const size_t blockOffset = static_cast<size_t>(by * blockWidth + bx) * kDxt35BlockBytes;
+            if (blockOffset + kDxt35BlockBytes > src.size()) continue;
             const uint8_t* block = src.data() + blockOffset;
 
             // Alpha endpoints
@@ -587,7 +597,7 @@ void BLPLoader::decompressDXT5(std::span<const uint8_t> src, uint8_t* dst, int w
             // Alpha is carried separately here, so the endpoint order is not a
             // mode flag and there is no transparent index.
             const DxtColorBlock colors =
-                decodeDxtColorBlock(block + 8, /*allowPunchThrough=*/false);
+                decodeDxtColorBlock(block + kDxtColorHalfOffset, /*allowPunchThrough=*/false);
 
             // A three-bit index into the eight-entry ramp built above.
             writeBlockPixels(colors, dst, width, height, bx, by,

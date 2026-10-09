@@ -115,6 +115,194 @@ static_assert(sizeof(M2Header) == 304,
               "M2Header is read straight from the file: 304 bytes, no padding");
 static_assert(offsetof(M2Header, vertexBox) == 0xa0,
               "the vertex box the client sizes a doodad by sits at +0xa0 (0x007bdb10)");
+static_assert(offsetof(M2Header, nBones) == 0x2c,
+              "magic through the animation lookup is the prefix every version shares");
+
+// Vanilla and TBC header (version < 264): the WotLK header with three more
+// fields in it, which shift everything after them. WotLK dropped the
+// playable animation lookup, moved the skins out to .skin files (keeping only
+// their count) and dropped the array ahead of the render flags.
+struct M2HeaderVanilla {
+    char magic[4];              // 'MD20'
+    uint32_t version;
+    uint32_t nameLength;
+    uint32_t nameOffset;
+    uint32_t globalFlags;
+
+    uint32_t nGlobalSequences;
+    uint32_t ofsGlobalSequences;
+    uint32_t nAnimations;
+    uint32_t ofsAnimations;
+    uint32_t nAnimationLookup;
+    uint32_t ofsAnimationLookup;
+    uint32_t nPlayableAnimLookup;   // not in WotLK; not read
+    uint32_t ofsPlayableAnimLookup;
+
+    uint32_t nBones;
+    uint32_t ofsBones;
+    uint32_t nKeyBoneLookup;
+    uint32_t ofsKeyBoneLookup;
+
+    uint32_t nVertices;
+    uint32_t ofsVertices;
+    uint32_t nViews;            // Number of embedded skin profiles
+    uint32_t ofsViews;          // not in WotLK: the profiles sit in the M2 itself
+
+    uint32_t nColors;
+    uint32_t ofsColors;
+    uint32_t nTextures;
+    uint32_t ofsTextures;
+
+    uint32_t nTransparency;
+    uint32_t ofsTransparency;
+    uint32_t nUVAnimation;
+    uint32_t ofsUVAnimation;
+    uint32_t nTexReplace;
+    uint32_t ofsTexReplace;
+    uint32_t nUnknownExtra;     // not in WotLK; not read
+    uint32_t ofsUnknownExtra;
+
+    uint32_t nRenderFlags;
+    uint32_t ofsRenderFlags;
+    uint32_t nBoneLookupTable;
+    uint32_t ofsBoneLookupTable;
+    uint32_t nTexLookup;
+    uint32_t ofsTexLookup;
+
+    uint32_t nTexUnits;
+    uint32_t ofsTexUnits;
+    uint32_t nTransLookup;
+    uint32_t ofsTransLookup;
+    uint32_t nUVAnimLookup;
+    uint32_t ofsUVAnimLookup;
+
+    float vertexBox[6];
+    float vertexRadius;
+    float boundingBox[6];
+    float boundingRadius;
+
+    uint32_t nBoundingTriangles;
+    uint32_t ofsBoundingTriangles;
+    uint32_t nBoundingVertices;
+    uint32_t ofsBoundingVertices;
+    uint32_t nBoundingNormals;
+    uint32_t ofsBoundingNormals;
+
+    uint32_t nAttachments;
+    uint32_t ofsAttachments;
+    uint32_t nAttachmentLookup;
+    uint32_t ofsAttachmentLookup;
+
+    uint32_t nEvents;
+    uint32_t ofsEvents;
+    uint32_t nLights;
+    uint32_t ofsLights;
+    uint32_t nCameras;
+    uint32_t ofsCameras;
+    uint32_t nCameraLookup;
+    uint32_t ofsCameraLookup;
+    uint32_t nRibbonEmitters;
+    uint32_t ofsRibbonEmitters;
+    uint32_t nParticleEmitters;
+    uint32_t ofsParticleEmitters;
+};
+static_assert(sizeof(M2HeaderVanilla) == sizeof(M2Header) + 20,
+              "M2HeaderVanilla is the WotLK header plus five uint32s, no padding");
+static_assert(offsetof(M2HeaderVanilla, nBones) == offsetof(M2Header, nBones) + 8,
+              "the playable animation lookup moves the vanilla bones 8 bytes on");
+static_assert(offsetof(M2HeaderVanilla, vertexBox) == offsetof(M2Header, vertexBox) + 20,
+              "the three extra fields put the vanilla vertex box 20 bytes on");
+// Every field is four bytes wide, so a file that stops partway through the
+// header still holds whole fields up to the last multiple of four.
+static_assert(alignof(M2HeaderVanilla) == 4 && sizeof(M2HeaderVanilla) % 4 == 0,
+              "M2HeaderVanilla is made of four-byte fields only");
+
+// The WotLK header as far as a vanilla one supplies it. A header cut short in
+// the bounds leaves them, and with them the vertex box, at zero.
+M2Header headerFromVanilla(const M2HeaderVanilla& v, bool haveBounds) {
+    M2Header h{};
+    std::memcpy(h.magic, v.magic, sizeof(h.magic));
+    h.version = v.version;
+    h.nameLength = v.nameLength;
+    h.nameOffset = v.nameOffset;
+    h.globalFlags = v.globalFlags;
+    h.nGlobalSequences = v.nGlobalSequences;
+    h.ofsGlobalSequences = v.ofsGlobalSequences;
+    h.nAnimations = v.nAnimations;
+    h.ofsAnimations = v.ofsAnimations;
+    h.nAnimationLookup = v.nAnimationLookup;
+    h.ofsAnimationLookup = v.ofsAnimationLookup;
+    h.nBones = v.nBones;
+    h.ofsBones = v.ofsBones;
+    h.nKeyBoneLookup = v.nKeyBoneLookup;
+    h.ofsKeyBoneLookup = v.ofsKeyBoneLookup;
+    h.nVertices = v.nVertices;
+    h.ofsVertices = v.ofsVertices;
+    h.nViews = v.nViews;
+    h.nColors = v.nColors;
+    h.ofsColors = v.ofsColors;
+    h.nTextures = v.nTextures;
+    h.ofsTextures = v.ofsTextures;
+    h.nTransparency = v.nTransparency;
+    h.ofsTransparency = v.ofsTransparency;
+    h.nUVAnimation = v.nUVAnimation;
+    h.ofsUVAnimation = v.ofsUVAnimation;
+    h.nTexReplace = v.nTexReplace;
+    h.ofsTexReplace = v.ofsTexReplace;
+    h.nRenderFlags = v.nRenderFlags;
+    h.ofsRenderFlags = v.ofsRenderFlags;
+    h.nBoneLookupTable = v.nBoneLookupTable;
+    h.ofsBoneLookupTable = v.ofsBoneLookupTable;
+    h.nTexLookup = v.nTexLookup;
+    h.ofsTexLookup = v.ofsTexLookup;
+    h.nTexUnits = v.nTexUnits;
+    h.ofsTexUnits = v.ofsTexUnits;
+    h.nTransLookup = v.nTransLookup;
+    h.ofsTransLookup = v.ofsTransLookup;
+    h.nUVAnimLookup = v.nUVAnimLookup;
+    h.ofsUVAnimLookup = v.ofsUVAnimLookup;
+    if (haveBounds) {
+        std::memcpy(h.vertexBox, v.vertexBox, sizeof(h.vertexBox));
+        h.vertexRadius = v.vertexRadius;
+        std::memcpy(h.boundingBox, v.boundingBox, sizeof(h.boundingBox));
+        h.boundingRadius = v.boundingRadius;
+    }
+    h.nBoundingTriangles = v.nBoundingTriangles;
+    h.ofsBoundingTriangles = v.ofsBoundingTriangles;
+    h.nBoundingVertices = v.nBoundingVertices;
+    h.ofsBoundingVertices = v.ofsBoundingVertices;
+    h.nBoundingNormals = v.nBoundingNormals;
+    h.ofsBoundingNormals = v.ofsBoundingNormals;
+    h.nAttachments = v.nAttachments;
+    h.ofsAttachments = v.ofsAttachments;
+    h.nAttachmentLookup = v.nAttachmentLookup;
+    h.ofsAttachmentLookup = v.ofsAttachmentLookup;
+    h.nEvents = v.nEvents;
+    h.ofsEvents = v.ofsEvents;
+    h.nLights = v.nLights;
+    h.ofsLights = v.ofsLights;
+    h.nCameras = v.nCameras;
+    h.ofsCameras = v.ofsCameras;
+    h.nCameraLookup = v.nCameraLookup;
+    h.ofsCameraLookup = v.ofsCameraLookup;
+    h.nRibbonEmitters = v.nRibbonEmitters;
+    h.ofsRibbonEmitters = v.ofsRibbonEmitters;
+    h.nParticleEmitters = v.nParticleEmitters;
+    h.ofsParticleEmitters = v.ofsParticleEmitters;
+    return h;
+}
+
+// M2Array: a count and a file offset, the reference every variable-length
+// table in an M2 is made of.
+struct M2ArrayDisk {
+    uint32_t count;
+    uint32_t offset;
+};
+static_assert(sizeof(M2ArrayDisk) == 8,
+              "M2ArrayDisk is read straight from the file: 8 bytes, no padding");
+// As uint32, so offset arithmetic with it wraps as the file's own uint32
+// offsets do.
+constexpr uint32_t kM2ArrayDiskSize = sizeof(M2ArrayDisk);
 
 // M2 vertex structure (on-disk format)
 struct M2VertexDisk {
@@ -388,7 +576,7 @@ struct M2AttachmentDisk {
     uint16_t bone;
     uint16_t unknown;
     float position[3];
-    uint8_t trackData[20]; // M2TrackDisk (20 bytes)
+    M2TrackDisk animateAttached;          // not read
 };
 static_assert(sizeof(M2AttachmentDisk) == 40,
               "M2AttachmentDisk is read straight from the file: 40 bytes, no padding");
@@ -399,7 +587,7 @@ struct M2AttachmentDiskVanilla {
     uint16_t bone;
     uint16_t unknown;
     float position[3];
-    uint8_t trackData[28]; // M2TrackDiskVanilla (28 bytes)
+    M2TrackDiskVanilla animateAttached;   // not read
 };
 static_assert(sizeof(M2AttachmentDiskVanilla) == 48,
               "M2AttachmentDiskVanilla is read straight from the file: 48 bytes, no padding");
@@ -410,11 +598,11 @@ struct M2CameraDisk {
     float fov;
     float farClip;
     float nearClip;
-    uint8_t positionTrack[20];
+    M2TrackDisk positionTrack;            // not read
     float positionBase[3];
-    uint8_t targetTrack[20];
+    M2TrackDisk targetTrack;              // not read
     float targetBase[3];
-    uint8_t rollTrack[20];
+    M2TrackDisk rollTrack;                // not read
 };
 
 // M2 camera (on-disk, vanilla - 124 bytes; tracks are 28 bytes)
@@ -423,17 +611,171 @@ struct M2CameraDiskVanilla {
     float fov;
     float farClip;
     float nearClip;
-    uint8_t positionTrack[28];
+    M2TrackDiskVanilla positionTrack;     // not read
     float positionBase[3];
-    uint8_t targetTrack[28];
+    M2TrackDiskVanilla targetTrack;       // not read
     float targetBase[3];
-    uint8_t rollTrack[28];
+    M2TrackDiskVanilla rollTrack;         // not read
 };
 
 // A wrong stride here reads garbage positions and would fling the backdrop
 // somewhere arbitrary rather than fail.
 static_assert(sizeof(M2CameraDisk) == 100, "M2CameraDisk must match the WotLK on-disk layout");
 static_assert(sizeof(M2CameraDiskVanilla) == 124, "M2CameraDiskVanilla must match the vanilla on-disk layout");
+
+// M2 event (on-disk, WotLK - 36 bytes). Its timestamps are a track with no
+// keys: one M2Array of timestamps per sequence, behind `timestamps`.
+struct M2EventDisk {
+    char identifier[4];         // e.g. "$FSD", a footfall
+    uint32_t data;
+    uint32_t bone;
+    float position[3];
+    uint16_t interpolationType;
+    int16_t globalSequence;
+    M2ArrayDisk timestamps;     // -> M2ArrayDisk[nSequences]
+};
+static_assert(sizeof(M2EventDisk) == 36,
+              "M2EventDisk is read straight from the file: 36 bytes, no padding");
+
+// M2 event (on-disk, vanilla/TBC - 44 bytes): the track carries interpolation
+// ranges, and its timestamps are one flat array on the global timeline.
+struct M2EventDiskVanilla {
+    char identifier[4];
+    uint32_t data;
+    uint32_t bone;
+    float position[3];
+    uint16_t interpolationType;
+    int16_t globalSequence;
+    M2ArrayDisk ranges;         // not read
+    M2ArrayDisk timestamps;     // -> uint32_t[count]
+};
+static_assert(sizeof(M2EventDiskVanilla) == 44,
+              "M2EventDiskVanilla is read straight from the file: 44 bytes, no padding");
+
+// M2Color: a vec3 colour track and a fixed16 alpha track, back to back.
+struct M2ColorDisk {
+    M2TrackDisk color;
+    M2TrackDisk alpha;
+};
+struct M2ColorDiskVanilla {
+    M2TrackDiskVanilla color;
+    M2TrackDiskVanilla alpha;
+};
+static_assert(sizeof(M2ColorDisk) == m2ColorRecordSize(true) &&
+              offsetof(M2ColorDisk, alpha) == m2ColorAlphaTrackOffset(true),
+              "M2ColorDisk must agree with m2_color_track.hpp's WotLK layout");
+static_assert(sizeof(M2ColorDiskVanilla) == m2ColorRecordSize(false) &&
+              offsetof(M2ColorDiskVanilla, alpha) == m2ColorAlphaTrackOffset(false),
+              "M2ColorDiskVanilla must agree with m2_color_track.hpp's vanilla layout");
+
+// The first 0x34 bytes of a particle emitter, the same in every version.
+struct M2ParticleEmitterHeaderDisk {
+    int32_t particleId;             // 0x00
+    uint32_t flags;                 // 0x04
+    float position[3];              // 0x08
+    uint16_t bone;                  // 0x14
+    uint16_t texture;               // 0x16
+    M2ArrayDisk geometryModel;      // 0x18 - not read
+    M2ArrayDisk recursionModel;     // 0x20 - not read
+    uint8_t blendingType;           // 0x28
+    uint8_t emitterType;            // 0x29
+    uint16_t particleColorIndex;    // 0x2A
+    uint8_t particleType;           // 0x2C - not read
+    uint8_t headOrTail;             // 0x2D - not read
+    int16_t textureTileRotation;    // 0x2E
+    uint16_t textureRows;           // 0x30
+    uint16_t textureCols;           // 0x32
+};
+static_assert(sizeof(M2ParticleEmitterHeaderDisk) == 0x34,
+              "M2ParticleEmitterHeaderDisk is read straight from the file: 0x34 bytes, no padding");
+
+// WotLK particle emitter (M2ParticleOld, 0x1DC bytes). The float tracks are
+// not contiguous: lifespan and emission rate each have a variance after them.
+struct M2ParticleEmitterDisk {
+    M2ParticleEmitterHeaderDisk header;
+    M2TrackDisk emissionSpeed;      // 0x34
+    M2TrackDisk speedVariation;     // 0x48
+    M2TrackDisk verticalRange;      // 0x5C
+    M2TrackDisk horizontalRange;    // 0x70
+    M2TrackDisk gravity;            // 0x84
+    M2TrackDisk lifespan;           // 0x98
+    float lifespanVary;             // 0xAC
+    M2TrackDisk emissionRate;       // 0xB0
+    float emissionRateVary;         // 0xC4
+    M2TrackDisk emissionAreaLength; // 0xC8
+    M2TrackDisk emissionAreaWidth;  // 0xDC
+    M2TrackDisk deceleration;       // 0xF0
+    FBlockDisk color;               // 0x104
+    FBlockDisk alpha;               // 0x114
+    FBlockDisk scale;               // 0x124
+    float scaleVary[2];             // 0x134
+    FBlockDisk headCell;            // 0x13C
+    FBlockDisk tailCell;            // 0x14C - not read
+    uint8_t notRead[0x6C];          // 0x15C - tail length, twinkle, spin, wind, spline
+    M2TrackDisk enabledIn;          // 0x1C8
+};
+static_assert(sizeof(M2ParticleEmitterDisk) == 0x1DC,
+              "M2ParticleEmitterDisk is read straight from the file: 0x1DC bytes, no padding");
+static_assert(offsetof(M2ParticleEmitterDisk, lifespanVary) == 0xAC &&
+              offsetof(M2ParticleEmitterDisk, emissionRateVary) == 0xC4 &&
+              offsetof(M2ParticleEmitterDisk, color) == 0x104 &&
+              offsetof(M2ParticleEmitterDisk, scaleVary) == 0x134 &&
+              offsetof(M2ParticleEmitterDisk, headCell) == 0x13C &&
+              offsetof(M2ParticleEmitterDisk, enabledIn) == 0x1C8,
+              "M2ParticleEmitterDisk fields must sit where the WotLK client reads them");
+
+// Vanilla particle emitter (0x1F8 bytes): ten contiguous 28-byte tracks, and
+// no FBlocks - colour, opacity and scale are three static values each over
+// the particle's life, split at `midpoint` (layout confirmed from real files).
+struct M2ParticleEmitterDiskVanilla {
+    M2ParticleEmitterHeaderDisk header;
+    M2TrackDiskVanilla emissionSpeed;      // 0x34
+    M2TrackDiskVanilla speedVariation;     // 0x50
+    M2TrackDiskVanilla verticalRange;      // 0x6C
+    M2TrackDiskVanilla horizontalRange;    // 0x88
+    M2TrackDiskVanilla gravity;            // 0xA4
+    M2TrackDiskVanilla lifespan;           // 0xC0
+    M2TrackDiskVanilla emissionRate;       // 0xDC
+    M2TrackDiskVanilla emissionAreaLength; // 0xF8
+    M2TrackDiskVanilla emissionAreaWidth;  // 0x114
+    M2TrackDiskVanilla deceleration;       // 0x130
+    float midpoint;                        // 0x14C - lifecycle split: 0 -> mid -> 1
+    uint32_t colorValues[3];               // 0x150 - BGRA, A is the opacity
+    float scaleValues[3];                  // 0x15C
+    uint8_t notRead[0x90];                 // 0x168
+};
+static_assert(sizeof(M2ParticleEmitterDiskVanilla) == 0x1F8,
+              "M2ParticleEmitterDiskVanilla is read straight from the file: 0x1F8 bytes, no padding");
+static_assert(offsetof(M2ParticleEmitterDiskVanilla, deceleration) == 0x130 &&
+              offsetof(M2ParticleEmitterDiskVanilla, midpoint) == 0x14C &&
+              offsetof(M2ParticleEmitterDiskVanilla, colorValues) == 0x150 &&
+              offsetof(M2ParticleEmitterDiskVanilla, scaleValues) == 0x15C,
+              "M2ParticleEmitterDiskVanilla fields must sit where vanilla files keep them");
+
+// WotLK ribbon emitter (0xAC bytes).
+struct M2RibbonEmitterDisk {
+    int32_t ribbonId;               // 0x00
+    uint32_t bone;                  // 0x04
+    float position[3];              // 0x08
+    M2ArrayDisk textureIndices;     // 0x14 - uint16_t each
+    M2ArrayDisk materialIndices;    // 0x1C - uint16_t each
+    M2TrackDisk colorTrack;         // 0x24 - vec3 RGB 0..1
+    M2TrackDisk alphaTrack;         // 0x38 - fixed16
+    M2TrackDisk heightAboveTrack;   // 0x4C - float
+    M2TrackDisk heightBelowTrack;   // 0x60 - float
+    float edgesPerSecond;           // 0x74
+    float edgeLifetime;             // 0x78
+    float gravity;                  // 0x7C
+    uint16_t textureRows;           // 0x80
+    uint16_t textureCols;           // 0x82
+    M2TrackDisk texSlotTrack;       // 0x84 - uint16
+    M2TrackDisk visibilityTrack;    // 0x98 - uint8 0/1
+};
+static_assert(sizeof(M2RibbonEmitterDisk) == 0xAC,
+              "M2RibbonEmitterDisk is read straight from the file: 0xAC bytes, no padding");
+static_assert(offsetof(M2RibbonEmitterDisk, edgesPerSecond) == 0x74 &&
+              offsetof(M2RibbonEmitterDisk, texSlotTrack) == 0x84,
+              "M2RibbonEmitterDisk fields must sit where the client reads them");
 
 template<typename T>
 T readValue(const std::vector<uint8_t>& data, uint32_t offset) {
@@ -535,16 +877,19 @@ void parseAnimTrack(const std::vector<uint8_t>& data,
         // Their sub-array offsets are .anim-file-relative, not M2-relative, so reading
         // from the M2 file would produce garbage data.
         if (i < sequenceFlags.size() && !(sequenceFlags[i] & kM2SeqFlagEmbeddedData)) continue;
-        // Each sub-array header is {uint32_t count, uint32_t offset} = 8 bytes
-        uint32_t tsHeaderOfs = disk.ofsTimestamps + i * 8;
-        uint32_t keyHeaderOfs = disk.ofsKeys + i * 8;
+        // Each sequence's timestamps and keys are an M2Array of their own.
+        uint32_t tsHeaderOfs = disk.ofsTimestamps + i * kM2ArrayDiskSize;
+        uint32_t keyHeaderOfs = disk.ofsKeys + i * kM2ArrayDiskSize;
 
-        if (tsHeaderOfs + 8 > data.size() || keyHeaderOfs + 8 > data.size()) continue;
+        if (tsHeaderOfs + kM2ArrayDiskSize > data.size() ||
+            keyHeaderOfs + kM2ArrayDiskSize > data.size()) continue;
 
-        uint32_t tsCount = readValue<uint32_t>(data, tsHeaderOfs);
-        uint32_t tsOffset = readValue<uint32_t>(data, tsHeaderOfs + 4);
-        uint32_t keyCount = readValue<uint32_t>(data, keyHeaderOfs);
-        uint32_t keyOffset = readValue<uint32_t>(data, keyHeaderOfs + 4);
+        const M2ArrayDisk tsArray = readValue<M2ArrayDisk>(data, tsHeaderOfs);
+        const M2ArrayDisk keyArray = readValue<M2ArrayDisk>(data, keyHeaderOfs);
+        uint32_t tsCount = tsArray.count;
+        uint32_t tsOffset = tsArray.offset;
+        uint32_t keyCount = keyArray.count;
+        uint32_t keyOffset = keyArray.offset;
 
         if (tsCount == 0 || keyCount == 0) continue;
 
@@ -773,14 +1118,18 @@ void parseAnimTrackVanilla(const std::vector<uint8_t>& data,
     }
 }
 
-// Parse an FBlock (particle lifetime curve) from a 16-byte on-disk header.
-// FBlocks are like M2Track but WITHOUT the interpolationType/globalSequence prefix.
-void parseFBlock(const std::vector<uint8_t>& data, uint32_t offset,
-                 M2FBlock& fb, int valueType) {
-    // valueType: 0 = color (C3Vector, 3 floats in 0-255 range), 1 = alpha (uint16), 2 = scale (float pair)
-    if (offset + sizeof(FBlockDisk) > data.size()) return;
+// What an FBlock's keys are.
+enum class FBlockValue {
+    Color,  // C3Vector, 3 floats in 0-255 range
+    Alpha,  // uint16, 32767 = opaque
+    Scale,  // float pair, x kept
+    Cell,   // uint16 texture cell, kept as it is
+};
 
-    FBlockDisk disk = readValue<FBlockDisk>(data, offset);
+// Parse an FBlock (particle lifetime curve) from its 16-byte on-disk header.
+// FBlocks are like M2Track but WITHOUT the interpolationType/globalSequence prefix.
+void parseFBlock(const std::vector<uint8_t>& data, const FBlockDisk& disk,
+                 M2FBlock& fb, FBlockValue valueType) {
     if (disk.nTimestamps == 0 || disk.nKeys == 0) return;
     // Sanity cap: particle FBlocks typically have 3 keyframes
     if (disk.nTimestamps > 1024 || disk.nKeys > 1024) return;
@@ -799,7 +1148,7 @@ void parseFBlock(const std::vector<uint8_t>& data, uint32_t offset,
     uint32_t nKeys = disk.nKeys;
     uint32_t ofsKeys = disk.ofsKeys;
 
-    if (valueType == 0) {
+    if (valueType == FBlockValue::Color) {
         // Color: C3Vector (3 × float per key, values in 0-255 range)
         if (ofsKeys + nKeys * 12 > data.size()) return;
         fb.vec3Values.reserve(nKeys);
@@ -809,13 +1158,13 @@ void parseFBlock(const std::vector<uint8_t>& data, uint32_t offset,
             float b = readValue<float>(data, ofsKeys + i * 12 + 8);
             fb.vec3Values.emplace_back(r / 255.0f, g / 255.0f, b / 255.0f);
         }
-    } else if (valueType == 3) {
+    } else if (valueType == FBlockValue::Cell) {
         // Cell numbers: uint16 per key, kept as they are
         if (ofsKeys + nKeys * sizeof(uint16_t) > data.size()) return;
         auto rawCells = readArray<uint16_t>(data, ofsKeys, nKeys);
         fb.floatValues.reserve(nKeys);
         for (auto c : rawCells) fb.floatValues.push_back(static_cast<float>(c));
-    } else if (valueType == 1) {
+    } else if (valueType == FBlockValue::Alpha) {
         // Alpha: uint16 per key
         if (ofsKeys + nKeys * sizeof(uint16_t) > data.size()) return;
         auto rawAlpha = readArray<uint16_t>(data, ofsKeys, nKeys);
@@ -823,7 +1172,7 @@ void parseFBlock(const std::vector<uint8_t>& data, uint32_t offset,
         for (auto a : rawAlpha) {
             fb.floatValues.push_back(static_cast<float>(a) / 32767.0f);
         }
-    } else if (valueType == 2) {
+    } else if (valueType == FBlockValue::Scale) {
         // Scale: float pair {x, y} per key, store x
         if (ofsKeys + nKeys * 8 > data.size()) return;
         fb.floatValues.reserve(nKeys);
@@ -844,8 +1193,9 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     //   +8: playableAnimLookup M2Array (after animationLookup)
     //   +4: ofsViews (after nViews, making it a full M2Array)
     //   +8: unknown extra M2Array (after texReplace, before renderFlags)
-    // Also: vanilla bones are 84 bytes (no boneNameCRC), sequences are 68 bytes.
-    constexpr size_t COMMON_PREFIX_SIZE = 0x2C; // magic through ofsAnimationLookup
+    // See M2HeaderVanilla. Also: vanilla bones are 108 bytes (no boneNameCRC),
+    // sequences are 68 bytes.
+    constexpr size_t COMMON_PREFIX_SIZE = offsetof(M2Header, nBones); // magic through ofsAnimationLookup
 
     if (m2Data.size() < COMMON_PREFIX_SIZE + 16) { // Need at least some fields after prefix
         core::Logger::getInstance().error("M2 data too small");
@@ -866,106 +1216,27 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     uint32_t ofsViews = 0;
 
     if (header.version < 264) {
-        // Vanilla M2: read remaining header fields using cursor, skipping extra fields
-        size_t c = COMMON_PREFIX_SIZE;
-
-        auto r32 = [&]() -> uint32_t {
-            if (c + 4 > m2Data.size()) return 0;
-            uint32_t v;
-            std::memcpy(&v, m2Data.data() + c, 4);
-            c += 4;
-            return v;
-        };
-
-        // Skip playableAnimLookup M2Array (8 bytes)
-        c += 8;
-
-        // Bones through ofsVertices (same field order as WotLK, just shifted)
-        header.nBones = r32();
-        header.ofsBones = r32();
-        header.nKeyBoneLookup = r32();
-        header.ofsKeyBoneLookup = r32();
-        header.nVertices = r32();
-        header.ofsVertices = r32();
-
+        // Vanilla M2: the longer header, as far as the file has it. Fields
+        // past the end of a short file stay zero, as do the bounds when the
+        // file stops inside them.
+        M2HeaderVanilla vanilla{};
+        const size_t available = std::min(m2Data.size(), sizeof(vanilla)) & ~size_t{3};
+        std::memcpy(&vanilla, m2Data.data(), available);
+        model.hasVertexBox = m2Data.size() >= offsetof(M2HeaderVanilla, nBoundingTriangles);
+        header = headerFromVanilla(vanilla, model.hasVertexBox);
         // nViews + ofsViews (vanilla has both, WotLK has only nViews)
-        header.nViews = r32();
-        ofsViews = r32();
-
-        // nColors through ofsTexReplace
-        header.nColors = r32();
-        header.ofsColors = r32();
-        header.nTextures = r32();
-        header.ofsTextures = r32();
-        header.nTransparency = r32();
-        header.ofsTransparency = r32();
-        header.nUVAnimation = r32();
-        header.ofsUVAnimation = r32();
-        header.nTexReplace = r32();
-        header.ofsTexReplace = r32();
-
-        // Skip unknown extra M2Array (8 bytes)
-        c += 8;
-
-        // nRenderFlags through ofsUVAnimLookup
-        header.nRenderFlags = r32();
-        header.ofsRenderFlags = r32();
-        header.nBoneLookupTable = r32();
-        header.ofsBoneLookupTable = r32();
-        header.nTexLookup = r32();
-        header.ofsTexLookup = r32();
-        header.nTexUnits = r32();
-        header.ofsTexUnits = r32();
-        header.nTransLookup = r32();
-        header.ofsTransLookup = r32();
-        header.nUVAnimLookup = r32();
-        header.ofsUVAnimLookup = r32();
-
-        // Float sections (vertexBox, vertexRadius, boundingBox, boundingRadius)
-        if (c + 56 <= m2Data.size()) {
-            model.hasVertexBox = true;
-            std::memcpy(header.vertexBox, m2Data.data() + c, 24); c += 24;
-            std::memcpy(&header.vertexRadius, m2Data.data() + c, 4); c += 4;
-            std::memcpy(header.boundingBox, m2Data.data() + c, 24); c += 24;
-            std::memcpy(&header.boundingRadius, m2Data.data() + c, 4); c += 4;
-        } else { c += 56; }
-
-        // Remaining M2Array pairs
-        header.nBoundingTriangles = r32();
-        header.ofsBoundingTriangles = r32();
-        header.nBoundingVertices = r32();
-        header.ofsBoundingVertices = r32();
-        header.nBoundingNormals = r32();
-        header.ofsBoundingNormals = r32();
-        header.nAttachments = r32();
-        header.ofsAttachments = r32();
-        header.nAttachmentLookup = r32();
-        header.ofsAttachmentLookup = r32();
-        header.nEvents = r32();
-        header.ofsEvents = r32();
-        header.nLights = r32();
-        header.ofsLights = r32();
-        header.nCameras = r32();
-        header.ofsCameras = r32();
-        header.nCameraLookup = r32();
-        header.ofsCameraLookup = r32();
-        header.nRibbonEmitters = r32();
-        header.ofsRibbonEmitters = r32();
-        header.nParticleEmitters = r32();
-        header.ofsParticleEmitters = r32();
+        ofsViews = vanilla.ofsViews;
 
         core::Logger::getInstance().debug("Vanilla M2 (version ", header.version,
             "): nVerts=", header.nVertices, " nViews=", header.nViews,
             " ofsViews=", ofsViews, " nTex=", header.nTextures);
     } else {
-        // WotLK: read remaining header with simple memcpy (no extra fields)
-        size_t wotlkSize = sizeof(M2Header) - COMMON_PREFIX_SIZE;
-        if (m2Data.size() < COMMON_PREFIX_SIZE + wotlkSize) {
+        // WotLK: the header as it is on disk (no extra fields)
+        if (m2Data.size() < sizeof(M2Header)) {
             core::Logger::getInstance().error("M2 data too small for WotLK header");
             return model;
         }
-        std::memcpy(reinterpret_cast<uint8_t*>(&header) + COMMON_PREFIX_SIZE,
-                    m2Data.data() + COMMON_PREFIX_SIZE, wotlkSize);
+        std::memcpy(&header, m2Data.data(), sizeof(M2Header));
         model.hasVertexBox = true;
     }
 
@@ -1090,42 +1361,40 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     if (header.nEvents > 0 && header.nEvents < 512 && header.ofsEvents > 0 &&
         !model.sequences.empty()) {
         const bool wotlkEvents = header.version >= 264;
-        const size_t eventSize = wotlkEvents ? 36 : 44;
-        const size_t trackOfs = 24;  // identifier(4) + data(4) + bone(4) + position(12)
+        const size_t eventSize = wotlkEvents ? sizeof(M2EventDisk) : sizeof(M2EventDiskVanilla);
         model.footstepEventTimes.resize(model.sequences.size());
-
-        auto rd32 = [&](size_t off) -> uint32_t {
-            if (off + 4 > m2Data.size()) return 0;
-            uint32_t v;
-            std::memcpy(&v, m2Data.data() + off, 4);
-            return v;
-        };
 
         size_t footfallStamps = 0;
         model.events.reserve(header.nEvents);
         for (uint32_t e = 0; e < header.nEvents; e++) {
             size_t base = header.ofsEvents + e * eventSize;
             if (base + eventSize > m2Data.size()) break;
+            // The two layouts agree up to the track's interpolation ranges.
+            const M2EventDisk disk = readValue<M2EventDisk>(m2Data, base);
             M2Model::M2Event event;
-            event.id = rd32(base);
-            event.bone = rd32(base + 8);
-            std::memcpy(&event.position, m2Data.data() + base + 12, sizeof(glm::vec3));
+            std::memcpy(&event.id, disk.identifier, sizeof(event.id));
+            event.bone = disk.bone;
+            event.position = glm::vec3(disk.position[0], disk.position[1], disk.position[2]);
             event.times.resize(model.sequences.size());
 
             if (wotlkEvents) {
-                uint32_t nArrays = rd32(base + trackOfs + 4);
-                uint32_t ofsArrays = rd32(base + trackOfs + 8);
+                uint32_t nArrays = disk.timestamps.count;
+                uint32_t ofsArrays = disk.timestamps.offset;
                 uint32_t count = std::min<uint32_t>(nArrays, model.sequences.size());
                 for (uint32_t s = 0; s < count; s++) {
-                    uint32_t nTs = rd32(ofsArrays + s * 8);
-                    uint32_t ofsTs = rd32(ofsArrays + s * 8 + 4);
+                    // Count and offset read one at a time: a table cut off
+                    // between them keeps its count.
+                    const uint32_t arrayOfs = ofsArrays + s * kM2ArrayDiskSize;
+                    uint32_t nTs = readValue<uint32_t>(m2Data, arrayOfs + offsetof(M2ArrayDisk, count));
+                    uint32_t ofsTs = readValue<uint32_t>(m2Data, arrayOfs + offsetof(M2ArrayDisk, offset));
                     if (nTs == 0 || nTs > 1024) continue;
                     if (ofsTs + nTs * sizeof(uint32_t) > m2Data.size()) continue;
                     event.times[s] = readArray<uint32_t>(m2Data, ofsTs, nTs);
                 }
             } else {
-                uint32_t nTs = rd32(base + trackOfs + 12);
-                uint32_t ofsTs = rd32(base + trackOfs + 16);
+                const M2EventDiskVanilla vanillaDisk = readValue<M2EventDiskVanilla>(m2Data, base);
+                uint32_t nTs = vanillaDisk.timestamps.count;
+                uint32_t ofsTs = vanillaDisk.timestamps.offset;
                 if (nTs != 0 && nTs <= 100000 && ofsTs + nTs * sizeof(uint32_t) <= m2Data.size()) {
                     auto stamps = readArray<uint32_t>(m2Data, ofsTs, nTs);
                     for (size_t s = 0; s < vanillaSeqWindows.size() && s < event.times.size(); s++) {
@@ -1140,7 +1409,7 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
             }
             for (auto& list : event.times) std::sort(list.begin(), list.end());
 
-            if (std::memcmp(m2Data.data() + base, "$FSD", 4) == 0) {
+            if (std::memcmp(disk.identifier, "$FSD", 4) == 0) {
                 for (size_t s = 0; s < event.times.size(); s++) {
                     auto& out = model.footstepEventTimes[s];
                     out.insert(out.end(), event.times[s].begin(), event.times[s].end());
@@ -1273,12 +1542,10 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     // The combiner combos sit after the WotLK header, present when global
     // flag 0x8 says so (0x00836980 reads +0x134 under +0x10 & 8).
     if (header.version >= 264 && (header.globalFlags & 0x8) != 0 &&
-        m2Data.size() >= sizeof(M2Header) + 8) {
-        uint32_t nCombos = 0, ofsCombos = 0;
-        std::memcpy(&nCombos, m2Data.data() + sizeof(M2Header), 4);
-        std::memcpy(&ofsCombos, m2Data.data() + sizeof(M2Header) + 4, 4);
-        if (nCombos > 0 && nCombos < 65536 && ofsCombos > 0) {
-            model.textureCombinerCombos = readArray<uint16_t>(m2Data, ofsCombos, nCombos);
+        m2Data.size() >= sizeof(M2Header) + sizeof(M2ArrayDisk)) {
+        const M2ArrayDisk combos = readValue<M2ArrayDisk>(m2Data, sizeof(M2Header));
+        if (combos.count > 0 && combos.count < 65536 && combos.offset > 0) {
+            model.textureCombinerCombos = readArray<uint16_t>(m2Data, combos.offset, combos.count);
         }
     }
 
@@ -1294,8 +1561,8 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         for (const auto& seq : model.sequences) seqFlags.push_back(seq.flags);
 
         const bool wotlk = header.version >= 264;
-        const uint32_t colorSize = wotlk ? 40u : 56u;   // 2 track headers per color
-        const uint32_t alphaOfs  = wotlk ? 20u : 28u;   // skip the vec3 color track
+        const uint32_t colorSize = m2ColorRecordSize(wotlk);       // M2ColorDisk(Vanilla)
+        const uint32_t alphaOfs  = m2ColorAlphaTrackOffset(wotlk); // skip the vec3 color track
         model.colorAlphas.reserve(header.nColors);
         model.colorRGB.reserve(header.nColors);
         model.colorAlphaTracks.resize(header.nColors);
@@ -1544,10 +1811,11 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         header.nParticleEmitters < 256) {
 
         const bool isVanilla = (header.version < 264);
-        static constexpr uint32_t EMITTER_SIZE_WOTLK  = 0x1DC; // 476
-        static constexpr uint32_t EMITTER_SIZE_VANILLA = 0x1F8; // 504
-        const uint32_t emitterSize = isVanilla ? EMITTER_SIZE_VANILLA : EMITTER_SIZE_WOTLK;
+        const uint32_t emitterSize = isVanilla ? sizeof(M2ParticleEmitterDiskVanilla)
+                                               : sizeof(M2ParticleEmitterDisk);
 
+        // Once every emitter lies inside the file, the reads below need no
+        // bounds checks of their own.
         if (static_cast<size_t>(header.ofsParticleEmitters) +
                 static_cast<size_t>(header.nParticleEmitters) * emitterSize <= m2Data.size()) {
 
@@ -1560,63 +1828,58 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
             }
         }
 
+        // Header fields (0x00-0x33) are the same for both versions
+        const auto readEmitterHeader = [](const M2ParticleEmitterHeaderDisk& h, M2ParticleEmitter& em) {
+            em.particleId = h.particleId;
+            em.flags      = h.flags;
+            em.position   = glm::vec3(h.position[0], h.position[1], h.position[2]);
+            em.bone       = h.bone;
+            em.texture    = h.texture;
+            em.blendingType = h.blendingType;
+            em.emitterType  = h.emitterType;
+            em.particleColorIndex = h.particleColorIndex;
+            em.textureTileRotation = h.textureTileRotation;
+            em.textureRows = h.textureRows;
+            em.textureCols = h.textureCols;
+            if (em.textureRows == 0) em.textureRows = 1;
+            if (em.textureCols == 0) em.textureCols = 1;
+        };
+
         for (uint32_t ei = 0; ei < header.nParticleEmitters; ei++) {
             uint32_t base = header.ofsParticleEmitters + ei * emitterSize;
 
             M2ParticleEmitter em;
-            // Header fields (0x00-0x33) are the same for both versions
-            em.particleId = readValue<int32_t>(m2Data, base + 0x00);
-            em.flags      = readValue<uint32_t>(m2Data, base + 0x04);
-            em.position.x = readValue<float>(m2Data, base + 0x08);
-            em.position.y = readValue<float>(m2Data, base + 0x0C);
-            em.position.z = readValue<float>(m2Data, base + 0x10);
-            em.bone       = readValue<uint16_t>(m2Data, base + 0x14);
-            em.texture    = readValue<uint16_t>(m2Data, base + 0x16);
-            em.blendingType = readValue<uint8_t>(m2Data, base + 0x28);
-            em.emitterType  = readValue<uint8_t>(m2Data, base + 0x29);
-            em.particleColorIndex = readValue<uint16_t>(m2Data, base + 0x2A);
-            em.textureTileRotation = readValue<int16_t>(m2Data, base + 0x2E);
-            em.textureRows = readValue<uint16_t>(m2Data, base + 0x30);
-            em.textureCols = readValue<uint16_t>(m2Data, base + 0x32);
-            if (em.textureRows == 0) em.textureRows = 1;
-            if (em.textureCols == 0) em.textureCols = 1;
 
             if (isVanilla) {
-                // Vanilla: 10 contiguous M2TrackDiskVanilla tracks (28 bytes each) at 0x34
-                auto parseTrackV = [&](uint32_t off, M2AnimationTrack& track) {
-                    if (base + off + sizeof(M2TrackDiskVanilla) <= m2Data.size()) {
-                        M2TrackDiskVanilla disk = readValue<M2TrackDiskVanilla>(m2Data, base + off);
-                        parseAnimTrackVanilla(m2Data, disk, track, TrackType::FLOAT);
-                    }
-                };
-                parseTrackV(0x34, em.emissionSpeed);       // +28 = 0x50
-                parseTrackV(0x50, em.speedVariation);      // +28 = 0x6C
-                parseTrackV(0x6C, em.verticalRange);       // +28 = 0x88
-                parseTrackV(0x88, em.horizontalRange);     // +28 = 0xA4
-                parseTrackV(0xA4, em.gravity);             // +28 = 0xC0
-                parseTrackV(0xC0, em.lifespan);            // +28 = 0xDC
-                parseTrackV(0xDC, em.emissionRate);        // +28 = 0xF8
-                parseTrackV(0xF8, em.emissionAreaLength);  // +28 = 0x114
-                parseTrackV(0x114, em.emissionAreaWidth);  // +28 = 0x130
-                parseTrackV(0x130, em.deceleration);       // +28 = 0x14C
+                const auto disk = readValue<M2ParticleEmitterDiskVanilla>(m2Data, base);
+                readEmitterHeader(disk.header, em);
 
-                // Vanilla: NO FBlocks - color/alpha/scale are static inline values
-                // Layout (empirically confirmed from real vanilla M2 files):
-                //   +0x14C: float midpoint (lifecycle split: 0→mid→1)
-                //   +0x150: uint32 colorValues[3] (BGRA, A channel = opacity)
-                //   +0x15C: float scaleValues[3] (1D particle scale)
-                float midpoint = readValue<float>(m2Data, base + 0x14C);
+                // Vanilla: 10 contiguous M2TrackDiskVanilla tracks (28 bytes each) at 0x34
+                parseAnimTrackVanilla(m2Data, disk.emissionSpeed, em.emissionSpeed, TrackType::FLOAT);
+                parseAnimTrackVanilla(m2Data, disk.speedVariation, em.speedVariation, TrackType::FLOAT);
+                parseAnimTrackVanilla(m2Data, disk.verticalRange, em.verticalRange, TrackType::FLOAT);
+                parseAnimTrackVanilla(m2Data, disk.horizontalRange, em.horizontalRange, TrackType::FLOAT);
+                parseAnimTrackVanilla(m2Data, disk.gravity, em.gravity, TrackType::FLOAT);
+                parseAnimTrackVanilla(m2Data, disk.lifespan, em.lifespan, TrackType::FLOAT);
+                parseAnimTrackVanilla(m2Data, disk.emissionRate, em.emissionRate, TrackType::FLOAT);
+                parseAnimTrackVanilla(m2Data, disk.emissionAreaLength, em.emissionAreaLength, TrackType::FLOAT);
+                parseAnimTrackVanilla(m2Data, disk.emissionAreaWidth, em.emissionAreaWidth, TrackType::FLOAT);
+                parseAnimTrackVanilla(m2Data, disk.deceleration, em.deceleration, TrackType::FLOAT);
+
+                // Vanilla: NO FBlocks - color/alpha/scale are static inline
+                // values, three each over the particle's life.
+                float midpoint = disk.midpoint;
                 if (midpoint < 0.0f || midpoint > 1.0f) midpoint = 0.5f;
 
                 // Synthesize color FBlock from static BGRA values
-                // Vanilla M2 stores 3× uint32 as BGRA (little-endian: byte0=B, byte1=G, byte2=R, byte3=A)
+                // Vanilla M2 stores 3x uint32 as BGRA (little-endian: byte0=B, byte1=G, byte2=R, byte3=A)
                 {
                     em.particleColor.timestamps = {0.0f, midpoint, 1.0f};
                     em.particleColor.vec3Values.resize(3);
                     em.particleAlpha.timestamps = {0.0f, midpoint, 1.0f};
                     em.particleAlpha.floatValues.resize(3);
                     for (int c = 0; c < 3; c++) {
-                        uint32_t bgra = readValue<uint32_t>(m2Data, base + 0x150 + c * 4);
+                        uint32_t bgra = disk.colorValues[c];
                         float b = ((bgra >>  0) & 0xFF) / 255.0f;
                         float g = ((bgra >>  8) & 0xFF) / 255.0f;
                         float r = ((bgra >> 16) & 0xFF) / 255.0f;
@@ -1639,44 +1902,37 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                     em.particleScale.timestamps = {0.0f, midpoint, 1.0f};
                     em.particleScale.floatValues.resize(3);
                     for (int s = 0; s < 3; s++) {
-                        float scale = readValue<float>(m2Data, base + 0x15C + s * 4);
+                        float scale = disk.scaleValues[s];
                         if (scale < 0.001f || scale > 100.0f) scale = 1.0f;
                         em.particleScale.floatValues[s] = scale;
                     }
                 }
             } else {
-                // WotLK: M2TrackDisk (20 bytes) at known offsets with vary floats interspersed
-                auto parseTrack = [&](uint32_t off, M2AnimationTrack& track) {
-                    if (base + off + sizeof(M2TrackDisk) <= m2Data.size()) {
-                        M2TrackDisk disk = readValue<M2TrackDisk>(m2Data, base + off);
-                        parseAnimTrack(m2Data, disk, track, TrackType::FLOAT, emSeqFlags);
-                    }
-                };
-                parseTrack(0x34, em.emissionSpeed);
-                parseTrack(0x48, em.speedVariation);
-                parseTrack(0x5C, em.verticalRange);
-                parseTrack(0x70, em.horizontalRange);
-                parseTrack(0x84, em.gravity);
-                parseTrack(0x98, em.lifespan);
-                parseTrack(0xB0, em.emissionRate);
-                parseTrack(0xC8, em.emissionAreaLength);
-                parseTrack(0xDC, em.emissionAreaWidth);
-                parseTrack(0xF0, em.deceleration);
-                if (base + 0x1C8 + sizeof(M2TrackDisk) <= m2Data.size()) {
-                    M2TrackDisk disk = readValue<M2TrackDisk>(m2Data, base + 0x1C8);
-                    parseAnimTrack(m2Data, disk, em.enabledTrack, TrackType::BYTE_BOOL, emSeqFlags);
-                }
+                const auto disk = readValue<M2ParticleEmitterDisk>(m2Data, base);
+                readEmitterHeader(disk.header, em);
 
-                em.lifespanVary = readValue<float>(m2Data, base + 0xAC);
-                em.emissionRateVary = readValue<float>(m2Data, base + 0xC4);
-                em.scaleVary = glm::vec2(readValue<float>(m2Data, base + 0x134),
-                                         readValue<float>(m2Data, base + 0x138));
+                // WotLK: M2TrackDisk (20 bytes) at known offsets with vary floats interspersed
+                parseAnimTrack(m2Data, disk.emissionSpeed, em.emissionSpeed, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.speedVariation, em.speedVariation, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.verticalRange, em.verticalRange, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.horizontalRange, em.horizontalRange, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.gravity, em.gravity, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.lifespan, em.lifespan, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.emissionRate, em.emissionRate, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.emissionAreaLength, em.emissionAreaLength, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.emissionAreaWidth, em.emissionAreaWidth, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.deceleration, em.deceleration, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.enabledIn, em.enabledTrack, TrackType::BYTE_BOOL, emSeqFlags);
+
+                em.lifespanVary = disk.lifespanVary;
+                em.emissionRateVary = disk.emissionRateVary;
+                em.scaleVary = glm::vec2(disk.scaleVary[0], disk.scaleVary[1]);
 
                 // Parse FBlocks (color, alpha, scale) - FBlocks are 16 bytes each
-                parseFBlock(m2Data, base + 0x104, em.particleColor, 0);
-                parseFBlock(m2Data, base + 0x114, em.particleAlpha, 1);
-                parseFBlock(m2Data, base + 0x124, em.particleScale, 2);
-                parseFBlock(m2Data, base + 0x13C, em.headCell, 3);
+                parseFBlock(m2Data, disk.color, em.particleColor, FBlockValue::Color);
+                parseFBlock(m2Data, disk.alpha, em.particleAlpha, FBlockValue::Alpha);
+                parseFBlock(m2Data, disk.scale, em.particleScale, FBlockValue::Scale);
+                parseFBlock(m2Data, disk.headCell, em.headCell, FBlockValue::Cell);
             }
 
             model.particleEmitters.push_back(std::move(em));
@@ -1687,12 +1943,13 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
 
     // Parse ribbon emitters (WotLK only; vanilla format TBD).
     // WotLK M2RibbonEmitter = 0xAC (172) bytes per entry.
-    static constexpr uint32_t RIBBON_SIZE_WOTLK = 0xAC;
     if (header.nRibbonEmitters > 0 && header.ofsRibbonEmitters > 0 &&
         header.nRibbonEmitters < 64 && header.version >= 264) {
 
+        // As with the particle emitters, this check covers every read of the
+        // records themselves.
         if (static_cast<size_t>(header.ofsRibbonEmitters) +
-                static_cast<size_t>(header.nRibbonEmitters) * RIBBON_SIZE_WOTLK <= m2Data.size()) {
+                static_cast<size_t>(header.nRibbonEmitters) * sizeof(M2RibbonEmitterDisk) <= m2Data.size()) {
 
             // Build sequence flags for parseAnimTrack
             std::vector<uint32_t> ribSeqFlags;
@@ -1702,23 +1959,23 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
             }
 
             for (uint32_t ri = 0; ri < header.nRibbonEmitters; ri++) {
-                uint32_t base = header.ofsRibbonEmitters + ri * RIBBON_SIZE_WOTLK;
+                const uint32_t base = header.ofsRibbonEmitters +
+                                      ri * static_cast<uint32_t>(sizeof(M2RibbonEmitterDisk));
+                const auto disk = readValue<M2RibbonEmitterDisk>(m2Data, base);
 
                 M2RibbonEmitter rib;
-                rib.ribbonId     = readValue<int32_t>(m2Data, base + 0x00);
-                rib.bone         = readValue<uint32_t>(m2Data, base + 0x04);
-                rib.position.x   = readValue<float>(m2Data, base + 0x08);
-                rib.position.y   = readValue<float>(m2Data, base + 0x0C);
-                rib.position.z   = readValue<float>(m2Data, base + 0x10);
+                rib.ribbonId     = disk.ribbonId;
+                rib.bone         = disk.bone;
+                rib.position     = glm::vec3(disk.position[0], disk.position[1], disk.position[2]);
 
                 // The texture (0x14) and material (0x1c) index arrays. The
                 // client pairs them up to the texture count, reading the
                 // material at the same place (0x00832ea0).
                 {
-                    const uint32_t nTex = readValue<uint32_t>(m2Data, base + 0x14);
-                    const uint32_t ofsTex = readValue<uint32_t>(m2Data, base + 0x18);
-                    const uint32_t nMat = readValue<uint32_t>(m2Data, base + 0x1C);
-                    const uint32_t ofsMat = readValue<uint32_t>(m2Data, base + 0x20);
+                    const uint32_t nTex = disk.textureIndices.count;
+                    const uint32_t ofsTex = disk.textureIndices.offset;
+                    const uint32_t nMat = disk.materialIndices.count;
+                    const uint32_t ofsMat = disk.materialIndices.offset;
                     const auto fits = [&](uint32_t ofs, uint32_t i) {
                         return static_cast<size_t>(ofs) + (static_cast<size_t>(i) + 1) * sizeof(uint16_t) <=
                                m2Data.size();
@@ -1743,36 +2000,22 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                     }
                 }
 
-                // colorTrack M2TrackDisk at 0x24 (vec3 RGB 0..1)
-                if (base + 0x24 + sizeof(M2TrackDisk) <= m2Data.size()) {
-                    M2TrackDisk disk = readValue<M2TrackDisk>(m2Data, base + 0x24);
-                    parseAnimTrack(m2Data, disk, rib.colorTrack, TrackType::VEC3, ribSeqFlags);
-                }
+                // colorTrack (vec3 RGB 0..1)
+                parseAnimTrack(m2Data, disk.colorTrack, rib.colorTrack, TrackType::VEC3, ribSeqFlags);
 
-                // alphaTrack M2TrackDisk at 0x38 (fixed16: int16/32767)
+                // alphaTrack (fixed16: int16/32767)
                 // Same nested-array layout as parseAnimTrack but keys are int16.
-                if (base + 0x38 + sizeof(M2TrackDisk) <= m2Data.size()) {
-                    parseAnimTrack(m2Data, readValue<M2TrackDisk>(m2Data, base + 0x38),
-                                   rib.alphaTrack, TrackType::FIXED16, ribSeqFlags);
-                }
+                parseAnimTrack(m2Data, disk.alphaTrack, rib.alphaTrack, TrackType::FIXED16, ribSeqFlags);
 
-                // heightAboveTrack M2TrackDisk at 0x4C (float)
-                if (base + 0x4C + sizeof(M2TrackDisk) <= m2Data.size()) {
-                    M2TrackDisk disk = readValue<M2TrackDisk>(m2Data, base + 0x4C);
-                    parseAnimTrack(m2Data, disk, rib.heightAboveTrack, TrackType::FLOAT, ribSeqFlags);
-                }
+                // heightAboveTrack, heightBelowTrack (float)
+                parseAnimTrack(m2Data, disk.heightAboveTrack, rib.heightAboveTrack, TrackType::FLOAT, ribSeqFlags);
+                parseAnimTrack(m2Data, disk.heightBelowTrack, rib.heightBelowTrack, TrackType::FLOAT, ribSeqFlags);
 
-                // heightBelowTrack M2TrackDisk at 0x60 (float)
-                if (base + 0x60 + sizeof(M2TrackDisk) <= m2Data.size()) {
-                    M2TrackDisk disk = readValue<M2TrackDisk>(m2Data, base + 0x60);
-                    parseAnimTrack(m2Data, disk, rib.heightBelowTrack, TrackType::FLOAT, ribSeqFlags);
-                }
-
-                rib.edgesPerSecond = readValue<float>(m2Data, base + 0x74);
-                rib.edgeLifetime   = readValue<float>(m2Data, base + 0x78);
-                rib.gravity        = readValue<float>(m2Data, base + 0x7C);
-                rib.textureRows    = readValue<uint16_t>(m2Data, base + 0x80);
-                rib.textureCols    = readValue<uint16_t>(m2Data, base + 0x82);
+                rib.edgesPerSecond = disk.edgesPerSecond;
+                rib.edgeLifetime   = disk.edgeLifetime;
+                rib.gravity        = disk.gravity;
+                rib.textureRows    = disk.textureRows;
+                rib.textureCols    = disk.textureCols;
                 if (rib.textureRows == 0) rib.textureRows = 1;
                 if (rib.textureCols == 0) rib.textureCols = 1;
                 // The rate and lifetime as the file has them: the emitter
@@ -1784,19 +2027,13 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                 }
                 if (!std::isfinite(rib.edgeLifetime) || rib.edgeLifetime > 1000.0f) rib.edgeLifetime = 0.0f;
 
-                // texSlotTrack M2TrackDisk at 0x84 (uint16)
-                if (base + 0x84 + sizeof(M2TrackDisk) <= m2Data.size()) {
-                    parseAnimTrack(m2Data, readValue<M2TrackDisk>(m2Data, base + 0x84),
-                                   rib.texSlotTrack, TrackType::UINT16, ribSeqFlags);
-                }
+                // texSlotTrack (uint16)
+                parseAnimTrack(m2Data, disk.texSlotTrack, rib.texSlotTrack, TrackType::UINT16, ribSeqFlags);
 
-                // visibilityTrack M2TrackDisk at 0x98 - keys are uint8 (0/1), NOT float.
+                // visibilityTrack - keys are uint8 (0/1), NOT float.
                 // Must read as uint8 and convert to float, else 0x01 reads as
                 // float ~1.4e-45 which fails the visibility > 0.5 check.
-                if (base + 0x98 + sizeof(M2TrackDisk) <= m2Data.size()) {
-                    parseAnimTrack(m2Data, readValue<M2TrackDisk>(m2Data, base + 0x98),
-                                   rib.visibilityTrack, TrackType::BYTE_BOOL, ribSeqFlags);
-                }
+                parseAnimTrack(m2Data, disk.visibilityTrack, rib.visibilityTrack, TrackType::BYTE_BOOL, ribSeqFlags);
 
                 // Skip garbage emitters (common M2 artifact: alternating emitters
                 // have bone=UINT_MAX or other invalid state)
@@ -1841,8 +2078,7 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     if (header.version < 264 && header.nViews > 0 && ofsViews > 0 &&
         ofsViews + sizeof(M2SkinProfileEmbedded) <= m2Data.size()) {
 
-        M2SkinProfileEmbedded skinProfile;
-        std::memcpy(&skinProfile, m2Data.data() + ofsViews, sizeof(skinProfile));
+        const M2SkinProfileEmbedded skinProfile = readValue<M2SkinProfileEmbedded>(m2Data, ofsViews);
 
         // Read vertex lookup table (maps skin-local indices to global vertex indices)
         std::vector<uint16_t> vertexLookup;
@@ -1897,8 +2133,8 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                     sm.boneStart = vs.boneStart;
                     sm.boneInfluences = vs.boneInfluences;
                     sm.centerBoneIndex = vs.centerBoneIndex;
-                    std::memcpy(sm.centerPosition, vs.centerPosition, 12);
-                    std::memset(sm.sortCenterPosition, 0, 12);
+                    std::memcpy(sm.centerPosition, vs.centerPosition, sizeof(sm.centerPosition));
+                    std::memset(sm.sortCenterPosition, 0, sizeof(sm.sortCenterPosition));
                     sm.sortRadius = 0;
                     submeshes.push_back(sm);
                 }
@@ -2142,14 +2378,17 @@ void M2Loader::loadAnimFile(const std::vector<uint8_t>& m2Data,
             if (!seqKeys.timestamps.empty()) return;
 
             // Read sub-array header for this sequence from the M2 file
-            uint32_t tsHeaderOfs = disk.ofsTimestamps + sequenceIndex * 8;
-            uint32_t keyHeaderOfs = disk.ofsKeys + sequenceIndex * 8;
-            if (tsHeaderOfs + 8 > m2Data.size() || keyHeaderOfs + 8 > m2Data.size()) return;
+            uint32_t tsHeaderOfs = disk.ofsTimestamps + sequenceIndex * kM2ArrayDiskSize;
+            uint32_t keyHeaderOfs = disk.ofsKeys + sequenceIndex * kM2ArrayDiskSize;
+            if (tsHeaderOfs + kM2ArrayDiskSize > m2Data.size() ||
+                keyHeaderOfs + kM2ArrayDiskSize > m2Data.size()) return;
 
-            uint32_t tsCount = readValue<uint32_t>(m2Data, tsHeaderOfs);
-            uint32_t tsOffset = readValue<uint32_t>(m2Data, tsHeaderOfs + 4);
-            uint32_t keyCount = readValue<uint32_t>(m2Data, keyHeaderOfs);
-            uint32_t keyOffset = readValue<uint32_t>(m2Data, keyHeaderOfs + 4);
+            const M2ArrayDisk tsArray = readValue<M2ArrayDisk>(m2Data, tsHeaderOfs);
+            const M2ArrayDisk keyArray = readValue<M2ArrayDisk>(m2Data, keyHeaderOfs);
+            uint32_t tsCount = tsArray.count;
+            uint32_t tsOffset = tsArray.offset;
+            uint32_t keyCount = keyArray.count;
+            uint32_t keyOffset = keyArray.offset;
 
             if (tsCount == 0 || keyCount == 0) return;
 

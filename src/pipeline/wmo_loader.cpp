@@ -1,5 +1,6 @@
 #include "pipeline/wmo_loader.hpp"
 #include "core/logger.hpp"
+#include <cstddef>
 #include <cstring>
 #include <glm/gtc/quaternion.hpp>
 
@@ -33,6 +34,91 @@ constexpr uint32_t MONR = 0x4D4F4E52;  // Normals
 constexpr uint32_t MOTV = 0x4D4F5456;  // Texture coords
 constexpr uint32_t MLIQ = 0x4D4C4951;  // Liquid
 constexpr uint32_t MODR = 0x4D4F4452;  // Doodad references
+constexpr uint32_t MOVT = 0x4D4F5654;  // Vertices
+constexpr uint32_t MOPY = 0x4D4F5059;  // Triangle material info
+
+// SMOMaterial (MOMT entry, 64 bytes).
+struct MomtEntryDisk {
+    uint32_t flags;
+    uint32_t shader;
+    uint32_t blendMode;
+    uint32_t texture1;          // MOTX offset
+    uint32_t sidnColor;         // emissive
+    uint32_t frameSidnColor;    // not read
+    uint32_t texture2;          // MOTX offset
+    uint32_t diffColor;
+    uint32_t groundType;        // not read
+    uint32_t texture3;          // MOTX offset
+    uint32_t color2;
+    uint32_t flags2;            // not read
+    uint32_t runtimeData[4];    // not read
+};
+static_assert(sizeof(MomtEntryDisk) == 64,
+              "MomtEntryDisk is read straight from the file: 64 bytes, no padding");
+
+// SMODoodadSet (MODS entry, 32 bytes).
+struct ModsEntryDisk {
+    char name[20];
+    uint32_t startIndex;        // first doodad in MODD
+    uint32_t count;
+    uint32_t padding;
+};
+static_assert(sizeof(ModsEntryDisk) == 32,
+              "ModsEntryDisk is read straight from the file: 32 bytes, no padding");
+
+// MOGP header (68 bytes), ahead of the group's sub-chunks.
+struct MogpHeaderDisk {
+    uint32_t groupName;             // MOGN offset - not read
+    uint32_t descriptiveGroupName;  // MOGN offset - not read
+    uint32_t flags;
+    float boundingBoxMin[3];
+    float boundingBoxMax[3];
+    uint16_t portalStart;
+    uint16_t portalCount;
+    uint16_t transBatchCount;
+    uint16_t intBatchCount;
+    uint16_t extBatchCount;         // not read
+    uint16_t padding;
+    uint8_t fogIndices[4];          // 4 x uint8, NOT 4 x uint32
+    uint32_t liquidType;
+    int32_t areaGroupId;            // WMOAreaTable's WMOGroupID (the client's group +0x180)
+    uint32_t flags2;                // not read
+    uint32_t unused;
+};
+static_assert(sizeof(MogpHeaderDisk) == 68,
+              "MogpHeaderDisk is read straight from the file: 68 bytes, no padding");
+static_assert(offsetof(MogpHeaderDisk, flags) == 8 &&
+              offsetof(MogpHeaderDisk, fogIndices) == 48 &&
+              offsetof(MogpHeaderDisk, areaGroupId) == 56,
+              "MogpHeaderDisk fields must sit where the client reads them");
+
+// SMOBatch (MOBA entry, 24 bytes).
+struct MobaEntryDisk {
+    int16_t boundingBox[6];     // not read
+    uint32_t startIndex;
+    uint16_t count;
+    uint16_t minIndex;
+    uint16_t maxIndex;
+    uint8_t flags;
+    uint8_t materialId;
+};
+static_assert(sizeof(MobaEntryDisk) == 24,
+              "MobaEntryDisk is read straight from the file: 24 bytes, no padding");
+
+// MLIQ header (30 bytes, unaligned fields - hence packed), then per-vertex
+// data and per-tile flags.
+#pragma pack(push, 1)
+struct MliqHeaderDisk {
+    uint32_t xVerts;
+    uint32_t yVerts;
+    uint32_t xTiles;
+    uint32_t yTiles;
+    float basePosition[3];
+    uint16_t materialId;
+};
+#pragma pack(pop)
+static_assert(sizeof(MliqHeaderDisk) == 30,
+              "MliqHeaderDisk is read straight from the file: 30 bytes, no padding");
 
 // Read utilities
 template<typename T>
@@ -170,34 +256,21 @@ WMOModel WMOLoader::load(const std::vector<uint8_t>& wmoData) {
             }
 
             case MOMT: {
-                // Materials - dump raw fields to find correct layout
-                uint32_t nMaterials = chunkSize / 64;  // Each material is 64 bytes
+                // Materials, SMOMaterial (wowdev.wiki): see MomtEntryDisk
+                uint32_t nMaterials = chunkSize / sizeof(MomtEntryDisk);
                 for (uint32_t i = 0; i < nMaterials; i++) {
-                    // Read all 16 uint32 fields (64 bytes)
-                    uint32_t fields[16];
-                    for (uint32_t& field : fields) {
-                        field = read<uint32_t>(wmoData, offset);
-                    }
+                    const auto entry = read<MomtEntryDisk>(wmoData, offset);
 
-                    // SMOMaterial layout (wowdev.wiki):
-                    // 0: flags, 1: shader, 2: blendMode
-                    // 3: texture_1 (MOTX offset)
-                    // 4: sidnColor (emissive), 5: frameSidnColor
-                    // 6: texture_2 (MOTX offset)
-                    // 7: diffColor, 8: ground_type
-                    // 9: texture_3 (MOTX offset)
-                    // 10: color_2, 11: flags2
-                    // 12-15: runtime
                     WMOMaterial mat;
-                    mat.flags = fields[0];
-                    mat.shader = fields[1];
-                    mat.blendMode = fields[2];
-                    mat.texture1 = fields[3];
-                    mat.color1 = fields[4];
-                    mat.texture2 = fields[6];  // Skip frameSidnColor at [5]
-                    mat.color2 = fields[7];
-                    mat.texture3 = fields[9];  // Skip ground_type at [8]
-                    mat.color3 = fields[10];
+                    mat.flags = entry.flags;
+                    mat.shader = entry.shader;
+                    mat.blendMode = entry.blendMode;
+                    mat.texture1 = entry.texture1;
+                    mat.color1 = entry.sidnColor;
+                    mat.texture2 = entry.texture2;
+                    mat.color2 = entry.diffColor;
+                    mat.texture3 = entry.texture3;
+                    mat.color3 = entry.color2;
 
                     model.materials.push_back(mat);
                 }
@@ -328,17 +401,17 @@ WMOModel WMOLoader::load(const std::vector<uint8_t>& wmoData) {
 
             case MODS: {
                 // Doodad sets: 20-byte name + 3×uint32 = 32 bytes each.
-                // Use bounds check before memcpy to avoid OOB on truncated files
-                // (the raw memcpy bypassed the safe read<T> template).
-                uint32_t nSets = chunkSize / 32;
+                // Through the bounds-checked read<T>: the chunk lies inside
+                // the file, so every whole entry does too.
+                uint32_t nSets = chunkSize / sizeof(ModsEntryDisk);
                 for (uint32_t i = 0; i < nSets; i++) {
+                    const auto entry = read<ModsEntryDisk>(wmoData, offset);
                     WMODoodadSet set;
-                    if (offset + 20 > wmoData.size()) break;
-                    std::memcpy(set.name, &wmoData[offset], 20);
-                    offset += 20;
-                    set.startIndex = read<uint32_t>(wmoData, offset);
-                    set.count = read<uint32_t>(wmoData, offset);
-                    set.padding = read<uint32_t>(wmoData, offset);
+                    static_assert(sizeof(set.name) == sizeof(entry.name), "MODS names are 20 bytes");
+                    std::memcpy(set.name, entry.name, sizeof(set.name));
+                    set.startIndex = entry.startIndex;
+                    set.count = entry.count;
+                    set.padding = entry.padding;
 
                     model.doodadSets.push_back(set);
                 }
@@ -480,42 +553,31 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
         else if (chunkId == MOGP) {
             // Group header - parse sub-chunks
             // MOGP header is 68 bytes, followed by sub-chunks
-            if (chunkSize < 68) {
+            if (chunkSize < sizeof(MogpHeaderDisk)) {
                 offset = chunkEnd;
                 continue;
             }
 
             // Read MOGP header
-            // MOGP starts with groupName(4) + descriptiveName(4) offsets into MOGN,
-            // followed by flags at offset +8.
             uint32_t mogpOffset = offset;
-            mogpOffset += 4; // skip groupName offset
-            mogpOffset += 4; // skip descriptiveGroupName offset
-            group.flags = read<uint32_t>(groupData, mogpOffset);
+            const auto mogp = read<MogpHeaderDisk>(groupData, mogpOffset);
+            group.flags = mogp.flags;
             bool isInterior = (group.flags & 0x2000) != 0;
             core::Logger::getInstance().debug("  Group flags: 0x", std::hex, group.flags, std::dec,
                                               (isInterior ? " (INTERIOR)" : " (exterior)"));
-            group.boundingBoxMin.x = read<float>(groupData, mogpOffset);
-            group.boundingBoxMin.y = read<float>(groupData, mogpOffset);
-            group.boundingBoxMin.z = read<float>(groupData, mogpOffset);
-            group.boundingBoxMax.x = read<float>(groupData, mogpOffset);
-            group.boundingBoxMax.y = read<float>(groupData, mogpOffset);
-            group.boundingBoxMax.z = read<float>(groupData, mogpOffset);
-            group.portalStart = read<uint16_t>(groupData, mogpOffset);
-            group.portalCount = read<uint16_t>(groupData, mogpOffset);
-            group.transBatchCount = read<uint16_t>(groupData, mogpOffset);
-            group.intBatchCount = read<uint16_t>(groupData, mogpOffset);
-            mogpOffset += 4; // extBatchCount, padding
+            group.boundingBoxMin = glm::vec3(mogp.boundingBoxMin[0], mogp.boundingBoxMin[1], mogp.boundingBoxMin[2]);
+            group.boundingBoxMax = glm::vec3(mogp.boundingBoxMax[0], mogp.boundingBoxMax[1], mogp.boundingBoxMax[2]);
+            group.portalStart = mogp.portalStart;
+            group.portalCount = mogp.portalCount;
+            group.transBatchCount = mogp.transBatchCount;
+            group.intBatchCount = mogp.intBatchCount;
             // fogIndices: 4 × uint8 (4 bytes total, NOT 4 × uint32)
-            group.fogIndices[0] = read<uint8_t>(groupData, mogpOffset);
-            group.fogIndices[1] = read<uint8_t>(groupData, mogpOffset);
-            group.fogIndices[2] = read<uint8_t>(groupData, mogpOffset);
-            group.fogIndices[3] = read<uint8_t>(groupData, mogpOffset);
-            group.liquidType = read<uint32_t>(groupData, mogpOffset);
+            for (int i = 0; i < 4; i++) group.fogIndices[i] = mogp.fogIndices[i];
+            group.liquidType = mogp.liquidType;
             // WMOAreaTable's WMOGroupID (the client's group +0x180).
-            group.areaGroupId = read<int32_t>(groupData, mogpOffset);
-            // Skip to end of 68-byte header
-            mogpOffset = offset + 68;
+            group.areaGroupId = mogp.areaGroupId;
+            // The sub-chunks follow the 68-byte header
+            mogpOffset = offset + static_cast<uint32_t>(sizeof(MogpHeaderDisk));
 
             // Parse sub-chunks within MOGP
             int groupLogCount = 0;
@@ -550,7 +612,7 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                     groupLogCount++;
                 }
 
-                if (subChunkId == 0x4D4F5654) { // MOVT - Vertices
+                if (subChunkId == MOVT) { // Vertices
                     uint32_t vertexCount = subChunkSize / 12; // 3 floats per vertex
                     for (uint32_t i = 0; i < vertexCount; i++) {
                         WMOVertex vertex;
@@ -570,7 +632,7 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                         group.indices.push_back(read<uint16_t>(groupData, mogpOffset));
                     }
                 }
-                else if (subChunkId == 0x4D4F5059) { // MOPY - Triangle material info
+                else if (subChunkId == MOPY) { // Triangle material info
                     // 2 bytes per triangle: flags (uint8) + materialId (uint8)
                     // flag 0x04 = detail/decorative geometry (no collision)
                     uint32_t triCount = subChunkSize / 2;
@@ -639,24 +701,17 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                     }
                 }
                 else if (subChunkId == MOBA) { // Batches
-                    // SMOBatch structure (24 bytes):
-                    // - 6 x int16 bounding box (12 bytes)
-                    // - uint32 startIndex (4 bytes)
-                    // - uint16 count (2 bytes)
-                    // - uint16 minIndex (2 bytes)
-                    // - uint16 maxIndex (2 bytes)
-                    // - uint8 flags (1 byte)
-                    // - uint8 material_id (1 byte)
-                    uint32_t batchCount = subChunkSize / 24;
+                    // SMOBatch structure (24 bytes): see MobaEntryDisk
+                    uint32_t batchCount = subChunkSize / sizeof(MobaEntryDisk);
                     for (uint32_t i = 0; i < batchCount; i++) {
+                        const auto entry = read<MobaEntryDisk>(groupData, mogpOffset);
                         WMOBatch batch;
-                        mogpOffset += 12; // Skip bounding box (6 x int16 = 12 bytes)
-                        batch.startIndex = read<uint32_t>(groupData, mogpOffset);
-                        batch.indexCount = read<uint16_t>(groupData, mogpOffset);
-                        batch.startVertex = read<uint16_t>(groupData, mogpOffset);
-                        batch.lastVertex = read<uint16_t>(groupData, mogpOffset);
-                        batch.flags = read<uint8_t>(groupData, mogpOffset);
-                        batch.materialId = read<uint8_t>(groupData, mogpOffset);
+                        batch.startIndex = entry.startIndex;
+                        batch.indexCount = entry.count;
+                        batch.startVertex = entry.minIndex;
+                        batch.lastVertex = entry.maxIndex;
+                        batch.flags = entry.flags;
+                        batch.materialId = entry.materialId;
                         group.batches.push_back(batch);
 
                         // Non-static so each group gets its own throttle window.
@@ -668,22 +723,19 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                     }
                 }
                 else if (subChunkId == MLIQ) { // MLIQ - WMO liquid data
-                    // Basic WotLK layout:
-                    // uint32 xVerts, yVerts, xTiles, yTiles
-                    // float  baseX, baseY, baseZ
-                    // uint16 materialId
+                    // Basic WotLK layout: MliqHeaderDisk, then
                     // (optional pad/unknown bytes)
                     // followed by vertex/tile payload
                     uint32_t parseOffset = mogpOffset;
-                    if (parseOffset + 30 <= subChunkEnd) {
-                        group.liquid.xVerts = read<uint32_t>(groupData, parseOffset);
-                        group.liquid.yVerts = read<uint32_t>(groupData, parseOffset);
-                        group.liquid.xTiles = read<uint32_t>(groupData, parseOffset);
-                        group.liquid.yTiles = read<uint32_t>(groupData, parseOffset);
-                        group.liquid.basePosition.x = read<float>(groupData, parseOffset);
-                        group.liquid.basePosition.y = read<float>(groupData, parseOffset);
-                        group.liquid.basePosition.z = read<float>(groupData, parseOffset);
-                        group.liquid.materialId = read<uint16_t>(groupData, parseOffset);
+                    if (parseOffset + sizeof(MliqHeaderDisk) <= subChunkEnd) {
+                        const auto mliq = read<MliqHeaderDisk>(groupData, parseOffset);
+                        group.liquid.xVerts = mliq.xVerts;
+                        group.liquid.yVerts = mliq.yVerts;
+                        group.liquid.xTiles = mliq.xTiles;
+                        group.liquid.yTiles = mliq.yTiles;
+                        group.liquid.basePosition =
+                            glm::vec3(mliq.basePosition[0], mliq.basePosition[1], mliq.basePosition[2]);
+                        group.liquid.materialId = mliq.materialId;
                         group.liquid.momtIndex = group.liquid.materialId;
                         group.liquid.groupFlags = group.flags;
 

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -196,9 +197,24 @@ struct DetailModelSize {
 /// skin, which the client fails to load.
 inline bool detailSkinCounts(const std::vector<uint8_t>& skin, uint32_t& vertices,
                              uint32_t& indices) {
-    if (skin.size() < 0x10 || std::memcmp(skin.data(), "SKIN", 4) != 0) return false;
-    std::memcpy(&vertices, skin.data() + 0x4, sizeof(vertices));
-    std::memcpy(&indices, skin.data() + 0xc, sizeof(indices));
+    // The start of a .skin header: the vertex lookup's M2Array, then the
+    // triangle index array's count.
+    struct SkinCountsDisk {
+        char magic[4];           // 'SKIN'
+        uint32_t nVertices;      // +0x4: entries in the vertex lookup
+        uint32_t ofsVertices;
+        uint32_t nIndices;       // +0xc: triangle indices
+    };
+    static_assert(sizeof(SkinCountsDisk) == 0x10 &&
+                  offsetof(SkinCountsDisk, nVertices) == 0x4 &&
+                  offsetof(SkinCountsDisk, nIndices) == 0xc,
+                  "SkinCountsDisk must match the .skin header the client reads");
+    if (skin.size() < sizeof(SkinCountsDisk)) return false;
+    SkinCountsDisk head;
+    std::memcpy(&head, skin.data(), sizeof(head));
+    if (std::memcmp(head.magic, "SKIN", 4) != 0) return false;
+    vertices = head.nVertices;
+    indices = head.nIndices;
     return true;
 }
 

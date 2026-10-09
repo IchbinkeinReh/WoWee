@@ -3,6 +3,7 @@
 #include "core/logger.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 
 namespace wowee {
@@ -11,26 +12,64 @@ namespace pipeline {
 namespace {
 
 constexpr uint32_t kMagic = 0x20534444u;  // "DDS "
-constexpr size_t kHeaderBytes = 128;      // magic + 124-byte DDS_HEADER
-constexpr size_t kDx10HeaderBytes = 20;   // DDS_HEADER_DXT10, when present
 
-// Offsets into the file, magic included, so they read as file positions.
-constexpr size_t kOfsHeaderSize = 4;
-constexpr size_t kOfsHeight = 12;
-constexpr size_t kOfsWidth = 16;
-constexpr size_t kOfsMipCount = 28;
-constexpr size_t kOfsPixelFormatFlags = 80;
-constexpr size_t kOfsFourCC = 84;
-constexpr size_t kOfsDxgiFormat = 128;
+// The file's first 128 bytes: the magic, then the 124-byte DDS_HEADER with
+// its DDS_PIXELFORMAT inside it.
+struct DdsPixelFormatDisk {
+    uint32_t size;
+    uint32_t flags;               // DDPF_*
+    uint32_t fourCC;
+    uint32_t rgbBitCount;
+    uint32_t rBitMask;
+    uint32_t gBitMask;
+    uint32_t bBitMask;
+    uint32_t aBitMask;
+};
+struct DdsFileHeaderDisk {
+    uint32_t magic;               // "DDS "
+    uint32_t headerSize;          // DDS_HEADER's own size, 124
+    uint32_t flags;
+    uint32_t height;
+    uint32_t width;
+    uint32_t pitchOrLinearSize;
+    uint32_t depth;
+    uint32_t mipMapCount;
+    uint32_t reserved1[11];
+    DdsPixelFormatDisk pixelFormat;
+    uint32_t caps;
+    uint32_t caps2;
+    uint32_t caps3;
+    uint32_t caps4;
+    uint32_t reserved2;
+};
+static_assert(sizeof(DdsFileHeaderDisk) == 128,
+              "DdsFileHeaderDisk is the magic plus the 124-byte DDS_HEADER, no padding");
+static_assert(offsetof(DdsFileHeaderDisk, mipMapCount) == 28 &&
+              offsetof(DdsFileHeaderDisk, pixelFormat) == 76,
+              "DdsFileHeaderDisk fields must sit where DDS puts them");
+constexpr uint32_t kDdsHeaderSize = sizeof(DdsFileHeaderDisk) - sizeof(uint32_t);
+
+// DDS_HEADER_DXT10, which follows when the four-character code is "DX10".
+struct DdsDx10HeaderDisk {
+    uint32_t dxgiFormat;
+    uint32_t resourceDimension;
+    uint32_t miscFlag;
+    uint32_t arraySize;
+    uint32_t miscFlags2;
+};
+static_assert(sizeof(DdsDx10HeaderDisk) == 20,
+              "DdsDx10HeaderDisk is read straight from the file: 20 bytes, no padding");
 
 constexpr uint32_t kFourCC(char a, char b, char c, char d) {
     return static_cast<uint32_t>(a) | (static_cast<uint32_t>(b) << 8) |
            (static_cast<uint32_t>(c) << 16) | (static_cast<uint32_t>(d) << 24);
 }
 
-uint32_t readU32(const std::vector<uint8_t>& data, size_t offset) {
-    uint32_t value = 0;
-    std::memcpy(&value, data.data() + offset, sizeof(value));
+// A disk struct at `offset`; the caller has checked the file holds it.
+template <typename T>
+T readDisk(const std::vector<uint8_t>& data, size_t offset) {
+    T value;
+    std::memcpy(&value, data.data() + offset, sizeof(T));
     return value;
 }
 
@@ -56,32 +95,33 @@ size_t DdsLoader::levelBytes(BLPCompression compression, int width, int height) 
 
 BLPImage DdsLoader::load(const std::vector<uint8_t>& ddsData) {
     BLPImage image;
-    if (ddsData.size() < kHeaderBytes) {
+    if (ddsData.size() < sizeof(DdsFileHeaderDisk)) {
         LOG_WARNING("DDS too small: ", ddsData.size(), " bytes");
         return image;
     }
-    if (readU32(ddsData, 0) != kMagic || readU32(ddsData, kOfsHeaderSize) != 124) {
+    const auto header = readDisk<DdsFileHeaderDisk>(ddsData, 0);
+    if (header.magic != kMagic || header.headerSize != kDdsHeaderSize) {
         LOG_WARNING("DDS header not recognised");
         return image;
     }
 
-    const int height = static_cast<int>(readU32(ddsData, kOfsHeight));
-    const int width = static_cast<int>(readU32(ddsData, kOfsWidth));
+    const int height = static_cast<int>(header.height);
+    const int width = static_cast<int>(header.width);
     if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
         LOG_WARNING("DDS dimensions out of range: ", width, "x", height);
         return image;
     }
 
     constexpr uint32_t kDdpfFourCC = 0x4u;
-    if ((readU32(ddsData, kOfsPixelFormatFlags) & kDdpfFourCC) == 0) {
+    if ((header.pixelFormat.flags & kDdpfFourCC) == 0) {
         // An uncompressed DDS has nothing this path wants: the PNG sidecar is
         // the way to hand over RGBA8, and it is already read.
         LOG_WARNING("DDS is not block compressed; use a .png sidecar instead");
         return image;
     }
 
-    const uint32_t fourCC = readU32(ddsData, kOfsFourCC);
-    size_t dataOffset = kHeaderBytes;
+    const uint32_t fourCC = header.pixelFormat.fourCC;
+    size_t dataOffset = sizeof(DdsFileHeaderDisk);
     BLPCompression compression = BLPCompression::NONE;
     if (fourCC == kFourCC('D', 'X', 'T', '1')) {
         compression = BLPCompression::DXT1;
@@ -94,17 +134,18 @@ BLPImage DdsLoader::load(const std::vector<uint8_t>& ddsData) {
         // carries a DXGI format where the legacy one carried a four-character
         // code; the sRGB variants are the same blocks, and the renderer
         // uploads UNORM either way.
-        if (ddsData.size() < kHeaderBytes + kDx10HeaderBytes) {
+        if (ddsData.size() < sizeof(DdsFileHeaderDisk) + sizeof(DdsDx10HeaderDisk)) {
             LOG_WARNING("DDS claims a DX10 header but is too small to hold one");
             return image;
         }
-        dataOffset = kHeaderBytes + kDx10HeaderBytes;
-        switch (readU32(ddsData, kOfsDxgiFormat)) {
-            case 71: case 72: compression = BLPCompression::DXT1; break;
-            case 74: case 75: compression = BLPCompression::DXT3; break;
-            case 77: case 78: compression = BLPCompression::DXT5; break;
+        const auto dx10 = readDisk<DdsDx10HeaderDisk>(ddsData, sizeof(DdsFileHeaderDisk));
+        dataOffset = sizeof(DdsFileHeaderDisk) + sizeof(DdsDx10HeaderDisk);
+        switch (dx10.dxgiFormat) {
+            case 71: case 72: compression = BLPCompression::DXT1; break;  // BC1_UNORM(_SRGB)
+            case 74: case 75: compression = BLPCompression::DXT3; break;  // BC2_UNORM(_SRGB)
+            case 77: case 78: compression = BLPCompression::DXT5; break;  // BC3_UNORM(_SRGB)
             default:
-                LOG_WARNING("DDS DXGI format ", readU32(ddsData, kOfsDxgiFormat),
+                LOG_WARNING("DDS DXGI format ", dx10.dxgiFormat,
                             " is not BC1/BC2/BC3");
                 return image;
         }
@@ -113,7 +154,7 @@ BLPImage DdsLoader::load(const std::vector<uint8_t>& ddsData) {
         return image;
     }
 
-    const uint32_t declaredMips = readU32(ddsData, kOfsMipCount);
+    const uint32_t declaredMips = header.mipMapCount;
     const uint32_t mipCount = std::max(1u, declaredMips);
 
     size_t at = dataOffset;
