@@ -5,6 +5,7 @@
 #include "game/game_handler.hpp"
 #include "game/entity.hpp"
 #include "rendering/camera.hpp"
+#include "rendering/renderer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -36,6 +37,30 @@ ScenePick pickScene(game::GameHandler& gameHandler,
                     const ScenePickHit& onHit) {
     ScenePick pick;
     const uint64_t myGuid = gameHandler.getPlayerGuid();
+
+    // Where the ray first meets the world - a building's collision triangles
+    // or the ground; only what the ray reaches before that can be picked.
+    // Half a yard of slack keeps a unit standing on the floor pickable where
+    // its sphere dips into it.
+    //
+    // Traced only as far as an object the ray reaches, and only once one is:
+    // the ground is marched half a yard at a time, and tracing the full
+    // reach every frame for the hover cost 2.5 ms when nothing was there.
+    constexpr float kOcclusionSlack = 0.5f;
+    auto* occlusionRenderer = params.occludeByWorld
+        ? core::Application::getInstance().getRenderer() : nullptr;
+    float worldT = 1e30f;        // the first world hit, once found
+    float worldTracedTo = 0.0f;  // how far the trace has looked without one
+    const auto hiddenByWorld = [&](float t) {
+        if (!occlusionRenderer) return false;
+        if (worldT < 1e29f) return t > worldT + kOcclusionSlack;
+        if (t <= worldTracedTo + kOcclusionSlack) return false;
+        if (const auto hit = occlusionRenderer->pickGround(ray.origin, ray.direction, t)) {
+            worldT = glm::length(*hit - ray.origin);
+        }
+        worldTracedTo = t;
+        return worldT < 1e29f && t > worldT + kOcclusionSlack;
+    };
 
     for (const auto& [guid, entity] : gameHandler.getEntityManager().getEntities()) {
         if (!entity) continue;
@@ -101,6 +126,7 @@ ScenePick pickScene(game::GameHandler& gameHandler,
 
         float hitT = 0.0f;
         if (!raySphereIntersect(ray, hitCenter, hitRadius, hitT)) continue;
+        if (hiddenByWorld(hitT)) continue;  // behind a wall or under the floor
         const float centerT = glm::dot(hitCenter - ray.origin, ray.direction);
 
         if (type == game::ObjectType::UNIT || type == game::ObjectType::PLAYER) {

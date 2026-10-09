@@ -138,6 +138,11 @@ struct ScenePickParams {
     /// caught while right-drag-rotating the camera near one, which sits the
     /// player down. Left-clicking a chair to target it still works.
     bool skipChairs = false;
+    /// Reject what the world hides: anything whose sphere the ray reaches
+    /// only past the first building or ground it meets. Without it the
+    /// pointer found units and objects through floors and walls - in the
+    /// Undercity, everything on the level below.
+    bool occludeByWorld = true;
 };
 
 /// Everything the traversal found, before either caller applies its own rules.

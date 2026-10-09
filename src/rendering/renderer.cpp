@@ -2393,7 +2393,13 @@ void Renderer::update(float deltaTime) {
                 namespace wl = pipeline::wmo_doodad_light;
                 const glm::vec3 start(feet.x, feet.y, startZ);
                 std::optional<float> ground;
-                if (terrainManager) ground = terrainManager->getHeightAt(feet.x, feet.y);
+                // Not where the ground has a hole: a shaft or a cave mouth
+                // cut through it is no floor, and taking the surface over
+                // it as one lit the Undercity lifts as outdoors each time
+                // they rose past the height of the ruins above - a flash
+                // of daylight on the platform mid-ride.
+                if (terrainManager && !terrainManager->isHoleAt(feet.x, feet.y))
+                    ground = terrainManager->getHeightAt(feet.x, feet.y);
                 auto found = wmoRenderer->floorAlong(start, startZ - wl::kFloorReach);
                 if (found && wl::terrainNearer(startZ, ground, found->z)) found.reset();
                 const bool groundBelow = ground && *ground <= startZ;
