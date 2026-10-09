@@ -1295,15 +1295,18 @@ spell_mods::Sum SpellHandler::spellModifiers(uint32_t spellId, uint8_t op) const
     auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end()) return {};
     // The class's spell family, ChrClasses SpellClassSet (+0x20, WotLK
-    // column 56), set when the player enters the world (0x008007a0).
+    // column 56; 22 in TBC's file, 14 in Classic's), set when the player
+    // enters the world (0x008007a0).
     const uint8_t classId = owner_.getPlayerClass();
     if (classSpellFamilyFor_ != classId) {
         classSpellFamilyFor_ = classId;
         classSpellFamily_ = 0;
         auto* am = core::Application::getInstance().getAssetManager();
         auto classes = am ? am->loadDBCOptional("ChrClasses.dbc") : nullptr;
-        const int32_t row = classes && classes->getFieldCount() == 60 ? classes->findRecordById(classId) : -1;
-        if (row >= 0) classSpellFamily_ = classes->getUInt32(static_cast<uint32_t>(row), 56);
+        const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ChrClasses") : nullptr;
+        const uint32_t field = layout ? layout->tryField("SpellClassSet") : 0xFFFFFFFF;
+        const int32_t row = classes && field < classes->getFieldCount() ? classes->findRecordById(classId) : -1;
+        if (row >= 0) classSpellFamily_ = classes->getUInt32(static_cast<uint32_t>(row), field);
     }
     const auto& flat = owner_.spellFlatModsRef();
     const auto& pct = owner_.spellPctModsRef();
@@ -3426,6 +3429,7 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t attrEx3Field = spellL ? spellL->tryField("AttributesEx3") : 0xFFFFFFFF;
     const uint32_t familyField = spellL ? spellL->tryField("SpellFamilyName") : 0xFFFFFFFF;
     const uint32_t familyFlagsField = spellL ? spellL->tryField("SpellFamilyFlags") : 0xFFFFFFFF;
+    const uint32_t familyFlagWords = isPreWotlk() ? 2u : 3u;
 
     // The base attribute word, beside the Ex one that was already read. Bit 6
     // marks a passive, which is the only thing asked of it so far.
@@ -3621,7 +3625,8 @@ void SpellHandler::loadSpellNameCache() const {
             }
             if (attrEx3Field < fieldCount) entry.attrEx3 = dbc->getUInt32(i, attrEx3Field);
             if (familyField < fieldCount) entry.spellFamily = dbc->getUInt32(i, familyField);
-            for (uint32_t w = 0; w < 3; ++w) {
+            // A uint64 before WotLK, three words since (groups 0-63, 0-95).
+            for (uint32_t w = 0; w < familyFlagWords; ++w) {
                 if (familyFlagsField != 0xFFFFFFFF && familyFlagsField + w < fieldCount)
                     entry.spellFamilyFlags[w] = dbc->getUInt32(i, familyFlagsField + w);
             }

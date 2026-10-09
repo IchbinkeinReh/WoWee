@@ -72,6 +72,9 @@
     "SexID": 1,
     "Variation": 2
   },
+  "ChrClasses": {
+    "SpellClassSet": 56
+  },
   "CreatureDisplayInfo": {
     "CreatureModelScale": 4,
     "ParticleColorID": 13,
