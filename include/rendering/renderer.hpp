@@ -848,7 +848,6 @@ private:
     /// extShadowQuality as read at start-up (0-4); below 2 the terrain's
     /// baked shadow dims a world object's direct light (0x007a1bc0).
     int extShadowQuality_ = 0;
-    bool ghostMode_ = false;  // set each frame from gameHandler->isPlayerGhost()
 
     // Render Graph - declarative pass ordering with automatic barriers
     std::unique_ptr<RenderGraph> renderGraph_;

@@ -110,7 +110,6 @@ private:
 
     /// The special fog's two targets, ping-ponged, kept from frame to frame.
     Target fog_[2];
-    bool fogCleared_ = false;
     uint32_t fogLatest_ = 0;
     VkTexture fogNoise_;
     VkTexture wave_;

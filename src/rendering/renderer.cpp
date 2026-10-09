@@ -3395,8 +3395,6 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     lastWMORenderMs = 0.0;
     lastM2RenderMs = 0.0;
 
-    // Cache ghost state for use in overlay and FXAA passes this frame.
-    ghostMode_ = (gameHandler && gameHandler->isPlayerGhost());
 
     uint32_t frameIdx = vkCtx->getCurrentFrame();
     VkDescriptorSet perFrameSet = perFrameDescSets[frameIdx];
