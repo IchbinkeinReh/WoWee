@@ -117,32 +117,45 @@ int interfaceTextLines(const std::string& text, const std::string& fontFace,
 }
 
 float fontEmSizeScale(const void* ttfData, size_t byteCount) {
+    // The OpenType offsets this reads, all big-endian.
+    constexpr uint32_t kTagCollection = 0x74746366u;      // 'ttcf'
+    constexpr uint32_t kTagHead = 0x68656164u;            // 'head'
+    constexpr uint32_t kTagHhea = 0x68686561u;            // 'hhea'
+    constexpr size_t kCollectionFirstFaceOffset = 12;     // TTC header: tag, version, numFonts, offsets[]
+    constexpr size_t kOffsetTableBytes = 12;              // sfntVersion, numTables, search fields
+    constexpr size_t kNumTablesOffset = 4;
+    constexpr size_t kTableRecordBytes = 16;              // tag, checksum, offset, length
+    constexpr size_t kTableRecordOffsetField = 8;
+    constexpr size_t kHeadUnitsPerEmOffset = 18;
+    constexpr size_t kHheaAscenderOffset = 4;
+    constexpr size_t kHheaDescenderOffset = 6;
+
     const auto* d = static_cast<const uint8_t*>(ttfData);
-    if (!d || byteCount < 12) return 1.0f;
+    if (!d || byteCount < kOffsetTableBytes) return 1.0f;
 
     // A collection points at its first face; a plain font is already there.
     size_t base = 0;
-    if (beAt(d, byteCount, 0, 4) == 0x74746366u /* 'ttcf' */) {
-        base = beAt(d, byteCount, 12, 4);
-        if (base + 12 > byteCount) return 1.0f;
+    if (beAt(d, byteCount, 0, 4) == kTagCollection) {
+        base = beAt(d, byteCount, kCollectionFirstFaceOffset, 4);
+        if (base + kOffsetTableBytes > byteCount) return 1.0f;
     }
 
-    const uint32_t tables = beAt(d, byteCount, base + 4, 2);
+    const uint32_t tables = beAt(d, byteCount, base + kNumTablesOffset, 2);
     size_t head = 0, hhea = 0;
     for (uint32_t i = 0; i < tables; ++i) {
-        const size_t rec = base + 12 + static_cast<size_t>(i) * 16;
-        const uint32_t tag = beAt(d, byteCount, rec, 4);
-        if (tag == 0x68656164u /* 'head' */) head = beAt(d, byteCount, rec + 8, 4);
-        else if (tag == 0x68686561u /* 'hhea' */) hhea = beAt(d, byteCount, rec + 8, 4);
+        const size_t record = base + kOffsetTableBytes + static_cast<size_t>(i) * kTableRecordBytes;
+        const uint32_t tag = beAt(d, byteCount, record, 4);
+        if (tag == kTagHead) head = beAt(d, byteCount, record + kTableRecordOffsetField, 4);
+        else if (tag == kTagHhea) hhea = beAt(d, byteCount, record + kTableRecordOffsetField, 4);
     }
     if (head == 0 || hhea == 0) return 1.0f;
 
-    const float upem = static_cast<float>(beAt(d, byteCount, head + 18, 2));
+    const float upem = static_cast<float>(beAt(d, byteCount, head + kHeadUnitsPerEmOffset, 2));
     // Signed, and the descender is negative in every font that has one.
     const auto s16 = [&](size_t at) {
         return static_cast<float>(static_cast<int16_t>(beAt(d, byteCount, at, 2)));
     };
-    const float span = s16(hhea + 4) - s16(hhea + 6);
+    const float span = s16(hhea + kHheaAscenderOffset) - s16(hhea + kHheaDescenderOffset);
     if (upem <= 0.0f || span <= 0.0f) return 1.0f;
 
     // A face whose span is wildly different from its em is more likely a

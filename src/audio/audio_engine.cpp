@@ -822,17 +822,18 @@ uint32_t AudioEngine::readCapturedOutput(float* dst, uint32_t maxFrames) {
     if (!captureRing_ || !dst || maxFrames == 0) return 0;
     auto* ring = static_cast<ma_pcm_rb*>(captureRing_);
     const ma_uint32 channels = ma_pcm_rb_get_channels(ring);
-    uint32_t read = 0;
-    while (read < maxFrames) {
-        ma_uint32 chunk = maxFrames - read;
-        void* src = nullptr;
-        if (ma_pcm_rb_acquire_read(ring, &chunk, &src) != MA_SUCCESS || chunk == 0) break;
-        std::memcpy(dst + static_cast<size_t>(read) * channels, src,
-                    static_cast<size_t>(chunk) * channels * sizeof(float));
-        ma_pcm_rb_commit_read(ring, chunk);
-        read += chunk;
+    // Frames are interleaved: one float per channel each.
+    uint32_t framesRead = 0;
+    while (framesRead < maxFrames) {
+        ma_uint32 chunkFrames = maxFrames - framesRead;
+        void* ringFrames = nullptr;
+        if (ma_pcm_rb_acquire_read(ring, &chunkFrames, &ringFrames) != MA_SUCCESS || chunkFrames == 0) break;
+        float* nextFrame = dst + static_cast<size_t>(framesRead) * channels;
+        std::memcpy(nextFrame, ringFrames, static_cast<size_t>(chunkFrames) * channels * sizeof(float));
+        ma_pcm_rb_commit_read(ring, chunkFrames);
+        framesRead += chunkFrames;
     }
-    return read;
+    return framesRead;
 }
 
 uint32_t AudioEngine::capturedOutputAvailable() const {
