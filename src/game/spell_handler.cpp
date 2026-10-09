@@ -4440,6 +4440,7 @@ void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
         uint32_t failedSpellId = 0;
         if (const auto* st = getUnitCastState(failOtherGuid)) failedSpellId = st->spellId;
         unitCastStates_.erase(failOtherGuid);
+        noteUnitCastEnd(failOtherGuid, false);
         if (owner_.addonEventCallbackRef()) {
             std::string unitId;
             if (failOtherGuid == owner_.getTargetGuid())     unitId = "target";
@@ -4717,6 +4718,7 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
     } else {
         // Another unit's cast failed - clear their tracked cast bar
         unitCastStates_.erase(failGuid);
+        noteUnitCastEnd(failGuid, false);
         if (owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(failGuid, false, false, SpellCastType::OMNI);
         }
@@ -5398,6 +5400,7 @@ void SpellHandler::parseEffectInterruptCast(network::Packet& packet, uint32_t ef
         uint32_t icSpellId = packet.readUInt32();
         // Clear the interrupted unit's cast bar immediately
         unitCastStates_.erase(icTarget);
+        noteUnitCastEnd(icTarget, false);
         // Record interrupt in combat log when player is involved
         if (isPlayerCaster || icTarget == playerGuid)
             owner_.addCombatText(CombatTextEntry::INTERRUPT, 0, icSpellId, isPlayerCaster, 0,
@@ -5678,7 +5681,10 @@ void SpellHandler::handleChannelUpdate(network::Packet& packet) {
         auto it = unitCastStates_.find(chanCaster2);
         if (it != unitCastStates_.end()) {
             it->second.timeRemaining = chanRemainMs / 1000.0f;
-            if (chanRemainMs == 0) unitCastStates_.erase(it);
+            if (chanRemainMs == 0) {
+                unitCastStates_.erase(it);
+                noteUnitCastEnd(chanCaster2, true);
+            }
         }
     }
     LOG_DEBUG("MSG_CHANNEL_UPDATE: caster=0x", std::hex, chanCaster2, std::dec,

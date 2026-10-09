@@ -1239,6 +1239,17 @@ target_link_libraries(test_nameplate_stacking PRIVATE catch2_main)
 add_test(NAME nameplate_stacking COMMAND test_nameplate_stacking)
 register_test_target(test_nameplate_stacking)
 
+# ── test_nameplate_cast_bar ──────────────────────────────────
+add_executable(test_nameplate_cast_bar
+    test_nameplate_cast_bar.cpp
+    ${TEST_COMMON_SOURCES}
+)
+target_include_directories(test_nameplate_cast_bar PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_nameplate_cast_bar SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_nameplate_cast_bar PRIVATE catch2_main)
+add_test(NAME nameplate_cast_bar COMMAND test_nameplate_cast_bar)
+register_test_target(test_nameplate_cast_bar)
+
 # ── test_combat_text_filter ──────────────────────────────────
 add_executable(test_combat_text_filter
     test_combat_text_filter.cpp

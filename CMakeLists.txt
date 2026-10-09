@@ -929,6 +929,7 @@ set(WOWEE_SOURCES
     src/rendering/character_preview.cpp
     src/rendering/wmo_renderer.cpp
     src/rendering/imgui_texture.cpp
+    src/rendering/imgui_blend.cpp
     src/rendering/bone_slots.cpp
     src/rendering/normal_map.cpp
     src/rendering/m2_renderer.cpp

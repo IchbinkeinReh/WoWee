@@ -169,8 +169,12 @@ public:
         auto it = unitCastStates_.find(guid);
         return (it != unitCastStates_.end() && it->second.casting) ? &it->second : nullptr;
     }
-    void clearUnitCastStates() { unitCastStates_.clear(); }
-    void removeUnitCastState(uint64_t guid) { unitCastStates_.erase(guid); }
+    void clearUnitCastStates() { unitCastStates_.clear(); unitCastEnds_.clear(); }
+    void removeUnitCastState(uint64_t guid) { unitCastStates_.erase(guid); unitCastEnds_.erase(guid); }
+    [[nodiscard]] const UnitCastEnd* getUnitCastEnd(uint64_t guid) const {
+        auto it = unitCastEnds_.find(guid);
+        return it != unitCastEnds_.end() ? &it->second : nullptr;
+    }
 
     // Aura cache mutation (formerly accessed via friend)
     void clearUnitAurasCache() { unitAurasCache_.clear(); }
@@ -549,6 +553,12 @@ private:
 
     // Per-unit cast state
     std::unordered_map<uint64_t, UnitCastState> unitCastStates_;
+    std::unordered_map<uint64_t, UnitCastEnd> unitCastEnds_;
+    void noteUnitCastEnd(uint64_t guid, bool channelZeroed) {
+        auto& e = unitCastEnds_[guid];
+        ++e.serial;
+        e.channelZeroed = channelZeroed;
+    }
 
     // Talents (dual-spec support)
     uint8_t activeTalentSpec_ = 0;

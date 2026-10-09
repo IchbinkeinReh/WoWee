@@ -17,10 +17,12 @@
 #include "game/unit_name_rules.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "rendering/camera.hpp"
+#include "rendering/imgui_blend.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/unit_name_anchor.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "ui/interface_fonts.hpp"
+#include "ui/nameplate_cast_bar.hpp"
 #include "ui/nameplate_stacking.hpp"
 #include "ui/sight_cache.hpp"
 #include "ui/ui_helpers.hpp"
@@ -477,6 +479,42 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     }
     const bool threatFlash = un::threatWarningOn(threatMode, inDungeon, gameHandler.isInGroup());
 
+    // The target's cast bar (0x00720e50 -> 0x0098f040, run on by
+    // 0x0098e9f0). While the unit casts, the bar is handed the cast; once
+    // the cast is gone it runs to its end by itself and fades out green. A
+    // failure or interrupt hides it, a channel stopped by an update of 0 is
+    // handed over at its end and fades out red.
+    static ui::PlateCastBar castBar;
+    static uint64_t castBarGuid = 0;
+    static uint32_t castBarEndSerial = 0;
+    {
+        const game::UnitCastEnd* end = targetGuid ? gameHandler.getUnitCastEnd(targetGuid) : nullptr;
+        if (targetGuid != castBarGuid) {
+            castBar.hide();
+            castBarGuid = targetGuid;
+            castBarEndSerial = end ? end->serial : 0;
+        }
+        const auto* cs = targetGuid ? gameHandler.getUnitCastState(targetGuid) : nullptr;
+        if (!targetCastBar || !targetGuid) {
+            castBar.hide();
+        } else if (cs && cs->casting && cs->timeTotal > 0.0f) {
+            // Attributes 0x20, a trade skill, has no bar.
+            const auto attrs = cs->spellId ? gameHandler.getSpellAttributes(cs->spellId) : std::nullopt;
+            const bool spellShown = attrs && (*attrs & 0x20u) == 0;
+            const float v = cs->isChannel ? cs->timeRemaining : cs->timeTotal - cs->timeRemaining;
+            castBar.set(0.0f, cs->timeTotal, v, cs->spellId, spellShown, cs->isChannel, !cs->interruptible);
+        } else if (end && end->serial != castBarEndSerial) {
+            if (end->channelZeroed && castBar.shown && castBar.channel)
+                castBar.set(castBar.min, castBar.max, castBar.min, castBar.spellId, true, true,
+                            castBar.notInterruptible);
+            else
+                castBar.hide();
+        } else {
+            castBar.update(ImGui::GetIO().DeltaTime);
+        }
+        if (end) castBarEndSerial = end->serial;
+    }
+
     // ---- The plates (0x0098f790, laid out by 0x0098f390, each frame
     // 0x0098e9f0); the target's on top, at frame level 20 to the others' 10.
     auto drawPlate = [&](const PlateRec& r) {
@@ -638,7 +676,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         }
 
         // The cast bar, for the target only (0x00720e50) and with
-        // showVKeyCastbar, orange (0x0098f040). Its border is the plate's
+        // showVKeyCastbar (0x0098f040). Its border is the plate's
         // own mirrored left to right, centred on the frame's bottom edge
         // (0x0098f390); for a cast that cannot be interrupted the shield,
         // a frame's height under it, in its place. The bar, 0.804 by 0.281
@@ -646,51 +684,55 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // 0.003125 up - down for the shield; the spell's icon, 0.01 square,
         // is centred 0.0092 in from the border's bottom-left and 0.0071 up
         // (0 for the shield).
-        if (r.isTarget && targetCastBar) {
-            const auto* cs = gameHandler.getUnitCastState(guid);
-            if (cs && cs->casting && cs->timeTotal > 0.0f) {
-                const float done = std::clamp((cs->timeTotal - cs->timeRemaining) / cs->timeTotal, 0.0f, 1.0f);
-                const float pct = cs->isChannel ? 1.0f - done : done;
-                const float borderUp = -fh * 0.5f;  // the border's bottom, from the frame's
-                const float inset = 0.003125f * ui;
-                const float barUp = cs->interruptible ? borderUp + inset : borderUp - inset;
-                const auto [cb0, cb1] = box(fw - inset - fw * 0.804f, barUp, fw * 0.804f, fh * 0.281f);
-                const ImU32 fillColor = IM_COL32(255, 178, 0, alpha);
-                const ImVec2 cbFill(cb0.x + (cb1.x - cb0.x) * pct, cb1.y);
-                if (VkDescriptorSet fill = plateTexture(assets, "Interface\\TargetingFrame\\UI-TargetingFrame-BarFill.blp")) {
-                    drawList->AddImage((ImTextureID)(uintptr_t)fill, cb0, cbFill, ImVec2(0, 0), ImVec2(pct, 1), fillColor);
-                } else {
-                    drawList->AddRectFilled(cb0, cbFill, fillColor);
+        if (r.isTarget && castBar.shown) {
+            const auto& bar = castBar;
+            const int barAlpha = alpha * bar.alpha / 255;
+            const float pct = std::clamp(bar.filled(), 0.0f, 1.0f);
+            const float borderUp = -fh * 0.5f;  // the border's bottom, from the frame's
+            const float inset = 0.003125f * ui;
+            const bool shield = bar.notInterruptible;
+            const float barUp = !shield ? borderUp + inset : borderUp - inset;
+            const auto [cb0, cb1] = box(fw - inset - fw * 0.804f, barUp, fw * 0.804f, fh * 0.281f);
+            // Orange while it runs, green at its end, red when handed over
+            // already there (0x0098f040, 0x0098e9f0).
+            const ImU32 fillColor = bar.colour == ui::PlateCastBar::Colour::Green ? IM_COL32(0, 255, 0, barAlpha)
+                                    : bar.colour == ui::PlateCastBar::Colour::Red ? IM_COL32(255, 0, 0, barAlpha)
+                                                                                  : IM_COL32(255, 178, 0, barAlpha);
+            const ImVec2 cbFill(cb0.x + (cb1.x - cb0.x) * pct, cb1.y);
+            if (VkDescriptorSet fill = plateTexture(assets, "Interface\\TargetingFrame\\UI-TargetingFrame-BarFill.blp")) {
+                drawList->AddImage((ImTextureID)(uintptr_t)fill, cb0, cbFill, ImVec2(0, 0), ImVec2(pct, 1), fillColor);
+            } else {
+                drawList->AddRectFilled(cb0, cbFill, fillColor);
+            }
+            if (!shield) {
+                if (VkDescriptorSet tex = plateTexture(assets, "Interface\\Tooltips\\Nameplate-Border.blp")) {
+                    const auto [cf0, cf1] = box(0.0f, borderUp, fw, fh);
+                    drawList->AddImage((ImTextureID)(uintptr_t)tex, cf0, cf1, ImVec2(1, 0), ImVec2(0, 1),
+                                       IM_COL32(255, 255, 255, barAlpha));
                 }
-                if (cs->interruptible) {
-                    if (VkDescriptorSet tex = plateTexture(assets, "Interface\\Tooltips\\Nameplate-Border.blp")) {
-                        const auto [cf0, cf1] = box(0.0f, borderUp, fw, fh);
-                        drawList->AddImage((ImTextureID)(uintptr_t)tex, cf0, cf1, ImVec2(1, 0), ImVec2(0, 1),
-                                           IM_COL32(255, 255, 255, alpha));
-                    }
-                } else if (VkDescriptorSet tex = plateTexture(assets, "Interface\\Tooltips\\Nameplate-CastBar-Shield.blp")) {
-                    const auto [cf0, cf1] = box(0.0f, borderUp - fh * 0.5f, fw, fh);
-                    drawList->AddImage((ImTextureID)(uintptr_t)tex, cf0, cf1, ImVec2(0, 0), ImVec2(1, 1),
-                                       IM_COL32(255, 255, 255, alpha));
-                }
-                if (VkDescriptorSet icon = cs->spellId ? getSpellIcon(cs->spellId, assets) : VK_NULL_HANDLE) {
-                    const float sq = 0.01f * ui;
-                    const float cx = left + 0.0092f * ui;
-                    const float cy = bottom - borderUp - (cs->interruptible ? 0.0071f * ui : 0.0f);
-                    drawList->AddImage((ImTextureID)(uintptr_t)icon, ImVec2(cx - sq * 0.5f, cy - sq * 0.5f),
-                                       ImVec2(cx + sq * 0.5f, cy + sq * 0.5f), ImVec2(0, 0), ImVec2(1, 1),
-                                       IM_COL32(255, 255, 255, alpha));
-                }
+            } else if (VkDescriptorSet tex = plateTexture(assets, "Interface\\Tooltips\\Nameplate-CastBar-Shield.blp")) {
+                const auto [cf0, cf1] = box(0.0f, borderUp - fh * 0.5f, fw, fh);
+                drawList->AddImage((ImTextureID)(uintptr_t)tex, cf0, cf1, ImVec2(0, 0), ImVec2(1, 1),
+                                   IM_COL32(255, 255, 255, barAlpha));
+            }
+            if (VkDescriptorSet icon = bar.spellId ? getSpellIcon(bar.spellId, assets) : VK_NULL_HANDLE) {
+                const float sq = 0.01f * ui;
+                const float cx = left + 0.0092f * ui;
+                const float cy = bottom - borderUp - (!shield ? 0.0071f * ui : 0.0f);
+                drawList->AddImage((ImTextureID)(uintptr_t)icon, ImVec2(cx - sq * 0.5f, cy - sq * 0.5f),
+                                   ImVec2(cx + sq * 0.5f, cy + sq * 0.5f), ImVec2(0, 0), ImVec2(1, 1),
+                                   IM_COL32(255, 255, 255, barAlpha));
             }
         }
 
         // HIGHLIGHT: Nameplate-Glow over the whole frame on the glowing
-        // plate (0x0098e910). The client adds it (blend mode 3); ImGui
-        // blends it over.
+        // plate (0x0098e910), added (blend mode 3).
         if (&r == glowing) {
             if (VkDescriptorSet glow = plateTexture(assets, "Interface\\Tooltips\\Nameplate-Glow.blp")) {
+                rendering::beginAdditive(drawList);
                 drawList->AddImage((ImTextureID)(uintptr_t)glow, fr0, fr1, ImVec2(0, 0), ImVec2(1, 1),
                                    IM_COL32(255, 255, 255, alpha));
+                rendering::endAdditive(drawList);
             }
         }
 

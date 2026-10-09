@@ -1252,6 +1252,9 @@ public:
         if (spellHandler_) return spellHandler_->getUnitCastState(guid);
         return nullptr;
     }
+    const game::UnitCastEnd* getUnitCastEnd(uint64_t guid) const {
+        return spellHandler_ ? spellHandler_->getUnitCastEnd(guid) : nullptr;
+    }
     // Convenience helpers for the current target
     bool isTargetCasting() const { return spellHandler_ ? spellHandler_->isTargetCasting() : false; }
     uint32_t getTargetCastSpellId() const { return spellHandler_ ? spellHandler_->getTargetCastSpellId() : 0; }
