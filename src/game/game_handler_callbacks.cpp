@@ -4057,6 +4057,17 @@ uint32_t GameHandler::getSpellMountCreature(uint32_t spellId) const {
     return 0;
 }
 
+bool GameHandler::spellAppliesMountedAura(uint32_t spellId) const {
+    if (spellId == 0) return false;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return false;
+    for (int i = 0; i < 3; ++i) {
+        if (it->second.effectAuraIds[i] == rendering::mount_transition::kAuraMounted) return true;
+    }
+    return false;
+}
+
 uint32_t GameHandler::getSpellTargetKind(uint32_t spellId) const {
     if (spellId == 0) return 0;
     loadSpellNameCache();

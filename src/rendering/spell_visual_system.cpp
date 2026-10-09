@@ -1,4 +1,5 @@
 #include "rendering/spell_visual_system.hpp"
+#include "rendering/mount_seat.hpp"
 #include "rendering/spell_missile.hpp"
 #include "rendering/placement_transform.hpp"
 #include "rendering/m2_renderer.hpp"
@@ -106,6 +107,8 @@ void SpellVisualSystem::loadSpellVisualDbc() {
         }
         return model;
     };
+    // Each kit's AnimID (+8), for a mount aura's rider pose (0x00724820).
+    std::unordered_map<uint32_t, int32_t> kitAnimIds;
     if (kitDbc && kitDbc->isLoaded()) {
         const uint32_t fc = kitDbc->getFieldCount();
         auto kitColumn = [&](const char* name, uint32_t fallback) {
@@ -118,6 +121,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
         const uint32_t worldField = kitColumn("WorldEffect", 14);
         const uint32_t kitFlagsField = kitColumn("Flags", 37);
         const uint32_t kitShakeField = kitColumn("ShakeID", 16);
+        const uint32_t kitAnimField = kitColumn("AnimID", 2);
         // SoundID (+0x3c), which 0x00745230 plays with the kit.
         const uint32_t kitSoundField = kitColumn("SoundID", 15);
         // LeftWeaponEffect and RightWeaponEffect (+0x24, +0x28), which
@@ -136,6 +140,8 @@ void SpellVisualSystem::loadSpellVisualDbc() {
         for (uint32_t i = 0; i < kitDbc->getRecordCount(); ++i) {
             const uint32_t kitId = kitDbc->getUInt32(i, 0);
             if (!kitId) continue;
+            if (kitAnimField != 0xFFFFFFFFu && kitDbc->getInt32(i, kitAnimField) >= 0)
+                kitAnimIds[kitId] = kitDbc->getInt32(i, kitAnimField);
             KitRecord kit;
             kit.id = kitId;
             for (size_t k = 0; k < slotFields.size(); ++k) {
@@ -297,6 +303,8 @@ void SpellVisualSystem::loadSpellVisualDbc() {
         {
             VisualAuraKits auraKits;
             auraKits.stateKit = static_cast<uint32_t>(std::max(svInt(i, svStateKitField, 0), 0));
+            if (auto animIt = kitAnimIds.find(auraKits.stateKit); animIt != kitAnimIds.end())
+                visualStateKitAnim_[vid] = animIt->second;
             auraKits.stateDoneKit = static_cast<uint32_t>(std::max(svInt(i, svStateDoneKitField, 0), 0));
             auraKits.channelKit = static_cast<uint32_t>(std::max(svInt(i, svChannelKitField, 0), 0));
             auraKits.flags = static_cast<uint32_t>(svInt(i, svFlagsField, 0));
@@ -958,8 +966,34 @@ void SpellVisualSystem::setUnitAuraSlot(uint64_t unitGuid, uint32_t slot, uint32
     if (spellId != 0) slots[slot] = spellId;
     else slots.erase(slot);
     auto visualOf = [&](uint32_t spell) { return spellVisualResolver_ ? spellVisualResolver_(spell) : 0u; };
-    if (old != 0) removeAuraStateKit(unitGuid, old, visualOf(old));
-    if (spellId != 0) applyAuraStateKit(unitGuid, spellId, visualOf(spellId), casterGuid);
+    if (old != 0) {
+        stepRiderPose(unitGuid, old, false);
+        removeAuraStateKit(unitGuid, old, visualOf(old));
+    }
+    if (spellId != 0) {
+        stepRiderPose(unitGuid, spellId, true);
+        applyAuraStateKit(unitGuid, spellId, visualOf(spellId), casterGuid);
+    }
+}
+
+void SpellVisualSystem::stepRiderPose(uint64_t unitGuid, uint32_t spellId, bool on) {
+    if (!kitSpellResolver_ || !kitSpellResolver_(spellId).mounts) return;
+    const uint32_t visualId = spellVisualResolver_ ? spellVisualResolver_(spellId) : 0u;
+    if (visualId == 0) return;
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    auto animIt = visualStateKitAnim_.find(visualId);
+    const int32_t kitAnim = animIt != visualStateKitAnim_.end() ? animIt->second : -1;
+    const uint32_t current = riderPose(unitGuid);
+    const bool activePlayer = activePlayerResolver_ && activePlayerResolver_() == unitGuid;
+    const uint32_t next = on ? mount_seat::riderPoseOnMountAura(current, kitAnim)
+                             : mount_seat::riderPoseOnMountAuraGone(current, kitAnim, activePlayer);
+    if (next == mount_seat::kRiderPoseMount) riderPoses_.erase(unitGuid);
+    else riderPoses_[unitGuid] = next;
+}
+
+uint32_t SpellVisualSystem::riderPose(uint64_t unitGuid) const {
+    auto it = riderPoses_.find(unitGuid);
+    return it != riderPoses_.end() ? it->second : mount_seat::kRiderPoseMount;
 }
 
 void SpellVisualSystem::setUnitAuraSlots(uint64_t unitGuid, const std::vector<AuraSlotSpell>& slotSpells) {
@@ -2163,6 +2197,7 @@ void SpellVisualSystem::reset() {
         for (AuraKit& aura : unit.auras) hideAuraKit(aura);
     }
     unitAuraKits_.clear();
+    riderPoses_.clear();
     chains_.clear();
     if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
         for (const MountTransition& t : mountTransitions_) {

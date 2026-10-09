@@ -2643,6 +2643,12 @@ wowee_add_test(test_spell_chain
 wowee_add_test(test_mount_transition
     SOURCES test_mount_transition.cpp)
 
+# ── test_mount_seat ──────────────────────────────────
+# A unit on its mount: its size (0x0071c0e0, 0x0073d5d0) and its rider's
+# pose (+0xb7c, 0x00724820, 0x0071e930).
+wowee_add_test(test_mount_seat
+    SOURCES test_mount_seat.cpp)
+
 # ── test_spell_chain_targets_packet ──────────────────
 # SMSG_SPELL_UPDATE_CHAIN_TARGETS as 0x00800470 reads it.
 wowee_add_packet_test(test_spell_chain_targets_packet)

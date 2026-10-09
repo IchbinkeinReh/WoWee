@@ -3515,6 +3515,9 @@ public:
     /// The creature a spell mounts its caster on: the misc value of its first
     /// effect applying aura 78 (0x006f9670); 0 for none.
     uint32_t getSpellMountCreature(uint32_t spellId) const;
+    /// Whether any of a spell's effects applies aura 78, Mounted
+    /// (0x00724820 reads EffectApplyAuraName alone).
+    bool spellAppliesMountedAura(uint32_t spellId) const;
     /// Returns the school bitmask for the spell from Spell.dbc
     /// (0x01=Physical, 0x02=Holy, 0x04=Fire, 0x08=Nature, 0x10=Frost, 0x20=Shadow, 0x40=Arcane).
     /// Returns 0 if unknown.

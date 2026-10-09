@@ -445,6 +445,7 @@
     "Scale": 4
   },
   "SpellVisualKit": {
+    "AnimID": 2,
     "BaseEffect": 5,
     "BreathEffect": 8,
     "ChestEffect": 4,

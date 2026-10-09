@@ -2345,6 +2345,7 @@ void Application::setState(AppState newState) {
                         if (!gameHandler) return info;
                         info.castTimeMs = gameHandler->getSpellData(spellId).castTimeMs;
                         info.targetKind = gameHandler->getSpellTargetKind(spellId);
+                        info.mounts = gameHandler->spellAppliesMountedAura(spellId);
                         return info;
                     });
                     svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
@@ -2365,6 +2366,9 @@ void Application::setState(AppState newState) {
                     // CharProc 16's mount transition (0x006f9670): the
                     // spell's mount, its model, whether the unit rides, and
                     // where it is handed over.
+                    svs->setActivePlayerResolver([this]() -> uint64_t {
+                        return gameHandler ? gameHandler->getPlayerGuid() : 0;
+                    });
                     svs->setMountDisplayResolver([this](uint32_t spellId) -> std::optional<uint32_t> {
                         if (!gameHandler) return std::nullopt;
                         const uint32_t entry = gameHandler->getSpellMountCreature(spellId);
@@ -3650,8 +3654,8 @@ void Application::syncRenderInstancesToEntities() {
                         uint32_t targetAnim;
                         if (creatureMount) {
                             // The unit's animations go to its mount
-                            // (0x007385c0); the rider holds Mount.
-                            targetAnim = rendering::anim::MOUNT;
+                            // (0x007385c0); the rider holds its pose (+0xb7c).
+                            targetAnim = entitySpawner_->riderPose(guid, instanceId);
                             uint32_t mountAnim =
                                 rendering::anim::mountLocomotion(isMovingNow, isFlyingNow, isWalkingNow);
                             if (!charRenderer->hasAnimation(creatureMount->instanceId, mountAnim))
@@ -3689,13 +3693,14 @@ void Application::syncRenderInstancesToEntities() {
                 }
                 // A rider's seat pose outlasts emotes and state updates.
                 if (creatureMount) {
+                    const uint32_t pose = entitySpawner_->riderPose(guid, instanceId);
                     uint32_t riderAnim = 0;
                     float riderTime = 0.0f, riderDuration = 0.0f;
                     const bool haveRiderState =
                         charRenderer->getAnimationState(instanceId, riderAnim, riderTime, riderDuration);
-                    if ((!haveRiderState || riderAnim != rendering::anim::MOUNT) &&
+                    if ((!haveRiderState || riderAnim != pose) &&
                         riderAnim != rendering::anim::DEATH) {
-                        charRenderer->playAnimation(instanceId, rendering::anim::MOUNT, /*loop=*/true);
+                        charRenderer->playAnimation(instanceId, pose, /*loop=*/true);
                     }
                 }
             }
@@ -3842,8 +3847,10 @@ void Application::syncRenderInstancesToEntities() {
                 const bool isSwimmingNow = _pCreatureSwimmingState.count(guid) > 0;
                 const bool isWalkingNow  = _pCreatureWalkingState.count(guid) > 0;
                 const bool isFlyingNow   = _pCreatureFlyingState.count(guid) > 0;
-                // In Mount in the air too: 3.3.5 has no rider flight poses.
-                const uint32_t mountedRiderAnim = rendering::anim::MOUNT;
+                // In its rider pose (+0xb7c, Mount unless a mount aura's
+                // kit gave another), in the air too: 3.3.5 has no rider
+                // flight poses.
+                const uint32_t mountedRiderAnim = entitySpawner_->riderPose(guid, instanceId);
                 bool prevMoving   = _pCreatureWasMoving[guid];
                 bool prevSwimming = _pCreatureWasSwimming[guid];
                 bool prevFlying   = _pCreatureWasFlying[guid];

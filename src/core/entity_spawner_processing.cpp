@@ -19,6 +19,7 @@
 #include "pipeline/wmo_loader.hpp"
 #include "pipeline/wmo_group_path.hpp"
 #include "rendering/animation/animation_ids.hpp"
+#include "rendering/mount_seat.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -1762,11 +1763,13 @@ void EntitySpawner::processPendingMount() {
 
     mountModelId_ = modelId;
 
-    // Create mount instance at player position
+    // Create mount instance at player position, the player's size (drawn
+    // at 1) times the mount display's (0x0071c0e0, +0x990 from 0x0073d5d0).
     glm::vec3 mountPos = renderer_->getCharacterPosition();
     float yawRad = glm::radians(renderer_->getCharacterYaw());
+    const float mountScale = rendering::mount_seat::mountModelScale(1.0f, creatureDisplayScale(mountDisplayId));
     uint32_t instanceId = charRenderer->createInstance(modelId, mountPos,
-        glm::vec3(0.0f, 0.0f, yawRad), 1.0f);
+        glm::vec3(0.0f, 0.0f, yawRad), mountScale);
 
     if (instanceId == 0) {
         LOG_WARNING("Failed to create mount instance");
@@ -1828,6 +1831,8 @@ void EntitySpawner::processPendingMount() {
         }
     }
 
+    // The seat by the mount's size.
+    heightOffset = rendering::mount_seat::seatHeight(heightOffset, mountScale);
     if (auto* ac = renderer_->getAnimationController()) ac->setMounted(instanceId, mountDisplayId, heightOffset, m2Path);
 
     // For taxi mounts, start with flying animation; for ground mounts, start with stand
@@ -1993,7 +1998,15 @@ bool EntitySpawner::applyRemotePlayerMount(uint64_t guid, uint32_t displayId) {
     }
     glm::vec3 pos(0.0f);
     cr->getInstancePosition(riderInstance, pos);
-    uint32_t mountInstance = cr->createInstance(modelId, pos, glm::vec3(0.0f), 1.0f);
+    // The unit's size times the mount display's (0x0071c0e0, +0x990 from
+    // 0x0073d5d0); the rider keeps its own.
+    float unitScale = 1.0f;
+    if (auto it = creatureAppliedScale_.find(guid); it != creatureAppliedScale_.end()) unitScale = it->second;
+    const float mountScale =
+        rendering::mount_seat::mountModelScale(unitScale, creatureDisplayScale(displayId));
+    const float seatZ = riderHeight;
+    riderHeight = rendering::mount_seat::seatHeight(seatZ, mountScale);
+    uint32_t mountInstance = cr->createInstance(modelId, pos, glm::vec3(0.0f), mountScale);
     if (mountInstance != 0) {
         const bool moving = gameHandler_ && [&] {
             auto entity = gameHandler_->getEntityManager().getEntity(guid);
@@ -2006,9 +2019,10 @@ bool EntitySpawner::applyRemotePlayerMount(uint64_t guid, uint32_t displayId) {
             mountAnim = moving ? rendering::anim::RUN : rendering::anim::STAND;
         }
         cr->playAnimation(mountInstance, mountAnim, true);
-        cr->playAnimation(riderInstance, rendering::anim::MOUNT, true);
+        cr->playAnimation(riderInstance, riderPose(guid, riderInstance), true);
         remotePlayerMounts_[guid] = {.displayId = displayId, .modelId = modelId,
-                                     .instanceId = mountInstance, .riderHeight = riderHeight};
+                                     .instanceId = mountInstance, .riderHeight = riderHeight,
+                                     .seatZ = seatZ, .scale = mountScale};
         // Its own mount drawn now: a mount transition's ends (0x0073d5d0).
         if (auto* svs = renderer_->getSpellVisualSystem()) svs->onUnitMounted(guid);
         LOG_INFO("Unit mounted: guid=0x", std::hex, guid, std::dec,

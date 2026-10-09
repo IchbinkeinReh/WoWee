@@ -299,9 +299,14 @@ public:
         uint32_t displayId = 0;
         uint32_t modelId = 0;
         uint32_t instanceId = 0;
-        float riderHeight = 0.0f;
+        float riderHeight = 0.0f;  ///< the seat over the mount's feet, by its size
+        float seatZ = 0.0f;        ///< the seat's height in the mount model
+        float scale = 1.0f;        ///< the mount's size (0x0071c0e0)
     };
     void setRemotePlayerMountDisplayId(uint64_t guid, uint32_t displayId);
+    /// The pose a unit's rider holds on its mount (+0xb7c, 0x0073d5d0):
+    /// Mount, or what a mount aura's kit set where the rider's model has it.
+    uint32_t riderPose(uint64_t guid, uint32_t riderInstance) const;
     /// A kit's worn head item on an NPC dressed by its
     /// CreatureDisplayInfoExtra (CharProc 17, 0x006f82d0); 0 gives it its
     /// own NPCItemDisplay head back (0x00723730).

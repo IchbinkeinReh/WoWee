@@ -17,10 +17,12 @@
 #include "rendering/character_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/wmo_loader.hpp"
 #include "rendering/animation/animation_ids.hpp"
+#include "rendering/mount_seat.hpp"
 #include "rendering/animation/emote_registry.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -339,6 +341,18 @@ void EntitySpawner::mountUnitNow(uint64_t guid, uint32_t displayId, bool localPl
     }
     pendingRemotePlayerMounts_.erase(guid);
     if (!applyRemotePlayerMount(guid, displayId)) pendingRemotePlayerMounts_[guid] = displayId;
+}
+
+uint32_t EntitySpawner::riderPose(uint64_t guid, uint32_t riderInstance) const {
+    // +0xb7c, which 0x0073d5d0 plays on the rider; Mount where the rider's
+    // model has not the pose a mount aura's kit gave it.
+    uint32_t pose = rendering::mount_seat::kRiderPoseMount;
+    if (renderer_)
+        if (auto* svs = renderer_->getSpellVisualSystem()) pose = svs->riderPose(guid);
+    auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (pose != rendering::mount_seat::kRiderPoseMount && cr && !cr->hasAnimation(riderInstance, pose))
+        pose = rendering::mount_seat::kRiderPoseMount;
+    return pose;
 }
 
 void EntitySpawner::setRemotePlayerMountDisplayId(uint64_t guid, uint32_t displayId) {
@@ -2522,6 +2536,13 @@ void EntitySpawner::refreshCreatureScales() {
         if (std::abs(applied - want) > 1e-4f) {
             charRenderer->setInstanceScale(instanceId, want);
             applied = want;
+            // Its mount is its size times the mount display's (0x0071c0e0).
+            if (auto mountIt = remotePlayerMounts_.find(guid); mountIt != remotePlayerMounts_.end()) {
+                RemotePlayerMount& mount = mountIt->second;
+                mount.scale = rendering::mount_seat::mountModelScale(want, creatureDisplayScale(mount.displayId));
+                mount.riderHeight = rendering::mount_seat::seatHeight(mount.seatZ, mount.scale);
+                charRenderer->setInstanceScale(mount.instanceId, mount.scale);
+            }
         }
     }
 }
