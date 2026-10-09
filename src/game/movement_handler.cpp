@@ -7,6 +7,7 @@
 #include "game/entity.hpp"
 #include "network/world_socket.hpp"
 #include "network/packet.hpp"
+#include "network/wire_format.hpp"
 #include "core/coordinates.hpp"
 #include "core/application.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -1452,26 +1453,22 @@ void MovementHandler::handleCompressedMoves(network::Packet& packet) {
     std::vector<uint8_t> decompressedStorage;
     const std::vector<uint8_t>* dataPtr = &packet.getData();
 
+    namespace wire = network::wire;
     const auto& rawData = packet.getData();
-    const bool hasCompressedWrapper =
-        rawData.size() >= 6 &&
-        rawData[4] == 0x78 &&
-        (rawData[5] == 0x01 || rawData[5] == 0x9C ||
-         rawData[5] == 0xDA || rawData[5] == 0x5E);
+    // uint32 inflated size, then a zlib stream (wire_format.hpp).
+    const bool hasCompressedWrapper = wire::isZlibStreamAt(rawData, wire::kInflatedSizeBytes);
     if (hasCompressedWrapper) {
-        uint32_t decompressedSize = static_cast<uint32_t>(rawData[0]) |
-                                    (static_cast<uint32_t>(rawData[1]) << 8) |
-                                    (static_cast<uint32_t>(rawData[2]) << 16) |
-                                    (static_cast<uint32_t>(rawData[3]) << 24);
+        uint32_t decompressedSize = wire::loadLE32(rawData, 0);
         if (decompressedSize == 0 || decompressedSize > 65536) {
             LOG_WARNING("SMSG_COMPRESSED_MOVES: bad decompressedSize=", decompressedSize);
             return;
         }
 
+        const auto zlibStream = std::span<const uint8_t>(rawData).subspan(wire::kInflatedSizeBytes);
         decompressedStorage.resize(decompressedSize);
         uLongf destLen = decompressedSize;
         int ret = uncompress(decompressedStorage.data(), &destLen,
-                             rawData.data() + 4, rawData.size() - 4);
+                             zlibStream.data(), static_cast<uLong>(zlibStream.size()));
         if (ret != Z_OK) {
             LOG_WARNING("SMSG_COMPRESSED_MOVES: zlib error ", ret);
             return;
@@ -1544,37 +1541,37 @@ void MovementHandler::handleCompressedMoves(network::Packet& packet) {
         result.usedPayloadOnlySize = payloadOnlySize;
         size_t pos = 0;
         while (pos < dataLen) {
-            if (pos + 1 > dataLen) break;
+            if (pos + wire::kMoveSubSizeBytes > dataLen) break;
             uint8_t subSize = data[pos];
             if (subSize == 0) {
                 result.ok = true;
-                result.endPos = pos + 1;
+                result.endPos = pos + wire::kMoveSubSizeBytes;
                 return result;
             }
 
             const size_t payloadLen = payloadOnlySize
                 ? static_cast<size_t>(subSize)
-                : (subSize >= 2 ? static_cast<size_t>(subSize) - 2 : 0);
-            if (!payloadOnlySize && subSize < 2) {
+                : (subSize >= wire::kMoveSubOpcodeBytes
+                       ? static_cast<size_t>(subSize) - wire::kMoveSubOpcodeBytes : 0);
+            if (!payloadOnlySize && subSize < wire::kMoveSubOpcodeBytes) {
                 result.endPos = pos;
                 return result;
             }
 
-            const size_t packetLen = 1 + 2 + payloadLen;
+            const size_t packetLen = wire::kMoveSubHeaderBytes + payloadLen;
             if (pos + packetLen > dataLen) {
                 result.overrun = true;
                 result.endPos = pos;
                 return result;
             }
 
-            uint16_t subOpcode = static_cast<uint16_t>(data[pos + 1]) |
-                                 (static_cast<uint16_t>(data[pos + 2]) << 8);
-            size_t payloadStart = pos + 3;
+            const uint16_t subOpcode = wire::moveSubOpcodeAt(data, pos);
+            const auto payload =
+                std::span<const uint8_t>(data).subspan(pos + wire::kMoveSubHeaderBytes, payloadLen);
 
             CompressedMoveSubPacket subPacket;
             subPacket.opcode = subOpcode;
-            subPacket.payload.assign(data.begin() + payloadStart,
-                                     data.begin() + payloadStart + payloadLen);
+            subPacket.payload.assign(payload.begin(), payload.end());
             result.packets.push_back(std::move(subPacket));
             ++result.subPacketCount;
             if (isRecognizedSubOpcode(subOpcode)) {
@@ -1667,38 +1664,39 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
                         " (occurrence=", wrappedUncompressedFallbackCount, ")");
         }
     };
+    namespace wire = network::wire;
+    // One compressed-moves sub-packet that fills the buffer exactly: its
+    // header dropped, the payload kept.
     auto stripWrappedSubpacket = [&](const std::vector<uint8_t>& bytes, std::vector<uint8_t>& stripped) -> bool {
-        if (bytes.size() < 3) return false;
+        if (bytes.size() < wire::kMoveSubHeaderBytes) return false;
         uint8_t subSize = bytes[0];
-        if (subSize < 2) return false;
-        size_t wrappedLen = static_cast<size_t>(subSize) + 1;
+        if (subSize < wire::kMoveSubOpcodeBytes) return false;
+        size_t wrappedLen = static_cast<size_t>(subSize) + wire::kMoveSubSizeBytes;
         if (wrappedLen != bytes.size()) return false;
-        size_t payloadLen = static_cast<size_t>(subSize) - 2;
-        if (3 + payloadLen > bytes.size()) return false;
-        stripped.assign(bytes.begin() + 3, bytes.begin() + 3 + payloadLen);
+        size_t payloadLen = static_cast<size_t>(subSize) - wire::kMoveSubOpcodeBytes;
+        if (wire::kMoveSubHeaderBytes + payloadLen > bytes.size()) return false;
+        const auto payload =
+            std::span<const uint8_t>(bytes).subspan(wire::kMoveSubHeaderBytes, payloadLen);
+        stripped.assign(payload.begin(), payload.end());
         return true;
     };
 
     const auto& rawData = packet.getData();
     const bool allowTurtleMoveCompression = isActiveExpansion("turtle");
+    // uint32 inflated size, then a zlib stream (wire_format.hpp).
     bool isCompressed = allowTurtleMoveCompression &&
-                        rawData.size() >= 6 &&
-                        rawData[4] == 0x78 &&
-                        (rawData[5] == 0x01 || rawData[5] == 0x9C ||
-                         rawData[5] == 0xDA || rawData[5] == 0x5E);
+                        wire::isZlibStreamAt(rawData, wire::kInflatedSizeBytes);
     if (isCompressed) {
-        uint32_t decompSize = static_cast<uint32_t>(rawData[0]) |
-                              (static_cast<uint32_t>(rawData[1]) << 8) |
-                              (static_cast<uint32_t>(rawData[2]) << 16) |
-                              (static_cast<uint32_t>(rawData[3]) << 24);
+        uint32_t decompSize = wire::loadLE32(rawData, 0);
         if (decompSize == 0 || decompSize > 65536) {
             LOG_WARNING("SMSG_MONSTER_MOVE: bad decompSize=", decompSize);
             return;
         }
+        const auto zlibStream = std::span<const uint8_t>(rawData).subspan(wire::kInflatedSizeBytes);
         std::vector<uint8_t> decompressed(decompSize);
         uLongf destLen = decompSize;
         int ret = uncompress(decompressed.data(), &destLen,
-                             rawData.data() + 4, rawData.size() - 4);
+                             zlibStream.data(), static_cast<uLong>(zlibStream.size()));
         if (ret != Z_OK) {
             LOG_WARNING("SMSG_MONSTER_MOVE: zlib error ", ret);
             return;

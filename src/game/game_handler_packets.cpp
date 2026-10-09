@@ -33,6 +33,7 @@
 #include "pipeline/dbc_layout.hpp"
 #include "network/world_socket.hpp"
 #include "network/packet.hpp"
+#include "network/wire_format.hpp"
 #include "auth/crypto.hpp"
 #include "core/coordinates.hpp"
 #include "core/application.hpp"
@@ -2530,29 +2531,28 @@ void GameHandler::registerRemainingOpcodes() {
         //   uint16_be subSize  (includes the 2-byte opcode; payload = subSize - 2)
         //   uint16_le subOpcode
         //   payload  (subSize - 2 bytes)
-        const auto& pdata = packet.getData();
+        namespace wire = network::wire;
+        const std::span<const uint8_t> pdata = packet.getData();
         size_t dataLen = pdata.size();
         size_t pos = packet.getReadPos();
         static uint32_t multiPktWarnCount = 0;
         std::vector<network::Packet> subPackets;
-        while (pos + 4 <= dataLen) {
-            uint16_t subSize = static_cast<uint16_t>(
-                (static_cast<uint16_t>(pdata[pos]) << 8) | pdata[pos + 1]);
-            if (subSize < 2) break;
-            size_t payloadLen = subSize - 2;
-            if (pos + 4 + payloadLen > dataLen) {
+        while (pos + wire::kServerHeaderBytes <= dataLen) {
+            const wire::ServerHeader subHeader = wire::decodeServerHeader(pdata, pos);
+            const uint16_t subSize = subHeader.size;
+            if (subSize < wire::kServerOpcodeBytes) break;
+            size_t payloadLen = subSize - wire::kServerOpcodeBytes;
+            if (pos + wire::kServerHeaderBytes + payloadLen > dataLen) {
                 if (++multiPktWarnCount <= 10) {
                     LOG_WARNING("SMSG_MULTIPLE_PACKETS: sub-packet overruns buffer at pos=",
                                 pos, " subSize=", subSize, " dataLen=", dataLen);
                 }
                 break;
             }
-            uint16_t subOpcode = static_cast<uint16_t>(pdata[pos + 2]) |
-                                 (static_cast<uint16_t>(pdata[pos + 3]) << 8);
-            std::vector<uint8_t> subPayload(pdata.begin() + pos + 4,
-                                            pdata.begin() + pos + 4 + payloadLen);
-            subPackets.emplace_back(subOpcode, std::move(subPayload));
-            pos += 4 + payloadLen;
+            const auto subPayload = pdata.subspan(pos + wire::kServerHeaderBytes, payloadLen);
+            subPackets.emplace_back(subHeader.opcode,
+                                    std::vector<uint8_t>(subPayload.begin(), subPayload.end()));
+            pos += wire::kServerHeaderBytes + payloadLen;
         }
         for (auto& subPacket : std::views::reverse(subPackets)) {
             enqueueIncomingPacketFront(std::move(subPacket));
@@ -3433,12 +3433,12 @@ void GameHandler::handlePacket(network::Packet& packet) {
         // [u8 subSize][u16 subOpcode][subPayload...] ...
         // where subOpcode is typically SMSG_MONSTER_MOVE / SMSG_MONSTER_MOVE_TRANSPORT.
         const auto& data = packet.getData();
-        if (packet.getReadPos() + 3 <= data.size()) {
+        if (packet.getReadPos() + network::wire::kMoveSubHeaderBytes <= data.size()) {
             size_t pos = packet.getReadPos();
             uint8_t subSize = data[pos];
-            if (subSize >= 2 && pos + 1 + subSize <= data.size()) {
-                uint16_t subOpcode = static_cast<uint16_t>(data[pos + 1]) |
-                                     (static_cast<uint16_t>(data[pos + 2]) << 8);
+            if (subSize >= network::wire::kMoveSubOpcodeBytes &&
+                pos + network::wire::kMoveSubSizeBytes + subSize <= data.size()) {
+                uint16_t subOpcode = network::wire::moveSubOpcodeAt(data, pos);
                 uint16_t monsterMoveWire = wireOpcode(Opcode::SMSG_MONSTER_MOVE);
                 uint16_t monsterMoveTransportWire = wireOpcode(Opcode::SMSG_MONSTER_MOVE_TRANSPORT);
                 if ((monsterMoveWire != 0xFFFF && subOpcode == monsterMoveWire) ||
