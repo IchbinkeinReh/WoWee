@@ -188,6 +188,45 @@ std::string loadingZoneCaption(const game::GameHandler* gh, pipeline::AssetManag
     return gh->getMapName(mapId);
 }
 
+/// The picture the client puts up while a map loads (0x00409ed0): the map's
+/// Map.dbc LoadingScreenID names a LoadingScreens.dbc row, and its file -
+/// with "Wide" before the extension when the row has a wide version and the
+/// screen is wider than 4:3 - is the loading screen. Empty when the layout
+/// or the data has none, and the client's own picture stays.
+std::string mapLoadingScreenPath(pipeline::AssetManager* am, uint32_t mapId, float aspect) {
+    const auto* dbcLayout = pipeline::getActiveDBCLayout();
+    if (!am || !am->isInitialized() || !dbcLayout) return {};
+    const auto* mapLayout = dbcLayout->getLayout("Map");
+    const auto* screenLayout = dbcLayout->getLayout("LoadingScreens");
+    if (!mapLayout || !screenLayout) return {};
+    const uint32_t screenField = mapLayout->tryField("LoadingScreenID");
+    const uint32_t fileField = screenLayout->tryField("FileName");
+    const uint32_t wideField = screenLayout->tryField("HasWideScreen");
+    if (screenField == 0xFFFFFFFFu || fileField == 0xFFFFFFFFu) return {};
+
+    auto mapDbc = am->loadDBC("Map.dbc");
+    if (!mapDbc || !mapDbc->isLoaded()) return {};
+    const int32_t mapRow = mapDbc->findRecordById(mapId);
+    if (mapRow < 0) return {};
+    const uint32_t screenId = mapDbc->getUInt32(static_cast<uint32_t>(mapRow), screenField);
+    if (screenId == 0) return {};
+
+    auto screens = am->loadDBC("LoadingScreens.dbc");
+    if (!screens || !screens->isLoaded()) return {};
+    const int32_t row = screens->findRecordById(screenId);
+    if (row < 0) return {};
+    std::string path = screens->getString(static_cast<uint32_t>(row), fileField);
+    if (path.empty()) return {};
+    const bool hasWide = wideField != 0xFFFFFFFFu &&
+                         screens->getUInt32(static_cast<uint32_t>(row), wideField) != 0;
+    // Wider than 4:3, by a thousandth's margin, as the client compares it.
+    if (hasWide && aspect > 4.0f / 3.0f + 0.001f) {
+        const size_t dot = path.find_last_of('.');
+        path.insert(dot == std::string::npos ? path.size() : dot, "Wide");
+    }
+    return path;
+}
+
 } // namespace
 
 WorldLoader::WorldLoader(Application& app,
@@ -785,6 +824,21 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     loadingScreen.setVkContext(window_->getVkContext());
     loadingScreen.setSDLWindow(window_->getSDLWindow());
     bool loadingScreenOk = loadingScreen.initialize();
+    // The destination's own picture over the client's default, as the client
+    // shows it - Northrend's going to Dalaran, not whatever was up before.
+    if (loadingScreenOk && window_ && window_->getHeight() > 0) {
+        const float aspect = static_cast<float>(window_->getWidth()) /
+                             static_cast<float>(window_->getHeight());
+        const std::string screenPath = mapLoadingScreenPath(assetManager_, mapId, aspect);
+        if (!screenPath.empty()) {
+            const pipeline::BLPImage picture = assetManager_->loadTexture(screenPath);
+            if (!picture.isValid() ||
+                !loadingScreen.loadImageRgba(picture.data.data(), picture.width, picture.height)) {
+                LOG_WARNING("Loading screen ", screenPath, " for map ", mapId,
+                            " could not be shown; keeping the default");
+            }
+        }
+    }
 
     auto showProgress = [&](const char* msg, float progress) {
         SDL_Event event;

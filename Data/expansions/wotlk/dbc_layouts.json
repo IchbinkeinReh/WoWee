@@ -290,9 +290,16 @@
     "Float": 23,
     "Int": 41
   },
+  "LoadingScreens": {
+    "ID": 0,
+    "Name": 1,
+    "FileName": 2,
+    "HasWideScreen": 3
+  },
   "Map": {
     "ID": 0,
-    "InternalName": 1
+    "InternalName": 1,
+    "LoadingScreenID": 57
   },
   "ParticleColor": {
     "End": 7,

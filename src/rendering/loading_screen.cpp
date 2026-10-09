@@ -89,26 +89,36 @@ bool LoadingScreen::loadImage(const std::string& path) {
         LOG_WARNING("No VkContext for loading screen image");
         return false;
     }
+    int width = 0, height = 0, channels = 0;
+    stbi_set_flip_vertically_on_load(false); // ImGui expects top-down
+    unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
+    if (!data) {
+        LOG_ERROR("Failed to load loading screen image: ", path);
+        return false;
+    }
+    const bool ok = loadImageRgba(data, width, height);
+    stbi_image_free(data);
+    return ok;
+}
+
+bool LoadingScreen::loadImageRgba(const uint8_t* data, int width, int height) {
+    if (!vkCtx || !data || width <= 0 || height <= 0) return false;
 
     // Clean up old image
     if (bgImage) {
         VkDevice device = vkCtx->getDevice();
         vkDeviceWaitIdle(device);
+        // The old image's ImGui handle too, now that one screen can change
+        // its picture (the map's, over the default).
+        if (bgDescriptorSet) ImGui_ImplVulkan_RemoveTexture(bgDescriptorSet);
         bgSampler = VK_NULL_HANDLE; // Owned by VkContext sampler cache
         if (bgImageView) { vkDestroyImageView(device, bgImageView, nullptr); bgImageView = VK_NULL_HANDLE; }
         if (bgImage) { vkDestroyImage(device, bgImage, nullptr); bgImage = VK_NULL_HANDLE; }
         if (bgMemory) { vkFreeMemory(device, bgMemory, nullptr); bgMemory = VK_NULL_HANDLE; }
         bgDescriptorSet = VK_NULL_HANDLE;
     }
-
-    int channels;
-    stbi_set_flip_vertically_on_load(false); // ImGui expects top-down
-    unsigned char* data = stbi_load(path.c_str(), &imageWidth, &imageHeight, &channels, 4);
-
-    if (!data) {
-        LOG_ERROR("Failed to load loading screen image: ", path);
-        return false;
-    }
+    imageWidth = width;
+    imageHeight = height;
 
     LOG_INFO("Loaded loading screen image: ", imageWidth, "x", imageHeight);
 
@@ -143,8 +153,6 @@ bool LoadingScreen::loadImage(const std::string& path) {
         memcpy(mapped, data, imageSize);
         vkUnmapMemory(device, stagingMemory);
     }
-
-    stbi_image_free(data);
 
     // Create image
     {

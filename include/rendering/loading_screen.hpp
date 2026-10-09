@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,9 @@ public:
 
     // Must be set before initialize() for Vulkan texture upload
     void setVkContext(VkContext* ctx) { vkCtx = ctx; }
+    /// Replace the picture with decoded RGBA pixels, top row first: the
+    /// destination map's loading screen, read from the game data.
+    bool loadImageRgba(const uint8_t* rgba, int width, int height);
     void setSDLWindow(SDL_Window* win) { sdlWindow = win; }
 
 private:
