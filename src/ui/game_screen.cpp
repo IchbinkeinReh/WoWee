@@ -27,6 +27,7 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/terrain_manager.hpp"
 #include "rendering/minimap.hpp"
+#include "rendering/selection_circle.hpp"
 #include "rendering/world_map.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/camera.hpp"
@@ -114,6 +115,9 @@ namespace {
 }
 
 namespace wowee { namespace ui {
+
+bool playerMayAttackPlayer(game::GameHandler& gameHandler, const game::Unit& other);
+glm::vec4 targetCircleColor(game::GameHandler& gameHandler, const game::Unit& unit);
 
 GameScreen::GameScreen() {
     loadSettings();
@@ -890,9 +894,10 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         if (gameHandler.hasTarget()) {
             auto target = gameHandler.getTarget();
             if (target) {
-                // Prefer the renderer's actual instance position so the selection
-                // circle tracks the rendered model (not a parallel entity-space
-                // interpolator that can drift from the visual position).
+                // Prefer the renderer's actual instance position so the target
+                // position the animation controller reads tracks the rendered
+                // model (not a parallel entity-space interpolator that can
+                // drift from the visual position).
                 glm::vec3 instPos;
                 if (core::Application::getInstance().getRenderPositionForGuid(target->getGuid(), instPos)) {
                     targetGLPos = instPos;
@@ -912,40 +917,20 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                 }
                 if (auto* ac = renderer->getAnimationController()) ac->setTargetPosition(&targetGLPos);
 
-                // Selection circle color: WoW-canonical level-based colors
-                bool showSelectionCircle = false;
-                glm::vec3 circleColor(1.0f, 1.0f, 0.3f); // default yellow
-                float circleRadius = 1.5f;
-                {
-                    glm::vec3 boundsCenter;
-                    float boundsRadius = 0.0f;
-                    if (core::Application::getInstance().getRenderBoundsForGuid(target->getGuid(), boundsCenter, boundsRadius)) {
-                        float r = boundsRadius * 1.1f;
-                        circleRadius = std::min(std::max(r, 0.8f), 8.0f);
-                    }
-                }
-                if (target->getType() == game::ObjectType::UNIT) {
-                    showSelectionCircle = true;
-                    auto unit = std::static_pointer_cast<game::Unit>(target);
-                    if (unit->getHealth() == 0 && unit->getMaxHealth() > 0) {
-                        circleColor = glm::vec3(0.5f, 0.5f, 0.5f); // gray (dead)
-                    } else if (unit->isHostile() || gameHandler.isAggressiveTowardPlayer(target->getGuid())) {
-                        const ImVec4 c = ui::helpers::levelDifficultyColor(
-                            gameHandler.getPlayerLevel(), unit->getLevel());
-                        circleColor = glm::vec3(c.x, c.y, c.z);
-                    } else {
-                        circleColor = glm::vec3(0.3f, 1.0f, 0.3f); // green (friendly)
-                    }
-                } else if (target->getType() == game::ObjectType::PLAYER) {
-                    showSelectionCircle = true;
-                    circleColor = glm::vec3(0.3f, 1.0f, 0.3f); // green (player)
-                }
-                // Nothing else gets one. WoW draws a selection circle under a
-                // unit and a player and under nothing else - a door, a mailbox,
-                // a bank vault is used rather than selected, and a ring on the
-                // floor around one reads as a creature being fought.
-                if (showSelectionCircle) {
-                    renderer->setSelectionCircle(targetGLPos, circleRadius, circleColor);
+                // The circle under the target (0x00743ec0 hands it to the
+                // world frame, 0x00725980 draws it): a unit or a player, never
+                // the player itself, while ObjectSelectionCircle is on (its
+                // default, 0x007460c0). Coloured as UnitSelectionColor would
+                // colour it (0x00521bf0), sized by the model (0x00720330).
+                const bool isUnit = target->getType() == game::ObjectType::UNIT ||
+                                    target->getType() == game::ObjectType::PLAYER;
+                const auto circle = isUnit && target->getGuid() != gameHandler.getPlayerGuid()
+                    ? core::Application::getInstance().getSelectionCircle(target->getGuid())
+                    : std::nullopt;
+                if (circle) {
+                    const auto& unit = static_cast<const game::Unit&>(*target);
+                    renderer->setSelectionCircle(circle->first, circle->second,
+                                                 targetCircleColor(gameHandler, unit));
                 } else {
                     renderer->clearSelectionCircle();
                 }
@@ -1206,38 +1191,87 @@ std::string unableCursorPath(const char* path) {
     return out;
 }
 
-/// Whether the player may attack another player, as FUN_00729740 decides it:
-/// not a friendly faction; the same duel (both name one duel flag); otherwise
-/// the target flagged for PvP, or either side marked contested (flag 2), and
-/// neither in a sanctuary (8) - or both in free-for-all (4). The flags are byte 1
-/// of UNIT_FIELD_BYTES_2 in WotLK; before it, UNIT_FIELD_FLAGS' PvP flag
+namespace {
+
+/// A unit's PvP flags as FUN_00729740 reads them: byte 1 of
+/// UNIT_FIELD_BYTES_2 in WotLK; before it, UNIT_FIELD_FLAGS' PvP flag
 /// (game::unitPvpFlags).
-bool playerMayAttackPlayer(game::GameHandler& gameHandler, const game::Unit& other) {
-    if (other.getHealth() == 0) return false;
-    if (other.getUnitFlags() & (0x00000002u | game::UNIT_FLAG_NOT_SELECTABLE)) return false;
-    if (!other.isHostile()) return false;
-
-    const auto me = gameHandler.getEntityManager().getEntity(gameHandler.getPlayerGuid());
-    const uint16_t arbiterField = game::fieldIndex(game::UF::PLAYER_DUEL_ARBITER);
-    if (me && arbiterField != 0xFFFF) {
-        const uint64_t mine = me->getField(arbiterField) |
-                              (static_cast<uint64_t>(me->getField(arbiterField + 1)) << 32);
-        const uint64_t theirs = other.getField(arbiterField) |
-                                (static_cast<uint64_t>(other.getField(arbiterField + 1)) << 32);
-        if (mine != 0 && mine == theirs) return true;
-    }
-
-    if (!me) return (other.getUnitFlags() & game::kUnitFlagPvp) != 0;
-    // Byte 1 of UNIT_FIELD_BYTES_2 is the PvP flags only from WotLK on.
+uint32_t pvpFlagsOf(const game::Entity& unit) {
     const uint16_t bytes2Field = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
     const bool bytes2HoldsPvp = bytes2Field != 0xFFFF && !game::isPreWotlk();
-    const auto flagsOf = [&](const game::Entity& unit) {
-        const uint32_t bytes2 = bytes2HoldsPvp ? unit.getField(bytes2Field) : 0;
-        const uint16_t flagsField = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
-        const uint32_t unitFlags = flagsField != 0xFFFF ? unit.getField(flagsField) : 0;
-        return game::unitPvpFlags(bytes2HoldsPvp, bytes2, unitFlags);
+    const uint32_t bytes2 = bytes2HoldsPvp ? unit.getField(bytes2Field) : 0;
+    const uint16_t flagsField = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+    const uint32_t unitFlags = flagsField != 0xFFFF ? unit.getField(flagsField) : 0;
+    return game::unitPvpFlags(bytes2HoldsPvp, bytes2, unitFlags);
+}
+
+/// Both in the same duel: both name one duel flag.
+bool inSameDuel(const game::Entity& a, const game::Entity& b) {
+    const uint16_t arbiterField = game::fieldIndex(game::UF::PLAYER_DUEL_ARBITER);
+    if (arbiterField == 0xFFFF) return false;
+    const auto arbiter = [&](const game::Entity& e) {
+        return e.getField(arbiterField) | (static_cast<uint64_t>(e.getField(arbiterField + 1)) << 32);
     };
-    return game::pvpFlagsAllowAttack(flagsOf(*me), flagsOf(other));
+    return arbiter(a) != 0 && arbiter(a) == arbiter(b);
+}
+
+/// FUN_00729740 between the player and another player-controlled unit, the
+/// player attacking when `playerAttacks`: never a dead or unattackable
+/// victim, never a friendly faction; the same duel; otherwise the victim
+/// flagged for PvP, or either side marked contested (flag 2), and neither in
+/// a sanctuary (8) - or both in free-for-all (4).
+bool mayAttackBetween(game::GameHandler& gameHandler, const game::Unit& other, bool playerAttacks) {
+    const auto me = gameHandler.getEntityManager().getEntity(gameHandler.getPlayerGuid());
+    const game::Unit* victim = &other;
+    if (!playerAttacks) {
+        if (!me || !me->isUnit()) return false;
+        victim = static_cast<const game::Unit*>(me.get());
+    }
+    if (victim->getHealth() == 0) return false;
+    if (victim->getUnitFlags() & (0x00000002u | game::UNIT_FLAG_NOT_SELECTABLE)) return false;
+    if (!other.isHostile()) return false;
+    if (!me) return playerAttacks && (other.getUnitFlags() & game::kUnitFlagPvp) != 0;
+    if (inSameDuel(*me, other)) return true;
+    return playerAttacks ? game::pvpFlagsAllowAttack(pvpFlagsOf(*me), pvpFlagsOf(other))
+                         : game::pvpFlagsAllowAttack(pvpFlagsOf(other), pvpFlagsOf(*me));
+}
+
+}  // namespace
+
+/// Whether the player may attack another player, as FUN_00729740 decides it.
+bool playerMayAttackPlayer(game::GameHandler& gameHandler, const game::Unit& other) {
+    return mayAttackBetween(gameHandler, other, true);
+}
+
+/// The colour of the circle under the target (FUN_00718ac0 asking
+/// FUN_00521bf0 with its last argument 1).
+glm::vec4 targetCircleColor(game::GameHandler& gameHandler, const game::Unit& unit) {
+    rendering::selection_circle::ColorInput in;
+    in.playerControlled = (unit.getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED) != 0;
+    in.dead = unit.getHealth() == 0 || (unit.getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) != 0;
+    in.reaction = gameHandler.unitReactionToPlayer(unit);
+    if (in.playerControlled) {
+        in.targetMayAttackPlayer = mayAttackBetween(gameHandler, unit, false);
+        in.playerMayAttackTarget = mayAttackBetween(gameHandler, unit, true);
+        const auto me = gameHandler.getEntityManager().getEntity(gameHandler.getPlayerGuid());
+        const uint32_t theirs = pvpFlagsOf(unit);
+        const uint32_t mine = me ? pvpFlagsOf(*me) : 0u;
+        in.pvp = (theirs & game::pvp::kPvp) != 0 && (theirs & game::pvp::kSanctuary) == 0 &&
+                 (mine & game::pvp::kSanctuary) == 0;
+        // FUN_0052d310: the player's own pet or a member, while in a group.
+        if (gameHandler.isInGroup()) {
+            const uint64_t guid = unit.getGuid();
+            in.groupMember = guid == gameHandler.getPetGuid();
+            for (const auto& m : gameHandler.getPartyData().members) {
+                if (m.guid == guid) in.groupMember = true;
+            }
+        }
+        // FUN_006b3510: on the friends list.
+        for (const auto& c : gameHandler.getContacts()) {
+            if (c.guid == unit.getGuid() && (c.flags & 0x1) != 0) in.friendListed = true;
+        }
+    }
+    return rendering::selection_circle::color(in);
 }
 
 /// The cursor over a unit or another player, as the client picks it: the sword

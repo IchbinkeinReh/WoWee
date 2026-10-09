@@ -135,6 +135,16 @@ public:
     bool getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, float& outRadius) const;
     uint32_t characterInstanceIdForGuid(uint64_t guid) const;
     bool getRenderFootZForGuid(uint64_t guid, float& outFootZ) const;
+    /// Where the circle under a unit goes and how big it is (0x00725980,
+    /// 0x00720330): at the unit's position - its mount's while it rides - and
+    /// sized by its CreatureModelData box, joined to its mount's when riding
+    /// (0x0071ed80), and its drawn scale; 1.2 when it has no box. Nothing
+    /// when it has no model drawn.
+    struct SelectionCirclePlacement {
+        glm::vec3 position{0.0f};
+        float radius = 0.0f;
+    };
+    std::optional<SelectionCirclePlacement> selectionCircle(uint64_t guid) const;
     bool getRenderPositionForGuid(uint64_t guid, glm::vec3& outPos) const;
 
     // Display data lookups

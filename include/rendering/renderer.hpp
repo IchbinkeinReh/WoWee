@@ -266,7 +266,9 @@ public:
     SwimEffects* getSwimEffects() const { syncWorldRecording(); return swimEffects.get(); }
 
     // Selection circle for targeted entity
-    void setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec3& color);
+    /// The target's circle (0x00725980): the unit's position, its radius
+    /// (selection_circle::radius) and its selection colour.
+    void setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec4& color);
     void clearSelectionCircle();
 
     // CPU timing stats (milliseconds, last frame).
@@ -405,6 +407,12 @@ private:
     std::unique_ptr<FootprintRenderer> footprintRenderer;
     std::unique_ptr<BlobShadowRenderer> blobShadowRenderer;
     std::vector<blob_shadow::Caster> blobCasters_;
+    struct SelectionCircle {
+        glm::vec3 position{0.0f};
+        float radius = 0.0f;
+        glm::vec4 color{0.0f};
+    };
+    std::optional<SelectionCircle> selectionCircle_;
     audio::AudioCoordinator* audioCoordinator_ = nullptr;  // Owned by Application
     std::unique_ptr<AnimationController> animationController_;  // §4.2
     std::unique_ptr<game::ZoneManager> zoneManager;

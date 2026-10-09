@@ -5747,6 +5747,13 @@ void Application::setHighlightedGameObject(uint64_t guid) {
     if (kind == 1 && m2) m2->setInstanceHighlight(instance, 1.0f);
 }
 
+std::optional<std::pair<glm::vec3, float>> Application::getSelectionCircle(uint64_t guid) const {
+    if (!entitySpawner_) return std::nullopt;
+    const auto placement = entitySpawner_->selectionCircle(guid);
+    if (!placement) return std::nullopt;
+    return std::make_pair(placement->position, placement->radius);
+}
+
 bool Application::getRenderPositionForGuid(uint64_t guid, glm::vec3& outPos) const {
     if (entitySpawner_) return entitySpawner_->getRenderPositionForGuid(guid, outPos);
     return false;

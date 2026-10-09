@@ -1,5 +1,6 @@
 // Which units and corpses the client puts a blob shadow under, and how big
-// (0x00743760, 0x00793980, 0x0071ed80, 0x0082ced0).
+// (0x00743760, 0x00793980, 0x0071ed80, 0x0082ced0), and the radius of the
+// circle under the target, sized by the same box (0x00720330).
 #include "core/entity_spawner.hpp"
 
 #include "game/entity.hpp"
@@ -7,6 +8,7 @@
 #include "game/update_field_table.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/selection_circle.hpp"
 
 namespace wowee::core {
 
@@ -122,6 +124,51 @@ void EntitySpawner::updateBlobShadows(uint32_t localPlayerInstance) {
         }
         placePlayer(self, localPlayerInstance, mountInstanceId_, mountDisplay);
     }
+}
+
+std::optional<EntitySpawner::SelectionCirclePlacement> EntitySpawner::selectionCircle(uint64_t guid) const {
+    const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
+    if (!characters || !gameHandler_) return std::nullopt;
+    const uint32_t instanceId = characterInstanceIdForGuid(guid);
+    glm::mat4 frame;
+    if (instanceId == 0 || !characters->getInstanceFrame(instanceId, frame)) return std::nullopt;
+    // The unit's scale (its virtual +0x7c, 0x0071c0e0): the scale it is drawn at.
+    const float scale = glm::length(glm::vec3(frame[0]));
+    SelectionCirclePlacement placement;
+    placement.position = glm::vec3(frame[3]);
+
+    rendering::blob_shadow::Box box;  // none: zero, which 0x00720330 sizes at 1.2
+    auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    if (entity && entity->isUnit()) {
+        const auto& unit = static_cast<const game::Unit&>(*entity);
+        uint32_t displayId = unit.getDisplayId();
+        if (auto d = creatureDisplayIds_.find(guid); d != creatureDisplayIds_.end()) displayId = d->second;
+        // Riding, the unit stands where its mount does; the rider's model
+        // sits up on the saddle.
+        uint32_t mountInstance = 0;
+        uint32_t mountDisplayId = 0;
+        if (guid == gameHandler_->getPlayerGuid()) {
+            mountInstance = mountInstanceId_;
+            if (mountInstance != 0) mountDisplayId = unit.getMountDisplayId();
+        } else if (const RemotePlayerMount* mount = getRemotePlayerMount(guid)) {
+            mountInstance = mount->instanceId;
+            mountDisplayId = mount->displayId;
+        }
+        glm::vec3 mountPosition;
+        if (mountInstance != 0 && characters->getInstancePosition(mountInstance, mountPosition)) {
+            placement.position = mountPosition;
+        }
+        if (const ModelGeoBox* own = geoBoxForDisplay(displayId)) {
+            box = own->box;
+            if (mountDisplayId != 0) {
+                if (const ModelGeoBox* mount = geoBoxForDisplay(mountDisplayId)) {
+                    box = rendering::blob_shadow::mountedBox(own->box, mount->box, mount->mountHeight);
+                }
+            }
+        }
+    }
+    placement.radius = rendering::selection_circle::radius(box, scale);
+    return placement;
 }
 
 }  // namespace wowee::core

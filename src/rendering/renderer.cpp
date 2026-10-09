@@ -56,6 +56,7 @@
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/fishing_line.hpp"
 #include "rendering/blob_shadow_renderer.hpp"
+#include "rendering/selection_circle.hpp"
 #include "game/game_handler.hpp"
 #include "pipeline/m2_loader.hpp"
 #include <algorithm>
@@ -2643,6 +2644,16 @@ void Renderer::update(float deltaTime) {
         blobShadowRenderer->prepare(vkCtx ? vkCtx->getCurrentFrame() : 0, blobCasters_,
                                     camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
                                     terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
+        // The circle under the target, laid on the ground the same way
+        // (0x00725980 through 0x007e4370), turned with the camera's bearing.
+        std::optional<blob_shadow::Projection> circle;
+        if (selectionCircle_ && camera) {
+            circle = selection_circle::project(selectionCircle_->position, selectionCircle_->radius,
+                                               camera->getPosition());
+        }
+        blobShadowRenderer->prepareSelection(circle, selectionCircle_ ? selectionCircle_->color : glm::vec4(0.0f),
+                                             camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
+                                             terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
     }
     { WOWEE_PROFILE_SCOPE("footsteps", Cpu); if (animationController_) animationController_->updateFootsteps(deltaTime); }
 
@@ -2752,12 +2763,12 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
     deferredWorldInitCooldown_ = 0.12f;
 }
 
-void Renderer::setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec3& color) {
-    if (overlaySystem_) overlaySystem_->setSelectionCircle(pos, radius, color);
+void Renderer::setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec4& color) {
+    selectionCircle_ = SelectionCircle{pos, radius, color};
 }
 
 void Renderer::clearSelectionCircle() {
-    if (overlaySystem_) overlaySystem_->clearSelectionCircle();
+    selectionCircle_.reset();
 }
 
 // ========================= PostProcessPipeline delegation stubs (§4.3) =========================
@@ -3284,8 +3295,6 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
     uint32_t frameIdx = vkCtx->getCurrentFrame();
     VkDescriptorSet perFrameSet = perFrameDescSets[frameIdx];
-    const glm::mat4& view = camera ? camera->getViewMatrix() : glm::mat4(1.0f);
-    const glm::mat4& projection = camera ? camera->getProjectionMatrix() : glm::mat4(1.0f);
 
     // GPU crash diagnostic: skip individual renderers to isolate which one faults
     static const bool envSkipWMO = (std::getenv("WOWEE_SKIP_WMO") != nullptr);
@@ -3341,9 +3350,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     // for why the primary cannot). A pass that is skipped leaves its mark
     // unwritten, and readback steps over it.
     enum SceneMark : uint32_t {
-        kMarkTerrain, kMarkGrass, kMarkSky, kMarkWmo, kMarkSelection, kMarkChars,
+        kMarkTerrain, kMarkGrass, kMarkSky, kMarkWmo, kMarkChars,
         kMarkM2Opaque, kMarkM2Blended, kMarkM2Particles, kMarkRibbons,
-        kMarkBlobShadows, kMarkWater, kMarkWorldEffects, kMarkOverlays,
+        kMarkBlobShadows, kMarkWater, kMarkWorldEffects, kMarkSelection, kMarkOverlays,
         kSceneMarkCount
     };
     const uint32_t sceneMarks = vkCtx ? vkCtx->gpuReserveMarks(kSceneMarkCount)
@@ -3530,12 +3539,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             WOWEE_PROFILE_SCOPE("record selection circle", Cpu);
             VkCommandBuffer cmd = beginSecondary(SEC_SELECTION);
             setSecondaryViewportScissor(cmd);
-            if (overlaySystem_) {
-                overlaySystem_->renderSelectionCircle(view, projection, cmd,
-                    terrainManager ? OverlaySystem::HeightQuery2D([&](float x, float y) { return terrainManager->getHeightAt(x, y); }) : OverlaySystem::HeightQuery2D{},
-                    wmoRenderer ? OverlaySystem::HeightQuery3D([&](float x, float y, float z) { return wmoRenderer->getFloorHeight(x, y, z); }) : OverlaySystem::HeightQuery3D{},
-                    m2Renderer ? OverlaySystem::HeightQuery3D([&](float x, float y, float z) { return m2Renderer->getFloorHeight(x, y, z); }) : OverlaySystem::HeightQuery3D{});
-            }
+            // On the finished world, depth tested (0x004f6f90 late in
+            // CGWorldFrame::Render); queued after the world's passes below.
+            if (blobShadowRenderer && camera) blobShadowRenderer->renderSelection(cmd, perFrameSet);
             sceneMark(cmd, kMarkSelection, "selection circle");
             vkEndCommandBuffer(cmd);
         }
@@ -3692,13 +3698,6 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 std::chrono::steady_clock::now() - wmoStart).count();
         }
 
-        if (overlaySystem_) {
-            overlaySystem_->renderSelectionCircle(view, projection, currentCmd,
-                terrainManager ? OverlaySystem::HeightQuery2D([&](float x, float y) { return terrainManager->getHeightAt(x, y); }) : OverlaySystem::HeightQuery2D{},
-                wmoRenderer ? OverlaySystem::HeightQuery3D([&](float x, float y, float z) { return wmoRenderer->getFloorHeight(x, y, z); }) : OverlaySystem::HeightQuery3D{},
-                m2Renderer ? OverlaySystem::HeightQuery3D([&](float x, float y, float z) { return m2Renderer->getFloorHeight(x, y, z); }) : OverlaySystem::HeightQuery3D{});
-        }
-
         if (characterRenderer && camera && !skipChars) {
             characterRenderer->prepareRender(frameIdx);
             characterRenderer->render(currentCmd, perFrameSet, *camera,
@@ -3737,6 +3736,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         if (footprintRenderer && camera) footprintRenderer->render(currentCmd, perFrameSet, *camera);
         if (questMarkerRenderer && camera) questMarkerRenderer->render(currentCmd, perFrameSet, *camera);
         sceneMark(currentCmd, kMarkWorldEffects, "weather, dust, footprints, quest markers");
+        // The circle under the target, on the finished world (0x004f6f90).
+        if (blobShadowRenderer && camera) blobShadowRenderer->renderSelection(currentCmd, perFrameSet);
+        sceneMark(currentCmd, kMarkSelection, "selection circle");
     }
 
     pendingWorld_.pending = true;
@@ -3865,11 +3867,13 @@ void Renderer::finishRenderWorld() {
         queue(secondaryCmds_[SEC_SKY][frameIdx], "sky");
         if (pw.queueWmo)
             queue(secondaryCmds_[SEC_WMO][frameIdx], "wmo");
-        queue(secondaryCmds_[SEC_SELECTION][frameIdx], "selection");
         queue(secondaryCmds_[SEC_CHARS][frameIdx], "characters");
         if (pw.queueM2)
             queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
         queue(secondaryCmds_[SEC_POST][frameIdx], "water/effects");
+        // The client draws the target's circle once the world is down
+        // (0x004f6f90 from CGWorldFrame::Render).
+        queue(secondaryCmds_[SEC_SELECTION][frameIdx], "selection");
 
         // In one call. The marks that used to follow each of these were
         // written from the primary, which a subpass begun with

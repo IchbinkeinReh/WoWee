@@ -2715,6 +2715,11 @@ wowee_add_test(test_client_ribbon
 wowee_add_test(test_blob_shadow
     SOURCES test_blob_shadow.cpp)
 
+# ── test_selection_circle ────────────────────────────────────
+# The circle under the target (rendering/selection_circle.hpp).
+wowee_add_test(test_selection_circle
+    SOURCES test_selection_circle.cpp)
+
 # ── test_client_weather ──────────────────────────────────────
 # The client's rain, snow and sand (MapWeather.cpp, rendering/client_weather.hpp):
 # density, rates, spawns, the ground cache and the lean with the player's movement.

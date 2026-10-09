@@ -5,36 +5,22 @@
 #include <glm/mat4x4.hpp>
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
-#include <functional>
-#include <optional>
 
 namespace wowee {
 namespace rendering {
 
 class VkContext;
 
-/// Manages selection circle and fullscreen overlay Vulkan pipelines.
+/// Manages the fullscreen overlay Vulkan pipelines. (The circle under the
+/// target is BlobShadowRenderer's, laid on the ground as the client does.)
 /// Extracted from Renderer to isolate overlay rendering resources.
 class OverlaySystem {
 public:
-    /// Height query callable: returns floor height at (x, y) or (x, y, probeZ).
-    using HeightQuery2D = std::function<std::optional<float>(float x, float y)>;
-    using HeightQuery3D = std::function<std::optional<float>(float x, float y, float probeZ)>;
-
     explicit OverlaySystem(VkContext* ctx);
     ~OverlaySystem();
 
     OverlaySystem(const OverlaySystem&) = delete;
     OverlaySystem& operator=(const OverlaySystem&) = delete;
-
-    // Selection circle
-    void setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec3& color);
-    void clearSelectionCircle();
-    void renderSelectionCircle(const glm::mat4& view, const glm::mat4& projection,
-                               VkCommandBuffer cmd,
-                               const HeightQuery2D& terrainHeight,
-                               const HeightQuery3D& wmoHeight,
-                               const HeightQuery3D& m2Height);
 
     // Fullscreen color overlay (underwater tint, etc.)
     void renderOverlay(const glm::vec4& color, VkCommandBuffer cmd);
@@ -59,31 +45,10 @@ public:
     void recreatePipelines();
 
 private:
-    void initSelectionCircle();
     void initOverlayPipeline();
     void initBrightnessPipeline();
 
     VkContext* vkCtx_ = nullptr;
-
-    // Selection circle resources
-    VkPipeline selCirclePipeline_ = VK_NULL_HANDLE;
-    VkPipelineLayout selCirclePipelineLayout_ = VK_NULL_HANDLE;
-    ::VkBuffer selCircleVertBuf_ = VK_NULL_HANDLE;
-    VmaAllocation selCircleVertAlloc_ = VK_NULL_HANDLE;
-    ::VkBuffer selCircleIdxBuf_ = VK_NULL_HANDLE;
-    VmaAllocation selCircleIdxAlloc_ = VK_NULL_HANDLE;
-    int selCircleVertCount_ = 0;
-    glm::vec3 selCirclePos_{0.0f};
-    glm::vec3 selCircleColor_{1.0f, 0.0f, 0.0f};
-    float selCircleRadius_ = 1.5f;
-    bool selCircleVisible_ = false;
-
-    // Floor-snap cache: the terrain/WMO/M2 floor queries are collision
-    // raycasts, so reuse the result while the target stands still. Refreshed
-    // periodically in case world geometry streams in around the target.
-    glm::vec3 selCircleFloorCachePos_{0.0f};
-    float selCircleFloorCacheZ_ = 0.0f;
-    int selCircleFloorCacheAge_ = -1;  // -1 = invalid; counts frames since query
 
     // Fullscreen overlay resources
     VkPipeline overlayPipeline_ = VK_NULL_HANDLE;
