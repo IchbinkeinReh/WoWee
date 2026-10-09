@@ -2396,7 +2396,7 @@ uint32_t GameHandler::groundTargetSpellId() const {
 spell_mods::Sum GameHandler::getSpellModifiers(uint32_t spellId, SpellModOp op) const {
     return spellHandler_ ? spellHandler_->spellModifiers(spellId, static_cast<uint8_t>(op)) : spell_mods::Sum{};
 }
-uint64_t GameHandler::cloneCasterGuid(const Unit& unit) const {
+uint64_t GameHandler::getCloneCasterGuid(const Unit& unit) const {
     const auto* auras = getUnitAuras(unit.getGuid());
     if (!auras || auras->empty()) return 0;
     return unit_names::cloneCasterGuid(*auras, [this](uint32_t spellId, int k) -> uint32_t {
@@ -2407,7 +2407,7 @@ uint64_t GameHandler::cloneCasterGuid(const Unit& unit) const {
 }
 
 std::string GameHandler::shownUnitName(const Unit& unit) {
-    const uint64_t caster = cloneCasterGuid(unit);
+    const uint64_t caster = getCloneCasterGuid(unit);
     if (caster == 0) return unit.getName();
     // The caster's own name while it is about; else what is cached for it
     // (0x0074d750), which a name query fills for a player.

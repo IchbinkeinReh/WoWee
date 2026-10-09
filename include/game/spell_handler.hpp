@@ -562,7 +562,7 @@ private:
     std::unordered_map<uint64_t, UnitCastEnd> unitCastEnds_;
     void noteUnitCastEnd(uint64_t guid, bool channelZeroed) {
         auto& e = unitCastEnds_[guid];
-        ++e.serial;
+        e.serial += 1;
         e.channelZeroed = channelZeroed;
     }
 

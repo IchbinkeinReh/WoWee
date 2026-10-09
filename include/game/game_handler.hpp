@@ -1840,7 +1840,7 @@ public:
     /// (aura 279) is its caster's.
     std::string shownUnitName(const Unit& unit);
     /// The caster of the unit's aura 279, 0 for none (0x0072a000).
-    uint64_t cloneCasterGuid(const Unit& unit) const;
+    uint64_t getCloneCasterGuid(const Unit& unit) const;
     const std::string& lookupName(uint64_t guid) const {
         return entityController_->lookupName(guid);
     }

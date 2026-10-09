@@ -295,7 +295,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // caster is about its text is the caster's (0x0072d4f0 calls itself
         // for it): no title of a creature's under it.
         const std::string name = gameHandler.shownUnitName(unit);
-        const uint64_t cloneOf = gameHandler.cloneCasterGuid(unit);
+        const uint64_t cloneOf = gameHandler.getCloneCasterGuid(unit);
         const bool asCaster = cloneOf != 0 && gameHandler.getEntityManager().getEntity(cloneOf) != nullptr;
         if (isPlayer) {
             const uint16_t pf = game::fieldIndex(game::UF::PLAYER_FLAGS);
