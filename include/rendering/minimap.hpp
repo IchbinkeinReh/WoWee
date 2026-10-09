@@ -175,7 +175,7 @@ private:
     // Descriptor resources (shared layout: 1 combined image sampler at binding 0)
     VkDescriptorSetLayout samplerSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool descPool = VK_NULL_HANDLE;
-    static constexpr uint32_t MAX_DESC_SETS = 2 * GRID * GRID + 1;
+    static constexpr uint32_t MAX_DESC_SETS = 2 * GRID * GRID + 2;
 
     // Tile composite pipeline (renders into VkRenderTarget)
     VkPipeline tilePipeline = VK_NULL_HANDLE;
@@ -186,6 +186,13 @@ private:
     VkPipeline displayPipeline = VK_NULL_HANDLE;
     VkPipelineLayout displayPipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSet displayDescSet = VK_NULL_HANDLE;
+    /// Textures\MinimapMask, the round cut the map is drawn through
+    /// (0x00581740's second stage), read on the first composite.
+    std::unique_ptr<VkTexture> maskTexture_;
+    VkDescriptorSet maskDescSet = VK_NULL_HANDLE;
+    bool maskTried_ = false;
+    bool maskLoaded_ = false;
+    void loadMask();
 
     int mapSize = 200;
     int zoomLevel_ = minimap_zoom::kDefaultLevel;

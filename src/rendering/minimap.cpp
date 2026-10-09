@@ -47,7 +47,8 @@ struct MinimapDisplayPush {
     float zoomRadius;
     int32_t squareShape;
     float opacity;
-};  // 40 bytes
+    int32_t hasMask;  // Textures\MinimapMask is resident
+};  // 44 bytes
 
 Minimap::Minimap() = default;
 
@@ -147,7 +148,7 @@ bool Minimap::initialize(VkContext* ctx, VkDescriptorSetLayout /*perFrameLayout*
     // --- Allocate all descriptor sets ---
     // Two frames of GRID x GRID tile sets, and one display set
     constexpr uint32_t kTileSets = GRID * GRID;
-    constexpr uint32_t kSetCount = 2 * kTileSets + 1;
+    constexpr uint32_t kSetCount = 2 * kTileSets + 2;
     std::vector<VkDescriptorSetLayout> layouts(kSetCount, samplerSetLayout);
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -169,6 +170,7 @@ bool Minimap::initialize(VkContext* ctx, VkDescriptorSetLayout /*perFrameLayout*
         for (uint32_t t = 0; t < kTileSets; t++)
             tileDescSets[f][t] = allSets[f * kTileSets + t];
     displayDescSet = allSets[2 * kTileSets];
+    maskDescSet = allSets[2 * kTileSets + 1];
 
     // --- Write display descriptor set → composite render target ---
     VkDescriptorImageInfo compositeImgInfo = compositeTarget->descriptorInfo();
@@ -180,6 +182,12 @@ bool Minimap::initialize(VkContext* ctx, VkDescriptorSetLayout /*perFrameLayout*
     displayWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     displayWrite.pImageInfo = &compositeImgInfo;
     vkUpdateDescriptorSets(device, 1, &displayWrite, 0, nullptr);
+    // The mask's set holds something valid until the mask is read
+    // (compositePass); hasMask says which.
+    VkDescriptorImageInfo placeholderInfo = noDataTexture->descriptorInfo();
+    displayWrite.dstSet = maskDescSet;
+    displayWrite.pImageInfo = &placeholderInfo;
+    vkUpdateDescriptorSets(device, 1, &displayWrite, 0, nullptr);
 
     // --- Tile pipeline layout: samplerSetLayout + push constant (vertex) ---
     VkPushConstantRange tilePush{};
@@ -188,12 +196,12 @@ bool Minimap::initialize(VkContext* ctx, VkDescriptorSetLayout /*perFrameLayout*
     tilePush.size = sizeof(MinimapTilePush);
     tilePipelineLayout = createPipelineLayout(device, { samplerSetLayout }, { tilePush });
 
-    // --- Display pipeline layout: samplerSetLayout + 40-byte push constant (vert+frag) ---
+    // --- Display pipeline layout: the composite, the mask, and the push constant (vert+frag) ---
     VkPushConstantRange displayPush{};
     displayPush.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     displayPush.offset = 0;
     displayPush.size = sizeof(MinimapDisplayPush);
-    displayPipelineLayout = createPipelineLayout(device, { samplerSetLayout }, { displayPush });
+    displayPipelineLayout = createPipelineLayout(device, { samplerSetLayout, samplerSetLayout }, { displayPush });
 
     // --- Vertex input: pos2 (loc 0) + uv2 (loc 1), stride 16 ---
     VkVertexInputBindingDescription binding{};
@@ -338,6 +346,9 @@ void Minimap::shutdown() {
     tileInsertionOrder.clear();
 
     if (noDataTexture) { noDataTexture->destroy(device, alloc); noDataTexture.reset(); }
+    if (maskTexture_) { maskTexture_->destroy(device, alloc); maskTexture_.reset(); }
+    maskTried_ = false;
+    maskLoaded_ = false;
     if (compositeTarget) { compositeTarget->destroy(device, alloc); compositeTarget.reset(); }
 
     vkCtx = nullptr;
@@ -536,10 +547,44 @@ void Minimap::updateTileDescriptors(uint32_t frameIdx, int centerTileX, int cent
 // Off-screen composite pass (call BEFORE main render pass)
 // --------------------------------------------------------
 
+void Minimap::loadMask() {
+    if (maskTried_ || !assetManager || !vkCtx || maskDescSet == VK_NULL_HANDLE) return;
+    maskTried_ = true;
+    // The round mask the client draws the map through, in the second texture
+    // stage (0x005832f0 loads it, 0x00581740 binds it).
+    auto image = assetManager->loadTexture("Textures\\MinimapMask.blp");
+    if (!image.isValid()) {
+        LOG_WARNING("Minimap: Textures\\MinimapMask.blp not found - cut round without it");
+        return;
+    }
+    maskTexture_ = std::make_unique<VkTexture>();
+    if (!maskTexture_->upload(*vkCtx, image.data.data(), image.width, image.height,
+                              VK_FORMAT_R8G8B8A8_UNORM, false) ||
+        !maskTexture_->createSampler(vkCtx->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+                                     VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 1.0f)) {
+        maskTexture_.reset();
+        return;
+    }
+    // Last bound by a display draw frames ago; the queue is idle for the
+    // upload just made.
+    vkDeviceWaitIdle(vkCtx->getDevice());
+    VkDescriptorImageInfo info = maskTexture_->descriptorInfo();
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = maskDescSet;
+    w.dstBinding = 0;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &info;
+    vkUpdateDescriptorSets(vkCtx->getDevice(), 1, &w, 0, nullptr);
+    maskLoaded_ = true;
+}
+
 void Minimap::compositePass(VkCommandBuffer cmd, const glm::vec3& centerWorldPos) {
     if (!enabled || !assetManager || !compositeTarget || !compositeTarget->isValid()) return;
 
     if (!trsParsed) parseTRS();
+    loadMask();
 
     if (indoorScene_) {
         compositeIndoor(cmd);
@@ -737,9 +782,10 @@ void Minimap::render(VkCommandBuffer cmd, const Camera& playerCamera,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, displayPipeline);
 
+    const VkDescriptorSet displaySets[2] = {displayDescSet, maskDescSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            displayPipelineLayout, 0, 1,
-                            &displayDescSet, 0, nullptr);
+                            displayPipelineLayout, 0, 2,
+                            displaySets, 0, nullptr);
 
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &quadVB, &offset);
@@ -820,6 +866,7 @@ void Minimap::render(VkCommandBuffer cmd, const Camera& playerCamera,
     push.zoomRadius = zoomRadius;
     push.squareShape = squareShape ? 1 : 0;
     push.opacity = opacity_;
+    push.hasMask = maskLoaded_ ? 1 : 0;
 
     vkCmdPushConstants(cmd, displayPipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

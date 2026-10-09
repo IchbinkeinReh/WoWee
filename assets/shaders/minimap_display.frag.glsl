@@ -1,6 +1,9 @@
 #version 450
 
 layout(set = 0, binding = 0) uniform sampler2D uComposite;
+// Textures\MinimapMask: the client draws the map through its alpha in a
+// second texture stage (0x00581740), the frame's border art over it.
+layout(set = 1, binding = 0) uniform sampler2D uMask;
 
 layout(push_constant) uniform Push {
     vec4 rect;
@@ -9,6 +12,7 @@ layout(push_constant) uniform Push {
     float zoomRadius;
     int squareShape;
     float opacity;
+    int hasMask;
 } push;
 
 layout(location = 0) in vec2 TexCoord;
@@ -19,8 +23,10 @@ void main() {
     vec2 center = TexCoord - 0.5;
     float dist = length(center);
 
+    float maskAlpha = 1.0;
     if (push.squareShape == 0) {
-        if (dist > 0.5) discard;
+        if (push.hasMask != 0) maskAlpha = texture(uMask, TexCoord).a;
+        else if (dist > 0.5) discard;
     }
 
     float cs = cos(push.rotation);
@@ -31,11 +37,5 @@ void main() {
 
     vec4 mapColor = texture(uComposite, mapUV);
 
-    // Dark border ring
-    float border = smoothstep(0.48, 0.5, dist);
-    if (push.squareShape == 0) {
-        mapColor.rgb *= 1.0 - border * 0.7;
-    }
-
-    outColor = vec4(mapColor.rgb, mapColor.a * push.opacity);
+    outColor = vec4(mapColor.rgb, mapColor.a * maskAlpha * push.opacity);
 }
