@@ -217,10 +217,9 @@ void ChatHandler::registerOpcodes(DispatchTable& table) {
         regular.writeUInt32(lang);
         regular.writeUInt64(senderGuid);
         regular.writeUInt32(unk);
-        const auto& raw = packet.getData();
-        size_t pos = packet.getReadPos();
-        if (pos < raw.size())
-            regular.writeBytes(raw.data() + pos, raw.size() - pos);
+        const auto body = packet.remainingData();
+        if (!body.empty())
+            regular.writeBytes(body.data(), body.size());
         handleMessageChat(regular);
     };
     table[Opcode::SMSG_TEXT_EMOTE] = [this](network::Packet& packet) {

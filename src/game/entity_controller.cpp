@@ -1249,11 +1249,11 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         } else if (ufi.minDamage != 0xFFFF && key == ufi.minDamage &&
                    block.guid == owner_.petGuidRef()) {
             // A float, sent as its bits like every other float field.
-            std::memcpy(&owner_.petMinDamageRef(), &val, 4);
+            owner_.petMinDamageRef() = bitsToFloat(val);
             petStatsChanged = true;
         } else if (ufi.maxDamage != 0xFFFF && key == ufi.maxDamage &&
                    block.guid == owner_.petGuidRef()) {
-            std::memcpy(&owner_.petMaxDamageRef(), &val, 4);
+            owner_.petMaxDamageRef() = bitsToFloat(val);
             petStatsChanged = true;
         } else if (ufi.stat0 != 0xFFFF && key >= ufi.stat0 && key < ufi.stat0 + 5 &&
                    block.guid == owner_.petGuidRef()) {
@@ -1581,7 +1581,7 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             owner_.playerHealBonusRef() = healVal;
         }
         // Percentage stats are stored as IEEE 754 floats packed into uint32 update fields.
-        // memcpy reinterprets the bits; clamp to [0..100] to guard against NaN/Inf from
+        // bitsToFloat reinterprets the bits; clamp to [0..100] to guard against NaN/Inf from
         // corrupted packets reaching the UI (display-only, no gameplay logic depends on these).
         // Points, not a percentage, so read straight rather than through the
         // float reinterpretation the lines below need.
@@ -1590,24 +1590,24 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
         // in) as float bits, one figure while not casting and one during the
         // five-second rule. A change refreshes the stat panel like any stat.
         else if (pfi.manaRegen != 0xFFFF && key == pfi.manaRegen) {
-            float mr; std::memcpy(&mr, &val, 4);
+            const float mr = bitsToFloat(val);
             if (owner_.playerManaRegenRef() != mr) statsChanged = true;
             owner_.playerManaRegenRef() = mr;
         }
         else if (pfi.manaRegenCasting != 0xFFFF && key == pfi.manaRegenCasting) {
-            float mr; std::memcpy(&mr, &val, 4);
+            const float mr = bitsToFloat(val);
             if (owner_.playerManaRegenCastingRef() != mr) statsChanged = true;
             owner_.playerManaRegenCastingRef() = mr;
         }
         else if (pfi.expertise != 0xFFFF && key == pfi.expertise) { owner_.playerExpertiseRef() = static_cast<int32_t>(val); }
         else if (pfi.offhandExpertise != 0xFFFF && key == pfi.offhandExpertise) { owner_.playerOffhandExpertiseRef() = static_cast<int32_t>(val); }
-        else if (pfi.blockPct != 0xFFFF && key == pfi.blockPct) { std::memcpy(&owner_.playerBlockPctRef(), &val, 4); owner_.playerBlockPctRef() = std::clamp(owner_.playerBlockPctRef(), 0.0f, 100.0f); }
-        else if (pfi.dodgePct != 0xFFFF && key == pfi.dodgePct) { std::memcpy(&owner_.playerDodgePctRef(), &val, 4); owner_.playerDodgePctRef() = std::clamp(owner_.playerDodgePctRef(), 0.0f, 100.0f); }
-        else if (pfi.parryPct != 0xFFFF && key == pfi.parryPct) { std::memcpy(&owner_.playerParryPctRef(), &val, 4); owner_.playerParryPctRef() = std::clamp(owner_.playerParryPctRef(), 0.0f, 100.0f); }
-        else if (pfi.critPct  != 0xFFFF && key == pfi.critPct)  { std::memcpy(&owner_.playerCritPctRef(),  &val, 4); owner_.playerCritPctRef()  = std::clamp(owner_.playerCritPctRef(),  0.0f, 100.0f); }
-        else if (pfi.rangedCritPct != 0xFFFF && key == pfi.rangedCritPct) { std::memcpy(&owner_.playerRangedCritPctRef(), &val, 4); owner_.playerRangedCritPctRef() = std::clamp(owner_.playerRangedCritPctRef(), 0.0f, 100.0f); }
+        else if (pfi.blockPct != 0xFFFF && key == pfi.blockPct) { owner_.playerBlockPctRef() = bitsToFloat(val); owner_.playerBlockPctRef() = std::clamp(owner_.playerBlockPctRef(), 0.0f, 100.0f); }
+        else if (pfi.dodgePct != 0xFFFF && key == pfi.dodgePct) { owner_.playerDodgePctRef() = bitsToFloat(val); owner_.playerDodgePctRef() = std::clamp(owner_.playerDodgePctRef(), 0.0f, 100.0f); }
+        else if (pfi.parryPct != 0xFFFF && key == pfi.parryPct) { owner_.playerParryPctRef() = bitsToFloat(val); owner_.playerParryPctRef() = std::clamp(owner_.playerParryPctRef(), 0.0f, 100.0f); }
+        else if (pfi.critPct  != 0xFFFF && key == pfi.critPct)  { owner_.playerCritPctRef() = bitsToFloat(val); owner_.playerCritPctRef()  = std::clamp(owner_.playerCritPctRef(),  0.0f, 100.0f); }
+        else if (pfi.rangedCritPct != 0xFFFF && key == pfi.rangedCritPct) { owner_.playerRangedCritPctRef() = bitsToFloat(val); owner_.playerRangedCritPctRef() = std::clamp(owner_.playerRangedCritPctRef(), 0.0f, 100.0f); }
         else if (pfi.sCrit1   != 0xFFFF && key >= pfi.sCrit1 && key < pfi.sCrit1 + 7) {
-            std::memcpy(&owner_.playerSpellCritPctArr()[key - pfi.sCrit1], &val, 4);
+            owner_.playerSpellCritPctArr()[key - pfi.sCrit1] = bitsToFloat(val);
         }
         else if (pfi.rating1  != 0xFFFF && key >= pfi.rating1 && key < pfi.rating1 + 25) {
             const int32_t r = static_cast<int32_t>(val);
@@ -2778,13 +2778,13 @@ void EntityController::handleCompressedUpdateObject(network::Packet& packet) {
     }
 
     // Remaining data is zlib compressed
-    size_t compressedSize = packet.getRemainingSize();
-    const uint8_t* compressedData = packet.getData().data() + packet.getReadPos();
+    const auto compressed = packet.remainingData();
 
     // Decompress
     std::vector<uint8_t> decompressed(decompressedSize);
     uLongf destLen = decompressedSize;
-    int ret = uncompress(decompressed.data(), &destLen, compressedData, compressedSize);
+    int ret = uncompress(decompressed.data(), &destLen, compressed.data(),
+                         static_cast<uLong>(compressed.size()));
 
     if (ret != Z_OK) {
         LOG_WARNING("Failed to decompress UPDATE_OBJECT: zlib error ", ret);

@@ -234,3 +234,21 @@ TEST_CASE("Packet sized string, length-prefixed with a terminator", "[packet]") 
         CHECK_FALSE(q.readSizedString(out));
     }
 }
+
+TEST_CASE("Packet remainingData is the bytes from the read position on", "[packet]") {
+    Packet p(1);
+    p.writeUInt32(0x04030201);
+    p.writeUInt8(0x05);
+    REQUIRE(p.remainingData().size() == 5);
+    p.readUInt8();
+    p.readUInt8();
+    const auto rest = p.remainingData();
+    REQUIRE(rest.size() == 3);
+    CHECK(rest[0] == 0x03);
+    CHECK(rest[2] == 0x05);
+    CHECK(rest.data() == p.getData().data() + 2);
+    // Past the end it is empty, as getRemainingSize clamps, rather than a
+    // span starting beyond the data.
+    p.setReadPos(99);
+    CHECK(p.remainingData().empty());
+}

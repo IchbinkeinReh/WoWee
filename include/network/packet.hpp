@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <vector>
 #include <cstdint>
+#include <span>
 #include <string>
 
 namespace wowee {
@@ -113,6 +114,12 @@ public:
     // (can happen via setReadPos with an unchecked offset).
     [[nodiscard]] size_t getRemainingSize() const { return (readPos <= data.size()) ? (data.size() - readPos) : 0; }
     [[nodiscard]] bool hasRemaining(size_t need) const { return readPos <= data.size() && need <= (data.size() - readPos); }
+    /// The bytes from the read position on, for a caller that hands the rest
+    /// of the packet on whole (a zlib stream, a body to re-wrap). Empty, not
+    /// out of range, when readPos has overshot - as getRemainingSize clamps.
+    [[nodiscard]] std::span<const uint8_t> remainingData() const {
+        return std::span<const uint8_t>(data).subspan(readPos <= data.size() ? readPos : data.size());
+    }
     [[nodiscard]] bool hasFullPackedGuid() const {
         if (readPos >= data.size()) return false;
         uint8_t mask = data[readPos];
