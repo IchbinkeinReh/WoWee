@@ -196,7 +196,7 @@ private:
     std::unordered_map<std::string, uint32_t> previewModelIds_;
     uint32_t nextPreviewModelId_ = 20000;
     uint32_t backdropInstanceId_ = 0;
-    int backdropRace_ = -1;   // race whose glue scene is currently loaded (-1 = none)
+    std::string backdropScene_;  // glue scene currently loaded (empty = none)
     uint32_t instanceId_ = 0;
     bool modelLoaded_ = false;
     bool compositeRequested_ = false;

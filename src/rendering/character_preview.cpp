@@ -1,5 +1,6 @@
 #include "core/character_component.hpp"
 #include "rendering/character_preview.hpp"
+#include "rendering/glue_scene.hpp"
 #include "rendering/imgui_texture.hpp"
 #include "rendering/vk_utils.hpp"
 #include "rendering/character_renderer.hpp"
@@ -1202,8 +1203,14 @@ void CharacterPreview::loadRacialBackdrop(game::Race race) {
     if (transparentBackground_) return;
 
     if (!charRenderer_ || !assetManager_) return;
-    if (backdropRace_ == static_cast<int>(race) && backdropInstanceId_ != 0) {
-        // Appearance changes recreate the character instance but keep the racial
+
+    // The scene GetSelectBackgroundModel (0x004e3620) and
+    // GetCreateBackgroundModel (0x004e0dd0) name: a death knight's is its
+    // class's (ChrClasses 6 +0x1c), anyone else's its race's ClientFileString
+    // (ChrRaces +0x2c) - a gnome's the dwarf's and a troll's the orc's.
+    const char* sceneName = glue_scene::backgroundScene(race, classId_);
+    if (backdropScene_ == (sceneName ? sceneName : "") && backdropInstanceId_ != 0) {
+        // Appearance changes recreate the character instance but keep the
         // scene. Reapply its stand mark and camera rig to the new instance.
         applyPreviewView();
         return;
@@ -1213,31 +1220,11 @@ void CharacterPreview::loadRacialBackdrop(game::Race race) {
         charRenderer_->removeInstance(backdropInstanceId_);
         backdropInstanceId_ = 0;
     }
-    backdropRace_ = static_cast<int>(race);
+    backdropScene_ = sceneName ? sceneName : "";
     previewStandPosition_ = glm::vec3(0.0f);
     previewViewDirection_ = glm::vec3(0.0f, 1.0f, 0.0f);
     modelYaw_ = 90.0f;
     applyPreviewView();
-
-    // The glue screens each stand the character in their racial home - humans in
-    // Stormwind, orcs in Durotar, and so on. Undead reuse the Scourge scene.
-    const char* sceneName = nullptr;
-    switch (race) {
-        case game::Race::HUMAN:     sceneName = "UI_Human";    break;
-        case game::Race::ORC:       sceneName = "UI_Orc";      break;
-        case game::Race::DWARF:     sceneName = "UI_Dwarf";    break;
-        case game::Race::NIGHT_ELF: sceneName = "UI_NightElf"; break;
-        case game::Race::UNDEAD:    sceneName = "UI_Scourge";  break;
-        case game::Race::TAUREN:    sceneName = "UI_Tauren";   break;
-        // Blizzard does not ship separate Gnome or Troll glue scenes in the
-        // Classic/TBC/WotLK asset sets. These races intentionally share their
-        // faction partner's authored selection backdrop.
-        case game::Race::GNOME:     sceneName = "UI_Dwarf";    break;
-        case game::Race::TROLL:     sceneName = "UI_Orc";      break;
-        case game::Race::BLOOD_ELF: sceneName = "UI_BloodElf"; break;
-        case game::Race::DRAENEI:   sceneName = "UI_Draenei";  break;
-        default: break;
-    }
     if (!sceneName) return;
 
     std::string scenePath = std::string("Interface\\Glues\\Models\\") + sceneName + "\\" +
@@ -1383,7 +1370,7 @@ void CharacterPreview::setTransparentBackground(bool transparent, bool opaqueBla
     if (transparent && backdropInstanceId_ != 0 && charRenderer_) {
         charRenderer_->removeInstance(backdropInstanceId_);
         backdropInstanceId_ = 0;
-        backdropRace_ = -1;
+        backdropScene_.clear();
     }
 }
 

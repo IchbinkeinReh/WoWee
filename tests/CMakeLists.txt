@@ -2654,6 +2654,11 @@ wowee_add_test(test_mount_seat
 wowee_add_test(test_loading_screen_layout
     SOURCES test_loading_screen_layout.cpp)
 
+# ── test_glue_scene ──────────────────────────────────
+# The glue screens' background scene (0x004e3620, 0x004e0dd0).
+wowee_add_test(test_glue_scene
+    SOURCES test_glue_scene.cpp)
+
 # ── test_spell_chain_targets_packet ──────────────────
 # SMSG_SPELL_UPDATE_CHAIN_TARGETS as 0x00800470 reads it.
 wowee_add_packet_test(test_spell_chain_targets_packet)
