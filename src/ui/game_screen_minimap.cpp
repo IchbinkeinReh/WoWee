@@ -1735,7 +1735,6 @@ void GameScreen::saveSettings() {
     out << "idle_camera_orbit=" << (settingsPanel_.pendingIdleCameraOrbit ? 1 : 0) << "\n";
     out << "buff_bar_scale=" << settingsPanel_.pendingBuffBarScale << "\n";
     out << "action_bar_scale=" << settingsPanel_.pendingActionBarScale << "\n";
-    out << "nameplate_scale=" << settingsPanel_.nameplateScale_ << "\n";
     out << "show_friendly_nameplates=" << (settingsPanel_.showFriendlyNameplates_ ? 1 : 0) << "\n";
     out << "show_enemy_nameplates=" << (settingsPanel_.showEnemyNameplates_ ? 1 : 0) << "\n";
     out << "show_action_bar2=" << (settingsPanel_.pendingShowActionBar2 ? 1 : 0) << "\n";
@@ -1988,8 +1987,6 @@ void GameScreen::loadSettings() {
             } else if (key == "action_bar_scale") {
                 settingsPanel_.pendingActionBarScale = std::clamp(std::stof(val), 0.5f, 2.0f);
                 actionBarScaleLoaded = true;
-            } else if (key == "nameplate_scale") {
-                settingsPanel_.nameplateScale_ = std::clamp(std::stof(val), 0.5f, 2.0f);
             } else if (key == "show_friendly_nameplates") {
                 settingsPanel_.showFriendlyNameplates_ = (std::stoi(val) != 0);
             } else if (key == "show_enemy_nameplates") {

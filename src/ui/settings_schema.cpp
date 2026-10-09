@@ -617,17 +617,17 @@ constexpr SettingDesc kSchema[] = {
      "", "cvar:showTargetCastbar"},
 
     // ------------------------------------------------------------------- Names
-    // The game's Names page, whole, and the nameplate rows that were on
-    // Combat & HUD. The names over heads are this client's own drawing, which
-    // picks its CVar by what the unit is; the plates are its own too.
+    // The game's Names page, whole. Each row is one bit of the mask the
+    // client asks a unit's name question with, defaulting as it registers
+    // them (0x007e6150); which bit a unit answers to is 0x00729c70's choice.
     {"myname", "My name", SettingKind::Bool, 0, 0, 0, "Names", "Names over heads",
      "Your own name over your head.", "", 0, "", "cvar:UnitNameOwn"},
     {"npcnames", "NPC names", SettingKind::Bool, 0, 0, 0, "Names", "",
-     "Names over creatures you can talk to, and over hostile ones.", "", 1,
+     "Names over creatures you can talk to, and over hostile ones.", "", 0,
      "", "cvar:UnitNameNPC"},
     {"critternames", "Critters and vanity pets", SettingKind::Bool, 0, 0, 0, "Names", "",
      "Names over rabbits, squirrels and the pets that only follow you.",
-     "", 1, "", "cvar:UnitNameNonCombatCreatureName"},
+     "", 0, "", "cvar:UnitNameNonCombatCreatureName"},
     {"guildnames", "Guild names", SettingKind::Bool, 0, 0, 0, "Names", "",
      "Players' guilds under their names.", "", 1, "", "cvar:UnitNamePlayerGuild"},
     {"playertitles", "Titles", SettingKind::Bool, 0, 0, 0, "Names", "",
@@ -637,18 +637,18 @@ constexpr SettingDesc kSchema[] = {
     {"friendlypetnames", "Friendly pets", SettingKind::Bool, 0, 0, 0, "Names", "",
      "Names over their pets.", "", 1, "", "cvar:UnitNameFriendlyPetName"},
     {"friendlyguardiannames", "Friendly guardians", SettingKind::Bool, 0, 0, 0, "Names", "",
-     "Names over their guardians - summoned helpers that fight.", "", 1,
+     "Names over their guardians - summoned helpers that fight.", "", 0,
      "", "cvar:UnitNameFriendlyGuardianName"},
     {"friendlytotemnames", "Friendly totems", SettingKind::Bool, 0, 0, 0, "Names", "",
-     "Names over their totems.", "", 1, "", "cvar:UnitNameFriendlyTotemName"},
+     "Names over their totems.", "", 0, "", "cvar:UnitNameFriendlyTotemName"},
     {"enemynames", "Enemy players", SettingKind::Bool, 0, 0, 0, "Names", "",
      "Names over players of the other faction.", "", 1, "", "cvar:UnitNameEnemyPlayerName"},
     {"enemypetnames", "Enemy pets", SettingKind::Bool, 0, 0, 0, "Names", "",
      "Names over their pets.", "", 1, "", "cvar:UnitNameEnemyPetName"},
     {"enemyguardiannames", "Enemy guardians", SettingKind::Bool, 0, 0, 0, "Names", "",
-     "Names over their guardians.", "", 1, "", "cvar:UnitNameEnemyGuardianName"},
+     "Names over their guardians.", "", 0, "", "cvar:UnitNameEnemyGuardianName"},
     {"enemytotemnames", "Enemy totems", SettingKind::Bool, 0, 0, 0, "Names", "",
-     "Names over their totems.", "", 1, "", "cvar:UnitNameEnemyTotemName"},
+     "Names over their totems.", "", 0, "", "cvar:UnitNameEnemyTotemName"},
 
     // Nameplates are a panel of their own, not a section of Names.
     //
@@ -660,18 +660,18 @@ constexpr SettingDesc kSchema[] = {
     // separate ideas: names drawn over heads, and the plates with the health
     // bars on them.
     {"friendlyplates", "Friendly nameplates", SettingKind::Bool, 0, 0, 0, "Nameplates", "Nameplates",
-     "Name and health bars over friendly players and creatures, not\n"
-     "only hostile ones. Shift+V toggles this too.", "", 0},
+     "Name and health bars over friendly players and creatures.\n"
+     "Shift+V toggles this, Ctrl+V both kinds together.", "", 0},
     {"friendlypetplates", "Friendly pets", SettingKind::Bool, 0, 0, 0, "Nameplates", "",
      "Plates over friendly pets.", "", 1, "friendlyplates", "cvar:nameplateShowFriendlyPets"},
     {"friendlyguardianplates", "Friendly guardians", SettingKind::Bool, 0, 0, 0, "Nameplates", "",
      "Plates over friendly guardians.", "", 1, "friendlyplates",
      "cvar:nameplateShowFriendlyGuardians"},
     {"friendlytotemplates", "Friendly totems", SettingKind::Bool, 0, 0, 0, "Nameplates", "",
-     "Plates over friendly totems.", "", 0, "friendlyplates", "cvar:nameplateShowFriendlyTotems"},
+     "Plates over friendly totems.", "", 1, "friendlyplates", "cvar:nameplateShowFriendlyTotems"},
     {"enemyplates", "Enemy nameplates", SettingKind::Bool, 0, 0, 0, "Nameplates", "",
-     "Name and health bars over hostile players and creatures. The V\n"
-     "key toggles this too.", "", 1},
+     "Name and health bars over hostile players and creatures. V\n"
+     "toggles this, Ctrl+V both kinds together.", "", 0},
     {"enemypetplates", "Enemy pets", SettingKind::Bool, 0, 0, 0, "Nameplates", "",
      "Plates over enemy pets.", "", 1, "enemyplates", "cvar:nameplateShowEnemyPets"},
     {"enemyguardianplates", "Enemy guardians", SettingKind::Bool, 0, 0, 0, "Nameplates", "",
@@ -680,15 +680,13 @@ constexpr SettingDesc kSchema[] = {
      "Plates over enemy totems.", "", 1, "enemyplates", "cvar:nameplateShowEnemyTotems"},
     {"nameplateoverlap", "Let nameplates overlap", SettingKind::Bool, 0, 0, 0, "Nameplates", "",
      "Plates over units standing in a line may cover each other. Off,\n"
-     "each is pushed clear of the others.", "", 0, "", "cvar:nameplateAllowOverlap"},
+     "each is pushed clear of the others.", "", 1, "", "cvar:nameplateAllowOverlap"},
     {"nameplateclasscolours", "Class colours for enemy players", SettingKind::Bool, 0, 0, 0,
      "Nameplates", "", "Colour an enemy player's health bar by their class.", "", 0,
      "", "cvar:ShowClassColorInNameplate"},
     {"nameplatecastbar", "Cast bar on the target's plate", SettingKind::Bool, 0, 0, 0, "Nameplates", "",
      "Show what your target is casting under its nameplate.", "", 1,
      "", "cvar:showVKeyCastbar"},
-    {"nameplatescale", "Nameplate scale", SettingKind::Float, 0.5f, 2.0f, 0.05f, "Nameplates", "",
-     "Size of the name and health bars over creatures' heads.", "", 1},
 
     // ------------------------------------------------------------- Combat Text
     // Blizzard_CombatText's own switches, which the game's page held. The six

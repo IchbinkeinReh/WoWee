@@ -137,3 +137,18 @@ TEST_CASE("the summoner field sits where the target field says it does",
     const auto wotlk = declaredFields("wotlk");
     CHECK(wotlk.at("UNIT_FIELD_SUMMONEDBY_LO") == 14);
 }
+
+TEST_CASE("the charmer and the maker sit either side of the summoner",
+          "[update-fields]") {
+    // CHARMEDBY, SUMMONEDBY and CREATEDBY are three guid pairs in a row; the
+    // owner the client asks about is the charmer, else the maker (0x004f5f20).
+    for (const char* expansion : {"classic", "tbc", "wotlk", "turtle"}) {
+        const auto fields = declaredFields(expansion);
+        INFO(expansion);
+        REQUIRE(fields.count("UNIT_FIELD_CREATEDBY") == 1);
+        REQUIRE(fields.count("UNIT_FIELD_CHARMEDBY") == 1);
+        CHECK(fields.at("UNIT_FIELD_CREATEDBY") == fields.at("UNIT_FIELD_SUMMONEDBY_LO") + 2);
+        CHECK(fields.at("UNIT_FIELD_CHARMEDBY") == fields.at("UNIT_FIELD_SUMMONEDBY_LO") - 2);
+    }
+    CHECK(declaredFields("wotlk").at("UNIT_FIELD_CREATEDBY") == 16);
+}

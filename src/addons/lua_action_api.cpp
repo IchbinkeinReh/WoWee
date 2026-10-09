@@ -1677,6 +1677,8 @@ void seedBindingDefaults() {
         {"ACTIONBUTTON7", "7"}, {"ACTIONBUTTON8", "8"},
         {"ACTIONBUTTON9", "9"}, {"ACTIONBUTTON10", "0"},
         {"ACTIONBUTTON11", "-"},{"ACTIONBUTTON12", "="},
+        // The nameplate keys, which the client answers itself.
+        {"NAMEPLATES", "V"}, {"FRIENDNAMEPLATES", "SHIFT-V"}, {"ALLNAMEPLATES", "CTRL-V"},
     };
     for (const auto& d : kDefaults) keys[d.command] = {d.key, ""};
 
@@ -1761,7 +1763,7 @@ bool clientActsOnBinding(const std::string& command) {
         "MOVEFORWARD", "MOVEBACKWARD", "TURNLEFT", "TURNRIGHT",
         "STRAFELEFT", "STRAFERIGHT", "JUMP", "TOGGLEAUTORUN", "TOGGLERUN",
         "TOGGLEGAMEMENU", "OPENCHAT", "OPENCHATSLASH", "TARGETNEARESTENEMY",
-        "SCREENSHOT", "TOGGLESHEATH",
+        "SCREENSHOT", "TOGGLESHEATH", "NAMEPLATES", "FRIENDNAMEPLATES", "ALLNAMEPLATES",
         "ACTIONBUTTON1", "ACTIONBUTTON2", "ACTIONBUTTON3", "ACTIONBUTTON4",
         "ACTIONBUTTON5", "ACTIONBUTTON6", "ACTIONBUTTON7", "ACTIONBUTTON8",
         "ACTIONBUTTON9", "ACTIONBUTTON10", "ACTIONBUTTON11", "ACTIONBUTTON12",

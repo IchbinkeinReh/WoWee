@@ -63,8 +63,6 @@ public:
 
     /** Request that the chat input be focused next frame. */
 
-    /** Set up a whisper to the given player name and focus input. */
-    void setWhisperTarget(const std::string& name);
 
     /** Execute a macro body (one line per 'click'). */
     void executeMacroText(game::GameHandler& gameHandler,

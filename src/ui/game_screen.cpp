@@ -679,7 +679,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     // ---- New UI elements ----
     auto spellIconFn = [this](uint32_t id, pipeline::AssetManager* am) { return getSpellIcon(id, am); };
     combatUI_.renderCooldownTracker(gameHandler, settingsPanel_, spellIconFn);
-    renderNameplates(gameHandler);  // player names always shown; NPC plates gated by the enemyplates row
+    renderNameplates(gameHandler);  // names over heads and nameplates (0x007e5640, 0x0098f790)
     combatUI_.playSoundsForNewChat(gameHandler);
     // Blizzard_CombatText draws its own once it is loaded, which happens the
     // moment the player touches the float-mode dropdown in the interface
@@ -1851,15 +1851,24 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             }
 
             if (KeybindingManager::getInstance().isActionPressed(KeybindingManager::Action::TOGGLE_NAMEPLATES)) {
-                // Through the setter and saved, like the panel's boxes. Both
-                // are bound to CVars, and the store is applied over the
-                // settings file at start-up - flipped here alone, the choice
-                // lasted until the client was closed.
-                const bool friendly = ImGui::GetIO().KeyShift;
-                const bool shown = friendly ? settingsPanel_.showFriendlyNameplates_
-                                            : settingsPanel_.showEnemyNameplates_;
-                settingsPanel_.setSettingValue(friendly ? "friendlyplates" : "enemyplates",
-                                               shown ? "0" : "1");
+                // The client's three nameplate bindings: NAMEPLATES (V) flips
+                // nameplateShowEnemies, FRIENDNAMEPLATES (Shift-V)
+                // nameplateShowFriends, and ALLNAMEPLATES (Ctrl-V) turns both
+                // off when both are on and both on otherwise. Through the
+                // setter and saved, like the panel's boxes, since both are
+                // bound to those CVars.
+                const ImGuiIO& keys = ImGui::GetIO();
+                const bool enemies = settingsPanel_.showEnemyNameplates_;
+                const bool friends = settingsPanel_.showFriendlyNameplates_;
+                if (keys.KeyCtrl) {
+                    const char* v = (enemies && friends) ? "0" : "1";
+                    settingsPanel_.setSettingValue("enemyplates", v);
+                    settingsPanel_.setSettingValue("friendlyplates", v);
+                } else if (keys.KeyShift) {
+                    settingsPanel_.setSettingValue("friendlyplates", friends ? "0" : "1");
+                } else {
+                    settingsPanel_.setSettingValue("enemyplates", enemies ? "0" : "1");
+                }
                 saveSettings();
             }
 

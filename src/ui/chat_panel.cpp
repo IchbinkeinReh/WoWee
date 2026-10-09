@@ -127,12 +127,6 @@ void ChatPanel::insertChatLink(const std::string& link) {
 
 
 
-void ChatPanel::setWhisperTarget(const std::string& name) {
-    selectedChatType_ = 4;  // WHISPER
-    strncpy(whisperTargetBuffer_, name.c_str(), sizeof(whisperTargetBuffer_) - 1);
-    whisperTargetBuffer_[sizeof(whisperTargetBuffer_) - 1] = '\0';
-}
-
 ChatPanel::SlashCommands ChatPanel::consumeSlashCommands() {
     SlashCommands result = slashCmds_;
     slashCmds_ = {};

@@ -786,8 +786,10 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
         auto* svc = getLuaServices(L);
         auto* win = svc ? svc->window : nullptr;
         lua_pushstring(L, std::to_string(win ? win->getHeight() : 1080).c_str());
-    } else if (n == "nameplateshowfriends") lua_pushstring(L, "1");
-    else if (n == "nameplateshowenemies") lua_pushstring(L, "1");
+    // Both nameplate switches start off (0x00511xxx); V and Shift-V turn them
+    // on.
+    } else if (n == "nameplateshowfriends") lua_pushstring(L, "0");
+    else if (n == "nameplateshowenemies") lua_pushstring(L, "0");
     else if (n == "sound_enablesfx") lua_pushstring(L, "1");
     else if (n == "sound_enableerrorspeech") lua_pushstring(L, "1");
     // One, not zero: the slider is a multiple of the original client's limit
@@ -822,11 +824,12 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // every one of these boxes unticked while the numbers were on screen.
     else if (n == "fctdamage" || n == "fcthealing" ||
              n == "fctdodgeparrymiss") lua_pushstring(L, "1");
-    // The four kinds of unit this client can tell apart on a nameplate. On,
-    // which is what it drew before any of them were read.
-    else if (n == "unitnameenemyplayername" || n == "unitnamefriendlyplayername" ||
-             n == "unitnamenpc" || n == "unitnamenoncombatcreaturename")
+    // Names over players on both sides are on; over creatures and critters
+    // off (0x007e6150).
+    else if (n == "unitnameenemyplayername" || n == "unitnamefriendlyplayername")
         lua_pushstring(L, "1");
+    else if (n == "unitnamenpc" || n == "unitnamenoncombatcreaturename")
+        lua_pushstring(L, "0");
     // Off, as the real client has it: bars start unlocked and a player who
     // wants them held down says so.
     else if (n == "lockactionbars") lua_pushstring(L, "0");
@@ -869,12 +872,12 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "autoquestprogress") lua_pushstring(L, "1");
     else if (n == "consolidatebuffs") lua_pushstring(L, "0");
     else if (n == "watchframewidth") lua_pushstring(L, "0");
-    // Nameplates and names for totems. The real client shows an enemy's totems
-    // and hides your own side's, and names both when they are shown.
+    // Nameplates and names for totems: plates on both sides, names on
+    // neither (0x00511xxx, 0x007e6150).
     else if (n == "nameplateshowenemytotems") lua_pushstring(L, "1");
-    else if (n == "nameplateshowfriendlytotems") lua_pushstring(L, "0");
-    else if (n == "unitnameenemytotemname") lua_pushstring(L, "1");
-    else if (n == "unitnamefriendlytotemname") lua_pushstring(L, "1");
+    else if (n == "nameplateshowfriendlytotems") lua_pushstring(L, "1");
+    else if (n == "unitnameenemytotemname") lua_pushstring(L, "0");
+    else if (n == "unitnamefriendlytotemname") lua_pushstring(L, "0");
     // Reaction, not class, is what a world-space bar is for here; the setting
     // is offered and honoured, but green stays the default.
     else if (n == "showclasscolorinnameplate") lua_pushstring(L, "0");
@@ -895,21 +898,23 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // Cast bars over enemy nameplates are on; party lines float only if asked.
     else if (n == "showvkeycastbar") lua_pushstring(L, "1");
     else if (n == "chatbubblesparty") lua_pushstring(L, "0");
-    // Pets and guardians, plated and named on both sides, as they ship.
+    // Pets and guardians plated on both sides; pets named, guardians not
+    // (0x00511xxx, 0x007e6150).
     else if (n == "nameplateshowenemypets") lua_pushstring(L, "1");
     else if (n == "nameplateshowfriendlypets") lua_pushstring(L, "1");
     else if (n == "nameplateshowenemyguardians") lua_pushstring(L, "1");
     else if (n == "nameplateshowfriendlyguardians") lua_pushstring(L, "1");
     else if (n == "unitnameenemypetname") lua_pushstring(L, "1");
     else if (n == "unitnamefriendlypetname") lua_pushstring(L, "1");
-    else if (n == "unitnameenemyguardianname") lua_pushstring(L, "1");
-    else if (n == "unitnamefriendlyguardianname") lua_pushstring(L, "1");
+    else if (n == "unitnameenemyguardianname") lua_pushstring(L, "0");
+    else if (n == "unitnamefriendlyguardianname") lua_pushstring(L, "0");
     // Guild names over players are shown; your own name over your own head is
     // not, both as the real client has them.
     else if (n == "unitnameplayerguild") lua_pushstring(L, "1");
     else if (n == "unitnameown") lua_pushstring(L, "0");
-    // Plates are kept apart unless overlapping is asked for, as they ship.
-    else if (n == "nameplateallowoverlap") lua_pushstring(L, "0");
+    // Plates may overlap; "0" is the old never-overlapping placement
+    // (0x00511xxx registers it "1").
+    else if (n == "nameplateallowoverlap") lua_pushstring(L, "1");
     // Spam filtering is on (the checkbox in front of it reads "Disable Spam
     // Filter"), and mature language filtering is off, as they ship.
     else if (n == "spamfilter") lua_pushstring(L, "1");

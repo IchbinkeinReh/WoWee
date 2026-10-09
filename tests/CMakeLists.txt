@@ -2750,3 +2750,8 @@ wowee_add_test(test_client_weather
 # PLAYER_FLAGS' hide-helm and hide-cloak bits on any player's model.
 wowee_add_test(test_player_display_flags
     SOURCES test_player_display_flags.cpp)
+
+# ── test_unit_name_rules ─────────────────────────────────────
+# Which units are named and plated, and the name cvars' defaults (game/unit_name_rules.hpp).
+wowee_add_test(test_unit_name_rules
+    SOURCES test_unit_name_rules.cpp)

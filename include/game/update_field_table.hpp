@@ -130,6 +130,11 @@ enum class UF : uint16_t {
     /// separates them is UNIT_FLAG_PLAYER_CONTROLLED and the creature type.
     UNIT_FIELD_SUMMONEDBY_LO,
     UNIT_FIELD_SUMMONEDBY_HI,
+    /// Who made this unit (low half; the high half is the next index). Two
+    /// below the target field in every layout. With CHARMEDBY, whose owner
+    /// the client asks about (0x004f5f20), and a unit made but neither
+    /// charmed nor summoned is a guardian to it (0x0071b600).
+    UNIT_FIELD_CREATEDBY,
 
     // GameObject fields
     GAMEOBJECT_DISPLAYID,

@@ -300,9 +300,10 @@ public:
     float preMuteVolume_ = 1.0f;  // AudioEngine master volume before muting
 
     // ---- Config toggles (read by GameScreen rendering, edited by Interface tab) ----
-    float nameplateScale_ = 1.0f; // Scale multiplier for nameplate bar dimensions
-    bool showFriendlyNameplates_ = true;  // Shift+V toggles friendly player nameplates
-    bool showEnemyNameplates_ = true;     // V toggles nameplates over hostile and neutral units
+    // nameplateShowFriends and nameplateShowEnemies, both off as the client
+    // registers them (0x00511xxx): Shift-V and V turn them on, Ctrl-V both.
+    bool showFriendlyNameplates_ = false;
+    bool showEnemyNameplates_ = false;
     bool showDPSMeter_ = false;
     bool showCooldownTracker_ = false;
     bool showRareTracker_ = false;  // Mark nearby spawned rares/rare-elites on both maps

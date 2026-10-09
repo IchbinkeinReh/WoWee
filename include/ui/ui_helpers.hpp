@@ -16,9 +16,6 @@ namespace wowee::ui::helpers {
 inline ImVec4 classColorVec4(uint8_t classId) { return getClassColor(classId); }
 inline ImU32 classColorU32(uint8_t classId, int alpha = 255) { return getClassColorU32(classId, alpha); }
 
-inline const char* classNameStr(uint8_t classId) {
-    return game::getClassName(static_cast<game::Class>(classId));
-}
 
 // Extract class id from a unit's UNIT_FIELD_BYTES_0 update field.
 // Returns 0 if the entity pointer is null or field is unset.
