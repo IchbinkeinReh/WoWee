@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/minimap_indoor.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/vk_shader.hpp"
 #include "rendering/spatial_grid.hpp"
@@ -462,6 +463,13 @@ public:
     /// Whether a point is in a group drawn in that pass: what sets an
     /// object's 0x8000, and the camera's fog colour with it (0x007c1730).
     [[nodiscard]] bool inInteriorPass(const glm::vec3& pos) const;
+
+    /// The building the indoor minimap is drawn from, when `pos` is inside
+    /// one of its interior groups: the groups through the portals that
+    /// reach the area of `radius` about it (minimap_indoor::connectedGroups).
+    /// None outdoors, and none for a building whose name is not known.
+    [[nodiscard]] std::optional<minimap_indoor::Scene>
+    indoorMinimapAt(const glm::vec3& pos, float radius) const;
     /// Changes whenever the set of those groups does.
     [[nodiscard]] uint64_t interiorPassGeneration() const { return interiorPassGeneration_; }
 
@@ -734,6 +742,13 @@ private:
         std::vector<PortalRef> portalRefs;
         // For each group: which portal refs belong to it (start index, count)
         std::vector<std::pair<uint16_t, uint16_t>> groupPortalRefs;
+        /// For the indoor minimap: the name its pictures are filed under,
+        /// every group as MOGI has it (by the group's own number, which the
+        /// pictures and the portals use) and the groups past each one's
+        /// portals.
+        std::string minimapBase;
+        std::vector<minimap_indoor::GroupInfo> minimapGroups;
+        std::vector<std::vector<uint32_t>> minimapNeighbours;
         // MFOG, and each group's four indices into it (0 = none)
         std::vector<pipeline::WMOFog> fogs;
         std::vector<std::array<uint8_t, 4>> groupFogIndices;

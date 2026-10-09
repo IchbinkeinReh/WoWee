@@ -278,6 +278,8 @@ private:
     /// interface owns it. Looked up by name and remembered, the same as the
     /// portrait.
     uint32_t minimapWidgetId_ = 0;
+    /// Whether the minimap was the indoor one last frame (see where it is read).
+    bool minimapWasIndoors_ = false;
     /// The FrameXML frame the world map is drawn into, when the original
     /// interface owns it. WorldMapDetailFrame rather than WorldMapFrame: the
     /// first is the map area, the second is the panel around it.

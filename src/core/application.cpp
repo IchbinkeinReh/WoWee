@@ -4477,6 +4477,22 @@ void Application::render() {
                         // map has to be told: Minimap:SetZoom is the interface
                         // saying what it wants, not the map changing. The
                         // client's six levels, zero furthest out (0x007f3b90).
+                        //
+                        // Except as the player goes in or out: the client keeps
+                        // a level for each (minimapZoom, minimapInsideZoom;
+                        // 0x007f3b40 answers GetZoom with the one in use) and
+                        // fires MINIMAP_UPDATE_ZOOM when the map changes over
+                        // (0x007f5ba0), so the frame takes the map's level then.
+                        if (map->isIndoors() != minimapWasIndoors_) {
+                            minimapWasIndoors_ = map->isIndoors();
+                            if (minimapWasIndoors_ && mm->savedInsideZoom >= 0) {
+                                map->setZoomLevel(mm->savedInsideZoom);
+                                mm->savedInsideZoom = -1;
+                            }
+                            mm->zoomLevel = map->getZoomLevel();
+                            mm->zoomIndoors = minimapWasIndoors_;
+                            if (gameHandler) gameHandler->fireAddonEvent("MINIMAP_UPDATE_ZOOM", {});
+                        }
                         if (mm->zoomLevel != map->getZoomLevel()) map->setZoomLevel(mm->zoomLevel);
 
                         // Minimap:PingLocation, which is all Minimap_OnClick

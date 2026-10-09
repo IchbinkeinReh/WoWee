@@ -30,6 +30,15 @@ struct MinimapTilePush {
     float gridSize;        // cells to a side
 };
 
+// Push constant for an indoor picture: its corners and their texture
+// coordinates, corner 0 at the picture's low x and y, then round.
+struct MinimapIndoorTilePush {
+    glm::vec4 corners01;
+    glm::vec4 corners23;
+    glm::vec4 uv01;
+    glm::vec4 uv23;
+};  // 64 bytes
+
 // Push constant for display vertex + fragment shaders
 struct MinimapDisplayPush {
     glm::vec4 rect;         // x, y, w, h in 0..1 screen space
@@ -238,7 +247,62 @@ bool Minimap::initialize(VkContext* ctx, VkDescriptorSetLayout /*perFrameLayout*
         fs.destroy();
     }
 
-    if (!tilePipeline || !displayPipeline) {
+    // --- Indoor pictures: alpha-blended over each other, lowest first ---
+    {
+        VkPushConstantRange indoorPush{};
+        indoorPush.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        indoorPush.offset = 0;
+        indoorPush.size = sizeof(MinimapIndoorTilePush);
+        indoorPipelineLayout = createPipelineLayout(device, { samplerSetLayout }, { indoorPush });
+
+        VkShaderModule vs, fs;
+        if (!vs.loadFromFile(device, "assets/shaders/minimap_wmo_tile.vert.spv") ||
+            !fs.loadFromFile(device, "assets/shaders/minimap_wmo_tile.frag.spv")) {
+            LOG_ERROR("Minimap: failed to load indoor tile shaders");
+            return false;
+        }
+        std::vector<VkVertexInputAttributeDescription> posOnly{ attrs[0] };
+        indoorPipeline = PipelineBuilder()
+            .setShaders(vs.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
+                        fs.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
+            .setVertexInput({ binding }, posOnly)
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+            .setNoDepthTest()
+            .setColorBlendAttachment(PipelineBuilder::blendAlpha())
+            .setLayout(indoorPipelineLayout)
+            .setRenderPass(compositeTarget->getRenderPass())
+            .setDynamicStates(viewportAndScissorDynamic())
+            .build(device, vkCtx->getPipelineCache());
+        vs.destroy();
+        fs.destroy();
+
+        constexpr uint32_t kIndoorSets = 2 * MAX_INDOOR_TILES;
+        VkDescriptorPoolSize indoorPoolSize{};
+        indoorPoolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        indoorPoolSize.descriptorCount = kIndoorSets;
+        VkDescriptorPoolCreateInfo indoorPoolInfo{};
+        indoorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        indoorPoolInfo.maxSets = kIndoorSets;
+        indoorPoolInfo.poolSizeCount = 1;
+        indoorPoolInfo.pPoolSizes = &indoorPoolSize;
+        if (vkCreateDescriptorPool(device, &indoorPoolInfo, nullptr, &indoorDescPool) != VK_SUCCESS) {
+            LOG_ERROR("Minimap: failed to create the indoor descriptor pool");
+            return false;
+        }
+        std::vector<VkDescriptorSetLayout> indoorLayouts(kIndoorSets, samplerSetLayout);
+        VkDescriptorSetAllocateInfo indoorAlloc{};
+        indoorAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        indoorAlloc.descriptorPool = indoorDescPool;
+        indoorAlloc.descriptorSetCount = kIndoorSets;
+        indoorAlloc.pSetLayouts = indoorLayouts.data();
+        if (vkAllocateDescriptorSets(device, &indoorAlloc, &indoorDescSets[0][0]) != VK_SUCCESS) {
+            LOG_ERROR("Minimap: failed to allocate the indoor descriptor sets");
+            return false;
+        }
+    }
+
+    if (!tilePipeline || !displayPipeline || !indoorPipeline) {
         LOG_ERROR("Minimap: failed to create pipelines");
         return false;
     }
@@ -257,9 +321,12 @@ void Minimap::shutdown() {
 
     destroy(device, tilePipeline);
     destroy(device, displayPipeline);
+    destroy(device, indoorPipeline);
     destroy(device, tilePipelineLayout);
     destroy(device, displayPipelineLayout);
+    destroy(device, indoorPipelineLayout);
     destroy(device, descPool);
+    destroy(device, indoorDescPool);
     destroy(device, samplerSetLayout);
 
     destroy(alloc, quadVB, quadVBAlloc);
@@ -314,6 +381,21 @@ std::string lowerKey(std::string key) {
     return key;
 }
 }  // namespace
+
+void Minimap::setIndoorScene(std::optional<minimap_indoor::Scene> scene) {
+    // A different building, room or area, or going in or out, draws the
+    // picture again; the same one does not.
+    const auto sameScene = [](const minimap_indoor::Scene& a, const minimap_indoor::Scene& b) {
+        return a.instanceId == b.instanceId && a.playerGroup == b.playerGroup &&
+               a.area.min == b.area.min && a.area.max == b.area.max &&
+               a.groups.size() == b.groups.size();
+    };
+    if (scene.has_value() != indoorScene_.has_value() ||
+        (scene && !sameScene(*scene, *indoorScene_))) {
+        indoorDirty_ = true;
+    }
+    indoorScene_ = std::move(scene);
+}
 
 // --------------------------------------------------------
 // TRS parsing
@@ -457,9 +539,14 @@ void Minimap::compositePass(VkCommandBuffer cmd, const glm::vec3& centerWorldPos
 
     if (!trsParsed) parseTRS();
 
+    if (indoorScene_) {
+        compositeIndoor(cmd);
+        return;
+    }
+
     // Check if composite needs refresh
     const auto now = std::chrono::steady_clock::now();
-    bool needsRefresh = !hasCachedFrame;
+    bool needsRefresh = !hasCachedFrame || compositeIndoors_;
     if (!needsRefresh) {
         float mdx = centerWorldPos.x - lastUpdatePos.x;
         float mdy = centerWorldPos.y - lastUpdatePos.y;
@@ -518,6 +605,110 @@ void Minimap::compositePass(VkCommandBuffer cmd, const glm::vec3& centerWorldPos
     lastUpdateTime = now;
     lastUpdatePos = centerWorldPos;
     hasCachedFrame = true;
+    compositeIndoors_ = false;
+    indoorDirty_ = false;
+}
+
+// --------------------------------------------------------
+// Indoors: the WMO groups' own pictures (0x007f5ba0, drawn by 0x00581290)
+// --------------------------------------------------------
+
+void Minimap::compositeIndoor(VkCommandBuffer cmd) {
+    if (hasCachedFrame && compositeIndoors_ && !indoorDirty_) return;
+    const minimap_indoor::Scene& scene = *indoorScene_;
+    namespace mi = minimap_indoor;
+
+    struct Picture {
+        VkTexture* texture = nullptr;
+        float key = 0.0f;
+        mi::Tile tile;
+    };
+    std::vector<Picture> pictures;
+    for (const auto& group : scene.groups) {
+        const float key = mi::drawKey((group.min.z + group.max.z) * 0.5f, scene.playerLocalZ,
+                                      group.index == scene.playerGroup);
+        for (const mi::Tile& tile : mi::groupTiles(group.min, group.max,
+                                                   scene.localMin, scene.localMax)) {
+            // A picture md5translate has no name for is drawn as nothing
+            // ("No minimap texture", 0x007f5070).
+            VkTexture* texture = loadTrsTexture(
+                mi::tileName(scene.wmoBase, static_cast<int>(group.index), tile.x, tile.y));
+            if (!texture || !texture->isValid()) continue;
+            pictures.push_back({texture, key, tile});
+        }
+    }
+    // Lowest first, the player's own group last (0x0057bd10).
+    std::stable_sort(pictures.begin(), pictures.end(),
+                     [](const Picture& a, const Picture& b) { return a.key < b.key; });
+    if (pictures.size() > MAX_INDOOR_TILES) pictures.resize(MAX_INDOOR_TILES);
+
+    const uint32_t frameIdx = vkCtx->getCurrentFrame();
+    std::vector<VkDescriptorImageInfo> images(pictures.size());
+    std::vector<VkWriteDescriptorSet> writes(pictures.size());
+    for (size_t i = 0; i < pictures.size(); ++i) {
+        images[i] = pictures[i].texture->descriptorInfo();
+        writes[i] = {};
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = indoorDescSets[frameIdx][i];
+        writes[i].dstBinding = 0;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &images[i];
+    }
+    if (!writes.empty()) {
+        vkUpdateDescriptorSets(vkCtx->getDevice(), static_cast<uint32_t>(writes.size()),
+                               writes.data(), 0, nullptr);
+    }
+
+    // The composite is the area: three of the zoom's radii across, centred
+    // on the cell the player is in. Its u runs against render x and its v
+    // against render y, as the terrain's do (render() and the blips agree).
+    const glm::vec2 center = scene.area.center();
+    const float span = scene.area.span();
+    const auto toComposite = [&](float x, float y) {
+        const glm::vec4 r = scene.modelMatrix * glm::vec4(x, y, scene.playerLocalZ, 1.0f);
+        return glm::vec2(0.5f - (r.x - center.x) / span, 0.5f - (r.y - center.y) / span);
+    };
+
+    // Black where no picture is (0x00581cd0 clears to it).
+    VkClearColorValue clearColor = {{ 0.0f, 0.0f, 0.0f, 1.0f }};
+    compositeTarget->beginPass(cmd, clearColor);
+    if (!pictures.empty()) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, indoorPipeline);
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &quadVB, &offset);
+        for (size_t i = 0; i < pictures.size(); ++i) {
+            const mi::Tile& t = pictures[i].tile;
+            // Half a texel in from each edge, and the picture's top row at
+            // its high y (0x0057e7f0).
+            const float eu = 0.5f / static_cast<float>(pictures[i].texture->getWidth());
+            const float ev = 0.5f / static_cast<float>(pictures[i].texture->getHeight());
+            MinimapIndoorTilePush push{};
+            const glm::vec2 c0 = toComposite(t.min.x, t.min.y);
+            const glm::vec2 c1 = toComposite(t.max.x, t.min.y);
+            const glm::vec2 c2 = toComposite(t.max.x, t.max.y);
+            const glm::vec2 c3 = toComposite(t.min.x, t.max.y);
+            push.corners01 = glm::vec4(c0, c1);
+            push.corners23 = glm::vec4(c2, c3);
+            push.uv01 = glm::vec4(eu, 1.0f - ev, 1.0f - eu, 1.0f - ev);
+            push.uv23 = glm::vec4(1.0f - eu, ev, eu, ev);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, indoorPipelineLayout,
+                                    0, 1, &indoorDescSets[frameIdx][i], 0, nullptr);
+            vkCmdPushConstants(cmd, indoorPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                               sizeof(push), &push);
+            vkCmdDraw(cmd, 6, 1, 0, 0);
+        }
+    }
+    compositeTarget->endPass(cmd);
+
+    compositeCenter_ = center;
+    compositeSpan_ = span;
+    compositeIndoors_ = true;
+    indoorDirty_ = false;
+    hasCachedFrame = true;
+    // The terrain's picture is gone; coming back out draws it again.
+    lastCenterTileX = -1;
+    lastCenterTileY = -1;
 }
 
 // --------------------------------------------------------
@@ -570,16 +761,26 @@ void Minimap::render(VkCommandBuffer cmd, const Camera& playerCamera,
 
     // Compute player's UV in the composite texture
     constexpr float TILE_SIZE = core::coords::TILE_SIZE;
-    auto [tileX, tileY] = core::coords::worldToTile(centerWorldPos.x, centerWorldPos.y);
+    float playerU = 0.5f;
+    float playerV = 0.5f;
+    float zoomRadius = 0.0f;
+    if (compositeIndoors_) {
+        // The area compositeIndoor drew, in the same sense as the tiles.
+        playerU = 0.5f - (centerWorldPos.x - compositeCenter_.x) / compositeSpan_;
+        playerV = 0.5f - (centerWorldPos.y - compositeCenter_.y) / compositeSpan_;
+        zoomRadius = getViewRadius() / compositeSpan_;
+    } else {
+        auto [tileX, tileY] = core::coords::worldToTile(centerWorldPos.x, centerWorldPos.y);
 
-    float fracNS = 32.0f - static_cast<float>(tileX) - centerWorldPos.y / TILE_SIZE;
-    float fracEW = 32.0f - static_cast<float>(tileY) - centerWorldPos.x / TILE_SIZE;
+        float fracNS = 32.0f - static_cast<float>(tileX) - centerWorldPos.y / TILE_SIZE;
+        float fracEW = 32.0f - static_cast<float>(tileY) - centerWorldPos.x / TILE_SIZE;
 
-    constexpr float kHalfGrid = static_cast<float>(GRID / 2);
-    float playerU = (kHalfGrid + fracEW) / static_cast<float>(GRID);
-    float playerV = (kHalfGrid + fracNS) / static_cast<float>(GRID);
+        constexpr float kHalfGrid = static_cast<float>(GRID / 2);
+        playerU = (kHalfGrid + fracEW) / static_cast<float>(GRID);
+        playerV = (kHalfGrid + fracNS) / static_cast<float>(GRID);
 
-    float zoomRadius = viewRadius / (TILE_SIZE * static_cast<float>(GRID));
+        zoomRadius = getViewRadius() / (TILE_SIZE * static_cast<float>(GRID));
+    }
 
     // Rotating with the camera is off everywhere: the saved setting is read and
     // dropped in loadSettings, since "Stabilize transports and correct minimap

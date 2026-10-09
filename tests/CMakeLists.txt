@@ -2730,6 +2730,11 @@ wowee_add_test(test_minimap_zoom
 wowee_add_test(test_minimap_blips
     SOURCES test_minimap_blips.cpp)
 
+# ── test_minimap_indoor ──────────────────────────────────────
+# The indoor minimap's WMO pictures: tiles, names, area and groups (rendering/minimap_indoor.hpp).
+wowee_add_test(test_minimap_indoor
+    SOURCES test_minimap_indoor.cpp)
+
 # ── test_unit_name_anchor ────────────────────────────────────
 # Where names and plates go, their range and dimming (rendering/unit_name_anchor.hpp).
 wowee_add_test(test_unit_name_anchor

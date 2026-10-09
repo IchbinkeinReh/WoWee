@@ -5828,6 +5828,18 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
     auto shadowDepth = renderGraph_->findResource("shadow_depth");
     auto reflTex = renderGraph_->findResource("reflection_texture");
 
+    // Inside a building the minimap is the indoor one, drawn from the WMO
+    // groups' own pictures (0x007f5ba0). Asked here, while the frame is built,
+    // rather than in the pass.
+    if (minimap && minimap->isEnabled() && camera) {
+        glm::vec3 minimapCenter = camera->getPosition();
+        if (cameraController && cameraController->isThirdPerson())
+            minimapCenter = characterPosition;
+        minimap->setIndoorScene(wmoRenderer
+            ? wmoRenderer->indoorMinimapAt(minimapCenter, minimap->insideViewRadius())
+            : std::nullopt);
+    }
+
     // Minimap composites (no dependencies - standalone off-screen render target)
     renderGraph_->addPass("minimap_composite", {}, {},
         [this](VkCommandBuffer cmd) {

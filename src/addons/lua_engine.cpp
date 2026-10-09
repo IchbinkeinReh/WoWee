@@ -3266,8 +3266,12 @@ int lua_Minimap_SetZoom(lua_State* L) {
         // Only for the map itself. SetZoom sits on the frame metatable, so any
         // frame can be sent one, and a stray call on another frame must not be
         // what the minimap opens at next time.
+        //
+        // The inside step under its own name, as the client keeps
+        // minimapInsideZoom apart from minimapZoom.
         if (w->name == "Minimap") {
-            setStoredCVar("wowee_minimapZoom", std::to_string(w->zoomLevel));
+            setStoredCVar(w->zoomIndoors ? "wowee_minimapInsideZoom" : "wowee_minimapZoom",
+                          std::to_string(w->zoomLevel));
         }
     }
     return 0;

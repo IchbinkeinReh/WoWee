@@ -1552,6 +1552,14 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     // client fires when the zoom changes under the interface, and it is what
     // greys the button that can no longer go any further - without it a map
     // restored at full zoom offers a zoom-in that does nothing.
+    // The inside step waits on the widget for the map to first go indoors.
+    if (key == "wowee_minimapinsidezoom") {
+        if (auto* tree = getWidgetTree(L)) {
+            if (auto* mm = tree->findByName("Minimap")) {
+                mm->savedInsideZoom = rendering::minimap_zoom::clampLevel(std::atoi(value.c_str()));
+            }
+        }
+    }
     if (key == "wowee_minimapzoom") {
         if (auto* tree = getWidgetTree(L)) {
             if (auto* mm = tree->findByName("Minimap")) {

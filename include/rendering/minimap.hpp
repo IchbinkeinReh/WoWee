@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/minimap_indoor.hpp"
 #include "rendering/minimap_zoom.hpp"
 
 #include <vulkan/vulkan.h>
@@ -7,6 +8,7 @@
 #include <glm/glm.hpp>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <deque>
@@ -68,16 +70,35 @@ public:
 
     void setSquareShape(bool square) { squareShape = square; }
     [[nodiscard]] bool isSquareShape() const { return squareShape; }
-    [[nodiscard]] float getViewRadius() const { return viewRadius; }
-
-    /// One of the client's six levels (minimap_zoom), 0 furthest out.
-    void setZoomLevel(int level) {
-        zoomLevel_ = minimap_zoom::clampLevel(level);
-        viewRadius = minimap_zoom::radius(zoomLevel_);
+    /// How far the map reaches from the player, in yards, at the zoom it is
+    /// at (0x007f3b90: the indoor table inside).
+    [[nodiscard]] float getViewRadius() const {
+        return minimap_zoom::radius(getZoomLevel(), isIndoors());
     }
-    [[nodiscard]] int getZoomLevel() const { return zoomLevel_; }
-    void zoomIn() { if (zoomLevel_ < minimap_zoom::kLevels - 1) setZoomLevel(zoomLevel_ + 1); }
-    void zoomOut() { if (zoomLevel_ > 0) setZoomLevel(zoomLevel_ - 1); }
+
+    /// One of the client's six levels (minimap_zoom), 0 furthest out. The
+    /// client keeps one for outside and one for inside (minimapZoom and
+    /// minimapInsideZoom) and these set and read the one in use, as
+    /// Minimap:SetZoom and GetZoom do (0x007f3ae0, 0x007f3b40).
+    void setZoomLevel(int level) {
+        (isIndoors() ? insideZoomLevel_ : zoomLevel_) = minimap_zoom::clampLevel(level);
+    }
+    [[nodiscard]] int getZoomLevel() const {
+        return isIndoors() ? insideZoomLevel_ : zoomLevel_;
+    }
+
+    /// The building the player is inside, which makes this the indoor map -
+    /// drawn from the WMO groups' own pictures, at the inside zoom - or none
+    /// outdoors (minimap_indoor.hpp). Set every frame, before compositePass.
+    void setIndoorScene(std::optional<minimap_indoor::Scene> scene);
+    [[nodiscard]] bool isIndoors() const { return indoorScene_.has_value(); }
+    /// The reach the indoor map would have, for finding the groups that make
+    /// it up before it is known to be indoors.
+    [[nodiscard]] float insideViewRadius() const {
+        return minimap_zoom::radius(insideZoomLevel_, true);
+    }
+    void zoomIn() { if (getZoomLevel() < minimap_zoom::kLevels - 1) setZoomLevel(getZoomLevel() + 1); }
+    void zoomOut() { if (getZoomLevel() > 0) setZoomLevel(getZoomLevel() - 1); }
 
     void setOpacity(float opacity) { opacity_ = opacity; }
 
@@ -168,7 +189,23 @@ private:
 
     int mapSize = 200;
     int zoomLevel_ = minimap_zoom::kDefaultLevel;
-    float viewRadius = minimap_zoom::radius(minimap_zoom::kDefaultLevel);
+    int insideZoomLevel_ = minimap_zoom::kDefaultLevel;
+
+    // Indoors (setIndoorScene). The composite is then the area about the
+    // player rather than the terrain tiles, and compositeCenter_ and
+    // compositeSpan_ say where it is, in render axes.
+    std::optional<minimap_indoor::Scene> indoorScene_;
+    bool indoorDirty_ = false;
+    bool compositeIndoors_ = false;
+    glm::vec2 compositeCenter_{0.0f};
+    float compositeSpan_ = 1.0f;
+    /// The client draws at most 256 pictures (0x007f5ba0's 0x100).
+    static constexpr uint32_t MAX_INDOOR_TILES = 256;
+    VkPipeline indoorPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout indoorPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorPool indoorDescPool = VK_NULL_HANDLE;
+    VkDescriptorSet indoorDescSets[2][MAX_INDOOR_TILES] = {};
+    void compositeIndoor(VkCommandBuffer cmd);
     bool enabled = true;
     bool rotateWithCamera = false;
     bool squareShape = false;

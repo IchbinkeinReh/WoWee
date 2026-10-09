@@ -439,6 +439,8 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
 
                     LOG_INFO("Loaded ", loadedGroups, " / ", wmoModel.nGroups, " WMO groups for instance");
                 }
+                // The name its minimap pictures are filed under.
+                wmoModel.sourcePath = wdtInfo.rootWMOPath;
 
                 // WMO-only maps: MODF uses same format as ADT MODF.
                 // Apply the same rotation conversion that outdoor WMOs get

@@ -662,6 +662,12 @@ struct Widget {
     /// does (3). Kept here rather than in Lua because the interface sets it
     /// through one button and reads it back through another.
     int zoomLevel = rendering::minimap_zoom::kDefaultLevel;
+    /// Whether that step is the inside one: the client keeps minimapZoom and
+    /// minimapInsideZoom apart, and the frame loop says which the map is on.
+    bool zoomIndoors = false;
+    /// The inside step as it was saved, until the map first goes indoors and
+    /// takes it; -1 once taken or when none was saved.
+    int savedInsideZoom = -1;
 
     /// Whether a link drawn in this frame answers a click. FCF_SetUninteractable
     /// turns it off for a chat window the player has made click-through, and the
