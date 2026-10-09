@@ -26,6 +26,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "game/game_handler.hpp"
+#include "game/spell_handler.hpp"
 #include "game/game_services.hpp"
 #include "game/transport_manager.hpp"
 
@@ -105,6 +106,15 @@ void EntitySpawner::syncGroundTargetModel() {
     const auto place = gameHandler_->groundTargetCursor();
     const auto* info = entry != 0 ? gameHandler_->getCachedGameObjectInfo(entry) : nullptr;
     if (!place || !info || info->displayId == 0) return drop();
+    // A place the spell cannot take hides the model: 0x004f66c0 hands
+    // 0x0077f2f0 the placement, which flags the scene object (+0x7c bit 4),
+    // and a flagged object's model is left out of the scene's draw list
+    // (0x00793060 clears its M2 flags 0x8 and 0x10000), its shadow and the
+    // world's collision.
+    auto* spells = gameHandler_->getSpellHandler();
+    if (spells && spells->groundTargetPlacement(place->canonical) !=
+                      static_cast<int>(game::ground_target::Placement::Acceptable))
+        return drop();
     // Only a doodad model: a building would be in the way of the very ray
     // that places it.
     std::string path = getGameObjectModelPathForDisplayId(info->displayId);

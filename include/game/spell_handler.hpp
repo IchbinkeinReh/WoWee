@@ -77,6 +77,11 @@ public:
     /// fixed facing rather than the player's (effect 81, 0x00d397d4).
     [[nodiscard]] uint32_t groundTargetObjectEntry() const { return groundTarget_.objectEntry; }
     [[nodiscard]] bool groundTargetObjectFixedFacing() const { return groundTarget_.objectFixedFacing; }
+    [[nodiscard]] float groundTargetObjectFacing() const { return groundTarget_.objectFacing; }
+    /// A right click while a spell waits for a place (0x0051fb00): effect
+    /// 81's model turns a quarter (0x007fd800), any other spell is put down
+    /// (0x00809a60). True when there was such a spell.
+    bool turnOrCancelGroundTargeting();
     /// The circle's radius, and whether the place is in range, for the
     /// cursor's place (0x008019c0, 0x00803ee0).
     [[nodiscard]] float groundTargetSpellArea() const;
@@ -506,6 +511,7 @@ private:
         std::optional<ground_target::Place> cursor;
         uint32_t objectEntry = 0;
         bool objectFixedFacing = false;
+        float objectFacing = 0.0f;  // 0x00d3f4dc for effect 81, from 0
     };
     GroundTarget groundTarget_;
     /// ChrClasses SpellClassSet for the player's class (0x008007a0), and

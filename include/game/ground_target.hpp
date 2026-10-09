@@ -45,6 +45,13 @@ constexpr uint32_t requiredTargets(uint32_t targets, uint32_t implicitTargetA0, 
 /// its own (0x00d397d4, 0x007fff60), turned a quarter at a time
 /// (0x007fd800).
 inline constexpr uint32_t kEffectObjectFixedFacing = 81;
+/// 0x007fd800: a right click turns that facing a quarter, kept under a turn.
+constexpr float quarterTurn(float facing) {
+    constexpr float kTurn = 6.2831855f;
+    facing += 1.5707964f;
+    if (facing > kTurn) facing -= kTurn;
+    return facing;
+}
 constexpr bool summonsObject(uint32_t effect) {
     return effect == 50 || effect == 76 || (effect >= 104 && effect <= 107) || effect == kEffectObjectFixedFacing;
 }

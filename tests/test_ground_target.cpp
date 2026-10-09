@@ -135,3 +135,13 @@ TEST_CASE("the spells that show a game object at the place", "[ground_target]") 
     for (uint32_t e : {50u, 76u, 104u, 105u, 106u, 107u, 81u}) CHECK(gt::summonsObject(e));
     for (uint32_t e : {0u, 2u, 28u, 75u, 103u, 108u}) CHECK_FALSE(gt::summonsObject(e));
 }
+
+TEST_CASE("effect 81's model turns a quarter per right click, under a turn", "[ground_target]") {
+    float f = 0.0f;
+    f = gt::quarterTurn(f);
+    CHECK(f == Catch::Approx(1.5707964f));
+    f = gt::quarterTurn(gt::quarterTurn(gt::quarterTurn(f)));
+    // Four quarters come back to a full turn, which is kept (only past it wraps).
+    CHECK(f == Catch::Approx(6.2831855f));
+    CHECK(gt::quarterTurn(f) == Catch::Approx(1.5707964f));
+}

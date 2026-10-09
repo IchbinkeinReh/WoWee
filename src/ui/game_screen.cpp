@@ -2265,9 +2265,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             // Treated as a camera rotate - do not interact/attack.
             return;
         }
-        // A right click puts a spell waiting for a place down
-        // (TurnOrActionStop) and does nothing else.
-        if (gameHandler.cancelGroundTargeting()) return;
+        // A right click puts a spell waiting for a place down, or turns
+        // effect 81's model a quarter (0x0051fb00), and does nothing else.
+        if (gameHandler.turnOrCancelGroundTargeting()) return;
         // Fishing bobbers are tiny and partly submerged, so their model bounds can
         // miss a cursor ray that visibly lands on the float. Test the authoritative
         // water position first with a forgiving sphere and reel directly, before

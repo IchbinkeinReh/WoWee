@@ -2396,6 +2396,9 @@ spell_mods::Sum GameHandler::getSpellModifiers(uint32_t spellId, SpellModOp op) 
     return spellHandler_ ? spellHandler_->spellModifiers(spellId, static_cast<uint8_t>(op)) : spell_mods::Sum{};
 }
 bool GameHandler::cancelGroundTargeting() { return spellHandler_ && spellHandler_->cancelGroundTargeting(); }
+bool GameHandler::turnOrCancelGroundTargeting() {
+    return spellHandler_ && spellHandler_->turnOrCancelGroundTargeting();
+}
 void GameHandler::placeGroundTarget(const ground_target::Place& place) {
     if (spellHandler_) spellHandler_->placeGroundTarget(place);
 }
@@ -2413,8 +2416,9 @@ uint32_t GameHandler::groundTargetObjectEntry() const {
     return spellHandler_ ? spellHandler_->groundTargetObjectEntry() : 0;
 }
 float GameHandler::groundTargetObjectFacing() const {
-    // Effect 81's starts at 0 (0x0080cce0 clears 0x00d3f4dc).
-    if (spellHandler_ && spellHandler_->groundTargetObjectFixedFacing()) return 0.0f;
+    // Effect 81's starts at 0 (0x0080cce0 clears 0x00d3f4dc) and turns by
+    // right clicks (0x007fd800).
+    if (spellHandler_ && spellHandler_->groundTargetObjectFixedFacing()) return spellHandler_->groundTargetObjectFacing();
     return movementInfo.orientation;
 }
 std::optional<ground_target::Place> GameHandler::groundTargetCursor() const {

@@ -1079,6 +1079,8 @@ public:
     [[nodiscard]] bool isGroundTargeting() const;
     [[nodiscard]] uint32_t groundTargetSpellId() const;
     bool cancelGroundTargeting();
+    /// A right click on the world while a spell waits for a place (0x0051fb00).
+    bool turnOrCancelGroundTargeting();
     void placeGroundTarget(const ground_target::Place& place);
     [[nodiscard]] std::optional<ground_target::Place> groundTargetCursor() const;
     /// The game object whose model the cursor's place shows, 0 for none, and

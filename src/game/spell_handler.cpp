@@ -1258,6 +1258,13 @@ bool SpellHandler::cancelGroundTargeting() {
     return true;
 }
 
+bool SpellHandler::turnOrCancelGroundTargeting() {
+    if (groundTarget_.spellId == 0) return false;
+    if (!groundTarget_.objectFixedFacing) return cancelGroundTargeting();
+    groundTarget_.objectFacing = ground_target::quarterTurn(groundTarget_.objectFacing);
+    return true;
+}
+
 void SpellHandler::placeGroundTarget(const ground_target::Place& place) {
     if (groundTarget_.spellId == 0) return;
     // 0x0080c340: the source location first when both are wanted.
