@@ -62,24 +62,34 @@ bool decodeLayerAlpha(const MapChunk& chunk, size_t layerIdx,
     const bool fourBit = chunk.bigAlpha == 0;
 
     if (layer.compressedAlpha() && !fourBit) {
+        // The client unpacks a row at a time (0x007b7420, called per row by
+        // 0x007b88d0): commands until the row's 64 texels are written, a
+        // command's count being its low seven bits as they are - not one
+        // more. Reading count + 1 made every run a texel too long, so the
+        // stream slid off its commands within a row or two and the rest of
+        // the layer was its own command bytes read as alpha: paving that
+        // never showed, and a dark net of whatever layer came next. A run
+        // that overshoots its row is cut there; the client's next row
+        // starts afresh at the next command.
+        const auto& src = chunk.alphaMap;
         size_t readPos = offset;
-        size_t writePos = 0;
-        while (writePos < ALPHA_MAP_SIZE && readPos < chunk.alphaMap.size()) {
-            const uint8_t cmd = chunk.alphaMap[readPos++];
-            const bool fill = (cmd & ALPHA_FILL_FLAG) != 0;
-            const int count = (cmd & ALPHA_COUNT_MASK) + 1;
-
-            if (fill) {
-                if (readPos >= chunk.alphaMap.size()) break;
-                const uint8_t val = chunk.alphaMap[readPos++];
-                for (int i = 0; i < count && writePos < ALPHA_MAP_SIZE; ++i) {
-                    outAlpha[writePos++] = val;
-                }
-            } else {
-                for (int i = 0;
-                     i < count && writePos < ALPHA_MAP_SIZE && readPos < chunk.alphaMap.size();
-                     ++i) {
-                    outAlpha[writePos++] = chunk.alphaMap[readPos++];
+        for (size_t row = 0; row < ALPHA_MAP_DIM && readPos < src.size(); ++row) {
+            uint8_t* out = outAlpha.data() + row * ALPHA_MAP_DIM;
+            size_t written = 0;
+            while (written < ALPHA_MAP_DIM && readPos < src.size()) {
+                const uint8_t cmd = src[readPos++];
+                const size_t count = cmd & ALPHA_COUNT_MASK;
+                if ((cmd & ALPHA_FILL_FLAG) != 0) {
+                    if (readPos >= src.size()) break;
+                    const uint8_t val = src[readPos++];
+                    for (size_t i = 0; i < count && written < ALPHA_MAP_DIM; ++i) {
+                        out[written++] = val;
+                    }
+                } else {
+                    // Every byte of a copy is consumed, kept or not.
+                    for (size_t i = 0; i < count && readPos < src.size(); ++i, ++readPos) {
+                        if (written < ALPHA_MAP_DIM) out[written++] = src[readPos];
+                    }
                 }
             }
         }

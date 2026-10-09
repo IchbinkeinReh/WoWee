@@ -1873,8 +1873,13 @@ void TerrainManager::ensureGroundEffectTablesLoaded() {
         if (doodadId == 0 || modelName.empty()) continue;
         if (groundEffectDoodad->getFieldCount() > 2) groundDoodadFlagsById_[doodadId] = groundEffectDoodad->getUInt32(i, 2);
 
+        // The table names models .mdl (the older rows) or .mdx (Outland's and
+        // Northrend's, 374 of its 580); the client's model loader (0x0081c390,
+        // from 0x007b3050) takes either and reads the .m2. Only .mdl was mapped
+        // here, so every .mdx tuft - Crystalsong's tall grass among them - was
+        // a file that does not exist and grew nothing.
         std::string lower = toLowerCopy(modelName);
-        if (lower.size() > 4 && lower.substr(lower.size() - 4) == ".mdl") {
+        if (lower.size() > 4 && (lower.ends_with(".mdl") || lower.ends_with(".mdx"))) {
             lower = lower.substr(0, lower.size() - 4) + ".m2";
         }
         if (lower.find('\\') != std::string::npos || lower.find('/') != std::string::npos) {

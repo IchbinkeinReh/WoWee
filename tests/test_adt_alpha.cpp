@@ -96,6 +96,38 @@ TEST_CASE("the map's MPHD flag 0x4 decides the bit depth, not the layer's size",
     CHECK_FALSE(decodeLayerAlpha(chunk, 1, alpha, 0));
 }
 
+TEST_CASE("a compressed map's command counts its texels as they are, a row at a time",
+          "[adt][alpha]") {
+    // 0x007b7420: the low seven bits are the count itself, and each row of
+    // 64 texels is its own run of commands. Every compressed layer of
+    // Northrend's tiles ends exactly where the next one begins read so.
+    MapChunk chunk;
+    chunk.layers.resize(2);
+    chunk.layers[1].flags = 0x100 | 0x200;
+    chunk.layers[1].offsetMCAL = 0;
+    chunk.flags = 0x8000;
+    chunk.bigAlpha = 1;
+    // Row 0: 3 copied texels, then 61 filled with 200.
+    chunk.alphaMap = {0x03, 10, 20, 30, 0x80 | 61, 200};
+    // Row 1: a fill that runs past the row is cut at its end.
+    chunk.alphaMap.insert(chunk.alphaMap.end(), {0x80 | 70, 50});
+    // Rows 2..63: 64 of 7.
+    for (size_t row = 2; row < ALPHA_MAP_DIM; ++row) {
+        chunk.alphaMap.insert(chunk.alphaMap.end(), {0x80 | 64, 7});
+    }
+
+    std::vector<uint8_t> alpha;
+    REQUIRE(decodeLayerAlpha(chunk, 1, alpha, 0));
+    CHECK(at(alpha, 0, 0) == 10);
+    CHECK(at(alpha, 2, 0) == 30);
+    CHECK(at(alpha, 3, 0) == 200);
+    CHECK(at(alpha, 63, 0) == 200);
+    CHECK(at(alpha, 0, 1) == 50);
+    CHECK(at(alpha, 63, 1) == 50);
+    CHECK(at(alpha, 0, 2) == 7);
+    CHECK(at(alpha, 63, 63) == 7);
+}
+
 TEST_CASE("the last row and column are taken from the ones before them",
           "[adt][alpha]") {
     // 15 everywhere the file paints, and 0 in the row and column it does not -

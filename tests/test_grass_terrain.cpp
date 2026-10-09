@@ -413,7 +413,7 @@ TEST_CASE("an overlay whose alpha runs out still covers the ground",
 
     // A compressed overlay whose stream stops after a handful of texels.
     const auto offset = static_cast<uint32_t>(chunk.alphaMap.size());
-    chunk.alphaMap.push_back(0x80 | 3);   // fill, 4 texels
+    chunk.alphaMap.push_back(0x80 | 4);   // fill, 4 texels
     chunk.alphaMap.push_back(255);
     TextureLayer overlay = makeLayer(kRoadEffect, 0x100 | 0x200, offset);
     chunk.layers.push_back(overlay);
