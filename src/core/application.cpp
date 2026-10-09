@@ -818,6 +818,15 @@ bool Application::initialize() {
         luaSvc.takeScreenshot = [uim = uiManager.get()]() {
             if (uim) uim->getGameScreen().takeScreenshot();
         };
+        luaSvc.toggleAutoRun = [r = renderer.get()]() {
+            if (auto* cc = r ? r->getCameraController() : nullptr) cc->toggleAutoRun();
+        };
+        luaSvc.setBindingTurn = [r = renderer.get()](int direction, bool held) {
+            auto* cc = r ? r->getCameraController() : nullptr;
+            if (!cc) return;
+            if (direction < 0) cc->setBindingTurnLeft(held);
+            else cc->setBindingTurnRight(held);
+        };
         luaSvc.getBarberStyleInfo = [uim = uiManager.get(), gh = gameHandler.get()](
                 int selector, std::string& name, bool& isCurrent) -> bool {
             if (!uim || !gh) return false;

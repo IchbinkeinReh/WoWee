@@ -3936,6 +3936,20 @@ static int lua_Screenshot(lua_State* L) {
     return 0;
 }
 
+// ToggleAutoRun(), TurnLeftStart() / TurnLeftStop(), TurnRightStart() /
+// TurnRightStop() - the movement bindings, acting as their keys do.
+static int lua_ToggleAutoRun(lua_State* L) {
+    auto* svc = getLuaServices(L);
+    if (svc && svc->toggleAutoRun) svc->toggleAutoRun();
+    return 0;
+}
+template <int Direction, bool Held>
+static int lua_BindingTurn(lua_State* L) {
+    auto* svc = getLuaServices(L);
+    if (svc && svc->setBindingTurn) svc->setBindingTurn(Direction, Held);
+    return 0;
+}
+
 // HasLFGRestrictions() → whether the player is in a dungeon-finder group
 //
 // There is a dungeon finder here - the client tracks the queue, the proposal
@@ -5357,6 +5371,11 @@ void registerSystemLuaAPI(lua_State* L) {
     loadInterfaceState();
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"Screenshot",               lua_Screenshot},
+                {"ToggleAutoRun",            lua_ToggleAutoRun},
+                {"TurnLeftStart",            lua_BindingTurn<-1, true>},
+                {"TurnLeftStop",             lua_BindingTurn<-1, false>},
+                {"TurnRightStart",           lua_BindingTurn<1, true>},
+                {"TurnRightStop",            lua_BindingTurn<1, false>},
                 {"WoweeShowSettings",        lua_WoweeShowSettings},
                 {"WoweeSettingList",         lua_WoweeSettingList},
                 {"WoweeVersion",             lua_WoweeVersion},

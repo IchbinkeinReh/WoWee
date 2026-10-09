@@ -142,6 +142,11 @@ public:
     [[nodiscard]] bool isTurningLeft() const { return turningLeftActive; }
     [[nodiscard]] bool isTurningRight() const { return turningRightActive; }
     [[nodiscard]] bool isAutoRunning() const { return autoRunning; }
+    /// The ToggleAutoRun / TurnLeftStart / TurnRightStart bindings, which act
+    /// as the key they are bound to does.
+    void toggleAutoRun() { autoRunning = !autoRunning; }
+    void setBindingTurnLeft(bool held) { bindingTurnLeft_ = held; }
+    void setBindingTurnRight(bool held) { bindingTurnRight_ = held; }
     [[nodiscard]] bool isRightMouseHeld() const { return rightMouseDown; }
     [[nodiscard]] bool isSitting() const { return sitting; }
     [[nodiscard]] bool isSwimming() const { return swimming; }
@@ -723,6 +728,8 @@ private:
     bool rKeyWasDown = false;
     bool runPace = false;
     bool autoRunning = false;
+    bool bindingTurnLeft_ = false;
+    bool bindingTurnRight_ = false;
     bool tildeWasDown = false;
 
     // Auto-follow target position (WoW /follow). Non-null when following.

@@ -2886,8 +2886,9 @@ void CameraController::update(float deltaTime) {
     // Up/Down move, Left/Right turn (strafe stays on Q/E).
     bool keyW = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_W) || input.isKeyPressed(SDL_SCANCODE_UP));
     bool keyS = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_S) || input.isKeyPressed(SDL_SCANCODE_DOWN));
-    bool keyA = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_A) || input.isKeyPressed(SDL_SCANCODE_LEFT));
-    bool keyD = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_D) || input.isKeyPressed(SDL_SCANCODE_RIGHT));
+    // TurnLeftStart()/TurnRightStart() hold a turn the way the key does.
+    bool keyA = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_A) || input.isKeyPressed(SDL_SCANCODE_LEFT) || bindingTurnLeft_);
+    bool keyD = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_D) || input.isKeyPressed(SDL_SCANCODE_RIGHT) || bindingTurnRight_);
     bool keyQ = !uiWantsKeyboard && !sitting && !movementSuppressed && input.isKeyPressed(SDL_SCANCODE_Q);
     bool keyE = !uiWantsKeyboard && !sitting && !movementSuppressed && input.isKeyPressed(SDL_SCANCODE_E);
     bool shiftDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LSHIFT) || input.isKeyPressed(SDL_SCANCODE_RSHIFT));

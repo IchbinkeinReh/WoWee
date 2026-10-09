@@ -309,6 +309,13 @@ struct LuaServices {
     /// Routed through the same call rather than reimplemented, so both put the
     /// file in the same place under the same name.
     std::function<void()> takeScreenshot;
+
+    /// The movement bindings ToggleAutoRun and TurnLeft/TurnRight Start/Stop.
+    ///
+    /// Held turns are kept on the camera controller beside the keys, so a
+    /// macro or a scripted walk moves the character as the keyboard does.
+    std::function<void()> toggleAutoRun;
+    std::function<void(int direction, bool held)> setBindingTurn;
 };
 
 } // namespace wowee::addons
