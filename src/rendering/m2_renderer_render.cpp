@@ -1016,6 +1016,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     continue;  // instance was removed since the dispatch
                 inst = &instances[idxIt->second];
             }
+            inst->cullVerdictKnown = 1;
             if (visibility[k]) {
                 inst->lastCullVisible = 1;
                 inst->hizPrevCulledFrames = 0;
@@ -1098,7 +1099,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                 glm::vec3 toCam = instance.cachedCullCenter - camPos;
                 distSq = glm::dot(toCam, toCam);
                 effectiveMaxDistSq = instanceMaxDistSq;
-            } else if (gpuCullAvailable && i < numInstances) {
+            } else if (gpuCullAvailable && i < numInstances && instance.cullVerdictKnown) {
                 // Per-instance verdict scattered above - indexing visibility[]
                 // directly here would read the slot of whichever instance held
                 // this array position when the dispatch was recorded.
@@ -2104,6 +2105,12 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
 
     auto getTexDescSet = [&](VkTexture* tex) -> VkDescriptorSet {
         VkImageView iv = tex->getImageView();
+        // Not uploaded yet: no set at all, and the caller skips the batch. A
+        // set naming the null view is a read of nothing on the GPU
+        // (VUID-vkCmdDrawIndexed-None-08114, first seen when the .mdx ground
+        // cover began to load), and the white set instead would cast the
+        // solid quad below.
+        if (iv == VK_NULL_HANDLE) return VK_NULL_HANDLE;
         auto cacheIt = texSetCache.find(iv);
         if (cacheIt != texSetCache.end()) return cacheIt->second;
 
@@ -2325,6 +2332,7 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
                 // this model shares it.
                 if (foliagePass && batch.hasAlpha && batch.texture) {
                     VkDescriptorSet texSet = getTexDescSet(batch.texture);
+                    if (texSet == VK_NULL_HANDLE) continue;  // its texture is still uploading
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         boundLayout, 0, 1, &texSet, 0, nullptr);
                 } else if (foliagePass) {

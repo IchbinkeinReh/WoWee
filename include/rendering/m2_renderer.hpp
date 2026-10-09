@@ -356,6 +356,12 @@ struct M2Instance {
     // in-flight dispatch draws immediately instead of waiting ~2 frames for its
     // first cull result.
     uint8_t lastCullVisible = 1;
+    // Whether lastCullVisible has been set by a dispatch yet. Until it has,
+    // the instance is culled on the CPU like an instance past the GPU's
+    // capacity - "draws immediately" must not mean "drawn without a test":
+    // entering the world, every one of Dalaran's 60,000 instances is new, and
+    // all of them went to the GPU for the first two frames.
+    uint8_t cullVerdictKnown = 0;
     // Consecutive frames this instance has been culled (capped at 3), used for
     // the HiZ `previouslyVisible` hysteresis.  Defaults to 2 ("not recently
     // visible") so a freshly spawned instance skips the HiZ test rather than
@@ -1043,8 +1049,16 @@ private:
     // takes a slot of its own, so at 16384 a dwarf standing in Dun Morogh
     // grass was already losing whole models for a frame at a time - which reads
     // as clutter blinking rather than as anything being over budget. Two
-    // buffers of 192 bytes a slot, so this costs 12 MB rather than 6.
-    static constexpr uint32_t MAX_INSTANCE_DATA = 32768;
+    // buffers of 192 bytes a slot, so this costs 24 MB.
+    //
+    // The client has no counterpart to size it by: it draws each M2 on its
+    // own, and its ground cover not as models at all but from a vertex pool
+    // of groundEffectDensity x 64 doodads, at most 4096, filled a batch at a
+    // time (CDetailDoodad_vtx, 0x007b2a80). Here every visible M2 of the
+    // frame shares this one buffer. Played it holds a few thousand; what ran
+    // it out was the first frames in the world, which drew every instance
+    // untested (see M2Instance::cullVerdictKnown).
+    static constexpr uint32_t MAX_INSTANCE_DATA = 65536;
     VkDescriptorSetLayout instanceSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool instanceDescPool_ = VK_NULL_HANDLE;
     ::VkBuffer instanceBuffer_[2] = {};
@@ -1073,7 +1087,10 @@ private:
         glm::mat4 viewProj;         // current frame view-projection                 (64 bytes)
         glm::mat4 prevViewProj;     // previous frame VP for HiZ reprojection        (64 bytes)
     };                              // Total: 272 bytes
-    static constexpr uint32_t MAX_CULL_INSTANCES = 24576;
+    /// Every instance resident, not every one drawn: those past it are culled
+    /// on the CPU instead. Dalaran holds over 60,000 with its ground cover;
+    /// 36 bytes a slot, 4.7 MB a frame.
+    static constexpr uint32_t MAX_CULL_INSTANCES = 131072;
     VkPipeline cullPipeline_ = VK_NULL_HANDLE;           // frustum-only (fallback)
     VkPipeline cullHiZPipeline_ = VK_NULL_HANDLE;        // frustum + HiZ occlusion
     VkPipelineLayout cullPipelineLayout_ = VK_NULL_HANDLE;  // frustum-only layout (set 0)
