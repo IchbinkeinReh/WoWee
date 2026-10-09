@@ -1,10 +1,13 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <array>
+#include <cstdint>
 #include <string>
-#include <vector>
 
 struct SDL_Window;
+
+namespace wowee::pipeline { class AssetManager; }
 
 namespace wowee {
 namespace rendering {
@@ -16,50 +19,41 @@ public:
     LoadingScreen();
     ~LoadingScreen();
 
-    bool initialize();
+    /// The map's picture (0x00409ed0) and the bar's textures (0x0040a990).
+    bool initialize(pipeline::AssetManager* assets, uint32_t mapId);
     void shutdown();
 
-    void selectRandomImage();
-
-    // Render the loading screen with progress bar and status text (pure ImGui)
+    // Render the loading screen: the picture and the bar (0x0040a270)
     void render();
 
-    // Draw loading screen as ImGui overlay (call within an existing ImGui frame).
-    // Used during warmup to overlay loading screen on top of the rendered world.
-    void renderOverlay();
-    /// The fullscreen window both draws open, and its background blit.
-    void beginBackdrop(const char* windowName, float screenW, float screenH);
-
     void setProgress(float progress) { loadProgress = progress; }
-    void setStatus(const std::string& status) { statusText = status; }
-    void setZoneName(const std::string& name) { zoneName = name; }
+    /// What is being loaded, for the log: the client's screen says nothing.
+    void setStatus(const std::string& status);
 
     // Must be set before initialize() for Vulkan texture upload
     void setVkContext(VkContext* ctx) { vkCtx = ctx; }
     void setSDLWindow(SDL_Window* win) { sdlWindow = win; }
 
 private:
-    bool loadImage(const std::string& path);
+    struct Texture {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkDescriptorSet descriptor = VK_NULL_HANDLE; // ImGui texture handle
+    };
+    bool loadTexture(pipeline::AssetManager* assets, const std::string& path, Texture& out);
+    bool upload(const uint8_t* rgba, int width, int height, Texture& out);
+    void release(Texture& tex);
 
     VkContext* vkCtx = nullptr;
     SDL_Window* sdlWindow = nullptr;
 
-    // Vulkan texture for background image
-    VkImage bgImage = VK_NULL_HANDLE;
-    VkDeviceMemory bgMemory = VK_NULL_HANDLE;
-    VkImageView bgImageView = VK_NULL_HANDLE;
-    VkSampler bgSampler = VK_NULL_HANDLE;
-    VkDescriptorSet bgDescriptorSet = VK_NULL_HANDLE; // ImGui texture handle
-
-    std::vector<std::string> imagePaths;
-    int currentImageIndex = 0;
+    Texture picture_;
+    /// The picture is the 16:10 "Wide" one (0x00b2fed8).
+    bool widePicture_ = false;
+    std::array<Texture, 2> bar_;  ///< loading_screen::kBar's pieces
 
     float loadProgress = 0.0f;
-    std::string statusText = "Loading...";
-    std::string zoneName;
-
-    int imageWidth = 0;
-    int imageHeight = 0;
 };
 
 } // namespace rendering

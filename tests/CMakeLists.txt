@@ -2649,6 +2649,11 @@ wowee_add_test(test_mount_transition
 wowee_add_test(test_mount_seat
     SOURCES test_mount_seat.cpp)
 
+# ── test_loading_screen_layout ───────────────────────
+# The world loading screen's picture and bar (0x0040a270, 0x004090c0).
+wowee_add_test(test_loading_screen_layout
+    SOURCES test_loading_screen_layout.cpp)
+
 # ── test_spell_chain_targets_packet ──────────────────
 # SMSG_SPELL_UPDATE_CHAIN_TARGETS as 0x00800470 reads it.
 wowee_add_packet_test(test_spell_chain_targets_packet)
