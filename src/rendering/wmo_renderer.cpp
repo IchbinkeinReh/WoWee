@@ -4310,7 +4310,7 @@ bool WMORenderer::isInsideInteriorWMO(float glX, float glY, float glZ) const {
 }
 
 std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3& start, float endZ) const {
-    // The first WMO triangle met going straight from `start` to `endZ`,
+    // The first WMO triangles met going straight from `start` to `endZ`,
     // across every WMO there (0x007c2700 asks each, 0x007c25d0 each group).
     const float reach = std::abs(start.z - endZ);
     if (reach <= 0.0f) return std::nullopt;
@@ -4318,11 +4318,25 @@ std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3&
     std::vector<size_t> candidates;
     gatherCandidates(glm::vec3(start.x - 0.5f, start.y - 0.5f, std::min(start.z, endZ)),
                      glm::vec3(start.x + 0.5f, start.y + 0.5f, std::max(start.z, endZ)), candidates);
-    float bestDist = reach;
-    const ModelData* bestModel = nullptr;
-    const GroupResources* bestGroup = nullptr;
-    uint32_t bestTri = 0;
-    glm::vec3 bestHit(0.0f);
+    // Two answers, as 0x007c6600 keeps them: the nearest triangle that
+    // collides (MOPY 0x20 or 0x08), which says there is a floor and where,
+    // and the nearest one that is drawn (0x20, or the detail 0x04), which
+    // the light comes from (0x007c2e70 hands that one to 0x007c15f0). A
+    // collision-only face is never drawn and its vertex colours are no light:
+    // the Undercity lift shafts carry invisible collision faces of flat
+    // grey (127 once loaded, doubled to white), and lighting a platform from
+    // them flashed it white each time its ray met one mid-ride. Neither
+    // takes a face flagged 0x02 (0x007c77d0's mask 0x82; 0x80 is only the
+    // mark 0x007c7610 clears again). A group without MOPY counts as drawn.
+    struct Hit {
+        float dist;
+        const ModelData* model = nullptr;
+        const GroupResources* group = nullptr;
+        uint32_t tri = 0;
+        glm::vec3 local{0.0f};
+    };
+    Hit collides{reach};
+    Hit drawn{reach};
     for (size_t idx : candidates) {
         const auto& instance = instances[idx];
         auto it = loadedModels.find(instance.modelId);
@@ -4338,6 +4352,12 @@ std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3&
             const auto& verts = group.collisionVertices;
             const auto& indices = group.collisionIndices;
             for (uint32_t triStart : tl_triScratch) {
+                const size_t tri = triStart / 3;
+                const uint8_t mopy = tri < group.triMopyFlags.size() ? group.triMopyFlags[tri] : 0x20u;
+                if (mopy & 0x02u) continue;
+                const bool collidable = (mopy & 0x28u) != 0;
+                const bool drawable = (mopy & 0x24u) != 0;
+                if (!collidable && !drawable) continue;
                 const glm::vec3& v0 = verts[indices[triStart]];
                 const glm::vec3& v1 = verts[indices[triStart + 1]];
                 const glm::vec3& v2 = verts[indices[triStart + 2]];
@@ -4346,32 +4366,42 @@ std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3&
                 const glm::vec3 hitLocal = localOrigin + localDir * t;
                 const glm::vec3 hitWorld = glm::vec3(instance.modelMatrix * glm::vec4(hitLocal, 1.0f));
                 const float dist = (hitWorld.z - start.z) * sign;
-                if (dist < 0.0f || dist >= bestDist) continue;
-                bestDist = dist;
-                bestModel = &model;
-                bestGroup = &group;
-                bestTri = triStart;
-                bestHit = hitLocal;
+                if (dist < 0.0f) continue;
+                const Hit hit{dist, &model, &group, triStart, hitLocal};
+                if (collidable && dist < collides.dist) collides = hit;
+                if (drawable && dist < drawn.dist) drawn = hit;
             }
         }
     }
-    if (!bestGroup) return std::nullopt;
+    if (!collides.group && !drawn.group) return std::nullopt;
     ObjectFloor found;
-    found.z = start.z + bestDist * sign;
-    // An object on an exterior or exterior-lit group's floor takes the
-    // zone's light (0x007c15f0), as does one on a group with no vertex
-    // colours.
-    if (bestGroup->collisionColors.empty()) return found;
+    found.z = start.z + (collides.group ? collides.dist : drawn.dist) * sign;
+    // An object whose floor is an exterior group's takes the zone's light
+    // (0x007c28f0 asks the colliding face's group, 0x007c15f0 the drawn
+    // face's), as does one on a group with no vertex colours.
+    if (collides.group && (collides.group->groupFlags & 0x8u)) return found;
+    // With no drawn face along the way the colliding one stands in, as no
+    // face (0x007c2700 fills the empty answer with the other's group and
+    // triangle 0xffff): 0x007c7fe0 then gives the WMO's ambient colour.
+    const Hit& lit = drawn.group ? drawn : collides;
+    if (lit.group->collisionColors.empty()) return found;
+    pipeline::wmo_doodad_light::FloorLight out;
+    if (!drawn.group) {
+        out.light = pipeline::wmo_doodad_light::unitLight(
+            glm::ivec3(glm::round(glm::clamp(lit.model->wmoAmbientColor, 0.0f, 1.0f) * 255.0f)));
+        found.light = out;
+        return found;
+    }
 
     // The vertex colours at the feet, by barycentric weight (0x007c7fe0).
-    const auto& indices = bestGroup->collisionIndices;
-    const uint16_t i0 = indices[bestTri];
-    const uint16_t i1 = indices[bestTri + 1];
-    const uint16_t i2 = indices[bestTri + 2];
-    const glm::vec3& a = bestGroup->collisionVertices[i0];
-    const glm::vec3& b = bestGroup->collisionVertices[i1];
-    const glm::vec3& c = bestGroup->collisionVertices[i2];
-    const glm::vec2 ab(b - a), ac(c - a), ap(bestHit - a);
+    const auto& indices = lit.group->collisionIndices;
+    const uint16_t i0 = indices[lit.tri];
+    const uint16_t i1 = indices[lit.tri + 1];
+    const uint16_t i2 = indices[lit.tri + 2];
+    const glm::vec3& a = lit.group->collisionVertices[i0];
+    const glm::vec3& b = lit.group->collisionVertices[i1];
+    const glm::vec3& c = lit.group->collisionVertices[i2];
+    const glm::vec2 ab(b - a), ac(c - a), ap(lit.local - a);
     const float den = ab.x * ac.y - ab.y * ac.x;
     float wb = 0.0f, wc = 0.0f;
     if (std::abs(den) > 1e-8f) {
@@ -4379,16 +4409,15 @@ std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3&
         wc = glm::clamp((ab.x * ap.y - ab.y * ap.x) / den, 0.0f, 1.0f - wb);
     }
     const float wa = 1.0f - wb - wc;
-    const auto& cols = bestGroup->collisionColors;
+    const auto& cols = lit.group->collisionColors;
     const glm::vec4 mocv = glm::vec4(cols[i0]) * wa + glm::vec4(cols[i1]) * wb + glm::vec4(cols[i2]) * wc;
     const glm::ivec3 floor = pipeline::wmo_doodad_light::unitFloorColor(
-        glm::vec3(mocv), bestModel->mohdFlags, glm::vec4(bestModel->wmoAmbientColor, 1.0f));
-    pipeline::wmo_doodad_light::FloorLight out;
+        glm::vec3(mocv), lit.model->mohdFlags, glm::vec4(lit.model->wmoAmbientColor, 1.0f));
     out.light = pipeline::wmo_doodad_light::unitLight(floor);
     // On a transition face (MOPY 0x1) the alpha there takes the light toward
     // the outside's (0x007c7fe0's last output, 0x007a0d60).
-    const size_t tri = bestTri / 3;
-    if (tri < bestGroup->triMopyFlags.size() && (bestGroup->triMopyFlags[tri] & 0x1u)) {
+    const size_t tri = lit.tri / 3;
+    if (tri < lit.group->triMopyFlags.size() && (lit.group->triMopyFlags[tri] & 0x1u)) {
         out.towardOutside = static_cast<int>(mocv.a);
     }
     found.light = out;
