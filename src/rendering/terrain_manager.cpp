@@ -875,8 +875,17 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                     }
                 }
 
-                // Pre-decode WMO textures on background thread
-                for (const auto& texPath : wmoModel.textures) {
+                // Pre-decode WMO textures on background thread - for the tile
+                // that places this WMO, not every tile it reaches into. A city
+                // is one placement listed by each tile it covers, and each of
+                // them decoded all its textures and built their normal maps
+                // again, only for finalization to skip the placement as
+                // already made: 78 of the 84 s the workers spent on WMOs
+                // entering Dalaran. Should the placing tile go before it is
+                // finalized, another tile's copy makes the model and its
+                // textures load the ordinary way.
+                static const decltype(wmoModel.textures) kNoTextures;
+                for (const auto& texPath : wmoAlreadyPrepared ? kNoTextures : wmoModel.textures) {
                     if (texPath.empty()) continue;
                     std::string texKey = texPath;
                     // Truncate at NUL (WMO paths can have stray bytes)

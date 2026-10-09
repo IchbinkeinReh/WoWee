@@ -1143,8 +1143,19 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
 
             if (world_) world_->update(1.0f / 60.0f);
 
-            // Process all spawn/equipment/transport queues during warmup
-            entitySpawner_->update();
+            // Process all spawn/equipment/transport queues during warmup -
+            // as many passes as fit in 20 ms. One pass is held to a few
+            // spawns and a 2 ms budget so play does not stutter, which is
+            // pointless behind a loading screen: in Dalaran, hundreds of
+            // players at three a pass and a pass every 38 ms kept the screen
+            // up for twelve seconds.
+            {
+                const auto spawnStart = std::chrono::steady_clock::now();
+                do {
+                    entitySpawner_->update();
+                } while (entitySpawner_->hasWorkPending() &&
+                         std::chrono::steady_clock::now() - spawnStart < std::chrono::milliseconds(20));
+            }
             if (auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
                 cr->processPendingNormalMaps(4);
             }
