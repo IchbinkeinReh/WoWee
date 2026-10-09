@@ -796,6 +796,11 @@ void ADTLoader::parseMH2O(std::span<const uint8_t> data, ADTTerrain& terrain) {
             if (layer.width == 0 || layer.height == 0) {
                 continue;
             }
+            // An origin outside the 8x8 chunk would wrap the uint8 width clamp
+            // below and index past layer.mask; only corrupt files have one.
+            if (layer.x >= 8 || layer.y >= 8) {
+                continue;
+            }
 
             // Clamp dimensions to valid range
             if (layer.width > 8) layer.width = 8;
