@@ -3051,7 +3051,8 @@ public:
     using MountCallback = std::function<void(uint32_t mountDisplayId)>;  // 0 = dismount
     void setMountCallback(MountCallback cb) { mountCallback_ = std::move(cb); }
 
-    // Mount display changes for visible players other than the local character.
+    // Mount display changes for visible units other than the local character:
+    // other players and creatures, which ride alike (0x00740450).
     using OtherPlayerMountCallback = std::function<void(uint64_t guid, uint32_t mountDisplayId)>;
     void setOtherPlayerMountCallback(OtherPlayerMountCallback cb) { otherPlayerMountCallback_ = std::move(cb); }
 

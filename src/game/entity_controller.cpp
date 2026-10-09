@@ -979,8 +979,9 @@ bool EntityController::applyUnitFieldsOnCreate(const UpdateBlock& block,
         else if (key == ufi.mountDisplayId) {
             if (block.guid == owner_.getPlayerGuid()) {
                 detectPlayerMountChange(val, block.fields);
-            } else if (block.objectType == ObjectType::PLAYER &&
+            } else if ((block.objectType == ObjectType::PLAYER || block.objectType == ObjectType::UNIT) &&
                        owner_.otherPlayerMountCallbackRef()) {
+                // A creature rides as a player does (0x00740450).
                 owner_.otherPlayerMountCallbackRef()(block.guid, val);
             }
             unit->setMountDisplayId(val);
@@ -1237,7 +1238,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         } else if (key == ufi.mountDisplayId) {
             if (block.guid == owner_.getPlayerGuid()) {
                 detectPlayerMountChange(val, block.fields);
-            } else if (entity->getType() == ObjectType::PLAYER &&
+            } else if ((entity->getType() == ObjectType::PLAYER || entity->getType() == ObjectType::UNIT) &&
                        val != unit->getMountDisplayId() &&
                        owner_.otherPlayerMountCallbackRef()) {
                 owner_.otherPlayerMountCallbackRef()(block.guid, val);

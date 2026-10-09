@@ -312,7 +312,9 @@ public:
     /// A unit mounted on a display now, or put down for 0 - a mount
     /// transition handing it over (0x007412b0, 0x00740450).
     void mountUnitNow(uint64_t guid, uint32_t displayId, bool localPlayer);
-    /// The instance drawing another player's mount, 0 while it rides none.
+    /// The instance drawing another unit's mount - a player's or a
+    /// creature's, for CGUnit_C mounts both alike (0x00740450, 0x0073d5d0)
+    /// - 0 while it rides none.
     uint32_t remotePlayerMountInstance(uint64_t guid) const {
         auto it = remotePlayerMounts_.find(guid);
         return it != remotePlayerMounts_.end() ? it->second.instanceId : 0u;

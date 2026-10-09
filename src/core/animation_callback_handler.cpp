@@ -319,7 +319,12 @@ void AnimationCallbackHandler::setupCallbacks() {
                 instanceId = mount->instanceId;
             }
         }
-        if (instanceId == 0) instanceId = entitySpawner_.getCreatureInstanceId(guid);
+        if (instanceId == 0) {
+            instanceId = entitySpawner_.getCreatureInstanceId(guid);
+            // A creature rides as a player does.
+            if (const auto* mount = instanceId != 0 ? entitySpawner_.getRemotePlayerMount(guid) : nullptr)
+                instanceId = mount->instanceId;
+        }
         if (instanceId == 0) return;
         auto entity = gameHandler_.getEntityManager().getEntity(guid);
         if (!entity) return;

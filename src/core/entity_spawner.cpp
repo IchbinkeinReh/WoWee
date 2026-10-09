@@ -355,6 +355,10 @@ void EntitySpawner::removeRemotePlayerMount(uint64_t guid) {
             auto playerIt = playerInstances_.find(guid);
             if (playerIt != playerInstances_.end()) {
                 cr->playAnimation(playerIt->second, rendering::anim::STAND, true);
+            } else if (auto creatureIt = creatureInstances_.find(guid); creatureIt != creatureInstances_.end()) {
+                // Down from the seat onto its own feet; the render sync
+                // puts it back on the ground.
+                cr->playAnimation(creatureIt->second, rendering::anim::STAND, true);
             }
         }
     }
@@ -2757,6 +2761,14 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
     creatureModelIds_[guid] = modelId;
     creatureDisplayIds_[guid] = displayId;
     creatureRenderPosCache_[guid] = renderPos;
+    // Already riding (UNIT_FIELD_MOUNTDISPLAYID in the create block, or a
+    // model rebuilt under a rider): its mount, as a player's.
+    if (gameHandler_) {
+        if (auto e = gameHandler_->getEntityManager().getEntity(guid); e && e->isUnit()) {
+            const uint32_t mount = static_cast<const game::Unit&>(*e).getMountDisplayId();
+            if (mount != 0) setRemotePlayerMountDisplayId(guid, mount);
+        }
+    }
     LOG_DEBUG("Spawned creature: guid=0x", std::hex, guid, std::dec,
              " displayId=", displayId, " at (", x, ", ", y, ", ", z, ")");
 }

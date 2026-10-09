@@ -581,6 +581,14 @@ constexpr StandStateAnims standStateAnims(uint8_t standState) {
     }
 }
 
+/// A riding unit's locomotion, which its mount plays (0x007385c0 hands the
+/// unit's animation to the mount model): Run, Walk or FlyForward on the
+/// move, FlyIdle hovering, else Stand. The rider holds Mount throughout.
+constexpr uint32_t mountLocomotion(bool moving, bool flying, bool walking) {
+    if (moving) return flying ? FLY_FORWARD : (walking ? WALK : RUN);
+    return flying ? FLY_IDLE : STAND;
+}
+
 } // namespace anim
 } // namespace rendering
 } // namespace wowee

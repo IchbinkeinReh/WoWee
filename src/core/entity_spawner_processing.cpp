@@ -1920,6 +1920,17 @@ bool EntitySpawner::loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
         }
     }
 
+    // The seat the artist placed, attachment 0 ("MountMain"), where the
+    // client hangs the rider (0x0073d5d0); the guess below only for a model
+    // that names none.
+    if (const auto* md = cr->getModelData(modelId)) {
+        for (const auto& att : md->attachments) {
+            if (att.id == 0 && att.position.z > 0.1f) {
+                riderHeight = att.position.z;
+                return true;
+            }
+        }
+    }
     if (const auto* md = cr->getModelData(modelId); md && !md->vertices.empty()) {
         float minZ = std::numeric_limits<float>::max();
         float maxZ = -std::numeric_limits<float>::max();
@@ -1958,8 +1969,15 @@ bool EntitySpawner::applyRemotePlayerMount(uint64_t guid, uint32_t displayId) {
         removeRemotePlayerMount(guid);
         return true;
     }
-    auto playerIt = playerInstances_.find(guid);
-    if (playerIt == playerInstances_.end()) return false;
+    // A player's or a creature's: the client mounts every unit the same way
+    // (0x00740450 -> 0x0073d5d0).
+    uint32_t riderInstance = 0;
+    if (auto playerIt = playerInstances_.find(guid); playerIt != playerInstances_.end()) {
+        riderInstance = playerIt->second;
+    } else if (auto creatureIt = creatureInstances_.find(guid); creatureIt != creatureInstances_.end()) {
+        riderInstance = creatureIt->second;
+    }
+    if (riderInstance == 0) return false;
 
     auto current = remotePlayerMounts_.find(guid);
     if (current != remotePlayerMounts_.end() && current->second.displayId == displayId) return true;
@@ -1974,7 +1992,7 @@ bool EntitySpawner::applyRemotePlayerMount(uint64_t guid, uint32_t displayId) {
         return true;
     }
     glm::vec3 pos(0.0f);
-    cr->getInstancePosition(playerIt->second, pos);
+    cr->getInstancePosition(riderInstance, pos);
     uint32_t mountInstance = cr->createInstance(modelId, pos, glm::vec3(0.0f), 1.0f);
     if (mountInstance != 0) {
         const bool moving = gameHandler_ && [&] {
@@ -1983,20 +2001,17 @@ bool EntitySpawner::applyRemotePlayerMount(uint64_t guid, uint32_t displayId) {
         }();
         const bool flying = creatureFlyingState_.count(guid) > 0;
         const bool walking = creatureWalkingState_.count(guid) > 0;
-        uint32_t mountAnim = moving
-            ? (flying ? rendering::anim::FLY_FORWARD
-                      : (walking ? rendering::anim::WALK : rendering::anim::RUN))
-            : (flying ? rendering::anim::FLY_IDLE : rendering::anim::STAND);
+        uint32_t mountAnim = rendering::anim::mountLocomotion(moving, flying, walking);
         if (!cr->hasAnimation(mountInstance, mountAnim)) {
             mountAnim = moving ? rendering::anim::RUN : rendering::anim::STAND;
         }
         cr->playAnimation(mountInstance, mountAnim, true);
-        cr->playAnimation(playerIt->second, rendering::anim::MOUNT, true);
+        cr->playAnimation(riderInstance, rendering::anim::MOUNT, true);
         remotePlayerMounts_[guid] = {.displayId = displayId, .modelId = modelId,
                                      .instanceId = mountInstance, .riderHeight = riderHeight};
         // Its own mount drawn now: a mount transition's ends (0x0073d5d0).
         if (auto* svs = renderer_->getSpellVisualSystem()) svs->onUnitMounted(guid);
-        LOG_INFO("Remote player mounted: guid=0x", std::hex, guid, std::dec,
+        LOG_INFO("Unit mounted: guid=0x", std::hex, guid, std::dec,
                  " displayId=", displayId, " riderHeight=", riderHeight,
                  " model=", modelPath);
     }
@@ -2027,6 +2042,8 @@ void EntitySpawner::despawnCreature(uint64_t guid) {
     creatureSpawnRetryWindowsUsed_.erase(guid);
     creaturePermanentFailureGuids_.erase(guid);
     deadCreatureGuids_.erase(guid);
+    pendingRemotePlayerMounts_.erase(guid);
+    removeRemotePlayerMount(guid);
 
     auto it = creatureInstances_.find(guid);
     if (it == creatureInstances_.end()) return;
