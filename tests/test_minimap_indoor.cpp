@@ -60,11 +60,12 @@ TEST_CASE("only the pictures reaching the area", "[minimap_indoor]") {
 }
 
 TEST_CASE("pictures are named after the WMO, the group and the tile", "[minimap_indoor]") {
+    // 0x007f3a70: past "World\\", and up to the last dot.
     const std::string base = mi::wmoBaseName("World\\wmo\\Dungeon\\KL_Deadmines\\Deadmines.wmo");
-    CHECK(base == "World\\wmo\\Dungeon\\KL_Deadmines\\Deadmines");
-    CHECK(mi::tileName(base, 7, 0, 12) ==
-          "World\\wmo\\Dungeon\\KL_Deadmines\\Deadmines_007_00_12");
-    CHECK(mi::wmoBaseName("World\\wmo.dir\\Thing") == "World\\wmo.dir\\Thing");
+    CHECK(base == "wmo\\Dungeon\\KL_Deadmines\\Deadmines");
+    CHECK(mi::tileName(base, 7, 0, 12) == "wmo\\Dungeon\\KL_Deadmines\\Deadmines_007_00_12");
+    CHECK(mi::wmoBaseName("WORLD/wmo/A/B.wmo") == "wmo/A/B");
+    CHECK(mi::wmoBaseName("wmo\\A\\B.wmo") == "wmo\\A\\B");
 }
 
 TEST_CASE("the area is the radius's cell grown by the radius", "[minimap_indoor]") {

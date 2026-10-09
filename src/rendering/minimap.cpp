@@ -375,9 +375,12 @@ void Minimap::setMapName(const std::string& name) {
 }
 
 namespace {
+// The client's table is keyed as SStrHashHT hashes: case and the way the
+// slashes lean do not matter.
 std::string lowerKey(std::string key) {
-    std::transform(key.begin(), key.end(), key.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) {
+        return c == '/' ? '\\' : static_cast<char>(std::tolower(c));
+    });
     return key;
 }
 }  // namespace
@@ -431,8 +434,7 @@ void Minimap::parseTRS() {
         if (hashFile.size() > 4 && hashFile.substr(hashFile.size() - 4) == ".blp")
             hashFile = hashFile.substr(0, hashFile.size() - 4);
 
-        // The client's table is keyed case-insensitively (SStrHashHT and
-        // SStrCmpI in 0x0055f4d0), so this one is too.
+        // Keyed case-insensitively, as 0x0055f4d0 looks it up.
         trsLookup[lowerKey(key)] = hashFile;
         count++;
     }

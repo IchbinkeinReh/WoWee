@@ -9,6 +9,7 @@
 /// from the box, and the box alone says how many there are and how big.
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -90,12 +91,23 @@ inline std::string tileName(const std::string& wmoBase, int group, int x, int y)
     return wmoBase + suffix;
 }
 
-/// The WMO's path as the pictures are named after it: the extension gone.
+/// The WMO's path as the pictures are named after it (0x007f3a70): the
+/// "World\\" in front gone - the client steps over its six characters - and
+/// everything from the last dot. "World\\wmo\\Dungeon\\X\\X.wmo" is filed as
+/// "wmo\\Dungeon\\X\\X".
 inline std::string wmoBaseName(const std::string& wmoPath) {
-    const auto dot = wmoPath.find_last_of('.');
-    const auto slash = wmoPath.find_last_of("\\/");
-    if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) return wmoPath;
-    return wmoPath.substr(0, dot);
+    std::string base = wmoPath;
+    constexpr const char kWorld[] = "world";
+    if (base.size() > 6 && (base[5] == '\\' || base[5] == '/')) {
+        bool world = true;
+        for (int i = 0; i < 5; ++i) {
+            if (std::tolower(static_cast<unsigned char>(base[i])) != kWorld[i]) world = false;
+        }
+        if (world) base.erase(0, 6);
+    }
+    const auto dot = base.find_last_of('.');
+    if (dot != std::string::npos) base.erase(dot);
+    return base;
 }
 
 /// The square of the world the indoor map is drawn from (0x007f5ba0): the
