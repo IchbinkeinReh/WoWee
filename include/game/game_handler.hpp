@@ -1086,10 +1086,6 @@ public:
     /// its own (0x007fff60).
     [[nodiscard]] uint32_t groundTargetObjectEntry() const;
     [[nodiscard]] float groundTargetObjectFacing() const;
-    /// The place a click on the world at this renderer point lands, with
-    /// the transport whose building it hit (wmoInstanceId, 0 for none) and
-    /// the point in its frame (0x00527360's event).
-    [[nodiscard]] ground_target::Place groundPlaceAt(const glm::vec3& renderPos, uint32_t wmoInstanceId) const;
     /// The pointer's place on the ground this frame (canonical; none when it
     /// is over no ground), remembered for CameraOrSelectOrMoveStop. Answers
     /// what the place is to the spell (0x00803ee0: 0 acceptable, 1 not, 2 too
