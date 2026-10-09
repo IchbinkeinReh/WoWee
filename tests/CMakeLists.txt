@@ -2730,6 +2730,11 @@ wowee_add_test(test_minimap_zoom
 wowee_add_test(test_minimap_blips
     SOURCES test_minimap_blips.cpp)
 
+# ── test_texture_variants ────────────────────────────────────
+# Interface art for additive drawing and Texture:SetDesaturated.
+wowee_add_test(test_texture_variants
+    SOURCES test_texture_variants.cpp)
+
 # ── test_screen_effect_state ─────────────────────────────────
 # The full-screen effects' CPU side: rows, drunk blur, wave, nether field, fog noise.
 wowee_add_test(test_screen_effect_state

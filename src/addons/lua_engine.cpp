@@ -3660,6 +3660,19 @@ int lua_Texture_SetBlendMode(lua_State* L) {
     }
     return 0;
 }
+// SetDesaturated(flag): drawn as its own luminance (Desaturate.bls). Answers
+// whether the shader is there - always - which SetItemButtonDesaturated reads
+// to decide against greying the icon with SetVertexColor instead.
+int lua_Texture_SetDesaturated(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->desaturated = lua_toboolean(L, 2) != 0;
+    lua_pushboolean(L, 1);
+    return 1;
+}
+int lua_Texture_IsDesaturated(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    lua_pushboolean(L, (w && w->desaturated) ? 1 : 0);
+    return 1;
+}
 int lua_Texture_GetBlendMode(lua_State* L) {
     auto* w = widgetOf(L, 1);
     lua_pushstring(L, (w && w->blendAdd) ? "ADD" : "BLEND");
@@ -4247,6 +4260,8 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("SetTexCoord", lua_Texture_SetTexCoord);
         set("SetBlendMode", lua_Texture_SetBlendMode);
         set("GetBlendMode", lua_Texture_GetBlendMode);
+        set("SetDesaturated", lua_Texture_SetDesaturated);
+        set("IsDesaturated", lua_Texture_IsDesaturated);
     }
     if (isFontString) {
         set("GetFont", lua_FontString_GetFont);
@@ -6990,6 +7005,8 @@ void LuaEngine::registerCoreAPI() {
         "SetBlendMode=1,SetBorderAlpha=1,SetBorderScalar=1,SetBorderTexture=1,\n"
         "SetButtonState=1,SetCamera=1,SetChecked=1,SetCheckedTexture=1,\n"
         "SetClampedToScreen=1,SetCooldown=1,\n"
+        // SetDesaturated is a real binding on textures now; kept here for
+        // anything else that asks.
         "SetCursorPosition=1,SetDesaturated=1,SetDisabledCheckedTexture=1,\n"
         "SetDisabledFontObject=1,SetDisabledTexture=1,SetDrawLayer=1,\n"
         "SetFacing=1,SetFillAlpha=1,SetFillTexture=1,SetFocus=1,\n"

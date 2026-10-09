@@ -1,5 +1,6 @@
 #include <cstring>
 #include "ui/widget_renderer.hpp"
+#include "ui/texture_variants.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/simple_html.hpp"
 #include "ui/link_hit.hpp"
@@ -44,6 +45,14 @@ uint32_t packColor(const float rgba[4], float alpha) {
     return IM_COL32(ch(rgba[0]), ch(rgba[1]), ch(rgba[2]), ch(rgba[3] * alpha));
 }
 
+/// A texture's vertex colour. Desaturate.bls reads the vertex alpha alone, so
+/// a desaturated texture takes no tint from SetVertexColor.
+uint32_t textureColor(const Widget& w) {
+    if (!w.desaturated) return packColor(w.color, w.alpha);
+    const float white[4] = {1.0f, 1.0f, 1.0f, w.color[3]};
+    return packColor(white, w.alpha);
+}
+
 
 /// WoW's inline markup, split into runs of text that share a colour.
 ///
@@ -65,24 +74,33 @@ void WidgetRenderer::initialize(pipeline::AssetManager* assets,
     vkCtx_ = vkCtx;
 }
 
-// Additive art is uploaded as its own image, because the same file can be
-// asked for both ways and the two differ in their alpha channel.
-static std::string cacheKey(const std::string& path, bool add) {
-    return add ? path + "|add" : path;
+// Additive and desaturated art are uploaded as images of their own, because
+// the same file can be asked for either way and they differ in their texels.
+static std::string cacheKey(const std::string& path, uint8_t variant) {
+    if (variant == 0) return path;
+    std::string key = path;
+    if (variant & 1u) key += "|add";             // kVariantAdd
+    if (variant & 2u) key += "|desat";           // kVariantDesaturate
+    return key;
 }
 
 const VkDescriptorSet* WidgetRenderer::cachedTexture(const std::string& path,
-                                                     bool add) const {
-    // The suffixed key is only built for additive art, which is a handful of
-    // frames rather than the whole screen. Everything else looks the path up
-    // as it stands and allocates nothing.
-    auto it = add ? textures_.find(cacheKey(path, true)) : textures_.find(path);
+                                                     uint8_t variant) const {
+    // The suffixed key is only built for additive or desaturated art, which
+    // is a handful of frames rather than the whole screen. Everything else
+    // looks the path up as it stands and allocates nothing.
+    auto it = variant != 0 ? textures_.find(cacheKey(path, variant)) : textures_.find(path);
     return (it == textures_.end()) ? nullptr : &it->second;
 }
 
-VkDescriptorSet WidgetRenderer::resident(const std::string& path, bool add) const {
+uint8_t WidgetRenderer::textureVariant(const Widget& w) {
+    return static_cast<uint8_t>((w.blendAdd ? kVariantAdd : 0) |
+                                (w.desaturated ? kVariantDesaturate : 0));
+}
+
+VkDescriptorSet WidgetRenderer::resident(const std::string& path, uint8_t variant) const {
     if (path.empty()) return kMissing;
-    const VkDescriptorSet* set = cachedTexture(path, add);
+    const VkDescriptorSet* set = cachedTexture(path, variant);
     return set ? *set : kMissing;
 }
 
@@ -139,8 +157,8 @@ std::vector<uint8_t> WidgetRenderer::readTextureFile(const std::string& path,
     return data;
 }
 
-VkDescriptorSet WidgetRenderer::texture(const std::string& path, bool add) {
-    const std::string key = cacheKey(path, add);
+VkDescriptorSet WidgetRenderer::texture(const std::string& path, uint8_t variant) {
+    const std::string key = cacheKey(path, variant);
     auto it = textures_.find(key);
     if (it != textures_.end()) return it->second;
     if (!assets_ || !vkCtx_ || path.empty()) return kMissing;
@@ -158,19 +176,18 @@ VkDescriptorSet WidgetRenderer::texture(const std::string& path, bool add) {
         textures_[key] = kMissing;
         return kMissing;
     }
-    if (add) {
+    if (variant & kVariantAdd) {
         // Additive blending is not something a single ImGui draw list can be
         // asked for - it has one pipeline and one blend state. But the art it
         // is used for is a glow on black, with no alpha channel of its own, and
         // over a dark scene "add" and "blend with alpha taken from brightness"
         // put nearly the same pixels on the screen. Black stays invisible,
         // which is the whole difference between a glow and a slab.
-        for (size_t i = 0; i + 3 < image.data.size(); i += 4) {
-            const uint8_t lum = std::max({image.data[i], image.data[i + 1],
-                                          image.data[i + 2]});
-            image.data[i + 3] = static_cast<uint8_t>((image.data[i + 3] * lum) / 255);
-        }
+        prepareAdditive(image.data);
     }
+    // Desaturate.bls reads the texture's own colour and only the vertex
+    // alpha, so the draw passes white for the rest (textureColor).
+    if (variant & kVariantDesaturate) prepareDesaturated(image.data);
     VkDescriptorSet set = vkCtx_->uploadImGuiTexture(image.data.data(),
                                                      image.width, image.height);
     textures_[key] = set;
@@ -1993,7 +2010,7 @@ void WidgetRenderer::reportWidgetDiagnostics(WidgetTree& tree,
                     w->rectW <= 0.0f || w->rectH <= 0.0f || offscreen ||
                     (w->visible && w->kind == WidgetKind::Texture &&
                      w->externalTexture == 0 && !w->texturePath.empty() &&
-                     resident(w->texturePath, w->blendAdd) == kMissing);
+                     resident(w->texturePath, textureVariant(*w)) == kMissing);
                 if (!askedFor && !troubled) { ++quiet; continue; }
                 report("  ", name,
                             (w->visible ? " shown" : " HIDDEN"), mouse, kindName, anchors,
@@ -2015,7 +2032,7 @@ void WidgetRenderer::reportWidgetDiagnostics(WidgetTree& tree,
                             // a .blp that was on disk all along.
                             (w->visible && w->kind == WidgetKind::Texture &&
                              w->externalTexture == 0 && !w->texturePath.empty() &&
-                             resident(w->texturePath, w->blendAdd) == kMissing
+                             resident(w->texturePath, textureVariant(*w)) == kMissing
                                  ? " NOTRESIDENT" : ""),
                             (w->texturePath.empty() ? "" : " tex="), w->texturePath);
             }
@@ -2045,7 +2062,7 @@ void WidgetRenderer::reportWidgetDiagnostics(WidgetTree& tree,
                         // draws nothing at all, and looks identical in a list
                         // of what was "drawn" to one that worked.
                         (w->kind == WidgetKind::Texture && !w->solidColor
-                             ? (resident(w->texturePath, w->blendAdd) == kMissing
+                             ? (resident(w->texturePath, textureVariant(*w)) == kMissing
                                     ? " NOTRESIDENT" : "")
                              : ""),
                         // The vertex colour multiplies the image, so a zero
@@ -2228,13 +2245,13 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     // appearing a frame or two later, which is invisible, and shortens each
     // stall to something that cannot sit across a driver's patience.
     constexpr int kUploadsPerFrame = 3;
-    std::vector<std::pair<const std::string*, bool>> wanted;
+    std::vector<std::pair<const std::string*, uint8_t>> wanted;
     wanted.reserve(kUploadsPerFrame);
-    auto want = [&](const std::string& path, bool add = false) {
+    auto want = [&](const std::string& path, uint8_t variant = 0) {
         if (static_cast<int>(wanted.size()) >= kUploadsPerFrame || path.empty()) return;
-        if (cachedTexture(path, add)) return;
-        for (const auto& p : wanted) if (*p.first == path && p.second == add) return;
-        wanted.emplace_back(&path, add);
+        if (cachedTexture(path, variant)) return;
+        for (const auto& p : wanted) if (*p.first == path && p.second == variant) return;
+        wanted.emplace_back(&path, variant);
     };
     // An inline texture is named inside the text rather than in a field of
     // its own, so this pass never saw one: |TInterface\MoneyFrame\UI-GoldIcon|t
@@ -2252,7 +2269,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
         for (const auto& run : parseMarkup(text)) {
             if (run.texture.empty()) continue;
             if (static_cast<int>(wanted.size()) >= kUploadsPerFrame) return;
-            if (cachedTexture(run.texture, false)) continue;
+            if (cachedTexture(run.texture, 0)) continue;
             markupPaths.push_back(run.texture);
             want(markupPaths.back());
         }
@@ -2261,7 +2278,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     for (const Widget* w : order) {
         if (static_cast<int>(wanted.size()) >= kUploadsPerFrame) break;
         if (w->kind == WidgetKind::Texture && !w->solidColor)
-            want(w->texturePath, w->blendAdd);
+            want(w->texturePath, textureVariant(*w));
         if (!w->text.empty()) wantMarkup(w->text);
         for (const auto& line : w->tooltipLines) {
             wantMarkup(line.left);
@@ -2274,7 +2291,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             for (const HtmlBlock& b : parseSimpleHtml(w->text)) {
                 if (b.kind != HtmlBlock::Kind::Image) continue;
                 if (static_cast<int>(wanted.size()) >= kUploadsPerFrame) break;
-                if (cachedTexture(b.src, false)) continue;
+                if (cachedTexture(b.src, 0)) continue;
                 markupPaths.push_back(b.src);
                 want(markupPaths.back());
             }
@@ -2871,7 +2888,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 // Only what is already resident. Anything still queued draws on
                 // a later frame rather than forcing an upload here.
                 const VkDescriptorSet* set =
-                    cachedTexture(w->texturePath, w->blendAdd);
+                    cachedTexture(w->texturePath, textureVariant(*w));
                 if (!set || *set == kMissing) continue;
                 tex = *set;
             }
@@ -2922,7 +2939,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                  ImVec2(q[4], q[5]),   // upper-right
                                  ImVec2(q[6], q[7]),   // lower-right
                                  ImVec2(q[2], q[3]),   // lower-left
-                                 packColor(w->color, w->alpha));
+                                 textureColor(*w));
             } else if (live && w->isUnitPortrait &&
                        std::fabs((x1 - x0) - (y1 - y0)) <= 0.02f * (x1 - x0)) {
                 // A face, drawn as the disc the interface expects.
@@ -2940,7 +2957,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 const ImVec2 centre((x0 + x1) * 0.5f, (y0 + y1) * 0.5f);
                 const float rx = (x1 - x0) * 0.5f;
                 const float ry = (y1 - y0) * 0.5f;
-                const ImU32 col = packColor(w->color, w->alpha);
+                const ImU32 col = textureColor(*w);
                 dl->PushTextureID(reinterpret_cast<ImTextureID>(tex));
                 dl->PrimReserve(kSegments * 3, kSegments + 1);
                 const unsigned int base = dl->_VtxCurrentIdx;
@@ -2967,7 +2984,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             } else {
                 dl->AddImage(reinterpret_cast<ImTextureID>(tex),
                              ImVec2(x0, y0), ImVec2(x1, y1), uv0, uv1,
-                             packColor(w->color, w->alpha));
+                             textureColor(*w));
             }
         } else if (w->kind == WidgetKind::FontString) {
             // Font objects carry a height, and honouring it is most of what

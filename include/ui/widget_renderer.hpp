@@ -76,9 +76,20 @@ private:
     /// Descriptor set for an Interface\ path, loading it on first use. Returns
     /// VK_NULL_HANDLE for anything missing, and remembers the failure so a
     /// mistyped path is not re-read every frame.
-    VkDescriptorSet texture(const std::string& path, bool add = false);
+    ///
+    /// `variant` picks how the art is prepared (kVariantAdd,
+    /// kVariantDesaturate), each its own upload.
+    VkDescriptorSet texture(const std::string& path, uint8_t variant = 0);
     /// Already-uploaded texture for a path, without triggering an upload.
-    [[nodiscard]] VkDescriptorSet resident(const std::string& path, bool add = false) const;
+    [[nodiscard]] VkDescriptorSet resident(const std::string& path, uint8_t variant = 0) const;
+
+    /// Additive art: alpha from its brightness (see texture()).
+    static constexpr uint8_t kVariantAdd = 1;
+    /// Texture:SetDesaturated: the art's luminance (0.299, 0.587, 0.114) in
+    /// all three channels, as the interface's Desaturate.bls draws it
+    /// (CSimpleTop, 0x00483060).
+    static constexpr uint8_t kVariantDesaturate = 2;
+    static uint8_t textureVariant(const Widget& w);
 
     /// scale is pixels per interface unit. The rect arrives in pixels, but a
     /// backdrop's insets and edge size are authored in units like everything
@@ -163,7 +174,7 @@ private:
     /// look it up. The draw pass does that twice for every texture on screen,
     /// every frame.
     [[nodiscard]] const VkDescriptorSet* cachedTexture(const std::string& path,
-                                                       bool add) const;
+                                                       uint8_t variant) const;
     /// Image dimensions by path, including the ones that could not be read -
     /// stored as zero so a missing file is looked for once and not once a frame.
     std::unordered_map<std::string, std::pair<float, float>> textureSizes_;

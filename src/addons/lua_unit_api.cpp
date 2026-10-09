@@ -3102,10 +3102,8 @@ void registerUnitLuaAPI(lua_State* L) {
                 // Answering no meant a picked-up item stayed drawn in the slot
                 // it had already left.
                 //
-                // It does show, despite SetDesaturated being a no-op here:
-                // SetItemButtonDesaturated reads the return value as
-                // "shaderSupported" and greys with SetVertexColor(0.5) when it
-                // is falsy, which is the branch a no-op takes.
+                // It shows as SetItemButtonDesaturated draws it: the icon
+                // desaturated (Texture:SetDesaturated, Desaturate.bls).
                 {"IsInventoryItemLocked",   [](lua_State* L) -> int {
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
             lua_pushboolean(L, slot > 0 && cursorEquipSlot() == slot);
