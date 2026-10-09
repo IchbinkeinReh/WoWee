@@ -127,6 +127,29 @@ constexpr int lockDataIndex(uint32_t gameObjectType) {
     return gameObjectType == 3 ? 0 : gameObjectType == 25 ? 4 : -1;
 }
 
+/// Interface\Minimap\POIIcons: 196 icons of 18 pixels, as many to a row as
+/// the square root of that (0x005832f0) - 14 - each a pixel in from its top
+/// left. AreaPOI's icons, a gossip point's and the corpse's are cells of it.
+constexpr int kPoiIconCount = 196;
+constexpr int kPoiIconColumns = 14;
+constexpr float kPoiIconPixels = 18.0f;
+/// The corpse's icon (0x007f4990).
+constexpr int kCorpsePoiIcon = 8;
+/// A point of interest further than this many yards gets no rim arrow - the
+/// corpse excepted (0x007f44a0).
+constexpr float kPoiArrowReach = 694.44446f;
+
+/// POIIcons cell `icon` of a texture `textureWidth` pixels wide (the client
+/// divides both ways by the width).
+constexpr Cell poiIconCell(int icon, int textureWidth) {
+    const float w = textureWidth > 0 ? static_cast<float>(textureWidth) : 256.0f;
+    const float px = 1.0f / w;
+    const float cell = kPoiIconPixels / w;
+    const float column = static_cast<float>(icon % kPoiIconColumns);
+    const float row = static_cast<float>(icon / kPoiIconColumns);
+    return {column * cell + px, row * cell + px, (column + 1.0f) * cell, (row + 1.0f) * cell};
+}
+
 /// The quest-giver status (DIALOG_STATUS_*) to its ObjectIcons cell, or -1
 /// for none. 0x0057f7f0: 10 is the ?, 8 the !, 7 the blue !; 2 and 4, the
 /// low-level ones, only while the "Low Level Quests" tracking is chosen.

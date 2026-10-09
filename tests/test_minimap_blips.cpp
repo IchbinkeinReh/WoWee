@@ -144,3 +144,14 @@ TEST_CASE("sides by race", "[minimap_blips]") {
     CHECK(mb::raceTeam(10) == 1);
     CHECK(mb::raceTeam(0) == -1);
 }
+
+TEST_CASE("POIIcons is 14 icons of 18 pixels to a row", "[minimap_blips]") {
+    const auto corpse = mb::poiIconCell(mb::kCorpsePoiIcon, 256);
+    CHECK(corpse.u0 == Catch::Approx((8.0f * 18.0f + 1.0f) / 256.0f));
+    CHECK(corpse.u1 == Catch::Approx(9.0f * 18.0f / 256.0f));
+    CHECK(corpse.v0 == Catch::Approx(1.0f / 256.0f));
+    CHECK(corpse.v1 == Catch::Approx(18.0f / 256.0f));
+    const auto second = mb::poiIconCell(15, 256);
+    CHECK(second.u0 == Catch::Approx(19.0f / 256.0f));
+    CHECK(second.v0 == Catch::Approx(19.0f / 256.0f));
+}

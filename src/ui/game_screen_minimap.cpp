@@ -110,12 +110,17 @@ namespace {
         VkDescriptorSet playerArrow = VK_NULL_HANDLE;
         int playerArrowWidth = 0;
         int playerArrowHeight = 0;
+        VkDescriptorSet poiIcons = VK_NULL_HANDLE;
+        int poiIconsWidth = 0;
+        int poiIconsHeight = 0;
+        VkDescriptorSet corpseArrow = VK_NULL_HANDLE;
+        VkDescriptorSet guideArrow = VK_NULL_HANDLE;
     };
 
     const MinimapArt& minimapArt(wowee::pipeline::AssetManager* assets,
                                  wowee::core::Window* window) {
         static MinimapArt art;
-        static bool gaveUp[4] = {};
+        static bool gaveUp[7] = {};
         const auto load = [&](int slot, VkDescriptorSet& set, const char* path,
                               int* width = nullptr, int* height = nullptr) {
             if (set || gaveUp[slot] || !assets) return;
@@ -131,7 +136,40 @@ namespace {
         load(2, art.groupArrow, "Interface\\Minimap\\Rotating-MinimapGroupArrow.blp");
         load(3, art.playerArrow, "Interface\\Minimap\\MinimapArrow.blp",
              &art.playerArrowWidth, &art.playerArrowHeight);
+        load(4, art.poiIcons, "Interface\\Minimap\\POIIcons.blp",
+             &art.poiIconsWidth, &art.poiIconsHeight);
+        load(5, art.corpseArrow, "Interface\\Minimap\\Rotating-MinimapCorpseArrow.blp");
+        load(6, art.guideArrow, "Interface\\Minimap\\Rotating-MinimapGuideArrow.blp");
         return art;
+    }
+
+    /// A Rotating-Minimap*Arrow at the rim of a map centred on (cx, cy),
+    /// pointing along `bearing` (0 up, toward the left as it grows), as
+    /// 0x00580ae0 and 0x0057d860 place and turn it. Returns where its middle
+    /// is.
+    ImVec2 drawRimArrow(ImDrawList* drawList, VkDescriptorSet texture, float cx, float cy,
+                        float unitPx, float bearing) {
+        namespace mb = wowee::rendering::minimap_blips;
+        const auto mid = mb::rimArrowOffset(bearing);
+        const float ax = cx + mid[0] * unitPx;
+        const float ay = cy - mid[1] * unitPx;
+        ImVec2 corners[4];
+        const float uv[4][2] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
+        for (int i = 0; i < 4; ++i) {
+            const auto p = mb::rimArrowArtPoint(bearing, uv[i][0], uv[i][1]);
+            corners[i] = ImVec2(ax + p[0] * unitPx, ay - p[1] * unitPx);
+        }
+        drawList->AddImageQuad((ImTextureID)(uintptr_t)texture,
+                               corners[0], corners[1], corners[2], corners[3],
+                               ImVec2(0.0f, 0.0f), ImVec2(1.0f, 0.0f),
+                               ImVec2(1.0f, 1.0f), ImVec2(0.0f, 1.0f));
+        return ImVec2(ax, ay);
+    }
+
+    /// The bearing of a minimap offset (x right, y down): 0 up, toward the
+    /// left as it grows - a facing on a north-up map.
+    float offsetBearing(const glm::vec2& offset) {
+        return std::atan2(-offset.x, -offset.y);
     }
 
     /// The LockType bits a Lock.dbc row opens to skill
@@ -1002,37 +1040,42 @@ void GameScreen::renderMinimapObjectBlips(const MinimapFrame& frame, const Entit
     if (tooltip) ImGui::SetTooltip("%s", tooltip);
 }
 
-// The points a gossip window has pointed at - quest and service targets.
+// The point a gossip window has pointed at (SMSG_GOSSIP_POI), as the client
+// keeps it: one of the static points of interest (0x007f4870), drawn as its
+// POIIcons icon within 0.8 of the reach and as a Rotating-MinimapGuideArrow
+// at the rim beyond it, out to 694 yards (0x007f44a0, 0x0057d860).
+//
+// A quest's points are not drawn: SMSG_QUEST_POI is the world map's, and
+// the minimap draws nothing of it.
 void GameScreen::renderMinimapGossipPois(const MinimapFrame& frame, game::GameHandler& gameHandler) {
-    // Gossip POI markers (quest / NPC navigation targets)
+    const MinimapArt& art = minimapArt(services_.assetManager, services_.window);
+    const float unitPx = frame.unitPixels();
+    const float size = minimap_blips::kBlipSize * unitPx;
     for (const auto& poi : gameHandler.getGossipPois()) {
-        // A gossip target always, a quest's points while it is tracked.
-        if (poi.questObjectiveIndex != -2 && !gameHandler.isQuestTracked(poi.data)) {
+        if (poi.questObjectiveIndex != -2) continue;
+        const glm::vec3 render = core::coords::canonicalToRender(glm::vec3(poi.x, poi.y, 0.0f));
+        const glm::vec2 offset = renderDeltaToMinimapOffset(
+            render.x - frame.playerRender.x, render.y - frame.playerRender.y, frame.view);
+        const float offsetLen = std::sqrt(offset.x * offset.x + offset.y * offset.y);
+        if (offsetLen <= frame.mapRadius * minimap_blips::kBlipReach) {
+            if (!art.poiIcons || poi.icon >= static_cast<uint32_t>(minimap_blips::kPoiIconCount)) continue;
+            const float sx = frame.centerX + offset.x;
+            const float sy = frame.centerY + offset.y;
+            drawAtlasBlip(frame.drawList, art.poiIcons, sx, sy, size,
+                          minimap_blips::poiIconCell(static_cast<int>(poi.icon), art.poiIconsWidth));
+            if (!poi.name.empty() && cursorNearBlip(sx, sy, size * 0.5f)) {
+                ImGui::SetTooltip("%s", poi.name.c_str());
+            }
             continue;
         }
-        // Convert WoW canonical coords to render coords for minimap projection
-        float sx = 0.0f, sy = 0.0f;
-        if (!frame.projectCanonical(poi.x, poi.y, sx, sy)) continue;
-
-        // Draw as a cyan diamond with tooltip on hover
-        const float d = 5.0f;
-        ImVec2 pts[4] = {
-            { sx,     sy - d },
-            { sx + d, sy     },
-            { sx,     sy + d },
-            { sx - d, sy     },
-        };
-        frame.drawList->AddConvexPolyFilled(pts, 4, IM_COL32(0, 210, 255, 220));
-        frame.drawList->AddPolyline(pts, 4, IM_COL32(255, 255, 255, 160), true, 1.0f);
-
-        // Show name label if cursor is within ~8px
-        ImVec2 cursorPos = ImGui::GetMousePos();
-        float dx = cursorPos.x - sx, dy = cursorPos.y - sy;
-        if (!poi.name.empty() && (dx * dx + dy * dy) < 64.0f) {
+        const float yards = offsetLen / frame.mapRadius * frame.view.viewRadius;
+        if (!art.guideArrow || yards > minimap_blips::kPoiArrowReach) continue;
+        const ImVec2 mid = drawRimArrow(frame.drawList, art.guideArrow, frame.centerX,
+                                        frame.centerY, unitPx, offsetBearing(offset));
+        if (!poi.name.empty() && cursorNearBlip(mid.x, mid.y, kArrowHoverRadius)) {
             ImGui::SetTooltip("%s", poi.name.c_str());
         }
     }
-
 }
 
 // What a party member pinged, for as long as the ping lasts.
@@ -1113,22 +1156,9 @@ void GameScreen::renderMinimapPartyDots(const MinimapFrame& frame, game::GameHan
         }
 
         if (!art.groupArrow || offsetLen <= 0.0f) continue;
-        // A facing: 0 up the map, turning toward the left.
-        const float bearing = std::atan2(-offset.x, -offset.y);
-        const auto mid = minimap_blips::rimArrowOffset(bearing);
-        const float ax = frame.centerX + mid[0] * unitPx;
-        const float ay = frame.centerY - mid[1] * unitPx;
-        ImVec2 corners[4];
-        const float uv[4][2] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
-        for (int i = 0; i < 4; ++i) {
-            const auto p = minimap_blips::rimArrowArtPoint(bearing, uv[i][0], uv[i][1]);
-            corners[i] = ImVec2(ax + p[0] * unitPx, ay - p[1] * unitPx);
-        }
-        frame.drawList->AddImageQuad((ImTextureID)(uintptr_t)art.groupArrow,
-                                     corners[0], corners[1], corners[2], corners[3],
-                                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 0.0f),
-                                     ImVec2(1.0f, 1.0f), ImVec2(0.0f, 1.0f));
-        if (!member.name.empty() && cursorNearBlip(ax, ay, kArrowHoverRadius)) {
+        const ImVec2 mid = drawRimArrow(frame.drawList, art.groupArrow, frame.centerX,
+                                        frame.centerY, unitPx, offsetBearing(offset));
+        if (!member.name.empty() && cursorNearBlip(mid.x, mid.y, kArrowHoverRadius)) {
             ImGui::SetTooltip("%s", member.name.c_str());
         }
     }
@@ -1179,83 +1209,42 @@ void GameScreen::renderMinimapBattlegroundPositions(const MinimapFrame& frame, g
 
 }
 
-// Where the corpse is, while the player is a ghost.
-//
-// Unlike every marker above it, a corpse off the edge of the map is not
-// skipped - it becomes an arrow at the rim pointing at it, which is why this
-// one keeps the render position rather than only the projected point.
+// Where the corpse is, while the player is a ghost: the static point of
+// interest 0x007f4990 sets, POIIcons' icon 8, within 0.8 of the reach, and a
+// Rotating-MinimapCorpseArrow at the rim beyond it - at any distance, the
+// corpse being the one point 0x007f44a0 keeps an arrow for however far.
 void GameScreen::renderMinimapCorpseMarker(const MinimapFrame& frame, game::GameHandler& gameHandler) {
-    // Corpse direction indicator - shown when player is a ghost
-    if (gameHandler.isPlayerGhost()) {
-        float corpseCanX = 0.0f, corpseCanY = 0.0f;
-        if (gameHandler.getCorpseCanonicalPos(corpseCanX, corpseCanY)) {
-            // The render position is kept: unlike the loops above, a corpse off
-            // the edge is not skipped - it gets a direction arrow at the rim,
-            // and that needs the direction.
-            const glm::vec3 corpseRender =
-                core::coords::canonicalToRender(glm::vec3(corpseCanX, corpseCanY, 0.0f));
-            float csx = 0.0f, csy = 0.0f;
-            const bool onMap = frame.project(corpseRender, csx, csy);
+    if (!gameHandler.isPlayerGhost()) return;
+    float corpseCanX = 0.0f, corpseCanY = 0.0f;
+    if (!gameHandler.getCorpseCanonicalPos(corpseCanX, corpseCanY)) return;
 
-            if (onMap) {
-                // Draw a small skull-like X marker at the corpse position
-                const float r = 5.0f;
-                frame.drawList->AddCircleFilled(ImVec2(csx, csy), r + 1.0f, IM_COL32(0, 0, 0, 140), 12);
-                frame.drawList->AddCircle(ImVec2(csx, csy), r + 1.0f, IM_COL32(200, 200, 220, 220), 12, 1.5f);
-                // Draw an X in the circle
-                frame.drawList->AddLine(ImVec2(csx - 3.0f, csy - 3.0f), ImVec2(csx + 3.0f, csy + 3.0f),
-                                  IM_COL32(180, 180, 220, 255), 1.5f);
-                frame.drawList->AddLine(ImVec2(csx + 3.0f, csy - 3.0f), ImVec2(csx - 3.0f, csy + 3.0f),
-                                  IM_COL32(180, 180, 220, 255), 1.5f);
-                // Tooltip on hover
-                if (cursorNearBlip(csx, csy)) {
-                    float dist = gameHandler.getCorpseDistance();
-                    if (dist >= 0.0f)
-                        ImGui::SetTooltip("Your corpse (%.0f yd)", dist);
-                    else
-                        ImGui::SetTooltip("Your corpse");
-                }
-            } else {
-                // Corpse is outside minimap - draw an edge arrow pointing toward it
-                float dx = corpseRender.x - frame.playerRender.x;
-                float dy = corpseRender.y - frame.playerRender.y;
-                // Only the direction is wanted here, and the projection's
-                // scale is uniform and positive, so it falls out of the
-                // normalisation below.
-                const glm::vec2 dir = renderDeltaToMinimapOffset(dx, dy, frame.view);
-                float rx = dir.x;
-                float ry = dir.y;
-                float len = std::sqrt(rx * rx + ry * ry);
-                if (len > 0.001f) {
-                    float nx = rx / len;
-                    float ny = ry / len;
-                    // Place arrow at the minimap edge
-                    float edgeR = frame.mapRadius - 7.0f;
-                    float ax = frame.centerX + nx * edgeR;
-                    float ay = frame.centerY + ny * edgeR;
-                    // Arrow pointing outward (toward corpse)
-                    float arrowLen = 6.0f;
-                    float arrowW = 3.5f;
-                    ImVec2 tip(ax + nx * arrowLen, ay + ny * arrowLen);
-                    ImVec2 left(ax - ny * arrowW - nx * arrowLen * 0.4f,
-                                ay + nx * arrowW - ny * arrowLen * 0.4f);
-                    ImVec2 right(ax + ny * arrowW - nx * arrowLen * 0.4f,
-                                 ay - nx * arrowW - ny * arrowLen * 0.4f);
-                    frame.drawList->AddTriangleFilled(tip, left, right, IM_COL32(180, 180, 240, 230));
-                    frame.drawList->AddTriangle(tip, left, right, IM_COL32(0, 0, 0, 180), 1.0f);
-                    // Tooltip on hover
-                    if (cursorNearBlip(ax, ay, kArrowHoverRadius)) {
-                        float dist = gameHandler.getCorpseDistance();
-                        if (dist >= 0.0f)
-                            ImGui::SetTooltip("Your corpse (%.0f yd)", dist);
-                        else
-                            ImGui::SetTooltip("Your corpse");
-                    }
-                }
-            }
-        }
+    const MinimapArt& art = minimapArt(services_.assetManager, services_.window);
+    const float unitPx = frame.unitPixels();
+    const glm::vec3 corpse = core::coords::canonicalToRender(glm::vec3(corpseCanX, corpseCanY, 0.0f));
+    const glm::vec2 offset = renderDeltaToMinimapOffset(
+        corpse.x - frame.playerRender.x, corpse.y - frame.playerRender.y, frame.view);
+    const float offsetLen = std::sqrt(offset.x * offset.x + offset.y * offset.y);
+
+    ImVec2 at;
+    float hover = kBlipHoverRadius;
+    if (offsetLen <= frame.mapRadius * minimap_blips::kBlipReach) {
+        if (!art.poiIcons) return;
+        const float size = minimap_blips::kBlipSize * unitPx;
+        at = ImVec2(frame.centerX + offset.x, frame.centerY + offset.y);
+        drawAtlasBlip(frame.drawList, art.poiIcons, at.x, at.y, size,
+                      minimap_blips::poiIconCell(minimap_blips::kCorpsePoiIcon, art.poiIconsWidth));
+        hover = size * 0.5f;
+    } else {
+        if (!art.corpseArrow) return;
+        at = drawRimArrow(frame.drawList, art.corpseArrow, frame.centerX, frame.centerY, unitPx,
+                          offsetBearing(offset));
+        hover = kArrowHoverRadius;
     }
-
+    if (cursorNearBlip(at.x, at.y, hover)) {
+        const float dist = gameHandler.getCorpseDistance();
+        if (dist >= 0.0f) ImGui::SetTooltip("Your corpse (%.0f yd)", dist);
+        else ImGui::SetTooltip("Your corpse");
+    }
 }
 
 // The player: Interface\Minimap\MinimapArrow at the centre, at the size of
