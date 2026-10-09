@@ -7,6 +7,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 namespace un = wowee::game::unit_names;
 
@@ -200,4 +201,25 @@ TEST_CASE("the plate's threat flash and name colours", "[unit_names][nameplate]"
     CHECK(un::plateNameColor(true, true) == 0xffff0000u);
     CHECK(un::plateNameColor(false, true) == 0xffffff00u);
     CHECK(un::plateNameColor(false, false) == 0xffffffffu);
+}
+
+TEST_CASE("a Mirror Image is named as the caster of its aura 279", "[unit_names]") {
+    struct Aura {
+        uint32_t spellId;
+        uint8_t flags;
+        uint64_t casterGuid;
+    };
+    // 45204 applies 279 on its effect 1; 1459 applies something else.
+    auto auraIds = [](uint32_t spellId, int k) -> uint32_t {
+        if (spellId == 45204) return k == 1 ? 279u : 0u;
+        if (spellId == 1459) return 79u;
+        return 0u;
+    };
+    const std::vector<Aura> none{{1459, 0x7, 0x11}};
+    CHECK(un::cloneCasterGuid(none, auraIds) == 0);
+    // The aura has to carry the effect that applies it.
+    const std::vector<Aura> otherEffect{{45204, 0x1, 0x22}};
+    CHECK(un::cloneCasterGuid(otherEffect, auraIds) == 0);
+    const std::vector<Aura> clone{{0, 0x2, 0x99}, {1459, 0x1, 0x11}, {45204, 0x2, 0x22}};
+    CHECK(un::cloneCasterGuid(clone, auraIds) == 0x22);
 }

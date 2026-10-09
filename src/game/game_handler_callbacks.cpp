@@ -1,4 +1,5 @@
 #include "game/ground_target.hpp"
+#include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
 #include "game/game_handler.hpp"
 #include "game/reputation_standing.hpp"
@@ -2395,6 +2396,30 @@ uint32_t GameHandler::groundTargetSpellId() const {
 spell_mods::Sum GameHandler::getSpellModifiers(uint32_t spellId, SpellModOp op) const {
     return spellHandler_ ? spellHandler_->spellModifiers(spellId, static_cast<uint8_t>(op)) : spell_mods::Sum{};
 }
+uint64_t GameHandler::cloneCasterGuid(const Unit& unit) const {
+    const auto* auras = getUnitAuras(unit.getGuid());
+    if (!auras || auras->empty()) return 0;
+    return unit_names::cloneCasterGuid(*auras, [this](uint32_t spellId, int k) -> uint32_t {
+        getSpellName(spellId);  // fills the cache
+        auto it = spellNameCache_.find(spellId);
+        return it != spellNameCache_.end() ? it->second.effectAuraIds[k] : 0u;
+    });
+}
+
+std::string GameHandler::shownUnitName(const Unit& unit) {
+    const uint64_t caster = cloneCasterGuid(unit);
+    if (caster == 0) return unit.getName();
+    // The caster's own name while it is about; else what is cached for it
+    // (0x0074d750), which a name query fills for a player.
+    if (auto e = entityController_->getEntityManager().getEntity(caster); e && e->isUnit()) {
+        const auto& u = static_cast<const Unit&>(*e);
+        if (!u.getName().empty()) return u.getName();
+    }
+    const std::string& cached = lookupName(caster);
+    if (cached.empty() && (caster >> 48) == 0) queryPlayerName(caster);
+    return cached;
+}
+
 bool GameHandler::cancelGroundTargeting() { return spellHandler_ && spellHandler_->cancelGroundTargeting(); }
 bool GameHandler::turnOrCancelGroundTargeting() {
     return spellHandler_ && spellHandler_->turnOrCancelGroundTargeting();

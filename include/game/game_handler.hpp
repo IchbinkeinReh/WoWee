@@ -1836,6 +1836,11 @@ public:
 
     // Look up a display name for any guid: checks playerNameCache then entity manager.
     // Returns empty string if unknown. Used by chat display to resolve names at render time.
+    /// A unit's name as the client gives it (0x0072a000): a Mirror Image's
+    /// (aura 279) is its caster's.
+    std::string shownUnitName(const Unit& unit);
+    /// The caster of the unit's aura 279, 0 for none (0x0072a000).
+    uint64_t cloneCasterGuid(const Unit& unit) const;
     const std::string& lookupName(uint64_t guid) const {
         return entityController_->lookupName(guid);
     }

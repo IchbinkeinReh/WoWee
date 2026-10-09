@@ -291,7 +291,12 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // 0x0072d4f0: tags, the name with its title, then the guild or the
         // creature's title on lines of their own.
         std::string text;
-        const std::string& name = unit.getName();
+        // A Mirror Image (aura 279) is named as its caster, and while the
+        // caster is about its text is the caster's (0x0072d4f0 calls itself
+        // for it): no title of a creature's under it.
+        const std::string name = gameHandler.shownUnitName(unit);
+        const uint64_t cloneOf = gameHandler.cloneCasterGuid(unit);
+        const bool asCaster = cloneOf != 0 && gameHandler.getEntityManager().getEntity(cloneOf) != nullptr;
         if (isPlayer) {
             const uint16_t pf = game::fieldIndex(game::UF::PLAYER_FLAGS);
             uint32_t flags = pf != 0xFFFF ? e.getField(pf) : 0;
@@ -319,11 +324,12 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
             text = name;
             const uint16_t petNumber = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
             const bool hasPetNumber = petNumber != 0xFFFF && e.getField(petNumber) != 0;
-            if (!hasPetNumber) {
+            if (!hasPetNumber && !asCaster) {
                 const std::string sub = gameHandler.getCachedCreatureSubName(unit.getEntry());
                 if (!sub.empty()) text += "\n<" + sub + ">";
             }
-            if (const std::string title = summonTitleLine(gameHandler, e, unit); !title.empty())
+            if (const std::string title = asCaster ? std::string{} : summonTitleLine(gameHandler, e, unit);
+                !title.empty())
                 text += "\n<" + title + ">";
         }
         if (text.empty()) return;
@@ -626,7 +632,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // level at 0.009 in its difficulty colour, centred 0.092 in from the
         // right and 0.284 up - or the skull for a hostile unit ten levels
         // over the player, or a boss (0x0098ef10).
-        const std::string& name = unit->getName();
+        const std::string name = gameHandler.shownUnitName(*unit);
         if (!name.empty()) {
             const float px = 0.01f * ui;
             const ImVec2 sz = font->CalcTextSizeA(px, FLT_MAX, 0.0f, name.c_str());

@@ -284,6 +284,25 @@ inline std::string summonTitleText(int title, const std::string& owner, const st
     return formatOwner(localized.empty() ? kSummonTitlesEnUS[title] : localized, owner);
 }
 
+/// 0x0072a000 and 0x0072d4f0: a unit under an aura whose spell applies aura
+/// 279 (CLONE_CASTER, Mirror Image's) on an effect the aura has - its flags'
+/// bit for that effect index - is named as that aura's caster: the caster's
+/// own name while it is about, else the name cached for its guid. 0 when
+/// the unit has no such aura. `auraIdsOf(spellId, k)` is the spell's
+/// EffectApplyAuraName k, 0 for none or an unknown spell.
+inline constexpr uint32_t kAuraCloneCaster = 279;
+template <class Auras, class AuraIdsOf>
+uint64_t cloneCasterGuid(const Auras& auras, AuraIdsOf auraIdsOf) {
+    for (const auto& a : auras) {
+        if (a.spellId == 0) continue;
+        for (int k = 0; k < 3; ++k) {
+            if ((a.flags & (1u << k)) == 0) continue;
+            if (auraIdsOf(a.spellId, k) == kAuraCloneCaster) return a.casterGuid;
+        }
+    }
+    return 0;
+}
+
 /// 0x00519df0: whether a plate shows its threat flash, by threatWarning
 /// (default 3): 0 never, 1 in a dungeon or raid map (Map.dbc InstanceType 1
 /// or 2), 2 in a party or raid, 3 always.
