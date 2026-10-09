@@ -5838,11 +5838,12 @@ void Renderer::renderVolumetricFog() {
 
 void Renderer::loadWmoAreaFlags() {
     if (wmoAreaFlagsLoaded_ || !wmoRenderer) return;
-    wmoAreaFlagsLoaded_ = true;
     auto* assetManager = core::Application::getInstance().getAssetManager();
+    if (!assetManager) return;
+    wmoAreaFlagsLoaded_ = true;
     const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("WMOAreaTable")
                                                         : nullptr;
-    if (!assetManager || !layout) return;
+    if (!layout) return;
     const uint32_t cols[4] = {layout->tryField("WMOID"), layout->tryField("NameSetID"),
                               layout->tryField("WMOGroupID"), layout->tryField("Flags")};
     auto data = assetManager->readFile("DBFilesClient\\WMOAreaTable.dbc");
@@ -5861,11 +5862,12 @@ void Renderer::loadWmoAreaFlags() {
 
 void Renderer::loadScreenEffectRows() {
     if (screenEffectRowsLoaded_) return;
-    screenEffectRowsLoaded_ = true;
     auto* assetManager = core::Application::getInstance().getAssetManager();
+    if (!assetManager) return;
+    screenEffectRowsLoaded_ = true;
     const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ScreenEffect")
                                                         : nullptr;
-    if (!assetManager || !layout) return;
+    if (!layout) return;
     const uint32_t effectCol = layout->tryField("Effect");
     const uint32_t paramCol = layout->tryField("Param0");
     const uint32_t lightCol = layout->tryField("LightParametersID");

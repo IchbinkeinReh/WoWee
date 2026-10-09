@@ -1027,7 +1027,7 @@ void GameScreen::renderMinimapObjectBlips(const MinimapFrame& frame, const Entit
         f.otherTracked = otherEntry && otherEntry->kind == mt::Kind::NpcFlag &&
                          (unit->getNpcFlags() & otherEntry->mask) != 0 && f.reaction > 2;
         f.questStatus = questStatus(guid);
-        f.taxiUnknown = gameHandler.taxiNodeUnknown(guid);
+        f.taxiUnknown = gameHandler.isTaxiNodeUnknown(guid);
         // Every player race is humanoid.
         const uint32_t creatureType = f.isPlayer ? 7u : gameHandler.getCreatureType(unit->getEntry());
         const uint32_t bytes1 = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1));

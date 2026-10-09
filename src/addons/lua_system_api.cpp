@@ -778,6 +778,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "sound_numchannels") lua_pushstring(L, "64");
     else if (n == "sound_outputquality") lua_pushstring(L, "2");
     else if (n == "uiscale") lua_pushstring(L, "1");
+    // The tracking menu's own entry, by name; none (0x0057e070).
+    else if (n == "minimaptrackedinfo") lua_pushstring(L, "");
     else if (n == "useuiscale") lua_pushstring(L, "1");
     else if (n == "screenwidth" || n == "gxresolution") {
         auto* svc = getLuaServices(L);
