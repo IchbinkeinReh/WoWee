@@ -829,6 +829,20 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
             {"MONSTER_EMOTE", 1.0f, 0.5f, 0.25f},
             {"MONSTER_WHISPER", 1.0f, 0.72f, 0.72f},
             {"CHANNEL", 1.0f, 0.75f, 0.75f}, {"LOOT", 0.0f, 0.67f, 0.0f},
+            // A channel's lines take the colour of their slot, CHANNEL1 to
+            // CHANNEL10 - ChatFrame_MessageEventHandler reads
+            // ChatTypeInfo["CHANNEL"..index] - so "Allgemein" drew white
+            // with CHANNEL alone set. Joins, leaves and notices are greyer.
+            {"CHANNEL1", 1.0f, 0.75f, 0.75f}, {"CHANNEL2", 1.0f, 0.75f, 0.75f},
+            {"CHANNEL3", 1.0f, 0.75f, 0.75f}, {"CHANNEL4", 1.0f, 0.75f, 0.75f},
+            {"CHANNEL5", 1.0f, 0.75f, 0.75f}, {"CHANNEL6", 1.0f, 0.75f, 0.75f},
+            {"CHANNEL7", 1.0f, 0.75f, 0.75f}, {"CHANNEL8", 1.0f, 0.75f, 0.75f},
+            {"CHANNEL9", 1.0f, 0.75f, 0.75f}, {"CHANNEL10", 1.0f, 0.75f, 0.75f},
+            {"CHANNEL_JOIN", 0.75f, 0.5f, 0.5f},
+            {"CHANNEL_LEAVE", 0.75f, 0.5f, 0.5f},
+            {"CHANNEL_LIST", 0.75f, 0.5f, 0.5f},
+            {"CHANNEL_NOTICE", 0.75f, 0.75f, 0.75f},
+            {"CHANNEL_NOTICE_USER", 0.75f, 0.75f, 0.75f},
             {"MONEY", 1.0f, 1.0f, 0.0f},
             {"BG_SYSTEM_NEUTRAL", 1.0f, 1.0f, 0.5f},
             {"BG_SYSTEM_ALLIANCE", 0.25f, 0.75f, 1.0f},
