@@ -64,6 +64,28 @@ struct PassengerPose {
     return frame * passengerLocal(pose, glm::length(glm::vec3(frame[0])));
 }
 
+/// A passenger on its way into or out of a seat (0x0074a7f0, states 1, 2,
+/// 4 and 5): drawn at a place on the straight way from where it began to
+/// its end, lifted by the arc's height, facing as it turns - upright, its
+/// own size (0x0082dd80 with the normal straight up).
+struct Flight {
+    glm::vec3 from{0.0f};           ///< where it began (+0x84, or +0x90 on its transport)
+    std::optional<glm::vec3> to;    ///< where it ends; none for its seat (0x007493b0)
+    float progress = 0.0f;          ///< +0x48
+    float height = 0.0f;            ///< the arc's
+    float facing = 0.0f;            ///< +0xbc, or +0xb4 while it waits
+};
+
+/// The flight's matrix, `target` its end this frame.
+[[nodiscard]] inline glm::mat4 flightWorld(const Flight& f, const glm::vec3& target, float scale) {
+    const float p = f.progress;
+    glm::vec3 at = f.from * (1.0f - p) + target * p;
+    at.z += f.height;
+    glm::mat4 m = glm::translate(glm::mat4(1.0f), at);
+    m = glm::rotate(m, f.facing, glm::vec3(0.0f, 0.0f, 1.0f));
+    return glm::scale(m, glm::vec3(scale));
+}
+
 /// The ride animation a seated passenger plays (0x00747b20 state 3): with
 /// seat Flags 0x2, RideAnimStart once where it has one, then RideAnimLoop.
 /// Nothing (0x1fa) without the flag or either animation: the passenger then

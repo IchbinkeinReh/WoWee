@@ -1348,8 +1348,13 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(info.x, info.y, info.z));
     float canYaw = core::coords::serverToCanonicalYaw(info.orientation);
 
-    // The mover's seat, where its transport is a vehicle (0x007489c0).
-    owner_.vehicleRoster().setTransport(moverGuid, onTransport ? transportGuid : 0, transportSeat, tLocalO);
+    // The mover's seat, where its transport is a vehicle (0x007489c0): moved
+    // through when 0xED brings it (0x00740d30 -> 0x007188f0 sets +0xa30
+    // 0x20000000), at once otherwise. Its flags2 say whether it leaves of
+    // its own will (0x0074bb60).
+    owner_.vehicleRoster().setMoveFlags2(moverGuid, info.flags2);
+    owner_.vehicleRoster().setTransport(moverGuid, onTransport ? transportGuid : 0, transportSeat, tLocalO,
+                                        !isPreWotlk() && packet.getOpcode() == wireOpcode(Opcode::MSG_MOVE_UNROOT));
 
     // A vehicle is a unit, not a transport the manager runs: the mover's
     // position is the world one the packet carries, and composing its seat
@@ -1754,6 +1759,12 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
         }
     }
 
+    // A monster move with no transport takes the unit off any it was on,
+    // moved through (0x0073f590 -> 0x0073c8e0 -> 0x006f0c70 with none).
+    if (!isPreWotlk() && owner_.vehicleRoster().passenger(data.guid)) {
+        owner_.vehicleRoster().setTransport(data.guid, 0, -1, 0.0f, true);
+    }
+
     auto entity = owner_.getEntityManager().getEntity(data.guid);
     if (!entity) {
         return;
@@ -1886,11 +1897,13 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         if (packet.getRemainingSize() < 2 + 12) return;
         const auto seat = static_cast<int8_t>(packet.readUInt8());
         /*uint8_t toggle =*/ packet.readUInt8();
-        // Its seat, where the transport is a vehicle (0x0074c040).
+        // Its seat, where the transport is a vehicle (0x0074c040), moved
+        // through (0x0073c8e0 sets +0xa30 0x20000000 around it).
         owner_.vehicleRoster().setTransport(moverGuid, transportGuid, seat,
                                             owner_.vehicleRoster().passenger(moverGuid)
                                                 ? owner_.vehicleRoster().passenger(moverGuid)->facing
-                                                : 0.0f);
+                                                : 0.0f,
+                                            true);
     } else {
         if (packet.getRemainingSize() < 8 + 1 + 8 + 12) return;
         moverGuid = packet.readUInt64();

@@ -2674,6 +2674,12 @@ wowee_add_test(test_spell_chain
 wowee_add_test(test_vehicle_seat
     SOURCES test_vehicle_seat.cpp ${CMAKE_SOURCE_DIR}/src/game/vehicle.cpp)
 
+# ── test_vehicle_transition ─────────────────────────
+# A passenger's way into and out of its seat (0x00749aa0, 0x0074a200,
+# 0x00747d70, 0x0074a7f0, 0x00747a30, 0x00747b20, 0x0074b9c0).
+wowee_add_test(test_vehicle_transition
+    SOURCES test_vehicle_transition.cpp ${CMAKE_SOURCE_DIR}/src/game/vehicle.cpp)
+
 # ── test_update_vehicle_block ────────────────────────
 # The movement block's seat byte and UPDATEFLAG_VEHICLE's row.
 wowee_add_packet_test(test_update_vehicle_block)

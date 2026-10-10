@@ -9,6 +9,7 @@
 #include "core/character_geosets.hpp"
 #include "core/weapon_attachment.hpp"
 #include "game/vehicle.hpp"
+#include "game/vehicle_transition.hpp"
 #include <memory>
 #include <string>
 #include <utility>
@@ -477,16 +478,50 @@ private:
     void loadVehicleTables();
     game::vehicle::VehicleTables vehicleTables_;
     bool vehicleTablesLoaded_ = false;
-    /// A passenger drawn in its seat: its instance, the vehicle's, the
-    /// seat's row, and what the seat did to it.
+    /// A unit's passenger component (CGUnit_C +0xf60): its way into, in and
+    /// out of a seat, and what is drawn of it.
     struct SeatedPassenger {
+        game::vehicle::SeatState state = game::vehicle::SeatState::None;  ///< +0x14
+        uint64_t vehicleGuid = 0;      ///< +0x28: the vehicle it goes to or sits in
+        uint8_t seat = 0xff;           ///< +0x31
+        uint64_t prevVehicleGuid = 0;  ///< +0x20: the one it comes from
+        uint8_t prevSeat = 0xff;       ///< +0x30
+        uint32_t seatId = 0;           ///< +0x54: the seat its moves read
+        bool voluntary = false;        ///< movement flags2 0x40 at the change
+        uint32_t startMs = 0;          ///< +0x34
+        uint32_t endMs = 0;            ///< +0x38
+        glm::vec3 from{0.0f};          ///< +0x84
+        uint64_t anchorGuid = 0;       ///< +0x40: the transport `from` rides on
+        glm::vec3 fromLocal{0.0f};     ///< +0x90: `from` less the anchor's place
+        float startFacing = 0.0f;      ///< +0xb4
+        float seatFacing = 0.0f;       ///< +0xb8
+        float drawnFacing = 0.0f;      ///< +0xbc
+        game::vehicle::Arc arc;
+        bool planned = false;          ///< +0x10 0x1: 0x0074a200 has run for the state
+        // What is drawn of it.
         uint32_t instanceId = 0;
-        uint32_t vehicleInstanceId = 0;
-        uint32_t seatId = 0;
         bool hidden = false;
+        uint32_t rideLoopVehicleInstance = 0;  ///< +0x70: the vehicle its seat animates
+        int32_t rideLoopBone = -1;
     };
     std::unordered_map<uint64_t, SeatedPassenger> seatedPassengers_;
-    void releaseSeatedPassenger(const SeatedPassenger& seated);
+    /// Where each vehicle was drawn last frame and how fast it went.
+    struct VehicleMotion {
+        glm::vec3 place{0.0f};
+        glm::vec3 velocity{0.0f};
+        uint32_t ms = 0;
+        bool known = false;
+    };
+    std::unordered_map<uint64_t, VehicleMotion> vehicleMotion_;
+    void releaseSeatedPassenger(uint64_t guid, SeatedPassenger& seated, bool landing);
+    /// 0x007489c0: the passenger to a new state, at `nowMs`.
+    void setSeatState(uint64_t guid, SeatedPassenger& p, game::vehicle::SeatState state, uint32_t nowMs);
+    /// 0x0074a200: a new state's time and arc.
+    void planSeatState(uint64_t guid, SeatedPassenger& p, uint32_t nowMs);
+    /// The model a vehicle is drawn by: its mount's while it rides one.
+    uint32_t vehicleInstanceFor(uint64_t guid) const;
+    /// A unit's place and facing as drawn by its own movement.
+    glm::vec3 unitRenderPosition(uint64_t guid) const;
 
     // Dependencies (non-owning)
     rendering::Renderer* renderer_;

@@ -240,6 +240,13 @@ public:
     void setInstanceSeat(uint32_t instanceId, uint32_t parentInstanceId, int32_t attachmentId,
                          const vehicle_seat::PassengerPose& pose);
     void clearInstanceSeat(uint32_t instanceId);
+    /// The passenger flies into or out of its seat instead of sitting in it
+    /// (0x0074a7f0 states 1, 2, 4, 5); a flight with no end flies to the
+    /// seat setInstanceSeat gave it. Nothing ends it.
+    void setInstanceSeatFlight(uint32_t instanceId, const std::optional<vehicle_seat::Flight>& flight);
+    /// The matrix its seat puts the passenger at this frame (0x007493b0);
+    /// nothing without a seat or its vehicle.
+    [[nodiscard]] std::optional<glm::mat4> seatTargetMatrix(uint32_t instanceId) const;
     /// The seat's ride animation holds the passenger's body: its start once,
     /// then its loop; what else asks the body to play is not played
     /// (0x007385c0 and 0x00724500 put the seat's first). Nothing releases it.
@@ -557,6 +564,8 @@ private:
         uint32_t seatParent = 0;
         int32_t seatAttachment = -1;
         vehicle_seat::PassengerPose seatPose;
+        /// setInstanceSeatFlight.
+        std::optional<vehicle_seat::Flight> seatFlight;
         /// setSeatAnimation: the body is the seat's.
         bool seatAnimationHeld = false;
         /// setMirrorsSeatParent.
@@ -587,6 +596,9 @@ private:
     std::vector<uint32_t> mirroringPassengers(uint32_t instanceId) const;
     /// Hangs every seated instance on its parent (after the bones).
     void placeSeatedInstances();
+    /// The seat's world matrix for a seated instance (0x007490f0 on the
+    /// vehicle model's attachment, or its matrix).
+    [[nodiscard]] std::optional<glm::mat4> seatWorld(const CharacterInstance& inst) const;
     void setupModelBuffers(M2ModelGPU& gpuModel);
     void calculateBindPose(M2ModelGPU& gpuModel);
     void calculateBoneMatrices(CharacterInstance& instance);

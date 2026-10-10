@@ -41,22 +41,63 @@ struct SeatRecord {
     uint32_t flags = 0;                   ///< +0x04
     int32_t attachmentId = -1;            ///< +0x08, an index into 0x00a2d3f0
     glm::vec3 attachmentOffset{0.0f};     ///< +0x0c
+    float enterPreDelay = 0.0f;           ///< +0x18
+    float enterSpeed = 0.0f;              ///< +0x1c
+    float enterGravity = 0.0f;            ///< +0x20
+    float enterMinDuration = 0.0f;        ///< +0x24
+    float enterMaxDuration = 0.0f;        ///< +0x28
+    float enterMinArcHeight = 0.0f;       ///< +0x2c
+    float enterMaxArcHeight = 0.0f;       ///< +0x30
+    int32_t enterAnimStart = -1;          ///< +0x34
+    int32_t enterAnimLoop = -1;           ///< +0x38
     int32_t rideAnimStart = -1;           ///< +0x3c
     int32_t rideAnimLoop = -1;            ///< +0x40
     int32_t rideUpperAnimStart = -1;      ///< +0x44
     int32_t rideUpperAnimLoop = -1;       ///< +0x48
+    float exitPreDelay = 0.0f;            ///< +0x4c
+    float exitSpeed = 0.0f;               ///< +0x50
+    float exitGravity = 0.0f;             ///< +0x54
+    float exitMinDuration = 0.0f;         ///< +0x58
+    float exitMaxDuration = 0.0f;         ///< +0x5c
+    float exitMinArcHeight = 0.0f;        ///< +0x60
+    float exitMaxArcHeight = 0.0f;        ///< +0x64
+    int32_t exitAnimStart = -1;           ///< +0x68
+    int32_t exitAnimLoop = -1;            ///< +0x6c
+    int32_t exitAnimEnd = -1;             ///< +0x70
     float passengerYaw = 0.0f;            ///< +0x74
     float passengerPitch = 0.0f;          ///< +0x78
     float passengerRoll = 0.0f;           ///< +0x7c
     int32_t passengerAttachmentId = -1;   ///< +0x80, the passenger model's own
+    int32_t vehicleEnterAnim = -1;        ///< +0x84
+    int32_t vehicleExitAnim = -1;         ///< +0x88
+    int32_t vehicleRideAnimLoop = -1;     ///< +0x8c
+    int32_t vehicleEnterAnimBone = 0;     ///< +0x90, a key bone
+    int32_t vehicleExitAnimBone = 0;      ///< +0x94
+    int32_t vehicleRideAnimLoopBone = 0;  ///< +0x98
     uint32_t flagsB = 0;                  ///< +0xb4
+    float cameraEnteringDelay = 0.0f;     ///< +0xb8
+    float cameraEnteringDuration = 0.0f;  ///< +0xbc
+    float cameraExitingDelay = 0.0f;      ///< +0xc0
+    float cameraExitingDuration = 0.0f;   ///< +0xc4
+    glm::vec3 cameraOffset{0.0f};         ///< +0xc8
+    float cameraPosChaseRate = 0.0f;      ///< +0xd4
+    float cameraFacingChaseRate = 0.0f;   ///< +0xd8
+    float cameraEnteringZoom = 0.0f;      ///< +0xdc
+    float cameraSeatZoomMin = 0.0f;       ///< +0xe0
+    float cameraSeatZoomMax = 0.0f;       ///< +0xe4
 };
 
 /// A Vehicle.dbc row (WotLK: 40 columns, 160 bytes, 0x00654800).
 struct VehicleRecord {
     uint32_t id = 0;
     uint32_t flags = 0;
+    float pitchMin = 0.0f;                       ///< +0x10
+    float pitchMax = 0.0f;                       ///< +0x14
     std::array<uint32_t, kSeatCount> seatIds{};  ///< +0x18
+    float cameraFadeDistScalarMin = 0.0f;        ///< +0x3c
+    float cameraFadeDistScalarMax = 0.0f;        ///< +0x40
+    float cameraPitchOffset = 0.0f;              ///< +0x44
+    float cameraYawOffset = 0.0f;                ///< +0x84
 };
 
 /// Vehicle.dbc and VehicleSeat.dbc by id.
@@ -96,8 +137,19 @@ public:
     /// byte under 8 seat it; anything else takes it out of any seat. Whether
     /// the transport is a vehicle is asked when it is drawn, since the
     /// passenger can come into view before its vehicle does.
-    void setTransport(uint64_t guid, uint64_t transportGuid, int8_t seat, float facing);
-    void leave(uint64_t guid) { passengers_.erase(guid); }
+    /// `animated` says the change is moved through (+0xa30 0x20000000,
+    /// 0x0074b840): from a monster move, an 0xED movement packet.
+    void setTransport(uint64_t guid, uint64_t transportGuid, int8_t seat, float facing, bool animated = false);
+    void leave(uint64_t guid) { setTransport(guid, 0, -1, 0.0f); }
+    /// The unit's movement flags2 (+0x7d0), whose 0x40 makes a leaving one
+    /// of its own will (0x0074bb60).
+    void setMoveFlags2(uint64_t guid, uint32_t flags2);
+    /// How the unit's last change of seat came about, until it is taken.
+    struct SeatChange {
+        bool animated = false;
+        bool voluntary = false;
+    };
+    [[nodiscard]] std::optional<SeatChange> takeChange(uint64_t guid);
     [[nodiscard]] std::optional<Passenger> passenger(uint64_t guid) const;
     [[nodiscard]] const std::unordered_map<uint64_t, Passenger>& passengers() const { return passengers_; }
 
@@ -108,6 +160,8 @@ public:
 private:
     std::unordered_map<uint64_t, uint32_t> vehicleIds_;
     std::unordered_map<uint64_t, Passenger> passengers_;
+    std::unordered_map<uint64_t, uint32_t> moveFlags2_;
+    std::unordered_map<uint64_t, SeatChange> changes_;
 };
 
 }  // namespace wowee::game::vehicle

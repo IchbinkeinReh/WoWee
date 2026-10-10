@@ -2425,7 +2425,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
 
         // Skip weapon instances for animation - their transforms are set by parent
         // bones. Enchant visuals are the exception: they are pure animated FX.
-        if (inst.hasOverrideModelMatrix && !inst.isEffectModel && inst.seatParent == 0) continue;
+        if (inst.hasOverrideModelMatrix && !inst.isEffectModel && inst.seatParent == 0 && !inst.seatFlight) continue;
 
         float distSq = glm::distance2(inst.position, cameraPos);
         if (distSq > animUpdateRadiusSq && !inst.isSceneModel) continue;
@@ -2774,7 +2774,7 @@ void CharacterRenderer::clearInstanceSeat(uint32_t instanceId) {
     instance.seatAttachment = -1;
     instance.seatAnimationHeld = false;
     instance.mirrorsSeatParent = false;
-    instance.hasOverrideModelMatrix = false;
+    instance.hasOverrideModelMatrix = instance.seatFlight.has_value();
 }
 
 void CharacterRenderer::setSeatAnimation(uint32_t instanceId,
@@ -2831,29 +2831,61 @@ std::optional<glm::vec3> CharacterRenderer::modelAttachmentPosition(uint32_t ins
     return offset;
 }
 
+std::optional<glm::mat4> CharacterRenderer::seatWorld(const CharacterInstance& inst) const {
+    if (inst.seatParent == 0) return std::nullopt;
+    auto pit = instances.find(inst.seatParent);
+    if (pit == instances.end()) return std::nullopt;
+    // The vehicle model's attachment for the seat (0x00831410), else
+    // its own matrix (0x007490f0 without the attachment).
+    glm::mat4 frame(1.0f);
+    if (inst.seatAttachment < 0 ||
+        !getAttachmentTransform(inst.seatParent, static_cast<uint32_t>(inst.seatAttachment), frame)) {
+        frame = pit->second.hasOverrideModelMatrix ? pit->second.overrideModelMatrix : getModelMatrix(pit->second);
+    }
+    return vehicle_seat::passengerWorld(frame, inst.seatPose);
+}
+
 void CharacterRenderer::placeSeatedInstances() {
     for (auto& [id, inst] : instances) {
-        if (inst.seatParent == 0) continue;
-        auto pit = instances.find(inst.seatParent);
-        if (pit == instances.end()) {
+        if (inst.seatParent == 0 && !inst.seatFlight) continue;
+        if (inst.seatParent != 0 && instances.find(inst.seatParent) == instances.end()) {
             inst.seatParent = 0;
             inst.seatAnimationHeld = false;
             inst.mirrorsSeatParent = false;
             inst.hasOverrideModelMatrix = false;
+            if (!inst.seatFlight) continue;
+        }
+        const std::optional<glm::mat4> seat = seatWorld(inst);
+        if (inst.seatFlight) {
+            // On its way (0x0074a7f0 states 1, 2, 4, 5): toward its end, or
+            // its seat as it is now (0x007493b0).
+            const glm::vec3 target = inst.seatFlight->to ? *inst.seatFlight->to
+                                     : seat             ? glm::vec3((*seat)[3])
+                                                        : inst.seatFlight->from;
+            inst.overrideModelMatrix = vehicle_seat::flightWorld(*inst.seatFlight, target, inst.scale);
+        } else if (seat) {
+            inst.overrideModelMatrix = *seat;
+        } else {
             continue;
         }
-        // The vehicle model's attachment for the seat (0x00831410), else
-        // its own matrix (0x007490f0 without the attachment).
-        glm::mat4 frame(1.0f);
-        if (inst.seatAttachment < 0 ||
-            !getAttachmentTransform(inst.seatParent, static_cast<uint32_t>(inst.seatAttachment), frame)) {
-            frame = pit->second.hasOverrideModelMatrix ? pit->second.overrideModelMatrix
-                                                       : getModelMatrix(pit->second);
-        }
-        inst.overrideModelMatrix = vehicle_seat::passengerWorld(frame, inst.seatPose);
         inst.hasOverrideModelMatrix = true;
         inst.position = glm::vec3(inst.overrideModelMatrix[3]);
     }
+}
+
+void CharacterRenderer::setInstanceSeatFlight(uint32_t instanceId, const std::optional<vehicle_seat::Flight>& flight) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& inst = it->second;
+    const bool had = inst.seatFlight.has_value();
+    inst.seatFlight = flight;
+    if (had && !flight && inst.seatParent == 0) inst.hasOverrideModelMatrix = false;
+}
+
+std::optional<glm::mat4> CharacterRenderer::seatTargetMatrix(uint32_t instanceId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return std::nullopt;
+    return seatWorld(it->second);
 }
 
 std::optional<uint32_t> CharacterRenderer::armAnimation(uint32_t instanceId, int arm) const {
