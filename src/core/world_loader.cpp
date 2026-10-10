@@ -984,6 +984,8 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         renderer_->getCameraController()->reset();
     }
     renderer_->setCharacterYaw(spawnYawDeg);
+    // Drawn facing that way from the start, not shuffled round from the last world.
+    renderer_->snapCharacterBodyYaw();
     spawnInstancePortalVisuals(mapId, renderer_, assetManager_);
 
     // Test transport disabled - real transports come from server via UPDATEFLAG_TRANSPORT

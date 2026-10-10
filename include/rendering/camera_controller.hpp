@@ -6,6 +6,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <functional>
+#include <cmath>
 #include <optional>
 
 namespace wowee {
@@ -246,6 +247,14 @@ public:
     void setRunBackSpeedOverride(float speed) { runBackSpeedOverride_ = speed; }
     // Server turn rate in rad/s (SMSG_FORCE_TURN_RATE_CHANGE); 0 = use WOW_TURN_SPEED default
     void setTurnRateOverride(float rateRadS) { turnRateOverride_ = rateRadS; }
+    /// The turn rate keyboard turns go at, in radians a second (+0x834).
+    [[nodiscard]] float getTurnRateRad() const {
+        return (turnRateOverride_ > 0.0f && turnRateOverride_ < 20.0f && !std::isnan(turnRateOverride_))
+                   ? turnRateOverride_ : glm::radians(WOW_TURN_SPEED);
+    }
+    /// The mouse steering the character: the right button held (both
+    /// buttons running too), or a finger dragging the view (FUN_005fa6b0).
+    [[nodiscard]] bool isMouseSteering() const { return rightMouseDown || steering_; }
     void setMovementRooted(bool rooted) { movementRooted_ = rooted; }
     [[nodiscard]] bool isMovementRooted() const { return movementRooted_; }
     void setGravityDisabled(bool disabled) { gravityDisabled_ = disabled; }

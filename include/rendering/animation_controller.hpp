@@ -102,6 +102,11 @@ public:
     // ── Sprint aura animation ────────────────────────────────────────────
     void setSprintAuraActive(bool active);
 
+    // ── Turning on the spot ──────────────────────────────────────────────
+    /// The shuffle the player's body yaw asks for this frame (Renderer,
+    /// body_yaw::turnShuffle), played by the locomotion while standing.
+    void setTurnShuffle(body_yaw::TurnShuffle shuffle) { turnShuffle_ = shuffle; }
+
     // ── Ranged combat ──────────────────────────────────────────────────────
     void setEquippedRangedType(RangedWeaponType type);
     void setRangedWeaponActive(bool active);
@@ -242,6 +247,7 @@ private:
     glm::vec3 lastMountSeatTarget_ = glm::vec3(0.0f);
     bool taxiFlight_ = false;
     bool m2TransportRiding_ = false;
+    body_yaw::TurnShuffle turnShuffle_ = body_yaw::TurnShuffle::None;
 
     // ── Private helpers ──────────────────────────────────────────────────
     uint32_t resolveMeleeAnimId();

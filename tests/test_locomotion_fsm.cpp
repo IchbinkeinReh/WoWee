@@ -230,3 +230,45 @@ TEST_CASE("LocomotionFSM: landing while walking or backing up has no landing", "
     auto fsm2 = landFrom(backing);
     CHECK(fsm2.getState() == LocomotionFSM::State::RUN);
 }
+
+// ── Turning on the spot (FUN_0073dab0 / FUN_0071e180) ──────────────────────
+
+TEST_CASE("LocomotionFSM: standing, a turn shuffles the feet", "[locomotion][shuffle]") {
+    LocomotionFSM fsm;
+    auto caps = makeLocoCaps();
+    caps.resolvedShuffleLeft = anim::SHUFFLE_LEFT;
+    caps.resolvedShuffleRight = anim::SHUFFLE_RIGHT;
+
+    auto in = idle();
+    in.shuffle = body_yaw::TurnShuffle::Left;
+    auto out = fsm.resolve(in, caps);
+    REQUIRE(out.valid);
+    CHECK(out.animId == anim::SHUFFLE_LEFT);
+    CHECK(out.loop);
+
+    in.shuffle = body_yaw::TurnShuffle::Right;
+    CHECK(fsm.resolve(in, caps).animId == anim::SHUFFLE_RIGHT);
+
+    // Done turning: the stand comes back.
+    in.shuffle = body_yaw::TurnShuffle::None;
+    CHECK(fsm.resolve(in, caps).animId == anim::STAND);
+}
+
+TEST_CASE("LocomotionFSM: moving, the turn is no shuffle", "[locomotion][shuffle]") {
+    LocomotionFSM fsm;
+    auto caps = makeLocoCaps();
+    caps.resolvedShuffleLeft = anim::SHUFFLE_LEFT;
+    auto in = idle();
+    in.moving = true;
+    in.sprinting = true;
+    in.shuffle = body_yaw::TurnShuffle::Left;
+    CHECK(fsm.resolve(in, caps).animId == anim::RUN);
+}
+
+TEST_CASE("LocomotionFSM: a model without the shuffle turns in its stand", "[locomotion][shuffle]") {
+    LocomotionFSM fsm;
+    auto caps = makeLocoCaps();
+    auto in = idle();
+    in.shuffle = body_yaw::TurnShuffle::Right;
+    CHECK(fsm.resolve(in, caps).animId == anim::STAND);
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/blob_shadow.hpp"
+#include "rendering/animation/body_yaw.hpp"
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -240,8 +241,18 @@ public:
     void setCharacterFollow(uint32_t instanceId);
     glm::vec3& getCharacterPosition() { return characterPosition; }
     uint32_t getCharacterInstanceId() const { return characterInstanceId; }
+    /// The player's movement facing, in degrees: what the server is told and
+    /// what the map arrows point along. Not where the body is drawn - see
+    /// getCharacterBodyYaw.
     float getCharacterYaw() const { return characterYaw; }
     void setCharacterYaw(float yawDeg) { characterYaw = yawDeg; }
+    /// The yaw the player's body is drawn at, in degrees (the client's +0xa94,
+    /// FUN_007156a0): behind the facing while the spine and head look round,
+    /// to the side strafing. For what is placed by the drawn model.
+    float getCharacterBodyYaw() const { return glm::degrees(characterBody_.body); }
+    /// Draw the body at the facing at once, with nothing to catch up: a new
+    /// world, where there is no turn to have been part way through.
+    void snapCharacterBodyYaw() { characterBodyInstance_ = 0; }
 
     // Screenshot capture - copies swapchain image to PNG file
     bool captureScreenshot(const std::string& outputPath);
@@ -733,6 +744,10 @@ private:
     glm::vec3 characterPosition = glm::vec3(0.0f);
     uint32_t characterInstanceId = 0;
     float characterYaw = 0.0f;
+    // The drawn body's yaw behind the facing (body_yaw::update), and the
+    // instance it was last turned for: another instance starts at the facing.
+    body_yaw::State characterBody_;
+    uint32_t characterBodyInstance_ = 0;
 
     // Where the player was, for shaders that react to them moving through the
     // world. playerWakePos_ chases characterPosition with a fixed time

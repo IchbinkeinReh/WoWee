@@ -61,8 +61,9 @@ void spawnFootprint(Renderer* renderer, CharacterRenderer* characterRenderer,
     if (!footprints || !characterRenderer || instanceId == 0) return;
     std::string modelName;
     characterRenderer->getInstanceModelName(instanceId, modelName);
+    // Along the drawn feet: the body yaw, which strafing turns to the side.
     footprints->spawn(modelName, renderer->getCharacterPosition(),
-                      glm::radians(renderer->getCharacterYaw()), leftFoot, fallback);
+                      glm::radians(renderer->getCharacterBodyYaw()), leftFoot, fallback);
 }
 
 } // namespace

@@ -78,9 +78,13 @@ AnimCapabilitySet AnimCapabilityProbe::probe(Renderer* renderer, uint32_t instan
         caps.hasWalkBackwards = (caps.resolvedWalkBackwards != 0);
     }
     // Note: no resolvedStrafeLeft/Right or resolvedRunLeft/Right here --
-    // strafing (pure or diagonal) reuses plain Walk/Run and the renderer's
-    // torso-bone rotation (CharacterRenderer::setInstanceTorsoYaw) for the
-    // visual angle. See LocomotionFSM::resolve().
+    // strafing (pure or diagonal) reuses plain Walk/Run, the body turned to
+    // the side and the spine and head turned back (body_yaw::update,
+    // CharacterRenderer::setInstanceTorsoYaw). See LocomotionFSM::resolve().
+    // The shuffle is the model's own or none: a model without it turns
+    // standing in its stand.
+    caps.resolvedShuffleLeft = has(anim::SHUFFLE_LEFT) ? anim::SHUFFLE_LEFT : 0;
+    caps.resolvedShuffleRight = has(anim::SHUFFLE_RIGHT) ? anim::SHUFFLE_RIGHT : 0;
 
     // ── Jump ────────────────────────────────────────────────────────────
     caps.resolvedJumpStart = has(anim::JUMP_START) ? anim::JUMP_START : 0;

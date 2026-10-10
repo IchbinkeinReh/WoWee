@@ -94,6 +94,7 @@
 #include "rendering/spell_visual_system.hpp"
 #include "rendering/post_process_pipeline.hpp"
 #include "rendering/animation_controller.hpp"
+#include "rendering/animation/animation_ids.hpp"
 #include "rendering/render_graph.hpp"
 #include "rendering/overlay_system.hpp"
 #include <imgui.h>
@@ -2561,16 +2562,11 @@ void Renderer::update(float deltaTime) {
 
         // Movement-facing comes from camera controller and is decoupled from LMB orbit.
         bool taxiFlight = animationController_ && animationController_->isTaxiFlight();
-        bool activeStrafe = (cameraController->isStrafingLeft() || cameraController->isStrafingRight())
-                             && !cameraController->isMovingBackward();
-        float torsoYawDeltaDeg = 0.0f;
-        if (taxiFlight) {
-            characterYaw = cameraController->getFacingYaw();
-        } else if (cameraController->isMoving() && activeStrafe) {
-            characterYaw = cameraController->getTravelYaw();
-            torsoYawDeltaDeg = cameraController->getFacingYaw() - characterYaw;
-        } else if (cameraController->isMoving() || cameraController->isRightMouseHeld() ||
-                   cameraController->isTurningLeft() || cameraController->isTurningRight()) {
+        // The facing is the movement facing, strafing too: the server is
+        // told where the character faces, and the strafe flag says which way
+        // it goes from there. Where the body is drawn is the body yaw below.
+        if (taxiFlight || cameraController->isMoving() || cameraController->isRightMouseHeld() ||
+            cameraController->isTurningLeft() || cameraController->isTurningRight()) {
             characterYaw = cameraController->getFacingYaw();
         }
         // No turning toward the target in combat. The client turns the player
@@ -2579,12 +2575,66 @@ void Renderer::update(float deltaTime) {
         // units), and this one swung the character round to its target at
         // 360 degrees a second whenever it stood still in a fight - and sent
         // that facing to the server.
-        float yawRad = glm::radians(characterYaw);
-        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(0.0f, 0.0f, yawRad));
 
-        while (torsoYawDeltaDeg > 180.0f) torsoYawDeltaDeg -= 360.0f;
-        while (torsoYawDeltaDeg < -180.0f) torsoYawDeltaDeg += 360.0f;
-        characterRenderer->setInstanceTorsoYaw(characterInstanceId, glm::radians(torsoYawDeltaDeg));
+        // The body is drawn at its own yaw, brought round to the facing by
+        // CGUnit's animation update (FUN_0073dab0; see body_yaw.hpp): held
+        // while the player turns, the spine and head looking round, and
+        // shuffled after on the spot.
+        const bool mounted = animationController_ && animationController_->isMounted();
+        uint32_t moveFlags = 0;
+        if (cameraController->isMovingForward()) moveFlags |= body_yaw::kForward;
+        if (cameraController->isMovingBackward()) moveFlags |= body_yaw::kBackward;
+        if (cameraController->isStrafingLeft()) moveFlags |= body_yaw::kStrafeLeft;
+        if (cameraController->isStrafingRight()) moveFlags |= body_yaw::kStrafeRight;
+        if (cameraController->isTurningLeft()) moveFlags |= body_yaw::kTurnLeft;
+        if (cameraController->isTurningRight()) moveFlags |= body_yaw::kTurnRight;
+        if (cameraController->isSwimming()) moveFlags |= body_yaw::kSwimming;
+        if (cameraController->isFlightAirborne()) moveFlags |= body_yaw::kFlying;
+        else if (!cameraController->isGrounded() && !cameraController->isSwimming())
+            moveFlags |= body_yaw::kFalling;
+        if (cameraController->isAscending()) moveFlags |= body_yaw::kAscending;
+        if (cameraController->isDescending()) moveFlags |= body_yaw::kDescending;
+        // Dead, the body lies as it fell (FUN_0073dab0's health test).
+        bool dead = false;
+        {
+            uint32_t curAnim = 0;
+            float curTime = 0.0f, curDuration = 0.0f;
+            if (characterRenderer->getAnimationState(characterInstanceId, curAnim, curTime, curDuration))
+                dead = curAnim == anim::DEATH || curAnim == anim::DEAD;
+        }
+        const float facingRad = body_yaw::wrap(glm::radians(characterYaw));
+        if (characterBodyInstance_ != characterInstanceId) {
+            characterBody_ = body_yaw::State{};
+            characterBody_.body = facingRad;
+            characterBodyInstance_ = characterInstanceId;
+        }
+        body_yaw::Input bodyIn;
+        bodyIn.facing = facingRad;
+        bodyIn.dt = deltaTime;
+        bodyIn.moveFlags = moveFlags;
+        // The camera stamps +0xabc after the units' update each frame the
+        // player is not turning, so the catch-up runs for the frame's time.
+        bodyIn.catchUpSeconds = deltaTime;
+        bodyIn.turnRate = cameraController->getTurnRateRad();
+        bodyIn.inputTurning = (moveFlags & (body_yaw::kTurnLeft | body_yaw::kTurnRight)) != 0 ||
+                              cameraController->isMouseSteering();
+        // Mounted, the rider sits the mount at the facing (applyMountPositioning
+        // draws both there); on a taxi likewise.
+        bodyIn.snap = dead || mounted || taxiFlight;
+        bodyIn.hasSpine = characterRenderer->hasKeyBone(characterInstanceId, 4);
+        bodyIn.hasHead = characterRenderer->hasKeyBone(characterInstanceId, 6);
+        bodyIn.spineAllowed = !mounted;
+        bodyIn.halveSpine = false;  // The player's own unit takes the whole lag on SpineLow first
+        const body_yaw::Result body = body_yaw::update(characterBody_, bodyIn);
+        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(0.0f, 0.0f, characterBody_.body));
+        characterRenderer->setInstanceTorsoYaw(characterInstanceId, body.spineYaw, body.headYaw);
+
+        // Turning on the spot shuffles, standing up and alive (the stand
+        // state FUN_0073dab0 asks through vfunc +0x138).
+        if (animationController_) {
+            animationController_->setTurnShuffle(body_yaw::turnShuffle(
+                moveFlags, body.step, !dead && !mounted && !taxiFlight && !cameraController->isSitting()));
+        }
 
         // Update animation based on movement state (delegated to AnimationController §4.2)
         if (animationController_) {

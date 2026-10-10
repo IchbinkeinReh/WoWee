@@ -101,6 +101,8 @@ public:
         bool descending = false;
         bool jumpKeyPressed = false;
         float characterYaw = 0.0f;
+        // Turning on the spot (body_yaw::turnShuffle), for the locomotion.
+        body_yaw::TurnShuffle shuffle = body_yaw::TurnShuffle::None;
         // Melee/ranged timers
         float meleeSwingTimer = 0.0f;
         float rangedShootTimer = 0.0f;
