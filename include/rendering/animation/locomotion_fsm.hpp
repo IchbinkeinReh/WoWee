@@ -2,6 +2,7 @@
 
 #include "rendering/animation/anim_capability_set.hpp"
 #include "rendering/animation/anim_event.hpp"
+#include "rendering/animation/body_yaw.hpp"
 #include <cstdint>
 
 namespace wowee {
@@ -35,6 +36,9 @@ public:
         bool swimming = false;
         bool sitting = false;
         bool sprintAura = false;      // Sprint/Dash aura - use SPRINT anim
+        // Turning on the spot: by key, or the body catching up with the
+        // facing (body_yaw::turnShuffle). Standing, it shuffles.
+        body_yaw::TurnShuffle shuffle = body_yaw::TurnShuffle::None;
         float deltaTime = 0.0f;
         // Animation state for one-shot completion detection (jump start/end)
         uint32_t currentAnimId = 0;

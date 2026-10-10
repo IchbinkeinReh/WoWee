@@ -172,7 +172,10 @@ public:
 
     void setInstancePosition(uint32_t instanceId, const glm::vec3& position);
     void setInstanceRotation(uint32_t instanceId, const glm::vec3& rotation);
-    void setInstanceTorsoYaw(uint32_t instanceId, float deltaYawRad);
+    /// The lag between the facing and the drawn body, shown on the SpineLow
+    /// and Head key bones (4 and 6) as turns about their Z (FUN_0073dab0's
+    /// FUN_008272f0 overrides); body_yaw::update splits it between them.
+    void setInstanceTorsoYaw(uint32_t instanceId, float spineYawRad, float headYawRad = 0.0f);
     void moveInstanceTo(uint32_t instanceId, const glm::vec3& destination, float durationSeconds);
     /// How fast the unit drawn by this instance is moving, in yards a second
     /// (zero standing). Its movement animation plays at this over the
@@ -417,7 +420,8 @@ private:
         glm::vec3 rotation;
         float scale;
         bool visible = true;  // For first-person camera hiding
-        float torsoYawOverrideRad = 0.0f;
+        float torsoYawOverrideRad = 0.0f;  ///< SpineLow; setInstanceTorsoYaw
+        float headYawOverrideRad = 0.0f;   ///< Head
 
         // Animation state
         uint32_t currentAnimationId = 0;

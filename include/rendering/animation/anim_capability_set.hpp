@@ -60,6 +60,8 @@ struct AnimCapabilitySet {
     uint32_t resolvedSwimBackwards = 0;
     uint32_t resolvedSwimLeft = 0;
     uint32_t resolvedSwimRight = 0;
+    uint32_t resolvedShuffleLeft = 0;  // Turning on the spot (FUN_0071e180)
+    uint32_t resolvedShuffleRight = 0;
 
     // ── Combat resolved IDs ─────────────────────────────────────────────
     uint32_t resolvedCombatIdle = 0;

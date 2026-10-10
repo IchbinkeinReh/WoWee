@@ -1233,6 +1233,12 @@ target_link_libraries(test_locomotion_fsm PRIVATE catch2_main)
 add_test(NAME locomotion_fsm COMMAND test_locomotion_fsm)
 register_test_target(test_locomotion_fsm)
 
+# ── test_body_yaw ────────────────────────────────────────────
+# The body yaw a unit is drawn at behind its facing (FUN_0073dab0), its spring
+# (FUN_00719660) and the shuffle it asks for turning on the spot.
+wowee_add_test(test_body_yaw
+    SOURCES test_body_yaw.cpp ${TEST_COMMON_SOURCES})
+
 # ── test_jump_landing ────────────────────────────────────────
 wowee_add_test(test_jump_landing
     SOURCES test_jump_landing.cpp ${TEST_COMMON_SOURCES})

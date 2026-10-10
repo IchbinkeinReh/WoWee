@@ -1135,6 +1135,7 @@ void AnimationController::updateCharacterAnimation() {
     fi.descending = cameraController->isDescending();
     fi.jumpKeyPressed = cameraController->isJumpKeyPressed();
     fi.characterYaw = renderer_->getCharacterYaw();
+    fi.shuffle = turnShuffle_;
     // Melee/ranged timers
     fi.meleeSwingTimer = meleeSwingTimer_;
     fi.rangedShootTimer = rangedShootTimer_;

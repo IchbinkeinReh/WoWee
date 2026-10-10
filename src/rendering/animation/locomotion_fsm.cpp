@@ -227,7 +227,19 @@ AnimOutput LocomotionFSM::resolve(const Input& in, const AnimCapabilitySet& caps
 
     switch (state_) {
         case State::IDLE:
+            // Turning on the spot shuffles the feet: ShuffleLeft (11) turned
+            // left by key or by the body catching up leftwards, ShuffleRight
+            // (12) likewise (FUN_0073dab0 asking FUN_0073ac30, which
+            // FUN_0071e180 answers). It ranks under casting, the combat
+            // stance, emotes and sitting, which the animator asks first, as
+            // FUN_0071de90 turns it down while any of those plays. With
+            // neither, the shuffle stops and the stand comes back.
             animId = anim::STAND;
+            if (in.shuffle == body_yaw::TurnShuffle::Left && caps.resolvedShuffleLeft) {
+                animId = caps.resolvedShuffleLeft;
+            } else if (in.shuffle == body_yaw::TurnShuffle::Right && caps.resolvedShuffleRight) {
+                animId = caps.resolvedShuffleRight;
+            }
             break;
 
         case State::WALK:

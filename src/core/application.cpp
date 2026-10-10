@@ -167,6 +167,69 @@ bool jumpHoldsAnimation(rendering::CharacterRenderer& charRenderer, uint32_t ins
     return false;
 }
 
+// The body another unit is drawn at, as Renderer draws the player's
+// (FUN_0073dab0; see body_yaw.hpp), and the shuffle it plays turning on the
+// spot. Nothing stamps +0xabc for a unit that is not the player's own, so
+// its body takes its facing - the eased one, FUN_00735f60's - whole each
+// frame: only strafing turns it aside, SpineLow taking half the look back
+// and the head the rest. What it turns standing still, or a turn key it
+// holds, shuffles its feet; the shuffle starts only from its stand, as
+// FUN_0071de90 turns it down over an emote or a cast and the combat stance
+// is asked first (FUN_0071e0d0), and stops back into the stand. Returns
+// the body yaw, in the render yaw's frame `facing` is given in.
+float turnUnitBody(rendering::CharacterRenderer& cr, uint32_t instanceId,
+                   EntitySpawner::UnitBody& body, float facing, uint32_t moveFlags,
+                   float deltaTime, bool snap, bool mayShuffle) {
+    namespace by = rendering::body_yaw;
+    if (body.instanceId != instanceId) {
+        body = {};
+        body.instanceId = instanceId;
+        body.state.body = by::wrap(facing);
+        body.hasSpine = cr.hasKeyBone(instanceId, 4);
+        body.hasHead = cr.hasKeyBone(instanceId, 6);
+    }
+    by::Input in;
+    in.facing = facing;
+    in.dt = deltaTime;
+    in.moveFlags = moveFlags;
+    in.catchUpSeconds = 1.0e6f;  // +0xabc never stamped: the whole lag
+    in.snap = snap;
+    in.hasSpine = body.hasSpine;
+    in.hasHead = body.hasHead;
+    in.halveSpine = true;
+    const by::Result r = by::update(body.state, in);
+    cr.setInstanceTorsoYaw(instanceId, r.spineYaw, r.headYaw);
+
+    const by::TurnShuffle want = by::turnShuffle(moveFlags, r.step, mayShuffle);
+    uint32_t wantAnim = want == by::TurnShuffle::Left  ? rendering::anim::SHUFFLE_LEFT
+                      : want == by::TurnShuffle::Right ? rendering::anim::SHUFFLE_RIGHT : 0;
+    if (wantAnim != 0 && !cr.hasAnimation(instanceId, wantAnim)) wantAnim = 0;
+    uint32_t cur = 0;
+    float curTime = 0.0f, curDuration = 0.0f;
+    if (cr.getAnimationState(instanceId, cur, curTime, curDuration)) {
+        const bool shuffling = cur == rendering::anim::SHUFFLE_LEFT || cur == rendering::anim::SHUFFLE_RIGHT;
+        if (wantAnim != 0 && cur != wantAnim && (cur == rendering::anim::STAND || shuffling)) {
+            cr.playAnimation(instanceId, wantAnim, /*loop=*/true);
+        } else if (wantAnim == 0 && shuffling) {
+            cr.playAnimation(instanceId, rendering::anim::STAND, /*loop=*/true);
+        }
+    }
+    return body.state.body;
+}
+
+// The movement flags FUN_0073dab0 reads for another unit: its last packet's,
+// with forward for one moved along a spline, whose packets carry none, and
+// swimming or flying as the sync tracks them.
+uint32_t unitBodyFlags(const game::Entity& entity, bool moving, bool swimming, bool flying) {
+    namespace by = rendering::body_yaw;
+    uint32_t flags = entity.getReportedMoveFlags();
+    if (!moving) flags &= ~(by::kForward | by::kBackward | by::kStrafe);
+    else if ((flags & (by::kForward | by::kBackward | by::kStrafe)) == 0) flags |= by::kForward;
+    if (swimming) flags |= by::kSwimming;
+    if (flying) flags |= by::kFlying;
+    return flags;
+}
+
 // The height a moving unit is drawn at over the floor found under it. On the
 // ground it is set on the floor. Falling, the client moves it by gravity and
 // stops it only where it meets the ground (FUN_007618b0 moving it through
@@ -3487,7 +3550,7 @@ void Application::applyServerMovementState(float deltaTime) {
 // ring sliding off an NPC that never moved. Player instances need the same for
 // a different reason: without it they never leave the run animation when they
 // stop.
-void Application::syncRenderInstancesToEntities() {
+void Application::syncRenderInstancesToEntities(float deltaTime) {
     auto creatureSyncStart = std::chrono::steady_clock::now();
     if (renderer && gameHandler && renderer->getCharacterRenderer()) {
         auto* charRenderer = renderer->getCharacterRenderer();
@@ -3588,6 +3651,8 @@ void Application::syncRenderInstancesToEntities() {
             // also drew every affected creature somewhere other than where it
             // actually was.
 
+            // The model turns towards the movement facing (FUN_00735f60).
+            float bodyYaw = entity->getModelFacing() + glm::radians(90.0f);
             if (posIt == _creatureRenderPosCache.end()) {
                 charRenderer->setInstancePosition(instanceId, renderPos);
                 if (creatureMount) charRenderer->setInstancePosition(creatureMount->instanceId, creatureMountPos);
@@ -3741,12 +3806,17 @@ void Application::syncRenderInstancesToEntities() {
                         charRenderer->playAnimation(instanceId, pose, /*loop=*/true);
                     }
                 }
+                // Its body, behind or aside of that facing (FUN_0073dab0).
+                bodyYaw = turnUnitBody(*charRenderer, instanceId, entitySpawner_->getUnitBodies()[guid],
+                                       bodyYaw,
+                                       unitBodyFlags(*entity, isMovingNow, isSwimmingNow, isFlyingNow),
+                                       deltaTime, deadOrCorpse || creatureMount != nullptr,
+                                       !jumpHolds && !isMovingNow && !deadOrCorpse && !creatureMount &&
+                                           unitPtr->getStandState() == 0);
             }
-            // The model turns towards the movement facing (FUN_00735f60).
-            float renderYaw = entity->getModelFacing() + glm::radians(90.0f);
-            charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, 0.0f, renderYaw));
+            charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, 0.0f, bodyYaw));
             if (creatureMount)
-                charRenderer->setInstanceRotation(creatureMount->instanceId, glm::vec3(0.0f, 0.0f, renderYaw));
+                charRenderer->setInstanceRotation(creatureMount->instanceId, glm::vec3(0.0f, 0.0f, bodyYaw));
         }
     }
     {
@@ -3831,6 +3901,10 @@ void Application::syncRenderInstancesToEntities() {
             const glm::vec3 mountRenderPos = renderPos;
             if (remoteMount) renderPos.z += remoteMount->riderHeight;
 
+            // Orientation sync: the model turns towards the movement facing
+            // rather than snapping to it, as the client draws other players
+            // (FUN_00735f60).
+            float bodyYaw = entity->getModelFacing() + glm::radians(90.0f);
             if (posIt == _pCreatureRenderPosCache.end()) {
                 charRenderer->setInstancePosition(instanceId, renderPos);
                 if (remoteMount) {
@@ -3960,16 +4034,20 @@ void Application::syncRenderInstancesToEntities() {
                                                     /*loop=*/true);
                     }
                 }
+                // Its body, behind or aside of that facing (FUN_0073dab0): a
+                // strafing player's turned to the side, a turn on the spot
+                // shuffled.
+                bodyYaw = turnUnitBody(*charRenderer, instanceId, entitySpawner_->getUnitBodies()[guid],
+                                       bodyYaw,
+                                       unitBodyFlags(*entity, isMovingNow, isSwimmingNow, isFlyingNow),
+                                       deltaTime, deadOrCorpse || remoteMount != nullptr,
+                                       !jumpHolds && !isMovingNow && !deadOrCorpse && !remoteMount &&
+                                           unitPtr->getStandState() == 0);
             }
-
-            // Orientation sync: the model turns towards the movement facing
-            // rather than snapping to it, as the client draws other players
-            // (FUN_00735f60).
-            float renderYaw = entity->getModelFacing() + glm::radians(90.0f);
-            charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, 0.0f, renderYaw));
+            charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, 0.0f, bodyYaw));
             if (remoteMount) {
                 charRenderer->setInstanceRotation(remoteMount->instanceId,
-                                                  glm::vec3(0.0f, 0.0f, renderYaw));
+                                                  glm::vec3(0.0f, 0.0f, bodyYaw));
             }
         }
     }
@@ -4242,7 +4320,7 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     // creature models remain at stale spawn positions.
     inGameStep = "creature render sync";
     updateCheckpoint = "in_game: creature render sync";
-    syncRenderInstancesToEntities();
+    syncRenderInstancesToEntities(deltaTime);
     // Movement heartbeat is sent from GameHandler::update() to avoid
     // duplicate packets from multiple update loops.
 

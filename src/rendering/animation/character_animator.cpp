@@ -189,6 +189,7 @@ AnimOutput CharacterAnimator::resolveAnimation() {
     locoIn.swimming = fi.swimming;
     locoIn.sitting = fi.sitting;
     locoIn.sprintAura = sprintAura_;
+    locoIn.shuffle = fi.shuffle;
     locoIn.deltaTime = lastDt_;
     // Animation state for one-shot completion detection (jump start/end)
     locoIn.currentAnimId = fi.currentAnimId;
@@ -211,7 +212,10 @@ AnimOutput CharacterAnimator::applyOverlays(AnimOutput base) const {
     // Stealth substitution based on locomotion state
     auto locoState = locomotion_.getState();
     if (locoState == LocomotionFSM::State::IDLE) {
-        if (caps_.resolvedStealthIdle) base.animId = caps_.resolvedStealthIdle;
+        // Not over the shuffle, which FUN_0071e180 picks ahead of the
+        // stand the stealth stand replaces.
+        const bool shuffling = base.animId == anim::SHUFFLE_LEFT || base.animId == anim::SHUFFLE_RIGHT;
+        if (caps_.resolvedStealthIdle && !shuffling) base.animId = caps_.resolvedStealthIdle;
     } else if (locoState == LocomotionFSM::State::WALK) {
         if (caps_.resolvedStealthWalk) base.animId = caps_.resolvedStealthWalk;
     } else if (locoState == LocomotionFSM::State::RUN) {
