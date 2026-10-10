@@ -2345,12 +2345,21 @@ void CharacterRenderer::setLocomotionSpeed(uint32_t instanceId, float yardsPerSe
         std::isfinite(yardsPerSecond) ? std::max(0.0f, yardsPerSecond) : 0.0f;
 }
 
-void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
+void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::mat4* viewProjection) {
     // Animate everything that can be drawn. The animation radius used to be
     // 120 yards against a 130-yard draw radius, so anything between the two
     // stood frozen in its last pose; the client animates what it shows.
     const float animUpdateRadius = static_cast<float>(envSizeOrDefault("WOWEE_CHAR_RENDER_RADIUS", 130));
     const float animUpdateRadiusSq = animUpdateRadius * animUpdateRadius;
+    // What it shows, and no more: a unit behind the camera keeps its clock
+    // running below, but its bones are not posed until it comes into view -
+    // in a city of four hundred that was most of the cost of this pass. The
+    // view is widened by a few yards so a shadow cast into it from just
+    // outside still moves, and everything close by is posed regardless.
+    Frustum viewFrustum;
+    if (viewProjection) viewFrustum.extractFromMatrix(*viewProjection);
+    constexpr float kOffscreenMarginYards = 10.0f;
+    constexpr float kAlwaysPoseRadiusSq = 25.0f * 25.0f;
 
     // Single pass: fade-in, movement, and animation bone collection
     toUpdate_.clear();
@@ -2481,6 +2490,11 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
         // Bones every frame, at any distance: the client steps a visible
         // model each frame. Every second or fourth frame past 45 and 90 yards
         // made creature locomotion visibly step.
+        if (viewProjection && !inst.isSceneModel && distSq > kAlwaysPoseRadiusSq) {
+            const float radius = (inst.cachedModel ? std::max(inst.cachedModel->data.boundRadius, 1.0f) : 2.0f) *
+                                 std::max(inst.scale, 0.01f);
+            if (!viewFrustum.intersectsSphere(inst.position, radius + kOffscreenMarginYards)) continue;
+        }
         toUpdate_.push_back(std::ref(inst));
     }
 
@@ -4446,7 +4460,20 @@ void CharacterRenderer::refreshInteriorLights(const FloorQuery& floorAt, const I
     const auto toBytes = [](const glm::vec3& c) {
         return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
     };
+    // What a unit holds and wears - weapons, helm, shoulders, their effects -
+    // is lit as the unit is, and takes its light after the loop. Asked for
+    // themselves they each queried the floor every frame, their hand-carried
+    // positions never holding still: four or five WMO raycasts a frame for
+    // every armed NPC in a crowd.
+    attachedScratch_.clear();
+    for (const auto& [id, instance] : instances) {
+        for (const auto& wa : instance.weaponAttachments) {
+            attachedScratch_.insert(wa.weaponInstanceId);
+            for (const auto& fx : wa.effects) attachedScratch_.insert(fx.effectInstanceId);
+        }
+    }
     for (auto& [id, instance] : instances) {
+        if (attachedScratch_.count(id)) continue;
         const glm::vec3 feet = instance.hasOverrideModelMatrix
             ? glm::vec3(instance.overrideModelMatrix[3])
             : instance.position;
@@ -4479,6 +4506,25 @@ void CharacterRenderer::refreshInteriorLights(const FloorQuery& floorAt, const I
         instance.drawDirect = glm::vec4(light.direct, light.towardSun);
         instance.drawFlags = glm::vec4(inInteriorPass && inInteriorPass(feet) ? 1.0f : 0.0f,
                                        instance.directScale, 0.0f, 0.0f);
+    }
+    for (const auto& [id, instance] : instances) {
+        if (instance.weaponAttachments.empty() || attachedScratch_.count(id)) continue;
+        auto lightLike = [&](uint32_t childId) {
+            auto childIt = instances.find(childId);
+            if (childIt == instances.end()) return;
+            auto& child = childIt->second;
+            child.floor = instance.floor;
+            child.easedAmbient = instance.easedAmbient;
+            child.directScale = instance.directScale;
+            child.lightKnown = instance.lightKnown;
+            child.drawAmbient = instance.drawAmbient;
+            child.drawDirect = instance.drawDirect;
+            child.drawFlags = instance.drawFlags;
+        };
+        for (const auto& wa : instance.weaponAttachments) {
+            lightLike(wa.weaponInstanceId);
+            for (const auto& fx : wa.effects) lightLike(fx.effectInstanceId);
+        }
     }
 }
 

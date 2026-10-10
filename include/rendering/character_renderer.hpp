@@ -125,7 +125,10 @@ public:
                                                                uint32_t eventId) const;
     static constexpr uint8_t kArmEventLeft = 1, kArmEventRight = 2, kArmEndLeft = 4, kArmEndRight = 8;
 
-    void update(float deltaTime, const glm::vec3& cameraPos = glm::vec3(0.0f));
+    /// Advances every instance's animation; poses the bones only of those in
+    /// (or near) the view `viewProjection` describes, when one is given.
+    void update(float deltaTime, const glm::vec3& cameraPos = glm::vec3(0.0f),
+                const glm::mat4* viewProjection = nullptr);
 
     /** Pre-allocate GPU resources (bone SSBOs, descriptors) on main thread before parallel render. */
     void prepareRender(uint32_t frameIndex);
@@ -687,6 +690,7 @@ private:
     std::unordered_map<uint32_t, M2ModelGPU> models;
     std::unordered_map<std::string, uint32_t> sharedItemModels_;
     std::unordered_set<uint32_t> sharedItemModelIds_;
+    std::unordered_set<uint32_t> attachedScratch_;  // refreshInteriorLights' per-frame scratch
     std::unordered_map<uint32_t, CharacterInstance> instances;
     /// The instances a render() call draws, in the order it draws them.
     std::vector<std::pair<uint32_t, CharacterInstance*>> drawOrder_;

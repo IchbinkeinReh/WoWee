@@ -2640,7 +2640,8 @@ void Renderer::update(float deltaTime) {
     // Update character animations (runs in parallel with M2 animation above)
     if (characterRenderer && camera) {
         WOWEE_PROFILE_SCOPE("animation: characters", Cpu);
-        characterRenderer->update(deltaTime, camera->getPosition());
+        const glm::mat4 viewProjection = camera->getViewProjectionMatrix();
+        characterRenderer->update(deltaTime, camera->getPosition(), &viewProjection);
     }
 
     // Update AudioEngine (cleanup finished sounds, etc.)
