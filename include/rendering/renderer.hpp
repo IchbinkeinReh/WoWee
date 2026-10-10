@@ -22,6 +22,7 @@
 #include "rendering/sky_system.hpp"
 #include "rendering/screen_effect_state.hpp"
 #include "rendering/minimap_indoor.hpp"
+#include "game/zone_area.hpp"
 #include "core/screen_recorder.hpp"
 #include "pipeline/custom_zone_discovery.hpp"
 
@@ -221,6 +222,9 @@ public:
     /// zone first - the world PvP flag is on the subzone. See ZoneManager.
     bool isOnOutdoorPvpObjective() const;
     bool isPlayerIndoors() const { return playerIndoors_; }
+    /// The texts the interface names the player's place by (game::zone_area),
+    /// none until there is a place to name.
+    const game::zone_area::Texts* getZoneTexts() const { return zoneTextsKnown_ ? &zoneTexts_ : nullptr; }
     VkContext* getVkContext() const { return vkCtx; }
     VkDescriptorSetLayout getPerFrameSetLayout() const { return perFrameSetLayout; }
     /// What a per-frame set allocated elsewhere binds at binding 2: a fog
@@ -926,11 +930,24 @@ private:
     bool screenEffectHavePlayer_ = false;
     bool cameraInLiquid_ = false;         ///< 0x00780620, for the glow's wave
 
-    /// WMOAreaTable's flags by building, name set and group, which decide
-    /// where the minimap is the indoor one (0x007f5ba0). Read once.
-    minimap_indoor::AreaFlags wmoAreaFlags_;
-    bool wmoAreaFlagsLoaded_ = false;
-    void loadWmoAreaFlags();
+    /// WMOAreaTable's rows by building, name set and group: the flags that
+    /// decide where the minimap is the indoor one (0x007f5ba0), and the area
+    /// and the name a building's group gives the place (0x0077fa00,
+    /// 0x007a1500, 0x007a15b0). Read once.
+    minimap_indoor::AreaRows wmoAreaRows_;
+    bool wmoAreaRowsLoaded_ = false;
+    void loadWmoAreaRows();
+
+    /// Where the player is, worked out once a frame (updatePlayerArea): the
+    /// building groups the player is linked to (0x007c2a70), the area of the
+    /// first of them (0x00782560, none where it names none), and the texts.
+    std::vector<minimap_indoor::GroupRef> playerLinks_;
+    uint32_t playerLinkedArea_ = 0;
+    bool playerLinkIndoors_ = false;
+    game::zone_area::Texts zoneTexts_;
+    bool zoneTextsKnown_ = false;
+    uint32_t zoneTextsMapId_ = 0xFFFFFFFFu;
+    void updatePlayerArea();
 
     // GPU-driven grass: compute cull with atomic compaction feeding an
     // indirect draw, over a population generated from terrain suitability.

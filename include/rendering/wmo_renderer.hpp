@@ -464,15 +464,52 @@ public:
     /// object's 0x8000, and the camera's fog colour with it (0x007c1730).
     [[nodiscard]] bool inInteriorPass(const glm::vec3& pos) const;
 
-    /// The building the indoor minimap is drawn from, when `pos` is inside
-    /// one of its interior groups: the groups through the portals that
-    /// reach the area of `radius` about it (minimap_indoor::connectedGroups).
-    /// None outdoors, and none for a building whose name is not known.
+    using GroupRef = minimap_indoor::GroupRef;
+    struct GroupAlong {
+        GroupRef ref;
+        /// How far along the line it was met, in yards.
+        float dist = 0.0f;
+    };
+    /// The groups an object is linked to (0x007c2a70 into 0x007c28f0): the
+    /// group of the first face going straight from `start` to `endZ` that
+    /// collides, and of the first that is drawn - floorAlong's faces and
+    /// groups (0x007c2700). Of buildings in the world only. Whether the
+    /// ground is nearer is the caller's to say (0x007c28f0 asks it apart).
+    struct Links {
+        std::optional<GroupAlong> collides;
+        std::optional<GroupAlong> drawn;
+    };
+    [[nodiscard]] Links linksAlong(const glm::vec3& start, float endZ) const;
+    /// The group the area of a place is read from (0x0077fa00's ray,
+    /// 0x007a30d0 with 0x10 and 0x500): the first face from `start` to `endZ`
+    /// that is not detail (0x04, the face mask 0x84 0x007ae140 makes of 0x10),
+    /// of any group, of buildings in the world that are not moved about
+    /// (0x500 passes over map objects flagged 0x100 or 0x400 - 0x400 is what
+    /// 0x007b64f0 sets on one placed by hand, a transport's).
+    [[nodiscard]] std::optional<GroupAlong> areaGroupAlong(const glm::vec3& start, float endZ) const;
+    /// What WMOAreaTable is asked about a group with: the building's WMOID,
+    /// the placement's name set and MOGP's group id; and MOGI's flags, and
+    /// whether its building is a moving one (a transport, the client's 0x400).
+    struct GroupArea {
+        uint32_t wmoId = 0;
+        uint32_t nameSet = 0;
+        int32_t areaGroupId = 0;
+        uint32_t flags = 0;
+        bool dynamic = false;
+    };
+    [[nodiscard]] std::optional<GroupArea> groupArea(const GroupRef& ref) const;
+
+    /// The building the indoor minimap is drawn from (0x007f5ba0), from the
+    /// groups the player is linked to (`links`, in order) and the area of
+    /// `radius` about `pos`: the groups through the portals that reach it
+    /// (minimap_indoor::connectedGroups), or the building's own pictures
+    /// (minimap_indoor::buildingPictures). None outdoors, and none for a
+    /// building whose name is not known.
     [[nodiscard]] std::optional<minimap_indoor::Scene>
-    indoorMinimapAt(const glm::vec3& pos, float radius) const;
-    /// WMOAreaTable's flags, which decide what is indoors (0x007f5ba0). Not
+    indoorMinimapAt(const glm::vec3& pos, float radius, const std::vector<GroupRef>& links) const;
+    /// WMOAreaTable's rows, which decide what is indoors (0x007f5ba0). Not
     /// owned; null for none.
-    void setAreaFlags(const minimap_indoor::AreaFlags* table) { areaFlags_ = table; }
+    void setAreaRows(const minimap_indoor::AreaRows* table) { areaRows_ = table; }
     /// The ADT placement's name set (MODF), for WMOAreaTable.
     void setInstanceNameSet(uint32_t instanceId, uint32_t nameSet);
     /// The building and interior group `pos` stands in, as the minimap tells
@@ -592,6 +629,10 @@ private:
         glm::vec3 boundingBoxMax;
 
         uint32_t groupFlags = 0;
+        /// The group's own number (MOGI's index), which WMOAreaTable's rows,
+        /// the minimap's pictures and the portals go by. Not this one's place
+        /// in ModelData::groups: an empty group is not kept there.
+        uint32_t groupIndex = 0;
         bool allUntextured = false;  // True if ALL batches use fallback white texture (collision/placeholder group)
         bool isLOD = false;          // Distance-only group (skip when camera is close)
 
@@ -922,6 +963,13 @@ private:
 
     void rebuildSpatialIndex();
     void gatherCandidates(const glm::vec3& queryMin, const glm::vec3& queryMax, std::vector<size_t>& outIndices) const;
+    /// Every triangle going straight from `start` to `endZ` (floorAlong and
+    /// the area queries): `onHit(instance, model, group, triStart, mopy,
+    /// dist, hitLocal)` for each face `takesFace(mopy)` lets through, of
+    /// groups with none of `groupSkip`.
+    template <typename FaceFilter, typename OnHit>
+    void walkTrianglesAlong(const glm::vec3& start, float endZ, uint32_t groupSkip,
+                            FaceFilter&& takesFace, OnHit&& onHit) const;
 
     // Vulkan context
     VkContext* vkCtx_ = nullptr;
@@ -1069,7 +1117,7 @@ private:
     /// flag per group, and the world bounds of the groups flagged.
     std::unordered_map<uint32_t, std::vector<uint8_t>> interiorPass_;
     std::vector<std::pair<glm::vec3, glm::vec3>> interiorPassBounds_;
-    const minimap_indoor::AreaFlags* areaFlags_ = nullptr;
+    const minimap_indoor::AreaRows* areaRows_ = nullptr;
     uint64_t interiorPassGeneration_ = 0;
 
     // Collision query profiling - atomic because getFloorHeight is dispatched

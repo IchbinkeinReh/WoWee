@@ -372,6 +372,15 @@
     "Y": 5,
     "Z": 6
   },
+  "WMOAreaTable": {
+    "ID": 0,
+    "WMOID": 1,
+    "NameSetID": 2,
+    "WMOGroupID": 3,
+    "Flags": 10,
+    "AreaTableID": 11,
+    "AreaName": 12
+  },
   "WorldMapArea": {
     "AreaID": 2,
     "AreaName": 3,

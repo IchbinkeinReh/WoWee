@@ -62,6 +62,17 @@ constexpr float kWallMaxAbsNormalZ = 0.65f;
 // Thread-local scratch buffers for collision queries (allows concurrent getFloorHeight/checkWallCollision calls)
 static thread_local std::vector<size_t> tl_candidateScratch;
 static thread_local std::vector<uint32_t> tl_triScratch;
+
+namespace {
+/// The groups 0x007c25d0 passes over: 0x80, 0x10000 and 0x400000.
+constexpr uint32_t kFloorGroupSkip = 0x410080u;
+/// The faces 0x007c2700 takes: not 0x02 (0x007c77d0's mask 0x82), and
+/// colliding (0x08, 0x20) or drawn (0x20, the detail 0x04).
+constexpr bool floorFaceTaken(uint8_t mopy) {
+    return (mopy & 0x02u) == 0 && (mopy & 0x2Cu) != 0;
+}
+}  // namespace
+
 static thread_local std::unordered_set<uint32_t> tl_candidateIdScratch;
 
 static void transformAABB(const glm::mat4& modelMatrix,
@@ -607,6 +618,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         }
 
         GroupResources resources;
+        resources.groupIndex = static_cast<uint32_t>(gi);
         if (createGroupResources(wmoGroup, resources, wmoGroup.flags, model.flags)) {
             // Detect distance-only LOD/exterior shell groups:
             // 1. Very low vertex count (<100) - portal connectors, tiny shells
@@ -4138,52 +4150,85 @@ bool WMORenderer::isInsideWMOGroups(float glX, float glY, float glZ,
     return false;
 }
 
-std::optional<minimap_indoor::Scene>
-WMORenderer::indoorMinimapAt(const glm::vec3& pos, float radius) const {
-    namespace mi = minimap_indoor;
-    gatherCandidates(pos - glm::vec3(0.5f), pos + glm::vec3(0.5f), tl_candidateScratch);
+WMORenderer::Links WMORenderer::linksAlong(const glm::vec3& start, float endZ) const {
+    // floorAlong's faces and groups (0x007c2700), the group each nearest one
+    // belongs to kept rather than its light.
+    Links out;
+    walkTrianglesAlong(start, endZ, kFloorGroupSkip, [](uint8_t mopy) { return floorFaceTaken(mopy); },
+                       [&](const WMOInstance& instance, const ModelData&, const GroupResources& group,
+                           uint32_t, uint8_t mopy, float dist, const glm::vec3&) {
+                           if (instance.hidden) return;
+                           const GroupAlong hit{{instance.id, group.groupIndex}, dist};
+                           if ((mopy & 0x28u) != 0 && (!out.collides || dist < out.collides->dist))
+                               out.collides = hit;
+                           if ((mopy & 0x24u) != 0 && (!out.drawn || dist < out.drawn->dist))
+                               out.drawn = hit;
+                       });
+    return out;
+}
 
-    // The group the player is in: the smallest whose box holds them, of any
-    // building there.
+std::optional<WMORenderer::GroupAlong> WMORenderer::areaGroupAlong(const glm::vec3& start, float endZ) const {
+    std::optional<GroupAlong> out;
+    walkTrianglesAlong(start, endZ, 0u, [](uint8_t mopy) { return (mopy & 0x04u) == 0; },
+                       [&](const WMOInstance& instance, const ModelData&, const GroupResources& group,
+                           uint32_t, uint8_t, float dist, const glm::vec3&) {
+                           if (instance.hidden || instance.isTransport) return;
+                           if (!out || dist < out->dist) out = GroupAlong{{instance.id, group.groupIndex}, dist};
+                       });
+    return out;
+}
+
+std::optional<WMORenderer::GroupArea> WMORenderer::groupArea(const GroupRef& ref) const {
+    const auto at = instanceIndexById.find(ref.instanceId);
+    if (at == instanceIndexById.end() || at->second >= instances.size()) return std::nullopt;
+    const WMOInstance& instance = instances[at->second];
+    const auto it = loadedModels.find(instance.modelId);
+    if (it == loadedModels.end() || ref.group >= it->second.minimapGroups.size()) return std::nullopt;
+    const auto& info = it->second.minimapGroups[ref.group];
+    GroupArea area;
+    area.wmoId = it->second.wmoId;
+    area.nameSet = instance.nameSet;
+    area.areaGroupId = info.areaGroupId;
+    area.flags = info.flags;
+    area.dynamic = instance.isTransport;
+    return area;
+}
+
+std::optional<minimap_indoor::Scene>
+WMORenderer::indoorMinimapAt(const glm::vec3& pos, float radius, const std::vector<GroupRef>& links) const {
+    namespace mi = minimap_indoor;
+    // The player's group is the first of the groups the player is linked to
+    // that is not a moving building's open to the sky (0x007a1640, 0x007a18d0):
+    // the group of the floor under the feet, not the smallest box about them.
+    // Dalaran's streets are inside the boxes of a dozen shops, and taking the
+    // smallest drew a shop's pictures, or none, in the middle of the city.
     const WMOInstance* bestInstance = nullptr;
     const ModelData* bestModel = nullptr;
     uint32_t bestGroup = 0;
-    float bestVolume = std::numeric_limits<float>::max();
-    glm::vec3 bestLocal(0.0f);
-    for (size_t idx : tl_candidateScratch) {
-        const auto& instance = instances[idx];
-        if (instance.hidden || instance.isTransport) continue;
-        if (!withinWorldBounds(instance, pos.x, pos.y, pos.z)) continue;
-        auto it = loadedModels.find(instance.modelId);
-        if (it == loadedModels.end() || it->second.minimapBase.empty()) continue;
-        const ModelData& model = it->second;
-        const glm::vec3 local = glm::vec3(instance.invModelMatrix * glm::vec4(pos, 1.0f));
-        for (uint32_t gi = 0; gi < model.minimapGroups.size(); ++gi) {
-            const auto& g = model.minimapGroups[gi];
-            if (local.x < g.min.x || local.y < g.min.y || local.z < g.min.z ||
-                local.x > g.max.x || local.y > g.max.y || local.z > g.max.z) {
-                continue;
-            }
-            const glm::vec3 e = g.max - g.min;
-            const float volume = e.x * e.y * e.z;
-            if (volume < bestVolume) {
-                bestVolume = volume;
-                bestInstance = &instance;
-                bestModel = &model;
-                bestGroup = gi;
-                bestLocal = local;
-            }
-        }
+    for (const GroupRef& link : links) {
+        const auto at = instanceIndexById.find(link.instanceId);
+        if (at == instanceIndexById.end() || at->second >= instances.size()) continue;
+        const WMOInstance& instance = instances[at->second];
+        const auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end() || link.group >= it->second.minimapGroups.size()) continue;
+        if (instance.isTransport && !mi::isInteriorGroup(it->second.minimapGroups[link.group].flags)) continue;
+        bestInstance = &instance;
+        bestModel = &it->second;
+        bestGroup = link.group;
+        break;
     }
-    if (!bestInstance) return std::nullopt;
+    if (!bestInstance || bestModel->minimapBase.empty()) return std::nullopt;
+    const glm::vec3 bestLocal = glm::vec3(bestInstance->invModelMatrix * glm::vec4(pos, 1.0f));
 
     // Indoors as the client asks its area tables (0x007f5ba0 on 0x007a1640's
     // two WMOAreaTable rows, the group's and the building's).
     const mi::GroupInfo& playerGroup = bestModel->minimapGroups[bestGroup];
-    const uint32_t* groupRow = mi::areaFlags(areaFlags_, bestModel->wmoId, bestInstance->nameSet,
-                                             playerGroup.areaGroupId);
-    const uint32_t* rootRow = mi::areaFlags(areaFlags_, bestModel->wmoId, bestInstance->nameSet, -1);
-    if (!mi::isIndoors(playerGroup.flags, groupRow, rootRow)) return std::nullopt;
+    const mi::AreaRow* groupRow = mi::areaRow(areaRows_, bestModel->wmoId, bestInstance->nameSet,
+                                              playerGroup.areaGroupId);
+    const mi::AreaRow* rootRow = mi::areaRow(areaRows_, bestModel->wmoId, bestInstance->nameSet, -1);
+    const uint32_t* groupFlags = groupRow ? &groupRow->flags : nullptr;
+    const uint32_t* rootFlags = rootRow ? &rootRow->flags : nullptr;
+    if (!mi::isIndoors(playerGroup.flags, groupFlags, rootFlags)) return std::nullopt;
 
     mi::Scene scene;
     scene.wmoBase = bestModel->minimapBase;
@@ -4209,15 +4254,15 @@ WMORenderer::indoorMinimapAt(const glm::vec3& pos, float radius) const {
     scene.localMin = glm::vec2(lo);
     scene.localMax = glm::vec2(hi);
 
-    std::vector<uint32_t> groups;
-    if (mi::ownGroupOnly(playerGroup.flags, rootRow)) {
-        groups.push_back(bestGroup);
-    } else {
-        const mi::WalkModel walk{&bestModel->minimapGroups, &bestModel->minimapLinks,
-                                 &bestModel->minimapPortals};
-        groups = mi::connectedGroups(walk, bestGroup, lo, hi, mi::isInteriorGroup(playerGroup.flags));
+    if (mi::buildingPictures(playerGroup.flags, rootFlags)) {
+        // The building's own pictures over its whole box (0x007afe70).
+        scene.groups.push_back({mi::buildingPictureGroup(bestModel->minimapGroups.size()),
+                                bestModel->boundingBoxMin, bestModel->boundingBoxMax});
+        return scene;
     }
-    for (uint32_t gi : groups) {
+    const mi::WalkModel walk{&bestModel->minimapGroups, &bestModel->minimapLinks,
+                             &bestModel->minimapPortals};
+    for (uint32_t gi : mi::connectedGroups(walk, bestGroup, lo, hi, mi::isInteriorGroup(playerGroup.flags))) {
         const auto& g = bestModel->minimapGroups[gi];
         scene.groups.push_back({gi, g.min, g.max});
     }
@@ -4271,15 +4316,58 @@ bool WMORenderer::isInsideInteriorWMO(float glX, float glY, float glZ) const {
     return isInsideWMOGroups(glX, glY, glZ, /*interiorOnly=*/true, nullptr);
 }
 
+template <typename FaceFilter, typename OnHit>
+void WMORenderer::walkTrianglesAlong(const glm::vec3& start, float endZ, uint32_t groupSkip,
+                                     FaceFilter&& takesFace, OnHit&& onHit) const {
+    // The triangles met going straight from `start` to `endZ`, across every
+    // WMO there (0x007c2700 asks each, 0x007c25d0 each group), each with how
+    // far along the line it was met. Groups with any of `groupSkip` are
+    // passed over, and faces `takesFace` turns down are not tested.
+    const float reach = std::abs(start.z - endZ);
+    if (reach <= 0.0f) return;
+    const float sign = endZ < start.z ? -1.0f : 1.0f;
+    std::vector<size_t> candidates;
+    gatherCandidates(glm::vec3(start.x - 0.5f, start.y - 0.5f, std::min(start.z, endZ)),
+                     glm::vec3(start.x + 0.5f, start.y + 0.5f, std::max(start.z, endZ)), candidates);
+    std::vector<uint32_t> tris;
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const ModelData& model = it->second;
+        const glm::vec3 localOrigin = glm::vec3(instance.invModelMatrix * glm::vec4(start, 1.0f));
+        const glm::vec3 localDir =
+            glm::normalize(glm::vec3(instance.invModelMatrix * glm::vec4(0.0f, 0.0f, sign, 0.0f)));
+        for (const auto& group : model.groups) {
+            if (group.groupFlags & groupSkip) continue;
+            if (!trianglesAlongRay(group, localOrigin, localDir, tris)) continue;
+            const auto& verts = group.collisionVertices;
+            const auto& indices = group.collisionIndices;
+            for (uint32_t triStart : tris) {
+                const size_t tri = triStart / 3;
+                const uint8_t mopy = tri < group.triMopyFlags.size() ? group.triMopyFlags[tri] : 0x20u;
+                if (!takesFace(mopy)) continue;
+                const glm::vec3& v0 = verts[indices[triStart]];
+                const glm::vec3& v1 = verts[indices[triStart + 1]];
+                const glm::vec3& v2 = verts[indices[triStart + 2]];
+                const float t = rayTriangleIntersect(localOrigin, localDir, v0, v1, v2);
+                if (t <= 0.0f) continue;
+                const glm::vec3 hitLocal = localOrigin + localDir * t;
+                const glm::vec3 hitWorld = glm::vec3(instance.modelMatrix * glm::vec4(hitLocal, 1.0f));
+                const float dist = (hitWorld.z - start.z) * sign;
+                if (dist < 0.0f || dist >= reach) continue;
+                onHit(instance, model, group, triStart, mopy, dist, hitLocal);
+            }
+        }
+    }
+}
+
 std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3& start, float endZ) const {
     // The first WMO triangles met going straight from `start` to `endZ`,
     // across every WMO there (0x007c2700 asks each, 0x007c25d0 each group).
     const float reach = std::abs(start.z - endZ);
     if (reach <= 0.0f) return std::nullopt;
     const float sign = endZ < start.z ? -1.0f : 1.0f;
-    std::vector<size_t> candidates;
-    gatherCandidates(glm::vec3(start.x - 0.5f, start.y - 0.5f, std::min(start.z, endZ)),
-                     glm::vec3(start.x + 0.5f, start.y + 0.5f, std::max(start.z, endZ)), candidates);
     // Two answers, as 0x007c6600 keeps them: the nearest triangle that
     // collides (MOPY 0x20 or 0x08), which says there is a floor and where,
     // and the nearest one that is drawn (0x20, or the detail 0x04), which
@@ -4290,6 +4378,7 @@ std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3&
     // them flashed it white each time its ray met one mid-ride. Neither
     // takes a face flagged 0x02 (0x007c77d0's mask 0x82; 0x80 is only the
     // mark 0x007c7610 clears again). A group without MOPY counts as drawn.
+    // 0x007c25d0 passes over groups with 0x80, 0x10000 or 0x400000.
     struct Hit {
         float dist;
         const ModelData* model = nullptr;
@@ -4299,42 +4388,13 @@ std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3&
     };
     Hit collides{reach};
     Hit drawn{reach};
-    for (size_t idx : candidates) {
-        const auto& instance = instances[idx];
-        auto it = loadedModels.find(instance.modelId);
-        if (it == loadedModels.end()) continue;
-        const ModelData& model = it->second;
-        const glm::vec3 localOrigin = glm::vec3(instance.invModelMatrix * glm::vec4(start, 1.0f));
-        const glm::vec3 localDir =
-            glm::normalize(glm::vec3(instance.invModelMatrix * glm::vec4(0.0f, 0.0f, sign, 0.0f)));
-        for (const auto& group : model.groups) {
-            // 0x007c25d0 passes over groups with 0x80, 0x10000 or 0x400000.
-            if (group.groupFlags & 0x410080u) continue;
-            if (!trianglesAlongRay(group, localOrigin, localDir, tl_triScratch)) continue;
-            const auto& verts = group.collisionVertices;
-            const auto& indices = group.collisionIndices;
-            for (uint32_t triStart : tl_triScratch) {
-                const size_t tri = triStart / 3;
-                const uint8_t mopy = tri < group.triMopyFlags.size() ? group.triMopyFlags[tri] : 0x20u;
-                if (mopy & 0x02u) continue;
-                const bool collidable = (mopy & 0x28u) != 0;
-                const bool drawable = (mopy & 0x24u) != 0;
-                if (!collidable && !drawable) continue;
-                const glm::vec3& v0 = verts[indices[triStart]];
-                const glm::vec3& v1 = verts[indices[triStart + 1]];
-                const glm::vec3& v2 = verts[indices[triStart + 2]];
-                const float t = rayTriangleIntersect(localOrigin, localDir, v0, v1, v2);
-                if (t <= 0.0f) continue;
-                const glm::vec3 hitLocal = localOrigin + localDir * t;
-                const glm::vec3 hitWorld = glm::vec3(instance.modelMatrix * glm::vec4(hitLocal, 1.0f));
-                const float dist = (hitWorld.z - start.z) * sign;
-                if (dist < 0.0f) continue;
-                const Hit hit{dist, &model, &group, triStart, hitLocal};
-                if (collidable && dist < collides.dist) collides = hit;
-                if (drawable && dist < drawn.dist) drawn = hit;
-            }
-        }
-    }
+    walkTrianglesAlong(start, endZ, kFloorGroupSkip, [](uint8_t mopy) { return floorFaceTaken(mopy); },
+                       [&](const WMOInstance&, const ModelData& model, const GroupResources& group,
+                           uint32_t triStart, uint8_t mopy, float dist, const glm::vec3& hitLocal) {
+                           const Hit hit{dist, &model, &group, triStart, hitLocal};
+                           if ((mopy & 0x28u) != 0 && dist < collides.dist) collides = hit;
+                           if ((mopy & 0x24u) != 0 && dist < drawn.dist) drawn = hit;
+                       });
     if (!collides.group && !drawn.group) return std::nullopt;
     ObjectFloor found;
     found.z = start.z + (collides.group ? collides.dist : drawn.dist) * sign;

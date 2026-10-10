@@ -551,7 +551,8 @@
     "NameSetID": 2,
     "WMOGroupID": 3,
     "Flags": 9,
-    "AreaTableID": 10
+    "AreaTableID": 10,
+    "AreaName": 11
   },
   "WorldMapArea": {
     "AreaID": 2,

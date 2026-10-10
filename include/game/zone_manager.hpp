@@ -2,6 +2,7 @@
 
 #include <string>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -34,6 +35,12 @@ public:
 
     [[nodiscard]] uint32_t getZoneId(int tileX, int tileY) const;
     [[nodiscard]] uint32_t resolveAreaZoneId(uint32_t areaId) const;
+    /// An area's ParentAreaID, none for an area AreaTable does not have.
+    [[nodiscard]] std::optional<uint32_t> areaParent(uint32_t areaId) const {
+        const auto it = areaParents_.find(areaId);
+        if (it == areaParents_.end()) return std::nullopt;
+        return it->second;
+    }
 
     /// Whether an area is a world PvP objective - one of the eleven the
     /// AREA_FLAG_OUTDOOR_PVP bit marks, or anywhere in Wintergrasp, which

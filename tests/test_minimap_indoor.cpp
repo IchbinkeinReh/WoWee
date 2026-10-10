@@ -158,11 +158,41 @@ TEST_CASE("indoors by the area tables", "[minimap_indoor]") {
     CHECK_FALSE(mi::isIndoors(mi::kGroupExterior, nullptr, &open));
     // The group's row's 0x20 rules it out.
     CHECK_FALSE(mi::isIndoors(mi::kGroupInterior, &blocked, &outdoorsHere));
-    // 0x8/0x10 on the building with an exterior group: its own pictures alone.
+    // 0x8/0x10 on the building with an exterior group: the building's own
+    // pictures rather than the walk.
     const uint32_t own = 0x10;
-    CHECK(mi::ownGroupOnly(mi::kGroupExterior, &own));
-    CHECK_FALSE(mi::ownGroupOnly(mi::kGroupInterior, &own));
-    CHECK_FALSE(mi::ownGroupOnly(mi::kGroupExterior, &outdoorsHere));
+    CHECK(mi::buildingPictures(mi::kGroupExterior, &own));
+    CHECK_FALSE(mi::buildingPictures(mi::kGroupInterior, &own));
+    CHECK_FALSE(mi::buildingPictures(mi::kGroupExterior, &outdoorsHere));
+    // Dalaran's: its building's row is 0x9, its streets exterior groups.
+    const uint32_t dalaran = 0x9;
+    CHECK(mi::isIndoors(0x8020080d, nullptr, &dalaran));
+    CHECK(mi::buildingPictures(0x8020080d, &dalaran));
+}
+
+TEST_CASE("the building's own pictures: one past its groups, over its box", "[minimap_indoor]") {
+    // ND_Dalaran: 91 groups, MOHD's box 614 by 702 yards - its pictures are
+    // ND_Dalaran_091_00_00 to _04_05, five across and six up.
+    CHECK(mi::buildingPictureGroup(91) == 91u);
+    const glm::vec3 lo(-336.42f, -379.13f, -325.46f), hi(277.27f, 323.17f, 549.88f);
+    const auto all = mi::groupTiles(lo, hi, {-1000.0f, -1000.0f}, {1000.0f, 1000.0f});
+    REQUIRE(all.size() == 30u);
+    CHECK(std::any_of(all.begin(), all.end(), [](const mi::Tile& t) { return t.x == 4 && t.y == 5; }));
+    CHECK(mi::tileName("wmo\\Northrend\\Dalaran\\ND_Dalaran", 91, 4, 5) ==
+          "wmo\\Northrend\\Dalaran\\ND_Dalaran_091_04_05");
+}
+
+TEST_CASE("the area tables' rows, exactly by building, name set and group", "[minimap_indoor]") {
+    mi::AreaRows rows;
+    rows[mi::areaKey(5164, 0, -1)] = {0x9, 4395, ""};
+    rows[mi::areaKey(5164, 0, 24042)] = {0x0, 4601, "Dalaran"};
+    const auto* root = mi::areaRow(&rows, 5164, 0, -1);
+    REQUIRE(root);
+    CHECK(root->areaId == 4395u);
+    CHECK(mi::areaRow(&rows, 5164, 0, 24042)->name == "Dalaran");
+    CHECK_FALSE(mi::areaRow(&rows, 5164, 1, 24042));
+    CHECK_FALSE(mi::areaRow(&rows, 5164, 0, 24043));
+    CHECK_FALSE(mi::areaRow(nullptr, 5164, 0, -1));
 }
 
 TEST_CASE("the outcode", "[minimap_indoor]") {

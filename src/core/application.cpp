@@ -821,6 +821,17 @@ bool Application::initialize() {
         luaSvc.getLiveZoneId = [r = renderer.get()]() -> uint32_t {
             return r ? r->getCurrentZoneId() : 0u;
         };
+        luaSvc.getZoneTexts = [r = renderer.get()]() {
+            addons::LuaServices::ZoneTexts out;
+            if (const auto* t = r ? r->getZoneTexts() : nullptr) {
+                out.known = true;
+                out.zone = t->zone;
+                out.realZone = t->realZone;
+                out.subzone = t->subzone;
+                out.minimap = t->minimap;
+            }
+            return out;
+        };
         luaSvc.isOnOutdoorPvpObjective = [r = renderer.get()]() -> bool {
             return r && r->isOnOutdoorPvpObjective();
         };
