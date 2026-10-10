@@ -546,7 +546,8 @@ void SpellVisualSystem::playKit(uint32_t kitId, spell_kit::KitType type, const g
 }
 
 void SpellVisualSystem::playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
-                                          uint32_t spellId, uint64_t casterGuid) {
+                                          uint32_t spellId, uint64_t casterGuid, float speed,
+                                          const std::optional<glm::vec3>& casterPosition) {
     if (!m2Renderer_ || visualId == 0) return;
     if (!cachedAssetManager_) cachedAssetManager_ = core::Application::getInstance().getAssetManager();
     if (!cachedAssetManager_) return;
@@ -557,8 +558,21 @@ void SpellVisualSystem::playSpellAreaKits(uint32_t visualId, const glm::vec3& pl
     const KitPlayExtra byCaster{.unitGuid = casterGuid};
     if (it->second.instantArea != 0)
         playKitOnUnit(it->second.instantArea, spell_kit::KitType::Area, 0, place, &place, 0, spellId, byCaster);
-    if (it->second.impactArea != 0 && !missileCarriesImpact)
-        playKitOnUnit(it->second.impactArea, spell_kit::KitType::Area, 0, place, &place, 0, spellId, byCaster);
+    if (it->second.impactArea == 0 || missileCarriesImpact) return;
+    if (const auto delayMs = spell_kit::areaImpactDelayMs(speed, casterPosition, place);
+        delayMs && casterGuid != 0) {
+        // Mode 1: on the caster, at now plus the way at the spell's speed.
+        waitingKits_.push_back({.unitGuid = casterGuid,
+                                .spellId = spellId,
+                                .kitId = it->second.impactArea,
+                                .type = spell_kit::KitType::Area,
+                                .hasPlace = true,
+                                .place = place,
+                                .deadlineMs = colourClockMs_ + *delayMs,
+                                .mode = 1});
+        return;
+    }
+    playKitOnUnit(it->second.impactArea, spell_kit::KitType::Area, 0, place, &place, 0, spellId, byCaster);
 }
 
 std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUnit(
@@ -568,8 +582,8 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
     if (it == kits_.end()) return {};
     const KitRecord& kit = it->second;
     // 0x0072af60: a kit of a chain spell with Flags 0x1 waits on its unit
-    // for the chain's pulse. A state kit is held by its aura here and plays
-    // as it comes.
+    // for the chain's pulse. A state kit waits in its aura instead
+    // (holdStateKitForChain).
     const uint64_t unitGuid =
         renderInstanceId != 0 && instanceUnitResolver_ ? instanceUnitResolver_(renderInstanceId) : extra.unitGuid;
     if (!extra.replay && unitGuid != 0 && spellId != 0 && type != spell_kit::KitType::State &&
@@ -943,12 +957,8 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
                 for (AuraKit& aura : unit.auras) {
                     if (aura.visualId != visualId || !aura.awaitingMissile) continue;
                     aura.awaitingMissile = false;
-                    glm::vec3 unitPos;
-                    if (charRenderer && charRenderer->getInstancePosition(unitInstance, unitPos))
-                        playKitShake(aura.kitId, unitPos);
-                    playKitColourFade(aura.kitId, unitInstance, aura.spellId);
-                    if (auto kitIt = kits_.find(aura.kitId); kitIt != kits_.end())
-                        startKitChains(kitIt->second, guid, aura.spellId, aura.casterGuid);
+                    holdStateKitForChain(aura);
+                    if (!aura.awaitingChain) startStateKitOnUnit(guid, aura, aura.casterGuid);
                 }
             }
         }
@@ -1144,18 +1154,12 @@ void SpellVisualSystem::applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, u
             }
         }
     }
-    if (!aura.awaitingMissile && instance != 0) {
-        glm::vec3 unitPos;
-        if (renderer_ && renderer_->getCharacterRenderer() &&
-            renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos))
-            playKitShake(aura.kitId, unitPos);
-        playKitColourFade(aura.kitId, instance, spellId);
-    }
-    // Its chains (0x007265c0): from the aura's caster where the kit names
-    // another unit (flag 0x1000 with the slot's caster, 0x00724820).
+    // Then 0x00745230: held for a chain's pulse (0x0072af60), or played -
+    // its chains from the aura's caster where the kit names another unit
+    // (flag 0x1000 with the slot's caster, 0x00724820).
     if (!aura.awaitingMissile) {
-        if (auto kitIt = kits_.find(aura.kitId); kitIt != kits_.end())
-            startKitChains(kitIt->second, unitGuid, spellId, casterGuid);
+        holdStateKitForChain(aura);
+        if (!aura.awaitingChain) startStateKitOnUnit(unitGuid, aura, casterGuid);
     }
     unit.auras.push_back(std::move(aura));
     // Then 0x00720400(1, 1) for a Flags 8 visual.
@@ -1424,11 +1428,21 @@ void SpellVisualSystem::releaseWaitingKits(uint64_t unitGuid, uint32_t spellId, 
     // Taken out first: a kit played here may start chains of its own.
     std::vector<WaitingKit> due;
     for (auto it = waitingKits_.begin(); it != waitingKits_.end();) {
-        if (it->unitGuid == unitGuid && it->spellId == spellId && it->counter == counter) {
+        if (it->mode == 0 && it->unitGuid == unitGuid && it->spellId == spellId && it->counter == counter) {
             due.push_back(*it);
             it = waitingKits_.erase(it);
         } else {
             ++it;
+        }
+    }
+    // A state or channel kit waits with counter -1 (0x00724820, 0x0072bc70).
+    if (counter == -1) {
+        if (auto unitIt = unitAuraKits_.find(unitGuid); unitIt != unitAuraKits_.end()) {
+            for (AuraKit& aura : unitIt->second.auras) {
+                if (!aura.awaitingChain || aura.spellId != spellId) continue;
+                aura.awaitingChain = false;
+                startStateKitOnUnit(unitGuid, aura, aura.casterGuid);
+            }
         }
     }
     for (const WaitingKit& w : due) {
@@ -1444,11 +1458,21 @@ void SpellVisualSystem::releaseWaitingKits(uint64_t unitGuid, uint32_t spellId, 
 }
 
 void SpellVisualSystem::expireWaitingKits() {
-    waitingKits_.erase(std::remove_if(waitingKits_.begin(), waitingKits_.end(),
-                                      [this](const WaitingKit& w) {
-                                          return static_cast<int32_t>(colourClockMs_ - w.deadlineMs) >= 0;
-                                      }),
-                       waitingKits_.end());
+    // Taken out first: a kit played here may queue more.
+    std::vector<WaitingKit> due;
+    for (auto it = waitingKits_.begin(); it != waitingKits_.end();) {
+        if (static_cast<int32_t>(colourClockMs_ - it->deadlineMs) >= 0) {
+            if (it->mode == 1) due.push_back(*it);
+            it = waitingKits_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (const WaitingKit& w : due) {
+        // 0x00728140 mode 1: played by its unit, not held again (+0x20 1).
+        playKitOnUnit(w.kitId, w.type, 0, w.place, &w.place, w.castTimeMs, w.spellId,
+                      {.unitGuid = w.unitGuid, .counter = w.counter, .replay = true});
+    }
 }
 
 const SpellVisualSystem::VisualEnds* SpellVisualSystem::visualEndsForSpell(uint32_t spellId) const {
@@ -1656,15 +1680,48 @@ void SpellVisualSystem::applyChannelKit(uint64_t unitGuid, uint32_t spellId) {
     auto kitIt = kits_.find(visualIt->second.channelKit);
     if (kitIt == kits_.end()) return;
     AuraKit aura{.spellId = spellId, .visualId = visualId, .kitId = kitIt->first};
-    if (const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitGuid) : 0) {
+    holdStateKitForChain(aura);
+    if (!aura.awaitingChain) startStateKitOnUnit(unitGuid, aura, 0);
+    unitAuraKits_[unitGuid].auras.push_back(std::move(aura));
+}
+
+void SpellVisualSystem::startStateKitOnUnit(uint64_t unitGuid, const AuraKit& aura, uint64_t otherSource) {
+    auto kitIt = kits_.find(aura.kitId);
+    if (kitIt == kits_.end()) return;
+    const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitGuid) : 0;
+    if (instance != 0) {
         glm::vec3 unitPos;
         if (renderer_ && renderer_->getCharacterRenderer() &&
             renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos))
             playKitShake(aura.kitId, unitPos);
-        playKitColourFade(aura.kitId, instance, spellId);
+        playKitColourFade(aura.kitId, instance, aura.spellId);
     }
-    startKitChains(kitIt->second, unitGuid, spellId, 0);
-    unitAuraKits_[unitGuid].auras.push_back(std::move(aura));
+    startKitChains(kitIt->second, unitGuid, aura.spellId, otherSource);
+    // 0x007265c0 runs for every kit type: 16 starts the mount transition
+    // from a state kit too.
+    for (uint32_t k = 0; k < 4 && instance != 0; ++k) {
+        if (kitIt->second.charProc[k] == spell_kit::kCharProcMountTransition)
+            startMountTransition(instance, aura.spellId, spell_kit::KitType::State, 0);
+    }
+}
+
+void SpellVisualSystem::holdStateKitForChain(AuraKit& aura) {
+    // 0x00724820 and 0x0072bc70 ask 0x00745230 with counter -1, so the
+    // kit waits for a pulse at either end of a bolt (0x0072af60).
+    auto kitIt = kits_.find(aura.kitId);
+    if (kitIt == kits_.end() || (kitIt->second.flags & spell_kit::kKitFlagWaitsForChain) == 0 ||
+        !visualHasChainKit(aura.visualId))
+        return;
+    aura.awaitingChain = true;
+    aura.chainDeadlineMs = colourClockMs_ + spell_kit::kWaitingKitMs;
+}
+
+void SpellVisualSystem::expireStateKitWaits() {
+    for (auto& [guid, unit] : unitAuraKits_) {
+        std::erase_if(unit.auras, [this](const AuraKit& aura) {
+            return aura.awaitingChain && static_cast<int32_t>(colourClockMs_ - aura.chainDeadlineMs) >= 0;
+        });
+    }
 }
 
 void SpellVisualSystem::updateChainTargets(uint64_t unitGuid, uint32_t spellId, const std::vector<uint64_t>& targets,
@@ -2215,7 +2272,7 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
         stepUnarmedKits(unitIt->first, unit, false);
         const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitIt->first) : 0;
         for (AuraKit& aura : unit.auras) {
-            if (!aura.playing || aura.awaitingMissile) {
+            if (!aura.playing || aura.awaitingMissile || aura.awaitingChain) {
                 if (!aura.models.empty()) hideAuraKit(aura);
                 continue;
             }
@@ -2267,6 +2324,7 @@ void SpellVisualSystem::update(float deltaTime) {
     updateChains(deltaTime);
     updateMountTransitions();
     expireWaitingKits();
+    expireStateKitWaits();
     publishClientStrips();
     if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
 

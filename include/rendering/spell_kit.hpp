@@ -10,7 +10,9 @@
 /// (0x0071e930 removes the spell's effects, 0x00743b40), every other kind
 /// plays once.
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <glm/glm.hpp>
@@ -202,6 +204,18 @@ constexpr bool kitRunsChain(const std::array<uint32_t, 4>& charProc) {
 /// it (0x0072af60, 0x00728050) - ten seconds at most (0x00728140).
 inline constexpr uint32_t kKitFlagWaitsForChain = 0x1;
 inline constexpr uint32_t kWaitingKitMs = 10000;
+
+/// SMSG_SPELL_GO's ImpactAreaKit for a spell with a speed and no missile to
+/// carry it (0x0080e1b0): it is queued on the caster to play when the way
+/// from the caster to the place would take at that speed - the distance
+/// over the speed, in ms, rounded (0x00728050 mode 1). Nothing - played at
+/// once - for no speed or no caster to measure from.
+inline std::optional<uint32_t> areaImpactDelayMs(float speed, const std::optional<glm::vec3>& caster,
+                                                 const glm::vec3& place) {
+    if (!(speed > 0.0f) || !caster) return std::nullopt;
+    const float ms = std::round(glm::length(place - *caster) / speed * 1000.0f);
+    return static_cast<uint32_t>(std::max(ms, 0.0f));
+}
 
 /// 8: a swing trail on each weapon in the unit's hands, ParamZero its colour
 ///    under ParamThree's alpha, laid for ParamTwo ms (0x007265c0 case 8,

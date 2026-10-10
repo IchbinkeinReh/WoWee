@@ -343,3 +343,14 @@ TEST_CASE("a kit runs a chain where any of its CharProcs is 0 or 12 (0x007fe470)
     CHECK(sk::kKitFlagWaitsForChain == 0x1u);
     CHECK(sk::kWaitingKitMs == 10000u);
 }
+
+TEST_CASE("SPELL_GO's ImpactAreaKit waits the way at the spell's speed (0x0080e1b0 mode 1)",
+          "[spell_kit]") {
+    namespace sk = wowee::rendering::spell_kit;
+    const glm::vec3 place(30.0f, 40.0f, 0.0f);
+    // 50 yards at 20 a second: 2.5 s.
+    CHECK(sk::areaImpactDelayMs(20.0f, glm::vec3(0.0f), place) == 2500u);
+    // No speed, or no caster to measure from: at once.
+    CHECK_FALSE(sk::areaImpactDelayMs(0.0f, glm::vec3(0.0f), place).has_value());
+    CHECK_FALSE(sk::areaImpactDelayMs(20.0f, std::nullopt, place).has_value());
+}

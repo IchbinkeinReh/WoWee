@@ -2555,7 +2555,8 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         if (visualId != 0) {
             // Cast-complete visual at caster (for instant spells that skip SPELL_START)
             glm::vec3 casterPos;
-            if (resolveUnitPosition(data.casterUnit, casterPos)) {
+            const bool haveCasterPos = resolveUnitPosition(data.casterUnit, casterPos);
+            if (haveCasterPos) {
                 if (auto* renderer = owner_.services().renderer) {
                     if (auto* svs = renderer->getSpellVisualSystem()) {
                         // Where its kits' chains go (0x00724f50, 0x00715400).
@@ -2578,11 +2579,18 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             // (0x0080e1b0, 0x00700e20).
             if ((data.targetFlags & 0x40u) && data.hasDestLocation) {
                 if (auto* renderer = owner_.services().renderer) {
-                    if (auto* svs = renderer->getSpellVisualSystem())
+                    if (auto* svs = renderer->getSpellVisualSystem()) {
+                        // The spell's speed times the ImpactAreaKit where no
+                        // missile carries it (0x0080e1b0, 0x00728050 mode 1).
+                        const auto spellIt = owner_.spellNameCacheRef().find(data.spellId);
+                        const float speed =
+                            spellIt != owner_.spellNameCacheRef().end() ? spellIt->second.missileSpeed : 0.0f;
                         svs->playSpellAreaKits(
                             visualId,
                             core::coords::canonicalToRender(glm::vec3(data.destX, data.destY, data.destZ)),
-                            flewToPlace, data.spellId, data.casterUnit);
+                            flewToPlace, data.spellId, data.casterUnit, speed,
+                            haveCasterPos ? std::optional<glm::vec3>(casterPos) : std::nullopt);
+                    }
                 }
             }
             for (const auto& tgt : data.hitTargets) {

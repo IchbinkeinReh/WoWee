@@ -68,9 +68,13 @@ public:
 
     /// A ground-aimed cast's area kits at its destination (0x0080e1b0): the
     /// InstantAreaKit (+0x5c), and the ImpactAreaKit (+0x60) unless a
-    /// missile carries it there (0x00700e20 plays it as that lands).
+    /// missile carries it there (0x00700e20 plays it as that lands). A spell
+    /// with a speed and no missile to carry it queues the ImpactAreaKit on
+    /// its caster for as long as the distance takes at that speed
+    /// (0x00728050 mode 1), and 0x00728140 plays it then.
     void playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
-                           uint32_t spellId = 0, uint64_t casterGuid = 0);
+                           uint32_t spellId = 0, uint64_t casterGuid = 0, float speed = 0.0f,
+                           const std::optional<glm::vec3>& casterPosition = std::nullopt);
 
     // Launch a physical weapon projectile (arrow, bullet, or thrown item)
     // without invoking the spell visual pipeline.
@@ -386,6 +390,10 @@ private:
         bool unarmedOnly = false;      ///< its visual has Flags 8
         bool playing = true;           ///< its kit is on the unit (not removed by 0x00720400)
         bool awaitingMissile = false;  ///< a missile carrying it is still flying at the unit
+        /// Held for its chain's pulse (0x0072af60, kit Flags 0x1) until
+        /// chainDeadlineMs, and never played if that passes (0x00728140).
+        bool awaitingChain = false;
+        uint32_t chainDeadlineMs = 0;
         uint64_t casterGuid = 0;       ///< the aura's caster, its chains' other end
         uint32_t boundInstance = 0;    ///< the instance its models hang on
         std::vector<KitModelInstance> models;
@@ -433,6 +441,9 @@ private:
         uint32_t castTimeMs = 0;
         int32_t counter = -1;
         uint32_t deadlineMs = 0;
+        /// 0x00728050's mode (+0x28): 0 waits for a chain's pulse and is
+        /// dropped at its deadline; 1 is timed and plays at it (0x00728140).
+        uint32_t mode = 0;
     };
     std::vector<WaitingKit> waitingKits_;
     /// 0x00800bf0: whether any of the visual's cast, impact, state, channel,
@@ -441,7 +452,8 @@ private:
     /// The unit's virtual 0xc0 (0x00722760): its kits waiting on the spell
     /// with this counter play.
     void releaseWaitingKits(uint64_t unitGuid, uint32_t spellId, int32_t counter);
-    /// 0x00728140: the waits run out unplayed.
+    /// 0x00728140: at its time, a timed kit plays and a chain's wait runs
+    /// out unplayed.
     void expireWaitingKits();
     /// Each unit's chain counter (+0xf58), two on for each chain kit.
     std::unordered_map<uint64_t, int32_t> unitChainCounters_;
@@ -574,6 +586,15 @@ private:
     /// 0x007265c0 cases 0 and 12 for a kit on `unitGuid` for `spellId`;
     /// `otherSource` names the unit kit flag 0x1000 draws from.
     void startKitChains(const KitRecord& kit, uint64_t unitGuid, uint32_t spellId, uint64_t otherSource);
+    /// A state kit as it plays (0x0073b140 for type 2): its shake and colour
+    /// on the unit, then its CharProcs (0x007265c0) - its chains, and 16's
+    /// mount transition.
+    void startStateKitOnUnit(uint64_t unitGuid, const AuraKit& aura, uint64_t otherSource);
+    /// 0x0072af60 for a state or channel kit (counter -1): held when its kit
+    /// has Flags 0x1 and the visual runs a chain.
+    void holdStateKitForChain(AuraKit& aura);
+    /// Their waits run out: the kits go unplayed (0x00728140).
+    void expireStateKitWaits();
     /// 0x00743b40's part for chains: those the unit's effects of the spell
     /// held let go (0x007fc990).
     void releaseChains(uint64_t unitGuid, uint32_t spellId);
