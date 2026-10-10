@@ -59,11 +59,13 @@ constexpr size_t kLegacyHeaderProbeLast     = 128;
 /// A legacy image's imports patch sequential dword IAT slots from offset 0.
 constexpr size_t kIatSlotSize = sizeof(uint32_t);
 
+#ifdef HAVE_UNICORN
 /// Memory protection passed to WardenEmulator::allocateMemory (PAGE_READWRITE).
 constexpr uint32_t kEmulatedPageReadWrite = 0x04;
 
 /// The most PacketHandler is given to write its response into.
 constexpr uint32_t kMaxEmulatedResponseSize = 1024;
+#endif
 
 uint16_t readLE16(const std::vector<uint8_t>& data, size_t offset) {
     return loadRecord<uint16_t>(data.data() + offset);

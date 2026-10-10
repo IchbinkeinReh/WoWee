@@ -1367,7 +1367,7 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     //   Classic  (vmangos Quest.cpp):      money=abs10, pairs at abs15, choice abs23
     //   TBC      (cmangos-tbc):            money=abs11, pairs at abs19, choice abs27
     //   WotLK    (AzerothCore GossipDef):  money=abs13, pairs at abs26, choice abs34
-    const size_t base = 8;
+    constexpr size_t base = 8;
     constexpr size_t kFieldBytes = 4;
     size_t moneyField, rewardPairsField, choicePairsField;
     // The quest's start item. Counted from the same base, at abs19 for WotLK:
@@ -1410,7 +1410,7 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     if (data.size() < base + lastField * kFieldBytes) return {};
 
     // Every field is one little-endian 32-bit word, numbered from `base`.
-    auto fieldAt = [&data, base](size_t fieldIndex) -> uint32_t {
+    auto fieldAt = [&data](size_t fieldIndex) -> uint32_t {
         return network::wire::loadLE32(data, base + fieldIndex * kFieldBytes);
     };
 
