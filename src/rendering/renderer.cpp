@@ -3051,6 +3051,21 @@ void Renderer::updateGrassPopulation() {
     const glm::vec3 center = characterPosition;
     if (glm::dot(center, center) <= 0.0f) return;  // no character yet
 
+    // High over the ground - Dalaran floats some four hundred yards above
+    // Crystalsong - every blade the window would hold lies far past where grass
+    // is drawn, and building it cost tens of milliseconds a frame every rebuild
+    // step walked through the city. Twice the window plus a margin, so a hill
+    // inside the window cannot come within reach unseen.
+    if (const auto ground = terrainManager->getHeightAt(center.x, center.y);
+        ground && center.z - *ground > 2.0f * windowRadius + 50.0f) {
+        if (grassBuilder_.active() || grassWindowValid_) {
+            grassBuilder_ = pipeline::GrassPopulationBuilder{};
+            grassRenderer_->setPopulation(nullptr, 0);
+            grassWindowValid_ = false;
+        }
+        return;
+    }
+
     // Whether a new build has to start. While one is running the comparison
     // is against its centre rather than the live window's, so walking far
     // during a long build restarts it around where the player now is instead
@@ -3092,6 +3107,20 @@ void Renderer::updateGrassPopulation() {
     // was most of the cost.
     constexpr float kUnitSize = core::coords::TILE_SIZE / 16.0f / 8.0f;
 
+    // Chunk cells known to have no terrain under them yet. A miss is the
+    // expensive answer - findChunkAt looks through every chunk of every loaded
+    // tile before giving up - and right after a teleport, before the tiles
+    // around have streamed in, it was the answer for every sample: seconds a
+    // slice on the main thread. Cells on the map's own chunk grid, so one miss
+    // covers the hundred samples that fall in the same chunk.
+    constexpr float kChunkSize = kUnitSize * 8.0f;
+    std::unordered_set<uint64_t> emptyCells;
+    auto chunkCellKey = [](float wx, float wy) {
+        const auto cx = static_cast<int32_t>(std::floor((core::coords::ZEROPOINT - wx) / kChunkSize));
+        const auto cy = static_cast<int32_t>(std::floor((core::coords::ZEROPOINT - wy) / kChunkSize));
+        return (static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32) | static_cast<uint32_t>(cy);
+    };
+
     auto sampler = [&](float wx, float wy) -> pipeline::GrassSuitability {
         float fracX = 0.0f;
         float fracY = 0.0f;
@@ -3101,7 +3130,11 @@ void Renderer::updateGrassPopulation() {
                           cached->position, wx, wy, kUnitSize, fracX, fracY)) {
             chunk = cached;
         } else {
-            chunk = terrainManager->findChunkAt(wx, wy, fracX, fracY, &cachedTile);
+            const uint64_t cell = chunkCellKey(wx, wy);
+            if (emptyCells.count(cell) == 0) {
+                chunk = terrainManager->findChunkAt(wx, wy, fracX, fracY, &cachedTile);
+                if (!chunk) emptyCells.insert(cell);
+            }
         }
         if (!chunk) { ++noChunk; return {}; }
         if (chunk != cached) {
@@ -3305,9 +3338,19 @@ void Renderer::updateGrassPopulation() {
     // every block surveyed becomes a terrain sample, so the budget is set by
     // the cost of sampling rather than of walking: small enough to stay off
     // the frame, large enough that a default window lands in a few slices.
-    constexpr size_t kCellsPerSlice = 64000;
+    //
+    // Bounded by time as well: a slice of 64000 cells cost 10 to 50 ms
+    // depending on how much of it was terrain, a stutter every rebuild step.
+    // Small slices until the frame's share is spent; a rebuild at walking pace
+    // still lands well inside the step it has before it would restart.
+    constexpr size_t kCellsPerSlice = 8000;
+    constexpr double kSliceBudgetMs = 6.0;
     const auto started = std::chrono::steady_clock::now();
-    const bool done = grassBuilder_.step(sampler, profileFor, kCellsPerSlice);
+    bool done = false;
+    do {
+        done = grassBuilder_.step(sampler, profileFor, kCellsPerSlice);
+    } while (!done && std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - started).count() < kSliceBudgetMs);
 
     // Only when it grew, and after every slice rather than at the end: the
     // shaders index this by blade, so it has to reach the device before the
