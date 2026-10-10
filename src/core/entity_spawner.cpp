@@ -1,4 +1,5 @@
 #include "core/entity_spawner.hpp"
+#include "core/asset_prefetch.hpp"
 #include "core/character_component.hpp"
 #include "core/item_attachments.hpp"
 #include "core/weapon_attachment.hpp"
@@ -76,6 +77,10 @@ void EntitySpawner::initialize() {
 }
 
 void EntitySpawner::update() {
+    if (!assetPrefetch_ && assetManager_ && assetManager_->isInitialized()) {
+        assetPrefetch_ = std::make_unique<AssetPrefetch>(*assetManager_);
+    }
+    if (assetPrefetch_) assetPrefetch_->pump();
     processPlayerSpawnQueue();
     processCreatureSpawnQueue();
     processAsyncNpcCompositeResults();
@@ -1830,6 +1835,44 @@ charRenderer->startFadeIn(instanceId, 0.5f);
 // CreatureDisplayInfoExtra and only the clothing groups are touched. Everything
 // else the model authored is left exactly as it is, because on a creature the
 // same group numbers mean unrelated geometry.
+bool EntitySpawner::creatureDressPrepared(uint32_t displayId) {
+    if (!assetPrefetch_ || !assetManager_) return true;
+    auto filesIt = creatureDressFiles_.find(displayId);
+    if (filesIt == creatureDressFiles_.end()) {
+        DressFiles files;
+        auto itDD = displayDataMap_.find(displayId);
+        if (itDD != displayDataMap_.end() && itDD->second.extraDisplayId != 0) {
+            auto itExtra = humanoidExtraMap_.find(itDD->second.extraDisplayId);
+            if (itExtra != humanoidExtraMap_.end()) {
+                const HumanoidDisplayExtra& extra = itExtra->second;
+                // The helm and shoulders normalizeHumanoidClothingGeosets hangs on it.
+                core::itemAttachmentFiles(*assetManager_, extra.equipDisplayId[0], extra.raceId,
+                                          extra.sexId, extra.equipDisplayId[1], files.models, files.textures);
+                // The hair and skin applyHumanoidInstanceOverrides colours it with.
+                if (!charSectionsCacheBuilt_) buildCharSectionsCache();
+                for (const std::string& path :
+                     {lookupCharSection(extra.raceId, extra.sexId, 3, extra.hairStyleId, extra.hairColorId, 0),
+                      lookupCharSection(extra.raceId, extra.sexId, 0, 0, extra.skinId, 1),
+                      lookupCharSection(extra.raceId, extra.sexId, 0, 0, extra.skinId, 0)}) {
+                    if (!path.empty()) files.textures.push_back(path);
+                }
+            }
+        }
+        filesIt = creatureDressFiles_.emplace(displayId, std::move(files)).first;
+    }
+    const DressFiles& files = filesIt->second;
+    if (files.models.empty() && files.textures.empty()) return true;
+    // Textures the renderer already holds need nothing more.
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    std::vector<std::string> textures;
+    for (const std::string& path : files.textures) {
+        if (!charRenderer || !charRenderer->hasTexture(path)) textures.push_back(path);
+    }
+    // A model shared already is not read again either; prefetch() keeps what
+    // it parsed, so asking is cheap once it has.
+    return assetPrefetch_->ready(files.models, textures);
+}
+
 void EntitySpawner::normalizeHumanoidClothingGeosets(uint32_t instanceId, uint32_t modelId,
                                                      uint32_t displayId) {
     auto* charRenderer = renderer_->getCharacterRenderer();
@@ -1874,9 +1917,9 @@ void EntitySpawner::normalizeHumanoidClothingGeosets(uint32_t instanceId, uint32
     // The helm and the shoulders, as the component hangs them on any character
     // (0x004ef0d0, 0x004ef840).
     core::attachHelm(*charRenderer, *assetManager_, instanceId, headDisplayId, extra.raceId,
-                     extra.sexId, [this] { return nextWeaponModelId_++; });
+                     extra.sexId, [this] { return nextWeaponModelId_++; }, assetPrefetch_.get());
     core::attachShoulders(*charRenderer, *assetManager_, instanceId, extra.equipDisplayId[1],
-                          [this] { return nextWeaponModelId_++; });
+                          [this] { return nextWeaponModelId_++; }, assetPrefetch_.get());
 
     // The cape's texture, so the cloak mesh shows the cloak rather than the
     // body's texture.
@@ -2674,6 +2717,8 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
     // Per-instance hair, skin and head-detail overrides. These run for every
     // NPC, cached model or not, so two NPCs sharing a model still get their own
     // colouring.
+    // What the prefetch decoded for it is uploaded from there, not decoded again.
+    if (assetPrefetch_) charRenderer->setPredecodedBLPCache(&assetPrefetch_->textures());
     applyHumanoidInstanceOverrides(instanceId, modelId, displayId);
     // A humanoid NPC geoset mask used to be built here, behind
     // `static constexpr bool kEnableNpcSafeGeosetMask = false`. Same story as
@@ -2697,6 +2742,7 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
     // at once - a cape and no cape, a robe skirt over trousers. Pick one per
     // clothing group and leave every other batch of the model alone.
     normalizeHumanoidClothingGeosets(instanceId, modelId, displayId);
+    charRenderer->setPredecodedBLPCache(nullptr);
 
     // Start the creature in the pose the server says it is already in: dead,
     // mid-emote, or newly arrived.

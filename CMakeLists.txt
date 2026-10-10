@@ -617,6 +617,7 @@ set(WOWEE_SOURCES
     src/core/helm_visual.cpp
     src/core/character_geosets.cpp
     src/core/item_attachments.cpp
+    src/core/asset_prefetch.cpp
     src/core/character_component.cpp
     src/core/world_loader.cpp
     src/core/npc_interaction_callback_handler.cpp

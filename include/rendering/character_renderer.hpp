@@ -195,6 +195,14 @@ public:
     void setInstanceDiffuseColour(uint32_t instanceId, const glm::vec3& colour);
     void setInstanceScale(uint32_t instanceId, float scale);
     [[nodiscard]] const pipeline::M2Model* getModelData(uint32_t modelId) const;
+    /// An item model (a helm, a shoulder) already loaded for someone, by what
+    /// it was loaded from; 0 when there is none or it has since been unloaded.
+    /// The next wearer shares it: loading one per wearer read, parsed and
+    /// uploaded the same mesh again for every NPC in a city, 20 to 115 ms each.
+    [[nodiscard]] uint32_t sharedItemModelId(const std::string& key) const;
+    /// Whether loadTexture would answer this path from its cache.
+    [[nodiscard]] bool hasTexture(const std::string& path) const;
+    void rememberSharedItemModel(const std::string& key, uint32_t modelId);
     [[nodiscard]] const pipeline::M2Model* getInstanceModelData(uint32_t instanceId) const;
     void setActiveGeosets(uint32_t instanceId, const std::unordered_set<uint16_t>& geosets);
     /// Opt an instance into the Skin Extra head-detail batch. Only a character
@@ -677,6 +685,8 @@ private:
     std::unique_ptr<VkTexture> flatNormalTexture_;
 
     std::unordered_map<uint32_t, M2ModelGPU> models;
+    std::unordered_map<std::string, uint32_t> sharedItemModels_;
+    std::unordered_set<uint32_t> sharedItemModelIds_;
     std::unordered_map<uint32_t, CharacterInstance> instances;
     /// The instances a render() call draws, in the order it draws them.
     std::vector<std::pair<uint32_t, CharacterInstance*>> drawOrder_;

@@ -611,6 +611,14 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
             continue;
         }
 
+        // What it wears is prepared off the main thread first; until then it
+        // waits its turn again rather than spawning without it.
+        if (!creatureDressPrepared(s.displayId)) {
+            pendingCreatureSpawns_.push_back(s);
+            rotationsLeft--;
+            continue;
+        }
+
         // Cached model - spawn is fast (no file I/O, just instance creation + texture setup)
         {
             auto spawnStart = std::chrono::steady_clock::now();

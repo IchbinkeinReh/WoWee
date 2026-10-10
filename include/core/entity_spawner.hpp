@@ -32,6 +32,8 @@ namespace game { class GameHandler; class Entity; struct CorpseLook; }
 
 namespace core {
 
+class AssetPrefetch;
+
 class Application;
 
 class EntitySpawner {
@@ -547,6 +549,17 @@ private:
     };
     std::unordered_map<uint32_t, FamilyScale> familyScale_;      // familyId → scale range
     core::AppearanceGeosetTables appearanceTables_;
+    // What a humanoid NPC will wear, prepared off the main thread before it
+    // spawns (see core::AssetPrefetch), and per display what that is.
+    std::unique_ptr<core::AssetPrefetch> assetPrefetch_;
+    struct DressFiles {
+        std::vector<std::string> models;
+        std::vector<std::string> textures;
+    };
+    std::unordered_map<uint32_t, DressFiles> creatureDressFiles_;
+    /// Whether everything a display's NPC wears has been prepared; asks for
+    /// what has not. True for a display that wears nothing of the kind.
+    bool creatureDressPrepared(uint32_t displayId);
     /// A player's character component before its equipment: race, sex,
     /// class, skin, face and the hair and facial rows (PLAYER_BYTES).
     core::CharacterLook playerLook(uint64_t guid, uint8_t raceId, uint8_t genderId,

@@ -689,6 +689,8 @@ void CharacterRenderer::shutdown() {
     flatNormalTexture_.reset();
 
     models.clear();
+    sharedItemModels_.clear();
+    sharedItemModelIds_.clear();
     instances.clear();
 
     // Destroy pipelines
@@ -803,6 +805,8 @@ void CharacterRenderer::clear() {
     createFallbackTextures(device);
 
     models.clear();
+    sharedItemModels_.clear();
+    sharedItemModelIds_.clear();
     instances.clear();
 
     // Reset material ring buffer offsets (buffers persist, just reset write position)
@@ -4956,9 +4960,28 @@ void CharacterRenderer::detachWeapon(uint32_t charInstanceId, uint32_t attachmen
     }
 }
 
+bool CharacterRenderer::hasTexture(const std::string& path) const {
+    return textureCache.find(normalizeTexturePathKey(path)) != textureCache.end();
+}
+
+uint32_t CharacterRenderer::sharedItemModelId(const std::string& key) const {
+    const auto it = sharedItemModels_.find(key);
+    if (it == sharedItemModels_.end() || models.find(it->second) == models.end()) return 0;
+    return it->second;
+}
+
+void CharacterRenderer::rememberSharedItemModel(const std::string& key, uint32_t modelId) {
+    sharedItemModels_[key] = modelId;
+    sharedItemModelIds_.insert(modelId);
+}
+
 void CharacterRenderer::unloadModelIfUnused(uint32_t modelId) {
     auto modelIt = models.find(modelId);
     if (modelIt == models.end()) return;
+    // A shared item model stays for the next wearer. Re-dressing an NPC takes
+    // its helm off before putting it back on, and unloading in between made
+    // every re-dress load the model again. Bounded by the item models seen.
+    if (sharedItemModelIds_.count(modelId)) return;
     for (const auto& p : instances) {
         if (p.second.modelId == modelId) return;
     }
