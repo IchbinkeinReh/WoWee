@@ -346,6 +346,19 @@ public:
     /// it says so; and let go when it leaves the seat. Each frame, after the
     /// units are placed (entity_spawner_vehicle.cpp).
     void updateVehiclePassengers();
+    /// The local player's passenger state while it is in or on its way into
+    /// or out of a seat (CGUnit_C +0xf60 +0x14), and where it is drawn.
+    [[nodiscard]] std::optional<game::vehicle::SeatState> localPassengerState() const;
+    [[nodiscard]] std::optional<glm::vec3> localPassengerDrawnPosition() const;
+    /// The local player's seat camera, due now (0x0075aac0 -> 0x0075a630
+    /// -> 0x0074c0e0): whether it is in a seat then (states 1 to 3), the
+    /// seat, and the time the camera takes. Taken once.
+    struct SeatCameraCue {
+        bool seated = false;
+        const game::vehicle::SeatRecord* seat = nullptr;
+        float seconds = 0.0f;
+    };
+    [[nodiscard]] std::optional<SeatCameraCue> takeSeatCameraCue();
 
     // Local player GUID exclusion (EntitySpawner skips spawning the local player)
     void setLocalPlayerGuid(uint64_t guid) { spawnedPlayerGuid_ = guid; }
@@ -505,6 +518,15 @@ private:
         int32_t rideLoopBone = -1;
     };
     std::unordered_map<uint64_t, SeatedPassenger> seatedPassengers_;
+    /// The local player's camera move, until it is due and taken.
+    struct LocalSeatCamera {
+        bool pending = false;
+        uint32_t startMs = 0;
+        uint32_t durationMs = 0;
+        bool fixed = false;
+        bool waitsForFlight = false;
+    };
+    LocalSeatCamera localSeatCamera_;
     /// Where each vehicle was drawn last frame and how fast it went.
     struct VehicleMotion {
         glm::vec3 place{0.0f};
@@ -516,6 +538,15 @@ private:
     void releaseSeatedPassenger(uint64_t guid, SeatedPassenger& seated, bool landing);
     /// 0x007489c0: the passenger to a new state, at `nowMs`.
     void setSeatState(uint64_t guid, SeatedPassenger& p, game::vehicle::SeatState state, uint32_t nowMs);
+    /// UNIT_ENTERING_VEHICLE, UNIT_ENTERED_VEHICLE, UNIT_EXITING_VEHICLE and
+    /// UNIT_EXITED_VEHICLE for a change of state of the player or a group
+    /// member (0x0074ad70 -> 0x00749fb0 -> 0x00749650).
+    void fireSeatEvents(uint64_t guid, const SeatedPassenger& p, game::vehicle::SeatState from,
+                        game::vehicle::SeatState to);
+    /// A SoundEntries.dbc row's Name, "" for none.
+    std::string soundEntryName(uint32_t id);
+    std::unordered_map<uint32_t, std::string> soundEntryNames_;
+    bool soundEntryNamesLoaded_ = false;
     /// The vehicle's animation for a seat taken (0x00756f80) and let go
     /// (0x007577e0).
     void startVehicleRideLoop(SeatedPassenger& p, const game::vehicle::SeatRecord& seat);

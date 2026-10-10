@@ -74,6 +74,9 @@ struct SeatRecord {
     int32_t vehicleEnterAnimBone = 0;     ///< +0x90, a key bone
     int32_t vehicleExitAnimBone = 0;      ///< +0x94
     int32_t vehicleRideAnimLoopBone = 0;  ///< +0x98
+    uint32_t enterUISoundId = 0;          ///< +0xa8
+    uint32_t exitUISoundId = 0;           ///< +0xac
+    uint32_t uiSkin = 0;                  ///< +0xb0
     uint32_t flagsB = 0;                  ///< +0xb4
     float cameraEnteringDelay = 0.0f;     ///< +0xb8
     float cameraEnteringDuration = 0.0f;  ///< +0xbc
@@ -98,6 +101,7 @@ struct VehicleRecord {
     float cameraFadeDistScalarMax = 0.0f;        ///< +0x40
     float cameraPitchOffset = 0.0f;              ///< +0x44
     float cameraYawOffset = 0.0f;                ///< +0x84
+    uint32_t uiIndicatorId = 0;                  ///< +0x90
 };
 
 /// Vehicle.dbc and VehicleSeat.dbc by id.
@@ -153,6 +157,18 @@ public:
     [[nodiscard]] std::optional<Passenger> passenger(uint64_t guid) const;
     [[nodiscard]] const std::unordered_map<uint64_t, Passenger>& passengers() const { return passengers_; }
 
+    /// Where each unit is on its way into, in or out of its seat - its
+    /// passenger component's state (+0xf60 +0x14), 0 for none - as the
+    /// drawing side steps it; and the tables the seats are read from.
+    void setSeatState(uint64_t guid, uint8_t state);
+    [[nodiscard]] uint8_t seatState(uint64_t guid) const;
+    void setTables(const VehicleTables* tables) { tables_ = tables; }
+    [[nodiscard]] const VehicleTables* tables() const { return tables_; }
+    /// The VehicleSeat row of the unit's seat, whatever its state
+    /// (0x00613600): its transport's vehicle row's column for its seat.
+    [[nodiscard]] const SeatRecord* seatOf(uint64_t guid) const;
+    [[nodiscard]] const VehicleRecord* vehicleOf(uint64_t guid) const;
+
     /// The unit went out of view: neither a vehicle nor in a seat.
     void forget(uint64_t guid);
     void clear();
@@ -162,6 +178,8 @@ private:
     std::unordered_map<uint64_t, Passenger> passengers_;
     std::unordered_map<uint64_t, uint32_t> moveFlags2_;
     std::unordered_map<uint64_t, SeatChange> changes_;
+    std::unordered_map<uint64_t, uint8_t> seatStates_;
+    const VehicleTables* tables_ = nullptr;
 };
 
 }  // namespace wowee::game::vehicle

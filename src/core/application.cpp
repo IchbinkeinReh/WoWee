@@ -1,4 +1,5 @@
 #include "core/application.hpp"
+#include "game/vehicle_camera.hpp"
 #include "core/frame_pacer.hpp"
 #include "core/env_flag.hpp"
 #include "core/character_paths.hpp"
@@ -3033,9 +3034,38 @@ void Application::applyServerMovementState(float deltaTime) {
     bool landingClampActive = !onTaxi && worldEntryCallbacks_ && worldEntryCallbacks_->getTaxiLandingClampTimer() > 0.0f &&
                               worldEntryCallbacks_->getWorldEntryMovementGraceTimer() <= 0.0f &&
                               !gameHandler->isMounted();
+    // A passenger moves with its seat and not by itself: its own movement
+    // stops (0x007489c0 -> 0x005fbbc0 as it sits and as it is let go), and
+    // the camera looks at it where it is drawn on the vehicle.
+    const auto seatState = entitySpawner_ ? entitySpawner_->localPassengerState() : std::nullopt;
+    const bool vehiclePassenger = seatState.has_value();
+    {
+        auto* cc = renderer->getCameraController();
+        const int stateNow = seatState ? static_cast<int>(*seatState) : 0;
+        if (stateNow != localSeatStateLastFrame_ &&
+            (stateNow == static_cast<int>(game::vehicle::SeatState::Seated) || stateNow == 0)) {
+            cc->clearMovementInputs();
+        }
+        localSeatStateLastFrame_ = stateNow;
+        cc->setVehiclePivot(vehiclePassenger ? entitySpawner_->localPassengerDrawnPosition() : std::nullopt);
+        // The seat's zoom when its camera move is due (0x0074c0e0).
+        if (auto cue = entitySpawner_ ? entitySpawner_->takeSeatCameraCue() : std::nullopt) {
+            const auto zoom = game::vehicle::seatCameraZoom(cue->seated, cue->seat, cc->getUserTargetDistance(),
+                                                            seatZoomRemembered_.has_value());
+            cc->setSeatZoomLimits(zoom.minDistance, zoom.maxDistance);
+            if (zoom.zoomTo) {
+                if (zoom.remember) seatZoomRemembered_ = cc->getUserTargetDistance();
+                cc->zoomOverTime(*zoom.zoomTo, cue->seconds);
+            }
+            if (zoom.restore && seatZoomRemembered_) {
+                cc->zoomOverTime(*seatZoomRemembered_, cue->seconds);
+                seatZoomRemembered_.reset();
+            }
+        }
+    }
     renderer->getCameraController()->setExternalFollow(
         externallyDrivenMotion || landingClampActive || hearthFreeze ||
-        transportTransferFreeze || deckFloorPending_);
+        transportTransferFreeze || deckFloorPending_ || vehiclePassenger);
     renderer->getCameraController()->setExternalMoving(externallyDrivenMotion);
     if (externallyDrivenMotion) {
         // Drop any stale local movement toggles while server drives taxi motion.

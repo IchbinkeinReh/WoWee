@@ -4225,14 +4225,27 @@ static int lua_CloseBattlefield(lua_State* L) { (void)L; return 0; }
 
 // Leaving a vehicle, and whether its aim can be raised or lowered. Vehicles
 // are not modelled here, so neither is possible.
-// CanExitVehicle() - whether the player is riding something they can get off.
-//
-// False always, so the leave-vehicle button on the main bar stayed hidden and
-// the unit menu's Leave Vehicle entry was removed from the menu every time it
-// was built. The state behind it has been tracked the whole time.
+// The player's seat has one of the given Flags (0x005fb560, which
+// CanExitVehicle, IsUsingVehicleControls and VehicleExit ask): seated (state
+// 3), the VehicleSeat row of its seat.
+static bool currentVehicleSeatHasFlag(game::GameHandler* gh, uint32_t flag) {
+    if (!gh) return false;
+    const uint64_t player = gh->getPlayerGuid();
+    if (gh->vehicleRoster().seatState(player) != 3) return false;
+    const game::vehicle::SeatRecord* seat = gh->vehicleRoster().seatOf(player);
+    return seat && (seat->flags & flag) != 0;
+}
+// CanExitVehicle(): 1 where the player's seat has Flags 0x2000000, else nil
+// (0x005fb9c0).
 static int lua_CanExitVehicle(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->isInVehicle() ? 1 : 0);
+    if (currentVehicleSeatHasFlag(getGameHandler(L), 0x2000000)) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
+    return 1;
+}
+// IsUsingVehicleControls(): the seat's Flags 0x800000 (0x005fb970).
+static int lua_IsUsingVehicleControls(lua_State* L) {
+    if (currentVehicleSeatHasFlag(getGameHandler(L), 0x800000)) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
     return 1;
 }
 static int lua_IsVehicleAimAngleAdjustable(lua_State* L) { lua_pushboolean(L, 0); return 1; }
@@ -5472,6 +5485,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"IsArenaTeamCaptain",           lua_IsArenaTeamCaptain},
                 {"CloseBattlefield",             lua_CloseBattlefield},
                 {"CanExitVehicle",               lua_CanExitVehicle},
+                {"IsUsingVehicleControls",       lua_IsUsingVehicleControls},
                 {"IsVehicleAimAngleAdjustable",  lua_IsVehicleAimAngleAdjustable},
                 {"HasKey",                       lua_HasKey},
                 {"GetArenaTeam",             lua_GetArenaTeam},
@@ -5599,13 +5613,11 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"VehicleAimUpStop",         lua_ReturnNothing},
                 {"VehicleAimDownStart",      lua_ReturnNothing},
                 {"VehicleAimDownStop",       lua_ReturnNothing},
-                // The button and the slash command both end here, and it did
-                // nothing - so /leavevehicle, the main bar's button and the
-                // unit menu's entry were three ways of not getting off.
-                // CMSG_REQUEST_VEHICLE_EXIT was already written and had no
-                // caller outside this client's own bar.
+                // CMSG_REQUEST_VEHICLE_EXIT where the player's seat lets it
+                // out, Flags 0x2000000 (0x005fb660 -> 0x0074c7f0).
                 {"VehicleExit", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->sendRequestVehicleExit();
+            auto* gh = getGameHandler(L);
+            if (currentVehicleSeatHasFlag(gh, 0x2000000)) gh->sendRequestVehicleExit();
             return 0;
         }},
                 {"VehicleAimGetNormAngle",   lua_ReturnZero},

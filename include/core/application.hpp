@@ -407,6 +407,10 @@ private:
     // until this exact transport instance's deck floor exists, instead of letting gravity
     // fold into the attachment and drop the rider through the hull.
     bool deckFloorPending_ = false;
+    /// The local player's passenger state last frame, and the camera
+    /// distance a seat's zoom put away (CGCamera +0x2d0, 0x005fe920).
+    int localSeatStateLastFrame_ = 0;
+    std::optional<float> seatZoomRemembered_;
 
     bool wasAutoAttacking_ = false;
 

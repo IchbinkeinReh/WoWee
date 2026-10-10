@@ -76,11 +76,34 @@ std::optional<Passenger> VehicleRoster::passenger(uint64_t guid) const {
     return it->second;
 }
 
+void VehicleRoster::setSeatState(uint64_t guid, uint8_t state) {
+    if (state == 0) seatStates_.erase(guid);
+    else seatStates_[guid] = state;
+}
+
+uint8_t VehicleRoster::seatState(uint64_t guid) const {
+    const auto it = seatStates_.find(guid);
+    return it != seatStates_.end() ? it->second : 0;
+}
+
+const SeatRecord* VehicleRoster::seatOf(uint64_t guid) const {
+    const auto p = passengers_.find(guid);
+    if (!tables_ || p == passengers_.end()) return nullptr;
+    return tables_->seat(vehicleId(p->second.vehicleGuid), p->second.seat);
+}
+
+const VehicleRecord* VehicleRoster::vehicleOf(uint64_t guid) const {
+    const auto p = passengers_.find(guid);
+    if (!tables_ || p == passengers_.end()) return nullptr;
+    return tables_->vehicle(vehicleId(p->second.vehicleGuid));
+}
+
 void VehicleRoster::forget(uint64_t guid) {
     vehicleIds_.erase(guid);
     passengers_.erase(guid);
     moveFlags2_.erase(guid);
     changes_.erase(guid);
+    seatStates_.erase(guid);
 }
 
 void VehicleRoster::clear() {
@@ -88,6 +111,7 @@ void VehicleRoster::clear() {
     passengers_.clear();
     moveFlags2_.clear();
     changes_.clear();
+    seatStates_.clear();
 }
 
 }  // namespace wowee::game::vehicle

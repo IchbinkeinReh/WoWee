@@ -6,6 +6,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "game/vehicle.hpp"
+#include "game/vehicle_camera.hpp"
 #include "game/vehicle_transition.hpp"
 
 namespace gv = wowee::game::vehicle;
@@ -196,4 +197,99 @@ TEST_CASE("a vehicle animation's bone column (0x00756f80)", "[vehicle]") {
     CHECK(gv::vehicleAnimBone(0x23) == gv::kWholeModelBone);
     CHECK(gv::vehicleAnimBone(-1) == gv::kWholeModelBone);
     CHECK(gv::vehicleAnimBone(0x1a) == gv::kWholeModelBone);
+}
+
+TEST_CASE("a change of seat times the camera (0x0075aac0)", "[vehicle]") {
+    gv::SeatRecord s;
+    s.enterMaxDuration = 5.0f;
+    s.exitMaxDuration = 0.2f;
+    s.enterPreDelay = 0.25f;
+    // Not moved through: at once, final.
+    auto t = gv::cameraTiming(SeatState::Seated, &s, false);
+    CHECK(t.fixed);
+    CHECK(t.durationMs == 0);
+    // The max duration held to 0.5..3 s, not final; after the wait.
+    t = gv::cameraTiming(SeatState::EnterDelay, &s, true);
+    CHECK_FALSE(t.fixed);
+    CHECK(t.durationMs == 3000);
+    CHECK(t.delayMs == 250);
+    CHECK(gv::cameraTiming(SeatState::Exiting, &s, true).durationMs == 500);
+    // The seat's own camera times with FlagsB 0x40 / 0x80.
+    s.flagsB = gv::kSeatFlagBEnterCameraTimes;
+    s.cameraEnteringDelay = 0.1f;
+    s.cameraEnteringDuration = 1.2f;
+    t = gv::cameraTiming(SeatState::Entering, &s, true);
+    CHECK(t.fixed);
+    CHECK(t.delayMs == 100);
+    CHECK(t.durationMs == 1200);
+    // No seat: half a second.
+    CHECK(gv::cameraTiming(SeatState::None, nullptr, true).durationMs == 500);
+}
+
+TEST_CASE("a seat zooms the camera (0x0074c0e0)", "[vehicle]") {
+    gv::SeatRecord s;
+    // Out of a seat the distance put away comes back.
+    auto z = gv::seatCameraZoom(false, &s, 10.0f, true);
+    CHECK(z.restore);
+    CHECK_FALSE(z.zoomTo);
+    // A seat that zooms nothing gives it back too; a fixed one leaves it.
+    CHECK(gv::seatCameraZoom(true, &s, 10.0f, true).restore);
+    s.flags = gv::kSeatFlagFixedCamera;
+    s.flagsB = gv::kSeatFlagBCameraZooms;
+    CHECK_FALSE(gv::seatCameraZoom(true, &s, 10.0f, true).restore);
+    // Limits and the entering zoom.
+    s.flags = gv::kSeatFlagCanControl;
+    s.cameraEnteringZoom = 20.0f;
+    z = gv::seatCameraZoom(true, &s, 10.0f, false);
+    REQUIRE(z.zoomTo);
+    CHECK(*z.zoomTo == Catch::Approx(20.0f));
+    CHECK(z.remember);
+    CHECK_FALSE(z.minDistance);
+    CHECK_FALSE(z.maxDistance);
+    // Kept closer with FlagsB 0x1000.
+    s.flagsB |= gv::kSeatFlagBKeepCloserZoom;
+    CHECK_FALSE(gv::seatCameraZoom(true, &s, 10.0f, false).zoomTo);
+    // Held in the seat's limits; one remembered already is kept.
+    s.flags = 0;
+    s.flagsB = gv::kSeatFlagBCameraZooms | gv::kSeatFlagBZoomMin | gv::kSeatFlagBZoomMax;
+    s.cameraSeatZoomMin = 12.0f;
+    s.cameraSeatZoomMax = 15.0f;
+    z = gv::seatCameraZoom(true, &s, 30.0f, true);
+    REQUIRE(z.minDistance);
+    CHECK(*z.minDistance == Catch::Approx(12.0f));
+    CHECK(*z.maxDistance == Catch::Approx(15.0f));
+    CHECK(*z.zoomTo == Catch::Approx(15.0f));
+    CHECK_FALSE(z.remember);
+    // A big entering zoom widens the max.
+    s.flags = gv::kSeatFlagCanControl;
+    s.flagsB = gv::kSeatFlagBCameraZooms;
+    s.cameraEnteringZoom = 60.0f;
+    z = gv::seatCameraZoom(true, &s, 10.0f, false);
+    REQUIRE(z.maxDistance);
+    CHECK(*z.maxDistance == Catch::Approx(60.0f));
+}
+
+TEST_CASE("the roster answers a unit's seat row and state (0x00613600)", "[vehicle]") {
+    gv::VehicleTables tables;
+    gv::VehicleRecord v;
+    v.id = 36;
+    v.seatIds = {101, 0, 0, 0, 0, 0, 0, 0};
+    tables.addVehicle(v);
+    gv::SeatRecord s;
+    s.id = 101;
+    s.flags = 0x800;
+    tables.addSeat(s);
+    gv::VehicleRoster r;
+    r.setTables(&tables);
+    r.setVehicleId(50, 36);
+    r.setTransport(1, 50, 0, 0.0f);
+    REQUIRE(r.seatOf(1));
+    CHECK(r.seatOf(1)->id == 101u);
+    CHECK(r.vehicleOf(1)->id == 36u);
+    CHECK(r.seatState(1) == 0);
+    r.setSeatState(1, 3);
+    CHECK(r.seatState(1) == 3);
+    r.forget(1);
+    CHECK(r.seatState(1) == 0);
+    CHECK_FALSE(r.seatOf(1));
 }

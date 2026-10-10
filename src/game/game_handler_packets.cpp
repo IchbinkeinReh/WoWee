@@ -1708,13 +1708,19 @@ void GameHandler::registerRemainingOpcodes() {
         bool nowInVehicle = newVehicleId != 0;
         vehicleId_ = newVehicleId;
         if (wasInVehicle != nowInVehicle) {
-            // Announced as well as stored. The state was kept and handed to
-            // this client's own bar, and the interface heard nothing - so the
-            // leave-vehicle button, which redraws on VEHICLE_UPDATE, never
-            // learned there was a vehicle to leave.
+            // The player is a vehicle now, or no longer (0x0074c750 ->
+            // 0x0074bbd0: PLAYER_GAINS_VEHICLE_DATA with its
+            // VehicleUIIndicatorID; 0x0074c7b0 -> 0x0074bc50: LOSES). Getting
+            // into or out of a seat is told by the seat's own events.
             fireAddonEvent("VEHICLE_UPDATE", {});
-            fireAddonEvent(nowInVehicle ? "UNIT_ENTERED_VEHICLE"
-                                        : "UNIT_EXITED_VEHICLE", {"player"});
+            if (nowInVehicle) {
+                const auto* tables = vehicleRoster_.tables();
+                const auto* row = tables ? tables->vehicle(newVehicleId) : nullptr;
+                fireAddonEvent("PLAYER_GAINS_VEHICLE_DATA",
+                               {"player", std::to_string(row ? row->uiIndicatorId : 0u)});
+            } else {
+                fireAddonEvent("PLAYER_LOSES_VEHICLE_DATA", {"player"});
+            }
             fireAddonEvent("UPDATE_BONUS_ACTIONBAR", {});
         }
     };

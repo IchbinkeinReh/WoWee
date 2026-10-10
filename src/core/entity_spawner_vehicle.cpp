@@ -15,6 +15,9 @@
 #include "core/coordinates.hpp"
 #include "game/entity.hpp"
 #include "game/game_handler.hpp"
+#include "game/group_defines.hpp"
+#include "game/handler_types.hpp"
+#include "game/vehicle_camera.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -33,6 +36,7 @@ namespace wowee::core {
 void EntitySpawner::loadVehicleTables() {
     if (vehicleTablesLoaded_ || !assetManager_ || !assetManager_->isInitialized()) return;
     vehicleTablesLoaded_ = true;
+    if (gameHandler_) gameHandler_->vehicleRoster().setTables(&vehicleTables_);
     const auto* layout = pipeline::getActiveDBCLayout();
     const pipeline::DBCFieldMap* vehicleLayout = layout ? layout->getLayout("Vehicle") : nullptr;
     const pipeline::DBCFieldMap* seatLayout = layout ? layout->getLayout("VehicleSeat") : nullptr;
@@ -79,6 +83,7 @@ void EntitySpawner::loadVehicleTables() {
         rec.cameraFadeDistScalarMax = f32(*vehicleDbc, row, vFadeMax);
         rec.cameraPitchOffset = f32(*vehicleDbc, row, vCamPitch);
         rec.cameraYawOffset = f32(*vehicleDbc, row, vCamYaw);
+        rec.uiIndicatorId = u32(*vehicleDbc, row, column(*vehicleLayout, *vehicleDbc, "VehicleUIIndicatorID"), 0);
         for (uint32_t i = 0; i < game::vehicle::kSeatCount; ++i) {
             rec.seatIds[i] = u32(*vehicleDbc, row, seatColumns[i], 0);
         }
@@ -155,6 +160,9 @@ void EntitySpawner::loadVehicleTables() {
         rec.cameraEnteringZoom = fcol("CameraEnteringZoom");
         rec.cameraSeatZoomMin = fcol("CameraSeatZoomMin");
         rec.cameraSeatZoomMax = fcol("CameraSeatZoomMax");
+        rec.enterUISoundId = u32(sd, row, column(sl, sd, "EnterUISoundID"), 0);
+        rec.exitUISoundId = u32(sd, row, column(sl, sd, "ExitUISoundID"), 0);
+        rec.uiSkin = u32(sd, row, column(sl, sd, "UiSkin"), 0);
         vehicleTables_.addSeat(rec);
     }
 }
@@ -264,6 +272,8 @@ void EntitySpawner::setSeatState(uint64_t guid, SeatedPassenger& p, SeatState st
     p.startMs = nowMs;
     p.endMs = nowMs;
     p.planned = false;
+    gameHandler_->vehicleRoster().setSeatState(guid, static_cast<uint8_t>(state));
+    if (old != state) fireSeatEvents(guid, p, old, state);
     if (state == SeatState::Seated && old != SeatState::Seated && seat) startVehicleRideLoop(p, *seat);
     if (!cr || p.instanceId == 0) return;
     // What it plays: the state's animation, the start once more but from 1
@@ -318,6 +328,87 @@ void EntitySpawner::stopVehicleRideLoop(uint64_t guid, SeatedPassenger& p) {
     cr->playAnimation(vehicleInstance, own, true);
 }
 
+std::string EntitySpawner::soundEntryName(uint32_t id) {
+    if (!soundEntryNamesLoaded_ && assetManager_ && assetManager_->isInitialized()) {
+        soundEntryNamesLoaded_ = true;
+        const auto* layout = pipeline::getActiveDBCLayout();
+        const pipeline::DBCFieldMap* map = layout ? layout->getLayout("SoundEntries") : nullptr;
+        auto dbc = map ? assetManager_->loadDBC("SoundEntries.dbc") : nullptr;
+        if (dbc && dbc->isLoaded()) {
+            const uint32_t idCol = map->tryField("ID");
+            const uint32_t nameCol = map->tryField("Name");
+            if (idCol < dbc->getFieldCount() && nameCol < dbc->getFieldCount()) {
+                for (uint32_t row = 0; row < dbc->getRecordCount(); ++row) {
+                    soundEntryNames_[dbc->getUInt32(row, idCol)] = dbc->getString(row, nameCol);
+                }
+            }
+        }
+    }
+    const auto it = soundEntryNames_.find(id);
+    return it != soundEntryNames_.end() ? it->second : std::string();
+}
+
+void EntitySpawner::fireSeatEvents(uint64_t guid, const SeatedPassenger& p, SeatState from, SeatState to) {
+    if (!gameHandler_) return;
+    // The unit's tokens (0x0060bb70): the player, a party or raid member.
+    std::vector<std::string> units;
+    if (guid == gameHandler_->getPlayerGuid()) units.emplace_back("player");
+    const auto& group = gameHandler_->getPartyData();
+    if (game::groupIsRaid(group.groupType)) {
+        for (size_t i = 0; i < group.members.size(); ++i) {
+            if (group.members[i].guid == guid) units.push_back("raid" + std::to_string(i + 1));
+        }
+    } else {
+        int n = 0;
+        for (const auto& m : group.members) {
+            if (m.guid == gameHandler_->getPlayerGuid()) continue;
+            ++n;
+            if (m.guid == guid) units.push_back("party" + std::to_string(n));
+        }
+    }
+    if (units.empty()) return;
+    // 0x00749fb0: which of the four a change from one state to another says.
+    constexpr uint32_t kEntering = 1, kEntered = 2, kExiting = 4, kExited = 8;
+    uint32_t which = 0;
+    switch (to) {
+        case SeatState::None: which = from == SeatState::Seated ? kExiting | kExited : kExited; break;
+        case SeatState::EnterDelay: which = kEntering; break;
+        case SeatState::Entering: which = from == SeatState::EnterDelay ? 0 : kEntering; break;
+        case SeatState::Seated:
+            which = from != SeatState::None && from != SeatState::Seated ? kEntered : kEntering | kEntered;
+            break;
+        case SeatState::ExitDelay: which = kExiting; break;
+        case SeatState::Exiting: which = from == SeatState::ExitDelay ? 0 : kExiting; break;
+    }
+    const game::vehicle::SeatRecord* seat = vehicleTables_.seatById(p.seatId);
+    const game::vehicle::VehicleRecord* vehicle =
+        vehicleTables_.vehicle(gameHandler_->vehicleRoster().vehicleId(p.vehicleGuid));
+    // 0x00748810's arguments: the unit; whether the seat has the vehicle UI
+    // (Flags 0x20000000) - held at false while UnitHasVehicleUI is; its
+    // UiSkin; its EnterUISoundID's name; whether it is a control seat (Flags
+    // 0x800); the vehicle's VehicleUIIndicatorID.
+    auto entering = [&](const char* event) {
+        static constexpr const char* kSkins[2] = {"Natural", "Mechanical"};
+        for (const auto& unit : units) {
+            gameHandler_->fireAddonEvent(
+                event, {unit, game::eventBool(false), seat && seat->uiSkin < 2 ? kSkins[seat->uiSkin] : "",
+                        seat ? soundEntryName(seat->enterUISoundId) : std::string(),
+                        game::eventBool(seat && (seat->flags & 0x800) != 0),
+                        std::to_string(vehicle ? vehicle->uiIndicatorId : 0u)});
+        }
+    };
+    if (which & kEntering) entering("UNIT_ENTERING_VEHICLE");
+    if (which & kEntered) entering("UNIT_ENTERED_VEHICLE");
+    if (which & kExiting) {
+        for (const auto& unit : units) gameHandler_->fireAddonEvent("UNIT_EXITING_VEHICLE", {unit});
+    }
+    if (which & kExited) {
+        // The unit and its seat's ExitUISoundID's name (0x00749650 0x8).
+        const std::string sound = seat ? soundEntryName(seat->exitUISoundId) : std::string();
+        for (const auto& unit : units) gameHandler_->fireAddonEvent("UNIT_EXITED_VEHICLE", {unit, sound});
+    }
+}
+
 void EntitySpawner::planSeatState(uint64_t guid, SeatedPassenger& p, uint32_t nowMs) {
     p.planned = true;
     auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
@@ -355,6 +446,13 @@ void EntitySpawner::planSeatState(uint64_t guid, SeatedPassenger& p, uint32_t no
             }
             p.arc = game::vehicle::planArc(*seat, entering, distance, along);
             p.endMs = p.startMs + p.arc.durationMs;
+            // The local player's camera takes the flight's time where its
+            // own is not final (0x0074a200 -> 0x0075af00).
+            if (gameHandler_ && guid == gameHandler_->getPlayerGuid() && localSeatCamera_.pending &&
+                !localSeatCamera_.fixed) {
+                localSeatCamera_.durationMs = p.arc.durationMs;
+                localSeatCamera_.fixed = true;
+            }
             break;
         }
     }
@@ -364,6 +462,39 @@ void EntitySpawner::planSeatState(uint64_t guid, SeatedPassenger& p, uint32_t no
         setSeatState(guid, p, entersOrSits(p.state) ? SeatState::Seated : SeatState::None, nowMs);
         p.planned = true;
     }
+}
+
+std::optional<game::vehicle::SeatState> EntitySpawner::localPassengerState() const {
+    if (!gameHandler_) return std::nullopt;
+    const auto it = seatedPassengers_.find(gameHandler_->getPlayerGuid());
+    if (it == seatedPassengers_.end() || it->second.state == SeatState::None) return std::nullopt;
+    return it->second.state;
+}
+
+std::optional<glm::vec3> EntitySpawner::localPassengerDrawnPosition() const {
+    auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!cr || !localPassengerState()) return std::nullopt;
+    const auto it = seatedPassengers_.find(gameHandler_->getPlayerGuid());
+    glm::vec3 pos(0.0f);
+    if (!cr->getInstancePosition(it->second.instanceId, pos)) return std::nullopt;
+    return pos;
+}
+
+std::optional<EntitySpawner::SeatCameraCue> EntitySpawner::takeSeatCameraCue() {
+    if (!localSeatCamera_.pending || !gameHandler_) return std::nullopt;
+    if (!reached(seatClockMs(), localSeatCamera_.startMs)) return std::nullopt;
+    if (localSeatCamera_.waitsForFlight && !localSeatCamera_.fixed) return std::nullopt;
+    localSeatCamera_.pending = false;
+    SeatCameraCue cue;
+    cue.seconds = static_cast<float>(localSeatCamera_.durationMs) * 0.001f;
+    const auto it = seatedPassengers_.find(gameHandler_->getPlayerGuid());
+    if (it != seatedPassengers_.end()) {
+        // In a seat, or on its way into one (0x0074c0e0's test).
+        const SeatState s = it->second.state;
+        cue.seated = s == SeatState::EnterDelay || s == SeatState::Entering || s == SeatState::Seated;
+        cue.seat = vehicleTables_.seatById(it->second.seatId);
+    }
+    return cue;
 }
 
 void EntitySpawner::updateVehiclePassengers() {
@@ -414,7 +545,20 @@ void EntitySpawner::updateVehiclePassengers() {
         p.voluntary = how.voluntary;
         const game::vehicle::SeatRecord* seat = vehicleTables_.seatById(p.seatId);
         const bool animated = game::vehicle::changeIsAnimated(how.animated, leaving, seat);
-        setSeatState(guid, p, game::vehicle::firstState(!leaving, seat, animated, p.voluntary), now);
+        const SeatState first = game::vehicle::firstState(!leaving, seat, animated, p.voluntary);
+        if (guid == gameHandler_->getPlayerGuid()) {
+            // The local player's camera moves with it (0x0074cf30 ->
+            // 0x0075aac0): after its wait, over its time - or, not yet
+            // final, the flight's (0x0075af00).
+            const auto timing = game::vehicle::cameraTiming(first, seat, animated);
+            const bool rests = first == SeatState::None || first == SeatState::Seated;
+            localSeatCamera_ = LocalSeatCamera{.pending = true,
+                                               .startMs = now + timing.delayMs,
+                                               .durationMs = timing.fixed || !rests ? timing.durationMs : 0u,
+                                               .fixed = timing.fixed,
+                                               .waitsForFlight = !timing.fixed && !rests};
+        }
+        setSeatState(guid, p, first, now);
     };
 
     std::unordered_set<uint64_t> inSeats;
@@ -466,11 +610,14 @@ void EntitySpawner::updateVehiclePassengers() {
         if (instanceId != p.instanceId) {
             // Its model changed: the old one let go, the new one given the
             // state's animation.
+            const bool wasHidden = p.hidden;
             releaseSeatedPassenger(guid, p, false);
             p.instanceId = instanceId;
             const game::vehicle::SeatRecord* seat = vehicleTables_.seatById(p.seatId);
             if (instanceId && seat && p.state != SeatState::None) {
                 cr->setSeatAnimation(instanceId, toRide(game::vehicle::seatAnimation(p.state, *seat, p.voluntary)));
+                if (wasHidden) cr->setInstanceVisible(instanceId, false);
+                p.hidden = wasHidden;
             }
         }
         const auto passenger = roster.passenger(guid);
@@ -521,10 +668,16 @@ void EntitySpawner::updateVehiclePassengers() {
             }
         }
 
-        if (p.state == SeatState::None || p.instanceId == 0) {
+        if (p.state == SeatState::None) {
             stopVehicleRideLoop(guid, p);
             releaseSeatedPassenger(guid, p, landed);
             it = seatedPassengers_.erase(it);
+            continue;
+        }
+        // A unit with no model is stepped all the same, and drawn when it
+        // has one.
+        if (p.instanceId == 0) {
+            ++it;
             continue;
         }
 

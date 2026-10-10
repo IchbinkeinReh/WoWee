@@ -339,6 +339,10 @@
     "SkillLineID": 1,
     "SpellID": 2
   },
+  "SoundEntries": {
+    "ID": 0,
+    "Name": 2
+  },
   "Spell": {
     "Attributes": 4,
     "AttributesEx": 5,
@@ -568,7 +572,8 @@
     "SeatID4": 10,
     "SeatID5": 11,
     "SeatID6": 12,
-    "SeatID7": 13
+    "SeatID7": 13,
+    "VehicleUIIndicatorID": 36
   },
   "VehicleSeat": {
     "AttachmentID": 2,
@@ -596,6 +601,7 @@
     "EnterMinDuration": 9,
     "EnterPreDelay": 6,
     "EnterSpeed": 7,
+    "EnterUISoundID": 42,
     "ExitAnimEnd": 28,
     "ExitAnimLoop": 27,
     "ExitAnimStart": 26,
@@ -606,6 +612,7 @@
     "ExitMinDuration": 22,
     "ExitPreDelay": 19,
     "ExitSpeed": 20,
+    "ExitUISoundID": 43,
     "Flags": 1,
     "FlagsB": 45,
     "ID": 0,
@@ -617,6 +624,7 @@
     "RideAnimStart": 15,
     "RideUpperAnimLoop": 18,
     "RideUpperAnimStart": 17,
+    "UiSkin": 44,
     "VehicleEnterAnim": 33,
     "VehicleEnterAnimBone": 36,
     "VehicleExitAnim": 34,

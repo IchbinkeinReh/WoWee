@@ -283,6 +283,17 @@ public:
     void setExternalMoving(bool moving) { externalMoving_ = moving; }
     void setFacingYaw(float yaw) { facingYaw = yaw; }  // For taxi/scripted movement
     void clearMovementInputs();
+    /// A passenger's camera looks at where its unit is drawn on the vehicle
+    /// (its matrix is the seat's, 0x0074a7f0) rather than where its own
+    /// movement left it; none follows the character again.
+    void setVehiclePivot(const std::optional<glm::vec3>& pivot) { vehiclePivot_ = pivot; }
+    /// A seat's zoom limits (0x0074c0e0 -> 0x00600840, 0x00600890); none
+    /// lifts them (0x006008e0, 0x00600920).
+    void setSeatZoomLimits(std::optional<float> minDistance, std::optional<float> maxDistance);
+    /// Zoomed to a distance over a time, evenly (0x005ffb70 -> 0x005ff950,
+    /// 0x005ffa60: the way over the time, whatever the zoom speed).
+    void zoomOverTime(float distance, float seconds);
+    [[nodiscard]] float getUserTargetDistance() const { return userTargetDistance; }
     void suppressMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
 
@@ -463,6 +474,13 @@ private:
     float currentDistance = 10.0f;      // Smoothed actual distance
     float collisionDistance = 10.0f;    // Max allowed by collision
     bool externalFollow_ = false;
+    std::optional<glm::vec3> vehiclePivot_;
+    std::optional<float> seatZoomMin_;
+    std::optional<float> seatZoomMax_;
+    float timedZoomFrom_ = 0.0f;
+    float timedZoomTo_ = 0.0f;
+    float timedZoomSeconds_ = 0.0f;
+    float timedZoomElapsed_ = -1.0f;  ///< below 0: none running
     static constexpr float MIN_DISTANCE = 0.5f;     // Minimum zoom (first-person threshold)
     static constexpr float MAX_DISTANCE_NORMAL = 22.0f;   // Default max zoom out
     static constexpr float MAX_DISTANCE_EXTENDED = 50.0f;  // Extended max zoom out

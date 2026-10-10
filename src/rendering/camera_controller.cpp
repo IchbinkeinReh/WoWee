@@ -2798,7 +2798,31 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
     camera->setPosition(newPos);
 }
 
+void CameraController::setSeatZoomLimits(std::optional<float> minDistance, std::optional<float> maxDistance) {
+    seatZoomMin_ = minDistance;
+    seatZoomMax_ = maxDistance;
+    if (seatZoomMin_) userTargetDistance = std::max(userTargetDistance, *seatZoomMin_);
+    if (seatZoomMax_) userTargetDistance = std::min(userTargetDistance, *seatZoomMax_);
+}
+
+void CameraController::zoomOverTime(float distance, float seconds) {
+    timedZoomFrom_ = userTargetDistance;
+    timedZoomTo_ = std::max(distance, MIN_DISTANCE);
+    timedZoomSeconds_ = std::max(seconds, 0.0f);
+    timedZoomElapsed_ = 0.0f;
+    if (timedZoomSeconds_ <= 0.0f) {
+        userTargetDistance = timedZoomTo_;
+        timedZoomElapsed_ = -1.0f;
+    }
+}
+
 void CameraController::update(float deltaTime) {
+    if (timedZoomElapsed_ >= 0.0f) {
+        timedZoomElapsed_ += deltaTime;
+        const float t = std::min(timedZoomElapsed_ / timedZoomSeconds_, 1.0f);
+        userTargetDistance = timedZoomFrom_ + (timedZoomTo_ - timedZoomFrom_) * t;
+        if (t >= 1.0f) timedZoomElapsed_ = -1.0f;
+    }
     if (!enabled || !camera) {
         return;
     }
@@ -2823,7 +2847,7 @@ void CameraController::update(float deltaTime) {
 
         // Position camera behind character during taxi
         if (thirdPerson && followTarget) {
-            glm::vec3 targetPos = *followTarget;
+            glm::vec3 targetPos = vehiclePivot_ ? *vehiclePivot_ : *followTarget;
             glm::vec3 forward3D = camera->getForward();
 
             // Pivot point at upper chest/neck
@@ -3815,7 +3839,12 @@ void CameraController::processMouseWheel(float delta) {
     // at every position instead of only at its ends.
     float maxDist = MAX_DISTANCE_NORMAL * maxDistanceFactor_;
     if (cachedInsideInteriorWMO) maxDist = std::min(maxDist, MAX_DISTANCE_INTERIOR);
-    userTargetDistance = glm::clamp(userTargetDistance, MIN_DISTANCE, maxDist);
+    float minDist = MIN_DISTANCE;
+    // A seat's limits hold the wheel too (0x0074c0e0).
+    if (seatZoomMax_) maxDist = *seatZoomMax_;
+    if (seatZoomMin_) minDist = std::max(minDist, *seatZoomMin_);
+    userTargetDistance = glm::clamp(userTargetDistance, minDist, std::max(minDist, maxDist));
+    timedZoomElapsed_ = -1.0f;
 }
 
 void CameraController::setFollowTarget(glm::vec3* target) {
