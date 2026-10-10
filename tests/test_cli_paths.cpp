@@ -128,7 +128,8 @@ TEST_CASE("each file carries the base path a loader wants", "[cli-paths]") {
     const auto found = findFilesByExtension(root, ".wom");
     REQUIRE(found.size() == 1);
     CHECK(found[0].relative == "meshes/tree.wom");
-    CHECK(found[0].base == (root / "meshes/tree").string());
+    // The same path, whichever separators the system joins it with.
+    CHECK(fs::path(found[0].base) == root / "meshes" / "tree");
     CHECK(found[0].bytes == 4);
 }
 

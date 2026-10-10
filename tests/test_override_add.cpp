@@ -99,7 +99,7 @@ TEST_CASE("an override replaces a file the manifest knows") {
     const std::string resolved =
         resolveLikeAssetManager(tree.root, manifest, "world\\trees\\old.blp");
     REQUIRE_FALSE(resolved.empty());
-    CHECK(resolved.find("/override/") != std::string::npos);
+    CHECK(fs::path(resolved).generic_string().find("/override/") != std::string::npos);
 }
 
 TEST_CASE("an override adds a file the manifest has never heard of") {
@@ -111,7 +111,7 @@ TEST_CASE("an override adds a file the manifest has never heard of") {
     const std::string resolved =
         resolveLikeAssetManager(tree.root, manifest, "world\\trees\\leaves_set.blp");
     REQUIRE_FALSE(resolved.empty());
-    CHECK(resolved.find("/override/") != std::string::npos);
+    CHECK(fs::path(resolved).generic_string().find("/override/") != std::string::npos);
 }
 
 TEST_CASE("without the override, the manifest still answers") {

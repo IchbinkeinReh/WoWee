@@ -46,7 +46,14 @@ namespace cli {
 /// `outRc` is the child's exit status, or 127 if it could not be started.
 inline std::string runAndCapture(const std::string& cmd, int& outRc) {
     std::string buf;
+#ifdef _WIN32
+    // cmd /c strips the first and last quote of a line that starts with one,
+    // which every line here does (the executable is quoted): wrapped once
+    // more, that outer pair is the one it strips.
+    std::FILE* pipe = popen(("\"" + cmd + "\"").c_str(), "r");
+#else
     std::FILE* pipe = popen(cmd.c_str(), "r");
+#endif
     if (!pipe) {
         outRc = 127;
         return buf;

@@ -47,13 +47,43 @@ inline std::string basePathFor(std::string path, const char* extension) {
     return path;
 }
 
-/// Wrap a string so a POSIX shell passes it through unchanged.
+/// Wrap a string so the system's shell passes it through unchanged.
 ///
-/// Single quotes, with the one character that cannot appear inside them
-/// spliced in as '"'"'. Paths under Data are user-named and a directory such
-/// as "Bob's zone" would otherwise end the quoting and run the rest as
+/// POSIX: single quotes, with the one character that cannot appear inside
+/// them spliced in as '"'"'. Paths under Data are user-named and a directory
+/// such as "Bob's zone" would otherwise end the quoting and run the rest as
 /// commands.
+///
+/// Windows: popen hands the line to cmd.exe, which knows nothing of single
+/// quotes - a path with a space split in two there, and one with & or | ran
+/// the rest as a command. Double quotes instead, which also keep & | < > ^
+/// from cmd, with the child's argv rules (CommandLineToArgvW) for a quote
+/// inside: backslashes before a quote are doubled and the quote escaped.
+/// A %NAME% naming a set variable is still expanded; cmd offers no quoting
+/// that stops it.
 inline std::string shellQuote(const std::string& s) {
+#ifdef _WIN32
+    std::string out = "\"";
+    size_t backslashes = 0;
+    for (char c : s) {
+        if (c == '\\') {
+            ++backslashes;
+            continue;
+        }
+        if (c == '"') {
+            out.append(backslashes * 2 + 1, '\\');
+            out.push_back('"');
+        } else {
+            out.append(backslashes, '\\');
+            out.push_back(c);
+        }
+        backslashes = 0;
+    }
+    // Doubled before the closing quote, or they would escape it.
+    out.append(backslashes * 2, '\\');
+    out.push_back('"');
+    return out;
+#else
     std::string out;
     out.reserve(s.size() + 2);
     out.push_back('\'');
@@ -63,6 +93,7 @@ inline std::string shellQuote(const std::string& s) {
     }
     out.push_back('\'');
     return out;
+#endif
 }
 
 /// The first four bytes of a file, which is its format magic.
@@ -113,8 +144,10 @@ inline std::vector<FoundFile> findFilesByExtension(
         FoundFile found;
         found.path = entry.path();
         std::error_code relEc;
-        found.relative = fs::relative(entry.path(), root, relEc).string();
-        if (relEc) found.relative = entry.path().filename().string();
+        // generic_string: '/' on every system, so a listing made on Windows
+        // diffs cleanly against one made anywhere else.
+        found.relative = fs::relative(entry.path(), root, relEc).generic_string();
+        if (relEc) found.relative = entry.path().filename().generic_string();
         found.base = basePathFor(entry.path().string(), extension);
         std::error_code sizeEc;
         const auto size = entry.file_size(sizeEc);
