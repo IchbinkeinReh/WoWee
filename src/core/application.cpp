@@ -125,6 +125,15 @@ namespace core {
 
 namespace {
 
+/// Walk rather than Run for a unit moving at this pace (FUN_00717050): Run
+/// above twice its walk speed, Walk at or below it. GetCurrentSpeed
+/// (FUN_00987570) is the spline's average for a unit on one and the speed its
+/// flags select otherwise - getMoveSpeed() holds the same.
+bool walksAtPace(const game::Entity& entity, bool moving) {
+    if (!moving) return false;
+    return entity.getMoveSpeed() <= 2.0f * entity.getMovementSpeeds().walk;
+}
+
 // Where another unit's jump leaves the sync loop's locomotion choice this
 // frame (airborneAnimSync): true while the jump's animations hold it - Fall
 // started for a unit in the air without one; refresh set for a unit down
@@ -820,6 +829,9 @@ bool Application::initialize() {
         };
         luaSvc.toggleAutoRun = [r = renderer.get()]() {
             if (auto* cc = r ? r->getCameraController() : nullptr) cc->toggleAutoRun();
+        };
+        luaSvc.pressJump = [r = renderer.get()]() {
+            if (auto* cc = r ? r->getCameraController() : nullptr) cc->pressBindingJump();
         };
         luaSvc.setBindingTurn = [r = renderer.get()](int direction, bool held) {
             auto* cc = r ? r->getCameraController() : nullptr;
@@ -3489,7 +3501,6 @@ void Application::syncRenderInstancesToEntities() {
         auto& _creatureInstances = entitySpawner_->getCreatureInstances();
         auto& _creatureRenderPosCache = entitySpawner_->getCreatureRenderPosCache();
         auto& _creatureSwimmingState = entitySpawner_->getCreatureSwimmingState();
-        auto& _creatureWalkingState = entitySpawner_->getCreatureWalkingState();
         auto& _creatureFlyingState = entitySpawner_->getCreatureFlyingState();
         auto& _creatureActiveEmotes = entitySpawner_->getCreatureActiveEmotes();
         auto& _creatureWasMoving = entitySpawner_->getCreatureWasMoving();
@@ -3631,7 +3642,14 @@ void Application::syncRenderInstancesToEntities() {
                 // Only switch on transitions to avoid resetting animation time.
                 // Don't override Death (1) animation.
                 const bool isSwimmingNow = _creatureSwimmingState.count(guid) > 0;
-                const bool isWalkingNow  = _creatureWalkingState.count(guid) > 0;
+                // Walk or Run by the pace, as FUN_00717050 picks it: Run when
+                // the current speed is more than twice the unit's walk speed,
+                // Walk otherwise. The speed is the spline's own (length over
+                // duration, FUN_00987570), and no flag enters into it - the
+                // client never copies a spline's walk mode into the unit's
+                // flags. Patrolling guards are moved at walk pace with no
+                // WALKING flag at all, and played Run slowed to that pace.
+                const bool isWalkingNow  = walksAtPace(*entity, isMovingNow);
                 const bool isFlyingNow   = _creatureFlyingState.count(guid) > 0;
                 bool prevMoving   = _creatureWasMoving[guid];
                 bool prevSwimming = _creatureWasSwimming[guid];
@@ -3751,7 +3769,6 @@ void Application::syncRenderInstancesToEntities() {
         auto& _pCreatureWasFlying = entitySpawner_->getCreatureWasFlying();
         auto& _pCreatureWasWalking = entitySpawner_->getCreatureWasWalking();
         auto& _pCreatureSwimmingState = entitySpawner_->getCreatureSwimmingState();
-        auto& _pCreatureWalkingState = entitySpawner_->getCreatureWalkingState();
         auto& _pCreatureFlyingState = entitySpawner_->getCreatureFlyingState();
         auto& _pCreatureRenderPosCache = entitySpawner_->getCreatureRenderPosCache();
         const uint64_t playerTargetGuid = gameHandler->hasTarget()
@@ -3854,7 +3871,7 @@ void Application::syncRenderInstancesToEntities() {
 
                 // Drive movement animation (same logic as creatures)
                 const bool isSwimmingNow = _pCreatureSwimmingState.count(guid) > 0;
-                const bool isWalkingNow  = _pCreatureWalkingState.count(guid) > 0;
+                const bool isWalkingNow  = walksAtPace(*entity, isMovingNow);  // FUN_00717050
                 const bool isFlyingNow   = _pCreatureFlyingState.count(guid) > 0;
                 // In its rider pose (+0xb7c, Mount unless a mount aura's
                 // kit gave another), in the air too: 3.3.5 has no rider
