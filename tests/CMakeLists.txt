@@ -1255,6 +1255,17 @@ target_link_libraries(test_nameplate_stacking PRIVATE catch2_main)
 add_test(NAME nameplate_stacking COMMAND test_nameplate_stacking)
 register_test_target(test_nameplate_stacking)
 
+# ── test_nameplate_cast_bar ──────────────────────────────────
+add_executable(test_nameplate_cast_bar
+    test_nameplate_cast_bar.cpp
+    ${TEST_COMMON_SOURCES}
+)
+target_include_directories(test_nameplate_cast_bar PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_nameplate_cast_bar SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_nameplate_cast_bar PRIVATE catch2_main)
+add_test(NAME nameplate_cast_bar COMMAND test_nameplate_cast_bar)
+register_test_target(test_nameplate_cast_bar)
+
 # ── test_combat_text_filter ──────────────────────────────────
 add_executable(test_combat_text_filter
     test_combat_text_filter.cpp
@@ -2647,6 +2658,22 @@ wowee_add_test(test_spell_chain
 # CharProc 16's mount transition (0x007fa6a0, 0x007fb7f0).
 wowee_add_test(test_mount_transition
     SOURCES test_mount_transition.cpp)
+
+# ── test_mount_seat ──────────────────────────────────
+# A unit on its mount: its size (0x0071c0e0, 0x0073d5d0) and its rider's
+# pose (+0xb7c, 0x00724820, 0x0071e930).
+wowee_add_test(test_mount_seat
+    SOURCES test_mount_seat.cpp)
+
+# ── test_loading_screen_layout ───────────────────────
+# The world loading screen's picture and bar (0x0040a270, 0x004090c0).
+wowee_add_test(test_loading_screen_layout
+    SOURCES test_loading_screen_layout.cpp)
+
+# ── test_glue_scene ──────────────────────────────────
+# The glue screens' background scene (0x004e3620, 0x004e0dd0).
+wowee_add_test(test_glue_scene
+    SOURCES test_glue_scene.cpp)
 
 # ── test_spell_chain_targets_packet ──────────────────
 # SMSG_SPELL_UPDATE_CHAIN_TARGETS as 0x00800470 reads it.

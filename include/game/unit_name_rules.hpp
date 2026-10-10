@@ -6,6 +6,8 @@
 /// read (0x007e6150, 0x00511xxx). Arithmetic only; the drawing is the HUD's.
 
 #include <cstdint>
+#include <cstdio>
+#include <optional>
 #include <string>
 
 namespace wowee::game::unit_names {
@@ -216,5 +218,128 @@ inline std::string playerNamePrefix(uint32_t playerFlags, const std::string& afk
     if (playerFlags & 0x8000) out += "<Dev>";
     return out;
 }
+
+/// 0x0061e830: the line under the name of a unit something made - "<%s's
+/// Pet>" and the like, the %s its owner (UNIT_FIELD_CHARMEDBY, else
+/// CREATEDBY; that unit's own owner where it has one). The text is the
+/// interface's UNITNAME_SUMMON_TITLE1 to 12 (FrameScript_GetText,
+/// 0x00819d40); these are enUS GlobalStrings', for want of an interface.
+inline constexpr int kSummonTitleCount = 12;
+inline constexpr const char* kSummonTitlesEnUS[] = {
+    nullptr,          "%s's Pet",       "%s's Guardian", "%s's Minion",   "%s's Totem",
+    "%s's Companion", "%s's Runeblade", "%s's Construct", "%s's Opponent", "%s's Vehicle",
+    "%s's Mount",     "%s's Lightwell", "%s's Butler",
+};
+/// The global the title's text is, "UNITNAME_SUMMON_TITLE<n>"; empty for none.
+inline std::string summonTitleKey(int title) {
+    if (title <= 0 || title > kSummonTitleCount) return {};
+    return "UNITNAME_SUMMON_TITLE" + std::to_string(title);
+}
+inline constexpr uint32_t kEffectSummon = 28;
+inline constexpr uint32_t kCreatureTypeBeast = 1;
+
+/// Which title: the SummonProperties Title (+0xc) of the creating spell's
+/// (UNIT_CREATED_BY_SPELL) first SUMMON effect's EffectMiscValueB, where
+/// there is such a row and its Title is not -1 - 0 meaning none; otherwise a
+/// beast's is Pet (1) and anything else's Minion (3).
+constexpr int summonTitle(std::optional<int32_t> propertiesTitle, uint32_t creatureType) {
+    if (propertiesTitle && *propertiesTitle != -1) return *propertiesTitle;
+    return creatureType == kCreatureTypeBeast ? 1 : 3;
+}
+
+/// A localized format with the owner put in for its %s (or %1$s), as the
+/// client's sprintf does; a "%%" is a percent sign. Nothing else in it is
+/// taken as a conversion, so a string from the interface cannot ask for
+/// arguments there are not.
+inline std::string formatOwner(const std::string& format, const std::string& owner) {
+    std::string out;
+    bool placed = false;
+    for (size_t i = 0; i < format.size(); ++i) {
+        if (format[i] != '%' || i + 1 >= format.size()) {
+            out += format[i];
+            continue;
+        }
+        if (format[i + 1] == '%') {
+            out += '%';
+            ++i;
+        } else if (format[i + 1] == 's' && !placed) {
+            out += owner;
+            placed = true;
+            ++i;
+        } else if (format.compare(i + 1, 3, "1$s") == 0 && !placed) {
+            out += owner;
+            placed = true;
+            i += 3;
+        } else {
+            out += format[i];
+        }
+    }
+    return out;
+}
+
+/// The title's text for the owner, empty for none: the interface's string
+/// where it has one, else enUS.
+inline std::string summonTitleText(int title, const std::string& owner, const std::string& localized = {}) {
+    if (title <= 0 || title > kSummonTitleCount) return {};
+    return formatOwner(localized.empty() ? kSummonTitlesEnUS[title] : localized, owner);
+}
+
+/// 0x0072a000 and 0x0072d4f0: a unit under an aura whose spell applies aura
+/// 279 (CLONE_CASTER, Mirror Image's) on an effect the aura has - its flags'
+/// bit for that effect index - is named as that aura's caster: the caster's
+/// own name while it is about, else the name cached for its guid. 0 when
+/// the unit has no such aura. `auraIdsOf(spellId, k)` is the spell's
+/// EffectApplyAuraName k, 0 for none or an unknown spell.
+inline constexpr uint32_t kAuraCloneCaster = 279;
+template <class Auras, class AuraIdsOf>
+uint64_t cloneCasterGuid(const Auras& auras, AuraIdsOf auraIdsOf) {
+    for (const auto& a : auras) {
+        if (a.spellId == 0) continue;
+        for (int k = 0; k < 3; ++k) {
+            if ((a.flags & (1u << k)) == 0) continue;
+            if (auraIdsOf(a.spellId, k) == kAuraCloneCaster) return a.casterGuid;
+        }
+    }
+    return 0;
+}
+
+/// 0x00519df0: whether a plate shows its threat flash, by threatWarning
+/// (default 3): 0 never, 1 in a dungeon or raid map (Map.dbc InstanceType 1
+/// or 2), 2 in a party or raid, 3 always.
+constexpr bool threatWarningOn(int mode, bool inDungeon, bool inGroup) {
+    switch (mode) {
+        case 1: return inDungeon;
+        case 2: return inGroup;
+        case 3: return true;
+        default: return false;
+    }
+}
+
+/// 0x0098e9f0: the plate's UI-TargetingFrame-Flash, tinted by the player's
+/// threat status on the unit - 1 yellow, 2 orange, 3 red (0x00ad2d70 by the
+/// status plus one, the table GetThreatStatusColor reads, 0x00511fe0); none
+/// at 0 or off the list. ARGB.
+constexpr uint32_t plateThreatColor(int status) {
+    switch (status) {
+        case 1: return 0xffffff77u;
+        case 2: return 0xffff9900u;
+        case 3: return 0xffff0000u;
+        default: return 0;
+    }
+}
+
+/// The plate name's colour: red for 5 s after the unit is hurt (0x0098e5b0
+/// from 0x0073f330 and AddCombatLogEntry), else yellow under the pointer's
+/// glow (0x0098e910), else white (0x0098e980). ARGB.
+inline constexpr float kPlateHurtSeconds = 5.0f;
+constexpr uint32_t plateNameColor(bool hurt, bool glow) {
+    if (hurt) return 0xffff0000u;
+    return glow ? 0xffffff00u : 0xffffffffu;
+}
+
+/// FOREIGN_SERVER_LABEL: 0x0072d4f0 ends another player's name with it
+/// when the name query gave a realm - one from another server in a
+/// battleground. This is enUS GlobalStrings', for want of an interface.
+inline constexpr const char* kForeignServerLabelEnUS = " (*)";
 
 }  // namespace wowee::game::unit_names

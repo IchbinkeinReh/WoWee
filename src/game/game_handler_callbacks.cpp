@@ -1,4 +1,5 @@
 #include "game/ground_target.hpp"
+#include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
 #include "game/game_handler.hpp"
 #include "game/reputation_standing.hpp"
@@ -2392,21 +2393,60 @@ bool GameHandler::isGroundTargeting() const { return spellHandler_ && spellHandl
 uint32_t GameHandler::groundTargetSpellId() const {
     return spellHandler_ ? spellHandler_->groundTargetSpellId() : 0;
 }
-bool GameHandler::cancelGroundTargeting() { return spellHandler_ && spellHandler_->cancelGroundTargeting(); }
-void GameHandler::placeGroundTarget(const glm::vec3& canonical) {
-    if (spellHandler_) spellHandler_->placeGroundTarget(canonical);
+spell_mods::Sum GameHandler::getSpellModifiers(uint32_t spellId, SpellModOp op) const {
+    return spellHandler_ ? spellHandler_->spellModifiers(spellId, static_cast<uint8_t>(op)) : spell_mods::Sum{};
 }
-std::optional<GameHandler::GroundTargetAim> GameHandler::aimGroundTarget(std::optional<glm::vec3> canonical) {
+uint64_t GameHandler::getCloneCasterGuid(const Unit& unit) const {
+    const auto* auras = getUnitAuras(unit.getGuid());
+    if (!auras || auras->empty()) return 0;
+    return unit_names::cloneCasterGuid(*auras, [this](uint32_t spellId, int k) -> uint32_t {
+        getSpellName(spellId);  // fills the cache
+        auto it = spellNameCache_.find(spellId);
+        return it != spellNameCache_.end() ? it->second.effectAuraIds[k] : 0u;
+    });
+}
+
+std::string GameHandler::shownUnitName(const Unit& unit) {
+    const uint64_t caster = getCloneCasterGuid(unit);
+    if (caster == 0) return unit.getName();
+    // The caster's own name while it is about; else what is cached for it
+    // (0x0074d750), which a name query fills for a player.
+    if (auto e = entityController_->getEntityManager().getEntity(caster); e && e->isUnit()) {
+        const auto& u = static_cast<const Unit&>(*e);
+        if (!u.getName().empty()) return u.getName();
+    }
+    const std::string& cached = lookupName(caster);
+    if (cached.empty() && (caster >> 48) == 0) queryPlayerName(caster);
+    return cached;
+}
+
+bool GameHandler::cancelGroundTargeting() { return spellHandler_ && spellHandler_->cancelGroundTargeting(); }
+bool GameHandler::turnOrCancelGroundTargeting() {
+    return spellHandler_ && spellHandler_->turnOrCancelGroundTargeting();
+}
+void GameHandler::placeGroundTarget(const ground_target::Place& place) {
+    if (spellHandler_) spellHandler_->placeGroundTarget(place);
+}
+std::optional<GameHandler::GroundTargetAim> GameHandler::aimGroundTarget(std::optional<ground_target::Place> place) {
     if (!spellHandler_) return std::nullopt;
-    spellHandler_->setGroundTargetCursor(canonical);
-    if (!canonical || !spellHandler_->isGroundTargeting()) return std::nullopt;
+    spellHandler_->setGroundTargetCursor(place);
+    if (!place || !spellHandler_->isGroundTargeting()) return std::nullopt;
     GroundTargetAim aim;
-    aim.placement = spellHandler_->groundTargetPlacement(*canonical);
+    aim.placement = spellHandler_->groundTargetPlacement(place->canonical);
     aim.circleRadius = ground_target::circleRadius(static_cast<ground_target::Placement>(aim.placement),
                                                    spellHandler_->groundTargetSpellArea());
     return aim;
 }
-std::optional<glm::vec3> GameHandler::groundTargetCursor() const {
+uint32_t GameHandler::groundTargetObjectEntry() const {
+    return spellHandler_ ? spellHandler_->groundTargetObjectEntry() : 0;
+}
+float GameHandler::groundTargetObjectFacing() const {
+    // Effect 81's starts at 0 (0x0080cce0 clears 0x00d3f4dc) and turns by
+    // right clicks (0x007fd800).
+    if (spellHandler_ && spellHandler_->groundTargetObjectFixedFacing()) return spellHandler_->groundTargetObjectFacing();
+    return movementInfo.orientation;
+}
+std::optional<ground_target::Place> GameHandler::groundTargetCursor() const {
     return spellHandler_ ? spellHandler_->groundTargetCursor() : std::nullopt;
 }
 
@@ -4015,6 +4055,17 @@ uint32_t GameHandler::getSpellMountCreature(uint32_t spellId) const {
             return it->second.effectMiscValues[i];
     }
     return 0;
+}
+
+bool GameHandler::spellAppliesMountedAura(uint32_t spellId) const {
+    if (spellId == 0) return false;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return false;
+    for (int i = 0; i < 3; ++i) {
+        if (it->second.effectAuraIds[i] == rendering::mount_transition::kAuraMounted) return true;
+    }
+    return false;
 }
 
 uint32_t GameHandler::getSpellTargetKind(uint32_t spellId) const {

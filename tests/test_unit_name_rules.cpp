@@ -7,6 +7,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 namespace un = wowee::game::unit_names;
 
@@ -163,4 +164,62 @@ TEST_CASE("name text height and the raid icon's fade", "[unit_names]") {
     CHECK(un::playerNamePrefix(0x2 | 0x4, "<AFK>", "<DND>", "<GM>") == "<AFK><DND>");
     CHECK(un::playerNamePrefix(0x8, "<AFK>", "<DND>", "<GM>") == "<GM>");
     CHECK(un::playerNamePrefix(0x8 | 0x8000, "<AFK>", "<DND>", "<GM>") == "<Dev>");
+}
+
+TEST_CASE("the line under a made unit's name (0x0061e830)", "[unit_names]") {
+    // A summon's SummonProperties Title, 0 for none; -1 or none falls back to
+    // the creature type: a beast's Pet, anything else's Minion.
+    CHECK(un::summonTitle(std::nullopt, un::kCreatureTypeBeast) == 1);
+    CHECK(un::summonTitle(std::nullopt, 3) == 3);
+    CHECK(un::summonTitle(-1, un::kCreatureTypeBeast) == 1);
+    CHECK(un::summonTitle(2, 3) == 2);
+    CHECK(un::summonTitle(0, 3) == 0);
+    CHECK(un::summonTitleText(1, "Thrall") == "Thrall's Pet");
+    CHECK(un::summonTitleText(4, "Thrall") == "Thrall's Totem");
+    CHECK(un::summonTitleText(0, "Thrall").empty());
+    CHECK(un::summonTitleText(99, "Thrall").empty());
+    // The interface's string where it has one: deDE's, and a format with no
+    // room for anything but the owner.
+    CHECK(un::summonTitleKey(1) == "UNITNAME_SUMMON_TITLE1");
+    CHECK(un::summonTitleKey(12) == "UNITNAME_SUMMON_TITLE12");
+    CHECK(un::summonTitleKey(13).empty());
+    CHECK(un::summonTitleText(1, "Thrall", "Begleiter von %s") == "Begleiter von Thrall");
+    CHECK(un::summonTitleText(3, "Thrall", "%1$s - Diener") == "Thrall - Diener");
+    CHECK(un::formatOwner("%s %d %s 100%%", "A") == "A %d %s 100%");
+}
+
+TEST_CASE("the plate's threat flash and name colours", "[unit_names][nameplate]") {
+    CHECK(un::threatWarningOn(3, false, false));
+    CHECK_FALSE(un::threatWarningOn(0, true, true));
+    CHECK(un::threatWarningOn(1, true, false));
+    CHECK_FALSE(un::threatWarningOn(1, false, true));
+    CHECK(un::threatWarningOn(2, false, true));
+    CHECK(un::plateThreatColor(0) == 0u);
+    CHECK(un::plateThreatColor(1) == 0xffffff77u);
+    CHECK(un::plateThreatColor(2) == 0xffff9900u);
+    CHECK(un::plateThreatColor(3) == 0xffff0000u);
+    CHECK(un::plateNameColor(true, true) == 0xffff0000u);
+    CHECK(un::plateNameColor(false, true) == 0xffffff00u);
+    CHECK(un::plateNameColor(false, false) == 0xffffffffu);
+}
+
+TEST_CASE("a Mirror Image is named as the caster of its aura 279", "[unit_names]") {
+    struct Aura {
+        uint32_t spellId;
+        uint8_t flags;
+        uint64_t casterGuid;
+    };
+    // 45204 applies 279 on its effect 1; 1459 applies something else.
+    auto auraIds = [](uint32_t spellId, int k) -> uint32_t {
+        if (spellId == 45204) return k == 1 ? 279u : 0u;
+        if (spellId == 1459) return 79u;
+        return 0u;
+    };
+    const std::vector<Aura> none{{1459, 0x7, 0x11}};
+    CHECK(un::cloneCasterGuid(none, auraIds) == 0);
+    // The aura has to carry the effect that applies it.
+    const std::vector<Aura> otherEffect{{45204, 0x1, 0x22}};
+    CHECK(un::cloneCasterGuid(otherEffect, auraIds) == 0);
+    const std::vector<Aura> clone{{0, 0x2, 0x99}, {1459, 0x1, 0x11}, {45204, 0x2, 0x22}};
+    CHECK(un::cloneCasterGuid(clone, auraIds) == 0x22);
 }

@@ -2730,6 +2730,9 @@ void Renderer::update(float deltaTime) {
         // stale server world-state zones and whole-ADT ambiguity at river banks.
         zctx.serverZoneId = getCurrentZoneId();
         zctx.zoneManager = zoneManager.get();
+        zctx.screenEffectAmbienceId = screenEffectAmbience_;
+        zctx.screenEffectZoneMusicId = screenEffectZoneMusic_;
+        zctx.assetManager = core::Application::getInstance().getAssetManager();
         WOWEE_PROFILE_SCOPE("zone audio", Cpu);
         audioCoordinator_->updateZoneAudio(zctx);
     }
@@ -2819,15 +2822,17 @@ void Renderer::clearSpellTargetCircle() {
 }
 
 std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm::vec3& dir,
-                                              float maxDistance) const {
+                                              float maxDistance, uint32_t* wmoInstanceId) const {
     const glm::vec3 d = glm::normalize(dir);
     float best = maxDistance;
     bool hit = false;
+    uint32_t building = 0;
     // Buildings and doodads, by their collision triangles, whatever the
     // collision focus around the player.
     if (wmoRenderer) {
-        const float t = wmoRenderer->raycastBoundingBoxes(origin, d, best, true);
-        if (t < best) { best = t; hit = true; }
+        uint32_t id = 0;
+        const float t = wmoRenderer->raycastBoundingBoxes(origin, d, best, true, &id);
+        if (t < best) { best = t; hit = true; building = id; }
     }
     // The terrain, marched in half-yard steps and the crossing halved down.
     if (terrainManager) {
@@ -2845,7 +2850,7 @@ std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm
                     const float mid = 0.5f * (lo + hi);
                     (below(mid) ? hi : lo) = mid;
                 }
-                if (hi < best) { best = hi; hit = true; }
+                if (hi < best) { best = hi; hit = true; building = 0; }
                 break;
             }
             prev = t;
@@ -2872,10 +2877,11 @@ std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm
             const float v = glm::dot(d, qv) * inv;
             if (v < 0.0f || u + v > 1.0f) continue;
             const float t = glm::dot(e2, qv) * inv;
-            if (t > 0.0f && t < best) { best = t; hit = true; }
+            if (t > 0.0f && t < best) { best = t; hit = true; building = 0; }
         }
     }
     if (!hit) return std::nullopt;
+    if (wmoInstanceId) *wmoInstanceId = building;
     return origin + d * best;
 }
 
@@ -5921,6 +5927,8 @@ void Renderer::loadScreenEffectRows() {
     const uint32_t effectCol = layout->tryField("Effect");
     const uint32_t paramCol = layout->tryField("Param0");
     const uint32_t lightCol = layout->tryField("LightParametersID");
+    const uint32_t ambienceCol = layout->tryField("SoundAmbienceID");
+    const uint32_t musicCol = layout->tryField("ZoneMusicID");
     auto data = assetManager->readFile("DBFilesClient\\ScreenEffect.dbc");
     pipeline::DBCFile dbc;
     if (data.empty() || !dbc.load(data) || effectCol >= dbc.getFieldCount() ||
@@ -5934,6 +5942,8 @@ void Renderer::loadScreenEffectRows() {
         row.kind = static_cast<screen_effect::Kind>(dbc.getUInt32(i, effectCol));
         for (uint32_t p = 0; p < 4; ++p) row.params[p] = static_cast<int32_t>(dbc.getUInt32(i, paramCol + p));
         row.lightOverride = dbc.getUInt32(i, lightCol);
+        if (ambienceCol < dbc.getFieldCount()) row.soundAmbience = dbc.getUInt32(i, ambienceCol);
+        if (musicCol < dbc.getFieldCount()) row.zoneMusic = dbc.getUInt32(i, musicCol);
         screenEffectRows_[row.id] = row;
     }
     LOG_INFO("Loaded ScreenEffect.dbc: ", screenEffectRows_.size(), " rows");
@@ -5989,6 +5999,9 @@ void Renderer::updateScreenEffect(float deltaTime) {
     screenEffectState_.select(row);
     screenEffectState_.advance(deltaTime);
     screenEffectLightOverride_ = row && row->lightOverride < 8 ? static_cast<int>(row->lightOverride) : -1;
+    // Its sounds take the top sound slot (0x004f7020 -> 0x004c8fa0).
+    screenEffectAmbience_ = row ? row->soundAmbience : 0;
+    screenEffectZoneMusic_ = row ? row->zoneMusic : 0;
     screenEffectDrunk_ = se::drunkAmount(bytes3, fakeDrunk);
 }
 

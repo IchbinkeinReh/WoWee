@@ -1863,6 +1863,9 @@ struct GameObjectQueryResponseData {
     uint32_t displayId = 0;
     uint32_t data[24] = {};  // Type-specific data fields (e.g. data[0]=taxiPathId for MO_TRANSPORT)
     bool hasData = false;    // Whether data[] was parsed
+    /// The template's size, after the data fields (+0x74 in the client's
+    /// cache record): the model's scale.
+    float size = 1.0f;
 
     [[nodiscard]] bool isValid() const { return entry != 0 && !name.empty(); }
 };
@@ -1933,6 +1936,9 @@ struct ItemQueryResponseData {
     /// The template's Sheath: where the weapon hangs put away (1 two-hand,
     /// 2 staff, 3 one-hand, 4 shield, ...); see core::weaponAttachmentPoint.
     uint32_t sheath = 0;
+    /// The template's Material (Material.dbc): its sheathe and unsheathe
+    /// sounds (0x004d07b0).
+    uint32_t material = 0;
     uint32_t inventoryType = 0;
     int32_t maxCount = 0;       // Max that can be carried (1 = Unique, 0 = unlimited)
     int32_t maxStack = 1;
@@ -2233,7 +2239,9 @@ public:
     static network::Packet buildItemTarget(uint32_t spellId, uint64_t itemGuid, uint8_t castCount);
     /// Cast at a place on the ground: SpellCastTargets with only
     /// TARGET_FLAG_DEST_LOCATION, written as 0x009ab8b0 writes it.
-    static network::Packet buildDestination(uint32_t spellId, float x, float y, float z, uint8_t castCount);
+    /// x, y, z in the transport's frame when transportGuid is set (0x009ab8b0).
+    static network::Packet buildDestination(uint32_t spellId, float x, float y, float z, uint8_t castCount,
+                                            uint64_t transportGuid = 0);
 };
 
 /** CMSG_CANCEL_AURA packet builder */

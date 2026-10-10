@@ -302,11 +302,10 @@ void SpellbookScreen::renderSpellTooltip(const SpellInfo* info, game::GameHandle
             // costing Focus said "Mana" and one costing Happiness said "Focus".
             const char* powerName = game::powerTypeName(info->powerType);
             if (!powerName) powerName = "Mana";
-            // Apply SMSG_SET_FLAT/PCT_SPELL_MODIFIER Cost modifier (SpellModOp::Cost = 14)
-            int32_t flatCost = gameHandler.getSpellFlatMod(game::GameHandler::SpellModOp::Cost);
-            int32_t pctCost  = gameHandler.getSpellPctMod(game::GameHandler::SpellModOp::Cost);
-            uint32_t displayCost = static_cast<uint32_t>(
-                game::GameHandler::applySpellMod(static_cast<int32_t>(info->manaCost), flatCost, pctCost));
+            // The spell's Cost modifiers (op 14, 0x007fd970).
+            const auto costMods = gameHandler.getSpellModifiers(info->spellId, game::GameHandler::SpellModOp::Cost);
+            const auto displayCost = static_cast<uint32_t>(
+                std::max(0.0f, game::spell_mods::apply(static_cast<float>(info->manaCost), costMods)));
             std::snprintf(costBuf, sizeof(costBuf), "%u %s", displayCost, powerName);
         }
 
@@ -315,12 +314,10 @@ void SpellbookScreen::renderSpellTooltip(const SpellInfo* info, game::GameHandle
         if (info->castTimeMs == 0) {
             std::snprintf(castBuf, sizeof(castBuf), "Instant cast");
         } else {
-            // Apply SpellModOp::CastingTime (10) modifiers
-            int32_t flatCT = gameHandler.getSpellFlatMod(game::GameHandler::SpellModOp::CastingTime);
-            int32_t pctCT  = gameHandler.getSpellPctMod(game::GameHandler::SpellModOp::CastingTime);
-            int32_t modCT  = game::GameHandler::applySpellMod(
-                static_cast<int32_t>(info->castTimeMs), flatCT, pctCT);
-            float secs = static_cast<float>(modCT) / 1000.0f;
+            // The spell's CastingTime modifiers (op 10, 0x007fd970).
+            const auto ctMods =
+                gameHandler.getSpellModifiers(info->spellId, game::GameHandler::SpellModOp::CastingTime);
+            float secs = game::spell_mods::apply(static_cast<float>(info->castTimeMs), ctMods) / 1000.0f;
             std::snprintf(castBuf, sizeof(castBuf), "%.1f sec cast", secs > 0.0f ? secs : 0.0f);
         }
 

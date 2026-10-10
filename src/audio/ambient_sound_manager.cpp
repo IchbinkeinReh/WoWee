@@ -761,7 +761,7 @@ void AmbientSoundManager::updateWaterAmbience(float deltaTime, bool isSwimming) 
 
 void AmbientSoundManager::updateZoneAmbience(float deltaTime, bool isIndoor) {
     // Don't play zone ambience when indoors or in cities
-    if (isIndoor || currentZone_ == ZoneType::NONE || currentCity_ != CityType::NONE) return;
+    if (isIndoor || currentZone_ == ZoneType::NONE || currentCity_ != CityType::NONE || ambienceOverridden_) return;
 
     zoneLoopTime_ += deltaTime;
 
@@ -813,7 +813,7 @@ void AmbientSoundManager::updateZoneAmbience(float deltaTime, bool isIndoor) {
 
 void AmbientSoundManager::updateCityAmbience(float deltaTime) {
     // Only play city ambience when actually in a city
-    if (currentCity_ == CityType::NONE) return;
+    if (currentCity_ == CityType::NONE || ambienceOverridden_) return;
 
     cityLoopTime_ += deltaTime;
 

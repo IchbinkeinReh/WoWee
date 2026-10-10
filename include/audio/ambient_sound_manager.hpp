@@ -78,6 +78,10 @@ public:
 
     uint64_t addEmitter(const glm::vec3& position, AmbientType type);
 
+    /// A higher sound slot's ambience - the screen effect's (0x004c8fa0,
+    /// slot 10) - holds the zone's and city's back.
+    void setAmbienceOverridden(bool overridden) { ambienceOverridden_ = overridden; }
+
     // Time of day control (0-24 hours)
     void setGameTime(float hours);
 
@@ -185,6 +189,7 @@ private:
     bool wasBlacksmith_ = false;
     bool wasSwimming_ = false;
     bool initialized_ = false;
+    bool ambienceOverridden_ = false;
     WeatherType currentWeather_ = WeatherType::NONE;
     uint32_t currentZoneId_ = 0;
     ZoneType currentZone_ = ZoneType::NONE;

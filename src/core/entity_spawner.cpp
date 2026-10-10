@@ -18,15 +18,18 @@
 #include "rendering/character_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/wmo_loader.hpp"
 #include "rendering/animation/animation_ids.hpp"
+#include "rendering/mount_seat.hpp"
 #include "rendering/animation/emote_registry.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "game/game_handler.hpp"
+#include "game/spell_handler.hpp"
 #include "game/game_services.hpp"
 #include "game/transport_manager.hpp"
 
@@ -93,6 +96,58 @@ void EntitySpawner::update() {
     syncCreatureStealthVisuals();
     refreshCreatureScales();
     syncCreatureParticleTwins();
+    syncGroundTargetModel();
+}
+
+void EntitySpawner::syncGroundTargetModel() {
+    // A guid no server object has: the client's own query for it runs under
+    // a high part of 0x1FE (0x0080cce0).
+    constexpr uint64_t kPreviewGuid = 0x1FE0000000000000ull;
+    auto drop = [&] {
+        if (groundTargetModelEntry_ == 0) return;
+        despawnGameObject(kPreviewGuid);
+        groundTargetModelEntry_ = 0;
+    };
+    if (!gameHandler_ || !renderer_) return drop();
+    const uint32_t entry = gameHandler_->groundTargetObjectEntry();
+    const auto place = gameHandler_->groundTargetCursor();
+    const auto* info = entry != 0 ? gameHandler_->getCachedGameObjectInfo(entry) : nullptr;
+    if (!place || !info || info->displayId == 0) return drop();
+    // A place the spell cannot take hides the model: 0x004f66c0 hands
+    // 0x0077f2f0 the placement, which flags the scene object (+0x7c bit 4),
+    // and a flagged object's model is left out of the scene's draw list
+    // (0x00793060 clears its M2 flags 0x8 and 0x10000), its shadow and the
+    // world's collision.
+    auto* spells = gameHandler_->getSpellHandler();
+    if (spells && spells->groundTargetPlacement(place->canonical) !=
+                      static_cast<int>(game::ground_target::Placement::Acceptable))
+        return drop();
+    // Only a doodad model: a building would be in the way of the very ray
+    // that places it.
+    std::string path = getGameObjectModelPathForDisplayId(info->displayId);
+    std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (path.size() < 4 || path.compare(path.size() - 4, 4, ".wmo") == 0) return drop();
+
+    const float facing = gameHandler_->groundTargetObjectFacing();
+    const float size = info->size > 0.0f ? info->size : 1.0f;
+    auto* m2 = renderer_->getM2Renderer();
+    if (!m2) return;
+    auto it = gameObjectInstances_.find(kPreviewGuid);
+    if (groundTargetModelEntry_ != entry || it == gameObjectInstances_.end() || !m2->hasInstance(it->second.instanceId)) {
+        drop();
+        spawnOnlineGameObject(kPreviewGuid, entry, info->displayId, place->canonical.x, place->canonical.y,
+                              place->canonical.z, facing, size);
+        it = gameObjectInstances_.find(kPreviewGuid);
+        if (it == gameObjectInstances_.end() || it->second.isWmo) return;
+        groundTargetModelEntry_ = entry;
+        m2->setSkipCollision(it->second.instanceId, true);
+    }
+    // At the place, turned as the player faces, at the template's size
+    // (0x004f66c0: 0x007fd7e0, 0x007fff60, 0x004c1bf0 with 0x00d3f4d8).
+    glm::mat4 transform = glm::translate(glm::mat4(1.0f), core::coords::canonicalToRender(place->canonical));
+    transform = glm::rotate(transform, facing + glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    transform = glm::scale(transform, glm::vec3(size));
+    m2->setInstanceTransform(it->second.instanceId, transform);
 }
 
 void EntitySpawner::syncCreatureStealthVisuals() {
@@ -293,6 +348,18 @@ void EntitySpawner::mountUnitNow(uint64_t guid, uint32_t displayId, bool localPl
     if (!applyRemotePlayerMount(guid, displayId)) pendingRemotePlayerMounts_[guid] = displayId;
 }
 
+uint32_t EntitySpawner::riderPose(uint64_t guid, uint32_t riderInstance) const {
+    // +0xb7c, which 0x0073d5d0 plays on the rider; Mount where the rider's
+    // model has not the pose a mount aura's kit gave it.
+    uint32_t pose = rendering::mount_seat::kRiderPoseMount;
+    if (renderer_)
+        if (auto* svs = renderer_->getSpellVisualSystem()) pose = svs->riderPose(guid);
+    auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (pose != rendering::mount_seat::kRiderPoseMount && cr && !cr->hasAnimation(riderInstance, pose))
+        pose = rendering::mount_seat::kRiderPoseMount;
+    return pose;
+}
+
 void EntitySpawner::setRemotePlayerMountDisplayId(uint64_t guid, uint32_t displayId) {
     if (guid == 0) return;
     pendingRemotePlayerMounts_[guid] = displayId;
@@ -307,6 +374,10 @@ void EntitySpawner::removeRemotePlayerMount(uint64_t guid) {
             auto playerIt = playerInstances_.find(guid);
             if (playerIt != playerInstances_.end()) {
                 cr->playAnimation(playerIt->second, rendering::anim::STAND, true);
+            } else if (auto creatureIt = creatureInstances_.find(guid); creatureIt != creatureInstances_.end()) {
+                // Down from the seat onto its own feet; the render sync
+                // puts it back on the ground.
+                cr->playAnimation(creatureIt->second, rendering::anim::STAND, true);
             }
         }
     }
@@ -531,7 +602,8 @@ bool EntitySpawner::resolveUnitWeaponItems(const UnitWeaponEntries& slots, std::
             items[i] = {.sheath = info->sheath,
                         .inventoryType = static_cast<uint8_t>(info->inventoryType),
                         .itemClass = info->itemClass,
-                        .subClass = info->subClass};
+                        .subClass = info->subClass,
+                        .material = static_cast<uint8_t>(info->material)};
             displays[i] = info->displayInfoId;
             continue;
         }
@@ -542,7 +614,8 @@ bool EntitySpawner::resolveUnitWeaponItems(const UnitWeaponEntries& slots, std::
         items[i] = {.sheath = itemDbc->getUInt32(r, 7),
                     .inventoryType = static_cast<uint8_t>(itemDbc->getUInt32(r, 6)),
                     .itemClass = itemDbc->getUInt32(r, 1),
-                    .subClass = itemDbc->getUInt32(r, 2)};
+                    .subClass = itemDbc->getUInt32(r, 2),
+                    .material = static_cast<uint8_t>(itemDbc->getUInt32(r, 4))};
         displays[i] = itemDbc->getUInt32(r, 5);
     }
     return true;
@@ -2513,6 +2586,13 @@ void EntitySpawner::refreshCreatureScales() {
         if (std::abs(applied - want) > 1e-4f) {
             charRenderer->setInstanceScale(instanceId, want);
             applied = want;
+            // Its mount is its size times the mount display's (0x0071c0e0).
+            if (auto mountIt = remotePlayerMounts_.find(guid); mountIt != remotePlayerMounts_.end()) {
+                RemotePlayerMount& mount = mountIt->second;
+                mount.scale = rendering::mount_seat::mountModelScale(want, creatureDisplayScale(mount.displayId));
+                mount.riderHeight = rendering::mount_seat::seatHeight(mount.seatZ, mount.scale);
+                charRenderer->setInstanceScale(mount.instanceId, mount.scale);
+            }
         }
     }
 }
@@ -2755,6 +2835,14 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
     creatureModelIds_[guid] = modelId;
     creatureDisplayIds_[guid] = displayId;
     creatureRenderPosCache_[guid] = renderPos;
+    // Already riding (UNIT_FIELD_MOUNTDISPLAYID in the create block, or a
+    // model rebuilt under a rider): its mount, as a player's.
+    if (gameHandler_) {
+        if (auto e = gameHandler_->getEntityManager().getEntity(guid); e && e->isUnit()) {
+            const uint32_t mount = static_cast<const game::Unit&>(*e).getMountDisplayId();
+            if (mount != 0) setRemotePlayerMountDisplayId(guid, mount);
+        }
+    }
     LOG_DEBUG("Spawned creature: guid=0x", std::hex, guid, std::dec,
              " displayId=", displayId, " at (", x, ", ", y, ", ", z, ")");
 }

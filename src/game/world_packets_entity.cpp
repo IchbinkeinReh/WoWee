@@ -296,6 +296,7 @@ bool parseGameObjectQueryBody(network::Packet& packet,
                         " strings read before them is one too few (entry=",
                         data.entry, ")");
         }
+        if (packet.hasRemaining(4)) data.size = packet.readFloat();
     } else if (remaining > 0) {
         // Partial data field; read what we can
         uint32_t fieldsToRead = remaining / 4;
@@ -644,7 +645,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
     if (packet.getReadPos() + kPreSocketSkip + 28 <= packet.getSize()) {
         // LockID(0), Material(1), Sheath(2), RandomProperty(3), RandomSuffix(4), Block(5)
         packet.readUInt32();
-        packet.readUInt32();
+        data.material = packet.readUInt32();
         data.sheath = packet.readUInt32();
         for (size_t i = 0; i < 3; ++i) packet.readUInt32();
         data.itemSetId = packet.readUInt32(); // ItemSet(6)
@@ -1182,17 +1183,18 @@ network::Packet CastSpellPacket::buildItemTarget(uint32_t spellId, uint64_t item
 }
 
 network::Packet CastSpellPacket::buildDestination(uint32_t spellId, float x, float y, float z,
-                                                  uint8_t castCount) {
+                                                  uint8_t castCount, uint64_t transportGuid) {
     // 0x0080ac90: castCount, spell, cast flags (0: no trajectory), then the
     // targets as 0x009ab8b0 writes them - the flags, and for
     // TARGET_FLAG_DEST_LOCATION (0x40) the transport the place is on as a
-    // packed guid (none here: one zero mask byte) and the position.
+    // packed guid (none: one zero mask byte) and the position, on a
+    // transport in its own frame.
     network::Packet packet(wireOpcode(Opcode::CMSG_CAST_SPELL));
     packet.writeUInt8(castCount);
     packet.writeUInt32(spellId);
     packet.writeUInt8(0x00);
     packet.writeUInt32(0x40);
-    packet.writePackedGuid(0);
+    packet.writePackedGuid(transportGuid);
     packet.writeFloat(x);
     packet.writeFloat(y);
     packet.writeFloat(z);

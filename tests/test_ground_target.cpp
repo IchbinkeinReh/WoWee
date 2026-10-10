@@ -6,6 +6,7 @@
 #include "test_support.hpp"
 #include "core/application.hpp"
 #include "game/ground_target.hpp"
+#include "game/spell_mods.hpp"
 #include "game/world_packets.hpp"
 #include "rendering/spell_target_circle.hpp"
 
@@ -86,4 +87,61 @@ TEST_CASE("the circle's box is +-r across and +-2 up", "[ground_target]") {
     CHECK(glm::dot(p->vRow, centre) == Catch::Approx(0.5f));
     CHECK(glm::dot(p->hRow, centre) == Catch::Approx(0.5f));
     CHECK(glm::dot(p->hRow, glm::vec4(10.0f, 20.0f, 7.0f, 1.0f)) == Catch::Approx(1.0f));
+}
+
+TEST_CASE("a place on a transport names it before the place", "[ground_target][packet]") {
+    auto p = CastSpellPacket::buildDestination(10, 1.0f, 2.0f, 3.0f, 1, 0x1FC0000000000005ull);
+    const auto& b = p.getData();
+    // Packed guid: a mask with bytes 0, 6 and 7, then 0x05, 0xC0 and 0x1F.
+    REQUIRE(b.size() == 1 + 4 + 1 + 4 + 4 + 12);
+    CHECK(b[10] == 0xC1);
+    CHECK(b[11] == 0x05);
+    CHECK(b[12] == 0xC0);
+    CHECK(b[13] == 0x1F);
+    CHECK(readF32(b, 14) == 1.0f);
+}
+
+TEST_CASE("the trajectory missile spares the destination only with its flag", "[ground_target]") {
+    CHECK(gt::requiredTargets(0x40, 89, true) == 0);
+    CHECK(gt::requiredTargets(0x40, 89, false) == 0x40);
+    CHECK(gt::requiredTargets(0x40, 18, true) == 0x40);
+}
+
+TEST_CASE("spell modifiers as 0x007fd970 sums and applies them", "[ground_target][spell_mods]") {
+    namespace sm = wowee::game::spell_mods;
+    const uint32_t flags[3] = {0x1u, 0x0u, 0x2u};  // bits 0 and 65
+    auto table = [](uint8_t bit, uint8_t op) -> std::pair<int32_t, int32_t> {
+        if (op != sm::kOpRadius) return {0, 0};
+        if (bit == 0) return {2, 0};
+        if (bit == 65) return {0, 20};
+        if (bit == 1) return {100, 100};  // a bit the spell lacks
+        return {0, 0};
+    };
+    const sm::Sum s = sm::modifiers(7, flags, 0, 7, sm::kOpRadius, table);
+    CHECK(s.any);
+    CHECK(s.flat == 2);
+    CHECK(s.pct == 120);
+    CHECK(sm::apply(8.0f, s) == Catch::Approx(12.0f));
+    // Another class's family, or AttributesEx3 0x20000000: none.
+    CHECK_FALSE(sm::modifiers(7, flags, 0, 4, sm::kOpRadius, table).any);
+    CHECK_FALSE(sm::modifiers(7, flags, sm::kAttrEx3NoModifiers, 7, sm::kOpRadius, table).any);
+    CHECK(sm::apply(8.0f, sm::Sum{}) == 8.0f);
+    // The percentage never goes below nothing.
+    auto cut = [](uint8_t, uint8_t) -> std::pair<int32_t, int32_t> { return {0, -150}; };
+    CHECK(sm::apply(8.0f, sm::modifiers(7, flags, 0, 7, sm::kOpRange, cut)) == 0.0f);
+}
+
+TEST_CASE("the spells that show a game object at the place", "[ground_target]") {
+    for (uint32_t e : {50u, 76u, 104u, 105u, 106u, 107u, 81u}) CHECK(gt::summonsObject(e));
+    for (uint32_t e : {0u, 2u, 28u, 75u, 103u, 108u}) CHECK_FALSE(gt::summonsObject(e));
+}
+
+TEST_CASE("effect 81's model turns a quarter per right click, under a turn", "[ground_target]") {
+    float f = 0.0f;
+    f = gt::quarterTurn(f);
+    CHECK(f == Catch::Approx(1.5707964f));
+    f = gt::quarterTurn(gt::quarterTurn(gt::quarterTurn(f)));
+    // Four quarters come back to a full turn, which is kept (only past it wraps).
+    CHECK(f == Catch::Approx(6.2831855f));
+    CHECK(gt::quarterTurn(f) == Catch::Approx(1.5707964f));
 }

@@ -107,6 +107,7 @@ void EntityController::registerOpcodes(DispatchTable& table) {
 void EntityController::clearAll() {
     pendingUpdateObjectWork_.clear();
     playerNameCache.clear();
+    playerRealmCache_.clear();
     playerClassRaceCache_.clear();
     pendingNameQueries.clear();
     creatureInfoCache.clear();
@@ -978,8 +979,9 @@ bool EntityController::applyUnitFieldsOnCreate(const UpdateBlock& block,
         else if (key == ufi.mountDisplayId) {
             if (block.guid == owner_.getPlayerGuid()) {
                 detectPlayerMountChange(val, block.fields);
-            } else if (block.objectType == ObjectType::PLAYER &&
+            } else if ((block.objectType == ObjectType::PLAYER || block.objectType == ObjectType::UNIT) &&
                        owner_.otherPlayerMountCallbackRef()) {
+                // A creature rides as a player does (0x00740450).
                 owner_.otherPlayerMountCallbackRef()(block.guid, val);
             }
             unit->setMountDisplayId(val);
@@ -1236,7 +1238,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         } else if (key == ufi.mountDisplayId) {
             if (block.guid == owner_.getPlayerGuid()) {
                 detectPlayerMountChange(val, block.fields);
-            } else if (entity->getType() == ObjectType::PLAYER &&
+            } else if ((entity->getType() == ObjectType::PLAYER || entity->getType() == ObjectType::UNIT) &&
                        val != unit->getMountDisplayId() &&
                        owner_.otherPlayerMountCallbackRef()) {
                 owner_.otherPlayerMountCallbackRef()(block.guid, val);
@@ -2963,6 +2965,8 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
 
     if (data.isValid()) {
         playerNameCache[data.guid] = data.name;
+        if (data.realmName.empty()) playerRealmCache_.erase(data.guid);
+        else playerRealmCache_[data.guid] = data.realmName;
         // Cache class/race from name query for UnitClass/UnitRace fallback,
         // and the gender an NPC's $g switch chooses by.
         if (data.classId != 0 || data.race != 0) {

@@ -201,6 +201,12 @@ private:
     void reachHandEvent(int hand, bool ended, const UnitWeaponItems& items);
     /// The reach's arms, their events and its end, once a frame.
     void updateSheathReach();
+    /// Whether each hand's reach has played its swap's sound; the swap runs
+    /// at the hand's event, and wowee runs it again at the reach's end.
+    bool reachSounded_[2] = {false, false};
+    /// 0x004d07b0, from 0x00732500: the moved weapon's Material.dbc sheathe
+    /// or unsheathe sound, 2 yards above the unit.
+    void playSheathSwapSound(int hand, const UnitWeaponItems& items);
     /// Any reach stopped where it is (0x00736d30's immediate change).
     void stopSheathReach();
     /// The stand state and channel object last seen, for 0x0073f060 and

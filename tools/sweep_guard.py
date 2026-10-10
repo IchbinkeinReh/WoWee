@@ -587,10 +587,13 @@ CHECKS = [
     # release it is talking about is this client, not the game. Thirty-five
     # since 2026-09-22: setAutoFaceTarget, the Combat page's debug setting
     # pushed to the game each frame beside setAutoLoot and setAutoRepair - a
-    # client setting, not a capability FrameXML is missing. The thirty-sixth
-    # is the one to look at.
+    # client setting, not a capability FrameXML is missing. Thirty-six since
+    # 2026-10-09: turnOrCancelGroundTargeting, a right click on the 3D world
+    # while a spell waits for a place (0x0051fb00, WorldFrame's own input,
+    # beside aimGroundTarget); FrameXML's SpellStopTargeting still reaches
+    # cancelGroundTargeting. The thirty-seventh is the one to look at.
     ("framexml_unreachable_verbs.py",
-     r"^(\d+) verbs this client's own windows can reach", 35,
+     r"^(\d+) verbs this client's own windows can reach", 36,
      "verbs only this client's own windows could reach"),
     # Emote tokens FrameXML can hand DoEmote that it cannot answer. One,
     # named "unused", which is a placeholder in FrameXML's own list. It was
@@ -999,12 +1002,8 @@ CHECKS = [
     # the scan cannot see through, a call on a continuation line and a
     # multi-line qualified one. The .w* format headers are counted separately
     # because an unused accessor there is API rather than dead weight.
-    # Two more for now: M2Renderer's old ribbon update and ribbon draw, which
-    # the client's ribbons (m2_renderer_ribbons.cpp) replaced. They live in
-    # m2_renderer_particles.cpp, which is being worked on elsewhere this
-    # round; they go, and this comes back to 2, when that file is free.
     ("dead_symbol_check.py",
-     r"^(\d+) of those outside the \.w\* format headers", 4,
+     r"^(\d+) of those outside the \.w\* format headers", 2,
      "declared functions with no caller"),
     # `return 8` hands back the top eight of the stack, so a pop between the
     # values a binding built and its return slides the window down onto

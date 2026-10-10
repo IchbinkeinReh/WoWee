@@ -70,6 +70,7 @@ void EntitySpawner::updateBlobShadows(uint32_t localPlayerInstance) {
 
     for (const auto& [guid, instanceId] : creatureInstances_) {
         std::optional<rendering::blob_shadow::Box> box;
+        const RemotePlayerMount* mount = getRemotePlayerMount(guid);
         auto entity = entities.getEntity(guid);
         if (entity && entity->getType() == game::ObjectType::CORPSE) {
             box = corpseBox(*entity, instanceId);
@@ -85,11 +86,17 @@ void EntitySpawner::updateBlobShadows(uint32_t localPlayerInstance) {
                 auto dIt = creatureDisplayIds_.find(guid);
                 const uint32_t displayId = dIt != creatureDisplayIds_.end() ? dIt->second
                                                                              : unit.getDisplayId();
-                // A creature's mount is not drawn here, so its box is its own.
-                box = unitBox(unit, displayId, 0);
+                // Riding, the box joined to its mount's (0x0071ed80), as a
+                // player's.
+                box = unitBox(unit, displayId, mount ? mount->displayId : 0);
             }
         }
-        cr->setInstanceBlobShadow(instanceId, box);
+        if (mount && mount->instanceId != 0) {
+            cr->setInstanceBlobShadow(mount->instanceId, box);
+            cr->setInstanceBlobShadow(instanceId, std::nullopt);
+        } else {
+            cr->setInstanceBlobShadow(instanceId, box);
+        }
     }
 
     // A player riding is drawn on the mount's instance: the blob goes there,

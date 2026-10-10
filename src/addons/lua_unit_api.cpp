@@ -12,8 +12,11 @@ static int lua_UnitName(lua_State* L) {
     // No game object branch here either, for the reason in UnitExists: a name
     // is the one answer about an object that would have been right, and giving
     // it while UnitExists says no is a unit that half exists.
-    if (unit && !unit->getName().empty()) {
-        lua_pushstring(L, unit->getName().c_str());
+    // A Mirror Image (aura 279) answers its caster's name (0x0072a000).
+    auto* ghName = getGameHandler(L);
+    const std::string shown = unit && ghName ? ghName->shownUnitName(*unit) : unit ? unit->getName() : std::string{};
+    if (unit && !shown.empty()) {
+        lua_pushstring(L, shown.c_str());
     } else {
         // Fallback: party member name for out-of-range members
         auto* gh = getGameHandler(L);

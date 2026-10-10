@@ -71,6 +71,30 @@ TEST_CASE("Spell layout exposes the fields the spell logic reads", "[dbc][layout
     }
 }
 
+TEST_CASE("Every expansion carries the spell modifier columns", "[dbc][layout]") {
+    // 0x007fd970: a spell takes the modifiers of its SpellFamilyFlags bits
+    // when its SpellFamilyName is the class's ChrClasses SpellClassSet. The
+    // flags are a uint64 before WotLK and three words in it.
+    struct Expect {
+        const char* expansion;
+        uint32_t ex3, family, flags, classSet;
+    };
+    for (const Expect& e : {Expect{"classic", 9, 160, 161, 14}, Expect{"turtle", 9, 160, 161, 14},
+                            Expect{"tbc", 8, 199, 200, 22}, Expect{"wotlk", 7, 208, 209, 56}}) {
+        INFO("expansion: " << e.expansion);
+        DBCLayout layout;
+        REQUIRE(layout.loadFromJson(layoutPath(e.expansion)));
+        const auto* spell = layout.getLayout("Spell");
+        const auto* classes = layout.getLayout("ChrClasses");
+        REQUIRE(spell != nullptr);
+        REQUIRE(classes != nullptr);
+        CHECK(spell->field("AttributesEx3") == e.ex3);
+        CHECK(spell->field("SpellFamilyName") == e.family);
+        CHECK(spell->field("SpellFamilyFlags") == e.flags);
+        CHECK(classes->field("SpellClassSet") == e.classSet);
+    }
+}
+
 TEST_CASE("SpellRange layout exposes MaxRange", "[dbc][layout]") {
     for (const auto& expansion : expansions()) {
         INFO("expansion: " << expansion);

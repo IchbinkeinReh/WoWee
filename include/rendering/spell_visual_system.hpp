@@ -157,6 +157,15 @@ public:
         uint64_t casterGuid = 0;
     };
     void setUnitAuraSlots(uint64_t unitGuid, const std::vector<AuraSlotSpell>& slotSpells);
+    /// The pose the unit's rider holds on its mount (+0xb7c): Mount, or the
+    /// AnimID of a mount aura's state kit (0x00724820, 0x0071e930).
+    uint32_t riderPose(uint64_t unitGuid) const;
+    /// The active player, whose mount aura going puts its pose back
+    /// (0x0071e930).
+    using ActivePlayerResolver = std::function<uint64_t()>;
+    void setActivePlayerResolver(ActivePlayerResolver resolver) { activePlayerResolver_ = std::move(resolver); }
+    /// The active player's rider pose.
+    uint32_t activePlayerRiderPose() const { return riderPose(activePlayerResolver_ ? activePlayerResolver_() : 0); }
     /// SMSG_SPELL_GO for a unit (0x0080e1b0): where its kits' chains go -
     /// the hit list less the unit itself (0x00724f50), and the place it was
     /// cast at (target flag 0x40), unless the visual has Flags 0x1 and there
@@ -253,6 +262,7 @@ public:
     struct KitSpellInfo {
         uint32_t castTimeMs = 0;
         uint32_t targetKind = 0;  ///< 2 enemies, 1 friends, 0 neither
+        bool mounts = false;      ///< an effect applies aura 78, Mounted (0x00724820)
     };
     using KitSpellResolver = std::function<KitSpellInfo(uint32_t spellId)>;
     void setKitSpellResolver(KitSpellResolver resolver) { kitSpellResolver_ = std::move(resolver); }
@@ -343,6 +353,15 @@ private:
         uint32_t flags = 0;         ///< SpellVisual Flags (+0x34)
     };
     std::unordered_map<uint32_t, VisualAuraKits> visualAuraKits_;  // visualId → its aura kits
+    /// visualId → its StateKit's AnimID (SpellVisualKit +8), where that is
+    /// not negative (0x00724820).
+    std::unordered_map<uint32_t, int32_t> visualStateKitAnim_;
+    /// unitGuid → its rider pose (+0xb7c) where not Mount.
+    std::unordered_map<uint64_t, uint32_t> riderPoses_;
+    ActivePlayerResolver activePlayerResolver_;
+    /// 0x00724820 and 0x0071e930: a mount aura on or off the unit sets its
+    /// rider pose.
+    void stepRiderPose(uint64_t unitGuid, uint32_t spellId, bool on);
 
     /// A kit model shown on a unit.
     struct KitModelInstance {

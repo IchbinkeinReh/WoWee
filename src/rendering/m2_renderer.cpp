@@ -394,8 +394,6 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                         (v & kVariantNoDepthTest) == 0, (v & kVariantNoDepthWrite) == 0);
                 }
             }
-            ribbonPipeline_ = ribbonPipelines_[2 * kPipelineVariantCount + (kVariantCull | kVariantNoDepthWrite)];
-            ribbonAdditivePipeline_ = ribbonPipelines_[4 * kPipelineVariantCount + (kVariantCull | kVariantNoDepthWrite)];
         }
         ribVert.destroy(); ribFrag.destroy();
     }
@@ -946,8 +944,6 @@ void M2Renderer::destroyPipelineVariants() {
 }
 
 void M2Renderer::destroyRibbonPipelines() {
-    ribbonPipeline_ = VK_NULL_HANDLE;
-    ribbonAdditivePipeline_ = VK_NULL_HANDLE;
     if (!vkCtx_) return;
     for (VkPipeline& p : ribbonPipelines_) {
         if (p) vkDestroyPipeline(vkCtx_->getDevice(), p, nullptr);

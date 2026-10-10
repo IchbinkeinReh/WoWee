@@ -4,6 +4,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/screen_effect_state.hpp"
+#include "audio/screen_effect_audio.hpp"
 
 #include <cmath>
 #include <set>
@@ -197,4 +198,15 @@ TEST_CASE("the state: fades and ramps start when their effect comes up", "[scree
     const uint32_t r = s.fogNoiseRow();
     s.advance(0.01f);
     CHECK(s.fogNoiseRow() == (r + 1) % se::kFogNoiseSize);
+}
+
+TEST_CASE("a screen effect's sounds follow the client's sound day", "[screen_effect][sound]") {
+    namespace sea = wowee::audio::screen_effect_audio;
+    // 5:30 to 21:00 is day (0x004c9850).
+    CHECK_FALSE(sea::isSoundDaytime(5.25f));
+    CHECK(sea::isSoundDaytime(5.5f));
+    CHECK(sea::isSoundDaytime(20.9f));
+    CHECK_FALSE(sea::isSoundDaytime(21.0f));
+    CHECK(sea::dayOrNight(11, 22, true) == 11);
+    CHECK(sea::dayOrNight(11, 22, false) == 22);
 }

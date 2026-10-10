@@ -70,6 +70,9 @@ struct UnitWeaponItem {
     uint8_t inventoryType = 0;
     uint32_t itemClass = 0;
     uint32_t subClass = 0;
+    /// Material.dbc's row: Item.dbc's column 4, the client's packed item
+    /// record +3, which 0x004d07b0 reads for the sheathe sounds.
+    uint8_t material = 0;
 };
 
 /// Before WotLK a creature's slot is a display id
@@ -80,7 +83,8 @@ constexpr UnitWeaponItem virtualItemInfo(uint32_t info0, uint32_t info1) {
     return {.sheath = info1 & 0xFFu,
             .inventoryType = static_cast<uint8_t>(info0 >> 24),
             .itemClass = info0 & 0xFFu,
-            .subClass = (info0 >> 8) & 0xFFu};
+            .subClass = (info0 >> 8) & 0xFFu,
+            .material = static_cast<uint8_t>(info0 >> 16)};
 }
 
 /// A unit's main hand, off hand and ranged item; null for an empty slot.
@@ -407,6 +411,30 @@ constexpr void sheathReachSwap(SheathReach& reach, int hand, const UnitWeaponIte
     }
     if (reach.from == SheathState::Ranged) reach.shown.mainHeld = reach.to == SheathState::Melee;
 }
+
+/// The sound 0x00732500 plays with its swap (0x004d07b0): the weapon the
+/// hand moved, the ranged one in the ranged state, put away or drawn.
+/// None where the swap was skipped (the hand does not hold the ranged
+/// weapon) or the slot is empty.
+struct SheathSwapSound {
+    const UnitWeaponItem* item = nullptr;
+    bool sheathing = false;  ///< Material +0xc (SheatheSoundID), else +0x10
+};
+constexpr SheathSwapSound sheathSwapSound(const SheathReach& reach, int hand, const UnitWeaponItems& items) {
+    const bool draw = reach.drawing[hand] && reach.to != SheathState::Unarmed;
+    const SheathState state = draw ? reach.to : reach.from;
+    if (state != SheathState::Ranged) return {items[static_cast<size_t>(hand)], !draw};
+    const UnitWeaponItem* ranged = items[2];
+    if (ranged) {
+        if (ranged->inventoryType == 15 && hand == 0) return {};
+        if (rangedInRightHand(ranged->inventoryType) && hand == 1) return {};
+    }
+    return {ranged, !draw};
+}
+
+/// Material.dbc's column for the sound 0x004d07b0 plays: SheatheSoundID
+/// (3, +0xc) putting away, UnsheatheSoundID (4, +0x10) drawing.
+constexpr uint32_t materialSheathSoundField(bool sheathing) { return sheathing ? 3u : 4u; }
 
 /// 0x00737bd0, a hand's reach ended: one that was putting away turns to
 /// drawing (0x007367b0, 0x007368b0) and may start a second reach.

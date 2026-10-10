@@ -35,6 +35,9 @@
     "SexID": 1,
     "Variation": 2
   },
+  "ChrClasses": {
+    "SpellClassSet": 22
+  },
   "CreatureDisplayInfo": {
     "CreatureModelScale": 4,
     "ExtraDisplayId": 3,
@@ -242,6 +245,7 @@
   "Spell": {
     "Attributes": 5,
     "AttributesEx": 6,
+    "AttributesEx3": 8,
     "CastingTimeIndex": 22,
     "CategoryRecoveryTime": 24,
     "Description": 161,
@@ -289,6 +293,8 @@
     "ReagentCount7": 61,
     "RecoveryTime": 23,
     "SchoolMask": 215,
+    "SpellFamilyFlags": 200,
+    "SpellFamilyName": 199,
     "SpellVisualID": 122,
     "TargetAuraState": 19,
     "Targets": 14,
@@ -319,6 +325,7 @@
     "Name": 1
   },
   "SpellVisualKit": {
+    "AnimID": 2,
     "BaseEffect": 5,
     "BreathEffect": 8,
     "ChestEffect": 4,

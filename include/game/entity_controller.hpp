@@ -38,6 +38,13 @@ public:
     [[nodiscard]] std::string getCachedPlayerName(uint64_t guid) const;
     [[nodiscard]] std::string getCachedCreatureName(uint32_t entry) const;
     void invalidatePlayerName(uint64_t guid) { playerNameCache.erase(guid); }
+    /// The player's realm, as the name query named it; empty for the
+    /// player's own server (0x0072a000's +0x34).
+    [[nodiscard]] const std::string& getCachedPlayerRealm(uint64_t guid) const {
+        static const std::string kNone;
+        auto it = playerRealmCache_.find(guid);
+        return it != playerRealmCache_.end() ? it->second : kNone;
+    }
 
     // Read-only cache access for other handlers
     [[nodiscard]] const std::unordered_map<uint64_t, std::string>& getPlayerNameCache() const { return playerNameCache; }
@@ -112,6 +119,8 @@ private:
 
     // ---- Name caches ----
     std::unordered_map<uint64_t, std::string> playerNameCache;
+    /// The realm a name query gave, for a player from another server.
+    std::unordered_map<uint64_t, std::string> playerRealmCache_;
     // Class/race cache from SMSG_NAME_QUERY_RESPONSE (guid → {classId, raceId})
     struct PlayerClassRace { uint8_t classId = 0; uint8_t raceId = 0; uint8_t gender = 0xFF; };
     std::unordered_map<uint64_t, PlayerClassRace> playerClassRaceCache_;

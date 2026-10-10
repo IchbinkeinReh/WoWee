@@ -16,6 +16,7 @@
 #include "auth/auth_handler.hpp"
 #include "game/game_handler.hpp"
 #include "rendering/vk_context.hpp"
+#include "rendering/imgui_blend.hpp"
 #include "ui/ui_texture_load.hpp"
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
@@ -144,6 +145,7 @@ bool UIManager::initialize(core::Window* win) {
     };
 
     ImGui_ImplVulkan_Init(&initInfo);
+    rendering::initImGuiBlend(vkCtx);
 
     imguiInitialized = true;
 
@@ -353,6 +355,7 @@ void UIManager::shutdown() {
             vkDeviceWaitIdle(vkCtx->getDevice());
         }
 
+        rendering::shutdownImGuiBlend();
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "game/quest_giver_status.hpp"
+#include "game/spell_mods.hpp"
+#include "game/ground_target.hpp"
 #include "game/calendar_data.hpp"
 #include "game/game_interfaces.hpp"
 #include "game/world_packets.hpp"
@@ -1077,8 +1079,15 @@ public:
     [[nodiscard]] bool isGroundTargeting() const;
     [[nodiscard]] uint32_t groundTargetSpellId() const;
     bool cancelGroundTargeting();
-    void placeGroundTarget(const glm::vec3& canonical);
-    [[nodiscard]] std::optional<glm::vec3> groundTargetCursor() const;
+    /// A right click on the world while a spell waits for a place (0x0051fb00).
+    bool turnOrCancelGroundTargeting();
+    void placeGroundTarget(const ground_target::Place& place);
+    [[nodiscard]] std::optional<ground_target::Place> groundTargetCursor() const;
+    /// The game object whose model the cursor's place shows, 0 for none, and
+    /// the facing it takes (canonical yaw): the player's, or for effect 81
+    /// its own (0x007fff60).
+    [[nodiscard]] uint32_t groundTargetObjectEntry() const;
+    [[nodiscard]] float groundTargetObjectFacing() const;
     /// The pointer's place on the ground this frame (canonical; none when it
     /// is over no ground), remembered for CameraOrSelectOrMoveStop. Answers
     /// what the place is to the spell (0x00803ee0: 0 acceptable, 1 not, 2 too
@@ -1087,7 +1096,7 @@ public:
         int placement = 1;
         float circleRadius = 0.0f;
     };
-    std::optional<GroundTargetAim> aimGroundTarget(std::optional<glm::vec3> canonical);
+    std::optional<GroundTargetAim> aimGroundTarget(std::optional<ground_target::Place> place);
     void cancelAura(uint32_t spellId);
     void dismissPet();
     void renamePet(const std::string& newName);
@@ -1244,6 +1253,9 @@ public:
     const UnitCastState* getUnitCastState(uint64_t guid) const {
         if (spellHandler_) return spellHandler_->getUnitCastState(guid);
         return nullptr;
+    }
+    const game::UnitCastEnd* getUnitCastEnd(uint64_t guid) const {
+        return spellHandler_ ? spellHandler_->getUnitCastEnd(guid) : nullptr;
     }
     // Convenience helpers for the current target
     bool isTargetCasting() const { return spellHandler_ ? spellHandler_->isTargetCasting() : false; }
@@ -1856,8 +1868,17 @@ public:
 
     // Look up a display name for any guid: checks playerNameCache then entity manager.
     // Returns empty string if unknown. Used by chat display to resolve names at render time.
+    /// A unit's name as the client gives it (0x0072a000): a Mirror Image's
+    /// (aura 279) is its caster's.
+    std::string shownUnitName(const Unit& unit);
+    /// The caster of the unit's aura 279, 0 for none (0x0072a000).
+    uint64_t getCloneCasterGuid(const Unit& unit) const;
     const std::string& lookupName(uint64_t guid) const {
         return entityController_->lookupName(guid);
+    }
+    /// The realm a name query gave for a player of another server, else empty.
+    const std::string& getCachedPlayerRealm(uint64_t guid) const {
+        return entityController_->getCachedPlayerRealm(guid);
     }
 
     uint8_t getPlayerClass() const {
@@ -2486,29 +2507,10 @@ public:
         }
     };
 
-    // Returns the sum of all flat modifiers for a given op across all groups.
-    // (Callers that need per-group resolution can use getSpellFlatMods() directly.)
-    int32_t getSpellFlatMod(SpellModOp op) const {
-        int32_t total = 0;
-        for (const auto& [k, v] : spellFlatMods_)
-            if (k.op == op) total += v;
-        return total;
-    }
-    // Returns the sum of all pct modifiers for a given op across all groups (in %).
-    int32_t getSpellPctMod(SpellModOp op) const {
-        int32_t total = 0;
-        for (const auto& [k, v] : spellPctMods_)
-            if (k.op == op) total += v;
-        return total;
-    }
-
-    // Convenience: apply flat+pct modifier to a base value.
-    // result = (base + flatMod) * (1.0 + pctMod/100.0), clamped to >= 0.
-    static int32_t applySpellMod(int32_t base, int32_t flat, int32_t pct) {
-        int64_t v = static_cast<int64_t>(base) + flat;
-        if (pct != 0) v = v + (v * pct + 50) / 100;  // round half-up
-        return static_cast<int32_t>(v < 0 ? 0 : v);
-    }
+    /// The modifiers a spell of the player's takes for an op (0x007fd970):
+    /// those of the SpellFamilyFlags bits it has, where its family is the
+    /// class's. spell_mods::apply makes the value.
+    [[nodiscard]] spell_mods::Sum getSpellModifiers(uint32_t spellId, SpellModOp op) const;
 
     struct FactionStandingInit {
         uint8_t flags = 0;
@@ -3081,7 +3083,8 @@ public:
     using MountCallback = std::function<void(uint32_t mountDisplayId)>;  // 0 = dismount
     void setMountCallback(MountCallback cb) { mountCallback_ = std::move(cb); }
 
-    // Mount display changes for visible players other than the local character.
+    // Mount display changes for visible units other than the local character:
+    // other players and creatures, which ride alike (0x00740450).
     using OtherPlayerMountCallback = std::function<void(uint64_t guid, uint32_t mountDisplayId)>;
     void setOtherPlayerMountCallback(OtherPlayerMountCallback cb) { otherPlayerMountCallback_ = std::move(cb); }
 
@@ -3544,6 +3547,9 @@ public:
     /// The creature a spell mounts its caster on: the misc value of its first
     /// effect applying aura 78 (0x006f9670); 0 for none.
     uint32_t getSpellMountCreature(uint32_t spellId) const;
+    /// Whether any of a spell's effects applies aura 78, Mounted
+    /// (0x00724820 reads EffectApplyAuraName alone).
+    bool spellAppliesMountedAura(uint32_t spellId) const;
     /// Returns the school bitmask for the spell from Spell.dbc
     /// (0x01=Physical, 0x02=Holy, 0x04=Fire, 0x08=Nature, 0x10=Frost, 0x20=Shadow, 0x40=Arcane).
     /// Returns 0 if unknown.
@@ -4070,6 +4076,11 @@ public:
         uint32_t schoolMask = 0; uint8_t dispelType = 0; uint32_t attrEx = 0;
         /// Spell.dbc Attributes, the base word. Bit 6 (0x40) is passive.
         uint32_t attr = 0;
+        /// Spell.dbc AttributesEx3 (+0x1c), SpellFamilyName (+0x240) and
+        /// SpellFamilyFlags (+0x244): which modifiers it takes (0x007fd970).
+        uint32_t attrEx3 = 0;
+        uint32_t spellFamily = 0;
+        uint32_t spellFamilyFlags[3] = {0, 0, 0};
         // Spell.dbc Targets bitmask (SpellCastTargetFlags) - 0x10 = TARGET_FLAG_ITEM
         uint32_t targetFlags = 0;
         // Spell.dbc RangeIndex resolved against SpellRange.dbc. A max range of 0
@@ -4090,6 +4101,8 @@ public:
         uint32_t effectAuraIds[3] = {0, 0, 0};
         /// Spell.dbc EffectMiscValue: an aura's or a summon's creature.
         uint32_t effectMiscValues[3] = {0, 0, 0};
+        /// Spell.dbc EffectMiscValueB: a summon's SummonProperties row.
+        uint32_t effectMiscValuesB[3] = {0, 0, 0};
         // Spell.dbc EffectImplicitTargetA - what the spell expects to be aimed
         // at. 21 means a friendly unit, which is how heals and buffs are told
         // apart from damage that shares the same effect and school.

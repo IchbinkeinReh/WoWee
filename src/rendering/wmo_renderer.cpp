@@ -4556,7 +4556,7 @@ std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::ve
 }
 
 float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
-                                        bool ignoreCollisionFocus) const {
+                                        bool ignoreCollisionFocus, uint32_t* hitInstanceId) const {
     QueryTimer timer(&queryTimeMs, &queryCallCount);
     float closestHit = maxDistance;
     // The camera is a solid sphere and every solid surface stops it: floors and
@@ -4679,6 +4679,7 @@ float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3
                 if (worldDist < MIN_HIT_DISTANCE) continue;
                 if (worldDist < closestHit && worldDist <= maxDistance) {
                     closestHit = worldDist;
+                    if (hitInstanceId) *hitInstanceId = instance.id;
                 }
             }
         }

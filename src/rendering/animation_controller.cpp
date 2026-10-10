@@ -1047,9 +1047,14 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
         characterRenderer->playAnimation(mountInstanceId_, mountOut.mountAnimId, mountOut.mountAnimLoop);
     }
 
-    // The rider sits in Mount, in the air as on the ground: 3.3.5 has no
-    // flight poses for a rider.
-    const uint32_t riderAnim = anim::MOUNT;
+    // The rider holds its pose (+0xb7c: Mount, or a mount aura kit's,
+    // 0x0073d5d0), in the air as on the ground: 3.3.5 has no flight poses
+    // for a rider.
+    uint32_t riderAnim = anim::MOUNT;
+    if (auto* svs = renderer_->getSpellVisualSystem()) {
+        const uint32_t pose = svs->activePlayerRiderPose();
+        if (characterRenderer->hasAnimation(characterInstanceId, pose)) riderAnim = pose;
+    }
 
     // Apply rider animation
     uint32_t currentAnimId = 0;

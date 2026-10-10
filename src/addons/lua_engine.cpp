@@ -12042,6 +12042,19 @@ bool LuaEngine::evaluateBoolean(const std::string& expression) {
     return truth;
 }
 
+std::string LuaEngine::globalText(const char* name) const {
+    if (!L_ || !name) return {};
+    lua_getglobal(L_, name);
+    std::string out;
+    if (lua_type(L_, -1) == LUA_TSTRING) {
+        size_t len = 0;
+        const char* s = lua_tolstring(L_, -1, &len);
+        if (s) out.assign(s, len);
+    }
+    lua_pop(L_, 1);
+    return out;
+}
+
 bool LuaEngine::executeString(const std::string& code) {
     if (!L_) return false;
 

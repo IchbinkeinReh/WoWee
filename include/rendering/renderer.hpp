@@ -280,8 +280,10 @@ public:
     /// The first terrain, building or doodad surface along a ray from the
     /// camera, renderer coordinates - the ground a click on the world lands
     /// on (CWorld's intersect, 0x004f66c0's place).
+    /// wmoInstanceId, where given, is the building the place is on, 0 for
+    /// none.
     [[nodiscard]] std::optional<glm::vec3> pickGround(const glm::vec3& origin, const glm::vec3& dir,
-                                                      float maxDistance) const;
+                                                      float maxDistance, uint32_t* wmoInstanceId = nullptr) const;
 
     // CPU timing stats (milliseconds, last frame).
     double getLastUpdateMs() const { return lastUpdateMs; }
@@ -918,6 +920,8 @@ private:
     bool screenEffectRowsLoaded_ = false;
     screen_effect::State screenEffectState_;
     int screenEffectLightOverride_ = -1;  ///< the row's Light slot, -1 for none
+    uint32_t screenEffectAmbience_ = 0;   ///< the row's SoundAmbience, 0 for none
+    uint32_t screenEffectZoneMusic_ = 0;  ///< the row's ZoneMusic, 0 for none
     float screenEffectDrunk_ = 0.0f;      ///< 0x004f7290
     bool screenEffectHavePlayer_ = false;
     bool cameraInLiquid_ = false;         ///< 0x00780620, for the glow's wave

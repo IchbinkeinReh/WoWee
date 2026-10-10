@@ -62,6 +62,15 @@ struct UnitCastState {
     SpellCastType castType        = SpellCastType::OMNI;
 };
 
+// How a unit's cast last ended, where a cast bar has to tell: a failure or an
+// interrupt clears the cast (0x00726200), a channel update to 0 ends the
+// channel where it stands (0x00726280). A cast that finished says nothing - a
+// plate runs its own bar to the end. `serial` counts the endings.
+struct UnitCastEnd {
+    uint32_t serial        = 0;
+    bool     channelZeroed = false;
+};
+
 // ---- Equipment sets (WotLK) ----
 
 struct EquipmentSetInfo {

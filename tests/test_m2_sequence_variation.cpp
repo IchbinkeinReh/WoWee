@@ -66,3 +66,11 @@ TEST_CASE("each stand state plays its loop and transitions", "[animation]") {
     STATIC_CHECK(anim::standStateAnims(7).loop == anim::DEAD);
     STATIC_CHECK(anim::standStateAnims(8).loop == anim::KNEEL_LOOP);
 }
+
+TEST_CASE("a riding unit's locomotion is its mount's", "[anim][mount]") {
+    STATIC_CHECK(anim::mountLocomotion(false, false, false) == anim::STAND);
+    STATIC_CHECK(anim::mountLocomotion(true, false, false) == anim::RUN);
+    STATIC_CHECK(anim::mountLocomotion(true, false, true) == anim::WALK);
+    STATIC_CHECK(anim::mountLocomotion(true, true, true) == anim::FLY_FORWARD);
+    STATIC_CHECK(anim::mountLocomotion(false, true, false) == anim::FLY_IDLE);
+}

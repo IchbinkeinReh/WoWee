@@ -20,6 +20,7 @@
 #include "addons/addon_manager.hpp"
 #include "ui/link_hit.hpp"
 #include "core/coordinates.hpp"
+#include "game/transport_manager.hpp"
 #include "core/input.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/post_process_pipeline.hpp"
@@ -159,6 +160,31 @@ void GameScreen::applySavedDisplayMode(core::Window* window) {
 }
 
 // Set UI services and propagate to child components
+
+namespace {
+
+/// The place a click on the world at this renderer point lands, with the
+/// MO_TRANSPORT whose building it hit (wmoInstanceId, 0 for none) and the
+/// point in its frame (0x00527360's event; high guid 0x1FC as 0x004f66c0
+/// tests it), in the axes its movement offsets use
+/// (TransportManager::serverToTransportLocal).
+game::ground_target::Place groundPlaceAt(game::GameHandler& gameHandler, const glm::vec3& renderPos,
+                                         uint32_t wmoInstanceId) {
+    game::ground_target::Place place;
+    place.canonical = core::coords::renderToCanonical(renderPos);
+    auto* transports = gameHandler.getTransportManager();
+    if (wmoInstanceId == 0 || !transports) return place;
+    for (const auto& [guid, transport] : transports->getTransports()) {
+        if (transport.isM2 || transport.wmoInstanceId != wmoInstanceId) continue;
+        if ((guid >> 52) != 0x1FCu) continue;
+        place.transportGuid = guid;
+        place.transportOffset = glm::vec3(transport.invTransform * glm::vec4(renderPos, 1.0f));
+        break;
+    }
+    return place;
+}
+
+}  // namespace
 
 namespace {
 using core::clickDragThreshold;
@@ -2030,9 +2056,11 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 const rendering::Ray ray = camera->screenToWorldRay(
                     mousePos.x, mousePos.y, static_cast<float>(window->getWidth()),
                     static_cast<float>(window->getHeight()));
-                const auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance);
+                uint32_t building = 0;
+                const auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building);
                 const auto aim = gameHandler.aimGroundTarget(
-                    ground ? std::optional<glm::vec3>(core::coords::renderToCanonical(*ground)) : std::nullopt);
+                    ground ? std::optional<game::ground_target::Place>(groundPlaceAt(gameHandler, *ground, building))
+                           : std::nullopt);
                 if (ground && aim) {
                     namespace gt = game::ground_target;
                     const auto where = static_cast<gt::Placement>(aim->placement);
@@ -2116,8 +2144,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 // the ground under the pointer, whatever unit stands there
                 // (0x00527360 -> 0x0080c340).
                 if (gameHandler.isGroundTargeting()) {
-                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance)) {
-                        gameHandler.placeGroundTarget(core::coords::renderToCanonical(*ground));
+                    uint32_t building = 0;
+                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building)) {
+                        gameHandler.placeGroundTarget(groundPlaceAt(gameHandler, *ground, building));
                     }
                     return;
                 }
@@ -2234,9 +2263,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             // Treated as a camera rotate - do not interact/attack.
             return;
         }
-        // A right click puts a spell waiting for a place down
-        // (TurnOrActionStop) and does nothing else.
-        if (gameHandler.cancelGroundTargeting()) return;
+        // A right click puts a spell waiting for a place down, or turns
+        // effect 81's model a quarter (0x0051fb00), and does nothing else.
+        if (gameHandler.turnOrCancelGroundTargeting()) return;
         // Fishing bobbers are tiny and partly submerged, so their model bounds can
         // miss a cursor ray that visibly lands on the float. Test the authoritative
         // water position first with a forgiving sphere and reel directly, before

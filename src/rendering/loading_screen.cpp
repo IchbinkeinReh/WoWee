@@ -1,4 +1,9 @@
 #include "rendering/loading_screen.hpp"
+#include "rendering/loading_screen_layout.hpp"
+#include "pipeline/asset_manager.hpp"
+#include "pipeline/blp_loader.hpp"
+#include "pipeline/dbc_layout.hpp"
+#include "pipeline/dbc_loader.hpp"
 
 #include <SDL3/SDL_vulkan.h>
 #include "rendering/vk_context.hpp"
@@ -8,68 +13,85 @@
 #include <imgui_impl_vulkan.h>
 #include <imgui_impl_sdl3.h>
 #include <SDL3/SDL.h>
-#include <random>
-#include <chrono>
-#include <cstdio>
+#include <cstring>
 
+// The one definition of stb_image the other image readers link against.
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
 namespace wowee {
 namespace rendering {
 
-LoadingScreen::LoadingScreen() {
-    imagePaths.emplace_back("assets/krayonload.png");
-}
+LoadingScreen::LoadingScreen() = default;
 
 LoadingScreen::~LoadingScreen() {
     shutdown();
 }
 
-bool LoadingScreen::initialize() {
+bool LoadingScreen::initialize(pipeline::AssetManager* assets, uint32_t mapId) {
     LOG_INFO("Initializing loading screen (Vulkan/ImGui)");
-    selectRandomImage();
-    LOG_INFO("Loading screen initialized");
+    namespace ls = loading_screen;
+    // 0x00409ed0: the map's LoadingScreens row (Map +0x24), its "Wide"
+    // version on a screen wider than 4:3 where it has one, else the row's
+    // picture, else the default.
+    std::string fileName;
+    bool hasWide = false;
+    if (assets && assets->isInitialized()) {
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        const auto* mapLayout = layouts ? layouts->getLayout("Map") : nullptr;
+        const auto* screenLayout = layouts ? layouts->getLayout("LoadingScreens") : nullptr;
+        const uint32_t screenField = mapLayout ? mapLayout->tryField("LoadingScreenID") : 0xFFFFFFFFu;
+        auto mapDbc = screenField != 0xFFFFFFFFu ? assets->loadDBC("Map.dbc") : nullptr;
+        auto screenDbc = screenLayout ? assets->loadDBC("LoadingScreens.dbc") : nullptr;
+        if (mapDbc && mapDbc->isLoaded() && screenDbc && screenDbc->isLoaded() &&
+            screenField < mapDbc->getFieldCount()) {
+            const int32_t mapRow = mapDbc->findRecordById(mapId);
+            const uint32_t screenId = mapRow >= 0 ? mapDbc->getUInt32(static_cast<uint32_t>(mapRow), screenField) : 0;
+            const int32_t screenRow = screenId ? screenDbc->findRecordById(screenId) : -1;
+            const uint32_t fileField = screenLayout->tryField("FileName");
+            const uint32_t wideField = screenLayout->tryField("HasWideScreen");
+            if (screenRow >= 0 && fileField < screenDbc->getFieldCount()) {
+                fileName = screenDbc->getString(static_cast<uint32_t>(screenRow), fileField);
+                hasWide = wideField < screenDbc->getFieldCount() &&
+                          screenDbc->getUInt32(static_cast<uint32_t>(screenRow), wideField) != 0;
+            }
+        }
+    }
+    float screenAspect = 0.0f;
+    if (vkCtx) {
+        const VkExtent2D extent = vkCtx->getSwapchainExtent();
+        if (extent.height > 0) screenAspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
+    }
+    widePicture_ = false;
+    if (!fileName.empty() && ls::wantsWidePicture(screenAspect, hasWide))
+        widePicture_ = loadTexture(assets, ls::widePicturePath(fileName), picture_);
+    if (!widePicture_ && !fileName.empty()) loadTexture(assets, fileName, picture_);
+    if (!picture_.descriptor) loadTexture(assets, ls::kDefaultPicture, picture_);
+    for (size_t i = 0; i < ls::kBar.size(); ++i) loadTexture(assets, ls::kBar[i].texture, bar_[i]);
+    LOG_INFO("Loading screen initialized: map ", mapId, " picture '", fileName, "'", widePicture_ ? " (wide)" : "");
     return true;
 }
 
-void LoadingScreen::shutdown() {
-    if (vkCtx && bgImage) {
-        VkDevice device = vkCtx->getDevice();
-        vkDeviceWaitIdle(device);
-
-        if (bgDescriptorSet) {
-            // ImGui manages descriptor set lifetime
-            bgDescriptorSet = VK_NULL_HANDLE;
-        }
-        bgSampler = VK_NULL_HANDLE; // Owned by VkContext sampler cache
-        if (bgImageView) {
-            vkDestroyImageView(device, bgImageView, nullptr);
-            bgImageView = VK_NULL_HANDLE;
-        }
-        if (bgImage) {
-            vkDestroyImage(device, bgImage, nullptr);
-            bgImage = VK_NULL_HANDLE;
-        }
-        if (bgMemory) {
-            vkFreeMemory(device, bgMemory, nullptr);
-            bgMemory = VK_NULL_HANDLE;
-        }
-    }
+void LoadingScreen::setStatus(const std::string& status) {
+    LOG_DEBUG("Loading: ", status);
 }
 
-void LoadingScreen::selectRandomImage() {
-    if (imagePaths.empty()) return;
+void LoadingScreen::release(Texture& tex) {
+    if (!vkCtx) return;
+    VkDevice device = vkCtx->getDevice();
+    // ImGui manages the descriptor set's lifetime.
+    tex.descriptor = VK_NULL_HANDLE;
+    if (tex.view) { vkDestroyImageView(device, tex.view, nullptr); tex.view = VK_NULL_HANDLE; }
+    if (tex.image) { vkDestroyImage(device, tex.image, nullptr); tex.image = VK_NULL_HANDLE; }
+    if (tex.memory) { vkFreeMemory(device, tex.memory, nullptr); tex.memory = VK_NULL_HANDLE; }
+}
 
-    unsigned seed = static_cast<unsigned>(
-        std::chrono::system_clock::now().time_since_epoch().count());
-    std::default_random_engine generator(seed);
-    std::uniform_int_distribution<int> distribution(0, imagePaths.size() - 1);
-
-    currentImageIndex = distribution(generator);
-    LOG_INFO("Selected loading screen: ", imagePaths[currentImageIndex]);
-
-    loadImage(imagePaths[currentImageIndex]);
+void LoadingScreen::shutdown() {
+    if (!vkCtx) return;
+    if (!picture_.image && !bar_[0].image && !bar_[1].image) return;
+    vkDeviceWaitIdle(vkCtx->getDevice());
+    release(picture_);
+    for (Texture& tex : bar_) release(tex);
 }
 
 static uint32_t findMemoryType(VkPhysicalDevice physDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
@@ -84,44 +106,28 @@ static uint32_t findMemoryType(VkPhysicalDevice physDevice, uint32_t typeFilter,
     return UINT32_MAX;
 }
 
-bool LoadingScreen::loadImage(const std::string& path) {
+bool LoadingScreen::loadTexture(pipeline::AssetManager* assets, const std::string& path, Texture& out) {
+    if (!assets || !assets->isInitialized()) return false;
+    std::string blp = path;
+    if (blp.size() < 4 || (blp.compare(blp.size() - 4, 4, ".blp") != 0 && blp.compare(blp.size() - 4, 4, ".BLP") != 0))
+        blp += ".blp";
+    pipeline::BLPImage image = assets->loadTexture(blp);
+    if (!image.isValid() || image.data.empty()) {
+        LOG_WARNING("Loading screen: no texture at ", blp);
+        return false;
+    }
+    if (out.image) {
+        vkDeviceWaitIdle(vkCtx->getDevice());
+        release(out);
+    }
+    return upload(image.data.data(), image.width, image.height, out);
+}
+
+bool LoadingScreen::upload(const uint8_t* rgba, int imageWidth, int imageHeight, Texture& out) {
     if (!vkCtx) {
         LOG_WARNING("No VkContext for loading screen image");
         return false;
     }
-    int width = 0, height = 0, channels = 0;
-    stbi_set_flip_vertically_on_load(false); // ImGui expects top-down
-    unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
-    if (!data) {
-        LOG_ERROR("Failed to load loading screen image: ", path);
-        return false;
-    }
-    const bool ok = loadImageRgba(data, width, height);
-    stbi_image_free(data);
-    return ok;
-}
-
-bool LoadingScreen::loadImageRgba(const uint8_t* data, int width, int height) {
-    if (!vkCtx || !data || width <= 0 || height <= 0) return false;
-
-    // Clean up old image
-    if (bgImage) {
-        VkDevice device = vkCtx->getDevice();
-        vkDeviceWaitIdle(device);
-        // The old image's ImGui handle too, now that one screen can change
-        // its picture (the map's, over the default).
-        if (bgDescriptorSet) ImGui_ImplVulkan_RemoveTexture(bgDescriptorSet);
-        bgSampler = VK_NULL_HANDLE; // Owned by VkContext sampler cache
-        if (bgImageView) { vkDestroyImageView(device, bgImageView, nullptr); bgImageView = VK_NULL_HANDLE; }
-        if (bgImage) { vkDestroyImage(device, bgImage, nullptr); bgImage = VK_NULL_HANDLE; }
-        if (bgMemory) { vkFreeMemory(device, bgMemory, nullptr); bgMemory = VK_NULL_HANDLE; }
-        bgDescriptorSet = VK_NULL_HANDLE;
-    }
-    imageWidth = width;
-    imageHeight = height;
-
-    LOG_INFO("Loaded loading screen image: ", imageWidth, "x", imageHeight);
-
     VkDevice device = vkCtx->getDevice();
     VkPhysicalDevice physDevice = vkCtx->getPhysicalDevice();
     VkDeviceSize imageSize = static_cast<VkDeviceSize>(imageWidth) * imageHeight * 4;
@@ -150,7 +156,7 @@ bool LoadingScreen::loadImageRgba(const uint8_t* data, int width, int height) {
 
         void* mapped;
         vkMapMemory(device, stagingMemory, 0, imageSize, 0, &mapped);
-        memcpy(mapped, data, imageSize);
+        std::memcpy(mapped, rgba, imageSize);
         vkUnmapMemory(device, stagingMemory);
     }
 
@@ -168,18 +174,18 @@ bool LoadingScreen::loadImageRgba(const uint8_t* data, int width, int height) {
         imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        vkCreateImage(device, &imgInfo, nullptr, &bgImage);
+        vkCreateImage(device, &imgInfo, nullptr, &out.image);
 
         VkMemoryRequirements memReqs;
-        vkGetImageMemoryRequirements(device, bgImage, &memReqs);
+        vkGetImageMemoryRequirements(device, out.image, &memReqs);
 
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize = memReqs.size;
         allocInfo.memoryTypeIndex = findMemoryType(physDevice, memReqs.memoryTypeBits,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        vkAllocateMemory(device, &allocInfo, nullptr, &bgMemory);
-        vkBindImageMemory(device, bgImage, bgMemory, 0);
+        vkAllocateMemory(device, &allocInfo, nullptr, &out.memory);
+        vkBindImageMemory(device, out.image, out.memory, 0);
     }
 
     // Transfer: transition, copy, transition
@@ -193,7 +199,7 @@ bool LoadingScreen::loadImageRgba(const uint8_t* data, int width, int height) {
         barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = bgImage;
+        barrier.image = out.image;
         barrier.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
         barrier.srcAccessMask = 0;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -207,7 +213,7 @@ bool LoadingScreen::loadImageRgba(const uint8_t* data, int width, int height) {
         VkBufferImageCopy region{};
         region.imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1};
         region.imageExtent = {.width = static_cast<uint32_t>(imageWidth), .height = static_cast<uint32_t>(imageHeight), .depth = 1};
-        vkCmdCopyBufferToImage(cmd, stagingBuffer, bgImage,
+        vkCmdCopyBufferToImage(cmd, stagingBuffer, out.image,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
         // Transition to shader read
@@ -231,14 +237,15 @@ bool LoadingScreen::loadImageRgba(const uint8_t* data, int width, int height) {
     {
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = bgImage;
+        viewInfo.image = out.image;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
         viewInfo.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
-        vkCreateImageView(device, &viewInfo, nullptr, &bgImageView);
+        vkCreateImageView(device, &viewInfo, nullptr, &out.view);
     }
 
     // Create sampler
+    VkSampler sampler = VK_NULL_HANDLE;
     {
         VkSamplerCreateInfo samplerInfo{};
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -247,100 +254,14 @@ bool LoadingScreen::loadImageRgba(const uint8_t* data, int width, int height) {
         samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        bgSampler = vkCtx->getOrCreateSampler(samplerInfo);
+        sampler = vkCtx->getOrCreateSampler(samplerInfo);  // owned by VkContext's cache
     }
 
     // Register with ImGui as a texture
-    bgDescriptorSet = ImGui_ImplVulkan_AddTexture(bgSampler, bgImageView,
+    out.descriptor = ImGui_ImplVulkan_AddTexture(sampler, out.view,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     return true;
-}
-
-/// Opens the fullscreen window the loading screen draws into and blits its
-/// background.
-///
-/// Both draws need it: the overlay that sits over a live frame and the standalone
-/// one that runs its own ImGui frame. Every flag matters. NoInputs is what keeps
-/// the screen from swallowing clicks meant for what is behind it, and
-/// NoBringToFrontOnFocus is what stops it climbing over the windows it is meant
-/// to sit under.
-void LoadingScreen::beginBackdrop(const char* windowName, float screenW, float screenH) {
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImVec2(screenW, screenH));
-    ImGui::Begin(windowName, nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBackground |
-        ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-    if (bgDescriptorSet) {
-        ImGui::GetWindowDrawList()->AddImage(
-            reinterpret_cast<ImTextureID>(bgDescriptorSet),
-            ImVec2(0, 0), ImVec2(screenW, screenH));
-    }
-}
-
-void LoadingScreen::renderOverlay() {
-    // Draw loading screen content as ImGui overlay within an existing ImGui frame.
-    // Caller is responsible for ImGui NewFrame/Render and Vulkan frame management.
-    ImGuiIO& io = ImGui::GetIO();
-    float screenW = io.DisplaySize.x;
-    float screenH = io.DisplaySize.y;
-
-    beginBackdrop("##LoadingScreenOverlay", screenW, screenH);
-
-    // Zone name header
-    if (!zoneName.empty()) {
-        ImFont* font = ImGui::GetFont();
-        float zoneTextSize = 24.0f;
-        ImVec2 zoneSize = font->CalcTextSizeA(zoneTextSize, FLT_MAX, 0.0f, zoneName.c_str());
-        float zoneX = (screenW - zoneSize.x) * 0.5f;
-        float zoneY = screenH * 0.06f - 44.0f;
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddText(font, zoneTextSize, ImVec2(zoneX + 2.0f, zoneY + 2.0f),
-                    IM_COL32(0, 0, 0, 200), zoneName.c_str());
-        dl->AddText(font, zoneTextSize, ImVec2(zoneX, zoneY),
-                    IM_COL32(255, 220, 120, 255), zoneName.c_str());
-    }
-
-    // Progress bar
-    {
-        const float barWidthFrac = 0.6f;
-        const float barHeight = 6.0f;
-        const float barY = screenH * 0.06f;
-        float barX = screenW * (0.5f - barWidthFrac * 0.5f);
-        float barW = screenW * barWidthFrac;
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        drawList->AddRectFilled(ImVec2(barX, barY), ImVec2(barX + barW, barY + barHeight),
-            IM_COL32(25, 25, 25, 200), 2.0f);
-        if (loadProgress > 0.001f) {
-            drawList->AddRectFilled(ImVec2(barX, barY), ImVec2(barX + barW * loadProgress, barY + barHeight),
-                IM_COL32(199, 156, 33, 255), 2.0f);
-        }
-        drawList->AddRect(ImVec2(barX - 1, barY - 1), ImVec2(barX + barW + 1, barY + barHeight + 1),
-            IM_COL32(140, 110, 25, 255), 2.0f);
-    }
-
-    // Percentage text
-    {
-        char pctBuf[32];
-        snprintf(pctBuf, sizeof(pctBuf), "%d%%", static_cast<int>(loadProgress * 100.0f));
-        float textY = screenH * 0.06f - 20.0f;
-        ImVec2 pctSize = ImGui::CalcTextSize(pctBuf);
-        ImGui::SetCursorPos(ImVec2((screenW - pctSize.x) * 0.5f, textY));
-        ImGui::TextColored(ImVec4(0.0f, 0.0f, 0.0f, 1.0f), "%s", pctBuf);
-    }
-
-    // Status text
-    {
-        float statusY = screenH * 0.06f + 14.0f;
-        ImVec2 statusSize = ImGui::CalcTextSize(statusText.c_str());
-        ImGui::SetCursorPos(ImVec2((screenW - statusSize.x) * 0.5f, statusY));
-        ImGui::TextColored(ImVec4(0.0f, 0.0f, 0.0f, 1.0f), "%s", statusText.c_str());
-    }
-
-    ImGui::End();
 }
 
 void LoadingScreen::render() {
@@ -359,74 +280,40 @@ void LoadingScreen::render() {
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 
-    // Invisible fullscreen window
-    beginBackdrop("##LoadingScreen", screenW, screenH);
+    // A fullscreen window to draw in. NoInputs keeps it from swallowing
+    // clicks, NoBringToFrontOnFocus from climbing over other windows.
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(screenW, screenH));
+    ImGui::Begin("##LoadingScreen", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBackground |
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    // Zone name header (large text centered above progress bar)
-    if (!zoneName.empty()) {
-        ImFont* font = ImGui::GetFont();
-        float zoneTextSize = 24.0f;
-        ImVec2 zoneSize = font->CalcTextSizeA(zoneTextSize, FLT_MAX, 0.0f, zoneName.c_str());
-        float zoneX = (screenW - zoneSize.x) * 0.5f;
-        float zoneY = screenH * 0.06f - 44.0f;  // above percentage text
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        // Drop shadow
-        dl->AddText(font, zoneTextSize, ImVec2(zoneX + 2.0f, zoneY + 2.0f),
-                    IM_COL32(0, 0, 0, 200), zoneName.c_str());
-        // Gold text
-        dl->AddText(font, zoneTextSize, ImVec2(zoneX, zoneY),
-                    IM_COL32(255, 220, 120, 255), zoneName.c_str());
+    // 0x0040a270: the screen black, the picture in a viewport of its own
+    // shape, and on it the bar - its fill, then its border (0x004090c0).
+    namespace ls = loading_screen;
+    const float aspect = screenH > 0.0f ? screenW / screenH : 0.0f;
+    const ls::Rect view = ls::pictureViewport(aspect, widePicture_);
+    // A rectangle of the viewport's 0..1, y up, in ImGui's pixels, y down.
+    auto toScreen = [&](const ls::Rect& r, ImVec2& p0, ImVec2& p1) {
+        const float vx = view.x0 * screenW, vw = (view.x1 - view.x0) * screenW;
+        const float vy = view.y0 * screenH, vh = (view.y1 - view.y0) * screenH;
+        p0 = ImVec2(vx + r.x0 * vw, screenH - (vy + r.y1 * vh));
+        p1 = ImVec2(vx + r.x1 * vw, screenH - (vy + r.y0 * vh));
+    };
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    if (picture_.descriptor) {
+        ImVec2 p0, p1;
+        toScreen(ls::Rect{}, p0, p1);
+        drawList->AddImage(reinterpret_cast<ImTextureID>(picture_.descriptor), p0, p1);
     }
-
-    // Progress bar (top of screen)
-    {
-        const float barWidthFrac = 0.6f;
-        const float barHeight = 6.0f;
-        const float barY = screenH * 0.06f;
-        float barX = screenW * (0.5f - barWidthFrac * 0.5f);
-        float barW = screenW * barWidthFrac;
-
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-
-        // Background
-        drawList->AddRectFilled(
-            ImVec2(barX, barY),
-            ImVec2(barX + barW, barY + barHeight),
-            IM_COL32(25, 25, 25, 200), 2.0f);
-
-        // Fill (gold)
-        if (loadProgress > 0.001f) {
-            drawList->AddRectFilled(
-                ImVec2(barX, barY),
-                ImVec2(barX + barW * loadProgress, barY + barHeight),
-                IM_COL32(199, 156, 33, 255), 2.0f);
-        }
-
-        // Border
-        drawList->AddRect(
-            ImVec2(barX - 1, barY - 1),
-            ImVec2(barX + barW + 1, barY + barHeight + 1),
-            IM_COL32(140, 110, 25, 255), 2.0f);
-    }
-
-    // Percentage text above bar
-    {
-        char pctBuf[32];
-        snprintf(pctBuf, sizeof(pctBuf), "%d%%", static_cast<int>(loadProgress * 100.0f));
-        float barCenterY = screenH * 0.06f;
-        float textY = barCenterY - 20.0f;
-
-        ImVec2 pctSize = ImGui::CalcTextSize(pctBuf);
-        ImGui::SetCursorPos(ImVec2((screenW - pctSize.x) * 0.5f, textY));
-        ImGui::TextColored(ImVec4(0.0f, 0.0f, 0.0f, 1.0f), "%s", pctBuf);
-    }
-
-    // Status text below bar
-    {
-        float statusY = screenH * 0.06f + 14.0f;
-        ImVec2 statusSize = ImGui::CalcTextSize(statusText.c_str());
-        ImGui::SetCursorPos(ImVec2((screenW - statusSize.x) * 0.5f, statusY));
-        ImGui::TextColored(ImVec4(0.0f, 0.0f, 0.0f, 1.0f), "%s", statusText.c_str());
+    for (size_t i = 0; i < ls::kBar.size(); ++i) {
+        if (!bar_[i].descriptor) continue;
+        ImVec2 p0, p1;
+        toScreen(ls::barPieceRect(ls::kBar[i], loadProgress), p0, p1);
+        if (p1.x <= p0.x) continue;
+        drawList->AddImage(reinterpret_cast<ImTextureID>(bar_[i].descriptor), p0, p1);
     }
 
     ImGui::End();

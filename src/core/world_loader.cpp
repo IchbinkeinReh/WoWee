@@ -10,7 +10,6 @@
 #include "core/appearance_composer.hpp"
 #include "core/window.hpp"
 #include "core/coordinates.hpp"
-#include "rendering/world_map/map_resolver.hpp"
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/animation_controller.hpp"
@@ -138,93 +137,6 @@ void spawnInstancePortalVisuals(uint32_t mapId,
                      portal.canonicalPos.y, ", ", portal.canonicalPos.z, ")");
         }
     }
-}
-
-/// What the loading screen says it is loading: the zone the player is going
-/// to, by its AreaTable name - which on a localized client is its own
-/// language's, since the strings are read from its column.
-///
-/// It said the continent, by an English name chosen from the map id. Map 530
-/// is Outland and also Eversong Woods, Ghostlands, Silvermoon, the draenei
-/// islands and the Exodar, so every blood elf and draenei logging in at home
-/// was told "Outland", on a German client as on any other.
-///
-/// The character list names the zone at login; a teleport has only the
-/// destination, which WorldMapArea's rectangles place. Map.dbc's own name is
-/// the last word, for a map no rectangle covers - an instance.
-std::string loadingZoneCaption(const game::GameHandler* gh, pipeline::AssetManager* am,
-                               uint32_t mapId, float serverX, float serverY) {
-    if (!gh) return {};
-    // The canonical position, which is what WorldMapArea is written in.
-    const glm::vec3 canonical = coords::serverToCanonical(glm::vec3(serverX, serverY, 0.0f));
-
-    if (const game::Character* ch = gh->getActiveCharacter();
-        ch && ch->zoneId != 0 && ch->mapId == mapId &&
-        std::abs(ch->x - serverX) < 5.0f && std::abs(ch->y - serverY) < 5.0f) {
-        if (std::string name = gh->getAreaName(ch->zoneId); !name.empty()) return name;
-    }
-
-    if (am && am->isInitialized()) {
-        if (auto wma = am->loadDBC("WorldMapArea.dbc"); wma && wma->isLoaded()) {
-            const auto* layout = pipeline::getActiveDBCLayout()
-                ? pipeline::getActiveDBCLayout()->getLayout("WorldMapArea") : nullptr;
-            std::vector<rendering::world_map::Zone> rows;
-            for (uint32_t i = 0; i < wma->getRecordCount(); ++i) {
-                rendering::world_map::Zone z;
-                z.mapID = wma->getUInt32(i, layout ? (*layout)["MapID"] : 1);
-                z.areaID = wma->getUInt32(i, layout ? (*layout)["AreaID"] : 2);
-                if (z.mapID != mapId || z.areaID == 0) continue;
-                z.bounds.locLeft = wma->getFloat(i, layout ? (*layout)["LocLeft"] : 4);
-                z.bounds.locRight = wma->getFloat(i, layout ? (*layout)["LocRight"] : 5);
-                z.bounds.locTop = wma->getFloat(i, layout ? (*layout)["LocTop"] : 6);
-                z.bounds.locBottom = wma->getFloat(i, layout ? (*layout)["LocBottom"] : 7);
-                rows.push_back(std::move(z));
-            }
-            const uint32_t areaId = rendering::world_map::zoneAreaAtPosition(
-                rows, mapId, canonical.x, canonical.y);
-            if (std::string name = gh->getAreaName(areaId); !name.empty()) return name;
-        }
-    }
-    return gh->getMapName(mapId);
-}
-
-/// The picture the client puts up while a map loads (0x00409ed0): the map's
-/// Map.dbc LoadingScreenID names a LoadingScreens.dbc row, and its file -
-/// with "Wide" before the extension when the row has a wide version and the
-/// screen is wider than 4:3 - is the loading screen. Empty when the layout
-/// or the data has none, and the client's own picture stays.
-std::string mapLoadingScreenPath(pipeline::AssetManager* am, uint32_t mapId, float aspect) {
-    const auto* dbcLayout = pipeline::getActiveDBCLayout();
-    if (!am || !am->isInitialized() || !dbcLayout) return {};
-    const auto* mapLayout = dbcLayout->getLayout("Map");
-    const auto* screenLayout = dbcLayout->getLayout("LoadingScreens");
-    if (!mapLayout || !screenLayout) return {};
-    const uint32_t screenField = mapLayout->tryField("LoadingScreenID");
-    const uint32_t fileField = screenLayout->tryField("FileName");
-    const uint32_t wideField = screenLayout->tryField("HasWideScreen");
-    if (screenField == 0xFFFFFFFFu || fileField == 0xFFFFFFFFu) return {};
-
-    auto mapDbc = am->loadDBC("Map.dbc");
-    if (!mapDbc || !mapDbc->isLoaded()) return {};
-    const int32_t mapRow = mapDbc->findRecordById(mapId);
-    if (mapRow < 0) return {};
-    const uint32_t screenId = mapDbc->getUInt32(static_cast<uint32_t>(mapRow), screenField);
-    if (screenId == 0) return {};
-
-    auto screens = am->loadDBC("LoadingScreens.dbc");
-    if (!screens || !screens->isLoaded()) return {};
-    const int32_t row = screens->findRecordById(screenId);
-    if (row < 0) return {};
-    std::string path = screens->getString(static_cast<uint32_t>(row), fileField);
-    if (path.empty()) return {};
-    const bool hasWide = wideField != 0xFFFFFFFFu &&
-                         screens->getUInt32(static_cast<uint32_t>(row), wideField) != 0;
-    // Wider than 4:3, by a thousandth's margin, as the client compares it.
-    if (hasWide && aspect > 4.0f / 3.0f + 0.001f) {
-        const size_t dot = path.find_last_of('.');
-        path.insert(dot == std::string::npos ? path.size() : dot, "Wide");
-    }
-    return path;
 }
 
 } // namespace
@@ -823,22 +735,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     rendering::LoadingScreen loadingScreen;
     loadingScreen.setVkContext(window_->getVkContext());
     loadingScreen.setSDLWindow(window_->getSDLWindow());
-    bool loadingScreenOk = loadingScreen.initialize();
-    // The destination's own picture over the client's default, as the client
-    // shows it - Northrend's going to Dalaran, not whatever was up before.
-    if (loadingScreenOk && window_ && window_->getHeight() > 0) {
-        const float aspect = static_cast<float>(window_->getWidth()) /
-                             static_cast<float>(window_->getHeight());
-        const std::string screenPath = mapLoadingScreenPath(assetManager_, mapId, aspect);
-        if (!screenPath.empty()) {
-            const pipeline::BLPImage picture = assetManager_->loadTexture(screenPath);
-            if (!picture.isValid() ||
-                !loadingScreen.loadImageRgba(picture.data.data(), picture.width, picture.height)) {
-                LOG_WARNING("Loading screen ", screenPath, " for map ", mapId,
-                            " could not be shown; keeping the default");
-            }
-        }
-    }
+    bool loadingScreenOk = loadingScreen.initialize(assetManager_, mapId);
 
     auto showProgress = [&](const char* msg, float progress) {
         SDL_Event event;
@@ -875,10 +772,6 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     loadingUi.window = window_;
     loadingUi.ok = loadingScreenOk;
     loadingUi.showProgress = showProgress;
-
-    // The zone being loaded, in the client's language; nothing rather than a
-    // guess when nothing names it.
-    loadingScreen.setZoneName(loadingZoneCaption(gameHandler_, assetManager_, mapId, x, y));
 
     showProgress("Entering world...", 0.0f);
 
