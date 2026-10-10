@@ -13,6 +13,12 @@
 #include "rendering/renderer.hpp"
 #include "rendering/animation_controller.hpp"
 #include "core/logger.hpp"
+#include "core/application.hpp"
+#include "addons/addon_manager.hpp"
+#include "addons/lua_engine.hpp"
+#include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_loader.hpp"
+#include "pipeline/dbc_layout.hpp"
 #include "core/app_clock.hpp"
 #include <algorithm>
 #include <chrono>
@@ -858,10 +864,16 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
             while (chatLineSenders_.size() > kRememberedLines)
                 chatLineSenders_.pop_front();
         }
-        const int channelNumber = getChannelIndex(data.channelName);
-        const size_t dash = data.channelName.find(" - ");
-        const std::string shortChannel = (dash == std::string::npos)
-            ? data.channelName : data.channelName.substr(0, dash);
+        // The channel's slot by the name on the line (0x00509dd0): arg4 is
+        // the name numbered - "1. Allgemein - Dalaran", which the frame puts
+        // in brackets in front of the line - and arg7 to arg10 are the
+        // slot's zone channel id, number, name and instance. The frame finds
+        // a zone channel by the id and any other by the name, so a line for a
+        // channel with no slot reaches no frame, as in the client.
+        const chat_channels::Slot* chanSlot =
+            data.channelName.empty() ? nullptr : channelSlots_.byName(data.channelName);
+        const std::string numberedChannel = data.channelName.empty()
+            ? std::string() : chat_channels::numberedName(chanSlot, data.channelName);
         // arg5 is the *target*, not the sender. It was the sender's own name,
         // which is only read by CHANNEL_NOTICE_USER - and read as "there are
         // two names in this notice", so every kick and ban was formatted as
@@ -909,13 +921,13 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
             data.message,
             shownName,
             lang,
-            data.channelName,
+            numberedChannel,
             data.receiverName,
             chatFlag,
-            "0",
-            std::to_string(channelNumber),
-            shortChannel,
-            "0",
+            std::to_string(chanSlot ? chanSlot->zoneChannelId : 0u),
+            std::to_string(chanSlot ? chanSlot->number : 0),
+            chanSlot ? chanSlot->name : std::string(),
+            std::to_string(chanSlot ? chanSlot->instanceId : 0u),
             std::to_string(lineId),
             guidBuf
         });
@@ -1085,13 +1097,124 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
     LOG_INFO("TEXT_EMOTE from ", senderName, " (emoteId=", data.textEmoteId, ")");
 }
 
-void ChatHandler::joinChannel(const std::string& channelName, const std::string& password) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    auto packet = owner_.getPacketParsers()
-        ? owner_.getPacketParsers()->buildJoinChannel(channelName, password)
-        : JoinChannelPacket::build(channelName, password);
-    owner_.getSocket()->send(packet);
-    LOG_INFO("Requesting to join channel: ", channelName);
+const std::vector<chat_channels::Row>& ChatHandler::channelRows() const {
+    if (channelRowsLoaded_) return channelRows_;
+    auto* am = owner_.services().assetManager;
+    // Not an attempt: the assets are not there to read yet, and a caller can
+    // reach this before they are.
+    if (!am || !am->isInitialized()) return channelRows_;
+    channelRowsLoaded_ = true;
+    auto dbc = am->loadDBC("ChatChannels.dbc");
+    if (!dbc || !dbc->isLoaded()) {
+        LOG_WARNING("ChatChannels.dbc not available - zone channels cannot be joined");
+        return channelRows_;
+    }
+    // ID, Flags, FactionGroup, then the two localized strings. The layout
+    // says where they are; without one the column count does, since the
+    // installed layouts file is a copy taken at extraction and may predate
+    // this table: 37 columns is sixteen locales and a flags column each
+    // (TBC, WotLK - 0x0063a3f0 insists on 37), 21 is vanilla's eight, and
+    // fewer is the unlocalized 4.x shape.
+    const uint32_t fields = dbc->getFieldCount();
+    uint32_t idField = 0, flagsField = 1, nameField = 3;
+    uint32_t shortcutField = fields >= 37 ? 20u : fields >= 21 ? 12u : 4u;
+    if (const auto* layouts = pipeline::getActiveDBCLayout()) {
+        if (const auto* l = layouts->getLayout("ChatChannels")) {
+            const auto pick = [&](const char* name, uint32_t& out) {
+                const uint32_t f = l->tryField(name);
+                if (f != 0xFFFFFFFFu && f < fields) out = f;
+            };
+            pick("ID", idField);
+            pick("Flags", flagsField);
+            pick("Name", nameField);
+            pick("Shortcut", shortcutField);
+        }
+    }
+    if (shortcutField >= fields || nameField >= fields) {
+        LOG_WARNING("ChatChannels.dbc has ", fields, " columns, too few for its names");
+        return channelRows_;
+    }
+    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        chat_channels::Row row;
+        row.id = dbc->getUInt32(i, idField);
+        row.flags = dbc->getUInt32(i, flagsField);
+        row.name = dbc->getString(i, nameField);
+        row.shortcut = dbc->getString(i, shortcutField);
+        if (row.id == 0 || row.shortcut.empty()) continue;
+        LOG_INFO("ChatChannels: ", row.id, " flags=0x", std::hex, row.flags, std::dec,
+                 " '", row.shortcut, "' -> '", row.name, "'");
+        channelRows_.push_back(std::move(row));
+    }
+    return channelRows_;
+}
+
+std::vector<std::pair<std::string, int>> ChatHandler::defaultWindowChannels() const {
+    // The rows the client joins by itself, which 0x00508320 puts in the
+    // first window by shortcut and id when there is no chat cache - and Guild
+    // Recruitment, which 0x00507d30 adds when it joins it.
+    std::vector<std::pair<std::string, int>> out;
+    for (const auto& r : channelRows()) {
+        if (r.flags & (chat_channels::kFlagInitial | chat_channels::kFlagGuildRecruitment))
+            out.emplace_back(r.shortcut, static_cast<int>(r.id));
+    }
+    return out;
+}
+
+chat_channels::Place ChatHandler::currentChannelPlace() const {
+    chat_channels::Place place;
+    // The real zone's text, which the client keeps at 0x00bd0780 and
+    // 0x00507a80 reads: "Dalaran", not the district the player stands in.
+    auto* renderer = core::Application::getInstance().getRenderer();
+    const auto* texts = renderer ? renderer->getZoneTexts() : nullptr;
+    if (!texts) return place;
+    place.zone = texts->realZone;
+    // The zone's own AreaTable row (0x00bd080c is the zone's id, as
+    // 0x0078f020 hands it to 0x005204c0).
+    place.zoneIsCity = (owner_.getAreaFlags(texts->zoneId) & chat_channels::kAreaFlagCity) != 0;
+    place.capitals = owner_.getCapitalsAreaName();
+    return place;
+}
+
+void ChatHandler::refreshJoinedChannels() {
+    joinedChannels_.clear();
+    for (const auto& s : channelSlots_.all()) {
+        if (s.number != 0 && !s.pending) joinedChannels_.push_back(s.name);
+    }
+}
+
+std::optional<chat_channels::Join> ChatHandler::joinChannel(const std::string& channelName,
+                                                            const std::string& password,
+                                                            bool byLogin) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return std::nullopt;
+    auto join = chat_channels::resolveJoin(channelRows(), channelName, currentChannelPlace());
+    if (!join) {
+        LOG_INFO("Not joining channel '", channelName, "': no zone to name it after yet");
+        return std::nullopt;
+    }
+    // A zone channel goes without the password typed with it (0x00507a80
+    // clears it on a row match).
+    const std::string pass = join->zoneChannelId != 0 ? std::string() : password;
+    // A slot already held - by id for a zone channel - is a channel already
+    // asked for or joined, and the client sends nothing again. Otherwise the
+    // slot is taken now, which is what fixes the channel's number.
+    const bool held = join->zoneChannelId != 0 ? channelSlots_.byZoneId(join->zoneChannelId) != nullptr
+                                               : channelSlots_.byName(join->name) != nullptr;
+    if (!held) {
+        if (!channelSlots_.reserve(join->name, join->zoneChannelId)) {
+            LOG_WARNING("Not joining channel '", join->name, "': all ",
+                        chat_channels::kMaxSlots, " channel slots are taken");
+            return std::nullopt;
+        }
+        // The login join sends 1 in the first byte and the interface's 0.
+        const uint8_t byZone = byLogin ? 1 : 0;
+        auto packet = owner_.getPacketParsers()
+            ? owner_.getPacketParsers()->buildJoinChannel(join->name, pass, join->zoneChannelId, byZone, 0)
+            : JoinChannelPacket::build(join->name, pass, join->zoneChannelId, byZone, 0);
+        owner_.getSocket()->send(packet);
+        LOG_INFO("Requesting to join channel: '", join->name, "' id=", join->zoneChannelId,
+                 " (asked for as '", channelName, "')");
+    }
+    return join;
 }
 
 void ChatHandler::requestChannelList(const std::string& channelName) {
@@ -1107,23 +1230,109 @@ void ChatHandler::requestChannelList(const std::string& channelName) {
 
 void ChatHandler::leaveChannel(const std::string& channelName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // A number names the joined channel with that number (0x004fe160); one
+    // that names none leaves nothing.
+    std::string name = channelName;
+    if (!name.empty() && std::all_of(name.begin(), name.end(),
+                                     [](unsigned char c) { return std::isdigit(c) != 0; })) {
+        const auto* s = channelSlots_.joinedByNumber(std::atoi(name.c_str()));
+        if (!s) return;
+        name = s->name;
+    }
+    // A shortcut is its zone channel, by id - the name it has now being
+    // whichever zone the server last put the player in.
+    const auto join = chat_channels::resolveJoin(channelRows(), name, currentChannelPlace());
+    if (!join) return;
+    chat_channels::Slot* slot = join->zoneChannelId != 0 ? channelSlots_.byZoneId(join->zoneChannelId)
+                                                         : channelSlots_.byName(join->name);
+    // Only a joined channel is left (0x005093f0): a slot still waiting for
+    // the server has nothing to leave yet.
+    if (!slot || slot->pending) return;
     auto packet = owner_.getPacketParsers()
-        ? owner_.getPacketParsers()->buildLeaveChannel(channelName)
-        : LeaveChannelPacket::build(channelName);
+        ? owner_.getPacketParsers()->buildLeaveChannel(slot->name, slot->zoneChannelId)
+        : LeaveChannelPacket::build(slot->name, slot->zoneChannelId);
     owner_.getSocket()->send(packet);
-    LOG_INFO("Requesting to leave channel: ", channelName);
+    slot->leaving = true;
+    // Not joined by itself at the next login either.
+    zoneChannelMask_ &= ~chat_channels::maskBit(slot->zoneChannelId);
+    LOG_INFO("Requesting to leave channel: '", slot->name, "' id=", slot->zoneChannelId);
 }
 
 std::string ChatHandler::getChannelByIndex(int index) const {
-    if (index < 1 || index > static_cast<int>(joinedChannels_.size())) return "";
-    return joinedChannels_[index - 1];
+    const auto* s = channelSlots_.joinedByNumber(index);
+    return s ? s->name : std::string();
 }
 
 int ChatHandler::getChannelIndex(const std::string& channelName) const {
-    for (int i = 0; i < static_cast<int>(joinedChannels_.size()); ++i) {
-        if (joinedChannels_[i] == channelName) return i + 1;
+    // Any slot of that name, as 0x00509dd0 looks the channel of a line up.
+    const auto* s = channelSlots_.byName(channelName);
+    return s ? s->number : 0;
+}
+
+void ChatHandler::fireChannelNotice(ChatType type, const std::string& word, const std::string& channelName,
+                                    const std::string& player, const std::string& target,
+                                    uint64_t senderGuid) {
+    const chat_channels::Slot* slot = channelSlots_.byName(channelName);
+    const std::string numbered = chat_channels::numberedName(slot, channelName);
+    const int number = slot ? slot->number : 0;
+    const uint32_t instance = slot ? slot->instanceId : 0;
+    const bool user = type == ChatType::CHANNEL_NOTICE_USER;
+
+    // The words are the interface's CHAT_<word>_NOTICE, which is what puts
+    // "Channel beigetreten: [1. Allgemein - Dalaran]" on a German client. The
+    // line kept here for the chat log and history is that text; what the
+    // interface is told is the word, and it prints the line itself.
+    std::string format;
+    bool interfaceStrings = false;
+    if (auto* addons = core::Application::getInstance().getAddonManager()) {
+        if (auto* lua = addons->getLuaEngine()) {
+            format = lua->globalText(("CHAT_" + word + "_NOTICE").c_str());
+            interfaceStrings = !lua->globalText("CHAT_YOU_JOINED_NOTICE").empty();
+        }
     }
-    return 0;
+    if (format.empty() && !interfaceStrings) {
+        // No interface strings at all: enUS's, for want of them.
+        if (word == "YOU_JOINED") format = "Joined Channel: |Hchannel:%d|h[%s]|h";
+        else if (word == "YOU_CHANGED") format = "Changed Channel: |Hchannel:%d|h[%s]|h";
+        else if (word == "YOU_LEFT" || word == "SUSPENDED") format = "Left Channel: |Hchannel:%d|h[%s]|h";
+        else format = "|Hchannel:%d|h[%s]|h " + word;
+    }
+    MessageChatData msg;
+    msg.type = type;
+    msg.language = ChatLanguage::UNIVERSAL;
+    msg.channelName = channelName;
+    msg.senderName = player;
+    msg.receiverName = target;
+    msg.senderGuid = senderGuid;
+    msg.message = format.empty() ? std::string()
+                                 : chat_channels::noticeLine(format, user, word, number, numbered,
+                                                             player, target, instance);
+    if (!msg.message.empty()) {
+        chatHistory_.push_back(msg);
+        chatHistory_.back().uid = ++chatUidCounter_;
+        if (chatHistory_.size() > maxChatHistory_) chatHistory_.pop_front();
+        logChatMessage(msg, "channel");
+    }
+    LOG_INFO("Channel notice ", word, " for '", channelName, "' (", numbered, ")");
+
+    if (!owner_.addonEventCallbackRef()) return;
+    char guidBuf[32] = "";
+    if (senderGuid != 0)
+        snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)senderGuid);
+    const uint32_t lineId = nextChatLineId_++;
+    // 0x004fdbc0's arguments: the word, the player, no language, the channel
+    // numbered, the second player, no flag, then the slot's zone channel id,
+    // number, name and instance - all zero and empty for a channel with no
+    // slot, which no chat frame matches and so does not print.
+    owner_.addonEventCallbackRef()(chatEventNameFor(type, player), {
+        word, player, "", numbered, target, "",
+        std::to_string(slot ? slot->zoneChannelId : 0u),
+        std::to_string(number),
+        slot ? slot->name : std::string(),
+        std::to_string(instance),
+        std::to_string(lineId),
+        guidBuf
+    });
 }
 
 void ChatHandler::handleChannelNotify(network::Packet& packet) {
@@ -1132,156 +1341,159 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
         LOG_WARNING("Failed to parse SMSG_CHANNEL_NOTIFY");
         return;
     }
+    namespace cc = chat_channels;
+    const uint8_t type = static_cast<uint8_t>(data.notifyType);
+    const auto nameOf = [&](uint64_t guid) {
+        if (guid == 0) return std::string();
+        std::string n = knownPlayerName(guid);
+        if (n.empty()) owner_.queryPlayerName(guid);
+        return n;
+    };
 
+    // 0x0050e120: every notice is a word handed to the interface, which
+    // finds CHAT_<word>_NOTICE in its own strings. This client used to write
+    // its own English sentence for each instead.
     switch (data.notifyType) {
-        case ChannelNotifyType::YOU_JOINED: {
-            if (std::find(joinedChannels_.begin(), joinedChannels_.end(), data.channelName) == joinedChannels_.end()) {
-                joinedChannels_.push_back(data.channelName);
-            }
-            MessageChatData msg;
-            msg.type = ChatType::SYSTEM;
-            msg.message = "Joined channel: " + data.channelName;
-            addLocalChatMessage(msg);
-            LOG_INFO("Joined channel: ", data.channelName);
-            break;
+        case ChannelNotifyType::PLAYER_JOINED:
+        case ChannelNotifyType::PLAYER_LEFT: {
+            // CHAT_MSG_CHANNEL_JOIN and _LEAVE, for a channel that is joined
+            // (0x004fdee0) and with the player's name. The client holds such
+            // a line until the name is known; here one without a name is
+            // dropped and the name asked for.
+            const auto* slot = channelSlots_.byName(data.channelName);
+            if (!slot || slot->pending) return;
+            const std::string who = nameOf(data.senderGuid);
+            if (who.empty() || !owner_.addonEventCallbackRef()) return;
+            const ChatType t = data.notifyType == ChannelNotifyType::PLAYER_JOINED
+                ? ChatType::CHANNEL_JOIN : ChatType::CHANNEL_LEAVE;
+            char guidBuf[32];
+            snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)data.senderGuid);
+            owner_.addonEventCallbackRef()(chatEventNameFor(t, who), {
+                "", who, "", cc::numberedName(slot, data.channelName), "", "",
+                std::to_string(slot->zoneChannelId), std::to_string(slot->number), slot->name,
+                std::to_string(slot->instanceId), std::to_string(nextChatLineId_++), guidBuf});
+            return;
         }
-        case ChannelNotifyType::YOU_LEFT: {
-            ownedChannels_.erase(data.channelName);
-            joinedChannels_.erase(
-                std::remove(joinedChannels_.begin(), joinedChannels_.end(), data.channelName),
-                joinedChannels_.end());
-            MessageChatData msg;
-            msg.type = ChatType::SYSTEM;
-            msg.message = "Left channel: " + data.channelName;
-            addLocalChatMessage(msg);
-            LOG_INFO("Left channel: ", data.channelName);
-            break;
-        }
-        case ChannelNotifyType::PLAYER_ALREADY_MEMBER: {
-            // Server confirms we're in this channel but our local list doesn't have it yet -
-            // can happen after reconnect or if the join notification was missed.
-            if (std::find(joinedChannels_.begin(), joinedChannels_.end(), data.channelName) == joinedChannels_.end()) {
-                joinedChannels_.push_back(data.channelName);
-                LOG_INFO("Already in channel: ", data.channelName);
-            }
-            break;
-        }
-        case ChannelNotifyType::NOT_IN_AREA:
-            addSystemChatMessage("You must be in the area to join '" + data.channelName + "'.");
-            LOG_DEBUG("Cannot join channel ", data.channelName, " (not in area)");
-            break;
-        case ChannelNotifyType::WRONG_PASSWORD:
-            addSystemChatMessage("Wrong password for channel '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::NOT_MEMBER:
-            addSystemChatMessage("You are not in channel '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::NOT_MODERATOR:
-            addSystemChatMessage("You are not a moderator of '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::MUTED:
-            addSystemChatMessage("You are muted in channel '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::BANNED:
-            addSystemChatMessage("You are banned from channel '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::THROTTLED:
-            addSystemChatMessage("Channel '" + data.channelName + "' is throttled. Please wait.");
-            break;
-        case ChannelNotifyType::NOT_IN_LFG:
-            addSystemChatMessage("You must be in a LFG queue to join '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::PLAYER_KICKED:
-            addSystemChatMessage("A player was kicked from '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::PASSWORD_CHANGED:
-            addSystemChatMessage("Password for '" + data.channelName + "' changed.");
-            break;
-        case ChannelNotifyType::OWNER_CHANGED:
-            // The guid beside the name is the new owner's -
-            // Channel::MakeOwnerChanged writes _ownerGUID into it. Kept so the
-            // unit menu can offer the moderator entries, which FrameXML hides
-            // behind IsDisplayChannelOwner: the verbs behind them were built
-            // and could not be reached.
-            if (data.senderGuid != 0 && data.senderGuid == owner_.getPlayerGuid()) {
-                ownedChannels_.insert(data.channelName);
-            } else {
-                ownedChannels_.erase(data.channelName);
-            }
-            addSystemChatMessage("Owner of '" + data.channelName + "' changed.");
-            break;
-        case ChannelNotifyType::NOT_OWNER:
-            addSystemChatMessage("You are not the owner of '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::INVALID_NAME:
-            addSystemChatMessage("Invalid channel name '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::PLAYER_NOT_FOUND:
-            addSystemChatMessage("Player not found.");
-            break;
-        case ChannelNotifyType::ANNOUNCEMENTS_ON:
-            addSystemChatMessage("Channel '" + data.channelName + "': announcements enabled.");
-            break;
-        case ChannelNotifyType::ANNOUNCEMENTS_OFF:
-            addSystemChatMessage("Channel '" + data.channelName + "': announcements disabled.");
-            break;
-        case ChannelNotifyType::MODERATION_ON:
-            addSystemChatMessage("Channel '" + data.channelName + "' is now moderated.");
-            break;
-        case ChannelNotifyType::MODERATION_OFF:
-            addSystemChatMessage("Channel '" + data.channelName + "' is no longer moderated.");
-            break;
-        case ChannelNotifyType::PLAYER_BANNED:
-            addSystemChatMessage("A player was banned from '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::PLAYER_UNBANNED:
-            addSystemChatMessage("A player was unbanned from '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::PLAYER_NOT_BANNED:
-            addSystemChatMessage("That player is not banned from '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::INVITE:
-            addSystemChatMessage("You have been invited to join channel '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::INVITE_WRONG_FACTION:
-        case ChannelNotifyType::WRONG_FACTION:
-            addSystemChatMessage("Wrong faction for channel '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::NOT_MODERATED:
-            addSystemChatMessage("Channel '" + data.channelName + "' is not moderated.");
-            break;
-        case ChannelNotifyType::PLAYER_INVITED:
-            addSystemChatMessage("Player invited to channel '" + data.channelName + "'.");
-            break;
-        case ChannelNotifyType::PLAYER_INVITE_BANNED:
-            addSystemChatMessage("That player is banned from '" + data.channelName + "'.");
-            break;
+        case ChannelNotifyType::MODE_CHANGE:
+            // A member's flags, which 0x0050cfc0 applies to the roster; no line.
+            LOG_DEBUG("Channel mode change in ", data.channelName);
+            return;
         default:
-            LOG_DEBUG("Channel notify type ", static_cast<int>(data.notifyType),
-                     " for channel ", data.channelName);
             break;
+    }
+
+    cc::Notice notice;
+    uint32_t slotId = 0;  // the id a freed slot is found by: YOU_JOINED's and YOU_LEFT's only
+    if (data.notifyType == ChannelNotifyType::YOU_JOINED) {
+        // Joined while its slot was already joined is the server moving the
+        // player into another zone's channel of the same row: YOU_CHANGED.
+        const cc::Slot* before = channelSlots_.find(data.zoneChannelId, data.channelName);
+        notice = cc::noticeFor(type, before && !before->pending);
+        if (channelSlots_.joined(data.zoneChannelId, data.channelName, data.instanceId,
+                                 data.channelFlags)) {
+            zoneChannelMask_ |= cc::maskBit(data.zoneChannelId);
+        }
+        slotId = data.zoneChannelId;
+    } else if (data.notifyType == ChannelNotifyType::YOU_LEFT) {
+        // A constant channel the server takes away with the zone - Trade on
+        // leaving a city - is SUSPENDED and keeps its number; one the player
+        // left is gone.
+        const cc::Slot* before = channelSlots_.find(data.zoneChannelId, data.channelName);
+        notice = cc::noticeFor(type, false, before != nullptr, before && before->leaving, data.constant);
+        channelSlots_.left(data.zoneChannelId, data.channelName);
+        slotId = data.zoneChannelId;
+        ownedChannels_.erase(data.channelName);
+    } else {
+        notice = cc::noticeFor(type);
+    }
+    if (data.notifyType == ChannelNotifyType::OWNER_CHANGED) {
+        // The guid is the new owner's: AzerothCore's Channel::MakeOwnerChanged
+        // writes _ownerGUID into it. Kept so IsDisplayChannelOwner can answer.
+        if (data.senderGuid != 0 && data.senderGuid == owner_.getPlayerGuid())
+            ownedChannels_.insert(data.channelName);
+        else
+            ownedChannels_.erase(data.channelName);
+    }
+    refreshJoinedChannels();
+    if (!notice.word) {
+        LOG_DEBUG("Channel notify type ", static_cast<int>(type), " for channel ", data.channelName);
+        return;
+    }
+    const std::string player = !data.playerName.empty() ? data.playerName : nameOf(data.senderGuid);
+    fireChannelNotice(notice.user ? ChatType::CHANNEL_NOTICE_USER : ChatType::CHANNEL_NOTICE,
+                      notice.word, data.channelName, player, nameOf(data.targetGuid), data.senderGuid);
+    if (notice.freesSlot) {
+        channelSlots_.clear(slotId, data.channelName);
+        ownedChannels_.erase(data.channelName);
+        refreshJoinedChannels();
     }
 }
 
 void ChatHandler::autoJoinDefaultChannels() {
-    LOG_INFO("autoJoinDefaultChannels: general=", chatAutoJoin.general,
-             " trade=", chatAutoJoin.trade, " localDefense=", chatAutoJoin.localDefense,
-             " lfg=", chatAutoJoin.lfg, " local=", chatAutoJoin.local);
-    if (chatAutoJoin.general) joinChannel("General");
-    if (chatAutoJoin.trade) joinChannel("Trade");
-    if (chatAutoJoin.localDefense) joinChannel("LocalDefense");
-    if (chatAutoJoin.lfg) joinChannel("LookingForGroup");
-    if (chatAutoJoin.local) joinChannel("Local");
+    // A new world: no channels yet, and the zone channels to be asked for
+    // once the player has a zone (0x0050edd0 clears the state at login and
+    // 0x00508320 arms the join).
+    channelSlots_.reset();
+    joinedChannels_.clear();
+    ownedChannels_.clear();
+    zoneChannelMask_ = 0;
+    loginChannelJoinArmed_ = true;
+    loginChannelJoinDone_ = false;
+}
 
-    // Guild Recruitment. Unlike the five above it has no switch of this
-    // client's own - the interface's checkbox is its only control - so the
-    // CVar is read here rather than mirrored into a client setting first.
-    //
-    // At world entry, like the rest of this function: the other five are
-    // applied here too, so a channel joined by ticking a box arrives on the
-    // next login, and this behaves the same way rather than differently.
-    if (addons::storedCVarValue("guildRecruitmentChannel", "0") != "0") {
-        joinChannel("GuildRecruitment");
+void ChatHandler::updateLoginChannelJoin() {
+    if (!loginChannelJoinArmed_ || loginChannelJoinDone_) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // Not on a flight path: 0x005204c0 and the flag update both skip the
+    // join while the taxi flag is up, and the flag dropping is what runs it.
+    if (owner_.isOnTaxiFlight()) return;
+    // Not before the zone has a name: every zone channel is named after it,
+    // and 0x00508090 waits for the text.
+    const chat_channels::Place place = currentChannelPlace();
+    if (place.zone.empty()) return;
+    const auto& rows = channelRows();
+    if (rows.empty()) {
+        if (channelRowsLoaded_) loginChannelJoinDone_ = true;
+        return;
+    }
+    loginChannelJoinDone_ = true;
+
+    // The client's mask comes from its chat cache, and a character without
+    // one gets every row flagged initial. This client keeps no chat cache;
+    // its settings are the switches it has always had, each taking its row
+    // out of the initial set.
+    uint32_t mask = chat_channels::initialMask(rows);
+    const auto drop = [&](bool on, const char* legacy) {
+        if (on) return;
+        if (const auto* r = chat_channels::rowForLegacyName(rows, legacy))
+            mask &= ~chat_channels::maskBit(r->id);
+    };
+    drop(chatAutoJoin.general, "General");
+    drop(chatAutoJoin.trade, "Trade");
+    drop(chatAutoJoin.localDefense, "LocalDefense");
+    drop(chatAutoJoin.lfg, "LookingForGroup");
+    zoneChannelMask_ = mask;
+    LOG_INFO("Joining zone channels for '", place.zone, "'", place.zoneIsCity ? " (a city)" : "",
+             ": mask=0x", std::hex, mask, std::dec);
+    // In the DBC's order, by shortcut, as 0x00508090 does - which is what
+    // numbers them: General 1, Trade 2, LocalDefense 3, LookingForGroup 4.
+    // A row a zone has no channel for (Trade outside a city) is still asked
+    // for and keeps its number; the server answers when the player reaches
+    // a zone that has it.
+    for (const auto& r : rows) {
+        if (mask & chat_channels::maskBit(r.id)) joinChannel(r.shortcut, "", true);
+    }
+
+    // Guild Recruitment (0x00507d30, run at the end of the login join): with
+    // the interface's option on, joined by a player in no guild. It has no
+    // switch of this client's own; the CVar is the option.
+    if (addons::storedCVarValue("guildRecruitmentChannel", "0") != "0" && !owner_.isInGuild()) {
+        for (const auto& r : rows) {
+            if (r.flags & chat_channels::kFlagGuildRecruitment) {
+                joinChannel(r.shortcut);
+                break;
+            }
+        }
     }
 }
 
@@ -1331,12 +1543,19 @@ void ChatHandler::fireChatEvent(const MessageChatData& msg) {
     // has, and the line is dropped before it reaches the window. This is the
     // one thing the callback that used to announce these as well did better,
     // and it is here now so nothing was lost when that went.
-    const int channelIndex = getChannelIndex(msg.channelName);
+    //
+    // The same slot-shaped arguments the server's lines carry (0x00509dd0).
+    const chat_channels::Slot* chanSlot =
+        msg.channelName.empty() ? nullptr : channelSlots_.byName(msg.channelName);
     owner_.addonEventCallbackRef()(eventName, {
         msg.message, shownName,
         owner_.getLanguageName(static_cast<uint32_t>(msg.language)),
-        msg.channelName, msg.receiverName, "", "0", std::to_string(channelIndex),
-        msg.channelName, "0", "0", guidBuf
+        msg.channelName.empty() ? std::string() : chat_channels::numberedName(chanSlot, msg.channelName),
+        msg.receiverName, "",
+        std::to_string(chanSlot ? chanSlot->zoneChannelId : 0u),
+        std::to_string(chanSlot ? chanSlot->number : 0),
+        chanSlot ? chanSlot->name : std::string(),
+        std::to_string(chanSlot ? chanSlot->instanceId : 0u), "0", guidBuf
     });
 }
 

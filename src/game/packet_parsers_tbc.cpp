@@ -1371,20 +1371,20 @@ uint8_t TbcPacketParsers::readQuestGiverStatus(network::Packet& packet) {
 // metadata and joins channels named e.g. "l" instead of "General".
 // ============================================================================
 
-network::Packet TbcPacketParsers::buildJoinChannel(const std::string& channelName, const std::string& password) {
+network::Packet TbcPacketParsers::buildJoinChannel(const std::string& channelName, const std::string& password, uint32_t channelId, uint8_t byZone, uint8_t unk) {
     network::Packet packet(wireOpcode(Opcode::CMSG_JOIN_CHANNEL));
-    packet.writeUInt32(0);  // channelId (unused)
-    packet.writeUInt8(0);   // hasVoice
-    packet.writeUInt8(0);   // joinedByZone
+    packet.writeUInt32(channelId);
+    packet.writeUInt8(byZone);
+    packet.writeUInt8(unk);
     packet.writeString(channelName);
     packet.writeString(password);
     LOG_DEBUG("[TBC] Built CMSG_JOIN_CHANNEL: channel=", channelName);
     return packet;
 }
 
-network::Packet TbcPacketParsers::buildLeaveChannel(const std::string& channelName) {
+network::Packet TbcPacketParsers::buildLeaveChannel(const std::string& channelName, uint32_t channelId) {
     network::Packet packet(wireOpcode(Opcode::CMSG_LEAVE_CHANNEL));
-    packet.writeUInt32(0);  // channelId (unused)
+    packet.writeUInt32(channelId);
     packet.writeString(channelName);
     LOG_DEBUG("[TBC] Built CMSG_LEAVE_CHANNEL: channel=", channelName);
     return packet;

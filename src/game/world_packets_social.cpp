@@ -337,20 +337,24 @@ bool TextEmoteParser::parse(network::Packet& packet, TextEmoteData& data, bool l
 // Channel System
 // ============================================================
 
-network::Packet JoinChannelPacket::build(const std::string& channelName, const std::string& password) {
+network::Packet JoinChannelPacket::build(const std::string& channelName, const std::string& password,
+                                         uint32_t channelId, uint8_t byZone, uint8_t unk) {
     network::Packet packet(wireOpcode(Opcode::CMSG_JOIN_CHANNEL));
-    packet.writeUInt32(0);  // channelId (unused)
-    packet.writeUInt8(0);   // hasVoice
-    packet.writeUInt8(0);   // joinedByZone
+    // The id is what makes the server treat the name as its zone channel; a
+    // zero joins a channel of the player's own by that name, which is how
+    // "General" sent as text made a private channel called General.
+    packet.writeUInt32(channelId);
+    packet.writeUInt8(byZone);
+    packet.writeUInt8(unk);
     packet.writeString(channelName);
     packet.writeString(password);
     LOG_DEBUG("Built CMSG_JOIN_CHANNEL: channel=", channelName);
     return packet;
 }
 
-network::Packet LeaveChannelPacket::build(const std::string& channelName) {
+network::Packet LeaveChannelPacket::build(const std::string& channelName, uint32_t channelId) {
     network::Packet packet(wireOpcode(Opcode::CMSG_LEAVE_CHANNEL));
-    packet.writeUInt32(0);  // channelId (unused)
+    packet.writeUInt32(channelId);
     packet.writeString(channelName);
     LOG_DEBUG("Built CMSG_LEAVE_CHANNEL: channel=", channelName);
     return packet;
@@ -364,10 +368,43 @@ bool ChannelNotifyParser::parse(network::Packet& packet, ChannelNotifyData& data
     }
     data.notifyType = static_cast<ChannelNotifyType>(packet.readUInt8());
     data.channelName = packet.readString();
-    // Some notification types have additional fields (guid, etc.)
-    bytesLeft = packet.getRemainingSize();
-    if (bytesLeft >= 8) {
-        data.senderGuid = packet.readUInt64();
+    // What follows the name depends on the type, as 0x0050e120 reads it. It
+    // used to be "a guid if eight bytes are left", which took YOU_JOINED's
+    // flags, channel id and instance for a guid and lost all three - and the
+    // channel id is what says which zone channel was joined.
+    const auto has = [&](size_t n) { return packet.hasRemaining(n); };
+    const auto guid = [&](uint64_t& out) { if (has(8)) out = packet.readUInt64(); };
+    switch (static_cast<uint8_t>(data.notifyType)) {
+        case 0x02:  // YOU_JOINED: flags, id, instance
+            if (has(1)) data.channelFlags = packet.readUInt8();
+            if (has(4)) data.zoneChannelId = packet.readUInt32();
+            if (has(4)) data.instanceId = packet.readUInt32();
+            break;
+        case 0x03:  // YOU_LEFT: id, constant
+            if (has(4)) data.zoneChannelId = packet.readUInt32();
+            if (has(1)) data.constant = packet.readUInt8() != 0;
+            break;
+        case 0x00: case 0x01:  // PLAYER_JOINED, PLAYER_LEFT
+        case 0x07: case 0x08:  // PASSWORD_CHANGED, OWNER_CHANGED
+        case 0x0D: case 0x0E: case 0x0F: case 0x10:  // announcements, moderation
+        case 0x17: case 0x18:  // PLAYER_ALREADY_MEMBER, INVITE
+        case 0x22: case 0x23: case 0x24:  // voice
+            guid(data.senderGuid);
+            break;
+        case 0x0C:  // MODE_CHANGE: who, old flags, new flags
+            guid(data.senderGuid);
+            if (has(1)) data.oldMemberFlags = packet.readUInt8();
+            if (has(1)) data.newMemberFlags = packet.readUInt8();
+            break;
+        case 0x12: case 0x14: case 0x15:  // PLAYER_KICKED, PLAYER_BANNED, PLAYER_UNBANNED
+            guid(data.senderGuid);
+            guid(data.targetGuid);
+            break;
+        case 0x09: case 0x0B: case 0x16: case 0x1D: case 0x1E:  // named players
+            if (has(1)) data.playerName = packet.readString();
+            break;
+        default:
+            break;
     }
     return true;
 }

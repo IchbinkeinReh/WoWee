@@ -331,6 +331,8 @@ void GameHandler::updateNetworking() {
     // socket below would be a tick later than it needs to be; before it means
     // a line waits one extra tick at most.
     if (chatHandler_) chatHandler_->expireChatAwaitingName();
+    // The zone channels, once the player has a zone to name them after.
+    if (chatHandler_) chatHandler_->updateLoginChannelJoin();
 
     // Update socket (processes incoming data and triggers callbacks). Not while
     // our own queue is too full to take what it would hand over; see
@@ -3066,6 +3068,10 @@ void GameHandler::loadAreaNameCache() const {
                 areaPvpCache_[areaId] = AreaPvpInfo{.flags = areaDbc->getUInt32(i, 4),
                                                     .team = areaDbc->getUInt32(i, 28)};
             }
+            // The capitals' row, which names a city's Trade channel. The
+            // client walks the table from its end and keeps the first row
+            // with 0x200 (0x0050edd0); the last in file order is the same row.
+            if (areaDbc->getUInt32(i, 4) & 0x200) capitalsAreaId_ = areaId;
         }
     }
 
