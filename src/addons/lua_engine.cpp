@@ -1980,7 +1980,30 @@ static bool fillQuestTooltip(wowee::ui::Widget* w, game::GameHandler* gh,
     return true;
 }
 
-static bool fillSpellTooltip(wowee::ui::Widget* w, game::GameHandler* gh,
+/// A GlobalStrings.lua text by name - the client's own wording, in its
+/// language - or `fallback` where the interface has not defined it.
+static std::string globalOr(lua_State* L, const char* name, const char* fallback) {
+    std::string out = fallback;
+    if (!L) return out;
+    lua_getglobal(L, name);
+    if (lua_type(L, -1) == LUA_TSTRING) out = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    return out;
+}
+
+/// `format` with its one `token` (%s or %.3g) filled with `value`, printed as
+/// %.3g prints it. Spliced rather than handed to printf: the format is data.
+static std::string withNumber(const std::string& format, const char* token, float value) {
+    char number[32];
+    std::snprintf(number, sizeof(number), "%.3g", value);
+    std::string out = format;
+    if (const size_t at = out.find(token); at != std::string::npos) {
+        out.replace(at, std::strlen(token), number);
+    }
+    return out;
+}
+
+static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
                              uint32_t spellId) {
     if (!w || !gh || spellId == 0) return false;
     const std::string& name = gh->getSpellName(spellId);
@@ -1997,7 +2020,13 @@ static bool fillSpellTooltip(wowee::ui::Widget* w, game::GameHandler* gh,
 
     w->isTooltip = true;
     w->tooltipLines.clear();
-    line(name, "", 1.0f, 0.82f, 0.0f);   // gold, as WoW titles a tooltip
+    // The name in white and its rank to the right in grey, as the spellbook
+    // shows them.
+    line(name, gh->getSpellRank(spellId), 1.0f, 1.0f, 1.0f);
+    {
+        auto& title = w->tooltipLines.back();
+        title.rc[0] = title.rc[1] = title.rc[2] = 0.5f;
+    }
 
     const auto info = gh->getSpellData(spellId);
     std::string cost, range;
@@ -2007,15 +2036,55 @@ static bool fillSpellTooltip(wowee::ui::Widget* w, game::GameHandler* gh,
         cost = std::to_string(info.manaCost) + (*unit ? std::string(" ") + unit : "");
     }
     if (info.maxRange > 0.0f) {
-        range = std::to_string(static_cast<int>(info.maxRange)) + " yd range";
+        range = withNumber(globalOr(L, "SPELL_RANGE", "%s yd range"), "%s", info.maxRange);
     }
     if (!cost.empty() || !range.empty()) line(cost, range, 1.0f, 1.0f, 1.0f);
 
     // Instant is a word rather than a zero, which is what WoW prints.
     const std::string cast = info.castTimeMs > 0
-        ? std::to_string(info.castTimeMs / 1000.0f).substr(0, 4) + " sec cast"
-        : std::string("Instant");
+        ? withNumber(globalOr(L, "SPELL_CAST_TIME_SEC", "%.3g sec cast"), "%.3g",
+                     info.castTimeMs / 1000.0f)
+        : globalOr(L, "SPELL_CAST_TIME_INSTANT", "Instant");
     line(cast, "", 1.0f, 1.0f, 1.0f);
+
+    // What the spell consumes, as 0x00624ce0 writes it: SPELL_REAGENTS, then
+    // each item by name with its count past one, a reagent the bags are
+    // short of in red. An item the cache has not answered yet is left out
+    // and asked for, as the client does; the next refresh names it.
+    gh->loadSpellNameCache();
+    if (auto se = gh->spellNameCacheRef().find(spellId); se != gh->spellNameCacheRef().end()) {
+        std::string reagents;
+        for (const auto& r : se->second.reagents) {
+            if (r.itemId == 0 || r.count == 0) continue;
+            const auto* item = gh->getItemInfo(r.itemId);
+            if (!item || !item->valid || item->name.empty()) {
+                gh->ensureItemInfo(r.itemId);
+                continue;
+            }
+            reagents += reagents.empty() ? globalOr(L, "SPELL_REAGENTS", "Reagents: ")
+                                         : std::string(", ");
+            std::string named = item->name;
+            if (r.count >= 2) named += " (" + std::to_string(r.count) + ")";
+            if (gh->countItemInBags(r.itemId) < r.count) named = "|cffff2020" + named + "|r";
+            reagents += named;
+        }
+        if (!reagents.empty()) {
+            line(reagents, "", 1.0f, 1.0f, 1.0f);
+            w->tooltipLines.back().wrap = true;
+        }
+    }
+
+    // What is left of its cooldown, after the reagents (ITEM_COOLDOWN_TIME).
+    if (const float left = gh->getSpellCooldown(spellId); left > 0.1f) {
+        const bool minutes = left >= 60.0f;
+        std::string text = globalOr(L, minutes ? "ITEM_COOLDOWN_TIME_MIN" : "ITEM_COOLDOWN_TIME_SEC",
+                                    minutes ? "Cooldown remaining: %d min" : "Cooldown remaining: %d sec");
+        const int amount = static_cast<int>(std::ceil(minutes ? left / 60.0f : left));
+        if (const size_t at = text.find("%d"); at != std::string::npos) {
+            text.replace(at, 2, std::to_string(amount));
+        }
+        line(text, "", 1.0f, 1.0f, 1.0f);
+    }
 
     const std::string body =
         gh->formatSpellDescription(spellId, gh->getSpellDescription(spellId));
@@ -2023,7 +2092,8 @@ static bool fillSpellTooltip(wowee::ui::Widget* w, game::GameHandler* gh,
         // Wrapped, as every line of prose in a tooltip is: a line that does
         // not wrap sets the tooltip's width, and a description is a sentence
         // or three - the tooltip grew as wide as the screen and ran off it.
-        line(body, "", 1.0f, 1.0f, 1.0f);
+        // Gold, NORMAL_FONT_COLOR, as the client writes a description.
+        line(body, "", 1.0f, 0.82f, 0.0f);
         w->tooltipLines.back().wrap = true;
     }
 
@@ -2051,7 +2121,7 @@ int lua_Tooltip_SetAction(lua_State* L) {
         return 1;
     }
     if (action.type == game::ActionBarSlot::SPELL) {
-        lua_pushboolean(L, fillSpellTooltip(w, gh, action.id) ? 1 : 0);
+        lua_pushboolean(L, fillSpellTooltip(L, w, gh, action.id) ? 1 : 0);
         return 1;
     }
     // A macro is the third kind a slot can hold and it has no tooltip of its
@@ -2142,7 +2212,7 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
 
     bool filled = false;
     if (kind == "spell" || kind == "enchant" || kind == "talent")
-        filled = fillSpellTooltip(w, gh, id);
+        filled = fillSpellTooltip(L, w, gh, id);
     else if (kind == "item") {
         filled = fillItemTooltipById(L, gh, id);
         if (filled) appendEnchantLineById(w, gh, enchantId);
@@ -2173,7 +2243,7 @@ int lua_Tooltip_SetSpellByID(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-    lua_pushboolean(L, fillSpellTooltip(w, gh, id) ? 1 : 0);
+    lua_pushboolean(L, fillSpellTooltip(L, w, gh, id) ? 1 : 0);
     return 1;
 }
 
@@ -2198,7 +2268,7 @@ int lua_Tooltip_SetGlyph(lua_State* L) {
     if (glyphId == 0) { lua_pushboolean(L, 0); return 1; }
     gh->ensureGlyphPropertiesLoaded();
     const uint32_t spellId = gh->getGlyphSpellId(glyphId);
-    lua_pushboolean(L, spellId && fillSpellTooltip(w, gh, spellId) ? 1 : 0);
+    lua_pushboolean(L, spellId && fillSpellTooltip(L, w, gh, spellId) ? 1 : 0);
     return 1;
 }
 
@@ -2294,7 +2364,7 @@ int lua_Tooltip_SetQuestLogRewardSpell(lua_State* L) {
         if (const auto* q = wowee::addons::questAtLogRow(gh, gh->getSelectedQuestLogIndex()))
             spellId = q->rewardSpellId;
     }
-    lua_pushboolean(L, spellId && fillSpellTooltip(w, gh, spellId) ? 1 : 0);
+    lua_pushboolean(L, spellId && fillSpellTooltip(L, w, gh, spellId) ? 1 : 0);
     return 1;
 }
 
@@ -7170,6 +7240,10 @@ void LuaEngine::registerCoreAPI() {
     // impossible rather than something to keep noticing.
     applyFrameMethods();
 
+    // The spell tooltip's builder, for the Lua SetSpellByID that wraps it.
+    lua_pushcfunction(L_, lua_Tooltip_SetSpellByID);
+    lua_setglobal(L_, "__WoweeTooltipSetSpellByID");
+
     // CreateFrame function
     lua_pushcfunction(L_, lua_EditBox_SetText);
     lua_setglobal(L_, "__WoweeEditSetText");
@@ -8243,61 +8317,16 @@ void LuaEngine::registerCoreAPI() {
         "    local _, name = GetPossessInfo(slot)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
-        "function __WoweeFrameMT:SetSpellByID(spellId)\n"
-        "    self:ClearLines()\n"
-        "    if not spellId or spellId == 0 then return end\n"
-        // Nine values, in the client's order. This used to read the fourth as
-        // a cast time, which is where the cost is - so every spell tooltip
-        // printed its mana cost as a cast time in seconds.
-        "    local name, rank, icon, _cost, _isFunnel, _powerType, castTime, minRange, maxRange = GetSpellInfo(spellId)\n"
-        "    if name then\n"
-        "        self:SetText(name, 1, 1, 1)\n"
-        "        if rank and rank ~= '' then self:AddLine(rank, 0.5, 0.5, 0.5) end\n"
-        // The cost comes from GetSpellInfo, which is where 3.3.5 puts it.
-        //
-        // This called GetSpellPowerCost and read two scalars off it. That
-        // binding exists, but it answers the *retail* shape - a list of
-        // tables, {{type=, cost=, name=}} - so `cost` was a table and
-        // `cost > 0` raised "attempt to compare number with table" on every
-        // spell hovered in the book. Two places holding one fact and
-        // disagreeing about it; the guard `cost and` does not help, because a
-        // table is perfectly truthy.
-        //
-        // GetSpellPowerCost is a Cataclysm API and nothing in this interface
-        // calls it. GetSpellInfo's fourth and sixth values are the cost and
-        // its power type, and they were already being captured here and
-        // thrown away.
-        "        -- Mana cost\n"
-        "        local cost, costType = _cost, _powerType\n"
-        "        if cost and cost > 0 then\n"
-        "            local powerNames = {[0]='Mana',[1]='Rage',[2]='Focus',[3]='Energy',[6]='Runic Power'}\n"
-        "            self:AddLine(cost..' '..(powerNames[costType] or 'Mana'), 1, 1, 1)\n"
-        "        end\n"
-        "        -- Range\n"
-        "        if maxRange and maxRange > 0 then\n"
-        "            self:AddDoubleLine(string.format('%.0f yd range', maxRange), '', 1,1,1, 1,1,1)\n"
-        "        end\n"
-        "        -- Cast time\n"
-        "        if castTime and castTime > 0 then\n"
-        "            self:AddDoubleLine(string.format('%.1f sec cast', castTime / 1000), '', 1,1,1, 1,1,1)\n"
-        "        else\n"
-        "            self:AddDoubleLine('Instant', '', 1,1,1, 1,1,1)\n"
-        "        end\n"
-        "        -- Description\n"
-        "        local desc = GetSpellDescription(spellId)\n"
-        "        if desc and desc ~= '' then\n"
-        // Wrapped, as prose in a tooltip always is. Without the flag the
-        // description set the tooltip's width on its own and the tooltip ran
-        // off the edge of the screen.
-        "            self:AddLine(desc, 1, 0.82, 0, 1)\n"
-        "        end\n"
-        "        -- Cooldown\n"
-        "        local start, dur = GetSpellCooldown(spellId)\n"
-        "        if dur and dur > 0 then\n"
-        "            local rem = start + dur - GetTime()\n"
-        "            if rem > 0.1 then self:AddLine(string.format('%.0f sec cooldown', rem), 1, 0, 0) end\n"
-        "        end\n"
-        "        self.__spellId = spellId\n"
+        // Built by the C binding (fillSpellTooltip), in the client's words
+        // and with the reagents; a second builder here, in English and
+        // without them, had taken its place. Kept as a wrapper for the one
+        // thing it added: the id GetSpell answers with.
+        "do\n"
+        "    local fill = __WoweeTooltipSetSpellByID\n"
+        "    function __WoweeFrameMT:SetSpellByID(spellId)\n"
+        "        local ok = fill(self, spellId)\n"
+        "        self.__spellId = ok and spellId or nil\n"
+        "        return ok\n"
         "    end\n"
         "end\n"
         // Answers whether it filled anything, because the caller asks:
