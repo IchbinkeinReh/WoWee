@@ -1160,10 +1160,6 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
     }
 }
 
-void WaterRenderer::removeWMO(uint32_t wmoId) {
-    removeWMOs(std::vector<uint32_t>{wmoId});
-}
-
 void WaterRenderer::removeWMOs(const std::vector<uint32_t>& wmoIds) {
     // A tile's WMOs leave together; one sweep of the surfaces for all of them
     // rather than one sweep, with an erase per hit, for each.

@@ -123,7 +123,6 @@ public:
     /// names, which an interior liquid's vertices take (0x00793d20).
     void loadFromWMO(const pipeline::WMOLiquid& liquid, const glm::mat4& modelMatrix, uint32_t wmoId,
                      uint32_t momtDiffuseBGRA = 0xffffffffu);
-    void removeWMO(uint32_t wmoId);
     void removeWMOs(const std::vector<uint32_t>& wmoIds);
     void removeTile(int tileX, int tileY);
     void clear();

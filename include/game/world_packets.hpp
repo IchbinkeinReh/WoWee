@@ -943,8 +943,8 @@ struct ChannelNotifyData {
     /// YOU_LEFT: the channel's id and whether it is a constant one, which the
     /// server leaves for the player when the zone no longer has it.
     bool constant = false;
-    /// MODE_CHANGE: a member's flags before and after.
-    uint8_t oldMemberFlags = 0;
+    /// MODE_CHANGE: a member's flags after the change (the flags before it
+    /// are on the wire too, and nothing needs them).
     uint8_t newMemberFlags = 0;
 
     [[nodiscard]] bool isValid() const { return !channelName.empty(); }

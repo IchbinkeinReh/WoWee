@@ -393,7 +393,7 @@ bool ChannelNotifyParser::parse(network::Packet& packet, ChannelNotifyData& data
             break;
         case 0x0C:  // MODE_CHANGE: who, old flags, new flags
             guid(data.senderGuid);
-            if (has(1)) data.oldMemberFlags = packet.readUInt8();
+            if (has(1)) packet.readUInt8();  // the flags before
             if (has(1)) data.newMemberFlags = packet.readUInt8();
             break;
         case 0x12: case 0x14: case 0x15:  // PLAYER_KICKED, PLAYER_BANNED, PLAYER_UNBANNED
