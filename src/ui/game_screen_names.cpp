@@ -262,7 +262,10 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     static thread_local std::vector<ui::PlateBox> placed;
     placed.clear();
     static SightCache sight;
-    sight.beginFrame(48);
+    // Each answer is a ray through the city, about a tenth of a
+    // millisecond in Dalaran: sixteen a frame keep a name that walks behind
+    // a wall a few tenths of a second behind it, at under two milliseconds.
+    sight.beginFrame(16);
     const auto* wmo = appRenderer ? appRenderer->queryWMORenderer() : nullptr;
 
     // The name's anchor: the PlayerName attachment, else over the model
