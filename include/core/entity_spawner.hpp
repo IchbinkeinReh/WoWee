@@ -516,6 +516,10 @@ private:
     void releaseSeatedPassenger(uint64_t guid, SeatedPassenger& seated, bool landing);
     /// 0x007489c0: the passenger to a new state, at `nowMs`.
     void setSeatState(uint64_t guid, SeatedPassenger& p, game::vehicle::SeatState state, uint32_t nowMs);
+    /// The vehicle's animation for a seat taken (0x00756f80) and let go
+    /// (0x007577e0).
+    void startVehicleRideLoop(SeatedPassenger& p, const game::vehicle::SeatRecord& seat);
+    void stopVehicleRideLoop(uint64_t guid, SeatedPassenger& p);
     /// 0x0074a200: a new state's time and arc.
     void planSeatState(uint64_t guid, SeatedPassenger& p, uint32_t nowMs);
     /// The model a vehicle is drawn by: its mount's while it rides one.

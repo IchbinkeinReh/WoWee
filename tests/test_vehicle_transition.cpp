@@ -189,3 +189,11 @@ TEST_CASE("the roster keeps how each change of seat came about", "[vehicle]") {
     r.setTransport(1, 0, -1, 0.0f, true);
     CHECK_FALSE(r.takeChange(1));
 }
+
+TEST_CASE("a vehicle animation's bone column (0x00756f80)", "[vehicle]") {
+    CHECK(gv::vehicleAnimBone(0) == 0);
+    CHECK(gv::vehicleAnimBone(0x22) == 0x22);
+    CHECK(gv::vehicleAnimBone(0x23) == gv::kWholeModelBone);
+    CHECK(gv::vehicleAnimBone(-1) == gv::kWholeModelBone);
+    CHECK(gv::vehicleAnimBone(0x1a) == gv::kWholeModelBone);
+}

@@ -109,6 +109,12 @@ public:
     /// The animation an arm plays on its own; nothing when it follows the
     /// body.
     [[nodiscard]] std::optional<uint32_t> armAnimation(uint32_t instanceId, int arm) const;
+    /// A key bone and everything below it on an animation of its own,
+    /// looped (0x00735820 with a bone, 0x00832ab0). False where the model
+    /// lacks the bone or the animation.
+    bool playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId);
+    /// The key bone back to the body (0x00735a60). False where it had none.
+    bool stopKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId);
     /// Whether the model has the key bone.
     [[nodiscard]] bool hasKeyBone(uint32_t instanceId, int32_t keyBoneId) const;
     /// What the arms' animations reached since the last call: bit 0 the
@@ -471,6 +477,16 @@ private:
         float armEventTime[2] = {-1.0f, -1.0f};  // when each arm's event comes, -1 for none
         uint8_t armEvents = 0;                 // kArmEvent*/kArmEnd* bits not yet taken
         std::vector<int8_t> boneArm;  // Per bone: 0 left arm, 1 right arm, -1 neither; built by playArmAnimation
+        /// playKeyBoneAnimation: key bones on looped sequences of their own,
+        /// and per bone which of them it follows (-1 the body).
+        struct KeyBoneAnimation {
+            int32_t keyBoneId = -1;
+            uint32_t animationId = 0;
+            int sequence = -1;
+            float time = 0.0f;
+        };
+        std::vector<KeyBoneAnimation> keyBoneAnimations;
+        std::vector<int16_t> boneKeyBoneAnimation;
         float animationTime = 0.0f;
         bool animationFrozen = false;  ///< setInstanceAnimationFrozen: the sequence held
         float locomotionSpeed = 0.0f;  // yards a second the unit moves at; see setLocomotionSpeed

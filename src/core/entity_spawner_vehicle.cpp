@@ -26,6 +26,7 @@
 #include <chrono>
 #include <cmath>
 #include <unordered_set>
+#include <utility>
 
 namespace wowee::core {
 
@@ -256,10 +257,14 @@ void EntitySpawner::setSeatState(uint64_t guid, SeatedPassenger& p, SeatState st
             p.seatFacing = p.startFacing = p.drawnFacing;
         }
     }
+    // Out of its seat, the vehicle's animation for it stops (0x007489c0 ->
+    // 0x007577e0); into it, it starts (0x00756f80).
+    if (old == SeatState::Seated && state != SeatState::Seated) stopVehicleRideLoop(guid, p);
     p.state = state;
     p.startMs = nowMs;
     p.endMs = nowMs;
     p.planned = false;
+    if (state == SeatState::Seated && old != SeatState::Seated && seat) startVehicleRideLoop(p, *seat);
     if (!cr || p.instanceId == 0) return;
     // What it plays: the state's animation, the start once more but from 1
     // to 2 and out of 4 (0x007489c0 clears +0x10 0x6, 0x00747b20).
@@ -274,6 +279,43 @@ void EntitySpawner::setSeatState(uint64_t guid, SeatedPassenger& p, SeatState st
                         p.prevVehicleGuid == p.vehicleGuid));
     if (hide != p.hidden) cr->setInstanceVisible(p.instanceId, !hide);
     p.hidden = hide;
+}
+
+void EntitySpawner::startVehicleRideLoop(SeatedPassenger& p, const game::vehicle::SeatRecord& seat) {
+    auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    // Seat Flags 0x20000 and a VehicleRideAnimLoop below 0x1fa (0x007489c0).
+    if (!cr || (seat.flags & game::vehicle::kSeatFlagHasVehicleRideAnim) == 0 || seat.vehicleRideAnimLoop < 0 ||
+        seat.vehicleRideAnimLoop >= game::vehicle::kNoAnimation)
+        return;
+    const uint32_t vehicleInstance = vehicleInstanceFor(p.vehicleGuid);
+    if (vehicleInstance == 0) return;
+    // 0x00756f80: on the VehicleRideAnimLoopBone key bone - past 0x22 it is
+    // 0x1a, the whole model.
+    const int32_t bone = game::vehicle::vehicleAnimBone(seat.vehicleRideAnimLoopBone);
+    const auto anim = static_cast<uint32_t>(seat.vehicleRideAnimLoop);
+    if (bone == game::vehicle::kWholeModelBone) cr->playAnimation(vehicleInstance, anim, true);
+    else if (!cr->playKeyBoneAnimation(vehicleInstance, bone, anim)) return;
+    p.rideLoopVehicleInstance = vehicleInstance;
+    p.rideLoopBone = bone;
+}
+
+void EntitySpawner::stopVehicleRideLoop(uint64_t guid, SeatedPassenger& p) {
+    auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    const uint32_t vehicleInstance = std::exchange(p.rideLoopVehicleInstance, 0);
+    const int32_t bone = std::exchange(p.rideLoopBone, -1);
+    if (!cr || vehicleInstance == 0) return;
+    // 0x007577e0: not while another passenger still holds it on that bone.
+    for (const auto& [other, q] : seatedPassengers_) {
+        if (other != guid && q.rideLoopVehicleInstance == vehicleInstance && q.rideLoopBone == bone) return;
+    }
+    // The bone back to the body (0x00735a60); where that cannot be, the
+    // vehicle animates as itself again (0x00757280, 0x0073ac30).
+    if (bone != game::vehicle::kWholeModelBone && cr->stopKeyBoneAnimation(vehicleInstance, bone)) return;
+    uint32_t own = rendering::anim::STAND;
+    if (auto entity = gameHandler_ ? gameHandler_->getEntityManager().getEntity(p.vehicleGuid) : nullptr) {
+        if (entity->isActivelyMoving()) own = entity->movesAtWalkPace() ? rendering::anim::WALK : rendering::anim::RUN;
+    }
+    cr->playAnimation(vehicleInstance, own, true);
 }
 
 void EntitySpawner::planSeatState(uint64_t guid, SeatedPassenger& p, uint32_t nowMs) {
@@ -480,6 +522,7 @@ void EntitySpawner::updateVehiclePassengers() {
         }
 
         if (p.state == SeatState::None || p.instanceId == 0) {
+            stopVehicleRideLoop(guid, p);
             releaseSeatedPassenger(guid, p, landed);
             it = seatedPassengers_.erase(it);
             continue;

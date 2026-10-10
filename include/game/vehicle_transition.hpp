@@ -51,6 +51,13 @@ inline constexpr uint32_t kAnimSwimIdle = 41;
 inline constexpr uint32_t kAnimJumpLandRun = 187;
 inline constexpr int32_t kNoAnimation = 0x1fa;
 
+/// The key bone a VehicleSeat vehicle animation plays on (0x00756f80,
+/// 0x007577e0): past 0x22 it is 0x1a, which is the whole model.
+inline constexpr int32_t kWholeModelBone = 0x1a;
+[[nodiscard]] inline int32_t vehicleAnimBone(int32_t column) {
+    return static_cast<uint32_t>(column) > 0x22u ? kWholeModelBone : column;
+}
+
 /// Whether a change of transport is moved through (0x0074b840): the unit's
 /// +0xa30 0x20000000 - set while a monster move (0x0073c8e0) or an 0xED
 /// movement packet (0x007188f0) or the active mover's own move with flags2
