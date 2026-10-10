@@ -1004,7 +1004,11 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
     auto* characterRenderer = renderer_->getCharacterRenderer();
     auto* cameraController = renderer_->getCameraController();
     uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
-    float characterYaw = renderer_->getCharacterYaw();
+    // The body's yaw rather than the facing, so mount and rider turn after
+    // the player the way a unit on foot does. A taxi has no body lag.
+    float characterYaw = (hasMountBodyYaw_ && !taxiFlight_) ? mountBodyYawDeg_
+                                                            : renderer_->getCharacterYaw();
+    hasMountBodyYaw_ = false;
     auto& mountFSM = characterAnimator_.getMountFSM();
 
     // Build MountFSM input
@@ -1042,8 +1046,22 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
         characterRenderer->setLocomotionSpeed(characterInstanceId, 0.0f);
     }
 
+    // Turning on the spot, the mount shuffles round as a unit on foot does
+    // (its own ShuffleLeft/Right), standing on the ground.
+    uint32_t shuffleAnim = 0;
+    if (turnShuffle_ != body_yaw::TurnShuffle::None && !taxiFlight_ && !mountIn.moving &&
+        mountIn.grounded && !mountIn.swimming && mountInstanceId_ > 0 && characterRenderer) {
+        const uint32_t want = turnShuffle_ == body_yaw::TurnShuffle::Left ? anim::SHUFFLE_LEFT
+                                                                         : anim::SHUFFLE_RIGHT;
+        if (characterRenderer->hasAnimation(mountInstanceId_, want)) shuffleAnim = want;
+    }
+
     // Apply mount animation if changed
-    if (mountOut.mountAnimChanged && mountInstanceId_ > 0 && characterRenderer) {
+    if (shuffleAnim != 0) {
+        if (!mountIn.haveMountState || mountIn.curMountAnim != shuffleAnim) {
+            characterRenderer->playAnimation(mountInstanceId_, shuffleAnim, true);
+        }
+    } else if (mountOut.mountAnimChanged && mountInstanceId_ > 0 && characterRenderer) {
         characterRenderer->playAnimation(mountInstanceId_, mountOut.mountAnimId, mountOut.mountAnimLoop);
     }
 

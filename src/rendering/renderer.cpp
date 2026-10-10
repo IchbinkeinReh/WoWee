@@ -2640,9 +2640,10 @@ void Renderer::update(float deltaTime) {
         bodyIn.turnRate = cameraController->getTurnRateRad();
         bodyIn.inputTurning = (moveFlags & (body_yaw::kTurnLeft | body_yaw::kTurnRight)) != 0 ||
                               cameraController->isMouseSteering();
-        // Mounted, the rider sits the mount at the facing (applyMountPositioning
-        // draws both there); on a taxi likewise.
-        bodyIn.snap = dead || mounted || taxiFlight;
+        // Mounted, the body is the mount's: it lags and shuffles as on foot,
+        // and applyMountPositioning draws mount and rider at it. On a taxi
+        // the facing is the route's.
+        bodyIn.snap = dead || taxiFlight;
         bodyIn.hasSpine = characterRenderer->hasKeyBone(characterInstanceId, 4);
         bodyIn.hasHead = characterRenderer->hasKeyBone(characterInstanceId, 6);
         bodyIn.spineAllowed = !mounted;
@@ -2655,7 +2656,8 @@ void Renderer::update(float deltaTime) {
         // state FUN_0073dab0 asks through vfunc +0x138).
         if (animationController_) {
             animationController_->setTurnShuffle(body_yaw::turnShuffle(
-                moveFlags, body.step, !dead && !mounted && !taxiFlight && !cameraController->isSitting()));
+                moveFlags, body.step, !dead && !taxiFlight && !cameraController->isSitting()));
+            if (mounted) animationController_->setMountBodyYaw(glm::degrees(characterBody_.body));
         }
 
         // Update animation based on movement state (delegated to AnimationController §4.2)

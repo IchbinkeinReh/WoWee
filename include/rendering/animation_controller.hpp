@@ -106,6 +106,10 @@ public:
     /// The shuffle the player's body yaw asks for this frame (Renderer,
     /// body_yaw::turnShuffle), played by the locomotion while standing.
     void setTurnShuffle(body_yaw::TurnShuffle shuffle) { turnShuffle_ = shuffle; }
+    /// Mounted, the yaw the mount's body is drawn at (degrees): the unit's
+    /// body yaw, lagging the facing and shuffled after it as a standing
+    /// unit's is - the mount is the unit's model (0x0073dab0).
+    void setMountBodyYaw(float degrees) { mountBodyYawDeg_ = degrees; hasMountBodyYaw_ = true; }
 
     // ── Ranged combat ──────────────────────────────────────────────────────
     void setEquippedRangedType(RangedWeaponType type);
@@ -248,6 +252,8 @@ private:
     bool taxiFlight_ = false;
     bool m2TransportRiding_ = false;
     body_yaw::TurnShuffle turnShuffle_ = body_yaw::TurnShuffle::None;
+    float mountBodyYawDeg_ = 0.0f;
+    bool hasMountBodyYaw_ = false;
 
     // ── Private helpers ──────────────────────────────────────────────────
     uint32_t resolveMeleeAnimId();
