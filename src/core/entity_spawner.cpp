@@ -196,6 +196,7 @@ void EntitySpawner::shutdown() {
     requestedCreatureDisplayIds_.clear();
     creatureRenderPosCache_.clear();
     creatureWasMoving_.clear();
+    unitBodies_.clear();
     creatureWasSwimming_.clear();
     creatureWasFlying_.clear();
     creatureWasWalking_.clear();
@@ -253,6 +254,7 @@ void EntitySpawner::resetAllState() {
 
     // Clear animation state maps
     creatureWasMoving_.clear();
+    unitBodies_.clear();
     creatureWasSwimming_.clear();
     creatureWasFlying_.clear();
     creatureWasWalking_.clear();

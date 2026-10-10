@@ -5,6 +5,7 @@
 #include "game/game_services.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "rendering/blob_shadow.hpp"
+#include "rendering/animation/body_yaw.hpp"
 #include "core/character_geosets.hpp"
 #include "core/weapon_attachment.hpp"
 #include <memory>
@@ -370,6 +371,15 @@ public:
     const std::unordered_map<uint64_t, uint32_t>& getCreatureDisplayIds() const { return creatureDisplayIds_; }
     std::unordered_map<uint64_t, glm::vec3>& getCreatureRenderPosCache() { return creatureRenderPosCache_; }
     std::unordered_map<uint64_t, bool>& getCreatureWasMoving() { return creatureWasMoving_; }
+    /// A unit's drawn body behind its facing (FUN_0073dab0), for the
+    /// instance it was turned for and the key bones that instance has.
+    struct UnitBody {
+        rendering::body_yaw::State state;
+        uint32_t instanceId = 0;
+        bool hasSpine = false;
+        bool hasHead = false;
+    };
+    std::unordered_map<uint64_t, UnitBody>& getUnitBodies() { return unitBodies_; }
     std::unordered_map<uint64_t, bool>& getCreatureWasSwimming() { return creatureWasSwimming_; }
     std::unordered_map<uint64_t, bool>& getCreatureWasFlying() { return creatureWasFlying_; }
     std::unordered_map<uint64_t, bool>& getCreatureWasWalking() { return creatureWasWalking_; }
@@ -612,6 +622,7 @@ private:
     std::unordered_map<uint64_t, uint32_t> requestedCreatureDisplayIds_;
     std::unordered_map<uint64_t, glm::vec3> creatureRenderPosCache_; // guid → last synced render position
     std::unordered_map<uint64_t, bool> creatureWasMoving_;
+    std::unordered_map<uint64_t, UnitBody> unitBodies_;
     std::unordered_map<uint64_t, bool> creatureWasSwimming_;
     std::unordered_map<uint64_t, bool> creatureWasFlying_;
     std::unordered_map<uint64_t, bool> creatureWasWalking_;
