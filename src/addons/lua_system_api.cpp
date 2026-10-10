@@ -3943,6 +3943,11 @@ static int lua_ToggleAutoRun(lua_State* L) {
     if (svc && svc->toggleAutoRun) svc->toggleAutoRun();
     return 0;
 }
+static int lua_JumpOrAscendStart(lua_State* L) {
+    auto* svc = getLuaServices(L);
+    if (svc && svc->pressJump) svc->pressJump();
+    return 0;
+}
 template <int Direction, bool Held>
 static int lua_BindingTurn(lua_State* L) {
     auto* svc = getLuaServices(L);
@@ -5372,6 +5377,7 @@ void registerSystemLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"Screenshot",               lua_Screenshot},
                 {"ToggleAutoRun",            lua_ToggleAutoRun},
+                {"JumpOrAscendStart",        lua_JumpOrAscendStart},
                 {"TurnLeftStart",            lua_BindingTurn<-1, true>},
                 {"TurnLeftStop",             lua_BindingTurn<-1, false>},
                 {"TurnRightStart",           lua_BindingTurn<1, true>},

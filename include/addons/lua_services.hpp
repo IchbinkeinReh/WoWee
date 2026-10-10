@@ -316,6 +316,8 @@ struct LuaServices {
     /// macro or a scripted walk moves the character as the keyboard does.
     std::function<void()> toggleAutoRun;
     std::function<void(int direction, bool held)> setBindingTurn;
+    /// JumpOrAscendStart: a press of the jump key.
+    std::function<void()> pressJump;
 };
 
 } // namespace wowee::addons

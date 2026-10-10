@@ -147,6 +147,7 @@ public:
     void toggleAutoRun() { autoRunning = !autoRunning; }
     void setBindingTurnLeft(bool held) { bindingTurnLeft_ = held; }
     void setBindingTurnRight(bool held) { bindingTurnRight_ = held; }
+    void pressBindingJump() { bindingJump_ = true; }
     [[nodiscard]] bool isRightMouseHeld() const { return rightMouseDown; }
     [[nodiscard]] bool isSitting() const { return sitting; }
     [[nodiscard]] bool isSwimming() const { return swimming; }
@@ -730,6 +731,7 @@ private:
     bool autoRunning = false;
     bool bindingTurnLeft_ = false;
     bool bindingTurnRight_ = false;
+    bool bindingJump_ = false;
     bool tildeWasDown = false;
 
     // Auto-follow target position (WoW /follow). Non-null when following.

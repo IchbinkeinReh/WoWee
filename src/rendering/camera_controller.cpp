@@ -2893,7 +2893,10 @@ void CameraController::update(float deltaTime) {
     bool keyE = !uiWantsKeyboard && !sitting && !movementSuppressed && input.isKeyPressed(SDL_SCANCODE_E);
     bool shiftDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LSHIFT) || input.isKeyPressed(SDL_SCANCODE_RSHIFT));
     bool ctrlDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LCTRL) || input.isKeyPressed(SDL_SCANCODE_RCTRL));
-    bool nowJump = !uiWantsKeyboard && !sitting && !movementSuppressed && input.isKeyJustPressed(SDL_SCANCODE_SPACE);
+    // JumpOrAscendStart() presses it once, as the key does.
+    bool nowJump = !uiWantsKeyboard && !sitting && !movementSuppressed &&
+                   (input.isKeyJustPressed(SDL_SCANCODE_SPACE) || bindingJump_);
+    bindingJump_ = false;
     // Swimming and flying need the held state, not the press edge: on land
     // space is a one-shot jump, but in water and in the air it is continuous
     // ascent, and an edge gave a single impulse that then bled away - or, in
