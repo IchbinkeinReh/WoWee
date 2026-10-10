@@ -38,6 +38,10 @@ inline constexpr int kVisibilityTile = kVisibilityTexels + 2;
 inline constexpr int kBandHeight = kProbes.y * (kIrradianceTile + kVisibilityTile);
 inline constexpr int kAtlasWidth = kProbes.x * kProbes.z * kVisibilityTile;
 inline constexpr int kAtlasHeight = kCascades * kBandHeight;
+/// The texel rt_gi_exposure keeps the view's lift in: past the near band's
+/// last irradiance tile.
+inline constexpr int kExposureTexelX = kProbes.x * kProbes.z * kIrradianceTile;
+inline constexpr int kExposureTexelY = 0;
 
 /// A list entry: the storage slot, the cascade, and whether the probe has just
 /// come into the volume and must forget what its slot held.

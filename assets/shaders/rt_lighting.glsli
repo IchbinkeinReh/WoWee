@@ -109,7 +109,9 @@ vec3 rtGiRatio(vec3 worldPos, vec3 n) {
     vec3 v = normalize(viewPos.xyz - worldPos);
     vec4 e = giIrradiance(uRtGiProbes, giVolume[0], giVolumeMod[0], giVolume[1], giVolumeMod[1],
                           worldPos, n, v);
-    vec3 ratio = giAmbientRatio(e, giSky.rgb, giGround.rgb, n, giSky.w, giGround.w, giParams.z);
+    float lift = texelFetch(uRtGiProbes, GI_EXPOSURE_TEXEL, 0).r;
+    vec3 ratio = giAmbientRatio(e, giSky.rgb, giGround.rgb, n, giSky.w, giGround.w, giParams.z,
+                                lift > 0.0 ? lift : 1.0);
 
     int debugView = int(giParams.y + 0.5);
     if (debugView != 0) {

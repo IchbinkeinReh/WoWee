@@ -28,6 +28,8 @@ void main() {
     vec3 v = normalize(pts[i * 3u + 2u].xyz);
     vec4 e = giIrradiance(uAtlas, c.vol[0], c.volMod[0], c.vol[1], c.volMod[1], p, n, v);
     results[i * 2u] = e;
-    results[i * 2u + 1u] =
-        vec4(giAmbientRatio(e, c.sky.rgb, c.ground.rgb, n, c.sky.w, c.ground.w, c.params.x), 0.0);
+    float lift = texelFetch(uAtlas, GI_EXPOSURE_TEXEL, 0).r;
+    results[i * 2u + 1u] = vec4(giAmbientRatio(e, c.sky.rgb, c.ground.rgb, n, c.sky.w, c.ground.w,
+                                               c.params.x, lift > 0.0 ? lift : 1.0),
+                                lift);
 }

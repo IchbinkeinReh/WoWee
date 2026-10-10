@@ -22,7 +22,8 @@ enum Binding : uint32_t {
     kAtlasStore = 2,
     kList = 3,
     kRays = 4,
-    kBindingCount = 5,
+    kGbuf = 5,
+    kBindingCount = 6,
 };
 
 constexpr VkFormat kAtlasFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -97,11 +98,12 @@ void RtGiProbes::initialize(VkContext* ctx, RtScene* scene) {
     config_.maxRatio = envFloat("WOWEE_GI_MAX_RATIO", config_.maxRatio, 1.0f, 8.0f);
     config_.groundAlbedo = envFloat("WOWEE_GI_GROUND_ALBEDO", config_.groundAlbedo, 0.0f, 1.0f);
     config_.chroma = envFloat("WOWEE_GI_CHROMA", config_.chroma, 0.0f, 1.0f);
+    config_.normalize = envFloat("WOWEE_GI_NORMALIZE", config_.normalize, 1.0f, 4.0f);
     config_.debug = static_cast<int>(envFloat("WOWEE_GI_DEBUG", 0.0f, 0.0f, 4.0f));
     LOG_INFO("RtGiProbes: spacing ", config_.spacing, " yd, period ", config_.period,
              ", hysteresis ", config_.hysteresis, ", strength ", config_.strength,
              ", max ratio ", config_.maxRatio, ", ground albedo ", config_.groundAlbedo,
-             ", chroma ", config_.chroma,
+             ", chroma ", config_.chroma, ", normalize ", config_.normalize,
              ", debug ", config_.debug);
 }
 
@@ -110,7 +112,7 @@ void RtGiProbes::shutdown() {
     VkDevice dev = ctx_->getDevice();
     vkDeviceWaitIdle(dev);
     destroyResources();
-    for (VkPipeline* p : {&trace_, &update_}) {
+    for (VkPipeline* p : {&trace_, &update_, &exposure_}) {
         if (*p) vkDestroyPipeline(dev, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -150,6 +152,7 @@ bool RtGiProbes::createPipelines() {
     b[kAtlasStore].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     b[kList].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[kRays].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[kGbuf].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = kBindingCount;
@@ -158,7 +161,7 @@ bool RtGiProbes::createPipelines() {
 
     VkDescriptorPoolSize sizes[4] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_FRAMES_IN_FLIGHT * 2},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_FRAMES_IN_FLIGHT * 2},
     };
@@ -203,7 +206,8 @@ bool RtGiProbes::createPipelines() {
     const bool hw = scene_->backend() == RtScene::Backend::Hardware;
     pipelinesOk_ = make(hw ? "assets/shaders/rt_gi_trace_hw.comp.spv"
                            : "assets/shaders/rt_gi_trace.comp.spv", trace_) &&
-                   make("assets/shaders/rt_gi_update.comp.spv", update_);
+                   make("assets/shaders/rt_gi_update.comp.spv", update_) &&
+                   make("assets/shaders/rt_gi_exposure.comp.spv", exposure_);
     if (!pipelinesOk_) LOG_ERROR("RtGiProbes: pipelines unavailable, no probe light");
     return pipelinesOk_;
 }
@@ -263,16 +267,18 @@ void RtGiProbes::destroyResources() {
     destroyBuffer(alloc, rays_);
     for (auto& l : lists_) destroyBuffer(alloc, l);
     for (bool& w : setWritten_) w = false;
+    for (VkImageView& v : setGbuf_) v = VK_NULL_HANDLE;
     haveGrid_ = false;
     frameBegun_ = false;
 }
 
-void RtGiProbes::writeSet(uint32_t slot, VkBuffer ubo, VkDeviceSize uboSize) {
+void RtGiProbes::writeSet(uint32_t slot, VkBuffer ubo, VkDeviceSize uboSize, VkImageView gbuf) {
     VkDescriptorBufferInfo uboInfo{ubo, 0, uboSize};
     VkDescriptorImageInfo sampled{sampler_, atlas_.imageView, VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorImageInfo storage{VK_NULL_HANDLE, atlas_.imageView, VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorBufferInfo list{lists_[slot].buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo rays{rays_.buffer, 0, VK_WHOLE_SIZE};
+    VkDescriptorImageInfo gbufInfo{sampler_, gbuf, VK_IMAGE_LAYOUT_GENERAL};
 
     std::array<VkWriteDescriptorSet, kBindingCount> w{};
     for (uint32_t i = 0; i < kBindingCount; ++i) {
@@ -291,8 +297,11 @@ void RtGiProbes::writeSet(uint32_t slot, VkBuffer ubo, VkDeviceSize uboSize) {
     w[kList].pBufferInfo = &list;
     w[kRays].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     w[kRays].pBufferInfo = &rays;
+    w[kGbuf].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[kGbuf].pImageInfo = &gbufInfo;
     vkUpdateDescriptorSets(ctx_->getDevice(), kBindingCount, w.data(), 0, nullptr);
     setWritten_[slot] = true;
+    setGbuf_[slot] = gbuf;
 }
 
 void RtGiProbes::beginFrame(uint32_t slot, const glm::vec3& camera, uint64_t frame,
@@ -323,16 +332,18 @@ void RtGiProbes::beginFrame(uint32_t slot, const glm::vec3& camera, uint64_t fra
     out.sky = glm::vec4(sky, config_.hysteresis);
     out.ground = glm::vec4(ground, 0.0f);
     out.rayLength = glm::vec4(cascadeSpacing(config_, 0) * kRayCells,
-                              cascadeSpacing(config_, 1) * kRayCells, 0.0f, 0.0f);
+                              cascadeSpacing(config_, 1) * kRayCells, config_.normalize, 0.0f);
     nextSky_ = sky;
     nextGround_ = ground;
     frameBegun_ = true;
 }
 
-void RtGiProbes::record(VkCommandBuffer cmd, uint32_t slot, VkBuffer ubo, VkDeviceSize uboSize) {
-    if (!frameBegun_ || !pipelinesOk_ || listCount_ == 0) return;
+void RtGiProbes::record(VkCommandBuffer cmd, uint32_t slot, VkBuffer ubo, VkDeviceSize uboSize,
+                        VkImageView gbuf) {
+    recordedThisFrame_ = false;
+    if (!frameBegun_ || !pipelinesOk_ || listCount_ == 0 || gbuf == VK_NULL_HANDLE) return;
     frameBegun_ = false;
-    if (!setWritten_[slot]) writeSet(slot, ubo, uboSize);
+    if (!setWritten_[slot] || setGbuf_[slot] != gbuf) writeSet(slot, ubo, uboSize, gbuf);
 
     // Last frame's update wrote the atlas and read the rays; its surfaces and
     // this frame's opaque ones sampled the atlas. All of it before this
@@ -361,8 +372,19 @@ void RtGiProbes::record(VkCommandBuffer cmd, uint32_t slot, VkBuffer ubo, VkDevi
 
     for (int c = 0; c < gi::kCascades; ++c) gridMin_[c] = nextGridMin_[c];
     haveGrid_ = true;
+    recordedThisFrame_ = true;
     sky_ = nextSky_;
     ground_ = nextGround_;
+}
+
+void RtGiProbes::recordExposure(VkCommandBuffer cmd, uint32_t slot) {
+    if (!recordedThisFrame_) return;
+    recordedThisFrame_ = false;
+    VkDescriptorSet sets[2] = {sets_[slot], scene_->descriptorSet()};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 2, sets, 0,
+                            nullptr);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, exposure_);
+    vkCmdDispatch(cmd, 1, 1, 1);
 }
 
 RtGiProbes::ConsumerData RtGiProbes::consumerData() const {

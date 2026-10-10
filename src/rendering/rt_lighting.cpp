@@ -496,7 +496,7 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
                   VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
     // The probes first: they need nothing of this frame's depth.
-    if (probes) probes_.record(cmd, slotIndex, s.ubo.buffer, sizeof(RtPassData));
+    if (probes) probes_.record(cmd, slotIndex, s.ubo.buffer, sizeof(RtPassData), s.gbuf.img.imageView);
 
     depthBarrier(cmd, sceneDepth, true);
 
@@ -512,13 +512,18 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
     auto computeToCompute = [&]() {
         memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                      VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                      VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                          VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     };
 
     bind(depthMsaa ? prepareMs_ : prepare_, 0);
     vkCmdDispatch(cmd, gx, gy, 1);
     computeToCompute();
     depthBarrier(cmd, sceneDepth, false);
+
+    // The view's lift for the probe light, from the G-buffer just built and
+    // the volume just updated; nothing below reads what it writes.
+    if (probes) probes_.recordExposure(cmd, slotIndex);
 
     bind(trace_, 0);
     vkCmdDispatch(cmd, gx, gy, 1);

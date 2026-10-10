@@ -70,6 +70,7 @@ public:
         float maxRatio = 2.0f;       // WOWEE_GI_MAX_RATIO
         float groundAlbedo = 0.3f;   // WOWEE_GI_GROUND_ALBEDO
         float chroma = 0.15f;        // WOWEE_GI_CHROMA: how much of the bounce's tint shows
+        float normalize = 1.6f;      // WOWEE_GI_NORMALIZE: the largest lift (rt_gi_exposure), 1 off
         int debug = 0;               // WOWEE_GI_DEBUG
     };
 
@@ -98,9 +99,14 @@ public:
     void beginFrame(uint32_t slot, const glm::vec3& camera, uint64_t frame, const glm::vec3& sky,
                     const glm::vec3& ground, PassData& out);
     /// Record the trace and the update. Outside a render pass, after the scene
-    /// update. `ubo` is the slot's RtPassData. Leaves the atlas written by
-    /// compute, for the caller's barrier toward its readers.
-    void record(VkCommandBuffer cmd, uint32_t slot, VkBuffer ubo, VkDeviceSize uboSize);
+    /// update. `ubo` is the slot's RtPassData, `gbuf` the view of the
+    /// tracer's G-buffer this slot builds (for recordExposure). Leaves the
+    /// atlas written by compute, for the caller's barrier toward its readers.
+    void record(VkCommandBuffer cmd, uint32_t slot, VkBuffer ubo, VkDeviceSize uboSize,
+                VkImageView gbuf);
+    /// Record the view's lift (rt_gi_exposure), once this frame's G-buffer
+    /// is built and a barrier has made it and the update visible to compute.
+    void recordExposure(VkCommandBuffer cmd, uint32_t slot);
 
     [[nodiscard]] ConsumerData consumerData() const;
     [[nodiscard]] const Config& config() const { return config_; }
@@ -109,7 +115,7 @@ public:
 
 private:
     bool createPipelines();
-    void writeSet(uint32_t slot, VkBuffer ubo, VkDeviceSize uboSize);
+    void writeSet(uint32_t slot, VkBuffer ubo, VkDeviceSize uboSize, VkImageView gbuf);
 
     VkContext* ctx_ = nullptr;
     RtScene* scene_ = nullptr;
@@ -120,6 +126,8 @@ private:
     AllocatedBuffer lists_[MAX_FRAMES_IN_FLIGHT]{};
     VkDescriptorSet sets_[MAX_FRAMES_IN_FLIGHT]{};
     bool setWritten_[MAX_FRAMES_IN_FLIGHT]{};
+    VkImageView setGbuf_[MAX_FRAMES_IN_FLIGHT]{};
+    bool recordedThisFrame_ = false;
 
     VkSampler sampler_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
@@ -127,6 +135,7 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline trace_ = VK_NULL_HANDLE;
     VkPipeline update_ = VK_NULL_HANDLE;
+    VkPipeline exposure_ = VK_NULL_HANDLE;
     bool pipelinesTried_ = false;
     bool pipelinesOk_ = false;
 

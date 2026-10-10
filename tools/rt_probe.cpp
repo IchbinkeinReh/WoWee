@@ -504,6 +504,22 @@ int main() {
             expect("the ground's colour tints, it does not take over", mildHue);
             expect("beneath the roof is darker", lum(ratio[5]) < 0.75f);
             expect("the top of a solid is not darkened by the probes inside it", near1(ratio[7], 0.1f));
+
+            // What the terrain makes of it (terrain.frag): the flat ambient
+            // times the ratio, plus the sun, clamped - against strength 0,
+            // which is the flat ambient as it is.
+            const float lift = rv[1].w;
+            std::printf("view lift %.3f\n", lift);
+            expect("the view's lift is a lift, and within WOWEE_GI_NORMALIZE",
+                   lift >= 1.0f && lift <= lighting.probes().config().normalize + 1e-3f);
+            const glm::vec3 flat = in.skyColor;
+            const float ndl = std::max(glm::dot(glm::vec3(0, 0, 1), glm::normalize(in.sunDir)), 0.0f);
+            const glm::vec3 lit = glm::clamp(flat * ratio[0] + ndl * in.sunColor, 0.0f, 1.0f);
+            const glm::vec3 lit0 = glm::clamp(flat + ndl * in.sunColor, 0.0f, 1.0f);
+            std::printf("open ground shaded: strength 1 (%.3f %.3f %.3f), strength 0 (%.3f %.3f %.3f)\n",
+                        lit.r, lit.g, lit.b, lit0.r, lit0.g, lit0.b);
+            expect("open ground shades as with the probes off, within 3%",
+                   glm::all(glm::lessThan(glm::abs(lit - lit0), lit0 * 0.03f)));
         }
         vkDestroyPipeline(dev, checkPipeline, nullptr);
         vkDestroyPipelineLayout(dev, checkPipelineLayout, nullptr);

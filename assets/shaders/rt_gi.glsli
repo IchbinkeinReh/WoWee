@@ -18,6 +18,9 @@ const int GI_VIS_TILE = 10;
 const int GI_BAND_HEIGHT = 32 * (GI_IRR_TILE + GI_VIS_TILE);
 const vec2 GI_ATLAS_SIZE = vec2(32 * 16 * GI_VIS_TILE, 2 * GI_BAND_HEIGHT);
 const int GI_RAYS = 64;
+// Where rt_gi_exposure leaves the view's lift (r): past the last irradiance
+// tile of the near cascade's band, which is narrower than the atlas.
+const ivec2 GI_EXPOSURE_TEXEL = ivec2(32 * 16 * GI_IRR_TILE, 0);
 
 vec2 giOctEncode(vec3 n) {
     n /= abs(n.x) + abs(n.y) + abs(n.z);
@@ -180,13 +183,14 @@ const vec3 GI_LUMA = vec3(0.299, 0.587, 0.114);
 // what a probe sees and a sky-blue ambient has little red for a red bounce to
 // be measured against. `chroma` is how much of the bounce's tint survives,
 // and no channel moves by more than a tenth or so.
+// `lift` scales the brightness first (rt_gi_exposure).
 vec3 giAmbientRatio(vec4 e, vec3 sky, vec3 ground, vec3 n, float strength, float maxRatio,
-                    float chroma) {
+                    float chroma, float lift) {
     if (any(isnan(e)) || any(isinf(e))) return vec3(1.0);
     vec3 open = giOpenReference(sky, ground, n);
     float lumOpen = max(dot(open, GI_LUMA), 1e-4);
     float lumE = max(dot(e.rgb, GI_LUMA), 0.0);
-    float level = min(lumE / lumOpen, maxRatio);
+    float level = min(lift * lumE / lumOpen, maxRatio);
     vec3 tint = vec3(1.0);
     if (lumE > 1e-4) {
         vec3 hueE = max(e.rgb, vec3(0.0)) / lumE;

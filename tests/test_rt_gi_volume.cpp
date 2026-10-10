@@ -176,3 +176,10 @@ TEST_CASE("list entries carry slot, cascade and reset apart", "[gi]") {
     CHECK(kListSlotMask == 0xFFFFFu);
     CHECK(kListReset == 0x80000000u);
 }
+
+TEST_CASE("the view's lift has a texel no tile covers", "[gi]") {
+    // Past the near band's last irradiance tile, above its visibility tiles.
+    CHECK(kExposureTexelX >= irradianceTileOrigin(0, kProbes - 1).x + kIrradianceTile);
+    CHECK(kExposureTexelX < kAtlasWidth);
+    CHECK(kExposureTexelY < visibilityTileOrigin(0, {0, 0, 0}).y);
+}

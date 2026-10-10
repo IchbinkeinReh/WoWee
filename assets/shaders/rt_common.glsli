@@ -26,7 +26,7 @@ layout(set = 0, binding = 0) uniform RtPassData {
     mat4 giRotation;         // this frame's random turn of the ray set
     vec4 giSky;              // rgb a ray that escapes upward; w hysteresis
     vec4 giGround;           // rgb one that escapes downward
-    vec4 giRayLength;        // x, y per cascade
+    vec4 giRayLength;        // x, y per cascade; z the largest lift (rt_gi_exposure)
 } pass;
 
 const uint RT_MODE_SHADOWS = 1u;
