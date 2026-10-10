@@ -1846,8 +1846,8 @@ void SpellVisualSystem::startMountTransition(uint32_t renderInstanceId, uint32_t
         }
         if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
             if (mountTransitions_[i].modelInstance) charRenderer->removeInstance(mountTransitions_[i].modelInstance);
-            charRenderer->setInstanceRenderOffset(mountTransitions_[i].riderInstance, glm::vec3(0.0f));
         }
+        releaseMountRider(mountTransitions_[i]);
         mountTransitions_.erase(mountTransitions_.begin() + static_cast<std::ptrdiff_t>(i));
     }
     MountTransition t;
@@ -1872,8 +1872,8 @@ void SpellVisualSystem::onUnitMounted(uint64_t unitGuid) {
         }
         if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
             if (mountTransitions_[i].modelInstance) charRenderer->removeInstance(mountTransitions_[i].modelInstance);
-            charRenderer->setInstanceRenderOffset(mountTransitions_[i].riderInstance, glm::vec3(0.0f));
         }
+        releaseMountRider(mountTransitions_[i]);
         mountTransitions_.erase(mountTransitions_.begin() + static_cast<std::ptrdiff_t>(i));
     }
 }
@@ -1884,8 +1884,8 @@ void SpellVisualSystem::endMountTransition(size_t index, bool resync) {
     mountTransitions_.erase(mountTransitions_.begin() + static_cast<std::ptrdiff_t>(index));
     if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
         if (t.modelInstance) charRenderer->removeInstance(t.modelInstance);
-        charRenderer->setInstanceRenderOffset(t.riderInstance, glm::vec3(0.0f));
     }
+    releaseMountRider(t);
     if (!mountSink_ || t.displayId == 0 || t.modelInstance == 0) return;
     // 0x007412b0: arrived, the unit is mounted on the display at once -
     // and where the cast is over, 0x007fec00 sets it to the server's right
@@ -1893,6 +1893,17 @@ void SpellVisualSystem::endMountTransition(size_t index, bool resync) {
     if (!(t.state.flags & mount_transition::kArrived)) return;
     const uint32_t display = resync && unitMountFieldQuery_ ? unitMountFieldQuery_(t.unitGuid) : t.displayId;
     mountSink_(t.unitGuid, display);
+}
+
+void SpellVisualSystem::releaseMountRider(const MountTransition& t) {
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || t.riderInstance == 0) return;
+    charRenderer->setInstanceRenderOffset(t.riderInstance, glm::vec3(0.0f));
+    charRenderer->setInstanceHoldsLastFrame(t.riderInstance, false);
+    if (t.riderTilted) {
+        if (const auto rotation = charRenderer->getInstanceRotation(t.riderInstance))
+            charRenderer->setInstanceRotation(t.riderInstance, glm::vec3(0.0f, 0.0f, rotation->z));
+    }
 }
 
 void SpellVisualSystem::updateMountTransitions() {
@@ -1915,8 +1926,9 @@ void SpellVisualSystem::updateMountTransitions() {
             continue;
         }
         if (rider != t.riderInstance) {
-            charRenderer->setInstanceRenderOffset(t.riderInstance, glm::vec3(0.0f));
+            releaseMountRider(t);
             t.riderInstance = rider;
+            t.riderTilted = false;
         }
         // 0x006f9610: the creature's answer gives the display, and then
         // the model (0x006f83d0) - Birth playing, unseen until it touches
@@ -2008,6 +2020,34 @@ void SpellVisualSystem::updateMountTransitions() {
         if (t.state.riderProgress != 0.0f && charRenderer->getAttachmentTransform(t.modelInstance, 0, seat))
             lift = riderLift(t.state, glm::vec3(seat[3]), t.state.position);
         charRenderer->setInstanceRenderOffset(rider, lift);
+        // 0x007193f0: the rider's ground normal eased toward the one it
+        // stands on - wowee keeps no movement normal, so the ground found
+        // under its feet stands in for 0x00987490's. A unit standing there
+        // has long since eased to it (0x007197d0 every frame), so it starts
+        // there.
+        if (groundQuery_) {
+            const glm::vec3 up(0.0f, 0.0f, 2.0f);
+            if (const auto hit = groundQuery_(riderPos + up, riderPos - up)) {
+                const float seconds = t.riderNormalMs ? static_cast<float>(now - t.riderNormalMs) * 0.001f : 1e6f;
+                t.riderNormal = easeGroundNormal(t.riderNormal, hit->normal, seconds);
+            }
+        }
+        t.riderNormalMs = now;
+        // While it is carried it is drawn tilted on it as 0x0082dd80 tilts
+        // its model (by its M2 flags & 3); otherwise plainly (0x00743330).
+        if (const auto rotation = charRenderer->getInstanceRotation(rider)) {
+            if (riderTilts(t.state)) {
+                const pipeline::M2Model* riderModel = charRenderer->getInstanceModelData(rider);
+                charRenderer->setInstanceRotation(
+                    rider, tiltedRotation(t.riderNormal, rotation->z, riderModel ? riderModel->globalFlags : 0u));
+                t.riderTilted = true;
+            } else if (t.riderTilted) {
+                charRenderer->setInstanceRotation(rider, glm::vec3(0.0f, 0.0f, rotation->z));
+                t.riderTilted = false;
+            }
+        }
+        // Arrived, its animation ending holds its last frame (0x0073bbd0).
+        charRenderer->setInstanceHoldsLastFrame(rider, riderHoldsLastFrame(t.state));
         ++i;
     }
 }

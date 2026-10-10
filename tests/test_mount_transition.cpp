@@ -132,3 +132,53 @@ TEST_CASE("Mount transition: the mount is drawn at the unit's own model scale") 
     REQUIRE(mountScale(0.0f) == 1.0f);
     REQUIRE(mountScale(-2.0f) == 1.0f);
 }
+
+TEST_CASE("the rider's ground normal eases by 0.0018 to the frame's seconds (0x007193f0)", "[mount_transition]") {
+    const glm::vec3 up(0.0f, 0.0f, 1.0f);
+    const glm::vec3 slope = glm::normalize(glm::vec3(0.5f, 0.0f, 1.0f));
+    const glm::vec3 half = mt::easeGroundNormal(up, slope, 0.5f);
+    const float keep = std::pow(0.0018f, 0.5f);
+    CHECK(half.x == Catch::Approx(slope.x + (0.0f - slope.x) * keep));
+    CHECK(half.z == Catch::Approx(slope.z + (1.0f - slope.z) * keep));
+    // No time, no ease; a long time, all the way.
+    CHECK(mt::easeGroundNormal(up, slope, 0.0f).z == Catch::Approx(1.0f));
+    CHECK(mt::easeGroundNormal(up, slope, 100.0f).x == Catch::Approx(slope.x));
+    // Ground steeper than z 0.35721236 is not eased to.
+    const glm::vec3 wall = glm::normalize(glm::vec3(1.0f, 0.0f, 0.3f));
+    CHECK(mt::easeGroundNormal(up, wall, 1.0f) == up);
+}
+
+TEST_CASE("a model tilts on its ground by its M2 flags & 3 (0x0082dd80)", "[mount_transition]") {
+    // Ground rising ahead of a unit facing +y and to its left.
+    const glm::vec3 n = glm::normalize(glm::vec3(0.2f, -0.3f, 1.0f));
+    const float facing = 1.5707964f;
+    // No flag: only the facing.
+    CHECK(mt::tiltedRotation(n, facing, 0) == glm::vec3(0.0f, 0.0f, facing));
+    CHECK(mt::tiltedRotation(n, facing, 2) == glm::vec3(0.0f, 0.0f, facing));
+    // 1: along its facing only - no turn about its forward.
+    const glm::vec3 one = mt::tiltedRotation(n, facing, 1);
+    CHECK(one.x == 0.0f);
+    // In its frame the normal is (-0.3, -0.2, 1): forward x is -0.3.
+    CHECK(one.y == Catch::Approx(std::atan2(-0.3f, 1.0f)).margin(1e-5));
+    CHECK(one.z == facing);
+    // 3: up along the normal.
+    const glm::vec3 three = mt::tiltedRotation(n, facing, 3);
+    const float a = three.x, b = three.y;
+    // Rz(facing) * Rx(a) * Ry(b) * (0,0,1).
+    const glm::vec3 local(std::sin(b), -std::sin(a) * std::cos(b), std::cos(a) * std::cos(b));
+    const glm::vec3 world(std::cos(facing) * local.x - std::sin(facing) * local.y,
+                          std::sin(facing) * local.x + std::cos(facing) * local.y, local.z);
+    CHECK(world.x == Catch::Approx(n.x).margin(1e-5));
+    CHECK(world.y == Catch::Approx(n.y).margin(1e-5));
+    CHECK(world.z == Catch::Approx(n.z).margin(1e-5));
+}
+
+TEST_CASE("the rider tilts only while carried, and holds once arrived", "[mount_transition]") {
+    mt::State s;
+    CHECK_FALSE(mt::riderTilts(s));
+    s.riderProgress = 0.3f;
+    CHECK(mt::riderTilts(s));
+    CHECK_FALSE(mt::riderHoldsLastFrame(s));
+    s.flags |= mt::kArrived;
+    CHECK(mt::riderHoldsLastFrame(s));
+}

@@ -2500,14 +2500,15 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                     // One-shot animation finished: return to the caller-specified
                     // resume anim (NPC state emote), else the loop the unit
                     // rests in (sitting, sleeping...), else Stand, unless dead
-                    if (inst.currentAnimationId != anim::DEATH) {
+                    if (inst.currentAnimationId != anim::DEATH && !inst.holdsLastFrame) {
                         const uint32_t resumeAnim =
                             inst.oneShotReturnAnim != 0 ? inst.oneShotReturnAnim
                             : inst.restAnimation != 0  ? inst.restAnimation
                                                        : anim::STAND;
                         playAnimationNow(pair.first, resumeAnim, true, 0);
                     } else {
-                        // Stay on last frame of death
+                        // Stay on last frame of death, or a mount
+                        // transition's arrived rider's (0x0073bbd0)
                         inst.animationTime = static_cast<float>(seq.duration);
                     }
                 }
@@ -4417,6 +4418,17 @@ void CharacterRenderer::setInstancePosition(uint32_t instanceId, const glm::vec3
         it->second.moveDuration = 0.0f;
         it->second.isMoving = false;
     }
+}
+
+std::optional<glm::vec3> CharacterRenderer::getInstanceRotation(uint32_t instanceId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return std::nullopt;
+    return it->second.rotation;
+}
+
+void CharacterRenderer::setInstanceHoldsLastFrame(uint32_t instanceId, bool holds) {
+    auto it = instances.find(instanceId);
+    if (it != instances.end()) it->second.holdsLastFrame = holds;
 }
 
 void CharacterRenderer::setInstanceRotation(uint32_t instanceId, const glm::vec3& rotation) {

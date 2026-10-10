@@ -488,7 +488,14 @@ private:
         uint32_t riderInstance = 0;
         bool birthSeen = false;
         mount_transition::State state;
+        /// The rider's ground normal (+0x9d8), eased (0x007193f0).
+        glm::vec3 riderNormal{0.0f, 0.0f, 1.0f};
+        uint32_t riderNormalMs = 0;
+        /// The rider was drawn tilted or held, to be put back.
+        bool riderTilted = false;
     };
+    /// The rider back to its plain matrix and its animation free.
+    void releaseMountRider(const MountTransition& t);
     std::vector<MountTransition> mountTransitions_;
     MountDisplayResolver mountDisplayResolver_;
     MountModelLoader mountModelLoader_;

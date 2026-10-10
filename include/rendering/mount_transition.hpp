@@ -162,6 +162,46 @@ inline float mountScale(float unitModelScale) {
     return unitModelScale > 0.0f ? unitModelScale : 1.0f;
 }
 
+/// The unit's ground normal (+0x9d8, (0,0,1) at first) eased toward the
+/// one its movement stands on (0x00987490) wherever that is no steeper than
+/// z 0.35721236: what is left of the way is 0.0018 to the power of the
+/// frame's seconds (0x007193f0, 0x007197d0). Not normalised.
+inline glm::vec3 easeGroundNormal(const glm::vec3& eased, const glm::vec3& ground, float seconds) {
+    if (ground.z < 0.35721236f) return eased;
+    const float keep = std::pow(0.0018f, std::max(seconds, 0.0f));
+    return ground + (eased - ground) * keep;
+}
+
+/// 0x0082dd80's turn for a model at `facing` on a ground normal, by the
+/// model's M2 global flags & 3: 3 tilts it the whole way, up along the
+/// normal (0x00824a80); 1 only along its facing, its sides kept level; any
+/// other, not at all. As Euler angles in the order the character renderer
+/// composes them (yaw about z, then about x, then about y).
+inline glm::vec3 tiltedRotation(const glm::vec3& normal, float facing, uint32_t modelFlags) {
+    const float len = std::sqrt(glm::dot(normal, normal));
+    const glm::vec3 nn = len > 1e-6f ? normal / len : glm::vec3(0.0f, 0.0f, 1.0f);
+    const float c = std::cos(-facing);
+    const float sn = std::sin(-facing);
+    const glm::vec3 n(c * nn.x - sn * nn.y, sn * nn.x + c * nn.y, nn.z);
+    switch (modelFlags & 3u) {
+        case 3u:
+            return glm::vec3(std::atan2(-n.y, n.z), std::asin(std::clamp(n.x, -1.0f, 1.0f)), facing);
+        case 1u:
+            // Its side axis level, its forward the side crossed with the normal.
+            return glm::vec3(0.0f, std::atan2(n.x, n.z), facing);
+        default:
+            return glm::vec3(0.0f, 0.0f, facing);
+    }
+}
+
+/// 0x007193f0: the rider is drawn tilted on its ground only while it is
+/// carried - at progress 0 it has the plain matrix (0x00743330).
+inline bool riderTilts(const State& s) { return s.riderProgress != 0.0f; }
+
+/// 0x0073bbd0: the rider's animation ending once the transition has
+/// arrived picks no next one - it holds its last frame.
+inline bool riderHoldsLastFrame(const State& s) { return (s.flags & kArrived) != 0; }
+
 /// 0x007fa930: how far the rider is lifted - toward the mount's seat
 /// (attachment 0) from the mount's place, by its progress.
 inline glm::vec3 riderLift(const State& s, const glm::vec3& seat, const glm::vec3& mountPlace) {
