@@ -154,7 +154,17 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
             if (isPlayer) {
                 glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
                 float durationSec = static_cast<float>(durationMs) / 1000.0f;
-                renderer_.getCharacterRenderer()->moveInstanceTo(instanceId, renderPos, durationSec);
+                auto* cr = renderer_.getCharacterRenderer();
+                // A mounted rider sits on the seat, not on the ground: this
+                // used to send the rider to the mount's feet, and the
+                // per-frame sync - which only moves a player whose position
+                // changed - left one standing still there, sitting in the
+                // air under its horse.
+                if (const auto* mount = entitySpawner_.getRemotePlayerMount(guid)) {
+                    cr->moveInstanceTo(mount->instanceId, renderPos, durationSec);
+                    renderPos.z += mount->riderHeight;
+                }
+                cr->moveInstanceTo(instanceId, renderPos, durationSec);
             }
             // Play the server-selected ground locomotion animation for the
             // duration of the spline move. Monster patrols report Walk through
