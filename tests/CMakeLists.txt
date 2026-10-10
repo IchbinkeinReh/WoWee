@@ -544,6 +544,14 @@ endif()
 wowee_add_test(test_chat_types
     SOURCES test_chat_types.cpp)
 
+# ── test_chat_channels ──────────────────────────────────────────
+# The zone channels are joined by ChatChannels.dbc id under the client's own
+# localized names, numbered by slot, and their notices are words for the
+# interface's strings. Joined by English name they were private channels
+# called "General" on a German client (game/chat_channels.hpp).
+wowee_add_test(test_chat_channels
+    SOURCES test_chat_channels.cpp)
+
 # ── test_chat_window_background ─────────────────────────────────
 # The chat panel is a white image the interface tints, so the colour this client
 # saves is the whole of what it looks like - and it saved white at full alpha,

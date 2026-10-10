@@ -4147,6 +4147,19 @@ public:
     };
     static constexpr size_t PLAYER_EXPLORED_ZONES_COUNT = 128;
     std::string getAreaName(uint32_t areaId) const;
+    /// An AreaTable row's Flags, zero for one it does not have.
+    uint32_t getAreaFlags(uint32_t areaId) const {
+        (void)getAreaName(areaId);
+        auto it = areaPvpCache_.find(areaId);
+        return it != areaPvpCache_.end() ? it->second.flags : 0u;
+    }
+    /// The name of the row that stands for every capital - "Hauptstädte",
+    /// "City" - which a city's Trade channel is named after: the last row
+    /// with flag 0x200, as 0x0050edd0 finds it. Empty where there is none.
+    std::string getCapitalsAreaName() const {
+        loadAreaNameCache();
+        return capitalsAreaId_ != 0 ? getAreaName(capitalsAreaId_) : std::string{};
+    }
 
     /// What GetZonePVPInfo answers for a zone: one of "sanctuary", "arena",
     /// "friendly", "hostile", "contested", or empty for a zone with no PvP
@@ -5046,6 +5059,7 @@ private:
     struct AreaPvpInfo { uint32_t flags = 0; uint32_t team = 0; };
     mutable std::unordered_map<uint32_t, AreaPvpInfo> areaPvpCache_;
     mutable bool areaNameCacheLoaded_ = false;
+    mutable uint32_t capitalsAreaId_ = 0;
     void loadAreaNameCache() const;
 
     // Map metadata cache (lazy-loaded from Map.dbc).

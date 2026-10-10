@@ -6,6 +6,7 @@
 #include "ui/chat_panel.hpp"
 #include "ui/chat/chat_utils.hpp"
 #include "game/game_handler.hpp"
+#include "game/chat_handler.hpp"
 #include <algorithm>
 #include <cctype>
 
@@ -192,10 +193,18 @@ public:
         if (ctx.args.empty()) return {.handled = false, .clearInput = false};
         const std::string tag = (ctx.fullCommand == "wts") ? "[WTS] " : "[WTB] ";
         std::string tradeChan;
-        for (const auto& ch : ctx.gameHandler.getJoinedChannels()) {
-            std::string chLow = ch;
-            for (char& c : chLow) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (chLow.rfind("trade", 0) == 0) { tradeChan = ch; break; }
+        // The Trade channel by what it is - its ChatChannels.dbc row - not by
+        // a name that is "Handel - Hauptstädte" on a German client.
+        if (auto* chat = ctx.gameHandler.getChatHandler()) {
+            for (const auto& s : chat->channelSlots().all()) {
+                if (s.number == 0 || s.pending || s.zoneChannelId == 0) continue;
+                for (const auto& r : chat->channelRows()) {
+                    if (r.id == s.zoneChannelId && (r.flags & game::chat_channels::kFlagTrade) &&
+                        !(r.flags & game::chat_channels::kFlagLookingForGroup))
+                        tradeChan = s.name;
+                }
+                if (!tradeChan.empty()) break;
+            }
         }
         if (tradeChan.empty()) {
             game::MessageChatData errMsg;

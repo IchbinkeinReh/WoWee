@@ -2,6 +2,7 @@
 
 #include <deque>
 
+#include "game/chat_channels.hpp"
 #include "game/chat_filters.hpp"
 
 #include "game/world_packets.hpp"
@@ -11,6 +12,7 @@
 #include <deque>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -36,14 +38,41 @@ public:
     void sendChatMessage(ChatType type, const std::string& message, const std::string& target = "");
     void sendAddonMessage(ChatType type, const std::string& message, const std::string& target = "");
     void sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid = 0);
-    void joinChannel(const std::string& channelName, const std::string& password = "");
+    /// Join a channel the way 0x00507a80 does: a ChatChannels.dbc shortcut
+    /// ("Allgemein") is that row's channel, asked for by id with the place in
+    /// its name; anything else is a channel of the player's own. A slot - the
+    /// channel's number - is taken now, before the server answers. Nothing
+    /// when the zone channel has no place to be named after yet, or all ten
+    /// slots are taken; otherwise what was asked for, which the interface's
+    /// JoinChannelByName answers with.
+    std::optional<chat_channels::Join> joinChannel(const std::string& channelName,
+                                                   const std::string& password = "",
+                                                   bool byLogin = false);
+    /// Leave a channel by its number, its name or its shortcut (0x005093f0).
     void leaveChannel(const std::string& channelName);
     /// Ask the server for a channel's members; the answer arrives as
     /// SMSG_CHANNEL_LIST and fires CHANNEL_ROSTER_UPDATE.
     void requestChannelList(const std::string& channelName);
     [[nodiscard]] std::string getChannelByIndex(int index) const;
     [[nodiscard]] int getChannelIndex(const std::string& channelName) const;
+    /// The joined channels' names in number order, for the channel panel.
+    /// A channel's number is not its place in this list - see channelSlots.
     [[nodiscard]] const std::vector<std::string>& getJoinedChannels() const { return joinedChannels_; }
+    /// The client's channel slots, numbered as /1, /2 and GetChannelList
+    /// number them.
+    [[nodiscard]] const chat_channels::Slots& channelSlots() const { return channelSlots_; }
+    /// ChatChannels.dbc as the client reads it, loaded on first use. Empty
+    /// until the assets are there.
+    [[nodiscard]] const std::vector<chat_channels::Row>& channelRows() const;
+    /// The channels a chat window carries when nothing has been saved for it:
+    /// each zone channel the client joins by itself, by shortcut and id
+    /// (0x00508320's default branch hands them to 0x00501a70).
+    [[nodiscard]] std::vector<std::pair<std::string, int>> defaultWindowChannels() const;
+    /// Join the zone channels once the player has a zone and is not on a
+    /// flight path, as 0x00508090 waits to (0x005204c0 calls it when the
+    /// zone's text changes, 0x00720000's flag update when a flight ends).
+    /// Called every tick; does its work once per login.
+    void updateLoginChannelJoin();
     /// Whether the player owns this channel - the one who created it, or who
     /// it passed to. SMSG_CHANNEL_NOTIFY says so with OWNER_CHANGED, which
     /// carries the new owner's guid: AzerothCore's Channel::MakeOwnerChanged
@@ -136,6 +165,15 @@ private:
 
     void handleTextEmote(network::Packet& packet);
     void handleChannelNotify(network::Packet& packet);
+    /// Rebuild joinedChannels_ from the slots.
+    void refreshJoinedChannels();
+    /// Where the player is, for a zone channel's name (0x00507a80).
+    [[nodiscard]] chat_channels::Place currentChannelPlace() const;
+    /// Tell the interface a channel notice as 0x00509dd0 does: the word is
+    /// arg1, the channel numbered in arg4, its id, number, name and instance
+    /// in arg7 to arg10.
+    void fireChannelNotice(ChatType type, const std::string& word, const std::string& channelName,
+                           const std::string& player, const std::string& target, uint64_t senderGuid);
     void handleChannelList(network::Packet& packet);
     void handleUserlistAdd(network::Packet& packet);
     void handleUserlistRemove(network::Packet& packet);
@@ -155,6 +193,16 @@ private:
     size_t maxChatHistory_ = 100;
     uint64_t chatUidCounter_ = 0;  // monotonic uid for MessageChatData::uid
     std::vector<std::string> joinedChannels_;
+    chat_channels::Slots channelSlots_;
+    mutable std::vector<chat_channels::Row> channelRows_;
+    mutable bool channelRowsLoaded_ = false;
+    /// The zone channels to join at login (0x00bcf010): a bit per row id,
+    /// set when one is joined and cleared when the player leaves it.
+    uint32_t zoneChannelMask_ = 0;
+    /// Armed at world entry, done once the zone channels have been asked for
+    /// (0x00bcefe4 and 0x00bcefe8).
+    bool loginChannelJoinArmed_ = false;
+    bool loginChannelJoinDone_ = false;
     std::set<std::string> ownedChannels_;
     /// Who sent the message a chat line id names, newest last.
     ///

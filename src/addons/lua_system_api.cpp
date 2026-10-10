@@ -12,6 +12,7 @@
 #include <set>
 #include <utility>
 #include <vector>
+#include "game/chat_handler.hpp"
 #include "game/group_defines.hpp"
 #include "game/minimap_tracking.hpp"
 #include "core/open_url.hpp"
@@ -3169,19 +3170,10 @@ static std::array<ChatWindowSettings, kNumChatWindows>& chatWindows() {
         // Blizzard_CombatLog and registers its own events, so its list is
         // empty here exactly as it is in the real client.
         for (const char* g : kDefaultChatGroups) w[0].messageGroups.emplace_back(g);
-        // The channels the default layout carries. FrameXML never adds one by
-        // itself - ChatFrame_RegisterForChannels reads this list and nothing
-        // else fills it - so with it empty every channel line was matched
-        // against nothing and dropped, however well the message parsed.
-        //
-        // Names without the zone after them, which is what the frame compares:
-        // the message carries "General - Blasted Lands" and the short name
-        // beside it, and the match is on the short one. Zero for the zone id,
-        // which this client does not learn; the name settles it.
-        for (const char* c : {"General", "Trade", "LocalDefense",
-                              "LookingForGroup", "GuildRecruitment"}) {
-            w[0].channels.emplace_back(c, 0);
-        }
+        // The channels the default layout carries are filled in when they are
+        // first asked for (settleWindowChannels): they are ChatChannels.dbc's
+        // shortcuts and ids, in the client's language, and the file is not
+        // read yet when this runs.
         return w;
     }();
     return windows;
@@ -3202,6 +3194,39 @@ static std::string interfaceStatePath() {
 }
 
 static void saveInterfaceState();
+
+/// Make a window's channel list what the frame can match lines against.
+///
+/// FrameXML never adds a channel by itself - ChatFrame_RegisterForChannels
+/// reads this list and nothing else fills it - so the first window starts
+/// with the zone channels the client joins by itself, by shortcut and
+/// ChatChannels.dbc id (0x00508320 hands them to 0x00501a70). The frame finds
+/// a zone channel's lines by that id, since the line names it "Allgemein -
+/// Dalaran" and the list "Allgemein"; a channel of the player's own it finds
+/// by name. An empty first window is the defaults, not a setting: the
+/// interface's reset empties it and expects the client to put them back.
+///
+/// A layout saved by builds that joined the channels by English name holds
+/// "General" with no id, which matches nothing on a client in any other
+/// language. Each is put back as its row's shortcut and id.
+static void settleWindowChannels(lua_State* L, ChatWindowSettings& w, bool first) {
+    auto* gh = getGameHandler(L);
+    auto* ch = gh ? gh->getChatHandler() : nullptr;
+    if (!ch || ch->channelRows().empty()) return;
+    bool changed = false;
+    if (first && w.channels.empty()) {
+        for (const auto& c : ch->defaultWindowChannels()) w.channels.push_back(c);
+        changed = !w.channels.empty();
+    }
+    for (auto& c : w.channels) {
+        if (c.second != 0) continue;
+        if (const auto* r = game::chat_channels::rowForLegacyName(ch->channelRows(), c.first)) {
+            c = {r->shortcut, static_cast<int>(r->id)};
+            changed = true;
+        }
+    }
+    if (changed) saveInterfaceState();
+}
 
 /// The window a one-based index names, or nullptr if it names none.
 static ChatWindowSettings* chatWindow(lua_State* L, int argIndex) {
@@ -6472,19 +6497,12 @@ void registerSystemLuaAPI(lua_State* L) {
                 // ChatFrame_RegisterForChannels reads: it steps two at a time
                 // and fills channelList and zoneChannelList together.
                 {"GetChatWindowChannels", [](lua_State* L) -> int {
-            const ChatWindowSettings* w = chatWindow(L, 1);
+            ChatWindowSettings* w = chatWindow(L, 1);
             if (!w) return 0;
             // Same rule, same reason: ChatFrame_RemoveAllChannels runs beside
             // the group wipe in FCF_ResetChatWindows, and a General with no
             // channels matched every channel line against nothing.
-            if (w->channels.empty() && lua_tonumber(L, 1) == 1) {
-                for (const char* c : {"General", "Trade", "LocalDefense",
-                                      "LookingForGroup", "GuildRecruitment"}) {
-                    lua_pushstring(L, c);
-                    lua_pushnumber(L, 0);
-                }
-                return 10;
-            }
+            settleWindowChannels(L, *w, lua_tonumber(L, 1) == 1);
             for (const auto& c : w->channels) {
                 lua_pushstring(L, c.first.c_str());
                 lua_pushnumber(L, c.second);
@@ -6524,7 +6542,14 @@ void registerSystemLuaAPI(lua_State* L) {
             ChatWindowSettings* w = chatWindow(L, 1);
             const char* name = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
             if (!w || !name) return 0;
-            const int zone = static_cast<int>(luaL_optnumber(L, 3, 0));
+            settleWindowChannels(L, *w, lua_tonumber(L, 1) == 1);
+            // A zone channel's shortcut answers its ChatChannels.dbc id, which
+            // is what the frame finds its lines by.
+            int zone = static_cast<int>(luaL_optnumber(L, 3, 0));
+            if (auto* gh = getGameHandler(L); gh && gh->getChatHandler()) {
+                for (const auto& r : gh->getChatHandler()->channelRows())
+                    if (game::chat_channels::sameName(r.shortcut, name)) zone = static_cast<int>(r.id);
+            }
             for (auto& c : w->channels) {
                 if (c.first != name) continue;
                 if (zone != 0) c.second = zone;

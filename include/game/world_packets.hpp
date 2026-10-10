@@ -860,7 +860,11 @@ public:
  */
 class JoinChannelPacket {
 public:
-    static network::Packet build(const std::string& channelName, const std::string& password = "");
+    /// 0x00507a80: the row's id (zero for a channel of the player's own), two
+    /// bytes - 1 and 0 from the login join (0x00508090), 0 and the voice
+    /// setting from the interface's - then the name and the password.
+    static network::Packet build(const std::string& channelName, const std::string& password = "",
+                                 uint32_t channelId = 0, uint8_t byZone = 0, uint8_t unk = 0);
 };
 
 /**
@@ -868,7 +872,8 @@ public:
  */
 class LeaveChannelPacket {
 public:
-    static network::Packet build(const std::string& channelName);
+    /// 0x005093f0: the slot's zone channel id, then its name.
+    static network::Packet build(const std::string& channelName, uint32_t channelId = 0);
 };
 
 /**
@@ -917,7 +922,25 @@ enum class ChannelNotifyType : uint8_t {
 struct ChannelNotifyData {
     ChannelNotifyType notifyType = ChannelNotifyType::YOU_JOINED;
     std::string channelName;
+    /// The player the notice is about, or who did it (0x0050e120's local_c):
+    /// the new owner, who changed the password, who kicked.
     uint64_t senderGuid = 0;
+    /// The second player, who was kicked or banned (local_30).
+    uint64_t targetGuid = 0;
+    /// A player named rather than given by guid (local_344): PLAYER_NOT_FOUND,
+    /// CHANNEL_OWNER, PLAYER_NOT_BANNED, PLAYER_INVITED, PLAYER_INVITE_BANNED.
+    std::string playerName;
+    /// YOU_JOINED: the channel's flags, its ChatChannels.dbc id and the
+    /// instance the interface puts after its name (arg10).
+    uint8_t channelFlags = 0;
+    uint32_t zoneChannelId = 0;
+    uint32_t instanceId = 0;
+    /// YOU_LEFT: the channel's id and whether it is a constant one, which the
+    /// server leaves for the player when the zone no longer has it.
+    bool constant = false;
+    /// MODE_CHANGE: a member's flags before and after.
+    uint8_t oldMemberFlags = 0;
+    uint8_t newMemberFlags = 0;
 
     [[nodiscard]] bool isValid() const { return !channelName.empty(); }
 };

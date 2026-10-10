@@ -72,6 +72,13 @@
     "SexID": 1,
     "Variation": 2
   },
+  "ChatChannels": {
+    "FactionGroup": 2,
+    "Flags": 1,
+    "ID": 0,
+    "Name": 3,
+    "Shortcut": 20
+  },
   "ChrClasses": {
     "SpellClassSet": 56
   },

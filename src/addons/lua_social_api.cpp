@@ -1,8 +1,10 @@
 // lua_social_api.cpp - Chat, guild, friends, ignore, gossip, party management, and emotes Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include <cstring>
 #include <iterator>
 #include <vector>
 #include "addons/lua_api_helpers.hpp"
+#include "game/chat_handler.hpp"
 #include "game/reputation_standing.hpp"
 #include "game/stationery.hpp"
 #include "rendering/animation_controller.hpp"
@@ -160,19 +162,40 @@ static int lua_SendChatMessage(lua_State* L) {
     // ChatEdit_ParseText stores what GetChannelName answered - an index into
     // the joined list - as the edit box's channelTarget and hands that back
     // here, so a bare number has to be turned into the name before it is sent.
+    //
+    // The number is the channel's slot (0x004fe160), not a place in a list:
+    // channel 3 stays 3 when channel 2 is left.
     if (ct == game::ChatType::CHANNEL && lua_isnumber(L, 4)) {
         const int index = static_cast<int>(lua_tonumber(L, 4));
-        const auto& joined = gh->getJoinedChannels();
-        if (index >= 1 && index <= static_cast<int>(joined.size())) {
-            targetStr = joined[static_cast<size_t>(index) - 1];
-        } else {
-            LOG_WARNING("SendChatMessage: channel index ", index,
-                        " is outside the ", joined.size(), " joined, not sending");
+        targetStr = gh->getChannelByIndex(index);
+        if (targetStr.empty()) {
+            LOG_WARNING("SendChatMessage: no joined channel has number ", index, ", not sending");
             return 0;
         }
     }
     gh->sendChatMessage(ct, msg, targetStr);
     return 0;
+}
+
+// JoinChannelByName(name, password, frameId, voice) → zoneChannel, shortcut
+// (0x0050d900, which JoinPermanentChannel and JoinTemporaryChannel share). A
+// shortcut joins its zone channel by id with the place in the name; anything
+// else is a channel of the player's own. The answer is the row's id - zero
+// for one of the player's own - and the shortcut for a zone channel; nothing
+// when nothing was joined, which /join reports as an invalid name.
+static int lua_JoinChannelByName(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    auto* ch = gh ? gh->getChatHandler() : nullptr;
+    const char* name = luaL_optstring(L, 1, "");
+    const char* pass = luaL_optstring(L, 2, "");
+    // One word, under 128 bytes, as the client checks before anything else.
+    if (!ch || !name || !*name || std::strchr(name, ' ') || std::strlen(name) >= 128) return 0;
+    const auto join = ch->joinChannel(name, pass ? pass : "");
+    if (!join) return 0;
+    lua_pushnumber(L, join->zoneChannelId);
+    if (join->shortcut.empty()) lua_pushnil(L);
+    else lua_pushstring(L, join->shortcut.c_str());
+    return 2;
 }
 
 // SendAddonMessage(prefix, text, chatType, target) - send addon message
@@ -1947,19 +1970,13 @@ void registerSocialLuaAPI(lua_State* L) {
                 // channel should show in. The frame binding is handled entirely
                 // in FrameXML, so only the join happens here.
                 //
-                // The first value says whether this is one of the automatic
-                // zone channels; nothing joined by name is, so it is nil rather
-                // than a zero that would read as true.
-                {"JoinPermanentChannel", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* name = luaL_optstring(L, 1, "");
-            const char* pass = luaL_optstring(L, 2, "");
-            if (!gh || !name || !*name) return luaReturnNil(L);
-            gh->joinChannel(name, pass ? pass : "");
-            lua_pushnil(L);
-            lua_pushstring(L, name);
-            return 2;
-        }},
+                // What 0x0050d900 answers: the ChatChannels.dbc id of the
+                // channel joined - zero for one of the player's own, which is
+                // still true in Lua - and the row's shortcut where it is a
+                // zone channel. Nothing at all when nothing was joined, and
+                // /join then says the name is invalid. A nil first value was
+                // answered for every join, so every /join said so.
+                {"JoinPermanentChannel", lua_JoinChannelByName},
                 // GetChannelList() → id, name per channel, and a disabled
                 // flag with them from 4.0 on.
                 //
@@ -1975,25 +1992,36 @@ void registerSocialLuaAPI(lua_State* L) {
                 // The flag is 4.x's, so 4.x keeps it. Nothing here has been
                 // read against a 4.3.4 interface and the answer it already had
                 // is the one it should keep until something has.
+                //
+                // 0x004fe650: each joined slot's number and, for a zone
+                // channel, its row's shortcut - "Allgemein", not "Allgemein -
+                // Dalaran" - and the slot's name for any other.
                 {"GetChannelList", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) return 0;
-            const auto& joined = gh->getJoinedChannels();
+            auto* ch = gh ? gh->getChatHandler() : nullptr;
+            if (!ch) return 0;
             const int per = interfaceVersion(L) >= 40000 ? 3 : 2;
+            const auto& slots = ch->channelSlots().all();
             // Lua guarantees a C function twenty free slots and no more, so
             // seven channels ran past the end of three-value answers and ten
             // runs past it for two - and the default set plus a couple of
             // custom ones is more than either.
-            if (!joined.empty() &&
-                !lua_checkstack(L, static_cast<int>(joined.size()) * per)) {
+            if (!slots.empty() &&
+                !lua_checkstack(L, static_cast<int>(slots.size()) * per)) {
                 return 0;
             }
-            for (size_t i = 0; i < joined.size(); ++i) {
-                lua_pushnumber(L, static_cast<lua_Number>(i + 1));
-                lua_pushstring(L, joined[i].c_str());
+            int pushed = 0;
+            for (const auto& s : slots) {
+                if (s.number == 0 || s.pending) continue;
+                std::string shown = s.name;
+                for (const auto& r : ch->channelRows())
+                    if (s.zoneChannelId != 0 && r.id == s.zoneChannelId) shown = r.shortcut;
+                lua_pushnumber(L, static_cast<lua_Number>(s.number));
+                lua_pushstring(L, shown.c_str());
                 if (per == 3) lua_pushboolean(L, 0);   // disabled
+                pushed += per;
             }
-            return static_cast<int>(joined.size()) * per;
+            return pushed;
         }},
                 // Channel moderation is not modelled, so the player owns none.
                 // IsDisplayChannelOwner lives in lua_system_api.cpp, beside
@@ -3479,14 +3507,14 @@ void registerSocialLuaAPI(lua_State* L) {
                     // is in one, and the server is never asked.
                     auto* gh = getGameHandler(L);
                     if (!gh) return 0;
-                    const auto& joined = gh->getJoinedChannels();
-                    if (joined.empty()) {
+                    auto* ch = gh->getChatHandler();
+                    if (!ch || gh->getJoinedChannels().empty()) {
                         gh->addSystemChatMessage("You are not in any channels.");
                         return 0;
                     }
-                    for (size_t i = 0; i < joined.size(); ++i) {
-                        gh->addSystemChatMessage(
-                            std::to_string(i + 1) + ". " + joined[i]);
+                    for (const auto& s : ch->channelSlots().all()) {
+                        if (s.number == 0 || s.pending) continue;
+                        gh->addSystemChatMessage(std::to_string(s.number) + ". " + s.name);
                     }
                     return 0;
                 }},
@@ -3626,13 +3654,8 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->randomRoll(mn, mx);
             return 0;
         }},
-                {"JoinChannelByName", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
-            const char* pw = luaL_optstring(L, 2, "");
-            if (gh) gh->joinChannel(name, pw);
-            return 0;
-        }},
+                {"JoinChannelByName", lua_JoinChannelByName},
+                {"JoinTemporaryChannel", lua_JoinChannelByName},
                 {"LeaveChannelByName", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* name = luaL_checkstring(L, 1);
@@ -3654,27 +3677,26 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GetChannelName", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) { lua_pushnumber(L, 0); lua_pushnil(L); lua_pushnumber(L, 0); return 3; }
-            const auto& joined = gh->getJoinedChannels();
-
-            int index = 0;
-            if (lua_isnumber(L, 1)) {
-                index = static_cast<int>(lua_tonumber(L, 1));
-            } else if (const char* wanted = lua_tostring(L, 1)) {
-                // Accepts a name as well as an index; chat's slash handlers
-                // pass whichever the player typed.
-                for (size_t i = 0; i < joined.size(); ++i) {
-                    if (joined[i] == wanted) { index = static_cast<int>(i) + 1; break; }
-                }
+            auto* ch = gh->getChatHandler();
+            // 0x004fe850: a number is the joined slot with that number, a
+            // name any slot of that name; the answer is the slot's number,
+            // its name - the server's, "Allgemein - Dalaran" - and its
+            // instance.
+            const game::chat_channels::Slot* slot = nullptr;
+            if (ch && lua_isnumber(L, 1)) {
+                slot = ch->channelSlots().joinedByNumber(static_cast<int>(lua_tonumber(L, 1)));
+            } else if (const char* wanted = ch ? lua_tostring(L, 1) : nullptr) {
+                slot = ch->channelSlots().byName(wanted);
             }
-            if (index < 1 || index > static_cast<int>(joined.size())) {
+            if (!slot) {
                 lua_pushnumber(L, 0);
                 lua_pushnil(L);
                 lua_pushnumber(L, 0);
                 return 3;
             }
-            lua_pushnumber(L, index);
-            lua_pushstring(L, joined[static_cast<size_t>(index) - 1].c_str());
-            lua_pushnumber(L, 0);   // instanceID - one instance of each here
+            lua_pushnumber(L, slot->number);
+            lua_pushstring(L, slot->name.c_str());
+            lua_pushnumber(L, slot->instanceId);
             return 3;
         }},
     };
