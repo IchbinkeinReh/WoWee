@@ -311,6 +311,8 @@ bool Renderer::createPerFrameResources() {
             LOG_ERROR("Failed to create the ray traced lighting");
             return false;
         }
+        // Off until the settings say otherwise - or WOWEE_RT_LIGHTING does.
+        setRtLightingMode(0);
     }
 
     // --- Create descriptor set layout for set 0 (per-frame UBO + shadow sampler + fog volume
@@ -2436,6 +2438,14 @@ void Renderer::update(float deltaTime) {
         const auto* gh = core::Application::getInstance().getGameHandler();
         uint32_t mapId    = gh ? gh->getCurrentMapId() : 0;
         float gameTime    = gh ? gh->getGameTime() : -1.0f;
+        // WOWEE_GAME_TIME=<hours>: the light at a time of day of one's
+        // choosing, for comparing lighting work at noon in the middle of the
+        // night. Only what is drawn; the server's clock is left alone.
+        static const float gameTimeOverride = [] {
+            const char* v = std::getenv("WOWEE_GAME_TIME");
+            return (v && *v) ? static_cast<float>(std::atof(v)) : -1.0f;
+        }();
+        if (gameTimeOverride >= 0.0f) gameTime = gameTimeOverride;
         // SMSG_WEATHER names a Weather.dbc row; the weather takes it from
         // there (0x007846a0). Nothing falls without one: the client makes up
         // no weather of its own, and draws it indoors as out, the ground it
@@ -5726,6 +5736,13 @@ VkImageView Renderer::getNeutralRtLightingView() const {
 
 void Renderer::setRtLightingMode(int mode) {
     if (!rtLighting_) return;
+    // WOWEE_RT_LIGHTING=<0..3> holds the mode whatever the settings say, so
+    // a comparison run leaves the player's own choice untouched.
+    static const int modeOverride = [] {
+        const char* v = std::getenv("WOWEE_RT_LIGHTING");
+        return (v && *v) ? std::atoi(v) : -1;
+    }();
+    if (modeOverride >= 0) mode = modeOverride;
     rtLighting_->setMode(static_cast<RtLighting::Mode>(std::clamp(mode, 0, 3)));
 }
 
