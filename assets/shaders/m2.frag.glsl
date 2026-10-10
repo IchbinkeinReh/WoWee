@@ -28,6 +28,12 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 cascadeRect[4];
     vec4 cascadeTexel[4];
     vec4 cascadeInfo;
+    // The probe volume (rt_lighting.glsli); GPUPerFrameData ends with it.
+    vec4 giVolume[2];
+    vec4 giVolumeMod[2];
+    vec4 giSky;
+    vec4 giGround;
+    vec4 giParams;
 };
 
 #include "rt_lighting.glsli"
@@ -260,7 +266,7 @@ void main() {
         vec3 terrainN = normalize(vInteriorDirect.xyz);
         float nl = clamp(dot(terrainN, toSun), 0.0, 1.0);
         RtLight rt = rtLightAt(FragPos);
-        vec3 light = min(rtAmbient(rt, ambientColor.rgb) + nl * lightColor.rgb, vec3(1.0)) * vInteriorAmbient.rgb;
+        vec3 light = min(rtAmbient(rt, ambientColor.rgb, FragPos, terrainN) + nl * lightColor.rgb, vec3(1.0)) * vInteriorAmbient.rgb;
         float shade = vDetailLit;
         if (shadowParams.x > 0.5) {
             // The shadow variants: the shadow map's light, no more than the
@@ -276,7 +282,7 @@ void main() {
         }
         vec3 rgb = tex0.rgb * light * (0.7 + 0.3 * shade);
         rgb = applyFog(rgb, FragPos, depth, (vInteriorLit & 2) != 0 ? cameraFogColor.rgb : fogColor.rgb);
-        outColor = vec4(rgb, alpha);
+        outColor = vec4(rtGiDebug(rgb), alpha);
         return;
     }
 
@@ -362,7 +368,7 @@ void main() {
         // the direct light no more than one a channel (0x00873ca0), then the
         // shadow variants' 0.7 + 0.3 x the light the shadow map lets through
         // over all of it.
-        light = clamp(rtAmbient(rt, ambient) + diff * min(direct, vec3(1.0)), 0.0, 1.0)
+        light = clamp(rtAmbient(rt, ambient, FragPos, norm) + diff * min(direct, vec3(1.0)), 0.0, 1.0)
               * (0.7 + 0.3 * shadow);
     }
     vec3 result = combineStages(vec4(light * tint, batchFade), tex0, tex1).rgb;
@@ -421,5 +427,5 @@ void main() {
         // NoAlphaAdd ignores alpha: the fade has to be in the colour.
         result *= vFadeAlpha;
     }
-    outColor = vec4(result, outAlpha);
+    outColor = vec4(rtGiDebug(result), outAlpha);
 }

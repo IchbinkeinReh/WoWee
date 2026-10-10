@@ -10,13 +10,10 @@
 #include "rt_common.glsli"
 
 layout(set = 0, binding = 3) uniform sampler2D uGbufCur;
-layout(set = 0, binding = 6) uniform sampler2D uGbufPrev;
-layout(set = 0, binding = 7) uniform sampler2D uRaw;
-layout(set = 0, binding = 8) uniform sampler2D uRawGi;
-layout(set = 0, binding = 9) uniform sampler2D uHistPrev;
-layout(set = 0, binding = 10) uniform sampler2D uHistGiPrev;
-layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D uHist;
-layout(set = 0, binding = 12, rgba16f) uniform writeonly image2D uHistGi;
+layout(set = 0, binding = 5) uniform sampler2D uGbufPrev;
+layout(set = 0, binding = 6) uniform sampler2D uRaw;
+layout(set = 0, binding = 7) uniform sampler2D uHistPrev;
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D uHist;
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -28,12 +25,10 @@ void main() {
 
     vec4 g = texelFetch(uGbufCur, px, 0);
     vec4 raw = texelFetch(uRaw, px, 0);
-    vec4 rawGi = texelFetch(uRawGi, px, 0);
     float dist = rtGbufDist(g);
     vec3 n = rtGbufNormal(g);
     if (dist <= 0.0) {
         imageStore(uHist, px, vec4(raw.rg, 1.0, 0.0));
-        imageStore(uHistGi, px, rawGi);
         return;
     }
 
@@ -41,7 +36,6 @@ void main() {
 
     float len = 0.0;
     vec4 hist = vec4(0.0);
-    vec4 histGi = vec4(0.0);
     vec4 clip = pass.prevViewProj * vec4(p, 1.0);
     if (pass.misc.y > 0.5 && clip.w > 0.0) {
         vec2 puv = clip.xy / clip.w * 0.5 + 0.5;
@@ -62,13 +56,11 @@ void main() {
                 float bw = (o.x == 1 ? w.x : 1.0 - w.x) * (o.y == 1 ? w.y : 1.0 - w.y);
                 if (same && bw > 0.0) {
                     hist += texelFetch(uHistPrev, q, 0) * bw;
-                    histGi += texelFetch(uHistGiPrev, q, 0) * bw;
                     wsum += bw;
                 }
             }
             if (wsum > 0.05) {
                 hist /= wsum;
-                histGi /= wsum;
                 len = hist.b;
             }
         }
@@ -77,7 +69,5 @@ void main() {
     len = min(len + 1.0, MAX_HISTORY);
     float a = 1.0 / len;
     vec2 lightOut = mix(hist.rg, raw.rg, a);
-    vec3 giOut = mix(histGi.rgb, rawGi.rgb, a);
     imageStore(uHist, px, vec4(lightOut, len, 0.0));
-    imageStore(uHistGi, px, vec4(giOut, 0.0));
 }

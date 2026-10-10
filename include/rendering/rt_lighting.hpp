@@ -6,6 +6,7 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
+#include "rendering/rt_gi_probes.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_utils.hpp"
 
@@ -15,8 +16,13 @@ namespace rendering {
 class RtScene;
 
 /**
- * Ray traced sun shadows, ambient occlusion and one-bounce diffuse light for
+ * Ray traced sun shadows, ambient occlusion and multi-bounce diffuse light for
  * the forward renderer.
+ *
+ * The diffuse light is a probe volume around the camera (RtGiProbes), updated
+ * in Full mode alongside the per-pixel terms below and read by the surfaces
+ * at their own position and normal. The rest of this comment is the
+ * per-pixel sun and occlusion.
  *
  * There is no G-buffer to trace from, so the pass runs after the opaque
  * geometry, on the depth it left: rebuild normals from depth, trace one
@@ -37,7 +43,8 @@ class RtScene;
  */
 class RtLighting {
 public:
-    /// Persisted as an index; add at the end.
+    /// Persisted as an index; add at the end. Full adds the probe volume's
+    /// multi-bounce light to ShadowsAO.
     enum class Mode : int { Off = 0, Shadows = 1, ShadowsAO = 2, Full = 3 };
 
     RtLighting() = default;
@@ -54,22 +61,24 @@ public:
     [[nodiscard]] Mode mode() const { return mode_; }
     [[nodiscard]] bool active() const { return mode_ != Mode::Off && pipelinesOk_; }
 
-    /// Bring the images to the size the scene is rendered at. Call between
-    /// frames, before the per-frame sets are used. Returns true when the
-    /// views changed and the per-frame sets must be written again.
+    /// Bring the images to the size the scene is rendered at, and the probe
+    /// volume into being or out of it with the mode. Call between frames,
+    /// before the per-frame sets are used. Returns true when the views
+    /// changed and the per-frame sets must be written again.
     bool prepare(VkExtent2D sceneExtent);
 
     /// The immutable sampler for per-frame bindings 3 and 4.
     [[nodiscard]] VkSampler sampler() const { return linearSampler_; }
-    /// What per-frame set `slot` binds at 3 (sun, AO, distance) and 4 (bounce).
+    /// What per-frame set `slot` binds at 3 (sun, AO, distance) and 4 (the
+    /// probe atlas, rt_gi.glsli).
     [[nodiscard]] VkImageView lightViewForSlot(uint32_t slot) const;
     [[nodiscard]] VkImageView giViewForSlot(uint32_t slot) const;
     [[nodiscard]] VkImageView neutralView() const { return neutral_.imageView; }
-    /// The images slot `slot` writes, in GENERAL layout, at the trace size.
+    /// The image slot `slot` writes, in GENERAL layout, at the trace size.
     /// For tools that read the result back (tools/rt_probe.cpp).
     [[nodiscard]] VkImage lightImageWrittenBy(uint32_t slot) const { return slots_[slot].out.img.image; }
-    [[nodiscard]] VkImage giImageWrittenBy(uint32_t slot) const { return slots_[slot].outGi.img.image; }
     [[nodiscard]] VkExtent2D traceExtent() const { return traceExtent_; }
+    [[nodiscard]] const RtGiProbes& probes() const { return probes_; }
 
     struct FrameInputs {
         glm::mat4 viewProj;
@@ -88,11 +97,13 @@ public:
 
     /// What the surface shaders need to find last frame's result, for the
     /// per-frame block: the view-projection it was traced with, the camera
-    /// position, and params (x = mode, 0 when there is no usable result).
+    /// position, and params (x = mode, 0 when there is no usable result);
+    /// and the probe volume as the atlas holds it (gi.params.x 0 when off).
     struct ConsumerData {
         glm::mat4 viewProj{1.0f};
         glm::vec4 cameraPos{0.0f};
         glm::vec4 params{0.0f};
+        RtGiProbes::ConsumerData gi;
     };
     [[nodiscard]] ConsumerData consumerData() const;
 
@@ -101,7 +112,7 @@ private:
         AllocatedImage img{};
     };
     struct Slot {
-        Target gbuf, hist, histGi, out, outGi;
+        Target gbuf, hist, out;
         AllocatedBuffer ubo{};
         VkDescriptorSet sets[3] = {};  // one per filter pass; set 0 also runs the rest
         VkImage boundDepth = VK_NULL_HANDLE;
@@ -123,7 +134,8 @@ private:
     VkExtent2D sceneExtent_{};
     VkExtent2D traceExtent_{};
     Slot slots_[MAX_FRAMES_IN_FLIGHT];
-    Target raw_, rawGi_, tmp_, tmpGi_;
+    Target raw_, tmp_;
+    RtGiProbes probes_;
     AllocatedImage neutral_{};
     bool imagesNeedInit_ = false;
 

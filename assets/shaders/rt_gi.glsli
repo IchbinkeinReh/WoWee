@@ -1,0 +1,156 @@
+// The irradiance probe volume (RtGiProbes): its layout, and how a point finds
+// the light the probes around it have gathered. Read by the probe passes for
+// the light at a ray's hit point and by the surfaces for their ambient
+// (rt_lighting.glsli). Mirrors include/rendering/rt_gi_volume.hpp.
+//
+// A cascade is described by two vectors:
+//   vol    xyz the absolute grid coordinate of its first probe, w the spacing
+//          in yards (0: the cascade holds nothing)
+//   volMod xyz that coordinate modulo the probe counts, which is where the
+//          first probe is stored
+// A probe's world position is its absolute coordinate times the spacing.
+
+const ivec3 GI_PROBES = ivec3(32, 32, 16);
+const int GI_IRR_TEXELS = 6;
+const int GI_IRR_TILE = 8;
+const int GI_VIS_TEXELS = 8;
+const int GI_VIS_TILE = 10;
+const int GI_BAND_HEIGHT = 32 * (GI_IRR_TILE + GI_VIS_TILE);
+const vec2 GI_ATLAS_SIZE = vec2(32 * 16 * GI_VIS_TILE, 2 * GI_BAND_HEIGHT);
+const int GI_RAYS = 64;
+
+vec2 giOctEncode(vec3 n) {
+    n /= abs(n.x) + abs(n.y) + abs(n.z);
+    vec2 e = n.xy;
+    if (n.z < 0.0) e = (1.0 - abs(n.yx)) * vec2(e.x >= 0.0 ? 1.0 : -1.0, e.y >= 0.0 ? 1.0 : -1.0);
+    return e;
+}
+
+vec3 giOctDecode(vec2 e) {
+    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return normalize(n);
+}
+
+// Ray i of the probe ray set, before the frame's turn (rt_gi_volume.hpp's
+// fibonacciDirection).
+vec3 giFibonacci(uint i) {
+    float z = 1.0 - (2.0 * float(i) + 1.0) / float(GI_RAYS);
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = float(i) * 2.39996323;
+    return vec3(r * cos(phi), r * sin(phi), z);
+}
+
+ivec2 giIrradianceTileOrigin(int cascade, ivec3 s) {
+    return ivec2((s.x + GI_PROBES.x * s.z) * GI_IRR_TILE, cascade * GI_BAND_HEIGHT + s.y * GI_IRR_TILE);
+}
+
+ivec2 giVisibilityTileOrigin(int cascade, ivec3 s) {
+    return ivec2((s.x + GI_PROBES.x * s.z) * GI_VIS_TILE,
+                 cascade * GI_BAND_HEIGHT + GI_PROBES.y * GI_IRR_TILE + s.y * GI_VIS_TILE);
+}
+
+// Where direction d falls in a tile, in atlas UV. The border lets the
+// bilinear filter run right up to the tile's edge.
+vec2 giTileUv(ivec2 origin, int texels, vec3 d) {
+    vec2 e = giOctEncode(d) * 0.5 + 0.5;
+    return (vec2(origin) + 1.0 + e * float(texels)) / GI_ATLAS_SIZE;
+}
+
+ivec3 giStorage(vec4 volMod, ivec3 local) {
+    return (ivec3(volMod.xyz) + local) % GI_PROBES;
+}
+
+vec3 giProbeWorld(vec4 vol, ivec3 local) {
+    return (vol.xyz + vec3(local)) * vol.w;
+}
+
+// How far inside a cascade p is: 1 more than two cells in from every face,
+// falling to 0 at the outermost probes, so the cascade beyond takes over
+// without a seam.
+float giCascadeCover(vec4 vol, vec3 p) {
+    if (vol.w <= 0.0) return 0.0;
+    vec3 g = p / vol.w - vol.xyz;
+    vec3 edge = min(g, vec3(GI_PROBES - 1) - g);
+    return clamp(min(edge.x, min(edge.y, edge.z)) * 0.5, 0.0, 1.0);
+}
+
+// The eight probes around p, weighted as DDGI does (Majercik et al. 2019):
+// trilinear, less for a probe behind the surface, and by Chebyshev's bound on
+// whether the probe can see the point at all, from the mean and mean square
+// distance its rays travelled toward it. The last is what keeps an alley's
+// probes on the far side of a wall out of the alley.
+//
+// v is the direction back toward whoever is looking - the camera, or for a
+// ray's hit point the probe that cast it - and with n moves the point the
+// visibility is tested from off the surface, so the surface does not shadow
+// itself.
+vec3 giSampleCascade(sampler2D atlas, int cascade, vec4 vol, vec4 volMod, vec3 p, vec3 n, vec3 v) {
+    float spacing = vol.w;
+    vec3 pb = p + (n * 0.2 + v * 0.8) * (0.225 * spacing);
+    vec3 g = pb / spacing - vol.xyz;
+    ivec3 base = clamp(ivec3(floor(g)), ivec3(0), GI_PROBES - 2);
+    vec3 alpha = clamp(g - vec3(base), 0.0, 1.0);
+
+    vec3 sum = vec3(0.0);
+    float wsum = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        ivec3 off = ivec3(i & 1, (i >> 1) & 1, i >> 2);
+        ivec3 local = base + off;
+        vec3 probe = giProbeWorld(vol, local);
+        ivec3 s = giStorage(volMod, local);
+
+        vec3 toProbe = normalize(probe - p);
+        float back = (dot(toProbe, n) + 1.0) * 0.5;
+        float w = back * back + 0.2;
+
+        vec3 fromProbe = pb - probe;
+        float d = length(fromProbe);
+        vec2 m = textureLod(atlas, giTileUv(giVisibilityTileOrigin(cascade, s), GI_VIS_TEXELS,
+                                            fromProbe / max(d, 1e-4)), 0.0).rg;
+        if (d > m.x) {
+            float variance = abs(m.x * m.x - m.y);
+            float over = d - m.x;
+            float cheb = variance / (variance + over * over);
+            w *= max(cheb * cheb * cheb, 0.05);
+        }
+        // Weights near zero crushed further, so a probe that can barely see
+        // the point does not still tint it.
+        w = max(w, 1e-6);
+        if (w < 0.2) w *= w * w / 0.04;
+
+        vec3 tri = mix(1.0 - alpha, alpha, vec3(off));
+        w *= tri.x * tri.y * tri.z;
+
+        // Blended in square root, which keeps a bright probe beside dark ones
+        // from spreading a hard-edged blotch over the cell.
+        vec3 irr = textureLod(atlas, giTileUv(giIrradianceTileOrigin(cascade, s), GI_IRR_TEXELS, n), 0.0).rgb;
+        sum += sqrt(max(irr, vec3(0.0))) * w;
+        wsum += w;
+    }
+    vec3 r = sum / max(wsum, 1e-6);
+    return r * r;
+}
+
+// The probes' irradiance at p, the near cascade where it reaches and the far
+// one beyond. w is how much of it there is: 0 outside both, where the caller
+// has to fall back on something.
+vec4 giIrradiance(sampler2D atlas, vec4 vol0, vec4 volMod0, vec4 vol1, vec4 volMod1,
+                  vec3 p, vec3 n, vec3 v) {
+    float c0 = giCascadeCover(vol0, p);
+    if (c0 >= 1.0) return vec4(giSampleCascade(atlas, 0, vol0, volMod0, p, n, v), 1.0);
+    float c1 = giCascadeCover(vol1, p);
+    vec3 e = vec3(0.0);
+    if (c1 > 0.0) e = giSampleCascade(atlas, 1, vol1, volMod1, p, n, v);
+    if (c0 > 0.0) e = mix(e, giSampleCascade(atlas, 0, vol0, volMod0, p, n, v), c1 > 0.0 ? c0 : 1.0);
+    return vec4(e, max(c0, c1));
+}
+
+// What a surface facing n would gather in the open, on level ground, from the
+// sky above the horizon and the ground below it: the light the zone's flat
+// ambient was authored for. Measured against this, the probes say how much
+// more or less a place gets than an open field.
+vec3 giOpenReference(vec3 sky, vec3 ground, vec3 n) {
+    float up = clamp(n.z * 0.5 + 0.5, 0.0, 1.0);
+    return sky * up + ground * (1.0 - up);
+}

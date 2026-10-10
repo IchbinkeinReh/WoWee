@@ -636,7 +636,7 @@ public:
     /// frame. See VolumetricFog.
     void setVolumetricFogQuality(int quality);
     /// Ray traced lighting: 0 off, 1 sun shadows, 2 + ambient occlusion,
-    /// 3 + one-bounce diffuse. See RtLighting.
+    /// 3 + multi-bounce diffuse from a probe volume. See RtLighting.
     void setRtLightingMode(int mode);
     /// A multiplier on how thick that air is; 1 is the default mist.
     void setVolumetricFogDensity(float density) { volumetricFogDensity_ = glm::clamp(density, 0.0f, 3.0f); }

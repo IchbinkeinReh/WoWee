@@ -28,6 +28,12 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 cascadeRect[4];
     vec4 cascadeTexel[4];
     vec4 cascadeInfo;
+    // The probe volume (rt_lighting.glsli); GPUPerFrameData ends with it.
+    vec4 giVolume[2];
+    vec4 giVolumeMod[2];
+    vec4 giSky;
+    vec4 giGround;
+    vec4 giParams;
 };
 
 #include "rt_lighting.glsli"
@@ -498,11 +504,15 @@ void main() {
         // zone's as it is (0x007a1e90). The direct light by its scale:
         // halved in the terrain's baked shadow (0x007c1730 multiplies by +0x8c).
         vec3 ambient = pc.interiorAmbient.w > 0.5 ? pc.interiorAmbient.rgb : ambientColor.rgb;
+        // An interior's ambient is its own baked light; the probes there
+        // would only take the open sky back out of it a second time.
+        vec3 ambientLit = pc.interiorAmbient.w > 0.5 ? rtAmbient(rt, ambient)
+                                                     : rtAmbient(rt, ambient, FragPos, norm);
         // The Diffuse_* programs' light: clamp(ambient + clamp(N.L) x direct),
         // the direct light no more than one a channel (0x00873ca0), then the
         // shadow variants' 0.7 + 0.3 x the light the shadow map lets through.
         vec3 direct = min(lightColor.rgb * pc.diffuseColour.rgb * pc.lightFlags.y, vec3(1.0));
-        light = clamp(rtAmbient(rt, ambient) + diff * direct, 0.0, 1.0)
+        light = clamp(ambientLit + diff * direct, 0.0, 1.0)
               * (0.7 + 0.3 * shadow);
     }
 
@@ -538,5 +548,6 @@ void main() {
         shaded.rgb = mix(vec3(0.5019608), shaded.rgb, fogFactor);
     }
 
+    shaded.rgb = rtGiDebug(shaded.rgb);
     outColor = shaded;
 }

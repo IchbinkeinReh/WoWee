@@ -28,6 +28,12 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 cascadeRect[4];
     vec4 cascadeTexel[4];
     vec4 cascadeInfo;
+    // The probe volume (rt_lighting.glsli); GPUPerFrameData ends with it.
+    vec4 giVolume[2];
+    vec4 giVolumeMod[2];
+    vec4 giSky;
+    vec4 giGround;
+    vec4 giParams;
 };
 
 #include "rt_lighting.glsli"
@@ -209,10 +215,10 @@ vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt) {
     vec3 ambient = vec3(wmoAmbientR, wmoAmbientG, wmoAmbientB);
     vec3 direct = vec3(0.0);
     if (mode == 1) {
-        ambient = rtAmbient(rt, ambientColor.rgb);
+        ambient = rtAmbient(rt, ambientColor.rgb, FragPos, norm);
         direct = lightColor.rgb;
     } else if (mode == 2) {
-        ambient = rtAmbient(rt, averagedAmbientColor.rgb);
+        ambient = rtAmbient(rt, averagedAmbientColor.rgb, FragPos, norm);
         direct = averagedDirectColor.rgb;
     }
     float ndl = clamp(dot(norm, normalize(-lightDir.xyz)), 0.0, 1.0);
@@ -349,5 +355,5 @@ void main() {
         result = outside * alpha + inside * (1.0 - alpha);
     }
 
-    outColor = vec4(result, alpha);
+    outColor = vec4(rtGiDebug(result), alpha);
 }

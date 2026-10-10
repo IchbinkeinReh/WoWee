@@ -12,12 +12,21 @@ layout(set = 0, binding = 0) uniform RtPassData {
     vec4 sunDir;         // xyz toward the sun; w = tan of its angular radius
     vec4 sunColor;       // rgb; w = 1 when the sun is above the horizon
     vec4 skyColor;       // rgb radiance of a ray that escapes
-    vec4 params;         // x = mode (1 shadows, 2 +AO, 3 +GI), y = AO radius,
-                         // z = GI ray length, w = shadow ray length
+    vec4 params;         // x = mode (1 shadows, 2 +AO, 3 +probe GI), y = AO
+                         // radius, z unused, w = shadow ray length
     vec4 extent;         // xy = trace size, zw = 1 / trace size
     vec4 sceneExtent;    // xy = scene depth size, zw = 1 / size
     vec4 misc;           // x = 1 when the acceleration structure holds anything,
                          // y = 1 when last frame's slot holds history
+    // The probe volume (rt_gi.glsli), read only by the probe passes.
+    vec4 giVolume[2];        // the grid this frame's update writes
+    vec4 giVolumeMod[2];
+    vec4 giPrevVolume[2];    // the grid the atlas holds until then; w 0 if none
+    vec4 giPrevVolumeMod[2];
+    mat4 giRotation;         // this frame's random turn of the ray set
+    vec4 giSky;              // rgb a ray that escapes upward; w hysteresis
+    vec4 giGround;           // rgb one that escapes downward
+    vec4 giRayLength;        // x, y per cascade
 } pass;
 
 const uint RT_MODE_SHADOWS = 1u;

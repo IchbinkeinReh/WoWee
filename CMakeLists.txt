@@ -542,6 +542,7 @@ function(compile_shaders TARGET_NAME)
     set(SHADER_VARIANTS
         "rt_prepare.comp.glsl|rt_prepare_ms.comp.spv|-DRT_MSAA"
         "rt_trace.comp.glsl|rt_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
+        "rt_gi_trace.comp.glsl|rt_gi_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
     )
     foreach(VARIANT ${SHADER_VARIANTS})
         string(REPLACE "|" ";" VARIANT_PARTS "${VARIANT}")
@@ -917,6 +918,7 @@ set(WOWEE_SOURCES
     src/rendering/rt_bvh.cpp
     src/rendering/rt_scene.cpp
     src/rendering/rt_lighting.cpp
+    src/rendering/rt_gi_probes.cpp
     src/rendering/performance_hud.cpp
     src/rendering/water_renderer.cpp
     src/rendering/skybox.cpp
@@ -2590,6 +2592,7 @@ add_executable(wowee_editor
     src/rendering/rt_bvh.cpp
     src/rendering/rt_scene.cpp
     src/rendering/rt_lighting.cpp
+    src/rendering/rt_gi_probes.cpp
     src/rendering/volumetric_fog.cpp
 
     # Core

@@ -10,10 +10,8 @@
 #include "rt_common.glsli"
 
 layout(set = 0, binding = 3) uniform sampler2D uGbufCur;
-layout(set = 0, binding = 13) uniform sampler2D uIn;
-layout(set = 0, binding = 14) uniform sampler2D uInGi;
-layout(set = 0, binding = 15, rgba16f) uniform writeonly image2D uOut;
-layout(set = 0, binding = 16, rgba16f) uniform writeonly image2D uOutGi;
+layout(set = 0, binding = 9) uniform sampler2D uIn;
+layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D uOut;
 
 layout(push_constant) uniform Push {
     int step;
@@ -30,12 +28,10 @@ void main() {
 
     vec4 g = texelFetch(uGbufCur, px, 0);
     vec4 c = texelFetch(uIn, px, 0);
-    vec4 cGi = texelFetch(uInGi, px, 0);
     float dist = rtGbufDist(g);
     vec3 n = rtGbufNormal(g);
     if (dist <= 0.0) {
         imageStore(uOut, px, vec4(c.rg, c.b, pc.last != 0 ? 0.0 : c.a));
-        imageStore(uOutGi, px, cGi);
         return;
     }
 
@@ -43,7 +39,6 @@ void main() {
     float spread = mix(1.0, 0.35, clamp(history / 24.0, 0.0, 1.0));
 
     vec2 sum = vec2(0.0);
-    vec3 sumGi = vec3(0.0);
     float wsum = 0.0;
     for (int y = -2; y <= 2; ++y) {
         for (int x = -2; x <= 2; ++x) {
@@ -58,12 +53,9 @@ void main() {
             float w = k * wz * wn;
             if (x != 0 || y != 0) w *= spread;
             sum += texelFetch(uIn, q, 0).rg * w;
-            sumGi += texelFetch(uInGi, q, 0).rgb * w;
             wsum += w;
         }
     }
     sum /= wsum;
-    sumGi /= wsum;
     imageStore(uOut, px, vec4(sum, history, pc.last != 0 ? dist : 0.0));
-    imageStore(uOutGi, px, vec4(sumGi, 0.0));
 }

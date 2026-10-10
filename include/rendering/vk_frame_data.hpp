@@ -78,11 +78,24 @@ struct GPUPerFrameData {
     glm::vec4 cascadeRect[kMaxShadowCascades]{};
     glm::vec4 cascadeTexel[kMaxShadowCascades]{};
     glm::vec4 cascadeInfo{0.0f};
+    // The irradiance probe volume at set 0 binding 4 (RtGiProbes,
+    // rt_gi.glsli), after the cascades so only the four surface shaders that
+    // read it declare it. Per cascade: xyz the absolute grid coordinate of the
+    // first probe and w the spacing, and that coordinate modulo the probe
+    // counts. giSky and giGround: the open field the probes are measured
+    // against (giOpenReference), w the strength and the largest ratio.
+    // giParams: x on (0/1), y the debug view (WOWEE_GI_DEBUG). Off in the
+    // reflection pass and the character preview.
+    glm::vec4 giVolume[2]{};
+    glm::vec4 giVolumeMod[2]{};
+    glm::vec4 giSky{0.0f};
+    glm::vec4 giGround{0.0f};
+    glm::vec4 giParams{0.0f};
 };
 // std140 adds no padding between mat4 and vec4 members, so this is the block's
 // size on the GPU as well. A change here is a change to every PerFrame block
 // that declares the members it touches.
-static_assert(sizeof(GPUPerFrameData) == 928, "GPUPerFrameData no longer matches the shaders' PerFrame");
+static_assert(sizeof(GPUPerFrameData) == 1040, "GPUPerFrameData no longer matches the shaders' PerFrame");
 
 // Push constants for the model matrix (most common case)
 struct GPUPushConstants {

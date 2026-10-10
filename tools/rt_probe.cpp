@@ -8,7 +8,10 @@
 //
 //   - a wall point whose ray to the sun crosses the box must be in shadow,
 //   - wall points whose rays miss it must be lit,
-//   - every value must be finite.
+//   - every value must be finite,
+//   - in the probe volume (RtGiProbes), a probe in the open must hold the sky
+//     above it and the open ground's light below, and one beside the box's
+//     sunlit face must see it lit.
 //
 //     cmake -S . -B build -DWOWEE_BUILD_RT_PROBE=ON
 //     cmake --build build --target rt_probe
@@ -19,6 +22,7 @@
 
 #include "core/logger.hpp"
 #include "rendering/rt_bvh.hpp"
+#include "rendering/rt_gi_volume.hpp"
 #include "rendering/rt_lighting.hpp"
 #include "rendering/rt_scene.hpp"
 #include "rendering/vk_context.hpp"
@@ -150,22 +154,37 @@ int main() {
         AllocatedBuffer light = createBuffer(ctx.getAllocator(), bytes,
                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                              VMA_MEMORY_USAGE_CPU_ONLY);
-        AllocatedBuffer gi = createBuffer(ctx.getAllocator(), bytes,
-                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                          VMA_MEMORY_USAGE_CPU_ONLY);
+        namespace gi = wowee::rendering::gi;
+        const VkImage atlas = lighting.probes().atlasImage();
+        const VkDeviceSize atlasBytes = VkDeviceSize(gi::kAtlasWidth) * gi::kAtlasHeight * 8;
+        AllocatedBuffer probes = createBuffer(ctx.getAllocator(), atlasBytes,
+                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                              VMA_MEMORY_USAGE_CPU_ONLY);
         ctx.immediateSubmit([&](VkCommandBuffer cmd) {
+            VkMemoryBarrier2 mb{};
+            mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            mb.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+            mb.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            mb.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+            VkDependencyInfo dep{};
+            dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep.memoryBarrierCount = 1;
+            dep.pMemoryBarriers = &mb;
+            cmdPipelineBarrier2(cmd, dep);
             VkBufferImageCopy region{};
             region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             region.imageExtent = {te.width, te.height, 1};
             vkCmdCopyImageToBuffer(cmd, lighting.lightImageWrittenBy(ctx.getCurrentFrame()),
                                    VK_IMAGE_LAYOUT_GENERAL, light.buffer, 1, &region);
-            vkCmdCopyImageToBuffer(cmd, lighting.giImageWrittenBy(ctx.getCurrentFrame()),
-                                   VK_IMAGE_LAYOUT_GENERAL, gi.buffer, 1, &region);
+            if (atlas != VK_NULL_HANDLE) {
+                region.imageExtent = {uint32_t(gi::kAtlasWidth), uint32_t(gi::kAtlasHeight), 1};
+                vkCmdCopyImageToBuffer(cmd, atlas, VK_IMAGE_LAYOUT_GENERAL, probes.buffer, 1, &region);
+            }
         });
         vkDeviceWaitIdle(ctx.getDevice());
 
         const auto* lightTexels = static_cast<const uint16_t*>(light.info.pMappedData);
-        const auto* giTexels = static_cast<const uint16_t*>(gi.info.pMappedData);
         auto texel = [&](const uint16_t* base, uint32_t x, uint32_t y, int c) {
             return glm::unpackHalf1x16(base[(size_t(y) * te.width + x) * 4 + c]);
         };
@@ -203,10 +222,7 @@ int main() {
         uint32_t shadowed = 0;
         for (uint32_t y = 0; y < te.height; ++y) {
             for (uint32_t x = 0; x < te.width; ++x) {
-                for (int c = 0; c < 4; ++c) {
-                    finite = finite && std::isfinite(texel(lightTexels, x, y, c)) &&
-                             std::isfinite(texel(giTexels, x, y, c));
-                }
+                for (int c = 0; c < 4; ++c) finite = finite && std::isfinite(texel(lightTexels, x, y, c));
                 if (texel(lightTexels, x, y, 0) < 0.5f) ++shadowed;
             }
         }
@@ -214,8 +230,58 @@ int main() {
         expect("every value is finite", finite);
         expect("the shadow is a patch, not the frame", shadowed > 20 && shadowed < te.width * te.height / 3);
 
+        // The probe volume. The camera is at the origin, so the near cascade's
+        // probe (0, 0, 0) is there, in the open - the box is a speck from it -
+        // and probe (4, 0, 0) stands two yards before the box's sunlit face.
+        expect("the probe volume exists in Full mode", atlas != VK_NULL_HANDLE);
+        if (atlas != VK_NULL_HANDLE) {
+            const auto* atlasTexels = static_cast<const uint16_t*>(probes.info.pMappedData);
+            auto atlasTexel = [&](glm::ivec2 p) {
+                const size_t at = (size_t(p.y) * gi::kAtlasWidth + p.x) * 4;
+                return glm::vec3(glm::unpackHalf1x16(atlasTexels[at]),
+                                 glm::unpackHalf1x16(atlasTexels[at + 1]),
+                                 glm::unpackHalf1x16(atlasTexels[at + 2]));
+            };
+            // The irradiance a probe holds for the interior texel facing
+            // closest to `dir`.
+            auto irradiance = [&](glm::ivec3 abs, glm::vec3 dir) {
+                const glm::ivec2 origin = gi::irradianceTileOrigin(0, gi::storageOf(abs));
+                float best = -2.0f;
+                glm::ivec2 pick(0);
+                for (int j = 0; j < gi::kIrradianceTexels; ++j) {
+                    for (int i = 0; i < gi::kIrradianceTexels; ++i) {
+                        const float c = glm::dot(gi::texelDirection({i, j}, gi::kIrradianceTexels), dir);
+                        if (c > best) {
+                            best = c;
+                            pick = {i, j};
+                        }
+                    }
+                }
+                return atlasTexel(origin + 1 + pick);
+            };
+            bool atlasFinite = true;
+            for (size_t i = 0; i < size_t(gi::kAtlasWidth) * gi::kAtlasHeight * 4; ++i) {
+                atlasFinite = atlasFinite && std::isfinite(glm::unpackHalf1x16(atlasTexels[i]));
+            }
+            expect("every probe value is finite", atlasFinite);
+
+            const glm::vec3 sky = in.skyColor;
+            const glm::vec3 up = irradiance({0, 0, 0}, {0, 0, 1});
+            const glm::vec3 down = irradiance({0, 0, 0}, {0, 0, -1});
+            std::printf("open probe: up (%.3f %.3f %.3f) down (%.3f %.3f %.3f), sky (%.3f %.3f %.3f)\n",
+                        up.r, up.g, up.b, down.r, down.g, down.b, sky.r, sky.g, sky.b);
+            expect("an open probe holds the sky above it",
+                   glm::all(glm::lessThan(glm::abs(up - sky), sky * 0.2f)));
+            expect("and less below it, where the ground is", down.b < up.b * 0.8f);
+            const glm::vec3 open = irradiance({0, 0, 0}, {1, 0, 0});
+            const glm::vec3 lit = irradiance({4, 0, 0}, {1, 0, 0});
+            std::printf("toward +x: open (%.3f %.3f %.3f), before the sunlit face (%.3f %.3f %.3f)\n",
+                        open.r, open.g, open.b, lit.r, lit.g, lit.b);
+            expect("a probe before a sunlit face is lit by it", lit.r > open.r * 1.2f);
+        }
+
         destroyBuffer(ctx.getAllocator(), light);
-        destroyBuffer(ctx.getAllocator(), gi);
+        destroyBuffer(ctx.getAllocator(), probes);
         destroyImage(ctx.getDevice(), ctx.getAllocator(), depth);
         lighting.shutdown();
         scene.shutdown();

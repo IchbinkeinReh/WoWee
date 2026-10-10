@@ -721,6 +721,13 @@ void Renderer::updatePerFrameUBO() {
         currentFrameData.rtViewProj = rt.viewProj;
         currentFrameData.rtCameraPos = rt.cameraPos;
         currentFrameData.rtParams = rt.params;
+        for (int c = 0; c < 2; ++c) {
+            currentFrameData.giVolume[c] = rt.gi.volume[c];
+            currentFrameData.giVolumeMod[c] = rt.gi.volumeMod[c];
+        }
+        currentFrameData.giSky = rt.gi.sky;
+        currentFrameData.giGround = rt.gi.ground;
+        currentFrameData.giParams = rt.gi.params;
     }
 
     // Player motion, consumed by water ripples and by the foliage brush in
@@ -5380,6 +5387,7 @@ void Renderer::renderReflectionPass() {
     // The fog volume is the camera's; its sets here bind the neutral one.
     reflData.volumetricParams = glm::vec4(0.0f);
     reflData.rtParams = glm::vec4(0.0f);
+    reflData.giParams = glm::vec4(0.0f);
     std::memcpy(reflPerFrameUBOMapped, &reflData, sizeof(GPUPerFrameData));
 
     // Begin reflection render pass (clears to black; scene rendered if pipeline-compatible)

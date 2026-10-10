@@ -27,6 +27,12 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 cascadeRect[4];
     vec4 cascadeTexel[4];
     vec4 cascadeInfo;
+    // The probe volume (rt_lighting.glsli); GPUPerFrameData ends with it.
+    vec4 giVolume[2];
+    vec4 giVolumeMod[2];
+    vec4 giSky;
+    vec4 giGround;
+    vec4 giParams;
 };
 
 #include "rt_lighting.glsli"
@@ -195,7 +201,7 @@ void main() {
     // to one before the chunk's vertex shading (MCCV) scales it.
     RtLight rt = rtLightAt(FragPos);
     float ndl = clamp(dot(norm, normalize(-lightDir.xyz)), 0.0, 1.0);
-    vec3 light = clamp(rtAmbient(rt, ambientColor.rgb) + ndl * lightColor.rgb, 0.0, 1.0) * Shading;
+    vec3 light = clamp(rtAmbient(rt, ambientColor.rgb, FragPos, norm) + ndl * lightColor.rgb, 0.0, 1.0) * Shading;
 
     // The shadow: the baked one (MCSH, the alpha texture's fourth channel),
     // or with the sun's shadow map on, the map alone. Whatever is lit, lit
@@ -231,5 +237,5 @@ void main() {
 
     result = applyFog(result, FragPos, fragDist, fogColor.rgb);
 
-    outColor = vec4(result, 1.0);
+    outColor = vec4(rtGiDebug(result), 1.0);
 }

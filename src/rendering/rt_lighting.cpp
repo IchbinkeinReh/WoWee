@@ -24,6 +24,7 @@ struct RtPassData {
     glm::vec4 extent;
     glm::vec4 sceneExtent;
     glm::vec4 misc;
+    RtGiProbes::PassData gi;
 };
 
 enum Binding : uint32_t {
@@ -32,24 +33,17 @@ enum Binding : uint32_t {
     kGbufStore = 2,
     kGbufCur = 3,
     kRawStore = 4,
-    kRawGiStore = 5,
-    kGbufPrev = 6,
-    kRaw = 7,
-    kRawGi = 8,
-    kHistPrev = 9,
-    kHistGiPrev = 10,
-    kHistStore = 11,
-    kHistGiStore = 12,
-    kFilterIn = 13,
-    kFilterInGi = 14,
-    kFilterOut = 15,
-    kFilterOutGi = 16,
-    kBindingCount = 17,
+    kGbufPrev = 5,
+    kRaw = 6,
+    kHistPrev = 7,
+    kHistStore = 8,
+    kFilterIn = 9,
+    kFilterOut = 10,
+    kBindingCount = 11,
 };
 
 constexpr VkFormat kFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr float kAoRadius = 3.0f;         // yards
-constexpr float kGiRayLength = 120.0f;
 constexpr float kShadowRayLength = 1500.0f;
 // The sun's angular radius is about a quarter of a degree. Twice that gives a
 // penumbra that reads at game distances without looking like an area light.
@@ -109,6 +103,7 @@ RtLighting::~RtLighting() { shutdown(); }
 bool RtLighting::initialize(VkContext* ctx, RtScene* scene) {
     ctx_ = ctx;
     scene_ = scene;
+    probes_.initialize(ctx, scene);
     VkDevice dev = ctx_->getDevice();
 
     VkSamplerCreateInfo si{};
@@ -146,6 +141,7 @@ void RtLighting::shutdown() {
     VkDevice dev = ctx_->getDevice();
     VmaAllocator alloc = ctx_->getAllocator();
     vkDeviceWaitIdle(dev);
+    probes_.shutdown();
     destroyImages();
     for (auto& s : slots_) destroyBuffer(alloc, s.ubo);
     destroyImage(dev, alloc, neutral_);
@@ -179,8 +175,7 @@ bool RtLighting::createPipelines() {
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     }
     b[kUbo].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    for (uint32_t i : {kGbufStore, kRawStore, kRawGiStore, kHistStore, kHistGiStore, kFilterOut,
-                       kFilterOutGi}) {
+    for (uint32_t i : {kGbufStore, kRawStore, kHistStore, kFilterOut}) {
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     }
     VkDescriptorSetLayoutCreateInfo li{};
@@ -192,8 +187,8 @@ bool RtLighting::createPipelines() {
     constexpr uint32_t kSets = MAX_FRAMES_IN_FLIGHT * 3;
     VkDescriptorPoolSize sizes[3] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSets},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 10},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 7},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 6},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 4},
     };
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -261,9 +256,9 @@ bool RtLighting::createImages(VkExtent2D e) {
         t.img = createImage(dev, alloc, e.width, e.height, kFormat, usage);
         return t.img.image != VK_NULL_HANDLE;
     };
-    bool ok = make(raw_) && make(rawGi_) && make(tmp_) && make(tmpGi_);
+    bool ok = make(raw_) && make(tmp_);
     for (auto& s : slots_) {
-        ok = ok && make(s.gbuf) && make(s.hist) && make(s.histGi) && make(s.out) && make(s.outGi);
+        ok = ok && make(s.gbuf) && make(s.hist) && make(s.out);
         s.wroteImages = false;
     }
     traceExtent_ = e;
@@ -274,9 +269,9 @@ bool RtLighting::createImages(VkExtent2D e) {
 void RtLighting::destroyImages() {
     VkDevice dev = ctx_->getDevice();
     VmaAllocator alloc = ctx_->getAllocator();
-    for (Target* t : {&raw_, &rawGi_, &tmp_, &tmpGi_}) destroyImage(dev, alloc, t->img);
+    for (Target* t : {&raw_, &tmp_}) destroyImage(dev, alloc, t->img);
     for (auto& s : slots_) {
-        for (Target* t : {&s.gbuf, &s.hist, &s.histGi, &s.out, &s.outGi}) destroyImage(dev, alloc, t->img);
+        for (Target* t : {&s.gbuf, &s.hist, &s.out}) destroyImage(dev, alloc, t->img);
         s.wroteImages = false;
         s.boundDepth = VK_NULL_HANDLE;
     }
@@ -286,11 +281,13 @@ void RtLighting::destroyImages() {
 bool RtLighting::prepare(VkExtent2D sceneExtent) {
     ++frameCounter_;
     if (mode_ == Mode::Off) {
-        if (traceExtent_.width == 0 && !scene_->isActive()) return false;
-        // Nothing of the pass or the scene's acceleration structures is kept
-        // while off; the per-frame sets go back to the neutral image.
+        if (traceExtent_.width == 0 && !scene_->isActive() && !probes_.hasResources()) return false;
+        // Nothing of the pass, the probes or the scene's acceleration
+        // structures is kept while off; the per-frame sets go back to the
+        // neutral image.
         vkDeviceWaitIdle(ctx_->getDevice());
         destroyImages();
+        probes_.destroyResources();
         scene_->setActive(false);
         havePrev_ = false;
         return true;
@@ -299,9 +296,22 @@ bool RtLighting::prepare(VkExtent2D sceneExtent) {
     if (!pipelinesOk_) return false;
     scene_->setActive(true);
 
+    // The probe volume lives only in Full mode: its atlas is some 47 MB.
+    bool probesChanged = false;
+    if ((mode_ == Mode::Full) != probes_.hasResources()) {
+        vkDeviceWaitIdle(ctx_->getDevice());
+        if (mode_ == Mode::Full) {
+            // Failing that, Full lights as ShadowsAO; createResources has said why.
+            probes_.createResources();
+        } else {
+            probes_.destroyResources();
+        }
+        probesChanged = true;
+    }
+
     const VkExtent2D want{std::max(1u, (sceneExtent.width + 1) / 2),
                           std::max(1u, (sceneExtent.height + 1) / 2)};
-    if (want.width == traceExtent_.width && want.height == traceExtent_.height) return false;
+    if (want.width == traceExtent_.width && want.height == traceExtent_.height) return probesChanged;
 
     vkDeviceWaitIdle(ctx_->getDevice());
     destroyImages();
@@ -323,9 +333,11 @@ VkImageView RtLighting::lightViewForSlot(uint32_t slot) const {
     return other.out.img.imageView ? other.out.img.imageView : neutral_.imageView;
 }
 
-VkImageView RtLighting::giViewForSlot(uint32_t slot) const {
-    const Slot& other = slots_[(slot + 1) % MAX_FRAMES_IN_FLIGHT];
-    return other.outGi.img.imageView ? other.outGi.img.imageView : neutral_.imageView;
+VkImageView RtLighting::giViewForSlot(uint32_t) const {
+    // One atlas for both slots: each frame updates only a share of it, so
+    // double-buffering it would mean copying the rest every frame. The update
+    // runs after the opaque surfaces that read it, behind a barrier.
+    return probes_.hasResources() ? probes_.atlasView() : neutral_.imageView;
 }
 
 VkImageView RtLighting::depthViewFor(VkImage image, bool msaa) {
@@ -365,9 +377,7 @@ void RtLighting::writeSlotSets(uint32_t slotIndex) {
 
     // Filter passes: history -> out, out -> tmp, tmp -> out.
     const Target* filterIn[3] = {&s.hist, &s.out, &tmp_};
-    const Target* filterInGi[3] = {&s.histGi, &s.outGi, &tmpGi_};
     const Target* filterOut[3] = {&s.out, &tmp_, &s.out};
-    const Target* filterOutGi[3] = {&s.outGi, &tmpGi_, &s.outGi};
 
     for (int pass = 0; pass < 3; ++pass) {
         std::array<VkDescriptorImageInfo, kBindingCount> img{};
@@ -375,18 +385,12 @@ void RtLighting::writeSlotSets(uint32_t slotIndex) {
         img[kGbufStore] = storage(s.gbuf);
         img[kGbufCur] = sampled(s.gbuf);
         img[kRawStore] = storage(raw_);
-        img[kRawGiStore] = storage(rawGi_);
         img[kGbufPrev] = sampled(prev.gbuf);
         img[kRaw] = sampled(raw_);
-        img[kRawGi] = sampled(rawGi_);
         img[kHistPrev] = sampled(prev.hist);
-        img[kHistGiPrev] = sampled(prev.histGi);
         img[kHistStore] = storage(s.hist);
-        img[kHistGiStore] = storage(s.histGi);
         img[kFilterIn] = sampled(*filterIn[pass]);
-        img[kFilterInGi] = sampled(*filterInGi[pass]);
         img[kFilterOut] = storage(*filterOut[pass]);
-        img[kFilterOutGi] = storage(*filterOutGi[pass]);
 
         std::array<VkWriteDescriptorSet, kBindingCount> w{};
         for (uint32_t i = 0; i < kBindingCount; ++i) {
@@ -426,6 +430,7 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
     if (!s.wroteImages || s.boundDepth != depthImage_) writeSlotSets(slotIndex);
 
     scene_->update(cmd);
+    ctx_->gpuMark(cmd, "rt scene update");
 
     if (imagesNeedInit_) {
         imagesNeedInit_ = false;
@@ -443,9 +448,9 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
             b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             barriers.push_back(b);
         };
-        for (const Target* t : {&raw_, &rawGi_, &tmp_, &tmpGi_}) add(*t);
+        for (const Target* t : {&raw_, &tmp_}) add(*t);
         for (auto& sl : slots_) {
-            for (const Target* t : {&sl.gbuf, &sl.hist, &sl.histGi, &sl.out, &sl.outGi}) add(*t);
+            for (const Target* t : {&sl.gbuf, &sl.hist, &sl.out}) add(*t);
         }
         VkDependencyInfo dep{};
         dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -465,12 +470,23 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
     d.sunDir = glm::vec4(glm::normalize(in.sunDir), kSunTanRadius);
     d.sunColor = glm::vec4(in.sunColor, in.sunUp ? 1.0f : 0.0f);
     d.skyColor = glm::vec4(in.skyColor, 0.0f);
-    d.params = glm::vec4(static_cast<float>(mode_), kAoRadius, kGiRayLength, kShadowRayLength);
+    d.params = glm::vec4(static_cast<float>(mode_), kAoRadius, 0.0f, kShadowRayLength);
     d.extent = glm::vec4(traceExtent_.width, traceExtent_.height, 1.0f / traceExtent_.width,
                          1.0f / traceExtent_.height);
     d.sceneExtent = glm::vec4(sceneExtent.width, sceneExtent.height, 1.0f / sceneExtent.width,
                               1.0f / sceneExtent.height);
     d.misc = glm::vec4(scene_->hasContent() ? 1.0f : 0.0f, havePrev ? 1.0f : 0.0f, 0.0f, 0.0f);
+    const bool probes = mode_ == Mode::Full && probes_.hasResources();
+    if (probes) {
+        // The open field the zone's flat ambient was set for: that ambient as
+        // the sky, and below the horizon ground of a typical colour lit by it
+        // and the sun (giOpenReference in rt_gi.glsli).
+        const float albedo = probes_.config().groundAlbedo;
+        const glm::vec3 sunOnGround =
+            in.sunUp ? in.sunColor * std::max(glm::normalize(in.sunDir).z, 0.0f) : glm::vec3(0.0f);
+        const glm::vec3 ground = albedo * (sunOnGround + in.skyColor);
+        probes_.beginFrame(slotIndex, in.cameraPos, frameCounter_, in.skyColor, ground, d.gi);
+    }
     std::memcpy(s.ubo.info.pMappedData, &d, sizeof(d));
 
     // The outputs of this slot were last read by the surfaces of the frame
@@ -478,6 +494,10 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
     memoryBarrier(cmd, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0,
                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                   VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+    // The probes first: they need nothing of this frame's depth.
+    if (probes) probes_.record(cmd, slotIndex, s.ubo.buffer, sizeof(RtPassData));
+
     depthBarrier(cmd, sceneDepth, true);
 
     const uint32_t gx = (traceExtent_.width + 7) / 8;
@@ -516,7 +536,8 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
         vkCmdDispatch(cmd, gx, gy, 1);
     }
 
-    // For the next frame's surfaces.
+    // For the next frame's surfaces - and the probe atlas also for what of
+    // this frame draws after here: blended doodads read it too.
     memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
@@ -531,6 +552,9 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
 
 RtLighting::ConsumerData RtLighting::consumerData() const {
     ConsumerData c;
+    // The atlas keeps its light whether or not last frame traced, and is read
+    // with the grid it was last written for.
+    if (active() && mode_ == Mode::Full) c.gi = probes_.consumerData();
     if (!active() || resultFrame_ == 0 || resultFrame_ + 1 != frameCounter_) return c;
     c.viewProj = resultViewProj_;
     c.cameraPos = glm::vec4(resultCameraPos_, 1.0f);
