@@ -49,6 +49,30 @@ struct Row {
     std::string shortcut;  // "Allgemein"
 };
 
+/// A localized string from its block of locale columns: the first that has
+/// text, enUS first. The client reads its own locale's column; a German file
+/// fills deDE and leaves enUS empty. The loader's promotion of such columns
+/// into enUS (DBCFile::promoteLocalizedStrings) takes ChatChannels.dbc's
+/// all-zero FactionGroup column for the empty enUS column of a block
+/// starting there, so the Name block is found one column early and left
+/// empty - every zone channel was then asked for under an empty name.
+/// Reading the block here does not depend on that guess.
+template <typename Column>
+std::string localizedText(Column&& column, uint32_t first, uint32_t width) {
+    for (uint32_t i = 0; i < width; ++i) {
+        std::string text = column(first + i);
+        if (!text.empty()) return text;
+    }
+    return {};
+}
+
+/// How many locale columns a ChatChannels.dbc string block has, by the
+/// file's column count: sixteen in the 37-column TBC and WotLK files, eight
+/// in vanilla's 21, one in the unlocalized 4.x shape.
+inline uint32_t localeWidth(uint32_t fieldCount) {
+    return fieldCount >= 37 ? 16u : fieldCount >= 21 ? 8u : 1u;
+}
+
 /// The client's comparison for names (0x0076ea40): case folded, whole string.
 /// It folds the accented letters as well; ASCII is what is folded here, which
 /// is every name ChatChannels.dbc ships.
@@ -185,6 +209,9 @@ public:
     /// else a new one on the end. False when one is already held for that
     /// name or id, or all ten are taken; the client then sends nothing.
     bool reserve(const std::string& name, uint32_t zoneChannelId) {
+        // A channel has a name; an empty one is a row read wrong, and every
+        // empty name is "the same channel" to byName.
+        if (name.empty()) return false;
         if (byName(name) || byZoneId(zoneChannelId)) return false;
         for (size_t i = 0; i < slots_.size(); ++i) {
             if (slots_[i].number == 0) {
