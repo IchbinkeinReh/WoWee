@@ -26,6 +26,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "addons/toc_parser.hpp"
 #include "addons/button_label_lua.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "core/window.hpp"
 #include <imgui.h>
 #include <fstream>
@@ -2244,6 +2245,119 @@ int lua_Tooltip_SetSpellByID(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
     lua_pushboolean(L, fillSpellTooltip(L, w, gh, id) ? 1 : 0);
+    return 1;
+}
+
+/// `text` with its |4singular:plural; picked for `n`, as the client's own
+/// formatter does - GlobalStrings writes its counted words that way.
+static std::string withPlural(std::string text, int n) {
+    for (size_t at = text.find("|4"); at != std::string::npos; at = text.find("|4", at)) {
+        const size_t colon = text.find(':', at);
+        const size_t end = colon == std::string::npos ? colon : text.find(';', colon);
+        if (end == std::string::npos) break;
+        const std::string pick = n == 1 ? text.substr(at + 2, colon - at - 2)
+                                        : text.substr(colon + 1, end - colon - 1);
+        text.replace(at, end + 1 - at, pick);
+        at += pick.size();
+    }
+    return text;
+}
+
+/// A buff or debuff, hovered: (unit, index, filter), as UnitAura counts.
+///
+/// As 0x00625f00 and 0x00625350 build it: the aura's name in gold with its
+/// dispel type to the right, what the aura does - Spell.dbc's ToolTip, not
+/// the spell's own description - in white, and the time it has left
+/// (SPELL_TIME_REMAINING). The Lua builder this replaces titled a buff in
+/// white and a debuff in red, described it with the spell's description, and
+/// counted down in English seconds.
+int lua_Tooltip_SetUnitAura(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
+
+    // Through UnitAura itself, so the index means what the buff frame meant.
+    lua_getglobal(L, "UnitAura");
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 1); lua_pushboolean(L, 0); return 1; }
+    lua_pushvalue(L, 2);
+    lua_pushvalue(L, 3);
+    lua_pushvalue(L, 4);
+    if (lua_pcall(L, 3, 11, 0) != 0) { lua_pop(L, 1); lua_pushboolean(L, 0); return 1; }
+    const int base = lua_gettop(L) - 10;
+    const char* auraName = lua_tostring(L, base);
+    const double duration = lua_tonumber(L, base + 5);
+    const double expires = lua_tonumber(L, base + 6);
+    const uint32_t spellId = static_cast<uint32_t>(lua_tonumber(L, base + 10));
+    const std::string name = auraName ? auraName : "";
+    lua_pop(L, 11);
+    if (name.empty()) { lua_pushboolean(L, 0); return 1; }
+
+    auto line = [&w](std::string l, std::string r, float cr, float cg, float cb) {
+        wowee::ui::Widget::TooltipLine t;
+        t.left = std::move(l);
+        t.right = std::move(r);
+        t.lc[0] = t.rc[0] = cr; t.lc[1] = t.rc[1] = cg; t.lc[2] = t.rc[2] = cb;
+        t.lc[3] = t.rc[3] = 1.0f;
+        w->tooltipLines.push_back(std::move(t));
+    };
+    w->isTooltip = true;
+    w->tooltipLines.clear();
+
+    // The dispel type's own name, from SpellDispelType.dbc, where that type
+    // is one an immunity can name (its fourth column).
+    std::string dispel;
+    if (const uint8_t type = spellId ? gh->getSpellDispelType(spellId) : 0; type != 0) {
+        auto* am = gh->services().assetManager;
+        if (am && am->isInitialized()) {
+            auto dbc = am->loadDBC("SpellDispelType.dbc");
+            if (dbc && dbc->isLoaded() && dbc->getFieldCount() >= 20) {
+                if (const int32_t row = dbc->findRecordById(type); row >= 0 &&
+                    dbc->getUInt32(static_cast<uint32_t>(row), 19) != 0) {
+                    dispel = dbc->getString(static_cast<uint32_t>(row), 1);
+                }
+            }
+        }
+    }
+    line(name, dispel, 1.0f, 0.82f, 0.0f);
+
+    gh->loadSpellNameCache();
+    if (auto se = gh->spellNameCacheRef().find(spellId); se != gh->spellNameCacheRef().end() &&
+        !se->second.auraDescription.empty()) {
+        line(gh->formatSpellDescription(spellId, se->second.auraDescription), "", 1.0f, 1.0f, 1.0f);
+        w->tooltipLines.back().wrap = true;
+    }
+
+    if (duration > 0.0 && expires > 0.0) {
+        double now = 0.0;
+        lua_getglobal(L, "GetTime");
+        if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0) now = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+        const double left = std::max(0.0, expires - now);
+        const char* key; const char* fallback; int amount;
+        if (left >= 86400.0) {
+            key = "SPELL_TIME_REMAINING_DAYS"; fallback = "%d |4day:days; remaining";
+            amount = static_cast<int>(std::ceil(left / 86400.0));
+        } else if (left >= 3600.0) {
+            key = "SPELL_TIME_REMAINING_HOURS"; fallback = "%d |4hour:hours; remaining";
+            amount = static_cast<int>(std::ceil(left / 3600.0));
+        } else if (left >= 60.0) {
+            key = "SPELL_TIME_REMAINING_MIN"; fallback = "%d |4minute:minutes; remaining";
+            amount = static_cast<int>(std::ceil(left / 60.0));
+        } else {
+            key = "SPELL_TIME_REMAINING_SEC"; fallback = "%d |4second:seconds; remaining";
+            amount = static_cast<int>(std::ceil(left));
+        }
+        std::string text = globalOr(L, key, fallback);
+        if (const size_t at = text.find("%d"); at != std::string::npos) {
+            text.replace(at, 2, std::to_string(amount));
+        }
+        line(withPlural(text, amount), "", 1.0f, 0.82f, 0.0f);
+    }
+
+    lua_pushnumber(L, spellId);
+    lua_setfield(L, 1, "__spellId");
+    w->shown = true;
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -7243,6 +7357,8 @@ void LuaEngine::registerCoreAPI() {
     // The spell tooltip's builder, for the Lua SetSpellByID that wraps it.
     lua_pushcfunction(L_, lua_Tooltip_SetSpellByID);
     lua_setglobal(L_, "__WoweeTooltipSetSpellByID");
+    lua_pushcfunction(L_, lua_Tooltip_SetUnitAura);
+    lua_setglobal(L_, "__WoweeTooltipSetUnitAura");
 
     // CreateFrame function
     lua_pushcfunction(L_, lua_EditBox_SetText);
@@ -7818,15 +7934,12 @@ void LuaEngine::registerCoreAPI() {
         // NumLines and GetText come from the widget itself, which is where
         // the lines now live.
         "function __WoweeFrameMT:SetUnitBuff(unit, index, filter)\n"
-        "    self:ClearLines()\n"
-        "    local name, rank, icon, count, debuffType, duration, expTime, caster, steal, consolidate, spellId = UnitBuff(unit, index, filter)\n"
-        "    if name then\n"
-        "        self:SetText(name, 1, 1, 1)\n"
-        "        if duration and duration > 0 then\n"
-        "            self:AddLine(string.format('%.0f sec remaining', expTime - GetTime()), 1, 1, 1)\n"
-        "        end\n"
-        "        self.__spellId = spellId\n"
+        "    if filter and filter ~= '' then\n"
+        "        if not string.find(filter, 'HELPFUL') then filter = filter .. '|HELPFUL' end\n"
+        "    else\n"
+        "        filter = 'HELPFUL'\n"
         "    end\n"
+        "    return self:SetUnitAura(unit, index, filter)\n"
         "end\n"
         // The one the buff frame actually calls. SetUnitBuff and
         // SetUnitDebuff were written and this was left in the no-op
@@ -8028,31 +8141,9 @@ void LuaEngine::registerCoreAPI() {
         "    self:SetText(name, 1, 1, 1)\n"
         "    if count and count > 1 then self:AddLine('x' .. count, 1, 1, 1) end\n"
         "end\n"
-        "function __WoweeFrameMT:SetUnitAura(unit, index, filter)\n"
-        "    self:ClearLines()\n"
-        "    local name, rank, icon, count, debuffType, duration, expTime, caster, steal, consolidate, spellId = UnitAura(unit, index, filter)\n"
-        "    if not name then return end\n"
-        // Harmful auras name their school and are titled in red; a buff is
-        // white. filter is what the caller asked for, debuffType is what came
-        // back, and either is enough to tell them apart.
-        "    local harmful = debuffType ~= nil or (filter and string.find(filter, 'HARMFUL'))\n"
-        "    if harmful then self:SetText(name, 1, 0, 0) else self:SetText(name, 1, 1, 1) end\n"
-        "    if debuffType then self:AddLine(debuffType, 0.5, 0.5, 0.5) end\n"
-        "    if count and count > 1 then self:AddLine(count .. ' stacks', 1, 1, 1) end\n"
-        // What the aura actually does, which is the whole reason a buff is
-        // worth hovering. The tooltip gave its name, its stacks and its time
-        // left and never said that Power Word: Fortitude increases Stamina by
-        // 165 - so nothing on the buff bar described its own effect.
-        //
-        // Above the time remaining, as WoW orders it: the description belongs
-        // to the aura and the countdown to this moment.
-        "    local desc = GetSpellDescription and spellId and GetSpellDescription(spellId)\n"
-        "    if desc and desc ~= '' then self:AddLine(desc, 1, 0.82, 0, 1) end\n"
-        "    if duration and duration > 0 and expTime then\n"
-        "        self:AddLine(string.format('%.0f sec remaining', expTime - GetTime()), 1, 1, 1)\n"
-        "    end\n"
-        "    self.__spellId = spellId\n"
-        "end\n"
+        // Built by the C binding (lua_Tooltip_SetUnitAura) as the client
+        // builds it; this only hands the call over.
+        "__WoweeFrameMT.SetUnitAura = __WoweeTooltipSetUnitAura\n"
         // Through SetUnitAura rather than beside it. This had the name and the
         // dispel type and nothing else - no stacks, no time left, no
         // description - so a debuff tooltip said strictly less than a buff's,

@@ -3693,9 +3693,10 @@ void SpellHandler::loadSpellNameCache() const {
             if (descriptionField != 0xFFFFFFFF) {
                 entry.description = dbc->getString(i, descriptionField);
             }
-            if (entry.description.empty() && tooltipField != 0xFFFFFFFF) {
-                entry.description = dbc->getString(i, tooltipField);
+            if (tooltipField != 0xFFFFFFFF) {
+                entry.auraDescription = dbc->getString(i, tooltipField);
             }
+            if (entry.description.empty()) entry.description = entry.auraDescription;
             if (descVarField != 0xFFFFFFFF) {
                 entry.descriptionVariableId = dbc->getUInt32(i, descVarField);
             }

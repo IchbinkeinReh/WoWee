@@ -4135,6 +4135,9 @@ public:
     struct SpellReagent { uint32_t itemId = 0; uint32_t count = 0; };
     struct SpellNameEntry {
         std::string name; std::string rank; std::string description;
+        /// Spell.dbc's ToolTip: what an aura of this spell says it does while
+        /// it is on someone, which the aura tooltip shows (0x00625350).
+        std::string auraDescription;
         uint32_t schoolMask = 0; uint8_t dispelType = 0; uint32_t attrEx = 0;
         /// Spell.dbc Attributes, the base word. Bit 6 (0x40) is passive.
         uint32_t attr = 0;
