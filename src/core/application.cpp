@@ -2472,6 +2472,9 @@ void Application::setState(AppState newState) {
                     svs->setMountModelLoader([this](uint32_t displayId) -> uint32_t {
                         return entitySpawner_ ? entitySpawner_->loadMountModel(displayId) : 0u;
                     });
+                    svs->setUnitScaleResolver([this](uint64_t guid) -> float {
+                        return entitySpawner_ ? entitySpawner_->unitModelScale(guid) : 1.0f;
+                    });
                     auto mountField = [this](uint64_t guid) -> uint32_t {
                         if (!gameHandler) return 0;
                         if (guid == gameHandler->getPlayerGuid()) return gameHandler->isMounted() ? 1u : 0u;

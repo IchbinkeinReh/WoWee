@@ -1933,7 +1933,12 @@ void SpellVisualSystem::updateMountTransitions() {
             const uint32_t modelId = mountModelLoader_ ? mountModelLoader_(t.displayId) : 0u;
             glm::vec3 at(0.0f);
             charRenderer->getInstancePosition(rider, at);
-            t.modelInstance = modelId ? charRenderer->createInstance(modelId, at, glm::vec3(0.0f), 1.0f) : 0u;
+            // 0x0071fbf0 scales the mount's matrix by the unit's model
+            // scale (its vtable +0x7c, 0x0071c0e0). The unit rides nothing
+            // yet (+0x98c is 0, 0x007265c0 case 16), so that is the unit's
+            // own size, without the mount display's +0x990.
+            const float scale = mountScale(unitScaleResolver_ ? unitScaleResolver_(t.unitGuid) : 1.0f);
+            t.modelInstance = modelId ? charRenderer->createInstance(modelId, at, glm::vec3(0.0f), scale) : 0u;
             if (t.modelInstance == 0) {
                 mountTransitions_.erase(mountTransitions_.begin() + static_cast<std::ptrdiff_t>(i));
                 continue;

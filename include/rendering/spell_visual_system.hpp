@@ -230,6 +230,10 @@ public:
     /// cannot be (0x006f83d0).
     using MountModelLoader = std::function<uint32_t(uint32_t displayId)>;
     void setMountModelLoader(MountModelLoader loader) { mountModelLoader_ = std::move(loader); }
+    /// The size a unit's model is drawn at (0x0071c0e0; the unit rides
+    /// nothing while its mount transition runs, so no mount display's).
+    using UnitScaleResolver = std::function<float(uint64_t unitGuid)>;
+    void setUnitScaleResolver(UnitScaleResolver resolver) { unitScaleResolver_ = std::move(resolver); }
     /// Whether a unit rides (0x0051a230: its mount display, not leaving it).
     using UnitMountedQuery = std::function<bool(uint64_t unitGuid)>;
     void setUnitMountedQuery(UnitMountedQuery query) { unitMountedQuery_ = std::move(query); }
@@ -488,6 +492,7 @@ private:
     std::vector<MountTransition> mountTransitions_;
     MountDisplayResolver mountDisplayResolver_;
     MountModelLoader mountModelLoader_;
+    UnitScaleResolver unitScaleResolver_;
     UnitMountedQuery unitMountedQuery_;
     UnitMountFieldQuery unitMountFieldQuery_;
     MountSink mountSink_;

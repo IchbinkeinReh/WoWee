@@ -154,6 +154,14 @@ void step(State& s, uint32_t nowMs, float riderFacing, const glm::vec3& riderPos
     if (s.flags & kTouchedGround) s.fade = std::min(s.fade + dt + dt, 1.0f);
 }
 
+/// The size 0x0071fbf0 draws the mount at: the unit's model scale (its
+/// vtable +0x7c, 0x0071c0e0), which multiplies in the mount display's +0x990
+/// only while the unit rides - and it rides nothing while this runs. Not
+/// positive reads 1.
+inline float mountScale(float unitModelScale) {
+    return unitModelScale > 0.0f ? unitModelScale : 1.0f;
+}
+
 /// 0x007fa930: how far the rider is lifted - toward the mount's seat
 /// (attachment 0) from the mount's place, by its progress.
 inline glm::vec3 riderLift(const State& s, const glm::vec3& seat, const glm::vec3& mountPlace) {

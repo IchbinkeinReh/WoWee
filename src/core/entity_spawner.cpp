@@ -2518,6 +2518,11 @@ float EntitySpawner::creatureDisplayScale(uint32_t displayId) const {
     return it != displayDataMap_.end() ? it->second.displayScale : 1.0f;
 }
 
+float EntitySpawner::unitModelScale(uint64_t guid) const {
+    auto it = creatureAppliedScale_.find(guid);
+    return it != creatureAppliedScale_.end() && it->second > 0.0f ? it->second : 1.0f;
+}
+
 namespace {
 // OBJECT_FIELD_SCALE_X as the spawn path reads it: unset or implausible is 1.0.
 float unitServerScale(const game::Entity& entity) {

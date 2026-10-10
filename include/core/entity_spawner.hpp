@@ -320,6 +320,9 @@ public:
     /// A display's model for the character renderer, as a mount's is loaded
     /// (its skins from CreatureDisplayInfo); 0 where it cannot be.
     uint32_t loadMountModel(uint32_t displayId);
+    /// The size a unit's model is drawn at (0x0071c0e0 while it rides
+    /// nothing): what its instance was given, 1 for one drawn at 1.
+    float unitModelScale(uint64_t guid) const;
     /// A unit mounted on a display now, or put down for 0 - a mount
     /// transition handing it over (0x007412b0, 0x00740450).
     void mountUnitNow(uint64_t guid, uint32_t displayId, bool localPlayer);
@@ -498,6 +501,7 @@ private:
     /// the display is unknown - an unknown display is already drawn at the
     /// model's own size, and guessing smaller would hide it.
     float creatureDisplayScale(uint32_t displayId) const;
+
 
     /// The size the client draws a creature at, before the server's
     /// OBJECT_FIELD_SCALE_X: display scale times model scale, overridden by

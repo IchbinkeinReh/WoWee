@@ -124,3 +124,11 @@ TEST_CASE("the mount faces as the rider and leans with the ground (0x0071fbf0)",
     CHECK(r.x == Catch::Approx(0.0f).margin(1e-6));
     CHECK(std::sin(r.y) == Catch::Approx(s.normal.x));
 }
+
+TEST_CASE("Mount transition: the mount is drawn at the unit's own model scale") {
+    using wowee::rendering::mount_transition::mountScale;
+    REQUIRE(mountScale(1.0f) == 1.0f);
+    REQUIRE(mountScale(1.5f) == 1.5f);
+    REQUIRE(mountScale(0.0f) == 1.0f);
+    REQUIRE(mountScale(-2.0f) == 1.0f);
+}
