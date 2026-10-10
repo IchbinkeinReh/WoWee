@@ -1203,8 +1203,18 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     // vectors and a copy of the whole list, every frame, in the pass that
     // turned out to be the largest single piece of CPU work in the frame.
     const auto m2T1 = std::chrono::steady_clock::now();
+    // Ground clutter last. The instance buffer holds 65536 a frame, and a
+    // dense Elwynn verge alone came near that: whatever sorted after the cap
+    // was dropped, and by model id that was fences and signposts - doodads
+    // that vanished for as long as the camera looked down the road. Behind
+    // everything else, only the clutter can be what does not fit.
     std::sort(sortedVisible_.begin(), sortedVisible_.end(),
-              [](const VisibleEntry& a, const VisibleEntry& b) { return a.modelId < b.modelId; });
+              [this](const VisibleEntry& a, const VisibleEntry& b) {
+                  const bool ga = instances[a.index].cachedIsGroundDetail;
+                  const bool gb = instances[b.index].cachedIsGroundDetail;
+                  if (ga != gb) return gb;
+                  return a.modelId < b.modelId;
+              });
     const auto m2T2 = std::chrono::steady_clock::now();
     // Reported at the end of the pass; see m2Profile above.
     struct M2Phases { double cull, sort, record; std::size_t visible, instances; };
@@ -1358,6 +1368,24 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
             }
 
             if (pending.empty()) { visStart = groupEnd; continue; }
+
+            // Clutter gets what is left once the second pass has its room -
+            // every transparent instance draws again there - and keeps its
+            // nearest tufts when that is not all of them.
+            if (model.isGroundDetail) {
+                const size_t reserved = transparentVisible_.size();
+                const size_t room = MAX_INSTANCE_DATA > instanceDataCount_ + reserved
+                                        ? MAX_INSTANCE_DATA - instanceDataCount_ - reserved : 0;
+                if (pending.size() > room) {
+                    std::nth_element(pending.begin(), pending.begin() + static_cast<std::ptrdiff_t>(room), pending.end(),
+                                     [&](const PendingInstance& a, const PendingInstance& b) {
+                                         const glm::vec3 da = instances[a.instanceIdx].cachedCullCenter - camPos;
+                                         const glm::vec3 db = instances[b.instanceIdx].cachedCullCenter - camPos;
+                                         return glm::dot(da, da) < glm::dot(db, db);
+                                     });
+                    pending.resize(room);
+                }
+            }
 
             // Sort by targetLOD so each sub-group occupies a contiguous SSBO range
             std::sort(pending.begin(), pending.end(),
