@@ -1053,8 +1053,10 @@ private:
     // time (CDetailDoodad_vtx, 0x007b2a80). Here every visible M2 of the
     // frame shares this one buffer. Played it holds a few thousand; what ran
     // it out was the first frames in the world, which drew every instance
-    // untested (see M2Instance::cullVerdictKnown).
-    static constexpr uint32_t MAX_INSTANCE_DATA = 65536;
+    // untested (see M2Instance::cullVerdictKnown) - and then a dense Elwynn
+    // verge looked down a road, which reached 65536 with clutter alone; so
+    // twice that, and the clutter is what gives way should even that fill.
+    static constexpr uint32_t MAX_INSTANCE_DATA = 131072;
     VkDescriptorSetLayout instanceSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool instanceDescPool_ = VK_NULL_HANDLE;
     ::VkBuffer instanceBuffer_[2] = {};

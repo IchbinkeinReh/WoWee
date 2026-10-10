@@ -1203,7 +1203,7 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     // vectors and a copy of the whole list, every frame, in the pass that
     // turned out to be the largest single piece of CPU work in the frame.
     const auto m2T1 = std::chrono::steady_clock::now();
-    // Ground clutter last. The instance buffer holds 65536 a frame, and a
+    // Ground clutter last. The instance buffer held 65536 a frame, and a
     // dense Elwynn verge alone came near that: whatever sorted after the cap
     // was dropped, and by model id that was fences and signposts - doodads
     // that vanished for as long as the camera looked down the road. Behind
