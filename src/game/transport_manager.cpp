@@ -260,6 +260,7 @@ void TransportManager::registerTransport(uint64_t guid,
             ? deeprunTramSeedDurationMs(spline.durationMs())
             : spline.durationMs();
         transport.localClockMs = static_cast<uint32_t>(nowEpochMs() % seedDurationMs);
+        seedFromServerPathTime(transport);
         LOG_INFO("TransportManager: Enabled client animation for transport 0x",
                  std::hex, guid, std::dec, " path=", pathId,
                  " durationMs=", spline.durationMs(), " seedMs=", transport.localClockMs,
@@ -451,6 +452,32 @@ bool TransportManager::isPointOnTransportDeck(uint64_t transportGuid,
 
     const float floorDelta = canonicalPosition.z - *floor;
     return floorDelta >= -0.35f && floorDelta <= maxFloorDelta;
+}
+
+void TransportManager::noteServerPathTime(uint64_t transportGuid, uint32_t pathTimeMs) {
+    serverPathTimes_[transportGuid] = {pathTimeMs, elapsedTime_};
+    if (auto* transport = getTransport(transportGuid)) seedFromServerPathTime(*transport);
+}
+
+void TransportManager::seedFromServerPathTime(ActiveTransport& transport) {
+    // Elevators only - a z-only path played on the client's clock. A ship's or
+    // a zeppelin's block carries the server's own ms instead, and its phase
+    // comes from the route fields (applyServerRouteClock).
+    if (!transport.useClientAnimation || transport.hasServerRouteClock) return;
+    auto it = serverPathTimes_.find(transport.guid);
+    if (it == serverPathTimes_.end()) return;
+    const auto* pathEntry = pathRepo_.findPath(transport.pathId);
+    if (!pathEntry || !pathEntry->zOnly) return;
+    const uint32_t durationMs = pathEntry->spline.durationMs();
+    if (durationMs == 0) return;
+    // Seeded from the wall clock, the lift ran at an arbitrary offset from
+    // the server's, so the doors - which the server opens on its own
+    // timeline - shut just as the car arrived.
+    const double sinceMs = std::max(0.0, (elapsedTime_ - it->second.receivedAt) * 1000.0);
+    const uint64_t now = static_cast<uint64_t>(it->second.pathTimeMs) + static_cast<uint64_t>(sinceMs);
+    transport.localClockMs = static_cast<uint32_t>(now % durationMs);
+    LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec, " at the server's path time ",
+             transport.localClockMs, "ms of ", durationMs, "ms");
 }
 
 void TransportManager::applyServerRouteClock(uint64_t transportGuid, float phase,
@@ -788,6 +815,8 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
     clockSync_.processServerUpdate(*transport,
                                    transport->borrowedPath ? nullptr : pathEntry,
                                    position, orientation, elapsedTime_);
+    // The first sample reseeds a client-animated path from the wall clock.
+    seedFromServerPathTime(*transport);
 
     updateTransformMatrices(*transport);
     pushTransform(*transport);

@@ -272,6 +272,11 @@ public:
     // fraction in [0,1) of periodMs. Cheap and idempotent - safe to call on every
     // object update that carries the fields.
     void applyServerRouteClock(uint64_t transportGuid, float phase, uint32_t periodMs);
+    /// The path time an elevator's create block carries (UPDATEFLAG_TRANSPORT).
+    /// The client runs a route-less transport at that time plus what has
+    /// passed since, modulo the path (0x00710640) - the same timeline the
+    /// server opens and shuts the doors on.
+    void noteServerPathTime(uint64_t transportGuid, uint32_t pathTimeMs);
 
     // Ship machinery follows the hull: ShipMoving while under way, ShipStop when
     // holding at a dock. Cheap to call every frame - it only reaches the
@@ -364,6 +369,8 @@ private:
     void pushTransform(ActiveTransport& transport);
     /// Take the hull out of the world, or put it back. See ActiveTransport::onThisMap.
     void setInstanceHidden(const ActiveTransport& transport, bool hidden);
+    /// Put an elevator at the server's path time, if its create block gave one.
+    void seedFromServerPathTime(ActiveTransport& transport);
 
     TransportPathRepository pathRepo_;
     TransportClockSync clockSync_;
@@ -377,6 +384,9 @@ private:
     /// server puts the route phase. See applyServerRouteClock.
     struct PendingRouteClock { float phase; uint32_t periodMs; };
     std::unordered_map<uint64_t, PendingRouteClock> pendingRouteClocks_;
+    /// noteServerPathTime's samples: the path time, and elapsedTime_ on arrival.
+    struct ServerPathTime { uint32_t pathTimeMs; double receivedAt; };
+    std::unordered_map<uint64_t, ServerPathTime> serverPathTimes_;
     uint64_t riderTransportGuid_ = 0;
     rendering::WMORenderer* wmoRenderer_ = nullptr;
     rendering::M2Renderer* m2Renderer_ = nullptr;

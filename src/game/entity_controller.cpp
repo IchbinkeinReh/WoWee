@@ -2171,6 +2171,9 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
 }
 
 void EntityController::onCreateGameObject(const UpdateBlock& block, std::shared_ptr<Entity>& entity) {
+    if (block.hasTransportTime) {
+        if (auto* tm = owner_.getTransportManager()) tm->noteServerPathTime(block.guid, block.transportTime);
+    }
     auto go = std::static_pointer_cast<GameObject>(entity);
     auto itDisp = block.fields.find(fieldIndex(UF::GAMEOBJECT_DISPLAYID));
     if (itDisp != block.fields.end()) {
