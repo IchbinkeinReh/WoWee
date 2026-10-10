@@ -4806,6 +4806,7 @@ void CharacterRenderer::refreshInteriorLights(const FloorQuery& floorAt, const I
     // themselves they each queried the floor every frame, their hand-carried
     // positions never holding still: four or five WMO raycasts a frame for
     // every armed NPC in a crowd.
+    ++lightRefreshFrame_;
     attachedScratch_.clear();
     for (const auto& [id, instance] : instances) {
         for (const auto& wa : instance.weaponAttachments) {
@@ -4819,7 +4820,12 @@ void CharacterRenderer::refreshInteriorLights(const FloorQuery& floorAt, const I
             ? glm::vec3(instance.overrideModelMatrix[3])
             : instance.position;
         const glm::vec3 d = feet - instance.interiorQueryPos;
-        if (!instance.interiorQueried || glm::dot(d, d) >= 0.25f * 0.25f) {
+        // A unit on the move asks for its floor every fourth frame, a
+        // quarter of them each frame: the light it takes from it eases in
+        // over many frames anyway, and in a crowd every walker asking every
+        // frame was a few hundred rays through the city.
+        const bool itsTurn = ((id + lightRefreshFrame_) & 3u) == 0;
+        if (!instance.interiorQueried || (glm::dot(d, d) >= 0.25f * 0.25f && itsTurn)) {
             instance.interiorQueried = true;
             instance.interiorQueryPos = feet;
             instance.floor = floorAt(feet);

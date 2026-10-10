@@ -792,6 +792,7 @@ private:
     std::unordered_map<std::string, uint32_t> sharedItemModels_;
     std::unordered_set<uint32_t> sharedItemModelIds_;
     std::unordered_set<uint32_t> attachedScratch_;  // refreshInteriorLights' per-frame scratch
+    uint32_t lightRefreshFrame_ = 0;  ///< refreshInteriorLights' turn counter
     std::unordered_map<uint32_t, CharacterInstance> instances;
     /// The instances a render() call draws, in the order it draws them.
     std::vector<std::pair<uint32_t, CharacterInstance*>> drawOrder_;
