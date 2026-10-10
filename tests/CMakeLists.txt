@@ -1199,6 +1199,12 @@ wowee_add_test(test_rt_bvh
     SOURCES test_rt_bvh.cpp
             ${CMAKE_SOURCE_DIR}/src/rendering/rt_bvh.cpp)
 
+# ── test_rt_gi_volume ────────────────────────────────────────
+# Header-only: where the irradiance probes are stored, scrolled and listed,
+# and the octahedral tiles' borders, against what the shaders assume.
+wowee_add_test(test_rt_gi_volume
+    SOURCES test_rt_gi_volume.cpp)
+
 # ── test_recording_size ──────────────────────────────────────
 # Header-only: the size a screen recording is encoded at.
 wowee_add_test(test_recording_size
