@@ -3031,6 +3031,7 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
     auto& model = instance.cachedModel->data;
 
     if (model.bones.empty()) {
+        instance.posedOnce = true;  // nothing to pose: as it is, it is right
         return;
     }
 
@@ -3138,6 +3139,7 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
     // session (a5080cec), and one `continue` added above would make this the
     // same fault. tools/bounded_log_check.py reports it.
     if (diagFrames < 3) diagFrames++;
+    instance.posedOnce = true;
 }
 
 glm::mat4 CharacterRenderer::getBoneTransform(const pipeline::M2Bone& bone, float animTime, float globalSeqTime,
@@ -3277,6 +3279,9 @@ bool CharacterRenderer::isDrawCandidate(const CharacterInstance& instance, const
                                         const Frustum& frustum, float renderRadiusSq) const {
     // Skip invisible instances (e.g., player in first-person mode)
     if (!instance.visible) return false;
+    // Not before it has been posed once (see posedOnce). An attachment is
+    // placed by its parent's bones, not its own animation.
+    if (!instance.posedOnce && !instance.hasOverrideModelMatrix) return false;
 
     // Character instance culling: test both distance and frustum visibility
     if (!instance.hasOverrideModelMatrix && !instance.isSceneModel) {
@@ -4189,6 +4194,7 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
     for (auto& pair : instances) {
         auto& inst = pair.second;
         if (!inst.visible) continue;
+        if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;  // as the main pass
 
         // Distance cull against shadow frustum
         glm::vec3 diff = inst.position - shadowCenter;
@@ -5260,6 +5266,7 @@ void CharacterRenderer::collectBlobShadows(std::vector<blob_shadow::Caster>& out
     for (const auto& [id, inst] : instances) {
         (void)id;
         if (!inst.blobShadow || !inst.visible) continue;
+        if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;
         blob_shadow::Caster c;
         c.world = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
         c.box = *inst.blobShadow;

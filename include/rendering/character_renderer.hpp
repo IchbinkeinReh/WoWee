@@ -473,6 +473,11 @@ private:
         glm::vec3 rotation;
         float scale;
         bool visible = true;  // For first-person camera hiding
+        /// Whether its bones have been computed from its animation at least
+        /// once. Until then it is not drawn: a model drawn before that stands
+        /// in its bind pose, dressed and stock-still, which is how a crowd
+        /// still loading looked.
+        bool posedOnce = false;
         float torsoYawOverrideRad = 0.0f;  ///< SpineLow; setInstanceTorsoYaw
         float headYawOverrideRad = 0.0f;   ///< Head
 
