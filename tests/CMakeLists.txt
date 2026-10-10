@@ -2817,3 +2817,10 @@ wowee_add_test(test_unit_name_rules
 # ── test_ground_target ───────────────────────────────────────
 # Casting at a place on the ground: packet, radius, range (game/ground_target.hpp).
 wowee_add_packet_test(test_ground_target)
+
+# ── test_zone_area ───────────────────────────────────────────
+# Where the player is, as the client names it: the area under the feet (a
+# building's before the ground's), the zone and subzone, the texts and the
+# zone events (game/zone_area.hpp).
+wowee_add_test(test_zone_area
+    SOURCES test_zone_area.cpp)
