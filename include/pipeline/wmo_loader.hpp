@@ -112,22 +112,47 @@ struct WMOPortalRef {
 };
 
 // WMO Liquid (MLIQ chunk data)
+/// A WMO group's LiquidType (the group's +0x144, set by 0x007d82e0). MOGP's
+/// liquid (+0x34 in its header) is a LiquidType id where the root's MOHD
+/// flags have 4; otherwise it is the old numbering, one less, with 15 for
+/// none. The basic types at or below 20 then become the WMO ones
+/// (0x007d7310): water 13 - 14 in a group flagged 0x80000 - ocean 14,
+/// magma 19, slime 20.
+inline uint32_t wmoGroupLiquidType(uint32_t mogpLiquid, uint32_t mogpFlags, uint32_t mohdFlags) {
+    uint32_t t = mogpLiquid;
+    if ((mohdFlags & 4) == 0) t = mogpLiquid == 15 ? 0 : mogpLiquid + 1;
+    if (t != 0 && t < 0x15) {
+        switch ((t - 1) & 3) {
+            case 0: return (mogpFlags & 0x80000) != 0 ? 14u : 13u;
+            case 1: return 14u;
+            case 2: return 19u;
+            default: return 20u;
+        }
+    }
+    return t;
+}
+
 struct WMOLiquid {
     uint32_t xVerts = 0;        // Vertices in X direction
     uint32_t yVerts = 0;        // Vertices in Y direction
     uint32_t xTiles = 0;        // Tiles in X (= xVerts - 1)
     uint32_t yTiles = 0;        // Tiles in Y (= yVerts - 1)
     glm::vec3 basePosition;     // Corner position in model space
-    uint16_t materialId = 0;    // Liquid material/type
+    uint16_t materialId = 0;    // MLIQ's material id (an index into MOMT)
+    /// The group's LiquidType (0x007d82e0, 0x007d7310), from MOGP's liquid
+    /// and the root's MOHD flags; see wmoGroupLiquidType.
+    uint32_t liquidType = 0;
+    /// The root's MOGI flags for this group; 0x48 clear there also draws its
+    /// liquid the interior way (0x007bde50, 0x00793d20).
+    uint32_t groupInfoFlags = 0;
     std::vector<float> heights; // Height per vertex (xVerts * yVerts)
     std::vector<uint8_t> flags; // Flags per tile (xTiles * yTiles)
     /// Each vertex's first four bytes, ahead of its height: a water's depth
     /// in the low byte, or a magma's two int16 texture coordinates. The client
     /// draws with both (0x007a7b00).
     std::vector<uint32_t> vertexInfo;
-    /// MLIQ's own material id as stored: an index into MOMT, whose diffuse
-    /// colour an interior liquid is drawn in (0x00793d20). `materialId` above
-    /// falls back to the group's liquid type when this is 0.
+    /// MLIQ's own material id: the MOMT entry whose diffuse colour an
+    /// interior liquid is drawn in (the group's +0x130, 0x007a6d70).
     uint16_t momtIndex = 0;
     /// The group's MOGP flags; 0x48 decides whether its liquid is drawn the
     /// interior way (0x00793d20).

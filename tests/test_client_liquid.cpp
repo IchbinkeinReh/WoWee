@@ -6,6 +6,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/client_liquid.hpp"
+#include "pipeline/wmo_loader.hpp"
 
 #include <cmath>
 
@@ -168,15 +169,36 @@ TEST_CASE("a texture name is a sequence, a procedural texture or a file", "[liqu
 
 TEST_CASE("a WMO liquid inside a building is drawn the interior way", "[liquid]") {
     // 0x00793d20: a group that is neither exterior (0x8) nor exterior-lit
-    // (0x40), with a LiquidType lacking flag 0x200.
-    CHECK(cl::wmoLiquidIsInterior(0x0, 0));
-    CHECK_FALSE(cl::wmoLiquidIsInterior(0x8, 0));
-    CHECK_FALSE(cl::wmoLiquidIsInterior(0x40, 0));
-    CHECK_FALSE(cl::wmoLiquidIsInterior(0x0, 0x200));
+    // (0x40) - by its MOGP flags, or by its MOGI entry's (the instance's
+    // flag 2, 0x007bde50) - with a LiquidType lacking flag 0x200.
+    CHECK(cl::wmoLiquidIsInterior(0x0, 0x8, 0));
+    CHECK(cl::wmoLiquidIsInterior(0x8, 0x0, 0));
+    CHECK_FALSE(cl::wmoLiquidIsInterior(0x8, 0x8, 0));
+    CHECK_FALSE(cl::wmoLiquidIsInterior(0x40, 0x40, 0));
+    CHECK_FALSE(cl::wmoLiquidIsInterior(0x0, 0x0, 0x200));
     // The water types up to 20 become 17 there; the rest keep theirs.
     CHECK(cl::wmoInteriorLiquidType(1) == 17);
     CHECK(cl::wmoInteriorLiquidType(13) == 17);
     CHECK(cl::wmoInteriorLiquidType(2) == 2);
     CHECK(cl::wmoInteriorLiquidType(3) == 3);
     CHECK(cl::wmoInteriorLiquidType(21) == 21);
+}
+
+TEST_CASE("a WMO group's LiquidType from MOGP's liquid (0x007d82e0, 0x007d7310)", "[liquid]") {
+    using wowee::pipeline::wmoGroupLiquidType;
+    // The old numbering, one less, 15 for none: water, ocean, magma, slime
+    // become the WMO types.
+    CHECK(wmoGroupLiquidType(0, 0, 0) == 13);
+    CHECK(wmoGroupLiquidType(0, 0x80000, 0) == 14);
+    CHECK(wmoGroupLiquidType(1, 0, 0) == 14);
+    CHECK(wmoGroupLiquidType(2, 0, 0) == 19);
+    CHECK(wmoGroupLiquidType(3, 0, 0) == 20);
+    CHECK(wmoGroupLiquidType(15, 0, 0) == 0);
+    CHECK(wmoGroupLiquidType(20, 0, 0) == 21);
+    // MOHD flag 4: a LiquidType id, converted the same way up to 20.
+    CHECK(wmoGroupLiquidType(1, 0, 4) == 13);
+    CHECK(wmoGroupLiquidType(3, 0, 4) == 19);
+    CHECK(wmoGroupLiquidType(17, 0, 4) == 13);
+    CHECK(wmoGroupLiquidType(21, 0, 4) == 21);
+    CHECK(wmoGroupLiquidType(0, 0, 4) == 0);
 }

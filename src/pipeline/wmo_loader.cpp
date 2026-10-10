@@ -738,6 +738,10 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                         group.liquid.materialId = mliq.materialId;
                         group.liquid.momtIndex = group.liquid.materialId;
                         group.liquid.groupFlags = group.flags;
+                        group.liquid.liquidType =
+                            wmoGroupLiquidType(group.liquidType, group.flags, model.flags);
+                        group.liquid.groupInfoFlags =
+                            groupIndex < model.groupInfo.size() ? model.groupInfo[groupIndex].flags : 0u;
 
                         // Keep parser resilient across minor format variants:
                         // prefer explicit per-vertex floats, otherwise fall back to flat.
@@ -775,10 +779,6 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                             std::memcpy(group.liquid.flags.data(), &groupData[parseOffset], tileCount);
                         } else if (tileCount > 0) {
                             group.liquid.flags.resize(tileCount, 0);
-                        }
-
-                        if (group.liquid.materialId == 0) {
-                            group.liquid.materialId = static_cast<uint16_t>(group.liquidType);
                         }
                     }
                 }

@@ -297,16 +297,19 @@ inline std::string frameName(const std::string& pattern, int n) {
     return out;
 }
 
-/// A WMO liquid drawn the interior way (0x00793d20): when its group is neither
-/// exterior nor exterior-lit (flags & 0x48 clear) and its LiquidType does not
-/// have flag 0x200. It is then lit by a fixed white light (0x007d4f40's second
-/// branch), its vertices take the colour of its MOMT material (+0x1c, the
-/// diffuse colour), its depth coordinate's u is 1 - the white half of
-/// proceduralWmoWaterTex - and a water of a basic type at or below 20 becomes
-/// type 17.
-inline bool wmoLiquidIsInterior(uint32_t groupFlags, uint32_t liquidTypeFlags) {
-    return (groupFlags & 0x48) == 0 && (liquidTypeFlags & 0x200) == 0;
+/// A WMO liquid drawn the interior way (0x00793d20): when its group is
+/// neither exterior nor exterior-lit (its MOGP flags & 0x48 clear), or the
+/// instance's group was made interior (+0xc flag 2, which 0x007bde50 sets
+/// where the root's MOGI entry for the group has 0x48 clear), and its
+/// LiquidType does not have flag 0x200. It is then lit by a fixed white light
+/// (0x007d4f40's second branch), its vertices take the colour of its MOMT
+/// material (+0x1c, the diffuse colour), its depth coordinate's u is 1 - the
+/// white half of proceduralWmoWaterTex - and a water of a basic type at or
+/// below 20 becomes type 17.
+inline bool wmoLiquidIsInterior(uint32_t groupFlags, uint32_t groupInfoFlags, uint32_t liquidTypeFlags) {
+    return ((groupFlags & 0x48) == 0 || (groupInfoFlags & 0x48) == 0) && (liquidTypeFlags & 0x200) == 0;
 }
+
 
 /// The type an interior WMO water is drawn as (0x00793d20): one of the water
 /// types 1, 5, 9, 13, 17 becomes 17.

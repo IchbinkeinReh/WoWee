@@ -1229,11 +1229,6 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                         const auto& group = groups[ft.wmoLiquidGroupIndex];
                         ft.wmoLiquidGroupIndex++;
                         if (!group.liquid.hasLiquid()) continue;
-                        if (group.flags & 0x2000) {
-                            uint16_t lt = group.liquid.materialId;
-                            uint8_t basicType = (lt == 0) ? 0 : ((lt - 1) % 4);
-                            if (basicType < 2) continue;
-                        }
                         // The MOMT entry MLIQ names gives an interior liquid its
                         // colour (0x00793d20 reads its diffuse colour, +0x1c).
                         const auto& mats = wmoReady.model.materials;

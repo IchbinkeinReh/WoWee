@@ -1014,7 +1014,7 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
     surface.tileX = -1;
     surface.tileY = -1;
     surface.wmoId = wmoId;
-    surface.liquidType = liquid.materialId;
+    surface.liquidType = static_cast<uint16_t>(liquid.liquidType);
     surface.xOffset = 0;
     surface.yOffset = 0;
     surface.width = static_cast<uint8_t>(std::min<uint32_t>(255, liquid.xTiles));
@@ -1060,12 +1060,16 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
     // vertex at its own height, the depth byte or the magma coordinate ahead
     // of it, and the interior look for a group that is not exterior.
     {
-        uint32_t ltFlags = 0;
-        if (auto it = clientTypeRecords_.find(liquid.materialId); it != clientTypeRecords_.end())
-            ltFlags = it->second.flags;
-        surface.wmoInterior = client_liquid::wmoLiquidIsInterior(liquid.groupFlags, ltFlags);
-        surface.clientLiquidType = surface.wmoInterior
-            ? client_liquid::wmoInteriorLiquidType(liquid.materialId) : liquid.materialId;
+        // The group's LiquidType, water (1) where LiquidType.dbc has none.
+        uint32_t type = liquid.liquidType;
+        auto it = clientTypeRecords_.find(type);
+        if (it == clientTypeRecords_.end() && !clientTypeRecords_.empty()) {
+            type = 1;
+            it = clientTypeRecords_.find(type);
+        }
+        const uint32_t ltFlags = it != clientTypeRecords_.end() ? it->second.flags : 0u;
+        surface.wmoInterior = client_liquid::wmoLiquidIsInterior(liquid.groupFlags, liquid.groupInfoFlags, ltFlags);
+        surface.clientLiquidType = surface.wmoInterior ? client_liquid::wmoInteriorLiquidType(type) : type;
         surface.wmoColorBGRA = momtDiffuseBGRA;
         const bool haveInfo = liquid.vertexInfo.size() == static_cast<size_t>(vertexCount);
         surface.clientPositions.resize(vertexCount);
@@ -3093,18 +3097,20 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
     };
     VkPipeline boundPipe = VK_NULL_HANDLE;
 
-    // The solid magma first, then the blended water over what is behind it.
-    // The client draws its liquids together after the world's opaque passes
-    // (0x0079a870 calls 0x008a2240 after 0x00793d20), sorted by material and
-    // settings (0x008a1980); opaque before blended here is this client's.
-    for (int pass = 0; pass < 2; ++pass) {
-        const bool magmaPass = pass == 0;
+    // The client draws its liquids, the ground's and the buildings', in one
+    // list after the world's opaque passes (0x0079a870 calls 0x008a2240
+    // after 0x00793d20 queues the WMO ones). 0x008a2240 qsorts that list of
+    // CInstance_Liquid pointers with 0x008a1980, which reads its keys at the
+    // element - the pointer itself and its neighbours - rather than through
+    // it, so the order is the instances' addresses: in effect the order they
+    // were made in, magma and water alike. The surfaces are kept in that
+    // order here.
+    {
         for (auto& surface : surfaces) {
             if (!surface.clientVertexBuffer || !surface.indexBuffer || surface.indexCount == 0) continue;
             ClientLiquid* liquid = clientLiquidFor(surface.clientLiquidType);
             if (!liquid || liquid->kind == client_liquid::MaterialKind::None) continue;
             const bool isMagma = liquid->kind == client_liquid::MaterialKind::Magma;
-            if (isMagma != magmaPass) continue;
 
             {
                 const glm::vec3 extentX = surface.stepX * static_cast<float>(surface.width);
@@ -3192,7 +3198,7 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
                 }
             }
 
-            VkPipeline pipe = magmaPass ? magmaPipe : waterPipe;
+            VkPipeline pipe = isMagma ? magmaPipe : waterPipe;
             if (boundPipe != pipe) {
                 // After procedural water's layout the shared sets go back on.
                 if (boundPipe == procPipe) bindClientSets();
