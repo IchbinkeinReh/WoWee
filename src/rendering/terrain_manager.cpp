@@ -2055,6 +2055,10 @@ void TerrainManager::updateDetailDoodads(const glm::vec3& camPos, const glm::vec
         return std::sqrt(dx * dx + dy * dy);
     };
 
+    // Released chunks go in one removal at the end: each call re-walks every M2
+    // instance, and after a teleport hundreds of chunks leave in one frame.
+    std::vector<uint32_t> releasedIds;
+
     for (auto& [coord, tile] : loadedTiles) {
         if (!tile || tile->detailChunks.empty()) continue;
         const bool tileNear = distanceTo(tile->minX, tile->minY, tile->maxX, tile->maxY) < releaseRange;
@@ -2064,7 +2068,7 @@ void TerrainManager::updateDetailDoodads(const glm::vec3& camPos, const glm::vec
             const float depth = m2ChunkViewDepth(glm::vec3(dc.minX, dc.minY, dc.minZ),
                                                  glm::vec3(dc.maxX, dc.maxY, dc.maxZ), camPos, viewDir);
             if (dc.instanced && d > releaseRange) {
-                m2Renderer->removeInstances(dc.instanceIds);
+                releasedIds.insert(releasedIds.end(), dc.instanceIds.begin(), dc.instanceIds.end());
                 dc.instanceIds.clear();
                 dc.instanced = false;
             } else if (!dc.instanced && depth < range && d <= releaseRange && !outOfTime) {
@@ -2085,6 +2089,7 @@ void TerrainManager::updateDetailDoodads(const glm::vec3& camPos, const glm::vec
             }
         }
     }
+    m2Renderer->removeInstances(releasedIds);
 }
 
 TerrainManager::TerrainTextureTones
