@@ -303,6 +303,13 @@ uint64_t cloneCasterGuid(const Auras& auras, AuraIdsOf auraIdsOf) {
     return 0;
 }
 
+/// 0x0072d4f0: whose name text a unit shows - its Mirror Image caster's,
+/// the whole of it, while that caster is about (the function calls itself
+/// for the caster, and looks for no image there); its own otherwise.
+inline uint64_t nameTextOwner(uint64_t unitGuid, uint64_t cloneCaster, bool casterPresent) {
+    return cloneCaster != 0 && casterPresent ? cloneCaster : unitGuid;
+}
+
 /// 0x00519df0: whether a plate shows its threat flash, by threatWarning
 /// (default 3): 0 never, 1 in a dungeon or raid map (Map.dbc InstanceType 1
 /// or 2), 2 in a party or raid, 3 always.

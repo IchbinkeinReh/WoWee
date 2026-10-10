@@ -284,49 +284,70 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         if (!at) return;
 
         // 0x0072d4f0: tags, the name with its title, then the guild or the
-        // creature's title on lines of their own.
-        std::string text;
-        // A Mirror Image (aura 279) is named as its caster, and while the
-        // caster is about its text is the caster's (0x0072d4f0 calls itself
-        // for it): no title of a creature's under it.
-        const std::string name = gameHandler.shownUnitName(unit);
-        const uint64_t cloneOf = gameHandler.getCloneCasterGuid(unit);
-        const bool asCaster = cloneOf != 0 && gameHandler.getEntityManager().getEntity(cloneOf) != nullptr;
-        if (isPlayer) {
-            const uint16_t pf = game::fieldIndex(game::UF::PLAYER_FLAGS);
-            uint32_t flags = pf != 0xFFFF ? e.getField(pf) : 0;
-            if (guid == playerGuid && gameHandler.isAfk()) flags |= 0x2;
-            text = un::playerNamePrefix(flags, "<AFK>", "<DND>", "<GM>");
-            std::string titled;
-            if ((nameMask & un::kPlayerPvpTitle) && !name.empty()) {
-                const uint16_t t = game::fieldIndex(game::UF::PLAYER_CHOSEN_TITLE);
-                if (t != 0xFFFF && e.getField(t) != 0) titled = gameHandler.getFormattedTitleFor(e.getField(t), name);
+        // creature's title on lines of their own. A Mirror Image (aura 279)
+        // whose caster is about is given the caster's whole text - the
+        // function calls itself for the caster, with no second look for an
+        // image; one whose caster is gone keeps its own, named as the
+        // caster (0x0072a000).
+        uint64_t g = guid;
+        const game::Entity* entP = &e;
+        const game::Unit* unitP = &unit;
+        bool player = isPlayer;
+        bool asCaster = false;
+        std::shared_ptr<game::Entity> caster;
+        if (const uint64_t cloneOf = gameHandler.getCloneCasterGuid(unit)) {
+            caster = gameHandler.getEntityManager().getEntity(cloneOf);
+            if (un::nameTextOwner(guid, cloneOf, caster && caster->isUnit()) == cloneOf) {
+                g = cloneOf;
+                entP = caster.get();
+                unitP = static_cast<const game::Unit*>(caster.get());
+                player = caster->getType() == game::ObjectType::PLAYER;
+                asCaster = true;
             }
-            if (name.empty()) gameHandler.queryPlayerName(guid);
-            text += titled.empty() ? name : titled;
-            if (nameMask & un::kPlayerGuild) {
-                if (const uint32_t g = gameHandler.getEntityGuildId(guid)) {
-                    const std::string& gn = gameHandler.lookupGuildName(g);
-                    if (!gn.empty()) text += "\n<" + gn + ">";
-                }
-            }
-            // Another server's player, as the name query named a realm.
-            if (guid != playerGuid && !gameHandler.getCachedPlayerRealm(guid).empty()) {
-                const std::string label = interfaceText("FOREIGN_SERVER_LABEL");
-                text += label.empty() ? un::kForeignServerLabelEnUS : label;
-            }
-        } else {
-            text = name;
-            const uint16_t petNumber = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
-            const bool hasPetNumber = petNumber != 0xFFFF && e.getField(petNumber) != 0;
-            if (!hasPetNumber && !asCaster) {
-                const std::string sub = gameHandler.getCachedCreatureSubName(unit.getEntry());
-                if (!sub.empty()) text += "\n<" + sub + ">";
-            }
-            if (const std::string title = asCaster ? std::string{} : summonTitleLine(gameHandler, e, unit);
-                !title.empty())
-                text += "\n<" + title + ">";
         }
+        const game::Entity& ent = *entP;
+        const game::Unit& u = *unitP;
+        std::string name = asCaster ? u.getName() : gameHandler.shownUnitName(unit);
+        if (name.empty() && asCaster) name = gameHandler.lookupName(g);
+        const std::string text = [&]() -> std::string {
+            std::string out;
+            if (player) {
+                const uint16_t pf = game::fieldIndex(game::UF::PLAYER_FLAGS);
+                uint32_t flags = pf != 0xFFFF ? ent.getField(pf) : 0;
+                if (g == playerGuid && gameHandler.isAfk()) flags |= 0x2;
+                out = un::playerNamePrefix(flags, "<AFK>", "<DND>", "<GM>");
+                std::string titled;
+                if ((nameMask & un::kPlayerPvpTitle) && !name.empty()) {
+                    const uint16_t t = game::fieldIndex(game::UF::PLAYER_CHOSEN_TITLE);
+                    if (t != 0xFFFF && ent.getField(t) != 0)
+                        titled = gameHandler.getFormattedTitleFor(ent.getField(t), name);
+                }
+                if (name.empty()) gameHandler.queryPlayerName(g);
+                out += titled.empty() ? name : titled;
+                if (nameMask & un::kPlayerGuild) {
+                    if (const uint32_t gid = gameHandler.getEntityGuildId(g)) {
+                        const std::string& gn = gameHandler.lookupGuildName(gid);
+                        if (!gn.empty()) out += "\n<" + gn + ">";
+                    }
+                }
+                // Another server's player, as the name query named a realm.
+                if (g != playerGuid && !gameHandler.getCachedPlayerRealm(g).empty()) {
+                    const std::string label = interfaceText("FOREIGN_SERVER_LABEL");
+                    out += label.empty() ? un::kForeignServerLabelEnUS : label;
+                }
+            } else {
+                out = name;
+                const uint16_t petNumber = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
+                const bool hasPetNumber = petNumber != 0xFFFF && ent.getField(petNumber) != 0;
+                if (!hasPetNumber) {
+                    const std::string sub = gameHandler.getCachedCreatureSubName(u.getEntry());
+                    if (!sub.empty()) out += "\n<" + sub + ">";
+                }
+                if (const std::string title = summonTitleLine(gameHandler, ent, u); !title.empty())
+                    out += "\n<" + title + ">";
+            }
+            return out;
+        }();
         if (text.empty()) return;
 
         // 0x007e5420: a fifth of a yard tall, more for a big model, measured

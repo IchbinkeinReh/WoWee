@@ -223,3 +223,9 @@ TEST_CASE("a Mirror Image is named as the caster of its aura 279", "[unit_names]
     const std::vector<Aura> clone{{0, 0x2, 0x99}, {1459, 0x1, 0x11}, {45204, 0x2, 0x22}};
     CHECK(un::cloneCasterGuid(clone, auraIds) == 0x22);
 }
+
+TEST_CASE("a Mirror Image shows its caster's whole name text while the caster is about", "[unit_names]") {
+    REQUIRE(un::nameTextOwner(0x10, 0x20, true) == 0x20);
+    REQUIRE(un::nameTextOwner(0x10, 0x20, false) == 0x10);
+    REQUIRE(un::nameTextOwner(0x10, 0, true) == 0x10);
+}
