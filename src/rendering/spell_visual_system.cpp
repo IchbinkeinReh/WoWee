@@ -1,4 +1,6 @@
 #include "rendering/spell_visual_system.hpp"
+#include <cctype>
+#include <future>
 #include "rendering/spell_missile.hpp"
 #include "rendering/placement_transform.hpp"
 #include "rendering/m2_renderer.hpp"
@@ -322,6 +324,76 @@ void SpellVisualSystem::loadSpellVisualDbc() {
              missileVisuals_.size(), " missiles (of ", svDbc->getRecordCount(), " visuals)");
 }
 
+namespace {
+
+/// An effect model made ready off the main thread: everything but the upload.
+struct PreparedEffectModel {
+    bool ok = false;
+    std::string failure;
+    pipeline::M2Model model;
+    std::unordered_map<std::string, pipeline::BLPImage> textures;
+};
+
+PreparedEffectModel prepareEffectModel(pipeline::AssetManager* assets, const std::string& modelPath,
+                                       bool decodeTextures) {
+    PreparedEffectModel prepared;
+    auto m2Data = assets->readFile(modelPath);
+    if (m2Data.empty()) {
+        prepared.failure = "could not read model";
+        return prepared;
+    }
+    prepared.model = pipeline::M2Loader::load(m2Data);
+    if (prepared.model.name.empty()) prepared.model.name = modelPath;
+    if (prepared.model.vertices.empty() && prepared.model.particleEmitters.empty()) {
+        prepared.failure = "empty model";
+        return prepared;
+    }
+    // Load skin file for WotLK-format M2s
+    if (prepared.model.version >= 264) {
+        std::string skinPath = pipeline::skinPathForM2(modelPath);
+        auto skinData = assets->readFile(skinPath);
+        if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, prepared.model);
+    }
+    // The textures, decoded as the terrain worker decodes a doodad's and
+    // under the key M2Renderer looks them up by.
+    if (decodeTextures) {
+        for (const auto& tex : prepared.model.textures) {
+            if (tex.filename.empty()) continue;
+            std::string texKey = tex.filename;
+            std::replace(texKey.begin(), texKey.end(), '/', '\\');
+            std::transform(texKey.begin(), texKey.end(), texKey.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (prepared.textures.count(texKey)) continue;
+            auto blp = assets->loadTexture(texKey, true);
+            if (blp.isValid()) prepared.textures[texKey] = std::move(blp);
+        }
+    }
+    prepared.ok = true;
+    return prepared;
+}
+
+}  // namespace
+
+/// Effect models are loaded on the spot inside it - the player's own spells.
+struct SyncEffectLoadScope {
+    bool& flag;
+    bool previous;
+    SyncEffectLoadScope(bool& f, bool on) : flag(f), previous(f) { flag = previous || on; }
+    ~SyncEffectLoadScope() { flag = previous; }
+    SyncEffectLoadScope(const SyncEffectLoadScope&) = delete;
+    SyncEffectLoadScope& operator=(const SyncEffectLoadScope&) = delete;
+};
+
+struct SpellVisualSystem::PendingEffectLoad {
+    std::string path;
+    std::future<PreparedEffectModel> job;
+};
+
+bool SpellVisualSystem::involvesPlayer(uint32_t instanceA, uint32_t instanceB) const {
+    const uint32_t player = renderer_ ? renderer_->getCharacterInstanceId() : 0;
+    return player != 0 && (instanceA == player || instanceB == player);
+}
+
 uint32_t SpellVisualSystem::acquireEffectModel(const std::string& modelPath) {
     // Get or assign a model ID for this path
     auto midIt = spellVisualModelIds_.find(modelPath);
@@ -344,41 +416,78 @@ uint32_t SpellVisualSystem::acquireEffectModel(const std::string& modelPath) {
     }
     if (m2Renderer_->hasModel(modelId)) return modelId;
 
-    auto m2Data = cachedAssetManager_->readFile(modelPath);
-    if (m2Data.empty()) {
-        LOG_WARNING("SpellVisual: could not read model: ", modelPath);
+    auto pendingIt = pendingEffectLoads_.find(modelId);
+    if (syncEffectLoads_) {
+        // Wanted now. A worker already on it is waited for rather than raced.
+        PreparedEffectModel prepared;
+        if (pendingIt != pendingEffectLoads_.end()) {
+            prepared = pendingIt->second->job.get();
+            pendingEffectLoads_.erase(pendingIt);
+        } else {
+            prepared = prepareEffectModel(cachedAssetManager_, modelPath, false);
+        }
+        return uploadEffectModel(modelId, modelPath, &prepared) ? modelId : 0;
+    }
+    // A handful in flight at once: a crowd's first minute asks for dozens,
+    // and a thread each would crowd out the terrain workers. One turned
+    // away here is asked for again the next time the spell is cast.
+    constexpr size_t kMaxLoadsInFlight = 4;
+    if (pendingIt == pendingEffectLoads_.end() && pendingEffectLoads_.size() < kMaxLoadsInFlight) {
+        auto pending = std::make_shared<PendingEffectLoad>();
+        pending->path = modelPath;
+        pending->job = std::async(std::launch::async, prepareEffectModel, cachedAssetManager_, modelPath, true);
+        pendingEffectLoads_.emplace(modelId, std::move(pending));
+    }
+    return 0;
+}
+
+bool SpellVisualSystem::uploadEffectModel(uint32_t modelId, const std::string& modelPath, void* preparedModel) {
+    auto& prepared = *static_cast<PreparedEffectModel*>(preparedModel);
+    if (!prepared.ok) {
+        LOG_WARNING("SpellVisual: ", prepared.failure, ": ", modelPath);
         spellVisualFailedModels_.insert(modelId);
-        return 0;
+        return false;
     }
-    pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
-    if (model.name.empty()) model.name = modelPath;
-    LOG_INFO("SpellVisual: M2 parsed: verts=", model.vertices.size(),
-             " bones=", model.bones.size(), " particles=", model.particleEmitters.size(),
-             " ribbons=", model.ribbonEmitters.size());
-    if (model.vertices.empty() && model.particleEmitters.empty()) {
-        LOG_WARNING("SpellVisual: empty model: ", modelPath);
-        spellVisualFailedModels_.insert(modelId);
-        return 0;
-    }
-    // Load skin file for WotLK-format M2s
-    if (model.version >= 264) {
-        std::string skinPath = pipeline::skinPathForM2(modelPath);
-        auto skinData = cachedAssetManager_->readFile(skinPath);
-        if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, model);
-    }
-    if (!m2Renderer_->loadModel(model, modelId)) {
+    LOG_INFO("SpellVisual: M2 parsed: verts=", prepared.model.vertices.size(),
+             " bones=", prepared.model.bones.size(), " particles=", prepared.model.particleEmitters.size(),
+             " ribbons=", prepared.model.ribbonEmitters.size());
+    if (!prepared.textures.empty()) m2Renderer_->setPredecodedBLPCache(&prepared.textures);
+    const bool loaded = m2Renderer_->loadModel(prepared.model, modelId);
+    m2Renderer_->setPredecodedBLPCache(nullptr);
+    if (!loaded) {
         LOG_WARNING("SpellVisual: failed to load model to GPU: ", modelPath);
         spellVisualFailedModels_.insert(modelId);
-        return 0;
+        return false;
     }
     m2Renderer_->markModelAsSpellEffect(modelId);
     LOG_INFO("SpellVisual: loaded model id=", modelId, " path=", modelPath);
-    return modelId;
+    return true;
+}
+
+void SpellVisualSystem::finishEffectModelLoads() {
+    if (pendingEffectLoads_.empty() || !m2Renderer_) return;
+    // A few a frame: each upload is a GPU copy of the mesh and its textures.
+    constexpr int kUploadsPerFrame = 2;
+    int uploaded = 0;
+    for (auto it = pendingEffectLoads_.begin();
+         it != pendingEffectLoads_.end() && uploaded < kUploadsPerFrame;) {
+        if (it->second->job.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        const uint32_t modelId = it->first;
+        const std::string path = it->second->path;
+        PreparedEffectModel prepared = it->second->job.get();
+        it = pendingEffectLoads_.erase(it);
+        ++uploaded;
+        uploadEffectModel(modelId, path, &prepared);
+    }
 }
 
 void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec3& worldPosition,
                                                 uint32_t castTimeMs, uint32_t attachInstanceId, uint32_t spellId) {
     if (!m2Renderer_ || visualId == 0) return;
+    const SyncEffectLoadScope syncLoads(syncEffectLoads_, involvesPlayer(attachInstanceId));
     if (!cachedAssetManager_) cachedAssetManager_ = core::Application::getInstance().getAssetManager();
     if (!cachedAssetManager_) return;
     if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
@@ -395,6 +504,7 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
                                          bool useImpactKit, uint32_t attachInstanceId, bool onCaster,
                                          uint32_t spellId) {
     if (!m2Renderer_ || visualId == 0) return;
+    const SyncEffectLoadScope syncLoads(syncEffectLoads_, involvesPlayer(attachInstanceId));
     if (!cachedAssetManager_) cachedAssetManager_ = core::Application::getInstance().getAssetManager();
     if (!cachedAssetManager_) return;
     if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
@@ -647,6 +757,8 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
                                            const MissileEnd& to, std::vector<MissileEnd> impacts,
                                            const MissileTrajectory* trajectory, uint32_t spellId) {
     if (!m2Renderer_ || visualId == 0 || !(speed > 0.0f)) return false;
+    const SyncEffectLoadScope syncLoads(syncEffectLoads_,
+                                        involvesPlayer(from.renderInstanceId, to.renderInstanceId));
     if (!cachedAssetManager_)
         cachedAssetManager_ = core::Application::getInstance().getAssetManager();
     if (!cachedAssetManager_) return false;
@@ -2065,6 +2177,7 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
 }
 
 void SpellVisualSystem::update(float deltaTime) {
+    finishEffectModelLoads();
     // First: an arrival plays its impact kit, which joins activeSpellVisuals_.
     colourClockMs_ += static_cast<uint32_t>(std::lround(deltaTime * 1000.0f));
     updateMissiles(deltaTime);

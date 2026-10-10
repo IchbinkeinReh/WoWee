@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <functional>
 #include <optional>
+#include <memory>
 #include <glm/glm.hpp>
 
 #include "rendering/spell_missile.hpp"
@@ -661,9 +662,26 @@ private:
     };
 
     void loadSpellVisualDbc();
-    /// The M2Renderer model id for an effect model, loading it on first use;
-    /// 0 when it cannot be loaded (remembered, so it is not read again).
+    /// The M2Renderer model id for an effect model; 0 when it is not ready.
+    ///
+    /// A model not yet loaded is read, parsed and its textures decoded on a
+    /// worker, and only uploaded here once that is done - each of those was
+    /// 3 to 175 ms on the main thread, a hitch at every new spell a crowd
+    /// cast. Until then the effect is left out, as the client leaves out a
+    /// model still loading. With syncEffectLoads_ set (the player's own
+    /// casts and the spells on them) it is loaded there and then, as before.
+    /// A model that cannot be loaded is remembered and never read again.
     uint32_t acquireEffectModel(const std::string& modelPath);
+    /// Upload the effect models whose worker has finished, a few a frame.
+    void finishEffectModelLoads();
+    /// Upload a prepared model (a PreparedEffectModel, private to the .cpp);
+    /// false, and the model remembered as failed, when it cannot be.
+    bool uploadEffectModel(uint32_t modelId, const std::string& modelPath, void* preparedModel);
+    struct PendingEffectLoad;
+    std::unordered_map<uint32_t, std::shared_ptr<PendingEffectLoad>> pendingEffectLoads_;
+    bool syncEffectLoads_ = false;
+    /// Whether the player's character is one of these render instances.
+    [[nodiscard]] bool involvesPlayer(uint32_t instanceA, uint32_t instanceB = 0) const;
     glm::vec3 missileSource(const MissileVisual& visual, const MissileEnd& from) const;
     /// Where the missile aims this frame; forgets a target that has gone.
     glm::vec3 missileTargetPoint(ActiveMissile& missile) const;
