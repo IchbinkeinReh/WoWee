@@ -580,6 +580,10 @@ public:
     /// length over its duration, or by setMoveSpeed when the caller knows it
     /// better.
     [[nodiscard]] float getMoveSpeed() const { return isActivelyMoving() ? moveSpeed_ : 0.0f; }
+    /// Walk rather than Run at the pace it is moving (FUN_00717050): Run above
+    /// twice its walk speed, Walk at or below it. No flag enters into it - the
+    /// client never copies a spline's walk mode into the unit's flags.
+    [[nodiscard]] bool movesAtWalkPace() const { return getMoveSpeed() <= 2.0f * speeds_.walk; }
     void setMoveSpeed(float yardsPerSecond) {
         if (std::isfinite(yardsPerSecond) && yardsPerSecond >= 0.0f) moveSpeed_ = yardsPerSecond;
     }

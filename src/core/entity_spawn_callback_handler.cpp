@@ -170,7 +170,12 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
                     uint32_t curAnimId = 0; float curT = 0.0f, curDur = 0.0f;
                     auto* cr = renderer_.getCharacterRenderer();
                     bool gotState = cr->getAnimationState(instanceId, curAnimId, curT, curDur);
-                    const bool walking = entitySpawner_.getCreatureWalkingState().count(guid) > 0;
+                    // By pace, as the per-frame sync picks it (FUN_00717050):
+                    // choosing by the WALKING flag here started every leg of a
+                    // walking guard's patrol in Run, and the sync, seeing its
+                    // own choice unchanged, left it there.
+                    auto moving = gameHandler_.getEntityManager().getEntity(guid);
+                    const bool walking = moving && moving->movesAtWalkPace();
                     const uint32_t targetAnim = walking ? rendering::anim::WALK : rendering::anim::RUN;
                     // The new spline's speed, before the play reads it to carry
                     // the stride over from Walk to Run.

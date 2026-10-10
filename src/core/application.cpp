@@ -125,14 +125,6 @@ namespace core {
 
 namespace {
 
-/// Walk rather than Run for a unit moving at this pace (FUN_00717050): Run
-/// above twice its walk speed, Walk at or below it. GetCurrentSpeed
-/// (FUN_00987570) is the spline's average for a unit on one and the speed its
-/// flags select otherwise - getMoveSpeed() holds the same.
-bool walksAtPace(const game::Entity& entity, bool moving) {
-    if (!moving) return false;
-    return entity.getMoveSpeed() <= 2.0f * entity.getMovementSpeeds().walk;
-}
 
 // Where another unit's jump leaves the sync loop's locomotion choice this
 // frame (airborneAnimSync): true while the jump's animations hold it - Fall
@@ -3725,7 +3717,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // client never copies a spline's walk mode into the unit's
                 // flags. Patrolling guards are moved at walk pace with no
                 // WALKING flag at all, and played Run slowed to that pace.
-                const bool isWalkingNow  = walksAtPace(*entity, isMovingNow);
+                const bool isWalkingNow  = (isMovingNow && entity->movesAtWalkPace());
                 const bool isFlyingNow   = _creatureFlyingState.count(guid) > 0;
                 bool prevMoving   = _creatureWasMoving[guid];
                 bool prevSwimming = _creatureWasSwimming[guid];
@@ -3956,7 +3948,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
 
                 // Drive movement animation (same logic as creatures)
                 const bool isSwimmingNow = _pCreatureSwimmingState.count(guid) > 0;
-                const bool isWalkingNow  = walksAtPace(*entity, isMovingNow);  // FUN_00717050
+                const bool isWalkingNow  = (isMovingNow && entity->movesAtWalkPace());  // FUN_00717050
                 const bool isFlyingNow   = _pCreatureFlyingState.count(guid) > 0;
                 // In its rider pose (+0xb7c, Mount unless a mount aura's
                 // kit gave another), in the air too: 3.3.5 has no rider
