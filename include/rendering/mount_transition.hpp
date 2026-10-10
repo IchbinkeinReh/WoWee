@@ -194,6 +194,31 @@ inline glm::vec3 tiltedRotation(const glm::vec3& normal, float facing, uint32_t 
     }
 }
 
+/// The end of 0x0082dd80: how far a model's matrix is blended toward the
+/// full tilt up its normal (0x00824a80), by the M2Sequence flags (+0xc) of
+/// the sequence its body plays (0x008266b0, 0x0082ced0). Flags & 0xe of 2
+/// or 4: the time it has played over half its length (0x00827000 times its
+/// end), 1 where it plays at rate 0, 0 where backwards - with 4, one less
+/// that; 8: the whole way; anything else, not at all. `timeMs` is the time
+/// into the sequence, `durationMs` its length.
+inline float fullTiltWeight(uint32_t sequenceFlags, float timeMs, uint32_t durationMs, float rate) {
+    const uint32_t kind = sequenceFlags & 0xeu;
+    if (kind == 8u) return 1.0f;
+    if (kind != 2u && kind != 4u) return 0.0f;
+    float w = 0.0f;
+    if (rate == 0.0f) {
+        w = 1.0f;
+    } else if (rate > 0.0f) {
+        // round(time / rate) over ((end - start) >> 1), the play's real span
+        // being its length over its rate.
+        const auto half = static_cast<uint32_t>(std::lround(static_cast<float>(durationMs) / rate)) >> 1;
+        w = half != 0 ? static_cast<float>(std::lround(timeMs / rate)) / static_cast<float>(half) : 1.0f;
+        w = std::clamp(w, 0.0f, 1.0f);
+    }
+    if (kind == 4u) w = 1.0f - w;
+    return w > 0.0f ? w : 0.0f;
+}
+
 /// 0x007193f0: the rider is drawn tilted on its ground only while it is
 /// carried - at progress 0 it has the plain matrix (0x00743330).
 inline bool riderTilts(const State& s) { return s.riderProgress != 0.0f; }

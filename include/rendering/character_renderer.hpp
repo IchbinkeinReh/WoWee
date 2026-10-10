@@ -178,6 +178,12 @@ public:
     /// the rest loop - a rider whose mount transition has arrived (0x0073bbd0
     /// picks it no next animation).
     void setInstanceHoldsLastFrame(uint32_t instanceId, bool holds);
+    /// The end of 0x0082dd80: the matrix's turn blended by `weight` toward
+    /// `fullRotation` (Euler angles as setInstanceRotation takes them), each
+    /// element of the two linearly; 0 turns it off.
+    void setInstanceTiltBlend(uint32_t instanceId, const glm::vec3& fullRotation, float weight);
+    /// The rate the body's sequence last advanced at.
+    [[nodiscard]] float getInstancePlaybackRate(uint32_t instanceId) const;
     /// The lag between the facing and the drawn body, shown on the SpineLow
     /// and Head key bones (4 and 6) as turns about their Z (FUN_0073dab0's
     /// FUN_008272f0 overrides); body_yaw::update splits it between them.
@@ -471,6 +477,8 @@ private:
         uint32_t restAnimation = 0;     // The stand state's loop, or 0 for Stand
         bool isDead = false;  // Prevents movement while in death state
         bool holdsLastFrame = false;  ///< setInstanceHoldsLastFrame
+        glm::vec3 tiltBlendRotation{0.0f};  ///< setInstanceTiltBlend
+        float tiltBlendWeight = 0.0f;
         std::vector<glm::mat4> boneMatrices;  // Current bone transforms
 
         // Geoset visibility - which submesh IDs to render

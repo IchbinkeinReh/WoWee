@@ -4402,6 +4402,16 @@ glm::mat4 CharacterRenderer::getModelMatrix(const CharacterInstance& instance) c
     model = glm::rotate(model, instance.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));  // Yaw
     model = glm::rotate(model, instance.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));  // Pitch
     model = glm::rotate(model, instance.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));  // Roll
+    if (instance.tiltBlendWeight > 0.0f) {
+        // 0x0082dd80: the matrix and the fully tilted one, weighted and
+        // summed element by element (0x004c2120, 0x004c1e60).
+        glm::mat4 full = glm::translate(glm::mat4(1.0f), instance.position + instance.renderOffset);
+        full = glm::rotate(full, instance.tiltBlendRotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
+        full = glm::rotate(full, instance.tiltBlendRotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+        full = glm::rotate(full, instance.tiltBlendRotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        const float w = std::min(instance.tiltBlendWeight, 1.0f);
+        model = model * (1.0f - w) + full * w;
+    }
 
     model = glm::scale(model, glm::vec3(instance.scale));
 
@@ -4429,6 +4439,18 @@ std::optional<glm::vec3> CharacterRenderer::getInstanceRotation(uint32_t instanc
 void CharacterRenderer::setInstanceHoldsLastFrame(uint32_t instanceId, bool holds) {
     auto it = instances.find(instanceId);
     if (it != instances.end()) it->second.holdsLastFrame = holds;
+}
+
+void CharacterRenderer::setInstanceTiltBlend(uint32_t instanceId, const glm::vec3& fullRotation, float weight) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    it->second.tiltBlendRotation = fullRotation;
+    it->second.tiltBlendWeight = weight > 0.0f ? weight : 0.0f;
+}
+
+float CharacterRenderer::getInstancePlaybackRate(uint32_t instanceId) const {
+    auto it = instances.find(instanceId);
+    return it != instances.end() ? it->second.playbackRate : 1.0f;
 }
 
 void CharacterRenderer::setInstanceRotation(uint32_t instanceId, const glm::vec3& rotation) {

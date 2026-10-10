@@ -182,3 +182,25 @@ TEST_CASE("the rider tilts only while carried, and holds once arrived", "[mount_
     s.flags |= mt::kArrived;
     CHECK(mt::riderHoldsLastFrame(s));
 }
+
+TEST_CASE("the full tilt is blended in by the body's sequence flags", "[mount_transition]") {
+    // Flags & 0xe of neither 2, 4 nor 8: no blend.
+    CHECK(mt::fullTiltWeight(0x20, 500.0f, 1000, 1.0f) == 0.0f);
+    CHECK(mt::fullTiltWeight(0x6, 500.0f, 1000, 1.0f) == 0.0f);
+    // 8: the whole way.
+    CHECK(mt::fullTiltWeight(0x8, 0.0f, 1000, 1.0f) == 1.0f);
+    // 2: in over the first half of the sequence.
+    CHECK(mt::fullTiltWeight(0x2, 0.0f, 1000, 1.0f) == 0.0f);
+    CHECK(mt::fullTiltWeight(0x2, 250.0f, 1000, 1.0f) == Catch::Approx(0.5f));
+    CHECK(mt::fullTiltWeight(0x2, 900.0f, 1000, 1.0f) == 1.0f);
+    // At twice the rate the same time into the sequence is as far.
+    CHECK(mt::fullTiltWeight(0x2, 250.0f, 1000, 2.0f) == Catch::Approx(0.5f));
+    // 4: out over it.
+    CHECK(mt::fullTiltWeight(0x4, 250.0f, 1000, 1.0f) == Catch::Approx(0.5f));
+    CHECK(mt::fullTiltWeight(0x4, 0.0f, 1000, 1.0f) == 1.0f);
+    CHECK(mt::fullTiltWeight(0x4, 600.0f, 1000, 1.0f) == 0.0f);
+    // Rate 0 is the whole way; backwards none, and 4 turns that round.
+    CHECK(mt::fullTiltWeight(0x2, 100.0f, 1000, 0.0f) == 1.0f);
+    CHECK(mt::fullTiltWeight(0x2, 100.0f, 1000, -1.0f) == 0.0f);
+    CHECK(mt::fullTiltWeight(0x4, 100.0f, 1000, -1.0f) == 1.0f);
+}

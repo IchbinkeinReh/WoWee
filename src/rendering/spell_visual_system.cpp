@@ -1960,6 +1960,7 @@ void SpellVisualSystem::releaseMountRider(const MountTransition& t) {
     if (t.riderTilted) {
         if (const auto rotation = charRenderer->getInstanceRotation(t.riderInstance))
             charRenderer->setInstanceRotation(t.riderInstance, glm::vec3(0.0f, 0.0f, rotation->z));
+        charRenderer->setInstanceTiltBlend(t.riderInstance, glm::vec3(0.0f), 0.0f);
     }
 }
 
@@ -2097,9 +2098,25 @@ void SpellVisualSystem::updateMountTransitions() {
                 const pipeline::M2Model* riderModel = charRenderer->getInstanceModelData(rider);
                 charRenderer->setInstanceRotation(
                     rider, tiltedRotation(t.riderNormal, rotation->z, riderModel ? riderModel->globalFlags : 0u));
+                // And blended toward the full tilt by the sequence its body
+                // plays (the end of 0x0082dd80).
+                float weight = 0.0f;
+                glm::mat4 pose(1.0f);
+                const std::vector<glm::mat4>* bones = nullptr;
+                int sequence = -1;
+                float timeMs = 0.0f;
+                float globalMs = 0.0f;
+                if (riderModel && charRenderer->getInstancePose(rider, pose, bones, sequence, timeMs, globalMs) &&
+                    sequence >= 0 && static_cast<size_t>(sequence) < riderModel->sequences.size()) {
+                    const auto& seq = riderModel->sequences[static_cast<size_t>(sequence)];
+                    weight = fullTiltWeight(seq.flags, timeMs, seq.duration,
+                                            charRenderer->getInstancePlaybackRate(rider));
+                }
+                charRenderer->setInstanceTiltBlend(rider, tiltedRotation(t.riderNormal, rotation->z, 3u), weight);
                 t.riderTilted = true;
             } else if (t.riderTilted) {
                 charRenderer->setInstanceRotation(rider, glm::vec3(0.0f, 0.0f, rotation->z));
+                charRenderer->setInstanceTiltBlend(rider, glm::vec3(0.0f), 0.0f);
                 t.riderTilted = false;
             }
         }
