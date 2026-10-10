@@ -494,21 +494,77 @@ void M2Renderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
         return;
     }
 
-    std::unordered_set<uint32_t> toRemove(instanceIds.begin(), instanceIds.end());
-    const size_t oldSize = instances.size();
-    for (auto& inst : instances) {
-        if (toRemove.count(inst.id)) {
-            destroyInstanceBones(inst, /*defer=*/true);
+    // A tile unload hands over a few thousand ids out of the tens of thousands
+    // a crowded zone holds. Rebuilding the whole spatial grid and dedup map for
+    // that cost 35-70 ms a tile on the main thread - a hitch at every tile
+    // border - so only what the removed instances touched is taken out.
+    std::unordered_set<uint32_t> toRemove;
+    toRemove.reserve(instanceIds.size());
+    // Cells are swept once each after the loop: ground clutter puts thousands
+    // of ids in one cell, and erasing them one at a time is quadratic.
+    std::unordered_set<GridCell, GridCellHash> touchedCells;
+    std::vector<size_t> removedIndices;
+    removedIndices.reserve(instanceIds.size());
+    for (uint32_t id : instanceIds) {
+        auto idxIt = instanceIndexById.find(id);
+        if (idxIt == instanceIndexById.end() || idxIt->second >= instances.size()) continue;
+        if (!toRemove.insert(id).second) continue;
+        const size_t idx = idxIt->second;
+        removedIndices.push_back(idx);
+        auto& inst = instances[idx];
+        const GridCell minCell = toSpatialCell(inst.worldBoundsMin);
+        const GridCell maxCell = toSpatialCell(inst.worldBoundsMax);
+        for (int z = minCell.z; z <= maxCell.z; z++)
+            for (int y = minCell.y; y <= maxCell.y; y++)
+                for (int x = minCell.x; x <= maxCell.x; x++)
+                    touchedCells.insert(GridCell{.x = x, .y = y, .z = z});
+        if (!inst.cachedIsGroundDetail) {
+            DedupKey dk{.modelId = inst.modelId,
+                        .qx = static_cast<int32_t>(std::round(inst.position.x * 10.0f)),
+                        .qy = static_cast<int32_t>(std::round(inst.position.y * 10.0f)),
+                        .qz = static_cast<int32_t>(std::round(inst.position.z * 10.0f))};
+            auto dedupIt = instanceDedupMap_.find(dk);
+            if (dedupIt != instanceDedupMap_.end() && dedupIt->second == id) {
+                instanceDedupMap_.erase(dedupIt);
+            }
         }
+        destroyInstanceBones(inst, /*defer=*/true);
+        instanceIndexById.erase(idxIt);
     }
-    instances.erase(std::remove_if(instances.begin(), instances.end(),
-                   [&toRemove](const M2Instance& inst) {
-                       return toRemove.find(inst.id) != toRemove.end();
-                   }),
-                   instances.end());
+    if (toRemove.empty()) {
+        return;
+    }
+    for (const GridCell& cell : touchedCells) {
+        auto cellIt = spatialGrid.find(cell);
+        if (cellIt == spatialGrid.end()) continue;
+        auto& ids = cellIt->second;
+        ids.erase(std::remove_if(ids.begin(), ids.end(),
+                                 [&toRemove](uint32_t id) { return toRemove.count(id) != 0; }),
+                  ids.end());
+    }
 
-    if (instances.size() != oldSize) {
-        rebuildSpatialIndex();
+    // Swap-removed, as removeInstance does: compacting in order slid every
+    // later instance - a few hundred bytes each, tens of thousands of them -
+    // down over the holes, which was most of what was left of the cost.
+    std::sort(removedIndices.begin(), removedIndices.end(), std::greater<size_t>());
+    for (size_t idx : removedIndices) {
+        if (idx + 1 < instances.size()) {
+            instances[idx] = std::move(instances.back());
+            instanceIndexById[instances[idx].id] = idx;
+        }
+        instances.pop_back();
+    }
+
+    animatedInstanceIndices_.clear();
+    particleOnlyInstanceIndices_.clear();
+    particleInstanceIndices_.clear();
+    for (size_t i = 0; i < instances.size(); i++) {
+        const auto& ri = instances[i];
+        if (ri.cachedHasParticleEmitters) particleInstanceIndices_.push_back(i);
+        if (ri.cachedHasAnimation && !ri.cachedDisableAnimation)
+            animatedInstanceIndices_.push_back(i);
+        else if (ri.cachedHasParticleEmitters)
+            particleOnlyInstanceIndices_.push_back(i);
     }
 }
 

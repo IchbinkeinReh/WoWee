@@ -1342,17 +1342,15 @@ void TerrainRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSp
 }
 
 void TerrainRenderer::removeTile(int tileX, int tileY) {
-    int removed = 0;
-    auto it = chunks.begin();
-    while (it != chunks.end()) {
-        if (it->tileX == tileX && it->tileY == tileY) {
-            destroyChunkGPU(*it);
-            it = chunks.erase(it);
-            removed++;
-        } else {
-            ++it;
-        }
+    // Destroyed in place, then compacted in one pass: erasing the 256 chunks of
+    // a tile one at a time slid every later chunk down 256 times.
+    auto onTile = [tileX, tileY](const TerrainChunkGPU& c) { return c.tileX == tileX && c.tileY == tileY; };
+    for (auto& chunk : chunks) {
+        if (onTile(chunk)) destroyChunkGPU(chunk);
     }
+    const size_t before = chunks.size();
+    chunks.erase(std::remove_if(chunks.begin(), chunks.end(), onTile), chunks.end());
+    const size_t removed = before - chunks.size();
     if (removed > 0) {
         LOG_DEBUG("Removed ", removed, " terrain chunks for tile [", tileX, ",", tileY, "]");
     }

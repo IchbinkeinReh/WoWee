@@ -1670,9 +1670,7 @@ void TerrainManager::unloadTile(int x, int y) {
                 m2Renderer->removeInstances(fit->m2InstanceIds);
             }
             if (wmoRenderer && !fit->wmoInstanceIds.empty()) {
-                for (uint32_t id : fit->wmoInstanceIds) {
-                    if (waterRenderer) waterRenderer->removeWMO(id);
-                }
+                if (waterRenderer) waterRenderer->removeWMOs(fit->wmoInstanceIds);
                 wmoRenderer->removeInstances(fit->wmoInstanceIds);
             }
             for (uint32_t uid : fit->tileUniqueIds) placedDoodadIds.erase(uid);
@@ -1706,21 +1704,22 @@ void TerrainManager::unloadTile(int x, int y) {
     }
 
     // Remove M2 doodad instances
+    // One call for the doodads and every chunk's ground clutter: each call
+    // re-walks every M2 instance, and once per chunk was up to 257 calls.
     if (m2Renderer) {
+        std::vector<uint32_t> m2Ids = tile->m2InstanceIds;
         for (auto& dc : tile->detailChunks) {
-            if (!dc.instanceIds.empty()) m2Renderer->removeInstances(dc.instanceIds);
+            m2Ids.insert(m2Ids.end(), dc.instanceIds.begin(), dc.instanceIds.end());
         }
-        m2Renderer->removeInstances(tile->m2InstanceIds);
-        LOG_DEBUG("  Removed ", tile->m2InstanceIds.size(), " M2 instances");
+        m2Renderer->removeInstances(m2Ids);
+        LOG_DEBUG("  Removed ", m2Ids.size(), " M2 instances");
     }
 
     // Remove WMO instances and their liquids
     if (wmoRenderer) {
-        for (uint32_t id : tile->wmoInstanceIds) {
-            // Remove WMO liquids associated with this instance
-            if (waterRenderer) {
-                waterRenderer->removeWMO(id);
-            }
+        // Remove the WMO liquids associated with these instances
+        if (waterRenderer) {
+            waterRenderer->removeWMOs(tile->wmoInstanceIds);
         }
         wmoRenderer->removeInstances(tile->wmoInstanceIds);
         LOG_DEBUG("  Removed ", tile->wmoInstanceIds.size(), " WMO instances");

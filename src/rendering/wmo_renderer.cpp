@@ -1338,18 +1338,7 @@ bool WMORenderer::hasInstance(uint32_t instanceId) const {
 }
 
 void WMORenderer::removeInstance(uint32_t instanceId) {
-    auto it = std::find_if(instances.begin(), instances.end(),
-                          [instanceId](const WMOInstance& inst) { return inst.id == instanceId; });
-    if (it != instances.end()) {
-        if (m2Renderer_) {
-            for (const auto& doodad : it->doodads) {
-                m2Renderer_->removeInstance(doodad.m2InstanceId);
-            }
-        }
-        instances.erase(it);
-        rebuildSpatialIndex();
-        core::Logger::getInstance().debug("Removed WMO instance ", instanceId);
-    }
+    removeInstances(std::vector<uint32_t>{instanceId});
 }
 
 void WMORenderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
@@ -1358,15 +1347,22 @@ void WMORenderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
     }
 
     std::unordered_set<uint32_t> toRemove(instanceIds.begin(), instanceIds.end());
-    if (m2Renderer_) {
-        for (const auto& inst : instances) {
-            if (toRemove.find(inst.id) == toRemove.end()) {
-                continue;
-            }
-            for (const auto& doodad : inst.doodads) {
-                m2Renderer_->removeInstance(doodad.m2InstanceId);
-            }
+    // The removed instances leave the grid and take their doodads with them,
+    // both in one batch. Refiling all that remain instead cost 12-25 ms a tile:
+    // a city WMO reaches into thousands of cells. Removing doodads one at a
+    // time re-walked every M2 instance for each.
+    std::vector<uint32_t> doodadIds;
+    for (const auto& inst : instances) {
+        if (toRemove.find(inst.id) == toRemove.end()) {
+            continue;
         }
+        eraseBounds(spatialGrid, inst.worldBoundsMin, inst.worldBoundsMax, inst.id);
+        for (const auto& doodad : inst.doodads) {
+            doodadIds.push_back(doodad.m2InstanceId);
+        }
+    }
+    if (m2Renderer_) {
+        m2Renderer_->removeInstances(doodadIds);
     }
 
     const size_t oldSize = instances.size();
@@ -1377,7 +1373,10 @@ void WMORenderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
                    instances.end());
 
     if (instances.size() != oldSize) {
-        rebuildSpatialIndex();
+        instanceIndexById.clear();
+        for (size_t i = 0; i < instances.size(); i++) {
+            instanceIndexById[instances[i].id] = i;
+        }
         core::Logger::getInstance().debug("Removed ", (oldSize - instances.size()),
                                           " WMO instances (batched)");
     }

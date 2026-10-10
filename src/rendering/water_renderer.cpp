@@ -2,6 +2,7 @@
 #include "rendering/water_surface_grid.hpp"
 #include "rendering/water_mask.hpp"
 #include "rendering/water_renderer.hpp"
+#include <unordered_set>
 #include "rendering/water_mask.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_pipeline.hpp"
@@ -988,17 +989,14 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
 }
 
 void WaterRenderer::removeTile(int tileX, int tileY) {
-    int removed = 0;
-    auto it = surfaces.begin();
-    while (it != surfaces.end()) {
-        if (it->tileX == tileX && it->tileY == tileY) {
-            destroyWaterMesh(*it);
-            it = surfaces.erase(it);
-            removed++;
-        } else {
-            ++it;
-        }
+    // Destroyed in place and compacted once, as TerrainRenderer::removeTile.
+    auto onTile = [tileX, tileY](const WaterSurface& w) { return w.tileX == tileX && w.tileY == tileY; };
+    for (auto& surface : surfaces) {
+        if (onTile(surface)) destroyWaterMesh(surface);
     }
+    const size_t before = surfaces.size();
+    surfaces.erase(std::remove_if(surfaces.begin(), surfaces.end(), onTile), surfaces.end());
+    const size_t removed = before - surfaces.size();
     if (removed > 0) {
         LOG_DEBUG("Water: Removed ", removed, " surfaces for tile [", tileX, ",", tileY, "], remaining: ", surfaces.size());
     }
@@ -1163,16 +1161,22 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
 }
 
 void WaterRenderer::removeWMO(uint32_t wmoId) {
-    if (wmoId == 0) return;
-    auto it = surfaces.begin();
-    while (it != surfaces.end()) {
-        if (it->wmoId == wmoId) {
-            destroyWaterMesh(*it);
-            it = surfaces.erase(it);
-        } else {
-            ++it;
-        }
+    removeWMOs(std::vector<uint32_t>{wmoId});
+}
+
+void WaterRenderer::removeWMOs(const std::vector<uint32_t>& wmoIds) {
+    // A tile's WMOs leave together; one sweep of the surfaces for all of them
+    // rather than one sweep, with an erase per hit, for each.
+    std::unordered_set<uint32_t> ids;
+    for (uint32_t id : wmoIds) {
+        if (id != 0) ids.insert(id);
     }
+    if (ids.empty()) return;
+    auto ofRemovedWmo = [&ids](const WaterSurface& w) { return w.wmoId != 0 && ids.count(w.wmoId) != 0; };
+    for (auto& surface : surfaces) {
+        if (ofRemovedWmo(surface)) destroyWaterMesh(surface);
+    }
+    surfaces.erase(std::remove_if(surfaces.begin(), surfaces.end(), ofRemovedWmo), surfaces.end());
 }
 
 void WaterRenderer::clear() {
