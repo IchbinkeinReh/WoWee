@@ -267,6 +267,7 @@ public:
      * Set streaming parameters
      */
     void setLoadRadius(int radius) { loadRadius = radius; }
+    [[nodiscard]] int getLoadRadius() const { return loadRadius; }
     void setUnloadRadius(int radius) { unloadRadius = radius; }
     void setStreamingEnabled(bool enabled) { streamingEnabled = enabled; }
     void setUpdateInterval(float seconds) { updateInterval = seconds; }

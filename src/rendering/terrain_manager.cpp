@@ -1483,11 +1483,19 @@ void TerrainManager::processReadyTiles() {
         while (!readyQueue.empty()) {
             auto pending = readyQueue.front();
             readyQueue.pop();
-            if (pending) {
-                FinalizingTile ft;
-                ft.pending = std::move(pending);
-                finalizingTiles_.push_back(std::move(ft));
+            if (!pending) continue;
+            // Read for a place the player has since left: finalizing it would
+            // upload a tile only to queue its unload. Forgotten instead, and
+            // read again should the player come back.
+            const int dx = pending->coord.x - currentTile.x;
+            const int dy = pending->coord.y - currentTile.y;
+            if (currentTile.x >= 0 && dx * dx + dy * dy > unloadRadius * unloadRadius) {
+                pendingTiles.erase(pending->coord);
+                continue;
             }
+            FinalizingTile ft;
+            ft.pending = std::move(pending);
+            finalizingTiles_.push_back(std::move(ft));
         }
     }
 

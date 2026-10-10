@@ -12,6 +12,7 @@
 #include "game/game_handler.hpp"
 #include "pipeline/asset_manager.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
@@ -127,16 +128,28 @@ void WorldEntryCallbackHandler::forceServerTeleportCommand(const glm::vec3& rend
 }
 
 // Precache tiles in a radius around a position (eliminates repeated tile-loop code)
+//
+// No further than the terrain manager streams, and in the same circle: a
+// teleport asked for a 17x17 square, three times the tiles the load radius
+// keeps, and the workers then read, and the main thread finalized at 8 ms a
+// frame, a few hundred tiles nobody would see - minutes of it after every
+// teleport. Nearest last, as precacheTiles puts each at the front of the queue.
 static void precacheNearbyTiles(rendering::TerrainManager* terrainMgr,
                                 const glm::vec3& renderPos, int radius) {
     if (!terrainMgr) return;
+    radius = std::min(radius, terrainMgr->getLoadRadius());
     auto [tileX, tileY] = core::coords::worldToTile(renderPos.x, renderPos.y);
-    int side = 2 * radius + 1;
-    std::vector<std::pair<int,int>> tiles;
-    tiles.reserve(static_cast<size_t>(side) * static_cast<size_t>(side));
+    struct Offset { int dx, dy; };
+    std::vector<Offset> offsets;
     for (int dy = -radius; dy <= radius; dy++)
         for (int dx = -radius; dx <= radius; dx++)
-            tiles.emplace_back(tileX + dx, tileY + dy);
+            if (dx * dx + dy * dy <= radius * radius) offsets.push_back({dx, dy});
+    std::sort(offsets.begin(), offsets.end(), [](const Offset& a, const Offset& b) {
+        return a.dx * a.dx + a.dy * a.dy > b.dx * b.dx + b.dy * b.dy;
+    });
+    std::vector<std::pair<int,int>> tiles;
+    tiles.reserve(offsets.size());
+    for (const Offset& o : offsets) tiles.emplace_back(tileX + o.dx, tileY + o.dy);
     terrainMgr->precacheTiles(tiles);
 }
 
@@ -446,7 +459,7 @@ void WorldEntryCallbackHandler::setupCallbacks() {
             glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
             precacheNearbyTiles(terrainMgr, renderPos, 4);
             auto [tileX, tileY] = core::coords::worldToTile(renderPos.x, renderPos.y);
-            LOG_INFO("Hearthstone preload: enqueued 81"
+            LOG_INFO("Hearthstone preload: enqueued the load radius"
                      " tiles around bind point (same map) tile=[", tileX, ",", tileY, "]");
         } else {
             // Different map: warm the file cache so ADT parsing is fast when
