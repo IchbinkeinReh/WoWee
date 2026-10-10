@@ -164,14 +164,28 @@ struct GroupInfo {
     int32_t areaGroupId = 0;
 };
 
+/// A group of a placed building: the instance and the group's own number.
+struct GroupRef {
+    uint32_t instanceId = 0;
+    uint32_t group = 0;
+    bool operator==(const GroupRef&) const = default;
+};
+
+/// A WMOAreaTable row (0x00990560's record of 0x30 bytes): its Flags
+/// (+0x24), its AreaTableID (+0x28) and its name (+0x2c).
+struct AreaRow {
+    uint32_t flags = 0;
+    uint32_t areaId = 0;
+    std::string name;
+};
 /// WMOAreaTable's rows by WMO, name set and group (0x00990560 looks them up
-/// exactly; the group -1 is the building's own row): their Flags.
-using AreaFlags = std::unordered_map<uint64_t, uint32_t>;
+/// exactly; the group -1 is the building's own row).
+using AreaRows = std::unordered_map<uint64_t, AreaRow>;
 inline uint64_t areaKey(uint32_t wmoId, uint32_t nameSet, int32_t groupId) {
     return (static_cast<uint64_t>(wmoId) << 40) ^ (static_cast<uint64_t>(nameSet & 0xFFu) << 32) ^
            static_cast<uint32_t>(groupId);
 }
-inline const uint32_t* areaFlags(const AreaFlags* table, uint32_t wmoId, uint32_t nameSet, int32_t groupId) {
+inline const AreaRow* areaRow(const AreaRows* table, uint32_t wmoId, uint32_t nameSet, int32_t groupId) {
     if (!table) return nullptr;
     const auto it = table->find(areaKey(wmoId, nameSet, groupId));
     return it == table->end() ? nullptr : &it->second;
@@ -193,10 +207,19 @@ inline bool isIndoors(uint32_t groupFlags, const uint32_t* groupRow, const uint3
 }
 
 /// With the building's row's 0x8 or 0x10 and the group exterior or lit as
-/// one (0x48), the map is that group's own pictures alone (0x007a17e0 into
-/// 0x007afe70) rather than the walk through the portals.
-inline bool ownGroupOnly(uint32_t groupFlags, const uint32_t* rootRow) {
+/// one (0x48), the map is not the walk through the portals but the
+/// building's own pictures (0x007a17e0 into 0x007b00a0's 0x007afe70).
+inline bool buildingPictures(uint32_t groupFlags, const uint32_t* rootRow) {
     return rootRow && (*rootRow & 0x18u) != 0 && (groupFlags & 0x48u) != 0;
+}
+
+/// The number the building's own pictures are filed under: one past its last
+/// group, the group count (0x007afe70 hands 0x007af8d0 the map object's
+/// +0x16c, which every walk over MOGI runs up to). They are laid out over
+/// MOHD's box as a group's are over its own - Dalaran's, 614 by 702 yards,
+/// is the five by six "ND_Dalaran_091_xx_yy" of its 91 groups.
+inline uint32_t buildingPictureGroup(size_t groupCount) {
+    return static_cast<uint32_t>(groupCount);
 }
 
 /// A portal out of a group (MOPR): the group past it and the portal.

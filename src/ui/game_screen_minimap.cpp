@@ -1509,7 +1509,13 @@ void GameScreen::renderMinimapReadouts(const MinimapFrame& frame, game::GameHand
                             ") at canonical ", mi.x, ", ", mi.y, ", ", mi.z);
             }
         }
-        if (zoneId != 0) {
+        // GetMinimapZoneText's (0x00515600): the subzone, or the zone where
+        // there is none - Dalaran's district or shop rather than the forest
+        // under the city.
+        if (const auto* texts = renderer ? renderer->getZoneTexts() : nullptr) {
+            zoneName = texts->minimap;
+        }
+        if (zoneName.empty() && zoneId != 0) {
             zoneName = gameHandler.getWhoAreaName(zoneId);
             if (zoneName.empty()) {
                 if (auto* zmRenderer = renderer ? renderer->getZoneManager() : nullptr) {

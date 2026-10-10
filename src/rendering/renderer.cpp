@@ -2111,8 +2111,14 @@ uint32_t Renderer::getCurrentZoneId() const {
 
     uint32_t tileZoneId = 0;
     if (zoneManager && terrainManager) {
-        if (const auto areaId = terrainManager->getAreaIdAt(
-                characterPosition.x, characterPosition.y)) {
+        // The area the player is in as the music and the ambience have it
+        // (0x00782560): the building's group the player stands on where its
+        // row names one - Dalaran, not the Crystalsong Forest a long way under
+        // it - and the chunk under the player otherwise.
+        std::optional<uint32_t> areaId;
+        if (playerLinkedArea_ != 0) areaId = playerLinkedArea_;
+        else areaId = terrainManager->getAreaIdAt(characterPosition.x, characterPosition.y);
+        if (areaId) {
             lastResolvedZoneId_ = zoneManager->resolveAreaZoneId(*areaId);
             return lastResolvedZoneId_;
         }
@@ -2142,6 +2148,118 @@ uint32_t Renderer::getCurrentZoneId() const {
     if (audioCoordinator_ && audioCoordinator_->getCurrentZoneId() != 0)
         return audioCoordinator_->getCurrentZoneId();
     return tileZoneId;
+}
+
+void Renderer::updatePlayerArea() {
+    namespace za = game::zone_area;
+    namespace mi = minimap_indoor;
+    auto* gh = core::Application::getInstance().getGameHandler();
+    playerLinks_.clear();
+    playerLinkedArea_ = 0;
+    playerLinkIndoors_ = false;
+    if (!gh || !gh->isInWorld() || !terrainManager || !zoneManager) return;
+    if (gh->getCurrentMapId() != zoneTextsMapId_) {
+        zoneTextsMapId_ = gh->getCurrentMapId();
+        zoneTextsKnown_ = false;
+        zoneTexts_ = {};
+    }
+    loadWmoAreaRows();
+    const mi::AreaRows* rows = wmoAreaRows_.empty() ? nullptr : &wmoAreaRows_;
+    const glm::vec3 feet = characterPosition;
+    const std::optional<float> groundZ = terrainManager->getHeightAt(feet.x, feet.y);
+    // How far down from `startZ` the ground is met, none where it is not met
+    // on the way down to `endZ`.
+    const auto groundDown = [&](float startZ, float endZ) -> std::optional<float> {
+        if (!groundZ || *groundZ > startZ || *groundZ < endZ) return std::nullopt;
+        return startZ - *groundZ;
+    };
+
+    // The groups the player is linked to (0x007c2a70): the group of the first
+    // face under the feet that collides, then of the first that is drawn,
+    // from a tenth of a yard over them to a thousand under - unless the
+    // ground is met first, 0x007c28f0 dropping a building's face the ground's
+    // is nearer than.
+    std::optional<WMORenderer::GroupArea> linked;
+    if (wmoRenderer) {
+        const float startZ = feet.z + 0.1f;
+        const float endZ = feet.z - 1000.0f;
+        const auto links = wmoRenderer->linksAlong(glm::vec3(feet.x, feet.y, startZ), endZ);
+        const auto ground = groundDown(startZ, endZ);
+        for (const auto& hit : {links.collides, links.drawn}) {
+            if (!hit || (ground && *ground < hit->dist)) continue;
+            if (std::find(playerLinks_.begin(), playerLinks_.end(), hit->ref) == playerLinks_.end())
+                playerLinks_.push_back(hit->ref);
+        }
+        // The first that is not a moving building's group open to the sky:
+        // the one 0x007a1640, 0x007a1480 and 0x007a18d0 all stop at.
+        for (const auto& ref : playerLinks_) {
+            const auto g = wmoRenderer->groupArea(ref);
+            if (!g || (g->dynamic && !mi::isInteriorGroup(g->flags))) continue;
+            linked = g;
+            playerLinkIndoors_ = mi::isInteriorGroup(g->flags);
+            break;
+        }
+    }
+    const uint32_t groundArea = terrainManager->getAreaIdAt(feet.x, feet.y).value_or(0);
+    // A moving building's group names nothing (0x00782560 and 0x007a13e0
+    // pass over map objects with 0x400).
+    const bool linkedStill = linked && !linked->dynamic;
+    if (linkedStill) {
+        const auto* row = mi::areaRow(rows, linked->wmoId, linked->nameSet, linked->areaGroupId);
+        playerLinkedArea_ = za::linkedArea(true, row ? row->areaId : 0, 0);
+    }
+
+    // The area the place is named by (0x0077fa00).
+    std::optional<float> wmoDist;
+    uint32_t wmoArea = 0;
+    const float nameStartZ = feet.z + 0.33f;
+    const float nameEndZ = feet.z - 1760.0f;
+    if (wmoRenderer) {
+        if (const auto hit = wmoRenderer->areaGroupAlong(glm::vec3(feet.x, feet.y, nameStartZ), nameEndZ)) {
+            wmoDist = hit->dist;
+            if (const auto g = wmoRenderer->groupArea(hit->ref)) {
+                if (const auto* row = mi::areaRow(rows, g->wmoId, g->nameSet, g->areaGroupId)) wmoArea = row->areaId;
+            }
+        }
+    }
+    const uint32_t area = za::placeArea(wmoDist, wmoArea, groundDown(nameStartZ, nameEndZ), groundArea);
+    if (area == 0) return;
+
+    // AreaTable as the texts read it: ParentAreaID and the name.
+    std::unordered_map<uint32_t, za::AreaInfo> areaRows;
+    const auto lookup = [&](uint32_t id) -> const za::AreaInfo* {
+        auto it = areaRows.find(id);
+        if (it == areaRows.end()) {
+            const auto parent = zoneManager->areaParent(id);
+            if (!parent) return nullptr;
+            it = areaRows.emplace(id, za::AreaInfo{*parent, gh->getAreaName(id)}).first;
+        }
+        return &it->second;
+    };
+    // The building's names where the player is linked to one that is not
+    // moving: its group's row's (0x007a15b0), and its own row's (0x007a1500)
+    // - which, nameless, gives the name of its area or, with none, of the
+    // ground's. A building with no row of its own names nothing.
+    std::optional<za::BuildingNames> names;
+    if (linkedStill) {
+        if (const auto* root = mi::areaRow(rows, linked->wmoId, linked->nameSet, -1)) {
+            za::BuildingNames n;
+            if (const auto* row = mi::areaRow(rows, linked->wmoId, linked->nameSet, linked->areaGroupId))
+                n.group = row->name;
+            n.building = root->name;
+            if (n.building.empty()) n.building = gh->getAreaName(root->areaId != 0 ? root->areaId : groundArea);
+            names = std::move(n);
+        }
+    }
+    const auto next = za::texts(area, lookup, names);
+    if (!next) return;
+    // The event (0x005204c0). The first texts on a map are a new area, as the
+    // client's first are against the zero it starts from.
+    const za::Event e = zoneTextsKnown_ ? za::event(zoneTexts_, *next, playerLinkIndoors_)
+                                        : za::Event::ZoneChangedNewArea;
+    zoneTexts_ = *next;
+    zoneTextsKnown_ = true;
+    if (const char* name = za::eventName(e)) gh->fireAddonEvent(name, {});
 }
 
 float Renderer::sampleSunOcclusion(const glm::vec3& sunDir, std::string* why) const {
@@ -2283,16 +2401,12 @@ void Renderer::update(float deltaTime) {
     uint32_t insideWmoId = 0;
     const bool insideWmo = canQueryWmo &&
         wmoRenderer->isInsideWMO(camPos.x, camPos.y, camPos.z, &insideWmoId);
-    // Announce the crossing. zonetext.lua and worldstateframe.lua both listen
-    // for ZONE_CHANGED_INDOORS, and WoW answers the way back out with a plain
-    // ZONE_CHANGED - there is no outdoors counterpart. Nothing fired either,
-    // so the state was known here and never left this file.
-    if (insideWmo != playerIndoors_) {
-        if (auto* gh = core::Application::getInstance().getGameHandler()) {
-            gh->fireAddonEvent(insideWmo ? "ZONE_CHANGED_INDOORS" : "ZONE_CHANGED", {});
-        }
-    }
     playerIndoors_ = insideWmo;
+    // Where the player is, and the zone events when that changes: on the
+    // texts changing, as the client raises them (0x005204c0), rather than on
+    // the camera entering a building's box - Dalaran's streets are inside a
+    // dozen, and every one of them fired ZONE_CHANGED_INDOORS.
+    updatePlayerArea();
 
     // Update lighting system
     if (lightingManager) {
@@ -5892,28 +6006,43 @@ void Renderer::renderVolumetricFog() {
     }
 }
 
-void Renderer::loadWmoAreaFlags() {
-    if (wmoAreaFlagsLoaded_ || !wmoRenderer) return;
+void Renderer::loadWmoAreaRows() {
+    if (wmoAreaRowsLoaded_ || !wmoRenderer) return;
     auto* assetManager = core::Application::getInstance().getAssetManager();
     if (!assetManager) return;
-    wmoAreaFlagsLoaded_ = true;
+    wmoAreaRowsLoaded_ = true;
     const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("WMOAreaTable")
                                                         : nullptr;
     if (!layout) return;
-    const uint32_t cols[4] = {layout->tryField("WMOID"), layout->tryField("NameSetID"),
-                              layout->tryField("WMOGroupID"), layout->tryField("Flags")};
+    const uint32_t cols[5] = {layout->tryField("WMOID"), layout->tryField("NameSetID"),
+                              layout->tryField("WMOGroupID"), layout->tryField("Flags"),
+                              layout->tryField("AreaTableID")};
+    const uint32_t nameCol = layout->tryField("AreaName");
     auto data = assetManager->readFile("DBFilesClient\\WMOAreaTable.dbc");
     pipeline::DBCFile dbc;
     if (data.empty() || !dbc.load(data)) return;
     for (uint32_t c : cols) {
         if (c >= dbc.getFieldCount()) return;
     }
-    for (uint32_t i = 0; i < dbc.getRecordCount(); ++i) {
-        wmoAreaFlags_[minimap_indoor::areaKey(dbc.getUInt32(i, cols[0]), dbc.getUInt32(i, cols[1]),
-                                              static_cast<int32_t>(dbc.getUInt32(i, cols[2])))] =
-            dbc.getUInt32(i, cols[3]);
+    const bool haveNames = nameCol < dbc.getFieldCount();
+    // The name ends the record - its locale block and that block's flags,
+    // eight locales before TBC and sixteen since - in every layout given for
+    // this table. A file it does not end is not laid out as the layout says,
+    // and its flags would put the minimap indoors at random.
+    if (haveNames && nameCol + 9 != dbc.getFieldCount() && nameCol + 17 != dbc.getFieldCount()) {
+        LOG_WARNING("WMOAreaTable.dbc has ", dbc.getFieldCount(), " fields, not what its layout says - not read");
+        return;
     }
-    LOG_INFO("Loaded WMOAreaTable.dbc: ", wmoAreaFlags_.size(), " rows");
+    for (uint32_t i = 0; i < dbc.getRecordCount(); ++i) {
+        minimap_indoor::AreaRow row;
+        row.flags = dbc.getUInt32(i, cols[3]);
+        row.areaId = dbc.getUInt32(i, cols[4]);
+        if (haveNames) row.name = dbc.getString(i, nameCol);
+        wmoAreaRows_[minimap_indoor::areaKey(dbc.getUInt32(i, cols[0]), dbc.getUInt32(i, cols[1]),
+                                             static_cast<int32_t>(dbc.getUInt32(i, cols[2])))] =
+            std::move(row);
+    }
+    LOG_INFO("Loaded WMOAreaTable.dbc: ", wmoAreaRows_.size(), " rows");
 }
 
 void Renderer::loadScreenEffectRows() {
@@ -6157,10 +6286,10 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
         glm::vec3 minimapCenter = camera->getPosition();
         if (cameraController && cameraController->isThirdPerson())
             minimapCenter = characterPosition;
-        loadWmoAreaFlags();
-        if (wmoRenderer) wmoRenderer->setAreaFlags(wmoAreaFlags_.empty() ? nullptr : &wmoAreaFlags_);
+        loadWmoAreaRows();
+        if (wmoRenderer) wmoRenderer->setAreaRows(wmoAreaRows_.empty() ? nullptr : &wmoAreaRows_);
         minimap->setIndoorScene(wmoRenderer
-            ? wmoRenderer->indoorMinimapAt(minimapCenter, minimap->insideViewRadius())
+            ? wmoRenderer->indoorMinimapAt(minimapCenter, minimap->insideViewRadius(), playerLinks_)
             : std::nullopt);
     }
 

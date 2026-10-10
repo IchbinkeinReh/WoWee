@@ -199,6 +199,20 @@ struct LuaServices {
     /// client works this out locally for exactly that reason.
     std::function<uint32_t()> getLiveZoneId;
 
+    /// The four texts the client keeps of where the player is (0x005204c0):
+    /// GetZoneText, GetRealZoneText, GetSubZoneText and GetMinimapZoneText,
+    /// worked out as the client does (game::zone_area). `known` is false
+    /// until there is a place to name - before the first chunk, or in an
+    /// instance with no ground - and the callers fall back to the zone id.
+    struct ZoneTexts {
+        bool known = false;
+        std::string zone;
+        std::string realZone;
+        std::string subzone;
+        std::string minimap;
+    };
+    std::function<ZoneTexts()> getZoneTexts;
+
     /// Whether the player is standing on a world PvP objective.
     ///
     /// The *area* rather than the zone, which is why it is not derived from

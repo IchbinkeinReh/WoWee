@@ -2029,41 +2029,56 @@ static int lua_GetCurrentMapAreaID(lua_State* L) {
     return 1;
 }
 
-// GetZoneText() / GetRealZoneText() → current zone name
-static int lua_GetZoneText(lua_State* L) {
+// The zone's name from its id, the way the texts were answered before the
+// client's own texts were worked out here, for where they are not known.
+static std::string zoneNameFromId(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushstring(L, ""); return 1; }
+    if (!gh) return {};
     // The terrain under the player first, and the server's zone only as a
-    // fallback.
-    //
-    // It was the other way round, and the server's zone reaches us on
-    // SMSG_INIT_WORLD_STATES alone - sent when the server notices a zone
-    // change, and not otherwise. So the name stayed on the last zone the
-    // server announced while the player walked out of it, which is what
-    // "Silverpine Forest" over Hillsbrad Foothills is. The real client works
-    // this out from its own map data for that reason, and this one already
-    // does the same work every frame for weather and music.
+    // fallback: the server's reaches us on SMSG_INIT_WORLD_STATES alone, sent
+    // when the server notices a zone change and not otherwise.
     uint32_t zoneId = 0;
     if (auto* svc = getLuaServices(L)) {
         if (svc->getLiveZoneId) zoneId = svc->getLiveZoneId();
     }
     if (zoneId == 0) zoneId = gh->getWorldStateZoneId();
-    if (zoneId != 0) {
-        std::string name = gh->getWhoAreaName(zoneId);
-        if (!name.empty()) { lua_pushstring(L, name.c_str()); return 1; }
+    return zoneId != 0 ? gh->getWhoAreaName(zoneId) : std::string();
+}
+
+static LuaServices::ZoneTexts zoneTexts(lua_State* L) {
+    if (auto* svc = getLuaServices(L)) {
+        if (svc->getZoneTexts) return svc->getZoneTexts();
     }
-    lua_pushstring(L, "");
+    return {};
+}
+
+// GetZoneText (0x00515570), GetRealZoneText (0x005155a0), GetSubZoneText
+// (0x005155d0) and GetMinimapZoneText (0x00515600): the four texts 0x005204c0
+// keeps, "" for none. Four different answers - in Dalaran the zone is
+// Dalaran and the subzone the district or shop the player is in, where all
+// four used to be the zone of the chunk under the city, Crystalsong Forest.
+static int lua_GetZoneText(lua_State* L) {
+    const auto t = zoneTexts(L);
+    lua_pushstring(L, t.known ? t.zone.c_str() : zoneNameFromId(L).c_str());
     return 1;
 }
 
-// GetSubZoneText() → subzone name (same as zone for now - server doesn't always send subzone)
-static int lua_GetSubZoneText(lua_State* L) {
-    return lua_GetZoneText(L);  // Best-effort: zone and subzone often overlap
+static int lua_GetRealZoneText(lua_State* L) {
+    const auto t = zoneTexts(L);
+    lua_pushstring(L, t.known ? t.realZone.c_str() : zoneNameFromId(L).c_str());
+    return 1;
 }
 
-// GetMinimapZoneText() → zone name displayed near minimap
+static int lua_GetSubZoneText(lua_State* L) {
+    const auto t = zoneTexts(L);
+    lua_pushstring(L, t.known ? t.subzone.c_str() : "");
+    return 1;
+}
+
 static int lua_GetMinimapZoneText(lua_State* L) {
-    return lua_GetZoneText(L);
+    const auto t = zoneTexts(L);
+    lua_pushstring(L, t.known ? t.minimap.c_str() : zoneNameFromId(L).c_str());
+    return 1;
 }
 
 // SetupFullscreenScale(frame) - the scale of a full-screen frame.
@@ -7012,7 +7027,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"__WoweeActiveTrackingSpell", lua_ActiveTrackingSpell},
                 {"SetTracking",         lua_SetTracking},
                 {"GetZoneText",          lua_GetZoneText},
-                {"GetRealZoneText",      lua_GetZoneText},
+                {"GetRealZoneText",      lua_GetRealZoneText},
                 {"GetSubZoneText",       lua_GetSubZoneText},
                 {"GetMinimapZoneText",   lua_GetMinimapZoneText},
                 {"GetGameTime",             lua_GetGameTime},
