@@ -577,6 +577,12 @@ struct UpdateBlock {
     bool onTransport = false;
     uint64_t transportGuid = 0;
     float transportX = 0.0f, transportY = 0.0f, transportZ = 0.0f, transportO = 0.0f;
+    /// The seat byte after the transport time: which seat of a vehicle the
+    /// unit is in (0x007489c0), -1 off one.
+    int8_t transportSeat = -1;
+
+    /// UPDATEFLAG_VEHICLE: the unit's Vehicle.dbc row (0x0074c750), 0 for none.
+    uint32_t vehicleId = 0;
 
     // Field data (for VALUES and CREATE updates) - sorted flat vector instead of
     // std::map to drop the per-field heap allocation on every UPDATE_OBJECT block.

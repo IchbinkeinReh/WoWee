@@ -806,6 +806,7 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     taxiStartGrace_ = 0.0f;
     currentMountDisplayId_ = 0;
     vehicleId_ = 0;
+    vehicleRoster_.clear();
     if (mountCallback_) {
         mountCallback_(0);
     }

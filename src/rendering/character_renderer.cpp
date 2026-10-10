@@ -2244,8 +2244,35 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
         core::Logger::getInstance().warning("Cannot play animation: instance ", instanceId, " not found");
         return;
     }
+    // A seated passenger's body is its seat's (0x007385c0, 0x00724500), or
+    // its vehicle's where it mirrors it (0x007385c0 asks 0x007487e0).
+    if (it->second.seatAnimationHeld || it->second.mirrorsSeatParent) return;
+    playAnimationNow(instanceId, animationId, loop, oneShotReturnAnim);
+}
 
-    auto& instance = it->second;
+std::vector<uint32_t> CharacterRenderer::mirroringPassengers(uint32_t instanceId) const {
+    std::vector<uint32_t> out;
+    for (const auto& [id, inst] : instances) {
+        if (inst.mirrorsSeatParent && inst.seatParent == instanceId) out.push_back(id);
+    }
+    return out;
+}
+
+void CharacterRenderer::playAnimationNow(uint32_t instanceId, uint32_t animationId, bool loop,
+                                         uint32_t oneShotReturnAnim) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    startAnimation(it->second, animationId, loop, oneShotReturnAnim);
+    // The vehicle hands what it plays to the passengers mirroring it
+    // (0x00735a60, 0x00735820).
+    for (uint32_t passenger : mirroringPassengers(instanceId)) {
+        auto pit = instances.find(passenger);
+        if (pit != instances.end()) startAnimation(pit->second, animationId, loop, oneShotReturnAnim);
+    }
+}
+
+void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t animationId, bool loop,
+                                       uint32_t oneShotReturnAnim) {
     auto& model = models[instance.modelId].data;
     instance.oneShotReturnAnim = loop ? 0 : oneShotReturnAnim;
 
@@ -2398,7 +2425,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
 
         // Skip weapon instances for animation - their transforms are set by parent
         // bones. Enchant visuals are the exception: they are pure animated FX.
-        if (inst.hasOverrideModelMatrix && !inst.isEffectModel) continue;
+        if (inst.hasOverrideModelMatrix && !inst.isEffectModel && inst.seatParent == 0) continue;
 
         float distSq = glm::distance2(inst.position, cameraPos);
         if (distSq > animUpdateRadiusSq && !inst.isSceneModel) continue;
@@ -2478,7 +2505,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                             inst.oneShotReturnAnim != 0 ? inst.oneShotReturnAnim
                             : inst.restAnimation != 0  ? inst.restAnimation
                                                        : anim::STAND;
-                        playAnimation(pair.first, resumeAnim, true);
+                        playAnimationNow(pair.first, resumeAnim, true, 0);
                     } else {
                         // Stay on last frame of death
                         inst.animationTime = static_cast<float>(seq.duration);
@@ -2548,6 +2575,9 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
             calculateBoneMatrices(instRef.get());
         }
     }
+
+    // Passengers on their vehicles' seats, then what they hold.
+    placeSeatedInstances();
 
     // Update weapon attachment transforms (after all bone matrices are computed)
     for (auto& pair : instances) {
@@ -2656,6 +2686,18 @@ constexpr int32_t kKeyBoneHead = 6;
 
 bool CharacterRenderer::playArmAnimation(uint32_t instanceId, int arm, uint32_t animationId, uint32_t eventId) {
     auto it = instances.find(instanceId);
+    if (it == instances.end()) return false;
+    // A mirroring passenger plays its vehicle's, not its own (0x00735820).
+    if (it->second.mirrorsSeatParent) return false;
+    const bool played = playArmAnimationNow(instanceId, arm, animationId, eventId);
+    for (uint32_t passenger : mirroringPassengers(instanceId)) {
+        playArmAnimationNow(passenger, arm, animationId, eventId);
+    }
+    return played;
+}
+
+bool CharacterRenderer::playArmAnimationNow(uint32_t instanceId, int arm, uint32_t animationId, uint32_t eventId) {
+    auto it = instances.find(instanceId);
     if (it == instances.end() || arm < 0 || arm > 1) return false;
     auto& instance = it->second;
     const auto& model = models[instance.modelId].data;
@@ -2697,9 +2739,120 @@ bool CharacterRenderer::playArmAnimation(uint32_t instanceId, int arm, uint32_t 
 void CharacterRenderer::stopArmAnimations(uint32_t instanceId) {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return;
+    // 0x00736d30 and 0x00735a60: the vehicle's shoulders go back to the body
+    // and its mirroring passengers' with them; a passenger's own do not.
+    if (it->second.mirrorsSeatParent) return;
+    auto stop = [](CharacterInstance& instance) {
+        instance.armSequenceIndex[0] = instance.armSequenceIndex[1] = -1;
+        instance.armEvents = 0;
+    };
+    stop(it->second);
+    for (uint32_t passenger : mirroringPassengers(instanceId)) {
+        auto pit = instances.find(passenger);
+        if (pit != instances.end()) stop(pit->second);
+    }
+}
+
+void CharacterRenderer::setInstanceSeat(uint32_t instanceId, uint32_t parentInstanceId, int32_t attachmentId,
+                                        const vehicle_seat::PassengerPose& pose) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || parentInstanceId == instanceId) return;
     auto& instance = it->second;
-    instance.armSequenceIndex[0] = instance.armSequenceIndex[1] = -1;
-    instance.armEvents = 0;
+    if (instance.seatParent != parentInstanceId) instance.mirrorsSeatParent = false;
+    instance.seatParent = parentInstanceId;
+    instance.seatAttachment = attachmentId;
+    instance.seatPose = pose;
+}
+
+void CharacterRenderer::clearInstanceSeat(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    if (instance.seatParent == 0) return;
+    instance.seatParent = 0;
+    instance.seatAttachment = -1;
+    instance.seatAnimationHeld = false;
+    instance.mirrorsSeatParent = false;
+    instance.hasOverrideModelMatrix = false;
+}
+
+void CharacterRenderer::setSeatAnimation(uint32_t instanceId,
+                                         const std::optional<vehicle_seat::RideAnimation>& ride) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    if (!ride) {
+        instance.seatAnimationHeld = false;
+        return;
+    }
+    // 0x00747b20: the start until it has played once (the passenger's +0x10
+    // 0x2, set as it ends, 0x007484e0), then the loop.
+    if (ride->start) {
+        startAnimation(instance, *ride->start, false, ride->loop.value_or(0));
+    } else {
+        startAnimation(instance, *ride->loop, true, 0);
+    }
+    instance.seatAnimationHeld = ride->loop.has_value();
+}
+
+void CharacterRenderer::setMirrorsSeatParent(uint32_t instanceId, bool mirrors) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    if (instance.mirrorsSeatParent == mirrors) return;
+    instance.mirrorsSeatParent = false;
+    if (!mirrors) return;
+    auto pit = instances.find(instance.seatParent);
+    if (pit == instances.end()) return;
+    const auto& vehicle = pit->second;
+    // 0x00748620: the vehicle's body and each bone set it animates, at the
+    // time it has reached; a set the vehicle leaves to the body, the
+    // passenger does too.
+    startAnimation(instance, vehicle.currentAnimationId, vehicle.animationLoop, vehicle.oneShotReturnAnim);
+    instance.animationTime = vehicle.animationTime;
+    for (int arm = 0; arm < 2; ++arm) {
+        instance.armSequenceIndex[arm] = -1;
+        if (vehicle.armSequenceIndex[arm] < 0) continue;
+        if (playArmAnimationNow(instanceId, arm, vehicle.armAnimationId[arm], 0)) {
+            instance.armTime[arm] = vehicle.armTime[arm];
+        }
+    }
+    instance.mirrorsSeatParent = true;
+}
+
+std::optional<glm::vec3> CharacterRenderer::modelAttachmentPosition(uint32_t instanceId,
+                                                                    uint32_t attachmentId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return std::nullopt;
+    uint16_t bone = 0;
+    glm::vec3 offset(0.0f);
+    if (!findAttachmentBone(it->second.modelId, attachmentId, bone, offset)) return std::nullopt;
+    return offset;
+}
+
+void CharacterRenderer::placeSeatedInstances() {
+    for (auto& [id, inst] : instances) {
+        if (inst.seatParent == 0) continue;
+        auto pit = instances.find(inst.seatParent);
+        if (pit == instances.end()) {
+            inst.seatParent = 0;
+            inst.seatAnimationHeld = false;
+            inst.mirrorsSeatParent = false;
+            inst.hasOverrideModelMatrix = false;
+            continue;
+        }
+        // The vehicle model's attachment for the seat (0x00831410), else
+        // its own matrix (0x007490f0 without the attachment).
+        glm::mat4 frame(1.0f);
+        if (inst.seatAttachment < 0 ||
+            !getAttachmentTransform(inst.seatParent, static_cast<uint32_t>(inst.seatAttachment), frame)) {
+            frame = pit->second.hasOverrideModelMatrix ? pit->second.overrideModelMatrix
+                                                       : getModelMatrix(pit->second);
+        }
+        inst.overrideModelMatrix = vehicle_seat::passengerWorld(frame, inst.seatPose);
+        inst.hasOverrideModelMatrix = true;
+        inst.position = glm::vec3(inst.overrideModelMatrix[3]);
+    }
 }
 
 std::optional<uint32_t> CharacterRenderer::armAnimation(uint32_t instanceId, int arm) const {

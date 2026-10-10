@@ -552,6 +552,35 @@
     "Y": 5,
     "Z": 6
   },
+  "Vehicle": {
+    "Flags": 1,
+    "ID": 0,
+    "SeatID0": 6,
+    "SeatID1": 7,
+    "SeatID2": 8,
+    "SeatID3": 9,
+    "SeatID4": 10,
+    "SeatID5": 11,
+    "SeatID6": 12,
+    "SeatID7": 13
+  },
+  "VehicleSeat": {
+    "AttachmentID": 2,
+    "AttachmentOffsetX": 3,
+    "AttachmentOffsetY": 4,
+    "AttachmentOffsetZ": 5,
+    "Flags": 1,
+    "FlagsB": 45,
+    "ID": 0,
+    "PassengerAttachmentID": 32,
+    "PassengerPitch": 30,
+    "PassengerRoll": 31,
+    "PassengerYaw": 29,
+    "RideAnimLoop": 16,
+    "RideAnimStart": 15,
+    "RideUpperAnimLoop": 18,
+    "RideUpperAnimStart": 17
+  },
   "WMOAreaTable": {
     "ID": 0,
     "WMOID": 1,

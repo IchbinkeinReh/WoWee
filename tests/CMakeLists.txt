@@ -2668,6 +2668,16 @@ wowee_add_test(test_spell_kit
 wowee_add_test(test_spell_chain
     SOURCES test_spell_chain.cpp)
 
+# ── test_vehicle_seat ────────────────────────────────
+# Vehicles and passengers: the roster, a seat's row (0x00756ec0), the
+# passenger's matrix (0x007490f0) and ride animation (0x00747b20).
+wowee_add_test(test_vehicle_seat
+    SOURCES test_vehicle_seat.cpp ${CMAKE_SOURCE_DIR}/src/game/vehicle.cpp)
+
+# ── test_update_vehicle_block ────────────────────────
+# The movement block's seat byte and UPDATEFLAG_VEHICLE's row.
+wowee_add_packet_test(test_update_vehicle_block)
+
 # ── test_mount_transition ────────────────────────────
 # CharProc 16's mount transition (0x007fa6a0, 0x007fb7f0).
 wowee_add_test(test_mount_transition

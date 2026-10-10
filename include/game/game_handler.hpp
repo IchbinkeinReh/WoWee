@@ -9,6 +9,7 @@
 #include "game/character.hpp"
 #include "game/opcode_table.hpp"
 #include "game/corpse_look.hpp"
+#include "game/vehicle.hpp"
 #include "game/update_field_table.hpp"
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
@@ -1691,10 +1692,6 @@ public:
     using SprintAuraCallback = std::function<void(bool active)>;
     void setSprintAuraCallback(SprintAuraCallback cb) { sprintAuraCallback_ = std::move(cb); }
 
-    // Vehicle state callback - fired when player enters/exits a vehicle
-    using VehicleStateCallback = std::function<void(bool entered, uint32_t vehicleId)>;
-    void setVehicleStateCallback(VehicleStateCallback cb) { vehicleStateCallback_ = std::move(cb); }
-
     // Faction hostility map (populated from FactionTemplate.dbc by Application)
     void setFactionHostileMap(std::unordered_map<uint32_t, bool> map) { factionHostileMap_ = std::move(map); }
     void setFactionFriendlyMap(std::unordered_map<uint32_t, bool> map) { factionFriendlyMap_ = std::move(map); }
@@ -3196,6 +3193,9 @@ public:
     bool isInVehicle() const { return vehicleId_ != 0; }
     uint32_t getVehicleId() const { return vehicleId_; }
     void sendRequestVehicleExit();
+    /// Which units are vehicles and who sits in them (game/vehicle.hpp).
+    vehicle::VehicleRoster& vehicleRoster() { return vehicleRoster_; }
+    const vehicle::VehicleRoster& vehicleRoster() const { return vehicleRoster_; }
 
     // Vendor
     void openVendor(uint64_t npcGuid);
@@ -4617,7 +4617,6 @@ private:
     GameObjectCustomAnimCallback gameObjectCustomAnimCallback_;
     GameObjectStateCallback gameObjectStateCallback_;
     SprintAuraCallback sprintAuraCallback_;
-    VehicleStateCallback vehicleStateCallback_;
 
     // Transport tracking
     std::unordered_map<uint64_t, TransportAttachment> transportAttachments_;
@@ -4871,6 +4870,7 @@ private:
 
     // Vehicle (WotLK): non-zero when player is seated in a vehicle
     uint32_t vehicleId_ = 0;
+    vehicle::VehicleRoster vehicleRoster_;
     /// The column the arena rosters are sorted by, so clicking it again knows
     /// to reverse rather than re-sort the same way.
     std::string arenaSortKey_;

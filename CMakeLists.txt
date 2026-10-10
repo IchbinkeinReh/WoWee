@@ -612,6 +612,7 @@ set(WOWEE_SOURCES
     src/core/entity_spawner_player.cpp
     src/core/entity_spawner_blob.cpp
     src/core/entity_spawner_corpse.cpp
+    src/core/entity_spawner_vehicle.cpp
     src/core/entity_spawner_processing.cpp
     src/core/appearance_composer.cpp
     src/core/helm_visual.cpp
@@ -686,6 +687,7 @@ set(WOWEE_SOURCES
     src/game/warden_emulator.cpp
     src/game/warden_memory.cpp
     src/game/transport_manager.cpp
+    src/game/vehicle.cpp
     src/game/transport_path_repository.cpp
     src/game/transport_clock_sync.cpp
     src/game/transport_animator.cpp

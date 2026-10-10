@@ -4316,6 +4316,8 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     inGameStep = "creature render sync";
     updateCheckpoint = "in_game: creature render sync";
     syncRenderInstancesToEntities(deltaTime);
+    // Passengers onto their vehicles' seats, over where the sync put them.
+    if (entitySpawner_) entitySpawner_->updateVehiclePassengers();
     // Movement heartbeat is sent from GameHandler::update() to avoid
     // duplicate packets from multiple update loops.
 

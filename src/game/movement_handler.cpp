@@ -1311,6 +1311,7 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     const bool onTransport = (info.flags & wireTransportFlag) != 0;
     uint64_t transportGuid = 0;
     float tLocalX = 0, tLocalY = 0, tLocalZ = 0, tLocalO = 0;
+    int8_t transportSeat = -1;
     if (onTransport) {
         transportGuid = packet.readPackedGuid();
         tLocalX = packet.readFloat();
@@ -1321,7 +1322,7 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
             /*uint32_t transportTime =*/ packet.readUInt32();
         }
         if (flags2Size >= 2) {
-            /*int8_t transportSeat =*/ packet.readUInt8();
+            transportSeat = static_cast<int8_t>(packet.readUInt8());
             // MOVEMENTFLAG2_INTERPOLATED_MOVEMENT, as FUN_004f4d40 tests it.
             if (info.flags2 & 0x0400) {
                 /*uint32_t transportTime2 =*/ packet.readUInt32();
@@ -1347,7 +1348,14 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(info.x, info.y, info.z));
     float canYaw = core::coords::serverToCanonicalYaw(info.orientation);
 
-    if (onTransport && transportGuid != 0 && owner_.getTransportManager()) {
+    // The mover's seat, where its transport is a vehicle (0x007489c0).
+    owner_.vehicleRoster().setTransport(moverGuid, onTransport ? transportGuid : 0, transportSeat, tLocalO);
+
+    // A vehicle is a unit, not a transport the manager runs: the mover's
+    // position is the world one the packet carries, and composing its seat
+    // offset onto an unknown transport put it at the offset itself.
+    if (onTransport && transportGuid != 0 && owner_.getTransportManager() &&
+        owner_.getTransportManager()->getTransport(transportGuid)) {
         glm::vec3 localCanonical = owner_.getTransportManager()->serverToTransportLocal(
             transportGuid, glm::vec3(tLocalX, tLocalY, tLocalZ));
         owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, localCanonical, true,
@@ -1867,10 +1875,28 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
 }
 
 void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
-    if (packet.getRemainingSize() < 8 + 1 + 8 + 12) return;
-    uint64_t moverGuid = packet.readUInt64();
-    /*uint8_t unk =*/ packet.readUInt8();
-    uint64_t transportGuid = packet.readUInt64();
+    uint64_t moverGuid = 0;
+    uint64_t transportGuid = 0;
+    if (!isPreWotlk()) {
+        // 0x0073f590: the mover's packed guid, the transport's, the seat
+        // byte, then the monster move's own toggle byte.
+        if (packet.getRemainingSize() < 2 + 2 + 12) return;
+        moverGuid = packet.readPackedGuid();
+        transportGuid = packet.readPackedGuid();
+        if (packet.getRemainingSize() < 2 + 12) return;
+        const auto seat = static_cast<int8_t>(packet.readUInt8());
+        /*uint8_t toggle =*/ packet.readUInt8();
+        // Its seat, where the transport is a vehicle (0x0074c040).
+        owner_.vehicleRoster().setTransport(moverGuid, transportGuid, seat,
+                                            owner_.vehicleRoster().passenger(moverGuid)
+                                                ? owner_.vehicleRoster().passenger(moverGuid)->facing
+                                                : 0.0f);
+    } else {
+        if (packet.getRemainingSize() < 8 + 1 + 8 + 12) return;
+        moverGuid = packet.readUInt64();
+        /*uint8_t unk =*/ packet.readUInt8();
+        transportGuid = packet.readUInt64();
+    }
 
     float localX = packet.readFloat();
     float localY = packet.readFloat();
@@ -1878,6 +1904,17 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
 
     auto entity = owner_.getEntityManager().getEntity(moverGuid);
     if (!entity) return;
+
+    // A vehicle is a unit and no transport the manager runs: the passenger
+    // is where its vehicle is, and drawn in its seat. Composing the seat
+    // offset onto an unknown transport put the passenger at the offset.
+    if (!owner_.getTransportManager() || !owner_.getTransportManager()->getTransport(transportGuid)) {
+        if (auto vehicle = owner_.getEntityManager().getEntity(transportGuid)) {
+            entity->setPosition(vehicle->getX(), vehicle->getY(), vehicle->getZ(), entity->getOrientation());
+        }
+        packet.skipAll();
+        return;
+    }
 
     if (packet.getReadPos() + 5 > packet.getSize()) {
         if (owner_.getTransportManager()) {

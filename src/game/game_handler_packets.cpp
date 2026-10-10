@@ -1690,23 +1690,24 @@ void GameHandler::registerRemainingOpcodes() {
     // uint32 auctionId + uint32 itemEntry + uint32 itemRandom - auction expired/cancelled
     // uint64 containerGuid - tells client to open this container
     // The actual items come via update packets; we just log this.
-    // PackedGuid (player guid) + uint32 vehicleId
-    // vehicleId == 0 means the player left the vehicle
+    // 0x4a7, the client's SET_VEHICLE_REC_ID (0x00716db0): a packed guid and
+    // the Vehicle.dbc row that unit now is, 0 for none - any unit's, not
+    // only the player's (0x0074c750 sets it, 0x0074c7b0 resets it).
     dispatchTable_[Opcode::SMSG_PLAYER_VEHICLE_DATA] = [this](network::Packet& packet) {
-        // PackedGuid (player guid) + uint32 vehicleId
-        // vehicleId == 0 means the player left the vehicle
+        uint64_t unitGuid = 0;
         if (packet.hasRemaining(1)) {
-            (void)packet.readPackedGuid(); // player guid (unused)
+            unitGuid = packet.readPackedGuid();
         }
         uint32_t newVehicleId = 0;
         if (packet.hasRemaining(4)) {
             newVehicleId = packet.readUInt32();
         }
+        vehicleRoster_.setVehicleId(unitGuid, newVehicleId);
+        if (unitGuid != playerGuid) return;
         bool wasInVehicle = vehicleId_ != 0;
         bool nowInVehicle = newVehicleId != 0;
         vehicleId_ = newVehicleId;
         if (wasInVehicle != nowInVehicle) {
-            if (vehicleStateCallback_) vehicleStateCallback_(nowInVehicle, newVehicleId);
             // Announced as well as stored. The state was kept and handed to
             // this client's own bar, and the interface heard nothing - so the
             // leave-vehicle button, which redraws on VEHICLE_UPDATE, never
@@ -2608,9 +2609,6 @@ void GameHandler::registerRemainingOpcodes() {
     dispatchTable_[Opcode::SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA] = [this](network::Packet& packet) {
         const bool wasRiding = vehicleId_ != 0;
         vehicleId_ = 0;  // Vehicle ride cancelled; clear UI
-        if (vehicleStateCallback_) {
-            vehicleStateCallback_(false, 0);
-        }
         if (wasRiding) {
             fireAddonEvent("VEHICLE_UPDATE", {});
             fireAddonEvent("UNIT_EXITED_VEHICLE", {"player"});

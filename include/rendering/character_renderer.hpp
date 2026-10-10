@@ -6,6 +6,7 @@
 
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
+#include "rendering/vehicle_seat.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 #include <vulkan/vulkan.h>
@@ -221,6 +222,25 @@ public:
     void setTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot, VkTexture* texture);
     void clearTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot);
     void setInstanceVisible(uint32_t instanceId, bool visible);
+    /// A passenger hung on its vehicle's model (0x0074a7f0 state 3): drawn
+    /// each frame by vehicle_seat::passengerWorld on the parent's attachment,
+    /// or on the parent's own matrix where it lacks it (0x00831630), still
+    /// animating as itself. `attachmentId` -1 asks for no attachment.
+    void setInstanceSeat(uint32_t instanceId, uint32_t parentInstanceId, int32_t attachmentId,
+                         const vehicle_seat::PassengerPose& pose);
+    void clearInstanceSeat(uint32_t instanceId);
+    /// The seat's ride animation holds the passenger's body: its start once,
+    /// then its loop; what else asks the body to play is not played
+    /// (0x007385c0 and 0x00724500 put the seat's first). Nothing releases it.
+    void setSeatAnimation(uint32_t instanceId, const std::optional<vehicle_seat::RideAnimation>& ride);
+    /// The passenger plays what its seat's parent plays and nothing of its
+    /// own (the passenger's +0x10 0x800: 0x00748620 copies the vehicle's
+    /// animations onto it, and 0x007385c0, 0x00735820, 0x00735a60 and
+    /// 0x00736d30 hand each of the vehicle's on and refuse the passenger's).
+    void setMirrorsSeatParent(uint32_t instanceId, bool mirrors);
+    /// Where an attachment of the instance's model is in the model, unposed
+    /// (0x00827460). Nothing where the model lacks it.
+    [[nodiscard]] std::optional<glm::vec3> modelAttachmentPosition(uint32_t instanceId, uint32_t attachmentId) const;
 
     /// What a unit's floor search finds under its feet (0x007c2a70).
     using FloorQuery = std::function<pipeline::wmo_doodad_light::ObjectFloorState(const glm::vec3&)>;
@@ -518,6 +538,16 @@ private:
         // batches must ignore, exactly as the blend mode says.
         bool isSceneModel = false;
 
+        /// setInstanceSeat: the instance it is hung on, 0 for none, at which
+        /// of its attachments (-1 its own matrix) and how.
+        uint32_t seatParent = 0;
+        int32_t seatAttachment = -1;
+        vehicle_seat::PassengerPose seatPose;
+        /// setSeatAnimation: the body is the seat's.
+        bool seatAnimationHeld = false;
+        /// setMirrorsSeatParent.
+        bool mirrorsSeatParent = false;
+
         /// The unit's box its blob shadow is sized by, in this model's space,
         /// when it has one (setInstanceBlobShadow).
         std::optional<blob_shadow::Box> blobShadow;
@@ -534,6 +564,15 @@ private:
         uint64_t shadowBonesFrame = 0;
     };
 
+    /// playAnimation without the seat's say, and handed on to the
+    /// passengers that mirror the instance.
+    void playAnimationNow(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim);
+    void startAnimation(CharacterInstance& instance, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim);
+    bool playArmAnimationNow(uint32_t instanceId, int arm, uint32_t animationId, uint32_t eventId);
+    /// The passengers that mirror an instance.
+    std::vector<uint32_t> mirroringPassengers(uint32_t instanceId) const;
+    /// Hangs every seated instance on its parent (after the bones).
+    void placeSeatedInstances();
     void setupModelBuffers(M2ModelGPU& gpuModel);
     void calculateBindPose(M2ModelGPU& gpuModel);
     void calculateBoneMatrices(CharacterInstance& instance);

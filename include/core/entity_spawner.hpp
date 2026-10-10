@@ -8,6 +8,7 @@
 #include "rendering/animation/body_yaw.hpp"
 #include "core/character_geosets.hpp"
 #include "core/weapon_attachment.hpp"
+#include "game/vehicle.hpp"
 #include <memory>
 #include <string>
 #include <utility>
@@ -338,6 +339,13 @@ public:
         return it != remotePlayerMounts_.end() ? &it->second : nullptr;
     }
 
+    /// Every unit in a vehicle's seat drawn there (0x0074a7f0 state 3):
+    /// hung on the vehicle model's seat attachment, playing the seat's ride
+    /// animation, mirroring the vehicle where the seat says so, hidden where
+    /// it says so; and let go when it leaves the seat. Each frame, after the
+    /// units are placed (entity_spawner_vehicle.cpp).
+    void updateVehiclePassengers();
+
     // Local player GUID exclusion (EntitySpawner skips spawning the local player)
     void setLocalPlayerGuid(uint64_t guid) { spawnedPlayerGuid_ = guid; }
 
@@ -465,6 +473,21 @@ private:
     void queueDressedEquipment(uint64_t guid);
     /// A CreatureModelData float column of the unit an instance draws.
     std::optional<float> modelDataColumn(uint32_t renderInstanceId, const char* column) const;
+    /// Vehicle.dbc and VehicleSeat.dbc (0x00654800, 0x00654a60), loaded once.
+    void loadVehicleTables();
+    game::vehicle::VehicleTables vehicleTables_;
+    bool vehicleTablesLoaded_ = false;
+    /// A passenger drawn in its seat: its instance, the vehicle's, the
+    /// seat's row, and what the seat did to it.
+    struct SeatedPassenger {
+        uint32_t instanceId = 0;
+        uint32_t vehicleInstanceId = 0;
+        uint32_t seatId = 0;
+        bool hidden = false;
+    };
+    std::unordered_map<uint64_t, SeatedPassenger> seatedPassengers_;
+    void releaseSeatedPassenger(const SeatedPassenger& seated);
+
     // Dependencies (non-owning)
     rendering::Renderer* renderer_;
     pipeline::AssetManager* assetManager_;

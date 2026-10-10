@@ -266,6 +266,7 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
         transportGuids_.erase(guid);
         serverUpdatedTransportGuids_.erase(guid);
         owner_.clearTransportAttachment(guid);
+        owner_.vehicleRoster().forget(guid);
         if (owner_.playerTransportGuidRef() == guid) {
             owner_.clearPlayerTransport();
         }
@@ -452,6 +453,17 @@ void EntityController::applyUpdateObjectBlock(const UpdateBlock& block, bool& ne
 void EntityController::updateNonPlayerTransportAttachment(const UpdateBlock& block,
                                                            const std::shared_ptr<Entity>& entity,
                                                            ObjectType entityType) {
+    // Every unit's vehicle row and seat, the player's own too: the create
+    // and movement blocks' UPDATEFLAG_VEHICLE (0x0074c750), and the living
+    // movement's transport and seat byte (0x007489c0).
+    if (entityType == ObjectType::UNIT || entityType == ObjectType::PLAYER) {
+        auto& roster = owner_.vehicleRoster();
+        roster.setVehicleId(block.guid, (block.updateFlags & 0x0080) ? block.vehicleId : 0u);
+        if (block.updateFlags & 0x0020) {  // UPDATEFLAG_LIVING
+            roster.setTransport(block.guid, block.onTransport ? block.transportGuid : 0,
+                                block.transportSeat, block.transportO);
+        }
+    }
     if (block.guid == owner_.getPlayerGuid()) return;
     if (entityType != ObjectType::UNIT && entityType != ObjectType::GAMEOBJECT) return;
 
@@ -2857,6 +2869,7 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
             }
         }
         owner_.clearTransportAttachment(data.guid);
+        owner_.vehicleRoster().forget(data.guid);
         entityManager.removeEntity(data.guid);
         LOG_INFO("Destroyed entity: 0x", std::hex, data.guid, std::dec,
                  " (", (data.isDeath ? "death" : "despawn"), ")");
