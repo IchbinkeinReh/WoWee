@@ -2122,7 +2122,10 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // here - asked at the player rather than at the camera. Indoors the
         // camera is forever being pushed off a wall and let back out, and that
         // is what turns a corridor into a bout of motion sickness.
-        if (cachedInsideWMO) {
+        // Interior groups only: cachedInsideWMO is any group's box, outdoor
+        // ones included, so every city street and the space under every
+        // archway capped the zoom at six yards with nothing in the way.
+        if (cachedInsideInteriorWMO) {
             if (!indoorZoomHeld_) {
                 indoorZoomHeld_ = true;
                 outdoorTargetDistance_ = userTargetDistance;
@@ -3811,7 +3814,7 @@ void CameraController::processMouseWheel(float delta) {
     // two numbers, so the game's own Max Camera Distance slider means something
     // at every position instead of only at its ends.
     float maxDist = MAX_DISTANCE_NORMAL * maxDistanceFactor_;
-    if (cachedInsideWMO) maxDist = std::min(maxDist, MAX_DISTANCE_INTERIOR);
+    if (cachedInsideInteriorWMO) maxDist = std::min(maxDist, MAX_DISTANCE_INTERIOR);
     userTargetDistance = glm::clamp(userTargetDistance, MIN_DISTANCE, maxDist);
 }
 

@@ -4648,6 +4648,7 @@ float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3
 
     for (size_t idx : tl_candidateScratch) {
         const auto& instance = instances[idx];
+        if (instance.hidden) continue;
         if (!ignoreCollisionFocus && outsideCollisionFocus(instance)) continue;
 
         glm::vec3 center = (instance.worldBoundsMin + instance.worldBoundsMax) * 0.5f;
@@ -4704,10 +4705,17 @@ float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3
             group.getTrianglesInRange(rMinX, rMinY, rMaxX, rMaxY, tl_triScratch);
 
             for (uint32_t triStart : tl_triScratch) {
+                // The camera's trace flags make the mask 0x82 (0x007ae140):
+                // a face flagged MOPY 0x02, no camera collision, is not there
+                // for it - arches, awnings and foliage cards the designers
+                // opened to the camera, which stopped the zoom with nothing
+                // to see in the way.
+                const uint32_t tri = triStart / 3;
+                if (tri < group.triMopyFlags.size() && (group.triMopyFlags[tri] & 0x02) != 0) continue;
                 const glm::vec3& v0 = verts[indices[triStart]];
                 const glm::vec3& v1 = verts[indices[triStart + 1]];
                 const glm::vec3& v2 = verts[indices[triStart + 2]];
-                glm::vec3 triNormal = group.triNormals[triStart / 3];
+                glm::vec3 triNormal = group.triNormals[tri];
                 if (glm::dot(triNormal, triNormal) < 0.5f) continue;  // degenerate
                 // Ignore near-grazing intersections that tend to come from ramps/arches
                 // and cause camera pull-in even when no meaningful wall is behind the player.
