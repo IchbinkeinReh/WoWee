@@ -326,6 +326,32 @@ std::optional<float> movingEntityFloor(rendering::Renderer* renderer,
     return best;
 }
 
+/// movingEntityFloor for one unit, asked every frame near the camera and
+/// every third frame past 40 yards, where a frame-old floor cannot be seen:
+/// in Dalaran every walker below a WMO floor sent a ray through the city a
+/// frame, a few hundred of them. A unit that has moved more than a yard and a
+/// half since asks at once wherever it is.
+std::optional<float> unitMovingFloor(uint64_t guid, rendering::Renderer* renderer,
+                                     const glm::vec3& renderPos,
+                                     const std::optional<glm::vec3>& previousRenderPos,
+                                     uint32_t frameNo) {
+    struct Last { glm::vec2 xy; std::optional<float> floor; };
+    static std::unordered_map<uint64_t, Last> last;
+    if (last.size() > 4096) last.clear();
+    const rendering::Camera* camera = renderer ? renderer->getCamera() : nullptr;
+    const glm::vec3 eye = camera ? camera->getPosition() : renderPos;
+    const glm::vec3 toEye = renderPos - eye;
+    const bool distant = glm::dot(toEye, toEye) > 40.0f * 40.0f;
+    auto it = last.find(guid);
+    if (distant && it != last.end() && ((guid + frameNo) % 3u) != 0) {
+        const glm::vec2 moved = glm::vec2(renderPos) - it->second.xy;
+        if (glm::dot(moved, moved) < 1.5f * 1.5f) return it->second.floor;
+    }
+    auto floor = movingEntityFloor(renderer, renderPos, previousRenderPos);
+    last[guid] = Last{glm::vec2(renderPos), floor};
+    return floor;
+}
+
 /// A wheel event's travel in clicks of a clicking wheel, which is what the
 /// interface scrolls by.
 ///
@@ -3769,6 +3795,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         const uint64_t currentTargetGuid = gameHandler->hasTarget()
             ? gameHandler->getTargetGuid() : 0;
         const uint64_t autoAttackGuid = gameHandler->getAutoAttackTargetGuid();
+        static uint32_t creatureFloorFrame = 0;
+        const uint32_t floorFrameNo = ++creatureFloorFrame;
         for (const auto& [guid, instanceId] : _creatureInstances) {
             auto entity = gameHandler->getEntityManager().getEntity(guid);
             if (!entity || entity->getType() != game::ObjectType::UNIT) continue;
@@ -3817,8 +3845,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             const bool groundCreature = !_creatureFlyingState.count(guid) &&
                                         !_creatureSwimmingState.count(guid);
             if (entity->isActivelyMoving() && groundCreature) {
-                if (auto floorZ = movingEntityFloor(renderer.get(), renderPos,
-                                                    previousGroundPos)) {
+                if (auto floorZ = unitMovingFloor(guid, renderer.get(), renderPos,
+                                                  previousGroundPos, floorFrameNo)) {
                     renderPos.z = heightOverFloor(*entity, renderPos.z, *floorZ);
                 }
             }
@@ -4040,6 +4068,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         const uint64_t playerTargetGuid = gameHandler->hasTarget()
             ? gameHandler->getTargetGuid() : 0;
         const uint64_t playerAutoAttackGuid = gameHandler->getAutoAttackTargetGuid();
+        static uint32_t playerFloorFrame = 0;
+        const uint32_t floorFrameNo = ++playerFloorFrame;
         for (const auto& [guid, instanceId] : _playerInstances) {
             auto entity = gameHandler->getEntityManager().getEntity(guid);
             if (!entity || entity->getType() != game::ObjectType::PLAYER) continue;
@@ -4077,8 +4107,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             const bool groundPlayer = !_pCreatureFlyingState.count(guid) &&
                                       !_pCreatureSwimmingState.count(guid);
             if (entity->isActivelyMoving() && groundPlayer) {
-                if (auto floorZ = movingEntityFloor(renderer.get(), renderPos,
-                                                    previousMountPos)) {
+                if (auto floorZ = unitMovingFloor(guid, renderer.get(), renderPos,
+                                                  previousMountPos, floorFrameNo)) {
                     renderPos.z = heightOverFloor(*entity, renderPos.z, *floorZ);
                 }
             }
