@@ -1311,6 +1311,9 @@ private:
         uint32_t casts;       ///< valid, visible and has a model
     };
     std::vector<ShadowCullEntry> shadowCull_;
+    /// The shadow cull copy after a swap-remove of `idx` (`last` moved into
+    /// it), or marked for a rebuild when it was not in step.
+    void followShadowCullSwap(size_t idx, size_t last);
     /// Ground clutter inside the first cascade, kept apart: tens of thousands
     /// of grass tufts, whose shadows nobody sees past a few dozen yards.
     std::vector<std::pair<uint32_t, uint32_t>> shadowGroundCandidates_[2];

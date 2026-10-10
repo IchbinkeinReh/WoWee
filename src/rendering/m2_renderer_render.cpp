@@ -235,8 +235,16 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     // object's scale comes from the server and is only known here.
     censusInstance(instance);
     instances.push_back(instance);
-    shadowCullDirty_ = true;
     size_t idx = instances.size() - 1;
+    // One entry on the end of the shadow cull copy, rather than all of it
+    // rebuilt at the next shadow pass: a city creates and removes spell
+    // effects and particle twins every frame, and each rebuilt 120 000.
+    if (!shadowCullDirty_ && shadowCull_.size() == idx) {
+        shadowCull_.emplace_back();
+        refreshShadowCullEntry(idx);
+    } else {
+        shadowCullDirty_ = true;
+    }
     // Track special instances for fast-path iteration
     if (!mdlRef.particleEmitters.empty()) {
         particleInstanceIndices_.push_back(idx);
@@ -336,8 +344,16 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
     // object's scale comes from the server and is only known here.
     censusInstance(instance);
     instances.push_back(instance);
-    shadowCullDirty_ = true;
     size_t idx = instances.size() - 1;
+    // One entry on the end of the shadow cull copy, rather than all of it
+    // rebuilt at the next shadow pass: a city creates and removes spell
+    // effects and particle twins every frame, and each rebuilt 120 000.
+    if (!shadowCullDirty_ && shadowCull_.size() == idx) {
+        shadowCull_.emplace_back();
+        refreshShadowCullEntry(idx);
+    } else {
+        shadowCullDirty_ = true;
+    }
     if (!mdl2.particleEmitters.empty()) {
         particleInstanceIndices_.push_back(idx);
     }

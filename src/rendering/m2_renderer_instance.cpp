@@ -35,6 +35,38 @@ thread_local std::unordered_set<uint32_t> tl_m2_candidateIdScratch;
 thread_local std::vector<uint32_t> tl_m2_collisionTriScratch;
 } // namespace m2_internal
 
+namespace {
+/// An index list after a swap-remove of `idx`: it goes, and `last`, moved
+/// into its place, is renamed to it.
+void followSwapRemove(std::vector<size_t>& v, size_t idx, size_t last) {
+    for (size_t k = 0; k < v.size();) {
+        if (v[k] == idx) {
+            v[k] = v.back();
+            v.pop_back();
+            continue;
+        }
+        ++k;
+    }
+    if (idx < last) {
+        for (size_t& x : v) {
+            if (x == last) x = idx;
+        }
+    }
+}
+}  // namespace
+
+void M2Renderer::followShadowCullSwap(size_t idx, size_t last) {
+    if (shadowCullDirty_ || shadowCull_.size() != last + 1) {
+        shadowCullDirty_ = true;
+        return;
+    }
+    if (idx < last) {
+        shadowCull_[idx] = shadowCull_[last];
+        shadowCull_[idx].index = static_cast<uint32_t>(idx);
+    }
+    shadowCull_.pop_back();
+}
+
 void M2Renderer::rebuildShadowCull() {
     shadowCull_.resize(instances.size());
     for (size_t i = 0; i < instances.size(); ++i) refreshShadowCullEntry(i);
@@ -451,7 +483,6 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
 }
 
 void M2Renderer::removeInstance(uint32_t instanceId) {
-    shadowCullDirty_ = true;
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;
     size_t idx = idxIt->second;
@@ -474,6 +505,8 @@ void M2Renderer::removeInstance(uint32_t instanceId) {
     destroyInstanceBones(inst, /*defer=*/true);
 
     // Swap-remove: move last element to the hole and pop_back to avoid O(n) shift
+    const size_t last = instances.size() - 1;
+    followShadowCullSwap(idx, last);
     instanceIndexById.erase(instanceId);
     if (idx < instances.size() - 1) {
         uint32_t movedId = instances.back().id;
@@ -484,19 +517,12 @@ void M2Renderer::removeInstance(uint32_t instanceId) {
         instances.pop_back();
     }
 
-    // Rebuild the lightweight auxiliary index vectors (animated, particle, etc.)
-    // These are small vectors of indices that are rebuilt cheaply.
-    animatedInstanceIndices_.clear();
-    particleOnlyInstanceIndices_.clear();
-    particleInstanceIndices_.clear();
-    for (size_t i = 0; i < instances.size(); i++) {
-        auto& ri = instances[i];
-        if (ri.cachedHasParticleEmitters) particleInstanceIndices_.push_back(i);
-        if (ri.cachedHasAnimation && !ri.cachedDisableAnimation)
-            animatedInstanceIndices_.push_back(i);
-        else if (ri.cachedHasParticleEmitters)
-            particleOnlyInstanceIndices_.push_back(i);
-    }
+    // The index lists follow the swap, as the shadow cull copy did above:
+    // both used to be rebuilt by walking every instance - 120 000 in a city,
+    // on each removal, and a city removes spell effects every frame.
+    followSwapRemove(animatedInstanceIndices_, idx, last);
+    followSwapRemove(particleOnlyInstanceIndices_, idx, last);
+    followSwapRemove(particleInstanceIndices_, idx, last);
 }
 
 void M2Renderer::setInstanceIsGameObject(uint32_t instanceId, bool isGameObject) {
@@ -532,7 +558,6 @@ void M2Renderer::setSkipWallCollision(uint32_t instanceId, bool skip) {
 }
 
 void M2Renderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
-    shadowCullDirty_ = true;
     if (instanceIds.empty() || instances.empty()) {
         return;
     }
@@ -590,13 +615,24 @@ void M2Renderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
     // later instance - a few hundred bytes each, tens of thousands of them -
     // down over the holes, which was most of what was left of the cost.
     std::sort(removedIndices.begin(), removedIndices.end(), std::greater<size_t>());
+    // A handful - a spell's effects going - follow each swap in the index
+    // lists; a tile's thousands rebuild them once below.
+    const bool fewRemoved = removedIndices.size() <= 32;
     for (size_t idx : removedIndices) {
+        const size_t last = instances.size() - 1;
+        followShadowCullSwap(idx, last);
+        if (fewRemoved) {
+            followSwapRemove(animatedInstanceIndices_, idx, last);
+            followSwapRemove(particleOnlyInstanceIndices_, idx, last);
+            followSwapRemove(particleInstanceIndices_, idx, last);
+        }
         if (idx + 1 < instances.size()) {
             instances[idx] = std::move(instances.back());
             instanceIndexById[instances[idx].id] = idx;
         }
         instances.pop_back();
     }
+    if (fewRemoved) return;
 
     animatedInstanceIndices_.clear();
     particleOnlyInstanceIndices_.clear();
