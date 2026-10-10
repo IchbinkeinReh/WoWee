@@ -94,6 +94,10 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
     if (inst.emitterAccumulators.size() != gpu.particleEmitters.size()) {
         inst.emitterAccumulators.resize(gpu.particleEmitters.size(), 0.0f);
     }
+    if (inst.emitterSplineEnd.size() != gpu.particleEmitters.size()) {
+        inst.emitterSplineEnd.assign(gpu.particleEmitters.size(), 0.0f);
+        inst.emitterSplinePin.assign(gpu.particleEmitters.size(), 0);
+    }
 
     std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
     std::uniform_real_distribution<float> distN(-1.0f, 1.0f);
@@ -157,80 +161,108 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             p.sizeVary = std::max(1.0f + distN(particleRng_) * em.scaleVary.x, 0.0001f);
             p.tileIndex = 0.0f;
 
-            // Position: emitter position transformed by bone matrix
-            glm::vec3 localPos = em.position;
-            // A plane emitter scatters its particles across a rectangle rather
-            // than letting them all leave from one point, every one of them
-            // (FUN_009815c0): a roll of -1..1 times half the length and half
-            // the width.
-            if (em.emitterType == 1) {
-                const float areaLength = interpFloat(em.emissionAreaLength, inst.animTime,
-                                                     inst.globalSequenceTime,
-                                                     inst.currentSequenceIndex,
-                                                     gpu.globalSequenceDurations);
-                const float areaWidth = interpFloat(em.emissionAreaWidth, inst.animTime,
-                                                    inst.globalSequenceTime,
-                                                    inst.currentSequenceIndex,
-                                                    gpu.globalSequenceDurations);
-                // Half the length and half the width either side of the emitter.
-                localPos.x += distN(particleRng_) * areaLength * 0.5f;
-                localPos.y += distN(particleRng_) * areaWidth * 0.5f;
+            const auto track = [&](const pipeline::M2AnimationTrack& t) {
+                return interpFloat(t, inst.animTime, inst.globalSequenceTime,
+                                   inst.currentSequenceIndex, gpu.globalSequenceDurations);
+            };
+            // Speed: the track's value times 1 + a roll of the speed spread
+            // (0x009792d0).
+            float speed = track(em.emissionSpeed);
+            speed *= 1.0f + distN(particleRng_) * track(em.speedVariation);
+            const float vRange = track(em.verticalRange);
+            const float hRange = track(em.horizontalRange);
+            const float zSource = m2_particle::zSourceValue(track(em.zSource));
+
+            // Where in the emitter's own space the particle starts, and its
+            // direction there - one function per shape.
+            glm::vec3 offset(0.0f);
+            glm::vec3 dir(0.0f, 0.0f, 1.0f);
+            if (em.emitterType == 2) {
+                // Sphere (0x00981950): on a shell between the area's length
+                // and width, at an elevation of -1..1 times the vertical
+                // range and an azimuth of -1..1 times the horizontal range;
+                // out from the centre, straight up under flag 0x8000, or away
+                // from zSource.
+                const float areaLength = track(em.emissionAreaLength);
+                const float areaWidth = track(em.emissionAreaWidth);
+                const float radius = areaLength + dist01(particleRng_) * (areaWidth - areaLength);
+                const float pol = distN(particleRng_) * vRange;
+                const float az = distN(particleRng_) * hRange;
+                const glm::vec3 out(std::cos(az) * std::cos(pol),
+                                    std::sin(az) * std::cos(pol),
+                                    std::sin(pol));
+                offset = out * radius;
+                if (zSource != 0.0f) {
+                    dir = m2_particle::sphereZSourceDirection(offset, zSource);
+                } else if (em.flags & 0x8000) {
+                    dir = glm::vec3(0.0f, 0.0f, 1.0f);
+                } else {
+                    dir = out;
+                }
+            } else if (em.emitterType == 3) {
+                // Spline (0x00981d40): somewhere between the start (length
+                // track, 0x00981c90) and the end (width track, 0x00981cd0) of
+                // the curve, exactly at the end once after the end moves.
+                // Up, turned about the curve by -1..1 times the vertical
+                // range and pushed out along that by 0..1 times the
+                // horizontal range; or away from zSource.
+                static const m2_particle::BezierSpline kNoSpline;
+                const auto& spline = ei < gpu.particleSplines.size() ? gpu.particleSplines[ei] : kNoSpline;
+                const float t0 = std::clamp(track(em.emissionAreaLength), 0.0f, 1.0f);
+                if (em.emissionAreaWidth.hasData()) {
+                    const float t1 = std::clamp(track(em.emissionAreaWidth), 0.0f, 1.0f);
+                    if (std::fabs(t1 - inst.emitterSplineEnd[ei]) >= 2.3841858e-07f) {
+                        inst.emitterSplineEnd[ei] = t1;
+                        inst.emitterSplinePin[ei] = 1;
+                    }
+                }
+                float t;
+                if (inst.emitterSplinePin[ei]) {
+                    t = inst.emitterSplineEnd[ei];
+                    inst.emitterSplinePin[ei] = 0;
+                } else {
+                    t = t0 + dist01(particleRng_) * (inst.emitterSplineEnd[ei] - t0);
+                }
+                offset = spline.position(t);
+                if (zSource != 0.0f) {
+                    dir = m2_particle::zSourceDirection(offset, zSource);
+                } else if (vRange != 0.0f) {
+                    dir = m2_particle::splineDirection(spline.tangent(t),
+                                                       distN(particleRng_) * vRange);
+                    if (hRange != 0.0f) {
+                        offset += dir * hRange * dist01(particleRng_);
+                    }
+                }
+            } else {
+                // Plane (0x009815c0): across a rectangle, a roll of -1..1
+                // times half the length and half the width; a lean off the
+                // emitter's up axis of -1..1 times the vertical range, turned
+                // about it by -1..1 times the horizontal range; or away from
+                // zSource.
+                if (em.emitterType == 1) {
+                    offset.x = distN(particleRng_) * track(em.emissionAreaLength) * 0.5f;
+                    offset.y = distN(particleRng_) * track(em.emissionAreaWidth) * 0.5f;
+                }
+                if (zSource != 0.0f) {
+                    dir = m2_particle::zSourceDirection(offset, zSource);
+                } else {
+                    const float pol = distN(particleRng_) * vRange;
+                    const float az = distN(particleRng_) * hRange;
+                    dir = glm::vec3(std::cos(az) * std::sin(pol),
+                                    std::sin(az) * std::sin(pol),
+                                    std::cos(pol));
+                }
             }
+
             glm::mat4 boneXform = glm::mat4(1.0f);
             if (em.bone < inst.boneMatrices.size()) {
                 boneXform = inst.boneMatrices[em.bone];
             }
-            glm::vec3 spawnLocal = localPos;
-
-            // Velocity: emission speed in upward direction + random spread
-            float speed = interpFloat(em.emissionSpeed, inst.animTime, inst.globalSequenceTime,
-                                      inst.currentSequenceIndex, gpu.globalSequenceDurations);
-            // (roll * speed spread + 1) * speed, as the client's FUN_009792d0.
-            speed *= 1.0f + distN(particleRng_) *
-                     interpFloat(em.speedVariation, inst.animTime, inst.globalSequenceTime,
-                                 inst.currentSequenceIndex, gpu.globalSequenceDurations);
-            float vRange = interpFloat(em.verticalRange, inst.animTime, inst.globalSequenceTime,
-                                       inst.currentSequenceIndex, gpu.globalSequenceDurations);
-            float hRange = interpFloat(em.horizontalRange, inst.animTime, inst.globalSequenceTime,
-                                       inst.currentSequenceIndex, gpu.globalSequenceDurations);
-
-            // The direction as the client rolls it (FUN_009815c0): a lean off
-            // the emitter's up axis of -1..1 times the vertical range, turned
-            // about it by -1..1 times the horizontal range - polar angles,
-            // whatever their size.
-            const float pol = distN(particleRng_) * vRange;
-            const float az = distN(particleRng_) * hRange;
-            glm::vec3 dir(std::cos(az) * std::sin(pol),
-                          std::sin(az) * std::sin(pol),
-                          std::cos(pol));
-
+            const glm::vec3 spawnLocal = em.position + offset;
             // Through the bone and the model, scale and all, as the client
             // multiplies it by the emitter's world matrix.
             glm::mat3 rotMat = glm::mat3(inst.modelMatrix * boneXform);
 
-            // A sphere emitter (FUN_00981950) is another shape: the particle
-            // starts on a shell between the area's length and width from
-            // the emitter, at an elevation of -1..1 times the vertical range
-            // above its plane and an azimuth of -1..1 times the horizontal
-            // range, and leaves straight out from the centre - in, when the
-            // speed is negative. Treated as a plane, every one of them left
-            // from the centre itself: the Eversong lamps' motes, which drift
-            // in toward the flame from all round it, crept out of one point.
-            if (em.emitterType == 2) {
-                const float areaLength = interpFloat(em.emissionAreaLength, inst.animTime,
-                                                     inst.globalSequenceTime,
-                                                     inst.currentSequenceIndex,
-                                                     gpu.globalSequenceDurations);
-                const float areaWidth = interpFloat(em.emissionAreaWidth, inst.animTime,
-                                                    inst.globalSequenceTime,
-                                                    inst.currentSequenceIndex,
-                                                    gpu.globalSequenceDurations);
-                const float radius = areaLength + dist01(particleRng_) * (areaWidth - areaLength);
-                dir = glm::vec3(std::cos(az) * std::cos(pol),
-                                std::sin(az) * std::cos(pol),
-                                std::sin(pol));
-                spawnLocal = em.position + dir * radius;
-            }
             // Flag 0x10 keeps the particle in the emitter bone's space
             // (FUN_00832ea0 maps it to 0x200; FUN_00981950 then leaves the
             // position and velocity untransformed), drawn through the bone as
@@ -279,35 +311,32 @@ void M2Renderer::updateParticles(M2Instance& inst, float dt) {
     if (!inst.cachedModel) return;
     const auto& gpu = *inst.cachedModel;
 
-    // Hoist per-emitter gravity out of the per-particle loop. Gravity (and the
-    // emissionSpeed fallback) depends only on the emitter and animation time -
-    // not on the particle itself - so interpFloat was being re-evaluated for
-    // every particle even when 100s of particles share one emitter.
+    // What each emitter hands its particles' step, sampled once per frame.
     constexpr size_t kMaxStackEmitters = 16;
-    float emitterGravStack[kMaxStackEmitters];
-    std::vector<float> emitterGravHeap;
+    m2_particle::StepParams stepStack[kMaxStackEmitters];
+    std::vector<m2_particle::StepParams> stepHeap;
     const size_t numEm = gpu.particleEmitters.size();
-    float* emitterGrav = nullptr;
-    if (numEm > 0) {
-        if (numEm <= kMaxStackEmitters) {
-            emitterGrav = emitterGravStack;
-        } else {
-            emitterGravHeap.resize(numEm);
-            emitterGrav = emitterGravHeap.data();
-        }
-        for (size_t e = 0; e < numEm; ++e) {
-            const auto& pem = gpu.particleEmitters[e];
-            // The gravity track's value, zero included (FUN_00979bb0 applies
-            // +0xb4 as it is).
-            const float grav = interpFloat(pem.gravity,
-                                           inst.animTime, inst.globalSequenceTime,
-                                           inst.currentSequenceIndex, gpu.globalSequenceDurations);
-            emitterGrav[e] = grav;
-        }
+    m2_particle::StepParams* stepParams = stepStack;
+    if (numEm > kMaxStackEmitters) {
+        stepHeap.resize(numEm);
+        stepParams = stepHeap.data();
     }
+    for (size_t e = 0; e < numEm; ++e) {
+        const auto& pem = gpu.particleEmitters[e];
+        // The gravity track's value, zero included (0x00979bb0 applies +0xb4
+        // as it is); drag and wind as the file gives them.
+        stepParams[e].gravity = interpFloat(pem.gravity,
+                                            inst.animTime, inst.globalSequenceTime,
+                                            inst.currentSequenceIndex, gpu.globalSequenceDurations);
+        stepParams[e].drag = pem.drag;
+        stepParams[e].wind = pem.windVector;
+        stepParams[e].windTime = pem.windTime;
+    }
+    static const m2_particle::StepParams kNoEmitter;
 
     for (size_t i = 0; i < inst.particles.size(); ) {
         auto& p = inst.particles[i];
+        const float age = p.life;
         p.life += dt;
         if (p.life >= p.maxLife) {
             // Swap-and-pop removal
@@ -315,13 +344,9 @@ void M2Renderer::updateParticles(M2Instance& inst, float dt) {
             inst.particles.pop_back();
             continue;
         }
-        // FUN_00979bb0: the move over the step with gravity's half-square
-        // term, then gravity on the velocity.
-        const float g = (p.emitterIndex >= 0 && static_cast<size_t>(p.emitterIndex) < numEm)
-                            ? emitterGrav[p.emitterIndex] : 0.0f;
-        p.position += p.velocity * dt;
-        p.position.z -= g * dt * dt * 0.5f;
-        p.velocity.z -= g * dt;
+        const auto& sp = (p.emitterIndex >= 0 && static_cast<size_t>(p.emitterIndex) < numEm)
+                             ? stepParams[p.emitterIndex] : kNoEmitter;
+        m2_particle::step(p.position, p.velocity, age, dt, sp);
         i++;
     }
 }

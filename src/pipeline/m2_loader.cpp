@@ -704,14 +704,20 @@ struct M2ParticleEmitterDisk {
     float emissionRateVary;         // 0xC4
     M2TrackDisk emissionAreaLength; // 0xC8
     M2TrackDisk emissionAreaWidth;  // 0xDC
-    M2TrackDisk deceleration;       // 0xF0
+    M2TrackDisk zSource;            // 0xF0 - emitter +0xbc (0x008309c0)
     FBlockDisk color;               // 0x104
     FBlockDisk alpha;               // 0x114
     FBlockDisk scale;               // 0x124
     float scaleVary[2];             // 0x134
     FBlockDisk headCell;            // 0x13C
     FBlockDisk tailCell;            // 0x14C - not read
-    uint8_t notRead[0x6C];          // 0x15C - tail length, twinkle, spin, wind, spline
+    uint8_t notRead0[0x18];         // 0x15C - tail length, twinkle, burst
+    float drag;                     // 0x174 - emitter +0x168 (0x00832ea0)
+    uint8_t notRead1[0x28];         // 0x178 - spin, tumble
+    float windVector[3];            // 0x1A0 - emitter +0x16c
+    float windTime;                 // 0x1AC - emitter +0x178
+    uint8_t notRead2[0x10];         // 0x1B0 - follow speeds and scales
+    M2ArrayDisk splinePoints;       // 0x1C0 - a spline emitter's curve (type 3)
     M2TrackDisk enabledIn;          // 0x1C8
 };
 static_assert(sizeof(M2ParticleEmitterDisk) == 0x1DC,
@@ -721,6 +727,10 @@ static_assert(offsetof(M2ParticleEmitterDisk, lifespanVary) == 0xAC &&
               offsetof(M2ParticleEmitterDisk, color) == 0x104 &&
               offsetof(M2ParticleEmitterDisk, scaleVary) == 0x134 &&
               offsetof(M2ParticleEmitterDisk, headCell) == 0x13C &&
+              offsetof(M2ParticleEmitterDisk, drag) == 0x174 &&
+              offsetof(M2ParticleEmitterDisk, windVector) == 0x1A0 &&
+              offsetof(M2ParticleEmitterDisk, windTime) == 0x1AC &&
+              offsetof(M2ParticleEmitterDisk, splinePoints) == 0x1C0 &&
               offsetof(M2ParticleEmitterDisk, enabledIn) == 0x1C8,
               "M2ParticleEmitterDisk fields must sit where the WotLK client reads them");
 
@@ -1864,7 +1874,7 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                 parseAnimTrackVanilla(m2Data, disk.emissionRate, em.emissionRate, TrackType::FLOAT);
                 parseAnimTrackVanilla(m2Data, disk.emissionAreaLength, em.emissionAreaLength, TrackType::FLOAT);
                 parseAnimTrackVanilla(m2Data, disk.emissionAreaWidth, em.emissionAreaWidth, TrackType::FLOAT);
-                parseAnimTrackVanilla(m2Data, disk.deceleration, em.deceleration, TrackType::FLOAT);
+                parseAnimTrackVanilla(m2Data, disk.deceleration, em.zSource, TrackType::FLOAT);
 
                 // Vanilla: NO FBlocks - color/alpha/scale are static inline
                 // values, three each over the particle's life.
@@ -1921,12 +1931,30 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                 parseAnimTrack(m2Data, disk.emissionRate, em.emissionRate, TrackType::FLOAT, emSeqFlags);
                 parseAnimTrack(m2Data, disk.emissionAreaLength, em.emissionAreaLength, TrackType::FLOAT, emSeqFlags);
                 parseAnimTrack(m2Data, disk.emissionAreaWidth, em.emissionAreaWidth, TrackType::FLOAT, emSeqFlags);
-                parseAnimTrack(m2Data, disk.deceleration, em.deceleration, TrackType::FLOAT, emSeqFlags);
+                parseAnimTrack(m2Data, disk.zSource, em.zSource, TrackType::FLOAT, emSeqFlags);
                 parseAnimTrack(m2Data, disk.enabledIn, em.enabledTrack, TrackType::BYTE_BOOL, emSeqFlags);
 
                 em.lifespanVary = disk.lifespanVary;
                 em.emissionRateVary = disk.emissionRateVary;
                 em.scaleVary = glm::vec2(disk.scaleVary[0], disk.scaleVary[1]);
+                em.drag = disk.drag;
+                em.windVector = glm::vec3(disk.windVector[0], disk.windVector[1], disk.windVector[2]);
+                em.windTime = disk.windTime;
+                // A spline emitter's points; 0x00832ea0 hands them to the
+                // curve only for type 3.
+                if (em.emitterType == 3) {
+                    const uint32_t n = disk.splinePoints.count;
+                    const uint32_t ofs = disk.splinePoints.offset;
+                    if (n > 0 && n < 4096 &&
+                        static_cast<size_t>(ofs) + static_cast<size_t>(n) * 12 <= m2Data.size()) {
+                        em.splinePoints.reserve(n);
+                        for (uint32_t i = 0; i < n; ++i) {
+                            em.splinePoints.emplace_back(readValue<float>(m2Data, ofs + i * 12),
+                                                         readValue<float>(m2Data, ofs + i * 12 + 4),
+                                                         readValue<float>(m2Data, ofs + i * 12 + 8));
+                        }
+                    }
+                }
 
                 // Parse FBlocks (color, alpha, scale) - FBlocks are 16 bytes each
                 parseFBlock(m2Data, disk.color, em.particleColor, FBlockValue::Color);

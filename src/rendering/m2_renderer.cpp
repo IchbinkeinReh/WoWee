@@ -283,8 +283,6 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
             {.location = 3, .binding = 0, .format = VK_FORMAT_R32_SFLOAT, .offset = 8 * sizeof(float)},          // tile
         };
 
-        // WOWEE_PFX_NODEPTH=1: particles ignore the depth buffer (a diagnostic).
-        const bool pfxNoDepth = std::getenv("WOWEE_PFX_NODEPTH") != nullptr;
         auto buildParticlePipeline = [&](VkPipelineColorBlendAttachmentState blend) -> VkPipeline {
             return PipelineBuilder()
                 .setShaders(particleVert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
@@ -292,7 +290,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                 .setVertexInput({pBind}, pAttrs)
                 .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
                 .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-                .setDepthTest(!pfxNoDepth, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+                .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
                 .setColorBlendAttachment(blend)
                 .setMultisample(vkCtx_->getMsaaSamples())
                 .setLayout(particlePipelineLayout_)
@@ -1660,6 +1658,12 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
 
     // Copy particle emitter data and resolve textures
     gpuModel.particleEmitters = model.particleEmitters;
+    gpuModel.particleSplines.resize(gpuModel.particleEmitters.size());
+    for (size_t i = 0; i < gpuModel.particleEmitters.size(); ++i) {
+        if (gpuModel.particleEmitters[i].emitterType == 3) {
+            gpuModel.particleSplines[i].setPoints(gpuModel.particleEmitters[i].splinePoints);
+        }
+    }
     gpuModel.particleTextures.resize(model.particleEmitters.size(), whiteTexture_.get());
     for (size_t ei = 0; ei < model.particleEmitters.size(); ei++) {
         uint16_t texIdx = model.particleEmitters[ei].texture;

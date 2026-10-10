@@ -11,6 +11,7 @@
 #include "pipeline/wmo_doodad_light.hpp"
 #include "rendering/m2_model_classifier.hpp"
 #include "rendering/m2_track_sampler.hpp"
+#include "rendering/m2_particle_motion.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -182,6 +183,9 @@ struct M2ModelGPU {
 
     // Particle emitter data (kept from M2Model)
     std::vector<pipeline::M2ParticleEmitter> particleEmitters;
+    /// A spline emitter's curve, measured once, per emitter (empty for the
+    /// other shapes).
+    std::vector<m2_particle::BezierSpline> particleSplines;
     std::vector<VkTexture*> particleTextures;    // Resolved Vulkan textures per emitter
     std::vector<VkDescriptorSet> particleTexSets; // Pre-allocated descriptor sets per emitter (stable, avoids per-frame alloc)
 
@@ -310,6 +314,11 @@ struct M2Instance {
 
     // Particle emitter state
     std::vector<float> emitterAccumulators;  // fractional particle counter per emitter
+    /// A spline emitter's end of the curve as last set (+0x23c, 0 at
+    /// construction) and whether the next particle is born exactly there
+    /// (+0x248): its setter 0x00981cd0 pins one whenever the end moves.
+    std::vector<float> emitterSplineEnd;
+    std::vector<uint8_t> emitterSplinePin;
     std::vector<M2Particle> particles;
 
     // Ribbon emitter state

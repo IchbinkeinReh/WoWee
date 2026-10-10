@@ -176,7 +176,10 @@ struct M2ParticleEmitter {
     M2AnimationTrack emissionRate;
     M2AnimationTrack emissionAreaLength;
     M2AnimationTrack emissionAreaWidth;
-    M2AnimationTrack deceleration;
+    // File track 0xF0, the client's zSource (+0xbc): when set, plane, sphere
+    // and spline emitters aim each particle away from the point this far
+    // above the emitter (0x009815c0, 0x00981950, 0x00981d40).
+    M2AnimationTrack zSource;
     M2FBlock particleColor;   // vec3 RGB at 3 timestamps
     M2FBlock particleAlpha;   // float (from uint16/32767) at 3 timestamps
     M2FBlock particleScale;   // float (x component of vec2) at 3 timestamps
@@ -196,6 +199,13 @@ struct M2ParticleEmitter {
     // +0x2A: which of a display's ParticleColor slots (11, 12, 13) recolours
     // this emitter; anything else keeps its own colours.
     uint16_t particleColorIndex = 0;
+    // WotLK 0x174, 0x1A0, 0x1AC: drag, wind and how long it blows (the
+    // emitter's +0x168, +0x16c and +0x178, applied by 0x00979bb0).
+    float drag = 0.0f;
+    glm::vec3 windVector{0.0f};
+    float windTime = 0.0f;
+    // WotLK 0x1C0: a spline emitter's (type 3) curve.
+    std::vector<glm::vec3> splinePoints;
     bool enabled = true;
 };
 

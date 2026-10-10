@@ -2838,3 +2838,9 @@ wowee_add_packet_test(test_ground_target)
 # zone events (game/zone_area.hpp).
 wowee_add_test(test_zone_area
     SOURCES test_zone_area.cpp)
+
+# ── test_m2_particle_motion ──────────────────────────────────
+# A particle's step (drag, wind, gravity) and the spline emitter's curve
+# (rendering/m2_particle_motion.hpp).
+wowee_add_test(test_m2_particle_motion
+    SOURCES test_m2_particle_motion.cpp)
