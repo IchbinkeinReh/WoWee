@@ -1134,17 +1134,29 @@ const std::vector<chat_channels::Row>& ChatHandler::channelRows() const {
         LOG_WARNING("ChatChannels.dbc has ", fields, " columns, too few for its names");
         return channelRows_;
     }
+    // Each string from its locale block, whichever column the client filled.
+    const uint32_t width = chat_channels::localeWidth(fields);
+    std::string summary;
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        const auto column = [&](uint32_t f) {
+            return f < fields ? dbc->getString(i, f) : std::string();
+        };
         chat_channels::Row row;
         row.id = dbc->getUInt32(i, idField);
         row.flags = dbc->getUInt32(i, flagsField);
-        row.name = dbc->getString(i, nameField);
-        row.shortcut = dbc->getString(i, shortcutField);
-        if (row.id == 0 || row.shortcut.empty()) continue;
-        LOG_INFO("ChatChannels: ", row.id, " flags=0x", std::hex, row.flags, std::dec,
-                 " '", row.shortcut, "' -> '", row.name, "'");
+        row.name = chat_channels::localizedText(column, nameField, std::min(width, fields - nameField));
+        row.shortcut = chat_channels::localizedText(column, shortcutField,
+                                                    std::min(width, fields - shortcutField));
+        // A row without both names cannot be joined: there is nothing to ask
+        // for it by and nothing to send.
+        if (row.id == 0 || row.shortcut.empty() || row.name.empty()) {
+            LOG_WARNING("ChatChannels.dbc row ", row.id, " has no name or shortcut - skipped");
+            continue;
+        }
+        summary += " " + std::to_string(row.id) + "='" + row.shortcut + "'/'" + row.name + "'";
         channelRows_.push_back(std::move(row));
     }
+    LOG_WARNING("ChatChannels: ", channelRows_.size(), " rows from ", fields, " columns:", summary);
     return channelRows_;
 }
 
@@ -1166,7 +1178,7 @@ chat_channels::Place ChatHandler::currentChannelPlace() const {
     // 0x00507a80 reads: "Dalaran", not the district the player stands in.
     auto* renderer = core::Application::getInstance().getRenderer();
     const auto* texts = renderer ? renderer->getZoneTexts() : nullptr;
-    if (!texts) return place;
+    if (!texts || texts->realZone.empty()) return place;
     place.zone = texts->realZone;
     // The zone's own AreaTable row (0x00bd080c is the zone's id, as
     // 0x0078f020 hands it to 0x005204c0).
@@ -1186,9 +1198,19 @@ std::optional<chat_channels::Join> ChatHandler::joinChannel(const std::string& c
                                                             const std::string& password,
                                                             bool byLogin) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return std::nullopt;
+    // Never a channel without a name - the client's interface refuses one
+    // before it gets here, and the server would make one called "".
+    if (channelName.empty()) {
+        LOG_WARNING("Not joining a channel with no name");
+        return std::nullopt;
+    }
     auto join = chat_channels::resolveJoin(channelRows(), channelName, currentChannelPlace());
     if (!join) {
-        LOG_INFO("Not joining channel '", channelName, "': no zone to name it after yet");
+        LOG_WARNING("Not joining channel '", channelName, "': no zone to name it after yet");
+        return std::nullopt;
+    }
+    if (join->name.empty()) {
+        LOG_WARNING("Not joining channel '", channelName, "': its row has no name");
         return std::nullopt;
     }
     // A zone channel goes without the password typed with it (0x00507a80
@@ -1201,6 +1223,8 @@ std::optional<chat_channels::Join> ChatHandler::joinChannel(const std::string& c
                                                : channelSlots_.byName(join->name) != nullptr;
     if (!held) {
         if (!channelSlots_.reserve(join->name, join->zoneChannelId)) {
+            // reserve() also refuses a name or id already held; "held" was
+            // checked above, so this is the slots being full.
             LOG_WARNING("Not joining channel '", join->name, "': all ",
                         chat_channels::kMaxSlots, " channel slots are taken");
             return std::nullopt;
@@ -1211,7 +1235,7 @@ std::optional<chat_channels::Join> ChatHandler::joinChannel(const std::string& c
             ? owner_.getPacketParsers()->buildJoinChannel(join->name, pass, join->zoneChannelId, byZone, 0)
             : JoinChannelPacket::build(join->name, pass, join->zoneChannelId, byZone, 0);
         owner_.getSocket()->send(packet);
-        LOG_INFO("Requesting to join channel: '", join->name, "' id=", join->zoneChannelId,
+        LOG_WARNING("Requesting to join channel: '", join->name, "' id=", join->zoneChannelId,
                  " (asked for as '", channelName, "')");
     }
     return join;
@@ -1313,7 +1337,7 @@ void ChatHandler::fireChannelNotice(ChatType type, const std::string& word, cons
         if (chatHistory_.size() > maxChatHistory_) chatHistory_.pop_front();
         logChatMessage(msg, "channel");
     }
-    LOG_INFO("Channel notice ", word, " for '", channelName, "' (", numbered, ")");
+    LOG_WARNING("Channel notice ", word, " for '", channelName, "' (", numbered, ")");
 
     if (!owner_.addonEventCallbackRef()) return;
     char guidBuf[32] = "";
@@ -1453,7 +1477,10 @@ void ChatHandler::updateLoginChannelJoin() {
     if (place.zone.empty()) return;
     const auto& rows = channelRows();
     if (rows.empty()) {
-        if (channelRowsLoaded_) loginChannelJoinDone_ = true;
+        if (channelRowsLoaded_) {
+            loginChannelJoinDone_ = true;
+            LOG_WARNING("No zone channels joined: ChatChannels.dbc gave no rows");
+        }
         return;
     }
     loginChannelJoinDone_ = true;
@@ -1473,8 +1500,8 @@ void ChatHandler::updateLoginChannelJoin() {
     drop(chatAutoJoin.localDefense, "LocalDefense");
     drop(chatAutoJoin.lfg, "LookingForGroup");
     zoneChannelMask_ = mask;
-    LOG_INFO("Joining zone channels for '", place.zone, "'", place.zoneIsCity ? " (a city)" : "",
-             ": mask=0x", std::hex, mask, std::dec);
+    LOG_WARNING("Joining zone channels for '", place.zone, "'", place.zoneIsCity ? " (a city)" : "",
+                ": mask=0x", std::hex, mask, std::dec);
     // In the DBC's order, by shortcut, as 0x00508090 does - which is what
     // numbers them: General 1, Trade 2, LocalDefense 3, LookingForGroup 4.
     // A row a zone has no channel for (Trade outside a city) is still asked

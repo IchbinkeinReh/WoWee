@@ -187,3 +187,44 @@ TEST_CASE("the name pattern takes one place and a literal percent", "[chat_chann
     CHECK(cc::formatName("100%% - %s", "X") == "100% - X");
     CHECK(cc::formatName("Plain", "X") == "Plain");
 }
+
+TEST_CASE("a German file's names are read from the deDE column of their block", "[chat_channels]") {
+    // Row 1 of a German ChatChannels.dbc as the loader leaves it: FactionGroup
+    // (column 2) zero, the enUS columns 3 and 20 empty - promotion took column
+    // 2 for the Name block's enUS column and missed it - and the text in deDE,
+    // columns 6 and 23.
+    const auto column = [](uint32_t f) -> std::string {
+        if (f == 6) return "Allgemein - %s";
+        if (f == 23) return "Allgemein";
+        return {};
+    };
+    CHECK(column(3).empty());
+    const uint32_t width = cc::localeWidth(37);
+    CHECK(width == 16u);
+    CHECK(cc::localizedText(column, 3, width) == "Allgemein - %s");
+    CHECK(cc::localizedText(column, 20, width) == "Allgemein");
+    CHECK(cc::localeWidth(21) == 8u);
+    CHECK(cc::localeWidth(5) == 1u);
+}
+
+TEST_CASE("rows read with empty names cannot fill the slots", "[chat_channels]") {
+    // What the first in-game run did: every row's Name read empty, so every
+    // zone channel resolved to "" and the first took a slot under that name;
+    // each next one then found "" held and was refused.
+    const std::vector<cc::Row> broken = {
+        {1, 0x80003, "", "Allgemein"},
+        {2, 0x3b, "", "Handel"},
+    };
+    auto j = cc::resolveJoin(broken, "Allgemein", kElwynn);
+    REQUIRE(j);
+    CHECK(j->name.empty());
+    cc::Slots slots;
+    // An empty name is never given a slot.
+    CHECK_FALSE(slots.reserve(j->name, j->zoneChannelId));
+    CHECK(slots.all().empty());
+    // Asking for one channel twice takes one slot.
+    CHECK(slots.reserve("Allgemein - Wald von Elwynn", 1));
+    CHECK_FALSE(slots.reserve("Allgemein - Wald von Elwynn", 1));
+    CHECK_FALSE(slots.reserve("Allgemein - Anderswo", 1));
+    CHECK(slots.all().size() == 1u);
+}
