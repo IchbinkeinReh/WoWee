@@ -2504,8 +2504,10 @@ void Renderer::update(float deltaTime) {
             lightingManager->setInteriorFog(interiorFog);
         }
         WOWEE_PROFILE_SCOPE("lighting", Cpu);
+        { WOWEE_PROFILE_SCOPE("lighting: zone", Cpu);
         lightingManager->update(characterPosition, mapId,
                                 gameTime, weatherIntensity, cameraLiquid, screenEffectLightOverride_);
+        }
         // A world object - unit, player or game object - on an interior floor
         // is lit by that floor's vertex colour, not the zone's light, and on
         // a transition face partly by the zone's (0x007a0d60, 0x007c7fe0); a
@@ -2551,6 +2553,7 @@ void Renderer::update(float deltaTime) {
                 return state;
             };
             const auto inPass = [&](const glm::vec3& p) { return wmoRenderer->inInteriorPass(p); };
+            { WOWEE_PROFILE_SCOPE("lighting: characters", Cpu);
             if (characterRenderer) {
                 characterRenderer->refreshInteriorLights(
                     [&](const glm::vec3& feet) {
@@ -2558,6 +2561,8 @@ void Renderer::update(float deltaTime) {
                     },
                     inPass, zl.ambientColor, zl.diffuseColor, deltaTime);
             }
+            }
+            WOWEE_PROFILE_SCOPE("lighting: game objects", Cpu);
             if (m2Renderer) {
                 m2Renderer->refreshGameObjectLights(
                     [&](const glm::vec3& feet, float startZ) { return objectFloor(feet, startZ, false); },

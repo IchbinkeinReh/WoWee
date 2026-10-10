@@ -117,15 +117,37 @@ void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const Interi
     const auto toBytes = [](const glm::vec3& c) {
         return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
     };
-    for (auto& inst : instances) {
-        // A doodad stays where it is: asked again only when the pass changes.
-        if (inst.isGameObject || inst.interiorPassGeneration != passGeneration) {
+    // A doodad stays where it is: asked again only when the pass changes,
+    // and only then is the whole list walked.
+    if (passGeneration != lightsPassGeneration_ || instances.size() != lightsInstanceCount_) {
+        lightsPassGeneration_ = passGeneration;
+        lightsInstanceCount_ = instances.size();
+        for (auto& inst : instances) {
+            if (inst.isGameObject || inst.interiorPassGeneration == passGeneration) continue;
             inst.interiorPassGeneration = passGeneration;
             inst.interiorPass = inInteriorPass && inInteriorPass(inst.position);
         }
-        if (!inst.isGameObject) continue;
+    }
+    // A game object that moved asks for its floor again - a few a frame, the
+    // rest keeping theirs a frame or two longer. Each is a ray through the
+    // world's geometry, and a city has dozens of objects that shift a little
+    // every frame.
+    int floorBudget = 8;
+    size_t keep = 0;
+    for (size_t k = 0; k < gameObjectInstanceIds_.size(); ++k) {
+        const uint32_t id = gameObjectInstanceIds_[k];
+        auto idxIt = instanceIndexById.find(id);
+        if (idxIt == instanceIndexById.end() || idxIt->second >= instances.size() ||
+            !instances[idxIt->second].isGameObject) {
+            continue;  // gone, or no longer one: dropped from the list
+        }
+        gameObjectInstanceIds_[keep++] = id;
+        auto& inst = instances[idxIt->second];
+        inst.interiorPassGeneration = passGeneration;
+        inst.interiorPass = inInteriorPass && inInteriorPass(inst.position);
         const glm::vec3 d = inst.position - inst.floorQueryPos;
-        if (!inst.floorQueried || glm::dot(d, d) >= 0.25f * 0.25f) {
+        if (!inst.floorQueried || (glm::dot(d, d) >= 0.25f * 0.25f && floorBudget > 0)) {
+            if (inst.floorQueried) --floorBudget;
             inst.floorQueried = true;
             inst.floorQueryPos = inst.position;
             inst.floor = floorAt(inst.position, wl::gameObjectFloorStart(inst.position.z, inst.worldBoundsMax.z));
@@ -151,6 +173,7 @@ void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const Interi
         inst.interiorDirect = light.direct * inst.directScale;
         inst.interiorTowardSun = light.towardSun;
     }
+    gameObjectInstanceIds_.resize(keep);
 }
 
 void M2Renderer::setInstanceHighlight(uint32_t instanceId, float amount) {
@@ -479,7 +502,9 @@ void M2Renderer::removeInstance(uint32_t instanceId) {
 void M2Renderer::setInstanceIsGameObject(uint32_t instanceId, bool isGameObject) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end() || idxIt->second >= instances.size()) return;
-    instances[idxIt->second].isGameObject = isGameObject;
+    auto& inst = instances[idxIt->second];
+    if (isGameObject && !inst.isGameObject) gameObjectInstanceIds_.push_back(instanceId);
+    inst.isGameObject = isGameObject;
 }
 
 void M2Renderer::setInstanceNoDistanceCull(uint32_t instanceId, bool noDistanceCull) {

@@ -4500,9 +4500,17 @@ void WMORenderer::updateInteriorPass(const glm::vec3& cameraPos, const Frustum* 
         ++interiorPassGeneration_;
     }
     interiorPassBounds_ = std::move(bounds);
+    interiorPassUnionMin_ = glm::vec3(std::numeric_limits<float>::max());
+    interiorPassUnionMax_ = glm::vec3(-std::numeric_limits<float>::max());
+    for (const auto& [lo, hi] : interiorPassBounds_) {
+        interiorPassUnionMin_ = glm::min(interiorPassUnionMin_, lo);
+        interiorPassUnionMax_ = glm::max(interiorPassUnionMax_, hi);
+    }
 }
 
 bool WMORenderer::inInteriorPass(const glm::vec3& pos) const {
+    if (glm::any(glm::lessThan(pos, interiorPassUnionMin_)) ||
+        glm::any(glm::greaterThan(pos, interiorPassUnionMax_))) return false;
     for (const auto& [lo, hi] : interiorPassBounds_) {
         if (glm::all(glm::greaterThanEqual(pos, lo)) && glm::all(glm::lessThanEqual(pos, hi))) return true;
     }

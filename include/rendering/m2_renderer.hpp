@@ -1198,6 +1198,13 @@ private:
     std::unordered_map<DedupKey, uint32_t, DedupHash> instanceDedupMap_;
 
     uint32_t nextInstanceId = 1;
+    /// The instances that are game objects, by id, for refreshGameObjectLights:
+    /// three hundred of a hundred thousand in Dalaran, and walking all of
+    /// them each frame to find those was most of its cost. An id whose
+    /// instance is gone or no longer a game object is dropped as it is met.
+    std::vector<uint32_t> gameObjectInstanceIds_;
+    uint64_t lightsPassGeneration_ = ~0ull;  ///< the pass the doodads were last asked against
+    size_t lightsInstanceCount_ = 0;         ///< and how many there were then: new ones are asked too
     uint32_t lastDrawCallCount = 0;
     size_t modelCacheLimit_ = 6000;
     uint32_t modelLimitRejectWarnings_ = 0;

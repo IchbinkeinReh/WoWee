@@ -1117,6 +1117,9 @@ private:
     /// flag per group, and the world bounds of the groups flagged.
     std::unordered_map<uint32_t, std::vector<uint8_t>> interiorPass_;
     std::vector<std::pair<glm::vec3, glm::vec3>> interiorPassBounds_;
+    /// The box around all of them: most of what is asked - every doodad in a
+    /// city, each time the pass changes - is outside it.
+    glm::vec3 interiorPassUnionMin_{0.0f}, interiorPassUnionMax_{-1.0f};
     const minimap_indoor::AreaRows* areaRows_ = nullptr;
     uint64_t interiorPassGeneration_ = 0;
 
