@@ -556,6 +556,22 @@ TEST_CASE("A localized client's strings are read where the enUS ones would be", 
         CHECK(dbc.getString(0, 21) == "Spells\\Holy.m2");
     }
 
+    SECTION("a column of zeros before a deDE block") {
+        // [ID, an int that is zero in every row, name x16, flags]. Read from
+        // the zero column, the block is just as well shaped - enUS empty,
+        // one text column - only one column early and with deDE at four:
+        // the name went into the zero column and enUS stayed empty.
+        constexpr uint32_t kN = 2;
+        std::vector<uint32_t> r(kN + 17, 0);
+        r[0] = 2050;
+        r[kN + 3] = heal;
+        r[kN + 16] = flags;
+        DBCFile dbc;
+        REQUIRE(dbc.load(buildSyntheticDBC(1, static_cast<uint32_t>(r.size()), {r}, strings)));
+        CHECK(dbc.getString(0, kN) == "Geringes Heilen");
+        CHECK(dbc.getUInt32(0, 1) == 0);
+    }
+
     SECTION("vanilla deDE, eight locale columns") {
         // [ID, name x8, flags, 0...]
         std::vector<uint32_t> r(12, 0);

@@ -199,6 +199,17 @@ void DBCFile::promoteLocalizedStrings() {
         uint32_t votes[16] = {};
         for (uint32_t f = 0; f + locales < fieldCount;) {
             uint32_t l = blockLocale(f, locales);
+            // A column of zeros just before a block makes the same shape one
+            // column early, with the locale one higher: enUS read as the
+            // zero column, the real enUS as koKR. What tells them apart is
+            // the flags column after the block - read from the early start
+            // it is the block's last locale, which is empty, and the real
+            // flags sit one further on.
+            while (l > 1 && f + 1 + locales < fieldCount && allZero[f + locales] &&
+                   !allZero[f + 1 + locales] && blockLocale(f + 1, locales) == l - 1) {
+                ++f;
+                --l;
+            }
             if (l != 0 && l <= maxLocale) {
                 blocks.emplace_back(f, l);
                 ++votes[l];
