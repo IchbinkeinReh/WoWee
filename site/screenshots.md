@@ -22,12 +22,6 @@ distance fog blended toward the sky's own horizon colour.
 **The login screen.** The interface is the game's own FrameXML, parsed and laid
 out by this client rather than reimplemented.
 
-<p align="center">
-  <img src="assets/krayonload.png" alt="The WoWee loading screen" width="100%" />
-</p>
-
-**Loading into the world.**
-
 ---
 
 ## Adding to this page
