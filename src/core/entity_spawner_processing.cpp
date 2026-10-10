@@ -1514,6 +1514,7 @@ void EntitySpawner::processPendingMount() {
     // on another, which goes first.
     if (mountInstanceId_ != 0) {
         if (mountDisplayId_ == mountDisplayId) return;
+        removeMountParticleTwin(mountInstanceId_);
         if (renderer_ && renderer_->getCharacterRenderer())
             renderer_->getCharacterRenderer()->removeInstance(mountInstanceId_);
         mountInstanceId_ = 0;
@@ -1786,6 +1787,7 @@ void EntitySpawner::processPendingMount() {
 
     mountInstanceId_ = instanceId;
     mountDisplayId_ = mountDisplayId;
+    spawnMountParticleTwin(mountDisplayId, modelId, instanceId);
     // Its own mount drawn now: a mount transition's ends (0x0073d5d0).
     if (auto* svs = renderer_->getSpellVisualSystem(); svs && gameHandler_)
         svs->onUnitMounted(gameHandler_->getPlayerGuid());
@@ -2027,6 +2029,7 @@ bool EntitySpawner::applyRemotePlayerMount(uint64_t guid, uint32_t displayId) {
         }
         cr->playAnimation(mountInstance, mountAnim, true);
         cr->playAnimation(riderInstance, riderPose(guid, riderInstance), true);
+        spawnMountParticleTwin(displayId, modelId, mountInstance);
         remotePlayerMounts_[guid] = {.displayId = displayId, .modelId = modelId,
                                      .instanceId = mountInstance, .riderHeight = riderHeight,
                                      .seatZ = seatZ, .scale = mountScale};

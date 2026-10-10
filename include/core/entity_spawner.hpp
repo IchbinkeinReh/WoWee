@@ -812,6 +812,14 @@ private:
     void spawnCreatureParticleTwin(uint64_t guid, uint32_t displayId, uint32_t charModelId,
                                    uint32_t charInstanceId);
     void syncCreatureParticleTwins();
+    /// A particles-only twin of a character-renderer instance; 0 when its
+    /// model has no emitters. See creatureParticleTwins_.
+    uint32_t spawnParticleTwin(uint32_t displayId, uint32_t charModelId, uint32_t charInstanceId);
+    /// Mounts' twins - a Felsteed's burning hooves - by the mount's own
+    /// instance id, since a mount is not in creatureInstances_.
+    std::unordered_map<uint32_t, uint32_t> mountParticleTwins_;
+    void spawnMountParticleTwin(uint32_t displayId, uint32_t charModelId, uint32_t mountInstanceId);
+    void removeMountParticleTwin(uint32_t mountInstanceId);
     /// The model of the game object a held ground-targeted spell summons, at
     /// the cursor's place (0x0080cce0 -> 0x007fe9e0, drawn by 0x004f66c0).
     void syncGroundTargetModel();

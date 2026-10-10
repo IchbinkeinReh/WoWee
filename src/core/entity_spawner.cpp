@@ -191,6 +191,7 @@ void EntitySpawner::shutdown() {
     // Clear all instances
     creatureInstances_.clear();
     creatureParticleTwins_.clear();
+    mountParticleTwins_.clear();
     creatureModelIds_.clear();
     creatureDisplayIds_.clear();
     requestedCreatureDisplayIds_.clear();
@@ -242,6 +243,7 @@ void EntitySpawner::resetAllState() {
     // Clear all instance tracking
     creatureInstances_.clear();
     creatureParticleTwins_.clear();
+    mountParticleTwins_.clear();
     creatureModelIds_.clear();
     creatureDisplayIds_.clear();
     requestedCreatureDisplayIds_.clear();
@@ -317,6 +319,7 @@ bool EntitySpawner::hasWorkPending() const {
 
 void EntitySpawner::clearMountState() {
     if (mountInstanceId_ != 0 && renderer_) {
+        removeMountParticleTwin(mountInstanceId_);
         if (auto* charRenderer = renderer_->getCharacterRenderer()) {
             charRenderer->removeInstance(mountInstanceId_);
         }
@@ -372,7 +375,10 @@ void EntitySpawner::removeRemotePlayerMount(uint64_t guid) {
     if (it == remotePlayerMounts_.end()) return;
     if (renderer_) {
         if (auto* cr = renderer_->getCharacterRenderer()) {
-            if (it->second.instanceId != 0) cr->removeInstance(it->second.instanceId);
+            if (it->second.instanceId != 0) {
+                removeMountParticleTwin(it->second.instanceId);
+                cr->removeInstance(it->second.instanceId);
+            }
             auto playerIt = playerInstances_.find(guid);
             if (playerIt != playerInstances_.end()) {
                 cr->playAnimation(playerIt->second, rendering::anim::STAND, true);
@@ -2606,27 +2612,48 @@ void EntitySpawner::refreshCreatureScales() {
 
 void EntitySpawner::spawnCreatureParticleTwin(uint64_t guid, uint32_t displayId,
                                               uint32_t charModelId, uint32_t charInstanceId) {
+    if (const uint32_t twin = spawnParticleTwin(displayId, charModelId, charInstanceId)) {
+        creatureParticleTwins_[guid] = twin;
+    }
+}
+
+void EntitySpawner::spawnMountParticleTwin(uint32_t displayId, uint32_t charModelId,
+                                           uint32_t mountInstanceId) {
+    if (const uint32_t twin = spawnParticleTwin(displayId, charModelId, mountInstanceId)) {
+        mountParticleTwins_[mountInstanceId] = twin;
+    }
+}
+
+void EntitySpawner::removeMountParticleTwin(uint32_t mountInstanceId) {
+    auto it = mountParticleTwins_.find(mountInstanceId);
+    if (it == mountParticleTwins_.end()) return;
+    if (auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr) m2->removeInstance(it->second);
+    mountParticleTwins_.erase(it);
+}
+
+uint32_t EntitySpawner::spawnParticleTwin(uint32_t displayId, uint32_t charModelId,
+                                          uint32_t charInstanceId) {
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
-    if (!charRenderer || !m2) return;
+    if (!charRenderer || !m2) return 0;
     const pipeline::M2Model* data = charRenderer->getModelData(charModelId);
-    if (!data || (data->particleEmitters.empty() && data->ribbonEmitters.empty())) return;
+    if (!data || (data->particleEmitters.empty() && data->ribbonEmitters.empty())) return 0;
 
     // The same model, loaded once into the M2 renderer for its emitters and
     // drawn for nothing else.
     const uint32_t twinModelId = 0x5A000000u + charModelId;
     if (!m2->hasModel(twinModelId)) {
-        if (!m2->loadModel(*data, twinModelId)) return;
+        if (!m2->loadModel(*data, twinModelId)) return 0;
         m2->setModelParticlesOnly(twinModelId);
     }
     glm::mat4 model(1.0f);
     const std::vector<glm::mat4>* bones = nullptr;
     int seq = 0;
     float t = 0.0f, gt = 0.0f;
-    if (!charRenderer->getInstancePose(charInstanceId, model, bones, seq, t, gt)) return;
+    if (!charRenderer->getInstancePose(charInstanceId, model, bones, seq, t, gt)) return 0;
     const uint32_t twin = m2->createInstance(twinModelId, glm::vec3(model[3]), glm::vec3(0.0f), 1.0f,
                                             /*allowPositionDedup=*/false);
-    if (twin == 0) return;
+    if (twin == 0) return 0;
     m2->setInstanceExternalPose(twin, model, *bones, seq, t, gt);
     if (auto disp = displayDataMap_.find(displayId);
         disp != displayDataMap_.end() && disp->second.particleColorId != 0) {
@@ -2634,11 +2661,11 @@ void EntitySpawner::spawnCreatureParticleTwin(uint64_t guid, uint32_t displayId,
             m2->setInstanceParticleColors(twin, pc->second);
         }
     }
-    creatureParticleTwins_[guid] = twin;
+    return twin;
 }
 
 void EntitySpawner::syncCreatureParticleTwins() {
-    if (creatureParticleTwins_.empty()) return;
+    if (creatureParticleTwins_.empty() && mountParticleTwins_.empty()) return;
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
     if (!charRenderer || !m2) return;
@@ -2650,6 +2677,14 @@ void EntitySpawner::syncCreatureParticleTwins() {
         int seq = 0;
         float t = 0.0f, gt = 0.0f;
         if (charRenderer->getInstancePose(it->second, model, bones, seq, t, gt) && bones) {
+            m2->setInstanceExternalPose(twin, model, *bones, seq, t, gt);
+        }
+    }    for (const auto& [mountInstance, twin] : mountParticleTwins_) {
+        glm::mat4 model(1.0f);
+        const std::vector<glm::mat4>* bones = nullptr;
+        int seq = 0;
+        float t = 0.0f, gt = 0.0f;
+        if (charRenderer->getInstancePose(mountInstance, model, bones, seq, t, gt) && bones) {
             m2->setInstanceExternalPose(twin, model, *bones, seq, t, gt);
         }
     }
