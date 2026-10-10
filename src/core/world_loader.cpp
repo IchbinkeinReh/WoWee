@@ -1051,6 +1051,11 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     {
         const float kMinWarmupSeconds = 2.0f;   // minimum time to drain network packets
         const float kMaxWarmupSeconds = 25.0f;  // hard cap to avoid infinite stall
+        // The floor is waited for longer than the rest. Entering with work
+        // still queued costs a few pop-ins; entering with no floor leaves
+        // the character hanging in the air over Dalaran, or under Undercity,
+        // until it streams in - which is what the loading screen is for.
+        const float kMaxGroundWaitSeconds = 90.0f;
         const auto warmupStart = std::chrono::high_resolution_clock::now();
         // NPCs dressed on the spot while the loading screen is up (see
         // EntitySpawner::setDressPrefetchBypass), however the warmup ends.
@@ -1145,12 +1150,40 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 // floor at the wrong location and eventually released at hard cap.
                 float rx = spawnRender.x, ry = spawnRender.y, rz = spawnRender.z;
 
+                // Asked where the player will stand. Only the camera sets the
+                // collision focus, and it has not run here, so the focus is
+                // wherever the last map left it; the queries below are about
+                // the spawn.
+                if (auto* wmo = renderer_->getWMORenderer()) {
+                    wmo->setCollisionFocus(glm::vec3(rx, ry, rz), 120.0f);
+                }
+                if (auto* m2 = renderer_->getM2Renderer()) {
+                    m2->setCollisionFocus(glm::vec3(rx, ry, rz), 120.0f);
+                }
                 // Check WMO floor FIRST (cities like Stormwind stand on WMO floors).
                 // Terrain exists below WMOs but at the wrong height.
+                // From just above the feet, as the player's own physics asks,
+                // and only then from higher: a probe five yards up starts
+                // above whatever overhangs the spot - an arch, a balcony -
+                // and in Dalaran it answered with a floor two hundred yards
+                // down, so the loading screen waited out its cap for a floor
+                // the player was already standing on.
                 if (auto* wmo = renderer_->getWMORenderer()) {
-                    auto wmoH = wmo->getFloorHeight(rx, ry, rz + 5.0f);
-                    if (wmoH.has_value() && std::abs(*wmoH - rz) < 15.0f) {
-                        groundReady = true;
+                    for (const float lift : {1.0f, 5.0f}) {
+                        auto wmoH = wmo->getFloorHeight(rx, ry, rz + lift);
+                        if (wmoH.has_value() && std::abs(*wmoH - rz) < 15.0f) {
+                            groundReady = true;
+                            break;
+                        }
+                    }
+                }
+                // Or a doodad's, which the player's physics stands on as well.
+                if (!groundReady) {
+                    if (auto* m2 = renderer_->getM2Renderer()) {
+                        auto m2H = m2->getFloorHeight(rx, ry, rz + 1.0f);
+                        if (m2H.has_value() && std::abs(*m2H - rz) < 15.0f) {
+                            groundReady = true;
+                        }
                     }
                 }
                 // Check terrain - but only if it's close to spawn Z (within 15 units).
@@ -1168,8 +1201,17 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 // where getHeightAt returns a slightly different value than the server's
                 // spawn Z (e.g. terrain LOD, MCNK chunk boundaries, or spawn inside a
                 // building where floor height differs from terrain below).
+                //
+                // Not where the terrain is nowhere near the spawn height: that
+                // is a character standing on a building - Dalaran floats far
+                // above its terrain, Undercity lies under it - and the floor
+                // it stands on is a WMO still streaming in. Accepting the
+                // tiles there let the loading screen go with nothing under it.
                 if (!groundReady && elapsed >= 5.0f) {
-                    if (auto* tm = renderer_->getTerrainManager()) {
+                    auto* tm = renderer_->getTerrainManager();
+                    const auto terrainHere = tm ? tm->getHeightAt(rx, ry) : std::nullopt;
+                    const bool onStructure = terrainHere.has_value() && std::abs(*terrainHere - rz) > 40.0f;
+                    if (tm && !onStructure) {
                         if (tm->getLoadedTileCount() >= 4) {
                             groundReady = true;
                             LOG_DEBUG("Warmup: using tile-count fallback (", tm->getLoadedTileCount(), " tiles) after ", elapsed, "s");
@@ -1193,10 +1235,16 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
 
             // Exit when: (min time passed AND queues drained AND ground ready) OR hard cap
             bool readyToExit = (elapsed >= kMinWarmupSeconds && idleIterations >= kIdleThreshold && groundReady);
-            if (readyToExit || elapsed >= kMaxWarmupSeconds) {
-                if (elapsed >= kMaxWarmupSeconds && !groundReady) {
-                    LOG_WARNING("Warmup hit hard cap (", kMaxWarmupSeconds, "s), ground NOT ready - may fall through world");
-                } else if (elapsed >= kMaxWarmupSeconds) {
+            // Past the queue cap with the floor there, go; without it, wait
+            // for the floor up to its own cap.
+            const bool capped = groundReady ? elapsed >= kMaxWarmupSeconds
+                                            : elapsed >= kMaxGroundWaitSeconds;
+            if (readyToExit || capped) {
+                LOG_INFO("Warmup done after ", elapsed, "s: ground ", groundReady ? "ready" : "NOT ready",
+                         ", queues ", queuesEmpty ? "drained" : "pending");
+                if (capped && !groundReady) {
+                    LOG_WARNING("Warmup hit hard cap (", kMaxGroundWaitSeconds, "s), ground NOT ready - may fall through world");
+                } else if (capped) {
                     LOG_WARNING("Warmup hit hard cap (", kMaxWarmupSeconds, "s), entering world with pending work");
                 }
                 break;
