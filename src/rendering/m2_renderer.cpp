@@ -2173,6 +2173,8 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
         src.positions.push_back(v.position);
         src.normals.push_back(v.normal);
     }
+    src.uvs.assign(model.vertices.size(), glm::vec2(0.0f));
+    for (size_t i = 0; i < model.vertices.size(); ++i) src.uvs[i] = model.vertices[i].texCoords[0];
     for (const auto& batch : gpuModel.batches) {
         if (batch.blendMode >= 2 || batch.batchOpacity < 0.01f ||
             batch.starLayer || batch.glowCardLike) {
@@ -2180,10 +2182,30 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
         }
         glm::vec3 albedo = batch.tint;
         float opacity = 1.0f;
+        uint32_t mask = RtScene::kInvalid;
         if (batch.texture) {
             albedo *= batch.texture->averageColor();
-            if (m2BatchNeedsAlphaTest(static_cast<uint8_t>(batch.blendMode), batch.hasAlpha)) {
+            // Cut out where the shadow map cuts it out: an alpha-key batch,
+            // and on a model whose shadow is drawn in the foliage pass any
+            // batch with alpha (renderShadow's foliage pass binds its
+            // texture and tests it at half).
+            const bool cutout =
+                m2BatchNeedsAlphaTest(static_cast<uint8_t>(batch.blendMode), batch.hasAlpha) ||
+                (gpuModel.shadowWindFoliage && batch.hasAlpha);
+            if (cutout) {
                 opacity = batch.texture->alphaCoverage();
+                const int coordSource = batch.coordSources & 3;  // 0 UV0, 1 UV1, 2 env
+                if (opacity < 1.0f && batch.texture->alphaMask() && coordSource < 2) {
+                    mask = rtScene_->addAlphaMask(*batch.texture->alphaMask());
+                    if (coordSource == 1) {
+                        const size_t endUv = std::min<size_t>(size_t(batch.indexStart) + batch.indexCount,
+                                                              model.indices.size());
+                        for (size_t i = batch.indexStart; i < endUv; ++i) {
+                            const uint16_t vi = model.indices[i];
+                            if (vi < model.vertices.size()) src.uvs[vi] = model.vertices[vi].texCoords[1];
+                        }
+                    }
+                }
             }
         }
         const float surface = packRtSurface(albedo, opacity);
@@ -2197,6 +2219,7 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
             src.indices.push_back(model.indices[i + 2]);
             src.surfaces.push_back(surface);
             src.oneSided.push_back(oneSided);
+            src.masks.push_back(mask);
         }
     }
     gpuModel.rtMesh = rtScene_->addMesh(std::move(src));

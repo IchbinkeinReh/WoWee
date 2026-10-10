@@ -6,6 +6,8 @@
 #include "pipeline/blp_loader.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
+#include <array>
+#include <memory>
 #include <string>
 #include <cstdint>
 #include <glm/glm.hpp>
@@ -53,6 +55,10 @@ public:
     /// for a texture that came in any other way.
     [[nodiscard]] const glm::vec3& averageColor() const { return averageColor_; }
     [[nodiscard]] float alphaCoverage() const { return alphaCoverage_; }
+    /// Which of a 64x64 grid over it is visible (BLPImage::alphaMask), taken
+    /// by uploadBLP for a texture with any transparency; null otherwise.
+    /// What the ray traced lighting alpha-tests a cutout by.
+    [[nodiscard]] const std::array<uint64_t, 64>* alphaMask() const { return alphaMask_.get(); }
 
     /// What every uploadBLP so far actually cost, and what the same textures
     /// would have cost decoded.
@@ -147,6 +153,7 @@ private:
     VmaAllocator allocator_ = VK_NULL_HANDLE;
     glm::vec3 averageColor_{1.0f};
     float alphaCoverage_ = 1.0f;
+    std::unique_ptr<std::array<uint64_t, 64>> alphaMask_;
 };
 
 } // namespace rendering

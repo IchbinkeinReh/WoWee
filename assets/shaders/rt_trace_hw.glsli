@@ -20,20 +20,22 @@ uint rtTriIndex(uint instance, uint primitive) {
     return rtMeshes[rtInstances[instance].mesh].triOffset + primitive;
 }
 
-bool rtAcceptCandidate(uint inst, uint prim, inout uint rng) {
-    float opacity = rtUnpackSurface(rtTris[rtTriIndex(inst, prim)].v0.w).a;
-    return opacity >= 1.0 || rtRandom(rng) < opacity;
+#include "rt_trace_alpha.glsli"
+
+bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, inout uint rng) {
+    return rtSolidAt(rtTris[rtTriIndex(inst, prim)], bary, rng);
 }
 
-// Resolve translucent candidates by their opacity; opaque geometry never
-// reaches the loop body. A macro because a rayQueryEXT cannot be passed to a
-// function.
+// Resolve translucent candidates by their cutout or opacity; opaque geometry
+// never reaches the loop body. A macro because a rayQueryEXT cannot be passed
+// to a function.
 #define RT_RESOLVE_CANDIDATES(q, rng)                                                  \
     while (rayQueryProceedEXT(q)) {                                                    \
         if (rayQueryGetIntersectionTypeEXT(q, false) ==                                \
                 gl_RayQueryCandidateIntersectionTriangleEXT &&                         \
             rtAcceptCandidate(rayQueryGetIntersectionInstanceCustomIndexEXT(q, false), \
-                              rayQueryGetIntersectionPrimitiveIndexEXT(q, false), rng)) \
+                              rayQueryGetIntersectionPrimitiveIndexEXT(q, false),      \
+                              rayQueryGetIntersectionBarycentricsEXT(q, false), rng))  \
             rayQueryConfirmIntersectionEXT(q);                                         \
     }
 

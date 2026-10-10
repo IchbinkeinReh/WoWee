@@ -2,7 +2,10 @@
 
 #include "core/logger.hpp"
 
+#include <glm/gtc/packing.hpp>
+
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 
@@ -16,6 +19,8 @@ constexpr uint32_t kBindingMeshes = 2;
 constexpr uint32_t kBindingInstances = 3;
 constexpr uint32_t kBindingTlasNodes = 4;
 constexpr uint32_t kBindingTlas = 5;
+constexpr uint32_t kBindingTriExtras = 6;
+constexpr uint32_t kBindingMasks = 7;
 
 constexpr uint32_t kInitialTriangles = 1u << 18;
 constexpr uint32_t kInitialNodes = 1u << 17;
@@ -64,6 +69,8 @@ bool RtScene::initialize(VkContext* ctx) {
     }
     nodePool_.elementSize = sizeof(RtBvhNode);
     nodePool_.usage = poolUsage;
+    extraPool_.elementSize = sizeof(glm::uvec4);
+    extraPool_.usage = poolUsage;
 
     placeholder_ = createBuffer(ctx_->getAllocator(), 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                 VMA_MEMORY_USAGE_CPU_TO_GPU);
@@ -119,6 +126,8 @@ bool RtScene::createDescriptors() {
     addBinding(kBindingTriangles, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     addBinding(kBindingMeshes, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     addBinding(kBindingInstances, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    addBinding(kBindingTriExtras, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    addBinding(kBindingMasks, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     if (backend_ == Backend::Software) {
         addBinding(kBindingNodes, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         addBinding(kBindingTlasNodes, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -134,7 +143,7 @@ bool RtScene::createDescriptors() {
 
     std::vector<VkDescriptorPoolSize> sizes;
     sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                     (backend_ == Backend::Software ? 5u : 3u) * MAX_FRAMES_IN_FLIGHT});
+                     (backend_ == Backend::Software ? 7u : 5u) * MAX_FRAMES_IN_FLIGHT});
     if (backend_ == Backend::Hardware) {
         sizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, MAX_FRAMES_IN_FLIGHT});
     }
@@ -177,6 +186,8 @@ void RtScene::shutdown() {
     }
     destroyBuffer(alloc, triPool_.buffer);
     destroyBuffer(alloc, nodePool_.buffer);
+    destroyBuffer(alloc, extraPool_.buffer);
+    destroyBuffer(alloc, maskBuffer_);
     destroyBuffer(alloc, meshTable_);
     destroyBuffer(alloc, placeholder_);
     if (descriptorPool_) vkDestroyDescriptorPool(dev, descriptorPool_, nullptr);
@@ -201,6 +212,8 @@ RtScene::MeshId RtScene::addMesh(MeshSource source) {
     if (source.surfaces.size() != 1 && source.surfaces.size() != triCount) return kInvalid;
     if (!source.normals.empty() && source.normals.size() != source.positions.size()) source.normals.clear();
     if (!source.oneSided.empty() && source.oneSided.size() != triCount) source.oneSided.clear();
+    if (!source.masks.empty() && source.masks.size() != triCount) source.masks.clear();
+    if (!source.uvs.empty() && source.uvs.size() != source.positions.size()) source.uvs.clear();
     RtAabb bounds;
     for (uint32_t idx : source.indices) {
         if (idx >= source.positions.size()) return kInvalid;
@@ -254,9 +267,20 @@ void RtScene::buildMesh(Mesh& m) {
         }
         tri.v0 = glm::vec4(src.positions[i0], surface);
         tri.v1 = glm::vec4(src.positions[i1], front);
-        tri.v2 = glm::vec4(src.positions[i2], 0.0f);
+        // v2.w: 1 + the index of the cutout's UVs and mask in the extras
+        // pool, as bits; 0 for none. Local here, made absolute on upload,
+        // since the hierarchy build reorders the triangles.
+        uint32_t extra = 0;
+        if (!src.uvs.empty() && !src.masks.empty() && src.masks[t] != kInvalid &&
+            src.masks[t] < masks_.size() / 64) {
+            m.extras.emplace_back(glm::packHalf2x16(src.uvs[i0]), glm::packHalf2x16(src.uvs[i1]),
+                                  glm::packHalf2x16(src.uvs[i2]), src.masks[t]);
+            extra = static_cast<uint32_t>(m.extras.size());
+        }
+        tri.v2 = glm::vec4(src.positions[i2], std::bit_cast<float>(extra));
         if (unpackRtSurface(surface).a < 1.0f) m.hasTranslucent = true;
     }
+    m.extraCount = static_cast<uint32_t>(m.extras.size());
     RtBvh bvh = buildRtTriangleBvh(m.tris);
     m.nodeCount = static_cast<uint32_t>(bvh.nodes.size());
     m.nodes = std::move(bvh.nodes);
@@ -292,6 +316,9 @@ void RtScene::releaseGpu() {
         m.tris.shrink_to_fit();
         m.nodes.clear();
         m.nodes.shrink_to_fit();
+        m.extras.clear();
+        m.extras.shrink_to_fit();
+        m.extraOffset = RtRangeAllocator::kFailed;
     }
     pendingMeshes_.clear();
     for (auto& fr : frames_) {
@@ -305,10 +332,14 @@ void RtScene::releaseGpu() {
         fr = FrameResources{};
         fr.set = set;
     }
-    for (GpuPool* p : {&triPool_, &nodePool_}) {
+    for (GpuPool* p : {&triPool_, &nodePool_, &extraPool_}) {
         destroyBuffer(alloc, p->buffer);
         p->alloc = RtRangeAllocator{};
     }
+    // The masks stay on the CPU; the GPU copy is made again when it is needed.
+    destroyBuffer(alloc, maskBuffer_);
+    maskCapacity_ = 0;
+    masksUploaded_ = 0;
     destroyBuffer(alloc, meshTable_);
     meshTableCapacity_ = 0;
     meshTableDirty_ = true;
@@ -330,6 +361,7 @@ void RtScene::removeMesh(MeshId id) {
     // slot are released only once every frame slot has been fenced.
     const uint32_t triOffset = m.triOffset, triCount = m.triCount;
     const uint32_t nodeOffset = m.nodeOffset, nodeCount = m.nodeCount;
+    const uint32_t extraOffset = m.extraOffset, extraCount = m.extraCount;
     VkAccelerationStructureKHR blas = m.blas;
     AllocatedBuffer blasBuffer = m.blasBuffer;
     m = Mesh{};
@@ -341,7 +373,7 @@ void RtScene::removeMesh(MeshId id) {
     VmaAllocator alloc = ctx_->getAllocator();
     auto destroyAs = pfnDestroyAs_;
     ctx_->deferAfterAllFrameFences([this, alive, epoch, dev, alloc, destroyAs, id, triOffset,
-                                    triCount, nodeOffset, nodeCount, blas,
+                                    triCount, nodeOffset, nodeCount, extraOffset, extraCount, blas,
                                     blasBuffer]() mutable {
         if (blas) destroyAs(dev, blas, nullptr);
         destroyBuffer(alloc, blasBuffer);
@@ -349,6 +381,8 @@ void RtScene::removeMesh(MeshId id) {
         if (epoch == gpuEpoch_ && triOffset != RtRangeAllocator::kFailed) triPool_.alloc.release(triOffset, triCount);
         if (epoch == gpuEpoch_ && nodeOffset != RtRangeAllocator::kFailed)
             nodePool_.alloc.release(nodeOffset, nodeCount);
+        if (epoch == gpuEpoch_ && extraOffset != RtRangeAllocator::kFailed && extraCount > 0)
+            extraPool_.alloc.release(extraOffset, extraCount);
         freeMeshes_.push_back(id);
     });
 }
@@ -464,15 +498,26 @@ void RtScene::uploadPending(VkCommandBuffer cmd) {
         Mesh& m = meshes_[id];
         m.triOffset = poolAllocate(cmd, triPool_, m.triCount);
         if (backend_ == Backend::Software) m.nodeOffset = poolAllocate(cmd, nodePool_, m.nodeCount);
+        if (m.extraCount > 0) m.extraOffset = poolAllocate(cmd, extraPool_, m.extraCount);
         if (m.triOffset == RtRangeAllocator::kFailed ||
-            (backend_ == Backend::Software && m.nodeOffset == RtRangeAllocator::kFailed)) {
+            (backend_ == Backend::Software && m.nodeOffset == RtRangeAllocator::kFailed) ||
+            (m.extraCount > 0 && m.extraOffset == RtRangeAllocator::kFailed)) {
             LOG_WARNING("RtScene: out of memory for a mesh of ", m.triCount, " triangles");
             if (m.triOffset != RtRangeAllocator::kFailed) triPool_.alloc.release(m.triOffset, m.triCount);
             if (m.nodeOffset != RtRangeAllocator::kFailed) nodePool_.alloc.release(m.nodeOffset, m.nodeCount);
-            m.triOffset = m.nodeOffset = RtRangeAllocator::kFailed;
+            if (m.extraOffset != RtRangeAllocator::kFailed) extraPool_.alloc.release(m.extraOffset, m.extraCount);
+            m.triOffset = m.nodeOffset = m.extraOffset = RtRangeAllocator::kFailed;
             m.tris.clear();
             m.nodes.clear();
+            m.extras.clear();
             continue;
+        }
+        // The cutouts' extras indices, local until now.
+        if (m.extraCount > 0) {
+            for (RtTriangle& tri : m.tris) {
+                const uint32_t local = std::bit_cast<uint32_t>(tri.v2.w);
+                if (local != 0) tri.v2.w = std::bit_cast<float>(local + m.extraOffset);
+            }
         }
         ready.push_back(id);
     }
@@ -499,6 +544,10 @@ void RtScene::uploadPending(VkCommandBuffer cmd) {
             stage(cmd, nodePool_.buffer.buffer, VkDeviceSize(m.nodeOffset) * sizeof(RtBvhNode),
                   m.nodes.data(), m.nodes.size() * sizeof(RtBvhNode));
         }
+        if (m.extraCount > 0) {
+            stage(cmd, extraPool_.buffer.buffer, VkDeviceSize(m.extraOffset) * sizeof(glm::uvec4),
+                  m.extras.data(), m.extras.size() * sizeof(glm::uvec4));
+        }
     }
 
     VkMemoryBarrier2 toReaders{};
@@ -523,6 +572,8 @@ void RtScene::uploadPending(VkCommandBuffer cmd) {
         m.tris.shrink_to_fit();
         m.nodes.clear();
         m.nodes.shrink_to_fit();
+        m.extras.clear();
+        m.extras.shrink_to_fit();
     }
     meshTableDirty_ = true;
     ++sceneVersion_;
@@ -802,6 +853,8 @@ void RtScene::writeDescriptors(FrameResources& fr) {
     VkDescriptorBufferInfo meshes = info(meshTable_);
     VkDescriptorBufferInfo insts = info(fr.instances);
     VkDescriptorBufferInfo tlasNodes = info(fr.tlasNodes);
+    VkDescriptorBufferInfo extras = info(extraPool_.buffer);
+    VkDescriptorBufferInfo masks = info(maskBuffer_);
 
     std::vector<VkWriteDescriptorSet> writes;
     auto add = [&](uint32_t binding, const VkDescriptorBufferInfo* bi) {
@@ -817,6 +870,8 @@ void RtScene::writeDescriptors(FrameResources& fr) {
     add(kBindingTriangles, &tris);
     add(kBindingMeshes, &meshes);
     add(kBindingInstances, &insts);
+    add(kBindingTriExtras, &extras);
+    add(kBindingMasks, &masks);
     VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
     if (backend_ == Backend::Software) {
         add(kBindingNodes, &nodes);
@@ -840,6 +895,7 @@ void RtScene::writeDescriptors(FrameResources& fr) {
 
 void RtScene::update(VkCommandBuffer cmd) {
     if (!ctx_ || !active_) return;
+    uploadMasks(cmd);
     uploadPending(cmd);
 
     if (meshTableDirty_) {
@@ -884,6 +940,57 @@ void RtScene::update(VkCommandBuffer cmd) {
     writeDescriptors(fr);
 }
 
+uint32_t RtScene::addAlphaMask(const std::array<uint64_t, 64>& bits) {
+    // FNV-1a over the rows; a collision would only share a mask between two
+    // textures that look the same.
+    uint64_t h = 1469598103934665603ull;
+    for (uint64_t row : bits) {
+        h ^= row;
+        h *= 1099511628211ull;
+    }
+    if (auto it = maskByHash_.find(h); it != maskByHash_.end()) return it->second;
+    const uint32_t id = static_cast<uint32_t>(masks_.size() / 64);
+    masks_.insert(masks_.end(), bits.begin(), bits.end());
+    maskByHash_.emplace(h, id);
+    return id;
+}
+
+void RtScene::uploadMasks(VkCommandBuffer cmd) {
+    const uint32_t count = static_cast<uint32_t>(masks_.size() / 64);
+    if (count == masksUploaded_) return;
+    if (!maskBuffer_.buffer || maskCapacity_ < count) {
+        if (maskBuffer_.buffer) {
+            VmaAllocator alloc = ctx_->getAllocator();
+            AllocatedBuffer old = maskBuffer_;
+            ctx_->deferAfterAllFrameFences([alloc, old]() mutable { destroyBuffer(alloc, old); });
+        }
+        maskCapacity_ = grownCapacity(maskCapacity_, count);
+        maskBuffer_ = createBuffer(ctx_->getAllocator(), VkDeviceSize(maskCapacity_) * 64 * sizeof(uint64_t),
+                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                   VMA_MEMORY_USAGE_GPU_ONLY);
+        masksUploaded_ = 0;  // a new buffer holds none of them
+        ++descriptorGeneration_;
+        if (!maskBuffer_.buffer) {
+            maskCapacity_ = 0;
+            return;
+        }
+    }
+    stage(cmd, maskBuffer_.buffer, VkDeviceSize(masksUploaded_) * 64 * sizeof(uint64_t),
+          masks_.data() + size_t(masksUploaded_) * 64, size_t(count - masksUploaded_) * 64 * sizeof(uint64_t));
+    masksUploaded_ = count;
+    VkMemoryBarrier2 mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+    VkDependencyInfo dep{};
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    cmdPipelineBarrier2(cmd, dep);
+}
+
 VkDescriptorSet RtScene::descriptorSet() const {
     return ctx_ ? frames_[ctx_->getCurrentFrame()].set : VK_NULL_HANDLE;
 }
@@ -894,7 +1001,8 @@ RtScene::Stats RtScene::stats() const {
     s.instances = liveInstances_;
     s.triangles = liveTriangles_;
     auto sz = [](const AllocatedBuffer& b) { return b.buffer ? uint64_t(b.info.size) : 0ull; };
-    s.gpuBytes = sz(triPool_.buffer) + sz(nodePool_.buffer) + sz(meshTable_);
+    s.gpuBytes = sz(triPool_.buffer) + sz(nodePool_.buffer) + sz(extraPool_.buffer) +
+                 sz(maskBuffer_) + sz(meshTable_);
     for (const auto& m : meshes_) s.gpuBytes += sz(m.blasBuffer);
     return s;
 }

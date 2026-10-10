@@ -17,7 +17,11 @@
 //     own code) must be about one on open ground at any orientation, with
 //     little of the ground's colour in it, and well under one beneath the roof,
 //   - and the sun the surfaces read must be the same in Full mode as in
-//     ShadowsAO.
+//     ShadowsAO,
+//   - and through four stacked leaf cards whose texture is half holes, in
+//     stripes that line up, half of it must get through - as the shadow
+//     map's alpha test has it - not the sixteenth that taking the coverage
+//     as a chance of a hit lets through.
 //
 //     cmake -S . -B build -DWOWEE_BUILD_RT_PROBE=ON
 //     cmake --build build --target rt_probe
@@ -40,6 +44,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -302,6 +307,31 @@ int main() {
         ground.flags = RtScene::kMeshTerrain;
         scene.addInstance(scene.addMesh(std::move(ground)), glm::mat4(1.0f));
         scene.addInstance(scene.addMesh(box({-26, -31, 1.0f}, {-4, -9, 1.5f})), glm::mat4(1.0f));
+        // Four leaf cards across the sun's way to the wall at y = -10, their
+        // texture visible in alternate stripes of eight texels along u.
+        {
+            std::array<uint64_t, 64> stripes{};
+            uint64_t row = 0;
+            for (int x = 0; x < 64; ++x) {
+                if ((x / 8) % 2 == 0) row |= uint64_t(1) << x;
+            }
+            stripes.fill(row);
+            const uint32_t mask = scene.addAlphaMask(stripes);
+            RtScene::MeshSource cards;
+            for (int k = 0; k < 4; ++k) {
+                const float x = 15.0f + 0.5f * k;
+                const uint32_t b = static_cast<uint32_t>(cards.positions.size());
+                cards.positions.insert(cards.positions.end(),
+                                       {{x, -14, -3}, {x, -6, -3}, {x, -6, 5}, {x, -14, 5}});
+                cards.uvs.insert(cards.uvs.end(), {{0, 0}, {1, 0}, {1, 1}, {0, 1}});
+                for (uint32_t i : {0u, 1u, 2u, 0u, 2u, 3u}) cards.indices.push_back(b + i);
+                cards.surfaces.push_back(packRtSurface(glm::vec3(0.3f, 0.5f, 0.2f), 0.5f));
+                cards.surfaces.push_back(packRtSurface(glm::vec3(0.3f, 0.5f, 0.2f), 0.5f));
+                cards.masks.push_back(mask);
+                cards.masks.push_back(mask);
+            }
+            scene.addInstance(scene.addMesh(std::move(cards)), glm::mat4(1.0f));
+        }
         // A solid block standing on the ground, as a building's foundation
         // does, with normals so its triangles have fronts: the probes inside
         // it must be switched off, or they darken its top.
@@ -486,7 +516,7 @@ int main() {
         // --- The sun in Full mode and in ShadowsAO --------------------------
         // The surfaces read the same image in both; the probes must leave it
         // alone.
-        auto readSun = [&](float out[3]) {
+        auto readSun = [&](float out[4]) {
             ctx.immediateSubmit([&](VkCommandBuffer cmd) {
                 VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
                 mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -506,12 +536,19 @@ int main() {
             vkDeviceWaitIdle(dev);
             const glm::vec3 at[3] = {{kWallDistance, 0.0f, -1.0f}, {kWallDistance, 0.0f, 5.0f},
                                      {kWallDistance, 7.0f, 0.0f}};
-            for (int i = 0; i < 3; ++i) {
-                float dist = 0;
-                sample(at[i], out[i], dist);
+            float dist = 0;
+            for (int i = 0; i < 3; ++i) sample(at[i], out[i], dist);
+            // Behind the cards, across several of their stripes.
+            out[3] = 0.0f;
+            int n = 0;
+            for (float y = -12.0f; y <= -8.0f; y += 0.05f, ++n) {
+                float s = 0;
+                sample({kWallDistance, y, 0.0f}, s, dist);
+                out[3] += s;
             }
+            out[3] /= static_cast<float>(n);
         };
-        float sunFull[3], sunAo[3];
+        float sunFull[4], sunAo[4];
         frame();
         readSun(sunFull);
         lighting.setMode(RtLighting::Mode::ShadowsAO);
@@ -522,6 +559,8 @@ int main() {
         bool sameSun = true;
         for (int i = 0; i < 3; ++i) sameSun = sameSun && std::abs(sunFull[i] - sunAo[i]) < 0.25f;
         expect("the sun reads the same in Full mode as in ShadowsAO", sameSun);
+        std::printf("sun through the leaf cards: %.2f\n", sunFull[3]);
+        expect("half the sun gets through cards that are half holes", sunFull[3] > 0.3f && sunFull[3] < 0.7f);
 
         destroyBuffer(ctx.getAllocator(), light);
         destroyBuffer(ctx.getAllocator(), probes);

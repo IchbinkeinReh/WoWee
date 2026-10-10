@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <span>
 #include <vector>
 #include <cstdint>
@@ -70,6 +71,13 @@ struct BLPImage {
     /// bounce off the surface picks up, and how much light a leaf card lets
     /// through. A texture with no visible texels reports white and zero.
     void averageColor(float rgb[3], float& coverage) const;
+
+    /// Which of a 64x64 grid over the texture is visible (alpha above half,
+    /// as the shadow map's cutout tests it), a row of bits per uint64, x in
+    /// the low bits first. What the ray tracer alpha-tests a leaf card by, so
+    /// its shadow has the leaves' holes in it. False for an image it cannot
+    /// read, with the mask all clear.
+    bool alphaMask(std::array<uint64_t, 64>& mask) const;
 
     /// Whether this texture's alpha is a silhouette that has to be honoured.
     ///

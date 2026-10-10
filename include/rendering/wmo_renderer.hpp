@@ -677,6 +677,8 @@ private:
         std::vector<glm::vec3> collisionVertices;
         /// The vertices' normals, for RtScene to tell a triangle's front.
         std::vector<glm::vec3> collisionNormals;
+        /// And their first UVs, for its alpha-keyed batches' cutouts.
+        std::vector<glm::vec2> collisionUVs;
         std::vector<uint16_t> collisionIndices;
 
         // 2D spatial grid for fast triangle lookup (built at load time).

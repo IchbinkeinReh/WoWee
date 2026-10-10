@@ -90,3 +90,40 @@ TEST_CASE("BLPImage mipmap storage", "[blp]") {
     REQUIRE(img.isValid());
     REQUIRE(img.mipmaps.size() == 3);
 }
+
+// The ray tracer's cutout of a leaf card (BLPImage::alphaMask): which of a
+// 64x64 grid is visible, as the shadow map's alpha test at half sees it.
+TEST_CASE("alphaMask marks the visible texels of a decoded image", "[blp]") {
+    BLPImage img;
+    img.width = 128;
+    img.height = 32;
+    img.data.assign(size_t(128) * 32 * 4, 255);
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 64; x < 128; ++x) img.data[(size_t(y) * 128 + x) * 4 + 3] = 0;  // right half clear
+    }
+    std::array<uint64_t, 64> mask{};
+    REQUIRE(img.alphaMask(mask));
+    for (uint64_t row : mask) CHECK(row == 0x00000000FFFFFFFFull);
+}
+
+TEST_CASE("alphaMask reads DXT1's punch-through", "[blp]") {
+    BLPImage img;
+    img.width = 64;
+    img.height = 64;
+    img.compression = BLPCompression::DXT1;
+    // 16x16 blocks. colour0 <= colour1 is the three-colour mode, index 3
+    // transparent: the left half's blocks index 0, the right half's 3.
+    std::vector<uint8_t> blocks;
+    for (int by = 0; by < 16; ++by) {
+        for (int bx = 0; bx < 16; ++bx) {
+            const uint8_t idx = bx < 8 ? 0x00 : 0xFF;
+            for (uint8_t b : {uint8_t(0x00), uint8_t(0x00), uint8_t(0xFF), uint8_t(0xFF), idx, idx, idx, idx}) {
+                blocks.push_back(b);
+            }
+        }
+    }
+    img.mipmaps.push_back(blocks);
+    std::array<uint64_t, 64> mask{};
+    REQUIRE(img.alphaMask(mask));
+    for (uint64_t row : mask) CHECK(row == 0x00000000FFFFFFFFull);
+}

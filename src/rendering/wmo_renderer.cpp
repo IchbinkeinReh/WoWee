@@ -2184,9 +2184,11 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
     // from collision - these are things like gears, railings, etc.
     resources.collisionVertices.reserve(group.vertices.size());
     resources.collisionNormals.reserve(group.vertices.size());
+    resources.collisionUVs.reserve(group.vertices.size());
     for (const auto& v : group.vertices) {
         resources.collisionVertices.push_back(v.position);
         resources.collisionNormals.push_back(v.normal);
+        resources.collisionUVs.push_back(v.texCoord);
     }
     // An interior group with vertex colours (MOGP 0x4) keeps them for the
     // light of whoever stands on it (0x007c7fe0 reads the group's MOCV), as
@@ -4850,17 +4852,30 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
         } else {
             src.normals.resize(src.positions.size(), glm::vec3(0.0f));
         }
+        if (group.collisionUVs.size() == group.collisionVertices.size()) {
+            src.uvs.insert(src.uvs.end(), group.collisionUVs.begin(), group.collisionUVs.end());
+        } else {
+            src.uvs.resize(src.positions.size(), glm::vec2(0.0f));
+        }
         for (const auto& batch : group.batches) {
             const uint32_t mat = batch.materialId;
             const uint32_t blend = mat < model.materialBlendModes.size() ? model.materialBlendModes[mat] : 0;
             if (blend >= 2) continue;  // blended: glass, light cards, water sheets
             glm::vec3 albedo(0.5f);
             float opacity = 1.0f;
+            uint32_t mask = RtScene::kInvalid;
             if (mat < model.materialTextureIndices.size()) {
                 const uint32_t ti = model.materialTextureIndices[mat];
                 if (ti < model.textures.size() && model.textures[ti]) {
                     albedo = model.textures[ti]->averageColor();
-                    if (blend == 1) opacity = model.textures[ti]->alphaCoverage();
+                    if (blend == 1) {
+                        // An alpha key - a railing, a lattice, ivy: cut out as
+                        // it is drawn.
+                        opacity = model.textures[ti]->alphaCoverage();
+                        if (opacity < 1.0f && model.textures[ti]->alphaMask()) {
+                            mask = rtScene_->addAlphaMask(*model.textures[ti]->alphaMask());
+                        }
+                    }
                 }
             }
             const float surface = packRtSurface(albedo, opacity);
@@ -4875,6 +4890,7 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
                 src.indices.push_back(base + group.collisionIndices[i + 2]);
                 src.surfaces.push_back(surface);
                 src.oneSided.push_back(oneSided);
+                src.masks.push_back(mask);
             }
         }
     }

@@ -675,6 +675,99 @@ const char* BLPLoader::getCompressionName(BLPCompression compression) {
 
 namespace wowee::pipeline {
 
+namespace {
+
+// The sixteen alphas of one block of a compressed level, x fastest.
+void blockAlphas(const uint8_t* block, BLPCompression compression, const DxtColorBlock& c,
+                 uint8_t out[16]) {
+    const bool dxt1 = compression == BLPCompression::DXT1;
+    uint8_t alphaPalette[8] = {};
+    uint64_t alphaBits = 0;
+    if (compression == BLPCompression::DXT5) {
+        const uint8_t a0 = block[0], a1 = block[1];
+        alphaPalette[0] = a0;
+        alphaPalette[1] = a1;
+        if (a0 > a1) {
+            for (int i = 0; i < 6; ++i)
+                alphaPalette[2 + i] = static_cast<uint8_t>(((6 - i) * a0 + (1 + i) * a1) / 7);
+        } else {
+            for (int i = 0; i < 4; ++i)
+                alphaPalette[2 + i] = static_cast<uint8_t>(((4 - i) * a0 + (1 + i) * a1) / 5);
+            alphaPalette[6] = 0;
+            alphaPalette[7] = 255;
+        }
+        for (int b = 0; b < 6; ++b) alphaBits |= uint64_t(block[2 + b]) << (8 * b);
+    }
+    for (int p = 0; p < 16; ++p) {
+        const int idx = c.indexAt(p & 3, p >> 2);
+        uint8_t a = 255;
+        if (dxt1) {
+            if (c.index3IsTransparent && idx == 3) a = 0;
+        } else if (compression == BLPCompression::DXT3) {
+            const uint8_t nib = (block[p / 2] >> ((p & 1) * 4)) & 0x0Fu;
+            a = static_cast<uint8_t>(nib * 17);
+        } else {
+            a = alphaPalette[(alphaBits >> (3 * p)) & 0x7u];
+        }
+        out[p] = a;
+    }
+}
+
+// The first level no larger than `side` on a side. Not the tail: mips
+// average alpha, and a 4x4 of a leaf card is a uniform half-opaque smear
+// that says nothing about which of the card is leaf.
+size_t levelAtMost(const BLPImage& image, int side) {
+    size_t level = 0;
+    while (level + 1 < image.mipmaps.size() &&
+           (std::max(1, image.width >> level) > side || std::max(1, image.height >> level) > side)) {
+        ++level;
+    }
+    return level;
+}
+
+}  // namespace
+
+bool BLPImage::alphaMask(std::array<uint64_t, 64>& mask) const {
+    mask.fill(0);
+    if (!isValid()) return false;
+    auto sample = [&](auto alphaAt, int w, int h) {
+        for (int y = 0; y < 64; ++y) {
+            const int ty = std::min(h - 1, (y * h) / 64);
+            for (int x = 0; x < 64; ++x) {
+                const int tx = std::min(w - 1, (x * w) / 64);
+                if (alphaAt(tx, ty) > 127) mask[y] |= uint64_t(1) << x;
+            }
+        }
+    };
+    if (!isBlockCompressed()) {
+        if (data.size() < size_t(width) * size_t(height) * 4) return false;
+        sample([&](int tx, int ty) { return data[(size_t(ty) * width + tx) * 4 + 3]; }, width, height);
+        return true;
+    }
+    // A level of at least 64 where there is one, so every mask texel has a
+    // texel of its own; larger levels are skipped down to it.
+    size_t level = levelAtMost(*this, 64);
+    if (level > 0 && (std::max(1, width >> level) < 64 || std::max(1, height >> level) < 64)) --level;
+    const int w = std::max(1, width >> level), h = std::max(1, height >> level);
+    const std::vector<uint8_t>& blocks = mipmaps[level];
+    const bool dxt1 = compression == BLPCompression::DXT1;
+    const size_t blockBytes = dxt1 ? 8 : 16;
+    const int blocksX = (w + 3) / 4;
+    const int blocksY = (h + 3) / 4;
+    if (blocks.size() < size_t(blocksX) * size_t(blocksY) * blockBytes) return false;
+    // Decoded a block at a time as the rows come by.
+    std::vector<uint8_t> alphas(size_t(blocksX) * blocksY * 16);
+    for (int b = 0; b < blocksX * blocksY; ++b) {
+        const uint8_t* block = &blocks[size_t(b) * blockBytes];
+        const DxtColorBlock c = decodeDxtColorBlock(block + (dxt1 ? 0 : 8), dxt1);
+        blockAlphas(block, compression, c, &alphas[size_t(b) * 16]);
+    }
+    sample([&](int tx, int ty) {
+        return alphas[(size_t(ty / 4) * blocksX + tx / 4) * 16 + (ty & 3) * 4 + (tx & 3)];
+    }, w, h);
+    return true;
+}
+
 void BLPImage::averageColor(float rgb[3], float& coverage) const {
     rgb[0] = rgb[1] = rgb[2] = 1.0f;
     coverage = 0.0f;
@@ -697,52 +790,16 @@ void BLPImage::averageColor(float rgb[3], float& coverage) const {
             add(data[i * 4], data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3]);
         }
     } else {
-        // The first level no larger than 64 on a side. Not the tail: mips
-        // average alpha, and a 4x4 of a leaf card is a uniform half-opaque
-        // smear that says nothing about how much of the card is leaf.
-        size_t level = 0;
-        while (level + 1 < mipmaps.size() &&
-               (std::max(1, width >> level) > 64 || std::max(1, height >> level) > 64)) {
-            ++level;
-        }
-        const std::vector<uint8_t>& blocks = mipmaps[level];
+        const std::vector<uint8_t>& blocks = mipmaps[levelAtMost(*this, 64)];
         const bool dxt1 = compression == BLPCompression::DXT1;
         const size_t blockBytes = dxt1 ? 8 : 16;
         for (size_t at = 0; at + blockBytes <= blocks.size(); at += blockBytes) {
-            const uint8_t* colorBytes = &blocks[at + (dxt1 ? 0 : 8)];
-            const DxtColorBlock c = decodeDxtColorBlock(colorBytes, dxt1);
-            uint8_t alphaPalette[8] = {};
-            if (compression == BLPCompression::DXT5) {
-                const uint8_t a0 = blocks[at], a1 = blocks[at + 1];
-                alphaPalette[0] = a0;
-                alphaPalette[1] = a1;
-                if (a0 > a1) {
-                    for (int i = 0; i < 6; ++i)
-                        alphaPalette[2 + i] = static_cast<uint8_t>(((6 - i) * a0 + (1 + i) * a1) / 7);
-                } else {
-                    for (int i = 0; i < 4; ++i)
-                        alphaPalette[2 + i] = static_cast<uint8_t>(((4 - i) * a0 + (1 + i) * a1) / 5);
-                    alphaPalette[6] = 0;
-                    alphaPalette[7] = 255;
-                }
-            }
-            uint64_t alphaBits = 0;
-            if (compression == BLPCompression::DXT5) {
-                for (int b = 0; b < 6; ++b) alphaBits |= uint64_t(blocks[at + 2 + b]) << (8 * b);
-            }
+            const DxtColorBlock c = decodeDxtColorBlock(&blocks[at + (dxt1 ? 0 : 8)], dxt1);
+            uint8_t alphas[16];
+            blockAlphas(&blocks[at], compression, c, alphas);
             for (int p = 0; p < 16; ++p) {
-                const int px = p & 3, py = p >> 2;
-                const int idx = c.indexAt(px, py);
-                uint8_t a = 255;
-                if (dxt1) {
-                    if (c.index3IsTransparent && idx == 3) a = 0;
-                } else if (compression == BLPCompression::DXT3) {
-                    const uint8_t nib = (blocks[at + p / 2] >> ((p & 1) * 4)) & 0x0Fu;
-                    a = static_cast<uint8_t>(nib * 17);
-                } else {
-                    a = alphaPalette[(alphaBits >> (3 * p)) & 0x7u];
-                }
-                add(c.rgb[idx][0], c.rgb[idx][1], c.rgb[idx][2], a);
+                const int idx = c.indexAt(p & 3, p >> 2);
+                add(c.rgb[idx][0], c.rgb[idx][1], c.rgb[idx][2], alphas[p]);
             }
         }
     }

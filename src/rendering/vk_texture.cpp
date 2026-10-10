@@ -18,7 +18,7 @@ VkTexture::VkTexture(VkTexture&& other) noexcept
     : image_(other.image_), sampler_(other.sampler_), mipLevels_(other.mipLevels_),
       ownsSampler_(other.ownsSampler_), device_(other.device_),
       allocator_(other.allocator_), averageColor_(other.averageColor_),
-      alphaCoverage_(other.alphaCoverage_) {
+      alphaCoverage_(other.alphaCoverage_), alphaMask_(std::move(other.alphaMask_)) {
     other.image_ = {};
     other.sampler_ = VK_NULL_HANDLE;
     // Source no longer owns the sampler - ownership transferred to this instance
@@ -40,6 +40,7 @@ VkTexture& VkTexture::operator=(VkTexture&& other) noexcept {
         allocator_ = other.allocator_;
         averageColor_ = other.averageColor_;
         alphaCoverage_ = other.alphaCoverage_;
+        alphaMask_ = std::move(other.alphaMask_);
         other.image_ = {};
         other.sampler_ = VK_NULL_HANDLE;
         other.ownsSampler_ = false;
@@ -273,6 +274,11 @@ bool VkTexture::uploadBLP(VkContext& ctx, const pipeline::BLPImage& image) {
         float rgb[3];
         image.averageColor(rgb, alphaCoverage_);
         averageColor_ = glm::vec3(rgb[0], rgb[1], rgb[2]);
+        alphaMask_.reset();
+        if (alphaCoverage_ < 1.0f) {
+            auto mask = std::make_unique<std::array<uint64_t, 64>>();
+            if (image.alphaMask(*mask)) alphaMask_ = std::move(mask);
+        }
     }
 
     if (!image.isBlockCompressed()) {

@@ -1,0 +1,32 @@
+// Whether a triangle is there where a ray crosses it, for both
+// tracers (rt_trace_hw.glsli, rt_trace_sw.glsli), which include this after
+// declaring RtTri.
+//
+// A cutout - a leaf card, a fence, a banner - is tested against its texture's
+// 64x64 visibility at the point hit (RtScene::addAlphaMask), as the shadow
+// map's alpha test has it (shadow.frag): a tree's shadow then has the gaps
+// between its leaves. Taking the texture's coverage as the chance of a hit
+// instead gave the same canopy as a near-solid blob - four cards of half
+// coverage stop all but a sixteenth of the rays - and laid the open road of
+// Goldshire in shade. That is what is left for a translucent triangle with no
+// mask.
+
+struct RtTriExtra { uvec4 data; };  // three UVs as half2, the mask
+layout(std430, set = 1, binding = 6) readonly buffer RtTriExtras { RtTriExtra rtTriExtras[]; };
+layout(std430, set = 1, binding = 7) readonly buffer RtMasks { uint rtMasks[]; };
+
+// bary: the hit's weights of v1 and v2.
+bool rtSolidAt(RtTri tri, vec2 bary, inout uint rng) {
+    float opacity = rtUnpackSurface(tri.v0.w).a;
+    if (opacity >= 1.0) return true;
+    uint extra = floatBitsToUint(tri.v2.w);
+    if (extra != 0u) {
+        uvec4 e = rtTriExtras[extra - 1u].data;
+        vec2 uv = unpackHalf2x16(e.x) * (1.0 - bary.x - bary.y) + unpackHalf2x16(e.y) * bary.x +
+                  unpackHalf2x16(e.z) * bary.y;
+        ivec2 t = ivec2(fract(uv) * 64.0) & 63;
+        uint word = rtMasks[e.w * 128u + uint(t.y) * 2u + uint(t.x >> 5)];
+        return ((word >> uint(t.x & 31)) & 1u) != 0u;
+    }
+    return rtRandom(rng) < opacity;
+}

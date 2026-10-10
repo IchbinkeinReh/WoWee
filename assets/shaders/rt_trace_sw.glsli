@@ -32,8 +32,12 @@ float rtBoxEntry(vec3 bmin, vec3 bmax, vec3 o, vec3 invD, float tMax) {
     return enter <= exit ? enter : 1e30;
 }
 
-// Moller-Trumbore, two-sided. Returns t, or -1 for a miss.
-float rtTriHit(RtTri tri, vec3 o, vec3 d) {
+#include "rt_trace_alpha.glsli"
+
+// Moller-Trumbore, two-sided. Returns t, or -1 for a miss; bary is the hit's
+// weights of v1 and v2.
+float rtTriHit(RtTri tri, vec3 o, vec3 d, out vec2 bary) {
+    bary = vec2(0.0);
     vec3 e1 = tri.v1.xyz - tri.v0.xyz;
     vec3 e2 = tri.v2.xyz - tri.v0.xyz;
     vec3 h = cross(d, e2);
@@ -46,12 +50,8 @@ float rtTriHit(RtTri tri, vec3 o, vec3 d) {
     vec3 q = cross(s, e1);
     float v = f * dot(d, q);
     if (v < 0.0 || u + v > 1.0) return -1.0;
+    bary = vec2(u, v);
     return f * dot(e2, q);
-}
-
-bool rtAcceptHit(float packedSurface, inout uint rng) {
-    float opacity = rtUnpackSurface(packedSurface).a;
-    return opacity >= 1.0 || rtRandom(rng) < opacity;
 }
 
 // Walk one bottom-level hierarchy in object space. Updates tMax and the hit
@@ -70,8 +70,9 @@ bool rtTraceMesh(RtMesh mesh, vec3 o, vec3 d, inout float tMax, inout uint hitTr
         if (node.count > 0u) {
             for (uint i = node.leftOrFirst; i < node.leftOrFirst + node.count; ++i) {
                 RtTri tri = rtTris[mesh.triOffset + i];
-                float t = rtTriHit(tri, o, d);
-                if (t > 0.0 && t < tMax && rtAcceptHit(tri.v0.w, rng)) {
+                vec2 bary;
+                float t = rtTriHit(tri, o, d, bary);
+                if (t > 0.0 && t < tMax && rtSolidAt(tri, bary, rng)) {
                     tMax = t;
                     hitTri = mesh.triOffset + i;
                     found = true;

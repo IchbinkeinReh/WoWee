@@ -24,8 +24,10 @@
 ///
 /// Main thread only. Removing a mesh that instances still use is a caller bug.
 
+#include <array>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -79,8 +81,19 @@ public:
         std::vector<float> surfaces;
         std::vector<glm::vec3> normals;
         std::vector<uint8_t> oneSided;  // per triangle; empty is all of them
+        /// A cutout: with `uvs` (one per position), a triangle whose `masks`
+        /// entry names an alpha mask (addAlphaMask) is hit only where the
+        /// mask says its texture is visible, as the shadow map's alpha test
+        /// has it. Others take their surface's opacity as a probability.
+        std::vector<glm::vec2> uvs;
+        std::vector<uint32_t> masks;  // per triangle; kInvalid for none
         uint32_t flags = 0;  // MeshFlags
     };
+
+    /// A texture's 64x64 visibility (VkTexture::alphaMask), for MeshSource::
+    /// masks. The same mask given twice is stored once; masks are kept for
+    /// the scene's life - a few hundred bytes each, a few hundred textures.
+    uint32_t addAlphaMask(const std::array<uint64_t, 64>& bits);
     /// Returns kInvalid for a mesh with no usable triangle.
     MeshId addMesh(MeshSource source);
     void removeMesh(MeshId mesh);
@@ -124,9 +137,13 @@ private:
         bool uploaded = false;
         bool queued = false;
         MeshSource source;
+        // The cutout triangles' UVs and masks (RtTriExtra in the shaders).
+        uint32_t extraOffset = RtRangeAllocator::kFailed;
+        uint32_t extraCount = 0;
         // Built from the source for one upload; cleared once copied.
         std::vector<RtTriangle> tris;
         std::vector<RtBvhNode> nodes;
+        std::vector<glm::uvec4> extras;
         // Hardware backend.
         AllocatedBuffer blasBuffer{};
         VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
@@ -217,6 +234,14 @@ private:
 
     GpuPool triPool_;
     GpuPool nodePool_;
+    GpuPool extraPool_;
+    // Alpha masks, 64 uint64 each, and how many of them the GPU has.
+    std::vector<uint64_t> masks_;
+    std::unordered_map<uint64_t, uint32_t> maskByHash_;
+    AllocatedBuffer maskBuffer_{};
+    uint32_t maskCapacity_ = 0;
+    uint32_t masksUploaded_ = 0;
+    void uploadMasks(VkCommandBuffer cmd);
     AllocatedBuffer meshTable_{};
     uint32_t meshTableCapacity_ = 0;
     bool meshTableDirty_ = true;
