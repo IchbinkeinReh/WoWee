@@ -1926,8 +1926,13 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
             //    while extreme speeds still catch geometry penetration.
             // 3. Was grounded + ground is close (grace for slopes)
             bool nearGround = (dz >= 0.0f && dz <= stepUp);
+            // No further than the fall would carry the feet by the next step:
+            // a jump lands on the frame it reaches the ground. This reached at
+            // least half a yard, so every jump came down to a hand's breadth
+            // above the floor and was put on it from there - a visible drop at
+            // the end of each one.
             float airSnapRange = std::min(fallCatch,
-                std::max(0.5f, std::abs(verticalVelocity) * f.physicsDeltaTime * 2.0f));
+                std::abs(verticalVelocity) * f.physicsDeltaTime + 0.02f);
             bool airFalling = (!grounded && verticalVelocity < -5.0f
                                && dz >= -airSnapRange);
             // Not while climbing in flight: a frame's climb at a high frame
