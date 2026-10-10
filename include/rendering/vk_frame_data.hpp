@@ -84,7 +84,8 @@ struct GPUPerFrameData {
     // first probe and w the spacing, and that coordinate modulo the probe
     // counts. giSky and giGround: the open field the probes are measured
     // against (giOpenReference), w the strength and the largest ratio.
-    // giParams: x on (0/1), y the debug view (WOWEE_GI_DEBUG). Off in the
+    // giParams: x on (0/1), y the debug view (WOWEE_GI_DEBUG), z how much of
+    // the bounce's tint shows (WOWEE_GI_CHROMA). Off in the
     // reflection pass and the character preview.
     glm::vec4 giVolume[2]{};
     glm::vec4 giVolumeMod[2]{};

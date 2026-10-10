@@ -675,6 +675,8 @@ private:
 
         // Collision geometry (positions only, for floor raycasting)
         std::vector<glm::vec3> collisionVertices;
+        /// The vertices' normals, for RtScene to tell a triangle's front.
+        std::vector<glm::vec3> collisionNormals;
         std::vector<uint16_t> collisionIndices;
 
         // 2D spatial grid for fast triangle lookup (built at load time).

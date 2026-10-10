@@ -31,6 +31,7 @@ layout(local_size_x = 10, local_size_y = 10) in;
 
 shared vec4 sRay[GI_RAYS];  // rgb radiance, a distance (clamped)
 shared vec3 sDir[GI_RAYS];
+shared uint sBuried;
 
 const float MAX_AGE = 255.0;
 // The visibility lobe: cos^10 is about 20 degrees to half height, wide enough
@@ -64,11 +65,15 @@ void main() {
     float maxDist = pass.giVolume[cascade].w * 2.6;
 
     uint i = gl_LocalInvocationIndex;
+    if (i == 0u) sBuried = 0u;
+    barrier();
     if (i < uint(GI_RAYS)) {
         uvec2 packed = giRays[gl_WorkGroupID.x * uint(GI_RAYS) + i];
         vec2 rg = unpackHalf2x16(packed.x);
         vec2 bd = unpackHalf2x16(packed.y);
-        sRay[i] = vec4(rg, bd.x, min(bd.y, maxDist));
+        if (bd.y < 0.0) atomicAdd(sBuried, 1u);
+        vec4 ray = vec4(rg, bd.x, min(abs(bd.y), maxDist));
+        sRay[i] = any(isnan(ray)) || any(isinf(ray)) ? vec4(0.0, 0.0, 0.0, maxDist) : ray;
         sDir[i] = normalize(mat3(pass.giRotation) * giFibonacci(i));
     }
 
@@ -81,6 +86,16 @@ void main() {
     vec4 prevVis = imageLoad(uGiAtlasStore, visTexel);
     float age = reset ? 0.0 : imageLoad(uGiAtlasStore, irrFirst).a;
     barrier();
+
+    // Whatever a probe held that is not a number is forgotten rather than
+    // blended: through the bounces it would spread to every probe that sees
+    // this one, and from them to the whole volume.
+    bool bad = isnan(age) || isinf(age) || any(isnan(prevIrr)) || any(isinf(prevIrr));
+    if (bad) {
+        age = 0.0;
+        prevIrr = vec4(0.0);
+    }
+    if (any(isnan(prevVis.rg)) || any(isinf(prevVis.rg))) prevVis = vec4(maxDist, maxDist * maxDist, 0.0, 0.0);
 
     float hysteresis = min(pass.giSky.w, age / (age + 1.0));
     float newAge = min(age + 1.0, MAX_AGE);
@@ -110,7 +125,15 @@ void main() {
         moments /= visWeight;
         visOut = mix(moments, prevVis.rg, hysteresis);
     }
-    imageStore(uGiAtlasStore, visTexel, vec4(visOut, 0.0, 0.0));
+    // Under the ground or inside a wall: a quarter of the rays meeting
+    // something from behind (rtClosestEx) is more than a probe outside ever
+    // casts. Such a probe sees only dark undersides, and the visibility tiles
+    // are too coarse to shut it out of a point just above the ground - its
+    // rays skim the underside at every distance - so it would darken every
+    // field it lies under, by about a quarter. The readers skip it
+    // (giSampleCascade). DDGI's probe classification, Majercik et al. 2021.
+    float buried = sBuried * 4u > uint(GI_RAYS) ? 1.0 : 0.0;
+    imageStore(uGiAtlasStore, visTexel, vec4(visOut, buried, 0.0));
 
     if (doIrr) {
         vec3 result = irr / max(irrWeight, 1e-4);

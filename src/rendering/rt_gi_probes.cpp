@@ -96,10 +96,12 @@ void RtGiProbes::initialize(VkContext* ctx, RtScene* scene) {
     config_.strength = envFloat("WOWEE_GI_STRENGTH", config_.strength, 0.0f, 4.0f);
     config_.maxRatio = envFloat("WOWEE_GI_MAX_RATIO", config_.maxRatio, 1.0f, 8.0f);
     config_.groundAlbedo = envFloat("WOWEE_GI_GROUND_ALBEDO", config_.groundAlbedo, 0.0f, 1.0f);
+    config_.chroma = envFloat("WOWEE_GI_CHROMA", config_.chroma, 0.0f, 1.0f);
     config_.debug = static_cast<int>(envFloat("WOWEE_GI_DEBUG", 0.0f, 0.0f, 4.0f));
     LOG_INFO("RtGiProbes: spacing ", config_.spacing, " yd, period ", config_.period,
              ", hysteresis ", config_.hysteresis, ", strength ", config_.strength,
              ", max ratio ", config_.maxRatio, ", ground albedo ", config_.groundAlbedo,
+             ", chroma ", config_.chroma,
              ", debug ", config_.debug);
 }
 
@@ -372,7 +374,7 @@ RtGiProbes::ConsumerData RtGiProbes::consumerData() const {
     }
     d.sky = glm::vec4(sky_, config_.strength);
     d.ground = glm::vec4(ground_, config_.maxRatio);
-    d.params = glm::vec4(1.0f, static_cast<float>(config_.debug), 0.0f, 0.0f);
+    d.params = glm::vec4(1.0f, static_cast<float>(config_.debug), config_.chroma, 0.0f);
     return d;
 }
 

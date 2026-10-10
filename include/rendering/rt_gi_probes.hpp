@@ -68,7 +68,8 @@ public:
         float hysteresis = 0.95f;    // WOWEE_GI_HYSTERESIS
         float strength = 1.0f;       // WOWEE_GI_STRENGTH
         float maxRatio = 2.0f;       // WOWEE_GI_MAX_RATIO
-        float groundAlbedo = 0.25f;  // WOWEE_GI_GROUND_ALBEDO
+        float groundAlbedo = 0.3f;   // WOWEE_GI_GROUND_ALBEDO
+        float chroma = 0.25f;        // WOWEE_GI_CHROMA: how much of the bounce's tint shows
         int debug = 0;               // WOWEE_GI_DEBUG
     };
 

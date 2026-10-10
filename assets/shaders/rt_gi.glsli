@@ -85,7 +85,7 @@ float giCascadeCover(vec4 vol, vec3 p) {
 // ray's hit point the probe that cast it - and with n moves the point the
 // visibility is tested from off the surface, so the surface does not shadow
 // itself.
-vec3 giSampleCascade(sampler2D atlas, int cascade, vec4 vol, vec4 volMod, vec3 p, vec3 n, vec3 v) {
+vec4 giSampleCascade(sampler2D atlas, int cascade, vec4 vol, vec4 volMod, vec3 p, vec3 n, vec3 v) {
     float spacing = vol.w;
     vec3 pb = p + (n * 0.2 + v * 0.8) * (0.225 * spacing);
     vec3 g = pb / spacing - vol.xyz;
@@ -106,8 +106,10 @@ vec3 giSampleCascade(sampler2D atlas, int cascade, vec4 vol, vec4 volMod, vec3 p
 
         vec3 fromProbe = pb - probe;
         float d = length(fromProbe);
-        vec2 m = textureLod(atlas, giTileUv(giVisibilityTileOrigin(cascade, s), GI_VIS_TEXELS,
-                                            fromProbe / max(d, 1e-4)), 0.0).rg;
+        vec3 vis = textureLod(atlas, giTileUv(giVisibilityTileOrigin(cascade, s), GI_VIS_TEXELS,
+                                              fromProbe / max(d, 1e-4)), 0.0).rgb;
+        if (vis.b > 0.5) continue;  // buried under the ground (rt_gi_update)
+        vec2 m = vis.rg;
         if (d > m.x) {
             float variance = abs(m.x * m.x - m.y);
             float over = d - m.x;
@@ -129,7 +131,9 @@ vec3 giSampleCascade(sampler2D atlas, int cascade, vec4 vol, vec4 volMod, vec3 p
         wsum += w;
     }
     vec3 r = sum / max(wsum, 1e-6);
-    return r * r;
+    // How much to trust it: next to nothing when every probe around is
+    // buried or cannot see the point.
+    return vec4(r * r, clamp(wsum * 20.0, 0.0, 1.0));
 }
 
 // The probes' irradiance at p, the near cascade where it reaches and the far
@@ -138,12 +142,19 @@ vec3 giSampleCascade(sampler2D atlas, int cascade, vec4 vol, vec4 volMod, vec3 p
 vec4 giIrradiance(sampler2D atlas, vec4 vol0, vec4 volMod0, vec4 vol1, vec4 volMod1,
                   vec3 p, vec3 n, vec3 v) {
     float c0 = giCascadeCover(vol0, p);
-    if (c0 >= 1.0) return vec4(giSampleCascade(atlas, 0, vol0, volMod0, p, n, v), 1.0);
+    vec4 s0 = c0 > 0.0 ? giSampleCascade(atlas, 0, vol0, volMod0, p, n, v) : vec4(0.0);
+    c0 *= s0.a;
+    if (c0 >= 1.0) return vec4(s0.rgb, 1.0);
     float c1 = giCascadeCover(vol1, p);
-    vec3 e = vec3(0.0);
-    if (c1 > 0.0) e = giSampleCascade(atlas, 1, vol1, volMod1, p, n, v);
-    if (c0 > 0.0) e = mix(e, giSampleCascade(atlas, 0, vol0, volMod0, p, n, v), c1 > 0.0 ? c0 : 1.0);
-    return vec4(e, max(c0, c1));
+    vec4 s1 = c1 > 0.0 ? giSampleCascade(atlas, 1, vol1, volMod1, p, n, v) : vec4(0.0);
+    c1 *= s1.a;
+    // The near cascade over the far one, by how far in it the point is and
+    // how much it trusts what it has.
+    float w0 = c0;
+    float w1 = c1 * (1.0 - c0);
+    float cover = w0 + w1;
+    if (cover <= 1e-4) return vec4(0.0);
+    return vec4((s0.rgb * w0 + s1.rgb * w1) / cover, cover);
 }
 
 // What a surface facing n would gather in the open, on level ground, from the
@@ -153,4 +164,35 @@ vec4 giIrradiance(sampler2D atlas, vec4 vol0, vec4 volMod0, vec4 vol1, vec4 volM
 vec3 giOpenReference(vec3 sky, vec3 ground, vec3 n) {
     float up = clamp(n.z * 0.5 + 0.5, 0.0, 1.0);
     return sky * up + ground * (1.0 - up);
+}
+
+const vec3 GI_LUMA = vec3(0.299, 0.587, 0.114);
+
+// The factor the probes put on a surface's flat ambient, from the irradiance
+// e (w its cover) against the open field's for the same normal.
+//
+// Brightness and colour are taken apart. The brightness follows the probes'
+// luminance against the open field's, which is what darkens an alley or
+// lifts a wall facing a sunlit one. Of the colour only a little is let
+// through, and only relative to the open field's: taken channel by channel
+// the ratio turns the whole of Goldshire the colour of its road and the
+// whole of Dalaran the colour of its cobbles, since the ground is half of
+// what a probe sees and a sky-blue ambient has little red for a red bounce to
+// be measured against. `chroma` is how much of the bounce's tint survives,
+// and no channel moves by more than a quarter.
+vec3 giAmbientRatio(vec4 e, vec3 sky, vec3 ground, vec3 n, float strength, float maxRatio,
+                    float chroma) {
+    if (any(isnan(e)) || any(isinf(e))) return vec3(1.0);
+    vec3 open = giOpenReference(sky, ground, n);
+    float lumOpen = max(dot(open, GI_LUMA), 1e-4);
+    float lumE = max(dot(e.rgb, GI_LUMA), 0.0);
+    float level = min(lumE / lumOpen, maxRatio);
+    vec3 tint = vec3(1.0);
+    if (lumE > 1e-4) {
+        vec3 hueE = max(e.rgb, vec3(0.0)) / lumE;
+        vec3 hueOpen = max(open, vec3(1e-4)) / lumOpen;
+        tint = clamp(mix(vec3(1.0), hueE / max(hueOpen, vec3(0.05)), chroma), vec3(0.8), vec3(1.25));
+        tint /= max(dot(tint, GI_LUMA), 1e-4);
+    }
+    return max(mix(vec3(1.0), level * tint, strength * clamp(e.a, 0.0, 1.0)), vec3(0.0));
 }

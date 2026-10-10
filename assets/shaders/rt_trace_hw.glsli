@@ -8,7 +8,8 @@
 
 struct RtTri { vec4 v0; vec4 v1; vec4 v2; };
 struct RtMesh { uint nodeOffset; uint triOffset; uint pad0; uint pad1; };
-struct RtInstance { vec4 worldToObject[3]; uint mesh; uint pad0; uint pad1; uint pad2; };
+struct RtInstance { vec4 worldToObject[3]; uint mesh; uint flags; uint pad1; uint pad2; };
+const uint RT_MESH_TERRAIN = 1u;  // RtScene::kMeshTerrain
 
 layout(std430, set = 1, binding = 0) readonly buffer RtTris { RtTri rtTris[]; };
 layout(std430, set = 1, binding = 2) readonly buffer RtMeshes { RtMesh rtMeshes[]; };
@@ -44,8 +45,12 @@ bool rtOccluded(vec3 origin, vec3 dir, float tMax, inout uint rng) {
     return rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
-bool rtClosest(vec3 origin, vec3 dir, float tMax, inout uint rng,
-               out float t, out vec3 normal, out vec4 surface) {
+// The nearest hit, its normal turned to face the ray, and whether it is
+// seen from behind (`below`) - the ground from beneath, or the inside of a
+// solid: a ray that started in the ground or in a wall.
+bool rtClosestEx(vec3 origin, vec3 dir, float tMax, inout uint rng,
+                 out float t, out vec3 normal, out vec4 surface, out bool below) {
+    below = false;
     t = tMax;
     normal = vec3(0.0, 0.0, 1.0);
     surface = vec4(0.0);
@@ -62,7 +67,18 @@ bool rtClosest(vec3 origin, vec3 dir, float tMax, inout uint rng,
     n = inst.worldToObject[0].xyz * n.x + inst.worldToObject[1].xyz * n.y +
         inst.worldToObject[2].xyz * n.z;
     normal = normalize(n);
+    // Terrain faces up whichever way its triangles wind; anything else that
+    // has a front (RtScene::MeshSource::normals) faces along its winding.
+    // An opaque one met from behind means the ray began inside it.
+    below = (inst.flags & RT_MESH_TERRAIN) != 0u ? dot(dir, normal) * normal.z > 0.0
+          : hit.v1.w > 0.5 && rtUnpackSurface(hit.v0.w).a >= 1.0 && dot(dir, normal) > 0.0;
     if (dot(normal, dir) > 0.0) normal = -normal;
     surface = rtUnpackSurface(hit.v0.w);
     return true;
+}
+
+bool rtClosest(vec3 origin, vec3 dir, float tMax, inout uint rng,
+               out float t, out vec3 normal, out vec4 surface) {
+    bool below;
+    return rtClosestEx(origin, dir, tMax, rng, t, normal, surface, below);
 }

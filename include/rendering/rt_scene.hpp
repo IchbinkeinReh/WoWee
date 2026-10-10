@@ -57,12 +57,29 @@ public:
 
     [[nodiscard]] Backend backend() const { return backend_; }
 
+    /// What a trace shader may need to know of a mesh beyond its triangles,
+    /// read per instance (RtInstance::flags in rt_trace_*.glsli).
+    enum MeshFlags : uint32_t {
+        /// Ground: a heightfield whose every face looks up, so a ray that
+        /// meets it going upward is coming from underneath (rtClosestEx).
+        kMeshTerrain = 1u,
+    };
+
     /// An indexed triangle mesh in object space. `surfaces` holds one packed
     /// surface (packRtSurface) per triangle, or a single one for all of them.
+    ///
+    /// With `normals` (one per position), each triangle is wound so that its
+    /// geometric normal points the way its vertex normals do, and is marked
+    /// as having a front - unless `oneSided` is given and says it has none
+    /// (a two-sided material). A ray that meets such a triangle from behind
+    /// started inside a solid; the probe volume switches such probes off.
     struct MeshSource {
         std::vector<glm::vec3> positions;
         std::vector<uint32_t> indices;
         std::vector<float> surfaces;
+        std::vector<glm::vec3> normals;
+        std::vector<uint8_t> oneSided;  // per triangle; empty is all of them
+        uint32_t flags = 0;  // MeshFlags
     };
     /// Returns kInvalid for a mesh with no usable triangle.
     MeshId addMesh(MeshSource source);
@@ -129,11 +146,12 @@ private:
         uint32_t pad1;
     };
     /// What a trace shader reads per instance (std430): the world-to-object
-    /// transform as three rows, and the mesh it places.
+    /// transform as three rows, the mesh it places and that mesh's flags.
     struct InstanceGPU {
         glm::vec4 worldToObject[3];
         uint32_t mesh;
-        uint32_t pad[3];
+        uint32_t flags;
+        uint32_t pad[2];
     };
 
     struct GpuPool {

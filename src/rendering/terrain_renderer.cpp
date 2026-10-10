@@ -1391,6 +1391,7 @@ void TerrainRenderer::registerRtChunk(TerrainChunkGPU& gpuChunk, const pipeline:
         albedo = glm::mix(albedo, tex->averageColor(), cover);
     }
     src.surfaces.push_back(packRtSurface(albedo, 1.0f));
+    src.flags = RtScene::kMeshTerrain;
 
     gpuChunk.rtMesh = rtScene_->addMesh(std::move(src));
     // Terrain vertices are already in world space.

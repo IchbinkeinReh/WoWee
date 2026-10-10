@@ -2168,7 +2168,11 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
 
     RtScene::MeshSource src;
     src.positions.reserve(model.vertices.size());
-    for (const auto& v : model.vertices) src.positions.push_back(v.position);
+    src.normals.reserve(model.vertices.size());
+    for (const auto& v : model.vertices) {
+        src.positions.push_back(v.position);
+        src.normals.push_back(v.normal);
+    }
     for (const auto& batch : gpuModel.batches) {
         if (batch.blendMode >= 2 || batch.batchOpacity < 0.01f ||
             batch.starLayer || batch.glowCardLike) {
@@ -2183,6 +2187,8 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
             }
         }
         const float surface = packRtSurface(albedo, opacity);
+        // Material flag 0x04: two-sided, no front to be behind.
+        const uint8_t oneSided = (batch.materialFlags & 0x04u) ? 0 : 1;
         const size_t end = std::min<size_t>(size_t(batch.indexStart) + batch.indexCount,
                                             model.indices.size());
         for (size_t i = batch.indexStart; i + 2 < end; i += 3) {
@@ -2190,6 +2196,7 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
             src.indices.push_back(model.indices[i + 1]);
             src.indices.push_back(model.indices[i + 2]);
             src.surfaces.push_back(surface);
+            src.oneSided.push_back(oneSided);
         }
     }
     gpuModel.rtMesh = rtScene_->addMesh(std::move(src));

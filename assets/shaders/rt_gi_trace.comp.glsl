@@ -12,7 +12,9 @@
 // every bounce before, so each update adds one more. A ray that escapes sees
 // the sky above the horizon and the open ground's light below it, the two the
 // zone's flat ambient stands for (giOpenReference). The distance it travelled
-// goes along for the visibility tiles.
+// goes along for the visibility tiles - negative for a ray that met the
+// ground from beneath or a solid from inside, as only a probe buried in them
+// casts: the update counts those and switches the probe off.
 
 #include "rt_common.glsli"
 #ifdef RT_HARDWARE
@@ -59,8 +61,17 @@ void main() {
     float t;
     vec3 hn;
     vec4 hs;
-    if (rtClosest(origin, dir, tMax, rng, t, hn, hs)) {
+    bool below;
+    bool hit = rtClosestEx(origin, dir, tMax, rng, t, hn, hs, below);
+    if (hit && below) {
+        radiance = vec3(0.0);
+        dist = -max(t, 1e-3);
+    } else if (hit) {
         dist = t;
+        // A sliver of a triangle has no normal to speak of; facing the ray
+        // back is as good as any, and better than a NaN that the bounces
+        // would carry into every probe of the volume.
+        if (any(isnan(hn)) || dot(hn, hn) < 0.5) hn = -dir;
         vec3 hp = origin + dir * t;
         vec3 L = normalize(pass.sunDir.xyz);
         vec3 light = bounceAt(hp, hn, -dir);
@@ -74,6 +85,8 @@ void main() {
         radiance = dir.z >= 0.0 ? pass.giSky.rgb : pass.giGround.rgb;
     }
 
+    if (any(isnan(radiance)) || any(isinf(radiance))) radiance = vec3(0.0);
+    radiance = min(radiance, vec3(16.0));  // half floats, and no fireflies
     giRays[gl_WorkGroupID.x * uint(GI_RAYS) + r] =
         uvec2(packHalf2x16(radiance.rg), packHalf2x16(vec2(radiance.b, dist)));
 }

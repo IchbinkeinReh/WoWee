@@ -2183,8 +2183,10 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
     // Use MOPY per-triangle flags to exclude detail/decorative geometry (flag 0x04)
     // from collision - these are things like gears, railings, etc.
     resources.collisionVertices.reserve(group.vertices.size());
+    resources.collisionNormals.reserve(group.vertices.size());
     for (const auto& v : group.vertices) {
         resources.collisionVertices.push_back(v.position);
+        resources.collisionNormals.push_back(v.normal);
     }
     // An interior group with vertex colours (MOGP 0x4) keeps them for the
     // light of whoever stands on it (0x007c7fe0 reads the group's MOCV), as
@@ -4840,6 +4842,14 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
         const uint32_t base = static_cast<uint32_t>(src.positions.size());
         src.positions.insert(src.positions.end(), group.collisionVertices.begin(),
                              group.collisionVertices.end());
+        // Faces for the probes' inside test; a group without its normals
+        // gets zero ones, which give its triangles no front.
+        if (group.collisionNormals.size() == group.collisionVertices.size()) {
+            src.normals.insert(src.normals.end(), group.collisionNormals.begin(),
+                               group.collisionNormals.end());
+        } else {
+            src.normals.resize(src.positions.size(), glm::vec3(0.0f));
+        }
         for (const auto& batch : group.batches) {
             const uint32_t mat = batch.materialId;
             const uint32_t blend = mat < model.materialBlendModes.size() ? model.materialBlendModes[mat] : 0;
@@ -4854,6 +4864,9 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
                 }
             }
             const float surface = packRtSurface(albedo, opacity);
+            // MOMT 0x4: unculled, two-sided - no front to be behind.
+            const uint32_t matFlags = mat < model.materialFlags.size() ? model.materialFlags[mat] : 0;
+            const uint8_t oneSided = (matFlags & 0x4u) ? 0 : 1;
             const uint32_t end = std::min<uint32_t>(batch.startIndex + batch.indexCount,
                                                     static_cast<uint32_t>(group.collisionIndices.size()));
             for (uint32_t i = batch.startIndex; i + 2 < end; i += 3) {
@@ -4861,6 +4874,7 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
                 src.indices.push_back(base + group.collisionIndices[i + 1]);
                 src.indices.push_back(base + group.collisionIndices[i + 2]);
                 src.surfaces.push_back(surface);
+                src.oneSided.push_back(oneSided);
             }
         }
     }

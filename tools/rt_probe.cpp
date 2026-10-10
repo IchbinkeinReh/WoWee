@@ -11,7 +11,13 @@
 //   - every value must be finite,
 //   - in the probe volume (RtGiProbes), a probe in the open must hold the sky
 //     above it and the open ground's light below, and one beside the box's
-//     sunlit face must see it lit.
+//     sunlit face must see it lit,
+//   - then, with orange ground and a roof slab added and the volume left to
+//     converge, the surfaces' ambient factor (rt_gi_check.comp, the shaders'
+//     own code) must be about one on open ground at any orientation, with
+//     little of the ground's colour in it, and well under one beneath the roof,
+//   - and the sun the surfaces read must be the same in Full mode as in
+//     ShadowsAO.
 //
 //     cmake -S . -B build -DWOWEE_BUILD_RT_PROBE=ON
 //     cmake --build build --target rt_probe
@@ -26,6 +32,7 @@
 #include "rendering/rt_lighting.hpp"
 #include "rendering/rt_scene.hpp"
 #include "rendering/vk_context.hpp"
+#include "rendering/vk_shader.hpp"
 #include "rendering/vk_utils.hpp"
 
 #include <SDL3/SDL.h>
@@ -45,7 +52,8 @@ namespace {
 constexpr uint32_t kSize = 256;       // scene depth, square
 constexpr float kWallDistance = 20.0f;
 
-RtScene::MeshSource box(const glm::vec3& lo, const glm::vec3& hi) {
+RtScene::MeshSource box(const glm::vec3& lo, const glm::vec3& hi,
+                        const glm::vec3& albedo = glm::vec3(0.6f)) {
     RtScene::MeshSource m;
     for (int i = 0; i < 8; ++i) {
         m.positions.emplace_back((i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z);
@@ -55,13 +63,14 @@ RtScene::MeshSource box(const glm::vec3& lo, const glm::vec3& hi) {
     for (const auto& f : faces) {
         for (uint32_t idx : {f[0], f[1], f[2], f[0], f[2], f[3]}) m.indices.push_back(idx);
     }
-    m.surfaces.push_back(packRtSurface(glm::vec3(0.6f), 1.0f));
+    m.surfaces.push_back(packRtSurface(albedo, 1.0f));
     return m;
 }
 
 }  // namespace
 
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);  // what was printed survives a crash
     wowee::core::Logger::getInstance().setLogLevel(wowee::core::LogLevel::INFO);
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
@@ -279,6 +288,240 @@ int main() {
                         open.r, open.g, open.b, lit.r, lit.g, lit.b);
             expect("a probe before a sunlit face is lit by it", lit.r > open.r * 1.2f);
         }
+
+        // --- A field, left to converge ---------------------------------
+        // Orange ground two yards below the camera, as a dirt road is - one
+        // sheet, flagged as terrain, so the probes under it are found out -
+        // and a roof slab over part of it. Everything else stays: the box
+        // now stands on the ground.
+        const glm::vec3 dirt(0.55f, 0.35f, 0.2f);
+        RtScene::MeshSource ground;
+        ground.positions = {{-400, -400, -2}, {400, -400, -2}, {400, 400, -2}, {-400, 400, -2}};
+        ground.indices = {0, 1, 2, 0, 2, 3};
+        ground.surfaces.push_back(packRtSurface(dirt, 1.0f));
+        ground.flags = RtScene::kMeshTerrain;
+        scene.addInstance(scene.addMesh(std::move(ground)), glm::mat4(1.0f));
+        scene.addInstance(scene.addMesh(box({-26, -31, 1.0f}, {-4, -9, 1.5f})), glm::mat4(1.0f));
+        // A solid block standing on the ground, as a building's foundation
+        // does, with normals so its triangles have fronts: the probes inside
+        // it must be switched off, or they darken its top.
+        {
+            RtScene::MeshSource block = box({20, -62, -2}, {62, -28, 4.5f});
+            const glm::vec3 centre(41, -45, 1.25f);
+            for (const auto& p : block.positions) block.normals.push_back(glm::normalize(p - centre));
+            scene.addInstance(scene.addMesh(std::move(block)), glm::mat4(1.0f));
+        }
+
+        auto frame = [&]() {
+            lighting.prepare(sceneExtent);
+            ctx.immediateSubmit([&](VkCommandBuffer cmd) {
+                lighting.record(cmd, depth.image, sceneExtent, false, in);
+            });
+        };
+        // Long enough for a probe updated one frame in four to be blended
+        // over many times, and for the bounces to settle.
+        for (int i = 0; i < 160; ++i) frame();
+        vkDeviceWaitIdle(ctx.getDevice());
+
+        struct Point {
+            const char* what;
+            glm::vec3 p, n;
+        };
+        const Point points[] = {
+            {"open ground, facing up", {-10, 10, -2}, {0, 0, 1}},
+            {"open ground, facing up, far", {-40, 30, -2}, {0, 0, 1}},
+            {"in the open, facing sideways", {-10, 10, -1}, {1, 0, 0}},
+            {"in the open, facing sideways (2)", {-10, 10, -1}, {0, -1, 0}},
+            {"in the open, facing down", {-10, 10, -0.5f}, {0, 0, -1}},
+            {"under the roof", {-15, -20, -2}, {0, 0, 1}},
+            {"before the box's sunlit face", {12.5f, 0, -2}, {0, 0, 1}},
+            {"on top of the solid block", {41, -45, 4.5f}, {0, 0, 1}},
+        };
+        constexpr uint32_t kPoints = sizeof(points) / sizeof(points[0]);
+        const RtLighting::ConsumerData cd = lighting.consumerData();
+        expect("the surfaces are told the volume is on", cd.gi.params.x > 0.5f);
+
+        VkDevice dev = ctx.getDevice();
+        AllocatedBuffer pts = createBuffer(ctx.getAllocator(), kPoints * 3 * sizeof(glm::vec4),
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+        AllocatedBuffer res = createBuffer(ctx.getAllocator(), kPoints * 2 * sizeof(glm::vec4),
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+        struct CheckBlock {
+            glm::vec4 vol[2], volMod[2], sky, ground, params;
+        } block{};
+        for (int c = 0; c < 2; ++c) {
+            block.vol[c] = cd.gi.volume[c];
+            block.volMod[c] = cd.gi.volumeMod[c];
+        }
+        block.sky = cd.gi.sky;
+        block.ground = cd.gi.ground;
+        block.params = glm::vec4(cd.gi.params.z, 0, 0, 0);
+        AllocatedBuffer ubo = createBuffer(ctx.getAllocator(), sizeof(block),
+                                           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+        std::memcpy(ubo.info.pMappedData, &block, sizeof(block));
+        auto* pv = static_cast<glm::vec4*>(pts.info.pMappedData);
+        for (uint32_t i = 0; i < kPoints; ++i) {
+            pv[i * 3] = glm::vec4(points[i].p, 0);
+            pv[i * 3 + 1] = glm::vec4(points[i].n, 0);
+            pv[i * 3 + 2] = glm::vec4(glm::normalize(in.cameraPos - points[i].p), 0);
+        }
+
+        VkDescriptorSetLayoutBinding lb[4]{};
+        const VkDescriptorType types[4] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                           VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                           VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                           VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        for (uint32_t b = 0; b < 4; ++b) {
+            lb[b].binding = b;
+            lb[b].descriptorType = types[b];
+            lb[b].descriptorCount = 1;
+            lb[b].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.bindingCount = 4;
+        li.pBindings = lb;
+        VkDescriptorSetLayout checkLayout = VK_NULL_HANDLE;
+        vkCreateDescriptorSetLayout(dev, &li, nullptr, &checkLayout);
+        VkDescriptorPoolSize ps[3] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+                                      {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2}};
+        VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pci.maxSets = 1;
+        pci.poolSizeCount = 3;
+        pci.pPoolSizes = ps;
+        VkDescriptorPool checkPool = VK_NULL_HANDLE;
+        vkCreateDescriptorPool(dev, &pci, nullptr, &checkPool);
+        VkDescriptorSetAllocateInfo sai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        sai.descriptorPool = checkPool;
+        sai.descriptorSetCount = 1;
+        sai.pSetLayouts = &checkLayout;
+        VkDescriptorSet checkSet = VK_NULL_HANDLE;
+        vkAllocateDescriptorSets(dev, &sai, &checkSet);
+        VkDescriptorImageInfo atlasInfo{lighting.sampler(), lighting.giViewForSlot(0), VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorBufferInfo bi[3] = {{ubo.buffer, 0, VK_WHOLE_SIZE},
+                                        {pts.buffer, 0, VK_WHOLE_SIZE},
+                                        {res.buffer, 0, VK_WHOLE_SIZE}};
+        VkWriteDescriptorSet w[4]{};
+        for (uint32_t b = 0; b < 4; ++b) {
+            w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[b].dstSet = checkSet;
+            w[b].dstBinding = b;
+            w[b].descriptorCount = 1;
+            w[b].descriptorType = types[b];
+            if (b == 0) w[b].pImageInfo = &atlasInfo;
+            else w[b].pBufferInfo = &bi[b - 1];
+        }
+        vkUpdateDescriptorSets(dev, 4, w, 0, nullptr);
+        VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        plci.setLayoutCount = 1;
+        plci.pSetLayouts = &checkLayout;
+        VkPipelineLayout checkPipelineLayout = VK_NULL_HANDLE;
+        vkCreatePipelineLayout(dev, &plci, nullptr, &checkPipelineLayout);
+        VkPipeline checkPipeline = VK_NULL_HANDLE;
+        {
+            wowee::rendering::VkShaderModule module;
+            if (module.loadFromFile(dev, "assets/shaders/rt_gi_check.comp.spv")) {
+                VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+                cpci.stage = module.stageInfo(VK_SHADER_STAGE_COMPUTE_BIT);
+                cpci.layout = checkPipelineLayout;
+                vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, nullptr, &checkPipeline);
+                module.destroy();
+            }
+        }
+        expect("the surfaces' probe code loads", checkPipeline != VK_NULL_HANDLE);
+        if (checkPipeline != VK_NULL_HANDLE) {
+            ctx.immediateSubmit([&](VkCommandBuffer cmd) {
+                VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+                mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+                mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers = &mb;
+                cmdPipelineBarrier2(cmd, dep);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, checkPipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, checkPipelineLayout, 0, 1,
+                                        &checkSet, 0, nullptr);
+                vkCmdDispatch(cmd, kPoints, 1, 1);
+                mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                mb.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+                mb.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+                cmdPipelineBarrier2(cmd, dep);
+            });
+            vkDeviceWaitIdle(dev);
+            const auto* rv = static_cast<const glm::vec4*>(res.info.pMappedData);
+            std::printf("sky (%.3f %.3f %.3f) ground ref (%.3f %.3f %.3f)\n", block.sky.r, block.sky.g,
+                        block.sky.b, block.ground.r, block.ground.g, block.ground.b);
+            glm::vec3 ratio[kPoints];
+            for (uint32_t i = 0; i < kPoints; ++i) {
+                const glm::vec4 e = rv[i * 2];
+                ratio[i] = glm::vec3(rv[i * 2 + 1]);
+                std::printf("  %-34s E (%.3f %.3f %.3f) cover %.2f  ratio (%.3f %.3f %.3f)\n",
+                            points[i].what, e.r, e.g, e.b, e.a, ratio[i].r, ratio[i].g, ratio[i].b);
+            }
+            auto lum = [](glm::vec3 c) { return glm::dot(c, glm::vec3(0.299f, 0.587f, 0.114f)); };
+            auto near1 = [&](glm::vec3 r, float tol) { return std::abs(lum(r) - 1.0f) < tol; };
+            auto hueSpread = [](glm::vec3 r) {
+                return std::max(r.r, std::max(r.g, r.b)) / std::max(1e-4f, std::min(r.r, std::min(r.g, r.b)));
+            };
+            expect("open ground facing up keeps the flat ambient", near1(ratio[0], 0.1f) && near1(ratio[1], 0.1f));
+            expect("open ground at other orientations, near it too",
+                   near1(ratio[2], 0.25f) && near1(ratio[3], 0.25f) && near1(ratio[4], 0.35f));
+            bool mildHue = true;
+            for (uint32_t i = 0; i < kPoints; ++i) mildHue = mildHue && hueSpread(ratio[i]) < 1.6f;
+            expect("the ground's colour tints, it does not take over", mildHue);
+            expect("beneath the roof is darker", lum(ratio[5]) < 0.75f);
+            expect("the top of a solid is not darkened by the probes inside it", near1(ratio[7], 0.1f));
+        }
+        vkDestroyPipeline(dev, checkPipeline, nullptr);
+        vkDestroyPipelineLayout(dev, checkPipelineLayout, nullptr);
+        vkDestroyDescriptorPool(dev, checkPool, nullptr);
+        vkDestroyDescriptorSetLayout(dev, checkLayout, nullptr);
+        destroyBuffer(ctx.getAllocator(), pts);
+        destroyBuffer(ctx.getAllocator(), res);
+        destroyBuffer(ctx.getAllocator(), ubo);
+
+        // --- The sun in Full mode and in ShadowsAO --------------------------
+        // The surfaces read the same image in both; the probes must leave it
+        // alone.
+        auto readSun = [&](float out[3]) {
+            ctx.immediateSubmit([&](VkCommandBuffer cmd) {
+                VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+                mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+                mb.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+                mb.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers = &mb;
+                cmdPipelineBarrier2(cmd, dep);
+                VkBufferImageCopy region{};
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.imageExtent = {te.width, te.height, 1};
+                vkCmdCopyImageToBuffer(cmd, lighting.lightImageWrittenBy(ctx.getCurrentFrame()),
+                                       VK_IMAGE_LAYOUT_GENERAL, light.buffer, 1, &region);
+            });
+            vkDeviceWaitIdle(dev);
+            const glm::vec3 at[3] = {{kWallDistance, 0.0f, -1.0f}, {kWallDistance, 0.0f, 5.0f},
+                                     {kWallDistance, 7.0f, 0.0f}};
+            for (int i = 0; i < 3; ++i) {
+                float dist = 0;
+                sample(at[i], out[i], dist);
+            }
+        };
+        float sunFull[3], sunAo[3];
+        frame();
+        readSun(sunFull);
+        lighting.setMode(RtLighting::Mode::ShadowsAO);
+        for (int i = 0; i < 8; ++i) frame();
+        readSun(sunAo);
+        std::printf("sun, Full vs ShadowsAO: %.2f/%.2f %.2f/%.2f %.2f/%.2f\n", sunFull[0], sunAo[0],
+                    sunFull[1], sunAo[1], sunFull[2], sunAo[2]);
+        bool sameSun = true;
+        for (int i = 0; i < 3; ++i) sameSun = sameSun && std::abs(sunFull[i] - sunAo[i]) < 0.25f;
+        expect("the sun reads the same in Full mode as in ShadowsAO", sameSun);
 
         destroyBuffer(ctx.getAllocator(), light);
         destroyBuffer(ctx.getAllocator(), probes);

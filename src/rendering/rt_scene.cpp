@@ -3,6 +3,7 @@
 #include "core/logger.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace wowee::rendering {
@@ -198,6 +199,8 @@ RtScene::MeshId RtScene::addMesh(MeshSource source) {
     if (!ctx_ || source.indices.size() < 3 || source.surfaces.empty()) return kInvalid;
     const size_t triCount = source.indices.size() / 3;
     if (source.surfaces.size() != 1 && source.surfaces.size() != triCount) return kInvalid;
+    if (!source.normals.empty() && source.normals.size() != source.positions.size()) source.normals.clear();
+    if (!source.oneSided.empty() && source.oneSided.size() != triCount) source.oneSided.clear();
     RtAabb bounds;
     for (uint32_t idx : source.indices) {
         if (idx >= source.positions.size()) return kInvalid;
@@ -234,9 +237,24 @@ void RtScene::buildMesh(Mesh& m) {
     for (uint32_t t = 0; t < m.triCount; ++t) {
         const float surface = src.surfaces.size() == 1 ? src.surfaces[0] : src.surfaces[t];
         RtTriangle& tri = m.tris[t];
-        tri.v0 = glm::vec4(src.positions[src.indices[t * 3]], surface);
-        tri.v1 = glm::vec4(src.positions[src.indices[t * 3 + 1]], 0.0f);
-        tri.v2 = glm::vec4(src.positions[src.indices[t * 3 + 2]], 0.0f);
+        uint32_t i0 = src.indices[t * 3], i1 = src.indices[t * 3 + 1], i2 = src.indices[t * 3 + 2];
+        // v1.w: 1 when the triangle has a front, which its winding gives
+        // (rtClosestEx). The data's own winding is not relied on: the
+        // terrain and the buildings are drawn unculled here.
+        float front = 0.0f;
+        if (!src.normals.empty() && (src.oneSided.empty() || src.oneSided[t])) {
+            const glm::vec3 g = glm::cross(src.positions[i1] - src.positions[i0],
+                                           src.positions[i2] - src.positions[i0]);
+            const glm::vec3 vn = src.normals[i0] + src.normals[i1] + src.normals[i2];
+            const float d = glm::dot(g, vn);
+            if (d != 0.0f && std::isfinite(d)) {
+                if (d < 0.0f) std::swap(i1, i2);
+                front = 1.0f;
+            }
+        }
+        tri.v0 = glm::vec4(src.positions[i0], surface);
+        tri.v1 = glm::vec4(src.positions[i1], front);
+        tri.v2 = glm::vec4(src.positions[i2], 0.0f);
         if (unpackRtSurface(surface).a < 1.0f) m.hasTranslucent = true;
     }
     RtBvh bvh = buildRtTriangleBvh(m.tris);
@@ -633,6 +651,7 @@ void RtScene::uploadFrame(VkCommandBuffer cmd, FrameResources& fr) {
             g.worldToObject[1] = invT[1];
             g.worldToObject[2] = invT[2];
             g.mesh = inst.mesh;
+            g.flags = m.source.flags;
             instanceData_.push_back(g);
             bounds.push_back(transformBounds(m.bounds, inst.objectToWorld));
 

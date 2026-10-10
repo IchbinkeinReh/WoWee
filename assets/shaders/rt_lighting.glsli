@@ -20,7 +20,7 @@
 //     vec4 giVolumeMod[2];
 //     vec4 giSky;        // w = strength
 //     vec4 giGround;     // w = largest ratio
-//     vec4 giParams;     // x = on, y = debug view
+//     vec4 giParams;     // x = on, y = debug view, z = chroma
 
 #include "rt_gi.glsli"
 
@@ -96,22 +96,20 @@ vec3 rtGiDebugColour = vec3(0.0);
 bool rtGiDebugSet = false;
 
 // How much more or less light than an open field the probes say a surface at
-// worldPos facing n gets, per channel. The original has no bounced light at
-// all; its Light.dbc ambient is the open field's (0x007ee750 and the curves
-// behind it), and the artists tuned every zone's colours on that. Taking the
-// probes' irradiance as the ambient would throw those colours away - the old
+// worldPos facing n gets. The original has no bounced light at all; its
+// Light.dbc ambient is the open field's (0x007ee750 and the curves behind
+// it), and the artists tuned every zone's colours on that. Taking the probes'
+// irradiance as the ambient would throw those colours away - the old
 // one-bounce mode did, and darkened everything turned away from the sky. As a
-// ratio against the open field (giOpenReference) the probes leave a meadow as
-// it was authored at every orientation, and darken the underside of a bridge,
-// an alley, a doorway; light a shaded wall from the sunlit one across from it;
-// and carry a red cliff's colour onto the ground beside it.
+// ratio against the open field (giOpenReference, giAmbientRatio) the probes
+// leave a meadow as it was authored at every orientation, and darken the
+// underside of a bridge, an alley, a doorway; light a shaded wall from the
+// sunlit one across from it; and warm the ground beside a red cliff a little.
 vec3 rtGiRatio(vec3 worldPos, vec3 n) {
     vec3 v = normalize(viewPos.xyz - worldPos);
     vec4 e = giIrradiance(uRtGiProbes, giVolume[0], giVolumeMod[0], giVolume[1], giVolumeMod[1],
                           worldPos, n, v);
-    vec3 open = giOpenReference(giSky.rgb, giGround.rgb, n);
-    vec3 ratio = min(e.rgb / max(open, vec3(1e-3)), vec3(giGround.w));
-    ratio = max(mix(vec3(1.0), ratio, giSky.w * e.a), vec3(0.0));
+    vec3 ratio = giAmbientRatio(e, giSky.rgb, giGround.rgb, n, giSky.w, giGround.w, giParams.z);
 
     int debugView = int(giParams.y + 0.5);
     if (debugView != 0) {
