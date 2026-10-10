@@ -19,6 +19,8 @@
 #include "audio/spell_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
 #include "core/application.hpp"
+#include "addons/addon_manager.hpp"
+#include "addons/lua_engine.hpp"
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "network/world_socket.hpp"
@@ -28,12 +30,49 @@
 #include "audio/ui_sound_manager.hpp"
 #include "audio/player_voice_manager.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <sstream>
 
 namespace wowee {
 namespace game {
+
+namespace {
+
+/// SKILL_RANK_UP with the skill and its new value put in: "%s"/"%1$s" takes
+/// the name and "%d"/"%2$d" the value, as the localized strings write them.
+std::string formatSkillRankUp(const std::string& format, const std::string& skill, uint32_t value) {
+    std::string out;
+    int nextArg = 1;
+    for (size_t i = 0; i < format.size(); ++i) {
+        if (format[i] != '%' || i + 1 >= format.size()) {
+            out += format[i];
+            continue;
+        }
+        size_t j = i + 1;
+        int arg = 0;
+        if (std::isdigit(static_cast<unsigned char>(format[j])) && j + 1 < format.size() && format[j + 1] == '$') {
+            arg = format[j] - '0';
+            j += 2;
+        }
+        if (j >= format.size()) { out += format[i]; continue; }
+        const char conv = format[j];
+        if (conv == 's' || conv == 'd') {
+            if (arg == 0) arg = nextArg++;
+            out += arg == 1 ? skill : std::to_string(value);
+            i = j;
+        } else if (conv == '%') {
+            out += '%';
+            i = j;
+        } else {
+            out += format[i];
+        }
+    }
+    return out;
+}
+
+}  // namespace
 
 // Merge incoming cooldown with local remaining time - keeps local timer when
 // a stale/duplicate packet arrives after local countdown has progressed.
@@ -4332,9 +4371,16 @@ void SpellHandler::extractSkillFields(const FlatFieldMap& fields) {
             const std::string& name = owner_.getSkillName(skillId);
             std::string skillName = name.empty() ? ("Skill #" + std::to_string(skillId)) : name;
             // CHAT_MSG_SKILL, which the interface colours blue, as the server
-            // sends it - not a system line, which is yellow.
-            owner_.addLocalChatLine(ChatType::SKILL, "Your skill in " + skillName +
-                                    " has increased to " + std::to_string(skill.value) + ".");
+            // sends it - not a system line, which is yellow. The words are the
+            // interface's SKILL_RANK_UP, so a German client says "Eure
+            // Fertigkeit '...' hat sich auf ... erhöht."; enUS only for want
+            // of one.
+            std::string format;
+            if (auto* addons = core::Application::getInstance().getAddonManager())
+                if (auto* lua = addons->getLuaEngine()) format = lua->globalText("SKILL_RANK_UP");
+            if (format.empty()) format = "Your skill in %s has increased to %d.";
+            owner_.addLocalChatLine(ChatType::SKILL,
+                                    formatSkillRankUp(format, skillName, skill.value));
         }
     }
 

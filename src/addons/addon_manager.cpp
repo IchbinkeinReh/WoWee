@@ -833,6 +833,18 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
             {"BG_SYSTEM_NEUTRAL", 1.0f, 1.0f, 0.5f},
             {"BG_SYSTEM_ALLIANCE", 0.25f, 0.75f, 1.0f},
             {"BG_SYSTEM_HORDE", 1.0f, 0.1f, 0.1f},
+            // The blues and the gold of skill-ups, experience, honour and
+            // reputation - "Eure Fertigkeit ... hat sich erhöht" drew white.
+            {"SKILL", 0.333f, 0.333f, 1.0f},
+            {"COMBAT_XP_GAIN", 0.435f, 0.435f, 1.0f},
+            {"COMBAT_HONOR_GAIN", 0.878f, 0.792f, 0.039f},
+            {"COMBAT_FACTION_CHANGE", 0.5f, 0.5f, 1.0f},
+            {"COMBAT_MISC_INFO", 0.5f, 0.5f, 1.0f},
+            {"OPENING", 0.5f, 0.5f, 1.0f},
+            {"PET_INFO", 0.5f, 0.5f, 1.0f},
+            {"AFK", 1.0f, 0.5f, 1.0f},       {"DND", 1.0f, 0.5f, 1.0f},
+            {"IGNORED", 1.0f, 0.0f, 0.0f},   {"FILTERED", 1.0f, 0.0f, 0.0f},
+            {"RESTRICTED", 1.0f, 0.0f, 0.0f},
         };
         char r[16], g[16], b[16];
         for (const auto& c : kChatColours) {
