@@ -2394,6 +2394,15 @@ void Renderer::update(float deltaTime) {
         if ((cameraController->isThirdPerson() && !cameraController->isFirstPersonView()) || (animationController_ && animationController_->isTaxiFlight())) {
             characterRenderer->setInstanceVisible(characterInstanceId, true);
         }
+        // The own mount goes with the rider: in first person the client
+        // draws neither (a taxi's view is always from behind).
+        if (animationController_) {
+            if (const uint32_t mount = animationController_->getMountInstanceId(); mount > 0) {
+                const bool firstPerson = cameraController->isFirstPersonView() &&
+                                         !animationController_->isTaxiFlight();
+                characterRenderer->setInstanceVisible(mount, !firstPerson);
+            }
+        }
     }
 
     // Resolve WMO containment before the ambience consumes it.
