@@ -147,7 +147,7 @@ def layouts():
     for name in [REFERENCE_LAYOUT] + list(OVERLAYS):
         path = ROOT / f"Data/expansions/{name}/dbc_layouts.json"
         if path.is_file():
-            out[name] = json.loads(path.read_text())
+            out[name] = json.loads(path.read_text(encoding="utf-8"))
     return out
 
 
@@ -219,7 +219,7 @@ def scan():
 def canary():
     """Move a column that is known right and confirm the scan names it."""
     path = ROOT / "Data/expansions/turtle/dbc_layouts.json"
-    original = path.read_text()
+    original = path.read_text(encoding="utf-8")
     try:
         doc = json.loads(original)
         doc["Spell"]["Effect0"] = 71      # the WotLK column, wrong for vanilla

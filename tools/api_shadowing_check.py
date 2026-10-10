@@ -199,7 +199,7 @@ import pathlib as _pathlib
 # paths below were relative to it, so the report crashed anywhere but the
 # repository root - which is where anything running it from a build
 # directory finds out, and only then.
-_src = (ADDONS / "lua_engine.cpp").read_text()
+_src = (ADDONS / "lua_engine.cpp").read_text(encoding="utf-8")
 _defs = _collections.Counter(
     re.findall(r'"function\s+[\w.]*[Mm][Tt]\w*\s*:\s*(\w+)', _src))
 _dupes = sorted(n for n, c in _defs.items() if c > 1)

@@ -49,7 +49,7 @@ LOAD_ONLY = ("resize(", "loadSound(", "LOG_INFO", "LOG_DEBUG", "LOG_WARNING")
 def collections():
     found = {}
     for header in sorted(AUDIO_HEADERS.glob("*.hpp")):
-        for m in DECL.finditer(header.read_text()):
+        for m in DECL.finditer(header.read_text(encoding="utf-8")):
             found[m.group(1)] = header.name
     return found
 
@@ -76,7 +76,7 @@ def canary():
     """Plant a collection that is loaded and never played, and look for it."""
     header = AUDIO_HEADERS / "ui_sound_manager.hpp"
     source = ROOT / "src" / "audio" / "ui_sound_manager.cpp"
-    h_before, s_before = header.read_text(), source.read_text()
+    h_before, s_before = header.read_text(encoding="utf-8"), source.read_text(encoding="utf-8")
     marker = "canaryNeverPlayedSounds_"
     try:
         header.write_text(h_before.replace(

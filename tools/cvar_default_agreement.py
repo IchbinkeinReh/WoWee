@@ -53,7 +53,7 @@ def main():
         print("lua_system_api.cpp is missing - nothing compared.")
         return 1
 
-    source = API.read_text()
+    source = API.read_text(encoding="utf-8")
     answers = {}
     for match in FALLBACK.finditer(source):
         for name in NAME.findall(match.group(1)):
@@ -61,7 +61,7 @@ def main():
 
     reads = {}
     for path in sorted(list(ROOT.glob("src/**/*.cpp")) + list(ROOT.glob("include/**/*.hpp"))):
-        for name, value in DIRECT.findall(path.read_text()):
+        for name, value in DIRECT.findall(path.read_text(encoding="utf-8")):
             reads.setdefault(name, (value, path.relative_to(ROOT)))
 
     print(f"GetCVar answers for {len(answers)} CVars; "

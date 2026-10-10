@@ -73,7 +73,7 @@ def is_verb(name: str) -> bool:
     # angle, active, bar. A verb here is camelCase with an object.
     return any(c.isupper() for c in name)
 
-hdr = (ROOT / "include/game/game_handler.hpp").read_text()
+hdr = (ROOT / "include/game/game_handler.hpp").read_text(encoding="utf-8")
 methods = set()
 for m in re.finditer(r"\b([a-z][A-Za-z0-9_]*)\s*\(", hdr):
     name = m.group(1)

@@ -218,7 +218,7 @@ def main():
             if not is_write_only(name, header, decl_line, scope):
                 continue
             line = text.count("\n", 0, m.start()) + 1
-            entry = (str(header.relative_to(ROOT)), line, name)
+            entry = (header.relative_to(ROOT).as_posix(), line, name)
             # The debt count stays on the trailing-underscore convention it
             # was built for: its read/write analysis works off an index keyed
             # that way, and widening it there would report every local that

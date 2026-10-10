@@ -119,7 +119,7 @@ def load_target_paths(target: Path):
     manifest = target / "manifest.json"
     if not manifest.is_file():
         sys.exit(f"No manifest.json under {target} - point --against at an extracted expansion")
-    entries = json.loads(manifest.read_text()).get("entries", {})
+    entries = json.loads(manifest.read_text(encoding="utf-8")).get("entries", {})
     return set(entries)
 
 
@@ -130,7 +130,7 @@ def source_build(source_root: Path) -> dict:
         path = source_root / name
         if path.is_file():
             try:
-                blob = json.loads(path.read_text())
+                blob = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
             if name == "expansion.json":
@@ -154,7 +154,7 @@ def install_pack(pack_dir: Path, target: Path, remove: bool) -> int:
     manifest_path = pack_dir / "pack.json"
     if not manifest_path.is_file():
         sys.exit(f"No pack.json in {pack_dir}")
-    pack = json.loads(manifest_path.read_text())
+    pack = json.loads(manifest_path.read_text(encoding="utf-8"))
     override = target / "override"
     entries = pack.get("entries", {})
 
@@ -239,7 +239,7 @@ def main() -> int:
     # eight thousand files to get thirty upgrades; the list is the thirty.
     listed = None
     if args.model_list:
-        listed = {slashed(line.strip()) for line in args.model_list.read_text().splitlines()
+        listed = {slashed(line.strip()) for line in args.model_list.read_text(encoding="utf-8").splitlines()
                   if line.strip() and not line.lstrip().startswith("#")}
 
     models = []

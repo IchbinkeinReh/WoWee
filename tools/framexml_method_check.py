@@ -39,7 +39,7 @@ import re, pathlib, collections
 # cannot fail.
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
-src = (REPO / "src" / "addons" / "lua_engine.cpp").read_text()
+src = (REPO / "src" / "addons" / "lua_engine.cpp").read_text(encoding="utf-8")
 
 # The curated set that answers a no-op.
 block = re.search(r'"__WoweeWidgetMethods = \{\\n"(.*?)"\}\\n"', src, re.S)

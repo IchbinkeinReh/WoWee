@@ -542,7 +542,7 @@ error("QQ" .. string.format("SETTINGS %d ~ %d ~ %d ~ %d ~ %d ~ %d ~ %d ~ %d ~ %d
 
 def clientCVarPairs():
     """The cvar -> setting rows of kClientCVars, so the probe is not a copy."""
-    source = (ROOT / "src/addons/lua_system_api.cpp").read_text()
+    source = (ROOT / "src/addons/lua_system_api.cpp").read_text(encoding="utf-8")
     at = source.find("kClientCVars[] = {")
     if at == -1:
         return []
@@ -632,7 +632,7 @@ def main():
     store = CONFIG_ROOT / "cvars.cfg"
     kept = {}
     if store.is_file():
-        for line in store.read_text().splitlines():
+        for line in store.read_text(encoding="utf-8").splitlines():
             name, _, value = line.partition("=")
             kept[name.strip().lower()] = value.strip()
     storeChecked = 0

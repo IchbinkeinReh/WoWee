@@ -591,9 +591,13 @@ CHECKS = [
     # 2026-10-09: turnOrCancelGroundTargeting, a right click on the 3D world
     # while a spell waits for a place (0x0051fb00, WorldFrame's own input,
     # beside aimGroundTarget); FrameXML's SpellStopTargeting still reaches
-    # cancelGroundTargeting. The thirty-seventh is the one to look at.
+    # cancelGroundTargeting. Thirty-seven since 2026-10-10:
+    # factionReactionToPlayer, which is a question rather than a verb - how a
+    # game object's faction regards the player, for the pointer over it
+    # (0x0070edd0). UnitReaction answers it for units; FrameXML has nothing
+    # that asks it of a game object. The thirty-eighth is the one to look at.
     ("framexml_unreachable_verbs.py",
-     r"^(\d+) verbs this client's own windows can reach", 36,
+     r"^(\d+) verbs this client's own windows can reach", 37,
      "verbs only this client's own windows could reach"),
     # Emote tokens FrameXML can hand DoEmote that it cannot answer. One,
     # named "unused", which is a placeholder in FrameXML's own list. It was
@@ -1211,7 +1215,7 @@ DATA_INPUTS = {
 def missing_input(tool):
     """The input this sweep needs and this checkout does not have."""
     try:
-        source = (TOOLS / tool).read_text()
+        source = (TOOLS / tool).read_text(encoding="utf-8")
     except OSError:
         return None
     for path, directory in DATA_INPUTS.items():

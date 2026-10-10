@@ -85,7 +85,7 @@ def main():
         return 0
 
     server = server_fields(args.server)
-    ours = json.loads(LAYOUT.read_text())
+    ours = json.loads(LAYOUT.read_text(encoding="utf-8"))
 
     rows, agree, unnamed = [], 0, []
     for name, index in sorted(ours.items()):

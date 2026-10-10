@@ -83,7 +83,7 @@ def main() -> int:
                 continue
             if DISTINCT.search(window):
                 continue
-            rel = str(path.relative_to(ROOT))
+            rel = path.relative_to(ROOT).as_posix()
             if settled_for(rel, window):
                 continue
             findings.append((rel, i + 1, line.strip()[:78]))

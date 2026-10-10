@@ -108,7 +108,7 @@ def bodyFrom(text, start):
 def bindingBodies():
     """Each binding's name and its body, however it was registered."""
     for cpp in sorted(BINDINGS.glob("*.cpp")):
-        s = cpp.read_text()
+        s = cpp.read_text(encoding="utf-8")
         for pattern in (NAMED_FN, LAMBDA_FN):
             for m in pattern.finditer(s):
                 # end() sits just past the opening brace the pattern matched.
@@ -176,7 +176,7 @@ def checkEventArgs():
     """Events whose handler unpacks more than is ever fired."""
     fired = {}
     for cpp in sorted(GAME.glob("*.cpp")) + sorted(BINDINGS.glob("*.cpp")):
-        s = cpp.read_text()
+        s = cpp.read_text(encoding="utf-8")
         for m in re.finditer(
                 r'(?:fireAddonEvent|addonEventCallbackRef\(\))\(\s*"(\w+)"\s*,\s*\{([^{}]*)\}', s):
             args = m.group(2).strip()

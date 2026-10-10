@@ -91,7 +91,7 @@ if not XML.is_dir():
     print(f"no interface at {XML} - name one on the command line")
     raise SystemExit(2)
 
-src = (ROOT / "src/ui/framexml_takeover.cpp").read_text()
+src = (ROOT / "src/ui/framexml_takeover.cpp").read_text(encoding="utf-8")
 accounted = set()
 for lit in re.findall(r'"([^"]*)"', src):
     for word in lit.split():

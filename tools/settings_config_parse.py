@@ -53,9 +53,9 @@ SCHEMA_ROW = re.compile(
 def schemaRangesByMember():
     """member -> (lo, hi), taken from the schema row bound to that member."""
     rows = {m.group(1): (float(m.group(2)), float(m.group(3)))
-            for m in SCHEMA_ROW.finditer(SCHEMA.read_text())}
+            for m in SCHEMA_ROW.finditer(SCHEMA.read_text(encoding="utf-8"))}
     out = {}
-    for m in PANEL_BINDING.finditer(PANEL.read_text()):
+    for m in PANEL_BINDING.finditer(PANEL.read_text(encoding="utf-8")):
         span = rows.get(m.group(1))
         if span:
             out[m.group(2)] = span
@@ -64,7 +64,7 @@ def schemaRangesByMember():
 
 def clampedRanges():
     """config key -> (member or None, lo, hi) for every value the loader bounds."""
-    text = LOADER.read_text()
+    text = LOADER.read_text(encoding="utf-8")
     out = {}
     for m in LOOSE.finditer(text):
         out.setdefault(m.group(1), (None, float(m.group(2)), float(m.group(3))))

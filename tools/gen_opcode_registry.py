@@ -22,7 +22,7 @@ RE_NAME = re.compile(r"^(?:CMSG|SMSG|MSG)_[A-Z0-9_]+$")
 
 
 def load_canonical(path: Path) -> list[str]:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     names = data.get("logical_opcodes", [])
     if not isinstance(names, list):
         raise ValueError("canonical.json: logical_opcodes must be a list")
@@ -39,7 +39,7 @@ def load_canonical(path: Path) -> list[str]:
 
 
 def load_aliases(path: Path, canonical: set[str]) -> dict[str, str]:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     aliases = data.get("aliases", {})
     if not isinstance(aliases, dict):
         raise ValueError("aliases.json: aliases must be an object")

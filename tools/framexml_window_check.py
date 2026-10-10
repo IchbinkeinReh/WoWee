@@ -187,7 +187,7 @@ def checkSuppressionNames():
         return False
 
     listed = []
-    for m in re.finditer(r'\{UiElement::(\w+),\s*((?:"[^"]*"\s*)+)', TAKEOVER.read_text()):
+    for m in re.finditer(r'\{UiElement::(\w+),\s*((?:"[^"]*"\s*)+)', TAKEOVER.read_text(encoding="utf-8")):
         blob = " ".join(re.findall(r'"([^"]*)"', m.group(2)))
         listed += [(n, m.group(1)) for n in blob.split() if n and n[0].isupper()]
 
@@ -209,7 +209,7 @@ def main():
         print(f"no takeover file at {TAKEOVER}")
         return 0
 
-    decided = TAKEOVER.read_text()
+    decided = TAKEOVER.read_text(encoding="utf-8")
     windows = topLevelWindows()
 
     # A ContainerFrame is a bag, and the bags element covers all thirteen of

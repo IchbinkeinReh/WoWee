@@ -97,7 +97,7 @@ def main():
         print("No chatframe.lua. Nothing can be compared - do not believe a zero.")
         return 1
 
-    events = events_the_interface_writes(CHATFRAME.read_text())
+    events = events_the_interface_writes(CHATFRAME.read_text(encoding="utf-8"))
     if not events:
         print("Read no AddMessage branches out of chatframe.lua. The zero below "
               "means the parse broke, not that the interface writes nothing.")
@@ -105,7 +105,7 @@ def main():
 
     doubled = []
     for path in SOURCES:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         for event in events:
             for m in re.finditer(r'"%s"' % event, text):
                 block = enclosing_block(text, m.start())

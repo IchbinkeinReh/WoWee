@@ -72,11 +72,11 @@ def depthOf(body, at):
 def main():
     declared = set()
     if PANEL_HEADER.is_file():
-        declared = set(re.findall(r'bool (\w*Applied_)\s*=', PANEL_HEADER.read_text()))
+        declared = set(re.findall(r'bool (\w*Applied_)\s*=', PANEL_HEADER.read_text(encoding="utf-8")))
 
     guards, bad, latchesSeen = 0, [], set()
     for path in SOURCES:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if "Applied_" not in text:
             continue
         for match in GUARD.finditer(text):

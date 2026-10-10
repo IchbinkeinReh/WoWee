@@ -71,7 +71,7 @@ def main():
             blizzard.setdefault(cvar.lower(), value)
 
     ours = {}
-    for match in FALLBACK.finditer(API.read_text()):
+    for match in FALLBACK.finditer(API.read_text(encoding="utf-8")):
         for name in NAME.findall(match.group(1)):
             ours.setdefault(name.lower(), match.group(2))
 

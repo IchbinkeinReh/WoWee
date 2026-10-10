@@ -98,7 +98,7 @@ def chatAliases():
     there was until the speech-bubble rows arrived under names of their own.
     """
     out = {}
-    for m in re.finditer(r'\b\w+&\s+(\w+)\s*=\s*settings\.(\w+)\s*;', CHAT_PANEL.read_text()):
+    for m in re.finditer(r'\b\w+&\s+(\w+)\s*=\s*settings\.(\w+)\s*;', CHAT_PANEL.read_text(encoding="utf-8")):
         out[m.group(2)] = m.group(1)
     return out
 
@@ -108,9 +108,9 @@ def mentions(where, member):
 
 
 def main():
-    schema = SCHEMA.read_text()
-    panel = PANEL.read_text()
-    persist = PERSIST.read_text()
+    schema = SCHEMA.read_text(encoding="utf-8")
+    panel = PANEL.read_text(encoding="utf-8")
+    persist = PERSIST.read_text(encoding="utf-8")
 
     keys = schema_keys(schema)
     if not keys:

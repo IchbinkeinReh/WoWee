@@ -93,7 +93,7 @@ def sliderRanges():
 
     snippets = ROOT / "include/addons/addon_lua_snippets.hpp"
     if snippets.is_file():
-        text = snippets.read_text()
+        text = snippets.read_text(encoding="utf-8")
         for m in re.finditer(r'\w+\.(\w+)\.minValue\s*=\s*([-\d.]+)', text):
             name, lo = m.group(1).lower(), float(m.group(2))
             hi = out.get(name, (lo, lo))[1]
@@ -109,7 +109,7 @@ def sliderRanges():
     # answers a shipped range that does not fit - view distance stopping at the
     # number the original renderer could reach, mouse sensitivity shipped as a
     # multiplier against a setting that is an amount.
-    text = API.read_text()
+    text = API.read_text(encoding="utf-8")
     at = text.find("kCVarRanges[] = {")
     if at != -1:
         body = text[at:text.find("};", at)]
@@ -123,7 +123,7 @@ def sliderRanges():
 
 def bindings():
     """cvar -> (setting key, scale), from kClientCVars."""
-    text = API.read_text()
+    text = API.read_text(encoding="utf-8")
     at = text.find("kClientCVars[] = {")
     if at == -1:
         return {}
@@ -139,7 +139,7 @@ def bindings():
 
 def fields():
     """setting key -> (member, whether the binding is a fraction)."""
-    text = PANEL.read_text()
+    text = PANEL.read_text(encoding="utf-8")
     out = {}
     for m in re.finditer(
             r'\{\.key = "([a-z0-9_]+)",\s*\.as\w+\s*=\s*&SettingsPanel::(\w+)\s*(,\s*\.fraction = true)?',
@@ -161,7 +161,7 @@ def sharedSettings():
     weatherDensity divides by three, but it drives a renderer rather than a
     setting, so it is not in this list.
     """
-    text = API.read_text()
+    text = API.read_text(encoding="utf-8")
     out = {}
     at = text.find("kClientCVars[] = {")
     if at != -1:

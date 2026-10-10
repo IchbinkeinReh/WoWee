@@ -59,7 +59,7 @@ def main():
         print("the settings loader is missing - nothing checked.")
         return 1
 
-    text = LOADER.read_text()
+    text = LOADER.read_text(encoding="utf-8")
     locals_ = set(LOCAL.findall(text))
 
     fields = {}

@@ -43,7 +43,7 @@ def main() -> int:
         print("tests/CMakeLists.txt is not here; the zero below would mean the "
               "scan broke rather than every test being registered.")
         return 1
-    text = cml.read_text()
+    text = cml.read_text(encoding="utf-8")
 
     added = re.findall(r"add_test\(NAME\s+(\w+)\s+COMMAND\s+(\w+)\)", text)
     registered = set(re.findall(r"register_test_target\((\w+)\)", text))

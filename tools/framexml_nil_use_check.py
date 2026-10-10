@@ -32,7 +32,7 @@ for t in texts.values():
     lua_defined |= set(re.findall(r'\b([A-Za-z_]\w*)\s*=\s*function\s*\(', t))
 # Names the bootstrap defines as counting stubs answer 0, not nil.
 counting = set(re.findall(r"'([A-Za-z_]\w*)'",
-    re.search(r'local counting = \{(.*?)\n\s*"\}', (REPO / 'src' / 'addons' / 'lua_engine.cpp').read_text(), re.S).group(1)))
+    re.search(r'local counting = \{(.*?)\n\s*"\}', (REPO / 'src' / 'addons' / 'lua_engine.cpp').read_text(encoding="utf-8"), re.S).group(1)))
 known = c_bindings | lua_defined | counting
 
 CALL = r'(?<![:.\w])([A-Z][A-Za-z0-9_]{3,})\s*\([^()]*\)'

@@ -65,7 +65,7 @@ def main():
         for path in sorted(base.rglob("*")):
             if path.suffix not in (".c", ".cpp", ".h", ".hpp", ".mm"):
                 continue
-            rel = str(path.relative_to(ROOT))
+            rel = path.relative_to(ROOT).as_posix()
             try:
                 text = path.read_text(errors="ignore")
             except OSError:

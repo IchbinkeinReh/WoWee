@@ -110,7 +110,7 @@ def main():
     checked, findings = 0, []
     for path in sources:
         n, hits = findings_in(path.read_text(errors="ignore"),
-                              str(path.relative_to(ROOT)))
+                              path.relative_to(ROOT).as_posix())
         checked += n
         findings += hits
 

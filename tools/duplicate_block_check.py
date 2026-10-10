@@ -107,7 +107,7 @@ def main():
             lines, numbers = code_lines(path.read_text(errors="ignore"))
         except OSError:
             continue
-        rel = str(path.relative_to(ROOT))
+        rel = path.relative_to(ROOT).as_posix()
         for i in range(len(lines) - WINDOW):
             window = lines[i:i + WINDOW]
             # Near-identical filler (a run of assignments to the same thing)

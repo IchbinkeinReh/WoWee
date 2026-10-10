@@ -28,7 +28,7 @@ RE_OPCODE_NAME = re.compile(r"^(?:CMSG|SMSG|MSG)_[A-Z0-9_]+$")
 
 
 def read_aliases(path: Path) -> Dict[str, str]:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     aliases = data.get("aliases", {})
     out: Dict[str, str] = {}
     for key, value in aliases.items():

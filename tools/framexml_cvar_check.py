@@ -47,7 +47,7 @@ if not fx.is_dir():
     sys.exit(f"no such directory: {fx}")
 
 # CVars the client answers deliberately, however that answer is spelled.
-sysapi = (REPO / "src/addons/lua_system_api.cpp").read_text()
+sysapi = (REPO / "src/addons/lua_system_api.cpp").read_text(encoding="utf-8")
 # Folded, because lua_GetCVar folds: the client's CVar names are not
 # case-sensitive and the interface spells "uiscale" and "uiScale" both ways.
 known = {m.lower() for m in re.findall(r'n == "(\w+)"', sysapi)}

@@ -21,7 +21,7 @@ def load_opcode_map(path: Path, _seen: Set[Path] | None = None) -> Dict[str, str
         raise ValueError(f"Opcode map inheritance cycle: {chain}")
     _seen.add(path)
 
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     merged: Dict[str, str] = {}
 
     extends = data.get("_extends")

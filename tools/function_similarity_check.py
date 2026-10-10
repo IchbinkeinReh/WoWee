@@ -238,7 +238,7 @@ def main() -> int:
             if path.suffix not in (".cpp", ".hpp", ".h"):
                 continue
             for name, code in bodies(path):
-                found.append((str(path.relative_to(ROOT)), name, code))
+                found.append((path.relative_to(ROOT).as_posix(), name, code))
     if not found:
         print("Found no function bodies at all, which cannot be right.")
         return 1

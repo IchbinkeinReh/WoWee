@@ -85,7 +85,7 @@ def scan():
     hits = []
     for path in sources():
         try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = path.read_text(encoding="utf-8").splitlines()
         except OSError:
             continue
         counters = {}

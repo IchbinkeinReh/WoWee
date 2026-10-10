@@ -520,7 +520,7 @@ def load_manifest(data_dir: Path) -> dict:
     path = data_dir / MANIFEST_NAME
     if path.is_file():
         try:
-            return json.loads(path.read_text())
+            return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
     return {"tool": "upscale_textures", "entries": {}}
@@ -649,7 +649,7 @@ def do_clean(data_dir: Path) -> None:
         legacy = data_dir / name
         if name == LEGACY_MANIFEST_NAME and legacy.is_file():
             # The list-of-paths manifest this tool used to keep.
-            for line in legacy.read_text().splitlines():
+            for line in legacy.read_text(encoding="utf-8").splitlines():
                 p = data_dir / line.strip()
                 if p.is_file():
                     p.unlink()

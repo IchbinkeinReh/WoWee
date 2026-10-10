@@ -133,7 +133,7 @@ def declared_members():
             # rough stand-in. Member functions here are lowerCamelCase.
             if name[0].isupper():
                 continue
-            out[name].add(str(path.relative_to(ROOT)))
+            out[name].add(path.relative_to(ROOT).as_posix())
     return out
 
 

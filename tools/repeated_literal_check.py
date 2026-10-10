@@ -84,7 +84,7 @@ def main():
 
     places = collections.defaultdict(set)
     for path in sources:
-        rel = str(path.relative_to(ROOT))
+        rel = path.relative_to(ROOT).as_posix()
         if rel.startswith(SKIP_PREFIX):
             continue
         for line in path.read_text(errors="ignore").split("\n"):

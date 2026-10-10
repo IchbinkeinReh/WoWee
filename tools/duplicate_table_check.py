@@ -113,7 +113,7 @@ def tables():
                     continue
                 if len(set(items)) < MIN_DISTINCT:
                     continue
-                found["|".join(items)].append((str(path.relative_to(ROOT)), m.group(1)))
+                found["|".join(items)].append((path.relative_to(ROOT).as_posix(), m.group(1)))
     return found
 
 

@@ -182,7 +182,7 @@ def scan():
     hits = []
     for path in sources():
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = path.read_text(encoding="utf-8")
         except OSError:
             continue
         lines = list(enumerate(text.splitlines(), 1))

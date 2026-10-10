@@ -89,7 +89,7 @@ def main():
     if not CMAKE.exists():
         print("No tests/CMakeLists.txt. Nothing was checked - do not believe a zero.")
         return 1
-    text = CMAKE.read_text()
+    text = CMAKE.read_text(encoding="utf-8")
 
     linked = set(re.findall(r"wowee_test_link_glm\((\w+)\)", text))
     targets = {m.group(1): m.group(2)

@@ -25,13 +25,13 @@ RE_CODE_REF = re.compile(r"\bOpcode::((?:CMSG|SMSG|MSG)_[A-Z0-9_]+)\b")
 
 
 def read_canonical_data(path: Path) -> Set[str]:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     names = data.get("logical_opcodes", [])
     return {n for n in names if isinstance(n, str) and RE_OPCODE_NAME.match(n)}
 
 
 def read_alias_data(path: Path) -> Dict[str, str]:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     aliases = data.get("aliases", {})
     out: Dict[str, str] = {}
     for k, v in aliases.items():

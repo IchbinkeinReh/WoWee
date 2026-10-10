@@ -71,7 +71,7 @@ def main():
     for what, owner, pattern in RULES:
         rx = re.compile(pattern, re.MULTILINE)
         for path in sources:
-            rel = str(path.relative_to(ROOT))
+            rel = path.relative_to(ROOT).as_posix()
             if rel == owner:
                 continue
             try:

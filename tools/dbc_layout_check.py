@@ -106,7 +106,7 @@ def main():
     def string_fit(layout_file):
         """How often this layout's string-named fields hold string offsets."""
         good = total = 0
-        for dbc_name, fields in json.loads(layout_file.read_text()).items():
+        for dbc_name, fields in json.loads(layout_file.read_text(encoding="utf-8")).items():
             path = dbc_for(dbc_name)
             if not path:
                 continue
@@ -129,7 +129,7 @@ def main():
     def violations(layout_file):
         """Out-of-range fields for one expansion's layouts, and how many fit."""
         found, checked, absent = [], 0, 0
-        for dbc_name, fields in sorted(json.loads(layout_file.read_text()).items()):
+        for dbc_name, fields in sorted(json.loads(layout_file.read_text(encoding="utf-8")).items()):
             path = dbc_for(dbc_name)
             if not path:
                 absent += 1

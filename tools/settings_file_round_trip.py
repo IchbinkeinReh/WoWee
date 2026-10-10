@@ -129,7 +129,7 @@ def main():
         ranges = settings_config_parse.rangesByKey()
         lines, wanted = [], {}
         spare, inBindings = list(SPARE_KEYS), False
-        for line in settings.read_text().splitlines():
+        for line in settings.read_text(encoding="utf-8").splitlines():
             if not line.strip() or line.startswith("["):
                 inBindings = line.strip() == "[Keybindings]"
                 lines.append(line)
@@ -145,7 +145,7 @@ def main():
 
         run()  # loads what was written, and writes it again
         came = {}
-        for line in settings.read_text().splitlines():
+        for line in settings.read_text(encoding="utf-8").splitlines():
             key, _, value = line.partition("=")
             came[key] = value.strip()
     except subprocess.TimeoutExpired:

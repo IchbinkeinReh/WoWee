@@ -137,7 +137,7 @@ STUBS = {"lua_ReturnNil", "lua_ReturnZero", "lua_ReturnFalse", "lua_ReturnNothin
 # had not run anywhere else in a long time.
 def _live_files():
     import re as _re
-    tk = (ROOT / "src/ui/framexml_takeover.cpp").read_text()
+    tk = (ROOT / "src/ui/framexml_takeover.cpp").read_text(encoding="utf-8")
     if "return true;" not in tk:
         raise SystemExit("frameXmlOwns no longer answers unconditionally - this "
                          "sweep assumes every element in the table is handed over")
@@ -145,7 +145,7 @@ def _live_files():
     if not elements:
         raise SystemExit("no elements found in framexml_takeover.cpp - this reads "
                          "the element table")
-    rd = (ROOT / "tools/framexml_element_readiness.py").read_text()
+    rd = (ROOT / "tools/framexml_element_readiness.py").read_text(encoding="utf-8")
     # Parsed as data, not run as code. These are two plain dict literals in a
     # sibling sweep, and exec() on a slice of another file is both more than
     # this needs and a finding in its own right: it hands whatever that regex

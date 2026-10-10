@@ -53,7 +53,7 @@ def main():
     if not CMAKE.exists():
         print("No CMakeLists.txt. Nothing was checked - do not believe a zero.")
         return 1
-    macros = build_macros(CMAKE.read_text())
+    macros = build_macros(CMAKE.read_text(encoding="utf-8"))
     if not macros:
         print("Read no macros out of add_compile_definitions. The zero below "
               "means the parse broke, not that nothing redefines them.")
@@ -75,7 +75,7 @@ def main():
                 previous = lines[i - 1] if i else ""
                 if re.match(r"\s*#\s*ifndef\s+%s\s*$" % name, previous):
                     continue
-                unguarded.append((str(path.relative_to(ROOT)), i + 1, name))
+                unguarded.append((path.relative_to(ROOT).as_posix(), i + 1, name))
 
     print(f"{len(macros)} macro(s) the build defines for every file: "
           f"{', '.join(sorted(macros))}\n")

@@ -38,16 +38,16 @@ def main():
             print(f"{path.name} is missing - nothing checked.")
             return 1
 
-    bound = set(re.findall(r'\{\.key = "([a-z0-9_]+)"', PANEL.read_text()))
+    bound = set(re.findall(r'\{\.key = "([a-z0-9_]+)"', PANEL.read_text(encoding="utf-8")))
     # Rows on the game's own store - "cvar:", "click:", "lua:" - have no field
     # to be bound to; see SettingDesc::store.
     rows = set()
     for m in re.finditer(r'\{(?:\.\w+\s*=\s*)?"([a-z0-9_]+)", "[^"]*", SettingKind::.*?\},\n',
-                         SCHEMA.read_text(), re.S):
+                         SCHEMA.read_text(encoding="utf-8"), re.S):
         if not re.search(r'"(cvar|click|lua):', m.group(0)):
             rows.add(m.group(1))
 
-    text = CVARS.read_text()
+    text = CVARS.read_text(encoding="utf-8")
     at = text.find("kClientCVars")
     block = text[at:at + 6000] if at != -1 else ""
     driven = set(re.findall(r'\{(?:\.\w+\s*=\s*)?"[a-z0-9_]+",\s*(?:\.\w+\s*=\s*)?"([a-z0-9_]+)"', block))
