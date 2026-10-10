@@ -1050,6 +1050,13 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         const float kMinWarmupSeconds = 2.0f;   // minimum time to drain network packets
         const float kMaxWarmupSeconds = 25.0f;  // hard cap to avoid infinite stall
         const auto warmupStart = std::chrono::high_resolution_clock::now();
+        // NPCs dressed on the spot while the loading screen is up (see
+        // EntitySpawner::setDressPrefetchBypass), however the warmup ends.
+        struct DressBypass {
+            EntitySpawner* spawner;
+            explicit DressBypass(EntitySpawner* s) : spawner(s) { if (spawner) spawner->setDressPrefetchBypass(true); }
+            ~DressBypass() { if (spawner) spawner->setDressPrefetchBypass(false); }
+        } dressBypass(entitySpawner_);
         // Track consecutive idle iterations (all queues empty) to detect convergence
         int idleIterations = 0;
         const int kIdleThreshold = 5;  // require 5 consecutive empty loops (~80ms)

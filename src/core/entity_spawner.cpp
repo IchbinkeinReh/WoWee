@@ -1909,7 +1909,7 @@ charRenderer->startFadeIn(instanceId, 0.5f);
 // else the model authored is left exactly as it is, because on a creature the
 // same group numbers mean unrelated geometry.
 bool EntitySpawner::creatureDressPrepared(uint32_t displayId) {
-    if (!assetPrefetch_ || !assetManager_) return true;
+    if (dressPrefetchBypass_ || !assetPrefetch_ || !assetManager_) return true;
     auto filesIt = creatureDressFiles_.find(displayId);
     if (filesIt == creatureDressFiles_.end()) {
         DressFiles files;

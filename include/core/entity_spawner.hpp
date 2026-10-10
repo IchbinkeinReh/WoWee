@@ -567,6 +567,14 @@ private:
     /// Whether everything a display's NPC wears has been prepared; asks for
     /// what has not. True for a display that wears nothing of the kind.
     bool creatureDressPrepared(uint32_t displayId);
+    bool dressPrefetchBypass_ = false;
+public:
+    /// Behind a loading screen nothing is seen to stutter, and the warmup
+    /// waits for the spawn queue to drain: NPCs are dressed on the spot there
+    /// rather than held for the prefetch workers, which would only keep the
+    /// loading screen up longer.
+    void setDressPrefetchBypass(bool bypass) { dressPrefetchBypass_ = bypass; }
+private:
     /// A player's character component before its equipment: race, sex,
     /// class, skin, face and the hair and facial rows (PLAYER_BYTES).
     core::CharacterLook playerLook(uint64_t guid, uint8_t raceId, uint8_t genderId,
