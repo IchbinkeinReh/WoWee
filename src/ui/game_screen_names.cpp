@@ -262,6 +262,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     static thread_local std::vector<ui::PlateBox> placed;
     placed.clear();
     static SightCache sight;
+    sight.beginFrame(48);
     const auto* wmo = appRenderer ? appRenderer->queryWMORenderer() : nullptr;
 
     // The name's anchor: the PlayerName attachment, else over the model
@@ -278,10 +279,12 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     // (0x007e5640), depth tested in the world - a wall in front hides it.
     auto drawOverheadName = [&](uint64_t guid, const game::Entity& e, const game::Unit& unit, bool isPlayer) {
         const glm::vec3 anchor = namePoint(guid, e);
-        if (guid != playerGuid && sight.blocked(wmo, guid, camPos, anchor)) return;
+        // On screen first: the projection is a multiply, the sight a ray
+        // through the city's geometry.
         float clipW = 0.0f;
         const auto at = project(viewProj, anchor, screenW, screenH, &clipW);
         if (!at) return;
+        if (guid != playerGuid && sight.blocked(wmo, guid, camPos, anchor)) return;
 
         // 0x0072d4f0: tags, the name with its title, then the guild or the
         // creature's title on lines of their own. A Mirror Image (aura 279)

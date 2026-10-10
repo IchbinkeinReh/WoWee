@@ -43,7 +43,18 @@ public:
         // them streams in and out.
         const bool moved = glm::distance(e.from, from) > kMovedUnits ||
                            glm::distance(e.to, to) > kMovedUnits;
+        // Within the frame's budget, oldest answers first in effect: one that
+        // has waited keeps its last answer (a frame or two old) until its
+        // turn. The camera moving moves every "from" at once - while the
+        // player walked through Dalaran that recomputed the sight of several
+        // hundred names every frame, which was most of the frame.
+        const bool known = e.age < kUnknownAge;
+        if ((moved || e.age >= kMaxAgeFrames) && known && budget_ <= 0) {
+            ++e.age;
+            return e.blocked;
+        }
         if (moved || e.age >= kMaxAgeFrames) {
+            if (known) --budget_;
             e.from = from;
             e.to = to;
             e.age = 0;
@@ -54,15 +65,23 @@ public:
         return e.blocked;
     }
 
+    /// How many answers may be recomputed until the next call; a subject
+    /// never asked about is always answered. Without a call there is no limit.
+    void beginFrame(int budget) { budget_ = budget; }
+
 private:
-    static constexpr std::size_t kMaxEntries = 512;
+    static constexpr int kUnknownAge = 1000;
+    int budget_ = 1 << 30;
+    // Above a crowded city's worth of units, so the cache is not dropped
+    // whole every few frames there.
+    static constexpr std::size_t kMaxEntries = 2048;
     static constexpr float kMovedUnits = 0.5f;
     static constexpr int kMaxAgeFrames = 15;
 
     struct Entry {
         glm::vec3 from{};
         glm::vec3 to{};
-        int age = 1000;
+        int age = kUnknownAge;
         bool blocked = false;
     };
     std::unordered_map<uint64_t, Entry> entries_;
