@@ -150,21 +150,29 @@ void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const Interi
         return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
     };
     // A doodad stays where it is: asked again only when the pass changes,
-    // and only then is the whole list walked.
-    if (passGeneration != lightsPassGeneration_ || instances.size() != lightsInstanceCount_) {
+    // a quarter of the list a frame. Walked whole, at once, on every change -
+    // and a new instance counted as one, which in a city is every frame - it
+    // was most of this function's cost. Instances added since are met as the
+    // walk reaches the end of the list.
+    if (passGeneration != lightsPassGeneration_) {
         lightsPassGeneration_ = passGeneration;
-        lightsInstanceCount_ = instances.size();
-        for (auto& inst : instances) {
+        lightsCursor_ = 0;
+    }
+    if (lightsCursor_ < instances.size()) {
+        const size_t end = std::min(instances.size(), lightsCursor_ + instances.size() / 4 + 1);
+        for (size_t i = lightsCursor_; i < end; ++i) {
+            auto& inst = instances[i];
             if (inst.isGameObject || inst.interiorPassGeneration == passGeneration) continue;
             inst.interiorPassGeneration = passGeneration;
             inst.interiorPass = inInteriorPass && inInteriorPass(inst.position);
         }
+        lightsCursor_ = end;
     }
-    // A game object that moved asks for its floor again - a few a frame, the
+    // A game object that moved asks for its floor again - three a frame, the
     // rest keeping theirs a frame or two longer. Each is a ray through the
     // world's geometry, and a city has dozens of objects that shift a little
     // every frame.
-    int floorBudget = 8;
+    int floorBudget = 3;
     size_t keep = 0;
     for (size_t k = 0; k < gameObjectInstanceIds_.size(); ++k) {
         const uint32_t id = gameObjectInstanceIds_[k];

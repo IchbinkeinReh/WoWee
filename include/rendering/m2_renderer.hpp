@@ -1243,7 +1243,7 @@ private:
     /// instance is gone or no longer a game object is dropped as it is met.
     std::vector<uint32_t> gameObjectInstanceIds_;
     uint64_t lightsPassGeneration_ = ~0ull;  ///< the pass the doodads were last asked against
-    size_t lightsInstanceCount_ = 0;         ///< and how many there were then: new ones are asked too
+    size_t lightsCursor_ = 0;                ///< how far the walk of them against it has got
     uint32_t lastDrawCallCount = 0;
     size_t modelCacheLimit_ = 6000;
     uint32_t modelLimitRejectWarnings_ = 0;
