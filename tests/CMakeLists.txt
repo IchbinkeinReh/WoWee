@@ -189,6 +189,14 @@ wowee_add_test(test_app_lifecycle
             ${CMAKE_SOURCE_DIR}/src/ui/android_ime.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_device_recovery ───────────────────────────────────
+# What the client decides when the driver says the Vulkan device is lost:
+# rebuild it, wait for a window to build it on, or give up. No device can be
+# lost here; the decisions can be made.
+wowee_add_test(test_device_recovery
+    SOURCES test_device_recovery.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_asset_inventory ────────────────────────────────────
 # What is installed and whether it can be used. The client used to start with
 # nothing extracted and fail far from the cause, never saying there were no

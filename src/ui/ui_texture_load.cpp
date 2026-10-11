@@ -10,6 +10,15 @@
 
 namespace wowee::ui {
 
+bool uiTexturesReplaced(uint32_t& seen) {
+    const auto* ctx = rendering::VkContext::globalInstance();
+    if (!ctx) return false;
+    const uint32_t generation = ctx->uiTextureGeneration();
+    if (generation == seen) return false;
+    seen = generation;
+    return true;
+}
+
 VkDescriptorSet uploadUiTextureFromBlp(pipeline::AssetManager* assetManager,
                                        const std::string& path,
                                        core::Window* window,
@@ -74,6 +83,8 @@ VkDescriptorSet itemIconTexture(uint32_t displayInfoId,
     // Shared across the interface: the bags, the action bar, tooltips and the
     // dialogs all draw the same items.
     static std::unordered_map<uint32_t, VkDescriptorSet> cache;
+    static uint32_t generationSeen = 0;
+    if (uiTexturesReplaced(generationSeen)) cache.clear();
     auto it = cache.find(displayInfoId);
     if (it != cache.end()) return it->second;
 

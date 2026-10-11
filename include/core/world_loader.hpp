@@ -46,6 +46,13 @@ public:
     // Process deferred world entry (called from Application::update each frame)
     void processPendingEntry();
 
+    /// The world loaded again, here and now, into a renderer rebuilt after a
+    /// lost Vulkan device - where the player stands, or where a teleport not
+    /// yet taken is sending them - with every entity the session already
+    /// knows handed to the spawner again, since the server will not send
+    /// them twice. The same load as any other, loading screen and all.
+    void reloadAfterDeviceLoss(uint32_t mapId, float x, float y, float z);
+
     // Map name utilities
     static const char* mapIdToName(uint32_t mapId);
     static const char* mapDisplayName(uint32_t mapId);
@@ -126,6 +133,8 @@ private:
 
     uint32_t loadedMapId_ = 0xFFFFFFFF;  // Map ID of currently loaded terrain (0xFFFFFFFF = none)
     bool loadingWorld_ = false;          // True while loadOnlineWorldTerrain is running
+    /// Set by reloadAfterDeviceLoss for the load it starts.
+    bool respawnKnownEntitiesOnLoad_ = false;
 
     struct PendingWorldEntry {
         uint32_t mapId; float x, y, z;

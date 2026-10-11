@@ -6,6 +6,7 @@
 
 #include <fstream>
 #include "rendering/vk_utils.hpp"
+#include "rendering/device_recovery.hpp"
 #include "core/logger.hpp"
 #include "core/env_flag.hpp"
 #include "core/frame_profiler.hpp"
@@ -25,6 +26,16 @@ namespace wowee {
 namespace rendering {
 
 VkContext* VkContext::sInstance_ = nullptr;
+
+// classifyGpuResult takes the code as a plain integer so it can be tested
+// without Vulkan; these hold it to the real values.
+static_assert(vk_result_code::kSuccess == VK_SUCCESS);
+static_assert(vk_result_code::kNotReady == VK_NOT_READY);
+static_assert(vk_result_code::kTimeout == VK_TIMEOUT);
+static_assert(vk_result_code::kSuboptimal == VK_SUBOPTIMAL_KHR);
+static_assert(vk_result_code::kDeviceLost == VK_ERROR_DEVICE_LOST);
+static_assert(vk_result_code::kSurfaceLost == VK_ERROR_SURFACE_LOST_KHR);
+static_assert(vk_result_code::kOutOfDate == VK_ERROR_OUT_OF_DATE_KHR);
 
 // Hash a VkSamplerCreateInfo into a 64-bit key for the sampler cache.
 // FNV-1a chosen for speed and low collision rate on small structured data.
@@ -208,8 +219,10 @@ void VkContext::shutdown() {
     immCmdBuf_ = VK_NULL_HANDLE;
     if (transferCommandPool_) { vkDestroyCommandPool(device, transferCommandPool_, nullptr); transferCommandPool_ = VK_NULL_HANDLE; }
 
-    // Persist pipeline cache to disk before tearing down the device.
-    savePipelineCache();
+    // Persist pipeline cache to disk before tearing down the device - but not
+    // a lost device's. What it would write is whatever the driver had when it
+    // died, and the next start would build every pipeline from it.
+    if (!deviceLost_) savePipelineCache();
     if (pipelineCache_) {
         vkDestroyPipelineCache(device, pipelineCache_, nullptr);
         pipelineCache_ = VK_NULL_HANDLE;
@@ -286,6 +299,62 @@ void VkContext::shutdown() {
     if (instance) { vkDestroyInstance(instance, nullptr); instance = VK_NULL_HANDLE; }
 
     LOG_DEBUG("Vulkan context shutdown complete");
+}
+
+void VkContext::simulateDeviceLoss() {
+    if (deviceLost_ || device == VK_NULL_HANDLE) return;
+    deviceLost_ = true;
+    LOG_WARNING("Device taken for lost on purpose (WOWEE_SIMULATE_DEVICE_LOSS)");
+}
+
+bool VkContext::rebuildAfterDeviceLoss() {
+    SDL_Window* window = sdlWindow_;
+    if (!window) return false;
+    const bool background = lifecycle_.inBackground();
+
+    // Everything made from the old instance goes, the instance with it: a
+    // physical device that came back from a reset is not promised to be the
+    // handle it was, and vkCreateDevice on the old one may answer lost again.
+    shutdown();
+
+    // shutdown() releases handles and leaves the bookkeeping around them as
+    // the last frame left it. initialize() was only ever run on a fresh
+    // object, so that is put back here: no frame half way round the ring, no
+    // upload batch open, nothing waiting to be presented.
+    currentFrame = 0;
+    extraPresents_.clear();
+    currentAcquireSemaphore_ = VK_NULL_HANDLE;
+    uploadBatchDepth_ = 0;
+    inUploadBatch_ = false;
+    batchCmd_ = VK_NULL_HANDLE;
+    inFlightBatches_.clear();
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        gpuMarkCount_[i] = 0;
+        gpuMarksPending_[i] = false;
+    }
+    gpuTimings_.clear();
+    swapchainDirty = false;
+    // Starting single-sampled, as a first start does: the saved setting is put
+    // back afterwards the way it is then, through the renderer's own rebuild
+    // (GameScreen::reapplySettingsAfterGpuRebuild).
+    msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
+    // A second window keeps semaphores of its own and remakes them when this
+    // moves; none of them belong to the new device.
+    ++syncResetGeneration_;
+    lifecycle_ = SurfaceLifecycle{};
+    if (background) lifecycle_.enterBackground();
+    deviceLost_ = false;
+
+    if (!initialize(window)) {
+        LOG_ERROR("Rebuilding the Vulkan device failed");
+        // Torn down, not half built: whatever initialize made before it
+        // stopped goes now, and the next attempt starts from nothing again.
+        shutdown();
+        deviceLost_ = true;
+        return false;
+    }
+    LOG_WARNING("Vulkan device rebuilt on ", gpuName_);
+    return true;
 }
 
 void VkContext::deferAfterFrameFence(std::function<void()>&& fn) {
@@ -1423,7 +1492,7 @@ void VkContext::checkpoint(VkCommandBuffer cmd, const char* label) {
 }
 
 void VkContext::noteDeviceLost(const char* where, VkResult result) {
-    if (result != VK_ERROR_DEVICE_LOST) return;
+    if (classifyGpuResult(result) != GpuResultClass::DeviceLost) return;
     // The first report is the one that matters: every call after it fails
     // the same way, and a log full of them buries the one that was first.
     if (deviceLost_) return;

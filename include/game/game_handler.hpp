@@ -580,6 +580,11 @@ public:
     /// is drawn without any item moving.
     void markOnlineEquipmentDirty() { onlineEquipDirty_ = true; }
     void resetEquipmentDirtyTracking() { lastEquipDisplayIds_ = {}; onlineEquipDirty_ = true; }
+    /// Every known entity handed to the spawn callbacks again, with the other
+    /// players' equipment and the player's own mount, for a world whose
+    /// render instances were all discarded while the session went on (see
+    /// EntityController::respawnKnownEntities).
+    void respawnKnownEntities();
     void unequipToBackpack(EquipSlot equipSlot);
 
     // Targeting

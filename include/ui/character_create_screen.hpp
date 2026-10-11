@@ -30,6 +30,10 @@ public:
     void setStatus(const std::string& msg, bool isError = false);
     void reset();
     void initializePreview(pipeline::AssetManager* am);
+    /// Lets go of the 3D preview for a Vulkan device about to be replaced,
+    /// and builds it again on the new one, dressed as it was.
+    void releasePreview();
+    void restorePreview();
 
     /** Set allowed races/classes from expansion profile. Empty = allow all (WotLK default). */
     void setExpansionConstraints(const std::vector<uint32_t>& races, const std::vector<uint32_t>& classes);
@@ -71,6 +75,8 @@ private:
 
     // 3D model preview
     std::unique_ptr<rendering::CharacterPreview> preview_;
+    /// Released by releasePreview, to be built again by restorePreview.
+    bool previewReleased_ = false;
     pipeline::AssetManager* assetManager_ = nullptr;
     int prevRaceIndex_ = -1;
     int prevGenderIndex_ = -1;

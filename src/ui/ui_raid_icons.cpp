@@ -15,6 +15,8 @@ VkDescriptorSet getRaidTargetIcon(uint8_t icon, pipeline::AssetManager* assetMan
     if (icon >= kRaidTargetIconCount || !assetManager) return VK_NULL_HANDLE;
 
     static std::array<VkDescriptorSet, kRaidTargetIconCount> cache{};
+    static uint32_t generationSeen = 0;
+    if (uiTexturesReplaced(generationSeen)) cache = {};
     if (cache[icon]) return cache[icon];
 
     // Blizzard numbers the files 1-8 in the same order as the icon indices.

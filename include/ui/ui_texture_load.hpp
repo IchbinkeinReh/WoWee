@@ -54,6 +54,13 @@ VkDescriptorSet uploadUiTextureFromBlp(pipeline::AssetManager* assetManager,
                                        UiTextureLoad* why = nullptr,
                                        int* width = nullptr, int* height = nullptr);
 
+/// Whether every UI texture has been destroyed since `seen` - a Vulkan
+/// device lost and rebuilt (VkContext::uiTextureGeneration) - and so whether
+/// a cache of sets from uploadUiTextureFromBlp has to be thrown away. Moves
+/// `seen` on when it answers yes. Drawing with a set from before is a fault
+/// the GPU answers by resetting.
+bool uiTexturesReplaced(uint32_t& seen);
+
 /// One icon, uploaded at most once and at most one per frame's budget.
 ///
 /// The spellbook and the talent tree ask this the same way and want the same

@@ -141,6 +141,29 @@ void GameScreen::applySavedAntiAliasing(rendering::Renderer* renderer) {
     renderer->setMsaaSamples(msaaSamplesForChoice(settingsPanel_.pendingAntiAliasing));
 }
 
+void GameScreen::reapplySettingsAfterGpuRebuild(rendering::Renderer* renderer) {
+    auto& panel = settingsPanel_;
+    panel.minimapSettingsApplied_ = false;
+    panel.zoneSettingsApplied_ = false;
+    panel.terrainSettingsApplied_ = false;
+    panel.lightingSettingsApplied_ = false;
+    panel.fxaaSettingsApplied_ = false;
+    panel.enhancedWaterApplied_ = false;
+    panel.lensFlareApplied_ = false;
+    panel.normalMapSettingsApplied_ = false;
+    panel.fsrSettingsApplied_ = false;
+    // The rebuilt context starts single-sampled, as at startup.
+    applySavedAntiAliasing(renderer);
+    panel.applyLoadedSettings();
+    // And the camera's, which is made again with the renderer: the graphics
+    // list above does not carry them, because at startup the camera is given
+    // them by the stored CVars instead.
+    for (const char* key : {"fov", "camerashake", "mousespeed", "cameramaxdistance",
+                            "pivotheight", "idleorbit", "invertmouse"}) {
+        panel.applySettingSideEffects(key);
+    }
+}
+
 void GameScreen::applySavedDisplayMode(core::Window* window) {
     if (!window) return;
     // Saved on every change and read back by the panel, and applied by nobody
@@ -1131,6 +1154,8 @@ void GameScreen::renderPlayerInfo(game::GameHandler& gameHandler) {
 VkDescriptorSet cursorTexture(pipeline::AssetManager* assets, core::Window* window,
                               const char* path) {
     static std::unordered_map<std::string, VkDescriptorSet> loaded;
+    static uint32_t generationSeen = 0;
+    if (ui::uiTexturesReplaced(generationSeen)) loaded.clear();
     auto it = loaded.find(path);
     if (it != loaded.end() && it->second != VK_NULL_HANDLE) return it->second;
 

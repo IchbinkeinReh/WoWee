@@ -56,6 +56,10 @@ public:
     /// Set services (dependency injection)
     void setServices(const UIServices& services) { services_ = services; }
 
+    /// Lets go of the 3D preview, for a Vulkan device about to be replaced.
+    /// It is built and dressed again the next time the screen is drawn.
+    void releasePreview();
+
     /**
      * Reset selection state (e.g., when switching servers)
      */

@@ -7,6 +7,7 @@
 #include "ui/settings_schema.hpp"
 #include "pipeline/m2_asset_loader.hpp"
 #include "core/coordinates.hpp"
+#include "core/app_clock.hpp"
 #include "ui/minimap_projection.hpp"
 #include "core/profiler.hpp"
 #include "core/frame_profiler.hpp"
@@ -2161,10 +2162,23 @@ void Application::run() {
 
         processDeferredLogoutToLogin();
 
-        // Exit gracefully on GPU device lost (unrecoverable)
-        if (renderer && renderer->getVkContext() && renderer->getVkContext()->isDeviceLost()) {
-            LOG_ERROR("GPU device lost - exiting application");
-            window->setShouldClose(true);
+        // A lost GPU device: rebuilt with everything drawn with it while the
+        // session carries on, here between frames where nothing is recording
+        // - or, past what DeviceRecovery allows, the end of the run.
+        if (rendering::VkContext* vk = window->getVkContext(); renderer && vk) {
+            // WOWEE_SIMULATE_DEVICE_LOSS=<seconds>: the device taken for lost
+            // that long into the run, once, so the rebuild can be watched on a
+            // machine whose driver never loses it.
+            static const double simulateLossAt = [] {
+                const char* v = std::getenv("WOWEE_SIMULATE_DEVICE_LOSS");
+                return (v && *v) ? std::atof(v) : -1.0;
+            }();
+            static bool simulatedLoss = false;
+            if (simulateLossAt >= 0.0 && !simulatedLoss && core::appTimeSeconds() >= simulateLossAt) {
+                simulatedLoss = true;
+                vk->simulateDeviceLoss();
+            }
+            if (vk->isDeviceLost()) handleDeviceLoss(*vk);
         }
 
         // Pace from the start of the frame we just completed. Using deltaTime
@@ -2312,19 +2326,7 @@ void Application::shutdown() {
     // with the renderer, so it has to let go before the renderer does. Left to
     // member destruction order it would free images against a device that has
     // already gone.
-    unitPortrait_.shutdown(renderer.get());
-    targetPortrait_.shutdown(renderer.get());
-    petPortrait_.shutdown(renderer.get());
-    focusPortrait_.shutdown(renderer.get());
-    npcPortrait_.shutdown(renderer.get());
-    inspectModel_.shutdown(renderer.get());
-    dressUpModel_.shutdown(renderer.get());
-    auctionDressUpModel_.shutdown(renderer.get());
-    petModel_.shutdown(renderer.get());
-    stableModel_.shutdown(renderer.get());
-    companionModel_.shutdown(renderer.get());
-    for (auto& p : partyPortraits_) p.shutdown(renderer.get());
-    paperdollModel_.shutdown(renderer.get());
+    shutdownPortraits();
 
     // For the same reason, and it was never being done: ImGui's Vulkan backend
     // holds a pipeline, its layout and descriptor set layout, two shader
@@ -2394,6 +2396,164 @@ void Application::shutdown() {
     LOG_DEBUG("Application shutdown complete");
 }
 
+void Application::shutdownPortraits() {
+    unitPortrait_.shutdown(renderer.get());
+    targetPortrait_.shutdown(renderer.get());
+    petPortrait_.shutdown(renderer.get());
+    focusPortrait_.shutdown(renderer.get());
+    npcPortrait_.shutdown(renderer.get());
+    inspectModel_.shutdown(renderer.get());
+    dressUpModel_.shutdown(renderer.get());
+    auctionDressUpModel_.shutdown(renderer.get());
+    petModel_.shutdown(renderer.get());
+    stableModel_.shutdown(renderer.get());
+    companionModel_.shutdown(renderer.get());
+    for (auto& p : partyPortraits_) p.shutdown(renderer.get());
+    paperdollModel_.shutdown(renderer.get());
+}
+
+void Application::handleDeviceLoss(rendering::VkContext& vk) {
+    using Action = rendering::DeviceRecovery::Action;
+    deviceRecovery_.deviceLost(core::appTimeSeconds());
+    switch (deviceRecovery_.next(vk.canRebuildDevice())) {
+        case Action::None:
+            return;
+        case Action::Wait:
+            // In the background, or back without a native window yet. Nothing
+            // is drawn meanwhile (render() says so once a second), and the
+            // device is rebuilt on the first frame there is a window for it.
+            return;
+        case Action::GiveUp:
+            LOG_ERROR("GPU device lost ", deviceRecovery_.lossesInWindow(), " times in ",
+                      static_cast<int>(rendering::DeviceRecovery::kLossWindowSeconds),
+                      "s, or would not come back - exiting application");
+            window->setShouldClose(true);
+            return;
+        case Action::Rebuild:
+            if (!recoverFromDeviceLoss()) {
+                LOG_ERROR("GPU device lost and could not be rebuilt - exiting application");
+                window->setShouldClose(true);
+            }
+            return;
+    }
+}
+
+bool Application::waitPumpingEvents(double seconds) {
+    const auto until = std::chrono::steady_clock::now() +
+                       std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                           std::chrono::duration<double>(seconds));
+    do {
+        // Only a quit is acted on, as the loading screen does. The app going
+        // to the background and back is seen by the lifecycle watch whoever
+        // polls, and reaches the context from there.
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_EVENT_QUIT) {
+                window->setShouldClose(true);
+                return false;
+            }
+        }
+        beatWatchdog();
+        SDL_Delay(20);
+    } while (std::chrono::steady_clock::now() < until);
+    return true;
+}
+
+void Application::releaseGpuForDeviceRebuild() {
+    // The order is shutdown()'s, for the same reasons: whatever holds a
+    // preview or a texture goes before the UI backend, the UI backend before
+    // the renderer, and the renderer before the context. Nothing outside the
+    // GPU is touched - the connection, the entities, the interface's state
+    // and the player's position all stay.
+    if (mapWindow_) mapWindow_->close();
+    ui::gamepadControls().setCameraController(nullptr);
+    ui::touchControls().setCameraController(nullptr);
+
+    // Every render instance is about to be gone. The spawner forgets the ones
+    // it made while their renderers can still be asked to drop them; the
+    // entities they drew stay with the game handler and are handed back to it
+    // when the world is loaded again (WorldLoader::reloadAfterDeviceLoss).
+    if (gameHandler && gameHandler->getTransportManager()) {
+        auto* tm = gameHandler->getTransportManager();
+        tm->setWMORenderer(nullptr);
+        tm->setM2Renderer(nullptr);
+        // Each transport names the instance it moves, and the rebuilt
+        // renderers hand those numbers out again to other models. They are
+        // registered afresh as their game objects are spawned again.
+        tm->clearTransports();
+    }
+    if (entitySpawner_) entitySpawner_->resetAllState();
+    playerCharacterSpawned = false;
+    npcsSpawned = false;
+    highlightedInstance_ = 0;
+    highlightedKind_ = 0;
+
+    shutdownPortraits();
+    if (uiManager) uiManager->releaseGpu();
+    if (renderer) renderer->shutdown();
+    // The context itself is torn down by its own rebuild.
+}
+
+bool Application::recoverFromDeviceLoss() {
+    rendering::VkContext* vk = window ? window->getVkContext() : nullptr;
+    if (!vk || !renderer) return false;
+    LOG_WARNING("GPU device lost - rebuilding the device and everything drawn with it "
+                "(recovery ", deviceRecovery_.recoveries() + 1, " this run)");
+    const auto started = std::chrono::steady_clock::now();
+    const bool inWorld = state == AppState::IN_GAME && gameHandler && gameHandler->isInWorld() &&
+                         worldLoader_;
+
+    releaseGpuForDeviceRebuild();
+
+    // The device, tried again with a growing delay while the driver comes
+    // back, and held while the app is away - Android may send it to the
+    // background in the middle of this.
+    while (!vk->rebuildAfterDeviceLoss()) {
+        const double delay = deviceRecovery_.rebuildFailed();
+        if (deviceRecovery_.next(true) == rendering::DeviceRecovery::Action::GiveUp) return false;
+        LOG_WARNING("Trying the device again in ", delay, "s (attempt ",
+                    deviceRecovery_.attempts() + 1, ")");
+        if (!waitPumpingEvents(delay)) return false;
+        while (!vk->canRebuildDevice()) {
+            if (!waitPumpingEvents(0.1)) return false;
+        }
+    }
+    deviceRecovery_.rebuilt();
+
+    // shutdown() let go of it with everything else.
+    renderer->setAudioCoordinator(audioCoordinator_.get());
+    if (!renderer->initialize(window.get())) {
+        LOG_ERROR("Renderer would not initialize on the rebuilt device");
+        return false;
+    }
+    if (uiManager) uiManager->restoreGpu();
+
+    // The world, loaded again where the player is. The session never left it:
+    // the server is still sending, the entities are all known, and only what
+    // drew them is new.
+    if (inWorld) {
+        const auto& movement = gameHandler->getMovementInfo();
+        const glm::vec3 server = core::coords::canonicalToServer(
+            glm::vec3(movement.x, movement.y, movement.z));
+        worldLoader_->reloadAfterDeviceLoss(gameHandler->getCurrentMapId(),
+                                            server.x, server.y, server.z);
+        // The state did not change, so setState did not wire the new camera
+        // controller and spell visual system.
+        if (state == AppState::IN_GAME) connectWorldHooks();
+    }
+    if (uiManager) uiManager->getGameScreen().reapplySettingsAfterGpuRebuild(renderer.get());
+    // The stored CVars as well, which reach the model renderers, the weather
+    // and the camera only by being acted on - at startup once the interface
+    // is loaded, which it still is.
+    if (addonManager_ && addonsLoaded_) addonManager_->reapplyStoredCVars();
+
+    LOG_WARNING("GPU device rebuilt in ",
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started).count(),
+                "ms", inWorld ? ", world reloaded" : "");
+    return true;
+}
+
 void Application::setState(AppState newState) {
     if (state == newState) {
         return;
@@ -2445,332 +2605,342 @@ void Application::setState(AppState newState) {
                 }
             }
             break;
-        case AppState::IN_GAME: {
-            // Wire up movement opcodes from camera controller
-            if (renderer && renderer->getCameraController()) {
-                auto* cc = renderer->getCameraController();
-                cc->setMovementCallback([this](uint32_t opcode) {
-                    if (gameHandler) {
-                        gameHandler->sendMovement(static_cast<game::Opcode>(opcode));
-                    }
-                });
-                cc->setStandUpCallback([this]() {
-                    if (gameHandler) {
-                        gameHandler->setStandState(rendering::AnimationController::STAND_STATE_STAND);
-                    }
-                });
-                cc->setSitDownCallback([this]() {
-                    if (gameHandler) {
-                        gameHandler->setStandState(rendering::AnimationController::STAND_STATE_SIT);
-                    }
-                    if (renderer) {
-                        if (auto* ac = renderer->getAnimationController()) {
-                            ac->setStandState(rendering::AnimationController::STAND_STATE_SIT);
-                        }
-                    }
-                });
-                // The stand state is carried by AnimationCallbackHandler, which
-                // owns the one callback slot for it. A second registration here
-                // replaced or was replaced by that one depending on which was
-                // built last, which is how the seated flag stopped arriving.
-                cc->setAutoFollowCancelCallback([this]() {
-                    if (gameHandler) {
-                        gameHandler->cancelFollow();
-                    }
-                });
-                cc->setUseWoWSpeed(true);
-            }
-            if (gameHandler) {
-                gameHandler->setFaceCameraProvider([this]() -> float {
-                    // Turn the character to the camera's look direction and report it in
-                    // canonical space (same camera-yaw→canonical mapping as the per-frame
-                    // orientation sync). Lets a fishing cast drop the bobber in front of
-                    // where the player is aiming even while standing still.
-                    if (!renderer || !renderer->getCameraController())
-                        return gameHandler ? gameHandler->getMovementInfo().orientation : 0.0f;
-                    // Use the CAMERA's live look yaw (getYaw), not getFacingYaw: the latter is
-                    // the character's facing, which is NOT updated by left-mouse orbit, so while
-                    // aiming at the water standing still it is stale. Turn the character to the
-                    // camera aim and use the same yaw→canonical mapping the (working) melee
-                    // facing uses, so the bobber lands where the player is looking.
-                    float camYawDeg = renderer->getCameraController()->getYaw();
-                    renderer->setCharacterYaw(camYawDeg);
-                    renderer->getCameraController()->setFacingYaw(camYawDeg);
-                    // "Face land to fish" ⇒ the bobber landed 180° opposite the aim, so the
-                    // canonical is a half-turn off here (getYaw's zero is opposite the look
-                    // vector). Add the half-turn so the bobber lands where the camera looks.
-                    float canon = core::coords::normalizeAngleRad(glm::radians(360.0f - camYawDeg));
-                    LOG_WARNING("[FISH-AIM] getYaw=", camYawDeg,
-                                " getFacingYaw=", renderer->getCameraController()->getFacingYaw(),
-                                " charYaw=", renderer->getCharacterYaw(),
-                                " canonicalDeg=", canon * 57.29578f,
-                                " serverYawDeg=", core::coords::canonicalToServerYaw(canon) * 57.29578f);
-                    return canon;
-                });
-
-                gameHandler->setMeleeSwingCallback([this](uint32_t spellId) {
-                    if (renderer) {
-                        // Ranged auto-attack spells: Auto Shot (75), Shoot (5019), Throw (2764)
-                        if (game::spellclass::isRangedWeaponAutoAttack(spellId)) {
-                            if (auto* ac = renderer->getAnimationController()) ac->triggerRangedShot();
-                        } else if (spellId != 0) {
-                            if (auto* ac = renderer->getAnimationController()) ac->triggerSpecialAttack(spellId);
-                        } else {
-                            if (auto* ac = renderer->getAnimationController()) ac->triggerMeleeSwing();
-                        }
-                    }
-                });
-                // The player's casts set its sheath state (0x007fa2e0): a
-                // ranged spell such as Auto Shot draws the ranged weapon.
-                gameHandler->setSpellCastBeginCallback([this](uint64_t caster, uint32_t spellId) {
-                    if (!gameHandler) return;
-                    if (caster == gameHandler->getPlayerGuid()) {
-                        if (appearanceComposer_) appearanceComposer_->onSpellCastBegin(spellId);
-                    } else if (entitySpawner_) {
-                        entitySpawner_->onUnitSpellCastBegin(caster, spellId);
-                    }
-                });
-                // Any unit's swing draws its melee weapons (0x00756800).
-                gameHandler->setUnitAttackSwingCallback([this](uint64_t attacker) {
-                    if (!gameHandler) return;
-                    if (attacker == gameHandler->getPlayerGuid()) {
-                        if (appearanceComposer_ && appearanceComposer_->sheathState() != core::SheathState::Melee)
-                            appearanceComposer_->requestSheathState(core::SheathState::Melee);
-                    } else if (entitySpawner_) {
-                        entitySpawner_->onUnitAttackSwing(attacker);
-                    }
-                });
-                // Which units hold a kit's weapon effects, and at what scale
-                // (0x0073a6c0, 0x006f8c50).
-                if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr) {
-                    svs->setWeaponEffectHolder([this](uint32_t renderInstanceId) -> std::optional<float> {
-                        if (!entitySpawner_) return 1.0f;
-                        return entitySpawner_->kitWeaponEffectHolder(renderInstanceId);
-                    });
-                    // The aura state kits: the unit's model, its spell's
-                    // visual, its kits' scale, and whether it shows its
-                    // Flags 8 kits (0x00720400).
-                    svs->setCameraShakeSink([this](const rendering::camera_shake::Shake& shake, const glm::vec3& at) {
-                        if (renderer && renderer->getCameraController())
-                            renderer->getCameraController()->addCameraShake(shake, at);
-                    });
-                    svs->setAttachedEffectScale([this](uint32_t renderInstanceId) {
-                        return entitySpawner_ ? entitySpawner_->kitAttachedEffectScale(renderInstanceId) : 1.0f;
-                    });
-                    svs->setWorldEffectScale([this](uint32_t renderInstanceId) {
-                        return entitySpawner_ ? entitySpawner_->kitWorldEffectScale(renderInstanceId) : 1.0f;
-                    });
-                    // What a kit's CharProc procedures read: its spell's cast
-                    // time and aim, the unit's creature type flags, and the
-                    // light the tint goes to.
-                    svs->setKitSpellResolver([this](uint32_t spellId) {
-                        rendering::SpellVisualSystem::KitSpellInfo info;
-                        if (!gameHandler) return info;
-                        info.castTimeMs = gameHandler->getSpellData(spellId).castTimeMs;
-                        info.targetKind = gameHandler->getSpellTargetKind(spellId);
-                        info.mounts = gameHandler->spellAppliesMountedAura(spellId);
-                        return info;
-                    });
-                    svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
-                        return entitySpawner_ ? entitySpawner_->creatureTypeFlags(renderInstanceId) : 0u;
-                    });
-                    svs->setLightTintSink([this](const glm::vec3& colour, uint32_t amount) {
-                        if (renderer && renderer->getLightingManager())
-                            renderer->getLightingManager()->setSpellLightTint(colour, amount);
-                    });
-                    svs->setUnitInstanceResolver([this](uint64_t guid) -> uint32_t {
-                        return gameHandler ? gameHandler->resolveUnitRenderInstance(guid) : 0;
-                    });
-                    svs->setUnitMountInstanceResolver([this](uint64_t guid) -> uint32_t {
-                        if (!entitySpawner_ || !gameHandler) return 0;
-                        if (guid == gameHandler->getPlayerGuid()) return entitySpawner_->getMountInstanceId();
-                        return entitySpawner_->remotePlayerMountInstance(guid);
-                    });
-                    // CharProc 16's mount transition (0x006f9670): the
-                    // spell's mount, its model, whether the unit rides, and
-                    // where it is handed over.
-                    svs->setActivePlayerResolver([this]() -> uint64_t {
-                        return gameHandler ? gameHandler->getPlayerGuid() : 0;
-                    });
-                    svs->setMountDisplayResolver([this](uint32_t spellId) -> std::optional<uint32_t> {
-                        if (!gameHandler) return std::nullopt;
-                        const uint32_t entry = gameHandler->getSpellMountCreature(spellId);
-                        if (entry == 0) return std::nullopt;
-                        const auto& cache = gameHandler->getCreatureInfoCache();
-                        auto it = cache.find(entry);
-                        if (it == cache.end()) {
-                            gameHandler->queryCreatureInfo(entry, 0);
-                            return 0u;
-                        }
-                        if (it->second.displayId[0] == 0) return std::nullopt;
-                        return it->second.displayId[0];
-                    });
-                    svs->setMountModelLoader([this](uint32_t displayId) -> uint32_t {
-                        return entitySpawner_ ? entitySpawner_->loadMountModel(displayId) : 0u;
-                    });
-                    svs->setUnitScaleResolver([this](uint64_t guid) -> float {
-                        return entitySpawner_ ? entitySpawner_->unitModelScale(guid) : 1.0f;
-                    });
-                    auto mountField = [this](uint64_t guid) -> uint32_t {
-                        if (!gameHandler) return 0;
-                        if (guid == gameHandler->getPlayerGuid()) return gameHandler->isMounted() ? 1u : 0u;
-                        auto entity = gameHandler->getEntityManager().getEntity(guid);
-                        if (!entity || !entity->isUnit()) return 0;
-                        return static_cast<const game::Unit&>(*entity).getMountDisplayId();
-                    };
-                    svs->setUnitMountedQuery([mountField](uint64_t guid) { return mountField(guid) != 0; });
-                    svs->setUnitMountFieldQuery([this](uint64_t guid) -> uint32_t {
-                        if (!gameHandler) return 0;
-                        if (guid == gameHandler->getPlayerGuid()) return gameHandler->currentMountDisplayIdRef();
-                        auto entity = gameHandler->getEntityManager().getEntity(guid);
-                        if (!entity || !entity->isUnit()) return 0;
-                        return static_cast<const game::Unit&>(*entity).getMountDisplayId();
-                    });
-                    svs->setMountSink([this](uint64_t guid, uint32_t displayId) {
-                        if (!entitySpawner_ || !gameHandler) return;
-                        // Any unit: a creature's transition hands it over
-                        // as a player's does (0x007412b0, 0x00740450).
-                        const bool player = guid == gameHandler->getPlayerGuid();
-                        if (player || entitySpawner_->isPlayerSpawned(guid) ||
-                            entitySpawner_->getCreatureInstanceId(guid) != 0)
-                            entitySpawner_->mountUnitNow(guid, displayId, player);
-                    });
-                    svs->setGroundQuery([this](const glm::vec3& top, const glm::vec3& bottom)
-                                            -> std::optional<rendering::mount_transition::GroundHit> {
-                        if (!renderer) return std::nullopt;
-                        std::optional<float> best;
-                        glm::vec3 normal(0.0f, 0.0f, 1.0f);
-                        auto consider = [&](std::optional<float> z, const glm::vec3& n) {
-                            if (z && *z <= top.z && *z >= bottom.z && (!best || *z > *best)) {
-                                best = z;
-                                normal = n;
-                            }
-                        };
-                        if (auto* terrain = renderer->getTerrainManager()) {
-                            const auto z = terrain->getHeightAt(top.x, top.y);
-                            const auto zx = terrain->getHeightAt(top.x + 0.5f, top.y);
-                            const auto zy = terrain->getHeightAt(top.x, top.y + 0.5f);
-                            glm::vec3 n(0.0f, 0.0f, 1.0f);
-                            if (z && zx && zy) n = glm::normalize(glm::vec3((*z - *zx) * 2.0f, (*z - *zy) * 2.0f, 1.0f));
-                            consider(z, n);
-                        }
-                        if (auto* wmo = renderer->getWMORenderer()) consider(wmo->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
-                        if (auto* m2 = renderer->getM2Renderer()) consider(m2->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
-                        if (!best) return std::nullopt;
-                        const float span = top.z - bottom.z;
-                        return rendering::mount_transition::GroundHit{
-                            .fraction = span > 0.0f ? (top.z - *best) / span : 0.0f, .normal = normal};
-                    });
-                    svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
-                        return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
-                    });
-                    // A chain's ends (0x007fae90): the unit an instance
-                    // draws, its height, and a game object's place.
-                    svs->setInstanceUnitResolver([this](uint32_t renderInstanceId) -> uint64_t {
-                        return entitySpawner_ ? entitySpawner_->unitGuidForInstance(renderInstanceId) : 0;
-                    });
-                    svs->setUnitHeight([this](uint32_t renderInstanceId) {
-                        return entitySpawner_ ? entitySpawner_->unitGeoBoxHeight(renderInstanceId) : 0.0f;
-                    });
-                    svs->setMeleeDrawnQuery([this](uint64_t guid) {
-                        if (gameHandler && guid == gameHandler->getPlayerGuid())
-                            return appearanceComposer_ && appearanceComposer_->sheathState() == core::SheathState::Melee;
-                        return entitySpawner_ && entitySpawner_->unitMeleeDrawn(guid);
-                    });
-                    // A kit's worn item (CharProc 17): the player's own
-                    // drawing, or another player's equipment.
-                    svs->setWornItemSink([this](uint64_t guid, int equipSlot, uint32_t displayId,
-                                                uint8_t inventoryType) {
-                        if (!gameHandler) return;
-                        if (guid == gameHandler->getPlayerGuid()) {
-                            if (appearanceComposer_)
-                                appearanceComposer_->setItemOverride(equipSlot, displayId, inventoryType);
-                            gameHandler->markOnlineEquipmentDirty();
-                            return;
-                        }
-                        if (!entitySpawner_) return;
-                        if (entitySpawner_->isPlayerSpawned(guid)) {
-                            entitySpawner_->setPlayerItemOverride(guid, equipSlot, displayId, inventoryType);
-                        } else if (equipSlot == rendering::spell_kit::equipSlotForComponentSlot(0)) {
-                            // Any other unit's head only (0x006f82d0).
-                            entitySpawner_->setNpcHeadItem(guid, displayId);
-                        }
-                    });
-                    svs->setObjectFrameResolver([this](uint64_t guid, glm::mat4& frame) {
-                        auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
-                        if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
-                        const glm::vec3 at = core::coords::canonicalToRender(
-                            glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
-                        frame = glm::rotate(glm::translate(glm::mat4(1.0f), at),
-                                            entity->getOrientation() + glm::half_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
-                        return true;
-                    });
-                    svs->setUnarmedKitsQuery([this](uint64_t guid) {
-                        if (gameHandler && guid == gameHandler->getPlayerGuid())
-                            return appearanceComposer_ && appearanceComposer_->unarmedKitsShown();
-                        return entitySpawner_ && entitySpawner_->unarmedKitsShown(guid);
-                    });
-                }
-                // Whether a text emote is sent, and the player's weapons put
-                // away when it is (0x006dd9e0).
-                gameHandler->setTextEmoteGateCallback([this](uint32_t textEmoteId) {
-                    using Gate = game::GameHandler::TextEmoteGate;
-                    if (!appearanceComposer_) return Gate::Send;
-                    switch (appearanceComposer_->onTextEmote(textEmoteId)) {
-                        case core::TextEmoteVerdict::Refused: return Gate::Refuse;
-                        case core::TextEmoteVerdict::RefusedWhileMoving: return Gate::RefuseWhileMoving;
-                        default: return Gate::Send;
-                    }
-                });
-                // The logout countdown finishing is not the end of it: the server
-                // confirms with SMSG_LOGOUT_COMPLETE, and only then does the client
-                // leave. Without this the countdown ran out and nothing happened.
-                gameHandler->setLogoutCompleteCallback([this](bool exiting) {
-                    if (exiting) {
-                        // 0x00409550: the world's music and ambience stop.
-                        if (auto* ac = getAudioCoordinator()) ac->leaveWorld();
-                        LOG_INFO("Logout complete - quitting");
-                        if (window) window->setShouldClose(true);
-                    } else {
-                        LOG_INFO("Logout complete - returning to character select");
-                        logoutToLogin();
-                    }
-                });
-                gameHandler->setKnockBackCallback([this](float vcos, float vsin, float hspeed, float vspeed) {
-                    if (renderer && renderer->getCameraController()) {
-                        renderer->getCameraController()->applyKnockBack(vcos, vsin, hspeed, vspeed);
-                    }
-                });
-                gameHandler->setCameraShakeCallback([this](uint32_t shakesId, uint32_t soundId) {
-                    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
-                    if (!svs) return;
-                    const glm::vec3 at = renderer->getCharacterPosition();
-                    svs->playCameraShakes(shakesId, at);
-                    svs->playSoundAt(soundId, at);
-                });
-                gameHandler->setPlayerSoundCallback([this](uint32_t soundId) {
-                    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
-                    if (svs) svs->playSoundAt(soundId, renderer->getCharacterPosition());
-                });
-                gameHandler->setAutoFollowCallback([this](const glm::vec3* renderPos) {
-                    if (renderer && renderer->getCameraController()) {
-                        if (renderPos) {
-                            renderer->getCameraController()->setAutoFollow(renderPos);
-                        } else {
-                            renderer->getCameraController()->cancelAutoFollow();
-                        }
-                    }
-                });
-                // Barber shop and other live appearance changes rebuild the model.
-                gameHandler->setPlayerModelRebuildCallback([this]() {
-                    refreshPlayerCharacterModel();
-                });
-            }
+        case AppState::IN_GAME:
+            connectWorldHooks();
             break;
-        }
         case AppState::DISCONNECTED:
             // Back to auth
             break;
+    }
+}
+
+// What the world's renderers and the game handler are wired with on entering
+// the world: the camera controller's movement and stance callbacks, the spell
+// visual system's resolvers, and the game handler's callbacks into them.
+//
+// Run by setState on the way in, and again by recoverFromDeviceLoss - the
+// camera controller and the spell visual system are made again with the
+// renderer, and the state does not change, so setState would not run it.
+void Application::connectWorldHooks() {
+    // Wire up movement opcodes from camera controller
+    if (renderer && renderer->getCameraController()) {
+        auto* cc = renderer->getCameraController();
+        cc->setMovementCallback([this](uint32_t opcode) {
+            if (gameHandler) {
+                gameHandler->sendMovement(static_cast<game::Opcode>(opcode));
+            }
+        });
+        cc->setStandUpCallback([this]() {
+            if (gameHandler) {
+                gameHandler->setStandState(rendering::AnimationController::STAND_STATE_STAND);
+            }
+        });
+        cc->setSitDownCallback([this]() {
+            if (gameHandler) {
+                gameHandler->setStandState(rendering::AnimationController::STAND_STATE_SIT);
+            }
+            if (renderer) {
+                if (auto* ac = renderer->getAnimationController()) {
+                    ac->setStandState(rendering::AnimationController::STAND_STATE_SIT);
+                }
+            }
+        });
+        // The stand state is carried by AnimationCallbackHandler, which
+        // owns the one callback slot for it. A second registration here
+        // replaced or was replaced by that one depending on which was
+        // built last, which is how the seated flag stopped arriving.
+        cc->setAutoFollowCancelCallback([this]() {
+            if (gameHandler) {
+                gameHandler->cancelFollow();
+            }
+        });
+        cc->setUseWoWSpeed(true);
+    }
+    if (gameHandler) {
+        gameHandler->setFaceCameraProvider([this]() -> float {
+            // Turn the character to the camera's look direction and report it in
+            // canonical space (same camera-yaw→canonical mapping as the per-frame
+            // orientation sync). Lets a fishing cast drop the bobber in front of
+            // where the player is aiming even while standing still.
+            if (!renderer || !renderer->getCameraController())
+                return gameHandler ? gameHandler->getMovementInfo().orientation : 0.0f;
+            // Use the CAMERA's live look yaw (getYaw), not getFacingYaw: the latter is
+            // the character's facing, which is NOT updated by left-mouse orbit, so while
+            // aiming at the water standing still it is stale. Turn the character to the
+            // camera aim and use the same yaw→canonical mapping the (working) melee
+            // facing uses, so the bobber lands where the player is looking.
+            float camYawDeg = renderer->getCameraController()->getYaw();
+            renderer->setCharacterYaw(camYawDeg);
+            renderer->getCameraController()->setFacingYaw(camYawDeg);
+            // "Face land to fish" ⇒ the bobber landed 180° opposite the aim, so the
+            // canonical is a half-turn off here (getYaw's zero is opposite the look
+            // vector). Add the half-turn so the bobber lands where the camera looks.
+            float canon = core::coords::normalizeAngleRad(glm::radians(360.0f - camYawDeg));
+            LOG_WARNING("[FISH-AIM] getYaw=", camYawDeg,
+                        " getFacingYaw=", renderer->getCameraController()->getFacingYaw(),
+                        " charYaw=", renderer->getCharacterYaw(),
+                        " canonicalDeg=", canon * 57.29578f,
+                        " serverYawDeg=", core::coords::canonicalToServerYaw(canon) * 57.29578f);
+            return canon;
+        });
+
+        gameHandler->setMeleeSwingCallback([this](uint32_t spellId) {
+            if (renderer) {
+                // Ranged auto-attack spells: Auto Shot (75), Shoot (5019), Throw (2764)
+                if (game::spellclass::isRangedWeaponAutoAttack(spellId)) {
+                    if (auto* ac = renderer->getAnimationController()) ac->triggerRangedShot();
+                } else if (spellId != 0) {
+                    if (auto* ac = renderer->getAnimationController()) ac->triggerSpecialAttack(spellId);
+                } else {
+                    if (auto* ac = renderer->getAnimationController()) ac->triggerMeleeSwing();
+                }
+            }
+        });
+        // The player's casts set its sheath state (0x007fa2e0): a
+        // ranged spell such as Auto Shot draws the ranged weapon.
+        gameHandler->setSpellCastBeginCallback([this](uint64_t caster, uint32_t spellId) {
+            if (!gameHandler) return;
+            if (caster == gameHandler->getPlayerGuid()) {
+                if (appearanceComposer_) appearanceComposer_->onSpellCastBegin(spellId);
+            } else if (entitySpawner_) {
+                entitySpawner_->onUnitSpellCastBegin(caster, spellId);
+            }
+        });
+        // Any unit's swing draws its melee weapons (0x00756800).
+        gameHandler->setUnitAttackSwingCallback([this](uint64_t attacker) {
+            if (!gameHandler) return;
+            if (attacker == gameHandler->getPlayerGuid()) {
+                if (appearanceComposer_ && appearanceComposer_->sheathState() != core::SheathState::Melee)
+                    appearanceComposer_->requestSheathState(core::SheathState::Melee);
+            } else if (entitySpawner_) {
+                entitySpawner_->onUnitAttackSwing(attacker);
+            }
+        });
+        // Which units hold a kit's weapon effects, and at what scale
+        // (0x0073a6c0, 0x006f8c50).
+        if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr) {
+            svs->setWeaponEffectHolder([this](uint32_t renderInstanceId) -> std::optional<float> {
+                if (!entitySpawner_) return 1.0f;
+                return entitySpawner_->kitWeaponEffectHolder(renderInstanceId);
+            });
+            // The aura state kits: the unit's model, its spell's
+            // visual, its kits' scale, and whether it shows its
+            // Flags 8 kits (0x00720400).
+            svs->setCameraShakeSink([this](const rendering::camera_shake::Shake& shake, const glm::vec3& at) {
+                if (renderer && renderer->getCameraController())
+                    renderer->getCameraController()->addCameraShake(shake, at);
+            });
+            svs->setAttachedEffectScale([this](uint32_t renderInstanceId) {
+                return entitySpawner_ ? entitySpawner_->kitAttachedEffectScale(renderInstanceId) : 1.0f;
+            });
+            svs->setWorldEffectScale([this](uint32_t renderInstanceId) {
+                return entitySpawner_ ? entitySpawner_->kitWorldEffectScale(renderInstanceId) : 1.0f;
+            });
+            // What a kit's CharProc procedures read: its spell's cast
+            // time and aim, the unit's creature type flags, and the
+            // light the tint goes to.
+            svs->setKitSpellResolver([this](uint32_t spellId) {
+                rendering::SpellVisualSystem::KitSpellInfo info;
+                if (!gameHandler) return info;
+                info.castTimeMs = gameHandler->getSpellData(spellId).castTimeMs;
+                info.targetKind = gameHandler->getSpellTargetKind(spellId);
+                info.mounts = gameHandler->spellAppliesMountedAura(spellId);
+                return info;
+            });
+            svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
+                return entitySpawner_ ? entitySpawner_->creatureTypeFlags(renderInstanceId) : 0u;
+            });
+            svs->setLightTintSink([this](const glm::vec3& colour, uint32_t amount) {
+                if (renderer && renderer->getLightingManager())
+                    renderer->getLightingManager()->setSpellLightTint(colour, amount);
+            });
+            svs->setUnitInstanceResolver([this](uint64_t guid) -> uint32_t {
+                return gameHandler ? gameHandler->resolveUnitRenderInstance(guid) : 0;
+            });
+            svs->setUnitMountInstanceResolver([this](uint64_t guid) -> uint32_t {
+                if (!entitySpawner_ || !gameHandler) return 0;
+                if (guid == gameHandler->getPlayerGuid()) return entitySpawner_->getMountInstanceId();
+                return entitySpawner_->remotePlayerMountInstance(guid);
+            });
+            // CharProc 16's mount transition (0x006f9670): the
+            // spell's mount, its model, whether the unit rides, and
+            // where it is handed over.
+            svs->setActivePlayerResolver([this]() -> uint64_t {
+                return gameHandler ? gameHandler->getPlayerGuid() : 0;
+            });
+            svs->setMountDisplayResolver([this](uint32_t spellId) -> std::optional<uint32_t> {
+                if (!gameHandler) return std::nullopt;
+                const uint32_t entry = gameHandler->getSpellMountCreature(spellId);
+                if (entry == 0) return std::nullopt;
+                const auto& cache = gameHandler->getCreatureInfoCache();
+                auto it = cache.find(entry);
+                if (it == cache.end()) {
+                    gameHandler->queryCreatureInfo(entry, 0);
+                    return 0u;
+                }
+                if (it->second.displayId[0] == 0) return std::nullopt;
+                return it->second.displayId[0];
+            });
+            svs->setMountModelLoader([this](uint32_t displayId) -> uint32_t {
+                return entitySpawner_ ? entitySpawner_->loadMountModel(displayId) : 0u;
+            });
+            svs->setUnitScaleResolver([this](uint64_t guid) -> float {
+                return entitySpawner_ ? entitySpawner_->unitModelScale(guid) : 1.0f;
+            });
+            auto mountField = [this](uint64_t guid) -> uint32_t {
+                if (!gameHandler) return 0;
+                if (guid == gameHandler->getPlayerGuid()) return gameHandler->isMounted() ? 1u : 0u;
+                auto entity = gameHandler->getEntityManager().getEntity(guid);
+                if (!entity || !entity->isUnit()) return 0;
+                return static_cast<const game::Unit&>(*entity).getMountDisplayId();
+            };
+            svs->setUnitMountedQuery([mountField](uint64_t guid) { return mountField(guid) != 0; });
+            svs->setUnitMountFieldQuery([this](uint64_t guid) -> uint32_t {
+                if (!gameHandler) return 0;
+                if (guid == gameHandler->getPlayerGuid()) return gameHandler->currentMountDisplayIdRef();
+                auto entity = gameHandler->getEntityManager().getEntity(guid);
+                if (!entity || !entity->isUnit()) return 0;
+                return static_cast<const game::Unit&>(*entity).getMountDisplayId();
+            });
+            svs->setMountSink([this](uint64_t guid, uint32_t displayId) {
+                if (!entitySpawner_ || !gameHandler) return;
+                // Any unit: a creature's transition hands it over
+                // as a player's does (0x007412b0, 0x00740450).
+                const bool player = guid == gameHandler->getPlayerGuid();
+                if (player || entitySpawner_->isPlayerSpawned(guid) ||
+                    entitySpawner_->getCreatureInstanceId(guid) != 0)
+                    entitySpawner_->mountUnitNow(guid, displayId, player);
+            });
+            svs->setGroundQuery([this](const glm::vec3& top, const glm::vec3& bottom)
+                                    -> std::optional<rendering::mount_transition::GroundHit> {
+                if (!renderer) return std::nullopt;
+                std::optional<float> best;
+                glm::vec3 normal(0.0f, 0.0f, 1.0f);
+                auto consider = [&](std::optional<float> z, const glm::vec3& n) {
+                    if (z && *z <= top.z && *z >= bottom.z && (!best || *z > *best)) {
+                        best = z;
+                        normal = n;
+                    }
+                };
+                if (auto* terrain = renderer->getTerrainManager()) {
+                    const auto z = terrain->getHeightAt(top.x, top.y);
+                    const auto zx = terrain->getHeightAt(top.x + 0.5f, top.y);
+                    const auto zy = terrain->getHeightAt(top.x, top.y + 0.5f);
+                    glm::vec3 n(0.0f, 0.0f, 1.0f);
+                    if (z && zx && zy) n = glm::normalize(glm::vec3((*z - *zx) * 2.0f, (*z - *zy) * 2.0f, 1.0f));
+                    consider(z, n);
+                }
+                if (auto* wmo = renderer->getWMORenderer()) consider(wmo->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
+                if (auto* m2 = renderer->getM2Renderer()) consider(m2->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
+                if (!best) return std::nullopt;
+                const float span = top.z - bottom.z;
+                return rendering::mount_transition::GroundHit{
+                    .fraction = span > 0.0f ? (top.z - *best) / span : 0.0f, .normal = normal};
+            });
+            svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
+                return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
+            });
+            // A chain's ends (0x007fae90): the unit an instance
+            // draws, its height, and a game object's place.
+            svs->setInstanceUnitResolver([this](uint32_t renderInstanceId) -> uint64_t {
+                return entitySpawner_ ? entitySpawner_->unitGuidForInstance(renderInstanceId) : 0;
+            });
+            svs->setUnitHeight([this](uint32_t renderInstanceId) {
+                return entitySpawner_ ? entitySpawner_->unitGeoBoxHeight(renderInstanceId) : 0.0f;
+            });
+            svs->setMeleeDrawnQuery([this](uint64_t guid) {
+                if (gameHandler && guid == gameHandler->getPlayerGuid())
+                    return appearanceComposer_ && appearanceComposer_->sheathState() == core::SheathState::Melee;
+                return entitySpawner_ && entitySpawner_->unitMeleeDrawn(guid);
+            });
+            // A kit's worn item (CharProc 17): the player's own
+            // drawing, or another player's equipment.
+            svs->setWornItemSink([this](uint64_t guid, int equipSlot, uint32_t displayId,
+                                        uint8_t inventoryType) {
+                if (!gameHandler) return;
+                if (guid == gameHandler->getPlayerGuid()) {
+                    if (appearanceComposer_)
+                        appearanceComposer_->setItemOverride(equipSlot, displayId, inventoryType);
+                    gameHandler->markOnlineEquipmentDirty();
+                    return;
+                }
+                if (!entitySpawner_) return;
+                if (entitySpawner_->isPlayerSpawned(guid)) {
+                    entitySpawner_->setPlayerItemOverride(guid, equipSlot, displayId, inventoryType);
+                } else if (equipSlot == rendering::spell_kit::equipSlotForComponentSlot(0)) {
+                    // Any other unit's head only (0x006f82d0).
+                    entitySpawner_->setNpcHeadItem(guid, displayId);
+                }
+            });
+            svs->setObjectFrameResolver([this](uint64_t guid, glm::mat4& frame) {
+                auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
+                if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
+                const glm::vec3 at = core::coords::canonicalToRender(
+                    glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
+                frame = glm::rotate(glm::translate(glm::mat4(1.0f), at),
+                                    entity->getOrientation() + glm::half_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
+                return true;
+            });
+            svs->setUnarmedKitsQuery([this](uint64_t guid) {
+                if (gameHandler && guid == gameHandler->getPlayerGuid())
+                    return appearanceComposer_ && appearanceComposer_->unarmedKitsShown();
+                return entitySpawner_ && entitySpawner_->unarmedKitsShown(guid);
+            });
+        }
+        // Whether a text emote is sent, and the player's weapons put
+        // away when it is (0x006dd9e0).
+        gameHandler->setTextEmoteGateCallback([this](uint32_t textEmoteId) {
+            using Gate = game::GameHandler::TextEmoteGate;
+            if (!appearanceComposer_) return Gate::Send;
+            switch (appearanceComposer_->onTextEmote(textEmoteId)) {
+                case core::TextEmoteVerdict::Refused: return Gate::Refuse;
+                case core::TextEmoteVerdict::RefusedWhileMoving: return Gate::RefuseWhileMoving;
+                default: return Gate::Send;
+            }
+        });
+        // The logout countdown finishing is not the end of it: the server
+        // confirms with SMSG_LOGOUT_COMPLETE, and only then does the client
+        // leave. Without this the countdown ran out and nothing happened.
+        gameHandler->setLogoutCompleteCallback([this](bool exiting) {
+            if (exiting) {
+                // 0x00409550: the world's music and ambience stop.
+                if (auto* ac = getAudioCoordinator()) ac->leaveWorld();
+                LOG_INFO("Logout complete - quitting");
+                if (window) window->setShouldClose(true);
+            } else {
+                LOG_INFO("Logout complete - returning to character select");
+                logoutToLogin();
+            }
+        });
+        gameHandler->setKnockBackCallback([this](float vcos, float vsin, float hspeed, float vspeed) {
+            if (renderer && renderer->getCameraController()) {
+                renderer->getCameraController()->applyKnockBack(vcos, vsin, hspeed, vspeed);
+            }
+        });
+        gameHandler->setCameraShakeCallback([this](uint32_t shakesId, uint32_t soundId) {
+            auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+            if (!svs) return;
+            const glm::vec3 at = renderer->getCharacterPosition();
+            svs->playCameraShakes(shakesId, at);
+            svs->playSoundAt(soundId, at);
+        });
+        gameHandler->setPlayerSoundCallback([this](uint32_t soundId) {
+            auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+            if (svs) svs->playSoundAt(soundId, renderer->getCharacterPosition());
+        });
+        gameHandler->setAutoFollowCallback([this](const glm::vec3* renderPos) {
+            if (renderer && renderer->getCameraController()) {
+                if (renderPos) {
+                    renderer->getCameraController()->setAutoFollow(renderPos);
+                } else {
+                    renderer->getCameraController()->cancelAutoFollow();
+                }
+            }
+        });
+        // Barber shop and other live appearance changes rebuild the model.
+        gameHandler->setPlayerModelRebuildCallback([this]() {
+            refreshPlayerCharacterModel();
+        });
     }
 }
 
@@ -4737,8 +4907,9 @@ void Application::render() {
         }
         // The loop still runs, to keep reading the socket. It does not need to
         // run at frame rate to do that, and a phone in someone's pocket should
-        // not be spending a core on it.
-        if (!vk->isDeviceLost()) SDL_Delay(50);
+        // not be spending a core on it. A lost device waits here too, until
+        // there is a window to rebuild it on (see handleDeviceLoss).
+        SDL_Delay(50);
         return;
     }
 

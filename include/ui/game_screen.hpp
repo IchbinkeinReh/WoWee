@@ -112,6 +112,13 @@ public:
     /// The saved windowed/fullscreen choice and vsync, applied before the
     /// first frame. Neither reaches the WindowConfig the window is built from.
     void applySavedDisplayMode(core::Window* window);
+    /// Every saved graphics setting, handed again to a renderer rebuilt after
+    /// a lost device. The renderer keeps what it holds itself; what lives in
+    /// the parts it rebuilt - the post-process chain, the minimap, the WMO
+    /// renderer, the fog - starts from its defaults and is given the saved
+    /// values the way it was at startup: at once where the part exists, and
+    /// by the per-part latches in update() for the ones the world load makes.
+    void reapplySettingsAfterGpuRebuild(rendering::Renderer* renderer);
 
     GameScreen();
 
@@ -374,6 +381,7 @@ private:
 
     // Spell icon cache: spellId -> GL texture ID
     std::unordered_map<uint32_t, VkDescriptorSet> spellIconCache_;
+    uint32_t spellIconGenerationSeen_ = 0;  ///< see uiTexturesReplaced
     // SpellIconID -> icon path (from SpellIcon.dbc)
     std::unordered_map<uint32_t, std::string> spellIconPaths_;
     // SpellID -> SpellIconID (from the active expansion's Spell.dbc layout)

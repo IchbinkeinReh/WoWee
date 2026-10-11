@@ -259,6 +259,18 @@ void UnitPortrait::shutdown(rendering::Renderer* renderer) {
     registered_ = false;
     preview_.reset();
     initialized_ = false;
+    // What the gone model was built from. A portrait used again afterwards -
+    // after a lost device is rebuilt - makes a new view, and has to load the
+    // model into it rather than take it as already there.
+    loadedCreaturePath_.clear();
+    loadedBake_.clear();
+    loadedEmblem_.reset();
+    loadedGuid_ = 0;
+    loadedRace_ = 0xFF;
+    loadedGender_ = 0xFF;
+    loadedAppearance_ = 0;
+    loadedFacialFeatures_ = 0;
+    loadedEquipHash_ = 0;
 }
 
 } // namespace wowee::ui

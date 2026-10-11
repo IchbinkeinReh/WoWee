@@ -1805,6 +1805,10 @@ bool AddonManager::reload() {
     return true;
 }
 
+void AddonManager::reapplyStoredCVars() {
+    if (lua_State* L = luaEngine_.getState()) applyStoredCVarSideEffects(L);
+}
+
 void AddonManager::shutdown() {
     saveAllSavedVariables();
     addons_.clear();

@@ -52,6 +52,7 @@
 #include <imgui_internal.h>
 #include <glm/gtc/constants.hpp>
 #include <algorithm>
+#include <iterator>
 #include <cmath>
 #include <cstring>
 #include <sstream>
@@ -123,6 +124,11 @@ namespace {
                                  wowee::core::Window* window) {
         static MinimapArt art;
         static bool gaveUp[8] = {};
+        static uint32_t generationSeen = 0;
+        if (wowee::ui::uiTexturesReplaced(generationSeen)) {
+            art = {};
+            std::fill(std::begin(gaveUp), std::end(gaveUp), false);
+        }
         const auto load = [&](int slot, VkDescriptorSet& set, const char* path,
                               int* width = nullptr, int* height = nullptr) {
             if (set || gaveUp[slot] || !assets) return;

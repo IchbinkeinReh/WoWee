@@ -105,6 +105,7 @@ private:
     int itemTargetArmedFrame_ = -1;
     /// The targeting cursor's own art. See castCursorTexture().
     VkDescriptorSet castCursorTexture_ = VK_NULL_HANDLE;
+    uint32_t castCursorGenerationSeen_ = 0;  ///< see uiTexturesReplaced
     VkDescriptorSet castCursorTexture();
 
     // Click-and-hold pickup tracking

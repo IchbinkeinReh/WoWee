@@ -13,6 +13,7 @@
 #include "game/game_services.hpp"
 #include "pipeline/asset_inventory.hpp"
 #include "core/update_check.hpp"
+#include "rendering/device_recovery.hpp"
 #include "pipeline/blp_loader.hpp"
 #include <memory>
 #include <map>
@@ -31,7 +32,7 @@
 namespace wowee {
 
 // Forward declarations
-namespace rendering { class Renderer; }
+namespace rendering { class Renderer; class VkContext; }
 namespace ui { class UIManager; class MapWindow; }
 namespace auth { class AuthHandler; }
 namespace game { class GameHandler; class World; class ExpansionRegistry; struct ExpansionProfile; }
@@ -187,6 +188,33 @@ private:
     void render();
     void performLogoutToLogin();
     void processDeferredLogoutToLogin();
+
+    /// The camera controller's and the spell visual system's hooks into the
+    /// session, and the game handler's into the world - what entering the
+    /// world wires up (setState), and a world rebuilt after a lost device
+    /// has to have wired again.
+    void connectWorldHooks();
+    /// Every portrait and model view the interface draws, let go of with
+    /// their offscreen targets.
+    void shutdownPortraits();
+
+    /// VK_ERROR_DEVICE_LOST, seen by the main loop between frames: decides
+    /// with deviceRecovery_ whether to rebuild now, wait for a window, or
+    /// give up and end the run as it always did.
+    void handleDeviceLoss(rendering::VkContext& vk);
+    /// Tears down everything made on the lost device and builds it again on
+    /// a new one - the context, the renderer, the interface's backend and
+    /// textures - then loads the world again where the player stands, with
+    /// the entities the session already knows. The connection and the game
+    /// state are not touched. False when the device would not come back.
+    bool recoverFromDeviceLoss();
+    /// recoverFromDeviceLoss's first half: everything on the GPU but the
+    /// context, in the order shutdown() lets go of it.
+    void releaseGpuForDeviceRebuild();
+    /// Reads window events for `seconds`, keeping the watchdog fed. False if
+    /// the player quit meanwhile.
+    bool waitPumpingEvents(double seconds);
+    rendering::DeviceRecovery deviceRecovery_;
 
     /// Take the interface down, because the character it belongs to is leaving.
     ///

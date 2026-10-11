@@ -319,6 +319,28 @@ public:
 
     [[nodiscard]] bool isDeviceLost() const { return deviceLost_; }
 
+    /// Whether a device could be built now: in the foreground, with a native
+    /// window to make the surface on. Asked before rebuildAfterDeviceLoss.
+    [[nodiscard]] bool canRebuildDevice() const {
+        return !lifecycle_.inBackground() && nativeWindowPresent();
+    }
+
+    /// After VK_ERROR_DEVICE_LOST: destroys the instance, the device and
+    /// everything this context made from them, and builds them again on the
+    /// same window, as initialize does.
+    ///
+    /// Everything else made on the old device - every renderer's pipelines,
+    /// buffers, images and descriptor sets, and the UI backend's - has to be
+    /// released first; see Application::recoverFromDeviceLoss. This object
+    /// stays where it is, so the pointers to it held all over the client stay
+    /// good. A failure leaves the context torn down and still lost, and it can
+    /// be asked again.
+    [[nodiscard]] bool rebuildAfterDeviceLoss();
+    /// Takes the device for lost without the driver saying so, for
+    /// WOWEE_SIMULATE_DEVICE_LOSS: the whole rebuild runs as it would after a
+    /// real loss, on a machine whose driver never loses one.
+    void simulateDeviceLoss();
+
     // MSAA
     [[nodiscard]] VkSampleCountFlagBits getMsaaSamples() const { return msaaSamples_; }
     void setMsaaSamples(VkSampleCountFlagBits samples);

@@ -182,6 +182,8 @@ void outlinedText(ImDrawList* dl, ImFont* font, float size, ImVec2 at, ImU32 col
 /// One interface texture, loaded once; a failed load is not retried.
 VkDescriptorSet plateTexture(pipeline::AssetManager* assets, const char* path) {
     static std::unordered_map<std::string, VkDescriptorSet> cache;
+    static uint32_t generationSeen = 0;
+    if (uiTexturesReplaced(generationSeen)) cache.clear();
     if (auto it = cache.find(path); it != cache.end()) return it->second;
     VkDescriptorSet tex =
         uploadUiTextureFromBlp(assets, path, core::Application::getInstance().getWindow());

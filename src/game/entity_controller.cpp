@@ -2203,6 +2203,71 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
     }
 }
 
+void EntityController::respawnKnownEntities() {
+    const uint16_t goScaleIdx = fieldIndex(UF::OBJECT_FIELD_SCALE_X);
+    const uint16_t goBytes1Idx = fieldIndex(UF::GAMEOBJECT_BYTES_1);
+    size_t units = 0, objects = 0, corpses = 0;
+    // Copied first: a callback is free to touch the entity list.
+    std::vector<std::shared_ptr<Entity>> known;
+    known.reserve(entityManager.getEntities().size());
+    for (const auto& [guid, entity] : entityManager.getEntities()) {
+        if (entity) known.push_back(entity);
+    }
+    for (const auto& entity : known) {
+        const uint64_t guid = entity->getGuid();
+        switch (entity->getType()) {
+            case ObjectType::UNIT:
+            case ObjectType::PLAYER: {
+                if (guid == owner_.getPlayerGuid()) break;  // spawned by the world load
+                auto unit = std::static_pointer_cast<Unit>(entity);
+                if (unit->getDisplayId() == 0) break;
+                // What it rides first, as applyUnitFieldsOnCreate hands it over
+                // before the spawn.
+                if (unit->getMountDisplayId() != 0 && owner_.otherPlayerMountCallbackRef()) {
+                    owner_.otherPlayerMountCallbackRef()(guid, unit->getMountDisplayId());
+                }
+                const bool dead = isUnitCorpseState(unit->getHealth(), unit->getMaxHealth(),
+                                                    unit->getDynamicFlags());
+                dispatchEntitySpawn(guid, entity->getType(), entity, unit, dead);
+                ++units;
+                break;
+            }
+            case ObjectType::GAMEOBJECT: {
+                auto go = std::static_pointer_cast<GameObject>(entity);
+                if (goBytes1Idx != 0xFFFF && owner_.gameObjectStateCallbackRef()) {
+                    owner_.gameObjectStateCallbackRef()(
+                        guid, static_cast<uint8_t>(entity->getField(goBytes1Idx) & 0xFF));
+                }
+                if (go->getDisplayId() != 0 && owner_.gameObjectSpawnCallbackRef()) {
+                    float scale = 1.0f;
+                    if (goScaleIdx != 0xFFFF) {
+                        const uint32_t raw = entity->getField(goScaleIdx);
+                        if (raw != 0) {
+                            scale = bitsToFloat(raw);
+                            if (scale <= 0.01f || scale > 100.0f) scale = 1.0f;
+                        }
+                    }
+                    owner_.gameObjectSpawnCallbackRef()(guid, go->getEntry(), go->getDisplayId(),
+                        go->getX(), go->getY(), go->getZ(), go->getOrientation(), scale);
+                    ++objects;
+                }
+                if (transportGuids_.count(guid) && owner_.transportMoveCallbackRef()) {
+                    owner_.transportMoveCallbackRef()(guid,
+                        go->getX(), go->getY(), go->getZ(), go->getOrientation());
+                }
+                break;
+            }
+            case ObjectType::CORPSE:
+                if (spawnCorpseFromFields(guid, *entity)) ++corpses;
+                break;
+            default:
+                break;
+        }
+    }
+    LOG_WARNING("Respawned the known world: ", units, " units, ", objects,
+                " game objects, ", corpses, " corpses");
+}
+
 void EntityController::onCreateGameObject(const UpdateBlock& block, std::shared_ptr<Entity>& entity) {
     if (block.hasTransportTime) {
         if (auto* tm = owner_.getTransportManager()) tm->noteServerPathTime(block.guid, block.transportTime);

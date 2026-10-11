@@ -414,6 +414,18 @@ void CharacterScreen::renderNotice(game::GameHandler& gameHandler, float screenW
     }
 }
 
+void CharacterScreen::releasePreview() {
+    // Unregisters itself from the renderer on the way out.
+    preview_.reset();
+    previewInitialized_ = false;
+    previewGuid_ = 0;
+    previewAppearanceBytes_ = 0;
+    previewFacialFeatures_ = 0;
+    previewUseFemaleModel_ = false;
+    previewEquipHash_ = 0;
+    previewEmblem_.reset();
+}
+
 void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
                                     const game::Character& character, ImVec2 a, ImVec2 b) {
     const PaperTheme& theme = ui_.theme();

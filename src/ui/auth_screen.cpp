@@ -16,6 +16,7 @@
 #include "core/window.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/vk_context.hpp"
+#include "rendering/imgui_texture.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/music_manager.hpp"
@@ -74,12 +75,30 @@ AuthScreen::~AuthScreen() {
     // the device on every run. bgSampler is the context's, cached and shared,
     // and bgDescriptorSet belongs to the ImGui backend, which frees its own
     // pool -- neither is this class's to destroy.
+    destroyBackgroundImage();
+}
+
+void AuthScreen::destroyBackgroundImage() {
     if (!bgVkCtx) return;
     VkDevice device = bgVkCtx->getDevice();
     if (device == VK_NULL_HANDLE) return;
     if (bgImageView) { vkDestroyImageView(device, bgImageView, nullptr); bgImageView = VK_NULL_HANDLE; }
     if (bgImage)     { vkDestroyImage(device, bgImage, nullptr);         bgImage = VK_NULL_HANDLE; }
     if (bgMemory)    { vkFreeMemory(device, bgMemory, nullptr);          bgMemory = VK_NULL_HANDLE; }
+}
+
+void AuthScreen::releaseGpu() {
+    // The set goes back to the backend that is about to go itself; the
+    // sampler is the context's cache's, gone with the context.
+    rendering::removeImGuiTexture(bgDescriptorSet);
+    bgSampler = VK_NULL_HANDLE;
+    destroyBackgroundImage();
+    // Decoded and uploaded again the next time the screen is drawn. One still
+    // decoding is left to land: it uploads to whatever device is there then.
+    if (bgInitAttempted) {
+        bgInitAttempted = false;
+        bgDecodeStarted = false;
+    }
 }
 
 std::string AuthScreen::makeServerKey(const std::string& host, int port) {

@@ -746,6 +746,17 @@ private:
     bool deferredWorldInitPending_ = false;
     uint8_t deferredWorldInitStage_ = 0;
     float deferredWorldInitCooldown_ = 0.0f;
+    /// The deferred step that loads the textures below; the steps before it
+    /// are audio.
+    static constexpr uint8_t kDeferredWorldTexturesStage = 5;
+    /// The sky's textures, the footprints and the blob shadows, which the
+    /// world's first load gives the renderer once per run.
+    void loadDeferredWorldTextures();
+    /// Set by shutdown() when a world had been loaded: a rebuild after a lost
+    /// device has to load those again with the next world.
+    bool worldGpuAssetsReloadPending_ = false;
+    /// Between initialize() and shutdown(): there is something to release.
+    bool needsShutdown_ = false;
 
     // Third-person character state
     glm::vec3 characterPosition = glm::vec3(0.0f);

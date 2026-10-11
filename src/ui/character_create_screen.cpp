@@ -189,6 +189,21 @@ void CharacterCreateScreen::initializePreview(pipeline::AssetManager* am) {
     prevRaceIndex_ = -1;
 }
 
+void CharacterCreateScreen::releasePreview() {
+    if (!preview_) return;
+    // Unregisters itself from the renderer on the way out.
+    preview_.reset();
+    previewReleased_ = true;
+}
+
+void CharacterCreateScreen::restorePreview() {
+    if (!previewReleased_) return;
+    previewReleased_ = false;
+    // The same as entering the screen: built, and the model loaded again on
+    // the next draw from the choices still on the sliders.
+    if (assetManager_) initializePreview(assetManager_);
+}
+
 void CharacterCreateScreen::update(float deltaTime) {
     if (preview_) {
         preview_->update(deltaTime);

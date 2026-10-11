@@ -42,6 +42,7 @@
 #include <fstream>
 #include <algorithm>
 #include <cctype>
+#include <utility>
 #include <functional>
 #include <glm/gtc/quaternion.hpp>
 
@@ -289,6 +290,18 @@ void WorldLoader::processPendingEntry() {
         renderer_->getCameraController()->suspendGravityFor(10.0f);
     }
     loadOnlineWorldTerrain(entry.mapId, entry.x, entry.y, entry.z);
+}
+
+void WorldLoader::reloadAfterDeviceLoss(uint32_t mapId, float x, float y, float z) {
+    if (!pendingWorldEntry_) setPendingEntry(mapId, x, y, z);
+    // Nothing of the old world is left to keep: a load from nothing, as the
+    // first one after login is.
+    resetLoadedMap();
+    respawnKnownEntitiesOnLoad_ = true;
+    // The player's own equipment, put on the new model as at a map change.
+    if (gameHandler_) gameHandler_->resetEquipmentDirtyTracking();
+    processPendingEntry();
+    respawnKnownEntitiesOnLoad_ = false;
 }
 
 // Read the map's WDT, then load either its root WMO or its terrain tiles, and
@@ -1044,6 +1057,14 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 if (!played) cr->playAnimation(instanceId, rendering::anim::ATTACK_UNARMED, false);
             }
         });
+    }
+
+    // A world rebuilt after a lost device: the entities the session knows were
+    // dropped with their render instances, and the server will not send them
+    // again. Handed to the spawner here, once the renderers they go into
+    // exist, so the warmup below drains them behind the loading screen.
+    if (std::exchange(respawnKnownEntitiesOnLoad_, false) && gameHandler_) {
+        gameHandler_->respawnKnownEntities();
     }
 
     // Keep the loading screen visible until all spawn/equipment/gameobject queues

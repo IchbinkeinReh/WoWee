@@ -646,6 +646,7 @@ VkDescriptorSet GameScreen::getSpellIcon(uint32_t spellId, pipeline::AssetManage
     if (spellId == 0 || !am) return VK_NULL_HANDLE;
 
     // Check cache first
+    if (uiTexturesReplaced(spellIconGenerationSeen_)) spellIconCache_.clear();
     auto cit = spellIconCache_.find(spellId);
     if (cit != spellIconCache_.end()) return cit->second;
 

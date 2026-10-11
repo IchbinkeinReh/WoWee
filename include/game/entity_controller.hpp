@@ -111,6 +111,13 @@ public:
     // --- Reset all state (called on disconnect / character switch) ---
     void clearAll();
 
+    /// Hands every entity already known to the spawn callbacks again, as its
+    /// create block did: units and other players (and what they ride), game
+    /// objects with their state, and corpses. For a world whose render
+    /// instances were all thrown away while the entities stayed - a Vulkan
+    /// device lost and rebuilt - which the server will not send again.
+    void respawnKnownEntities();
+
 private:
     GameHandler& owner_;
 

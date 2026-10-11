@@ -17,6 +17,7 @@ union SDL_Event;
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
+namespace rendering { class VkContext; }
 
 // Forward declarations
 namespace core { class Window; class AppearanceComposer; enum class AppState; }
@@ -69,6 +70,15 @@ public:
      * Shutdown ImGui and cleanup
      */
     void shutdown();
+
+    /// Lets go of everything the interface holds on the Vulkan device - the
+    /// ImGui backend, the screens' textures and previews - and nothing else,
+    /// for a device that is about to be replaced (see
+    /// Application::recoverFromDeviceLoss). restoreGpu builds the backend
+    /// again on the context's new device; what the screens draw comes back
+    /// on its own the next time it is drawn.
+    void releaseGpu();
+    void restoreGpu();
 
     /**
      * Update UI state
@@ -130,6 +140,9 @@ private:
     pipeline::AssetManager* cursorAssets_ = nullptr;
     VkDescriptorSet gloveCursor_ = VK_NULL_HANDLE;
     bool gloveCursorFailed_ = false;
+    /// Between releaseGpu and restoreGpu: there is no Vulkan backend.
+    bool gpuReleased_ = false;
+    void initVulkanBackend(rendering::VkContext* vkCtx);
     void drawGloveCursor();
 
     /// How much bigger than a desktop layout this display needs the interface

@@ -30,6 +30,10 @@ public:
     /// bgDescriptorSet belongs to the ImGui backend.
     ~AuthScreen();
 
+    /// Lets go of the background image, for a Vulkan device about to be
+    /// replaced. It is decoded and uploaded again the next time it is drawn.
+    void releaseGpu();
+
     /**
      * Render the UI
      * @param authHandler Reference to auth handler
@@ -202,6 +206,7 @@ private:
     std::future<DecodedBackground> bgDecodeFuture;
     bool bgDecodeStarted = false;
     bool uploadBackgroundImage(const unsigned char* pixels);
+    void destroyBackgroundImage();
     rendering::VkContext* bgVkCtx = nullptr;
     VkImage bgImage = VK_NULL_HANDLE;
     VkDeviceMemory bgMemory = VK_NULL_HANDLE;

@@ -213,6 +213,7 @@ void InventoryScreen::cancelPickup(game::Inventory& inv) {
 /// Nothing in the client used the cursor art at all, so every cursor that
 /// meant something drew whatever the calling code had to hand.
 VkDescriptorSet InventoryScreen::castCursorTexture() {
+    if (uiTexturesReplaced(castCursorGenerationSeen_)) castCursorTexture_ = VK_NULL_HANDLE;
     if (!castCursorTexture_) {
         if (assetManager_ && assetManager_->isInitialized()) {
             castCursorTexture_ = uploadUiTextureFromBlp(

@@ -123,7 +123,15 @@ bool UIManager::initialize(core::Window* win) {
 
     // Initialize ImGui for SDL2 + Vulkan
     ImGui_ImplSDL3_InitForVulkan(window->getSDLWindow());
+    initVulkanBackend(vkCtx);
 
+    imguiInitialized = true;
+
+    LOG_INFO("UI manager initialized successfully (Vulkan)");
+    return true;
+}
+
+void UIManager::initVulkanBackend(rendering::VkContext* vkCtx) {
     ImGui_ImplVulkan_InitInfo initInfo{};
     initInfo.ApiVersion = VK_API_VERSION_1_1;
     initInfo.Instance = vkCtx->getInstance();
@@ -146,11 +154,36 @@ bool UIManager::initialize(core::Window* win) {
 
     ImGui_ImplVulkan_Init(&initInfo);
     rendering::initImGuiBlend(vkCtx);
+}
 
-    imguiInitialized = true;
+void UIManager::releaseGpu() {
+    if (!imguiInitialized || gpuReleased_) return;
+    // The screens' own pictures first, while the backend some of them were
+    // registered with is still there to take them back.
+    if (authScreen) authScreen->releaseGpu();
+    if (characterScreen) characterScreen->releasePreview();
+    if (characterCreateScreen) characterCreateScreen->releasePreview();
+    // The context's, freed with its UI textures; uploaded again when next drawn.
+    gloveCursor_ = VK_NULL_HANDLE;
+    gloveCursorFailed_ = false;
 
-    LOG_INFO("UI manager initialized successfully (Vulkan)");
-    return true;
+    // The backend only. The ImGui context, its windows and the font atlas's
+    // pixels stay: the atlas texture is the backend's, and ImGui asks the
+    // next backend to make it again.
+    rendering::shutdownImGuiBlend();
+    ImGui_ImplVulkan_Shutdown();
+    gpuReleased_ = true;
+    LOG_WARNING("UI released its Vulkan resources");
+}
+
+void UIManager::restoreGpu() {
+    if (!imguiInitialized || !gpuReleased_) return;
+    auto* vkCtx = window ? window->getVkContext() : nullptr;
+    if (!vkCtx) return;
+    initVulkanBackend(vkCtx);
+    gpuReleased_ = false;
+    if (characterCreateScreen) characterCreateScreen->restorePreview();
+    LOG_WARNING("UI rebuilt its Vulkan resources");
 }
 
 void UIManager::loadInterfaceFont(const std::string& dataRoot,
@@ -351,12 +384,16 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
 void UIManager::shutdown() {
     if (imguiInitialized) {
         auto* vkCtx = window ? window->getVkContext() : nullptr;
-        if (vkCtx) {
+        if (vkCtx && vkCtx->getDevice() != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(vkCtx->getDevice());
         }
 
-        rendering::shutdownImGuiBlend();
-        ImGui_ImplVulkan_Shutdown();
+        // Already gone when a rebuild after a lost device did not come back.
+        if (!gpuReleased_) {
+            rendering::shutdownImGuiBlend();
+            ImGui_ImplVulkan_Shutdown();
+        }
+        gpuReleased_ = false;
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
         imguiInitialized = false;

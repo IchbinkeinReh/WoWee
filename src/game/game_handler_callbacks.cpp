@@ -2288,6 +2288,15 @@ void GameHandler::emitAllOtherPlayerEquipment() {
     if (inventoryHandler_) inventoryHandler_->emitAllOtherPlayerEquipment();
 }
 
+void GameHandler::respawnKnownEntities() {
+    if (entityController_) entityController_->respawnKnownEntities();
+    // Their equipment reaches the spawner by its own callback, not with them.
+    emitAllOtherPlayerEquipment();
+    // The player's own mount is the player's state rather than an entity's,
+    // and the spawner forgot it along with every instance.
+    if (currentMountDisplayId_ != 0 && mountCallback_) mountCallback_(currentMountDisplayId_);
+}
+
 // ============================================================
 // Combat (delegated to CombatHandler)
 // ============================================================

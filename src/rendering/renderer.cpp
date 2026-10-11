@@ -780,6 +780,7 @@ void Renderer::updatePerFrameUBO() {
 
 bool Renderer::initialize(core::Window* win) {
     window = win;
+    needsShutdown_ = true;
     // The thread that records frames, and so the one that waits on the doodad
     // worker when something reaches for the renderers it is reading.
     mainThreadId_ = std::this_thread::get_id();
@@ -924,8 +925,12 @@ bool Renderer::initialize(core::Window* win) {
 
     LOG_INFO("Vulkan sub-renderers initialized (Phase 3)");
 
-    // LightingManager doesn't use GL - initialize for data-only use
-    lightingManager = std::make_unique<LightingManager>();
+    // LightingManager doesn't use GL - initialize for data-only use.
+    //
+    // Kept by a rebuild after a lost device: it holds nothing of the GPU, and
+    // its tables are read from the DBCs by the application, once, after the
+    // asset manager exists (Application::initialize).
+    if (!lightingManager) lightingManager = std::make_unique<LightingManager>();
     auto* assetManager = core::Application::getInstance().getAssetManager();
 
     // Create zone manager; enrich music paths from DBC if available
@@ -1017,6 +1022,11 @@ bool Renderer::initialize(core::Window* win) {
 }
 
 void Renderer::shutdown() {
+    // Once per initialize. A rebuild after a lost device that did not come
+    // back leaves this shut down against a context that is gone, and the
+    // application's own shutdown then asks again.
+    if (!needsShutdown_) return;
+    needsShutdown_ = false;
     syncWorldRecording();
     // A recording in progress is finished, not abandoned: the file is only
     // playable once its index is written.
@@ -1093,6 +1103,24 @@ void Renderer::shutdown() {
     if (swimEffects) {
         swimEffects->shutdown();
         swimEffects.reset();
+    }
+
+    // These three used to be left to ~Renderer, which was enough while the
+    // only shutdown was the last one: the device was still there when the
+    // destructor ran. A rebuild after a lost device runs shutdown and then
+    // initialize on this same object, and initialize's assignments would
+    // destroy them against a device that has been replaced.
+    if (mountDust) {
+        mountDust->shutdown();
+        mountDust.reset();
+    }
+    if (chargeEffect) {
+        chargeEffect->shutdown();
+        chargeEffect.reset();
+    }
+    if (screenCapture_) {
+        screenCapture_->shutdown();
+        screenCapture_.reset();
     }
 
     if (blobShadowRenderer) {
@@ -1190,6 +1218,29 @@ void Renderer::shutdown() {
     performanceHUD.reset();
     cameraController.reset();
     camera.reset();
+
+    // What still names an instance in the renderers above, which are gone.
+    // Nothing of the GPU in these, but every id they hold is now another
+    // model's, or nobody's, in the renderers a rebuild makes.
+    levelUpEffect.reset();
+    lootSparkles_.reset();
+    questGiverMarkers_.reset();
+    setCharacterFollow(0);
+    characterBodyInstance_ = 0;
+    activePreviews_.clear();
+    blobCasters_.clear();
+    selectionCircle_.reset();
+    spellTargetCircle_.reset();
+    worldDrawnLastFrame_ = false;
+    worldDrawnThisFrame_ = false;
+    terrainLoaded = false;
+    msaaChangePending_ = false;
+    // The sky's textures, the footprints and the blob shadows are loaded once
+    // per run, by the world's first load, behind cachedAssetManager. A rebuilt
+    // renderer has none of them, so the next world load loads them again.
+    deferredWorldInitPending_ = false;
+    deferredWorldInitStage_ = 0;
+    worldGpuAssetsReloadPending_ = cachedAssetManager != nullptr;
 
     LOG_INFO("Renderer shutdown");
 }
@@ -3024,13 +3075,8 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
         case 4:
             if (audioCoordinator_->getMovementSoundManager()) audioCoordinator_->getMovementSoundManager()->initialize(cachedAssetManager);
             break;
-        case 5:
-            if (skySystem) skySystem->loadTextures(cachedAssetManager);
-            if (footprintRenderer && !footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, cachedAssetManager))
-                LOG_WARNING("Footprint renderer re-init failed (non-fatal)");
-            if (blobShadowRenderer && !blobShadowRenderer->initialize(vkCtx, perFrameSetLayout, cachedAssetManager))
-                LOG_WARNING("Blob shadow renderer re-init failed (non-fatal)");
-            if (weather) weather->loadAssets(cachedAssetManager);
+        case kDeferredWorldTexturesStage:
+            loadDeferredWorldTextures();
             break;
         default:
             deferredWorldInitPending_ = false;
@@ -3039,6 +3085,15 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
 
     deferredWorldInitStage_++;
     deferredWorldInitCooldown_ = 0.12f;
+}
+
+void Renderer::loadDeferredWorldTextures() {
+    if (skySystem) skySystem->loadTextures(cachedAssetManager);
+    if (footprintRenderer && !footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, cachedAssetManager))
+        LOG_WARNING("Footprint renderer re-init failed (non-fatal)");
+    if (blobShadowRenderer && !blobShadowRenderer->initialize(vkCtx, perFrameSetLayout, cachedAssetManager))
+        LOG_WARNING("Blob shadow renderer re-init failed (non-fatal)");
+    if (weather) weather->loadAssets(cachedAssetManager);
 }
 
 void Renderer::setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec4& color) {
@@ -4885,7 +4940,20 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (zoneManager && assetManager) {
             zoneManager->enrichFromDBC(assetManager);
         }
+    } else if (worldGpuAssetsReloadPending_ && cachedAssetManager) {
+        // A renderer rebuilt after a lost device: the audio above was set up
+        // by the first load and outlived the device, but the textures the
+        // first load gave the sky, the footprints and the blob shadows did
+        // not. The same step that loaded them, on its own.
+        if (deferredWorldInitEnabled_) {
+            deferredWorldInitPending_ = true;
+            deferredWorldInitStage_ = kDeferredWorldTexturesStage;
+            deferredWorldInitCooldown_ = 0.25f;
+        } else {
+            loadDeferredWorldTextures();
+        }
     }
+    worldGpuAssetsReloadPending_ = false;
 
     // Snap camera to ground
     if (cameraController) {

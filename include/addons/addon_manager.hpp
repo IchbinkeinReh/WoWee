@@ -45,6 +45,10 @@ public:
     void fireEvent(const std::string& event, const std::vector<std::string>& args = {});
     void update(float deltaTime);
     void shutdown();
+    /// Every stored CVar acted on again, as loadAllAddons does once the
+    /// interface is up: for the camera, model renderers and minimap that a
+    /// renderer rebuilt after a lost Vulkan device made afresh.
+    void reapplyStoredCVars();
 
     [[nodiscard]] const std::vector<TocFile>& getAddons() const { return addons_; }
     /// The addons that wait to be asked for. Half the interface's own panels
