@@ -344,17 +344,15 @@ void main() {
         shadow = mix(1.0, shadow, shadowParams.y);
     }
     RtLight rt = rtLightAt(FragPos);
-    shadow = rtShadow(rt, shadow);
     // The shadow variants let a face turned edge-on to the sun out of the
-    // shadow: by |1.2 - |N.L||^4, saturated (c4 is the light's view-space
-    // direction, 0x00875c10).
+    // map's shadow (rtEdgeOnLift); the traced one keeps its own.
+    shadow = rtShadowEdgeOn(rt, shadow, norm, normalize(-lightDir.xyz));
     // Not here: their sat(dot(P, c3.xyz) + c3.w) lift. 0x008745d0 sets c3 to
     // 0x007bb670's plane (normal from the world matrix, through the player
     // two yards up) for groups without flags 0x48, and to zero for the rest
     // at shadow levels above 2; the M2 and terrain variants always get zero
     // (0x00874760, 0xd431ac is never written). The plane's space is not
     // pinned down, so it is left out.
-    shadow += (1.0 - shadow) * clamp(pow(abs(1.2 - abs(dot(norm, normalize(-lightDir.xyz)))), 4.0), 0.0, 1.0);
     const float shadowScale = rtShadowScale(rt, shadow);
 
     const vec3 env = (program == 3 || program == 5) ? texture(uEnvTexture, EnvCoord).rgb : vec3(0.0);

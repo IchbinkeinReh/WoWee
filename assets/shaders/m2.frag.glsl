@@ -280,13 +280,15 @@ void main() {
                                               dot(terrainN, toSun), 0.0005), shadowParams.y);
             // The map alone, as on the ground under it (terrain.frag): the
             // baked mask beside it is a second, offline sun's shadows.
-            float s = rtShadow(rt, mapLit);
-            shade = mix(s, 1.0, clamp(pow(abs(1.2 - abs(dot(terrainN, toSun))), 4.0), 0.0, 1.0));
+            // The edge-on lift for the map's shadow only (rtEdgeOnLift).
+            shade = rtShadowEdgeOn(rt, mapLit, terrainN, toSun);
         } else {
             // No map: the traced shadow where there is one, as on the
-            // ground under it, and the baked one where there is not.
-            float s = mix(rt.sun, 1.0, clamp(pow(abs(1.2 - abs(dot(terrainN, toSun))), 4.0), 0.0, 1.0));
-            shade = mix(shade, s, rt.weight);
+            // ground under it, and the baked one where there is not. Not
+            // lifted: the traced shadow has no acne to clear, and on the
+            // grass of a field under a low light the lift took half of every
+            // tree's and house's shadow back out.
+            shade = mix(shade, rt.sun, rt.weight);
         }
         vec3 rgb = tex0.rgb * (light * rtShadowScale(rt, shade) + rtPointLight(rt));
         rgb = applyFog(rgb, FragPos, depth, (vInteriorLit & 2) != 0 ? cameraFogColor.rgb : fogColor.rgb);
@@ -368,11 +370,9 @@ void main() {
         }
 
         RtLight rt = rtLightAt(FragPos);
-        shadow = rtShadow(rt, shadow);
         // The shadow variants let a face turned edge-on to the sun out of the
-        // shadow: by |1.2 - |N.L||^4, saturated (c4 is the light's view-space
-        // direction, 0x00875c10).
-        shadow += (1.0 - shadow) * clamp(pow(abs(1.2 - abs(dot(norm, normalize(-lightDir.xyz)))), 4.0), 0.0, 1.0);
+        // map's shadow (rtEdgeOnLift); the traced one keeps its own.
+        shadow = rtShadowEdgeOn(rt, shadow, norm, normalize(-lightDir.xyz));
         // A game object takes its own: its ambient as it eases, its direct
         // light as scaled in the terrain's baked shadow (0x007a1e90).
         const bool worldObject = (vInteriorLit & 4) != 0;

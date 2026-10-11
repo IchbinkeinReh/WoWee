@@ -276,6 +276,25 @@ float rtShadow(RtLight r, float shadowMap) {
     return min(shadowMap, mix(1.0, r.sun, r.weight * rtSunShadowStrength()));
 }
 
+// How far the shadow variants let a face turned edge-on to the sun out of
+// the shadow map's shadow: |1.2 - |N.L||^4, saturated (c4 is the light's
+// view-space direction, 0x00875c10). That is for the client's coarse map,
+// whose depth test cannot tell a face it grazes from what shades it: it
+// clears the acne on such a face, and with it any shadow at all on flat
+// ground under a low light - half of one at twenty degrees. A traced ray
+// starts off the surface and knows the difference, so its shadow is not
+// lifted: a tree's or a house's would otherwise half vanish from the ground
+// and the grass on it in the evening.
+float rtEdgeOnLift(vec3 n, vec3 toLight) {
+    return clamp(pow(abs(1.2 - abs(dot(n, toLight))), 4.0), 0.0, 1.0);
+}
+
+// rtShadow with the map's shadow lifted on an edge-on face first, and the
+// traced one taken as it is.
+float rtShadowEdgeOn(RtLight r, float shadowMap, vec3 n, vec3 toLight) {
+    return rtShadow(r, shadowMap + (1.0 - shadowMap) * rtEdgeOnLift(n, toLight));
+}
+
 // The point lights' light on this surface, to add to the light it is lit
 // by; nothing without a result.
 vec3 rtPointLight(RtLight r) {
