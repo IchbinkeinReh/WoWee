@@ -498,8 +498,12 @@ bool GroupListParser::parse(network::Packet& packet, GroupListData& data,
         if (rem() >= 1) data.difficultyId     = packet.readUInt8();
         // Raid difficulty - WotLK only
         if (rem() >= 1) data.raidDifficultyId = packet.readUInt8();
-        // Extra byte in some 3.3.5a builds
-        if (hasRoles && rem() >= 1) packet.readUInt8();
+        // WotLK: the player's difficulty (0x006d8870 reads the three
+        // difficulties in this order into 0xbd1978, 0xbd197c, 0xbd1980).
+        if (hasRoles && rem() >= 1) {
+            data.playerDifficulty = packet.readUInt8();
+            data.hasPlayerDifficulty = true;
+        }
     }
 
     LOG_INFO("Group list: ", data.memberCount, " members, leader=0x",

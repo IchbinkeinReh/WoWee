@@ -2687,11 +2687,9 @@ static int lua_GetInstanceInfo(lua_State* L) {
     const char* diffName = game::instanceDifficultyName(diff);
     lua_pushstring(L, diffName ? diffName : "Normal");      // 4: difficultyName
     lua_pushnumber(L, 5);                                   // 5: maxPlayers (default 5-man)
-    // The two the raid branch reads. Neither is tracked here, and both are
-    // only consulted for a dynamic-difficulty raid - but nil reaches
-    // `playerDifficulty == 1` and `if ( isDynamicInstance )` in minimap.lua,
-    // and the interface unpacks all seven on one line.
-    lua_pushnumber(L, 0);                                   // 6: playerDifficulty
+    // The two the raid branch reads; nil would reach `playerDifficulty == 1`
+    // and `if ( isDynamicInstance )` in minimap.lua.
+    lua_pushnumber(L, gh->playerDifficultyRef());           // 6: playerDifficulty (0x0051a8c0: 0xbd1980)
     lua_pushboolean(L, 0);                                  // 7: isDynamicInstance
     return 7;
 }

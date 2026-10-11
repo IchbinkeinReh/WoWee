@@ -2281,6 +2281,8 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     const bool wasInGroup = !partyData.isEmpty();
     partyData = GroupListData{};
     if (!GroupListParser::parse(packet, partyData, hasRoles, hasBattleGroupFlag)) return;
+    // 0x006d8870: a group with members sets the player's difficulty.
+    if (partyData.hasPlayerDifficulty) owner_.playerDifficultyRef() = partyData.playerDifficulty;
 
     // The roster carries online state in isOnline; the per-member stat updates
     // carry it in the onlineStatus bitmask. Seed the bitmask from the roster so

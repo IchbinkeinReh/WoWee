@@ -110,6 +110,10 @@ struct GroupListData {
     uint8_t lootThreshold = 0;
     uint8_t difficultyId = 0;
     uint8_t raidDifficultyId = 0;
+    /// WotLK: the player's difficulty, 0 normal and 1 heroic, the last byte
+    /// of a group that has members (0x006d8870 stores it in 0xbd1980).
+    bool hasPlayerDifficulty = false;
+    uint8_t playerDifficulty = 0;
     uint32_t memberCount = 0;
     std::vector<GroupMember> members;
     uint64_t leaderGuid = 0;

@@ -91,7 +91,7 @@ std::vector<uint8_t> groupList(uint8_t groupType, const std::vector<Member>& mem
         w.u8(2);        // loot threshold
         w.u8(1);        // dungeon difficulty
         w.u8(0);        // raid difficulty
-        w.u8(0);        // dynamic difficulty
+        w.u8(1);        // player difficulty (heroic)
     }
     return w.bytes;
 }
@@ -169,4 +169,21 @@ TEST_CASE("a solo group carries no loot block", "[group-list]") {
     REQUIRE(ok);
     CHECK(data.memberCount == 0);
     CHECK(data.leaderGuid == 0x1001);
+}
+
+TEST_CASE("the last byte is the player's difficulty", "[group-list]") {
+    // 0x006d8870 reads dungeon, raid and player difficulty in that order
+    // after the loot threshold, and stores the last in 0xbd1980.
+    bool ok = false;
+    const GroupListData data = parsed(groupList(0x02, fourOthers(), 0x1001, false), ok);
+    REQUIRE(ok);
+    CHECK(data.difficultyId == 1);
+    CHECK(data.raidDifficultyId == 0);
+    CHECK(data.hasPlayerDifficulty);
+    CHECK(data.playerDifficulty == 1);
+
+    // A solo group has no such block, and sets nothing.
+    const GroupListData solo = parsed(groupList(0x00, {}, 0x1001, false), ok);
+    REQUIRE(ok);
+    CHECK_FALSE(solo.hasPlayerDifficulty);
 }
