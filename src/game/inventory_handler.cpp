@@ -4047,11 +4047,15 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             owner_.addSystemChatMessage("Trade opened.");
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_SHOW", {});
             break;
-        case 3:   // TRADE_CANCELED
+        case 3: { // TRADE_CANCELED
+            // TRADE_CLOSED only for a window still open (0x005873e0 ->
+            // 0x005870a0): one this client closed itself has said so already.
+            const bool wasOpen = isTradeOpen();
             resetTradeState();
             owner_.addSystemChatMessage("Trade cancelled.");
-            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
+            if (wasOpen && owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
             break;
+        }
         case 4:   // TRADE_ACCEPT - the other side pressed accept
             tradeStatus_ = TradeStatus::Accepted;
             tradePartnerAccepted_ = true;

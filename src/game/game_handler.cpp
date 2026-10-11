@@ -3525,6 +3525,9 @@ void GameHandler::closeNpcInteraction() {
                        : isAuctionHouseOpen() ? getAuctioneerGuid()
                        : isStableWindowOpen() ? getStableMasterGuid()
                        : hasPetitionShowlist() ? getPetitionNpcGuid()
+                       : isQuestDetailsOpen() ? getQuestDetails().npcGuid
+                       : isQuestRequestItemsOpen() ? getQuestRequestItems().npcGuid
+                       : isQuestOfferRewardOpen() ? getQuestOfferReward().npcGuid
                        : 0;
     // 0x00720860 first, for a creature that is alive (health, no
     // UNIT_DYNFLAG_DEAD); not for a player or an object.
@@ -3534,6 +3537,36 @@ void GameHandler::closeNpcInteraction() {
         npcFarewellCallback_(npc, glm::vec3(unit->getX(), unit->getY(), unit->getZ()));
     }
     // 0x00512e60: the window that object opened.
+    //
+    // A trade is cancelled - CMSG_CANCEL_TRADE and TRADE_CLOSED (0x005870a0,
+    // 0x00704040, event 0x132).
+    if (isTradeOpen()) {
+        cancelTrade();
+        fireAddonEvent("TRADE_CLOSED", {});
+    }
+    // ITEM_TEXT_CLOSED (0x0058a1a0, event 0x117); nothing is sent.
+    if (isItemTextOpen()) closeItemText();
+    // The quest window (0x0058ca70): one a player offered is declined to it -
+    // MSG_QUEST_PUSH_RESULT with the sharer (or the player), quest 0 and 3 -
+    // then QUEST_FINISHED (event 0x121).
+    const bool questDetails = isQuestDetailsOpen();
+    if (questDetails || isQuestRequestItemsOpen() || isQuestOfferRewardOpen()) {
+        const uint64_t giver = questDetails ? getQuestDetails().npcGuid
+                             : isQuestRequestItemsOpen() ? getQuestRequestItems().npcGuid
+                             : getQuestOfferReward().npcGuid;
+        const uint64_t sharer = questDetails ? getQuestDetails().informUnit : 0;
+        auto giverEntity = giver ? getEntityManager().getEntity(giver) : nullptr;
+        if (giverEntity && giverEntity->getType() == ObjectType::PLAYER && isInWorld()) {
+            network::Packet packet(wireOpcode(Opcode::MSG_QUEST_PUSH_RESULT));
+            packet.writeUInt64(sharer ? sharer : giver);
+            packet.writeUInt32(0);
+            packet.writeUInt8(3);
+            socket->send(packet);
+        }
+        if (questDetails) declineQuest(true);
+        if (isQuestRequestItemsOpen()) closeQuestRequestItems(true);
+        if (isQuestOfferRewardOpen()) closeQuestOfferReward(true);
+    }
     if (isGossipWindowOpen()) closeGossip();
     if (isVendorWindowOpen()) closeVendor();
     if (isTrainerWindowOpen()) closeTrainer();
@@ -3544,6 +3577,8 @@ void GameHandler::closeNpcInteraction() {
     if (isAuctionHouseOpen()) closeAuctionHouse();
     if (isStableWindowOpen()) closeStableWindow();
     if (hasPetitionShowlist()) closePetitionVendor();
+    // The tabard designer (CLOSE_TABARD_FRAME) and the battlemaster's list
+    // (BATTLEFIELDS_CLOSED) close here too; this client opens neither.
 }
 
 void GameHandler::updatePetActionBar() {

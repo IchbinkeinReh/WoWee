@@ -2785,6 +2785,9 @@ struct QuestRewardItem {
 /** SMSG_QUESTGIVER_QUEST_DETAILS data (simplified) */
 struct QuestDetailsData {
     uint64_t npcGuid = 0;
+    /// Who shared the quest, 0 for none - 3.x only. The quest window's
+    /// answer to a player goes to it (0x0058ca70, 0xc0d650).
+    uint64_t informUnit = 0;
     uint32_t questId = 0;
     std::string title;
     std::string details;      // Quest description text

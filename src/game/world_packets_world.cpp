@@ -790,11 +790,12 @@ bool QuestDetailsParser::parse(network::Packet& packet, QuestDetailsData& data) 
     // Detect: try WotLK first (read informUnit + questId), then check if title
     // string looks valid. If not, rewind and try vanilla (questId directly).
     size_t preInform = packet.getReadPos();
-    /*informUnit*/ packet.readUInt64();
+    data.informUnit = packet.readUInt64();
     data.questId = packet.readUInt32();
     data.title = normalizeWowTextTokens(packet.readString());
     if (data.title.empty() || data.questId > 100000) {
         // Likely vanilla format - rewind past informUnit
+        data.informUnit = 0;
         packet.setReadPos(preInform);
         data.questId = packet.readUInt32();
         data.title = normalizeWowTextTokens(packet.readString());
