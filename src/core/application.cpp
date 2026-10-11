@@ -69,6 +69,7 @@
 #include "addons/addon_manager.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include <imgui.h>
+#include <imgui_internal.h>
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/wmo_loader.hpp"
 #include "pipeline/wmo_group_path.hpp"
@@ -351,6 +352,70 @@ float wheelClicks(float delta, uint64_t timestampNs) {
 #endif
 }
 
+/// The thread the main loop runs on, which is the one SDL's Android pump
+/// sends the lifecycle events from.
+SDL_ThreadID gMainThreadId = 0;
+/// A lifecycle change seen on another thread, for the main loop to act on:
+/// 0 nothing, 1 background, 2 foreground.
+std::atomic<int> gPendingLifecycle{0};
+
+void applyLifecycle(Window* window, bool background, const char* why) {
+    rendering::VkContext* vk = window ? window->getVkContext() : nullptr;
+    if (background) {
+        // SDL leaves the audio running when it is not told to block on pause,
+        // and this client tells it not to (see Window::initialize).
+        audio::AudioEngine::instance().setSuspended(true);
+        if (vk) vk->enterBackground(why);
+    } else {
+        if (vk) vk->enterForeground(why);
+        // As the focus change would leave it: Sound in Background decides
+        // only for a window that lost the focus, and a resumed one has it.
+        audio::AudioEngine::instance().setSuspended(false);
+    }
+}
+
+/// Acts on the app going to the background and coming back as SDL sends the
+/// events, not when a loop gets round to reading them.
+///
+/// The main loop is not the only reader of SDL's queue: the world load, the
+/// terrain warmup and the loading screen each drain it with a loop of their
+/// own and drop whatever is not a quit or a resize. A phone sent to the home
+/// screen during a load lost WILL_ENTER_BACKGROUND that way, kept drawing to a
+/// surface whose window was gone, and came back to a black screen that never
+/// recovered. A watch sees every event whoever polls for it.
+///
+/// On Android SDL sends these from the pump, which runs on the thread that
+/// called SDL_PollEvent - the main thread, between frames - so the Vulkan work
+/// can be done here. Anything that arrives from another thread is left for the
+/// main loop.
+bool SDLCALL lifecycleWatch(void* userdata, SDL_Event* event) {
+    bool background = false;
+    const char* why = nullptr;
+    switch (event->type) {
+        case SDL_EVENT_WILL_ENTER_BACKGROUND: background = true;  why = "WILL_ENTER_BACKGROUND"; break;
+        case SDL_EVENT_DID_ENTER_BACKGROUND:  background = true;  why = "DID_ENTER_BACKGROUND";  break;
+        case SDL_EVENT_WILL_ENTER_FOREGROUND:
+            LOG_WARNING("SDL_EVENT_WILL_ENTER_FOREGROUND");
+            return true;
+        case SDL_EVENT_DID_ENTER_FOREGROUND:  background = false; why = "DID_ENTER_FOREGROUND";  break;
+        case SDL_EVENT_LOW_MEMORY:
+            LOG_WARNING("SDL_EVENT_LOW_MEMORY: the system is short of memory");
+            return true;
+        case SDL_EVENT_TERMINATING:
+            LOG_WARNING("SDL_EVENT_TERMINATING: the system is ending the app");
+            return true;
+        default:
+            return true;
+    }
+    if (SDL_GetCurrentThreadID() != gMainThreadId) {
+        LOG_WARNING(why, " arrived off the main thread; handled next frame");
+        gPendingLifecycle.store(background ? 1 : 2, std::memory_order_release);
+        return true;
+    }
+    applyLifecycle(static_cast<Window*>(userdata), background, why);
+    return true;
+}
+
 } // namespace
 
 Application* Application::instance = nullptr;
@@ -383,6 +448,11 @@ bool Application::initialize() {
     if (!window->initialize()) {
         LOG_FATAL("Failed to initialize window");
         return false;
+    }
+
+    gMainThreadId = SDL_GetCurrentThreadID();
+    if (!SDL_AddEventWatch(lifecycleWatch, window.get())) {
+        LOG_WARNING("Could not watch for the app's lifecycle events: ", SDL_GetError());
     }
 
     // Controllers, which are a window's business rather than a renderer's:
@@ -1576,6 +1646,11 @@ void Application::run() {
         ui::clearInterfaceConsumedKeys();
         ui::ageChatSlashEcho();
 
+        // A lifecycle change the watch saw from another thread.
+        if (const int pending = gPendingLifecycle.exchange(0, std::memory_order_acq_rel)) {
+            applyLifecycle(window.get(), pending == 1, "deferred lifecycle event");
+        }
+
         // Ask for text input while one of the interface's edit boxes has the
         // keyboard.
         //
@@ -1614,7 +1689,13 @@ void Application::run() {
                                      event.type == SDL_EVENT_WINDOW_FOCUS_GAINED;
                 const bool playInBackground =
                     addons::storedCVarValue("Sound_EnableSoundWhenGameIsInBG", "0") != "0";
-                audio::AudioEngine::instance().setSuspended(!focused && !playInBackground);
+                // An app the system has sent to the background is silent
+                // whatever the box says: SDL takes the focus away as it goes,
+                // and that is not the player switching windows.
+                const bool appInBackground =
+                    window && window->getVkContext() && window->getVkContext()->inBackground();
+                audio::AudioEngine::instance().setSuspended(
+                    appInBackground || (!focused && !playInBackground));
             }
 
             // The map window's own events stop here. A click on the map is not
@@ -1646,28 +1727,6 @@ void Application::run() {
                 event.key.key = SDLK_ESCAPE;
             }
 
-            // The activity going to the background takes the native window with
-            // it, and the Vulkan surface and swapchain built on it die at the
-            // same moment. Drawing to them afterwards is what left the client on
-            // a black screen it never came back from. SDL sends these on the
-            // same thread as the loop, so the teardown happens before the
-            // window is gone rather than after.
-            if (event.type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
-                if (window && window->getVkContext()) {
-                    window->getVkContext()->releaseSurface();
-                }
-            } else if (event.type == SDL_EVENT_DID_ENTER_FOREGROUND) {
-                if (window && window->getVkContext()) {
-                    // Pixels: a surface is built at the drawable size, which
-                    // is not the window size on a high density display.
-                    int w = 0, h = 0;
-                    SDL_GetWindowSizeInPixels(window->getSDLWindow(), &w, &h);
-                    if (!window->getVkContext()->restoreSurface(
-                            window->getSDLWindow(), w, h)) {
-                        LOG_ERROR("Resuming without a surface; the client cannot draw");
-                    }
-                }
-            }
 #endif
             // Pass event to UI manager first
             if (uiManager) {
@@ -2140,6 +2199,7 @@ void Application::shutdown() {
     LOG_DEBUG("Shutting down application...");
 
     // Before the window, whose destructor takes SDL down with it.
+    if (window) SDL_RemoveEventWatch(lifecycleWatch, window.get());
     ui::gamepadControls().setKeyRouter(nullptr);
     core::gamepad().shutdown();
 
@@ -4567,26 +4627,37 @@ void Application::beatWatchdog() {
 }
 
 void Application::render() {
-#ifdef __ANDROID__
-    // Nothing to draw to between the activity leaving the foreground and coming
-    // back. Acquiring an image from a destroyed swapchain is undefined, and the
-    // frame would be thrown away regardless.
+    // Nothing to draw to between the app leaving the foreground and its
+    // surface being rebuilt, and nothing is drawn in the background at all.
+    // syncSurface is also where a surface the driver reported lost, or one
+    // whose native window was not there yet on resume, is rebuilt - so this is
+    // asked every frame rather than only between the lifecycle events.
     //
     // update() has already opened an ImGui frame by this point, and ImGui wants
     // every frame closed before the next is opened - returning without doing so
     // aborted on the following NewFrame rather than on anything to do with the
     // surface. EndFrame closes it without drawing it.
-    if (window && window->getVkContext() && window->getVkContext()->isSurfaceLost()) {
-        if (ImGui::GetCurrentContext() && ImGui::GetFrameCount() > 0) {
+    if (rendering::VkContext* vk = window ? window->getVkContext() : nullptr;
+        vk && !vk->syncSurface()) {
+        if (ImGui::GetCurrentContext() && ImGui::GetCurrentContext()->WithinFrameScope) {
             ImGui::EndFrame();
+        }
+        // Said once a second, so the log shows a client that is waiting
+        // rather than one that has stopped.
+        static auto lastSaid = std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastSaid > std::chrono::seconds(1)) {
+            lastSaid = now;
+            LOG_INFO("Not drawing: ", vk->isDeviceLost()   ? "device lost"
+                                      : vk->inBackground() ? "in the background"
+                                                           : "no surface yet");
         }
         // The loop still runs, to keep reading the socket. It does not need to
         // run at frame rate to do that, and a phone in someone's pocket should
         // not be spending a core on it.
-        SDL_Delay(50);
+        if (!vk->isDeviceLost()) SDL_Delay(50);
         return;
     }
-#endif
 
     if (!renderer) {
         return;

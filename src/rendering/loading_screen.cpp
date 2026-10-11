@@ -320,7 +320,10 @@ void LoadingScreen::render() {
     ImGui::Render();
 
     // Submit the frame to Vulkan (loading screen runs outside the main render loop)
-    if (vkCtx) {
+    // Not in the background, and not without a surface: the load goes on
+    // behind the home screen and this frame is simply not drawn. syncSurface is
+    // also what rebuilds the surface when the app comes back mid-load.
+    if (vkCtx && vkCtx->syncSurface()) {
         // Handle window resize: recreate swapchain before acquiring an image
         if (vkCtx->isSwapchainDirty() && sdlWindow) {
             // The surface, in pixels. SDL_GetWindowSize answers points, and

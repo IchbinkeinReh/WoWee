@@ -677,6 +677,12 @@ private:
     void updateStarsModel(float deltaTime);
     VkSampleCountFlagBits pendingMsaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
     bool msaaChangePending_ = false;
+    /// The VkContext swapchain generation the swapchain-sized resources were
+    /// last built for. A rebuild made outside beginFrame - the loading screen
+    /// does its own, and a resume rebuilds the surface under everything -
+    /// moves the context's count past this and beginFrame rebuilds them too.
+    uint64_t swapchainResourcesGeneration_ = 0;
+    void rebuildSwapchainSizedResources();
     /// What the frame's shadow pass draws, worked out on the main thread in
     /// beginFrame: the image and its layout, the cascades, the renderers, and
     /// the prologue it is recorded into (VkContext::getFramePrologue). The

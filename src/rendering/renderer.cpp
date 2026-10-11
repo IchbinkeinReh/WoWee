@@ -771,6 +771,7 @@ bool Renderer::initialize(core::Window* win) {
     // worker when something reaches for the renderers it is reading.
     mainThreadId_ = std::this_thread::get_id();
     vkCtx = win->getVkContext();
+    swapchainResourcesGeneration_ = vkCtx ? vkCtx->swapchainGeneration() : 0;
     deferredWorldInitEnabled_ = core::envFlagEnabled("WOWEE_DEFER_WORLD_SYSTEMS", true);
     LOG_INFO("Initializing renderer (Vulkan)");
 
@@ -1302,6 +1303,9 @@ void Renderer::applyMsaaChange() {
     // Selection circle + overlay + FSR use lazy init, just destroy them
     if (overlaySystem_) overlaySystem_->recreatePipelines();
     if (postProcessPipeline_) postProcessPipeline_->destroyAllResources(); // Will be lazily recreated in beginFrame()
+    // Everything sized from the swapchain was rebuilt above, against the
+    // swapchain this change just made.
+    swapchainResourcesGeneration_ = vkCtx->swapchainGeneration();
 
     // ImGui is deliberately not restarted here.
     //
@@ -1321,6 +1325,28 @@ void Renderer::applyMsaaChange() {
     // VK_ERROR_DEVICE_LOST a fraction of a second later. Applying a saved
     // anti-aliasing setting at startup made that look like a crash on launch.
 
+}
+
+void Renderer::rebuildSwapchainSizedResources() {
+    swapchainResourcesGeneration_ = vkCtx->swapchainGeneration();
+    // Rebuild water resources that reference swapchain extent/views
+    if (waterRenderer) {
+        waterRenderer->recreatePipelines();
+        waterRenderer->destroyWater1xResources();
+        setupWater1xPass();
+    }
+    // Recreate post-process resources for new swapchain dimensions
+    if (postProcessPipeline_) postProcessPipeline_->handleSwapchainResize();
+    // Resize HiZ depth pyramid for new swapchain dimensions
+    if (hizSystem_) {
+        auto ext = vkCtx->getSwapchainExtent();
+        if (!hizSystem_->resize(ext.width, ext.height)) {
+            LOG_WARNING("HiZ resize failed - disabling occlusion culling");
+            if (m2Renderer) m2Renderer->setHiZSystem(nullptr);
+            hizSystem_->shutdown();
+            hizSystem_.reset();
+        }
+    }
 }
 
 void Renderer::beginFrame() {
@@ -1447,24 +1473,12 @@ void Renderer::beginFrame() {
         // It stays dirty and the next frame tries again; resizing the post
         // effects at a size that failed is what disabled FXAA for good.
         if (!vkCtx->recreateSwapchain(window->getDrawableWidth(), window->getDrawableHeight())) return;
-        // Rebuild water resources that reference swapchain extent/views
-        if (waterRenderer) {
-            waterRenderer->recreatePipelines();
-            waterRenderer->destroyWater1xResources();
-            setupWater1xPass();
-        }
-        // Recreate post-process resources for new swapchain dimensions
-        if (postProcessPipeline_) postProcessPipeline_->handleSwapchainResize();
-        // Resize HiZ depth pyramid for new swapchain dimensions
-        if (hizSystem_) {
-            auto ext = vkCtx->getSwapchainExtent();
-            if (!hizSystem_->resize(ext.width, ext.height)) {
-                LOG_WARNING("HiZ resize failed - disabling occlusion culling");
-                if (m2Renderer) m2Renderer->setHiZSystem(nullptr);
-                hizSystem_->shutdown();
-                hizSystem_.reset();
-            }
-        }
+    }
+    // Everything holding views of the swapchain or sized from it, for whichever
+    // rebuild happened since they were made - this one, or one the loading
+    // screen made while the world was loading, which nothing here was told of.
+    if (swapchainResourcesGeneration_ != vkCtx->swapchainGeneration()) {
+        rebuildSwapchainSizedResources();
     }
 
     // Between frames, so a resize of the ray traced lighting's images can wait

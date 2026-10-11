@@ -85,6 +85,7 @@ VkContext::~VkContext() {
 
 bool VkContext::initialize(SDL_Window* window) {
     LOG_INFO("Initializing Vulkan context");
+    sdlWindow_ = window;
 
     if (!createInstance(window)) return false;
     if (!createSurface(window)) return false;
@@ -2622,7 +2623,12 @@ VkDescriptorSet VkContext::uploadImGuiTexture(const uint8_t* rgba, int width, in
 }
 
 void VkContext::releaseSurface() {
-    if (device) vkDeviceWaitIdle(device);
+    if (device) {
+        if (const VkResult idle = vkDeviceWaitIdle(device); idle != VK_SUCCESS) {
+            LOG_ERROR("Surface release: wait-idle failed (", static_cast<int>(idle), ")");
+            noteDeviceLost("releaseSurface", idle);
+        }
+    }
 
     for (auto fb : swapchainFramebuffers) {
         if (fb) vkDestroyFramebuffer(device, fb, nullptr);
@@ -2641,20 +2647,55 @@ void VkContext::releaseSurface() {
         vkDestroySurfaceKHR(instance, surface, nullptr);
         surface = VK_NULL_HANDLE;
     }
-    surfaceLost_ = true;
-    LOG_INFO("Vulkan surface and swapchain released for the background");
+    // A frame cut off by the window going - an image acquired and never
+    // presented - leaves its acquire semaphore signalled, and handing that to
+    // the first acquire on the new swapchain is undefined: drivers answer it
+    // by losing the device. The wait above has emptied the queue, so the
+    // fences and semaphores can all be remade in the state a first frame
+    // expects.
+    if (device && !deviceLost_) resetFrameSyncState();
+    swapchainDirty = true;
+    lifecycle_.surfaceReleased();
+    LOG_WARNING("Vulkan surface and swapchain released (",
+                lifecycle_.inBackground() ? "in the background" : "lost by the driver", ")");
 }
 
-bool VkContext::restoreSurface(SDL_Window* window, int width, int height) {
-    if (!surfaceLost_) {
+bool VkContext::nativeWindowPresent() const {
+    if (!sdlWindow_) return false;
+#ifdef __ANDROID__
+    // Set by SDL's onNativeSurfaceCreated and cleared by onNativeSurfaceDestroyed,
+    // both on the Java UI thread. vkCreateAndroidSurfaceKHR with a null window
+    // is undefined, so a restore waits for this rather than trying.
+    return SDL_GetPointerProperty(SDL_GetWindowProperties(sdlWindow_),
+                                  SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr) != nullptr;
+#else
+    return true;
+#endif
+}
+
+bool VkContext::restoreSurface() {
+    if (lifecycle_.surfaceLive()) {
         LOG_INFO("Resume with a surface that was never released; nothing to rebuild");
         return true;
     }
-    if (!createSurface(window)) {
-        LOG_ERROR("Could not recreate the Vulkan surface on resume");
+    if (!sdlWindow_ || !createSurface(sdlWindow_)) {
+        lifecycle_.restoreFailed();
+        if (lifecycle_.shouldLogFailedRestore()) {
+            LOG_ERROR("Could not recreate the Vulkan surface (attempt ",
+                      lifecycle_.failedRestores(), "); trying again next frame");
+        }
         return false;
     }
-    surfaceLost_ = false;
+    // The present queue was chosen against the first surface. A new one is
+    // the same window on the same display and has always been supported in
+    // practice, but a phone that says otherwise is worth knowing about.
+    VkBool32 presentable = VK_FALSE;
+    if (vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, presentQueueFamily, surface,
+                                             &presentable) != VK_SUCCESS || !presentable) {
+        LOG_WARNING("Rebuilt surface reports no present support on queue family ",
+                    presentQueueFamily);
+    }
+    lifecycle_.surfaceRestored();
 
     // Only the surface is rebuilt here. The swapchain is left to the renderer's
     // own dirty path, which rebuilds the water passes, the post-process chain
@@ -2662,9 +2703,46 @@ bool VkContext::restoreSurface(SDL_Window* window, int width, int height) {
     // swapchain. Building it here instead left those pointing at images that no
     // longer existed, and beginFrame read through one of them.
     swapchainDirty = true;
-    LOG_INFO("Vulkan surface rebuilt after resume; swapchain to follow (",
-             width, "x", height, ")");
+    int w = 0, h = 0;
+    SDL_GetWindowSizeInPixels(sdlWindow_, &w, &h);
+    LOG_WARNING("Vulkan surface rebuilt (", w, "x", h, "); swapchain to follow");
     return true;
+}
+
+void VkContext::enterBackground(const char* why) {
+    if (lifecycle_.enterBackground()) {
+        LOG_WARNING("App to the background (", why, "): rendering stops");
+    }
+    (void)syncSurface();
+}
+
+void VkContext::enterForeground(const char* why) {
+    if (lifecycle_.enterForeground()) {
+        LOG_WARNING("App to the foreground (", why, "): native window ",
+                    nativeWindowPresent() ? "present" : "not there yet");
+    }
+    (void)syncSurface();
+}
+
+bool VkContext::syncSurface() {
+    if (deviceLost_) return false;
+    switch (lifecycle_.next(nativeWindowPresent())) {
+        case SurfaceLifecycle::Action::Release:
+            releaseSurface();
+            // Lost by the driver in the foreground: the window it was built on
+            // may already have a successor, so try at once rather than a frame
+            // late.
+            if (lifecycle_.next(nativeWindowPresent()) == SurfaceLifecycle::Action::Restore) {
+                (void)restoreSurface();
+            }
+            break;
+        case SurfaceLifecycle::Action::Restore:
+            (void)restoreSurface();
+            break;
+        case SurfaceLifecycle::Action::None:
+            break;
+    }
+    return canRender();
 }
 
 bool VkContext::surfaceHasArea() const {
@@ -2690,6 +2768,12 @@ bool VkContext::recreateSwapchain(int width, int height) {
     // crash handler turns into exit code 3. Kept dirty and left alone, the
     // first frame with a window again builds it at the real size.
     if (width <= 0 || height <= 0 || !surfaceHasArea()) {
+        swapchainDirty = true;
+        return false;
+    }
+    // surfaceHasArea answers true for a surface it could not query, and a
+    // released one is not a surface at all.
+    if (surface == VK_NULL_HANDLE || !lifecycle_.surfaceLive()) {
         swapchainDirty = true;
         return false;
     }
@@ -2806,6 +2890,7 @@ bool VkContext::recreateSwapchain(int width, int height) {
     if (!createSceneContinueRenderPass()) return false;
 
     swapchainDirty = false;
+    ++swapchainGeneration_;
     LOG_INFO("Swapchain recreated: ", swapchainExtent.width, "x", swapchainExtent.height);
     return true;
 }
@@ -2923,6 +3008,9 @@ void VkContext::resetFrameSyncState() {
 
 VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     if (deviceLost_) return VK_NULL_HANDLE;
+    // Nothing is drawn in the background, nor to a surface the driver has
+    // said is gone; syncSurface rebuilds it before the next frame.
+    if (!lifecycle_.canRender()) return VK_NULL_HANDLE;
     if (swapchain == VK_NULL_HANDLE) return VK_NULL_HANDLE;  // Swapchain lost; recreate pending
     // A rebuild that failed partway leaves the swapchain with no render pass
     // and no framebuffers behind it. Every caller indexes the framebuffers by
@@ -2988,6 +3076,17 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     }
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        swapchainDirty = true;
+        return VK_NULL_HANDLE;
+    }
+    // The native window went out from under the swapchain - Android taking it
+    // from an activity on its way to the background, before the lifecycle
+    // event says so. Rebuilding the swapchain on the same surface can never
+    // work; the surface itself has to go. This was reported as a failed
+    // acquire and nothing else, every frame, for good: the black screen.
+    if (result == VK_ERROR_SURFACE_LOST_KHR) {
+        LOG_WARNING("vkAcquireNextImageKHR: surface lost - releasing it to rebuild");
+        lifecycle_.surfaceLostByDriver();
         swapchainDirty = true;
         return VK_NULL_HANDLE;
     }
@@ -3211,6 +3310,12 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     if (result == VK_ERROR_OUT_OF_DATE_KHR ||
         (result == VK_SUBOPTIMAL_KHR && !suboptimalIsExpected)) {
         swapchainDirty = true;
+    } else if (result == VK_ERROR_SURFACE_LOST_KHR) {
+        LOG_WARNING("vkQueuePresentKHR: surface lost - releasing it to rebuild");
+        lifecycle_.surfaceLostByDriver();
+        swapchainDirty = true;
+    } else if (result == VK_ERROR_DEVICE_LOST) {
+        noteDeviceLost("vkQueuePresentKHR", result);
     }
 
     // Each on its own, after the main image: one call for several swapchains

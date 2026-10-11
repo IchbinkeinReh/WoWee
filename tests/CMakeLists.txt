@@ -180,6 +180,12 @@ wowee_add_test(test_spell_description_eval
     SOURCES test_spell_description_eval.cpp
             ${CMAKE_SOURCE_DIR}/src/game/spell_description_eval.cpp)
 
+# ── test_app_lifecycle ──────────────────────────────────────
+# What the client decides when Android sends it to the background and back.
+# The event cannot be produced here; the decisions can.
+wowee_add_test(test_app_lifecycle
+    SOURCES test_app_lifecycle.cpp)
+
 # ── test_asset_inventory ────────────────────────────────────
 # What is installed and whether it can be used. The client used to start with
 # nothing extracted and fail far from the cause, never saying there were no

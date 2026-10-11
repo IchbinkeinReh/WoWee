@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "rendering/vk_utils.hpp"
+#include "rendering/surface_lifecycle.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <VkBootstrap.h>
@@ -99,11 +100,38 @@ public:
     /// is what left the client on a black screen that never came back.
     void releaseSurface();
 
-    /// Builds both again against the window's new native surface.
-    [[nodiscard]] bool restoreSurface(SDL_Window* window, int width, int height);
+    /// Builds the surface again against the window's current native window.
+    /// The swapchain is left dirty, for the renderer's own rebuild path.
+    [[nodiscard]] bool restoreSurface();
 
-    /// True between the two, when there is nothing to draw to.
-    [[nodiscard]] bool isSurfaceLost() const { return surfaceLost_; }
+    /// The app leaving the foreground and coming back - SDL's
+    /// WILL/DID_ENTER_BACKGROUND and DID_ENTER_FOREGROUND. Leaving releases the
+    /// surface at once; coming back rebuilds it if the native window is there
+    /// already, and syncSurface keeps trying each frame if it is not.
+    void enterBackground(const char* why);
+    void enterForeground(const char* why);
+
+    /// Carries out whatever SurfaceLifecycle says is due: a release after the
+    /// app went away or the driver reported VK_ERROR_SURFACE_LOST_KHR, or a
+    /// restore once it is back with a native window. Cheap when there is
+    /// nothing to do, and called before every frame by every path that draws
+    /// one. Answers canRender().
+    bool syncSurface();
+
+    /// Whether a frame can be drawn at all: a live surface, in the
+    /// foreground, on a device that is still there.
+    [[nodiscard]] bool canRender() const { return lifecycle_.canRender() && !deviceLost_; }
+    [[nodiscard]] bool inBackground() const { return lifecycle_.inBackground(); }
+
+    /// True between a release and a restore, when there is nothing to draw to.
+    [[nodiscard]] bool isSurfaceLost() const { return !lifecycle_.surfaceLive(); }
+
+    /// Counts successful swapchain rebuilds. Anything holding views of the
+    /// swapchain or targets sized from it - the renderer's water, post-process
+    /// and HiZ resources, and the descriptor sets that point at them -
+    /// compares this against the value it was built for, so a rebuild made by
+    /// someone else (the loading screen, a resume) is not missed.
+    [[nodiscard]] uint64_t swapchainGeneration() const { return swapchainGeneration_; }
 
     // Frame operations
     VkCommandBuffer beginFrame(uint32_t& imageIndex);
@@ -463,7 +491,14 @@ private:
     std::vector<VkImageView> swapchainImageViews;
     std::vector<VkFramebuffer> swapchainFramebuffers;
     bool swapchainDirty = false;
-    bool surfaceLost_ = false;
+    SurfaceLifecycle lifecycle_;
+    /// The window the surface is built on, kept from initialize so the
+    /// surface can be rebuilt without the caller having to hand it back.
+    SDL_Window* sdlWindow_ = nullptr;
+    uint64_t swapchainGeneration_ = 0;
+    /// Whether the window has a native window behind it right now. Always on
+    /// a desktop; on Android, only between surfaceCreated and surfaceDestroyed.
+    [[nodiscard]] bool nativeWindowPresent() const;
     bool deviceLost_ = false;
     bool vsync_ = true;
     /// The vsync state the present-mode line last reported, so a rebuild
