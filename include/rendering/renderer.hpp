@@ -118,6 +118,10 @@ public:
     /// passes that follow the scene. Does nothing when there is nothing
     /// pending, so endFrame calls it too in case the caller did not.
     void finishRenderWorld();
+    /// Grow the grass around the player all at once, behind the loading
+    /// screen. In play a window is built a few milliseconds a frame, and on
+    /// entering the world that showed as the field filling in patch by patch.
+    void prepareGrassBeforeEntry();
     /// Waits for the doodad worker and the shadow worker, if either is still
     /// recording, without putting anything into the frame. Anything that is
     /// about to change the model or character renderers' state calls this
@@ -994,6 +998,7 @@ private:
     // reproduces every blade that is still in range rather than reshuffling.
     glm::vec3 grassWindowCenter_{0.0f};
     bool grassWindowValid_ = false;
+    double grassSliceBudgetMs_ = 6.0;  ///< a frame's share of a grass build; see updateGrassPopulation
     // The window being generated, a bounded number of lattice cells per
     // frame. Small windows still finish inside one; the ones the distance
     // slider allows take as many frames as they take, and upload when done.

@@ -3319,6 +3319,19 @@ uint32_t Renderer::grassProfileFor(uint32_t effectId, uint32_t areaId) {
     return index;
 }
 
+void Renderer::prepareGrassBeforeEntry() {
+    if (!grassEnabled_) return;
+    const double frameShare = grassSliceBudgetMs_;
+    grassSliceBudgetMs_ = 2000.0;
+    // A build runs to its end in one call with this budget; a second one
+    // only if the first found the window had already moved on.
+    for (int i = 0; i < 3; ++i) {
+        updateGrassPopulation();
+        if (grassWindowValid_ && !grassBuilder_.active()) break;
+    }
+    grassSliceBudgetMs_ = frameShare;
+}
+
 void Renderer::updateGrassPopulation() {
     if (!grassEnabled_) return;
     if (!grassRenderer_ || !grassRenderer_->isReady() || !terrainManager) return;
@@ -3639,7 +3652,7 @@ void Renderer::updateGrassPopulation() {
     // Small slices until the frame's share is spent; a rebuild at walking pace
     // still lands well inside the step it has before it would restart.
     constexpr size_t kCellsPerSlice = 8000;
-    constexpr double kSliceBudgetMs = 6.0;
+    const double kSliceBudgetMs = grassSliceBudgetMs_;
     const auto started = std::chrono::steady_clock::now();
     bool done = false;
     do {

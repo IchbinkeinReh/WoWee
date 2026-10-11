@@ -1262,6 +1262,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             const bool capped = groundReady ? elapsed >= kMaxWarmupSeconds
                                             : elapsed >= kMaxGroundWaitSeconds;
             if (readyToExit || capped) {
+                // The grass around the player, grown in full before the
+                // screen goes rather than patch by patch after it.
+                if (groundReady && renderer_) renderer_->prepareGrassBeforeEntry();
                 LOG_INFO("Warmup done after ", elapsed, "s: ground ", groundReady ? "ready" : "NOT ready",
                          ", queues ", queuesEmpty ? "drained" : "pending");
                 if (capped && !groundReady) {
