@@ -1042,24 +1042,164 @@ static int lua_UnitIsPlayer(lua_State* L) {
 // Vehicles, as ScriptEvents.cpp answers for a unit: its passenger state
 // (+0xf60 +0x14) and the VehicleSeat row of the seat it is in (0x00613600:
 // its transport's vehicle row's column for its seat byte).
-static uint64_t vehicleUnitGuid(lua_State* L, game::GameHandler* gh) {
+static uint64_t resolveUnitArgGuid(lua_State* L, game::GameHandler* gh) {
     std::string uid(luaL_optstring(L, 1, "player"));
     toLowerInPlace(uid);
     return gh ? resolveUnitGuid(gh, uid) : 0;
 }
 
-/// UnitHasVehicleUI(unit): the seat's Flags 0x20000000 (0x00613740). Held at
-/// false here: it hands the action bar to VehicleMenuBar, whose readers -
-/// GetVehicleUIIndicator, UnitVehicleSeatCount, UnitVehicleSeatInfo,
-/// CanEjectPassengerFromSeat and the aim calls - are not bound yet.
+/// UnitHasVehicleUI(unit): the seat's Flags 0x20000000 (0x00613740).
 static int lua_UnitHasVehicleUI(lua_State* L) {
-    (void)L;
-    return luaReturnFalse(L);
+    auto* gh = getGameHandler(L);
+    const uint64_t guid = resolveUnitArgGuid(L, gh);
+    const game::vehicle::SeatRecord* seat = gh && guid ? gh->vehicleRoster().seatOf(guid) : nullptr;
+    lua_pushboolean(L, seat && (seat->flags & game::vehicle::kSeatFlagHasVehicleUI) != 0 ? 1 : 0);
+    return 1;
+}
+/// The vehicle a unit's seats are counted from (0x0074c650 with none to
+/// stop at): up its transports, or itself where it is a vehicle.
+static uint64_t vehicleRootOf(game::GameHandler* gh, uint64_t guid, uint64_t stopAt = 0) {
+    return gh && guid ? gh->vehicleRoster().rootVehicle(guid, stopAt, vehicleKnown(gh)) : 0;
+}
+/// UnitVehicleSeatCount(unit): the seats of the vehicle its seats count
+/// from, 0 for none (0x00613830 -> 0x00757470).
+static int lua_UnitVehicleSeatCount(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint64_t root = vehicleRootOf(gh, resolveUnitArgGuid(L, gh));
+    lua_pushnumber(L, root ? static_cast<double>(gh->vehicleRoster().uiSeatCount(root, vehicleIsPlayer(gh))) : 0.0);
+    return 1;
+}
+/// UnitVehicleSeatInfo(unit, seat) -> controlType, occupantName, serverName,
+/// ejectable, canSwitchSeats (0x006138c0 -> 0x007579e0): the seat-th of the
+/// vehicle its seats count from. controlType is "Root" or "Child" for a
+/// control seat (Flags 0x800) of that vehicle or of one riding it, else
+/// "None"; the occupant's name or nil; no server name; FlagsB 0x20 and
+/// Flags 0x4000000. Nothing for no such seat.
+static int lua_UnitVehicleSeatInfo(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint64_t guid = resolveUnitArgGuid(L, gh);
+    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+    const uint64_t root = vehicleRootOf(gh, guid);
+    if (!root || index < 1) return 0;
+    const auto info = game::vehicle::uiSeatInfo(gh->vehicleRoster(), root, static_cast<uint32_t>(index - 1),
+                                                vehicleIsPlayer(gh));
+    if (!info) return 0;
+    lua_pushstring(L, info->controlType);
+    std::string name;
+    if (info->occupant) {
+        auto entity = gh->getEntityManager().getEntity(info->occupant);
+        if (auto* unit = dynamic_cast<game::Unit*>(entity.get())) name = gh->shownUnitName(*unit);  // 0x0072a000
+        if (name.empty()) name = gh->lookupName(info->occupant);
+        if (name.empty()) name = "Unknown Being";
+    }
+    if (info->occupant) lua_pushstring(L, name.c_str());
+    else lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushboolean(L, info->ejectable ? 1 : 0);
+    lua_pushboolean(L, info->canSwitchSeats ? 1 : 0);
+    return 5;
+}
+/// UnitSwitchToVehicleSeat(unit, seat) (0x006139b0 -> 0x0074ca90): for the
+/// player only, in a passenger state; the seat-th of the vehicle its seats
+/// count from, where it is empty and both it and the player's own seat have
+/// Flags 0x4000000 - CMSG_REQUEST_VEHICLE_SWITCH_SEAT with that vehicle and
+/// seat.
+static int lua_UnitSwitchToVehicleSeat(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint64_t guid = resolveUnitArgGuid(L, gh);
+    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+    if (!gh || !guid || guid != gh->getPlayerGuid() || gh->vehicleRoster().seatState(guid) == 0) return 0;
+    const auto p = gh->vehicleRoster().passenger(guid);
+    const uint64_t root = p ? vehicleRootOf(gh, p->vehicleGuid) : 0;
+    if (!root || index < 1) return 0;
+    const auto& roster = gh->vehicleRoster();
+    const auto at = roster.uiSeat(root, static_cast<uint32_t>(index - 1), vehicleIsPlayer(gh));
+    if (!at || !roster.tables()) return 0;
+    const game::vehicle::SeatRecord* seat = roster.tables()->seat(roster.vehicleId(at->vehicleGuid), at->seat);
+    if (!seat || roster.occupant(at->vehicleGuid, at->seat) != 0 ||
+        (seat->flags & game::vehicle::kSeatFlagCanSwitch) == 0 ||
+        !playerVehicleSeatHasFlag(gh, game::vehicle::kSeatFlagCanSwitch))
+        return 0;
+    gh->sendRequestVehicleSwitchSeat(at->vehicleGuid, at->seat);
+    return 0;
+}
+/// CanSwitchVehicleSeat(): whether the player's seat has Flags 0x4000000,
+/// whatever is asked of it (0x00608580).
+static int lua_CanSwitchVehicleSeat(lua_State* L) {
+    lua_pushboolean(L, playerVehicleSeatHasFlag(getGameHandler(L), game::vehicle::kSeatFlagCanSwitch) ? 1 : 0);
+    return 1;
+}
+/// GetVehicleUIIndicator(id) -> backgroundTexture, numSeats; nothing for
+/// no such indicator (0x00614e60 -> 0x00614d90).
+static const game::vehicle::UIIndicator* uiIndicator(lua_State* L, game::GameHandler* gh, int arg) {
+    const auto* tables = gh ? gh->vehicleRoster().tables() : nullptr;
+    return tables ? tables->indicator(static_cast<uint32_t>(lua_tonumber(L, arg))) : nullptr;
+}
+static int lua_GetVehicleUIIndicator(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetVehicleUIIndicator(indicatorID)");
+    const auto* ind = uiIndicator(L, getGameHandler(L), 1);
+    if (!ind) return 0;
+    lua_pushstring(L, ind->backgroundTexture.c_str());
+    lua_pushnumber(L, static_cast<double>(ind->seats.size()));
+    return 2;
+}
+/// GetVehicleUIIndicatorSeat(id, i) -> virtualSeatIndex, xPos, yPos: the
+/// indicator's i-th seat in id order (0x00614ef0).
+static int lua_GetVehicleUIIndicatorSeat(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetVehicleUIIndicatorSeat(indicatorID, indicatorSeatIndex)");
+    const auto* ind = uiIndicator(L, getGameHandler(L), 1);
+    const auto i = static_cast<uint32_t>(static_cast<int>(lua_tonumber(L, 2)) - 1);
+    if (!ind || i >= ind->seats.size()) return 0;
+    lua_pushnumber(L, static_cast<double>(ind->seats[i].virtualSeatIndex));
+    lua_pushnumber(L, ind->seats[i].x);
+    lua_pushnumber(L, ind->seats[i].y);
+    return 3;
+}
+/// The passenger in the player's seat-th of the vehicle its seats count
+/// from, where the player carries it - is that vehicle, or one it rides on
+/// (0x00613d20, 0x00613e10). The seat's row too.
+struct EjectTarget {
+    uint64_t occupant = 0;
+    const game::vehicle::SeatRecord* seat = nullptr;
+};
+static std::optional<EjectTarget> ejectTarget(game::GameHandler* gh, int index) {
+    if (!gh || index < 1) return std::nullopt;
+    const uint64_t player = gh->getPlayerGuid();
+    const uint64_t root = vehicleRootOf(gh, player);
+    if (!root) return std::nullopt;
+    const auto& roster = gh->vehicleRoster();
+    const auto at = roster.uiSeat(root, static_cast<uint32_t>(index - 1), vehicleIsPlayer(gh));
+    if (!at) return std::nullopt;
+    EjectTarget out;
+    out.occupant = roster.occupant(at->vehicleGuid, at->seat);
+    if (!out.occupant) return std::nullopt;
+    out.seat = roster.tables() ? roster.tables()->seat(roster.vehicleId(at->vehicleGuid), at->seat) : nullptr;
+    return out;
+}
+/// CanEjectPassengerFromSeat(seat): the player carries its passenger and the
+/// seat has FlagsB 0x20 (0x00613d20).
+static int lua_CanEjectPassengerFromSeat(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CanEjectPassengerFromSeat(seatIndex)");
+    auto* gh = getGameHandler(L);
+    const auto t = ejectTarget(gh, static_cast<int>(lua_tonumber(L, 1)));
+    const bool can = t && vehicleRootOf(gh, t->occupant, gh->getPlayerGuid()) == gh->getPlayerGuid() && t->seat &&
+                     (t->seat->flagsB & game::vehicle::kSeatFlagBEjectable) != 0;
+    lua_pushboolean(L, can ? 1 : 0);
+    return 1;
+}
+/// EjectPassengerFromSeat(seat): CMSG_EJECT_PASSENGER for whoever sits
+/// there; the server judges (0x00613e10 -> 0x00757200).
+static int lua_EjectPassengerFromSeat(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: EjectPassengerFromSeat(seatIndex)");
+    auto* gh = getGameHandler(L);
+    if (const auto t = ejectTarget(gh, static_cast<int>(lua_tonumber(L, 1)))) gh->sendEjectPassenger(t->occupant);
+    return 0;
 }
 /// UnitInVehicle(unit): 1 while seated (state 3), else nil (0x006133d0).
 static int lua_UnitInVehicle(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint64_t guid = vehicleUnitGuid(L, gh);
+    const uint64_t guid = resolveUnitArgGuid(L, gh);
     if (gh && guid && gh->vehicleRoster().seatState(guid) == 3) lua_pushnumber(L, 1.0);
     else lua_pushnil(L);
     return 1;
@@ -1069,7 +1209,7 @@ static int lua_UnitInVehicle(lua_State* L) {
 static uint64_t guidField(game::GameHandler* gh, uint64_t unitGuid, game::UF field);
 static int lua_UnitControllingVehicle(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint64_t guid = vehicleUnitGuid(L, gh);
+    const uint64_t guid = resolveUnitArgGuid(L, gh);
     bool controlling = false;
     if (gh && guid && gh->vehicleRoster().seatState(guid) == 3) {
         if (const auto p = gh->vehicleRoster().passenger(guid)) {
@@ -1082,7 +1222,7 @@ static int lua_UnitControllingVehicle(lua_State* L) {
 /// UnitInVehicleControlSeat(unit): its seat's Flags 0x800 (0x00613700).
 static int lua_UnitInVehicleControlSeat(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint64_t guid = vehicleUnitGuid(L, gh);
+    const uint64_t guid = resolveUnitArgGuid(L, gh);
     const game::vehicle::SeatRecord* seat = gh && guid ? gh->vehicleRoster().seatOf(guid) : nullptr;
     lua_pushboolean(L, seat && (seat->flags & 0x800) != 0 ? 1 : 0);
     return 1;
@@ -1091,7 +1231,7 @@ static int lua_UnitInVehicleControlSeat(lua_State* L) {
 /// "" past them, nothing without a seat (0x006137d0).
 static int lua_UnitVehicleSkin(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint64_t guid = vehicleUnitGuid(L, gh);
+    const uint64_t guid = resolveUnitArgGuid(L, gh);
     const game::vehicle::SeatRecord* seat = gh && guid ? gh->vehicleRoster().seatOf(guid) : nullptr;
     if (!seat) return 0;
     static constexpr const char* kSkins[2] = {"Natural", "Mechanical"};
@@ -2453,22 +2593,19 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"UnitUsingVehicle", [](lua_State* L) -> int {
             // 1 while in any passenger state, else nil (0x006134a0).
             auto* gh = getGameHandler(L);
-            const uint64_t guid = vehicleUnitGuid(L, gh);
+            const uint64_t guid = resolveUnitArgGuid(L, gh);
             if (gh && guid && gh->vehicleRoster().seatState(guid) != 0) lua_pushnumber(L, 1.0);
             else lua_pushnil(L);
             return 1;
         }},
-                // UnitVehicleSeatInfo(unit, seat) → controlType, occupantName,
-                // serverName, ejectable, canSwitchSeats.
-                //
-                // Seats are not modelled: SMSG_PLAYER_VEHICLE_DATA carries the
-                // vehicle a player is in and nothing about who else is aboard.
-                // Nothing rather than an invented seat - the caller shows an
-                // occupant's name from it, and a made-up one would be a name.
-                {"UnitVehicleSeatInfo", [](lua_State* L) -> int {
-            for (int i = 0; i < 5; ++i) lua_pushnil(L);
-            return 5;
-        }},
+                {"UnitVehicleSeatInfo", lua_UnitVehicleSeatInfo},
+                {"UnitVehicleSeatCount", lua_UnitVehicleSeatCount},
+                {"UnitSwitchToVehicleSeat", lua_UnitSwitchToVehicleSeat},
+                {"CanSwitchVehicleSeat", lua_CanSwitchVehicleSeat},
+                {"GetVehicleUIIndicator", lua_GetVehicleUIIndicator},
+                {"GetVehicleUIIndicatorSeat", lua_GetVehicleUIIndicatorSeat},
+                {"CanEjectPassengerFromSeat", lua_CanEjectPassengerFromSeat},
+                {"EjectPassengerFromSeat", lua_EjectPassengerFromSeat},
                 {"UnitIsGhost",   lua_UnitIsGhost},
                 {"UnitIsDeadOrGhost", lua_UnitIsDeadOrGhost},
                 {"UnitIsAFK",     lua_UnitIsAFK},

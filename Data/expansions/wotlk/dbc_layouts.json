@@ -625,12 +625,26 @@
     "RideUpperAnimLoop": 18,
     "RideUpperAnimStart": 17,
     "UiSkin": 44,
+    "VehicleAbilityDisplay": 41,
     "VehicleEnterAnim": 33,
     "VehicleEnterAnimBone": 36,
+    "VehicleEnterAnimDelay": 39,
     "VehicleExitAnim": 34,
     "VehicleExitAnimBone": 37,
+    "VehicleExitAnimDelay": 40,
     "VehicleRideAnimLoop": 35,
     "VehicleRideAnimLoopBone": 38
+  },
+  "VehicleUIIndSeat": {
+    "ID": 0,
+    "VehicleUIIndicatorID": 1,
+    "VirtualSeatIndex": 2,
+    "XPos": 3,
+    "YPos": 4
+  },
+  "VehicleUIIndicator": {
+    "BackgroundTexture": 1,
+    "ID": 0
   },
   "WMOAreaTable": {
     "ID": 0,

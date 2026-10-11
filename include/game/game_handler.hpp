@@ -3193,6 +3193,9 @@ public:
     bool isInVehicle() const { return vehicleId_ != 0; }
     uint32_t getVehicleId() const { return vehicleId_; }
     void sendRequestVehicleExit();
+    void sendRequestVehicleSeatStep(bool next);
+    void sendRequestVehicleSwitchSeat(uint64_t vehicleGuid, uint8_t seat);
+    void sendEjectPassenger(uint64_t passengerGuid);
     /// Which units are vehicles and who sits in them (game/vehicle.hpp).
     vehicle::VehicleRoster& vehicleRoster() { return vehicleRoster_; }
     const vehicle::VehicleRoster& vehicleRoster() const { return vehicleRoster_; }

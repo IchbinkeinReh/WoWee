@@ -500,6 +500,7 @@ private:
         uint64_t prevVehicleGuid = 0;  ///< +0x20: the one it comes from
         uint8_t prevSeat = 0xff;       ///< +0x30
         uint32_t seatId = 0;           ///< +0x54: the seat its moves read
+        uint64_t rootGuid = 0;         ///< +0x58: the vehicle its seats count from
         bool voluntary = false;        ///< movement flags2 0x40 at the change
         uint32_t startMs = 0;          ///< +0x34
         uint32_t endMs = 0;            ///< +0x38
@@ -536,6 +537,9 @@ private:
     };
     std::unordered_map<uint64_t, VehicleMotion> vehicleMotion_;
     void releaseSeatedPassenger(uint64_t guid, SeatedPassenger& seated, bool landing);
+    /// The vehicle a unit's seats count from while it is in a passenger
+    /// state, else the one it would (0x00748040, 0x0074c650).
+    uint64_t seatRootOf(uint64_t guid) const;
     /// 0x007489c0: the passenger to a new state, at `nowMs`.
     void setSeatState(uint64_t guid, SeatedPassenger& p, game::vehicle::SeatState state, uint32_t nowMs);
     /// UNIT_ENTERING_VEHICLE, UNIT_ENTERED_VEHICLE, UNIT_EXITING_VEHICLE and

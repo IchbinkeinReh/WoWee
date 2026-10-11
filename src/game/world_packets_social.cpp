@@ -427,6 +427,31 @@ network::Packet SetActiveMoverPacket::build(uint64_t guid) {
     return packet;
 }
 
+network::Packet VehiclePackets::requestExit() {
+    return network::Packet(wireOpcode(Opcode::CMSG_REQUEST_VEHICLE_EXIT));
+}
+
+network::Packet VehiclePackets::requestPrevSeat() {
+    return network::Packet(wireOpcode(Opcode::CMSG_REQUEST_VEHICLE_PREV_SEAT));
+}
+
+network::Packet VehiclePackets::requestNextSeat() {
+    return network::Packet(wireOpcode(Opcode::CMSG_REQUEST_VEHICLE_NEXT_SEAT));
+}
+
+network::Packet VehiclePackets::requestSwitchSeat(uint64_t vehicleGuid, uint8_t seat) {
+    network::Packet packet(wireOpcode(Opcode::CMSG_REQUEST_VEHICLE_SWITCH_SEAT));
+    packet.writePackedGuid(vehicleGuid);  // 0x0076dd00
+    packet.writeUInt8(seat);              // 0x0047afe0
+    return packet;
+}
+
+network::Packet VehiclePackets::ejectPassenger(uint64_t passengerGuid) {
+    network::Packet packet(wireOpcode(Opcode::CMSG_CONTROLLER_EJECT_PASSENGER));
+    packet.writeUInt64(passengerGuid);  // 0x0047b100
+    return packet;
+}
+
 network::Packet InspectPacket::build(uint64_t targetGuid) {
     network::Packet packet(wireOpcode(Opcode::CMSG_INSPECT));
     if (isActiveExpansion("classic") || isActiveExpansion("tbc") || isActiveExpansion("turtle")) {

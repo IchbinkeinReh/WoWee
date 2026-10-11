@@ -15,8 +15,11 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -74,6 +77,7 @@ struct SeatRecord {
     int32_t vehicleEnterAnimBone = 0;     ///< +0x90, a key bone
     int32_t vehicleExitAnimBone = 0;      ///< +0x94
     int32_t vehicleRideAnimLoopBone = 0;  ///< +0x98
+    uint32_t vehicleAbilityDisplay = 0;   ///< +0xa4, 1 hands the action bar to the vehicle (0x005d4ad0)
     uint32_t enterUISoundId = 0;          ///< +0xa8
     uint32_t exitUISoundId = 0;           ///< +0xac
     uint32_t uiSkin = 0;                  ///< +0xb0
@@ -104,11 +108,41 @@ struct VehicleRecord {
     uint32_t uiIndicatorId = 0;                  ///< +0x90
 };
 
+/// VehicleSeat Flags and FlagsB the vehicle interface reads.
+inline constexpr uint32_t kSeatFlagCanSwitch = 0x4000000;     ///< 0x0074ca90, 0x007579e0
+inline constexpr uint32_t kSeatFlagHasVehicleUI = 0x20000000; ///< 0x00613740
+inline constexpr uint32_t kSeatFlagBEjectable = 0x20;         ///< 0x00613d20, 0x007579e0
+/// Vehicle.dbc Flags the aim reads (0x005fb3a0, 0x005f9f70, 0x005f9fe0).
+inline constexpr uint32_t kVehicleFlagPitchLimits = 0x40;
+inline constexpr uint32_t kVehicleFlagAimAngle = 0x400;
+inline constexpr uint32_t kVehicleFlagAimPower = 0x800;
+
+/// VehicleUIIndicator.dbc (ID, BackgroundTexture) and its VehicleUIIndSeat
+/// rows (ID, VehicleUIIndicatorID, VirtualSeatIndex, XPos, YPos), which
+/// 0x00614d90 gathers for an indicator in their id order.
+struct UIIndicatorSeat {
+    uint32_t id = 0;
+    uint32_t indicatorId = 0;
+    uint32_t virtualSeatIndex = 0;  ///< +0x8
+    float x = 0.0f;                 ///< +0xc
+    float y = 0.0f;                 ///< +0x10
+};
+struct UIIndicator {
+    uint32_t id = 0;
+    std::string backgroundTexture;
+    std::vector<UIIndicatorSeat> seats;
+    bool present = false;  ///< it has a VehicleUIIndicator row
+};
+
 /// Vehicle.dbc and VehicleSeat.dbc by id.
 class VehicleTables {
 public:
     void addVehicle(const VehicleRecord& row) { vehicles_[row.id] = row; }
     void addSeat(const SeatRecord& row) { seats_[row.id] = row; }
+    void addIndicator(uint32_t id, std::string backgroundTexture);
+    /// An indicator seat, kept with its indicator in id order.
+    void addIndicatorSeat(const UIIndicatorSeat& seat);
+    [[nodiscard]] const UIIndicator* indicator(uint32_t id) const;
     [[nodiscard]] const VehicleRecord* vehicle(uint32_t id) const;
     [[nodiscard]] const SeatRecord* seatById(uint32_t id) const;
     /// The row for a vehicle's seat (0x00756ec0): its seat column, nothing
@@ -119,6 +153,7 @@ public:
 private:
     std::unordered_map<uint32_t, VehicleRecord> vehicles_;
     std::unordered_map<uint32_t, SeatRecord> seats_;
+    std::unordered_map<uint32_t, UIIndicator> indicators_;
 };
 
 /// A unit in a seat: its vehicle, the seat and its facing on it - the
@@ -169,6 +204,27 @@ public:
     [[nodiscard]] const SeatRecord* seatOf(uint64_t guid) const;
     [[nodiscard]] const VehicleRecord* vehicleOf(uint64_t guid) const;
 
+    /// The vehicle a unit's seats are counted from (0x0074c650): up its
+    /// chain of transports while each is a vehicle's or a player's guid, to
+    /// `stopAt` where it is met; else the unit itself where it is a vehicle.
+    /// `known` says whether an object is in view (0x004d4db0).
+    [[nodiscard]] uint64_t rootVehicle(uint64_t guid, uint64_t stopAt,
+                                       const std::function<bool(uint64_t)>& known) const;
+    /// The passenger in a vehicle's seat (0x00757680), 0 for none.
+    [[nodiscard]] uint64_t occupant(uint64_t vehicleGuid, uint8_t seat) const;
+    /// How many seats the interface shows for a vehicle (0x00757470): its
+    /// seat columns that name a seat, each seat a vehicle that is no player
+    /// rides in taken by that vehicle's own.
+    [[nodiscard]] uint32_t uiSeatCount(uint64_t vehicleGuid, const std::function<bool(uint64_t)>& isPlayer) const;
+    /// The vehicle and seat of the interface's seat `index` (0-based,
+    /// 0x00757550), in that same order.
+    struct UISeat {
+        uint64_t vehicleGuid = 0;
+        uint8_t seat = 0;
+    };
+    [[nodiscard]] std::optional<UISeat> uiSeat(uint64_t vehicleGuid, uint32_t index,
+                                               const std::function<bool(uint64_t)>& isPlayer) const;
+
     /// The unit went out of view: neither a vehicle nor in a seat.
     void forget(uint64_t guid);
     void clear();
@@ -181,5 +237,24 @@ private:
     std::unordered_map<uint64_t, uint8_t> seatStates_;
     const VehicleTables* tables_ = nullptr;
 };
+
+/// What UnitVehicleSeatInfo answers for a seat (0x007579e0).
+struct UISeatInfo {
+    const char* controlType = "None";  ///< "Root"/"Child" for Flags 0x800
+    uint64_t occupant = 0;
+    bool ejectable = false;      ///< FlagsB 0x20
+    bool canSwitchSeats = false; ///< Flags 0x4000000
+};
+[[nodiscard]] std::optional<UISeatInfo> uiSeatInfo(const VehicleRoster& roster, uint64_t rootGuid, uint32_t index,
+                                                   const std::function<bool(uint64_t)>& isPlayer);
+
+/// A guid the transport chain is walked through (0x0074c650): a vehicle's
+/// (high 0xF15x) or a player's.
+[[nodiscard]] inline bool isVehicleGuid(uint64_t guid) {
+    return (static_cast<uint32_t>(guid >> 32) & 0xf0f00000u) == 0xf0500000u;
+}
+[[nodiscard]] inline bool isPlayerGuid(uint64_t guid) {
+    return (guid & 0xf000000000000000ull) == 0 && (guid & 0xf07fffffffffffffull) != 0;
+}
 
 }  // namespace wowee::game::vehicle

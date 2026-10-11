@@ -2612,14 +2612,10 @@ void GameHandler::registerRemainingOpcodes() {
         // without it the panel sat on whatever it had when it opened.
         fireAddonEvent("INSPECT_ACHIEVEMENT_READY", {});
     };
-    dispatchTable_[Opcode::SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA] = [this](network::Packet& packet) {
-        const bool wasRiding = vehicleId_ != 0;
-        vehicleId_ = 0;  // Vehicle ride cancelled; clear UI
-        if (wasRiding) {
-            fireAddonEvent("VEHICLE_UPDATE", {});
-            fireAddonEvent("UNIT_EXITED_VEHICLE", {"player"});
-            fireAddonEvent("UPDATE_BONUS_ACTIONBAR", {});
-        }
+    // The client only lets go of the player's wait for a seat change it
+    // asked for (0x00800510 -> 0x00747900, passenger +0x10 &= ~0x8); the
+    // vehicle the player is - its own rec id - is untouched.
+    dispatchTable_[Opcode::SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA] = [](network::Packet& packet) {
         packet.skipAll();
     };
     // uint32 type (0=normal, 1=heavy, 2=tired/restricted) + uint32 minutes played

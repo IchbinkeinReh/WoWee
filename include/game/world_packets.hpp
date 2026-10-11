@@ -1803,6 +1803,22 @@ public:
     static network::Packet build(uint64_t guid);
 };
 
+/// The vehicle interface's requests (ScriptEvents.cpp, UnitVehicle_C.cpp).
+class VehiclePackets {
+public:
+    /// CMSG_REQUEST_VEHICLE_EXIT (0x476, 0x0074c7f0): no payload.
+    static network::Packet requestExit();
+    /// CMSG_REQUEST_VEHICLE_PREV_SEAT / NEXT_SEAT (0x477 / 0x478,
+    /// 0x0074c8b0 / 0x0074c9a0): no payload.
+    static network::Packet requestPrevSeat();
+    static network::Packet requestNextSeat();
+    /// CMSG_REQUEST_VEHICLE_SWITCH_SEAT (0x479, 0x0074ca90): the vehicle's
+    /// packed guid and the seat.
+    static network::Packet requestSwitchSeat(uint64_t vehicleGuid, uint8_t seat);
+    /// CMSG_EJECT_PASSENGER (0x4a9, 0x00757200): the passenger's guid, whole.
+    static network::Packet ejectPassenger(uint64_t passengerGuid);
+};
+
 /** CMSG_INSPECT packet builder */
 class InspectPacket {
 public:

@@ -3,6 +3,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #pragma once
 
+#include <functional>
 #include <string>
 #include <chrono>
 #include <cstring>
@@ -343,6 +344,28 @@ inline uint64_t getEntityTargetGuid(game::GameHandler* gh, uint64_t guid) {
     return targetGuid;
 }
 
+/// Whether an object is in view, and whether it is a player - what the
+/// vehicle roster's walks ask (0x0074c650, 0x00757470).
+inline std::function<bool(uint64_t)> vehicleKnown(game::GameHandler* gh) {
+    return [gh](uint64_t g) { return gh->getEntityManager().getEntity(g) != nullptr; };
+}
+inline std::function<bool(uint64_t)> vehicleIsPlayer(game::GameHandler* gh) {
+    return [gh](uint64_t g) {
+        auto e = gh->getEntityManager().getEntity(g);
+        return e && e->getType() == game::ObjectType::PLAYER;
+    };
+}
+
+/// The player sits (state 3) in a seat with one of the given Flags
+/// (0x005fb560).
+inline bool playerVehicleSeatHasFlag(game::GameHandler* gh, uint32_t flag) {
+    if (!gh) return false;
+    const uint64_t player = gh->getPlayerGuid();
+    if (gh->vehicleRoster().seatState(player) != 3) return false;
+    const game::vehicle::SeatRecord* seat = gh->vehicleRoster().seatOf(player);
+    return seat && (seat->flags & flag) != 0;
+}
+
 // Resolve WoW unit IDs to GUID
 inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
     if (uid == "player")      return gh->getPlayerGuid();
@@ -350,6 +373,14 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
     if (uid == "focus")       return gh->getFocusGuid();
     if (uid == "mouseover")   return gh->getMouseoverGuid();
     if (uid == "pet")         return gh->getPetGuid();
+    // The player's vehicle: its transport while it sits (state 3), else none
+    // (0x0060abf0 -> 0x004f6250).
+    if (uid == "vehicle") {
+        const uint64_t player = gh->getPlayerGuid();
+        if (gh->vehicleRoster().seatState(player) != 3) return 0;
+        const auto p = gh->vehicleRoster().passenger(player);
+        return p ? p->vehicleGuid : 0;
+    }
     // The NPC whose window is open, which is how FrameXML titles three of
     // them: GossipFrameNpcNameText and BankFrameTitleText both read
     // UnitName("npc"), and QuestFrameNpcNameText reads UnitName("questnpc").

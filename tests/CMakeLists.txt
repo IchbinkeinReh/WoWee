@@ -2680,6 +2680,17 @@ wowee_add_test(test_vehicle_seat
 wowee_add_test(test_vehicle_transition
     SOURCES test_vehicle_transition.cpp ${CMAKE_SOURCE_DIR}/src/game/vehicle.cpp)
 
+# ── test_vehicle_ui ──────────────────────────────────
+# What VehicleMenuBar reads: the seats a vehicle shows (0x00757470,
+# 0x00757550, 0x007579e0), the vehicle they count from (0x0074c650), the
+# seat map (0x00614d90).
+wowee_add_test(test_vehicle_ui
+    SOURCES test_vehicle_ui.cpp ${CMAKE_SOURCE_DIR}/src/game/vehicle.cpp)
+
+# ── test_vehicle_packets ─────────────────────────────
+# The seat requests and the eject (0x0074ca90, 0x00757200).
+wowee_add_packet_test(test_vehicle_packets)
+
 # ── test_update_vehicle_block ────────────────────────
 # The movement block's seat byte and UPDATEFLAG_VEHICLE's row.
 wowee_add_packet_test(test_update_vehicle_block)

@@ -163,7 +163,41 @@ void EntitySpawner::loadVehicleTables() {
         rec.enterUISoundId = u32(sd, row, column(sl, sd, "EnterUISoundID"), 0);
         rec.exitUISoundId = u32(sd, row, column(sl, sd, "ExitUISoundID"), 0);
         rec.uiSkin = u32(sd, row, column(sl, sd, "UiSkin"), 0);
+        rec.vehicleAbilityDisplay = u32(sd, row, column(sl, sd, "VehicleAbilityDisplay"), 0);
         vehicleTables_.addSeat(rec);
+    }
+
+    // The seat map VehicleMenuBar draws (GetVehicleUIIndicator, 0x00614d90).
+    const pipeline::DBCFieldMap* indLayout = layout->getLayout("VehicleUIIndicator");
+    const pipeline::DBCFieldMap* indSeatLayout = layout->getLayout("VehicleUIIndSeat");
+    auto indDbc = indLayout ? assetManager_->loadDBC("VehicleUIIndicator.dbc") : nullptr;
+    auto indSeatDbc = indSeatLayout ? assetManager_->loadDBC("VehicleUIIndSeat.dbc") : nullptr;
+    if (indDbc && indDbc->isLoaded()) {
+        const uint32_t iId = column(*indLayout, *indDbc, "ID");
+        const uint32_t iTex = column(*indLayout, *indDbc, "BackgroundTexture");
+        for (uint32_t row = 0; row < indDbc->getRecordCount(); ++row) {
+            const uint32_t id = u32(*indDbc, row, iId, 0);
+            if (id == 0) continue;
+            vehicleTables_.addIndicator(id, iTex != 0xFFFFFFFFu ? indDbc->getString(row, iTex) : std::string());
+        }
+    }
+    if (indSeatDbc && indSeatDbc->isLoaded()) {
+        const auto& ql = *indSeatLayout;
+        const auto& qd = *indSeatDbc;
+        const uint32_t qId = column(ql, qd, "ID");
+        const uint32_t qInd = column(ql, qd, "VehicleUIIndicatorID");
+        const uint32_t qSeat = column(ql, qd, "VirtualSeatIndex");
+        const uint32_t qX = column(ql, qd, "XPos");
+        const uint32_t qY = column(ql, qd, "YPos");
+        for (uint32_t row = 0; row < qd.getRecordCount(); ++row) {
+            game::vehicle::UIIndicatorSeat seat;
+            seat.id = u32(qd, row, qId, 0);
+            seat.indicatorId = u32(qd, row, qInd, 0);
+            seat.virtualSeatIndex = u32(qd, row, qSeat, 0);
+            seat.x = f32(qd, row, qX);
+            seat.y = f32(qd, row, qY);
+            if (seat.id != 0) vehicleTables_.addIndicatorSeat(seat);
+        }
     }
 }
 
@@ -240,6 +274,15 @@ void EntitySpawner::releaseSeatedPassenger(uint64_t guid, SeatedPassenger& seate
     else cr->playAnimation(id, rendering::anim::STAND, true);
 }
 
+uint64_t EntitySpawner::seatRootOf(uint64_t guid) const {
+    if (!gameHandler_) return 0;
+    const auto it = seatedPassengers_.find(guid);
+    if (it != seatedPassengers_.end() && it->second.state != SeatState::None) return it->second.rootGuid;
+    auto& entities = gameHandler_->getEntityManager();
+    return gameHandler_->vehicleRoster().rootVehicle(
+        guid, 0, [&entities](uint64_t g) { return entities.getEntity(g) != nullptr; });
+}
+
 void EntitySpawner::setSeatState(uint64_t guid, SeatedPassenger& p, SeatState state, uint32_t nowMs) {
     auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     const SeatState old = p.state;
@@ -274,6 +317,17 @@ void EntitySpawner::setSeatState(uint64_t guid, SeatedPassenger& p, SeatState st
     p.planned = false;
     gameHandler_->vehicleRoster().setSeatState(guid, static_cast<uint8_t>(state));
     if (old != state) fireSeatEvents(guid, p, old, state);
+    // VEHICLE_PASSENGERS_CHANGED (0x007489c0): into or out of a seat - to or
+    // from states 0 and 3 - of a vehicle whose seats count from the one the
+    // player's do (0x004f6230).
+    if (old != state && (old == SeatState::None || state == SeatState::None || old == SeatState::Seated ||
+                         state == SeatState::Seated)) {
+        const uint64_t vehicle = p.vehicleGuid != 0 ? p.vehicleGuid : p.prevVehicleGuid;  // 0x00747ff0
+        const uint64_t root = vehicle != 0 ? seatRootOf(vehicle) : 0;
+        if (root != 0 && root == seatRootOf(gameHandler_->getPlayerGuid())) {
+            gameHandler_->fireAddonEvent("VEHICLE_PASSENGERS_CHANGED", {});
+        }
+    }
     if (state == SeatState::Seated && old != SeatState::Seated && seat) startVehicleRideLoop(p, *seat);
     if (!cr || p.instanceId == 0) return;
     // What it plays: the state's animation, the start once more but from 1
@@ -384,14 +438,15 @@ void EntitySpawner::fireSeatEvents(uint64_t guid, const SeatedPassenger& p, Seat
     const game::vehicle::VehicleRecord* vehicle =
         vehicleTables_.vehicle(gameHandler_->vehicleRoster().vehicleId(p.vehicleGuid));
     // 0x00748810's arguments: the unit; whether the seat has the vehicle UI
-    // (Flags 0x20000000) - held at false while UnitHasVehicleUI is; its
-    // UiSkin; its EnterUISoundID's name; whether it is a control seat (Flags
+    // (Flags 0x20000000); its UiSkin; its EnterUISoundID's name; whether it is a control seat (Flags
     // 0x800); the vehicle's VehicleUIIndicatorID.
     auto entering = [&](const char* event) {
         static constexpr const char* kSkins[2] = {"Natural", "Mechanical"};
         for (const auto& unit : units) {
             gameHandler_->fireAddonEvent(
-                event, {unit, game::eventBool(false), seat && seat->uiSkin < 2 ? kSkins[seat->uiSkin] : "",
+                event, {unit,
+                        game::eventBool(seat && (seat->flags & game::vehicle::kSeatFlagHasVehicleUI) != 0),
+                        seat && seat->uiSkin < 2 ? kSkins[seat->uiSkin] : "",
                         seat ? soundEntryName(seat->enterUISoundId) : std::string(),
                         game::eventBool(seat && (seat->flags & 0x800) != 0),
                         std::to_string(vehicle ? vehicle->uiIndicatorId : 0u)});
@@ -539,7 +594,15 @@ void EntitySpawner::updateVehiclePassengers() {
                 break;
         }
         const bool leaving = vehicleGuid == 0;
-        if (!leaving) p.seatId = seatId;
+        if (!leaving) {
+            p.seatId = seatId;
+            // +0x58: where its seats count from (0x0074c650).
+            auto& entities = gameHandler_->getEntityManager();
+            const uint64_t root = roster.rootVehicle(guid, 0, [&entities](uint64_t g) {
+                return entities.getEntity(g) != nullptr;
+            });
+            p.rootGuid = root != 0 ? root : vehicleGuid;
+        }
         p.vehicleGuid = vehicleGuid;
         p.seat = seatIndex;
         p.voluntary = how.voluntary;

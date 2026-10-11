@@ -4223,28 +4223,36 @@ static int lua_IsArenaTeamCaptain(lua_State* L) { lua_pushboolean(L, 0); return 
 // Closing the battlemaster's window, which is a client-side dismissal.
 static int lua_CloseBattlefield(lua_State* L) { (void)L; return 0; }
 
-// Leaving a vehicle, and whether its aim can be raised or lowered. Vehicles
-// are not modelled here, so neither is possible.
-// The player's seat has one of the given Flags (0x005fb560, which
-// CanExitVehicle, IsUsingVehicleControls and VehicleExit ask): seated (state
-// 3), the VehicleSeat row of its seat.
-static bool currentVehicleSeatHasFlag(game::GameHandler* gh, uint32_t flag) {
-    if (!gh) return false;
-    const uint64_t player = gh->getPlayerGuid();
-    if (gh->vehicleRoster().seatState(player) != 3) return false;
-    const game::vehicle::SeatRecord* seat = gh->vehicleRoster().seatOf(player);
-    return seat && (seat->flags & flag) != 0;
-}
 // CanExitVehicle(): 1 where the player's seat has Flags 0x2000000, else nil
 // (0x005fb9c0).
 static int lua_CanExitVehicle(lua_State* L) {
-    if (currentVehicleSeatHasFlag(getGameHandler(L), 0x2000000)) lua_pushnumber(L, 1.0);
+    if (playerVehicleSeatHasFlag(getGameHandler(L), 0x2000000)) lua_pushnumber(L, 1.0);
     else lua_pushnil(L);
     return 1;
 }
+// CanSwitchVehicleSeats(): 1 where the player's seat has Flags 0x4000000,
+// else nil (0x005fba10).
+static int lua_CanSwitchVehicleSeats(lua_State* L) {
+    if (playerVehicleSeatHasFlag(getGameHandler(L), 0x4000000)) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
+    return 1;
+}
+// VehiclePrevSeat() / VehicleNextSeat(): where the player's seat lets it
+// switch (Flags 0x4000000), CMSG_REQUEST_VEHICLE_PREV_SEAT / NEXT_SEAT
+// (0x005fb6d0 -> 0x0074c8b0, 0x005fb720 -> 0x0074c9a0).
+static int lua_VehiclePrevSeat(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (playerVehicleSeatHasFlag(gh, 0x4000000)) gh->sendRequestVehicleSeatStep(false);
+    return 0;
+}
+static int lua_VehicleNextSeat(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (playerVehicleSeatHasFlag(gh, 0x4000000)) gh->sendRequestVehicleSeatStep(true);
+    return 0;
+}
 // IsUsingVehicleControls(): the seat's Flags 0x800000 (0x005fb970).
 static int lua_IsUsingVehicleControls(lua_State* L) {
-    if (currentVehicleSeatHasFlag(getGameHandler(L), 0x800000)) lua_pushnumber(L, 1.0);
+    if (playerVehicleSeatHasFlag(getGameHandler(L), 0x800000)) lua_pushnumber(L, 1.0);
     else lua_pushnil(L);
     return 1;
 }
@@ -5486,6 +5494,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"CloseBattlefield",             lua_CloseBattlefield},
                 {"CanExitVehicle",               lua_CanExitVehicle},
                 {"IsUsingVehicleControls",       lua_IsUsingVehicleControls},
+                {"CanSwitchVehicleSeats",        lua_CanSwitchVehicleSeats},
+                {"VehiclePrevSeat",              lua_VehiclePrevSeat},
+                {"VehicleNextSeat",              lua_VehicleNextSeat},
                 {"IsVehicleAimAngleAdjustable",  lua_IsVehicleAimAngleAdjustable},
                 {"HasKey",                       lua_HasKey},
                 {"GetArenaTeam",             lua_GetArenaTeam},
@@ -5614,10 +5625,19 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"VehicleAimDownStart",      lua_ReturnNothing},
                 {"VehicleAimDownStop",       lua_ReturnNothing},
                 // CMSG_REQUEST_VEHICLE_EXIT where the player's seat lets it
-                // out, Flags 0x2000000 (0x005fb660 -> 0x0074c7f0).
+                // out, Flags 0x2000000 (0x005fb660 -> 0x0074c7f0); else the
+                // error SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW (0x005216f0).
                 {"VehicleExit", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (currentVehicleSeatHasFlag(gh, 0x2000000)) gh->sendRequestVehicleExit();
+            if (!gh) return 0;
+            if (playerVehicleSeatHasFlag(gh, 0x2000000)) {
+                gh->sendRequestVehicleExit();
+                return 0;
+            }
+            lua_getglobal(L, "SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW");
+            const char* text = lua_tostring(L, -1);
+            gh->addUIError(text ? text : "You can't do that right now.");
+            lua_pop(L, 1);
             return 0;
         }},
                 {"VehicleAimGetNormAngle",   lua_ReturnZero},

@@ -1078,12 +1078,28 @@ void GameHandler::sendPing() {
     socket->send(packet);
 }
 
+// The vehicle interface's requests. The player is its own mover here, never
+// its vehicle, so each goes the way the client sends it for a passenger
+// that does not drive (0x0074c7f0, 0x0074c8b0, 0x0074c9a0, 0x0074ca90); the
+// seat the player leaves is the server's to say.
 void GameHandler::sendRequestVehicleExit() {
-    if (state != WorldState::IN_WORLD || vehicleId_ == 0) return;
-    // CMSG_REQUEST_VEHICLE_EXIT has no payload - opcode only
-    network::Packet pkt(wireOpcode(Opcode::CMSG_REQUEST_VEHICLE_EXIT));
-    socket->send(pkt);
-    vehicleId_ = 0;  // Optimistically clear; server will confirm via SMSG_PLAYER_VEHICLE_DATA(0)
+    if (state != WorldState::IN_WORLD || !socket) return;
+    socket->send(VehiclePackets::requestExit());
+}
+
+void GameHandler::sendRequestVehicleSeatStep(bool next) {
+    if (state != WorldState::IN_WORLD || !socket) return;
+    socket->send(next ? VehiclePackets::requestNextSeat() : VehiclePackets::requestPrevSeat());
+}
+
+void GameHandler::sendRequestVehicleSwitchSeat(uint64_t vehicleGuid, uint8_t seat) {
+    if (state != WorldState::IN_WORLD || !socket) return;
+    socket->send(VehiclePackets::requestSwitchSeat(vehicleGuid, seat));
+}
+
+void GameHandler::sendEjectPassenger(uint64_t passengerGuid) {
+    if (state != WorldState::IN_WORLD || !socket) return;
+    socket->send(VehiclePackets::ejectPassenger(passengerGuid));
 }
 
 const std::vector<GameHandler::EquipmentSetInfo>& GameHandler::getEquipmentSets() const {
