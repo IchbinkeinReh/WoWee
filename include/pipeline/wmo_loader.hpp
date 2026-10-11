@@ -42,17 +42,17 @@ struct WMOGroupInfo {
     int32_t nameOffset;         // Group name in MOGN chunk
 };
 
-// WMO Light
+// WMO Light (MOLT, 0x30 bytes on disk)
 struct WMOLight {
-    uint32_t type;              // 0=omni, 1=spot, 2=directional, 3=ambient
+    uint32_t type;              // 0=omni, 1=spot, 2=directional, 3=ambient (a byte on disk)
     uint8_t useAttenuation;
     uint8_t pad[3];
-    glm::vec4 color;
+    glm::vec4 color;            // rgba 0..1, from the BGRA bytes on disk
     glm::vec3 position;
     float intensity;
     float attenuationStart;
     float attenuationEnd;
-    float unknown[4];
+    float unknown[4];           // between the intensity and the attenuation on disk
 };
 
 // WMO Doodad Set (collection of M2 models placed in WMO)

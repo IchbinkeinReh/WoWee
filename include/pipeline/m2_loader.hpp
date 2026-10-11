@@ -243,6 +243,24 @@ struct M2RibbonEmitter {
     std::vector<Material> materials;
 };
 
+/// A light the model carries: the header's lights (+0x108), 0x9c bytes each,
+/// which the client fixes up track by track in FUN_00839270. A point light
+/// (type 1) is linked into the client's 64x64 world grid of lights by
+/// 0x00834c70; a directional one (type 0) stays with its model. The position
+/// is in the model's space and moves with its bone, as an attachment's does.
+struct M2Light {
+    uint16_t type = 1;                  // +0x00: 0 directional, 1 point
+    int16_t bone = -1;                  // +0x02
+    glm::vec3 position{0.0f};           // +0x04
+    M2AnimationTrack ambientColor;      // +0x10: vec3, 0..1
+    M2AnimationTrack ambientIntensity;  // +0x24: float
+    M2AnimationTrack diffuseColor;      // +0x38: vec3, 0..1
+    M2AnimationTrack diffuseIntensity;  // +0x4c: float
+    M2AnimationTrack attenuationStart;  // +0x60: float, yards
+    M2AnimationTrack attenuationEnd;    // +0x74: float, yards
+    M2AnimationTrack visibility;        // +0x88: uint8, 0 or 1
+};
+
 // Complete M2 model structure
 struct M2Model {
     // Model metadata
@@ -349,6 +367,9 @@ struct M2Model {
     // Ribbon emitters
     std::vector<M2RibbonEmitter> ribbonEmitters;
 
+    // Lights (WotLK files only; see M2Light)
+    std::vector<M2Light> lights;
+
     // Collision mesh (simplified geometry for physics)
     std::vector<glm::vec3> collisionVertices;
     std::vector<uint16_t> collisionIndices;      // 3 per triangle
@@ -394,6 +415,13 @@ public:
                              uint32_t sequenceIndex,
                              M2Model& model);
 };
+
+/// The `count` lights at `offset` of a WotLK (v264) file, with their tracks;
+/// `sequenceFlags` as parseAnimTrack takes them (one per sequence), so a
+/// sequence whose keys live in an .anim file is left empty. Records that do
+/// not fit in the data are dropped, as is everything past 256 of them.
+std::vector<M2Light> parseM2Lights(const std::vector<uint8_t>& data, uint32_t count, uint32_t offset,
+                                   const std::vector<uint32_t>& sequenceFlags);
 
 std::string skinPathForM2(const std::string& m2Path);
 

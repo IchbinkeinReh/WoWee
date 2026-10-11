@@ -787,6 +787,27 @@ static_assert(offsetof(M2RibbonEmitterDisk, edgesPerSecond) == 0x74 &&
               offsetof(M2RibbonEmitterDisk, texSlotTrack) == 0x84,
               "M2RibbonEmitterDisk fields must sit where the client reads them");
 
+// WotLK light (0x9c bytes), the layout FUN_00839270 walks: two shorts, the
+// position, and seven tracks.
+struct M2LightDisk {
+    uint16_t type;                  // 0x00
+    int16_t bone;                   // 0x02
+    float position[3];              // 0x04
+    M2TrackDisk ambientColor;       // 0x10 - vec3
+    M2TrackDisk ambientIntensity;   // 0x24 - float
+    M2TrackDisk diffuseColor;       // 0x38 - vec3
+    M2TrackDisk diffuseIntensity;   // 0x4C - float
+    M2TrackDisk attenuationStart;   // 0x60 - float
+    M2TrackDisk attenuationEnd;     // 0x74 - float
+    M2TrackDisk visibility;         // 0x88 - uint8
+};
+static_assert(sizeof(M2LightDisk) == 0x9c,
+              "M2LightDisk is read straight from the file: 0x9c bytes, no padding");
+static_assert(offsetof(M2LightDisk, ambientColor) == 0x10 &&
+                  offsetof(M2LightDisk, diffuseColor) == 0x38 &&
+                  offsetof(M2LightDisk, visibility) == 0x88,
+              "M2LightDisk tracks must sit where FUN_00839270 fixes them up");
+
 template<typename T>
 T readValue(const std::vector<uint8_t>& data, uint32_t offset) {
     if (offset + sizeof(T) > data.size()) {
@@ -2075,6 +2096,14 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         }
     }
 
+    // Lights (WotLK layout only, as the ribbons above).
+    if (header.version >= 264 && header.nLights > 0) {
+        std::vector<uint32_t> lightSeqFlags;
+        lightSeqFlags.reserve(model.sequences.size());
+        for (const auto& seq : model.sequences) lightSeqFlags.push_back(seq.flags);
+        model.lights = parseM2Lights(m2Data, header.nLights, header.ofsLights, lightSeqFlags);
+    }
+
     // Read collision mesh (bounding triangles/vertices/normals)
     if (header.nBoundingVertices > 0 && header.ofsBoundingVertices > 0) {
         struct Vec3Disk { float x, y, z; };
@@ -2468,6 +2497,40 @@ void M2Loader::loadAnimFile(const std::vector<uint8_t>& m2Data,
         " (id=", model.sequences[sequenceIndex].id, "): patched ", patchedTracks, " bone tracks");
 }
 
+
+std::vector<M2Light> parseM2Lights(const std::vector<uint8_t>& data, uint32_t count, uint32_t offset,
+                                   const std::vector<uint32_t>& sequenceFlags) {
+    std::vector<M2Light> lights;
+    // No model has more than a handful; a count past this is a damaged file.
+    constexpr uint32_t kMaxLights = 256;
+    if (count == 0 || offset == 0) return lights;
+    count = std::min(count, kMaxLights);
+    lights.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        const size_t base = static_cast<size_t>(offset) + static_cast<size_t>(i) * sizeof(M2LightDisk);
+        if (base + sizeof(M2LightDisk) > data.size()) break;
+        const auto disk = readValue<M2LightDisk>(data, static_cast<uint32_t>(base));
+        M2Light light;
+        light.type = disk.type;
+        light.bone = disk.bone;
+        light.position = glm::vec3(disk.position[0], disk.position[1], disk.position[2]);
+        if (!std::isfinite(light.position.x) || !std::isfinite(light.position.y) ||
+            !std::isfinite(light.position.z)) {
+            light.position = glm::vec3(0.0f);
+        }
+        parseAnimTrack(data, disk.ambientColor, light.ambientColor, TrackType::VEC3, sequenceFlags);
+        parseAnimTrack(data, disk.ambientIntensity, light.ambientIntensity, TrackType::FLOAT, sequenceFlags);
+        parseAnimTrack(data, disk.diffuseColor, light.diffuseColor, TrackType::VEC3, sequenceFlags);
+        parseAnimTrack(data, disk.diffuseIntensity, light.diffuseIntensity, TrackType::FLOAT, sequenceFlags);
+        parseAnimTrack(data, disk.attenuationStart, light.attenuationStart, TrackType::FLOAT, sequenceFlags);
+        parseAnimTrack(data, disk.attenuationEnd, light.attenuationEnd, TrackType::FLOAT, sequenceFlags);
+        // One byte a key, as a ribbon's visibility: read as a float a 1 would
+        // be a denormal that every test takes for zero.
+        parseAnimTrack(data, disk.visibility, light.visibility, TrackType::BYTE_BOOL, sequenceFlags);
+        lights.push_back(std::move(light));
+    }
+    return lights;
+}
 
 std::string skinPathForM2(const std::string& m2Path) {
     const size_t dot = m2Path.rfind('.');

@@ -1205,6 +1205,15 @@ wowee_add_test(test_rt_bvh
 wowee_add_test(test_rt_gi_volume
     SOURCES test_rt_gi_volume.cpp)
 
+# ── test_rt_point_lights ─────────────────────────────────────
+# An M2's lights read from a synthetic file and placed by their bone, a
+# building's, the falloff the trace shader shares, and which lights a crowded
+# view keeps.
+wowee_add_test(test_rt_point_lights
+    SOURCES test_rt_point_lights.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_recording_size ──────────────────────────────────────
 # Header-only: the size a screen recording is encoded at.
 wowee_add_test(test_recording_size
