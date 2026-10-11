@@ -430,7 +430,6 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 cameraController->setInvertMouse(pendingInvertMouse);
                 cameraController->setPivotHeight(pendingPivotHeight);
                 cameraController->setIdleOrbitEnabled(pendingIdleCameraOrbit);
-                cameraController->setSmoothCameraFollow(pendingSmoothCameraFollow);
                 cameraController->setMaxDistanceFactor(cameraDistanceFactor(pendingCameraMaxDistance));
             }
         }
@@ -1099,7 +1098,6 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "camerashake",     .asFloat = &SettingsPanel::pendingCameraShake},
     {.key = "cameramaxdistance", .asInt = &SettingsPanel::pendingCameraMaxDistance},
     {.key = "pivotheight",     .asFloat = &SettingsPanel::pendingPivotHeight},
-    {.key = "smoothfollow",    .asBool  = &SettingsPanel::pendingSmoothCameraFollow},
     {.key = "idleorbit",       .asBool  = &SettingsPanel::pendingIdleCameraOrbit},
     {.key = "invertmouse",     .asBool  = &SettingsPanel::pendingInvertMouse},
     {.key = "gamepad",          .asBool  = &SettingsPanel::pendingGamepadEnabled},
@@ -1334,8 +1332,6 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (cameraController) {
             cameraController->setMaxDistanceFactor(cameraDistanceFactor(pendingCameraMaxDistance));
         }
-    } else if (key == "smoothfollow") {
-        if (cameraController) cameraController->setSmoothCameraFollow(pendingSmoothCameraFollow);
     } else if (key == "pivotheight") {
         if (cameraController) cameraController->setPivotHeight(pendingPivotHeight);
     } else if (key == "idleorbit") {

@@ -313,7 +313,6 @@ void GameScreen::applyCameraControlSettings() {
         cam->setInvertMouse(settingsPanel_.pendingInvertMouse);
         cam->setPivotHeight(settingsPanel_.pendingPivotHeight);
         cam->setIdleOrbitEnabled(settingsPanel_.pendingIdleCameraOrbit);
-        cam->setSmoothCameraFollow(settingsPanel_.pendingSmoothCameraFollow);
         cam->setShakeScale(settingsPanel_.pendingCameraShake);
         cam->setMaxDistanceFactor(cameraDistanceFactor(settingsPanel_.pendingCameraMaxDistance));
     }

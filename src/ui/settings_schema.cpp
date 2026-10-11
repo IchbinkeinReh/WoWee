@@ -380,9 +380,10 @@ constexpr SettingDesc kSchema[] = {
      "not affected - that happens to your character, not the picture.", "", 1.0f},
     // Max Camera Distance was the game's own Camera page's until 2026-09-06,
     // when it was the one control on that page not already a row here - the
-    // other two, follow speed and camera style, wrote camerastiffness (since
-    // removed with the camera's position smoothing) and smoothfollow. In yards rather than the multiple of 22 the game's slider
-    // counted in; kClientCVars scales cameraDistanceMaxFactor by 22 for an
+    // other two, follow speed and camera style, wrote camerastiffness and
+    // smoothfollow (both since removed with the camera's position smoothing,
+    // which the client does not have). In yards rather than the multiple of
+    // 22 the game's slider counted in; kClientCVars scales cameraDistanceMaxFactor by 22 for an
     // addon or a macro that still writes it. Before either there was an
     // extended-zoom checkbox of this client's own, a choice between two
     // positions where this is every distance between them.
@@ -393,9 +394,6 @@ constexpr SettingDesc kSchema[] = {
     {"pivotheight", "Camera pivot height", SettingKind::Float, 0, 3, 0.1f, "Camera", "",
      "The point the camera turns around, as a height above your feet in\n"
      "yards. Lower feels closer to the character; higher looks over it.", "", 1.6f},
-    {"smoothfollow", "Smooth follow", SettingKind::Bool, 0, 0, 0, "Camera", "",
-     "Ease the camera round behind you as you turn, rather than\n"
-     "snapping straight to it.", "", 0},
     {"idleorbit", "Idle orbit", SettingKind::Bool, 0, 0, 0, "Camera", "",
      "Slowly circle the camera around you while you stand still.", "", 1},
     {"mousespeed", "Mouse sensitivity", SettingKind::Float, 0.05f, 1.0f, 0.05f, "Camera", "Mouse",

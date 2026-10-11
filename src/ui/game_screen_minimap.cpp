@@ -1962,7 +1962,6 @@ void GameScreen::saveSettings() {
     out << "invert_mouse=" << (settingsPanel_.pendingInvertMouse ? 1 : 0) << "\n";
     out << "camera_max_distance=" << settingsPanel_.pendingCameraMaxDistance << "\n";
     out << "camera_pivot_height=" << settingsPanel_.pendingPivotHeight << "\n";
-    out << "camera_smooth_follow=" << (settingsPanel_.pendingSmoothCameraFollow ? 1 : 0) << "\n";
     out << "gamepad=" << (settingsPanel_.pendingGamepadEnabled ? 1 : 0) << "\n";
     out << "gamepad_look_speed=" << settingsPanel_.pendingGamepadLookSpeed << "\n";
     out << "gamepad_invert_look=" << (settingsPanel_.pendingGamepadInvertLook ? 1 : 0) << "\n";
@@ -2248,7 +2247,6 @@ void GameScreen::loadSettings() {
             else if (key == "invert_mouse") settingsPanel_.pendingInvertMouse = (std::stoi(val) != 0);
             else if (key == "camera_max_distance") settingsPanel_.pendingCameraMaxDistance = std::clamp(std::stoi(val), 22, 50);
             else if (key == "camera_pivot_height") settingsPanel_.pendingPivotHeight = std::clamp(std::stof(val), 0.0f, 3.0f);
-            else if (key == "camera_smooth_follow") settingsPanel_.pendingSmoothCameraFollow = (std::stoi(val) != 0);
             else if (key == "gamepad") settingsPanel_.pendingGamepadEnabled = (std::stoi(val) != 0);
             else if (key == "gamepad_look_speed") settingsPanel_.pendingGamepadLookSpeed = std::clamp(std::stof(val), 60.0f, 540.0f);
             else if (key == "gamepad_invert_look") settingsPanel_.pendingGamepadInvertLook = (std::stoi(val) != 0);

@@ -124,7 +124,6 @@ public:
     float pendingGamepadDeadzone = 0.18f;
     int pendingCameraMaxDistance = 22;     // Yards; the CVar counts multiples of this default
     float pendingPivotHeight = 1.6f;       // Camera pivot height above feet (lower = less detached feel)
-    bool pendingSmoothCameraFollow = false; // Keep lerping while turning (floaty, detached follow)
     float pendingFov = 70.0f;
     float pendingCameraShake = 1.0f;  // 0 = off, 1 = the full amount  // degrees, default matches WoW's ~70° horizontal FOV
 

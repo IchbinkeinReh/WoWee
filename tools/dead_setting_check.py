@@ -56,7 +56,8 @@ CPP_ROOTS = [ROOT / "src", ROOT / "include"]
 # looking for controls that change nothing in the game. cameraSmoothStyle was
 # the case that prompted the question and it proves the point: it is asked for
 # by name in interfaceoptionspanels.lua, and until it was wired up it still did
-# not move the camera by one degree.
+# not move the camera by one degree. (It was later unwired again, with the
+# camera position smoothing it drove, which the original client never had.)
 DECL_FILES = {"interfaceoptionspanels.xml", "interfaceoptionspanels.lua",
               "videooptionspanels.xml", "videooptionspanels.lua",
               "audiooptionspanels.xml", "audiooptionspanels.lua"}

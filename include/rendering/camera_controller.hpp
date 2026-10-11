@@ -574,13 +574,7 @@ private:
     static constexpr float MAX_DISTANCE_INTERIOR = 6.0f;
     bool extendedZoom_ = false;
     static constexpr float ZOOM_SMOOTH_SPEED = 15.0f;  // How fast zoom eases
-    // When true the camera keeps its exponential lerp even while actively
-    // dragging or keyboard-turning - the pre-snap "floaty follow" feel.
-    // When false (default), rotation input moves the camera 1:1.
-    bool smoothCameraFollow_ = false;
 public:
-    void setSmoothCameraFollow(bool smooth) { smoothCameraFollow_ = smooth; }
-    [[nodiscard]] bool isSmoothCameraFollow() const { return smoothCameraFollow_; }
     void setPivotHeight(float h) { pivotHeight_ = std::clamp(h, 0.0f, 3.0f); }
     [[nodiscard]] float getPivotHeight() const { return pivotHeight_; }
 

@@ -893,12 +893,11 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "petmeleedamage") lua_pushstring(L, "1");
     else if (n == "fctspellmechanics") lua_pushstring(L, "1");
     else if (n == "fctspellmechanicsother") lua_pushstring(L, "0");
-    // The camera does not keep lerping through a turn unless asked, which is
-    // this client's own default.
-    else if (n == "camerasmoothstyle") lua_pushstring(L, "0");
-    // Camera Following Speed, in degrees a second, at the client's own
-    // default. Stored and answered back like any other CVar; nothing here
-    // reads it.
+    // Camera Following Style and Camera Following Speed (degrees a second),
+    // at the client's own defaults as wow.exe registers them: "4"
+    // (PTR_DAT_00ad1c2c) and "180" (0x00a1e7a8). Stored and answered back
+    // like any other CVar; nothing here reads either.
+    else if (n == "camerasmoothstyle") lua_pushstring(L, "4");
     else if (n == "camerayawsmoothspeed") lua_pushstring(L, "180");
     // Titles on player names, as the real client shows them.
     else if (n == "unitnameplayerpvptitle") lua_pushstring(L, "1");
@@ -1609,11 +1608,6 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     if (key == "gxwindow" && !g_replayingStoredCVars) {
         if (auto* svc = getLuaServices(L); svc && svc->setClientSetting) {
             svc->setClientSetting("fullscreen", value == "0" ? "1" : "0");
-        }
-    }
-    if (key == "camerasmoothstyle") {
-        if (auto* svc = getLuaServices(L); svc && svc->setClientSetting) {
-            svc->setClientSetting("smoothfollow", value == "0" ? "0" : "1");
         }
     }
     // Mouse Look Speed. Named cameraYawMoveSpeed, which is what it turns, but
