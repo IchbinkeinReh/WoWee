@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -112,7 +113,14 @@ public:
         /// no map), the map giving their shadows in this frame's pose.
         glm::vec3 unitMapCenter{0.0f};
         float unitMapRadius = 0.0f;
+        /// The nearest units' boxes this frame (min, max), at most
+        /// kUnitBoxes: what of the depth is a unit, which moves on its own.
+        /// The surfaces do not take a unit's texels of the result for the
+        /// ground it stood on a frame earlier (rtLightAt, rt_lighting.glsli).
+        const std::vector<std::pair<glm::vec3, glm::vec3>>* unitBoxes = nullptr;
     };
+    /// Must match RT_UNIT_BOXES in rt_common.glsli.
+    static constexpr uint32_t kUnitBoxes = 16;
 
     /// Record the pass. Outside a render pass, after the opaque geometry.
     /// The depth image must be in DEPTH_STENCIL_ATTACHMENT_OPTIMAL and is

@@ -29,6 +29,7 @@ struct RtPassData {
     glm::mat4 invViewProjRel;
     glm::vec4 unitMap;
     RtGiProbes::PassData gi;
+    glm::vec4 unitBoxes[2 * RtLighting::kUnitBoxes];
 };
 
 enum Binding : uint32_t {
@@ -517,7 +518,17 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
                          1.0f / traceExtent_.height);
     d.sceneExtent = glm::vec4(sceneExtent.width, sceneExtent.height, 1.0f / sceneExtent.width,
                               1.0f / sceneExtent.height);
-    d.misc = glm::vec4(scene_->hasContent() ? 1.0f : 0.0f, havePrev ? 1.0f : 0.0f, 0.0f, 0.0f);
+    uint32_t unitBoxes = 0;
+    if (in.unitBoxes) {
+        for (const auto& [lo, hi] : *in.unitBoxes) {
+            if (unitBoxes == kUnitBoxes) break;
+            d.unitBoxes[2 * unitBoxes] = glm::vec4(lo, 0.0f);
+            d.unitBoxes[2 * unitBoxes + 1] = glm::vec4(hi, 0.0f);
+            ++unitBoxes;
+        }
+    }
+    d.misc = glm::vec4(scene_->hasContent() ? 1.0f : 0.0f, havePrev ? 1.0f : 0.0f,
+                       static_cast<float>(unitBoxes), 0.0f);
     const bool probes = mode_ == Mode::Full && probes_.hasResources();
     if (probes) {
         // The open field the zone's flat ambient was set for: that ambient as

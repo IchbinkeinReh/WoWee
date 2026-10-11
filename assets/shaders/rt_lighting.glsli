@@ -108,6 +108,21 @@ void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec4 point, inou
     sunAo += l.rg * w;
 }
 
+// Set by a shader drawing a unit (character.frag) before rtLightAt.
+bool rtSurfaceIsUnit = false;
+
+// The distance a texel of the result stands for, 0 where it is no use to
+// this surface. The nearest units' texels carry theirs negated (rt_filter):
+// those serve only units. A unit moves on its own, and the result is a frame
+// old, so the ground a body has just walked off, or swung an arm or a staff
+// away from, finds the body's texels where it lies - lit as the body was.
+// Weighed in, they matched the ground at the feet; refused, they left it
+// with nothing, drawn without the tracing: either way a copy of the body,
+// a frame behind, in other light. Refused, such a surface borrows (below).
+float rtTexelDist(vec4 l) {
+    return l.a < 0.0 && !rtSurfaceIsUnit ? 0.0 : abs(l.a);
+}
+
 // The result is traced at half resolution, so a surface's texel neighbours
 // can be other surfaces - most of all along an object's silhouette, where a
 // single filtered read would average the object with what is behind it, fail
@@ -152,8 +167,9 @@ RtLight rtLightAt(vec3 worldPos) {
             for (int x = -1; x <= 1; ++x) {
                 ivec2 q = clamp(center + ivec2(x, y), ivec2(0), size - 1);
                 vec4 l = texelFetch(uRtLight, q, 0);
-                float e = (l.a - expected) / tolerance;
-                float match = l.a > 0.0 ? exp(-e * e) : 0.0;
+                float d = rtTexelDist(l);
+                float e = (d - expected) / tolerance;
+                float match = d > 0.0 ? exp(-e * e) : 0.0;
                 vec2 o = vec2(q) - f;
                 float w = match * exp(-dot(o, o));
                 if (w <= 1e-4) continue;
@@ -184,8 +200,20 @@ RtLight rtLightAt(vec3 worldPos) {
     // water, a leaf the half resolution missed), or ground among grass
     // blades, which has a blade a hand's breadth in front of it everywhere:
     // nothing of its own is near for those.
-    float there = texelFetch(uRtLight, clamp(center, ivec2(0), size - 1), 0).a;
-    bool hidden = !onScreen || there <= 0.0;
+    //
+    // Except where what stood in front was a unit, or this surface is one:
+    // a unit moves on its own, and the occluder put back where last frame
+    // saw it is where the body was, not where it is - for the player's own
+    // body, which the camera follows, it lands on the very ground the body
+    // has just walked off, and that ground was drawn without the tracing, a
+    // copy of the body a frame behind it in other light. Units are few and
+    // small on the screen; they borrow always, and trust what they borrow as
+    // their own - the same ground a few texels on - as anything less leaves
+    // that copy in part.
+    float thereSigned = texelFetch(uRtLight, clamp(center, ivec2(0), size - 1), 0).a;
+    float there = abs(thereSigned);
+    bool moved = onScreen && wsum <= 1e-4 && (thereSigned < 0.0 || rtSurfaceIsUnit);
+    bool hidden = !onScreen || there <= 0.0 || moved;
     if (!hidden && wsum <= 1e-4 && there < 0.85 * expected - tolerance) {
         vec3 occluder = rtCameraPos.xyz + (worldPos - rtCameraPos.xyz) * (there / expected);
         vec4 a = projection * (view * vec4(worldPos, 1.0));
@@ -205,8 +233,9 @@ RtLight rtLightAt(vec3 worldPos) {
                 if (x == 0 && y == 0) continue;
                 ivec2 q = clamp(center + ivec2(x, y) * reach, ivec2(0), size - 1);
                 vec4 l = texelFetch(uRtLight, q, 0);
-                float e = (l.a - expected) / ringTolerance;
-                float match = l.a > 0.0 ? 1.0 - e * e : 0.0;
+                float d = rtTexelDist(l);
+                float e = (d - expected) / ringTolerance;
+                float match = d > 0.0 ? 1.0 - e * e : 0.0;
                 if (match > ringBest) {
                     ringBest = match;
                     ringAt = q;
@@ -217,7 +246,7 @@ RtLight rtLightAt(vec3 worldPos) {
         if (ringBest > 0.0) {
             wsum = 1.0;
             rtGather(ringAt, ringLight, 1.0, sunAo, point, bakedDark);
-            weight = 0.8 * smoothstep(0.0, 0.75, ringBest);
+            weight = (moved ? 1.0 : 0.8) * smoothstep(0.0, 0.75, ringBest);
             borrowed = true;
         }
     }

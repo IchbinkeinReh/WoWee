@@ -421,6 +421,12 @@ public:
         uint32_t shapes = 0;      // appearances registered
     };
     [[nodiscard]] RtStats rtStats() const { return rtStats_; }
+    /// The nearest bodies' boxes as syncRtScene placed them this frame (min,
+    /// max), what they carry included, nearest first: what of the depth is a
+    /// unit for the ray traced lighting (RtLighting::FrameInputs::unitBoxes).
+    [[nodiscard]] const std::vector<std::pair<glm::vec3, glm::vec3>>& rtUnitBoxes() const {
+        return rtUnitBoxes_;
+    }
 
 private:
     std::unordered_map<std::string, pipeline::BLPImage>* predecodedBLPCache_ = nullptr;
@@ -599,6 +605,12 @@ private:
         // 0x00781a10), and lightFlags as drawn.
         float directScale = 1.0f;
         glm::vec4 drawFlags{0.0f, 1.0f, 0.0f, 0.0f};
+        // Where the instance stood when the ray traced lighting last traced
+        // (syncRtScene, rtSyncGeneration_ then): the result the surfaces read
+        // is that frame's, and a unit that has moved since looks itself up
+        // where it stood (rtMotionPush).
+        glm::vec3 rtTracedAt{0.0f};
+        uint64_t rtTracedGeneration = 0;
 
         // Enchant visual attached to a weapon. It needs its animation advanced
         // even though its transform comes from the parent; it is drawn by its
@@ -934,6 +946,13 @@ private:
     std::unordered_map<uint32_t, RtCharacter> rtCharacters_;
     uint64_t rtSyncGeneration_ = 0;
     RtStats rtStats_;
+    std::vector<std::pair<glm::vec3, glm::vec3>> rtUnitBoxes_;
+    /// Where an instance is placed, for rtTracedAt.
+    static glm::vec3 rtPlacedAt(const CharacterInstance& inst);
+    /// How far `inst` has moved since the lighting was traced, packed into
+    /// the push constants' lightFlags.w and diffuseColour.w (rtUnitMotion in
+    /// character.frag.glsl).
+    void rtMotionPush(const CharacterInstance& inst, CharPushConstants& push) const;
     uint64_t rtShapeKey(const CharacterInstance& inst, const M2ModelGPU& gm,
                         std::vector<std::pair<uint32_t, uint32_t>>& batches);
     void rtAcquireShape(uint64_t key, const CharacterInstance& inst, const M2ModelGPU& gm,

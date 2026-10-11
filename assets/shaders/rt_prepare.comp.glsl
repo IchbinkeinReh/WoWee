@@ -1,6 +1,7 @@
 #version 450
 // Scene depth -> the tracer's G-buffer, at trace resolution: world normal
-// reconstructed from depth, and the distance to the camera (0 for sky).
+// reconstructed from depth, the distance to the camera (0 for sky), and
+// whether the surface is a unit's (rtGbufUnit).
 //
 // Built with RT_MSAA when the depth is multisampled and could not be
 // resolved; sample 0 stands for the pixel then.
@@ -64,5 +65,16 @@ void main() {
     vec3 n = normalize(cross(dx, dy));
     if (dot(n, p) > 0.0) n = -n;
 
-    imageStore(uGbuf, px, vec4(rtOctEncode(n), length(p), float(sub)));
+    // Whether this is one of the nearest units: inside its box this frame.
+    // A unit moves on its own, so where it stood when this is read - a frame
+    // on - may be bare ground (rtLightAt).
+    vec3 w = pass.cameraPos.xyz + p;
+    bool unit = false;
+    int boxes = int(pass.misc.z + 0.5);
+    for (int i = 0; i < boxes && !unit; ++i) {
+        unit = all(greaterThanEqual(w, pass.unitBoxes[2 * i].xyz)) &&
+               all(lessThanEqual(w, pass.unitBoxes[2 * i + 1].xyz));
+    }
+
+    imageStore(uGbuf, px, vec4(rtOctEncode(n), length(p), float(sub) + (unit ? 4.0 : 0.0)));
 }

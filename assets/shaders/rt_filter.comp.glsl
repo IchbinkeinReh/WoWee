@@ -7,7 +7,8 @@
 // settled shadows keep their edges. The three terms are sun, occlusion and
 // point light visibility; alpha carries the history length from pass to
 // pass, and the last pass writes the distance there instead, which the
-// surface shaders check the result against.
+// surface shaders check the result against - negated where the surface is a
+// unit's (rtGbufUnit), which rtLightAt treats as gone a frame on.
 
 #include "rt_common.glsli"
 
@@ -59,5 +60,5 @@ void main() {
         }
     }
     sum /= wsum;
-    imageStore(uOut, px, vec4(sum, pc.last != 0 ? dist : history));
+    imageStore(uOut, px, vec4(sum, pc.last != 0 ? (rtGbufUnit(g) ? -dist : dist) : history));
 }

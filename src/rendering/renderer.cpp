@@ -5985,7 +5985,10 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
     }
     {
         WOWEE_PROFILE_SCOPE("rt: sync characters", Cpu);
-        if (characterRenderer) characterRenderer->syncRtScene(in.cameraPos);
+        if (characterRenderer) {
+            characterRenderer->syncRtScene(in.cameraPos);
+            in.unitBoxes = &characterRenderer->rtUnitBoxes();
+        }
     }
     {
         // The frame's point lights: what carries one near the camera, cut to

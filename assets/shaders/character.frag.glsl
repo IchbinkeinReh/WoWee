@@ -169,12 +169,26 @@ layout(push_constant) uniform Push {
     vec4 interiorDirect;
     // x: 1 in a WMO group of the camera's interior pass, y: the scale on the
     // direct light, z: the model's own depth in yards, within which it does
-    // not receive the sun's shadow (CharPushConstants::lightFlags).
+    // not receive the sun's shadow (CharPushConstants::lightFlags); w: how far
+    // the unit has moved across the ground since the ray traced lighting it
+    // reads was traced, packed (rtUnitMotion), 0 for none.
     vec4 lightFlags;
     // The unit's colour, which its direct light is multiplied by (CM2Model
-    // +0x180: a spell kit's, 0x00720db0); white for none.
+    // +0x180: a spell kit's, 0x00720db0); white for none. w: how far the unit
+    // has moved up or down since then, read only with lightFlags.w.
     vec4 diffuseColour;
 } pc;
+
+// How far the unit has moved since the frame the ray traced lighting was
+// traced in (CharacterRenderer::rtMotionPush): x and y in 1/1024 yards about
+// 2048, twelve bits each, plus one - a whole number a float holds exactly.
+vec3 rtUnitMotion() {
+    float packed = pc.lightFlags.w;
+    if (packed < 0.5) return vec3(0.0);
+    uint u = uint(packed + 0.5) - 1u;
+    vec2 xy = (vec2(float(u & 0xFFFu), float(u >> 12u)) - 2048.0) / 1024.0;
+    return vec3(xy, pc.diffuseColour.w);
+}
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
@@ -496,7 +510,11 @@ void main() {
             shadow = csmShadow(uShadowMap, FragPos, vertexNormal, nl, bias);
             shadow = mix(1.0, shadow, shadowParams.y);
         }
-        RtLight rt = rtLightAt(FragPos);
+        // A unit moves on its own. The result is last frame's: the unit finds
+        // itself there where it stood then, and where it still finds nothing
+        // of itself - an arm swung, a turn - it borrows (rtLightAt).
+        rtSurfaceIsUnit = true;
+        RtLight rt = rtLightAt(FragPos - rtUnitMotion());
         shadow = rtShadow(rt, shadow);
         // The shadow variants let a face turned edge-on to the sun out of the
         // shadow: by |1.2 - |N.L||^4, saturated (c4 is the light's view-space
