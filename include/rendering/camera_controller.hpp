@@ -257,10 +257,12 @@ public:
     /// The mouse steering the character: the right button held (both
     /// buttons running too), or a finger dragging the view (FUN_005fa6b0).
     [[nodiscard]] bool isMouseSteering() const { return rightMouseDown || steering_; }
-    /// The camera's own yaw held, the left button looking about alone
-    /// (Camera FREELOOK, 0x00601ff0 -> +0xac): no unit's facing turns it
-    /// (0x00604490).
-    [[nodiscard]] bool isFreeLooking() const { return leftMouseDown && !rightMouseDown; }
+    /// The camera's own yaw held, a mouse button looking about or steering
+    /// (0x005fa170: the first of the input's 0x6000003 -> Camera FREELOOK,
+    /// 0x006047e0 -> 0x00601ff0 -> 0x006019b0, +0xac): no unit's facing
+    /// turns it (0x00604490) - steering, the facing is the camera's own
+    /// (0x006023d0 -> 0x005fb260).
+    [[nodiscard]] bool isFreeLooking() const { return leftMouseDown || rightMouseDown || steering_; }
     void setMovementRooted(bool rooted) { movementRooted_ = rooted; }
     [[nodiscard]] bool isMovementRooted() const { return movementRooted_; }
     /// The mover's movement flags2 0x1 and 0x2: no strafing - nor rising or
@@ -319,6 +321,10 @@ public:
     /// The camera's yaw is its vehicle camera's facing and its own turn on
     /// top (0x00604490): as that facing turns, so does the camera.
     void turnWithVehicle(float degrees) { yaw += degrees; }
+    /// The driver's camera turns with its vehicle camera's facing, not with
+    /// the keys (0x00604490 adds +0x84): the turn keys turn the vehicle
+    /// alone, and the camera follows its facing as it is chased (0x0075a1c0).
+    void setYawFollowsVehicleCamera(bool follows) { yawFollowsVehicleCamera_ = follows; }
     /// A seat's zoom limits (0x0074c0e0 -> 0x00600840, 0x00600890); none
     /// lifts them (0x006008e0, 0x00600920).
     void setSeatZoomLimits(std::optional<float> minDistance, std::optional<float> maxDistance);
@@ -886,6 +892,7 @@ private:
     bool moverNoStrafe_ = false;  ///< the mover's flags2 0x1
     bool moverNoJump_ = false;    ///< the mover's flags2 0x2
     bool moverHeld_ = false;      ///< 0x0074ba40: the mover may not move
+    bool yawFollowsVehicleCamera_ = false;  ///< a driver's vehicle camera turns the camera (0x00604490)
     // Server-driven gravity disable (levitate/hover): skip gravity accumulation.
     bool gravityDisabled_ = false;
     // Server-driven feather fall: cap downward velocity to slow-fall terminal.

@@ -3142,12 +3142,15 @@ void CameraController::update(float deltaTime) {
                                        && !std::isnan(turnRateOverride_))
                                          ? glm::degrees(turnRateOverride_)
                                          : WOW_TURN_SPEED;
+    // A driver's keys turn the vehicle alone; its camera follows the vehicle
+    // camera's chased facing (0x00604490, 0x0075a1c0).
+    float& keyTurned = yawFollowsVehicleCamera_ ? facingYaw : yaw;
     if (nowTurnLeft && !nowTurnRight) {
-        yaw += activeTurnSpeedDeg * deltaTime;
+        keyTurned += activeTurnSpeedDeg * deltaTime;
     } else if (nowTurnRight && !nowTurnLeft) {
-        yaw -= activeTurnSpeedDeg * deltaTime;
+        keyTurned -= activeTurnSpeedDeg * deltaTime;
     }
-    if (nowTurnLeft || nowTurnRight) {
+    if ((nowTurnLeft || nowTurnRight) && !yawFollowsVehicleCamera_) {
         camera->setRotation(yaw, pitch);
         facingYaw = yaw;
     }

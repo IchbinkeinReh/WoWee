@@ -588,6 +588,27 @@ TEST_CASE("a seat's FlagsB 0x1 holds the camera's yaw unless the keys turn (0x00
     CHECK_FALSE(seatHoldsCameraYaw(CameraMode::ExitWait, &seat));
 }
 
+TEST_CASE("the driver's camera trails its vehicle's keyed turn by the chased facing (0x00604490)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    // The keys turn the vehicle at once; the camera turns by the facing
+    // chased at 20 / CameraFacingChaseRate, so it lags the turn and catches
+    // it up after.
+    SeatRecord seat;
+    seat.flags = kSeatFlagCanControl;
+    seat.cameraFacingChaseRate = 10.0f;  // a rate of 2
+    CameraFacing f;
+    f.restartAt(0.0f);
+    float turned = stepCameraFacing(f, 0.5f, CameraMode::Seated, &seat, 1.0f, 0, false, 0.05f, true, false);
+    CHECK(turned > 0.0f);
+    CHECK(turned < 0.5f);
+    for (int i = 0; i < 200; ++i)
+        turned += stepCameraFacing(f, 0.5f, CameraMode::Seated, &seat, 1.0f, 0, false, 0.05f, false, false);
+    CHECK(turned == Catch::Approx(0.5f).margin(1e-3f));
+    // A mouse button held - steering or looking about - holds the camera's
+    // own yaw (0x005fa170 -> 0x006047e0, +0xac): the facing turns it not.
+    CHECK(stepCameraFacing(f, 1.0f, CameraMode::Seated, &seat, 1.0f, 0, false, 0.05f, false, true) == 0.0f);
+}
+
 TEST_CASE("from a control seat the vehicle camera watches the vehicle (0x0075a930)", "[vehicle]") {
     using namespace wowee::game::vehicle;
     SeatRecord seat;

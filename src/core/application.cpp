@@ -3469,8 +3469,10 @@ void Application::applyServerMovementState(float deltaTime) {
         } else {
             cc->setCameraFadeTarget(std::nullopt);
         }
-        // The driver turns the vehicle, and the camera with it, by its keys.
-        if (view && view->turned != 0.0f && drivenUnit == 0) cc->turnWithVehicle(glm::degrees(view->turned));
+        // The camera turns with that facing, the driver's too: its keys turn
+        // the vehicle, and the camera follows it as it is chased (0x00604490).
+        cc->setYawFollowsVehicleCamera(view.has_value() && drivenUnit != 0);
+        if (view && view->turned != 0.0f) cc->turnWithVehicle(glm::degrees(view->turned));
         // The seat's zoom when its camera move is due (0x0074c0e0).
         if (auto cue = entitySpawner_ ? entitySpawner_->takeSeatCameraCue() : std::nullopt) {
             // The distance mode first (0x0074c0e0 -> 0x00600590), then the
