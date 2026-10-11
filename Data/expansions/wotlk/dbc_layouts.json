@@ -432,6 +432,7 @@
   },
   "SpellShapeshiftForm": {
     "BonusActionBar": 1,
+    "Flags": 19,
     "ID": 0,
     "Name": 2,
     "PresetSpellID0": 27

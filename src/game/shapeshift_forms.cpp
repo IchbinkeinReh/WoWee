@@ -81,7 +81,12 @@ std::vector<const char*> bonusBarOffsetEvents(uint32_t offsetBefore, uint32_t of
 }
 
 std::vector<const char*> formChangeEvents(uint32_t offsetBefore, uint32_t offsetAfter) {
-    auto events = bonusBarOffsetEvents(offsetBefore, offsetAfter);
+    std::vector<const char*> events{
+        "SPELL_UPDATE_USABLE",         // event 0xf5, 0x0053cf10
+        "ACTIONBAR_UPDATE_STATE",      // event 0xb1, 0x0053b480
+        "CURRENT_SPELL_CAST_CHANGED",  // event 0xf3
+    };
+    for (const char* event : bonusBarOffsetEvents(offsetBefore, offsetAfter)) events.push_back(event);
     events.push_back("UPDATE_SHAPESHIFT_FORM");  // event 0x179
     return events;
 }

@@ -158,14 +158,21 @@ TEST_CASE("the pet's actions or a form's preset spells take the bar to 5", "[sha
 }
 
 TEST_CASE("a form change fires the bar's events, then the form's", "[shapeshift]") {
-    // 0x006da130 -> 0x005a83c0: Battle Stance from none moves the offset.
-    CHECK(names(formChangeEvents(0, 1)) ==
-          std::vector<std::string>{"UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORM"});
+    // 0x006da130: 0x0053cf10 and 0x0053b480 first, whatever the bar does.
+    const std::vector<std::string> head{"SPELL_UPDATE_USABLE", "ACTIONBAR_UPDATE_STATE",
+                                        "CURRENT_SPELL_CAST_CHANGED"};
+    auto with = [&](std::vector<std::string> tail) {
+        std::vector<std::string> all = head;
+        all.insert(all.end(), tail.begin(), tail.end());
+        return all;
+    };
+    // 0x005a83c0: Battle Stance from none moves the offset.
+    CHECK(names(formChangeEvents(0, 1)) == with({"UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORM"}));
     // Two forms on the same bar: only the form's event.
-    CHECK(names(formChangeEvents(1, 1)) == std::vector<std::string>{"UPDATE_SHAPESHIFT_FORM"});
+    CHECK(names(formChangeEvents(1, 1)) == with({"UPDATE_SHAPESHIFT_FORM"}));
     // Leaving the pet's page changes the page as well.
     CHECK(names(formChangeEvents(5, 0)) ==
-          std::vector<std::string>{"ACTIONBAR_PAGE_CHANGED", "UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORM"});
+          with({"ACTIONBAR_PAGE_CHANGED", "UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORM"}));
     CHECK(bonusBarOffsetEvents(3, 3).empty());
     // The list's own event is not one of them: the forms did not change.
     for (const char* event : formChangeEvents(0, 2)) CHECK(std::string(event) != "UPDATE_SHAPESHIFT_FORMS");
@@ -179,6 +186,46 @@ TEST_CASE("a form is active while its spell's positive aura is on the player", "
     CHECK_FALSE(formSpellActive(auras, 0));
     const std::vector<TestAura> negative{{wowee::game::SPELL_BATTLE_STANCE, 0x80}};
     CHECK_FALSE(formSpellActive(negative, wowee::game::SPELL_BATTLE_STANCE));
+}
+
+TEST_CASE("a form whose cancel is pending is not in effect", "[shapeshift]") {
+    // 0x00802cb0: +0x9f4 set and the spell a shapeshift - its aura is still
+    // on until the server takes it off.
+    const std::vector<TestAura> auras{{wowee::game::SPELL_CAT_FORM, 0x10}};
+    CHECK(formSpellActive(auras, wowee::game::SPELL_CAT_FORM, false));
+    CHECK_FALSE(formSpellActive(auras, wowee::game::SPELL_CAT_FORM, true));
+}
+
+TEST_CASE("cancelling the form's aura leaves the form before the server does", "[shapeshift]") {
+    using wowee::game::FormAuraCancel;
+    using wowee::game::formAuraCancel;
+    // 0x00802f80. Cat Form: aura 36 naming form 1; the second effect is a
+    // plain aura.
+    const uint32_t catAuras[3] = {36, 4, 0};
+    const uint32_t catMisc[3] = {1, 0, 0};
+    ShapeshiftFormRow cat = rowWithBar(1);
+    ShapeshiftFormRow noCancel = rowWithBar(0);
+    noCancel.flags = 0x2;
+    auto rows = [&](uint8_t form) -> const ShapeshiftFormRow* {
+        if (form == 1) return &cat;
+        if (form == 2) return &noCancel;
+        if (form == 5) return &cat;
+        return nullptr;
+    };
+    // In Cat Form: left at once.
+    CHECK(formAuraCancel(1, catAuras, catMisc, rows) == FormAuraCancel::SendFormPending);
+    // No form in effect - none, or a cancel already pending: only the packet.
+    CHECK(formAuraCancel(0, catAuras, catMisc, rows) == FormAuraCancel::Send);
+    // In another form: the aura goes, the form stays.
+    CHECK(formAuraCancel(5, catAuras, catMisc, rows) == FormAuraCancel::Send);
+    // A spell that shapeshifts nobody.
+    const uint32_t plain[3] = {4, 0, 0};
+    CHECK(formAuraCancel(1, plain, catMisc, rows) == FormAuraCancel::Send);
+    // A form flagged no-cancel, or with no row: nothing is sent.
+    const uint32_t lockedMisc[3] = {2, 0, 0};
+    CHECK(formAuraCancel(1, catAuras, lockedMisc, rows) == FormAuraCancel::Refused);
+    const uint32_t unknownMisc[3] = {40, 0, 0};
+    CHECK(formAuraCancel(1, catAuras, unknownMisc, rows) == FormAuraCancel::Refused);
 }
 
 TEST_CASE("GetShapeshiftForm is the active form's place on the bar", "[shapeshift]") {

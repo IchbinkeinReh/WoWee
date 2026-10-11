@@ -2700,7 +2700,7 @@ void registerUnitLuaAPI(lua_State* L) {
             // aura on the player - not a form id, which a stance or presence
             // may not even set.
             const bool active = game::isPreWotlk() ? currentForm == fi.formId
-                                                   : game::formSpellActive(gh->getPlayerAuras(), fi.spellId);
+                                                   : gh->formSpellInEffect(fi.spellId);
             lua_pushstring(L, fi.icon);                          // icon
             lua_pushstring(L, fi.name);                          // name
             lua_pushboolean(L, active ? 1 : 0);                  // isActive

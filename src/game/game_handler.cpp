@@ -215,6 +215,7 @@ void GameHandler::disconnect() {
     entityController_->clearAll();
     // The next character starts with no form and its own bar.
     shapeshiftFormId_ = 0;
+    shapeshiftFormPending_ = false;
     petActionsOnBonusBar_ = false;
     setState(WorldState::DISCONNECTED);
     LOG_INFO("Disconnected from world server");
@@ -3446,12 +3447,14 @@ const ShapeshiftFormRow* GameHandler::shapeshiftFormRow(uint8_t form) const {
                 ? pipeline::getActiveDBCLayout()->getLayout("SpellShapeshiftForm") : nullptr;
             const uint32_t idField  = layout ? (*layout)["ID"] : 0;
             const uint32_t barField = layout ? (*layout)["BonusActionBar"] : 1;
+            const uint32_t flagsField = layout ? layout->tryField("Flags") : 0xFFFFFFFFu;
             // PresetSpellID[8] (0x008b8c60, +0x2c), where the layout has it.
             const uint32_t presetField = layout ? layout->tryField("PresetSpellID0") : 0xFFFFFFFFu;
             for (uint32_t row = 0; row < dbc->getRecordCount(); ++row) {
                 if (dbc->getUInt32(row, idField) != form) continue;
                 ShapeshiftFormRow r;
                 r.bonusActionBar = dbc->getUInt32(row, barField);
+                if (flagsField < dbc->getFieldCount()) r.flags = dbc->getUInt32(row, flagsField);
                 if (presetField != 0xFFFFFFFFu && presetField + 8 <= dbc->getFieldCount()) {
                     for (uint32_t i = 0; i < 8; ++i) r.presetSpells[i] = dbc->getUInt32(row, presetField + i);
                 }
@@ -3465,6 +3468,11 @@ const ShapeshiftFormRow* GameHandler::shapeshiftFormRow(uint8_t form) const {
     return slot ? &*slot : nullptr;
 }
 
+bool GameHandler::formSpellInEffect(uint32_t spellId) const {
+    return formSpellActive(getPlayerAuras(), spellId,
+                           shapeshiftFormPending_ && spellAppliesAura(spellId, kAuraModShapeshift));
+}
+
 uint32_t GameHandler::getBonusActionBarOffset() const {
     // 0x005a83c0 (DAT_00c1e59c).
     return bonusBarOffset(petActionsOnBonusBar_, shapeshiftFormRow(shapeshiftFormId_));
@@ -3472,7 +3480,9 @@ uint32_t GameHandler::getBonusActionBarOffset() const {
 
 std::vector<const char*> GameHandler::setPlayerShapeshiftForm(uint8_t form) {
     if (form == shapeshiftFormId_) return {};
-    // 0x006da130, the handler on UNIT_FIELD_BYTES_2 byte 3 (+0x1d3).
+    // 0x006da130, the handler on UNIT_FIELD_BYTES_2 byte 3 (+0x1d3). The
+    // server has answered: a cancelled form is no longer pending (+0x9f4).
+    shapeshiftFormPending_ = false;
     const uint32_t before = getBonusActionBarOffset();
     shapeshiftFormId_ = form;
     LOG_INFO("Shapeshift form changed: ", static_cast<int>(form));

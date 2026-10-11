@@ -63,11 +63,42 @@ std::vector<ShapeshiftForm> knownShapeshiftForms(uint8_t classId, const KnownSpe
 }
 
 /// What the action bar reads of a SpellShapeshiftForm.dbc row (0x008b8c60:
-/// BonusActionBar is column 1, PresetSpellID[8] columns 27..34, +0x2c).
+/// BonusActionBar is column 1, Flags column 19 (+0xc), PresetSpellID[8]
+/// columns 27..34, +0x2c).
 struct ShapeshiftFormRow {
     uint32_t bonusActionBar = 0;
+    uint32_t flags = 0;
     std::array<uint32_t, 8> presetSpells{};
 };
+
+/// SPELL_AURA_MOD_SHAPESHIFT, the aura a form's spell applies (0x24).
+inline constexpr uint32_t kAuraModShapeshift = 36;
+/// SpellShapeshiftForm Flags 0x2: a form whose aura the player may not cancel.
+inline constexpr uint32_t kFormFlagNoCancel = 0x2;
+
+/// What cancelling one of the player's auras does about its form (0x00802f80).
+enum class FormAuraCancel {
+    Send,            ///< CMSG_CANCEL_AURA, nothing more.
+    SendFormPending, ///< The form it holds is left at once (0x00721cf0), then sent.
+    Refused,         ///< Not sent at all.
+};
+
+/// 0x00802f80 for the player's own aura: with a form in effect (`form`, as
+/// 0x0071af70 reads it), each shapeshift effect (aura 36) of the spell names
+/// a form by its EffectMiscValue. A form with no row, or one flagged no-cancel,
+/// keeps the aura; the form the player is in is left before the server says.
+template <typename RowOf>
+[[nodiscard]] FormAuraCancel formAuraCancel(uint8_t form, const uint32_t (&effectAuras)[3],
+                                            const uint32_t (&effectMisc)[3], RowOf rowOf) {
+    if (form == 0) return FormAuraCancel::Send;
+    for (int i = 0; i < 3; ++i) {
+        if (effectAuras[i] != kAuraModShapeshift) continue;
+        const ShapeshiftFormRow* row = effectMisc[i] <= 0xFF ? rowOf(static_cast<uint8_t>(effectMisc[i])) : nullptr;
+        if (!row || (row->flags & kFormFlagNoCancel) != 0) return FormAuraCancel::Refused;
+        if (effectMisc[i] == form) return FormAuraCancel::SendFormPending;
+    }
+    return FormAuraCancel::Send;
+}
 
 /// 0x005a7c50: a form that brings spells of its own.
 [[nodiscard]] bool formHasPresetSpells(const ShapeshiftFormRow& row);
@@ -77,8 +108,10 @@ struct ShapeshiftFormRow {
 /// BonusActionBar, 0 without a form.
 [[nodiscard]] uint32_t bonusBarOffset(bool petActionsOnBar, const ShapeshiftFormRow* form);
 
-/// The events the form field's change fires, in order (0x006da130 ->
-/// 0x005a83c0): ACTIONBAR_PAGE_CHANGED when the bar leaves the pet's page (5),
+/// The events the form field's change fires, in order (0x006da130):
+/// SPELL_UPDATE_USABLE (0x0053cf10), ACTIONBAR_UPDATE_STATE and
+/// CURRENT_SPELL_CAST_CHANGED (0x0053b480), then from 0x005a83c0
+/// ACTIONBAR_PAGE_CHANGED when the bar leaves the pet's page (5) and
 /// UPDATE_BONUS_ACTIONBAR when the offset moved, then UPDATE_SHAPESHIFT_FORM.
 [[nodiscard]] std::vector<const char*> formChangeEvents(uint32_t offsetBefore, uint32_t offsetAfter);
 
@@ -86,10 +119,12 @@ struct ShapeshiftFormRow {
 [[nodiscard]] std::vector<const char*> bonusBarOffsetEvents(uint32_t offsetBefore, uint32_t offsetAfter);
 
 /// Whether a form's spell is the one in effect (0x00802cb0): the player
-/// carries an aura of it with the positive flag (0x10) set.
+/// carries an aura of it with the positive flag (0x10) set. A shapeshift
+/// spell (aura 36) while the form's cancel is pending (+0x9f4) is not, aura
+/// or not: `shapeshiftPending`.
 template <typename Auras>
-[[nodiscard]] bool formSpellActive(const Auras& auras, uint32_t spellId) {
-    if (spellId == 0) return false;
+[[nodiscard]] bool formSpellActive(const Auras& auras, uint32_t spellId, bool shapeshiftPending = false) {
+    if (spellId == 0 || shapeshiftPending) return false;
     for (const auto& aura : auras) {
         if (aura.spellId == spellId && (aura.flags & 0x10) != 0) return true;
     }

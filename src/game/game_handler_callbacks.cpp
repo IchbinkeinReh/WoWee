@@ -4334,6 +4334,25 @@ bool GameHandler::spellAppliesAura(uint32_t spellId, uint32_t auraType) const {
     return false;
 }
 
+bool GameHandler::spellShapeshiftsInto(uint32_t spellId, uint8_t form) const {
+    if (spellId == 0) return false;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return false;
+    for (int i = 0; i < 3; ++i) {
+        if (it->second.effectAuraIds[i] == kAuraModShapeshift && it->second.effectMiscValues[i] == form) return true;
+    }
+    return false;
+}
+
+FormAuraCancel GameHandler::formAuraCancelFor(uint32_t spellId) const {
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return FormAuraCancel::Send;
+    return formAuraCancel(getShapeshiftFormId(), it->second.effectAuraIds, it->second.effectMiscValues,
+                          [this](uint8_t form) { return shapeshiftFormRow(form); });
+}
+
 uint32_t GameHandler::getSpellTargetKind(uint32_t spellId) const {
     if (spellId == 0) return 0;
     loadSpellNameCache();

@@ -1518,6 +1518,21 @@ void SpellHandler::cancelCraftQueue() {
 
 void SpellHandler::cancelAura(uint32_t spellId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // 0x00802f80: the aura of a form the player is in. The form is left at
+    // once (0x00721cf0: +0x9f4 set, UPDATE_SHAPESHIFT_FORM) and stays left
+    // until the server changes the form field (0x006da130).
+    if (!isPreWotlk()) {
+        switch (owner_.formAuraCancelFor(spellId)) {
+        case FormAuraCancel::Refused:
+            return;
+        case FormAuraCancel::SendFormPending:
+            owner_.setShapeshiftFormPending();
+            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORM", {});
+            break;
+        case FormAuraCancel::Send:
+            break;
+        }
+    }
     auto packet = CancelAuraPacket::build(spellId);
     owner_.getSocket()->send(packet);
 }

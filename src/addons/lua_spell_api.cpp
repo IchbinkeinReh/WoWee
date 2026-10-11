@@ -1393,11 +1393,19 @@ void registerSpellLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"CancelShapeshiftForm", [](lua_State* L) -> int {
-            // Cancel current form - cast spell 0 or cancel aura
+            // 0x0053de60 -> 0x00726ce0: with a form in effect (none while a
+            // cancel is pending), cancel each positive aura (0x10) whose
+            // shapeshift effect (aura 36) names that form.
             auto* gh = getGameHandler(L);
-            if (gh && gh->getShapeshiftFormId() != 0) {
-                // Cancelling a form is done by re-casting the same form spell
-                // For simplicity, just note that the server will handle it
+            if (!gh || game::isPreWotlk() || gh->getShapeshiftFormId() == 0) return 0;
+            std::vector<uint32_t> spells;
+            for (const auto& aura : gh->getPlayerAuras()) {
+                if ((aura.flags & 0x10) != 0) spells.push_back(aura.spellId);
+            }
+            // The form is read again for each: the first cancel leaves it.
+            for (uint32_t spellId : spells) {
+                const uint8_t form = gh->getShapeshiftFormId();
+                if (form != 0 && gh->spellShapeshiftsInto(spellId, form)) gh->cancelAura(spellId);
             }
             return 0;
         }},
@@ -1421,7 +1429,7 @@ void registerSpellLuaAPI(lua_State* L) {
             const auto forms = game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells());
             std::vector<bool> active;
             active.reserve(forms.size());
-            for (const auto& form : forms) active.push_back(game::formSpellActive(gh->getPlayerAuras(), form.spellId));
+            for (const auto& form : forms) active.push_back(gh->formSpellInEffect(form.spellId));
             lua_pushnumber(L, game::activeShapeshiftIndex(active, formField));
             return 1;
         }},

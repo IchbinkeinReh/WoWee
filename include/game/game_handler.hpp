@@ -2440,7 +2440,15 @@ public:
 
     // Combo points
     uint8_t  getComboPoints() const { return comboPoints_; }
-    uint8_t  getShapeshiftFormId() const { return shapeshiftFormId_; }
+    /// The form in effect (0x0071af70): none while a cancelled form waits on
+    /// the server (+0x9f4).
+    uint8_t  getShapeshiftFormId() const { return shapeshiftFormPending_ ? 0 : shapeshiftFormId_; }
+    /// The player cancelled the form's aura and the server has not yet
+    /// changed the form field (+0x9f4: set by 0x00721cf0, cleared by 0x006da130).
+    bool shapeshiftFormPending() const { return shapeshiftFormPending_; }
+    void setShapeshiftFormPending() { shapeshiftFormPending_ = true; }
+    /// 0x00802cb0 for the player: whether a form's spell is in effect.
+    bool formSpellInEffect(uint32_t spellId) const;
     /// Which extra action bar the current form or stance uses, or 0 for none.
     ///
     /// SpellShapeshiftForm.dbc carries it per form - cat 1, bear 3, moonkin 4,
@@ -3611,6 +3619,12 @@ public:
     uint32_t getSpellVisualId(uint32_t spellId) const;
     /// What a spell is aimed at (0x007fe1b0): 2 enemies, 1 friends, 0 neither.
     uint32_t getSpellTargetKind(uint32_t spellId) const;
+    /// Whether one of a spell's effects shapeshifts (aura 36) into `form`
+    /// (0x00726ce0).
+    bool spellShapeshiftsInto(uint32_t spellId, uint8_t form) const;
+    /// What cancelling the player's aura of a spell does about the form in
+    /// effect (0x00802f80).
+    FormAuraCancel formAuraCancelFor(uint32_t spellId) const;
     /// The creature a spell mounts its caster on: the misc value of its first
     /// effect applying aura 78 (0x006f9670); 0 for none.
     uint32_t getSpellMountCreature(uint32_t spellId) const;
@@ -4779,6 +4793,7 @@ private:
 
     // Shapeshift form: UNIT_FIELD_BYTES_2 byte 3 in WotLK (+0x1d3, 0x0071af70)
     uint8_t  shapeshiftFormId_ = 0;
+    bool     shapeshiftFormPending_ = false;
     mutable std::unordered_map<uint8_t, std::optional<ShapeshiftFormRow>> shapeshiftFormRows_;
     // Combo points (rogues/druids)
     uint8_t  comboPoints_ = 0;
