@@ -5,6 +5,9 @@ import android.os.Bundle;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.util.Log;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsAnimation;
 
 import java.io.File;
 import java.io.IOException;
@@ -85,7 +88,65 @@ public class WoweeActivity extends SDLActivity {
         new File(root, "config").mkdirs();
 
         super.onCreate(savedInstanceState);
+        watchKeyboard();
     }
+
+    /**
+     * Tells the client when the on-screen keyboard comes and goes.
+     *
+     * SDL 3.2 says nothing when the keyboard is put away. It notices the back
+     * key, sometimes - the keyboard usually takes that itself - and not the
+     * keyboard's own hide key at all; and what it answers when asked is
+     * InputMethodManager.isAcceptingText(), which stays true with the keyboard
+     * gone because the input connection is still open. So the chat box kept
+     * the focus with nothing left to type into it. The window's IME inset is
+     * what says whether a keyboard is on the screen, and it is reported from
+     * every place it can change: the insets being applied, the keyboard's
+     * animation finishing, and a layout pass.
+     */
+    private void watchKeyboard() {
+        if (SDLActivity.mBrokenLibraries) return;
+        final View decor = getWindow().getDecorView();
+        decor.setOnApplyWindowInsetsListener((v, insets) -> {
+            reportKeyboard(insets);
+            // What the decor view does with no listener set.
+            return v.onApplyWindowInsets(insets);
+        });
+        decor.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(
+                WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+            @Override
+            public WindowInsets onProgress(WindowInsets insets,
+                                           java.util.List<WindowInsetsAnimation> running) {
+                return insets;
+            }
+
+            @Override
+            public void onEnd(WindowInsetsAnimation animation) {
+                reportKeyboard(decor.getRootWindowInsets());
+            }
+        });
+        decor.getViewTreeObserver().addOnGlobalLayoutListener(
+                () -> reportKeyboard(decor.getRootWindowInsets()));
+    }
+
+    private Boolean keyboardShown = null;
+
+    private void reportKeyboard(WindowInsets insets) {
+        if (insets == null) return;
+        boolean shown = insets.isVisible(WindowInsets.Type.ime());
+        if (keyboardShown != null && keyboardShown == shown) return;
+        keyboardShown = shown;
+        Log.v(TAG, "on-screen keyboard " + (shown ? "shown" : "hidden"));
+        try {
+            nativeImeVisibilityChanged(shown);
+        } catch (UnsatisfiedLinkError e) {
+            // A libwowee.so older than this class, or one that did not load.
+            Log.w(TAG, "client cannot be told about the keyboard", e);
+        }
+    }
+
+    /** src/ui/android_ime.cpp. */
+    private static native void nativeImeVisibilityChanged(boolean visible);
 
     /** Reads a system property, so a log level can be set without a rebuild. */
     private String systemProperty(String name) {

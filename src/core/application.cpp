@@ -64,6 +64,8 @@
 #include "audio/footstep_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/audio_engine.hpp"
+#include "ui/screen_keyboard_sync.hpp"
+#include "ui/android_ime.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "addons/addon_manager.hpp"
@@ -414,6 +416,18 @@ bool SDLCALL lifecycleWatch(void* userdata, SDL_Event* event) {
     }
     applyLifecycle(static_cast<Window*>(userdata), background, why);
     return true;
+}
+
+/// The interface's edit focus and the on-screen keyboard; see
+/// ScreenKeyboardSync.
+ui::ScreenKeyboardSync gKeyboardSync;
+
+/// Whether the system's keyboard is on the screen: the window's IME inset
+/// where the activity reports it, SDL's own answer where it does not.
+bool screenKeyboardShown(SDL_Window* sdlWindow) {
+    const int reported = ui::reportedImeVisibility();
+    if (reported >= 0) return reported == 1;
+    return sdlWindow && SDL_ScreenKeyboardShown(sdlWindow);
 }
 
 } // namespace
@@ -1652,7 +1666,8 @@ void Application::run() {
         }
 
         // Ask for text input while one of the interface's edit boxes has the
-        // keyboard.
+        // keyboard - and, where the keyboard is one the system draws on the
+        // screen, keep the two in step.
         //
         // SDL2 delivered SDL_TEXTINPUT from the start and nothing had to ask.
         // SDL3 does not - and ImGui's backend calls SDL_StopTextInput every
@@ -1661,13 +1676,32 @@ void Application::run() {
         // the code that opens the box, and not one character after it arrived.
         // Asserted per frame rather than on a focus change because the backend
         // can turn it off again at any point.
+        //
+        // On a phone the same assertion was the problem: the player put the
+        // keyboard away, the chat box kept the focus, and this raised the
+        // keyboard again. A keyboard that goes away now takes the focus with
+        // it - the box's ClearFocus, so ChatEdit_OnEditFocusLost deactivates
+        // the chat as Escape would - and a box that lets the focus go puts the
+        // keyboard away.
         if (window && addonManager_ && addonsLoaded_) {
-            if (auto* engine = addonManager_->getLuaEngine();
-                engine && engine->editBoxHasFocus()) {
-                if (SDL_Window* sdlWindow = window->getSDLWindow();
-                    sdlWindow && !SDL_TextInputActive(sdlWindow)) {
-                    SDL_StartTextInput(sdlWindow);
+            if (auto* engine = addonManager_->getLuaEngine()) {
+                SDL_Window* sdlWindow = window->getSDLWindow();
+                ui::ScreenKeyboardSync::Inputs in;
+                in.hasScreenKeyboard = SDL_HasScreenKeyboardSupport();
+                in.editFocused = engine->editBoxHasFocus();
+                in.keyboardShown = in.hasScreenKeyboard && screenKeyboardShown(sdlWindow);
+                in.textInputActive = sdlWindow && SDL_TextInputActive(sdlWindow);
+                in.otherWantsText = ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
+                const auto act = gKeyboardSync.update(in);
+                if (act.clearFocus) {
+                    LOG_INFO("On-screen keyboard closed; the edit box gives up the focus");
+                    engine->setEditFocus(0);
                 }
+                if (act.stopTextInput && sdlWindow) {
+                    LOG_INFO("Edit box lost the focus; putting the on-screen keyboard away");
+                    SDL_StopTextInput(sdlWindow);
+                }
+                if (act.startTextInput && sdlWindow) SDL_StartTextInput(sdlWindow);
             }
         }
 

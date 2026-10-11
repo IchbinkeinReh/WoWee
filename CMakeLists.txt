@@ -1064,6 +1064,7 @@ set(WOWEE_SOURCES
     src/ui/gamepad_bindings.cpp
     src/ui/gamepad_controls.cpp
     src/ui/touch_controls.cpp
+    src/ui/android_ime.cpp
     src/ui/combat_ui.cpp
     src/ui/window_manager.cpp
     src/ui/bis_gear_data.cpp
