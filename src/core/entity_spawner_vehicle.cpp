@@ -317,6 +317,9 @@ void EntitySpawner::setSeatState(uint64_t guid, SeatedPassenger& p, SeatState st
     p.planned = false;
     gameHandler_->vehicleRoster().setSeatState(guid, static_cast<uint8_t>(state));
     if (old != state) fireSeatEvents(guid, p, old, state);
+    // The mover's aim is shown again for its new state (0x007489c0 ->
+    // 0x0074c5a0); the mover here is the player.
+    if (old != state && guid == gameHandler_->getPlayerGuid()) gameHandler_->announceVehicleAim();
     // VEHICLE_PASSENGERS_CHANGED (0x007489c0): into or out of a seat - to or
     // from states 0 and 3 - of a vehicle whose seats count from the one the
     // player's do (0x004f6230).

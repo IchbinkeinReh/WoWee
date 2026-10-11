@@ -3196,6 +3196,17 @@ public:
     void sendRequestVehicleSeatStep(bool next);
     void sendRequestVehicleSwitchSeat(uint64_t vehicleGuid, uint8_t seat);
     void sendEjectPassenger(uint64_t passengerGuid);
+    /// The vehicle's aim: the unit it is read from and set on (0x005f9d20),
+    /// a unit's pitch, a unit's Vehicle.dbc row, a pitch asked of a unit
+    /// (0x005fb3a0), the events that show the aim (0x0074c5a0), and the
+    /// power VehicleAimSetNormPower keeps (0x005f9f10).
+    uint64_t vehicleAimUnit() const;
+    float unitPitch(uint64_t guid) const;
+    const vehicle::VehicleRecord* vehicleRowOf(uint64_t guid) const;
+    void requestVehicleAim(uint64_t unit, float pitch);
+    void announceVehicleAim();
+    float vehicleAimPower() const { return vehicleAimPower_; }
+    void setVehicleAimPower(float power) { vehicleAimPower_ = vehicle::clampAimPower(power); }
     /// Which units are vehicles and who sits in them (game/vehicle.hpp).
     vehicle::VehicleRoster& vehicleRoster() { return vehicleRoster_; }
     const vehicle::VehicleRoster& vehicleRoster() const { return vehicleRoster_; }
@@ -4874,6 +4885,7 @@ private:
     // Vehicle (WotLK): non-zero when player is seated in a vehicle
     uint32_t vehicleId_ = 0;
     vehicle::VehicleRoster vehicleRoster_;
+    float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
     /// The column the arena rosters are sorted by, so clicking it again knows
     /// to reverse rather than re-sort the same way.
     std::string arenaSortKey_;

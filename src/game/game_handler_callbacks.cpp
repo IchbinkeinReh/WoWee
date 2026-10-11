@@ -833,6 +833,9 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         auto activeMoverPacket = SetActiveMoverPacket::build(playerGuid);
         socket->send(activeMoverPacket);
         LOG_INFO("Sent CMSG_SET_ACTIVE_MOVER for player 0x", std::hex, playerGuid, std::dec);
+        // A new mover: VEHICLE_UPDATE and its aim (0x00747f40).
+        fireAddonEvent("VEHICLE_UPDATE", {});
+        announceVehicleAim();
     }
 
     // Immediately sync our position so the server doesn't keep stale coordinates
@@ -1095,6 +1098,65 @@ void GameHandler::sendRequestVehicleSeatStep(bool next) {
 void GameHandler::sendRequestVehicleSwitchSeat(uint64_t vehicleGuid, uint8_t seat) {
     if (state != WorldState::IN_WORLD || !socket) return;
     socket->send(VehiclePackets::requestSwitchSeat(vehicleGuid, seat));
+}
+
+uint64_t GameHandler::vehicleAimUnit() const {
+    // 0x005f9d20: the mover - the player here - or, where it sits in a
+    // control seat (Flags 0x800), the vehicle under it.
+    const uint64_t player = playerGuid;
+    if (vehicleRoster_.seatState(player) == 3) {
+        const auto p = vehicleRoster_.passenger(player);
+        const vehicle::SeatRecord* seat = vehicleRoster_.seatOf(player);
+        if (p && seat && (seat->flags & 0x800) != 0 && entityController_ &&
+            getEntityManager().getEntity(p->vehicleGuid) && vehicleRoster_.vehicleId(p->vehicleGuid) != 0)
+            return p->vehicleGuid;
+    }
+    return player;
+}
+
+float GameHandler::unitPitch(uint64_t guid) const {
+    return guid == playerGuid ? movementInfo.pitch : vehicleRoster_.pitch(guid);
+}
+
+const vehicle::VehicleRecord* GameHandler::vehicleRowOf(uint64_t guid) const {
+    const auto* tables = vehicleRoster_.tables();
+    return tables ? tables->vehicle(vehicleRoster_.vehicleId(guid)) : nullptr;
+}
+
+void GameHandler::requestVehicleAim(uint64_t unit, float pitch) {
+    // 0x005fb3a0: held in the unit's row's limits, then set at once and sent
+    // (0x0072ead0 -> 0x006ee460, move event 0x14: MSG_MOVE_SET_PITCH). Only
+    // the mover's own movement is sent, and the mover here is the player.
+    const vehicle::VehicleRecord* row = vehicleRowOf(unit);
+    pitch = vehicle::clampAim(row, pitch);
+    if (unit != playerGuid) return;
+    movementInfo.pitch = pitch;
+    sendMovement(Opcode::MSG_MOVE_SET_PITCH);
+    if (row && (row->flags & vehicle::kVehicleFlagAimAngle)) {
+        // VEHICLE_ANGLE_UPDATE by the mover's row (0x005fa910).
+        if (const vehicle::VehicleRecord* moverRow = vehicleRowOf(playerGuid)) {
+            fireAddonEvent("VEHICLE_ANGLE_UPDATE", {std::to_string(vehicle::normalizedAim(moverRow, pitch)),
+                                                    std::to_string(pitch)});
+        }
+    }
+}
+
+void GameHandler::announceVehicleAim() {
+    // 0x0074c5a0 for the mover, the player, by its own row: whether the aim's
+    // angle (Flags 0x400) and power (0x800) are shown - neither while it is
+    // on its way into or out of a seat (0x0074ba40) - then the angle.
+    const vehicle::VehicleRecord* row = vehicleRowOf(playerGuid);
+    const uint8_t state = vehicleRoster_.seatState(playerGuid);
+    const bool moving = state != 0 && state != 3;
+    const bool angle = !moving && row && (row->flags & vehicle::kVehicleFlagAimAngle);
+    const bool power = !moving && row && (row->flags & vehicle::kVehicleFlagAimPower);
+    fireAddonEvent("VEHICLE_ANGLE_SHOW", angle ? std::vector<std::string>{"1"} : std::vector<std::string>{});
+    fireAddonEvent("VEHICLE_POWER_SHOW", power ? std::vector<std::string>{"1"} : std::vector<std::string>{});
+    if (row) {
+        const float pitch = movementInfo.pitch;
+        fireAddonEvent("VEHICLE_ANGLE_UPDATE",
+                       {std::to_string(vehicle::normalizedAim(row, pitch)), std::to_string(pitch)});
+    }
 }
 
 void GameHandler::sendEjectPassenger(uint64_t passengerGuid) {

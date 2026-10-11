@@ -152,3 +152,27 @@ TEST_CASE("an indicator's seats are its VehicleUIIndSeat rows in id order (0x006
     CHECK(ind->seats[0].virtualSeatIndex == 0u);
     CHECK(ind->seats[1].x == Catch::Approx(0.5f));
 }
+
+TEST_CASE("the aim is held in its row's limits (0x005fb3a0, 0x005f9e60, 0x005f9f10)", "[vehicle]") {
+    // Without Flags 0x40, a quarter turn either way; no row, as asked.
+    gv::VehicleRecord free;
+    CHECK(gv::clampAim(&free, 3.0f) == Catch::Approx(1.5707964f));
+    CHECK(gv::clampAim(&free, -3.0f) == Catch::Approx(-1.5707964f));
+    CHECK(gv::clampAim(nullptr, 3.0f) == Catch::Approx(3.0f));
+    gv::VehicleRecord limited;
+    limited.flags = gv::kVehicleFlagPitchLimits | gv::kVehicleFlagAimAngle;
+    limited.pitchMin = 0.0f;
+    limited.pitchMax = 1.0f;
+    CHECK(gv::clampAim(&limited, -0.5f) == Catch::Approx(0.0f));
+    CHECK(gv::clampAim(&limited, 0.25f) == Catch::Approx(0.25f));
+    CHECK(gv::clampAim(&limited, 1.0f) == Catch::Approx(1.0f));
+    CHECK(gv::normalizedAim(&limited, 0.25f) == Catch::Approx(0.25f));
+    CHECK(gv::normalizedAim(&free, 0.0f) == Catch::Approx(0.5f));
+    // Limits that are one point: 0.
+    limited.pitchMax = 0.0f;
+    CHECK(gv::normalizedAim(&limited, 0.0f) == Catch::Approx(0.0f));
+    // The power: below 0 is 0, 1 or more is 1.
+    CHECK(gv::clampAimPower(-0.2f) == 0.0f);
+    CHECK(gv::clampAimPower(0.4f) == Catch::Approx(0.4f));
+    CHECK(gv::clampAimPower(1.0f) == 1.0f);
+}

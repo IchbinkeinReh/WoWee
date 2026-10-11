@@ -906,8 +906,10 @@ void MovementPacket::writeMovementPayload(network::Packet& packet, const Movemen
         }
     }
 
-    // Write pitch if swimming/flying
-    if (info.hasFlag(MovementFlags::SWIMMING) || info.hasFlag(MovementFlags::FLYING)) {
+    // The pitch: swimming or flying (0x2200000), or flags2 0x20 that always
+    // allows it - a vehicle's aim (0x004f4ed0).
+    if (info.hasFlag(MovementFlags::SWIMMING) || info.hasFlag(MovementFlags::FLYING) ||
+        (info.flags2 & 0x0020) != 0) {
         packet.writeFloat(info.pitch);
     }
 
@@ -920,6 +922,10 @@ void MovementPacket::writeMovementPayload(network::Packet& packet, const Movemen
         packet.writeFloat(info.jumpSinAngle);
         packet.writeFloat(info.jumpCosAngle);
         packet.writeFloat(info.jumpXYSpeed);
+    }
+    // MOVEMENTFLAG_SPLINE_ELEVATION's height, last (0x004f4ed0).
+    if ((info.flags & 0x04000000) != 0) {
+        packet.writeFloat(info.splineElevation);
     }
 }
 
@@ -940,7 +946,7 @@ bool MovementPacket::readPitchAndFall(network::Packet& packet, MovementInfo& inf
     }
     if ((info.flags & 0x04000000) != 0) {  // MOVEMENTFLAG_SPLINE_ELEVATION
         if (!packet.hasRemaining(4)) return false;
-        (void)packet.readFloat();
+        info.splineElevation = packet.readFloat();
     }
     return true;
 }

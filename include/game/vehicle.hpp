@@ -183,6 +183,9 @@ public:
     /// The unit's movement flags2 (+0x7d0), whose 0x40 makes a leaving one
     /// of its own will (0x0074bb60).
     void setMoveFlags2(uint64_t guid, uint32_t flags2);
+    /// The unit's pitch as its last movement said (+0x7c0 of its movement).
+    void setPitch(uint64_t guid, float pitch);
+    [[nodiscard]] float pitch(uint64_t guid) const;
     /// How the unit's last change of seat came about, until it is taken.
     struct SeatChange {
         bool animated = false;
@@ -233,10 +236,46 @@ private:
     std::unordered_map<uint64_t, uint32_t> vehicleIds_;
     std::unordered_map<uint64_t, Passenger> passengers_;
     std::unordered_map<uint64_t, uint32_t> moveFlags2_;
+    std::unordered_map<uint64_t, float> pitches_;
     std::unordered_map<uint64_t, SeatChange> changes_;
     std::unordered_map<uint64_t, uint8_t> seatStates_;
     const VehicleTables* tables_ = nullptr;
 };
+
+/// The pitch a vehicle row lets its aim take (0x005fb3a0, 0x005f9e60):
+/// PitchMin..PitchMax with Flags 0x40, else a quarter turn either way.
+struct AimLimits {
+    float min = -1.5707964f;
+    float max = 1.5707964f;
+};
+[[nodiscard]] inline AimLimits aimLimits(const VehicleRecord* row) {
+    if (row && (row->flags & kVehicleFlagPitchLimits)) return {row->pitchMin, row->pitchMax};
+    return {};
+}
+/// A pitch asked of a unit, held in its row's limits; a unit with no row
+/// takes it as asked (0x005fb3a0).
+[[nodiscard]] inline float clampAim(const VehicleRecord* row, float pitch) {
+    if (!row) return pitch;
+    const AimLimits l = aimLimits(row);
+    if (pitch < l.min) return l.min;
+    if (l.max <= pitch) return l.max;
+    return pitch;
+}
+/// A pitch as a share of the limits, 0 where they are one (0x005fa910,
+/// 0x005f9e60).
+[[nodiscard]] inline float normalizedAim(const VehicleRecord* row, float pitch) {
+    const AimLimits l = aimLimits(row);
+    const float range = l.max - l.min;
+    if (range <= 0.0001f && range >= -0.0001f) return 0.0f;
+    return (pitch - l.min) / range;
+}
+/// The aim's power as VehicleAimSetNormPower keeps it (0x005f9f10): below 0
+/// is 0 and 1 or more is 1.
+[[nodiscard]] inline float clampAimPower(float power) {
+    if (power < 0.0f) return 0.0f;
+    if (1.0f <= power) return 1.0f;
+    return power;
+}
 
 /// What UnitVehicleSeatInfo answers for a seat (0x007579e0).
 struct UISeatInfo {

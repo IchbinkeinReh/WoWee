@@ -8,6 +8,8 @@
 #include "game/packet_parsers.hpp"
 #include "core/application.hpp"
 
+#include <cstring>
+
 // The builders under test never reach the singleton; a null instance satisfies
 // the linker for the translation units that inline isActiveExpansion().
 namespace wowee {
@@ -36,4 +38,28 @@ TEST_CASE("an eject names the passenger in eight bytes", "[vehicle]") {
     const Bytes bytes = VehiclePackets::ejectPassenger(0x0000000000ABCDEFull).getData();
     const Bytes want{0xEF, 0xCD, 0xAB, 0x00, 0x00, 0x00, 0x00, 0x00};
     CHECK(bytes == want);
+}
+
+TEST_CASE("the movement block carries the pitch for flags2 0x20 and the spline elevation last (0x004f4ed0)",
+          "[vehicle]") {
+    MovementInfo info;
+    info.flags2 = 0x20;
+    info.pitch = 0.5f;
+    wowee::network::Packet withPitch(0);
+    MovementPacket::writeMovementPayload(withPitch, info);
+    // flags(4) flags2(2) time(4) xyz(12) o(4) pitch(4) fall(4)
+    REQUIRE(withPitch.getData().size() == 34u);
+    float pitch = 0.0f;
+    std::memcpy(&pitch, withPitch.getData().data() + 26, 4);
+    CHECK(pitch == 0.5f);
+
+    MovementInfo elevated;
+    elevated.flags = 0x04000000;
+    elevated.splineElevation = 2.0f;
+    wowee::network::Packet withElevation(0);
+    MovementPacket::writeMovementPayload(withElevation, elevated);
+    REQUIRE(withElevation.getData().size() == 34u);
+    float elevation = 0.0f;
+    std::memcpy(&elevation, withElevation.getData().data() + 30, 4);
+    CHECK(elevation == 2.0f);
 }

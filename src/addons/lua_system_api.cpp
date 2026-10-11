@@ -4256,7 +4256,90 @@ static int lua_IsUsingVehicleControls(lua_State* L) {
     else lua_pushnil(L);
     return 1;
 }
-static int lua_IsVehicleAimAngleAdjustable(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// The vehicle's aim, on the unit 0x005f9d20 names: the player, or the
+// vehicle whose control seat it sits in.
+//
+// IsVehicleAimAngleAdjustable() / IsVehicleAimPowerAdjustable(): 1 where that
+// unit's Vehicle.dbc row has Flags 0x400 / 0x800, else nil (0x005f9f70,
+// 0x005f9fe0).
+static int pushAimRowFlag(lua_State* L, uint32_t flag) {
+    auto* gh = getGameHandler(L);
+    const auto* row = gh ? gh->vehicleRowOf(gh->vehicleAimUnit()) : nullptr;
+    if (row && (row->flags & flag)) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
+    return 1;
+}
+static int lua_IsVehicleAimAngleAdjustable(lua_State* L) {
+    return pushAimRowFlag(L, game::vehicle::kVehicleFlagAimAngle);
+}
+static int lua_IsVehicleAimPowerAdjustable(lua_State* L) {
+    return pushAimRowFlag(L, game::vehicle::kVehicleFlagAimPower);
+}
+// VehicleAimGetAngle(): that unit's pitch (0x005f9e10).
+static int lua_VehicleAimGetAngle(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->unitPitch(gh->vehicleAimUnit()) : 0.0);
+    return 1;
+}
+// VehicleAimGetNormAngle(): the pitch as a share of its row's limits
+// (0x005f9e60).
+static int lua_VehicleAimGetNormAngle(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return luaReturnZero(L);
+    const uint64_t unit = gh->vehicleAimUnit();
+    lua_pushnumber(L, game::vehicle::normalizedAim(gh->vehicleRowOf(unit), gh->unitPitch(unit)));
+    return 1;
+}
+// VehicleAimSetNormPower(p) / VehicleAimGetNormPower(): kept, 0..1
+// (0x005f9f10, 0x005f9550).
+static int lua_VehicleAimSetNormPower(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (gh && lua_isnumber(L, 1)) gh->setVehicleAimPower(static_cast<float>(lua_tonumber(L, 1)));
+    return 0;
+}
+static int lua_VehicleAimGetNormPower(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->vehicleAimPower() : 0.0);
+    return 1;
+}
+// VehicleAimIncrement([d]) / VehicleAimDecrement([d]): the mover's pitch
+// moved by d, 0.1 unless given (0x005fb770, 0x005fb7d0 -> 0x005fb4b0).
+static int stepVehicleAim(lua_State* L, float sign) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const float d = lua_isnumber(L, 1) ? static_cast<float>(lua_tonumber(L, 1)) : 0.1f;
+    const uint64_t mover = gh->getPlayerGuid();
+    gh->requestVehicleAim(mover, gh->unitPitch(mover) + sign * d);
+    return 0;
+}
+static int lua_VehicleAimIncrement(lua_State* L) { return stepVehicleAim(L, 1.0f); }
+static int lua_VehicleAimDecrement(lua_State* L) { return stepVehicleAim(L, -1.0f); }
+// VehicleAimRequestAngle(a): where the mover's row has Flags 0x400
+// (0x005fb820).
+static int lua_VehicleAimRequestAngle(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const uint64_t mover = gh->getPlayerGuid();
+    const auto* row = gh->vehicleRowOf(mover);
+    if (row && (row->flags & game::vehicle::kVehicleFlagAimAngle) && lua_isnumber(L, 1)) {
+        gh->requestVehicleAim(mover, static_cast<float>(lua_tonumber(L, 1)));
+    }
+    return 0;
+}
+// VehicleAimRequestNormAngle(n): the aim unit's limits' share n, where its
+// row has Flags 0x400 (0x005fb8c0).
+static int lua_VehicleAimRequestNormAngle(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const uint64_t unit = gh->vehicleAimUnit();
+    const auto* row = gh->vehicleRowOf(unit);
+    if (row && (row->flags & game::vehicle::kVehicleFlagAimAngle) && lua_isnumber(L, 1)) {
+        const auto limits = game::vehicle::aimLimits(row);
+        const float n = static_cast<float>(lua_tonumber(L, 1));
+        gh->requestVehicleAim(unit, limits.min + (limits.max - limits.min) * n);
+    }
+    return 0;
+}
 
 // HasKey() - whether the player carries a key ring at all. The keyring exists
 // and holds keys, so the button that opens it is offered.
@@ -5498,6 +5581,13 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"VehiclePrevSeat",              lua_VehiclePrevSeat},
                 {"VehicleNextSeat",              lua_VehicleNextSeat},
                 {"IsVehicleAimAngleAdjustable",  lua_IsVehicleAimAngleAdjustable},
+                {"IsVehicleAimPowerAdjustable",  lua_IsVehicleAimPowerAdjustable},
+                {"VehicleAimGetAngle",           lua_VehicleAimGetAngle},
+                {"VehicleAimSetNormPower",       lua_VehicleAimSetNormPower},
+                {"VehicleAimIncrement",          lua_VehicleAimIncrement},
+                {"VehicleAimDecrement",          lua_VehicleAimDecrement},
+                {"VehicleAimRequestAngle",       lua_VehicleAimRequestAngle},
+                {"VehicleAimRequestNormAngle",   lua_VehicleAimRequestNormAngle},
                 {"HasKey",                       lua_HasKey},
                 {"GetArenaTeam",             lua_GetArenaTeam},
                 {"GetRandomBGHonorCurrencyBonuses",  lua_GetRandomBGHonorCurrencyBonuses},
@@ -5618,8 +5708,8 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"TurnInGuildCharter",       lua_ReturnNothing},
-                // Nothing is being driven, so aiming it does nothing
-                // and there is nothing to climb out of.
+                // The pitch keys' control bits (0x005fc8e0 -> 0x005fa170,
+                // 0x400 and 0x800), which nothing here moves the pitch by.
                 {"VehicleAimUpStart",        lua_ReturnNothing},
                 {"VehicleAimUpStop",         lua_ReturnNothing},
                 {"VehicleAimDownStart",      lua_ReturnNothing},
@@ -5640,8 +5730,8 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pop(L, 1);
             return 0;
         }},
-                {"VehicleAimGetNormAngle",   lua_ReturnZero},
-                {"VehicleAimGetNormPower",   lua_ReturnZero},
+                {"VehicleAimGetNormAngle",   lua_VehicleAimGetNormAngle},
+                {"VehicleAimGetNormPower",   lua_VehicleAimGetNormPower},
                 {"GetMapInfo",               lua_GetMapInfo},
                 {"GetExpansionLevel",        lua_GetExpansionLevel},
                 // The difficulty the player is set to, which this client is

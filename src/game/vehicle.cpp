@@ -84,6 +84,17 @@ void VehicleRoster::setMoveFlags2(uint64_t guid, uint32_t flags2) {
     else moveFlags2_[guid] = flags2;
 }
 
+void VehicleRoster::setPitch(uint64_t guid, float pitch) {
+    if (guid == 0) return;
+    if (pitch == 0.0f) pitches_.erase(guid);
+    else pitches_[guid] = pitch;
+}
+
+float VehicleRoster::pitch(uint64_t guid) const {
+    const auto it = pitches_.find(guid);
+    return it != pitches_.end() ? it->second : 0.0f;
+}
+
 std::optional<VehicleRoster::SeatChange> VehicleRoster::takeChange(uint64_t guid) {
     const auto it = changes_.find(guid);
     if (it == changes_.end()) return std::nullopt;
@@ -221,6 +232,7 @@ void VehicleRoster::forget(uint64_t guid) {
     vehicleIds_.erase(guid);
     passengers_.erase(guid);
     moveFlags2_.erase(guid);
+    pitches_.erase(guid);
     changes_.erase(guid);
     seatStates_.erase(guid);
 }
@@ -229,6 +241,7 @@ void VehicleRoster::clear() {
     vehicleIds_.clear();
     passengers_.clear();
     moveFlags2_.clear();
+    pitches_.clear();
     changes_.clear();
     seatStates_.clear();
 }

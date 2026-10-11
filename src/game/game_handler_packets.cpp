@@ -1711,8 +1711,8 @@ void GameHandler::registerRemainingOpcodes() {
             // The player is a vehicle now, or no longer (0x0074c750 ->
             // 0x0074bbd0: PLAYER_GAINS_VEHICLE_DATA with its
             // VehicleUIIndicatorID; 0x0074c7b0 -> 0x0074bc50: LOSES). Getting
-            // into or out of a seat is told by the seat's own events.
-            fireAddonEvent("VEHICLE_UPDATE", {});
+            // into or out of a seat is told by the seat's own events, and
+            // VEHICLE_UPDATE by a change of mover (0x00747f40).
             if (nowInVehicle) {
                 const auto* tables = vehicleRoster_.tables();
                 const auto* row = tables ? tables->vehicle(newVehicleId) : nullptr;

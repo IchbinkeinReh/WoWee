@@ -1353,6 +1353,7 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     // 0x20000000), at once otherwise. Its flags2 say whether it leaves of
     // its own will (0x0074bb60).
     owner_.vehicleRoster().setMoveFlags2(moverGuid, info.flags2);
+    owner_.vehicleRoster().setPitch(moverGuid, info.pitch);
     owner_.vehicleRoster().setTransport(moverGuid, onTransport ? transportGuid : 0, transportSeat, tLocalO,
                                         !isPreWotlk() && packet.getOpcode() == wireOpcode(Opcode::MSG_MOVE_UNROOT));
 
