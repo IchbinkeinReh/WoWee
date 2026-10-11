@@ -1245,7 +1245,6 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
     auto* cameraController = renderer ? renderer->getCameraController() : nullptr;
     auto* post = renderer ? renderer->getPostProcessPipeline() : nullptr;
     auto* wmo = renderer ? renderer->getWMORenderer() : nullptr;
-    auto* chars = renderer ? renderer->getCharacterRenderer() : nullptr;
 
     // The switches the game's own Sound panel used to own. Writing the setting
     // has already written the cvar behind it - see noteClientSettingChanged -
@@ -1392,14 +1391,12 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
     } else if (key == "fxaa") {
         if (post) post->setFXAAEnabled(pendingFXAA);
     } else if (key == "normalmapping") {
+        // Buildings only (see GameScreen's first application of these).
         if (wmo) wmo->setNormalMappingEnabled(pendingNormalMapping);
-        if (chars) chars->setNormalMappingEnabled(pendingNormalMapping);
     } else if (key == "normalmapstrength") {
         if (wmo) wmo->setNormalMapStrength(pendingNormalMapStrength);
-        if (chars) chars->setNormalMapStrength(pendingNormalMapStrength);
     } else if (key == "parallax") {
         if (wmo) wmo->setPOMEnabled(pendingPOM);
-        if (chars) chars->setPOMEnabled(pendingPOM);
     } else if (key == "sharpstars") {
         if (renderer) renderer->setSharpStars(pendingSharpStars);
     } else if (key == "sunshafts") {
@@ -1408,7 +1405,6 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setScreenGlowEnabled(pendingScreenGlow);
     } else if (key == "parallaxquality") {
         if (wmo) wmo->setPOMQuality(pendingPOMQuality);
-        if (chars) chars->setPOMQuality(pendingPOMQuality);
     } else if (key == "upscaling") {
         // pendingFSR is the older flag for "FSR 1 is on" and is what the saved
         // settings still carry, so the mode and the flag are set together

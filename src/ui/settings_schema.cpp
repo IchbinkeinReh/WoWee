@@ -183,16 +183,16 @@ constexpr SettingDesc kSchema[] = {
      "is not there, so a short distance is a visible edge on open ground.", "", 140},
 
     {"normalmapping", "Surface bumps (normal mapping)", SettingKind::Bool, 0, 0, 0, "Detail", "Surfaces",
-     "Light stone, wood, cloth and metal by their surface texture, so\n"
-     "they catch the light like the real material rather than flat paint.\n"
-     "Not in the original client.", "", 0},
+     "Light the stone, brick and wood of buildings by their surface\n"
+     "texture, so they catch the light like the real material rather\n"
+     "than flat paint. Not in the original client.", "", 0},
     {"normalmapstrength", "Bump strength", SettingKind::Float, 0, 2, 0.1f, "Detail", "",
      "How pronounced those surface bumps look. 1 is as the textures\n"
      "were made; higher exaggerates them.", "", 0.8f, "normalmapping"},
     {"parallax", "Surface depth (parallax)", SettingKind::Bool, 0, 0, 0, "Detail", "",
-     "Gives bricks, cobbles and planks real depth when seen at an\n"
-     "angle, so mortar lines sink and stones stand out. Not in the\n"
-     "original client.", "", 0},
+     "Gives the bricks, cobbles and planks of buildings real depth\n"
+     "when seen at an angle, so mortar lines sink and stones stand out.\n"
+     "Not in the original client.", "", 0},
     {"parallaxquality", "Surface depth quality", SettingKind::Enum, 0, 2, 1, "Detail", "",
      "How finely each surface is traced for that depth: 16, 32 or 64\n"
      "steps. Higher looks steadier up close and costs more on big walls.",

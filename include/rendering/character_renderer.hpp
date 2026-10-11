@@ -395,12 +395,6 @@ public:
 
     [[nodiscard]] size_t getInstanceCount() const { return instances.size(); }
 
-    // Normal mapping / POM settings
-    void setNormalMappingEnabled(bool enabled) { normalMappingEnabled_ = enabled; }
-    void setNormalMapStrength(float strength) { normalMapStrength_ = strength; }
-    void setPOMEnabled(bool enabled) { pomEnabled_ = enabled; }
-    void setPOMQuality(int quality) { pomQuality_ = quality; }
-
     // Fog/lighting/shadow are now in per-frame UBO - keep stubs for callers that haven't been updated
     void setFog(const glm::vec3&, float, float) {}
     void setLighting(const float[3], const float[3], const float[3]) {}
@@ -855,12 +849,6 @@ private:
     std::atomic<int> pendingNormalMapCount_{0};  // in-flight background tasks
 
     // Pure CPU normal map generation (thread-safe, no GPU access)
-    /// Start deriving a normal/height map for a texture already in the cache.
-    /// Called for every surface this renderer draws, whether it came from a
-    /// file or was composited in memory.
-    bool queueNormalMapGeneration(const std::string& cacheKey,
-                                  std::vector<uint8_t> pixels,
-                                  uint32_t width, uint32_t height);
 
     static NormalMapResult generateNormalHeightMapCPU(
         std::string cacheKey, std::vector<uint8_t> pixels, uint32_t width, uint32_t height);

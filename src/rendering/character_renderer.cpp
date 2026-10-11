@@ -902,45 +902,6 @@ std::unique_ptr<VkTexture> CharacterRenderer::generateNormalHeightMap(
     return tex;
 }
 
-// Static, thread-safe CPU-only normal map generation (no GPU access)
-bool CharacterRenderer::queueNormalMapGeneration(const std::string& cacheKey,
-                                                std::vector<uint8_t> pixels,
-                                                uint32_t width, uint32_t height) {
-    // Every surface this renderer draws derives its normal map from its own
-    // diffuse art, and this is the one place that starts that work. It used to
-    // be spelled out inside the file-loading path alone - so a texture that
-    // never came from a file never got one, and a character's body is exactly
-    // that: composited in memory from a skin, a face and whatever armour is
-    // worn. The largest lit surface on screen was the one surface with no
-    // normal map, which reads as the lighting working everywhere except on
-    // people.
-    if (width < 32 || height < 32) return false;
-    // Use acq_rel so the increment is visible to shutdown()'s acquire load
-    // before the thread body begins (relaxed could delay visibility and cause
-    // shutdown() to see 0 and proceed while a thread is still running).
-    pendingNormalMapCount_.fetch_add(1, std::memory_order_acq_rel);
-    auto* self = this;
-    std::thread([self, ck = cacheKey, px = std::move(pixels), width, height]() mutable {
-        // try-catch guarantees the counter is decremented even if the compute
-        // throws (e.g., bad_alloc). Without this, shutdown() would deadlock
-        // waiting for a count that never reaches zero.
-        try {
-            auto result = generateNormalHeightMapCPU(std::move(ck), std::move(px),
-                                                     width, height);
-            {
-                std::lock_guard<std::mutex> lock(self->normalMapResultsMutex_);
-                self->completedNormalMaps_.push_back(std::move(result));
-            }
-        } catch (const std::exception& e) {
-            LOG_ERROR("Normal map generation failed: ", e.what());
-        }
-        if (self->pendingNormalMapCount_.fetch_sub(1, std::memory_order_release) == 1) {
-            self->normalMapDoneCV_.notify_one();
-        }
-    }).detach();
-    return true;
-}
-
 CharacterRenderer::NormalMapResult CharacterRenderer::generateNormalHeightMapCPU(
         std::string cacheKey, std::vector<uint8_t> srcPixels, uint32_t width, uint32_t height) {
     NormalMapResult result;
@@ -1056,11 +1017,12 @@ VkTexture* CharacterRenderer::loadTexture(const std::string& path, uint32_t texF
     e.hasAlpha = hasAlpha;
     e.wrapFlags = static_cast<uint8_t>(texFlags);
 
-    // Launch normal map generation on background thread - CPU work is pure compute,
-    // only the GPU upload (in processPendingNormalMaps) needs the main thread (~1-2ms).
-    e.normalMapPending = queueNormalMapGeneration(
-        cacheKey, std::vector<uint8_t>(blpImage.data.begin(), blpImage.data.end()),
-        blpImage.width, blpImage.height);
+    // No normal map is derived for a character texture any more: the surface
+    // bumps are for buildings only (skin and cloth carry painted folds and
+    // shading, which a map made from the colour turns into bumps that are not
+    // there), so each would have been a thread and an upload for nothing - a
+    // few hundred of them as a crowd loads. The flat map stands in.
+    e.normalMapPending = false;
 
     textureCacheBytes_ += e.approxBytes;
     texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha};
