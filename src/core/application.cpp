@@ -3047,9 +3047,21 @@ void Application::applyServerMovementState(float deltaTime) {
             cc->clearMovementInputs();
         }
         localSeatStateLastFrame_ = stateNow;
-        cc->setVehiclePivot(vehiclePassenger ? entitySpawner_->localPassengerDrawnPosition() : std::nullopt);
+        // What its vehicle camera looks at, and the camera turned with its
+        // facing (VehicleCamera_C, 0x00604490).
+        const auto view = vehiclePassenger ? entitySpawner_->localVehicleCameraView() : std::nullopt;
+        cc->setVehiclePivot(view ? std::optional<glm::vec3>(view->pivot) : std::nullopt);
+        if (view && view->turned != 0.0f) cc->turnWithVehicle(glm::degrees(view->turned));
         // The seat's zoom when its camera move is due (0x0074c0e0).
         if (auto cue = entitySpawner_ ? entitySpawner_->takeSeatCameraCue() : std::nullopt) {
+            // The distance mode first (0x0074c0e0 -> 0x00600590), then the
+            // vehicle's yaw and pitch offsets over the same time, none out
+            // of a seat (0x005fe890, 0x005fe8d0).
+            const auto mode = game::vehicle::seatCameraMode(cue->seated, cue->seat, seatZoomRemembered_.has_value());
+            cc->setCameraDistanceMode(mode.mode, cue->seconds, mode.animate, seatZoomRemembered_);
+            const bool offsets = cue->seated && cue->vehicle;
+            cc->setVehicleCameraOffsets(offsets ? cue->vehicle->cameraYawOffset : 0.0f,
+                                        offsets ? cue->vehicle->cameraPitchOffset : 0.0f, cue->seconds);
             const auto zoom = game::vehicle::seatCameraZoom(cue->seated, cue->seat, cc->getUserTargetDistance(),
                                                             seatZoomRemembered_.has_value());
             cc->setSeatZoomLimits(zoom.minDistance, zoom.maxDistance);

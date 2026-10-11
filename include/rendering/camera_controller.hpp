@@ -2,6 +2,7 @@
 
 #include "rendering/camera_shake.hpp"
 #include "rendering/camera.hpp"
+#include "game/vehicle_camera.hpp"
 #include "core/input.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -287,6 +288,9 @@ public:
     /// (its matrix is the seat's, 0x0074a7f0) rather than where its own
     /// movement left it; none follows the character again.
     void setVehiclePivot(const std::optional<glm::vec3>& pivot) { vehiclePivot_ = pivot; }
+    /// The camera's yaw is its vehicle camera's facing and its own turn on
+    /// top (0x00604490): as that facing turns, so does the camera.
+    void turnWithVehicle(float degrees) { yaw += degrees; }
     /// A seat's zoom limits (0x0074c0e0 -> 0x00600840, 0x00600890); none
     /// lifts them (0x006008e0, 0x00600920).
     void setSeatZoomLimits(std::optional<float> minDistance, std::optional<float> maxDistance);
@@ -294,6 +298,18 @@ public:
     /// 0x005ffa60: the way over the time, whatever the zoom speed).
     void zoomOverTime(float distance, float seconds);
     [[nodiscard]] float getUserTargetDistance() const { return userTargetDistance; }
+    /// The camera's distance mode (0x00600590): the distance of the mode left
+    /// is kept - the one remembered before a seat's zoom where there is one
+    /// (0x005ff320) - and the new mode's (savedModeDistance) zoomed to over
+    /// `seconds`, half a second at least, where `animate` asks and it
+    /// differs. Mode 1 lets the wheel out to 50 (0x006000e0).
+    void setCameraDistanceMode(int mode, float seconds, bool animate, std::optional<float> remembered);
+    [[nodiscard]] int getCameraDistanceMode() const { return distanceMode_; }
+    /// The vehicle's CameraYawOffset and CameraPitchOffset, eased to over
+    /// `seconds` (0x0074c0e0 -> 0x005fe890, 0x005fe8d0): the yaw turns where
+    /// the camera stands about what it looks at (0x00601d60 -> 0x00600730),
+    /// the pitch tilts the view (0x00606f90 -> 0x004c55b0).
+    void setVehicleCameraOffsets(float yawOffset, float pitchOffset, float seconds);
     void suppressMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
 
@@ -481,6 +497,12 @@ private:
     float timedZoomTo_ = 0.0f;
     float timedZoomSeconds_ = 0.0f;
     float timedZoomElapsed_ = -1.0f;  ///< below 0: none running
+    int distanceMode_ = 0;                  ///< +0x2c4
+    float savedDistance_ = -1.0f;           ///< cameraSavedDistance; below 0 until the first change
+    float savedVehicleDistance_ = -1.0f;    ///< cameraSavedVehicleDistance, "-1.0"
+    game::vehicle::EasedCameraOffset vehicleYawOffset_;
+    game::vehicle::EasedCameraOffset vehiclePitchOffset_;
+    uint32_t cameraClockMs_ = 0;
     static constexpr float MIN_DISTANCE = 0.5f;     // Minimum zoom (first-person threshold)
     static constexpr float MAX_DISTANCE_NORMAL = 22.0f;   // Default max zoom out
     static constexpr float MAX_DISTANCE_EXTENDED = 50.0f;  // Extended max zoom out

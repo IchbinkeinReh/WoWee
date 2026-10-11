@@ -319,7 +319,12 @@ void EntitySpawner::setSeatState(uint64_t guid, SeatedPassenger& p, SeatState st
     if (old != state) fireSeatEvents(guid, p, old, state);
     // The mover's aim is shown again for its new state (0x007489c0 ->
     // 0x0074c5a0); the mover here is the player.
-    if (old != state && guid == gameHandler_->getPlayerGuid()) gameHandler_->announceVehicleAim();
+    if (old != state && guid == gameHandler_->getPlayerGuid()) {
+        gameHandler_->announceVehicleAim();
+        // Its vehicle camera starts over with each state (0x0075aac0 sets
+        // +0x8 0x20).
+        localVehicleCamera_.snap = true;
+    }
     // VEHICLE_PASSENGERS_CHANGED (0x007489c0): into or out of a seat - to or
     // from states 0 and 3 - of a vehicle whose seats count from the one the
     // player's do (0x004f6230).
@@ -538,6 +543,66 @@ std::optional<glm::vec3> EntitySpawner::localPassengerDrawnPosition() const {
     return pos;
 }
 
+std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCameraView() {
+    const auto drawn = localPassengerDrawnPosition();
+    if (!drawn) {
+        localVehicleCamera_.snap = true;
+        return std::nullopt;
+    }
+    auto* cr = renderer_->getCharacterRenderer();
+    const auto& p = seatedPassengers_.find(gameHandler_->getPlayerGuid())->second;
+    const game::vehicle::SeatRecord* seat = vehicleTables_.seatById(p.seatId);
+    const uint32_t vehicleInstance = vehicleInstanceFor(p.vehicleGuid);
+    glm::vec3 vehiclePos(0.0f);
+    glm::mat4 vehicleFrame(1.0f);
+    // Seated only (state 3, VehicleCamera_C mode 3); on the way in or out
+    // its camera looks where it is drawn, and starts over once it sits.
+    if (p.state != SeatState::Seated || !seat || vehicleInstance == 0 ||
+        !cr->getInstancePosition(vehicleInstance, vehiclePos) || !cr->getInstanceFrame(vehicleInstance, vehicleFrame)) {
+        localVehicleCamera_.snap = true;
+        return VehicleCameraView{.pivot = *drawn};
+    }
+    auto& vc = localVehicleCamera_;
+    const uint32_t now = seatClockMs();
+    const float dt = static_cast<float>(now - vc.lastMs) * 0.001f;
+    vc.lastMs = now;
+    // 0x00759200: the unit where it is and its facing - the vehicle's where
+    // the seat's FlagsB 0x200 asks - and the seat's CameraOffset about it.
+    glm::vec3 at = *drawn;
+    float yaw = 0.0f;
+    glm::mat4 frame(1.0f);
+    if ((seat->flagsB & 0x200) != 0) {
+        at = vehiclePos;
+        yaw = yawOf(vehicleFrame);
+    } else if (cr->getInstanceFrame(p.instanceId, frame)) {
+        yaw = yawOf(frame);
+    }
+    const glm::vec3 target = at + game::vehicle::seatCameraOffset(*seat, yaw) - vehiclePos;
+    // 0x00759d80: chased on the vehicle at 20 / CameraPosChaseRate.
+    if (const auto rate = game::vehicle::seatChaseRate(seat->cameraPosChaseRate); rate && !vc.snap) {
+        game::vehicle::chaseStep(vc.rel, vc.relVelocity, target, *rate, dt);
+    } else {
+        vc.rel = target;
+        vc.relVelocity = glm::vec3(0.0f);
+    }
+    // 0x0075a1c0: the facing within a half turn of the last, chased at
+    // 20 / CameraFacingChaseRate.
+    constexpr float kPi = 3.1415927f;
+    const float before = vc.facing;
+    float want = yaw;
+    while (want + kPi < before) want += 2.0f * kPi;
+    while (before < want - kPi) want -= 2.0f * kPi;
+    if (const auto rate = game::vehicle::seatChaseRate(seat->cameraFacingChaseRate); rate && !vc.snap) {
+        game::vehicle::chaseStep(vc.facing, vc.facingVelocity, want, *rate, dt);
+    } else {
+        vc.facing = want;
+        vc.facingVelocity = 0.0f;
+    }
+    const float turned = vc.snap ? 0.0f : vc.facing - before;
+    vc.snap = false;
+    return VehicleCameraView{.pivot = vehiclePos + vc.rel, .turned = turned};
+}
+
 std::optional<EntitySpawner::SeatCameraCue> EntitySpawner::takeSeatCameraCue() {
     if (!localSeatCamera_.pending || !gameHandler_) return std::nullopt;
     if (!reached(seatClockMs(), localSeatCamera_.startMs)) return std::nullopt;
@@ -551,6 +616,7 @@ std::optional<EntitySpawner::SeatCameraCue> EntitySpawner::takeSeatCameraCue() {
         const SeatState s = it->second.state;
         cue.seated = s == SeatState::EnterDelay || s == SeatState::Entering || s == SeatState::Seated;
         cue.seat = vehicleTables_.seatById(it->second.seatId);
+        cue.vehicle = vehicleTables_.vehicle(gameHandler_->vehicleRoster().vehicleId(it->second.vehicleGuid));
     }
     return cue;
 }

@@ -16,7 +16,7 @@ namespace wowee::game::vehicle {
 
 /// VehicleSeat Flags (+4) and FlagsB (+0xb4) the camera reads.
 inline constexpr uint32_t kSeatFlagCanControl = 0x800;             ///< 0x0074c0e0, 0x00613700
-inline constexpr uint32_t kSeatFlagFixedCamera = 0x1000000;        ///< 0x0074c0e0: no zoom
+inline constexpr uint32_t kSeatFlagFixedCamera = 0x1000000;        ///< 0x0074c0e0: the vehicle distance mode
 inline constexpr uint32_t kSeatFlagBCameraZooms = 0x400;
 inline constexpr uint32_t kSeatFlagBEnterCameraTimes = 0x40;      ///< 0x0075aac0
 inline constexpr uint32_t kSeatFlagBExitCameraTimes = 0x80;
@@ -64,10 +64,11 @@ struct CameraTiming {
 /// The zoom a seat sets (0x0074c0e0), with the player in it (states 1 to
 /// 3) or not. Out of one, or in a seat that zooms nothing (no FlagsB
 /// 0x400), the distance remembered on the way in comes back. In a seat with
-/// Flags 0x1000000 the camera is left be. Otherwise its limits are FlagsB
-/// 0x4000's CameraSeatZoomMin and 0x8000's CameraSeatZoomMax; with Flags
-/// 0x800 it is drawn to the CameraEnteringZoom - out unless FlagsB 0x1000,
-/// in unless 0x2000 - and the limits widened to take it; and held in them.
+/// Flags 0x1000000 the zoom is the vehicle distance mode's (0x00600590).
+/// Otherwise its limits are FlagsB 0x4000's CameraSeatZoomMin and 0x8000's
+/// CameraSeatZoomMax; with Flags 0x800 it is drawn to the CameraEnteringZoom
+/// - out unless FlagsB 0x1000, in unless 0x2000 - and the limits widened to
+/// take it; and held in them.
 /// A change is zoomed to over the camera's time, the distance before it
 /// remembered unless one already is.
 struct CameraZoom {
@@ -120,6 +121,110 @@ struct CameraZoom {
         z.zoomTo = target;
     }
     return z;
+}
+
+/// The vehicle camera's chase of a value toward its target (0x007160b0 for
+/// one, 0x006ff4c0 for a point): a spring that settles at `rate` without
+/// overshooting, its velocity kept between steps.
+template <class T>
+inline void chaseStep(T& value, T& velocity, const T& target, float rate, float dt) {
+    const float x = rate * dt;
+    const float d = 1.0f / (x * x * 0.48f + x * x * x * 0.235f + x + 1.0f);
+    const T off = value - target;
+    const T push = (off * rate + velocity) * dt;
+    value = (off + push) * d + target;
+    velocity = (velocity - push * rate) * d;
+}
+
+/// The rate a seat chases at: 20 over its CameraPosChaseRate or
+/// CameraFacingChaseRate, none for one of 0.0001 or less (0x00759d80,
+/// 0x0075a1c0).
+[[nodiscard]] inline std::optional<float> seatChaseRate(float column) {
+    if (!(0.0001f < column)) return std::nullopt;
+    return 20.0f / column;
+}
+
+/// A seat's CameraOffset about the unit (0x00759200): (Y, -X, Z) turned by
+/// its facing - Y ahead, X to its right - here on the render axes, whose
+/// yaw `renderYaw` is a quarter turn less the game's facing taken the
+/// other way.
+[[nodiscard]] inline glm::vec3 seatCameraOffset(const SeatRecord& seat, float renderYaw) {
+    const float c = std::cos(renderYaw);
+    const float s = std::sin(renderYaw);
+    const glm::vec3& o = seat.cameraOffset;
+    return {o.y * c - o.x * s, o.y * s + o.x * c, o.z};
+}
+
+/// The camera's ease over a move's time (0x005fffd0): its cosine of pi*t
+/// taken by a cubic on t less its nearest whole number (0x005fe800),
+/// turned to 0..1.
+[[nodiscard]] inline float cameraEase(float t) {
+    // 0x005fe800: the nearest whole number below a non-positive t.
+    float n = std::nearbyint(t);
+    if (!(t > 0.0f)) n -= 1.0f;
+    const float f = t - n;
+    float c = 1.0f - (6.0f - 4.0f * f) * f * f;
+    if (static_cast<long>(n) & 1L) c = -c;
+    return 0.5f - c * 0.5f;
+}
+
+/// A camera offset eased from where it is to where it is asked to be
+/// between two times (0x005fe890 / 0x005fe8d0 set it, 0x006006a0 /
+/// 0x006007b0 step it): the Vehicle.dbc CameraYawOffset (+0x2dc..+0x2e4)
+/// and CameraPitchOffset (+0x2f0..+0x2f8) of the vehicle a seat belongs to.
+struct EasedCameraOffset {
+    uint32_t startMs = 0;
+    uint32_t endMs = 0;
+    float from = 0.0f;
+    float to = 0.0f;
+    float value = 0.0f;
+
+    void set(float target, uint32_t start, uint32_t end) {
+        startMs = start;
+        endMs = end;
+        if (start != end) {
+            from = value;
+            to = target;
+        } else {
+            value = target;
+        }
+    }
+    void step(uint32_t nowMs) {
+        if (startMs == endMs) return;
+        const float t = static_cast<float>(nowMs - startMs) / static_cast<float>(endMs - startMs);
+        if (1.0f < t) {
+            startMs = endMs;
+            value = to;
+            return;
+        }
+        value = (to - from) * cameraEase(t) + from;
+    }
+};
+
+/// The camera's distance mode (0x00600590): 0 the ordinary, 1 a seat with
+/// Flags 0x1000000's. A change zooms to the new mode's saved distance -
+/// cameraSavedDistance held to 0..50, cameraSavedVehicleDistance or 50 where
+/// it is below 0 - over the time given, half a second at least, where it is
+/// asked to and the distance differs by 0.001 or more.
+[[nodiscard]] inline float savedModeDistance(int mode, float savedDistance, float savedVehicleDistance) {
+    if (mode == 0) return savedDistance < 0.0f ? 0.0f : (savedDistance < 50.0f ? savedDistance : 50.0f);
+    return savedVehicleDistance < 0.0f ? 50.0f : savedVehicleDistance;
+}
+
+/// What a change of seat asks of the camera's distance mode (0x0074c0e0):
+/// a seat with Flags 0x1000000 the vehicle mode, zoomed to; a seat that
+/// zooms (FlagsB 0x400) the ordinary one, not zoomed to; anything else the
+/// ordinary one, zoomed to unless a distance before is remembered.
+struct CameraModeChange {
+    int mode = 0;
+    bool animate = false;
+};
+[[nodiscard]] inline CameraModeChange seatCameraMode(bool seated, const SeatRecord* seat, bool remembering) {
+    if (seated && seat) {
+        if (seat->flags & kSeatFlagFixedCamera) return {1, true};
+        if (seat->flagsB & kSeatFlagBCameraZooms) return {0, false};
+    }
+    return {0, !remembering};
 }
 
 }  // namespace wowee::game::vehicle

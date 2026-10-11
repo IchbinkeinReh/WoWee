@@ -2816,7 +2816,30 @@ void CameraController::zoomOverTime(float distance, float seconds) {
     }
 }
 
+void CameraController::setCameraDistanceMode(int mode, float seconds, bool animate,
+                                             std::optional<float> remembered) {
+    // 0x00600590.
+    if (mode == distanceMode_) return;
+    seconds = std::max(seconds, 0.5f);
+    // 0x005ff320: the distance of the mode left.
+    const float leaving = remembered ? *remembered : userTargetDistance;
+    if (distanceMode_ == 0) savedDistance_ = leaving;
+    else savedVehicleDistance_ = leaving;
+    const float to = game::vehicle::savedModeDistance(mode, savedDistance_, savedVehicleDistance_);
+    distanceMode_ = mode;
+    if (animate && std::fabs(to - userTargetDistance) >= 0.001f) zoomOverTime(to, seconds);
+}
+
+void CameraController::setVehicleCameraOffsets(float yawOffset, float pitchOffset, float seconds) {
+    const uint32_t end = cameraClockMs_ + static_cast<uint32_t>(std::max(0.0f, seconds) * 1000.0f);
+    vehicleYawOffset_.set(yawOffset, cameraClockMs_, end);
+    vehiclePitchOffset_.set(pitchOffset, cameraClockMs_, end);
+}
+
 void CameraController::update(float deltaTime) {
+    cameraClockMs_ += static_cast<uint32_t>(std::max(0.0f, deltaTime) * 1000.0f);
+    vehicleYawOffset_.step(cameraClockMs_);
+    vehiclePitchOffset_.step(cameraClockMs_);
     if (timedZoomElapsed_ >= 0.0f) {
         timedZoomElapsed_ += deltaTime;
         const float t = std::min(timedZoomElapsed_ / timedZoomSeconds_, 1.0f);
@@ -2854,8 +2877,16 @@ void CameraController::update(float deltaTime) {
             float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
             glm::vec3 pivot = targetPos + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset);
 
-            // Camera direction from yaw/pitch
+            // Camera direction from yaw/pitch, turned about what it looks
+            // at by the vehicle's yaw offset (0x00601d60 -> 0x00600730) -
+            // the other way round here, the render axes being the game's
+            // with x and y swapped.
             glm::vec3 camDir = -forward3D;
+            if (vehicleYawOffset_.value != 0.0f) {
+                const float c = std::cos(-vehicleYawOffset_.value);
+                const float sn = std::sin(-vehicleYawOffset_.value);
+                camDir = glm::vec3(camDir.x * c - camDir.y * sn, camDir.x * sn + camDir.y * c, camDir.z);
+            }
 
             // Use current distance
             float actualDist = std::min(currentDistance, collisionDistance);
@@ -2886,6 +2917,11 @@ void CameraController::update(float deltaTime) {
             }
 
             camera->setPosition(smoothedCamPos);
+        }
+        // The vehicle's pitch offset tilts the view and not where it stands
+        // (0x00606f90 -> 0x004c55b0).
+        if (vehiclePitchOffset_.value != 0.0f) {
+            camera->setRotation(yaw, pitch + glm::degrees(vehiclePitchOffset_.value));
         }
 
         // The ground limits are not kept up in flight. Left as they were at
@@ -3841,6 +3877,8 @@ void CameraController::processMouseWheel(float delta) {
     if (cachedInsideInteriorWMO) maxDist = std::min(maxDist, MAX_DISTANCE_INTERIOR);
     float minDist = MIN_DISTANCE;
     // A seat's limits hold the wheel too (0x0074c0e0).
+    // The vehicle distance mode lets it out to 50 (0x006000e0).
+    if (distanceMode_ == 1) maxDist = 50.0f;
     if (seatZoomMax_) maxDist = *seatZoomMax_;
     if (seatZoomMin_) minDist = std::max(minDist, *seatZoomMin_);
     userTargetDistance = glm::clamp(userTargetDistance, minDist, std::max(minDist, maxDist));

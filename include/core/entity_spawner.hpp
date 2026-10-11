@@ -350,12 +350,24 @@ public:
     /// or out of a seat (CGUnit_C +0xf60 +0x14), and where it is drawn.
     [[nodiscard]] std::optional<game::vehicle::SeatState> localPassengerState() const;
     [[nodiscard]] std::optional<glm::vec3> localPassengerDrawnPosition() const;
+    /// What the local passenger's camera looks at, as its vehicle camera
+    /// (VehicleCamera_C) has it this frame: seated, the seat's CameraOffset
+    /// about it chased at the seat's CameraPosChaseRate (0x00759200,
+    /// 0x00759d80) and its facing at CameraFacingChaseRate (0x0075a1c0) -
+    /// how far that facing turned since the last frame, which the camera
+    /// turns with (0x00604490); on its way in or out, where it is drawn.
+    struct VehicleCameraView {
+        glm::vec3 pivot{0.0f};
+        float turned = 0.0f;  ///< radians, render yaw
+    };
+    [[nodiscard]] std::optional<VehicleCameraView> localVehicleCameraView();
     /// The local player's seat camera, due now (0x0075aac0 -> 0x0075a630
     /// -> 0x0074c0e0): whether it is in a seat then (states 1 to 3), the
     /// seat, and the time the camera takes. Taken once.
     struct SeatCameraCue {
         bool seated = false;
         const game::vehicle::SeatRecord* seat = nullptr;
+        const game::vehicle::VehicleRecord* vehicle = nullptr;
         float seconds = 0.0f;
     };
     [[nodiscard]] std::optional<SeatCameraCue> takeSeatCameraCue();
@@ -528,6 +540,16 @@ private:
         bool waitsForFlight = false;
     };
     LocalSeatCamera localSeatCamera_;
+    /// The local passenger's vehicle camera's chase (VehicleCamera_C).
+    struct LocalVehicleCamera {
+        bool snap = true;                  ///< +0x8 0x20: the next update starts the chase over
+        glm::vec3 rel{0.0f};               ///< +0x64: on the vehicle
+        glm::vec3 relVelocity{0.0f};       ///< +0x70
+        float facing = 0.0f;               ///< +0x88 / +0x94
+        float facingVelocity = 0.0f;       ///< +0x98
+        uint32_t lastMs = 0;               ///< +0xa0
+    };
+    LocalVehicleCamera localVehicleCamera_;
     /// Where each vehicle was drawn last frame and how fast it went.
     struct VehicleMotion {
         glm::vec3 place{0.0f};

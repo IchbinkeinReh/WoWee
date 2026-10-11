@@ -293,3 +293,83 @@ TEST_CASE("the roster answers a unit's seat row and state (0x00613600)", "[vehic
     CHECK(r.seatState(1) == 0);
     CHECK_FALSE(r.seatOf(1));
 }
+
+TEST_CASE("the camera's ease is 0x005fffd0's cubic (0x005fe800's split)", "[vehicle]") {
+    CHECK(gv::cameraEase(0.0f) == Catch::Approx(0.0f));
+    CHECK(gv::cameraEase(0.25f) == Catch::Approx(0.15625f));
+    CHECK(gv::cameraEase(0.5f) == Catch::Approx(0.5f));
+    // Past the half it is split from 1, and the cubic is not even in it.
+    CHECK(gv::cameraEase(0.75f) == Catch::Approx(0.78125f));
+    CHECK(gv::cameraEase(1.0f) == Catch::Approx(1.0f));
+}
+
+TEST_CASE("a vehicle's camera offsets are eased over the move (0x005fe890, 0x006006a0)", "[vehicle]") {
+    gv::EasedCameraOffset yaw;
+    // At once where the times are one.
+    yaw.set(0.5f, 100, 100);
+    CHECK(yaw.value == Catch::Approx(0.5f));
+    yaw.set(1.5f, 1000, 2000);
+    yaw.step(1500);
+    CHECK(yaw.value == Catch::Approx(1.0f));
+    yaw.step(2001);
+    CHECK(yaw.value == Catch::Approx(1.5f));
+    CHECK(yaw.startMs == yaw.endMs);
+}
+
+TEST_CASE("a seat picks the camera's distance mode (0x0074c0e0 -> 0x00600590)", "[vehicle]") {
+    gv::SeatRecord fixedCamera;
+    fixedCamera.flags = gv::kSeatFlagFixedCamera;
+    auto m = gv::seatCameraMode(true, &fixedCamera, true);
+    CHECK(m.mode == 1);
+    CHECK(m.animate);
+    gv::SeatRecord zooms;
+    zooms.flagsB = gv::kSeatFlagBCameraZooms;
+    m = gv::seatCameraMode(true, &zooms, false);
+    CHECK(m.mode == 0);
+    CHECK_FALSE(m.animate);
+    m = gv::seatCameraMode(false, &fixedCamera, false);
+    CHECK(m.mode == 0);
+    CHECK(m.animate);
+    CHECK_FALSE(gv::seatCameraMode(false, nullptr, true).animate);
+    // The saved distances: the ordinary one held to 0..50, the vehicle's
+    // 50 while it is the "-1.0" it starts as.
+    CHECK(gv::savedModeDistance(0, 80.0f, 3.0f) == 50.0f);
+    CHECK(gv::savedModeDistance(0, 12.0f, 3.0f) == 12.0f);
+    CHECK(gv::savedModeDistance(1, 12.0f, -1.0f) == 50.0f);
+    CHECK(gv::savedModeDistance(1, 12.0f, 30.0f) == 30.0f);
+}
+
+TEST_CASE("the vehicle camera chases as 0x007160b0 and 0x006ff4c0 step", "[vehicle]") {
+    // One step at rate 20 over 0.05 s: x = 1, d = 1 / 2.715.
+    float value = 1.0f;
+    float velocity = 0.0f;
+    gv::chaseStep(value, velocity, 0.0f, 20.0f, 0.05f);
+    const float d = 1.0f / 2.715f;
+    CHECK(value == Catch::Approx(2.0f * d));
+    CHECK(velocity == Catch::Approx(-20.0f * d));
+    // It settles on the target without passing it.
+    for (int i = 0; i < 200; ++i) {
+        gv::chaseStep(value, velocity, 0.0f, 20.0f, 0.016f);
+        CHECK(value >= -1e-4f);
+    }
+    CHECK(value == Catch::Approx(0.0f).margin(1e-4));
+    glm::vec3 p(2.0f, 0.0f, 0.0f), v(0.0f);
+    gv::chaseStep(p, v, glm::vec3(0.0f), 20.0f, 0.05f);
+    CHECK(p.x == Catch::Approx(4.0f * d));
+    // A rate of 0.0001 or less is no chase; the rate is 20 over the column.
+    CHECK_FALSE(gv::seatChaseRate(0.0f));
+    CHECK(*gv::seatChaseRate(2.0f) == Catch::Approx(10.0f));
+}
+
+TEST_CASE("a seat's CameraOffset is (Y, -X, Z) turned by its facing (0x00759200)", "[vehicle]") {
+    gv::SeatRecord seat;
+    seat.cameraOffset = glm::vec3(1.0f, -10.0f, 3.0f);  // a yard right, ten behind, three up
+    // Render yaw 0 looks along +x; its right is +y there.
+    glm::vec3 o = gv::seatCameraOffset(seat, 0.0f);
+    CHECK(o.x == Catch::Approx(-10.0f));
+    CHECK(o.y == Catch::Approx(1.0f));
+    CHECK(o.z == Catch::Approx(3.0f));
+    o = gv::seatCameraOffset(seat, 1.5707964f);
+    CHECK(o.x == Catch::Approx(-1.0f));
+    CHECK(o.y == Catch::Approx(-10.0f).margin(1e-5));
+}
