@@ -214,11 +214,19 @@ vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt) {
     if (mode == 0) return v;
     vec3 ambient = vec3(wmoAmbientR, wmoAmbientG, wmoAmbientB);
     vec3 direct = vec3(0.0);
+    // Inside, the probes' ratio is left out: a batch the camera's interior
+    // pass draws with the outdoor light is one the artists lit as the open
+    // air - a window, its shutters and the daylight in its panes - and the
+    // probes in a lamplit room would take that light back out of it, down to
+    // black (an interior's own colours are its baked light, as a unit's floor
+    // colour is in character.frag). The traced occlusion stays.
     if (mode == 1) {
-        ambient = rtAmbient(rt, ambientColor.rgb, FragPos, norm);
+        ambient = gp.interiorPass != 0 ? rtAmbient(rt, ambientColor.rgb)
+                                       : rtAmbient(rt, ambientColor.rgb, FragPos, norm);
         direct = lightColor.rgb;
     } else if (mode == 2) {
-        ambient = rtAmbient(rt, averagedAmbientColor.rgb, FragPos, norm);
+        ambient = gp.interiorPass != 0 ? rtAmbient(rt, averagedAmbientColor.rgb)
+                                       : rtAmbient(rt, averagedAmbientColor.rgb, FragPos, norm);
         direct = averagedDirectColor.rgb;
     }
     float ndl = clamp(dot(norm, normalize(-lightDir.xyz)), 0.0, 1.0);
