@@ -5967,7 +5967,30 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
     RtLighting::FrameInputs in{};
     in.viewProj = camera->getProjectionMatrix() * camera->getViewMatrix();
     in.cameraPos = camera->getPosition();
+    // Toward the sun the sky draws, as the shadow map and the mist's shafts
+    // have it (sunTravelDirection), not the light's direction (Light.dbc):
+    // that one stands the same way round but a good deal higher - in the
+    // evening some twenty degrees up over a sun at six - so the buildings'
+    // traced shadows came out a third of the length the low sun on screen
+    // makes them, and the ground they should have covered lay in the sun.
+    // Units near the camera take the map's shadow (rt_trace.comp), which
+    // now falls the same way as the traced one beside it. Below the horizon
+    // the light's direction, as before: the moon's light. Held at least as
+    // high as the map holds it (computeLightSpaceMatrix), so the two agree
+    // where both are drawn and a sun on the horizon does not lay every
+    // pebble's shadow across the whole field.
     in.sunDir = -glm::vec3(currentFrameData.lightDir);
+    if (lightingManager) {
+        const glm::vec3 drawnSun = lightingManager->getLightingParams().sunDir;
+        if (drawnSun.z > 0.0f && glm::dot(drawnSun, drawnSun) > 1e-6f) {
+            glm::vec3 d = glm::normalize(drawnSun);
+            if (d.z < 0.15f) {
+                d.z = 0.15f;
+                d = glm::normalize(d);
+            }
+            in.sunDir = d;
+        }
+    }
     in.sunColor = glm::vec3(currentFrameData.lightColor);
     in.skyColor = glm::vec3(currentFrameData.ambientColor);
     in.sunUp = in.sunDir.z > -0.05f;
@@ -6549,6 +6572,15 @@ void Renderer::recordSunShafts() {
             strength *= 1.0f - glm::smoothstep(0.0f, 0.5f, std::max(past.x, past.y));
             // Rain and snow put a lid over it.
             if (weather) strength *= 1.0f - 0.8f * glm::clamp(weather->getIntensity(), 0.0f, 1.0f);
+            // Only while the sun can be seen from here, as the lens flare
+            // (sampleSunOcclusion, eased in update). The rays come from
+            // whatever is bright near the sun's place on screen, not from the
+            // sky alone - there is no depth to tell them apart (sun_shafts.hpp)
+            // - so with the sun behind a house its sunlit roof, wall and the
+            // leaves beside it streamed light across the house and the ground
+            // in its shadow, and a sun just past the screen's edge poured a
+            // shaft down that edge from whatever lit wall stood there.
+            strength *= 1.0f - glm::clamp(sunOcclusion_, 0.0f, 1.0f);
 
             // The sun's own colour, kept in hue and not in brightness, and
             // half white: the rays should warm at dusk, not turn orange.
