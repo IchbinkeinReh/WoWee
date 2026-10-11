@@ -69,6 +69,12 @@ constexpr uint32_t petSlotSpell(uint32_t packed) {
     return state == 1 || (state >= 8 && state < 18) ? packed & 0x00FFFFFFu : 0u;
 }
 
+/// Whether a pet slot's spell is cast by the pet as the client casts the
+/// player's (0x005d4210 -> 0x0080cce0, CMSG_PET_CAST_SPELL) rather than
+/// asked of it by CMSG_PET_ACTION: Spell.dbc AttributesEx4 (+0x20) 0x20, or
+/// the pet is the active mover - a vehicle the player drives (0x006dd060).
+constexpr bool petCastsItself(uint32_t attrEx4, bool petIsMover) { return (attrEx4 & 0x20u) != 0 || petIsMover; }
+
 /// What PetDismiss does (CGPetInfo::PetDismiss, 0x005d46f0).
 enum class DismissAction : uint8_t {
     None,

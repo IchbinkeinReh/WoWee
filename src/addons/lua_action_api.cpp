@@ -205,7 +205,7 @@ static const char* petTokenTexture(uint32_t packed) {
     }
 }
 /// Uses a pet slot as the pet bar's button does (0x005d4210): at the unit
-/// named by `unitArg`, else the target, else the pet.
+/// named by `unitArg`, else the target.
 static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, int unitArg) {
     if (!gh || !gh->hasPet() || (packed & 0x00FFFFFFu) == 0) return;
     uint64_t target = 0;
@@ -214,8 +214,8 @@ static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, in
         toLowerInPlace(u);
         target = resolveUnitGuid(gh, u);
     }
-    if (target == 0) target = gh->hasTarget() ? gh->getTargetGuid() : gh->getPetGuid();
-    gh->sendPetAction(packed, target);
+    if (target == 0 && gh->hasTarget()) target = gh->getTargetGuid();
+    gh->usePetSlot(packed, target);
 }
 
 static int lua_HasAction(lua_State* L) {

@@ -1202,6 +1202,15 @@ network::Packet CastSpellPacket::buildDestination(uint32_t spellId, float x, flo
     return packet;
 }
 
+network::Packet CastSpellPacket::asPetCast(uint64_t casterGuid, const network::Packet& cast) {
+    // 0x0080ac90: opcode 0x1f0, the caster, then castCount, spell, cast
+    // flags and targets as CMSG_CAST_SPELL has them.
+    network::Packet packet(wireOpcode(Opcode::CMSG_PET_CAST_SPELL));
+    packet.writeUInt64(casterGuid);
+    packet.writeBytes(cast.getData().data(), cast.getData().size());
+    return packet;
+}
+
 network::Packet CancelAuraPacket::build(uint32_t spellId) {
     network::Packet packet(wireOpcode(Opcode::CMSG_CANCEL_AURA));
     packet.writeUInt32(spellId);

@@ -2308,6 +2308,10 @@ public:
     /// x, y, z in the transport's frame when transportGuid is set (0x009ab8b0).
     static network::Packet buildDestination(uint32_t spellId, float x, float y, float z, uint8_t castCount,
                                             uint64_t transportGuid = 0);
+    /// The same cast by the player's pet - a vehicle it drives among them:
+    /// CMSG_PET_CAST_SPELL, the caster's guid ahead of the body
+    /// (0x0080ac90).
+    static network::Packet asPetCast(uint64_t casterGuid, const network::Packet& cast);
 };
 
 /** CMSG_CANCEL_AURA packet builder */

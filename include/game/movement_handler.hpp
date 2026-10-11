@@ -276,6 +276,9 @@ public:
     void applyTaxiMountForCurrentNode();
     /// Plays out a monster move held for a vehicle's animation (0x00747990).
     void releaseHeldVehicleMove(uint64_t mover);
+    /// A move of the unit's is held for its vehicle's animation (its
+    /// passenger component's +0x10 0x200, 0x00748070 to 0x00748230).
+    [[nodiscard]] bool vehicleMoveHeld(uint64_t unit) const { return heldVehicleMoves_.count(unit) != 0; }
 
 private:
     /// A monster move held for a vehicle's enter or exit animation, kept as

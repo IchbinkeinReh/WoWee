@@ -1212,14 +1212,18 @@ void GameHandler::askVehicleSeatChange() {
     vehicleRoster_.markSeatChangeAsked(playerGuid, seatClockMs());
 }
 
-bool GameHandler::moverHeldBySeat() const {
-    // 0x0074ba40 for the mover: its own seat, and the driver's - the player,
-    // where the mover is the vehicle it drives.
-    const uint64_t mover = activeMover();
-    if (mover == 0) return false;
-    const bool driven = drivesItsVehicle(vehicleRoster_, playerGuid, mover);
+bool GameHandler::heldBySeat(uint64_t unit) const {
+    // 0x0074ba40: the unit's own seat, and the driver's - the player, where
+    // the unit is the vehicle it drives. A move held for the vehicle's
+    // animation is the passenger's +0x10 0x200.
+    if (unit == 0) return false;
+    const bool driven = drivesItsVehicle(vehicleRoster_, playerGuid, unit);
     const uint8_t driverState = driven ? vehicleRoster_.seatState(playerGuid) : 0;
-    return vehicle::moverHeldBySeat(vehicleRoster_.seatState(mover), driverState,
+    const auto animHeld = [this](uint64_t guid) {
+        return movementHandler_ && movementHandler_->vehicleMoveHeld(guid);
+    };
+    return vehicle::moverHeldBySeat(vehicleRoster_.seatState(unit), animHeld(unit), driverState,
+                                    driven && animHeld(playerGuid),
                                     driven && vehicleRoster_.seatChangeAsked(playerGuid, seatClockMs()));
 }
 
@@ -2638,6 +2642,22 @@ void GameHandler::handlePetSpells(network::Packet& packet) {
 
 void GameHandler::sendPetAction(uint32_t action, uint64_t targetGuid) {
     if (spellHandler_) spellHandler_->sendPetAction(action, targetGuid);
+}
+
+void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
+    // 0x005d4210: a spell the pet casts itself - AttributesEx4 0x20, or the
+    // pet is the active mover (0x006dd060) - goes as the player's casts do
+    // (0x0080cce0) at the unit asked; anything else is CMSG_PET_ACTION.
+    if (const uint32_t spell = pet::petSlotSpell(packed); spell != 0 && petGuid_ != 0) {
+        loadSpellNameCache();
+        const auto it = spellNameCache_.find(spell);
+        const uint32_t attrEx4 = it != spellNameCache_.end() ? it->second.attrEx4 : 0;
+        if (pet::petCastsItself(attrEx4, petGuid_ == activeMover())) {
+            if (spellHandler_) spellHandler_->castPetSpell(petGuid_, spell, targetGuid);
+            return;
+        }
+    }
+    sendPetAction(packed, targetGuid != 0 ? targetGuid : petGuid_);
 }
 
 void GameHandler::dismissCritter() {

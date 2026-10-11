@@ -355,6 +355,8 @@
     "Attributes": 4,
     "AttributesEx": 5,
     "AttributesEx3": 7,
+    "AttributesEx4": 8,
+    "AttributesEx7": 11,
     "CasterAuraState": 20,
     "CasterAuraStateNot": 22,
     "CastingTimeIndex": 28,

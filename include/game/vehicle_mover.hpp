@@ -105,13 +105,25 @@ struct MoveSpline {
 }
 
 /// Whether the mover may not move for its seat (0x0074ba40): its own seat
-/// state is on the way in or out (not 0 or 3), or - where a driver controls
-/// it - the driver's is, or the driver, in a seat, asked for a seat change
-/// it has not yet had (0x00747fa0's +0x10 0x8).
-[[nodiscard]] inline bool moverHeldBySeat(uint8_t moverState, uint8_t driverState, bool driverAskedSeatChange) {
+/// state is on the way in or out (not 0 or 3), or a move of its is held for
+/// its vehicle's animation (+0x10 0x200); or - where a driver controls it -
+/// the same of the driver's, or the driver, in a seat, asked for a seat
+/// change it has not yet had (0x00747fa0's +0x10 0x8).
+[[nodiscard]] inline bool moverHeldBySeat(uint8_t moverState, bool moverAnimHeld, uint8_t driverState,
+                                          bool driverAnimHeld, bool driverAskedSeatChange) {
     if (moverState != 0 && moverState != 3) return true;
+    if (moverAnimHeld) return true;
     if (driverState != 0 && driverState != 3) return true;
+    if (driverAnimHeld) return true;
     return driverState != 0 && driverAskedSeatChange;
+}
+
+/// SendCast (0x0080ac90): a spell with AttributesEx7 (+0x2c) 0x80 cast by the
+/// active mover asks the seated player's seat change (0x00747fa0) and stops
+/// the mover (0x0071ae10 -> 0x006ecde0, MSG_MOVE_STOP).
+inline constexpr uint32_t kAttrEx7PrepareForVehicleControlEnd = 0x80;
+[[nodiscard]] inline bool castEndsVehicleControl(uint32_t attrEx7, uint64_t caster, uint64_t mover) {
+    return caster != 0 && caster == mover && (attrEx7 & kAttrEx7PrepareForVehicleControlEnd) != 0;
 }
 
 /// The keys the mover's movement flags2 hold: 0x1 starts no strafe

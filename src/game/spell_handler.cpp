@@ -7,6 +7,7 @@
 #include "game/ground_target.hpp"
 #include "game/spell_target_kind.hpp"
 #include "game/pet_action.hpp"
+#include "game/vehicle_mover.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
 #include "game/packet_parsers.hpp"
@@ -799,9 +800,80 @@ bool SpellHandler::isTargetCastInterruptible() const {
     return s ? s->interruptible : true;
 }
 
+bool SpellHandler::armGroundTarget(uint32_t spellId, uint64_t caster) {
+    // A spell that wants a place on the ground (Spell.dbc Targets 0x20/0x40,
+    // 0x0080c790) is not sent: the cursor holds it until the world is
+    // clicked (0x0080c340) or it is put down (SpellStopTargeting). A second
+    // such spell replaces the first.
+    if (spellId == 0) return false;
+    loadSpellNameCache();
+    auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return false;
+    // TARGET_DEST_TRAJ's exception reads the spell's SpellMissile
+    // row, its Flags (+4) bit 1 (0x0080c790 case 0x59).
+    bool trajectory = false;
+    if (it->second.implicitTargetsA[0] == 89 && it->second.spellMissileId != 0) {
+        auto* am = core::Application::getInstance().getAssetManager();
+        auto missiles = am ? am->loadDBCOptional("SpellMissile.dbc") : nullptr;
+        const int32_t row = missiles && missiles->getFieldCount() > 1
+                                ? missiles->findRecordById(it->second.spellMissileId) : -1;
+        trajectory = row >= 0 && (missiles->getUInt32(static_cast<uint32_t>(row), 1) & 1u) != 0;
+    }
+    const uint32_t required = ground_target::requiredTargets(
+        it->second.targetFlags, it->second.implicitTargetsA[0], trajectory);
+    if (!ground_target::wantsLocation(required)) return false;
+    if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
+    groundTarget_ = GroundTarget{};
+    groundTarget_.spellId = spellId;
+    groundTarget_.caster = caster;
+    groundTarget_.required = required &
+        (ground_target::kTargetFlagSourceLocation | ground_target::kTargetFlagDestLocation);
+    // The first effect that summons a game object shows its
+    // model at the place (0x0080cce0).
+    for (int k = 0; k < 3; ++k) {
+        if (!ground_target::summonsObject(it->second.effectIds[k])) continue;
+        groundTarget_.objectEntry = it->second.effectMiscValues[k];
+        groundTarget_.objectFixedFacing = it->second.effectIds[k] == ground_target::kEffectObjectFixedFacing;
+        if (groundTarget_.objectEntry != 0) owner_.queryGameObjectInfo(groundTarget_.objectEntry, 0);
+        break;
+    }
+    LOG_INFO("Ground targeting: spell ", spellId, " waits for a place (targets 0x",
+             std::hex, it->second.targetFlags, std::dec, ")");
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
+    return true;
+}
+
+void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targetGuid) {
+    // 0x005d4210 -> 0x0080cce0: a pet's spell cast as the player's are, by
+    // the pet - the vehicle the player drives among them.
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || caster == 0 || spellId == 0) return;
+    if (owner_.heldBySeat(caster)) return;  // 0x0074ba40
+    if (armGroundTarget(spellId, caster)) return;
+    const uint64_t target = isSelfCastSpell(spellId) ? 0 : targetGuid;
+    const auto cast = owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
+                                                : CastSpellPacket::build(spellId, target, ++castCount_);
+    owner_.getSocket()->send(CastSpellPacket::asPetCast(caster, cast));
+    LOG_INFO("Pet 0x", std::hex, caster, " casting spell: ", std::dec, spellId, " on 0x", std::hex, target, std::dec);
+    castSent(spellId, caster);
+}
+
+void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
+    // 0x0080ac90: AttributesEx7 0x80 from the active mover - the player's
+    // seat change is asked (0x00747fa0, the player seated); the mover's
+    // stop (0x0071ae10) is the hold that asking puts on it.
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    if (vehicle::castEndsVehicleControl(it->second.attrEx7, caster, owner_.activeMover()))
+        owner_.askVehicleSeatChange();
+}
+
 void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     LOG_DEBUG("castSpell: spellId=", spellId, " target=0x", std::hex, targetGuid, std::dec);
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // 0x0080cce0: nothing is cast by a caster its seat holds (0x0074ba40) -
+    // on its way into or out of one, or its move held for the vehicle's
+    // animation.
+    if (owner_.heldBySeat(owner_.getPlayerGuid())) return;
 
     // Auto Shot and the wand's Shoot keep going once started, and the action
     // button flashes for as long as they do. The stop half comes from the
@@ -935,48 +1007,8 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         }
     }
 
-    // A spell that wants a place on the ground (Spell.dbc Targets 0x20/0x40,
-    // 0x0080c790) is not sent: the cursor holds it until the world is
-    // clicked (0x0080c340) or it is put down (SpellStopTargeting). A second
-    // such spell replaces the first.
-    if (spellId != 0) {
-        loadSpellNameCache();
-        auto it = owner_.spellNameCacheRef().find(spellId);
-        if (it != owner_.spellNameCacheRef().end()) {
-            // TARGET_DEST_TRAJ's exception reads the spell's SpellMissile
-            // row, its Flags (+4) bit 1 (0x0080c790 case 0x59).
-            bool trajectory = false;
-            if (it->second.implicitTargetsA[0] == 89 && it->second.spellMissileId != 0) {
-                auto* am = core::Application::getInstance().getAssetManager();
-                auto missiles = am ? am->loadDBCOptional("SpellMissile.dbc") : nullptr;
-                const int32_t row = missiles && missiles->getFieldCount() > 1
-                                        ? missiles->findRecordById(it->second.spellMissileId) : -1;
-                trajectory = row >= 0 && (missiles->getUInt32(static_cast<uint32_t>(row), 1) & 1u) != 0;
-            }
-            const uint32_t required = ground_target::requiredTargets(
-                it->second.targetFlags, it->second.implicitTargetsA[0], trajectory);
-            if (ground_target::wantsLocation(required)) {
-                if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
-                groundTarget_ = GroundTarget{};
-                groundTarget_.spellId = spellId;
-                groundTarget_.required = required &
-                    (ground_target::kTargetFlagSourceLocation | ground_target::kTargetFlagDestLocation);
-                // The first effect that summons a game object shows its
-                // model at the place (0x0080cce0).
-                for (int k = 0; k < 3; ++k) {
-                    if (!ground_target::summonsObject(it->second.effectIds[k])) continue;
-                    groundTarget_.objectEntry = it->second.effectMiscValues[k];
-                    groundTarget_.objectFixedFacing = it->second.effectIds[k] == ground_target::kEffectObjectFixedFacing;
-                    if (groundTarget_.objectEntry != 0) owner_.queryGameObjectInfo(groundTarget_.objectEntry, 0);
-                    break;
-                }
-                LOG_INFO("Ground targeting: spell ", spellId, " waits for a place (targets 0x",
-                         std::hex, it->second.targetFlags, std::dec, ")");
-                if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
-                return;
-            }
-        }
-    }
+    // A spell that wants a place on the ground waits for it (0x0080c790).
+    if (armGroundTarget(spellId, 0)) return;
 
     if (casting_) {
         // Spell queue: if we're within 400ms of the cast completing (and not channeling),
@@ -1275,6 +1307,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
               " castCount=", static_cast<int>(castCount_), " packetSize=", packet.getSize());
     owner_.getSocket()->send(packet);
     LOG_INFO("Casting spell: ", spellId, " on 0x", std::hex, target, std::dec);
+    castSent(spellId, owner_.getPlayerGuid());
 
     // Fire UNIT_SPELLCAST_SENT for cast bar addons
     if (owner_.addonEventCallbackRef()) {
@@ -1313,9 +1346,10 @@ void SpellHandler::placeGroundTarget(const ground_target::Place& place) {
     groundTarget_.required &= ~filled;
     if (groundTarget_.required != 0) return;
     const uint32_t spellId = groundTarget_.spellId;
+    const uint64_t caster = groundTarget_.caster;
     groundTarget_ = GroundTarget{};
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
-    castAtLocation(spellId, place);
+    castAtLocation(spellId, place, caster);
 }
 
 float SpellHandler::groundTargetSpellArea() const {
@@ -1389,7 +1423,7 @@ int SpellHandler::groundTargetPlacement(const glm::vec3& canonical) const {
     return static_cast<int>(ground_target::placement(glm::dot(d, d), minRange, maxRange));
 }
 
-void SpellHandler::castAtLocation(uint32_t spellId, const ground_target::Place& place) {
+void SpellHandler::castAtLocation(uint32_t spellId, const ground_target::Place& place, uint64_t caster) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // Sent where the click landed, whatever the range: the client only paints
     // the circle by it (0x00803ee0), and the server answers out of range. On
@@ -1402,7 +1436,9 @@ void SpellHandler::castAtLocation(uint32_t spellId, const ground_target::Place& 
         ? owner_.getPacketParsers()->buildCastSpellAtLocation(spellId, wire.x, wire.y, wire.z, ++castCount_,
                                                               transportGuid)
         : CastSpellPacket::buildDestination(spellId, wire.x, wire.y, wire.z, ++castCount_, transportGuid);
-    owner_.getSocket()->send(packet);
+    // A pet's, by the pet (0x0080ac90's 0x1f0).
+    owner_.getSocket()->send(caster != 0 ? CastSpellPacket::asPetCast(caster, packet) : packet);
+    castSent(spellId, caster != 0 ? caster : owner_.getPlayerGuid());
     LOG_INFO("Casting spell: ", spellId, " at (", wire.x, ", ", wire.y, ", ", wire.z, ") transport 0x", std::hex,
              transportGuid, std::dec);
     if (owner_.addonEventCallbackRef())
@@ -3519,6 +3555,8 @@ void SpellHandler::loadSpellNameCache() const {
 
     // AttributesEx3 and the spell family, for the modifiers (0x007fd970).
     const uint32_t attrEx3Field = spellL ? spellL->tryField("AttributesEx3") : 0xFFFFFFFF;
+    const uint32_t attrEx4Field = spellL ? spellL->tryField("AttributesEx4") : 0xFFFFFFFF;
+    const uint32_t attrEx7Field = spellL ? spellL->tryField("AttributesEx7") : 0xFFFFFFFF;
     const uint32_t familyField = spellL ? spellL->tryField("SpellFamilyName") : 0xFFFFFFFF;
     const uint32_t familyFlagsField = spellL ? spellL->tryField("SpellFamilyFlags") : 0xFFFFFFFF;
     const uint32_t familyFlagWords = isPreWotlk() ? 2u : 3u;
@@ -3717,6 +3755,8 @@ void SpellHandler::loadSpellNameCache() const {
                 entry.attr = dbc->getUInt32(i, attrField);
             }
             if (attrEx3Field < fieldCount) entry.attrEx3 = dbc->getUInt32(i, attrEx3Field);
+            if (attrEx4Field < fieldCount) entry.attrEx4 = dbc->getUInt32(i, attrEx4Field);
+            if (attrEx7Field < fieldCount) entry.attrEx7 = dbc->getUInt32(i, attrEx7Field);
             if (familyField < fieldCount) entry.spellFamily = dbc->getUInt32(i, familyField);
             // A uint64 before WotLK, three words since (groups 0-63, 0-95).
             for (uint32_t w = 0; w < familyFlagWords; ++w) {

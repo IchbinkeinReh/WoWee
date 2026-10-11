@@ -1152,6 +1152,9 @@ public:
     }
     // Send CMSG_PET_ACTION to issue a pet command
     void sendPetAction(uint32_t action, uint64_t targetGuid = 0);
+    /// The pet bar's slot used (0x005d4210) at a unit, or none for the
+    /// target's place.
+    void usePetSlot(uint32_t packed, uint64_t targetGuid);
     // Toggle autocast for a pet spell via CMSG_PET_SPELL_AUTOCAST
     void togglePetSpellAutocast(uint32_t spellId);
     const std::unordered_set<uint32_t>& getKnownSpells() const {
@@ -3247,8 +3250,12 @@ public:
     /// change is marked asked for the seated player.
     void askVehicleSeatChange();
     /// 0x0074ba40 for the active mover: its seat - or its driver's - is on
-    /// the way, or its driver asked for a seat change.
-    [[nodiscard]] bool moverHeldBySeat() const;
+    /// the way or has a move held for the vehicle's animation, or its
+    /// driver asked for a seat change.
+    [[nodiscard]] bool moverHeldBySeat() const { return heldBySeat(activeMover()); }
+    /// 0x0074ba40 for a unit: what holds the mover (its keys, 0x005fa060)
+    /// also refuses the unit's casts (0x0080cce0).
+    [[nodiscard]] bool heldBySeat(uint64_t unit) const;
     /// 0x0071d1f0: the SummonProperties Flags of what made the unit.
     [[nodiscard]] uint32_t summonPropertiesFlagsOf(uint64_t unitGuid);
     float vehicleAimPower() const { return vehicleAimPower_; }
@@ -4144,6 +4151,11 @@ public:
         /// Spell.dbc AttributesEx3 (+0x1c), SpellFamilyName (+0x240) and
         /// SpellFamilyFlags (+0x244): which modifiers it takes (0x007fd970).
         uint32_t attrEx3 = 0;
+        /// AttributesEx4 (+0x20) and AttributesEx7 (+0x2c): a pet's spell it
+        /// casts itself (0x005d4210), and one that ends vehicle control
+        /// (0x0080ac90).
+        uint32_t attrEx4 = 0;
+        uint32_t attrEx7 = 0;
         uint32_t spellFamily = 0;
         uint32_t spellFamilyFlags[3] = {0, 0, 0};
         // Spell.dbc Targets bitmask (SpellCastTargetFlags) - 0x10 = TARGET_FLAG_ITEM

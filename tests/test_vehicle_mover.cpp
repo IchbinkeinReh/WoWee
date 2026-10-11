@@ -82,14 +82,19 @@ TEST_CASE("the mover's flags2 hold its strafe and jump keys", "[vehicle]") {
 
 TEST_CASE("a seat on the way, or a seat change asked, holds the mover", "[vehicle]") {
     // 0x0074ba40: the mover's own seat moving.
-    CHECK(moverHeldBySeat(1, 0, false));
-    CHECK_FALSE(moverHeldBySeat(3, 0, false));
+    CHECK(moverHeldBySeat(1, false, 0, false, false));
+    CHECK_FALSE(moverHeldBySeat(3, false, 0, false, false));
     // The driver's seat moving.
-    CHECK(moverHeldBySeat(0, 4, false));
+    CHECK(moverHeldBySeat(0, false, 4, false, false));
     // The seated driver's seat change asked (0x00747fa0's +0x10 0x8).
-    CHECK(moverHeldBySeat(0, 3, true));
-    CHECK_FALSE(moverHeldBySeat(0, 3, false));
-    CHECK_FALSE(moverHeldBySeat(0, 0, true));
+    CHECK(moverHeldBySeat(0, false, 3, false, true));
+    CHECK_FALSE(moverHeldBySeat(0, false, 3, false, false));
+    CHECK_FALSE(moverHeldBySeat(0, false, 0, false, true));
+    // A move held for the vehicle's animation (+0x10 0x200, 0x00748070),
+    // the mover's own or the driver's, whatever the state.
+    CHECK(moverHeldBySeat(3, true, 0, false, false));
+    CHECK(moverHeldBySeat(0, true, 0, false, false));
+    CHECK(moverHeldBySeat(0, false, 3, true, false));
 }
 
 TEST_CASE("a move spline runs its time, unless it comes let go", "[vehicle]") {
@@ -104,4 +109,12 @@ TEST_CASE("a move spline runs its time, unless it comes let go", "[vehicle]") {
     const auto cyc = moveSplineFrom(true, 0x80000, 1000, 5000);
     REQUIRE(cyc.has_value());
     CHECK(moveSplineRunning(*cyc, 900000));
+}
+
+TEST_CASE("a spell that ends vehicle control asks the seat change, cast by the mover", "[vehicle]") {
+    // 0x0080ac90: AttributesEx7 0x80, the caster the active mover.
+    CHECK(castEndsVehicleControl(0x80, 7, 7));
+    CHECK_FALSE(castEndsVehicleControl(0x80, 7, 8));
+    CHECK_FALSE(castEndsVehicleControl(0x40, 7, 7));
+    CHECK_FALSE(castEndsVehicleControl(0x80, 0, 0));
 }

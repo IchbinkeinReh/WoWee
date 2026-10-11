@@ -131,3 +131,11 @@ TEST_CASE("PetDismiss from a driven vehicle", "[pet][vehicle]") {
     c.seatFlags = 0x2000000;
     CHECK(dismissAction(c) == DismissAction::DismissControlledVehicle);
 }
+
+TEST_CASE("a pet's spell is cast by the pet where it is the mover or the spell asks", "[pet]") {
+    // 0x005d4210: AttributesEx4 0x20, or the pet the active mover - a
+    // vehicle the player drives - goes through 0x0080cce0.
+    CHECK(petCastsItself(0, true));
+    CHECK(petCastsItself(0x20, false));
+    CHECK_FALSE(petCastsItself(0x10, false));
+}

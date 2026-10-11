@@ -52,6 +52,9 @@ public:
 
     // --- Public API (delegated from GameHandler) ---
     void castSpell(uint32_t spellId, uint64_t targetGuid = 0);
+    /// A pet's spell cast by the pet itself (0x005d4210 -> 0x0080cce0,
+    /// CMSG_PET_CAST_SPELL): at a place it waits for one, as the player's do.
+    void castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targetGuid);
 
     // --- A spell waiting for a place on the ground (Spell_C.cpp) ---
     /// The spell the cursor holds while it waits for a location, or 0
@@ -505,6 +508,7 @@ private:
 
     struct GroundTarget {
         uint32_t spellId = 0;
+        uint64_t caster = 0;  ///< a pet casting it itself; 0 the player
         uint32_t required = 0;
         glm::vec3 source{0.0f};
         std::optional<ground_target::Place> cursor;
@@ -518,7 +522,12 @@ private:
     mutable uint32_t classSpellFamily_ = 0;
     mutable uint8_t classSpellFamilyFor_ = 0xFF;
     /// Send the cast at the destination the targeting gathered.
-    void castAtLocation(uint32_t spellId, const ground_target::Place& place);
+    void castAtLocation(uint32_t spellId, const ground_target::Place& place, uint64_t caster);
+    /// 0x0080c790: arms the cursor for a spell that wants a place; false
+    /// where it wants none.
+    bool armGroundTarget(uint32_t spellId, uint64_t caster);
+    /// What SendCast does once the cast is out (0x0080ac90).
+    void castSent(uint32_t spellId, uint64_t caster);
     bool casting_ = false;
     bool castIsChannel_ = false;
     uint32_t currentCastSpellId_ = 0;

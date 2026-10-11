@@ -101,3 +101,13 @@ TEST_CASE("CMSG_FAR_SIGHT is one byte (0x006e2880)", "[vehicle]") {
     CHECK(VehiclePackets::farSight(true).getData() == Bytes{1});
     CHECK(VehiclePackets::farSight(false).getData() == Bytes{0});
 }
+
+TEST_CASE("a pet's own cast names the caster ahead of the cast's body", "[vehicle]") {
+    // 0x0080ac90's 0x1f0: the caster's whole guid, then castCount, spell,
+    // cast flags and targets as CMSG_CAST_SPELL writes them.
+    const auto cast = CastSpellPacket::build(62345, 0, 7);
+    const Bytes bytes = CastSpellPacket::asPetCast(0xF150001234000056ull, cast).getData();
+    Bytes want{0x56, 0x00, 0x00, 0x34, 0x12, 0x00, 0x50, 0xF1};
+    want.insert(want.end(), cast.getData().begin(), cast.getData().end());
+    CHECK(bytes == want);
+}
