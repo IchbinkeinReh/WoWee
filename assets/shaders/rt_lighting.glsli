@@ -21,7 +21,8 @@
 // its colours already: there they only cast their shadows (rtPointLightOwn,
 // rtBakedShade).
 //
-// The including shader must declare, in its PerFrame block, viewPos and:
+// The including shader must declare, in its PerFrame block, view, projection,
+// viewPos and:
 //     mat4 rtViewProj;   // the frame the result was traced in
 //     vec4 rtCameraPos;  // its camera position
 //     vec4 rtParams;     // x = mode (0 off, 1 sun, 2 +AO, 3 +probe light)
@@ -72,28 +73,15 @@ RtLight rtLightDebug(RtLight r) {
     return r;
 }
 
-// One texel of the result into the running sums, by weight w.
-void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec3 point, inout vec3 own,
-              inout float bakedDark) {
+// One texel of the result into the running sums, by weight w: the sun and
+// the occlusion; the point lights' light that arrives, and of it the baked
+// lights' (brightest channel's worth); and the baked lights' that does not.
+void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec4 point, inout float bakedDark) {
     vec4 p = texelFetch(uRtPointLight, q, 0);
     float vis = l.b;
-    point += p.rgb * (vis * w);
-    float total = max(p.r, max(p.g, p.b));
-    float bakedPart = total > 1e-4 ? clamp(p.a / total, 0.0, 1.0) : 0.0;
-    own += p.rgb * ((1.0 - bakedPart) * vis * w);
+    point += p * (vis * w);
     bakedDark += min(p.a, 1.0) * (1.0 - vis) * w;
     sunAo += l.rg * w;
-}
-
-RtLight rtLightFinish(RtLight r, float weight, float wsum, vec2 sunAo, vec3 point, vec3 own,
-                      float bakedDark) {
-    r.weight = weight;
-    r.sun = sunAo.x / wsum;
-    r.ao = sunAo.y / wsum;
-    r.point = point / wsum * weight;
-    r.pointOwn = own / wsum * weight;
-    r.bakedShade = 1.0 - RT_BAKED_SHADOW * weight * bakedDark / wsum;
-    return rtLightDebug(r);
 }
 
 // The result is traced at half resolution, so a surface's texel neighbours
@@ -132,9 +120,9 @@ RtLight rtLightAt(vec3 worldPos) {
     float wsum = 0.0;
     float best = 0.0;
     vec2 sunAo = vec2(0.0);
-    vec3 point = vec3(0.0);
-    vec3 own = vec3(0.0);
+    vec4 point = vec4(0.0);
     float bakedDark = 0.0;
+    float weight = 0.0;
     if (onScreen) {
         for (int y = -1; y <= 1; ++y) {
             for (int x = -1; x <= 1; ++x) {
@@ -147,48 +135,83 @@ RtLight rtLightAt(vec3 worldPos) {
                 if (w <= 1e-4) continue;
                 best = max(best, match);
                 wsum += w;
-                rtGather(q, l, w, sunAo, point, own, bakedDark);
+                rtGather(q, l, w, sunAo, point, bakedDark);
             }
         }
-        if (wsum > 1e-4) {
-            return rtLightFinish(r, smoothstep(0.1, 0.6, best), wsum, sunAo, point, own, bakedDark);
-        }
+        if (wsum > 1e-4) weight = smoothstep(0.1, 0.6, best);
     }
 
-    // Nothing of this surface here: the best texel at its distance among
-    // eight directions at 3, 6, 12 and 24 texels, nearest ring first, a
-    // little looser in the distance the farther out it is.
-    const ivec2 dirs[8] = ivec2[8](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1),
-                                   ivec2(1, 1), ivec2(-1, 1), ivec2(1, -1), ivec2(-1, -1));
-    for (int ring = 0; ring < 4; ++ring) {
-        int reach = 3 << ring;
+    // Nothing of this surface here: the best texel at its distance in eight
+    // directions at 3, 8 and 20 texels, nearest ring first, a little looser
+    // in the distance the farther out it is. Borrowed, so trusted a little
+    // less than a surface's own; the shadow map keeps its say through
+    // rtShadow.
+    //
+    // Only for a surface that something well in front of it hid last frame
+    // and that has come out from behind it since - a body, a pillar, a
+    // wall's edge the view has swung past - or that was off the screen's
+    // edge or against the sky. Nothing is drawn depth first here, so most
+    // surfaces something nearer hid last frame are hidden still: drawn
+    // before what covers them, and about to be painted over. That occluder,
+    // put back where last frame saw it along the same line of sight and
+    // projected with this frame's camera, still covers this pixel for those;
+    // searching on each of them cost as much as the rest of the lighting
+    // together. Nor is it for one in front of what was traced there (glass,
+    // water, a leaf the half resolution missed), or ground among grass
+    // blades, which has a blade a hand's breadth in front of it everywhere:
+    // nothing of its own is near for those.
+    float there = texelFetch(uRtLight, clamp(center, ivec2(0), size - 1), 0).a;
+    bool hidden = !onScreen || there <= 0.0;
+    if (!hidden && wsum <= 1e-4 && there < 0.85 * expected - tolerance) {
+        vec3 occluder = rtCameraPos.xyz + (worldPos - rtCameraPos.xyz) * (there / expected);
+        vec4 a = projection * (view * vec4(worldPos, 1.0));
+        vec4 b = projection * (view * vec4(occluder, 1.0));
+        vec2 apart = (a.xy / a.w - b.xy / max(b.w, 1e-4)) * 0.5 * vec2(size);
+        hidden = b.w <= 0.0 || dot(apart, apart) > 2.25;
+    }
+    bool borrowed = false;
+    for (int ring = 0; ring < 3 && hidden && wsum <= 1e-4; ++ring) {
+        int reach = ring == 0 ? 3 : (ring == 1 ? 8 : 20);
         float ringTolerance = tolerance * (1.0 + 0.5 * float(ring));
         float ringBest = 0.0;
         ivec2 ringAt = ivec2(0);
         vec4 ringLight = vec4(0.0);
-        for (int d = 0; d < 8; ++d) {
-            ivec2 q = clamp(center + dirs[d] * reach, ivec2(0), size - 1);
-            vec4 l = texelFetch(uRtLight, q, 0);
-            float e = (l.a - expected) / ringTolerance;
-            float match = l.a > 0.0 ? exp(-e * e) : 0.0;
-            if (match > ringBest) {
-                ringBest = match;
-                ringAt = q;
-                ringLight = l;
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                if (x == 0 && y == 0) continue;
+                ivec2 q = clamp(center + ivec2(x, y) * reach, ivec2(0), size - 1);
+                vec4 l = texelFetch(uRtLight, q, 0);
+                float e = (l.a - expected) / ringTolerance;
+                float match = l.a > 0.0 ? 1.0 - e * e : 0.0;
+                if (match > ringBest) {
+                    ringBest = match;
+                    ringAt = q;
+                    ringLight = l;
+                }
             }
         }
-        if (ringBest > 0.3) {
-            rtGather(ringAt, ringLight, 1.0, sunAo, point, own, bakedDark);
-            // Borrowed, so trusted a little less than a surface's own; the
-            // shadow map keeps its say through rtShadow.
-            r = rtLightFinish(r, 0.8 * smoothstep(0.3, 0.8, ringBest), 1.0, sunAo, point, own, bakedDark);
-            if (rtGiDebugSet && int(giParams.y + 0.5) == 5) {
-                rtGiDebugColour = mix(vec3(1.0, 0.5, 0.0), rtGiDebugColour, 0.5);
-            }
-            return r;
+        if (ringBest > 0.0) {
+            wsum = 1.0;
+            rtGather(ringAt, ringLight, 1.0, sunAo, point, bakedDark);
+            weight = 0.8 * smoothstep(0.0, 0.75, ringBest);
+            borrowed = true;
         }
     }
-    return rtLightDebug(r);
+    if (wsum <= 1e-4) return rtLightDebug(r);
+
+    r.weight = weight;
+    r.sun = sunAo.x / wsum;
+    r.ao = sunAo.y / wsum;
+    r.point = point.rgb / wsum * weight;
+    // The other lights' part: the whole less the baked lights' share of it.
+    float total = max(point.r, max(point.g, point.b));
+    r.pointOwn = r.point * (total > 1e-4 ? clamp(1.0 - point.a / total, 0.0, 1.0) : 1.0);
+    r.bakedShade = 1.0 - RT_BAKED_SHADOW * weight * bakedDark / wsum;
+    r = rtLightDebug(r);
+    if (borrowed && rtGiDebugSet && int(giParams.y + 0.5) == 5) {
+        rtGiDebugColour = mix(vec3(1.0, 0.5, 0.0), rtGiDebugColour, 0.5);
+    }
+    return r;
 }
 
 
@@ -225,8 +248,9 @@ float rtBakedShade(RtLight r) {
 // through, as the client's pixel programs have it, made for its coarse soft
 // map - a shadow that only hints. Where the shadow is traced it is sharp and
 // true to its caster, and a unit standing in the sun should be seen to cast
-// one: half the light in the shade, still above the flat ambient alone.
-const float RT_SHADOW_FLOOR = 0.5;
+// one: a little over half the light in the shade, still above the flat
+// ambient alone.
+const float RT_SHADOW_FLOOR = 0.55;
 float rtShadowScale(RtLight r, float shadow) {
     return mix(0.7 + 0.3 * shadow, RT_SHADOW_FLOOR + (1.0 - RT_SHADOW_FLOOR) * shadow, r.weight);
 }
