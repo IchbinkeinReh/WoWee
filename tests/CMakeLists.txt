@@ -729,6 +729,12 @@ wowee_add_test(test_shapeshift_forms
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/game/shapeshift_forms.cpp)
 
+# ── test_difficulty_change ───────────────────────────────────
+# SMSG_CHANGEPLAYER_DIFFICULTY_RESULT's errors and the cooldown's wording.
+wowee_add_test(test_difficulty_change
+    SOURCES test_difficulty_change.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_world_leave_sound ───────────────────────────────────
 # The ambience loops leaving the world stops, and the teleports that do it.
 wowee_add_test(test_world_leave_sound

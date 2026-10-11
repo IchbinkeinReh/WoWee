@@ -1303,6 +1303,8 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // ambience the old world left playing stop at once, and the new zone
     // starts its own.
     if (auto* ac = renderer_->getAudioCoordinator()) ac->leaveWorld();
+    // It is the one loading screen: a difficulty change's ends here too.
+    app_.difficultyLoadingScreen_.reset();
 
     // Track which map we actually loaded (used by same-map teleport check).
     loadedMapId_ = mapId;

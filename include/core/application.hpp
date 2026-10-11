@@ -32,7 +32,7 @@
 namespace wowee {
 
 // Forward declarations
-namespace rendering { class Renderer; class VkContext; }
+namespace rendering { class Renderer; class VkContext; class LoadingScreen; }
 namespace ui { class UIManager; class MapWindow; }
 namespace auth { class AuthHandler; }
 namespace game { class GameHandler; class World; class ExpansionRegistry; struct ExpansionProfile; }
@@ -289,6 +289,9 @@ private:
     std::unique_ptr<rendering::Renderer> renderer;
     std::unique_ptr<ui::UIManager> uiManager;
     std::unique_ptr<ui::MapWindow> mapWindow_;
+    /// The current map's loading screen while a player difficulty change is
+    /// under way (0x0052c460 cases 6 and 9), drawn instead of the world.
+    std::unique_ptr<rendering::LoadingScreen> difficultyLoadingScreen_;
     /// A failed open is not retried every frame; switching the setting off
     /// and on again tries again.
     bool mapWindowFailed_ = false;

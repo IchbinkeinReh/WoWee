@@ -2,6 +2,8 @@
 #include "core/env_flag.hpp"
 #include "game/game_handler.hpp"
 #include "game/achievement_criteria.hpp"
+#include "game/chat_channels.hpp"
+#include "game/difficulty_change.hpp"
 #include "game/packed_time.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/game_utils.hpp"
@@ -37,6 +39,8 @@
 #include "auth/crypto.hpp"
 #include "core/coordinates.hpp"
 #include "core/application.hpp"
+#include "addons/addon_manager.hpp"
+#include "addons/lua_engine.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
@@ -108,6 +112,18 @@ float slowPacketLogThresholdMs() {
 }
 
 constexpr size_t kMaxQueuedInboundPackets = 4096;
+
+/// A GlobalStrings text as FrameScript_GetText (0x00819d40) looks it up: the
+/// interface's, or enUS's for want of one.
+std::string difficultyText(const char* key) {
+    if (auto* addons = core::Application::getInstance().getAddonManager()) {
+        if (auto* lua = addons->getLuaEngine()) {
+            std::string text = lua->globalText(key);
+            if (!text.empty()) return text;
+        }
+    }
+    return difficulty_change::englishText(key);
+}
 
 } // end anonymous namespace
 
@@ -475,26 +491,63 @@ void GameHandler::registerCoreOpcodes() {
         }
     };
     dispatchTable_[Opcode::SMSG_CHANGEPLAYER_DIFFICULTY_RESULT] = [this](network::Packet& packet) {
-        if (packet.hasRemaining(4)) {
-            uint32_t result = packet.readUInt32();
-            if (result == 9) {
-                // 0x0052c460 case 9, the change done: the world's music and
-                // ambience stop (0x00409550) and PLAYER_DIFFICULTY_CHANGED
-                // (event 0x298) fires.
+        // 0x0052c460. Every case reads its own bytes after the uint32 result.
+        if (!packet.hasRemaining(4)) return;
+        const uint32_t result = packet.readUInt32();
+        switch (result) {
+            case 0:  // the difficulty, kept (0xbd1980) and nothing said
+                if (packet.hasRemaining(1)) playerDifficulty_ = packet.readUInt8();
+                return;
+            case 1: {  // on cooldown: the seconds left, worded by 0x0061a9e0
+                if (!packet.hasRemaining(4)) return;
+                const uint32_t seconds = packet.readUInt32();
+                const auto left = difficulty_change::intDuration(seconds * 1000u);
+                const std::string duration = chat_channels::luaFormat(
+                    difficultyText((std::string("INT_SPELL_DURATION") + left.suffix).c_str()),
+                    {std::to_string(left.value)});
+                raiseUiError(chat_channels::luaFormat(
+                    difficultyText(difficulty_change::errorKey(result)), {duration}));
+                return;
+            }
+            case 6:  // started: the cooldown's seconds (0xbd1984) and the
+                     // current map's loading screen (0x0040ab70)
+                if (!packet.hasRemaining(4)) return;
+                packet.readUInt32();  // read only by Can/ChangePlayerDifficulty
+                if (difficultyLoadingScreenCallback_) difficultyLoadingScreenCallback_(true, currentMapId_);
+                return;
+            case 8: {  // a MapDifficulty.dbc row whose message goes to chat
+                if (!packet.hasRemaining(4)) return;
+                const uint32_t mapDifficultyId = packet.readUInt32();
+                auto* am = services_.assetManager;
+                auto dbc = am && am->isInitialized() ? am->loadDBC("MapDifficulty.dbc") : nullptr;
+                if (!dbc || !dbc->isLoaded()) return;
+                // 0=ID, 1=MapID, 2=Difficulty, 3=Message_lang
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                    if (dbc->getUInt32(i, 0) != mapDifficultyId) continue;
+                    addSystemChatMessage(dbc->getString(i, 3));
+                    break;
+                }
+                return;
+            }
+            case 9: {
+                // Done: the loading screen ends (0x00409550), and with it the
+                // world's music and ambience; PLAYER_DIFFICULTY_CHANGED (event
+                // 0x298); and ERR_PLAYER_DIFFICULTY_CHANGED_S (0x2a0), a
+                // system line, names the difficulty.
+                LOG_INFO("Changed difficulty successfully");
+                if (difficultyLoadingScreenCallback_) difficultyLoadingScreenCallback_(false, currentMapId_);
                 if (auto* ac = services_.audioCoordinator) ac->leaveWorld();
                 fireAddonEvent("PLAYER_DIFFICULTY_CHANGED", {});
-            } else if (result == 0) {
-                addSystemChatMessage("Difficulty changed.");
-            } else {
-                static const char* reasons[] = {
-                    "", "Error", "Too many members", "Already in dungeon",
-                    "You are in a battleground", "Raid not allowed in heroic",
-                    "You must be in a raid group", "Player not in group"
-                };
-                const char* msg = (result < 8) ? reasons[result] : "Difficulty change failed.";
-                addUIError(std::string("Cannot change difficulty: ") + msg);
-                addSystemChatMessage(std::string("Cannot change difficulty: ") + msg);
+                const std::string name =
+                    difficultyText(("PLAYER_DIFFICULTY" + std::to_string(playerDifficulty_ + 1)).c_str());
+                addSystemChatMessage(chat_channels::luaFormat(
+                    difficultyText("ERR_PLAYER_DIFFICULTY_CHANGED_S"), {name}));
+                return;
             }
+            default:
+                // 2-5 and 7: an error of their own, nothing more read.
+                if (const char* key = difficulty_change::errorKey(result)) raiseUiError(difficultyText(key));
+                return;
         }
     };
     dispatchTable_[Opcode::SMSG_CORPSE_NOT_IN_INSTANCE] = [this](network::Packet& /*packet*/) {

@@ -3679,6 +3679,8 @@ void SocialHandler::handleInstanceDifficulty(network::Packet& packet) {
     instanceDifficulty_ = packet.readUInt32();
     if (rem() >= 4) {
         uint32_t secondField = packet.readUInt32();
+        // The player's difficulty (0x00526530 -> 0xbd1980).
+        owner_.playerDifficultyRef() = secondField;
         if (rem() >= 4) instanceIsHeroic_ = (instanceDifficulty_ == 1);
         else instanceIsHeroic_ = (secondField != 0);
     } else {

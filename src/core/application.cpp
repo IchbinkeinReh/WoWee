@@ -2297,6 +2297,7 @@ void Application::shutdown() {
 
     // Before the renderer it records through and the device it draws with.
     if (mapWindow_) mapWindow_->close();
+    difficultyLoadingScreen_.reset();
 
     // Hide the window immediately so the OS doesn't think the app is frozen
     // during the (potentially slow) resource cleanup below.
@@ -2510,6 +2511,7 @@ void Application::releaseGpuForDeviceRebuild() {
     // GPU is touched - the connection, the entities, the interface's state
     // and the player's position all stay.
     if (mapWindow_) mapWindow_->close();
+    difficultyLoadingScreen_.reset();
     ui::gamepadControls().setCameraController(nullptr);
     ui::touchControls().setCameraController(nullptr);
 
@@ -2951,6 +2953,16 @@ void Application::connectWorldHooks() {
                 case core::TextEmoteVerdict::RefusedWhileMoving: return Gate::RefuseWhileMoving;
                 default: return Gate::Send;
             }
+        });
+        // A player difficulty change shows the current map's loading screen
+        // until it is done (0x0052c460: 6 -> 0x0040ab70, 9 -> 0x00409550).
+        gameHandler->setDifficultyLoadingScreenCallback([this](bool show, uint32_t mapId) {
+            difficultyLoadingScreen_.reset();
+            if (!show || !window || !assetManager) return;
+            auto screen = std::make_unique<rendering::LoadingScreen>();
+            screen->setVkContext(window->getVkContext());
+            screen->setSDLWindow(window->getSDLWindow());
+            if (screen->initialize(assetManager.get(), mapId)) difficultyLoadingScreen_ = std::move(screen);
         });
         // The logout countdown finishing is not the end of it: the server
         // confirms with SMSG_LOGOUT_COMPLETE, and only then does the client
@@ -4969,6 +4981,14 @@ void Application::render() {
     }
 
     if (!renderer) {
+        return;
+    }
+
+    // A difficulty change's loading screen is all there is to see while it
+    // is up (0x0040ab70); it has no world to stay over once the game is left.
+    if (difficultyLoadingScreen_ && state != AppState::IN_GAME) difficultyLoadingScreen_.reset();
+    if (difficultyLoadingScreen_) {
+        difficultyLoadingScreen_->render();
         return;
     }
 

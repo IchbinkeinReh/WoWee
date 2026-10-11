@@ -1421,6 +1421,14 @@ public:
     void setLogoutCompleteCallback(LogoutCompleteCallback cb) { logoutCompleteCallback_ = std::move(cb); }
     auto& logoutCompleteCallbackRef() { return logoutCompleteCallback_; }
 
+    // The loading screen a player difficulty change puts up: shown for the
+    // current map (SMSG_CHANGEPLAYER_DIFFICULTY_RESULT 6, 0x0040ab70) and
+    // taken down when the change is done (9, 0x00409550).
+    using DifficultyLoadingScreenCallback = std::function<void(bool show, uint32_t mapId)>;
+    void setDifficultyLoadingScreenCallback(DifficultyLoadingScreenCallback cb) {
+        difficultyLoadingScreenCallback_ = std::move(cb);
+    }
+
     // Appearance changed callback - fired when PLAYER_BYTES or facial features update (barber shop, etc.)
     using AppearanceChangedCallback = std::function<void()>;
     void setAppearanceChangedCallback(AppearanceChangedCallback cb) { appearanceChangedCallback_ = std::move(cb); }
@@ -3917,6 +3925,7 @@ public:
     // ── World, Map & Zones ───────────────────────────────────────────
     auto& currentMapIdRef() { return currentMapId_; }
     auto& inInstanceRef() { return inInstance_; }
+    auto& playerDifficultyRef() { return playerDifficulty_; }
     auto& worldStateMapIdRef() { return worldStateMapId_; }
     auto& worldStatesRef() { return worldStates_; }
     auto& worldStateZoneIdRef() { return worldStateZoneId_; }
@@ -4585,6 +4594,11 @@ private:
     // Player GUID and map
     uint64_t playerGuid = 0;
     uint32_t currentMapId_ = 0;
+    /// The player's difficulty, 0 normal and 1 heroic (0xbd1980): from
+    /// SMSG_INSTANCE_DIFFICULTY's second field and
+    /// SMSG_CHANGEPLAYER_DIFFICULTY_RESULT 0. Names the difficulty a change
+    /// says it set (PLAYER_DIFFICULTY<n+1>).
+    uint32_t playerDifficulty_ = 0;
     bool hasHomeBind_ = false;
     uint32_t homeBindMapId_ = 0;
     uint32_t homeBindZoneId_ = 0;
@@ -5309,6 +5323,7 @@ private:
     NpcRespawnCallback npcRespawnCallback_;
     StandStateCallback standStateCallback_;
     LogoutCompleteCallback logoutCompleteCallback_;
+    DifficultyLoadingScreenCallback difficultyLoadingScreenCallback_;
     AppearanceChangedCallback appearanceChangedCallback_;
     PlayerModelRebuildCallback playerModelRebuildCallback_;
     GhostStateCallback ghostStateCallback_;
