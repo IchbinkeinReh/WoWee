@@ -65,8 +65,22 @@ public:
     /// TARGET_FLAG_DEST_LOCATION.
     [[nodiscard]] uint32_t groundTargetRequired() const { return groundTarget_.required; }
     /// Put the spell down without casting it (SpellStopTargeting, 0x0080ac90's
-    /// clean-up). True when there was one.
+    /// clean-up) - one waiting for a place or for a unit. True when there was
+    /// one.
     bool cancelGroundTargeting();
+
+    // --- A spell waiting for a unit to be clicked (Spell_C.cpp) ---
+    /// The cursor holds a spell no unit filled (0x0080cce0 setting
+    /// 0x00d3f4e4 with a unit still wanted).
+    [[nodiscard]] bool isUnitTargeting() const { return unitTarget_.spellId != 0; }
+    [[nodiscard]] uint32_t unitTargetSpellId() const { return unitTarget_.spellId; }
+    /// A click on a unit, or SpellTargetUnit (0x0080dc00): the held spell
+    /// takes it where it fills what is wanted (0x0080bc80) and is cast once
+    /// nothing more is; no unit there is SPELL_FAILED_OUT_OF_RANGE.
+    void spellTargetUnit(uint64_t unitGuid);
+    /// Whether the held spell would take the unit, within its reach
+    /// (0x00803a50): the Cast cursor over it, else UnableCast (0x004f8190).
+    [[nodiscard]] bool spellCanTargetUnit(uint64_t unitGuid) const;
     /// A click on the world at this place, canonical: fills the location the
     /// spell wants (0x0080c340) and casts once nothing more is wanted.
     void placeGroundTarget(const ground_target::Place& place);
@@ -517,6 +531,26 @@ private:
         float objectFacing = 0.0f;  // 0x00d3f4dc for effect 81, from 0
     };
     GroundTarget groundTarget_;
+    /// The spell the cursor holds for a unit, its caster and what it still
+    /// wants (0x00d3f4e4, 0x00d3f4e0).
+    struct UnitTarget {
+        uint32_t spellId = 0;
+        uint64_t caster = 0;
+        uint32_t required = 0;
+    };
+    UnitTarget unitTarget_;
+    /// 0x0080bc80 for a spell and a unit: whether it fills some of
+    /// `required`, and what is left. A unit out of the spell's reach is
+    /// refused, said when `say` (0x00803850).
+    struct UnitTake {
+        bool taken = false;
+        uint32_t required = 0;
+    };
+    UnitTake takeUnit(uint32_t spellId, uint64_t caster, uint64_t unitGuid, uint32_t required, bool say) const;
+    /// The cursor holds the spell for a unit (0x0080cce0).
+    void armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required);
+    /// CMSG_PET_CAST_SPELL at a unit or at none (0x0080ac90).
+    void sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target);
     /// ChrClasses SpellClassSet for the player's class (0x008007a0), and
     /// the class it was read for.
     mutable uint32_t classSpellFamily_ = 0;

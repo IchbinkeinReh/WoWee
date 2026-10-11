@@ -2603,6 +2603,13 @@ std::string GameHandler::shownUnitName(const Unit& unit) {
 }
 
 bool GameHandler::cancelGroundTargeting() { return spellHandler_ && spellHandler_->cancelGroundTargeting(); }
+bool GameHandler::isUnitTargeting() const { return spellHandler_ && spellHandler_->isUnitTargeting(); }
+void GameHandler::spellTargetUnit(uint64_t unitGuid) {
+    if (spellHandler_) spellHandler_->spellTargetUnit(unitGuid);
+}
+bool GameHandler::spellCanTargetUnit(uint64_t unitGuid) const {
+    return spellHandler_ && spellHandler_->spellCanTargetUnit(unitGuid);
+}
 bool GameHandler::turnOrCancelGroundTargeting() {
     return spellHandler_ && spellHandler_->turnOrCancelGroundTargeting();
 }

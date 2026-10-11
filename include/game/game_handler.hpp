@@ -1086,8 +1086,15 @@ public:
     [[nodiscard]] bool isGroundTargeting() const;
     [[nodiscard]] uint32_t groundTargetSpellId() const;
     bool cancelGroundTargeting();
-    /// A right click on the world while a spell waits for a place (0x0051fb00).
+    /// A right click on the world while a spell waits for a place, or for a
+    /// unit (0x0051fb00).
     bool turnOrCancelGroundTargeting();
+    // A spell held on the cursor until a unit is clicked (SpellHandler;
+    // 0x0080cce0, 0x0080bc80): the click or SpellTargetUnit, and whether
+    // the unit under the pointer would do (0x00803a50).
+    [[nodiscard]] bool isUnitTargeting() const;
+    void spellTargetUnit(uint64_t unitGuid);
+    [[nodiscard]] bool spellCanTargetUnit(uint64_t unitGuid) const;
     void placeGroundTarget(const ground_target::Place& place);
     [[nodiscard]] std::optional<ground_target::Place> groundTargetCursor() const;
     /// The game object whose model the cursor's place shows, 0 for none, and
@@ -4211,6 +4218,11 @@ public:
         /// (0x0080ac90).
         uint32_t attrEx4 = 0;
         uint32_t attrEx7 = 0;
+        /// AttributesEx2 (+0x18) and TargetCreatureType (+0x44): a spell at
+        /// the dead (0x1), and the creature types it may be cast at
+        /// (0x0080bc80).
+        uint32_t attrEx2 = 0;
+        uint32_t targetCreatureType = 0;
         /// AttributesEx5 (+0x24): usable with the caster stunned (0x8),
         /// fleeing (0x20000) or confused (0x40000) (0x005d4210); and
         /// AttributesEx6 (+0x28) 0x40000: cast by the caster's charmer
@@ -4264,6 +4276,10 @@ public:
         float rangeMax[2] = {-1.0f, -1.0f};
         /// Spell.dbc RangeIndex, kept for the two above.
         uint32_t rangeIndex = 0;
+        /// Its SpellRange row's Flags (+0x14): 1 melee, 2 ranged (0x007ff480);
+        /// whether there is a row at all.
+        uint32_t rangeFlags = 0;
+        bool hasRangeRow = false;
         /// Spell.dbc EffectRadiusIndex, kept for the radius above.
         uint32_t effectRadiusIndex[3] = {0, 0, 0};
         float durationSec = 0.0f;

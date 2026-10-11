@@ -1901,6 +1901,16 @@ target_link_libraries(test_pet_action PRIVATE catch2_main)
 add_test(NAME pet_action COMMAND test_pet_action)
 register_test_target(test_pet_action)
 
+# ── test_spell_unit_target ──────────────────────────────────
+add_executable(test_spell_unit_target
+    test_spell_unit_target.cpp
+)
+target_include_directories(test_spell_unit_target PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_spell_unit_target SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_spell_unit_target PRIVATE catch2_main)
+add_test(NAME spell_unit_target COMMAND test_spell_unit_target)
+register_test_target(test_spell_unit_target)
+
 # ── test_spell_classification ───────────────────────────────
 add_executable(test_spell_classification
     test_spell_classification.cpp

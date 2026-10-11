@@ -82,6 +82,10 @@
   "ChrClasses": {
     "SpellClassSet": 56
   },
+  "ChrRaces": {
+    "CreatureType": 8,
+    "ID": 0
+  },
   "CreatureDisplayInfo": {
     "CreatureModelScale": 4,
     "ParticleColorID": 13,
@@ -354,6 +358,7 @@
   "Spell": {
     "Attributes": 4,
     "AttributesEx": 5,
+    "AttributesEx2": 6,
     "AttributesEx3": 7,
     "AttributesEx4": 8,
     "AttributesEx5": 9,
@@ -418,6 +423,7 @@
     "SpellMissileID": 227,
     "SpellVisualID": 131,
     "TargetAuraState": 21,
+    "TargetCreatureType": 17,
     "Targets": 16,
     "Tooltip": 187
   },
@@ -435,6 +441,7 @@
   },
   "SpellShapeshiftForm": {
     "BonusActionBar": 1,
+    "CreatureType": 20,
     "Flags": 19,
     "ID": 0,
     "Name": 2,

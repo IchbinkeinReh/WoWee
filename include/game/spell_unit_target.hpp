@@ -1,0 +1,300 @@
+#pragma once
+
+/// The unit a spell is cast at, as the client takes one (Spell_C.cpp): what a
+/// unit fills of the targets a spell still needs (0x0080bc80), the caster's
+/// relations it asks - may help (0x007293d0), may attack (0x00729740) - the
+/// reach between them (0x007ff480, 0x00803850), and what 0x0080cce0 does
+/// when no unit fills them. Arithmetic only: the units are the caller's.
+
+#include "game/pvp_flags.hpp"
+
+#include <cstdint>
+
+namespace wowee::game::unit_target {
+
+/// OBJECT_FIELD_TYPE bits.
+inline constexpr uint32_t kTypeUnit = 0x8;
+inline constexpr uint32_t kTypePlayer = 0x10;
+inline constexpr uint32_t kTypeGameObject = 0x20;
+
+/// SpellCastTargetFlags 0x0080bc80 fills from a unit.
+inline constexpr uint32_t kUnit = 0x2;
+inline constexpr uint32_t kUnitRaid = 0x4;
+inline constexpr uint32_t kUnitParty = 0x8;
+inline constexpr uint32_t kUnitEnemy = 0x80;
+inline constexpr uint32_t kUnitAlly = 0x100;
+inline constexpr uint32_t kCorpseEnemy = 0x200;
+inline constexpr uint32_t kUnitDead = 0x400;
+inline constexpr uint32_t kGameObject = 0x800;
+inline constexpr uint32_t kGameObjectItem = 0x4000;
+inline constexpr uint32_t kCorpseAlly = 0x8000;
+inline constexpr uint32_t kUnitMinipet = 0x10000;
+
+/// UNIT_FIELD_FLAGS (+0xd4) bits the relations read.
+inline constexpr uint32_t kFlagPlayerControlled = 0x8;
+inline constexpr uint32_t kFlagImmuneToPc = 0x100;
+inline constexpr uint32_t kFlagImmuneToNpc = 0x200;
+inline constexpr uint32_t kFlagNotSelectable = 0x2000000;
+
+/// 0x007251c0's answer, 0 hated to 7 exalted (UnitReaction less one): from
+/// 4 friendly (0x00514050, with the creature flag 0x4000000 besides), to 1
+/// hostile (0x00514080).
+inline constexpr int kReactionFriendly = 4;
+inline constexpr int kReactionHostile = 1;
+
+/// One side as the two relations read it.
+struct Side {
+    bool isPlayer = false;            ///< OBJECT_FIELD_TYPE 0x10
+    uint32_t unitFlags = 0;           ///< UNIT_FIELD_FLAGS (+0xd4)
+    uint32_t unitFlags2 = 0;          ///< UNIT_FIELD_FLAGS_2 (+0xd8)
+    uint32_t pvpFlags = 0;            ///< UNIT_FIELD_BYTES_2 byte 1 (+0x1d1)
+    uint32_t creatureTypeFlags = 0;   ///< its creature cache row's type flags (+0x964 +0xc), 0 for none
+    uint32_t playerFlags = 0;         ///< a player's PLAYER_FLAGS (+0x1008 +8)
+    /// A vehicle whose Vehicle.dbc row has Flags 0x20000000, none carrying it
+    /// (+0xf5c +0xc, 0x0074c650 answering itself).
+    bool vehicleOutOfReach = false;
+};
+
+/// The players behind both sides (0x00718b70: the unit, else its charmer or
+/// creator, else theirs) and their duels - PLAYER_DUEL_ARBITER and
+/// PLAYER_DUEL_TEAM (+0x1008 [0], [8]).
+struct Controllers {
+    bool found = false;  ///< both have one
+    uint64_t casterArbiter = 0;
+    uint64_t unitArbiter = 0;
+    uint32_t casterTeam = 0;
+    uint32_t unitTeam = 0;
+};
+
+/// 0x007293d0: whether the caster may help the unit. `reaction` is the
+/// caster's of it (0x007251c0); `ignoreImmunity` the last argument, which
+/// also lets it help a creature not flagged for it.
+[[nodiscard]] constexpr bool mayAssist(const Side& caster, const Side& unit, int reaction, bool ignoreImmunity,
+                                       const Controllers& c) {
+    if ((unit.unitFlags & kFlagNotSelectable) != 0) return false;
+    const bool casterPc = (caster.unitFlags & kFlagPlayerControlled) != 0;
+    if (!ignoreImmunity) {
+        if (casterPc && (unit.unitFlags & kFlagImmuneToPc) != 0) return false;
+        if (!casterPc && (unit.unitFlags & kFlagImmuneToNpc) != 0) return false;
+    }
+    if (reaction < kReactionFriendly && (caster.creatureTypeFlags & 0x4000000u) == 0) return false;
+    if ((unit.unitFlags & kFlagPlayerControlled) == 0) {
+        // A creature: one not flagged for PvP wants CAN_ASSIST (0x1000,
+        // 0x00715f90) or 0x4000000 (0x00715df0) from a player's side.
+        if (casterPc && !ignoreImmunity && (unit.pvpFlags & pvp::kPvp) == 0)
+            return (unit.creatureTypeFlags & (0x1000u | 0x4000000u)) != 0;
+        return true;
+    }
+    // Not one in a duel, but by its partner on the same side.
+    if (c.found && c.unitTeam != 0 && (c.casterArbiter != c.unitArbiter || c.casterTeam != c.unitTeam)) return false;
+    if ((unit.pvpFlags & pvp::kFreeForAll) != 0 && (caster.pvpFlags & pvp::kFreeForAll) == 0) return false;
+    if ((caster.pvpFlags & pvp::kSanctuary) != 0 && (unit.pvpFlags & pvp::kSanctuary) == 0 &&
+        (unit.pvpFlags & pvp::kPvp) != 0)
+        return false;
+    return true;
+}
+
+/// 0x00729740: whether the caster may attack the unit. `reaction` is the
+/// caster's of the unit, `reactionBack` the unit's of the caster.
+[[nodiscard]] constexpr bool mayAttack(const Side& caster, const Side& unit, int reaction, int reactionBack,
+                                       const Controllers& c) {
+    if (caster.isPlayer && (caster.playerFlags & 0x80000u) != 0) return false;
+    // A ghost, unless the caster sees them (creature flag 2).
+    if (unit.isPlayer && (unit.playerFlags & 0x10u) != 0 && (caster.creatureTypeFlags & 0x2u) == 0) return false;
+    if ((unit.unitFlags & (0x2u | 0x80u | 0x10000u | 0x100000u | kFlagNotSelectable)) != 0) return false;
+    const bool casterPc = (caster.unitFlags & kFlagPlayerControlled) != 0;
+    const bool unitPc = (unit.unitFlags & kFlagPlayerControlled) != 0;
+    if (casterPc && (unit.unitFlags & kFlagImmuneToPc) != 0) return false;
+    if (!casterPc && (unit.unitFlags & kFlagImmuneToNpc) != 0) return false;
+    if (unitPc && (caster.unitFlags & kFlagImmuneToPc) != 0) return false;
+    if (!unitPc && (caster.unitFlags & kFlagImmuneToNpc) != 0) return false;
+    if (((caster.unitFlags2 | unit.unitFlags2) & 0x10000u) != 0 &&
+        (caster.vehicleOutOfReach || unit.vehicleOutOfReach))
+        return false;
+    if (!casterPc && !unitPc) return reaction <= kReactionHostile || reactionBack <= kReactionHostile;
+    const bool friendly = reaction >= kReactionFriendly || (caster.creatureTypeFlags & 0x4000000u) != 0;
+    if (casterPc && unitPc) {
+        if (friendly) return false;
+        if (!c.found) return (caster.pvpFlags & pvp::kSanctuary) == 0 && (unit.pvpFlags & pvp::kSanctuary) == 0;
+        if (c.casterTeam != 0 && c.unitTeam != 0 && c.casterArbiter == c.unitArbiter) return true;
+        return pvpFlagsAllowAttack(caster.pvpFlags, unit.pvpFlags);
+    }
+    if (casterPc && (unit.pvpFlags & pvp::kSanctuary) != 0) return false;
+    if (unitPc && (caster.pvpFlags & pvp::kSanctuary) != 0) return false;
+    return !friendly;
+}
+
+/// What 0x0080bc80 reads of the spell.
+struct Spell {
+    uint32_t attrEx = 0;              ///< +0x14: 0x80000 not at its caster
+    uint32_t attrEx2 = 0;             ///< +0x18: 0x1 at the dead
+    uint32_t attrEx3 = 0;             ///< +0x1c: 0x10000000 a unit immune to players
+    uint32_t attrEx5 = 0;             ///< +0x24: 0x200000 likewise
+    uint32_t attrEx6 = 0;             ///< +0x28: 0x200 a charmed ally, 0x1000000 a unit flagged 0x10000
+    uint32_t targetCreatureType = 0;  ///< +0x44, a mask by type less one
+};
+
+/// What it reads of the unit.
+struct Unit {
+    uint32_t type = 0;           ///< OBJECT_FIELD_TYPE
+    bool isCaster = false;
+    int32_t health = 0;          ///< UNIT_FIELD_HEALTH (+0x48)
+    uint32_t unitFlags = 0;      ///< UNIT_FIELD_FLAGS
+    uint32_t dynamicFlags = 0;   ///< UNIT_DYNAMIC_FLAGS (+0x124), 0x20 dead
+    uint32_t petNumber = 0;      ///< UNIT_FIELD_PETNUMBER (+0x114)
+    uint32_t creatureType = 0;   ///< 0x0071f300
+    bool charmed = false;        ///< UNIT_FIELD_CHARMEDBY set (0x004f5f00)
+};
+
+/// The caster's relations to it, as 0x0080bc80 asks them.
+struct Relations {
+    bool inParty = false;       ///< 0x00718ca0
+    bool inRaid = false;        ///< 0x00718d70
+    bool mayAssist = false;     ///< 0x007293d0 (unit, 0)
+    bool mayAssistEx6 = false;  ///< 0x007293d0 (unit, AttributesEx6 0x8)
+    bool mayAttack = false;     ///< 0x00729740
+};
+
+/// What taking it did: the unit fills some of what was needed (`required`
+/// is what is left), with the cast's targets now `mask`.
+struct Take {
+    bool taken = false;
+    uint32_t required = 0;
+    uint32_t mask = 0;
+};
+
+/// 0x0080bc80: whether the unit fills what the spell still needs. A game
+/// object fills a game object wanted; a unit, in order: a party member, a
+/// raid member, an ally, an enemy, any unit not immune to players; a dead
+/// player or pet for an ally's corpse, a dead player not to be helped for an
+/// enemy's, a companion; and with AttributesEx6 0x200 a charmed unit not to
+/// be attacked for an ally. Never the caster with AttributesEx 0x80000, a
+/// unit flagged 0x10000 without AttributesEx6 0x1000000, nor one of a type
+/// the spell does not name; a dead one only where the dead are wanted, a
+/// living one not where only the dead are.
+[[nodiscard]] constexpr Take takeUnit(const Spell& s, const Unit& u, const Relations& r, uint32_t required) {
+    Take t{false, required, 0};
+    if ((u.type & kTypeUnit) == 0) {
+        if ((u.type & kTypeGameObject) != 0 && (required & (kGameObject | kGameObjectItem)) != 0) {
+            t = {true, required & ~(kGameObject | kGameObjectItem), kGameObject};
+        }
+        return t;
+    }
+    if (u.isCaster && (s.attrEx & 0x80000u) != 0) return t;
+    if ((u.unitFlags & 0x10000u) != 0 && (s.attrEx6 & 0x1000000u) == 0) return t;
+    if (s.targetCreatureType != 0 &&
+        (u.creatureType == 0 || (s.targetCreatureType & (1u << ((u.creatureType - 1) & 31))) == 0))
+        return t;
+    const bool dead = u.health < 1;
+    if (dead && (u.dynamicFlags & 0x20u) == 0 && (required & (kCorpseAlly | kUnitDead | kCorpseEnemy)) == 0 &&
+        (s.attrEx2 & 0x1u) == 0)
+        return t;
+    if (!dead && (required & kUnitDead) != 0) return t;
+    // As a unit: the dead also fill a dead unit wanted.
+    const auto asUnit = [&](uint32_t bit) {
+        Take k{true, required & ~bit, kUnit};
+        if (dead) k.required &= ~kUnitDead;
+        return k;
+    };
+    if ((required & kUnitParty) != 0 && r.inParty && r.mayAssist) return asUnit(kUnitParty);
+    if ((required & kUnitRaid) != 0 && r.inRaid && r.mayAssist) return asUnit(kUnitRaid);
+    if ((required & kUnitAlly) != 0 && r.mayAssistEx6) return asUnit(kUnitAlly);
+    if ((required & kUnitEnemy) != 0 && r.mayAttack) return asUnit(kUnitEnemy);
+    if ((required & kUnit) != 0 &&
+        ((u.unitFlags & kFlagImmuneToPc) == 0 || (s.attrEx3 & 0x10000000u) != 0 || (s.attrEx5 & 0x200000u) != 0)) {
+        return {true, required & ~(dead ? (kCorpseAlly | kUnitDead | kCorpseEnemy | kUnit) : kUnit), kUnit};
+    }
+    if ((required & kCorpseAlly) != 0 && dead && ((u.type & kTypePlayer) != 0 || u.petNumber != 0)) {
+        if (r.mayAssist) t = {true, required & ~kCorpseAlly, kUnit};
+        return t;
+    }
+    if ((required & kCorpseEnemy) != 0 && dead && (u.type & kTypePlayer) != 0) {
+        if (!r.mayAssist) t = {true, required & ~kCorpseEnemy, kUnit};
+        return t;
+    }
+    if ((required & kUnitMinipet) != 0) {
+        if (u.creatureType == 12) t = {true, required & ~kUnitMinipet, kUnitMinipet};
+        return t;
+    }
+    if ((required & kUnitAlly) != 0 && (s.attrEx6 & 0x200u) != 0 && u.charmed && !r.mayAttack) {
+        t = {true, required & ~kUnitAlly, kUnitAlly};
+    }
+    return t;
+}
+
+/// 0x0080bc80: a unit taken as one of these is held to the spell's reach
+/// (0x00803850).
+[[nodiscard]] constexpr bool reachChecked(uint32_t mask) { return (mask & 0x18202u) != 0; }
+
+/// What 0x007ff480 reads for the reach.
+struct RangeInput {
+    uint32_t attr = 0;          ///< Attributes (+0x10): 0x404 is 0 to 100
+    bool hasRow = false;        ///< a SpellRange row
+    uint32_t rowFlags = 0;      ///< its Flags (+0x14): 1 melee, 2 ranged
+    float rowMin = 0.0f;        ///< its minimum and maximum, hostile or
+    float rowMax = 0.0f;        ///< friendly (0x00801650)
+    float casterReach = 0.0f;   ///< UNIT_FIELD_COMBATREACH (+0xf0)
+    bool hasUnit = false;       ///< aimed at a unit
+    float unitReach = 0.0f;
+};
+struct Range {
+    float min = 0.0f;
+    float max = 0.0f;
+};
+
+/// 0x007ff480: from the caster to the unit. A melee row reaches both
+/// combat reaches and 4/3, at least 5; a ranged row's minimum starts there;
+/// at a unit both reaches lengthen the maximum, and a minimum other than a
+/// ranged row's. `maxMods` turns the row's maximum by the Range modifiers
+/// (op 5). Moving units' 8/3 more is not kept.
+template <typename MaxMods>
+[[nodiscard]] constexpr Range unitRange(const RangeInput& in, MaxMods&& maxMods) {
+    if ((in.attr & 0x404u) != 0) return {0.0f, 100.0f};
+    Range r{};
+    float extra = 0.0f;
+    if (in.hasRow) {
+        const float near = (in.hasUnit ? in.unitReach : in.casterReach) + in.casterReach + 4.0f / 3.0f;
+        if ((in.rowFlags & 1u) == 0) {
+            r.min = (in.rowFlags & 2u) == 0 ? in.rowMin : (near <= 5.0f ? 5.0f : near) + in.rowMin;
+            r.max = in.rowMax;
+            if (in.hasUnit) {
+                extra = in.casterReach + in.unitReach;
+                if (r.min != 0.0f && (in.rowFlags & 2u) == 0) r.min += extra;
+            }
+        } else {
+            extra = near <= 5.0f ? 5.0f : near;
+        }
+    }
+    r.max = maxMods(r.max) + extra;
+    return r;
+}
+
+/// 0x00803850 -> 0x0080bc80's refusal of a unit outside the reach: closer
+/// than the minimum SPELL_FAILED_TOO_CLOSE, beyond the maximum
+/// SPELL_FAILED_OUT_OF_RANGE; 0 within it.
+inline constexpr uint8_t kFailedOutOfRange = 0x61;
+inline constexpr uint8_t kFailedTooClose = 0x80;
+[[nodiscard]] constexpr uint8_t reachFailure(float distSq, const Range& r) {
+    if (r.min * r.min > distSq) return kFailedTooClose;
+    if (r.max * r.max < distSq) return kFailedOutOfRange;
+    return 0;
+}
+
+/// 0x0080cce0 when no unit filled the spell (0x0080c790 answering none):
+/// Attributes 0x200's main hand, for a caster other than the player or one
+/// with nothing there, SPELL_FAILED_MAINHAND_EMPTY (0x32);
+/// else the cursor holds the spell for a unit to be clicked - unless an enemy
+/// is wanted and AttributesEx5 0x800 does not let an ally or party member
+/// stand for it: SPELL_FAILED_BAD_TARGETS (0xc) with a target, else
+/// SPELL_FAILED_BAD_IMPLICIT_TARGETS (0xb). 0 for the cursor.
+inline constexpr uint8_t kFailedMainhand = 0x32;
+inline constexpr uint8_t kFailedBadTargets = 0xc;
+inline constexpr uint8_t kFailedNoTarget = 0xb;
+[[nodiscard]] constexpr uint8_t noUnitFailure(uint32_t attr, uint32_t attrEx5, uint32_t required, bool casterIsPlayer,
+                                              bool playerHasMainhand, bool playerHasTarget) {
+    if ((attr & 0x200u) != 0 && (!casterIsPlayer || !playerHasMainhand)) return kFailedMainhand;
+    if ((required & kUnitEnemy) == 0 || ((attrEx5 & 0x800u) != 0 && (required & 0x10cu) != 0)) return 0;
+    return playerHasTarget ? kFailedBadTargets : kFailedNoTarget;
+}
+
+}  // namespace wowee::game::unit_target

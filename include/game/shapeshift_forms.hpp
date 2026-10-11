@@ -71,6 +71,9 @@ struct ShapeshiftFormRow {
     uint32_t bonusActionBar = 0;
     uint32_t flags = 0;
     std::array<uint32_t, 8> presetSpells{};
+    /// CreatureType (+0x10): what the form makes its unit, 0 for unchanged
+    /// (0x0071f300).
+    uint32_t creatureType = 0;
 };
 
 /// SPELL_AURA_MOD_SHAPESHIFT, the aura a form's spell applies (0x24).

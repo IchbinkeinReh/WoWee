@@ -7,6 +7,8 @@
 #include "game/ground_target.hpp"
 #include "game/spell_target_kind.hpp"
 #include "game/pet_action.hpp"
+#include "game/pvp_flags.hpp"
+#include "game/spell_unit_target.hpp"
 #include "game/vehicle_mover.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -823,6 +825,7 @@ bool SpellHandler::armGroundTarget(uint32_t spellId, uint64_t caster) {
         it->second.targetFlags, it->second.implicitTargetsA[0], trajectory);
     if (!ground_target::wantsLocation(required)) return false;
     if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
+    unitTarget_ = UnitTarget{};
     groundTarget_ = GroundTarget{};
     groundTarget_.spellId = spellId;
     groundTarget_.caster = caster;
@@ -843,6 +846,260 @@ bool SpellHandler::armGroundTarget(uint32_t spellId, uint64_t caster) {
     return true;
 }
 
+namespace {
+
+uint64_t entityGuidField(const Entity& e, UF low) {
+    const uint16_t idx = fieldIndex(low);
+    if (idx == 0xFFFF) return 0;
+    return e.getField(idx) | (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
+}
+
+uint32_t entityField(const Entity& e, UF f) {
+    const uint16_t idx = fieldIndex(f);
+    return idx != 0xFFFF ? e.getField(idx) : 0u;
+}
+
+/// 0x00718b70: the player behind a unit - itself, else its charmer (else
+/// creator), else that one's.
+std::shared_ptr<Entity> controllingPlayer(GameHandler& gh, const std::shared_ptr<Entity>& e) {
+    const auto up = [](const Entity& x) {
+        const uint64_t c = entityGuidField(x, UF::UNIT_FIELD_CHARMEDBY);
+        return c != 0 ? c : entityGuidField(x, UF::UNIT_FIELD_CREATEDBY);
+    };
+    std::shared_ptr<Entity> u = e;
+    if (const uint64_t g = up(*e); g != 0) u = gh.getEntityManager().getEntity(g);
+    if (!u) return nullptr;
+    if (u->getType() == ObjectType::PLAYER) return u;
+    const uint64_t g2 = up(*u);
+    auto v = g2 != 0 ? gh.getEntityManager().getEntity(g2) : nullptr;
+    return v && v->getType() == ObjectType::PLAYER ? v : nullptr;
+}
+
+/// 0x0052c680: the player or one of their party - in a raid, their
+/// subgroup; 0x00512a00 adds the raid's members.
+bool inPlayersParty(GameHandler& gh, uint64_t guid, bool orRaid) {
+    if (guid == 0) return false;
+    if (guid == gh.getPlayerGuid()) return true;
+    const auto& pd = gh.getPartyData();
+    const bool raid = pd.groupType == 1;
+    for (const auto& m : pd.members) {
+        if (m.guid == guid && (!raid || orRaid || m.subGroup == pd.subGroup)) return true;
+    }
+    return false;
+}
+
+unit_target::Side relationSide(GameHandler& gh, const Entity& e) {
+    unit_target::Side s;
+    s.isPlayer = e.getType() == ObjectType::PLAYER;
+    s.unitFlags = entityField(e, UF::UNIT_FIELD_FLAGS);
+    s.unitFlags2 = entityField(e, UF::UNIT_FIELD_FLAGS_2);
+    s.pvpFlags = unitPvpFlags(!isPreWotlk() && fieldIndex(UF::UNIT_FIELD_BYTES_2) != 0xFFFF,
+                              entityField(e, UF::UNIT_FIELD_BYTES_2), s.unitFlags);
+    if (s.isPlayer) {
+        s.playerFlags = entityField(e, UF::PLAYER_FLAGS);
+    } else if (e.isUnit()) {
+        const auto& cache = gh.getCreatureInfoCache();
+        if (auto it = cache.find(static_cast<const Unit&>(e).getEntry()); it != cache.end())
+            s.creatureTypeFlags = it->second.typeFlags;
+    }
+    if (const auto* row = gh.vehicleRowOf(e.getGuid()); row && (row->flags & 0x20000000u) != 0) {
+        const auto known = [&gh](uint64_t g) { return gh.getEntityManager().getEntity(g) != nullptr; };
+        s.vehicleOutOfReach = gh.vehicleRoster().rootVehicle(e.getGuid(), 0, known) == e.getGuid();
+    }
+    return s;
+}
+
+/// 0x007251c0 asked by a unit the player controls - their pet, or a
+/// vehicle they drive - 0 to 7. Itself, or one with the same player behind
+/// it, is friendly (4); one in a duel with that player's, by its side; one
+/// behind whom is the player's group, else both free-for-all, hostile (1);
+/// otherwise as it is to the player, whose faction the pet carries.
+int controlledReaction(GameHandler& gh, const std::shared_ptr<Entity>& caster, const std::shared_ptr<Entity>& unit) {
+    if (unit->getGuid() == caster->getGuid()) return unit_target::kReactionFriendly;
+    if (!unit->isUnit()) return 3;
+    const auto& u = static_cast<const Unit&>(*unit);
+    if ((entityField(*caster, UF::UNIT_FIELD_FLAGS) & unit_target::kFlagPlayerControlled) != 0 &&
+        (entityField(*unit, UF::UNIT_FIELD_FLAGS) & unit_target::kFlagPlayerControlled) != 0) {
+        const auto c1 = controllingPlayer(gh, caster);
+        const auto c2 = controllingPlayer(gh, unit);
+        bool grouped = false;
+        if (c1 && c2) {
+            const uint64_t a1 = entityGuidField(*c1, UF::PLAYER_DUEL_ARBITER);
+            const uint64_t a2 = entityGuidField(*c2, UF::PLAYER_DUEL_ARBITER);
+            const uint32_t t1 = entityField(*c1, UF::PLAYER_DUEL_TEAM);
+            const uint32_t t2 = entityField(*c2, UF::PLAYER_DUEL_TEAM);
+            if (t1 != 0 && t2 != 0 && a1 == a2) return t1 == t2 ? unit_target::kReactionFriendly : 1;
+            if (c1 == c2) return unit_target::kReactionFriendly;
+            const uint64_t me = gh.getPlayerGuid();
+            grouped = (c1->getGuid() == me && inPlayersParty(gh, c2->getGuid(), true)) ||
+                      (c2->getGuid() == me && inPlayersParty(gh, c1->getGuid(), true));
+        }
+        const auto pvp = [](const Entity& x) {
+            return unitPvpFlags(!isPreWotlk() && fieldIndex(UF::UNIT_FIELD_BYTES_2) != 0xFFFF,
+                                entityField(x, UF::UNIT_FIELD_BYTES_2), entityField(x, UF::UNIT_FIELD_FLAGS));
+        };
+        if (!grouped && (pvp(*caster) & pvp::kFreeForAll) != 0 && (pvp(*unit) & pvp::kFreeForAll) != 0) return 1;
+    }
+    return gh.playerReactionTo(u) - 1;
+}
+
+/// The caster's relations to the unit as 0x0080bc80 asks them.
+unit_target::Relations relationsOf(GameHandler& gh, const std::shared_ptr<Entity>& caster,
+                                   const std::shared_ptr<Entity>& unit, uint32_t attrEx6) {
+    unit_target::Relations r;
+    if (!unit->isUnit()) return r;
+    const auto cs = relationSide(gh, *caster);
+    const auto us = relationSide(gh, *unit);
+    unit_target::Controllers c;
+    const auto c1 = controllingPlayer(gh, caster);
+    const auto c2 = controllingPlayer(gh, unit);
+    if (c1 && c2) {
+        c.found = true;
+        c.casterArbiter = entityGuidField(*c1, UF::PLAYER_DUEL_ARBITER);
+        c.unitArbiter = entityGuidField(*c2, UF::PLAYER_DUEL_ARBITER);
+        c.casterTeam = entityField(*c1, UF::PLAYER_DUEL_TEAM);
+        c.unitTeam = entityField(*c2, UF::PLAYER_DUEL_TEAM);
+    }
+    const int reaction = controlledReaction(gh, caster, unit);
+    const int back = gh.unitReactionToPlayer(static_cast<const Unit&>(*unit)) - 1;
+    r.mayAssist = unit_target::mayAssist(cs, us, reaction, false, c);
+    r.mayAssistEx6 = unit_target::mayAssist(cs, us, reaction, (attrEx6 & 0x8u) != 0, c);
+    r.mayAttack = unit_target::mayAttack(cs, us, reaction, back, c);
+    // 0x00718ca0 / 0x00718d70: itself; between two the player controls,
+    // their players in the player's party (or raid); for the raid also a
+    // creature flagged 0x4000000.
+    const bool same = unit->getGuid() == caster->getGuid();
+    const bool bothPc = (cs.unitFlags & unit_target::kFlagPlayerControlled) != 0 &&
+                        (us.unitFlags & unit_target::kFlagPlayerControlled) != 0;
+    const auto grouped = [&](bool orRaid) {
+        if (!bothPc || !c1 || !c2) return false;
+        const uint64_t me = gh.getPlayerGuid();
+        return (c1->getGuid() == me && inPlayersParty(gh, c2->getGuid(), orRaid)) ||
+               (c2->getGuid() == me && inPlayersParty(gh, c1->getGuid(), orRaid));
+    };
+    r.inParty = same || grouped(false);
+    r.inRaid = same || (us.creatureTypeFlags & 0x4000000u) != 0 || grouped(true);
+    return r;
+}
+
+/// 0x0071f300: a unit's creature type - its form's, else its creature's,
+/// else its race's (ChrRaces CreatureType, +0x20).
+uint32_t creatureTypeOf(GameHandler& gh, const Entity& e) {
+    const uint32_t bytes2 = entityField(e, UF::UNIT_FIELD_BYTES_2);
+    if (const auto* form = !isPreWotlk() ? gh.shapeshiftFormRow(static_cast<uint8_t>(bytes2 >> 24)) : nullptr;
+        form && static_cast<int32_t>(form->creatureType) > 0)
+        return form->creatureType;
+    if (e.getType() != ObjectType::PLAYER) {
+        return e.isUnit() ? gh.getCreatureType(static_cast<const Unit&>(e).getEntry()) : 0u;
+    }
+    const uint32_t race = entityField(e, UF::UNIT_FIELD_BYTES_0) & 0xFFu;
+    auto* am = core::Application::getInstance().getAssetManager();
+    auto races = am ? am->loadDBCOptional("ChrRaces.dbc") : nullptr;
+    const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ChrRaces") : nullptr;
+    const uint32_t field = layout ? layout->tryField("CreatureType") : 0xFFFFFFFF;
+    const int32_t row = races && field < races->getFieldCount() ? races->findRecordById(race) : -1;
+    return row >= 0 ? races->getUInt32(static_cast<uint32_t>(row), field) : 0u;
+}
+
+}  // namespace
+
+SpellHandler::UnitTake SpellHandler::takeUnit(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid,
+                                              uint32_t required, bool say) const {
+    UnitTake out{false, required};
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end() || unitGuid == 0) return out;
+    auto& em = owner_.getEntityManager();
+    const auto caster = em.getEntity(casterGuid);
+    const auto unit = em.getEntity(unitGuid);
+    if (!caster || !unit) return out;
+    const auto& e = it->second;
+    const unit_target::Spell s{e.attrEx, e.attrEx2, e.attrEx3, e.attrEx5, e.attrEx6, e.targetCreatureType};
+    unit_target::Unit u;
+    switch (unit->getType()) {
+        case ObjectType::PLAYER: u.type = unit_target::kTypeUnit | unit_target::kTypePlayer; break;
+        case ObjectType::UNIT: u.type = unit_target::kTypeUnit; break;
+        case ObjectType::GAMEOBJECT: u.type = unit_target::kTypeGameObject; break;
+        default: break;
+    }
+    u.isCaster = unitGuid == casterGuid;
+    if (unit->isUnit()) {
+        const auto& un = static_cast<const Unit&>(*unit);
+        u.health = static_cast<int32_t>(un.getHealth());
+        u.unitFlags = entityField(*unit, UF::UNIT_FIELD_FLAGS);
+        u.dynamicFlags = un.getDynamicFlags();
+        u.petNumber = entityField(*unit, UF::UNIT_FIELD_PETNUMBER);
+        u.creatureType = creatureTypeOf(owner_, *unit);
+        u.charmed = entityGuidField(*unit, UF::UNIT_FIELD_CHARMEDBY) != 0;
+    }
+    const auto r = relationsOf(owner_, caster, unit, e.attrEx6);
+    const auto t = unit_target::takeUnit(s, u, r, required);
+    if (!t.taken) return out;
+    if (unit_target::reachChecked(t.mask) && caster->isUnit() && unit->isUnit()) {
+        // 0x00801650: the friendly reach for a unit it may help, else the
+        // hostile one.
+        const int k = r.mayAssist ? 1 : 0;
+        unit_target::RangeInput in;
+        in.attr = e.attr;
+        in.hasRow = e.hasRangeRow;
+        in.rowFlags = e.rangeFlags;
+        in.rowMin = std::max(0.0f, e.rangeMin[k]);
+        in.rowMax = std::max(0.0f, e.rangeMax[k]);
+        in.casterReach = static_cast<const Unit&>(*caster).getCombatReach();
+        in.hasUnit = true;
+        in.unitReach = static_cast<const Unit&>(*unit).getCombatReach();
+        const auto range = unit_target::unitRange(in, [&](float m) {
+            return spell_mods::apply(m, spellModifiers(spellId, spell_mods::kOpRange));
+        });
+        const glm::vec3 d(unit->getX() - caster->getX(), unit->getY() - caster->getY(), unit->getZ() - caster->getZ());
+        if (const uint8_t fail = unit_target::reachFailure(glm::dot(d, d), range)) {
+            if (say) owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
+            return out;
+        }
+    }
+    return {true, t.required};
+}
+
+void SpellHandler::armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required) {
+    // 0x0080cce0: the cursor holds it (0x00d3f4e4) until a unit is clicked
+    // or it is put down; it takes the place of a spell held for a place.
+    if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
+    groundTarget_ = GroundTarget{};
+    unitTarget_ = UnitTarget{spellId, caster, required};
+    LOG_INFO("Unit targeting: spell ", spellId, " waits for a unit (wants 0x", std::hex, required, std::dec, ")");
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
+}
+
+void SpellHandler::spellTargetUnit(uint64_t unitGuid) {
+    if (unitTarget_.spellId == 0) return;
+    if (!owner_.getEntityManager().getEntity(unitGuid)) {
+        // 0x0080dc00: no unit there.
+        owner_.addUIError(castFailureMessage(owner_, unitTarget_.spellId, unit_target::kFailedOutOfRange, -1, 0, 0));
+        return;
+    }
+    const auto t = takeUnit(unitTarget_.spellId, unitTarget_.caster, unitGuid, unitTarget_.required, true);
+    if (!t.taken) return;
+    unitTarget_.required = t.required;
+    if (t.required != 0) return;
+    const UnitTarget held = unitTarget_;
+    unitTarget_ = UnitTarget{};
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
+    sendPetCast(held.spellId, held.caster, unitGuid);
+}
+
+bool SpellHandler::spellCanTargetUnit(uint64_t unitGuid) const {
+    return unitTarget_.spellId != 0 &&
+           takeUnit(unitTarget_.spellId, unitTarget_.caster, unitGuid, unitTarget_.required, false).taken;
+}
+
+void SpellHandler::sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const auto cast = owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
+                                                : CastSpellPacket::build(spellId, target, ++castCount_);
+    owner_.getSocket()->send(CastSpellPacket::asPetCast(caster, cast));
+    LOG_INFO("Pet 0x", std::hex, caster, " casting spell: ", std::dec, spellId, " on 0x", std::hex, target, std::dec);
+    castSent(spellId, caster);
+}
+
 void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targetGuid) {
     // 0x005d4210 -> 0x0080cce0: a pet's spell cast as the player's are, by
     // the pet - the vehicle the player drives among them.
@@ -852,18 +1109,13 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
     if (it == owner_.spellNameCacheRef().end()) return;
     const auto& spell = it->second;
     if ((spell.attr & 0x40u) != 0) return;  // a passive is not cast
-    const auto guidField = [](const Entity& e, UF low) -> uint64_t {
-        const uint16_t idx = fieldIndex(low);
-        if (idx == 0xFFFF) return 0;
-        return e.getField(idx) | (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
-    };
     // AttributesEx6 0x40000: its charmer casts it, the player as its own
     // casts go (0x0080cce0 on, 0x0080ac90 sending CMSG_CAST_SPELL).
     if ((spell.attrEx6 & 0x40000u) != 0) {
         auto pet = owner_.getEntityManager().getEntity(caster);
         if (!pet) return;
-        caster = pet::castingUnit(caster, spell.attrEx6, guidField(*pet, UF::UNIT_FIELD_CHARMEDBY),
-                                  guidField(*pet, UF::UNIT_FIELD_CREATEDBY));
+        caster = pet::castingUnit(caster, spell.attrEx6, entityGuidField(*pet, UF::UNIT_FIELD_CHARMEDBY),
+                                  entityGuidField(*pet, UF::UNIT_FIELD_CREATEDBY));
         if (caster == 0 || !owner_.getEntityManager().getEntity(caster)) return;
         if (caster == owner_.getPlayerGuid()) {
             castSpell(spellId, targetGuid);
@@ -873,28 +1125,80 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
     if (owner_.heldBySeat(caster)) return;  // 0x0074ba40
     // AttributesEx7 0x8 wants a caster with UNIT_FIELD_FLAGS_2 0x40000.
     if (auto c = owner_.getEntityManager().getEntity(caster)) {
-        const uint16_t flags2Field = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
-        const uint32_t flags2 = flags2Field != 0xFFFF ? c->getField(flags2Field) : 0u;
-        if (!pet::casterMayCast(spell.attrEx7, flags2)) {
+        if (!pet::casterMayCast(spell.attrEx7, entityField(*c, UF::UNIT_FIELD_FLAGS_2))) {
             constexpr uint8_t kSpellFailedSpellUnavailable = 0x6b;
             owner_.addUIError(castFailureMessage(owner_, spellId, kSpellFailedSpellUnavailable, -1, 0, 0));
             return;
         }
     }
     if (armGroundTarget(spellId, caster)) return;
-    // 0x0080c790: the targets it needs - none, it goes at none; else the
-    // unit asked, or the player's target (unless ImplicitTargetA 16 takes
-    // none).
-    const uint32_t required =
-        ground_target::requiredTargets(spell.targetFlags, spell.implicitTargetsA[0], false);
-    uint64_t target = 0;
-    if (required != 0 && !ground_target::takesNoUnit(spell.implicitTargetsA[0]))
-        target = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
-    const auto cast = owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
-                                                : CastSpellPacket::build(spellId, target, ++castCount_);
-    owner_.getSocket()->send(CastSpellPacket::asPetCast(caster, cast));
-    LOG_INFO("Pet 0x", std::hex, caster, " casting spell: ", std::dec, spellId, " on 0x", std::hex, target, std::dec);
-    castSent(spellId, caster);
+    // 0x0080c790: the targets it needs - none, it goes at none.
+    uint32_t required = ground_target::requiredTargets(spell.targetFlags, spell.implicitTargetsA[0], false);
+    if (required == 0) {
+        sendPetCast(spellId, caster, 0);
+        return;
+    }
+    // Else a unit: the one asked, or the player's target - none at all with
+    // ImplicitTargetA 16.
+    if (!ground_target::takesNoUnit(spell.implicitTargetsA[0])) {
+        const uint64_t asked = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
+        auto& em = owner_.getEntityManager();
+        const auto unit = asked != 0 ? em.getEntity(asked) : nullptr;
+        // One out of view goes as it is, for a spell reaching past 100
+        // yards (0x00802c30 with no unit).
+        if (asked != 0 && !unit) {
+            const auto casterEntity = em.getEntity(caster);
+            unit_target::RangeInput in;
+            in.attr = spell.attr;
+            in.hasRow = spell.hasRangeRow;
+            in.rowFlags = spell.rangeFlags;
+            const int k = spellTargetKind(spell.targetFlags,
+                                          {spell.implicitTargetsA[0], spell.implicitTargetsA[1], spell.implicitTargetsA[2]},
+                                          {spell.implicitTargetsB[0], spell.implicitTargetsB[1], spell.implicitTargetsB[2]},
+                                          {spell.effectAuraIds[0], spell.effectAuraIds[1], spell.effectAuraIds[2]}) == 1
+                              ? 1 : 0;
+            in.rowMin = std::max(0.0f, spell.rangeMin[k]);
+            in.rowMax = std::max(0.0f, spell.rangeMax[k]);
+            in.casterReach = casterEntity && casterEntity->isUnit()
+                                 ? static_cast<const Unit&>(*casterEntity).getCombatReach() : 0.0f;
+            const auto range = unit_target::unitRange(in, [&](float m) {
+                return spell_mods::apply(m, spellModifiers(spellId, spell_mods::kOpRange));
+            });
+            if (range.max > 100.0f) {
+                sendPetCast(spellId, caster, asked);
+                return;
+            }
+        }
+        // 0x0080bc80: a unit that fills what is wanted; cast once nothing
+        // more is.
+        const auto tryUnit = [&](uint64_t guid) {
+            const auto t = takeUnit(spellId, caster, guid, required, true);
+            if (!t.taken) return false;
+            if (t.required == 0) sendPetCast(spellId, caster, guid);
+            return true;
+        };
+        if (unit && tryUnit(asked)) return;
+        // Auto self-cast, with none asked or one the caster may not help:
+        // the player, then the caster itself.
+        if (owner_.isAutoSelfCast()) {
+            bool helpless = asked == 0;
+            if (!helpless && unit && unit->isUnit()) {
+                const auto c = em.getEntity(caster);
+                helpless = !c || !relationsOf(owner_, c, unit, 0).mayAssist;
+            }
+            if (helpless) {
+                if (tryUnit(owner_.getPlayerGuid())) return;
+                if (caster != owner_.getPlayerGuid() && tryUnit(caster)) return;
+            }
+        }
+    }
+    // 0x0080cce0 with no unit: the cursor holds it, or it is refused.
+    if (const uint8_t fail = unit_target::noUnitFailure(spell.attr, spell.attrEx5, required, false, false,
+                                                        owner_.getTargetGuid() != 0)) {
+        owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
+        return;
+    }
+    armUnitTarget(spellId, caster, required);
 }
 
 void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
@@ -1366,14 +1670,17 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
 }
 
 bool SpellHandler::cancelGroundTargeting() {
-    if (groundTarget_.spellId == 0) return false;
-    LOG_INFO("Ground targeting: spell ", groundTarget_.spellId, " put down");
+    if (groundTarget_.spellId == 0 && unitTarget_.spellId == 0) return false;
+    LOG_INFO("Targeting: spell ", groundTarget_.spellId | unitTarget_.spellId, " put down");
     groundTarget_ = GroundTarget{};
+    unitTarget_ = UnitTarget{};
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
     return true;
 }
 
 bool SpellHandler::turnOrCancelGroundTargeting() {
+    // 0x0051fb00: one held for a unit is put down (0x00809a60).
+    if (unitTarget_.spellId != 0) return cancelGroundTargeting();
     if (groundTarget_.spellId == 0) return false;
     if (!groundTarget_.objectFixedFacing) return cancelGroundTargeting();
     groundTarget_.objectFacing = ground_target::quarterTurn(groundTarget_.objectFacing);
@@ -3612,6 +3919,8 @@ void SpellHandler::loadSpellNameCache() const {
 
     // AttributesEx3 and the spell family, for the modifiers (0x007fd970).
     const uint32_t attrEx3Field = spellL ? spellL->tryField("AttributesEx3") : 0xFFFFFFFF;
+    const uint32_t attrEx2Field = spellL ? spellL->tryField("AttributesEx2") : 0xFFFFFFFF;
+    const uint32_t creatureTypeField = spellL ? spellL->tryField("TargetCreatureType") : 0xFFFFFFFF;
     const uint32_t attrEx4Field = spellL ? spellL->tryField("AttributesEx4") : 0xFFFFFFFF;
     const uint32_t attrEx7Field = spellL ? spellL->tryField("AttributesEx7") : 0xFFFFFFFF;
     const uint32_t attrEx5Field = spellL ? spellL->tryField("AttributesEx5") : 0xFFFFFFFF;
@@ -3815,6 +4124,8 @@ void SpellHandler::loadSpellNameCache() const {
                 entry.attr = dbc->getUInt32(i, attrField);
             }
             if (attrEx3Field < fieldCount) entry.attrEx3 = dbc->getUInt32(i, attrEx3Field);
+            if (attrEx2Field < fieldCount) entry.attrEx2 = dbc->getUInt32(i, attrEx2Field);
+            if (creatureTypeField < fieldCount) entry.targetCreatureType = dbc->getUInt32(i, creatureTypeField);
             if (attrEx4Field < fieldCount) entry.attrEx4 = dbc->getUInt32(i, attrEx4Field);
             if (attrEx7Field < fieldCount) entry.attrEx7 = dbc->getUInt32(i, attrEx7Field);
             if (attrEx5Field < fieldCount) entry.attrEx5 = dbc->getUInt32(i, attrEx5Field);
@@ -3943,17 +4254,19 @@ void SpellHandler::loadSpellNameCache() const {
     // two apart (min hostile, min friendly, max hostile, max friendly);
     // vanilla has one of each.
     if (rangeDbc && rangeDbc->isLoaded()) {
-        struct Ends { float min[2]; float max[2]; };
+        // WotLK's Flags (+0x14) follow: 1 melee, 2 ranged (0x007ff480).
+        struct Ends { float min[2]; float max[2]; uint32_t flags; };
         std::unordered_map<uint32_t, Ends> ends;
         const uint32_t n = rangeDbc->getFieldCount();
         for (uint32_t ri = 0; ri < rangeDbc->getRecordCount(); ++ri) {
             Ends e{};
             if (n >= 5) {
                 e = {{rangeDbc->getFloat(ri, 1), rangeDbc->getFloat(ri, 2)},
-                     {rangeDbc->getFloat(ri, 3), rangeDbc->getFloat(ri, 4)}};
+                     {rangeDbc->getFloat(ri, 3), rangeDbc->getFloat(ri, 4)},
+                     n >= 6 && !isPreWotlk() ? rangeDbc->getUInt32(ri, 5) : 0u};
             } else if (n >= 3) {
                 e = {{rangeDbc->getFloat(ri, 1), rangeDbc->getFloat(ri, 1)},
-                     {rangeDbc->getFloat(ri, 2), rangeDbc->getFloat(ri, 2)}};
+                     {rangeDbc->getFloat(ri, 2), rangeDbc->getFloat(ri, 2)}, 0u};
             } else {
                 continue;
             }
@@ -3966,6 +4279,8 @@ void SpellHandler::loadSpellNameCache() const {
                 entry.rangeMin[k] = it->second.min[k];
                 entry.rangeMax[k] = it->second.max[k];
             }
+            entry.rangeFlags = it->second.flags;
+            entry.hasRangeRow = true;
         }
     }
     // SpellRadius.dbc: ID, Radius, RadiusPerLevel, RadiusMax.

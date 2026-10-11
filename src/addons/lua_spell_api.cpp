@@ -56,11 +56,21 @@ uint32_t highestKnownRankByName(game::GameHandler* gh, const std::string& name) 
 //
 // A spell cast with no target leaves the cursor holding it until something is
 // clicked; these are what the unit and party frames call when that click lands
-// on them. This client resolves a target at cast time instead - there is no
-// pending spell on the cursor to complete - so each answers false: nothing was
-// waiting, so nothing was consumed, and the frame falls through to its ordinary
-// click handling rather than swallowing it.
-static int lua_SpellTargetUnit(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// on them.
+//
+// SpellTargetUnit("unit") (0x0080dc00): the unit, while a spell waits for one,
+// offered to it (0x0080bc80); no unit by that name is
+// SPELL_FAILED_OUT_OF_RANGE. Nothing is returned.
+static int lua_SpellTargetUnit(lua_State* L) {
+    std::string token = luaL_checkstring(L, 1);
+    auto* gh = getGameHandler(L);
+    if (!gh || !gh->isUnitTargeting()) return 0;
+    toLowerInPlace(token);
+    gh->spellTargetUnit(resolveUnitGuid(gh, token));
+    return 0;
+}
+// Only spells waiting for a unit are held for a click; an item cursor is
+// finished by the bag click instead, so this answers false.
 static int lua_SpellTargetItem(lua_State* L) { lua_pushboolean(L, 0); return 1; }
 
 // Dropping what the cursor holds onto a unit, which opens a trade. The cursor
@@ -1273,8 +1283,8 @@ void registerSpellLuaAPI(lua_State* L) {
         }},
                 {"SpellStopTargeting", [](lua_State* L) -> int {
             // Puts down whatever the cursor holds for a target: a spell
-            // waiting for a place on the ground, or the item cursor a stone
-            // or an oil arms.
+            // waiting for a place on the ground or for a unit, or the item
+            // cursor a stone or an oil arms.
             auto* gh = getGameHandler(L);
             if (gh) gh->cancelGroundTargeting();
             if (gh && gh->isAwaitingItemTarget()) gh->cancelItemTargeting();
@@ -1283,7 +1293,7 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"SpellIsTargeting", [](lua_State* L) -> int {
             // 0x00d3f4e4: a spell is on the cursor waiting for its target.
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && (gh->isGroundTargeting() || gh->isAwaitingItemTarget()));
+            lua_pushboolean(L, gh && (gh->isGroundTargeting() || gh->isUnitTargeting() || gh->isAwaitingItemTarget()));
             return 1;
         }},
                 // The world clicks the left and right buttons are bound to

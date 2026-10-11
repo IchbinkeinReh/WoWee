@@ -1724,7 +1724,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             st.holdingItem           = inventoryScreen.isHoldingItem() ||
                                        !frameXmlCursorItem().empty();
             st.casting               = gameHandler.isCasting();
-            st.spellTargeting        = gameHandler.isGroundTargeting();
+            st.spellTargeting        = gameHandler.isGroundTargeting() || gameHandler.isUnitTargeting();
             st.lootOpen              = gameHandler.isLootWindowOpen();
             st.gossipOpen            = gameHandler.isGossipWindowOpen();
             st.vendorOpen            = gameHandler.isVendorWindowOpen();
@@ -2126,10 +2126,20 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             // tighter sphere critters get, which this copy did not have.
             const ui::ScenePick hoverPick =
                 ui::pickScene(gameHandler, ray, ui::ScenePickParams{});
-            // The client changes the pointer only over what a click can act
-            // on; anywhere else it stays the glove (drawn by the interface
-            // manager once nothing here has taken the pointer).
-            if (!drawVendorCursor(gameHandler, hoverPick)) {
+            if (gameHandler.isUnitTargeting()) {
+                // A spell waiting for a unit (0x004f8190): Cast over one it
+                // would take within its reach (0x00803a50), else UnableCast.
+                const uint64_t over = hoverPick.mouseover();
+                if (VkDescriptorSet tex = cursorTexture(
+                        services_.assetManager, services_.window,
+                        over != 0 && gameHandler.spellCanTargetUnit(over) ? game::ground_target::kCastCursor
+                                                                          : game::ground_target::kUnableCastCursor)) {
+                    drawCursorTexture(tex);
+                }
+            } else if (!drawVendorCursor(gameHandler, hoverPick)) {
+                // The client changes the pointer only over what a click can
+                // act on; anywhere else it stays the glove (drawn by the
+                // interface manager once nothing here has taken the pointer).
                 drawWorldObjectCursor(gameHandler, hoverPick);
             }
             highlightGuid = hoverPick.mouseover();
@@ -2204,6 +2214,14 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 const ui::ScenePick pick = ui::pickScene(
                     gameHandler, ray, ui::ScenePickParams{});
                 uint64_t closestGuid = pick.resolve();
+
+                // With a spell waiting for a unit, what is clicked is offered
+                // to it rather than targeted (0x00524bf0 asking 0x007fd620,
+                // then 0x0080bc80).
+                if (closestGuid != 0 && gameHandler.isUnitTargeting()) {
+                    gameHandler.spellTargetUnit(closestGuid);
+                    return;
+                }
 
                 // Dropping what the cursor is carrying onto another player
                 // opens a trade with them, which is how a trade begins in WoW

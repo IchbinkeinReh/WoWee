@@ -179,6 +179,10 @@ enum class UF : uint16_t {
     /// sparkle (0x00705900).
     CORPSE_FIELD_DYNAMIC_FLAGS,
     PLAYER_DUEL_ARBITER,
+    /// WotLK: the side of the duel a player is on (+0x1008 +0x20), which
+    /// with the arbiter decides who may help and attack whom (0x007293d0,
+    /// 0x00729740).
+    PLAYER_DUEL_TEAM,
     /// WotLK: the unit the player looks through - a vehicle it drives, a
     /// possessed unit (+0x1008 +0x770, 0x004f7310).
     PLAYER_FARSIGHT,
