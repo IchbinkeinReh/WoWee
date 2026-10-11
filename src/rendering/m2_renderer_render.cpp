@@ -865,21 +865,27 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
     // become the readable set.  Done before the upload loop overwrites them, and
     // after the early-out above, so "readable" always describes the last dispatch
     // actually recorded on this slot.
+    uint32_t* submittedIds = nullptr;
     if (frameIndex < 2) {
         cullReadableIds_[frameIndex].swap(cullSubmittedIds_[frameIndex]);
-        cullSubmittedIds_[frameIndex].clear();
-        cullSubmittedIds_[frameIndex].reserve(numInstances);
-        for (uint32_t i = 0; i < numInstances; i++)
-            cullSubmittedIds_[frameIndex].push_back(instances[i].id);
+        cullSubmittedIds_[frameIndex].resize(numInstances);
+        submittedIds = cullSubmittedIds_[frameIndex].data();
     }
 
     // --- Upload per-instance cull data (SSBO, binding 1) ---
     // The per-instance radius math used to be recomputed here every frame; it's
     // now precomputed once by recomputeCachedCullFactors() since it depends only
     // on static instance state (scale, bound radius, animation/ground flags).
-    if (cullInputMapped_[frameIndex]) {
-        auto* input = static_cast<CullInstanceGPU*>(cullInputMapped_[frameIndex]);
-        for (uint32_t i = 0; i < numInstances; i++) {
+    //
+    // Split across the frame workers: 120 000 instances in a city were 2.5 ms
+    // of the main thread's frame, one after another, and no instance's entry
+    // depends on another's. Each range writes only its own slots.
+    auto* input = cullInputMapped_[frameIndex]
+        ? static_cast<CullInstanceGPU*>(cullInputMapped_[frameIndex]) : nullptr;
+    auto writeRange = [&, input, submittedIds](uint32_t begin, uint32_t end) {
+        for (uint32_t i = begin; i < end; i++) {
+            if (submittedIds) submittedIds[i] = instances[i].id;
+            if (!input) continue;
             const auto& inst = instances[i];
             const float effectiveMaxDistSq = instanceMaxDistSq(inst);
 
@@ -908,6 +914,19 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
             input[i].effectiveMaxDistSq = effectiveMaxDistSq;
             input[i].flags = flags;
         }
+    };
+    {
+        const uint32_t parts = numInstances >= 16384 ? 4u : 1u;
+        const uint32_t per = (numInstances + parts - 1) / parts;
+        std::vector<std::future<void>> pending;
+        pending.reserve(parts);
+        for (uint32_t p = 1; p < parts; ++p) {
+            const uint32_t b = std::min(numInstances, p * per);
+            const uint32_t e = std::min(numInstances, b + per);
+            pending.push_back(core::ThreadPool::frameWorkers().submit([&writeRange, b, e]() { writeRange(b, e); }));
+        }
+        writeRange(0, std::min(numInstances, per));
+        for (auto& f : pending) f.get();
     }
 
     // --- Dispatch compute shader ---

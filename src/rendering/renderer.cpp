@@ -1372,7 +1372,9 @@ void Renderer::beginFrame() {
     // The same for a shadow pass planned and never recorded: its prologue is
     // reset with the rest of the slot below.
     shadowPlan_.pending = false;
+    { WOWEE_PROFILE_SCOPE("beginFrame: join last frame's recording", Cpu);
     syncWorldRecording();
+    }
     if (!vkCtx) return;
     if (vkCtx->isDeviceLost()) return;
 
@@ -1499,7 +1501,9 @@ void Renderer::beginFrame() {
     rtRecordedThisFrame_ = false;
 
     // Acquire swapchain image and begin command buffer
+    { WOWEE_PROFILE_SCOPE("beginFrame: acquire", Cpu);
     currentCmd = vkCtx->beginFrame(currentImageIndex);
+    }
     if (currentCmd == VK_NULL_HANDLE) {
         // Swapchain out of date, will retry next frame
         return;
@@ -1507,7 +1511,9 @@ void Renderer::beginFrame() {
 
     // This slot's fence has just been waited on, so a frame it copied for the
     // recording two frames ago is complete.
+    { WOWEE_PROFILE_SCOPE("beginFrame: collect recorded frame", Cpu);
     collectRecordedFrame();
+    }
 
     // FSR2 jitter pattern (§4.3 - delegates to PostProcessPipeline)
     if (postProcessPipeline_ && camera) postProcessPipeline_->applyJitter(camera.get());
@@ -1516,13 +1522,17 @@ void Renderer::beginFrame() {
     lightSpaceMatrix = computeLightSpaceMatrix();
 
     // Update per-frame UBO with current camera/lighting state
+    { WOWEE_PROFILE_SCOPE("beginFrame: per-frame data", Cpu);
     updatePerFrameUBO();
+    }
 
     // The shadow pass, planned now and recorded later into the prologue (see
     // planShadowPass). Before anything else marks the frame: its timestamps
     // are reserved here so that they read back in the order they execute,
     // and the prologue executes ahead of everything this buffer records.
+    { WOWEE_PROFILE_SCOPE("beginFrame: plan shadows", Cpu);
     planShadowPass();
+    }
 
     // ── Early compute: M2 frustum culling ──
     // beginFrame() has already waited for this frame slot's previous fence, so
@@ -1534,7 +1544,9 @@ void Renderer::beginFrame() {
     if (m2Renderer && camera && vkCtx) {
         uint32_t frame = vkCtx->getCurrentFrame();
         m2Renderer->invalidateCullOutput(frame);
+        { WOWEE_PROFILE_SCOPE("beginFrame: m2 cull dispatch", Cpu);
         m2Renderer->dispatchCullCompute(currentCmd, frame, *camera);
+        }
         vkCtx->gpuMark(currentCmd, "m2 cull (compute)");
     }
 
@@ -1542,7 +1554,9 @@ void Renderer::beginFrame() {
     // outside a render pass. Unlike the M2 path nothing reads the result back -
     // the count it produces is consumed by the indirect draw on the GPU.
     if (grassRenderer_ && camera && vkCtx) {
+        { WOWEE_PROFILE_SCOPE("beginFrame: grass population", Cpu);
         updateGrassPopulation();
+        }
         grassRenderer_->reportCullResult();
         grassRenderer_->dispatchCull(currentCmd, vkCtx->getCurrentFrame(), *camera,
                                      characterPosition);
@@ -1552,7 +1566,9 @@ void Renderer::beginFrame() {
     // --- Off-screen pre-passes ---
     // Build frame graph: registers pre-passes as graph nodes with dependencies.
     // compile() topologically sorts; execute() runs them with auto barriers.
+    { WOWEE_PROFILE_SCOPE("beginFrame: frame graph", Cpu);
     buildFrameGraph(nullptr);
+    }
     if (renderGraph_) {
         renderGraph_->execute(currentCmd);
     }
