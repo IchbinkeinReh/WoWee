@@ -383,6 +383,117 @@ inline void stepCameraMode(CameraModeClock& c, uint32_t nowMs, bool fixed, uint3
     return (1.0f / (static_cast<float>(modeMs) * 0.001f + 0.001f)) * 4.0f + 1.0f / (left * left);
 }
 
+/// The vehicle camera's facing (0x0075a1c0): the watched unit's facing in
+/// the world - within a half turn of the last - chased at the seat's 20 /
+/// CameraFacingChaseRate while waiting to enter, entering or seated; and
+/// the facing the camera turns by: seated that one, waiting the one at the
+/// change, on the way in or out from there to it by the camera's ease
+/// (0x005fffd0) - or sprung, as the point is (FlagsB 0x20000 in, 0x40000
+/// out).
+struct CameraFacing {
+    float start = 0.0f;           ///< +0x7c
+    float out = 0.0f;             ///< +0x80
+    float target = 0.0f;          ///< +0x88
+    float spring = 0.0f;          ///< +0x8c
+    float springVelocity = 0.0f;  ///< +0x90
+    float chase = 0.0f;           ///< +0x94
+    float chaseVelocity = 0.0f;   ///< +0x98
+    bool holdsYaw = false;        ///< +0x8 0x2: the seat's FlagsB 0x1, set at the change
+    bool follows = false;         ///< +0x8 0x4: the yaw held this step
+    /// A change of seat starts over from where it faces (0x0075aac0); a
+    /// new camera from the unit's facing (0x0075b1a0).
+    void restart() {
+        start = target = chase = spring = out;
+        springVelocity = 0.0f;
+    }
+    void restartAt(float facing) {
+        out = facing;
+        restart();
+    }
+};
+/// Whether a seat's FlagsB 0x1 holds the camera's yaw (0x00759880, +0x8
+/// 0x2, at the change): waiting to enter, entering or seated.
+[[nodiscard]] inline bool seatHoldsCameraYaw(CameraMode mode, const SeatRecord* seat) {
+    const bool seatModes = mode == CameraMode::EnterWait || mode == CameraMode::Entering || mode == CameraMode::Seated;
+    return seatModes && seat && (seat->flagsB & 0x1u) != 0;
+}
+/// One step; how far the camera turns with it (0x00604490 adds the facing
+/// to the camera's yaw). `snap` is +0x8 0x20, `t` the mode's progress,
+/// `keysTurn` the turn keys held without the mouse steering (the input's
+/// 0x300 without 0x2000001), `freeLook` the camera's own yaw held
+/// (+0xac): the facing is not added then. Where the seat holds the yaw
+/// and the keys do not turn, seated the turn is taken back (0x005fe5f0)
+/// and on the way in the facing is held where it was.
+inline float stepCameraFacing(CameraFacing& f, float facing, CameraMode mode, const SeatRecord* seat, float t,
+                              uint32_t modeMs, bool snap, float dt, bool keysTurn, bool freeLook) {
+    constexpr float kPi = 3.1415927f;
+    const float before = f.target;
+    float want = facing;
+    while (want + kPi < before) want += 2.0f * kPi;
+    while (before < want - kPi) want -= 2.0f * kPi;
+    f.target = want;
+    const bool seatModes = mode == CameraMode::EnterWait || mode == CameraMode::Entering || mode == CameraMode::Seated;
+    if (seat && seatModes) {
+        if (const auto rate = seatChaseRate(seat->cameraFacingChaseRate)) {
+            if (!snap) {
+                chaseStep(f.chase, f.chaseVelocity, f.target, *rate, dt);
+                f.target = f.chase;
+            } else {
+                f.chase = f.target;
+                f.chaseVelocity = 0.0f;
+            }
+        }
+    }
+    const float prevOut = f.out;
+    switch (mode) {
+        case CameraMode::Seated:
+            f.out = f.target;
+            break;
+        case CameraMode::EnterWait:
+        case CameraMode::ExitWait:
+            f.out = f.start;
+            break;
+        default:
+            if (!cameraSpringsOnTheWay(mode, seat)) {
+                f.out = (f.target - f.start) * cameraEase(t) + f.start;
+            } else if (t >= 0.999999f) {
+                f.spring = f.target;
+                f.springVelocity = 0.0f;
+                f.out = f.spring;
+            } else {
+                float w = f.target;
+                while (w + kPi < f.spring) w += 2.0f * kPi;
+                while (f.spring < w - kPi) w -= 2.0f * kPi;
+                chaseStep(f.spring, f.springVelocity, w, cameraWaySpringRate(modeMs, t), dt);
+                f.out = f.spring;
+            }
+            break;
+    }
+    float turned = freeLook ? 0.0f : f.out - prevOut;
+    if (f.holdsYaw && seatModes) {
+        if (f.follows && !freeLook) {
+            if (mode != CameraMode::Seated) {
+                f.out = prevOut;
+                f.spring = prevOut;
+                f.target = before;
+            }
+            turned = 0.0f;
+        }
+        f.follows = !keysTurn;
+    } else {
+        f.follows = false;
+    }
+    return turned;
+}
+
+/// Whom the camera watches and the frame it is held in (0x0075a930): in a
+/// control seat (Flags 0x800), on the way in or there, the vehicle - its
+/// point and facing the vehicle's, its chase in the vehicle's own frame;
+/// otherwise the unit itself.
+[[nodiscard]] inline bool cameraWatchesVehicle(bool leaving, const SeatRecord* seat) {
+    return !leaving && seat && (seat->flags & kSeatFlagCanControl) != 0;
+}
+
 /// A unit's place on its transport (its movement's raw position, vfunc
 /// +0x30) taken to the world (0x004f4460): its offset - x ahead, y to the
 /// left - turned by the transport's facing; here on the render axes, `renderYaw` as

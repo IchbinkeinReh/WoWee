@@ -360,6 +360,9 @@ public:
     /// 0x00759d80) and its facing at CameraFacingChaseRate (0x0075a1c0) -
     /// how far that facing turned since the last frame, which the camera
     /// turns with (0x00604490); on its way in or out, where it is drawn.
+    /// It runs out its way out after the passenger is gone, and ends with
+    /// it (0x0075af40 case 5). `keysTurn` and `freeLook` as
+    /// stepCameraFacing takes them.
     struct VehicleCameraView {
         glm::vec3 pivot{0.0f};
         float turned = 0.0f;  ///< radians, render yaw
@@ -367,7 +370,7 @@ public:
         /// raised by its height (0x00718080); none on the way in or out.
         std::optional<glm::vec3> collisionOrigin;
     };
-    [[nodiscard]] std::optional<VehicleCameraView> localVehicleCameraView();
+    [[nodiscard]] std::optional<VehicleCameraView> localVehicleCameraView(bool keysTurn, bool freeLook);
     /// The vehicle model the camera's closeness fades for the local player
     /// - the one it sits in or drives (0x004f8660) - and its row's fade
     /// scalars where Flags 0x80000 gives them (0x00606f90).
@@ -570,8 +573,9 @@ private:
         bool snap = true;                  ///< +0x8 0x20: the next update starts the chase over
         glm::vec3 rel{0.0f};               ///< +0x64: on the vehicle
         glm::vec3 relVelocity{0.0f};       ///< +0x70
-        float facing = 0.0f;               ///< +0x88 / +0x94
-        float facingVelocity = 0.0f;       ///< +0x98
+        game::vehicle::CameraFacing facing;  ///< +0x7c..+0x98, +0x8 0x2 / 0x4
+        uint32_t seatId = 0;               ///< +0x10: the seat of the last change
+        bool watchesVehicle = false;       ///< +0xb0: the vehicle, from a control seat (0x0075a930)
         uint32_t lastMs = 0;               ///< +0xa0
         bool active = false;               ///< the camera is there (CGUnit_C +0xf64)
         game::vehicle::CameraModeClock clock;  ///< +0xa4, +0xa8, +0xac
@@ -586,6 +590,8 @@ private:
     LocalVehicleCamera localVehicleCamera_;
     /// Where a transport is drawn; the world's origin for none.
     [[nodiscard]] glm::vec3 framePosition(uint64_t guid) const;
+    /// The transport a vehicle is on, none for the world (vfunc +0x40).
+    [[nodiscard]] uint64_t vehicleTransportOf(uint64_t vehicleGuid) const;
     /// A passenger's move held for its vehicle's animation (the passenger
     /// component's +0x10 0x200 and what it keeps beside it).
     struct HeldVehicleMove {

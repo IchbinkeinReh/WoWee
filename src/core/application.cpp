@@ -3214,8 +3214,11 @@ void Application::applyServerMovementState(float deltaTime) {
         }
         localSeatStateLastFrame_ = stateNow;
         // What its vehicle camera looks at, and the camera turned with its
-        // facing (VehicleCamera_C, 0x00604490).
-        const auto view = vehiclePassenger ? entitySpawner_->localVehicleCameraView() : std::nullopt;
+        // facing (VehicleCamera_C, 0x00604490) - on past the passenger
+        // record, to the end of its way out (0x0075af40).
+        const auto view = entitySpawner_ ? entitySpawner_->localVehicleCameraView(
+                                               cc->isTurningLeft() || cc->isTurningRight(), cc->isFreeLooking())
+                                         : std::nullopt;
         cc->setVehiclePivot(view ? std::optional<glm::vec3>(view->pivot) : std::nullopt);
         cc->setVehicleCollisionOrigin(view ? view->collisionOrigin : std::nullopt);
         // The vehicle the camera's closeness fades in the player's stead

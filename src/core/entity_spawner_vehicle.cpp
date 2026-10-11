@@ -323,9 +323,6 @@ void EntitySpawner::setSeatState(uint64_t guid, SeatedPassenger& p, SeatState st
     // 0x0074c5a0); the mover here is the player.
     if (old != state && guid == gameHandler_->getPlayerGuid()) {
         gameHandler_->announceVehicleAim();
-        // Its vehicle camera starts over with each state (0x0075aac0 sets
-        // +0x8 0x20).
-        localVehicleCamera_.snap = true;
     }
     // VEHICLE_PASSENGERS_CHANGED (0x007489c0): into or out of a seat - to or
     // from states 0 and 3 - of a vehicle whose seats count from the one the
@@ -565,18 +562,23 @@ glm::vec3 EntitySpawner::framePosition(uint64_t guid) const {
     return pos;
 }
 
-std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCameraView() {
+std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCameraView(bool keysTurn, bool freeLook) {
     using game::vehicle::CameraMode;
     auto& vc = localVehicleCamera_;
-    const auto drawn = localPassengerDrawnPosition();
-    if (!drawn || !vc.active) {
+    if (!vc.active || !gameHandler_) {
         vc.active = false;
         vc.snap = true;
         return std::nullopt;
     }
     auto* cr = renderer_->getCharacterRenderer();
     const uint64_t player = gameHandler_->getPlayerGuid();
-    const auto& p = seatedPassengers_.find(player)->second;
+    // The passenger record may be gone while the camera runs out its way
+    // out (0x0074b0b0 frees the one, 0x0075af40 ends the other): it looks
+    // at the unit where it is then.
+    const auto pit = seatedPassengers_.find(player);
+    const SeatedPassenger* p = pit != seatedPassengers_.end() ? &pit->second : nullptr;
+    const auto drawnPassenger = localPassengerDrawnPosition();
+    const glm::vec3 drawn = drawnPassenger ? *drawnPassenger : unitRenderPosition(player);
     const uint32_t now = seatClockMs();
     const float dt = static_cast<float>(now - vc.lastMs) * 0.001f;
     vc.lastMs = now;
@@ -588,8 +590,10 @@ std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCamer
         vc.snap = true;
         return std::nullopt;
     }
-    const game::vehicle::SeatRecord* seat = vehicleTables_.seatById(p.seatId);
-    const uint64_t vehicleGuid = p.vehicleGuid != 0 ? p.vehicleGuid : p.prevVehicleGuid;
+    const game::vehicle::SeatRecord* seat = vehicleTables_.seatById(vc.seatId);
+    // With no passenger record it is on no vehicle, and pulls in from none
+    // (0x00759580 finds no vehicle for the unit).
+    const uint64_t vehicleGuid = p ? (p->vehicleGuid != 0 ? p->vehicleGuid : p->prevVehicleGuid) : 0;
     const uint32_t vehicleInstance = vehicleGuid ? vehicleInstanceFor(vehicleGuid) : 0;
     glm::vec3 vehiclePos(0.0f);
     glm::mat4 vehicleFrame(1.0f);
@@ -599,9 +603,9 @@ std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCamer
     // vehicle into its seat and until it leaves it - the vehicle's place and
     // the offset its movement holds on it, turned by the vehicle; else where
     // it is.
-    glm::vec3 own = *drawn;
-    const bool onVehicle = p.state == SeatState::EnterDelay || p.state == SeatState::Entering ||
-                           p.state == SeatState::Seated || p.state == SeatState::ExitDelay;
+    glm::vec3 own = drawn;
+    const bool onVehicle = p && (p->state == SeatState::EnterDelay || p->state == SeatState::Entering ||
+                                 p->state == SeatState::Seated || p->state == SeatState::ExitDelay);
     if (haveVehicle && onVehicle) {
         glm::vec3 offset(0.0f);
         const auto& attachments = gameHandler_->transportAttachmentsRef();
@@ -610,33 +614,42 @@ std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCamer
             offset = core::coords::canonicalToServer(it->second.localOffset);
         own = vehiclePos + game::vehicle::transportOffsetAbout(offset, yawOf(vehicleFrame));
     }
+    // The unit it watches faces (0x0075a1c0): the vehicle from a control
+    // seat (0x0075a930), else the unit itself.
+    const bool watchesVehicle = vc.watchesVehicle && haveVehicle;
+    float facing = vc.facing.target;
+    if (watchesVehicle) {
+        facing = yawOf(vehicleFrame);
+    } else if (glm::mat4 frame(1.0f);
+               cr->getInstanceFrame(p ? p->instanceId : characterInstanceIdForGuid(player), frame)) {
+        facing = yawOf(frame);
+    }
     // 0x00759200: what it looks at. Waiting, entering or seated, the seat's
-    // CameraOffset about the unit where it is and its facing - the
-    // vehicle's where FlagsB 0x200 asks - from its own place, or with
-    // FlagsB 0x100 from where the seat draws it (0x00749d80); chased on the
-    // vehicle at 20 / CameraPosChaseRate (0x00759d80). Leaving, the unit's
-    // own place.
+    // CameraOffset about the unit it watches, where it is and as it faces -
+    // the vehicle's where FlagsB 0x200 asks or it watches the vehicle -
+    // from its own place, or with FlagsB 0x100 from where the seat draws it
+    // (0x00749d80); chased at 20 / CameraPosChaseRate in the frame of what
+    // the unit it watches is on (0x00759d80, 0x00759bd0): its vehicle, or
+    // for the vehicle its own transport. Leaving, the unit's own place.
     glm::vec3 target = own;
-    float yaw = 0.0f;
     const bool seatModes =
         mode == CameraMode::EnterWait || mode == CameraMode::Entering || mode == CameraMode::Seated;
     if (seatModes && haveVehicle) {
-        glm::vec3 at = (seat->flagsB & 0x100) != 0 ? *drawn : own;
-        glm::mat4 frame(1.0f);
-        if ((seat->flagsB & 0x200) != 0) {
+        glm::vec3 at = (seat->flagsB & 0x100) != 0 ? drawn : own;
+        float yaw = facing;
+        if (watchesVehicle || (seat->flagsB & 0x200) != 0) {
             at = vehiclePos;
             yaw = yawOf(vehicleFrame);
-        } else if (cr->getInstanceFrame(p.instanceId, frame)) {
-            yaw = yawOf(frame);
         }
-        const glm::vec3 rel = at + game::vehicle::seatCameraOffset(*seat, yaw) - vehiclePos;
+        const glm::vec3 chaseOrigin = watchesVehicle ? framePosition(vehicleTransportOf(vehicleGuid)) : vehiclePos;
+        const glm::vec3 rel = at + game::vehicle::seatCameraOffset(*seat, yaw) - chaseOrigin;
         if (const auto rate = game::vehicle::seatChaseRate(seat->cameraPosChaseRate); rate && !vc.snap) {
             game::vehicle::chaseStep(vc.rel, vc.relVelocity, rel, *rate, dt);
         } else {
             vc.rel = rel;
             vc.relVelocity = glm::vec3(0.0f);
         }
-        target = vehiclePos + vc.rel;
+        target = chaseOrigin + vc.rel;
     }
     // The way there (0x00759d80 with 0x007598f0): held where it looked at
     // the change while it waits; on the way in or out, from there to the
@@ -648,9 +661,10 @@ std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCamer
     if (mode != CameraMode::Seated) {
         // Its own way's share (+0x48).
         float share = 1.0f;
-        if (p.endMs != p.startMs)
-            share = std::clamp(static_cast<float>(now - p.startMs) / static_cast<float>(p.endMs - p.startMs), 0.0f, 1.0f);
-        t = game::vehicle::cameraModeProgress(vc.clock, now, p.state, seat, share);
+        if (p && p->endMs != p->startMs)
+            share = std::clamp(static_cast<float>(now - p->startMs) / static_cast<float>(p->endMs - p->startMs), 0.0f,
+                               1.0f);
+        t = game::vehicle::cameraModeProgress(vc.clock, now, p ? p->state : SeatState::None, seat, share);
     }
     switch (mode) {
         case CameraMode::Seated:
@@ -677,23 +691,9 @@ std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCamer
             }
             break;
     }
-    // 0x0075a1c0: seated, the facing within a half turn of the last,
-    // chased at 20 / CameraFacingChaseRate; the camera turns with it.
-    constexpr float kPi = 3.1415927f;
-    float turned = 0.0f;
-    if (mode == CameraMode::Seated && haveVehicle) {
-        const float before = vc.facing;
-        float want = yaw;
-        while (want + kPi < before) want += 2.0f * kPi;
-        while (before < want - kPi) want -= 2.0f * kPi;
-        if (const auto rate = game::vehicle::seatChaseRate(seat->cameraFacingChaseRate); rate && !vc.snap) {
-            game::vehicle::chaseStep(vc.facing, vc.facingVelocity, want, *rate, dt);
-        } else {
-            vc.facing = want;
-            vc.facingVelocity = 0.0f;
-        }
-        turned = vc.snap ? 0.0f : vc.facing - before;
-    }
+    // 0x0075a1c0: its facing, in every mode, and the camera turned with it.
+    const float turned = game::vehicle::stepCameraFacing(vc.facing, facing, mode, seat, t, vc.clock.ms, vc.snap, dt,
+                                                         keysTurn, freeLook);
     vc.snap = false;
     // The pull-in (0x00759580) looks from the vehicle in every mode.
     std::optional<glm::vec3> origin;
@@ -703,6 +703,14 @@ std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCamer
         origin = vehiclePos + glm::vec3(0.0f, 0.0f, game::vehicle::vehicleCameraHeight(vehicleHeight));
     }
     return VehicleCameraView{.pivot = vc.point, .turned = turned, .collisionOrigin = origin};
+}
+
+uint64_t EntitySpawner::vehicleTransportOf(uint64_t vehicleGuid) const {
+    // The vehicle's own transport (vfunc +0x40); none on the world.
+    if (!gameHandler_ || vehicleGuid == 0) return 0;
+    const auto& attachments = gameHandler_->transportAttachmentsRef();
+    const auto it = attachments.find(vehicleGuid);
+    return it != attachments.end() ? it->second.transportGuid : 0;
 }
 
 std::optional<EntitySpawner::CameraFadeVehicle> EntitySpawner::localCameraFadeVehicle() {
@@ -903,15 +911,34 @@ void EntitySpawner::updateVehiclePassengers() {
             // unit's transport then - the vehicle on the way in or waiting
             // to leave, the world once it leaves (0x0075aac0).
             auto& vc = localVehicleCamera_;
-            if (!vc.active) vc.point = unitRenderPosition(guid);
+            if (!vc.active) {
+                vc.point = unitRenderPosition(guid);
+                // 0x0075b1a0: a new camera faces as the unit does.
+                glm::mat4 frame(1.0f);
+                const uint32_t instance = p.instanceId ? p.instanceId : characterInstanceIdForGuid(guid);
+                vc.facing.restartAt(cr->getInstanceFrame(instance, frame) ? yawOf(frame) : 0.0f);
+            }
             vc.active = true;
             vc.clock = game::vehicle::cameraModeAtChange(first, timing, now);
             vc.fixed = timing.fixed;
             vc.durationMs = timing.durationMs;
-            vc.startFrame = !leaving ? vehicleGuid : (first == SeatState::ExitDelay ? p.prevVehicleGuid : 0);
+            vc.seatId = p.seatId;
+            // 0x0075a930: from a control seat it watches the vehicle, held
+            // in the vehicle's own frame; else the unit, held on the
+            // vehicle on the way in or waiting to leave, the world once it
+            // leaves.
+            vc.watchesVehicle = game::vehicle::cameraWatchesVehicle(leaving, seat);
+            if (vc.watchesVehicle) vc.startFrame = vehicleTransportOf(vehicleGuid);
+            else vc.startFrame = !leaving ? vehicleGuid : (first == SeatState::ExitDelay ? p.prevVehicleGuid : 0);
             vc.start = vc.point - framePosition(vc.startFrame);
             vc.spring = vc.start;
             vc.springVelocity = glm::vec3(0.0f);
+            // Its facing starts over from where it faces (+0x7c..+0x94),
+            // and a seat's FlagsB 0x1 holds the camera's yaw from here
+            // (0x00759880, +0x8 0x2 and 0x4).
+            vc.facing.restart();
+            vc.facing.holdsYaw = game::vehicle::seatHoldsCameraYaw(vc.clock.mode, seat);
+            if (vc.facing.holdsYaw) vc.facing.follows = true;
             vc.snap = true;
         }
         setSeatState(guid, p, first, now);

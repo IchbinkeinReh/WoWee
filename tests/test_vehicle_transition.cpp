@@ -540,3 +540,60 @@ TEST_CASE("a passenger's own place is its offset on the vehicle, turned (0x004f4
     CHECK(a.y == Catch::Approx(b.y));
     CHECK(a.z == Catch::Approx(b.z));
 }
+
+TEST_CASE("the vehicle camera's facing in each mode (0x0075a1c0)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    SeatRecord seat;  // no facing chase, no spring, no FlagsB 0x1
+    CameraFacing f;
+    f.restartAt(0.0f);
+    // Waiting, it holds the facing of the change: no turn.
+    CHECK(stepCameraFacing(f, 1.0f, CameraMode::EnterWait, &seat, 0.0f, 1000, false, 0.016f, false, false) == 0.0f);
+    CHECK(f.out == 0.0f);
+    CHECK(f.target == Catch::Approx(1.0f));
+    // Entering, eased from it to the facing by the way's share.
+    CHECK(stepCameraFacing(f, 1.0f, CameraMode::Entering, &seat, 0.5f, 1000, false, 0.016f, false, false) ==
+          Catch::Approx(0.5f));
+    CHECK(stepCameraFacing(f, 1.0f, CameraMode::Entering, &seat, 1.0f, 1000, false, 0.016f, false, false) ==
+          Catch::Approx(0.5f));
+    // Seated, the facing itself; within a half turn of the last.
+    CHECK(stepCameraFacing(f, 1.0f + 6.2831855f, CameraMode::Seated, &seat, 1.0f, 0, false, 0.016f, false, false) ==
+          Catch::Approx(0.0f).margin(1e-5f));
+    // The camera's own yaw held (+0xac): no turn.
+    CHECK(stepCameraFacing(f, 1.5f, CameraMode::Seated, &seat, 1.0f, 0, false, 0.016f, false, true) == 0.0f);
+    CHECK(f.out == Catch::Approx(1.5f));
+}
+
+TEST_CASE("a seat's FlagsB 0x1 holds the camera's yaw unless the keys turn (0x0075a1c0)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    SeatRecord seat;
+    seat.flagsB = 0x1;
+    CameraFacing f;
+    f.restartAt(0.0f);
+    f.holdsYaw = seatHoldsCameraYaw(CameraMode::Entering, &seat);
+    REQUIRE(f.holdsYaw);
+    f.follows = true;
+    // On the way in the facing is held where it was.
+    CHECK(stepCameraFacing(f, 1.0f, CameraMode::Entering, &seat, 0.5f, 1000, false, 0.016f, false, false) == 0.0f);
+    CHECK(f.out == 0.0f);
+    CHECK(f.target == 0.0f);
+    // Seated, the turn is taken back (0x005fe5f0) while the facing moves.
+    CHECK(stepCameraFacing(f, 1.0f, CameraMode::Seated, &seat, 1.0f, 0, false, 0.016f, false, false) == 0.0f);
+    CHECK(f.out == Catch::Approx(1.0f));
+    // The keys turning: the next step turns with it.
+    CHECK(stepCameraFacing(f, 1.0f, CameraMode::Seated, &seat, 1.0f, 0, false, 0.016f, true, false) == 0.0f);
+    CHECK_FALSE(f.follows);
+    CHECK(stepCameraFacing(f, 1.25f, CameraMode::Seated, &seat, 1.0f, 0, false, 0.016f, true, false) ==
+          Catch::Approx(0.25f));
+    // Waiting to leave the seat holds nothing (+0x8 0x2 is for 1 to 3).
+    CHECK_FALSE(seatHoldsCameraYaw(CameraMode::ExitWait, &seat));
+}
+
+TEST_CASE("from a control seat the vehicle camera watches the vehicle (0x0075a930)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    SeatRecord seat;
+    CHECK_FALSE(cameraWatchesVehicle(false, &seat));
+    seat.flags = kSeatFlagCanControl;
+    CHECK(cameraWatchesVehicle(false, &seat));
+    CHECK_FALSE(cameraWatchesVehicle(true, &seat));
+    CHECK_FALSE(cameraWatchesVehicle(false, nullptr));
+}

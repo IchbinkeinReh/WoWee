@@ -297,6 +297,13 @@ void EntitySpawner::resetAllState() {
     gameObjectDisplayIdFailedCache_.clear();
     // Instance ids in here belong to a renderer that has just been cleared.
     gameObjectServerState_.clear();
+
+    // The passengers go with their units, and the player's vehicle camera
+    // with the player (0x00734fd0 -> 0x0074cd60).
+    seatedPassengers_.clear();
+    heldVehicleMoves_.clear();
+    localSeatCamera_ = LocalSeatCamera{};
+    localVehicleCamera_ = LocalVehicleCamera{};
 }
 
 void EntitySpawner::rebuildLookups() {

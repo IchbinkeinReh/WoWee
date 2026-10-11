@@ -257,6 +257,10 @@ public:
     /// The mouse steering the character: the right button held (both
     /// buttons running too), or a finger dragging the view (FUN_005fa6b0).
     [[nodiscard]] bool isMouseSteering() const { return rightMouseDown || steering_; }
+    /// The camera's own yaw held, the left button looking about alone
+    /// (Camera FREELOOK, 0x00601ff0 -> +0xac): no unit's facing turns it
+    /// (0x00604490).
+    [[nodiscard]] bool isFreeLooking() const { return leftMouseDown && !rightMouseDown; }
     void setMovementRooted(bool rooted) { movementRooted_ = rooted; }
     [[nodiscard]] bool isMovementRooted() const { return movementRooted_; }
     /// The mover's movement flags2 0x1 and 0x2: no strafing - nor rising or
