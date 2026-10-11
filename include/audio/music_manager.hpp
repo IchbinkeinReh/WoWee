@@ -24,6 +24,11 @@ public:
     void playMusic(const std::string& mpqPath, bool loop = true, float fadeInMs = 0.0f);
     void playFilePath(const std::string& filePath, bool loop = true, float fadeInMs = 0.0f);
     void stopMusic(float fadeMs = 2000.0f);
+    /// SMSG_PLAY_MUSIC's track: the client's script music (0xb4ac3c), which
+    /// shares this manager with the zone's.
+    void playScriptMusic(const std::string& mpqPath);
+    /// The track playing is script music.
+    [[nodiscard]] bool isScriptMusic() const { return scriptMusic_; }
     /// Loop Music, from the audio options. Takes effect on the next track.
     void setLooping(bool loop) { loopTracks_ = loop; }
     [[nodiscard]] bool isLooping() const { return loopTracks_; }
@@ -66,6 +71,7 @@ private:
     pipeline::AssetManager* assetManager = nullptr;
     std::string currentTrack;
     bool currentTrackIsFile = false;
+    bool scriptMusic_ = false;
     bool playing = false;
     int volumePercent = 30;
     bool underwaterMode = false;

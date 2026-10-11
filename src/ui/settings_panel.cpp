@@ -23,6 +23,7 @@
 #include "core/version.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/lens_flare.hpp"
+#include "rendering/day_night.hpp"
 #include "rendering/post_process_pipeline.hpp"
 #include "rendering/lighting_manager.hpp"
 #include "rendering/camera.hpp"
@@ -1258,7 +1259,17 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         return;
     }
     if (key == "viewdistance") {
-        if (renderer) renderer->setViewDistance(pendingViewDistance);
+        if (renderer) {
+            const float before = renderer->getFarClip();
+            renderer->setViewDistance(pendingViewDistance);
+            // In the world, a far clip raised past 10 yards unloads its sound
+            // (0x007831a0 -> 0x00409550).
+            auto* gh = services_.gameHandler;
+            if (gh && gh->getState() == game::WorldState::IN_WORLD && services_.audioCoordinator &&
+                rendering::daynight::farClipRaiseShowsLoadingScreen(before, renderer->getFarClip())) {
+                services_.audioCoordinator->leaveWorld();
+            }
+        }
     } else if (key == "shadows") {
         if (renderer) renderer->setShadowsEnabled(pendingShadows);
     } else if (key == "shadowdistance") {

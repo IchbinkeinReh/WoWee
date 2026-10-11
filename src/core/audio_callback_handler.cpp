@@ -73,7 +73,7 @@ void AudioCallbackHandler::setupCallbacks() {
 
         auto path = resolveSoundEntryPath(soundId);
         if (path) {
-            music->playMusic(*path, /*loop=*/false);
+            music->playScriptMusic(*path);
         }
     });
 

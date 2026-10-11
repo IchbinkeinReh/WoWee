@@ -316,6 +316,13 @@ inline float clientFarClip(float setting, uint32_t mapId, bool farClipOverride =
     return setting > limit ? limit : setting;
 }
 
+/// A far clip raised by more than 10 yards (0x00780800 keeps the last one,
+/// 0x007831a0 compares) is drawn after a loading screen, whose end stops the
+/// world's music and ambience (0x00409550). Lowered, or by less, it is not.
+inline bool farClipRaiseShowsLoadingScreen(float before, float after) {
+    return after - before > 10.0f;
+}
+
 /// What 0x007f3230 draws with when it has no light at all (DAT_00d39008 0):
 /// fog out to 1e10 yards - so to the far clip (0x007f16f0) - starting half way,
 /// drawn with an exponent of 4 on any map.

@@ -70,12 +70,14 @@ public:
     void shutdown();
 
     /// The world unloads - a logout, the client quitting from the world - or
-    /// a loading screen ends: a map change (SMSG_NEW_WORLD -> 0x006e7f50) or
-    /// a teleport of more than 150 yards on the same map (0x006ecf80).
+    /// a loading screen ends: a map change (SMSG_NEW_WORLD -> 0x006e7f50), a
+    /// teleport of more than 150 yards on the same map (0x006ecf80), or a far
+    /// clip raised by more than 10 yards (0x007831a0). An instance difficulty
+    /// changed (SMSG_CHANGEPLAYER_DIFFICULTY_RESULT 9, 0x0052c460) does it too.
     ///
     /// What the client's unload (0x00409550) stops: the zone music's two
-    /// channels and the script music (0x004c93b0), and the ambience's
-    /// channels (0x004c85f0), all at once. The zone they were for is
+    /// channels at once and the script music over half a second (0x004c93b0),
+    /// and the ambience's channels (0x004c85f0). The zone they were for is
     /// forgotten too, so the next world entry starts its music afresh.
     void leaveWorld();
 

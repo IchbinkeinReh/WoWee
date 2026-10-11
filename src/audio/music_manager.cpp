@@ -44,6 +44,7 @@ void MusicManager::shutdown() {
     fadeInTargetVolume = 0.0f;
     currentTrack.clear();
     currentTrackIsFile = false;
+    scriptMusic_ = false;
     pendingTrack.clear();
     pendingIsFile = false;
     musicDataCache_.clear();
@@ -101,6 +102,9 @@ void MusicManager::playMusic(const std::string& mpqPath, bool loop, float fadeIn
         }
         currentTrack = mpqPath;
         currentTrackIsFile = false;
+        scriptMusic_ = false;
+        // A track started ends any fade of the last: the engine has one.
+        fadingOut = false;
         LOG_INFO("Music: Playing ", mpqPath);
     } else {
         LOG_ERROR("Music: Failed to play music via AudioEngine");
@@ -186,10 +190,17 @@ void MusicManager::pollPendingFileLoad() {
         }
         currentTrack = filePath;
         currentTrackIsFile = true;
+        scriptMusic_ = false;
+        fadingOut = false;
         LOG_INFO("Music: Playing file ", filePath);
     } else {
         LOG_ERROR("Music: Failed to play music via AudioEngine");
     }
+}
+
+void MusicManager::playScriptMusic(const std::string& mpqPath) {
+    playMusic(mpqPath, /*loop=*/false);
+    if (playing && currentTrack == mpqPath) scriptMusic_ = true;
 }
 
 void MusicManager::stopMusic(float fadeMs) {
@@ -215,6 +226,7 @@ void MusicManager::stopMusic(float fadeMs) {
         fadingOut = false;
         currentTrack.clear();
         currentTrackIsFile = false;
+        scriptMusic_ = false;
     }
 }
 
@@ -302,6 +314,7 @@ void MusicManager::update(float deltaTime) {
             playing = false;
             currentTrack.clear();
             currentTrackIsFile = false;
+            scriptMusic_ = false;
         }
         return;  // Don't process other fade logic while fading out
     }

@@ -259,6 +259,16 @@ TEST_CASE("the far clip is held to 791 yards before map 530 and 1583 from it", "
     CHECK(dn::clientFarClip(1900.0f, 530, false, false) == Catch::Approx(791.6667f));
 }
 
+TEST_CASE("a far clip raised past 10 yards reloads the world's sound", "[daynight][farclip]") {
+    // 0x007831a0: the new far clip less the last, strictly over 10.
+    CHECK(dn::farClipRaiseShowsLoadingScreen(400.0f, 791.6667f));
+    CHECK(dn::farClipRaiseShowsLoadingScreen(400.0f, 410.5f));
+    CHECK_FALSE(dn::farClipRaiseShowsLoadingScreen(400.0f, 410.0f));
+    CHECK_FALSE(dn::farClipRaiseShowsLoadingScreen(1200.0f, 400.0f));
+    // A setting past the map's limit changes nothing the world draws.
+    CHECK_FALSE(dn::farClipRaiseShowsLoadingScreen(dn::clientFarClip(1600.0f, 0), dn::clientFarClip(1900.0f, 0)));
+}
+
 TEST_CASE("the fog follows the map's far clip", "[daynight][farclip][fog]") {
     // The fog's end is held to the far clip (0x007f16f0), and the later fog
     // ends at it (0x007ecd80), so the same setting fogs the two worlds at

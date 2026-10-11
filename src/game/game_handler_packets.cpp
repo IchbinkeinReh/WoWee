@@ -477,7 +477,13 @@ void GameHandler::registerCoreOpcodes() {
     dispatchTable_[Opcode::SMSG_CHANGEPLAYER_DIFFICULTY_RESULT] = [this](network::Packet& packet) {
         if (packet.hasRemaining(4)) {
             uint32_t result = packet.readUInt32();
-            if (result == 0) {
+            if (result == 9) {
+                // 0x0052c460 case 9, the change done: the world's music and
+                // ambience stop (0x00409550) and PLAYER_DIFFICULTY_CHANGED
+                // (event 0x298) fires.
+                if (auto* ac = services_.audioCoordinator) ac->leaveWorld();
+                fireAddonEvent("PLAYER_DIFFICULTY_CHANGED", {});
+            } else if (result == 0) {
                 addSystemChatMessage("Difficulty changed.");
             } else {
                 static const char* reasons[] = {

@@ -75,10 +75,12 @@ void AudioCoordinator::shutdown() {
 }
 
 void AudioCoordinator::leaveWorld() {
-    // 0x004c93b0: the zone music's channels (0x004c6450(1) on 0xb4ac90) and
-    // the script music SMSG_PLAY_MUSIC and PlayMusic start (0xb4ac3c), with
-    // its slot (3) cleared. Here they share the one music manager.
-    if (musicManager_) musicManager_->stopMusic(0.0f);
+    // 0x004c93b0: the zone music's channels at once (0x004c6450(1) on
+    // 0xb4ac90, no fade) and the script music SMSG_PLAY_MUSIC and PlayMusic
+    // start (0xb4ac3c) over half a second (0x004c6390 with 0.5, seconds by
+    // 0x0087a2f0), with its slot (3) cleared. Here they share the one music
+    // manager, so whichever is playing stops its own way.
+    if (musicManager_) musicManager_->stopMusic(musicManager_->isScriptMusic() ? 500.0f : 0.0f);
     // 0x004c85f0: the ambience's channels (0xb4ac50) - the zone's and the
     // screen effect's loop.
     if (screenEffectAmbienceHandle_ != 0) AudioEngine::instance().stopSound(screenEffectAmbienceHandle_);
