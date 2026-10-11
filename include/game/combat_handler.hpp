@@ -183,6 +183,7 @@ private:
     void handleHealthUpdate(network::Packet& packet);
     void handlePowerUpdate(network::Packet& packet);
     void handleUpdateComboPoints(network::Packet& packet);
+    void handlePetUpdateComboPoints(network::Packet& packet);
     void handlePvpCredit(network::Packet& packet);
     void handleProcResist(network::Packet& packet);
     void handleSpellDamageShield(network::Packet& packet);

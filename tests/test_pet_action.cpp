@@ -228,3 +228,34 @@ TEST_CASE("AttributesEx6 0x40000 is cast by the charmer, and Ex7 0x8 wants its f
     CHECK_FALSE(casterMayCast(0x8, 0));
     CHECK(casterMayCast(0x8, 0x40000));
 }
+
+TEST_CASE("a dead pet, its ranged weapon and its combo points (0x0080cce0)", "[pet]") {
+    // CGUnit_C +0x128 (0x00716490): health 0; Attributes 0x800000 allows it.
+    REQUIRE(casterDeadRefuses(0, 0));
+    REQUIRE_FALSE(casterDeadRefuses(0, 0x800000));
+    REQUIRE_FALSE(casterDeadRefuses(10, 0));
+    // Attributes 0x2: a ranged weapon, not disarmed of it.
+    REQUIRE_FALSE(rangedWeaponRefuses(0, 0, 0));
+    REQUIRE(rangedWeaponRefuses(0x2, 0, 0));
+    REQUIRE_FALSE(rangedWeaponRefuses(0x2, 1234, 0));
+    REQUIRE(rangedWeaponRefuses(0x2, 1234, 0x400));
+    // Combo points: none on the unit is NO_COMBO_POINTS, a warrior's
+    // CASTER_AURASTATE; an aura 262 for the spell lets it go.
+    REQUIRE(comboPointsFailure(0x100000, 0, false, 9) == 0x4e);
+    REQUIRE(comboPointsFailure(0x400000, 0, false, 1) == 0x16);
+    REQUIRE(comboPointsFailure(0x100000, 2, false, 9) == 0);
+    REQUIRE(comboPointsFailure(0x100000, 0, true, 9) == 0);
+    REQUIRE(comboPointsFailure(0, 0, false, 9) == 0);
+}
+
+TEST_CASE("an aura 262 reaches a spell by its family and class mask (0x007fdec0)", "[pet]") {
+    const uint32_t names[3] = {0, kAuraIgnoreAuraState, 0};
+    const uint32_t masks[3][3] = {{0, 0, 0}, {0, 0x10, 0}, {0, 0, 0}};
+    const uint32_t flags[3] = {0, 0x10, 0};
+    REQUIRE(auraIgnoresAuraState(9, names, masks, 0x2, 9, flags));
+    // The effect off, another family, or no shared bit.
+    REQUIRE_FALSE(auraIgnoresAuraState(9, names, masks, 0x1, 9, flags));
+    REQUIRE_FALSE(auraIgnoresAuraState(8, names, masks, 0x2, 9, flags));
+    const uint32_t other[3] = {0x10, 0, 0};
+    REQUIRE_FALSE(auraIgnoresAuraState(9, names, masks, 0x2, 9, other));
+}

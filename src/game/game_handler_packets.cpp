@@ -3433,7 +3433,6 @@ void GameHandler::registerRemainingOpcodes() {
         Opcode::SMSG_NOTIFY_DANCE,
         Opcode::SMSG_NOTIFY_DEST_LOC_SPELL_CAST,
         Opcode::SMSG_PETGODMODE,
-        Opcode::SMSG_PET_UPDATE_COMBO_POINTS,
         Opcode::SMSG_PLAY_DANCE,
         Opcode::SMSG_PROFILEDATA_RESPONSE,
         Opcode::SMSG_PVP_QUEUE_STATS,

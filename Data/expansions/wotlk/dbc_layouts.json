@@ -389,6 +389,7 @@
     "EffectMiscValue1": 111,
     "EffectMiscValue2": 112,
     "EffectMiscValueB0": 113,
+    "EffectSpellClassMask": 122,
     "EffectMiscValueB1": 114,
     "EffectMiscValueB2": 115,
     "ActiveIconID": 134,

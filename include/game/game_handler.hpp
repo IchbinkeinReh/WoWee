@@ -3875,6 +3875,14 @@ public:
     // ── Combat & Player Stats ────────────────────────────────────────
     auto& comboPointsRef() { return comboPoints_; }
     auto& comboTargetRef() { return comboTarget_; }
+    auto& petComboPointsRef() { return petComboPoints_; }
+    auto& petComboTargetRef() { return petComboTarget_; }
+    /// The pet's combo points on a unit, the player's target for none
+    /// (0x005d3520).
+    uint8_t petComboPointsOn(uint64_t unit) const {
+        if (unit == 0) unit = targetGuid;
+        return unit == petComboTarget_ ? petComboPoints_ : 0;
+    }
     auto& isRestingRef() { return isResting_; }
     auto& playerArenaPointsRef() { return playerArenaPoints_; }
     auto& playerArmorRatingRef() { return playerArmorRating_; }
@@ -4256,6 +4264,9 @@ public:
         uint32_t effectMiscValues[3] = {0, 0, 0};
         /// Spell.dbc EffectMiscValueB: a summon's SummonProperties row.
         uint32_t effectMiscValuesB[3] = {0, 0, 0};
+        /// Spell.dbc EffectSpellClassMask, three words an effect (+0x1e8):
+        /// the spells an effect's aura reaches (0x007fdec0).
+        uint32_t effectClassMask[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
         // Spell.dbc EffectImplicitTargetA - what the spell expects to be aimed
         // at. 21 means a friendly unit, which is how heals and buffs are told
         // apart from damage that shares the same effect and school.
@@ -4874,6 +4885,9 @@ private:
     // Combo points (rogues/druids)
     uint8_t  comboPoints_ = 0;
     uint64_t comboTarget_ = 0;
+    /// SMSG_PET_UPDATE_COMBO_POINTS for the pet (0x00c234e4, 0x00c234e8).
+    uint8_t  petComboPoints_ = 0;
+    uint64_t petComboTarget_ = 0;
 
     // Instance / raid lockouts
 

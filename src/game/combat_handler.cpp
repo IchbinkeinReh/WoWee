@@ -247,6 +247,7 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_HEALTH_UPDATE] = [this](network::Packet& p) { handleHealthUpdate(p); };
     table[Opcode::SMSG_POWER_UPDATE] = [this](network::Packet& p) { handlePowerUpdate(p); };
     table[Opcode::SMSG_UPDATE_COMBO_POINTS] = [this](network::Packet& p) { handleUpdateComboPoints(p); };
+    table[Opcode::SMSG_PET_UPDATE_COMBO_POINTS] = [this](network::Packet& p) { handlePetUpdateComboPoints(p); };
     table[Opcode::SMSG_PVP_CREDIT] = [this](network::Packet& p) { handlePvpCredit(p); };
     table[Opcode::SMSG_PROCRESIST] = [this](network::Packet& p) { handleProcResist(p); };
 
@@ -1007,6 +1008,20 @@ void CombatHandler::handleUpdateComboPoints(network::Packet& packet) {
     LOG_DEBUG("SMSG_UPDATE_COMBO_POINTS: target=0x", std::hex, target,
               std::dec, " points=", static_cast<int>(owner_.comboPointsRef()));
     owner_.fireAddonEvent("PLAYER_COMBO_POINTS", {});
+}
+
+void CombatHandler::handlePetUpdateComboPoints(network::Packet& packet) {
+    // 0x005d36a0: the pet's packed guid, the unit's, the points - kept
+    // for the first pet only (0x005d34b0).
+    if (!packet.hasRemaining(2)) return;
+    const uint64_t pet = packet.readPackedGuid();
+    if (!packet.hasRemaining(2)) return;
+    const uint64_t target = packet.readPackedGuid();
+    if (!packet.hasRemaining(1)) return;
+    const uint8_t points = packet.readUInt8();
+    if (pet != owner_.getPetGuid()) return;
+    owner_.petComboTargetRef() = target;
+    owner_.petComboPointsRef() = points;
 }
 
 void CombatHandler::handlePvpCredit(network::Packet& packet) {

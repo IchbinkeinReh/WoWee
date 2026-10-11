@@ -1123,12 +1123,64 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
         }
     }
     if (owner_.heldBySeat(caster)) return;  // 0x0074ba40
+    auto casterEntity = owner_.getEntityManager().getEntity(caster);
+    // A dead caster (CGUnit_C +0x128, 0x00716490), unless Attributes
+    // 0x800000.
+    if (casterEntity && casterEntity->isUnit() &&
+        pet::casterDeadRefuses(static_cast<const Unit&>(*casterEntity).getHealth(), spell.attr)) {
+        constexpr uint8_t kSpellFailedCasterDead = 0x17;
+        owner_.addUIError(castFailureMessage(owner_, spellId, kSpellFailedCasterDead, -1, 0, 0));
+        return;
+    }
     // AttributesEx7 0x8 wants a caster with UNIT_FIELD_FLAGS_2 0x40000.
-    if (auto c = owner_.getEntityManager().getEntity(caster)) {
-        if (!pet::casterMayCast(spell.attrEx7, entityField(*c, UF::UNIT_FIELD_FLAGS_2))) {
+    if (casterEntity) {
+        if (!pet::casterMayCast(spell.attrEx7, entityField(*casterEntity, UF::UNIT_FIELD_FLAGS_2))) {
             constexpr uint8_t kSpellFailedSpellUnavailable = 0x6b;
             owner_.addUIError(castFailureMessage(owner_, spellId, kSpellFailedSpellUnavailable, -1, 0, 0));
             return;
+        }
+        // Attributes 0x2: a ranged weapon in its third virtual slot, not
+        // disarmed of it (CGUnit_C +0x12c -> 0x0071f440).
+        const uint16_t slots = fieldIndex(UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
+        const uint32_t ranged = slots != 0xFFFF ? casterEntity->getField(static_cast<uint16_t>(slots + 2)) : 0u;
+        if (pet::rangedWeaponRefuses(spell.attr, ranged, entityField(*casterEntity, UF::UNIT_FIELD_FLAGS_2))) {
+            constexpr uint8_t kSpellFailedEquippedItem = 0x1c;
+            owner_.addUIError(castFailureMessage(owner_, spellId, kSpellFailedEquippedItem, -1, 0, 0));
+            return;
+        }
+        // AttributesEx 0x500000 from the pet: its combo points on the unit
+        // (0x005d3520), else an aura 262 for the spell on the unit that
+        // made it, up its creators (0x0072aaf0 -> 0x007283a0).
+        if ((spell.attrEx & 0x500000u) != 0 && caster == owner_.getPetGuid()) {
+            uint64_t root = caster;
+            for (auto e = casterEntity; e;) {
+                const uint64_t up = entityGuidField(*e, UF::UNIT_FIELD_CREATEDBY);
+                if (up == 0) break;
+                root = up;
+                e = owner_.getEntityManager().getEntity(up);
+                if (!e) root = 0;
+            }
+            bool auraLetsIt = false;
+            const auto* auras = root == owner_.getPlayerGuid() ? &playerAuras_ : getUnitAuras(root);
+            static const std::vector<AuraSlot> kNoAuras;
+            for (const auto& a : auras ? *auras : kNoAuras) {
+                if (a.spellId == 0) continue;
+                const auto as = owner_.spellNameCacheRef().find(a.spellId);
+                if (as == owner_.spellNameCacheRef().end()) continue;
+                if (pet::auraIgnoresAuraState(as->second.spellFamily, as->second.effectAuraIds,
+                                              as->second.effectClassMask, a.flags, spell.spellFamily,
+                                              spell.spellFamilyFlags)) {
+                    auraLetsIt = true;
+                    break;
+                }
+            }
+            const uint8_t casterClass =
+                static_cast<uint8_t>((entityField(*casterEntity, UF::UNIT_FIELD_BYTES_0) >> 8) & 0xFFu);
+            if (const uint8_t fail = pet::comboPointsFailure(spell.attrEx, owner_.petComboPointsOn(targetGuid),
+                                                             auraLetsIt, casterClass)) {
+                owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
+                return;
+            }
         }
     }
     if (armGroundTarget(spellId, caster)) return;
@@ -3582,6 +3634,9 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
     const size_t remaining = packet.getRemainingSize();
     if (remaining < 8) {
         owner_.petGuidRef() = 0;
+        // No pet: its combo points go (0x005d6900 -> 0x005d34b0).
+        owner_.petComboTargetRef() = 0;
+        owner_.petComboPointsRef() = 0;
         owner_.petSpellListRef().clear();
         owner_.petAutocastSpellsRef().clear();
         memset(owner_.petActionSlotsRef(), 0, sizeof(owner_.petActionSlotsRef()));
@@ -3600,6 +3655,8 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
     // pet comes back in answer to this and nothing else.
     if (owner_.petGuidRef() != 0) requestPetName(owner_.petGuidRef());
     if (owner_.petGuidRef() == 0) {
+        owner_.petComboTargetRef() = 0;
+        owner_.petComboPointsRef() = 0;
         owner_.petSpellListRef().clear();
         owner_.petAutocastSpellsRef().clear();
         memset(owner_.petActionSlotsRef(), 0, sizeof(owner_.petActionSlotsRef()));
@@ -3921,6 +3978,7 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t attrEx3Field = spellL ? spellL->tryField("AttributesEx3") : 0xFFFFFFFF;
     const uint32_t attrEx2Field = spellL ? spellL->tryField("AttributesEx2") : 0xFFFFFFFF;
     const uint32_t creatureTypeField = spellL ? spellL->tryField("TargetCreatureType") : 0xFFFFFFFF;
+    const uint32_t classMaskField = spellL ? spellL->tryField("EffectSpellClassMask") : 0xFFFFFFFF;
     const uint32_t attrEx4Field = spellL ? spellL->tryField("AttributesEx4") : 0xFFFFFFFF;
     const uint32_t attrEx7Field = spellL ? spellL->tryField("AttributesEx7") : 0xFFFFFFFF;
     const uint32_t attrEx5Field = spellL ? spellL->tryField("AttributesEx5") : 0xFFFFFFFF;
@@ -4126,6 +4184,10 @@ void SpellHandler::loadSpellNameCache() const {
             if (attrEx3Field < fieldCount) entry.attrEx3 = dbc->getUInt32(i, attrEx3Field);
             if (attrEx2Field < fieldCount) entry.attrEx2 = dbc->getUInt32(i, attrEx2Field);
             if (creatureTypeField < fieldCount) entry.targetCreatureType = dbc->getUInt32(i, creatureTypeField);
+            if (classMaskField != 0xFFFFFFFF && classMaskField + 9 <= fieldCount) {
+                for (uint32_t k = 0; k < 9; ++k)
+                    entry.effectClassMask[k / 3][k % 3] = dbc->getUInt32(i, classMaskField + k);
+            }
             if (attrEx4Field < fieldCount) entry.attrEx4 = dbc->getUInt32(i, attrEx4Field);
             if (attrEx7Field < fieldCount) entry.attrEx7 = dbc->getUInt32(i, attrEx7Field);
             if (attrEx5Field < fieldCount) entry.attrEx5 = dbc->getUInt32(i, attrEx5Field);

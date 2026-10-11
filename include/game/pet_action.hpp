@@ -172,6 +172,50 @@ template <typename SlotOf, typename Auras, typename MountOf>
     return (attrEx7 & 0x8u) == 0 || (casterFlags2 & 0x40000u) != 0;
 }
 
+/// 0x0080cce0: a dead caster - CGUnit_C's virtual +0x128, 0x00716490:
+/// UNIT_FIELD_HEALTH 0 - casts only what Attributes 0x800000 allows; else
+/// SPELL_FAILED_CASTER_DEAD (0x17).
+[[nodiscard]] constexpr bool casterDeadRefuses(int64_t health, uint32_t attr) {
+    return health <= 0 && (attr & 0x800000u) == 0;
+}
+
+/// 0x0080cce0: Attributes 0x2 (a ranged weapon's) from a caster other than
+/// the player wants a ranged weapon - CGUnit_C's virtual +0x12c, 0x0071f440
+/// (2, 0): the item in its third virtual slot (+0x998[2], 0x00718b10), and
+/// not UNIT_FIELD_FLAGS_2 0x400; else SPELL_FAILED_EQUIPPED_ITEM (0x1c).
+[[nodiscard]] constexpr bool rangedWeaponRefuses(uint32_t attr, uint32_t rangedItem, uint32_t flags2) {
+    return (attr & 0x2u) != 0 && (rangedItem == 0 || (flags2 & 0x400u) != 0);
+}
+
+/// 0x007283a0 (262, spell) -> 0x007fdec0: an aura whose effect k applies
+/// SPELL_AURA_ABILITY_IGNORE_AURASTATE (262), that effect on (the aura's
+/// flag bit k), of the spell's SpellFamilyName, its EffectSpellClassMask
+/// (+0x1e8 + 12k) meeting the spell's SpellFamilyFlags.
+inline constexpr uint32_t kAuraIgnoreAuraState = 262;
+[[nodiscard]] constexpr bool auraIgnoresAuraState(uint32_t auraFamily, const uint32_t (&auraNames)[3],
+                                                  const uint32_t (&classMask)[3][3], uint8_t auraFlags,
+                                                  uint32_t spellFamily, const uint32_t (&familyFlags)[3]) {
+    if (auraFamily != spellFamily) return false;
+    for (int k = 0; k < 3; ++k) {
+        if (auraNames[k] != kAuraIgnoreAuraState || (auraFlags & (1u << k)) == 0) continue;
+        for (int w = 0; w < 3; ++w) {
+            if ((classMask[k][w] & familyFlags[w]) != 0) return true;
+        }
+    }
+    return false;
+}
+
+/// 0x0080cce0: AttributesEx 0x500000 (combo points) cast by the pet wants
+/// the pet's points on the unit (0x005d3520) - unless the unit that made it
+/// carries an aura letting the spell go without (0x0072aaf0): a warrior's
+/// SPELL_FAILED_CASTER_AURASTATE (0x16), else SPELL_FAILED_NO_COMBO_POINTS
+/// (0x4e). 0 where it may go.
+[[nodiscard]] constexpr uint8_t comboPointsFailure(uint32_t attrEx, uint8_t points, bool auraLetsIt,
+                                                   uint8_t casterClass) {
+    if ((attrEx & 0x500000u) == 0 || points != 0 || auraLetsIt) return 0;
+    return casterClass == 1 ? 0x16 : 0x4e;
+}
+
 /// What PetDismiss does (CGPetInfo::PetDismiss, 0x005d46f0).
 enum class DismissAction : uint8_t {
     None,
