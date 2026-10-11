@@ -9,6 +9,15 @@
 //
 // Three terms ride along - sun, occlusion and point light visibility - and
 // the history length is the fourth channel.
+//
+// The reprojection follows the camera only. What moves on its own - a unit
+// turning, walking, swinging an arm - drags its shadow over ground whose
+// history still holds the shadow where it was, and the camera's own test
+// passes there: same ground, same distance. So the history is also held to
+// what this frame's samples around the pixel allow (a variance clamp over
+// the same surface), and a history clamped hard is shortened with it, so a
+// shadow that moved off a patch of ground leaves in a few frames instead of
+// fading out over two dozen behind whatever cast it.
 
 #include "rt_common.glsli"
 
@@ -67,6 +76,36 @@ void main() {
                 len = hist.a;
             }
         }
+    }
+
+    if (len > 0.0) {
+        // This frame's samples over a 5x5 block (every other texel), on this
+        // surface: their mean and spread. One sample a pixel is noisy - a
+        // half-lit edge is a mix of 0s and 1s - so the window is the mean
+        // plus one and a half standard deviations and a fifth on either side.
+        vec3 m1 = vec3(0.0), m2 = vec3(0.0);
+        float count = 0.0;
+        for (int y = -2; y <= 2; y += 2) {
+            for (int x = -2; x <= 2; x += 2) {
+                ivec2 q = clamp(px + ivec2(x, y), ivec2(0), ivec2(pass.extent.xy) - 1);
+                vec4 qg = texelFetch(uGbufCur, q, 0);
+                float qd = rtGbufDist(qg);
+                bool same = (x == 0 && y == 0) ||
+                            (qd > 0.0 && abs(qd - dist) < 0.05 * dist + 0.1 && dot(rtGbufNormal(qg), n) > 0.8);
+                if (!same) continue;
+                vec3 v = texelFetch(uRaw, q, 0).rgb;
+                m1 += v;
+                m2 += v * v;
+                count += 1.0;
+            }
+        }
+        vec3 mean = m1 / count;
+        vec3 sigma = sqrt(max(m2 / count - mean * mean, vec3(0.0)));
+        vec3 window = 1.5 * sigma + 0.2;
+        vec3 held = clamp(hist.rgb, mean - window, mean + window);
+        vec3 moved = abs(held - hist.rgb);
+        len *= clamp(1.0 - 3.0 * max(moved.r, max(moved.g, moved.b)), 0.1, 1.0);
+        hist.rgb = held;
     }
 
     len = min(len + 1.0, MAX_HISTORY);
