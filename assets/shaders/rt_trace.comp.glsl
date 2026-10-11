@@ -21,6 +21,12 @@
 // two back together (rt_lighting.glsli). A flickering torch then flickers at
 // once, without waiting for its shadow to converge, and a dozen lights cost
 // one ray a pixel, not a dozen.
+//
+// A building's own lights (MOLT) are baked into its interior's vertex
+// colours already. Their part of the unshadowed light goes out beside it, in
+// uPointOut's alpha (the brightest channel's worth), so those surfaces can
+// take the rest of the light and only the shadows of these
+// (rt_lighting.glsli).
 
 #include "rt_common.glsli"
 #ifdef RT_HARDWARE
@@ -31,11 +37,11 @@
 
 layout(set = 0, binding = 3) uniform sampler2D uGbufCur;
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D uRaw;
-layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D uPointOut;
+layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D uPointOut;  // a = the baked lights' part
 
 // Must match rt_lights::PointLightGPU.
 struct RtPointLight {
-    vec4 positionEnd;  // xyz, w = where its light ends (yards)
+    vec4 positionEnd;  // xyz, w = where its light ends (yards), negative for a baked one
     vec4 colorStart;   // rgb, w = where its falloff starts
 };
 layout(std430, set = 0, binding = 12) readonly buffer RtPointLights { RtPointLight rtPointLights[]; };
@@ -94,6 +100,7 @@ void main() {
     // The point lights: their sum, and one of them picked by weighted
     // reservoir sampling in the same pass.
     vec3 pointSum = vec3(0.0);
+    float bakedSum = 0.0;
     float weightSum = 0.0;
     int picked = -1;
     uint lightCount = uint(pass.params.z + 0.5);
@@ -101,7 +108,7 @@ void main() {
         RtPointLight light = rtPointLights[i];
         vec3 toLight = light.positionEnd.xyz - p;
         float d2 = dot(toLight, toLight);
-        float end = light.positionEnd.w;
+        float end = abs(light.positionEnd.w);
         if (d2 >= end * end) continue;
         float d = sqrt(d2);
         float ndl = d > 1e-4 ? dot(n, toLight / d) : 1.0;
@@ -110,6 +117,7 @@ void main() {
         float w = max(c.r, max(c.g, c.b));
         if (w <= 0.0) continue;
         pointSum += c;
+        if (light.positionEnd.w < 0.0) bakedSum += w;
         weightSum += w;
         if (rtRandom(rng) * weightSum < w) picked = int(i);
     }
@@ -126,5 +134,5 @@ void main() {
     }
 
     imageStore(uRaw, px, vec4(sun, ao, pointVis, 0.0));
-    imageStore(uPointOut, px, vec4(pointSum, 0.0));
+    imageStore(uPointOut, px, vec4(pointSum, bakedSum));
 }

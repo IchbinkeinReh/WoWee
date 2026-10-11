@@ -279,8 +279,13 @@ void main() {
             // baked mask beside it is a second, offline sun's shadows.
             float s = rtShadow(rt, mapLit);
             shade = mix(s, 1.0, clamp(pow(abs(1.2 - abs(dot(terrainN, toSun))), 4.0), 0.0, 1.0));
+        } else {
+            // No map: the traced shadow where there is one, as on the
+            // ground under it, and the baked one where there is not.
+            float s = mix(rt.sun, 1.0, clamp(pow(abs(1.2 - abs(dot(terrainN, toSun))), 4.0), 0.0, 1.0));
+            shade = mix(shade, s, rt.weight);
         }
-        vec3 rgb = tex0.rgb * (light * (0.7 + 0.3 * shade) + rtPointLight(rt));
+        vec3 rgb = tex0.rgb * (light * rtShadowScale(rt, shade) + rtPointLight(rt));
         rgb = applyFog(rgb, FragPos, depth, (vInteriorLit & 2) != 0 ? cameraFogColor.rgb : fogColor.rgb);
         outColor = vec4(rtGiDebug(rgb), alpha);
         return;
@@ -339,9 +344,13 @@ void main() {
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, vInteriorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
         // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct),
-        // and the torches' and lamps' where the ray tracing has it.
+        // and the torches' and lamps' where the ray tracing has it. The MODD
+        // colour is the group's baked light, its lamps in it already: those
+        // only shadow it (rtPointLightOwn, rtBakedShade).
+        RtLight rt = rtLightAt(FragPos);
         light = clamp(vInteriorAmbient + highlightAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0)
-              + rtPointLight(rtLightAt(FragPos));
+                  * rtBakedShade(rt)
+              + rtPointLightOwn(rt);
     } else {
         // Ambient and diffuse only. The client lights an M2 batch with the
         // fixed-function light (FUN_0081fb10) and no specular term; its
@@ -371,7 +380,7 @@ void main() {
         // shadow variants' 0.7 + 0.3 x the light the shadow map lets through
         // over all of it.
         light = clamp(rtAmbient(rt, ambient, FragPos, norm) + diff * min(direct, vec3(1.0)), 0.0, 1.0)
-              * (0.7 + 0.3 * shadow);
+              * rtShadowScale(rt, shadow);
         // The torches' and lamps' light, where the ray tracing has it.
         light += rtPointLight(rt);
     }

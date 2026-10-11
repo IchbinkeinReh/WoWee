@@ -513,9 +513,12 @@ void main() {
         // shadow variants' 0.7 + 0.3 x the light the shadow map lets through.
         vec3 direct = min(lightColor.rgb * pc.diffuseColour.rgb * pc.lightFlags.y, vec3(1.0));
         light = clamp(ambientLit + diff * direct, 0.0, 1.0)
-              * (0.7 + 0.3 * shadow);
-        // The torches' and lamps' light, where the ray tracing has it.
-        light += rtPointLight(rt);
+              * rtShadowScale(rt, shadow);
+        // The torches' and lamps' light, where the ray tracing has it. An
+        // interior's colour is its baked light, its lamps in it already:
+        // those only shadow it (rtPointLightOwn, rtBakedShade).
+        if (pc.interiorAmbient.w > 0.5) light = light * rtBakedShade(rt) + rtPointLightOwn(rt);
+        else light += rtPointLight(rt);
     }
 
     // The batch's colour times the light is the diffuse the stages combine

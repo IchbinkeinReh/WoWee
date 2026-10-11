@@ -227,6 +227,18 @@ vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt) {
     return unifiedPath != 0 ? clamp(light * 0.5 + v + c29, 0.0, 1.0) : clamp(v * light + c29, 0.0, 1.0);
 }
 
+// The torches' and lamps' light, where the ray tracing has it, over a pass's
+// colour `c` - halved, as surface() doubles that colour. A pass whose colour
+// is the group's MOCV - unlit, the interior's ambient, or the unified
+// programs that add it - holds the building's own lights already, baked by
+// the artists' tools from the very MOLT lights traced here: it takes only
+// the other lights, and the building's lights' shadows over its colour.
+vec3 withPointLights(vec3 c, int mode, RtLight rt) {
+    bool baked = hasVertexColors != 0 && (mode == 0 || mode == 3 || unifiedPath != 0);
+    if (baked) return c * rtBakedShade(rt) + 0.5 * rtPointLightOwn(rt);
+    return c + 0.5 * rtPointLight(rt);
+}
+
 // The pixel program over a pass's colour `c` (the vertex colour doubled, as
 // every MapObj program has it): MapObjEnv adds the reflection by the
 // texture's alpha, MapObjEnvMetal by the texture times its alpha. Specular
@@ -332,7 +344,7 @@ void main() {
     // (0x00874760, 0xd431ac is never written). The plane's space is not
     // pinned down, so it is left out.
     shadow += (1.0 - shadow) * clamp(pow(abs(1.2 - abs(dot(norm, normalize(-lightDir.xyz)))), 4.0), 0.0, 1.0);
-    const float shadowScale = 0.7 + 0.3 * shadow;
+    const float shadowScale = rtShadowScale(rt, shadow);
 
     const vec3 env = (program == 3 || program == 5) ? texture(uEnvTexture, EnvCoord).rgb : vec3(0.0);
     // The fog's distance is the view depth: every vertex program takes it
@@ -340,12 +352,9 @@ void main() {
     // (c30, 0x00873210), not the distance to the eye.
     float dist = -(view * vec4(FragPos, 1.0)).z;
 
-    // The torches' and lamps' light, where the ray tracing has it, over the
-    // pass's colour - halved, as surface() doubles that colour.
-    const vec3 pointLight = 0.5 * rtPointLight(rt);
     vec3 inside = passColour(insideLight, v.rgb, norm, rt);
     if ((shadowed & 2) != 0) inside *= shadowScale;
-    inside += pointLight;
+    inside = withPointLights(inside, insideLight, rt);
     inside = fogPass(surface(inside, texColor, env), (fogs >> 2) & 3, dist);
 
     vec3 result = inside;
@@ -355,7 +364,7 @@ void main() {
         // one minus it, added (blend 7).
         vec3 outside = passColour(outsideLight, v.rgb, norm, rt);
         if ((shadowed & 1) != 0) outside *= shadowScale;
-        outside += pointLight;
+        outside = withPointLights(outside, outsideLight, rt);
         outside = fogPass(surface(outside, texColor, env), fogs & 3, dist);
         result = outside * alpha + inside * (1.0 - alpha);
     }

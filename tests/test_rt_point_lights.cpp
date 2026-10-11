@@ -174,6 +174,8 @@ TEST_CASE("a building's omni lights are placed and the rest left to its baking",
     CHECK(omni->position == glm::vec3(11.0f, 2.0f, 3.0f));
     CHECK(omni->color.g == Catch::Approx(1.2f));
     CHECK(omni->attenuationEnd == Catch::Approx(8.0f * kWorldReachScale));
+    // Its interior is lit by it already, in its vertex colours.
+    CHECK(omni->baked);
     CHECK_FALSE(placeWmoLight(glm::vec3(0.0f), glm::vec3(1.0f), 1.0f, 1.0f, 8.0f, 1, model).has_value());
     CHECK_FALSE(placeWmoLight(glm::vec3(0.0f), glm::vec3(1.0f), 1.0f, 1.0f, 0.0f, 0, model).has_value());
     CHECK_FALSE(placeWmoLight(glm::vec3(0.0f), glm::vec3(1.0f), 0.0f, 1.0f, 8.0f, 0, model).has_value());
@@ -245,6 +247,10 @@ TEST_CASE("the GPU record carries the window beside position and colour", "[rt][
     const PointLightGPU g = toGpu(l);
     CHECK(g.positionEnd == glm::vec4(1, 2, 3, 7));
     CHECK(g.colorStart == glm::vec4(0.5f, 0.25f, 0.125f, 1.0f));
+    // A building's light says so by the sign of its end, which the shader
+    // takes the magnitude of.
+    l.baked = true;
+    CHECK(toGpu(l).positionEnd == glm::vec4(1, 2, 3, -7));
 }
 
 TEST_CASE("a candle's sub-yard window still reaches the ground around it", "[rt][lights]") {

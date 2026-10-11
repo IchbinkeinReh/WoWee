@@ -221,9 +221,14 @@ void main() {
         float shadow = csmShadow(uShadowMap, FragPos, norm, nl, bias);
         shadow = mix(1.0, shadow, shadowParams.y);
         lit = rtShadow(rt, shadow);
+    } else {
+        // No map: the traced shadow where there is one - it follows the sun
+        // and whatever stands in it, the units included - and the baked mask
+        // where there is not.
+        lit = mix(lit, rt.sun, rt.weight);
     }
 
-    vec3 result = (litColor * light + unlitColor) * (0.7 + 0.3 * lit);
+    vec3 result = (litColor * light + unlitColor) * rtShadowScale(rt, lit);
     // The torches' and lamps' light, where the ray tracing has it, on the lit
     // layers.
     result += litColor * rtPointLight(rt);

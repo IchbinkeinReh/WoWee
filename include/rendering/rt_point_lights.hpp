@@ -30,10 +30,17 @@ struct PointLight {
     float attenuationStart = 0.0f;  // yards: full strength within
     glm::vec3 color{0.0f};          // linear, intensity folded in
     float attenuationEnd = 0.0f;    // yards: nothing beyond
+    /// A building's own light (MOLT), which its interior already carries in
+    /// its vertex colours (MOCV), its doodads in their MODD colour and the
+    /// units on its floors in the floor's colour (0x007a0d60). Those
+    /// surfaces take only its shadows; adding its light again would light
+    /// them twice (rt_lighting.glsli, rtPointLightOwn and rtBakedShade).
+    bool baked = false;
 };
 
 /// What the shader reads per light (std430): position and end, colour and
-/// start. Must match RtPointLight in rt_trace.comp.glsl.
+/// start. Must match RtPointLight in rt_trace.comp.glsl. A baked light's end
+/// goes negative; an end is never zero (selectLights drops those).
 struct PointLightGPU {
     glm::vec4 positionEnd;
     glm::vec4 colorStart;
@@ -41,7 +48,8 @@ struct PointLightGPU {
 static_assert(sizeof(PointLightGPU) == 32, "PointLightGPU is uploaded as std430");
 
 inline PointLightGPU toGpu(const PointLight& l) {
-    return {glm::vec4(l.position, l.attenuationEnd), glm::vec4(l.color, l.attenuationStart)};
+    return {glm::vec4(l.position, l.baked ? -l.attenuationEnd : l.attenuationEnd),
+            glm::vec4(l.color, l.attenuationStart)};
 }
 
 /// How much of a light reaches `distance` yards: all of it within the start,
@@ -199,6 +207,7 @@ inline std::optional<PointLight> placeWmoLight(const glm::vec3& localPosition, c
     out.color = glm::max(color, glm::vec3(0.0f)) * intensity;
     out.attenuationStart = std::max(attenuationStart, 0.0f) * scale;
     out.attenuationEnd = attenuationEnd * scale;
+    out.baked = true;
     return out;
 }
 
