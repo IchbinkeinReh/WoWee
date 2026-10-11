@@ -2355,14 +2355,10 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         waterNudgeZ_ = 0.0f;
     }
 
-    // Smooth camera position to avoid jitter
-    if (glm::dot(smoothedCamPos, smoothedCamPos) < 1e-4f) {
-        smoothedCamPos = actualCam;  // Initialize
-    }
-    bool activelyRotating = mouseButtonDown || f.nowTurnLeft || f.nowTurnRight;
-    float camLerp = (activelyRotating && !smoothCameraFollow_)
-        ? 1.0f : (1.0f - std::exp(-camSmoothSpeed_ * deltaTime));
-    smoothedCamPos += (actualCam - smoothedCamPos) * camLerp;
+    // The camera sits exactly where it was computed, after collision has
+    // pulled it in along the line of sight: the client does not ease its
+    // position towards that point, and doing so made it trail sideways
+    // while strafing.
 
     // ===== Final floor clearance check =====
     // Use WMO-aware floor so the camera doesn't pop above tunnels/caves.
@@ -2370,25 +2366,25 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
     if (!cachedInsideWMO) {
         std::optional<float> camTerrainH;
         if (!cachedInsideInteriorWMO) {
-            camTerrainH = getTerrainFloorAt(smoothedCamPos.x, smoothedCamPos.y);
+            camTerrainH = getTerrainFloorAt(actualCam.x, actualCam.y);
         }
         std::optional<float> camWmoH;
         if (wmoRenderer) {
             // Skip expensive WMO floor query if camera barely moved
-            float cdx = smoothedCamPos.x - lastCamFloorQueryPos.x;
-            float cdy = smoothedCamPos.y - lastCamFloorQueryPos.y;
+            float cdx = actualCam.x - lastCamFloorQueryPos.x;
+            float cdy = actualCam.y - lastCamFloorQueryPos.y;
             float camDeltaSq = cdx * cdx + cdy * cdy;
             if (camDeltaSq < 0.09f && hasCachedCamFloor) {
                 camWmoH = cachedCamWmoFloor;
             } else {
-                float camFloorProbeZ = smoothedCamPos.z;
+                float camFloorProbeZ = actualCam.z;
                 if (cachedInsideInteriorWMO) {
                     // Inside tunnels/buildings, probe near player height so roof
                     // triangles above the camera don't get treated as floor.
-                    camFloorProbeZ = std::min(smoothedCamPos.z, targetPos.z + 1.0f);
+                    camFloorProbeZ = std::min(actualCam.z, targetPos.z + 1.0f);
                 }
                 camWmoH = wmoRenderer->getFloorHeight(
-                    smoothedCamPos.x, smoothedCamPos.y, camFloorProbeZ);
+                    actualCam.x, actualCam.y, camFloorProbeZ);
 
                 if (cachedInsideInteriorWMO && camWmoH) {
                     // Never let camera floor clamp latch to tunnel ceilings / upper decks.
@@ -2399,7 +2395,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                 }
                 cachedCamWmoFloor = camWmoH;
                 hasCachedCamFloor = true;
-                lastCamFloorQueryPos = smoothedCamPos;
+                lastCamFloorQueryPos = actualCam;
             }
         }
         // When camera/character are inside a WMO, force WMO floor usage for camera
@@ -2414,11 +2410,11 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                 camDropFromPlayer < 1.8f) {
                 camFloorH = camWmoH;
             } else {
-                camFloorH = selectClosestFloor(camTerrainH, camWmoH, smoothedCamPos.z);
+                camFloorH = selectClosestFloor(camTerrainH, camWmoH, actualCam.z);
             }
         } else {
             camFloorH = selectReachableFloor(
-                camTerrainH, camWmoH, smoothedCamPos.z, 0.5f);
+                camTerrainH, camWmoH, actualCam.z, 0.5f);
         }
         // Terrain has no underside. The reachability filter above is for
         // structure floors, where something half a yard over the camera may be
@@ -2428,17 +2424,17 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // counting as a ceiling. While the character stands on or above the
         // terrain, the camera belongs above it too.
         if (!cachedInsideInteriorWMO) {
-            auto groundH = cameraTerrainFloor(smoothedCamPos.x, smoothedCamPos.y, targetPos);
+            auto groundH = cameraTerrainFloor(actualCam.x, actualCam.y, targetPos);
             if (groundH && (!camFloorH || *groundH > *camFloorH)) camFloorH = groundH;
         }
-        if (camFloorH && smoothedCamPos.z < *camFloorH + MIN_FLOOR_CLEARANCE) {
-            smoothedCamPos.z = *camFloorH + MIN_FLOOR_CLEARANCE;
+        if (camFloorH && actualCam.z < *camFloorH + MIN_FLOOR_CLEARANCE) {
+            actualCam.z = *camFloorH + MIN_FLOOR_CLEARANCE;
         }
     }
     // Never let camera sink below the character's feet plane.
-    smoothedCamPos.z = std::max(smoothedCamPos.z, targetPos.z + 0.15f);
+    actualCam.z = std::max(actualCam.z, targetPos.z + 0.15f);
 
-    camera->setPosition(smoothedCamPos);
+    camera->setPosition(actualCam);
     // The pitch offset tilts the view (0x004c55b0), easing back to 0 out of a
     // seat (0x005fe8d0).
     if (vehiclePitchOffset_.value != 0.0f) camera->setRotation(yaw, pitch + glm::degrees(vehiclePitchOffset_.value));
@@ -2503,7 +2499,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // the squeezed one.
         bool shouldHidePlayer = isFirstPersonView();
         characterRenderer->setInstanceVisible(playerInstanceId, !shouldHidePlayer);
-        applyCameraFade(smoothedCamPos, glm::length(smoothedCamPos - pivot), pivot.z - targetPos.z);
+        applyCameraFade(actualCam, glm::length(actualCam - pivot), pivot.z - targetPos.z);
 
         // Note: the Renderer's CharAnimState machine drives player character animations
         // (Run, Walk, Jump, Swim, etc.) - no additional animation driving needed here.
@@ -2943,23 +2939,15 @@ void CameraController::update(float deltaTime) {
                 actualCam = pivot + camDir * actualDist;
             }
 
-            // Smooth camera position (1:1 while actively dragging, see main update()).
-            if (glm::dot(smoothedCamPos, smoothedCamPos) < 1e-4f) {
-                smoothedCamPos = actualCam;
-            }
-            float camLerp = (mouseButtonDown && !smoothCameraFollow_)
-                ? 1.0f : (1.0f - std::exp(-camSmoothSpeed_ * deltaTime));
-            smoothedCamPos += (actualCam - smoothedCamPos) * camLerp;
-
             // A flight path skims ridges and lands on hillsides.
-            if (auto groundH = cameraTerrainFloor(smoothedCamPos.x, smoothedCamPos.y, targetPos)) {
+            if (auto groundH = cameraTerrainFloor(actualCam.x, actualCam.y, targetPos)) {
                 constexpr float kTaxiFloorClearance = 0.35f;
-                smoothedCamPos.z = std::max(smoothedCamPos.z, *groundH + kTaxiFloorClearance);
+                actualCam.z = std::max(actualCam.z, *groundH + kTaxiFloorClearance);
             }
 
-            camera->setPosition(smoothedCamPos);
+            camera->setPosition(actualCam);
             if (characterRenderer && playerInstanceId > 0)
-                applyCameraFade(smoothedCamPos, glm::length(smoothedCamPos - pivot), pivot.z - targetPos.z);
+                applyCameraFade(actualCam, glm::length(actualCam - pivot), pivot.z - targetPos.z);
         }
         // The vehicle's pitch offset tilts the view and not where it stands
         // (0x00606f90 -> 0x004c55b0).
@@ -3709,11 +3697,9 @@ void CameraController::reset() {
             glm::vec3 pivot = spawnPos + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset);
             glm::vec3 camDir = -forward3D;
             glm::vec3 camPos = pivot + camDir * currentDistance;
-            smoothedCamPos = camPos;
             camera->setPosition(camPos);
         } else {
             spawnPos.z += eyeHeight;
-            smoothedCamPos = spawnPos;
             camera->setPosition(spawnPos);
         }
 
@@ -3851,14 +3837,12 @@ void CameraController::reset() {
         glm::vec3 pivot = spawnPos + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset);
         glm::vec3 camDir = -forward3D;
         glm::vec3 camPos = pivot + camDir * currentDistance;
-        smoothedCamPos = camPos;
         camera->setPosition(camPos);
     } else {
         // Free-fly mode keeps camera eye-height above ground.
         if (foundBest) {
             spawnPos.z += eyeHeight;
         }
-        smoothedCamPos = spawnPos;
         camera->setPosition(spawnPos);
     }
 
@@ -3890,11 +3874,9 @@ void CameraController::teleportTo(const glm::vec3& pos) {
         glm::vec3 pivot = pos + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset);
         glm::vec3 camDir = -forward3D;
         glm::vec3 camPos = pivot + camDir * currentDistance;
-        smoothedCamPos = camPos;
         camera->setPosition(camPos);
     } else {
         glm::vec3 camPos = pos + glm::vec3(0.0f, 0.0f, eyeHeight);
-        smoothedCamPos = camPos;
         camera->setPosition(camPos);
     }
 

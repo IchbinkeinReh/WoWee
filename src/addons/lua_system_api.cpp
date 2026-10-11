@@ -894,9 +894,12 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "fctspellmechanics") lua_pushstring(L, "1");
     else if (n == "fctspellmechanicsother") lua_pushstring(L, "0");
     // The camera does not keep lerping through a turn unless asked, which is
-    // this client's own default, and the smoothing rate it starts at.
+    // this client's own default.
     else if (n == "camerasmoothstyle") lua_pushstring(L, "0");
-    else if (n == "camerayawsmoothspeed") lua_pushstring(L, "30");
+    // Camera Following Speed, in degrees a second, at the client's own
+    // default. Stored and answered back like any other CVar; nothing here
+    // reads it.
+    else if (n == "camerayawsmoothspeed") lua_pushstring(L, "180");
     // Titles on player names, as the real client shows them.
     else if (n == "unitnameplayerpvptitle") lua_pushstring(L, "1");
     // Cast bars over enemy nameplates are on; party lines float only if asked.
@@ -1611,18 +1614,6 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     if (key == "camerasmoothstyle") {
         if (auto* svc = getLuaServices(L); svc && svc->setClientSetting) {
             svc->setClientSetting("smoothfollow", value == "0" ? "0" : "1");
-        }
-    }
-    // Camera Following Speed. The shipped CVar is in degrees a second and this
-    // camera smooths with a rate constant, so the two numbers do not convert -
-    // and inventing a conversion would put a slider in front of a value it
-    // does not describe. The range is redefined instead, to exactly what
-    // CameraController::setCameraSmoothSpeed accepts, so the control covers
-    // what this client can do and the number passes through untouched. Same
-    // reasoning as farclip's range below.
-    if (key == "camerayawsmoothspeed") {
-        if (auto* svc = getLuaServices(L); svc && svc->setClientSetting) {
-            svc->setClientSetting("camerastiffness", value);
         }
     }
     // Mouse Look Speed. Named cameraYawMoveSpeed, which is what it turns, but
@@ -5293,10 +5284,6 @@ constexpr CVarRange kCVarRanges[] = {
     // above and so has to offer the same range. Shipped as 0.5 to 1.5, a
     // multiplier around 1.0, against a setting that sits at 0.2 and stops at 1.
     {"mousespeed", 0.05f, 1.0f},
-    // Camera Following Speed. Not the shipped range: see the note in
-    // applyCVarSideEffects - these are the bounds the camera itself clamps to,
-    // so every position on the slider is a speed this client can actually run.
-    {"camerayawsmoothspeed", 5.0f, 100.0f},
     // Max camera distance, as a multiple of the original client's limit. The
     // shipped table stops at 2; this client has always been willing to go
     // further, and did it through a checkbox of its own until this slider was

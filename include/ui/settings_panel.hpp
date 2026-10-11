@@ -122,7 +122,6 @@ public:
     float pendingGamepadLookSpeed = 180.0f;   // degrees a second at full stick
     bool pendingGamepadInvertLook = false;
     float pendingGamepadDeadzone = 0.18f;
-    float pendingCameraStiffness = 30.0f;  // Camera smooth speed (higher = tighter, less sway)
     int pendingCameraMaxDistance = 22;     // Yards; the CVar counts multiples of this default
     float pendingPivotHeight = 1.6f;       // Camera pivot height above feet (lower = less detached feel)
     bool pendingSmoothCameraFollow = false; // Keep lerping while turning (floaty, detached follow)

@@ -1960,7 +1960,6 @@ void GameScreen::saveSettings() {
     // Controls
     out << "mouse_sensitivity=" << settingsPanel_.pendingMouseSensitivity << "\n";
     out << "invert_mouse=" << (settingsPanel_.pendingInvertMouse ? 1 : 0) << "\n";
-    out << "camera_stiffness=" << settingsPanel_.pendingCameraStiffness << "\n";
     out << "camera_max_distance=" << settingsPanel_.pendingCameraMaxDistance << "\n";
     out << "camera_pivot_height=" << settingsPanel_.pendingPivotHeight << "\n";
     out << "camera_smooth_follow=" << (settingsPanel_.pendingSmoothCameraFollow ? 1 : 0) << "\n";
@@ -2247,7 +2246,6 @@ void GameScreen::loadSettings() {
             // Controls
             else if (key == "mouse_sensitivity") settingsPanel_.pendingMouseSensitivity = std::clamp(std::stof(val), 0.05f, 1.0f);
             else if (key == "invert_mouse") settingsPanel_.pendingInvertMouse = (std::stoi(val) != 0);
-            else if (key == "camera_stiffness") settingsPanel_.pendingCameraStiffness = std::clamp(std::stof(val), 5.0f, 100.0f);
             else if (key == "camera_max_distance") settingsPanel_.pendingCameraMaxDistance = std::clamp(std::stoi(val), 22, 50);
             else if (key == "camera_pivot_height") settingsPanel_.pendingPivotHeight = std::clamp(std::stof(val), 0.0f, 3.0f);
             else if (key == "camera_smooth_follow") settingsPanel_.pendingSmoothCameraFollow = (std::stoi(val) != 0);

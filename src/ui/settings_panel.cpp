@@ -428,7 +428,6 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             if (auto* cameraController = renderer->getCameraController()) {
                 cameraController->setMouseSensitivity(pendingMouseSensitivity);
                 cameraController->setInvertMouse(pendingInvertMouse);
-                cameraController->setCameraSmoothSpeed(pendingCameraStiffness);
                 cameraController->setPivotHeight(pendingPivotHeight);
                 cameraController->setIdleOrbitEnabled(pendingIdleCameraOrbit);
                 cameraController->setSmoothCameraFollow(pendingSmoothCameraFollow);
@@ -1098,7 +1097,6 @@ constexpr FieldBinding kFieldBindings[] = {
     // --- Camera ---
     {.key = "fov",             .asFloat = &SettingsPanel::pendingFov},
     {.key = "camerashake",     .asFloat = &SettingsPanel::pendingCameraShake},
-    {.key = "camerastiffness", .asFloat = &SettingsPanel::pendingCameraStiffness},
     {.key = "cameramaxdistance", .asInt = &SettingsPanel::pendingCameraMaxDistance},
     {.key = "pivotheight",     .asFloat = &SettingsPanel::pendingPivotHeight},
     {.key = "smoothfollow",    .asBool  = &SettingsPanel::pendingSmoothCameraFollow},
@@ -1333,8 +1331,6 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (cameraController) cameraController->setShakeScale(pendingCameraShake);
     } else if (key == "mousespeed") {
         if (cameraController) cameraController->setMouseSensitivity(pendingMouseSensitivity);
-    } else if (key == "camerastiffness") {
-        if (cameraController) cameraController->setCameraSmoothSpeed(pendingCameraStiffness);
     } else if (key == "cameramaxdistance") {
         if (cameraController) {
             cameraController->setMaxDistanceFactor(cameraDistanceFactor(pendingCameraMaxDistance));
