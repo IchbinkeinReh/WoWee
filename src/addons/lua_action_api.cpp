@@ -164,10 +164,70 @@ static void setCursorType(lua_State* L, CursorType type) {
     }
 }
 
+/// The pet bar's slot a bonus bar slot (0-based) refers to while the bonus bar
+/// holds the pet's actions (0x005d4ad0 -> 0x005ab800): slots 120..131 are
+/// 0x10000000 | i for the pet bar's first ten (0x005d3240), the last two
+/// empty. The packed pet slot, or nothing for an ordinary slot; an empty pet
+/// slot is 0.
+struct PetActionRef {
+    uint32_t index = 0;
+    uint32_t packed = 0;
+};
+static std::optional<PetActionRef> petActionRef(game::GameHandler* gh, int slot) {
+    if (!gh || !gh->petActionsOnBonusBar()) return std::nullopt;
+    const int i = slot - game::GameHandler::kBonusPetSlotFirst;
+    if (i < 0 || i >= game::GameHandler::PET_ACTION_BAR_SLOTS) return std::nullopt;
+    return PetActionRef{static_cast<uint32_t>(i), gh->getPetActionSlot(i)};
+}
+using game::pet::petSlotSpell;
+/// The global naming a pet command's or stance's icon (0x005a97f0:
+/// "PET_%s_TEXTURE"), nothing for anything else.
+static const char* petTokenTexture(uint32_t packed) {
+    const uint32_t action = game::pet::petActionId(packed);
+    switch (game::pet::petActionType(packed)) {
+        case game::pet::ActionType::Command:
+            switch (action) {
+                case game::pet::kStay: return "PET_WAIT_TEXTURE";
+                case game::pet::kFollow: return "PET_FOLLOW_TEXTURE";
+                case game::pet::kAttack: return "PET_ATTACK_TEXTURE";
+                case game::pet::kAbandon: return "PET_DISMISS_TEXTURE";
+                default: return nullptr;
+            }
+        case game::pet::ActionType::Reaction:
+            switch (action) {
+                case game::pet::kPassive: return "PET_PASSIVE_TEXTURE";
+                case game::pet::kDefensive: return "PET_DEFENSIVE_TEXTURE";
+                case game::pet::kAggressive: return "PET_AGGRESSIVE_TEXTURE";
+                default: return nullptr;
+            }
+        default:
+            return nullptr;
+    }
+}
+/// Uses a pet slot as the pet bar's button does (0x005d4210): at the unit
+/// named by `unitArg`, else the target, else the pet.
+static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, int unitArg) {
+    if (!gh || !gh->hasPet() || (packed & 0x00FFFFFFu) == 0) return;
+    uint64_t target = 0;
+    if (const char* uid = luaL_optstring(L, unitArg, nullptr)) {
+        std::string u(uid);
+        toLowerInPlace(u);
+        target = resolveUnitGuid(gh, u);
+    }
+    if (target == 0) target = gh->hasTarget() ? gh->getTargetGuid() : gh->getPetGuid();
+    gh->sendPetAction(packed, target);
+}
+
 static int lua_HasAction(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnFalse(L); }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1; // WoW uses 1-indexed slots
+    if (const auto ref = petActionRef(gh, slot)) {
+        // 0x005a8160: a command or a stance, or a spell.
+        const uint32_t state = (ref->packed >> 24) & 0x3f;
+        lua_pushboolean(L, ref->packed != 0 && (state == 6 || state == 7 || petSlotSpell(ref->packed) != 0));
+        return 1;
+    }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size())) {
         lua_pushboolean(L, 0);
@@ -182,6 +242,19 @@ static int lua_GetActionTexture(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    if (const auto ref = petActionRef(gh, slot)) {
+        // 0x005a97f0: a pet spell's icon, a command's or a stance's global.
+        if (const uint32_t spell = petSlotSpell(ref->packed)) {
+            const std::string icon = gh->getSpellIconPath(spell);
+            if (icon.empty()) lua_pushnil(L);
+            else lua_pushstring(L, icon.c_str());
+            return 1;
+        }
+        const char* token = petTokenTexture(ref->packed);
+        if (!token) return luaReturnNil(L);
+        lua_getglobal(L, token);
+        return 1;
+    }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
         lua_pushnil(L);
@@ -221,6 +294,12 @@ static int lua_IsUsableAction(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { lua_pushboolean(L, 0); lua_pushboolean(L, 0); return 2; }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    if (const auto ref = petActionRef(gh, slot)) {
+        // A pet slot is usable as the pet bar's is: while it holds something.
+        lua_pushboolean(L, ref->packed != 0 ? 1 : 0);
+        lua_pushboolean(L, 0);
+        return 2;
+    }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
         lua_pushboolean(L, 0);
@@ -265,6 +344,9 @@ static int lua_IsActionInRange(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    // The pet casts a pet slot's spell, from where it is; no range is read
+    // for it here.
+    if (petActionRef(gh, slot)) return luaReturnNil(L);
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
         lua_pushnil(L);
@@ -287,6 +369,19 @@ static int lua_GetActionInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return 0; }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    if (const auto ref = petActionRef(gh, slot)) {
+        // 0x005a8f10: "spell", its place in the pet's spellbook, "pet", the
+        // spell - for any of the ten, whatever it holds.
+        const uint32_t spell = petSlotSpell(ref->packed);
+        const auto& book = gh->getPetSpells();
+        const auto at = std::find(book.begin(), book.end(), spell);
+        const int index = spell != 0 && at != book.end() ? static_cast<int>(at - book.begin()) : -1;
+        lua_pushstring(L, "spell");
+        lua_pushnumber(L, index + 1);
+        lua_pushstring(L, "pet");
+        lua_pushnumber(L, spell);
+        return 4;
+    }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
         return 0;
@@ -343,6 +438,15 @@ static int lua_GetActionCooldown(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 1); return 3; }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    if (const auto ref = petActionRef(gh, slot)) {
+        // A pet slot's spell waits as the pet bar's does.
+        const uint32_t spell = petSlotSpell(ref->packed);
+        const float remaining = spell ? gh->getSpellCooldown(spell) : 0.0f;
+        lua_pushnumber(L, remaining > 0.01f ? luaGetTimeNow() : 0.0);
+        lua_pushnumber(L, remaining > 0.01f ? remaining : 0.0);
+        lua_pushnumber(L, 1);
+        return 3;
+    }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
         lua_pushnumber(L, 0);
@@ -399,6 +503,11 @@ static int lua_UseAction(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    if (const auto ref = petActionRef(gh, slot)) {
+        // 0x005abbc0 -> 0x005d4210: the pet bar's slot, used.
+        castPetSlot(L, gh, ref->packed, 2);
+        return 0;
+    }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) return 0;
     const auto& action = bar[slot];
@@ -2286,6 +2395,11 @@ void registerActionLuaAPI(lua_State* L) {
                 // made that worse rather than better, which is what happened
                 // an hour ago.
                 {"GetActionBarPage", [](lua_State* L) -> int {
+            // 1 while the bonus bar holds the pet's actions (0x005a7fd0).
+            if (auto* gh = getGameHandler(L); gh && gh->petActionsOnBonusBar()) {
+                lua_pushnumber(L, 1);
+                return 1;
+            }
             lua_getglobal(L, "__WoweeActionBarPage");
             if (lua_isnil(L, -1)) { lua_pop(L, 1); lua_pushnumber(L, 1); }
             return 1;
@@ -2592,27 +2706,14 @@ void registerActionLuaAPI(lua_State* L) {
                     game::pet::packPetAction(game::pet::ActionType::Reaction, game::pet::kPassive), 0);
             return 0;
         }},
+                // CastPetAction(action, unit) - the unit is what a click-cast
+                // binding on a unit frame passes, and dropping it sent the pet
+                // at whatever was targeted instead of what was clicked.
                 {"CastPetAction", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             int index = static_cast<int>(luaL_checknumber(L, 1));
-            if (!gh || !gh->hasPet() || index < 1 || index > game::GameHandler::PET_ACTION_BAR_SLOTS) return 0;
-            uint32_t packed = gh->getPetActionSlot(index - 1);
-            uint32_t spellId = packed & 0x00FFFFFF;
-            if (spellId != 0) {
-                // CastPetAction(action, unit) - the unit is what a click-cast
-                // binding on a unit frame passes, and dropping it sent the pet
-                // at whatever was targeted instead of what was clicked. The
-                // same fault CastSpellByID had, two files over.
-                uint64_t target = 0;
-                if (const char* uid = luaL_optstring(L, 2, nullptr)) {
-                    std::string u(uid);
-                    toLowerInPlace(u);
-                    target = resolveUnitGuid(gh, u);
-                }
-                if (target == 0)
-                    target = gh->hasTarget() ? gh->getTargetGuid() : gh->getPetGuid();
-                gh->sendPetAction(packed, target);
-            }
+            if (!gh || index < 1 || index > game::GameHandler::PET_ACTION_BAR_SLOTS) return 0;
+            castPetSlot(L, gh, gh->getPetActionSlot(index - 1), 2);
             return 0;
         }},
                 {"TogglePetAutocast", [](lua_State* L) -> int {

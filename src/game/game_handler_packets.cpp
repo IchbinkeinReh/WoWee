@@ -1721,7 +1721,6 @@ void GameHandler::registerRemainingOpcodes() {
             } else {
                 fireAddonEvent("PLAYER_LOSES_VEHICLE_DATA", {"player"});
             }
-            fireAddonEvent("UPDATE_BONUS_ACTIONBAR", {});
         }
     };
     // guid(8) + status(1): status 1 = NPC has available/new routes for this player

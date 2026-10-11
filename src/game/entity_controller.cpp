@@ -2461,6 +2461,13 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         owner_.maybeDetectVisibleItemLayout();
         owner_.detectInventorySlotBases(block.fields);
 
+        // The unit the player looks through (0x006e4fd0): whether the bonus
+        // bar holds the pet's actions is asked again (0x005d4ad0).
+        if (const uint16_t farsight = fieldIndex(UF::PLAYER_FARSIGHT); farsight != 0xFFFF &&
+            (block.fields.find(farsight) != block.fields.end() ||
+             block.fields.find(static_cast<uint16_t>(farsight + 1)) != block.fields.end())) {
+            owner_.updatePetActionBar();
+        }
         PlayerFieldIndices pfi = PlayerFieldIndices::resolve();
         bool slotsChanged = applyPlayerStatFields(block.fields, pfi, false);
         if (slotsChanged) {

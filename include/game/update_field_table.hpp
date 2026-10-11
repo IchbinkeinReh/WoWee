@@ -179,6 +179,9 @@ enum class UF : uint16_t {
     /// sparkle (0x00705900).
     CORPSE_FIELD_DYNAMIC_FLAGS,
     PLAYER_DUEL_ARBITER,
+    /// WotLK: the unit the player looks through - a vehicle it drives, a
+    /// possessed unit (+0x1008 +0x770, 0x004f7310).
+    PLAYER_FARSIGHT,
     GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,
     // MO_TRANSPORT route clock. LEVEL carries the route's period in ms; the high

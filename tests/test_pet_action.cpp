@@ -62,3 +62,15 @@ TEST_CASE("a spell id larger than 24 bits cannot corrupt the type", "[pet]") {
     REQUIRE(petActionType(packed) == ActionType::Enabled);
     REQUIRE(petActionId(packed) == 0x00FFFFFFu);
 }
+
+TEST_CASE("an action-bar reference to a pet slot reads only its spells (0x005a80e0)", "[pet]") {
+    REQUIRE(petSlotSpell(packPetAction(ActionType::Enabled, 2649u)) == 2649u);
+    REQUIRE(petSlotSpell(packPetAction(ActionType::Disabled, 2649u)) == 2649u);
+    REQUIRE(petSlotSpell(packPetAction(ActionType::Passive, 3110u)) == 3110u);
+    // States 8..17 are spells too, 18 is not.
+    REQUIRE(petSlotSpell((8u << 24) | 77u) == 77u);
+    REQUIRE(petSlotSpell((17u << 24) | 77u) == 77u);
+    REQUIRE(petSlotSpell((18u << 24) | 77u) == 0u);
+    REQUIRE(petSlotSpell(packPetAction(ActionType::Command, kAttack)) == 0u);
+    REQUIRE(petSlotSpell(packPetAction(ActionType::Reaction, kDefensive)) == 0u);
+}

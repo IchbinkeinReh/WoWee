@@ -2434,6 +2434,17 @@ public:
     /// no bar of their own. Read from the file rather than written out here,
     /// because a table of class-and-form guesses is not checkable.
     uint32_t getBonusActionBarOffset() const;
+    /// Whether the bonus bar holds the pet's actions - the vehicle the
+    /// player drives, or a unit it possesses (DAT_00c1e5a0 0x1, 0x005d4ad0).
+    /// Slots 121..132 are then the pet bar's ten and two empty ones
+    /// (0x005ab800 with 0x005d3240), the offset is 5 (0x005a83c0) and the
+    /// page reads 1 (0x005a7fd0).
+    bool petActionsOnBonusBar() const { return petActionsOnBonusBar_; }
+    static constexpr int kBonusPetSlotFirst = 120;
+    /// 0x005d4ad0: on where the player looks through its pet (PLAYER_FARSIGHT)
+    /// and the pet lives, and - where the pet is the vehicle it sits in - its
+    /// seat's VehicleAbilityDisplay is 1.
+    void updatePetActionBar();
     uint64_t getComboTarget() const { return comboTarget_; }
 
     // Death Knight rune state (6 runes: 0-1=Blood, 2-3=Unholy, 4-5=Frost; may become Death=3)
@@ -4886,6 +4897,7 @@ private:
     uint32_t vehicleId_ = 0;
     vehicle::VehicleRoster vehicleRoster_;
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
+    bool petActionsOnBonusBar_ = false;
     /// The column the arena rosters are sorted by, so clicking it again knows
     /// to reverse rather than re-sort the same way.
     std::string arenaSortKey_;

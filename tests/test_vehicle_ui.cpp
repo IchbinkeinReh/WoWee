@@ -176,3 +176,19 @@ TEST_CASE("the aim is held in its row's limits (0x005fb3a0, 0x005f9e60, 0x005f9f
     CHECK(gv::clampAimPower(0.4f) == Catch::Approx(0.4f));
     CHECK(gv::clampAimPower(1.0f) == 1.0f);
 }
+
+TEST_CASE("the bonus bar holds the pet's actions as 0x005d4ad0 decides", "[vehicle]") {
+    constexpr uint64_t kPet = 0xF150000100000001ull;
+    // The player looks through its living pet.
+    CHECK(gv::petActionsOnBonusBar(kPet, kPet, true, false, nullptr));
+    CHECK_FALSE(gv::petActionsOnBonusBar(0, kPet, true, false, nullptr));
+    CHECK_FALSE(gv::petActionsOnBonusBar(kPet, kPet + 1, true, false, nullptr));
+    CHECK_FALSE(gv::petActionsOnBonusBar(kPet, kPet, false, false, nullptr));
+    // The pet is the vehicle the player sits in: its seat's
+    // VehicleAbilityDisplay says, and a seat with no row lets it.
+    gv::SeatRecord seat;
+    CHECK_FALSE(gv::petActionsOnBonusBar(kPet, kPet, true, true, &seat));
+    seat.vehicleAbilityDisplay = 1;
+    CHECK(gv::petActionsOnBonusBar(kPet, kPet, true, true, &seat));
+    CHECK(gv::petActionsOnBonusBar(kPet, kPet, true, true, nullptr));
+}

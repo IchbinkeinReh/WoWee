@@ -3426,6 +3426,8 @@ void GameHandler::rebuildCompanions() const {
 }
 
 uint32_t GameHandler::getBonusActionBarOffset() const {
+    // 0x005a83c0: 5 while the bar holds the pet's actions.
+    if (petActionsOnBonusBar_) return 5;
     const uint8_t form = shapeshiftFormId_;
     if (form == 0) return 0;
 
@@ -3451,6 +3453,31 @@ uint32_t GameHandler::getBonusActionBarOffset() const {
     }
     barOfForm[form] = bar;
     return bar;
+}
+
+void GameHandler::updatePetActionBar() {
+    bool on = false;
+    auto player = getEntityManager().getEntity(playerGuid);
+    const uint16_t farsightIdx = fieldIndex(UF::PLAYER_FARSIGHT);
+    if (player && farsightIdx != 0xFFFF) {
+        const uint64_t farsight = (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(farsightIdx + 1))) << 32) |
+                                  player->getField(farsightIdx);
+        auto pet = petGuid_ ? std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(petGuid_)) : nullptr;
+        // 0x005d35b0: the pet is there and alive.
+        const auto passenger = vehicleRoster_.passenger(playerGuid);
+        on = vehicle::petActionsOnBonusBar(farsight, petGuid_, pet && pet->getHealth() > 0,
+                                           passenger && passenger->vehicleGuid == petGuid_,
+                                           vehicleRoster_.seatOf(playerGuid));
+    }
+    const uint32_t before = getBonusActionBarOffset();
+    petActionsOnBonusBar_ = on;
+    const uint32_t after = getBonusActionBarOffset();
+    if (before != after) {
+        // 0x005a83c0: the page changes back from the pet's bar.
+        if (before == 5) fireAddonEvent("ACTIONBAR_PAGE_CHANGED", {});
+        fireAddonEvent("UPDATE_BONUS_ACTIONBAR", {});
+    }
+    fireAddonEvent("PET_BAR_UPDATE", {});
 }
 
 void GameHandler::announceCompanionChange() {

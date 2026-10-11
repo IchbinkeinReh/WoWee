@@ -61,6 +61,14 @@ constexpr bool isPetSpellAction(uint32_t packed) {
     return t != ActionType::Command && t != ActionType::Reaction;
 }
 
+/// The spell an action-bar reference to a pet slot reads (0x005a80e0): the
+/// state byte's low six bits 1 - a castable spell, autocast or not - or
+/// 8..17; a command or a stance reads none.
+constexpr uint32_t petSlotSpell(uint32_t packed) {
+    const uint32_t state = (packed >> 24) & 0x3fu;
+    return state == 1 || (state >= 8 && state < 18) ? packed & 0x00FFFFFFu : 0u;
+}
+
 } // namespace pet
 } // namespace game
 } // namespace wowee

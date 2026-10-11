@@ -277,6 +277,17 @@ struct AimLimits {
     return power;
 }
 
+/// Whether the bonus bar holds the pet's actions (0x005d4ad0): the player
+/// looks through its pet (PLAYER_FARSIGHT is the pet) and the pet lives;
+/// where the pet is the vehicle the player sits in, only from a seat whose
+/// VehicleAbilityDisplay is 1 (a seat with no row lets it).
+[[nodiscard]] inline bool petActionsOnBonusBar(uint64_t farsight, uint64_t pet, bool petAlive,
+                                               bool petIsPlayersVehicle, const SeatRecord* playerSeat) {
+    if (farsight == 0 || pet != farsight || !petAlive) return false;
+    if (petIsPlayersVehicle && playerSeat) return playerSeat->vehicleAbilityDisplay == 1;
+    return true;
+}
+
 /// What UnitVehicleSeatInfo answers for a seat (0x007579e0).
 struct UISeatInfo {
     const char* controlType = "None";  ///< "Root"/"Child" for Flags 0x800
