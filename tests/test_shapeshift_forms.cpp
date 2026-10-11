@@ -89,16 +89,45 @@ TEST_CASE("every index the count allows describes a form", "[shapeshift]") {
 TEST_CASE("every form has a distinct form id and spell", "[shapeshift]") {
     // The form id is what "is this one active" compares against, so two forms
     // sharing one would both light up. Dire Bear is deliberately not in the
-    // table for exactly this reason: it shares Bear's slot.
+    // table for exactly this reason: it shares Bear's slot. A presence sets no
+    // form at all (0), so only the ids that are set have to differ.
     for (uint8_t classId : {uint8_t{1}, uint8_t{4}, kPriest, uint8_t{6}, kDruid}) {
         std::set<uint8_t> formIds;
         std::set<uint32_t> spellIds;
         for (const auto& form : allShapeshiftForms(classId)) {
             INFO("class " << int(classId) << " form " << form.name);
-            CHECK(formIds.insert(form.formId).second);
+            if (form.formId != 0) CHECK(formIds.insert(form.formId).second);
             CHECK(spellIds.insert(form.spellId).second);
         }
     }
+}
+
+TEST_CASE("form ids are SpellShapeshiftForm.dbc's", "[shapeshift]") {
+    // Column 0 of the DBC, which each form spell's aura 36 names as its misc
+    // value. Bear was 1 and Cat 3 here - Cat Form's id and Travel Form's.
+    auto formIdOf = [](uint8_t classId, uint32_t spellId) -> int {
+        for (const auto& form : allShapeshiftForms(classId))
+            if (form.spellId == spellId) return form.formId;
+        return -1;
+    };
+    using namespace wowee::game;
+    CHECK(formIdOf(kDruid, SPELL_CAT_FORM) == 1);
+    CHECK(formIdOf(kDruid, SPELL_TREE_OF_LIFE) == 2);
+    CHECK(formIdOf(kDruid, SPELL_TRAVEL_FORM) == 3);
+    CHECK(formIdOf(kDruid, SPELL_AQUATIC_FORM) == 4);
+    CHECK(formIdOf(kDruid, SPELL_BEAR_FORM) == 5);
+    CHECK(formIdOf(kDruid, SPELL_SWIFT_FLIGHT) == 27);
+    CHECK(formIdOf(kDruid, SPELL_FLIGHT_FORM) == 29);
+    CHECK(formIdOf(kDruid, SPELL_MOONKIN_FORM) == 31);
+    CHECK(formIdOf(1, SPELL_BATTLE_STANCE) == 17);
+    CHECK(formIdOf(1, SPELL_DEFENSIVE_STANCE) == 18);
+    CHECK(formIdOf(1, SPELL_BERSERKER_STANCE) == 19);
+    CHECK(formIdOf(4, SPELL_STEALTH) == 30);
+    CHECK(formIdOf(kPriest, SPELL_SHADOWFORM) == 28);
+    // Presences apply no aura 36; the DBC has no row for them.
+    CHECK(formIdOf(6, SPELL_BLOOD_PRESENCE) == 0);
+    CHECK(formIdOf(6, SPELL_FROST_PRESENCE) == 0);
+    CHECK(formIdOf(6, SPELL_UNHOLY_PRESENCE) == 0);
 }
 
 TEST_CASE("a class with no stance bar has no forms", "[shapeshift]") {

@@ -23,7 +23,9 @@ namespace wowee::game {
 /// GetShapeshiftFormInfo on each, so the two have to be the same list.
 struct ShapeshiftForm {
     uint32_t spellId;   ///< What casting this form actually casts.
-    uint8_t formId;     ///< The shapeshift form field's value while it is active.
+    /// The shapeshift form field's value while it is active: the form's
+    /// SpellShapeshiftForm.dbc id (column 0), 0 for one that sets none.
+    uint8_t formId;
     const char* name;
     const char* icon;
     /// The spell that takes this button over once learned, 0 for none - the

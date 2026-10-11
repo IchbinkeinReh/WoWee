@@ -11,14 +11,18 @@ namespace {
 // Dire Bear is not a row of its own. It replaces Bear Form on the same button
 // (0x005424d4 swaps the list's spell in place), so the button then holds and
 // casts Dire Bear Form and is active while its aura is.
+//
+// The form ids are SpellShapeshiftForm.dbc's (column 0), which is what each
+// form spell's aura 36 names: Cat 1, Tree of Life 2, Travel 3, Aquatic 4,
+// Bear 5 (Dire Bear 8), Swift Flight 27, Flight 29, Moonkin 31.
 const ShapeshiftForm kDruid[] = {
-    {.spellId = SPELL_BEAR_FORM,    .formId = 1,  .name = "Bear Form",         .icon = "Interface\\Icons\\Ability_Racial_BearForm",
+    {.spellId = SPELL_BEAR_FORM,    .formId = 5,  .name = "Bear Form",         .icon = "Interface\\Icons\\Ability_Racial_BearForm",
      .supersededBy = SPELL_DIRE_BEAR_FORM, .supersededName = "Dire Bear Form"},
-    {.spellId = SPELL_AQUATIC_FORM, .formId = 2,  .name = "Aquatic Form",      .icon = "Interface\\Icons\\Ability_Druid_AquaticForm"},
-    {.spellId = SPELL_CAT_FORM,     .formId = 3,  .name = "Cat Form",          .icon = "Interface\\Icons\\Ability_Druid_CatForm"},
-    {.spellId = SPELL_TRAVEL_FORM,  .formId = 4,  .name = "Travel Form",       .icon = "Interface\\Icons\\Ability_Druid_TravelForm"},
+    {.spellId = SPELL_AQUATIC_FORM, .formId = 4,  .name = "Aquatic Form",      .icon = "Interface\\Icons\\Ability_Druid_AquaticForm"},
+    {.spellId = SPELL_CAT_FORM,     .formId = 1,  .name = "Cat Form",          .icon = "Interface\\Icons\\Ability_Druid_CatForm"},
+    {.spellId = SPELL_TRAVEL_FORM,  .formId = 3,  .name = "Travel Form",       .icon = "Interface\\Icons\\Ability_Druid_TravelForm"},
     {.spellId = SPELL_MOONKIN_FORM, .formId = 31, .name = "Moonkin Form",      .icon = "Interface\\Icons\\Spell_Nature_ForceOfNature"},
-    {.spellId = SPELL_TREE_OF_LIFE, .formId = 36, .name = "Tree of Life",      .icon = "Interface\\Icons\\Ability_Druid_TreeofLife"},
+    {.spellId = SPELL_TREE_OF_LIFE, .formId = 2,  .name = "Tree of Life",      .icon = "Interface\\Icons\\Ability_Druid_TreeofLife"},
     {.spellId = SPELL_FLIGHT_FORM,  .formId = 29, .name = "Flight Form",       .icon = "Interface\\Icons\\Ability_Druid_FlightForm"},
     {.spellId = SPELL_SWIFT_FLIGHT, .formId = 27, .name = "Swift Flight Form", .icon = "Interface\\Icons\\Ability_Druid_FlightForm"},
 };
@@ -29,10 +33,12 @@ const ShapeshiftForm kWarrior[] = {
     {.spellId = SPELL_BERSERKER_STANCE, .formId = 19, .name = "Berserker Stance", .icon = "Interface\\Icons\\Ability_Racial_Avatar"},
 };
 
+// Presences are no form: their spells apply no aura 36 and the DBC has no
+// row for them, so the form field stays 0.
 const ShapeshiftForm kDeathKnight[] = {
-    {.spellId = SPELL_BLOOD_PRESENCE,  .formId = 32, .name = "Blood Presence",  .icon = "Interface\\Icons\\Spell_Deathknight_BloodPresence"},
-    {.spellId = SPELL_FROST_PRESENCE,  .formId = 33, .name = "Frost Presence",  .icon = "Interface\\Icons\\Spell_Deathknight_FrostPresence"},
-    {.spellId = SPELL_UNHOLY_PRESENCE, .formId = 34, .name = "Unholy Presence", .icon = "Interface\\Icons\\Spell_Deathknight_UnholyPresence"},
+    {.spellId = SPELL_BLOOD_PRESENCE,  .formId = 0,  .name = "Blood Presence",  .icon = "Interface\\Icons\\Spell_Deathknight_BloodPresence"},
+    {.spellId = SPELL_FROST_PRESENCE,  .formId = 0,  .name = "Frost Presence",  .icon = "Interface\\Icons\\Spell_Deathknight_FrostPresence"},
+    {.spellId = SPELL_UNHOLY_PRESENCE, .formId = 0,  .name = "Unholy Presence", .icon = "Interface\\Icons\\Spell_Deathknight_UnholyPresence"},
 };
 
 const ShapeshiftForm kRogue[] = {
