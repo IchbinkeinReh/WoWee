@@ -22,10 +22,9 @@ TEST_CASE("the neutral band is left at an exposure of one", "[eye]") {
 TEST_CASE("darker than the band brightens, brighter darkens, part of the way and within limits",
           "[eye]") {
     const Params p;
-    // One stop under: half a stop up.
-    CHECK(exposureFor(p.neutralLow - 1.0f) == Catch::Approx(std::exp2(0.5f)));
-    // One stop over: half a stop down.
-    CHECK(exposureFor(p.neutralHigh + 1.0f) == Catch::Approx(std::exp2(-0.5f)));
+    // Half a stop under: a quarter stop up; half over: a quarter down.
+    CHECK(exposureFor(p.neutralLow - 0.5f) == Catch::Approx(std::exp2(0.25f)));
+    CHECK(exposureFor(p.neutralHigh + 0.5f) == Catch::Approx(std::exp2(-0.25f)));
     // Far out either way: no further than the limits.
     CHECK(exposureFor(p.neutralLow - 20.0f) == Catch::Approx(p.maxExposure));
     CHECK(exposureFor(p.neutralHigh + 20.0f) == Catch::Approx(p.minExposure));
