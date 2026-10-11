@@ -1,5 +1,6 @@
 #include "core/world_entry_callback_handler.hpp"
 #include "core/coordinates.hpp"
+#include "core/far_teleport.hpp"
 #include "core/entity_spawner.hpp"
 #include "core/world_loader.hpp"
 #include "core/logger.hpp"
@@ -10,6 +11,7 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "game/game_handler.hpp"
+#include "audio/audio_coordinator.hpp"
 #include "pipeline/asset_manager.hpp"
 
 #include <algorithm>
@@ -176,6 +178,9 @@ void WorldEntryCallbackHandler::setupCallbacks() {
             entitySpawner_->despawnAllCreatures();
             entitySpawner_->despawnAllPlayers();
             entitySpawner_->despawnAllGameObjects();
+            // The client reloads behind a loading screen whose end stops the
+            // world's music and ambience (0x00403b70 -> 0x006e7f50 -> 0x00409550).
+            if (auto* ac = renderer_.getAudioCoordinator()) ac->leaveWorld();
 
             // Update player position and re-queue nearby tiles (same logic as teleport)
             glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(x, y, z));
@@ -209,6 +214,12 @@ void WorldEntryCallbackHandler::setupCallbacks() {
             glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
             float teleportDistSq = glm::dot(renderPos - oldPos, renderPos - oldPos);
             bool farTeleport = (teleportDistSq > 500.0f * 500.0f);
+            // Past 150 yards the client shows a loading screen, and its end
+            // stops the world's music and ambience (0x0074b620 -> 0x00409550).
+            // A far teleport reloads here and stops them at its own end.
+            if (!farTeleport && teleportShowsLoadingScreen(oldPos, renderPos)) {
+                if (auto* ac = renderer_.getAudioCoordinator()) ac->leaveWorld();
+            }
 
             if (farTeleport) {
                 // Far same-map teleport (hearthstone, etc.): defer full world reload

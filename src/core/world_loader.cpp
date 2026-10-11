@@ -24,6 +24,7 @@
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/loading_screen.hpp"
 #include "addons/addon_manager.hpp"
+#include "audio/audio_coordinator.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "pipeline/m2_loader.hpp"
@@ -1277,6 +1278,10 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     if (loadingScreenOk) {
         loadingScreen.shutdown();
     }
+    // The loading screen's end (0x006e7f50 -> 0x00409550): the music and
+    // ambience the old world left playing stop at once, and the new zone
+    // starts its own.
+    if (auto* ac = renderer_->getAudioCoordinator()) ac->leaveWorld();
 
     // Track which map we actually loaded (used by same-map teleport check).
     loadedMapId_ = mapId;

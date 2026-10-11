@@ -722,7 +722,7 @@ wowee_add_test(test_shapeshift_forms
             ${CMAKE_SOURCE_DIR}/src/game/shapeshift_forms.cpp)
 
 # ── test_world_leave_sound ───────────────────────────────────
-# The ambience loops leaving the world stops.
+# The ambience loops leaving the world stops, and the teleports that do it.
 wowee_add_test(test_world_leave_sound
     SOURCES test_world_leave_sound.cpp
             ${TEST_COMMON_SOURCES})

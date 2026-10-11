@@ -93,7 +93,7 @@ void AudioCoordinator::leaveWorld() {
     inTavern_ = false;
     inBlacksmith_ = false;
     musicSwitchCooldown_ = 0.0f;
-    LOG_INFO("Left the world: music and ambience stopped");
+    LOG_INFO("World unloaded: music and ambience stopped");
 }
 
 void AudioCoordinator::playZoneMusic(const std::string& music) {

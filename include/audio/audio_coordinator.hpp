@@ -69,7 +69,9 @@ public:
     /// Shutdown all audio managers and engine.
     void shutdown();
 
-    /// The world unloads - a logout, the client quitting from the world.
+    /// The world unloads - a logout, the client quitting from the world - or
+    /// a loading screen ends: a map change (SMSG_NEW_WORLD -> 0x006e7f50) or
+    /// a teleport of more than 150 yards on the same map (0x006ecf80).
     ///
     /// What the client's unload (0x00409550) stops: the zone music's two
     /// channels and the script music (0x004c93b0), and the ambience's
