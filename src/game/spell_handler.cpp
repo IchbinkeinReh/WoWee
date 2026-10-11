@@ -34,6 +34,7 @@
 #include "audio/ui_sound_manager.hpp"
 #include "audio/player_voice_manager.hpp"
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -859,6 +860,12 @@ uint32_t entityField(const Entity& e, UF f) {
     return idx != 0xFFFF ? e.getField(idx) : 0u;
 }
 
+/// UNIT_MOD_CAST_SPEED (+0x128) as a factor; 1 where none was sent.
+float castSpeedOf(const Entity& e) {
+    const uint32_t raw = entityField(e, UF::UNIT_MOD_CAST_SPEED);
+    return raw != 0 ? std::bit_cast<float>(raw) : 1.0f;
+}
+
 /// 0x00718b70: the player behind a unit - itself, else its charmer (else
 /// creator), else that one's.
 std::shared_ptr<Entity> controllingPlayer(GameHandler& gh, const std::shared_ptr<Entity>& e) {
@@ -1251,6 +1258,52 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
         return;
     }
     armUnitTarget(spellId, caster, required);
+}
+
+int64_t SpellHandler::historyNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+int32_t SpellHandler::moddedCooldown(uint32_t spellId, int32_t ms) const {
+    // 0x007fd970 with op 11, Cooldown.
+    return static_cast<int32_t>(spell_mods::apply(static_cast<float>(ms), spellModifiers(spellId, 11)));
+}
+
+bool SpellHandler::petToggleHeld(uint32_t spellId) const {
+    // 0x00809100: the cvar, then the pet's list (0x00d3f5ac + 24*1).
+    return addons::storedCVarValue("secureAbilityToggle", "0") != "0" &&
+           petHistory_.startedRecently(spellId, historyNowMs());
+}
+
+void SpellHandler::notePetActionCast(uint32_t spellId, uint64_t pet) {
+    // 0x00805d70: StartRecoveryCategory or StartRecoveryTime - the global
+    // cooldown through its modifiers (op 21), begun now.
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    const auto& e = it->second;
+    if (e.startRecoveryCategory == 0 && e.startRecoveryMs == 0) return;
+    auto unit = owner_.getEntityManager().getEntity(pet);
+    const float speed = unit ? castSpeedOf(*unit) : 1.0f;
+    const auto mods = spellModifiers(spellId, 21);
+    const int32_t gcd = spell_history::globalCooldown(
+        e.startRecoveryCategory, static_cast<int32_t>(spell_mods::apply(static_cast<float>(e.startRecoveryMs), mods)),
+        static_cast<int32_t>(e.startRecoveryMs), e.dmgClass, e.attr, speed);
+    if (gcd == 0) return;
+    const int64_t now = historyNowMs();
+    spell_history::Entry h;
+    h.spellId = spellId;
+    h.start = now;
+    h.categoryStart = now;
+    h.onHold = (e.attr & 0x2000000u) != 0;  // 0x00801220
+    h.gcdCategory = e.startRecoveryCategory;
+    h.gcd = gcd;
+    petHistory_.add(h);
+}
+
+void SpellHandler::notePetCastFailed(uint32_t spellId) {
+    petHistory_.dropGlobalCooldown(spellId, historyNowMs());
 }
 
 void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
@@ -2805,6 +2858,51 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // 0x00805330 for a cast that had no start (instant), as for one that had.
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
 
+    // 0x0080e1b0: a unit the player charmed (else summoned) - the pet - puts
+    // the cast in the pet's history: its cooldown and category's, through
+    // the modifiers, and its global cooldown; every 30 s the history is
+    // pruned (0x00d3f608).
+    {
+        const int64_t now = historyNowMs();
+        auto caster = owner_.getEntityManager().getEntity(data.casterUnit);
+        if (caster && caster->isUnit() && data.casterUnit != owner_.getPlayerGuid()) {
+            uint64_t by = entityGuidField(*caster, UF::UNIT_FIELD_CHARMEDBY);
+            if (by == 0) {
+                const uint16_t lo = fieldIndex(UF::UNIT_FIELD_SUMMONEDBY_LO);
+                const uint16_t hi = fieldIndex(UF::UNIT_FIELD_SUMMONEDBY_HI);
+                by = (lo != 0xFFFF ? caster->getField(lo) : 0u) |
+                     (static_cast<uint64_t>(hi != 0xFFFF ? caster->getField(hi) : 0u) << 32);
+            }
+            loadSpellNameCache();
+            const auto it = owner_.spellNameCacheRef().find(data.spellId);
+            if (by == owner_.getPlayerGuid() && it != owner_.spellNameCacheRef().end()) {
+                const auto& e = it->second;
+                spell_history::Entry h;
+                h.spellId = data.spellId;
+                h.start = now;
+                h.duration = moddedCooldown(data.spellId, static_cast<int32_t>(e.recoveryMs));
+                h.category = e.category;
+                h.categoryStart = now;
+                h.categoryDuration = (e.attrEx6 & 0x80000000u) == 0
+                                         ? moddedCooldown(data.spellId, static_cast<int32_t>(e.categoryRecoveryMs))
+                                         : static_cast<int32_t>(e.categoryRecoveryMs);
+                h.onHold = (e.attr & 0x2000000u) != 0;  // 0x00801220
+                h.gcdCategory = e.startRecoveryCategory;
+                const auto gcdMods = spellModifiers(data.spellId, 21);
+                h.gcd = spell_history::globalCooldown(
+                    e.startRecoveryCategory,
+                    static_cast<int32_t>(spell_mods::apply(static_cast<float>(e.startRecoveryMs), gcdMods)),
+                    static_cast<int32_t>(e.startRecoveryMs), e.dmgClass, e.attr,
+                    castSpeedOf(*caster));
+                petHistory_.add(h);
+            }
+        }
+        if (now - historyPruneAt_ >= 0) {
+            historyPruneAt_ = now + 30000;
+            petHistory_.prune(now);
+        }
+    }
+
     if (data.casterUnit == owner_.getPlayerGuid()) {
         owner_.loadSpellNameCache();
         spellclass::RestChannelKind restKind = spellclass::RestChannelKind::NONE;
@@ -3063,11 +3161,50 @@ void SpellHandler::handleSpellCooldown(network::Packet& packet) {
     const bool isClassicFormat = isClassicLikeExpansion();
 
     if (!packet.hasRemaining(8)) return;
-    /*guid*/ packet.readUInt64();
+    const uint64_t cooldownGuid = packet.readUInt64();
 
+    uint8_t cooldownFlags = 0;
     if (!isClassicFormat) {
         if (!packet.hasRemaining(1)) return;
-        /*flags*/ packet.readUInt8();
+        cooldownFlags = packet.readUInt8();
+    }
+    // 0x00806dd0: the pet's go into its history - begun now, the time sent
+    // or else the spell's own through the modifiers, with the global
+    // cooldown for flag 1 unless held (0x00801220; flag 2 never holds).
+    if (cooldownGuid != 0 && cooldownGuid == owner_.getPetGuid() && cooldownGuid != owner_.getPlayerGuid() &&
+        !isClassicFormat) {
+        loadSpellNameCache();
+        const int64_t now = historyNowMs();
+        const auto pet = owner_.getEntityManager().getEntity(cooldownGuid);
+        const size_t at = packet.getReadPos();
+        while (packet.getRemainingSize() >= 8) {
+            const uint32_t spellId = packet.readUInt32();
+            const uint32_t cooldownMs = packet.readUInt32();
+            const auto it = owner_.spellNameCacheRef().find(spellId);
+            if (it == owner_.spellNameCacheRef().end()) continue;
+            const auto& e = it->second;
+            spell_history::Entry h;
+            h.spellId = spellId;
+            h.start = now;
+            h.duration = cooldownMs != 0 ? static_cast<int32_t>(cooldownMs)
+                                         : moddedCooldown(spellId, static_cast<int32_t>(e.recoveryMs));
+            h.category = e.category;
+            h.categoryStart = now;
+            h.categoryDuration = cooldownMs != 0 ? 0
+                                 : (e.attrEx6 & 0x80000000u) == 0
+                                     ? moddedCooldown(spellId, static_cast<int32_t>(e.categoryRecoveryMs))
+                                     : static_cast<int32_t>(e.categoryRecoveryMs);
+            h.onHold = (cooldownFlags & 0x2) == 0 && (e.attr & 0x2000000u) != 0;
+            if ((cooldownFlags & 0x1) != 0 && !h.onHold) {
+                h.gcdCategory = e.startRecoveryCategory;
+                h.gcd = spell_history::globalCooldown(
+                    e.startRecoveryCategory,
+                    static_cast<int32_t>(spell_mods::apply(static_cast<float>(e.startRecoveryMs), spellModifiers(spellId, 21))),
+                    static_cast<int32_t>(e.startRecoveryMs), e.dmgClass, e.attr, pet ? castSpeedOf(*pet) : 1.0f);
+            }
+            petHistory_.add(h);
+        }
+        packet.setReadPos(at);
     }
 
     const size_t entrySize = isClassicFormat ? 12u : 8u;
@@ -3122,8 +3259,11 @@ void SpellHandler::handleSpellCooldown(network::Packet& packet) {
 void SpellHandler::handleCooldownEvent(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     uint32_t spellId = packet.readUInt32();
+    uint64_t eventGuid = 0;
     if (packet.hasRemaining(8))
-        packet.readUInt64();
+        eventGuid = packet.readUInt64();
+    // 0x00804010: the pet's held cooldown begins now (0x00802970).
+    if (eventGuid != 0 && eventGuid == owner_.getPetGuid()) petHistory_.event(spellId, historyNowMs(), false);
     spellCooldowns_.erase(spellId);
     spellCooldownTotals_.erase(spellId);
     for (auto& slot : owner_.actionBarRef()) {
@@ -3631,6 +3771,8 @@ void SpellHandler::handleAchievementEarned(network::Packet& packet) {
 // ============================================================
 
 void SpellHandler::handlePetSpells(network::Packet& packet) {
+    // 0x005d6b90 begins by emptying the pet's spell history (0x00804420).
+    petHistory_.clear();
     const size_t remaining = packet.getRemainingSize();
     if (remaining < 8) {
         owner_.petGuidRef() = 0;
@@ -3723,6 +3865,28 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
             if (state & 0x40) {
                 owner_.petAutocastSpellsRef().insert(spellId);
             }
+        }
+
+        // The cooldowns: spell, category (uint16), the time left of its
+        // cooldown and of its category's, the latter's top bit holding it
+        // until an event - each into the pet's history (0x00805b10).
+        if (!packet.hasRemaining(1)) break;
+        const uint8_t cooldownCount = packet.readUInt8();
+        loadSpellNameCache();
+        const int64_t now = historyNowMs();
+        for (uint8_t i = 0; i < cooldownCount && packet.hasRemaining(14); ++i) {
+            const uint32_t spellId = packet.readUInt32();
+            const uint16_t category = packet.readUInt16();
+            const uint32_t cooldown = packet.readUInt32();
+            const uint32_t categoryCooldown = packet.readUInt32();
+            const auto it = owner_.spellNameCacheRef().find(spellId);
+            const int32_t recovery = it != owner_.spellNameCacheRef().end() ? static_cast<int32_t>(it->second.recoveryMs) : 0;
+            const int32_t categoryRecovery =
+                it != owner_.spellNameCacheRef().end() ? static_cast<int32_t>(it->second.categoryRecoveryMs) : 0;
+            petHistory_.add(spell_history::fromRemaining(
+                spellId, category, static_cast<int32_t>(cooldown), static_cast<int32_t>(categoryCooldown & 0x7FFFFFFFu),
+                (categoryCooldown & 0x80000000u) != 0, recovery,
+                categoryRecovery, now, [&](int32_t ms) { return moddedCooldown(spellId, ms); }));
         }
     } while (false);
 
@@ -3979,6 +4143,10 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t attrEx2Field = spellL ? spellL->tryField("AttributesEx2") : 0xFFFFFFFF;
     const uint32_t creatureTypeField = spellL ? spellL->tryField("TargetCreatureType") : 0xFFFFFFFF;
     const uint32_t classMaskField = spellL ? spellL->tryField("EffectSpellClassMask") : 0xFFFFFFFF;
+    const uint32_t categoryField = spellL ? spellL->tryField("Category") : 0xFFFFFFFF;
+    const uint32_t startCategoryField = spellL ? spellL->tryField("StartRecoveryCategory") : 0xFFFFFFFF;
+    const uint32_t startTimeField = spellL ? spellL->tryField("StartRecoveryTime") : 0xFFFFFFFF;
+    const uint32_t dmgClassField = spellL ? spellL->tryField("DmgClass") : 0xFFFFFFFF;
     const uint32_t attrEx4Field = spellL ? spellL->tryField("AttributesEx4") : 0xFFFFFFFF;
     const uint32_t attrEx7Field = spellL ? spellL->tryField("AttributesEx7") : 0xFFFFFFFF;
     const uint32_t attrEx5Field = spellL ? spellL->tryField("AttributesEx5") : 0xFFFFFFFF;
@@ -4184,6 +4352,10 @@ void SpellHandler::loadSpellNameCache() const {
             if (attrEx3Field < fieldCount) entry.attrEx3 = dbc->getUInt32(i, attrEx3Field);
             if (attrEx2Field < fieldCount) entry.attrEx2 = dbc->getUInt32(i, attrEx2Field);
             if (creatureTypeField < fieldCount) entry.targetCreatureType = dbc->getUInt32(i, creatureTypeField);
+            if (categoryField < fieldCount) entry.category = dbc->getUInt32(i, categoryField);
+            if (startCategoryField < fieldCount) entry.startRecoveryCategory = dbc->getUInt32(i, startCategoryField);
+            if (startTimeField < fieldCount) entry.startRecoveryMs = dbc->getUInt32(i, startTimeField);
+            if (dmgClassField < fieldCount) entry.dmgClass = dbc->getUInt32(i, dmgClassField);
             if (classMaskField != 0xFFFFFFFF && classMaskField + 9 <= fieldCount) {
                 for (uint32_t k = 0; k < 9; ++k)
                     entry.effectClassMask[k / 3][k % 3] = dbc->getUInt32(i, classMaskField + k);
@@ -5049,6 +5221,11 @@ void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
 void SpellHandler::handleClearCooldown(network::Packet& packet) {
     if (packet.hasRemaining(4)) {
         uint32_t spellId = packet.readUInt32();
+        // 0x00804010: the pet's entries for it go (0x00802970).
+        if (packet.hasRemaining(8)) {
+            const uint64_t guid = packet.readUInt64();
+            if (guid != 0 && guid == owner_.getPetGuid()) petHistory_.event(spellId, historyNowMs(), true);
+        }
         spellCooldowns_.erase(spellId);
         spellCooldownTotals_.erase(spellId);
         for (auto& slot : owner_.actionBarRef()) {
@@ -5064,8 +5241,10 @@ void SpellHandler::handleModifyCooldown(network::Packet& packet) {
     // cooldown moved by whatever that happened to be.
     if (packet.hasRemaining(16)) {
         uint32_t spellId = packet.readUInt32();
-        (void)packet.readUInt64();  // the player it applies to, always this one
+        const uint64_t guid = packet.readUInt64();
         int32_t  diffMs  = static_cast<int32_t>(packet.readUInt32());
+        // 0x00804010: the pet's starts move (0x00802a10).
+        if (guid != 0 && guid == owner_.getPetGuid()) petHistory_.modify(spellId, diffMs);
         float diffSec = diffMs / 1000.0f;
         auto it = spellCooldowns_.find(spellId);
         if (it != spellCooldowns_.end()) {

@@ -356,6 +356,10 @@
     "Name": 2
   },
   "Spell": {
+    "Category": 1,
+    "DmgClass": 213,
+    "StartRecoveryCategory": 205,
+    "StartRecoveryTime": 206,
     "Attributes": 4,
     "AttributesEx": 5,
     "AttributesEx2": 6,

@@ -5,6 +5,7 @@
 #include "game/spell_defines.hpp"
 #include "game/spell_mods.hpp"
 #include "game/ground_target.hpp"
+#include "game/spell_history.hpp"
 #include "game/handler_types.hpp"
 #include "audio/spell_sound_manager.hpp"
 #include "network/packet.hpp"
@@ -81,6 +82,18 @@ public:
     /// Whether the held spell would take the unit, within its reach
     /// (0x00803a50): the Cast cursor over it, else UnableCast (0x004f8190).
     [[nodiscard]] bool spellCanTargetUnit(uint64_t unitGuid) const;
+
+    // --- The pet's spell history (0x00d3f5ac + 24) ---
+    [[nodiscard]] const spell_history::History& petSpellHistory() const { return petHistory_; }
+    /// 0x00809100 for the pet: secureAbilityToggle on, and the spell's
+    /// cooldown began under 1.5 s ago (0x00807d40) - its button does not
+    /// turn it off.
+    [[nodiscard]] bool petToggleHeld(uint32_t spellId) const;
+    /// 0x00805d70: a pet's spell sent as CMSG_PET_ACTION starts its global
+    /// cooldown in the pet's history.
+    void notePetActionCast(uint32_t spellId, uint64_t pet);
+    /// SMSG_PET_CAST_FAILED (0x00806c30 -> 0x00804720).
+    void notePetCastFailed(uint32_t spellId);
     /// A click on the world at this place, canonical: fills the location the
     /// spell wants (0x0080c340) and casts once nothing more is wanted.
     void placeGroundTarget(const ground_target::Place& place);
@@ -539,6 +552,12 @@ private:
         uint32_t required = 0;
     };
     UnitTarget unitTarget_;
+    spell_history::History petHistory_;
+    int64_t historyPruneAt_ = 0;  ///< 0x00d3f608: the next prune, on a spell go
+    /// The client's clock for the history, in milliseconds (0x0086ae20).
+    static int64_t historyNowMs();
+    /// A cooldown through the spell's Cooldown modifiers (op 11).
+    int32_t moddedCooldown(uint32_t spellId, int32_t ms) const;
     /// 0x0080bc80 for a spell and a unit: whether it fills some of
     /// `required`, and what is left. A unit out of the spell's reach is
     /// refused, said when `say` (0x00803850).

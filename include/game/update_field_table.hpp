@@ -183,6 +183,9 @@ enum class UF : uint16_t {
     /// with the arbiter decides who may help and attack whom (0x007293d0,
     /// 0x00729740).
     PLAYER_DUEL_TEAM,
+    /// WotLK: a unit's casting speed as a factor, which shortens a pet's
+    /// global cooldown (+0x128, 0x00805d70).
+    UNIT_MOD_CAST_SPEED,
     /// WotLK: the unit the player looks through - a vehicle it drives, a
     /// possessed unit (+0x1008 +0x770, 0x004f7310).
     PLAYER_FARSIGHT,

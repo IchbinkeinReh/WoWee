@@ -4304,6 +4304,13 @@ public:
         uint32_t spellMissileId = 0;
         uint32_t recoveryMs = 0;
         uint32_t categoryRecoveryMs = 0;
+        /// Spell.dbc Category (+0x4), StartRecoveryCategory (+0x234),
+        /// StartRecoveryTime (+0x238) and DmgClass (+0x254): what the spell
+        /// history keeps of a cast (0x00805d70).
+        uint32_t category = 0;
+        uint32_t startRecoveryCategory = 0;
+        uint32_t startRecoveryMs = 0;
+        uint32_t dmgClass = 0;
         uint32_t createdItemId = 0;
         SpellReagent reagents[8] = {};
         uint32_t trivialSkillHigh = 0;

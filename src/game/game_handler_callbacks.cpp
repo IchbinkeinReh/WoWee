@@ -2719,6 +2719,9 @@ void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
             static const std::vector<AuraSlot> kNoAuras;
             const auto* auras = getUnitAuras(petGuid_);
             if (pet::spellInEffectOn(toggle, unit, slotOf, auras ? *auras : kNoAuras, mountOf)) {
+                // Not within 1.5 s of its cooldown beginning, with
+                // secureAbilityToggle (0x00809100 on the pet's history).
+                if (spellHandler_ && spellHandler_->petToggleHeld(spell)) return;
                 if (pet::spellAppliesAura(toggle.effects) && socket) {
                     if (const uint16_t wire = wireOpcode(Opcode::CMSG_PET_CANCEL_AURA); wire != 0xFFFF) {
                         network::Packet pkt(wire);
@@ -2738,6 +2741,8 @@ void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
             if (spellHandler_) spellHandler_->castPetSpell(petGuid_, spell, targetGuid);
             return;
         }
+        // 0x00805d70: its global cooldown into the pet's history.
+        if (spellHandler_) spellHandler_->notePetActionCast(spell, petGuid_);
     }
     sendPetAction(packed, targetGuid != 0 ? targetGuid : petGuid_);
 }

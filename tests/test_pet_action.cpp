@@ -1,6 +1,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "game/pet_action.hpp"
+#include "game/spell_history.hpp"
 
 #include <array>
 #include <utility>
@@ -258,4 +259,62 @@ TEST_CASE("an aura 262 reaches a spell by its family and class mask (0x007fdec0)
     REQUIRE_FALSE(auraIgnoresAuraState(8, names, masks, 0x2, 9, flags));
     const uint32_t other[3] = {0x10, 0, 0};
     REQUIRE_FALSE(auraIgnoresAuraState(9, names, masks, 0x2, 9, other));
+}
+
+TEST_CASE("the pet's spell history: what began under 1.5 s ago (0x00807d40)", "[pet]") {
+    using namespace wowee::game::spell_history;
+    History h;
+    // Nothing to run and not held: not kept (0x00805230).
+    h.add(Entry{.spellId = 1, .start = 1000});
+    REQUIRE(h.entries().empty());
+    h.add(Entry{.spellId = 1, .start = 1000, .categoryStart = 1000, .gcdCategory = 133, .gcd = 1500});
+    REQUIRE(h.startedRecently(1, 2499));
+    REQUIRE_FALSE(h.startedRecently(1, 2500));
+    REQUIRE_FALSE(h.startedRecently(2, 1000));
+    // SMSG_PET_CAST_FAILED: its global cooldown off, and pruned (0x00804720).
+    h.dropGlobalCooldown(1, 1200);
+    REQUIRE(h.entries().empty());
+    // SMSG_MODIFY_COOLDOWN moves the start (0x00802a10).
+    h.add(Entry{.spellId = 3, .start = 1000, .duration = 10000});
+    h.modify(3, 2000);
+    REQUIRE(h.startedRecently(3, 4000));
+    // Pruned once run out, not before (0x00802b00).
+    h.prune(12000);
+    REQUIRE(h.entries().size() == 1);
+    h.prune(13000);
+    REQUIRE(h.entries().empty());
+    // A held one starts at SMSG_COOLDOWN_EVENT; SMSG_CLEAR_COOLDOWN takes it
+    // off (0x00802970).
+    h.add(Entry{.spellId = 4, .start = 0, .onHold = true});
+    REQUIRE_FALSE(h.startedRecently(4, 50000));
+    h.event(4, 50000, false);
+    REQUIRE(h.startedRecently(4, 50100));
+    h.event(4, 50100, true);
+    REQUIRE(h.entries().empty());
+}
+
+TEST_CASE("SMSG_PET_SPELLS cooldowns began as long ago as has run (0x00805b10)", "[pet]") {
+    using namespace wowee::game::spell_history;
+    const auto none = [](int32_t ms) { return ms; };
+    // 10 s of a 10 s cooldown left: it began now.
+    auto e = fromRemaining(5, 0, 10000, 0, false, 10000, 0, 50000, none);
+    REQUIRE(e.start == 50000);
+    REQUIRE(e.duration == 10000);
+    // 4 s left: it began 6 s ago.
+    e = fromRemaining(5, 0, 4000, 0, false, 10000, 0, 50000, none);
+    REQUIRE(e.start == 44000);
+    // None left: not begun.
+    e = fromRemaining(5, 0, 0, 0, false, 10000, 0, 50000, none);
+    REQUIRE(e.duration == 0);
+    REQUIRE(e.start == 0);
+}
+
+TEST_CASE("a pet's global cooldown, hastened from 1 to 1.5 s (0x00805d70)", "[pet]") {
+    using namespace wowee::game::spell_history;
+    REQUIRE(globalCooldown(133, 1500, 1500, 0, 0, 1.0f) == 1500);
+    REQUIRE(globalCooldown(133, 1500, 1500, 0, 0, 0.8f) == 1200);
+    REQUIRE(globalCooldown(133, 1500, 1500, 0, 0, 0.5f) == 1000);
+    // Melee, or another category: as it is.
+    REQUIRE(globalCooldown(133, 1500, 1500, 2, 0, 0.5f) == 1500);
+    REQUIRE(globalCooldown(0, 1000, 1000, 0, 0, 0.5f) == 1000);
 }

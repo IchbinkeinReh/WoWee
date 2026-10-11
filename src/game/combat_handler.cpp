@@ -1,4 +1,5 @@
 #include "game/combat_handler.hpp"
+#include "game/spell_handler.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/combat_text_filter.hpp"
@@ -1214,6 +1215,9 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
                                  ? packet.readUInt8() : 0;
         LOG_DEBUG("SMSG_PET_CAST_FAILED: spell=", spellId,
                   " reason=", static_cast<int>(reason));
+        // 0x00806c30 -> 0x00804720: its global cooldown off the pet's
+        // history.
+        if (auto* spells = owner_.getSpellHandler()) spells->notePetCastFailed(spellId);
         if (reason != 0) {
             const char* reasonStr = getSpellCastResultString(reason);
             const std::string& sName = owner_.getSpellName(spellId);
