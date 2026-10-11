@@ -6729,10 +6729,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // page a bonus button reads from, so a flat zero left a druid
                 // or a warrior looking at the wrong page in every form.
                 //
-                // The mapping is in SpellShapeshiftForm.dbc rather than written
-                // out here - a table of class-and-form guesses is not
-                // checkable, and this one is: cat 1, bear 3, moonkin 4, the
-                // three warrior stances 1 to 3, 0 for the travel forms.
+                // 0x005a7f20 answers DAT_00c1e59c, which 0x005a83c0 sets from
+                // the form's SpellShapeshiftForm.dbc BonusActionBar (5 for the
+                // pet's actions or a form's preset spells).
                 {"GetBonusBarOffset", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             lua_pushnumber(L, gh ? static_cast<double>(gh->getBonusActionBarOffset()) : 0.0);

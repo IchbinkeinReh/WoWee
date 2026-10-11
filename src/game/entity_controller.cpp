@@ -1003,6 +1003,7 @@ bool EntityController::applyUnitFieldsOnCreate(const UpdateBlock& block,
             unit->setMountDisplayId(val);
         }
     }
+    applyPlayerShapeshiftForm(block);
     // Initial update masks commonly omit fields whose value is zero. A dead unit
     // can therefore arrive without UNIT_FIELD_HEALTH even though its default
     // client-side health is zero; the dynamic corpse bits remain authoritative.
@@ -1011,6 +1012,19 @@ bool EntityController::applyUnitFieldsOnCreate(const UpdateBlock& block,
         unitInitiallyDead = true;
     }
     return unitInitiallyDead;
+}
+
+// The player's form is UNIT_FIELD_BYTES_2 byte 3 in WotLK (+0x1d3, read by
+// 0x0071af70); 0x006da130 is the handler the client puts on it.
+void EntityController::applyPlayerShapeshiftForm(const UpdateBlock& block) {
+    if (block.guid != owner_.getPlayerGuid() || isPreWotlk()) return;
+    const uint16_t bytes2 = fieldIndex(UF::UNIT_FIELD_BYTES_2);
+    if (bytes2 == 0xFFFF) return;
+    const auto it = block.fields.find(bytes2);
+    if (it == block.fields.end()) return;
+    for (const char* event : owner_.setPlayerShapeshiftForm(static_cast<uint8_t>(it->second >> 24))) {
+        pendingEvents_.emit(event);
+    }
 }
 
 // Consolidates player-death state into one place so both the health==0 and
@@ -1160,8 +1174,10 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                     owner_.stealthStateCallbackRef()(nowStealthed);
                 }
 
+                // Before WotLK. WotLK keeps the form in UNIT_FIELD_BYTES_2
+                // byte 3 (applyPlayerShapeshiftForm); this byte is not it.
                 uint8_t newForm = static_cast<uint8_t>((val >> 24) & 0xFF);
-                if (newForm != owner_.shapeshiftFormIdRef()) {
+                if (isPreWotlk() && newForm != owner_.shapeshiftFormIdRef()) {
                     owner_.shapeshiftFormIdRef() = newForm;
                     LOG_INFO("Shapeshift form changed: ", static_cast<int>(newForm));
                     pendingEvents_.emit("UPDATE_SHAPESHIFT_FORM", {});
@@ -1377,6 +1393,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     if (petExperienceChanged && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("UNIT_PET_EXPERIENCE", {"pet"});
     }
+    applyPlayerShapeshiftForm(block);
     // The pet tab redraws its stat block on these, named for the pet.
     if (petStatsChanged && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("UNIT_STATS", {"pet"});

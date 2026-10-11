@@ -423,7 +423,8 @@
   "SpellShapeshiftForm": {
     "BonusActionBar": 1,
     "ID": 0,
-    "Name": 2
+    "Name": 2,
+    "PresetSpellID0": 27
   },
   "SpellEffectCameraShakes": {
     "CameraShake0": 1,

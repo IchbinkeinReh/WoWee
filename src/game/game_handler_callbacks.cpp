@@ -4302,6 +4302,18 @@ bool GameHandler::spellAppliesMountedAura(uint32_t spellId) const {
     return false;
 }
 
+bool GameHandler::spellAppliesAura(uint32_t spellId, uint32_t auraType) const {
+    // 0x007fde50: any of the three effects' EffectApplyAuraName.
+    if (spellId == 0) return false;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return false;
+    for (int i = 0; i < 3; ++i) {
+        if (it->second.effectAuraIds[i] == auraType) return true;
+    }
+    return false;
+}
+
 uint32_t GameHandler::getSpellTargetKind(uint32_t spellId) const {
     if (spellId == 0) return 0;
     loadSpellNameCache();

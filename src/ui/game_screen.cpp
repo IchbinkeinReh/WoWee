@@ -1995,10 +1995,24 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
 
             for (int i = 0; i < game::GameHandler::SLOTS_PER_BAR; ++i) {
                 if (!ctrlDown && input.isKeyJustPressed(actionBarKeys[i])) {
+                    // The page reads 1 while the bonus bar holds the pet's
+                    // actions (0x005a7fd0).
+                    const bool petBar = gameHandler.petActionsOnBonusBar();
                     int slotIdx = shiftDown
                         ? ActionBarPanel::actionSlotForPage(ActionBarPanel::kBottomLeftActionPage, i)
-                        : ActionBarPanel::actionSlotForPage(actionBarPanel_.getMainActionBarPage(), i);
-                    if (bar[slotIdx].type == game::ActionBarSlot::SPELL && bar[slotIdx].isReady()) {
+                        : ActionBarPanel::mainBarSlot(petBar ? 1 : actionBarPanel_.getMainActionBarPage(),
+                                                      gameHandler.getBonusActionBarOffset(), i);
+                    const int petIndex = slotIdx - game::GameHandler::kBonusPetSlotFirst;
+                    if (petBar && petIndex >= 0) {
+                        // The pet bar's slot (0x005abbc0 -> 0x005d4210): at the
+                        // target, else the pet.
+                        const uint32_t packed = petIndex < game::GameHandler::PET_ACTION_BAR_SLOTS
+                            ? gameHandler.getPetActionSlot(petIndex) : 0;
+                        if (gameHandler.hasPet() && (packed & 0x00FFFFFFu) != 0) {
+                            gameHandler.sendPetAction(packed, gameHandler.hasTarget() ? gameHandler.getTargetGuid()
+                                                                                      : gameHandler.getPetGuid());
+                        }
+                    } else if (bar[slotIdx].type == game::ActionBarSlot::SPELL && bar[slotIdx].isReady()) {
                         uint64_t target = gameHandler.hasTarget() ? gameHandler.getTargetGuid() : 0;
                         gameHandler.castSpell(bar[slotIdx].id, target);
                     } else if (bar[slotIdx].type == game::ActionBarSlot::ITEM && bar[slotIdx].id != 0) {

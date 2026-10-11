@@ -213,6 +213,9 @@ void GameHandler::disconnect() {
     if (spellHandler_) spellHandler_->clearUnitAurasCache();
     if (combatHandler_) combatHandler_->clearCombatText();
     entityController_->clearAll();
+    // The next character starts with no form and its own bar.
+    shapeshiftFormId_ = 0;
+    petActionsOnBonusBar_ = false;
     setState(WorldState::DISCONNECTED);
     LOG_INFO("Disconnected from world server");
 }
@@ -233,6 +236,7 @@ void GameHandler::resetDbcCaches() {
     activeAreaTriggers_.clear();
     talentCache_.clear();
     talentTabCache_.clear();
+    shapeshiftFormRows_.clear();
     // The copies that are actually read live in the sub-handlers - the getters
     // beside these forward there. Clearing only the local ones left the
     // previous expansion's talents and flight points live after a switch.
@@ -3427,18 +3431,14 @@ void GameHandler::rebuildCompanions() const {
              critterSpells_.size(), " critters from ", known.size(), " known spells");
 }
 
-uint32_t GameHandler::getBonusActionBarOffset() const {
-    // 0x005a83c0: 5 while the bar holds the pet's actions.
-    if (petActionsOnBonusBar_) return 5;
-    const uint8_t form = shapeshiftFormId_;
-    if (form == 0) return 0;
-
+const ShapeshiftFormRow* GameHandler::shapeshiftFormRow(uint8_t form) const {
+    if (form == 0) return nullptr;
     // Cached per form: the file does not change, and this is asked on every
     // action button update.
-    static std::unordered_map<uint8_t, uint32_t> barOfForm;
-    if (auto it = barOfForm.find(form); it != barOfForm.end()) return it->second;
-
-    uint32_t bar = 0;
+    if (auto it = shapeshiftFormRows_.find(form); it != shapeshiftFormRows_.end()) {
+        return it->second ? &*it->second : nullptr;
+    }
+    std::optional<ShapeshiftFormRow> found;
     auto* am = services_.assetManager;
     if (am && am->isInitialized()) {
         if (auto dbc = am->loadDBC("SpellShapeshiftForm.dbc"); dbc && dbc->isLoaded()) {
@@ -3446,15 +3446,52 @@ uint32_t GameHandler::getBonusActionBarOffset() const {
                 ? pipeline::getActiveDBCLayout()->getLayout("SpellShapeshiftForm") : nullptr;
             const uint32_t idField  = layout ? (*layout)["ID"] : 0;
             const uint32_t barField = layout ? (*layout)["BonusActionBar"] : 1;
+            // PresetSpellID[8] (0x008b8c60, +0x2c), where the layout has it.
+            const uint32_t presetField = layout ? layout->tryField("PresetSpellID0") : 0xFFFFFFFFu;
             for (uint32_t row = 0; row < dbc->getRecordCount(); ++row) {
                 if (dbc->getUInt32(row, idField) != form) continue;
-                bar = dbc->getUInt32(row, barField);
+                ShapeshiftFormRow r;
+                r.bonusActionBar = dbc->getUInt32(row, barField);
+                if (presetField != 0xFFFFFFFFu && presetField + 8 <= dbc->getFieldCount()) {
+                    for (uint32_t i = 0; i < 8; ++i) r.presetSpells[i] = dbc->getUInt32(row, presetField + i);
+                }
+                found = r;
                 break;
             }
         }
     }
-    barOfForm[form] = bar;
-    return bar;
+    auto& slot = shapeshiftFormRows_[form];
+    slot = found;
+    return slot ? &*slot : nullptr;
+}
+
+uint32_t GameHandler::getBonusActionBarOffset() const {
+    // 0x005a83c0 (DAT_00c1e59c).
+    return bonusBarOffset(petActionsOnBonusBar_, shapeshiftFormRow(shapeshiftFormId_));
+}
+
+std::vector<const char*> GameHandler::setPlayerShapeshiftForm(uint8_t form) {
+    if (form == shapeshiftFormId_) return {};
+    // 0x006da130, the handler on UNIT_FIELD_BYTES_2 byte 3 (+0x1d3).
+    const uint32_t before = getBonusActionBarOffset();
+    shapeshiftFormId_ = form;
+    LOG_INFO("Shapeshift form changed: ", static_cast<int>(form));
+    // 0x005abac0 -> 0x005ab800: a form's preset spells go to slots 121..132
+    // (0x005a7cd0, eight of them, the last four empty), as the bar's own.
+    if (!petActionsOnBonusBar_) {
+        if (const ShapeshiftFormRow* row = shapeshiftFormRow(form); row && formHasPresetSpells(*row)) {
+            for (int i = 0; i < 12; ++i) {
+                ActionBarSlot& slot = actionBar[kBonusPetSlotFirst + i];
+                const uint32_t spell = i < 8 ? row->presetSpells[static_cast<size_t>(i)] : 0;
+                slot = ActionBarSlot{};
+                if (spell != 0) {
+                    slot.type = ActionBarSlot::SPELL;
+                    slot.id = spell;
+                }
+            }
+        }
+    }
+    return formChangeEvents(before, getBonusActionBarOffset());
 }
 
 void GameHandler::updatePetActionBar() {
@@ -3473,11 +3510,9 @@ void GameHandler::updatePetActionBar() {
     }
     const uint32_t before = getBonusActionBarOffset();
     petActionsOnBonusBar_ = on;
-    const uint32_t after = getBonusActionBarOffset();
-    if (before != after) {
-        // 0x005a83c0: the page changes back from the pet's bar.
-        if (before == 5) fireAddonEvent("ACTIONBAR_PAGE_CHANGED", {});
-        fireAddonEvent("UPDATE_BONUS_ACTIONBAR", {});
+    // 0x005a83c0: the page changes back from the pet's bar.
+    for (const char* event : bonusBarOffsetEvents(before, getBonusActionBarOffset())) {
+        fireAddonEvent(event, {});
     }
     fireAddonEvent("PET_BAR_UPDATE", {});
 }

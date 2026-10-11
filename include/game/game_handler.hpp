@@ -10,6 +10,7 @@
 #include "game/opcode_table.hpp"
 #include "game/corpse_look.hpp"
 #include "game/vehicle.hpp"
+#include "game/shapeshift_forms.hpp"
 #include "game/update_field_table.hpp"
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
@@ -2444,6 +2445,11 @@ public:
     /// no bar of their own. Read from the file rather than written out here,
     /// because a table of class-and-form guesses is not checkable.
     uint32_t getBonusActionBarOffset() const;
+    /// The form's SpellShapeshiftForm.dbc row, nothing for none or unknown.
+    const ShapeshiftFormRow* shapeshiftFormRow(uint8_t form) const;
+    /// The player's UNIT_FIELD_BYTES_2 byte 3 changed (0x006da130): the
+    /// form, its preset spells, and the events to fire, in order.
+    std::vector<const char*> setPlayerShapeshiftForm(uint8_t form);
     /// Whether the bonus bar holds the pet's actions - the vehicle the
     /// player drives, or a unit it possesses (DAT_00c1e5a0 0x1, 0x005d4ad0).
     /// Slots 121..132 are then the pet bar's ten and two empty ones
@@ -3604,6 +3610,8 @@ public:
     /// Whether any of a spell's effects applies aura 78, Mounted
     /// (0x00724820 reads EffectApplyAuraName alone).
     bool spellAppliesMountedAura(uint32_t spellId) const;
+    /// Whether any of a spell's effects applies the given aura (0x007fde50).
+    bool spellAppliesAura(uint32_t spellId, uint32_t auraType) const;
     /// Returns the school bitmask for the spell from Spell.dbc
     /// (0x01=Physical, 0x02=Holy, 0x04=Fire, 0x08=Nature, 0x10=Frost, 0x20=Shadow, 0x40=Arcane).
     /// Returns 0 if unknown.
@@ -4754,8 +4762,9 @@ private:
     // Mirror timers (0=fatigue, 1=breath, 2=feigndeath)
     MirrorTimer mirrorTimers_[3];
 
-    // Shapeshift form (from UNIT_FIELD_BYTES_1 byte 3)
+    // Shapeshift form: UNIT_FIELD_BYTES_2 byte 3 in WotLK (+0x1d3, 0x0071af70)
     uint8_t  shapeshiftFormId_ = 0;
+    mutable std::unordered_map<uint8_t, std::optional<ShapeshiftFormRow>> shapeshiftFormRows_;
     // Combo points (rogues/druids)
     uint8_t  comboPoints_ = 0;
     uint64_t comboTarget_ = 0;

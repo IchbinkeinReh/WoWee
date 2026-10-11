@@ -221,6 +221,8 @@ private:
     void markPlayerDead(const char* source);
 
     // Cached field indices resolved once per handler call to avoid repeated lookups.
+    /// The player's shapeshift form from UNIT_FIELD_BYTES_2 (WotLK).
+    void applyPlayerShapeshiftForm(const UpdateBlock& block);
     struct UnitFieldIndices {
         uint16_t health, maxHealth, powerBase, maxPowerBase;
         uint16_t level, faction, flags, dynFlags, auraState;

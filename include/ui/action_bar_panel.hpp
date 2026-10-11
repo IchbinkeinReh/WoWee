@@ -8,6 +8,8 @@
 /// handler needs - a page and a button index give a slot - and the page itself,
 /// which the interface owns and tells this client on every change.
 
+#include <cstdint>
+
 namespace wowee {
 namespace ui {
 
@@ -20,6 +22,15 @@ public:
 
     static int actionSlotForPage(int page, int buttonIndex) {
         return (page - 1) * 12 + buttonIndex;
+    }
+
+    /// The slot a main-bar key presses. FrameXML's ActionButtonDown takes
+    /// the bonus bar's button while that bar is up, and a bonus button on
+    /// page 1 reads page NUM_ACTIONBAR_PAGES + GetBonusBarOffset() - a
+    /// warrior's Battle Stance (offset 1) is slots 73..84.
+    static int mainBarSlot(int page, uint32_t bonusOffset, int buttonIndex) {
+        if (page == 1 && bonusOffset > 0) page = kFrameXmlActionBarPages + static_cast<int>(bonusOffset);
+        return actionSlotForPage(page, buttonIndex);
     }
 
     [[nodiscard]] int getMainActionBarPage() const { return mainActionBarPage_; }

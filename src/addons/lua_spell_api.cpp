@@ -1,6 +1,7 @@
 // lua_spell_api.cpp - Spell info, casting, auras, and targeting Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/shapeshift_forms.hpp"
+#include "game/game_utils.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "game/item_text.hpp"
 #include "addons/lua_engine.hpp"
@@ -1407,7 +1408,21 @@ void registerSpellLuaAPI(lua_State* L) {
                 // framexml_lua_override_check exists to catch exactly that.
                 {"GetShapeshiftForm", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? gh->getShapeshiftFormId() : 0);
+            if (!gh) return luaReturnZero(L);
+            if (game::isPreWotlk()) {
+                lua_pushnumber(L, gh->getShapeshiftFormId());
+                return 1;
+            }
+            // 0x0053de10 -> 0x0053d4b0: the active form's place on the bar,
+            // not its form id. With a true argument, nothing while the form
+            // field is clear.
+            const uint8_t formField = gh->getShapeshiftFormId();
+            if (lua_toboolean(L, 1) && formField == 0) return luaReturnZero(L);
+            const auto forms = game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells());
+            std::vector<bool> active;
+            active.reserve(forms.size());
+            for (const auto& form : forms) active.push_back(game::formSpellActive(gh->getPlayerAuras(), form.spellId));
+            lua_pushnumber(L, game::activeShapeshiftIndex(active, formField));
             return 1;
         }},
                 {"GetNumShapeshiftForms", [](lua_State* L) -> int {

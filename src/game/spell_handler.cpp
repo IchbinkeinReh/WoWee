@@ -1,4 +1,5 @@
 #include "game/spell_handler.hpp"
+#include "game/shapeshift_forms.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/gather_spells.hpp"
@@ -2132,6 +2133,10 @@ void SpellHandler::handleInitialSpells(network::Packet& packet) {
 
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("SPELLS_CHANGED", {});
+        // The stance bar's list, built from the spellbook (event 0x178).
+        if (!knownShapeshiftForms(owner_.getPlayerClass(), knownSpells_).empty()) {
+            owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORMS", {});
+        }
         // A crafting window's recipes are the spells that just changed, and
         // it refreshes on its own event rather than on that one.
         if (craftingWindowOpen_) owner_.addonEventCallbackRef()("TRADE_SKILL_UPDATE", {});
@@ -2730,6 +2735,20 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
                 auraList->resize(maxSlot + 1);
             }
         }
+        // The spells whose aura came or went on the player, for the stance bar.
+        std::vector<uint32_t> playerAuraChanges;
+        if (data.guid == owner_.getPlayerGuid()) {
+            if (isAll) {
+                for (const auto& [slot, aura] : data.updates) playerAuraChanges.push_back(aura.spellId);
+            } else {
+                for (const auto& [slot, aura] : data.updates) {
+                    if ((*auraList)[slot].spellId != aura.spellId) {
+                        playerAuraChanges.push_back((*auraList)[slot].spellId);
+                        playerAuraChanges.push_back(aura.spellId);
+                    }
+                }
+            }
+        }
         for (auto [slot, aura] : data.updates) {
             if (aura.durationMs >= 0) {
                 aura.receivedAtMs = nowMs;
@@ -2737,6 +2756,19 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
             (*auraList)[slot] = aura;
         }
         mirrorAurasByGuid(data.guid, *auraList);
+
+        // 0x00722090 / 0x00727760: an aura of a stance bar spell that is no
+        // shapeshift (aura 36) - Stealth, a presence - came or went. A real
+        // form says so through its form field instead (0x006da130).
+        if (!playerAuraChanges.empty() && owner_.addonEventCallbackRef()) {
+            const auto forms = knownShapeshiftForms(owner_.getPlayerClass(), owner_.getKnownSpells());
+            const bool barSpellChanged = std::any_of(forms.begin(), forms.end(), [&](const ShapeshiftForm& f) {
+                return std::find(playerAuraChanges.begin(), playerAuraChanges.end(), f.spellId) !=
+                           playerAuraChanges.end() &&
+                       !owner_.spellAppliesAura(f.spellId, 36);
+            });
+            if (barSpellChanged) owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORM", {});
+        }
 
         // The auras' state kits on the unit, as each slot changes
         // (0x00724820, 0x0071e930).
@@ -2812,6 +2844,16 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
     }
 }
 
+namespace {
+// Whether a spell is one of the stance bar's (0x0053bd40), as the class has them.
+bool isStanceBarSpell(uint8_t classId, uint32_t spellId) {
+    for (const ShapeshiftForm& form : allShapeshiftForms(classId)) {
+        if (form.spellId == spellId || form.supersededBy == spellId) return true;
+    }
+    return false;
+}
+}  // namespace
+
 void SpellHandler::handleLearnedSpell(network::Packet& packet) {
     const bool classicSpellId = isClassicLikeExpansion();
     const size_t minSz = classicSpellId ? 2u : 4u;
@@ -2849,6 +2891,10 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
     if (!alreadyKnown && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("LEARNED_SPELL_IN_TAB", {std::to_string(spellId)});
         owner_.addonEventCallbackRef()("SPELLS_CHANGED", {});
+        // The stance bar's list took it (0x00542563 -> event 0x178).
+        if (isStanceBarSpell(owner_.getPlayerClass(), spellId)) {
+            owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORMS", {});
+        }
         // The mounts and critters list is built from the spellbook, so a new
         // spell can add to it. petpaperdollframe refreshes on this and on
         // nothing else, which is why the tab stayed as it was first drawn.
@@ -2884,6 +2930,10 @@ void SpellHandler::handleRemovedSpell(network::Packet& packet) {
     // throws rather than doing nothing.
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("SPELLS_CHANGED", {});
+        // Off the stance bar's list (0x0053fda8 -> event 0x178).
+        if (isStanceBarSpell(owner_.getPlayerClass(), spellId)) {
+            owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORMS", {});
+        }
         // The mirror of COMPANION_LEARNED on the other side of this file. The
         // mounts and critters list is built from the spellbook, so losing a
         // spell can take one off it, and the pet tab refreshes on this and on

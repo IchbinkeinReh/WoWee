@@ -1,6 +1,7 @@
 // lua_unit_api.cpp - Unit query, stats, party/raid, and player state Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/shapeshift_forms.hpp"
+#include "game/game_utils.hpp"
 #include "game/bg_score_defs.hpp"
 #include "addons/lua_api_helpers.hpp"
 
@@ -2695,9 +2696,14 @@ void registerUnitLuaAPI(lua_State* L) {
             const auto forms = game::knownShapeshiftForms(classId, gh->getKnownSpells());
             if (static_cast<size_t>(index) > forms.size()) { return luaReturnNil(L); }
             const auto& fi = forms[static_cast<size_t>(index) - 1];
+            // 0x0053de90: active is 0x00802cb0's answer, the form's spell's
+            // aura on the player - not a form id, which a stance or presence
+            // may not even set.
+            const bool active = game::isPreWotlk() ? currentForm == fi.formId
+                                                   : game::formSpellActive(gh->getPlayerAuras(), fi.spellId);
             lua_pushstring(L, fi.icon);                          // icon
             lua_pushstring(L, fi.name);                          // name
-            lua_pushboolean(L, currentForm == fi.formId ? 1 : 0); // isActive
+            lua_pushboolean(L, active ? 1 : 0);                  // isActive
             lua_pushboolean(L, 1);                               // isCastable
             return 4;
         }},

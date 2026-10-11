@@ -8,11 +8,12 @@ namespace {
 // The order is the order the bar shows them, which is the order the client
 // has always shown them and the order every index refers to.
 //
-// Dire Bear is deliberately absent. It replaces Bear Form on the same button
-// rather than adding one, so a druid who has learned it has two spells for one
-// slot; the bar shows Bear and casting it casts whichever the server accepts.
+// Dire Bear is not a row of its own. It replaces Bear Form on the same button
+// (0x005424d4 swaps the list's spell in place), so the button then holds and
+// casts Dire Bear Form and is active while its aura is.
 const ShapeshiftForm kDruid[] = {
-    {.spellId = SPELL_BEAR_FORM,    .formId = 1,  .name = "Bear Form",         .icon = "Interface\\Icons\\Ability_Racial_BearForm"},
+    {.spellId = SPELL_BEAR_FORM,    .formId = 1,  .name = "Bear Form",         .icon = "Interface\\Icons\\Ability_Racial_BearForm",
+     .supersededBy = SPELL_DIRE_BEAR_FORM, .supersededName = "Dire Bear Form"},
     {.spellId = SPELL_AQUATIC_FORM, .formId = 2,  .name = "Aquatic Form",      .icon = "Interface\\Icons\\Ability_Druid_AquaticForm"},
     {.spellId = SPELL_CAT_FORM,     .formId = 3,  .name = "Cat Form",          .icon = "Interface\\Icons\\Ability_Druid_CatForm"},
     {.spellId = SPELL_TRAVEL_FORM,  .formId = 4,  .name = "Travel Form",       .icon = "Interface\\Icons\\Ability_Druid_TravelForm"},
@@ -53,6 +54,43 @@ std::vector<ShapeshiftForm> allShapeshiftForms(uint8_t classId) {
         case 11: return {std::begin(kDruid), std::end(kDruid)};
         default: return {};
     }
+}
+
+bool formHasPresetSpells(const ShapeshiftFormRow& row) {
+    for (uint32_t spell : row.presetSpells) {
+        if (spell != 0) return true;
+    }
+    return false;
+}
+
+uint32_t bonusBarOffset(bool petActionsOnBar, const ShapeshiftFormRow* form) {
+    // 0x005a83c0: DAT_00c1e5a0 set (the pet's actions, bit 1, or a form's
+    // preset spells, bit 2 from 0x005abac0) is the pet's page.
+    if (petActionsOnBar) return 5;
+    if (!form) return 0;
+    if (formHasPresetSpells(*form)) return 5;
+    return form->bonusActionBar;
+}
+
+std::vector<const char*> bonusBarOffsetEvents(uint32_t offsetBefore, uint32_t offsetAfter) {
+    std::vector<const char*> events;
+    if (offsetBefore == offsetAfter) return events;
+    if (offsetBefore == 5) events.push_back("ACTIONBAR_PAGE_CHANGED");  // event 0xaf
+    events.push_back("UPDATE_BONUS_ACTIONBAR");                         // event 0xb4
+    return events;
+}
+
+std::vector<const char*> formChangeEvents(uint32_t offsetBefore, uint32_t offsetAfter) {
+    auto events = bonusBarOffsetEvents(offsetBefore, offsetAfter);
+    events.push_back("UPDATE_SHAPESHIFT_FORM");  // event 0x179
+    return events;
+}
+
+uint32_t activeShapeshiftIndex(const std::vector<bool>& activeByIndex, uint8_t formField) {
+    for (size_t i = activeByIndex.size(); i > 0; --i) {
+        if (activeByIndex[i - 1]) return static_cast<uint32_t>(i);
+    }
+    return formField != 0 ? static_cast<uint32_t>(activeByIndex.size() + 1) : 0;
 }
 
 }  // namespace wowee::game

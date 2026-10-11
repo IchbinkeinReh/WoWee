@@ -12,9 +12,12 @@
 #include <catch_amalgamated.hpp>
 
 #include <set>
+#include <string>
+#include <vector>
 
 #include "game/protocol_constants.hpp"
 #include "game/shapeshift_forms.hpp"
+#include "ui/action_bar_panel.hpp"
 
 using wowee::game::allShapeshiftForms;
 using wowee::game::knownShapeshiftForms;
@@ -102,4 +105,109 @@ TEST_CASE("a class with no stance bar has no forms", "[shapeshift]") {
     CHECK(allShapeshiftForms(kMage).empty());
     const std::set<uint32_t> known{wowee::game::SPELL_BEAR_FORM};
     CHECK(knownShapeshiftForms(kMage, known).empty());
+}
+
+// ── The form's bar, its active flag and its events (WotLK) ──────────────────
+
+using wowee::game::activeShapeshiftIndex;
+using wowee::game::bonusBarOffset;
+using wowee::game::bonusBarOffsetEvents;
+using wowee::game::formChangeEvents;
+using wowee::game::formSpellActive;
+using wowee::game::ShapeshiftFormRow;
+
+namespace {
+
+ShapeshiftFormRow rowWithBar(uint32_t bar) {
+    ShapeshiftFormRow row;
+    row.bonusActionBar = bar;
+    return row;
+}
+
+struct TestAura {
+    uint32_t spellId;
+    uint8_t flags;
+};
+
+std::vector<std::string> names(const std::vector<const char*>& events) {
+    return {events.begin(), events.end()};
+}
+
+}  // namespace
+
+TEST_CASE("a form's bonus bar offset is its SpellShapeshiftForm row's", "[shapeshift]") {
+    // 0x005a83c0: no form, no bar; a stance its BonusActionBar column - the
+    // warrior's three are 1, 2 and 3, which FrameXML adds to page 6.
+    CHECK(bonusBarOffset(false, nullptr) == 0);
+    const auto battle = rowWithBar(1), defensive = rowWithBar(2), berserker = rowWithBar(3);
+    CHECK(bonusBarOffset(false, &battle) == 1);
+    CHECK(bonusBarOffset(false, &defensive) == 2);
+    CHECK(bonusBarOffset(false, &berserker) == 3);
+    const auto travel = rowWithBar(0);
+    CHECK(bonusBarOffset(false, &travel) == 0);
+}
+
+TEST_CASE("the pet's actions or a form's preset spells take the bar to 5", "[shapeshift]") {
+    const auto cat = rowWithBar(1);
+    CHECK(bonusBarOffset(true, &cat) == 5);
+    CHECK(bonusBarOffset(true, nullptr) == 5);
+    // 0x005a7c50: any PresetSpellID makes it the pet's page (0x005abac0).
+    auto preset = rowWithBar(2);
+    preset.presetSpells[3] = 12345;
+    CHECK(bonusBarOffset(false, &preset) == 5);
+}
+
+TEST_CASE("a form change fires the bar's events, then the form's", "[shapeshift]") {
+    // 0x006da130 -> 0x005a83c0: Battle Stance from none moves the offset.
+    CHECK(names(formChangeEvents(0, 1)) ==
+          std::vector<std::string>{"UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORM"});
+    // Two forms on the same bar: only the form's event.
+    CHECK(names(formChangeEvents(1, 1)) == std::vector<std::string>{"UPDATE_SHAPESHIFT_FORM"});
+    // Leaving the pet's page changes the page as well.
+    CHECK(names(formChangeEvents(5, 0)) ==
+          std::vector<std::string>{"ACTIONBAR_PAGE_CHANGED", "UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORM"});
+    CHECK(bonusBarOffsetEvents(3, 3).empty());
+    // The list's own event is not one of them: the forms did not change.
+    for (const char* event : formChangeEvents(0, 2)) CHECK(std::string(event) != "UPDATE_SHAPESHIFT_FORMS");
+}
+
+TEST_CASE("a form is active while its spell's positive aura is on the player", "[shapeshift]") {
+    // 0x00802cb0: the aura of the spell, with flag 0x10.
+    const std::vector<TestAura> auras{{wowee::game::SPELL_DEFENSIVE_STANCE, 0x10 | 0x01}, {1234, 0x10}};
+    CHECK(formSpellActive(auras, wowee::game::SPELL_DEFENSIVE_STANCE));
+    CHECK_FALSE(formSpellActive(auras, wowee::game::SPELL_BATTLE_STANCE));
+    CHECK_FALSE(formSpellActive(auras, 0));
+    const std::vector<TestAura> negative{{wowee::game::SPELL_BATTLE_STANCE, 0x80}};
+    CHECK_FALSE(formSpellActive(negative, wowee::game::SPELL_BATTLE_STANCE));
+}
+
+TEST_CASE("GetShapeshiftForm is the active form's place on the bar", "[shapeshift]") {
+    // 0x0053d4b0: searched from the end, 1-based.
+    CHECK(activeShapeshiftIndex({false, true, false}, 18) == 2);
+    CHECK(activeShapeshiftIndex({false, false, false}, 0) == 0);
+    // A form field set but none of the bar's: one past the bar.
+    CHECK(activeShapeshiftIndex({false, false, false}, 7) == 4);
+}
+
+TEST_CASE("Dire Bear Form takes Bear Form's button", "[shapeshift]") {
+    // 0x005424d4: the list's spell is replaced in place.
+    const std::set<uint32_t> known{wowee::game::SPELL_BEAR_FORM, wowee::game::SPELL_DIRE_BEAR_FORM,
+                                   wowee::game::SPELL_CAT_FORM};
+    const auto forms = knownShapeshiftForms(kDruid, known);
+    REQUIRE(forms.size() == 2);
+    CHECK(forms[0].spellId == wowee::game::SPELL_DIRE_BEAR_FORM);
+    CHECK(std::string(forms[0].name) == "Dire Bear Form");
+    CHECK(forms[1].spellId == wowee::game::SPELL_CAT_FORM);
+}
+
+TEST_CASE("a stance's number keys press its own bar", "[actionbar]") {
+    // ActionButtonDown takes the bonus button while the bonus bar is up; on
+    // page 1 it reads page 6 + GetBonusBarOffset(). 0-based slots.
+    CHECK(wowee::ui::ActionBarPanel::mainBarSlot(1, 0, 0) == 0);    // no stance: slot 1
+    CHECK(wowee::ui::ActionBarPanel::mainBarSlot(1, 1, 0) == 72);   // Battle Stance: slot 73
+    CHECK(wowee::ui::ActionBarPanel::mainBarSlot(1, 2, 11) == 95);  // Defensive: slot 96
+    CHECK(wowee::ui::ActionBarPanel::mainBarSlot(1, 3, 0) == 96);   // Berserker: slot 97
+    CHECK(wowee::ui::ActionBarPanel::mainBarSlot(1, 5, 0) == 120);  // the pet's page: slot 121
+    // A page turned by hand is not the bonus bar's.
+    CHECK(wowee::ui::ActionBarPanel::mainBarSlot(2, 1, 0) == 12);
 }
