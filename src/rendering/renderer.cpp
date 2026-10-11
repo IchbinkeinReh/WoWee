@@ -2887,7 +2887,11 @@ void Renderer::update(float deltaTime) {
         const int shadowLOD = std::atoi(
             addons::storedCVarValue("shadowLOD", "1").c_str());
         const int extShadowQuality = shadowsEnabled ? extShadowQuality_ : 0;
-        if (characterRenderer && camera && blob_shadow::drawn(shadowLOD, extShadowQuality)) {
+        // Not under the ray traced lighting: every unit casts its traced
+        // shadow there (character_renderer_rt.cpp), and a blob beneath it
+        // would be a second shadow, round and pointing nowhere.
+        const bool tracedShadows = rtLighting_ && rtLighting_->active();
+        if (characterRenderer && camera && !tracedShadows && blob_shadow::drawn(shadowLOD, extShadowQuality)) {
             characterRenderer->collectBlobShadows(blobCasters_);
         }
         blobShadowRenderer->prepare(vkCtx ? vkCtx->getCurrentFrame() : 0, blobCasters_,
