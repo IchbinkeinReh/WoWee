@@ -1370,22 +1370,29 @@ bool Application::initialize() {
                     // suffix names empty for the rest of the session.
                     if (!*propLoaded && amPtr->isInitialized()) {
                         *propLoaded = true;
-                        // Both DBCs carry the display name ("of the Bear" / "of Strength") as
-                        // the first string column, field 1, across classic/tbc/wotlk/turtle.
-                        constexpr uint32_t kNameField = 1;
-                        // ItemRandomProperties.dbc: ID=0, Name=1 (positive IDs)
+                        // The display name ("of the Bear" / "of Strength"). Field 1 unless the
+                        // expansion's layout says otherwise: WotLK's ItemRandomProperties keeps
+                        // an untranslated internal name there and the localized one at 7.
+                        const auto* layouts = pipeline::getActiveDBCLayout();
+                        auto nameField = [layouts](const char* table) -> uint32_t {
+                            const auto* l = layouts ? layouts->getLayout(table) : nullptr;
+                            return l ? (*l)["Name"] : 1u;
+                        };
+                        // ItemRandomProperties.dbc: positive IDs
                         if (auto dbc = amPtr->loadDBC("ItemRandomProperties.dbc"); dbc && dbc->isLoaded()) {
+                            const uint32_t nameF = nameField("ItemRandomProperties");
                             for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
                                 int32_t rid = static_cast<int32_t>(dbc->getUInt32(r, 0));
-                                std::string name = dbc->getString(r, kNameField);
+                                std::string name = dbc->getString(r, nameF);
                                 if (!name.empty() && rid > 0) (*propNames)[rid] = name;
                             }
                         }
-                        // ItemRandomSuffix.dbc: ID=0, Name=1 - keyed as negative IDs
+                        // ItemRandomSuffix.dbc: keyed as negative IDs
                         if (auto dbc = amPtr->loadDBC("ItemRandomSuffix.dbc"); dbc && dbc->isLoaded()) {
+                            const uint32_t nameF = nameField("ItemRandomSuffix");
                             for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
                                 int32_t rid = static_cast<int32_t>(dbc->getUInt32(r, 0));
-                                std::string name = dbc->getString(r, kNameField);
+                                std::string name = dbc->getString(r, nameF);
                                 if (!name.empty() && rid > 0) (*propNames)[-rid] = name;
                             }
                         }

@@ -572,6 +572,24 @@ TEST_CASE("A localized client's strings are read where the enUS ones would be", 
         CHECK(dbc.getUInt32(0, 1) == 0);
     }
 
+    SECTION("two columns of zeros before a deDE block") {
+        // ItemRandomProperties: [ID, internal name, enchant x5, name x16,
+        // flags], its last two enchant slots zero in every row. Read from
+        // either zero column the block is shaped just as well, two or one
+        // columns early; the suffix went into the first of them.
+        constexpr uint32_t kN = 7;
+        std::vector<uint32_t> r(kN + 17, 0);
+        r[0] = 17;
+        r[2] = 5;
+        r[kN + 3] = heal;
+        r[kN + 16] = flags;
+        DBCFile dbc;
+        REQUIRE(dbc.load(buildSyntheticDBC(1, static_cast<uint32_t>(r.size()), {r}, strings)));
+        CHECK(dbc.getString(0, kN) == "Geringes Heilen");
+        CHECK(dbc.getUInt32(0, 5) == 0);
+        CHECK(dbc.getUInt32(0, 6) == 0);
+    }
+
     SECTION("vanilla deDE, eight locale columns") {
         // [ID, name x8, flags, 0...]
         std::vector<uint32_t> r(12, 0);

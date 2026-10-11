@@ -204,6 +204,14 @@
     "TextureTorsoLower": 19,
     "TextureTorsoUpper": 18
   },
+  "ItemRandomProperties": {
+    "ID": 0,
+    "Name": 7
+  },
+  "ItemRandomSuffix": {
+    "ID": 0,
+    "Name": 1
+  },
   "ItemSet": {
     "ID": 0,
     "Item0": 18,
