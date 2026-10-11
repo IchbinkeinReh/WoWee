@@ -680,12 +680,12 @@ void Renderer::updatePerFrameUBO() {
                 currentFrameData.cascadeTexel[c] = glm::vec4(0.0f);
             }
         }
-        // y: a cascade blends into the next over its outer 12%; z: the last
-        // one fades out from 90% of its half-width, to 99% of it as the
-        // client's does (shadow_csm.glsli).
+        // y: unused - the cascades switch with no blend, as the client's do;
+        // z: the last one fades out from 90% of its half-width, to 99% of it
+        // as the client's does (shadow_csm.glsli).
         // w: one yard of the shared light-space depth range in depth units,
         // so a shader can bias by a distance (character.frag's self-shadow).
-        currentFrameData.cascadeInfo = glm::vec4(static_cast<float>(cascades), 0.12f, 0.9f,
+        currentFrameData.cascadeInfo = glm::vec4(static_cast<float>(cascades), 0.0f, 0.9f,
                                                  1.0f / shadowDepthRange(shadowDistance_));
         // The outer cascade's, in the same atlas terms, for anything that
         // reads the one matrix rather than the cascades.

@@ -69,7 +69,7 @@ struct GPUPerFrameData {
     // cascadeRect: the tile in atlas UV, min xy and max zw.
     // cascadeTexel: x one texel in yards, y and z one atlas texel in u and v.
     // cascadeInfo: x how many cascades there are (0: none, everything lit),
-    //   y the fraction of a tile over which it blends into the next one,
+    //   y unused (the cascades switch with no blend, as the client's do),
     //   z where the last cascade starts fading out, as a fraction of its
     //   half-width, w one yard along the light in the cascades' depth (they
     //   all share one depth range), for a bias a shader wants in yards.

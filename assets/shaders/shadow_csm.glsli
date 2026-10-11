@@ -12,21 +12,17 @@
 //     mat4 cascadeMatrix[4];  // world -> atlas uv.xy, depth z
 //     vec4 cascadeRect[4];    // the tile: uv min xy, uv max zw
 //     vec4 cascadeTexel[4];   // x one texel in yards, yz one atlas texel in u, v
-//     vec4 cascadeInfo;       // x count (0 = no map), y blend band, z fade start
+//     vec4 cascadeInfo;       // x count (0 = no map), y unused, z fade start
 //
 // cascadeInfo.x is 0 in the character preview, whose block is zeroed, and
 // before the player has a position; everything then reads as lit.
 
 // How far into a tile, as a fraction of its half-width from the centre: 0 at
-// the centre, 1 on the edge. And the inset the tile is trusted up to: two
-// atlas texels, so the 3x3 filter and the normal offset stay on the tile.
-float csmTileDistance(int c, vec2 uv, out float dMax) {
+// the centre, 1 on the edge - the client's max(|x|, |y|) on a cascade's
+// -1..1 coordinates.
+float csmTileDistance(int c, vec2 uv) {
     const vec4 rect = cascadeRect[c];
-    const vec2 size = rect.zw - rect.xy;
-    const vec2 t = (uv - rect.xy) / size;
-    const vec2 insetT = 2.0 * cascadeTexel[c].yz / size;
-    dMax = 1.0 - 2.0 * max(insetT.x, insetT.y);
-    const vec2 d = abs(t * 2.0 - 1.0);
+    const vec2 d = abs((uv - rect.xy) / (rect.zw - rect.xy) * 2.0 - 1.0);
     return max(d.x, d.y);
 }
 
@@ -58,35 +54,27 @@ float csmSampleCascade(sampler2DShadow smap, int c, vec3 worldPos, vec3 n, float
 // strength. n is the surface normal, nl its dot with the direction to the sun
 // and depthBias what is taken off the depth (the shader's own, as before).
 //
-// The finest cascade whose tile holds the point is used; over the outer 12%
-// of that tile it blends into the next one, so the step in sharpness is a
-// ramp rather than a line; and the last cascade's shadow fades out, so the
-// map's coverage ends without an edge. That fade is the client's: linear, to
-// fully lit, from 90% of the outer cascade's half-width to 99% of it -
-// saturate(11 - 11.111111 * max(|x|, |y|)) on its coordinates in the cascaded
-// pixel shaders (combiners_*, mapobj*, terrain3*; the third of the cascades
-// FUN_00875d30 makes at extShadowQuality 3 and up).
+// The cascade is chosen as the client's cascaded pixel shaders choose it
+// (combiners_*, mapobj*, terrain3*; e.g. nvfp2 combiners_opaque, variant 2,
+// with the three cascades FUN_00875d30 makes at extShadowQuality 3 and up):
+// the first whose coordinates have max(|x|, |y|) < 1, strictly and with no
+// inset, and nothing blended between them - the switch to the next one is a
+// hard line. The last cascade is read wherever no finer one holds the point,
+// untested, and its shadow fades out to fully lit from 90% of its half-width
+// to 99% of it: saturate(11 - 11.111111 * max(|x|, |y|)).
 float csmShadow(sampler2DShadow smap, vec3 worldPos, vec3 n, float nl, float depthBias) {
     const int count = min(int(cascadeInfo.x + 0.5), 4);
     for (int c = 0; c < count; ++c) {
         const vec4 ls = cascadeMatrix[c] * vec4(worldPos, 1.0);
-        float dMax;
-        const float d = csmTileDistance(c, ls.xy / ls.w, dMax);
-        if (d > dMax) continue;
-
-        float shadow = csmSampleCascade(smap, c, worldPos, n, nl, depthBias);
+        const float d = csmTileDistance(c, ls.xy / ls.w);
         if (c + 1 < count) {
-            const float band = max(cascadeInfo.y, 1e-3);
-            const float w = clamp((d - (dMax - band)) / band, 0.0, 1.0);
-            if (w > 0.0) {
-                shadow = mix(shadow, csmSampleCascade(smap, c + 1, worldPos, n, nl, depthBias), w);
-            }
-        } else {
-            const float end = min(0.99, dMax);
-            const float start = min(cascadeInfo.z, end - 1e-3);
-            shadow = mix(shadow, 1.0, clamp((d - start) / (end - start), 0.0, 1.0));
+            if (d < 1.0) return csmSampleCascade(smap, c, worldPos, n, nl, depthBias);
+            continue;
         }
-        return shadow;
+        const float start = min(cascadeInfo.z, 0.99 - 1e-3);
+        const float fade = clamp((d - start) / (0.99 - start), 0.0, 1.0);
+        if (fade >= 1.0) return 1.0;
+        return mix(csmSampleCascade(smap, c, worldPos, n, nl, depthBias), 1.0, fade);
     }
     return 1.0;
 }
