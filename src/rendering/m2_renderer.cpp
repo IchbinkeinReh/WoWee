@@ -2,8 +2,11 @@
 #include "rendering/placement_transform.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/rt_bvh.hpp"
+#include "rendering/rt_point_lights.hpp"
+#include "rendering/rt_rigid_parts.hpp"
 #include "rendering/rt_scene.hpp"
 #include "core/env_flag.hpp"
+#include "core/frame_profiler.hpp"
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_blend_mode.hpp"
 #include "rendering/m2_texture_combiner.hpp"
@@ -1712,6 +1715,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     // Copy ribbon emitter data and resolve each texture and material pair
     // (0x00832ea0): the texture a direct index into the model's textures.
     gpuModel.ribbonEmitters = model.ribbonEmitters;
+    gpuModel.lights = model.lights;
     if (!model.ribbonEmitters.empty()) {
         VkDevice device = vkCtx_->getDevice();
         gpuModel.ribbonMaterialStart.assign(1, 0u);
@@ -2157,14 +2161,17 @@ namespace rendering {
 
 void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& model) {
     if (!rtScene_ || model.vertices.empty() || model.indices.empty()) return;
-    // What the renderer never draws, what is too small and numerous to be
-    // worth its triangles (ground clutter), and what moves: an animated model
-    // would cast its bind pose, not the pose on screen.
+    // What the renderer never draws, and what is too small and numerous to be
+    // worth its triangles (ground clutter).
     if (gpuModel.isInvisibleTrap || gpuModel.isSpellEffect ||
         gpuModel.isGroundDetail || gpuModel.isSkyBird || gpuModel.isLightBeam) {
         return;
     }
-    if (gpuModel.hasAnimation && !gpuModel.disableAnimation && !gpuModel.isTransportDoodad) return;
+    // An animated model - a door, a chest, a banner, a lantern on its chain -
+    // as one mesh would cast its bind pose, not the pose on screen. It is
+    // cut into pieces by bone instead, which syncRtScene places by this
+    // frame's bones while the instance is near.
+    const bool animated = gpuModel.hasAnimation && !gpuModel.disableAnimation && !gpuModel.isTransportDoodad;
 
     RtScene::MeshSource src;
     src.positions.reserve(model.vertices.size());
@@ -2222,76 +2229,247 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
             src.masks.push_back(mask);
         }
     }
-    gpuModel.rtMesh = rtScene_->addMesh(std::move(src));
+    if (!animated) {
+        gpuModel.rtMesh = rtScene_->addMesh(std::move(src));
+        return;
+    }
+    if (src.indices.empty() || model.bones.empty()) return;
+    std::vector<std::array<uint8_t, 4>> boneIdx(model.vertices.size()), boneWgt(model.vertices.size());
+    for (size_t i = 0; i < model.vertices.size(); ++i) {
+        for (int k = 0; k < 4; ++k) {
+            boneIdx[i][k] = model.vertices[i].boneIndices[k];
+            boneWgt[i][k] = model.vertices[i].boneWeights[k];
+        }
+    }
+    std::vector<int16_t> parents(model.bones.size());
+    for (size_t b = 0; b < model.bones.size(); ++b) parents[b] = model.bones[b].parentBone;
+    constexpr uint32_t kMinPieceTriangles = 16;
+    const auto parts = rt_parts::splitByBone(boneIdx, boneWgt, src.indices, parents, kMinPieceTriangles);
+    std::vector<uint32_t> remap(src.positions.size(), RtScene::kInvalid);
+    for (const auto& part : parts) {
+        RtScene::MeshSource piece;
+        for (uint32_t t : part.triangles) {
+            for (int c = 0; c < 3; ++c) {
+                const uint32_t v = src.indices[t * 3 + c];
+                if (remap[v] == RtScene::kInvalid) {
+                    remap[v] = static_cast<uint32_t>(piece.positions.size());
+                    piece.positions.push_back(src.positions[v]);
+                    piece.normals.push_back(src.normals[v]);
+                    piece.uvs.push_back(src.uvs[v]);
+                }
+                piece.indices.push_back(remap[v]);
+            }
+            piece.surfaces.push_back(src.surfaces[t]);
+            piece.oneSided.push_back(src.oneSided[t]);
+            piece.masks.push_back(src.masks[t]);
+        }
+        for (uint32_t t : part.triangles) {
+            for (int c = 0; c < 3; ++c) remap[src.indices[t * 3 + c]] = RtScene::kInvalid;
+        }
+        const uint32_t mesh = rtScene_->addMesh(std::move(piece));
+        if (mesh != RtScene::kInvalid) gpuModel.rtPieces.push_back({part.bone, mesh});
+    }
 }
 
 void M2Renderer::releaseRtModel(M2ModelGPU& gpuModel) {
-    if (!rtScene_ || gpuModel.rtMesh == RtScene::kInvalid) return;
+    if (!rtScene_ || (gpuModel.rtMesh == RtScene::kInvalid && gpuModel.rtPieces.empty())) return;
     // Instances of it are normally gone already; any left are dropped here,
     // and the M2Instance that still names one re-registers on the next sync
     // if its model comes back.
-    for (size_t i = 0; i < rtOwned_.size();) {
-        const uint32_t id = rtOwned_[i];
-        if (rtMeshOf_[id] == gpuModel.rtMesh) {
-            rtScene_->removeInstance(id);
-            rtSeen_[id] = 0;
-            rtOwned_[i] = rtOwned_.back();
-            rtOwned_.pop_back();
-        } else {
-            ++i;
+    std::vector<uint32_t> meshes;
+    if (gpuModel.rtMesh != RtScene::kInvalid) meshes.push_back(gpuModel.rtMesh);
+    for (const auto& piece : gpuModel.rtPieces) meshes.push_back(piece.mesh);
+    for (RtTracking* tr : {&rtStatic_, &rtDynamic_}) {
+        const uint32_t bit = tr == &rtDynamic_ ? RtScene::kDynamicBit : 0u;
+        for (size_t i = 0; i < tr->owned.size();) {
+            const uint32_t slot = tr->owned[i];
+            if (std::find(meshes.begin(), meshes.end(), tr->meshOf[slot]) != meshes.end()) {
+                rtScene_->removeInstance(slot | bit);
+                tr->seen[slot] = 0;
+                tr->owned[i] = tr->owned.back();
+                tr->owned.pop_back();
+            } else {
+                ++i;
+            }
         }
     }
-    rtScene_->removeMesh(gpuModel.rtMesh);
+    for (uint32_t mesh : meshes) rtScene_->removeMesh(mesh);
     gpuModel.rtMesh = RtScene::kInvalid;
+    gpuModel.rtPieces.clear();
+}
+
+M2Renderer::RtTracking& M2Renderer::rtTrackingOf(uint32_t rtId) {
+    return RtScene::isDynamic(rtId) ? rtDynamic_ : rtStatic_;
 }
 
 void M2Renderer::syncRtScene() {
     if (!rtScene_ || !rtScene_->isActive()) return;
     const uint64_t gen = ++rtSyncGeneration_;
-    auto track = [&](uint32_t id, uint32_t mesh) {
-        if (id >= rtSeen_.size()) {
-            rtSeen_.resize(id + 1, 0);
-            rtMeshOf_.resize(id + 1, RtScene::kInvalid);
-        }
-        rtSeen_[id] = gen;
-        rtMeshOf_[id] = mesh;
+    rtLitInstances_.clear();
+    rtAnimatedPieces_ = 0;
+    // The tracking slot of an RtScene instance id.
+    auto slotOf = [](uint32_t id) { return id & ~RtScene::kDynamicBit; };
+    auto seenOf = [&](uint32_t id) -> uint64_t {
+        const RtTracking& tr = rtTrackingOf(id);
+        const uint32_t s = slotOf(id);
+        return s < tr.seen.size() ? tr.seen[s] : 0;
     };
-    for (auto& inst : instances) {
-        auto it = models.find(inst.modelId);
-        const uint32_t mesh = it != models.end() ? it->second.rtMesh : RtScene::kInvalid;
+    auto track = [&](uint32_t id, uint32_t mesh) {
+        RtTracking& tr = rtTrackingOf(id);
+        const uint32_t s = slotOf(id);
+        if (s >= tr.seen.size()) {
+            tr.seen.resize(s + 1, 0);
+            tr.meshOf.resize(s + 1, RtScene::kInvalid);
+        }
+        tr.seen[s] = gen;
+        tr.meshOf[s] = mesh;
+    };
+    auto meshOf = [&](uint32_t id) {
+        const RtTracking& tr = rtTrackingOf(id);
+        const uint32_t s = slotOf(id);
+        return s < tr.meshOf.size() ? tr.meshOf[s] : RtScene::kInvalid;
+    };
+    auto add = [&](M2Instance& inst, uint32_t mesh, bool dynamic) {
+        inst.rtInstance = dynamic ? rtScene_->addDynamicInstance(mesh, inst.modelMatrix)
+                                  : rtScene_->addInstance(mesh, inst.modelMatrix);
+        if (inst.rtInstance == RtScene::kInvalid) return;
+        inst.rtMatrix = inst.modelMatrix;
+        rtTrackingOf(inst.rtInstance).owned.push_back(slotOf(inst.rtInstance));
+        track(inst.rtInstance, mesh);
+    };
+    // The cached model pointers hold unless a model was added or removed
+    // since update() refreshed them (the map may have rehashed). Taking them
+    // saves a hash lookup an instance - most of this pass in a city.
+    const bool cachedModelsValid = !spatialIndexDirty_;
+    for (size_t idx = 0; idx < instances.size(); ++idx) {
+        auto& inst = instances[idx];
+        const M2ModelGPU* model = nullptr;
+        if (cachedModelsValid) {
+            model = inst.cachedModel;
+        } else if (auto it = models.find(inst.modelId); it != models.end()) {
+            model = &it->second;
+        }
+        if (model && (!model->lights.empty() || model->isBrazierOrFire || model->isTorch)) {
+            rtLitInstances_.push_back(static_cast<uint32_t>(idx));
+        }
+        const uint32_t mesh = model ? model->rtMesh : RtScene::kInvalid;
         const bool wanted = mesh != RtScene::kInvalid && inst.fade >= 1.0f;
         // Still ours, not claimed by another instance this pass (a copied
         // M2Instance carries its original's id), and placing the same mesh.
-        const bool valid = inst.rtInstance != RtScene::kInvalid &&
-                           inst.rtInstance < rtSeen_.size() && rtSeen_[inst.rtInstance] != 0 &&
-                           rtSeen_[inst.rtInstance] != gen && rtMeshOf_[inst.rtInstance] == mesh;
+        const uint64_t seen = inst.rtInstance != RtScene::kInvalid ? seenOf(inst.rtInstance) : 0;
+        const bool valid = seen != 0 && seen != gen && meshOf(inst.rtInstance) == mesh;
         if (!wanted) {
             inst.rtInstance = RtScene::kInvalid;  // an unseen id is removed below
             continue;
         }
         if (!valid) {
-            inst.rtInstance = rtScene_->addInstance(mesh, inst.modelMatrix);
-            if (inst.rtInstance == RtScene::kInvalid) continue;
-            inst.rtMatrix = inst.modelMatrix;
-            rtOwned_.push_back(inst.rtInstance);
-            track(inst.rtInstance, mesh);
+            add(inst, mesh, false);
             continue;
         }
         if (inst.rtMatrix != inst.modelMatrix) {
-            rtScene_->setInstanceTransform(inst.rtInstance, inst.modelMatrix);
-            inst.rtMatrix = inst.modelMatrix;
+            if (RtScene::isDynamic(inst.rtInstance)) {
+                rtScene_->setInstanceTransform(inst.rtInstance, inst.modelMatrix);
+                inst.rtMatrix = inst.modelMatrix;
+                track(inst.rtInstance, mesh);
+            } else {
+                // It moves: a transport, or a doodad riding one. Moved in the
+                // static set it would rebuild the whole city's top level
+                // every frame; the old id is left unseen and goes below.
+                add(inst, mesh, true);
+            }
+            continue;
         }
         track(inst.rtInstance, mesh);
     }
-    for (size_t i = 0; i < rtOwned_.size();) {
-        const uint32_t id = rtOwned_[i];
-        if (rtSeen_[id] != gen) {
-            rtScene_->removeInstance(id);
-            rtSeen_[id] = 0;
-            rtOwned_[i] = rtOwned_.back();
-            rtOwned_.pop_back();
-        } else {
-            ++i;
+
+    // The animated models near the camera, piece by piece as their bones
+    // hold them this frame. Nearer than this they cast; the bones of those
+    // farther are not kept up to date anyway unless they are in view.
+    WOWEE_PROFILE_SCOPE("rt: animated doodads", Cpu);
+    constexpr float kAnimatedCastRadius = 60.0f;
+    constexpr uint32_t kMaxAnimatedPieces = 3000;
+    for (size_t idx : animatedInstanceIndices_) {
+        if (idx >= instances.size()) continue;
+        M2Instance& inst = instances[idx];
+        const M2ModelGPU* model = cachedModelsValid ? inst.cachedModel : nullptr;
+        if (!cachedModelsValid) {
+            if (auto it = models.find(inst.modelId); it != models.end()) model = &it->second;
+        }
+        const glm::vec3 d = inst.position - cachedCamPos_;
+        const bool wanted = model && !model->rtPieces.empty() && inst.fade >= 1.0f &&
+                            !inst.boneMatrices.empty() && glm::dot(d, d) < kAnimatedCastRadius * kAnimatedCastRadius &&
+                            rtAnimatedPieces_ + model->rtPieces.size() <= kMaxAnimatedPieces;
+        if (!wanted) {
+            inst.rtPieceInstances.clear();  // unseen, so removed below
+            continue;
+        }
+        inst.rtPieceInstances.resize(model->rtPieces.size(), RtScene::kInvalid);
+        for (size_t i = 0; i < model->rtPieces.size(); ++i) {
+            const auto& piece = model->rtPieces[i];
+            const glm::mat4 m = piece.bone < inst.boneMatrices.size()
+                                    ? inst.modelMatrix * inst.boneMatrices[piece.bone]
+                                    : inst.modelMatrix;
+            uint32_t& id = inst.rtPieceInstances[i];
+            const uint64_t seen = id != RtScene::kInvalid ? seenOf(id) : 0;
+            if (seen != 0 && seen != gen && meshOf(id) == piece.mesh) {
+                rtScene_->setInstanceTransform(id, m);
+            } else {
+                id = rtScene_->addDynamicInstance(piece.mesh, m);
+                if (id == RtScene::kInvalid) continue;
+                rtDynamic_.owned.push_back(slotOf(id));
+            }
+            track(id, piece.mesh);
+        }
+        rtAnimatedPieces_ += static_cast<uint32_t>(model->rtPieces.size());
+    }
+
+    for (RtTracking* tr : {&rtStatic_, &rtDynamic_}) {
+        const uint32_t bit = tr == &rtDynamic_ ? RtScene::kDynamicBit : 0u;
+        for (size_t i = 0; i < tr->owned.size();) {
+            const uint32_t slot = tr->owned[i];
+            if (tr->seen[slot] != gen) {
+                rtScene_->removeInstance(slot | bit);
+                tr->seen[slot] = 0;
+                tr->owned[i] = tr->owned.back();
+                tr->owned.pop_back();
+            } else {
+                ++i;
+            }
+        }
+    }
+}
+
+void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
+                                 std::vector<rt_lights::PointLight>& out) const {
+    for (uint32_t idx : rtLitInstances_) {
+        if (idx >= instances.size()) continue;
+        const M2Instance& inst = instances[idx];
+        const M2ModelGPU* model = inst.cachedModel;
+        if (!model) continue;
+        // The model's own reach plus what its lights could add to it.
+        const float reach = range + model->boundRadius * inst.scale + 30.0f;
+        const glm::vec3 d = inst.position - eye;
+        if (glm::dot(d, d) > reach * reach) continue;
+        const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
+        if (model->lights.empty()) {
+            // A fire with no light of its own (rt_lights::fireLight).
+            if (!model->isBrazierOrFire && !model->isTorch) continue;
+            const glm::vec3 bmin = model->hasVertexBox ? model->vertexBoxMin : model->boundMin;
+            const glm::vec3 bmax = model->hasVertexBox ? model->vertexBoxMax : model->boundMax;
+            rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch,
+                                                           inst.globalSequenceTime,
+                                                           static_cast<float>(inst.id % 97u));
+            l.color *= fade;
+            out.push_back(l);
+            continue;
+        }
+        for (const auto& light : model->lights) {
+            auto l = rt_lights::evaluateM2Light(light, inst.currentSequenceIndex, inst.animTime,
+                                                inst.globalSequenceTime, model->globalSequenceDurations,
+                                                inst.modelMatrix, inst.boneMatrices);
+            if (!l) continue;
+            l->color *= fade;
+            out.push_back(*l);
         }
     }
 }

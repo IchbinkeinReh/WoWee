@@ -43,6 +43,7 @@ class VkContext;
 class VkTexture;
 class HiZSystem;
 class RtScene;
+namespace rt_lights { struct PointLight; }
 
 // Ceiling on the bone matrices computed and uploaded for one M2 instance.
 // WoW models run well past a hundred bones - the largest shipped model has
@@ -172,6 +173,13 @@ struct M2ModelGPU {
     std::vector<uint32_t> globalSequenceDurations;  // Loop durations for global sequence tracks
     bool hasAnimation = false;  // True if any bone has keyframes
     uint32_t rtMesh = ~0u;      // RtScene mesh, or ~0u when it does not cast
+    /// An animated model's RtScene meshes instead: cut into one piece per
+    /// bone (rt_rigid_parts.hpp), each placed by its bone's matrix.
+    struct RtPiece {
+        uint32_t bone = 0;
+        uint32_t mesh = ~0u;
+    };
+    std::vector<RtPiece> rtPieces;
     bool isSpellEffect = false;  // True for spell effect models (skip particle dampeners)
     bool disableAnimation = false; // Keep foliage/tree doodads visually stable
     bool shadowWindFoliage = false; // Cast shadows in the alpha-tested foliage pass (leaf cutouts)
@@ -194,6 +202,8 @@ struct M2ModelGPU {
 
     // Ribbon emitter data (kept from M2Model)
     std::vector<pipeline::M2RibbonEmitter> ribbonEmitters;
+    // Lights (kept from M2Model), which the ray traced lighting shades with.
+    std::vector<pipeline::M2Light> lights;
     /// Every emitter's texture and material pairs one after another, the
     /// textures and their sets alike; emitter i's run from
     /// ribbonMaterialStart[i] to ribbonMaterialStart[i + 1].
@@ -244,6 +254,9 @@ struct M2Instance {
     // Its RtScene instance and the matrix last given to it; see syncRtScene.
     uint32_t rtInstance = ~0u;
     glm::mat4 rtMatrix{0.0f};
+    // An animated model's pieces' RtScene instances, while it is near enough
+    // to cast (syncRtScene), parallel to M2ModelGPU::rtPieces.
+    std::vector<uint32_t> rtPieceInstances;
     glm::vec3 worldBoundsMin;
     glm::vec3 worldBoundsMax;
 
@@ -518,8 +531,16 @@ public:
     /// bind pose. Not given to the sky's renderer.
     void setRtScene(RtScene* scene) { rtScene_ = scene; }
     /// Bring the scene's instances in line with this renderer's, once a frame
-    /// while the lighting is on.
+    /// while the lighting is on. An instance that moves - a transport, a
+    /// doodad on one - goes over to the scene's dynamic instances.
     void syncRtScene();
+    /// The point lights the instances' models carry (torches, braziers,
+    /// lamps, spell effects), placed for this frame, within `range` of `eye`.
+    /// Walks the instances syncRtScene found to carry lights, so it follows
+    /// that call.
+    void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    /// How many pieces of animated models the last sync placed.
+    [[nodiscard]] uint32_t rtAnimatedPieces() const { return rtAnimatedPieces_; }
     void setForceNoCull(bool v) { forceNoCull_ = v; }
 
     /** Ensure GPU→CPU cull output is visible to the host after a fence wait.
@@ -1126,11 +1147,22 @@ private:
 
     RtScene* rtScene_ = nullptr;
     // RtScene instances this renderer owns, and per RtScene instance id the
-    // sync generation that last saw it and the mesh it places.
-    std::vector<uint32_t> rtOwned_;
-    std::vector<uint64_t> rtSeen_;
-    std::vector<uint32_t> rtMeshOf_;
+    // sync generation that last saw it and the mesh it places: one set for
+    // the static instances, one for the dynamic (indexed without the
+    // scene's kDynamicBit).
+    struct RtTracking {
+        std::vector<uint32_t> owned;
+        std::vector<uint64_t> seen;
+        std::vector<uint32_t> meshOf;
+    };
+    RtTracking rtStatic_, rtDynamic_;
+    RtTracking& rtTrackingOf(uint32_t rtId);
     uint64_t rtSyncGeneration_ = 0;
+    // The instances whose models carry lights, by index, as the last sync
+    // found them.
+    std::vector<uint32_t> rtLitInstances_;
+    // Pieces of animated models placed by the last sync.
+    uint32_t rtAnimatedPieces_ = 0;
     void registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
     void releaseRtModel(M2ModelGPU& gpuModel);
 

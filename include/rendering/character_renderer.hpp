@@ -36,6 +36,8 @@ class Camera;
 class Frustum;
 class VkContext;
 class VkTexture;
+class RtScene;
+namespace rt_lights { struct PointLight; }
 
 // Enchant visual (glint, glow) attached to a weapon at one of the weapon model's
 // own item-visual attachment points.
@@ -408,6 +410,24 @@ public:
     // Pre-decoded BLP cache: set before calling loadModel() to skip main-thread BLP decode
     void setPredecodedBLPCache(std::unordered_map<std::string, pipeline::BLPImage>* cache) { predecodedBLPCache_ = cache; }
 
+    /// Where the characters cast for the ray traced lighting (RtScene). Set
+    /// on the world's renderer, not a preview's.
+    void setRtScene(RtScene* scene) { rtScene_ = scene; }
+    /// Once a frame while the lighting is on: bring the scene's characters in
+    /// line with this renderer's, posed as they are drawn this frame
+    /// (character_renderer_rt.cpp).
+    void syncRtScene(const glm::vec3& cameraPos);
+    /// The point lights the characters' models carry - a fire elemental's
+    /// glow, a held torch - placed for this frame, within `range` of `eye`.
+    void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    struct RtStats {
+        uint32_t characters = 0;  // casting
+        uint32_t posed = 0;       // of those, cut into bone pieces
+        uint32_t instances = 0;   // RtScene instances placed
+        uint32_t shapes = 0;      // appearances registered
+    };
+    [[nodiscard]] RtStats rtStats() const { return rtStats_; }
+
 private:
     std::unordered_map<std::string, pipeline::BLPImage>* predecodedBLPCache_ = nullptr;
     // GPU representation of M2 model
@@ -441,6 +461,11 @@ private:
         // Pre-classified at load time to avoid per-batch string ops in render loop
         bool isKoboldFlame = false;
         bool isSkyBird = false;
+
+        /// The pose the ray tracer's whole-model proxy stands in: Stand at
+        /// its start, skinned once (character_renderer_rt.cpp).
+        std::vector<glm::mat4> rtStandPose;
+        bool rtStandPoseDone = false;
     };
 
     // Character instance
@@ -522,6 +547,9 @@ private:
         // Geoset visibility - which submesh IDs to render
         // Empty = render all (for non-character models)
         std::unordered_set<uint16_t> activeGeosets;
+        /// Bumped whenever what the instance looks like changes - its
+        /// geosets, its textures - so the ray tracer's proxy is chosen again.
+        uint32_t rtAppearanceSerial = 0;
         /// Draw the Skin Extra (texture type 8) head-detail batch. True only
         /// where the instance has been set up to composite it - the player.
         bool drawSkinExtra = false;
@@ -878,6 +906,55 @@ private:
     VkDescriptorPool shadowTexPool_[kShadowTexPoolFrames] = {};
     std::unordered_map<VkImageView, VkDescriptorSet> shadowTexSetCache_;
     VkDescriptorSet shadowTexDescSet(VkTexture* tex, uint32_t frameIndex);
+
+    // The ray traced lighting's view of the characters (character_renderer_rt.cpp).
+    //
+    // A shape is one appearance of one model - the batches it draws and the
+    // cutouts they have - registered as a whole mesh in its Stand pose, and,
+    // once a character of it is near enough to be posed, as one mesh per
+    // bone piece (rt_rigid_parts.hpp).
+    struct RtShape {
+        uint32_t refs = 0;
+        uint32_t modelId = 0;
+        uint32_t wholeMesh = ~0u;
+        glm::vec3 wholeMin{0.0f}, wholeMax{0.0f};
+        bool partsTried = false;
+        struct Piece {
+            uint32_t bone = 0;
+            uint32_t mesh = ~0u;
+            glm::vec3 bmin{0.0f}, bmax{0.0f};
+        };
+        std::vector<Piece> pieces;
+        /// What the pieces are cut from, kept until they are.
+        std::vector<uint32_t> triangles;     // vertex indices, three a triangle
+        std::vector<float> surfaces;         // one a triangle
+        std::vector<uint32_t> masks;         // one a triangle
+        std::vector<uint8_t> uvSet;          // one a triangle: 0 UV0, 1 UV1
+    };
+    struct RtCharacter {
+        uint64_t seen = 0;
+        uint64_t shapeKey = 0;
+        bool hasShape = false;
+        uint32_t appearanceSerial = ~0u;
+        bool posed = false;
+        uint32_t whole = ~0u;                  // RtScene instance
+        std::vector<uint32_t> pieces;          // RtScene instances, parallel to RtShape::pieces
+        uint32_t group = 0;                    // RtScene group, bodies only
+    };
+    RtScene* rtScene_ = nullptr;
+    std::unordered_map<uint64_t, RtShape> rtShapes_;
+    std::unordered_map<uint32_t, RtCharacter> rtCharacters_;
+    uint64_t rtSyncGeneration_ = 0;
+    RtStats rtStats_;
+    uint64_t rtShapeKey(const CharacterInstance& inst, const M2ModelGPU& gm,
+                        std::vector<std::pair<uint32_t, uint32_t>>& batches);
+    void rtAcquireShape(uint64_t key, const CharacterInstance& inst, const M2ModelGPU& gm,
+                        const std::vector<std::pair<uint32_t, uint32_t>>& batches);
+    void rtReleaseShape(uint64_t key);
+    void rtBuildPieces(RtShape& shape, const M2ModelGPU& gm);
+    void rtDropInstances(RtCharacter& rc);
+    void rtForget(RtCharacter& rc);
+    const std::vector<glm::mat4>& rtStandPose(M2ModelGPU& gm);
 };
 
 } // namespace rendering

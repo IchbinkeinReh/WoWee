@@ -39,6 +39,7 @@ class Camera;
 class Frustum;
 class M2Renderer;
 class RtScene;
+namespace rt_lights { struct PointLight; }
 class VkContext;
 class VkTexture;
 
@@ -81,8 +82,12 @@ public:
     /// Bring the scene's instances in line with this renderer's: added,
     /// moved, hidden and removed. Once a frame, and only while the lighting
     /// is on; one pass over the instances is cheaper than hooking every one
-    /// of the half-dozen ways they change.
+    /// of the half-dozen ways they change. A transport, and anything else
+    /// seen to move, is one of the scene's dynamic instances.
     void syncRtScene();
+    /// The omni lights (MOLT) of the instances near `eye`, placed in the
+    /// world: lamps, braziers, glowing windows.
+    void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
 
     /**
      * Load WMO model and create GPU resources
@@ -765,6 +770,7 @@ private:
         glm::vec3 boundingBoxMin;
         glm::vec3 boundingBoxMax;
         glm::vec3 wmoAmbientColor{0.5f, 0.5f, 0.5f};  // From MOHD, used for interior lighting
+        std::vector<pipeline::WMOLight> lights;        // MOLT, for the ray traced lighting
         uint32_t mohdFlags = 0;                        // MOHD flags (0x2: see floorAlong)
         bool isLowPlatform = false;
 

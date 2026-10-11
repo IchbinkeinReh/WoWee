@@ -9,6 +9,7 @@
 #include "pipeline/wmo_doodad_light.hpp"
 #include "rendering/day_night.hpp"
 #include "rendering/rt_bvh.hpp"
+#include "rendering/rt_point_lights.hpp"
 #include "rendering/rt_scene.hpp"
 #include "rendering/normal_map.hpp"
 #include "rendering/m2_renderer.hpp"
@@ -469,6 +470,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
     modelData.boundingBoxMin = model.boundingBoxMin;
     modelData.boundingBoxMax = model.boundingBoxMax;
     modelData.wmoAmbientColor = model.ambientColor;
+    modelData.lights = model.lights;
     modelData.mohdFlags = model.flags;
     std::string lowerSourcePath = model.sourcePath;
     std::replace(lowerSourcePath.begin(), lowerSourcePath.end(), '/', '\\');
@@ -4923,14 +4925,28 @@ void WMORenderer::syncRtScene() {
         if (mesh == rtModelMeshes_.end()) continue;
         auto rec = rtInstances_.find(inst.id);
         if (rec == rtInstances_.end()) {
-            const uint32_t rtId = rtScene_->addInstance(mesh->second, inst.modelMatrix);
+            // A ship or a lift moves every frame: the dynamic top level's,
+            // so the static one is not rebuilt for it.
+            const uint32_t rtId = inst.isTransport ? rtScene_->addDynamicInstance(mesh->second, inst.modelMatrix)
+                                                   : rtScene_->addInstance(mesh->second, inst.modelMatrix);
             if (rtId != RtScene::kInvalid) {
                 rtInstances_.emplace(inst.id, RtInstanceRecord{rtId, inst.modelId, inst.modelMatrix, gen});
             }
             continue;
         }
         if (rec->second.matrix != inst.modelMatrix) {
-            rtScene_->setInstanceTransform(rec->second.rtId, inst.modelMatrix);
+            if (RtScene::isDynamic(rec->second.rtId)) {
+                rtScene_->setInstanceTransform(rec->second.rtId, inst.modelMatrix);
+            } else {
+                // Moved without being a transport; from now on it is one.
+                const uint32_t rtId = rtScene_->addDynamicInstance(mesh->second, inst.modelMatrix);
+                if (rtId != RtScene::kInvalid) {
+                    rtScene_->removeInstance(rec->second.rtId);
+                    rec->second.rtId = rtId;
+                } else {
+                    rtScene_->setInstanceTransform(rec->second.rtId, inst.modelMatrix);
+                }
+            }
             rec->second.matrix = inst.modelMatrix;
         }
         rec->second.seen = gen;
@@ -4941,6 +4957,25 @@ void WMORenderer::syncRtScene() {
             it = rtInstances_.erase(it);
         } else {
             ++it;
+        }
+    }
+}
+
+void WMORenderer::collectRtLights(const glm::vec3& eye, float range,
+                                  std::vector<rt_lights::PointLight>& out) const {
+    for (const auto& inst : instances) {
+        if (inst.hidden) continue;
+        // Nearest point of the instance's box: a city is one instance and
+        // the camera is usually inside it.
+        const glm::vec3 nearest = glm::clamp(eye, inst.worldBoundsMin, inst.worldBoundsMax);
+        if (glm::dot(nearest - eye, nearest - eye) > range * range) continue;
+        auto model = loadedModels.find(inst.modelId);
+        if (model == loadedModels.end()) continue;
+        for (const auto& light : model->second.lights) {
+            auto l = rt_lights::placeWmoLight(light.position, glm::vec3(light.color), light.intensity,
+                                              light.attenuationStart, light.attenuationEnd, light.type,
+                                              inst.modelMatrix);
+            if (l) out.push_back(*l);
         }
     }
 }

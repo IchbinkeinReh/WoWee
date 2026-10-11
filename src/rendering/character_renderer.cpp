@@ -266,9 +266,10 @@ static bool batchUsesTextureType(const pipeline::M2Model& model, const pipeline:
 // Whether a batch is drawn as alpha-cut hair cards whatever its blend mode
 // says. The main pass and the shadow pass both ask, so that what casts is the
 // silhouette that is drawn: hair cut out on screen but cast as solid quads put
-// a dark slab on the character's own back below the hair.
-static bool batchIsHairCard(const pipeline::M2Model& model, const pipeline::M2Batch& batch,
-                            uint16_t blendMode, bool isSceneModel) {
+// a dark slab on the character's own back below the hair. The ray traced
+// lighting's proxy asks too (character_renderer_rt.cpp).
+bool batchIsHairCard(const pipeline::M2Model& model, const pipeline::M2Batch& batch,
+                     uint16_t blendMode, bool isSceneModel) {
     // Scene models have no hair, and their submesh ids are all 0, which
     // would otherwise satisfy the hair-geoset guess for every batch.
     // The geoset-id guess is for player-style models, whose hair has
@@ -4763,6 +4764,7 @@ void CharacterRenderer::setActiveGeosets(uint32_t instanceId, const std::unorder
     auto it = instances.find(instanceId);
     if (it != instances.end()) {
         it->second.activeGeosets = geosets;
+        ++it->second.rtAppearanceSerial;
     }
 }
 
@@ -4770,6 +4772,7 @@ void CharacterRenderer::setDrawSkinExtra(uint32_t instanceId, bool enabled) {
     auto it = instances.find(instanceId);
     if (it != instances.end()) {
         it->second.drawSkinExtra = enabled;
+        ++it->second.rtAppearanceSerial;
     }
 }
 
@@ -4777,6 +4780,7 @@ void CharacterRenderer::setGroupTextureOverride(uint32_t instanceId, uint16_t ge
     auto it = instances.find(instanceId);
     if (it != instances.end()) {
         it->second.groupTextureOverrides[geosetGroup] = texture;
+        ++it->second.rtAppearanceSerial;
     }
 }
 
@@ -4784,6 +4788,7 @@ void CharacterRenderer::setTextureSlotOverride(uint32_t instanceId, uint16_t tex
     auto it = instances.find(instanceId);
     if (it != instances.end()) {
         it->second.textureSlotOverrides[textureSlot] = texture;
+        ++it->second.rtAppearanceSerial;
     }
 }
 
@@ -4791,6 +4796,7 @@ void CharacterRenderer::clearTextureSlotOverride(uint32_t instanceId, uint16_t t
     auto it = instances.find(instanceId);
     if (it != instances.end()) {
         it->second.textureSlotOverrides.erase(textureSlot);
+        ++it->second.rtAppearanceSerial;
     }
 }
 

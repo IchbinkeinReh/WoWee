@@ -1,20 +1,27 @@
-// The hardware tracer: GL_EXT_ray_query against the TLAS RtScene builds.
+// The hardware tracer: GL_EXT_ray_query against the TLASes RtScene builds.
 // Same interface and the same triangle pool as rt_trace_sw.glsli; a BLAS is
 // built straight from a mesh's range of the pool, so a committed primitive
 // index is an offset into that range.
+//
+// Two top levels: the static instances' (rtTlas) and the dynamic ones'
+// (rtDynamicTlas), queried one after the other, the second no farther than
+// what the first one hit. A dynamic instance in a group comes to the
+// candidate loop (FORCE_NO_OPAQUE), which passes it by for a ray that starts
+// inside the group's box (rtInGroup, rt_trace_alpha.glsli).
 
 // The including shader enables GL_EXT_ray_query; glslang only honours an
 // #extension that comes before the first declaration.
 
 struct RtTri { vec4 v0; vec4 v1; vec4 v2; };
 struct RtMesh { uint nodeOffset; uint triOffset; uint pad0; uint pad1; };
-struct RtInstance { vec4 worldToObject[3]; uint mesh; uint flags; uint pad1; uint pad2; };
+struct RtInstance { vec4 worldToObject[3]; uint mesh; uint flags; uint group; uint pad2; };
 const uint RT_MESH_TERRAIN = 1u;  // RtScene::kMeshTerrain
 
 layout(std430, set = 1, binding = 0) readonly buffer RtTris { RtTri rtTris[]; };
 layout(std430, set = 1, binding = 2) readonly buffer RtMeshes { RtMesh rtMeshes[]; };
 layout(std430, set = 1, binding = 3) readonly buffer RtInstances { RtInstance rtInstances[]; };
 layout(set = 1, binding = 5) uniform accelerationStructureEXT rtTlas;
+layout(set = 1, binding = 8) uniform accelerationStructureEXT rtDynamicTlas;
 
 uint rtTriIndex(uint instance, uint primitive) {
     return rtMeshes[rtInstances[instance].mesh].triOffset + primitive;
@@ -22,20 +29,22 @@ uint rtTriIndex(uint instance, uint primitive) {
 
 #include "rt_trace_alpha.glsli"
 
-bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, inout uint rng) {
+bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, inout uint rng) {
+    if (rtInGroup(rtInstances[inst].group, origin)) return false;
     return rtSolidAt(rtTris[rtTriIndex(inst, prim)], bary, rng);
 }
 
-// Resolve translucent candidates by their cutout or opacity; opaque geometry
-// never reaches the loop body. A macro because a rayQueryEXT cannot be passed
-// to a function.
+// Resolve translucent candidates by their cutout or opacity, and grouped ones
+// by where the ray starts; opaque geometry never reaches the loop body. A
+// macro because a rayQueryEXT cannot be passed to a function.
 #define RT_RESOLVE_CANDIDATES(q, rng)                                                  \
     while (rayQueryProceedEXT(q)) {                                                    \
         if (rayQueryGetIntersectionTypeEXT(q, false) ==                                \
                 gl_RayQueryCandidateIntersectionTriangleEXT &&                         \
             rtAcceptCandidate(rayQueryGetIntersectionInstanceCustomIndexEXT(q, false), \
                               rayQueryGetIntersectionPrimitiveIndexEXT(q, false),      \
-                              rayQueryGetIntersectionBarycentricsEXT(q, false), rng))  \
+                              rayQueryGetIntersectionBarycentricsEXT(q, false),        \
+                              rayQueryGetWorldRayOriginEXT(q), rng))                   \
             rayQueryConfirmIntersectionEXT(q);                                         \
     }
 
@@ -44,7 +53,12 @@ bool rtOccluded(vec3 origin, vec3 dir, float tMax, inout uint rng) {
     rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
                           origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(q, rng);
-    return rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+    if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT) return true;
+    rayQueryEXT d;
+    rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
+                          origin, 0.0, dir, tMax);
+    RT_RESOLVE_CANDIDATES(d, rng);
+    return rayQueryGetIntersectionTypeEXT(d, true) != gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
 // The nearest hit, its normal turned to face the ray, and whether it is
@@ -56,14 +70,28 @@ bool rtClosestEx(vec3 origin, vec3 dir, float tMax, inout uint rng,
     t = tMax;
     normal = vec3(0.0, 0.0, 1.0);
     surface = vec4(0.0);
+    bool found = false;
+    uint instIdx = 0u, prim = 0u;
     rayQueryEXT q;
     rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsNoneEXT, 0xFF, origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(q, rng);
-    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT)
-        return false;
-    t = rayQueryGetIntersectionTEXT(q, true);
-    uint instIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(q, true);
-    RtTri hit = rtTris[rtTriIndex(instIdx, rayQueryGetIntersectionPrimitiveIndexEXT(q, true))];
+    if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
+        found = true;
+        t = rayQueryGetIntersectionTEXT(q, true);
+        instIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(q, true);
+        prim = rayQueryGetIntersectionPrimitiveIndexEXT(q, true);
+    }
+    rayQueryEXT d;
+    rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsNoneEXT, 0xFF, origin, 0.0, dir, t);
+    RT_RESOLVE_CANDIDATES(d, rng);
+    if (rayQueryGetIntersectionTypeEXT(d, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
+        found = true;
+        t = rayQueryGetIntersectionTEXT(d, true);
+        instIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(d, true);
+        prim = rayQueryGetIntersectionPrimitiveIndexEXT(d, true);
+    }
+    if (!found) return false;
+    RtTri hit = rtTris[rtTriIndex(instIdx, prim)];
     RtInstance inst = rtInstances[instIdx];
     vec3 n = cross(hit.v1.xyz - hit.v0.xyz, hit.v2.xyz - hit.v0.xyz);
     n = inst.worldToObject[0].xyz * n.x + inst.worldToObject[1].xyz * n.y +

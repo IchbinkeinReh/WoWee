@@ -4693,6 +4693,7 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         characterRenderer = std::make_unique<CharacterRenderer>();
         if (!characterRenderer->initialize(vkCtx, perFrameSetLayout, assetManager))
             LOG_ERROR("CharacterRenderer initialization failed");
+        characterRenderer->setRtScene(rtScene_.get());
         if (shadowRenderPass != VK_NULL_HANDLE) {
             if (!characterRenderer->initializeShadow(shadowRenderPass))
                 LOG_WARNING("Character shadow pipeline initialization failed");
@@ -5815,9 +5816,34 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
     in.sunColor = glm::vec3(currentFrameData.lightColor);
     in.skyColor = glm::vec3(currentFrameData.ambientColor);
     in.sunUp = in.sunDir.z > -0.05f;
-    if (wmoRenderer) wmoRenderer->syncRtScene();
-    if (m2Renderer) m2Renderer->syncRtScene();
-    rtLighting_->record(currentCmd, sceneDepth, sceneExtent, depthIsMsaa, in);
+    {
+        WOWEE_PROFILE_SCOPE("rt: sync scene", Cpu);
+        if (wmoRenderer) wmoRenderer->syncRtScene();
+        if (m2Renderer) m2Renderer->syncRtScene();
+    }
+    {
+        WOWEE_PROFILE_SCOPE("rt: sync characters", Cpu);
+        if (characterRenderer) characterRenderer->syncRtScene(in.cameraPos);
+    }
+    {
+        WOWEE_PROFILE_SCOPE("rt: record", Cpu);
+        rtLighting_->record(currentCmd, sceneDepth, sceneExtent, depthIsMsaa, in);
+    }
+    // What the scene holds, every ten seconds while the lighting is on: to
+    // read beside the frame profile when judging its cost.
+    static auto lastStats = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastStats > std::chrono::seconds(10)) {
+        lastStats = now;
+        const RtScene::Stats st = rtScene_->stats();
+        const CharacterRenderer::RtStats cs =
+            characterRenderer ? characterRenderer->rtStats() : CharacterRenderer::RtStats{};
+        LOG_INFO("RT: ", st.instances, " static and ", st.dynamicInstances, " dynamic instances, ",
+                 st.meshes, " meshes, ", st.triangles, " triangles, ", st.gpuBytes / (1024 * 1024),
+                 " MB; characters ", cs.characters, " (", cs.posed, " posed, ", cs.instances,
+                 " instances, ", cs.shapes, " shapes); ",
+                 m2Renderer ? m2Renderer->rtAnimatedPieces() : 0u, " pieces of animated doodads");
+    }
     vkCtx->gpuMark(currentCmd, "rt_lighting");
 }
 

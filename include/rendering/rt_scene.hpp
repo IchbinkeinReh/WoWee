@@ -22,6 +22,22 @@
 /// streams the world in rather than stalling - and switching it off frees
 /// every GPU byte.
 ///
+/// Instances come in two kinds. Static ones - the terrain, the buildings, the
+/// doodads - are gathered into one top level that is rebuilt only when that
+/// set changes. Dynamic ones - characters and their parts, transports, what
+/// animates - are expected to move every frame and get a top level of their
+/// own, rebuilt every frame from just them; the tracers walk both. A moving
+/// unit then costs a frame what the few hundred dynamic instances cost, not
+/// what the hundred thousand static ones of a city would.
+///
+/// A dynamic instance may name a group: a box in the world, set every frame,
+/// from inside which rays do not see the group's own instances. A character
+/// is one group - body, parts and what it carries - so it never shadows or
+/// occludes itself, as the shadow map never lets a model shadow itself
+/// either (CharPushConstants::lightFlags). Its proxy is only an approximation
+/// of the skinned surface on screen and would otherwise lay streaks of
+/// shadow over it.
+///
 /// Main thread only. Removing a mesh that instances still use is a caller bug.
 
 #include <array>
@@ -45,7 +61,10 @@ class RtScene {
 public:
     using MeshId = uint32_t;
     using InstanceId = uint32_t;
+    using GroupId = uint32_t;
     static constexpr uint32_t kInvalid = ~0u;
+    /// Set in the ids of dynamic instances.
+    static constexpr InstanceId kDynamicBit = 0x80000000u;
 
     enum class Backend { Software, Hardware };
 
@@ -99,8 +118,23 @@ public:
     void removeMesh(MeshId mesh);
 
     InstanceId addInstance(MeshId mesh, const glm::mat4& objectToWorld);
+    /// An instance of the per-frame top level; `group` 0 for none. Its id has
+    /// kDynamicBit set; the two calls below take either kind.
+    InstanceId addDynamicInstance(MeshId mesh, const glm::mat4& objectToWorld, GroupId group = 0);
     void setInstanceTransform(InstanceId instance, const glm::mat4& objectToWorld);
     void removeInstance(InstanceId instance);
+    [[nodiscard]] static bool isDynamic(InstanceId instance) {
+        return instance != kInvalid && (instance & kDynamicBit) != 0;
+    }
+    /// Whether the mesh has made it into the pools (and has its BLAS), so an
+    /// instance of it would be traced.
+    [[nodiscard]] bool meshReady(MeshId mesh) const;
+
+    /// Groups for addDynamicInstance, never 0. A group starts with no box,
+    /// which nothing is inside.
+    GroupId addGroup();
+    void setGroupBounds(GroupId group, const glm::vec3& bmin, const glm::vec3& bmax);
+    void removeGroup(GroupId group);
 
     /// Build and upload while active; release everything GPU-side when not.
     /// Switching off must happen with the device idle.
@@ -116,11 +150,12 @@ public:
     [[nodiscard]] VkDescriptorSet descriptorSet() const;
     /// False until at least one instance has made it into an acceleration
     /// structure; tracing an empty scene is legal but pointless.
-    [[nodiscard]] bool hasContent() const { return liveInstances_ > 0; }
+    [[nodiscard]] bool hasContent() const { return liveInstances_ + liveDynInstances_ > 0; }
 
     struct Stats {
         uint32_t meshes = 0;
         uint32_t instances = 0;
+        uint32_t dynamicInstances = 0;
         uint64_t triangles = 0;
         uint64_t gpuBytes = 0;
     };
@@ -136,6 +171,9 @@ private:
         RtAabb bounds;
         bool uploaded = false;
         bool queued = false;
+        // Static instances placing it: only their arrival in the pools
+        // changes the static top level.
+        uint32_t staticRefs = 0;
         MeshSource source;
         // The cutout triangles' UVs and masks (RtTriExtra in the shaders).
         uint32_t extraOffset = RtRangeAllocator::kFailed;
@@ -154,6 +192,12 @@ private:
         bool live = false;
         MeshId mesh = kInvalid;
         glm::mat4 objectToWorld{1.0f};
+        GroupId group = 0;  // dynamic instances only
+    };
+    struct Group {
+        bool live = false;
+        glm::vec4 bmin{1e30f};
+        glm::vec4 bmax{-1e30f};
     };
     /// What a trace shader reads per mesh (std430).
     struct MeshGPU {
@@ -163,12 +207,25 @@ private:
         uint32_t pad1;
     };
     /// What a trace shader reads per instance (std430): the world-to-object
-    /// transform as three rows, the mesh it places and that mesh's flags.
+    /// transform as three rows, the mesh it places, that mesh's flags and the
+    /// instance's group (0 for none).
     struct InstanceGPU {
         glm::vec4 worldToObject[3];
         uint32_t mesh;
         uint32_t flags;
-        uint32_t pad[2];
+        uint32_t group;
+        uint32_t pad;
+    };
+    /// A hardware top level and what building it takes; one of each kind per
+    /// frame slot.
+    struct TlasResources {
+        AllocatedBuffer asInstances{}; // VkAccelerationStructureInstanceKHR[], mapped
+        uint32_t asInstanceCapacity = 0;
+        AllocatedBuffer tlasBuffer{};
+        VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
+        VkDeviceSize tlasSize = 0;
+        AllocatedBuffer scratch{};
+        VkDeviceSize scratchSize = 0;
     };
 
     struct GpuPool {
@@ -178,18 +235,14 @@ private:
         VkBufferUsageFlags usage = 0;
     };
     struct FrameResources {
-        AllocatedBuffer instances{};   // InstanceGPU[], mapped
+        AllocatedBuffer instances{};   // InstanceGPU[], mapped: the static ones, then the dynamic
         uint32_t instanceCapacity = 0;
-        AllocatedBuffer tlasNodes{};   // RtBvhNode[], mapped (software)
+        AllocatedBuffer tlasNodes{};   // RtBvhNode[], mapped (software); see kTopHeader
         uint32_t tlasNodeCapacity = 0;
-        // Hardware TLAS.
-        AllocatedBuffer asInstances{}; // VkAccelerationStructureInstanceKHR[], mapped
-        uint32_t asInstanceCapacity = 0;
-        AllocatedBuffer tlasBuffer{};
-        VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
-        VkDeviceSize tlasSize = 0;
-        AllocatedBuffer scratch{};
-        VkDeviceSize scratchSize = 0;
+        AllocatedBuffer groups{};      // two vec4 per group id, mapped
+        uint32_t groupCapacity = 0;
+        // Hardware top levels.
+        TlasResources staticAs, dynamicAs;
         uint64_t uploadedVersion = ~0ull;
         uint64_t descriptorGeneration = ~0ull;
         uint32_t instanceCount = 0;
@@ -203,13 +256,18 @@ private:
     void uploadPending(VkCommandBuffer cmd);
     void buildPendingBlas(VkCommandBuffer cmd, const std::vector<MeshId>& meshes);
     void uploadFrame(VkCommandBuffer cmd, FrameResources& fr);
-    void buildTlas(VkCommandBuffer cmd, FrameResources& fr);
+    void buildStatic();
+    void buildDynamic();
+    void buildTlas(VkCommandBuffer cmd, TlasResources& as,
+                   const std::vector<VkAccelerationStructureInstanceKHR>& data, bool fastBuild);
+    void destroyTlas(TlasResources& as);
     void writeDescriptors(FrameResources& fr);
     void destroyMeshGpu(Mesh& m);
     void releaseGpu();
     void buildMesh(Mesh& m);
     VkDeviceAddress bufferAddress(VkBuffer buffer) const;
-    void ensureMapped(AllocatedBuffer& buf, uint32_t& capacity, uint32_t needed,
+    /// Returns true when the buffer was replaced and holds nothing yet.
+    bool ensureMapped(AllocatedBuffer& buf, uint32_t& capacity, uint32_t needed,
                       uint32_t elementSize, VkBufferUsageFlags usage);
     void stage(VkCommandBuffer cmd, VkBuffer dst, VkDeviceSize dstOffset, const void* data,
                VkDeviceSize size);
@@ -228,8 +286,13 @@ private:
     std::vector<MeshId> pendingMeshes_;
     std::vector<Instance> instances_;
     std::vector<InstanceId> freeInstances_;
+    std::vector<Instance> dynInstances_;
+    std::vector<InstanceId> freeDynInstances_;
+    std::vector<Group> groups_;  // [0] is "no group" and stays empty
+    std::vector<GroupId> freeGroups_;
     uint32_t liveMeshes_ = 0;
     uint32_t liveInstances_ = 0;
+    uint32_t liveDynInstances_ = 0;
     uint64_t liveTriangles_ = 0;
 
     GpuPool triPool_;
@@ -252,11 +315,20 @@ private:
     // Bumped whenever a buffer a descriptor points at is replaced.
     uint64_t descriptorGeneration_ = 0;
 
-    // CPU copies of the per-frame data, built once per version.
+    // CPU copies of the static per-frame data, built once per version. The
+    // software top level's nodes are stored after kTopHeader and point there.
     uint64_t builtVersion_ = ~0ull;
     std::vector<InstanceGPU> instanceData_;
     std::vector<RtBvhNode> tlasNodes_;
     std::vector<VkAccelerationStructureInstanceKHR> asInstanceData_;
+    RtAabb staticBounds_;
+    // The same of the dynamic instances, built every update. Their rows
+    // follow the static ones, their nodes the static nodes.
+    std::vector<InstanceGPU> dynInstanceData_;
+    std::vector<RtBvhNode> dynTlasNodes_;
+    std::vector<VkAccelerationStructureInstanceKHR> dynAsInstanceData_;
+    RtAabb dynamicBounds_;
+    std::vector<glm::vec4> groupData_;
 
     FrameResources frames_[MAX_FRAMES_IN_FLIGHT];
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;

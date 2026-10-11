@@ -931,6 +931,7 @@ set(WOWEE_SOURCES
     src/rendering/lighting_manager.cpp
     src/rendering/sky_system.cpp
     src/rendering/character_renderer.cpp
+    src/rendering/character_renderer_rt.cpp
     src/rendering/character_preview.cpp
     src/rendering/wmo_renderer.cpp
     src/rendering/imgui_texture.cpp

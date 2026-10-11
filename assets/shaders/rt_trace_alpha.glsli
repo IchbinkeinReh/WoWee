@@ -14,6 +14,18 @@
 struct RtTriExtra { uvec4 data; };  // three UVs as half2, the mask
 layout(std430, set = 1, binding = 6) readonly buffer RtTriExtras { RtTriExtra rtTriExtras[]; };
 layout(std430, set = 1, binding = 7) readonly buffer RtMasks { uint rtMasks[]; };
+// A group's box, min and max (RtScene::setGroupBounds); group 0 is none.
+layout(std430, set = 1, binding = 9) readonly buffer RtGroups { vec4 rtGroups[]; };
+
+// Whether a ray from p passes the instances of `group` by: it starts inside
+// the group's box - on the character the group is, which never shadows or
+// occludes itself.
+bool rtInGroup(uint group, vec3 p) {
+    if (group == 0u) return false;
+    vec3 lo = rtGroups[group * 2u].xyz;
+    vec3 hi = rtGroups[group * 2u + 1u].xyz;
+    return all(greaterThanEqual(p, lo)) && all(lessThanEqual(p, hi));
+}
 
 // bary: the hit's weights of v1 and v2.
 bool rtSolidAt(RtTri tri, vec2 bary, inout uint rng) {

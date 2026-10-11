@@ -1,5 +1,6 @@
 #include "rendering/rt_scene.hpp"
 
+#include "core/frame_profiler.hpp"
 #include "core/logger.hpp"
 
 #include <glm/gtc/packing.hpp>
@@ -21,6 +22,29 @@ constexpr uint32_t kBindingTlasNodes = 4;
 constexpr uint32_t kBindingTlas = 5;
 constexpr uint32_t kBindingTriExtras = 6;
 constexpr uint32_t kBindingMasks = 7;
+constexpr uint32_t kBindingDynamicTlas = 8;
+constexpr uint32_t kBindingGroups = 9;
+
+// The software top level begins with three nodes that join the two
+// hierarchies: a root over both, then a copy of each one's root as its two
+// children (an interior node's children sit side by side). The static nodes
+// follow, then the dynamic ones, each pointing at their place in the whole.
+constexpr uint32_t kTopHeader = 3;
+
+// A node no ray enters: a point box beyond any distance traced. (An inverted
+// box would not do - the slab test reads it as an infinite one.)
+RtBvhNode farNode() {
+    RtBvhNode n{};
+    n.bmin = n.bmax = glm::vec3(1e30f);
+    n.leftOrFirst = 0;
+    n.count = 0;
+    return n;
+}
+
+// A hierarchy's root placed in the header, its indices made absolute.
+RtBvhNode headerChild(const std::vector<RtBvhNode>& nodes) {
+    return nodes.empty() ? farNode() : nodes.front();
+}
 
 constexpr uint32_t kInitialTriangles = 1u << 18;
 constexpr uint32_t kInitialNodes = 1u << 17;
@@ -128,11 +152,13 @@ bool RtScene::createDescriptors() {
     addBinding(kBindingInstances, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     addBinding(kBindingTriExtras, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     addBinding(kBindingMasks, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    addBinding(kBindingGroups, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     if (backend_ == Backend::Software) {
         addBinding(kBindingNodes, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         addBinding(kBindingTlasNodes, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     } else {
         addBinding(kBindingTlas, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
+        addBinding(kBindingDynamicTlas, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
     }
 
     VkDescriptorSetLayoutCreateInfo li{};
@@ -143,9 +169,9 @@ bool RtScene::createDescriptors() {
 
     std::vector<VkDescriptorPoolSize> sizes;
     sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                     (backend_ == Backend::Software ? 7u : 5u) * MAX_FRAMES_IN_FLIGHT});
+                     (backend_ == Backend::Software ? 8u : 6u) * MAX_FRAMES_IN_FLIGHT});
     if (backend_ == Backend::Hardware) {
-        sizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, MAX_FRAMES_IN_FLIGHT});
+        sizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 2u * MAX_FRAMES_IN_FLIGHT});
     }
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -175,13 +201,14 @@ void RtScene::shutdown() {
     for (auto& m : meshes_) destroyMeshGpu(m);
     meshes_.clear();
     instances_.clear();
+    dynInstances_.clear();
+    groups_.clear();
     for (auto& fr : frames_) {
         destroyBuffer(alloc, fr.instances);
         destroyBuffer(alloc, fr.tlasNodes);
-        destroyBuffer(alloc, fr.asInstances);
-        if (fr.tlas) pfnDestroyAs_(dev, fr.tlas, nullptr);
-        destroyBuffer(alloc, fr.tlasBuffer);
-        destroyBuffer(alloc, fr.scratch);
+        destroyBuffer(alloc, fr.groups);
+        destroyTlas(fr.staticAs);
+        destroyTlas(fr.dynamicAs);
         fr = FrameResources{};
     }
     destroyBuffer(alloc, triPool_.buffer);
@@ -195,6 +222,15 @@ void RtScene::shutdown() {
     descriptorPool_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
     ctx_ = nullptr;
+}
+
+void RtScene::destroyTlas(TlasResources& as) {
+    VmaAllocator alloc = ctx_->getAllocator();
+    destroyBuffer(alloc, as.asInstances);
+    if (as.tlas && pfnDestroyAs_) pfnDestroyAs_(ctx_->getDevice(), as.tlas, nullptr);
+    destroyBuffer(alloc, as.tlasBuffer);
+    destroyBuffer(alloc, as.scratch);
+    as = TlasResources{};
 }
 
 void RtScene::destroyMeshGpu(Mesh& m) {
@@ -305,7 +341,6 @@ void RtScene::setActive(bool active) {
 
 void RtScene::releaseGpu() {
     VmaAllocator alloc = ctx_->getAllocator();
-    VkDevice dev = ctx_->getDevice();
     ++gpuEpoch_;
     for (auto& m : meshes_) {
         destroyMeshGpu(m);
@@ -324,10 +359,9 @@ void RtScene::releaseGpu() {
     for (auto& fr : frames_) {
         destroyBuffer(alloc, fr.instances);
         destroyBuffer(alloc, fr.tlasNodes);
-        destroyBuffer(alloc, fr.asInstances);
-        if (fr.tlas) pfnDestroyAs_(dev, fr.tlas, nullptr);
-        destroyBuffer(alloc, fr.tlasBuffer);
-        destroyBuffer(alloc, fr.scratch);
+        destroyBuffer(alloc, fr.groups);
+        destroyTlas(fr.staticAs);
+        destroyTlas(fr.dynamicAs);
         const VkDescriptorSet set = fr.set;
         fr = FrameResources{};
         fr.set = set;
@@ -398,12 +432,35 @@ RtScene::InstanceId RtScene::addInstance(MeshId mesh, const glm::mat4& objectToW
         instances_.emplace_back();
     }
     instances_[id] = Instance{true, mesh, objectToWorld};
+    ++meshes_[mesh].staticRefs;
     ++liveInstances_;
     ++sceneVersion_;
     return id;
 }
 
+RtScene::InstanceId RtScene::addDynamicInstance(MeshId mesh, const glm::mat4& objectToWorld,
+                                                GroupId group) {
+    if (mesh >= meshes_.size() || !meshes_[mesh].live) return kInvalid;
+    InstanceId id;
+    if (!freeDynInstances_.empty()) {
+        id = freeDynInstances_.back();
+        freeDynInstances_.pop_back();
+    } else {
+        id = static_cast<InstanceId>(dynInstances_.size());
+        dynInstances_.emplace_back();
+    }
+    dynInstances_[id] = Instance{true, mesh, objectToWorld, group < groups_.size() ? group : 0};
+    ++liveDynInstances_;
+    return id | kDynamicBit;
+}
+
 void RtScene::setInstanceTransform(InstanceId id, const glm::mat4& objectToWorld) {
+    if (isDynamic(id)) {
+        // The dynamic top level is rebuilt every frame; nothing to mark.
+        const InstanceId d = id & ~kDynamicBit;
+        if (d < dynInstances_.size() && dynInstances_[d].live) dynInstances_[d].objectToWorld = objectToWorld;
+        return;
+    }
     if (id >= instances_.size() || !instances_[id].live) return;
     if (instances_[id].objectToWorld == objectToWorld) return;
     instances_[id].objectToWorld = objectToWorld;
@@ -411,11 +468,54 @@ void RtScene::setInstanceTransform(InstanceId id, const glm::mat4& objectToWorld
 }
 
 void RtScene::removeInstance(InstanceId id) {
+    if (isDynamic(id)) {
+        const InstanceId d = id & ~kDynamicBit;
+        if (d >= dynInstances_.size() || !dynInstances_[d].live) return;
+        dynInstances_[d] = Instance{};
+        freeDynInstances_.push_back(d);
+        --liveDynInstances_;
+        return;
+    }
     if (id >= instances_.size() || !instances_[id].live) return;
+    const MeshId mesh = instances_[id].mesh;
+    if (mesh < meshes_.size() && meshes_[mesh].staticRefs > 0) --meshes_[mesh].staticRefs;
     instances_[id] = Instance{};
     freeInstances_.push_back(id);
     --liveInstances_;
     ++sceneVersion_;
+}
+
+bool RtScene::meshReady(MeshId mesh) const {
+    if (mesh >= meshes_.size()) return false;
+    const Mesh& m = meshes_[mesh];
+    return m.live && m.uploaded && (backend_ == Backend::Software || m.blas != VK_NULL_HANDLE);
+}
+
+RtScene::GroupId RtScene::addGroup() {
+    if (groups_.empty()) groups_.emplace_back();  // 0: no group
+    GroupId id;
+    if (!freeGroups_.empty()) {
+        id = freeGroups_.back();
+        freeGroups_.pop_back();
+    } else {
+        id = static_cast<GroupId>(groups_.size());
+        groups_.emplace_back();
+    }
+    groups_[id] = Group{};
+    groups_[id].live = true;
+    return id;
+}
+
+void RtScene::setGroupBounds(GroupId group, const glm::vec3& bmin, const glm::vec3& bmax) {
+    if (group == 0 || group >= groups_.size() || !groups_[group].live) return;
+    groups_[group].bmin = glm::vec4(bmin, 0.0f);
+    groups_[group].bmax = glm::vec4(bmax, 0.0f);
+}
+
+void RtScene::removeGroup(GroupId group) {
+    if (group == 0 || group >= groups_.size() || !groups_[group].live) return;
+    groups_[group] = Group{};
+    freeGroups_.push_back(group);
 }
 
 // ---------------------------------------------------------------------------
@@ -565,9 +665,11 @@ void RtScene::uploadPending(VkCommandBuffer cmd) {
 
     if (backend_ == Backend::Hardware) buildPendingBlas(cmd, ready);
 
+    bool placedStatic = false;
     for (MeshId id : ready) {
         Mesh& m = meshes_[id];
         m.uploaded = true;
+        placedStatic = placedStatic || m.staticRefs > 0;
         m.tris.clear();
         m.tris.shrink_to_fit();
         m.nodes.clear();
@@ -576,7 +678,10 @@ void RtScene::uploadPending(VkCommandBuffer cmd) {
         m.extras.shrink_to_fit();
     }
     meshTableDirty_ = true;
-    ++sceneVersion_;
+    // A mesh only dynamic instances place - a character's, a piece of one -
+    // reaches the dynamic top level next frame anyway; rebuilding the static
+    // one for it cost a city a few milliseconds every few frames.
+    if (placedStatic) ++sceneVersion_;
 }
 
 void RtScene::buildPendingBlas(VkCommandBuffer cmd, const std::vector<MeshId>& ids) {
@@ -667,9 +772,9 @@ void RtScene::buildPendingBlas(VkCommandBuffer cmd, const std::vector<MeshId>& i
     cmdPipelineBarrier2(cmd, dep);
 }
 
-void RtScene::ensureMapped(AllocatedBuffer& buf, uint32_t& capacity, uint32_t needed,
+bool RtScene::ensureMapped(AllocatedBuffer& buf, uint32_t& capacity, uint32_t needed,
                            uint32_t elementSize, VkBufferUsageFlags usage) {
-    if (buf.buffer && capacity >= needed) return;
+    if (buf.buffer && capacity >= needed) return false;
     VmaAllocator alloc = ctx_->getAllocator();
     if (buf.buffer) {
         // This frame slot's previous use has been fenced, but the descriptor
@@ -681,85 +786,189 @@ void RtScene::ensureMapped(AllocatedBuffer& buf, uint32_t& capacity, uint32_t ne
     buf = createBuffer(alloc, VkDeviceSize(capacity) * elementSize, usage,
                        VMA_MEMORY_USAGE_CPU_TO_GPU);
     ++descriptorGeneration_;
+    return true;
+}
+
+void RtScene::buildStatic() {
+    builtVersion_ = sceneVersion_;
+    instanceData_.clear();
+    asInstanceData_.clear();
+    staticBounds_ = RtAabb{};
+    std::vector<RtAabb> bounds;
+    for (const Instance& inst : instances_) {
+        if (!inst.live) continue;
+        const Mesh& m = meshes_[inst.mesh];
+        if (!m.uploaded) continue;  // failed allocation, or not yet uploaded
+        if (backend_ == Backend::Hardware && !m.blas) continue;
+        InstanceGPU g{};
+        const glm::mat4 inv = glm::inverse(inst.objectToWorld);
+        const glm::mat4 invT = glm::transpose(inv);
+        g.worldToObject[0] = invT[0];
+        g.worldToObject[1] = invT[1];
+        g.worldToObject[2] = invT[2];
+        g.mesh = inst.mesh;
+        g.flags = m.source.flags;
+        instanceData_.push_back(g);
+        bounds.push_back(transformBounds(m.bounds, inst.objectToWorld));
+        staticBounds_.grow(bounds.back());
+
+        if (backend_ == Backend::Hardware) {
+            VkAccelerationStructureInstanceKHR ai{};
+            const glm::mat4 t = glm::transpose(inst.objectToWorld);
+            std::memcpy(&ai.transform, &t, sizeof(ai.transform));
+            ai.instanceCustomIndex = static_cast<uint32_t>(instanceData_.size() - 1);
+            ai.mask = 0xFF;
+            ai.accelerationStructureReference = m.blasAddress;
+            asInstanceData_.push_back(ai);
+        }
+    }
+    tlasNodes_.clear();
+    if (backend_ == Backend::Software && !instanceData_.empty()) {
+        RtBvh top = buildRtBvh(bounds, 1);
+        // Leaves index the reordered instance array; reorder to match.
+        std::vector<InstanceGPU> sorted(instanceData_.size());
+        for (size_t i = 0; i < top.order.size(); ++i) sorted[i] = instanceData_[top.order[i]];
+        instanceData_.swap(sorted);
+        tlasNodes_ = std::move(top.nodes);
+        // Interior nodes point past the header; leaves index the static rows,
+        // which come first.
+        for (RtBvhNode& n : tlasNodes_) {
+            if (n.count == 0) n.leftOrFirst += kTopHeader;
+        }
+    }
+}
+
+void RtScene::buildDynamic() {
+    dynInstanceData_.clear();
+    dynAsInstanceData_.clear();
+    dynTlasNodes_.clear();
+    dynamicBounds_ = RtAabb{};
+    const uint32_t firstRow = static_cast<uint32_t>(instanceData_.size());
+    std::vector<RtAabb> bounds;
+    for (const Instance& inst : dynInstances_) {
+        if (!inst.live) continue;
+        const Mesh& m = meshes_[inst.mesh];
+        if (!m.uploaded) continue;
+        if (backend_ == Backend::Hardware && !m.blas) continue;
+        InstanceGPU g{};
+        const glm::mat4 inv = glm::inverse(inst.objectToWorld);
+        const glm::mat4 invT = glm::transpose(inv);
+        g.worldToObject[0] = invT[0];
+        g.worldToObject[1] = invT[1];
+        g.worldToObject[2] = invT[2];
+        g.mesh = inst.mesh;
+        g.flags = m.source.flags;
+        g.group = inst.group < groups_.size() && groups_[inst.group].live ? inst.group : 0;
+        dynInstanceData_.push_back(g);
+        bounds.push_back(transformBounds(m.bounds, inst.objectToWorld));
+        dynamicBounds_.grow(bounds.back());
+
+        if (backend_ == Backend::Hardware) {
+            VkAccelerationStructureInstanceKHR ai{};
+            const glm::mat4 t = glm::transpose(inst.objectToWorld);
+            std::memcpy(&ai.transform, &t, sizeof(ai.transform));
+            ai.instanceCustomIndex = firstRow + static_cast<uint32_t>(dynInstanceData_.size() - 1);
+            ai.mask = 0xFF;
+            // A grouped instance goes through the shader's candidate loop,
+            // which is where a ray from inside its group passes it by.
+            if (g.group != 0) ai.flags = VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;
+            ai.accelerationStructureReference = m.blasAddress;
+            dynAsInstanceData_.push_back(ai);
+        }
+    }
+    if (backend_ == Backend::Software && !dynInstanceData_.empty()) {
+        RtBvh top = buildRtBvh(bounds, 1);
+        std::vector<InstanceGPU> sorted(dynInstanceData_.size());
+        for (size_t i = 0; i < top.order.size(); ++i) sorted[i] = dynInstanceData_[top.order[i]];
+        dynInstanceData_.swap(sorted);
+        dynTlasNodes_ = std::move(top.nodes);
+        const uint32_t firstNode = kTopHeader + static_cast<uint32_t>(tlasNodes_.size());
+        for (RtBvhNode& n : dynTlasNodes_) {
+            n.leftOrFirst += n.count == 0 ? firstNode : firstRow;
+        }
+    }
+
+    // Group boxes, two vec4 a group; index 0 is no group.
+    groupData_.assign(std::max<size_t>(groups_.size(), 1) * 2, glm::vec4(1e30f));
+    for (size_t i = 0; i < groups_.size(); ++i) {
+        if (!groups_[i].live) continue;
+        groupData_[i * 2] = groups_[i].bmin;
+        groupData_[i * 2 + 1] = groups_[i].bmax;
+    }
 }
 
 void RtScene::uploadFrame(VkCommandBuffer cmd, FrameResources& fr) {
-    // Rebuild the CPU-side per-frame data once per scene version.
-    if (builtVersion_ != sceneVersion_) {
-        builtVersion_ = sceneVersion_;
-        instanceData_.clear();
-        asInstanceData_.clear();
-        std::vector<RtAabb> bounds;
-        for (const Instance& inst : instances_) {
-            if (!inst.live) continue;
-            const Mesh& m = meshes_[inst.mesh];
-            if (!m.uploaded) continue;  // failed allocation, or not yet uploaded
-            if (backend_ == Backend::Hardware && !m.blas) continue;
-            InstanceGPU g{};
-            const glm::mat4 inv = glm::inverse(inst.objectToWorld);
-            const glm::mat4 invT = glm::transpose(inv);
-            g.worldToObject[0] = invT[0];
-            g.worldToObject[1] = invT[1];
-            g.worldToObject[2] = invT[2];
-            g.mesh = inst.mesh;
-            g.flags = m.source.flags;
-            instanceData_.push_back(g);
-            bounds.push_back(transformBounds(m.bounds, inst.objectToWorld));
+    const uint32_t staticCount = static_cast<uint32_t>(instanceData_.size());
+    const uint32_t dynamicCount = static_cast<uint32_t>(dynInstanceData_.size());
+    fr.instanceCount = staticCount + dynamicCount;
 
-            if (backend_ == Backend::Hardware) {
-                VkAccelerationStructureInstanceKHR ai{};
-                const glm::mat4 t = glm::transpose(inst.objectToWorld);
-                std::memcpy(&ai.transform, &t, sizeof(ai.transform));
-                ai.instanceCustomIndex = static_cast<uint32_t>(instanceData_.size() - 1);
-                ai.mask = 0xFF;
-                ai.accelerationStructureReference = m.blasAddress;
-                asInstanceData_.push_back(ai);
-            }
-        }
-        tlasNodes_.clear();
-        if (backend_ == Backend::Software && !instanceData_.empty()) {
-            RtBvh top = buildRtBvh(bounds, 1);
-            // Leaves index the reordered instance array; reorder to match.
-            std::vector<InstanceGPU> sorted(instanceData_.size());
-            for (size_t i = 0; i < top.order.size(); ++i) sorted[i] = instanceData_[top.order[i]];
-            instanceData_.swap(sorted);
-            tlasNodes_ = std::move(top.nodes);
-        }
+    // A replaced buffer holds nothing: the static part is copied again too.
+    if (ensureMapped(fr.instances, fr.instanceCapacity, fr.instanceCount, sizeof(InstanceGPU),
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) {
+        fr.uploadedVersion = ~0ull;
+    }
+    if (backend_ == Backend::Software &&
+        ensureMapped(fr.tlasNodes, fr.tlasNodeCapacity,
+                     kTopHeader + static_cast<uint32_t>(tlasNodes_.size() + dynTlasNodes_.size()),
+                     sizeof(RtBvhNode), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) {
+        fr.uploadedVersion = ~0ull;
+    }
+    ensureMapped(fr.groups, fr.groupCapacity, static_cast<uint32_t>(groupData_.size()),
+                 sizeof(glm::vec4), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    if (fr.groups.buffer && !groupData_.empty()) {
+        std::memcpy(fr.groups.info.pMappedData, groupData_.data(), groupData_.size() * sizeof(glm::vec4));
     }
 
-    if (fr.uploadedVersion == sceneVersion_) return;
-    fr.uploadedVersion = sceneVersion_;
-    fr.instanceCount = static_cast<uint32_t>(instanceData_.size());
-
-    ensureMapped(fr.instances, fr.instanceCapacity, fr.instanceCount, sizeof(InstanceGPU),
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    if (!instanceData_.empty()) {
-        std::memcpy(fr.instances.info.pMappedData, instanceData_.data(),
-                    instanceData_.size() * sizeof(InstanceGPU));
+    auto* rows = static_cast<InstanceGPU*>(fr.instances.info.pMappedData);
+    const bool staticChanged = fr.uploadedVersion != sceneVersion_;
+    if (staticChanged && staticCount > 0) {
+        std::memcpy(rows, instanceData_.data(), staticCount * sizeof(InstanceGPU));
     }
+    if (dynamicCount > 0) {
+        std::memcpy(rows + staticCount, dynInstanceData_.data(), dynamicCount * sizeof(InstanceGPU));
+    }
+
     if (backend_ == Backend::Software) {
-        ensureMapped(fr.tlasNodes, fr.tlasNodeCapacity, static_cast<uint32_t>(tlasNodes_.size()),
-                     sizeof(RtBvhNode), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        if (!tlasNodes_.empty()) {
-            std::memcpy(fr.tlasNodes.info.pMappedData, tlasNodes_.data(),
-                        tlasNodes_.size() * sizeof(RtBvhNode));
+        auto* nodes = static_cast<RtBvhNode*>(fr.tlasNodes.info.pMappedData);
+        RtBvhNode header[kTopHeader];
+        RtAabb all = staticBounds_;
+        all.grow(dynamicBounds_);
+        header[0] = farNode();
+        if (all.valid()) {
+            header[0].bmin = all.bmin;
+            header[0].bmax = all.bmax;
+        }
+        header[0].leftOrFirst = 1;
+        header[0].count = 0;
+        header[1] = headerChild(tlasNodes_);
+        header[2] = headerChild(dynTlasNodes_);
+        std::memcpy(nodes, header, sizeof(header));
+        if (staticChanged && !tlasNodes_.empty()) {
+            std::memcpy(nodes + kTopHeader, tlasNodes_.data(), tlasNodes_.size() * sizeof(RtBvhNode));
+        }
+        if (!dynTlasNodes_.empty()) {
+            std::memcpy(nodes + kTopHeader + tlasNodes_.size(), dynTlasNodes_.data(),
+                        dynTlasNodes_.size() * sizeof(RtBvhNode));
         }
     } else {
-        buildTlas(cmd, fr);
+        if (staticChanged || !fr.staticAs.tlas) buildTlas(cmd, fr.staticAs, asInstanceData_, false);
+        buildTlas(cmd, fr.dynamicAs, dynAsInstanceData_, true);
     }
+    fr.uploadedVersion = sceneVersion_;
 }
 
-void RtScene::buildTlas(VkCommandBuffer cmd, FrameResources& fr) {
+void RtScene::buildTlas(VkCommandBuffer cmd, TlasResources& as,
+                        const std::vector<VkAccelerationStructureInstanceKHR>& data, bool fastBuild) {
     VkDevice dev = ctx_->getDevice();
     VmaAllocator alloc = ctx_->getAllocator();
-    const uint32_t count = static_cast<uint32_t>(asInstanceData_.size());
+    const uint32_t count = static_cast<uint32_t>(data.size());
 
-    ensureMapped(fr.asInstances, fr.asInstanceCapacity, count,
+    ensureMapped(as.asInstances, as.asInstanceCapacity, count,
                  sizeof(VkAccelerationStructureInstanceKHR),
                  VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
     if (count > 0) {
-        std::memcpy(fr.asInstances.info.pMappedData, asInstanceData_.data(),
+        std::memcpy(as.asInstances.info.pMappedData, data.data(),
                     count * sizeof(VkAccelerationStructureInstanceKHR));
     }
 
@@ -767,12 +976,15 @@ void RtScene::buildTlas(VkCommandBuffer cmd, FrameResources& fr) {
     geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
     geom.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
     geom.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
-    geom.geometry.instances.data.deviceAddress = bufferAddress(fr.asInstances.buffer);
+    geom.geometry.instances.data.deviceAddress = bufferAddress(as.asInstances.buffer);
 
     VkAccelerationStructureBuildGeometryInfoKHR build{};
     build.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     build.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-    build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    // The dynamic level is built every frame from a few hundred instances;
+    // the static one is traced for many frames per build.
+    build.flags = fastBuild ? VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR
+                            : VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
     build.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     build.geometryCount = 1;
     build.pGeometries = &geom;
@@ -781,47 +993,50 @@ void RtScene::buildTlas(VkCommandBuffer cmd, FrameResources& fr) {
     sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
     pfnGetAsBuildSizes_(dev, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build, &count, &sizes);
 
-    if (!fr.tlas || fr.tlasSize < sizes.accelerationStructureSize) {
-        if (fr.tlas) {
-            VkAccelerationStructureKHR oldAs = fr.tlas;
-            AllocatedBuffer oldBuf = fr.tlasBuffer;
+    if (!as.tlas || as.tlasSize < sizes.accelerationStructureSize) {
+        if (as.tlas) {
+            VkAccelerationStructureKHR oldAs = as.tlas;
+            AllocatedBuffer oldBuf = as.tlasBuffer;
             auto destroyAs = pfnDestroyAs_;
             ctx_->deferAfterFrameFence([dev, alloc, oldAs, oldBuf, destroyAs]() mutable {
                 destroyAs(dev, oldAs, nullptr);
                 destroyBuffer(alloc, oldBuf);
             });
         }
-        fr.tlasSize = sizes.accelerationStructureSize + sizes.accelerationStructureSize / 2;
-        fr.tlasBuffer = createBuffer(alloc, fr.tlasSize,
+        // Room to grow, and never nothing: an empty level still needs a
+        // structure for the descriptor to name.
+        as.tlasSize = std::max<VkDeviceSize>(
+            sizes.accelerationStructureSize + sizes.accelerationStructureSize / 2, 4096);
+        as.tlasBuffer = createBuffer(alloc, as.tlasSize,
                                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                      VMA_MEMORY_USAGE_GPU_ONLY);
         VkAccelerationStructureCreateInfoKHR ci{};
         ci.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-        ci.buffer = fr.tlasBuffer.buffer;
-        ci.size = fr.tlasSize;
+        ci.buffer = as.tlasBuffer.buffer;
+        ci.size = as.tlasSize;
         ci.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-        fr.tlas = VK_NULL_HANDLE;
-        if (pfnCreateAs_(dev, &ci, nullptr, &fr.tlas) != VK_SUCCESS) {
-            fr.tlas = VK_NULL_HANDLE;
+        as.tlas = VK_NULL_HANDLE;
+        if (pfnCreateAs_(dev, &ci, nullptr, &as.tlas) != VK_SUCCESS) {
+            as.tlas = VK_NULL_HANDLE;
             return;
         }
         ++descriptorGeneration_;
     }
-    if (!fr.scratch.buffer || fr.scratchSize < sizes.buildScratchSize) {
-        if (fr.scratch.buffer) {
-            AllocatedBuffer old = fr.scratch;
+    if (!as.scratch.buffer || as.scratchSize < sizes.buildScratchSize) {
+        if (as.scratch.buffer) {
+            AllocatedBuffer old = as.scratch;
             ctx_->deferAfterFrameFence([alloc, old]() mutable { destroyBuffer(alloc, old); });
         }
-        fr.scratchSize = sizes.buildScratchSize + sizes.buildScratchSize / 2;
-        fr.scratch = createBuffer(alloc, fr.scratchSize + scratchAlignment_,
+        as.scratchSize = std::max<VkDeviceSize>(sizes.buildScratchSize + sizes.buildScratchSize / 2, 256);
+        as.scratch = createBuffer(alloc, as.scratchSize + scratchAlignment_,
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                   VMA_MEMORY_USAGE_GPU_ONLY);
     }
 
-    const VkDeviceAddress scratchAddr = bufferAddress(fr.scratch.buffer);
-    build.dstAccelerationStructure = fr.tlas;
+    const VkDeviceAddress scratchAddr = bufferAddress(as.scratch.buffer);
+    build.dstAccelerationStructure = as.tlas;
     build.scratchData.deviceAddress = (scratchAddr + scratchAlignment_ - 1) & ~(scratchAlignment_ - 1);
     VkAccelerationStructureBuildRangeInfoKHR range{};
     range.primitiveCount = count;
@@ -855,6 +1070,7 @@ void RtScene::writeDescriptors(FrameResources& fr) {
     VkDescriptorBufferInfo tlasNodes = info(fr.tlasNodes);
     VkDescriptorBufferInfo extras = info(extraPool_.buffer);
     VkDescriptorBufferInfo masks = info(maskBuffer_);
+    VkDescriptorBufferInfo groups = info(fr.groups);
 
     std::vector<VkWriteDescriptorSet> writes;
     auto add = [&](uint32_t binding, const VkDescriptorBufferInfo* bi) {
@@ -872,22 +1088,28 @@ void RtScene::writeDescriptors(FrameResources& fr) {
     add(kBindingInstances, &insts);
     add(kBindingTriExtras, &extras);
     add(kBindingMasks, &masks);
-    VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
+    add(kBindingGroups, &groups);
+    VkWriteDescriptorSetAccelerationStructureKHR asWrite[2]{};
     if (backend_ == Backend::Software) {
         add(kBindingNodes, &nodes);
         add(kBindingTlasNodes, &tlasNodes);
-    } else if (fr.tlas) {
-        asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-        asWrite.accelerationStructureCount = 1;
-        asWrite.pAccelerationStructures = &fr.tlas;
-        VkWriteDescriptorSet w{};
-        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.pNext = &asWrite;
-        w.dstSet = fr.set;
-        w.dstBinding = kBindingTlas;
-        w.descriptorCount = 1;
-        w.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        writes.push_back(w);
+    } else {
+        const std::pair<uint32_t, VkAccelerationStructureKHR*> levels[2] = {
+            {kBindingTlas, &fr.staticAs.tlas}, {kBindingDynamicTlas, &fr.dynamicAs.tlas}};
+        for (int i = 0; i < 2; ++i) {
+            if (!*levels[i].second) continue;
+            asWrite[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+            asWrite[i].accelerationStructureCount = 1;
+            asWrite[i].pAccelerationStructures = levels[i].second;
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.pNext = &asWrite[i];
+            w.dstSet = fr.set;
+            w.dstBinding = levels[i].first;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+            writes.push_back(w);
+        }
     }
     vkUpdateDescriptorSets(ctx_->getDevice(), static_cast<uint32_t>(writes.size()), writes.data(),
                            0, nullptr);
@@ -935,6 +1157,15 @@ void RtScene::update(VkCommandBuffer cmd) {
         cmdPipelineBarrier2(cmd, dep);
     }
 
+    // The static data once per version of that set, the dynamic every frame.
+    if (builtVersion_ != sceneVersion_) {
+        WOWEE_PROFILE_SCOPE("rt: static top level", Cpu);
+        buildStatic();
+    }
+    {
+        WOWEE_PROFILE_SCOPE("rt: dynamic top level", Cpu);
+        buildDynamic();
+    }
     FrameResources& fr = frames_[ctx_->getCurrentFrame()];
     uploadFrame(cmd, fr);
     writeDescriptors(fr);
@@ -999,6 +1230,7 @@ RtScene::Stats RtScene::stats() const {
     Stats s;
     s.meshes = liveMeshes_;
     s.instances = liveInstances_;
+    s.dynamicInstances = liveDynInstances_;
     s.triangles = liveTriangles_;
     auto sz = [](const AllocatedBuffer& b) { return b.buffer ? uint64_t(b.info.size) : 0ull; };
     s.gpuBytes = sz(triPool_.buffer) + sz(nodePool_.buffer) + sz(extraPool_.buffer) +

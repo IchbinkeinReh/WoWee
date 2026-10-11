@@ -1214,6 +1214,12 @@ wowee_add_test(test_rt_point_lights
             ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_rt_rigid_parts ──────────────────────────────────────
+# Header-only: a skinned model cut into the pieces the ray tracer moves by
+# their bones.
+wowee_add_test(test_rt_rigid_parts
+    SOURCES test_rt_rigid_parts.cpp)
+
 # ── test_recording_size ──────────────────────────────────────
 # Header-only: the size a screen recording is encoded at.
 wowee_add_test(test_recording_size
