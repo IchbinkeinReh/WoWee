@@ -1154,13 +1154,20 @@ private:
         std::vector<uint32_t> owned;
         std::vector<uint64_t> seen;
         std::vector<uint32_t> meshOf;
+        std::vector<uint32_t> ownerOf;  ///< the M2Instance::id the slot was placed for
     };
     RtTracking rtStatic_, rtDynamic_;
     RtTracking& rtTrackingOf(uint32_t rtId);
     uint64_t rtSyncGeneration_ = 0;
-    // The instances whose models carry lights, by index, as the last sync
-    // found them.
+    // The instances whose models carry lights, by M2Instance::id, as the last
+    // complete pass found them; the pass in progress fills rtLitNext_.
     std::vector<uint32_t> rtLitInstances_;
+    std::vector<uint32_t> rtLitNext_;
+    // The pass over every instance is spread over a few frames: where it has
+    // got to. The instances placed in the dynamic level - moving ones - are
+    // brought up to date every frame from rtDynamicOwnerIds_ (M2Instance ids).
+    size_t rtSyncCursor_ = 0;
+    std::vector<uint32_t> rtDynamicOwnerIds_;
     // Pieces of animated models placed by the last sync.
     uint32_t rtAnimatedPieces_ = 0;
     void registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
