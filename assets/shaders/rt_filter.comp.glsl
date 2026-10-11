@@ -4,8 +4,10 @@
 // down across depth and normal edges. Run three times with steps 1, 2, 4.
 //
 // Pixels with a long history are already smooth and are filtered less, so
-// settled shadows keep their edges. The last pass writes the distance into
-// alpha, which the surface shaders check the result against.
+// settled shadows keep their edges. The three terms are sun, occlusion and
+// point light visibility; alpha carries the history length from pass to
+// pass, and the last pass writes the distance there instead, which the
+// surface shaders check the result against.
 
 #include "rt_common.glsli"
 
@@ -31,14 +33,14 @@ void main() {
     float dist = rtGbufDist(g);
     vec3 n = rtGbufNormal(g);
     if (dist <= 0.0) {
-        imageStore(uOut, px, vec4(c.rg, c.b, pc.last != 0 ? 0.0 : c.a));
+        imageStore(uOut, px, vec4(c.rgb, pc.last != 0 ? 0.0 : c.a));
         return;
     }
 
-    float history = c.b;
+    float history = c.a;
     float spread = mix(1.0, 0.35, clamp(history / 24.0, 0.0, 1.0));
 
-    vec2 sum = vec2(0.0);
+    vec3 sum = vec3(0.0);
     float wsum = 0.0;
     for (int y = -2; y <= 2; ++y) {
         for (int x = -2; x <= 2; ++x) {
@@ -52,10 +54,10 @@ void main() {
             float wn = pow(max(dot(rtGbufNormal(qg), n), 0.0), 32.0);
             float w = k * wz * wn;
             if (x != 0 || y != 0) w *= spread;
-            sum += texelFetch(uIn, q, 0).rg * w;
+            sum += texelFetch(uIn, q, 0).rgb * w;
             wsum += w;
         }
     }
     sum /= wsum;
-    imageStore(uOut, px, vec4(sum, history, pc.last != 0 ? dist : 0.0));
+    imageStore(uOut, px, vec4(sum, pc.last != 0 ? dist : history));
 }

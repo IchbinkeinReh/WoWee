@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include <glm/glm.hpp>
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
 #include "rendering/rt_gi_probes.hpp"
+#include "rendering/rt_point_lights.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_utils.hpp"
 
@@ -34,8 +36,16 @@ class RtScene;
  * map and the flat ambient, so the one frame of latency only ever shows as
  * the old lighting, never as a hole.
  *
- * Only what RtScene holds casts: terrain, buildings and doodads. Characters
- * receive traced light and shadow but cast only into the shadow map.
+ * What RtScene holds casts: terrain, buildings and doodads, and as dynamic
+ * instances the characters, what they carry and what moves
+ * (character_renderer_rt.cpp, RtScene's dynamic top level).
+ *
+ * The point lights of the frame - torches, braziers, lamps, the omni lights
+ * of buildings (rt_point_lights.hpp) - are traced in the same pass: their
+ * light unshadowed into an image of its own, the fraction of it that arrives
+ * beside the sun's visibility (rt_trace.comp.glsl). The surfaces add their
+ * product to their light. With the pass off nothing reads either, and the
+ * world is lit as the original lights it, by none of them.
  *
  * The results are double-buffered by frame slot. Slot s writes its outputs
  * after its opaque pass; the per-frame set of slot s binds the outputs of the
@@ -67,12 +77,22 @@ public:
     /// changed and the per-frame sets must be written again.
     bool prepare(VkExtent2D sceneExtent);
 
-    /// The immutable sampler for per-frame bindings 3 and 4.
+    /// The immutable sampler for per-frame bindings 3 to 5.
     [[nodiscard]] VkSampler sampler() const { return linearSampler_; }
-    /// What per-frame set `slot` binds at 3 (sun, AO, distance) and 4 (the
-    /// probe atlas, rt_gi.glsli).
+    /// What per-frame set `slot` binds at 3 (sun, AO, point light share,
+    /// distance), 4 (the probe atlas, rt_gi.glsli) and 5 (the point lights
+    /// unshadowed).
     [[nodiscard]] VkImageView lightViewForSlot(uint32_t slot) const;
     [[nodiscard]] VkImageView giViewForSlot(uint32_t slot) const;
+    [[nodiscard]] VkImageView pointViewForSlot(uint32_t slot) const;
+
+    /// The most point lights one frame traces; the rest of a crowded view's
+    /// are the least of them (rt_lights::selectLights).
+    static constexpr uint32_t kMaxPointLights = 128;
+    /// This frame's point lights, most important first, for the next
+    /// record(). Past kMaxPointLights are dropped.
+    void setPointLights(const std::vector<rt_lights::PointLight>& lights);
+    [[nodiscard]] uint32_t pointLightCount() const { return static_cast<uint32_t>(pointLights_.size()); }
     [[nodiscard]] VkImageView neutralView() const { return neutral_.imageView; }
     /// The image slot `slot` writes, in GENERAL layout, at the trace size.
     /// For tools that read the result back (tools/rt_probe.cpp).
@@ -113,7 +133,9 @@ private:
     };
     struct Slot {
         Target gbuf, hist, out;
+        Target point;              // the point lights unshadowed (rt_trace.comp)
         AllocatedBuffer ubo{};
+        AllocatedBuffer lights{};  // rt_lights::PointLightGPU[kMaxPointLights], mapped
         VkDescriptorSet sets[3] = {};  // one per filter pass; set 0 also runs the rest
         VkImage boundDepth = VK_NULL_HANDLE;
         bool wroteImages = false;
@@ -149,6 +171,8 @@ private:
     VkPipeline trace_ = VK_NULL_HANDLE;
     VkPipeline temporal_ = VK_NULL_HANDLE;
     VkPipeline filter_ = VK_NULL_HANDLE;
+
+    std::vector<rt_lights::PointLightGPU> pointLights_;
 
     VkImage depthImage_ = VK_NULL_HANDLE;
     VkImageView depthView_ = VK_NULL_HANDLE;

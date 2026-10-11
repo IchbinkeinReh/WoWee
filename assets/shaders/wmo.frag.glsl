@@ -340,8 +340,12 @@ void main() {
     // (c30, 0x00873210), not the distance to the eye.
     float dist = -(view * vec4(FragPos, 1.0)).z;
 
+    // The torches' and lamps' light, where the ray tracing has it, over the
+    // pass's colour - halved, as surface() doubles that colour.
+    const vec3 pointLight = 0.5 * rtPointLight(rt);
     vec3 inside = passColour(insideLight, v.rgb, norm, rt);
     if ((shadowed & 2) != 0) inside *= shadowScale;
+    inside += pointLight;
     inside = fogPass(surface(inside, texColor, env), (fogs >> 2) & 3, dist);
 
     vec3 result = inside;
@@ -351,6 +355,7 @@ void main() {
         // one minus it, added (blend 7).
         vec3 outside = passColour(outsideLight, v.rgb, norm, rt);
         if ((shadowed & 1) != 0) outside *= shadowScale;
+        outside += pointLight;
         outside = fogPass(surface(outside, texColor, env), fogs & 3, dist);
         result = outside * alpha + inside * (1.0 - alpha);
     }

@@ -224,6 +224,9 @@ void main() {
     }
 
     vec3 result = (litColor * light + unlitColor) * (0.7 + 0.3 * lit);
+    // The torches' and lamps' light, where the ray tracing has it, on the lit
+    // layers.
+    result += litColor * rtPointLight(rt);
 
     // The 'specular' option (off by default): the specular vertex programs'
     // secondary colour, pow(max(N.H, 0), 20) x the light's specular (c27),

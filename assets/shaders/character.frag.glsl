@@ -514,6 +514,8 @@ void main() {
         vec3 direct = min(lightColor.rgb * pc.diffuseColour.rgb * pc.lightFlags.y, vec3(1.0));
         light = clamp(ambientLit + diff * direct, 0.0, 1.0)
               * (0.7 + 0.3 * shadow);
+        // The torches' and lamps' light, where the ray tracing has it.
+        light += rtPointLight(rt);
     }
 
     // The batch's colour times the light is the diffuse the stages combine

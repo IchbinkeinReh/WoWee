@@ -3,6 +3,7 @@
 #include "rendering/vk_shader.hpp"
 #include "core/logger.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 
@@ -39,7 +40,9 @@ enum Binding : uint32_t {
     kHistStore = 8,
     kFilterIn = 9,
     kFilterOut = 10,
-    kBindingCount = 11,
+    kPointStore = 11,   // the slot's point lights, unshadowed (rt_trace.comp)
+    kPointLights = 12,  // the slot's light list
+    kBindingCount = 13,
 };
 
 constexpr VkFormat kFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -143,7 +146,10 @@ void RtLighting::shutdown() {
     vkDeviceWaitIdle(dev);
     probes_.shutdown();
     destroyImages();
-    for (auto& s : slots_) destroyBuffer(alloc, s.ubo);
+    for (auto& s : slots_) {
+        destroyBuffer(alloc, s.ubo);
+        destroyBuffer(alloc, s.lights);
+    }
     destroyImage(dev, alloc, neutral_);
     if (depthView_) vkDestroyImageView(dev, depthView_, nullptr);
     depthView_ = VK_NULL_HANDLE;
@@ -175,9 +181,10 @@ bool RtLighting::createPipelines() {
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     }
     b[kUbo].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    for (uint32_t i : {kGbufStore, kRawStore, kHistStore, kFilterOut}) {
+    for (uint32_t i : {kGbufStore, kRawStore, kHistStore, kFilterOut, kPointStore}) {
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     }
+    b[kPointLights].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = kBindingCount;
@@ -185,15 +192,16 @@ bool RtLighting::createPipelines() {
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &setLayout_) != VK_SUCCESS) return false;
 
     constexpr uint32_t kSets = MAX_FRAMES_IN_FLIGHT * 3;
-    VkDescriptorPoolSize sizes[3] = {
+    VkDescriptorPoolSize sizes[4] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSets},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 6},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 4},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 5},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSets},
     };
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pi.maxSets = kSets;
-    pi.poolSizeCount = 3;
+    pi.poolSizeCount = 4;
     pi.pPoolSizes = sizes;
     if (vkCreateDescriptorPool(dev, &pi, nullptr, &pool_) != VK_SUCCESS) return false;
     for (auto& s : slots_) {
@@ -207,6 +215,9 @@ bool RtLighting::createPipelines() {
         s.ubo = createBuffer(ctx_->getAllocator(), sizeof(RtPassData),
                              VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
         if (!s.ubo.buffer) return false;
+        s.lights = createBuffer(ctx_->getAllocator(), sizeof(rt_lights::PointLightGPU) * kMaxPointLights,
+                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+        if (!s.lights.buffer) return false;
     }
 
     VkDescriptorSetLayout setLayouts[2] = {setLayout_, scene_->descriptorSetLayout()};
@@ -258,7 +269,7 @@ bool RtLighting::createImages(VkExtent2D e) {
     };
     bool ok = make(raw_) && make(tmp_);
     for (auto& s : slots_) {
-        ok = ok && make(s.gbuf) && make(s.hist) && make(s.out);
+        ok = ok && make(s.gbuf) && make(s.hist) && make(s.out) && make(s.point);
         s.wroteImages = false;
     }
     traceExtent_ = e;
@@ -271,7 +282,7 @@ void RtLighting::destroyImages() {
     VmaAllocator alloc = ctx_->getAllocator();
     for (Target* t : {&raw_, &tmp_}) destroyImage(dev, alloc, t->img);
     for (auto& s : slots_) {
-        for (Target* t : {&s.gbuf, &s.hist, &s.out}) destroyImage(dev, alloc, t->img);
+        for (Target* t : {&s.gbuf, &s.hist, &s.out, &s.point}) destroyImage(dev, alloc, t->img);
         s.wroteImages = false;
         s.boundDepth = VK_NULL_HANDLE;
     }
@@ -333,6 +344,17 @@ VkImageView RtLighting::lightViewForSlot(uint32_t slot) const {
     return other.out.img.imageView ? other.out.img.imageView : neutral_.imageView;
 }
 
+VkImageView RtLighting::pointViewForSlot(uint32_t slot) const {
+    const Slot& other = slots_[(slot + 1) % MAX_FRAMES_IN_FLIGHT];
+    return other.point.img.imageView ? other.point.img.imageView : neutral_.imageView;
+}
+
+void RtLighting::setPointLights(const std::vector<rt_lights::PointLight>& lights) {
+    pointLights_.clear();
+    const size_t n = std::min<size_t>(lights.size(), kMaxPointLights);
+    for (size_t i = 0; i < n; ++i) pointLights_.push_back(rt_lights::toGpu(lights[i]));
+}
+
 VkImageView RtLighting::giViewForSlot(uint32_t) const {
     // One atlas for both slots: each frame updates only a share of it, so
     // double-buffering it would mean copying the rest every frame. The update
@@ -366,6 +388,7 @@ void RtLighting::writeSlotSets(uint32_t slotIndex) {
     Slot& prev = slots_[(slotIndex + 1) % MAX_FRAMES_IN_FLIGHT];
 
     VkDescriptorBufferInfo ubo{s.ubo.buffer, 0, sizeof(RtPassData)};
+    VkDescriptorBufferInfo lights{s.lights.buffer, 0, VK_WHOLE_SIZE};
     auto sampled = [&](const Target& t) {
         return VkDescriptorImageInfo{pointSampler_, t.img.imageView, VK_IMAGE_LAYOUT_GENERAL};
     };
@@ -391,6 +414,7 @@ void RtLighting::writeSlotSets(uint32_t slotIndex) {
         img[kHistStore] = storage(s.hist);
         img[kFilterIn] = sampled(*filterIn[pass]);
         img[kFilterOut] = storage(*filterOut[pass]);
+        img[kPointStore] = storage(s.point);
 
         std::array<VkWriteDescriptorSet, kBindingCount> w{};
         for (uint32_t i = 0; i < kBindingCount; ++i) {
@@ -401,6 +425,9 @@ void RtLighting::writeSlotSets(uint32_t slotIndex) {
             if (i == kUbo) {
                 w[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 w[i].pBufferInfo = &ubo;
+            } else if (i == kPointLights) {
+                w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w[i].pBufferInfo = &lights;
             } else {
                 const bool isStorage = img[i].sampler == VK_NULL_HANDLE;
                 w[i].descriptorType = isStorage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -450,7 +477,7 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
         };
         for (const Target* t : {&raw_, &tmp_}) add(*t);
         for (auto& sl : slots_) {
-            for (const Target* t : {&sl.gbuf, &sl.hist, &sl.out}) add(*t);
+            for (const Target* t : {&sl.gbuf, &sl.hist, &sl.out, &sl.point}) add(*t);
         }
         VkDependencyInfo dep{};
         dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -470,7 +497,15 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
     d.sunDir = glm::vec4(glm::normalize(in.sunDir), kSunTanRadius);
     d.sunColor = glm::vec4(in.sunColor, in.sunUp ? 1.0f : 0.0f);
     d.skyColor = glm::vec4(in.skyColor, 0.0f);
-    d.params = glm::vec4(static_cast<float>(mode_), kAoRadius, 0.0f, kShadowRayLength);
+    // The frame's point lights, into this slot's list; z of the block says
+    // how many there are.
+    const uint32_t lightCount = static_cast<uint32_t>(pointLights_.size());
+    if (lightCount > 0) {
+        std::memcpy(s.lights.info.pMappedData, pointLights_.data(),
+                    lightCount * sizeof(rt_lights::PointLightGPU));
+    }
+    d.params = glm::vec4(static_cast<float>(mode_), kAoRadius, static_cast<float>(lightCount),
+                         kShadowRayLength);
     d.extent = glm::vec4(traceExtent_.width, traceExtent_.height, 1.0f / traceExtent_.width,
                          1.0f / traceExtent_.height);
     d.sceneExtent = glm::vec4(sceneExtent.width, sceneExtent.height, 1.0f / sceneExtent.width,

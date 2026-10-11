@@ -280,7 +280,7 @@ void main() {
             float s = rtShadow(rt, mapLit);
             shade = mix(s, 1.0, clamp(pow(abs(1.2 - abs(dot(terrainN, toSun))), 4.0), 0.0, 1.0));
         }
-        vec3 rgb = tex0.rgb * light * (0.7 + 0.3 * shade);
+        vec3 rgb = tex0.rgb * (light * (0.7 + 0.3 * shade) + rtPointLight(rt));
         rgb = applyFog(rgb, FragPos, depth, (vInteriorLit & 2) != 0 ? cameraFogColor.rgb : fogColor.rgb);
         outColor = vec4(rtGiDebug(rgb), alpha);
         return;
@@ -338,8 +338,10 @@ void main() {
         const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, vInteriorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
-        // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct).
-        light = clamp(vInteriorAmbient + highlightAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0);
+        // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct),
+        // and the torches' and lamps' where the ray tracing has it.
+        light = clamp(vInteriorAmbient + highlightAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0)
+              + rtPointLight(rtLightAt(FragPos));
     } else {
         // Ambient and diffuse only. The client lights an M2 batch with the
         // fixed-function light (FUN_0081fb10) and no specular term; its
@@ -370,6 +372,8 @@ void main() {
         // over all of it.
         light = clamp(rtAmbient(rt, ambient, FragPos, norm) + diff * min(direct, vec3(1.0)), 0.0, 1.0)
               * (0.7 + 0.3 * shadow);
+        // The torches' and lamps' light, where the ray tracing has it.
+        light += rtPointLight(rt);
     }
     vec3 result = combineStages(vec4(light * tint, batchFade), tex0, tex1).rgb;
 

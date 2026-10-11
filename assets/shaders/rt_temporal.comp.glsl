@@ -6,6 +6,9 @@
 // there - same distance within a few percent, similar normal. The blend
 // weight is 1 / history length, capped, so a newly revealed pixel converges
 // in a handful of frames and a settled one averages dozens.
+//
+// Three terms ride along - sun, occlusion and point light visibility - and
+// the history length is the fourth channel.
 
 #include "rt_common.glsli"
 
@@ -28,7 +31,7 @@ void main() {
     float dist = rtGbufDist(g);
     vec3 n = rtGbufNormal(g);
     if (dist <= 0.0) {
-        imageStore(uHist, px, vec4(raw.rg, 1.0, 0.0));
+        imageStore(uHist, px, vec4(raw.rgb, 1.0));
         return;
     }
 
@@ -61,13 +64,13 @@ void main() {
             }
             if (wsum > 0.05) {
                 hist /= wsum;
-                len = hist.b;
+                len = hist.a;
             }
         }
     }
 
     len = min(len + 1.0, MAX_HISTORY);
     float a = 1.0 / len;
-    vec2 lightOut = mix(hist.rg, raw.rg, a);
-    imageStore(uHist, px, vec4(lightOut, len, 0.0));
+    vec3 lightOut = mix(hist.rgb, raw.rgb, a);
+    imageStore(uHist, px, vec4(lightOut, len));
 }

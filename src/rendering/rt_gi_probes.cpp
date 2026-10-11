@@ -99,7 +99,7 @@ void RtGiProbes::initialize(VkContext* ctx, RtScene* scene) {
     config_.groundAlbedo = envFloat("WOWEE_GI_GROUND_ALBEDO", config_.groundAlbedo, 0.0f, 1.0f);
     config_.chroma = envFloat("WOWEE_GI_CHROMA", config_.chroma, 0.0f, 1.0f);
     config_.normalize = envFloat("WOWEE_GI_NORMALIZE", config_.normalize, 1.0f, 4.0f);
-    config_.debug = static_cast<int>(envFloat("WOWEE_GI_DEBUG", 0.0f, 0.0f, 4.0f));
+    config_.debug = static_cast<int>(envFloat("WOWEE_GI_DEBUG", 0.0f, 0.0f, 6.0f));
     LOG_INFO("RtGiProbes: spacing ", config_.spacing, " yd, period ", config_.period,
              ", hysteresis ", config_.hysteresis, ", strength ", config_.strength,
              ", max ratio ", config_.maxRatio, ", ground albedo ", config_.groundAlbedo,

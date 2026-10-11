@@ -47,6 +47,7 @@
 #include "rendering/sun_shafts.hpp"
 #include "rendering/screen_effects.hpp"
 #include "rendering/rt_lighting.hpp"
+#include "rendering/rt_point_lights.hpp"
 #include "rendering/rt_scene.hpp"
 #include "rendering/screen_capture.hpp"
 #include "rendering/loot_sparkles.hpp"
@@ -299,7 +300,7 @@ bool Renderer::createPerFrameResources() {
 
     // The ray traced lighting's scene and pass. They outlive the per-frame
     // sets: the renderers register geometry with the scene as they load, and
-    // bindings 3 and 4 below take the pass's sampler as immutable.
+    // bindings 3 to 5 below take the pass's sampler as immutable.
     if (!rtScene_) {
         rtScene_ = std::make_unique<RtScene>();
         if (!rtScene_->initialize(vkCtx)) {
@@ -317,7 +318,7 @@ bool Renderer::createPerFrameResources() {
 
     // --- Create descriptor set layout for set 0 (per-frame UBO + shadow sampler + fog volume
     //     + ray traced lighting) ---
-    VkDescriptorSetLayoutBinding bindings[5]{};
+    VkDescriptorSetLayoutBinding bindings[6]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -344,10 +345,11 @@ bool Renderer::createPerFrameResources() {
     bindings[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     bindings[2].pImmutableSamplers = &fogSampler;
     // Last frame's ray traced lighting (RtLighting), read by the terrain,
-    // building, doodad and character surfaces. Immutable samplers again, so
-    // the preview's sets only name the neutral view.
+    // building, doodad and character surfaces: the sun, occlusion and point
+    // light share, the probe atlas, the point lights. Immutable samplers
+    // again, so the preview's sets only name the neutral view.
     const VkSampler rtSampler = rtLighting_->sampler();
-    for (uint32_t b = 3; b <= 4; ++b) {
+    for (uint32_t b = 3; b <= 5; ++b) {
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[b].descriptorCount = 1;
@@ -357,7 +359,7 @@ bool Renderer::createPerFrameResources() {
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 5;
+    layoutInfo.bindingCount = 6;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &perFrameSetLayout) != VK_SUCCESS) {
@@ -370,7 +372,7 @@ bool Renderer::createPerFrameResources() {
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = MAX_FRAMES * 2; // normal frames + reflection frames
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = MAX_FRAMES * 2 * 4;  // shadow, fog, two RT results, per set
+    poolSizes[1].descriptorCount = MAX_FRAMES * 2 * 5;  // shadow, fog, three RT results, per set
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -434,12 +436,13 @@ bool Renderer::createPerFrameResources() {
 
         // Neutral until the ray traced lighting is on; writeRtLightingBindings
         // swaps in the other slot's results then.
-        VkDescriptorImageInfo rtImgInfo[2]{};
+        VkDescriptorImageInfo rtImgInfo[3]{};
         rtImgInfo[0].imageView = rtLighting_->lightViewForSlot(i);
         rtImgInfo[1].imageView = rtLighting_->giViewForSlot(i);
-        rtImgInfo[0].imageLayout = rtImgInfo[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        rtImgInfo[2].imageView = rtLighting_->pointViewForSlot(i);
+        for (auto& info : rtImgInfo) info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        VkWriteDescriptorSet writes[5]{};
+        VkWriteDescriptorSet writes[6]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = perFrameDescSets[i];
         writes[0].dstBinding = 0;
@@ -458,7 +461,7 @@ bool Renderer::createPerFrameResources() {
         writes[2].descriptorCount = 1;
         writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[2].pImageInfo = &fogImgInfo;
-        for (uint32_t b = 0; b < 2; ++b) {
+        for (uint32_t b = 0; b < 3; ++b) {
             writes[3 + b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[3 + b].dstSet = perFrameDescSets[i];
             writes[3 + b].dstBinding = 3 + b;
@@ -467,7 +470,7 @@ bool Renderer::createPerFrameResources() {
             writes[3 + b].pImageInfo = &rtImgInfo[b];
         }
 
-        vkUpdateDescriptorSets(device, 5, writes, 0, nullptr);
+        vkUpdateDescriptorSets(device, 6, writes, 0, nullptr);
     }
 
     // --- Create reflection per-frame UBO and descriptor set ---
@@ -528,7 +531,7 @@ bool Renderer::createPerFrameResources() {
             rtImgInfo.imageView = rtLighting_->neutralView();
             rtImgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet writes[5]{};
+            VkWriteDescriptorSet writes[6]{};
             writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[0].dstSet = reflPerFrameDescSet[i];
             writes[0].dstBinding = 0;
@@ -547,7 +550,7 @@ bool Renderer::createPerFrameResources() {
             writes[2].descriptorCount = 1;
             writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[2].pImageInfo = &fogImgInfo;
-            for (uint32_t b = 3; b <= 4; ++b) {
+            for (uint32_t b = 3; b <= 5; ++b) {
                 writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[b].dstSet = reflPerFrameDescSet[i];
                 writes[b].dstBinding = b;
@@ -556,7 +559,7 @@ bool Renderer::createPerFrameResources() {
                 writes[b].pImageInfo = &rtImgInfo;
             }
 
-            vkUpdateDescriptorSets(device, 5, writes, 0, nullptr);
+            vkUpdateDescriptorSets(device, 6, writes, 0, nullptr);
         }
     }
 
@@ -5760,12 +5763,13 @@ void Renderer::writeRtLightingBindings() {
     // RtLighting::prepare has waited for the device whenever it reports a
     // change, so neither slot's set is in use.
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
-        VkDescriptorImageInfo info[2]{};
+        VkDescriptorImageInfo info[3]{};
         info[0].imageView = rtLighting_->lightViewForSlot(i);
         info[1].imageView = rtLighting_->giViewForSlot(i);
-        info[0].imageLayout = info[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkWriteDescriptorSet writes[2]{};
-        for (uint32_t b = 0; b < 2; ++b) {
+        info[2].imageView = rtLighting_->pointViewForSlot(i);
+        for (auto& image : info) image.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkWriteDescriptorSet writes[3]{};
+        for (uint32_t b = 0; b < 3; ++b) {
             writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[b].dstSet = perFrameDescSets[i];
             writes[b].dstBinding = 3 + b;
@@ -5773,7 +5777,7 @@ void Renderer::writeRtLightingBindings() {
             writes[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[b].pImageInfo = &info[b];
         }
-        vkUpdateDescriptorSets(vkCtx->getDevice(), 2, writes, 0, nullptr);
+        vkUpdateDescriptorSets(vkCtx->getDevice(), 3, writes, 0, nullptr);
     }
 }
 
@@ -5826,6 +5830,23 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
         if (characterRenderer) characterRenderer->syncRtScene(in.cameraPos);
     }
     {
+        // The frame's point lights: what carries one near the camera, cut to
+        // what reaches into the view and to the most the pass traces.
+        WOWEE_PROFILE_SCOPE("rt: point lights", Cpu);
+        constexpr float kLightRange = 120.0f;
+        // Main thread only; kept to keep its capacity.
+        static std::vector<rt_lights::PointLight> lightScratch;
+        lightScratch.clear();
+        if (m2Renderer) m2Renderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        if (wmoRenderer) wmoRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        if (characterRenderer) characterRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        Frustum frustum;
+        frustum.extractFromMatrix(in.viewProj);
+        rt_lights::selectLights(lightScratch, in.cameraPos, kLightRange, RtLighting::kMaxPointLights,
+                                [&](const glm::vec3& p, float r) { return frustum.intersectsSphere(p, r); });
+        rtLighting_->setPointLights(lightScratch);
+    }
+    {
         WOWEE_PROFILE_SCOPE("rt: record", Cpu);
         rtLighting_->record(currentCmd, sceneDepth, sceneExtent, depthIsMsaa, in);
     }
@@ -5841,7 +5862,7 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
         LOG_INFO("RT: ", st.instances, " static and ", st.dynamicInstances, " dynamic instances, ",
                  st.meshes, " meshes, ", st.triangles, " triangles, ", st.gpuBytes / (1024 * 1024),
                  " MB; characters ", cs.characters, " (", cs.posed, " posed, ", cs.instances,
-                 " instances, ", cs.shapes, " shapes); ",
+                 " instances, ", cs.shapes, " shapes); ", rtLighting_->pointLightCount(), " point lights; ",
                  m2Renderer ? m2Renderer->rtAnimatedPieces() : 0u, " pieces of animated doodads");
     }
     vkCtx->gpuMark(currentCmd, "rt_lighting");
