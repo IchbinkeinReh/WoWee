@@ -73,8 +73,33 @@ struct ShapeshiftFormRow {
 
 /// SPELL_AURA_MOD_SHAPESHIFT, the aura a form's spell applies (0x24).
 inline constexpr uint32_t kAuraModShapeshift = 36;
+/// SpellShapeshiftForm Flags 0x1: a stance, which 0x00721ca0 does not count
+/// as a form.
+inline constexpr uint32_t kFormFlagStance = 0x1;
 /// SpellShapeshiftForm Flags 0x2: a form whose aura the player may not cancel.
 inline constexpr uint32_t kFormFlagNoCancel = 0x2;
+
+/// SpellShapeshiftForm Flags 0x8: a form the player keeps an NPC's window
+/// open in; entering one without it closes the window (0x006da130 ->
+/// 0x00518d50).
+inline constexpr uint32_t kFormFlagKeepsInteraction = 0x8;
+
+/// SoundEntries 10063 (DruidMorph_Impact_Base): leaving a druid form
+/// (0x006da130).
+inline constexpr uint32_t kSoundFormLeave = 0x274f;
+
+/// 0x00721ca0: the player is in a form - not none, not a stance. A form with
+/// no row is read as none (the client reads past its table).
+[[nodiscard]] bool inShapeshiftForm(uint8_t form, const ShapeshiftFormRow* row);
+
+/// 0x006da130: in a form (0x00721ca0) without Flags 0x8, the window the
+/// player has open with an NPC or object closes (0x00518d50).
+[[nodiscard]] bool formClosesInteraction(uint8_t form, const ShapeshiftFormRow* row);
+
+/// 0x006da130: leaving cat (1), tree (2), travel (3), aquatic (4), bear (5),
+/// dire bear (8), flight (0x1d) or moonkin (0x1f) form for none or a stance
+/// plays kSoundFormLeave at the player.
+[[nodiscard]] bool formLeaveSound(uint8_t formBefore, bool inFormAfter);
 
 /// What cancelling one of the player's auras does about its form (0x00802f80).
 enum class FormAuraCancel {

@@ -1612,6 +1612,11 @@ public:
     using CameraShakeCallback = std::function<void(uint32_t spellEffectCameraShakesId, uint32_t soundId)>;
     void setCameraShakeCallback(CameraShakeCallback cb) { cameraShakeCallback_ = std::move(cb); }
 
+    // A SoundEntries sound the client plays at the player itself, as the form
+    // field's handler does on leaving a form (0x006da130).
+    using PlayerSoundCallback = std::function<void(uint32_t soundId)>;
+    void setPlayerSoundCallback(PlayerSoundCallback cb) { playerSoundCallback_ = std::move(cb); }
+
     // Auto-follow callback: pass render-space position pointer to start, nullptr to cancel.
     using AutoFollowCallback = std::function<void(const glm::vec3* renderPos)>;
     void setAutoFollowCallback(AutoFollowCallback cb) { autoFollowCallback_ = std::move(cb); }
@@ -2461,6 +2466,10 @@ public:
     /// The player's UNIT_FIELD_BYTES_2 byte 3 changed (0x006da130): the
     /// form, its preset spells, and the events to fire, in order.
     std::vector<const char*> setPlayerShapeshiftForm(uint8_t form);
+    /// 0x00518d50 on the object the player has a window open with
+    /// (0xbd07a8): a living creature says farewell (0x00720860), then its
+    /// window closes (0x00512e60).
+    void closeNpcInteraction();
     /// Whether the bonus bar holds the pet's actions - the vehicle the
     /// player drives, or a unit it possesses (DAT_00c1e5a0 0x1, 0x005d4ad0).
     /// Slots 121..132 are then the pet bar's ten and two empty ones
@@ -4685,6 +4694,7 @@ private:
     WorldEntryCallback worldEntryCallback_;
     KnockBackCallback knockBackCallback_;
     CameraShakeCallback cameraShakeCallback_;
+    PlayerSoundCallback playerSoundCallback_;
     AutoFollowCallback autoFollowCallback_;
     UnstuckCallback unstuckCallback_;
     UnstuckCallback unstuckGyCallback_;

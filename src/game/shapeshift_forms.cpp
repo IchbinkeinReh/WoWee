@@ -63,6 +63,25 @@ bool formHasPresetSpells(const ShapeshiftFormRow& row) {
     return false;
 }
 
+bool inShapeshiftForm(uint8_t form, const ShapeshiftFormRow* row) {
+    return form != 0 && row && (row->flags & kFormFlagStance) == 0;
+}
+
+bool formClosesInteraction(uint8_t form, const ShapeshiftFormRow* row) {
+    return inShapeshiftForm(form, row) && (row->flags & kFormFlagKeepsInteraction) == 0;
+}
+
+bool formLeaveSound(uint8_t formBefore, bool inFormAfter) {
+    if (inFormAfter) return false;
+    switch (formBefore) {
+        case 0x01: case 0x02: case 0x03: case 0x04:
+        case 0x05: case 0x08: case 0x1d: case 0x1f:
+            return true;
+        default:
+            return false;
+    }
+}
+
 uint32_t bonusBarOffset(bool petActionsOnBar, const ShapeshiftFormRow* form) {
     // 0x005a83c0: DAT_00c1e5a0 set (the pet's actions, bit 1, or a form's
     // preset spells, bit 2 from 0x005abac0) is the pet's page.

@@ -2748,6 +2748,10 @@ void Application::setState(AppState newState) {
                     svs->playCameraShakes(shakesId, at);
                     svs->playSoundAt(soundId, at);
                 });
+                gameHandler->setPlayerSoundCallback([this](uint32_t soundId) {
+                    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+                    if (svs) svs->playSoundAt(soundId, renderer->getCharacterPosition());
+                });
                 gameHandler->setAutoFollowCallback([this](const glm::vec3* renderPos) {
                     if (renderer && renderer->getCameraController()) {
                         if (renderPos) {

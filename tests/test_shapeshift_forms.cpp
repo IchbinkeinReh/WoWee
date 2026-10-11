@@ -228,6 +228,45 @@ TEST_CASE("cancelling the form's aura leaves the form before the server does", "
     CHECK(formAuraCancel(1, catAuras, unknownMisc, rows) == FormAuraCancel::Refused);
 }
 
+TEST_CASE("leaving a druid form for none or a stance plays its sound", "[shapeshift]") {
+    using wowee::game::formLeaveSound;
+    using wowee::game::inShapeshiftForm;
+    // 0x00721ca0: a form is not none, not a stance (Flags 0x1), and has a row.
+    ShapeshiftFormRow cat = rowWithBar(1);
+    cat.flags = 0x2f8;
+    ShapeshiftFormRow stance = rowWithBar(1);
+    stance.flags = 0x7;
+    CHECK(inShapeshiftForm(1, &cat));
+    CHECK_FALSE(inShapeshiftForm(17, &stance));
+    CHECK_FALSE(inShapeshiftForm(0, nullptr));
+    CHECK_FALSE(inShapeshiftForm(40, nullptr));
+    // 0x006da130: the old form one of the eight, the new one none or a stance.
+    for (uint8_t form : {1, 2, 3, 4, 5, 8, 0x1d, 0x1f}) {
+        CHECK(formLeaveSound(form, false));
+        CHECK_FALSE(formLeaveSound(form, true));
+    }
+    // Swift Flight Form, a stance, Shadowform, Stealth, none: silent.
+    for (uint8_t form : {0, 0x1b, 17, 28, 30}) CHECK_FALSE(formLeaveSound(form, false));
+    CHECK(wowee::game::kSoundFormLeave == 10063);
+}
+
+TEST_CASE("a form without Flags 0x8 closes the NPC's window", "[shapeshift]") {
+    using wowee::game::formClosesInteraction;
+    // SpellShapeshiftForm.dbc 3.3.5a: cat 0x2f8, Spirit of Redemption (32)
+    // 0x4100, Shadowform 0x9, Battle Stance 0x7.
+    ShapeshiftFormRow cat, redemption, shadow, battle;
+    cat.flags = 0x2f8;
+    redemption.flags = 0x4100;
+    shadow.flags = 0x9;
+    battle.flags = 0x7;
+    CHECK_FALSE(formClosesInteraction(1, &cat));
+    CHECK(formClosesInteraction(32, &redemption));
+    // A stance is no form to 0x00721ca0, flag or not.
+    CHECK_FALSE(formClosesInteraction(28, &shadow));
+    CHECK_FALSE(formClosesInteraction(17, &battle));
+    CHECK_FALSE(formClosesInteraction(0, nullptr));
+}
+
 TEST_CASE("GetShapeshiftForm is the active form's place on the bar", "[shapeshift]") {
     // 0x0053d4b0: searched from the end, 1-based.
     CHECK(activeShapeshiftIndex({false, true, false}, 18) == 2);

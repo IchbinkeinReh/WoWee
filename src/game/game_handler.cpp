@@ -3484,8 +3484,17 @@ std::vector<const char*> GameHandler::setPlayerShapeshiftForm(uint8_t form) {
     // server has answered: a cancelled form is no longer pending (+0x9f4).
     shapeshiftFormPending_ = false;
     const uint32_t before = getBonusActionBarOffset();
+    const uint8_t formBefore = shapeshiftFormId_;
     shapeshiftFormId_ = form;
     LOG_INFO("Shapeshift form changed: ", static_cast<int>(form));
+    const ShapeshiftFormRow* formRow = shapeshiftFormRow(form);
+    // Into a form that keeps no NPC's window (no Flags 0x8): it closes.
+    if (formClosesInteraction(form, formRow)) closeNpcInteraction();
+    // Out of a druid form into none or a stance: DruidMorph_Impact_Base at
+    // the player (0x004c6a40).
+    if (formLeaveSound(formBefore, inShapeshiftForm(form, formRow)) && playerSoundCallback_) {
+        playerSoundCallback_(kSoundFormLeave);
+    }
     // 0x005abac0 -> 0x005ab800: a form's preset spells go to slots 121..132
     // (0x005a7cd0, eight of them, the last four empty), as the bar's own.
     if (!petActionsOnBonusBar_) {
@@ -3502,6 +3511,39 @@ std::vector<const char*> GameHandler::setPlayerShapeshiftForm(uint8_t form) {
         }
     }
     return formChangeEvents(before, getBonusActionBarOffset());
+}
+
+void GameHandler::closeNpcInteraction() {
+    // The client keeps one object a window is open with (0xbd07a8, set by
+    // 0x0051fce0 as each opens, the last closing the one before); wowee keeps
+    // each window's own, so the windows open are the ones closed.
+    const uint64_t npc = isGossipWindowOpen() ? getCurrentGossip().npcGuid
+                       : isVendorWindowOpen() ? getVendorItems().vendorGuid
+                       : isTrainerWindowOpen() ? getTrainerSpells().trainerGuid
+                       : isTaxiWindowOpen() && movementHandler_ ? movementHandler_->getTaxiNpcGuid()
+                       : isBankOpen() ? getBankerGuid()
+                       : isAuctionHouseOpen() ? getAuctioneerGuid()
+                       : isStableWindowOpen() ? getStableMasterGuid()
+                       : hasPetitionShowlist() ? getPetitionNpcGuid()
+                       : 0;
+    // 0x00720860 first, for a creature that is alive (health, no
+    // UNIT_DYNFLAG_DEAD); not for a player or an object.
+    auto unit = npc ? std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(npc)) : nullptr;
+    if (unit && unit->getType() == ObjectType::UNIT && unit->getHealth() > 0 &&
+        (unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) == 0 && npcFarewellCallback_) {
+        npcFarewellCallback_(npc, glm::vec3(unit->getX(), unit->getY(), unit->getZ()));
+    }
+    // 0x00512e60: the window that object opened.
+    if (isGossipWindowOpen()) closeGossip();
+    if (isVendorWindowOpen()) closeVendor();
+    if (isTrainerWindowOpen()) closeTrainer();
+    if (isTaxiWindowOpen()) closeTaxi();
+    if (isBankOpen()) closeBank();
+    if (isGuildBankOpen()) closeGuildBank();
+    if (isMailboxOpen()) closeMailbox();
+    if (isAuctionHouseOpen()) closeAuctionHouse();
+    if (isStableWindowOpen()) closeStableWindow();
+    if (hasPetitionShowlist()) closePetitionVendor();
 }
 
 void GameHandler::updatePetActionBar() {
