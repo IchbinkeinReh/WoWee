@@ -685,6 +685,33 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             }
 
             // ============================================================
+            // DEBUG GRAPHICS TAB
+            // ============================================================
+            // The lighting's parts, one at a time and by hand: what the
+            // surfaces show instead (the WOWEE_GI_DEBUG views) and each
+            // light's and shadow's strength (Renderer::LightingTune). Two
+            // schema pages, as the options panels have them.
+            if (ImGui::BeginTabItem("Debug Graphics", nullptr, tabFlagFor("Debug Graphics"))) {
+                ImGui::TextWrapped("For looking at the lighting's parts. Every default is the "
+                                   "picture as it is; the ray traced ones change nothing with "
+                                   "ray tracing off.");
+                ImGui::Spacing();
+                drawSchemaCategory("Debug Graphics", saveCallback);
+                ImGui::Spacing();
+                ImGui::SeparatorText("Shadows");
+                drawSchemaCategory("Debug Shadows", saveCallback);
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                if (ImGui::Button("Restore Debug Graphics Defaults", ImVec2(-1, 0))) {
+                    restoreSchemaDefaults("Debug Graphics");
+                    restoreSchemaDefaults("Debug Shadows");
+                    saveCallback();
+                }
+                ImGui::EndTabItem();
+            }
+
+            // ============================================================
             // ABOUT TAB
             // ============================================================
             if (ImGui::BeginTabItem("About", nullptr, tabFlagFor("About"))) {
@@ -871,6 +898,9 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
     "screenglow", "raytracedlighting",
+    // The Debug Graphics settings: each applies all of them.
+    "dbgview", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
+    "dbgtracedsunshadow", "dbgmapsunshadow", "dbgpointshadow", "dbgbakedlampshadow", "dbgocclusion", "dbgterrainshadow", "dbgblobshadow",
     // Moved off the game's own Effects panel, so this list is now what
     // applies them at startup; the cvar store used to do it.
     "groundclutterdistance", "particledensity", "weatherdetail",
@@ -1028,6 +1058,20 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "fogstrength",    .asFloat = &SettingsPanel::pendingFogStrength},
     {.key = "lightshafts",    .asInt   = &SettingsPanel::pendingVolumetricFog},
     {.key = "raytracedlighting", .asInt = &SettingsPanel::pendingRtLighting},
+    {.key = "dbgview", .asInt = &SettingsPanel::pendingDbgView},
+    {.key = "dbgambient", .asInt = &SettingsPanel::pendingDbgAmbient},
+    {.key = "dbgsun", .asInt = &SettingsPanel::pendingDbgSun},
+    {.key = "dbgbakedlight", .asInt = &SettingsPanel::pendingDbgBakedLight},
+    {.key = "dbgpointlights", .asInt = &SettingsPanel::pendingDbgPointLights},
+    {.key = "dbgbounce", .asInt = &SettingsPanel::pendingDbgBounce},
+    {.key = "dbgshadowdarkness", .asInt = &SettingsPanel::pendingDbgShadowDarkness},
+    {.key = "dbgtracedsunshadow", .asInt = &SettingsPanel::pendingDbgTracedSunShadow},
+    {.key = "dbgmapsunshadow", .asInt = &SettingsPanel::pendingDbgMapSunShadow},
+    {.key = "dbgpointshadow", .asInt = &SettingsPanel::pendingDbgPointShadow},
+    {.key = "dbgbakedlampshadow", .asInt = &SettingsPanel::pendingDbgBakedLampShadow},
+    {.key = "dbgocclusion", .asInt = &SettingsPanel::pendingDbgOcclusion},
+    {.key = "dbgterrainshadow", .asInt = &SettingsPanel::pendingDbgTerrainShadow},
+    {.key = "dbgblobshadow", .asInt = &SettingsPanel::pendingDbgBlobShadow},
     {.key = "mistdensity",    .asFloat = &SettingsPanel::pendingVolumetricDensity},
     {.key = "mousespeed",     .asFloat = &SettingsPanel::pendingMouseSensitivity},
     {.key = "minimapclock",   .asBool  = &SettingsPanel::pendingShowMinimapClock},
@@ -1223,6 +1267,30 @@ bool isVolumeKey(const std::string& key) {
 }
 
 }  // namespace
+
+/// The Debug Graphics settings to the renderer, all together: they are one
+/// struct there (Renderer::LightingTune), and percent here.
+void SettingsPanel::applyLightingTune() {
+    auto* renderer = services_.renderer;
+    if (!renderer) return;
+    auto pct = [](int v) { return static_cast<float>(v) / 100.0f; };
+    rendering::Renderer::LightingTune t;
+    t.ambient = pct(pendingDbgAmbient);
+    t.sun = pct(pendingDbgSun);
+    t.bakedLight = pct(pendingDbgBakedLight);
+    t.pointLights = pct(pendingDbgPointLights);
+    t.bounce = pct(pendingDbgBounce);
+    t.shadowStrength = pct(pendingDbgShadowDarkness);
+    t.tracedSunShadow = pct(pendingDbgTracedSunShadow);
+    t.mapSunShadow = pct(pendingDbgMapSunShadow);
+    t.pointShadow = pct(pendingDbgPointShadow);
+    t.bakedLampShadow = pct(pendingDbgBakedLampShadow);
+    t.occlusion = pct(pendingDbgOcclusion);
+    t.bakedTerrainShadow = pct(pendingDbgTerrainShadow);
+    t.blobShadow = pct(pendingDbgBlobShadow);
+    renderer->setLightingTune(t);
+    renderer->setRtDebugView(pendingDbgView);
+}
 
 void SettingsPanel::applySettingSideEffects(const std::string& key) {
     // The settings window applies each value where its slider is, so a change
@@ -1443,6 +1511,21 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setVolumetricFogQuality(pendingVolumetricFog);
     } else if (key == "raytracedlighting") {
         if (renderer) renderer->setRtLightingMode(pendingRtLighting);
+    } else if (key == "dbgview" ||
+               key == "dbgambient" ||
+               key == "dbgsun" ||
+               key == "dbgbakedlight" ||
+               key == "dbgpointlights" ||
+               key == "dbgbounce" ||
+               key == "dbgshadowdarkness" ||
+               key == "dbgtracedsunshadow" ||
+               key == "dbgmapsunshadow" ||
+               key == "dbgpointshadow" ||
+               key == "dbgbakedlampshadow" ||
+               key == "dbgocclusion" ||
+               key == "dbgterrainshadow" ||
+               key == "dbgblobshadow") {
+        applyLightingTune();
     } else if (key == "mistdensity") {
         if (renderer) renderer->setVolumetricFogDensity(pendingVolumetricDensity);
     } else if (key == "fogskyblend") {

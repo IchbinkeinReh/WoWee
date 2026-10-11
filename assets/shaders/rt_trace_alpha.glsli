@@ -17,11 +17,17 @@ layout(std430, set = 1, binding = 7) readonly buffer RtMasks { uint rtMasks[]; }
 // A group's box, min and max (RtScene::setGroupBounds); group 0 is none.
 layout(std430, set = 1, binding = 9) readonly buffer RtGroups { vec4 rtGroups[]; };
 
+// Set by the caller for one ray: pass every grouped instance - every unit and
+// what it carries - by. The sun's ray does near the camera, where the shadow
+// map draws the units truly posed and this frame (rt_trace.comp).
+bool rtSkipUnits = false;
+
 // Whether a ray from p passes the instances of `group` by: it starts inside
 // the group's box - on the character the group is, which never shadows or
 // occludes itself.
 bool rtInGroup(uint group, vec3 p) {
     if (group == 0u) return false;
+    if (rtSkipUnits) return true;
     vec3 lo = rtGroups[group * 2u].xyz;
     vec3 hi = rtGroups[group * 2u + 1u].xyz;
     return all(greaterThanEqual(p, lo)) && all(lessThanEqual(p, hi));

@@ -18,6 +18,9 @@ layout(set = 0, binding = 0) uniform RtPassData {
     vec4 sceneExtent;    // xy = scene depth size, zw = 1 / size
     vec4 misc;           // x = 1 when the acceleration structure holds anything,
                          // y = 1 when last frame's slot holds history
+    mat4 invViewProjRel; // this frame: NDC -> world less the camera position
+    vec4 unitMap;        // xyz the shadow map's centre, w the radius it draws
+                         // the units' sun shadows within (0: none)
     // The probe volume (rt_gi.glsli), read only by the probe passes.
     vec4 giVolume[2];        // the grid this frame's update writes
     vec4 giVolumeMod[2];
@@ -89,6 +92,17 @@ vec3 rtWorldFromDepth(vec2 uv, float depth) {
     return w.xyz / w.w;
 }
 
+// The same less the camera position, without passing through the world's
+// coordinates: some ten thousand yards out, where a float steps a thousandth
+// of a yard, as far as one pixel is from the next on a surface a yard from
+// the eye. Differences between neighbours - a normal, a direction - are taken
+// from this.
+vec3 rtRelFromDepth(vec2 uv, float depth) {
+    vec4 ndc = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 w = pass.invViewProjRel * ndc;
+    return w.xyz / w.w;
+}
+
 // The tracer's G-buffer texel: octahedral normal in xy, distance to the
 // camera in z (0 for sky), and in w which pixel of the 2x2 scene block it was
 // taken from (0-3, x fastest). The nearest surface in the block is kept, so
@@ -120,7 +134,7 @@ vec3 rtGbufWorld(vec4 g, ivec2 px) {
     int sub = int(g.w + 0.5);
     ivec2 sp = rtBlockBase(px) + ivec2(sub & 1, sub >> 1);
     vec2 uv = (vec2(sp) + 0.5) * pass.sceneExtent.zw;
-    vec3 dir = normalize(rtWorldFromDepth(uv, 0.5) - pass.cameraPos.xyz);
+    vec3 dir = normalize(rtRelFromDepth(uv, 0.5));
     return pass.cameraPos.xyz + dir * g.z;
 }
 

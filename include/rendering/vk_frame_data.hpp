@@ -92,11 +92,26 @@ struct GPUPerFrameData {
     glm::vec4 giSky{0.0f};
     glm::vec4 giGround{0.0f};
     glm::vec4 giParams{0.0f};
+    // The lighting's adjustable strengths (the Debug Graphics settings),
+    // read by the same four surface shaders through rt_lighting.glsli. w is 1
+    // when they are filled in; a block left zero (the character preview)
+    // reads as the defaults.
+    // rtTune: x how much of the light a traced shadow takes (0.6), y the
+    //   point lights' strength (1), z how much of a baked colour a lamp's
+    //   traced shadow takes where that lamp alone lights it (0.6), w 1.
+    // lightTune: x the baked light's strength - an interior's vertex
+    //   colours, a doodad's MODD colour, a unit's floor colour (1); y how
+    //   much of the traced sun shadows, z of the point lights' shadows and
+    //   w of the traced occlusion shows (1 each).
+    // rtTune2: x how much of the probes' bounced light shows (1).
+    glm::vec4 rtTune{0.0f};
+    glm::vec4 lightTune{0.0f};
+    glm::vec4 rtTune2{0.0f};
 };
 // std140 adds no padding between mat4 and vec4 members, so this is the block's
 // size on the GPU as well. A change here is a change to every PerFrame block
 // that declares the members it touches.
-static_assert(sizeof(GPUPerFrameData) == 1040, "GPUPerFrameData no longer matches the shaders' PerFrame");
+static_assert(sizeof(GPUPerFrameData) == 1088, "GPUPerFrameData no longer matches the shaders' PerFrame");
 
 // Push constants for the model matrix (most common case)
 struct GPUPushConstants {

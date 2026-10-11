@@ -165,9 +165,19 @@ bool rtTraceScene(vec3 o, vec3 d, inout float tMax, out uint hitTri, out uint hi
     return found;
 }
 
-bool rtOccluded(vec3 origin, vec3 dir, float tMax, inout uint rng) {
+// Whether anything stops the ray, and whether what did was a unit (a
+// grouped instance) - which moves, so its shadow must not linger in the
+// history (rt_temporal).
+bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool unit) {
     uint tri, inst;
-    return rtTraceScene(origin, dir, tMax, tri, inst, true, rng);
+    bool hit = rtTraceScene(origin, dir, tMax, tri, inst, true, rng);
+    unit = hit && rtInstances[inst].group != 0u;
+    return hit;
+}
+
+bool rtOccluded(vec3 origin, vec3 dir, float tMax, inout uint rng) {
+    bool unit;
+    return rtOccludedBy(origin, dir, tMax, rng, unit);
 }
 
 // The nearest hit, its normal turned to face the ray, and whether it is

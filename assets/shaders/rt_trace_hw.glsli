@@ -48,7 +48,11 @@ bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, inout uint 
             rayQueryConfirmIntersectionEXT(q);                                         \
     }
 
-bool rtOccluded(vec3 origin, vec3 dir, float tMax, inout uint rng) {
+// Whether anything stops the ray, and whether what did was a unit (a
+// grouped instance) - which moves, so its shadow must not linger in the
+// history (rt_temporal).
+bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool unit) {
+    unit = false;
     rayQueryEXT q;
     rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
                           origin, 0.0, dir, tMax);
@@ -58,7 +62,14 @@ bool rtOccluded(vec3 origin, vec3 dir, float tMax, inout uint rng) {
     rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
                           origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(d, rng);
-    return rayQueryGetIntersectionTypeEXT(d, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+    if (rayQueryGetIntersectionTypeEXT(d, true) == gl_RayQueryCommittedIntersectionNoneEXT) return false;
+    unit = rtInstances[rayQueryGetIntersectionInstanceCustomIndexEXT(d, true)].group != 0u;
+    return true;
+}
+
+bool rtOccluded(vec3 origin, vec3 dir, float tMax, inout uint rng) {
+    bool unit;
+    return rtOccludedBy(origin, dir, tMax, rng, unit);
 }
 
 // The nearest hit, its normal turned to face the ray, and whether it is

@@ -71,7 +71,7 @@ public:
         float groundAlbedo = 0.3f;   // WOWEE_GI_GROUND_ALBEDO
         float chroma = 0.15f;        // WOWEE_GI_CHROMA: how much of the bounce's tint shows
         float normalize = 1.6f;      // WOWEE_GI_NORMALIZE: the largest lift (rt_gi_exposure), 1 off
-        int debug = 0;               // WOWEE_GI_DEBUG: 1-4 the probes, 5 traced sun, 6 point lights
+        int debug = 0;               // WOWEE_GI_DEBUG: 1-4 the probes, 5 traced sun, 6 point lights, 7 traced occlusion
     };
 
     RtGiProbes() = default;

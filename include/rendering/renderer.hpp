@@ -643,6 +643,33 @@ public:
     /// Ray traced lighting: 0 off, 1 sun shadows, 2 + ambient occlusion,
     /// 3 + multi-bounce diffuse from a probe volume. See RtLighting.
     void setRtLightingMode(int mode);
+    /// The lighting's adjustable strengths (Settings > Debug Graphics). The
+    /// defaults are the look as it is. The ray traced ones act only where
+    /// the ray tracing has a result; the rest act with it off too.
+    struct LightingTune {
+        // Light.
+        float ambient = 1.0f;           ///< the zone's ambient light, the base every surface starts from
+        float sun = 1.0f;               ///< the sun's (or moon's) direct light
+        float bakedLight = 1.0f;        ///< interiors' vertex colours, doodads' and units' floor colours
+        float pointLights = 1.0f;       ///< ray traced: the torches', lamps' and fires' light
+        float bounce = 1.0f;            ///< ray traced: the probes' bounced light (Full mode)
+        // Shadows.
+        float shadowStrength = 0.6f;    ///< ray traced: how much of the light a shadow takes
+        float tracedSunShadow = 1.0f;   ///< ray traced: how much of the traced sun shadows shows
+        float mapSunShadow = 1.0f;      ///< the shadow map's sun shadows (with or without ray tracing)
+        float pointShadow = 1.0f;       ///< ray traced: the point lights' shadows
+        float bakedLampShadow = 0.6f;   ///< ray traced: how much of a baked colour a lamp's shadow takes
+        float occlusion = 1.0f;         ///< ray traced: ambient occlusion
+        float bakedTerrainShadow = 1.0f;  ///< the terrain's baked shadow map, times its zone opacity
+        float blobShadow = 1.0f;        ///< the round shadows under units (shadows off, ray tracing off)
+    };
+    void setLightingTune(const LightingTune& tune) { lightingTune_ = tune; }
+    const LightingTune& lightingTune() const { return lightingTune_; }
+    /// What the surfaces show instead of themselves, for looking at the ray
+    /// traced lighting's parts (rt_lighting.glsli): 0 nothing, 1-4 the probe
+    /// volume's, 5 the traced sun, 6 the point lights, 7 the traced
+    /// occlusion. WOWEE_GI_DEBUG, when set, wins.
+    void setRtDebugView(int view) { rtDebugView_ = view; }
     /// A multiplier on how thick that air is; 1 is the default mist.
     void setVolumetricFogDensity(float density) { volumetricFogDensity_ = glm::clamp(density, 0.0f, 3.0f); }
     /// Rays streaming from the sun across the finished picture. See SunShafts.
@@ -906,6 +933,8 @@ private:
     // after every renderer that registers geometry with the scene.
     std::unique_ptr<RtScene> rtScene_;
     std::unique_ptr<RtLighting> rtLighting_;
+    LightingTune lightingTune_{};
+    int rtDebugView_ = 0;
     void writeRtLightingBindings();
     VkExtent2D sceneRenderExtent() const;
     void recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool depthIsMsaa);

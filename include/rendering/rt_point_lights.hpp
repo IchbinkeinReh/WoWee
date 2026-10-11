@@ -193,6 +193,43 @@ inline PointLight fireLight(const glm::vec3& boxMin, const glm::vec3& boxMax, co
     return out;
 }
 
+/// The light of a lamp that carries none of its own: a street lamp, a
+/// hanging lantern, a sconce (the classifier's isLanternLike). None of the
+/// human lamps and lanterns has an M2 light (their files list none); the
+/// original draws only their glowing glass. The light sits at `local`, the
+/// middle of that glass in the model's space (lampGlowCentre), warm, reaching
+/// some nine yards; `level` turns it on - the window level, full at night
+/// and out by day (wmo_sidn::windowLevel), as the lamps of a town are lit.
+inline constexpr float kLampReach = 6.0f;
+inline PointLight lampLight(const glm::vec3& local, const glm::mat4& modelMatrix, float level) {
+    PointLight out;
+    out.position = glm::vec3(modelMatrix * glm::vec4(local, 1.0f));
+    const float scale = glm::length(glm::vec3(modelMatrix[0]));
+    out.color = glm::vec3(1.0f, 0.78f, 0.48f) * std::clamp(level, 0.0f, 1.0f);
+    out.attenuationEnd = std::clamp(kLampReach * scale, 3.0f, 12.0f) * kWorldReachScale;
+    out.attenuationStart = 0.2f * out.attenuationEnd;
+    return out;
+}
+
+/// Where a lamp's light comes from in its model's space: the middle of what
+/// glows - its unlit or additive batches, or its glow cards - weighted by
+/// their vertices; the top of its box, as a fire's, when none does.
+/// `glowing(i)` says whether index i of `indices` belongs to such a batch.
+template <class Glowing>
+glm::vec3 lampGlowCentre(const std::vector<glm::vec3>& positions, const std::vector<uint16_t>& indices,
+                         Glowing&& glowing, const glm::vec3& boxMin, const glm::vec3& boxMax) {
+    glm::dvec3 sum(0.0);
+    double count = 0.0;
+    for (size_t i = 0; i < indices.size(); ++i) {
+        if (indices[i] >= positions.size() || !glowing(i)) continue;
+        sum += glm::dvec3(positions[indices[i]]);
+        count += 1.0;
+    }
+    if (count > 0.0) return glm::vec3(sum / count);
+    const glm::vec3 size = boxMax - boxMin;
+    return {0.5f * (boxMin.x + boxMax.x), 0.5f * (boxMin.y + boxMax.y), boxMax.z - 0.2f * size.z};
+}
+
 /// A WMO's omni light (MOLT type 0) placed by its instance. Spot,
 /// directional and ambient lights are only the baked lighting's.
 inline std::optional<PointLight> placeWmoLight(const glm::vec3& localPosition, const glm::vec3& color,

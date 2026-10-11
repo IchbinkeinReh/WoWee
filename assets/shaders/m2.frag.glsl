@@ -34,6 +34,9 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 giSky;
     vec4 giGround;
     vec4 giParams;
+    vec4 rtTune;
+    vec4 lightTune;
+    vec4 rtTune2;
 };
 
 #include "rt_lighting.glsli"
@@ -349,7 +352,7 @@ void main() {
         // only shadow it (rtPointLightOwn, rtBakedShade).
         RtLight rt = rtLightAt(FragPos);
         light = clamp(vInteriorAmbient + highlightAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0)
-                  * rtBakedShade(rt)
+                  * (rtBakedLight() * rtBakedShade(rt))
               + rtPointLightOwn(rt);
     } else {
         // Ambient and diffuse only. The client lights an M2 batch with the

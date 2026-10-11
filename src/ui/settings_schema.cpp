@@ -267,6 +267,56 @@ constexpr SettingDesc kSchema[] = {
      "Characters still cast shadows from the shadow map.",
      "Off|Sun shadows|Shadows and occlusion|Shadows, occlusion and bounce light", 0},
 
+    // ------------------------------------------------------- Debug Graphics
+    // The lighting's parts, to look at one at a time and to set by hand
+    // (Renderer::LightingTune). Every default is the look as it is, with the
+    // ray tracing on or off. Two pages, as one does not fit in two columns.
+    {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 7, 1, "Debug Graphics", "View",
+     "Replace the picture with one part of the ray traced lighting.\n"
+     "The traced views work in every ray tracing mode; the probe views\n"
+     "need Shadows, occlusion and bounce light. Nothing with ray tracing\n"
+     "off. WOWEE_GI_DEBUG, when set, wins.",
+     "Off|Probe light ratio (grey = open field)|Probe irradiance|Ambient with the probes|"
+     "Probe cascades|Traced sun visibility|Point lights' light|Traced occlusion", 0},
+    {"dbgambient", "Ambient light (%)", SettingKind::Int, 0, 300, 5, "Debug Graphics", "Light",
+     "The zone's ambient light, the base every surface starts from\n"
+     "before the sun and the lamps. 100 is the zone's own.", "", 100},
+    {"dbgsun", "Sun light (%)", SettingKind::Int, 0, 300, 5, "Debug Graphics", "",
+     "The sun's or the moon's direct light. 100 is the zone's own.", "", 100},
+    {"dbgbakedlight", "Baked light (%)", SettingKind::Int, 0, 300, 5, "Debug Graphics", "",
+     "The light painted into the world: a building interior's vertex\n"
+     "colours, its doodads' colours and the floor colour units inside\n"
+     "take. 100 is as painted.", "", 100},
+    {"dbgpointlights", "Torches and lamps, ray traced (%)", SettingKind::Int, 0, 300, 5, "Debug Graphics", "",
+     "The light the torches, fires, lamps and lanterns add under the\n"
+     "ray traced lighting. 100 is their own.", "", 100},
+    {"dbgbounce", "Bounced light, ray traced (%)", SettingKind::Int, 0, 200, 5, "Debug Graphics", "",
+     "How far the probes' bounced light darkens shaded places and\n"
+     "lifts lit ones (Shadows, occlusion and bounce light). 0 leaves\n"
+     "the flat ambient.", "", 100},
+
+    {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
+     "How much of the light a shadow takes where the ray tracing has a\n"
+     "result. Without it the client's own 30% applies.", "", 60},
+    {"dbgtracedsunshadow", "Sun shadows, traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
+     "How much of the traced sun shadows shows. Units near you cast\n"
+     "theirs through the shadow map instead.", "", 100},
+    {"dbgpointshadow", "Torch and lamp shadows (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
+     "How much of the shadows the torches and lamps cast shows.", "", 100},
+    {"dbgbakedlampshadow", "Lamp shadows on painted light (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
+     "How much of an interior's painted light a lamp's shadow takes\n"
+     "where that lamp alone lights it.", "", 60},
+    {"dbgocclusion", "Ambient occlusion (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
+     "How much of the traced darkening in corners and crevices shows.", "", 100},
+    {"dbgmapsunshadow", "Sun shadows, shadow map (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Always",
+     "How much of the shadow map's sun shadows shows, with the ray\n"
+     "tracing on or off. They hold the units' shadows and their own.", "", 100},
+    {"dbgterrainshadow", "Terrain painted shadows (%)", SettingKind::Int, 0, 200, 5, "Debug Shadows", "",
+     "The shadows painted into the ground under trees and buildings,\n"
+     "against the zone's own darkness for them.", "", 100},
+    {"dbgblobshadow", "Round unit shadows (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
+     "The round shadows under units with shadows and ray tracing off.", "", 100},
+
     // --------------------------------------------------------------- Upscaling
     {"upscaling", "Upscaling", SettingKind::Enum, 0, 2, 1, "Upscaling", "Mode",
      "Draw the world smaller, then scale it up to fill your screen,\n"

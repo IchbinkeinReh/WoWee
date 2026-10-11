@@ -34,6 +34,9 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 giSky;
     vec4 giGround;
     vec4 giParams;
+    vec4 rtTune;
+    vec4 lightTune;
+    vec4 rtTune2;
 };
 
 #include "rt_lighting.glsli"
@@ -243,7 +246,7 @@ vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt) {
 // the other lights, and the building's lights' shadows over its colour.
 vec3 withPointLights(vec3 c, int mode, RtLight rt) {
     bool baked = hasVertexColors != 0 && (mode == 0 || mode == 3 || unifiedPath != 0);
-    if (baked) return c * rtBakedShade(rt) + 0.5 * rtPointLightOwn(rt);
+    if (baked) return c * (rtBakedLight() * rtBakedShade(rt)) + 0.5 * rtPointLightOwn(rt);
     return c + 0.5 * rtPointLight(rt);
 }
 

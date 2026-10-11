@@ -34,6 +34,9 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 giSky;
     vec4 giGround;
     vec4 giParams;
+    vec4 rtTune;
+    vec4 lightTune;
+    vec4 rtTune2;
 };
 
 #include "rt_lighting.glsli"
@@ -503,7 +506,7 @@ void main() {
         // The ambient as it eases in from an interior's (w = 1), or the
         // zone's as it is (0x007a1e90). The direct light by its scale:
         // halved in the terrain's baked shadow (0x007c1730 multiplies by +0x8c).
-        vec3 ambient = pc.interiorAmbient.w > 0.5 ? pc.interiorAmbient.rgb : ambientColor.rgb;
+        vec3 ambient = pc.interiorAmbient.w > 0.5 ? pc.interiorAmbient.rgb * rtBakedLight() : ambientColor.rgb;
         // An interior's ambient is its own baked light; the probes there
         // would only take the open sky back out of it a second time.
         vec3 ambientLit = pc.interiorAmbient.w > 0.5 ? rtAmbient(rt, ambient)

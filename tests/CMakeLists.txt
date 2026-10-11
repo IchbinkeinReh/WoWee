@@ -1219,6 +1219,12 @@ wowee_add_test(test_rt_bvh
 wowee_add_test(test_rt_gi_volume
     SOURCES test_rt_gi_volume.cpp)
 
+# ── test_rt_reconstruct ──────────────────────────────────────
+# Header-only: positions unprojected relative to the camera, so a close
+# surface's normal survives the world's large coordinates.
+wowee_add_test(test_rt_reconstruct
+    SOURCES test_rt_reconstruct.cpp)
+
 # ── test_rt_point_lights ─────────────────────────────────────
 # An M2's lights read from a synthetic file and placed by their bone, a
 # building's, the falloff the trace shader shares, and which lights a crowded

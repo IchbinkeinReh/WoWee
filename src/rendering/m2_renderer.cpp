@@ -2173,6 +2173,43 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     // frame's bones while the instance is near.
     const bool animated = gpuModel.hasAnimation && !gpuModel.disableAnimation && !gpuModel.isTransportDoodad;
 
+    // A lamp with no light of its own gets one at its glowing glass
+    // (rt_lights::lampLight) - not a broken one, nor one put out.
+    if (gpuModel.lights.empty() && gpuModel.isLanternLike && !gpuModel.isBrazierOrFire && !gpuModel.isTorch) {
+        std::string lower = gpuModel.name;
+        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        // Not the classifier's bare "light", which also takes twilight and
+        // moonlight; the fixtures by name.
+        const bool fixture = lower.find("lamp") != std::string::npos ||
+                             lower.find("lantern") != std::string::npos ||
+                             lower.find("sconce") != std::string::npos ||
+                             lower.find("candle") != std::string::npos ||
+                             lower.find("chandelier") != std::string::npos;
+        const bool dark = !fixture || lower.find("broken") != std::string::npos ||
+                          (lower.size() >= 3 && lower.compare(lower.size() - 3, 3, "off") == 0) ||
+                          lower.find("off.m2") != std::string::npos;
+        if (!dark) {
+            std::vector<uint8_t> glows(model.indices.size(), 0);
+            bool any = false;
+            for (const auto& batch : gpuModel.batches) {
+                const bool glow = batch.glowCardLike || (batch.materialFlags & 0x01u) != 0 ||
+                                  batch.blendMode == 3 || batch.blendMode == 4;
+                if (!glow || batch.batchOpacity < 0.01f) continue;
+                const size_t end = std::min<size_t>(size_t(batch.indexStart) + batch.indexCount, glows.size());
+                for (size_t i = batch.indexStart; i < end; ++i) glows[i] = 1;
+                any = true;
+            }
+            std::vector<glm::vec3> positions;
+            positions.reserve(model.vertices.size());
+            for (const auto& v : model.vertices) positions.push_back(v.position);
+            const glm::vec3 bmin = gpuModel.hasVertexBox ? gpuModel.vertexBoxMin : gpuModel.boundMin;
+            const glm::vec3 bmax = gpuModel.hasVertexBox ? gpuModel.vertexBoxMax : gpuModel.boundMax;
+            gpuModel.lampLocal = rt_lights::lampGlowCentre(
+                positions, model.indices, [&](size_t i) { return any && glows[i] != 0; }, bmin, bmax);
+            gpuModel.isLamp = true;
+        }
+    }
+
     RtScene::MeshSource src;
     src.positions.reserve(model.vertices.size());
     src.normals.reserve(model.vertices.size());
@@ -2357,7 +2394,8 @@ void M2Renderer::syncRtScene() {
         } else if (auto it = models.find(inst.modelId); it != models.end()) {
             model = &it->second;
         }
-        if (scanning && model && (!model->lights.empty() || model->isBrazierOrFire || model->isTorch)) {
+        if (scanning && model &&
+            (!model->lights.empty() || model->isBrazierOrFire || model->isTorch || model->isLamp)) {
             rtLitNext_.push_back(inst.id);
         }
         const uint32_t mesh = model ? model->rtMesh : RtScene::kInvalid;
@@ -2488,6 +2526,17 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
         const glm::vec3 d = inst.position - eye;
         if (glm::dot(d, d) > reach * reach) continue;
         const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
+        if (model->lights.empty() && model->isLamp) {
+            // A lamp with no light of its own, lit at night (rt_lights::lampLight).
+            if (rtLampLevel_ <= 0.0f) continue;
+            rt_lights::PointLight l = rt_lights::lampLight(model->lampLocal, inst.modelMatrix, rtLampLevel_);
+            l.color *= fade;
+            // A lamp of a WMO interior is in the interior's baked colours
+            // already: there it only casts its shadows (PointLight::baked).
+            l.baked = inst.interiorLit;
+            out.push_back(l);
+            continue;
+        }
         if (model->lights.empty()) {
             // A fire with no light of its own (rt_lights::fireLight).
             if (!model->isBrazierOrFire && !model->isTorch) continue;

@@ -297,3 +297,36 @@ TEST_CASE("a fire without a light of its own is lit from the top of its box", "[
         CHECK(f.color.r <= 1.0f);
     }
 }
+
+TEST_CASE("a lamp without a light of its own is lit at its glass, at night", "[rt][lights]") {
+    // A street lamp: a post up the middle, the lantern out on an arm. Only
+    // the lantern's glass glows.
+    const std::vector<glm::vec3> positions = {
+        {0.0f, 0.0f, 0.0f}, {0.2f, 0.0f, 0.0f}, {0.0f, 0.0f, 4.0f},     // the post
+        {1.4f, 0.0f, 3.0f}, {1.6f, 0.0f, 3.0f}, {1.5f, 0.0f, 3.6f}};    // the glass
+    const std::vector<uint16_t> indices = {0, 1, 2, 3, 4, 5};
+    const glm::vec3 glass = lampGlowCentre(
+        positions, indices, [](size_t i) { return i >= 3; }, glm::vec3(0.0f), glm::vec3(1.6f, 0.2f, 4.0f));
+    CHECK(glass.x == Catch::Approx(1.5f));
+    CHECK(glass.z == Catch::Approx(3.2f));
+    // Nothing glows: the top of the box, as a fire's.
+    const glm::vec3 top = lampGlowCentre(
+        positions, indices, [](size_t) { return false; }, glm::vec3(0.0f), glm::vec3(1.6f, 0.2f, 4.0f));
+    CHECK(top.x == Catch::Approx(0.8f));
+    CHECK(top.z == Catch::Approx(3.2f));
+
+    const glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 20.0f, 30.0f));
+    const PointLight night = lampLight(glass, model, 1.0f);
+    CHECK(night.position.x == Catch::Approx(11.5f));
+    CHECK(night.position.z == Catch::Approx(33.2f));
+    CHECK(night.attenuationEnd == Catch::Approx(kLampReach * kWorldReachScale));
+    CHECK(night.attenuationStart < night.attenuationEnd);
+    CHECK(night.color.r > night.color.b);
+    CHECK_FALSE(night.baked);
+    // Out by day, part-way at dusk.
+    CHECK(lampLight(glass, model, 0.0f).color.r == 0.0f);
+    CHECK(lampLight(glass, model, 0.5f).color.r == Catch::Approx(0.5f));
+    // A lantern scaled down still reaches the ground.
+    const PointLight small = lampLight(glass, glm::scale(model, glm::vec3(0.2f)), 1.0f);
+    CHECK(small.attenuationEnd == Catch::Approx(3.0f * kWorldReachScale));
+}

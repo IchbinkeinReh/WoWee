@@ -81,11 +81,24 @@ void main() {
     uint rng = rtSeed(uvec2(px), uint(pass.cameraPos.w));
     uint mode = uint(pass.params.x + 0.5);
 
+    // Whether a unit stopped one of this pixel's rays: a unit moves, and
+    // its shadow must not stay behind in the history (rt_temporal).
+    bool unitHit = false;
+
     float sun = 0.0;
     vec3 L = normalize(pass.sunDir.xyz);
     if (pass.sunColor.w > 0.5 && dot(n, L) > 0.0) {
         vec3 sd = rtConeSample(L, pass.sunDir.w, rng);
-        sun = rtOccluded(origin, sd, pass.params.w, rng) ? 0.0 : 1.0;
+        // Within the shadow map's reach the units' sun shadows are the map's:
+        // drawn this frame in the pose on screen. Traced, they came a frame
+        // late and settled over several more, and a running body trailed a
+        // ghost of its staff and legs over the ground and itself.
+        vec3 fromMap = p - pass.unitMap.xyz;
+        rtSkipUnits = dot(fromMap, fromMap) < pass.unitMap.w * pass.unitMap.w;
+        bool byUnit;
+        sun = rtOccludedBy(origin, sd, pass.params.w, rng, byUnit) ? 0.0 : 1.0;
+        rtSkipUnits = false;
+        unitHit = unitHit || byUnit;
     }
 
     float ao = 1.0;
@@ -129,10 +142,12 @@ void main() {
         float d = length(toLight);
         float reach = d - min(RT_LIGHT_STANDOFF, 0.5 * d);
         if (d > 1e-3 && reach > 0.0) {
-            pointVis = rtOccluded(origin, toLight / d, reach, rng) ? 0.0 : 1.0;
+            bool byUnit;
+            pointVis = rtOccludedBy(origin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
+            unitHit = unitHit || byUnit;
         }
     }
 
-    imageStore(uRaw, px, vec4(sun, ao, pointVis, 0.0));
+    imageStore(uRaw, px, vec4(sun, ao, pointVis, unitHit ? 1.0 : 0.0));
     imageStore(uPointOut, px, vec4(pointSum, bakedSum));
 }

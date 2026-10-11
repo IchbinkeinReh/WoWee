@@ -32,6 +32,11 @@
 //     vec4 giSky;        // w = strength
 //     vec4 giGround;     // w = largest ratio
 //     vec4 giParams;     // x = on, y = debug view, z = chroma
+//     vec4 rtTune;       // x shadow darkness, y point lights, z baked-lamp
+//                        // shadows; w 1 when these three blocks are set
+//     vec4 lightTune;    // x baked light, y traced sun shadows, z point
+//                        // lights' shadows, w traced occlusion
+//     vec4 rtTune2;      // x the probes' bounced light
 
 #include "rt_gi.glsli"
 
@@ -51,16 +56,32 @@ struct RtLight {
 // How much of a baked colour a lamp's shadow takes, where the lamp alone
 // lights it fully. Not all of it: the bake holds the room's ambient and its
 // other lamps too, and it is a vertex colour - an average over a polygon
-// that may reach well past the shadow.
-const float RT_BAKED_SHADOW = 0.45;
+// that may reach well past the shadow. The Debug Graphics settings can move
+// it (rtTune.z).
+const float RT_BAKED_SHADOW = 0.6;
+float rtBakedShadowStrength() { return rtTune.w > 0.5 ? rtTune.z : RT_BAKED_SHADOW; }
+float rtPointStrength() { return rtTune.w > 0.5 ? rtTune.y : 1.0; }
+
+// The baked light's strength - an interior's vertex colours, a doodad's MODD
+// colour, a unit's floor colour: 1 as the client has it, with or without
+// the ray tracing (the Debug Graphics settings, lightTune.x).
+float rtBakedLight() { return rtTune.w > 0.5 ? lightTune.x : 1.0; }
+
+// How much of each traced term shows, 1 as traced (the Debug Graphics
+// settings): the sun's shadows, the point lights' shadows, the occlusion
+// and the probes' bounced light.
+float rtSunShadowStrength() { return rtTune.w > 0.5 ? lightTune.y : 1.0; }
+float rtPointShadowStrength() { return rtTune.w > 0.5 ? lightTune.z : 1.0; }
+float rtAoStrength() { return rtTune.w > 0.5 ? lightTune.w : 1.0; }
+float rtBounceStrength() { return rtTune.w > 0.5 ? rtTune2.x : 1.0; }
 
 // What WOWEE_GI_DEBUG shows instead of the surface, when it shows anything.
 vec3 rtGiDebugColour = vec3(0.0);
 bool rtGiDebugSet = false;
 
-// WOWEE_GI_DEBUG 5 and 6, in Full mode: the traced sun's visibility (red
+// WOWEE_GI_DEBUG 5, 6 and 7, in Full mode: the traced sun's visibility (red
 // where there is no result, tinted orange where it was borrowed from beside
-// it), and the point lights' light as it is added.
+// it), the point lights' light as it is added, and the traced occlusion.
 RtLight rtLightDebug(RtLight r) {
     int debugView = int(giParams.y + 0.5);
     if (debugView == 5) {
@@ -69,6 +90,9 @@ RtLight rtLightDebug(RtLight r) {
     } else if (debugView == 6) {
         rtGiDebugSet = true;
         rtGiDebugColour = r.point;
+    } else if (debugView == 7) {
+        rtGiDebugSet = true;
+        rtGiDebugColour = r.weight > 0.0 ? vec3(r.ao) : vec3(1.0, 0.0, 0.0);
     }
     return r;
 }
@@ -79,7 +103,7 @@ RtLight rtLightDebug(RtLight r) {
 void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec4 point, inout float bakedDark) {
     vec4 p = texelFetch(uRtPointLight, q, 0);
     float vis = l.b;
-    point += p * (vis * w);
+    point += p * (mix(1.0, vis, rtPointShadowStrength()) * w);
     bakedDark += min(p.a, 1.0) * (1.0 - vis) * w;
     sunAo += l.rg * w;
 }
@@ -202,11 +226,11 @@ RtLight rtLightAt(vec3 worldPos) {
     r.weight = weight;
     r.sun = sunAo.x / wsum;
     r.ao = sunAo.y / wsum;
-    r.point = point.rgb / wsum * weight;
+    r.point = point.rgb / wsum * (weight * rtPointStrength());
     // The other lights' part: the whole less the baked lights' share of it.
     float total = max(point.r, max(point.g, point.b));
     r.pointOwn = r.point * (total > 1e-4 ? clamp(1.0 - point.a / total, 0.0, 1.0) : 1.0);
-    r.bakedShade = 1.0 - RT_BAKED_SHADOW * weight * bakedDark / wsum;
+    r.bakedShade = 1.0 - rtBakedShadowStrength() * weight * bakedDark / wsum;
     r = rtLightDebug(r);
     if (borrowed && rtGiDebugSet && int(giParams.y + 0.5) == 5) {
         rtGiDebugColour = mix(vec3(1.0, 0.5, 0.0), rtGiDebugColour, 0.5);
@@ -220,7 +244,7 @@ RtLight rtLightAt(vec3 worldPos) {
 // the units it carries in a standing pose (character_renderer_rt.cpp) cast
 // their true pose into the map, and the two together keep that one.
 float rtShadow(RtLight r, float shadowMap) {
-    return min(shadowMap, mix(1.0, r.sun, r.weight));
+    return min(shadowMap, mix(1.0, r.sun, r.weight * rtSunShadowStrength()));
 }
 
 // The point lights' light on this surface, to add to the light it is lit
@@ -248,18 +272,19 @@ float rtBakedShade(RtLight r) {
 // through, as the client's pixel programs have it, made for its coarse soft
 // map - a shadow that only hints. Where the shadow is traced it is sharp and
 // true to its caster, and a unit standing in the sun should be seen to cast
-// one: a little over half the light in the shade, still above the flat
-// ambient alone.
-const float RT_SHADOW_FLOOR = 0.55;
+// one: 0.4 + 0.6 x the light, still above the flat ambient alone. The Debug
+// Graphics settings can move the 0.6 (rtTune.x).
+const float RT_SHADOW_STRENGTH = 0.6;
 float rtShadowScale(RtLight r, float shadow) {
-    return mix(0.7 + 0.3 * shadow, RT_SHADOW_FLOOR + (1.0 - RT_SHADOW_FLOOR) * shadow, r.weight);
+    float k = rtTune.w > 0.5 ? rtTune.x : RT_SHADOW_STRENGTH;
+    return mix(0.7 + 0.3 * shadow, (1.0 - k) + k * shadow, r.weight);
 }
 
 // The flat ambient darkened by the traced occlusion: for what the probes must
 // not light (an interior's own ambient), and the rest of it below Full.
 vec3 rtAmbient(RtLight r, vec3 flatAmbient) {
     if (rtParams.x < 1.5) return flatAmbient;
-    return mix(flatAmbient, flatAmbient * r.ao, r.weight);
+    return mix(flatAmbient, flatAmbient * r.ao, r.weight * rtAoStrength());
 }
 
 // How much more or less light than an open field the probes say a surface at
@@ -279,6 +304,7 @@ vec3 rtGiRatio(vec3 worldPos, vec3 n) {
     float lift = texelFetch(uRtGiProbes, GI_EXPOSURE_TEXEL, 0).r;
     vec3 ratio = giAmbientRatio(e, giSky.rgb, giGround.rgb, n, giSky.w, giGround.w, giParams.z,
                                 lift > 0.0 ? lift : 1.0);
+    ratio = mix(vec3(1.0), ratio, rtBounceStrength());
 
     int debugView = int(giParams.y + 0.5);
     if (debugView != 0) {

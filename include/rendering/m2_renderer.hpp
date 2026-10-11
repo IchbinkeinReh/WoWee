@@ -130,6 +130,10 @@ struct M2ModelGPU {
     bool isWaterfall = false;       // Waterfall model (ambient sound + splash particles)
     bool isBrazierOrFire = false;   // Brazier / campfire / bonfire model
     bool isTorch = false;           // Wall-mounted or standing torch
+    // A lamp or lantern with no light of its own, and where its glass glows in
+    // its own space (rt_lights::lampLight). Set when its ray traced mesh is.
+    bool isLamp = false;
+    glm::vec3 lampLocal{0.0f};
     AmbientEmitterType ambientEmitterType = AmbientEmitterType::None;
 
     // Collision mesh with spatial grid (from M2 bounding geometry)
@@ -539,6 +543,8 @@ public:
     /// Walks the instances syncRtScene found to carry lights, so it follows
     /// that call.
     void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    /// How far the lamps are lit (rt_lights::lampLight): the window level.
+    void setRtLampLevel(float level) { rtLampLevel_ = level; }
     /// How many pieces of animated models the last sync placed.
     [[nodiscard]] uint32_t rtAnimatedPieces() const { return rtAnimatedPieces_; }
     void setForceNoCull(bool v) { forceNoCull_ = v; }
@@ -1174,6 +1180,7 @@ private:
     // complete pass found them; the pass in progress fills rtLitNext_.
     std::vector<uint32_t> rtLitInstances_;
     std::vector<uint32_t> rtLitNext_;
+    float rtLampLevel_ = 0.0f;
     // The pass over every instance is spread over a few frames: where it has
     // got to. The instances placed in the dynamic level - moving ones - are
     // brought up to date every frame from rtDynamicOwnerIds_ (M2Instance ids).

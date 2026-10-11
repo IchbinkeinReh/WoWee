@@ -30,6 +30,7 @@ layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D uHist;
 layout(local_size_x = 8, local_size_y = 8) in;
 
 const float MAX_HISTORY = 24.0;
+const float UNIT_HISTORY = 2.0;
 
 void main() {
     ivec2 px = ivec2(gl_GlobalInvocationID.xy);
@@ -108,6 +109,11 @@ void main() {
         hist.rgb = held;
     }
 
+    // A unit's shadow is here this frame: units move, and a long history
+    // would keep where it was for many frames after - a ghost of a running
+    // body's legs trailing it. Kept short while it is here, the history lets
+    // go of it within a few frames once it has moved on.
+    if (raw.a > 0.5) len = min(len, UNIT_HISTORY);
     len = min(len + 1.0, MAX_HISTORY);
     float a = 1.0 / len;
     vec3 lightOut = mix(hist.rgb, raw.rgb, a);

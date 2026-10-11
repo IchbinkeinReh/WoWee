@@ -631,9 +631,17 @@ void Renderer::updatePerFrameUBO() {
         // the direct light by up to 35% (0x007816f0 with the glare's
         // 0xd38f4c from the frame before, 0x007ef6e0).
         const float glareDim = skySystem ? 1.0f - skySystem->getSunGlareDim() : 1.0f;
-        currentFrameData.lightColor = glm::vec4(lp.diffuseColor * glareDim, 1.0f);
+        // The Debug Graphics settings' sun and baked-shadow strengths, 1 by
+        // default (lightingTune_).
+        const float sunScale = std::max(lightingTune_.sun, 0.0f);
+        currentFrameData.lightColor = glm::vec4(lp.diffuseColor * glareDim * sunScale, 1.0f);
         // w: ch8's red, how dark the terrain's baked shadows are drawn.
-        currentFrameData.ambientColor = glm::vec4(lp.ambientColor * glareDim, lp.shadowOpacity);
+        const float ambientScale = std::max(lightingTune_.ambient, 0.0f);
+        currentFrameData.ambientColor =
+            glm::vec4(lp.ambientColor * glareDim * ambientScale,
+                      lightingTune_.bakedTerrainShadow == 1.0f
+                          ? lp.shadowOpacity
+                          : std::clamp(lp.shadowOpacity * lightingTune_.bakedTerrainShadow, 0.0f, 1.0f));
         // The zone's fog colour for the world, the camera's own - its
         // interior's blended in - for interior groups and what stands in
         // them (0x007f16f0, 0x007a8440). w: the power the fog is drawn
@@ -641,8 +649,8 @@ void Renderer::updatePerFrameUBO() {
         currentFrameData.fogColor = glm::vec4(lp.zoneFogColor, lp.fogExponent);
         currentFrameData.cameraFogColor = glm::vec4(lp.fogColor, lp.fogExponent);
         // Not dimmed by the glare: 0x007816f0 darkens only 0xd38ca8/cac.
-        currentFrameData.averagedDirectColor = glm::vec4(lp.averagedDirectColor, 1.0f);
-        currentFrameData.averagedAmbientColor = glm::vec4(lp.averagedAmbientColor, 1.0f);
+        currentFrameData.averagedDirectColor = glm::vec4(lp.averagedDirectColor * sunScale, 1.0f);
+        currentFrameData.averagedAmbientColor = glm::vec4(lp.averagedAmbientColor * ambientScale, 1.0f);
         currentFrameData.windowLight = glm::vec4(
             wmo_sidn::windowLevel(lightingManager->getTimeOfDay()), 0.0f, 0.0f, 0.0f);
         currentFrameData.specularColor = glm::vec4(lp.sunColor, clientSpecular_ ? 1.0f : 0.0f);
@@ -696,6 +704,11 @@ void Renderer::updatePerFrameUBO() {
     float shadowBias = glm::clamp(0.8f * (shadowDistance_ / 300.0f), 0.0f, 1.0f);
     // z carries one texel of a cascade's tile, as it carried one of the single
     // map; the cascades' own are in cascadeTexel.
+    // y is what the shaders take as the map's strength (mix(1, shadow, y)),
+    // times the Debug Graphics setting's.
+    if (lightingTune_.mapSunShadow != 1.0f) {
+        shadowBias = std::clamp(shadowBias * lightingTune_.mapSunShadow, 0.0f, 1.0f);
+    }
     currentFrameData.shadowParams = glm::vec4(shadowsEnabled ? 1.0f : 0.0f, shadowBias,
                                               1.0f / static_cast<float>(SHADOW_MAP_SIZE), 0.0f);
 
@@ -733,7 +746,20 @@ void Renderer::updatePerFrameUBO() {
         currentFrameData.giSky = rt.gi.sky;
         currentFrameData.giGround = rt.gi.ground;
         currentFrameData.giParams = rt.gi.params;
+        // The debug view: WOWEE_GI_DEBUG's when set, else the settings'. The
+        // traced terms' views (5-7) work in every mode; the probes' need Full.
+        if (currentFrameData.giParams.y < 0.5f) {
+            currentFrameData.giParams.y = static_cast<float>(rtDebugView_);
+        }
     }
+    currentFrameData.rtTune = glm::vec4(std::max(lightingTune_.shadowStrength, 0.0f),
+                                        std::max(lightingTune_.pointLights, 0.0f),
+                                        std::max(lightingTune_.bakedLampShadow, 0.0f), 1.0f);
+    currentFrameData.lightTune = glm::vec4(std::max(lightingTune_.bakedLight, 0.0f),
+                                           std::clamp(lightingTune_.tracedSunShadow, 0.0f, 1.0f),
+                                           std::clamp(lightingTune_.pointShadow, 0.0f, 1.0f),
+                                           std::clamp(lightingTune_.occlusion, 0.0f, 1.0f));
+    currentFrameData.rtTune2 = glm::vec4(std::max(lightingTune_.bounce, 0.0f), 0.0f, 0.0f, 0.0f);
 
     // Player motion, consumed by water ripples and by the foliage brush in
     // m2.vert. Horizontal speed only: a fall shouldn't read as running.
@@ -2961,6 +2987,10 @@ void Renderer::update(float deltaTime) {
         const bool tracedShadows = rtLighting_ && rtLighting_->active();
         if (characterRenderer && camera && !tracedShadows && blob_shadow::drawn(shadowLOD, extShadowQuality)) {
             characterRenderer->collectBlobShadows(blobCasters_);
+            if (lightingTune_.blobShadow != 1.0f) {
+                const float s = std::clamp(lightingTune_.blobShadow, 0.0f, 1.0f);
+                for (auto& c : blobCasters_) c.alpha *= s;
+            }
         }
         blobShadowRenderer->prepare(vkCtx ? vkCtx->getCurrentFrame() : 0, blobCasters_,
                                     camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
@@ -5941,6 +5971,13 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
     in.sunColor = glm::vec3(currentFrameData.lightColor);
     in.skyColor = glm::vec3(currentFrameData.ambientColor);
     in.sunUp = in.sunDir.z > -0.05f;
+    // The shadow map's reach, short of where its last cascade fades out:
+    // within it the units' sun shadows are the map's (rt_trace.comp).
+    if (currentFrameData.shadowParams.x > 0.5f && activeShadowCascades_ > 0 &&
+        currentFrameData.cascadeInfo.x > 0.5f) {
+        in.unitMapCenter = shadowCascades_[activeShadowCascades_ - 1].center;
+        in.unitMapRadius = shadowCascades_[activeShadowCascades_ - 1].halfExtent * 0.8f;
+    }
     {
         WOWEE_PROFILE_SCOPE("rt: sync scene", Cpu);
         if (wmoRenderer) wmoRenderer->syncRtScene();
@@ -5958,7 +5995,12 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
         // Main thread only; kept to keep its capacity.
         static std::vector<rt_lights::PointLight> lightScratch;
         lightScratch.clear();
-        if (m2Renderer) m2Renderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        if (m2Renderer) {
+            // The lamps are lit as the windows are: at night (rt_lights::lampLight).
+            m2Renderer->setRtLampLevel(lightingManager ? wmo_sidn::windowLevel(lightingManager->getTimeOfDay())
+                                                       : 0.0f);
+            m2Renderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        }
         if (wmoRenderer) wmoRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         if (characterRenderer) characterRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         Frustum frustum;

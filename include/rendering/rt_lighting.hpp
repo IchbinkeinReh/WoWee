@@ -107,6 +107,11 @@ public:
         glm::vec3 sunColor;
         glm::vec3 skyColor;    // what the flat ambient term stands for
         bool sunUp = true;
+        /// Where the sun's shadow map draws the units' shadows: the sun's
+        /// rays pass the units by within unitMapRadius of the centre (0 for
+        /// no map), the map giving their shadows in this frame's pose.
+        glm::vec3 unitMapCenter{0.0f};
+        float unitMapRadius = 0.0f;
     };
 
     /// Record the pass. Outside a render pass, after the opaque geometry.

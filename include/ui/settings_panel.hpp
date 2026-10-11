@@ -74,6 +74,23 @@ public:
     int pendingVolumetricFog = 0;
     /// Ray traced lighting: 0 off, 1 sun, 2 + occlusion, 3 + bounce. See RtLighting.
     int pendingRtLighting = 0;
+    /// Settings > Debug Graphics: the view the surfaces show instead
+    /// (0-7, Renderer::setRtDebugView) and the lighting's strengths in
+    /// percent (Renderer::LightingTune).
+    int pendingDbgView = 0;
+    int pendingDbgAmbient = 100;
+    int pendingDbgSun = 100;
+    int pendingDbgBakedLight = 100;
+    int pendingDbgPointLights = 100;
+    int pendingDbgBounce = 100;
+    int pendingDbgShadowDarkness = 60;
+    int pendingDbgTracedSunShadow = 100;
+    int pendingDbgMapSunShadow = 100;
+    int pendingDbgPointShadow = 100;
+    int pendingDbgBakedLampShadow = 60;
+    int pendingDbgOcclusion = 100;
+    int pendingDbgTerrainShadow = 100;
+    int pendingDbgBlobShadow = 100;
     /// A multiplier on how thick that mist is. See Renderer::setVolumetricFogDensity.
     float pendingVolumetricDensity = 1.0f;
     /// This client's procedural water with reflection and refraction, instead
@@ -337,6 +354,8 @@ public:
     /// instead, and without this it would update the number, save it, and
     /// change nothing on screen.
     void applySettingSideEffects(const std::string& key);
+    /// The Debug Graphics settings, all of them, to the renderer.
+    void applyLightingTune();
 
     /// Draw every setting the schema files under `category`, as ImGui
     /// controls, with a heading wherever the section changes.

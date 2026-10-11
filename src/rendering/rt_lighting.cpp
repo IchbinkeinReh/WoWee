@@ -1,4 +1,5 @@
 #include "rendering/rt_lighting.hpp"
+#include "rendering/rt_reconstruct.hpp"
 #include "rendering/rt_scene.hpp"
 #include "rendering/vk_shader.hpp"
 #include "core/logger.hpp"
@@ -25,6 +26,8 @@ struct RtPassData {
     glm::vec4 extent;
     glm::vec4 sceneExtent;
     glm::vec4 misc;
+    glm::mat4 invViewProjRel;
+    glm::vec4 unitMap;
     RtGiProbes::PassData gi;
 };
 
@@ -491,6 +494,10 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
 
     RtPassData d{};
     d.invViewProj = glm::inverse(in.viewProj);
+    // NDC -> world less the camera (rt_reconstruct.hpp): the normals are
+    // made from differences the world's coordinates would round away.
+    d.invViewProjRel = rt_reconstruct::cameraRelativeInverse(in.viewProj, in.cameraPos);
+    d.unitMap = glm::vec4(in.unitMapCenter, std::max(in.unitMapRadius, 0.0f));
     d.prevViewProj = havePrev ? prevViewProj_ : in.viewProj;
     d.cameraPos = glm::vec4(in.cameraPos, static_cast<float>(frameCounter_ & 0xFFFFFF));
     d.prevCameraPos = glm::vec4(havePrev ? prevCameraPos_ : in.cameraPos, 0.0f);
