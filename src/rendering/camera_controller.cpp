@@ -1,4 +1,5 @@
 #include "rendering/camera_controller.hpp"
+#include "game/vehicle_camera.hpp"
 
 #include "core/env_flag.hpp"
 #include "rendering/swim_wall.hpp"
@@ -2099,6 +2100,14 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
 
     // Camera direction from yaw/pitch (already computed as forward3D)
     glm::vec3 camDir = -f.forward3D;  // Camera looks at pivot, so it's behind
+    // Turned by the vehicle's yaw offset as in a seat (0x00601d60 ->
+    // 0x00600730): the driver's camera, and the offset easing back to 0 once
+    // the seat is left (0x005fe890).
+    if (vehicleYawOffset_.value != 0.0f) {
+        const float c = std::cos(-vehicleYawOffset_.value);
+        const float sn = std::sin(-vehicleYawOffset_.value);
+        camDir = glm::vec3(camDir.x * c - camDir.y * sn, camDir.x * sn + camDir.y * c, camDir.z);
+    }
 
     // Smooth zoom toward user target
     float zoomLerp = 1.0f - std::exp(-ZOOM_SMOOTH_SPEED * deltaTime);
@@ -2473,6 +2482,9 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
     smoothedCamPos.z = std::max(smoothedCamPos.z, targetPos.z + 0.15f);
 
     camera->setPosition(smoothedCamPos);
+    // The pitch offset tilts the view (0x004c55b0), easing back to 0 out of a
+    // seat (0x005fe8d0).
+    if (vehiclePitchOffset_.value != 0.0f) camera->setRotation(yaw, pitch + glm::degrees(vehiclePitchOffset_.value));
 
     // Hide player model when in first-person (camera too close)
     // WoW fades between ~1.0m and ~0.5m, hides fully below 0.5m
@@ -2534,6 +2546,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // the squeezed one.
         bool shouldHidePlayer = isFirstPersonView();
         characterRenderer->setInstanceVisible(playerInstanceId, !shouldHidePlayer);
+        applyCameraFade(smoothedCamPos, glm::length(smoothedCamPos - pivot));
 
         // Note: the Renderer's CharAnimState machine drives player character animations
         // (Run, Walk, Jump, Swim, etc.) - no additional animation driving needed here.
@@ -2589,7 +2602,7 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
     f.nowJump = inputJump;
     // A driver's camera looks where its vehicle camera does (0x00604490),
     // the vehicle moved by these keys.
-    updateOrbitCamera(deltaTime, f, vehiclePivot_ ? *vehiclePivot_ : targetPos);
+    updateOrbitCamera(deltaTime, f, vehiclePivot_ ? vehiclePulledIn(*vehiclePivot_, deltaTime) : targetPos);
 }
 
 // The camera that flies itself, used when nothing is being followed.
@@ -2800,6 +2813,54 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
     camera->setPosition(newPos);
 }
 
+void CameraController::setVehicleCollisionOrigin(const std::optional<glm::vec3>& origin) {
+    if (!origin) vehiclePullIn_ = {};
+    vehicleCollisionOrigin_ = origin;
+}
+
+glm::vec3 CameraController::vehiclePulledIn(const glm::vec3& point, float deltaTime) {
+    if (!vehicleCollisionOrigin_) return point;
+    game::vehicle::easeCameraPullIn(vehiclePullIn_, deltaTime);
+    const glm::vec3 origin = *vehicleCollisionOrigin_;
+    const glm::vec3 way = point - origin;
+    const float length = glm::length(way);
+    if (length <= 1e-05f) return point;
+    const glm::vec3 dir = way / length;
+    const float reach = std::min(length + 1.0f, 200.0f);
+    // The world along the way (0x0077f310): built geometry and the ground.
+    float hit = reach;
+    if (wmoRenderer) hit = std::min(hit, wmoRenderer->raycastBoundingBoxes(origin, dir, reach));
+    if (terrainManager && !cachedInsideInteriorWMO) hit = std::min(hit, raymarchTerrainCameraLimit(origin, dir, reach));
+    const std::optional<float> share = hit < reach ? std::optional<float>(hit / reach) : std::nullopt;
+    return game::vehicle::vehicleCameraPulledIn(origin, point, share, vehiclePullIn_);
+}
+
+void CameraController::applyCameraFade(const glm::vec3& cameraPos, float distance) {
+    // 0x00606f90: the camera's distance from its unit, less its near clip,
+    // between the fade's bounds; the alpha goes to the unit, or the vehicle
+    // it is on (0x004f8660). The player rides that vehicle and fades with it.
+    float nearDistance = game::vehicle::kCameraFadeNear;
+    float farDistance = game::vehicle::kCameraFadeFar;
+    uint32_t target = playerInstanceId;
+    if (cameraFadeTarget_ && cameraFadeTarget_->instanceId != 0) {
+        target = cameraFadeTarget_->instanceId;
+        glm::vec3 center(0.0f);
+        float radius = 0.0f;
+        if (cameraFadeTarget_->scalars && characterRenderer->getInstanceBounds(target, center, radius)) {
+            nearDistance = cameraFadeTarget_->scalars->x * radius;
+            farDistance = cameraFadeTarget_->scalars->y * radius;
+            distance = glm::length(cameraPos - center);
+        }
+    }
+    const float nearClip = camera ? camera->getNearPlane() : 0.0f;
+    const float alpha = game::vehicle::cameraFadeAlpha(distance - nearClip, nearDistance, farDistance);
+    if (cameraFadedInstance_ != 0 && cameraFadedInstance_ != target && cameraFadedInstance_ != playerInstanceId)
+        characterRenderer->setInstanceCameraAlpha(cameraFadedInstance_, 1.0f);
+    characterRenderer->setInstanceCameraAlpha(target, alpha);
+    if (target != playerInstanceId) characterRenderer->setInstanceCameraAlpha(playerInstanceId, alpha);
+    cameraFadedInstance_ = target;
+}
+
 void CameraController::setSeatZoomLimits(std::optional<float> minDistance, std::optional<float> maxDistance) {
     seatZoomMin_ = minDistance;
     seatZoomMax_ = maxDistance;
@@ -2872,7 +2933,9 @@ void CameraController::update(float deltaTime) {
 
         // Position camera behind character during taxi
         if (thirdPerson && followTarget) {
-            glm::vec3 targetPos = vehiclePivot_ ? *vehiclePivot_ : *followTarget;
+            // The vehicle camera's point, pulled in toward its vehicle where
+            // the world is in the way (0x00604490 -> 0x00759580).
+            glm::vec3 targetPos = vehiclePivot_ ? vehiclePulledIn(*vehiclePivot_, deltaTime) : *followTarget;
             glm::vec3 forward3D = camera->getForward();
 
             // Pivot point at upper chest/neck
@@ -2919,6 +2982,8 @@ void CameraController::update(float deltaTime) {
             }
 
             camera->setPosition(smoothedCamPos);
+            if (characterRenderer && playerInstanceId > 0)
+                applyCameraFade(smoothedCamPos, glm::length(smoothedCamPos - pivot));
         }
         // The vehicle's pitch offset tilts the view and not where it stands
         // (0x00606f90 -> 0x004c55b0).

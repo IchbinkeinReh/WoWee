@@ -359,8 +359,19 @@ public:
     struct VehicleCameraView {
         glm::vec3 pivot{0.0f};
         float turned = 0.0f;  ///< radians, render yaw
+        /// Where its pull-in looks from (0x00759580): the vehicle's place
+        /// raised by its height (0x00718080); none on the way in or out.
+        std::optional<glm::vec3> collisionOrigin;
     };
     [[nodiscard]] std::optional<VehicleCameraView> localVehicleCameraView();
+    /// The vehicle model the camera's closeness fades for the local player
+    /// - the one it sits in or drives (0x004f8660) - and its row's fade
+    /// scalars where Flags 0x80000 gives them (0x00606f90).
+    struct CameraFadeVehicle {
+        uint32_t instanceId = 0;
+        std::optional<glm::vec2> scalars;
+    };
+    [[nodiscard]] std::optional<CameraFadeVehicle> localCameraFadeVehicle();
     /// Whether a monster move taking `mover` to `transport`'s `seat` waits on
     /// its vehicle's enter or exit animation (0x0074bcb0); where it does the
     /// vehicle plays it and the move is let go after the seat's delay, at the

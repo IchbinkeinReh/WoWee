@@ -288,6 +288,18 @@ public:
     /// (its matrix is the seat's, 0x0074a7f0) rather than where its own
     /// movement left it; none follows the character again.
     void setVehiclePivot(const std::optional<glm::vec3>& pivot) { vehiclePivot_ = pivot; }
+    /// The model the camera's closeness fades in the player's stead: the
+    /// vehicle the player sits in or drives (0x004f8660 -> 0x0074c650 /
+    /// 0x00748040), with its row's fade scalars where Flags 0x80000 gives
+    /// them (0x00606f90). None fades the player.
+    struct CameraFadeTarget {
+        uint32_t instanceId = 0;
+        std::optional<glm::vec2> scalars;  ///< CameraFadeDistScalarMin / Max
+    };
+    void setCameraFadeTarget(const std::optional<CameraFadeTarget>& target) { cameraFadeTarget_ = target; }
+    /// Where the vehicle camera's pull-in looks from (0x00759580): the
+    /// vehicle's place raised by its height; none while not in a seat.
+    void setVehicleCollisionOrigin(const std::optional<glm::vec3>& origin);
     /// The camera's yaw is its vehicle camera's facing and its own turn on
     /// top (0x00604490): as that facing turns, so does the camera.
     void turnWithVehicle(float degrees) { yaw += degrees; }
@@ -491,6 +503,16 @@ private:
     float collisionDistance = 10.0f;    // Max allowed by collision
     bool externalFollow_ = false;
     std::optional<glm::vec3> vehiclePivot_;
+    std::optional<CameraFadeTarget> cameraFadeTarget_;
+    std::optional<glm::vec3> vehicleCollisionOrigin_;
+    game::vehicle::CameraPullIn vehiclePullIn_;
+    /// The vehicle camera's point - its seat's CameraOffset about the unit -
+    /// pulled in toward its vehicle where the world is in the way
+    /// (0x00759580: from +0x2c to +0x38).
+    [[nodiscard]] glm::vec3 vehiclePulledIn(const glm::vec3& point, float deltaTime);
+    uint32_t cameraFadedInstance_ = 0;  ///< the model faded last frame
+    /// The camera's closeness fades its unit's model (0x00606f90).
+    void applyCameraFade(const glm::vec3& cameraPos, float distance);
     std::optional<float> seatZoomMin_;
     std::optional<float> seatZoomMax_;
     float timedZoomFrom_ = 0.0f;

@@ -3083,6 +3083,15 @@ void Application::applyServerMovementState(float deltaTime) {
         // facing (VehicleCamera_C, 0x00604490).
         const auto view = vehiclePassenger ? entitySpawner_->localVehicleCameraView() : std::nullopt;
         cc->setVehiclePivot(view ? std::optional<glm::vec3>(view->pivot) : std::nullopt);
+        cc->setVehicleCollisionOrigin(view ? view->collisionOrigin : std::nullopt);
+        // The vehicle the camera's closeness fades in the player's stead
+        // (0x004f8660, 0x00606f90).
+        if (const auto fade = entitySpawner_ ? entitySpawner_->localCameraFadeVehicle() : std::nullopt) {
+            cc->setCameraFadeTarget(rendering::CameraController::CameraFadeTarget{.instanceId = fade->instanceId,
+                                                                                .scalars = fade->scalars});
+        } else {
+            cc->setCameraFadeTarget(std::nullopt);
+        }
         // The driver turns the vehicle, and the camera with it, by its keys.
         if (view && view->turned != 0.0f && drivenUnit == 0) cc->turnWithVehicle(glm::degrees(view->turned));
         // The seat's zoom when its camera move is due (0x0074c0e0).

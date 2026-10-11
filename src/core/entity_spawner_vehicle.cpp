@@ -571,7 +571,10 @@ std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCamer
     vc.lastMs = now;
     // 0x00759200: the unit where it is and its facing - the vehicle's where
     // the seat's FlagsB 0x200 asks - and the seat's CameraOffset about it.
-    glm::vec3 at = *drawn;
+    // A seat without FlagsB 0x100 looks from the unit's own place (vfunc
+    // +0x30) - a passenger's is its vehicle's, as its movement has it - and
+    // one with it from where the seat draws it (0x00749d80).
+    glm::vec3 at = (seat->flagsB & 0x100) != 0 ? *drawn : vehiclePos;
     float yaw = 0.0f;
     glm::mat4 frame(1.0f);
     if ((seat->flagsB & 0x200) != 0) {
@@ -603,7 +606,33 @@ std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCamer
     }
     const float turned = vc.snap ? 0.0f : vc.facing - before;
     vc.snap = false;
-    return VehicleCameraView{.pivot = vehiclePos + vc.rel, .turned = turned};
+    float vehicleHeight = 0.0f;
+    if (!cr->getInstanceHeight(vehicleInstance, vehicleHeight)) vehicleHeight = 0.0f;
+    const glm::vec3 origin = vehiclePos + glm::vec3(0.0f, 0.0f, game::vehicle::vehicleCameraHeight(vehicleHeight));
+    return VehicleCameraView{.pivot = vehiclePos + vc.rel, .turned = turned, .collisionOrigin = origin};
+}
+
+std::optional<EntitySpawner::CameraFadeVehicle> EntitySpawner::localCameraFadeVehicle() {
+    if (!gameHandler_) return std::nullopt;
+    const uint64_t player = gameHandler_->getPlayerGuid();
+    uint64_t vehicle = 0;
+    // Seated (state 3), its vehicle; else the vehicle it drives.
+    if (const auto it = seatedPassengers_.find(player);
+        it != seatedPassengers_.end() && it->second.state == SeatState::Seated) {
+        vehicle = it->second.vehicleGuid;
+    } else if (const uint64_t mover = gameHandler_->activeMover();
+               mover != player && gameHandler_->vehicleRoster().vehicleId(mover) != 0) {
+        vehicle = mover;
+    }
+    if (vehicle == 0) return std::nullopt;
+    const uint32_t instance = vehicleInstanceFor(vehicle);
+    if (instance == 0) return std::nullopt;
+    CameraFadeVehicle fade{.instanceId = instance};
+    if (const auto* row = vehicleTables_.vehicle(gameHandler_->vehicleRoster().vehicleId(vehicle));
+        row && (row->flags & game::vehicle::kVehicleFlagCameraFade) != 0) {
+        fade.scalars = glm::vec2(row->cameraFadeDistScalarMin, row->cameraFadeDistScalarMax);
+    }
+    return fade;
 }
 
 std::optional<EntitySpawner::SeatCameraCue> EntitySpawner::takeSeatCameraCue() {

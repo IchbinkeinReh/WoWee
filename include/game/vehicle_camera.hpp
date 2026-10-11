@@ -227,4 +227,59 @@ struct CameraModeChange {
     return {0, !remembering};
 }
 
+/// How far the camera's own model shows as the camera closes on it
+/// (Camera.cpp 0x00606f90 -> 0x004f8660): opaque from `farDistance` out,
+/// gone at `nearDistance` and in, evenly between (0x008ca080 over 0..255).
+/// `distance` is the camera's from its unit less its near clip. The
+/// ordinary bounds are 0.0027778 and 1.8315 yards; a vehicle row with
+/// Flags 0x80000 gives its own, CameraFadeDistScalarMin/Max times its
+/// model's radius, measured from the model's centre.
+inline constexpr float kCameraFadeNear = 0.0027777778f;
+inline constexpr float kCameraFadeFar = 1.8315f;  // 0x3fea6e99
+inline constexpr uint32_t kVehicleFlagCameraFade = 0x80000;
+[[nodiscard]] inline float cameraFadeAlpha(float distance, float nearDistance, float farDistance) {
+    if (distance >= farDistance) return 1.0f;
+    if (distance <= nearDistance) return 0.0f;
+    return (distance - nearDistance) / (farDistance - nearDistance);
+}
+
+/// The vehicle camera's pull-in (0x00759580): the point the camera looks at
+/// - the seat's CameraOffset about the unit, chased - is looked for from the
+/// vehicle's place raised by its height - a non-player's capped at
+/// 2.0277777 - less a sixth (0x00718080), one yard past it, 200 at most. A hit at a
+/// share nearer than the share held snaps the held share in; a farther one,
+/// or none, keeps the held share, which eases back out to 1 at 2.5
+/// (0x00759d80, chaseStep). The point goes to that share less a yard; a
+/// hit within a yard puts it at the vehicle's point.
+[[nodiscard]] inline float vehicleCameraHeight(float modelHeight) {
+    return (modelHeight > 2.0277777f ? 2.0277777f : modelHeight) - 0.16666667f;
+}
+struct CameraPullIn {
+    float held = 1.0f;      ///< +0x44
+    float velocity = 0.0f;  ///< +0x48
+};
+/// `hitShare` is where along the way something was hit, none where nothing.
+[[nodiscard]] inline glm::vec3 vehicleCameraPulledIn(const glm::vec3& origin, const glm::vec3& point,
+                                                    std::optional<float> hitShare, CameraPullIn& pull) {
+    const glm::vec3 way = point - origin;
+    const float length = std::sqrt(way.x * way.x + way.y * way.y + way.z * way.z);
+    if (length <= 1e-05f) return point;
+    const glm::vec3 dir = way / length;
+    const float reach = std::min(length + 1.0f, 200.0f);
+    float share = pull.held;
+    if (hitShare) {
+        if (*hitShare < pull.held) {
+            pull.held = *hitShare;
+            pull.velocity = 0.0f;
+            share = *hitShare;
+        }
+        const float along = reach * share - 1.0f;
+        if (along <= 1e-05f) return origin;
+        return origin + dir * along;
+    }
+    return origin + dir * (reach * share - 1.0f);
+}
+/// Each step, the held share back out toward 1 (0x00759d80).
+inline void easeCameraPullIn(CameraPullIn& pull, float dt) { chaseStep(pull.held, pull.velocity, 1.0f, 2.5f, dt); }
+
 }  // namespace wowee::game::vehicle

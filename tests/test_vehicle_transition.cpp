@@ -408,3 +408,35 @@ TEST_CASE("a move into or out of a seat waits on the vehicle's animation (0x0074
     seat.vehicleEnterAnim = 0x1fa;
     CHECK_FALSE(gv::vehicleSeatAnim(seat, true, false));
 }
+
+TEST_CASE("the camera's closeness fades its model between the bounds (0x00606f90)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    CHECK(cameraFadeAlpha(5.0f, kCameraFadeNear, kCameraFadeFar) == 1.0f);
+    CHECK(cameraFadeAlpha(kCameraFadeFar, kCameraFadeNear, kCameraFadeFar) == 1.0f);
+    CHECK(cameraFadeAlpha(0.0f, kCameraFadeNear, kCameraFadeFar) == 0.0f);
+    CHECK(cameraFadeAlpha(1.0f, 0.0f, 2.0f) == Catch::Approx(0.5f));
+    // A vehicle's own: its scalars times its model's radius.
+    CHECK(cameraFadeAlpha(3.0f, 0.5f * 4.0f, 1.0f * 4.0f) == Catch::Approx(0.5f));
+}
+
+TEST_CASE("the vehicle camera is pulled in where the world is in the way and eases out (0x00759580)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    CHECK(vehicleCameraHeight(5.0f) == Catch::Approx(2.0277777f - 0.16666667f));
+    CHECK(vehicleCameraHeight(1.0f) == Catch::Approx(1.0f - 0.16666667f));
+    CameraPullIn pull;
+    const glm::vec3 origin(0.0f);
+    const glm::vec3 camera(9.0f, 0.0f, 0.0f);  // a reach of 10
+    // Nothing in the way: one yard short of the reach, the camera itself.
+    CHECK(vehicleCameraPulledIn(origin, camera, std::nullopt, pull).x == Catch::Approx(9.0f));
+    // A hit halfway snaps in: 10 * 0.5 - 1.
+    CHECK(vehicleCameraPulledIn(origin, camera, 0.5f, pull).x == Catch::Approx(4.0f));
+    CHECK(pull.held == 0.5f);
+    // A farther hit keeps the share held.
+    CHECK(vehicleCameraPulledIn(origin, camera, 0.9f, pull).x == Catch::Approx(4.0f));
+    // A hit within a yard: the vehicle's point.
+    CHECK(vehicleCameraPulledIn(origin, camera, 0.05f, pull).x == Catch::Approx(0.0f));
+    // Eased back out toward 1.
+    pull.held = 0.5f;
+    for (int i = 0; i < 200; ++i) easeCameraPullIn(pull, 0.05f);
+    CHECK(pull.held == Catch::Approx(1.0f).margin(0.001));
+}

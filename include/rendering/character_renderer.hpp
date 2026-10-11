@@ -210,6 +210,9 @@ public:
     void setLocomotionSpeed(uint32_t instanceId, float yardsPerSecond);
     void startFadeIn(uint32_t instanceId, float durationSeconds);
     void setInstanceOpacity(uint32_t instanceId, float opacity);
+    /// How much of the model the camera's closeness leaves (0x00737390), on
+    /// top of its own opacity; its weapons go with it.
+    void setInstanceCameraAlpha(uint32_t instanceId, float alpha);
     /// A spell kit's alpha on the unit (0x007265c0 case 14), on top of its
     /// own: faded to over `seconds`, or set at once where that is 0 or it is
     /// already there (0x00744030). Its weapons take it too.
@@ -534,6 +537,7 @@ private:
         float opacity = 1.0f;
         /// A spell kit's alpha (setInstanceKitAlpha), multiplying opacity.
         float kitAlpha = 1.0f;
+        float cameraAlpha = 1.0f;  ///< the camera's closeness (0x004f8660 -> 0x00737390)
         float kitAlphaFrom = 1.0f;
         float kitAlphaTo = 1.0f;
         float kitAlphaElapsed = 0.0f;
