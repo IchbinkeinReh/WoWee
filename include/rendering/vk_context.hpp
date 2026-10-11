@@ -606,6 +606,10 @@ private:
     // every immediate submit (the M2 frustum-cull dispatch fires this per frame).
     VkCommandBuffer immCmdBuf_ = VK_NULL_HANDLE;
 
+    /// Ends and frees the open batch's command buffer and staging without
+    /// submitting it: the end of a batch recorded against a lost device.
+    void dropUploadBatch(VkCommandPool pool);
+
     // Batch upload state (nesting-safe via depth counter)
     int uploadBatchDepth_ = 0;
     bool inUploadBatch_ = false;

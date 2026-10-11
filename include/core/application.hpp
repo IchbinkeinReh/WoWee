@@ -206,15 +206,22 @@ private:
     /// a new one - the context, the renderer, the interface's backend and
     /// textures - then loads the world again where the player stands, with
     /// the entities the session already knows. The connection and the game
-    /// state are not touched. False when the device would not come back.
+    /// state are not touched. A rebuild that does not take is left for the
+    /// main loop to try again (true); false when the device will not come
+    /// back.
     bool recoverFromDeviceLoss();
     /// recoverFromDeviceLoss's first half: everything on the GPU but the
     /// context, in the order shutdown() lets go of it.
     void releaseGpuForDeviceRebuild();
-    /// Reads window events for `seconds`, keeping the watchdog fed. False if
-    /// the player quit meanwhile.
-    bool waitPumpingEvents(double seconds);
+    /// One time round the main loop while the device is lost: a quit acted
+    /// on, the network session updated, nothing drawn or uploaded, and the
+    /// rebuild tried when handleDeviceLoss says.
+    void runWhileDeviceLost(rendering::VkContext& vk, float deltaTime);
     rendering::DeviceRecovery deviceRecovery_;
+    /// Released by the first rebuild attempt and not yet rebuilt: the
+    /// attempts after it go straight to the context.
+    bool gpuReleasedForRebuild_ = false;
+    std::chrono::steady_clock::time_point deviceRebuildStarted_{};
 
     /// Take the interface down, because the character it belongs to is leaving.
     ///

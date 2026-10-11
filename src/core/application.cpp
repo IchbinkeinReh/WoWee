@@ -1678,6 +1678,15 @@ void Application::run() {
         // integrates over it.
         const float deltaTime = FramePacer::toSeconds(deltaNs);
 
+        // A lost GPU device, from the loss until it is rebuilt: the session
+        // kept up, nothing drawn or uploaded, and the rebuild tried when
+        // there is a window and DeviceRecovery's delay has passed.
+        if (rendering::VkContext* vk = window->getVkContext(); renderer && vk && vk->isDeviceLost()) {
+            runWhileDeviceLost(*vk, deltaTime);
+            core::FrameProfiler::get().endFrame();
+            continue;
+        }
+
         if (renderer && renderer->getCameraController() && ImGui::GetIO().WantCaptureMouse) {
             renderer->getCameraController()->releaseMouseCapture();
         }
@@ -2414,14 +2423,16 @@ void Application::shutdownPortraits() {
 
 void Application::handleDeviceLoss(rendering::VkContext& vk) {
     using Action = rendering::DeviceRecovery::Action;
-    deviceRecovery_.deviceLost(core::appTimeSeconds());
-    switch (deviceRecovery_.next(vk.canRebuildDevice())) {
+    const double now = core::appTimeSeconds();
+    deviceRecovery_.deviceLost(now);
+    switch (deviceRecovery_.next(vk.canRebuildDevice(), now)) {
         case Action::None:
             return;
         case Action::Wait:
-            // In the background, or back without a native window yet. Nothing
-            // is drawn meanwhile (render() says so once a second), and the
-            // device is rebuilt on the first frame there is a window for it.
+            // In the background, back without a native window yet, or between
+            // one rebuild that did not take and the next. Nothing is drawn or
+            // uploaded meanwhile, the session is kept up (runWhileDeviceLost),
+            // and this is asked again next time round the loop.
             return;
         case Action::GiveUp:
             LOG_ERROR("GPU device lost ", deviceRecovery_.lossesInWindow(), " times in ",
@@ -2438,25 +2449,58 @@ void Application::handleDeviceLoss(rendering::VkContext& vk) {
     }
 }
 
-bool Application::waitPumpingEvents(double seconds) {
-    const auto until = std::chrono::steady_clock::now() +
-                       std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                           std::chrono::duration<double>(seconds));
-    do {
-        // Only a quit is acted on, as the loading screen does. The app going
-        // to the background and back is seen by the lifecycle watch whoever
-        // polls, and reaches the context from there.
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT) {
-                window->setShouldClose(true);
-                return false;
-            }
+void Application::runWhileDeviceLost(rendering::VkContext& vk, float deltaTime) {
+    // Only a quit is acted on, as the loading screen does. The app going to
+    // the background and back is seen by the lifecycle watch whoever polls,
+    // and reaches the context from there; nothing else has anything to act
+    // on while there is no device.
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_EVENT_QUIT) {
+            window->setShouldClose(true);
+            return;
         }
-        beatWatchdog();
-        SDL_Delay(20);
-    } while (std::chrono::steady_clock::now() < until);
-    return true;
+    }
+
+    // The session, and only the session: packets read and handled, the ping
+    // and the rest of what the game handler sends on its own clock. Nothing
+    // that draws or uploads - the world, the spawn queues, the renderer, the
+    // interface - runs against a device that is gone; what arrives for them
+    // is picked up by the world reload after the rebuild. A world that has
+    // disconnected is left for the full update to take down once there is a
+    // device again.
+    switch (state) {
+        case AppState::AUTHENTICATION:
+        case AppState::REALM_SELECTION:
+            if (authHandler) authHandler->update(deltaTime);
+            break;
+        case AppState::CHARACTER_CREATION:
+        case AppState::CHARACTER_SELECTION:
+            if (gameHandler) gameHandler->update(deltaTime);
+            break;
+        case AppState::IN_GAME:
+            if (gameHandler && gameHandler->getState() != game::WorldState::DISCONNECTED) {
+                gameHandler->update(deltaTime);
+            }
+            break;
+        default:
+            break;
+    }
+
+    handleDeviceLoss(vk);
+    if (!vk.isDeviceLost()) return;
+
+    // Said once a second, so the log shows a client that is waiting rather
+    // than one that has stopped.
+    static auto lastSaid = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastSaid > std::chrono::seconds(1)) {
+        lastSaid = now;
+        LOG_INFO("Not drawing: device lost", vk.inBackground() ? ", in the background" : "");
+    }
+    // Reading the socket does not need frame rate, and a phone in someone's
+    // pocket should not spend a core on it.
+    SDL_Delay(50);
 }
 
 void Application::releaseGpuForDeviceRebuild() {
@@ -2497,28 +2541,34 @@ void Application::releaseGpuForDeviceRebuild() {
 bool Application::recoverFromDeviceLoss() {
     rendering::VkContext* vk = window ? window->getVkContext() : nullptr;
     if (!vk || !renderer) return false;
-    LOG_WARNING("GPU device lost - rebuilding the device and everything drawn with it "
-                "(recovery ", deviceRecovery_.recoveries() + 1, " this run)");
-    const auto started = std::chrono::steady_clock::now();
-    const bool inWorld = state == AppState::IN_GAME && gameHandler && gameHandler->isInWorld() &&
-                         worldLoader_;
 
-    releaseGpuForDeviceRebuild();
+    // Released once, on the first attempt. One that does not take leaves it
+    // released, and the next is tried from the main loop when DeviceRecovery
+    // says, with the session kept up in between (runWhileDeviceLost).
+    if (!gpuReleasedForRebuild_) {
+        LOG_WARNING("GPU device lost - rebuilding the device and everything drawn with it "
+                    "(recovery ", deviceRecovery_.recoveries() + 1, " this run)");
+        deviceRebuildStarted_ = std::chrono::steady_clock::now();
+        releaseGpuForDeviceRebuild();
+        gpuReleasedForRebuild_ = true;
+    }
 
-    // The device, tried again with a growing delay while the driver comes
-    // back, and held while the app is away - Android may send it to the
-    // background in the middle of this.
-    while (!vk->rebuildAfterDeviceLoss()) {
-        const double delay = deviceRecovery_.rebuildFailed();
-        if (deviceRecovery_.next(true) == rendering::DeviceRecovery::Action::GiveUp) return false;
+    // Android may have sent the app to the background since the last try;
+    // the context keeps it in the background if so.
+    if (!vk->rebuildAfterDeviceLoss()) {
+        const double delay = deviceRecovery_.rebuildFailed(core::appTimeSeconds());
+        if (deviceRecovery_.next(true, core::appTimeSeconds()) ==
+            rendering::DeviceRecovery::Action::GiveUp) {
+            return false;
+        }
         LOG_WARNING("Trying the device again in ", delay, "s (attempt ",
                     deviceRecovery_.attempts() + 1, ")");
-        if (!waitPumpingEvents(delay)) return false;
-        while (!vk->canRebuildDevice()) {
-            if (!waitPumpingEvents(0.1)) return false;
-        }
+        return true;
     }
+    gpuReleasedForRebuild_ = false;
     deviceRecovery_.rebuilt();
+    const bool inWorld = state == AppState::IN_GAME && gameHandler && gameHandler->isInWorld() &&
+                         worldLoader_;
 
     // shutdown() let go of it with everything else.
     renderer->setAudioCoordinator(audioCoordinator_.get());
@@ -2532,6 +2582,10 @@ bool Application::recoverFromDeviceLoss() {
     // the server is still sending, the entities are all known, and only what
     // drew them is new.
     if (inWorld) {
+        // Spawns that arrived while there was no device were queued for
+        // renderers that are gone; the reload hands the spawner every entity
+        // the session knows instead.
+        if (entitySpawner_) entitySpawner_->clearAllQueues();
         const auto& movement = gameHandler->getMovementInfo();
         const glm::vec3 server = core::coords::canonicalToServer(
             glm::vec3(movement.x, movement.y, movement.z));
@@ -2549,7 +2603,7 @@ bool Application::recoverFromDeviceLoss() {
 
     LOG_WARNING("GPU device rebuilt in ",
                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - started).count(),
+                    std::chrono::steady_clock::now() - deviceRebuildStarted_).count(),
                 "ms", inWorld ? ", world reloaded" : "");
     return true;
 }
@@ -4907,8 +4961,9 @@ void Application::render() {
         }
         // The loop still runs, to keep reading the socket. It does not need to
         // run at frame rate to do that, and a phone in someone's pocket should
-        // not be spending a core on it. A lost device waits here too, until
-        // there is a window to rebuild it on (see handleDeviceLoss).
+        // not be spending a core on it. A lost device stops here only for the
+        // frame it was lost in; the loop then runs runWhileDeviceLost instead
+        // until it is rebuilt.
         SDL_Delay(50);
         return;
     }

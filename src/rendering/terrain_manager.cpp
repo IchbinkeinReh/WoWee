@@ -1471,6 +1471,13 @@ void TerrainManager::workerLoop() {
 void TerrainManager::processReadyTiles() {
     ZoneScopedN("TerrainManager::processReadyTiles");
     WOWEE_PROFILE_SCOPE("terrain: finalize ready tiles", Cpu);
+    // Nothing is uploaded to a lost device. What the workers have ready stays
+    // queued, and goes with this manager when the device is rebuilt and the
+    // world loaded again (Application::recoverFromDeviceLoss).
+    if (VkContext* vk = terrainRenderer ? terrainRenderer->getVkContext() : nullptr;
+        vk && vk->isDeviceLost()) {
+        return;
+    }
     // Move newly ready tiles into the finalizing deque.
     // Keep them in pendingTiles so streamTiles() won't re-enqueue them.
     {

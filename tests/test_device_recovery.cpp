@@ -34,7 +34,7 @@ TEST_CASE("only VK_ERROR_DEVICE_LOST asks for a new device", "[device_recovery]"
 
 TEST_CASE("a lost device is rebuilt, and the loss is counted once", "[device_recovery]") {
     DeviceRecovery r;
-    CHECK(r.next(true) == Action::None);
+    CHECK(r.next(true, 0.0) == Action::None);
     CHECK_FALSE(r.lost());
 
     r.deviceLost(10.0);
@@ -44,12 +44,12 @@ TEST_CASE("a lost device is rebuilt, and the loss is counted once", "[device_rec
     r.deviceLost(10.2);
     CHECK(r.lost());
     CHECK(r.lossesInWindow() == 1);
-    CHECK(r.next(true) == Action::Rebuild);
+    CHECK(r.next(true, 10.2) == Action::Rebuild);
 
     r.rebuilt();
     CHECK_FALSE(r.lost());
     CHECK(r.recoveries() == 1);
-    CHECK(r.next(true) == Action::None);
+    CHECK(r.next(true, 10.3) == Action::None);
 }
 
 TEST_CASE("nothing is rebuilt without a window to build on", "[device_recovery]") {
@@ -57,52 +57,75 @@ TEST_CASE("nothing is rebuilt without a window to build on", "[device_recovery]"
     r.deviceLost(0.0);
     // In the background, or back before Android has handed over a window:
     // waiting, which costs no attempt however long it lasts.
-    for (int i = 0; i < 100; ++i) CHECK(r.next(false) == Action::Wait);
+    for (int i = 0; i < 100; ++i) CHECK(r.next(false, i * 60.0) == Action::Wait);
     CHECK(r.attempts() == 0);
-    CHECK(r.next(true) == Action::Rebuild);
+    CHECK(r.next(true, 6000.0) == Action::Rebuild);
 }
 
 TEST_CASE("a rebuild that fails is tried again later, then given up", "[device_recovery]") {
     DeviceRecovery r;
     r.deviceLost(0.0);
 
+    double t = 0.0;
     double last = 0.0;
     for (uint32_t i = 0; i + 1 < DeviceRecovery::kMaxRebuildAttempts; ++i) {
-        const double delay = r.rebuildFailed();
+        const double delay = r.rebuildFailed(t);
         // Growing, and never past the ceiling.
         CHECK(delay >= last);
         CHECK(delay <= DeviceRecovery::kMaxRetryDelaySeconds);
         last = delay;
-        CHECK(r.next(true) == Action::Rebuild);
+        t += delay;
+        CHECK(r.next(true, t) == Action::Rebuild);
     }
     CHECK(r.attempts() == DeviceRecovery::kMaxRebuildAttempts - 1);
-    (void)r.rebuildFailed();
-    CHECK(r.next(true) == Action::GiveUp);
-    CHECK(r.next(false) == Action::GiveUp);
+    (void)r.rebuildFailed(t);
+    CHECK(r.next(true, t) == Action::GiveUp);
+    CHECK(r.next(false, t) == Action::GiveUp);
+    CHECK(r.next(true, t + 1000.0) == Action::GiveUp);
+}
+
+TEST_CASE("the retry is a time to try at, not a sleep", "[device_recovery]") {
+    // The main loop keeps reading the connection between attempts, and asks
+    // next() every time round; until the delay has passed it is told to wait.
+    DeviceRecovery r;
+    r.deviceLost(100.0);
+    const double delay = r.rebuildFailed(100.0);
+    CHECK(r.retryAt() == Catch::Approx(100.0 + delay));
+    CHECK(r.next(true, 100.0) == Action::Wait);
+    CHECK(r.next(true, 100.0 + delay * 0.5) == Action::Wait);
+    CHECK(r.next(true, 100.0 + delay) == Action::Rebuild);
+    // Waiting, however often it is asked, is not another attempt.
+    CHECK(r.attempts() == 1);
+
+    // The delay passing does not make a window: in the background it waits
+    // on, and is tried the first time round there is one.
+    CHECK(r.next(false, 100.0 + delay + 30.0) == Action::Wait);
+    CHECK(r.next(true, 100.0 + delay + 30.0) == Action::Rebuild);
 }
 
 TEST_CASE("the retry delay doubles from the first", "[device_recovery]") {
     DeviceRecovery r;
     r.deviceLost(0.0);
-    CHECK(r.rebuildFailed() == Catch::Approx(DeviceRecovery::kFirstRetryDelaySeconds));
-    CHECK(r.rebuildFailed() == Catch::Approx(DeviceRecovery::kFirstRetryDelaySeconds * 2.0));
-    CHECK(r.rebuildFailed() == Catch::Approx(DeviceRecovery::kFirstRetryDelaySeconds * 4.0));
+    CHECK(r.rebuildFailed(0.0) == Catch::Approx(DeviceRecovery::kFirstRetryDelaySeconds));
+    CHECK(r.rebuildFailed(0.0) == Catch::Approx(DeviceRecovery::kFirstRetryDelaySeconds * 2.0));
+    CHECK(r.rebuildFailed(0.0) == Catch::Approx(DeviceRecovery::kFirstRetryDelaySeconds * 4.0));
     for (int i = 0; i < 10; ++i) {
-        CHECK(r.rebuildFailed() <= DeviceRecovery::kMaxRetryDelaySeconds);
+        CHECK(r.rebuildFailed(0.0) <= DeviceRecovery::kMaxRetryDelaySeconds);
     }
 }
 
 TEST_CASE("a new loss starts its attempts over", "[device_recovery]") {
     DeviceRecovery r;
     r.deviceLost(0.0);
-    (void)r.rebuildFailed();
-    (void)r.rebuildFailed();
+    (void)r.rebuildFailed(0.0);
+    (void)r.rebuildFailed(0.25);
     r.rebuilt();
     CHECK(r.attempts() == 0);
 
-    r.deviceLost(1.0);
+    // Nor does the last loss's retry time hold the next one back.
+    r.deviceLost(0.3);
     CHECK(r.attempts() == 0);
-    CHECK(r.next(true) == Action::Rebuild);
+    CHECK(r.next(true, 0.3) == Action::Rebuild);
 }
 
 TEST_CASE("a device lost again and again is given up on", "[device_recovery]") {
@@ -113,12 +136,12 @@ TEST_CASE("a device lost again and again is given up on", "[device_recovery]") {
     double t = 0.0;
     for (uint32_t i = 0; i < DeviceRecovery::kMaxLossesInWindow; ++i) {
         r.deviceLost(t);
-        CHECK(r.next(true) == Action::Rebuild);
+        CHECK(r.next(true, t) == Action::Rebuild);
         r.rebuilt();
         t += 5.0;
     }
     r.deviceLost(t);
-    CHECK(r.next(true) == Action::GiveUp);
+    CHECK(r.next(true, t) == Action::GiveUp);
 }
 
 TEST_CASE("losses far apart are each recovered", "[device_recovery]") {
@@ -128,7 +151,7 @@ TEST_CASE("losses far apart are each recovered", "[device_recovery]") {
     double t = 0.0;
     for (int i = 0; i < 10; ++i) {
         r.deviceLost(t);
-        CHECK(r.next(true) == Action::Rebuild);
+        CHECK(r.next(true, t) == Action::Rebuild);
         r.rebuilt();
         t += DeviceRecovery::kLossWindowSeconds + 1.0;
     }

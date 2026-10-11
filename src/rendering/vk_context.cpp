@@ -3581,6 +3581,15 @@ void VkContext::endUploadBatch() {
 
     VkCommandPool pool = hasDedicatedTransfer_ ? transferCommandPool_ : immCommandPool;
 
+    // Nothing is submitted to a lost device: its fence would never signal, so
+    // the batch would sit in inFlightBatches_ until the rebuild with its
+    // staging held. Dropped instead; what it carried is uploaded again by the
+    // world reload after the rebuild.
+    if (deviceLost_) {
+        dropUploadBatch(pool);
+        return;
+    }
+
     // Raw staging counts too. Checking only the allocator's list meant a batch
     // holding nothing but ImGui texture uploads looked empty, so the command
     // buffer holding every one of those copies was thrown away unsubmitted and
@@ -3672,6 +3681,12 @@ void VkContext::endUploadBatchSync() {
     }
 
     VkCommandPool pool = hasDedicatedTransfer_ ? transferCommandPool_ : immCommandPool;
+
+    // As endUploadBatch: nothing goes to a lost device, and nothing waits on it.
+    if (deviceLost_) {
+        dropUploadBatch(pool);
+        return;
+    }
 
     if (batchStagingBuffers_.empty() && batchRawStaging_.empty()) {
         vkEndCommandBuffer(batchCmd_);
@@ -3812,6 +3827,17 @@ void VkContext::deferStagingCleanup(AllocatedBuffer staging) {
 
 void VkContext::deferRawStagingCleanup(VkBuffer buffer, VkDeviceMemory memory) {
     batchRawStaging_.push_back({.buffer = buffer, .memory = memory});
+}
+
+void VkContext::dropUploadBatch(VkCommandPool pool) {
+    vkEndCommandBuffer(batchCmd_);
+    vkFreeCommandBuffers(device, pool, 1, &batchCmd_);
+    batchCmd_ = VK_NULL_HANDLE;
+    for (auto& staging : batchStagingBuffers_) {
+        destroyBuffer(allocator, staging);
+    }
+    batchStagingBuffers_.clear();
+    freeRawStaging();
 }
 
 void VkContext::freeRawStaging() {
