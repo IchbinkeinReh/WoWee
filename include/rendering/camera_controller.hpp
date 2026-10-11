@@ -271,6 +271,9 @@ public:
     /// The mover may not move (0x005fa060 -> 0x0074ba40): its keys start
     /// nothing - no step, turn or jump - and autorun ends (0x005fbbc0).
     void setMoverHeld(bool held) { moverHeld_ = held; }
+    /// The mover stopped with its keys as they are (0x0071ae10): forward and
+    /// back start nothing until they come to rest (forwardBackStopHolds).
+    void stopForwardBack() { forwardBackStopped_ = true; }
     void setMoverKeyRestrictions(bool noStrafe, bool noJump) {
         moverNoStrafe_ = noStrafe;
         moverNoJump_ = noJump;
@@ -892,6 +895,7 @@ private:
     bool moverNoStrafe_ = false;  ///< the mover's flags2 0x1
     bool moverNoJump_ = false;    ///< the mover's flags2 0x2
     bool moverHeld_ = false;      ///< 0x0074ba40: the mover may not move
+    bool forwardBackStopped_ = false;  ///< 0x0071ae10 with the input's +4 0x10000 kept
     bool yawFollowsVehicleCamera_ = false;  ///< a driver's vehicle camera turns the camera (0x00604490)
     // Server-driven gravity disable (levitate/hover): skip gravity accumulation.
     bool gravityDisabled_ = false;

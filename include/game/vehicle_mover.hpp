@@ -121,6 +121,15 @@ struct MoveSpline {
 /// SendCast (0x0080ac90): a spell with AttributesEx7 (+0x2c) 0x80 cast by the
 /// active mover asks the seated player's seat change (0x00747fa0) and stops
 /// the mover (0x0071ae10 -> 0x006ecde0, MSG_MOVE_STOP).
+/// That stop leaves the input as it is - its forward/back move still started
+/// (+4 0x10000) - so a key held starts nothing again (0x005fae70 restarts
+/// only a move not started, or one the other way): the mover stays stopped
+/// until the forward and back keys come to rest - none held, or both - which
+/// stops and forgets it, or until its keys are let go, as a mover that may
+/// not move has them (0x005fbbc0, the seat change's hold among it).
+[[nodiscard]] constexpr bool forwardBackStopHolds(bool stopped, bool forwardKeys, bool backKeys, bool moverHeld) {
+    return stopped && forwardKeys != backKeys && !moverHeld;
+}
 inline constexpr uint32_t kAttrEx7PrepareForVehicleControlEnd = 0x80;
 [[nodiscard]] inline bool castEndsVehicleControl(uint32_t attrEx7, uint64_t caster, uint64_t mover) {
     return caster != 0 && caster == mover && (attrEx7 & kAttrEx7PrepareForVehicleControlEnd) != 0;

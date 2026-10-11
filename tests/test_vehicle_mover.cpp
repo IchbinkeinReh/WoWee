@@ -118,3 +118,16 @@ TEST_CASE("a spell that ends vehicle control asks the seat change, cast by the m
     CHECK_FALSE(castEndsVehicleControl(0x40, 7, 7));
     CHECK_FALSE(castEndsVehicleControl(0x80, 0, 0));
 }
+
+TEST_CASE("a cast's stop keeps the mover stopped while its key is held (0x0071ae10, 0x005fae70)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    // Forward held: it holds.
+    CHECK(forwardBackStopHolds(true, true, false, false));
+    CHECK(forwardBackStopHolds(true, false, true, false));
+    // The keys at rest - none, or both ways - forget it.
+    CHECK_FALSE(forwardBackStopHolds(true, false, false, false));
+    CHECK_FALSE(forwardBackStopHolds(true, true, true, false));
+    // A mover that may not move has its keys let go (0x005fbbc0).
+    CHECK_FALSE(forwardBackStopHolds(true, true, false, true));
+    CHECK_FALSE(forwardBackStopHolds(false, true, false, false));
+}

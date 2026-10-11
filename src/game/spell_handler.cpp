@@ -899,12 +899,14 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
 
 void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
     // 0x0080ac90: AttributesEx7 0x80 from the active mover - the player's
-    // seat change is asked (0x00747fa0, the player seated); the mover's
-    // stop (0x0071ae10) is the hold that asking puts on it.
+    // seat change is asked (0x00747fa0, the player seated), then the mover
+    // stops, its keys as they are (0x0071ae10).
     const auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end()) return;
-    if (vehicle::castEndsVehicleControl(it->second.attrEx7, caster, owner_.activeMover()))
+    if (vehicle::castEndsVehicleControl(it->second.attrEx7, caster, owner_.activeMover())) {
         owner_.askVehicleSeatChange();
+        owner_.stopMover();
+    }
 }
 
 void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {

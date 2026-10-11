@@ -2978,6 +2978,9 @@ void Application::connectWorldHooks() {
                 logoutToLogin();
             }
         });
+        gameHandler->setMoverStopCallback([this]() {
+            if (renderer && renderer->getCameraController()) renderer->getCameraController()->stopForwardBack();
+        });
         gameHandler->setKnockBackCallback([this](float vcos, float vsin, float hspeed, float vspeed) {
             if (renderer && renderer->getCameraController()) {
                 renderer->getCameraController()->applyKnockBack(vcos, vsin, hspeed, vspeed);

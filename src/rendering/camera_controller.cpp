@@ -1,4 +1,5 @@
 #include "rendering/camera_controller.hpp"
+#include "game/vehicle_mover.hpp"
 #include "game/vehicle_camera.hpp"
 
 #include "core/env_flag.hpp"
@@ -3108,8 +3109,12 @@ void CameraController::update(float deltaTime) {
     const bool movBlocked = movementRooted_ || moverHeld_;
     // Auto-follow uses run speed (same as auto-run), not walk speed
     if (autoFollowMove) autoRunning = true;
-    bool nowForward = !movBlocked && (keyW || mouseAutorun || autoRunning);
-    bool nowBackward = !movBlocked && keyS;
+    // A mover stopped by a cast (0x0071ae10) stays stopped while its keys
+    // are held as they were (0x005fae70).
+    const bool forwardKeys = keyW || mouseAutorun || autoRunning;
+    forwardBackStopped_ = game::vehicle::forwardBackStopHolds(forwardBackStopped_, forwardKeys, keyS, moverHeld_);
+    bool nowForward = !movBlocked && !forwardBackStopped_ && forwardKeys;
+    bool nowBackward = !movBlocked && !forwardBackStopped_ && keyS;
     bool nowStrafeLeft = false;
     bool nowStrafeRight = false;
     bool nowTurnLeft = false;
@@ -3944,6 +3949,7 @@ bool CameraController::isMoving() const {
 }
 
 void CameraController::clearMovementInputs() {
+    forwardBackStopped_ = false;
     moveForwardActive = false;
     moveBackwardActive = false;
     strafeLeftActive = false;

@@ -1618,6 +1618,13 @@ public:
     //   in render space, see CameraController::applyKnockBack),
     //   hspeed, vspeed (raw from packet; vspeed is negative when the server intends
     //   an upward launch - negate before applying as initial Y velocity).
+    /// The active mover's forward/back move stopped, its keys as they are
+    /// (0x0071ae10 -> 0x006ecde0, MSG_MOVE_STOP).
+    using MoverStopCallback = std::function<void()>;
+    void setMoverStopCallback(MoverStopCallback cb) { moverStopCallback_ = std::move(cb); }
+    void stopMover() {
+        if (moverStopCallback_) moverStopCallback_();
+    }
     using KnockBackCallback = std::function<void(float vcos, float vsin, float hspeed, float vspeed)>;
     void setKnockBackCallback(KnockBackCallback cb) { knockBackCallback_ = std::move(cb); }
 
@@ -4721,6 +4728,7 @@ private:
 
     WorldEntryCallback worldEntryCallback_;
     KnockBackCallback knockBackCallback_;
+    MoverStopCallback moverStopCallback_;
     CameraShakeCallback cameraShakeCallback_;
     PlayerSoundCallback playerSoundCallback_;
     AutoFollowCallback autoFollowCallback_;
