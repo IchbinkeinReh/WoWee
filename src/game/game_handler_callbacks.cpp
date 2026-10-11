@@ -1159,6 +1159,10 @@ void GameHandler::announceVehicleAim() {
     }
 }
 
+void GameHandler::releaseVehicleMove(uint64_t mover) {
+    if (movementHandler_) movementHandler_->releaseHeldVehicleMove(mover);
+}
+
 void GameHandler::sendEjectPassenger(uint64_t passengerGuid) {
     if (state != WorldState::IN_WORLD || !socket) return;
     socket->send(VehiclePackets::ejectPassenger(passengerGuid));

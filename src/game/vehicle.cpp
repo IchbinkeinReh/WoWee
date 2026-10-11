@@ -84,6 +84,11 @@ void VehicleRoster::setMoveFlags2(uint64_t guid, uint32_t flags2) {
     else moveFlags2_[guid] = flags2;
 }
 
+uint32_t VehicleRoster::moveFlags2(uint64_t guid) const {
+    const auto it = moveFlags2_.find(guid);
+    return it != moveFlags2_.end() ? it->second : 0;
+}
+
 void VehicleRoster::setPitch(uint64_t guid, float pitch) {
     if (guid == 0) return;
     if (pitch == 0.0f) pitches_.erase(guid);

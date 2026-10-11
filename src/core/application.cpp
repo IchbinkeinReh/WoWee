@@ -600,6 +600,11 @@ bool Application::initialize() {
         entitySpawner_ = std::make_unique<EntitySpawner>(
             renderer.get(), assetManager.get(), gameHandler.get(), &gameServices_);
         entitySpawner_->initialize();
+        // A move into or out of a seat waits on the vehicle's animation
+        // (0x0074c040).
+        gameHandler->setVehicleMoveHoldCallback([this](uint64_t mover, uint64_t transport, uint8_t seat) {
+            return entitySpawner_ && entitySpawner_->holdVehicleMove(mover, transport, seat);
+        });
 
         appearanceComposer_ = std::make_unique<AppearanceComposer>(
             renderer.get(), assetManager.get(), gameHandler.get(),

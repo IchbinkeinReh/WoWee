@@ -718,3 +718,17 @@ TEST_CASE("An outgoing jump carries the client's block", "[entity][fall]") {
         CHECK(outgoingJumpBlock(kForward | kWalking, 0.0f, 2.5f, 7.0f, 4.5f).horizontalSpeed == 2.5f);
     }
 }
+
+TEST_CASE("A moving entity's velocity is its direction times its speed (0x006fed70)", "[entity][movement]") {
+    wowee::game::Entity e(1);
+    CHECK(glm::length(e.getMoveVelocity()) == Catch::Approx(0.0f));
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveTo(3.0f, 4.0f, 0.0f, 0.0f, 2.0f);  // 5 yards in 2 s
+    const glm::vec3 v = e.getMoveVelocity();
+    CHECK(v.x == Catch::Approx(1.5f));
+    CHECK(v.y == Catch::Approx(2.0f));
+    CHECK(v.z == Catch::Approx(0.0f));
+    // Arrived, it has none.
+    e.updateMovement(2.5f);
+    CHECK(glm::length(e.getMoveVelocity()) == Catch::Approx(0.0f));
+}

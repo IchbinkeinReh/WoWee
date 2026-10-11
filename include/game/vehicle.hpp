@@ -77,6 +77,8 @@ struct SeatRecord {
     int32_t vehicleEnterAnimBone = 0;     ///< +0x90, a key bone
     int32_t vehicleExitAnimBone = 0;      ///< +0x94
     int32_t vehicleRideAnimLoopBone = 0;  ///< +0x98
+    float vehicleEnterAnimDelay = 0.0f;   ///< +0x9c
+    float vehicleExitAnimDelay = 0.0f;    ///< +0xa0
     uint32_t vehicleAbilityDisplay = 0;   ///< +0xa4, 1 hands the action bar to the vehicle (0x005d4ad0)
     uint32_t enterUISoundId = 0;          ///< +0xa8
     uint32_t exitUISoundId = 0;           ///< +0xac
@@ -183,6 +185,7 @@ public:
     /// The unit's movement flags2 (+0x7d0), whose 0x40 makes a leaving one
     /// of its own will (0x0074bb60).
     void setMoveFlags2(uint64_t guid, uint32_t flags2);
+    [[nodiscard]] uint32_t moveFlags2(uint64_t guid) const;
     /// The unit's pitch as its last movement said (+0x7c0 of its movement).
     void setPitch(uint64_t guid, float pitch);
     [[nodiscard]] float pitch(uint64_t guid) const;

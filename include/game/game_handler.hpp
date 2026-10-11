@@ -1471,6 +1471,16 @@ public:
     using UnitJumpCallback = std::function<void(uint64_t guid, ReportedJump jump)>;
     void setUnitJumpCallback(UnitJumpCallback cb) { unitJumpCallback_ = std::move(cb); }
 
+    /// A monster move that takes a unit into or out of a vehicle's seat is
+    /// held while the vehicle plays the seat's enter or exit animation
+    /// (0x0073f590 -> 0x0074c040): asked with the unit, the transport the move
+    /// takes it to and the seat; true holds it, and releaseVehicleMove plays
+    /// it out (0x00748230 -> 0x00747990).
+    using VehicleMoveHoldCallback = std::function<bool(uint64_t mover, uint64_t transport, uint8_t seat)>;
+    void setVehicleMoveHoldCallback(VehicleMoveHoldCallback cb) { vehicleMoveHoldCallback_ = std::move(cb); }
+    [[nodiscard]] const VehicleMoveHoldCallback& vehicleMoveHoldCallback() const { return vehicleMoveHoldCallback_; }
+    void releaseVehicleMove(uint64_t mover);
+
     // Unit move-flags callback: fired on every MSG_MOVE_* for other players with the raw flags field.
     // Drives Walk(4) vs Run(5) selection and swim state initialization from heartbeat packets.
     /// A unit's movement flags changed.
@@ -4897,6 +4907,7 @@ private:
     uint32_t vehicleId_ = 0;
     vehicle::VehicleRoster vehicleRoster_;
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
+    VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     bool petActionsOnBonusBar_ = false;
     /// The column the arena rosters are sorted by, so clicking it again knows
     /// to reverse rather than re-sort the same way.

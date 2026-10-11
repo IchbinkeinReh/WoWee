@@ -2372,6 +2372,25 @@ void CharacterRenderer::setLocomotionSpeed(uint32_t instanceId, float yardsPerSe
         std::isfinite(yardsPerSecond) ? std::max(0.0f, yardsPerSecond) : 0.0f;
 }
 
+namespace {
+// Which key bone animation each bone follows: its own key bone's, else its
+// parent's. Parents come first, so one pass finds them.
+template <class KeyBoneAnimations>
+void assignKeyBoneAnimations(const pipeline::M2Model& model, const KeyBoneAnimations& anims,
+                             std::vector<int16_t>& out) {
+    out.assign(model.bones.size(), -1);
+    if (anims.empty()) return;
+    for (size_t i = 0; i < model.bones.size(); i++) {
+        const auto& bone = model.bones[i];
+        int16_t set = bone.parentBone >= 0 && static_cast<size_t>(bone.parentBone) < i ? out[bone.parentBone] : -1;
+        for (size_t a = 0; a < anims.size(); a++) {
+            if (anims[a].keyBoneId == bone.keyBoneId) set = static_cast<int16_t>(a);
+        }
+        out[i] = set;
+    }
+}
+}  // namespace
+
 void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::mat4* viewProjection) {
     // Animate everything that can be drawn. The animation radius used to be
     // 120 yards against a 130-yard draw radius, so anything between the two
@@ -2450,14 +2469,28 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
             }
         }
 
-        // Key bones on their own sequences run on at rate 1, looping.
+        // Key bones on their own sequences run on at rate 1, looping; one
+        // played once gives its bone back to the body at its end
+        // (0x00757280 -> 0x00757420 -> 0x00735a60).
         if (inst.cachedModel && !inst.animationFrozen) {
+            bool ended = false;
             for (auto& k : inst.keyBoneAnimations) {
                 if (k.sequence < 0 || static_cast<size_t>(k.sequence) >= inst.cachedModel->data.sequences.size())
                     continue;
                 const float duration = static_cast<float>(inst.cachedModel->data.sequences[k.sequence].duration);
                 k.time += deltaTime * 1000.0f;
-                if (duration > 0.0f) k.time = std::fmod(k.time, duration);
+                if (k.once && k.time >= duration) {
+                    k.sequence = -1;
+                    ended = true;
+                } else if (duration > 0.0f) {
+                    k.time = std::fmod(k.time, duration);
+                }
+            }
+            if (ended) {
+                auto& anims = inst.keyBoneAnimations;
+                anims.erase(std::remove_if(anims.begin(), anims.end(), [](const auto& k) { return k.sequence < 0; }),
+                            anims.end());
+                assignKeyBoneAnimations(inst.cachedModel->data, anims, inst.boneKeyBoneAnimation);
             }
         }
 
@@ -2899,26 +2932,9 @@ std::optional<glm::mat4> CharacterRenderer::seatTargetMatrix(uint32_t instanceId
     return seatWorld(it->second);
 }
 
-namespace {
-// Which key bone animation each bone follows: its own key bone's, else its
-// parent's. Parents come first, so one pass finds them.
-template <class KeyBoneAnimations>
-void assignKeyBoneAnimations(const pipeline::M2Model& model, const KeyBoneAnimations& anims,
-                             std::vector<int16_t>& out) {
-    out.assign(model.bones.size(), -1);
-    if (anims.empty()) return;
-    for (size_t i = 0; i < model.bones.size(); i++) {
-        const auto& bone = model.bones[i];
-        int16_t set = bone.parentBone >= 0 && static_cast<size_t>(bone.parentBone) < i ? out[bone.parentBone] : -1;
-        for (size_t a = 0; a < anims.size(); a++) {
-            if (anims[a].keyBoneId == bone.keyBoneId) set = static_cast<int16_t>(a);
-        }
-        out[i] = set;
-    }
-}
-}  // namespace
 
-bool CharacterRenderer::playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId) {
+bool CharacterRenderer::playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId,
+                                             bool once) {
     auto it = instances.find(instanceId);
     if (it == instances.end() || keyBoneId < 0 || !hasKeyBone(instanceId, keyBoneId)) return false;
     auto& instance = it->second;
@@ -2934,7 +2950,7 @@ bool CharacterRenderer::playKeyBoneAnimation(uint32_t instanceId, int32_t keyBon
     auto& anims = instance.keyBoneAnimations;
     auto a = std::find_if(anims.begin(), anims.end(), [&](const auto& k) { return k.keyBoneId == keyBoneId; });
     if (a == anims.end()) a = anims.insert(anims.end(), CharacterInstance::KeyBoneAnimation{});
-    *a = CharacterInstance::KeyBoneAnimation{keyBoneId, animationId, sequence, 0.0f};
+    *a = CharacterInstance::KeyBoneAnimation{keyBoneId, animationId, sequence, 0.0f, once};
     assignKeyBoneAnimations(model, anims, instance.boneKeyBoneAnimation);
     return true;
 }
@@ -2949,6 +2965,16 @@ bool CharacterRenderer::stopKeyBoneAnimation(uint32_t instanceId, int32_t keyBon
     anims.erase(a);
     assignKeyBoneAnimations(models[instance.modelId].data, anims, instance.boneKeyBoneAnimation);
     return true;
+}
+
+std::optional<float> CharacterRenderer::keyBoneAnimationTime(uint32_t instanceId, int32_t keyBoneId,
+                                                           uint32_t animationId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return std::nullopt;
+    for (const auto& k : it->second.keyBoneAnimations) {
+        if (k.keyBoneId == keyBoneId && k.animationId == animationId) return k.time;
+    }
+    return std::nullopt;
 }
 
 std::optional<uint32_t> CharacterRenderer::armAnimation(uint32_t instanceId, int arm) const {

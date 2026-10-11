@@ -230,8 +230,23 @@ public:
     void handleForceMoveFlagChange(network::Packet& packet, const char* name, Opcode ackOpcode, uint32_t flag, bool set);
     void handleMoveSetCollisionHeight(network::Packet& packet);
     void applyTaxiMountForCurrentNode();
+    /// Plays out a monster move held for a vehicle's animation (0x00747990).
+    void releaseHeldVehicleMove(uint64_t mover);
 
 private:
+    /// A monster move held for a vehicle's enter or exit animation, kept as
+    /// it came (0x00748170) and run again as it is let go.
+    struct HeldVehicleMove {
+        uint16_t opcode = 0;
+        std::vector<uint8_t> data;
+        bool transportForm = false;
+    };
+    std::unordered_map<uint64_t, HeldVehicleMove> heldVehicleMoves_;
+    bool replayingVehicleMove_ = false;
+    /// 0x0074c040: a move for a unit with one held lets that one go first;
+    /// then this one is held where the vehicle's animation asks.
+    bool holdForVehicle(const network::Packet& packet, uint64_t mover, uint64_t transport, uint8_t seat,
+                        bool transportForm);
     // --- Packet handlers ---
     void handleMonsterMove(network::Packet& packet);
     void handleMonsterMoveTransport(network::Packet& packet);

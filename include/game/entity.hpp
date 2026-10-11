@@ -588,6 +588,28 @@ public:
         if (std::isfinite(yardsPerSecond) && yardsPerSecond >= 0.0f) moveSpeed_ = yardsPerSecond;
     }
 
+    /// The current move's direction times its speed - CMovement's +0x64
+    /// direction and +0x8c speed (0x006fed70) - on the game's axes; nothing
+    /// while it is not moving.
+    [[nodiscard]] glm::vec3 getMoveVelocity() const {
+        if (!isActivelyMoving()) return glm::vec3(0.0f);
+        if (movingByFlags_) {
+            // The heading turns with the facing (advanceByFlags).
+            const float t = std::min(moveElapsed_, kFlagDeadReckonLimitSec);
+            const float heading = flagHeading_ + flagArcRate_ * t;
+            return {flagSpeed_ * std::cos(heading), -flagSpeed_ * std::sin(heading), flagClimb_};
+        }
+        glm::vec3 way(moveEndX_ - moveStartX_, moveEndY_ - moveStartY_, moveEndZ_ - moveStartZ_);
+        if (usePathMode_ && activeSpline_ && splineDurationMs_ > 0) {
+            uint32_t ms = static_cast<uint32_t>(moveElapsed_ * 1000.0f);
+            if (ms >= splineDurationMs_) ms = splineDurationMs_ - 1;
+            way = activeSpline_->evaluate(ms).tangent;
+        }
+        const float length = std::sqrt(way.x * way.x + way.y * way.y + way.z * way.z);
+        if (length < 1e-6f) return glm::vec3(0.0f);
+        return way * (moveSpeed_ / length);
+    }
+
     void updateMovement(float deltaTime) {
         if (turnRate_ != 0.0f) {
             turnElapsed_ += deltaTime;

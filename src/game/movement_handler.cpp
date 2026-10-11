@@ -1760,6 +1760,9 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
         }
     }
 
+    // Held while its vehicle plays the seat's exit animation (0x0074c040).
+    if (!isPreWotlk() && holdForVehicle(packet, data.guid, 0, 0xff, false)) return;
+
     // A monster move with no transport takes the unit off any it was on,
     // moved through (0x0073f590 -> 0x0073c8e0 -> 0x006f0c70 with none).
     if (!isPreWotlk() && owner_.vehicleRoster().passenger(data.guid)) {
@@ -1886,6 +1889,30 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
     }
 }
 
+bool MovementHandler::holdForVehicle(const network::Packet& packet, uint64_t mover, uint64_t transport, uint8_t seat,
+                                     bool transportForm) {
+    if (replayingVehicleMove_ || mover == 0) return false;
+    // 0x0074c040 -> 0x00748230: the one held goes first.
+    if (heldVehicleMoves_.count(mover)) releaseHeldVehicleMove(mover);
+    const auto& hold = owner_.vehicleMoveHoldCallback();
+    if (!hold || !hold(mover, transport, seat)) return false;
+    heldVehicleMoves_[mover] = HeldVehicleMove{.opcode = packet.getOpcode(), .data = packet.getData(),
+                                                .transportForm = transportForm};
+    return true;
+}
+
+void MovementHandler::releaseHeldVehicleMove(uint64_t mover) {
+    const auto it = heldVehicleMoves_.find(mover);
+    if (it == heldVehicleMoves_.end()) return;
+    HeldVehicleMove held = std::move(it->second);
+    heldVehicleMoves_.erase(it);
+    network::Packet packet(held.opcode, std::move(held.data));
+    replayingVehicleMove_ = true;
+    if (held.transportForm) handleMonsterMoveTransport(packet);
+    else handleMonsterMove(packet);
+    replayingVehicleMove_ = false;
+}
+
 void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
     uint64_t moverGuid = 0;
     uint64_t transportGuid = 0;
@@ -1898,6 +1925,12 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         if (packet.getRemainingSize() < 2 + 12) return;
         const auto seat = static_cast<int8_t>(packet.readUInt8());
         /*uint8_t toggle =*/ packet.readUInt8();
+        // Held while the vehicle plays the seat's enter or exit animation
+        // (0x0074c040).
+        if (holdForVehicle(packet, moverGuid, transportGuid, static_cast<uint8_t>(seat), true)) {
+            packet.skipAll();
+            return;
+        }
         // Its seat, where the transport is a vehicle (0x0074c040), moved
         // through (0x0073c8e0 sets +0xa30 0x20000000 around it).
         owner_.vehicleRoster().setTransport(moverGuid, transportGuid, seat,

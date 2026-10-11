@@ -164,6 +164,8 @@ void EntitySpawner::loadVehicleTables() {
         rec.exitUISoundId = u32(sd, row, column(sl, sd, "ExitUISoundID"), 0);
         rec.uiSkin = u32(sd, row, column(sl, sd, "UiSkin"), 0);
         rec.vehicleAbilityDisplay = u32(sd, row, column(sl, sd, "VehicleAbilityDisplay"), 0);
+        rec.vehicleEnterAnimDelay = fcol("VehicleEnterAnimDelay");
+        rec.vehicleExitAnimDelay = fcol("VehicleExitAnimDelay");
         vehicleTables_.addSeat(rec);
     }
 
@@ -499,11 +501,12 @@ void EntitySpawner::planSeatState(uint64_t guid, SeatedPassenger& p, uint32_t no
             const float distance = glm::length(way);
             std::optional<float> along;
             if (entering && p.vehicleGuid != 0) {
-                // The seat's speed less the vehicle's own along the way
-                // (0x006fed70).
+                // The seat's speed less the vehicle's own along the way: its
+                // movement's direction times its speed (0x006fed70), on the
+                // render axes.
                 glm::vec3 velocity(0.0f);
-                if (auto it = vehicleMotion_.find(p.vehicleGuid); it != vehicleMotion_.end()) {
-                    velocity = it->second.velocity;
+                if (auto vehicle = gameHandler_->getEntityManager().getEntity(p.vehicleGuid)) {
+                    velocity = core::coords::canonicalToRender(vehicle->getMoveVelocity());
                 }
                 along = distance > 0.0001f ? seat->enterSpeed - glm::dot(velocity, way / distance) : 0.0f;
             }
@@ -621,27 +624,101 @@ std::optional<EntitySpawner::SeatCameraCue> EntitySpawner::takeSeatCameraCue() {
     return cue;
 }
 
+bool EntitySpawner::holdVehicleMove(uint64_t mover, uint64_t transport, uint8_t seatIndex) {
+    auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!cr || !gameHandler_) return false;
+    loadVehicleTables();
+    const auto& roster = gameHandler_->vehicleRoster();
+    // 0x0074bcb0: a change of transport or seat, into a vehicle's or out of one.
+    const auto current = roster.passenger(mover);
+    if (current && current->vehicleGuid == transport && current->seat == seatIndex) return false;
+    const bool entering = game::vehicle::isVehicleGuid(transport) || game::vehicle::isPlayerGuid(transport);
+    uint64_t vehicle = transport;
+    if (!entering) {
+        if (!current) return false;
+        vehicle = current->vehicleGuid;
+        seatIndex = current->seat;
+    }
+    const game::vehicle::SeatRecord* seat = vehicleTables_.seat(roster.vehicleId(vehicle), seatIndex);
+    if (!seat) return false;
+    const auto anim = game::vehicle::vehicleSeatAnim(*seat, entering, (roster.moveFlags2(mover) & 0x40) != 0);
+    const uint32_t vehicleInstance = anim ? vehicleInstanceFor(vehicle) : 0;
+    // 0x00756ca0: the vehicle's model has it.
+    if (!anim || vehicleInstance == 0 || !cr->hasAnimation(vehicleInstance, anim->animation)) return false;
+    // 0x0074be10 -> 0x00756f80: the vehicle plays it once on its bone, or
+    // as a whole past 0x22.
+    if (anim->bone == game::vehicle::kWholeModelBone) {
+        cr->playAnimation(vehicleInstance, anim->animation, false);
+    } else if (!cr->playKeyBoneAnimation(vehicleInstance, anim->bone, anim->animation, true)) {
+        return false;
+    }
+    // 0x007479e0: leaving, its ride animation on that bone is the exit's now.
+    if (!entering) {
+        if (auto it = seatedPassengers_.find(mover);
+            it != seatedPassengers_.end() && it->second.rideLoopVehicleInstance == vehicleInstance &&
+            it->second.rideLoopBone == anim->bone) {
+            it->second.rideLoopVehicleInstance = 0;
+            it->second.rideLoopBone = -1;
+        }
+    }
+    const uint32_t now = seatClockMs();
+    HeldVehicleMove held;
+    held.vehicleGuid = vehicle;
+    held.vehicleInstance = vehicleInstance;
+    held.bone = anim->bone;
+    held.animation = anim->animation;
+    held.timed = anim->timed;
+    held.startMs = now;
+    held.releaseMs = now + anim->waitMs;  // 0x00748070: +0x64
+    if (!held.timed) {
+        // The first of "$VG0"/"$VT0" (any seat) and the seat's own.
+        for (const uint32_t id : {anim->eventBase, anim->eventBase + ((static_cast<uint32_t>(seatIndex) + 1u) << 24)}) {
+            const auto at = cr->getAnimationEventTime(vehicleInstance, anim->animation, id);
+            if (at && *at != 0 && (!held.eventMs || *at < *held.eventMs)) held.eventMs = *at;
+        }
+    }
+    heldVehicleMoves_[mover] = held;
+    return true;
+}
+
+void EntitySpawner::stepHeldVehicleMoves(uint32_t nowMs) {
+    if (heldVehicleMoves_.empty()) return;
+    auto* cr = renderer_->getCharacterRenderer();
+    std::vector<uint64_t> release;
+    for (const auto& [mover, held] : heldVehicleMoves_) {
+        bool go = reached(nowMs, held.releaseMs);
+        if (!held.timed && !go) {
+            // At the event for its seat (0x00757060 / 0x007570f0), or as the
+            // animation ends or stops (0x00757280).
+            const uint32_t elapsed = nowMs - held.startMs;
+            if (held.eventMs && elapsed >= *held.eventMs) go = true;
+            if (held.bone == game::vehicle::kWholeModelBone) {
+                uint32_t playing = 0;
+                float time = 0.0f;
+                float duration = 0.0f;
+                if (!cr->getAnimationState(held.vehicleInstance, playing, time, duration) ||
+                    playing != held.animation || time >= duration)
+                    go = true;
+            } else if (!cr->keyBoneAnimationTime(held.vehicleInstance, held.bone, held.animation)) {
+                go = true;
+            }
+        }
+        if (go) release.push_back(mover);
+    }
+    for (const uint64_t mover : release) {
+        heldVehicleMoves_.erase(mover);
+        gameHandler_->releaseVehicleMove(mover);  // 0x00748230 -> 0x00747990
+    }
+}
+
 void EntitySpawner::updateVehiclePassengers() {
     auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!cr || !gameHandler_) return;
+    stepHeldVehicleMoves(seatClockMs());
     auto& roster = gameHandler_->vehicleRoster();
     if (roster.passengers().empty() && seatedPassengers_.empty()) return;
     loadVehicleTables();
     const uint32_t now = seatClockMs();
-
-    // The vehicles' speeds, for the way into their seats (0x006fed70).
-    for (const auto& [guid, passenger] : roster.passengers()) {
-        glm::vec3 place(0.0f);
-        if (!cr->getInstancePosition(vehicleInstanceFor(passenger.vehicleGuid), place)) continue;
-        VehicleMotion& m = vehicleMotion_[passenger.vehicleGuid];
-        if (m.known && now != m.ms) {
-            const float dt = static_cast<float>(now - m.ms) * 0.001f;
-            if (dt > 0.0f && dt < 1.0f) m.velocity = (place - m.place) / dt;
-        }
-        m.place = place;
-        m.ms = now;
-        m.known = true;
-    }
 
     // A change of transport (0x0074b200 -> 0x00749aa0): where it comes from
     // (+0x20), where it goes (+0x28), the seat its moves read (+0x54), and

@@ -112,7 +112,13 @@ public:
     /// A key bone and everything below it on an animation of its own,
     /// looped (0x00735820 with a bone, 0x00832ab0). False where the model
     /// lacks the bone or the animation.
-    bool playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId);
+    /// `once` plays it through a single time and gives the bone back to the
+    /// body at its end (0x00756f80's one-shot, 0x00757280 -> 0x00757420).
+    bool playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId, bool once = false);
+    /// How far into its own animation a key bone is, in ms; nothing where it
+    /// plays none, or another.
+    [[nodiscard]] std::optional<float> keyBoneAnimationTime(uint32_t instanceId, int32_t keyBoneId,
+                                                            uint32_t animationId) const;
     /// The key bone back to the body (0x00735a60). False where it had none.
     bool stopKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId);
     /// Whether the model has the key bone.
@@ -484,6 +490,7 @@ private:
             uint32_t animationId = 0;
             int sequence = -1;
             float time = 0.0f;
+            bool once = false;
         };
         std::vector<KeyBoneAnimation> keyBoneAnimations;
         std::vector<int16_t> boneKeyBoneAnimation;

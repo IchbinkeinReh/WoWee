@@ -373,3 +373,38 @@ TEST_CASE("a seat's CameraOffset is (Y, -X, Z) turned by its facing (0x00759200)
     CHECK(o.x == Catch::Approx(-1.0f));
     CHECK(o.y == Catch::Approx(-10.0f).margin(1e-5));
 }
+
+TEST_CASE("a move into or out of a seat waits on the vehicle's animation (0x0074bcb0, 0x00748070)", "[vehicle]") {
+    gv::SeatRecord seat;
+    seat.vehicleEnterAnim = 150;
+    seat.vehicleEnterAnimBone = 5;
+    seat.vehicleExitAnim = 151;
+    seat.vehicleExitAnimBone = 40;  // past 0x22: the whole model
+    // No flag, no animation.
+    CHECK_FALSE(gv::vehicleSeatAnim(seat, true, false));
+    seat.flags = gv::kSeatFlagVehicleEnterAnim | gv::kSeatFlagVehicleExitAnimForced;
+    auto in = gv::vehicleSeatAnim(seat, true, false);
+    REQUIRE(in);
+    CHECK(in->animation == 150u);
+    CHECK(in->bone == 5);
+    CHECK_FALSE(in->timed);
+    CHECK(in->waitMs == 3000u);
+    CHECK(in->eventBase == 0x30475624u);  // "$VG0"
+    // Leaving of its own will asks 0x40000, which this seat has not.
+    CHECK_FALSE(gv::vehicleSeatAnim(seat, false, true));
+    auto out = gv::vehicleSeatAnim(seat, false, false);
+    REQUIRE(out);
+    CHECK(out->bone == gv::kWholeModelBone);
+    CHECK(out->eventBase == 0x30545624u);  // "$VT0"
+    // A delay where the seat gives one, three seconds at most.
+    seat.flags |= gv::kSeatFlagEnterAnimDelayed;
+    seat.vehicleEnterAnimDelay = 0.75f;
+    in = gv::vehicleSeatAnim(seat, true, false);
+    CHECK(in->timed);
+    CHECK(in->waitMs == 750u);
+    seat.vehicleEnterAnimDelay = 9.0f;
+    CHECK(gv::vehicleSeatAnim(seat, true, false)->waitMs == 3000u);
+    // 0x1fa or past it is no animation.
+    seat.vehicleEnterAnim = 0x1fa;
+    CHECK_FALSE(gv::vehicleSeatAnim(seat, true, false));
+}

@@ -361,6 +361,12 @@ public:
         float turned = 0.0f;  ///< radians, render yaw
     };
     [[nodiscard]] std::optional<VehicleCameraView> localVehicleCameraView();
+    /// Whether a monster move taking `mover` to `transport`'s `seat` waits on
+    /// its vehicle's enter or exit animation (0x0074bcb0); where it does the
+    /// vehicle plays it and the move is let go after the seat's delay, at the
+    /// animation's event for the seat, at its end or after three seconds
+    /// (0x0074be10, 0x00748070, 0x00757060 / 0x007570f0, 0x00757280).
+    bool holdVehicleMove(uint64_t mover, uint64_t transport, uint8_t seat);
     /// The local player's seat camera, due now (0x0075aac0 -> 0x0075a630
     /// -> 0x0074c0e0): whether it is in a seat then (states 1 to 3), the
     /// seat, and the time the camera takes. Taken once.
@@ -550,14 +556,20 @@ private:
         uint32_t lastMs = 0;               ///< +0xa0
     };
     LocalVehicleCamera localVehicleCamera_;
-    /// Where each vehicle was drawn last frame and how fast it went.
-    struct VehicleMotion {
-        glm::vec3 place{0.0f};
-        glm::vec3 velocity{0.0f};
-        uint32_t ms = 0;
-        bool known = false;
+    /// A passenger's move held for its vehicle's animation (the passenger
+    /// component's +0x10 0x200 and what it keeps beside it).
+    struct HeldVehicleMove {
+        uint64_t vehicleGuid = 0;          ///< +0x68
+        uint32_t vehicleInstance = 0;
+        int32_t bone = 0;
+        uint32_t animation = 0;
+        bool timed = false;                ///< +0x10 0x80
+        uint32_t startMs = 0;
+        uint32_t releaseMs = 0;            ///< +0x64
+        std::optional<uint32_t> eventMs;   ///< the "$VG"/"$VT" event for its seat
     };
-    std::unordered_map<uint64_t, VehicleMotion> vehicleMotion_;
+    std::unordered_map<uint64_t, HeldVehicleMove> heldVehicleMoves_;
+    void stepHeldVehicleMoves(uint32_t nowMs);
     void releaseSeatedPassenger(uint64_t guid, SeatedPassenger& seated, bool landing);
     /// The vehicle a unit's seats count from while it is in a passenger
     /// state, else the one it would (0x00748040, 0x0074c650).

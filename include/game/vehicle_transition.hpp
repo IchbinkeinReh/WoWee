@@ -58,6 +58,49 @@ inline constexpr int32_t kWholeModelBone = 0x1a;
     return static_cast<uint32_t>(column) > 0x22u ? kWholeModelBone : column;
 }
 
+/// VehicleSeat Flags for the vehicle's own animations as a passenger gets in
+/// or out (0x0074bcb0, 0x0074be10, 0x00748070).
+inline constexpr uint32_t kSeatFlagVehicleEnterAnim = 0x400000;
+inline constexpr uint32_t kSeatFlagVehicleExitAnimVoluntary = 0x40000;
+inline constexpr uint32_t kSeatFlagVehicleExitAnimForced = 0x80000;
+inline constexpr uint32_t kSeatFlagEnterAnimDelayed = 0x8000000;
+inline constexpr uint32_t kSeatFlagExitAnimDelayed = 0x10000000;
+
+/// The vehicle animation a monster move into or out of a seat waits on
+/// (0x0074bcb0): in, VehicleEnterAnim on VehicleEnterAnimBone with Flags
+/// 0x400000; out, VehicleExitAnim on VehicleExitAnimBone with Flags 0x40000
+/// where the unit leaves of its own will (movement flags2 0x40), else
+/// 0x80000; below 0x1fa either way. The wait is the seat's
+/// VehicleEnterAnimDelay / VehicleExitAnimDelay where Flags 0x8000000 /
+/// 0x10000000 give one, else until the animation's "$VG" / "$VT" event for
+/// the seat; three seconds at most (0x00748070).
+struct VehicleSeatAnim {
+    uint32_t animation = 0;
+    int32_t bone = 0;
+    bool timed = false;
+    uint32_t waitMs = 3000;
+    uint32_t eventBase = 0;  ///< "$VG0" or "$VT0" as a word; the seat's is plus (seat + 1) << 24
+};
+[[nodiscard]] inline std::optional<VehicleSeatAnim> vehicleSeatAnim(const SeatRecord& seat, bool entering,
+                                                                    bool voluntary) {
+    const uint32_t flag = entering ? kSeatFlagVehicleEnterAnim
+                                   : (voluntary ? kSeatFlagVehicleExitAnimVoluntary : kSeatFlagVehicleExitAnimForced);
+    const int32_t anim = entering ? seat.vehicleEnterAnim : seat.vehicleExitAnim;
+    if ((seat.flags & flag) == 0 || static_cast<uint32_t>(anim) >= static_cast<uint32_t>(kNoAnimation))
+        return std::nullopt;
+    VehicleSeatAnim a;
+    a.animation = static_cast<uint32_t>(anim);
+    a.bone = vehicleAnimBone(entering ? seat.vehicleEnterAnimBone : seat.vehicleExitAnimBone);
+    a.timed = (seat.flags & (entering ? kSeatFlagEnterAnimDelayed : kSeatFlagExitAnimDelayed)) != 0;
+    if (a.timed) {
+        const float delay = entering ? seat.vehicleEnterAnimDelay : seat.vehicleExitAnimDelay;
+        const auto ms = static_cast<uint32_t>(static_cast<int64_t>(std::lround(delay * 1000.0f)));
+        a.waitMs = ms > 3000u ? 3000u : ms;
+    }
+    a.eventBase = entering ? 0x30475624u : 0x30545624u;
+    return a;
+}
+
 /// Whether a change of transport is moved through (0x0074b840): the unit's
 /// +0xa30 0x20000000 - set while a monster move (0x0073c8e0) or an 0xED
 /// movement packet (0x007188f0) or the active mover's own move with flags2
