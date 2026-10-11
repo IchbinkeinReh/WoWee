@@ -205,6 +205,24 @@ std::optional<uint32_t> M2Renderer::soleSequenceId(uint32_t instanceId) const {
     return inst.cachedModel->sequences[0].id;
 }
 
+bool M2Renderer::getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& out) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return false;
+    const auto& inst = instances[idxIt->second];
+    const M2ModelGPU* model = inst.cachedModel;
+    if (!model) return false;
+    const pipeline::M2Attachment* point = nullptr;
+    if (attachmentId < model->attachmentLookup.size()) {
+        const uint16_t index = model->attachmentLookup[attachmentId];
+        if (index < model->attachments.size()) point = &model->attachments[index];
+    }
+    if (!point) return false;
+    glm::mat4 bone(1.0f);
+    if (point->bone < inst.boneMatrices.size()) bone = inst.boneMatrices[point->bone];
+    out = inst.modelMatrix * bone * glm::translate(glm::mat4(1.0f), point->position);
+    return true;
+}
+
 void M2Renderer::setInstanceAnimationHeld(uint32_t instanceId, uint32_t animationId,
                                           bool skipToEnd) {
     auto idxIt = instanceIndexById.find(instanceId);

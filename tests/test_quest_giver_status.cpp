@@ -100,3 +100,37 @@ TEST_CASE("a status the server never sends draws nothing", "[questgiver]") {
     CHECK(questGiverMarker(wire(11)).symbol == nullptr);
     CHECK(questGiverMarker(wire(255)).symbol == nullptr);
 }
+
+namespace {
+std::string modelOf(uint8_t v, bool trivial = false) {
+    const char* m = wowee::game::questGiverMarkerModel(wire(v), trivial);
+    return m ? m : "";
+}
+}  // namespace
+
+TEST_CASE("the mark over the head is the client's TalkToMe model for the status",
+          "[questgiver]") {
+    // 0x00745da0 through 0x00a34f5c into 0x00adac98.
+    CHECK(modelOf(0).empty());
+    CHECK(modelOf(1) == "Interface\\Buttons\\TalkToMeGrey.m2");
+    CHECK(modelOf(5) == "Interface\\Buttons\\TalkToMeQuestion_Grey.m2");
+    CHECK(modelOf(6) == "Interface\\Buttons\\TalkToMeQuestion_LTBlue.m2");
+    CHECK(modelOf(7) == "Interface\\Buttons\\TalkToMeBlue.m2");
+    CHECK(modelOf(8) == "Interface\\Buttons\\TalkToMe.m2");
+    CHECK(modelOf(9) == "Interface\\Buttons\\TalkToMeQuestionMark.m2");
+    CHECK(modelOf(10) == "Interface\\Buttons\\TalkToMeQuestionMark.m2");
+    CHECK(modelOf(11).empty());
+}
+
+TEST_CASE("the low-level marks hang only while trivial quests are tracked", "[questgiver]") {
+    // 0x0057bf30 gates statuses 2 to 4.
+    CHECK(modelOf(2).empty());
+    CHECK(modelOf(3).empty());
+    CHECK(modelOf(4).empty());
+    CHECK(modelOf(2, true) == "Interface\\Buttons\\TalkToMe.m2");
+    CHECK(modelOf(3, true) == "Interface\\Buttons\\TalkToMeQuestion_LTBlue.m2");
+    CHECK(modelOf(4, true) == "Interface\\Buttons\\TalkToMeBlue.m2");
+    // The others do not depend on it.
+    CHECK(modelOf(8, true) == modelOf(8));
+    CHECK(modelOf(1, true) == modelOf(1));
+}

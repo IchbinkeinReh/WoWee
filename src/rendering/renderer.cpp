@@ -52,7 +52,7 @@
 #include "rendering/loot_sparkles.hpp"
 #include "rendering/minimap.hpp"
 #include "rendering/world_map.hpp"
-#include "rendering/quest_marker_renderer.hpp"
+#include "rendering/quest_giver_markers.hpp"
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/fishing_line.hpp"
 #include "rendering/blob_shadow_renderer.hpp"
@@ -905,7 +905,7 @@ bool Renderer::initialize(core::Window* win) {
     // The distance setting may have been applied before this existed.
     grassRenderer_->setCullDistance(grassDistance_);
 
-    questMarkerRenderer = std::make_unique<QuestMarkerRenderer>();
+    questGiverMarkers_ = std::make_unique<QuestGiverMarkers>();
     footprintRenderer = std::make_unique<FootprintRenderer>();
     blobShadowRenderer = std::make_unique<BlobShadowRenderer>();
 
@@ -1261,7 +1261,6 @@ void Renderer::applyMsaaChange() {
     if (skyboxModelRenderer_) skyboxModelRenderer_->recreatePipelines();
     if (starsModelRenderer_) starsModelRenderer_->recreatePipelines();
     if (characterRenderer) characterRenderer->recreatePipelines();
-    if (questMarkerRenderer) questMarkerRenderer->recreatePipelines();
     if (footprintRenderer) footprintRenderer->recreatePipelines();
     if (blobShadowRenderer) blobShadowRenderer->recreatePipelines();
     if (weather) weather->recreatePipelines();
@@ -2960,8 +2959,6 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
             if (audioCoordinator_->getMovementSoundManager()) audioCoordinator_->getMovementSoundManager()->initialize(cachedAssetManager);
             break;
         case 5:
-            if (questMarkerRenderer && !questMarkerRenderer->initialize(vkCtx, perFrameSetLayout, cachedAssetManager))
-                LOG_WARNING("Quest marker renderer re-init failed (non-fatal)");
             if (skySystem) skySystem->loadTextures(cachedAssetManager);
             if (footprintRenderer && !footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, cachedAssetManager))
                 LOG_WARNING("Footprint renderer re-init failed (non-fatal)");
@@ -3918,8 +3915,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             if (chargeEffect && camera) chargeEffect->render(cmd, perFrameSet);
             if (fishingLines_ && camera) fishingLines_->render(cmd, perFrameSet);
             if (footprintRenderer && camera) footprintRenderer->render(cmd, perFrameSet, *camera);
-            if (questMarkerRenderer && camera) questMarkerRenderer->render(cmd, perFrameSet, *camera);
-            sceneMark(cmd, kMarkWorldEffects, "weather, dust, footprints, quest markers");
+            sceneMark(cmd, kMarkWorldEffects, "weather, dust, footprints");
 
             // The sun's and the White Lady's glare, over the whole world with
             // no depth test, last before the overlays (0x007f0870 runs after
@@ -4063,8 +4059,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         if (chargeEffect && camera) chargeEffect->render(currentCmd, perFrameSet);
         if (fishingLines_ && camera) fishingLines_->render(currentCmd, perFrameSet);
         if (footprintRenderer && camera) footprintRenderer->render(currentCmd, perFrameSet, *camera);
-        if (questMarkerRenderer && camera) questMarkerRenderer->render(currentCmd, perFrameSet, *camera);
-        sceneMark(currentCmd, kMarkWorldEffects, "weather, dust, footprints, quest markers");
+        sceneMark(currentCmd, kMarkWorldEffects, "weather, dust, footprints");
         // The circle under the target, on the finished world (0x004f6f90).
         if (blobShadowRenderer && camera) blobShadowRenderer->renderSelection(currentCmd, perFrameSet);
         if (blobShadowRenderer && camera) blobShadowRenderer->renderSpellTarget(currentCmd, perFrameSet);
@@ -4780,10 +4775,6 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             }
             if (audioCoordinator_->getMovementSoundManager()) {
                 audioCoordinator_->getMovementSoundManager()->initialize(assetManager);
-            }
-            if (questMarkerRenderer) {
-                if (!questMarkerRenderer->initialize(vkCtx, perFrameSetLayout, assetManager))
-                    LOG_WARNING("Quest marker renderer initialization failed (non-fatal)");
             }
             if (skySystem) skySystem->loadTextures(assetManager);
             if (footprintRenderer) {

@@ -165,6 +165,9 @@ struct M2ModelGPU {
 
     // Skeletal animation data (kept from M2Model for bone computation)
     std::vector<pipeline::M2Bone> bones;
+    /// The model's attachment points, to hang another model on (0x00831630).
+    std::vector<pipeline::M2Attachment> attachments;
+    std::vector<uint16_t> attachmentLookup;
     std::vector<pipeline::M2Sequence> sequences;
     std::vector<uint32_t> globalSequenceDurations;  // Loop durations for global sequence tracks
     bool hasAnimation = false;  // True if any bone has keyframes
@@ -649,6 +652,9 @@ public:
     /// and that animation is the opening. Undercity's lift doors are the case:
     /// one bone, one sequence, id 0, 3333ms.
     [[nodiscard]] std::optional<uint32_t> soleSequenceId(uint32_t instanceId) const;
+    /// The world frame of an instance's attachment point (0x00831410): its
+    /// bone as posed now, offset to the point. False where the model has none.
+    bool getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& out) const;
     /// True while the instance is still live in the renderer. Owners that cache
     /// instance IDs (game objects, transports) use this to notice an instance
     /// that was dropped underneath them - e.g. by a renderer-wide clear - and

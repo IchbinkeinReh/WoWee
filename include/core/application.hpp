@@ -418,8 +418,7 @@ private:
     bool wasAutoAttacking_ = false;
 
     // Quest marker billboard sprites (above NPCs)
-    void loadQuestMarkerModels();  // Now loads BLP textures
-    void updateQuestMarkers();     // Updates billboard positions
+    void updateQuestMarkers();     // The marks over questgivers' heads
     void updateLootSparkles();     // The glitter over corpses with loot
 };
 

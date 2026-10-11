@@ -20,7 +20,7 @@
 #include "rendering/character_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
-#include "rendering/quest_marker_renderer.hpp"
+#include "rendering/quest_giver_markers.hpp"
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/loading_screen.hpp"
 #include "addons/addon_manager.hpp"
@@ -826,7 +826,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 terrain->softReset();
                 terrain->setStreamingEnabled(true);  // Re-enable in case previous map disabled it
             }
-            if (auto* questMarkers = renderer_->getQuestMarkerRenderer()) {
+            if (auto* questMarkers = renderer_->getQuestGiverMarkers()) {
                 questMarkers->clear();
             }
             if (auto* footprints = renderer_->getFootprintRenderer()) {

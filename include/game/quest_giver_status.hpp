@@ -5,8 +5,8 @@
 ///
 /// The values are DIALOG_STATUS_* from the server's QuestDef.h and there are
 /// eleven of them. This client named six, and two of those it named wrongly:
-/// 7 was called "available, low level" when the server means available-with-
-/// reputation, and low-level-available is 2 - a value nothing here had a name
+/// 7 was called "available, low level" when the server means a repeatable
+/// quest available, and low-level-available is 2 - a value nothing here had a name
 /// for at all.
 ///
 /// A status with no name matched no branch in any of the four places that draw
@@ -69,6 +69,37 @@ inline QuestGiverMarker questGiverMarker(QuestGiverStatus status) {
             break;
     }
     return {};
+}
+
+/// The model hung over a questgiver's head (0x00745da0): the status picks a
+/// row of 0x00a34f5c, which names a model in the table at 0x00adac98 - the
+/// TalkToMe set under Interface\Buttons, each drawn at scale 1. Yellow for an
+/// ordinary quest, blue for a repeatable one (the _REP statuses), grey for one
+/// you cannot take yet or have not finished. The low-level statuses get their
+/// mark only while the minimap tracks trivial quests (0x0057bf30: the tracked
+/// entry is of kind 3). Null for none. The client names the .mdx and loads
+/// the .m2.
+inline const char* questGiverMarkerModel(QuestGiverStatus status, bool trackingTrivialQuests) {
+    constexpr const char* kYellowBang = "Interface\\Buttons\\TalkToMe.m2";
+    constexpr const char* kYellowQuestion = "Interface\\Buttons\\TalkToMeQuestionMark.m2";
+    constexpr const char* kBlueBang = "Interface\\Buttons\\TalkToMeBlue.m2";
+    constexpr const char* kBlueQuestion = "Interface\\Buttons\\TalkToMeQuestion_LTBlue.m2";
+    constexpr const char* kGreyBang = "Interface\\Buttons\\TalkToMeGrey.m2";
+    constexpr const char* kGreyQuestion = "Interface\\Buttons\\TalkToMeQuestion_Grey.m2";
+    switch (status) {
+        case QuestGiverStatus::UNAVAILABLE:             return kGreyBang;
+        case QuestGiverStatus::LOW_LEVEL_AVAILABLE:     return trackingTrivialQuests ? kYellowBang : nullptr;
+        case QuestGiverStatus::LOW_LEVEL_REWARD_REP:    return trackingTrivialQuests ? kBlueQuestion : nullptr;
+        case QuestGiverStatus::LOW_LEVEL_AVAILABLE_REP: return trackingTrivialQuests ? kBlueBang : nullptr;
+        case QuestGiverStatus::INCOMPLETE:              return kGreyQuestion;
+        case QuestGiverStatus::REWARD_REP:              return kBlueQuestion;
+        case QuestGiverStatus::AVAILABLE_REP:           return kBlueBang;
+        case QuestGiverStatus::AVAILABLE:               return kYellowBang;
+        case QuestGiverStatus::REWARD2:
+        case QuestGiverStatus::REWARD:                  return kYellowQuestion;
+        case QuestGiverStatus::NONE:                    break;
+    }
+    return nullptr;
 }
 
 }  // namespace wowee::game

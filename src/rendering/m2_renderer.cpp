@@ -1487,6 +1487,8 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
 
     // Store bone/sequence data for animation
     gpuModel.bones = model.bones;
+    gpuModel.attachments = model.attachments;
+    gpuModel.attachmentLookup = model.attachmentLookup;
     gpuModel.sequences = model.sequences;
     gpuModel.globalSequenceDurations = model.globalSequenceDurations;
     gpuModel.hasAnimation = false;

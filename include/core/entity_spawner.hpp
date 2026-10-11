@@ -150,6 +150,9 @@ public:
     /// CreatureModelData height times its scale. Nothing when it has no
     /// model drawn, or neither attachment nor a height.
     std::optional<glm::vec3> unitNamePosition(uint64_t guid) const;
+    /// The frame a questgiver's mark hangs on: a unit's name attachment
+    /// (0x00719310) or a game object's (0x0070cf30). Nothing without one.
+    std::optional<glm::mat4> questMarkerFrame(uint64_t guid) const;
     /// Where the circle under a unit goes and how big it is (0x00725980,
     /// 0x00720330): at the unit's position - its mount's while it rides - and
     /// sized by its CreatureModelData box, joined to its mount's when riding
@@ -745,6 +748,10 @@ public:
     /// loading screen up longer.
     void setDressPrefetchBypass(bool bypass) { dressPrefetchBypass_ = bypass; }
 private:
+    /// A unit's name attachment (0x00719310): PlayerNameMounted on its
+    /// mount's model while it rides, else PlayerName. `mountInstance` is the
+    /// mount it found, 0 on foot.
+    std::optional<glm::mat4> unitNameAttachment(uint64_t guid, uint32_t& mountInstance) const;
     /// A player's character component before its equipment: race, sex,
     /// class, skin, face and the hair and facial rows (PLAYER_BYTES).
     core::CharacterLook playerLook(uint64_t guid, uint8_t raceId, uint8_t genderId,

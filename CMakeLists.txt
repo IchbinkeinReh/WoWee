@@ -956,7 +956,7 @@ set(WOWEE_SOURCES
     src/pipeline/grass_profile.cpp
     src/pipeline/grass_biomes.cpp
     src/pipeline/grass_clearing.cpp
-    src/rendering/quest_marker_renderer.cpp
+    src/rendering/quest_giver_markers.cpp
     src/rendering/footprint_renderer.cpp
     src/rendering/blob_shadow_renderer.cpp
     src/rendering/minimap.cpp

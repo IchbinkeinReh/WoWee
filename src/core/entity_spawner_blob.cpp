@@ -7,6 +7,7 @@
 #include "game/game_handler.hpp"
 #include "game/update_field_table.hpp"
 #include "rendering/character_renderer.hpp"
+#include "rendering/m2_renderer.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/selection_circle.hpp"
 #include "rendering/unit_name_anchor.hpp"
@@ -179,16 +180,15 @@ std::optional<EntitySpawner::SelectionCirclePlacement> EntitySpawner::selectionC
     return placement;
 }
 
-std::optional<glm::vec3> EntitySpawner::unitNamePosition(uint64_t guid) const {
+std::optional<glm::mat4> EntitySpawner::unitNameAttachment(uint64_t guid, uint32_t& mountInstance) const {
     namespace una = rendering::unit_name_anchor;
+    mountInstance = 0;
     const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
     if (!characters || !gameHandler_) return std::nullopt;
     const uint32_t instanceId = characterInstanceIdForGuid(guid);
-    glm::mat4 frame;
-    if (instanceId == 0 || !characters->getInstanceFrame(instanceId, frame)) return std::nullopt;
+    if (instanceId == 0) return std::nullopt;
 
     // Riding, the unit's model is its mount's (the rider is attached to it).
-    uint32_t mountInstance = 0;
     if (guid == gameHandler_->getPlayerGuid()) {
         mountInstance = mountInstanceId_;
     } else if (const RemotePlayerMount* mount = getRemotePlayerMount(guid)) {
@@ -198,11 +198,44 @@ std::optional<glm::vec3> EntitySpawner::unitNamePosition(uint64_t guid) const {
     if (mountInstance != 0) {
         if (characters->getAttachmentTransform(mountInstance, una::kAttachmentPlayerNameMounted, attachment) ||
             characters->getAttachmentTransform(mountInstance, una::kAttachmentPlayerName, attachment)) {
-            return glm::vec3(attachment[3]);
+            return attachment;
         }
     } else if (characters->getAttachmentTransform(instanceId, una::kAttachmentPlayerName, attachment)) {
-        return glm::vec3(attachment[3]);
+        return attachment;
     }
+    return std::nullopt;
+}
+
+std::optional<glm::mat4> EntitySpawner::questMarkerFrame(uint64_t guid) const {
+    namespace una = rendering::unit_name_anchor;
+    if (gameObjectInstances_.count(guid) == 0) {
+        // A unit's (0x00719310): PlayerNameMounted on its model while it
+        // rides, else PlayerName; with neither it gets no mark.
+        uint32_t mountInstance = 0;
+        return unitNameAttachment(guid, mountInstance);
+    }
+    // A game object's (0x0070cf30): PlayerName on its M2, nothing on a WMO.
+    const auto& info = gameObjectInstances_.at(guid);
+    const auto* m2 = renderer_ ? renderer_->queryM2Renderer() : nullptr;
+    if (info.isWmo || !m2) return std::nullopt;
+    glm::mat4 frame;
+    if (!m2->getAttachmentTransform(info.instanceId, una::kAttachmentPlayerName, frame)) return std::nullopt;
+    // Short of 0.99 in its [9], the mark is given the transpose of the
+    // frame's rotation, which stands it up again.
+    if (frame[2][1] < 0.99f) frame = frame * glm::mat4(glm::transpose(glm::mat3(frame)));
+    return frame;
+}
+
+std::optional<glm::vec3> EntitySpawner::unitNamePosition(uint64_t guid) const {
+    namespace una = rendering::unit_name_anchor;
+    const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
+    if (!characters || !gameHandler_) return std::nullopt;
+    const uint32_t instanceId = characterInstanceIdForGuid(guid);
+    glm::mat4 frame;
+    if (instanceId == 0 || !characters->getInstanceFrame(instanceId, frame)) return std::nullopt;
+
+    uint32_t mountInstance = 0;
+    if (const auto attachment = unitNameAttachment(guid, mountInstance)) return glm::vec3((*attachment)[3]);
 
     glm::vec3 position(frame[3]);
     glm::mat4 mountFrame;

@@ -66,7 +66,7 @@ class M2Renderer;
 class Minimap;
 namespace world_map { class WorldMapFacade; }
 using WorldMap = world_map::WorldMapFacade;
-class QuestMarkerRenderer;
+class QuestGiverMarkers;
 class FootprintRenderer;
 class BlobShadowRenderer;
 class CharacterPreview;
@@ -213,7 +213,7 @@ public:
     const WMORenderer* queryWMORenderer() const { return wmoRenderer.get(); }
     Minimap* getMinimap() const { return minimap.get(); }
     WorldMap* getWorldMap() const { return worldMap.get(); }
-    QuestMarkerRenderer* getQuestMarkerRenderer() const { return questMarkerRenderer.get(); }
+    QuestGiverMarkers* getQuestGiverMarkers() const { syncWorldRecording(); return questGiverMarkers_.get(); }
     FootprintRenderer* getFootprintRenderer() const { return footprintRenderer.get(); }
     FishingLineRenderer* getFishingLineRenderer() const { return fishingLines_.get(); }
     SkySystem* getSkySystem() const { return skySystem.get(); }
@@ -432,7 +432,7 @@ private:
     float starsAlpha_ = 0.0f;
     std::unique_ptr<Minimap> minimap;
     std::unique_ptr<WorldMap> worldMap;
-    std::unique_ptr<QuestMarkerRenderer> questMarkerRenderer;
+    std::unique_ptr<QuestGiverMarkers> questGiverMarkers_;
     std::unique_ptr<FootprintRenderer> footprintRenderer;
     std::unique_ptr<BlobShadowRenderer> blobShadowRenderer;
     std::vector<blob_shadow::Caster> blobCasters_;

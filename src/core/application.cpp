@@ -57,7 +57,9 @@
 #include "rendering/world_map.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "ui/keybinding_manager.hpp"
-#include "rendering/quest_marker_renderer.hpp"
+#include "rendering/quest_giver_markers.hpp"
+#include "game/quest_giver_status.hpp"
+#include "game/minimap_tracking.hpp"
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/loading_screen.hpp"
 #include "audio/music_manager.hpp"
@@ -2727,8 +2729,6 @@ void Application::setState(AppState newState) {
                     refreshPlayerCharacterModel();
                 });
             }
-            // Load quest marker models
-            loadQuestMarkerModels();
             break;
         }
         case AppState::DISCONNECTED:
@@ -2979,7 +2979,7 @@ void Application::performLogoutToLogin() {
         if (auto* terrain = renderer->getTerrainManager()) {
             terrain->softReset();
         }
-        if (auto* questMarkers = renderer->getQuestMarkerRenderer()) {
+        if (auto* questMarkers = renderer->getQuestGiverMarkers()) {
             questMarkers->clear();
         }
         if (auto* footprints = renderer->getFootprintRenderer()) {
@@ -6147,23 +6147,6 @@ bool Application::getRenderPositionForGuid(uint64_t guid, glm::vec3& outPos) con
     return false;
 }
 
-void Application::loadQuestMarkerModels() {
-    if (!assetManager || !renderer) return;
-
-    // Quest markers are billboard sprites; the renderer's QuestMarkerRenderer handles
-    // texture loading and pipeline setup during world initialization.
-    // Calling initialize() here is a no-op if already done; harmless if called early.
-    if (auto* qmr = renderer->getQuestMarkerRenderer()) {
-        if (auto* vkCtx = renderer->getVkContext()) {
-            VkDescriptorSetLayout pfl = renderer->getPerFrameSetLayout();
-            if (pfl != VK_NULL_HANDLE) {
-                if (!qmr->initialize(vkCtx, pfl, assetManager.get()))
-                    LOG_WARNING("Quest marker renderer re-init failed (non-fatal)");
-            }
-        }
-    }
-}
-
 void Application::updateLootSparkles() {
     auto* sparkles = renderer ? renderer->getLootSparkles() : nullptr;
     if (!sparkles || !gameHandler) return;
@@ -6182,96 +6165,33 @@ void Application::updateLootSparkles() {
 }
 
 void Application::updateQuestMarkers() {
-    if (!gameHandler || !renderer) {
-        return;
-    }
+    auto* markers = renderer ? renderer->getQuestGiverMarkers() : nullptr;
+    if (!markers || !gameHandler) return;
 
-    auto* questMarkerRenderer = renderer->getQuestMarkerRenderer();
-    if (!questMarkerRenderer) {
-        static bool logged = false;
-        if (!logged) {
-            LOG_WARNING("QuestMarkerRenderer not available!");
-            logged = true;
-        }
-        return;
-    }
+    // The low-level marks are hung only while the minimap tracks trivial
+    // quests (0x0057bf30).
+    const int tracked = gameHandler->minimapOtherTracking();
+    const bool trivial =
+        tracked >= 0 && tracked < static_cast<int>(game::minimap_tracking::kOther.size()) &&
+        game::minimap_tracking::kOther[static_cast<size_t>(tracked)].kind ==
+            game::minimap_tracking::Kind::TrivialQuests;
 
-    const auto& questStatuses = gameHandler->getNpcQuestStatuses();
-
-    // Clear all markers (we'll re-add active ones)
-    questMarkerRenderer->clear();
-
-    static bool firstRun = true;
-    int markersAdded = 0;
-
-    // Add markers for NPCs with quest status
-    for (const auto& [guid, status] : questStatuses) {
-        // Determine marker type
-        int markerType = -1;  // -1 = no marker
-
-        // One mapping for all five places that draw this - see
-        // quest_giver_status.hpp. Five of the eleven statuses the server can
-        // send had no name here, so an NPC whose quests you have out-levelled
-        // got no marker at all.
-        const auto marker = game::questGiverMarker(status);
-        float markerGrayscale = marker.dim ? 1.0f : 0.0f;
-        if (marker.symbol) {
-            const bool bang = marker.symbol[0] == '!';
-            // 0 is the exclamation texture, 1 the gold question mark and 2 the
-            // grey one; the shader desaturates from markerGrayscale.
-            markerType = bang ? 0 : (marker.dim ? 2 : 1);
-        }
-
-        if (markerType < 0) continue;
-
-        // Get NPC entity position
+    std::vector<rendering::QuestGiverMarkers::Marker> wanted;
+    for (const auto& [guid, status] : gameHandler->getNpcQuestStatuses()) {
+        const char* model = game::questGiverMarkerModel(status, trivial);
+        if (!model) continue;
         auto entity = gameHandler->getEntityManager().getEntity(guid);
         if (!entity) continue;
-        if (entity->getType() == game::ObjectType::UNIT) {
-            auto unit = std::static_pointer_cast<game::Unit>(entity);
-            const std::string& name = unit->getName();
-            // Case-insensitive substring scan without copying or lowercasing the
-            // whole name into a fresh std::string every frame. Spirit healers
-            // and spirit guides use their own white visual cue, so skip them.
-            auto containsCI = [&](const char* needle, size_t nlen) {
-                if (name.size() < nlen) return false;
-                const size_t last = name.size() - nlen;
-                for (size_t i = 0; i <= last; ++i) {
-                    bool match = true;
-                    for (size_t j = 0; j < nlen; ++j) {
-                        unsigned char a = static_cast<unsigned char>(name[i + j]);
-                        unsigned char b = static_cast<unsigned char>(needle[j]);
-                        if (std::tolower(a) != b) { match = false; break; }
-                    }
-                    if (match) return true;
-                }
-                return false;
-            };
-            if (containsCI("spirit healer", 13) || containsCI("spirit guide", 12)) {
-                continue;
-            }
+        // A unit's mark is put up only while it lives (0x007192e0).
+        if (entity->getType() == game::ObjectType::UNIT &&
+            static_cast<const game::Unit&>(*entity).getHealth() == 0) {
+            continue;
         }
-
-        glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
-        glm::vec3 renderPos = coords::canonicalToRender(canonical);
-
-        // Get NPC bounding height for proper marker positioning
-        glm::vec3 boundsCenter;
-        float boundsRadius = 0.0f;
-        float boundingHeight = 2.0f;  // Default
-        if (getRenderBoundsForGuid(guid, boundsCenter, boundsRadius)) {
-            boundingHeight = boundsRadius * 2.0f;
-        }
-
-        // Set the marker (renderer will handle positioning, bob, glow, etc.)
-        questMarkerRenderer->setMarker(guid, renderPos, markerType, boundingHeight, markerGrayscale);
-        markersAdded++;
+        const auto frame = entitySpawner_ ? entitySpawner_->questMarkerFrame(guid) : std::nullopt;
+        if (!frame) continue;
+        wanted.push_back({guid, model, *frame});
     }
-
-    if (firstRun && markersAdded > 0) {
-        LOG_DEBUG("Quest markers: Added ", markersAdded, " markers on first run");
-        firstRun = false;
-    }
+    markers->update(renderer->getM2Renderer(), assetManager.get(), wanted);
 }
 
 void Application::setupTestTransport() {
