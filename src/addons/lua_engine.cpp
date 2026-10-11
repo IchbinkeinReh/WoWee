@@ -25,6 +25,7 @@
 #include "addons/lua_handler_globals.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "addons/toc_parser.hpp"
+#include "addons/button_label_lua.hpp"
 #include "core/window.hpp"
 #include <imgui.h>
 #include <fstream>
@@ -4136,30 +4137,29 @@ int lua_Region_GetVertexColor(lua_State* L) {
 int lua_Frame_SetNormalFontObject(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     if (!tree) return 0;
-    // The label, not the button: a button has no text of its own.
-    //
-    // Made here if it does not exist yet. A template names its font as it is
-    // built and the label is created lazily, by the first SetText - so the
-    // settings were applied to the button, the label arrived afterwards with
-    // none of them, and a button that asked for GameFontNormalLeft drew its
-    // text centred at the default size.
+    // Kept on the button, as CSimpleButton keeps it (+0x2b0). The XML loader
+    // in wow.exe (0x0096fed0) only stores the three fonts while it walks a
+    // button's children and gives the label its font afterwards, through
+    // SetFontString (0x0096f7b0) - so a <NormalFont> written before the
+    // <ButtonText>, or inherited from a template, still reaches it. The
+    // label made by SetFontString reads this field; see kButtonLabelLua.
+    lua_pushvalue(L, 2);
+    lua_setfield(L, 1, "__normalFontObject");
+
+    // The label, not the button: a button has no text of its own. Only the
+    // one the button already has. Making one here, when the font is named
+    // before the <ButtonText> it belongs to, gave the font to a label the
+    // <ButtonText> then replaced: GossipTitleButtonTemplate's QuestFontLeft
+    // went to a string nothing drew, and the quest and gossip titles were
+    // drawn centred in their 275-wide boxes. A label that comes later takes
+    // the font from the field above.
     lua_getfield(L, 1, "__fontString");
-    if (!lua_istable(L, -1)) {
-        lua_pop(L, 1);
-        lua_getfield(L, 1, "GetFontString");
-        if (lua_isfunction(L, -1)) {
-            lua_pushvalue(L, 1);
-            if (lua_pcall(L, 1, 1, 0) != 0) {
-                lua_pop(L, 1);
-                lua_pushnil(L);
-            }
-        }
-    }
     const uint32_t fsId =
         lua_istable(L, -1) ? widgetIdOf(L, lua_gettop(L)) : 0;
     wowee::ui::Widget* fs = fsId ? tree->get(fsId) : nullptr;
     lua_pop(L, 1);
-    applyFontObject(L, 2, fs ? fs : widgetOf(L, 1));
+    if (!fs) return 0;
+    applyFontObject(L, 2, fs);
 
     // A label with no anchors of its own is centred on its button - that is
     // what an unanchored region gets - and justifying text inside a box that
@@ -6834,15 +6834,12 @@ void LuaEngine::registerCoreAPI() {
         "function mt:SetID(id) self.__id = id end\n"
         "function mt:GetID() return self.__id or 0 end\n"
         "function mt:GetScrollChild() return self.__scrollChild end\n"
-        "function mt:SetFontString(fs) self.__fontString = fs end\n"
-        // Made on demand when a button is asked for one it has not been
-        // given. Every button has a font string in the real client, and
-        // FrameXML assumes it: FCF_SetTabColor does
-        // minFrame:GetFontString():SetTextColor(...) without checking.
+        // SetFontString, GetFontString and GetNormalFontObject are
+        // kButtonLabelLua's, run once this block has.
         // The fill of a status bar, as an object. This client keeps a bar's
         // fill as a texture *path* on the bar itself, so there is no region to
         // hand back and one is made on demand - the same answer GetFontString
-        // gives one line below, and for the same reason.
+        // gives, and for the same reason.
         //
         // It was nil, and blizzard_achievementui does
         // `self:GetStatusBarTexture():SetDrawLayer("BORDER")` in the OnLoad of
@@ -6857,12 +6854,6 @@ void LuaEngine::registerCoreAPI() {
         "        self.__barTexture = self:CreateTexture(nil, 'ARTWORK')\n"
         "    end\n"
         "    return self.__barTexture\n"
-        "end\n"
-        "function mt:GetFontString()\n"
-        "    if not self.__fontString then\n"
-        "        self.__fontString = self:CreateFontString(nil, 'OVERLAY')\n"
-        "    end\n"
-        "    return self.__fontString\n"
         "end\n"
         // A button's text is its font string's text; keeping them apart means
         // SetText on the button quietly does nothing, which is how a bar full
@@ -6912,16 +6903,11 @@ void LuaEngine::registerCoreAPI() {
         // Only for a button. A plain frame's SetText is a value it keeps, and
         // giving every frame a font string would draw labels nothing asked
         // for.
+        // GetFontString makes it through SetFontString, which places it
+        // and gives it the button's font, as the real client does.
         "    if not self.__fontString and self.IsObjectType\n"
         "       and self:IsObjectType('Button') then\n"
         "        self:GetFontString()\n"
-        "        if self.__fontString then\n"
-        "            self.__fontString:SetPoint('CENTER')\n"
-        "            local f = self.GetNormalFontObject and self:GetNormalFontObject()\n"
-        "            if f and self.__fontString.SetFontObject then\n"
-        "                self.__fontString:SetFontObject(f)\n"
-        "            end\n"
-        "        end\n"
         "    end\n"
         "    if self.__fontString then self.__fontString:SetText(text) end\n"
         "end\n"
@@ -6931,6 +6917,8 @@ void LuaEngine::registerCoreAPI() {
         "    return self.__text\n"
         "end\n"
     );
+    // The label's half of a button's fonts; see the header.
+    bootstrap(kButtonLabelLua);
 
     // Catch-all for unimplemented widget methods. Frames are logic-only stubs (not
     // natively rendered), so UI-heavy addons call many widget methods we don't model

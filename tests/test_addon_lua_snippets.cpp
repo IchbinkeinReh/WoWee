@@ -23,6 +23,7 @@ extern "C" {
 #include <utility>
 
 #include "addons/addon_lua_snippets.hpp"
+#include "addons/button_label_lua.hpp"
 
 namespace {
 
@@ -193,4 +194,84 @@ TEST_CASE("the chat background swatch script parses", "[addonlua]") {
                                          "ChatBackgroundSwatch");
     INFO(err);
     CHECK(err.empty());
+}
+
+namespace {
+
+/// The frame metatable, a font string and the C half of SetNormalFontObject,
+/// cut down to what kButtonLabelLua calls. The stand-in for the C binding does
+/// what it does: keeps the font on the button and gives it to the label the
+/// button already has, without making one.
+constexpr const char* kFakeButtonLua = R"LUA(
+QuestFontLeft = { justifyH = 'LEFT' }
+GameFontNormal = { }
+GameFontNormalRight = { justifyH = 'RIGHT' }
+
+local function fontString()
+    return {
+        points = {}, justifyH = 'CENTER',
+        GetNumPoints = function(self) return #self.points end,
+        SetPoint = function(self, point) table.insert(self.points, point) end,
+    }
+end
+newFontString = fontString
+
+__WoweeFrameMT = {}
+__WoweeFrameMT.__index = __WoweeFrameMT
+function __WoweeFrameMT:CreateFontString() return fontString() end
+function __WoweeFrameMT:SetNormalFontObject(font)
+    self.__normalFontObject = font
+    local fs = self.__fontString
+    if not fs then return end
+    local object = type(font) == 'string' and _G[font] or font
+    if object and object.justifyH then fs.justifyH = object.justifyH end
+end
+function newButton() return setmetatable({}, __WoweeFrameMT) end
+)LUA";
+
+}  // namespace
+
+TEST_CASE("a button's font reaches a ButtonText declared after it", "[addonlua]") {
+    // GossipTitleButtonTemplate and QuestTitleButtonTemplate name
+    // <NormalFont style="QuestFontLeft"/> and a <ButtonText> 275 wide anchored
+    // at the left. The emitter writes the font first, as the XML reads; the
+    // label has to come out justified to the left all the same, which is what
+    // wow.exe's SetFontString does with the font it stored.
+    const std::string got = runChunks({
+        {kFakeButtonLua, "FakeButton"},
+        {wowee::addons::kButtonLabelLua, "ButtonLabel"},
+        {R"LUA(
+            local b = newButton()
+            b:SetNormalFontObject('QuestFontLeft')
+            local text = newFontString()
+            text:SetPoint('LEFT')          -- the template's own anchor
+            b:SetFontString(text)
+            return text.justifyH .. ' ' .. #text.points .. ' ' ..
+                   tostring(b:GetFontString() == text) .. ' ' ..
+                   tostring(b:GetNormalFontObject() == QuestFontLeft)
+        )LUA", "Gossip"},
+    });
+    CHECK(got == "LEFT 1 true true");
+}
+
+TEST_CASE("a label with no anchors sits where its button's font justifies", "[addonlua]") {
+    // Left or right for a font that says so, the middle otherwise - which is
+    // how every centred button label stays centred.
+    const std::string got = runChunks({
+        {kFakeButtonLua, "FakeButton"},
+        {wowee::addons::kButtonLabelLua, "ButtonLabel"},
+        {R"LUA(
+            local out = {}
+            for _, font in ipairs({ 'GameFontNormal', 'QuestFontLeft', 'GameFontNormalRight' }) do
+                local b = newButton()
+                b:SetNormalFontObject(font)
+                local fs = b:GetFontString()       -- made on demand
+                table.insert(out, fs.points[1] .. '/' .. fs.justifyH)
+            end
+            local plain = newButton():GetFontString()
+            table.insert(out, plain.points[1] .. '/' .. plain.justifyH)
+            return table.concat(out, ' ')
+        )LUA", "Placement"},
+    });
+    CHECK(got == "CENTER/CENTER LEFT/LEFT RIGHT/RIGHT CENTER/CENTER");
 }
