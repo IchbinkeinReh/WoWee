@@ -2450,14 +2450,16 @@ void Renderer::update(float deltaTime) {
     const bool canQueryWmo = (camera && wmoRenderer);
     const glm::vec3 camPos = camera ? camera->getPosition() : glm::vec3(0.0f);
     uint32_t insideWmoId = 0;
-    const bool insideWmo = canQueryWmo &&
-        wmoRenderer->isInsideWMO(camPos.x, camPos.y, camPos.z, &insideWmoId);
+    const bool insideWmo = [&] {
+        WOWEE_PROFILE_SCOPE("camera inside a WMO", Cpu);
+        return canQueryWmo && wmoRenderer->isInsideWMO(camPos.x, camPos.y, camPos.z, &insideWmoId);
+    }();
     playerIndoors_ = insideWmo;
     // Where the player is, and the zone events when that changes: on the
     // texts changing, as the client raises them (0x005204c0), rather than on
     // the camera entering a building's box - Dalaran's streets are inside a
     // dozen, and every one of them fired ZONE_CHANGED_INDOORS.
-    updatePlayerArea();
+    { WOWEE_PROFILE_SCOPE("player area", Cpu); updatePlayerArea(); }
 
     // Update lighting system
     if (lightingManager) {
@@ -2529,6 +2531,7 @@ void Renderer::update(float deltaTime) {
             // PLAYER_FLAGS (the player's +0x1008 fields, +8) has 0x10,
             // PLAYER_FLAGS_GHOST.
             if (wmoRenderer && camera && !ghost) {
+                WOWEE_PROFILE_SCOPE("interior fog", Cpu);
                 if (auto f = wmoRenderer->interiorFogAt(camera->getPosition())) {
                     interiorFog = LightingManager::InteriorFog{
                         .end = f->end, .startScalar = f->startScalar, .color = f->color,

@@ -4535,7 +4535,7 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     // creature models remain at stale spawn positions.
     inGameStep = "creature render sync";
     updateCheckpoint = "in_game: creature render sync";
-    syncRenderInstancesToEntities(deltaTime);
+    { WOWEE_PROFILE_SCOPE("render sync: units", Cpu); syncRenderInstancesToEntities(deltaTime); }
     // Passengers onto their vehicles' seats, over where the sync put them.
     if (entitySpawner_) entitySpawner_->updateVehiclePassengers();
     // Movement heartbeat is sent from GameHandler::update() to avoid
