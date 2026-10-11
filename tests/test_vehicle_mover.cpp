@@ -91,3 +91,17 @@ TEST_CASE("a seat on the way, or a seat change asked, holds the mover", "[vehicl
     CHECK_FALSE(moverHeldBySeat(0, 3, false));
     CHECK_FALSE(moverHeldBySeat(0, 0, true));
 }
+
+TEST_CASE("a move spline runs its time, unless it comes let go", "[vehicle]") {
+    const auto s = moveSplineFrom(true, 0, 1000, 5000);
+    REQUIRE(s.has_value());
+    CHECK(moveSplineRunning(*s, 5999));
+    CHECK_FALSE(moveSplineRunning(*s, 6000));
+    // No path, or flags 0x400: none.
+    CHECK_FALSE(moveSplineFrom(false, 0, 1000, 5000).has_value());
+    CHECK_FALSE(moveSplineFrom(true, 0x400, 1000, 5000).has_value());
+    // Cyclic: it does not run out.
+    const auto cyc = moveSplineFrom(true, 0x80000, 1000, 5000);
+    REQUIRE(cyc.has_value());
+    CHECK(moveSplineRunning(*cyc, 900000));
+}

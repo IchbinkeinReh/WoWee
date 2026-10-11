@@ -85,6 +85,25 @@ inline constexpr uint32_t kPitchStartHoldMs = 100;
     return true;
 }
 
+/// A unit's move spline as the client keeps it (its movement's +0xbc): from
+/// a monster move with a path, until it has run its time or is let go - the
+/// client marks one finished with its flags' 0x400 rather than freeing it
+/// (0x0098ba90, 0x006eaf50), and a move that comes with 0x400 is done from
+/// the start. A cyclic one (0x80000) does not run out.
+struct MoveSpline {
+    uint32_t startMs = 0;
+    uint32_t durationMs = 0;
+    bool cyclic = false;
+};
+[[nodiscard]] inline std::optional<MoveSpline> moveSplineFrom(bool hasPath, uint32_t splineFlags, uint32_t durationMs,
+                                                              uint32_t nowMs) {
+    if (!hasPath || (splineFlags & 0x400u) != 0) return std::nullopt;
+    return MoveSpline{.startMs = nowMs, .durationMs = durationMs, .cyclic = (splineFlags & 0x80000u) != 0};
+}
+[[nodiscard]] inline bool moveSplineRunning(const MoveSpline& s, uint32_t nowMs) {
+    return s.cyclic || static_cast<int32_t>(nowMs - s.startMs) < static_cast<int32_t>(s.durationMs);
+}
+
 /// Whether the mover may not move for its seat (0x0074ba40): its own seat
 /// state is on the way in or out (not 0 or 3), or - where a driver controls
 /// it - the driver's is, or the driver, in a seat, asked for a seat change

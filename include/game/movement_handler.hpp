@@ -4,6 +4,7 @@
 #include "game/entity.hpp"
 #include "core/coordinates.hpp"
 #include "game/opcode_table.hpp"
+#include "game/vehicle_mover.hpp"
 #include "network/packet.hpp"
 #include <glm/glm.hpp>
 #include <chrono>
@@ -315,6 +316,10 @@ private:
     /// object in view, else the player.
     [[nodiscard]] uint64_t cameraTarget() const;
     [[nodiscard]] uint64_t playerFarsight() const;
+    /// A unit's move spline from its monster move (+0xbc, 0x0098c770), and
+    /// whether it still runs: not let go (+0x20 0x400) nor run out.
+    void noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs);
+    [[nodiscard]] bool onMoveSpline(uint64_t guid);
     /// The movement of `guid` as the client keeps it: movementInfo for the
     /// mover, the player's held one while another unit moves.
     [[nodiscard]] const MovementInfo& movementOf(uint64_t guid) const;
@@ -471,7 +476,8 @@ private:
     // --- The active mover ---
     std::optional<uint64_t> activeMover_;  ///< DAT_00ca1238; none set: the player
     uint64_t moverInfoOwner_ = 0;          ///< whose movement movementInfo is; 0 the player's
-    MovementInfo heldPlayerMovement_;      ///< the player's while another unit moves
+    std::unordered_map<uint64_t, vehicle::MoveSpline> moveSplines_;
+        MovementInfo heldPlayerMovement_;      ///< the player's while another unit moves
     std::unordered_map<uint64_t, bool> unitControl_;  ///< +0xa30 0x400 of units but the player
     /// A control update for a unit not in view, kept for its create
     /// (0x00716060: DAT_00ca1248..50).

@@ -1387,6 +1387,8 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
     if (moverGuid == owner_.getPlayerGuid() || moverGuid == 0) {
         return;
     }
+    // A movement packet lets the unit's move spline go (0x0098ba90).
+    moveSplines_.erase(moverGuid);
 
     MovementInfo info = {};
     info.flags = packet.readUInt32();
@@ -1865,6 +1867,8 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
     if (!entity) {
         return;
     }
+    // Its move spline (+0xbc, 0x0098c770): a path to run, or a stop.
+    noteMoveSpline(data.guid, data.hasDest, isPreWotlk() ? 0u : data.splineFlags, data.duration);
 
     // Classic/TBC creature patrols encode ground locomotion in the spline:
     // RUNMODE set means Run, while a clear bit means Walk. Publish it before
@@ -2142,6 +2146,7 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
 
     glm::vec3 startLocalCanonical = owner_.getTransportManager()->serverToTransportLocal(
         transportGuid, glm::vec3(localX, localY, localZ));
+    noteMoveSpline(moverGuid, hasDest && duration > 0, isPreWotlk() ? 0u : splineFlags, duration);
 
     if (hasDest && duration > 0) {
         glm::vec3 destLocalCanonical = owner_.getTransportManager()->serverToTransportLocal(
@@ -4072,6 +4077,25 @@ bool MovementHandler::unitHasClientControl(uint64_t guid) const {
     return it != unitControl_.end() && it->second;
 }
 
+void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs) {
+    const uint32_t now = nextMovementTimestampMs();
+    if (auto spline = vehicle::moveSplineFrom(hasPath, splineFlags, durationMs, now))
+        moveSplines_[guid] = *spline;
+    else
+        moveSplines_.erase(guid);
+    // Those that ran out are of no more use.
+    if (moveSplines_.size() > 256)
+        std::erase_if(moveSplines_, [now](const auto& kv) { return !vehicle::moveSplineRunning(kv.second, now); });
+}
+
+bool MovementHandler::onMoveSpline(uint64_t guid) {
+    const auto it = moveSplines_.find(guid);
+    if (it == moveSplines_.end()) return false;
+    if (vehicle::moveSplineRunning(it->second, nextMovementTimestampMs())) return true;
+    moveSplines_.erase(it);
+    return false;
+}
+
 uint64_t MovementHandler::playerFarsight() const {
     const uint16_t index = fieldIndex(UF::PLAYER_FARSIGHT);
     auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
@@ -4134,8 +4158,8 @@ void MovementHandler::setActiveMover(uint64_t guid) {
                                       static_cast<uint32_t>(MovementFlags::TURN_RIGHT);
         constexpr uint32_t kPitching = static_cast<uint32_t>(MovementFlags::PITCH_UP) |
                                        static_cast<uint32_t>(MovementFlags::PITCH_DOWN);
-        const bool onSpline = old == player && (onTaxiFlight_ || taxiClientActive_);
-        if (!onSpline) {
+        // ... and its +0xbc: only where it has no move spline, or one let go.
+        if (!onMoveSpline(old)) {
             if (movementInfo.flags & kTurning) sendMovement(Opcode::MSG_MOVE_STOP_TURN);
             if (movementInfo.flags & kPitching) sendMovement(Opcode::MSG_MOVE_STOP_PITCH);
             if (movementInfo.flags & kStrafing) sendMovement(Opcode::MSG_MOVE_STOP_STRAFE);
