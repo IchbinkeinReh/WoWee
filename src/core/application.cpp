@@ -3217,6 +3217,11 @@ void Application::applyServerMovementState(float deltaTime) {
                 seatZoomRemembered_.reset();
             }
         }
+        // No vehicle, no seat change to come: no vehicle offsets turning
+        // the camera on foot.
+        if (!vehiclePassenger && drivenUnit == 0 && entitySpawner_ && !entitySpawner_->seatCameraCuePending()) {
+            cc->releaseVehicleCameraOffsets();
+        }
     }
     renderer->getCameraController()->setExternalFollow(
         externallyDrivenMotion || landingClampActive || hearthFreeze ||

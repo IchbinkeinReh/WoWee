@@ -199,6 +199,8 @@ struct EasedCameraOffset {
         }
         value = (to - from) * cameraEase(t) + from;
     }
+    /// Where it is going: what it eases to, or is at once it has.
+    [[nodiscard]] float target() const { return startMs == endMs ? value : to; }
 };
 
 /// The camera's distance mode (0x00600590): 0 the ordinary, 1 a seat with

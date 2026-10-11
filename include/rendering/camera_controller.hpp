@@ -334,6 +334,11 @@ public:
     /// the camera stands about what it looks at (0x00601d60 -> 0x00600730),
     /// the pitch tilts the view (0x00606f90 -> 0x004c55b0).
     void setVehicleCameraOffsets(float yawOffset, float pitchOffset, float seconds);
+    /// Out of every seat and with no seat change to come, the offsets are on
+    /// their way to 0 (0x005fe890, 0x005fe8d0 take them from the seat alone):
+    /// ones a lost seat change left behind are eased out over half a second,
+    /// rather than turning the camera on foot.
+    void releaseVehicleCameraOffsets();
     void suppressMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
 
@@ -689,10 +694,6 @@ private:
     /// below, the water surface. Eased both ways so crossing the water's
     /// edge does not jump the view.
     float waterNudgeZ_ = 0.0f;
-    // Degrees of yaw the camera is currently stepping around an obstruction by,
-    // so it clears a pillar or a doorframe instead of riding up the player's
-    // neck. Smoothed; zero whenever nothing is in the way.
-    float cameraDeflectDeg_ = 0.0f;
 
     // Gravity / grounding
     float verticalVelocity = 0.0f;

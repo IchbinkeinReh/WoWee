@@ -318,6 +318,20 @@ TEST_CASE("a vehicle's camera offsets are eased over the move (0x005fe890, 0x006
     CHECK(yaw.startMs == yaw.endMs);
 }
 
+TEST_CASE("a camera offset's target is where it eases to, or where it rests", "[vehicle]") {
+    gv::EasedCameraOffset yaw;
+    CHECK(yaw.target() == 0.0f);
+    yaw.set(0.5f, 100, 100);
+    CHECK(yaw.target() == Catch::Approx(0.5f));
+    // On its way back to 0 it is already released, whatever it is at now.
+    yaw.set(0.0f, 1000, 1500);
+    yaw.step(1200);
+    CHECK(yaw.value != 0.0f);
+    CHECK(yaw.target() == 0.0f);
+    yaw.step(1600);
+    CHECK(yaw.target() == 0.0f);
+}
+
 TEST_CASE("a seat picks the camera's distance mode (0x0074c0e0 -> 0x00600590)", "[vehicle]") {
     gv::SeatRecord fixedCamera;
     fixedCamera.flags = gv::kSeatFlagFixedCamera;

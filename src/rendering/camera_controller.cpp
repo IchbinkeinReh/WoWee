@@ -2186,60 +2186,15 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
 
         float rawLimit = wmoLimitAlong(camDir);
 
-        // Step around what is in the way rather than only backing away from it.
-        //
-        // Pulling straight in is what puts the camera on the player's neck the
-        // moment they set their back to a wall, and from inside their own head
-        // there is nothing to steer by. A few degrees of yaw usually clears the
-        // obstruction entirely - a pillar, a doorframe, the corner of a
-        // building - and keeps the shot.
-        //
-        // Two extra rays at most, and only on a frame that is actually blocked,
-        // which is the minority of them. The winner has to buy a real amount of
-        // clearance, so the camera does not wander for nothing.
-        constexpr float DEFLECT_MAX_DEG = 14.0f;
-        constexpr float DEFLECT_MIN_GAIN = 1.0f;   // yards of clearance worth turning for
-        float deflectTarget = 0.0f;
-        if (rawLimit < currentDistance - 0.5f && rawLimit < userTargetDistance) {
-            float bestLimit = rawLimit;
-            for (float trialDeg : {DEFLECT_MAX_DEG, -DEFLECT_MAX_DEG}) {
-                const float a = glm::radians(trialDeg);
-                const float ca = std::cos(a), sa = std::sin(a);
-                // Yaw about world Z: the camera should step sideways, not rise.
-                glm::vec3 trialDir(camDir.x * ca - camDir.y * sa,
-                                   camDir.x * sa + camDir.y * ca,
-                                   camDir.z);
-                float trialLimit = wmoLimitAlong(glm::normalize(trialDir));
-                if (trialLimit > bestLimit + DEFLECT_MIN_GAIN) {
-                    bestLimit = trialLimit;
-                    deflectTarget = trialDeg;
-                }
-            }
-            rawLimit = bestLimit;
-        }
+        // Only pulled in along the line it looks down, never turned aside:
+        // the client's sweep (Camera.cpp 0x00605d60 -> 0x0077f310) shortens
+        // the distance and leaves the yaw alone.
 
-        // Ease into and out of the turn; snapping to it reads as the camera
-        // being knocked sideways.
-        {
-            const float tau = (deflectTarget != 0.0f) ? 0.12f : 0.30f;
-            const float alpha = 1.0f - std::exp(-deltaTime / tau);
-            cameraDeflectDeg_ += (deflectTarget - cameraDeflectDeg_) * alpha;
-            if (std::abs(cameraDeflectDeg_) > 0.05f) {
-                const float a = glm::radians(cameraDeflectDeg_);
-                const float ca = std::cos(a), sa = std::sin(a);
-                camDir = glm::normalize(glm::vec3(camDir.x * ca - camDir.y * sa,
-                                                  camDir.x * sa + camDir.y * ca,
-                                                  camDir.z));
-            }
-        }
-
-        // The ground, folded in after the deflection and on its own timing.
+        // The ground, folded in on its own timing.
         //
-        // It is never a reason to turn: there is no side to a hillside to step
-        // past, so trying to yaw around one only wanders. And its own limit is
-        // smoothed before it is used, because the marched height changes a
-        // little every step the player takes and that arrives as a shudder if
-        // it is passed straight through.
+        // Its own limit is smoothed before it is used, because the marched
+        // height changes a little every step the player takes and that
+        // arrives as a shudder if it is passed straight through.
         if (!cachedInsideInteriorWMO) {
             const float terrainLimit =
                 raymarchTerrainCameraLimit(pivot, camDir, currentDistance);
@@ -2913,6 +2868,11 @@ void CameraController::setVehicleCameraOffsets(float yawOffset, float pitchOffse
     const uint32_t end = cameraClockMs_ + static_cast<uint32_t>(std::max(0.0f, seconds) * 1000.0f);
     vehicleYawOffset_.set(yawOffset, cameraClockMs_, end);
     vehiclePitchOffset_.set(pitchOffset, cameraClockMs_, end);
+}
+
+void CameraController::releaseVehicleCameraOffsets() {
+    if (vehicleYawOffset_.target() == 0.0f && vehiclePitchOffset_.target() == 0.0f) return;
+    setVehicleCameraOffsets(0.0f, 0.0f, 0.5f);
 }
 
 void CameraController::update(float deltaTime) {

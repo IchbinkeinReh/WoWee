@@ -394,6 +394,8 @@ public:
         float seconds = 0.0f;
     };
     [[nodiscard]] std::optional<SeatCameraCue> takeSeatCameraCue();
+    /// A seat change whose camera move is still to come.
+    [[nodiscard]] bool seatCameraCuePending() const { return localSeatCamera_.pending; }
 
     // Local player GUID exclusion (EntitySpawner skips spawning the local player)
     void setLocalPlayerGuid(uint64_t guid) { spawnedPlayerGuid_ = guid; }
