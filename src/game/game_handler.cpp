@@ -796,6 +796,8 @@ void GameHandler::update(float deltaTime) {
     if (state == WorldState::IN_WORLD) {
         timeSinceLastPing += deltaTime;
         if (movementHandler_) movementHandler_->timeSinceLastMoveHeartbeatRef() += deltaTime;
+        // The mover's pitch over time and a full-speed pitcher's held start.
+        if (movementHandler_) movementHandler_->updateMoverPitch(deltaTime);
 
         const float currentPingInterval =
             (isPreWotlk()) ? game::CLASSIC_PING_INTERVAL_SEC : pingInterval;

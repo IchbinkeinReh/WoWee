@@ -4308,8 +4308,8 @@ static int stepVehicleAim(lua_State* L, float sign) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const float d = lua_isnumber(L, 1) ? static_cast<float>(lua_tonumber(L, 1)) : 0.1f;
-    const uint64_t mover = gh->getPlayerGuid();
-    gh->requestVehicleAim(mover, gh->unitPitch(mover) + sign * d);
+    // From the pitch a pitch over time is on its way to, else the mover's.
+    gh->requestVehicleAim(gh->activeMover(), gh->vehicleAimBasePitch() + sign * d);
     return 0;
 }
 static int lua_VehicleAimIncrement(lua_State* L) { return stepVehicleAim(L, 1.0f); }
@@ -4319,7 +4319,7 @@ static int lua_VehicleAimDecrement(lua_State* L) { return stepVehicleAim(L, -1.0
 static int lua_VehicleAimRequestAngle(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    const uint64_t mover = gh->getPlayerGuid();
+    const uint64_t mover = gh->activeMover();
     const auto* row = gh->vehicleRowOf(mover);
     if (row && (row->flags & game::vehicle::kVehicleFlagAimAngle) && lua_isnumber(L, 1)) {
         gh->requestVehicleAim(mover, static_cast<float>(lua_tonumber(L, 1)));
@@ -5709,11 +5709,24 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 {"TurnInGuildCharter",       lua_ReturnNothing},
                 // The pitch keys' control bits (0x005fc8e0 -> 0x005fa170,
-                // 0x400 and 0x800), which nothing here moves the pitch by.
-                {"VehicleAimUpStart",        lua_ReturnNothing},
-                {"VehicleAimUpStop",         lua_ReturnNothing},
-                {"VehicleAimDownStart",      lua_ReturnNothing},
-                {"VehicleAimDownStop",       lua_ReturnNothing},
+                // 0x400 and 0x800): the mover pitches up or down at its
+                // pitch rate while one is held (0x005fb1a0).
+                {"VehicleAimUpStart", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->setVehicleAimKey(true, true);
+            return 0;
+        }},
+                {"VehicleAimUpStop", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->setVehicleAimKey(true, false);
+            return 0;
+        }},
+                {"VehicleAimDownStart", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->setVehicleAimKey(false, true);
+            return 0;
+        }},
+                {"VehicleAimDownStop", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->setVehicleAimKey(false, false);
+            return 0;
+        }},
                 // CMSG_REQUEST_VEHICLE_EXIT where the player's seat lets it
                 // out, Flags 0x2000000 (0x005fb660 -> 0x0074c7f0); else the
                 // error SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW (0x005216f0).

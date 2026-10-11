@@ -410,6 +410,9 @@ private:
     /// The local player's passenger state last frame, and the camera
     /// distance a seat's zoom put away (CGCamera +0x2d0, 0x005fe920).
     int localSeatStateLastFrame_ = 0;
+    /// The unit the camera's movement drives in the player's stead - a
+    /// vehicle it drives - last frame; 0 for the player itself.
+    uint64_t drivenUnitLastFrame_ = 0;
     std::optional<float> seatZoomRemembered_;
 
     bool wasAutoAttacking_ = false;

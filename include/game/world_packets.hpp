@@ -568,6 +568,8 @@ struct UpdateBlock {
     // Raw movement flags from LIVING block (SWIMMING=0x200000, WALKING=0x100, CAN_FLY=0x800000, FLYING=0x1000000)
     // Used to initialise swim/walk/fly state on entity spawn (cold-join).
     uint32_t moveFlags = 0;
+    uint16_t moveFlags2 = 0;  ///< WotLK's LIVING block
+    float pitch = 0.0f;       ///< swimming, flying or flags2 0x20
 
     // UPDATEFLAG_TRANSPORT: the server's clock in ms when it built the block
     // (getMSTime), which the client keeps a transport's path time by.
@@ -1818,6 +1820,19 @@ public:
     static network::Packet requestSwitchSeat(uint64_t vehicleGuid, uint8_t seat);
     /// CMSG_EJECT_PASSENGER (0x4a9, 0x00757200): the passenger's guid, whole.
     static network::Packet ejectPassenger(uint64_t passengerGuid);
+    /// CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE (0x49b, move event 0x37,
+    /// 0x006ef5a0 -> 0x0071f0c0): the driven vehicle's packed guid and
+    /// movement (0x0071ef80), then the vehicle the seat is on, packed - 0 for
+    /// the vehicle's own next (seat 1) or previous (seat 0xff) - and the seat.
+    /// `wire` is in server coordinates.
+    static network::Packet changeSeatsOnControlledVehicle(uint64_t moverGuid, const MovementInfo& wire,
+                                                          uint64_t vehicleGuid, uint8_t seat);
+    /// CMSG_DISMISS_CONTROLLED_VEHICLE (0x46d, move event 0x34, 0x006ef540):
+    /// the driven vehicle's packed guid and movement.
+    static network::Packet dismissControlledVehicle(uint64_t moverGuid, const MovementInfo& wire);
+    /// CMSG_FAR_SIGHT (0x27a, 0x006e2880): 1 as the player starts looking
+    /// through its farsight object, 0 as it stops.
+    static network::Packet farSight(bool on);
 };
 
 /** CMSG_INSPECT packet builder */

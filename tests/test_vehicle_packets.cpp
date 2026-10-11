@@ -63,3 +63,41 @@ TEST_CASE("the movement block carries the pitch for flags2 0x20 and the spline e
     std::memcpy(&elevation, withElevation.getData().data() + 30, 4);
     CHECK(elevation == 2.0f);
 }
+
+TEST_CASE("a driver's change of seat carries the vehicle's movement, then the seat's vehicle and the seat (0x0071f0c0)",
+          "[vehicle]") {
+    MovementInfo info;
+    info.flags = 0x1;
+    info.time = 7;
+    info.x = 1.0f;
+    const Bytes bytes =
+        VehiclePackets::changeSeatsOnControlledVehicle(0xF150001234000056ull, info, 0, 0xff).getData();
+    // mover packed (6) + flags(4) flags2(2) time(4) xyz(12) o(4) fall(4) + guid 0 packed (1) + seat (1)
+    REQUIRE(bytes.size() == 6u + 30u + 2u);
+    CHECK(bytes[0] == 0xD9);
+    CHECK(bytes[6] == 0x01);   // flags
+    CHECK(bytes[12] == 7);     // time
+    CHECK(bytes[36] == 0x00);  // no vehicle named: the mask alone
+    CHECK(bytes[37] == 0xff);  // the previous seat
+
+    const Bytes other =
+        VehiclePackets::changeSeatsOnControlledVehicle(0xF150001234000056ull, info, 0xF150001234000099ull, 2)
+            .getData();
+    REQUIRE(other.size() == 6u + 30u + 6u + 1u);
+    CHECK(other[36] == 0xD9);
+    CHECK(other[37] == 0x99);
+    CHECK(other.back() == 2);
+}
+
+TEST_CASE("a dismiss carries the vehicle and its movement alone (0x006ef540)", "[vehicle]") {
+    MovementInfo info;
+    const Bytes bytes = VehiclePackets::dismissControlledVehicle(0x0000000000000005ull, info).getData();
+    REQUIRE(bytes.size() == 2u + 30u);
+    CHECK(bytes[0] == 0x01);
+    CHECK(bytes[1] == 0x05);
+}
+
+TEST_CASE("CMSG_FAR_SIGHT is one byte (0x006e2880)", "[vehicle]") {
+    CHECK(VehiclePackets::farSight(true).getData() == Bytes{1});
+    CHECK(VehiclePackets::farSight(false).getData() == Bytes{0});
+}

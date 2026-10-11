@@ -108,6 +108,7 @@ struct MovementSpeeds {
     float flight = 7.0f;
     float flightBack = 4.5f;
     float turnRate = 3.14159265f;
+    float pitchRate = 3.14159265f;  ///< CMovement +0xb0, what a pitch over time runs at
 };
 
 /// What a movement packet from a unit did to its jump; see

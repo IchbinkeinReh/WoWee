@@ -1093,7 +1093,7 @@ bool UpdateObjectParser::parseMovementBlock(network::Packet& packet, UpdateBlock
             (moveFlags & 0x02000000) /* FLYING */ ||
             (moveFlags2 & 0x0020)    /* MOVEMENTFLAG2_ALWAYS_ALLOW_PITCHING */) {
             if (rem() < 4) return false;
-            /*float pitch =*/ packet.readFloat();
+            block.pitch = packet.readFloat();
         }
 
         // Fall time
@@ -1127,6 +1127,7 @@ bool UpdateObjectParser::parseMovementBlock(network::Packet& packet, UpdateBlock
         block.turnRate        = packet.readFloat();
         block.pitchRate       = packet.readFloat();
         block.moveFlags = moveFlags;
+        block.moveFlags2 = moveFlags2;
 
         // Spline data
         if (moveFlags & 0x08000000) { // MOVEMENTFLAG_SPLINE_ENABLED

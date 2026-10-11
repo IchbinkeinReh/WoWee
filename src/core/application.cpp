@@ -2924,14 +2924,16 @@ void Application::performLogoutToLogin() {
 // about it lands.
 void Application::applyServerMovementState(float deltaTime) {
     if (renderer && gameHandler && renderer->getCameraController()) {
-        renderer->getCameraController()->setRunSpeedOverride(gameHandler->getServerRunSpeed());
-        renderer->getCameraController()->setWalkSpeedOverride(gameHandler->getServerWalkSpeed());
-        renderer->getCameraController()->setSwimSpeedOverride(gameHandler->getServerSwimSpeed());
-        renderer->getCameraController()->setSwimBackSpeedOverride(gameHandler->getServerSwimBackSpeed());
-        renderer->getCameraController()->setFlightSpeedOverride(gameHandler->getServerFlightSpeed());
-        renderer->getCameraController()->setFlightBackSpeedOverride(gameHandler->getServerFlightBackSpeed());
-        renderer->getCameraController()->setRunBackSpeedOverride(gameHandler->getServerRunBackSpeed());
-        renderer->getCameraController()->setTurnRateOverride(gameHandler->getServerTurnRate());
+        // The active mover's speeds: the player's, or a driven vehicle's own.
+        const game::MovementSpeeds speeds = gameHandler->moverSpeeds();
+        renderer->getCameraController()->setRunSpeedOverride(speeds.run);
+        renderer->getCameraController()->setWalkSpeedOverride(speeds.walk);
+        renderer->getCameraController()->setSwimSpeedOverride(speeds.swim);
+        renderer->getCameraController()->setSwimBackSpeedOverride(speeds.swimBack);
+        renderer->getCameraController()->setFlightSpeedOverride(speeds.flight);
+        renderer->getCameraController()->setFlightBackSpeedOverride(speeds.flightBack);
+        renderer->getCameraController()->setRunBackSpeedOverride(speeds.runBack);
+        renderer->getCameraController()->setTurnRateOverride(speeds.turnRate);
         renderer->getCameraController()->setMovementRooted(gameHandler->isPlayerRooted());
         renderer->getCameraController()->setGravityDisabled(gameHandler->isGravityDisabled());
         renderer->getCameraController()->setFeatherFallActive(gameHandler->isFeatherFalling());
@@ -3044,8 +3046,33 @@ void Application::applyServerMovementState(float deltaTime) {
     // the camera looks at it where it is drawn on the vehicle.
     const auto seatState = entitySpawner_ ? entitySpawner_->localPassengerState() : std::nullopt;
     const bool vehiclePassenger = seatState.has_value();
+    // The unit the keys drive in the player's stead (the active mover,
+    // DAT_00ca1238): its movement is the camera's, and the player rides it.
+    // None moves while there is no mover.
+    const uint64_t activeMover = gameHandler->activeMover();
+    uint64_t drivenUnit = 0;
+    std::shared_ptr<game::Entity> drivenEntity;
+    if (activeMover != 0 && activeMover != gameHandler->getPlayerGuid()) {
+        drivenEntity = gameHandler->getEntityManager().getEntity(activeMover);
+        if (drivenEntity) drivenUnit = activeMover;
+    }
+    const bool noMover = activeMover == 0;
     {
         auto* cc = renderer->getCameraController();
+        if (drivenUnit != drivenUnitLastFrame_) {
+            // A new mover's keys start let go (0x00729010 -> 0x005fbbc0); the
+            // camera's character is the driven unit where it stands and
+            // faces, turned with it.
+            cc->clearMovementInputs();
+            if (drivenEntity) {
+                renderer->getCharacterPosition() = core::coords::canonicalToRender(
+                    glm::vec3(drivenEntity->getX(), drivenEntity->getY(), drivenEntity->getZ()));
+                const float facing = core::coords::canonicalToCharacterYawDeg(drivenEntity->getOrientation());
+                cc->turnWithVehicle(facing - cc->getFacingYaw());
+                cc->setFacingYaw(facing);
+            }
+            drivenUnitLastFrame_ = drivenUnit;
+        }
         const int stateNow = seatState ? static_cast<int>(*seatState) : 0;
         if (stateNow != localSeatStateLastFrame_ &&
             (stateNow == static_cast<int>(game::vehicle::SeatState::Seated) || stateNow == 0)) {
@@ -3056,7 +3083,8 @@ void Application::applyServerMovementState(float deltaTime) {
         // facing (VehicleCamera_C, 0x00604490).
         const auto view = vehiclePassenger ? entitySpawner_->localVehicleCameraView() : std::nullopt;
         cc->setVehiclePivot(view ? std::optional<glm::vec3>(view->pivot) : std::nullopt);
-        if (view && view->turned != 0.0f) cc->turnWithVehicle(glm::degrees(view->turned));
+        // The driver turns the vehicle, and the camera with it, by its keys.
+        if (view && view->turned != 0.0f && drivenUnit == 0) cc->turnWithVehicle(glm::degrees(view->turned));
         // The seat's zoom when its camera move is due (0x0074c0e0).
         if (auto cue = entitySpawner_ ? entitySpawner_->takeSeatCameraCue() : std::nullopt) {
             // The distance mode first (0x0074c0e0 -> 0x00600590), then the
@@ -3082,7 +3110,7 @@ void Application::applyServerMovementState(float deltaTime) {
     }
     renderer->getCameraController()->setExternalFollow(
         externallyDrivenMotion || landingClampActive || hearthFreeze ||
-        transportTransferFreeze || deckFloorPending_ || vehiclePassenger);
+        transportTransferFreeze || deckFloorPending_ || (vehiclePassenger && drivenUnit == 0) || noMover);
     renderer->getCameraController()->setExternalMoving(externallyDrivenMotion);
     if (externallyDrivenMotion) {
         // Drop any stale local movement toggles while server drives taxi motion.

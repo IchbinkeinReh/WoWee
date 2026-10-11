@@ -2587,7 +2587,9 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
         }
     }
     f.nowJump = inputJump;
-    updateOrbitCamera(deltaTime, f, targetPos);
+    // A driver's camera looks where its vehicle camera does (0x00604490),
+    // the vehicle moved by these keys.
+    updateOrbitCamera(deltaTime, f, vehiclePivot_ ? *vehiclePivot_ : targetPos);
 }
 
 // The camera that flies itself, used when nothing is being followed.

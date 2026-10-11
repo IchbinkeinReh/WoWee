@@ -58,6 +58,7 @@ void applyBlockSpeedsToEntity(const UpdateBlock& block, Entity& entity) {
     apply(block.flightSpeed, speeds.flight);
     apply(block.flightBackSpeed, speeds.flightBack);
     apply(block.turnRate, speeds.turnRate);
+    apply(block.pitchRate, speeds.pitchRate);
 }
 
 } // anonymous namespace
@@ -462,6 +463,9 @@ void EntityController::updateNonPlayerTransportAttachment(const UpdateBlock& blo
         if (block.updateFlags & 0x0020) {  // UPDATEFLAG_LIVING
             roster.setTransport(block.guid, block.onTransport ? block.transportGuid : 0,
                                 block.transportSeat, block.transportO);
+            // Its flags2 and pitch, as a movement packet's (+0x7d0, +0x7c0).
+            roster.setMoveFlags2(block.guid, block.moveFlags2);
+            roster.setPitch(block.guid, block.pitch);
         }
     }
     if (block.guid == owner_.getPlayerGuid()) return;
@@ -2466,6 +2470,12 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         if (const uint16_t farsight = fieldIndex(UF::PLAYER_FARSIGHT); farsight != 0xFFFF &&
             (block.fields.find(farsight) != block.fields.end() ||
              block.fields.find(static_cast<uint16_t>(farsight + 1)) != block.fields.end())) {
+            if (auto* movement = owner_.getMovementHandler()) {
+                const uint64_t looked =
+                    (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(farsight + 1))) << 32) |
+                    entity->getField(farsight);
+                movement->onFarsightChanged(looked);  // 0x006e2880
+            }
             owner_.updatePetActionBar();
         }
         PlayerFieldIndices pfi = PlayerFieldIndices::resolve();
@@ -2667,6 +2677,11 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
     // Dispatch to type-specific handler
     auto* handler = getTypeHandler(block.objectType);
     if (handler) handler->onCreate(block, entity, newItemCreated);
+
+    // A control update that waited for the unit (0x007402b0 -> 0x0072cca0).
+    if (block.objectType == ObjectType::UNIT || block.objectType == ObjectType::PLAYER) {
+        if (auto* movement = owner_.getMovementHandler()) movement->onUnitCreated(block.guid);
+    }
 
     flushPendingEvents();
 }

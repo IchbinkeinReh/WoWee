@@ -3,6 +3,9 @@
 #include "game/game_utils.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/spline_packet.hpp"
+#include "game/vehicle.hpp"
+#include "game/vehicle_mover.hpp"
+#include "game/update_field_table.hpp"
 #include "game/transport_manager.hpp"
 #include "game/entity.hpp"
 #include "network/world_socket.hpp"
@@ -205,28 +208,36 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_FORCE_MOVE_ROOT] = [this](network::Packet& packet) { handleForceMoveRootState(packet, true); };
     table[Opcode::SMSG_FORCE_MOVE_UNROOT] = [this](network::Packet& packet) { handleForceMoveRootState(packet, false); };
     table[Opcode::SMSG_FORCE_WALK_SPEED_CHANGE] = [this](network::Packet& packet) {
-        handleForceSpeedChange(packet, "WALK_SPEED", Opcode::CMSG_FORCE_WALK_SPEED_CHANGE_ACK, &serverWalkSpeed_);
+        handleForceSpeedChange(packet, "WALK_SPEED", Opcode::CMSG_FORCE_WALK_SPEED_CHANGE_ACK, &serverWalkSpeed_,
+                               &MovementSpeeds::walk);
     };
     table[Opcode::SMSG_FORCE_RUN_BACK_SPEED_CHANGE] = [this](network::Packet& packet) {
-        handleForceSpeedChange(packet, "RUN_BACK_SPEED", Opcode::CMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK, &serverRunBackSpeed_);
+        handleForceSpeedChange(packet, "RUN_BACK_SPEED", Opcode::CMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK, &serverRunBackSpeed_,
+                               &MovementSpeeds::runBack);
     };
     table[Opcode::SMSG_FORCE_SWIM_SPEED_CHANGE] = [this](network::Packet& packet) {
-        handleForceSpeedChange(packet, "SWIM_SPEED", Opcode::CMSG_FORCE_SWIM_SPEED_CHANGE_ACK, &serverSwimSpeed_);
+        handleForceSpeedChange(packet, "SWIM_SPEED", Opcode::CMSG_FORCE_SWIM_SPEED_CHANGE_ACK, &serverSwimSpeed_,
+                               &MovementSpeeds::swim);
     };
     table[Opcode::SMSG_FORCE_SWIM_BACK_SPEED_CHANGE] = [this](network::Packet& packet) {
-        handleForceSpeedChange(packet, "SWIM_BACK_SPEED", Opcode::CMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK, &serverSwimBackSpeed_);
+        handleForceSpeedChange(packet, "SWIM_BACK_SPEED", Opcode::CMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK, &serverSwimBackSpeed_,
+                               &MovementSpeeds::swimBack);
     };
     table[Opcode::SMSG_FORCE_FLIGHT_SPEED_CHANGE] = [this](network::Packet& packet) {
-        handleForceSpeedChange(packet, "FLIGHT_SPEED", Opcode::CMSG_FORCE_FLIGHT_SPEED_CHANGE_ACK, &serverFlightSpeed_);
+        handleForceSpeedChange(packet, "FLIGHT_SPEED", Opcode::CMSG_FORCE_FLIGHT_SPEED_CHANGE_ACK, &serverFlightSpeed_,
+                               &MovementSpeeds::flight);
     };
     table[Opcode::SMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE] = [this](network::Packet& packet) {
-        handleForceSpeedChange(packet, "FLIGHT_BACK_SPEED", Opcode::CMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE_ACK, &serverFlightBackSpeed_);
+        handleForceSpeedChange(packet, "FLIGHT_BACK_SPEED", Opcode::CMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE_ACK, &serverFlightBackSpeed_,
+                               &MovementSpeeds::flightBack);
     };
     table[Opcode::SMSG_FORCE_TURN_RATE_CHANGE] = [this](network::Packet& packet) {
-        handleForceSpeedChange(packet, "TURN_RATE", Opcode::CMSG_FORCE_TURN_RATE_CHANGE_ACK, &serverTurnRate_);
+        handleForceSpeedChange(packet, "TURN_RATE", Opcode::CMSG_FORCE_TURN_RATE_CHANGE_ACK, &serverTurnRate_,
+                               &MovementSpeeds::turnRate);
     };
     table[Opcode::SMSG_FORCE_PITCH_RATE_CHANGE] = [this](network::Packet& packet) {
-        handleForceSpeedChange(packet, "PITCH_RATE", Opcode::CMSG_FORCE_PITCH_RATE_CHANGE_ACK, &serverPitchRate_);
+        handleForceSpeedChange(packet, "PITCH_RATE", Opcode::CMSG_FORCE_PITCH_RATE_CHANGE_ACK, &serverPitchRate_,
+                               &MovementSpeeds::pitchRate);
     };
 
     // Movement flag toggles
@@ -398,7 +409,7 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
 // ============================================================
 
 void MovementHandler::handleClientControlUpdate(network::Packet& packet) {
-    // PackedGuid + uint8 allowMovement.
+    // PackedGuid + uint8 allowMovement (0x0072d0b0).
     //
     // Through readPackedGuid rather than the byte loop that used to be written
     // out here. It decoded correctly, but it was a second copy of the packed
@@ -411,34 +422,21 @@ void MovementHandler::handleClientControlUpdate(network::Packet& packet) {
         packet.skipAll();
         return;
     }
-    const uint64_t controlGuid = packet.readPackedGuid();
+    uint64_t controlGuid = packet.readPackedGuid();
     if (!packet.hasRemaining(1)) {
         LOG_WARNING("SMSG_CLIENT_CONTROL_UPDATE too short: ", packet.getSize(), " bytes");
         return;
     }
-    bool allowMovement = (packet.readUInt8() != 0);
-    if (controlGuid == 0 || controlGuid == owner_.getPlayerGuid()) {
-        bool changed = (serverMovementAllowed_ != allowMovement);
-        serverMovementAllowed_ = allowMovement;
-        if (changed && !allowMovement) {
-            // Force-stop local movement immediately when server revokes control.
-            movementInfo.flags &= ~(static_cast<uint32_t>(MovementFlags::FORWARD) |
-                                    static_cast<uint32_t>(MovementFlags::BACKWARD) |
-                                    static_cast<uint32_t>(MovementFlags::STRAFE_LEFT) |
-                                    static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT) |
-                                    static_cast<uint32_t>(MovementFlags::TURN_LEFT) |
-                                    static_cast<uint32_t>(MovementFlags::TURN_RIGHT));
-            owner_.sendMovement(Opcode::MSG_MOVE_STOP);
-            owner_.sendMovement(Opcode::MSG_MOVE_STOP_STRAFE);
-            owner_.sendMovement(Opcode::MSG_MOVE_STOP_TURN);
-            owner_.sendMovement(Opcode::MSG_MOVE_STOP_SWIM);
-            owner_.addSystemChatMessage("Movement disabled by server.");
-            owner_.fireAddonEvent("PLAYER_CONTROL_LOST", {});
-        } else if (changed && allowMovement) {
-            owner_.addSystemChatMessage("Movement re-enabled.");
-            owner_.fireAddonEvent("PLAYER_CONTROL_GAINED", {});
-        }
+    const bool allowMovement = (packet.readUInt8() != 0);
+    if (controlGuid == 0) controlGuid = owner_.getPlayerGuid();
+    if (controlGuid != owner_.getPlayerGuid() && !owner_.getEntityManager().getEntity(controlGuid)) {
+        // 0x00716060: a unit not in view keeps it for its create - the
+        // latest for it, or one that gives control over one that takes it.
+        if (!pendingControl_ || pendingControl_->first == controlGuid || !pendingControl_->second || allowMovement)
+            pendingControl_ = std::make_pair(controlGuid, allowMovement);
+        return;
     }
+    applyControlUpdate(controlGuid, allowMovement);
 }
 
 // ============================================================
@@ -541,7 +539,15 @@ void MovementHandler::sendMovement(Opcode opcode) {
     // player then walks up to is out of the server's reach, and refuses in
     // silence. Once per stretch of it, not per packet.
     const char* heldReason = nullptr;
-    if (!taxiAllowed) {
+    // The packet names the active mover and carries its movement (0x0071ef80):
+    // the player, or the unit the client controls in its stead.
+    const uint64_t mover = activeMover();
+    const bool moverIsPlayer = mover == owner_.getPlayerGuid();
+    if (mover == 0) {
+        heldReason = "no unit is the active mover";
+    } else if (!moverIsPlayer) {
+        if (!unitHasClientControl(mover)) heldReason = "the server has not given control of the unit";
+    } else if (!taxiAllowed) {
         if (!serverMovementAllowed_) heldReason = "the server has not given control of the character";
         else if (onTaxiFlight_) heldReason = "a taxi flight is in progress";
         else if (taxiMountActive_) heldReason = "a taxi mount is on";
@@ -593,6 +599,16 @@ void MovementHandler::sendMovement(Opcode opcode) {
             owner_.cancelCast();
         }
     }
+
+    // The pitch's packets go out only for a unit that can pitch: swimming,
+    // flying, or movement flags2 0x20 (0x007413f0 for 0xbf..0xc1 and 0xdb;
+    // 0x00989220 sets no pitch flag otherwise).
+    const bool pitchOpcode = opcode == Opcode::MSG_MOVE_START_PITCH_UP ||
+                             opcode == Opcode::MSG_MOVE_START_PITCH_DOWN ||
+                             opcode == Opcode::MSG_MOVE_STOP_PITCH || opcode == Opcode::MSG_MOVE_SET_PITCH;
+    const bool canPitch = movementInfo.hasFlag(MovementFlags::SWIMMING) ||
+                          movementInfo.hasFlag(MovementFlags::FLYING) || (movementInfo.flags2 & 0x0020) != 0;
+    if (pitchOpcode && !canPitch) return;
 
     // Update movement flags based on opcode
     switch (opcode) {
@@ -701,6 +717,18 @@ void MovementHandler::sendMovement(Opcode opcode) {
             // from however the swimmer was last angled.
             movementInfo.pitch = 0.0f;
             break;
+        case Opcode::MSG_MOVE_START_PITCH_UP:
+            movementInfo.flags = (movementInfo.flags & ~static_cast<uint32_t>(MovementFlags::PITCH_DOWN)) |
+                                 static_cast<uint32_t>(MovementFlags::PITCH_UP);
+            break;
+        case Opcode::MSG_MOVE_START_PITCH_DOWN:
+            movementInfo.flags = (movementInfo.flags & ~static_cast<uint32_t>(MovementFlags::PITCH_UP)) |
+                                 static_cast<uint32_t>(MovementFlags::PITCH_DOWN);
+            break;
+        case Opcode::MSG_MOVE_STOP_PITCH:
+            movementInfo.flags &= ~(static_cast<uint32_t>(MovementFlags::PITCH_UP) |
+                                    static_cast<uint32_t>(MovementFlags::PITCH_DOWN));
+            break;
         case Opcode::MSG_MOVE_START_DESCEND:
             // Must set DESCENDING so outgoing movement packets carry the correct
             // flag during flight descent. Only clearing ASCENDING left the flag
@@ -710,6 +738,28 @@ void MovementHandler::sendMovement(Opcode opcode) {
             break;
         default:
             break;
+    }
+
+    // A full-speed pitcher (flags2 0x10) holds its START_PITCH for 100 ms; a
+    // stop before it went out is one MSG_MOVE_SET_PITCH, or nothing where the
+    // facing and pitch are where they were sent (0x00721ac0, 0x0071ae80).
+    if ((movementInfo.flags2 & 0x0010) != 0 && !flushingPitchStart_) {
+        if (opcode == Opcode::MSG_MOVE_START_PITCH_UP || opcode == Opcode::MSG_MOVE_START_PITCH_DOWN) {
+            heldPitchStart_ = opcode;
+            heldPitchStartMs_ = movementTime;
+            return;
+        }
+        if (opcode == Opcode::MSG_MOVE_STOP_PITCH) {
+            const bool startHeld = heldPitchStart_.has_value() && !pitchStartSent_;
+            heldPitchStart_.reset();
+            pitchStartSent_ = false;
+            if (startHeld) {
+                if (vehicle::pitchUnchangedSinceSent(movementInfo.orientation, lastSentFacing_, movementInfo.pitch,
+                                                     lastSentPitch_, canPitch))
+                    return;
+                opcode = Opcode::MSG_MOVE_SET_PITCH;
+            }
+        }
     }
 
     // Fire PLAYER_STARTED/STOPPED_MOVING on movement state transitions
@@ -744,7 +794,8 @@ void MovementHandler::sendMovement(Opcode opcode) {
         sanitizeMovementForTaxi();
     }
 
-    bool includeTransportInWire = owner_.isOnTransport();
+    // The player's transport; a unit moved in its stead carries its own.
+    bool includeTransportInWire = moverIsPlayer && owner_.isOnTransport();
     if (includeTransportInWire && owner_.getTransportManager()) {
         if (auto* tr = owner_.getTransportManager()->getTransport(owner_.playerTransportGuidRef()); tr && tr->isM2) {
             includeTransportInWire = false;
@@ -883,9 +934,16 @@ void MovementHandler::sendMovement(Opcode opcode) {
 
     // Build and send movement packet (expansion-specific format)
     auto packet = owner_.getPacketParsers()
-        ? owner_.getPacketParsers()->buildMovementPacket(opcode, wireInfo, owner_.getPlayerGuid())
-        : MovementPacket::build(opcode, wireInfo, owner_.getPlayerGuid());
+        ? owner_.getPacketParsers()->buildMovementPacket(opcode, wireInfo, mover)
+        : MovementPacket::build(opcode, wireInfo, mover);
     owner_.getSocket()->send(packet);
+    // What went out (0x0071f0c0): the facing, the pitch where it can pitch,
+    // and whether a pitch is under way since (+0xa30 0x8000000).
+    lastSentFacing_ = movementInfo.orientation;
+    if (canPitch) lastSentPitch_ = movementInfo.pitch;
+    if ((movementInfo.flags & (static_cast<uint32_t>(MovementFlags::PITCH_UP) |
+                               static_cast<uint32_t>(MovementFlags::PITCH_DOWN))) != 0)
+        pitchStartSent_ = true;
     lastSentPos_ = glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z);
     hasSentMovement_ = true;
     if (movementHeldReason_) {
@@ -902,6 +960,14 @@ void MovementHandler::sendMovement(Opcode opcode) {
         lastHeartbeatTransportGuid_ = movementInfo.transportGuid;
     } else {
         lastNonHeartbeatMoveSendTimeMs_ = movementInfo.time;
+    }
+    // Any other packet takes a held START_PITCH out after it (0x00721c20).
+    if (heldPitchStart_ && !pitchOpcode && !flushingPitchStart_) {
+        const Opcode held = *heldPitchStart_;
+        heldPitchStart_.reset();
+        flushingPitchStart_ = true;
+        sendMovement(held);
+        flushingPitchStart_ = false;
     }
 }
 
@@ -998,6 +1064,12 @@ void MovementHandler::setPosition(float x, float y, float z) {
     // Not during a client taxi flight, where the flight simulation moves the
     // entity and the character is placed from it.
     if (taxiClientActive_ || onTaxiFlight_) return;
+    // The unit the client moves goes with it - a driven vehicle, whose
+    // passenger the player rides along on it.
+    const uint64_t mover = activeMover();
+    if (mover != 0 && mover != owner_.getPlayerGuid()) {
+        if (auto unit = owner_.getEntityManager().getEntity(mover)) unit->setPosition(x, y, z, movementInfo.orientation);
+    }
     if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
         player->setPosition(x, y, z, movementInfo.orientation);
     }
@@ -1059,18 +1131,21 @@ void MovementHandler::dismount() {
 // root, flag, collision-height, knockback) require the same ACK structure:
 // GUID + counter + movement payload with server-space coordinates. Centralised
 // here so transport coordinate conversion can't diverge between handlers.
-network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counter) {
+network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counter, uint64_t guid) {
+    // The unit the change was for and its movement (0x0071ef80): the
+    // player's, or the unit the client moves in its stead.
+    if (guid == 0) guid = owner_.getPlayerGuid();
     network::Packet ack(wireOpcode(ackOpcode));
     const bool legacyGuid =
         isActiveExpansion("classic") || isActiveExpansion("tbc") || isActiveExpansion("turtle");
     if (legacyGuid) {
-        ack.writeUInt64(owner_.getPlayerGuid());
+        ack.writeUInt64(guid);
     } else {
-        ack.writePackedGuid(owner_.getPlayerGuid());
+        ack.writePackedGuid(guid);
     }
     ack.writeUInt32(counter);
 
-    MovementInfo wire = movementInfo;
+    MovementInfo wire = movementOf(guid);
     wire.time = nextMovementTimestampMs();
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
         wire.transportTime = wire.time;
@@ -1096,7 +1171,8 @@ network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counte
 }
 
 void MovementHandler::handleForceSpeedChange(network::Packet& packet, const char* name,
-                                              Opcode ackOpcode, float* speedStorage) {
+                                              Opcode ackOpcode, float* speedStorage,
+                                              float MovementSpeeds::* unitMember) {
     const bool fscTbcLike = isPreWotlk();
     uint64_t guid = fscTbcLike
         ? packet.readUInt64() : packet.readPackedGuid();
@@ -1113,7 +1189,16 @@ void MovementHandler::handleForceSpeedChange(network::Packet& packet, const char
     LOG_INFO("SMSG_FORCE_", name, "_CHANGE: guid=0x", std::hex, guid, std::dec,
              " counter=", counter, " speed=", newSpeed);
 
-    if (guid != owner_.getPlayerGuid()) return;
+    // The player's, or the unit the client moves in its stead (a driven
+    // vehicle's): any unit's change lands on its movement (0x00732450 ->
+    // 0x007307a0), and the server asks it of the one it moves.
+    const bool forPlayer = guid == owner_.getPlayerGuid();
+    std::shared_ptr<Entity> unit;
+    if (!forPlayer) {
+        if (guid != activeMover() || guid == 0) return;
+        unit = owner_.getEntityManager().getEntity(guid);
+        if (!unit) return;
+    }
 
     // Validate BEFORE sending ACK - if we echo a bad speed back to the server
     // but don't apply it locally, the client and server desync on movement speed.
@@ -1123,18 +1208,23 @@ void MovementHandler::handleForceSpeedChange(network::Packet& packet, const char
     }
 
     if (owner_.getSocket()) {
-        auto ack = buildForceAck(ackOpcode, counter);
+        auto ack = buildForceAck(ackOpcode, counter, guid);
         ack.writeFloat(newSpeed);
         owner_.getSocket()->send(ack);
     }
 
-    if (speedStorage) *speedStorage = newSpeed;
+    if (forPlayer) {
+        if (speedStorage) *speedStorage = newSpeed;
+    } else if (unitMember) {
+        unit->movementSpeeds().*unitMember = newSpeed;
+    }
 }
 
 void MovementHandler::handleForceRunSpeedChange(network::Packet& packet) {
     // A speed change is not a dismount signal. Mount ownership is updated by
     // SMSG_DISMOUNT / UNIT_FIELD_MOUNTDISPLAYID instead.
-    handleForceSpeedChange(packet, "RUN_SPEED", Opcode::CMSG_FORCE_RUN_SPEED_CHANGE_ACK, &serverRunSpeed_);
+    handleForceSpeedChange(packet, "RUN_SPEED", Opcode::CMSG_FORCE_RUN_SPEED_CHANGE_ACK, &serverRunSpeed_,
+                               &MovementSpeeds::run);
 }
 
 void MovementHandler::handleForceMoveRootState(network::Packet& packet, bool rooted) {
@@ -1148,18 +1238,19 @@ void MovementHandler::handleForceMoveRootState(network::Packet& packet, bool roo
     LOG_INFO(rooted ? "SMSG_FORCE_MOVE_ROOT" : "SMSG_FORCE_MOVE_UNROOT",
              ": guid=0x", std::hex, guid, std::dec, " counter=", counter);
 
-    if (guid != owner_.getPlayerGuid()) return;
+    MovementInfo* info = movementFor(guid);
+    if (!info) return;
 
     if (rooted) {
-        movementInfo.flags |= static_cast<uint32_t>(MovementFlags::ROOT);
+        info->flags |= static_cast<uint32_t>(MovementFlags::ROOT);
     } else {
-        movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::ROOT);
+        info->flags &= ~static_cast<uint32_t>(MovementFlags::ROOT);
     }
 
     if (!owner_.getSocket()) return;
     Opcode ackOp = rooted ? Opcode::CMSG_FORCE_MOVE_ROOT_ACK : Opcode::CMSG_FORCE_MOVE_UNROOT_ACK;
     if (wireOpcode(ackOp) == 0xFFFF) return;
-    owner_.getSocket()->send(buildForceAck(ackOp, counter));
+    owner_.getSocket()->send(buildForceAck(ackOp, counter, guid));
 }
 
 void MovementHandler::handleForceMoveFlagChange(network::Packet& packet, const char* name,
@@ -1173,19 +1264,20 @@ void MovementHandler::handleForceMoveFlagChange(network::Packet& packet, const c
 
     LOG_INFO("SMSG_FORCE_", name, ": guid=0x", std::hex, guid, std::dec, " counter=", counter);
 
-    if (guid != owner_.getPlayerGuid()) return;
+    MovementInfo* info = movementFor(guid);
+    if (!info) return;
 
     if (flag != 0) {
         if (set) {
-            movementInfo.flags |= flag;
+            info->flags |= flag;
         } else {
-            movementInfo.flags &= ~flag;
+            info->flags &= ~flag;
         }
     }
 
     if (!owner_.getSocket()) return;
     if (wireOpcode(ackOpcode) == 0xFFFF) return;
-    owner_.getSocket()->send(buildForceAck(ackOpcode, counter));
+    owner_.getSocket()->send(buildForceAck(ackOpcode, counter, guid));
 }
 
 void MovementHandler::handleMoveSetCollisionHeight(network::Packet& packet) {
@@ -3962,6 +4054,355 @@ void MovementHandler::updateFollowMovement(float deltaTime) {
     const float t = distance > 0.001f ? (step / distance) : 0.0f;
     setPosition(movementInfo.x + dx * t, movementInfo.y + dy * t, movementInfo.z + dz * t);
     sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+}
+
+
+// ============================================================
+// The active mover
+// ============================================================
+
+uint64_t MovementHandler::activeMover() const {
+    return activeMover_ ? *activeMover_ : owner_.getPlayerGuid();
+}
+
+bool MovementHandler::unitHasClientControl(uint64_t guid) const {
+    if (guid == 0) return false;
+    if (guid == owner_.getPlayerGuid()) return serverMovementAllowed_;
+    const auto it = unitControl_.find(guid);
+    return it != unitControl_.end() && it->second;
+}
+
+uint64_t MovementHandler::playerFarsight() const {
+    const uint16_t index = fieldIndex(UF::PLAYER_FARSIGHT);
+    auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (!player || index == 0xFFFF) return 0;
+    return (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(index + 1))) << 32) |
+           player->getField(index);
+}
+
+uint64_t MovementHandler::cameraTarget() const {
+    const uint64_t farsight = playerFarsight();
+    if (farsight != 0 && owner_.getEntityManager().getEntity(farsight)) return farsight;
+    return owner_.getPlayerGuid();
+}
+
+const MovementInfo& MovementHandler::movementOf(uint64_t guid) const {
+    const uint64_t player = owner_.getPlayerGuid();
+    const uint64_t owner = moverInfoOwner_ != 0 ? moverInfoOwner_ : player;
+    if (guid == player && owner != player) return heldPlayerMovement_;
+    return movementInfo;
+}
+
+MovementInfo* MovementHandler::movementFor(uint64_t guid) {
+    const uint64_t player = owner_.getPlayerGuid();
+    const uint64_t owner = moverInfoOwner_ != 0 ? moverInfoOwner_ : player;
+    if (guid == owner) return &movementInfo;
+    if (guid == player) return &heldPlayerMovement_;
+    return nullptr;
+}
+
+void MovementHandler::resetActiveMover() {
+    // 0x006e7f50 -> 0x00513880 -> 0x00717c50: the player moves itself again
+    // and controls nothing else.
+    const uint64_t player = owner_.getPlayerGuid();
+    if (moverInfoOwner_ != 0 && moverInfoOwner_ != player) movementInfo = heldPlayerMovement_;
+    activeMover_ = player;
+    moverInfoOwner_ = 0;
+    unitControl_.clear();
+    pendingControl_.reset();
+    farSightAnnounced_ = false;
+    pitchingToTarget_ = false;
+    aimKeys_ = 0;
+    aimKeyPitching_ = false;
+    heldPitchStart_.reset();
+    pitchStartSent_ = false;
+}
+
+void MovementHandler::setActiveMover(uint64_t guid) {
+    const uint64_t old = activeMover();
+    if (old == guid) return;
+    const uint64_t player = owner_.getPlayerGuid();
+    auto& entities = owner_.getEntityManager();
+    if (old != 0 && entities.getEntity(old) && owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
+        // 0x00729010 -> 0x006ee920 -> 0x006ed7e0 -> 0x006e9980: the old
+        // mover's movement stops and says so, as itself.
+        constexpr uint32_t kMoving = static_cast<uint32_t>(MovementFlags::FORWARD) |
+                                     static_cast<uint32_t>(MovementFlags::BACKWARD);
+        constexpr uint32_t kStrafing = static_cast<uint32_t>(MovementFlags::STRAFE_LEFT) |
+                                       static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT);
+        constexpr uint32_t kTurning = static_cast<uint32_t>(MovementFlags::TURN_LEFT) |
+                                      static_cast<uint32_t>(MovementFlags::TURN_RIGHT);
+        constexpr uint32_t kPitching = static_cast<uint32_t>(MovementFlags::PITCH_UP) |
+                                       static_cast<uint32_t>(MovementFlags::PITCH_DOWN);
+        const bool onSpline = old == player && (onTaxiFlight_ || taxiClientActive_);
+        if (!onSpline) {
+            if (movementInfo.flags & kTurning) sendMovement(Opcode::MSG_MOVE_STOP_TURN);
+            if (movementInfo.flags & kPitching) sendMovement(Opcode::MSG_MOVE_STOP_PITCH);
+            if (movementInfo.flags & kStrafing) sendMovement(Opcode::MSG_MOVE_STOP_STRAFE);
+            if (movementInfo.flags & kMoving) sendMovement(Opcode::MSG_MOVE_STOP);
+            // The player no longer moves itself (0x00724e70(0x2d1)).
+            if (old == player) {
+                MovementInfo wire = moverWireInfo();
+                owner_.getSocket()->send(MovementPacket::build(Opcode::CMSG_MOVE_NOT_ACTIVE_MOVER, wire, player));
+            }
+        }
+    }
+    pitchingToTarget_ = false;
+    heldPitchStart_.reset();
+    pitchStartSent_ = false;
+    aimKeyPitching_ = false;
+    activeMover_ = guid;
+    if (guid == 0) return;
+    LOG_INFO("Active mover: 0x", std::hex, guid, std::dec);
+    if (owner_.getSocket()) owner_.getSocket()->send(SetActiveMoverPacket::build(guid));
+
+    // movementInfo becomes the new mover's: the player's comes back where the
+    // unit it moved in its stead is - it rode there - and another unit's is
+    // where it stands, as its own movement said last.
+    const uint64_t owner = moverInfoOwner_ != 0 ? moverInfoOwner_ : player;
+    if (owner != guid) {
+        constexpr uint32_t kTransient = 0x000000FFu | static_cast<uint32_t>(MovementFlags::ONTRANSPORT) |
+                                        static_cast<uint32_t>(MovementFlags::FALLING) |
+                                        static_cast<uint32_t>(MovementFlags::FALLINGFAR);
+        const MovementInfo last = movementInfo;
+        if (owner == player) heldPlayerMovement_ = movementInfo;
+        if (guid == player) {
+            movementInfo = heldPlayerMovement_;
+            movementInfo.x = last.x;
+            movementInfo.y = last.y;
+            movementInfo.z = last.z;
+            movementInfo.flags &= ~kTransient;
+            moverInfoOwner_ = 0;
+        } else {
+            MovementInfo unitInfo;
+            if (auto unit = entities.getEntity(guid)) {
+                unitInfo.x = unit->getX();
+                unitInfo.y = unit->getY();
+                unitInfo.z = unit->getZ();
+                unitInfo.orientation = unit->getOrientation();
+                unitInfo.flags = unit->getReportedMoveFlags() & ~kTransient;
+            }
+            unitInfo.flags2 = owner_.vehicleRoster().moveFlags2(guid);
+            unitInfo.pitch = owner_.vehicleRoster().pitch(guid);
+            movementInfo = unitInfo;
+            moverInfoOwner_ = guid;
+        }
+        isFalling_ = false;
+        fallStartMs_ = 0;
+    }
+    // 0x00747f40: VEHICLE_UPDATE, and the new mover's aim.
+    owner_.fireAddonEvent("VEHICLE_UPDATE", {});
+    owner_.announceVehicleAim();
+}
+
+void MovementHandler::applyControlUpdate(uint64_t guid, bool allow) {
+    const uint64_t player = owner_.getPlayerGuid();
+    if (guid == player) {
+        bool changed = (serverMovementAllowed_ != allow);
+        serverMovementAllowed_ = allow;
+        // 0x0071c930: the player's control - PLAYER_CONTROL_LOST / GAINED
+        // (0x00520fe0) - and its movement stopped where it moves itself.
+        if (changed && !allow) {
+            if (activeMover() == player) {
+                movementInfo.flags &= ~(static_cast<uint32_t>(MovementFlags::FORWARD) |
+                                        static_cast<uint32_t>(MovementFlags::BACKWARD) |
+                                        static_cast<uint32_t>(MovementFlags::STRAFE_LEFT) |
+                                        static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT) |
+                                        static_cast<uint32_t>(MovementFlags::TURN_LEFT) |
+                                        static_cast<uint32_t>(MovementFlags::TURN_RIGHT));
+                owner_.sendMovement(Opcode::MSG_MOVE_STOP);
+                owner_.sendMovement(Opcode::MSG_MOVE_STOP_STRAFE);
+                owner_.sendMovement(Opcode::MSG_MOVE_STOP_TURN);
+                owner_.sendMovement(Opcode::MSG_MOVE_STOP_SWIM);
+            }
+            owner_.fireAddonEvent("PLAYER_CONTROL_LOST", {});
+        } else if (changed && allow) {
+            owner_.fireAddonEvent("PLAYER_CONTROL_GAINED", {});
+        }
+    } else {
+        unitControl_[guid] = allow;
+    }
+    // 0x0072cca0: the mover follows.
+    const uint64_t target = cameraTarget();
+    if (const auto mover = vehicle::moverAfterControlUpdate(guid, allow, target, activeMover(),
+                                                            unitHasClientControl(target))) {
+        setActiveMover(*mover);
+    }
+}
+
+void MovementHandler::onUnitCreated(uint64_t guid) {
+    if (pendingControl_ && pendingControl_->first == guid) {
+        const bool allow = pendingControl_->second;
+        pendingControl_.reset();
+        applyControlUpdate(guid, allow);
+    }
+}
+
+void MovementHandler::onFarsightChanged(uint64_t farsight) {
+    // 0x006e2880: CMSG_FAR_SIGHT the first time the object is there to look
+    // through, and 0 once it is cleared; the mover by what the player looks
+    // through.
+    const uint64_t player = owner_.getPlayerGuid();
+    const bool known = farsight != 0 && owner_.getEntityManager().getEntity(farsight) != nullptr;
+    if (const auto say = vehicle::farSightAnnouncement(farsight, known, farSightAnnounced_)) {
+        farSightAnnounced_ = *say;
+        if (owner_.getSocket() && wireOpcode(Opcode::CMSG_FAR_SIGHT) != 0xFFFF)
+            owner_.getSocket()->send(VehiclePackets::farSight(*say));
+    }
+    setActiveMover(vehicle::moverAfterFarsight(farsight, known, unitHasClientControl(farsight), player,
+                                               unitHasClientControl(player)));
+}
+
+MovementSpeeds MovementHandler::moverSpeeds() const {
+    const uint64_t mover = activeMover();
+    if (mover != owner_.getPlayerGuid()) {
+        if (auto unit = owner_.getEntityManager().getEntity(mover)) return unit->movementSpeeds();
+    }
+    MovementSpeeds speeds;
+    speeds.walk = serverWalkSpeed_;
+    speeds.run = serverRunSpeed_;
+    speeds.runBack = serverRunBackSpeed_;
+    speeds.swim = serverSwimSpeed_;
+    speeds.swimBack = serverSwimBackSpeed_;
+    speeds.flight = serverFlightSpeed_;
+    speeds.flightBack = serverFlightBackSpeed_;
+    speeds.turnRate = serverTurnRate_;
+    speeds.pitchRate = serverPitchRate_;
+    return speeds;
+}
+
+MovementInfo MovementHandler::moverWireInfo() {
+    MovementInfo wire = movementInfo;
+    wire.time = nextMovementTimestampMs();
+    const glm::vec3 serverPos = core::coords::canonicalToServer(glm::vec3(wire.x, wire.y, wire.z));
+    wire.x = serverPos.x;
+    wire.y = serverPos.y;
+    wire.z = serverPos.z;
+    wire.orientation = core::coords::canonicalToServerYaw(wire.orientation);
+    if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
+        wire.transportTime = wire.time;
+        wire.transportTime2 = wire.time;
+        const glm::vec3 t = core::coords::canonicalToServer(glm::vec3(wire.transportX, wire.transportY, wire.transportZ));
+        wire.transportX = t.x;
+        wire.transportY = t.y;
+        wire.transportZ = t.z;
+    }
+    return wire;
+}
+
+float MovementHandler::moverPitchRate() const {
+    const float rate = moverSpeeds().pitchRate;
+    return rate > 0.0f ? rate : core::coords::PI;
+}
+
+void MovementHandler::startMoverPitch(bool up) {
+    sendMovement(up ? Opcode::MSG_MOVE_START_PITCH_UP : Opcode::MSG_MOVE_START_PITCH_DOWN);
+}
+
+void MovementHandler::stopMoverPitch() {
+    sendMovement(Opcode::MSG_MOVE_STOP_PITCH);
+}
+
+void MovementHandler::requestMoverPitch(float pitch) {
+    // 0x005fb3a0 for the mover, held in its row's limits by the caller.
+    if ((movementInfo.flags2 & 0x0010) == 0) {
+        // At once (event 0x14 -> MSG_MOVE_SET_PITCH).
+        pitchingToTarget_ = false;
+        movementInfo.pitch = pitch;
+        sendMovement(Opcode::MSG_MOVE_SET_PITCH);
+        return;
+    }
+    // Over time (0x0072d470 -> 0x006ef490, event 0x36 -> 0x006ef7a0): up or
+    // down at its pitch rate, and stopped (event 0x33) when it is there.
+    if (pitchingToTarget_ && pitchTarget_ == pitch) return;  // on its way there already
+    const auto way = vehicle::pitchOverTime(movementInfo.pitch, pitch, moverPitchRate());
+    pitchTarget_ = pitch;
+    pitchingToTarget_ = true;
+    pitchStopMs_ = nextMovementTimestampMs() + way.durationMs;
+    startMoverPitch(way.up);
+}
+
+void MovementHandler::setAimKey(bool up, bool held) {
+    const int bit = up ? 1 : 2;
+    aimKeys_ = held ? (aimKeys_ | bit) : (aimKeys_ & ~bit);
+    // 0x005fb1a0: the keys' way, the input control's 0x80000 while it pitches.
+    const int way = vehicle::aimKeyDirection((aimKeys_ & 1) != 0, (aimKeys_ & 2) != 0);
+    if (way != 0) {
+        pitchingToTarget_ = false;
+        if (!aimKeyPitching_) {
+            startMoverPitch(way > 0);
+            aimKeyPitching_ = true;
+        }
+    } else if (aimKeyPitching_) {
+        stopMoverPitch();
+        aimKeyPitching_ = false;
+        // VEHICLE_ANGLE_UPDATE with the mover's pitch (0x005fa910).
+        owner_.fireVehicleAngleUpdate(movementInfo.pitch);
+    }
+}
+
+bool MovementHandler::updateMoverPitch(float deltaTime) {
+    const uint32_t now = nextMovementTimestampMs();
+    // 0x00721b90: a full-speed pitcher's START_PITCH after 100 ms.
+    if (heldPitchStart_ && now - heldPitchStartMs_ > vehicle::kPitchStartHoldMs) {
+        const Opcode held = *heldPitchStart_;
+        heldPitchStart_.reset();
+        flushingPitchStart_ = true;
+        sendMovement(held);
+        flushingPitchStart_ = false;
+    }
+    constexpr uint32_t kPitching = static_cast<uint32_t>(MovementFlags::PITCH_UP) |
+                                   static_cast<uint32_t>(MovementFlags::PITCH_DOWN);
+    if ((movementInfo.flags & kPitching) == 0) return false;
+    // The mover pitches at its pitch rate, in its vehicle row's limits
+    // (0x006ef490's clamp).
+    const float before = movementInfo.pitch;
+    const float sign = movementInfo.hasFlag(MovementFlags::PITCH_UP) ? 1.0f : -1.0f;
+    float pitch = before + sign * moverPitchRate() * deltaTime;
+    if (pitchingToTarget_) {
+        if ((sign > 0.0f && pitch >= pitchTarget_) || (sign < 0.0f && pitch <= pitchTarget_) ||
+            static_cast<int32_t>(now - pitchStopMs_) >= 0) {
+            pitch = pitchTarget_;
+            movementInfo.pitch = pitch;
+            pitchingToTarget_ = false;
+            stopMoverPitch();  // event 0x33
+            return pitch != before;
+        }
+    }
+    const vehicle::VehicleRecord* row = owner_.vehicleRowOf(activeMover());
+    if (row && (row->flags & vehicle::kVehicleFlagPitchLimits)) pitch = vehicle::clampAim(row, pitch);
+    movementInfo.pitch = pitch;
+    return pitch != before;
+}
+
+void MovementHandler::stopMoverForRequest() {
+    constexpr uint32_t kTurning = static_cast<uint32_t>(MovementFlags::TURN_LEFT) |
+                                  static_cast<uint32_t>(MovementFlags::TURN_RIGHT);
+    constexpr uint32_t kPitching = static_cast<uint32_t>(MovementFlags::PITCH_UP) |
+                                   static_cast<uint32_t>(MovementFlags::PITCH_DOWN);
+    constexpr uint32_t kStrafing = static_cast<uint32_t>(MovementFlags::STRAFE_LEFT) |
+                                   static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT);
+    if (movementInfo.flags & kTurning) sendMovement(Opcode::MSG_MOVE_STOP_TURN);
+    if (movementInfo.flags & kPitching) sendMovement(Opcode::MSG_MOVE_STOP_PITCH);
+    if (movementInfo.flags & kStrafing) sendMovement(Opcode::MSG_MOVE_STOP_STRAFE);
+    movementInfo.flags &= ~(static_cast<uint32_t>(MovementFlags::FORWARD) |
+                            static_cast<uint32_t>(MovementFlags::BACKWARD) | kTurning | kPitching | kStrafing);
+    pitchingToTarget_ = false;
+}
+
+void MovementHandler::sendChangeSeatsOnControlledVehicle(uint64_t vehicleGuid, uint8_t seat) {
+    const uint64_t mover = activeMover();
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mover == 0) return;
+    stopMoverForRequest();
+    owner_.getSocket()->send(
+        VehiclePackets::changeSeatsOnControlledVehicle(mover, moverWireInfo(), vehicleGuid, seat));
+}
+
+void MovementHandler::sendDismissControlledVehicle() {
+    const uint64_t mover = activeMover();
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mover == 0) return;
+    stopMoverForRequest();
+    owner_.getSocket()->send(VehiclePackets::dismissControlledVehicle(mover, moverWireInfo()));
 }
 
 } // namespace game

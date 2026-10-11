@@ -3142,6 +3142,8 @@ public:
     bool isHostileAttacker(uint64_t guid) const;
     bool isHostileFactionPublic(uint32_t factionTemplateId) const { return isHostileFaction(factionTemplateId); }
     float getServerRunSpeed() const;
+    /// The active mover's speeds: the player's, or a driven unit's own.
+    MovementSpeeds moverSpeeds() const;
     float getServerWalkSpeed() const;
     float getServerSwimSpeed() const;
     float getServerSwimBackSpeed() const;
@@ -3222,6 +3224,15 @@ public:
     /// (0x005fb3a0), the events that show the aim (0x0074c5a0), and the
     /// power VehicleAimSetNormPower keeps (0x005f9f10).
     uint64_t vehicleAimUnit() const;
+    /// The unit the client moves (DAT_00ca1238): the player, a vehicle it
+    /// drives, or none.
+    uint64_t activeMover() const;
+    /// VEHICLE_ANGLE_UPDATE for the mover's row (0x005fa910).
+    void fireVehicleAngleUpdate(float pitch);
+    /// VehicleAimUp/DownStart/Stop (0x005fc8e0 -> 0x005fa170, 0x005fb1a0).
+    void setVehicleAimKey(bool up, bool held);
+    /// What VehicleAimIncrement steps from (0x005fb4b0).
+    float vehicleAimBasePitch() const;
     float unitPitch(uint64_t guid) const;
     const vehicle::VehicleRecord* vehicleRowOf(uint64_t guid) const;
     void requestVehicleAim(uint64_t unit, float pitch);

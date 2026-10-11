@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game/world_packets.hpp"
+#include "game/entity.hpp"
 #include "core/coordinates.hpp"
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
@@ -8,6 +9,7 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -59,6 +61,47 @@ public:
                                 bool offsetNeedsTransportResolution = false);
     void clearTransportAttachment(uint64_t childGuid);
     void updateAttachedTransportChildren(float deltaTime);
+
+    // --- The active mover (DAT_00ca1238) ---
+    /// The unit the client moves and names in its movement packets: the
+    /// player, a unit the server gave it control of - a vehicle it drives, a
+    /// unit it possesses - or none (0). movementInfo is that unit's movement.
+    [[nodiscard]] uint64_t activeMover() const;
+    /// 0x00717c50 at world entry: the player again, and no other unit
+    /// controlled.
+    void resetActiveMover();
+    /// 0x00729010: the old mover's movement stopped - the player's said with
+    /// CMSG_MOVE_NOT_ACTIVE_MOVER - then CMSG_SET_ACTIVE_MOVER for the new
+    /// one, whose movement movementInfo takes over.
+    void setActiveMover(uint64_t guid);
+    /// Whether the client controls a unit (its +0xa30 0x400, 0x0071c930).
+    [[nodiscard]] bool unitHasClientControl(uint64_t guid) const;
+    /// The player's PLAYER_FARSIGHT changed (0x006e4fd0 -> 0x006e2880).
+    void onFarsightChanged(uint64_t farsight);
+    /// A unit came into view: a control update that waited for it is
+    /// applied (0x007402b0 -> 0x0072cca0), and the farsight object looked
+    /// through once it is there.
+    void onUnitCreated(uint64_t guid);
+    /// The active mover's speeds: the player's, or the unit's own.
+    [[nodiscard]] MovementSpeeds moverSpeeds() const;
+    /// The mover's pitch asked to `pitch` (0x005fb3a0): at once and sent as
+    /// MSG_MOVE_SET_PITCH, or - movement flags2 0x10 - over time at its
+    /// pitch rate (0x0072d470).
+    void requestMoverPitch(float pitch);
+    /// The aim keys (VehicleAimUp/DownStart/Stop, 0x005fb1a0): the mover
+    /// pitches up or down at its pitch rate while one is held.
+    void setAimKey(bool up, bool held);
+    /// The driven vehicle's own requests, its movement stopped first (move
+    /// events 0x37 and 0x34 -> 0x006e9980): CMSG_CHANGE_SEATS_ON_CONTROLLED_
+    /// VEHICLE and CMSG_DISMISS_CONTROLLED_VEHICLE.
+    void sendChangeSeatsOnControlledVehicle(uint64_t vehicleGuid, uint8_t seat);
+    void sendDismissControlledVehicle();
+    /// What VehicleAimIncrement steps from (0x005fb4b0): the pitch a pitch
+    /// over time is on its way to, else the mover's.
+    [[nodiscard]] float aimBasePitch() const { return pitchingToTarget_ ? pitchTarget_ : movementInfo.pitch; }
+    /// Each frame: the mover's pitch over time, and a full-speed pitcher's
+    /// held start sent after 100 ms (0x00721b90). True where the pitch moved.
+    bool updateMoverPitch(float deltaTime);
 
     // Movement info accessors
     [[nodiscard]] const MovementInfo& getMovementInfo() const { return movementInfo; }
@@ -253,14 +296,30 @@ private:
     void handleOtherPlayerMovement(network::Packet& packet);
     void handleMoveSetSpeed(network::Packet& packet);
     void handleForceRunSpeedChange(network::Packet& packet);
-    network::Packet buildForceAck(Opcode ackOpcode, uint32_t counter);
-    void handleForceSpeedChange(network::Packet& packet, const char* name, Opcode ackOpcode, float* speedStorage);
+    /// `guid` 0 is the player.
+    network::Packet buildForceAck(Opcode ackOpcode, uint32_t counter, uint64_t guid = 0);
+    void handleForceSpeedChange(network::Packet& packet, const char* name, Opcode ackOpcode, float* speedStorage,
+                                float MovementSpeeds::* unitMember);
+    /// The movement a forced change of `guid` lands on: the mover's, or the
+    /// player's held one while another unit moves; none for another unit.
+    [[nodiscard]] MovementInfo* movementFor(uint64_t guid);
     void handleForceMoveRootState(network::Packet& packet, bool rooted);
     void handleMoveKnockBack(network::Packet& packet);
     void handleTeleportAck(network::Packet& packet);
     void handleNewWorld(network::Packet& packet);
     void handleShowTaxiNodes(network::Packet& packet);
     void handleClientControlUpdate(network::Packet& packet);
+    /// 0x0072cca0 for a unit in view.
+    void applyControlUpdate(uint64_t guid, bool allow);
+    /// The unit the camera looks through (the camera's +0x88): the farsight
+    /// object in view, else the player.
+    [[nodiscard]] uint64_t cameraTarget() const;
+    [[nodiscard]] uint64_t playerFarsight() const;
+    /// The movement of `guid` as the client keeps it: movementInfo for the
+    /// mover, the player's held one while another unit moves.
+    [[nodiscard]] const MovementInfo& movementOf(uint64_t guid) const;
+    /// A movement packet for the mover, in server coordinates.
+    [[nodiscard]] MovementInfo moverWireInfo();
     void handleActivateTaxiReply(network::Packet& packet);
     void loadTaxiDbc();
 
@@ -408,6 +467,36 @@ private:
     std::unordered_map<uint32_t, uint32_t> taxiPrevMap_;
 
     bool followMoveMoving_ = false;  // whether MSG_MOVE_START_FORWARD has been sent for the current follow
+
+    // --- The active mover ---
+    std::optional<uint64_t> activeMover_;  ///< DAT_00ca1238; none set: the player
+    uint64_t moverInfoOwner_ = 0;          ///< whose movement movementInfo is; 0 the player's
+    MovementInfo heldPlayerMovement_;      ///< the player's while another unit moves
+    std::unordered_map<uint64_t, bool> unitControl_;  ///< +0xa30 0x400 of units but the player
+    /// A control update for a unit not in view, kept for its create
+    /// (0x00716060: DAT_00ca1248..50).
+    std::optional<std::pair<uint64_t, bool>> pendingControl_;
+    bool farSightAnnounced_ = false;       ///< the player's +0x1858 0x1
+    // The mover's pitch over time (event 0x36 -> 0x33) and the aim keys.
+    bool pitchingToTarget_ = false;
+    uint32_t pitchStopMs_ = 0;
+    float pitchTarget_ = 0.0f;
+    int aimKeys_ = 0;                      ///< 1 up (0x400), 2 down (0x800)
+    bool aimKeyPitching_ = false;          ///< the input control's 0x80000
+    // A full-speed pitcher's (flags2 0x10) held START_PITCH (+0x954, +0x94c)
+    // and whether one went out since (+0xa30 0x8000000).
+    std::optional<Opcode> heldPitchStart_;
+    uint32_t heldPitchStartMs_ = 0;
+    bool pitchStartSent_ = false;
+    bool flushingPitchStart_ = false;
+    float lastSentFacing_ = 0.0f;           ///< +0x294
+    float lastSentPitch_ = 0.0f;            ///< +0x295
+    [[nodiscard]] float moverPitchRate() const;
+    void startMoverPitch(bool up);
+    void stopMoverPitch();
+    /// 0x006e9980: the mover's turn, pitch and strafe stopped and said, its
+    /// run let go.
+    void stopMoverForRequest();
 };
 
 } // namespace game

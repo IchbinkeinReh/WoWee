@@ -2687,6 +2687,11 @@ wowee_add_test(test_vehicle_transition
 wowee_add_test(test_vehicle_ui
     SOURCES test_vehicle_ui.cpp ${CMAKE_SOURCE_DIR}/src/game/vehicle.cpp)
 
+# ── test_vehicle_mover ───────────────────────────────
+# The active mover's switches and the pitch over time (vehicle_mover.hpp).
+wowee_add_test(test_vehicle_mover
+    SOURCES test_vehicle_mover.cpp)
+
 # ── test_vehicle_packets ─────────────────────────────
 # The seat requests and the eject (0x0074ca90, 0x00757200).
 wowee_add_packet_test(test_vehicle_packets)

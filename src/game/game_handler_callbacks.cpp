@@ -828,7 +828,9 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         worldEntryCallback_(data.mapId, data.x, data.y, data.z, initialWorldEntry);
     }
 
-    // Send CMSG_SET_ACTIVE_MOVER on initial world entry and world transfers.
+    // Send CMSG_SET_ACTIVE_MOVER on initial world entry and world transfers:
+    // the player moves itself again (0x00717c50).
+    if (movementHandler_) movementHandler_->resetActiveMover();
     if (playerGuid != 0 && socket) {
         auto activeMoverPacket = SetActiveMoverPacket::build(playerGuid);
         socket->send(activeMoverPacket);
@@ -1081,41 +1083,84 @@ void GameHandler::sendPing() {
     socket->send(packet);
 }
 
-// The vehicle interface's requests. The player is its own mover here, never
-// its vehicle, so each goes the way the client sends it for a passenger
-// that does not drive (0x0074c7f0, 0x0074c8b0, 0x0074c9a0, 0x0074ca90); the
-// seat the player leaves is the server's to say.
+// The vehicle interface's requests. A passenger that does not drive asks
+// the server (0x0074c7f0, 0x0074c8b0, 0x0074c9a0, 0x0074ca90); the driver -
+// its vehicle the active mover, the player on it - sends the vehicle's own
+// with its movement.
+namespace {
+/// Whether the player drives the vehicle it rides: that vehicle is the
+/// active mover (0x0074c7f0's test).
+bool drivesItsVehicle(const vehicle::VehicleRoster& roster, uint64_t player, uint64_t mover) {
+    const auto p = roster.passenger(player);
+    return p && mover != 0 && mover != player && p->vehicleGuid == mover;
+}
+}  // namespace
+
+MovementSpeeds GameHandler::moverSpeeds() const {
+    return movementHandler_ ? movementHandler_->moverSpeeds() : MovementSpeeds{};
+}
+
+uint64_t GameHandler::activeMover() const {
+    return movementHandler_ ? movementHandler_->activeMover() : playerGuid;
+}
+
 void GameHandler::sendRequestVehicleExit() {
     if (state != WorldState::IN_WORLD || !socket) return;
+    if (drivesItsVehicle(vehicleRoster_, playerGuid, activeMover())) {
+        // 0x005d46f0: the vehicle as the player's pet, from a seat whose
+        // Flags 0x2000000 lets it out - CMSG_DISMISS_CONTROLLED_VEHICLE
+        // (0x0074bb20 -> 0x006ef540, move event 0x34).
+        const vehicle::SeatRecord* seat = vehicleRoster_.seatOf(playerGuid);
+        if (activeMover() == petGuid_ && seat && (seat->flags & 0x2000000) != 0 && movementHandler_)
+            movementHandler_->sendDismissControlledVehicle();
+        return;
+    }
     socket->send(VehiclePackets::requestExit());
 }
 
 void GameHandler::sendRequestVehicleSeatStep(bool next) {
     if (state != WorldState::IN_WORLD || !socket) return;
+    if (drivesItsVehicle(vehicleRoster_, playerGuid, activeMover())) {
+        // 0x006ef5a0 with no vehicle and seat 1 (next) or 0xff (previous).
+        if (movementHandler_) movementHandler_->sendChangeSeatsOnControlledVehicle(0, next ? 1 : 0xff);
+        return;
+    }
     socket->send(next ? VehiclePackets::requestNextSeat() : VehiclePackets::requestPrevSeat());
 }
 
 void GameHandler::sendRequestVehicleSwitchSeat(uint64_t vehicleGuid, uint8_t seat) {
     if (state != WorldState::IN_WORLD || !socket) return;
+    if (drivesItsVehicle(vehicleRoster_, playerGuid, activeMover())) {
+        // 0x0074ca90 -> 0x0074bb30: the vehicle and the seat.
+        if (movementHandler_) movementHandler_->sendChangeSeatsOnControlledVehicle(vehicleGuid, seat);
+        return;
+    }
     socket->send(VehiclePackets::requestSwitchSeat(vehicleGuid, seat));
 }
 
 uint64_t GameHandler::vehicleAimUnit() const {
-    // 0x005f9d20: the mover - the player here - or, where it sits in a
-    // control seat (Flags 0x800), the vehicle under it.
-    const uint64_t player = playerGuid;
-    if (vehicleRoster_.seatState(player) == 3) {
-        const auto p = vehicleRoster_.passenger(player);
-        const vehicle::SeatRecord* seat = vehicleRoster_.seatOf(player);
-        if (p && seat && (seat->flags & 0x800) != 0 && entityController_ &&
-            getEntityManager().getEntity(p->vehicleGuid) && vehicleRoster_.vehicleId(p->vehicleGuid) != 0)
+    // 0x005f9d20: the mover - or, where it sits in a control seat (Flags
+    // 0x800), the vehicle under it.
+    const uint64_t mover = activeMover();
+    if (mover == 0 || !entityController_ || !getEntityManager().getEntity(mover)) return 0;
+    if (vehicleRoster_.seatState(mover) == 3) {
+        const auto p = vehicleRoster_.passenger(mover);
+        const vehicle::SeatRecord* seat = vehicleRoster_.seatOf(mover);
+        if (p && seat && (seat->flags & 0x800) != 0 && getEntityManager().getEntity(p->vehicleGuid) &&
+            vehicleRoster_.vehicleId(p->vehicleGuid) != 0)
             return p->vehicleGuid;
     }
-    return player;
+    return mover;
 }
 
 float GameHandler::unitPitch(uint64_t guid) const {
-    return guid == playerGuid ? movementInfo.pitch : vehicleRoster_.pitch(guid);
+    return guid == activeMover() ? movementInfo.pitch : vehicleRoster_.pitch(guid);
+}
+
+float GameHandler::vehicleAimBasePitch() const {
+    // The mover's pitch is movementInfo's, which the movement handler shares.
+    if (!movementHandler_) return movementInfo.pitch;
+    return movementHandler_->aimBasePitch();
 }
 
 const vehicle::VehicleRecord* GameHandler::vehicleRowOf(uint64_t guid) const {
@@ -1123,30 +1168,38 @@ const vehicle::VehicleRecord* GameHandler::vehicleRowOf(uint64_t guid) const {
     return tables ? tables->vehicle(vehicleRoster_.vehicleId(guid)) : nullptr;
 }
 
-void GameHandler::requestVehicleAim(uint64_t unit, float pitch) {
-    // 0x005fb3a0: held in the unit's row's limits, then set at once and sent
-    // (0x0072ead0 -> 0x006ee460, move event 0x14: MSG_MOVE_SET_PITCH). Only
-    // the mover's own movement is sent, and the mover here is the player.
-    const vehicle::VehicleRecord* row = vehicleRowOf(unit);
-    pitch = vehicle::clampAim(row, pitch);
-    if (unit != playerGuid) return;
-    movementInfo.pitch = pitch;
-    sendMovement(Opcode::MSG_MOVE_SET_PITCH);
-    if (row && (row->flags & vehicle::kVehicleFlagAimAngle)) {
-        // VEHICLE_ANGLE_UPDATE by the mover's row (0x005fa910).
-        if (const vehicle::VehicleRecord* moverRow = vehicleRowOf(playerGuid)) {
-            fireAddonEvent("VEHICLE_ANGLE_UPDATE", {std::to_string(vehicle::normalizedAim(moverRow, pitch)),
-                                                    std::to_string(pitch)});
-        }
+void GameHandler::fireVehicleAngleUpdate(float pitch) {
+    // 0x005fa910: by the mover's row; nothing without one.
+    if (const vehicle::VehicleRecord* moverRow = vehicleRowOf(activeMover())) {
+        fireAddonEvent("VEHICLE_ANGLE_UPDATE",
+                       {std::to_string(vehicle::normalizedAim(moverRow, pitch)), std::to_string(pitch)});
     }
 }
 
+void GameHandler::setVehicleAimKey(bool up, bool held) {
+    if (movementHandler_) movementHandler_->setAimKey(up, held);
+}
+
+void GameHandler::requestVehicleAim(uint64_t unit, float pitch) {
+    // 0x005fb3a0: held in the unit's row's limits, then set on it - at once
+    // and sent (0x0072ead0 -> 0x006ee460, MSG_MOVE_SET_PITCH), or over time
+    // for movement flags2 0x10 (0x0072d470). Only the mover's own movement
+    // goes out.
+    const vehicle::VehicleRecord* row = vehicleRowOf(unit);
+    pitch = vehicle::clampAim(row, pitch);
+    if (unit == 0 || unit != activeMover() || !movementHandler_) return;
+    const bool overTime = (movementInfo.flags2 & 0x0010) != 0;
+    movementHandler_->requestMoverPitch(pitch);
+    if (!overTime && row && (row->flags & vehicle::kVehicleFlagAimAngle)) fireVehicleAngleUpdate(pitch);
+}
+
 void GameHandler::announceVehicleAim() {
-    // 0x0074c5a0 for the mover, the player, by its own row: whether the aim's
-    // angle (Flags 0x400) and power (0x800) are shown - neither while it is
-    // on its way into or out of a seat (0x0074ba40) - then the angle.
-    const vehicle::VehicleRecord* row = vehicleRowOf(playerGuid);
-    const uint8_t state = vehicleRoster_.seatState(playerGuid);
+    // 0x0074c5a0 for the mover, by its own row: whether the aim's angle
+    // (Flags 0x400) and power (0x800) are shown - neither while it is on its
+    // way into or out of a seat (0x0074ba40) - then the angle.
+    const uint64_t mover = activeMover();
+    const vehicle::VehicleRecord* row = vehicleRowOf(mover);
+    const uint8_t state = vehicleRoster_.seatState(mover);
     const bool moving = state != 0 && state != 3;
     const bool angle = !moving && row && (row->flags & vehicle::kVehicleFlagAimAngle);
     const bool power = !moving && row && (row->flags & vehicle::kVehicleFlagAimPower);
