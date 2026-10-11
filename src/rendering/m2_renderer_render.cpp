@@ -1,3 +1,4 @@
+#include <optional>
 #include "rendering/shadow_params.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_renderer_internal.h"
@@ -1037,6 +1038,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     // object must be culled for 2 consecutive frames before it stops counting as
     // "previously visible", which prevents the 1-frame-on / 1-frame-off
     // oscillation that showed up as doodad flicker near moving characters.
+    std::optional<core::ProfileScope> phaseScope;
+    phaseScope.emplace("m2: scatter cull verdicts", core::FrameProfiler::isMainThread() ? core::ProfileKind::Cpu : core::ProfileKind::Worker);
     if (gpuCullAvailable) {
         const auto& ids = cullReadableIds_[frameIndex < 2 ? frameIndex : 0];
         for (size_t k = 0; k < ids.size(); ++k) {
@@ -1116,6 +1119,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     const uint32_t chunkCount = totalInstances >= 2048
         ? std::min<uint32_t>(4, (totalInstances + 1023) / 1024)
         : 1;
+    phaseScope.reset();
+    phaseScope.emplace("m2: classify visible", core::FrameProfiler::isMainThread() ? core::ProfileKind::Cpu : core::ProfileKind::Worker);
     std::vector<VisibleChunk> chunks(chunkCount);
     auto classifyRange = [&](uint32_t chunk, uint32_t begin, uint32_t end) {
         auto& out = chunks[chunk];
@@ -1237,6 +1242,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     // What it did cost was a hash map over every visible instance, two index
     // vectors and a copy of the whole list, every frame, in the pass that
     // turned out to be the largest single piece of CPU work in the frame.
+    phaseScope.reset();
+    phaseScope.emplace("m2: sort", core::FrameProfiler::isMainThread() ? core::ProfileKind::Cpu : core::ProfileKind::Worker);
     const auto m2T1 = std::chrono::steady_clock::now();
     // Ground clutter last. The instance buffer held 65536 a frame, and a
     // dense Elwynn verge alone came near that: whatever sorted after the cap
@@ -1251,6 +1258,8 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                   return a.modelId < b.modelId;
               });
     const auto m2T2 = std::chrono::steady_clock::now();
+    phaseScope.reset();
+    phaseScope.emplace("m2: record draws", core::FrameProfiler::isMainThread() ? core::ProfileKind::Cpu : core::ProfileKind::Worker);
     // Reported at the end of the pass; see m2Profile above.
     struct M2Phases { double cull, sort, record; std::size_t visible, instances; };
     const auto sayPhases = [&](const M2Phases& p) {
