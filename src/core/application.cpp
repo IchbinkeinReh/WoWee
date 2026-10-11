@@ -3093,8 +3093,8 @@ void Application::applyServerMovementState(float deltaTime) {
         // The vehicle the camera's closeness fades in the player's stead
         // (0x004f8660, 0x00606f90).
         if (const auto fade = entitySpawner_ ? entitySpawner_->localCameraFadeVehicle() : std::nullopt) {
-            cc->setCameraFadeTarget(rendering::CameraController::CameraFadeTarget{.instanceId = fade->instanceId,
-                                                                                .scalars = fade->scalars});
+            cc->setCameraFadeTarget(rendering::CameraController::CameraFadeTarget{
+                .instanceId = fade->instanceId, .scalars = fade->scalars, .riders = fade->riders});
         } else {
             cc->setCameraFadeTarget(std::nullopt);
         }

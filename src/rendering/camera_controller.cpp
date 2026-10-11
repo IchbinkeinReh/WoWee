@@ -2548,7 +2548,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // the squeezed one.
         bool shouldHidePlayer = isFirstPersonView();
         characterRenderer->setInstanceVisible(playerInstanceId, !shouldHidePlayer);
-        applyCameraFade(smoothedCamPos, glm::length(smoothedCamPos - pivot));
+        applyCameraFade(smoothedCamPos, glm::length(smoothedCamPos - pivot), pivot.z - targetPos.z);
 
         // Note: the Renderer's CharAnimState machine drives player character animations
         // (Run, Walk, Jump, Swim, etc.) - no additional animation driving needed here.
@@ -2837,10 +2837,10 @@ glm::vec3 CameraController::vehiclePulledIn(const glm::vec3& point, float deltaT
     return game::vehicle::vehicleCameraPulledIn(origin, point, share, vehiclePullIn_);
 }
 
-void CameraController::applyCameraFade(const glm::vec3& cameraPos, float distance) {
+void CameraController::applyCameraFade(const glm::vec3& cameraPos, float distance, float pivotHeight) {
     // 0x00606f90: the camera's distance from its unit, less its near clip,
     // between the fade's bounds; the alpha goes to the unit, or the vehicle
-    // it is on (0x004f8660). The player rides that vehicle and fades with it.
+    // it is on (0x004f8660), and from it to whoever rides it (0x00737390).
     float nearDistance = game::vehicle::kCameraFadeNear;
     float farDistance = game::vehicle::kCameraFadeFar;
     uint32_t target = playerInstanceId;
@@ -2854,13 +2854,27 @@ void CameraController::applyCameraFade(const glm::vec3& cameraPos, float distanc
             distance = glm::length(cameraPos - center);
         }
     }
+    farDistance = game::vehicle::cameraFadeFarBound(farDistance, barberView_, distance, pivotHeight,
+                                                    glm::radians(pitch));
     const float nearClip = camera ? camera->getNearPlane() : 0.0f;
     const float alpha = game::vehicle::cameraFadeAlpha(distance - nearClip, nearDistance, farDistance);
-    if (cameraFadedInstance_ != 0 && cameraFadedInstance_ != target && cameraFadedInstance_ != playerInstanceId)
+    // The vehicle's alpha goes to every passenger on it, and to theirs
+    // (0x00737390 down its seats).
+    static const std::vector<uint32_t> kNone;
+    const std::vector<uint32_t>& riders =
+        cameraFadeTarget_ && cameraFadeTarget_->instanceId != 0 ? cameraFadeTarget_->riders : kNone;
+    auto fades = [&](uint32_t id) {
+        return id == target || std::find(riders.begin(), riders.end(), id) != riders.end();
+    };
+    if (cameraFadedInstance_ != 0 && !fades(cameraFadedInstance_))
         characterRenderer->setInstanceCameraAlpha(cameraFadedInstance_, 1.0f);
+    for (const uint32_t id : cameraFadedRiders_) {
+        if (!fades(id)) characterRenderer->setInstanceCameraAlpha(id, 1.0f);
+    }
     characterRenderer->setInstanceCameraAlpha(target, alpha);
-    if (target != playerInstanceId) characterRenderer->setInstanceCameraAlpha(playerInstanceId, alpha);
+    for (const uint32_t id : riders) characterRenderer->setInstanceCameraAlpha(id, alpha);
     cameraFadedInstance_ = target;
+    cameraFadedRiders_ = riders;
 }
 
 void CameraController::setSeatZoomLimits(std::optional<float> minDistance, std::optional<float> maxDistance) {
@@ -2985,7 +2999,7 @@ void CameraController::update(float deltaTime) {
 
             camera->setPosition(smoothedCamPos);
             if (characterRenderer && playerInstanceId > 0)
-                applyCameraFade(smoothedCamPos, glm::length(smoothedCamPos - pivot));
+                applyCameraFade(smoothedCamPos, glm::length(smoothedCamPos - pivot), pivot.z - targetPos.z);
         }
         // The vehicle's pitch offset tilts the view and not where it stands
         // (0x00606f90 -> 0x004c55b0).

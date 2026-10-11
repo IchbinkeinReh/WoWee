@@ -6,6 +6,7 @@
 #include "core/input.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <vector>
 #include <functional>
 #include <cmath>
 #include <optional>
@@ -305,6 +306,7 @@ public:
     struct CameraFadeTarget {
         uint32_t instanceId = 0;
         std::optional<glm::vec2> scalars;  ///< CameraFadeDistScalarMin / Max
+        std::vector<uint32_t> riders;      ///< its passengers', faded with it (0x00737390)
     };
     void setCameraFadeTarget(const std::optional<CameraFadeTarget>& target) { cameraFadeTarget_ = target; }
     /// Where the vehicle camera's pull-in looks from (0x00759580): the
@@ -522,8 +524,9 @@ private:
     /// (0x00759580: from +0x2c to +0x38).
     [[nodiscard]] glm::vec3 vehiclePulledIn(const glm::vec3& point, float deltaTime);
     uint32_t cameraFadedInstance_ = 0;  ///< the model faded last frame
+    std::vector<uint32_t> cameraFadedRiders_;  ///< and its passengers'
     /// The camera's closeness fades its unit's model (0x00606f90).
-    void applyCameraFade(const glm::vec3& cameraPos, float distance);
+    void applyCameraFade(const glm::vec3& cameraPos, float distance, float pivotHeight);
     std::optional<float> seatZoomMin_;
     std::optional<float> seatZoomMax_;
     float timedZoomFrom_ = 0.0f;

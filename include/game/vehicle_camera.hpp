@@ -243,6 +243,22 @@ inline constexpr uint32_t kVehicleFlagCameraFade = 0x80000;
     return (distance - nearDistance) / (farDistance - nearDistance);
 }
 
+/// The fade's far bound as the camera holds it (0x00606f90): a third of it
+/// at the barber shop (DAT_00bd19b8); and looked at steeply from above - its
+/// pitch under -1.1868238 rad (68 degrees down) and its distance short of
+/// its height over its unit (+0x128) - over the square of (pitch + pi/2) *
+/// 2.604353: as it was at 68 degrees, ever wider straight down.
+/// `distance` is the one the fade reads, before its near clip.
+[[nodiscard]] inline float cameraFadeFarBound(float farDistance, bool barberShop, float distance, float pivotHeight,
+                                              float pitchRad) {
+    if (barberShop) farDistance *= 0.33333334f;
+    if (distance < pivotHeight && pitchRad < -1.1868238f) {
+        const float f = (-1.5707964f - pitchRad) * -2.604353f;
+        if (std::fabs(f) >= 2.3841858e-07f) farDistance /= f * f;
+    }
+    return farDistance;
+}
+
 /// The vehicle camera's pull-in (0x00759580): the point the camera looks at
 /// - the seat's CameraOffset about the unit, chased - is looked for from the
 /// vehicle's place raised by its height - a non-player's capped at
@@ -281,5 +297,98 @@ struct CameraPullIn {
 }
 /// Each step, the held share back out toward 1 (0x00759d80).
 inline void easeCameraPullIn(CameraPullIn& pull, float dt) { chaseStep(pull.held, pull.velocity, 1.0f, 2.5f, dt); }
+
+
+/// VehicleCamera_C's mode (+0xa4): waiting to enter, entering, seated,
+/// waiting to leave, leaving; Off ends it (0x0075af40 case 5).
+enum class CameraMode : uint8_t { Off = 0, EnterWait = 1, Entering = 2, Seated = 3, ExitWait = 4, Exiting = 5 };
+struct CameraModeClock {
+    CameraMode mode = CameraMode::Off;
+    uint32_t startMs = 0;  ///< +0xa8
+    uint32_t ms = 0;       ///< +0xac
+};
+
+/// The mode a change of seat starts the camera in (0x0075aac0): a wait for
+/// its delay where there is one; else leaving for its time - or off, out of
+/// any seat with no final time - and entering for its time - or seated, in
+/// its seat with no final time.
+[[nodiscard]] inline CameraModeClock cameraModeAtChange(SeatState first, const CameraTiming& t, uint32_t nowMs) {
+    const bool leaving = first == SeatState::None || first == SeatState::ExitDelay || first == SeatState::Exiting;
+    const bool settled = t.durationMs == 0 || !t.fixed;
+    if (t.delayMs > 0) return {leaving ? CameraMode::ExitWait : CameraMode::EnterWait, nowMs, t.delayMs};
+    if (leaving) {
+        if (first == SeatState::None && settled) return {CameraMode::Off, nowMs, 0};
+        return {CameraMode::Exiting, nowMs, t.durationMs};
+    }
+    if (first == SeatState::Seated && settled) return {CameraMode::Seated, nowMs, 0};
+    return {CameraMode::Entering, nowMs, t.durationMs};
+}
+
+/// Each step, a mode whose time is up moves on (0x0075af40): either wait to
+/// entering - for the final time, else a second, less what it ran over -
+/// entering to seated, leaving to off.
+inline void stepCameraMode(CameraModeClock& c, uint32_t nowMs, bool fixed, uint32_t durationMs) {
+    if (c.mode == CameraMode::Off || c.mode == CameraMode::Seated) return;
+    const int32_t over = static_cast<int32_t>(nowMs - c.ms - c.startMs);
+    if (over < 0) return;
+    c.startMs = nowMs;
+    switch (c.mode) {
+        case CameraMode::EnterWait:
+        case CameraMode::ExitWait: {
+            const uint32_t whole = fixed ? durationMs : 1000u;
+            c.mode = CameraMode::Entering;
+            c.ms = whole > static_cast<uint32_t>(over) ? whole - static_cast<uint32_t>(over) : 0u;
+            break;
+        }
+        case CameraMode::Entering:
+            c.mode = CameraMode::Seated;
+            c.ms = 0;
+            break;
+        case CameraMode::Exiting:
+            c.mode = CameraMode::Off;
+            c.ms = 0;
+            break;
+        default:
+            break;
+    }
+}
+
+/// How far along its mode the camera is (0x007598f0): 1 seated; the
+/// passenger's own way in (or out) where it is on it and the seat gives no
+/// camera time of its own (FlagsB 0x40 in, 0x80 out); else its time, 1 with
+/// none.
+[[nodiscard]] inline float cameraModeProgress(const CameraModeClock& c, uint32_t nowMs, SeatState passenger,
+                                              const SeatRecord* seat, float passengerProgress) {
+    if (c.mode == CameraMode::Seated) return 1.0f;
+    const bool entering = c.mode == CameraMode::EnterWait || c.mode == CameraMode::Entering;
+    const bool onItsWay = entering ? passenger == SeatState::Entering : passenger == SeatState::Exiting;
+    const uint32_t own = entering ? kSeatFlagBEnterCameraTimes : kSeatFlagBExitCameraTimes;
+    if (onItsWay && (!seat || (seat->flagsB & own) == 0)) return passengerProgress;
+    if (c.ms == 0) return 1.0f;
+    const float t = static_cast<float>(nowMs - c.startMs) / static_cast<float>(c.ms);
+    return std::clamp(t, 0.0f, 1.0f);
+}
+
+/// Whether the camera springs to its point on the way rather than going
+/// evenly (0x00759d80): FlagsB 0x20000 entering, 0x40000 leaving; and the
+/// spring's rate, stiffer as the time runs out.
+[[nodiscard]] inline bool cameraSpringsOnTheWay(CameraMode mode, const SeatRecord* seat) {
+    const uint32_t flag = mode == CameraMode::Entering ? 0x20000u : 0x40000u;
+    return seat && (seat->flagsB & flag) != 0;
+}
+[[nodiscard]] inline float cameraWaySpringRate(uint32_t modeMs, float t) {
+    const float left = 1.0f - t;
+    return (1.0f / (static_cast<float>(modeMs) * 0.001f + 0.001f)) * 4.0f + 1.0f / (left * left);
+}
+
+/// A unit's place on its transport (its movement's raw position, vfunc
+/// +0x30) taken to the world (0x004f4460): its offset - x ahead, y to the
+/// left - turned by the transport's facing; here on the render axes, `renderYaw` as
+/// seatCameraOffset takes it.
+[[nodiscard]] inline glm::vec3 transportOffsetAbout(const glm::vec3& offset, float renderYaw) {
+    const float c = std::cos(renderYaw);
+    const float s = std::sin(renderYaw);
+    return {offset.x * c + offset.y * s, offset.x * s - offset.y * c, offset.z};
+}
 
 }  // namespace wowee::game::vehicle

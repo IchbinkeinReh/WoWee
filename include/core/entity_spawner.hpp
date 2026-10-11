@@ -9,6 +9,7 @@
 #include "core/character_geosets.hpp"
 #include "core/weapon_attachment.hpp"
 #include "game/vehicle.hpp"
+#include "game/vehicle_camera.hpp"
 #include "game/vehicle_transition.hpp"
 #include <memory>
 #include <string>
@@ -370,6 +371,8 @@ public:
     struct CameraFadeVehicle {
         uint32_t instanceId = 0;
         std::optional<glm::vec2> scalars;
+        /// Its passengers' models, and theirs, which 0x00737390 fades with it.
+        std::vector<uint32_t> riders;
     };
     [[nodiscard]] std::optional<CameraFadeVehicle> localCameraFadeVehicle();
     /// Whether a monster move taking `mover` to `transport`'s `seat` waits on
@@ -565,8 +568,19 @@ private:
         float facing = 0.0f;               ///< +0x88 / +0x94
         float facingVelocity = 0.0f;       ///< +0x98
         uint32_t lastMs = 0;               ///< +0xa0
+        bool active = false;               ///< the camera is there (CGUnit_C +0xf64)
+        game::vehicle::CameraModeClock clock;  ///< +0xa4, +0xa8, +0xac
+        bool fixed = false;                ///< +0x8 0x1: durationMs is final
+        uint32_t durationMs = 0;           ///< +0x9c
+        glm::vec3 point{0.0f};             ///< +0x2c: what it looks at
+        glm::vec3 start{0.0f};             ///< +0x20: `point` at the change, on startFrame
+        uint64_t startFrame = 0;           ///< the transport it is held on, 0 for the world
+        glm::vec3 spring{0.0f};            ///< +0x4c: on its way, on startFrame
+        glm::vec3 springVelocity{0.0f};    ///< +0x58
     };
     LocalVehicleCamera localVehicleCamera_;
+    /// Where a transport is drawn; the world's origin for none.
+    [[nodiscard]] glm::vec3 framePosition(uint64_t guid) const;
     /// A passenger's move held for its vehicle's animation (the passenger
     /// component's +0x10 0x200 and what it keeps beside it).
     struct HeldVehicleMove {

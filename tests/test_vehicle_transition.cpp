@@ -5,6 +5,8 @@
 // record of how a change came about.
 #include <catch_amalgamated.hpp>
 
+#include <cmath>
+
 #include "game/vehicle.hpp"
 #include "game/vehicle_camera.hpp"
 #include "game/vehicle_transition.hpp"
@@ -439,4 +441,88 @@ TEST_CASE("the vehicle camera is pulled in where the world is in the way and eas
     pull.held = 0.5f;
     for (int i = 0; i < 200; ++i) easeCameraPullIn(pull, 0.05f);
     CHECK(pull.held == Catch::Approx(1.0f).margin(0.001));
+}
+
+TEST_CASE("the fade's far bound widens looked at steeply from close above (0x00606f90)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    // Level, or far off: as it is.
+    CHECK(cameraFadeFarBound(kCameraFadeFar, false, 1.0f, 2.0f, -0.5f) == kCameraFadeFar);
+    CHECK(cameraFadeFarBound(kCameraFadeFar, false, 3.0f, 2.0f, -1.5f) == kCameraFadeFar);
+    // At 68 degrees down, about as it is; steeper, wider.
+    CHECK(cameraFadeFarBound(kCameraFadeFar, false, 1.0f, 2.0f, -1.1868f) == Catch::Approx(kCameraFadeFar).epsilon(0.01));
+    const float steep = cameraFadeFarBound(kCameraFadeFar, false, 1.0f, 2.0f, -1.5f);
+    CHECK(steep == Catch::Approx(kCameraFadeFar / std::pow((1.5707964f - 1.5f) * 2.604353f, 2.0f)));
+    // A third at the barber shop.
+    CHECK(cameraFadeFarBound(3.0f, true, 5.0f, 2.0f, 0.0f) == Catch::Approx(1.0f));
+}
+
+TEST_CASE("the vehicle camera's mode at a change of seat (0x0075aac0)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    CameraTiming t{.delayMs = 300, .durationMs = 1500, .fixed = true};
+    CHECK(cameraModeAtChange(SeatState::EnterDelay, t, 10).mode == CameraMode::EnterWait);
+    CHECK(cameraModeAtChange(SeatState::EnterDelay, t, 10).ms == 300u);
+    CHECK(cameraModeAtChange(SeatState::ExitDelay, t, 10).mode == CameraMode::ExitWait);
+    t.delayMs = 0;
+    CHECK(cameraModeAtChange(SeatState::Entering, t, 10).mode == CameraMode::Entering);
+    CHECK(cameraModeAtChange(SeatState::Exiting, t, 10).mode == CameraMode::Exiting);
+    // Settled at once: seated, or off.
+    t.fixed = false;
+    CHECK(cameraModeAtChange(SeatState::Seated, t, 10).mode == CameraMode::Seated);
+    CHECK(cameraModeAtChange(SeatState::None, t, 10).mode == CameraMode::Off);
+    // On the way, with a time not yet final, it is entering all the same.
+    CHECK(cameraModeAtChange(SeatState::Entering, t, 10).mode == CameraMode::Entering);
+}
+
+TEST_CASE("the vehicle camera's modes move on with their time (0x0075af40)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    CameraModeClock c{.mode = CameraMode::EnterWait, .startMs = 1000, .ms = 300};
+    stepCameraMode(c, 1299, true, 2000);
+    CHECK(c.mode == CameraMode::EnterWait);
+    // 50 ms over: entering for the final time less that.
+    stepCameraMode(c, 1350, true, 2000);
+    CHECK(c.mode == CameraMode::Entering);
+    CHECK(c.ms == 1950u);
+    CHECK(c.startMs == 1350u);
+    stepCameraMode(c, 3300, true, 2000);
+    CHECK(c.mode == CameraMode::Seated);
+    // A wait to leave goes on to entering, as the client has it; with no
+    // final time, a second.
+    CameraModeClock w{.mode = CameraMode::ExitWait, .startMs = 0, .ms = 100};
+    stepCameraMode(w, 100, false, 2000);
+    CHECK(w.mode == CameraMode::Entering);
+    CHECK(w.ms == 1000u);
+    CameraModeClock x{.mode = CameraMode::Exiting, .startMs = 0, .ms = 500};
+    stepCameraMode(x, 500, true, 500);
+    CHECK(x.mode == CameraMode::Off);
+}
+
+TEST_CASE("how far along its mode the vehicle camera is (0x007598f0)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    SeatRecord seat;
+    CameraModeClock c{.mode = CameraMode::Entering, .startMs = 1000, .ms = 1000};
+    // On its own way in, with no camera time of the seat's: the way's share.
+    CHECK(cameraModeProgress(c, 1500, SeatState::Entering, &seat, 0.2f) == Catch::Approx(0.2f));
+    // With FlagsB 0x40: its own time.
+    seat.flagsB = kSeatFlagBEnterCameraTimes;
+    CHECK(cameraModeProgress(c, 1500, SeatState::Entering, &seat, 0.2f) == Catch::Approx(0.5f));
+    CHECK(cameraModeProgress(c, 9000, SeatState::Entering, &seat, 0.2f) == 1.0f);
+    c.mode = CameraMode::Seated;
+    CHECK(cameraModeProgress(c, 1000, SeatState::Seated, &seat, 0.0f) == 1.0f);
+    CHECK(cameraSpringsOnTheWay(CameraMode::Entering, nullptr) == false);
+    seat.flagsB = 0x40000;
+    CHECK(cameraSpringsOnTheWay(CameraMode::Exiting, &seat));
+    CHECK_FALSE(cameraSpringsOnTheWay(CameraMode::Entering, &seat));
+    CHECK(cameraWaySpringRate(1000, 0.0f) == Catch::Approx(4.0f / 1.001f + 1.0f));
+}
+
+TEST_CASE("a passenger's own place is its offset on the vehicle, turned (0x004f4460)", "[vehicle]") {
+    using namespace wowee::game::vehicle;
+    // Ahead and to the left come out as a seat's CameraOffset of (Y, -X) does.
+    SeatRecord seat;
+    seat.cameraOffset = glm::vec3(-0.5f, 2.0f, 1.0f);  // (Y, -X): 2 ahead, 0.5 to the left
+    const glm::vec3 a = transportOffsetAbout(glm::vec3(2.0f, 0.5f, 1.0f), 0.7f);
+    const glm::vec3 b = seatCameraOffset(seat, 0.7f);
+    CHECK(a.x == Catch::Approx(b.x));
+    CHECK(a.y == Catch::Approx(b.y));
+    CHECK(a.z == Catch::Approx(b.z));
 }
