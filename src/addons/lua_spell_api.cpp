@@ -69,6 +69,17 @@ static int lua_SpellTargetUnit(lua_State* L) {
     gh->spellTargetUnit(resolveUnitGuid(gh, token));
     return 0;
 }
+// SpellCanTargetUnit("unit") (0x00804190): 1 where the spell waiting for a
+// unit would take it, within its reach (0x00803a50), else nil.
+static int lua_SpellCanTargetUnit(lua_State* L) {
+    std::string token = luaL_checkstring(L, 1);
+    auto* gh = getGameHandler(L);
+    toLowerInPlace(token);
+    const uint64_t guid = gh ? resolveUnitGuid(gh, token) : 0;
+    if (guid != 0 && gh->spellCanTargetUnit(guid)) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
+    return 1;
+}
 // Only spells waiting for a unit are held for a click; an item cursor is
 // finished by the bag click instead, so this answers false.
 static int lua_SpellTargetItem(lua_State* L) { lua_pushboolean(L, 0); return 1; }
@@ -1339,6 +1350,7 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"GetSpellBookItemName", lua_GetSpellBookItemName},
                 {"GetSpellName",      lua_GetSpellName},
                 {"SpellTargetUnit",   lua_SpellTargetUnit},
+                {"SpellCanTargetUnit", lua_SpellCanTargetUnit},
                 {"SpellTargetItem",   lua_SpellTargetItem},
                 {"DropItemOnUnit",    lua_DropItemOnUnit},
                 {"SetMultiCastSpell", lua_SetMultiCastSpell},
