@@ -86,6 +86,7 @@ class RtScene;
 class RtLighting;
 class LootSparkles;
 class SunShafts;
+class EyeAdaptationPass;
 class ScreenEffects;
 class ScreenCapture;
 
@@ -918,6 +919,9 @@ private:
     // Screen-space sun shafts, built from the finished frame at the end of
     // endFrame and added in the overlay pass ahead of the interface.
     std::unique_ptr<SunShafts> sunShafts_;
+    // The eye's adaptation under the ray traced lighting, measured where the
+    // shafts take their copy and applied in the overlay pass.
+    std::unique_ptr<EyeAdaptationPass> eyeAdaptation_;
     bool sunShaftsEnabled_ = false;  // opt-in: the original client has none
     bool enhancedWater_ = false;     // opt-in: the original client draws its own liquid
     bool pendingClientSpecular_ = false;  // the 'specular' setting as last set
@@ -926,6 +930,7 @@ private:
     /// picture, and a login screen or a loading screen is not one.
     bool worldDrawnThisFrame_ = false;
     void recordSunShafts();
+    void recordEyeAdaptation();
 
     /// The character previews' off-screen passes (character select, the
     /// paperdoll, portraits), recorded once the scene's passes are closed.

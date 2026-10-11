@@ -948,6 +948,7 @@ set(WOWEE_SOURCES
     src/rendering/hiz_system.cpp
     src/rendering/volumetric_fog.cpp
     src/rendering/sun_shafts.cpp
+    src/rendering/eye_adaptation_pass.cpp
     src/rendering/screen_effects.cpp
     src/rendering/cube_texture.cpp
     src/rendering/screen_capture.cpp

@@ -1214,6 +1214,12 @@ wowee_add_test(test_rt_point_lights
             ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_eye_adaptation ──────────────────────────────────────
+# Header-only: the eye's exposure under the ray traced lighting - one in
+# daylight, part of the way elsewhere, quicker into the light than out.
+wowee_add_test(test_eye_adaptation
+    SOURCES test_eye_adaptation.cpp)
+
 # ── test_rt_rigid_parts ──────────────────────────────────────
 # Header-only: a skinned model cut into the pieces the ray tracer moves by
 # their bones.

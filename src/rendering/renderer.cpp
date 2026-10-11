@@ -45,6 +45,7 @@
 #include "rendering/hiz_system.hpp"
 #include "rendering/volumetric_fog.hpp"
 #include "rendering/sun_shafts.hpp"
+#include "rendering/eye_adaptation_pass.hpp"
 #include "rendering/screen_effects.hpp"
 #include "rendering/rt_lighting.hpp"
 #include "rendering/rt_point_lights.hpp"
@@ -991,6 +992,14 @@ bool Renderer::initialize(core::Window* win) {
         sunShafts_.reset();
     }
 
+    // Not fatal either: without it the eye does not adapt.
+    eyeAdaptation_ = std::make_unique<EyeAdaptationPass>();
+    if (!eyeAdaptation_->initialize(vkCtx)) {
+        LOG_WARNING("Eye adaptation failed to initialise - no eye adaptation");
+        eyeAdaptation_->shutdown();
+        eyeAdaptation_.reset();
+    }
+
     // Create render graph and register virtual resources
     renderGraph_ = std::make_unique<RenderGraph>();
 
@@ -1049,6 +1058,10 @@ void Renderer::shutdown() {
     if (sunShafts_) {
         sunShafts_->shutdown();
         sunShafts_.reset();
+    }
+    if (eyeAdaptation_) {
+        eyeAdaptation_->shutdown();
+        eyeAdaptation_.reset();
     }
     if (screenEffects_) {
         screenEffects_->shutdown();
@@ -1714,6 +1727,7 @@ void Renderer::endFrame() {
     if (vkCtx) vkCtx->gpuMark(currentCmd, "screen effects");
     recordSunShafts();
     if (vkCtx) vkCtx->gpuMark(currentCmd, "sun shafts");
+    recordEyeAdaptation();
 
     const auto& overlayFbs = vkCtx->getOverlayFramebuffers();
     if (vkCtx->getOverlayRenderPass() != VK_NULL_HANDLE && currentImageIndex < overlayFbs.size()) {
@@ -1738,6 +1752,8 @@ void Renderer::endFrame() {
         // the glow and death passes, then the shafts screened over it.
         if (screenEffects_) screenEffects_->composite(currentCmd, vkCtx->getCurrentFrame());
         if (sunShafts_) sunShafts_->composite(currentCmd, vkCtx->getCurrentFrame());
+        // The eye's exposure over all of it, the interface left out.
+        if (eyeAdaptation_) eyeAdaptation_->composite(currentCmd);
         vkCtx->gpuMark(currentCmd, "effects composite");
 
         // ImGui's pipelines are built against the overlay pass, so it always
@@ -6413,6 +6429,24 @@ void Renderer::recordSunShafts() {
     sunShafts_->record(currentCmd, vkCtx->getCurrentFrame(),
                        currentImageIndex < images.size() ? images[currentImageIndex] : VK_NULL_HANDLE,
                        vkCtx->getSwapchainExtent(), in);
+}
+
+void Renderer::recordEyeAdaptation() {
+    if (!eyeAdaptation_ || currentCmd == VK_NULL_HANDLE) return;
+    const auto& images = vkCtx->getSwapchainImages();
+    // Only over the world's picture, and only with the ray traced lighting
+    // on: off, the frame is left exactly as it was. A login or a loading
+    // screen keeps the eye where it was rather than adapting to it.
+    const bool rtOn = rtLighting_ && rtLighting_->active() && camera != nullptr;
+    if (!rtOn) {
+        eyeAdaptation_->record(currentCmd, vkCtx->getCurrentFrame(), VK_NULL_HANDLE, {}, false, 0.0f);
+        return;
+    }
+    if (!worldDrawnThisFrame_) return;
+    eyeAdaptation_->record(currentCmd, vkCtx->getCurrentFrame(),
+                           currentImageIndex < images.size() ? images[currentImageIndex] : VK_NULL_HANDLE,
+                           vkCtx->getSwapchainExtent(), true, lastDeltaTime_);
+    vkCtx->gpuMark(currentCmd, "eye adaptation");
 }
 
 // Build the per-frame render graph for off-screen pre-passes.
