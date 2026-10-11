@@ -127,6 +127,31 @@ std::string difficultyText(const char* key) {
 
 } // end anonymous namespace
 
+// ERR_DIFFICULTY_CHANGE_COOLDOWN_S (0x2ca) with the time left worded by
+// 0x0061a9e0: SMSG_CHANGEPLAYER_DIFFICULTY_RESULT 1 and 0x0052d8d0 alike.
+void GameHandler::raiseDifficultyCooldownError(uint32_t ms) {
+    const auto left = difficulty_change::intDuration(ms);
+    const std::string duration = chat_channels::luaFormat(
+        difficultyText((std::string("INT_SPELL_DURATION") + left.suffix).c_str()),
+        {std::to_string(left.value)});
+    raiseUiError(chat_channels::luaFormat(difficultyText(difficulty_change::errorKey(1)), {duration}));
+}
+
+void GameHandler::changePlayerDifficulty(uint32_t difficulty) {
+    // 0x0052d8d0: only for one who may (0x0052cbc0), and not while the last
+    // change's cooldown runs - that says how long is left instead.
+    if (!canChangePlayerDifficulty()) return;
+    const int64_t now = static_cast<int64_t>(std::time(nullptr));
+    if (difficulty_change::coolingDown(playerDifficultyCooldownEnd_, now)) {
+        raiseDifficultyCooldownError(static_cast<uint32_t>(playerDifficultyCooldownEnd_ - now) * 1000u);
+        return;
+    }
+    if (!socket) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_CHANGEPLAYER_DIFFICULTY));
+    packet.writeUInt32(difficulty);
+    socket->send(packet);
+}
+
 // The rune bar draws itself from these two events and from nothing else. All
 // three rune packets stored their state and announced none of it, so a death
 // knight's runes were drawn once at login and then stood still.
@@ -498,21 +523,15 @@ void GameHandler::registerCoreOpcodes() {
             case 0:  // the difficulty, kept (0xbd1980) and nothing said
                 if (packet.hasRemaining(1)) playerDifficulty_ = packet.readUInt8();
                 return;
-            case 1: {  // on cooldown: the seconds left, worded by 0x0061a9e0
+            case 1:  // on cooldown: the seconds left, worded by 0x0061a9e0
                 if (!packet.hasRemaining(4)) return;
-                const uint32_t seconds = packet.readUInt32();
-                const auto left = difficulty_change::intDuration(seconds * 1000u);
-                const std::string duration = chat_channels::luaFormat(
-                    difficultyText((std::string("INT_SPELL_DURATION") + left.suffix).c_str()),
-                    {std::to_string(left.value)});
-                raiseUiError(chat_channels::luaFormat(
-                    difficultyText(difficulty_change::errorKey(result)), {duration}));
+                raiseDifficultyCooldownError(packet.readUInt32() * 1000u);
                 return;
-            }
-            case 6:  // started: the cooldown's seconds (0xbd1984) and the
-                     // current map's loading screen (0x0040ab70)
+            case 6:  // started: the cooldown, kept as when it ends (0xbd1984),
+                     // and the current map's loading screen (0x0040ab70)
                 if (!packet.hasRemaining(4)) return;
-                packet.readUInt32();  // read only by Can/ChangePlayerDifficulty
+                playerDifficultyCooldownEnd_ = static_cast<int64_t>(std::time(nullptr)) +
+                                               static_cast<int32_t>(packet.readUInt32());
                 if (difficultyLoadingScreenCallback_) difficultyLoadingScreenCallback_(true, currentMapId_);
                 return;
             case 8: {  // a MapDifficulty.dbc row whose message goes to chat

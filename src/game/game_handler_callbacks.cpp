@@ -590,6 +590,9 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
 
     // Store player GUID
     playerGuid = characterGuid;
+    // Entering the world clears a difficulty change's cooldown (0x0052b550
+    // -> 0x0052d0e0).
+    playerDifficultyCooldownEnd_ = 0;
 
     // Reset per-character state so previous character data doesn't bleed through
     inventory = Inventory();

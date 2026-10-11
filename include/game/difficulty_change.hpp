@@ -22,6 +22,27 @@ inline const char* errorKey(uint32_t result) {
     }
 }
 
+/// Map.dbc Flags: a raid whose leader can switch it between normal and
+/// heroic (0x00519640, and GetInstanceInfo's isDynamicInstance, 0x0051a8c0).
+constexpr uint32_t kMapFlagDynamicDifficulty = 0x100;
+
+/// 0x0052cbc0, CanChangePlayerDifficulty's first answer and the gate of
+/// ChangePlayerDifficulty: the current map is a raid (Map.dbc InstanceType 2)
+/// that can switch difficulty, the player is in a raid group (0xbeb608 counts
+/// its members) and leads it (0xbd1968).
+inline bool mayChange(uint32_t mapInstanceType, uint32_t mapFlags, bool inRaid,
+                      uint64_t leaderGuid, uint64_t playerGuid) {
+    return mapInstanceType == 2 && (mapFlags & kMapFlagDynamicDifficulty) != 0 && inRaid &&
+           leaderGuid != 0 && leaderGuid == playerGuid;
+}
+
+/// 0x0052d000 and 0x0052d8d0: the cooldown is a wall-clock time in seconds
+/// (0xbd1984, time() plus the seconds result 6 sends), 0 for none, running
+/// while time() is before it.
+inline bool coolingDown(int64_t cooldownEnd, int64_t now) {
+    return cooldownEnd != 0 && now - cooldownEnd < 0;
+}
+
 /// A time as 0x0061a9e0 words it with "INT_SPELL_DURATION", rounding up
 /// (its 7th argument): the GlobalStrings key's suffix and the number for its
 /// %d. Under a minute it is whole seconds, rounded down.

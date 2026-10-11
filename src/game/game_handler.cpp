@@ -4,6 +4,7 @@
 #include <set>
 
 #include "game/item_text.hpp"
+#include "game/difficulty_change.hpp"
 #include "game/achievement_criteria.hpp"
 #include "game/game_utils.hpp"
 #include "rendering/world_map/map_resolver.hpp"
@@ -3132,6 +3133,7 @@ void GameHandler::loadMapNameCache() const {
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         uint32_t id = dbc->getUInt32(i, 0);
         mapInstanceTypeCache_[id] = dbc->getUInt32(i, 2);
+        if (nameField == 5) mapFlagsCache_[id] = dbc->getUInt32(i, 3);
         std::string name = dbc->getString(i, nameField);
         if (name.empty()) name = dbc->getString(i, 1); // internal name fallback
         if (!name.empty() && !mapNameCache_.count(id)) {
@@ -4053,6 +4055,29 @@ bool GameHandler::isInInstance() const {
     auto it = mapInstanceTypeCache_.find(currentMapId_);
     return it != mapInstanceTypeCache_.end() &&
            (it->second == 1 || it->second == 2);
+}
+
+bool GameHandler::isDynamicDifficultyMap() const {
+    loadMapNameCache();
+    auto it = mapFlagsCache_.find(currentMapId_);
+    return it != mapFlagsCache_.end() &&
+           (it->second & difficulty_change::kMapFlagDynamicDifficulty) != 0;
+}
+
+bool GameHandler::canChangePlayerDifficulty() const {
+    loadMapNameCache();
+    auto type = mapInstanceTypeCache_.find(currentMapId_);
+    auto flags = mapFlagsCache_.find(currentMapId_);
+    if (type == mapInstanceTypeCache_.end() || flags == mapFlagsCache_.end()) return false;
+    const GroupListData& party = getPartyData();
+    return difficulty_change::mayChange(type->second, flags->second,
+                                        !party.isEmpty() && groupIsRaid(party.groupType),
+                                        party.leaderGuid, playerGuid);
+}
+
+bool GameHandler::isPlayerDifficultyCoolingDown() const {
+    return difficulty_change::coolingDown(playerDifficultyCooldownEnd_,
+                                          static_cast<int64_t>(std::time(nullptr)));
 }
 
 bool GameHandler::hasPendingDuelRequest() const {

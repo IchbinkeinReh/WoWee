@@ -3081,7 +3081,24 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushboolean(L, (guid != 0 && guid != gh->getPlayerGuid()) ? 1 : 0);
             return 1;
         }},
-                {"CanChangePlayerDifficulty", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // 0x0052d000: whether the player may change the difficulty
+                // (0x0052cbc0), and whether the last change's cooldown is over.
+                {"CanChangePlayerDifficulty", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushboolean(L, gh && gh->canChangePlayerDifficulty() ? 1 : 0);
+            lua_pushboolean(L, gh && gh->isPlayerDifficultyCoolingDown() ? 0 : 1);
+            return 2;
+        }},
+                // 0x0052e420: a number is required; one who may change it
+                // (0x0052cbc0) sends 0 normal or 1 heroic (0x0052d8d0).
+                {"ChangePlayerDifficulty", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetPlayerDifficulty(\"difficulty\")");
+            auto* gh = getGameHandler(L);
+            if (!gh || !gh->canChangePlayerDifficulty()) return 0;
+            const uint32_t difficulty = static_cast<uint32_t>(lua_tonumber(L, 1));
+            if (difficulty < 2) gh->changePlayerDifficulty(difficulty);
+            return 0;
+        }},
                 {"IsSilenced",                [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
                 {"IsDisplayChannelModerator", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
                 // PromoteToLeader(name) - /promote, /pr, and the unit menu's

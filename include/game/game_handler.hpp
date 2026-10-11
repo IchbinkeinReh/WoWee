@@ -1983,6 +1983,16 @@ public:
     void respondInstanceLock(bool accept);
     bool isInstanceHeroic() const;
     bool isInInstance() const;
+    /// The current map can switch between normal and heroic (Map.dbc Flags
+    /// 0x100; GetInstanceInfo's isDynamicInstance, 0x0051a8c0).
+    bool isDynamicDifficultyMap() const;
+    /// 0x0052cbc0: the player leads a raid group on such a map.
+    bool canChangePlayerDifficulty() const;
+    /// 0xbd1984: a difficulty change's cooldown still runs.
+    bool isPlayerDifficultyCoolingDown() const;
+    /// 0x0052d8d0: CMSG_CHANGEPLAYER_DIFFICULTY with the difficulty, or the
+    /// cooldown's error while it runs.
+    void changePlayerDifficulty(uint32_t difficulty);
 
     /** True when ghost is within 40 yards of corpse position (same map). */
     bool canReclaimCorpse() const;
@@ -4106,6 +4116,7 @@ public:
     /// mattered: "Not ready", "Not enough rage" and "You can't do that right
     /// now" arrive once per rejected keypress.
     void raiseUiError(const std::string& message);
+    void raiseDifficultyCooldownError(uint32_t ms);
     void sendPing();
     void setTransportAttachment(uint64_t childGuid, ObjectType type,
                                 uint64_t transportGuid, const glm::vec3& localOffset,
@@ -4615,6 +4626,9 @@ private:
     /// SMSG_CHANGEPLAYER_DIFFICULTY_RESULT 0. Names the difficulty a change
     /// says it set (PLAYER_DIFFICULTY<n+1>).
     uint32_t playerDifficulty_ = 0;
+    /// When a difficulty change's cooldown ends, in time() seconds (0xbd1984,
+    /// set by SMSG_CHANGEPLAYER_DIFFICULTY_RESULT 6); 0 for none.
+    int64_t playerDifficultyCooldownEnd_ = 0;
     bool hasHomeBind_ = false;
     uint32_t homeBindMapId_ = 0;
     uint32_t homeBindZoneId_ = 0;
@@ -5207,6 +5221,7 @@ private:
     // Map metadata cache (lazy-loaded from Map.dbc).
     mutable std::unordered_map<uint32_t, std::string> mapNameCache_;
     mutable std::unordered_map<uint32_t, uint32_t> mapInstanceTypeCache_;
+    mutable std::unordered_map<uint32_t, uint32_t> mapFlagsCache_;
     mutable bool mapNameCacheLoaded_ = false;
     // (mapId, difficulty) -> encounter count, and the same map with no
     // difficulty-specific rows under a difficulty of 0xFFFFFFFF.

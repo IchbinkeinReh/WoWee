@@ -2690,7 +2690,7 @@ static int lua_GetInstanceInfo(lua_State* L) {
     // The two the raid branch reads; nil would reach `playerDifficulty == 1`
     // and `if ( isDynamicInstance )` in minimap.lua.
     lua_pushnumber(L, gh->playerDifficultyRef());           // 6: playerDifficulty (0x0051a8c0: 0xbd1980)
-    lua_pushboolean(L, 0);                                  // 7: isDynamicInstance
+    lua_pushboolean(L, gh->isDynamicDifficultyMap() ? 1 : 0); // 7: isDynamicInstance (Map.dbc Flags 0x100)
     return 7;
 }
 

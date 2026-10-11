@@ -51,3 +51,27 @@ TEST_CASE("the enUS fallback fills the cooldown into the error", "[difficulty]")
     CHECK(luaFormat(dc::englishText("ERR_PLAYER_DIFFICULTY_CHANGED_S"),
                     {dc::englishText("PLAYER_DIFFICULTY2")}) == "Difficulty set to Heroic.");
 }
+
+TEST_CASE("only a raid leader on a dynamic raid map may change it", "[difficulty]") {
+    // 0x0052cbc0: Map.dbc InstanceType 2 with Flags 0x100, a raid group, and
+    // the player its leader.
+    constexpr uint64_t me = 0x10, other = 0x20;
+    constexpr uint32_t raid = 2, party = 1, dyn = dc::kMapFlagDynamicDifficulty;
+    CHECK(dc::mayChange(raid, dyn, true, me, me));
+    CHECK(dc::mayChange(raid, dyn | 0x1, true, me, me));
+    CHECK_FALSE(dc::mayChange(party, dyn, true, me, me));  // a dungeon
+    CHECK_FALSE(dc::mayChange(raid, 0, true, me, me));     // a fixed raid
+    CHECK_FALSE(dc::mayChange(raid, dyn, false, me, me));  // not in a raid group
+    CHECK_FALSE(dc::mayChange(raid, dyn, true, other, me));
+    CHECK_FALSE(dc::mayChange(raid, dyn, true, 0, 0));     // no leader at all
+}
+
+TEST_CASE("the cooldown is when it ends, not how long it has left", "[difficulty]") {
+    // 0xbd1984 holds time() plus result 6's seconds; 0 is none.
+    constexpr int64_t now = 1'700'000'000;
+    CHECK_FALSE(dc::coolingDown(0, now));
+    CHECK(dc::coolingDown(now + 1, now));
+    CHECK(dc::coolingDown(now + 300, now));
+    CHECK_FALSE(dc::coolingDown(now, now));  // over the second it ends
+    CHECK_FALSE(dc::coolingDown(now - 5, now));
+}
