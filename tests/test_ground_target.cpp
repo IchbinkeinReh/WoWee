@@ -107,6 +107,24 @@ TEST_CASE("the trajectory missile spares the destination only with its flag", "[
     CHECK(gt::requiredTargets(0x40, 18, true) == 0x40);
 }
 
+TEST_CASE("the first ImplicitTargetA adds and takes targets (0x0080c790)", "[ground_target]") {
+    CHECK(gt::requiredTargets(0x0, 1, false) == 0);
+    CHECK(gt::requiredTargets(0x402, 1, false) == 0x2);
+    CHECK(gt::requiredTargets(0x8000, 5, false) == 0);
+    CHECK(gt::requiredTargets(0x0, 6, false) == 0x80);
+    CHECK(gt::requiredTargets(0x0, 21, false) == 0x100);
+    CHECK(gt::requiredTargets(0x0, 23, false) == 0x800);
+    CHECK(gt::requiredTargets(0x0, 25, false) == 0x2);
+    CHECK(gt::requiredTargets(0x0, 70, false) == 0x2);
+    CHECK(gt::requiredTargets(0x0, 26, false) == 0x4000);
+    CHECK(gt::requiredTargets(0x0, 35, false) == 0x8);
+    CHECK(gt::requiredTargets(0x0, 57, false) == 0x4);
+    CHECK(gt::requiredTargets(0x0, 90, false) == 0x10000);
+    CHECK(gt::requiredTargets(0x0, 22, false) == 0);
+    CHECK(gt::takesNoUnit(16));
+    CHECK_FALSE(gt::takesNoUnit(6));
+}
+
 TEST_CASE("spell modifiers as 0x007fd970 sums and applies them", "[ground_target][spell_mods]") {
     namespace sm = wowee::game::spell_mods;
     const uint32_t flags[3] = {0x1u, 0x0u, 0x2u};  // bits 0 and 65

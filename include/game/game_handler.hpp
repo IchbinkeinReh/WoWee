@@ -4193,6 +4193,15 @@ public:
         /// (0x0080ac90).
         uint32_t attrEx4 = 0;
         uint32_t attrEx7 = 0;
+        /// AttributesEx5 (+0x24): usable with the caster stunned (0x8),
+        /// fleeing (0x20000) or confused (0x40000) (0x005d4210); and
+        /// AttributesEx6 (+0x28) 0x40000: cast by the caster's charmer
+        /// (0x0080cce0).
+        uint32_t attrEx5 = 0;
+        uint32_t attrEx6 = 0;
+        /// Spell.dbc ActiveIconID (+0x218): a spell shown as in effect,
+        /// which its button turns off (0x00802cb0).
+        uint32_t activeIconId = 0;
         uint32_t spellFamily = 0;
         uint32_t spellFamilyFlags[3] = {0, 0, 0};
         // Spell.dbc Targets bitmask (SpellCastTargetFlags) - 0x10 = TARGET_FLAG_ITEM

@@ -2,6 +2,10 @@
 
 #include "game/pet_action.hpp"
 
+#include <array>
+#include <utility>
+#include <vector>
+
 using namespace wowee::game::pet;
 
 // The bug these cover: dismiss packed action 0 under the command type, which is
@@ -138,4 +142,89 @@ TEST_CASE("a pet's spell is cast by the pet where it is the mover or the spell a
     CHECK(petCastsItself(0, true));
     CHECK(petCastsItself(0x20, false));
     CHECK_FALSE(petCastsItself(0x10, false));
+}
+
+TEST_CASE("no pet stunned, fleeing or confused casts unless the spell allows it (0x005d4210)", "[pet]") {
+    CHECK_FALSE(petsCannotCast(std::array<uint32_t, 1>{0u}, 0));
+    CHECK(petsCannotCast(std::array<uint32_t, 1>{0x40000u}, 0));
+    CHECK_FALSE(petsCannotCast(std::array<uint32_t, 1>{0x40000u}, 0x8));
+    CHECK(petsCannotCast(std::array<uint32_t, 1>{0x800000u}, 0));
+    CHECK_FALSE(petsCannotCast(std::array<uint32_t, 1>{0x800000u}, 0x20000));
+    CHECK(petsCannotCast(std::array<uint32_t, 1>{0x400000u}, 0));
+    CHECK_FALSE(petsCannotCast(std::array<uint32_t, 1>{0x400000u}, 0x40000));
+    // Stunned but allowed it, and fleeing: the fleeing bars it.
+    CHECK(petsCannotCast(std::array<uint32_t, 1>{0x840000u}, 0x8));
+    // Every pet, in the same way: one stunned, one free casts.
+    CHECK_FALSE(petsCannotCast(std::array<uint32_t, 2>{0x40000u, 0u}, 0));
+    CHECK_FALSE(petsCannotCast(std::array<uint32_t, 2>{0x40000u, 0x800000u}, 0));
+    CHECK_FALSE(petsCannotCast(std::array<uint32_t, 0>{}, 0));
+}
+
+namespace {
+struct TestAura {
+    uint32_t spellId = 0;
+    uint8_t flags = 0;
+};
+}  // namespace
+
+TEST_CASE("a pet's spell in effect is taken off by its button (0x00802cb0)", "[pet]") {
+    const auto noSlot = [](uint32_t) { return 0u; };
+    const auto noMount = [](uint32_t) { return std::pair<uint32_t, uint32_t>{0u, 0u}; };
+    ToggleSpell s;
+    s.id = 100;
+    std::vector<TestAura> auras{{100, 0x10}};
+    // Without an ActiveIconID, a companion or a mount, never.
+    CHECK_FALSE(spellInEffectOn(s, ToggleUnit{}, noSlot, auras, noMount));
+    s.activeIconId = 7;
+    CHECK(spellInEffectOn(s, ToggleUnit{}, noSlot, auras, noMount));
+    // Only with the positive flag.
+    auras[0].flags = 0x8;
+    CHECK_FALSE(spellInEffectOn(s, ToggleUnit{}, noSlot, auras, noMount));
+    // A companion's: its critter is the one it names.
+    ToggleSpell c;
+    c.id = 200;
+    c.effects[0] = kEffectSummon;
+    c.misc[0] = 4242;
+    c.miscB0 = 41;
+    const auto slot5 = [](uint32_t row) { return row == 41 ? 5u : 0u; };
+    ToggleUnit u;
+    CHECK_FALSE(spellInEffectOn(c, u, slot5, std::vector<TestAura>{}, noMount));
+    u.critterEntry = 4242;
+    CHECK(spellInEffectOn(c, u, slot5, std::vector<TestAura>{}, noMount));
+    // A summon naming the vehicle it rides, made by the player.
+    ToggleSpell v;
+    v.id = 300;
+    v.activeIconId = 1;
+    v.effects[1] = kEffectSummon;
+    v.misc[1] = 555;
+    ToggleUnit rider;
+    rider.vehicleEntry = 555;
+    CHECK_FALSE(spellInEffectOn(v, rider, noSlot, std::vector<TestAura>{}, noMount));
+    rider.vehicleMadeByPlayer = true;
+    CHECK(spellInEffectOn(v, rider, noSlot, std::vector<TestAura>{}, noMount));
+    // A mount: another aura mounting the same creature.
+    ToggleSpell m;
+    m.id = 400;
+    m.auras[0] = kAuraMounted;
+    m.misc[0] = 99;
+    const auto mountOf = [](uint32_t spell) {
+        return spell == 401 ? std::pair<uint32_t, uint32_t>{kAuraMounted, 99u} : std::pair<uint32_t, uint32_t>{0u, 0u};
+    };
+    CHECK(spellInEffectOn(m, ToggleUnit{}, noSlot, std::vector<TestAura>{{401, 0}}, mountOf));
+    CHECK_FALSE(spellInEffectOn(m, ToggleUnit{}, noSlot, std::vector<TestAura>{{402, 0}}, mountOf));
+}
+
+TEST_CASE("only an aura's spell is taken off a pet (0x007fdf20)", "[pet]") {
+    CHECK(spellAppliesAura({0, 6, 0}));
+    CHECK(spellAppliesAura({143, 0, 0}));
+    CHECK_FALSE(spellAppliesAura({28, 0, 0}));
+}
+
+TEST_CASE("AttributesEx6 0x40000 is cast by the charmer, and Ex7 0x8 wants its flag (0x0080cce0)", "[pet]") {
+    CHECK(castingUnit(1, 0, 2, 3) == 1);
+    CHECK(castingUnit(1, 0x40000, 2, 3) == 2);
+    CHECK(castingUnit(1, 0x40000, 0, 3) == 3);
+    CHECK(casterMayCast(0, 0));
+    CHECK_FALSE(casterMayCast(0x8, 0));
+    CHECK(casterMayCast(0x8, 0x40000));
 }

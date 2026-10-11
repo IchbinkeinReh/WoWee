@@ -13,6 +13,7 @@
 // already packed correctly and can be sent straight back; everything the client
 // builds itself goes through packPetAction.
 
+#include <cstddef>
 #include <cstdint>
 
 namespace wowee {
@@ -74,6 +75,102 @@ constexpr uint32_t petSlotSpell(uint32_t packed) {
 /// asked of it by CMSG_PET_ACTION: Spell.dbc AttributesEx4 (+0x20) 0x20, or
 /// the pet is the active mover - a vehicle the player drives (0x006dd060).
 constexpr bool petCastsItself(uint32_t attrEx4, bool petIsMover) { return (attrEx4 & 0x20u) != 0 || petIsMover; }
+
+/// 0x005d4210: a spell no pet is in a state to cast - every pet stunned
+/// (UNIT_FIELD_FLAGS 0x40000) unless the spell's AttributesEx5 has 0x8,
+/// else every one fleeing (0x800000) unless 0x20000, else every one confused
+/// (0x400000) unless 0x40000. Nothing is said.
+template <typename Flags>
+[[nodiscard]] constexpr bool petsCannotCast(const Flags& petUnitFlags, uint32_t attrEx5) {
+    size_t pets = 0, stunned = 0, fleeing = 0, confused = 0;
+    for (const uint32_t f : petUnitFlags) {
+        ++pets;
+        if ((attrEx5 & 0x8u) == 0 && (f & 0x40000u) != 0) ++stunned;
+        else if ((attrEx5 & 0x20000u) == 0 && (f & 0x800000u) != 0) ++fleeing;
+        else if ((attrEx5 & 0x40000u) == 0 && (f & 0x400000u) != 0) ++confused;
+    }
+    return pets != 0 && (stunned == pets || fleeing == pets || confused == pets);
+}
+
+/// What 0x00802cb0 reads of a spell: its ActiveIconID (+0x218), Effect
+/// (+0x11c), EffectApplyAuraName (+0x17c), EffectMiscValue (+0x1b8) and the
+/// first EffectMiscValueB (+0x1c4).
+struct ToggleSpell {
+    uint32_t id = 0;
+    uint32_t activeIconId = 0;
+    uint32_t effects[3] = {0, 0, 0};
+    uint32_t auras[3] = {0, 0, 0};
+    uint32_t misc[3] = {0, 0, 0};
+    uint32_t miscB0 = 0;
+};
+/// What it reads of the unit, one other than the player: the entry its
+/// UNIT_FIELD_CRITTER guid carries, and the vehicle it rides (0x00747ff0) -
+/// its entry and whether the player made it (UNIT_FIELD_CREATEDBY).
+struct ToggleUnit {
+    uint32_t critterEntry = 0;
+    uint32_t vehicleEntry = 0;
+    bool vehicleMadeByPlayer = false;
+};
+inline constexpr uint32_t kEffectSummon = 28;
+inline constexpr uint32_t kAuraMounted = 78;
+inline constexpr uint32_t kSummonSlotCritter = 5;
+
+/// 0x00802cb0: whether a spell is in effect on a unit, so that its button
+/// takes it off rather than casting it. Only a spell with an ActiveIconID,
+/// or one that summons a companion - its first effect SUMMON (28) whose
+/// SummonProperties row (the first EffectMiscValueB) has Slot (+0x10) 5 -
+/// or mounts (first aura 78) (0x008009b0). Then: a SUMMON effect naming the
+/// vehicle the unit rides, made by the player; or naming the unit's critter,
+/// where that row is a companion's; an aura of the spell on the unit with
+/// the positive flag (0x10); or for a mount, an aura on the unit mounting
+/// the same creature. `slotOf` gives a SummonProperties row's Slot,
+/// `mountOf` an aura spell's first ApplyAuraName and EffectMiscValue.
+template <typename SlotOf, typename Auras, typename MountOf>
+[[nodiscard]] bool spellInEffectOn(const ToggleSpell& s, const ToggleUnit& u, SlotOf slotOf, const Auras& auras,
+                                   MountOf mountOf) {
+    const bool companion = s.effects[0] == kEffectSummon && slotOf(s.miscB0) == kSummonSlotCritter;
+    if (s.activeIconId == 0 && !companion && s.auras[0] != kAuraMounted) return false;  // 0x008009b0
+    for (int k = 0; k < 3; ++k) {
+        if (s.effects[k] != kEffectSummon) continue;
+        if (u.vehicleEntry != 0 && u.vehicleEntry == s.misc[k] && u.vehicleMadeByPlayer) return true;
+        if (slotOf(s.miscB0) == kSummonSlotCritter) return u.critterEntry == s.misc[k];
+    }
+    for (const auto& aura : auras) {
+        if (aura.spellId == s.id && (aura.flags & 0x10u) != 0) return true;
+    }
+    if (s.auras[0] == kAuraMounted) {
+        for (const auto& aura : auras) {
+            const auto [auraName, misc] = mountOf(aura.spellId);
+            if (auraName == kAuraMounted && misc == s.misc[0]) return true;
+        }
+    }
+    return false;
+}
+
+/// 0x007fdf20: a spell with an effect that applies an aura (0x0076be10) -
+/// APPLY_AURA (6) or an area aura (35, 65, 119, 128, 129, 143). Taking one
+/// off a unit not the player is CMSG_PET_CANCEL_AURA (0x00802f80); any
+/// other is not sent.
+[[nodiscard]] constexpr bool spellAppliesAura(const uint32_t (&effects)[3]) {
+    for (const uint32_t e : effects) {
+        if (e == 6 || e == 35 || e == 65 || e == 119 || e == 128 || e == 129 || e == 143) return true;
+    }
+    return false;
+}
+
+/// 0x0080cce0: a spell with AttributesEx6 (+0x28) 0x40000 is cast by its
+/// caster's charmer - UNIT_FIELD_CHARMEDBY, else UNIT_FIELD_CREATEDBY.
+[[nodiscard]] constexpr uint64_t castingUnit(uint64_t caster, uint32_t attrEx6, uint64_t charmedBy,
+                                             uint64_t createdBy) {
+    if ((attrEx6 & 0x40000u) == 0) return caster;
+    return charmedBy != 0 ? charmedBy : createdBy;
+}
+
+/// 0x0080cce0: AttributesEx7 (+0x2c) 0x8 is cast only by a caster with
+/// UNIT_FIELD_FLAGS_2 0x40000; else SPELL_FAILED_SPELL_UNAVAILABLE (0x6b).
+[[nodiscard]] constexpr bool casterMayCast(uint32_t attrEx7, uint32_t casterFlags2) {
+    return (attrEx7 & 0x8u) == 0 || (casterFlags2 & 0x40000u) != 0;
+}
 
 /// What PetDismiss does (CGPetInfo::PetDismiss, 0x005d46f0).
 enum class DismissAction : uint8_t {

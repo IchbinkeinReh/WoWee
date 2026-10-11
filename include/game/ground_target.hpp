@@ -28,15 +28,35 @@ inline constexpr uint32_t kTargetFlagSourceLocation = 0x20;
 inline constexpr uint32_t kTargetFlagDestLocation = 0x40;
 
 /// 0x0080c790: the targets a spell still needs - Spell.dbc Targets with the
-/// first effect's ImplicitTargetA adding or removing bits. Of those, only the
-/// two locations matter here: TARGET_DEST_TRAJ (89) with a missile whose
-/// SpellMissile row is flagged 1 drops the destination (the trajectory picks
-/// it instead).
+/// first effect's ImplicitTargetA adding or removing bits: TARGET_DEST_TRAJ
+/// (89) with a missile whose SpellMissile row is flagged 1 drops the
+/// destination (the trajectory picks it instead). None needed, the cast goes
+/// at none (0x0080ac90).
 constexpr uint32_t requiredTargets(uint32_t targets, uint32_t implicitTargetA0, bool trajectoryMissile) {
     uint32_t required = targets;
-    if (implicitTargetA0 == 89 && trajectoryMissile) required &= ~kTargetFlagDestLocation;
+    switch (implicitTargetA0) {
+        case 1: required &= ~0x400u; break;
+        case 5: required &= ~0x8000u; break;
+        case 6: case 53: required |= 0x80u; break;
+        case 21: case 45: required |= 0x100u; break;
+        case 23: required |= 0x800u; break;
+        case 25: case 63: case 64: case 65: case 66: case 67: case 68: case 69: case 70: case 71: case 74: case 75:
+            required |= kTargetFlagUnit;
+            break;
+        case 26: required |= 0x4000u; break;
+        case 35: required |= 0x8u; break;
+        case 57: case 61: required |= 0x4u; break;
+        case 89:
+            if (trajectoryMissile) required &= ~kTargetFlagDestLocation;
+            break;
+        case 90: required |= 0x10000u; break;
+        default: break;
+    }
     return required;
 }
+/// 0x0080c790: with ImplicitTargetA 16 first, no unit is taken - neither the
+/// one asked nor the player's target.
+constexpr bool takesNoUnit(uint32_t implicitTargetA0) { return implicitTargetA0 == 16; }
 
 /// 0x0080cce0: a spell with one of these effects - TRANS_DOOR (50),
 /// SUMMON_OBJECT_WILD (76), SUMMON_OBJECT_SLOT1-4 (104-107) or 81 - shows the

@@ -847,9 +847,49 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
     // 0x005d4210 -> 0x0080cce0: a pet's spell cast as the player's are, by
     // the pet - the vehicle the player drives among them.
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || caster == 0 || spellId == 0) return;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    const auto& spell = it->second;
+    if ((spell.attr & 0x40u) != 0) return;  // a passive is not cast
+    const auto guidField = [](const Entity& e, UF low) -> uint64_t {
+        const uint16_t idx = fieldIndex(low);
+        if (idx == 0xFFFF) return 0;
+        return e.getField(idx) | (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
+    };
+    // AttributesEx6 0x40000: its charmer casts it, the player as its own
+    // casts go (0x0080cce0 on, 0x0080ac90 sending CMSG_CAST_SPELL).
+    if ((spell.attrEx6 & 0x40000u) != 0) {
+        auto pet = owner_.getEntityManager().getEntity(caster);
+        if (!pet) return;
+        caster = pet::castingUnit(caster, spell.attrEx6, guidField(*pet, UF::UNIT_FIELD_CHARMEDBY),
+                                  guidField(*pet, UF::UNIT_FIELD_CREATEDBY));
+        if (caster == 0 || !owner_.getEntityManager().getEntity(caster)) return;
+        if (caster == owner_.getPlayerGuid()) {
+            castSpell(spellId, targetGuid);
+            return;
+        }
+    }
     if (owner_.heldBySeat(caster)) return;  // 0x0074ba40
+    // AttributesEx7 0x8 wants a caster with UNIT_FIELD_FLAGS_2 0x40000.
+    if (auto c = owner_.getEntityManager().getEntity(caster)) {
+        const uint16_t flags2Field = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+        const uint32_t flags2 = flags2Field != 0xFFFF ? c->getField(flags2Field) : 0u;
+        if (!pet::casterMayCast(spell.attrEx7, flags2)) {
+            constexpr uint8_t kSpellFailedSpellUnavailable = 0x6b;
+            owner_.addUIError(castFailureMessage(owner_, spellId, kSpellFailedSpellUnavailable, -1, 0, 0));
+            return;
+        }
+    }
     if (armGroundTarget(spellId, caster)) return;
-    const uint64_t target = isSelfCastSpell(spellId) ? 0 : targetGuid;
+    // 0x0080c790: the targets it needs - none, it goes at none; else the
+    // unit asked, or the player's target (unless ImplicitTargetA 16 takes
+    // none).
+    const uint32_t required =
+        ground_target::requiredTargets(spell.targetFlags, spell.implicitTargetsA[0], false);
+    uint64_t target = 0;
+    if (required != 0 && !ground_target::takesNoUnit(spell.implicitTargetsA[0]))
+        target = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
     const auto cast = owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
                                                 : CastSpellPacket::build(spellId, target, ++castCount_);
     owner_.getSocket()->send(CastSpellPacket::asPetCast(caster, cast));
@@ -3572,6 +3612,9 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t attrEx3Field = spellL ? spellL->tryField("AttributesEx3") : 0xFFFFFFFF;
     const uint32_t attrEx4Field = spellL ? spellL->tryField("AttributesEx4") : 0xFFFFFFFF;
     const uint32_t attrEx7Field = spellL ? spellL->tryField("AttributesEx7") : 0xFFFFFFFF;
+    const uint32_t attrEx5Field = spellL ? spellL->tryField("AttributesEx5") : 0xFFFFFFFF;
+    const uint32_t attrEx6Field = spellL ? spellL->tryField("AttributesEx6") : 0xFFFFFFFF;
+    const uint32_t activeIconField = spellL ? spellL->tryField("ActiveIconID") : 0xFFFFFFFF;
     const uint32_t familyField = spellL ? spellL->tryField("SpellFamilyName") : 0xFFFFFFFF;
     const uint32_t familyFlagsField = spellL ? spellL->tryField("SpellFamilyFlags") : 0xFFFFFFFF;
     const uint32_t familyFlagWords = isPreWotlk() ? 2u : 3u;
@@ -3772,6 +3815,9 @@ void SpellHandler::loadSpellNameCache() const {
             if (attrEx3Field < fieldCount) entry.attrEx3 = dbc->getUInt32(i, attrEx3Field);
             if (attrEx4Field < fieldCount) entry.attrEx4 = dbc->getUInt32(i, attrEx4Field);
             if (attrEx7Field < fieldCount) entry.attrEx7 = dbc->getUInt32(i, attrEx7Field);
+            if (attrEx5Field < fieldCount) entry.attrEx5 = dbc->getUInt32(i, attrEx5Field);
+            if (attrEx6Field < fieldCount) entry.attrEx6 = dbc->getUInt32(i, attrEx6Field);
+            if (activeIconField < fieldCount) entry.activeIconId = dbc->getUInt32(i, activeIconField);
             if (familyField < fieldCount) entry.spellFamily = dbc->getUInt32(i, familyField);
             // A uint64 before WotLK, three words since (groups 0-63, 0-95).
             for (uint32_t w = 0; w < familyFlagWords; ++w) {

@@ -1,4 +1,5 @@
 #include "game/ground_target.hpp"
+#include <array>
 #include "game/pet_action.hpp"
 #include "game/vehicle_mover.hpp"
 #include "game/unit_name_rules.hpp"
@@ -2653,6 +2654,14 @@ void GameHandler::sendPetAction(uint32_t action, uint64_t targetGuid) {
     if (spellHandler_) spellHandler_->sendPetAction(action, targetGuid);
 }
 
+namespace {
+uint64_t guidFieldOf(const Entity& e, UF low) {
+    const uint16_t idx = fieldIndex(low);
+    if (idx == 0xFFFF) return 0;
+    return e.getField(idx) | (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
+}
+}  // namespace
+
 void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
     // 0x005d4210: a spell the pet casts itself - AttributesEx4 0x20, or the
     // pet is the active mover (0x006dd060) - goes as the player's casts do
@@ -2661,6 +2670,60 @@ void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
         loadSpellNameCache();
         const auto it = spellNameCache_.find(spell);
         const uint32_t attrEx4 = it != spellNameCache_.end() ? it->second.attrEx4 : 0;
+        // Nothing for a pet out of view (0x005d4210 finds none).
+        auto petEntity = getEntityManager().getEntity(petGuid_);
+        auto petUnit = std::dynamic_pointer_cast<Unit>(petEntity);
+        if (!petUnit) return;
+        // A spell in effect on the pet is taken off it (0x00802cb0 ->
+        // 0x00802f80).
+        if (it != spellNameCache_.end()) {
+            pet::ToggleSpell toggle;
+            toggle.id = spell;
+            toggle.activeIconId = it->second.activeIconId;
+            for (int k = 0; k < 3; ++k) {
+                toggle.effects[k] = it->second.effectIds[k];
+                toggle.auras[k] = it->second.effectAuraIds[k];
+                toggle.misc[k] = it->second.effectMiscValues[k];
+            }
+            toggle.miscB0 = it->second.effectMiscValuesB[0];
+            pet::ToggleUnit unit;
+            const uint64_t critter = guidFieldOf(*petUnit, UF::UNIT_FIELD_CRITTER);
+            unit.critterEntry = static_cast<uint32_t>((critter >> 24) & 0xFFFFFFFu);  // its entry bits
+            if (const auto p = vehicleRoster_.passenger(petGuid_)) {
+                if (auto v = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(p->vehicleGuid))) {
+                    unit.vehicleEntry = v->getEntry();
+                    unit.vehicleMadeByPlayer = guidFieldOf(*v, UF::UNIT_FIELD_CREATEDBY) == playerGuid;
+                }
+            }
+            auto* am = services_.assetManager;
+            auto props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
+            const auto slotOf = [&](uint32_t row) -> uint32_t {
+                const int32_t r = props && props->getFieldCount() > 4 ? props->findRecordById(row) : -1;
+                return r >= 0 ? props->getUInt32(static_cast<uint32_t>(r), 4) : 0u;
+            };
+            const auto mountOf = [&](uint32_t auraSpell) -> std::pair<uint32_t, uint32_t> {
+                const auto m = spellNameCache_.find(auraSpell);
+                if (m == spellNameCache_.end()) return {0u, 0u};
+                return {m->second.effectAuraIds[0], m->second.effectMiscValues[0]};
+            };
+            static const std::vector<AuraSlot> kNoAuras;
+            const auto* auras = getUnitAuras(petGuid_);
+            if (pet::spellInEffectOn(toggle, unit, slotOf, auras ? *auras : kNoAuras, mountOf)) {
+                if (pet::spellAppliesAura(toggle.effects) && socket) {
+                    if (const uint16_t wire = wireOpcode(Opcode::CMSG_PET_CANCEL_AURA); wire != 0xFFFF) {
+                        network::Packet pkt(wire);
+                        pkt.writeUInt64(petGuid_);
+                        pkt.writeUInt32(spell);
+                        socket->send(pkt);
+                    }
+                }
+                return;
+            }
+        }
+        // None cast by a pet stunned, fleeing or confused where the spell
+        // does not allow it; nothing said (0x005d4210).
+        const uint32_t attrEx5 = it != spellNameCache_.end() ? it->second.attrEx5 : 0;
+        if (pet::petsCannotCast(std::array<uint32_t, 1>{petUnit->getUnitFlags()}, attrEx5)) return;
         if (pet::petCastsItself(attrEx4, petGuid_ == activeMover())) {
             if (spellHandler_) spellHandler_->castPetSpell(petGuid_, spell, targetGuid);
             return;
@@ -2680,14 +2743,6 @@ void GameHandler::dismissCritter() {
     // The server confirms by clearing the critter field; leave the local state
     // alone so a refused dismiss does not leave the client thinking it worked.
 }
-
-namespace {
-uint64_t guidFieldOf(const Entity& e, UF low) {
-    const uint16_t idx = fieldIndex(low);
-    if (idx == 0xFFFF) return 0;
-    return e.getField(idx) | (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
-}
-}  // namespace
 
 uint32_t GameHandler::summonPropertiesFlagsOf(uint64_t unitGuid) {
     // 0x0071d1f0: the creating spell's first SUMMON effect's (28)
