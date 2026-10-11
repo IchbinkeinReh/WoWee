@@ -25,6 +25,17 @@
 
 namespace wowee::rendering::rt_lights {
 
+/// What gave a light, for the Debug Graphics settings to scale each kind on
+/// its own (Renderer::LightingTune::sourceIntensity and sourceReach).
+enum class Source : uint8_t {
+    Model = 0,     // an M2 light of a doodad or game object
+    Fire = 1,      // fireLight: a fire that carries none of its own
+    Lamp = 2,      // lampLight: a lamp that carries none of its own
+    Building = 3,  // a WMO's MOLT light
+    Unit = 4,      // an M2 light of a character or creature
+};
+inline constexpr size_t kSourceCount = 5;
+
 struct PointLight {
     glm::vec3 position{0.0f};
     float attenuationStart = 0.0f;  // yards: full strength within
@@ -36,6 +47,7 @@ struct PointLight {
     /// surfaces take only its shadows; adding its light again would light
     /// them twice (rt_lighting.glsli, rtPointLightOwn and rtBakedShade).
     bool baked = false;
+    Source source = Source::Model;
 };
 
 /// What the shader reads per light (std430): position and end, colour and
@@ -190,6 +202,7 @@ inline PointLight fireLight(const glm::vec3& boxMin, const glm::vec3& boxMax, co
     out.color = (torch ? glm::vec3(1.0f, 0.62f, 0.3f) : glm::vec3(1.0f, 0.55f, 0.22f)) * flicker;
     out.attenuationEnd = std::clamp(extent * 3.0f, torch ? 4.0f : 5.0f, 14.0f) * kWorldReachScale;
     out.attenuationStart = 0.25f * out.attenuationEnd;
+    out.source = Source::Fire;
     return out;
 }
 
@@ -208,6 +221,7 @@ inline PointLight lampLight(const glm::vec3& local, const glm::mat4& modelMatrix
     out.color = glm::vec3(1.0f, 0.78f, 0.48f) * std::clamp(level, 0.0f, 1.0f);
     out.attenuationEnd = std::clamp(kLampReach * scale, 3.0f, 12.0f) * kWorldReachScale;
     out.attenuationStart = 0.2f * out.attenuationEnd;
+    out.source = Source::Lamp;
     return out;
 }
 
@@ -245,6 +259,7 @@ inline std::optional<PointLight> placeWmoLight(const glm::vec3& localPosition, c
     out.attenuationStart = std::max(attenuationStart, 0.0f) * scale;
     out.attenuationEnd = attenuationEnd * scale;
     out.baked = true;
+    out.source = Source::Building;
     return out;
 }
 

@@ -339,7 +339,7 @@ TEST_CASE("every panel the client offers still has settings on it", "[settings][
     for (const auto& d : schema()) present.insert(d.category);
 
     for (const char* category : {"Graphics", "Shadows", "Detail", "Grass", "Water", "Ray Tracing", "Debug Graphics",
-                                 "Debug Shadows", "Upscaling", "Display",
+                                 "Debug Lights", "Debug Shadows", "Upscaling", "Display",
                                  "Camera", "Interface", "Minimap", "Action Bars", "HUD",
                                  "Combat", "Names", "Nameplates", "Combat Text", "Unit Frames",
                                  "Sound", "Sound Effects", "Chat", "Gameplay"}) {
@@ -366,6 +366,8 @@ TEST_CASE("every panel the client offers still has settings on it", "[settings][
     // off Graphics when the shadow resolution would not fit beside them.
     // Twenty-four with Debug Graphics and Debug Shadows: the lighting's
     // parts and strengths, fourteen controls, more than one page holds.
-    INFO("the schema names " << present.size() << " categories where twenty-four are expected");
-    CHECK(present.size() == 24);
+    // Twenty-five with Debug Lights: each kind of point light's intensity
+    // and reach, ten more controls.
+    INFO("the schema names " << present.size() << " categories where twenty-five are expected");
+    CHECK(present.size() == 25);
 }

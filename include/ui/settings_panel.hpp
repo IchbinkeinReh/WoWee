@@ -83,6 +83,17 @@ public:
     int pendingDbgBakedLight = 100;
     int pendingDbgPointLights = 100;
     int pendingDbgBounce = 100;
+    /// Per kind of point light (rt_lights::Source), in percent of its own.
+    int pendingDbgModelLightIntensity = 100;
+    int pendingDbgModelLightReach = 100;
+    int pendingDbgFireLightIntensity = 100;
+    int pendingDbgFireLightReach = 100;
+    int pendingDbgLampLightIntensity = 100;
+    int pendingDbgLampLightReach = 100;
+    int pendingDbgBuildingLightIntensity = 100;
+    int pendingDbgBuildingLightReach = 100;
+    int pendingDbgUnitLightIntensity = 100;
+    int pendingDbgUnitLightReach = 100;
     int pendingDbgShadowDarkness = 60;
     int pendingDbgTracedSunShadow = 100;
     int pendingDbgMapSunShadow = 100;

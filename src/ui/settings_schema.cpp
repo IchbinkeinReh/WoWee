@@ -294,6 +294,41 @@ constexpr SettingDesc kSchema[] = {
      "How far the probes' bounced light darkens shaded places and\n"
      "lifts lit ones (Shadows, occlusion and bounce light). 0 leaves\n"
      "the flat ambient.", "", 100},
+    {"dbgmodellightintensity", "Model lights: intensity (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "Intensity and reach",
+     "The lights model files carry: braziers, crystals, spell\n"
+     "effects on objects.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgmodellightreach", "Model lights: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
+     "How far its light reaches: where the falloff starts and ends.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgfirelightintensity", "Fires: intensity (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
+     "Fires, braziers and torches whose files carry no light: a\n"
+     "warm flickering light added at their flame.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgfirelightreach", "Fires: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
+     "How far its light reaches: where the falloff starts and ends.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbglamplightintensity", "Lamps and lanterns: intensity (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
+     "Street lamps, lanterns and sconces whose files carry no\n"
+     "light, lit at night.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbglamplightreach", "Lamps and lanterns: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
+     "How far its light reaches: where the falloff starts and ends.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgbuildinglightintensity", "Building lights: intensity (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
+     "A building's own lamps (WMO lights). Its walls and floors\n"
+     "hold their light already; the rest takes it from the tracing.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgbuildinglightreach", "Building lights: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
+     "How far its light reaches: where the falloff starts and ends.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgunitlightintensity", "Unit lights: intensity (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
+     "The lights of spell effects and models on characters and\n"
+     "creatures.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgunitlightreach", "Unit lights: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
+     "How far its light reaches: where the falloff starts and ends.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
 
     {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
      "How much of the light a shadow takes where the ray tracing has a\n"

@@ -6003,6 +6003,14 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
         }
         if (wmoRenderer) wmoRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         if (characterRenderer) characterRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        // The Debug Graphics settings' strength and reach per kind of light.
+        for (rt_lights::PointLight& l : lightScratch) {
+            const size_t k = std::min(static_cast<size_t>(l.source), rt_lights::kSourceCount - 1);
+            l.color *= std::max(lightingTune_.sourceIntensity[k], 0.0f);
+            const float reach = std::max(lightingTune_.sourceReach[k], 0.0f);
+            l.attenuationStart *= reach;
+            l.attenuationEnd *= reach;
+        }
         Frustum frustum;
         frustum.extractFromMatrix(in.viewProj);
         rt_lights::selectLights(lightScratch, in.cameraPos, kLightRange, RtLighting::kMaxPointLights,

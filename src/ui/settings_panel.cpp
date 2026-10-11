@@ -698,6 +698,9 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 ImGui::Spacing();
                 drawSchemaCategory("Debug Graphics", saveCallback);
                 ImGui::Spacing();
+                ImGui::SeparatorText("Light sources");
+                drawSchemaCategory("Debug Lights", saveCallback);
+                ImGui::Spacing();
                 ImGui::SeparatorText("Shadows");
                 drawSchemaCategory("Debug Shadows", saveCallback);
                 ImGui::Spacing();
@@ -705,6 +708,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 ImGui::Spacing();
                 if (ImGui::Button("Restore Debug Graphics Defaults", ImVec2(-1, 0))) {
                     restoreSchemaDefaults("Debug Graphics");
+                    restoreSchemaDefaults("Debug Lights");
                     restoreSchemaDefaults("Debug Shadows");
                     saveCallback();
                 }
@@ -900,6 +904,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "screenglow", "raytracedlighting",
     // The Debug Graphics settings: each applies all of them.
     "dbgview", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
+    "dbgmodellightintensity", "dbgmodellightreach", "dbgfirelightintensity", "dbgfirelightreach", "dbglamplightintensity", "dbglamplightreach", "dbgbuildinglightintensity", "dbgbuildinglightreach", "dbgunitlightintensity", "dbgunitlightreach",
     "dbgtracedsunshadow", "dbgmapsunshadow", "dbgpointshadow", "dbgbakedlampshadow", "dbgocclusion", "dbgterrainshadow", "dbgblobshadow",
     // Moved off the game's own Effects panel, so this list is now what
     // applies them at startup; the cvar store used to do it.
@@ -1064,6 +1069,16 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "dbgbakedlight", .asInt = &SettingsPanel::pendingDbgBakedLight},
     {.key = "dbgpointlights", .asInt = &SettingsPanel::pendingDbgPointLights},
     {.key = "dbgbounce", .asInt = &SettingsPanel::pendingDbgBounce},
+    {.key = "dbgmodellightintensity", .asInt = &SettingsPanel::pendingDbgModelLightIntensity},
+    {.key = "dbgmodellightreach", .asInt = &SettingsPanel::pendingDbgModelLightReach},
+    {.key = "dbgfirelightintensity", .asInt = &SettingsPanel::pendingDbgFireLightIntensity},
+    {.key = "dbgfirelightreach", .asInt = &SettingsPanel::pendingDbgFireLightReach},
+    {.key = "dbglamplightintensity", .asInt = &SettingsPanel::pendingDbgLampLightIntensity},
+    {.key = "dbglamplightreach", .asInt = &SettingsPanel::pendingDbgLampLightReach},
+    {.key = "dbgbuildinglightintensity", .asInt = &SettingsPanel::pendingDbgBuildingLightIntensity},
+    {.key = "dbgbuildinglightreach", .asInt = &SettingsPanel::pendingDbgBuildingLightReach},
+    {.key = "dbgunitlightintensity", .asInt = &SettingsPanel::pendingDbgUnitLightIntensity},
+    {.key = "dbgunitlightreach", .asInt = &SettingsPanel::pendingDbgUnitLightReach},
     {.key = "dbgshadowdarkness", .asInt = &SettingsPanel::pendingDbgShadowDarkness},
     {.key = "dbgtracedsunshadow", .asInt = &SettingsPanel::pendingDbgTracedSunShadow},
     {.key = "dbgmapsunshadow", .asInt = &SettingsPanel::pendingDbgMapSunShadow},
@@ -1280,6 +1295,16 @@ void SettingsPanel::applyLightingTune() {
     t.bakedLight = pct(pendingDbgBakedLight);
     t.pointLights = pct(pendingDbgPointLights);
     t.bounce = pct(pendingDbgBounce);
+    t.sourceIntensity[0] = pct(pendingDbgModelLightIntensity);
+    t.sourceReach[0] = pct(pendingDbgModelLightReach);
+    t.sourceIntensity[1] = pct(pendingDbgFireLightIntensity);
+    t.sourceReach[1] = pct(pendingDbgFireLightReach);
+    t.sourceIntensity[2] = pct(pendingDbgLampLightIntensity);
+    t.sourceReach[2] = pct(pendingDbgLampLightReach);
+    t.sourceIntensity[3] = pct(pendingDbgBuildingLightIntensity);
+    t.sourceReach[3] = pct(pendingDbgBuildingLightReach);
+    t.sourceIntensity[4] = pct(pendingDbgUnitLightIntensity);
+    t.sourceReach[4] = pct(pendingDbgUnitLightReach);
     t.shadowStrength = pct(pendingDbgShadowDarkness);
     t.tracedSunShadow = pct(pendingDbgTracedSunShadow);
     t.mapSunShadow = pct(pendingDbgMapSunShadow);
@@ -1517,6 +1542,16 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
                key == "dbgbakedlight" ||
                key == "dbgpointlights" ||
                key == "dbgbounce" ||
+               key == "dbgmodellightintensity" ||
+               key == "dbgmodellightreach" ||
+               key == "dbgfirelightintensity" ||
+               key == "dbgfirelightreach" ||
+               key == "dbglamplightintensity" ||
+               key == "dbglamplightreach" ||
+               key == "dbgbuildinglightintensity" ||
+               key == "dbgbuildinglightreach" ||
+               key == "dbgunitlightintensity" ||
+               key == "dbgunitlightreach" ||
                key == "dbgshadowdarkness" ||
                key == "dbgtracedsunshadow" ||
                key == "dbgmapsunshadow" ||

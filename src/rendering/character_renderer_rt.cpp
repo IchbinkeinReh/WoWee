@@ -473,6 +473,7 @@ void CharacterRenderer::collectRtLights(const glm::vec3& eye, float range,
                                                 inst.boneMatrices);
             if (!l) continue;
             l->color *= fade;
+            l->source = rt_lights::Source::Unit;
             out.push_back(*l);
         }
     }
