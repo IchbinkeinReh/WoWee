@@ -295,9 +295,27 @@ static int lua_IsUsableAction(lua_State* L) {
     if (!gh) { lua_pushboolean(L, 0); lua_pushboolean(L, 0); return 2; }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
     if (const auto ref = petActionRef(gh, slot)) {
-        // A pet slot is usable as the pet bar's is: while it holds something.
-        lua_pushboolean(L, ref->packed != 0 ? 1 : 0);
-        lua_pushboolean(L, 0);
+        // 0x005a9e20 for a pet's slot: its spell is cast by the pet
+        // (0x005d3390), which must be there and afford it of its own power
+        // (0x0080b5d0, 0x008017e0) - a vehicle's steam or energy, not the
+        // player's mana. A command or a stance is usable while it is set.
+        bool usable = ref->packed != 0;
+        bool noPower = false;
+        if (const uint32_t spell = petSlotSpell(ref->packed)) {
+            const auto pet = std::dynamic_pointer_cast<game::Unit>(
+                gh->getEntityManager().getEntity(gh->getPetGuid()));
+            if (!pet) {
+                usable = false;
+            } else {
+                const auto data = gh->getSpellData(spell);
+                if (data.manaCost > 0 && pet->getPowerByType(data.powerType) < data.manaCost) {
+                    usable = false;
+                    noPower = true;
+                }
+            }
+        }
+        lua_pushboolean(L, usable ? 1 : 0);
+        lua_pushboolean(L, noPower ? 1 : 0);
         return 2;
     }
     const auto& bar = gh->getActionBar();
@@ -344,9 +362,13 @@ static int lua_IsActionInRange(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
-    // The pet casts a pet slot's spell, from where it is; no range is read
-    // for it here.
-    if (petActionRef(gh, slot)) return luaReturnNil(L);
+    // The pet casts a pet slot's spell, from where it is (0x005a9e20 ->
+    // 0x005d3390): its range is measured from the pet.
+    if (const auto ref = petActionRef(gh, slot)) {
+        const uint32_t spell = petSlotSpell(ref->packed);
+        if (spell == 0 || gh->getPetGuid() == 0) return luaReturnNil(L);
+        return pushSpellRangeAnswer(L, gh, spell, gh->getTargetGuid(), gh->getPetGuid());
+    }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
         lua_pushnil(L);

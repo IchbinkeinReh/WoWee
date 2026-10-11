@@ -85,14 +85,17 @@ inline int luaReturnFalse(lua_State* L){ lua_pushboolean(L, 0); return 1; }
 /// 1 in range, 0 out, and nil where there is no range to speak of - a spell
 /// with none, nothing targeted, either side not known to the client. Edge to
 /// edge, as the server measures it; see spellclass::withinSpellRange.
+/// `casterGuid` is who casts it, the player where it is 0 - the pet for a
+/// pet's slot (0x005a9e20 casts it from the pet, 0x005d3390).
 inline int pushSpellRangeAnswer(lua_State* L, game::GameHandler* gh,
-                                uint32_t spellId, uint64_t targetGuid) {
+                                uint32_t spellId, uint64_t targetGuid, uint64_t casterGuid = 0) {
     if (!gh || spellId == 0 || targetGuid == 0) return luaReturnNil(L);
     const auto data = gh->getSpellData(spellId);
     // Self-cast spells have no range and show no indicator.
     if (data.maxRange <= 0.0f) return luaReturnNil(L);
     const auto target = gh->getEntityManager().getEntity(targetGuid);
-    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    const auto player =
+        gh->getEntityManager().getEntity(casterGuid != 0 ? casterGuid : gh->getPlayerGuid());
     if (!target || !player) return luaReturnNil(L);
     const float dx = player->getX() - target->getX();
     const float dy = player->getY() - target->getY();
