@@ -715,11 +715,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
         for (const TextRun& run : line) lineW += runWidth(run);
         // Each line justifies inside the box on its own, which is what makes a
         // centred paragraph look centred rather than ragged from one offset.
-        float x = at.x;
-        if (wrapWidth > 0.0f && justifyH) {
-            if (std::string(justifyH) == "CENTER") x = at.x + (wrapWidth - lineW) * 0.5f;
-            else if (std::string(justifyH) == "RIGHT") x = at.x + wrapWidth - lineW;
-        }
+        float x = at.x + justifyOffset(justifyH, wrapWidth, lineW);
         for (const TextRun& run : line) {
             if (!run.texture.empty()) {
                 const float w = runWidth(run);
@@ -2605,11 +2601,21 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         });
                     return lines.empty() ? size_t{1} : lines.size();
                 };
-                float y = y1 - lineH;
+                // A plain MessageFrame - UIErrorsFrame is the one the interface
+                // has - is laid from its top down, not from its bottom up: the
+                // original anchors line slot k TOPLEFT to the frame at k line
+                // heights below its top inset (0x00968790), with the slots in
+                // insert order. With insertMode="TOP" the newest is in front
+                // of the list and so on the top line. Laid bottom-up, a lone
+                // "Nicht genug Mana" sat on the last of the frame's 60 units
+                // rather than its first, lower on screen than the original's.
+                const bool topDown = w->objectType == "MessageFrame";
+                const int count = static_cast<int>(w->messages.size());
+                float y = topDown ? y0 : y1 - lineH;
                 int painted = 0;
                 const int scroll = w->messageScroll;
-                for (int i = static_cast<int>(w->messages.size()) - 1 - scroll;
-                     i >= 0 && y >= y0; --i) {
+                for (int k = scroll; k < count && (topDown ? y < y1 : y >= y0); ++k) {
+                    const int i = topDown ? k : count - 1 - k;
                     const auto& m = w->messages[static_cast<size_t>(i)];
                     // A line whose time is up is still in the history - it
                     // comes back when the frame is scrolled - but it takes no
@@ -2630,7 +2636,12 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // starts as many lines above the cursor as it needs, and
                     // the cursor then moves past all of them.
                     const size_t rows = lineCount(m.text);
-                    const float top = y - static_cast<float>(rows - 1) * lineH;
+                    const float top = topDown ? y : y - static_cast<float>(rows - 1) * lineH;
+                    // Top-down the block grows downward instead, and one that
+                    // would run out of the bottom stops the same way - unless it
+                    // is the first, which the original shows regardless.
+                    if (topDown && painted > 0 &&
+                        top + static_cast<float>(rows) * lineH > y1 + 0.5f) break;
                     // A message that does not fit whole is not drawn at all.
                     //
                     // The loop's own bound only knows where the *last* row of
@@ -2670,12 +2681,23 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         drawMarkupText(dl, font, size,
                                        ImVec2(bx + shadowPx(w->shadowX * s), by - shadowPx(w->shadowY * s)),
                                        packColor(sc, w->alpha * w->shadowColor[3] * rgba[3]),
-                                       w->alpha, m.text, wrapW, false, nullptr, true);
+                                       w->alpha, m.text, wrapW, false,
+                                       w->justifyH.c_str(), true);
                     }
+                    // Justified the way the frame's own font instance says,
+                    // inside the frame's width - each line of a message on its
+                    // own, as the original lays them out (a line is a font
+                    // string as wide as the frame). Passing no justify here
+                    // started every line at the left edge, which UIErrorsFrame
+                    // (justifyH="CENTER", 512 wide, top middle) shows as
+                    // errors that are centred only when they are long.
+                    // ChatFrameTemplate declares LEFT, so chat is unchanged.
                     drawMarkupText(dl, font, size, ImVec2(bx, by),
                                    packColor(rgba, w->alpha), w->alpha, m.text,
-                                   wrapW, false, nullptr, false, &tree, w->id);
-                    y -= lineH * static_cast<float>(rows);
+                                   wrapW, false, w->justifyH.c_str(), false,
+                                   &tree, w->id);
+                    if (topDown) y += lineH * static_cast<float>(rows);
+                    else         y -= lineH * static_cast<float>(rows);
                     ++painted;
                 }
                 // A window holding lines and painting none of them.

@@ -234,3 +234,45 @@ TEST_CASE("a character is never cut in half", "[wrap][ellipsis]") {
 TEST_CASE("a box too small for the dots gets the dots", "[wrap][ellipsis]") {
     CHECK(fitWithEllipsis("Anything", 2.0f, charWidth) == "...");
 }
+
+// ---------------------------------------------------------------------------
+// Where a line starts in its box. A message frame's lines were drawn with no
+// justify at all, so UIErrorsFrame (512 wide, justifyH="CENTER") started every
+// error at its left edge: only a line nearly as wide as the frame looked
+// centred, and "Not enough mana" sat well left of the middle of the screen.
+
+using wowee::ui::justifyOffset;
+
+TEST_CASE("a centred line sits in the middle of its box whatever its length", "[wrap][justify]") {
+    // The middle of the line is the middle of the box, for a short line and a
+    // long one alike - which is what made the old drawing look right only
+    // sometimes.
+    CHECK(justifyOffset("CENTER", 512.0f, 120.0f) + 120.0f * 0.5f == 256.0f);
+    CHECK(justifyOffset("CENTER", 512.0f, 500.0f) + 500.0f * 0.5f == 256.0f);
+    CHECK(justifyOffset("CENTER", 512.0f, 512.0f) == 0.0f);
+}
+
+TEST_CASE("each wrapped line of a centred message is centred on its own", "[wrap][justify]") {
+    // Two lines of different widths, and each one's middle on the box's.
+    const auto lines = wowee::ui::wrapText(
+        {wowee::ui::WrapRun{"aaaaaaa bb"}}, 8.0f, false, charWidth);
+    REQUIRE(lines.size() == 2);
+    const float w0 = charWidth(lines[0][0].text);
+    const float w1 = charWidth(lines[1][0].text);
+    REQUIRE(w0 != w1);
+    CHECK(justifyOffset("CENTER", 8.0f, w0) + w0 * 0.5f == 4.0f);
+    CHECK(justifyOffset("CENTER", 8.0f, w1) + w1 * 0.5f == 4.0f);
+}
+
+TEST_CASE("left, right, unknown and missing justify", "[wrap][justify]") {
+    CHECK(justifyOffset("RIGHT", 512.0f, 112.0f) == 400.0f);
+    CHECK(justifyOffset("LEFT", 512.0f, 112.0f) == 0.0f);
+    CHECK(justifyOffset("JUSTIFY", 512.0f, 112.0f) == 0.0f);
+    CHECK(justifyOffset(nullptr, 512.0f, 112.0f) == 0.0f);
+}
+
+TEST_CASE("a box with no width has nothing to justify in", "[wrap][justify]") {
+    // An auto-sized label is as wide as its text and starts where it is put.
+    CHECK(justifyOffset("CENTER", 0.0f, 112.0f) == 0.0f);
+    CHECK(justifyOffset("RIGHT", 0.0f, 112.0f) == 0.0f);
+}

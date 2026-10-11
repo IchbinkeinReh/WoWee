@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace wowee::ui {
@@ -193,6 +194,27 @@ std::string fitWithEllipsis(const std::string& text, float width, Measure measur
         if (measure(head + kDots) <= width) return head + kDots;
     }
     return kDots;
+}
+
+/// Where a line starts inside its box, measured from the box's left edge.
+///
+/// Each line of a block justifies on its own: a centred paragraph has every
+/// line centred, not every line started where the widest one started. LEFT,
+/// anything unrecognised and a null justify all start at the edge. A box of
+/// no width is no box - an auto-sized label is as wide as its own text - so
+/// there is nothing to justify inside and the line starts at the edge too.
+///
+/// A message frame's lines go through this as well as a label's. They used to
+/// be drawn with no justify at all, so UIErrorsFrame - 512 wide, anchored to
+/// the top middle of the screen, justifyH="CENTER" - started every error at
+/// its left edge: a long one looked roughly centred and a short one such as
+/// "Not enough mana" sat well left of the middle.
+inline float justifyOffset(const char* justifyH, float boxWidth, float lineWidth) {
+    if (!justifyH || boxWidth <= 0.0f) return 0.0f;
+    const std::string_view j(justifyH);
+    if (j == "CENTER") return (boxWidth - lineWidth) * 0.5f;
+    if (j == "RIGHT")  return boxWidth - lineWidth;
+    return 0.0f;
 }
 
 }  // namespace wowee::ui
