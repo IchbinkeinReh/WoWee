@@ -85,6 +85,16 @@ inline constexpr uint32_t kPitchStartHoldMs = 100;
     return true;
 }
 
+/// Whether the mover may not move for its seat (0x0074ba40): its own seat
+/// state is on the way in or out (not 0 or 3), or - where a driver controls
+/// it - the driver's is, or the driver, in a seat, asked for a seat change
+/// it has not yet had (0x00747fa0's +0x10 0x8).
+[[nodiscard]] inline bool moverHeldBySeat(uint8_t moverState, uint8_t driverState, bool driverAskedSeatChange) {
+    if (moverState != 0 && moverState != 3) return true;
+    if (driverState != 0 && driverState != 3) return true;
+    return driverState != 0 && driverAskedSeatChange;
+}
+
 /// The keys the mover's movement flags2 hold: 0x1 starts no strafe
 /// (0x00988b00) and no rise or dive in water or air (0x009898e0); 0x2 starts
 /// no jump (0x009883f0).

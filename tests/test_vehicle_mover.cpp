@@ -79,3 +79,15 @@ TEST_CASE("the mover's flags2 hold its strafe and jump keys", "[vehicle]") {
     // Flags2 0x10 (pitches over time) holds neither.
     CHECK_FALSE(moverKeyRestrictions(0x10).noStrafe);
 }
+
+TEST_CASE("a seat on the way, or a seat change asked, holds the mover", "[vehicle]") {
+    // 0x0074ba40: the mover's own seat moving.
+    CHECK(moverHeldBySeat(1, 0, false));
+    CHECK_FALSE(moverHeldBySeat(3, 0, false));
+    // The driver's seat moving.
+    CHECK(moverHeldBySeat(0, 4, false));
+    // The seated driver's seat change asked (0x00747fa0's +0x10 0x8).
+    CHECK(moverHeldBySeat(0, 3, true));
+    CHECK_FALSE(moverHeldBySeat(0, 3, false));
+    CHECK_FALSE(moverHeldBySeat(0, 0, true));
+}

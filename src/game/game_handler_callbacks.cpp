@@ -1,4 +1,6 @@
 #include "game/ground_target.hpp"
+#include "game/pet_action.hpp"
+#include "game/vehicle_mover.hpp"
 #include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
 #include "game/game_handler.hpp"
@@ -1107,12 +1109,10 @@ uint64_t GameHandler::activeMover() const {
 void GameHandler::sendRequestVehicleExit() {
     if (state != WorldState::IN_WORLD || !socket) return;
     if (drivesItsVehicle(vehicleRoster_, playerGuid, activeMover())) {
-        // 0x005d46f0: the vehicle as the player's pet, from a seat whose
-        // Flags 0x2000000 lets it out - CMSG_DISMISS_CONTROLLED_VEHICLE
-        // (0x0074bb20 -> 0x006ef540, move event 0x34).
-        const vehicle::SeatRecord* seat = vehicleRoster_.seatOf(playerGuid);
-        if (activeMover() == petGuid_ && seat && (seat->flags & 0x2000000) != 0 && movementHandler_)
-            movementHandler_->sendDismissControlledVehicle();
+        // The driver's exit is PetDismiss (0x0074c7f0 -> 0x005d46f0): the
+        // vehicle as its pet leaves by CMSG_DISMISS_CONTROLLED_VEHICLE, any
+        // other falls through to sending the pet away.
+        dismissPet();
         return;
     }
     socket->send(VehiclePackets::requestExit());
@@ -1121,7 +1121,9 @@ void GameHandler::sendRequestVehicleExit() {
 void GameHandler::sendRequestVehicleSeatStep(bool next) {
     if (state != WorldState::IN_WORLD || !socket) return;
     if (drivesItsVehicle(vehicleRoster_, playerGuid, activeMover())) {
-        // 0x006ef5a0 with no vehicle and seat 1 (next) or 0xff (previous).
+        // 0x00747fa0, then 0x006ef5a0 with no vehicle and seat 1 (next) or
+        // 0xff (previous).
+        askVehicleSeatChange();
         if (movementHandler_) movementHandler_->sendChangeSeatsOnControlledVehicle(0, next ? 1 : 0xff);
         return;
     }
@@ -1131,7 +1133,9 @@ void GameHandler::sendRequestVehicleSeatStep(bool next) {
 void GameHandler::sendRequestVehicleSwitchSeat(uint64_t vehicleGuid, uint8_t seat) {
     if (state != WorldState::IN_WORLD || !socket) return;
     if (drivesItsVehicle(vehicleRoster_, playerGuid, activeMover())) {
-        // 0x0074ca90 -> 0x0074bb30: the vehicle and the seat.
+        // 0x0074ca90: 0x00747fa0, then 0x0074bb30 with the vehicle and the
+        // seat.
+        askVehicleSeatChange();
         if (movementHandler_) movementHandler_->sendChangeSeatsOnControlledVehicle(vehicleGuid, seat);
         return;
     }
@@ -1193,14 +1197,39 @@ void GameHandler::requestVehicleAim(uint64_t unit, float pitch) {
     if (!overTime && row && (row->flags & vehicle::kVehicleFlagAimAngle)) fireVehicleAngleUpdate(pitch);
 }
 
+namespace {
+uint32_t seatClockMs() {
+    using namespace std::chrono;
+    return static_cast<uint32_t>(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+}
+}  // namespace
+
+void GameHandler::askVehicleSeatChange() {
+    // 0x00747fa0: the seated player's movement keys are let go and pressed
+    // again (0x005fbf10), and the seat change is marked asked (+0x10 0x8,
+    // +0x4c), which holds its mover (0x0074ba40).
+    if (vehicleRoster_.seatState(playerGuid) != 3) return;
+    vehicleRoster_.markSeatChangeAsked(playerGuid, seatClockMs());
+}
+
+bool GameHandler::moverHeldBySeat() const {
+    // 0x0074ba40 for the mover: its own seat, and the driver's - the player,
+    // where the mover is the vehicle it drives.
+    const uint64_t mover = activeMover();
+    if (mover == 0) return false;
+    const bool driven = drivesItsVehicle(vehicleRoster_, playerGuid, mover);
+    const uint8_t driverState = driven ? vehicleRoster_.seatState(playerGuid) : 0;
+    return vehicle::moverHeldBySeat(vehicleRoster_.seatState(mover), driverState,
+                                    driven && vehicleRoster_.seatChangeAsked(playerGuid, seatClockMs()));
+}
+
 void GameHandler::announceVehicleAim() {
     // 0x0074c5a0 for the mover, by its own row: whether the aim's angle
-    // (Flags 0x400) and power (0x800) are shown - neither while it is on its
-    // way into or out of a seat (0x0074ba40) - then the angle.
+    // (Flags 0x400) and power (0x800) are shown - neither while it may not
+    // move for its seat (0x0074ba40) - then the angle.
     const uint64_t mover = activeMover();
     const vehicle::VehicleRecord* row = vehicleRowOf(mover);
-    const uint8_t state = vehicleRoster_.seatState(mover);
-    const bool moving = state != 0 && state != 3;
+    const bool moving = moverHeldBySeat();
     const bool angle = !moving && row && (row->flags & vehicle::kVehicleFlagAimAngle);
     const bool power = !moving && row && (row->flags & vehicle::kVehicleFlagAimPower);
     fireAddonEvent("VEHICLE_ANGLE_SHOW", angle ? std::vector<std::string>{"1"} : std::vector<std::string>{});
@@ -2623,8 +2652,77 @@ void GameHandler::dismissCritter() {
     // alone so a refused dismiss does not leave the client thinking it worked.
 }
 
+namespace {
+uint64_t guidFieldOf(const Entity& e, UF low) {
+    const uint16_t idx = fieldIndex(low);
+    if (idx == 0xFFFF) return 0;
+    return e.getField(idx) | (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
+}
+}  // namespace
+
+uint32_t GameHandler::summonPropertiesFlagsOf(uint64_t unitGuid) {
+    // 0x0071d1f0: the creating spell's first SUMMON effect's (28)
+    // EffectMiscValueB, as a SummonProperties row; its Flags (+0x14).
+    auto unit = getEntityManager().getEntity(unitGuid);
+    const uint16_t bySpell = fieldIndex(UF::UNIT_CREATED_BY_SPELL);
+    const uint32_t spellId = unit && bySpell != 0xFFFF ? unit->getField(bySpell) : 0;
+    if (spellId == 0) return 0;
+    getSpellName(spellId);  // fills the cache
+    const auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return 0;
+    for (int k = 0; k < 3; ++k) {
+        if (it->second.effectIds[k] != 28) continue;
+        auto* am = services_.assetManager;
+        auto props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
+        const int32_t row = props && props->getFieldCount() > 5 ? props->findRecordById(it->second.effectMiscValuesB[k]) : -1;
+        return row >= 0 ? props->getUInt32(static_cast<uint32_t>(row), 5) : 0;
+    }
+    return 0;
+}
+
 void GameHandler::dismissPet() {
-    if (spellHandler_) spellHandler_->dismissPet();
+    // CGPetInfo::PetDismiss (0x005d46f0).
+    if (state != WorldState::IN_WORLD || !socket) return;
+    pet::DismissContext c;
+    auto player = getEntityManager().getEntity(playerGuid);
+    if (player) {
+        c.player = playerGuid;
+        c.playerCharmedBy = guidFieldOf(*player, UF::UNIT_FIELD_CHARMEDBY);
+        const uint16_t farsightIdx = fieldIndex(UF::PLAYER_FARSIGHT);
+        if (farsightIdx != 0xFFFF) c.farsight = guidFieldOf(*player, UF::PLAYER_FARSIGHT);
+    }
+    c.pet = petGuid_;
+    if (auto pet = petGuid_ ? getEntityManager().getEntity(petGuid_) : nullptr) {
+        c.petInView = true;
+        const uint64_t charmedBy = guidFieldOf(*pet, UF::UNIT_FIELD_CHARMEDBY);
+        c.petOwner = charmedBy != 0 ? charmedBy : guidFieldOf(*pet, UF::UNIT_FIELD_SUMMONEDBY_LO);
+        if (auto u = std::dynamic_pointer_cast<Unit>(pet)) c.petUnitFlags = u->getUnitFlags();
+    }
+    c.mover = activeMover();
+    if (const auto p = vehicleRoster_.passenger(playerGuid)) c.playerTransport = p->vehicleGuid;
+    c.moverIsVehicle = c.mover != 0 && vehicleRoster_.vehicleId(c.mover) != 0;
+    if (const vehicle::SeatRecord* seat = vehicleRoster_.seatOf(playerGuid)) {
+        c.seatKnown = true;
+        c.seatFlags = seat->flags;
+    }
+    if (pet::canDismissPet(c) && !(c.pet == c.mover && c.playerTransport == c.pet))
+        c.summonPropertiesFlags = summonPropertiesFlagsOf(c.pet);
+    switch (pet::dismissAction(c)) {
+        case pet::DismissAction::DismissControlledVehicle:
+            // The seat change asked first (0x00747fa0), then the vehicle's
+            // own request (0x0074bb20 -> 0x006ef540).
+            askVehicleSeatChange();
+            if (movementHandler_) movementHandler_->sendDismissControlledVehicle();
+            break;
+        case pet::DismissAction::PetAction:
+            // CMSG_PET_ACTION, COMMAND_ABANDON at no target, and
+            // PET_DISMISS_START with 10000 (event 0x176).
+            socket->send(PetActionPacket::build(petGuid_, pet::packPetAction(pet::ActionType::Command, pet::kAbandon), 0));
+            fireAddonEvent("PET_DISMISS_START", {"10000"});
+            break;
+        case pet::DismissAction::None:
+            break;
+    }
 }
 
 void GameHandler::togglePetSpellAutocast(uint32_t spellId) {

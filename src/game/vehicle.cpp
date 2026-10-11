@@ -115,8 +115,18 @@ std::optional<Passenger> VehicleRoster::passenger(uint64_t guid) const {
 }
 
 void VehicleRoster::setSeatState(uint64_t guid, uint8_t state) {
+    // 0x007489c0 takes back an asked seat change (+0x10 0x8).
+    seatChangeAskedMs_.erase(guid);
     if (state == 0) seatStates_.erase(guid);
     else seatStates_[guid] = state;
+}
+
+void VehicleRoster::markSeatChangeAsked(uint64_t guid, uint32_t nowMs) { seatChangeAskedMs_[guid] = nowMs; }
+
+bool VehicleRoster::seatChangeAsked(uint64_t guid, uint32_t nowMs) const {
+    // 0x0074af70 lets it go once 2000 ms have passed.
+    const auto it = seatChangeAskedMs_.find(guid);
+    return it != seatChangeAskedMs_.end() && static_cast<int32_t>(nowMs - it->second) < 2000;
 }
 
 uint8_t VehicleRoster::seatState(uint64_t guid) const {
@@ -240,6 +250,7 @@ void VehicleRoster::forget(uint64_t guid) {
     pitches_.erase(guid);
     changes_.erase(guid);
     seatStates_.erase(guid);
+    seatChangeAskedMs_.erase(guid);
 }
 
 void VehicleRoster::clear() {
@@ -249,6 +260,7 @@ void VehicleRoster::clear() {
     pitches_.clear();
     changes_.clear();
     seatStates_.clear();
+    seatChangeAskedMs_.clear();
 }
 
 }  // namespace wowee::game::vehicle

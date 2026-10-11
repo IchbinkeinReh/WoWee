@@ -74,3 +74,60 @@ TEST_CASE("an action-bar reference to a pet slot reads only its spells (0x005a80
     REQUIRE(petSlotSpell(packPetAction(ActionType::Command, kAttack)) == 0u);
     REQUIRE(petSlotSpell(packPetAction(ActionType::Reaction, kDefensive)) == 0u);
 }
+
+namespace {
+DismissContext ownPetOnFoot() {
+    DismissContext c;
+    c.player = 0x11;
+    c.pet = 0xF140000000000022ull;
+    c.petInView = true;
+    c.petOwner = c.player;
+    c.mover = c.player;
+    return c;
+}
+}  // namespace
+
+TEST_CASE("PetDismiss sends the pet away as 0x005d46f0 does", "[pet]") {
+    DismissContext c = ownPetOnFoot();
+    CHECK(dismissAction(c) == DismissAction::PetAction);
+    // A summon whose SummonProperties Flags have 0x20 stays.
+    c.summonPropertiesFlags = 0x20;
+    CHECK(dismissAction(c) == DismissAction::None);
+    c = ownPetOnFoot();
+    // Stunned, fleeing or confused (0x005d3310): nothing.
+    c.petUnitFlags = 0x40000;
+    CHECK(dismissAction(c) == DismissAction::None);
+    c = ownPetOnFoot();
+    // Out of view, or another's: nothing.
+    c.petInView = false;
+    CHECK(dismissAction(c) == DismissAction::None);
+    c = ownPetOnFoot();
+    c.petOwner = 0x33;
+    CHECK(dismissAction(c) == DismissAction::None);
+    c = ownPetOnFoot();
+    // The player charmed: nothing.
+    c.playerCharmedBy = 0x44;
+    CHECK(dismissAction(c) == DismissAction::None);
+}
+
+TEST_CASE("PetDismiss from a driven vehicle", "[pet][vehicle]") {
+    constexpr uint64_t kVehicle = 0xF150001234000056ull;
+    // The driven vehicle is not the pet: the camera looks through the
+    // vehicle, so 0x005d3e80 finds no pet to send away.
+    DismissContext c = ownPetOnFoot();
+    c.mover = kVehicle;
+    c.farsight = kVehicle;
+    c.playerTransport = kVehicle;
+    CHECK(dismissAction(c) == DismissAction::None);
+    // Without the farsight, the fall-through sends the pet away.
+    c.farsight = 0;
+    CHECK(dismissAction(c) == DismissAction::PetAction);
+    // The vehicle is the pet: by its seat's Flags 0x2000000.
+    c.pet = kVehicle;
+    c.farsight = kVehicle;
+    c.moverIsVehicle = true;
+    c.seatKnown = true;
+    CHECK(dismissAction(c) == DismissAction::None);
+    c.seatFlags = 0x2000000;
+    CHECK(dismissAction(c) == DismissAction::DismissControlledVehicle);
+}

@@ -2939,6 +2939,8 @@ void Application::applyServerMovementState(float deltaTime) {
         // The mover's flags2 hold its strafe and jump keys.
         const auto held = game::vehicle::moverKeyRestrictions(gameHandler->getMovementInfo().flags2);
         renderer->getCameraController()->setMoverKeyRestrictions(held.noStrafe, held.noJump);
+        // A mover held for its seat moves by no key (0x0074ba40).
+        renderer->getCameraController()->setMoverHeld(gameHandler->moverHeldBySeat());
         renderer->getCameraController()->setGravityDisabled(gameHandler->isGravityDisabled());
         renderer->getCameraController()->setFeatherFallActive(gameHandler->isFeatherFalling());
         renderer->getCameraController()->setWaterWalkActive(gameHandler->isWaterWalking());

@@ -3240,15 +3240,6 @@ void SpellHandler::sendPetAction(uint32_t action, uint64_t targetGuid) {
               " action=0x", action, " target=0x", targetGuid, std::dec);
 }
 
-void SpellHandler::dismissPet() {
-    if (owner_.petGuidRef() == 0 || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    // Dismiss is COMMAND_ABANDON. Packing action 0 here sent COMMAND_STAY, so
-    // the pet planted itself instead of leaving.
-    auto packet = PetActionPacket::build(
-        owner_.petGuidRef(), pet::packPetAction(pet::ActionType::Command, pet::kAbandon));
-    owner_.getSocket()->send(packet);
-}
-
 void SpellHandler::togglePetSpellAutocast(uint32_t spellId) {
     if (owner_.petGuidRef() == 0 || spellId == 0 || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     bool currentlyOn = owner_.petAutocastSpellsRef().count(spellId) != 0;

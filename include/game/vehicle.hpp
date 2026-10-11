@@ -203,6 +203,11 @@ public:
     /// drawing side steps it; and the tables the seats are read from.
     void setSeatState(uint64_t guid, uint8_t state);
     [[nodiscard]] uint8_t seatState(uint64_t guid) const;
+    /// A seated unit asked its vehicle for a seat change (0x00747fa0, its
+    /// passenger component's +0x10 0x8 and +0x4c): asked until its seat
+    /// state next changes (0x007489c0) or 2 s pass (0x0074af70).
+    void markSeatChangeAsked(uint64_t guid, uint32_t nowMs);
+    [[nodiscard]] bool seatChangeAsked(uint64_t guid, uint32_t nowMs) const;
     void setTables(const VehicleTables* tables) { tables_ = tables; }
     [[nodiscard]] const VehicleTables* tables() const { return tables_; }
     /// The VehicleSeat row of the unit's seat, whatever its state
@@ -242,6 +247,7 @@ private:
     std::unordered_map<uint64_t, float> pitches_;
     std::unordered_map<uint64_t, SeatChange> changes_;
     std::unordered_map<uint64_t, uint8_t> seatStates_;
+    std::unordered_map<uint64_t, uint32_t> seatChangeAskedMs_;
     const VehicleTables* tables_ = nullptr;
 };
 

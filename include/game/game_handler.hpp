@@ -3237,6 +3237,14 @@ public:
     const vehicle::VehicleRecord* vehicleRowOf(uint64_t guid) const;
     void requestVehicleAim(uint64_t unit, float pitch);
     void announceVehicleAim();
+    /// 0x00747fa0, before the driver asks for a seat change: the seat
+    /// change is marked asked for the seated player.
+    void askVehicleSeatChange();
+    /// 0x0074ba40 for the active mover: its seat - or its driver's - is on
+    /// the way, or its driver asked for a seat change.
+    [[nodiscard]] bool moverHeldBySeat() const;
+    /// 0x0071d1f0: the SummonProperties Flags of what made the unit.
+    [[nodiscard]] uint32_t summonPropertiesFlagsOf(uint64_t unitGuid);
     float vehicleAimPower() const { return vehicleAimPower_; }
     void setVehicleAimPower(float power) { vehicleAimPower_ = vehicle::clampAimPower(power); }
     /// Which units are vehicles and who sits in them (game/vehicle.hpp).

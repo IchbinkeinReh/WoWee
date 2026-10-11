@@ -3139,8 +3139,11 @@ void CameraController::update(float deltaTime) {
         }
     }
 
+    // A mover that may not move (0x005fbbc0 with 0x005fac90 false) stops its
+    // autorun, and its keys start nothing.
+    if (moverHeld_) autoRunning = false;
     // When the server has rooted the player, suppress all horizontal movement input.
-    const bool movBlocked = movementRooted_;
+    const bool movBlocked = movementRooted_ || moverHeld_;
     // Auto-follow uses run speed (same as auto-run), not walk speed
     if (autoFollowMove) autoRunning = true;
     bool nowForward = !movBlocked && (keyW || mouseAutorun || autoRunning);
@@ -3167,6 +3170,9 @@ void CameraController::update(float deltaTime) {
     // strafe), and 0x2 the jump (0x009883f0 starts none).
     if (moverNoStrafe_) nowStrafeLeft = nowStrafeRight = false;
     if (moverNoJump_) nowJump = false;
+    // Nor a turn or a jump for a held mover (0x005fa0d0, 0x005fbf80 ->
+    // 0x0074ba40).
+    if (moverHeld_) nowTurnLeft = nowTurnRight = nowJump = false;
 
     // Keyboard turning updates camera yaw (character follows yaw in renderer).
     // Use server turn rate (rad/s) when set; otherwise fall back to WOW_TURN_SPEED (deg/s).

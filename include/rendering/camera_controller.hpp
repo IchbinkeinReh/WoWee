@@ -261,6 +261,9 @@ public:
     /// The mover's movement flags2 0x1 and 0x2: no strafing - nor rising or
     /// sinking in water and air (0x00988b00, 0x009898e0) - and no jump
     /// (0x009883f0).
+    /// The mover may not move (0x005fa060 -> 0x0074ba40): its keys start
+    /// nothing - no step, turn or jump - and autorun ends (0x005fbbc0).
+    void setMoverHeld(bool held) { moverHeld_ = held; }
     void setMoverKeyRestrictions(bool noStrafe, bool noJump) {
         moverNoStrafe_ = noStrafe;
         moverNoJump_ = noJump;
@@ -885,6 +888,7 @@ private:
     bool movementRooted_ = false;
     bool moverNoStrafe_ = false;  ///< the mover's flags2 0x1
     bool moverNoJump_ = false;    ///< the mover's flags2 0x2
+    bool moverHeld_ = false;      ///< 0x0074ba40: the mover may not move
     // Server-driven gravity disable (levitate/hover): skip gravity accumulation.
     bool gravityDisabled_ = false;
     // Server-driven feather fall: cap downward velocity to slow-fall terminal.

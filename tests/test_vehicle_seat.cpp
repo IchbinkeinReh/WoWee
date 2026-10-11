@@ -143,3 +143,18 @@ TEST_CASE("a seat's ride animation needs Flags 0x2 (0x00747b20)", "[vehicle]") {
     CHECK(loopOnly->loop == 92u);
     CHECK_FALSE(vs::rideAnimation(gv::kSeatFlagHasRideAnim, -1, -1).has_value());
 }
+
+TEST_CASE("an asked seat change lasts until the seat state changes or 2 s pass", "[vehicle]") {
+    gv::VehicleRoster roster;
+    constexpr uint64_t kPlayer = 0x11;
+    roster.setSeatState(kPlayer, 3);
+    CHECK_FALSE(roster.seatChangeAsked(kPlayer, 1000));
+    roster.markSeatChangeAsked(kPlayer, 1000);
+    CHECK(roster.seatChangeAsked(kPlayer, 2999));
+    // 0x0074af70: gone at 2000 ms.
+    CHECK_FALSE(roster.seatChangeAsked(kPlayer, 3000));
+    // 0x007489c0: gone at the next state.
+    roster.markSeatChangeAsked(kPlayer, 5000);
+    roster.setSeatState(kPlayer, 5);
+    CHECK_FALSE(roster.seatChangeAsked(kPlayer, 5001));
+}

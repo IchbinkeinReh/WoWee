@@ -2747,11 +2747,9 @@ void registerActionLuaAPI(lua_State* L) {
             if (spellId != 0) gh->togglePetSpellAutocast(spellId);
             return 0;
         }},
+                // CGPetInfo::PetDismiss (0x005d46f0).
                 {"PetDismiss", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            if (gh && gh->hasPet())
-                gh->sendPetAction(
-                    game::pet::packPetAction(game::pet::ActionType::Command, game::pet::kAbandon), 0);
+            if (auto* gh = getGameHandler(L)) gh->dismissPet();
             return 0;
         }},
                 // The other end of the ABANDON_PET dialog, which the pet's
