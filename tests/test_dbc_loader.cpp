@@ -112,6 +112,35 @@ TEST_CASE("DBCFile getFloat", "[dbc]") {
     REQUIRE(dbc.getFloat(0, 1) == Catch::Approx(3.14f));
 }
 
+TEST_CASE("DBCFile reads no field past the end of its row", "[dbc]") {
+    // Two 6-byte rows of 3 columns (a word and two bytes, as a file with
+    // byte fields has): column 2 would start at byte 8, past the row.
+    std::vector<uint8_t> data = {'W', 'D', 'B', 'C'};
+    auto writeU32 = [&](uint32_t v) {
+        for (int i = 0; i < 4; ++i) data.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
+    };
+    writeU32(2);  // records
+    writeU32(3);  // fields
+    writeU32(6);  // record size
+    writeU32(1);  // string block
+    writeU32(0x11111111);
+    data.push_back(0xAA);
+    data.push_back(0xBB);
+    writeU32(0x22222222);
+    data.push_back(0xCC);
+    data.push_back(0xDD);
+    data.push_back(0);
+
+    DBCFile dbc;
+    REQUIRE(dbc.load(data));
+    CHECK(dbc.getUInt32(0, 0) == 0x11111111u);
+    CHECK(dbc.getUInt32(1, 0) == 0x22222222u);
+    CHECK(dbc.getUInt32(0, 1) == 0u);
+    CHECK(dbc.getUInt32(0, 2) == 0u);
+    CHECK(dbc.getUInt32(1, 2) == 0u);
+    CHECK(dbc.getFloat(1, 2) == 0.0f);
+}
+
 TEST_CASE("DBCFile getString", "[dbc]") {
     std::string strings;
     strings += '\0';

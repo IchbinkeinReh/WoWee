@@ -254,7 +254,10 @@ const uint8_t* DBCFile::getRecord(uint32_t index) const {
 }
 
 uint32_t DBCFile::getUInt32(uint32_t recordIndex, uint32_t fieldIndex) const {
-    if (!loaded || recordIndex >= recordCount || fieldIndex >= fieldCount) {
+    // The record bounds too: a file with byte fields (SpellChainEffects,
+    // 177-byte rows of 48 columns) has fewer whole words than columns.
+    if (!loaded || recordIndex >= recordCount || fieldIndex >= fieldCount ||
+        (fieldIndex + 1) * kFieldBytes > recordSize) {
         return 0;
     }
 
@@ -273,7 +276,10 @@ int32_t DBCFile::getInt32(uint32_t recordIndex, uint32_t fieldIndex) const {
 }
 
 float DBCFile::getFloat(uint32_t recordIndex, uint32_t fieldIndex) const {
-    if (!loaded || recordIndex >= recordCount || fieldIndex >= fieldCount) {
+    // The record bounds too: a file with byte fields (SpellChainEffects,
+    // 177-byte rows of 48 columns) has fewer whole words than columns.
+    if (!loaded || recordIndex >= recordCount || fieldIndex >= fieldCount ||
+        (fieldIndex + 1) * kFieldBytes > recordSize) {
         return 0.0f;
     }
 
