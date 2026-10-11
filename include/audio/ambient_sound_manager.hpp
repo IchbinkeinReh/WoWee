@@ -5,6 +5,7 @@
 #include <string>
 #include <cstdint>
 #include <glm/vec3.hpp>
+#include "audio/ambience_loops.hpp"
 
 namespace wowee {
 namespace pipeline {
@@ -21,6 +22,9 @@ public:
     // Initialization
     bool initialize(pipeline::AssetManager* assets);
     void shutdown();
+    /// Leaving the world: the ambience stops at once and forgets the place
+    /// it was for (0x00409550 -> 0x004c85f0).
+    void stopAll();
 
     // Main update loop - called from renderer
     void update(float deltaTime, const glm::vec3& cameraPos, bool isIndoor, bool isSwimming = false, bool isBlacksmith = false);
@@ -201,6 +205,9 @@ private:
         float startTime;
     };
     std::vector<ActiveSound> activeSounds_;
+    /// The ambience loops still running, for stopAll().
+    AmbienceLoops loops_;
+    void playAmbienceLoop(const std::vector<uint8_t>& data, float volume);
 
     // Helper methods
     void updatePositionalEmitters(float deltaTime, const glm::vec3& cameraPos);

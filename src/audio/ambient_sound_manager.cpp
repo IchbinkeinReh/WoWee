@@ -254,9 +254,31 @@ bool AmbientSoundManager::initialize(pipeline::AssetManager* assets) {
 }
 
 void AmbientSoundManager::shutdown() {
+    stopAll();
     emitters_.clear();
     activeSounds_.clear();
     initialized_ = false;
+}
+
+void AmbientSoundManager::playAmbienceLoop(const std::vector<uint8_t>& data, float volume) {
+    loops_.add(AudioEngine::instance().playSound2DStoppable(data, volume));
+}
+
+void AmbientSoundManager::stopAll() {
+    // 0x004c85f0 -> 0x004c6450(1): the ambience's channels, at once.
+    for (uint32_t handle : loops_.takeAll()) AudioEngine::instance().stopSound(handle);
+    // And the place it was for, so the next world starts its own.
+    emitters_.clear();
+    activeSounds_.clear();
+    currentWeather_ = WeatherType::NONE;
+    currentZoneId_ = 0;
+    currentZone_ = ZoneType::NONE;
+    currentCity_ = CityType::NONE;
+    ambienceOverridden_ = false;
+    wasIndoor_ = wasBlacksmith_ = wasSwimming_ = false;
+    birdTimer_ = cricketTimer_ = 0.0f;
+    windLoopTime_ = blacksmithLoopTime_ = weatherLoopTime_ = oceanLoopTime_ = 0.0f;
+    zoneLoopTime_ = cityLoopTime_ = bellTollTime_ = 0.0f;
 }
 
 bool AmbientSoundManager::loadSound(const std::string& path, AmbientSample& sample, pipeline::AssetManager* assets) {
@@ -471,7 +493,7 @@ void AmbientSoundManager::updateBlacksmithAmbience(float deltaTime) {
         // Play blacksmith ambience loop every 15 seconds
         if (blacksmithLoopTime_ >= 15.0f) {
             float volume = 0.6f * volumeScale_;  // Ambient loop volume
-            AudioEngine::instance().playSound2D(blacksmithSounds_[0].data, volume, 1.0f);
+            playAmbienceLoop(blacksmithSounds_[0].data, volume);
             LOG_INFO("Playing blacksmith ambience loop");
             blacksmithLoopTime_ = 0.0f;
         }
@@ -501,7 +523,7 @@ void AmbientSoundManager::updateWindAmbience(float deltaTime, bool isIndoor) {
             // Play every 15 seconds for ambient atmosphere
             if (windLoopTime_ >= 15.0f) {
                 float volume = 0.5f * volumeScale_;
-                AudioEngine::instance().playSound2D(tavernSounds_[0].data, volume, 1.0f);
+                playAmbienceLoop(tavernSounds_[0].data, volume);
                 LOG_INFO("Playing tavern ambience (glasses clinking)");
                 windLoopTime_ = 0.0f;
             }
@@ -519,7 +541,7 @@ void AmbientSoundManager::updateWindAmbience(float deltaTime, bool isIndoor) {
             windLoopTime_ += deltaTime;
             if (windLoopTime_ >= 30.0f) {
                 float volume = 0.3f * volumeScale_;
-                AudioEngine::instance().playSound2D(windSounds_[0].data, volume, 1.0f);
+                playAmbienceLoop(windSounds_[0].data, volume);
                 LOG_INFO("Playing outdoor ambience");
                 windLoopTime_ = 0.0f;
             }
@@ -718,7 +740,7 @@ void AmbientSoundManager::updateWeatherAmbience(float deltaTime, bool isIndoor) 
     if (weatherLibrary && !weatherLibrary->empty() && (*weatherLibrary)[0].loaded) {
         if (weatherLoopTime_ >= loopInterval) {
             float volume = 0.4f * volumeScale_;  // Weather ambience at moderate volume
-            AudioEngine::instance().playSound2D((*weatherLibrary)[0].data, volume, 1.0f);
+            playAmbienceLoop((*weatherLibrary)[0].data, volume);
             LOG_INFO("Playing weather ambience: type ", static_cast<int>(currentWeather_));
             weatherLoopTime_ = 0.0f;
         }
@@ -742,7 +764,7 @@ void AmbientSoundManager::updateWaterAmbience(float deltaTime, bool isSwimming) 
             // Play every 18 seconds for underwater ambience
             if (oceanLoopTime_ >= 18.0f) {
                 float volume = 0.5f * volumeScale_;
-                AudioEngine::instance().playSound2D(underwaterSounds_[0].data, volume, 1.0f);
+                playAmbienceLoop(underwaterSounds_[0].data, volume);
                 LOG_INFO("Playing underwater ambience");
                 oceanLoopTime_ = 0.0f;
             }
@@ -803,7 +825,7 @@ void AmbientSoundManager::updateZoneAmbience(float deltaTime, bool isIndoor) {
         // Play every 30 seconds for zone ambience (longer intervals for background atmosphere)
         if (zoneLoopTime_ >= 30.0f) {
             float volume = 0.35f * volumeScale_;  // Zone ambience at moderate-low volume
-            AudioEngine::instance().playSound2D((*zoneLibrary)[0].data, volume, 1.0f);
+            playAmbienceLoop((*zoneLibrary)[0].data, volume);
             LOG_INFO("Playing zone ambience: type ", static_cast<int>(currentZone_),
                      " (", isDay ? "day" : "night", ")");
             zoneLoopTime_ = 0.0f;
@@ -849,7 +871,7 @@ void AmbientSoundManager::updateCityAmbience(float deltaTime) {
         // Play every 20 seconds for city ambience (moderate intervals for urban atmosphere)
         if (cityLoopTime_ >= 20.0f) {
             float volume = 0.4f * volumeScale_;  // City ambience at moderate volume
-            AudioEngine::instance().playSound2D((*cityLibrary)[0].data, volume, 1.0f);
+            playAmbienceLoop((*cityLibrary)[0].data, volume);
             LOG_INFO("Playing city ambience: type ", static_cast<int>(currentCity_),
                      " (", isDay ? "day" : "night", ")");
             cityLoopTime_ = 0.0f;

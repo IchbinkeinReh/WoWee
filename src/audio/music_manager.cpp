@@ -208,6 +208,9 @@ void MusicManager::stopMusic(float fadeMs) {
         fadeOutStartVolume = effectiveMusicVolume();
     } else {
         AudioEngine::instance().stopMusic();
+        // A fade-out cut short leaves the volume where it got to; the next
+        // track starts from the player's own.
+        if (fadingOut) AudioEngine::instance().setMusicVolume(effectiveMusicVolume());
         playing = false;
         fadingOut = false;
         currentTrack.clear();

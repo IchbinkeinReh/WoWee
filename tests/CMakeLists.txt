@@ -712,6 +712,12 @@ wowee_add_test(test_shapeshift_forms
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/game/shapeshift_forms.cpp)
 
+# ── test_world_leave_sound ───────────────────────────────────
+# The ambience loops leaving the world stops.
+wowee_add_test(test_world_leave_sound
+    SOURCES test_world_leave_sound.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_tile_size_agreement ─────────────────────────────────
 # The ADT tile size, which three headers each declared and two files spelled
 # with two fewer decimals. Pins the value against its own arithmetic.

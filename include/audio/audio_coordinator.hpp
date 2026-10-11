@@ -69,6 +69,14 @@ public:
     /// Shutdown all audio managers and engine.
     void shutdown();
 
+    /// The world unloads - a logout, the client quitting from the world.
+    ///
+    /// What the client's unload (0x00409550) stops: the zone music's two
+    /// channels and the script music (0x004c93b0), and the ambience's
+    /// channels (0x004c85f0), all at once. The zone they were for is
+    /// forgotten too, so the next world entry starts its music afresh.
+    void leaveWorld();
+
     /// Per-frame zone detection, music transitions, and ambient weather sync.
     /// Called from Renderer::update() with a pre-filled context.
     void updateZoneAudio(const ZoneAudioContext& ctx);

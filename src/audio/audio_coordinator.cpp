@@ -74,6 +74,28 @@ void AudioCoordinator::shutdown() {
     LOG_INFO("AudioCoordinator shutdown complete");
 }
 
+void AudioCoordinator::leaveWorld() {
+    // 0x004c93b0: the zone music's channels (0x004c6450(1) on 0xb4ac90) and
+    // the script music SMSG_PLAY_MUSIC and PlayMusic start (0xb4ac3c), with
+    // its slot (3) cleared. Here they share the one music manager.
+    if (musicManager_) musicManager_->stopMusic(0.0f);
+    // 0x004c85f0: the ambience's channels (0xb4ac50) - the zone's and the
+    // screen effect's loop.
+    if (screenEffectAmbienceHandle_ != 0) AudioEngine::instance().stopSound(screenEffectAmbienceHandle_);
+    screenEffectAmbienceHandle_ = 0;
+    if (ambientSoundManager_) ambientSoundManager_->stopAll();
+    // The slots the next world fills again.
+    screenEffectSounds_ = {};
+    screenEffectAmbiencePlaying_.clear();
+    screenEffectMusicPlaying_.clear();
+    currentZoneId_ = 0;
+    currentZoneName_.clear();
+    inTavern_ = false;
+    inBlacksmith_ = false;
+    musicSwitchCooldown_ = 0.0f;
+    LOG_INFO("Left the world: music and ambience stopped");
+}
+
 void AudioCoordinator::playZoneMusic(const std::string& music) {
     if (music.empty() || !musicManager_) return;
     if (music.rfind("file:", 0) == 0) {

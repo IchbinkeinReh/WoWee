@@ -2598,9 +2598,8 @@ void Application::setState(AppState newState) {
                 // leave. Without this the countdown ran out and nothing happened.
                 gameHandler->setLogoutCompleteCallback([this](bool exiting) {
                     if (exiting) {
-                        if (auto* ac = getAudioCoordinator()) {
-                            if (auto* music = ac->getMusicManager()) music->stopMusic(0.0f);
-                        }
+                        // 0x00409550: the world's music and ambience stop.
+                        if (auto* ac = getAudioCoordinator()) ac->leaveWorld();
                         LOG_INFO("Logout complete - quitting");
                         if (window) window->setShouldClose(true);
                     } else {
@@ -2834,6 +2833,11 @@ void Application::performLogoutToLogin() {
         gameHandler->disconnect();
     }
 
+    // The world's sound goes with it (0x00409550): zone and script music,
+    // and the ambience. Nothing updates them past this point, so a loop
+    // left running here played on over the login screen.
+    if (audioCoordinator_) audioCoordinator_->leaveWorld();
+
     // --- Per-session flags ---
     npcsSpawned = false;
     playerCharacterSpawned = false;
@@ -2889,9 +2893,6 @@ void Application::performLogoutToLogin() {
         }
         if (auto* ac = renderer->getAnimationController()) ac->clearMount();
         renderer->setCharacterFollow(0);
-        if (auto* music = audioCoordinator_ ? audioCoordinator_->getMusicManager() : nullptr) {
-            music->stopMusic(0.0f);
-        }
     }
 
     // Clear stale realm/character selection so switching servers starts fresh
