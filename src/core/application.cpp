@@ -1,5 +1,6 @@
 #include "core/application.hpp"
 #include "game/vehicle_camera.hpp"
+#include "game/vehicle_mover.hpp"
 #include "core/frame_pacer.hpp"
 #include "core/env_flag.hpp"
 #include "core/character_paths.hpp"
@@ -2935,6 +2936,9 @@ void Application::applyServerMovementState(float deltaTime) {
         renderer->getCameraController()->setRunBackSpeedOverride(speeds.runBack);
         renderer->getCameraController()->setTurnRateOverride(speeds.turnRate);
         renderer->getCameraController()->setMovementRooted(gameHandler->isPlayerRooted());
+        // The mover's flags2 hold its strafe and jump keys.
+        const auto held = game::vehicle::moverKeyRestrictions(gameHandler->getMovementInfo().flags2);
+        renderer->getCameraController()->setMoverKeyRestrictions(held.noStrafe, held.noJump);
         renderer->getCameraController()->setGravityDisabled(gameHandler->isGravityDisabled());
         renderer->getCameraController()->setFeatherFallActive(gameHandler->isFeatherFalling());
         renderer->getCameraController()->setWaterWalkActive(gameHandler->isWaterWalking());

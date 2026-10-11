@@ -85,4 +85,15 @@ inline constexpr uint32_t kPitchStartHoldMs = 100;
     return true;
 }
 
+/// The keys the mover's movement flags2 hold: 0x1 starts no strafe
+/// (0x00988b00) and no rise or dive in water or air (0x009898e0); 0x2 starts
+/// no jump (0x009883f0).
+struct MoverKeyRestrictions {
+    bool noStrafe = false;
+    bool noJump = false;
+};
+[[nodiscard]] inline MoverKeyRestrictions moverKeyRestrictions(uint32_t flags2) {
+    return {.noStrafe = (flags2 & 0x1u) != 0, .noJump = (flags2 & 0x2u) != 0};
+}
+
 }  // namespace wowee::game::vehicle

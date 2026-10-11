@@ -68,3 +68,14 @@ TEST_CASE("the aim keys net out, and an unmoved stop sends nothing", "[vehicle]"
     CHECK_FALSE(pitchUnchangedSinceSent(1.0f, 1.2f, 0.2f, 0.2f, true));
     CHECK_FALSE(pitchUnchangedSinceSent(1.0f, 1.0f, 0.2f, 0.4f, true));
 }
+
+TEST_CASE("the mover's flags2 hold its strafe and jump keys", "[vehicle]") {
+    CHECK_FALSE(moverKeyRestrictions(0).noStrafe);
+    CHECK_FALSE(moverKeyRestrictions(0).noJump);
+    CHECK(moverKeyRestrictions(0x1).noStrafe);
+    CHECK_FALSE(moverKeyRestrictions(0x1).noJump);
+    CHECK(moverKeyRestrictions(0x2).noJump);
+    CHECK_FALSE(moverKeyRestrictions(0x2).noStrafe);
+    // Flags2 0x10 (pitches over time) holds neither.
+    CHECK_FALSE(moverKeyRestrictions(0x10).noStrafe);
+}

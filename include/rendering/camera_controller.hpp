@@ -258,6 +258,13 @@ public:
     [[nodiscard]] bool isMouseSteering() const { return rightMouseDown || steering_; }
     void setMovementRooted(bool rooted) { movementRooted_ = rooted; }
     [[nodiscard]] bool isMovementRooted() const { return movementRooted_; }
+    /// The mover's movement flags2 0x1 and 0x2: no strafing - nor rising or
+    /// sinking in water and air (0x00988b00, 0x009898e0) - and no jump
+    /// (0x009883f0).
+    void setMoverKeyRestrictions(bool noStrafe, bool noJump) {
+        moverNoStrafe_ = noStrafe;
+        moverNoJump_ = noJump;
+    }
     void setGravityDisabled(bool disabled) { gravityDisabled_ = disabled; }
     void setFeatherFallActive(bool active) { featherFallActive_ = active; }
     void setWaterWalkActive(bool active) { waterWalkActive_ = active; }
@@ -410,6 +417,7 @@ private:
         bool nowJump = false;
         bool spaceHeld = false;       ///< held, not pressed: rising in water and in flight
         bool xDown = false;
+        bool noAscendDescend = false;  ///< flags2 0x1: no rising or sinking (0x009898e0)
         bool uiWantsKeyboard = false;
     };
 
@@ -875,6 +883,8 @@ private:
     float turnRateOverride_ = 0.0f;  // rad/s; 0 = WOW_TURN_SPEED default (π rad/s)
     // Server-driven root state: when true, block all horizontal movement input.
     bool movementRooted_ = false;
+    bool moverNoStrafe_ = false;  ///< the mover's flags2 0x1
+    bool moverNoJump_ = false;    ///< the mover's flags2 0x2
     // Server-driven gravity disable (levitate/hover): skip gravity accumulation.
     bool gravityDisabled_ = false;
     // Server-driven feather fall: cap downward velocity to slow-fall terminal.

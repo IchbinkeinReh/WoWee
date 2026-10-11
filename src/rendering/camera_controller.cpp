@@ -540,9 +540,10 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         }
 
         // Spacebar = swim up, X = swim down (both continuous, not a jump)
-        bool diveKey = f.xDown;
+        // Flags2 0x1 holds the rise and the dive as well (0x009898e0).
+        bool diveKey = f.xDown && !f.noAscendDescend;
         bool diveIntent = diveKey || (f.nowForward && (f.forward3D.z < -0.28f));
-        if (f.spaceHeld) {
+        if (f.spaceHeld && !f.noAscendDescend) {
             verticalVelocity = SWIM_BUOYANCY;
         } else if (diveKey) {
             verticalVelocity = -SWIM_BUOYANCY;
@@ -735,8 +736,9 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             if (f.nowStrafeRight) flyMove -= f.right;
             // Space = ascend, X = descend while airborne (works on foot too,
             // e.g. .gm fly, not just on a flying mount).
-            bool flyDescend = !f.uiWantsKeyboard && f.xDown;
-            if (f.spaceHeld)     flyMove.z += 1.0f;
+            // Flags2 0x1 holds both (0x009898e0).
+            bool flyDescend = !f.uiWantsKeyboard && f.xDown && !f.noAscendDescend;
+            if (f.spaceHeld && !f.noAscendDescend) flyMove.z += 1.0f;
             if (flyDescend)      flyMove.z -= 1.0f;
             float flyMoveLenSq = glm::dot(flyMove, flyMove);
             if (flyMoveLenSq > 1e-6f) {
@@ -3161,6 +3163,10 @@ void CameraController::update(float deltaTime) {
         nowStrafeLeft = !movBlocked && (keyA || keyQ);
         nowStrafeRight = !movBlocked && (keyD || keyE);
     }
+    // The mover's flags2 0x1 holds the strafe keys (0x00988b00 starts no
+    // strafe), and 0x2 the jump (0x009883f0 starts none).
+    if (moverNoStrafe_) nowStrafeLeft = nowStrafeRight = false;
+    if (moverNoJump_) nowJump = false;
 
     // Keyboard turning updates camera yaw (character follows yaw in renderer).
     // Use server turn rate (rad/s) when set; otherwise fall back to WOW_TURN_SPEED (deg/s).
@@ -3373,6 +3379,7 @@ void CameraController::update(float deltaTime) {
     f.nowJump = nowJump;
     f.spaceHeld = spaceHeld;
     f.xDown = xDown;
+    f.noAscendDescend = moverNoStrafe_;
     f.uiWantsKeyboard = uiWantsKeyboard;
 
     // Two cameras: one orbits a character and moves it, one flies itself.
@@ -3463,8 +3470,8 @@ void CameraController::update(float deltaTime) {
     // Flight ascend/descend transitions (Space = ascend, X = descend while mounted+flying)
     if (movementCallback && !externalFollow_) {
         const bool airborne = isFlightAirborne();
-        const bool nowAscending = airborne && spaceHeld;
-        const bool nowDescending = airborne && xDown && mounted_;
+        const bool nowAscending = airborne && spaceHeld && !moverNoStrafe_;
+        const bool nowDescending = airborne && xDown && mounted_ && !moverNoStrafe_;
 
         if (airborne) {
             if (nowAscending && !wasAscending_) {
