@@ -681,7 +681,8 @@ void Renderer::updatePerFrameUBO() {
             }
         }
         // y: a cascade blends into the next over its outer 12%; z: the last
-        // one fades out from 90% of its half-width to its edge.
+        // one fades out from 90% of its half-width, to 99% of it as the
+        // client's does (shadow_csm.glsli).
         // w: one yard of the shared light-space depth range in depth units,
         // so a shader can bias by a distance (character.frag's self-shadow).
         currentFrameData.cascadeInfo = glm::vec4(static_cast<float>(cascades), 0.12f, 0.9f,

@@ -60,8 +60,12 @@ float csmSampleCascade(sampler2DShadow smap, int c, vec3 worldPos, vec3 n, float
 //
 // The finest cascade whose tile holds the point is used; over the outer 12%
 // of that tile it blends into the next one, so the step in sharpness is a
-// ramp rather than a line; and over the outer 10% of the last cascade the
-// shadow fades out, so the map's coverage ends without an edge.
+// ramp rather than a line; and the last cascade's shadow fades out, so the
+// map's coverage ends without an edge. That fade is the client's: linear, to
+// fully lit, from 90% of the outer cascade's half-width to 99% of it -
+// saturate(11 - 11.111111 * max(|x|, |y|)) on its coordinates in the cascaded
+// pixel shaders (combiners_*, mapobj*, terrain3*; the third of the cascades
+// FUN_00875d30 makes at extShadowQuality 3 and up).
 float csmShadow(sampler2DShadow smap, vec3 worldPos, vec3 n, float nl, float depthBias) {
     const int count = min(int(cascadeInfo.x + 0.5), 4);
     for (int c = 0; c < count; ++c) {
@@ -78,8 +82,9 @@ float csmShadow(sampler2DShadow smap, vec3 worldPos, vec3 n, float nl, float dep
                 shadow = mix(shadow, csmSampleCascade(smap, c + 1, worldPos, n, nl, depthBias), w);
             }
         } else {
-            const float start = min(cascadeInfo.z, dMax - 1e-3);
-            shadow = mix(shadow, 1.0, clamp((d - start) / (dMax - start), 0.0, 1.0));
+            const float end = min(0.99, dMax);
+            const float start = min(cascadeInfo.z, end - 1e-3);
+            shadow = mix(shadow, 1.0, clamp((d - start) / (end - start), 0.0, 1.0));
         }
         return shadow;
     }
