@@ -6,6 +6,7 @@
 #include "ui/framexml_takeover.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
+#include "game/interface_text.hpp"
 #include "game/entity.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/update_field_table.hpp"
@@ -16,23 +17,17 @@
 #include "rendering/renderer.hpp"
 #include "core/logger.hpp"
 #include "core/application.hpp"
+#include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_loader.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <set>
 #include <vector>
-
-namespace {
-const std::pair<uint32_t, const char*> kBgNames[] = {
-    {1,"Alterac Valley"},{2,"Warsong Gulch"},{3,"Arathi Basin"},
-    {4,"Nagrand Arena"},{5,"Blade's Edge Arena"},{6,"All Arenas"},
-    {7,"Eye of the Storm"},{8,"Ruins of Lordaeron"},{9,"Strand of the Ancients"},
-    {10,"Dalaran Sewers"},{11,"Ring of Valor"},{30,"Isle of Conquest"},{32,"Random Battleground"},
-};
-}  // namespace
 
 namespace wowee {
 namespace game {
@@ -52,80 +47,78 @@ std::filesystem::path guildNameCachePath() {
     return std::filesystem::path("guild_names.tsv");
 }
 
+// The three places 0x005216f0 sends a game error, as its table at 0x00ac8af0
+// says for each one: a system line (0x00509dd0, CHAT_MSG_SYSTEM), the yellow
+// UI_INFO_MESSAGE (event 0xbc) or the red UI_ERROR_MESSAGE (event 0xbb). The
+// words are the interface's ERR_* string with the arguments put in.
+enum class ErrTo { Chat, Info, Error };
+
+void gameError(GameHandler& gh, ErrTo to, const char* key, const char* enUS,
+               const std::vector<std::string>& args = {}) {
+    const std::string text = interfaceFormat(key, enUS, args);
+    if (text.empty()) return;
+    switch (to) {
+        case ErrTo::Chat:  gh.addSystemChatMessage(text); break;
+        case ErrTo::Info:  gh.addUIInfoMessage(text); break;
+        case ErrTo::Error: gh.addUIError(text); break;
+    }
+}
+
+/// A duration in milliseconds as 0x0061a9e0 words it with the
+/// INT_SPELL_DURATION prefix and rounding up: seconds under a minute, then
+/// minutes, hours and days, sixty minutes reading as one hour and twenty-four
+/// hours as one day.
+std::string spellDurationText(uint64_t ms) {
+    constexpr uint64_t kMinute = 60000, kHour = kMinute * 60, kDay = kHour * 24;
+    const auto up = [](uint64_t v, uint64_t unit) { return v == 0 ? 0 : (v - 1) / unit + 1; };
+    const char* key = "INT_SPELL_DURATION_SEC";
+    const char* enUS = "%d sec";
+    uint64_t n = ms / 1000;
+    if (ms >= kDay) {
+        n = up(ms, kDay); key = "INT_SPELL_DURATION_DAYS"; enUS = "%d |4day:days;";
+    } else if (ms >= kHour) {
+        n = up(ms, kHour);
+        if (n == 24) { n = 1; key = "INT_SPELL_DURATION_DAYS"; enUS = "%d |4day:days;"; }
+        else { key = "INT_SPELL_DURATION_HOURS"; enUS = "%d |4hour:hours;"; }
+    } else if (ms >= kMinute) {
+        n = up(ms, kMinute);
+        if (n == 60) { n = 1; key = "INT_SPELL_DURATION_HOURS"; enUS = "%d |4hour:hours;"; }
+        else { key = "INT_SPELL_DURATION_MIN"; enUS = "%d min"; }
+    }
+    return interfaceFormat(key, enUS, {std::to_string(n)});
+}
+
+/// An instance's name as 0x004fe070 gives it: Map.dbc's, followed by the
+/// difficulty (DUNGEON_NAME_WITH_DIFFICULTY) where MapDifficulty.dbc names one
+/// for that map and difficulty - "Naxxramas (25 Spieler)". The map's number
+/// where Map.dbc has no name, as 0x0050ccd0 prints it.
+std::string instanceLabel(GameHandler& gh, uint32_t mapId, uint32_t difficulty) {
+    std::string name = gh.getMapName(mapId);
+    if (name.empty()) return std::to_string(mapId);
+    auto* am = gh.services().assetManager;
+    auto dbc = am && am->isInitialized() ? am->loadDBC("MapDifficulty.dbc") : nullptr;
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() <= 22) return name;
+    // 0=ID, 1=MapID, 2=Difficulty, 22=Difficultystring (a GlobalStrings key).
+    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        if (dbc->getUInt32(i, 1) != mapId || dbc->getUInt32(i, 2) != difficulty) continue;
+        const std::string key = dbc->getString(i, 22);
+        if (key.empty()) break;
+        return interfaceFormat("DUNGEON_NAME_WITH_DIFFICULTY", "%1$s (%2$s)",
+                               {name, interfaceString(key.c_str(), key.c_str())});
+    }
+    return name;
+}
+
+/// The player's own name, for the handlers that word a line differently when
+/// it is about the player.
+std::string ownName(GameHandler& gh) {
+    std::string name = gh.lookupName(gh.getPlayerGuid());
+    if (name.empty())
+        if (const Character* ch = gh.getActiveCharacter()) name = ch->name;
+    return name;
+}
+
 } // namespace
-
-
-
-
-// LFG join result codes from LFGJoinResult enum (WotLK 3.3.5a).
-// Case 0 = success (no error message needed), returns nullptr so the caller
-// knows not to display an error string.
-// A uint32 on the wire, so a uint32 here - narrowing it to a byte would
-// wrap a large value into a case that means something else.
-static const char* lfgJoinResultString(uint32_t result) {
-    switch (result) {
-        case 0:  return nullptr;  // LFG_JOIN_OK
-        case 1:  return "Role check failed.";
-        case 2:  return "No LFG slots available for your group.";
-        case 3:  return "No LFG object found.";
-        case 4:  return "No slots available (player).";
-        case 5:  return "No slots available (party).";
-        case 6:  return "Dungeon requirements not met by all members.";
-        case 7:  return "Party members are from different realms.";
-        case 8:  return "Not all members are present.";
-        case 9:  return "Get info timeout.";
-        case 10: return "Invalid dungeon slot.";
-        case 11: return "You are marked as a deserter.";
-        case 12: return "A party member is marked as a deserter.";
-        case 13: return "You are on a random dungeon cooldown.";
-        case 14: return "A party member is on a random dungeon cooldown.";
-        case 15: return "Cannot join dungeon finder.";  // LFG_JOIN_INTERNAL_ERROR
-        case 16: return "No spec/role available.";
-        default: return "Cannot join dungeon finder.";
-    }
-}
-
-// ArenaTeamCommandErrors, as SMSG_ARENA_TEAM_COMMAND_RESULT sends them. The
-// range is sparse - the server sends 0x08 for two different refusals and skips
-// most of what lies between - so a table indexed by the value would be mostly
-// holes and would answer the wrong sentence for anything the server adds.
-static const char* arenaTeamErrorString(uint32_t error) {
-    switch (error) {
-        case 0x01: return "Internal arena team error.";
-        case 0x02: return "You are already in an arena team of that size.";
-        case 0x03: return "That player is already in an arena team of that size.";
-        case 0x04: return "You have already been invited to an arena team.";
-        case 0x05: return "That player has already been invited to an arena team.";
-        case 0x06: return "That arena team name is invalid.";
-        case 0x07: return "That arena team name already exists.";
-        // The server reuses this value for the captain leaving and for acting
-        // without the rank to do so.
-        case 0x08: return "The captain cannot leave; permissions denied.";
-        case 0x09: return "You are not in an arena team of that size.";
-        case 0x0A: return "That player is not in your arena team.";
-        case 0x0B: return "No player of that name was found.";
-        case 0x0C: return "That player is of the opposing faction.";
-        case 0x13: return "That player is ignoring you.";
-        case 0x15: return "That player's level is too low.";
-        case 0x16: return "That player's level is too high.";
-        case 0x17: return "The arena team is full.";
-        case 0x1B: return "No arena team of that name was found.";
-        case 0x1E: return "Arena teams are locked for the season.";
-        default:   return "The arena team command was refused.";
-    }
-}
-
-static const char* lfgTeleportDeniedString(uint32_t reason) {
-    switch (reason) {
-        case 0:  return "You are not in a LFG group.";
-        case 1:  return "You are not in the dungeon.";
-        case 2:  return "You have a summon pending.";
-        case 3:  return "You are dead.";
-        case 4:  return "You have Deserter.";
-        case 5:  return "You do not meet the requirements.";
-        default: return "Teleport to dungeon denied.";
-    }
-}
 
 static bool parseInspectEquipmentPayload(network::Packet& packet,
                                          uint64_t& outGuid,
@@ -488,17 +481,11 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         if (owner_.getState() == WorldState::IN_WORLD) handleWho(packet);
     };
     table[Opcode::SMSG_WHOIS] = [this](network::Packet& packet) {
+        // The game console's and nobody else's (0x006b3280 hands the text to
+        // the console, 0x00765270) - this printed it into chat as "[Whois]".
         if (packet.getReadPos() < packet.getSize()) {
             std::string whoisText = packet.readString();
-            if (!whoisText.empty()) {
-                std::string line;
-                for (char c : whoisText) {
-                    if (c == '\n') { if (!line.empty()) owner_.addSystemChatMessage("[Whois] " + line); line.clear(); }
-                    else line += c;
-                }
-                if (!line.empty()) owner_.addSystemChatMessage("[Whois] " + line);
-                LOG_INFO("SMSG_WHOIS: ", whoisText);
-            }
+            if (!whoisText.empty()) LOG_INFO("SMSG_WHOIS: ", whoisText);
         }
     };
     table[Opcode::SMSG_FRIEND_STATUS] = [this](network::Packet& packet) {
@@ -563,18 +550,26 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_GROUP_DECLINE] = [this](network::Packet& packet) { handleGroupDecline(packet); };
     table[Opcode::SMSG_GROUP_LIST] = [this](network::Packet& packet) { handleGroupList(packet); };
     table[Opcode::SMSG_GROUP_DESTROYED] = [this](network::Packet& /*packet*/) {
+        // ERR_GROUP_DISBANDED, a system line, and only to someone who was in
+        // the group (0x006cbe40). This said it twice in English, on screen and
+        // in chat.
+        const bool wasInGroup = !partyData.members.empty();
         partyData.members.clear();
         partyData.memberCount = 0;
         partyData.leaderGuid = 0;
-        owner_.addUIError("Your party has been disbanded.");
-        owner_.addSystemChatMessage("Your party has been disbanded.");
+        if (wasInGroup)
+            gameError(owner_, ErrTo::Chat, "ERR_GROUP_DISBANDED", "Your group has been disbanded.");
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("GROUP_ROSTER_UPDATE", {});
             owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
         }
     };
     table[Opcode::SMSG_GROUP_CANCEL] = [this](network::Packet& /*packet*/) {
-        owner_.addSystemChatMessage("Group invite cancelled.");
+        // PARTY_INVITE_CANCEL and nothing said (0x006cbd10 -> 0x00512560,
+        // event 0x108): UIParent hides the invitation popup on it. This printed
+        // "Group invite cancelled." and left the popup up.
+        pendingGroupInvite = false;
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PARTY_INVITE_CANCEL", {});
     };
     table[Opcode::SMSG_GROUP_UNINVITE] = [this](network::Packet& packet) { handleGroupUninvite(packet); };
     table[Opcode::SMSG_PARTY_COMMAND_RESULT] = [this](network::Packet& packet) { handlePartyCommandResult(packet); };
@@ -588,8 +583,10 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         readyCheckNotReadyCount_ = 0;
         readyCheckInitiator_.clear();
         readyCheckResults_.clear();
+        bool initiatedHere = false;
         if (packet.hasRemaining(8)) {
             uint64_t initiatorGuid = packet.readUInt64();
+            initiatedHere = initiatorGuid == owner_.getPlayerGuid();
             auto entity = owner_.getEntityManager().getEntity(initiatorGuid);
             if (auto* unit = dynamic_cast<Unit*>(entity.get()))
                 readyCheckInitiator_ = unit->getName();
@@ -599,9 +596,10 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
                 if (member.guid == partyData.leaderGuid) { readyCheckInitiator_ = member.name; break; }
             }
         }
-        owner_.addSystemChatMessage(readyCheckInitiator_.empty()
-            ? "Ready check initiated!"
-            : readyCheckInitiator_ + " initiated a ready check!");
+        // READY_CHECK_START, a system line for the one who started it and
+        // nobody else (0x00574d50); the others get the popup READY_CHECK opens.
+        if (initiatedHere)
+            owner_.addSystemChatMessage(interfaceString("READY_CHECK_START", "Starting ready check..."));
         if (owner_.addonEventCallbackRef())
             owner_.addonEventCallbackRef()("READY_CHECK", {readyCheckInitiator_});
     };
@@ -626,9 +624,14 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
                 if (r.name == rname) { r.ready = (isReady != 0); found = true; break; }
             }
             if (!found) readyCheckResults_.push_back({ .name = rname, .ready = isReady != 0 });
-            char rbuf[128];
-            std::snprintf(rbuf, sizeof(rbuf), "%s is %s.", rname.c_str(), isReady ? "Ready" : "Not Ready");
-            owner_.addSystemChatMessage(rbuf);
+            // RAID_MEMBER_NOT_READY for a "no" and nothing for a "yes"
+            // (0x005744f0) - in a raid only to whoever started the check.
+            // This announced every answer either way, in English.
+            const bool initiatedHere = !readyCheckInitiator_.empty() &&
+                                       readyCheckInitiator_ == ownName(owner_);
+            if (!isReady && (!groupIsRaid(partyData.groupType) || initiatedHere))
+                owner_.addSystemChatMessage(
+                    interfaceFormat("RAID_MEMBER_NOT_READY", "%s is not ready", {rname}));
         }
         if (owner_.addonEventCallbackRef()) {
             char guidBuf[32];
@@ -637,10 +640,10 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         }
     };
     table[Opcode::MSG_RAID_READY_CHECK_FINISHED] = [this](network::Packet& /*packet*/) {
-        char fbuf[128];
-        std::snprintf(fbuf, sizeof(fbuf), "Ready check complete: %u ready, %u not ready.",
-                     readyCheckReadyCount_, readyCheckNotReadyCount_);
-        owner_.addSystemChatMessage(fbuf);
+        // No tally on the server's word. The original's summary -
+        // RAID_MEMBERS_AFK, READY_CHECK_ALL_READY or READY_CHECK_FINISHED - comes
+        // from its own timer, for the one who started the check (0x00573390);
+        // this printed an English count to everybody instead.
         pendingReadyCheck_ = false;
         readyCheckReadyCount_ = 0;
         readyCheckNotReadyCount_ = 0;
@@ -654,10 +657,9 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_DUEL_COMPLETE] = [this](network::Packet& packet) { handleDuelComplete(packet); };
     table[Opcode::SMSG_DUEL_WINNER] = [this](network::Packet& packet) { handleDuelWinner(packet); };
     table[Opcode::SMSG_DUEL_OUTOFBOUNDS] = [this](network::Packet& /*packet*/) {
-        owner_.addUIError("You are out of the duel area!");
-        owner_.raiseUiError("You are out of the duel area!");
-        // The interface runs the ten-second countdown to a forfeit off this
-        // pair; the message alone says it once and never counts.
+        // The event alone (0x005cf910, event 0x172): UIParent shows the
+        // DUEL_OUTOFBOUNDS popup with its ten-second countdown to a forfeit.
+        // This put the same English line on screen twice besides.
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("DUEL_OUTOFBOUNDS", {});
     };
     table[Opcode::SMSG_DUEL_INBOUNDS] = [this](network::Packet& /*packet*/) {
@@ -676,21 +678,19 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         if (!packet.hasRemaining(16)) return;
         uint64_t killerGuid = packet.readUInt64();
         uint64_t victimGuid = packet.readUInt64();
-        auto nameFor = [this](uint64_t g) -> std::string {
-            auto nit = owner_.getPlayerNameCache().find(g);
-            if (nit != owner_.getPlayerNameCache().end()) return nit->second;
-            auto ent = owner_.getEntityManager().getEntity(g);
-            if (ent && (ent->getType() == game::ObjectType::UNIT ||
-                        ent->getType() == game::ObjectType::PLAYER))
-                return std::static_pointer_cast<game::Unit>(ent)->getName();
-            return {};
-        };
-        std::string killerName = nameFor(killerGuid);
-        std::string victimName = nameFor(victimGuid);
-        if (!killerName.empty() && !victimName.empty()) {
-            char buf[256];
-            std::snprintf(buf, sizeof(buf), "%s killed %s.", killerName.c_str(), victimName.c_str());
-            owner_.addSystemChatMessage(buf);
+        // A combat log entry and nothing in chat (0x00750c90): the original
+        // files it as PARTY_KILL (subevent 0x2b) for the combat log to word -
+        // "X tötet Y" is the combat log's line, not a system message. This
+        // printed an English "X killed Y." into the chat window instead.
+        if (owner_.addonEventCallbackRef()) {
+            char src[32], dst[32];
+            std::snprintf(src, sizeof(src), "0x%016llX", static_cast<unsigned long long>(killerGuid));
+            std::snprintf(dst, sizeof(dst), "0x%016llX", static_cast<unsigned long long>(victimGuid));
+            owner_.addonEventCallbackRef()("COMBAT_LOG_EVENT_UNFILTERED", {
+                std::to_string(static_cast<double>(std::time(nullptr))), "PARTY_KILL",
+                src, owner_.lookupName(killerGuid), "0",
+                dst, owner_.lookupName(victimGuid), "0"
+            });
         }
     };
 
@@ -704,11 +704,15 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_PETITION_SHOWLIST] = [this](network::Packet& packet) { handlePetitionShowlist(packet); };
     table[Opcode::SMSG_TURN_IN_PETITION_RESULTS] = [this](network::Packet& packet) { handleTurnInPetitionResults(packet); };
     table[Opcode::SMSG_OFFER_PETITION_ERROR] = [this](network::Packet& packet) {
-        if (packet.hasRemaining(4)) {
-            uint32_t err = packet.readUInt32();
-            if (err == 1) owner_.addSystemChatMessage("Player is already in a guild.");
-            else if (err == 2) owner_.addSystemChatMessage("Player already has a petition.");
-            else owner_.raiseUiError("Cannot offer petition to that player.");
+        // The player the charter was offered to, and ERR_ALREADY_IN_ARENA_TEAM_S
+        // naming them as a system line when the name is known (0x005cea00).
+        // This read a reason code where the server sends a guid, and answered
+        // in English.
+        if (packet.hasRemaining(8)) {
+            const std::string name = owner_.lookupName(packet.readUInt64());
+            if (!name.empty())
+                gameError(owner_, ErrTo::Chat, "ERR_ALREADY_IN_ARENA_TEAM_S",
+                          "%s is already in an arena team of that size.", {name});
         }
     };
     table[Opcode::MSG_GUILD_EVENT_LOG_QUERY] = [this](network::Packet& packet) { handleGuildEventLog(packet); };
@@ -721,8 +725,10 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_BATTLEFIELD_STATUS] = [this](network::Packet& packet) { handleBattlefieldStatus(packet); };
     table[Opcode::SMSG_BATTLEFIELD_LIST] = [this](network::Packet& packet) { handleBattlefieldList(packet); };
     table[Opcode::SMSG_BATTLEFIELD_PORT_DENIED] = [this](network::Packet& /*packet*/) {
-        owner_.addUIError("Battlefield port denied.");
-        owner_.addSystemChatMessage("Battlefield port denied.");
+        // ERR_PLAYER_DEAD on screen, whenever there is a player to say it to
+        // (0x0054d4b0). This said "Battlefield port denied." on screen and in
+        // chat.
+        gameError(owner_, ErrTo::Error, "ERR_PLAYER_DEAD", "You can't do that when you're dead.");
     };
     table[Opcode::MSG_BATTLEGROUND_PLAYER_POSITIONS] = [this](network::Packet& packet) {
         bgPlayerPositions_.clear();
@@ -739,8 +745,20 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
             }
         }
     };
-    table[Opcode::SMSG_REMOVED_FROM_PVP_QUEUE] = [this](network::Packet& /*packet*/) {
-        owner_.addSystemChatMessage("You have been removed from the PvP queue.");
+    table[Opcode::SMSG_REMOVED_FROM_PVP_QUEUE] = [this](network::Packet& packet) {
+        // The reason, and the refusal on screen that names it (0x00526530 ->
+        // 0x00522180); nothing for a reason it has no words for. This printed
+        // one English line whatever the reason.
+        if (!packet.hasRemaining(4)) return;
+        switch (packet.readUInt32()) {
+            case 0: gameError(owner_, ErrTo::Error, "ERR_REMOVE_FROM_PVP_QUEUE_GRANT_LEVEL",
+                              "You have been removed from a PvP queue because you have been granted a level."); break;
+            case 1: gameError(owner_, ErrTo::Error, "ERR_REMOVE_FROM_PVP_QUEUE_XP_GAIN",
+                              "You have been removed from a PvP queue because you changed your experience gain settings."); break;
+            case 2: gameError(owner_, ErrTo::Error, "ERR_REMOVE_FROM_PVP_QUEUE_FACTION_CHANGE",
+                              "You have been removed from a PvP queue because you changed your faction."); break;
+            default: break;
+        }
     };
     // The answer to a join, and most often a refusal. A positive value is the
     // battleground joined; the negative ones are the reasons a queue was
@@ -750,63 +768,81 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         if (!packet.hasRemaining(4)) return;
         bgJoinPendingType_ = 0;  // answered
         const int32_t result = static_cast<int32_t>(packet.readUInt32());
-        std::string msg;
+        // Each answer as 0x0054b1c0 words it: the ERR_* string for the
+        // refusal, a joined queue as yellow ERR_GROUP_JOIN_BATTLEGROUND_S, and
+        // the deserter refusal, oddly, yellow too - the table at 0x00ac8af0
+        // routes it to UI_INFO_MESSAGE. These were English, each said twice.
+        LOG_INFO("SMSG_GROUP_JOINED_BATTLEGROUND: ", result);
         switch (result) {
             case -1: return;  // nothing to say
-            case 0:   msg = "Your group has joined a battleground queue, but you are not eligible"; break;
-            case -2:  msg = "You cannot join the battleground yet because you or one of your party members is flagged as a Deserter."; break;
-            case -3:  msg = "Incorrect party size for this arena."; break;
-            case -4:  msg = "You can only be queued for 2 battles at once"; break;
-            case -5:  msg = "You cannot queue for a rated match while queued for other battles"; break;
-            case -6:  msg = "You cannot queue for another battle while queued for a rated arena match"; break;
-            case -7:  msg = "Your team has left the arena queue"; break;
-            case -8:  msg = "You can't do that in a battleground."; break;
-            case -10: msg = "Cannot join the queue unless all members of your party are in the same battleground level range."; break;
-            case -11: {
-                std::string who = "A party member";
-                if (packet.hasRemaining(8)) {
-                    auto it = owner_.getPlayerNameCache().find(packet.readUInt64());
-                    if (it != owner_.getPlayerNameCache().end() && !it->second.empty()) who = it->second;
-                }
-                msg = who + " was unavailable to join the queue.";
+            case -2:  gameError(owner_, ErrTo::Info, "ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS",
+                                "You cannot join the battleground yet because you or one of your party members is flagged as a Deserter."); break;
+            case -3:  gameError(owner_, ErrTo::Error, "ERR_ARENA_TEAM_PARTY_SIZE", "Incorrect party size for this arena."); break;
+            case -4:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_TOO_MANY_QUEUES", "You can only be queued for 2 battles at once"); break;
+            case -5:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_CANNOT_QUEUE_FOR_RATED",
+                                "You cannot queue for a rated match while queued for other battles"); break;
+            case -6:  gameError(owner_, ErrTo::Error, "ERR_BATTLEDGROUND_QUEUED_FOR_RATED",
+                                "You cannot queue for another battle while queued for a rated arena match"); break;
+            case -7:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_TEAM_LEFT_QUEUE", "Your team has left the arena queue"); break;
+            case -8:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_NOT_IN_BATTLEGROUND", "You can't do that in a battleground."); break;
+            case -9:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_JOIN_XP_GAIN",
+                                "Cannot join as a group unless all the members of your party have the same XP gain setting."); break;
+            case -10: gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_JOIN_RANGE_INDEX",
+                                "Cannot join the queue unless all members of your party are in the same battleground level range."); break;
+            case -11:
+            case -12: {
+                // Both carry the member who held it up; named when known,
+                // ERR_BATTLEGROUND_JOIN_FAILED when not.
+                std::string who;
+                if (packet.hasRemaining(8)) who = owner_.lookupName(packet.readUInt64());
+                if (who.empty())
+                    gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_JOIN_FAILED", "Join as a group failed");
+                else
+                    gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_JOIN_TIMED_OUT",
+                              "%s was unavailable to join the queue.", {who});
                 break;
             }
-            case -12: msg = "Join as a group failed"; break;
-            case -13: msg = "You cannot queue for a battleground or arena while using the dungeon system."; break;
-            case -14: msg = "Can't do that while in a Random Battleground queue."; break;
-            case -15: msg = "Can't queue for Random Battleground while in another Battleground queue."; break;
-            default:
-                if (result > 0) {
-                    std::string bgName = "a battleground";
-                    for (const auto& kv : kBgNames)
-                        if (kv.first == static_cast<uint32_t>(result)) { bgName = kv.second; break; }
-                    owner_.addSystemChatMessage("Your group has joined the queue for " + bgName);
-                    return;
-                }
-                msg = "Could not join the battleground queue (" + std::to_string(result) + ").";
+            case -13: gameError(owner_, ErrTo::Error, "ERR_LFG_CANT_USE_BATTLEGROUND",
+                                "You cannot queue for a battleground or arena while using the dungeon system."); break;
+            case -14: gameError(owner_, ErrTo::Error, "ERR_IN_RANDOM_BG", "Can't do that while in a Random Battleground queue."); break;
+            case -15: gameError(owner_, ErrTo::Error, "ERR_IN_NON_RANDOM_BG",
+                                "Can't queue for Random Battleground while in another Battleground queue."); break;
+            default: {
+                // A battleground by BattlemasterList.dbc's name, or
+                // ERR_GROUP_JOIN_BATTLEGROUND_FAIL where there is none - which
+                // is where a zero lands too.
+                const GameHandler::BattlemasterEntry* bg =
+                    result > 0 ? owner_.getBattlemasterInfo(static_cast<uint32_t>(result)) : nullptr;
+                if (bg && !bg->name.empty())
+                    gameError(owner_, ErrTo::Info, "ERR_GROUP_JOIN_BATTLEGROUND_S",
+                              "Your group has joined the queue for %s", {bg->name});
+                else
+                    gameError(owner_, ErrTo::Error, "ERR_GROUP_JOIN_BATTLEGROUND_FAIL",
+                              "Your group has joined a battleground queue, but you are not eligible");
                 break;
+            }
         }
-        LOG_WARNING("Battleground join refused: ", result, " - ", msg);
-        owner_.addUIError(msg);
-        owner_.addSystemChatMessage(msg);
     };
-    table[Opcode::SMSG_JOINED_BATTLEGROUND_QUEUE] = [this](network::Packet& /*packet*/) {
-        owner_.addSystemChatMessage("You have joined the battleground queue.");
-    };
+    // No handler in the original at all, so nothing to say: this printed
+    // "You have joined the battleground queue." The queue itself arrives as
+    // SMSG_BATTLEFIELD_STATUS.
+    table[Opcode::SMSG_JOINED_BATTLEGROUND_QUEUE] = [](network::Packet& /*packet*/) {};
+    // ERR_BG_PLAYER_JOINED_SS and ERR_BG_PLAYER_LEFT_S, system lines naming
+    // the player (0x0054b510) - "Name-Realm" for one from another realm,
+    // which a name from the cache already is. These were English.
     table[Opcode::SMSG_BATTLEGROUND_PLAYER_JOINED] = [this](network::Packet& packet) {
         if (packet.hasRemaining(8)) {
-            uint64_t guid = packet.readUInt64();
-            auto it = owner_.getPlayerNameCache().find(guid);
-            if (it != owner_.getPlayerNameCache().end() && !it->second.empty())
-                owner_.addSystemChatMessage(it->second + " has entered the battleground.");
+            const std::string name = owner_.lookupName(packet.readUInt64());
+            if (!name.empty())
+                gameError(owner_, ErrTo::Chat, "ERR_BG_PLAYER_JOINED_SS",
+                          "|Hplayer:%s|h[%s]|h has joined the battle", {name, name});
         }
     };
     table[Opcode::SMSG_BATTLEGROUND_PLAYER_LEFT] = [this](network::Packet& packet) {
         if (packet.hasRemaining(8)) {
-            uint64_t guid = packet.readUInt64();
-            auto it = owner_.getPlayerNameCache().find(guid);
-            if (it != owner_.getPlayerNameCache().end() && !it->second.empty())
-                owner_.addSystemChatMessage(it->second + " has left the battleground.");
+            const std::string name = owner_.lookupName(packet.readUInt64());
+            if (!name.empty())
+                gameError(owner_, ErrTo::Chat, "ERR_BG_PLAYER_LEFT_S", "%s has left the battle", {name});
         }
     };
 
@@ -818,60 +854,109 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     // ---- Guild / RAF / PvP AFK (moved from GameHandler) ----
     table[Opcode::SMSG_GUILD_DECLINE] = [this](network::Packet& packet) {
         if (packet.hasData()) {
+            // ERR_GUILD_DECLINE_S, a system line (0x006cc410).
             std::string name = packet.readString();
-            owner_.addSystemChatMessage(name + " declined your guild invitation.");
+            gameError(owner_, ErrTo::Chat, "ERR_GUILD_DECLINE_S", "%s declines your guild invitation.", {name});
         }
     };
     table[Opcode::SMSG_REFER_A_FRIEND_EXPIRED] = [this](network::Packet& packet) {
-        owner_.addSystemChatMessage("Your Recruit-A-Friend link has expired.");
+        // The friend whose link ran out, and a friends-list refresh - nothing
+        // said (0x00526530, which fires FRIENDLIST_UPDATE). This printed an
+        // English line.
         packet.skipAll();
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
     };
     table[Opcode::SMSG_REFER_A_FRIEND_FAILURE] = [this](network::Packet& packet) {
+        // The reason, and a name only for reason 9; each said on screen as
+        // 0x005219e0 picks the ERR_ string, nothing for the rest. This printed
+        // "Recruit-A-Friend: " and an English reason of its own numbering.
         if (packet.hasRemaining(4)) {
-            uint32_t reason = packet.readUInt32();
-            static const char* kRafErrors[] = {
-                "Not eligible",            // 0
-                "Target not eligible",     // 1
-                "Too many referrals",      // 2
-                "Wrong faction",           // 3
-                "Not a recruit",           // 4
-                "Recruit requirements not met", // 5
-                "Level above requirement", // 6
-                "Friend needs account upgrade", // 7
-            };
-            const char* msg = (reason < 8) ? kRafErrors[reason]
-                                           : "Recruit-A-Friend failed.";
-            owner_.addSystemChatMessage(std::string("Recruit-A-Friend: ") + msg);
+            const uint32_t reason = packet.readUInt32();
+            std::string name;
+            if (reason == 9 && packet.getReadPos() < packet.getSize()) name = packet.readString();
+            const std::string maxLevel = "60";  // 0x3c, a constant in the original
+            switch (reason) {
+                case 1: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_NOT_REFERRED_BY", "You were not referred by that player."); break;
+                case 2: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_TARGET_TOO_HIGH", "That player's level is too high."); break;
+                case 3: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_INSUFFICIENT_GRANTABLE_LEVELS", "You have not earned enough levels to grant any more."); break;
+                case 4: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_TOO_FAR", "That player is too far away."); break;
+                case 5: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_DIFFERENT_FACTION", "You cannot grant a level to a character of the opposing faction."); break;
+                case 6: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_NOT_NOW", "You cannot grant a level to that player right now."); break;
+                case 7: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_GRANT_LEVEL_MAX_I", "You cannot grant levels to players level %d or higher.", {maxLevel}); break;
+                case 8: gameError(owner_, ErrTo::Error, "ERR_GENERIC_NO_TARGET", "You have no target."); break;
+                case 9: gameError(owner_, ErrTo::Chat, "ERR_TARGET_NOT_IN_GROUP_S", "%s is not in your party.", {name}); break;
+                case 10: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_SUMMON_LEVEL_MAX_I", "You can only summon players of level %d or lower.", {maxLevel}); break;
+                case 11: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_SUMMON_COOLDOWN", "You can only summon your friend once per hour."); break;
+                case 12: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_INSUF_EXPAN_LVL", "Your friend's account does not have the expansion required."); break;
+                case 13: gameError(owner_, ErrTo::Error, "ERR_REFER_A_FRIEND_SUMMON_OFFLINE_S", "%s is offline and cannot be summoned.", {name}); break;
+                default: break;
+            }
         }
         packet.skipAll();
     };
     table[Opcode::SMSG_REPORT_PVP_AFK_RESULT] = [this](network::Packet& packet) {
+        // Only the reporting system being switched on (5) or off (6) is said,
+        // as PVP_REPORT_AFK_SYSTEM_ENABLED / _DISABLED system lines
+        // (0x006e2e90); any other result is silent. This announced every
+        // report in English, or refused it on screen.
         if (packet.hasRemaining(1)) {
-            uint8_t result = packet.readUInt8();
-            if (result == 0)
-                owner_.addSystemChatMessage("AFK report submitted.");
-            else
-                owner_.raiseUiError("Cannot report that player as AFK right now.");
+            const uint8_t result = packet.readUInt8();
+            if (result == 5)
+                owner_.addSystemChatMessage(interfaceString("PVP_REPORT_AFK_SYSTEM_ENABLED", "The notification system has been enabled."));
+            else if (result == 6)
+                owner_.addSystemChatMessage(interfaceString("PVP_REPORT_AFK_SYSTEM_DISABLED", "The notification system has been disabled."));
         }
         packet.skipAll();
     };
-    table[Opcode::SMSG_INSTANCE_SAVE_CREATED] = [this](network::Packet& /*packet*/) {
-        owner_.addSystemChatMessage("You are now saved to this instance.");
+    table[Opcode::SMSG_INSTANCE_SAVE_CREATED] = [this](network::Packet& packet) {
+        // INSTANCE_SAVED, a system line, for the zero the server sends
+        // (0x0052bb10; a one is a debug-only lock notice). This printed
+        // "You are now saved to this instance."
+        const uint32_t kind = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+        if (kind == 0)
+            owner_.addSystemChatMessage(interfaceString("INSTANCE_SAVED", "You are now saved to this instance"));
     };
     table[Opcode::SMSG_RAID_INSTANCE_MESSAGE] = [this](network::Packet& packet) {
+        // The type, the map, its difficulty and a time, worded by 0x0050ca80:
+        // 1 RAID_INSTANCE_WARNING_HOURS, 2 _MIN, 3 _MIN_SOON, 5
+        // RAID_INSTANCE_EXPIRED - system lines - and 4, the welcome, as
+        // RAID_INSTANCE_WELCOME for UIParent to word itself. The types were
+        // read one place out here and answered in English.
         if (!packet.hasRemaining(12)) return;
-        uint32_t msgType = packet.readUInt32();
-        uint32_t mapId   = packet.readUInt32();
-        packet.readUInt32(); // diff
-        std::string mapLabel = owner_.getMapName(mapId);
-        if (mapLabel.empty()) mapLabel = "instance #" + std::to_string(mapId);
-        if (msgType == 1 && packet.hasRemaining(4)) {
-            uint32_t timeLeft = packet.readUInt32();
-            owner_.addSystemChatMessage(mapLabel + " will reset in " + std::to_string(timeLeft / 60) + " minute(s).");
-        } else if (msgType == 2) {
-            owner_.addSystemChatMessage("You have been saved to " + mapLabel + ".");
-        } else if (msgType == 3) {
-            owner_.addSystemChatMessage("Welcome to " + mapLabel + ".");
+        const uint32_t msgType = packet.readUInt32();
+        const uint32_t mapId   = packet.readUInt32();
+        const uint32_t diff    = packet.readUInt32();
+        const uint32_t timeLeft = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+        const std::string mapLabel = instanceLabel(owner_, mapId, diff);
+        switch (msgType) {
+            case 1:
+                owner_.addSystemChatMessage(interfaceFormat("RAID_INSTANCE_WARNING_HOURS",
+                    "WARNING! Your save for '%s' will expire in %d |4hour:hours;.",
+                    {mapLabel, std::to_string(timeLeft / 3600)}));
+                break;
+            case 2:
+                owner_.addSystemChatMessage(interfaceFormat("RAID_INSTANCE_WARNING_MIN",
+                    "WARNING! Your save for '%s' will expire in %d |4minute:minutes;!",
+                    {mapLabel, std::to_string(timeLeft / 60)}));
+                break;
+            case 3:
+                owner_.addSystemChatMessage(interfaceFormat("RAID_INSTANCE_WARNING_MIN_SOON",
+                    "WARNING! Your save for '%s' will expire in %d |4minute:minutes;.",
+                    {mapLabel, std::to_string(timeLeft / 60)}));
+                break;
+            case 4: {
+                const bool locked   = packet.hasRemaining(1) && packet.readUInt8() != 0;
+                const bool extended = packet.hasRemaining(1) && packet.readUInt8() != 0;
+                if (owner_.addonEventCallbackRef())
+                    owner_.addonEventCallbackRef()("RAID_INSTANCE_WELCOME", {
+                        mapLabel, std::to_string(timeLeft), locked ? "1" : "0", extended ? "1" : "0"});
+                break;
+            }
+            case 5:
+                owner_.addSystemChatMessage(interfaceFormat("RAID_INSTANCE_EXPIRED",
+                    "Your save for %s has expired.", {mapLabel}));
+                break;
+            default: break;
         }
     };
     table[Opcode::SMSG_INSTANCE_RESET] = [this](network::Packet& packet) {
@@ -880,23 +965,31 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         auto it = std::remove_if(instanceLockouts_.begin(), instanceLockouts_.end(),
             [mapId](const InstanceLockout& lo){ return lo.mapId == mapId; });
         instanceLockouts_.erase(it, instanceLockouts_.end());
+        // INSTANCE_RESET_SUCCESS, a system line naming the map from Map.dbc,
+        // or its number (0x0050ccd0).
         std::string mapLabel = owner_.getMapName(mapId);
-        if (mapLabel.empty()) mapLabel = "instance #" + std::to_string(mapId);
-        owner_.addSystemChatMessage(mapLabel + " has been reset.");
+        if (mapLabel.empty()) mapLabel = std::to_string(mapId);
+        owner_.addSystemChatMessage(interfaceFormat("INSTANCE_RESET_SUCCESS", "%s has been reset.", {mapLabel}));
     };
     table[Opcode::SMSG_INSTANCE_RESET_FAILED] = [this](network::Packet& packet) {
+        // The reason first and then the map - read the other way round here -
+        // and a system line for the three reasons 0x0050cda0 has words for:
+        // INSTANCE_RESET_FAILED (players inside), _OFFLINE, _ZONING. This said
+        // it on screen and in chat, in English.
         if (!packet.hasRemaining(8)) return;
-        uint32_t mapId  = packet.readUInt32();
-        uint32_t reason = packet.readUInt32();
-        static const char* resetFailReasons[] = {
-            "Not max level.", "Offline party members.", "Party members inside.",
-            "Party members changing zone.", "Heroic difficulty only."
-        };
-        const char* reasonMsg = (reason < 5) ? resetFailReasons[reason] : "Unknown reason.";
+        const uint32_t reason = packet.readUInt32();
+        const uint32_t mapId  = packet.readUInt32();
         std::string mapLabel = owner_.getMapName(mapId);
-        if (mapLabel.empty()) mapLabel = "instance #" + std::to_string(mapId);
-        owner_.addUIError("Cannot reset " + mapLabel + ": " + reasonMsg);
-        owner_.addSystemChatMessage("Cannot reset " + mapLabel + ": " + reasonMsg);
+        if (mapLabel.empty()) mapLabel = std::to_string(mapId);
+        switch (reason) {
+            case 0: owner_.addSystemChatMessage(interfaceFormat("INSTANCE_RESET_FAILED",
+                        "Cannot reset %s.  There are players still inside the instance.", {mapLabel})); break;
+            case 1: owner_.addSystemChatMessage(interfaceFormat("INSTANCE_RESET_FAILED_OFFLINE",
+                        "Cannot reset %s.  There are players offline in your party.", {mapLabel})); break;
+            case 2: owner_.addSystemChatMessage(interfaceFormat("INSTANCE_RESET_FAILED_ZONING",
+                        "Cannot reset %s.  There are players in your party attempting to zone into an instance.", {mapLabel})); break;
+            default: break;
+        }
     };
     table[Opcode::SMSG_INSTANCE_LOCK_WARNING_QUERY] = [this](network::Packet& packet) {
         // Nine bytes: a countdown in milliseconds, the mask of encounters
@@ -939,7 +1032,9 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_LFG_BOOT_PROPOSAL_UPDATE] = [this](network::Packet& packet) { handleLfgBootProposalUpdate(packet); };
     table[Opcode::SMSG_LFG_TELEPORT_DENIED] = [this](network::Packet& packet) { handleLfgTeleportDenied(packet); };
     table[Opcode::SMSG_LFG_DISABLED] = [this](network::Packet& /*packet*/) {
-        owner_.addSystemChatMessage("The Dungeon Finder is currently disabled.");
+        // ERR_SYSTEM_DISABLED on screen (0x0055bdc0); this printed an English
+        // line to chat.
+        gameError(owner_, ErrTo::Error, "ERR_SYSTEM_DISABLED", "This system is currently disabled.");
     };
     table[Opcode::SMSG_LFG_OFFER_CONTINUE] = [this](network::Packet& packet) {
         // uint32 dungeon entry, which the handler used to skip entirely - and
@@ -955,9 +1050,9 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
             dungeonId = entry & 0x00FFFFFFu;
             typeId    = (entry >> 24) & 0xFFu;
         }
+        // LFG_OFFER_CONTINUE alone; the dialog it opens says the rest
+        // (0x0055bdc0). This printed "Dungeon Finder: You may continue ...".
         std::string name = owner_.getLfgDungeonName(dungeonId);
-        if (name.empty()) name = "your dungeon";
-        owner_.addSystemChatMessage("Dungeon Finder: You may continue " + name + ".");
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("LFG_OFFER_CONTINUE",
                                            {name, std::to_string(dungeonId),
@@ -969,21 +1064,25 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         uint64_t roleGuid = packet.readUInt64();
         uint8_t  ready    = packet.readUInt8();
         uint32_t roles    = packet.readUInt32();
-        std::string roleName;
-        if (roles & 0x02) roleName += "Tank ";
-        if (roles & 0x04) roleName += "Healer ";
-        if (roles & 0x08) roleName += "DPS ";
-        if (roleName.empty()) roleName = "None";
-        std::string pName = "A player";
-        if (auto e = owner_.getEntityManager().getEntity(roleGuid))
-            if (auto u = std::dynamic_pointer_cast<Unit>(e))
-                pName = u->getName();
-        if (ready) owner_.addSystemChatMessage(pName + " has chosen: " + roleName);
-        // Announced as well as written to chat. The role-check window lists
-        // who has picked what as they pick it, and it learns that from this
-        // event alone - parsed here since the chat line needed the same three
-        // bits, and never fired, so the list stayed blank while the chat
-        // filled up beside it.
+        std::string pName = owner_.lookupName(roleGuid);
+        if (pName.empty())
+            if (auto e = owner_.getEntityManager().getEntity(roleGuid))
+                if (auto u = std::dynamic_pointer_cast<Unit>(e))
+                    pName = u->getName();
+        // Nothing said for a choice; a refusal is
+        // ERR_LFG_PLAYER_DECLINED_ROLE_CHECK, a system line naming the player
+        // (0x0055bdc0, case 699), and the event is for a choice only. This
+        // printed "X has chosen: Tank Healer" in English.
+        if (pName.empty()) { packet.skipAll(); return; }
+        if (!ready) {
+            gameError(owner_, ErrTo::Chat, "ERR_LFG_PLAYER_DECLINED_ROLE_CHECK",
+                      "%s has declined the role check.", {pName});
+            packet.skipAll();
+            return;
+        }
+        // The role-check window lists who has picked what as they pick it,
+        // and it learns that from this event alone; it was never fired, so
+        // the list stayed blank.
         //
         // Booleans through eventBool: "0" is a number and true in Lua, so a
         // false argument in front of a true one cannot be spelled as text.
@@ -1120,15 +1219,13 @@ void SocialHandler::inspectUnit(uint64_t guid) {
         LOG_WARNING("Cannot inspect: not in world or not connected");
         return;
     }
-    if (guid == 0) {
-        owner_.raiseUiError("You must target a player to inspect.");
-        return;
-    }
+    // Nothing is said for a unit that cannot be inspected, nor for the
+    // request going out: NotifyInspect (0x00522870) returns quietly when
+    // CanInspect fails. These were English lines - "You must target a player
+    // to inspect.", "You can only inspect players.", "Inspecting X...".
+    if (guid == 0) return;
     auto entity = owner_.getEntityManager().getEntity(guid);
-    if (!entity || entity->getType() != ObjectType::PLAYER) {
-        owner_.addSystemChatMessage("You can only inspect players.");
-        return;
-    }
+    if (!entity || entity->getType() != ObjectType::PLAYER) return;
     auto packet = InspectPacket::build(guid);
     owner_.getSocket()->send(packet);
     if (isActiveExpansion("wotlk")) {
@@ -1136,9 +1233,7 @@ void SocialHandler::inspectUnit(uint64_t guid) {
         owner_.getSocket()->send(achPkt);
     }
     auto player = std::static_pointer_cast<Player>(entity);
-    std::string name = player->getName().empty() ? "Target" : player->getName();
-    owner_.addSystemChatMessage("Inspecting " + name + "...");
-    LOG_INFO("Sent inspect request for player: ", name, " (GUID: 0x", std::hex, guid, std::dec, ")");
+    LOG_INFO("Sent inspect request for player: ", player->getName(), " (GUID: 0x", std::hex, guid, std::dec, ")");
 }
 
 void SocialHandler::handleInspectResults(network::Packet& packet) {
@@ -1279,13 +1374,8 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
         } else {
             LOG_WARNING("SMSG_TALENTS_INFO: too short after guid, ", bytesLeft, " bytes");
         }
-        auto entity = owner_.getEntityManager().getEntity(guid);
-        std::string name = "Target";
-        if (entity) {
-            auto player = std::dynamic_pointer_cast<Player>(entity);
-            if (player && !player->getName().empty()) name = player->getName();
-        }
-        owner_.addSystemChatMessage("Inspecting " + name + " (no talent data available).");
+        // Said in the log only - this printed "Inspecting X (no talent data
+        // available)." into chat, which the original has no line for.
         return;
     }
 
@@ -1451,61 +1541,66 @@ void SocialHandler::queryWho(const std::string& playerName) {
 
 void SocialHandler::addFriend(const std::string& playerName, const std::string& note) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (playerName.empty()) { owner_.raiseUiError("You must specify a player name."); return; }
+    // The request goes out without a word (0x006b6e10); the server's answer,
+    // SMSG_FRIEND_STATUS, is what is said. This printed "Sending friend
+    // request to X..." and refused an empty name in English.
+    if (playerName.empty()) return;
     auto packet = AddFriendPacket::build(playerName, note);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Sending friend request to " + playerName + "...");
     LOG_INFO("Sent friend request to: ", playerName);
 }
 
 void SocialHandler::removeFriend(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (playerName.empty()) { owner_.raiseUiError("You must specify a player name."); return; }
+    // A name not on the list is ERR_FRIEND_NOT_FOUND, a system line, and the
+    // removal itself goes out silently (0x006b6f00). These were English.
+    if (playerName.empty()) return;
     auto it = owner_.friendsCacheRef().find(playerName);
     if (it == owner_.friendsCacheRef().end()) {
-        owner_.addSystemChatMessage(playerName + " is not in your friends list.");
+        gameError(owner_, ErrTo::Chat, "ERR_FRIEND_NOT_FOUND", "Player not found.");
         return;
     }
     auto packet = DelFriendPacket::build(it->second);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Removing " + playerName + " from friends list...");
     LOG_INFO("Sent remove friend request for: ", playerName);
 }
 
 void SocialHandler::setFriendNote(const std::string& playerName, const std::string& note) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (playerName.empty()) { owner_.raiseUiError("You must specify a player name."); return; }
+    // As for a removal (0x006b6f70): ERR_FRIEND_NOT_FOUND for a stranger,
+    // and nothing for the note being set.
+    if (playerName.empty()) return;
     auto it = owner_.friendsCacheRef().find(playerName);
     if (it == owner_.friendsCacheRef().end()) {
-        owner_.addSystemChatMessage(playerName + " is not in your friends list.");
+        gameError(owner_, ErrTo::Chat, "ERR_FRIEND_NOT_FOUND", "Player not found.");
         return;
     }
     auto packet = SetContactNotesPacket::build(it->second, note);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Updated note for " + playerName);
     LOG_INFO("Set friend note for: ", playerName);
 }
 
 void SocialHandler::addIgnore(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (playerName.empty()) { owner_.raiseUiError("You must specify a player name."); return; }
+    // Silent until the server answers with SMSG_FRIEND_STATUS.
+    if (playerName.empty()) return;
     auto packet = AddIgnorePacket::build(playerName);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Adding " + playerName + " to ignore list...");
     LOG_INFO("Sent ignore request for: ", playerName);
 }
 
 void SocialHandler::removeIgnore(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (playerName.empty()) { owner_.raiseUiError("You must specify a player name."); return; }
+    // ERR_IGNORE_NOT_FOUND for a name not on the list (0x006b7040), and
+    // nothing for the request going out. These were English.
+    if (playerName.empty()) return;
     auto it = owner_.ignoreCacheRef().find(playerName);
     if (it == owner_.ignoreCacheRef().end()) {
-        owner_.addSystemChatMessage(playerName + " is not in your ignore list.");
+        gameError(owner_, ErrTo::Chat, "ERR_IGNORE_NOT_FOUND", "Player not found.");
         return;
     }
     auto packet = DelIgnorePacket::build(it->second);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Removing " + playerName + " from ignore list...");
     // Don't erase from ignoreCache here - wait for the server's SMSG_IGNORE_LIST
     // response to confirm. Erasing optimistically desyncs the cache if the server
     // rejects the request. (Compare with removeFriend which also waits for
@@ -1550,7 +1645,8 @@ void SocialHandler::requestLogout(bool exitAfterLogout) {
             if (owner_.logoutCompleteCallbackRef()) owner_.logoutCompleteCallbackRef()(true);
             return;
         }
-        owner_.addSystemChatMessage("Already logging out.");
+        // Nothing said: the countdown popup is already up. This printed
+        // "Already logging out."
         return;
     }
     auto packet = LogoutRequestPacket::build();
@@ -1562,13 +1658,15 @@ void SocialHandler::requestLogout(bool exitAfterLogout) {
 
 void SocialHandler::cancelLogout() {
     if (!owner_.getSocket()) return;
-    if (!loggingOut_) { owner_.addSystemChatMessage("Not currently logging out."); return; }
+    // No line either way: the original's cancel answers with LOGOUT_CANCEL
+    // (event 0x105, 0x006b0900), which closes the countdown popup. This
+    // printed "Not currently logging out." and "Logout cancelled."
+    if (!loggingOut_) return;
     auto packet = LogoutCancelPacket::build();
     owner_.getSocket()->send(packet);
     loggingOut_ = false;
     exitAfterLogout_ = false;
     logoutCountdown_ = 0.0f;
-    owner_.addSystemChatMessage("Logout cancelled.");
     LOG_INFO("Cancelled logout");
 }
 
@@ -1616,40 +1714,41 @@ void SocialHandler::takeInboxTextItem(uint32_t mailId) {
 
 void SocialHandler::setGuildMotd(const std::string& motd) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // No line of its own: the new message comes back as the GUILD_MOTD event,
+    // which the chat frame prints. This said "Guild MOTD updated." besides.
     auto packet = GuildMotdPacket::build(motd);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Guild MOTD updated.");
 }
 
 void SocialHandler::promoteGuildMember(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (playerName.empty()) { owner_.raiseUiError("You must specify a player name."); return; }
+    // The guild commands go out silently and the server's answer is what is
+    // said - SMSG_GUILD_EVENT or SMSG_GUILD_COMMAND_RESULT. These printed
+    // "Promoting X...", "Demoting X...", "Leaving guild...", "Inviting X to
+    // guild..." and refused an empty name in English.
+    if (playerName.empty()) return;
     auto packet = GuildPromotePacket::build(playerName);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Promoting " + playerName + "...");
 }
 
 void SocialHandler::demoteGuildMember(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (playerName.empty()) { owner_.raiseUiError("You must specify a player name."); return; }
+    if (playerName.empty()) return;
     auto packet = GuildDemotePacket::build(playerName);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Demoting " + playerName + "...");
 }
 
 void SocialHandler::leaveGuild() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = GuildLeavePacket::build();
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Leaving guild...");
 }
 
 void SocialHandler::inviteToGuild(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (playerName.empty()) { owner_.raiseUiError("You must specify a player name."); return; }
+    if (playerName.empty()) return;
     auto packet = GuildInvitePacket::build(playerName);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Inviting " + playerName + " to guild...");
 }
 
 void SocialHandler::kickGuildMember(const std::string& playerName) {
@@ -1790,17 +1889,20 @@ void SocialHandler::offerPetition(uint64_t petitionGuid, uint64_t targetGuid) {
 
 void SocialHandler::initiateReadyCheck() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (!isInGroup()) { owner_.raiseUiError("You must be in a group to initiate a ready check."); return; }
+    // DoReadyCheck (0x005732b0) says nothing either way: without the lead
+    // it returns, and READY_CHECK_START comes back with the server's
+    // MSG_RAID_READY_CHECK. These were English lines.
+    if (!isInGroup()) return;
     auto packet = ReadyCheckPacket::build();
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Ready check initiated.");
 }
 
 void SocialHandler::respondToReadyCheck(bool ready) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // ConfirmReadyCheck (0x005740c0) sends the answer and says nothing. This
+    // printed "You are ready." / "You are not ready."
     auto packet = ReadyCheckConfirmPacket::build(ready);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage(ready ? "You are ready." : "You are not ready.");
 }
 
 // ============================================================
@@ -1810,9 +1912,10 @@ void SocialHandler::respondToReadyCheck(bool ready) {
 void SocialHandler::acceptDuel() {
     if (!pendingDuelRequest_ || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     pendingDuelRequest_ = false;
+    // AcceptDuel and CancelDuel send and say nothing; these printed "You
+    // accept the duel." and "You have forfeited the duel."
     auto pkt = DuelAcceptPacket::build(duelArbiterGuid_);
     owner_.getSocket()->send(pkt);
-    owner_.addSystemChatMessage("You accept the duel.");
 }
 
 void SocialHandler::forfeitDuel() {
@@ -1820,27 +1923,26 @@ void SocialHandler::forfeitDuel() {
     pendingDuelRequest_ = false;
     auto packet = DuelCancelPacket::build(duelArbiterGuid_);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("You have forfeited the duel.");
 }
 
 void SocialHandler::proposeDuel(uint64_t targetGuid) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (targetGuid == 0) { owner_.raiseUiError("You must target a player to challenge to a duel."); return; }
+    // StartDuel (0x005cf950) sends the challenge without a word, and with
+    // no unit nothing at all; ERR_DUEL_REQUESTED comes back with the
+    // server's SMSG_DUEL_REQUESTED. These were English lines.
+    if (targetGuid == 0) return;
     auto packet = DuelProposedPacket::build(targetGuid);
     owner_.getSocket()->send(packet);
     duelOpponentGuid_ = targetGuid;
-    owner_.addSystemChatMessage("You have challenged your target to a duel.");
 }
 
 void SocialHandler::reportPlayer(uint64_t targetGuid, const std::string& reason) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (targetGuid == 0) {
-        owner_.raiseUiError("You must target a player to report.");
-        return;
-    }
+    // Nothing said here: the answer is the server's SMSG_COMPLAIN_RESULT
+    // (COMPLAINT_ADDED). These printed English lines.
+    if (targetGuid == 0) return;
     auto packet = ComplainPacket::build(targetGuid, reason);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Player report submitted.");
     LOG_INFO("Reported player: 0x", std::hex, targetGuid, std::dec, " reason=", reason);
 }
 
@@ -1853,9 +1955,11 @@ void SocialHandler::handleDuelRequested(network::Packet& packet) {
     duelArbiterGuid_ = packet.readUInt64();
     duelChallengerGuid_ = packet.readUInt64();
     // The server sends this to both players. The one who issued the challenge
-    // keeps the flag, to be able to call it off, and is not asked to accept it.
+    // keeps the flag, to be able to call it off, and is not asked to accept it
+    // - but is told ERR_DUEL_REQUESTED, a system line (0x005cfcd0).
     if (duelChallengerGuid_ == owner_.getPlayerGuid()) {
         pendingDuelRequest_ = false;
+        gameError(owner_, ErrTo::Chat, "ERR_DUEL_REQUESTED", "You have requested a duel.");
         return;
     }
     duelOpponentGuid_ = duelChallengerGuid_;
@@ -1873,7 +1977,8 @@ void SocialHandler::handleDuelRequested(network::Packet& packet) {
         duelChallengerName_ = tmp;
     }
     pendingDuelRequest_ = true;
-    owner_.addSystemChatMessage(duelChallengerName_ + " challenges you to a duel!");
+    // The DUEL_REQUESTED popup says it; no chat line (0x005cfcd0). This
+    // printed "X challenges you to a duel!"
     if (auto* ac = owner_.services().audioCoordinator)
         if (auto* sfx = ac->getUiSoundManager()) sfx->playTargetSelect();
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("DUEL_REQUESTED", {duelChallengerName_});
@@ -1885,7 +1990,10 @@ void SocialHandler::handleDuelComplete(network::Packet& packet) {
     pendingDuelRequest_ = false;
     duelCountdownMs_ = 0;
     duelOpponentGuid_ = 0;
-    if (!started) owner_.addSystemChatMessage("The duel was cancelled.");
+    // ERR_DUEL_CANCELLED for a duel that never began, in yellow on screen as
+    // the table routes it (0x005cfa90). This was an English chat line.
+    if (!started)
+        gameError(owner_, ErrTo::Info, "ERR_DUEL_CANCELLED", "Duel cancelled.");
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("DUEL_FINISHED", {});
 }
 
@@ -1894,10 +2002,12 @@ void SocialHandler::handleDuelWinner(network::Packet& packet) {
     uint8_t duelType = packet.readUInt8();
     std::string winner = packet.readString();
     std::string loser  = packet.readString();
-    std::string msg = (duelType == 1)
-        ? loser + " has fled from the duel. " + winner + " wins!"
-        : winner + " has defeated " + loser + " in a duel!";
-    owner_.addSystemChatMessage(msg);
+    // DUEL_WINNER_KNOCKOUT, or DUEL_WINNER_RETREAT for a duel fled, the two
+    // names in the order they came - a system line (0x005cfb20). These were
+    // English.
+    owner_.addSystemChatMessage(duelType == 0
+        ? interfaceFormat("DUEL_WINNER_KNOCKOUT", "%1$s has defeated %2$s in a duel", {winner, loser})
+        : interfaceFormat("DUEL_WINNER_RETREAT", "%2$s has fled from %1$s in a duel", {winner, loser}));
 }
 
 // ============================================================
@@ -2012,18 +2122,11 @@ void SocialHandler::leaveGroup() {
 
 void SocialHandler::convertToRaid() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (!isInGroup()) {
-        owner_.raiseUiError("You are not in a group.");
-        return;
-    }
-    if (partyData.leaderGuid != owner_.getPlayerGuid()) {
-        owner_.raiseUiError("You must be the party leader to convert to raid.");
-        return;
-    }
-    if (groupIsRaid(partyData.groupType)) {
-        owner_.raiseUiError("You are already in a raid group.");
-        return;
-    }
+    // ConvertToRaid (0x00574a00) does nothing at all unless the player
+    // leads a party, and says nothing about it. These were English refusals.
+    if (!isInGroup()) return;
+    if (partyData.leaderGuid != owner_.getPlayerGuid()) return;
+    if (groupIsRaid(partyData.groupType)) return;
     auto packet = GroupRaidConvertPacket::build();
     owner_.getSocket()->send(packet);
     LOG_INFO("Sent CMSG_GROUP_RAID_CONVERT");
@@ -2065,10 +2168,11 @@ void SocialHandler::promoteToLeader(uint64_t guid) {
 
 void SocialHandler::uninvitePlayer(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (playerName.empty()) { owner_.raiseUiError("You must specify a player name to uninvite."); return; }
+    // UninviteUnit (0x0051a7a0) sends and says nothing; the group's own
+    // update announces who left. These were English lines.
+    if (playerName.empty()) return;
     auto packet = GroupUninvitePacket::build(playerName);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Removed " + playerName + " from the group.");
 }
 
 // CMSG_LOOT_METHOD carries all three settings together, so changing one means
@@ -2137,32 +2241,31 @@ void SocialHandler::leaveParty() {
 
 void SocialHandler::setMainTank(uint64_t targetGuid) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (targetGuid == 0) { owner_.raiseUiError("You must have a target selected."); return; }
+    // The assignments go out without a word (SetPartyAssignment,
+    // 0x0052e1b0, speaks only to refuse). These printed "Main tank set." and
+    // the like, and an English refusal for want of a target.
+    if (targetGuid == 0) return;
     auto packet = RaidTargetUpdatePacket::build(0, targetGuid);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Main tank set.");
 }
 
 void SocialHandler::setMainAssist(uint64_t targetGuid) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (targetGuid == 0) { owner_.raiseUiError("You must have a target selected."); return; }
+    if (targetGuid == 0) return;
     auto packet = RaidTargetUpdatePacket::build(1, targetGuid);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Main assist set.");
 }
 
 void SocialHandler::clearMainTank() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = RaidTargetUpdatePacket::build(0, 0);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Main tank cleared.");
 }
 
 void SocialHandler::clearMainAssist() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = RaidTargetUpdatePacket::build(1, 0);
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage("Main assist cleared.");
 }
 
 void SocialHandler::setRaidMarkLocally(uint64_t guid, uint8_t icon) {
@@ -2253,18 +2356,23 @@ void SocialHandler::handleGroupInvite(network::Packet& packet) {
     // accept/decline popup, played the invitation sound and left an invite
     // pending that the server would never honour. Answering it is a refusal,
     // not an offer.
+    //
+    // Both are said as 0x006df1a0 says them, as system lines with the inviter
+    // linked: ERR_INVITED_ALREADY_IN_GROUP_SS for that refusal, and
+    // ERR_INVITED_TO_GROUP_SS beside PARTY_INVITE_REQUEST for an invitation.
+    // These were English, the invitation once in chat and again on screen.
     if (!data.canAccept) {
-        owner_.addSystemChatMessage(
-            "|Hplayer:" + data.inviterName + "|h[" + data.inviterName +
-            "]|h invited you to a group, but you could not accept because you "
-            "are already in a group.");
+        gameError(owner_, ErrTo::Chat, "ERR_INVITED_ALREADY_IN_GROUP_SS",
+                  "|Hplayer:%s|h[%s]|h has invited you to join a group, but you cannot accept because you are already in a group.",
+                  {data.inviterName, data.inviterName});
         return;
     }
 
     pendingGroupInvite = true;
     pendingInviterName = data.inviterName;
-    owner_.addSystemChatMessage(data.inviterName + " has invited you to a group.");
-    owner_.addUIError(data.inviterName + " has invited you to join a group.");
+    gameError(owner_, ErrTo::Chat, "ERR_INVITED_TO_GROUP_SS",
+              "|Hplayer:%s|h[%s]|h has invited you to join a group.",
+              {data.inviterName, data.inviterName});
     if (auto* ac = owner_.services().audioCoordinator)
         if (auto* sfx = ac->getUiSoundManager()) sfx->playQuestActivate();
     if (owner_.addonEventCallbackRef())
@@ -2274,14 +2382,19 @@ void SocialHandler::handleGroupInvite(network::Packet& packet) {
 void SocialHandler::handleGroupDecline(network::Packet& packet) {
     GroupDeclineData data;
     if (!GroupDeclineResponseParser::parse(packet, data)) return;
-    owner_.addSystemChatMessage(data.playerName + " has declined your group invitation.");
+    // ERR_DECLINE_GROUP_S, a system line (0x006cbd40).
+    gameError(owner_, ErrTo::Chat, "ERR_DECLINE_GROUP_S", "%s declines your group invitation.",
+              {data.playerName});
 }
 
 void SocialHandler::handleGroupList(network::Packet& packet) {
     const bool hasRoles = isActiveExpansion("wotlk");
     const bool hasBattleGroupFlag = isActiveExpansion("tbc");
     const uint8_t prevLootMethod = partyData.lootMethod;
+    const uint64_t prevLooterGuid = partyData.looterGuid;
+    const uint8_t prevLootThreshold = partyData.lootThreshold;
     const bool wasInGroup = !partyData.isEmpty();
+    const std::vector<GroupMember> prevMembers = partyData.members;
     partyData = GroupListData{};
     if (!GroupListParser::parse(packet, partyData, hasRoles, hasBattleGroupFlag)) return;
     // 0x006d8870: a group with members sets the player's difficulty.
@@ -2297,29 +2410,67 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     }
 
     const bool nowInGroup = !partyData.isEmpty();
-    if (!nowInGroup && wasInGroup) {
-        owner_.addSystemChatMessage("You are no longer in a group.");
-        LOG_INFO("Left group");
-    } else if (nowInGroup && !wasInGroup) {
-        std::string members;
-        for (const auto& m : partyData.members) {
-            if (!members.empty()) members += ", ";
-            members += m.name.empty() ? "?" : m.name;
+    // Who came and went, as 0x006d8870 says it - in a party only, a raid's
+    // roster being the raid frame's business: ERR_JOINED_GROUP_S for each
+    // member not there before and ERR_LEFT_GROUP_S for each one gone, system
+    // lines. A group just formed names its other member to the leader alone.
+    // Leaving is said elsewhere (ERR_LEFT_GROUP_YOU, ERR_UNINVITE_YOU,
+    // ERR_GROUP_DISBANDED). This printed "You joined a group with: ..." and
+    // "You are no longer in a group." in English.
+    if (nowInGroup && !groupIsRaid(partyData.groupType)) {
+        const auto had = [](const std::vector<GroupMember>& list, uint64_t guid) {
+            return std::any_of(list.begin(), list.end(),
+                               [guid](const GroupMember& m) { return m.guid == guid; });
+        };
+        if (wasInGroup) {
+            for (const auto& m : partyData.members)
+                if (!m.name.empty() && !had(prevMembers, m.guid))
+                    gameError(owner_, ErrTo::Chat, "ERR_JOINED_GROUP_S", "%s joins the party.", {m.name});
+            for (const auto& m : prevMembers)
+                if (!m.name.empty() && !had(partyData.members, m.guid))
+                    gameError(owner_, ErrTo::Chat, "ERR_LEFT_GROUP_S", "%s leaves the party.", {m.name});
+        } else if (partyData.leaderGuid == owner_.getPlayerGuid() && !partyData.members.empty() &&
+                   !partyData.members.back().name.empty()) {
+            gameError(owner_, ErrTo::Chat, "ERR_JOINED_GROUP_S", "%s joins the party.",
+                      {partyData.members.back().name});
         }
-        owner_.addSystemChatMessage("You joined a group with: " + members);
-        LOG_INFO("Joined group with ", partyData.memberCount, " members: ", members);
     }
-    // Loot method change notification
-    if (wasInGroup && nowInGroup && partyData.lootMethod != prevLootMethod) {
-        const char* methodName = lootMethodName(partyData.lootMethod);
-        owner_.addSystemChatMessage(std::string("Loot method changed to ") + methodName + ".");
-        // Already noticed, and only ever said in chat. The party frames read
-        // the method to decide whether to offer the master-looter menu, and
-        // they reread it on this - so the change was announced to the player
-        // and not to the interface standing next to them.
-        if (owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("PARTY_LOOT_METHOD_CHANGED", {});
+    if (nowInGroup != wasInGroup) LOG_INFO(nowInGroup ? "Joined group" : "Left group");
+    // The loot rules, as 0x0052bd90 announces them - on joining a group, and
+    // afterwards whenever one changes: ERR_SET_LOOT_* for the method,
+    // ERR_NEW_LOOT_MASTER_S for a new master looter and
+    // ERR_SET_LOOT_THRESHOLD_S for the threshold, system lines. This printed
+    // "Loot method changed to X." in English, and only for the method.
+    if (nowInGroup) {
+        const bool fresh = !wasInGroup;
+        const bool methodChanged = fresh || partyData.lootMethod != prevLootMethod;
+        if (methodChanged) {
+            switch (partyData.lootMethod) {
+                case 0: gameError(owner_, ErrTo::Chat, "ERR_SET_LOOT_FREEFORALL", "Looting changed to free for all."); break;
+                case 1: gameError(owner_, ErrTo::Chat, "ERR_SET_LOOT_ROUNDROBIN", "Looting changed to round robin."); break;
+                case 2: gameError(owner_, ErrTo::Chat, "ERR_SET_LOOT_MASTER", "Looting changed to master looter."); break;
+                case 3: gameError(owner_, ErrTo::Chat, "ERR_SET_LOOT_GROUP", "Looting changed to group loot."); break;
+                case 4: gameError(owner_, ErrTo::Chat, "ERR_SET_LOOT_NBG", "Looting changed to need before greed."); break;
+                default: break;
+            }
+        }
+        if ((methodChanged || partyData.looterGuid != prevLooterGuid) &&
+            partyData.lootMethod == 2 && partyData.looterGuid != 0) {
+            const std::string looter = owner_.lookupName(partyData.looterGuid);
+            if (!looter.empty())
+                gameError(owner_, ErrTo::Chat, "ERR_NEW_LOOT_MASTER_S", "%s is now the loot master.", {looter});
+        }
+        if (fresh || partyData.lootThreshold != prevLootThreshold) {
+            const std::string qualityKey = "ITEM_QUALITY" + std::to_string(partyData.lootThreshold) + "_DESC";
+            gameError(owner_, ErrTo::Chat, "ERR_SET_LOOT_THRESHOLD_S", "Loot threshold set to %s.",
+                      {interfaceString(qualityKey.c_str(), qualityKey.c_str())});
+        }
     }
+    // The party frames read the method to decide whether to offer the
+    // master-looter menu, and they reread it on this.
+    if (wasInGroup && nowInGroup && partyData.lootMethod != prevLootMethod &&
+        owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("PARTY_LOOT_METHOD_CHANGED", {});
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("GROUP_ROSTER_UPDATE", {});
         owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
@@ -2341,38 +2492,74 @@ void SocialHandler::handleGroupUninvite(network::Packet& packet) {
         owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
         owner_.addonEventCallbackRef()("RAID_ROSTER_UPDATE", {});
     }
-    owner_.addUIError("You have been removed from the group.");
-    owner_.addSystemChatMessage("You have been removed from the group.");
+    // ERR_UNINVITE_YOU, a system line (0x006cbe10). This said it in English,
+    // on screen and in chat.
+    gameError(owner_, ErrTo::Chat, "ERR_UNINVITE_YOU", "You have been removed from the group.");
 }
 
 void SocialHandler::handlePartyCommandResult(network::Packet& packet) {
     PartyCommandResultData data;
     if (!PartyCommandResultParser::parse(packet, data)) return;
-    if (data.result != PartyResult::OK) {
-        const char* errText = nullptr;
-        switch (data.result) {
-            case PartyResult::BAD_PLAYER_NAME:       errText = "No player named \"%s\" is currently online."; break;
-            case PartyResult::TARGET_NOT_IN_GROUP:   errText = "%s is not in your group."; break;
-            case PartyResult::TARGET_NOT_IN_INSTANCE:errText = "%s is not in your instance."; break;
-            case PartyResult::GROUP_FULL:            errText = "Your party is full."; break;
-            case PartyResult::ALREADY_IN_GROUP:      errText = "%s is already in a group."; break;
-            case PartyResult::NOT_IN_GROUP:          errText = "You are not in a group."; break;
-            case PartyResult::NOT_LEADER:            errText = "You are not the group leader."; break;
-            case PartyResult::PLAYER_WRONG_FACTION:  errText = "%s is the wrong faction for this group."; break;
-            case PartyResult::IGNORING_YOU:          errText = "%s is ignoring you."; break;
-            case PartyResult::LFG_PENDING:           errText = "You cannot do that while in a LFG queue."; break;
-            case PartyResult::INVITE_RESTRICTED:     errText = "Target is not accepting group invites."; break;
-            default:                                 errText = "Party command failed."; break;
-        }
-        char buf[256];
-        if (!data.name.empty() && errText && std::strstr(errText, "%s"))
-            std::snprintf(buf, sizeof(buf), errText, data.name.c_str());
-        else if (errText)
-            std::snprintf(buf, sizeof(buf), "%s", errText);
-        else
-            std::snprintf(buf, sizeof(buf), "Party command failed (error %u).", static_cast<uint32_t>(data.result));
-        owner_.addUIError(buf);
-        owner_.addSystemChatMessage(buf);
+    // The value after the result, which the vote-kick cooldowns are counted
+    // in (seconds).
+    const int32_t value = packet.hasRemaining(4) ? static_cast<int32_t>(packet.readUInt32()) : 0;
+    const std::vector<std::string> name = {data.name};
+    // Each result as 0x006cbec0 words it, from the ERR_* strings and through
+    // the channel the error table gives each - most of them system lines, a
+    // few on screen. Success is said too, for an invitation sent
+    // (ERR_INVITE_PLAYER_S) and for leaving (ERR_LEFT_GROUP_YOU). These were
+    // English, each said on screen and in chat.
+    switch (static_cast<uint32_t>(data.result)) {
+        case 0:
+            if (data.command == PartyCommand::INVITE && !data.name.empty())
+                gameError(owner_, ErrTo::Chat, "ERR_INVITE_PLAYER_S", "You have invited %s to join your group.", name);
+            else if (data.command == PartyCommand::LEAVE) {
+                gameError(owner_, ErrTo::Chat, "ERR_LEFT_GROUP_YOU", "You leave the group.");
+                if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CANCEL_SUMMON", {});
+            }
+            break;
+        case 1:  gameError(owner_, ErrTo::Chat, "ERR_BAD_PLAYER_NAME_S", "Cannot find player '%s'.", name); break;
+        case 2:  gameError(owner_, ErrTo::Chat, "ERR_TARGET_NOT_IN_GROUP_S", "%s is not in your party.", name); break;
+        case 3:  gameError(owner_, ErrTo::Chat, "ERR_TARGET_NOT_IN_INSTANCE_S", "%s is not in your instance.", name); break;
+        case 4:  gameError(owner_, ErrTo::Chat, "ERR_GROUP_FULL", "Your party is full."); break;
+        case 5:  gameError(owner_, ErrTo::Chat, "ERR_ALREADY_IN_GROUP_S", "%s is already in a group.", name); break;
+        case 6:  gameError(owner_, ErrTo::Chat, "ERR_NOT_IN_GROUP", "You aren't in a party."); break;
+        case 7:  gameError(owner_, ErrTo::Chat, "ERR_NOT_LEADER", "You are not the party leader."); break;
+        case 8:  gameError(owner_, ErrTo::Error, "ERR_PLAYER_WRONG_FACTION", "Target is unfriendly."); break;
+        case 9:  gameError(owner_, ErrTo::Chat, "ERR_IGNORING_YOU_S", "%s is ignoring you.", name); break;
+        case 12: gameError(owner_, ErrTo::Chat, "ERR_LFG_PENDING", "You cannot do that while in the Dungeon Finder queue."); break;
+        case 13: gameError(owner_, ErrTo::Chat, "ERR_INVITE_RESTRICTED", "Trial accounts cannot invite characters into groups."); break;
+        case 14:
+            if (data.command == PartyCommand::SWAP)
+                gameError(owner_, ErrTo::Error, "ERR_GROUP_SWAP_FAILED", "Party member swap failed.");
+            else
+                gameError(owner_, ErrTo::Error, "ERR_INVITE_IN_COMBAT", "You can't invite players while in combat.");
+            break;
+        case 15: gameError(owner_, ErrTo::Error, "ERR_INVITE_UNKNOWN_REALM", "You cannot invite players from that realm."); break;
+        case 16: gameError(owner_, ErrTo::Error, "ERR_INVITE_NO_PARTY_SERVER", "Unable to begin party server session."); break;
+        case 17: gameError(owner_, ErrTo::Error, "ERR_INVITE_PARTY_BUSY", "The party server is busy."); break;
+        case 18: gameError(owner_, ErrTo::Error, "ERR_PARTY_TARGET_AMBIGUOUS", "That name is ambiguous."); break;
+        case 19: gameError(owner_, ErrTo::Chat, "ERR_PARTY_LFG_INVITE_RAID_LOCKED",
+                           "%s is locked to a different instance of this dungeon.", name); break;
+        case 20: gameError(owner_, ErrTo::Error, "ERR_PARTY_LFG_BOOT_LIMIT", "You cannot vote to kick anyone else from this group."); break;
+        case 21: gameError(owner_, ErrTo::Error, "ERR_PARTY_LFG_BOOT_COOLDOWN_S",
+                           "You must wait %s before starting another vote to kick.",
+                           {spellDurationText(static_cast<uint64_t>(value < 0 ? 1 : value) * 1000)}); break;
+        case 22: gameError(owner_, ErrTo::Error, "ERR_PARTY_LFG_BOOT_IN_PROGRESS", "A vote to kick is already in progress."); break;
+        case 23: gameError(owner_, ErrTo::Error, "ERR_PARTY_LFG_BOOT_TOO_FEW_PLAYERS", "There are not enough players in the group to vote to kick."); break;
+        case 24: gameError(owner_, ErrTo::Error, "ERR_PARTY_LFG_BOOT_NOT_ELIGIBLE_S",
+                           "This player cannot be kicked for %s.",
+                           {spellDurationText(static_cast<uint64_t>(value < 0 ? 1 : value) * 1000)}); break;
+        case 25: gameError(owner_, ErrTo::Error, "ERR_RAID_DISALLOWED_BY_LEVEL", "You cannot form a raid group at this level."); break;
+        case 26: gameError(owner_, ErrTo::Error, "ERR_PARTY_LFG_BOOT_IN_COMBAT", "You cannot vote to kick while in combat."); break;
+        case 27:
+            // No line: the vote-kick dialog asks for a reason on this.
+            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("VOTE_KICK_REASON_NEEDED", {data.name});
+            break;
+        case 28: gameError(owner_, ErrTo::Error, "ERR_PARTY_LFG_BOOT_DUNGEON_COMPLETE", "You cannot vote to kick once the dungeon is complete."); break;
+        case 29: gameError(owner_, ErrTo::Error, "ERR_PARTY_LFG_BOOT_LOOT_ROLLS", "You cannot vote to kick while a loot roll is in progress."); break;
+        case 30: gameError(owner_, ErrTo::Error, "ERR_PARTY_LFG_TELEPORT_IN_COMBAT", "You cannot teleport to the dungeon while in combat."); break;
+        default: break;
     }
 }
 
@@ -2519,26 +2706,36 @@ void SocialHandler::handlePartyMemberStats(network::Packet& packet, bool isFull)
 
 void SocialHandler::handleGuildInfo(network::Packet& packet) {
     GuildInfoData data;
+    const size_t start = packet.getReadPos();
     if (!GuildInfoParser::parse(packet, data)) return;
+    // The founding date, which the parser steps over: the packed time after
+    // the name (minutes in bits 0-5, hours 6-10, weekday 11-13, day-1 14-19,
+    // month-1 20-23, year-2000 24-28), read again from where it sits.
+    uint32_t created = 0;
+    {
+        const size_t end = packet.getReadPos();
+        packet.setReadPos(start + data.guildName.size() + 1);
+        if (packet.hasRemaining(4)) created = packet.readUInt32();
+        packet.setReadPos(end);
+    }
     if (!data.guildName.empty()) {
         if (const Character* ch = owner_.getActiveCharacter(); ch && ch->hasGuild()) {
             rememberGuildName(ch->guildId, data.guildName);
             if (guildName_.empty()) guildName_ = data.guildName;
         }
     }
-    // SMSG_GUILD_INFO is pushed by the server on every guild roster sync
-    // (login, member join/leave, periodic refreshes). Only print when
-    // something the user can see has actually changed; otherwise the
-    // guild banner spams chat on every tick.
-    const bool changed = (guildInfoData_.guildName != data.guildName) ||
-                         (guildInfoData_.numMembers != data.numMembers) ||
-                         (guildInfoData_.numAccounts != data.numAccounts);
+    // The answer to /guildinfo, and only that - nothing here asks for it
+    // unprompted - said as 0x006cc440 says it: GUILD_NAME_TEMPLATE and then
+    // GUILD_INFO_TEMPLATE with the founding date and the counts, two system
+    // lines, every time it is asked. This printed one English line, and
+    // only when a figure had changed since the last time.
     guildInfoData_ = data;
-    if (changed) {
-        owner_.addSystemChatMessage("Guild: " + data.guildName + " (" +
-                             std::to_string(data.numMembers) + " members, " +
-                             std::to_string(data.numAccounts) + " accounts)");
-    }
+    owner_.addSystemChatMessage(interfaceFormat("GUILD_NAME_TEMPLATE", "Guild: %s", {data.guildName}));
+    owner_.addSystemChatMessage(interfaceFormat("GUILD_INFO_TEMPLATE",
+        "Guild created %1$d/%2$d/%3$d, %4$d players, %5$d accounts",
+        {std::to_string(((created >> 20) & 0x0F) + 1), std::to_string(((created >> 14) & 0x3F) + 1),
+         std::to_string(((created >> 24) & 0x1F) + 2000),
+         std::to_string(data.numMembers), std::to_string(data.numAccounts)}));
 }
 
 void SocialHandler::handleGuildRoster(network::Packet& packet) {
@@ -2642,8 +2839,10 @@ void SocialHandler::handleGuildQueryResponse(network::Packet& packet) {
         guildQueryData_ = data;
         guildRankNames_.clear();
         for (const auto& rankName : data.rankNames) guildRankNames_.push_back(rankName);
+        // The name arriving is news for the interface and not for chat: the
+        // original's query answer (0x006359e0) prints nothing. This said
+        // "Guild: <Name>".
         if (wasUnknown && !guildName_.empty()) {
-            owner_.addSystemChatMessage("Guild: <" + guildName_ + ">");
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PLAYER_GUILD_UPDATE", {});
         }
     }
@@ -2667,50 +2866,48 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
     GuildEventData data;
     if (!GuildEventParser::parse(packet, data)) return;
 
-    // What the game prints for each, in its own words (ERR_GUILD_* and the
-    // friend list's online and offline lines) and as a system line. These went
-    // out as guild chat with no sender, and the interface puts the player's own
-    // name on a local line without one: "[Guild] [You]: [Guild] Coggs has come
-    // online."
+    // What the game prints for each, as 0x006d92d0 words it - the ERR_GUILD_*
+    // string with the event's strings put in, and the friend list's online
+    // and offline lines - all system lines. These were English; before that
+    // they went out as guild chat with no sender.
     std::string msg;
     bool guildLine = false;  // the MOTD, which is the one that is guild chat
+    const auto s = [&](size_t i) { return i < data.numStrings ? data.strings[i] : std::string(); };
     switch (data.eventType) {
         case GuildEvent::PROMOTION:
-            if (data.numStrings >= 3)
-                msg = data.strings[0] + " has promoted " + data.strings[1] + " to " + data.strings[2] + ".";
+            msg = interfaceFormat("ERR_GUILD_PROMOTE_SSS", "%s has promoted %s to %s.", {s(0), s(1), s(2)});
             break;
         case GuildEvent::DEMOTION:
-            if (data.numStrings >= 3)
-                msg = data.strings[0] + " has demoted " + data.strings[1] + " to " + data.strings[2] + ".";
+            msg = interfaceFormat("ERR_GUILD_DEMOTE_SSS", "%s has demoted %s to %s.", {s(0), s(1), s(2)});
             break;
         case GuildEvent::MOTD:
             // The interface writes this one itself, from the GUILD_MOTD event
             // fired further down: chatframe.lua formats GUILD_MOTD_TEMPLATE
             // and adds it. Only the client's own window needs a line here.
             if (data.numStrings >= 1 && !ui::frameXmlOwns(ui::UiElement::Chat)) {
-                msg = "Guild Message of the Day: " + data.strings[0];
+                msg = interfaceFormat("GUILD_MOTD_TEMPLATE", "Guild Message of the Day: %s", {data.strings[0]});
                 guildLine = true;
             }
             break;
         case GuildEvent::JOINED:
-            if (data.numStrings >= 1) msg = data.strings[0] + " has joined the guild.";
+            msg = interfaceFormat("ERR_GUILD_JOIN_S", "%s has joined the guild.", {s(0)});
             break;
         case GuildEvent::LEFT:
-            if (data.numStrings >= 1) msg = data.strings[0] + " has left the guild.";
+            msg = interfaceFormat("ERR_GUILD_LEAVE_S", "%s has left the guild.", {s(0)});
             break;
         case GuildEvent::REMOVED:
             // The member removed, then who removed them - the order the server
             // sends and ERR_GUILD_REMOVE_SS reads them in.
-            if (data.numStrings >= 2) msg = data.strings[0] + " has been kicked out of the guild by " + data.strings[1] + ".";
+            msg = interfaceFormat("ERR_GUILD_REMOVE_SS", "%s has been kicked out of the guild by %s.", {s(0), s(1)});
             break;
         case GuildEvent::LEADER_IS:
-            if (data.numStrings >= 1) msg = data.strings[0] + " is the leader of your guild.";
+            msg = interfaceFormat("ERR_GUILD_LEADER_IS_S", "%s is the leader of your guild.", {s(0)});
             break;
         case GuildEvent::LEADER_CHANGED:
-            if (data.numStrings >= 2) msg = data.strings[0] + " has made " + data.strings[1] + " the new Guild Master.";
+            msg = interfaceFormat("ERR_GUILD_LEADER_CHANGED_SS", "%s has made %s the new Guild Master.", {s(0), s(1)});
             break;
         case GuildEvent::DISBANDED:
-            msg = "Guild has been disbanded.";
+            msg = interfaceString("ERR_GUILD_DISBANDED", "Guild has been disbanded.");
             guildName_.clear();
             guildRankNames_.clear();
             guildRoster_ = GuildRosterData{};
@@ -2728,14 +2925,21 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
             // said. The transition is still tracked when the message is
             // suppressed - the roster's idea of who is online is not the
             // player's idea of what is worth reading.
+            //
+            // The words are the friend list's, ERR_FRIEND_ONLINE_SS and
+            // ERR_FRIEND_OFFLINE_S, and 0x006d92d0 leaves out the player and
+            // anyone on the friends list, whose own notice says it already.
             if (data.numStrings >= 1 && guildMemberOnlineTransition(data.strings[0], true) &&
-                addons::storedCVarValue("guildMemberNotify", "1") != "0")
-                msg = "|Hplayer:" + data.strings[0] + "|h[" + data.strings[0] + "]|h has come online.";
+                addons::storedCVarValue("guildMemberNotify", "1") != "0" &&
+                data.strings[0] != ownName(owner_) && !owner_.friendsCacheRef().count(data.strings[0]))
+                msg = interfaceFormat("ERR_FRIEND_ONLINE_SS", "|Hplayer:%s|h[%s]|h has come online.",
+                                      {data.strings[0], data.strings[0]});
             break;
         case GuildEvent::SIGNED_OFF:
             if (data.numStrings >= 1 && guildMemberOnlineTransition(data.strings[0], false) &&
-                addons::storedCVarValue("guildMemberNotify", "1") != "0")
-                msg = data.strings[0] + " has gone offline.";
+                addons::storedCVarValue("guildMemberNotify", "1") != "0" &&
+                data.strings[0] != ownName(owner_) && !owner_.friendsCacheRef().count(data.strings[0]))
+                msg = interfaceFormat("ERR_FRIEND_OFFLINE_S", "%s has gone offline.", {data.strings[0]});
             break;
         // The bank's half of the event list. The server broadcasts these to
         // every member whenever anyone touches the bank, so they are frequent,
@@ -2864,7 +3068,11 @@ void SocialHandler::handleGuildInvite(network::Packet& packet) {
     pendingGuildInvite_ = true;
     pendingGuildInviterName_ = data.inviterName;
     pendingGuildInviteGuildName_ = data.guildName;
-    owner_.addSystemChatMessage(data.inviterName + " has invited you to join " + data.guildName + ".");
+    // ERR_INVITED_TO_GUILD_SSS, a system line with the inviter linked, beside
+    // GUILD_INVITE_REQUEST (0x006cc3b0). This was English.
+    gameError(owner_, ErrTo::Chat, "ERR_INVITED_TO_GUILD_SSS",
+              "|Hplayer:%s|h[%s]|h has invited you to join the guild, %s.",
+              {data.inviterName, data.inviterName, data.guildName});
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("GUILD_INVITE_REQUEST", {data.inviterName, data.guildName});
 }
@@ -2876,20 +3084,31 @@ void SocialHandler::handleGuildCommandResult(network::Packet& packet) {
         // Whether the player's own membership changed, which is a different
         // question from whether the command worked: inviting someone succeeds
         // without altering anything the panels read.
+        //
+        // Said as 0x006cc590 says it, system lines naming the guild or the
+        // player: ERR_GUILD_CREATE_S, ERR_GUILD_INVITE_S, ERR_GUILD_QUIT_S
+        // (the server's quit is 3), ERR_GUILD_FOUNDER_S. These were English.
         bool membershipChanged = false;
+        const std::vector<std::string> name = {data.name};
         switch (data.command) {
             case 0:
-                owner_.addSystemChatMessage("Guild created.");
+                gameError(owner_, ErrTo::Chat, "ERR_GUILD_CREATE_S", "%s created.", name);
                 membershipChanged = true;
                 break;
             case 1:
-                if (!data.name.empty()) owner_.addSystemChatMessage("You have invited " + data.name + " to the guild.");
+                gameError(owner_, ErrTo::Chat, "ERR_GUILD_INVITE_S", "You have invited %s to join your guild.", name);
                 break;
             case 2:
-                owner_.addSystemChatMessage("You have left the guild.");
+            case 3:
+                if (data.command == 3)
+                    gameError(owner_, ErrTo::Chat, "ERR_GUILD_QUIT_S", "You are no longer a member of %s.", name);
                 guildName_.clear(); guildRankNames_.clear();
                 guildRoster_ = GuildRosterData{}; hasGuildRoster_ = false;
                 membershipChanged = true;
+                break;
+            case 0x0E:
+                gameError(owner_, ErrTo::Chat, "ERR_GUILD_FOUNDER_S",
+                          "Congratulations, you are a founding member of %s!", name);
                 break;
             default: break;
         }
@@ -2908,31 +3127,40 @@ void SocialHandler::handleGuildCommandResult(network::Packet& packet) {
         }
         return;
     }
-    const char* errStr = nullptr;
+    // The refusals by the server's numbering, as 0x006cc590 words them -
+    // system lines but for the four the error table puts on screen. This had
+    // seven English sentences under the wrong numbers and an English "Guild
+    // command failed" for the rest, each said on screen and in chat.
+    const std::vector<std::string> name = {data.name};
     switch (data.errorCode) {
-        case 2:  errStr = "You are not in a guild."; break;
-        case 4:  errStr = "No player named \"%s\" is online."; break;
-        case 11: errStr = "\"%s\" is already in a guild."; break;
-        case 13: errStr = "You are already in a guild."; break;
-        case 14: errStr = "\"%s\" has already been invited to a guild."; break;
-        case 16: case 17: errStr = "You are not the guild leader."; break;
-        case 22: errStr = "That player is ignoring you."; break;
+        case 1:  gameError(owner_, ErrTo::Chat, "ERR_GUILD_INTERNAL", "Internal guild error."); break;
+        case 2:  gameError(owner_, ErrTo::Chat, "ERR_ALREADY_IN_GUILD", "You are already in a guild."); break;
+        case 3:  gameError(owner_, ErrTo::Chat, "ERR_ALREADY_IN_GUILD_S", "%s is already in a guild.", name); break;
+        case 4:  gameError(owner_, ErrTo::Chat, "ERR_INVITED_TO_GUILD", "You have already been invited into a guild."); break;
+        case 5:  gameError(owner_, ErrTo::Chat, "ERR_ALREADY_INVITED_TO_GUILD_S", "%s has already been invited into a guild.", name); break;
+        case 6:  gameError(owner_, ErrTo::Error, "ERR_NAME_INVALID", "Invalid name"); break;
+        case 7:  gameError(owner_, ErrTo::Error, "ERR_GUILD_NAME_EXISTS_S", "There is already a guild named \"%s\".", name); break;
+        case 8:
+            if (data.command == 3)
+                gameError(owner_, ErrTo::Chat, "ERR_GUILD_LEADER_LEAVE", "You must promote a new Guild Master using /gleader before leaving the guild.");
+            else
+                gameError(owner_, ErrTo::Chat, "ERR_GUILD_PERMISSIONS", "You don't have permission to do that.");
+            break;
+        case 9:  gameError(owner_, ErrTo::Chat, "ERR_GUILD_PLAYER_NOT_IN_GUILD", "You are not in a guild."); break;
+        case 10: gameError(owner_, ErrTo::Chat, "ERR_GUILD_PLAYER_NOT_IN_GUILD_S", "%s is not in your guild.", name); break;
+        case 11: gameError(owner_, ErrTo::Chat, "ERR_GUILD_PLAYER_NOT_FOUND_S", "\"%s\" not found.", name); break;
+        case 12: gameError(owner_, ErrTo::Chat, "ERR_GUILD_NOT_ALLIED", "You cannot invite players from the opposing alliance"); break;
+        case 13: gameError(owner_, ErrTo::Chat, "ERR_GUILD_RANK_TOO_HIGH_S", "%s's rank is too high", name); break;
+        case 14: gameError(owner_, ErrTo::Chat, "ERR_GUILD_RANK_TOO_LOW_S", "%s is already at the lowest rank", name); break;
+        case 17: gameError(owner_, ErrTo::Chat, "ERR_GUILD_RANKS_LOCKED", "Temporary guild error.  Please try again!"); break;
+        case 18: gameError(owner_, ErrTo::Chat, "ERR_GUILD_RANK_IN_USE", "That guild rank is currently in use."); break;
+        case 19: gameError(owner_, ErrTo::Chat, "ERR_IGNORING_YOU_S", "%s is ignoring you.", name); break;
+        case 25: gameError(owner_, ErrTo::Error, "ERR_GUILD_WITHDRAW_LIMIT", "You cannot withdraw that much from the guild bank."); break;
+        case 26: gameError(owner_, ErrTo::Error, "ERR_GUILD_NOT_ENOUGH_MONEY", "The guild bank does not have enough money"); break;
+        case 28: gameError(owner_, ErrTo::Error, "ERR_GUILD_BANK_FULL", "This guild bank tab is full"); break;
+        case 29: gameError(owner_, ErrTo::Error, "ERR_ITEM_NOT_FOUND", "The item was not found."); break;
         default: break;
     }
-    std::string errorMsg;
-    if (errStr) {
-        std::string fmt = errStr;
-        auto pos = fmt.find("%s");
-        if (pos != std::string::npos && !data.name.empty()) fmt.replace(pos, 2, data.name);
-        else if (pos != std::string::npos) fmt.replace(pos, 2, "that player");
-        errorMsg = fmt;
-    } else {
-        errorMsg = "Guild command failed";
-        if (!data.name.empty()) errorMsg += " for " + data.name;
-        errorMsg += " (error " + std::to_string(data.errorCode) + ")";
-    }
-    owner_.addUIError(errorMsg);
-    owner_.addSystemChatMessage(errorMsg);
 }
 
 void SocialHandler::handlePetitionShowlist(network::Packet& packet) {
@@ -3057,31 +3285,54 @@ void SocialHandler::handlePetitionSignResults(network::Packet& packet) {
     uint64_t petGuid    = packet.readUInt64();
     uint64_t playerGuid = packet.readUInt64();
     uint32_t result     = packet.readUInt32();
+    if (result == 0 && petitionInfo_.petitionGuid == petGuid) {
+        petitionInfo_.signatureCount++;
+        PetitionSignature sig; sig.playerGuid = playerGuid;
+        petitionInfo_.signatures.push_back(sig);
+    }
+    // As 0x006cefd0 says it. Someone else's signature on this player's
+    // charter is ERR_PETITION_SIGNED_S naming them, whatever the result; the
+    // player's own is ERR_PETITION_SIGNED, a system line, or the refusal on
+    // screen, and nothing for a result it has no words for. These were
+    // English.
+    if (playerGuid != owner_.getPlayerGuid()) {
+        const std::string signer = owner_.lookupName(playerGuid);
+        if (!signer.empty())
+            gameError(owner_, ErrTo::Chat, "ERR_PETITION_SIGNED_S", "%s has signed your charter.", {signer});
+        return;
+    }
     switch (result) {
         case 0:
-            owner_.addSystemChatMessage("Petition signed successfully.");
-            if (petitionInfo_.petitionGuid == petGuid) {
-                petitionInfo_.signatureCount++;
-                PetitionSignature sig; sig.playerGuid = playerGuid;
-                petitionInfo_.signatures.push_back(sig);
-            }
+            gameError(owner_, ErrTo::Chat, "ERR_PETITION_SIGNED", "Charter signed");
+            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PETITION_CLOSED", {});
             break;
-        case 1: owner_.raiseUiError("You have already signed that petition."); break;
-        case 2: owner_.raiseUiError("You are already in a guild."); break;
-        case 3: owner_.raiseUiError("You cannot sign your own petition."); break;
-        default: owner_.addSystemChatMessage("Cannot sign petition (error " + std::to_string(result) + ")."); break;
+        case 1:  gameError(owner_, ErrTo::Error, "ERR_PETITION_ALREADY_SIGNED", "You have already signed that charter"); break;
+        case 2:  gameError(owner_, ErrTo::Error, "ERR_PETITION_IN_GUILD", "That player is already in a guild"); break;
+        case 3:  gameError(owner_, ErrTo::Error, "ERR_PETITION_CREATOR", "You can't sign your own charter"); break;
+        case 5:  gameError(owner_, ErrTo::Error, "ERR_PETITION_NOT_SAME_SERVER", "That player is not from your server"); break;
+        case 8:  gameError(owner_, ErrTo::Error, "ERR_PETITION_FULL", "That charter is full"); break;
+        case 10: gameError(owner_, ErrTo::Error, "ERR_PETITION_ALREADY_SIGNED_OTHER", "You've already signed another guild charter"); break;
+        case 11: gameError(owner_, ErrTo::Error, "ERR_PETITION_RESTRICTED_ACCOUNT", "Trial accounts cannot sign guild charters"); break;
+        default: break;
     }
 }
 
 void SocialHandler::handleTurnInPetitionResults(network::Packet& packet) {
     uint32_t result = 0;
     if (!TurnInPetitionResultsParser::parse(packet, result)) return;
+    // As 0x006cf1a0 says it: a charter turned in closes the registrar and
+    // says nothing (the guild's own events announce it); 2, 4 and 11 are
+    // refusals - ERR_PETITION_IN_GUILD and ERR_PETITION_NOT_ENOUGH_SIGNATURES
+    // on screen, ERR_GUILD_PERMISSIONS a system line. This had English
+    // sentences under other numbers.
     switch (result) {
-        case 0: owner_.addSystemChatMessage("Guild created successfully!"); break;
-        case 1: owner_.addSystemChatMessage("Guild creation failed: already in a guild."); break;
-        case 2: owner_.addSystemChatMessage("Guild creation failed: not enough signatures."); break;
-        case 3: owner_.addSystemChatMessage("Guild creation failed: name already taken."); break;
-        default: owner_.addSystemChatMessage("Guild creation failed (error " + std::to_string(result) + ")."); break;
+        case 0:
+            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GUILD_REGISTRAR_CLOSED", {});
+            break;
+        case 2:  gameError(owner_, ErrTo::Error, "ERR_PETITION_IN_GUILD", "That player is already in a guild"); break;
+        case 4:  gameError(owner_, ErrTo::Error, "ERR_PETITION_NOT_ENOUGH_SIGNATURES", "You need more signatures"); break;
+        case 11: gameError(owner_, ErrTo::Chat, "ERR_GUILD_PERMISSIONS", "You don't have permission to do that."); break;
+        default: break;
     }
 }
 
@@ -3144,22 +3395,20 @@ void SocialHandler::handlePlayedTime(network::Packet& packet) {
         // work here as well as letting the interface do it asked twice.
         if (ui::frameXmlOwns(ui::UiElement::Chat)) return;
 
-        uint32_t totalDays = data.totalTimePlayed / 86400;
-        uint32_t totalHours = (data.totalTimePlayed % 86400) / 3600;
-        uint32_t totalMinutes = (data.totalTimePlayed % 3600) / 60;
-        uint32_t levelDays = data.levelTimePlayed / 86400;
-        uint32_t levelHours = (data.levelTimePlayed % 86400) / 3600;
-        uint32_t levelMinutes = (data.levelTimePlayed % 3600) / 60;
-        std::string totalMsg = "Total time played: ";
-        if (totalDays > 0) totalMsg += std::to_string(totalDays) + " days, ";
-        if (totalHours > 0 || totalDays > 0) totalMsg += std::to_string(totalHours) + " hours, ";
-        totalMsg += std::to_string(totalMinutes) + " minutes";
-        std::string levelMsg = "Time played this level: ";
-        if (levelDays > 0) levelMsg += std::to_string(levelDays) + " days, ";
-        if (levelHours > 0 || levelDays > 0) levelMsg += std::to_string(levelHours) + " hours, ";
-        levelMsg += std::to_string(levelMinutes) + " minutes";
-        owner_.addSystemChatMessage(totalMsg);
-        owner_.addSystemChatMessage(levelMsg);
+        //
+        // Worded as ChatFrame_DisplayTimePlayed words them: TIME_PLAYED_TOTAL
+        // and TIME_PLAYED_LEVEL around TIME_DAYHOURMINUTESECOND. These were
+        // English.
+        const auto breakdown = [](uint32_t t) {
+            return interfaceFormat("TIME_DAYHOURMINUTESECOND",
+                "%d |4day:days;, %d |4hour:hours;, %d |4minute:minutes;, %d |4second:seconds;",
+                {std::to_string(t / 86400), std::to_string((t % 86400) / 3600),
+                 std::to_string((t % 3600) / 60), std::to_string(t % 60)});
+        };
+        owner_.addSystemChatMessage(interfaceFormat("TIME_PLAYED_TOTAL", "Total time played: %s",
+                                                    {breakdown(data.totalTimePlayed)}));
+        owner_.addSystemChatMessage(interfaceFormat("TIME_PLAYED_LEVEL", "Time played this level: %s",
+                                                    {breakdown(data.levelTimePlayed)}));
     }
 }
 
@@ -3169,7 +3418,9 @@ void SocialHandler::handleWho(network::Packet& packet) {
     uint32_t onlineCount = packet.readUInt32();
     whoResults_.clear();
     whoOnlineCount_ = onlineCount;
-    if (displayCount == 0) { owner_.raiseUiError("No players found."); return; }
+    // No refusal for an empty answer: the count line below says "0 players
+    // total" (WHO_NUM_RESULTS, 0x006b86b0). This raised an English "No
+    // players found." on screen and told the who panel nothing.
     for (uint32_t i = 0; i < displayCount; ++i) {
         if (packet.getReadPos() >= packet.getSize()) break;
         std::string playerName = packet.readString();
@@ -3197,19 +3448,25 @@ void SocialHandler::handleWho(network::Packet& packet) {
     // client's to print rather than the interface's, which is why no FrameXML
     // file formats them. The count line carries a |4 escape, which resolves on
     // the way to the screen.
+    //
+    // Each row is WHO_LIST_FORMAT, or WHO_LIST_GUILD_FORMAT with a guild, and
+    // the count WHO_NUM_RESULTS (0x006b5030, 0x006b86b0); the zone is always
+    // there, UNKNOWN where it has no name. These were English templates.
     if (!whoToUI_) {
         for (const auto& e : whoResults_) {
-            std::string line = "|Hplayer:" + e.name + "|h[" + e.name + "]|h: Level " +
-                               std::to_string(e.level) + " " +
-                               getRaceName(static_cast<Race>(e.raceId)) + std::string(" ") +
-                               getClassName(static_cast<Class>(e.classId));
-            if (!e.guildName.empty()) line += " <" + e.guildName + ">";
-            const std::string zone = owner_.getWhoAreaName(e.zoneId);
-            if (!zone.empty()) line += " - " + zone;
-            owner_.addSystemChatMessage(line);
+            std::string zone = owner_.getWhoAreaName(e.zoneId);
+            if (zone.empty()) zone = interfaceString("UNKNOWN", "Unknown");
+            const std::string level = std::to_string(e.level);
+            const std::string race = getRaceName(static_cast<Race>(e.raceId));
+            const std::string cls = getClassName(static_cast<Class>(e.classId));
+            owner_.addSystemChatMessage(e.guildName.empty()
+                ? interfaceFormat("WHO_LIST_FORMAT", "|Hplayer:%s|h[%s]|h: Level %d %s %s - %s",
+                                  {e.name, e.name, level, race, cls, zone})
+                : interfaceFormat("WHO_LIST_GUILD_FORMAT", "|Hplayer:%s|h[%s]|h: Level %d %s %s <%s> - %s",
+                                  {e.name, e.name, level, race, cls, e.guildName, zone}));
         }
-        owner_.addSystemChatMessage(std::to_string(whoOnlineCount_) +
-                                    " |4player:players; total");
+        owner_.addSystemChatMessage(interfaceFormat("WHO_NUM_RESULTS", "%d |4player:players; total",
+                                                    {std::to_string(whoOnlineCount_)}));
     }
 
     // The who panel asked for this and redraws its rows on the answer coming
@@ -3365,18 +3622,36 @@ void SocialHandler::handleFriendStatus(network::Packet& packet) {
             owner_.contactsRef().push_back(std::move(entry));
         }
     }
+    // Each result as 0x006b73a0 words it, system lines all: the friend
+    // list's ERR_FRIEND_* - a database error reads as ERR_FRIEND_NOT_FOUND
+    // there too, and the online notice links the name - and the ignore
+    // list's ERR_IGNORE_*, which share this packet and said nothing here.
+    // The lines that name a player wait for the name, as the original's do.
+    // These were English.
+    const std::vector<std::string> who = {playerName};
+    const bool named = !playerName.empty();
     switch (data.status) {
-        case kDbError:      owner_.addSystemChatMessage("Your friends list could not be reached."); break;
-        case kListFull:     owner_.addSystemChatMessage("Your friends list is full."); break;
-        case kOnline:       owner_.addSystemChatMessage(playerName + " is now online."); break;
-        case kOffline:      owner_.addSystemChatMessage(playerName + " is now offline."); break;
-        case kNotFound:     owner_.addSystemChatMessage("Player not found."); break;
-        case kRemoved:      owner_.addSystemChatMessage(playerName + " has been removed from your friends list."); break;
+        case kDbError:
+        case kNotFound:     gameError(owner_, ErrTo::Chat, "ERR_FRIEND_NOT_FOUND", "Player not found."); break;
+        case kListFull:     gameError(owner_, ErrTo::Chat, "ERR_FRIEND_LIST_FULL", "Your friends list is full."); break;
+        case kOnline:
+            if (named) gameError(owner_, ErrTo::Chat, "ERR_FRIEND_ONLINE_SS", "|Hplayer:%s|h[%s]|h has come online.",
+                                 {playerName, playerName});
+            break;
+        case kOffline:      if (named) gameError(owner_, ErrTo::Chat, "ERR_FRIEND_OFFLINE_S", "%s has gone offline.", who); break;
+        case kRemoved:      if (named) gameError(owner_, ErrTo::Chat, "ERR_FRIEND_REMOVED_S", "%s removed from friends list.", who); break;
         case kAddedOnline:
-        case kAddedOffline: owner_.addSystemChatMessage(playerName + " has been added to your friends list."); break;
-        case kAlready:      owner_.addSystemChatMessage(playerName + " is already in your friends list."); break;
-        case kSelf:         owner_.addSystemChatMessage("You cannot add yourself as a friend."); break;
-        case kEnemy:        owner_.addSystemChatMessage(playerName + " belongs to the other faction."); break;
+        case kAddedOffline: if (named) gameError(owner_, ErrTo::Chat, "ERR_FRIEND_ADDED_S", "%s added to friends.", who); break;
+        case kAlready:      if (named) gameError(owner_, ErrTo::Chat, "ERR_FRIEND_ALREADY_S", "%s is already your friend.", who); break;
+        case kSelf:         gameError(owner_, ErrTo::Chat, "ERR_FRIEND_SELF", "You can't put yourself on your friend list."); break;
+        case kEnemy:        gameError(owner_, ErrTo::Chat, "ERR_FRIEND_WRONG_FACTION", "Friends must be part of your alliance."); break;
+        case 0x0B:          gameError(owner_, ErrTo::Chat, "ERR_IGNORE_FULL", "You can't ignore any more players."); break;
+        case 0x0C:          gameError(owner_, ErrTo::Chat, "ERR_IGNORE_SELF", "You can't ignore yourself."); break;
+        case 0x0D:          gameError(owner_, ErrTo::Chat, "ERR_IGNORE_NOT_FOUND", "Player not found."); break;
+        case 0x0E:          if (named) gameError(owner_, ErrTo::Chat, "ERR_IGNORE_ALREADY_S", "%s is already being ignored.", who); break;
+        case 0x0F:          if (named) gameError(owner_, ErrTo::Chat, "ERR_IGNORE_ADDED_S", "%s is now being ignored.", who); break;
+        case 0x10:          if (named) gameError(owner_, ErrTo::Chat, "ERR_IGNORE_REMOVED_S", "%s is no longer being ignored.", who); break;
+        case 0x11:          gameError(owner_, ErrTo::Chat, "ERR_IGNORE_AMBIGUOUS", "That name is ambiguous, type more of the player's server name."); break;
         default: break;
     }
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
@@ -3385,14 +3660,15 @@ void SocialHandler::handleFriendStatus(network::Packet& packet) {
 void SocialHandler::handleRandomRoll(network::Packet& packet) {
     RandomRollData data;
     if (!RandomRollParser::parse(packet, data)) return;
-    std::string rollerName = (data.rollerGuid == owner_.getPlayerGuid()) ? "You" : "Someone";
-    if (data.rollerGuid != owner_.getPlayerGuid()) {
-        auto it = owner_.getPlayerNameCache().find(data.rollerGuid);
-        if (it != owner_.getPlayerNameCache().end()) rollerName = it->second;
-    }
-    std::string msg = rollerName + ((data.rollerGuid == owner_.getPlayerGuid()) ? " roll " : " rolls ");
-    msg += std::to_string(data.result) + " (" + std::to_string(data.minRoll) + "-" + std::to_string(data.maxRoll) + ")";
-    owner_.addSystemChatMessage(msg);
+    // RANDOM_ROLL_RESULT with the roller's name - the player's own too - the
+    // number and the range, a system line (0x006e2e90, MSG_RANDOM_ROLL); none
+    // for a roller whose name is not known. This printed "You roll" /
+    // "Someone rolls" in English.
+    std::string rollerName = owner_.lookupName(data.rollerGuid);
+    if (rollerName.empty() && data.rollerGuid == owner_.getPlayerGuid()) rollerName = ownName(owner_);
+    if (rollerName.empty()) return;
+    owner_.addSystemChatMessage(interfaceFormat("RANDOM_ROLL_RESULT", "%s rolls %d (%d-%d)",
+        {rollerName, std::to_string(data.result), std::to_string(data.minRoll), std::to_string(data.maxRoll)}));
 }
 
 // ============================================================
@@ -3403,8 +3679,10 @@ void SocialHandler::handleLogoutResponse(network::Packet& packet) {
     LogoutResponseData data;
     if (!LogoutResponseParser::parse(packet, data)) return;
     if (data.result == 0) {
-        if (data.instant) { owner_.addSystemChatMessage("Logging out..."); logoutCountdown_ = 0.0f; }
-        else { owner_.addSystemChatMessage("Logging out in 20 seconds..."); logoutCountdown_ = 20.0f; }
+        // No line: the countdown is the CAMP or QUIT popup below (0x006b08b0
+        // fires PLAYER_CAMPING or PLAYER_QUITING and says nothing). This
+        // printed "Logging out..." / "Logging out in 20 seconds...".
+        logoutCountdown_ = data.instant ? 0.0f : 20.0f;
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("PLAYER_LOGOUT", {});
             // The timer the server just imposed, announced so the interface can
@@ -3436,7 +3714,8 @@ void SocialHandler::handleLogoutResponse(network::Packet& packet) {
             LOG_WARNING("Logout refused, but Exit Game was asked for - closing anyway");
             if (owner_.logoutCompleteCallbackRef()) owner_.logoutCompleteCallbackRef()(true);
         } else {
-            owner_.raiseUiError("Cannot logout right now.");
+            // ERR_LOGOUT_FAILED on screen (0x006b08b0); this was English.
+            gameError(owner_, ErrTo::Error, "ERR_LOGOUT_FAILED", "You can't logout now.");
         }
     }
 }
@@ -3445,8 +3724,9 @@ void SocialHandler::handleLogoutComplete(network::Packet& /*packet*/) {
     // The countdown finishing is not the end of it: the server says when the
     // character is actually out of the world, and only then can the client leave -
     // to character select, or out of the game entirely for /quit and /exit.
+    // Nothing said - the client leaves the world. This printed "Logout
+    // complete." on the way out.
     const bool exiting = exitAfterLogout_;
-    owner_.addSystemChatMessage("Logout complete.");
     loggingOut_ = false; exitAfterLogout_ = false; logoutCountdown_ = 0.0f;
     LOG_WARNING("Logout complete (exiting=", exiting ? "yes" : "no", ")");  // temporary: visible at default log level
     if (owner_.logoutCompleteCallbackRef()) owner_.logoutCompleteCallbackRef()(exiting);
@@ -3468,13 +3748,15 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     const uint32_t bgTypeId = status.bgTypeId;
     const uint32_t statusId = status.statusId;
 
-    std::string bgName = "Battleground";
-    for (const auto& kv : kBgNames) { if (kv.first == bgTypeId) { bgName = kv.second; break; } }
-    if (bgName == "Battleground") bgName = "Battleground #" + std::to_string(bgTypeId);
-    if (arenaType > 0) {
-        bgName = std::to_string(arenaType) + "v" + std::to_string(arenaType) + " Arena";
-        for (const auto& kv : kBgNames) { if (kv.first == bgTypeId) { bgName += " (" + std::string(kv.second) + ")"; break; } }
-    }
+    // The name GetBattlefieldStatus answers with, from where 0x0054bc30 takes
+    // it: the map's own (Map.dbc) once a place is offered or entered, and the
+    // battleground's (BattlemasterList.dbc) while queued - both in the
+    // client's language. This was an English table of its own, "2v2 Arena
+    // (Nagrand Arena)" for an arena, which the interface showed as it was.
+    std::string bgName;
+    if ((statusId == 2 || statusId == 3) && status.mapId != 0) bgName = owner_.getMapName(status.mapId);
+    if (bgName.empty())
+        if (const GameHandler::BattlemasterEntry* bg = owner_.getBattlemasterInfo(bgTypeId)) bgName = bg->name;
 
     // An invitation with no timeout in it still has to count down from
     // something, and eighty seconds is what the server gives one.
@@ -3511,16 +3793,14 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
         statusChanged = true;
     }
 
+    // Said in the log only. The original answers a status with
+    // UPDATE_BATTLEFIELD_STATUS and no line (0x0054ae40) - the queue icon and
+    // the "enter battle" popup are the interface's. This printed "Queued for
+    // X.", "X is ready!" and "Entered X." in English.
     if (statusChanged) {
         LOG_WARNING("Battleground queue ", queueSlot + 1, ": status ", statusId,
                     " for type ", bgTypeId, " (", bgName, "), average wait ",
                     avgWaitSec, " s, waited ", timeInQueueSec, " s");
-        switch (statusId) {
-            case 1: owner_.addSystemChatMessage("Queued for " + bgName + "."); break;
-            case 2: owner_.addSystemChatMessage(bgName + " is ready!"); break;
-            case 3: owner_.addSystemChatMessage("Entered " + bgName + "."); break;
-            default: break;
-        }
     }
     // The argument is which queue changed, counted from one, not what it
     // changed to. battlefieldframe.lua takes it as the index and raises the
@@ -3562,14 +3842,15 @@ void SocialHandler::acceptBattlefield(uint32_t queueSlot) {
     const BgQueueSlot* slot = nullptr;
     if (queueSlot == 0xFFFFFFFF) { for (const auto& s : bgQueues_) { if (s.statusId == 2) { slot = &s; break; } } }
     else if (queueSlot < bgQueues_.size() && bgQueues_[queueSlot].statusId == 2) slot = &bgQueues_[queueSlot];
-    if (!slot) { owner_.addSystemChatMessage("No battleground invitation pending."); return; }
+    // AcceptBattlefieldPort sends the answer and says nothing, and nothing
+    // for want of an invitation either. These were English lines.
+    if (!slot) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_BATTLEFIELD_PORT));
     pkt.writeUInt8(slot->arenaType); pkt.writeUInt8(0x00); pkt.writeUInt32(slot->bgTypeId);
     pkt.writeUInt16(0x0000); pkt.writeUInt8(1);
     owner_.getSocket()->send(pkt);
     uint32_t clearSlot = slot->queueSlot;
     if (clearSlot < bgQueues_.size()) bgQueues_[clearSlot].statusId = 3;
-    owner_.addSystemChatMessage("Accepting battleground invitation...");
 }
 
 // Leave the battleground the player is standing in, which is a different thing
@@ -3635,17 +3916,16 @@ void SocialHandler::declineBattlefield(uint32_t queueSlot) {
     else if (queueSlot < bgQueues_.size() &&
              (bgQueues_[queueSlot].statusId == 1 || bgQueues_[queueSlot].statusId == 2))
         slot = &bgQueues_[queueSlot];
-    if (!slot) { owner_.addSystemChatMessage("No battleground invitation pending."); return; }
-    const bool wasInvite = slot->statusId == 2;
-    const std::string bgName = slot->bgName;
+    // Silent, as declining or leaving a queue is in the original - this
+    // printed "No battleground invitation pending.", "Battleground
+    // invitation declined." and "Left the queue for X.".
+    if (!slot) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_BATTLEFIELD_PORT));
     pkt.writeUInt8(slot->arenaType); pkt.writeUInt8(0x00); pkt.writeUInt32(slot->bgTypeId);
     pkt.writeUInt16(0x0000); pkt.writeUInt8(0);
     owner_.getSocket()->send(pkt);
     uint32_t clearSlot = slot->queueSlot;
     if (clearSlot < bgQueues_.size()) bgQueues_[clearSlot] = BgQueueSlot{};
-    owner_.addSystemChatMessage(wasInvite ? "Battleground invitation declined."
-                                          : "Left the queue for " + bgName + ".");
     // The minimap icon and the panel read the queues on this event; without
     // it they kept showing the queue until the server's next word.
     if (owner_.addonEventCallbackRef())
@@ -3697,8 +3977,16 @@ void SocialHandler::handleInstanceDifficulty(network::Packet& packet) {
     }
     inInstance_ = true;
     if (instanceDifficulty_ != prevDifficulty) {
-        const char* diffLabel = instanceDifficultyName(instanceDifficulty_);
-        if (diffLabel) owner_.addSystemChatMessage(std::string("Dungeon difficulty set to ") + diffLabel + ".");
+        // ERR_DUNGEON_DIFFICULTY_CHANGED_S naming DUNGEON_DIFFICULTY<n>, a
+        // system line - for the difficulty being set (MSG_SET_DUNGEON_DIFFICULTY,
+        // 0x00525530 -> 0x00524720) and not for the instance's own
+        // (SMSG_INSTANCE_DIFFICULTY, which 0x00526530 only stores). This was
+        // English, for either.
+        if (packet.getOpcode() == wireOpcode(Opcode::MSG_SET_DUNGEON_DIFFICULTY)) {
+            const std::string key = "DUNGEON_DIFFICULTY" + std::to_string(instanceDifficulty_ + 1);
+            gameError(owner_, ErrTo::Chat, "ERR_DUNGEON_DIFFICULTY_CHANGED_S",
+                      "Dungeon difficulty set to %s.", {interfaceString(key.c_str(), key.c_str())});
+        }
         // Already noticed and already said - in chat, to the player. The
         // minimap hangs a difficulty banner off its own corner and rereads
         // GetInstanceInfo on this, which answers from the value just stored,
@@ -3723,16 +4011,38 @@ void SocialHandler::handleLfgJoinResult(network::Packet& packet) {
     if (!packet.hasRemaining(8)) return;
     const uint32_t result = packet.readUInt32();
     const uint32_t state  = packet.readUInt32();
+    // A join is said by the queue update that follows it (ERR_LFG_JOINED_QUEUE)
+    // and a refusal here, as 0x0055bdc0 picks it from its table at
+    // 0x00acdda8 - system lines but for ERR_LFG_CANT_USE_DUNGEONS on screen,
+    // and a failed role check named by its reason. These were English
+    // ("Dungeon Finder: ..."), refusals said twice.
     if (result == 0) {
         lfgState_ = static_cast<LfgState>(state);
-        std::string dName = owner_.getLfgDungeonName(lfgDungeonId_);
-        if (!dName.empty()) owner_.addSystemChatMessage("Dungeon Finder: Joined the queue for " + dName + ".");
-        else owner_.addSystemChatMessage("Dungeon Finder: Joined the queue.");
+    } else if (result == 1 && state == 3) {
+        gameError(owner_, ErrTo::Chat, "ERR_LFG_ROLE_CHECK_FAILED_TIMEOUT", "The Role Check has failed because a group member did not respond.");
+    } else if (result == 1 && state == 4) {
+        gameError(owner_, ErrTo::Chat, "ERR_LFG_ROLE_CHECK_FAILED_NOT_VIABLE", "The Role Check has failed because your group is not viable.");
     } else {
-        const char* msg = lfgJoinResultString(result);
-        std::string errMsg = std::string("Dungeon Finder: ") + (msg ? msg : "Join failed.");
-        owner_.addUIError(errMsg);
-        owner_.addSystemChatMessage(errMsg);
+        switch (result) {
+            case 1: case 18:
+                    gameError(owner_, ErrTo::Chat, "ERR_LFG_ROLE_CHECK_FAILED", "The Role Check has failed."); break;
+            case 2: gameError(owner_, ErrTo::Chat, "ERR_LFG_GROUP_FULL", "Your group is already full."); break;
+            case 4: gameError(owner_, ErrTo::Chat, "ERR_LFG_NO_LFG_OBJECT", "Internal LFG Error."); break;
+            case 5: gameError(owner_, ErrTo::Chat, "ERR_LFG_NO_SLOTS_PLAYER", "You do not meet the requirements for the chosen dungeons."); break;
+            case 6: gameError(owner_, ErrTo::Chat, "ERR_LFG_NO_SLOTS_PARTY", "One or more party members do not meet the requirements for the chosen dungeons."); break;
+            case 7: gameError(owner_, ErrTo::Chat, "ERR_LFG_MISMATCHED_SLOTS", "You cannot mix dungeons, raids, and random when picking dungeons."); break;
+            case 8: gameError(owner_, ErrTo::Chat, "ERR_LFG_PARTY_PLAYERS_FROM_DIFFERENT_REALMS", "The dungeon you chose does not support players from multiple realms."); break;
+            case 9: gameError(owner_, ErrTo::Chat, "ERR_LFG_MEMBERS_NOT_PRESENT", "One or more party members are pending invites or disconnected."); break;
+            case 10: gameError(owner_, ErrTo::Chat, "ERR_LFG_GET_INFO_TIMEOUT", "Could not retrieve information about some party members."); break;
+            case 11: gameError(owner_, ErrTo::Chat, "ERR_LFG_INVALID_SLOT", "One or more dungeons was not valid."); break;
+            case 12: gameError(owner_, ErrTo::Chat, "ERR_LFG_DESERTER_PLAYER", "You can not queue for dungeons until your deserter debuff wears off."); break;
+            case 13: gameError(owner_, ErrTo::Chat, "ERR_LFG_DESERTER_PARTY", "One or more party members has a deserter debuff."); break;
+            case 14: gameError(owner_, ErrTo::Chat, "ERR_LFG_RANDOM_COOLDOWN_PLAYER", "You can not queue for random dungeons while on random dungeon cooldown."); break;
+            case 15: gameError(owner_, ErrTo::Chat, "ERR_LFG_RANDOM_COOLDOWN_PARTY", "One or more party members are on random dungeon cooldown."); break;
+            case 16: gameError(owner_, ErrTo::Chat, "ERR_LFG_TOO_MANY_MEMBERS", "You have too many group members to queue for that."); break;
+            case 17: gameError(owner_, ErrTo::Error, "ERR_LFG_CANT_USE_DUNGEONS", "You cannot queue for a dungeon or raid while using battlegrounds or arenas."); break;
+            default: break;
+        }
     }
     // The queue state moved, either into a queue or back out of the attempt,
     // and LFG_UPDATE is how the panel is told to re-read it - the same event
@@ -3901,30 +4211,35 @@ void SocialHandler::handleLfgProposalUpdate(network::Packet& packet) {
 
     lfgDungeonId_ = dungeonId; lfgProposalId_ = proposalId;
     switch (proposalState) {
-        case kProposalInitiating: {
+        case kProposalInitiating:
             lfgState_ = LfgState::Proposal;
-            std::string dName = owner_.getLfgDungeonName(dungeonId);
-            owner_.addSystemChatMessage(dName.empty()
-                ? "Dungeon Finder: A group has been found. Accept or decline."
-                : "Dungeon Finder: A group has been found for " + dName +
-                  ". Accept or decline.");
             break;
-        }
         case kProposalFailed:
             lfgState_ = LfgState::Queued; lfgProposalId_ = 0;
-            owner_.addUIError("Dungeon Finder: Group proposal failed.");
-            owner_.addSystemChatMessage("Dungeon Finder: Group proposal failed.");
             break;
-        case kProposalSuccess: {
+        case kProposalSuccess:
             lfgState_ = LfgState::InDungeon; lfgProposalId_ = 0;
-            std::string dName = owner_.getLfgDungeonName(dungeonId);
-            owner_.addSystemChatMessage(dName.empty()
-                ? "Dungeon Finder: Group found! Entering dungeon..."
-                : "Dungeon Finder: Group found for " + dName +
-                  "! Entering dungeon...");
             break;
-        }
         default: break;
+    }
+    // Nothing is said for the proposal itself - its dialog is the
+    // announcement - only who turned it down, from the members' answers
+    // (0x0055bdc0): ERR_LFG_PROPOSAL_DECLINED_PARTY for someone of the
+    // player's own group, else ERR_LFG_PROPOSAL_DECLINED_SELF for the
+    // player, system lines. This printed "Dungeon Finder: A group has been
+    // found...", "...Group proposal failed." (twice) and "...Entering
+    // dungeon..." in English.
+    {
+        bool selfDeclined = false, partyDeclined = false;
+        for (const auto& m : lfgProposalMembers_) {
+            if (!m.answered || m.accepted) continue;
+            if (m.isSelf) selfDeclined = true;
+            else if (m.sameGroup) partyDeclined = true;
+        }
+        if (partyDeclined)
+            gameError(owner_, ErrTo::Chat, "ERR_LFG_PROPOSAL_DECLINED_PARTY", "A member of your group has declined the proposal.");
+        else if (selfDeclined)
+            gameError(owner_, ErrTo::Chat, "ERR_LFG_PROPOSAL_DECLINED_SELF", "You have declined the group invitation.");
     }
     // The proposal dialog is built from GetLFGProposal, which already answers
     // from this - it just had no way to know a proposal had arrived.
@@ -3970,7 +4285,7 @@ void SocialHandler::handleLfgRoleCheckUpdate(network::Packet& packet) {
     // the values they test for.
     if (!packet.hasRemaining(6)) return;
     const uint32_t roleCheckState = packet.readUInt32();
-    packet.readUInt8();   // initiating
+    const bool initiating = packet.readUInt8() != 0;
 
     // The dungeons being checked for, and how many are in the group. Both were
     // stopped at: the count was read and the list behind it left on the wire.
@@ -3992,8 +4307,16 @@ void SocialHandler::handleLfgRoleCheckUpdate(network::Packet& packet) {
     lfgRoleCheckMembers_ = packet.hasRemaining(1) ? packet.readUInt8() : 0;
 
     if (roleCheckState == 1) lfgState_ = LfgState::Queued;
-    else if (roleCheckState == 3) { lfgState_ = LfgState::None; owner_.addUIError("Dungeon Finder: Role check failed - missing required role."); owner_.addSystemChatMessage("Dungeon Finder: Role check failed - missing required role."); }
-    else if (roleCheckState == 2) { lfgState_ = LfgState::RoleCheck; owner_.addSystemChatMessage("Dungeon Finder: Performing role check..."); }
+    else if (roleCheckState == 3) lfgState_ = LfgState::None;
+    else if (roleCheckState == 2) lfgState_ = LfgState::RoleCheck;
+    // ERR_LFG_ROLE_CHECK_INITIATED when the check starts and
+    // ERR_LFG_ROLE_CHECK_ABORTED for state 5, system lines (0x0055bdc0); a
+    // failed check is said by the join result. These were English, the
+    // missing-role one on screen as well.
+    if (initiating)
+        gameError(owner_, ErrTo::Chat, "ERR_LFG_ROLE_CHECK_INITIATED", "A role check has been initiated. Your group will be queued when all members have selected a role.");
+    if (roleCheckState == 5)
+        gameError(owner_, ErrTo::Chat, "ERR_LFG_ROLE_CHECK_ABORTED", "The role check has been aborted.");
     // Likewise GetLFGRoleUpdate, which reports the check in progress.
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("LFG_ROLE_CHECK_UPDATE", {});
@@ -4055,25 +4378,40 @@ enum : uint8_t {
     kLfgGroupDisband        = 17,
 };
 
-/// What to say about an update, or nullptr for the ones that are not news.
-///
-/// Said only when the state actually moves, because the server restates the
-/// same state on a schedule and every line here would otherwise arrive again
-/// with it.
-const char* lfgUpdateMessage(uint8_t updateType) {
+/// Whether this client knows the update type, for the warning below.
+bool lfgUpdateKnown(uint8_t updateType) {
     switch (updateType) {
-        case kLfgJoinQueue:
-        case kLfgJoinQueueAlt:     return "Dungeon Finder: You have joined the queue.";
-        case kLfgAddedToQueue:     return "Dungeon Finder: Added to the queue.";
-        case kLfgRemovedFromQueue: return "Dungeon Finder: Removed from the queue.";
-        case kLfgRoleCheckFailed:  return "Dungeon Finder: The role check failed.";
-        case kLfgRoleCheckAborted: return "Dungeon Finder: The role check was cancelled.";
-        case kLfgProposalFailed:   return "Dungeon Finder: The group did not form - back in the queue.";
-        case kLfgProposalDeclined: return "Dungeon Finder: Someone declined - back in the queue.";
-        case kLfgGroupFound:       return "Dungeon Finder: A group has been found!";
-        case kLfgGroupDisband:     return "Dungeon Finder: Your group disbanded.";
-        default:                   return nullptr;
+        case kLfgJoinQueue: case kLfgJoinQueueAlt: case kLfgAddedToQueue:
+        case kLfgRemovedFromQueue: case kLfgRoleCheckFailed: case kLfgRoleCheckAborted:
+        case kLfgProposalFailed: case kLfgProposalDeclined: case kLfgGroupFound:
+        case kLfgGroupDisband:
+            return true;
+        default:
+            return false;
     }
+}
+
+/// The lines 0x0055bdc0 says for SMSG_LFG_UPDATE_PLAYER and _PARTY, from the
+/// queue as it was and as it now is. A proposal still pending that the
+/// update ends, with the player still listed and queued, is
+/// ERR_LFG_PROPOSAL_FAILED. Joining is ERR_LFG_JOINED_QUEUE; leaving - no
+/// longer joined, or no longer queued - is ERR_LFG_LEFT_QUEUE, and only for
+/// update types 7 and 15 by the server's numbering (removed from the queue, a
+/// member gone offline). System lines all. This client used to print its own
+/// English for each update type instead ("Dungeon Finder: ...").
+void sayLfgUpdate(GameHandler& gh, uint8_t updateType, bool extraInfo, bool joined, bool queued,
+                  bool prevJoined, bool prevQueued, bool proposalEnds, bool mayAnnounceJoin) {
+    if (proposalEnds && extraInfo && queued)
+        gameError(gh, ErrTo::Chat, "ERR_LFG_PROPOSAL_FAILED", "Your group has been returned to the queue.");
+    bool left = false;
+    if (joined && !prevJoined) {
+        if (mayAnnounceJoin)
+            gameError(gh, ErrTo::Chat, "ERR_LFG_JOINED_QUEUE", "You are now queued in the Dungeon Finder.");
+        return;
+    }
+    left = (!joined && prevJoined) || (!queued && prevQueued);
+    if (left && (updateType == 7 || updateType == 15))
+        gameError(gh, ErrTo::Chat, "ERR_LFG_LEFT_QUEUE", "You have left the Dungeon Finder queue.");
 }
 
 }  // namespace
@@ -4098,6 +4436,13 @@ void SocialHandler::handleLfgUpdatePlayer(network::Packet& packet) {
         packet.readUInt8();
         readLfgDungeonList(packet);
     }
+    // The queue before this update, as near as this client keeps it: listed
+    // whenever there is any state, queued while queued or offered a group.
+    const bool prevJoined = lfgState_ != LfgState::None;
+    const bool prevQueued = lfgState_ == LfgState::Queued || lfgState_ == LfgState::Proposal;
+    const bool proposalPending = lfgProposalId_ != 0 || lfgState_ == LfgState::Proposal;
+    sayLfgUpdate(owner_, updateType, extraInfo, /*joined=*/extraInfo, queued, prevJoined, prevQueued,
+                 proposalPending && !isInGroup(), /*mayAnnounceJoin=*/true);
     applyLfgUpdate(updateType, extraInfo, queued, /*inDungeon=*/false);
 }
 
@@ -4123,11 +4468,24 @@ void SocialHandler::handleLfgUpdateParty(network::Packet& packet) {
     const bool extraInfo = packet.readUInt8() != 0;
     bool queued = false;
     bool joined = false;
+    bool hasDungeons = false;
     if (extraInfo && packet.hasRemaining(8)) {
         joined = packet.readUInt8() != 0;
         queued = packet.readUInt8() != 0;
         for (int i = 0; i < 5; ++i) packet.readUInt8();
+        if (packet.hasRemaining(1)) {
+            const size_t at = packet.getReadPos();
+            hasDungeons = packet.readUInt8() != 0;
+            packet.setReadPos(at);
+        }
         readLfgDungeonList(packet);
+    }
+    {
+        const bool prevJoined = lfgState_ != LfgState::None;
+        const bool prevQueued = lfgState_ == LfgState::Queued || lfgState_ == LfgState::Proposal;
+        const bool proposalPending = lfgProposalId_ != 0 || lfgState_ == LfgState::Proposal;
+        sayLfgUpdate(owner_, updateType, extraInfo, joined, queued, prevJoined, prevQueued,
+                     proposalPending && isInGroup(), /*mayAnnounceJoin=*/hasDungeons);
     }
     // The party's join flag covers being in the dungeon as well as being in the
     // queue, so it only means "in a dungeon" when the queue flag is off.
@@ -4175,12 +4533,9 @@ void SocialHandler::applyLfgUpdate(uint8_t updateType, bool extraInfo,
         lfgState_ = LfgState::InDungeon;
     }
 
-    if (const char* message = lfgUpdateMessage(updateType)) {
-        // Only on a move. UPDATE_STATUS says nothing of its own and the rest
-        // repeat: the server restates the queue every few seconds, and each
-        // restatement used to arrive as a line of chat.
-        if (lfgState_ != previous) owner_.addSystemChatMessage(message);
-    } else if (updateType != kLfgUpdateStatus && updateType != kLfgDefault) {
+    // The lines are sayLfgUpdate's, said before the state above moved.
+    (void)previous;
+    if (!lfgUpdateKnown(updateType) && updateType != kLfgUpdateStatus && updateType != kLfgDefault) {
         // An update type this client has no name for. Said once so it can be
         // added, rather than silently deciding the queue is over.
         static std::set<uint8_t> said;
@@ -4241,22 +4596,16 @@ void SocialHandler::handleLfgPlayerReward(network::Packet& packet) {
     reward.valid = true;
     lfgCompletionReward_ = reward;
 
-    const uint32_t money = reward.money;
-    const uint32_t xp = reward.xp;
-    const std::string moneyBuf = game::formatCopperPrice(money);
-    std::string rewardMsg = std::string("Dungeon Finder reward: ") + moneyBuf + ", " + std::to_string(xp) + " XP";
-    if (!reward.items.empty()) {
-        const auto& first = reward.items.front();
-        std::string itemLabel = "item #" + std::to_string(first.itemId);
-        uint32_t lfgItemQuality = 1;
-        if (const ItemQueryResponseData* info = owner_.getItemInfo(first.itemId)) {
-            if (!info->name.empty()) itemLabel = info->name;
-            lfgItemQuality = info->quality;
-        }
-        rewardMsg += ", " + buildItemLink(first.itemId, lfgItemQuality, itemLabel);
-        if (first.count > 1) rewardMsg += " x" + std::to_string(first.count);
-    }
     lfgState_ = LfgState::FinishedDungeon;
+    // The experience and the money as a quest reward's are said,
+    // ERR_QUEST_REWARD_EXP_I and ERR_QUEST_REWARD_MONEY_S, system lines
+    // (0x0055bdc0); the items are announced by their own pushes. This built
+    // an English "Dungeon Finder reward: ..." it never printed.
+    if (reward.xp > 0)
+        gameError(owner_, ErrTo::Chat, "ERR_QUEST_REWARD_EXP_I", "Experience gained: %d.", {std::to_string(reward.xp)});
+    if (reward.money > 0)
+        gameError(owner_, ErrTo::Chat, "ERR_QUEST_REWARD_MONEY_S", "Received %s.",
+                  {interface_text::moneyText(reward.money, [](const char* k, const char* e) { return interfaceString(k, e); })});
 
     // The reward toast. It carries no arguments - the frame reads the nine
     // values back through GetLFGCompletionReward - so the store above has to
@@ -4300,12 +4649,22 @@ void SocialHandler::handleLfgBootProposalUpdate(network::Packet& packet) {
     if (inProgress) { lfgState_ = LfgState::Boot; }
     else {
         const bool bootPassed = (bootVotes >= votesNeeded);
+        const std::string victimName = lfgBootTargetName_;
         lfgBootVotes_ = lfgBootTotal_ = lfgBootTimeLeft_ = lfgBootNeeded_ = 0;
         lfgBootTargetName_.clear(); lfgBootReason_.clear();
         lfgBootDidVote_ = lfgBootMyVote_ = lfgBootInProgress_ = false;
         lfgBootVictimGuid_ = 0;
         lfgState_ = LfgState::InDungeon;
-        owner_.addSystemChatMessage(bootPassed ? "Dungeon Finder: Vote kick passed - member removed." : "Dungeon Finder: Vote kick failed.");
+        // ERR_PARTY_LFG_BOOT_VOTE_SUCCEEDED or _FAILED naming the player, a
+        // system line, when the name is known (0x0055bdc0). This was English.
+        if (!victimName.empty()) {
+            if (bootPassed)
+                gameError(owner_, ErrTo::Chat, "ERR_PARTY_LFG_BOOT_VOTE_SUCCEEDED",
+                          "The vote to kick %s has passed.", {victimName});
+            else
+                gameError(owner_, ErrTo::Chat, "ERR_PARTY_LFG_BOOT_VOTE_FAILED",
+                          "The vote to kick %s has failed.", {victimName});
+        }
     }
     // The vote-to-kick dialog, whose countdown starts on this.
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_BOOT_PROPOSAL_UPDATE", {});
@@ -4317,7 +4676,22 @@ void SocialHandler::handleLfgTeleportDenied(network::Packet& packet) {
     // to this handler would have inherited it.
     if (!packet.hasRemaining(4)) return;
     const uint32_t reason = packet.readUInt32();
-    owner_.addSystemChatMessage(std::string("Dungeon Finder: ") + lfgTeleportDeniedString(reason));
+    // On screen, through 0x0055bdc0's jump table at 0x0055d148: dead,
+    // falling, locked out, fatigued, an invalid location - which the table
+    // follows with "locked out" as well, falling through - and "locked out"
+    // for any reason past seven; nothing for 0, 5 and 7. This printed
+    // "Dungeon Finder: " and an English reason of its own numbering.
+    switch (reason) {
+        case 1: gameError(owner_, ErrTo::Error, "ERR_PLAYER_DEAD", "You can't do that when you're dead."); break;
+        case 2: gameError(owner_, ErrTo::Error, "ERR_NOT_WHILE_FALLING", "You can't do that while jumping or falling"); break;
+        case 4: gameError(owner_, ErrTo::Error, "ERR_NOT_WHILE_FATIGUED", "You can't do that while fatigued"); break;
+        case 6:
+            gameError(owner_, ErrTo::Error, "ERR_INVALID_TELEPORT_LOCATION", "Invalid teleport location");
+            [[fallthrough]];
+        case 3: gameError(owner_, ErrTo::Error, "ERR_CLIENT_LOCKED_OUT", "You can't do that right now."); break;
+        case 0: case 5: case 7: break;
+        default: gameError(owner_, ErrTo::Error, "ERR_CLIENT_LOCKED_OUT", "You can't do that right now."); break;
+    }
 }
 
 // ============================================================
@@ -4411,34 +4785,49 @@ void SocialHandler::handleArenaTeamCommandResult(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     const uint32_t error = packet.readUInt32();
 
-    // ArenaTeamCommandTypes, and it is not a dense range: 2, and everything
-    // between 4 and 13, are values the server never sends. The old table read
-    // it as 0..5 in a row, so a quit reported itself as a remove and a change
-    // of captain fell off the end.
-    const char* cmdName = "arena team";
-    switch (command) {
-        case 0x00: cmdName = "arena team create"; break;
-        case 0x01: cmdName = "arena team invite"; break;
-        case 0x03: cmdName = "arena team quit"; break;
-        case 0x0E: cmdName = "arena team captain"; break;
-        default: break;
-    }
-
-    // Whichever name the result is about. A create names the team, an invite
-    // names the player, and both are sent for the ones that concern both.
-    std::string about;
-    if (!teamName.empty()) about = teamName;
-    if (!playerName.empty())
-        about = about.empty() ? playerName : about + " / " + playerName;
-
+    // ArenaTeamCommandTypes (0 create, 1 invite, 3 quit, 0x0E founder) and
+    // the refusals, each as 0x006ccb20 words it from the ERR_ARENA_TEAM_*
+    // strings with the team or the player put in - system lines all, and
+    // nothing for a code it has no words for. This printed "arena team invite
+    // succeeded: ..." and English reasons.
+    const std::vector<std::string> team = {teamName};
+    const std::vector<std::string> player = {playerName};
     if (error == 0) {
-        owner_.addSystemChatMessage(std::string(cmdName) + " succeeded" +
-                                    (about.empty() ? "." : ": " + about));
+        switch (command) {
+            case 0x00: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_CREATE_S", "%s created.  To disband, use /teamdisband [2v2, 3v3, 5v5].", team); break;
+            case 0x01: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_INVITE_SS", "You have invited %s to join %s", {playerName, teamName}); break;
+            case 0x03: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_QUIT_S", "You are no longer a member of %s", team); break;
+            case 0x0E: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_FOUNDER_S", "Congratulations, you are a founding member of %s!  To leave, use /teamquit [2v2, 3v3, 5v5].", team); break;
+            default: break;
+        }
         return;
     }
-    owner_.addSystemChatMessage(std::string(cmdName) + " failed" +
-                                (about.empty() ? "" : " (" + about + ")") +
-                                ": " + arenaTeamErrorString(error));
+    switch (error) {
+        case 0x01: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_INTERNAL", "Internal arena team error"); break;
+        case 0x02: gameError(owner_, ErrTo::Chat, "ERR_ALREADY_IN_ARENA_TEAM", "You are already in an arena team of that size"); break;
+        case 0x03: gameError(owner_, ErrTo::Chat, "ERR_ALREADY_IN_ARENA_TEAM_S", "%s is already in an arena team of that size", player); break;
+        case 0x04: gameError(owner_, ErrTo::Chat, "ERR_INVITED_TO_ARENA_TEAM", "You have already been invited into an arena team"); break;
+        case 0x05: gameError(owner_, ErrTo::Chat, "ERR_ALREADY_INVITED_TO_ARENA_TEAM_S", "%s has already been invited to an arena team", player); break;
+        case 0x06: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_NAME_INVALID", "That name contains invalid characters, please enter a new name"); break;
+        case 0x07: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_NAME_EXISTS_S", "There is already an arena team named \"%s\"", team); break;
+        case 0x08:
+            if (command == 0x03)
+                gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_LEADER_LEAVE_S", "You must promote a new team captain using /teamcaptain before leaving the team", team);
+            else
+                gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_PERMISSIONS", "You don't have permission to do that");
+            break;
+        case 0x09: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_PLAYER_NOT_IN_TEAM", "You are not in an arena team of that size"); break;
+        case 0x0A: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_PLAYER_NOT_IN_TEAM_SS", "%s is not in %s", {playerName, teamName}); break;
+        case 0x0B: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_PLAYER_NOT_FOUND_S", "\"%s\" not found", player); break;
+        case 0x0C: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_NOT_ALLIED", "You cannot invite players from the opposing alliance"); break;
+        case 0x13: gameError(owner_, ErrTo::Chat, "ERR_IGNORING_YOU_S", "%s is ignoring you.", player); break;
+        case 0x15: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_TARGET_TOO_LOW_S", "%s is not high enough level to join your team", player); break;
+        case 0x16: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_TARGET_TOO_HIGH_S", "%s is too high level to join your team", player); break;
+        case 0x17: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_TOO_MANY_MEMBERS_S", "%s is full", team); break;
+        case 0x1B: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_NOT_FOUND", "Arena team not found"); break;
+        case 0x1E: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAMS_LOCKED", "Arena teams are locked"); break;
+        default: break;
+    }
 }
 
 void SocialHandler::handleArenaTeamQueryResponse(network::Packet& packet) {
@@ -4522,7 +4911,15 @@ void SocialHandler::handleArenaTeamRoster(network::Packet& packet) {
 void SocialHandler::handleArenaTeamInvite(network::Packet& packet) {
     std::string playerName = packet.readString();
     std::string teamName = packet.readString();
-    owner_.addSystemChatMessage(playerName + " has invited you to join " + teamName + ".");
+    // ARENA_TEAM_INVITE_REQUEST for the popup, and a system line in the
+    // guild invitation's words, ERR_INVITED_TO_GUILD_SSS - which is what
+    // 0x006cc910 prints for this. The line was English and the popup never
+    // asked.
+    if (owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("ARENA_TEAM_INVITE_REQUEST", {playerName, teamName});
+    gameError(owner_, ErrTo::Chat, "ERR_INVITED_TO_GUILD_SSS",
+              "|Hplayer:%s|h[%s]|h has invited you to join the guild, %s.",
+              {playerName, playerName, teamName});
 }
 
 void SocialHandler::handleArenaTeamEvent(network::Packet& packet) {
@@ -4530,20 +4927,30 @@ void SocialHandler::handleArenaTeamEvent(network::Packet& packet) {
     uint8_t event = packet.readUInt8();
     uint8_t strCount = 0;
     if (packet.hasRemaining(1)) strCount = packet.readUInt8();
-    std::string param1, param2;
-    if (strCount >= 1 && packet.getSize() > packet.getReadPos()) param1 = packet.readString();
-    if (strCount >= 2 && packet.getSize() > packet.getReadPos()) param2 = packet.readString();
-    std::string msg;
+    std::vector<std::string> args;
+    for (uint8_t i = 0; i < strCount && i < 3 && packet.getSize() > packet.getReadPos(); ++i)
+        args.push_back(packet.readString());
+    // ArenaTeamEvents, as 0x006cc980 words them, with the event's strings put
+    // in - system lines: 3 joined (ERR_ARENA_TEAM_YOU_JOIN_S when it is the
+    // player), 4 left, 5 removed, 6 the captain, 7 a new captain, 8
+    // disbanded, and ERR_GUILD_INTERNAL for anything else. These were
+    // English, numbered from 0.
+    const auto a = [&](size_t i) { return i < args.size() ? args[i] : std::string(); };
     switch (event) {
-        case 0: msg = param1.empty() ? "A player has joined your arena team." : param1 + " has joined your arena team."; break;
-        case 1: msg = param1.empty() ? "A player has left the arena team." : param1 + " has left the arena team."; break;
-        case 2: msg = (!param1.empty() && !param2.empty()) ? param1 + " has been removed from the arena team by " + param2 + "." : "A player has been removed from the arena team."; break;
-        case 3: msg = param1.empty() ? "The arena team captain has changed." : param1 + " is now the arena team captain."; break;
-        case 4: msg = "Your arena team has been disbanded."; break;
-        case 5: msg = param1.empty() ? "Your arena team has been created." : "Arena team \"" + param1 + "\" has been created."; break;
-        default: msg = "Arena team event " + std::to_string(event); if (!param1.empty()) msg += ": " + param1; break;
+        case 3:
+            if (!args.empty() && args[0] == ownName(owner_))
+                gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_YOU_JOIN_S",
+                          "You have joined %s.  To leave, use /teamquit [2v2, 3v3, 5v5].", {a(1)});
+            else
+                gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_JOIN_SS", "%s has joined %s", args);
+            break;
+        case 4: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_LEAVE_SS", "%s has left %s", args); break;
+        case 5: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_REMOVE_SSS", "%s has been kicked out of %s by %s.", args); break;
+        case 6: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_LEADER_IS_SS", "%s is the captain of %s", args); break;
+        case 7: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_LEADER_CHANGED_SSS", "%s has made %s the new captain of %s.", args); break;
+        case 8: gameError(owner_, ErrTo::Chat, "ERR_ARENA_TEAM_DISBANDED_S", "%s has disbanded %s.", args); break;
+        default: gameError(owner_, ErrTo::Chat, "ERR_GUILD_INTERNAL", "Internal guild error."); break;
     }
-    owner_.addSystemChatMessage(msg);
 }
 
 void SocialHandler::handleArenaTeamStats(network::Packet& packet) {
@@ -4569,15 +4976,20 @@ void SocialHandler::requestArenaTeamRoster(uint32_t teamId) {
 void SocialHandler::handleArenaError(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     uint32_t error = packet.readUInt32();
-    std::string msg;
+    // On screen, as 0x006cce90 says it: 0 is ERR_ARENA_NO_TEAM_II with the
+    // team size after it (twice, "2v2"), 1 ERR_ARENA_EXPIRED_CAIS, 2
+    // ERR_LFG_CANT_USE_BATTLEGROUND, and nothing for the rest. These were
+    // English reasons of another numbering, in chat.
     switch (error) {
-        case 1: msg = "The other team is not big enough."; break;
-        case 2: msg = "That team is full."; break;
-        case 3: msg = "Not enough members to start."; break;
-        case 4: msg = "Too many members."; break;
-        default: msg = "Arena error (code " + std::to_string(error) + ")"; break;
+        case 0: {
+            const std::string size = packet.hasRemaining(1) ? std::to_string(packet.readUInt8()) : std::string("0");
+            gameError(owner_, ErrTo::Error, "ERR_ARENA_NO_TEAM_II", "You are not in a %dv%d arena team", {size, size});
+            break;
+        }
+        case 1: gameError(owner_, ErrTo::Error, "ERR_ARENA_EXPIRED_CAIS", "You may not queue while one or more of your team members is under the effect of restricted play."); break;
+        case 2: gameError(owner_, ErrTo::Error, "ERR_LFG_CANT_USE_BATTLEGROUND", "You cannot queue for a battleground or arena while using the dungeon system."); break;
+        default: break;
     }
-    owner_.addSystemChatMessage(msg);
 }
 
 void SocialHandler::handlePvpLogData(network::Packet& packet) {
@@ -4678,14 +5090,9 @@ void SocialHandler::updateLogoutCountdown(float deltaTime) {
     if (bgJoinPendingType_ != 0) {
         bgJoinWaitSec_ -= deltaTime;
         if (bgJoinWaitSec_ <= 0.0f) {
-            std::string name = "that battleground";
-            for (const auto& kv : kBgNames)
-                if (kv.first == bgJoinPendingType_) { name = kv.second; break; }
-            const std::string msg = "The server did not answer the request to queue for " +
-                                    name + " - this realm may not offer it to you.";
+            // In the log only: the original has no such notice, and this
+            // said an English sentence of its own on screen and in chat.
             LOG_WARNING("Battleground join unanswered: type ", bgJoinPendingType_);
-            owner_.addUIError(msg);
-            owner_.addSystemChatMessage(msg);
             bgJoinPendingType_ = 0;
         }
     }
@@ -4778,13 +5185,14 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
     //   WotLK:   RAF bonus (float), showVisual (uint8), count
     // Treating WotLK's first float byte as showVisual shifted the entire packet,
     // producing bogus counts, faction names, standings, and chat messages.
+    float rafBonus = 0.0f;
     if (isActiveExpansion("wotlk")) {
         if (!packet.hasRemaining(9)) return;
-        /*float rafBonus =*/ packet.readFloat();
+        rafBonus = packet.readFloat();
         /*uint8_t showVisual =*/ packet.readUInt8();
     } else if (isActiveExpansion("tbc")) {
         if (!packet.hasRemaining(8)) return;
-        /*float rafBonus =*/ packet.readFloat();
+        rafBonus = packet.readFloat();
     } else if (!packet.hasRemaining(4)) {
         return;
     }
@@ -4821,15 +5229,33 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
         int32_t delta = standing - oldStanding;
         if (delta != 0) {
             std::string name = owner_.getFactionName(factionId);
-            char buf[256];
-            std::snprintf(buf, sizeof(buf), "Reputation with %s %s by %d.",
-                          name.c_str(), delta > 0 ? "increased" : "decreased", std::abs(delta));
-            owner_.addSystemChatMessage(buf);
+            // FACTION_STANDING_INCREASED or _DECREASED with the faction and
+            // the amount, _INCREASED_BONUS with a Recruit-A-Friend bonus, as
+            // CHAT_MSG_COMBAT_FACTION_CHANGE and nothing else (0x0050b8c0).
+            // This was English, said twice - once as a system line besides.
+            std::string line;
+            const std::string amount = std::to_string(std::abs(delta));
+            if (delta < 0) {
+                line = interfaceFormat("FACTION_STANDING_DECREASED",
+                    "Your %s reputation has decreased by %d.", {name, amount});
+            } else if (rafBonus > 0.0f) {
+                // The one format with a %.1f, which luaFormat does not take:
+                // the bonus goes in first.
+                std::string fmt = interfaceString("FACTION_STANDING_INCREASED_BONUS",
+                    "Reputation with %s increased by %d. (+%.1f Refer-A-Friend bonus)");
+                char bonus[32];
+                std::snprintf(bonus, sizeof(bonus), "%.1f", static_cast<double>(rafBonus));
+                if (const auto at = fmt.find("%.1f"); at != std::string::npos) fmt.replace(at, 4, bonus);
+                line = chat_channels::luaFormat(fmt, {name, amount});
+            } else {
+                line = interfaceFormat("FACTION_STANDING_INCREASED",
+                    "Reputation with %s increased by %d.", {name, amount});
+            }
             owner_.watchedFactionIdRef() = factionId;
             if (owner_.repChangeCallbackRef()) owner_.repChangeCallbackRef()(name, delta, standing);
             // These events fire unconditionally on any rep change (not gated by callback).
             owner_.fireAddonEvent("UPDATE_FACTION", {});
-            owner_.addLocalChatLine(ChatType::COMBAT_FACTION_CHANGE, std::string(buf));
+            owner_.addLocalChatLine(ChatType::COMBAT_FACTION_CHANGE, line);
         }
     }
 }
@@ -4866,8 +5292,14 @@ void SocialHandler::handleGroupSetLeader(network::Packet& packet) {
     for (const auto& m : pd.members) {
         if (m.name == leaderName) { pd.leaderGuid = m.guid; break; }
     }
-    if (!leaderName.empty())
-        owner_.addSystemChatMessage(leaderName + " is now the group leader.");
+    // ERR_NEW_LEADER_YOU for the player and ERR_NEW_LEADER_S for anyone
+    // else, system lines (0x006cbd70). This was English.
+    if (!leaderName.empty()) {
+        if (leaderName == ownName(owner_))
+            gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_YOU", "You are now the group leader.");
+        else
+            gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_S", "%s is now the group leader.", {leaderName});
+    }
     owner_.fireAddonEvent("PARTY_LEADER_CHANGED", {});
     owner_.fireAddonEvent("GROUP_ROSTER_UPDATE", {});
 }
@@ -4926,12 +5358,8 @@ void SocialHandler::handleSummonRequest(network::Packet& packet) {
         owner_.summonerNameRef() = tmp;
     }
 
-    std::string msg = owner_.summonerNameRef() + " is summoning you";
-    std::string zoneName = owner_.getAreaName(zoneId);
-    if (!zoneName.empty())
-        msg += " to " + zoneName;
-    msg += '.';
-    owner_.addSystemChatMessage(msg);
+    // CONFIRM_SUMMON and its popup, which names the summoner and the place;
+    // no chat line (0x006d8680). This printed "X is summoning you to Y.".
     LOG_INFO("SMSG_SUMMON_REQUEST: summoner=", owner_.summonerNameRef(),
              " zoneId=", zoneId, " timeout=", owner_.summonTimeoutSecRef(), "s");
     owner_.fireAddonEvent("CONFIRM_SUMMON", {});
@@ -4958,14 +5386,14 @@ void SocialHandler::sendSummonResponse(bool accept) {
 
 void SocialHandler::acceptSummon() {
     if (!owner_.pendingSummonRequestRef()) return;
+    // ConfirmSummon and CancelSummon answer and say nothing (0x0051b050,
+    // 0x0051b110); these printed "Accepting summon..." and "Summon declined."
     sendSummonResponse(true);
-    owner_.addSystemChatMessage("Accepting summon...");
     LOG_INFO("Accepted summon from ", owner_.summonerNameRef());
 }
 
 void SocialHandler::declineSummon() {
     sendSummonResponse(false);
-    owner_.addSystemChatMessage("Summon declined.");
 }
 
 // ============================================================
@@ -5218,7 +5646,8 @@ void SocialHandler::toggleHelm() {
     owner_.helmVisibleRef() = !owner_.helmVisibleRef();
     auto packet = ShowingHelmPacket::build(owner_.helmVisibleRef());
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage(owner_.helmVisibleRef() ? "Helm is now visible." : "Helm is now hidden.");
+    // ShowHelm (0x0051c0b0) says nothing; this printed "Helm is now
+    // visible/hidden."
     // The flag alone changed nothing on screen: it was set, sent to the server
     // and never read. Mark equipment dirty so the helm model and the hair under
     // it are both rebuilt from it.
@@ -5235,7 +5664,8 @@ void SocialHandler::toggleCloak() {
     owner_.cloakVisibleRef() = !owner_.cloakVisibleRef();
     auto packet = ShowingCloakPacket::build(owner_.cloakVisibleRef());
     owner_.getSocket()->send(packet);
-    owner_.addSystemChatMessage(owner_.cloakVisibleRef() ? "Cloak is now visible." : "Cloak is now hidden.");
+    // ShowCloak (0x0051c100) likewise; this printed "Cloak is now
+    // visible/hidden."
     LOG_INFO("Cloak visibility toggled: ", owner_.cloakVisibleRef());
 }
 
