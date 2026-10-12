@@ -1,5 +1,7 @@
 #include "game/ground_target.hpp"
 #include <array>
+#include <string_view>
+#include "game/interface_text.hpp"
 #include "game/pet_action.hpp"
 #include "game/vehicle_mover.hpp"
 #include "game/unit_name_rules.hpp"
@@ -1064,10 +1066,35 @@ void GameHandler::handleMotd(network::Packet& packet) {
 void GameHandler::handleNotification(network::Packet& packet) {
     // SMSG_NOTIFICATION: single null-terminated string
     std::string message = packet.readString();
-    if (!message.empty()) {
-        LOG_INFO("Server notification: ", message);
-        addSystemChatMessage(message);
+    if (message.empty()) return;
+    LOG_INFO("Server notification: ", message);
+    // 0x00401280: the text goes on the red error line (UI_ERROR_MESSAGE,
+    // through 0x00513290), not into chat - this printed it as a system line.
+    // A "DEBUGACTION: " prefix is dropped. A leading '~' carries switches:
+    // '>' keeps it off the screen, '#' puts it in chat as well, and '^n' makes
+    // n the chat type, with anything but 3 going to the yellow info line.
+    std::string_view text = message;
+    if (text.rfind("DEBUGACTION: ", 0) == 0) text.remove_prefix(13);
+    if (text.empty() || text.front() != '~') {
+        addUIError(std::string(text));
+        return;
     }
+    text.remove_prefix(1);
+    bool onScreen = true, inChat = false;
+    int level = 3, chatType = 0;
+    if (!text.empty() && text.front() == '>') { onScreen = false; text.remove_prefix(1); }
+    if (!text.empty() && text.front() == '#') { inChat = true; text.remove_prefix(1); }
+    if (text.size() >= 2 && text.front() == '^') {
+        level = text[1] - '0';
+        chatType = level;
+        text.remove_prefix(2);
+    }
+    const std::string line(text);
+    if (onScreen && !line.empty()) {
+        if (level == 3) addUIError(line);
+        else addUIInfoMessage(line);
+    }
+    if (inChat) addLocalChatLine(static_cast<ChatType>(chatType), line);
 }
 
 void GameHandler::sendPing() {
@@ -1686,7 +1713,7 @@ bool GameHandler::sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid) {
         switch (textEmoteGateCallback_(textEmoteId)) {
             case TextEmoteGate::Send: break;
             case TextEmoteGate::RefuseWhileMoving:
-                raiseUiError("You can't do that while moving!");
+                raiseUiError(interfaceString("ERR_NOEMOTEWHILERUNNING", "You can't do that while moving!"));
                 return false;
             case TextEmoteGate::Refuse: return false;
         }
@@ -3487,8 +3514,21 @@ void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
     if (gatherBaseSpellId != 0) {
         const uint32_t gatherSpellId = knownGatherRank(spellHandler_.get(), gatherBaseSpellId);
         if (gatherSpellId == 0) {
-            addSystemChatMessage(gatherBaseSpellId == kMiningBaseSpellId ? "Requires Mining."
-                                                    : "Requires Herbalism.");
+            // A lock the player has no skill for is ERR_USE_LOCKED_WITH_SPELL_S
+            // on the error line, naming the LockType.dbc row (0x007116c0;
+            // 2 is herbalism, 3 mining). This printed English "Requires
+            // Mining." to chat.
+            const uint32_t lockType = gatherBaseSpellId == kMiningBaseSpellId ? 3u : 2u;
+            std::string lockName;
+            auto* am = services_.assetManager;
+            if (auto dbc = am && am->isInitialized() ? am->loadDBC("LockType.dbc") : nullptr;
+                dbc && dbc->isLoaded()) {
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                    if (dbc->getUInt32(i, 0) == lockType) { lockName = dbc->getString(i, 1); break; }
+                }
+            }
+            if (lockName.empty()) lockName = "UNKNOWN";
+            addUIError(interfaceFormat("ERR_USE_LOCKED_WITH_SPELL_S", "Requires %s", {lockName}));
             LOG_INFO("GO gather skipped: no known rank for base spell=", gatherBaseSpellId,
                      " guid=0x", std::hex, guid, std::dec, " name='", goName, "'");
             return;

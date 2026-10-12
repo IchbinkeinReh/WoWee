@@ -1,4 +1,5 @@
 #include "game/game_handler.hpp"
+#include "game/interface_text.hpp"
 #include "game/reputation_standing.hpp"
 
 #include <set>
@@ -853,8 +854,10 @@ void GameHandler::update(float deltaTime) {
             combatHandler_ && (combatHandler_->isAutoAttacking() || combatHandler_->hasAutoAttackIntent())) {
             pendingGameObjectInteractGuid_ = 0;
             if (spellHandler_) spellHandler_->resetCastState();
-            addUIError("Interrupted.");
-            addSystemChatMessage("Interrupted.");
+            // A cast that fails says so on the red line only, in the
+            // interface's words (SPELL_FAILED_INTERRUPTED) - not also as an
+            // English "Interrupted." in chat.
+            addUIError(interfaceString("SPELL_FAILED_INTERRUPTED", "Interrupted"));
         }
         // Check if client-side cast timer expired (tick-down is in SpellHandler::updateTimers).
         // Three paths depending on whether this is a GO interaction or craft-queue cast:
