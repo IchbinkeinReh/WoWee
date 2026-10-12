@@ -569,6 +569,13 @@ wowee_add_test(test_chat_types
 wowee_add_test(test_chat_channels
     SOURCES test_chat_channels.cpp)
 
+# ── test_interface_text ─────────────────────────────────────────
+# Loot, money and roll lines in the interface's own GlobalStrings, picked from
+# the packet the way the original picks them - not "Looted: 5c" in English on
+# a German client (game/interface_text.hpp).
+wowee_add_test(test_interface_text
+    SOURCES test_interface_text.cpp)
+
 # ── test_chat_window_background ─────────────────────────────────
 # The chat panel is a white image the interface tints, so the colour this client
 # saves is the whole of what it looks like - and it saved white at full alpha,

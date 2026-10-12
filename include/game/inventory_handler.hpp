@@ -581,6 +581,8 @@ private:
     void handleTradeStatusExtended(network::Packet& packet);
     void handleLootRoll(network::Packet& packet);
     void handleLootRollWon(network::Packet& packet);
+    /// A rolled item's chat link, its random suffix in the name.
+    std::string rollItemLink(uint32_t itemId, int32_t randomProp);
 
     /// Tell the interface a roll is over, by the id it was opened with.
     ///
@@ -690,7 +692,8 @@ private:
         bool itemAutoLootSent = false;
     };
     std::unordered_map<uint64_t, LocalLootState> localLootState_;
-    void announceLootMoney(uint64_t lootGuid, uint32_t amount);
+    /// soleLooter: YOU_LOOT_MONEY; otherwise the group's share, LOOT_MONEY_SPLIT.
+    void announceLootMoney(uint64_t lootGuid, uint32_t amount, bool soleLooter = true);
     /// The coin is gone from the open loot window, because the server has said
     /// so. Idempotent: both packets that report it call this.
     void clearLootMoney();

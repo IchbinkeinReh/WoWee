@@ -2,6 +2,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "game/spell_classification.hpp"
 #include "game/item_text.hpp"
+#include "game/interface_text.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/player_display_flags.hpp"
 #include "core/app_clock.hpp"
@@ -39,6 +40,193 @@ InventoryHandler::InventoryHandler(GameHandler& owner)
     : owner_(owner) {}
 
 namespace {
+/// The interface's strings, for the interface_text choosers.
+std::string uiText(const char* key, const char* enUS) { return interfaceString(key, enUS); }
+
+/// One of the client's game errors: a GlobalStrings key and its enUS words.
+/// The real client keeps these in a table (0x00ac8af0) that also says where
+/// each one goes - nearly all of these are UI_ERROR_MESSAGE, the red line.
+struct GameErrorText {
+    const char* key = nullptr;
+    const char* enUS = nullptr;
+};
+
+/// SMSG_INVENTORY_CHANGE_FAILURE's code as 0x00753bb0 turns it into a game
+/// error. Codes 0, 81 (a bind confirmation) and 83 have none.
+GameErrorText inventoryChangeError(uint8_t code) {
+    switch (code) {
+        case 0: case 81: case 83: return {};
+        case 1:  return {"ERR_CANT_EQUIP_LEVEL_I", "You must reach level %d to use that item."};
+        case 2:  return {"ERR_CANT_EQUIP_SKILL", "You aren't skilled enough to use that item."};
+        case 3:  return {"ERR_WRONG_SLOT", "That item doesn't go in that slot."};
+        case 5:  return {"ERR_BAG_IN_BAG", "Can't put non-empty bags in other bags."};
+        case 6:  return {"ERR_TRADE_EQUIPPED_BAG", "You can't trade equipped bags."};
+        case 7:  return {"ERR_AMMO_ONLY", "Only ammo can go there."};
+        case 8:  return {"ERR_PROFICIENCY_NEEDED", "You do not have the required proficiency for that item."};
+        case 9: case 12: case 18:
+                 return {"ERR_NO_SLOT_AVAILABLE", "No equipment slot is available for that item."};
+        case 10: case 11:
+                 return {"ERR_CANT_EQUIP_EVER", "You can never use that item."};
+        case 13: return {"ERR_2HANDED_EQUIPPED", "Cannot equip that with a two-handed weapon."};
+        case 14: return {"ERR_2HSKILLNOTFOUND", "You cannot dual-wield"};
+        case 15: case 16:
+                 return {"ERR_WRONG_BAG_TYPE", "That item doesn't go in that container."};
+        case 17: return {"ERR_ITEM_MAX_COUNT", "You can't carry any more of those items."};
+        case 19: case 55:
+                 return {"ERR_CANT_STACK", "This item cannot stack."};
+        case 20: return {"ERR_NOT_EQUIPPABLE", "This item cannot be equipped."};
+        case 21: return {"ERR_CANT_SWAP", "These items can't be swapped."};
+        case 22: return {"ERR_SLOT_EMPTY", "That slot is empty."};
+        case 23: case 54:
+                 return {"ERR_ITEM_NOT_FOUND", "The item was not found."};
+        case 24: return {"ERR_DROP_BOUND_ITEM", "You can't drop a soulbound item."};
+        case 25: return {"ERR_OUT_OF_RANGE", "Out of range."};
+        case 26: return {"ERR_TOO_FEW_TO_SPLIT", "Tried to split more than number in stack."};
+        case 27: return {"ERR_SPLIT_FAILED", "Couldn't split those items."};
+        case 28: return {"ERR_SPELL_FAILED_REAGENTS_GENERIC", "Missing reagent"};
+        case 29: return {"ERR_NOT_ENOUGH_MONEY", "You don't have enough money."};
+        case 30: return {"ERR_NOT_A_BAG", "Not a bag."};
+        case 31: return {"ERR_DESTROY_NONEMPTY_BAG", "You can only do that with empty bags."};
+        case 32: return {"ERR_NOT_OWNER", "You don't own that item."};
+        case 33: return {"ERR_ONLY_ONE_QUIVER", "You can only equip one quiver."};
+        case 34: return {"ERR_NO_BANK_SLOT", "You must purchase that bag slot first"};
+        case 35: return {"ERR_NO_BANK_HERE", "You are too far away from a bank."};
+        case 36: return {"ERR_ITEM_LOCKED", "Item is locked."};
+        case 37: return {"ERR_GENERIC_STUNNED", "You are stunned"};
+        case 38: return {"ERR_PLAYER_DEAD", "You can't do that when you're dead."};
+        case 39: return {"ERR_CLIENT_LOCKED_OUT", "You can't do that right now."};
+        case 40: case 73:
+                 return {"ERR_INTERNAL_BAG_ERROR", "Internal Bag Error"};
+        case 41: return {"ERR_ONLY_ONE_BOLT", "You can only equip one quiver."};
+        case 42: return {"ERR_ONLY_ONE_AMMO", "You can only equip one ammo pouch."};
+        case 43: return {"ERR_CANT_WRAP_STACKABLE", "Stackable items can't be wrapped."};
+        case 44: return {"ERR_CANT_WRAP_EQUIPPED", "Equipped items can't be wrapped."};
+        case 45: return {"ERR_CANT_WRAP_WRAPPED", "Wrapped items can't be wrapped."};
+        case 46: return {"ERR_CANT_WRAP_BOUND", "Bound items can't be wrapped."};
+        case 47: return {"ERR_CANT_WRAP_UNIQUE", "Unique items can't be wrapped."};
+        case 48: return {"ERR_CANT_WRAP_BAGS", "Bags can't be wrapped."};
+        case 49: return {"ERR_LOOT_GONE", "Already looted"};
+        case 50: return {"ERR_INV_FULL", "Inventory is full."};
+        case 51: return {"ERR_BANK_FULL", "Your bank is full"};
+        case 52: case 57:
+                 return {"ERR_VENDOR_SOLD_OUT", "That item is currently sold out."};
+        case 58: return {"ERR_OBJECT_IS_BUSY", "That object is busy."};
+        case 59: return {"ERR_CANT_BE_DISENCHANTED", "Item cannot be disenchanted"};
+        case 60: return {"ERR_NOT_IN_COMBAT", "You can't do that while in combat"};
+        case 61: return {"ERR_NOT_WHILE_DISARMED", "You can't do that while disarmed"};
+        case 63: return {"ERR_CANT_EQUIP_RANK", "You don't have the required rank for that item"};
+        case 64: return {"ERR_CANT_EQUIP_REPUTATION", "You don't have the required reputation for that item"};
+        case 65: return {"ERR_TOO_MANY_SPECIAL_BAGS", "You cannot equip another bag of that type"};
+        case 66: return {"ERR_LOOT_CANT_LOOT_THAT_NOW", "You can't loot that item now."};
+        case 67: return {"ERR_ITEM_UNIQUE_EQUIPPABLE", "You cannot equip more than one of those."};
+        case 68: return {"ERR_VENDOR_MISSING_TURNINS", "You do not have the required items for that purchase"};
+        case 69: return {"ERR_NOT_ENOUGH_HONOR_POINTS", "You don't have enough honor points"};
+        case 70: return {"ERR_NOT_ENOUGH_ARENA_POINTS", "You don't have enough arena points"};
+        case 71: return {"ERR_ITEM_MAX_COUNT_SOCKETED", "You have the maximum number of those gems in your inventory or socketed into items."};
+        case 72: return {"ERR_MAIL_BOUND_ITEM", "You can't mail soulbound items."};
+        case 75: return {"ERR_ITEM_MAX_COUNT_EQUIPPED_SOCKETED", "You have the maximum number of those gems socketed into equipped items."};
+        case 76: return {"ERR_ITEM_UNIQUE_EQUIPPABLE_SOCKETED", "You cannot socket more than one of those gems into a single item."};
+        case 77: return {"ERR_TOO_MUCH_GOLD", "At gold limit"};
+        case 78: return {"ERR_NOT_DURING_ARENA_MATCH", "You can't do that while in an arena match"};
+        case 79: return {"ERR_TRADE_BOUND_ITEM", "You can't trade a soulbound item."};
+        case 80: return {"ERR_CANT_EQUIP_RATING", "You don't have the personal, team, or battleground rating required to buy that item"};
+        case 82: return {"ERR_NOT_SAME_ACCOUNT", "Account-bound items can only be given to your own characters."};
+        case 84: return {"ERR_ITEM_MAX_LIMIT_CATEGORY_COUNT_EXCEEDED_IS", "You can only carry %d %s"};
+        case 85: return {"ERR_ITEM_MAX_LIMIT_CATEGORY_SOCKETED_EXCEEDED_IS", "You can only equip %d |4item:items in the %s category"};
+        case 86: return {"ERR_SCALING_STAT_ITEM_LEVEL_EXCEEDED", "Your level is too high to use that item"};
+        case 87: return {"ERR_PURCHASE_LEVEL_TOO_LOW", "You must reach level %d to purchase that item."};
+        case 88: return {"ERR_CANT_EQUIP_NEED_TALENT", "You do not have the required talent to equip that."};
+        case 89: return {"ERR_ITEM_MAX_LIMIT_CATEGORY_EQUIPPED_EXCEEDED_IS", "You can only equip %d |4item:items in the %s category"};
+        case 90: return {"ERR_SHAPESHIFT_FORM_CANNOT_EQUIP", "Cannot equip item in this form"};
+        case 91: return {"ERR_ITEM_INVENTORY_FULL_SATCHEL", "Your inventory is full. Your satchel has been delivered to your mailbox."};
+        // Everything else - 4 and the server's other bag-full codes among
+        // them - is ERR_BAG_FULL, the switch's default.
+        default: return {"ERR_BAG_FULL", "That bag is full."};
+    }
+}
+
+/// SMSG_SEND_MAIL_RESULT's error as 0x005717b0 turns it into a game error.
+/// 1 carries an inventory code of its own and 20 says nothing.
+GameErrorText mailError(uint32_t error) {
+    switch (error) {
+        case 2:  return {"ERR_MAIL_TO_SELF", "You can't send mail to yourself."};
+        case 3:  return {"ERR_NOT_ENOUGH_MONEY", "You don't have enough money."};
+        case 4:  return {"ERR_MAIL_TARGET_NOT_FOUND", "Cannot find mail recipient."};
+        case 5:  return {"ERR_PLAYER_WRONG_FACTION", "Target is unfriendly."};
+        case 14: return {"ERR_RESTRICTED_ACCOUNT", "Starter Edition accounts can't perform that action"};
+        case 15: return {"ERR_MAIL_REACHED_CAP", "You have reached the maximum number of mail recipients in-game"};
+        case 16: return {"ERR_MAIL_WRAPPED_COD", "You can't send wrapped items COD."};
+        case 17: return {"ERR_USER_SQUELCHED", "Your mail and chat privileges have been suspended pending a review by a Game Master."};
+        case 18: return {"ERR_MAIL_TOO_MANY_ATTACHMENTS", "Too many attachments in mail."};
+        case 19: return {"ERR_MAIL_INVALID_ATTACHMENT", "Invalid attachment in mail."};
+        case 21: return {"ERR_MAIL_ATTACHMENT_EXPIRED", "That item has expired."};
+        default: return {"ERR_MAIL_DATABASE_ERROR", "Internal mail database error."};
+    }
+}
+
+/// ItemLimitCategory.dbc's name and quantity for a limit category, which the
+/// "you can only carry N of these" errors name (0x006e2e90 reads them from the
+/// client's copy of the table). Empty where the table or the row is missing.
+std::pair<std::string, uint32_t> itemLimitCategory(GameHandler& owner, uint32_t id) {
+    auto* am = owner.services().assetManager;
+    if (!am || !am->isInitialized() || id == 0) return {};
+    auto dbc = am->loadDBC("ItemLimitCategory.dbc");
+    // ID, Name (16 locales + flags), Quantity, Flags.
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 19) return {};
+    const int32_t row = dbc->findRecordById(id);
+    if (row < 0) return {};
+    return {dbc->getString(static_cast<uint32_t>(row), 1),
+            dbc->getUInt32(static_cast<uint32_t>(row), 18)};
+}
+
+/// The name of the player this client last asked to trade, which the busy and
+/// ignoring refusals name (0x005873e0 names the trade target). Here rather
+/// than in the trade state, which holds a peer only once a trade begins.
+std::string& tradeRequestName() {
+    static std::string name;
+    return name;
+}
+
+/// An auction line waiting on its item's name, as the real client parks one
+/// (0x0059a400) - ERR_AUCTION_*_S names the item, so it can only be printed
+/// once the item query has answered. There is one InventoryHandler.
+struct PendingAuctionLine {
+    uint32_t itemEntry = 0;
+    int32_t randomProp = 0;
+    const char* key = nullptr;
+    const char* enUS = nullptr;
+};
+std::vector<PendingAuctionLine>& pendingAuctionLines() {
+    static std::vector<PendingAuctionLine> lines;
+    return lines;
+}
+
+/// The item as the auction lines name it (0x00706d70): its plain name, with
+/// a random suffix put on through ITEM_SUFFIX_TEMPLATE. No link.
+std::string auctionItemName(const GameHandler& owner, const std::string& name, int32_t randomProp) {
+    if (randomProp != 0) {
+        const std::string suffix = owner.getRandomPropertyName(randomProp);
+        if (!suffix.empty())
+            return interfaceFormat("ITEM_SUFFIX_TEMPLATE", "%s %s", {name, suffix});
+    }
+    return name;
+}
+
+/// ERR_AUCTION_SOLD_S, _EXPIRED_S, _OUTBID_S, _WON_S and _REMOVED_S, which
+/// the game error table sends as system chat - now if the item's name is
+/// known, else when its query answers.
+void auctionItemLine(GameHandler& owner, uint32_t itemEntry, int32_t randomProp,
+                     const char* key, const char* enUS) {
+    const ItemQueryResponseData* info = owner.getItemInfo(itemEntry);
+    if (info && !info->name.empty()) {
+        owner.addSystemChatMessage(interfaceFormat(key, enUS,
+            {auctionItemName(owner, info->name, randomProp)}));
+        return;
+    }
+    pendingAuctionLines().push_back({itemEntry, randomProp, key, enUS});
+    owner.ensureItemInfo(itemEntry);
+}
+
 constexpr uint32_t kConsumableSubclassItemEnhancement = 6;
 // SpellCastTargetFlags bit set by Spell.dbc for spells cast onto another item.
 constexpr uint32_t kSpellTargetFlagItem = 0x10;
@@ -214,14 +402,18 @@ uint64_t targetGuidForUseItem(GameHandler& owner, const ItemQueryResponseData* i
 /// Both paths that learn about looted money end here - the server's notify and
 /// the fallback timer for servers that do not send one - so the line and the
 /// coin cannot differ between them.
-void InventoryHandler::announceLootMoney(uint64_t lootGuid, uint32_t amount) {
+void InventoryHandler::announceLootMoney(uint64_t lootGuid, uint32_t amount, bool soleLooter) {
     if (amount == 0) return;
     auto it = localLootState_.find(lootGuid);
     if (it != localLootState_.end()) {
         if (it->second.moneyTaken) return;
         it->second.moneyTaken = true;
     }
-    owner_.addSystemChatMessage("Looted: " + formatCopperAmount(amount));
+    // YOU_LOOT_MONEY, or LOOT_MONEY_SPLIT for a share, with the amount in
+    // GOLD_AMOUNT/SILVER_AMOUNT/COPPER_AMOUNT, as CHAT_MSG_MONEY (0x006ceca0)
+    // - "Ihr plündert 5 Kupfer". This printed "Looted: 5c" as a system line.
+    owner_.addLocalChatLine(ChatType::MONEY,
+                            interface_text::lootMoneyLine(amount, soleLooter, uiText));
     if (auto* ac = owner_.services().audioCoordinator) {
         if (auto* sfx = ac->getUiSoundManager()) {
             if (amount >= 10000) sfx->playLootCoinLarge();
@@ -276,8 +468,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_LOOT_MONEY_NOTIFY] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(4)) return;
         uint32_t amount = packet.readUInt32();
-        if (packet.hasRemaining(1))
-            /*uint8_t soleLooter =*/ packet.readUInt8();
+        bool soleLooter = true;
+        if (packet.hasRemaining(1)) soleLooter = packet.readUInt8() != 0;
         owner_.playerMoneyCopperRef() += amount;
         owner_.pendingMoneyDeltaRef() = amount;
         owner_.pendingMoneyDeltaTimerRef() = 2.0f;
@@ -285,7 +477,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         pendingLootMoneyGuid_ = 0;
         pendingLootMoneyAmount_ = 0;
         pendingLootMoneyNotifyTimer_ = 0.0f;
-        announceLootMoney(notifyGuid, amount);
+        announceLootMoney(notifyGuid, amount, soleLooter);
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
         // Both packets report the same thing and a server may send either, so
         // the coin goes on whichever arrives first.
@@ -305,9 +497,10 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_READ_ITEM_OK] = [](network::Packet& packet) {
         packet.skipAll();
     };
-    table[Opcode::SMSG_READ_ITEM_FAILED] = [this](network::Packet& packet) {
-        owner_.addUIError("You cannot read this item.");
-        owner_.raiseUiError("You cannot read this item.");
+    table[Opcode::SMSG_READ_ITEM_FAILED] = [](network::Packet& packet) {
+        // No words: 0x006d5d90 answers a refusal with ITEM_TEXT_TRANSLATION or
+        // ITEM_TEXT_CLOSED and nothing on screen. This printed "You cannot
+        // read this item." twice, red and in chat.
         packet.skipAll();
     };
 
@@ -355,8 +548,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         roll.rollCountdownMs = countdown;
         roll.voteMask = voteMask;
         roll.rollStartedAt = std::chrono::steady_clock::now();
-        std::string link = buildItemLink(itemId, quality, itemName);
-        owner_.addSystemChatMessage("Loot roll started for " + link + ".");
+        // No line: the original opens the roll window and says nothing
+        // (0x006fb2c0). "Loot roll started for ..." was this client's own.
         // The roll id the interface will ask every later question by. Its own
         // number: the slot plus one was unique only while one roll was open,
         // and two corpses both rolling their first item shared it.
@@ -384,44 +577,17 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         std::string allPassName = (allPassInfo && !allPassInfo->name.empty())
             ? allPassInfo->name : ("Item #" + std::to_string(itemId));
         uint32_t allPassQuality = allPassInfo ? allPassInfo->quality : 1u;
-        owner_.addSystemChatMessage("Everyone passed on " + buildItemLink(itemId, allPassQuality, allPassName) + ".");
+        // LOOT_ROLL_ALL_PASSED as CHAT_MSG_LOOT (0x006fb470).
+        owner_.addLocalChatLine(ChatType::LOOT, interfaceFormat("LOOT_ROLL_ALL_PASSED", "Everyone passed on: %s",
+            {buildItemLink(itemId, allPassQuality, allPassName)}));
         endLootRoll(passedGuid, passedSlot);
     };
 
-    table[Opcode::SMSG_LOOT_ITEM_NOTIFY] = [this](network::Packet& packet) {
-        // objectGuid(8) + lootSlot(1) [Classic: uint32; WotLK: uint8]
-        if (!packet.hasRemaining(9)) return;
-        /*uint64_t objectGuid =*/ packet.readUInt64();
-        uint32_t lootSlot;
-        if (isActiveExpansion("wotlk")) {
-            lootSlot = packet.readUInt8();
-        } else {
-            if (!packet.hasRemaining(4)) return;
-            lootSlot = packet.readUInt32();
-        }
-        // Try to resolve item name
-        uint32_t itemId = 0;
-        for (const auto& lootItem : currentLoot_.items) {
-            if (lootItem.slotIndex == static_cast<uint8_t>(lootSlot)) {
-                itemId = lootItem.itemId;
-                break;
-            }
-        }
-        if (itemId != 0) {
-            auto* notifInfo = owner_.getItemInfo(itemId);
-            std::string itemName = (notifInfo && !notifInfo->name.empty())
-                ? notifInfo->name : ("Item #" + std::to_string(itemId));
-            uint32_t notifyQuality = notifInfo ? notifInfo->quality : 1u;
-            std::string itemLink2 = buildItemLink(itemId, notifyQuality, itemName);
-            // Show Loot Spam, which the panel offers and nothing read - so the
-            // line went to chat for every item however it was set, which is
-            // what the setting is named after. Default on: it is what this
-            // client has always printed, and a player who does not want it
-            // has now got the switch that says so.
-            if (addons::storedCVarValue("showLootSpam", "1") != "0") {
-                owner_.addSystemChatMessage("You receive loot: " + itemLink2 + ".");
-            }
-        }
+    table[Opcode::SMSG_LOOT_ITEM_NOTIFY] = [](network::Packet& packet) {
+        // Read and dropped, as the original does (0x006ced80): the line about
+        // an item is SMSG_ITEM_PUSH_RESULT's. This printed "You receive loot:"
+        // a second time, in English, for every item.
+        packet.skipAll();
     };
 
     table[Opcode::SMSG_LOOT_SLOT_CHANGED] = [this](network::Packet& packet) {
@@ -447,16 +613,23 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         //   +slot(4)+itemId(4)+suffixFactor(4)+randomPropertyId(4)+count(4)+countInInventory(4)
         if (!packet.hasRemaining(45)) return;
         uint64_t guid = packet.readUInt64();
-        if (guid != owner_.getPlayerGuid()) { packet.skipAll(); return; }
-        /*uint32_t received      =*/ packet.readUInt32();
-        /*uint32_t created       =*/ packet.readUInt32();
-        /*uint32_t displayInChat =*/ packet.readUInt32();
+        const bool self = guid == owner_.getPlayerGuid();
+        const bool received   = packet.readUInt32() != 0;
+        const bool created    = packet.readUInt32() != 0;
+        const bool showInChat = packet.readUInt32() != 0;
         const uint8_t bagSlot = packet.readUInt8();
         /*uint32_t slot          =*/ packet.readUInt32();
         uint32_t itemId = packet.readUInt32();
         /*uint32_t suffixFactor  =*/ packet.readUInt32();
         int32_t randomProp = static_cast<int32_t>(packet.readUInt32());
         uint32_t count = packet.readUInt32();
+
+        // A party member's push is a line in chat and nothing else (0x00523900):
+        // "X bekommt Beute: ..." for loot, "X stellt her: ..." for a creation.
+        // This dropped them unread.
+        interface_text::ItemPush push{.self = self, .received = received, .created = created,
+                                      .showInChat = showInChat, .count = count};
+        const std::string who = self ? std::string() : owner_.lookupName(guid);
 
         auto* info = owner_.getItemInfo(itemId);
         // Which bag button the item landed in, in the numbering the interface
@@ -470,7 +643,9 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
 
         if (!info || info->name.empty()) {
             // Item info not yet cached - defer notification
-            owner_.pendingItemPushNotifsRef().push_back({.itemId = itemId, .count = count, .bagButtonId = bagButtonId});
+            owner_.pendingItemPushNotifsRef().push_back({.itemId = itemId, .count = count,
+                .bagButtonId = bagButtonId, .self = self, .received = received,
+                .created = created, .showInChat = showInChat, .randomProp = randomProp, .who = who});
             owner_.ensureItemInfo(itemId);
             return;
         }
@@ -481,9 +656,12 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         }
         uint32_t quality = info->quality;
         std::string link = buildItemLink(itemId, quality, itemName);
-        std::string msg = "Received item: " + link;
-        if (count > 1) msg += " x" + std::to_string(count);
-        owner_.addSystemChatMessage(msg);
+        // LOOT_ITEM_SELF, LOOT_ITEM_PUSHED_SELF or LOOT_ITEM_CREATED_SELF (and
+        // their _MULTIPLE) as CHAT_MSG_LOOT, as 0x00523900 picks them from the
+        // packet's flags - and none when the server says not to show it. This
+        // printed "Received item: [x] x2" as a system line for all of them.
+        owner_.addLocalChatLine(ChatType::LOOT, interface_text::itemPushLine(push, link, who, uiText));
+        if (!self) return;
         if (auto* ac = owner_.services().audioCoordinator) {
             if (auto* sfx = ac->getUiSoundManager())
                 sfx->playLootItem();
@@ -552,14 +730,24 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                     buybackItems_.erase(rejected);
                     notifyBuybackChanged();
                 }
-                static const char* sellErrors[] = {
-                    "OK", "Can't find item", "Can't sell item",
-                    "Can't find vendor", "You don't own that item",
-                    "Unknown error", "Only empty bag"
-                };
-                const char* msg = (result < 7) ? sellErrors[result] : "Unknown sell error";
-                owner_.addUIError(std::string("Sell failed: ") + msg);
-                owner_.addSystemChatMessage(std::string("Sell failed: ") + msg);
+                // The game error 0x006d1540 picks for the code, on screen
+                // only. This printed "Sell failed: Can't sell item" in
+                // English, red and in chat both; 5 and anything past 9 say
+                // nothing at all.
+                GameErrorText err;
+                switch (result) {
+                    case 1: err = {"ERR_ITEM_NOT_FOUND", "The item was not found."}; break;
+                    case 2: err = {"ERR_VENDOR_NOT_INTERESTED", "The merchant doesn't want that item."}; break;
+                    case 3: err = {"ERR_VENDOR_HATES_YOU", "That merchant doesn't like you."}; break;
+                    case 4: err = {"ERR_NOT_OWNER", "You don't own that item."}; break;
+                    case 6: err = {"ERR_DESTROY_NONEMPTY_BAG", "You can only do that with empty bags."}; break;
+                    case 7: err = {"ERR_VENDOR_DOESNT_BUY", "You can't sell items to that merchant."}; break;
+                    case 8: err = {"ERR_MUST_REPAIR_DURABILITY", "You must repair that item's durability to use it."}; break;
+                    case 9: err = {"ERR_INTERNAL_BAG_ERROR", "Internal Bag Error"}; break;
+                    default: break;
+                }
+                const char* msg = err.key ? err.key : "no error text";
+                if (err.key) owner_.addUIError(uiText(err.key, err.enUS));
                 if (auto* ac = owner_.services().audioCoordinator) {
                     if (auto* sfx = ac->getUiSoundManager())
                         sfx->playError();
@@ -577,134 +765,43 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         if (error == 0) return;
 
         LOG_WARNING("SMSG_INVENTORY_CHANGE_FAILURE: error=", (int)error);
-        uint32_t requiredLevel = 0;
+        // Two item guids and a bag byte, then what this error names: the
+        // level wanted (1, 87) or the ItemLimitCategory (84, 85, 89) -
+        // 0x006e2e90 reads them in that order.
+        uint32_t arg = 0;
         if (packet.hasRemaining(17)) {
             packet.readUInt64();
             packet.readUInt64();
             packet.readUInt8();
-            if (error == 1 && packet.hasRemaining(4))
-                requiredLevel = packet.readUInt32();
+            if ((error == 1 || error == 87 || error == 84 || error == 85 || error == 89) &&
+                packet.hasRemaining(4))
+                arg = packet.readUInt32();
         }
 
-        // Level requirement has its own formatting
+        // The game error 0x00753bb0 picks for the code, on screen only and in
+        // the interface's words. This had its own English for each code -
+        // "Cannot loot item: Inventory is full.", "Inventory error (N)." -
+        // and wrote every one to the chat log as well.
+        const GameErrorText err = inventoryChangeError(error);
+        if (!err.key) return;
+        std::string msg;
+        if (error == 1 || error == 87) {
+            msg = interfaceFormat(err.key, err.enUS, {std::to_string(arg)});
+        } else if (error == 84 || error == 85 || error == 89) {
+            // The category's quantity and name, in that order. The real
+            // client cannot be without the row (0x006e2e90 stops the game
+            // there); without it here there is nothing to say.
+            const auto [name, quantity] = itemLimitCategory(owner_, arg);
+            if (name.empty()) return;
+            msg = interfaceFormat(err.key, err.enUS, {std::to_string(quantity), name});
+        } else {
+            msg = uiText(err.key, err.enUS);
+        }
+        owner_.addUIError(msg);
         if (error == 1) {
-            char levelBuf[64];
-            if (requiredLevel > 0) {
-                std::snprintf(levelBuf, sizeof(levelBuf),
-                              "You must reach level %u to use that item.", requiredLevel);
-            } else {
-                std::snprintf(levelBuf, sizeof(levelBuf),
-                              "You must reach a higher level to use that item.");
-            }
-            owner_.addUIError(levelBuf);
-            owner_.addSystemChatMessage(levelBuf);
             owner_.playErrorSpeech(audio::PlayerErrorSpeech::CANT_EQUIP_LEVEL);
             return;
         }
-
-        const char* errMsg = nullptr;
-        switch (error) {
-                    // 1 and 2 name a requirement rather than a mistake, and
-                    // both were missing: a recipe above your profession skill
-                    // answered "Inventory error (2)".
-                    case 1:  errMsg = "You must reach a higher level to use that."; break;
-                    case 2:  errMsg = "You aren't skilled enough to use that."; break;
-                    case 3:  errMsg = "That item doesn't go in that slot."; break;
-                    case 4:  errMsg = "That bag is full."; break;
-                    case 5:  errMsg = "Can't put bags in bags."; break;
-                    case 6:  errMsg = "Can't trade equipped bags."; break;
-                    case 7:  errMsg = "That slot only holds ammo."; break;
-                    case 8:  errMsg = "You can't use that item."; break;
-                    case 9:  errMsg = "No equipment slot available."; break;
-                    case 10: errMsg = "You can never use that item."; break;
-                    case 11: errMsg = "You can never use that item."; break;
-                    case 12: errMsg = "No equipment slot available."; break;
-                    case 13: errMsg = "Can't equip with a two-handed weapon."; break;
-                    case 14: errMsg = "Can't dual-wield."; break;
-                    case 15: errMsg = "That item doesn't go in that bag."; break;
-                    case 16: errMsg = "That item doesn't go in that bag."; break;
-                    case 17: errMsg = "You can't carry any more of those."; break;
-                    case 18: errMsg = "No equipment slot available."; break;
-                    case 19: errMsg = "Can't stack those items."; break;
-                    case 20: errMsg = "That item can't be equipped."; break;
-                    case 21: errMsg = "Can't swap items."; break;
-                    case 22: errMsg = "That slot is empty."; break;
-                    case 23: errMsg = "Item not found."; break;
-                    case 24: errMsg = "Can't drop soulbound items."; break;
-                    case 25: errMsg = "Out of range."; break;
-                    case 26: errMsg = "Need to split more than 1."; break;
-                    case 27: errMsg = "Split failed."; break;
-                    case 28: errMsg = "Not enough reagents."; break;
-                    case 29: errMsg = "Not enough money."; break;
-                    case 30: errMsg = "Not a bag."; break;
-                    case 31: errMsg = "Can't destroy non-empty bag."; break;
-                    case 32: errMsg = "You don't own that item."; break;
-                    case 33: errMsg = "You can only have one quiver."; break;
-                    case 34: errMsg = "No free bank slots."; break;
-                    case 35: errMsg = "No bank here."; break;
-                    case 36: errMsg = "Item is locked."; break;
-                    case 37: errMsg = "You are stunned."; break;
-                    case 38: errMsg = "You are dead."; break;
-                    case 39: errMsg = "Can't do that right now."; break;
-                    case 40: errMsg = "Internal bag error."; break;
-                    case 41: errMsg = "You can only equip one bolt."; break;
-                    case 42: errMsg = "You can only equip one ammo pouch."; break;
-                    case 43: errMsg = "Stackable items can't be wrapped."; break;
-                    case 44: errMsg = "Equipped items can't be wrapped."; break;
-                    case 45: errMsg = "Wrapped items can't be wrapped."; break;
-                    case 46: errMsg = "Soulbound items can't be wrapped."; break;
-                    case 47: errMsg = "Unique items can't be wrapped."; break;
-                    case 48: errMsg = "Bags can't be wrapped."; break;
-                    case 49: errMsg = "Loot is gone."; break;
-                    case 50: errMsg = "Inventory is full."; break;
-                    case 51: errMsg = "Bank is full."; break;
-                    case 52: errMsg = "That item is sold out."; break;
-                    // The server has several codes for one condition - four
-                    // separate bag-full values, two for item-not-found - so
-                    // these repeat a message rather than inventing a new one.
-                    case 53: errMsg = "That bag is full."; break;
-                    case 54: errMsg = "Item not found."; break;
-                    case 55: errMsg = "Can't stack those items."; break;
-                    case 56: errMsg = "That bag is full."; break;
-                    case 57: errMsg = "That item is sold out."; break;
-                    case 58: errMsg = "That object is busy."; break;
-                    case 60: errMsg = "Can't do that in combat."; break;
-                    case 61: errMsg = "Can't do that while disarmed."; break;
-                    case 62: errMsg = "That bag is full."; break;
-                    case 63: errMsg = "Requires a higher rank."; break;
-                    case 64: errMsg = "Requires higher reputation."; break;
-                    case 65: errMsg = "You can't carry any more special bags."; break;
-                    case 66: errMsg = "You can't loot that now."; break;
-                    case 67: errMsg = "That item is unique-equipped."; break;
-                    case 68: errMsg = "You are missing required items."; break;
-                    case 69: errMsg = "Not enough honor points."; break;
-                    case 70: errMsg = "Not enough arena points."; break;
-                    case 71: errMsg = "You can't carry any more of those."; break;
-                    case 72: errMsg = "Soulbound items can't be mailed."; break;
-                    case 73: errMsg = "Can't split a stack while prospecting."; break;
-                    case 75: errMsg = "You can't equip any more of those."; break;
-                    case 76: errMsg = "That item is unique-equipped."; break;
-                    case 77: errMsg = "Too much gold."; break;
-                    case 78: errMsg = "Can't do that during arena match."; break;
-                    case 79: errMsg = "You can't trade that."; break;
-                    case 80: errMsg = "Requires a personal arena rating."; break;
-                    case 82: errMsg = "That belongs to another character."; break;
-                    case 84: errMsg = "You can't carry any more of that kind."; break;
-                    case 85: errMsg = "You can't socket any more of that kind."; break;
-                    case 86: errMsg = "That item's level is too high."; break;
-                    case 87: errMsg = "Requires a higher level."; break;
-                    case 88: errMsg = "Requires the right talent."; break;
-                    case 89: errMsg = "You can't equip any more of that kind."; break;
-                    // 59 is NONE and 81 asks for a bind confirmation rather
-                    // than reporting a failure. Neither is an error to show.
-                    default: break;
-                }
-        std::string msg = errMsg ? errMsg : "Inventory error (" + std::to_string(error) + ").";
-        if (error == 50 && currentLoot_.lootGuid != 0) {
-            msg = "Cannot loot item: Inventory is full.";
-        }
-        owner_.addUIError(msg);
-        owner_.addSystemChatMessage(msg);
         if (auto* ac = owner_.services().audioCoordinator) {
             if (auto* sfx = ac->getUiSoundManager())
                 sfx->playError();
@@ -762,31 +859,43 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                         auto pkt = ListInventoryPacket::build(currentVendorItems_.vendorGuid);
                         owner_.getSocket()->send(pkt);
                     }
-                    owner_.addUIError("That buyback item is no longer available.");
+                    // Code 0 is ERR_ITEM_NOT_FOUND for a buyback as for a
+                    // purchase (0x006cdba0) - this said "That buyback item
+                    // is no longer available." in English.
+                    owner_.addUIError(uiText("ERR_ITEM_NOT_FOUND", "The item was not found."));
+                    if (auto* ac = owner_.services().audioCoordinator)
+                        if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
                     return;
                 }
                 pendingBuybackSlot_ = -1;
                 pendingBuybackWireSlot_ = 0;
             }
-            const char* msg = "Purchase failed.";
+            // The game error 0x006cdba0 picks for the code, on screen only.
+            // This had English of its own for five codes - two of them on
+            // the wrong numbers - and "Purchase failed." for the rest, in
+            // chat as well; 6 says nothing.
+            GameErrorText err;
             switch (errCode) {
-                case 0: msg = "Purchase failed: item not found."; break;
-                case 2: msg = "You don't have enough money."; break;
-                case 4: msg = "Seller is too far away."; break;
-                case 5: msg = "That item is sold out."; break;
-                case 6: msg = "You can't carry any more items."; break;
-                default: break;
+                case 1: case 7: err = {"ERR_VENDOR_SOLD_OUT", "That item is currently sold out."}; break;
+                case 2:  err = {"ERR_NOT_ENOUGH_MONEY", "You don't have enough money."}; break;
+                case 4:  err = {"ERR_VENDOR_HATES_YOU", "That merchant doesn't like you."}; break;
+                case 5:  err = {"ERR_VENDOR_TOO_FAR", "You are too far away."}; break;
+                case 6:  break;
+                case 8:  err = {"ERR_ITEM_MAX_COUNT", "You can't carry any more of those items."}; break;
+                case 11: err = {"ERR_CANT_EQUIP_RANK", "You don't have the required rank for that item"}; break;
+                case 12: err = {"ERR_CANT_EQUIP_REPUTATION", "You don't have the required reputation for that item"}; break;
+                default: err = {"ERR_ITEM_NOT_FOUND", "The item was not found."}; break;
             }
-            owner_.addUIError(msg);
-            owner_.addSystemChatMessage(msg);
+            if (!err.key) return;
+            owner_.addUIError(uiText(err.key, err.enUS));
             if (auto* ac = owner_.services().audioCoordinator) {
                 if (auto* sfx = ac->getUiSoundManager())
                     sfx->playError();
             }
             if (errCode == 2)
                 owner_.playErrorSpeech(audio::PlayerErrorSpeech::NOT_ENOUGH_MONEY);
-            else if (errCode == 6)
-                owner_.playErrorSpeech(audio::PlayerErrorSpeech::INVENTORY_FULL);
+            else if (errCode == 8)
+                owner_.playErrorSpeech(audio::PlayerErrorSpeech::ITEM_MAX_COUNT);
         }
     };
 
@@ -795,7 +904,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             /*uint64_t vendorGuid =*/ packet.readUInt64();
             const uint32_t vendorSlot = packet.readUInt32();   // 1-based, as the list numbers them
             const uint32_t newCount   = packet.readUInt32();   // 0xFFFFFFFF for an unlimited item
-            uint32_t itemCount  = packet.readUInt32();
+            /*uint32_t itemCount =*/ packet.readUInt32();
 
             // The stock left, said now rather than at the next reopen.
             //
@@ -823,15 +932,10 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                     [this](const BuybackItem& item) {
                         return item.wireSlot == pendingBuybackWireSlot_;
                     });
-                if (bought != buybackItems_.end()) {
-                    const auto& entry = *bought;
-                    std::string label = entry.item.name.empty()
-                        ? "item #" + std::to_string(entry.item.itemId) : entry.item.name;
-                    owner_.addSystemChatMessage("Bought back: " +
-                        buildItemLink(entry.item.itemId,
-                                      static_cast<uint32_t>(entry.item.quality), label));
-                    buybackItems_.erase(bought);
-                }
+                // No line: 0x006cdd10 only updates the merchant's stock. This
+                // printed "Bought back: [item]" in English; the item's own
+                // SMSG_ITEM_PUSH_RESULT line is what the real client shows.
+                if (bought != buybackItems_.end()) buybackItems_.erase(bought);
                 pendingBuybackSlot_ = -1;
                 pendingBuybackWireSlot_ = 0;
                 if (auto* ac = owner_.services().audioCoordinator) {
@@ -845,16 +949,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                 return;
             }
             if (pendingBuyItemId_ != 0) {
-                std::string itemLabel;
-                uint32_t buyQuality = 1;
-                if (const ItemQueryResponseData* info = owner_.getItemInfo(pendingBuyItemId_)) {
-                    if (!info->name.empty()) itemLabel = info->name;
-                    buyQuality = info->quality;
-                }
-                if (itemLabel.empty()) itemLabel = "item #" + std::to_string(pendingBuyItemId_);
-                std::string msg = "Purchased: " + buildItemLink(pendingBuyItemId_, buyQuality, itemLabel);
-                if (itemCount > 1) msg += " x" + std::to_string(itemCount);
-                owner_.addSystemChatMessage(msg);
+                // Nor for a purchase - "Purchased: [item] xN" was this
+                // client's own English; the push result says what arrived.
                 if (auto* ac = owner_.services().audioCoordinator) {
                     if (auto* sfx = ac->getUiSoundManager())
                         sfx->playPickupBag();
@@ -921,18 +1017,28 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // one word, not three words. Written out properly here so the next
         // person to add a field does not count from a layout that is not the
         // one on the wire.
-        if (packet.hasRemaining(24)) {
+        //
+        // 0x005a0790 speaks only when the guid is zero, and then by the bid:
+        // ERR_AUCTION_SOLD_S for a sale, ERR_AUCTION_EXPIRED_S for none -
+        // system chat, the item named plainly. A non-zero guid is a new
+        // bidder on one of the player's auctions, which only updates the
+        // list. This printed "Your auction of [item] has sold!" in English
+        // for every one of them.
+        if (packet.hasRemaining(28)) {
             /*uint32_t auctionId =*/ packet.readUInt32();
-            /*uint32_t bid       =*/ packet.readUInt32();
+            const uint32_t bid = packet.readUInt32();
             /*uint32_t unk       =*/ packet.readUInt32();
-            /*uint64_t unkGuid   =*/ packet.readUInt64();
-            uint32_t itemEntry = packet.readUInt32();
-            owner_.ensureItemInfo(itemEntry);
-            auto* info = owner_.getItemInfo(itemEntry);
-            std::string rawName = info && !info->name.empty() ? info->name : ("Item #" + std::to_string(itemEntry));
-            uint32_t aucQuality = info ? info->quality : 1u;
-            std::string itemLink = buildItemLink(itemEntry, aucQuality, rawName);
-            owner_.addSystemChatMessage("Your auction of " + itemLink + " has sold!");
+            const uint64_t bidderGuid = packet.readUInt64();
+            const uint32_t itemEntry = packet.readUInt32();
+            const int32_t randomProp = static_cast<int32_t>(packet.readUInt32());
+            if (bidderGuid == 0) {
+                if (bid != 0)
+                    auctionItemLine(owner_, itemEntry, randomProp, "ERR_AUCTION_SOLD_S",
+                                    "A buyer has been found for your auction of %s.");
+                else
+                    auctionItemLine(owner_, itemEntry, randomProp, "ERR_AUCTION_EXPIRED_S",
+                                    "Your auction of %s has expired.");
+            }
         }
         packet.skipAll();
     };
@@ -946,19 +1052,20 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         /*uint32_t auctionHouseId =*/ packet.readUInt32();
         /*uint32_t auctionId      =*/ packet.readUInt32();
         /*uint64_t bidderGuid     =*/ packet.readUInt64();
-        /*uint32_t bidAmount      =*/ packet.readUInt32();
+        const uint32_t bidAmount = packet.readUInt32();
         /*uint32_t outbidAmount   =*/ packet.readUInt32();
         uint32_t itemEntry = packet.readUInt32();
         int32_t bidRandProp = static_cast<int32_t>(packet.readUInt32());
-        owner_.ensureItemInfo(itemEntry);
-        auto* info = owner_.getItemInfo(itemEntry);
-        std::string rawName = info && !info->name.empty() ? info->name : ("Item #" + std::to_string(itemEntry));
-        if (bidRandProp != 0) {
-            std::string suffix = owner_.getRandomPropertyName(bidRandProp);
-            if (!suffix.empty()) rawName += " " + suffix;
-        }
-        uint32_t bidQuality = info ? info->quality : 1u;
-        owner_.addSystemChatMessage("You have been outbid on " + buildItemLink(itemEntry, bidQuality, rawName) + ".");
+        // 0x005a0480: a bid of zero is an auction won, ERR_AUCTION_WON_S;
+        // anything else is ERR_AUCTION_OUTBID_S - system chat, the item named
+        // plainly. This said "You have been outbid on [item]." in English
+        // for both, so a won auction read as a lost one.
+        if (bidAmount == 0)
+            auctionItemLine(owner_, itemEntry, bidRandProp, "ERR_AUCTION_WON_S",
+                            "You won an auction for %s");
+        else
+            auctionItemLine(owner_, itemEntry, bidRandProp, "ERR_AUCTION_OUTBID_S",
+                            "You have been outbid on %s.");
         packet.skipAll();
     };
 
@@ -967,16 +1074,11 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             /*uint32_t auctionId =*/ packet.readUInt32();
             uint32_t itemEntry = packet.readUInt32();
             int32_t itemRandom = static_cast<int32_t>(packet.readUInt32());
-            owner_.ensureItemInfo(itemEntry);
-            auto* info = owner_.getItemInfo(itemEntry);
-            std::string rawName3 = info && !info->name.empty() ? info->name : ("Item #" + std::to_string(itemEntry));
-            if (itemRandom != 0) {
-                std::string suffix = owner_.getRandomPropertyName(itemRandom);
-                if (!suffix.empty()) rawName3 += " " + suffix;
-            }
-            uint32_t remQuality = info ? info->quality : 1u;
-            std::string remLink = buildItemLink(itemEntry, remQuality, rawName3);
-            owner_.addSystemChatMessage("Your auction of " + remLink + " has expired.");
+            // ERR_AUCTION_REMOVED_S, system chat (0x005a0ac0) - the seller
+            // took the auction down. This said "Your auction of [item] has
+            // expired." in English, which is a different line.
+            auctionItemLine(owner_, itemEntry, itemRandom, "ERR_AUCTION_REMOVED_S",
+                            "Your auction of %s has been cancelled by the seller.");
         }
         packet.skipAll();
     };
@@ -1039,9 +1141,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             LOG_INFO("SMSG_EQUIPMENT_SET_SAVED: index=", setIndex,
                      " guid=", setGuid, " name=", setName);
         }
-        owner_.addSystemChatMessage(setName.empty()
-            ? std::string("Equipment set saved.")
-            : "Equipment set \"" + setName + "\" saved.");
+        // No line: 0x005af6c0 only stores the guid. This printed "Equipment
+        // set "X" saved." in English.
         // The set list just gained a row, or an existing row gained the guid
         // the server knows it by. The equipment manager rebuilds its list only
         // on this event, so without it a set saved this session is missing
@@ -1052,7 +1153,13 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_EQUIPMENT_SET_USE_RESULT] = [this](network::Packet& packet) {
         if (packet.hasRemaining(1)) {
             uint8_t result = packet.readUInt8();
-            if (result != 0) { owner_.addUIError("Failed to equip item set."); owner_.addSystemChatMessage("Failed to equip item set."); }
+            // 0x005af710 has words for one failure only - bags too full to
+            // take what comes off, EQUIPMENT_MANAGER_BAGS_FULL on screen - and
+            // none for the rest. This printed "Failed to equip item set."
+            // in English, red and in chat, for every one.
+            if (result == 4)
+                owner_.addUIError(uiText("EQUIPMENT_MANAGER_BAGS_FULL",
+                                         "Equipment swap failed. Inventory is full."));
         }
     };
 
@@ -1381,18 +1488,18 @@ void InventoryHandler::handleLootRoll(network::Packet& packet) {
     uint64_t objectGuid = packet.readUInt64();
     uint32_t lootSlot   = packet.readUInt32();
     uint64_t playerGuid = packet.readUInt64();
-    /*uint32_t itemId     =*/ packet.readUInt32();
+    uint32_t itemId     = packet.readUInt32();
     /*uint32_t randSuffix =*/ packet.readUInt32();
-    (void)packet.readUInt32(); // random property
+    const int32_t randProp = static_cast<int32_t>(packet.readUInt32());
     uint8_t rollNumber  = packet.readUInt8();
     uint8_t rollType    = packet.readUInt8();
-    /*uint8_t autoPass   =*/ packet.readUInt8();
+    const bool autoPass = packet.readUInt8() != 0;
 
     // Resolve player name
     std::string playerName;
     auto nit = owner_.getPlayerNameCache().find(playerGuid);
     if (nit != owner_.getPlayerNameCache().end()) playerName = nit->second;
-    if (playerName.empty()) playerName = "Player";
+    if (playerName.empty()) playerName = owner_.lookupName(playerGuid);
 
     if (LootRollEntry* roll = findLootRoll(objectGuid, lootSlot)) {
         LootRollEntry::PlayerRollResult result;
@@ -1402,16 +1509,36 @@ void InventoryHandler::handleLootRoll(network::Packet& packet) {
         roll->playerRolls.push_back(result);
     }
 
-    // RollVote enum: 0=Pass, 1=Need, 2=Greed, 3=Disenchant.
-    const char* typeStr = "passed on";
-    if (rollType == 1) typeStr = "rolled Need";
-    else if (rollType == 2) typeStr = "rolled Greed";
-    else if (rollType == 3) typeStr = "rolled Disenchant";
-    if (rollType >= 1 && rollType <= 3) {
-        owner_.addSystemChatMessage(playerName + " " + typeStr + " - " + std::to_string(rollNumber));
-    } else {
-        owner_.addSystemChatMessage(playerName + " passed.");
+    // The interface's LOOT_ROLL_* line as CHAT_MSG_LOOT, chosen the way
+    // 0x006fa840 chooses it: a choice (need, greed, disenchant, pass) or a die
+    // cast, this player's own or someone else's, and only an automatic pass of
+    // one's own without showLootSpam. This printed "X rolled Need - 85".
+    interface_text::LootRoll r;
+    r.self = playerGuid == owner_.getPlayerGuid();
+    r.rollNumber = static_cast<int8_t>(rollNumber);
+    r.rollType = rollType;
+    r.autoPass = autoPass;
+    r.lootSpam = addons::storedCVarValue("showLootSpam", "1") != "0";
+    if (auto ent = owner_.getEntityManager().getEntity(playerGuid)) {
+        if (ent->getType() == ObjectType::PLAYER) {
+            // UNIT_FIELD_BYTES_0's third byte, 1 for female.
+            const uint32_t bytes0 = ent->getField(fieldIndex(UF::UNIT_FIELD_BYTES_0));
+            r.female = ((bytes0 >> 16) & 0xFF) == 1;
+        }
     }
+    owner_.addLocalChatLine(ChatType::LOOT,
+                            interface_text::lootRollLine(r, rollItemLink(itemId, randProp), playerName, uiText));
+}
+
+std::string InventoryHandler::rollItemLink(uint32_t itemId, int32_t randomProp) {
+    owner_.ensureItemInfo(itemId);
+    auto* info = owner_.getItemInfo(itemId);
+    std::string itemName = (info && !info->name.empty()) ? info->name : ("Item #" + std::to_string(itemId));
+    if (randomProp != 0) {
+        std::string suffix = owner_.getRandomPropertyName(randomProp);
+        if (!suffix.empty()) itemName += " " + suffix;
+    }
+    return buildItemLink(itemId, info ? info->quality : 1u, itemName);
 }
 
 void InventoryHandler::handleLootRollWon(network::Packet& packet) {
@@ -1429,24 +1556,15 @@ void InventoryHandler::handleLootRollWon(network::Packet& packet) {
     std::string winnerName;
     auto nit = owner_.getPlayerNameCache().find(winnerGuid);
     if (nit != owner_.getPlayerNameCache().end()) winnerName = nit->second;
-    if (winnerName.empty()) winnerName = "Player";
+    if (winnerName.empty()) winnerName = owner_.lookupName(winnerGuid);
 
-    owner_.ensureItemInfo(itemId);
-    auto* info = owner_.getItemInfo(itemId);
-    std::string itemName = (info && !info->name.empty()) ? info->name : ("Item #" + std::to_string(itemId));
-    if (wonRandProp != 0) {
-        std::string suffix = owner_.getRandomPropertyName(wonRandProp);
-        if (!suffix.empty()) itemName += " " + suffix;
-    }
-    uint32_t wonQuality = info ? info->quality : 1u;
-    std::string link = buildItemLink(itemId, wonQuality, itemName);
-
-    // RollVote enum: 1=Need, 2=Greed, 3=Disenchant (0=Pass cannot win).
-    const char* typeStr = "Need";
-    if (rollType == 2) typeStr = "Greed";
-    else if (rollType == 3) typeStr = "Disenchant";
-
-    owner_.addSystemChatMessage(winnerName + " won " + link + " (" + typeStr + " - " + std::to_string(rollNumber) + ")");
+    // LOOT_ROLL_WON / LOOT_ROLL_YOU_WON, or their _NO_SPAM lines naming the
+    // winning roll without showLootSpam, as CHAT_MSG_LOOT (0x006fb700). This
+    // printed "X won [item] (Need - 85)" in English.
+    owner_.addLocalChatLine(ChatType::LOOT, interface_text::lootRollWonLine(
+        winnerGuid == owner_.getPlayerGuid(), rollNumber, rollType,
+        addons::storedCVarValue("showLootSpam", "1") != "0",
+        rollItemLink(itemId, wonRandProp), winnerName, uiText));
     endLootRoll(wonGuid, wonSlot);
 }
 
@@ -1584,7 +1702,11 @@ void InventoryHandler::sellItemBySlot(int backpackIndex) {
         }
     }
     if (sellPrice == 0) {
-        owner_.raiseUiError("Cannot sell: this item has no vendor value.");
+        // What the server answers for one - SELL_ERR_CANT_SELL_ITEM, which
+        // 0x006d1540 shows as ERR_VENDOR_NOT_INTERESTED; the real client
+        // asks rather than checking (0x006d2d40). This said "Cannot sell:
+        // this item has no vendor value." in English.
+        owner_.raiseUiError(uiText("ERR_VENDOR_NOT_INTERESTED", "The merchant doesn't want that item."));
         return;
     }
 
@@ -1608,10 +1730,10 @@ void InventoryHandler::sellItemBySlot(int backpackIndex) {
         notifyBuybackChanged();
         sellItem(currentVendorItems_.vendorGuid, itemGuid, count);
     } else if (itemGuid == 0) {
-        owner_.raiseUiError("Cannot sell: item not found in inventory.");
+        // This client's own bookkeeping failing, which the real one has no
+        // words for; logged, not shown. Nor is selling with no merchant
+        // open, which 0x005d8650 simply does not do.
         LOG_WARNING("Sell failed: missing item GUID for slot ", backpackIndex);
-    } else {
-        owner_.raiseUiError("Cannot sell: no vendor.");
     }
 }
 
@@ -1628,7 +1750,11 @@ void InventoryHandler::sellItemInBag(int bagIndex, int slotIndex) {
         }
     }
     if (sellPrice == 0) {
-        owner_.raiseUiError("Cannot sell: this item has no vendor value.");
+        // What the server answers for one - SELL_ERR_CANT_SELL_ITEM, which
+        // 0x006d1540 shows as ERR_VENDOR_NOT_INTERESTED; the real client
+        // asks rather than checking (0x006d2d40). This said "Cannot sell:
+        // this item has no vendor value." in English.
+        owner_.raiseUiError(uiText("ERR_VENDOR_NOT_INTERESTED", "The merchant doesn't want that item."));
         return;
     }
 
@@ -1657,9 +1783,8 @@ void InventoryHandler::sellItemInBag(int bagIndex, int slotIndex) {
         notifyBuybackChanged();
         sellItem(currentVendorItems_.vendorGuid, itemGuid, count);
     } else if (itemGuid == 0) {
-        owner_.raiseUiError("Cannot sell: item not found.");
-    } else {
-        owner_.raiseUiError("Cannot sell: no vendor.");
+        // As above: nothing the real client could say.
+        LOG_WARNING("Sell failed: missing item GUID for bag ", bagIndex, " slot ", slotIndex);
     }
 }
 
@@ -1696,7 +1821,8 @@ void InventoryHandler::repairItem(uint64_t vendorGuid, uint64_t itemGuid) {
 
     uint32_t cost = estimateItemRepairCost(itemGuid);
     if (cost > 0 && owner_.getMoneyCopper() < cost) {
-        owner_.addUIError("Not enough money");
+        // ERR_NOT_ENOUGH_MONEY, as the repair cursor checks it (0x005d8650).
+        owner_.addUIError(uiText("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
         return;
     }
 
@@ -1724,7 +1850,8 @@ void InventoryHandler::repairAll(uint64_t vendorGuid, bool useGuildBank) {
     uint32_t totalCost = estimateRepairAllCost();
 
     if (!useGuildBank && totalCost > 0 && owner_.getMoneyCopper() < totalCost) {
-        owner_.addUIError("Not enough money");
+        // ERR_NOT_ENOUGH_MONEY, as RepairAllItems checks it (0x00585c90).
+        owner_.addUIError(uiText("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
         return;
     }
 
@@ -1880,7 +2007,8 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     if (itemGuid == 0) {
         LOG_WARNING("useItem: itemGuid=0 for item='", item.name, "' entry=", item.itemId,
                     " - cannot use");
-        owner_.raiseUiError("Cannot use that item right now.");
+        // This client not knowing the item's guid, which the real one always
+        // does - nothing it could have said. Logged, not shown.
         return;
     }
 
@@ -1914,7 +2042,8 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
         (owner_.getSpellTargetFlags(useSpellId) & kSpellTargetFlagItem) != 0) {
         pendingItemTarget_ = PendingItemTarget{.bag = wowBag, .slot = wowSlot, .itemGuid = itemGuid, .spellId = useSpellId,
                                                .itemId = item.itemId, .itemName = item.name};
-        owner_.addSystemChatMessage("Choose an item to apply " + item.name + " to.");
+        // The real client turns the cursor into the spell's and says nothing;
+        // "Choose an item to apply X to." was this client's own English.
         return;
     }
 
@@ -1946,7 +2075,7 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
             owner_.getTargetGuid() == 0) {
             pendingUnitTarget_ = PendingItemTarget{.bag = wowBag, .slot = wowSlot, .itemGuid = itemGuid, .spellId = useSpellId,
                                                    .itemId = item.itemId, .itemName = item.name, .fromSpell = false};
-            owner_.addSystemChatMessage("Choose a target for " + item.name + ".");
+            // The targeting cursor, without words - as for the item target.
             return;
         }
     }
@@ -2038,7 +2167,8 @@ void InventoryHandler::beginSpellItemTargeting(uint32_t spellId, const std::stri
     pending.itemName = spellName;
     pending.fromSpell = true;
     pendingItemTarget_ = pending;
-    owner_.addSystemChatMessage("Choose an item to use " + spellName + " on.");
+    // The targeting cursor, without words: "Choose an item to use X on." was
+    // this client's own English.
 }
 
 void InventoryHandler::replaceEnchant() {
@@ -2104,7 +2234,9 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
             (targetInfo->itemClass == kItemClassWeapon ||
              targetInfo->itemClass == kItemClassArmor);
         if (!canDisenchant) {
-            owner_.raiseUiError("Item cannot be disenchanted");
+            // The server's answer to the cast, said before it is sent:
+            // SPELL_FAILED_CANT_BE_DISENCHANTED, on screen like any failed cast.
+            owner_.raiseUiError(uiText("SPELL_FAILED_CANT_BE_DISENCHANTED", "Item cannot be disenchanted"));
             return;
         }
 
@@ -2724,14 +2856,11 @@ void InventoryHandler::handleListInventory(network::Packet& packet) {
                 }
             }
         }
-        if (itemsSold > 0) {
-            char buf[128];
-            std::snprintf(buf, sizeof(buf),
-                "|cffaaaaaaAuto-sold %d grey item%s for %s.|r",
-                itemsSold, itemsSold == 1 ? "" : "s",
-                game::formatCopperPrice(totalSellPrice).c_str());
-            owner_.addSystemChatMessage(buf);
-        }
+        // Logged rather than said: auto-selling is this client's own, and the
+        // real client has no line for it - "Auto-sold N grey items for X."
+        // was English on any client.
+        if (itemsSold > 0)
+            LOG_INFO("Auto-sold ", itemsSold, " grey item(s) for ", totalSellPrice, " copper");
     }
 
     // Auto-repair
@@ -2746,8 +2875,10 @@ void InventoryHandler::handleListInventory(network::Packet& packet) {
             }
         }
         if (anyDamaged) {
+            // Without a line, as auto-selling: "Auto-repair triggered." was
+            // this client's own English, and the real client has no such
+            // feature to announce.
             repairAll(currentVendorItems_.vendorGuid, false);
-            owner_.addSystemChatMessage("|cffaaaaaaAuto-repair triggered.|r");
         }
     }
 
@@ -3012,23 +3143,11 @@ void InventoryHandler::refreshMailList() {
 }
 
 const char* InventoryHandler::mailResultText(uint32_t error) {
-    // MailResponseResult, as the server sends it.
-    switch (error) {
-        case 1:  return "Those items cannot go in your bags.";
-        case 2:  return "You cannot send mail to yourself.";
-        case 3:  return "You do not have enough money.";
-        case 4:  return "No player by that name.";
-        case 5:  return "You cannot send mail to the other faction.";
-        case 6:  return "The server refused the letter.";
-        case 14: return "Trial accounts cannot send mail.";
-        case 15: return "That player's mailbox is full.";
-        case 16: return "A wrapped item cannot be sent cash on delivery.";
-        case 17: return "Your mail and chat are suspended.";
-        case 18: return "Too many items attached.";
-        case 19: return "One of the attached items cannot be mailed.";
-        case 21: return "One of the attached items has expired.";
-        default: return nullptr;
-    }
+    // The enUS words of the game error 0x005717b0 shows for the code; the
+    // line itself is put up in the interface's words (mailError). 0, 1 (an
+    // inventory code of its own) and 20 have none.
+    if (error == 0 || error == 1 || error == 20) return nullptr;
+    return mailError(error).enUS;
 }
 
 void InventoryHandler::refuseSend(const std::string& reason, const char* logLine) {
@@ -3037,8 +3156,10 @@ void InventoryHandler::refuseSend(const std::string& reason, const char* logLine
     // side used to return without a word, so the button stayed disabled - one
     // silent refusal and no letter could be sent for the rest of the session,
     // whatever was wrong the first time.
-    LOG_WARNING("sendMail: ", logLine);
-    owner_.addSystemChatMessage(reason);
+    //
+    // The reason goes to the log and nowhere else: SendMail (0x00570910)
+    // refuses these without a word, and they were English in chat.
+    LOG_WARNING("sendMail: ", logLine, " (", reason, ")");
     if (owner_.addonEventCallbackRef()) {
         // Zero is "internal error" in the server's own table, which is the
         // honest answer for a refusal that never reached it.
@@ -3316,14 +3437,32 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
     constexpr uint32_t MAIL_ITEM_TAKEN = 2;
     constexpr uint32_t MAIL_RETURNED_TO_SENDER = 3;
     constexpr uint32_t MAIL_DELETED = 4;
-    constexpr uint32_t MAIL_MADE_PERMANENT = 5;
+    [[maybe_unused]] constexpr uint32_t MAIL_MADE_PERMANENT = 5;
 
     auto mailIt = std::find_if(mailInbox_.begin(), mailInbox_.end(),
         [mailId](const MailMessage& mail) { return mail.messageId == mailId; });
 
+    // What 0x005717b0 says, for every action alike: ERR_MAIL_SENT on the
+    // yellow line for a letter gone out, a game error for a refusal - the
+    // inventory's own for code 1, which carries one - and nothing for
+    // anything else. This wrote its own English to chat for each action,
+    // "Item taken from mail.", "Mail deleted.", "Failed to take money (error
+    // N).", none of which the real client says.
+    if (error == 1) {
+        const uint8_t equipError = packet.hasRemaining(4)
+            ? static_cast<uint8_t>(packet.readUInt32()) : 0;
+        const GameErrorText err = inventoryChangeError(equipError);
+        if (err.key) owner_.addUIError(uiText(err.key, err.enUS));
+    } else if (error != 0 && error != 20) {
+        const GameErrorText err = mailError(error);
+        // ERR_USER_SQUELCHED is the one the table sends to chat.
+        if (error == 17) owner_.addSystemChatMessage(uiText(err.key, err.enUS));
+        else owner_.addUIError(uiText(err.key, err.enUS));
+    }
+
     if (action == MAIL_SEND) {
         if (error == 0) {
-            owner_.addSystemChatMessage("Mail sent.");
+            owner_.addUIInfoMessage(uiText("ERR_MAIL_SENT", "Mail sent."));
             clearMailAttachments();
             // The frame stays where it is - WoW resets its fields and leaves it
             // open. This used to close this client's own compose window here,
@@ -3339,10 +3478,6 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
                 owner_.addonEventCallbackRef()("MAIL_SUCCESS", {});
             }
         } else {
-            const char* why = mailResultText(error);
-            owner_.addSystemChatMessage(
-                why ? std::string("Mail not sent: ") + why
-                    : "Failed to send mail (error " + std::to_string(error) + ").");
             // Carries the error so the frame can say which refusal it was.
             if (owner_.addonEventCallbackRef()) {
                 owner_.addonEventCallbackRef()("MAIL_FAILED", {std::to_string(error)});
@@ -3350,25 +3485,18 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
         }
     } else if (action == MAIL_ITEM_TAKEN) {
         if (error == 0) {
-            owner_.addSystemChatMessage("Item taken from mail.");
             if (owner_.addonEventCallbackRef()) fireBagUpdates();
-        } else {
-            owner_.addSystemChatMessage("Failed to take item (error " + std::to_string(error) + ").");
         }
     } else if (action == MAIL_MONEY_TAKEN) {
         if (error == 0) {
             if (mailIt != mailInbox_.end()) mailIt->money = 0;
-            owner_.addSystemChatMessage("Money taken from mail.");
             if (owner_.addonEventCallbackRef()) {
                 owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
                 owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
             }
-        } else {
-            owner_.addSystemChatMessage("Failed to take money (error " + std::to_string(error) + ").");
         }
     } else if (action == MAIL_DELETED || action == MAIL_RETURNED_TO_SENDER) {
         if (error == 0) {
-            owner_.addSystemChatMessage(action == MAIL_DELETED ? "Mail deleted." : "Mail returned.");
             if (mailIt != mailInbox_.end()) {
                 const int erasedIndex = static_cast<int>(std::distance(mailInbox_.begin(), mailIt));
                 mailInbox_.erase(mailIt);
@@ -3377,8 +3505,6 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
             }
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
         }
-    } else if (action == MAIL_MADE_PERMANENT && error == 0) {
-        owner_.addSystemChatMessage("Mail text copied.");
     }
     refreshMailList();
 }
@@ -3399,10 +3525,11 @@ void InventoryHandler::handleQueryNextMailTime(network::Packet& packet) {
 }
 
 void InventoryHandler::setHasNewMail(bool value) {
-    // Announce a chat line + sound only on the rising edge (no unread -> unread), so the
-    // periodic next-mail-time poll doesn't repeat the notification while mail sits unread.
+    // The sound only on the rising edge (no unread -> unread), so the periodic
+    // next-mail-time poll doesn't repeat it while mail sits unread. No chat
+    // line: the real client shows the minimap's letter (UPDATE_PENDING_MAIL,
+    // 0x005704d0) and says nothing - "You have new mail." was this client's.
     if (value && !hasNewMail_) {
-        owner_.addSystemChatMessage("You have new mail.");
         if (auto* ac = owner_.services().audioCoordinator)
             if (auto* sfx = ac->getUiSoundManager()) sfx->playMailReceived();
     }
@@ -3489,11 +3616,19 @@ void InventoryHandler::handleShowBank(network::Packet& packet) {
 void InventoryHandler::handleBuyBankSlotResult(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     uint32_t result = packet.readUInt32();
-    if (result == 0) {
-        owner_.addSystemChatMessage("Bank slot purchased.");
+    // 0x006e2e90 reads 0, 1 and 2 as the three refusals, through the table at
+    // 0x00a32618, and says nothing for 3, the purchase going through. This
+    // took 0 for success and printed "Bank slot purchased." for a refusal
+    // and "Failed to purchase bank slot." for a purchase, both in English.
+    static constexpr GameErrorText kBankSlotErrors[] = {
+        {"ERR_BANKSLOT_FAILED_TOO_MANY", "You've reached the maximum number of bag slots!"},
+        {"ERR_BANKSLOT_INSUFFICIENT_FUNDS", "You can't afford that."},
+        {"ERR_BANKSLOT_NOTBANKER", "That unit is not a banker!"},
+    };
+    if (result < 3) {
+        owner_.addUIError(uiText(kBankSlotErrors[result].key, kBankSlotErrors[result].enUS));
+    } else if (result == 3) {
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PLAYERBANKBAGSLOTS_CHANGED", {});
-    } else {
-        owner_.addSystemChatMessage("Failed to purchase bank slot.");
     }
 }
 
@@ -3508,7 +3643,10 @@ void InventoryHandler::openGuildBank(uint64_t guid) {
     // object was clicked had nothing behind it and never would: tabs to click,
     // no contents, and no way to tell that from a vault that had not loaded yet.
     if (!owner_.isInGuild()) {
-        owner_.raiseUiError("You are not in a guild.");
+        // What the server would answer - ERR_GUILD_PLAYER_NOT_IN_GUILD, a
+        // guild command result, which 0x006cc590 prints as system chat. This
+        // said "You are not in a guild." in English, on screen.
+        owner_.addSystemChatMessage(uiText("ERR_GUILD_PLAYER_NOT_IN_GUILD", "You are not in a guild."));
         return;
     }
     guildBankerGuid_ = guid;
@@ -3626,7 +3764,10 @@ void InventoryHandler::guildBankDepositFromInventory(uint8_t srcBag, uint8_t src
         if (!occupied[s]) { freeSlot = s; break; }
     }
     if (freeSlot < 0) {
-        owner_.addSystemChatMessage("This guild bank tab is full.");
+        // What the server answers for a full tab - ERR_GUILD_BANK_FULL, a
+        // guild command result 0x006cc590 shows on screen. This said "This
+        // guild bank tab is full." in English, in chat.
+        owner_.addUIError(uiText("ERR_GUILD_BANK_FULL", "This guild bank tab is full"));
         return;
     }
     guildBankDepositItem(guildBankActiveTab_, static_cast<uint8_t>(freeSlot), srcBag, srcSlot);
@@ -3866,12 +4007,19 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
     uint32_t error  = packet.readUInt32();
     (void)auctionId;
 
-    const char* actionNames[] = {"sell", "cancel", "bid/buyout"};
-    const char* actionStr = (action < 3) ? actionNames[action] : "unknown";
-
+    // 0x0059ffb0's lines, all of them the game error table's: ERR_AUCTION_
+    // STARTED, _REMOVED and _BID_PLACED in system chat for the three actions
+    // going through, and a red line for each refusal. This printed "Auction
+    // sell successful." and "Auction bid/buyout failed: Bid too low." in
+    // English - with the refusals numbered as the server does not number
+    // them - red and in chat both.
     if (error == 0) {
-        std::string msg = std::string("Auction ") + actionStr + " successful.";
-        owner_.addSystemChatMessage(msg);
+        if (action == 0)
+            owner_.addSystemChatMessage(uiText("ERR_AUCTION_STARTED", "Auction created."));
+        else if (action == 1)
+            owner_.addSystemChatMessage(uiText("ERR_AUCTION_REMOVED", "Auction cancelled."));
+        else if (action == 2)
+            owner_.addSystemChatMessage(uiText("ERR_AUCTION_BID_PLACED", "Bid accepted."));
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
             fireBagUpdates();
@@ -3885,18 +4033,24 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
                          lastAuctionSearch_.offset, lastAuctionSearch_.sort);
         }
     } else {
-        const char* errMsg = "Unknown error.";
+        GameErrorText err;
         switch (error) {
-            case 1: errMsg = "Not enough money."; break;
-            case 2: errMsg = "Item not found."; break;
-            case 5: errMsg = "Bid too low."; break;
-            case 6: errMsg = "Bid increment too low."; break;
-            case 7: errMsg = "You cannot bid on your own auction."; break;
-            case 8: errMsg = "Database error."; break;
-            default: break;
+            case 1: {
+                // An inventory refusal, which carries its own code.
+                const uint8_t equipError = packet.hasRemaining(4)
+                    ? static_cast<uint8_t>(packet.readUInt32()) : 0;
+                err = inventoryChangeError(equipError);
+                break;
+            }
+            case 3:  err = {"ERR_NOT_ENOUGH_MONEY", "You don't have enough money."}; break;
+            case 4:  err = {"ERR_ITEM_NOT_FOUND", "The item was not found."}; break;
+            case 5:  err = {"ERR_AUCTION_HIGHER_BID", "There is already a higher bid on that item."}; break;
+            case 7:  err = {"ERR_AUCTION_BID_INCREMENT", "Your bid increment is too small."}; break;
+            case 10: err = {"ERR_AUCTION_BID_OWN", "You cannot bid on your own auction."}; break;
+            case 13: err = {"ERR_RESTRICTED_ACCOUNT", "Starter Edition accounts can't perform that action"}; break;
+            default: err = {"ERR_AUCTION_DATABASE_ERROR", "Internal auction error."}; break;
         }
-        owner_.addUIError(std::string("Auction ") + actionStr + " failed: " + errMsg);
-        owner_.addSystemChatMessage(std::string("Auction ") + actionStr + " failed: " + errMsg);
+        if (err.key) owner_.addUIError(uiText(err.key, err.enUS));
     }
 }
 
@@ -4043,6 +4197,17 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     uint32_t status = packet.readUInt32();
     LOG_WARNING("SMSG_TRADE_STATUS: status=", status, " size=", packet.getSize());
+    // What each status says is 0x005873e0's choice, from the game error table:
+    // a red line for most, the yellow one for a trade cancelled or complete,
+    // and system chat for the ones that name the other player. The rest -
+    // the request, the window opening, an acceptance - say nothing; FrameXML
+    // shows the request popup itself on TRADE_REQUEST. This printed its own
+    // English for nearly every status: "Trade opened.", "Trade partner
+    // accepted.", "Trade failed: player is busy.", "X wants to trade with
+    // you."
+    auto error = [this](const char* key, const char* enUS) {
+        owner_.addUIError(uiText(key, enUS));
+    };
     switch (status) {
         // The codes are AzerothCore's TradeStatus enum, checked against
         // SharedDefines.h rather than against the names that used to be here.
@@ -4054,8 +4219,13 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
         // window announcing "Trade complete".
         case 0:   // BUSY
         case 5:   // BUSY_2
+            // ERR_PLAYER_BUSY_S, naming whom the trade was with - only when
+            // there is someone to name.
+            if (const std::string& who = tradePeerName_.empty() ? tradeRequestName() : tradePeerName_;
+                !who.empty())
+                owner_.addSystemChatMessage(interfaceFormat("ERR_PLAYER_BUSY_S",
+                    "%s is busy right now.", {who}));
             resetTradeState();
-            owner_.addSystemChatMessage("Trade failed: player is busy.");
             break;
         case 1: { // BEGIN_TRADE - someone is asking
             // 0x007044a0: to the one who asked, it is answered busy
@@ -4073,18 +4243,17 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             // Resolve name
             auto nit = owner_.getPlayerNameCache().find(tradePeerGuid_);
             if (nit != owner_.getPlayerNameCache().end()) tradePeerName_ = nit->second;
-            else tradePeerName_ = "Unknown";
+            else tradePeerName_ = uiText("UNKNOWNOBJECT", "Unknown");
             // Block Trades, which the panel offers and nothing read: every
             // request opened a window whatever it said. Refused before the
-            // window rather than after, and said in chat, because a request
-            // silently swallowed reads as the other player being ignored.
+            // window, and said in chat as the real client says it -
+            // ERR_TRADE_BLOCKED_S (0x005873e0).
             if (addons::storedCVarValue("blockTrades", "0") != "0") {
-                owner_.addSystemChatMessage(
-                    "Declined a trade from " + tradePeerName_ + " (trades are blocked).");
+                owner_.addSystemChatMessage(interfaceFormat("ERR_TRADE_BLOCKED_S",
+                    "%s has requested to trade. You have refused.", {tradePeerName_}));
                 declineTradeRequest();
                 break;
             }
-            owner_.addSystemChatMessage(tradePeerName_ + " wants to trade with you.");
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_REQUEST", {tradePeerName_});
             break;
         }
@@ -4096,27 +4265,30 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             // 0x005870a0 -> 0x0051fce0): the one who asked, or the one
             // asked (0x00703c10, set by 0x00703cf0 or BEGIN_TRADE).
             if (tradePeerGuid_ != 0) owner_.setInteractionObject(tradePeerGuid_, go_interaction::Window::Trade);
-            owner_.addSystemChatMessage("Trade opened.");
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_SHOW", {});
             break;
         case 3: { // TRADE_CANCELED
             // TRADE_CLOSED only for a window still open (0x005873e0 ->
             // 0x005870a0): one this client closed itself has said so already.
+            // TRADE_REQUEST_CANCEL first, which takes down a request popup
+            // still asking, then ERR_TRADE_CANCELLED on the yellow line.
             const bool wasOpen = isTradeOpen();
             resetTradeState();
-            owner_.addSystemChatMessage("Trade cancelled.");
-            if (wasOpen && owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
+            if (owner_.addonEventCallbackRef()) {
+                owner_.addonEventCallbackRef()("TRADE_REQUEST_CANCEL", {});
+                if (wasOpen) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
+            }
+            owner_.addUIInfoMessage(uiText("ERR_TRADE_CANCELLED", "Trade cancelled."));
             break;
         }
         case 4:   // TRADE_ACCEPT - the other side pressed accept
             tradeStatus_ = TradeStatus::Accepted;
             tradePartnerAccepted_ = true;
-            owner_.addSystemChatMessage("Trade partner accepted.");
             fireTradeAcceptUpdate();
             break;
         case 6:   // NO_TARGET
             resetTradeState();
-            owner_.raiseUiError("You have no target.");
+            error("ERR_GENERIC_NO_TARGET", "You have no target.");
             break;
         case 7:   // BACK_TO_TRADE - an acceptance was taken back
             tradeStatus_ = TradeStatus::Open;
@@ -4131,53 +4303,65 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             tradeStatus_ = TradeStatus::None;
             tradeSelfAccepted_ = false;
             tradePartnerAccepted_ = false;
-            owner_.addSystemChatMessage("Trade complete.");
             if (owner_.addonEventCallbackRef()) {
                 owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
                 fireBagUpdates();
                 owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
             }
+            owner_.addUIInfoMessage(uiText("ERR_TRADE_COMPLETE", "Trade complete."));
             break;
         case 9:   // TRADE_REJECTED
             resetTradeState();
-            owner_.addSystemChatMessage("Trade declined.");
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
             break;
         case 10:  // TARGET_TO_FAR
             resetTradeState();
-            owner_.addSystemChatMessage("Trade failed: target is too far away.");
+            error("ERR_TRADE_TOO_FAR", "Trade target is too far away.");
             break;
         case 11:  // WRONG_FACTION
             resetTradeState();
-            owner_.raiseUiError("You cannot trade with the enemy.");
+            error("ERR_PLAYER_WRONG_FACTION", "Target is unfriendly.");
             break;
         case 12:  // CLOSE_WINDOW
             resetTradeState();
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_CLOSED", {});
             break;
         case 14:  // IGNORE_YOU
+            // ERR_IGNORING_YOU_S in system chat, naming whom - when known.
+            if (const std::string& who = tradePeerName_.empty() ? tradeRequestName() : tradePeerName_;
+                !who.empty())
+                owner_.addSystemChatMessage(interfaceFormat("ERR_IGNORING_YOU_S",
+                    "%s is ignoring you.", {who}));
             resetTradeState();
-            owner_.raiseUiError("That player is ignoring you.");
             break;
         case 15:  // YOU_STUNNED
-            owner_.raiseUiError("You are stunned.");
+            error("ERR_GENERIC_STUNNED", "You are stunned");
             break;
         case 16:  // TARGET_STUNNED
-            owner_.raiseUiError("That player is stunned.");
+            error("ERR_TARGET_STUNNED", "Target is stunned");
             break;
         case 17:  // YOU_DEAD
-            owner_.raiseUiError("You are dead.");
+            error("ERR_PLAYER_DEAD", "You can't do that when you're dead.");
             break;
         case 18:  // TARGET_DEAD
-            owner_.raiseUiError("That player is dead.");
+            error("ERR_TRADE_TARGET_DEAD", "You cannot trade with dead players.");
             break;
         case 19:  // YOU_LOGOUT
+            resetTradeState();
+            error("ERR_LOGGING_OUT", "You are logging out");
+            break;
         case 20:  // TARGET_LOGOUT
             resetTradeState();
-            owner_.addSystemChatMessage("Trade failed: logging out.");
+            error("ERR_TARGET_LOGGING_OUT", "Target is logging out");
+            break;
+        case 21:  // TRIAL_ACCOUNT
+            error("ERR_RESTRICTED_ACCOUNT", "Starter Edition accounts can't perform that action");
+            break;
+        case 22:  // WRONG_REALM
+            error("ERR_TRADE_WRONG_REALM", "You can only trade conjured items to players from other realms.");
             break;
         case 23:  // NOT_ON_TAPLIST
-            owner_.raiseUiError("You do not have permission to loot that item.");
+            error("ERR_TRADE_NOT_ON_TAPLIST", "You may only trade bound items to players that were originally eligible to loot them.");
             break;
         default:
             LOG_DEBUG("Unhandled SMSG_TRADE_STATUS: ", status);
@@ -4305,13 +4489,17 @@ bool InventoryHandler::supportsEquipmentSets() const {
 void InventoryHandler::useEquipmentSet(uint32_t setId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     uint16_t wire = wireOpcode(Opcode::CMSG_EQUIPMENT_SET_USE);
-    if (wire == 0xFFFF) { owner_.addUIError("Equipment sets not supported."); return; }
+    // No opcode for it in this expansion, and nothing to say about that:
+    // the real client has the manager or does not. "Equipment sets not
+    // supported." was this client's own English.
+    if (wire == 0xFFFF) return;
     const EquipmentSet* es = nullptr;
     for (const auto& s : equipmentSets_) {
         if (s.setId == setId) { es = &s; break; }
     }
     if (!es) {
-        owner_.addSystemChatMessage("Equipment set not found.");
+        // UseEquipmentSet (0x005af380) returns nothing for a name it does
+        // not know; this said "Equipment set not found." in English.
         return;
     }
     network::Packet pkt(wire);
@@ -4357,7 +4545,7 @@ void InventoryHandler::saveEquipmentSet(const std::string& name, const std::stri
                                          uint64_t existingGuid, uint32_t setIndex) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     uint16_t wire = wireOpcode(Opcode::CMSG_EQUIPMENT_SET_SAVE);
-    if (wire == 0xFFFF) { owner_.addUIError("Equipment sets not supported."); return; }
+    if (wire == 0xFFFF) return;   // as useEquipmentSet: nothing to say
     pendingSaveSetName_ = name;
     pendingSaveSetIcon_ = iconName;
     if (setIndex == 0xFFFFFFFF) {
@@ -4385,7 +4573,7 @@ void InventoryHandler::saveEquipmentSet(const std::string& name, const std::stri
 void InventoryHandler::deleteEquipmentSet(uint64_t setGuid) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     uint16_t wire = wireOpcode(Opcode::CMSG_DELETEEQUIPMENT_SET);
-    if (wire == 0xFFFF) { owner_.addUIError("Equipment sets not supported."); return; }
+    if (wire == 0xFFFF) return;   // as useEquipmentSet: nothing to say
     network::Packet pkt(wire);
     // HandleEquipmentSetDelete reads this packed too.
     pkt.writePackedGuid(setGuid);
@@ -4638,14 +4826,33 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
             }
         }
 
+        // Auction lines that were waiting on this item's name (0x0059a400).
+        {
+            auto& waiting = pendingAuctionLines();
+            for (auto it = waiting.begin(); it != waiting.end(); ) {
+                if (it->itemEntry != data.entry) { ++it; continue; }
+                if (!data.name.empty())
+                    owner_.addSystemChatMessage(interfaceFormat(it->key, it->enUS,
+                        {auctionItemName(owner_, data.name, it->randomProp)}));
+                it = waiting.erase(it);
+            }
+        }
+
         // Flush any deferred loot notifications waiting on this item's name/quality.
         for (auto it = owner_.pendingItemPushNotifsRef().begin(); it != owner_.pendingItemPushNotifsRef().end(); ) {
             if (it->itemId == data.entry) {
                 std::string itemName = data.name.empty() ? ("item #" + std::to_string(data.entry)) : data.name;
+                if (it->randomProp != 0) {
+                    std::string suffix = owner_.getRandomPropertyName(it->randomProp);
+                    if (!suffix.empty()) itemName += " " + suffix;
+                }
                 std::string link = buildItemLink(data.entry, data.quality, itemName);
-                std::string msg = "Received item: " + link;
-                if (it->count > 1) msg += " x" + std::to_string(it->count);
-                owner_.addSystemChatMessage(msg);
+                // The same line the immediate path prints (0x00523900).
+                const interface_text::ItemPush push{.self = it->self, .received = it->received,
+                    .created = it->created, .showInChat = it->showInChat, .count = it->count};
+                owner_.addLocalChatLine(ChatType::LOOT,
+                                        interface_text::itemPushLine(push, link, it->who, uiText));
+                if (!it->self) { it = owner_.pendingItemPushNotifsRef().erase(it); continue; }
                 if (auto* ac = owner_.services().audioCoordinator) {
                     if (auto* sfx = ac->getUiSoundManager()) sfx->playLootItem();
                 }
@@ -5917,11 +6124,9 @@ void InventoryHandler::handleTrainerBuySucceeded(network::Packet& packet) {
     if (owner_.getSpellHandler() && !owner_.getSpellHandler()->hasKnownSpell(spellId)) {
         owner_.getSpellHandler()->addKnownSpell(spellId);
     }
-    const std::string& name = owner_.getSpellName(spellId);
-    if (!name.empty())
-        owner_.addSystemChatMessage("You have learned " + name + ".");
-    else
-        owner_.addSystemChatMessage("Spell learned.");
+    // No line: the real client has no handler for this opcode at all - the
+    // spell's own SMSG_LEARNED_SPELL is what says it was learned. This
+    // printed "You have learned X." in English beside it.
     if (auto* ac = owner_.services().audioCoordinator)
         if (auto* sfx = ac->getUiSoundManager()) sfx->playQuestActivate();
     owner_.fireAddonEvent("TRAINER_UPDATE", {});
@@ -5934,19 +6139,14 @@ void InventoryHandler::handleTrainerBuyFailed(network::Packet& packet) {
     uint32_t errorCode = 0;
     if (packet.hasRemaining(4))
         errorCode = packet.readUInt32();
-    const std::string& spellName = owner_.getSpellName(spellId);
-    std::string msg = "Cannot learn ";
-    if (!spellName.empty()) msg += spellName;
-    else msg += "spell #" + std::to_string(spellId);
     // SMSG_TRAINER_BUY_FAILED reason codes (WoW 3.3.5a):
     //   0 = trainer service unavailable / cannot learn (requirements unmet, e.g. skill too low)
     //   1 = not enough money
     //   2 = does not meet requirements (class/race/level/skill)
-    if (errorCode == 1) msg += " (not enough money)";
-    else if (errorCode == 2) msg += " (requirements not met)";
-    else msg += " (requirements not met)";
-    owner_.addUIError(msg);
-    owner_.addSystemChatMessage(msg);
+    // No words for any of them: 0x006d8410 writes "Trainer service %d
+    // unavailable" and the like to the developer console only. This printed
+    // "Cannot learn X (not enough money)" in English, red and in chat.
+    LOG_INFO("SMSG_TRAINER_BUY_FAILED: spell=", spellId, " error=", errorCode);
     if (auto* ac = owner_.services().audioCoordinator)
         if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
     if (errorCode == 1)
@@ -5965,17 +6165,18 @@ void InventoryHandler::initiateTrade(uint64_t targetGuid) {
         return;
     }
 
-    if (targetGuid == 0) {
-        owner_.raiseUiError("You must target a player to trade with.");
-        return;
-    }
+    // No words either way: InitiateTrade (0x00522600) does nothing for a unit
+    // it cannot find and says nothing when it sends the request. This said
+    // "You must target a player to trade with." and "Requesting trade with
+    // target." in English.
+    if (targetGuid == 0) return;
 
     // 0x00703cf0: not with a partner already (ERR_ALREADY_TRADING), and not
     // again within a second of the last request.
     const auto nowMs = static_cast<uint32_t>(core::appTimeSeconds() * 1000.0);
     switch (go_interaction::tradeInitiate(tradePeerGuid_, nowMs, tradeResendAtMs_)) {
         case go_interaction::TradeInitiate::AlreadyTrading:
-            owner_.raiseUiError("You are already trading.");
+            owner_.raiseUiError(interfaceString("ERR_ALREADY_TRADING", "You are already trading."));
             return;
         case go_interaction::TradeInitiate::TooSoon:
             return;
@@ -5996,7 +6197,8 @@ void InventoryHandler::initiateTrade(uint64_t targetGuid) {
     auto nit = owner_.getPlayerNameCache().find(targetGuid);
     if (nit != owner_.getPlayerNameCache().end() && !nit->second.empty()) {
         tradeRequestNameGuid_ = 0;
-        owner_.addSystemChatMessage("You have requested to trade with " + nit->second + ".");
+        owner_.addSystemChatMessage(interfaceFormat("ERR_INITIATE_TRADE_S",
+            "You have requested to trade with %s.", {nit->second}));
     } else {
         tradeRequestNameGuid_ = targetGuid;
         owner_.queryPlayerName(targetGuid);
@@ -6007,7 +6209,8 @@ void InventoryHandler::initiateTrade(uint64_t targetGuid) {
 void InventoryHandler::onPlayerNameKnown(uint64_t guid, const std::string& name) {
     if (guid == 0 || guid != tradeRequestNameGuid_) return;
     tradeRequestNameGuid_ = 0;
-    owner_.addSystemChatMessage("You have requested to trade with " + name + ".");
+    owner_.addSystemChatMessage(interfaceFormat("ERR_INITIATE_TRADE_S",
+        "You have requested to trade with %s.", {name}));
 }
 
 uint32_t InventoryHandler::getTempEnchantRemainingMs(uint32_t slot) const {
@@ -6026,18 +6229,9 @@ uint32_t InventoryHandler::getTempEnchantRemainingMs(uint32_t slot) const {
 void InventoryHandler::addMoneyCopper(uint32_t amount) {
     if (amount == 0) return;
     owner_.playerMoneyCopperRef() += amount;
-    const auto coins = game::splitCopper(amount);
-    const uint32_t gold = coins.gold;
-    const uint32_t silver = coins.silver;
-    const uint32_t copper = coins.copper;
-    std::string msg = "You receive ";
-    msg += std::to_string(gold) + "g ";
-    msg += std::to_string(silver) + "s ";
-    msg += std::to_string(copper) + "c.";
-    // As money, not as a system line. Both were added because the typed one
-    // raised in the interface's handler and never appeared - see
-    // ChatHandler::addLocalChatLine.
-    owner_.addLocalChatLine(ChatType::MONEY, msg);
+    // Nothing said: the original has no "You receive 0g 1s 5c." - money it is
+    // told about is worded by the packet that brought it (YOU_LOOT_MONEY,
+    // ERR_QUEST_REWARD_MONEY_S, ...), not by the purse changing.
 }
 
 // ============================================================

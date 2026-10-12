@@ -672,6 +672,7 @@ set(WOWEE_SOURCES
     src/game/game_handler_packets.cpp
     src/game/game_handler_callbacks.cpp
     src/game/chat_handler.cpp
+    src/game/interface_text.cpp
     src/game/text_tokens.cpp
     src/game/text_tokens_subject.cpp
     src/game/movement_handler.cpp

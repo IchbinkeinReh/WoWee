@@ -4771,6 +4771,14 @@ private:
         /// deferred path can fire ITEM_PUSH with the same arguments the
         /// immediate one does.
         int bagButtonId = 0;
+        /// The packet's flags and receiver, for the line it is announced
+        /// with once the name is known (0x00523900).
+        bool self = true;
+        bool received = false;
+        bool created = false;
+        bool showInChat = true;
+        int32_t randomProp = 0;
+        std::string who;
     };
     std::vector<PendingItemPushNotif> pendingItemPushNotifs_;
     std::array<uint64_t, 23> equipSlotGuids_{};
