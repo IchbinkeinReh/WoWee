@@ -283,14 +283,9 @@ public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         ctx.panel.setSelectedChatType(4);
         std::string lastSender = ctx.gameHandler.getLastWhisperSender();
-        if (lastSender.empty()) {
-            game::MessageChatData sysMsg;
-            sysMsg.type = game::ChatType::SYSTEM;
-            sysMsg.language = game::ChatLanguage::UNIVERSAL;
-            sysMsg.message = "No one has whispered you yet.";
-            ctx.gameHandler.addLocalChatMessage(sysMsg);
-            return {};
-        }
+        // Nothing said: chatframe.lua's REPLY leaves its error branch empty.
+        // This printed "No one has whispered you yet." in English.
+        if (lastSender.empty()) return {};
         char* buf = ctx.panel.getWhisperTargetBuffer();
         size_t sz = ctx.panel.getWhisperTargetBufferSize();
         strncpy(buf, lastSender.c_str(), sz - 1);

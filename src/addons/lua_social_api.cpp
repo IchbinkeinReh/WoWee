@@ -1101,10 +1101,9 @@ static int lua_OfferPetition(lua_State* L) {
     const auto* info = shownPetition(L);
     if (!gh || !info) return 0;
     const uint64_t target = gh->getTargetGuid();
-    if (target == 0) {
-        gh->addUIError("You have no target.");
-        return 0;
-    }
+    // No target, nothing said: 0x005cf220 returns without a word. This raised
+    // "You have no target." in English.
+    if (target == 0) return 0;
     gh->offerPetition(info->petitionGuid, target);
     return 0;
 }
@@ -3523,17 +3522,22 @@ void registerSocialLuaAPI(lua_State* L) {
                     // Members are a separate question this client cannot answer,
                     // which is why ListChannelByName is still inert: it lists who
                     // is in one, and the server is never asked.
+                    //
+                    // As 0x0050dae0 words it: every joined channel as
+                    // "[%d. %s] ", run together into one CHAT_MSG_CHANNEL_LIST
+                    // line. This printed "N. Name" lines and "You are not in any
+                    // channels." as system lines, in English. With no channel
+                    // the client's line is empty, and nothing is shown here.
                     auto* gh = getGameHandler(L);
                     if (!gh) return 0;
                     auto* ch = gh->getChatHandler();
-                    if (!ch || gh->getJoinedChannels().empty()) {
-                        gh->addSystemChatMessage("You are not in any channels.");
-                        return 0;
-                    }
+                    if (!ch) return 0;
+                    std::string line;
                     for (const auto& s : ch->channelSlots().all()) {
                         if (s.number == 0 || s.pending) continue;
-                        gh->addSystemChatMessage(std::to_string(s.number) + ". " + s.name);
+                        line += "[" + std::to_string(s.number) + ". " + s.name + "] ";
                     }
+                    gh->addLocalChatLine(game::ChatType::CHANNEL_LIST, line);
                     return 0;
                 }},
                 {"ListChannelByName",        [](lua_State* L) -> int { (void)L; return 0; }},

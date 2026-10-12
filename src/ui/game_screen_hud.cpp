@@ -851,12 +851,12 @@ void GameScreen::takeScreenshot() {
 
     const std::string path = capturePath("screenshots", "png");
 
-    if (renderer->captureScreenshot(path)) {
-        game::MessageChatData sysMsg;
-        sysMsg.type = game::ChatType::SYSTEM;
-        sysMsg.language = game::ChatLanguage::UNIVERSAL;
-        sysMsg.message = "Screenshot saved: " + path;
-        services_.gameHandler->addLocalChatMessage(sysMsg);
+    // SCREENSHOT_SUCCEEDED or SCREENSHOT_FAILED, which worldframe.lua shows
+    // as SCREENSHOT_SUCCESS / SCREENSHOT_FAILURE in the action status text.
+    // No chat line: this printed "Screenshot saved: <path>" in English.
+    const bool saved = renderer->captureScreenshot(path);
+    if (services_.gameHandler) {
+        services_.gameHandler->fireAddonEvent(saved ? "SCREENSHOT_SUCCEEDED" : "SCREENSHOT_FAILED");
     }
 }
 

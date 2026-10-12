@@ -1,6 +1,7 @@
 // lua_inventory_api.cpp - Items, containers, merchant, loot, equipment, trading, auction, and mail Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/item_text.hpp"
+#include "game/interface_text.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/inventory_slots.hpp"
@@ -3438,10 +3439,12 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // The "you can't do that when you're dead" line, which
                 // containerframe.lua and uiparent.lua raise when a panel is
                 // asked for while dead. A no-op meant the bags simply refused
-                // to open with nothing said about why.
+                // to open with nothing said about why. The client's is game
+                // error 0x87, ERR_PLAYER_DEAD, a UI_ERROR_MESSAGE (0x00522f90);
+                // this raised it in English.
                 {"NotWhileDeadError", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) {
-                gh->addUIError("You can't do that when you're dead.");
+                gh->addUIError(game::interfaceString("ERR_PLAYER_DEAD", "You can't do that when you're dead."));
             }
             return 0;
         }},
