@@ -28,6 +28,7 @@
 #include "addons/lua_engine.hpp"
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
+#include "game/interface_text.hpp"
 #include "network/world_socket.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -39,6 +40,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <sstream>
 
 namespace wowee {
@@ -133,90 +135,232 @@ bool isRoutineCastRejection(uint8_t result) {
     }
 }
 
-bool isBandageSpell(const GameHandler& owner, uint32_t spellId) {
-    if (spellId == 0) return false;
-    for (const auto& [itemId, info] : owner.getItemInfoCache()) {
-        (void)itemId;
-        if (!isBandageItem(&info)) continue;
-        for (const auto& itemSpell : info.spells) {
-            if (itemSpell.spellId == spellId) return true;
-        }
-    }
-    return false;
+/// A spell's name as the learn and unlearn lines give it: "Name (Rank)", or
+/// the name alone where Spell.dbc has no rank (0x00542030, 0x006e71d0).
+std::string spellNameWithRank(const GameHandler& owner, uint32_t spellId) {
+    const std::string& name = owner.getSpellName(spellId);
+    const std::string& rank = owner.getSpellRank(spellId);
+    return rank.empty() ? name : name + " (" + rank + ")";
 }
 
+/// The chat line a newly learned spell gets, as 0x00542030 picks it: nothing
+/// for a spell hidden from the spell book (Attributes 0x80),
+/// ERR_LEARN_RECIPE_S for a trade spell (0x20), ERR_LEARN_COMPANION_S with
+/// the creature's name for a companion or mount (0x008009b0), and otherwise
+/// ERR_LEARN_ABILITY_S (0x10) or ERR_LEARN_SPELL_S. Empty where the spell, or
+/// a companion's creature, is not known - the original waits on the creature
+/// query for that one and prints when it answers; this does not.
+std::string learnedSpellText(const GameHandler& owner, uint32_t spellId) {
+    const auto attrs = owner.getSpellAttributes(spellId);
+    const std::string& name = owner.getSpellName(spellId);
+    if (!attrs || name.empty() || (*attrs & 0x80u) != 0) return {};
+    if ((*attrs & 0x20u) != 0)
+        return interfaceFormat("ERR_LEARN_RECIPE_S", "You have learned how to create a new item: %s.", {name});
+    for (const bool mounts : {false, true}) {
+        for (const Companion& c : owner.getCompanions(mounts)) {
+            if (c.spellId != spellId) continue;
+            const std::string creature = owner.getCachedCreatureName(c.creatureId);
+            if (creature.empty()) return {};
+            return interfaceFormat("ERR_LEARN_COMPANION_S", "You have added %s to your collection.", {creature});
+        }
+    }
+    if ((*attrs & 0x10u) != 0)
+        return interfaceFormat("ERR_LEARN_ABILITY_S", "You have learned a new ability: %s.",
+                               {spellNameWithRank(owner, spellId)});
+    return interfaceFormat("ERR_LEARN_SPELL_S", "You have learned a new spell: %s.",
+                           {spellNameWithRank(owner, spellId)});
+}
+
+/// SpellCastResult -> its SPELL_FAILED_ key, less the prefix, as 0x007fcca0
+/// names them; anything past the end is SPELL_FAILED_UNKNOWN.
+constexpr const char* kSpellFailedNames[] = {
+    "SUCCESS", "AFFECTING_COMBAT", "ALREADY_AT_FULL_HEALTH", "ALREADY_AT_FULL_MANA",
+    "ALREADY_AT_FULL_POWER", "ALREADY_BEING_TAMED", "ALREADY_HAVE_CHARM", "ALREADY_HAVE_SUMMON",
+    "ALREADY_OPEN", "AURA_BOUNCED", "AUTOTRACK_INTERRUPTED", "BAD_IMPLICIT_TARGETS", "BAD_TARGETS",
+    "CANT_BE_CHARMED", "CANT_BE_DISENCHANTED", "CANT_BE_DISENCHANTED_SKILL", "CANT_BE_MILLED",
+    "CANT_BE_PROSPECTED", "CANT_CAST_ON_TAPPED", "CANT_DUEL_WHILE_INVISIBLE",
+    "CANT_DUEL_WHILE_STEALTHED", "CANT_STEALTH", "CASTER_AURASTATE", "CASTER_DEAD", "CHARMED",
+    "CHEST_IN_USE", "CONFUSED", "DONT_REPORT", "EQUIPPED_ITEM", "EQUIPPED_ITEM_CLASS",
+    "EQUIPPED_ITEM_CLASS_MAINHAND", "EQUIPPED_ITEM_CLASS_OFFHAND", "ERROR", "FIZZLE", "FLEEING",
+    "FOOD_LOWLEVEL", "HIGHLEVEL", "HUNGER_SATIATED", "IMMUNE", "INCORRECT_AREA", "INTERRUPTED",
+    "INTERRUPTED_COMBAT", "ITEM_ALREADY_ENCHANTED", "ITEM_GONE", "ITEM_NOT_FOUND",
+    "ITEM_NOT_READY", "LEVEL_REQUIREMENT", "LINE_OF_SIGHT", "LOWLEVEL", "LOW_CASTLEVEL",
+    "MAINHAND_EMPTY", "MOVING", "NEED_AMMO", "NEED_AMMO_POUCH", "NEED_EXOTIC_AMMO",
+    "NEED_MORE_ITEMS", "NOPATH", "NOT_BEHIND", "NOT_FISHABLE", "NOT_FLYING", "NOT_HERE",
+    "NOT_INFRONT", "NOT_IN_CONTROL", "NOT_KNOWN", "NOT_MOUNTED", "NOT_ON_TAXI", "NOT_ON_TRANSPORT",
+    "NOT_READY", "NOT_SHAPESHIFT", "NOT_STANDING", "NOT_TRADEABLE", "NOT_TRADING",
+    "NOT_UNSHEATHED", "NOT_WHILE_GHOST", "NOT_WHILE_LOOTING", "NO_AMMO", "NO_CHARGES_REMAIN",
+    "NO_CHAMPION", "NO_COMBO_POINTS", "NO_DUELING", "NO_ENDURANCE", "NO_FISH",
+    "NO_ITEMS_WHILE_SHAPESHIFTED", "NO_MOUNTS_ALLOWED", "NO_PET", "NO_POWER", "NOTHING_TO_DISPEL",
+    "NOTHING_TO_STEAL", "ONLY_ABOVEWATER", "ONLY_DAYTIME", "ONLY_INDOORS", "ONLY_MOUNTED",
+    "ONLY_NIGHTTIME", "ONLY_OUTDOORS", "ONLY_SHAPESHIFT", "ONLY_STEALTHED", "ONLY_UNDERWATER",
+    "OUT_OF_RANGE", "PACIFIED", "POSSESSED", "REAGENTS", "REQUIRES_AREA", "REQUIRES_SPELL_FOCUS",
+    "ROOTED", "SILENCED", "SPELL_IN_PROGRESS", "SPELL_LEARNED", "SPELL_UNAVAILABLE", "STUNNED",
+    "TARGETS_DEAD", "TARGET_AFFECTING_COMBAT", "TARGET_AURASTATE", "TARGET_DUELING",
+    "TARGET_ENEMY", "TARGET_ENRAGED", "TARGET_FRIENDLY", "TARGET_IN_COMBAT", "TARGET_IS_PLAYER",
+    "TARGET_IS_PLAYER_CONTROLLED", "TARGET_NOT_DEAD", "TARGET_NOT_IN_PARTY", "TARGET_NOT_LOOTED",
+    "TARGET_NOT_PLAYER", "TARGET_NO_POCKETS", "TARGET_NO_WEAPONS", "TARGET_NO_RANGED_WEAPONS",
+    "TARGET_UNSKINNABLE", "THIRST_SATIATED", "TOO_CLOSE", "TOO_MANY_OF_ITEM", "TOTEM_CATEGORY",
+    "TOTEMS", "TRY_AGAIN", "UNIT_NOT_BEHIND", "UNIT_NOT_INFRONT", "WRONG_PET_FOOD",
+    "NOT_WHILE_FATIGUED", "TARGET_NOT_IN_INSTANCE", "NOT_WHILE_TRADING", "TARGET_NOT_IN_RAID",
+    "TARGET_FREEFORALL", "NO_EDIBLE_CORPSES", "ONLY_BATTLEGROUNDS", "TARGET_NOT_GHOST",
+    "TRANSFORM_UNUSABLE", "WRONG_WEATHER", "DAMAGE_IMMUNE", "PREVENTED_BY_MECHANIC", "PLAY_TIME",
+    "REPUTATION", "MIN_SKILL", "NOT_IN_ARENA", "NOT_ON_SHAPESHIFT", "NOT_ON_STEALTHED",
+    "NOT_ON_DAMAGE_IMMUNE", "NOT_ON_MOUNTED", "TOO_SHALLOW", "TARGET_NOT_IN_SANCTUARY",
+    "TARGET_IS_TRIVIAL", "BM_OR_INVISGOD", "EXPERT_RIDING_REQUIREMENT",
+    "ARTISAN_RIDING_REQUIREMENT", "NOT_IDLE", "NOT_INACTIVE", "PARTIAL_PLAYTIME", "NO_PLAYTIME",
+    "NOT_IN_BATTLEGROUND", "NOT_IN_RAID_INSTANCE", "ONLY_IN_ARENA",
+    "TARGET_LOCKED_TO_RAID_INSTANCE", "ON_USE_ENCHANT", "NOT_ON_GROUND", "CUSTOM_ERROR",
+    "CANT_DO_THAT_RIGHT_NOW", "TOO_MANY_SOCKETS", "INVALID_GLYPH", "UNIQUE_GLYPH",
+    "GLYPH_SOCKET_LOCKED", "NO_VALID_TARGETS", "ITEM_AT_MAX_CHARGES", "NOT_IN_BARBERSHOP",
+    "FISHING_TOO_LOW", "ITEM_ENCHANT_TRADE_WINDOW", "SUMMON_PENDING", "MAX_SOCKETS",
+    "PET_CAN_RENAME", "TARGET_CANNOT_BE_RESURRECTED",
+};
+
+/// The SPELL_FAILED_* text for a result, unformatted, or the English this
+/// client had where there is no interface.
+std::string spellFailedText(uint8_t result, int powerType) {
+    const std::string key = std::string("SPELL_FAILED_") +
+        (result < std::size(kSpellFailedNames) ? kSpellFailedNames[result] : "UNKNOWN");
+    const char* enUS = getSpellCastResultString(result, powerType);
+    return interfaceString(key.c_str(), enUS ? enUS : "Unknown reason");
+}
+
+/// The ERR_ line a player's cast failure is shown through, as 0x00807f10
+/// picks it. Most are ERR_SPELL_FAILED_S, which is "%s" and shows the
+/// SPELL_FAILED_ text as it is; the others put that text inside their own
+/// words or replace it.
+struct CastFailureLine { const char* key; const char* enUS; };
+CastFailureLine castFailureLine(const GameHandler& owner, uint32_t spellId, uint8_t result) {
+    switch (result) {
+        case 0x02: return {"ERR_SPELL_FAILED_ALREADY_AT_FULL_HEALTH", "You are already at full health."};
+        case 0x03: return {"ERR_SPELL_FAILED_ALREADY_AT_FULL_MANA", "You are already at full mana."};
+        case 0x04: return {"ERR_SPELL_FAILED_ALREADY_AT_FULL_POWER_S", "You are already at full %s."};
+        case 0x0b: return {"ERR_GENERIC_NO_TARGET", "You have no target."};
+        case 0x1c: return {"ERR_SPELL_FAILED_EQUIPPED_ITEM", "Must have the proper item equipped."};
+        case 0x1d: case 0x1e: case 0x1f:
+                   return {"ERR_SPELL_FAILED_EQUIPPED_ITEM_CLASS_S", "%s"};
+        // The potion and food variants go by the spell's category, which is
+        // not to hand here.
+        case 0x2d: return {"ERR_ITEM_COOLDOWN", "Item is not ready yet."};
+        case 0x34: return {"ERR_NOAMMO_S", "%s"};
+        case 0x43: {
+            const auto attrs = owner.getSpellAttributes(spellId);
+            if (attrs && (*attrs & 0x10u) != 0)
+                return {"ERR_ABILITY_COOLDOWN", "Ability is not ready yet."};
+            return {"ERR_SPELL_COOLDOWN", "Spell is not ready yet."};
+        }
+        case 0x48: return {"ERR_SPELL_FAILED_NOTUNSHEATHED", "You have to be unsheathed to do that!"};
+        case 0x5e: return {"ERR_SPELL_FAILED_SHAPESHIFT_FORM_S", "%s"};
+        case 0x61: return {"ERR_SPELL_OUT_OF_RANGE", "Out of range."};
+        case 0x64: return {"ERR_SPELL_FAILED_REAGENTS", "%s"};
+        case 0x83: return {"ERR_SPELL_FAILED_TOTEMS", "%s"};
+        case 0x94: return {"ERR_PLAY_TIME_EXCEEDED", "Max play time exceeded"};
+        case 0xaa: return {"ERR_BAD_ON_USE_ENCHANT", "This item already has an on use effect."};
+        case 0xae: return {"ERR_TOO_MANY_SOCKETS", "Too many sockets"};
+        case 0xb2: return {"ERR_GENERIC_NO_VALID_TARGETS", "No valid targets."};
+        case 0xb8: return {"ERR_MAX_SOCKETS", "This item already has the maximum number of sockets"};
+        default:   return {"ERR_SPELL_FAILED_S", "%s"};
+    }
+}
+
+/// The interface's name for a power, as 0x007fe4b0 lists them.
+const char* powerTokenKey(int powerType) {
+    static constexpr const char* kKeys[] = {"MANA", "RAGE", "FOCUS", "ENERGY", "HAPPINESS", "RUNES", "RUNIC_POWER"};
+    return (powerType >= 0 && powerType < 7) ? kKeys[powerType] : nullptr;
+}
+
+/// The line a player's failed cast shows on screen, as 0x00808200 words it:
+/// the SPELL_FAILED_ text, with the name it takes put in for the results that
+/// name something, inside the ERR_ line 0x00807f10 picks. Empty for a result
+/// the original reports nothing for - SPELL_FAILED_DONT_REPORT, or a named
+/// thing that is not known.
+///
+/// This used to be English throughout, and invented lines of its own for
+/// fishing, bandages, aura states, crafting stations, tools and gathering;
+/// the original shows the same SPELL_FAILED_ text for those as for anything
+/// else. Where a result names something this client does not look up - an
+/// item class, a form, a mechanic, a custom error - the English it had is
+/// kept rather than showing an unfilled %s.
 std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
                                uint8_t result, int powerType, uint32_t miscArg = 0,
                                uint32_t miscArg2 = 0) {
-    if (spellclass::isFishingCast(spellId)) {
-        if (result == 11 || result == 60 || result == 178)
-            return "Face open water and try casting again.";
-        if (result == 58)
-            return "You can't fish in this area.";
-        if (result == 156)
-            return "The water there is too shallow.";
-    }
-
-    // Bandages use a hidden target aura to enforce the Recently Bandaged
-    // lockout. Exposing the protocol label ("Target aurastate") gives the
-    // player no actionable information.
-    if (isBandageSpell(owner, spellId)) {
-        if (result == 111)
-            return "Cannot use another bandage while Recently Bandaged is active.";
-        if (result == 40 || result == 41)
-            return "Bandaging was interrupted. Remain still until it finishes.";
-    }
-
-    // "Requires spell focus" means a crafting station object must be nearby.
-    // The packet names which one via its SpellFocusObject id - surface it.
-    if (result == kCastResultRequiresSpellFocus) {
-        if (miscArg != 0) {
-            const std::string& focusName = owner.getSpellFocusName(miscArg);
-            if (!focusName.empty())
-                return "Requires " + focusName + " nearby.";
+    if (result == 0 || result == 0x1b) return {};  // SUCCESS, DONT_REPORT
+    std::string text = spellFailedText(result, powerType);
+    auto fill = [&](const std::vector<std::string>& args) {
+        text = chat_channels::luaFormat(text, args);
+    };
+    auto itemName = [&](uint32_t itemId) -> std::string {
+        const auto* info = owner.getItemInfo(itemId);
+        return (info && info->valid) ? info->name : std::string();
+    };
+    switch (result) {
+        case 0x04: {  // ALREADY_AT_FULL_POWER: the power's own name
+            const char* key = powerTokenKey(powerType);
+            if (!key) return {};
+            text = interfaceString(key, key);
+            break;
         }
-        return "You must be near the right crafting station (forge, anvil, cooking fire, ...).";
-    }
-
-    // "Totems" / "Totem category" mean a required crafting tool is missing
-    // (blacksmith hammer, mining pick, ...). Name it from the packet's ids:
-    // TotemCategory.dbc entries for totem-category, item ids for totems.
-    if (result == kCastResultTotemCategory || result == kCastResultTotems) {
-        std::string tools;
-        for (uint32_t id : {miscArg, miscArg2}) {
-            if (id == 0) continue;
-            std::string name;
-            if (result == kCastResultTotemCategory) {
-                name = owner.getTotemCategoryName(id);
-            } else if (const auto* info = owner.getItemInfo(id); info && info->valid) {
-                name = info->name;
-            }
-            if (name.empty()) continue;
-            if (!tools.empty()) tools += " and ";
-            tools += name;
+        case 0x55: {  // NO_POWER: ERR_OUT_OF_<power> alone (table 0x00a439c8)
+            static constexpr const char* kOutOf[][2] = {
+                {"ERR_OUT_OF_MANA", "Not enough mana"},   {"ERR_OUT_OF_RAGE", "Not enough rage"},
+                {"ERR_OUT_OF_FOCUS", "Not enough focus"}, {"ERR_OUT_OF_ENERGY", "Not enough energy"},
+                {"ERR_NOT_HAPPY_ENOUGH", "Your pet is not happy enough"},
+                {"ERR_OUT_OF_RUNES", "Not enough runes"}, {"ERR_OUT_OF_RUNIC_POWER", "Not enough runic power"},
+            };
+            if (powerType == -2) return interfaceString("ERR_OUT_OF_HEALTH", "Not enough health");
+            if (powerType >= 0 && powerType < 7)
+                return interfaceString(kOutOf[powerType][0], kOutOf[powerType][1]);
+            break;
         }
-        if (!tools.empty()) return "Requires " + tools + " in your inventory.";
-        return "Requires a crafting tool you don't have (blacksmith hammer, mining pick, ...).";
-    }
-
-    // "Target aurastate" (111) means the target isn't in the state the ability needs.
-    // Translate the spell's required Spell.dbc TargetAuraState into actionable text -
-    // Execute and Hammer of Wrath want a low-health target, etc.
-    if (result == 111) {
-        switch (owner.getSpellTargetAuraState(spellId)) {
-            case 2:  return "Target must be below 20% health.";
-            case 13: return "Target must be below 35% health.";
-            case 14: return "Target must be affected by Immolate or Shadowflame.";
-            case 16: return "Target must be afflicted by your Deadly Poison.";
-            case 17: return "Target must be enraged.";
-            case 18: return "Target must be bleeding.";
-            default: return "The target isn't in the required state for this ability.";
+        case 0x65: {  // REQUIRES_AREA: the area's name, or the text as it is
+            const std::string area = miscArg ? owner.getAreaName(miscArg) : std::string();
+            if (!area.empty()) fill({area});
+            break;
         }
+        case kCastResultRequiresSpellFocus: {  // the focus object's name, or the text as it is
+            const std::string& focus = owner.getSpellFocusName(miscArg);
+            if (!focus.empty()) fill({focus});
+            break;
+        }
+        case kCastResultTotemCategory: {  // the tool's name, or nothing at all
+            const std::string& tool = owner.getTotemCategoryName(miscArg);
+            if (tool.empty()) return {};
+            fill({tool});
+            break;
+        }
+        case kCastResultTotems:
+        case 0x64: {  // TOTEMS, REAGENTS: the item's name, or nothing at all
+            const std::string name = itemName(miscArg);
+            if (name.empty()) return {};
+            fill({name});
+            break;
+        }
+        case 0x37: {  // NEED_MORE_ITEMS: how many of which item
+            const std::string name = itemName(miscArg);
+            if (name.empty()) return {};
+            fill({std::to_string(miscArg2), name});
+            break;
+        }
+        case 0x96: {  // MIN_SKILL: the skill line and the rank it wants
+            std::string skill = owner.getSkillLineName(miscArg);
+            if (skill.empty()) skill = "UNKNOWN";
+            fill({skill, std::to_string(miscArg2)});
+            break;
+        }
+        case 0xb5:  // FISHING_TOO_LOW: the rank it wants
+            fill({std::to_string(miscArg)});
+            break;
+        case 0x1d: case 0x1e: case 0x1f: case 0x36: case 0x5e: case 0x93: case 0xac: case 0xb0: {
+            const char* enUS = getSpellCastResultString(result, powerType);
+            if (enUS) text = enUS;
+            break;
+        }
+        default:
+            break;
     }
-
-    const char* reason = getSpellCastResultString(result, powerType);
-    return reason ? reason
-                  : ("Spell cast failed (error " + std::to_string(result) + ")");
+    const CastFailureLine line = castFailureLine(owner, spellId, result);
+    return chat_channels::luaFormat(interfaceString(line.key, line.enUS), {text});
 }
 
 bool isGatherSpellId(uint32_t spellId) {
@@ -225,57 +369,6 @@ bool isGatherSpellId(uint32_t spellId) {
 
 bool shouldDespawnGatherTarget(uint8_t result) {
     return result == kSpellFailedAlreadyOpen || result == kSpellFailedChestInUse;
-}
-
-bool isMiningGatherSpell(uint32_t spellId) {
-    return isMiningRank(spellId);
-}
-
-uint32_t gatherRequiredSkillRank(GameHandler& owner, uint64_t goGuid) {
-    auto entity = owner.getEntityManager().getEntity(goGuid);
-    if (!entity || entity->getType() != ObjectType::GAMEOBJECT) return 0;
-    auto go = std::static_pointer_cast<GameObject>(entity);
-    const auto* info = owner.getCachedGameObjectInfo(go->getEntry());
-    if (!info || !info->hasData || info->data[0] == 0) return 0;
-
-    auto* assets = owner.services().assetManager;
-    auto lockDbc = assets ? assets->loadDBC("Lock.dbc") : nullptr;
-    if (!lockDbc || !lockDbc->isLoaded() || lockDbc->getFieldCount() < 33) return 0;
-
-    const uint32_t lockId = info->data[0];
-    for (uint32_t row = 0; row < lockDbc->getRecordCount(); ++row) {
-        if (lockDbc->getUInt32(row, 0) != lockId) continue;
-        // Lock.dbc: Type[8], Index[8], Skill[8], Action[8]. Resource
-        // nodes have a LOCK_KEY_SKILL entry whose Skill value is the exact
-        // Mining/Herbalism rank enforced by the server.
-        for (uint32_t slot = 0; slot < 8; ++slot) {
-            constexpr uint32_t kLockKeySkill = 2;
-            if (lockDbc->getUInt32(row, 1 + slot) != kLockKeySkill) continue;
-            const uint32_t required = lockDbc->getUInt32(row, 17 + slot);
-            if (required != 0) return required;
-        }
-        break;
-    }
-    return 0;
-}
-
-std::string gatherCastFailureMessage(GameHandler& owner, uint64_t goGuid,
-                                     uint32_t spellId, uint8_t result,
-                                     const std::string& fallback) {
-    if (result == kSpellFailedTryAgain) return "Failed.";
-    if (result == kSpellFailedChestInUse) return "Already in use.";
-    // LOW_CASTLEVEL is the server's generic wording for an insufficient
-    // gathering profession rank. MIN_SKILL_REQUIRED is used by some cores.
-    if (result == 49 || result == 150) {
-        const char* skill = isMiningGatherSpell(spellId) ? "Mining" : "Herbalism";
-        const uint32_t required = gatherRequiredSkillRank(owner, goGuid);
-        if (required != 0) {
-            return std::string("Requires ") + skill + " skill " +
-                   std::to_string(required) + ".";
-        }
-        return std::string("Your ") + skill + " skill is too low for this node.";
-    }
-    return fallback;
 }
 
 // Map a (WotLK-normalized) SpellCastResult to a character speech response.
@@ -573,40 +666,6 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
         break;
     }
     return carried;
-}
-
-static std::string displaySpellName(GameHandler& handler, uint32_t spellId) {
-    if (spellId == 0) return {};
-    const std::string& name = handler.getSpellName(spellId);
-    if (!name.empty()) return name;
-    return "spell " + std::to_string(spellId);
-}
-
-static std::string formatSpellNameList(GameHandler& handler,
-                                       const std::vector<uint32_t>& spellIds,
-                                       size_t maxShown = 3) {
-    if (spellIds.empty()) return {};
-
-    const size_t shownCount = std::min(spellIds.size(), maxShown);
-    std::ostringstream oss;
-    for (size_t i = 0; i < shownCount; ++i) {
-        if (i > 0) {
-            if (shownCount == 2) {
-                oss << " and ";
-            } else if (i == shownCount - 1) {
-                oss << ", and ";
-            } else {
-                oss << ", ";
-            }
-        }
-        oss << displaySpellName(handler, spellIds[i]);
-    }
-
-    if (spellIds.size() > shownCount) {
-        oss << ", and " << (spellIds.size() - shownCount) << " more";
-    }
-
-    return oss.str();
 }
 
 SpellHandler::SpellHandler(GameHandler& owner)
@@ -1443,7 +1502,9 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
             // setting on this dismounts and lets the cast go, which is what
             // the option is for and what the real client does with it.
             if (addons::storedCVarValue("autoDismountFlying", "0") == "0") {
-                owner_.addUIError("You can't do that while flying.");
+                // SPELL_FAILED_NOT_MOUNTED, which 0x0080ac90 gives when
+                // 0x0071b0c0 will not dismount. This was English.
+                owner_.addUIError(castFailureMessage(owner_, spellId, 0x40, -1));
                 return;
             }
             owner_.dismount();
@@ -1529,7 +1590,9 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
                     (moveFlags & static_cast<uint32_t>(MovementFlags::BACKWARD)     ? " BACKWARD" : ""),
                     (moveFlags & static_cast<uint32_t>(MovementFlags::STRAFE_LEFT)  ? " STRAFE_LEFT" : ""),
                     (moveFlags & static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT) ? " STRAFE_RIGHT" : ""));
-        owner_.raiseUiError("Can't do that while moving");
+        // SPELL_FAILED_MOVING, as 0x0080ac90 refuses a cast on the move.
+        // This was English.
+        owner_.raiseUiError(castFailureMessage(owner_, spellId, kSpellFailedMoving, -1));
         return;
     }
 
@@ -1553,7 +1616,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     constexpr uint32_t kSpellTargetFlagItem = 0x10;
     if ((getSpellTargetFlags(spellId) & kSpellTargetFlagItem) != 0) {
         if (owner_.isAwaitingItemTarget()) {
-            owner_.addSystemChatMessage("Choose an item first.");
+            // Not said: the interface has no such line.
             return;
         }
         owner_.beginSpellItemTargeting(spellId, getSpellName(spellId));
@@ -1620,17 +1683,21 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // Warrior Charge (ranks 1-3): client-side range check + charge callback
     if (spellId == 100 || spellId == 6178 || spellId == 11578) {
         // Charge is an opener: it cannot be used once the fight has started.
+        // These refusals are the SPELL_FAILED_ results the cast would get,
+        // worded as castFailureMessage words them: AFFECTING_COMBAT (1),
+        // BAD_IMPLICIT_TARGETS (0xb) for no target, BAD_TARGETS (0xc),
+        // TARGETS_DEAD (0x6d), TOO_CLOSE and OUT_OF_RANGE. They were English.
         if (owner_.isInCombat()) {
-            owner_.raiseUiError("You can't do that while in combat.");
+            owner_.raiseUiError(castFailureMessage(owner_, spellId, 0x01, -1));
             return;
         }
         if (target == 0) {
-            owner_.raiseUiError("You have no target.");
+            owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedNoTarget, -1));
             return;
         }
         auto entity = owner_.getEntityManager().getEntity(target);
         if (!entity) {
-            owner_.raiseUiError("You have no target.");
+            owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedNoTarget, -1));
             return;
         }
         // Charge needs an attackable unit. Game objects (mining nodes, herb nodes,
@@ -1640,12 +1707,12 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         auto unit = std::dynamic_pointer_cast<Unit>(entity);
         const ObjectType targetType = entity->getType();
         if (!unit || (targetType != ObjectType::UNIT && targetType != ObjectType::PLAYER)) {
-            owner_.raiseUiError("You cannot attack that target.");
+            owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedBadTargets, -1));
             return;
         }
         // Corpses cannot be charged.
         if (unit->getHealth() == 0) {
-            owner_.raiseUiError("You cannot attack that target.");
+            owner_.raiseUiError(castFailureMessage(owner_, spellId, 0x6d, -1));
             return;
         }
         if (targetType == ObjectType::UNIT) {
@@ -1665,7 +1732,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
                 unit->isHostile() || owner_.isAggressiveTowardPlayer(target);
             const bool clearlyFriendly = unit->isInteractable() && !hostileOrAggressive;
             if (clearlyFriendly || (unit->getUnitFlags() & kBlockedChargeFlags) != 0) {
-                owner_.raiseUiError("You cannot attack that target.");
+                owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedBadTargets, -1));
                 return;
             }
         }
@@ -1675,11 +1742,11 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         float dz = tz - owner_.movementInfoRef().z;
         float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (dist < 8.0f) {
-            owner_.raiseUiError("Target is too close.");
+            owner_.raiseUiError(castFailureMessage(owner_, spellId, kSpellFailedTooClose, -1));
             return;
         }
         if (dist > 25.0f) {
-            owner_.raiseUiError("Out of range.");
+            owner_.raiseUiError(castFailureMessage(owner_, spellId, kSpellFailedOutOfRange, -1));
             return;
         }
         float yaw = std::atan2(-dy, dx);
@@ -1708,7 +1775,9 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
                 float dz = entity->getZ() - owner_.movementInfoRef().z;
                 float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
                 if (dist > 8.0f) {
-                    owner_.raiseUiError("Out of range.");
+                    // SPELL_FAILED_OUT_OF_RANGE, worded as the server's would
+                    // be. This was English.
+                    owner_.raiseUiError(castFailureMessage(owner_, spellId, kSpellFailedOutOfRange, -1));
                     return;
                 }
                 if (owner_.isAutoFaceTarget()) owner_.faceCanonicalYaw(std::atan2(-dy, dx));
@@ -1755,7 +1824,10 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // player has auto self-cast on, and is left to the server when they do not.
     if (target == 0 && !selfCast && !fishingCast &&
         spellclass::requiresHostileTarget(getSpellImplicitTargetA(spellId))) {
-        owner_.raiseUiError("You have no target.");
+        // SPELL_FAILED_BAD_IMPLICIT_TARGETS, as 0x0080cce0 refuses an enemy
+        // spell with nothing selected (unit_target::noUnitFailure). This was
+        // English.
+        owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedNoTarget, -1));
         LOG_WARNING("Cast refused: spell ", spellId,
                     " needs a hostile target and nothing is selected - sending it"
                     " with an empty target would have aimed it at the caster");
@@ -1964,7 +2036,8 @@ void SpellHandler::startCraftQueue(uint32_t spellId, int count) {
     // thing still blocked in the air.
     if (owner_.isMounted() && owner_.isPlayerFlying() &&
         addons::storedCVarValue("autoDismountFlying", "0") == "0") {
-        owner_.addUIError("You can't do that while flying.");
+        // The cast's own refusal, SPELL_FAILED_NOT_MOUNTED (see castSpell).
+        owner_.addUIError(castFailureMessage(owner_, spellId, 0x40, -1));
         return;
     }
     craftQueueSpellId_ = spellId;
@@ -2104,8 +2177,8 @@ void SpellHandler::switchTalentSpec(uint8_t newSpec) {
     // Both are taught when dual specialisation is bought, so not knowing one
     // means the character has only the single spec.
     if (!knownSpells_.count(spellId)) {
-        owner_.addUIError("You have not learned Dual Talent Specialization.");
-        owner_.raiseUiError("You have not learned Dual Talent Specialization.");
+        // Silent, as SetActiveTalentGroup (0x005c5e70) is for a group the
+        // character does not have. This said so in English, twice over.
         return;
     }
 
@@ -2127,7 +2200,7 @@ void SpellHandler::confirmTalentWipe() {
     owner_.getSocket()->send(pkt);
 
     LOG_INFO("confirmTalentWipe: sent confirm for npc=0x", std::hex, talentWipeNpcGuid_, std::dec);
-    owner_.addSystemChatMessage("Talent reset confirmed. The server will update your talents.");
+    // No line: ConfirmTalentWipe (0x0051bf50) only sends.
     talentWipeNpcGuid_ = 0;
     talentWipeCost_ = 0;
 }
@@ -2152,9 +2225,8 @@ void SpellHandler::confirmPetUnlearn() {
     network::Packet pkt(wireOpcode(Opcode::CMSG_PET_UNLEARN_TALENTS));
     owner_.getSocket()->send(pkt);
     LOG_INFO("confirmPetUnlearn: sent CMSG_PET_UNLEARN_TALENTS");
-    owner_.addSystemChatMessage(
-        "Pet talent reset requested. This server resets pet talents at the "
-        "next login rather than on request.");
+    // No line: the 3.3.5 interface has no pet unlearn confirmation at all,
+    // let alone words for one.
     petUnlearnCost_ = 0;
 }
 
@@ -2717,14 +2789,13 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     }
     std::string errMsg = castFailureMessage(owner_, data.spellId, data.result, powerType,
                                             data.miscArg, data.miscArg2);
-    if (gatherCast) {
-        errMsg = gatherCastFailureMessage(owner_, gatherGoGuid, data.spellId,
-                                          data.result, errMsg);
-        if (shouldDespawnGatherTarget(data.result)) {
-            owner_.despawnGameObjectLocally(gatherGoGuid);
-        }
+    // A gathering cast fails in the same words as any other: the lines this
+    // put in their place ("Failed.", "Already in use.", "Requires Mining
+    // skill N.") are not the interface's.
+    if (gatherCast && shouldDespawnGatherTarget(data.result)) {
+        owner_.despawnGameObjectLocally(gatherGoGuid);
     }
-    owner_.addUIError(errMsg);
+    if (!errMsg.empty()) owner_.addUIError(errMsg);
 
     // On screen and nowhere else. A cast failure went to the chat log as well
     // from here and from handleCastResult both, so the fix that took it out of
@@ -3465,7 +3536,7 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
 
     const bool alreadyKnown = knownSpells_.count(spellId) > 0;
     knownSpells_.insert(spellId);
-    LOG_INFO("Learned spell: ", spellId, alreadyKnown ? " (already known, skipping chat)" : "");
+    LOG_INFO("Learned spell: ", spellId, alreadyKnown ? " (already known)" : "");
     if (isPreWotlk()) {
         loadTalentDbc();
         syncPreWotlkTalentsFromKnownSpells();
@@ -3507,16 +3578,14 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
         if (craftingWindowOpen_) owner_.addonEventCallbackRef()("TRADE_SKILL_UPDATE", {});
     }
 
-    if (isTalentSpell) return;
-
-    if (!alreadyKnown) {
-        const std::string& name = owner_.getSpellName(spellId);
-        if (!name.empty()) {
-            owner_.addSystemChatMessage("You have learned a new spell: " + name + ".");
-        } else {
-            owner_.addSystemChatMessage("You have learned a new spell.");
-        }
-    }
+    // The learn line in chat for every SMSG_LEARNED_SPELL, as 0x006e7d60 ->
+    // 0x006e7b00 -> 0x00542030 prints it - a talent's spell and a new rank of
+    // a known one included: the server sends SMSG_SUPERCEDED_SPELL first, and
+    // that already put the new rank in the book. This was English, and left
+    // talents and new ranks out.
+    (void)isTalentSpell;
+    const std::string learned = learnedSpellText(owner_, spellId);
+    if (!learned.empty()) owner_.addSystemChatMessage(learned);
 }
 
 void SpellHandler::handleRemovedSpell(network::Packet& packet) {
@@ -3563,14 +3632,15 @@ void SpellHandler::handleRemovedSpell(network::Packet& packet) {
         if (isTalentRankSpell) break;
     }
 
-    if (!isTalentRankSpell) {
-        const std::string& name = owner_.getSpellName(spellId);
-        if (!name.empty())
-            owner_.addSystemChatMessage("You have unlearned: " + name + ".");
-        else
-            owner_.addSystemChatMessage("A spell has been removed.");
-    } else {
-        LOG_DEBUG("Suppressed talent-rank removal chat for spell ", spellId);
+    // ERR_SPELL_UNLEARNED_S with "Name (Rank)" in chat, as 0x006e7840 ->
+    // 0x006e71d0 prints it for any spell that is neither a trade spell
+    // (Attributes 0x20) nor hidden (0x80) - a talent's old rank included.
+    // This was English, and printed for an unknown spell as well.
+    (void)isTalentRankSpell;
+    if (const auto attrs = owner_.getSpellAttributes(spellId);
+        attrs && (*attrs & 0xA0u) == 0 && !owner_.getSpellName(spellId).empty()) {
+        owner_.addSystemChatMessage(interfaceFormat("ERR_SPELL_UNLEARNED_S", "You have unlearned %s.",
+                                                    {spellNameWithRank(owner_, spellId)}));
     }
 
     bool barChanged = false;
@@ -3620,12 +3690,10 @@ void SpellHandler::handleSupercededSpell(network::Packet& packet) {
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("ACTIONBAR_SLOT_CHANGED", {"0"});
     }
 
-    if (!newSpellAlreadyAnnounced) {
-        const std::string& newName = owner_.getSpellName(newSpellId);
-        if (!newName.empty()) {
-            owner_.addSystemChatMessage("Upgraded to " + newName);
-        }
-    }
+    // No line: 0x006e7e00 only swaps the rank in the book. The new rank is
+    // announced by the SMSG_LEARNED_SPELL that follows. This printed
+    // "Upgraded to X" in English.
+    (void)newSpellAlreadyAnnounced;
 }
 
 void SpellHandler::handleUnlearnSpells(network::Packet& packet) {
@@ -3646,10 +3714,8 @@ void SpellHandler::handleUnlearnSpells(network::Packet& packet) {
         }
     }
     if (barChanged) owner_.saveCharacterConfig();
-
-    if (spellCount > 0) {
-        owner_.addSystemChatMessage("Unlearned " + std::to_string(spellCount) + " spells");
-    }
+    // No line: 0x006e2240 only keeps the list. This printed "Unlearned N
+    // spells" in English.
 }
 
 void SpellHandler::handleTalentsInfo(network::Packet& packet) {
@@ -3709,13 +3775,9 @@ void SpellHandler::handleTalentsInfo(network::Packet& packet) {
         owner_.addonEventCallbackRef()("PLAYER_TALENT_UPDATE", {});
     }
 
-    if (!talentsInitialized_) {
-        talentsInitialized_ = true;
-        if (unspentTalents > 0) {
-            owner_.addSystemChatMessage("You have " + std::to_string(unspentTalents)
-                + " unspent talent point" + (unspentTalents != 1 ? "s" : "") + ".");
-        }
-    }
+    // No line about unspent points: 0x006cd770 -> 0x005c9e50 only updates the
+    // talent frame. This printed one in English at login.
+    if (!talentsInitialized_) talentsInitialized_ = true;
 }
 
 void SpellHandler::handleAchievementEarned(network::Packet& packet) {
@@ -3736,14 +3798,10 @@ void SpellHandler::handleAchievementEarned(network::Packet& packet) {
 
     bool isSelf = (guid == owner_.getPlayerGuid());
     if (isSelf) {
-        char buf[256];
-        if (!achName.empty()) {
-            std::snprintf(buf, sizeof(buf), "Achievement earned: %s", achName.c_str());
-        } else {
-            std::snprintf(buf, sizeof(buf), "Achievement earned! (ID %u)", achievementId);
-        }
-        owner_.addSystemChatMessage(buf);
-
+        // No chat line of its own: 0x005b3020 raises the badge and nothing
+        // else, and the player's own CHAT_MSG_ACHIEVEMENT reaches them in the
+        // same say-range broadcast as everyone else's. This printed
+        // "Achievement earned: X" in English on top.
         owner_.earnedAchievementsRef().insert(achievementId);
         owner_.achievementDatesRef()[achievementId] = earnDate;
         if (auto* ac = owner_.services().audioCoordinator) {
@@ -5193,14 +5251,10 @@ void SpellHandler::handleCastResult(network::Packet& packet) {
             std::string errMsg = castFailureMessage(owner_, castResultSpellId,
                                                      castResult, playerPowerType,
                                                      castResultMiscArg, castResultMiscArg2);
-            if (gatherCast) {
-                errMsg = gatherCastFailureMessage(owner_, gatherGoGuid,
-                                                  castResultSpellId, castResult, errMsg);
-                if (shouldDespawnGatherTarget(castResult)) {
-                    owner_.despawnGameObjectLocally(gatherGoGuid);
-                }
+            if (gatherCast && shouldDespawnGatherTarget(castResult)) {
+                owner_.despawnGameObjectLocally(gatherGoGuid);
             }
-            owner_.addUIError(errMsg);
+            if (!errMsg.empty()) owner_.addUIError(errMsg);
             if (owner_.spellCastFailedCallbackRef()) owner_.spellCastFailedCallbackRef()(castResultSpellId);
                 owner_.fireAddonEvent("UNIT_SPELLCAST_FAILED", spellcastArgs("player", castResultSpellId));
                 owner_.fireAddonEvent("UNIT_SPELLCAST_STOP",   spellcastArgs("player", castResultSpellId));
@@ -5450,26 +5504,12 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         uint8_t rawFailReason = packet.readUInt8();
         // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table
         uint8_t failReason = isClassic ? static_cast<uint8_t>(rawFailReason + 1) : rawFailReason;
-        if (failGuid == owner_.getPlayerGuid() && failReason != 0) {
-            // Show interruption/failure reason in chat and error overlay for player
-            int pt = -1;
-            if (auto pe = owner_.getEntityManager().getEntity(owner_.getPlayerGuid()))
-                if (auto pu = std::dynamic_pointer_cast<Unit>(pe))
-                    pt = static_cast<int>(pu->getPowerType());
-            std::string reason = castFailureMessage(owner_, failSpellId, failReason, pt);
-            if (!reason.empty()) {
-                // Prefix with spell name for context, e.g. "Fireball: Not in range"
-                const std::string& sName = owner_.getSpellName(failSpellId);
-                std::string fullMsg = sName.empty() ? reason
-                                                    : sName + ": " + reason;
-                owner_.addUIError(fullMsg);
-                MessageChatData emsg;
-                emsg.type = ChatType::SYSTEM;
-                emsg.language = ChatLanguage::UNIVERSAL;
-                emsg.message = std::move(fullMsg);
-                owner_.addLocalChatMessage(emsg);
-            }
-        }
+        // Nothing said, for the player's own failure either: 0x00809c70 only
+        // ends the cast (0x007fecc0), and the reason, where there is one,
+        // came with SMSG_CAST_FAILED. This put "Spell: reason" on screen and
+        // in chat a second time.
+        (void)failSpellId;
+        (void)failReason;
     }
     // Fire UNIT_SPELLCAST_INTERRUPTED for Lua addons
     if (owner_.addonEventCallbackRef()) {
@@ -5590,16 +5630,10 @@ void SpellHandler::handleDispelFailed(network::Packet& packet) {
         }
         /*uint64_t victim =*/ packet.readPackedGuid();
     }
-    // Only show failure to the player who attempted the dispel
-    if (dispelCasterGuid == owner_.getPlayerGuid()) {
-        const auto& name = owner_.getSpellName(dispelSpellId);
-        char buf[128];
-        if (!name.empty())
-            std::snprintf(buf, sizeof(buf), "%s failed to dispel.", name.c_str());
-        else
-            std::snprintf(buf, sizeof(buf), "Dispel failed! (spell %u)", dispelSpellId);
-        owner_.addSystemChatMessage(buf);
-    }
+    // No chat line: 0x00750ea0 writes this to the combat log (event 0x27)
+    // and nowhere else. This printed "X failed to dispel." in English.
+    (void)dispelSpellId;
+    (void)dispelCasterGuid;
 }
 
 void SpellHandler::handleTotemCreated(network::Packet& packet) {
@@ -5881,31 +5915,9 @@ void SpellHandler::handleSpellDispelLog(network::Packet& packet) {
             loggedIds = dispelledIds;
         }
 
-        const std::string displaySpellNames = formatSpellNameList(owner_, loggedIds);
-        if (!displaySpellNames.empty()) {
-            char buf[256];
-            const char* passiveVerb = loggedIds.size() == 1 ? "was" : "were";
-            if (isStolen) {
-                if (victimGuid == owner_.getPlayerGuid() && casterGuid != owner_.getPlayerGuid())
-                    std::snprintf(buf, sizeof(buf), "%s %s stolen.",
-                                  displaySpellNames.c_str(), passiveVerb);
-                else if (casterGuid == owner_.getPlayerGuid())
-                    std::snprintf(buf, sizeof(buf), "You steal %s.", displaySpellNames.c_str());
-                else
-                    std::snprintf(buf, sizeof(buf), "%s %s stolen.",
-                                  displaySpellNames.c_str(), passiveVerb);
-            } else {
-                if (victimGuid == owner_.getPlayerGuid() && casterGuid != owner_.getPlayerGuid())
-                    std::snprintf(buf, sizeof(buf), "%s %s dispelled.",
-                                  displaySpellNames.c_str(), passiveVerb);
-                else if (casterGuid == owner_.getPlayerGuid())
-                    std::snprintf(buf, sizeof(buf), "You dispel %s.", displaySpellNames.c_str());
-                else
-                    std::snprintf(buf, sizeof(buf), "%s %s dispelled.",
-                                  displaySpellNames.c_str(), passiveVerb);
-            }
-            owner_.addSystemChatMessage(buf);
-        }
+        // No chat line: SMSG_SPELLDISPELLOG goes to the combat log alone
+        // (0x006ce3b0 -> 0x006ce2b0). This printed "You dispel X." and the
+        // like in English.
         // Preserve stolen auras as spellsteal events so the log wording stays accurate.
         if (!loggedIds.empty()) {
             bool isPlayerCaster = (casterGuid == owner_.getPlayerGuid());
@@ -5967,16 +5979,9 @@ void SpellHandler::handleSpellStealLog(network::Packet& packet) {
                 loggedIds.push_back(stolenId);
         }
 
-        const std::string stealDisplayNames = formatSpellNameList(owner_, loggedIds);
-        if (!stealDisplayNames.empty()) {
-            char buf[256];
-            if (stealCaster == owner_.getPlayerGuid())
-                std::snprintf(buf, sizeof(buf), "You stole %s.", stealDisplayNames.c_str());
-            else
-                std::snprintf(buf, sizeof(buf), "%s %s stolen.", stealDisplayNames.c_str(),
-                              loggedIds.size() == 1 ? "was" : "were");
-            owner_.addSystemChatMessage(buf);
-        }
+        // No chat line: SMSG_SPELLSTEALLOG goes to the combat log alone
+        // (0x006ce3b0, as the dispel log). This printed "You stole X." in
+        // English.
         // Some servers emit both SPELLDISPELLOG(isStolen=1) and SPELLSTEALLOG
         // for the same aura. Keep the first event and suppress the duplicate.
         if (!loggedIds.empty()) {
@@ -6046,9 +6051,10 @@ void SpellHandler::handleSpellInstaKillLog(network::Packet& packet) {
     if (ikCaster == owner_.getPlayerGuid()) {
         owner_.addCombatText(CombatTextEntry::INSTAKILL, 0, ikSpell, true, 0, ikCaster, ikVictim);
     } else if (ikVictim == owner_.getPlayerGuid()) {
+        // Into the combat log and no further: 0x006ce260 -> 0x00752210 logs
+        // it and says nothing. This printed an English line on screen and
+        // in chat.
         owner_.addCombatText(CombatTextEntry::INSTAKILL, 0, ikSpell, false, 0, ikCaster, ikVictim);
-        owner_.addUIError("You were killed by an instant-kill effect.");
-        owner_.addSystemChatMessage("You were killed by an instant-kill effect.");
     }
     LOG_DEBUG("SMSG_SPELLINSTAKILLLOG: caster=0x", std::hex, ikCaster,
               " victim=0x", ikVictim, std::dec, " spell=", ikSpell);
@@ -6162,17 +6168,12 @@ void SpellHandler::parseEffectCreateItem(network::Packet& packet, uint32_t effec
         uint32_t itemEntry = packet.readUInt32();
         if (!isPlayerCaster || itemEntry == 0) continue;
 
+        // No chat line here: SMSG_SPELLLOGEXECUTE is combat log only
+        // (0x006d3730), and the item is announced by the item push that
+        // brings it (LOOT_ITEM_CREATED_SELF). This printed "You create X
+        // using Y." in English.
         owner_.ensureItemInfo(itemEntry);
-        const ItemQueryResponseData* info = owner_.getItemInfo(itemEntry);
-        std::string itemName = (info && !info->name.empty())
-            ? info->name : ("item #" + std::to_string(itemEntry));
-        const auto& spellName = owner_.getSpellName(spellId);
-        std::string msg = spellName.empty()
-            ? ("You create: " + itemName + ".")
-            : ("You create " + itemName + " using " + spellName + ".");
-        owner_.addSystemChatMessage(msg);
-        LOG_DEBUG("SMSG_SPELLLOGEXECUTE CREATE_ITEM: spell=", spellId,
-                  " item=", itemEntry, " name=", itemName);
+        LOG_DEBUG("SMSG_SPELLLOGEXECUTE CREATE_ITEM: spell=", spellId, " item=", itemEntry);
     }
 }
 
@@ -6207,14 +6208,10 @@ void SpellHandler::parseEffectFeedPet(network::Packet& packet, uint32_t effectLo
         uint32_t feedItem = packet.readUInt32();
         if (!isPlayerCaster || feedItem == 0) continue;
 
+        // No chat line: combat log only (0x006d3730). This printed "You feed
+        // your pet X." in English.
         owner_.ensureItemInfo(feedItem);
-        const ItemQueryResponseData* info = owner_.getItemInfo(feedItem);
-        std::string itemName = (info && !info->name.empty())
-            ? info->name : ("item #" + std::to_string(feedItem));
-        uint32_t feedQuality = info ? info->quality : 1u;
-        owner_.addSystemChatMessage("You feed your pet " +
-                                     buildItemLink(feedItem, feedQuality, itemName) + ".");
-        LOG_DEBUG("SMSG_SPELLLOGEXECUTE FEED_PET: item=", feedItem, " name=", itemName);
+        LOG_DEBUG("SMSG_SPELLLOGEXECUTE FEED_PET: item=", feedItem);
     }
 }
 
@@ -6353,19 +6350,9 @@ void SpellHandler::handleItemEnchantTimeUpdate(network::Packet& packet) {
             if (t.slot == enchSlot) { t.expireMs = expireMs; found = true; break; }
         }
         if (!found) owner_.tempEnchantTimersRef().push_back({.slot = enchSlot, .expireMs = expireMs});
-
-        // Warn at important thresholds
-        if (durationSec <= 60 && durationSec > 55) {
-            const char* slotName = (enchSlot < 3) ? owner_.kTempEnchantSlotNames[enchSlot] : "weapon";
-            char buf[80];
-            std::snprintf(buf, sizeof(buf), "Weapon enchant (%s) expires in 1 minute!", slotName);
-            owner_.addSystemChatMessage(buf);
-        } else if (durationSec <= 300 && durationSec > 295) {
-            const char* slotName = (enchSlot < 3) ? owner_.kTempEnchantSlotNames[enchSlot] : "weapon";
-            char buf[80];
-            std::snprintf(buf, sizeof(buf), "Weapon enchant (%s) expires in 5 minutes.", slotName);
-            owner_.addSystemChatMessage(buf);
-        }
+        // No warnings: 0x006e6330 keeps the time for the buff frame's
+        // enchant buttons and prints nothing. These were English chat lines
+        // at five minutes and one minute.
     }
     LOG_DEBUG("SMSG_ITEM_ENCHANT_TIME_UPDATE: slot=", enchSlot, " dur=", durationSec, "s");
 }
@@ -6508,7 +6495,7 @@ void SpellHandler::requestStabledPetList() {
 void SpellHandler::stablePet(uint8_t slot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || owner_.stableMasterGuidRef() == 0) return;
     if (owner_.petGuidRef() == 0) {
-        owner_.raiseUiError("You do not have an active pet to stable.");
+        // Silent, as StablePet (0x005a19c0) is without a pet. This was English.
         return;
     }
     auto pkt = StablePetPacket::build(owner_.stableMasterGuidRef(), slot);

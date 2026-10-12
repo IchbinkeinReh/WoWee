@@ -18,6 +18,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "core/application.hpp"
 #include "core/logger.hpp"
+#include "game/interface_text.hpp"
 #include <algorithm>
 #include <bit>
 #include <cstring>
@@ -28,9 +29,64 @@
 #include <limits>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 
 namespace wowee {
 namespace game {
+
+namespace {
+
+/// A quest's EndText - the fourth string of SMSG_QUEST_QUERY_RESPONSE, which
+/// the original keeps in its quest cache at +0x1a24 (where 0x007f70e0 reads it
+/// in) - by quest id. It is what 0x006d8030 names an objective by when
+/// SMSG_QUESTUPDATE_COMPLETE finishes it. Kept here because QuestLogEntry has
+/// no field for it: completionText is a choice between it and the fifth.
+std::unordered_map<uint32_t, std::string>& questEndTexts() {
+    static std::unordered_map<uint32_t, std::string> texts;
+    return texts;
+}
+
+/// The on-screen line for one kill or use credit, as 0x006d8030 words it for
+/// SMSG_QUESTUPDATE_ADD_KILL: a game object (the entry's high bit) by its name
+/// in ERR_QUEST_ADD_FOUND_SII, a creature by its name in ERR_QUEST_ADD_KILL_SII.
+/// Empty when the name is not cached - the original prints nothing then.
+///
+/// The original first prefers the quest's own ObjectiveText for that entry
+/// (cache +0x1c94), in ERR_QUEST_ADD_FOUND_SII; this client does not keep
+/// those four strings, so such a quest shows the creature's name instead.
+std::string questKillCreditText(const GameHandler& owner, uint32_t rawEntry,
+                                uint32_t count, uint32_t required) {
+    const uint32_t entry = rawEntry & 0x7FFFFFFFu;
+    if ((rawEntry & 0x80000000u) != 0) {
+        const auto* info = owner.getCachedGameObjectInfo(entry);
+        if (!info || info->name.empty()) return {};
+        return interfaceFormat("ERR_QUEST_ADD_FOUND_SII", "%1$s: %2$d/%3$d",
+                               {info->name, std::to_string(count), std::to_string(required)});
+    }
+    const std::string name = owner.getCachedCreatureName(entry);
+    if (name.empty()) return {};
+    return interfaceFormat("ERR_QUEST_ADD_KILL_SII", "%1$s slain: %2$d/%3$d",
+                           {name, std::to_string(count), std::to_string(required)});
+}
+
+/// The on-screen line SMSG_QUESTUPDATE_COMPLETE gives (0x006d8030, case
+/// 0x198): the quest's EndText in ERR_QUEST_OBJECTIVE_COMPLETE_S, or
+/// ERR_QUEST_UNKNOWN_COMPLETE where it has none.
+std::string questObjectiveCompleteText(uint32_t questId) {
+    const auto& texts = questEndTexts();
+    auto it = texts.find(questId);
+    if (it != texts.end() && !it->second.empty()) {
+        return interfaceFormat("ERR_QUEST_OBJECTIVE_COMPLETE_S", "%s (Complete)", {it->second});
+    }
+    return interfaceString("ERR_QUEST_UNKNOWN_COMPLETE", "Objective Complete.");
+}
+
+/// A quest's title in one of the ERR_QUEST_* chat lines that name it.
+std::string questTitleText(const char* key, const char* enUS, const std::string& title) {
+    return interfaceFormat(key, enUS, {title});
+}
+
+}  // namespace
 
 QuestGiverStatus QuestHandler::getQuestGiverStatus(uint64_t guid) const {
     auto it = npcQuestStatus_.find(guid);
@@ -227,6 +283,9 @@ struct QuestQueryTextCandidate {
     /// fifth string passes straight over it.
     std::string description;
     std::string completionText;
+    /// The fourth string, EndText, which names an exploration or event
+    /// objective once it is done (see questEndTexts).
+    std::string endText;
     /// The raw third string as read from the wire, before the readability
     /// check - a temporary probe into why the description comes back empty on
     /// some realms even where the title and objectives read cleanly.
@@ -380,6 +439,8 @@ static QuestQueryTextCandidate pickBestQuestQueryTexts(const std::vector<uint8_t
                         if (readCStringAt(data, n3, s4, n4)) {
                             readCStringAt(data, n4, s5, n5);
                             c.completionText = pickQuestCompletedLine(s4, s5);
+                            if (isReadableQuestText(s4, 2, 600))
+                                c.endText = normalizeQuestText(s4, true);
                         }
                     }
                 }
@@ -426,6 +487,8 @@ static QuestQueryTextCandidate pickBestQuestQueryTexts(const std::vector<uint8_t
                 if (readCStringAt(data, m3, d4, m4)) {
                     readCStringAt(data, m4, d5, m5);
                     c.completionText = pickQuestCompletedLine(d4, d5);
+                    if (isReadableQuestText(d4, 2, 600))
+                        c.endText = normalizeQuestText(d4, true);
                 }
             }
         }
@@ -619,10 +682,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
 
     // ---- SMSG_QUESTLOG_FULL ----
     table[Opcode::SMSG_QUESTLOG_FULL] = [this](network::Packet& /*packet*/) {
-        const std::string msg = "Your quest log is full (" +
-            std::to_string(maxQuestLogSlots()) + " quests). Abandon a quest to make room.";
-        owner_.addUIError(msg);
-        owner_.addSystemChatMessage(msg);
+        // ERR_QUEST_LOG_FULL on screen and nowhere else (0x006d7f10, case
+        // 0x195). This was an English line of its own, in chat as well.
+        owner_.addUIError(interfaceString("ERR_QUEST_LOG_FULL", "Your quest log is full."));
         // Roll back the optimistic local entries the server refused; without
         // this the local log drifts past the server cap with phantom quests.
         bool removed = false;
@@ -682,8 +744,11 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             std::string questTitle;
             for (const auto& q : questLog_)
                 if (q.questId == questId && !q.title.empty()) { questTitle = q.title; break; }
-            owner_.addSystemChatMessage(questTitle.empty() ? std::string("Quest failed!")
-                                                           : ('"' + questTitle + "\" failed!"));
+            // ERR_QUEST_FAILED_S with the title, in chat (0x006d8030, case
+            // 0x196); nothing for a quest whose title is not known. This was
+            // English: '"X" failed!'.
+            if (!questTitle.empty())
+                owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_S", "%s failed.", questTitle));
             // Same omission as the complete handler had: a line of chat is not
             // a redraw, and a failed quest goes on looking fine in the log.
             announceQuestLogChanged(questId);
@@ -697,8 +762,11 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             std::string questTitle;
             for (const auto& q : questLog_)
                 if (q.questId == questId && !q.title.empty()) { questTitle = q.title; break; }
-            owner_.addSystemChatMessage(questTitle.empty() ? std::string("Quest timed out!")
-                                                           : ('"' + questTitle + "\" has timed out."));
+            // The same ERR_QUEST_FAILED_S as a failed quest: case 0x197 of
+            // 0x006d8030 stops the timer and falls into 0x196. This was
+            // English: '"X" has timed out.'.
+            if (!questTitle.empty())
+                owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_S", "%s failed.", questTitle));
             announceQuestLogChanged(questId);
         }
     };
@@ -712,21 +780,28 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             std::string questTitle;
             for (const auto& q : questLog_)
                 if (q.questId == questId && !q.title.empty()) { questTitle = q.title; break; }
-            const char* reasonStr = nullptr;
-            switch (reason) {
-                case 1: reasonStr = "failed conditions"; break;
-                case 2: reasonStr = "inventory full"; break;
-                case 3: reasonStr = "too far away"; break;
-                case 4: reasonStr = "another quest is blocking"; break;
-                case 5: reasonStr = "wrong time of day"; break;
-                case 6: reasonStr = "wrong race"; break;
-                case 7: reasonStr = "wrong class"; break;
+            // As 0x006cda70 words it, by the inventory result the server
+            // gives as the reason: a full bag (4, 0x10, 0x32) is
+            // ERR_QUEST_FAILED_BAG_FULL_S in chat and ERR_INV_FULL on screen,
+            // a duplicate (0x11) ERR_QUEST_FAILED_MAX_COUNT_S, the daily cap
+            // (0x4a) ERR_QUEST_FAILED_TOO_MANY_DAILY_QUESTS_I with 25, and
+            // anything else ERR_QUEST_FAILED_S. Nothing for a quest whose
+            // title is not known. This printed its own English reasons.
+            if (!questTitle.empty()) {
+                if (reason == 0x4a) {
+                    owner_.addSystemChatMessage(interfaceFormat("ERR_QUEST_FAILED_TOO_MANY_DAILY_QUESTS_I",
+                        "You have already completed %d daily quests today", {"25"}));
+                } else if (reason == 4 || reason == 0x10 || reason == 0x32) {
+                    owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_BAG_FULL_S",
+                                                               "%s failed: Inventory is full.", questTitle));
+                    owner_.addUIError(interfaceString("ERR_INV_FULL", "Inventory is full."));
+                } else if (reason == 0x11) {
+                    owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_MAX_COUNT_S",
+                                                               "%s failed: Duplicate item found.", questTitle));
+                } else {
+                    owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_S", "%s failed.", questTitle));
+                }
             }
-            std::string msg = questTitle.empty() ? "Quest" : ('"' + questTitle + '"');
-            msg += " failed";
-            if (reasonStr) msg += std::string(": ") + reasonStr;
-            msg += '.';
-            owner_.addSystemChatMessage(msg);
         }
     };
 
@@ -770,10 +845,30 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     clearPendingQuestAccept(questId);
                 }
             }
-            // Only show error to user for real errors (not informational messages)
-            if (failReason != 13 && failReason != 18) {  // Don't spam "already on/completed"
-                owner_.addSystemChatMessage(std::string("Quest unavailable: ") + reasonStr);
+            // The reason in chat as 0x006cd7c0 picks it - every reason,
+            // "already on" and "already done" included. This was English
+            // ("Quest unavailable: ...") and left those two out.
+            const char* key = "ERR_QUEST_NEED_PREREQS";
+            const char* enUS = "You don't meet the requirements for that quest.";
+            switch (failReason) {
+                case 1:    key = "ERR_QUEST_FAILED_LOW_LEVEL"; enUS = "You are not high enough level for that quest."; break;
+                case 6:    key = "ERR_QUEST_FAILED_WRONG_RACE"; enUS = "That quest is not available to your race."; break;
+                case 7:    key = "ERR_QUEST_ALREADY_DONE"; enUS = "You have completed that quest."; break;
+                case 0x0c: key = "ERR_QUEST_ONLY_ONE_TIMED"; enUS = "You can only be on one timed quest at a time."; break;
+                case 0x0d:
+                case 0x12: key = "ERR_QUEST_ALREADY_ON"; enUS = "You are already on that quest."; break;
+                case 0x10: key = "ERR_QUEST_FAILED_EXPANSION"; enUS = "This quest requires an expansion enabled account."; break;
+                case 0x15: key = "ERR_QUEST_FAILED_MISSING_ITEMS"; enUS = "You don't have the required items with you. Check storage."; break;
+                case 0x17: key = "ERR_QUEST_FAILED_NOT_ENOUGH_MONEY"; enUS = "You don't have enough money for that quest."; break;
+                case 0x1a: key = nullptr; break;
+                case 0x1b: key = "ERR_QUEST_FAILED_CAIS"; enUS = "You cannot complete quests once you have reached tired time."; break;
+                case 0x1d: key = "ERR_QUEST_ALREADY_DONE_DAILY"; enUS = "You have completed that daily quest today."; break;
+                default: break;
             }
+            owner_.addSystemChatMessage(key
+                ? interfaceString(key, enUS)
+                : interfaceFormat("ERR_QUEST_FAILED_TOO_MANY_DAILY_QUESTS_I",
+                                  "You have already completed %d daily quests today", {"25"}));
         }
     };
 
@@ -786,6 +881,32 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 pendingTurnInQuestId_ = 0;
                 pendingTurnInNpcGuid_ = 0;
                 pendingTurnInRewardRequest_ = false;
+            }
+            // The turn-in lines 0x006d0e10 prints, in chat: ERR_QUEST_COMPLETE_S
+            // with the title, then ERR_QUEST_REWARD_EXP_I and
+            // ERR_QUEST_REWARD_MONEY_S for the experience and money the
+            // WotLK packet carries after the id. Nothing was printed before.
+            // (Its honour, talent point, arena point and reward item lines
+            // are not given here.)
+            for (const auto& q : questLog_) {
+                if (q.questId == questId && !q.title.empty()) {
+                    owner_.addSystemChatMessage(questTitleText("ERR_QUEST_COMPLETE_S", "%s completed.", q.title));
+                    break;
+                }
+            }
+            if (!isClassicLikeExpansion() && !isActiveExpansion("tbc") && packet.hasRemaining(8)) {
+                const uint32_t rewardXp = packet.readUInt32();
+                const uint32_t rewardMoney = packet.readUInt32();
+                if (rewardXp != 0) {
+                    owner_.addSystemChatMessage(interfaceFormat("ERR_QUEST_REWARD_EXP_I",
+                        "Experience gained: %d.", {std::to_string(rewardXp)}));
+                }
+                if (static_cast<int32_t>(rewardMoney) > 0) {
+                    const std::string coins = interface_text::moneyText(rewardMoney,
+                        [](const char* k, const char* e) { return interfaceString(k, e); });
+                    owner_.addSystemChatMessage(interfaceFormat("ERR_QUEST_REWARD_MONEY_S",
+                        "Received %s.", {coins}));
+                }
             }
             for (auto it = questLog_.begin(); it != questLog_.end(); ++it) {
                 if (it->questId == questId) {
@@ -821,7 +942,8 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
         if (rem >= 12) {
             uint32_t questId = packet.readUInt32();
             clearPendingQuestAccept(questId);
-            uint32_t entry = normalizeQuestObjectiveEntry(packet.readUInt32());
+            const uint32_t rawEntry = packet.readUInt32();
+            uint32_t entry = normalizeQuestObjectiveEntry(rawEntry);
             uint32_t count = packet.readUInt32();
             uint32_t reqCount = 0;
             if (packet.hasRemaining(4)) {
@@ -857,12 +979,11 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     quest.killCounts[entry] = {count, reqCount};
 
                     std::string creatureName = owner_.getCachedCreatureName(entry);
-                    std::string progressMsg = quest.title + ": ";
-                    if (!creatureName.empty()) {
-                        progressMsg += creatureName + " ";
-                    }
-                    progressMsg += std::to_string(count) + "/" + std::to_string(reqCount);
-                    owner_.addSystemChatMessage(progressMsg);
+                    // On screen in yellow, as UI_INFO_MESSAGE (0x006d8030,
+                    // case 0x199). This was an English chat line, "Title:
+                    // Name 3/10".
+                    const std::string progressMsg = questKillCreditText(owner_, rawEntry, count, reqCount);
+                    if (!progressMsg.empty()) owner_.addUIInfoMessage(progressMsg);
 
                     if (owner_.questProgressCallbackRef()) {
                         owner_.questProgressCallbackRef()(quest.title, creatureName, count, reqCount);
@@ -896,7 +1017,8 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             for (auto& quest : questLog_) {
                 if (quest.questId == questId) {
                     quest.complete = true;
-                    owner_.addSystemChatMessage("Quest Complete: " + quest.title);
+                    // As SMSG_QUESTUPDATE_COMPLETE words it, below.
+                    owner_.addUIInfoMessage(questObjectiveCompleteText(questId));
                     break;
                 }
             }
@@ -912,10 +1034,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             owner_.queryItemInfo(itemId, 0);
 
             std::string itemLabel = "item #" + std::to_string(itemId);
-            uint32_t questItemQuality = 1;
+            std::string itemName;
             if (const ItemQueryResponseData* info = owner_.getItemInfo(itemId)) {
-                if (!info->name.empty()) itemLabel = info->name;
-                questItemQuality = info->quality;
+                if (!info->name.empty()) itemLabel = itemName = info->name;
             }
 
             bool updatedAny = false;
@@ -946,6 +1067,16 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     ? required
                     : current + count;
                 updatedAny = true;
+                // ERR_QUEST_ADD_ITEM_SII on screen in yellow while the count
+                // was still short of the requirement, the new count held to it
+                // - as 0x006d7c30 does when an objective item changes count.
+                // This was an English chat line, "Quest item: [X] (n)", once
+                // per packet whatever it counted towards.
+                const bool requiredKnownHere = required != std::numeric_limits<uint32_t>::max();
+                if (requiredKnownHere && current < required && !itemName.empty()) {
+                    owner_.addUIInfoMessage(interfaceFormat("ERR_QUEST_ADD_ITEM_SII", "%1$s: %2$d/%3$d",
+                        {itemName, std::to_string(quest.itemCounts[itemId]), std::to_string(required)}));
+                }
                 // An unknown requirement (no SMSG_QUEST_QUERY_RESPONSE yet) can't
                 // be compared against, so assume it may have just filled rather
                 // than leaving those quests without a marker refresh. The requery
@@ -955,7 +1086,6 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     maybeCompletedObjective = true;
                 }
             }
-            owner_.addSystemChatMessage("Quest item: " + buildItemLink(itemId, questItemQuality, itemLabel) + " (" + std::to_string(count) + ")");
 
             if (owner_.questProgressCallbackRef() && updatedAny) {
                 for (const auto& quest : questLog_) {
@@ -1005,7 +1135,8 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
         if (rem >= 12) {
             uint32_t questId = packet.readUInt32();
             clearPendingQuestAccept(questId);
-            uint32_t entry = normalizeQuestObjectiveEntry(packet.readUInt32());
+            const uint32_t rawEntry = packet.readUInt32();
+            uint32_t entry = normalizeQuestObjectiveEntry(rawEntry);
             uint32_t count = packet.readUInt32();
             uint32_t reqCount = 0;
             if (packet.hasRemaining(4)) reqCount = packet.readUInt32();
@@ -1016,8 +1147,11 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             for (auto& quest : questLog_) {
                 if (quest.questId == questId) {
                     quest.killCounts[entry] = {count, reqCount};
-                    owner_.addSystemChatMessage(quest.title + ": " + std::to_string(count) +
-                                                 "/" + std::to_string(reqCount));
+                    // A kill credit by its layout, so worded as one (see
+                    // SMSG_QUESTUPDATE_ADD_KILL). This was "Title: 3/10" in
+                    // chat.
+                    const std::string progressMsg = questKillCreditText(owner_, rawEntry, count, reqCount);
+                    if (!progressMsg.empty()) owner_.addUIInfoMessage(progressMsg);
                     announceQuestLogChanged(questId);
                     break;
                 }
@@ -1035,7 +1169,11 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             for (auto& quest : questLog_) {
                 if (quest.questId == questId) {
                     quest.complete = true;
-                    owner_.addSystemChatMessage("Quest Complete: " + quest.title);
+                    // ERR_QUEST_OBJECTIVE_COMPLETE_S with the quest's EndText,
+                    // or ERR_QUEST_UNKNOWN_COMPLETE, on screen in yellow
+                    // (0x006d8030, case 0x198). This was "Quest Complete:
+                    // Title" in chat.
+                    owner_.addUIInfoMessage(questObjectiveCompleteText(questId));
                     LOG_INFO("Marked quest ", questId, " as complete");
                     announceQuestLogChanged(questId);
                     break;
@@ -1069,8 +1207,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             bool nowResting = (value != 0);
             if (nowResting != owner_.isRestingRef()) {
                 owner_.isRestingRef() = nowResting;
-                owner_.addSystemChatMessage(owner_.isRestingRef() ? "You are now resting."
-                                                              : "You are no longer resting.");
+                // No line. "You are now resting" is no string the interface
+                // has, and 3.3.5 itself registers this opcode as
+                // SMSG_QUEST_FORCE_REMOVE (0x006d8370), not as a rest start.
                 if (owner_.addonEventCallbackRef())
                     owner_.addonEventCallbackRef()("PLAYER_UPDATE_RESTING", {});
             }
@@ -1113,10 +1252,12 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
         }
         if (removed) {
             owner_.setQuestTracked(questId, false);
+            // ERR_QUEST_FORCE_REMOVED_S in chat, and nothing for a quest whose
+            // title is not known (0x006d8370). This was English, with the id
+            // standing in for a missing title.
             if (!removedTitle.empty()) {
-                owner_.addSystemChatMessage("Quest removed: " + removedTitle);
-            } else {
-                owner_.addSystemChatMessage("Quest removed (ID " + std::to_string(questId) + ").");
+                owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FORCE_REMOVED_S",
+                    "The quest %s has been removed from your quest log", removedTitle));
             }
             if (owner_.addonEventCallbackRef()) {
                 owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
@@ -1195,6 +1336,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     " objParse: valid=", objs.valid ? 1 : 0,
                     " kills=", objKills, " items=", objItems);
         const QuestQueryRewardsData rwds = QuestQueryRewardsParser::parse(packet.getData(), questLogStride);
+        if (!parsed.endText.empty()) questEndTexts()[questId] = parsed.endText;
 
         for (auto& q : questLog_) {
             if (q.questId != questId) continue;
@@ -1343,9 +1485,11 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 count = std::min(count, reqCount);
                 quest.killCounts[PVP_KILL_ENTRY] = {count, reqCount};
 
-                std::string progressMsg = quest.title + ": PvP kills " +
-                    std::to_string(count) + "/" + std::to_string(reqCount);
-                owner_.addSystemChatMessage(progressMsg);
+                // ERR_QUEST_ADD_PLAYER_KILL_SII on screen in yellow
+                // (0x006d8030, case 0x46f). This was "Title: PvP kills 3/10"
+                // in chat.
+                owner_.addUIInfoMessage(interfaceFormat("ERR_QUEST_ADD_PLAYER_KILL_SII",
+                    "Players slain: %d/%d", {std::to_string(count), std::to_string(reqCount)}));
                 break;
             }
         }
@@ -1581,10 +1725,10 @@ void QuestHandler::acceptQuest() {
     // with a clearer message and no optimistic local entry to roll back.
     const int maxSlots = maxQuestLogSlots();
     if (static_cast<int>(questLog_.size()) >= maxSlots) {
-        const std::string msg = "Your quest log is full (" + std::to_string(maxSlots) +
-                                " quests). Abandon a quest to make room.";
-        owner_.addUIError(msg);
-        owner_.addSystemChatMessage(msg);
+        // The ERR_QUEST_LOG_FULL the server would answer with, on screen only
+        // (0x006d7f10, case 0x195) - the original has no check of its own here
+        // and lets the server refuse. This was an English line in chat too.
+        owner_.addUIError(interfaceString("ERR_QUEST_LOG_FULL", "Your quest log is full."));
         if (auto* ac = owner_.services().audioCoordinator)
             if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
         return;
@@ -1658,7 +1802,7 @@ void QuestHandler::closeGossip() {
 void QuestHandler::offerQuestFromItem(uint64_t itemGuid, uint32_t questId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     if (itemGuid == 0 || questId == 0) {
-        owner_.raiseUiError("Cannot start quest right now.");
+        // Nothing said: there is no such line in the interface.
         return;
     }
     // Send CMSG_QUESTGIVER_QUERY_QUEST with the item GUID as the "questgiver."
@@ -1791,25 +1935,15 @@ void QuestHandler::abandonQuest(uint32_t questId) {
 }
 
 void QuestHandler::shareQuestWithParty(uint32_t questId) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) {
-        owner_.raiseUiError("Cannot share quest: not in world.");
-        return;
-    }
-    if (!owner_.isInGroup()) {
-        owner_.raiseUiError("You must be in a group to share a quest.");
-        return;
-    }
+    // Silent, as QuestLogPushQuest (0x005e4ed0) is: it sends or does nothing,
+    // and what the player hears back is MSG_QUEST_PUSH_RESULT's
+    // ERR_QUEST_PUSH_*_S. This printed English lines of its own - "Sharing
+    // quest: X", "Quest shared.", and two refusals.
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (!owner_.isInGroup()) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_PUSHQUESTTOPARTY));
     pkt.writeUInt32(questId);
     owner_.getSocket()->send(pkt);
-    // Local feedback: find quest title
-    for (const auto& q : questLog_) {
-        if (q.questId == questId && !q.title.empty()) {
-            owner_.addSystemChatMessage("Sharing quest: " + q.title);
-            return;
-        }
-    }
-    owner_.addSystemChatMessage("Quest shared.");
 }
 
 void QuestHandler::acceptSharedQuest() {
@@ -1820,7 +1954,8 @@ void QuestHandler::acceptSharedQuest() {
     owner_.getSocket()->send(pkt);
     // Auto-track the accepted shared quest, same as a normal accept.
     owner_.setQuestTracked(sharedQuestId_, true);
-    owner_.addSystemChatMessage("Accepted: " + sharedQuestTitle_);
+    // No line: ConfirmAcceptQuest (0x0058c910) only sends. The quest's own
+    // ERR_QUEST_ACCEPTED_S comes when it reaches the log.
 }
 
 void QuestHandler::declineSharedQuest() {
@@ -2744,8 +2879,8 @@ void QuestHandler::handleQuestConfirmAccept(network::Packet& packet) {
     }
 
     pendingSharedQuest_ = true;
-    owner_.addSystemChatMessage(sharedQuestSharerName_ + " has shared the quest \"" +
-                                sharedQuestTitle_ + "\" with you.");
+    // No chat line: 0x006cbc50 -> 0x0058bc50 only raises QUEST_ACCEPT_CONFIRM,
+    // whose popup says who and what. This printed an English line as well.
     // Who and what, in that order: uiparent.lua hands both straight to
     // StaticPopup_Show, whose text is "%s is starting %s". It picks between
     // two popups on whether the log is full, and answers the yes with

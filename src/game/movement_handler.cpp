@@ -17,6 +17,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "core/logger.hpp"
+#include "game/interface_text.hpp"
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
 #include <cmath>
@@ -30,6 +31,40 @@ namespace wowee {
 namespace game {
 
 namespace {
+
+/// A taxi refusal as the original shows it: its ERR_TAXI* string, through
+/// UI_ERROR_MESSAGE or UI_INFO_MESSAGE as the game error table at 0x00ac8af0
+/// files that one (NOSUCHPATH, NOTENOUGHMONEY, TOOFARAWAY, NOVENDORNEARBY,
+/// NOTVISITED, PLAYERMOVING and NOTSTANDING are yellow, the rest red).
+struct TaxiError { const char* key; const char* enUS; bool info; };
+constexpr TaxiError kTaxiNoSuchPath{"ERR_TAXINOSUCHPATH", "There is no direct path to that destination!", true};
+
+void showTaxiError(GameHandler& owner, const TaxiError& e) {
+    const std::string text = interfaceString(e.key, e.enUS);
+    if (e.info) owner.addUIInfoMessage(text);
+    else owner.addUIError(text);
+}
+
+/// SMSG_ACTIVATETAXIREPLY's result -> its error, as 0x006cee90 looks it up
+/// in the table at 0x00ad9c94; nothing for 0 (success) or an unknown result.
+const TaxiError* taxiReplyError(uint32_t result) {
+    static constexpr TaxiError kErrors[] = {
+        {"ERR_TAXIUNSPECIFIEDSERVERERROR", "Unspecified server taxi error.", false},
+        kTaxiNoSuchPath,
+        {"ERR_TAXINOTENOUGHMONEY", "You don't have enough money!", true},
+        {"ERR_TAXITOOFARAWAY", "You are too far away from the taxi stand!", true},
+        {"ERR_TAXINOVENDORNEARBY", "There is no taxi vendor nearby!", true},
+        {"ERR_TAXINOTVISITED", "You haven't reached that taxi node on foot yet!", true},
+        {"ERR_TAXIPLAYERBUSY", "You are busy and can't use the taxi service now.", false},
+        {"ERR_TAXIPLAYERALREADYMOUNTED", "You are already mounted! Dismount first.", false},
+        {"ERR_TAXIPLAYERSHAPESHIFTED", "You can't take a taxi while shapeshifted!", false},
+        {"ERR_TAXIPLAYERMOVING", "You are moving.", true},
+        {"ERR_TAXISAMENODE", "You are already there!", false},
+        {"ERR_TAXINOTSTANDING", "You need to be standing to go anywhere.", true},
+    };
+    if (result == 0 || result > std::size(kErrors)) return nullptr;
+    return &kErrors[result - 1];
+}
 
 struct KnownAreaTriggerDestination {
     uint32_t triggerId;
@@ -2748,10 +2783,11 @@ void MovementHandler::handleShowTaxiNodes(network::Packet& packet) {
             for (uint32_t bit = 0; bit < 32; ++bit) {
                 if (newBits & (1u << bit)) {
                     uint32_t nodeId = i * 32 + bit + 1;
-                    auto it = taxiNodes_.find(nodeId);
-                    if (it != taxiNodes_.end()) {
-                        owner_.addSystemChatMessage("Discovered flight path: " + it->second.name);
-                    }
+                    // Nothing said here: the original's line for a new
+                    // flight point is ERR_NEWTAXIPATH, from
+                    // SMSG_NEW_TAXI_PATH (0x006e2e90, case 0x1af). This
+                    // printed "Discovered flight path: X" in English.
+                    LOG_INFO("Taxi node ", nodeId, " newly known");
                 }
             }
         }
@@ -3300,7 +3336,9 @@ void MovementHandler::handleActivateTaxiReply(network::Packet& packet) {
             return;
         }
         LOG_WARNING("Taxi activation failed, result=", data.result);
-        owner_.raiseUiError("Cannot take that flight path.");
+        // The result's own ERR_TAXI* line, as 0x006cee90 shows it. This was
+        // "Cannot take that flight path." in English for every result.
+        if (const TaxiError* e = taxiReplyError(data.result)) showTaxiError(owner_, *e);
         taxiActivatePending_ = false;
         taxiActivateTimer_ = 0.0f;
         // Clear the pending path data built speculatively by activateTaxi() -
@@ -3426,12 +3464,12 @@ void MovementHandler::activateTaxi(uint32_t destNodeId) {
 
     {
         auto destIt = taxiNodes_.find(destNodeId);
+        // No line: TakeTaxiNode (0x00591680 -> 0x005914b0) only sends. These
+        // were English.
         if (destIt != taxiNodes_.end() && !destIt->second.name.empty()) {
             taxiDestName_ = destIt->second.name;
-            owner_.addSystemChatMessage("Requesting flight to " + destIt->second.name + "...");
         } else {
             taxiDestName_.clear();
-            owner_.addSystemChatMessage("Taxi: requesting flight...");
         }
     }
 
@@ -3449,7 +3487,9 @@ void MovementHandler::activateTaxi(uint32_t destNodeId) {
     if (path.size() < 2) {
         LOG_WARNING("No taxi route through discovered nodes from ", startNode,
                     " to ", destNodeId);
-        owner_.addSystemChatMessage("No flight path available to that destination.");
+        // ERR_TAXINOSUCHPATH in yellow, as 0x005914b0 refuses a node with no
+        // route to it. This was English, in chat.
+        showTaxiError(owner_, kTaxiNoSuchPath);
         return;
     }
 
@@ -3992,14 +4032,16 @@ void MovementHandler::followTarget() {
         return;
     }
 
+    // ERR_GENERIC_NO_TARGET with nobody to follow, as FollowUnit()
+    // (0x005224c0) says it for /follow on its own. These were English.
     if (owner_.getTargetGuid() == 0) {
-        owner_.raiseUiError("You must target someone to follow.");
+        owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
         return;
     }
 
     auto target = owner_.getTarget();
     if (!target) {
-        owner_.raiseUiError("Invalid target.");
+        owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
         return;
     }
 
@@ -4026,7 +4068,9 @@ void MovementHandler::followTarget() {
         targetName = unit->getName();
     }
 
-    owner_.addSystemChatMessage("Now following " + targetName + ".");
+    // No chat line: AUTOFOLLOW_BEGIN below is what says so, through
+    // FrameXML's AutoFollowStatus and AUTOFOLLOWSTART. This printed "Now
+    // following X." in English as well.
     LOG_INFO("Following target: ", targetName, " (GUID: 0x", std::hex, owner_.getTargetGuid(), std::dec, ")");
     // The name goes with it: the status text is formatted from this argument,
     // and without one it formats a nil.
@@ -4045,7 +4089,8 @@ void MovementHandler::cancelFollow() {
     if (owner_.autoFollowCallbackRef()) {
         owner_.autoFollowCallbackRef()(nullptr);
     }
-    owner_.addSystemChatMessage("You stop following.");
+    // No chat line: AUTOFOLLOW_END is what says so (AUTOFOLLOWSTOP). This
+    // printed "You stop following." in English as well.
     owner_.fireAddonEvent("AUTOFOLLOW_END", {});
 }
 

@@ -19,13 +19,119 @@
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "network/world_socket.hpp"
+#include "game/interface_text.hpp"
 #include <algorithm>
 #include <cmath>
 #include <ctime>
+#include <iterator>
 #include <random>
 
 namespace wowee {
 namespace game {
+
+namespace {
+
+/// SpellCastResult -> its SPELL_FAILED_ key, less the prefix, as 0x007fcca0
+/// names them. The same table spell_handler.cpp keeps for the player's casts.
+constexpr const char* kPetSpellFailedNames[] = {
+    "SUCCESS", "AFFECTING_COMBAT", "ALREADY_AT_FULL_HEALTH", "ALREADY_AT_FULL_MANA",
+    "ALREADY_AT_FULL_POWER", "ALREADY_BEING_TAMED", "ALREADY_HAVE_CHARM", "ALREADY_HAVE_SUMMON",
+    "ALREADY_OPEN", "AURA_BOUNCED", "AUTOTRACK_INTERRUPTED", "BAD_IMPLICIT_TARGETS", "BAD_TARGETS",
+    "CANT_BE_CHARMED", "CANT_BE_DISENCHANTED", "CANT_BE_DISENCHANTED_SKILL", "CANT_BE_MILLED",
+    "CANT_BE_PROSPECTED", "CANT_CAST_ON_TAPPED", "CANT_DUEL_WHILE_INVISIBLE",
+    "CANT_DUEL_WHILE_STEALTHED", "CANT_STEALTH", "CASTER_AURASTATE", "CASTER_DEAD", "CHARMED",
+    "CHEST_IN_USE", "CONFUSED", "DONT_REPORT", "EQUIPPED_ITEM", "EQUIPPED_ITEM_CLASS",
+    "EQUIPPED_ITEM_CLASS_MAINHAND", "EQUIPPED_ITEM_CLASS_OFFHAND", "ERROR", "FIZZLE", "FLEEING",
+    "FOOD_LOWLEVEL", "HIGHLEVEL", "HUNGER_SATIATED", "IMMUNE", "INCORRECT_AREA", "INTERRUPTED",
+    "INTERRUPTED_COMBAT", "ITEM_ALREADY_ENCHANTED", "ITEM_GONE", "ITEM_NOT_FOUND",
+    "ITEM_NOT_READY", "LEVEL_REQUIREMENT", "LINE_OF_SIGHT", "LOWLEVEL", "LOW_CASTLEVEL",
+    "MAINHAND_EMPTY", "MOVING", "NEED_AMMO", "NEED_AMMO_POUCH", "NEED_EXOTIC_AMMO",
+    "NEED_MORE_ITEMS", "NOPATH", "NOT_BEHIND", "NOT_FISHABLE", "NOT_FLYING", "NOT_HERE",
+    "NOT_INFRONT", "NOT_IN_CONTROL", "NOT_KNOWN", "NOT_MOUNTED", "NOT_ON_TAXI", "NOT_ON_TRANSPORT",
+    "NOT_READY", "NOT_SHAPESHIFT", "NOT_STANDING", "NOT_TRADEABLE", "NOT_TRADING",
+    "NOT_UNSHEATHED", "NOT_WHILE_GHOST", "NOT_WHILE_LOOTING", "NO_AMMO", "NO_CHARGES_REMAIN",
+    "NO_CHAMPION", "NO_COMBO_POINTS", "NO_DUELING", "NO_ENDURANCE", "NO_FISH",
+    "NO_ITEMS_WHILE_SHAPESHIFTED", "NO_MOUNTS_ALLOWED", "NO_PET", "NO_POWER", "NOTHING_TO_DISPEL",
+    "NOTHING_TO_STEAL", "ONLY_ABOVEWATER", "ONLY_DAYTIME", "ONLY_INDOORS", "ONLY_MOUNTED",
+    "ONLY_NIGHTTIME", "ONLY_OUTDOORS", "ONLY_SHAPESHIFT", "ONLY_STEALTHED", "ONLY_UNDERWATER",
+    "OUT_OF_RANGE", "PACIFIED", "POSSESSED", "REAGENTS", "REQUIRES_AREA", "REQUIRES_SPELL_FOCUS",
+    "ROOTED", "SILENCED", "SPELL_IN_PROGRESS", "SPELL_LEARNED", "SPELL_UNAVAILABLE", "STUNNED",
+    "TARGETS_DEAD", "TARGET_AFFECTING_COMBAT", "TARGET_AURASTATE", "TARGET_DUELING",
+    "TARGET_ENEMY", "TARGET_ENRAGED", "TARGET_FRIENDLY", "TARGET_IN_COMBAT", "TARGET_IS_PLAYER",
+    "TARGET_IS_PLAYER_CONTROLLED", "TARGET_NOT_DEAD", "TARGET_NOT_IN_PARTY", "TARGET_NOT_LOOTED",
+    "TARGET_NOT_PLAYER", "TARGET_NO_POCKETS", "TARGET_NO_WEAPONS", "TARGET_NO_RANGED_WEAPONS",
+    "TARGET_UNSKINNABLE", "THIRST_SATIATED", "TOO_CLOSE", "TOO_MANY_OF_ITEM", "TOTEM_CATEGORY",
+    "TOTEMS", "TRY_AGAIN", "UNIT_NOT_BEHIND", "UNIT_NOT_INFRONT", "WRONG_PET_FOOD",
+    "NOT_WHILE_FATIGUED", "TARGET_NOT_IN_INSTANCE", "NOT_WHILE_TRADING", "TARGET_NOT_IN_RAID",
+    "TARGET_FREEFORALL", "NO_EDIBLE_CORPSES", "ONLY_BATTLEGROUNDS", "TARGET_NOT_GHOST",
+    "TRANSFORM_UNUSABLE", "WRONG_WEATHER", "DAMAGE_IMMUNE", "PREVENTED_BY_MECHANIC", "PLAY_TIME",
+    "REPUTATION", "MIN_SKILL", "NOT_IN_ARENA", "NOT_ON_SHAPESHIFT", "NOT_ON_STEALTHED",
+    "NOT_ON_DAMAGE_IMMUNE", "NOT_ON_MOUNTED", "TOO_SHALLOW", "TARGET_NOT_IN_SANCTUARY",
+    "TARGET_IS_TRIVIAL", "BM_OR_INVISGOD", "EXPERT_RIDING_REQUIREMENT",
+    "ARTISAN_RIDING_REQUIREMENT", "NOT_IDLE", "NOT_INACTIVE", "PARTIAL_PLAYTIME", "NO_PLAYTIME",
+    "NOT_IN_BATTLEGROUND", "NOT_IN_RAID_INSTANCE", "ONLY_IN_ARENA",
+    "TARGET_LOCKED_TO_RAID_INSTANCE", "ON_USE_ENCHANT", "NOT_ON_GROUND", "CUSTOM_ERROR",
+    "CANT_DO_THAT_RIGHT_NOW", "TOO_MANY_SOCKETS", "INVALID_GLYPH", "UNIQUE_GLYPH",
+    "GLYPH_SOCKET_LOCKED", "NO_VALID_TARGETS", "ITEM_AT_MAX_CHARGES", "NOT_IN_BARBERSHOP",
+    "FISHING_TOO_LOW", "ITEM_ENCHANT_TRADE_WINDOW", "SUMMON_PENDING", "MAX_SOCKETS",
+    "PET_CAN_RENAME", "TARGET_CANNOT_BE_RESURRECTED",
+};
+
+/// The on-screen line for the pet's failed cast, as 0x00805610 words it: its
+/// own ERR_PET_SPELL_* lines for the results it has one for, the cooldown and
+/// power lines, and otherwise the SPELL_FAILED_ text through
+/// ERR_SPELL_FAILED_S. Where the result names something not looked up here
+/// (an item class, a form, an area, a focus object, a mechanic, a custom
+/// error) the English this client had is kept rather than an unfilled %s.
+std::string petCastFailureMessage(const GameHandler& owner, uint32_t spellId, uint8_t result) {
+    switch (result) {
+        case 0x01: return interfaceString("ERR_PET_SPELL_AFFECTING_COMBAT", "Your pet is in combat");
+        case 0x17: return interfaceString("ERR_PET_SPELL_DEAD", "Your pet is dead");
+        case 0x38: return interfaceString("ERR_PET_SPELL_NOPATH", "No path available");
+        case 0x39: return interfaceString("ERR_PET_SPELL_NOT_BEHIND", "Your pet must be behind its target");
+        case 0x43: {
+            const auto attrs = owner.getSpellAttributes(spellId);
+            if (attrs && (*attrs & 0x10u) != 0)
+                return interfaceString("ERR_ABILITY_COOLDOWN", "Ability is not ready yet.");
+            return interfaceString("ERR_SPELL_COOLDOWN", "Spell is not ready yet.");
+        }
+        case 0x55: {  // by the spell's power type (table 0x00a439c8)
+            static constexpr const char* kOutOf[][2] = {
+                {"ERR_OUT_OF_MANA", "Not enough mana"},   {"ERR_OUT_OF_RAGE", "Not enough rage"},
+                {"ERR_OUT_OF_FOCUS", "Not enough focus"}, {"ERR_OUT_OF_ENERGY", "Not enough energy"},
+                {"ERR_NOT_HAPPY_ENOUGH", "Your pet is not happy enough"},
+                {"ERR_OUT_OF_RUNES", "Not enough runes"}, {"ERR_OUT_OF_RUNIC_POWER", "Not enough runic power"},
+            };
+            const uint8_t power = owner.getSpellData(spellId).powerType;
+            if (power < 7) return interfaceString(kOutOf[power][0], kOutOf[power][1]);
+            break;
+        }
+        case 0x61: return interfaceString("ERR_PET_SPELL_OUT_OF_RANGE", "Your pet is out of range");
+        case 0x67: return interfaceString("ERR_PET_SPELL_ROOTED", "Your pet can't move");
+        case 0x6d: return interfaceString("ERR_PET_SPELL_TARGETS_DEAD", "Your pet's target is dead");
+        case 0x1d: case 0x1e: case 0x1f: case 0x5e: case 0x65: case 0x66: case 0x93: case 0xac: {
+            const char* enUS = getSpellCastResultString(result);
+            return enUS ? std::string(enUS) : std::string();
+        }
+        default:
+            break;
+    }
+    const std::string key = std::string("SPELL_FAILED_") +
+        (result < std::size(kPetSpellFailedNames) ? kPetSpellFailedNames[result] : "UNKNOWN");
+    const char* enUS = getSpellCastResultString(result);
+    return chat_channels::luaFormat(interfaceString("ERR_SPELL_FAILED_S", "%s"),
+                                    {interfaceString(key.c_str(), enUS ? enUS : "Unknown reason")});
+}
+
+/// A pet spell's name as its learn lines give it, "Name (Rank)" where it has
+/// a rank (0x005d4c30).
+std::string petSpellNameWithRank(const GameHandler& owner, uint32_t spellId) {
+    const std::string& name = owner.getSpellName(spellId);
+    const std::string& rank = owner.getSpellRank(spellId);
+    return rank.empty() ? name : name + " (" + rank + ")";
+}
+
+}  // namespace
 
 CombatHandler::CombatHandler(GameHandler& owner)
     : owner_(owner) {}
@@ -85,9 +191,11 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_ATTACKSTOP] = [this](network::Packet& packet) { handleAttackStop(packet); };
     table[Opcode::SMSG_ATTACKSWING_NOTINRANGE] = [this](network::Packet& /*packet*/) {
         autoAttackOutOfRange_ = true;
+        // ERR_BADATTACKPOS, at most every four seconds: 0x00756800 notes the
+        // refusal and 0x006d5eb0 reports it. This was English.
         if (autoAttackRangeWarnCooldown_ <= 0.0f) {
-            owner_.raiseUiError("Target is too far away.");
-            autoAttackRangeWarnCooldown_ = 1.25f;
+            owner_.raiseUiError(interfaceString("ERR_BADATTACKPOS", "You are too far away!"));
+            autoAttackRangeWarnCooldown_ = 4.0f;
         }
     };
     table[Opcode::SMSG_ATTACKSWING_BADFACING] = [this](network::Packet& /*packet*/) {
@@ -100,9 +208,10 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         //
         // The real client says so and leaves the heading alone - the swing
         // simply does not land until the player turns back.
+        // ERR_BADATTACKFACING, by the same four-second rule (0x006d5eb0).
         if (autoAttackRangeWarnCooldown_ <= 0.0f) {
-            owner_.raiseUiError("You are facing the wrong way!");
-            autoAttackRangeWarnCooldown_ = 1.25f;
+            owner_.raiseUiError(interfaceString("ERR_BADATTACKFACING", "You are facing the wrong way!"));
+            autoAttackRangeWarnCooldown_ = 4.0f;
         }
     };
     table[Opcode::SMSG_ATTACKSWING_NOTSTANDING] = [this](network::Packet& /*packet*/) {
@@ -114,11 +223,10 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         }
     };
     table[Opcode::SMSG_ATTACKSWING_CANT_ATTACK] = [this](network::Packet& /*packet*/) {
+        // The swing stops and nothing is said: 0x00756800 hands this to
+        // 0x006e1660, which ends the attack and only plays a voice line.
+        // This was an English line.
         stopAutoAttack();
-        if (autoAttackRangeWarnCooldown_ <= 0.0f) {
-            owner_.raiseUiError("You can't attack that.");
-            autoAttackRangeWarnCooldown_ = 1.25f;
-        }
     };
     table[Opcode::SMSG_ATTACKERSTATEUPDATE] = [this](network::Packet& packet) { handleAttackerStateUpdate(packet); };
     table[Opcode::SMSG_AI_REACTION] = [this](network::Packet& packet) {
@@ -322,9 +430,12 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
              rangedSlot.item.inventoryType == game::InvType::THROWN);
         float maxRange = hasRangedWeapon ? 40.0f : 8.0f;
         if (dist3d > maxRange) {
+            // The ERR_BADATTACKPOS the server's refusal would have brought
+            // (see SMSG_ATTACKSWING_NOTINRANGE); the original sends the swing
+            // and lets it be refused. This was English.
             if (autoAttackRangeWarnCooldown_ <= 0.0f) {
-                owner_.raiseUiError("Target is too far away.");
-                autoAttackRangeWarnCooldown_ = 1.25f;
+                owner_.raiseUiError(interfaceString("ERR_BADATTACKPOS", "You are too far away!"));
+                autoAttackRangeWarnCooldown_ = 4.0f;
             }
             return;
         }
@@ -339,7 +450,9 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     if (owner_.isMounted()) {
         if (owner_.isPlayerFlying() && !owner_.isTaxiMountActive() &&
             addons::storedCVarValue("autoDismountFlying", "0") == "0") {
-            owner_.addUIError("You can't do that while flying.");
+            // ERR_ATTACK_MOUNTED, as 0x0072bdb0 refuses an attack it will not
+            // dismount for (0x0071b0c0). This was English.
+            owner_.addUIError(interfaceString("ERR_ATTACK_MOUNTED", "Can't attack while mounted."));
             return;
         }
         owner_.dismount();
@@ -498,7 +611,13 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
 
     // Fire COMBAT_LOG_EVENT_UNFILTERED for Lua addons
     // Args: subevent, sourceGUID, sourceName, 0 (sourceFlags), destGUID, destName, 0 (destFlags), spellId, spellName, amount
-    if (owner_.addonEventCallbackRef()) {
+    //
+    // Not for experience or honour: neither is a combat log entry in the
+    // original (they are CHAT_MSG_COMBAT_XP_GAIN / _HONOR_GAIN lines), and the
+    // table below gave both the slot of PARTY_KILL - so every kill's
+    // experience told the combat log a second, invented kill.
+    if (owner_.addonEventCallbackRef() &&
+        type != CombatTextEntry::XP_GAIN && type != CombatTextEntry::HONOR_GAIN) {
         static const char* kSubevents[] = {
             "SWING_DAMAGE", "SPELL_DAMAGE", "SPELL_HEAL", "SWING_MISSED", "SWING_MISSED",
             "SWING_MISSED", "SWING_MISSED", "SWING_MISSED", "SPELL_DAMAGE", "SPELL_HEAL",
@@ -874,15 +993,17 @@ void CombatHandler::updateAutoAttack(float deltaTime) {
                 if (dist3d > meleeRange) {
                     autoAttackOutOfRange_ = true;
                     autoAttackOutOfRangeTime_ += deltaTime;
+                    // ERR_BADATTACKPOS once, at most every four seconds, as
+                    // for the server's refusal. This raised an English line
+                    // twice over.
                     if (autoAttackRangeWarnCooldown_ <= 0.0f) {
-                        owner_.raiseUiError("Target is too far away.");
-                        owner_.addUIError("Target is too far away.");
-                        autoAttackRangeWarnCooldown_ = 1.25f;
+                        owner_.raiseUiError(interfaceString("ERR_BADATTACKPOS", "You are too far away!"));
+                        autoAttackRangeWarnCooldown_ = 4.0f;
                     }
                     // Stop chasing stale swings when the target remains out of range.
+                    // Silently: the interface has no line for it.
                     if (autoAttackOutOfRangeTime_ > 2.0f && dist3d > 9.0f) {
                         stopAutoAttack();
-                        owner_.raiseUiError("Auto-attack stopped: target out of range.");
                         allowResync = false;
                     }
                 } else {
@@ -1036,8 +1157,28 @@ void CombatHandler::handlePvpCredit(network::Packet& packet) {
         uint64_t victimGuid = packet.readUInt64();
         uint32_t rank       = packet.readUInt32();
         LOG_INFO("SMSG_PVP_CREDIT: honor=", honor, " victim=0x", std::hex, victimGuid, std::dec, " rank=", rank);
-        std::string msg = "You gain " + std::to_string(honor) + " honor points.";
-        owner_.addLocalChatLine(ChatType::COMBAT_HONOR_GAIN, msg);
+        // As 0x0050b6d0 words it, as CHAT_MSG_COMBAT_HONOR_GAIN: with no
+        // victim, COMBATLOG_HONORAWARD; for a victim it can see and some
+        // honour, COMBATLOG_HONORGAIN_NO_RANK where the rank is negative.
+        // This was "You gain N honor points." in English.
+        //
+        // A ranked kill is COMBATLOG_HONORGAIN with the victim's
+        // PVP_RANK_<rank>_<n> title, n chosen from their race's flags,
+        // which this client does not read; that one keeps the English.
+        std::string msg;
+        if (victimGuid == 0) {
+            msg = interfaceFormat("COMBATLOG_HONORAWARD", "You have been awarded %d honor points.",
+                                  {std::to_string(honor)});
+        } else if (static_cast<int32_t>(honor) > 0 && owner_.getEntityManager().getEntity(victimGuid)) {
+            const std::string victimName = owner_.lookupName(victimGuid);
+            if (static_cast<int32_t>(rank) < 0) {
+                msg = interfaceFormat("COMBATLOG_HONORGAIN_NO_RANK", "%s dies, honorable kill (%d Honor Points)",
+                                      {victimName, std::to_string(honor)});
+            } else {
+                msg = "You gain " + std::to_string(honor) + " honor points.";
+            }
+        }
+        if (!msg.empty()) owner_.addLocalChatLine(ChatType::COMBAT_HONOR_GAIN, msg);
         if (honor > 0) addCombatText(CombatTextEntry::HONOR_GAIN, static_cast<int32_t>(honor), 0, true);
         if (owner_.pvpHonorCallbackRef()) owner_.pvpHonorCallbackRef()(honor, victimGuid, rank);
     }
@@ -1180,31 +1321,60 @@ void CombatHandler::handleResistLog(network::Packet& packet) {
 // ============================================================
 
 void CombatHandler::handlePetTameFailure(network::Packet& packet) {
-    static const char* reasons[] = {
-        "Invalid creature", "Too many pets", "Already tamed",
-        "Wrong faction", "Level too low", "Creature not tameable",
-        "Can't control", "Can't command"
+    // ERR_TAME_FAILED on screen with the PETTAME_ reason, as 0x00802090 ->
+    // 0x00800390 picks it. This was English, in chat as well, and its
+    // reasons were off by one against the codes.
+    static constexpr const char* kReasons[][2] = {
+        {"PETTAME_UNKNOWNERROR", "Unknown taming error"},
+        {"PETTAME_INVALIDCREATURE", "Invalid creature"},
+        {"PETTAME_TOOMANY", "You have too many pets"},
+        {"PETTAME_CREATUREALREADYOWNED", "Creature already owned"},
+        {"PETTAME_NOTTAMEABLE", "Creature not tameable"},
+        {"PETTAME_ANOTHERSUMMONACTIVE", "You already have a summon active"},
+        {"PETTAME_UNITSCANTTAME", "You cannot tame creatures"},
+        {"PETTAME_NOPETAVAILABLE", "You have no pet available to summon"},
+        {"PETTAME_INTERNALERROR", "Internal pet error"},
+        {"PETTAME_TOOHIGHLEVEL", "Creature is too high level"},
+        {"PETTAME_DEAD", "Your pet is dead"},
+        {"PETTAME_NOTDEAD", "Your pet is not dead"},
+        {"PETTAME_CANTCONTROLEXOTIC", "You cannot control exotic creatures"},
     };
     if (packet.hasRemaining(1)) {
         uint8_t reason = packet.readUInt8();
-        const char* msg = (reason < 8) ? reasons[reason] : "Unknown reason";
-        std::string s = std::string("Failed to tame: ") + msg;
-        owner_.addUIError(s);
-        owner_.addSystemChatMessage(s);
+        if (reason >= std::size(kReasons)) reason = 0;
+        owner_.addUIError(interfaceFormat("ERR_TAME_FAILED", "%s.",
+                                          {interfaceString(kReasons[reason][0], kReasons[reason][1])}));
     }
 }
 
 void CombatHandler::handlePetActionFeedback(network::Packet& packet) {
-    static const char* kPetFeedback[] = {
-        nullptr,
-        "Your pet is dead.", "Your pet has nothing to attack.",
-        "Your pet cannot attack that target.", "That target is too far away.",
-        "Your pet cannot find a path to the target.",
-        "Your pet cannot attack an immune target.",
-    };
+    // On screen, as 0x005d4da0 words it: 1 ERR_PET_SPELL_DEAD; 2, with the
+    // spell, ERR_NO_ATTACK_TARGET - or ERR_GENERIC_NO_VALID_TARGETS for a
+    // spell aimed at friends; 3 ERR_INVALID_ATTACK_TARGET; 4
+    // ERR_PET_SPELL_NOPATH; nothing else. These were English chat lines.
     if (!packet.hasRemaining(1)) return;
-    uint8_t msg = packet.readUInt8();
-    if (msg > 0 && msg < 7 && kPetFeedback[msg]) owner_.addSystemChatMessage(kPetFeedback[msg]);
+    const uint8_t msg = packet.readUInt8();
+    switch (msg) {
+        case 1:
+            owner_.addUIError(interfaceString("ERR_PET_SPELL_DEAD", "Your pet is dead"));
+            break;
+        case 2: {
+            const uint32_t spellId = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+            if (spellId != 0 && owner_.getSpellTargetKind(spellId) == 1)
+                owner_.addUIError(interfaceString("ERR_GENERIC_NO_VALID_TARGETS", "No valid targets."));
+            else
+                owner_.addUIError(interfaceString("ERR_NO_ATTACK_TARGET", "There is nothing to attack."));
+            break;
+        }
+        case 3:
+            owner_.addUIError(interfaceString("ERR_INVALID_ATTACK_TARGET", "You cannot attack that target."));
+            break;
+        case 4:
+            owner_.addUIError(interfaceString("ERR_PET_SPELL_NOPATH", "No path available"));
+            break;
+        default:
+            break;
+    }
     packet.skipAll();
 }
 
@@ -1223,15 +1393,12 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         // 0x00806c30 -> 0x00804720: its global cooldown off the pet's
         // history.
         if (auto* spells = owner_.getSpellHandler()) spells->notePetCastFailed(spellId);
+        // On screen and not in chat, as 0x00806c30 -> 0x00805610 says it;
+        // see petCastFailureMessage. This was "Spell: reason" in English, in
+        // chat.
         if (reason != 0) {
-            const char* reasonStr = getSpellCastResultString(reason);
-            const std::string& sName = owner_.getSpellName(spellId);
-            std::string errMsg;
-            if (reasonStr && *reasonStr)
-                errMsg = sName.empty() ? reasonStr : (sName + ": " + reasonStr);
-            else
-                errMsg = sName.empty() ? "Pet spell failed." : (sName + ": Pet spell failed.");
-            owner_.addSystemChatMessage(errMsg);
+            const std::string errMsg = petCastFailureMessage(owner_, spellId, reason);
+            if (!errMsg.empty()) owner_.addUIError(errMsg);
         }
     }
     packet.skipAll();
@@ -1243,7 +1410,9 @@ void CombatHandler::handlePetBroken(network::Packet& packet) {
     owner_.petSpellListRef().clear();
     owner_.petAutocastSpellsRef().clear();
     memset(owner_.petActionSlotsRef(), 0, sizeof(owner_.petActionSlotsRef()));
-    owner_.addSystemChatMessage("Your pet has died.");
+    // ERR_PET_BROKEN on screen, which is all 0x005d3120 does. This was
+    // "Your pet has died." in English, in chat.
+    owner_.addUIError(interfaceString("ERR_PET_BROKEN", "Your pet has run away"));
     // The same pair SMSG_PET_SPELLS fires, because the same two things have to
     // be redrawn - the pet frame and the pet action bar. Losing the pet
     // outright announced nothing while *learning one spell* announced
@@ -1259,8 +1428,17 @@ void CombatHandler::handlePetLearnedSpell(network::Packet& packet) {
     if (packet.hasRemaining(4)) {
         uint32_t spellId = packet.readUInt32();
         owner_.petSpellListRef().push_back(spellId);
-        const std::string& sname = owner_.getSpellName(spellId);
-        owner_.addSystemChatMessage("Your pet has learned " + (sname.empty() ? "a new ability." : sname + "."));
+        // ERR_PET_LEARN_ABILITY_S (Attributes 0x10) or ERR_PET_LEARN_SPELL_S
+        // with "Name (Rank)", in chat (0x005d4c30); nothing for a spell not
+        // in Spell.dbc. This was English.
+        if (const auto attrs = owner_.getSpellAttributes(spellId);
+            attrs && !owner_.getSpellName(spellId).empty()) {
+            const bool ability = (*attrs & 0x10u) != 0;
+            owner_.addSystemChatMessage(interfaceFormat(
+                ability ? "ERR_PET_LEARN_ABILITY_S" : "ERR_PET_LEARN_SPELL_S",
+                ability ? "Your pet has learned a new ability: %s." : "Your pet has learned a new spell: %s.",
+                {petSpellNameWithRank(owner_, spellId)}));
+        }
         LOG_DEBUG("SMSG_PET_LEARNED_SPELL: spellId=", spellId);
         owner_.fireAddonEvent("PET_BAR_UPDATE", {});
     }
@@ -1274,6 +1452,11 @@ void CombatHandler::handlePetUnlearnedSpell(network::Packet& packet) {
             std::remove(owner_.petSpellListRef().begin(), owner_.petSpellListRef().end(), spellId),
             owner_.petSpellListRef().end());
         owner_.petAutocastSpellsRef().erase(spellId);
+        // ERR_PET_SPELL_UNLEARNED_S in chat (0x005d4c30), which was missing.
+        if (owner_.getSpellAttributes(spellId) && !owner_.getSpellName(spellId).empty()) {
+            owner_.addSystemChatMessage(interfaceFormat("ERR_PET_SPELL_UNLEARNED_S",
+                "Your pet has unlearned %s.", {petSpellNameWithRank(owner_, spellId)}));
+        }
         LOG_DEBUG("SMSG_PET_UNLEARNED_SPELL: spellId=", spellId);
     }
     packet.skipAll();
@@ -1311,14 +1494,9 @@ void CombatHandler::handlePetMode(network::Packet& packet) {
 // ============================================================
 
 void CombatHandler::handleResurrectFailed(network::Packet& packet) {
-    if (packet.hasRemaining(4)) {
-        uint32_t reason = packet.readUInt32();
-        const char* msg = (reason == 1) ? "The target cannot be resurrected right now."
-                        : (reason == 2) ? "Cannot resurrect in this area."
-                        : "Resurrection failed.";
-        owner_.addUIError(msg);
-        owner_.addSystemChatMessage(msg);
-    }
+    // Nothing said: 0x006ce470 -> 0x00520f70 only raises an event. These
+    // were English lines, on screen and in chat.
+    if (packet.hasRemaining(4)) packet.readUInt32();
 }
 
 // ============================================================
@@ -1482,16 +1660,16 @@ void CombatHandler::setFocus(uint64_t guid) {
                 name = unit->getName();
             }
             if (name.empty()) name = owner_.lookupName(guid);
-            if (name.empty()) name = "Unknown";
-            owner_.addSystemChatMessage("Focus set: " + name);
-            LOG_INFO("Focus set: 0x", std::hex, guid, std::dec);
+            // No line: FocusUnit (0x00522480) says nothing. This printed
+            // "Focus set: X" in English.
+            LOG_INFO("Focus set: 0x", std::hex, guid, std::dec, " (", name, ")");
         }
     }
 }
 
 void CombatHandler::clearFocus() {
+    // No line: ClearFocus (0x005225e0) says nothing.
     if (owner_.focusGuidRef() != 0) {
-        owner_.addSystemChatMessage("Focus cleared.");
         LOG_INFO("Focus cleared");
     }
     owner_.focusGuidRef() = 0;
@@ -1511,8 +1689,8 @@ void CombatHandler::setMouseoverGuid(uint64_t guid) {
 }
 
 void CombatHandler::targetLastTarget() {
+    // Silent with none, as TargetLastTarget (0x00525d70) is.
     if (owner_.lastTargetGuidRef() == 0) {
-        owner_.addSystemChatMessage("No previous target.");
         return;
     }
 
@@ -1547,8 +1725,9 @@ void CombatHandler::cycleTarget(bool reverse, const char* noneMessage,
     std::sort(cands.begin(), cands.end(),
               [](const Cand& a, const Cand& b) { return a.distSq < b.distSq; });
 
+    // Silent with none, as TargetNearestEnemy and its kin (0x00525ad0) are.
+    (void)noneMessage;
     if (cands.empty()) {
-        owner_.addSystemChatMessage(noneMessage);
         return;
     }
 
@@ -1631,16 +1810,16 @@ void CombatHandler::targetNearestRaidMember(bool reverse) {
 }
 
 void CombatHandler::targetLastEnemy() {
+    // Silent with none, as TargetLastEnemy (0x00525df0) is.
     if (lastEnemyTargetGuid_ == 0) {
-        owner_.addSystemChatMessage("No previous enemy target.");
         return;
     }
     targetUnit(lastEnemyTargetGuid_);  // 0x00525df0 -> 0x00524bf0
 }
 
 void CombatHandler::targetLastFriend() {
+    // Silent with none, as TargetLastFriend (0x00525e50) is.
     if (lastFriendTargetGuid_ == 0) {
-        owner_.addSystemChatMessage("No previous friendly target.");
         return;
     }
     targetUnit(lastFriendTargetGuid_);  // 0x00525e50 -> 0x00524bf0
@@ -1769,14 +1948,16 @@ void CombatHandler::assistTarget() {
         return;
     }
 
+    // ERR_GENERIC_NO_TARGET with nobody to assist, as AssistUnit()
+    // (0x00525eb0) says it for /assist on its own. These were English.
     if (owner_.getTargetGuid() == 0) {
-        owner_.raiseUiError("You must target someone to assist.");
+        owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
         return;
     }
 
     auto target = getTarget();
     if (!target) {
-        owner_.raiseUiError("Invalid target.");
+        owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
         return;
     }
 
@@ -1795,8 +1976,8 @@ void CombatHandler::assistTarget() {
     // Who they have selected, read the one way it is read. See targetGuidOfUnit.
     const uint64_t assistTargetGuid = unitTargetGuid(target);
 
+    // Silent when they have no target, as 0x00525eb0 is.
     if (assistTargetGuid == 0) {
-        owner_.addSystemChatMessage(targetName + " has no target.");
         LOG_INFO("Assist: ", targetName, " has no target");
         return;
     }
@@ -1824,12 +2005,10 @@ void CombatHandler::togglePvp() {
         // UNIT_FIELD_FLAGS (index 59), bit 0x1000 = UNIT_FLAG_PVP
         currentlyPvp = (entity->getField(59) & 0x00001000) != 0;
     }
-    if (currentlyPvp) {
-        owner_.addSystemChatMessage("PvP flag disabled.");
-    } else {
-        owner_.addSystemChatMessage("PvP flag enabled.");
-    }
-    LOG_INFO("Toggled PvP flag");
+    // No line here: TogglePVP (0x00516840) only sends. The original speaks
+    // when the flag comes back changed (0x006e0fd0: ERR_PVP_TOGGLE_ON/OFF on
+    // screen and PVP_TOGGLE_ON/OFF_VERBOSE in chat). These were English.
+    LOG_INFO("Toggled PvP flag (was ", currentlyPvp ? "on" : "off", ")");
 }
 
 // ============================================================
@@ -1969,18 +2148,30 @@ void CombatHandler::handleXpGain(network::Packet& packet) {
 
     addCombatText(CombatTextEntry::XP_GAIN, static_cast<int32_t>(data.totalXp), 0, true);
 
+    // As 0x0050c720 words it, as CHAT_MSG_COMBAT_XP_GAIN: the player's own
+    // guid as the victim is COMBATLOG_XPLOSS_FIRSTPERSON_UNNAMED; a victim
+    // that is a unit this client has, COMBATLOG_XPGAIN_FIRSTPERSON with its
+    // name; anything else COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED (0x0050b1d0).
+    // This was English.
+    //
+    // Not given: the rested-bonus forms (COMBATLOG_XPGAIN_EXHAUSTION*, which
+    // need the experience before the bonus that the parser does not keep,
+    // and the rest state's name) and the group and raid ones.
+    const std::string xp = std::to_string(data.totalXp);
     std::string msg;
-    if (data.victimGuid != 0 && data.type == 0) {
-        std::string victimName = owner_.lookupName(data.victimGuid);
-        if (!victimName.empty())
-            msg = victimName + " dies, you gain " + std::to_string(data.totalXp) + " experience.";
-        else
-            msg = "You gain " + std::to_string(data.totalXp) + " experience.";
+    if (data.victimGuid != 0 && data.victimGuid == owner_.getPlayerGuid()) {
+        msg = interfaceFormat("COMBATLOG_XPLOSS_FIRSTPERSON_UNNAMED", "You lose %d experience.", {xp});
     } else {
-        msg = "You gain " + std::to_string(data.totalXp) + " experience.";
-    }
-    if (data.groupBonus > 0) {
-        msg += " (+" + std::to_string(data.groupBonus) + " group bonus)";
+        std::string victimName;
+        if (data.victimGuid != 0) {
+            auto victim = owner_.getEntityManager().getEntity(data.victimGuid);
+            if (victim && (victim->getType() == ObjectType::UNIT || victim->getType() == ObjectType::PLAYER))
+                victimName = owner_.lookupName(data.victimGuid);
+        }
+        msg = victimName.empty()
+            ? interfaceFormat("COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED", "You gain %d experience.", {xp})
+            : interfaceFormat("COMBATLOG_XPGAIN_FIRSTPERSON", "%s dies, you gain %d experience.",
+                              {victimName, xp});
     }
     owner_.addLocalChatLine(ChatType::COMBAT_XP_GAIN, msg);
 }

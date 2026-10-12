@@ -12,6 +12,7 @@
 #include "game/transport_manager.hpp"
 #include "game/movement_handler.hpp"
 #include "core/logger.hpp"
+#include "game/interface_text.hpp"
 #include "core/coordinates.hpp"
 #include "network/world_socket.hpp"
 #include "rendering/animation_controller.hpp"
@@ -26,6 +27,14 @@ namespace game {
 
 namespace {
 
+/// The player's PLAYER_FLAGS as last seen, for the PvP flag's change - the
+/// one change 0x006e0fd0 speaks about. Taken from the create block without a
+/// word, so logging in flagged says nothing.
+struct LastPlayerFlags { uint32_t value = 0; bool known = false; };
+LastPlayerFlags& lastPlayerFlags() {
+    static LastPlayerFlags flags;
+    return flags;
+}
 
 int updateObjectBlocksBudgetPerUpdate(WorldState state) {
     static const int inWorldBudget =
@@ -1534,6 +1543,27 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
               owner_.isRestingRef() = nowResting;
               pendingEvents_.emit("PLAYER_UPDATE_RESTING", {});
           }
+          // The PvP flag (PLAYER_FLAGS_IN_PVP, 0x200) turning on or off:
+          // ERR_PVP_TOGGLE_ON/OFF on screen in yellow and
+          // PVP_TOGGLE_ON/OFF_VERBOSE in chat, as 0x006e0fd0 says it. This is
+          // what answers TogglePVP; the request itself says nothing.
+          {
+            constexpr uint32_t PLAYER_FLAGS_IN_PVP = 0x00000200;
+            auto& last = lastPlayerFlags();
+            if (!isCreate && last.known && ((last.value ^ val) & PLAYER_FLAGS_IN_PVP) != 0) {
+                const bool on = (val & PLAYER_FLAGS_IN_PVP) != 0;
+                owner_.addUIInfoMessage(on
+                    ? interfaceString("ERR_PVP_TOGGLE_ON", "PvP flag on")
+                    : interfaceString("ERR_PVP_TOGGLE_OFF", "PvP flag off"));
+                owner_.addSystemChatMessage(on
+                    ? interfaceString("PVP_TOGGLE_ON_VERBOSE",
+                                      "You are now flagged for PvP combat and will remain so until toggled off.")
+                    : interfaceString("PVP_TOGGLE_OFF_VERBOSE",
+                                      "You will be unflagged for PvP combat after five minutes of non-PvP action in friendly territory."));
+            }
+            last.value = val;
+            last.known = true;
+          }
           // The helm and cloak switches, which the realm keeps and this client
           // never read back. Both are set by CMSG_SHOWING_HELM/CLOAK and come
           // home in PLAYER_FLAGS, so the realm had them right the whole time -
@@ -1890,27 +1920,10 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
                 durabilityChanged = true;
                 LOG_DEBUG("Item durability update: guid=0x", std::hex, block.guid,
                           std::dec, " dur ", prevDur, "->", val, "/", it->second.maxDurability);
-                // Warn once when durability drops below 20% for an equipped item.
-                const uint32_t maxDur = it->second.maxDurability;
-                if (maxDur > 0 && val < maxDur / 5u && prevDur >= maxDur / 5u) {
-                    // Check if this item is in an equip slot (not bag inventory).
-                    bool isEquipped = false;
-                    for (uint64_t slotGuid : owner_.equipSlotGuidsRef()) {
-                        if (slotGuid == block.guid) { isEquipped = true; break; }
-                    }
-                    if (isEquipped) {
-                        std::string itemName;
-                        const auto* info = owner_.getItemInfo(it->second.entry);
-                        if (info) itemName = info->name;
-                        char buf[128];
-                        if (!itemName.empty())
-                            std::snprintf(buf, sizeof(buf), "%s is about to break!", itemName.c_str());
-                        else
-                            std::snprintf(buf, sizeof(buf), "An equipped item is about to break!");
-                        owner_.addUIError(buf);
-                        owner_.addSystemChatMessage(buf);
-                    }
-                }
+                // No warning line: the interface has no string for one. The
+                // original shows wear only through the durability figure
+                // (UPDATE_INVENTORY_DURABILITY). This printed "X is about to
+                // break!" in English, on screen and in chat.
             }
         } else if (key == itemMaxDurField && isItemInInventory) {
             if (it->second.maxDurability != val) {
@@ -3378,9 +3391,8 @@ void EntityController::showGameObjectPageText(uint64_t guid) {
         return;
     }
 
-    if (!info.name.empty()) {
-        owner_.addSystemChatMessage(info.name);
-    }
+    // Nothing for an object with no page: 0x0070be30 -> 0x0058a1a0 only
+    // raises the item-text events. This printed the object's name in chat.
 }
 
 void EntityController::handlePageTextQueryResponse(network::Packet& packet) {
