@@ -2272,7 +2272,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     if (picked && picked->getType() == game::ObjectType::GAMEOBJECT) {
                         gameHandler.interactWithGameObject(closestGuid);
                     } else {
-                        gameHandler.setTarget(closestGuid);
+                        gameHandler.targetUnit(closestGuid);
                     }
                 } else if (addons::storedCVarValue("deselectOnClick", "1") != "0") {
                     // Clicked empty space - deselect current target, unless the
@@ -2355,7 +2355,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 if (!goInfo || goInfo->type != 7) {
                     LOG_DEBUG("[GO-DIAG] Right-click: re-interacting with targeted GO 0x",
                                 std::hex, target->getGuid(), std::dec);
-                    gameHandler.setTarget(target->getGuid());
+                    gameHandler.targetUnit(target->getGuid());
                     gameHandler.interactWithGameObject(target->getGuid());
                     return;
                 }
@@ -2446,11 +2446,11 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     if (closestType == game::ObjectType::GAMEOBJECT) {
                         LOG_DEBUG("[GO-DIAG] Right-click: raypick hit GO 0x",
                                     std::hex, closestGuid, std::dec);
-                        gameHandler.setTarget(closestGuid);
+                        gameHandler.targetUnit(closestGuid);
                         gameHandler.interactWithGameObject(closestGuid);
                         return;
                     }
-                    gameHandler.setTarget(closestGuid);
+                    gameHandler.targetUnit(closestGuid);
                 }
             }
         }
