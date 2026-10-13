@@ -65,7 +65,6 @@ public:
     void playQuestComplete();
     void playQuestFailed();
     void playQuestUpdate();
-    void playFishingBite();
 
     // Loot sounds
     void playLootCoinSmall();
@@ -127,7 +126,6 @@ private:
     std::vector<UISample> questCompleteSounds_;
     std::vector<UISample> questFailedSounds_;
     std::vector<UISample> questUpdateSounds_;
-    std::vector<UISample> fishingBiteSounds_;
 
     std::vector<UISample> lootCoinSmallSounds_;
     std::vector<UISample> lootCoinLargeSounds_;

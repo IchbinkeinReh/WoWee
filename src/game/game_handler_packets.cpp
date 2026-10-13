@@ -1396,8 +1396,9 @@ void GameHandler::registerCoreOpcodes() {
             // FISHINGNODE: SendCustomAnim(GetGoAnimProgress()) - and Create
             // sets a fishing node's animation progress to 0, so the index is
             // 0, Custom0). Kept for reeling it in; the client shows nothing
-            // of it but the animation below and the sound its model plays,
-            // which the bite sound stands in for.
+            // of it but the animation below, whose $GC0 event plays the
+            // splash, the display's Sound[6] (0x0070c050, M2EventSounds) - for
+            // every bobber, as it has no sound of its own for a bite.
             auto go = std::static_pointer_cast<GameObject>(goEnt);
             uint64_t createdBy = static_cast<uint64_t>(go->getField(6))
                                | (static_cast<uint64_t>(go->getField(7)) << 32);
@@ -1405,8 +1406,6 @@ void GameHandler::registerCoreOpcodes() {
             const bool ownedFishingBite = createdBy == playerGuid && (!info || info->type == 17);
             if (ownedFishingBite) {
                 hookedFishingBobberGuid_ = guid;
-                withSoundManager(&audio::AudioCoordinator::getUiSoundManager,
-                                 [](auto* sfx) { sfx->playFishingBite(); });
                 LOG_DEBUG("Fishing bite: guid=0x", std::hex, guid, std::dec,
                           " index=", animId);
             }
