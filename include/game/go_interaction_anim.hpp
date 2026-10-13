@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 
@@ -170,6 +172,46 @@ struct Step {
 [[nodiscard]] inline bool windowSetsInteraction(uint64_t guid, uint64_t openWith, uint64_t self = 0) {
     if (guid == openWith) return false;
     return self == 0 || guid != self;
+}
+
+/// The windows that set the interaction object, in the order 0x00512e60
+/// asks them as it lets the object go: the first open with it closes.
+///   Trade         0xbfa658, closed by 0x005870a0(0)
+///   Book          0xbfc948, 0x0058a1a0(0)
+///   Gossip        0xc016f0, 0x0058a550(0)
+///   Quest         0xc0d648, 0x0058ca70
+///   Merchant      0xbfa3e8, 0x00584600
+///   Taxi          0xc0dbf0, 0x00590ba0
+///   Trainer       0xc0e490, 0x005940e0(0)
+///   Bank          0xbeb9a0, 0x0057b8d0(0)
+///   GuildBank     0xc1dc10, 0x005a4270(0)
+///   Registrar     0xc0e570, 0x00599e90 (the guild's; the arena's, 0xc0f7c8,
+///                 comes after the stable - wowee keeps one for both)
+///   Mailbox       0xbeb030, 0x00571730
+///   AuctionHouse  0xc0f3e8, 0x0059f150
+///   Stable        0xc0f6c0, 0x005a0f10
+/// The tabard designer (0xc0e518) and the battlemaster (0xbea568), which
+/// wowee does not open, are left out.
+enum class Window : uint8_t {
+    Trade, Book, Gossip, Quest, Merchant, Taxi, Trainer, Bank, GuildBank,
+    Registrar, Mailbox, AuctionHouse, Stable, Count
+};
+inline constexpr size_t kWindowCount = static_cast<size_t>(Window::Count);
+
+/// 0x00512e60 as 0x0051fce0 replaces `released`: the first window in its
+/// order open with it (`openWith`, 0 for one not open), which closes. Not
+/// the window being opened (`opening`): the client asks before that one
+/// takes its object, wowee after.
+[[nodiscard]] inline std::optional<Window> windowClosedWith(const std::array<uint64_t, kWindowCount>& openWith,
+                                                            uint64_t released,
+                                                            std::optional<Window> opening = std::nullopt) {
+    if (released == 0) return std::nullopt;
+    for (size_t i = 0; i < kWindowCount; ++i) {
+        const auto window = static_cast<Window>(i);
+        if (opening && *opening == window) continue;
+        if (openWith[i] == released) return window;
+    }
+    return std::nullopt;
 }
 
 } // namespace wowee::game::go_interaction

@@ -13,6 +13,7 @@
 #include "game/vehicle.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "game/update_field_table.hpp"
+#include "game/go_interaction_anim.hpp"
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
 #include "game/group_defines.hpp"
@@ -2529,13 +2530,14 @@ public:
     void closeNpcInteraction();
     /// The object the player has a window open with (0xbd07a8), set as one
     /// opens (0x0051fce0): the one before is let go first (0x00518d50 ->
-    /// 0x00512e60, a game object's CLOSE), and a game object plays its OPEN.
+    /// 0x00512e60, a game object's CLOSE, and the window open with it
+    /// closes - not `opening`), and a game object plays its OPEN.
     /// Let go once no window is open with it any more.
-    void setInteractionObject(uint64_t guid);
+    void setInteractionObject(uint64_t guid, std::optional<go_interaction::Window> opening = std::nullopt);
     uint64_t getInteractionObject() const { return interactionObject_; }
     /// A quest window sets it too (0x0058c5a0), but not over a game object
     /// that already is it.
-    void setQuestInteractionObject(uint64_t guid);
+    void setQuestInteractionObject(uint64_t guid, go_interaction::Window opening = go_interaction::Window::Quest);
     /// Whether the bonus bar holds the pet's actions - the vehicle the
     /// player drives, or a unit it possesses (DAT_00c1e5a0 0x1, 0x005d4ad0).
     /// Slots 121..132 are then the pet bar's ten and two empty ones
@@ -2801,7 +2803,7 @@ public:
     void clearBook() { bookPages_.clear(); bookTitle_.clear(); bookMaterial_ = 0; bookObjectGuid_ = 0; }
     /// The object a book being read is from - a game object or an item - which
     /// the reading window opens with (0x0058a1a0 -> 0x0051fce0).
-    void setBookObject(uint64_t guid) { bookObjectGuid_ = guid; setInteractionObject(guid); }
+    void setBookObject(uint64_t guid) { bookObjectGuid_ = guid; setInteractionObject(guid, go_interaction::Window::Book); }
 
     /// What is being read, for the heading over the page. Known at every point
     /// a book is opened - the game object's name from its query cache, or the
@@ -4843,8 +4845,13 @@ private:
     /// farewell, 0x00518d50's for a window that closed with nothing after it:
     /// a living creature says farewell first (0x00720860).
     void releaseInteractionObject(bool farewell = false);
+    /// What each window that sets the interaction object is open with, 0
+    /// for one that is not, in 0x00512e60's order.
+    std::array<uint64_t, go_interaction::kWindowCount> interactionWindowObjects();
     /// Whether a window that sets the interaction object is open with guid.
     bool interactionWindowOpen(uint64_t guid);
+    /// Closes one of them, as 0x00512e60 does.
+    void closeInteractionWindow(go_interaction::Window window);
     SprintAuraCallback sprintAuraCallback_;
 
     // Transport tracking

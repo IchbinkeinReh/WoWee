@@ -2941,7 +2941,7 @@ void SocialHandler::handlePetitionShowlist(network::Packet& packet) {
     petitionNpcGuid_ = data.npcGuid;
     // Either registrar's window opens with it (0x006d69f0 -> 0x00599e00 or
     // 0x005a22a0 -> 0x0051fce0).
-    owner_.setInteractionObject(petitionNpcGuid_);
+    owner_.setInteractionObject(petitionNpcGuid_, go_interaction::Window::Registrar);
     petitionCost_ = data.cost;
     // The whole offer, not just the first charter's price. An arena registrar
     // offers three and the panel prices whichever tab is open.

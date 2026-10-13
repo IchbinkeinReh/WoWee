@@ -3943,7 +3943,7 @@ void SpellHandler::handleListStabledPets(network::Packet& packet) {
     // 0x005a11a0: a stable master other than the one open sets the
     // interaction object.
     if (go_interaction::windowSetsInteraction(owner_.stableMasterGuidRef(), stableBefore)) {
-        owner_.setInteractionObject(owner_.stableMasterGuidRef());
+        owner_.setInteractionObject(owner_.stableMasterGuidRef(), go_interaction::Window::Stable);
     }
     uint8_t petCount  = packet.readUInt8();
     owner_.stableNumSlotsRef()   = packet.readUInt8();

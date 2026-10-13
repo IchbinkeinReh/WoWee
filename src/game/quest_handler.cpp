@@ -2244,7 +2244,7 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
     if (questDetailsOpen_) return; // Don't reopen gossip while viewing quest
     gossipWindowOpen_ = true;
     // 0x0058a550: a gossip window with another object sets it.
-    if (currentGossip_.npcGuid != gossipBefore) owner_.setInteractionObject(currentGossip_.npcGuid);
+    if (currentGossip_.npcGuid != gossipBefore) owner_.setInteractionObject(currentGossip_.npcGuid, go_interaction::Window::Gossip);
     // Gossip carries its text as an npc-text id, not inline, so any greeting
     // left over from a quest list belongs to a different window.
     questGreeting_.clear();
@@ -2335,8 +2335,9 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
 
     currentGossip_ = std::move(data);
     gossipWindowOpen_ = true;
-    // The quest frame's greeting (0x0058c5a0 with 0).
-    owner_.setQuestInteractionObject(currentGossip_.npcGuid);
+    // The quest frame's greeting (0x0058c5a0 with 0), which wowee keeps as
+    // its gossip window.
+    owner_.setQuestInteractionObject(currentGossip_.npcGuid, go_interaction::Window::Gossip);
     // QUEST_GREETING, not GOSSIP_SHOW. This is SMSG_QUESTGIVER_QUEST_LIST - a
     // quest giver listing what it has, which the greeting frame answers.
     // GOSSIP_SHOW belongs to SMSG_GOSSIP_MESSAGE and opens the gossip frame

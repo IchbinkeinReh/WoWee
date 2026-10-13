@@ -2658,8 +2658,8 @@ void InventoryHandler::handleListInventory(network::Packet& packet) {
     }
     vendorWindowOpen_ = true;
     // MERCHANT_SHOW opens with the vendor (0x00584500 -> 0x0051fce0).
-    owner_.setInteractionObject(currentVendorItems_.vendorGuid);
-    owner_.closeGossip();
+    owner_.setInteractionObject(currentVendorItems_.vendorGuid, go_interaction::Window::Merchant);
+    if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MERCHANT_SHOW", {});
 
     // Auto-sell grey items
@@ -2770,9 +2770,9 @@ void InventoryHandler::handleTrainerList(network::Packet& packet) {
     // object, unless it is the player itself.
     if (go_interaction::windowSetsInteraction(currentTrainerList_.trainerGuid, trainerBefore,
                                               owner_.getPlayerGuid())) {
-        owner_.setInteractionObject(currentTrainerList_.trainerGuid);
+        owner_.setInteractionObject(currentTrainerList_.trainerGuid, go_interaction::Window::Trainer);
     }
-    owner_.closeGossip();
+    if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRAINER_SHOW", {});
 
     // At WARNING, and broken down by the three states the panel filters on,
@@ -2955,7 +2955,7 @@ void InventoryHandler::openMailbox(uint64_t guid) {
     mailboxGuid_ = guid;
     mailboxOpen_ = true;
     // MAIL_SHOW opens with the mailbox (0x0056da60 -> 0x0051fce0).
-    owner_.setInteractionObject(guid);
+    owner_.setInteractionObject(guid, go_interaction::Window::Mailbox);
     // Through the setter, which is the only thing that says so. Assigning the
     // member cleared the flag and told nobody: this client's own minimap asks
     // hasNewMail() again on every frame it draws, so it went out by itself,
@@ -3264,7 +3264,7 @@ void InventoryHandler::handleShowMailbox(network::Packet& packet) {
     if (!packet.hasRemaining(8)) return;
     mailboxGuid_ = packet.readUInt64();
     mailboxOpen_ = true;
-    owner_.setInteractionObject(mailboxGuid_);   // 0x0056da60
+    owner_.setInteractionObject(mailboxGuid_, go_interaction::Window::Mailbox);   // 0x0056da60
     selectedMailIndex_ = -1;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_SHOW", {});
     selectDefaultStationery();
@@ -3407,7 +3407,7 @@ void InventoryHandler::openBank(uint64_t guid) {
     bankerGuid_ = guid;
     bankOpen_ = true;
     // BANKFRAME_OPENED opens with the banker (0x0057b8d0 -> 0x0051fce0).
-    owner_.setInteractionObject(guid);
+    owner_.setInteractionObject(guid, go_interaction::Window::Bank);
     if (isClassicLikeExpansion()) {
         effectiveBankSlots_ = 24;
         effectiveBankBagSlots_ = 6;
@@ -3634,7 +3634,7 @@ void InventoryHandler::handleGuildBankList(network::Packet& packet) {
     if (guildBankerGuid_ != 0 && !guildBankOpen_) {
         guildBankOpen_ = true;
         // GUILDBANKFRAME_OPENED, with the vault (0x005a7250 -> 0x0051fce0).
-        owner_.setInteractionObject(guildBankerGuid_);
+        owner_.setInteractionObject(guildBankerGuid_, go_interaction::Window::GuildBank);
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GUILDBANKFRAME_OPENED", {});
     }
     // Each list is tagged with the tab it describes. Track it so the UI
@@ -3677,7 +3677,7 @@ void InventoryHandler::openAuctionHouse(uint64_t guid) {
     auctionOpen_ = true;
     auctionActiveTab_ = 0;
     // AUCTION_HOUSE_SHOW opens with the auctioneer (0x0059f000 -> 0x0051fce0).
-    owner_.setInteractionObject(guid);
+    owner_.setInteractionObject(guid, go_interaction::Window::AuctionHouse);
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_SHOW", {});
 }
 
@@ -3786,7 +3786,7 @@ void InventoryHandler::handleAuctionHello(network::Packet& packet) {
     AuctionHelloData data;
     if (!AuctionHelloParser::parse(packet, data)) return;
     openAuctionHouse(data.auctioneerGuid);
-    owner_.closeGossip();
+    if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already
 }
 
 void InventoryHandler::handleAuctionListResult(network::Packet& packet) {
@@ -4069,7 +4069,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             tradePartnerAccepted_ = false;
             // TRADE_SHOW opens with the other player (0x005873e0 ->
             // 0x005870a0 -> 0x0051fce0). Known here only to the one asked.
-            if (tradePeerGuid_ != 0) owner_.setInteractionObject(tradePeerGuid_);
+            if (tradePeerGuid_ != 0) owner_.setInteractionObject(tradePeerGuid_, go_interaction::Window::Trade);
             owner_.addSystemChatMessage("Trade opened.");
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_SHOW", {});
             break;

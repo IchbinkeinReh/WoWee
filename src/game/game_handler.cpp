@@ -3633,10 +3633,16 @@ std::vector<const char*> GameHandler::setPlayerShapeshiftForm(uint8_t form) {
     return formChangeEvents(before, getBonusActionBarOffset());
 }
 
-void GameHandler::setInteractionObject(uint64_t guid) {
+void GameHandler::setInteractionObject(uint64_t guid, std::optional<go_interaction::Window> opening) {
     // 0x0051fce0. Whatever was set is let go first, even the same object
-    // again (0x00518d50 with 0xbd07a8 itself).
+    // again (0x00518d50 with 0xbd07a8 itself), and the window open with it
+    // closes (0x00512e60) - not the one opening now, which wowee has given
+    // its object already.
+    const uint64_t released = interactionObject_;
     releaseInteractionObject();
+    if (const auto window = go_interaction::windowClosedWith(interactionWindowObjects(), released, opening)) {
+        closeInteractionWindow(*window);
+    }
     interactionObject_ = guid;
     // A game object (type mask 0x20) plays its OPEN (0x0070bab0, slot 0x98).
     auto entity = guid ? getEntityManager().getEntity(guid) : nullptr;
@@ -3645,12 +3651,12 @@ void GameHandler::setInteractionObject(uint64_t guid) {
     }
 }
 
-void GameHandler::setQuestInteractionObject(uint64_t guid) {
+void GameHandler::setQuestInteractionObject(uint64_t guid, go_interaction::Window opening) {
     if (guid != 0 && guid == interactionObject_) {
         auto entity = getEntityManager().getEntity(guid);
         if (entity && entity->getType() == ObjectType::GAMEOBJECT) return;
     }
-    setInteractionObject(guid);
+    setInteractionObject(guid, opening);
 }
 
 void GameHandler::releaseInteractionObject(bool farewell) {
@@ -3674,34 +3680,102 @@ void GameHandler::releaseInteractionObject(bool farewell) {
     }
 }
 
-bool GameHandler::interactionWindowOpen(uint64_t guid) {
-    // The windows that set it: gossip and the quest giver's list (0x0058a550,
-    // 0x0058c5a0), the quest windows (0x0058c5a0), a book (0x0058a1a0), the
-    // mailbox (0x0056da60) and the guild bank (0x005a7250); the merchant
-    // (0x00584500), the trainer (0x005940e0), the flight map (0x005932e0),
-    // the bank (0x0057b8d0), the auction house (0x0059f000), the stable
-    // (0x005a11a0), the guild and arena registrars (0x00599e00, 0x005a22a0)
-    // and a trade (0x005870a0). Each lets it go as it closes (0x00518d50);
-    // gossip not while a quest window is still open with it, nor that the
-    // other way round (0x0058a550, 0x0058ca70).
-    if (isGossipWindowOpen() && getCurrentGossip().npcGuid == guid) return true;
-    if (isQuestDetailsOpen() && getQuestDetails().npcGuid == guid) return true;
-    if (isQuestRequestItemsOpen() && getQuestRequestItems().npcGuid == guid) return true;
-    if (isQuestOfferRewardOpen() && getQuestOfferReward().npcGuid == guid) return true;
-    if (bookObjectGuid_ == guid) return true;
+std::array<uint64_t, go_interaction::kWindowCount> GameHandler::interactionWindowObjects() {
+    // The windows that set it, by what each is open with: gossip and the
+    // quest giver's list (0x0058a550, 0x0058c5a0), the quest windows
+    // (0x0058c5a0), a book (0x0058a1a0), the mailbox (0x0056da60) and the
+    // guild bank (0x005a7250); the merchant (0x00584500), the trainer
+    // (0x005940e0), the flight map (0x005932e0), the bank (0x0057b8d0), the
+    // auction house (0x0059f000), the stable (0x005a11a0), the guild and
+    // arena registrars (0x00599e00, 0x005a22a0) and a trade (0x005870a0).
+    using go_interaction::Window;
+    std::array<uint64_t, go_interaction::kWindowCount> with{};
+    auto set = [&](Window w, bool open, uint64_t guid) {
+        if (open) with[static_cast<size_t>(w)] = guid;
+    };
     if (inventoryHandler_) {
-        if (inventoryHandler_->isMailboxOpen() && inventoryHandler_->getMailboxGuid() == guid) return true;
-        if (inventoryHandler_->isGuildBankOpen() && inventoryHandler_->getGuildBankerGuid() == guid) return true;
-        if (inventoryHandler_->isTradeOpen() && inventoryHandler_->getTradePeerGuid() == guid) return true;
+        set(Window::Trade, inventoryHandler_->isTradeOpen(), inventoryHandler_->getTradePeerGuid());
+        set(Window::Mailbox, inventoryHandler_->isMailboxOpen(), inventoryHandler_->getMailboxGuid());
+        set(Window::GuildBank, inventoryHandler_->isGuildBankOpen(), inventoryHandler_->getGuildBankerGuid());
     }
-    if (isVendorWindowOpen() && getVendorItems().vendorGuid == guid) return true;
-    if (isTrainerWindowOpen() && getTrainerSpells().trainerGuid == guid) return true;
-    if (isTaxiWindowOpen() && movementHandler_ && movementHandler_->getTaxiNpcGuid() == guid) return true;
-    if (isBankOpen() && getBankerGuid() == guid) return true;
-    if (isAuctionHouseOpen() && getAuctioneerGuid() == guid) return true;
-    if (isStableWindowOpen() && getStableMasterGuid() == guid) return true;
-    if (hasPetitionShowlist() && getPetitionNpcGuid() == guid) return true;
+    set(Window::Book, true, bookObjectGuid_);
+    set(Window::Gossip, isGossipWindowOpen(), getCurrentGossip().npcGuid);
+    set(Window::Quest, isQuestDetailsOpen(), getQuestDetails().npcGuid);
+    if (!with[static_cast<size_t>(Window::Quest)]) set(Window::Quest, isQuestRequestItemsOpen(), getQuestRequestItems().npcGuid);
+    if (!with[static_cast<size_t>(Window::Quest)]) set(Window::Quest, isQuestOfferRewardOpen(), getQuestOfferReward().npcGuid);
+    set(Window::Merchant, isVendorWindowOpen(), getVendorItems().vendorGuid);
+    set(Window::Taxi, isTaxiWindowOpen() && movementHandler_, movementHandler_ ? movementHandler_->getTaxiNpcGuid() : 0);
+    set(Window::Trainer, isTrainerWindowOpen(), getTrainerSpells().trainerGuid);
+    set(Window::Bank, isBankOpen(), getBankerGuid());
+    set(Window::Registrar, hasPetitionShowlist(), getPetitionNpcGuid());
+    set(Window::AuctionHouse, isAuctionHouseOpen(), getAuctioneerGuid());
+    set(Window::Stable, isStableWindowOpen(), getStableMasterGuid());
+    return with;
+}
+
+bool GameHandler::interactionWindowOpen(uint64_t guid) {
+    // Each lets it go as it closes (0x00518d50); gossip not while a quest
+    // window is still open with it, nor that the other way round
+    // (0x0058a550, 0x0058ca70).
+    if (guid == 0) return false;
+    for (uint64_t with : interactionWindowObjects()) {
+        if (with == guid) return true;
+    }
     return false;
+}
+
+void GameHandler::closeInteractionWindow(go_interaction::Window window) {
+    using go_interaction::Window;
+    switch (window) {
+        case Window::Trade:
+            // A trade is cancelled - CMSG_CANCEL_TRADE and TRADE_CLOSED
+            // (0x005870a0, 0x00704040, event 0x132).
+            if (isTradeOpen()) {
+                cancelTrade();
+                fireAddonEvent("TRADE_CLOSED", {});
+            }
+            break;
+        case Window::Book:
+            // ITEM_TEXT_CLOSED (0x0058a1a0, event 0x117), and the book is
+            // let go (0xbfc948 = 0); nothing is sent.
+            if (isItemTextOpen()) closeItemText();
+            clearBook();
+            break;
+        case Window::Quest: {
+            // The quest window (0x0058ca70): one a player offered is declined
+            // to it - MSG_QUEST_PUSH_RESULT with the sharer (or the player),
+            // quest 0 and 3 - then QUEST_FINISHED (event 0x121).
+            const bool questDetails = isQuestDetailsOpen();
+            if (!questDetails && !isQuestRequestItemsOpen() && !isQuestOfferRewardOpen()) break;
+            const uint64_t giver = questDetails ? getQuestDetails().npcGuid
+                                 : isQuestRequestItemsOpen() ? getQuestRequestItems().npcGuid
+                                 : getQuestOfferReward().npcGuid;
+            const uint64_t sharer = questDetails ? getQuestDetails().informUnit : 0;
+            auto giverEntity = giver ? getEntityManager().getEntity(giver) : nullptr;
+            if (giverEntity && giverEntity->getType() == ObjectType::PLAYER && isInWorld()) {
+                network::Packet packet(wireOpcode(Opcode::MSG_QUEST_PUSH_RESULT));
+                packet.writeUInt64(sharer ? sharer : giver);
+                packet.writeUInt32(0);
+                packet.writeUInt8(3);
+                socket->send(packet);
+            }
+            if (questDetails) declineQuest(true);
+            if (isQuestRequestItemsOpen()) closeQuestRequestItems(true);
+            if (isQuestOfferRewardOpen()) closeQuestOfferReward(true);
+            break;
+        }
+        case Window::Gossip:       if (isGossipWindowOpen()) closeGossip(); break;
+        case Window::Merchant:     if (isVendorWindowOpen()) closeVendor(); break;
+        case Window::Trainer:      if (isTrainerWindowOpen()) closeTrainer(); break;
+        case Window::Taxi:         if (isTaxiWindowOpen()) closeTaxi(); break;
+        case Window::Bank:         if (isBankOpen()) closeBank(); break;
+        case Window::GuildBank:    if (isGuildBankOpen()) closeGuildBank(); break;
+        case Window::Mailbox:      if (isMailboxOpen()) closeMailbox(); break;
+        case Window::AuctionHouse: if (isAuctionHouseOpen()) closeAuctionHouse(); break;
+        case Window::Stable:       if (isStableWindowOpen()) closeStableWindow(); break;
+        case Window::Registrar:    if (hasPetitionShowlist()) closePetitionVendor(); break;
+        case Window::Count:        break;
+    }
 }
 
 void GameHandler::closeNpcInteraction() {
@@ -3712,46 +3786,12 @@ void GameHandler::closeNpcInteraction() {
     releaseInteractionObject(/*farewell=*/true);
     // wowee keeps each window's own object, so the windows open are the ones
     // closed.
-    //
-    // A trade is cancelled - CMSG_CANCEL_TRADE and TRADE_CLOSED (0x005870a0,
-    // 0x00704040, event 0x132).
-    if (isTradeOpen()) {
-        cancelTrade();
-        fireAddonEvent("TRADE_CLOSED", {});
+    using go_interaction::Window;
+    for (Window window : {Window::Trade, Window::Book, Window::Quest, Window::Gossip, Window::Merchant,
+                          Window::Trainer, Window::Taxi, Window::Bank, Window::GuildBank, Window::Mailbox,
+                          Window::AuctionHouse, Window::Stable, Window::Registrar}) {
+        closeInteractionWindow(window);
     }
-    // ITEM_TEXT_CLOSED (0x0058a1a0, event 0x117); nothing is sent.
-    if (isItemTextOpen()) closeItemText();
-    // The quest window (0x0058ca70): one a player offered is declined to it -
-    // MSG_QUEST_PUSH_RESULT with the sharer (or the player), quest 0 and 3 -
-    // then QUEST_FINISHED (event 0x121).
-    const bool questDetails = isQuestDetailsOpen();
-    if (questDetails || isQuestRequestItemsOpen() || isQuestOfferRewardOpen()) {
-        const uint64_t giver = questDetails ? getQuestDetails().npcGuid
-                             : isQuestRequestItemsOpen() ? getQuestRequestItems().npcGuid
-                             : getQuestOfferReward().npcGuid;
-        const uint64_t sharer = questDetails ? getQuestDetails().informUnit : 0;
-        auto giverEntity = giver ? getEntityManager().getEntity(giver) : nullptr;
-        if (giverEntity && giverEntity->getType() == ObjectType::PLAYER && isInWorld()) {
-            network::Packet packet(wireOpcode(Opcode::MSG_QUEST_PUSH_RESULT));
-            packet.writeUInt64(sharer ? sharer : giver);
-            packet.writeUInt32(0);
-            packet.writeUInt8(3);
-            socket->send(packet);
-        }
-        if (questDetails) declineQuest(true);
-        if (isQuestRequestItemsOpen()) closeQuestRequestItems(true);
-        if (isQuestOfferRewardOpen()) closeQuestOfferReward(true);
-    }
-    if (isGossipWindowOpen()) closeGossip();
-    if (isVendorWindowOpen()) closeVendor();
-    if (isTrainerWindowOpen()) closeTrainer();
-    if (isTaxiWindowOpen()) closeTaxi();
-    if (isBankOpen()) closeBank();
-    if (isGuildBankOpen()) closeGuildBank();
-    if (isMailboxOpen()) closeMailbox();
-    if (isAuctionHouseOpen()) closeAuctionHouse();
-    if (isStableWindowOpen()) closeStableWindow();
-    if (hasPetitionShowlist()) closePetitionVendor();
     // The tabard designer (CLOSE_TABARD_FRAME) and the battlemaster's list
     // (BATTLEFIELDS_CLOSED) close here too; this client opens neither.
 }

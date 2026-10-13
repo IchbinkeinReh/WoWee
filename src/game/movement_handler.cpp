@@ -2720,8 +2720,8 @@ void MovementHandler::handleShowTaxiNodes(network::Packet& packet) {
     taxiNpcGuid_ = data.npcGuid;
     taxiWindowOpen_ = true;
     // TAXIMAP_OPENED opens with the flight master (0x005932e0 -> 0x0051fce0).
-    owner_.setInteractionObject(taxiNpcGuid_);
-    owner_.closeGossip();
+    owner_.setInteractionObject(taxiNpcGuid_, go_interaction::Window::Taxi);
+    if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already
     buildTaxiCostMap();
     auto it = taxiNodes_.find(data.nearestNode);
     if (it != taxiNodes_.end()) {

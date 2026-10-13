@@ -167,3 +167,30 @@ TEST_CASE("Only Custom0..3 return to the server's pose as they end", "[go_intera
     // meanwhile then goes.
     CHECK(stateHoldsObject(kStateDespawn));
 }
+
+TEST_CASE("Replacing the interaction object closes the window open with the old one", "[go_interaction]") {
+    constexpr uint64_t npc = 0xF130000123000001ull, other = 0xF130000456000002ull;
+    std::array<uint64_t, kWindowCount> with{};
+    auto at = [&](Window w) -> uint64_t& { return with[static_cast<size_t>(w)]; };
+    // Nothing was set, or nothing is open with it: nothing closes.
+    CHECK_FALSE(windowClosedWith(with, 0).has_value());
+    CHECK_FALSE(windowClosedWith(with, npc).has_value());
+    // Gossip with the NPC, then its merchant opens: the gossip closes
+    // (0x00512e60 -> 0x0058a550).
+    at(Window::Gossip) = npc;
+    at(Window::Merchant) = npc;
+    CHECK(windowClosedWith(with, npc, Window::Merchant) == std::optional<Window>(Window::Gossip));
+    // Only the first in 0x00512e60's order: a trade before a book before
+    // gossip ...
+    at(Window::Trade) = npc;
+    CHECK(windowClosedWith(with, npc, Window::Merchant) == std::optional<Window>(Window::Trade));
+    // ... and never the one being opened, which wowee has already given its
+    // object.
+    at(Window::Trade) = 0;
+    CHECK(windowClosedWith(with, npc, Window::Gossip) == std::optional<Window>(Window::Merchant));
+    // A window open with another object stays.
+    at(Window::Gossip) = other;
+    at(Window::Merchant) = 0;
+    CHECK_FALSE(windowClosedWith(with, npc, Window::Merchant).has_value());
+    CHECK(windowClosedWith(with, other) == std::optional<Window>(Window::Gossip));
+}
