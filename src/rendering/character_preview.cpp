@@ -23,6 +23,7 @@
 #include "pipeline/item_textures.hpp"
 #include "pipeline/m2_asset_loader.hpp"
 #include "core/logger.hpp"
+#include <cstdlib>
 #include "core/application.hpp"
 #include <imgui.h>
 #include <backends/imgui_impl_vulkan.h>
@@ -193,9 +194,27 @@ void CharacterPreview::createFBO() {
     VmaAllocator allocator = vkCtx_->getAllocator();
 
     // 1. Create off-screen render target with depth
+    // WOWEE_PREVIEW_MSAA=1|2|4|8 overrides the preview's own sample count. A
+    // diagnostic for the NVIDIA device loss at character select (#154), which
+    // needs scene MSAA on and a draw into this 4x pass: it separates "the
+    // preview's multisampling" from "the scene's".
+    static const VkSampleCountFlagBits previewSamples = [] {
+        const char* v = std::getenv("WOWEE_PREVIEW_MSAA");
+        if (!v || !*v) return VK_SAMPLE_COUNT_4_BIT;
+        switch (std::atoi(v)) {
+            case 1: return VK_SAMPLE_COUNT_1_BIT;
+            case 2: return VK_SAMPLE_COUNT_2_BIT;
+            case 8: return VK_SAMPLE_COUNT_8_BIT;
+            default: return VK_SAMPLE_COUNT_4_BIT;
+        }
+    }();
+    if (previewSamples != VK_SAMPLE_COUNT_4_BIT) {
+        LOG_WARNING("CharacterPreview: WOWEE_PREVIEW_MSAA - ", static_cast<int>(previewSamples),
+                    "x instead of 4x");
+    }
     renderTarget_ = std::make_unique<VkRenderTarget>();
     if (!renderTarget_->create(*vkCtx_, fboWidth_, fboHeight_, VK_FORMAT_R8G8B8A8_UNORM, true,
-                               VK_SAMPLE_COUNT_4_BIT)) {
+                               previewSamples)) {
         LOG_ERROR("CharacterPreview: failed to create render target");
         renderTarget_.reset();
         return;
