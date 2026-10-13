@@ -162,20 +162,12 @@ ScenePick pickScene(game::GameHandler& gameHandler,
                     pick.deadUnitGuid = guid;
                 }
             } else {
+                // Whatever its reaction: 0x004f9550 ranks the models it meets by
+                // what they are (0x004f6270 - living, lootable corpse, object),
+                // never by whether the player may attack them.
                 if (centerT < pick.livingUnitCenterT) {
                     pick.livingUnitCenterT = centerT;
                     pick.livingUnitGuid = guid;
-                }
-                if (type == game::ObjectType::UNIT) {
-                    auto unit = std::static_pointer_cast<game::Unit>(entity);
-                    // A corpse still answers isHostile(), and a hostile is picked
-                    // ahead of everything - hence the liveness check above it.
-                    const bool hostile = unit->isHostile() ||
-                                         gameHandler.isAggressiveTowardPlayer(guid);
-                    if (hostile && hitT < pick.hostileUnitT) {
-                        pick.hostileUnitT = hitT;
-                        pick.hostileUnitGuid = guid;
-                    }
                 }
             }
         } else if (type == game::ObjectType::GAMEOBJECT) {

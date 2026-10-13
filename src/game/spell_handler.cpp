@@ -1715,26 +1715,13 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
             owner_.raiseUiError(castFailureMessage(owner_, spellId, 0x6d, -1));
             return;
         }
-        if (targetType == ObjectType::UNIT) {
-            // Neutral combat creatures (yellow-name mobs such as Goretusks)
-            // are valid Charge targets even though they are not inherently
-            // hostile. Match normal right-click combat by rejecting only
-            // service NPCs and targets the server explicitly marks as
-            // non-attackable/immune, rather than requiring hostile faction.
-            constexpr uint32_t UNIT_FLAG_NON_ATTACKABLE = 0x00000002;
-            constexpr uint32_t UNIT_FLAG_IMMUNE_TO_PC   = 0x00000100;
-            constexpr uint32_t UNIT_FLAG_NOT_SELECTABLE = 0x02000000;
-            constexpr uint32_t kBlockedChargeFlags =
-                UNIT_FLAG_NON_ATTACKABLE |
-                UNIT_FLAG_IMMUNE_TO_PC |
-                UNIT_FLAG_NOT_SELECTABLE;
-            const bool hostileOrAggressive =
-                unit->isHostile() || owner_.isAggressiveTowardPlayer(target);
-            const bool clearlyFriendly = unit->isInteractable() && !hostileOrAggressive;
-            if (clearlyFriendly || (unit->getUnitFlags() & kBlockedChargeFlags) != 0) {
-                owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedBadTargets, -1));
-                return;
-            }
+        // An enemy spell takes a unit the player may attack (0x0080bc80 asking
+        // 0x00729740), else is refused with a target: SPELL_FAILED_BAD_TARGETS
+        // (0x0080cce0). Neutral creatures pass; a friendly one, or one flagged
+        // out of reach or immune to players, does not.
+        if (!owner_.unitMayAttack(owner_.getPlayerGuid(), target)) {
+            owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedBadTargets, -1));
+            return;
         }
         float tx = entity->getX(), ty = entity->getY(), tz = entity->getZ();
         float dx = tx - owner_.movementInfoRef().x;

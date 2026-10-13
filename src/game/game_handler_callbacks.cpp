@@ -2381,10 +2381,6 @@ uint64_t GameHandler::getUnitMeleeTarget(uint64_t guid) const {
     return combatHandler_ ? combatHandler_->getUnitMeleeTarget(guid) : 0;
 }
 
-bool GameHandler::isAggressiveTowardPlayer(uint64_t guid) const {
-    return combatHandler_ ? combatHandler_->isAggressiveTowardPlayer(guid) : false;
-}
-
 uint64_t GameHandler::getLastMeleeSwingMs() const {
     return combatHandler_ ? combatHandler_->getLastMeleeSwingMs() : 0;
 }

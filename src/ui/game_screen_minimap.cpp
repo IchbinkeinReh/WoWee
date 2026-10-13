@@ -760,8 +760,10 @@ void GameScreen::renderMinimapNpcDots(const MinimapFrame& frame, const EntityLis
                     if (!nm.empty()) ImGui::SetTooltip("%s (quest)", nm.c_str());
                 }
             } else {
-                ImU32 baseDot = unit->isHostile() ? IM_COL32(220, 70, 70, 220) : IM_COL32(245, 245, 245, 210);
-                frame.drawList->AddCircleFilled(ImVec2(sx, sy), 1.0f, baseDot);
+                // One colour for all: the client draws no dot for every unit,
+                // so this overlay of WoWee's own takes no view of a unit's
+                // reaction either.
+                frame.drawList->AddCircleFilled(ImVec2(sx, sy), 1.0f, IM_COL32(245, 245, 245, 210));
             }
         }
     }

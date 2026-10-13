@@ -188,9 +188,6 @@ struct ScenePick {
     uint64_t closestGuid = 0;          ///< Nearest hit of any pickable type.
     float    closestT = 1e30f;
 
-    uint64_t hostileUnitGuid = 0;      ///< Nearest *living* hostile unit.
-    float    hostileUnitT = 1e30f;
-
     uint64_t livingUnitGuid = 0;       ///< Nearest living unit or player, by centre.
     float    livingUnitCenterT = 1e30f;
     uint64_t deadUnitGuid = 0;         ///< Nearest corpse, by centre.
@@ -220,7 +217,7 @@ struct ScenePick {
 
     /// Resolve to the one thing under the cursor: a unit unless an object's
     /// centre is clearly in front of it, so a creature is never lost to a
-    /// decorative or backing object behind it. A hostile keeps its priority.
+    /// decorative or backing object behind it.
     ///
     /// This and not closestGuid is what a caller wants. closestGuid is the
     /// nearest *entry point* of anything pickable, and a game object's sphere
@@ -238,7 +235,7 @@ struct ScenePick {
         constexpr float kUnitOverGoBias = 2.0f;
         const uint64_t unit = unitGuid();
         if (unit != 0 && (objectGuid == 0 || unitCenterT() <= objectCenterT + kUnitOverGoBias)) {
-            return hostileUnitGuid != 0 ? hostileUnitGuid : unit;
+            return unit;
         }
         if (objectGuid != 0) return objectGuid;
         return 0;

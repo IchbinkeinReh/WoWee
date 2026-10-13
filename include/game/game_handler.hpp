@@ -1053,7 +1053,6 @@ public:
     bool isInCombat() const;
     bool isInCombatWith(uint64_t guid) const;
     uint64_t getAutoAttackTargetGuid() const;
-    bool isAggressiveTowardPlayer(uint64_t guid) const;
     /// Another unit's melee target from its SMSG_ATTACKSTART (CGUnit_C
     /// +0xa20); 0 for none.
     uint64_t getUnitMeleeTarget(uint64_t guid) const;

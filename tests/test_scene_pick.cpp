@@ -21,7 +21,6 @@ using wowee::ui::ScenePick;
 namespace {
 constexpr uint64_t kVendor = 0xF130000001u;
 constexpr uint64_t kStall  = 0xF110000002u;
-constexpr uint64_t kWolf   = 0xF130000003u;
 constexpr uint64_t kCorpse = 0xF130000004u;
 }  // namespace
 
@@ -53,15 +52,6 @@ TEST_CASE("an object clearly in front of the unit takes it") {
     // Just inside the bias, and the unit keeps it.
     pick.objectCenterT = 12.5f;
     CHECK(pick.resolve() == kVendor);
-}
-
-TEST_CASE("a hostile outranks whatever else is under the cursor") {
-    ScenePick pick;
-    pick.livingUnitGuid = kVendor;
-    pick.livingUnitCenterT = 6.0f;
-    pick.hostileUnitGuid = kWolf;
-    pick.hostileUnitT = 9.0f;
-    CHECK(pick.resolve() == kWolf);
 }
 
 TEST_CASE("a corpse is picked only when nothing living is there") {
