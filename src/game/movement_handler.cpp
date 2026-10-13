@@ -8,6 +8,7 @@
 #include "game/update_field_table.hpp"
 #include "game/transport_manager.hpp"
 #include "game/entity.hpp"
+#include "game/monster_move_flags.hpp"
 #include "network/world_socket.hpp"
 #include "network/packet.hpp"
 #include "network/wire_format.hpp"
@@ -1867,8 +1868,13 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
     if (!entity) {
         return;
     }
+    // Its movement flags, and whether a spline still carries it, as the
+    // handler finds them (0x0073c8e0); the new move sets them below.
+    const bool wasOnSpline = onMoveSpline(data.guid);
+    const uint32_t moveFlagsBefore = entity->getReportedMoveFlags();
+    const uint32_t moveSplineFlags = isPreWotlk() ? 0u : data.splineFlags;
     // Its move spline (+0xbc, 0x0098c770): a path to run, or a stop.
-    noteMoveSpline(data.guid, data.hasDest, isPreWotlk() ? 0u : data.splineFlags, data.duration);
+    noteMoveSpline(data.guid, data.hasDest, moveSplineFlags, data.duration);
 
     // Classic/TBC creature patrols encode ground locomotion in the spline:
     // RUNMODE set means Run, while a clear bit means Walk. Publish it before
@@ -1923,6 +1929,22 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
         const float facingBefore = entity->getOrientation();
         // What a move too short to launch a spline faces at once.
         const float orientation = finalFacing.value_or(facingBefore);
+        // The path's length from where the unit is drawn, through the
+        // packet's start, waypoints and destination: one too short starts
+        // no spline (0x0073c8e0).
+        float pathLength = 0.0f;
+        {
+            glm::vec3 at(entity->getX(), entity->getY(), entity->getZ());
+            auto through = [&](const glm::vec3& next) {
+                pathLength += glm::length(next - at);
+                at = next;
+            };
+            const glm::vec3 startCanonical = core::coords::serverToCanonical(glm::vec3(data.x, data.y, data.z));
+            if (glm::dot(startCanonical - at, startCanonical - at) >= 0.00077160494f) through(startCanonical);
+            for (const auto& wp : data.waypoints)
+                through(core::coords::serverToCanonical(glm::vec3(wp.x, wp.y, wp.z)));
+            through(destCanonical);
+        }
 
         // Build full path: start → waypoints → destination (all in canonical coords)
         if (!data.waypoints.empty()) {
@@ -1947,6 +1969,12 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
         entity->faceAlongMove(finalFacing,
                               keepsFacing ? std::optional<float>(facingBefore) : std::nullopt,
                               inverted);
+        // Forward along it - backward on an inverted one - until it ends,
+        // unless it is cyclic (0x006eb680, 0x006eb0b0).
+        entity->setMonsterMoveFlags(
+            monster_move::afterMonsterMove(moveFlagsBefore, wasOnSpline,
+                                           pathLength > monster_move::kMinSplineLength, moveSplineFlags),
+            (moveSplineFlags & monster_move::kSplineCyclic) == 0);
 
         if (owner_.creatureMoveCallbackRef()) {
             owner_.creatureMoveCallbackRef()(data.guid,
@@ -1983,6 +2011,10 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
             }
         }
     }
+    // A stop, or no path: every way it moved stops (0x006f11b0 ->
+    // 0x006e9980).
+    if (!data.hasDest)
+        entity->setMonsterMoveFlags(monster_move::afterMonsterMove(moveFlagsBefore, wasOnSpline, false, 0), false);
 }
 
 bool MovementHandler::holdForVehicle(const network::Packet& packet, uint64_t mover, uint64_t transport, uint8_t seat,
@@ -2146,7 +2178,12 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
 
     glm::vec3 startLocalCanonical = owner_.getTransportManager()->serverToTransportLocal(
         transportGuid, glm::vec3(localX, localY, localZ));
-    noteMoveSpline(moverGuid, hasDest && duration > 0, isPreWotlk() ? 0u : splineFlags, duration);
+    // Its movement flags as the handler finds them (0x0073c8e0); the move
+    // sets them below.
+    const bool wasOnSpline = onMoveSpline(moverGuid);
+    const uint32_t moveFlagsBefore = entity->getReportedMoveFlags();
+    const uint32_t moveSplineFlags = isPreWotlk() ? 0u : splineFlags;
+    noteMoveSpline(moverGuid, hasDest && duration > 0, moveSplineFlags, duration);
 
     if (hasDest && duration > 0) {
         glm::vec3 destLocalCanonical = owner_.getTransportManager()->serverToTransportLocal(
@@ -2161,11 +2198,18 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         }
 
         owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, destLocalCanonical, false, 0.0f);
+        const float pathLength =
+            glm::length(destWorld - glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
         entity->startMoveTo(destWorld.x, destWorld.y, destWorld.z, facingAngle, duration / 1000.0f);
         // Along the path, then the facing asked for on arriving - as
         // handleMonsterMove does.
         entity->faceAlongMove(moveType >= 2 ? std::optional<float>(facingAngle) : std::nullopt,
                               std::nullopt, false);
+        // Forward along it until it ends, as handleMonsterMove leaves them.
+        entity->setMonsterMoveFlags(
+            monster_move::afterMonsterMove(moveFlagsBefore, wasOnSpline,
+                                           pathLength > monster_move::kMinSplineLength, moveSplineFlags),
+            (moveSplineFlags & monster_move::kSplineCyclic) == 0);
 
         if (entity->getType() == ObjectType::UNIT && owner_.creatureMoveCallbackRef())
             owner_.creatureMoveCallbackRef()(moverGuid, destWorld.x, destWorld.y, destWorld.z, duration);
@@ -2177,6 +2221,8 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         glm::vec3 startWorld = owner_.getTransportManager()->getPlayerWorldPosition(transportGuid, startLocalCanonical);
         owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, startLocalCanonical, false, 0.0f);
         entity->setPosition(startWorld.x, startWorld.y, startWorld.z, facingAngle);
+        // A stop: every way it moved stops (0x006f11b0 -> 0x006e9980).
+        entity->setMonsterMoveFlags(monster_move::afterMonsterMove(moveFlagsBefore, wasOnSpline, false, 0), false);
         if (entity->getType() == ObjectType::UNIT && owner_.creatureMoveCallbackRef())
             owner_.creatureMoveCallbackRef()(moverGuid, startWorld.x, startWorld.y, startWorld.z, 0);
     }

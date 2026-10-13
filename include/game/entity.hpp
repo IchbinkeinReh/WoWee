@@ -18,6 +18,7 @@
 #include <chrono>
 #include "math/spline.hpp"
 #include "game/flat_field_map.hpp"
+#include "game/monster_move_flags.hpp"
 
 namespace wowee {
 namespace game {
@@ -501,6 +502,7 @@ public:
         const uint32_t before = reportedMoveFlags_;
         const bool wasLaunched = launched_;
         reportedMoveFlags_ = flags;
+        splineFlagsArrive_ = false;
         const bool falling = (flags & kFalling) != 0;
         if (verticalSpeed) launched_ = falling && *verticalSpeed != 0.0f;
         else if (kind == MoveOpcodeKind::Jump) launched_ = falling;
@@ -521,7 +523,19 @@ public:
     [[nodiscard]] uint32_t getReportedMoveFlags() const { return reportedMoveFlags_; }
     /// The flags of a create or movement block's movement section, which
     /// the client takes as they are.
-    void setBlockMoveFlags(uint32_t flags) { reportedMoveFlags_ = flags; }
+    void setBlockMoveFlags(uint32_t flags) {
+        reportedMoveFlags_ = flags;
+        splineFlagsArrive_ = false;
+    }
+    /// The flags a monster move leaves (monster_move::afterMonsterMove),
+    /// given after its move has been started here. `arrives` - a spline that
+    /// is not cyclic - takes forward and back off again once the move is
+    /// over (0x006eb0b0), at once if it never got under way.
+    void setMonsterMoveFlags(uint32_t flags, bool arrives) {
+        reportedMoveFlags_ = flags;
+        splineFlagsArrive_ = arrives;
+        arriveSplineFlags();
+    }
 
     /// CMovement::GetCurrentSpeed (0x00987570) on the flags last received:
     /// nothing without a direction flag (0xc0000f); on a spline that
@@ -632,6 +646,7 @@ public:
             if (movingByFlags_) advanceByFlags(deltaTime);
             else advanceSegment(deltaTime);
         }
+        arriveSplineFlags();
         updateModelFacing();
     }
 
@@ -722,6 +737,14 @@ private:
     static constexpr float kFlagDeadReckonLimitSec = 1.0f;
 
     static float wrapAngle(float a) { return std::remainder(a, 2.0f * kPi); }
+
+    /// 0x006eb0b0 -> 0x0098bd10: the spline over, forward and back (and a
+    /// pending stop) go.
+    void arriveSplineFlags() {
+        if (!splineFlagsArrive_ || isActivelyMoving()) return;
+        reportedMoveFlags_ = monster_move::arrived(reportedMoveFlags_);
+        splineFlagsArrive_ = false;
+    }
 
     void resetMotionExtras() {
         movingByFlags_ = false;
@@ -850,6 +873,9 @@ private:
     // The last movement packet's flags, and whether the fall in them is a
     // jump's; see reportMoveFlags.
     uint32_t reportedMoveFlags_ = 0;
+    // A monster move's spline set forward or back in them, which its end
+    // takes off; see setMonsterMoveFlags.
+    bool splineFlagsArrive_ = false;
     bool launched_ = false;
     // Asked for its locomotion again; see takeLocomotionRequest.
     bool locomotionRequested_ = false;

@@ -732,3 +732,66 @@ TEST_CASE("A moving entity's velocity is its direction times its speed (0x006fed
     e.updateMovement(2.5f);
     CHECK(glm::length(e.getMoveVelocity()) == Catch::Approx(0.0f));
 }
+
+// ── A monster move's movement flags (0x0073c8e0, 0x006eb0b0) ────────────
+
+TEST_CASE("A monster move's spline moves the unit forward, its end stops it", "[entity][monstermove]") {
+    namespace mm = monster_move;
+    // From standing: everything stopped first, then forward.
+    CHECK(mm::afterMonsterMove(0, false, true, 0) == 0x1u);
+    // An inverted spline goes backward.
+    CHECK(mm::afterMonsterMove(0x1u, false, true, mm::kSplineOrientInversed) == 0x2u);
+    // Still on a spline: what it had stays but the pending stop and moves.
+    CHECK(mm::afterMonsterMove(0x1u | 0x100u | 0x4000u, true, true, 0) == (0x1u | 0x100u));
+    // Not on one: strafing, turning, falling go before it starts; walking stays.
+    CHECK(mm::afterMonsterMove(0x4u | 0x10u | 0x1000u | 0x100u, false, true, 0) == (0x1u | 0x100u));
+    // A stop, or a path too short: every way of moving goes.
+    CHECK(mm::afterMonsterMove(0x1u | 0x100u, true, false, 0) == 0x100u);
+    // Rooted, a spline that neither falls nor arcs is not started.
+    CHECK(mm::afterMonsterMove(0x800u, false, true, 0) == 0x800u);
+    // ...one that falls is, the root left pending.
+    CHECK(mm::afterMonsterMove(0x800u, false, true, mm::kSplineFalling) == (0x1u | 0x100000u));
+    // Into or out of a transport, no spline: stopped.
+    CHECK(mm::afterMonsterMove(0x1u, true, true, mm::kSplineTransportEnter) == 0u);
+    CHECK(mm::arrived(0x1u | 0x100u | 0x4000u) == 0x100u);
+}
+
+TEST_CASE("A unit on a monster move's spline reads forward until it arrives", "[entity][monstermove]") {
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveTo(10.0f, 0.0f, 0.0f, 0.0f, 2.0f);
+    e.setMonsterMoveFlags(monster_move::afterMonsterMove(e.getReportedMoveFlags(), false, true, 0), true);
+    CHECK((e.getReportedMoveFlags() & 0x1u) != 0);
+    // Moving forward faster than twice its walk speed, as the spell reach asks.
+    CHECK(e.currentSpeed() == Catch::Approx(5.0f));
+    e.updateMovement(1.0f);
+    CHECK((e.getReportedMoveFlags() & 0x1u) != 0);
+    e.updateMovement(1.5f);
+    CHECK(e.getReportedMoveFlags() == 0u);
+    CHECK(e.currentSpeed() == 0.0f);
+}
+
+TEST_CASE("A cyclic spline keeps the unit moving, a move that never starts does not", "[entity][monstermove]") {
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveTo(10.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+    e.setMonsterMoveFlags(0x1u, /*arrives=*/false);
+    e.updateMovement(5.0f);
+    CHECK(e.getReportedMoveFlags() == 0x1u);
+
+    // A destination where it already is: no move under way, forward goes at once.
+    Entity f;
+    f.setPosition(1.0f, 1.0f, 1.0f, 0.0f);
+    f.startMoveTo(1.0f, 1.0f, 1.0f, 0.0f, 1.0f);
+    f.setMonsterMoveFlags(0x1u, true);
+    CHECK(f.getReportedMoveFlags() == 0u);
+
+    // A movement packet's own flags replace the spline's, which then end nothing.
+    Entity g;
+    g.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    g.startMoveTo(10.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+    g.setMonsterMoveFlags(0x1u, true);
+    g.reportMoveFlags(0x1u | 0x4u, MoveOpcodeKind::None);
+    g.updateMovement(5.0f);
+    CHECK(g.getReportedMoveFlags() == (0x1u | 0x4u));
+}
