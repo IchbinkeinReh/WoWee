@@ -917,40 +917,6 @@ unit_target::Side relationSide(GameHandler& gh, const Entity& e) {
     return s;
 }
 
-/// 0x007251c0 asked by a unit the player controls - their pet, or a
-/// vehicle they drive - 0 to 7. Itself, or one with the same player behind
-/// it, is friendly (4); one in a duel with that player's, by its side; one
-/// behind whom is the player's group, else both free-for-all, hostile (1);
-/// otherwise as it is to the player, whose faction the pet carries.
-int controlledReaction(GameHandler& gh, const std::shared_ptr<Entity>& caster, const std::shared_ptr<Entity>& unit) {
-    if (unit->getGuid() == caster->getGuid()) return unit_target::kReactionFriendly;
-    if (!unit->isUnit()) return 3;
-    const auto& u = static_cast<const Unit&>(*unit);
-    if ((entityField(*caster, UF::UNIT_FIELD_FLAGS) & unit_target::kFlagPlayerControlled) != 0 &&
-        (entityField(*unit, UF::UNIT_FIELD_FLAGS) & unit_target::kFlagPlayerControlled) != 0) {
-        const auto c1 = controllingPlayer(gh, caster);
-        const auto c2 = controllingPlayer(gh, unit);
-        bool grouped = false;
-        if (c1 && c2) {
-            const uint64_t a1 = entityGuidField(*c1, UF::PLAYER_DUEL_ARBITER);
-            const uint64_t a2 = entityGuidField(*c2, UF::PLAYER_DUEL_ARBITER);
-            const uint32_t t1 = entityField(*c1, UF::PLAYER_DUEL_TEAM);
-            const uint32_t t2 = entityField(*c2, UF::PLAYER_DUEL_TEAM);
-            if (t1 != 0 && t2 != 0 && a1 == a2) return t1 == t2 ? unit_target::kReactionFriendly : 1;
-            if (c1 == c2) return unit_target::kReactionFriendly;
-            const uint64_t me = gh.getPlayerGuid();
-            grouped = (c1->getGuid() == me && inPlayersParty(gh, c2->getGuid(), true)) ||
-                      (c2->getGuid() == me && inPlayersParty(gh, c1->getGuid(), true));
-        }
-        const auto pvp = [](const Entity& x) {
-            return unitPvpFlags(!isPreWotlk() && fieldIndex(UF::UNIT_FIELD_BYTES_2) != 0xFFFF,
-                                entityField(x, UF::UNIT_FIELD_BYTES_2), entityField(x, UF::UNIT_FIELD_FLAGS));
-        };
-        if (!grouped && (pvp(*caster) & pvp::kFreeForAll) != 0 && (pvp(*unit) & pvp::kFreeForAll) != 0) return 1;
-    }
-    return gh.playerReactionTo(u) - 1;
-}
-
 /// The caster's relations to the unit as 0x0080bc80 asks them.
 unit_target::Relations relationsOf(GameHandler& gh, const std::shared_ptr<Entity>& caster,
                                    const std::shared_ptr<Entity>& unit, uint32_t attrEx6) {
@@ -968,8 +934,9 @@ unit_target::Relations relationsOf(GameHandler& gh, const std::shared_ptr<Entity
         c.casterTeam = entityField(*c1, UF::PLAYER_DUEL_TEAM);
         c.unitTeam = entityField(*c2, UF::PLAYER_DUEL_TEAM);
     }
-    const int reaction = controlledReaction(gh, caster, unit);
-    const int back = gh.unitReactionToPlayer(static_cast<const Unit&>(*unit)) - 1;
+    // 0x007251c0 both ways round.
+    const int reaction = gh.unitReaction(*caster, *unit);
+    const int back = gh.unitReaction(*unit, *caster);
     r.mayAssist = unit_target::mayAssist(cs, us, reaction, false, c);
     r.mayAssistEx6 = unit_target::mayAssist(cs, us, reaction, (attrEx6 & 0x8u) != 0, c);
     r.mayAttack = unit_target::mayAttack(cs, us, reaction, back, c);
@@ -1571,15 +1538,14 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
                     // it as an invalid target - which is what a heal aimed at
                     // some enemies and not others looked like. A dead unit
                     // cannot take a buff either, and a player may always be
-                    // helped once their faction is friendly.
+                    // helped once their faction is friendly. The player's
+                    // reaction to it, friendly or better (0x007251c0).
                     // Health is deliberately not asked about: it is zero for a
                     // unit whose first update has not landed, and self-casting
                     // a heal meant for a party member because their health had
                     // not arrived yet would be a worse fault than the one this
                     // fixes.
-                    haveFriendlyTarget =
-                        !unit->isHostile() &&
-                        owner_.isFriendlyFaction(unit->getFactionTemplate());
+                    haveFriendlyTarget = owner_.playerReactionTo(*unit) >= 5;
                 }
             }
         }

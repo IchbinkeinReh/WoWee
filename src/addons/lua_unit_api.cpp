@@ -2303,14 +2303,7 @@ static int reactionBetween(lua_State* L, const char* first, const char* second) 
     auto* a = resolveUnit(L, first);
     auto* b = resolveUnit(L, second);
     if (!gh || !a || !b) return 0;
-    if (a == b) return 5;
-    const uint64_t me = gh->getPlayerGuid();
-    if (a->getGuid() == me && b->getType() == game::ObjectType::UNIT) return gh->playerReactionTo(*b);
-    if (b->getGuid() == me && a->getType() == game::ObjectType::UNIT) return gh->unitReactionToPlayer(*a);
-    // Between players, or two units neither of which is the player: what is
-    // known is each unit's hostility to the player, asked of the other one.
-    const game::Unit* other = a->getGuid() == me ? b : a;
-    return other->isHostile() ? 2 : 5;
+    return gh->unitReaction(*a, *b) + 1;
 }
 
 /// UnitIsFriend(unit1, unit2): unit1 regards unit2 as friendly (0x00514050).

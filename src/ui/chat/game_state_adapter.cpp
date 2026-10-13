@@ -107,7 +107,7 @@ bool GameStateAdapter::entityIsHostile(uint64_t guid) const {
     auto entity = gameHandler_.getEntityManager().getEntity(guid);
     if (!entity) return false;
     auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
-    return unit && gameHandler_.isHostileFactionPublic(unit->getFactionTemplate());
+    return unit && unit->isHostile();
 }
 
 } // namespace ui

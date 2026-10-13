@@ -182,6 +182,9 @@
     "FactionGroup": 3,
     "Flags": 2,
     "Friend0": 10,
+    "Friend1": 11,
+    "Friend2": 12,
+    "Friend3": 13,
     "FriendGroup": 4,
     "ID": 0
   },

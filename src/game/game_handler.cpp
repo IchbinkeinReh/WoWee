@@ -2885,27 +2885,134 @@ void GameHandler::loadFactionNameCache() const {
              factionRepListToId_.size(), " with reputation tracking");
 }
 
-int GameHandler::unitReactionToPlayer(const Unit& unit) const {
-    const uint32_t ft = unit.getFactionTemplate();
-    if (auto it = factionTemplateRepList_.find(ft);
-        it != factionTemplateRepList_.end() && it->second < initialFactions_.size()) {
-        const auto& standing = initialFactions_[it->second];
-        int rank = reputationStandingFor(standing.standing).id;
-        if (standing.flags & FACTION_FLAG_AT_WAR) rank = std::min(rank, 4);
-        return rank;
+namespace {
+
+uint32_t reactionField(const Entity& e, UF f) {
+    const uint16_t idx = fieldIndex(f);
+    return idx != 0xFFFF ? e.getField(idx) : 0u;
+}
+uint64_t reactionGuidField(const Entity& e, UF low) {
+    const uint16_t idx = fieldIndex(low);
+    if (idx == 0xFFFF) return 0;
+    return e.getField(idx) | (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
+}
+
+/// What 0x007251c0 reads of the player's standings and of the player.
+struct ReactionWorld {
+    const GameHandler& gh;
+    const std::unordered_map<uint32_t, reaction::FactionTemplate>& rows;
+    const std::unordered_map<uint32_t, uint8_t>* forcedReactions;
+    uint64_t activePlayer = 0;
+    uint64_t duelOpponent = 0;
+
+    const reaction::FactionTemplate* factionTemplate(uint32_t id) const {
+        auto it = rows.find(id);
+        return it != rows.end() ? &it->second : nullptr;
     }
-    if (unit.isHostile()) return 2;
+    /// 0x005d06a0: SMSG_SET_FORCED_REACTIONS.
+    bool forced(uint32_t faction, int& out) const {
+        if (!forcedReactions) return false;
+        auto it = forcedReactions->find(faction);
+        if (it == forcedReactions->end()) return false;
+        out = it->second;
+        return true;
+    }
+    /// 0x00718b30: Faction.dbc's ReputationListID not -1.
+    bool tracked(uint32_t faction) const { return gh.getRepListIdByFactionId(faction) != 0xFFFFFFFFu; }
+    /// 0x005d04b0, 0x005d0600: the standings of the first 128 indices.
+    bool atWar(uint32_t faction) const {
+        const uint32_t i = gh.getRepListIdByFactionId(faction);
+        return i < 0x80 && gh.isFactionAtWar(i);
+    }
+    int rank(uint32_t faction) const {
+        const uint32_t i = gh.getRepListIdByFactionId(faction);
+        if (i >= 0x80) return reaction::kNeutral;
+        const auto& all = gh.getInitialFactions();
+        return reaction::standingRank(i < all.size() ? all[i].standing : gh.factionBaseReputation(faction));
+    }
+};
+
+/// 0x0052c680 / 0x00512a00: one of the player's party or raid.
+bool inPlayersGroup(const GameHandler& gh, uint64_t guid) {
+    if (guid == 0) return false;
+    for (const auto& m : gh.getPartyData().members)
+        if (m.guid == guid) return true;
+    return false;
+}
+
+reaction::Player reactionPlayer(const GameHandler& gh, const Entity& p) {
+    reaction::Player r;
+    r.found = true;
+    r.guid = p.getGuid();
+    r.duelArbiter = reactionGuidField(p, UF::PLAYER_DUEL_ARBITER);
+    r.duelTeam = reactionField(p, UF::PLAYER_DUEL_TEAM);
+    r.playerFlags = reactionField(p, UF::PLAYER_FLAGS);
+    r.unitFlags2 = reactionField(p, UF::UNIT_FIELD_FLAGS_2);
+    r.grouped = inPlayersGroup(gh, r.guid);
+    return r;
+}
+
+reaction::Who reactionWho(const GameHandler& gh, const Entity& e) {
+    reaction::Who w;
+    w.guid = e.getGuid();
+    w.factionTemplate = reactionField(e, UF::UNIT_FIELD_FACTIONTEMPLATE);
+    w.unitFlags = reactionField(e, UF::UNIT_FIELD_FLAGS);
+    w.unitFlags2 = reactionField(e, UF::UNIT_FIELD_FLAGS_2);
+    w.pvpFlags = unitPvpFlags(!isPreWotlk() && fieldIndex(UF::UNIT_FIELD_BYTES_2) != 0xFFFF,
+                              reactionField(e, UF::UNIT_FIELD_BYTES_2), w.unitFlags);
+    // 0x004f5f20: the charmer, else the creator.
+    const auto up = [](const Entity& x) {
+        const uint64_t c = reactionGuidField(x, UF::UNIT_FIELD_CHARMEDBY);
+        return c != 0 ? c : reactionGuidField(x, UF::UNIT_FIELD_CREATEDBY);
+    };
+    w.charmerOrCreator = up(e);
+    if (e.getType() == ObjectType::PLAYER) w.self = reactionPlayer(gh, e);
+    // 0x00718b70: itself, else its charmer (else creator), when a player;
+    // else that one's.
+    const auto& em = gh.getEntityManager();
+    std::shared_ptr<Entity> u;
+    const Entity* at = &e;
+    if (w.charmerOrCreator != 0) {
+        u = em.getEntity(w.charmerOrCreator);
+        at = u.get();
+    }
+    if (at != nullptr) {
+        if (at->getType() == ObjectType::PLAYER) {
+            w.behind = reactionPlayer(gh, *at);
+        } else if (const uint64_t g = up(*at); g != 0) {
+            if (auto v = em.getEntity(g); v && v->getType() == ObjectType::PLAYER) w.behind = reactionPlayer(gh, *v);
+        }
+    }
+    return w;
+}
+
+}  // namespace
+
+int GameHandler::unitReaction(const Entity& asker, const Entity& unit) const {
+    ReactionWorld w{*this, factionTemplates_,
+                    combatHandler_ ? &combatHandler_->getForcedReactions() : nullptr, getPlayerGuid(),
+                    socialHandler_ ? socialHandler_->getDuelOpponentGuid() : 0};
+    return reaction::unitReaction(w, reactionWho(*this, asker), reactionWho(*this, unit));
+}
+
+int GameHandler::unitReactionToPlayer(const Unit& unit) const {
+    // 0x007251c0 asked by the unit about the player.
+    if (auto me = getEntityManager().getEntity(getPlayerGuid()); me && !factionTemplates_.empty())
+        return unitReaction(unit, *me) + 1;
+    // Before the player's own object or FactionTemplate.dbc: the templates
+    // as faction_hostility.cpp worked them out.
+    const uint32_t ft = unit.getFactionTemplate();
+    if (isHostileFaction(ft)) return 2;
     return isFriendlyFaction(ft) ? 5 : 4;
 }
 
 int GameHandler::playerReactionTo(const Unit& unit) const {
-    // 0x007251c0 asked by the player about a unit no player is behind: the
-    // unit's faction, if it has a standing, answers friendly (4) unless at
-    // war (1, 0x005d04b0); otherwise the player's template asks about the
-    // unit's (0x0071f770, 0x00715440). isFriendlyFaction already reads a
-    // standing's faction as "not at war".
-    if (unit.isHostile()) return 2;
-    return isFriendlyFaction(unit.getFactionTemplate()) ? 5 : 4;
+    // 0x007251c0 asked by the player about the unit.
+    if (auto me = getEntityManager().getEntity(getPlayerGuid()); me && !factionTemplates_.empty())
+        return unitReaction(*me, unit) + 1;
+    const uint32_t ft = unit.getFactionTemplate();
+    if (isHostileFaction(ft)) return 2;
+    return isFriendlyFaction(ft) ? 5 : 4;
 }
 
 bool GameHandler::playerMayAttackCreature(const Unit& unit) const {
@@ -2938,23 +3045,25 @@ bool GameHandler::playerMayAttackCreature(const Unit& unit) const {
 }
 
 int GameHandler::factionReactionToPlayer(uint32_t ft) const {
-    // 0x0071f770 and 0x00715440: the standing for a faction that has one
-    // (0x005d0600), else the template's own enemies, else neutral.
+    // 0x0071f770: the template asked about the player.
     if (ft == 0) return 4;
-    if (auto it = factionTemplateRepList_.find(ft);
-        it != factionTemplateRepList_.end() && it->second < initialFactions_.size()) {
-        return reputationStandingFor(initialFactions_[it->second].standing).id;
+    if (auto me = getEntityManager().getEntity(getPlayerGuid()); me && !factionTemplates_.empty()) {
+        ReactionWorld w{*this, factionTemplates_,
+                        combatHandler_ ? &combatHandler_->getForcedReactions() : nullptr, getPlayerGuid(),
+                        socialHandler_ ? socialHandler_->getDuelOpponentGuid() : 0};
+        return reaction::templateReactionTo(w, ft, reactionWho(*this, *me)) + 1;
     }
     auto it = factionRegardsPlayerHostile_.find(ft);
     return it != factionRegardsPlayerHostile_.end() && it->second ? 2 : 4;
 }
 
+bool GameHandler::playerRegardsHostile(const Unit& unit) const { return playerReactionTo(unit) <= 2; }
+
 void GameHandler::refreshUnitHostility() {
-    if (factionTemplateRepList_.empty()) return;
     for (const auto& [guid, entity] : getEntityManager().getEntities()) {
         if (!entity || !entity->isUnit()) continue;
         auto* unit = static_cast<Unit*>(entity.get());
-        unit->setHostile(isHostileFaction(unit->getFactionTemplate()));
+        unit->setHostile(playerRegardsHostile(*unit));
     }
 }
 

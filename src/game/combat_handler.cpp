@@ -834,6 +834,8 @@ void CombatHandler::handleSetForcedReactions(network::Packet& packet) {
         forcedReactions_[factionId] = static_cast<uint8_t>(reaction);
     }
     LOG_INFO("SMSG_SET_FORCED_REACTIONS: ", forcedReactions_.size(), " faction overrides");
+    // 0x005d06a0 answers before the standings: units are judged again.
+    owner_.refreshUnitHostility();
 }
 
 // ============================================================

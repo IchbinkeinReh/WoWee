@@ -306,6 +306,9 @@ public:
     void reportPlayer(uint64_t targetGuid, const std::string& reason);
     [[nodiscard]] bool hasPendingDuelRequest() const { return pendingDuelRequest_; }
     [[nodiscard]] const std::string& getDuelChallengerName() const { return duelChallengerName_; }
+    /// 0x00c22b60: the player challenged (0x005cf950) or challenging
+    /// (0x005cfb20), until the duel completes (0x005cfa90).
+    [[nodiscard]] uint64_t getDuelOpponentGuid() const { return duelOpponentGuid_; }
     [[nodiscard]] float getDuelCountdownRemaining() const {
         if (duelCountdownMs_ == 0) return 0.0f;
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -637,6 +640,7 @@ private:
     // Duel
     bool pendingDuelRequest_    = false;
     uint64_t duelChallengerGuid_= 0;
+    uint64_t duelOpponentGuid_ = 0;
     uint64_t duelArbiterGuid_   = 0;   // the duel flag; both answers name it
 
     // A join the server has not answered yet, and how long it has left.

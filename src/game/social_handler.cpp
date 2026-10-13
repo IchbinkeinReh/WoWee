@@ -1828,6 +1828,7 @@ void SocialHandler::proposeDuel(uint64_t targetGuid) {
     if (targetGuid == 0) { owner_.raiseUiError("You must target a player to challenge to a duel."); return; }
     auto packet = DuelProposedPacket::build(targetGuid);
     owner_.getSocket()->send(packet);
+    duelOpponentGuid_ = targetGuid;
     owner_.addSystemChatMessage("You have challenged your target to a duel.");
 }
 
@@ -1857,6 +1858,7 @@ void SocialHandler::handleDuelRequested(network::Packet& packet) {
         pendingDuelRequest_ = false;
         return;
     }
+    duelOpponentGuid_ = duelChallengerGuid_;
     duelChallengerName_.clear();
     auto entity = owner_.getEntityManager().getEntity(duelChallengerGuid_);
     if (auto* unit = dynamic_cast<Unit*>(entity.get()))
@@ -1882,6 +1884,7 @@ void SocialHandler::handleDuelComplete(network::Packet& packet) {
     uint8_t started = packet.readUInt8();
     pendingDuelRequest_ = false;
     duelCountdownMs_ = 0;
+    duelOpponentGuid_ = 0;
     if (!started) owner_.addSystemChatMessage("The duel was cancelled.");
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("DUEL_FINISHED", {});
 }

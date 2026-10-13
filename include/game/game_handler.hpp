@@ -3,6 +3,7 @@
 #include "game/quest_giver_status.hpp"
 #include "game/spell_mods.hpp"
 #include "game/ground_target.hpp"
+#include "game/unit_reaction.hpp"
 #include "game/calendar_data.hpp"
 #include "game/game_interfaces.hpp"
 #include "game/world_packets.hpp"
@@ -1783,27 +1784,26 @@ public:
         auto it = factionFriendlyMap_.find(factionTemplateId);
         return it != factionFriendlyMap_.end() ? it->second : false;
     }
-    /// Re-judge every unit's hostility, after the at-war state it came from
-    /// has changed. A unit's is worked out when it appears and kept.
+    /// Re-judge every unit's hostility, after what it comes from - the
+    /// player, the standings, the forced reactions - has changed. A unit's is
+    /// worked out when it appears and kept.
     void refreshUnitHostility();
+    /// How `asker` regards `unit` as the client works it out (0x007251c0,
+    /// unit_reaction.hpp): 0 hated to 7 exalted, UnitReaction less one.
+    [[nodiscard]] int unitReaction(const Entity& asker, const Entity& unit) const;
     /// How a unit regards the player, numbered as UnitReaction numbers it:
-    /// 1 hated to 8 exalted. For a faction the player has a standing with,
-    /// that standing - no better than neutral while at war - and otherwise 2
-    /// hostile, 5 friendly, 4 neither.
-    ///
-    /// Not the same question as isHostileFaction, which is whether the player
-    /// may attack it. The Kurenai are not attackable by an Alliance player at
-    /// any standing, but at Unfriendly they will not talk to one either, and
-    /// the server refuses the conversation on exactly this number.
+    /// 1 hated to 8 exalted - unitReaction(unit, player) + 1.
     [[nodiscard]] int unitReactionToPlayer(const Unit& unit) const;
-    /// How the player regards a unit - the other way round from
-    /// unitReactionToPlayer, and what deciding to attack asks (0x007251c0
-    /// with the player asking). For a faction the player has a standing
-    /// with the standing does not count: at war is 2 hostile and anything
-    /// else 5 friendly, so Dalaran's Kirin Tor, yellow at a neutral
-    /// standing, are not the player's to fight. Otherwise 2 hostile, 5
-    /// friendly, 4 neither, as the templates have it.
+    /// How the player regards a unit - unitReaction(player, unit) + 1, what
+    /// deciding to attack asks.
     [[nodiscard]] int playerReactionTo(const Unit& unit) const;
+    /// The player regards the unit as hostile or worse (0x007251c0 1 or
+    /// below): what Unit::isHostile keeps.
+    [[nodiscard]] bool playerRegardsHostile(const Unit& unit) const;
+    /// FactionTemplate.dbc, row by id, as 0x007251c0 reads it.
+    void setFactionTemplates(std::unordered_map<uint32_t, reaction::FactionTemplate> rows) {
+        factionTemplates_ = std::move(rows);
+    }
     /// Whether the player may attack a unit no player is behind
     /// (0x00729740, the player attacking): not one flagged out of reach of
     /// attack or of players, not one in a sanctuary, and not one the player
@@ -3228,7 +3228,6 @@ public:
 
     bool isMounted() const { return currentMountDisplayId_ != 0; }
     bool isHostileAttacker(uint64_t guid) const;
-    bool isHostileFactionPublic(uint32_t factionTemplateId) const { return isHostileFaction(factionTemplateId); }
     float getServerRunSpeed() const;
     /// The active mover's speeds: the player's, or a driven unit's own.
     MovementSpeeds moverSpeeds() const;
@@ -5095,6 +5094,7 @@ private:
     std::unordered_map<uint32_t, bool> factionFriendlyMap_;
     std::unordered_map<uint32_t, uint32_t> factionTemplateRepList_;
     std::unordered_map<uint32_t, bool> factionRegardsPlayerHostile_;
+    std::unordered_map<uint32_t, reaction::FactionTemplate> factionTemplates_;
 
     // Vehicle (WotLK): non-zero when player is seated in a vehicle
     uint32_t vehicleId_ = 0;

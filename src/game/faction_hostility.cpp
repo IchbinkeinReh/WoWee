@@ -144,8 +144,24 @@ void buildFactionHostilityMap(pipeline::AssetManager& assetManager, GameHandler&
     // the symmetric answer above: "Creature" (114) names the player's group
     // as its enemy, while the player's template has nothing against it.
     std::unordered_map<uint32_t, bool> regardsPlayerHostile;
+    // And every row whole, as 0x007251c0 reads it.
+    std::unordered_map<uint32_t, reaction::FactionTemplate> rows;
+    const bool hasEnemyList = ftDbc->getFieldCount() > ftEnemy0 + 3;
     for (uint32_t i = 0; i < ftDbc->getRecordCount(); i++) {
         uint32_t id = ftDbc->getUInt32(i, ftID);
+        {
+            reaction::FactionTemplate& row = rows[id];
+            row.id = id;
+            row.faction = ftDbc->getUInt32(i, ftFaction);
+            row.flags = ftDbc->getUInt32(i, ftFlags);
+            row.factionGroup = ftDbc->getUInt32(i, ftFG);
+            row.friendGroup = ftDbc->getUInt32(i, ftFriend);
+            row.enemyGroup = ftDbc->getUInt32(i, ftEnemy);
+            for (uint32_t f = 0; f < 4; ++f) {
+                if (hasEnemyList) row.enemies[f] = ftDbc->getUInt32(i, ftEnemy0 + f);
+                if (hasFriendList) row.friends[f] = ftDbc->getUInt32(i, ftFriend0 + f);
+            }
+        }
         uint32_t parentFaction = ftDbc->getUInt32(i, ftFaction);
         uint32_t factionGroup = ftDbc->getUInt32(i, ftFG);
         uint32_t friendGroup = ftDbc->getUInt32(i, ftFriend);
@@ -228,10 +244,12 @@ void buildFactionHostilityMap(pipeline::AssetManager& assetManager, GameHandler&
     for (const auto& [fid, f] : friendlyMap) { if (f) friendlyCount++; }
     LOG_INFO("Faction friendliness: ", friendlyCount, "/", friendlyMap.size(),
              " templates friendly; the rest are hostile or neutral");
+    gameHandler.setFactionTemplates(std::move(rows));
     gameHandler.setFactionTemplateRepList(std::move(templateRepList));
     gameHandler.setFactionRegardsPlayerHostileMap(std::move(regardsPlayerHostile));
     gameHandler.setFactionFriendlyMap(std::move(friendlyMap));
     gameHandler.setFactionHostileMap(std::move(factionMap));
+    gameHandler.refreshUnitHostility();
     LOG_INFO("Faction hostility for race ", static_cast<int>(playerRace), " (FT ", playerFtId, "): ",
         hostileCount, "/", ftDbc->getRecordCount(),
         " hostile (friendGroup=0x", std::hex, playerFriendGroup, ", enemyGroup=0x", playerEnemyGroup, std::dec, ")");

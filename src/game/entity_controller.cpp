@@ -1257,7 +1257,9 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         }
         else if (key == ufi.faction) {
             unit->setFactionTemplate(val);
-            unit->setHostile(owner_.isHostileFaction(val));
+            // The player's own template moves how everything regards them.
+            if (block.guid == owner_.getPlayerGuid()) owner_.refreshUnitHostility();
+            else unit->setHostile(owner_.playerRegardsHostile(*unit));
         } else if (key == ufi.boundingRadius) {
             unit->setBoundingRadius(bitsToFloat(val));
         } else if (key == ufi.combatReach) {
@@ -2092,7 +2094,7 @@ void EntityController::onCreateUnit(const UpdateBlock& block, std::shared_ptr<En
     bool unitInitiallyDead = applyUnitFieldsOnCreate(block, unit, ufi);
 
     // Hostility
-    unit->setHostile(owner_.isHostileFaction(unit->getFactionTemplate()));
+    unit->setHostile(owner_.playerRegardsHostile(*unit));
 
     // Spawn dispatch
     if (unit->getDisplayId() == 0) {
@@ -2164,8 +2166,9 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
         syncPreWotlkAurasFromFields(entity);
     }
 
-    // Hostility
-    unit->setHostile(owner_.isHostileFaction(unit->getFactionTemplate()));
+    // Hostility, and once the player is here, everything judged without them.
+    if (block.guid == owner_.getPlayerGuid()) owner_.refreshUnitHostility();
+    else unit->setHostile(owner_.playerRegardsHostile(*unit));
 
     // Spawn dispatch
     if (unit->getDisplayId() != 0) {
