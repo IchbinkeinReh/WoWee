@@ -3776,8 +3776,8 @@ void SpellHandler::handleTalentsInfo(network::Packet& packet) {
     }
 
     // No line about unspent points: 0x006cd770 -> 0x005c9e50 only updates the
-    // talent frame. This printed one in English at login.
-    if (!talentsInitialized_) talentsInitialized_ = true;
+    // talent frame. This printed one in English at login, and the flag that
+    // kept it to the first refresh went with it.
 }
 
 void SpellHandler::handleAchievementEarned(network::Packet& packet) {
@@ -4132,7 +4132,6 @@ void SpellHandler::resetAllState() {
 }
 
 void SpellHandler::resetTalentState() {
-    talentsInitialized_ = false;
     learnedTalents_[0].clear();
     learnedTalents_[1].clear();
     learnedGlyphs_[0].fill(0);

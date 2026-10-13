@@ -1007,18 +1007,16 @@ bool XpGainParser::parse(network::Packet& packet, XpGainData& data) {
     data.victimGuid = packet.readUInt64();
     data.totalXp = packet.readUInt32();
     data.type = packet.readUInt8();
-    if (data.type == 0) {
-        // Kill XP: float groupRate (1.0 = solo) + uint8 RAF flag
-        // Validate before reading conditional fields
-        if (packet.hasRemaining(5)) {
-            float groupRate = packet.readFloat();
-            packet.readUInt8(); // RAF bonus flag
-            // Group bonus = total - (total / rate); only if grouped (rate > 1)
-            if (groupRate > 1.0f) {
-                data.groupBonus = data.totalXp - static_cast<uint32_t>(data.totalXp / groupRate);
-            }
-        }
+    // A kill goes on with the experience before the rested bonus (uint32)
+    // and the group rate (float), then the Recruit-a-Friend byte. This read
+    // the uint32 as the float, so the "group bonus" it worked out was noise;
+    // the group and rested wordings that would want them are not given (see
+    // CombatHandler::handleXpGain), so they are passed over.
+    if (data.type == 0 && packet.hasRemaining(8)) {
+        packet.readUInt32();  // experience without the rested bonus
+        packet.readFloat();   // group rate
     }
+    if (packet.hasRemaining(1)) packet.readUInt8();  // Recruit-a-Friend bonus
     LOG_DEBUG("XP gain: ", data.totalXp, " xp (type=", static_cast<int>(data.type), ")");
     return data.totalXp > 0;
 }

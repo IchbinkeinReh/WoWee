@@ -2265,7 +2265,6 @@ struct XpGainData {
     uint64_t victimGuid = 0;    // 0 for non-kill XP (quest, exploration)
     uint32_t totalXp = 0;
     uint8_t type = 0;           // 0 = kill, 1 = non-kill
-    uint32_t groupBonus = 0;
 
     [[nodiscard]] bool isValid() const { return totalXp > 0; }
 };

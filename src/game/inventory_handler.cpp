@@ -3142,14 +3142,6 @@ void InventoryHandler::refreshMailList() {
     owner_.getSocket()->send(packet);
 }
 
-const char* InventoryHandler::mailResultText(uint32_t error) {
-    // The enUS words of the game error 0x005717b0 shows for the code; the
-    // line itself is put up in the interface's words (mailError). 0, 1 (an
-    // inventory code of its own) and 20 have none.
-    if (error == 0 || error == 1 || error == 20) return nullptr;
-    return mailError(error).enUS;
-}
-
 void InventoryHandler::refuseSend(const std::string& reason, const char* logLine) {
     // The compose frame disables its Send button the moment it is pressed and
     // re-enables it only when it hears how the send went. A refusal on this

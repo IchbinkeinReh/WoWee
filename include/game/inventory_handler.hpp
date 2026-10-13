@@ -339,13 +339,6 @@ public:
     bool hasNewMail() const { return hasNewMail_; }
     void openMailbox(uint64_t guid);
     void closeMailbox();
-    /// What the server's mail refusal means, in words.
-    ///
-    /// SMSG_SEND_MAIL_RESULT carries a number from MailResponseResult and the
-    /// client printed it bare - "Failed to send mail (error 19)" says nothing
-    /// about what to do differently, and 19 is the one a player can actually
-    /// act on: something on the letter cannot be mailed.
-    static const char* mailResultText(uint32_t error);
 
     /// Put paper in the compose frame, so its Send button can be enabled.
     void selectDefaultStationery();

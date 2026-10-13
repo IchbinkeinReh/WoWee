@@ -641,7 +641,6 @@ private:
     std::unordered_map<uint32_t, TalentEntry> talentCache_;
     std::unordered_map<uint32_t, TalentTabEntry> talentTabCache_;
     bool talentDbcLoaded_ = false;
-    bool talentsInitialized_ = false;
 
     // Auras
     std::vector<AuraSlot> playerAuras_;
