@@ -6187,6 +6187,8 @@ void InventoryHandler::initiateTrade(uint64_t targetGuid) {
     // ERR_INITIATE_TRADE_S with the name (0x0067d770): now if it is known,
     // otherwise once it comes (0x00703c60).
     auto nit = owner_.getPlayerNameCache().find(targetGuid);
+    // Whom the request went to, for the refusals that name them.
+    tradeRequestName() = nit != owner_.getPlayerNameCache().end() ? nit->second : std::string{};
     if (nit != owner_.getPlayerNameCache().end() && !nit->second.empty()) {
         tradeRequestNameGuid_ = 0;
         owner_.addSystemChatMessage(interfaceFormat("ERR_INITIATE_TRADE_S",
@@ -6201,6 +6203,7 @@ void InventoryHandler::initiateTrade(uint64_t targetGuid) {
 void InventoryHandler::onPlayerNameKnown(uint64_t guid, const std::string& name) {
     if (guid == 0 || guid != tradeRequestNameGuid_) return;
     tradeRequestNameGuid_ = 0;
+    tradeRequestName() = name;
     owner_.addSystemChatMessage(interfaceFormat("ERR_INITIATE_TRADE_S",
         "You have requested to trade with %s.", {name}));
 }
