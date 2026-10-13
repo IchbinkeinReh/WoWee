@@ -196,3 +196,32 @@ TEST_CASE("no unit: the cursor, or the refusals 0x32, 0xc and 0xb (0x0080cce0)",
     REQUIRE(noUnitFailure(0x200, 0, kUnitAlly, false, true, true) == kFailedMainhand);
     REQUIRE(noUnitFailure(0x200, 0, kUnitAlly, true, true, true) == 0);
 }
+
+TEST_CASE("AttributesEx5 0x800 lets a unit stand for its own target (0x007ffc40)", "[unit_target]") {
+    Relations ally;
+    ally.mayAssist = ally.mayAssistEx6 = true;
+    Relations enemy;
+    enemy.mayAttack = true;
+    // An enemy wanted: an ally gives its target if that may be attacked.
+    REQUIRE(retarget(kUnitEnemy, ally, true, enemy) == Retarget::ItsTarget);
+    REQUIRE(retarget(kUnitEnemy, ally, true, ally) == Retarget::None);
+    REQUIRE(retarget(kUnitEnemy, ally, false, {}) == Retarget::None);
+    REQUIRE(retarget(kUnitEnemy, enemy, true, ally) == Retarget::Itself);
+    // An ally wanted: an enemy gives its target if that may be helped.
+    REQUIRE(retarget(kUnitAlly, enemy, true, ally) == Retarget::ItsTarget);
+    REQUIRE(retarget(kUnitAlly, enemy, true, enemy) == Retarget::None);
+    REQUIRE(retarget(kUnitAlly, ally, true, enemy) == Retarget::Itself);
+    // A party or raid member wanted: only one in the party or raid.
+    REQUIRE(retarget(kUnitParty, enemy, true, ally) == Retarget::None);
+    Relations member = ally;
+    member.inParty = true;
+    REQUIRE(retarget(kUnitParty, enemy, true, member) == Retarget::ItsTarget);
+    REQUIRE(retarget(kUnitRaid, enemy, true, member) == Retarget::None);
+    member.inRaid = true;
+    REQUIRE(retarget(kUnitRaid, enemy, true, member) == Retarget::ItsTarget);
+    // Neither side wanted: itself.
+    REQUIRE(retarget(kUnit, enemy, true, ally) == Retarget::Itself);
+    // An ally wanted drops an enemy wanted; otherwise nothing changes.
+    REQUIRE(retargetRequired(kUnitAlly | kUnitEnemy) == kUnitAlly);
+    REQUIRE(retargetRequired(kUnitEnemy | kUnit) == (kUnitEnemy | kUnit));
+}

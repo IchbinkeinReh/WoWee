@@ -564,6 +564,7 @@ private:
     struct UnitTake {
         bool taken = false;
         uint32_t required = 0;
+        uint64_t unit = 0;  ///< the unit taken: the one asked, or its target (0x007ffc40)
     };
     UnitTake takeUnit(uint32_t spellId, uint64_t caster, uint64_t unitGuid, uint32_t required, bool say) const;
     /// The cursor holds the spell for a unit (0x0080cce0).

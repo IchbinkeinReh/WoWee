@@ -980,14 +980,29 @@ uint32_t creatureTypeOf(GameHandler& gh, const Entity& e) {
 
 SpellHandler::UnitTake SpellHandler::takeUnit(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid,
                                               uint32_t required, bool say) const {
-    UnitTake out{false, required};
+    UnitTake out{false, required, 0};
     const auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end() || unitGuid == 0) return out;
     auto& em = owner_.getEntityManager();
     const auto caster = em.getEntity(casterGuid);
-    const auto unit = em.getEntity(unitGuid);
+    auto unit = em.getEntity(unitGuid);
     if (!caster || !unit) return out;
     const auto& e = it->second;
+    if ((e.attrEx5 & 0x800u) != 0 && unit->isUnit()) {
+        // 0x007ffc40: the unit, or its own target in its place.
+        const uint64_t itsGuid = entityGuidField(*unit, UF::UNIT_FIELD_TARGET_LO);
+        auto its = itsGuid != 0 ? em.getEntity(itsGuid) : nullptr;
+        if (its && !its->isUnit()) its = nullptr;
+        const auto pick = unit_target::retarget(required, relationsOf(owner_, caster, unit, e.attrEx6), its != nullptr,
+                                                its ? relationsOf(owner_, caster, its, e.attrEx6)
+                                                    : unit_target::Relations{});
+        if (pick == unit_target::Retarget::None) return out;
+        if (pick == unit_target::Retarget::ItsTarget) {
+            unit = its;
+            unitGuid = itsGuid;
+        }
+        required = unit_target::retargetRequired(required);
+    }
     const unit_target::Spell s{e.attrEx, e.attrEx2, e.attrEx3, e.attrEx5, e.attrEx6, e.targetCreatureType};
     unit_target::Unit u;
     switch (unit->getType()) {
@@ -1031,7 +1046,7 @@ SpellHandler::UnitTake SpellHandler::takeUnit(uint32_t spellId, uint64_t casterG
             return out;
         }
     }
-    return {true, t.required};
+    return {true, t.required, unitGuid};
 }
 
 void SpellHandler::armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required) {
@@ -1058,7 +1073,7 @@ void SpellHandler::spellTargetUnit(uint64_t unitGuid) {
     const UnitTarget held = unitTarget_;
     unitTarget_ = UnitTarget{};
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
-    sendPetCast(held.spellId, held.caster, unitGuid);
+    sendPetCast(held.spellId, held.caster, t.unit);
 }
 
 bool SpellHandler::spellCanTargetUnit(uint64_t unitGuid) const {
@@ -1201,7 +1216,7 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
         const auto tryUnit = [&](uint64_t guid) {
             const auto t = takeUnit(spellId, caster, guid, required, true);
             if (!t.taken) return false;
-            if (t.required == 0) sendPetCast(spellId, caster, guid);
+            if (t.required == 0) sendPetCast(spellId, caster, t.unit);
             return true;
         };
         if (unit && tryUnit(asked)) return;

@@ -155,6 +155,34 @@ struct Relations {
     bool mayAttack = false;     ///< 0x00729740
 };
 
+/// 0x007ffc40, which 0x0080bc80 asks first of a unit for a spell with
+/// AttributesEx5 0x800: a unit not of the side wanted stands for its own
+/// target (UNIT_FIELD_TARGET). An enemy wanted, and no ally, party or raid
+/// member (0x10c): a unit the caster may help (0x007293d0 with
+/// AttributesEx6 0x8) gives its target if the caster may attack that, else
+/// nothing. An ally, party or raid member wanted: a unit the caster may
+/// attack gives its target if the caster may help that and it is a party
+/// member where one is wanted, a raid member where one is, or an ally is
+/// wanted; else nothing. Any other unit is itself.
+enum class Retarget : uint8_t { None, Itself, ItsTarget };
+[[nodiscard]] constexpr Retarget retarget(uint32_t required, const Relations& unit, bool hasTarget,
+                                          const Relations& target) {
+    if ((required & (kUnitAlly | kUnitParty | kUnitRaid)) != 0) {
+        if (!unit.mayAttack) return Retarget::Itself;
+        if (!hasTarget || !target.mayAssistEx6) return Retarget::None;
+        if ((required & kUnitParty) != 0 && target.inParty) return Retarget::ItsTarget;
+        if ((required & kUnitRaid) != 0 && target.inRaid) return Retarget::ItsTarget;
+        return (required & kUnitAlly) != 0 ? Retarget::ItsTarget : Retarget::None;
+    }
+    if ((required & kUnitEnemy) == 0 || !unit.mayAssistEx6) return Retarget::Itself;
+    return hasTarget && target.mayAttack ? Retarget::ItsTarget : Retarget::None;
+}
+/// What is still wanted after it (0x0080bc80): with an ally, party or raid
+/// member wanted, no longer an enemy.
+[[nodiscard]] constexpr uint32_t retargetRequired(uint32_t required) {
+    return (required & (kUnitAlly | kUnitParty | kUnitRaid)) != 0 ? required & ~kUnitEnemy : required;
+}
+
 /// What taking it did: the unit fills some of what was needed (`required`
 /// is what is left), with the cast's targets now `mask`.
 struct Take {
