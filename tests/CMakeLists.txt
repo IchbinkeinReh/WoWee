@@ -2970,3 +2970,8 @@ wowee_add_test(test_zone_area
 # (rendering/m2_particle_motion.hpp).
 wowee_add_test(test_m2_particle_motion
     SOURCES test_m2_particle_motion.cpp)
+
+# ── test_player_facing ───────────────────────────────────────
+# GetPlayerFacing answers the server orientation, not the canonical yaw.
+wowee_add_test(test_player_facing
+    SOURCES test_player_facing.cpp)

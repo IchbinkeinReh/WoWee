@@ -491,11 +491,10 @@ static int lua_GetPlayerMapPosition(lua_State* L) {
 static int lua_GetPlayerFacing(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (gh) {
-        float facing = gh->getMovementInfo().orientation;
-        // Normalize to [0, 2π)
-        while (facing < 0) facing += 6.2831853f;
-        while (facing >= 6.2831853f) facing -= 6.2831853f;
-        lua_pushnumber(L, facing);
+        // The movement info holds the canonical yaw; Lua is given the
+        // server orientation, as the original client gives it.
+        lua_pushnumber(L, core::coords::canonicalToPlayerFacing(
+                              gh->getMovementInfo().orientation));
     } else {
         lua_pushnumber(L, 0);
     }

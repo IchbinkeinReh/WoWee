@@ -69,6 +69,17 @@ inline float canonicalToServerYaw(float canonicalYaw) {
     return normalizeAngleRad(canonicalYaw + (PI * 0.5f));
 }
 
+// What GetPlayerFacing() answers for a canonical yaw: the server orientation
+// - 0 north, counter-clockwise - in [0, 2π), as the original client's does.
+// The canonical yaw is a quarter turn behind it; handed to Lua as it was, an
+// addon facing the player north read -π/2, i.e. east.
+inline float canonicalToPlayerFacing(float canonicalYaw) {
+    float facing = canonicalToServerYaw(canonicalYaw);
+    if (facing < 0.0f) facing += TWO_PI;
+    if (facing >= TWO_PI) facing -= TWO_PI;
+    return facing;
+}
+
 // Character yaw is the renderer's facing in degrees; canonical yaw is the game
 // side's in radians. The frame loop pushes render → game every frame, so the
 // renderer is the source of truth and anything wanting to change facing has to
