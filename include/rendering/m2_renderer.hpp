@@ -637,6 +637,10 @@ public:
     void setInstanceAnimation(uint32_t instanceId, uint32_t animationId, bool loop = true);
     /// Check if a model instance has a specific animation ID in its sequence table.
     [[nodiscard]] bool hasAnimation(uint32_t instanceId, uint32_t animationId) const;
+    /// Whether the animation's sequence has flag 0x1, which the client plays
+    /// once and holds at its end rather than round again (0x00831fc0 sets
+    /// +0x4a, which 0x00832260 then leaves alone).
+    [[nodiscard]] bool sequencePlaysOnce(uint32_t instanceId, uint32_t animationId) const;
     [[nodiscard]] float getInstanceAnimDuration(uint32_t instanceId) const;
     /// Where an instance's current sequence has got to: its time and length
     /// (ms) and its speed, what the client reads of one with 0x008266b0.

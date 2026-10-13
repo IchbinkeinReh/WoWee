@@ -98,6 +98,13 @@ struct Step {
     return static_cast<uint8_t>(kStateCustom0 + index);
 }
 
+/// 0x0070d7e0, as a custom animation ends: Custom0..3 take the server
+/// state's pose again (slot 0x30, unless taken away meanwhile). Despawn has
+/// no case - the model goes on with its sequence as the M2 plays it on.
+[[nodiscard]] inline bool customAnimEndRestoresPose(uint8_t state) {
+    return state >= kStateCustom0 && state < kStateDespawn;
+}
+
 /// The interaction object was cleared (0x00512e60 -> 0x0070bac0, slot 0x9c).
 ///   type 2   0x0070ff20: Close, with no customAnim and the object in Open
 ///            or Opened

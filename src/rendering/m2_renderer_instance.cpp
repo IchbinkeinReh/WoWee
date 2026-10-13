@@ -345,6 +345,18 @@ bool M2Renderer::hasAnimation(uint32_t instanceId, uint32_t animationId) const {
     return false;
 }
 
+bool M2Renderer::sequencePlaysOnce(uint32_t instanceId, uint32_t animationId) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return false;
+    const auto& inst = instances[idxIt->second];
+    if (!inst.cachedModel) return false;
+    // The first with the id, as setInstanceAnimation picks.
+    for (const auto& seq : inst.cachedModel->sequences) {
+        if (seq.id == animationId) return (seq.flags & 0x1u) != 0;
+    }
+    return false;
+}
+
 float M2Renderer::getInstanceAnimDuration(uint32_t instanceId) const {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return 0.0f;

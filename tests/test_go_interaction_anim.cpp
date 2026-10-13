@@ -153,3 +153,17 @@ TEST_CASE("SMSG_GAMEOBJECT_CUSTOM_ANIM's index", "[go_interaction]") {
     CHECK_FALSE(customAnimState(4).has_value());
     CHECK_FALSE(customAnimState(100).has_value());
 }
+
+TEST_CASE("Only Custom0..3 return to the server's pose as they end", "[go_interaction]") {
+    // 0x0070d7e0: states 8..0xb call slot 0x30; Despawn (12) has no case,
+    // and the model is left playing its sequence on.
+    for (uint8_t state = kStateCustom0; state < kStateDespawn; ++state) {
+        CHECK(customAnimEndRestoresPose(state));
+    }
+    CHECK_FALSE(customAnimEndRestoresPose(kStateDespawn));
+    CHECK_FALSE(customAnimEndRestoresPose(kStateOpen));
+    CHECK_FALSE(customAnimEndRestoresPose(kStateClose));
+    // Its hold is let go all the same (0x004d77e0): a Despawn taken away
+    // meanwhile then goes.
+    CHECK(stateHoldsObject(kStateDespawn));
+}

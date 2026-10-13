@@ -2408,10 +2408,23 @@ void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId,
     gameObjectTransitionEnd_.erase(guid);
 
     if (state >= gi::kStateCustom0) {
-        // A custom animation plays once, and the object then takes its server
-        // state's pose again (0x0070d7e0, states 8..0xb, by slot 0x30).
         const uint32_t anim = kGoStateAnim[state];
-        m2->setInstanceAnimation(instanceId, anim, false);
+        if (state == gi::kStateDespawn) {
+            // Started as any state is (0x0070d1e0 -> 0x00832ab0), and nothing
+            // ends it (0x0070d7e0 has no case): the model goes on as the M2
+            // plays a sequence on - held at its end with flag 0x1 (0x00831fc0,
+            // +0x4a), round again otherwise (0x00832260).
+            if (m2->sequencePlaysOnce(instanceId, anim)) {
+                m2->setInstanceAnimationHeld(instanceId, anim, false);
+            } else {
+                m2->setInstanceAnimation(instanceId, anim, true);
+            }
+        } else {
+            // A custom animation plays once, and the object then takes its
+            // server state's pose again (0x0070d7e0, states 8..0xb, by slot
+            // 0x30).
+            m2->setInstanceAnimation(instanceId, anim, false);
+        }
         const auto ms = static_cast<int64_t>(m2->getInstanceAnimDuration(instanceId));
         gameObjectCustomAnimEnd_[guid] =
             std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max<int64_t>(ms, 0));
@@ -2456,6 +2469,12 @@ void EntitySpawner::updateGameObjectCustomAnims() {
         // as the hold the animation had is let go (0x004d77e0).
         if (gameObjectDestroyPending_.count(guid)) {
             despawnGameObject(guid);
+            continue;
+        }
+        // Despawn has no case there: the model is left as it is.
+        auto anim = gameObjectAnimState_.find(guid);
+        if (anim == gameObjectAnimState_.end() ||
+            !game::go_interaction::customAnimEndRestoresPose(anim->second)) {
             continue;
         }
         // From the server's state to itself: its resting pose (0x0070d690
