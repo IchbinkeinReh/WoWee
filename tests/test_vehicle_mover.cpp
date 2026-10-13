@@ -127,6 +127,10 @@ TEST_CASE("a cast's stop keeps the mover stopped while its key is held (0x0071ae
     // The keys at rest - none, or both ways - forget it.
     CHECK_FALSE(forwardBackStopHolds(true, false, false, false));
     CHECK_FALSE(forwardBackStopHolds(true, true, true, false));
+    // Counted: autorun is a forward key, and the forward key with both mouse
+    // buttons against the back key is still one forward.
+    CHECK(forwardBackStopHolds(true, 2, 1, false));
+    CHECK_FALSE(forwardBackStopHolds(true, 1, 1, false));
     // A mover that may not move has its keys let go (0x005fbbc0).
     CHECK_FALSE(forwardBackStopHolds(true, true, false, true));
     CHECK_FALSE(forwardBackStopHolds(false, true, false, false));

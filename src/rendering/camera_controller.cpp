@@ -3110,9 +3110,11 @@ void CameraController::update(float deltaTime) {
     // Auto-follow uses run speed (same as auto-run), not walk speed
     if (autoFollowMove) autoRunning = true;
     // A mover stopped by a cast (0x0071ae10) stays stopped while its keys
-    // are held as they were (0x005fae70).
+    // are held as they were (0x005fae70), counted as it counts them.
     const bool forwardKeys = keyW || mouseAutorun || autoRunning;
-    forwardBackStopped_ = game::vehicle::forwardBackStopHolds(forwardBackStopped_, forwardKeys, keyS, moverHeld_);
+    const int forwardCount = int(keyW) + int(mouseAutorun) + int(autoRunning);
+    forwardBackStopped_ =
+        game::vehicle::forwardBackStopHolds(forwardBackStopped_, forwardCount, int(keyS), moverHeld_);
     bool nowForward = !movBlocked && !forwardBackStopped_ && forwardKeys;
     bool nowBackward = !movBlocked && !forwardBackStopped_ && keyS;
     bool nowStrafeLeft = false;

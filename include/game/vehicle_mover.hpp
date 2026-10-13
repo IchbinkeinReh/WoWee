@@ -124,10 +124,15 @@ struct MoveSpline {
 /// That stop leaves the input as it is - its forward/back move still started
 /// (+4 0x10000) - so a key held starts nothing again (0x005fae70 restarts
 /// only a move not started, or one the other way): the mover stays stopped
-/// until the forward and back keys come to rest - none held, or both - which
-/// stops and forgets it, or until its keys are let go, as a mover that may
-/// not move has them (0x005fbbc0, the seat change's hold among it).
-[[nodiscard]] constexpr bool forwardBackStopHolds(bool stopped, bool forwardKeys, bool backKeys, bool moverHeld) {
+/// until the forward and back keys come to rest, which stops and forgets it,
+/// or until its keys are let go, as a mover that may not move has them
+/// (0x005fbbc0, the seat change's hold among it). At rest is 0x005fae70's
+/// count: one for each of autorun (+4 0x1000), the forward key (0x10) and
+/// both mouse buttons (0x1 and 0x2), less one for the back key (0x20),
+/// coming to 0. Autorun counts as a forward key held, and ends only when
+/// it is turned off or a forward or back key or both mouse buttons are
+/// pressed (0x005fa170), which then count instead.
+[[nodiscard]] constexpr bool forwardBackStopHolds(bool stopped, int forwardKeys, int backKeys, bool moverHeld) {
     return stopped && forwardKeys != backKeys && !moverHeld;
 }
 inline constexpr uint32_t kAttrEx7PrepareForVehicleControlEnd = 0x80;
