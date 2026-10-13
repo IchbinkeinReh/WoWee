@@ -125,6 +125,14 @@ public:
     /// which holds whole numbers exactly to 2048.
     static constexpr uint32_t kMaxMovers = 500;
 
+    /// Once a frame, before consumerData: where the camera is and which
+    /// interior rooms it stands in (0 outside). After a teleport the surfaces
+    /// take nothing of the old result; after a cut - the camera pulled in by
+    /// a wall, a seat taken - or a room entered or left they take only their
+    /// own texels of it, borrowing nothing from beside. Either way the next
+    /// trace starts its history afresh.
+    void noteCamera(const glm::vec3& cameraPos, uint64_t roomKey);
+
     /// Record the pass. Outside a render pass, after the opaque geometry.
     /// The depth image must be in DEPTH_STENCIL_ATTACHMENT_OPTIMAL and is
     /// returned to it.
@@ -133,7 +141,8 @@ public:
 
     /// What the surface shaders need to find last frame's result, for the
     /// per-frame block: the view-projection it was traced with, the camera
-    /// position, and params (x = mode, 0 when there is no usable result);
+    /// position, and params (x = mode, 0 when there is no usable result;
+    /// z = 1 when the surfaces must not borrow this frame, noteCamera);
     /// and the probe volume as the atlas holds it (gi.params.x 0 when off).
     struct ConsumerData {
         glm::mat4 viewProj{1.0f};
@@ -207,6 +216,14 @@ private:
     glm::mat4 prevViewProj_{1.0f};
     glm::vec3 prevCameraPos_{0.0f};
     bool havePrev_ = false;
+
+    // noteCamera: this frame's camera against the last, and the room.
+    glm::vec3 notedCamera_{0.0f};
+    uint64_t notedRoom_ = 0;
+    bool notedOnce_ = false;
+    bool teleportThisFrame_ = false;  // nothing of the old result, no history
+    bool cutThisFrame_ = false;       // no history, no borrowing
+    bool roomThisFrame_ = false;      // no history, no borrowing
 };
 
 } // namespace rendering

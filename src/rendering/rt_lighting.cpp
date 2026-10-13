@@ -508,8 +508,11 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
         cmdPipelineBarrier2(cmd, dep);
     }
 
-    // Last frame's slot holds history only if last frame traced into it,.
-    const bool havePrev = havePrev_ && resultFrame_ != 0 && resultFrame_ + 1 == frameCounter_;
+    // Last frame's slot holds history only if last frame traced into it, and
+    // only for the same place: not across a jump of the camera or a room
+    // entered or left (noteCamera).
+    const bool havePrev = havePrev_ && resultFrame_ != 0 && resultFrame_ + 1 == frameCounter_ &&
+                          !cutThisFrame_ && !roomThisFrame_;
 
     RtPassData d{};
     d.invViewProj = glm::inverse(in.viewProj);
@@ -663,15 +666,38 @@ uint32_t RtLighting::writeMovers(Slot& s, const FrameInputs& in) {
     return n;
 }
 
+void RtLighting::noteCamera(const glm::vec3& cameraPos, uint64_t roomKey) {
+    // Farther than this in one frame is no walk, ride or flight: a cut - the
+    // camera pulled in by a wall it has met, a seat taken - and farther than
+    // the second a teleport, which leaves nothing of the old view to find.
+    constexpr float kCut = 4.0f;
+    constexpr float kTeleport = 50.0f;
+    const float jump = notedOnce_ ? glm::distance(cameraPos, notedCamera_) : kTeleport + 1.0f;
+    teleportThisFrame_ = jump > kTeleport;
+    cutThisFrame_ = jump > kCut;
+    roomThisFrame_ = notedOnce_ && roomKey != notedRoom_;
+    if (notedOnce_ && (cutThisFrame_ || roomThisFrame_)) {
+        LOG_DEBUG("RtLighting: history reset - ", teleportThisFrame_ ? "teleport" : cutThisFrame_ ? "camera cut" : "room",
+                  " (camera moved ", jump, " yd, room ", notedRoom_, " -> ", roomKey, ")");
+    }
+    notedCamera_ = cameraPos;
+    notedRoom_ = roomKey;
+    notedOnce_ = true;
+}
+
 RtLighting::ConsumerData RtLighting::consumerData() const {
     ConsumerData c;
     // The atlas keeps its light whether or not last frame traced, and is read
     // with the grid it was last written for.
     if (active() && mode_ == Mode::Full) c.gi = probes_.consumerData();
     if (!active() || resultFrame_ == 0 || resultFrame_ + 1 != frameCounter_) return c;
+    // Traced somewhere else: nothing of it is this frame's.
+    if (teleportThisFrame_) return c;
     c.viewProj = resultViewProj_;
     c.cameraPos = glm::vec4(resultCameraPos_, 1.0f);
-    c.params = glm::vec4(static_cast<float>(resultMode_), 1.0f, 0.0f, 0.0f);
+    // After a cut or in another room, a surface takes only its own texels.
+    c.params = glm::vec4(static_cast<float>(resultMode_), 1.0f,
+                         cutThisFrame_ || roomThisFrame_ ? 1.0f : 0.0f, 0.0f);
     return c;
 }
 

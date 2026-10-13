@@ -735,6 +735,11 @@ void Renderer::updatePerFrameUBO() {
     // colours.
 
     if (rtLighting_) {
+        // A camera that jumped, or a room entered or left, before the result
+        // of the last frame is read (RtLighting::noteCamera).
+        if (camera) {
+            rtLighting_->noteCamera(camera->getPosition(), wmoRenderer ? wmoRenderer->cameraRoomKey() : 0);
+        }
         const RtLighting::ConsumerData rt = rtLighting_->consumerData();
         currentFrameData.rtViewProj = rt.viewProj;
         currentFrameData.rtCameraPos = rt.cameraPos;

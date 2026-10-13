@@ -528,6 +528,11 @@ public:
     [[nodiscard]] std::optional<IndoorArea> indoorAreaAt(const glm::vec3& pos) const;
     /// Changes whenever the set of those groups does.
     [[nodiscard]] uint64_t interiorPassGeneration() const { return interiorPassGeneration_; }
+    /// Which interior rooms the camera stood in at the last
+    /// updateInteriorPass: the buildings and their groups that are not
+    /// outside (MOGP 0x8) whose boxes hold it, hashed; 0 outside. Changes as
+    /// the camera goes indoors, outdoors, or from room to room.
+    [[nodiscard]] uint64_t cameraRoomKey() const { return cameraRoomKey_; }
     /// The buildings that moved since last frame, as prepareRender found
     /// them: the ray traced lighting's movers (RtLighting::FrameInputs::movers).
     [[nodiscard]] const std::vector<RtMover>& rtMovers() const { return rtMovers_; }
@@ -1150,6 +1155,7 @@ private:
     glm::vec3 interiorPassUnionMin_{0.0f}, interiorPassUnionMax_{-1.0f};
     const minimap_indoor::AreaRows* areaRows_ = nullptr;
     uint64_t interiorPassGeneration_ = 0;
+    uint64_t cameraRoomKey_ = 0;
     // What moved (setInstanceTransform) since the frame before last, and
     // what of it moved since last frame (prepareRtMovers).
     std::vector<uint32_t> rtPlacedIds_;

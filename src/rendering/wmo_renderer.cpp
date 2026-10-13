@@ -4493,6 +4493,9 @@ void WMORenderer::updateInteriorPass(const glm::vec3& cameraPos, const Frustum* 
     std::unordered_map<uint32_t, std::vector<uint8_t>> pass;
     std::vector<std::pair<glm::vec3, glm::vec3>> bounds;
     std::vector<size_t> candidates;
+    // The interior rooms the camera is in (cameraRoomKey): the building and
+    // its groups that are not outside (0x8).
+    uint64_t roomKey = 0;
     gatherCandidates(cameraPos - glm::vec3(0.5f), cameraPos + glm::vec3(0.5f), candidates);
     for (size_t idx : candidates) {
         const auto& instance = instances[idx];
@@ -4512,6 +4515,14 @@ void WMORenderer::updateInteriorPass(const glm::vec3& cameraPos, const Frustum* 
             if (glm::all(glm::greaterThanEqual(local, g.boundingBoxMin)) &&
                 glm::all(glm::lessThanEqual(local, g.boundingBoxMax))) {
                 cameraGroups.push_back(static_cast<uint32_t>(gi));
+                if ((g.groupFlags & 0x8) == 0) {
+                    // Summed, so the order the buildings come in does not count.
+                    uint64_t h = (static_cast<uint64_t>(instance.id) << 20) ^ static_cast<uint64_t>(gi);
+                    h ^= h >> 33;
+                    h *= 0xff51afd7ed558ccdull;
+                    h ^= h >> 33;
+                    roomKey += h | 1u;
+                }
             }
         }
         if (cameraGroups.empty()) continue;
@@ -4538,6 +4549,7 @@ void WMORenderer::updateInteriorPass(const glm::vec3& cameraPos, const Frustum* 
         }
         if (any) pass[instance.id] = std::move(groups);
     }
+    cameraRoomKey_ = roomKey;
     if (pass != interiorPass_) {
         interiorPass_ = std::move(pass);
         ++interiorPassGeneration_;
