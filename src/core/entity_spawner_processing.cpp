@@ -2285,10 +2285,8 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
 void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
     namespace gi = game::go_interaction;
     auto it = gameObjectInstances_.find(guid);
-    // 0x0070fe10 and 0x0070c9f0 ask for the model before anything; the
-    // client's type 9 would note the state for a model still loading, which
-    // is not kept here.
-    if (it == gameObjectInstances_.end() || it->second.isWmo || !gameHandler_) return;
+    const bool modelLoading = it == gameObjectInstances_.end();
+    if ((!modelLoading && it->second.isWmo) || !gameHandler_) return;
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
     if (!m2) return;
     auto entity = gameHandler_->getEntityManager().getEntity(guid);
@@ -2298,6 +2296,19 @@ void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
     if (!info) return;   // no template, no type to ask
     // The template's data fields, none while it is not cached (+0x1a4).
     const uint32_t* data = info->hasData ? info->data : nullptr;
+
+    if (modelLoading) {
+        // 0x0070fe10 and 0x0070c9f0 ask for the model before anything. A
+        // custom animation is noted for it (0x0070bde0, +0x208) and played as
+        // it arrives (0x00713f50). Type 9's Open and Close note their state
+        // (0x0070d510, +0x10), but the model's arrival enters the server
+        // state's pose over it (slot 0x94, 0x0070d600), so nothing is kept.
+        if (open) {
+            const gi::Step step = gi::onOpen(info->type, data);
+            if (step.action == gi::Action::PlayCustom) gameObjectPendingCustomAnim_[guid] = step.state;
+        }
+        return;
+    }
 
     const uint32_t instanceId = it->second.instanceId;
     const auto has = [&](uint32_t anim) { return m2->hasAnimation(instanceId, anim); };
@@ -2311,6 +2322,7 @@ void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
         case gi::Action::Enter:
             break;
         case gi::Action::EnterIfModelHas:
+        case gi::Action::PlayCustom:
             // 0x0070c480: the state's own animation, 0x00ada938[state].
             if (step.state >= std::size(kGoStateAnim) || !has(kGoStateAnim[step.state])) return;
             break;
@@ -2323,23 +2335,46 @@ void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
             break;
         }
     }
+    enterGameObjectAnimState(guid, instanceId, step.state);
+}
+
+void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId, uint8_t state) {
+    namespace gi = game::go_interaction;
+    auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
+    if (!m2) return;
     // 0x0070d510: a state it is already in is not entered again.
-    if (step.state == current) return;
-    gameObjectAnimState_[guid] = step.state;
+    auto curIt = gameObjectAnimState_.find(guid);
+    if (curIt != gameObjectAnimState_.end() && curIt->second == state) return;
+    gameObjectAnimState_[guid] = state;
     gameObjectCustomAnimEnd_.erase(guid);
 
-    if (step.state >= gi::kStateCustom0) {
+    if (state >= gi::kStateCustom0) {
         // A custom animation plays once, and the object then takes its server
         // state's pose again (0x0070d7e0, states 8..0xb, by slot 0x30).
-        const uint32_t anim = kGoStateAnim[step.state];
+        const uint32_t anim = kGoStateAnim[state];
         m2->setInstanceAnimation(instanceId, anim, false);
         const auto ms = static_cast<int64_t>(m2->getInstanceAnimDuration(instanceId));
         gameObjectCustomAnimEnd_[guid] =
             std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max<int64_t>(ms, 0));
         return;
     }
-    const auto [anim, hold] = goStateAnimation(step.state, has);
-    playGoStateAnimation(*m2, instanceId, step.state, goShownAnimation(anim, has), hold);
+    const auto has = [&](uint32_t anim) { return m2->hasAnimation(instanceId, anim); };
+    const auto [anim, hold] = goStateAnimation(state, has);
+    playGoStateAnimation(*m2, instanceId, state, goShownAnimation(anim, has), hold);
+}
+
+void EntitySpawner::applyPendingGameObjectCustomAnim(uint64_t guid) {
+    auto pending = gameObjectPendingCustomAnim_.find(guid);
+    if (pending == gameObjectPendingCustomAnim_.end()) return;
+    const uint8_t state = pending->second;
+    gameObjectPendingCustomAnim_.erase(pending);
+    auto it = gameObjectInstances_.find(guid);
+    auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
+    if (it == gameObjectInstances_.end() || it->second.isWmo || !m2) return;
+    // 0x00713f50: after the server state's pose, the noted animation by slot
+    // 0x4c (0x0070c480) - if the model has it.
+    if (state >= std::size(kGoStateAnim) || !m2->hasAnimation(it->second.instanceId, kGoStateAnim[state])) return;
+    enterGameObjectAnimState(guid, it->second.instanceId, state);
 }
 
 void EntitySpawner::updateGameObjectCustomAnims() {
@@ -2367,6 +2402,7 @@ void EntitySpawner::onGameObjectInfoReceived(uint32_t /*entry*/) {
 }
 
 void EntitySpawner::despawnGameObject(uint64_t guid) {
+    gameObjectPendingCustomAnim_.erase(guid);
     pendingTransportDoodadBatches_.erase(
         std::remove_if(pendingTransportDoodadBatches_.begin(), pendingTransportDoodadBatches_.end(),
                        [guid](const PendingTransportDoodadBatch& b) { return b.guid == guid; }),

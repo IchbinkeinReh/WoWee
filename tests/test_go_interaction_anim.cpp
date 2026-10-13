@@ -42,8 +42,9 @@ TEST_CASE("A quest giver object's customAnim is data4", "[go_interaction]") {
     CHECK(onOpen(2, data).action == Action::EnterUnlessShowingOpen);
     data[4] = 1;
     // 0x0070bde0: 0x00a335e8[customAnim + 1] - Custom0 for 1 ... Despawn for 5.
+    // With the model loading, 0x0070bde0 notes it in +0x208 for 0x00713f50.
     auto open = onOpen(2, data);
-    CHECK(open.action == Action::EnterIfModelHas);
+    CHECK(open.action == Action::PlayCustom);
     CHECK(open.state == kStateCustom0);
     data[4] = 4;
     CHECK(onOpen(2, data).state == kStateCustom0 + 3);

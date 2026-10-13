@@ -300,6 +300,7 @@ void EntitySpawner::resetAllState() {
     gameObjectServerState_.clear();
     gameObjectAnimState_.clear();
     gameObjectCustomAnimEnd_.clear();
+    gameObjectPendingCustomAnim_.clear();
 
     // The passengers go with their units, and the player's vehicle camera
     // with the player (0x00734fd0 -> 0x0074cd60).

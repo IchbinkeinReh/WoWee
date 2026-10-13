@@ -20,6 +20,10 @@ enum class Action : uint8_t {
     Enter,
     /// Enter `state` only if the model has its animation (0x0070c480).
     EnterIfModelHas,
+    /// A custom animation (0x0070bde0): as EnterIfModelHas, or, while the
+    /// model is still loading, noted (GameObject_C +0x208) and played as
+    /// it arrives (0x00713f50).
+    PlayCustom,
     /// Enter `state` only if the model is not showing its Open already -
     /// Open, or what AnimationData falls back to without one (0x0070fe10).
     EnterUnlessShowingOpen,
@@ -41,7 +45,8 @@ struct Step {
 /// type handler's slot 0x98).
 ///   type 2   0x0070fe10: with no customAnim, Open unless it shows it already;
 ///            with one, the custom animation 0x0070bde0 picks -
-///            0x00a335e8[customAnim + 1], Custom0..3 and Despawn for 1..5
+///            0x00a335e8[customAnim + 1], Custom0..3 and Despawn for 1..5 -
+///            which a model still loading gets when it arrives
 ///   type 9   0x0070b560: Open
 ///   19, 34   0x0070c9f0 (mailbox, guild bank): Custom0
 /// Every other type's slot is 0x005eeb70, which does nothing.
@@ -52,7 +57,7 @@ struct Step {
             if (custom == 0) return {Action::EnterUnlessShowingOpen, kStateOpen};
             // Past 5 the table holds something that is not a state.
             if (custom > 5) return {};
-            return {Action::EnterIfModelHas, static_cast<uint8_t>(kStateCustom0 + custom - 1)};
+            return {Action::PlayCustom, static_cast<uint8_t>(kStateCustom0 + custom - 1)};
         }
         case 9:
             return {Action::Enter, kStateOpen};

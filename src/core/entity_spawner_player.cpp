@@ -974,6 +974,8 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
             pending != gameObjectPendingState_.end()) {
             applyGameObjectState(guid, pending->second);
         }
+        // ...and a custom animation asked for meanwhile (0x00713f50, +0x208).
+        applyPendingGameObjectCustomAnim(guid);
 
         // Notify transport system for M2 transports (e.g. Deeprun Tram cars)
         if (gameHandler_ && gameHandler_->isTransportGuid(guid)) {

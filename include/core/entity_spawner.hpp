@@ -1134,6 +1134,13 @@ private:
     /// goes back to its server state's pose (0x0070d7e0).
     std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> gameObjectCustomAnimEnd_;
     void updateGameObjectCustomAnims();
+    /// A custom animation asked for while the model was still loading
+    /// (GameObject_C +0x208), played as it arrives (0x00713f50).
+    std::unordered_map<uint64_t, uint8_t> gameObjectPendingCustomAnim_;
+    void applyPendingGameObjectCustomAnim(uint64_t guid);
+    /// 0x0070d510: puts the object in an animation state, not again if it is
+    /// in it already.
+    void enterGameObjectAnimState(uint64_t guid, uint32_t instanceId, uint8_t state);
     struct PendingTransportMove {
         float x = 0.0f, y = 0.0f, z = 0.0f, orientation = 0.0f;
     };
