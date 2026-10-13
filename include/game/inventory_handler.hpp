@@ -315,6 +315,7 @@ public:
         [[nodiscard]] bool occupied() const { return itemGuid != 0; }
     };
     bool isMailboxOpen() const { return mailboxOpen_; }
+    uint64_t getMailboxGuid() const { return mailboxGuid_; }
     const std::vector<MailMessage>& getMailInbox() const { return mailInbox_; }
     /// Writable, for the backfill that fills in a mail's sender once the name
     /// packet for that guid arrives.
@@ -458,6 +459,7 @@ public:
     // Deposit an inventory item into the first free slot of the viewed tab.
     void guildBankDepositFromInventory(uint8_t srcBag, uint8_t srcSlot);
     bool isGuildBankOpen() const { return guildBankOpen_; }
+    uint64_t getGuildBankerGuid() const { return guildBankerGuid_; }
     const GuildBankData& getGuildBankData() const { return guildBankData_; }
     /// The guild bank's balance as SMSG_GUILD_EVENT reports it. The bank list
     /// is only sent to whoever is standing at the banker; everyone else learns

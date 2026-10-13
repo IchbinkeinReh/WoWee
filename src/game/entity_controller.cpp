@@ -3359,6 +3359,8 @@ void EntityController::showGameObjectPageText(uint64_t guid) {
         owner_.setBookMaterial(pageMaterial);
         auto req = PageTextQueryPacket::build(pageId, guid);
         owner_.getSocket()->send(req);
+        // The reading window opens with the object (0x0058a1a0 -> 0x0051fce0).
+        owner_.setBookObject(guid);
         return;
     }
 

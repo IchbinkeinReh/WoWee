@@ -2237,11 +2237,14 @@ void QuestHandler::triggerQuestAcceptResync(uint32_t questId, uint64_t npcGuid, 
 // ---------------------------------------------------------------------------
 
 void QuestHandler::handleGossipMessage(network::Packet& packet) {
+    const uint64_t gossipBefore = gossipWindowOpen_ ? currentGossip_.npcGuid : 0;
     bool ok = owner_.getPacketParsers() ? owner_.getPacketParsers()->parseGossipMessage(packet, currentGossip_)
                                     : GossipMessageParser::parse(packet, currentGossip_);
     if (!ok) return;
     if (questDetailsOpen_) return; // Don't reopen gossip while viewing quest
     gossipWindowOpen_ = true;
+    // 0x0058a550: a gossip window with another object sets it.
+    if (currentGossip_.npcGuid != gossipBefore) owner_.setInteractionObject(currentGossip_.npcGuid);
     // Gossip carries its text as an npc-text id, not inline, so any greeting
     // left over from a quest list belongs to a different window.
     questGreeting_.clear();
@@ -2332,6 +2335,8 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
 
     currentGossip_ = std::move(data);
     gossipWindowOpen_ = true;
+    // The quest frame's greeting (0x0058c5a0 with 0).
+    owner_.setQuestInteractionObject(currentGossip_.npcGuid);
     // QUEST_GREETING, not GOSSIP_SHOW. This is SMSG_QUESTGIVER_QUEST_LIST - a
     // quest giver listing what it has, which the greeting frame answers.
     // GOSSIP_SHOW belongs to SMSG_GOSSIP_MESSAGE and opens the gossip frame
@@ -2617,6 +2622,7 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
     questDetailsOpen_ = true;
     questDetailsOpenTime_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     gossipWindowOpen_ = false;
+    owner_.setQuestInteractionObject(currentQuestDetails_.npcGuid);
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_DETAIL", {});
 }
 
@@ -2643,6 +2649,7 @@ void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
     gossipWindowOpen_ = false;
     questDetailsOpen_ = false;
     questDetailsOpenTime_ = std::chrono::steady_clock::time_point{};
+    owner_.setQuestInteractionObject(data.npcGuid);
 
     // The panel shown when a quest is handed back before it is finished, or
     // when it asks for something in return. Its siblings QUEST_DETAIL and
@@ -2705,6 +2712,7 @@ void QuestHandler::handleQuestOfferReward(network::Packet& packet) {
     gossipWindowOpen_ = false;
     questDetailsOpen_ = false;
     questDetailsOpenTime_ = std::chrono::steady_clock::time_point{};
+    owner_.setQuestInteractionObject(data.npcGuid);
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_COMPLETE", {});
 
     // Query item names for reward items

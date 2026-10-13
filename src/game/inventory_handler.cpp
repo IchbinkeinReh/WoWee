@@ -2304,6 +2304,8 @@ void InventoryHandler::readItemBySlot(int backpackIndex) {
     owner_.bookPagesRef().clear();
     owner_.setBookTitle(info ? info->name : std::string());
     owner_.setBookMaterial(info ? info->pageMaterial : 0u);
+    // The reading window opens with the item (0x0058a1a0 -> 0x0051fce0).
+    if (itemGuid != 0) owner_.setBookObject(itemGuid);
     auto readPacket = ReadItemPacket::build(0xFF, static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex));
     owner_.getSocket()->send(readPacket);
     auto pagePacket = PageTextQueryPacket::build(pageTextId, itemGuid != 0 ? itemGuid : owner_.getPlayerGuid());
@@ -2342,6 +2344,8 @@ void InventoryHandler::readItemInBag(int bagIndex, int slotIndex) {
     owner_.bookPagesRef().clear();
     owner_.setBookTitle(info ? info->name : std::string());
     owner_.setBookMaterial(info ? info->pageMaterial : 0u);
+    // The reading window opens with the item (0x0058a1a0 -> 0x0051fce0).
+    if (itemGuid != 0) owner_.setBookObject(itemGuid);
     auto readPacket = ReadItemPacket::build(wowBag, static_cast<uint8_t>(slotIndex));
     owner_.getSocket()->send(readPacket);
     auto pagePacket = PageTextQueryPacket::build(pageTextId, itemGuid != 0 ? itemGuid : owner_.getPlayerGuid());
@@ -2940,6 +2944,8 @@ void InventoryHandler::acceptSockets() {
 void InventoryHandler::openMailbox(uint64_t guid) {
     mailboxGuid_ = guid;
     mailboxOpen_ = true;
+    // MAIL_SHOW opens with the mailbox (0x0056da60 -> 0x0051fce0).
+    owner_.setInteractionObject(guid);
     // Through the setter, which is the only thing that says so. Assigning the
     // member cleared the flag and told nobody: this client's own minimap asks
     // hasNewMail() again on every frame it draws, so it went out by itself,
@@ -3248,6 +3254,7 @@ void InventoryHandler::handleShowMailbox(network::Packet& packet) {
     if (!packet.hasRemaining(8)) return;
     mailboxGuid_ = packet.readUInt64();
     mailboxOpen_ = true;
+    owner_.setInteractionObject(mailboxGuid_);   // 0x0056da60
     selectedMailIndex_ = -1;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_SHOW", {});
     selectDefaultStationery();
@@ -3614,6 +3621,8 @@ void InventoryHandler::handleGuildBankList(network::Packet& packet) {
     // refresh, or the banker guid arrived only with the list).
     if (guildBankerGuid_ != 0 && !guildBankOpen_) {
         guildBankOpen_ = true;
+        // GUILDBANKFRAME_OPENED, with the vault (0x005a7250 -> 0x0051fce0).
+        owner_.setInteractionObject(guildBankerGuid_);
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GUILDBANKFRAME_OPENED", {});
     }
     // Each list is tagged with the tab it describes. Track it so the UI

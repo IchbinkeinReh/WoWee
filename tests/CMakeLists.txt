@@ -1911,6 +1911,16 @@ target_link_libraries(test_spell_unit_target PRIVATE catch2_main)
 add_test(NAME spell_unit_target COMMAND test_spell_unit_target)
 register_test_target(test_spell_unit_target)
 
+# ── test_go_interaction_anim ────────────────────────────────
+add_executable(test_go_interaction_anim
+    test_go_interaction_anim.cpp
+)
+target_include_directories(test_go_interaction_anim PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_go_interaction_anim SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_go_interaction_anim PRIVATE catch2_main)
+add_test(NAME go_interaction_anim COMMAND test_go_interaction_anim)
+register_test_target(test_go_interaction_anim)
+
 # ── test_spell_classification ───────────────────────────────
 add_executable(test_spell_classification
     test_spell_classification.cpp

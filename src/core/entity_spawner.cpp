@@ -97,6 +97,7 @@ void EntitySpawner::update() {
     refreshCreatureScales();
     syncCreatureParticleTwins();
     syncGroundTargetModel();
+    updateGameObjectCustomAnims();
 }
 
 void EntitySpawner::syncGroundTargetModel() {
@@ -297,6 +298,8 @@ void EntitySpawner::resetAllState() {
     gameObjectDisplayIdFailedCache_.clear();
     // Instance ids in here belong to a renderer that has just been cleared.
     gameObjectServerState_.clear();
+    gameObjectAnimState_.clear();
+    gameObjectCustomAnimEnd_.clear();
 
     // The passengers go with their units, and the player's vehicle camera
     // with the player (0x00734fd0 -> 0x0074cd60).

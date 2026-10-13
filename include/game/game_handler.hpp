@@ -1734,6 +1734,12 @@ public:
     using GameObjectStateCallback = std::function<void(uint64_t guid, uint8_t goState)>;
     void setGameObjectStateCallback(GameObjectStateCallback cb) { gameObjectStateCallback_ = std::move(cb); }
 
+    /// A game object became the interaction object (open) or stopped being
+    /// it: its type's OPEN (0x0051fce0 -> 0x0070bab0) or CLOSE (0x00512e60 ->
+    /// 0x0070bac0).
+    using GameObjectInteractionCallback = std::function<void(uint64_t guid, bool open)>;
+    void setGameObjectInteractionCallback(GameObjectInteractionCallback cb) { gameObjectInteractionCallback_ = std::move(cb); }
+
     // Sprint aura callback - fired when sprint-type aura active state changes on player
     using SprintAuraCallback = std::function<void(bool active)>;
     void setSprintAuraCallback(SprintAuraCallback cb) { sprintAuraCallback_ = std::move(cb); }
@@ -2507,6 +2513,15 @@ public:
     /// (0xbd07a8): a living creature says farewell (0x00720860), then its
     /// window closes (0x00512e60).
     void closeNpcInteraction();
+    /// The object the player has a window open with (0xbd07a8), set as one
+    /// opens (0x0051fce0): the one before is let go first (0x00518d50 ->
+    /// 0x00512e60, a game object's CLOSE), and a game object plays its OPEN.
+    /// Let go once no window is open with it any more.
+    void setInteractionObject(uint64_t guid);
+    uint64_t getInteractionObject() const { return interactionObject_; }
+    /// A quest window sets it too (0x0058c5a0), but not over a game object
+    /// that already is it.
+    void setQuestInteractionObject(uint64_t guid);
     /// Whether the bonus bar holds the pet's actions - the vehicle the
     /// player drives, or a unit it possesses (DAT_00c1e5a0 0x1, 0x005d4ad0).
     /// Slots 121..132 are then the pet bar's ten and two empty ones
@@ -2769,7 +2784,10 @@ public:
     struct BookPage { uint32_t pageId = 0; std::string text; };
     const std::vector<BookPage>& getBookPages() const { return bookPages_; }
     bool hasBookOpen() const { return !bookPages_.empty(); }
-    void clearBook() { bookPages_.clear(); bookTitle_.clear(); bookMaterial_ = 0; }
+    void clearBook() { bookPages_.clear(); bookTitle_.clear(); bookMaterial_ = 0; bookObjectGuid_ = 0; }
+    /// The object a book being read is from - a game object or an item - which
+    /// the reading window opens with (0x0058a1a0 -> 0x0051fce0).
+    void setBookObject(uint64_t guid) { bookObjectGuid_ = guid; setInteractionObject(guid); }
 
     /// What is being read, for the heading over the page. Known at every point
     /// a book is opened - the game object's name from its query cache, or the
@@ -4801,6 +4819,12 @@ private:
     GameObjectInfoCallback gameObjectInfoCallback_;
     GameObjectCustomAnimCallback gameObjectCustomAnimCallback_;
     GameObjectStateCallback gameObjectStateCallback_;
+    GameObjectInteractionCallback gameObjectInteractionCallback_;
+    uint64_t interactionObject_ = 0;
+    /// 0x00512e60 for the interaction object: a game object's CLOSE.
+    void releaseInteractionObject();
+    /// Whether a window that sets the interaction object is open with guid.
+    bool interactionWindowOpen(uint64_t guid);
     SprintAuraCallback sprintAuraCallback_;
 
     // Transport tracking
@@ -5420,6 +5444,7 @@ private:
     LevelUpDeltas lastLevelUpDeltas_;
     std::vector<TempEnchantTimer> tempEnchantTimers_;
     std::vector<BookPage> bookPages_;            // pages collected for the current readable item
+    uint64_t bookObjectGuid_ = 0;                // what they are read from, 0 for none
     std::string bookTitle_;                      // name of the object or item those pages belong to
     uint32_t bookMaterial_ = 0;                  // PageTextMaterial.dbc id, 0 for unknown
     /// PageTextMaterial.dbc is seven rows and is read once on the first ask,

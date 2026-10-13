@@ -136,6 +136,12 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
         entitySpawner_.applyGameObjectState(guid, goState);
     });
 
+    // The object a window is open with: its type's OPEN, or its CLOSE once
+    // it is let go.
+    gameHandler_.setGameObjectInteractionCallback([this](uint64_t guid, bool open) {
+        entitySpawner_.applyGameObjectInteraction(guid, open);
+    });
+
     // Creature move callback (online mode) - update creature positions
     gameHandler_.setCreatureMoveCallback([this](uint64_t guid, float x, float y, float z, uint32_t durationMs) {
         if (!renderer_.getCharacterRenderer()) return;

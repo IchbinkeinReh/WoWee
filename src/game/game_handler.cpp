@@ -767,6 +767,12 @@ void GameHandler::update(float deltaTime) {
         if (charDeleteCallback_) charDeleteCallback_(deleted, msg);
     }
 
+    // The interaction object is let go once its window has closed
+    // (0x00518d50 from each window's close).
+    if (interactionObject_ != 0 && !interactionWindowOpen(interactionObject_)) {
+        releaseInteractionObject();
+    }
+
     // Validate target still exists
     if (targetGuid != 0 && !entityController_->getEntityManager().hasEntity(targetGuid)) {
         clearTarget();
@@ -3517,6 +3523,56 @@ std::vector<const char*> GameHandler::setPlayerShapeshiftForm(uint8_t form) {
     return formChangeEvents(before, getBonusActionBarOffset());
 }
 
+void GameHandler::setInteractionObject(uint64_t guid) {
+    // 0x0051fce0. Whatever was set is let go first, even the same object
+    // again (0x00518d50 with 0xbd07a8 itself).
+    releaseInteractionObject();
+    interactionObject_ = guid;
+    // A game object (type mask 0x20) plays its OPEN (0x0070bab0, slot 0x98).
+    auto entity = guid ? getEntityManager().getEntity(guid) : nullptr;
+    if (entity && entity->getType() == ObjectType::GAMEOBJECT && gameObjectInteractionCallback_) {
+        gameObjectInteractionCallback_(guid, true);
+    }
+}
+
+void GameHandler::setQuestInteractionObject(uint64_t guid) {
+    if (guid != 0 && guid == interactionObject_) {
+        auto entity = getEntityManager().getEntity(guid);
+        if (entity && entity->getType() == ObjectType::GAMEOBJECT) return;
+    }
+    setInteractionObject(guid);
+}
+
+void GameHandler::releaseInteractionObject() {
+    // 0x00512e60: cleared, and a game object plays its CLOSE (0x0070bac0,
+    // slot 0x9c).
+    const uint64_t guid = interactionObject_;
+    if (guid == 0) return;
+    interactionObject_ = 0;
+    auto entity = getEntityManager().getEntity(guid);
+    if (entity && entity->getType() == ObjectType::GAMEOBJECT && gameObjectInteractionCallback_) {
+        gameObjectInteractionCallback_(guid, false);
+    }
+}
+
+bool GameHandler::interactionWindowOpen(uint64_t guid) {
+    // The windows that set it: gossip and the quest giver's list (0x0058a550,
+    // 0x0058c5a0), the quest windows (0x0058c5a0), a book (0x0058a1a0), the
+    // mailbox (0x0056da60) and the guild bank (0x005a7250). Each lets it go
+    // as it closes (0x00518d50); gossip not while a quest window is still
+    // open with it, nor that the other way round (0x0058a550, 0x0058ca70).
+    if (isGossipWindowOpen() && getCurrentGossip().npcGuid == guid) return true;
+    if (isQuestDetailsOpen() && getQuestDetails().npcGuid == guid) return true;
+    if (isQuestRequestItemsOpen() && getQuestRequestItems().npcGuid == guid) return true;
+    if (isQuestOfferRewardOpen() && getQuestOfferReward().npcGuid == guid) return true;
+    if (bookObjectGuid_ == guid) return true;
+    if (inventoryHandler_) {
+        if (inventoryHandler_->isMailboxOpen() && inventoryHandler_->getMailboxGuid() == guid) return true;
+        if (inventoryHandler_->isGuildBankOpen() && inventoryHandler_->getGuildBankerGuid() == guid) return true;
+    }
+    return false;
+}
+
 void GameHandler::closeNpcInteraction() {
     // The client keeps one object a window is open with (0xbd07a8, set by
     // 0x0051fce0 as each opens, the last closing the one before); wowee keeps
@@ -3540,7 +3596,9 @@ void GameHandler::closeNpcInteraction() {
         (unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) == 0 && npcFarewellCallback_) {
         npcFarewellCallback_(npc, glm::vec3(unit->getX(), unit->getY(), unit->getZ()));
     }
-    // 0x00512e60: the window that object opened.
+    // 0x00512e60: the object is let go - a game object's CLOSE - and the
+    // window it opened closes.
+    releaseInteractionObject();
     //
     // A trade is cancelled - CMSG_CANCEL_TRADE and TRADE_CLOSED (0x005870a0,
     // 0x00704040, event 0x132).

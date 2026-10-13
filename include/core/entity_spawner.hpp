@@ -128,6 +128,10 @@ public:
     /// model existed and was dropped, so every door in the world was drawn in
     /// its closed pose however the server had it.
     void applyGameObjectState(uint64_t guid, uint8_t goState);
+    /// The object became the one a window is open with (open), or stopped
+    /// being it: its type's OPEN (slot 0x98) or CLOSE (slot 0x9c) - see
+    /// game/go_interaction_anim.hpp.
+    void applyGameObjectInteraction(uint64_t guid, bool open);
 
     // Quick instance ID lookups (returns 0 if not found)
     uint32_t getCreatureInstanceId(uint64_t guid) const {
@@ -1123,6 +1127,13 @@ private:
     std::unordered_map<uint64_t, uint8_t> gameObjectPendingState_;
     /// The last GOState applied to each object, so a change knows where from.
     std::unordered_map<uint64_t, uint8_t> gameObjectServerState_;
+    /// The client's animation state each object is in (0x00ada938's index,
+    /// the type handler's +0x10).
+    std::unordered_map<uint64_t, uint8_t> gameObjectAnimState_;
+    /// When a custom animation an interaction started ends, and the object
+    /// goes back to its server state's pose (0x0070d7e0).
+    std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> gameObjectCustomAnimEnd_;
+    void updateGameObjectCustomAnims();
     struct PendingTransportMove {
         float x = 0.0f, y = 0.0f, z = 0.0f, orientation = 0.0f;
     };
