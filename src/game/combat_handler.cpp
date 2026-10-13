@@ -401,12 +401,11 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
         if (dynamic_cast<Unit*>(entity.get())) {
             // 0x00729740 with the player attacking.
             const uint64_t me = owner_.getPlayerGuid();
-            if (!owner_.unitMayAttack(me, targetGuid) && !isAggressiveTowardPlayer(targetGuid)) {
+            if (!owner_.unitMayAttack(me, targetGuid)) {
                 const uint64_t theirTarget = unitTargetGuid(entity);
                 auto their = owner_.getEntityManager().getEntity(theirTarget);
                 auto* theirUnit = dynamic_cast<Unit*>(their.get());
-                if (theirUnit && (owner_.unitMayAttack(me, theirTarget) ||
-                                  isAggressiveTowardPlayer(theirTarget))) {
+                if (theirUnit && owner_.unitMayAttack(me, theirTarget)) {
                     targetGuid = theirTarget;
                 } else {
                     return;   // nothing of theirs worth swinging at
@@ -1565,8 +1564,7 @@ void CombatHandler::setTarget(uint64_t guid) {
             // (0x00729a70), else the last friend one the player may help
             // (0x007293d0).
             const uint64_t me = owner_.getPlayerGuid();
-            if ((unit->getHealth() > 0 && owner_.unitMayAttack(me, previous)) ||
-                isAggressiveTowardPlayer(previous)) {
+            if (unit->getHealth() > 0 && owner_.unitMayAttack(me, previous)) {
                 lastEnemyTargetGuid_ = previous;
             } else if (owner_.unitMayAssist(me, previous)) {
                 lastFriendTargetGuid_ = previous;
@@ -1765,7 +1763,7 @@ void CombatHandler::targetEnemy(bool reverse) {
         auto* unit = dynamic_cast<Unit*>(&e);
         if (!unit || unit->getHealth() == 0) return false;
         // 0x00518e40: one the player may attack (0x00729740).
-        return owner_.unitMayAttack(owner_.getPlayerGuid(), guid) || isAggressiveTowardPlayer(guid);
+        return owner_.unitMayAttack(owner_.getPlayerGuid(), guid);
     });
 }
 
@@ -1782,7 +1780,7 @@ void CombatHandler::targetNearestEnemyPlayer(bool reverse) {
         auto* unit = dynamic_cast<Unit*>(&e);
         if (!unit || unit->getHealth() == 0) return false;
         // 0x00518e40: one the player may attack (0x00729740).
-        return owner_.unitMayAttack(owner_.getPlayerGuid(), guid) || isAggressiveTowardPlayer(guid);
+        return owner_.unitMayAttack(owner_.getPlayerGuid(), guid);
     });
 }
 
@@ -1850,9 +1848,7 @@ void CombatHandler::tabTarget(float playerX, float playerY, float playerZ) {
                    !lootIt->second.data.items.empty();
         }
         // 0x00518e40: one the player may attack (0x00729740).
-        const bool hostileByFaction = owner_.unitMayAttack(owner_.getPlayerGuid(), guid);
-        const bool hostileByCombat = isAggressiveTowardPlayer(guid);
-        return hostileByFaction || hostileByCombat;
+        return owner_.unitMayAttack(owner_.getPlayerGuid(), guid);
     };
 
     // Restart the cycle after a pause - the player has moved on; the next tab
