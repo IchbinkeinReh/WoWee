@@ -94,7 +94,8 @@ AllocatedImage createImage(VkDevice device, VmaAllocator allocator,
 
     if (const VkResult r = vmaCreateImage(allocator, &imgInfo, &allocInfo,
             &result.image, &result.allocation, nullptr); r != VK_SUCCESS) {
-        LOG_ERROR("Failed to create VMA image (", width, "x", height, "): ", static_cast<int>(r));
+        LOG_ERROR("Failed to create VMA image (", width, "x", height, " fmt=",
+                  static_cast<int>(format), " usage=", usage, "): ", static_cast<int>(r));
         // The size is not known without the image; its texels at 8 bytes
         // a sample are near enough for the dialog.
         noteFailure(r, uint64_t(width) * height * uint32_t(samples) * 8);
