@@ -87,7 +87,18 @@ void main() {
 
     float sun = 0.0;
     vec3 L = normalize(pass.sunDir.xyz);
-    if (pass.sunColor.w > 0.5 && dot(n, L) > 0.0) {
+    if (pass.sunColor.w > 0.5) {
+        // A surface turned away from the sun is traced from its far side.
+        // That was taken as shadowed outright, and is for a solid - its ray
+        // starts inside and leaves through the solid's own sunlit face, as a
+        // hillside's runs under the ground until it comes out of it. But a
+        // card - a tuft of grass, a leaf - has nothing behind it: seen from
+        // its shaded face, against the sun, it is lit through, and a
+        // meadow looked at toward an evening sun went dark tuft by tuft.
+        // Its light still comes by its own N.L in the surface shaders, or
+        // by the ground's (ground clutter); this is only whether anything
+        // stands between it and the sun.
+        vec3 sunOrigin = dot(n, L) > 0.0 ? origin : p - n * rtSurfaceOffset(dist);
         vec3 sd = rtConeSample(L, pass.sunDir.w, rng);
         // Within the shadow map's reach the units' sun shadows are the map's:
         // drawn this frame in the pose on screen. Traced, they came a frame
@@ -96,7 +107,7 @@ void main() {
         vec3 fromMap = p - pass.unitMap.xyz;
         rtSkipUnits = dot(fromMap, fromMap) < pass.unitMap.w * pass.unitMap.w;
         bool byUnit;
-        sun = rtOccludedBy(origin, sd, pass.params.w, rng, byUnit) ? 0.0 : 1.0;
+        sun = rtOccludedBy(sunOrigin, sd, pass.params.w, rng, byUnit) ? 0.0 : 1.0;
         rtSkipUnits = false;
         unitHit = unitHit || byUnit;
     }
