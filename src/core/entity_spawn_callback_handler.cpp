@@ -116,21 +116,9 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
         entitySpawner_.onGameObjectInfoReceived(entry);
     });
 
-    // GameObject custom animation callback (e.g. chest opening)
-    gameHandler_.setGameObjectCustomAnimCallback([this](uint64_t guid, uint32_t animId) {
-        auto& goInstances = entitySpawner_.getGameObjectInstances();
-        auto it = goInstances.find(guid);
-        if (it == goInstances.end()) return;
-        auto& info = it->second;
-        if (!info.isWmo) {
-            if (auto* m2r = renderer_.getM2Renderer()) {
-                // Play the custom animation as a one-shot if model supports it
-                if (m2r->hasAnimation(info.instanceId, animId))
-                    m2r->setInstanceAnimation(info.instanceId, animId, false);
-                else
-                    m2r->setInstanceAnimationFrozen(info.instanceId, false);
-            }
-        }
+    // A custom or despawn animation the server plays on a game object.
+    gameHandler_.setGameObjectCustomAnimCallback([this](uint64_t guid, uint8_t animState) {
+        entitySpawner_.playGameObjectCustomAnim(guid, animState);
     });
 
     // GameObject state change callback: a door, a chest, a destructible is a

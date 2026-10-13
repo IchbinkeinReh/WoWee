@@ -73,6 +73,31 @@ struct Step {
     }
 }
 
+/// Whether the type handler's slot 0x4c, through which a custom animation is
+/// played (0x0070bde0, 0x0070bef0, 0x00713f50), is 0x0070c480: enter the
+/// state if the model has its animation. The handlers 0x00714250 builds for
+/// types 4, 7, 11, 13, 14, 15, 31, 32, 33 and 35, and the base one for a
+/// type it has no case for (0x00a33618: 20, 21, 28 and past 35), have
+/// 0x00632050 there, which does nothing.
+[[nodiscard]] inline bool playsCustomAnimation(uint32_t goType) {
+    switch (goType) {
+        case 4: case 7: case 11: case 13: case 14: case 15:
+        case 20: case 21: case 28:
+        case 31: case 32: case 33: case 35:
+            return false;
+        default:
+            return goType < 35;
+    }
+}
+
+/// SMSG_GAMEOBJECT_CUSTOM_ANIM (0x0070be90): an index under 4 plays custom
+/// animation 0..3 (0x0070bde0, 0x00a335e8[index + 2]: Custom0..3); any other
+/// is ignored.
+[[nodiscard]] inline std::optional<uint8_t> customAnimState(uint32_t index) {
+    if (index >= 4) return std::nullopt;
+    return static_cast<uint8_t>(kStateCustom0 + index);
+}
+
 /// The interaction object was cleared (0x00512e60 -> 0x0070bac0, slot 0x9c).
 ///   type 2   0x0070ff20: Close, with no customAnim and the object in Open
 ///            or Opened

@@ -7,6 +7,7 @@
 #include "game/packed_time.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/game_utils.hpp"
+#include "game/go_interaction_anim.hpp"
 #include "game/chat_handler.hpp"
 #include "game/movement_handler.hpp"
 #include "game/combat_handler.hpp"
@@ -621,12 +622,16 @@ void GameHandler::registerCoreOpcodes() {
         Opcode::SMSG_DYNAMIC_DROP_ROLL_RESULT, Opcode::SMSG_DESTRUCTIBLE_BUILDING_DAMAGE,
     }) { registerSkipHandler(op); }
 
-    // Game object despawn animation - reset state to closed before actual despawn
+    // 0x0070bef0: the game object (type mask 0x20) plays Despawn, the
+    // animation state 0x00a335e8[6] - through its type's slot 0x4c, or noted
+    // for a model still loading (+0x208 = 6).
     dispatchTable_[Opcode::SMSG_GAMEOBJECT_DESPAWN_ANIM] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(8)) return;
         uint64_t guid = packet.readUInt64();
-        // Trigger a CLOSE animation / freeze before the object is removed
-        if (gameObjectStateCallback_) gameObjectStateCallback_(guid, 0);
+        auto entity = entityController_->getEntityManager().getEntity(guid);
+        if (!entity || entity->getType() != ObjectType::GAMEOBJECT) return;
+        if (gameObjectCustomAnimCallback_)
+            gameObjectCustomAnimCallback_(guid, go_interaction::kStateDespawn);
     };
     // Game object reset state - return to READY(closed) state
     dispatchTable_[Opcode::SMSG_GAMEOBJECT_RESET_STATE] = [this](network::Packet& packet) {
@@ -1256,9 +1261,10 @@ void GameHandler::registerCoreOpcodes() {
         if (packet.getSize() < 12) return;
         uint64_t guid = packet.readUInt64();
         uint32_t animId = packet.readUInt32();
-        bool ownedFishingBite = false;
         auto goEnt = entityController_->getEntityManager().getEntity(guid);
-        if (goEnt && goEnt->getType() == ObjectType::GAMEOBJECT) {
+        // 0x0070be90: only for a game object (type mask 0x20).
+        if (!goEnt || goEnt->getType() != ObjectType::GAMEOBJECT) return;
+        {
             auto go = std::static_pointer_cast<GameObject>(goEnt);
             // Only treat custom animation as a bite when this is our bobber.
             // AzerothCore sends the GO's animation progress (normally 100), not
@@ -1266,14 +1272,9 @@ void GameHandler::registerCoreOpcodes() {
             uint64_t createdBy = static_cast<uint64_t>(go->getField(6))
                                | (static_cast<uint64_t>(go->getField(7)) << 32);
             auto* info = getCachedGameObjectInfo(go->getEntry());
-            ownedFishingBite = createdBy == playerGuid && (!info || info->type == 17);
+            const bool ownedFishingBite = createdBy == playerGuid && (!info || info->type == 17);
             if (ownedFishingBite) {
                 hookedFishingBobberGuid_ = guid;
-                // G_FishingBobber.m2 sequence 153 is its authored 1.33s bite/splash
-                // animation; sequence 0 is the normal three-second idle bob.
-                constexpr uint32_t kFishingBobberBiteAnimation = 153;
-                if (gameObjectCustomAnimCallback_)
-                    gameObjectCustomAnimCallback_(guid, kFishingBobberBiteAnimation);
                 addUIError("A fish is on your line! Right-click to reel it in.");
                 addSystemChatMessage("A fish is on your line! Right-click to reel it in.");
                 withSoundManager(&audio::AudioCoordinator::getUiSoundManager,
@@ -1282,8 +1283,12 @@ void GameHandler::registerCoreOpcodes() {
                             " serverAnimProgress=", animId);
             }
         }
-        if (!ownedFishingBite && gameObjectCustomAnimCallback_)
-            gameObjectCustomAnimCallback_(guid, animId);
+        // Custom0..3 for an index under 4 (0x0070bde0, 0x00a335e8[index + 2]),
+        // the bobber's included - its bite is Custom0. Any other index is
+        // ignored, so the animation progress AzerothCore sends shows nothing,
+        // as in the client.
+        if (const auto state = go_interaction::customAnimState(animId); state && gameObjectCustomAnimCallback_)
+            gameObjectCustomAnimCallback_(guid, *state);
     };
 
     // Item refund / socket gems / item time

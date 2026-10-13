@@ -138,6 +138,11 @@ public:
     /// being it: its type's OPEN (slot 0x98) or CLOSE (slot 0x9c) - see
     /// game/go_interaction_anim.hpp.
     void applyGameObjectInteraction(uint64_t guid, bool open);
+    /// The server's custom animation (SMSG_GAMEOBJECT_CUSTOM_ANIM, 0x0070be90:
+    /// Custom0..3) or despawn animation (SMSG_GAMEOBJECT_DESPAWN_ANIM,
+    /// 0x0070bef0: Despawn) for the object: through its type's slot 0x4c, or
+    /// noted for a model still loading (+0x208).
+    void playGameObjectCustomAnim(uint64_t guid, uint8_t state);
 
     // Quick instance ID lookups (returns 0 if not found)
     uint32_t getCreatureInstanceId(uint64_t guid) const {

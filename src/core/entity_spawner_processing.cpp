@@ -2368,6 +2368,32 @@ void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
     enterGameObjectAnimState(guid, instanceId, step.state);
 }
 
+void EntitySpawner::playGameObjectCustomAnim(uint64_t guid, uint8_t state) {
+    namespace gi = game::go_interaction;
+    if (!gameHandler_) return;
+    auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return;
+    auto it = gameObjectInstances_.find(guid);
+    if (it == gameObjectInstances_.end()) {
+        // 0x0070bde0 / 0x0070bef0: the model still loading, it is noted
+        // (+0x208), whatever the type, for 0x00713f50 to play.
+        gameObjectPendingCustomAnim_[guid] = state;
+        return;
+    }
+    gameObjectPendingCustomAnim_.erase(guid);   // +0x208 = 0
+    auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
+    if (it->second.isWmo || !m2) return;
+    // Slot 0x4c: 0x0070c480 for most types - if the model has the state's
+    // animation (0x00ada938[state]) - and nothing for the rest.
+    const uint16_t bytes1 = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
+    if (bytes1 == 0xFFFF) return;
+    const uint32_t goType = (entity->getField(bytes1) >> 8) & 0xFFu;
+    if (!gi::playsCustomAnimation(goType)) return;
+    const uint32_t instanceId = it->second.instanceId;
+    if (state >= std::size(kGoStateAnim) || !m2->hasAnimation(instanceId, kGoStateAnim[state])) return;
+    enterGameObjectAnimState(guid, instanceId, state);
+}
+
 void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId, uint8_t state) {
     namespace gi = game::go_interaction;
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
@@ -2408,7 +2434,11 @@ void EntitySpawner::applyPendingGameObjectCustomAnim(uint64_t guid) {
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
     if (it == gameObjectInstances_.end() || it->second.isWmo || !m2) return;
     // 0x00713f50: after the server state's pose, the noted animation by slot
-    // 0x4c (0x0070c480) - if the model has it.
+    // 0x4c (0x0070c480) - if the type's slot plays one and the model has it.
+    auto entity = gameHandler_ ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
+    const uint16_t bytes1 = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
+    if (!entity || bytes1 == 0xFFFF) return;
+    if (!game::go_interaction::playsCustomAnimation((entity->getField(bytes1) >> 8) & 0xFFu)) return;
     if (state >= std::size(kGoStateAnim) || !m2->hasAnimation(it->second.instanceId, kGoStateAnim[state])) return;
     enterGameObjectAnimState(guid, it->second.instanceId, state);
 }

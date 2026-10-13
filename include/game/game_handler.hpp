@@ -1734,7 +1734,11 @@ public:
     /// holds it. Without one, the despawn callback.
     void setGameObjectDestroyCallback(GameObjectDespawnCallback cb) { gameObjectDestroyCallback_ = std::move(cb); }
 
-    using GameObjectCustomAnimCallback = std::function<void(uint64_t guid, uint32_t animId)>;
+    /// A custom animation the server plays on a game object: the client's
+    /// animation state for it (go_interaction_anim.hpp), Custom0..3 from
+    /// SMSG_GAMEOBJECT_CUSTOM_ANIM (0x0070be90) and Despawn from
+    /// SMSG_GAMEOBJECT_DESPAWN_ANIM (0x0070bef0).
+    using GameObjectCustomAnimCallback = std::function<void(uint64_t guid, uint8_t animState)>;
     void setGameObjectCustomAnimCallback(GameObjectCustomAnimCallback cb) { gameObjectCustomAnimCallback_ = std::move(cb); }
 
     // GameObject state change callback (triggered when GAMEOBJECT_BYTES_1 updates - state byte changes)

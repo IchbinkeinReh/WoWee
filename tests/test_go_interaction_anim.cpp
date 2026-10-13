@@ -130,3 +130,26 @@ TEST_CASE("Which states hold an object the server takes away", "[go_interaction]
     for (uint8_t s : {0, 2, 4, 5, 7, 8, 9, 10, 11, 12}) CHECK(stateHoldsObject(s));
     for (uint8_t s : {1, 3, 6}) CHECK_FALSE(stateHoldsObject(s));
 }
+
+TEST_CASE("Which types play the server's custom animations", "[go_interaction]") {
+    // Slot 0x4c of the handler 0x00714250 builds: 0x0070c480 ...
+    for (uint32_t type : {0u, 1u, 2u, 3u, 5u, 6u, 8u, 9u, 10u, 12u, 16u, 17u, 18u, 19u,
+                          22u, 23u, 24u, 25u, 26u, 27u, 29u, 30u, 34u}) {
+        CHECK(playsCustomAnimation(type));
+    }
+    // ... or 0x00632050, which does nothing - the base handler's (0x00a33618)
+    // for the types it has no case for among them.
+    for (uint32_t type : {4u, 7u, 11u, 13u, 14u, 15u, 20u, 21u, 28u, 31u, 32u, 33u, 35u, 36u, 255u}) {
+        CHECK_FALSE(playsCustomAnimation(type));
+    }
+}
+
+TEST_CASE("SMSG_GAMEOBJECT_CUSTOM_ANIM's index", "[go_interaction]") {
+    // 0x0070be90: under 4, 0x00a335e8[index + 2] - Custom0..3.
+    CHECK(customAnimState(0) == std::optional<uint8_t>(kStateCustom0));
+    CHECK(customAnimState(3) == std::optional<uint8_t>(kStateCustom0 + 3));
+    // Anything else, AzerothCore's animation progress of 100 among it, is
+    // not played.
+    CHECK_FALSE(customAnimState(4).has_value());
+    CHECK_FALSE(customAnimState(100).has_value());
+}
