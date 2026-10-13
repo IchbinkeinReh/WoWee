@@ -468,10 +468,20 @@ void main() {
         const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, pc.interiorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
+        // The ray tracing, where it has a result, as for the doodads on the
+        // same floor (m2.frag): the floor's colour is the building's baked
+        // light, its lamps in it already, so those only shadow the unit
+        // (rtBakedShade) and the other lights - fires, M2 lights - add theirs
+        // (rtPointLightOwn); the occlusion darkens the ambient. Without a
+        // result all of it is as the client has it.
+        rtSurfaceIsUnit = true;
+        RtLight rt = pc.diffuseColour.w > 0.5 ? rtLightSeeThrough(RtPrevPos) : rtLightAt(RtPrevPos);
         // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct).
-        light = clamp(pc.interiorAmbient.rgb
+        light = clamp(rtAmbient(rt, pc.interiorAmbient.rgb)
                           + idiff * pc.interiorDirect.rgb * pc.diffuseColour.rgb * pc.lightFlags.y,
-                      0.0, 1.0);
+                      0.0, 1.0)
+                  * (rtBakedLight() * rtBakedShade(rt))
+              + rtPointLightOwn(rt);
     } else {
         vec3 ldir = normalize(-lightDir.xyz);
         float diff = max(dot(norm, ldir), 0.0);
