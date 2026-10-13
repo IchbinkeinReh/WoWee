@@ -3,6 +3,7 @@
 // SMSG_CHANGEPLAYER_DIFFICULTY_RESULT as the client reads it (0x0052c460).
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace wowee::game::difficulty_change {
@@ -93,6 +94,47 @@ inline const char* englishText(const char* key) {
         if (std::string_view(e.key) == key) return e.text;
     }
     return "";
+}
+
+/// A console line as 0x007658a0 and 0x00768900 split it: spaces before the
+/// command skipped, the command up to the first space, its argument the rest
+/// with the spaces around it trimmed.
+struct ConsoleLine {
+    std::string_view command;
+    std::string_view args;
+};
+
+inline ConsoleLine splitConsoleLine(std::string_view line) {
+    while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
+    const size_t space = line.find(' ');
+    ConsoleLine out{line.substr(0, space), {}};
+    if (space == std::string_view::npos) return out;
+    std::string_view args = line.substr(space);
+    while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
+    while (!args.empty() && args.back() == ' ') args.remove_suffix(1);
+    out.args = args;
+    return out;
+}
+
+/// The console command changePlayerDifficulty (0x0052d060, registered by
+/// 0x0052d0e0 with category 5 and no help text): its argument read as
+/// 0x0076f0d0 reads one - an optional '-', then the digits up to the first
+/// other character, 0 when there are none - and sent as
+/// CMSG_CHANGEPLAYER_DIFFICULTY when under 2, with none of
+/// ChangePlayerDifficulty's checks. Nothing for anything else, which the
+/// console answers "Invalid difficulty".
+inline std::optional<uint32_t> consoleDifficulty(std::string_view args) {
+    size_t i = 0;
+    const bool negative = !args.empty() && args[0] == '-';
+    if (negative) ++i;
+    uint32_t value = 0;
+    while (i < args.size() && args[i] >= '0' && args[i] <= '9') {
+        value = value * 10u + static_cast<uint32_t>(args[i] - '0');
+        ++i;
+    }
+    if (negative) value = 0u - value;
+    if (value < 2) return value;
+    return std::nullopt;
 }
 
 }  // namespace wowee::game::difficulty_change

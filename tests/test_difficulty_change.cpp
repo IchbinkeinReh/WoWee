@@ -75,3 +75,34 @@ TEST_CASE("the cooldown is when it ends, not how long it has left", "[difficulty
     CHECK_FALSE(dc::coolingDown(now, now));  // over the second it ends
     CHECK_FALSE(dc::coolingDown(now - 5, now));
 }
+
+TEST_CASE("a console line splits at its first space", "[difficulty]") {
+    // 0x007658a0 skips the spaces before it; 0x00768900 trims the argument.
+    auto line = dc::splitConsoleLine("  changeplayerdifficulty   1  ");
+    CHECK(line.command == "changeplayerdifficulty");
+    CHECK(line.args == "1");
+    line = dc::splitConsoleLine("changeplayerdifficulty");
+    CHECK(line.command == "changeplayerdifficulty");
+    CHECK(line.args.empty());
+    line = dc::splitConsoleLine("changeplayerdifficulty 1 2");
+    CHECK(line.args == "1 2");
+}
+
+TEST_CASE("changePlayerDifficulty reads its argument as 0x0076f0d0 does", "[difficulty]") {
+    // 0 and 1 are sent; nothing to read is 0.
+    CHECK(dc::consoleDifficulty("0") == 0u);
+    CHECK(dc::consoleDifficulty("1") == 1u);
+    CHECK(dc::consoleDifficulty("") == 0u);
+    CHECK(dc::consoleDifficulty("heroic") == 0u);
+    CHECK(dc::consoleDifficulty("1x") == 1u);
+    CHECK(dc::consoleDifficulty("1 2") == 1u);
+    CHECK(dc::consoleDifficulty("-0") == 0u);
+    CHECK(dc::consoleDifficulty("-") == 0u);
+    CHECK(dc::consoleDifficulty("+1") == 0u);
+    // 2 and up, and any negative, are "Invalid difficulty".
+    CHECK_FALSE(dc::consoleDifficulty("2").has_value());
+    CHECK_FALSE(dc::consoleDifficulty("10").has_value());
+    CHECK_FALSE(dc::consoleDifficulty("-1").has_value());
+    // 2^32 + 1 wraps to 1, as the client's unsigned arithmetic does.
+    CHECK(dc::consoleDifficulty("4294967297") == 1u);
+}

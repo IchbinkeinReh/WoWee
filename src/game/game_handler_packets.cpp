@@ -146,6 +146,10 @@ void GameHandler::changePlayerDifficulty(uint32_t difficulty) {
         raiseDifficultyCooldownError(static_cast<uint32_t>(playerDifficultyCooldownEnd_ - now) * 1000u);
         return;
     }
+    sendChangePlayerDifficulty(difficulty);
+}
+
+void GameHandler::sendChangePlayerDifficulty(uint32_t difficulty) {
     if (!socket) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_CHANGEPLAYER_DIFFICULTY));
     packet.writeUInt32(difficulty);

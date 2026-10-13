@@ -5,6 +5,7 @@
 #include <vector>
 #include "addons/lua_api_helpers.hpp"
 #include "game/chat_handler.hpp"
+#include "game/difficulty_change.hpp"
 #include "game/reputation_standing.hpp"
 #include "game/stationery.hpp"
 #include "rendering/animation_controller.hpp"
@@ -3591,7 +3592,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BNListConversation",       [](lua_State* L) -> int { (void)L; return 0; }},
                 {"BNSendConversationMessage",[](lua_State* L) -> int { (void)L; return 0; }},
                 {"BNSendWhisper",            [](lua_State* L) -> int { (void)L; return 0; }},
-                // ConsoleExec(command) - the console, of which one command is
+                // ConsoleExec(command) - the console, of which two commands are
                 // reachable and worth honouring.
                 //
                 // SlashCmdList["RELOAD"] is ConsoleExec("reloadui") and nothing
@@ -3605,6 +3606,18 @@ void registerSocialLuaAPI(lua_State* L) {
             if (cmd == "reloadui") {
                 if (auto* svc = getLuaServices(L); svc && svc->requestReloadUI) {
                     svc->requestReloadUI();
+                }
+            }
+            // changePlayerDifficulty <0|1> (0x0052d060): sent as it is, with
+            // none of ChangePlayerDifficulty's checks; anything else is
+            // "Invalid difficulty" on the console, which this client has not.
+            namespace dc = wowee::game::difficulty_change;
+            const dc::ConsoleLine line = dc::splitConsoleLine(cmd);
+            if (line.command == "changeplayerdifficulty") {
+                if (const auto difficulty = dc::consoleDifficulty(line.args)) {
+                    if (auto* gh = getGameHandler(L)) gh->sendChangePlayerDifficulty(*difficulty);
+                } else {
+                    LOG_WARNING("Console: Invalid difficulty");
                 }
             }
             return 0;

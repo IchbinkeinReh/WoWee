@@ -2006,6 +2006,9 @@ public:
     /// 0x0052d8d0: CMSG_CHANGEPLAYER_DIFFICULTY with the difficulty, or the
     /// cooldown's error while it runs.
     void changePlayerDifficulty(uint32_t difficulty);
+    /// CMSG_CHANGEPLAYER_DIFFICULTY with the difficulty and nothing asked
+    /// first - the console's changePlayerDifficulty (0x0052d060).
+    void sendChangePlayerDifficulty(uint32_t difficulty);
 
     /** True when ghost is within 40 yards of corpse position (same map). */
     bool canReclaimCorpse() const;
