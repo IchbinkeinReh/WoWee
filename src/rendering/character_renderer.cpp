@@ -15,6 +15,7 @@
  * the original WoW Model Viewer (charcontrol.h, REGION_FAC=2).
  */
 #include <atomic>
+#include "core/frame_profiler.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/pom_quality.hpp"
 #include "rendering/shadow_params.hpp"
@@ -3149,6 +3150,7 @@ void CharacterRenderer::prepareRender(uint32_t frameIndex) {
     if (instances.empty() || !opaquePipeline_) return;
     if (frameIndex >= 2 || boneDescPool_ == VK_NULL_HANDLE || boneSetLayout_ == VK_NULL_HANDLE) return;
 
+    WOWEE_PROFILE_SCOPE("prepare: character bone ring", Cpu);
     // Pre-allocate bone SSBOs + descriptor sets on main thread (pool ops not
     // thread-safe): the whole ring at once, as each set binds two of them.
     constexpr int kRing = CharacterInstance::kBoneRing;

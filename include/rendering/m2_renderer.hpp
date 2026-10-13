@@ -417,8 +417,10 @@ struct M2Instance {
     uint64_t rtSeenFrame = 0;
     uint64_t rtPrevRefFrame = 0;
     uint32_t rtPrevRef = 0;
-    // The frame its placement was last set in (notePlaced).
+    // The frame its placement was last set in, and whether it is in
+    // M2Renderer::rtPlacedIds_ (notePlaced).
     uint64_t rtPlacedFrame = 0;
+    bool rtPlacedListed = false;
 
     bool bonesDirty[2] = {false, false};  // Per-frame-index: set when bones recomputed, cleared after upload
     // Mega-bone slot this instance's bones were last uploaded to, per frame

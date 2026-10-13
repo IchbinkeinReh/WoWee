@@ -697,8 +697,10 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
 static const bool kM2NoSkinning = envFlagEnabled("WOWEE_M2_NO_SKINNING");
 
 void M2Renderer::notePlaced(uint32_t instanceId, M2Instance& inst) {
-    if (inst.rtPlacedFrame == rtFrame_ + 1) return;
     inst.rtPlacedFrame = rtFrame_ + 1;
+    // Once in the list, however often it is placed.
+    if (inst.rtPlacedListed) return;
+    inst.rtPlacedListed = true;
     rtPlacedIds_.push_back(instanceId);
 }
 
@@ -712,6 +714,7 @@ void M2Renderer::notePlaced(uint32_t instanceId, M2Instance& inst) {
 // are placed once, and what of them is animated - a tree in the wind, a
 // banner - moves too little to tell.
 void M2Renderer::prepareRtMovers(uint32_t frameIndex, const glm::vec3& cameraPos) {
+    WOWEE_PROFILE_SCOPE("prepare: m2 movers", Cpu);
     ++rtFrame_;
     rtMovers_.clear();
     // As far as a mover can be told from what stands behind it at the half
@@ -788,9 +791,17 @@ void M2Renderer::prepareRtMovers(uint32_t frameIndex, const glm::vec3& cameraPos
     std::vector<uint32_t> placed;
     placed.swap(rtPlacedIds_);
     for (uint32_t id : placed) {
-        visit(id);
         auto it = instanceIndexById.find(id);
-        if (it != instanceIndexById.end() && instances[it->second].rtPlacedFrame + 1 >= rtFrame_) {
+        if (it == instanceIndexById.end()) continue;
+        instances[it->second].rtPlacedListed = false;
+    }
+    for (uint32_t id : placed) {
+        auto it = instanceIndexById.find(id);
+        if (it == instanceIndexById.end()) continue;
+        visit(id);
+        M2Instance& inst = instances[it->second];
+        if (inst.rtPlacedFrame + 1 >= rtFrame_ && !inst.rtPlacedListed) {
+            inst.rtPlacedListed = true;
             rtPlacedIds_.push_back(id);
         }
     }
@@ -799,6 +810,7 @@ void M2Renderer::prepareRtMovers(uint32_t frameIndex, const glm::vec3& cameraPos
 void M2Renderer::prepareRender(uint32_t frameIndex, const Camera& camera) {
     if (!initialized_ || instances.empty()) return;
     prepareRtMovers(frameIndex, camera.getPosition());
+    WOWEE_PROFILE_SCOPE("prepare: m2 bones", Cpu);
 
     // --- Mega bone SSBO: assign ranges and upload all animated instance bones ---
     // Offset 0 is reserved as the identity/no-bones sentinel; animated instances

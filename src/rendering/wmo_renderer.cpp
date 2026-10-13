@@ -1,3 +1,4 @@
+#include "core/frame_profiler.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/pom_quality.hpp"
@@ -1656,6 +1657,7 @@ void WMORenderer::gatherCandidates(const glm::vec3& queryMin, const glm::vec3& q
 // surface, it finds itself in the result traced then (wmo.vert), and its
 // texels are a mover's, which nothing else takes (RtMover).
 void WMORenderer::prepareRtMovers() {
+    WOWEE_PROFILE_SCOPE("prepare: wmo movers", Cpu);
     rtMovers_.clear();
     std::vector<uint32_t> placed;
     placed.swap(rtPlacedIds_);
