@@ -2645,7 +2645,15 @@ void InventoryHandler::useItemById(uint32_t itemId, uint64_t unitTarget) {
 }
 
 void InventoryHandler::handleListInventory(network::Packet& packet) {
-    if (!ListInventoryParser::parse(packet, currentVendorItems_)) return;
+    ListInventoryData data;
+    data.canRepair = currentVendorItems_.canRepair;   // set by the gossip's repair option
+    if (!ListInventoryParser::parse(packet, data)) return;
+    // MERCHANT_SHOW opens with the vendor (0x00584500), which first sets it
+    // as the interaction object (0x0051fce0): the window open with the one
+    // before closes (0x00512e60) - the merchant's own, MERCHANT_CLOSED, when
+    // it is open with that vendor already - and only then is the list taken.
+    owner_.setInteractionObject(data.vendorGuid);
+    currentVendorItems_ = std::move(data);
 
     // Detect repair capability from NPC flags (covers direct vendors without gossip).
     // UNIT_NPC_FLAG_REPAIR = 0x1000.
@@ -2657,8 +2665,6 @@ void InventoryHandler::handleListInventory(network::Packet& packet) {
         }
     }
     vendorWindowOpen_ = true;
-    // MERCHANT_SHOW opens with the vendor (0x00584500 -> 0x0051fce0).
-    owner_.setInteractionObject(currentVendorItems_.vendorGuid, go_interaction::Window::Merchant);
     if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MERCHANT_SHOW", {});
 
@@ -2952,10 +2958,12 @@ void InventoryHandler::acceptSockets() {
 // ============================================================
 
 void InventoryHandler::openMailbox(uint64_t guid) {
+    // MAIL_SHOW opens with the mailbox (0x0056da60), set as the interaction
+    // object before the window takes it (0x0051fce0): one open with that
+    // mailbox already closes first (MAIL_CLOSED).
+    owner_.setInteractionObject(guid);
     mailboxGuid_ = guid;
     mailboxOpen_ = true;
-    // MAIL_SHOW opens with the mailbox (0x0056da60 -> 0x0051fce0).
-    owner_.setInteractionObject(guid, go_interaction::Window::Mailbox);
     // Through the setter, which is the only thing that says so. Assigning the
     // member cleared the flag and told nobody: this client's own minimap asks
     // hasNewMail() again on every frame it draws, so it went out by itself,
@@ -3262,9 +3270,10 @@ void InventoryHandler::mailMarkAsRead(uint32_t mailId) {
 
 void InventoryHandler::handleShowMailbox(network::Packet& packet) {
     if (!packet.hasRemaining(8)) return;
-    mailboxGuid_ = packet.readUInt64();
+    const uint64_t guid = packet.readUInt64();
+    owner_.setInteractionObject(guid);   // 0x0056da60, as openMailbox
+    mailboxGuid_ = guid;
     mailboxOpen_ = true;
-    owner_.setInteractionObject(mailboxGuid_, go_interaction::Window::Mailbox);   // 0x0056da60
     selectedMailIndex_ = -1;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_SHOW", {});
     selectDefaultStationery();
@@ -3404,10 +3413,12 @@ void InventoryHandler::setHasNewMail(bool value) {
 // ============================================================
 
 void InventoryHandler::openBank(uint64_t guid) {
+    // BANKFRAME_OPENED opens with the banker (0x0057b8d0), set as the
+    // interaction object before the bank takes it (0x0051fce0): a bank open
+    // with that banker already closes first (BANKFRAME_CLOSED).
+    owner_.setInteractionObject(guid);
     bankerGuid_ = guid;
     bankOpen_ = true;
-    // BANKFRAME_OPENED opens with the banker (0x0057b8d0 -> 0x0051fce0).
-    owner_.setInteractionObject(guid, go_interaction::Window::Bank);
     if (isClassicLikeExpansion()) {
         effectiveBankSlots_ = 24;
         effectiveBankBagSlots_ = 6;
@@ -3673,11 +3684,13 @@ void InventoryHandler::handleGuildBankList(network::Packet& packet) {
 // ============================================================
 
 void InventoryHandler::openAuctionHouse(uint64_t guid) {
+    // AUCTION_HOUSE_SHOW opens with the auctioneer (0x0059f000), set as the
+    // interaction object before the window takes it (0x0051fce0): one open
+    // with that auctioneer already closes first (AUCTION_HOUSE_CLOSED).
+    owner_.setInteractionObject(guid);
     auctioneerGuid_ = guid;
     auctionOpen_ = true;
     auctionActiveTab_ = 0;
-    // AUCTION_HOUSE_SHOW opens with the auctioneer (0x0059f000 -> 0x0051fce0).
-    owner_.setInteractionObject(guid, go_interaction::Window::AuctionHouse);
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_SHOW", {});
 }
 

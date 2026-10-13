@@ -255,3 +255,19 @@ TEST_CASE("A door collides only in Closed", "[go_interaction]") {
     // Other types' entry (0x0070d510) leaves it.
     for (uint32_t type : {1u, 3u, 5u, 35u}) CHECK_FALSE(collidesAfterEntering(type, kStateCustom0).has_value());
 }
+
+TEST_CASE("A window opened again with its object closes first", "[go_interaction]") {
+    // 0x00584500 (merchant) and the bank, auction house, mailbox and
+    // registrars set the interaction object (0x0051fce0) before taking it:
+    // with that object already, 0x00512e60 finds their own window open with
+    // it and closes it - MERCHANT_CLOSED, then MERCHANT_SHOW.
+    const uint64_t vendor = 0xF130000001000001ull;
+    std::array<uint64_t, kWindowCount> with{};
+    with[static_cast<size_t>(Window::Merchant)] = vendor;
+    CHECK(windowClosedWith(with, vendor) == std::optional<Window>(Window::Merchant));
+    for (Window w : {Window::Bank, Window::AuctionHouse, Window::Mailbox, Window::Registrar}) {
+        std::array<uint64_t, kWindowCount> one{};
+        one[static_cast<size_t>(w)] = vendor;
+        CHECK(windowClosedWith(one, vendor) == std::optional<Window>(w));
+    }
+}

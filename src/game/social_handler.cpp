@@ -2938,10 +2938,11 @@ void SocialHandler::handleGuildCommandResult(network::Packet& packet) {
 void SocialHandler::handlePetitionShowlist(network::Packet& packet) {
     PetitionShowlistData data;
     if (!PetitionShowlistParser::parse(packet, data)) return;
-    petitionNpcGuid_ = data.npcGuid;
     // Either registrar's window opens with it (0x006d69f0 -> 0x00599e00 or
-    // 0x005a22a0 -> 0x0051fce0).
-    owner_.setInteractionObject(petitionNpcGuid_, go_interaction::Window::Registrar);
+    // 0x005a22a0), set as the interaction object before the window takes it
+    // (0x0051fce0): one open with that registrar already closes first.
+    owner_.setInteractionObject(data.npcGuid);
+    petitionNpcGuid_ = data.npcGuid;
     petitionCost_ = data.cost;
     // The whole offer, not just the first charter's price. An arena registrar
     // offers three and the panel prices whichever tab is open.
