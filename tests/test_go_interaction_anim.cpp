@@ -89,3 +89,38 @@ TEST_CASE("Which windows make their object the interaction object", "[go_interac
     CHECK_FALSE(windowSetsInteraction(npc, npc, self));
     CHECK_FALSE(windowSetsInteraction(self, 0, self));
 }
+
+TEST_CASE("Open and Close, Destroy and Rebuild reverse each other part-way", "[go_interaction]") {
+    // 0x0070d510's pairs; nothing else starts part-way.
+    CHECK(reversesTransition(kStateOpen, kStateClose));
+    CHECK(reversesTransition(kStateClose, kStateOpen));
+    CHECK(reversesTransition(kStateDestroy, kStateRebuild));
+    CHECK(reversesTransition(kStateRebuild, kStateDestroy));
+    CHECK_FALSE(reversesTransition(kStateOpened, kStateClose));
+    CHECK_FALSE(reversesTransition(1, kStateOpen));
+    CHECK_FALSE(reversesTransition(kStateOpen, kStateDestroy));
+    CHECK_FALSE(reversesTransition(kStateCustom0, kStateClose));
+}
+
+TEST_CASE("A reversed transition starts at what is left of the other", "[go_interaction]") {
+    // 0x0070d010: (1 - elapsed / length) * 65535, rounded.
+    CHECK(reversedStartProgress(0.0f, 1000.0f, 1.0f) == uint16_t{65535});
+    CHECK(reversedStartProgress(250.0f, 1000.0f, 1.0f) == uint16_t{49151});   // 49151.25
+    CHECK(reversedStartProgress(500.0f, 1000.0f, 1.0f) == uint16_t{32768});   // 32767.5, to even
+    CHECK(reversedStartProgress(1000.0f, 1000.0f, 1.0f) == uint16_t{0});
+    // Its speed scales elapsed and length alike.
+    CHECK(reversedStartProgress(250.0f, 1000.0f, 2.0f) == uint16_t{49151});
+    // Past its end, held (speed 0) or of no length: from the start.
+    CHECK_FALSE(reversedStartProgress(1000.5f, 1000.0f, 1.0f).has_value());
+    CHECK_FALSE(reversedStartProgress(300.0f, 1000.0f, 0.0f).has_value());
+    CHECK_FALSE(reversedStartProgress(0.0f, 0.0f, 1.0f).has_value());
+
+    // 0x0070d1e0: duration * progress / 65535 into the new one.
+    CHECK(progressStartTime(65535, 2000) == 2000u);
+    CHECK(progressStartTime(0, 2000) == 0u);
+    CHECK(progressStartTime(49151, 2000) == 1500u);
+    // Open three quarters done; a Close of 3000 ms starts a quarter in.
+    const auto p = reversedStartProgress(1500.0f, 2000.0f, 1.0f);
+    REQUIRE(p.has_value());
+    CHECK(progressStartTime(*p, 3000) == 750u);
+}

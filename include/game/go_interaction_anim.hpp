@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace wowee::game::go_interaction {
 
@@ -10,6 +12,8 @@ namespace wowee::game::go_interaction {
 inline constexpr uint8_t kStateOpen = 2;
 inline constexpr uint8_t kStateOpened = 3;
 inline constexpr uint8_t kStateClose = 4;
+inline constexpr uint8_t kStateDestroy = 5;
+inline constexpr uint8_t kStateRebuild = 7;
 inline constexpr uint8_t kStateCustom0 = 8;
 inline constexpr uint8_t kStateDespawn = 12;
 
@@ -87,6 +91,35 @@ struct Step {
         default:
             return {};
     }
+}
+
+/// 0x0070d510: entering `to` from `from` reverses a transition - Open and
+/// Close, Destroy and Rebuild - which then starts where the other got to.
+[[nodiscard]] inline bool reversesTransition(uint8_t from, uint8_t to) {
+    return (from == kStateOpen && to == kStateClose) || (from == kStateClose && to == kStateOpen) ||
+           (from == kStateDestroy && to == kStateRebuild) || (from == kStateRebuild && to == kStateDestroy);
+}
+
+/// 0x0070d510 -> 0x0070d010: how far into the reversed transition it starts,
+/// in 65535ths (written to GAMEOBJECT_DYNAMIC's high half, +0x22): what is
+/// left of the one playing, 1 - elapsed / length over 0x008266b0's start and
+/// end. Those span the sequence's length at its speed, its time counted
+/// from the start, so elapsed / length is time / duration. None when that
+/// has no length (a speed of 0 starts and ends it at once, 0x00826ed0) or
+/// is past its end.
+[[nodiscard]] inline std::optional<uint16_t> reversedStartProgress(float timeMs, float durationMs,
+                                                                   float speed) {
+    if (speed == 0.0f || !(durationMs > 0.0f) || timeMs < 0.0f) return std::nullopt;
+    const float done = timeMs / durationMs;
+    if (done > 1.0f) return std::nullopt;
+    return static_cast<uint16_t>(std::lrint((1.0f - done) * 65535.0f));
+}
+
+/// 0x0070d1e0: the sequence time (ms) a transition starts at for a progress
+/// in 65535ths - duration * progress / 65535, rounded.
+[[nodiscard]] inline uint32_t progressStartTime(uint16_t progress, uint32_t durationMs) {
+    return static_cast<uint32_t>(std::lrint(static_cast<float>(durationMs) *
+                                            static_cast<float>(progress) * 1.5259022e-05f));
 }
 
 /// Whether a window opening with `guid` makes it the interaction object

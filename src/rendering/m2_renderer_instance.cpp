@@ -357,6 +357,20 @@ float M2Renderer::getInstanceAnimDuration(uint32_t instanceId) const {
     return seqs[seqIdx].duration; // in milliseconds
 }
 
+std::optional<M2Renderer::AnimPlayback> M2Renderer::getInstanceAnimPlayback(uint32_t instanceId) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return std::nullopt;
+    const auto& inst = instances[idxIt->second];
+    return AnimPlayback{inst.animTime, inst.animDuration, inst.animSpeed};
+}
+
+void M2Renderer::setInstanceAnimTime(uint32_t instanceId, float timeMs) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    auto& inst = instances[idxIt->second];
+    inst.animTime = std::clamp(timeMs, 0.0f, std::max(inst.animDuration, 0.0f));
+}
+
 bool M2Renderer::getInstanceBounds(uint32_t instanceId, glm::vec3& outCenter, float& outRadius) const {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return false;

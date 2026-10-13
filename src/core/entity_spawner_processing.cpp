@@ -34,6 +34,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <optional>
 #include <cctype>
 #include <sstream>
 #include <cstring>
@@ -2193,6 +2194,28 @@ void playGoStateAnimation(rendering::M2Renderer& m2, uint32_t instanceId, uint8_
     }
 }
 
+// 0x0070d510: a transition that reverses one still playing - Open and
+// Close, Destroy and Rebuild - is to start where that one got to, read
+// before the new one replaces it. Only while GAMEOBJECT_DYNAMIC's high half
+// holds no progress of the server's (0xffff), which wowee does not read.
+std::optional<uint16_t> goReversalProgress(const rendering::M2Renderer& m2, uint32_t instanceId,
+                                           uint8_t from, uint8_t to) {
+    if (!game::go_interaction::reversesTransition(from, to)) return std::nullopt;
+    const auto playback = m2.getInstanceAnimPlayback(instanceId);
+    if (!playback) return std::nullopt;
+    return game::go_interaction::reversedStartProgress(playback->timeMs, playback->durationMs,
+                                                       playback->speed);
+}
+
+// 0x0070d1e0: the new sequence started at that progress of its own length.
+void startGoAnimationPartWay(rendering::M2Renderer& m2, uint32_t instanceId, uint32_t anim,
+                             std::optional<uint16_t> progress) {
+    if (!progress || !m2.hasAnimation(instanceId, anim)) return;
+    const auto duration = static_cast<uint32_t>(std::max(m2.getInstanceAnimDuration(instanceId), 0.0f));
+    m2.setInstanceAnimTime(instanceId,
+                           static_cast<float>(game::go_interaction::progressStartTime(*progress, duration)));
+}
+
 } // namespace
 
 void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
@@ -2262,6 +2285,9 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
         }
     }
 
+    const auto animStateIt = gameObjectAnimState_.find(guid);
+    const auto progress = animStateIt != gameObjectAnimState_.end()
+        ? goReversalProgress(*m2, instanceId, animStateIt->second, state) : std::nullopt;
     gameObjectAnimState_[guid] = state;
     gameObjectCustomAnimEnd_.erase(guid);
 
@@ -2279,7 +2305,9 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
         }
     }
 
-    playGoStateAnimation(*m2, instanceId, state, goShownAnimation(anim, has), hold);
+    const uint32_t shown = goShownAnimation(anim, has);
+    playGoStateAnimation(*m2, instanceId, state, shown, hold);
+    startGoAnimationPartWay(*m2, instanceId, shown, progress);
 }
 
 void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
@@ -2345,6 +2373,8 @@ void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId,
     // 0x0070d510: a state it is already in is not entered again.
     auto curIt = gameObjectAnimState_.find(guid);
     if (curIt != gameObjectAnimState_.end() && curIt->second == state) return;
+    const auto progress = curIt != gameObjectAnimState_.end()
+        ? goReversalProgress(*m2, instanceId, curIt->second, state) : std::nullopt;
     gameObjectAnimState_[guid] = state;
     gameObjectCustomAnimEnd_.erase(guid);
 
@@ -2360,7 +2390,9 @@ void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId,
     }
     const auto has = [&](uint32_t anim) { return m2->hasAnimation(instanceId, anim); };
     const auto [anim, hold] = goStateAnimation(state, has);
-    playGoStateAnimation(*m2, instanceId, state, goShownAnimation(anim, has), hold);
+    const uint32_t shown = goShownAnimation(anim, has);
+    playGoStateAnimation(*m2, instanceId, state, shown, hold);
+    startGoAnimationPartWay(*m2, instanceId, shown, progress);
 }
 
 void EntitySpawner::applyPendingGameObjectCustomAnim(uint64_t guid) {

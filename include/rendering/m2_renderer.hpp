@@ -638,6 +638,13 @@ public:
     /// Check if a model instance has a specific animation ID in its sequence table.
     [[nodiscard]] bool hasAnimation(uint32_t instanceId, uint32_t animationId) const;
     [[nodiscard]] float getInstanceAnimDuration(uint32_t instanceId) const;
+    /// Where an instance's current sequence has got to: its time and length
+    /// (ms) and its speed, what the client reads of one with 0x008266b0.
+    struct AnimPlayback { float timeMs = 0.0f; float durationMs = 0.0f; float speed = 0.0f; };
+    [[nodiscard]] std::optional<AnimPlayback> getInstanceAnimPlayback(uint32_t instanceId) const;
+    /// Moves the current sequence to timeMs, within its length: one started
+    /// part-way (0x0070d1e0's start offset into 0x00832ab0).
+    void setInstanceAnimTime(uint32_t instanceId, float timeMs);
     /// World-space visual bounding sphere of an instance (center + radius),
     /// used for cursor picking and selection circles. Returns false for an
     /// unknown instance or a degenerate (zero-radius) model.
