@@ -194,3 +194,15 @@ TEST_CASE("Replacing the interaction object closes the window open with the old 
     CHECK_FALSE(windowClosedWith(with, npc, Window::Merchant).has_value());
     CHECK(windowClosedWith(with, other) == std::optional<Window>(Window::Gossip));
 }
+
+TEST_CASE("Which trade statuses end the trade the window is set with", "[go_interaction]") {
+    // 0x007044a0 clears the partner and who asked for these ...
+    for (uint32_t status : {0u, 3u, 5u, 6u, 8u, 10u, 11u, 12u, 13u, 14u, 15u, 18u, 21u}) {
+        CHECK(tradeStatusEndsTrade(status));
+    }
+    // ... and keeps them for the request, the window opening, an accept and
+    // its withdrawal, and the rest.
+    for (uint32_t status : {1u, 2u, 4u, 7u, 9u, 22u, 23u}) {
+        CHECK_FALSE(tradeStatusEndsTrade(status));
+    }
+}

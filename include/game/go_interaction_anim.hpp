@@ -214,4 +214,17 @@ inline constexpr size_t kWindowCount = static_cast<size_t>(Window::Count);
     return std::nullopt;
 }
 
+/// SMSG_TRADE_STATUS codes after which the trade manager forgets its
+/// partner and who asked (0x007044a0: 0xca0fe0 and 0xca0fe8 cleared) - the
+/// partner a trade window sets as the interaction object. Not 1, 2, 4, 7, 9
+/// or 22 and on.
+[[nodiscard]] inline bool tradeStatusEndsTrade(uint32_t status) {
+    switch (status) {
+        case 0: case 3: case 5: case 6: case 8: case 10: case 11: case 12: case 13:
+            return true;
+        default:
+            return status >= 14 && status <= 21;
+    }
+}
+
 } // namespace wowee::game::go_interaction

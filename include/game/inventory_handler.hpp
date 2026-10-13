@@ -655,6 +655,8 @@ private:
     bool tradePartnerAccepted_ = false;
     void fireTradeAcceptUpdate();
     uint64_t    tradePeerGuid_= 0;
+    /// This player asked for the trade (0xca0fe0, set by 0x00703cf0).
+    bool        tradeInitiated_ = false;
     std::string tradePeerName_;
     std::array<TradeSlot, TRADE_SLOT_COUNT> myTradeSlots_{};
     std::array<TradeSlot, TRADE_SLOT_COUNT> peerTradeSlots_{};

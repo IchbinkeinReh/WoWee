@@ -4014,6 +4014,7 @@ void InventoryHandler::setTradeGold(uint64_t amount) {
 void InventoryHandler::resetTradeState() {
     tradeStatus_ = TradeStatus::None;
     tradePeerGuid_ = 0;
+    tradeInitiated_ = false;
     tradePeerName_.clear();
     myTradeSlots_ = {};
     peerTradeSlots_ = {};
@@ -4042,6 +4043,15 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             owner_.addSystemChatMessage("Trade failed: player is busy.");
             break;
         case 1: { // BEGIN_TRADE - someone is asking
+            // 0x007044a0: to the one who asked, it is answered busy
+            // (CMSG_BUSY_TRADE, 0x00703e70) and the partner kept.
+            if (tradeInitiated_) {
+                if (owner_.getSocket()) {
+                    network::Packet busy(wireOpcode(Opcode::CMSG_BUSY_TRADE));
+                    owner_.getSocket()->send(busy);
+                }
+                break;
+            }
             if (packet.hasRemaining(8))
                 tradePeerGuid_ = packet.readUInt64();
             tradeStatus_ = TradeStatus::PendingIncoming;
@@ -4068,7 +4078,8 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             tradeSelfAccepted_ = false;
             tradePartnerAccepted_ = false;
             // TRADE_SHOW opens with the other player (0x005873e0 ->
-            // 0x005870a0 -> 0x0051fce0). Known here only to the one asked.
+            // 0x005870a0 -> 0x0051fce0): the one who asked, or the one
+            // asked (0x00703c10, set by 0x00703cf0 or BEGIN_TRADE).
             if (tradePeerGuid_ != 0) owner_.setInteractionObject(tradePeerGuid_, go_interaction::Window::Trade);
             owner_.addSystemChatMessage("Trade opened.");
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_SHOW", {});
@@ -4157,6 +4168,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             LOG_DEBUG("Unhandled SMSG_TRADE_STATUS: ", status);
             break;
     }
+    if (go_interaction::tradeStatusEndsTrade(status)) tradeInitiated_ = false;
 }
 
 void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
@@ -5940,6 +5952,11 @@ void InventoryHandler::initiateTrade(uint64_t targetGuid) {
 
     auto packet = InitiateTradePacket::build(targetGuid);
     owner_.getSocket()->send(packet);
+    // 0x00703cf0: the one asked is the partner from here (0xca0fe8), which
+    // the window opens with (TRADE_STATUS 2, 0x005873e0 -> 0x005870a0), and
+    // this player the one who asked (0xca0fe0).
+    tradePeerGuid_ = targetGuid;
+    tradeInitiated_ = true;
     owner_.addSystemChatMessage("Requesting trade with target.");
     LOG_INFO("Initiated trade with target: 0x", std::hex, targetGuid, std::dec);
 }
