@@ -4168,7 +4168,12 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             LOG_DEBUG("Unhandled SMSG_TRADE_STATUS: ", status);
             break;
     }
-    if (go_interaction::tradeStatusEndsTrade(status)) tradeInitiated_ = false;
+    // 0x007044a0: the partner and who asked are forgotten - on 8 (complete)
+    // too, whose other state waits for SMSG_TRADE_STATUS_EXTENDED.
+    if (go_interaction::tradeStatusEndsTrade(status)) {
+        tradeInitiated_ = false;
+        tradePeerGuid_ = 0;
+    }
 }
 
 void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
@@ -5950,15 +5955,44 @@ void InventoryHandler::initiateTrade(uint64_t targetGuid) {
         return;
     }
 
+    // 0x00703cf0: not with a partner already (ERR_ALREADY_TRADING), and not
+    // again within a second of the last request.
+    const auto nowMs = static_cast<uint32_t>(core::appTimeSeconds() * 1000.0);
+    switch (go_interaction::tradeInitiate(tradePeerGuid_, nowMs, tradeResendAtMs_)) {
+        case go_interaction::TradeInitiate::AlreadyTrading:
+            owner_.raiseUiError("You are already trading.");
+            return;
+        case go_interaction::TradeInitiate::TooSoon:
+            return;
+        case go_interaction::TradeInitiate::Send:
+            break;
+    }
+    tradeResendAtMs_ = nowMs + 1000;
+
     auto packet = InitiateTradePacket::build(targetGuid);
     owner_.getSocket()->send(packet);
-    // 0x00703cf0: the one asked is the partner from here (0xca0fe8), which
-    // the window opens with (TRADE_STATUS 2, 0x005873e0 -> 0x005870a0), and
-    // this player the one who asked (0xca0fe0).
+    // The one asked is the partner from here (0xca0fe8), which the window
+    // opens with (TRADE_STATUS 2, 0x005873e0 -> 0x005870a0), and this player
+    // the one who asked (0xca0fe0).
     tradePeerGuid_ = targetGuid;
     tradeInitiated_ = true;
-    owner_.addSystemChatMessage("Requesting trade with target.");
+    // ERR_INITIATE_TRADE_S with the name (0x0067d770): now if it is known,
+    // otherwise once it comes (0x00703c60).
+    auto nit = owner_.getPlayerNameCache().find(targetGuid);
+    if (nit != owner_.getPlayerNameCache().end() && !nit->second.empty()) {
+        tradeRequestNameGuid_ = 0;
+        owner_.addSystemChatMessage("You have requested to trade with " + nit->second + ".");
+    } else {
+        tradeRequestNameGuid_ = targetGuid;
+        owner_.queryPlayerName(targetGuid);
+    }
     LOG_INFO("Initiated trade with target: 0x", std::hex, targetGuid, std::dec);
+}
+
+void InventoryHandler::onPlayerNameKnown(uint64_t guid, const std::string& name) {
+    if (guid == 0 || guid != tradeRequestNameGuid_) return;
+    tradeRequestNameGuid_ = 0;
+    owner_.addSystemChatMessage("You have requested to trade with " + name + ".");
 }
 
 uint32_t InventoryHandler::getTempEnchantRemainingMs(uint32_t slot) const {

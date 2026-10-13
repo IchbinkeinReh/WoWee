@@ -227,4 +227,23 @@ inline constexpr size_t kWindowCount = static_cast<size_t>(Window::Count);
     }
 }
 
+/// What 0x00703cf0 does with a trade request (CMSG_INITIATE_TRADE).
+enum class TradeInitiate : uint8_t {
+    /// A partner is set (0xca0fe8): ERR_ALREADY_TRADING, nothing sent.
+    AlreadyTrading,
+    /// Within a second of the last request sent (0xca0ff8): nothing.
+    TooSoon,
+    /// Sent, and the next one allowed a second on.
+    Send,
+};
+
+/// `partner` is the trade manager's partner; `resendAtMs` when the next
+/// request may go (0 before the first), compared with `nowMs` as the client
+/// compares its millisecond clock.
+[[nodiscard]] inline TradeInitiate tradeInitiate(uint64_t partner, uint32_t nowMs, uint32_t resendAtMs) {
+    if (partner != 0) return TradeInitiate::AlreadyTrading;
+    if (resendAtMs != 0 && static_cast<int32_t>(nowMs - resendAtMs) < 0) return TradeInitiate::TooSoon;
+    return TradeInitiate::Send;
+}
+
 } // namespace wowee::game::go_interaction

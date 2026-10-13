@@ -232,3 +232,16 @@ TEST_CASE("A TrinityCore / AzerothCore fishing bite plays the bobber's Custom0",
     CHECK(wowee::rendering::anim::CUSTOM_0 == 153u);
     CHECK(playsCustomAnimation(17));
 }
+
+TEST_CASE("A trade request with a partner set, or within a second", "[go_interaction]") {
+    // 0x00703cf0: a partner (0xca0fe8) refuses it - ERR_ALREADY_TRADING ...
+    CHECK(tradeInitiate(0x42, 5000, 0) == TradeInitiate::AlreadyTrading);
+    CHECK(tradeInitiate(0x42, 5000, 9000) == TradeInitiate::AlreadyTrading);
+    // ... the first goes, and the next a second on (0xca0ff8), not before.
+    CHECK(tradeInitiate(0, 5000, 0) == TradeInitiate::Send);
+    CHECK(tradeInitiate(0, 5999, 6000) == TradeInitiate::TooSoon);
+    CHECK(tradeInitiate(0, 6000, 6000) == TradeInitiate::Send);
+    // The clock's wrap, as the client's signed difference takes it.
+    CHECK(tradeInitiate(0, 100, 0xFFFFFF00u) == TradeInitiate::Send);
+    CHECK(tradeInitiate(0, 0xFFFFFF00u, 100) == TradeInitiate::TooSoon);
+}

@@ -3802,6 +3802,7 @@ public:
     MovementHandler* getMovementHandler() { return movementHandler_.get(); }
     SpellHandler* getSpellHandler() { return spellHandler_.get(); }
     QuestHandler* getQuestHandler() { return questHandler_.get(); }
+    InventoryHandler* getInventoryHandler() { return inventoryHandler_.get(); }
 
     // ── Mutable Accessors for Members with Existing Const Getters ────
     void setTargetGuidRaw(uint64_t g) { targetGuid = g; }

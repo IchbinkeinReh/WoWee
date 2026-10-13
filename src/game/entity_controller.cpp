@@ -8,6 +8,7 @@
 #include "game/update_field_table.hpp"
 #include "game/opcode_table.hpp"
 #include "game/chat_handler.hpp"
+#include "game/inventory_handler.hpp"
 #include "game/transport_manager.hpp"
 #include "game/movement_handler.hpp"
 #include "core/logger.hpp"
@@ -3101,6 +3102,8 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
         // Chat lines held back for this name can go out now, with it on them.
         // After the cache above, which a held NPC line reads for its $-tokens.
         if (owner_.getChatHandler()) owner_.getChatHandler()->flushChatAwaitingName(data.guid);
+        // A trade request's ERR_INITIATE_TRADE_S waiting for it (0x00703c60).
+        if (owner_.getInventoryHandler()) owner_.getInventoryHandler()->onPlayerNameKnown(data.guid, data.name);
         // Update entity name
         auto entity = entityManager.getEntity(data.guid);
         if (entity && entity->getType() == ObjectType::PLAYER) {

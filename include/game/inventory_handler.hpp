@@ -76,6 +76,9 @@ public:
     bool isTradeOpen() const { return tradeStatus_ == TradeStatus::Open || tradeStatus_ == TradeStatus::Accepted; }
     const std::string& getTradePeerName() const { return tradePeerName_; }
     uint64_t getTradePeerGuid() const { return tradePeerGuid_; }
+    /// A player's name has come (0x0067d770's callback): ERR_INITIATE_TRADE_S
+    /// if it is the one a trade request went to (0x00703c60).
+    void onPlayerNameKnown(uint64_t guid, const std::string& name);
     const std::array<TradeSlot, TRADE_SLOT_COUNT>& getMyTradeSlots() const { return myTradeSlots_; }
     const std::array<TradeSlot, TRADE_SLOT_COUNT>& getPeerTradeSlots() const { return peerTradeSlots_; }
     uint64_t getMyTradeGold() const { return myTradeGold_; }
@@ -657,6 +660,11 @@ private:
     uint64_t    tradePeerGuid_= 0;
     /// This player asked for the trade (0xca0fe0, set by 0x00703cf0).
     bool        tradeInitiated_ = false;
+    /// When 0x00703cf0 next sends a request (0xca0fe8 + 1000 ms), 0 before
+    /// the first.
+    uint32_t    tradeResendAtMs_ = 0;
+    /// The one asked, whose name ERR_INITIATE_TRADE_S waits for (0x00703c60).
+    uint64_t    tradeRequestNameGuid_ = 0;
     std::string tradePeerName_;
     std::array<TradeSlot, TRADE_SLOT_COUNT> myTradeSlots_{};
     std::array<TradeSlot, TRADE_SLOT_COUNT> peerTradeSlots_{};
