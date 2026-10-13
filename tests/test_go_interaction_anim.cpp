@@ -3,6 +3,10 @@
 #include <catch_amalgamated.hpp>
 
 #include "game/go_interaction_anim.hpp"
+#include "network/packet.hpp"
+#include "rendering/animation/animation_ids.hpp"
+
+#include <vector>
 
 using namespace wowee::game::go_interaction;
 
@@ -148,8 +152,7 @@ TEST_CASE("SMSG_GAMEOBJECT_CUSTOM_ANIM's index", "[go_interaction]") {
     // 0x0070be90: under 4, 0x00a335e8[index + 2] - Custom0..3.
     CHECK(customAnimState(0) == std::optional<uint8_t>(kStateCustom0));
     CHECK(customAnimState(3) == std::optional<uint8_t>(kStateCustom0 + 3));
-    // Anything else, AzerothCore's animation progress of 100 among it, is
-    // not played.
+    // Anything else is not played.
     CHECK_FALSE(customAnimState(4).has_value());
     CHECK_FALSE(customAnimState(100).has_value());
 }
@@ -205,4 +208,27 @@ TEST_CASE("Which trade statuses end the trade the window is set with", "[go_inte
     for (uint32_t status : {1u, 2u, 4u, 7u, 9u, 22u, 23u}) {
         CHECK_FALSE(tradeStatusEndsTrade(status));
     }
+}
+
+TEST_CASE("A TrinityCore / AzerothCore fishing bite plays the bobber's Custom0", "[go_interaction]") {
+    // GameObject::Update, FISHINGNODE, once the bobber is ready:
+    // SendCustomAnim(GetGoAnimProgress()) - `data << GetGUID(); data <<
+    // uint32(anim);` - and GameObject::Create sets a fishing node's animation
+    // progress to 0. The bobber here: HighGuid::GameObject (0xF110), entry
+    // 35591 (Fishing Bobber, 0x8B07), counter 0x123.
+    const std::vector<uint8_t> body = {
+        0x23, 0x01, 0x00, 0x07, 0x8b, 0x00, 0x10, 0xf1,  // guid 0xF110008B07000123
+        0x00, 0x00, 0x00, 0x00,                          // anim 0
+    };
+    wowee::network::Packet packet(0x00B3, body);   // SMSG_GAMEOBJECT_CUSTOM_ANIM
+    // 0x0070be90: the guid (0x0047b400, 8 bytes), the index (0x0047b3c0, 4).
+    REQUIRE(packet.getSize() == 12);
+    CHECK(packet.readUInt64() == 0xF110008B07000123ull);
+    const auto state = customAnimState(packet.readUInt32());
+    // 0x00a335e8[0 + 2] = 8, Custom0; 0x00ada938[8] = AnimationData 153,
+    // which type 17's slot 0x4c (0x0070c480) plays if the model has it.
+    REQUIRE(state.has_value());
+    CHECK(*state == kStateCustom0);
+    CHECK(wowee::rendering::anim::CUSTOM_0 == 153u);
+    CHECK(playsCustomAnimation(17));
 }

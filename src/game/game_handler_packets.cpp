@@ -1265,28 +1265,30 @@ void GameHandler::registerCoreOpcodes() {
         // 0x0070be90: only for a game object (type mask 0x20).
         if (!goEnt || goEnt->getType() != ObjectType::GAMEOBJECT) return;
         {
+            // The player's own bobber: the bite, which the server announces
+            // with this packet (TrinityCore / AzerothCore GameObject::Update,
+            // FISHINGNODE: SendCustomAnim(GetGoAnimProgress()) - and Create
+            // sets a fishing node's animation progress to 0, so the index is
+            // 0, Custom0). Kept for reeling it in; the client shows nothing
+            // of it but the animation below and the sound its model plays,
+            // which the bite sound stands in for.
             auto go = std::static_pointer_cast<GameObject>(goEnt);
-            // Only treat custom animation as a bite when this is our bobber.
-            // AzerothCore sends the GO's animation progress (normally 100), not
-            // M2 animation id 0, so the packet payload itself cannot identify it.
             uint64_t createdBy = static_cast<uint64_t>(go->getField(6))
                                | (static_cast<uint64_t>(go->getField(7)) << 32);
             auto* info = getCachedGameObjectInfo(go->getEntry());
             const bool ownedFishingBite = createdBy == playerGuid && (!info || info->type == 17);
             if (ownedFishingBite) {
                 hookedFishingBobberGuid_ = guid;
-                addUIError("A fish is on your line! Right-click to reel it in.");
-                addSystemChatMessage("A fish is on your line! Right-click to reel it in.");
                 withSoundManager(&audio::AudioCoordinator::getUiSoundManager,
                                  [](auto* sfx) { sfx->playFishingBite(); });
-                LOG_WARNING("Fishing bite ready: guid=0x", std::hex, guid, std::dec,
-                            " serverAnimProgress=", animId);
+                LOG_DEBUG("Fishing bite: guid=0x", std::hex, guid, std::dec,
+                          " index=", animId);
             }
         }
         // Custom0..3 for an index under 4 (0x0070bde0, 0x00a335e8[index + 2]),
-        // the bobber's included - its bite is Custom0. Any other index is
-        // ignored, so the animation progress AzerothCore sends shows nothing,
-        // as in the client.
+        // the bobber's bite included - index 0, Custom0 (AnimationData 153),
+        // through type 17's slot 0x4c (0x0070c480). Any other index is
+        // ignored.
         if (const auto state = go_interaction::customAnimState(animId); state && gameObjectCustomAnimCallback_)
             gameObjectCustomAnimCallback_(guid, *state);
     };

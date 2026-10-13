@@ -1914,6 +1914,8 @@ register_test_target(test_spell_unit_target)
 # ── test_go_interaction_anim ────────────────────────────────
 add_executable(test_go_interaction_anim
     test_go_interaction_anim.cpp
+    ${TEST_COMMON_SOURCES}
+    ${CMAKE_SOURCE_DIR}/src/network/packet.cpp
 )
 target_include_directories(test_go_interaction_anim PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_go_interaction_anim SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
