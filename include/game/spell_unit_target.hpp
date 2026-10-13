@@ -264,6 +264,11 @@ struct RangeInput {
     float casterReach = 0.0f;   ///< UNIT_FIELD_COMBATREACH (+0xf0)
     bool hasUnit = false;       ///< aimed at a unit
     float unitReach = 0.0f;
+    bool unitIsPlayer = false;  ///< OBJECT_FIELD_TYPE 0x10
+    /// Each going forward, sideways or falling (0x100d) faster than twice
+    /// its walk speed (0x00716fa0).
+    bool casterMoving = false;
+    bool unitMoving = false;
 };
 struct Range {
     float min = 0.0f;
@@ -274,7 +279,7 @@ struct Range {
 /// combat reaches and 4/3, at least 5; a ranged row's minimum starts there;
 /// at a unit both reaches lengthen the maximum, and a minimum other than a
 /// ranged row's. `maxMods` turns the row's maximum by the Range modifiers
-/// (op 5). Moving units' 8/3 more is not kept.
+/// (op 5). Both moving, a melee row or a player unit reach 8/3 more.
 template <typename MaxMods>
 [[nodiscard]] constexpr Range unitRange(const RangeInput& in, MaxMods&& maxMods) {
     if ((in.attr & 0x404u) != 0) return {0.0f, 100.0f};
@@ -292,6 +297,8 @@ template <typename MaxMods>
         } else {
             extra = near <= 5.0f ? 5.0f : near;
         }
+        if (in.hasUnit && in.casterMoving && in.unitMoving && ((in.rowFlags & 1u) != 0 || in.unitIsPlayer))
+            extra += 8.0f / 3.0f;
     }
     r.max = maxMods(r.max) + extra;
     return r;

@@ -225,3 +225,33 @@ TEST_CASE("AttributesEx5 0x800 lets a unit stand for its own target (0x007ffc40)
     REQUIRE(retargetRequired(kUnitAlly | kUnitEnemy) == kUnitAlly);
     REQUIRE(retargetRequired(kUnitEnemy | kUnit) == (kUnitEnemy | kUnit));
 }
+
+TEST_CASE("both moving, a melee row or a player unit reaches 8/3 more (0x007ff480)", "[unit_target]") {
+    const auto same = [](float m) { return m; };
+    RangeInput melee;
+    melee.hasRow = true;
+    melee.rowFlags = 1;
+    melee.casterReach = 1.5f;
+    melee.hasUnit = true;
+    melee.unitReach = 1.5f;
+    const float still = unitRange(melee, same).max;
+    REQUIRE(still == Catch::Approx(5.0f));
+    melee.casterMoving = true;
+    REQUIRE(unitRange(melee, same).max == Catch::Approx(still));
+    melee.unitMoving = true;
+    REQUIRE(unitRange(melee, same).max == Catch::Approx(still + 8.0f / 3.0f));
+    // A ranged row only at a player.
+    RangeInput ranged;
+    ranged.hasRow = true;
+    ranged.rowMax = 30.0f;
+    ranged.hasUnit = true;
+    ranged.casterMoving = ranged.unitMoving = true;
+    REQUIRE(unitRange(ranged, same).max == Catch::Approx(30.0f));
+    ranged.unitIsPlayer = true;
+    REQUIRE(unitRange(ranged, same).max == Catch::Approx(30.0f + 8.0f / 3.0f));
+    // No row, nothing more.
+    RangeInput none;
+    none.hasUnit = true;
+    none.unitIsPlayer = none.casterMoving = none.unitMoving = true;
+    REQUIRE(unitRange(none, same).max == Catch::Approx(0.0f));
+}

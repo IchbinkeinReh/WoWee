@@ -45,6 +45,8 @@ float slowUpdateObjectBlockLogThresholdMs() {
 /// packets (Entity::startMoveByFlags). A block without them - a vanilla one
 /// has no flight speeds - leaves the base speeds in place.
 void applyBlockSpeedsToEntity(const UpdateBlock& block, Entity& entity) {
+    // And its movement flags, which the spell reach reads (0x007ff480).
+    if (block.hasMovement) entity.setBlockMoveFlags(block.moveFlags);
     if (!block.hasMovement || block.runSpeed <= 0.1f || block.runSpeed >= 100.0f) return;
     auto apply = [](float value, float& destination) {
         if (std::isfinite(value) && value > 0.01f && value < 200.0f) destination = value;

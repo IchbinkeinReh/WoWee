@@ -957,6 +957,18 @@ unit_target::Relations relationsOf(GameHandler& gh, const std::shared_ptr<Entity
     return r;
 }
 
+/// 0x007ff480's moving unit: forward, sideways or falling (0x100d) and
+/// faster than twice its walk speed (0x00716fa0, 0x00987570). The mover's
+/// are the player's own; another's those its last packet or block brought.
+bool movingForReach(GameHandler& gh, const Entity& e) {
+    if (e.getGuid() == gh.activeMover()) {
+        const uint32_t flags = gh.getMovementInfo().flags;
+        const MovementSpeeds speeds = gh.moverSpeeds();
+        return (flags & 0x100du) != 0 && Entity::speedForFlags(speeds, flags) > 2.0f * speeds.walk;
+    }
+    return (e.getReportedMoveFlags() & 0x100du) != 0 && e.currentSpeed() > 2.0f * e.getMovementSpeeds().walk;
+}
+
 /// 0x0071f300: a unit's creature type - its form's, else its creature's,
 /// else its race's (ChrRaces CreatureType, +0x20).
 uint32_t creatureTypeOf(GameHandler& gh, const Entity& e) {
@@ -1037,6 +1049,9 @@ SpellHandler::UnitTake SpellHandler::takeUnit(uint32_t spellId, uint64_t casterG
         in.casterReach = static_cast<const Unit&>(*caster).getCombatReach();
         in.hasUnit = true;
         in.unitReach = static_cast<const Unit&>(*unit).getCombatReach();
+        in.unitIsPlayer = unit->getType() == ObjectType::PLAYER;
+        in.casterMoving = movingForReach(owner_, *caster);
+        in.unitMoving = movingForReach(owner_, *unit);
         const auto range = unit_target::unitRange(in, [&](float m) {
             return spell_mods::apply(m, spellModifiers(spellId, spell_mods::kOpRange));
         });

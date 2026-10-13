@@ -519,6 +519,18 @@ public:
 
     /// The flags of the unit's last movement packet; see reportMoveFlags.
     [[nodiscard]] uint32_t getReportedMoveFlags() const { return reportedMoveFlags_; }
+    /// The flags of a create or movement block's movement section, which
+    /// the client takes as they are.
+    void setBlockMoveFlags(uint32_t flags) { reportedMoveFlags_ = flags; }
+
+    /// CMovement::GetCurrentSpeed (0x00987570) on the flags last received:
+    /// nothing without a direction flag (0xc0000f); on a spline that
+    /// spline's speed; else the flags' speed (speedForFlags).
+    [[nodiscard]] float currentSpeed() const {
+        if ((reportedMoveFlags_ & kDirectionFlags) == 0) return 0.0f;
+        if (isActivelyMoving() && !movingByFlags_) return moveSpeed_;
+        return speedForFlags(speeds_, reportedMoveFlags_);
+    }
 
     /// In the air as the client's locomotion choice sees a unit
     /// (FUN_00723350): falling with a vertical speed, or falling far.
