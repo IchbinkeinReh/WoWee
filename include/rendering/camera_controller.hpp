@@ -73,6 +73,9 @@ public:
     void setSteering(bool steering) { steering_ = steering; }
 
     void processMouseWheel(float delta);
+    /// The player's distance in by `yards` (out for less than 0), held to the
+    /// limits the wheel is: CameraZoomIn and CameraZoomOut.
+    void zoomBy(float yards);
     void setFollowTarget(glm::vec3* target);
     void setDefaultSpawn(const glm::vec3& position, float yawDeg, float pitchDeg) {
         defaultPosition = position;

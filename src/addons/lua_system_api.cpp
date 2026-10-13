@@ -3966,6 +3966,15 @@ static int lua_ToggleAutoRun(lua_State* L) {
     if (svc && svc->toggleAutoRun) svc->toggleAutoRun();
     return 0;
 }
+// CameraZoomIn(yards) / CameraZoomOut(yards) - the camera's distance from the
+// player, as the zoom bindings move it.
+template <int Sign>
+static int lua_CameraZoom(lua_State* L) {
+    auto* svc = getLuaServices(L);
+    const float yards = static_cast<float>(luaL_optnumber(L, 1, 1.0));
+    if (svc && svc->cameraZoom) svc->cameraZoom(Sign * yards);
+    return 0;
+}
 static int lua_JumpOrAscendStart(lua_State* L) {
     auto* svc = getLuaServices(L);
     if (svc && svc->pressJump) svc->pressJump();
@@ -5499,6 +5508,8 @@ void registerSystemLuaAPI(lua_State* L) {
     loadInterfaceState();
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"Screenshot",               lua_Screenshot},
+                {"CameraZoomIn",             lua_CameraZoom<1>},
+                {"CameraZoomOut",            lua_CameraZoom<-1>},
                 {"ToggleAutoRun",            lua_ToggleAutoRun},
                 {"JumpOrAscendStart",        lua_JumpOrAscendStart},
                 {"TurnLeftStart",            lua_BindingTurn<-1, true>},

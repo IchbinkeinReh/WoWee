@@ -3915,7 +3915,13 @@ void CameraController::processMouseWheel(float delta) {
     collisionClearSeconds_ = 0.0f;
     // Scale zoom speed proportionally to current distance for fine control up close
     float zoomSpeed = glm::max(userTargetDistance * 0.15f, 0.3f);
-    userTargetDistance -= delta * zoomSpeed;
+    zoomBy(delta * zoomSpeed);
+}
+
+void CameraController::zoomBy(float yards) {
+    collisionZoomDebt_ = 0.0f;
+    collisionClearSeconds_ = 0.0f;
+    userTargetDistance -= yards;
     // A multiple of the original client's limit rather than a choice between
     // two numbers, so the game's own Max Camera Distance slider means something
     // at every position instead of only at its ends.

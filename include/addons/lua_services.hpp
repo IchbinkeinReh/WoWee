@@ -332,6 +332,8 @@ struct LuaServices {
     std::function<void(int direction, bool held)> setBindingTurn;
     /// JumpOrAscendStart: a press of the jump key.
     std::function<void()> pressJump;
+    /// CameraZoomIn(yards) and CameraZoomOut(yards), as the wheel's bindings.
+    std::function<void(float yards)> cameraZoom;
 };
 
 } // namespace wowee::addons
