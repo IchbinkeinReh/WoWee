@@ -2406,6 +2406,16 @@ void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId,
     gameObjectAnimState_[guid] = state;
     gameObjectCustomAnimEnd_.erase(guid);
     gameObjectTransitionEnd_.erase(guid);
+    // A door's entry (0x0070d8d0) has it collide only in Closed (+0x20c).
+    if (gameHandler_) {
+        const uint16_t bytes1 = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
+        auto entity = gameHandler_->getEntityManager().getEntity(guid);
+        if (entity && bytes1 != 0xFFFF) {
+            const uint32_t goType = (entity->getField(bytes1) >> 8) & 0xFFu;
+            if (const auto collides = gi::collidesAfterEntering(goType, state))
+                m2->setSkipCollision(instanceId, !*collides);
+        }
+    }
 
     if (state >= gi::kStateCustom0) {
         const uint32_t anim = kGoStateAnim[state];

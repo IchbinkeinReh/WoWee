@@ -92,6 +92,16 @@ struct Step {
     }
 }
 
+/// A door's (type 0) state entry, 0x0070d8d0 - its handler's slot 0xb0 -
+/// also sets whether it collides (GameObject_C +0x20c, which 0x0070f550
+/// gives the world's collision queries, 0x004f6560): only in Closed (1), so
+/// not while it plays a custom animation or Despawn. Other types' entry
+/// leaves it as it is (nullopt).
+[[nodiscard]] inline std::optional<bool> collidesAfterEntering(uint32_t goType, uint8_t state) {
+    if (goType != 0) return std::nullopt;
+    return state == 1;
+}
+
 /// SMSG_GAMEOBJECT_CUSTOM_ANIM (0x0070be90): an index under 4 plays custom
 /// animation 0..3 (0x0070bde0, 0x00a335e8[index + 2]: Custom0..3); any other
 /// is ignored.

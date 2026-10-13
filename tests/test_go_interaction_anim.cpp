@@ -245,3 +245,13 @@ TEST_CASE("A trade request with a partner set, or within a second", "[go_interac
     CHECK(tradeInitiate(0, 100, 0xFFFFFF00u) == TradeInitiate::Send);
     CHECK(tradeInitiate(0, 0xFFFFFF00u, 100) == TradeInitiate::TooSoon);
 }
+
+TEST_CASE("A door collides only in Closed", "[go_interaction]") {
+    // 0x0070d8d0, type 0's state entry: +0x20c = (state == Closed).
+    CHECK(collidesAfterEntering(0, 1) == std::optional<bool>(true));
+    for (uint8_t s : {0, 2, 3, 4, 5, 6, 7}) CHECK(collidesAfterEntering(0, s) == std::optional<bool>(false));
+    for (uint8_t s = kStateCustom0; s <= kStateDespawn; ++s)
+        CHECK(collidesAfterEntering(0, s) == std::optional<bool>(false));
+    // Other types' entry (0x0070d510) leaves it.
+    for (uint32_t type : {1u, 3u, 5u, 35u}) CHECK_FALSE(collidesAfterEntering(type, kStateCustom0).has_value());
+}
