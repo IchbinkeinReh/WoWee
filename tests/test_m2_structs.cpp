@@ -215,3 +215,43 @@ TEST_CASE("M2Model collections", "[m2]") {
     REQUIRE(model.textures.size() == 1);
     REQUIRE(model.sequences[0].duration == 1000);
 }
+
+TEST_CASE("a doodad's collision bounds take in all of its collision mesh", "[m2][collision]") {
+    // elwynntreecanopy04.m2: render bounds and the collision mesh's box. The
+    // trunk guess is a box about the crown's middle, 2.6 either side and 7
+    // tall; the roots and trunk reach 6 to 7.5 out and 27 up. Culled by the
+    // guess, the faces outside it were never asked and the tree was walked
+    // through from those sides.
+    wowee::rendering::M2ModelGPU model;
+    model.boundMin = glm::vec3(-27.8f, -24.7f, -5.4f);
+    model.boundMax = glm::vec3(24.9f, 26.3f, 77.5f);
+    model.collisionTreeTrunk = true;
+    model.collision.triCount = 52;
+    model.collision.boundsMin = glm::vec3(-6.1f, -5.7f, -5.4f);
+    model.collision.boundsMax = glm::vec3(5.2f, 7.5f, 26.9f);
+
+    glm::vec3 tightMin, tightMax;
+    wowee::rendering::getTightCollisionBounds(model, tightMin, tightMax);
+    CHECK(tightMin.x > model.collision.boundsMin.x);   // the guess misses the roots
+    CHECK(tightMax.z < model.collision.boundsMax.z);   // and the trunk above them
+
+    glm::vec3 qMin, qMax;
+    wowee::rendering::getCollisionQueryBounds(model, qMin, qMax);
+    CHECK(glm::all(glm::lessThanEqual(qMin, model.collision.boundsMin)));
+    CHECK(glm::all(glm::greaterThanEqual(qMax, model.collision.boundsMax)));
+    // Never smaller than the guess, which the AABB floor still uses.
+    CHECK(glm::all(glm::lessThanEqual(qMin, tightMin)));
+    CHECK(glm::all(glm::greaterThanEqual(qMax, tightMax)));
+
+    // A model without collision triangles keeps the guess alone.
+    wowee::rendering::M2ModelGPU bare;
+    bare.boundMin = model.boundMin;
+    bare.boundMax = model.boundMax;
+    bare.collisionTreeTrunk = true;
+    bare.collision.boundsMin = model.collision.boundsMin;
+    bare.collision.boundsMax = model.collision.boundsMax;
+    glm::vec3 bMin, bMax;
+    wowee::rendering::getCollisionQueryBounds(bare, bMin, bMax);
+    CHECK(bMin == tightMin);
+    CHECK(bMax == tightMax);
+}

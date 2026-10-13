@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -176,6 +178,30 @@ inline bool holdCylinderOffWallTriangle(const glm::vec3& from, glm::vec3& to,
     to.x += dir.x * push;
     to.y += dir.y * push;
     return true;
+}
+
+/// A collision face's plane normal, in the model's frame: the file's normal
+/// for the triangle where there is one, as the client takes it (0x0082ec30
+/// reads the M2's bounding normals, one per triangle, and builds each face's
+/// plane from it), else the winding's. Not normalised.
+inline glm::vec3 collisionFaceNormal(const std::vector<glm::vec3>& fileNormals, uint32_t tri,
+                                     const glm::vec3& v0, const glm::vec3& v1,
+                                     const glm::vec3& v2) {
+    if (tri < fileNormals.size()) {
+        const glm::vec3& n = fileNormals[tri];
+        if (glm::dot(n, n) > 1e-12f) return n;
+    }
+    return glm::cross(v1 - v0, v2 - v0);
+}
+
+/// Whether a face, by its unit world normal, can stop a character moving
+/// straight down - can be stood on. The client's sweep tests a face only when
+/// its normal opposes the motion, n.dir <= -1e-5 (0x0075c5a0, called by the
+/// sweep 0x0075f9d0); for a fall that is n.z >= 1e-5. A face looking down - the
+/// underside of a door, a beam, a canopy - is passed through from below and
+/// is never a floor.
+inline bool faceHoldsDownwardSweep(const glm::vec3& worldNormal) {
+    return worldNormal.z >= 1e-5f;
 }
 
 /// The sphere a collision query is restricted to, so that a query near the

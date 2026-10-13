@@ -82,6 +82,30 @@ inline void getTightCollisionBounds(const M2ModelGPU& model, glm::vec3& outMin, 
     outMax = center + half;
 }
 
+/// The model-space box an instance's world bounds are made from: the tight
+/// box above, grown to take in the whole of the authored collision mesh.
+///
+/// The world bounds are what every collision query culls instances by - the
+/// spatial grid they are filed in, the collision focus, the broad-phase test
+/// in checkCollision and getFloorHeight. The tight box is a guess at the solid
+/// part from the render bounds, and for a tree it is a trunk-sized box about
+/// the middle of the crown: elwynntreecanopy04's is 2.6 yards either side of
+/// the crown's centre and 7 tall, where its collision mesh - roots and trunk -
+/// reaches 6 to 7.5 yards out and 27 up; canopylesstree04's is 0.66 either
+/// side against a mesh 6 to 7.5 out. So the faces of the trunk outside the box
+/// were never asked: from one side the tree held, from another the character
+/// walked into the bark until the box's margin began, and above the box's top
+/// - 2 yards over the roots - not at all. The client gathers a doodad's faces
+/// by its collision mesh (0x0082ec30 outcodes each of its vertices against the
+/// query box), so the mesh is what has to be inside the bounds.
+inline void getCollisionQueryBounds(const M2ModelGPU& model, glm::vec3& outMin, glm::vec3& outMax) {
+    getTightCollisionBounds(model, outMin, outMax);
+    if (model.collision.valid()) {
+        outMin = glm::min(outMin, model.collision.boundsMin);
+        outMax = glm::max(outMax, model.collision.boundsMax);
+    }
+}
+
 inline float getEffectiveCollisionTopLocal(const M2ModelGPU& model,
                                            const glm::vec3& localPos,
                                            const glm::vec3& localMin,

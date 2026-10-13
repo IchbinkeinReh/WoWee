@@ -2117,11 +2117,14 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         model.collisionIndices = readArray<uint16_t>(m2Data, header.ofsBoundingTriangles, header.nBoundingTriangles);
     }
     if (header.nBoundingNormals > 0 && header.ofsBoundingNormals > 0) {
-        struct Vec4Disk { float x, y, z, w; };
-        auto diskNormals = readArray<Vec4Disk>(m2Data, header.ofsBoundingNormals, header.nBoundingNormals);
+        // Three floats each: the client steps 12 bytes per normal
+        // (0x0082ec30). Read as four, every normal after the first was the
+        // next one's components shifted by one.
+        struct Vec3Disk { float x, y, z; };
+        auto diskNormals = readArray<Vec3Disk>(m2Data, header.ofsBoundingNormals, header.nBoundingNormals);
         model.collisionNormals.reserve(diskNormals.size());
         for (const auto& n : diskNormals) {
-            model.collisionNormals.emplace_back(n.x, n.y, n.z, n.w);
+            model.collisionNormals.emplace_back(n.x, n.y, n.z);
         }
     }
     if (!model.collisionVertices.empty()) {

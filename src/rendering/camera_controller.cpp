@@ -1996,6 +1996,25 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
     // Update follow target position
     *followTarget = targetPos;
 
+    // WOWEE_COLLISION_TRACE: where the character is, every frame up to 50 a
+    // second, and the doodads with collision around it whenever it has moved 30
+    // yards - what an in-game "can I walk through this" test is read from.
+    static const bool kCollisionTrace = std::getenv("WOWEE_COLLISION_TRACE") != nullptr;
+    if (kCollisionTrace) {
+        static float traceClock = 0.0f;
+        static glm::vec3 lastDump(1e9f);
+        traceClock += f.physicsDeltaTime;
+        if (traceClock >= 0.02f) {
+            traceClock = 0.0f;
+            LOG_WARNING("TRACE pos ", targetPos.x, " ", targetPos.y, " ", targetPos.z,
+                        " grounded=", grounded ? 1 : 0);
+        }
+        if (m2Renderer && glm::length(targetPos - lastDump) > 30.0f) {
+            lastDump = targetPos;
+            m2Renderer->debugLogCollidersNear(targetPos, 40.0f);
+        }
+    }
+
     // --- Safe position caching + void fall detection ---
     if (grounded && hasRealGround_ && !swimming && verticalVelocity >= 0.0f) {
         // Player is safely on real geometry - save periodically

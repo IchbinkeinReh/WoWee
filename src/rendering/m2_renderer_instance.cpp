@@ -20,6 +20,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <algorithm>
 #include <set>
+#include <mutex>
 #include <cmath>
 #include <limits>
 #include <unordered_set>
@@ -106,7 +107,7 @@ void M2Renderer::setInstancePosition(uint32_t instanceId, const glm::vec3& posit
     // at addInstance and stays valid as long as the instance exists.
     if (inst.cachedModel) {
         glm::vec3 localMin, localMax;
-        getTightCollisionBounds(*inst.cachedModel, localMin, localMax);
+        getCollisionQueryBounds(*inst.cachedModel, localMin, localMax);
         transformAABB(inst.modelMatrix, localMin, localMax, inst.worldBoundsMin, inst.worldBoundsMax);
         inst.recomputeCachedCullFactors();
     }
@@ -507,7 +508,7 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
     // Update bounds via the cached model pointer
     if (inst.cachedModel) {
         glm::vec3 localMin, localMax;
-        getTightCollisionBounds(*inst.cachedModel, localMin, localMax);
+        getCollisionQueryBounds(*inst.cachedModel, localMin, localMax);
         transformAABB(inst.modelMatrix, localMin, localMax, inst.worldBoundsMin, inst.worldBoundsMax);
         inst.recomputeCachedCullFactors();
     }
@@ -1171,6 +1172,17 @@ uint32_t M2Renderer::getTotalTriangleCount() const {
     return total;
 }
 
+void M2Renderer::debugLogCollidersNear(const glm::vec3& pos, float radius) const {
+    for (const auto& instance : instances) {
+        if (!instance.cachedModel || !instance.cachedModel->collision.valid()) continue;
+        if (glm::length(glm::vec2(instance.position - pos)) > radius) continue;
+        LOG_WARNING("COLLIDER '", instance.cachedModel->name, "' pos ", instance.position.x, " ",
+                    instance.position.y, " ", instance.position.z, " rot ", instance.rotation.x,
+                    " ", instance.rotation.y, " ", instance.rotation.z, " scale ", instance.scale,
+                    " tris ", instance.cachedModel->collision.triCount);
+    }
+}
+
 void M2Renderer::debugDumpFloorCandidatesAt(float glX, float glY, float glZ) const {
     LOG_WARNING("=== M2 Floor Debug at render(", glX, ", ", glY, ", ", glZ, ") ===");
     glm::vec3 queryMin(glX - 2.0f, glY - 2.0f, glZ - 6.0f);
@@ -1326,6 +1338,21 @@ void M2Renderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3
     }
 }
 
+namespace {
+// WOWEE_COLLISION_TRACE: each model whose underside the floor query met with
+// no top above it, once - where a two-sided query would have stood someone
+// on a face the client passes through.
+const bool kCollisionTraceFloor = std::getenv("WOWEE_COLLISION_TRACE") != nullptr;
+void noteUndersideOnlyFloor(const std::string& modelName, float undersideZ, float probeZ) {
+    static std::mutex mutex;
+    static std::set<std::string> seen;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!seen.insert(modelName).second) return;
+    LOG_WARNING("M2 floor: only the underside of '", modelName, "' under the probe (z ",
+                undersideZ, ", probe ", probeZ, ") - not stood on");
+}
+}  // namespace
+
 std::optional<float> M2Renderer::getFloorHeight(float glX, float glY, float glZ, float* outNormalZ) const {
     QueryTimer timer(&queryTimeMs, &queryCallCount);
     std::optional<float> bestFloor;
@@ -1393,6 +1420,10 @@ std::optional<float> M2Renderer::getFloorHeight(float glX, float glY, float glZ,
             float bestWorldHitZ = -std::numeric_limits<float>::max();
             float bestHitNormalZ = 1.0f;
             bool hitAny = false;
+            // The ray met the underside of the mesh within reach: whatever is
+            // under the feet here, it is not this model's top.
+            bool hitUnderside = false;
+            float bestUndersideZ = -std::numeric_limits<float>::max();
 
             for (uint32_t ti : tl_m2_collisionTriScratch) {
                 if (ti >= model.collision.triCount) continue;
@@ -1412,26 +1443,32 @@ std::optional<float> M2Renderer::getFloorHeight(float glX, float glY, float glZ,
                 const glm::vec3 worldHit = glm::vec3(
                     instance.modelMatrix * glm::vec4(localHit, 1.0f));
 
-                // Walkable normal check (world space)
-                glm::vec3 worldN(0.0f, 0.0f, 1.0f);  // Default to flat
-                glm::vec3 localN = glm::cross(v1 - v0, v2 - v0);
-                float nLen = glm::length(localN);
-                if (nLen > 0.001f) {
-                    localN /= nLen;
-                    if (localN.z < 0.0f) localN = -localN;
-                    glm::vec3 transformedN = glm::vec3(
-                        instance.modelMatrix * glm::vec4(localN, 0.0f));
-                    float wnLen = glm::length(transformedN);
-                    if (wnLen > 0.001f) {
-                        worldN = transformedN / wnLen;
-                    } // else: keep worldN = (0,0,1) flat default
-                    if (std::abs(worldN.z) < 0.35f) continue; // too steep (~70° max slope)
+                // Only a face that looks up holds the feet. The client finds
+                // the ground by sweeping the character down, and a sweep only
+                // tests a face whose plane - the file's normal, turned with
+                // the instance (0x0082ec30) - opposes the motion (0x0075c5a0
+                // skips n.dir > -1e-5). Taken from either side, the underside
+                // of a door rising past the character was a floor, and it
+                // lifted them with it.
+                const glm::vec3 localN = collisionFaceNormal(
+                    model.collision.normals, ti, v0, v1, v2);
+                glm::vec3 worldN = glm::vec3(instance.modelMatrix * glm::vec4(localN, 0.0f));
+                const float wnLen = glm::length(worldN);
+                if (wnLen <= 1e-6f) continue;
+                worldN /= wnLen;
+                if (!faceHoldsDownwardSweep(worldN)) {
+                    if (worldHit.z <= glZ + 3.0f) {
+                        hitUnderside = true;
+                        bestUndersideZ = std::max(bestUndersideZ, worldHit.z);
+                    }
+                    continue;
                 }
+                if (worldN.z < 0.35f) continue; // too steep (~70° max slope)
 
                 if (worldHit.z <= glZ + 3.0f && worldHit.z > bestWorldHitZ) {
                     bestWorldHitZ = worldHit.z;
                     hitAny = true;
-                    bestHitNormalZ = std::abs(worldN.z);
+                    bestHitNormalZ = worldN.z;
                 }
             }
 
@@ -1443,6 +1480,17 @@ std::optional<float> M2Renderer::getFloorHeight(float glX, float glY, float glZ,
                 // A successful authored-mesh hit is more accurate than the
                 // model AABB top, especially for pitched ramps where the AABB
                 // projection is not a world-vertical intersection.
+                continue;
+            }
+            // Only the underside was met: the feet are under or inside the
+            // model - a door that has risen past them - and the box's top is
+            // no floor for them either. Before faces were one-sided the
+            // underside answered here and this was never reached; falling to
+            // the box would lift the character onto the door just the same.
+            if (hitUnderside) {
+                if (kCollisionTraceFloor && bestUndersideZ > -1e30f) {
+                    noteUndersideOnlyFloor(model.name, bestUndersideZ, glZ);
+                }
                 continue;
             }
             // Fall through to AABB floor - both contribute, highest wins

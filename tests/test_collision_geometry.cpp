@@ -298,3 +298,57 @@ TEST_CASE("a face holds back only what is in front of it", "[collision]") {
                                             a, b, c));
     CHECK(behind.x == -front * 0.2f);
 }
+
+TEST_CASE("a collision face takes the file's normal, the winding only without one", "[collision]") {
+    using wowee::rendering::collisionFaceNormal;
+    const glm::vec3 a(0, 0, 0), b(1, 0, 0), c(0, 1, 0);   // winds to +z
+    const std::vector<glm::vec3> fileDown = {glm::vec3(0, 0, -1)};
+    CHECK(collisionFaceNormal(fileDown, 0, a, b, c).z < 0.0f);
+
+    // No normal for this triangle, or a zero one: the winding answers.
+    const std::vector<glm::vec3> none;
+    CHECK(collisionFaceNormal(none, 0, a, b, c).z > 0.0f);
+    const std::vector<glm::vec3> zero = {glm::vec3(0.0f)};
+    CHECK(collisionFaceNormal(zero, 0, a, b, c).z > 0.0f);
+    CHECK(collisionFaceNormal(fileDown, 1, a, b, c).z > 0.0f);
+}
+
+TEST_CASE("only a face that looks up holds a character moving down", "[collision]") {
+    using wowee::rendering::faceHoldsDownwardSweep;
+    CHECK(faceHoldsDownwardSweep(glm::vec3(0, 0, 1)));
+    CHECK(faceHoldsDownwardSweep(glm::normalize(glm::vec3(1, 0, 0.2f))));
+    CHECK_FALSE(faceHoldsDownwardSweep(glm::vec3(0, 0, -1)));
+    CHECK_FALSE(faceHoldsDownwardSweep(glm::normalize(glm::vec3(1, 0, -0.2f))));
+    // A wall, exactly vertical, opposes no fall (0x0075c5a0: n.dir > -1e-5).
+    CHECK_FALSE(faceHoldsDownwardSweep(glm::vec3(1, 0, 0)));
+}
+
+TEST_CASE("a door rising past the feet is no floor from below", "[collision]") {
+    using wowee::rendering::collisionFaceNormal;
+    using wowee::rendering::faceHoldsDownwardSweep;
+    // A door slab 0.2 thick whose underside has risen to 0.6 over the feet:
+    // the top looks up, the underside down, each with its file normal.
+    const std::array<std::array<glm::vec3, 3>, 2> faces = {{
+        {glm::vec3(-1, -1, 3.0f), glm::vec3(1, -1, 3.0f), glm::vec3(0, 1, 3.0f)},   // top
+        {glm::vec3(-1, -1, 0.6f), glm::vec3(0, 1, 0.6f), glm::vec3(1, -1, 0.6f)},   // underside
+    }};
+    const std::vector<glm::vec3> normals = {glm::vec3(0, 0, 1), glm::vec3(0, 0, -1)};
+
+    // The floor pick: a ray down from above the probe, the highest face hit at
+    // or under the reach of a step.
+    const glm::vec3 origin(0.0f, 0.0f, 6.0f);
+    const glm::vec3 down(0.0f, 0.0f, -1.0f);
+    const float reach = 0.0f + 1.1f;   // the feet at 0, a step and a half over them
+    float best = -1e9f;
+    for (size_t i = 0; i < faces.size(); ++i) {
+        const auto& f = faces[i];
+        const float t = rayTriangleIntersect(origin, down, f[0], f[1], f[2]);
+        if (t < 0.0f) continue;
+        const float z = origin.z - t;
+        const glm::vec3 n = glm::normalize(collisionFaceNormal(normals, uint32_t(i), f[0], f[1], f[2]));
+        if (!faceHoldsDownwardSweep(n)) continue;
+        if (z <= reach) best = std::max(best, z);
+    }
+    // The underside is in reach and was the floor; it is not one any more.
+    CHECK(best == -1e9f);
+}

@@ -141,7 +141,13 @@ struct M2ModelGPU {
     struct CollisionMesh {
         std::vector<glm::vec3> vertices;
         std::vector<uint16_t> indices;
+        /// The file's plane normal for each triangle (may be empty or short:
+        /// the winding stands in for a missing one).
+        std::vector<glm::vec3> normals;
         uint32_t triCount = 0;
+        /// The vertices' box, in model space. Set by build().
+        glm::vec3 boundsMin{0.0f};
+        glm::vec3 boundsMax{0.0f};
 
         struct TriBounds { float minZ, maxZ; };
         std::vector<TriBounds> triBounds;
@@ -792,6 +798,9 @@ public:
     /// a floor that should have come from a lift deck and did not left no
     /// trace at all beyond "m2=-99999".
     void debugDumpFloorCandidatesAt(float glX, float glY, float glZ) const;
+    /// Logs every doodad with authored collision within `radius` of a point:
+    /// name, position, rotation and scale (WOWEE_COLLISION_TRACE).
+    void debugLogCollidersNear(const glm::vec3& pos, float radius) const;
     [[nodiscard]] float raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;
     void setCollisionFocus(const glm::vec3& worldPos, float radius);
 

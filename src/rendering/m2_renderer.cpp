@@ -1182,6 +1182,8 @@ void M2ModelGPU::CollisionMesh::build() {
         bmin = glm::min(bmin, v);
         bmax = glm::max(bmax, v);
     }
+    boundsMin = bmin;
+    boundsMax = bmax;
 
     gridOrigin = glm::vec2(bmin.x, bmin.y);
     gridCellsX = std::max(1, std::min(32, static_cast<int>(std::ceil((bmax.x - bmin.x) / CELL_SIZE))));
@@ -1530,6 +1532,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     // Build collision mesh + spatial grid from M2 bounding geometry
     gpuModel.collision.vertices = model.collisionVertices;
     gpuModel.collision.indices = model.collisionIndices;
+    gpuModel.collision.normals = model.collisionNormals;
     gpuModel.collision.build();
     if (gpuModel.collision.valid()) {
         core::Logger::getInstance().debug("  M2 collision mesh: ", gpuModel.collision.triCount,
