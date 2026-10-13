@@ -550,7 +550,13 @@ M2ClassificationResult classifyM2Model(
     // tree is a tree however few vertices it has. AZR_Tree01 is 197 vertices
     // with three falling-leaf emitters; taken for an effect, its alpha-keyed
     // canopy was drawn additively, and Azshara's forest turned translucent.
-    const bool particleDominated = emitterCount >= 3 && vertexCount <= 200 && !treeLike;
+    // A light fixture is the same shape: GeneralCandelabra01 is 167 vertices
+    // with one flame emitter per candle. As an effect it was drawn unlit and
+    // additive, and its flames lost the fixture handling and grew into squares.
+    const bool flameFixture = r.isLanternLike || r.isTorch || r.isBrazierOrFire ||
+                              r.isKoboldFlame;
+    const bool particleDominated = emitterCount >= 3 && vertexCount <= 200 && !treeLike &&
+                                   !flameFixture;
     r.isSpellEffect = hasAny(n, kEffectTokens) || steamVfx || particleEmitterVfx
                     || particleDominated;
     // Instance portals are spell effects too.

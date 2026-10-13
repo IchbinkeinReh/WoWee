@@ -255,6 +255,15 @@ TEST_CASE("a small tree with leaf emitters is a tree, not an effect",
     CHECK(leaves.isSpellEffect);
 }
 
+TEST_CASE("a candelabra with a flame per candle is a fixture, not an effect",
+          "[m2][classifier]") {
+    const auto candelabra = classifyM2Model(
+        "WORLD\\GENERIC\\HUMAN\\PASSIVE DOODADS\\CANDELABRAS\\GENERALCANDELABRA01.M2",
+        glm::vec3(-0.5f), glm::vec3(0.5f), 167, 3);
+    CHECK_FALSE(candelabra.isSpellEffect);
+    CHECK(candelabra.isLanternLike);
+}
+
 TEST_CASE("a waterfall is not foliage, whatever zone it is named for",
           "[m2][classifier][foliage]") {
     CHECK_FALSE(classify("StranglethornWaterfall01").isFoliageLike);
