@@ -566,7 +566,8 @@ void CombatHandler::autoTargetAttacker(uint64_t attackerGuid) {
     if (attackerGuid == 0 || attackerGuid == owner_.getPlayerGuid()) return;
     if (owner_.getTargetGuid() != 0) return;
     if (!owner_.getEntityManager().hasEntity(attackerGuid)) return;
-    owner_.setTarget(attackerGuid);
+    // 0x00755020 from SMSG_ATTACKSTART (0x00756800).
+    targetUnit(attackerGuid);
 }
 
 void CombatHandler::handleAttackStart(network::Packet& packet) {
@@ -1357,6 +1358,15 @@ bool CombatHandler::isSelectableUnit(uint64_t guid) const {
     return true;
 }
 
+bool CombatHandler::targetUnit(uint64_t guid) {
+    if (guid != 0 && owner_.isUnitTargeting() && owner_.getEntityManager().getEntity(guid)) {
+        owner_.spellTargetUnit(guid);
+        return false;
+    }
+    setTarget(guid);
+    return true;
+}
+
 void CombatHandler::setTarget(uint64_t guid) {
     if (guid == owner_.getTargetGuid()) return;
     // Looted-out, unskinnable corpses cannot be selected.
@@ -1499,9 +1509,10 @@ void CombatHandler::targetLastTarget() {
         return;
     }
 
-    // Swap current and last target
+    // Swap current and last target - unless a spell waiting for a unit
+    // takes it (TargetLastTarget, 0x00525d70 -> 0x00524bf0).
     uint64_t temp = owner_.getTargetGuid();
-    setTarget(owner_.lastTargetGuidRef());
+    if (!targetUnit(owner_.lastTargetGuidRef())) return;
     owner_.lastTargetGuidRef() = temp;
 }
 
@@ -1539,16 +1550,17 @@ void CombatHandler::cycleTarget(bool reverse, const char* noneMessage,
     for (const auto& c : cands) order.push_back(c.guid);
 
     // Not on the list: start at the near end, or the far one going backwards.
+    // The TargetNearest family (0x00524fc0) ends in 0x00524bf0.
     auto it = std::find(order.begin(), order.end(), owner_.getTargetGuid());
     if (it == order.end()) {
-        setTarget(reverse ? order.back() : order.front());
+        targetUnit(reverse ? order.back() : order.front());
         return;
     }
     if (reverse) {
-        setTarget(it == order.begin() ? order.back() : *(it - 1));
+        targetUnit(it == order.begin() ? order.back() : *(it - 1));
     } else {
         auto next = it + 1;
-        setTarget(next == order.end() ? order.front() : *next);
+        targetUnit(next == order.end() ? order.front() : *next);
     }
 }
 
@@ -1613,7 +1625,7 @@ void CombatHandler::targetLastEnemy() {
         owner_.addSystemChatMessage("No previous enemy target.");
         return;
     }
-    setTarget(lastEnemyTargetGuid_);
+    targetUnit(lastEnemyTargetGuid_);  // 0x00525df0 -> 0x00524bf0
 }
 
 void CombatHandler::targetLastFriend() {
@@ -1621,7 +1633,7 @@ void CombatHandler::targetLastFriend() {
         owner_.addSystemChatMessage("No previous friendly target.");
         return;
     }
-    setTarget(lastFriendTargetGuid_);
+    targetUnit(lastFriendTargetGuid_);  // 0x00525e50 -> 0x00524bf0
 }
 
 void CombatHandler::tabTarget(float playerX, float playerY, float playerZ) {
@@ -1730,7 +1742,7 @@ void CombatHandler::tabTarget(float playerX, float playerY, float playerZ) {
         uint64_t guid = owner_.tabCycleListRef()[owner_.tabCycleIndexRef()];
         auto entity = owner_.getEntityManager().getEntity(guid);
         if (isValidTabTarget(entity)) {
-            setTarget(guid);
+            targetUnit(guid);  // TargetNearestEnemy, 0x00525ad0 -> 0x00524fc0
             return;
         }
     }
@@ -1778,8 +1790,8 @@ void CombatHandler::assistTarget() {
         return;
     }
 
-    // Set our target to their target
-    setTarget(assistTargetGuid);
+    // Set our target to their target (AssistUnit, 0x00525eb0 -> 0x00524bf0)
+    targetUnit(assistTargetGuid);
     LOG_INFO("Assisting ", targetName, ", now targeting GUID: 0x", std::hex, assistTargetGuid, std::dec);
 }
 

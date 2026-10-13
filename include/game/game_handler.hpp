@@ -590,6 +590,9 @@ public:
 
     // Targeting
     void setTarget(uint64_t guid) override;
+    /// "Target this unit" as the interface asks it (0x00524bf0): offered to
+    /// a spell waiting for a unit instead, while one is (false then).
+    bool targetUnit(uint64_t guid);
     void clearTarget() override;
     uint64_t getTargetGuid() const override { return targetGuid; }
     std::shared_ptr<Entity> getTarget() const override;

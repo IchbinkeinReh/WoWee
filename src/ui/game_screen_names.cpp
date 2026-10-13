@@ -783,7 +783,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         if (!ImGui::GetIO().WantCaptureMouse) {
             if (mouse.x >= fr0.x && mouse.x <= fr1.x && mouse.y >= fr0.y && mouse.y <= fr1.y) {
                 gameHandler.setMouseoverGuid(guid);
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) gameHandler.setTarget(guid);
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) gameHandler.targetUnit(guid);
             }
         }
     };

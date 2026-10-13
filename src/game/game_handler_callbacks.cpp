@@ -1728,6 +1728,10 @@ void GameHandler::setTarget(uint64_t guid) {
     if (combatHandler_) combatHandler_->setTarget(guid);
 }
 
+bool GameHandler::targetUnit(uint64_t guid) {
+    return combatHandler_ ? combatHandler_->targetUnit(guid) : false;
+}
+
 void GameHandler::clearTarget() {
     if (combatHandler_) combatHandler_->clearTarget();
 }

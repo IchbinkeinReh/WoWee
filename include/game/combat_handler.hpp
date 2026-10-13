@@ -98,6 +98,10 @@ public:
     /// those cannot be selected. Living units, players and non-units are always selectable.
     [[nodiscard]] bool isSelectableUnit(uint64_t guid) const;
     void setTarget(uint64_t guid);
+    /// What "target this unit" does (0x00524bf0): while a spell waits for a
+    /// unit (0x007fd620) the unit is offered to it (0x0080bc80) and the
+    /// target stays; else it becomes the target. False when offered.
+    bool targetUnit(uint64_t guid);
     void clearTarget();
     [[nodiscard]] std::shared_ptr<Entity> getTarget() const;
     void setFocus(uint64_t guid);

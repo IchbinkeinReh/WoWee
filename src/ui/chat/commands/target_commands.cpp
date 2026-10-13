@@ -73,7 +73,7 @@ public:
 
         // If conditionals resolved to a specific GUID, target it directly
         if (targetCmdOverride != static_cast<uint64_t>(-1) && targetCmdOverride != 0) {
-            ctx.gameHandler.setTarget(targetCmdOverride);
+            ctx.gameHandler.targetUnit(targetCmdOverride);
             return {};
         }
 
@@ -84,7 +84,7 @@ public:
 
         uint64_t bestGuid = findNearestByName(ctx.gameHandler, targetArgLower);
         if (bestGuid) {
-            ctx.gameHandler.setTarget(bestGuid);
+            ctx.gameHandler.targetUnit(bestGuid);
         } else {
             game::MessageChatData sysMsg;
             sysMsg.type = game::ChatType::SYSTEM;

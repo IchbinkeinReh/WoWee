@@ -955,7 +955,8 @@ static int lua_TargetUnit(lua_State* L) {
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
-    if (guid != 0) gh->setTarget(guid);
+    // 0x00525a30 -> 0x005259e0 -> 0x00524bf0.
+    if (guid != 0) gh->targetUnit(guid);
     return 0;
 }
 
@@ -996,7 +997,8 @@ static int lua_AssistUnit(lua_State* L) {
     uint64_t guid = resolveUnitGuid(gh, uidStr);
     if (guid == 0) return 0;
     uint64_t theirTarget = getEntityTargetGuid(gh, guid);
-    if (theirTarget != 0) gh->setTarget(theirTarget);
+    // 0x00525eb0 -> 0x005259e0 -> 0x00524bf0.
+    if (theirTarget != 0) gh->targetUnit(theirTarget);
     return 0;
 }
 
