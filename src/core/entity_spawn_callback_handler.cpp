@@ -105,6 +105,10 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
     gameHandler_.setGameObjectDespawnCallback([this](uint64_t guid) {
         entitySpawner_.despawnGameObject(guid);
     });
+    // ...and one the server took away, which an animation may hold a while.
+    gameHandler_.setGameObjectDestroyCallback([this](uint64_t guid) {
+        entitySpawner_.destroyGameObject(guid);
+    });
 
     // GameObject metadata arrival - settles the animation policy for models that
     // spawned before their type was known.

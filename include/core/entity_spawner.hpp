@@ -80,6 +80,12 @@ public:
     void despawnCreature(uint64_t guid);
     void despawnPlayer(uint64_t guid);
     void despawnGameObject(uint64_t guid);
+    /// The server took a game object away (0x004d7610, 0x004d7230). While an
+    /// animation state holds it - 0x0070d1e0 takes a hold for any state but
+    /// Closed, Opened and Destroyed, 0x0070d7e0 lets it go as the state ends
+    /// - it is only marked (GameObject_C +0xbc 0x100000) and goes as that
+    /// ends (0x004d77e0); otherwise at once.
+    void destroyGameObject(uint64_t guid);
 
     /// A CORPSE object as CGCorpse_C draws it (0x00705670, 0x00705b20):
     /// bones as the race's death skeleton; otherwise its display's model,
@@ -1138,6 +1144,15 @@ private:
     /// (GameObject_C +0x208), played as it arrives (0x00713f50).
     std::unordered_map<uint64_t, uint8_t> gameObjectPendingCustomAnim_;
     void applyPendingGameObjectCustomAnim(uint64_t guid);
+    /// Taken away by the server while an animation held them (+0xbc
+    /// 0x100000); see destroyGameObject.
+    std::unordered_set<uint64_t> gameObjectDestroyPending_;
+    /// When a transition (Open, Close, Destroy, Rebuild) has played and lets
+    /// its hold go (0x0070d1e0's +0x18).
+    std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> gameObjectTransitionEnd_;
+    void noteGameObjectTransitionEnd(uint64_t guid, uint32_t instanceId, uint8_t state, uint32_t anim);
+    [[nodiscard]] bool gameObjectAnimationHolds(uint64_t guid) const;
+    void updateGameObjectDestroyPending();
     /// 0x0070d510: puts the object in an animation state, not again if it is
     /// in it already.
     void enterGameObjectAnimState(uint64_t guid, uint32_t instanceId, uint8_t state);

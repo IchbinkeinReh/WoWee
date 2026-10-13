@@ -2290,6 +2290,7 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
         ? goReversalProgress(*m2, instanceId, animStateIt->second, state) : std::nullopt;
     gameObjectAnimState_[guid] = state;
     gameObjectCustomAnimEnd_.erase(guid);
+    gameObjectTransitionEnd_.erase(guid);
 
     const auto has = [&](uint32_t anim) { return m2->hasAnimation(instanceId, anim); };
     const auto [anim, hold] = goStateAnimation(state, has);
@@ -2308,6 +2309,7 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
     const uint32_t shown = goShownAnimation(anim, has);
     playGoStateAnimation(*m2, instanceId, state, shown, hold);
     startGoAnimationPartWay(*m2, instanceId, shown, progress);
+    noteGameObjectTransitionEnd(guid, instanceId, state, shown);
 }
 
 void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
@@ -2377,6 +2379,7 @@ void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId,
         ? goReversalProgress(*m2, instanceId, curIt->second, state) : std::nullopt;
     gameObjectAnimState_[guid] = state;
     gameObjectCustomAnimEnd_.erase(guid);
+    gameObjectTransitionEnd_.erase(guid);
 
     if (state >= gi::kStateCustom0) {
         // A custom animation plays once, and the object then takes its server
@@ -2393,6 +2396,7 @@ void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId,
     const uint32_t shown = goShownAnimation(anim, has);
     playGoStateAnimation(*m2, instanceId, state, shown, hold);
     startGoAnimationPartWay(*m2, instanceId, shown, progress);
+    noteGameObjectTransitionEnd(guid, instanceId, state, shown);
 }
 
 void EntitySpawner::applyPendingGameObjectCustomAnim(uint64_t guid) {
@@ -2418,12 +2422,65 @@ void EntitySpawner::updateGameObjectCustomAnims() {
     }
     for (uint64_t guid : ended) {
         gameObjectCustomAnimEnd_.erase(guid);
+        // 0x0070d7e0: not with +0xbc 0x100000 - it was taken away, and goes
+        // as the hold the animation had is let go (0x004d77e0).
+        if (gameObjectDestroyPending_.count(guid)) {
+            despawnGameObject(guid);
+            continue;
+        }
         // From the server's state to itself: its resting pose (0x0070d690
         // with +0x204 both times).
         if (auto st = gameObjectServerState_.find(guid); st != gameObjectServerState_.end()) {
             applyGameObjectState(guid, st->second);
         }
     }
+}
+
+bool EntitySpawner::gameObjectAnimationHolds(uint64_t guid) const {
+    auto it = gameObjectInstances_.find(guid);
+    auto st = gameObjectAnimState_.find(guid);
+    if (it == gameObjectInstances_.end() || it->second.isWmo || st == gameObjectAnimState_.end()) return false;
+    const uint8_t state = st->second;
+    if (!game::go_interaction::stateHoldsObject(state)) return false;
+    if (state >= game::go_interaction::kStateCustom0) {
+        auto end = gameObjectCustomAnimEnd_.find(guid);
+        return end != gameObjectCustomAnimEnd_.end() && std::chrono::steady_clock::now() < end->second;
+    }
+    // A transition holds until it has played (+0x18).
+    auto end = gameObjectTransitionEnd_.find(guid);
+    return end != gameObjectTransitionEnd_.end() && std::chrono::steady_clock::now() < end->second;
+}
+
+void EntitySpawner::noteGameObjectTransitionEnd(uint64_t guid, uint32_t instanceId, uint8_t state,
+                                                uint32_t anim) {
+    gameObjectTransitionEnd_.erase(guid);
+    if (state != kGoOpen && state != kGoClose && state != kGoDestroy && state != kGoRebuild) return;
+    auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
+    if (!m2 || !m2->hasAnimation(instanceId, anim)) return;
+    // 0x0070d1e0: what is left of the sequence from where it starts, at its
+    // speed; a speed of 0 ends it at once.
+    const auto playback = m2->getInstanceAnimPlayback(instanceId);
+    if (!playback || playback->speed <= 0.0f) return;
+    const float ms = std::max(playback->durationMs - playback->timeMs, 0.0f) / playback->speed;
+    gameObjectTransitionEnd_[guid] =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(static_cast<int64_t>(ms));
+}
+
+void EntitySpawner::destroyGameObject(uint64_t guid) {
+    if (gameObjectAnimationHolds(guid)) {
+        gameObjectDestroyPending_.insert(guid);
+        return;
+    }
+    despawnGameObject(guid);
+}
+
+void EntitySpawner::updateGameObjectDestroyPending() {
+    if (gameObjectDestroyPending_.empty()) return;
+    std::vector<uint64_t> done;
+    for (uint64_t guid : gameObjectDestroyPending_) {
+        if (!gameObjectAnimationHolds(guid)) done.push_back(guid);
+    }
+    for (uint64_t guid : done) despawnGameObject(guid);
 }
 
 void EntitySpawner::onGameObjectInfoReceived(uint32_t /*entry*/) {
@@ -2435,6 +2492,7 @@ void EntitySpawner::onGameObjectInfoReceived(uint32_t /*entry*/) {
 
 void EntitySpawner::despawnGameObject(uint64_t guid) {
     gameObjectPendingCustomAnim_.erase(guid);
+    gameObjectDestroyPending_.erase(guid);
     pendingTransportDoodadBatches_.erase(
         std::remove_if(pendingTransportDoodadBatches_.begin(), pendingTransportDoodadBatches_.end(),
                        [guid](const PendingTransportDoodadBatch& b) { return b.guid == guid; }),
@@ -2477,6 +2535,7 @@ void EntitySpawner::despawnGameObject(uint64_t guid) {
     gameObjectServerState_.erase(guid);
     gameObjectAnimState_.erase(guid);
     gameObjectCustomAnimEnd_.erase(guid);
+    gameObjectTransitionEnd_.erase(guid);
 
     LOG_DEBUG("Despawned gameobject: guid=0x", std::hex, guid, std::dec);
 }

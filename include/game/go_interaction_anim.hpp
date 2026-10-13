@@ -122,6 +122,15 @@ struct Step {
                                             static_cast<float>(progress) * 1.5259022e-05f));
 }
 
+/// 0x0070d1e0: entering a state takes a hold on the object (0x004d4d60)
+/// that 0x0070d7e0 lets go as the state ends - any state but Closed, Opened
+/// and Destroyed. One the server takes away meanwhile is kept, marked with
+/// GameObject_C +0xbc 0x100000, until the last hold goes (0x004d7610,
+/// 0x004d7230, 0x004d77e0).
+[[nodiscard]] inline bool stateHoldsObject(uint8_t state) {
+    return state != 1 && state != kStateOpened && state != 6;
+}
+
 /// Whether a window opening with `guid` makes it the interaction object
 /// (0x0051fce0). Most windows always do; the trainer's (0x005940e0) and the
 /// stable's (0x005a11a0) not while already open with it (`openWith`), and

@@ -124,3 +124,9 @@ TEST_CASE("A reversed transition starts at what is left of the other", "[go_inte
     REQUIRE(p.has_value());
     CHECK(progressStartTime(*p, 3000) == 750u);
 }
+
+TEST_CASE("Which states hold an object the server takes away", "[go_interaction]") {
+    // 0x0070d1e0: all but Closed, Opened and Destroyed.
+    for (uint8_t s : {0, 2, 4, 5, 7, 8, 9, 10, 11, 12}) CHECK(stateHoldsObject(s));
+    for (uint8_t s : {1, 3, 6}) CHECK_FALSE(stateHoldsObject(s));
+}

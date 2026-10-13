@@ -646,6 +646,10 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
              " displayId=", displayId, " entry=", entry,
              " pos=(", x, ", ", y, ", ", z, ")");
 
+    // Created again while it was going: kept, and no longer going
+    // (0x004d6ae0 clears +0xbc 0x100000).
+    gameObjectDestroyPending_.erase(guid);
+
     auto goIt = gameObjectInstances_.find(guid);
     if (goIt != gameObjectInstances_.end()) {
         // A tracked instance ID is only meaningful while the renderer still holds

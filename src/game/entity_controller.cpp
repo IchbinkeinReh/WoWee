@@ -259,8 +259,8 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
             // Clear pending name query so the query is re-sent when this player
             // comes back into range (entity is recreated as a new object).
             pendingNameQueries.erase(guid);
-        } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDespawnCallbackRef()) {
-            owner_.gameObjectDespawnCallbackRef()(guid);
+        } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
+            owner_.gameObjectDestroyCallbackRef()(guid);   // 0x004d7230
         } else if (entity->getType() == ObjectType::CORPSE && owner_.playerDespawnCallbackRef()) {
             owner_.playerDespawnCallbackRef()(guid);
         }
@@ -2959,8 +2959,8 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
                 owner_.inspectedPlayerItemEntriesRef().erase(data.guid);
                 owner_.pendingAutoInspectRef().erase(data.guid);
                 pendingNameQueries.erase(data.guid);
-            } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDespawnCallbackRef()) {
-                owner_.gameObjectDespawnCallbackRef()(data.guid);
+            } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
+                owner_.gameObjectDestroyCallbackRef()(data.guid);   // 0x004d7610
             } else if (entity->getType() == ObjectType::CORPSE && owner_.playerDespawnCallbackRef()) {
                 owner_.playerDespawnCallbackRef()(data.guid);
             }

@@ -1725,6 +1725,10 @@ public:
     // GameObject despawn callback (online mode - triggered when gameobject leaves view)
     using GameObjectDespawnCallback = std::function<void(uint64_t guid)>;
     void setGameObjectDespawnCallback(GameObjectDespawnCallback cb) { gameObjectDespawnCallback_ = std::move(cb); }
+    /// The server took a game object away (SMSG_DESTROY_OBJECT 0x004d7610,
+    /// out of range 0x004d7230), which the client keeps while an animation
+    /// holds it. Without one, the despawn callback.
+    void setGameObjectDestroyCallback(GameObjectDespawnCallback cb) { gameObjectDestroyCallback_ = std::move(cb); }
 
     using GameObjectCustomAnimCallback = std::function<void(uint64_t guid, uint32_t animId)>;
     void setGameObjectCustomAnimCallback(GameObjectCustomAnimCallback cb) { gameObjectCustomAnimCallback_ = std::move(cb); }
@@ -4075,6 +4079,10 @@ public:
     auto& emoteAnimCallbackRef() { return emoteAnimCallback_; }
     auto& unitStandStateCallbackRef() { return unitStandStateCallback_; }
     auto& gameObjectDespawnCallbackRef() { return gameObjectDespawnCallback_; }
+    /// The destroy callback, or the despawn one where there is none.
+    auto& gameObjectDestroyCallbackRef() {
+        return gameObjectDestroyCallback_ ? gameObjectDestroyCallback_ : gameObjectDespawnCallback_;
+    }
     auto& gameObjectInfoCallbackRef() { return gameObjectInfoCallback_; }
     auto& gameObjectMoveCallbackRef() { return gameObjectMoveCallback_; }
     auto& gameObjectSpawnCallbackRef() { return gameObjectSpawnCallback_; }
@@ -4819,6 +4827,7 @@ private:
     GameObjectSpawnCallback gameObjectSpawnCallback_;
     GameObjectMoveCallback gameObjectMoveCallback_;
     GameObjectDespawnCallback gameObjectDespawnCallback_;
+    GameObjectDespawnCallback gameObjectDestroyCallback_;
     GameObjectInfoCallback gameObjectInfoCallback_;
     GameObjectCustomAnimCallback gameObjectCustomAnimCallback_;
     GameObjectStateCallback gameObjectStateCallback_;
