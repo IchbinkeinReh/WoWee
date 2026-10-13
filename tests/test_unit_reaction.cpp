@@ -212,3 +212,19 @@ TEST_CASE("one with no player behind it, made by the duel opponent (0x0071f5c0)"
     CHECK(unitReaction(w, me, thing) == kHostile);
     CHECK(unitReaction(w, thing, me) == kHostile);
 }
+
+TEST_CASE("one side by faction group, neither charmed, not attackable (0x00729b30)", "[reaction]") {
+    // Two Alliance players who may not attack each other.
+    CHECK(sameSide(&kHuman, &kHuman, false, false, false));
+    // An Alliance player and a boar: groups 3 and 0 differ, whatever else.
+    CHECK_FALSE(sameSide(&kHuman, &kBoar, false, false, false));
+    // Same group, but in a duel or flagged: may attack, so not cooperating.
+    CHECK_FALSE(sameSide(&kHuman, &kHuman, false, false, true));
+    // Either charmed, whatever the groups.
+    CHECK_FALSE(sameSide(&kHuman, &kHuman, true, false, false));
+    CHECK_FALSE(sameSide(&kHuman, &kHuman, false, true, false));
+    // A missing template leaves only the attack question.
+    CHECK(sameSide(&kHuman, nullptr, false, false, false));
+    CHECK(sameSide(nullptr, &kOrc, false, false, false));
+    CHECK_FALSE(sameSide(nullptr, &kOrc, false, false, true));
+}

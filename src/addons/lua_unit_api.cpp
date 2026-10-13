@@ -707,15 +707,22 @@ static int lua_UnitCanAttack(lua_State* L) {
     return 1;
 }
 
-// UnitCanCooperate(unit, otherUnit) → boolean
+// UnitCanCooperate(unit, otherUnit) → 1 or nil (0x0060d530): the two of one
+// side (0x00729b30, the first asking); else one is "player" and the other
+// the player's, a member or a member's pet (0x00512a30).
 static int lua_UnitCanCooperate(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnFalse(L); }
-    (void)luaL_checkstring(L, 1); // unit1 (unused - cooperation is based on unit2's hostility)
-    const char* uid2 = luaL_checkstring(L, 2);
-    auto* unit2 = resolveUnit(L, uid2);
-    if (!unit2) { return luaReturnFalse(L); }
-    lua_pushboolean(L, !unit2->isHostile());
+    if (!gh) { return luaReturnNil(L); }
+    std::string u1(luaL_checkstring(L, 1)), u2(luaL_checkstring(L, 2));
+    toLowerInPlace(u1);
+    toLowerInPlace(u2);
+    const uint64_t g1 = resolveUnitGuid(gh, u1);
+    const uint64_t g2 = resolveUnitGuid(gh, u2);
+    const bool yes = (g1 != 0 && g2 != 0 && gh->unitsCooperate(g1, g2)) ||
+                     (u1 == "player" && gh->isPlayerOrGroupUnit(g2)) ||
+                     (u2 == "player" && gh->isPlayerOrGroupUnit(g1));
+    if (!yes) { return luaReturnNil(L); }
+    lua_pushnumber(L, 1);
     return 1;
 }
 

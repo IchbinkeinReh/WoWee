@@ -1822,6 +1822,10 @@ public:
     /// party (0x0052d310) or raid (0x00573200), or a member's pet - a pet
     /// being a unit's UNIT_FIELD_CHARM, else its UNIT_FIELD_SUMMON.
     [[nodiscard]] bool isPlayerOrGroupUnit(uint64_t guid) const;
+    /// 0x00729b30, `a` asking (reaction::sameSide): not one unit, neither
+    /// charmed, of one faction group, and `a` may not attack `b`. False
+    /// when either is not a unit here.
+    [[nodiscard]] bool unitsCooperate(uint64_t a, uint64_t b) const;
 
     // Creature move callback (online mode - triggered by SMSG_MONSTER_MOVE)
     // Parameters: guid, x, y, z (canonical), duration_ms (0 = instant)

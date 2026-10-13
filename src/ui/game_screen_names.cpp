@@ -89,17 +89,15 @@ un::UnitFacts unitFacts(game::GameHandler& gh, const game::Entity& e, const game
     f.ownerIsPlayer = isPlayerGuid(charmedBy != 0 ? charmedBy : createdBy);
     f.immuneToNpc = (unit.getUnitFlags() & 0x200u) != 0;
     f.alive = unit.getHealth() >= 1 && (unit.getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) == 0;
-    // 0x00729b30: nothing charmed, not attackable and of the player's side.
-    f.friendlyGroup = !f.charmedBy && !f.attackable && !unit.isHostile();
+    // 0x00729b30 with the player asking.
+    const uint64_t me = gh.getPlayerGuid();
+    f.friendlyGroup = gh.unitsCooperate(me, e.getGuid());
     if (charmedBy != 0) {
-        const uint64_t me = gh.getPlayerGuid();
+        // 0x00729c70: a charmer that charms it back and is the player or of
+        // the player's side (0x00729b30 again).
         if (auto charmer = gh.getEntityManager().getEntity(charmedBy); charmer && charmer->isUnit()) {
             const bool controlsIt = guidAt(*charmer, game::UF::UNIT_FIELD_CHARM) == e.getGuid();
-            const auto& c = static_cast<const game::Unit&>(*charmer);
-            const bool friendly = charmedBy == me ||
-                (charmer->getType() == game::ObjectType::PLAYER && !playerMayAttackPlayer(gh, c) &&
-                 !c.isHostile());
-            f.charmerFriendly = controlsIt && friendly;
+            f.charmerFriendly = controlsIt && (charmedBy == me || gh.unitsCooperate(me, charmedBy));
         }
     }
     return f;

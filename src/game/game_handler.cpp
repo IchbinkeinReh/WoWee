@@ -3026,6 +3026,21 @@ bool GameHandler::unitMayAssist(uint64_t helper, uint64_t unit) const {
     return spellHandler_ && spellHandler_->unitMayAssist(helper, unit);
 }
 
+bool GameHandler::unitsCooperate(uint64_t a, uint64_t b) const {
+    if (a == b) return false;
+    const auto ea = getEntityManager().getEntity(a);
+    const auto eb = getEntityManager().getEntity(b);
+    if (!ea || !eb || !ea->isUnit() || !eb->isUnit()) return false;
+    const auto row = [this](const Entity& e) -> const reaction::FactionTemplate* {
+        auto it = factionTemplates_.find(reactionField(e, UF::UNIT_FIELD_FACTIONTEMPLATE));
+        return it != factionTemplates_.end() ? &it->second : nullptr;
+    };
+    const bool aCharmed = reactionGuidField(*ea, UF::UNIT_FIELD_CHARMEDBY) != 0;
+    const bool bCharmed = reactionGuidField(*eb, UF::UNIT_FIELD_CHARMEDBY) != 0;
+    if (aCharmed || bCharmed) return false;
+    return reaction::sameSide(row(*ea), row(*eb), false, false, unitMayAttack(a, b));
+}
+
 bool GameHandler::isPlayerOrGroupUnit(uint64_t guid) const {
     if (guid == 0) return false;
     const auto petOf = [this](uint64_t owner) -> uint64_t {

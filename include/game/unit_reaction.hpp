@@ -170,4 +170,16 @@ template <typename World>
     return r < 7 ? r : 7;
 }
 
+/// 0x00729b30, short of the two being one unit: neither charmed
+/// (UNIT_FIELD_CHARMEDBY, +0x18 of the unit fields), of one faction group
+/// (FactionTemplate +0xc) - or either without a template - and the first
+/// may not attack the second (0x00729740). UnitCanCooperate, and what the
+/// names and plates take for a friendly player or pet.
+[[nodiscard]] constexpr bool sameSide(const FactionTemplate* a, const FactionTemplate* b, bool aCharmed,
+                                      bool bCharmed, bool aMayAttackB) {
+    if (aCharmed || bCharmed) return false;
+    if (a != nullptr && b != nullptr && a->factionGroup != b->factionGroup) return false;
+    return !aMayAttackB;
+}
+
 }  // namespace wowee::game::reaction
