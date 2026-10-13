@@ -222,6 +222,9 @@ namespace {
 
 namespace wowee { namespace ui {
 
+// game_screen.cpp: who may attack whom between players (0x00729740).
+bool playerMayAttackPlayer(game::GameHandler& gameHandler, const game::Unit& other);
+
 namespace minimap_blips = rendering::minimap_blips;
 
 void GameScreen::refreshQuestObjectiveCache(game::GameHandler& gameHandler) {
@@ -1030,8 +1033,11 @@ void GameScreen::renderMinimapObjectBlips(const MinimapFrame& frame, const Entit
         }
         // unitReactionToPlayer counts from 1, the client's from 0.
         f.reaction = gameHandler.unitReactionToPlayer(*unit) - 1;
+        // 0x00729530 with the player asking: each regards the other as
+        // neutral or better.
         f.otherTracked = otherEntry && otherEntry->kind == mt::Kind::NpcFlag &&
-                         (unit->getNpcFlags() & otherEntry->mask) != 0 && f.reaction > 2;
+                         (unit->getNpcFlags() & otherEntry->mask) != 0 && f.reaction > 2 && self &&
+                         gameHandler.unitReaction(*self, *unit) > 2;
         f.questStatus = questStatus(guid);
         f.taxiUnknown = gameHandler.isTaxiNodeUnknown(guid);
         // Every player race is humanoid.
@@ -1041,7 +1047,7 @@ void GameScreen::renderMinimapObjectBlips(const MinimapFrame& frame, const Entit
         if (f.isPlayer) {
             const uint32_t bytes0 = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
             f.sameTeam = minimap_blips::raceTeam(static_cast<uint8_t>(bytes0 & 0xFF)) == ownTeam;
-            f.attackable = unit->isHostile();
+            f.attackable = playerMayAttackPlayer(gameHandler, *unit);
         }
         const int icon = minimap_blips::unitIcon(f, trackingLowLevel);
         if (icon >= 0) place(*entity, icon, &unit->getName());

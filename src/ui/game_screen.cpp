@@ -1262,9 +1262,10 @@ bool inSameDuel(const game::Entity& a, const game::Entity& b) {
 
 /// FUN_00729740 between the player and another player-controlled unit, the
 /// player attacking when `playerAttacks`: never a dead or unattackable
-/// victim, never a friendly faction; the same duel; otherwise the victim
-/// flagged for PvP, or either side marked contested (flag 2), and neither in
-/// a sanctuary (8) - or both in free-for-all (4).
+/// victim, never one the attacker regards as friendly (0x00514050 asked by
+/// the attacker); the same duel; otherwise the victim flagged for PvP, or
+/// either side marked contested (flag 2), and neither in a sanctuary (8) -
+/// or both in free-for-all (4).
 bool mayAttackBetween(game::GameHandler& gameHandler, const game::Unit& other, bool playerAttacks) {
     const auto me = gameHandler.getEntityManager().getEntity(gameHandler.getPlayerGuid());
     const game::Unit* victim = &other;
@@ -1274,7 +1275,9 @@ bool mayAttackBetween(game::GameHandler& gameHandler, const game::Unit& other, b
     }
     if (victim->getHealth() == 0) return false;
     if (victim->getUnitFlags() & (0x00000002u | game::UNIT_FLAG_NOT_SELECTABLE)) return false;
-    if (!other.isHostile()) return false;
+    // 0x007251c0 asked by the attacker: friendly (4) or better.
+    if (me && (playerAttacks ? gameHandler.unitReaction(*me, other) : gameHandler.unitReaction(other, *me)) >= 4)
+        return false;
     if (!me) return playerAttacks && (other.getUnitFlags() & game::kUnitFlagPvp) != 0;
     if (inSameDuel(*me, other)) return true;
     return playerAttacks ? game::pvpFlagsAllowAttack(pvpFlagsOf(*me), pvpFlagsOf(other))
@@ -1380,7 +1383,7 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
         }
         if (outOfReach) path = unableCursorPath(path.c_str());
     } else if (isPlayer ? playerMayAttackPlayer(gameHandler, *unit)
-                        : gameHandler.playerMayAttackCreature(*unit)) {
+                        : gameHandler.unitMayAttack(gameHandler.getPlayerGuid(), unit->getGuid())) {
         // The sword over whatever the player may attack (0x00729a70): alive,
         // not flagged out of reach, and not regarded as friendly by the player
         // - so a neutral boar wears it as a hostile wolf does, and Dalaran's
@@ -2479,21 +2482,22 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                         };
                         bool allowSpiritInteract = (gameHandler.isPlayerDead() || gameHandler.isPlayerGhost()) && isSpiritNpc();
                         bool canInteractNpc = unit->isInteractable() || allowSpiritInteract;
-                        bool shouldAttackByFallback = !canInteractNpc;
-                        if (!unit->isHostile() && canInteractNpc) {
+                        // 0x00731260: spoken to when the player may interact
+                        // with it (0x00729530 - something to talk to, each
+                        // regarding the other as neutral or better, else
+                        // UNIT_FLAG2 0x4000); else attacked when the player
+                        // may attack it (0x00729a70); else only targeted.
+                        const uint16_t flags2Field = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
+                        const uint32_t flags2 = flags2Field != 0xFFFF ? unit->getField(flags2Field) : 0u;
+                        const auto me = gameHandler.getEntityManager().getEntity(gameHandler.getPlayerGuid());
+                        const bool mayInteract =
+                            canInteractNpc && (unit->getUnitFlags() & game::UNIT_FLAG_NOT_SELECTABLE) == 0 &&
+                            ((me && gameHandler.unitReaction(*me, *unit) > 2 &&
+                              gameHandler.unitReaction(*unit, *me) > 2) ||
+                             (flags2 & 0x4000u) != 0);
+                        if (mayInteract) {
                             gameHandler.interactWithNpc(target->getGuid());
-                        } else if (unit->isHostile() || shouldAttackByFallback) {
-                            // Said once per unit: a creature nobody thinks is
-                            // hostile, attacked because it carries no NPC flags,
-                            // is a talk that never left this client.
-                            if (!unit->isHostile()) {
-                                static std::unordered_set<uint64_t> said;
-                                if (said.insert(target->getGuid()).second) {
-                                    LOG_WARNING("Right-click: ", unit->getName(),
-                                                " is not hostile and has no NPC flags,"
-                                                " so it was attacked rather than spoken to");
-                                }
-                            }
+                        } else if (gameHandler.unitMayAttack(gameHandler.getPlayerGuid(), target->getGuid())) {
                             gameHandler.startAutoAttack(target->getGuid());
                         }
                     }
@@ -2506,7 +2510,12 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                         gameHandler.interactWithGameObject(target->getGuid());
                     }
                 } else if (target->getType() == game::ObjectType::PLAYER) {
-                    // Right-click another player could start attack in PvP context
+                    // 0x00731260 for another player: nothing to talk to, so
+                    // attacked when the player may attack them.
+                    auto other = std::static_pointer_cast<game::Unit>(target);
+                    if (other->getHealth() > 0 && playerMayAttackPlayer(gameHandler, *other)) {
+                        gameHandler.startAutoAttack(target->getGuid());
+                    }
                 }
             }
         }

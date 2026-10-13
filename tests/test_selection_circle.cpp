@@ -95,6 +95,24 @@ TEST_CASE("a friendly player's circle: group, friends, PvP", "[selection_circle]
     CHECK(same(sc::color(in), 170, 170, 255));
 }
 
+TEST_CASE("UnitSelectionColor skips the dead, the group and friends", "[selection_circle]") {
+    sc::ColorInput in;
+    in.circle = false;
+    in.reaction = 2;
+    in.dead = true;
+    CHECK(same(sc::color(in), 255, 0, 0));
+    in.playerControlled = true;
+    in.reaction = 5;
+    in.targetMayAttackPlayer = true;
+    CHECK(same(sc::color(in), 0, 0, 255));
+    in.targetMayAttackPlayer = false;
+    in.groupMember = true;
+    in.friendListed = true;
+    CHECK(same(sc::color(in), 0, 0, 255));
+    in.pvp = true;
+    CHECK(same(sc::color(in), 0, 255, 0));
+}
+
 TEST_CASE("the box is the unit's position and the radius either way", "[selection_circle]") {
     const glm::vec3 unit(100.0f, 200.0f, 30.0f);
     const auto p = sc::project(unit, 0.75f, glm::vec3(90.0f, 200.0f, 35.0f));

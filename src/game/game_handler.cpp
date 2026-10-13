@@ -3015,33 +3015,12 @@ int GameHandler::playerReactionTo(const Unit& unit) const {
     return isFriendlyFaction(ft) ? 5 : 4;
 }
 
-bool GameHandler::playerMayAttackCreature(const Unit& unit) const {
-    // 0x00729740 with the player attacking. The victim's flags first:
-    // non-attackable (0x2), 0x80, 0x10000, 0x100000, not selectable.
-    constexpr uint32_t kNonAttackable = 0x2, kPvpAttackable = 0x8, kFlag80 = 0x80,
-                       kImmuneToPc = 0x100, kImmuneToNpc = 0x200, kFlag10000 = 0x10000,
-                       kFlag100000 = 0x100000;
-    const uint32_t theirs = unit.getUnitFlags();
-    if (theirs & (kNonAttackable | kFlag80 | kFlag10000 | kFlag100000 | UNIT_FLAG_NOT_SELECTABLE)) {
-        return false;
-    }
-    // Immunity, each side against the other's kind: a player carries 0x8,
-    // so a victim immune to players is out of reach; and a player immune to
-    // NPCs cannot strike one.
-    auto me = getEntityManager().getEntity(getPlayerGuid());
-    const uint32_t mine = me && me->isUnit() ? static_cast<const Unit&>(*me).getUnitFlags() : kPvpAttackable;
-    if ((mine & kPvpAttackable) && (theirs & kImmuneToPc)) return false;
-    if (!(mine & kPvpAttackable) && (theirs & kImmuneToNpc)) return false;
-    if ((theirs & kPvpAttackable) && (mine & kImmuneToPc)) return false;
-    if (!(theirs & kPvpAttackable) && (mine & kImmuneToNpc)) return false;
-    // A unit in a sanctuary, against a player.
-    const uint16_t bytes2Field = fieldIndex(UF::UNIT_FIELD_BYTES_2);
-    if ((mine & kPvpAttackable) && bytes2Field != 0xFFFF && !isPreWotlk()) {
-        const uint32_t pvp = unitPvpFlags(true, unit.getField(bytes2Field), theirs);
-        if (pvp & pvp::kSanctuary) return false;
-    }
-    // Last, 0x00514050: not if the player regards it as friendly.
-    return playerReactionTo(unit) <= 4;
+bool GameHandler::unitMayAttack(uint64_t attacker, uint64_t victim) const {
+    return spellHandler_ && spellHandler_->unitMayAttack(attacker, victim);
+}
+
+bool GameHandler::unitMayAssist(uint64_t helper, uint64_t unit) const {
+    return spellHandler_ && spellHandler_->unitMayAssist(helper, unit);
 }
 
 int GameHandler::factionReactionToPlayer(uint32_t ft) const {

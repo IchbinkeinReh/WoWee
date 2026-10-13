@@ -1812,13 +1812,13 @@ public:
     void setFactionTemplates(std::unordered_map<uint32_t, reaction::FactionTemplate> rows) {
         factionTemplates_ = std::move(rows);
     }
-    /// Whether the player may attack a unit no player is behind
-    /// (0x00729740, the player attacking): not one flagged out of reach of
-    /// attack or of players, not one in a sanctuary, and not one the player
-    /// regards as friendly (playerReactionTo above 4). A neutral boar may
-    /// be attacked; a neutral standing's guard may not. Another player
-    /// goes by the duel and PvP rules instead.
-    [[nodiscard]] bool playerMayAttackCreature(const Unit& unit) const;
+    /// 0x00729740 for any two units by guid, `attacker` asking: what
+    /// UnitCanAttack, the enemy target cycles and the last enemy target ask
+    /// with the player attacking. False when either is not a unit here.
+    [[nodiscard]] bool unitMayAttack(uint64_t attacker, uint64_t victim) const;
+    /// 0x007293d0 (its last argument 0), `helper` asking: UnitCanAssist, the
+    /// friendly player cycle and the last friendly target.
+    [[nodiscard]] bool unitMayAssist(uint64_t helper, uint64_t unit) const;
 
     // Creature move callback (online mode - triggered by SMSG_MONSTER_MOVE)
     // Parameters: guid, x, y, z (canonical), duration_ms (0 = instant)

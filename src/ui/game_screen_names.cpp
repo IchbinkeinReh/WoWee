@@ -67,7 +67,7 @@ bool isPlayerGuid(uint64_t guid) { return guid != 0 && (guid >> 48) == 0; }
 /// by the player as friendly.
 bool mayAttack(game::GameHandler& gh, const game::Unit& unit, bool isPlayer) {
     if (isPlayer) return playerMayAttackPlayer(gh, unit);
-    return gh.playerMayAttackCreature(unit);
+    return gh.unitMayAttack(gh.getPlayerGuid(), unit.getGuid());
 }
 
 /// What 0x00729c70 and 0x0072b060 read off a unit.

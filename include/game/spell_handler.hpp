@@ -56,6 +56,11 @@ public:
     /// A pet's spell cast by the pet itself (0x005d4210 -> 0x0080cce0,
     /// CMSG_PET_CAST_SPELL): at a place it waits for one, as the player's do.
     void castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targetGuid);
+    /// 0x00729740: whether one unit may attack another, each by guid; false
+    /// when either is not a unit here.
+    [[nodiscard]] bool unitMayAttack(uint64_t attacker, uint64_t victim) const;
+    /// 0x007293d0 with its last argument 0: whether one unit may help another.
+    [[nodiscard]] bool unitMayAssist(uint64_t helper, uint64_t unit) const;
 
     // --- A spell waiting for a place on the ground (Spell_C.cpp) ---
     /// The spell the cursor holds while it waits for a location, or 0

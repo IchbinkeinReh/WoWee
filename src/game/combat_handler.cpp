@@ -290,12 +290,14 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     // has a friendly unit selected, would turn one refusal into another.
     if (addons::storedCVarValue("assistAttack", "0") != "0") {
         auto entity = owner_.getEntityManager().getEntity(targetGuid);
-        if (auto* unit = dynamic_cast<Unit*>(entity.get())) {
-            if (!unit->isHostile() && !isAggressiveTowardPlayer(targetGuid)) {
+        if (dynamic_cast<Unit*>(entity.get())) {
+            // 0x00729740 with the player attacking.
+            const uint64_t me = owner_.getPlayerGuid();
+            if (!owner_.unitMayAttack(me, targetGuid) && !isAggressiveTowardPlayer(targetGuid)) {
                 const uint64_t theirTarget = unitTargetGuid(entity);
                 auto their = owner_.getEntityManager().getEntity(theirTarget);
                 auto* theirUnit = dynamic_cast<Unit*>(their.get());
-                if (theirUnit && (theirUnit->isHostile() ||
+                if (theirUnit && (owner_.unitMayAttack(me, theirTarget) ||
                                   isAggressiveTowardPlayer(theirTarget))) {
                     targetGuid = theirTarget;
                 } else {
@@ -1381,9 +1383,14 @@ void CombatHandler::setTarget(uint64_t guid) {
         owner_.lastTargetGuidRef() = previous;
         auto entity = owner_.getEntityManager().getEntity(previous);
         if (auto* unit = dynamic_cast<Unit*>(entity.get())) {
-            if (unit->isHostile() || isAggressiveTowardPlayer(previous)) {
+            // 0x00524bf0: the last enemy one the player may attack
+            // (0x00729a70), else the last friend one the player may help
+            // (0x007293d0).
+            const uint64_t me = owner_.getPlayerGuid();
+            if ((unit->getHealth() > 0 && owner_.unitMayAttack(me, previous)) ||
+                isAggressiveTowardPlayer(previous)) {
                 lastEnemyTargetGuid_ = previous;
-            } else {
+            } else if (owner_.unitMayAssist(me, previous)) {
                 lastFriendTargetGuid_ = previous;
             }
         }
@@ -1578,7 +1585,8 @@ void CombatHandler::targetEnemy(bool reverse) {
         if (t != ObjectType::UNIT && t != ObjectType::PLAYER) return false;
         auto* unit = dynamic_cast<Unit*>(&e);
         if (!unit || unit->getHealth() == 0) return false;
-        return unit->isHostile() || isAggressiveTowardPlayer(guid);
+        // 0x00518e40: one the player may attack (0x00729740).
+        return owner_.unitMayAttack(owner_.getPlayerGuid(), guid) || isAggressiveTowardPlayer(guid);
     });
 }
 
@@ -1594,15 +1602,17 @@ void CombatHandler::targetNearestEnemyPlayer(bool reverse) {
         if (e.getType() != ObjectType::PLAYER) return false;
         auto* unit = dynamic_cast<Unit*>(&e);
         if (!unit || unit->getHealth() == 0) return false;
-        return unit->isHostile() || isAggressiveTowardPlayer(guid);
+        // 0x00518e40: one the player may attack (0x00729740).
+        return owner_.unitMayAttack(owner_.getPlayerGuid(), guid) || isAggressiveTowardPlayer(guid);
     });
 }
 
 void CombatHandler::targetNearestFriendPlayer(bool reverse) {
-    cycleTarget(reverse, "No friendly players in range.", [](uint64_t, Entity& e) {
+    cycleTarget(reverse, "No friendly players in range.", [this](uint64_t guid, Entity& e) {
         if (e.getType() != ObjectType::PLAYER) return false;
         auto* unit = dynamic_cast<Unit*>(&e);
-        return unit && !unit->isHostile();
+        // 0x00518e40: one the player may help (0x007293d0), alive.
+        return unit && unit->getHealth() > 0 && owner_.unitMayAssist(owner_.getPlayerGuid(), guid);
     });
 }
 
@@ -1660,7 +1670,8 @@ void CombatHandler::tabTarget(float playerX, float playerY, float playerZ) {
             return lootIt != owner_.localLootStateRef().end() &&
                    !lootIt->second.data.items.empty();
         }
-        const bool hostileByFaction = unit->isHostile();
+        // 0x00518e40: one the player may attack (0x00729740).
+        const bool hostileByFaction = owner_.unitMayAttack(owner_.getPlayerGuid(), guid);
         const bool hostileByCombat = isAggressiveTowardPlayer(guid);
         return hostileByFaction || hostileByCombat;
     };

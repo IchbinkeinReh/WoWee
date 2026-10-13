@@ -990,6 +990,20 @@ uint32_t creatureTypeOf(GameHandler& gh, const Entity& e) {
 
 }  // namespace
 
+bool SpellHandler::unitMayAttack(uint64_t attacker, uint64_t victim) const {
+    auto& em = owner_.getEntityManager();
+    const auto a = em.getEntity(attacker);
+    const auto b = em.getEntity(victim);
+    return a && b && a->isUnit() && b->isUnit() && relationsOf(owner_, a, b, 0).mayAttack;
+}
+
+bool SpellHandler::unitMayAssist(uint64_t helper, uint64_t unit) const {
+    auto& em = owner_.getEntityManager();
+    const auto a = em.getEntity(helper);
+    const auto b = em.getEntity(unit);
+    return a && b && a->isUnit() && b->isUnit() && relationsOf(owner_, a, b, 0).mayAssist;
+}
+
 SpellHandler::UnitTake SpellHandler::takeUnit(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid,
                                               uint32_t required, bool say) const {
     UnitTake out{false, required, 0};

@@ -3,6 +3,8 @@
 #include "game/shapeshift_forms.hpp"
 #include "game/game_utils.hpp"
 #include "game/bg_score_defs.hpp"
+#include "game/pvp_flags.hpp"
+#include "rendering/selection_circle.hpp"
 #include "addons/lua_api_helpers.hpp"
 
 namespace wowee::addons {
@@ -700,23 +702,8 @@ static int lua_UnitCanAttack(lua_State* L) {
     uint64_t g1 = resolveUnitGuid(gh, u1);
     uint64_t g2 = resolveUnitGuid(gh, u2);
     if (g1 == 0 || g2 == 0 || g1 == g2) { return luaReturnFalse(L); }
-    // 0x0060d730 asks 0x00729740 with unit1 attacking. The player attacking
-    // a creature has the whole rule; a creature attacking the player may
-    // unless it regards the player as friendly (0x00514050 asked by it).
-    auto* unit1 = resolveUnit(L, uid1);
-    auto* unit2 = resolveUnit(L, uid2);
-    if (!unit1 || !unit2) { return luaReturnFalse(L); }
-    const uint64_t me = gh->getPlayerGuid();
-    bool can = false;
-    if (g1 == me && unit2->getType() == game::ObjectType::UNIT) {
-        can = gh->playerMayAttackCreature(*unit2);
-    } else if (g2 == me && unit1->getType() == game::ObjectType::UNIT) {
-        can = gh->unitReactionToPlayer(*unit1) <= 4;
-    } else {
-        // Between players: hostility to the player, as before.
-        can = (g1 == me ? unit2 : unit1)->isHostile();
-    }
-    lua_pushboolean(L, can);
+    // 0x0060d730 asks 0x00729740 with unit1 attacking.
+    lua_pushboolean(L, gh->unitMayAttack(g1, g2));
     return 1;
 }
 
@@ -2747,25 +2734,41 @@ void registerUnitLuaAPI(lua_State* L) {
                                 t == game::InvType::TWO_HAND) ? 1 : 0);
             return 1;
         }},
-                // The colour a unit's name is drawn in: red for hostile, orange
-                // for unfriendly, yellow for neutral, green for friendly. Unit
-                // frames read all four components straight into SetTextColor.
+                // 0x0060da00: 0x00521bf0 with its last argument 0. A creature
+                // by how it regards the player; a unit a player controls by
+                // who may attack whom, then by its reaction while flagged for
+                // PvP, else blue - and blue for no unit.
                 {"UnitSelectionColor", [](lua_State* L) -> int {
             const char* uid = luaL_optstring(L, 1, "player");
             auto* unit = resolveUnit(L, uid);
-            float r = 0.0f, g = 1.0f, b = 0.0f;
             auto* gh = getGameHandler(L);
-            if (unit && gh && unit->getType() == game::ObjectType::UNIT) {
-                // A creature by how it regards the player, standing and all.
-                const int reaction = gh->unitReactionToPlayer(*unit);
-                if (reaction <= 2)      { r = 1.0f; g = 0.0f; }
-                else if (reaction == 3) { r = 1.0f; g = 0.5f; }
-                else if (reaction == 4) { r = 1.0f; g = 1.0f; }
-            } else if (unit && unit->isHostile()) { r = 1.0f; g = 0.0f; b = 0.0f; }
-            lua_pushnumber(L, r);
-            lua_pushnumber(L, g);
-            lua_pushnumber(L, b);
-            lua_pushnumber(L, 1.0);
+            rendering::selection_circle::ColorInput in;
+            in.circle = false;
+            in.playerControlled = true;
+            if (unit && gh) {
+                const uint64_t me = gh->getPlayerGuid();
+                in.playerControlled = (unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED) != 0;
+                in.reaction = gh->unitReactionToPlayer(*unit);
+                in.targetMayAttackPlayer = gh->unitMayAttack(unit->getGuid(), me);
+                in.playerMayAttackTarget = gh->unitMayAttack(me, unit->getGuid());
+                const auto pvpOf = [](const game::Entity& e) {
+                    const uint16_t b2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
+                    const uint16_t fl = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+                    const bool holds = b2 != 0xFFFF && !game::isPreWotlk();
+                    return game::unitPvpFlags(holds, holds ? e.getField(b2) : 0u,
+                                              fl != 0xFFFF ? e.getField(fl) : 0u);
+                };
+                const auto meEntity = gh->getEntityManager().getEntity(me);
+                const uint32_t theirs = pvpOf(*unit);
+                const uint32_t mine = meEntity ? pvpOf(*meEntity) : 0u;
+                in.pvp = (theirs & game::pvp::kPvp) != 0 && (theirs & game::pvp::kSanctuary) == 0 &&
+                         (mine & game::pvp::kSanctuary) == 0;
+            }
+            const glm::vec4 c = rendering::selection_circle::color(in);
+            lua_pushnumber(L, c.r);
+            lua_pushnumber(L, c.g);
+            lua_pushnumber(L, c.b);
+            lua_pushnumber(L, c.a);
             return 4;
         }},
                 {"UnitIsPartyLeader", [](lua_State* L) -> int {
@@ -2784,11 +2787,16 @@ void registerUnitLuaAPI(lua_State* L) {
             lua_pushboolean(L, (unit && unit->getHealth() == 0) ? 1 : 0);
             return 1;
         }},
-                // Whether the first unit may help the second - true between
-                // anything not hostile to each other.
+                // Whether the first unit may help the second: 0x0060d690
+                // asks 0x007293d0 of unit1, its last argument 0.
                 {"UnitCanAssist", [](lua_State* L) -> int {
-            auto* other = resolveUnit(L, luaL_optstring(L, 2, "target"));
-            lua_pushboolean(L, (other && !other->isHostile()) ? 1 : 0);
+            auto* gh = getGameHandler(L);
+            std::string u1(luaL_optstring(L, 1, "player")), u2(luaL_optstring(L, 2, "target"));
+            toLowerInPlace(u1);
+            toLowerInPlace(u2);
+            const uint64_t g1 = gh ? resolveUnitGuid(gh, u1) : 0;
+            const uint64_t g2 = gh ? resolveUnitGuid(gh, u2) : 0;
+            lua_pushboolean(L, (g1 != 0 && g2 != 0 && gh->unitMayAssist(g1, g2)) ? 1 : 0);
             return 1;
         }},
                 {"GetPVPRankInfo", [](lua_State* L) -> int {

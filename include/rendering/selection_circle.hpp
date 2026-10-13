@@ -53,6 +53,10 @@ struct ColorInput {
     bool groupMember = false;
     /// On the friends list (0x006b3510).
     bool friendListed = false;
+    /// 0x00521bf0's last argument: 1 for the circle (and the name, 0x00718ac0),
+    /// 0 for UnitSelectionColor (0x0060da00), which skips the dead, the group
+    /// and the friends list and takes 0x00bd0c8c[0], blue, for the last.
+    bool circle = true;
 };
 
 /// The colour 0x00521bf0 hands back, as 0..1 RGBA (its table is D3DCOLOR).
@@ -69,22 +73,26 @@ inline glm::vec4 color(const ColorInput& in) {
         if (i == 3) return rgb(255, 255, 0);
         return rgb(0, 255, 0);
     };
+    // 0x00bd0c8c[circle]: blue for UnitSelectionColor, a paler blue for the
+    // circle.
+    const glm::vec4 blue = in.circle ? rgb(96, 96, 255) : rgb(0, 0, 255);
     if (!in.playerControlled) {
-        if (in.dead) return rgb(127, 127, 127);  // 0x00acc3f8
+        if (in.circle && in.dead) return rgb(127, 127, 127);  // 0x00acc3f8
         return byReaction(in.reaction);
     }
     if (in.targetMayAttackPlayer) {
-        return in.playerMayAttackTarget ? rgb(255, 0, 0)    // 0x00bd0c98
-                                        : rgb(96, 96, 255);  // 0x00bd0c90
+        return in.playerMayAttackTarget ? rgb(255, 0, 0)  // 0x00bd0c98
+                                        : blue;
     }
     if (in.playerMayAttackTarget) return rgb(255, 255, 0);  // 0x00bd0ca0
+    if (!in.circle) return in.pvp ? byReaction(in.reaction) : blue;
     if (in.groupMember) {
         return in.pvp ? rgb(170, 255, 170)    // 0x00bd0c84
                       : rgb(170, 170, 255);   // 0x00bd0c88
     }
     if (in.friendListed) return rgb(83, 201, 255);  // 0x00bd0c80
     if (in.pvp) return byReaction(in.reaction);
-    return rgb(96, 96, 255);  // 0x00bd0c8c[1]
+    return blue;
 }
 
 /// The angle from the camera to the unit across the ground (0x004f5130).
