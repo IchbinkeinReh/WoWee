@@ -1404,7 +1404,9 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
             const M2EventDisk disk = readValue<M2EventDisk>(m2Data, base);
             M2Model::M2Event event;
             std::memcpy(&event.id, disk.identifier, sizeof(event.id));
+            event.data = disk.data;
             event.bone = disk.bone;
+            event.globalSequence = disk.globalSequence;
             event.position = glm::vec3(disk.position[0], disk.position[1], disk.position[2]);
             event.times.resize(model.sequences.size());
 

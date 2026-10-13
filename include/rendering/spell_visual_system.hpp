@@ -734,6 +734,8 @@ private:
     bool syncEffectLoads_ = false;
     /// Whether the player's character is one of these render instances.
     [[nodiscard]] bool involvesPlayer(uint32_t instanceA, uint32_t instanceB = 0) const;
+    /// Hand a kit model's events to the effect it is (setInstanceEventOwner).
+    void setEffectEventOwner(uint32_t instanceId, uint32_t unitInstanceId);
     glm::vec3 missileSource(const MissileVisual& visual, const MissileEnd& from) const;
     /// Where the missile aims this frame; forgets a target that has gone.
     glm::vec3 missileTargetPoint(ActiveMissile& missile) const;

@@ -402,6 +402,12 @@ bool SpellVisualSystem::involvesPlayer(uint32_t instanceA, uint32_t instanceB) c
     return player != 0 && (instanceA == player || instanceB == player);
 }
 
+// A kit's model is an effect (0x006f94c0 gives it 0x006f7b00 for its
+// events), on the unit the kit plays on - the active player's or another's.
+void SpellVisualSystem::setEffectEventOwner(uint32_t instanceId, uint32_t unitInstanceId) {
+    m2Renderer_->setInstanceEventOwner(instanceId, m2_event::Owner::Effect, involvesPlayer(unitInstanceId) ? 1u : 0u);
+}
+
 uint32_t SpellVisualSystem::acquireEffectModel(const std::string& modelPath) {
     // Get or assign a model ID for this path
     auto midIt = spellVisualModelIds_.find(modelPath);
@@ -640,6 +646,7 @@ void SpellVisualSystem::playKitWeaponEffects(const std::vector<KitWeaponEffect>&
         const uint32_t instanceId = m2Renderer_->createInstance(modelId, glm::vec3(attachMat[3]), glm::vec3(0.0f), 1.0f);
         if (instanceId == 0) continue;
         m2Renderer_->restartInstanceAnimation(instanceId);
+        setEffectEventOwner(instanceId, attachInstanceId);
         m2Renderer_->setInstanceTransform(instanceId, attachMat * glm::scale(glm::mat4(1.0f), glm::vec3(scale)));
         // With its kit: a precast kit's for the cast, a cast kit's once.
         addKitModel(instanceId, isPrecast ? spell_kit::KitModelLife::Repeat : spell_kit::KitModelLife::Once,
@@ -1049,6 +1056,7 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitModel
         const uint32_t instanceId = m2Renderer_->createInstance(modelId, glm::vec3(transform[3]), glm::vec3(0.0f), 1.0f);
         if (instanceId == 0) continue;
         m2Renderer_->restartInstanceAnimation(instanceId);
+        setEffectEventOwner(instanceId, renderInstanceId);
         m2Renderer_->setInstanceTransform(instanceId, transform);
         const bool attached = where == spell_kit::KitModelPlace::Attachment;
         if (life == spell_kit::KitModelLife::Hold) {

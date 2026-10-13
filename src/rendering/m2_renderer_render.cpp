@@ -526,11 +526,35 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
             if (glm::dot(toCam, toCam) > clutterAnimCutoffSq) continue;
         }
 
+        // Where the events were looked at last: before this step's time, or
+        // below zero for a sequence just started (M2Instance::eventsFromStart).
+        const float eventsFrom = instance.eventsFromStart ? -1.0f : instance.animTime - dtMs;
+        instance.eventsFromStart = false;
         instance.animTime += dtMs * (instance.animSpeed - 1.0f);
 
         // For animation looping/variation, we need the actual model data.
         if (!instance.cachedModel) continue;
         const M2ModelGPU& model = *instance.cachedModel;
+
+        // The events of a sequence the animation passed from `from` to `to`,
+        // once each and every lap where it loops (0x00832260, 0x00830fb0).
+        // An event on a global sequence reads the first sequence's times.
+        const bool steppedEvents = instance.eventOwner != m2_event::Owner::None && !model.events.empty();
+        auto stepEvents = [&](int seq, float from, float to) {
+            if (!steppedEvents || seq < 0 || seq >= static_cast<int>(model.sequences.size())) return;
+            // Every lap of the sequence as it loops here (0x00830fb0 repeats
+            // by its length; one with flag 0x1 the client holds at its end).
+            const float lap = static_cast<float>(model.sequences[seq].duration);
+            for (uint32_t e = 0; e < model.events.size(); ++e) {
+                const auto& event = model.events[e];
+                const size_t timeline = event.globalSequence >= 0 ? 0u : static_cast<size_t>(seq);
+                if (timeline >= event.times.size()) continue;
+                m2_event::forEachCrossed(event.times[timeline], from, to, lap, [&](uint32_t) {
+                    steppedEvents_.push_back({idx, e});
+                });
+            }
+        };
+        const int eventsSequence = instance.currentSequenceIndex;
 
         // Validate sequence index
         if (instance.currentSequenceIndex < 0 ||
@@ -549,9 +573,12 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
             if (instance.holdAtEnd) {
                 // Stay on the last frame. A door's open sequence ends with the
                 // door open, and that is the pose the server is describing.
+                stepEvents(eventsSequence, eventsFrom, instance.animDuration);
                 instance.animTime = instance.animDuration;
                 instance.animSpeed = 0.0f;
             } else if (instance.playingVariation) {
+                stepEvents(eventsSequence, eventsFrom, instance.animDuration);
+                instance.eventsFromStart = true;
                 blendIntoSequence(model, instance, instance.idleSequenceIndex);
                 instance.playingVariation = false;
                 instance.currentSequenceIndex = instance.idleSequenceIndex;
@@ -562,6 +589,7 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
             } else {
                 // Use iterative subtraction instead of fmod() to preserve precision
                 float duration = std::max(1.0f, instance.animDuration);
+                const float lapEnd = instance.animTime;
                 while (instance.animTime >= duration) {
                     instance.animTime -= duration;
                 }
@@ -581,13 +609,22 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
                     if (next != current && next >= 0 &&
                         next < static_cast<int>(model.sequences.size()) &&
                         model.sequences[next].duration > 0) {
+                        // The pass ends, and the next sequence starts.
+                        stepEvents(eventsSequence, eventsFrom, duration);
                         blendIntoSequence(model, instance, next);
                         instance.currentSequenceIndex = next;
                         instance.animDuration = static_cast<float>(model.sequences[next].duration);
                         instance.animTime = std::min(instance.animTime, instance.animDuration - 1.0f);
+                        stepEvents(next, -1.0f, instance.animTime);
+                    } else {
+                        stepEvents(eventsSequence, eventsFrom, lapEnd);
                     }
+                } else {
+                    stepEvents(eventsSequence, eventsFrom, lapEnd);
                 }
             }
+        } else {
+            stepEvents(eventsSequence, eventsFrom, instance.animTime);
         }
 
         // Frustum + distance cull: skip expensive bone computation for off-screen instances.
@@ -671,6 +708,22 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
             }
         }
     }
+
+    // This step's events, where they are now the bones are posed: on the
+    // event's bone, then in the world (0x004c21b0 with the bone's matrix and
+    // the model's). Held for whoever plays them (M2EventSounds), and dropped
+    // if nobody does.
+    if (firedEvents_.size() > 4096) firedEvents_.clear();
+    for (const SteppedEvent& stepped : steppedEvents_) {
+        const M2Instance& inst = instances[stepped.instanceIndex];
+        const auto& event = inst.cachedModel->events[stepped.eventIndex];
+        glm::mat4 bone(1.0f);
+        if (event.bone < inst.boneMatrices.size()) bone = inst.boneMatrices[event.bone];
+        firedEvents_.push_back({.instanceId = inst.id, .owner = inst.eventOwner, .ownerArg = inst.eventOwnerArg,
+                                .id = event.id, .data = event.data,
+                                .position = glm::vec3(inst.modelMatrix * bone * glm::vec4(event.position, 1.0f))});
+    }
+    steppedEvents_.clear();
 
     // Particle update (sequential - uses RNG, not thread-safe)
     // Only iterate instances that have particle emitters (pre-built list).

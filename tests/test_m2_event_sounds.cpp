@@ -1,0 +1,101 @@
+// Which of a model's events fire as its animation steps, and what sound the
+// game object and spell effect callbacks play for one.
+//
+// 0x00830fb0 fires an event whose time is after where the last step got to
+// and at or before where this one gets to, again every lap of a looping
+// sequence and once for one with flag 0x1. 0x0070c050 (a game object's) and
+// 0x006f7b00 (a spell effect's) say what each id plays.
+#include <catch_amalgamated.hpp>
+
+#include <vector>
+
+#include "rendering/m2_event_sounds.hpp"
+
+namespace m2_event = wowee::rendering::m2_event;
+using m2_event::Owner;
+using m2_event::Play;
+
+namespace {
+
+std::vector<uint32_t> crossed(const std::vector<uint32_t>& times, float from, float to, float lap) {
+    std::vector<uint32_t> out;
+    m2_event::forEachCrossed(times, from, to, lap, [&](uint32_t t) { out.push_back(t); });
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("An event fires once as the animation passes it", "[m2_event]") {
+    const std::vector<uint32_t> times{100, 500};
+    // After where it was, at or before where it is.
+    CHECK(crossed(times, 0.0f, 100.0f, 0.0f) == std::vector<uint32_t>{100});
+    CHECK(crossed(times, 100.0f, 200.0f, 0.0f).empty());
+    CHECK(crossed(times, 99.0f, 600.0f, 0.0f) == std::vector<uint32_t>{100, 500});
+    // Standing still passes nothing, even on an event.
+    CHECK(crossed(times, 100.0f, 100.0f, 0.0f).empty());
+}
+
+TEST_CASE("A sequence just started fires its first frame's events", "[m2_event]") {
+    const std::vector<uint32_t> times{0, 300};
+    CHECK(crossed(times, -1.0f, 16.0f, 1000.0f) == std::vector<uint32_t>{0});
+    // Where the step only goes on from 0, the one at 0 is behind it.
+    CHECK(crossed(times, 0.0f, 16.0f, 1000.0f).empty());
+}
+
+TEST_CASE("A looping sequence fires its events again every lap", "[m2_event]") {
+    const std::vector<uint32_t> times{0, 400};
+    // Over the end of a 1000 ms lap: the 400 of this lap is behind, the 0 of
+    // the next is passed.
+    CHECK(crossed(times, 990.0f, 1010.0f, 1000.0f) == std::vector<uint32_t>{0});
+    // Past the 400 of the next lap as well.
+    CHECK(crossed(times, 900.0f, 1400.0f, 1000.0f) == std::vector<uint32_t>{0, 400});
+    // A step over two whole laps passes each event twice, in order.
+    CHECK(crossed(times, 450.0f, 2450.0f, 1000.0f) == std::vector<uint32_t>{0, 400, 0, 400});
+    // Without a lap - flag 0x1 - the end is the end.
+    CHECK(crossed(times, 990.0f, 1410.0f, 0.0f).empty());
+}
+
+TEST_CASE("A game object's $GOn and $GCn are its display's Sound slots", "[m2_event]") {
+    // 0x0070c050 hands 0x0070bf70 the slot in edx.
+    CHECK(m2_event::gameObjectSoundSlot(0x304f4724u) == std::optional<uint32_t>(0));  // $GO0
+    CHECK(m2_event::gameObjectSoundSlot(0x354f4724u) == std::optional<uint32_t>(5));  // $GO5
+    CHECK(m2_event::gameObjectSoundSlot(0x30434724u) == std::optional<uint32_t>(6));  // $GC0
+    CHECK(m2_event::gameObjectSoundSlot(0x33434724u) == std::optional<uint32_t>(9));  // $GC3
+    CHECK_FALSE(m2_event::gameObjectSoundSlot(0x364f4724u).has_value());              // $GO6
+    CHECK_FALSE(m2_event::gameObjectSoundSlot(0x34434724u).has_value());              // $GC4
+    CHECK_FALSE(m2_event::gameObjectSoundSlot(m2_event::kSound).has_value());
+    CHECK(m2_event::fourCC("$GC0") == 0x30434724u);
+    CHECK(m2_event::kSound == 0x444e5324u);
+    CHECK(m2_event::kDoodadSoundOnce == 0x4f534424u);
+    CHECK(m2_event::kDoodadSoundLoop == 0x4c534424u);
+}
+
+TEST_CASE("What a game object's events play", "[m2_event]") {
+    // The fishing bobber's splash: $GC0, its display's (668) Sound[6], 3355.
+    const auto bite = m2_event::planSound(Owner::GameObject, m2_event::fourCC("$GC0"), 0);
+    CHECK(bite.play == Play::ObjectKit);
+    CHECK(bite.slotted);
+    CHECK(bite.sound == 6u);
+    // $SND and $DSO: the data's sound, once, where the event is.
+    const auto snd = m2_event::planSound(Owner::GameObject, m2_event::kSound, 1234);
+    CHECK(snd.play == Play::Once);
+    CHECK_FALSE(snd.slotted);
+    CHECK(snd.sound == 1234u);
+    CHECK(m2_event::planSound(Owner::GameObject, m2_event::kDoodadSoundOnce, 7).play == Play::Once);
+    // $DSL: the data's sound looping on the object.
+    CHECK(m2_event::planSound(Owner::GameObject, m2_event::kDoodadSoundLoop, 7).play == Play::ObjectLoop);
+    // A camera shake ($SHK) or a footfall plays nothing here.
+    CHECK(m2_event::planSound(Owner::GameObject, m2_event::fourCC("$SHK"), 7).play == Play::None);
+    CHECK(m2_event::planSound(Owner::GameObject, m2_event::fourCC("$FSD"), 7).play == Play::None);
+}
+
+TEST_CASE("What a spell effect's events play", "[m2_event]") {
+    // 0x006f7b00: $SND alone.
+    const auto snd = m2_event::planSound(Owner::Effect, m2_event::kSound, 99);
+    CHECK(snd.play == Play::OnEffect);
+    CHECK(snd.sound == 99u);
+    CHECK(m2_event::planSound(Owner::Effect, m2_event::kDoodadSoundOnce, 99).play == Play::None);
+    CHECK(m2_event::planSound(Owner::Effect, m2_event::fourCC("$GO0"), 99).play == Play::None);
+    // A model nobody owns plays nothing.
+    CHECK(m2_event::planSound(Owner::None, m2_event::kSound, 99).play == Play::None);
+}

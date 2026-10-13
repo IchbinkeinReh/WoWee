@@ -775,6 +775,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // as a client running at its worst and was not a setting at all.
     //
     // The controls are taken off the panels; see kRemovedControlsLua.
+    // On by default (0x004d1600 registers it "1"): a spell effect's model
+    // sound on the active player plays at the listener (M2EventSounds).
+    else if (n == "sound_listeneratcharacter") lua_pushstring(L, "1");
     else if (n == "sound_numchannels") lua_pushstring(L, "64");
     else if (n == "sound_outputquality") lua_pushstring(L, "2");
     else if (n == "uiscale") lua_pushstring(L, "1");

@@ -259,7 +259,28 @@ void M2Renderer::restartInstanceAnimation(uint32_t instanceId) {
     if (idxIt == instanceIndexById.end()) return;
     auto& inst = instances[idxIt->second];
     inst.animTime = 0.0f;
+    inst.eventsFromStart = true;
     if (inst.cachedModel) computeBoneMatrices(*inst.cachedModel, inst, &cachedCamPos_);
+}
+
+void M2Renderer::setInstanceEventOwner(uint32_t instanceId, m2_event::Owner owner, uint32_t ownerArg) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    auto& inst = instances[idxIt->second];
+    inst.eventOwner = owner;
+    inst.eventOwnerArg = ownerArg;
+}
+
+std::vector<M2Renderer::FiredEvent> M2Renderer::takeFiredEvents() {
+    std::vector<FiredEvent> out;
+    out.swap(firedEvents_);
+    return out;
+}
+
+std::optional<glm::vec3> M2Renderer::getInstancePosition(uint32_t instanceId) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return std::nullopt;
+    return glm::vec3(instances[idxIt->second].modelMatrix[3]);
 }
 
 std::optional<uint32_t> M2Renderer::soleSequenceId(uint32_t instanceId) const {
@@ -306,9 +327,11 @@ void M2Renderer::setInstanceAnimationHeld(uint32_t instanceId, uint32_t animatio
         if (skipToEnd) {
             inst.animTime = inst.animDuration;
             inst.animSpeed = 0.0f;
+            inst.eventsFromStart = false;
         } else {
             inst.animTime = 0.0f;
             inst.animSpeed = 1.0f;
+            inst.eventsFromStart = true;
         }
         return;
     }
@@ -328,6 +351,7 @@ void M2Renderer::setInstanceAnimation(uint32_t instanceId, uint32_t animationId,
             inst.animDuration = static_cast<float>(seqs[i].duration);
             inst.animTime = 0.0f;
             inst.animSpeed = 1.0f;
+            inst.eventsFromStart = true;
             // Use playingVariation=true for one-shot (returns to idle when done)
             inst.playingVariation = !loop;
             inst.holdAtEnd = false;
@@ -383,6 +407,8 @@ void M2Renderer::setInstanceAnimTime(uint32_t instanceId, float timeMs) {
     if (idxIt == instanceIndexById.end()) return;
     auto& inst = instances[idxIt->second];
     inst.animTime = std::clamp(timeMs, 0.0f, std::max(inst.animDuration, 0.0f));
+    // Started part-way: what it starts past is behind it.
+    if (inst.animTime > 0.0f) inst.eventsFromStart = false;
 }
 
 bool M2Renderer::getInstanceBounds(uint32_t instanceId, glm::vec3& outCenter, float& outRadius) const {

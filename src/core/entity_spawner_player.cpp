@@ -959,6 +959,9 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
         // Server game objects are not doodads: the client's doodad size-class
         // distances (0x00791cb0) do not hold them.
         m2Renderer->setInstanceIsGameObject(instanceId, true);
+        // Its model's events go to the game object (0x00712f30 sets
+        // 0x0070cac0), which plays its display's sounds by them (0x0070c050).
+        m2Renderer->setInstanceEventOwner(instanceId, rendering::m2_event::Owner::GameObject, displayId);
 
         // Deeprun Tram cars: riding never used real mesh collision to begin with (Z is
         // fully code-locked to the transport's simulated position while boarded, not

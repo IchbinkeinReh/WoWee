@@ -1514,6 +1514,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     gpuModel.attachments = model.attachments;
     gpuModel.attachmentLookup = model.attachmentLookup;
     gpuModel.sequences = model.sequences;
+    gpuModel.events = model.events;
     gpuModel.globalSequenceDurations = model.globalSequenceDurations;
     gpuModel.hasAnimation = false;
     for (const auto& bone : model.bones) {

@@ -292,11 +292,14 @@ struct M2Model {
 
     /// The header's events (+0x100): each one's id - its four characters,
     /// "$SHR", read as a little-endian word (0x52485324) as the client
-    /// compares them - its bone and position, and its times in each
-    /// sequence (ms from the sequence's start, sorted).
+    /// compares them - its data (a sound's id, for one that plays a sound),
+    /// its bone and position, its global sequence (-1 for none) and its
+    /// times in each sequence (ms from the sequence's start, sorted).
     struct M2Event {
         uint32_t id = 0;
+        uint32_t data = 0;
         uint32_t bone = 0;
+        int16_t globalSequence = -1;
         glm::vec3 position{0.0f};
         std::vector<std::vector<uint32_t>> times;
     };

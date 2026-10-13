@@ -72,6 +72,7 @@ class BlobShadowRenderer;
 class CharacterPreview;
 class AmdFsr3Runtime;
 class SpellVisualSystem;
+class M2EventSounds;
 class PostProcessPipeline;
 class AnimationController;
 class LevelUpEffect;
@@ -772,6 +773,8 @@ private:
 
     // Spell visual effects - owned SpellVisualSystem (extracted from Renderer §4.4)
     std::unique_ptr<SpellVisualSystem> spellVisualSystem_;
+    // The sounds the M2 models' events play (game objects', spell effects').
+    std::unique_ptr<M2EventSounds> m2EventSounds_;
 
     // Post-process pipeline - owns all FSR/FXAA/FSR2 state (extracted §4.3)
     std::unique_ptr<PostProcessPipeline> postProcessPipeline_;

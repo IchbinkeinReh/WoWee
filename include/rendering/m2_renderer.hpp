@@ -13,6 +13,7 @@
 #include "rendering/m2_model_classifier.hpp"
 #include "rendering/m2_track_sampler.hpp"
 #include "rendering/m2_particle_motion.hpp"
+#include "rendering/m2_event_sounds.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -183,6 +184,9 @@ struct M2ModelGPU {
     std::vector<pipeline::M2Sequence> sequences;
     std::vector<uint32_t> globalSequenceDurations;  // Loop durations for global sequence tracks
     bool hasAnimation = false;  // True if any bone has keyframes
+    /// The header's events (pipeline::M2Model::events), stepped with the
+    /// animation of an instance that has an owner (M2Instance::eventOwner).
+    std::vector<pipeline::M2Model::M2Event> events;
     uint32_t rtMesh = ~0u;      // RtScene mesh, or ~0u when it does not cast
     /// An animated model's RtScene meshes instead: cut into one piece per
     /// bone (rt_rigid_parts.hpp), each placed by its bone's matrix.
@@ -293,6 +297,14 @@ struct M2Instance {
     /// back to the idle sequence, which for a door is the closed pose - so an
     /// open door swung open and shut itself, over and over.
     bool holdAtEnd = false;
+
+    /// Whose model this is, for its events (m2_event::Owner), and the
+    /// owner's argument; see setInstanceEventOwner. None steps none.
+    m2_event::Owner eventOwner = m2_event::Owner::None;
+    uint32_t eventOwnerArg = 0;
+    /// A sequence was just started: the next step looks at its events from
+    /// below zero, so those at its first frame fire.
+    bool eventsFromStart = false;
 
     /// The game object highlight, 0 or 1: the light's ambient added to the
     /// model's (0x00743c70 sets +0x18c..0x194, 0x0082e140 adds them).
@@ -726,6 +738,26 @@ public:
         return instanceIndexById.find(instanceId) != instanceIndexById.end();
     }
     void removeInstance(uint32_t instanceId);
+
+    /// Give an instance's model events an owner, whose callback they go to
+    /// (CM2Model +0x1c4, 0x00824060): a game object's (0x00712f30), with its
+    /// display id, or a spell effect's (0x006f94c0), with 1 when it is on the
+    /// active player.
+    void setInstanceEventOwner(uint32_t instanceId, m2_event::Owner owner, uint32_t ownerArg);
+    /// An event an owned instance's animation passed (0x00830fb0), where it
+    /// is in the world: its position on its bone (0x004c21b0).
+    struct FiredEvent {
+        uint32_t instanceId = 0;
+        m2_event::Owner owner = m2_event::Owner::None;
+        uint32_t ownerArg = 0;
+        uint32_t id = 0;
+        uint32_t data = 0;
+        glm::vec3 position{0.0f};
+    };
+    /// The events update() fired since this was last asked, in order.
+    std::vector<FiredEvent> takeFiredEvents();
+    /// Where an instance is in the world, if it is still there.
+    std::optional<glm::vec3> getInstancePosition(uint32_t instanceId) const;
 
     /// A model drawn for its particles alone: no geometry, no shadow, no
     /// collision, and no animation of its own. A creature's particle effects
@@ -1532,6 +1564,14 @@ private:
 
     // Animation update buffers (avoid per-frame allocation)
     std::vector<size_t> boneWorkIndices_;        // Reused each frame
+    /// This step's events: the instance's index and the event's (in its
+    /// model's events), placed once the bones are posed.
+    struct SteppedEvent {
+        size_t instanceIndex = 0;
+        uint32_t eventIndex = 0;
+    };
+    std::vector<SteppedEvent> steppedEvents_;
+    std::vector<FiredEvent> firedEvents_;
     std::vector<std::future<void>> animFutures_; // Reused each frame
     bool spatialIndexDirty_ = false;
 

@@ -2378,6 +2378,12 @@ wowee_add_test(test_m2_locomotion_rate
 wowee_add_test(test_m2_sequence_variation
     SOURCES test_m2_sequence_variation.cpp)
 
+# ── test_m2_event_sounds ─────────────────────────────────────
+# Which of a model's events its animation passes (0x00830fb0), and what the
+# game object (0x0070c050) and spell effect (0x006f7b00) callbacks play.
+wowee_add_test(test_m2_event_sounds
+    SOURCES test_m2_event_sounds.cpp)
+
 # ── test_m2_external_sequences ───────────────────────────────
 # Which sequences keep their keyframes in an .anim file, and which of them a
 # filtered load asks for. m2_loader knows nothing about the asset tree.

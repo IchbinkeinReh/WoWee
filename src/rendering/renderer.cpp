@@ -94,6 +94,7 @@
 #include "rendering/vk_utils.hpp"
 #include "rendering/amd_fsr3_runtime.hpp"
 #include "rendering/spell_visual_system.hpp"
+#include "rendering/m2_event_sounds.hpp"
 #include "rendering/post_process_pipeline.hpp"
 #include "rendering/animation_controller.hpp"
 #include "rendering/animation/animation_ids.hpp"
@@ -2972,6 +2973,12 @@ void Renderer::update(float deltaTime) {
         try { m2AnimFuture.get(); }
         catch (const std::exception& e) { LOG_ERROR("M2 animation worker: ", e.what()); }
         m2AnimLaunched = false;
+    }
+
+    // What the models' events play, now the step that found them is done.
+    if (m2Renderer) {
+        if (!m2EventSounds_) m2EventSounds_ = std::make_unique<M2EventSounds>();
+        m2EventSounds_->update(*m2Renderer, cachedAssetManager);
     }
 
     // Footsteps: age visual prints, then let authored footfall events add new ones.

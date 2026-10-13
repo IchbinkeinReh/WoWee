@@ -946,6 +946,7 @@ set(WOWEE_SOURCES
     src/rendering/m2_renderer_particles.cpp
     src/rendering/m2_renderer_ribbons.cpp
     src/rendering/m2_renderer_instance.cpp
+    src/rendering/m2_event_sounds.cpp
     src/rendering/m2_model_classifier.cpp
     src/rendering/render_graph.cpp
     src/rendering/hiz_system.cpp
