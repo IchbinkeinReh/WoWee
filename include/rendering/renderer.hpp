@@ -578,7 +578,7 @@ private:
     bool shadowCenterInitialized = false;
     bool shadowsEnabled = false;
     float shadowDistance_ = 300.0f;  // Shadow frustum half-extent (default: 300 units)
-    float viewDistance_ = 1200.0f;
+    float viewDistance_ = 1277.0f;
     /// The far clip the world is drawn to: the setting held to this map's
     /// limit (daynight::clientFarClip, 0x00780770), and the map it was worked
     /// out for, so a map change reapplies it.

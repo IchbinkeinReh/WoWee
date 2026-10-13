@@ -1749,7 +1749,7 @@ void AuthScreen::loadLoginGraphicsState() {
         if (key == "graphics_preset")       loginGfx_.preset        = clampI(std::stoi(val), 0, kGraphicsPresetCount);
         else if (key == "shadows")          loginGfx_.shadows        = (val == "1");
         else if (key == "shadow_distance")  loginGfx_.shadowDistance = clampF(std::stof(val), 40.0f, 500.0f);
-        else if (key == "view_distance")    loginGfx_.viewDistance   = clampF(std::stof(val), 400.0f, 2400.0f);
+        else if (key == "view_distance")    loginGfx_.viewDistance   = clampF(std::stof(val), 177.0f, 1277.0f);
         else if (key == "fog_sky_blend")    loginGfx_.fogSkyBlend    = clampF(std::stof(val), 0.0f, 1.0f);
         else if (key == "fog_strength")     loginGfx_.fogStrength    = clampF(std::stof(val), 0.0f, 2.0f);
         else if (key == "sharp_stars")      loginGfx_.sharpStars     = (val == "1");
@@ -1966,7 +1966,7 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
         }
         {
             const auto [ra, rb] = labelled("View distance");
-            ui_.sliderFloat("gfx.viewdist", ra, rb, &loginGfx_.viewDistance, 400.0f, 2400.0f);
+            ui_.sliderFloat("gfx.viewdist", ra, rb, &loginGfx_.viewDistance, 177.0f, 1277.0f);
             right.gap(px(8));
         }
         {

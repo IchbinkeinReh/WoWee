@@ -39,10 +39,14 @@ constexpr SettingDesc kSchema[] = {
      "Change any one of them afterwards and this reads Custom.",
      "Custom|Low|Medium|High|Ultra", 0},
     // The shadow rows are on a Shadows page of their own, after this one.
-    {"viewdistance", "View distance", SettingKind::Float, 400, 2400, 50, "Graphics", "View",
+    // The client's farclip: its slider's range and step, 177 to 1277 in
+    // tenths (FrameXML VideoOptionsPanels.lua), and its Ultra level's value.
+    // What is drawn is that held to 183 yards and the map's limit, 791 before
+    // Outland and 1583 from it (0x00780770).
+    {"viewdistance", "View distance", SettingKind::Float, 177, 1277, 110, "Graphics", "View",
      "How far into the distance the world is drawn, in yards. The single\n"
      "largest cost in the picture: terrain, buildings and creatures are all\n"
-     "drawn to this range.", "", 1900},
+     "drawn to this range.", "", 1277},
     // It used to be left out, deferred to the Effects panel of the game's own
     // Video options - as were ground clutter, its radius, brightness,
     // particle and weather detail, environment detail and texture filtering.
@@ -451,9 +455,13 @@ constexpr SettingDesc kSchema[] = {
      "Bilinear|Smooth", 1},
 
     // ------------------------------------------------------------------ Camera
+    // Vertical, as the projection takes it. The client's is fixed: its camera
+    // holds pi/2 (0x00607c20) and the world projection takes 0.6 of that,
+    // 54 degrees, at every window shape (0x00607cb0) - a wider window sees
+    // more to the sides, not less above and below.
     {"fov", "Field of view", SettingKind::Float, 45, 110, 1, "Camera", "View",
-     "How wide a view the camera takes, in degrees. 70 is what the\n"
-     "original client shows; wider fits more in and stretches the edges.", "", 70},
+     "How tall a view the camera takes, in degrees. 54 is what the\n"
+     "original client shows; wider fits more in and stretches the edges.", "", 54},
     // The client shakes the camera for spell effects and for thunderstorms, and
     // there was no control over it. There would not have been in 2004 - the
     // idea that this is something to offer is newer than the game - and it is

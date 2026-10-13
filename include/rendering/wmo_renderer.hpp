@@ -327,7 +327,7 @@ public:
     }
     bool isDistanceCullingEnabled() const { return distanceCulling; }
     float getMaxGroupDistance() const { return maxGroupDistance; }
-    void setViewDistance(float distance) { viewDistance_ = std::clamp(distance, 400.0f, 2400.0f); }
+    void setViewDistance(float distance) { viewDistance_ = std::clamp(distance, 183.33333f, 1583.3334f); }
 
     /**
      * Get number of groups culled by portals last frame

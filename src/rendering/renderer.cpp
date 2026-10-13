@@ -826,7 +826,7 @@ bool Renderer::initialize(core::Window* win) {
     camera->setPosition(glm::vec3(-8900.0f, -170.0f, 150.0f));
     camera->setRotation(0.0f, -5.0f);
     camera->setAspectRatio(window->getAspectRatio());
-    camera->setFov(60.0f);
+    camera->setFov(54.0f);
 
     // Create camera controller
     cameraController = std::make_unique<CameraController>(camera.get());
@@ -5130,7 +5130,7 @@ void Renderer::setSharpStars(bool enabled) {
 
 void Renderer::setViewDistance(float distance) {
     syncWorldRecording();
-    viewDistance_ = glm::clamp(distance, 400.0f, 2400.0f);
+    viewDistance_ = glm::clamp(distance, 177.0f, 1277.0f);
     applyFarClip(farClipMapId_);
 }
 

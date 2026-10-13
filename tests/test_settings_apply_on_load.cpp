@@ -119,13 +119,13 @@ TEST_CASE("the settings the user reported are on the applied list",
 TEST_CASE("the graphics defaults have one home", "[settings]") {
     // The same two numbers were written in the settings panel, in the login
     // screen's copy of the same struct, and in the reset button's constant.
-    CHECK(wowee::ui::kDefaultViewDistance == 1900.0f);
+    CHECK(wowee::ui::kDefaultViewDistance == 1277.0f);
     CHECK(wowee::ui::kDefaultGroundClutter == 70);
 
     // And they have to be reachable on the sliders that show them, or the
     // panel opens on a value it cannot represent.
-    CHECK(wowee::ui::kDefaultViewDistance >= 400.0f);
-    CHECK(wowee::ui::kDefaultViewDistance <= 2400.0f);
+    CHECK(wowee::ui::kDefaultViewDistance >= 177.0f);
+    CHECK(wowee::ui::kDefaultViewDistance <= 1277.0f);
     CHECK(wowee::ui::kDefaultGroundClutter >= 0);
     CHECK(wowee::ui::kDefaultGroundClutter <= 150);
 }

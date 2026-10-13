@@ -169,7 +169,7 @@ public:
     /// masked by (0x007d6980). Takes effect for chunks loaded after it.
     void setSpecular(bool on) { specular_ = on; }
     [[nodiscard]] bool isFogEnabled() const { return fogEnabled; }
-    void setViewDistance(float distance) { maxViewDistance_ = std::clamp(distance, 400.0f, 2400.0f); }
+    void setViewDistance(float distance) { maxViewDistance_ = std::clamp(distance, 183.33333f, 1583.3334f); }
 
     void setShadowMap(VkDescriptorImageInfo /*depthInfo*/, const glm::mat4& /*lightSpaceMat*/) {}
     void clearShadowMap() {}

@@ -66,7 +66,7 @@ private:
     glm::vec3 position = glm::vec3(0.0f);
     float yaw = 0.0f;
     float pitch = 0.0f;
-    float fov = 45.0f;
+    float fov = 54.0f;
     float aspectRatio = 16.0f / 9.0f;
     float nearPlane = 0.5f;
     float farPlane = 30000.0f;   // Improves depth precision vs extremely large far clip

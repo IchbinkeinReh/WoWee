@@ -13,7 +13,11 @@
 
 namespace wowee::ui {
 
-inline constexpr float kDefaultViewDistance = 1900.0f;
+/// The farclip the client's Ultra quality level sets (GraphicsQualityLevels[5],
+/// the top of its View Distance slider, 177 to 1277 - FrameXML
+/// VideoOptionsPanels.lua). The engine holds whatever is asked for between
+/// 183 yards and the map's limit (0x00780770).
+inline constexpr float kDefaultViewDistance = 1277.0f;
 inline constexpr int   kDefaultGroundClutter = 70;
 
 }  // namespace wowee::ui

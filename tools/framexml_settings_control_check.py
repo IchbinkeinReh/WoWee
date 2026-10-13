@@ -432,7 +432,7 @@ end
 -- Every CVar a Blizzard control writes, and the setting it is meant to reach.
 --
 -- Probed at the ends of the setting's own range, in the CVar's units. A row
--- holds its value to that range - a farclip of 1 reads as the 400 yards the
+-- holds its value to that range - a farclip of 1 reads as the 177 yards the
 -- renderer stops at - so 1 and 0 only say anything for the bools, which have
 -- no range and are given them.
 for _, pair in ipairs(CLIENT_CVARS) do

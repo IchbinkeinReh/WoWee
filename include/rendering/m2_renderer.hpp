@@ -888,7 +888,7 @@ public:
     /// The view distance, a ceiling on every instance: the terrain and the
     /// WMOs stop there, so a doodad past it would stand on nothing.
     void setViewDistance(float distance) {
-        viewDistanceAbsolute_ = std::clamp(distance, 400.0f, 2400.0f);
+        viewDistanceAbsolute_ = std::clamp(distance, 183.33333f, 1583.3334f);
     }
 
     /// How far the ground cover is drawn - the game's Ground Clutter Radius.
