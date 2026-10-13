@@ -308,9 +308,19 @@ void EntitySpawner::resetAllState() {
     // The passengers go with their units, and the player's vehicle camera
     // with the player (0x00734fd0 -> 0x0074cd60).
     seatedPassengers_.clear();
+    // A move held for a vehicle's animation is let go only from here
+    // (stepHeldVehicleMoves), and the game handler holds the mover - its
+    // keys and its casts - for as long as it waits. With the vehicle's model
+    // gone it goes now, as one whose animation can no longer be read does.
+    std::vector<uint64_t> heldMovers;
+    heldMovers.reserve(heldVehicleMoves_.size());
+    for (const auto& [mover, held] : heldVehicleMoves_) heldMovers.push_back(mover);
     heldVehicleMoves_.clear();
     localSeatCamera_ = LocalSeatCamera{};
     localVehicleCamera_ = LocalVehicleCamera{};
+    if (gameHandler_) {
+        for (const uint64_t mover : heldMovers) gameHandler_->releaseVehicleMove(mover);
+    }
 }
 
 void EntitySpawner::rebuildLookups() {
