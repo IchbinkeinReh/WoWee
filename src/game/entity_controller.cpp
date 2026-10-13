@@ -2728,6 +2728,12 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
     trackActiveCritter(block);
     pendingEvents_.clear();
 
+    // The player's object made anew - after a character change or its
+    // destruction - starts with no cancelled form pending (0x0073f660).
+    if (block.guid == owner_.getPlayerGuid() && !entityManager.hasEntity(block.guid)) {
+        owner_.clearShapeshiftFormPending();
+    }
+
     // 3a: Create entity from block type
     std::shared_ptr<Entity> entity = createEntityFromBlock(block);
 

@@ -2510,6 +2510,9 @@ public:
     /// changed the form field (+0x9f4: set by 0x00721cf0, cleared by 0x006da130).
     bool shapeshiftFormPending() const { return shapeshiftFormPending_; }
     void setShapeshiftFormPending() { shapeshiftFormPending_ = true; }
+    /// The player's object made anew: CGUnit_C's constructor (0x0073f660)
+    /// starts +0x9f4 clear, so no cancel carries over to it.
+    void clearShapeshiftFormPending() { shapeshiftFormPending_ = false; }
     /// 0x00802cb0 for the player: whether a form's spell is in effect.
     bool formSpellInEffect(uint32_t spellId) const;
     /// Which extra action bar the current form or stance uses, or 0 for none.
