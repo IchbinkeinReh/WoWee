@@ -90,8 +90,12 @@ bool MacroEvaluator::evalCondition(const std::string& raw, uint64_t& tgt) const 
     if (c == "dead")     return gameState_.entityIsDead(eff);
     if (c == "nodead")   return !gameState_.entityIsDead(eff);
 
-    if (c == "harm" || c == "nohelp") return gameState_.entityIsHostile(eff);
-    if (c == "help" || c == "noharm") return !gameState_.entityIsHostile(eff);
+    // 0x005ef830 / 0x005ef7b0: the player may attack it (0x00729740), may
+    // help it (0x007293d0). A unit can be neither - "no" is the one negated.
+    if (c == "harm")   return gameState_.entityMayAttack(eff);
+    if (c == "noharm") return !gameState_.entityMayAttack(eff);
+    if (c == "help")   return gameState_.entityMayAssist(eff);
+    if (c == "nohelp") return !gameState_.entityMayAssist(eff);
 
     // --- Mounted / swimming / flying ---
     if (c == "mounted")   return gameState_.isMounted();

@@ -54,9 +54,15 @@ public:
     [[nodiscard]] virtual bool hasFormAura() const = 0;
 
     // --- Entity queries (flattened, no Entity* exposure) ---
+    /// [exists] (0x005eed70): the object is here, else it is the player's
+    /// or a group member's (0x00512a30).
     [[nodiscard]] virtual bool entityExists(uint64_t guid) const = 0;
+    /// [dead] (0x005ef8b0).
     [[nodiscard]] virtual bool entityIsDead(uint64_t guid) const = 0;
-    [[nodiscard]] virtual bool entityIsHostile(uint64_t guid) const = 0;
+    /// [harm] (0x005ef830): the player may attack the unit (0x00729740).
+    [[nodiscard]] virtual bool entityMayAttack(uint64_t guid) const = 0;
+    /// [help] (0x005ef7b0): the player may help the unit (0x007293d0).
+    [[nodiscard]] virtual bool entityMayAssist(uint64_t guid) const = 0;
 };
 
 } // namespace ui

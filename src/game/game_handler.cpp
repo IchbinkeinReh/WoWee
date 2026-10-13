@@ -3026,6 +3026,23 @@ bool GameHandler::unitMayAssist(uint64_t helper, uint64_t unit) const {
     return spellHandler_ && spellHandler_->unitMayAssist(helper, unit);
 }
 
+bool GameHandler::isPlayerOrGroupUnit(uint64_t guid) const {
+    if (guid == 0) return false;
+    const auto petOf = [this](uint64_t owner) -> uint64_t {
+        auto e = getEntityManager().getEntity(owner);
+        if (!e) return 0;
+        const uint64_t charm = reactionGuidField(*e, UF::UNIT_FIELD_CHARM);
+        return charm != 0 ? charm : reactionGuidField(*e, UF::UNIT_FIELD_SUMMON);
+    };
+    const uint64_t me = getPlayerGuid();
+    if (guid == me || guid == petOf(me)) return true;
+    for (const auto& m : getPartyData().members) {
+        if (m.guid == 0) continue;
+        if (m.guid == guid || guid == petOf(m.guid)) return true;
+    }
+    return false;
+}
+
 int GameHandler::factionReactionToPlayer(uint32_t ft) const {
     // 0x0071f770: the template asked about the player.
     if (ft == 0) return 4;

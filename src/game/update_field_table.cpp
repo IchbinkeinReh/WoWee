@@ -77,6 +77,7 @@ static const UFNameEntry kUFNames[] = {
     {.name = "PLAYER_EXPLORED_ZONES_START", .field = UF::PLAYER_EXPLORED_ZONES_START},
     {.name = "UNIT_FIELD_CRITTER", .field = UF::UNIT_FIELD_CRITTER},
     {.name = "UNIT_FIELD_CHARM", .field = UF::UNIT_FIELD_CHARM},
+    {.name = "UNIT_FIELD_SUMMON", .field = UF::UNIT_FIELD_SUMMON},
     {.name = "UNIT_FIELD_CHARMEDBY", .field = UF::UNIT_FIELD_CHARMEDBY},
     {.name = "UNIT_FIELD_SUMMONEDBY_LO", .field = UF::UNIT_FIELD_SUMMONEDBY_LO},
     {.name = "UNIT_FIELD_SUMMONEDBY_HI", .field = UF::UNIT_FIELD_SUMMONEDBY_HI},

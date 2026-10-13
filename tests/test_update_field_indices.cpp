@@ -151,4 +151,6 @@ TEST_CASE("the charmer and the maker sit either side of the summoner",
         CHECK(fields.at("UNIT_FIELD_CHARMEDBY") == fields.at("UNIT_FIELD_SUMMONEDBY_LO") - 2);
     }
     CHECK(declaredFields("wotlk").at("UNIT_FIELD_CREATEDBY") == 16);
+    // The pet a unit summoned follows what it charms (0x0052d310: +0, else +8).
+    CHECK(declaredFields("wotlk").at("UNIT_FIELD_SUMMON") == declaredFields("wotlk").at("UNIT_FIELD_CHARM") + 2);
 }

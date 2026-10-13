@@ -40,8 +40,8 @@ public:
     uint32_t castSpellId   = 0;
     std::string castSpellName;
 
-    // Entity states (guid → exists, dead, hostile)
-    struct EntityInfo { bool exists = true; bool dead = false; bool hostile = false; };
+    // Entity states (guid → exists, dead, the player may attack it, may help it)
+    struct EntityInfo { bool exists = true; bool dead = false; bool attackable = false; bool assistable = false; };
     std::unordered_map<uint64_t, EntityInfo> entities;
 
     // Form / aura
@@ -93,9 +93,13 @@ public:
         auto it = entities.find(guid);
         return it != entities.end() && it->second.dead;
     }
-    bool entityIsHostile(uint64_t guid) const override {
+    bool entityMayAttack(uint64_t guid) const override {
         auto it = entities.find(guid);
-        return it != entities.end() && it->second.hostile;
+        return it != entities.end() && it->second.attackable;
+    }
+    bool entityMayAssist(uint64_t guid) const override {
+        auto it = entities.find(guid);
+        return it != entities.end() && it->second.assistable;
     }
 
 private:
@@ -285,7 +289,7 @@ TEST_CASE("[target=focus] sets target override", "[macro_eval]") {
 TEST_CASE("[exists] true when target entity exists", "[macro_eval]") {
     TestFixture f;
     f.gs.targetGuid = 10;
-    f.gs.entities[10] = {true, false, false};
+    f.gs.entities[10] = {true, false, false, false};
     CHECK(f.run("[exists] Attack; Buff") == "Attack");
 }
 
@@ -298,29 +302,43 @@ TEST_CASE("[exists] false when no target", "[macro_eval]") {
 TEST_CASE("[dead] true when target is dead", "[macro_eval]") {
     TestFixture f;
     f.gs.targetGuid = 10;
-    f.gs.entities[10] = {true, true, false};
+    f.gs.entities[10] = {true, true, false, false};
     CHECK(f.run("[dead] Resurrect; Heal") == "Resurrect");
 }
 
 TEST_CASE("[nodead] true when target is alive", "[macro_eval]") {
     TestFixture f;
     f.gs.targetGuid = 10;
-    f.gs.entities[10] = {true, false, false};
+    f.gs.entities[10] = {true, false, false, false};
     CHECK(f.run("[nodead] Heal; Resurrect") == "Heal");
 }
 
-TEST_CASE("[harm] true when target is hostile", "[macro_eval]") {
+TEST_CASE("[harm] true when the player may attack the target", "[macro_eval]") {
     TestFixture f;
     f.gs.targetGuid = 10;
-    f.gs.entities[10] = {true, false, true};
+    f.gs.entities[10] = {true, false, true, false};
     CHECK(f.run("[harm] Attack; Heal") == "Attack");
 }
 
-TEST_CASE("[help] true when target is friendly", "[macro_eval]") {
+TEST_CASE("[help] true when the player may help the target", "[macro_eval]") {
     TestFixture f;
     f.gs.targetGuid = 10;
-    f.gs.entities[10] = {true, false, false};
+    f.gs.entities[10] = {true, false, false, true};
     CHECK(f.run("[help] Heal; Attack") == "Heal");
+}
+
+TEST_CASE("[help] and [harm] are each their own check", "[macro_eval]") {
+    // 0x005ef7b0 asks 0x007293d0 and 0x005ef830 asks 0x00729740: a unit can
+    // be neither - a friendly one flagged out of reach, say - so [nohelp] is
+    // not [harm].
+    TestFixture f;
+    f.gs.targetGuid = 10;
+    f.gs.entities[10] = {true, false, false, false};
+    CHECK(f.run("[help] Heal; Other") == "Other");
+    CHECK(f.run("[harm] Attack; Other") == "Other");
+    CHECK(f.run("[nohelp] NotHelp; Other") == "NotHelp");
+    CHECK(f.run("[noharm] NotHarm; Other") == "NotHarm");
+    CHECK(f.run("[nohelp,noharm] Neither; Other") == "Neither");
 }
 
 // ── Chained conditions ──────────────────────────────────────

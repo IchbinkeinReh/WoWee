@@ -1819,6 +1819,10 @@ public:
     /// 0x007293d0 (its last argument 0), `helper` asking: UnitCanAssist, the
     /// friendly player cycle and the last friendly target.
     [[nodiscard]] bool unitMayAssist(uint64_t helper, uint64_t unit) const;
+    /// 0x00512a30: the player, the player's pet, a member of the player's
+    /// party (0x0052d310) or raid (0x00573200), or a member's pet - a pet
+    /// being a unit's UNIT_FIELD_CHARM, else its UNIT_FIELD_SUMMON.
+    [[nodiscard]] bool isPlayerOrGroupUnit(uint64_t guid) const;
 
     // Creature move callback (online mode - triggered by SMSG_MONSTER_MOVE)
     // Parameters: guid, x, y, z (canonical), duration_ms (0 = instant)

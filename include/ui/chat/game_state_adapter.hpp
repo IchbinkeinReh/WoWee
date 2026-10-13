@@ -52,7 +52,8 @@ public:
     // --- Entity queries ---
     [[nodiscard]] bool entityExists(uint64_t guid) const override;
     [[nodiscard]] bool entityIsDead(uint64_t guid) const override;
-    [[nodiscard]] bool entityIsHostile(uint64_t guid) const override;
+    [[nodiscard]] bool entityMayAttack(uint64_t guid) const override;
+    [[nodiscard]] bool entityMayAssist(uint64_t guid) const override;
 
 private:
     game::GameHandler& gameHandler_;

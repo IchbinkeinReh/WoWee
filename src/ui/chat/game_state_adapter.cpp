@@ -93,21 +93,39 @@ bool GameStateAdapter::hasFormAura() const {
 // --- Entity queries ---
 bool GameStateAdapter::entityExists(uint64_t guid) const {
     if (guid == 0 || guid == static_cast<uint64_t>(-1)) return false;
-    return gameHandler_.getEntityManager().getEntity(guid) != nullptr;
+    // 0x005eed70: the object, else the player's or a member's (0x00512a30).
+    return gameHandler_.getEntityManager().getEntity(guid) != nullptr || gameHandler_.isPlayerOrGroupUnit(guid);
 }
 
 bool GameStateAdapter::entityIsDead(uint64_t guid) const {
+    if (guid == 0 || guid == static_cast<uint64_t>(-1)) return false;
+    // 0x005ef8b0: a unit with no health; one flagged dead (UNIT_DYNFLAG_DEAD)
+    // unless it is the player's or a member's (0x00512a30); a ghost
+    // (PLAYER_FLAGS 0x10). No unit here: the member's status, dead or ghost
+    // (0x00513c30, 0xc).
     auto entity = gameHandler_.getEntityManager().getEntity(guid);
-    if (!entity) return false;
-    auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
-    return unit && unit->getHealth() == 0;
+    if (!entity || !entity->isUnit()) {
+        for (const auto& m : gameHandler_.getPartyData().members)
+            if (m.guid == guid) return (m.onlineStatus & 0xcu) != 0;
+        return false;
+    }
+    const auto& unit = static_cast<const game::Unit&>(*entity);
+    if (unit.getHealth() == 0) return true;
+    if ((unit.getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) != 0 && !gameHandler_.isPlayerOrGroupUnit(guid))
+        return true;
+    if (entity->getType() != game::ObjectType::PLAYER) return false;
+    const uint16_t flags = game::fieldIndex(game::UF::PLAYER_FLAGS);
+    return flags != 0xFFFF && (entity->getField(flags) & 0x10u) != 0;
 }
 
-bool GameStateAdapter::entityIsHostile(uint64_t guid) const {
-    auto entity = gameHandler_.getEntityManager().getEntity(guid);
-    if (!entity) return false;
-    auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
-    return unit && unit->isHostile();
+bool GameStateAdapter::entityMayAttack(uint64_t guid) const {
+    return guid != 0 && guid != static_cast<uint64_t>(-1) &&
+           gameHandler_.unitMayAttack(gameHandler_.getPlayerGuid(), guid);
+}
+
+bool GameStateAdapter::entityMayAssist(uint64_t guid) const {
+    return guid != 0 && guid != static_cast<uint64_t>(-1) &&
+           gameHandler_.unitMayAssist(gameHandler_.getPlayerGuid(), guid);
 }
 
 } // namespace ui

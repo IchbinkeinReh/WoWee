@@ -132,6 +132,9 @@ enum class UF : uint16_t {
     // possible for the other three expansions, and an update field index
     // guessed is an arbitrary field read.
     UNIT_FIELD_CHARM,
+    /// The pet it has summoned, the guid pair after UNIT_FIELD_CHARM (WotLK
+    /// 8): where 0x0052d310 looks for a pet when nothing is charmed.
+    UNIT_FIELD_SUMMON,
     UNIT_FIELD_CHARMEDBY,
     /// Who summoned this unit, if anyone. Two fields, low half first, like
     /// every other guid here. A pet, a guardian and a totem all carry it; what
