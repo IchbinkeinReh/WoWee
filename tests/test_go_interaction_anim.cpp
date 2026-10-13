@@ -74,3 +74,17 @@ TEST_CASE("Every other type does nothing", "[go_interaction]") {
         CHECK(onClose(type, nullptr, kStateOpen).action == Action::None);
     }
 }
+
+TEST_CASE("Which windows make their object the interaction object", "[go_interaction]") {
+    constexpr uint64_t npc = 0xF130000123000001ull, other = 0xF130000456000002ull;
+    constexpr uint64_t self = 0x0000000000000042ull;
+    // A merchant, a bank, a flight map...: whatever was open before.
+    CHECK(windowSetsInteraction(npc, 0));
+    CHECK(windowSetsInteraction(npc, other));
+    // 0x005a11a0: the stable master the stable is open with already does not.
+    CHECK_FALSE(windowSetsInteraction(npc, npc));
+    // 0x005940e0: nor the trainer open already, nor the player itself.
+    CHECK(windowSetsInteraction(npc, other, self));
+    CHECK_FALSE(windowSetsInteraction(npc, npc, self));
+    CHECK_FALSE(windowSetsInteraction(self, 0, self));
+}

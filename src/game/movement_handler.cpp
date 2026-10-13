@@ -2719,6 +2719,8 @@ void MovementHandler::handleShowTaxiNodes(network::Packet& packet) {
     currentTaxiData_ = data;
     taxiNpcGuid_ = data.npcGuid;
     taxiWindowOpen_ = true;
+    // TAXIMAP_OPENED opens with the flight master (0x005932e0 -> 0x0051fce0).
+    owner_.setInteractionObject(taxiNpcGuid_);
     owner_.closeGossip();
     buildTaxiCostMap();
     auto it = taxiNodes_.find(data.nearestNode);

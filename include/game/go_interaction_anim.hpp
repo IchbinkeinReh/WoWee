@@ -84,4 +84,13 @@ struct Step {
     }
 }
 
+/// Whether a window opening with `guid` makes it the interaction object
+/// (0x0051fce0). Most windows always do; the trainer's (0x005940e0) and the
+/// stable's (0x005a11a0) not while already open with it (`openWith`), and
+/// the trainer's not for the player itself (`self`, 0 for any).
+[[nodiscard]] inline bool windowSetsInteraction(uint64_t guid, uint64_t openWith, uint64_t self = 0) {
+    if (guid == openWith) return false;
+    return self == 0 || guid != self;
+}
+
 } // namespace wowee::game::go_interaction

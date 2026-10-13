@@ -14,6 +14,7 @@
 #include "game/game_utils.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/entity.hpp"
+#include "game/go_interaction_anim.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
@@ -3941,7 +3942,13 @@ void SpellHandler::handleListStabledPets(network::Packet& packet) {
         LOG_WARNING("MSG_LIST_STABLED_PETS: packet too short (", packet.getSize(), ")");
         return;
     }
+    const uint64_t stableBefore = owner_.stableWindowOpenRef() ? owner_.stableMasterGuidRef() : 0;
     owner_.stableMasterGuidRef() = packet.readUInt64();
+    // 0x005a11a0: a stable master other than the one open sets the
+    // interaction object.
+    if (go_interaction::windowSetsInteraction(owner_.stableMasterGuidRef(), stableBefore)) {
+        owner_.setInteractionObject(owner_.stableMasterGuidRef());
+    }
     uint8_t petCount  = packet.readUInt8();
     owner_.stableNumSlotsRef()   = packet.readUInt8();
 

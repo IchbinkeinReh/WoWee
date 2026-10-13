@@ -17,6 +17,7 @@
 #include "core/application.hpp"
 #include "core/logger.hpp"
 #include "game/sell_count.hpp"
+#include "game/go_interaction_anim.hpp"
 #include "network/world_socket.hpp"
 #include "network/packet.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -2656,6 +2657,8 @@ void InventoryHandler::handleListInventory(network::Packet& packet) {
         }
     }
     vendorWindowOpen_ = true;
+    // MERCHANT_SHOW opens with the vendor (0x00584500 -> 0x0051fce0).
+    owner_.setInteractionObject(currentVendorItems_.vendorGuid);
     owner_.closeGossip();
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MERCHANT_SHOW", {});
 
@@ -2760,8 +2763,15 @@ void InventoryHandler::handleListInventory(network::Packet& packet) {
 
 void InventoryHandler::handleTrainerList(network::Packet& packet) {
     const bool isClassic = isClassicLikeExpansion();
+    const uint64_t trainerBefore = trainerWindowOpen_ ? currentTrainerList_.trainerGuid : 0;
     if (!TrainerListParser::parse(packet, currentTrainerList_, isClassic)) return;
     trainerWindowOpen_ = true;
+    // 0x005940e0: a trainer other than the one open sets the interaction
+    // object, unless it is the player itself.
+    if (go_interaction::windowSetsInteraction(currentTrainerList_.trainerGuid, trainerBefore,
+                                              owner_.getPlayerGuid())) {
+        owner_.setInteractionObject(currentTrainerList_.trainerGuid);
+    }
     owner_.closeGossip();
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRAINER_SHOW", {});
 
@@ -3396,6 +3406,8 @@ void InventoryHandler::setHasNewMail(bool value) {
 void InventoryHandler::openBank(uint64_t guid) {
     bankerGuid_ = guid;
     bankOpen_ = true;
+    // BANKFRAME_OPENED opens with the banker (0x0057b8d0 -> 0x0051fce0).
+    owner_.setInteractionObject(guid);
     if (isClassicLikeExpansion()) {
         effectiveBankSlots_ = 24;
         effectiveBankBagSlots_ = 6;
@@ -3664,6 +3676,8 @@ void InventoryHandler::openAuctionHouse(uint64_t guid) {
     auctioneerGuid_ = guid;
     auctionOpen_ = true;
     auctionActiveTab_ = 0;
+    // AUCTION_HOUSE_SHOW opens with the auctioneer (0x0059f000 -> 0x0051fce0).
+    owner_.setInteractionObject(guid);
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_SHOW", {});
 }
 
@@ -4053,6 +4067,9 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             tradeStatus_ = TradeStatus::Open;
             tradeSelfAccepted_ = false;
             tradePartnerAccepted_ = false;
+            // TRADE_SHOW opens with the other player (0x005873e0 ->
+            // 0x005870a0 -> 0x0051fce0). Known here only to the one asked.
+            if (tradePeerGuid_ != 0) owner_.setInteractionObject(tradePeerGuid_);
             owner_.addSystemChatMessage("Trade opened.");
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRADE_SHOW", {});
             break;

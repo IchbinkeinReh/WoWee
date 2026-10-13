@@ -2442,15 +2442,8 @@ void QuestHandler::classifyGossipQuests(bool updateQuestLog) {
 void QuestHandler::handleGossipComplete(network::Packet& packet) {
     (void)packet;
 
-    // Play farewell sound before closing
-    if (owner_.npcFarewellCallbackRef() && currentGossip_.npcGuid != 0) {
-        auto entity = owner_.getEntityManager().getEntity(currentGossip_.npcGuid);
-        if (entity && entity->getType() == ObjectType::UNIT) {
-            glm::vec3 pos(entity->getX(), entity->getY(), entity->getZ());
-            owner_.npcFarewellCallbackRef()(currentGossip_.npcGuid, pos);
-        }
-    }
-
+    // The creature's farewell is the interaction object's, said as it is let
+    // go with the window (0x0058a550 -> 0x00518d50 -> 0x00720860).
     gossipWindowOpen_ = false;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GOSSIP_CLOSED", {});
     currentGossip_ = GossipMessageData{};

@@ -768,9 +768,10 @@ void GameHandler::update(float deltaTime) {
     }
 
     // The interaction object is let go once its window has closed
-    // (0x00518d50 from each window's close).
+    // (0x00518d50 from each window's close, which a creature says farewell
+    // to).
     if (interactionObject_ != 0 && !interactionWindowOpen(interactionObject_)) {
-        releaseInteractionObject();
+        releaseInteractionObject(/*farewell=*/true);
     }
 
     // Validate target still exists
@@ -3543,13 +3544,22 @@ void GameHandler::setQuestInteractionObject(uint64_t guid) {
     setInteractionObject(guid);
 }
 
-void GameHandler::releaseInteractionObject() {
-    // 0x00512e60: cleared, and a game object plays its CLOSE (0x0070bac0,
-    // slot 0x9c).
+void GameHandler::releaseInteractionObject(bool farewell) {
     const uint64_t guid = interactionObject_;
     if (guid == 0) return;
-    interactionObject_ = 0;
     auto entity = getEntityManager().getEntity(guid);
+    // 0x00518d50 with nothing to follow: a creature (type mask 0x8, not a
+    // player) that is alive - health, no UNIT_DYNFLAG_DEAD - says farewell
+    // (0x00720860(0)). Not when another object replaces it (0x0051fce0).
+    if (farewell && entity && entity->getType() == ObjectType::UNIT && npcFarewellCallback_) {
+        auto unit = std::static_pointer_cast<Unit>(entity);
+        if (unit->getHealth() > 0 && (unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) == 0) {
+            npcFarewellCallback_(guid, glm::vec3(unit->getX(), unit->getY(), unit->getZ()));
+        }
+    }
+    // 0x00512e60: cleared, and a game object plays its CLOSE (0x0070bac0,
+    // slot 0x9c).
+    interactionObject_ = 0;
     if (entity && entity->getType() == ObjectType::GAMEOBJECT && gameObjectInteractionCallback_) {
         gameObjectInteractionCallback_(guid, false);
     }
@@ -3558,9 +3568,13 @@ void GameHandler::releaseInteractionObject() {
 bool GameHandler::interactionWindowOpen(uint64_t guid) {
     // The windows that set it: gossip and the quest giver's list (0x0058a550,
     // 0x0058c5a0), the quest windows (0x0058c5a0), a book (0x0058a1a0), the
-    // mailbox (0x0056da60) and the guild bank (0x005a7250). Each lets it go
-    // as it closes (0x00518d50); gossip not while a quest window is still
-    // open with it, nor that the other way round (0x0058a550, 0x0058ca70).
+    // mailbox (0x0056da60) and the guild bank (0x005a7250); the merchant
+    // (0x00584500), the trainer (0x005940e0), the flight map (0x005932e0),
+    // the bank (0x0057b8d0), the auction house (0x0059f000), the stable
+    // (0x005a11a0), the guild and arena registrars (0x00599e00, 0x005a22a0)
+    // and a trade (0x005870a0). Each lets it go as it closes (0x00518d50);
+    // gossip not while a quest window is still open with it, nor that the
+    // other way round (0x0058a550, 0x0058ca70).
     if (isGossipWindowOpen() && getCurrentGossip().npcGuid == guid) return true;
     if (isQuestDetailsOpen() && getQuestDetails().npcGuid == guid) return true;
     if (isQuestRequestItemsOpen() && getQuestRequestItems().npcGuid == guid) return true;
@@ -3569,36 +3583,26 @@ bool GameHandler::interactionWindowOpen(uint64_t guid) {
     if (inventoryHandler_) {
         if (inventoryHandler_->isMailboxOpen() && inventoryHandler_->getMailboxGuid() == guid) return true;
         if (inventoryHandler_->isGuildBankOpen() && inventoryHandler_->getGuildBankerGuid() == guid) return true;
+        if (inventoryHandler_->isTradeOpen() && inventoryHandler_->getTradePeerGuid() == guid) return true;
     }
+    if (isVendorWindowOpen() && getVendorItems().vendorGuid == guid) return true;
+    if (isTrainerWindowOpen() && getTrainerSpells().trainerGuid == guid) return true;
+    if (isTaxiWindowOpen() && movementHandler_ && movementHandler_->getTaxiNpcGuid() == guid) return true;
+    if (isBankOpen() && getBankerGuid() == guid) return true;
+    if (isAuctionHouseOpen() && getAuctioneerGuid() == guid) return true;
+    if (isStableWindowOpen() && getStableMasterGuid() == guid) return true;
+    if (hasPetitionShowlist() && getPetitionNpcGuid() == guid) return true;
     return false;
 }
 
 void GameHandler::closeNpcInteraction() {
-    // The client keeps one object a window is open with (0xbd07a8, set by
-    // 0x0051fce0 as each opens, the last closing the one before); wowee keeps
-    // each window's own, so the windows open are the ones closed.
-    const uint64_t npc = isGossipWindowOpen() ? getCurrentGossip().npcGuid
-                       : isVendorWindowOpen() ? getVendorItems().vendorGuid
-                       : isTrainerWindowOpen() ? getTrainerSpells().trainerGuid
-                       : isTaxiWindowOpen() && movementHandler_ ? movementHandler_->getTaxiNpcGuid()
-                       : isBankOpen() ? getBankerGuid()
-                       : isAuctionHouseOpen() ? getAuctioneerGuid()
-                       : isStableWindowOpen() ? getStableMasterGuid()
-                       : hasPetitionShowlist() ? getPetitionNpcGuid()
-                       : isQuestDetailsOpen() ? getQuestDetails().npcGuid
-                       : isQuestRequestItemsOpen() ? getQuestRequestItems().npcGuid
-                       : isQuestOfferRewardOpen() ? getQuestOfferReward().npcGuid
-                       : 0;
-    // 0x00720860 first, for a creature that is alive (health, no
-    // UNIT_DYNFLAG_DEAD); not for a player or an object.
-    auto unit = npc ? std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(npc)) : nullptr;
-    if (unit && unit->getType() == ObjectType::UNIT && unit->getHealth() > 0 &&
-        (unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) == 0 && npcFarewellCallback_) {
-        npcFarewellCallback_(npc, glm::vec3(unit->getX(), unit->getY(), unit->getZ()));
-    }
-    // 0x00512e60: the object is let go - a game object's CLOSE - and the
-    // window it opened closes.
-    releaseInteractionObject();
+    // 0x00518d50 on the interaction object (0xbd07a8), which each window
+    // sets as it opens (0x0051fce0): a living creature says farewell
+    // (0x00720860), then it is let go - a game object's CLOSE - and the
+    // window it opened closes (0x00512e60).
+    releaseInteractionObject(/*farewell=*/true);
+    // wowee keeps each window's own object, so the windows open are the ones
+    // closed.
     //
     // A trade is cancelled - CMSG_CANCEL_TRADE and TRADE_CLOSED (0x005870a0,
     // 0x00704040, event 0x132).

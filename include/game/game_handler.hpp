@@ -4824,8 +4824,10 @@ private:
     GameObjectStateCallback gameObjectStateCallback_;
     GameObjectInteractionCallback gameObjectInteractionCallback_;
     uint64_t interactionObject_ = 0;
-    /// 0x00512e60 for the interaction object: a game object's CLOSE.
-    void releaseInteractionObject();
+    /// 0x00512e60 for the interaction object: a game object's CLOSE. With
+    /// farewell, 0x00518d50's for a window that closed with nothing after it:
+    /// a living creature says farewell first (0x00720860).
+    void releaseInteractionObject(bool farewell = false);
     /// Whether a window that sets the interaction object is open with guid.
     bool interactionWindowOpen(uint64_t guid);
     SprintAuraCallback sprintAuraCallback_;
