@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 
 namespace wowee {
 namespace rendering {
@@ -29,8 +30,16 @@ struct RtPassData {
     glm::mat4 invViewProjRel;
     glm::vec4 unitMap;
     RtGiProbes::PassData gi;
-    glm::vec4 unitBoxes[2 * RtLighting::kUnitBoxes];
 };
+
+// Must match RtMover in rt_movers.glsli.
+struct RtMoverGPU {
+    glm::vec4 lo;         // w: the longest history its texels keep
+    glm::vec4 hi;
+    glm::vec4 motion[3];  // rows of the 3x4 taking a point now to where it was
+    glm::vec4 rect;       // trace texels it covers: min xy, max xy
+};
+static_assert(sizeof(RtMoverGPU) == 96, "RtMoverGPU must match rt_movers.glsli");
 
 enum Binding : uint32_t {
     kUbo = 0,
@@ -46,7 +55,8 @@ enum Binding : uint32_t {
     kFilterOut = 10,
     kPointStore = 11,   // the slot's point lights, unshadowed (rt_trace.comp)
     kPointLights = 12,  // the slot's light list
-    kBindingCount = 13,
+    kMovers = 13,       // the slot's movers (rt_movers.glsli)
+    kBindingCount = 14,
 };
 
 constexpr VkFormat kFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -153,6 +163,7 @@ void RtLighting::shutdown() {
     for (auto& s : slots_) {
         destroyBuffer(alloc, s.ubo);
         destroyBuffer(alloc, s.lights);
+        destroyBuffer(alloc, s.movers);
     }
     destroyImage(dev, alloc, neutral_);
     if (depthView_) vkDestroyImageView(dev, depthView_, nullptr);
@@ -189,6 +200,7 @@ bool RtLighting::createPipelines() {
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     }
     b[kPointLights].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[kMovers].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = kBindingCount;
@@ -200,7 +212,7 @@ bool RtLighting::createPipelines() {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSets},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 6},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 5},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSets},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSets * 2},
     };
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -222,6 +234,9 @@ bool RtLighting::createPipelines() {
         s.lights = createBuffer(ctx_->getAllocator(), sizeof(rt_lights::PointLightGPU) * kMaxPointLights,
                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
         if (!s.lights.buffer) return false;
+        s.movers = createBuffer(ctx_->getAllocator(), sizeof(RtMoverGPU) * kMaxMovers,
+                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+        if (!s.movers.buffer) return false;
     }
 
     VkDescriptorSetLayout setLayouts[2] = {setLayout_, scene_->descriptorSetLayout()};
@@ -251,8 +266,10 @@ bool RtLighting::createPipelines() {
         return ok;
     };
     const bool hw = scene_->backend() == RtScene::Backend::Hardware;
-    pipelinesOk_ = make("assets/shaders/rt_prepare.comp.spv", prepare_) &&
-                   make("assets/shaders/rt_prepare_ms.comp.spv", prepareMs_) &&
+    pipelinesOk_ = make(hw ? "assets/shaders/rt_prepare_hw.comp.spv"
+                           : "assets/shaders/rt_prepare.comp.spv", prepare_) &&
+                   make(hw ? "assets/shaders/rt_prepare_ms_hw.comp.spv"
+                           : "assets/shaders/rt_prepare_ms.comp.spv", prepareMs_) &&
                    make(hw ? "assets/shaders/rt_trace_hw.comp.spv"
                            : "assets/shaders/rt_trace.comp.spv", trace_) &&
                    make("assets/shaders/rt_temporal.comp.spv", temporal_) &&
@@ -393,6 +410,7 @@ void RtLighting::writeSlotSets(uint32_t slotIndex) {
 
     VkDescriptorBufferInfo ubo{s.ubo.buffer, 0, sizeof(RtPassData)};
     VkDescriptorBufferInfo lights{s.lights.buffer, 0, VK_WHOLE_SIZE};
+    VkDescriptorBufferInfo movers{s.movers.buffer, 0, VK_WHOLE_SIZE};
     auto sampled = [&](const Target& t) {
         return VkDescriptorImageInfo{pointSampler_, t.img.imageView, VK_IMAGE_LAYOUT_GENERAL};
     };
@@ -429,9 +447,9 @@ void RtLighting::writeSlotSets(uint32_t slotIndex) {
             if (i == kUbo) {
                 w[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 w[i].pBufferInfo = &ubo;
-            } else if (i == kPointLights) {
+            } else if (i == kPointLights || i == kMovers) {
                 w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                w[i].pBufferInfo = &lights;
+                w[i].pBufferInfo = i == kMovers ? &movers : &lights;
             } else {
                 const bool isStorage = img[i].sampler == VK_NULL_HANDLE;
                 w[i].descriptorType = isStorage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -490,7 +508,7 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
         cmdPipelineBarrier2(cmd, dep);
     }
 
-    // Last frame's slot holds history only if last frame traced into it.
+    // Last frame's slot holds history only if last frame traced into it,.
     const bool havePrev = havePrev_ && resultFrame_ != 0 && resultFrame_ + 1 == frameCounter_;
 
     RtPassData d{};
@@ -518,17 +536,9 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
                          1.0f / traceExtent_.height);
     d.sceneExtent = glm::vec4(sceneExtent.width, sceneExtent.height, 1.0f / sceneExtent.width,
                               1.0f / sceneExtent.height);
-    uint32_t unitBoxes = 0;
-    if (in.unitBoxes) {
-        for (const auto& [lo, hi] : *in.unitBoxes) {
-            if (unitBoxes == kUnitBoxes) break;
-            d.unitBoxes[2 * unitBoxes] = glm::vec4(lo, 0.0f);
-            d.unitBoxes[2 * unitBoxes + 1] = glm::vec4(hi, 0.0f);
-            ++unitBoxes;
-        }
-    }
+    const uint32_t moverCount = writeMovers(s, in);
     d.misc = glm::vec4(scene_->hasContent() ? 1.0f : 0.0f, havePrev ? 1.0f : 0.0f,
-                       static_cast<float>(unitBoxes), 0.0f);
+                       static_cast<float>(moverCount), 0.0f);
     const bool probes = mode_ == Mode::Full && probes_.hasResources();
     if (probes) {
         // The open field the zone's flat ambient was set for: that ambient as
@@ -606,6 +616,51 @@ void RtLighting::record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D scen
     resultViewProj_ = in.viewProj;
     resultCameraPos_ = in.cameraPos;
     resultMode_ = mode_;
+}
+
+uint32_t RtLighting::writeMovers(Slot& s, const FrameInputs& in) {
+    if (!in.movers || in.movers->empty() || !s.movers.info.pMappedData) return 0;
+    auto* out = static_cast<RtMoverGPU*>(s.movers.info.pMappedData);
+    const glm::vec2 size(static_cast<float>(traceExtent_.width), static_cast<float>(traceExtent_.height));
+    uint32_t n = 0;
+    for (const RtMover& m : *in.movers) {
+        if (n == kMaxMovers) break;
+        // The trace texels its box covers, for rt_prepare to sort the boxes
+        // into its tiles by. A box reaching behind the camera covers all.
+        glm::vec2 lo(std::numeric_limits<float>::max()), hi(-std::numeric_limits<float>::max());
+        bool behind = false;
+        for (int c = 0; c < 8 && !behind; ++c) {
+            const glm::vec3 corner((c & 1) ? m.hi.x : m.lo.x, (c & 2) ? m.hi.y : m.lo.y,
+                                   (c & 4) ? m.hi.z : m.lo.z);
+            const glm::vec4 clip = in.viewProj * glm::vec4(corner, 1.0f);
+            if (clip.w < 0.05f) {
+                behind = true;
+                break;
+            }
+            const glm::vec2 t = (glm::vec2(clip) / clip.w * 0.5f + 0.5f) * size;
+            lo = glm::min(lo, t);
+            hi = glm::max(hi, t);
+        }
+        if (behind) {
+            lo = glm::vec2(0.0f);
+            hi = size;
+        } else {
+            lo = glm::floor(lo) - 1.0f;
+            hi = glm::ceil(hi) + 1.0f;
+            if (hi.x <= 0.0f || hi.y <= 0.0f || lo.x >= size.x || lo.y >= size.y) continue;
+        }
+        RtMoverGPU& g = out[n++];
+        // A mover keeps a short history while it moves, as its pose does not
+        // follow the rigid motion; one standing still, a longer one.
+        g.lo = glm::vec4(m.lo, m.moving ? 6.0f : 16.0f);
+        g.hi = glm::vec4(m.hi, m.seeThrough ? 1.0f : 0.0f);
+        for (int r = 0; r < 3; ++r) {
+            g.motion[r] = glm::vec4(m.prevFromCur[0][r], m.prevFromCur[1][r], m.prevFromCur[2][r],
+                                    m.prevFromCur[3][r]);
+        }
+        g.rect = glm::vec4(lo, hi);
+    }
+    return n;
 }
 
 RtLighting::ConsumerData RtLighting::consumerData() const {

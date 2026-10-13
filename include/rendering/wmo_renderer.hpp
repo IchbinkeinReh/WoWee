@@ -5,6 +5,7 @@
 #include "rendering/vk_shader.hpp"
 #include "rendering/spatial_grid.hpp"
 #include "rendering/shadow_params.hpp"
+#include "rendering/rt_mover.hpp"
 
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/grass_clearing.hpp"
@@ -527,6 +528,9 @@ public:
     [[nodiscard]] std::optional<IndoorArea> indoorAreaAt(const glm::vec3& pos) const;
     /// Changes whenever the set of those groups does.
     [[nodiscard]] uint64_t interiorPassGeneration() const { return interiorPassGeneration_; }
+    /// The buildings that moved since last frame, as prepareRender found
+    /// them: the ray traced lighting's movers (RtLighting::FrameInputs::movers).
+    [[nodiscard]] const std::vector<RtMover>& rtMovers() const { return rtMovers_; }
 
     /**
      * Raycast against WMO bounding boxes for camera collision
@@ -614,6 +618,13 @@ private:
     /// interiorPass 1 when the group is drawn in the camera's interior pass
     /// (wmo_doodad_light::interiorPassGroups), whose interior batches the
     /// client fogs in the camera's colour (0x007a9380).
+    /// The vertex stage's push: the model matrix, and as it was last frame
+    /// (the same for a building that stands still), where the ray traced
+    /// lighting the surfaces read was traced (wmo.vert's RtPrevPos).
+    struct WMOInstancePush {
+        glm::mat4 model{1.0f};
+        glm::mat4 prevModel{1.0f};
+    };
     struct WMOGroupPush {
         int32_t interiorPass = 0;
         int32_t highlight = 0;  ///< the light's ambient added into c29
@@ -853,6 +864,13 @@ private:
         float scale;
         glm::mat4 modelMatrix;
         glm::mat4 invModelMatrix;  // Cached inverse for collision
+        // A building that moves - a ship's hull, a gunship (prepareRtMovers):
+        // its model matrix as drawn last frame, valid in rtPrevFrame; and as
+        // drawn this one, in rtLastFrame.
+        glm::mat4 rtPrevModel{1.0f};
+        glm::mat4 rtLastModel{1.0f};
+        uint32_t rtPrevFrame = 0;
+        uint32_t rtLastFrame = 0;
         glm::vec3 worldBoundsMin;
         glm::vec3 worldBoundsMax;
         std::vector<std::pair<glm::vec3, glm::vec3>> worldGroupBounds;
@@ -1132,6 +1150,11 @@ private:
     glm::vec3 interiorPassUnionMin_{0.0f}, interiorPassUnionMax_{-1.0f};
     const minimap_indoor::AreaRows* areaRows_ = nullptr;
     uint64_t interiorPassGeneration_ = 0;
+    // What moved (setInstanceTransform) since the frame before last, and
+    // what of it moved since last frame (prepareRtMovers).
+    std::vector<uint32_t> rtPlacedIds_;
+    std::vector<RtMover> rtMovers_;
+    void prepareRtMovers();
 
     // Collision query profiling - atomic because getFloorHeight is dispatched
     // on async threads from camera_controller while the main thread reads these.

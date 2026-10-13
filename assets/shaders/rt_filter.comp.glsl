@@ -8,7 +8,11 @@
 // point light visibility; alpha carries the history length from pass to
 // pass, and the last pass writes the distance there instead, which the
 // surface shaders check the result against - negated where the surface is a
-// unit's (rtGbufUnit), which rtLightAt treats as gone a frame on.
+// mover's (rtGbufMover), which rtLightAt treats as gone a frame on.
+//
+// A tap of another mover, or of what stands still beside a mover, is not
+// taken: a body's light is not smeared over the ground at its feet, nor the
+// ground's over the body, nor one unit's over the next.
 
 #include "rt_common.glsli"
 
@@ -33,6 +37,7 @@ void main() {
     vec4 c = texelFetch(uIn, px, 0);
     float dist = rtGbufDist(g);
     vec3 n = rtGbufNormal(g);
+    int mover = rtGbufMover(g);
     if (dist <= 0.0) {
         imageStore(uOut, px, vec4(c.rgb, pc.last != 0 ? 0.0 : c.a));
         return;
@@ -49,7 +54,7 @@ void main() {
             if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, ivec2(pass.extent.xy)))) continue;
             vec4 qg = texelFetch(uGbufCur, q, 0);
             float qd = rtGbufDist(qg);
-            if (qd <= 0.0) continue;
+            if (qd <= 0.0 || rtGbufMover(qg) != mover) continue;
             float k = KERNEL[abs(x)] * KERNEL[abs(y)];
             float wz = exp(-abs(qd - dist) / (0.02 * dist * float(pc.step) + 1e-3));
             float wn = pow(max(dot(rtGbufNormal(qg), n), 0.0), 32.0);
@@ -60,5 +65,5 @@ void main() {
         }
     }
     sum /= wsum;
-    imageStore(uOut, px, vec4(sum, pc.last != 0 ? (rtGbufUnit(g) ? -dist : dist) : history));
+    imageStore(uOut, px, vec4(sum, pc.last != 0 ? (mover > 0 ? -dist : dist) : history));
 }

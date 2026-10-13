@@ -169,26 +169,14 @@ layout(push_constant) uniform Push {
     vec4 interiorDirect;
     // x: 1 in a WMO group of the camera's interior pass, y: the scale on the
     // direct light, z: the model's own depth in yards, within which it does
-    // not receive the sun's shadow (CharPushConstants::lightFlags); w: how far
-    // the unit has moved across the ground since the ray traced lighting it
-    // reads was traced, packed (rtUnitMotion), 0 for none.
+    // not receive the sun's shadow (CharPushConstants::lightFlags); w: 1 when
+    // the vertex stage had last frame's pose (RtPrevPos).
     vec4 lightFlags;
     // The unit's colour, which its direct light is multiplied by (CM2Model
-    // +0x180: a spell kit's, 0x00720db0); white for none. w: how far the unit
-    // has moved up or down since then, read only with lightFlags.w.
+    // +0x180: a spell kit's, 0x00720db0); white for none. w: 1 when the unit
+    // is drawn see-through as a whole (rtLightSeeThrough).
     vec4 diffuseColour;
 } pc;
-
-// How far the unit has moved since the frame the ray traced lighting was
-// traced in (CharacterRenderer::rtMotionPush): x and y in 1/1024 yards about
-// 2048, twelve bits each, plus one - a whole number a float holds exactly.
-vec3 rtUnitMotion() {
-    float packed = pc.lightFlags.w;
-    if (packed < 0.5) return vec3(0.0);
-    uint u = uint(packed + 0.5) - 1u;
-    vec2 xy = (vec2(float(u & 0xFFFu), float(u >> 12u)) - 2048.0) / 1024.0;
-    return vec3(xy, pc.diffuseColour.w);
-}
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
@@ -196,6 +184,9 @@ layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 layout(location = 0) in vec3 FragPos;
 layout(location = 1) in vec3 Normal;
 layout(location = 2) in vec2 inTexCoord;
+// Where this point of the surface stood a frame earlier, when the ray traced
+// lighting it reads was traced (character.vert).
+layout(location = 7) in vec3 RtPrevPos;
 // The animated UV, set first thing in main from inTexCoord and the batch's
 // texture matrix; everything below samples through it.
 vec2 TexCoord;
@@ -511,10 +502,12 @@ void main() {
             shadow = mix(1.0, shadow, shadowParams.y);
         }
         // A unit moves on its own. The result is last frame's: the unit finds
-        // itself there where it stood then, and where it still finds nothing
-        // of itself - an arm swung, a turn - it borrows (rtLightAt).
+        // itself there where it stood then, in last frame's place and pose,
+        // and where it still finds nothing of itself it borrows from its own
+        // texels beside (rtLightAt). One drawn see-through is not in the
+        // result at all - what shows through it is - and is lit without it.
         rtSurfaceIsUnit = true;
-        RtLight rt = rtLightAt(FragPos - rtUnitMotion());
+        RtLight rt = pc.diffuseColour.w > 0.5 ? rtLightSeeThrough(RtPrevPos) : rtLightAt(RtPrevPos);
         shadow = rtShadow(rt, shadow);
         // The shadow variants let a face turned edge-on to the sun out of the
         // shadow: by |1.2 - |N.L||^4, saturated (c4 is the light's view-space
@@ -574,6 +567,12 @@ void main() {
         shaded.rgb = mix(vec3(0.5019608), shaded.rgb, fogFactor);
     }
 
+    // WOWEE_GI_DEBUG 9: how far each point moved since last frame (a
+    // quarter yard a channel), as the lighting is looked up.
+    if (int(giParams.y + 0.5) == 9) {
+        rtGiDebugSet = true;
+        rtGiDebugColour = clamp(abs(RtPrevPos - FragPos) * 4.0, 0.0, 1.0) + (pc.lightFlags.w > 0.5 ? vec3(0.0) : vec3(0.3, 0.0, 0.3));
+    }
     shaded.rgb = rtGiDebug(shaded.rgb);
     outColor = shaded;
 }

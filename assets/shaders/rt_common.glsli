@@ -4,9 +4,6 @@
 // working images. Set 1 is the scene (rt_trace_sw.glsli / rt_trace_hw.glsli).
 // Must match RtPassData in rt_lighting.cpp.
 
-// Must match RtLighting::kUnitBoxes.
-#define RT_UNIT_BOXES 16
-
 layout(set = 0, binding = 0) uniform RtPassData {
     mat4 invViewProj;    // this frame: NDC -> world
     mat4 prevViewProj;   // last frame: world -> clip, for reprojection
@@ -21,7 +18,7 @@ layout(set = 0, binding = 0) uniform RtPassData {
     vec4 sceneExtent;    // xy = scene depth size, zw = 1 / size
     vec4 misc;           // x = 1 when the acceleration structure holds anything,
                          // y = 1 when last frame's slot holds history,
-                         // z = how many of unitBoxes are set
+                         // z = how many movers the list holds (rt_movers.glsli)
     mat4 invViewProjRel; // this frame: NDC -> world less the camera position
     vec4 unitMap;        // xyz the shadow map's centre, w the radius it draws
                          // the units' sun shadows within (0: none)
@@ -34,9 +31,6 @@ layout(set = 0, binding = 0) uniform RtPassData {
     vec4 giSky;              // rgb a ray that escapes upward; w hysteresis
     vec4 giGround;           // rgb one that escapes downward
     vec4 giRayLength;        // x, y per cascade; z the largest lift (rt_gi_exposure)
-    // The nearest units' boxes this frame, min and max (RtLighting::kUnitBoxes):
-    // what of the G-buffer is a unit, which moves on its own (rt_prepare).
-    vec4 unitBoxes[2 * RT_UNIT_BOXES];
 } pass;
 
 const uint RT_MODE_SHADOWS = 1u;
@@ -112,10 +106,10 @@ vec3 rtRelFromDepth(vec2 uv, float depth) {
 
 // The tracer's G-buffer texel: octahedral normal in xy, distance to the
 // camera in z (0 for sky), and in w which pixel of the 2x2 scene block it was
-// taken from (0-3, x fastest), plus 4 where that surface is a unit's
-// (rtGbufUnit). The nearest surface in the block is kept, so the edge of an
-// object in front of the sky or a far wall is never lost to the half
-// resolution.
+// taken from (0-3, x fastest), plus 4 x (1 + the mover's index) where that
+// surface is a mover's (rtGbufMover, rt_movers.glsli). The nearest surface in
+// the block is kept, so the edge of an object in front of the sky or a far
+// wall is never lost to the half resolution.
 vec2 rtOctEncode(vec3 n) {
     n /= abs(n.x) + abs(n.y) + abs(n.z);
     vec2 e = n.xy;
@@ -131,7 +125,8 @@ vec3 rtOctDecode(vec2 e) {
 
 vec3 rtGbufNormal(vec4 g) { return rtOctDecode(g.xy); }
 float rtGbufDist(vec4 g) { return g.z; }
-bool rtGbufUnit(vec4 g) { return g.w > 3.5; }
+// 0 for what stands still, else 1 + the index of the mover it is.
+int rtGbufMover(vec4 g) { return int(g.w + 0.5) >> 2; }
 
 // The first scene pixel of trace texel px's block, and the block's size.
 ivec2 rtBlockBase(ivec2 px) {

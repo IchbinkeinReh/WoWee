@@ -86,6 +86,10 @@ layout(location = 9) flat in int vInteriorLit;
 layout(location = 10) flat in vec3 vInteriorAmbient;
 layout(location = 11) flat in vec4 vInteriorDirect;
 layout(location = 12) flat in float vDetailLit;
+// Where this point was when the ray traced lighting it reads was traced, and
+// whether it moved since: a door, a chest, a lift (m2.vert).
+layout(location = 13) in vec3 RtPrevPos;
+layout(location = 14) flat in int vRtMoved;
 
 layout(location = 0) out vec4 outColor;
 
@@ -352,7 +356,8 @@ void main() {
         // and the torches' and lamps' where the ray tracing has it. The MODD
         // colour is the group's baked light, its lamps in it already: those
         // only shadow it (rtPointLightOwn, rtBakedShade).
-        RtLight rt = rtLightAt(FragPos);
+        rtSurfaceIsUnit = vRtMoved != 0;
+        RtLight rt = rtLightAt(RtPrevPos);
         light = clamp(vInteriorAmbient + highlightAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0)
                   * (rtBakedLight() * rtBakedShade(rt))
               + rtPointLightOwn(rt);
@@ -369,7 +374,9 @@ void main() {
             shadow = mix(1.0, shadow, shadowParams.y);
         }
 
-        RtLight rt = rtLightAt(FragPos);
+        // What moved since the result was traced finds itself where it was.
+        rtSurfaceIsUnit = vRtMoved != 0;
+        RtLight rt = rtLightAt(RtPrevPos);
         // The shadow variants let a face turned edge-on to the sun out of the
         // map's shadow (rtEdgeOnLift); the traced one keeps its own.
         shadow = rtShadowEdgeOn(rt, shadow, norm, normalize(-lightDir.xyz));

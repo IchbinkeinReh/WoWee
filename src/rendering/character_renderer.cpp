@@ -178,7 +178,8 @@ void applyMagentaKeyIfNeeded(pipeline::BLPImage& image, const std::string& path)
 
 // Descriptor pool sizing
 static constexpr uint32_t MAX_MATERIAL_SETS = 4096;
-static constexpr uint32_t MAX_BONE_SETS = 8192;
+// Three a skinned instance (CharacterInstance::kBoneRing).
+static constexpr uint32_t MAX_BONE_SETS = 12288;
 
 // Texture compositing sizes (NPC skin upscale)
 static constexpr int kBaseTexSize    = 256;  // NPC baked texture default
@@ -519,17 +520,20 @@ bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFram
         vkCreateDescriptorSetLayout(device, &ci, nullptr, &materialSetLayout_);
     }
 
-    // Bone set layout (set 2): binding 0 = STORAGE_BUFFER (bone matrices)
+    // Bone set layout (set 2): binding 0 = this frame's bone matrices and
+    // model matrix, binding 1 = last frame's (CharacterInstance::boneBuffer)
     {
-        VkDescriptorSetLayoutBinding binding{};
-        binding.binding = 0;
-        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        binding.descriptorCount = 1;
-        binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        VkDescriptorSetLayoutBinding bindings[2] = {};
+        for (uint32_t b = 0; b < 2; ++b) {
+            bindings[b].binding = b;
+            bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[b].descriptorCount = 1;
+            bindings[b].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        }
 
         VkDescriptorSetLayoutCreateInfo ci{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 1;
-        ci.pBindings = &binding;
+        ci.bindingCount = 2;
+        ci.pBindings = bindings;
         vkCreateDescriptorSetLayout(device, &ci, nullptr, &boneSetLayout_);
     }
 
@@ -550,7 +554,7 @@ bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFram
     }
     {
         VkDescriptorPoolSize sizes[] = {
-            {.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = MAX_BONE_SETS},
+            {.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = MAX_BONE_SETS * 2},
         };
         VkDescriptorPoolCreateInfo ci{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         ci.maxSets = MAX_BONE_SETS;
@@ -3140,71 +3144,93 @@ glm::mat4 CharacterRenderer::getBoneTransform(const pipeline::M2Bone& bone, floa
 // --- Rendering ---
 
 void CharacterRenderer::prepareRender(uint32_t frameIndex) {
+    // A new frame for the bone ring, whether or not anything draws.
+    ++boneFrame_;
     if (instances.empty() || !opaquePipeline_) return;
     if (frameIndex >= 2 || boneDescPool_ == VK_NULL_HANDLE || boneSetLayout_ == VK_NULL_HANDLE) return;
 
-    // Pre-allocate bone SSBOs + descriptor sets on main thread (pool ops not thread-safe)
+    // Pre-allocate bone SSBOs + descriptor sets on main thread (pool ops not
+    // thread-safe): the whole ring at once, as each set binds two of them.
+    constexpr int kRing = CharacterInstance::kBoneRing;
+    const VkDeviceSize bufferSize = (MAX_BONES + 1) * sizeof(glm::mat4);
     for (auto& [id, instance] : instances) {
         int numBones = std::min(static_cast<int>(instance.boneMatrices.size()), MAX_BONES);
         if (numBones <= 0) continue;
+        if (instance.boneSet[0] && instance.boneSet[1] && instance.boneSet[2]) continue;
 
-        if (!instance.boneBuffer[frameIndex]) {
+        bool ok = true;
+        for (int k = 0; k < kRing && ok; ++k) {
+            if (instance.boneBuffer[k]) continue;
             VkBufferCreateInfo bci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            bci.size = MAX_BONES * sizeof(glm::mat4);
+            bci.size = bufferSize;
             bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
             VmaAllocationCreateInfo aci{};
             aci.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
             aci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
             VmaAllocationInfo allocInfo{};
-            if (vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci,
-                            &instance.boneBuffer[frameIndex], &instance.boneAlloc[frameIndex], &allocInfo) != VK_SUCCESS) {
-                instance.boneBuffer[frameIndex] = VK_NULL_HANDLE;
-                instance.boneAlloc[frameIndex] = VK_NULL_HANDLE;
-                instance.boneMapped[frameIndex] = nullptr;
-                continue;
+            if (vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci, &instance.boneBuffer[k],
+                                &instance.boneAlloc[k], &allocInfo) != VK_SUCCESS) {
+                instance.boneBuffer[k] = VK_NULL_HANDLE;
+                instance.boneAlloc[k] = VK_NULL_HANDLE;
+                instance.boneMapped[k] = nullptr;
+                ok = false;
+                break;
             }
-            instance.boneMapped[frameIndex] = allocInfo.pMappedData;
-
+            instance.boneMapped[k] = allocInfo.pMappedData;
+            instance.boneWritten[k] = 0;
             // Initialize all bone slots to identity so out-of-range indices
             // produce correct (neutral) transforms instead of GPU garbage
-            if (instance.boneMapped[frameIndex]) {
-                auto* dst = static_cast<glm::mat4*>(instance.boneMapped[frameIndex]);
-                for (int j = 0; j < MAX_BONES; j++) dst[j] = glm::mat4(1.0f);
+            if (instance.boneMapped[k]) {
+                auto* dst = static_cast<glm::mat4*>(instance.boneMapped[k]);
+                for (int j = 0; j <= MAX_BONES; j++) dst[j] = glm::mat4(1.0f);
             }
-
+        }
+        for (int k = 0; k < kRing && ok; ++k) {
+            if (instance.boneSet[k]) continue;
             VkDescriptorSetAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             ai.descriptorPool = boneDescPool_;
             ai.descriptorSetCount = 1;
             ai.pSetLayouts = &boneSetLayout_;
-            VkResult dsRes = vkAllocateDescriptorSets(vkCtx_->getDevice(), &ai, &instance.boneSet[frameIndex]);
+            VkResult dsRes = vkAllocateDescriptorSets(vkCtx_->getDevice(), &ai, &instance.boneSet[k]);
             if (dsRes != VK_SUCCESS) {
                 LOG_ERROR("CharacterRenderer::prepareRender: bone descriptor alloc failed (instance=",
-                          id, ", frame=", frameIndex, ", vk=", static_cast<int>(dsRes), ")");
-                if (instance.boneBuffer[frameIndex]) {
-                    vmaDestroyBuffer(vkCtx_->getAllocator(),
-                                     instance.boneBuffer[frameIndex], instance.boneAlloc[frameIndex]);
-                    instance.boneBuffer[frameIndex] = VK_NULL_HANDLE;
-                    instance.boneAlloc[frameIndex] = VK_NULL_HANDLE;
-                    instance.boneMapped[frameIndex] = nullptr;
-                }
-                continue;
+                          id, ", ring=", k, ", vk=", static_cast<int>(dsRes), ")");
+                instance.boneSet[k] = VK_NULL_HANDLE;
+                ok = false;
+                break;
             }
-
-            if (instance.boneSet[frameIndex]) {
-                VkDescriptorBufferInfo bufInfo{};
-                bufInfo.buffer = instance.boneBuffer[frameIndex];
-                bufInfo.offset = 0;
-                bufInfo.range = bci.size;
-                VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                write.dstSet = instance.boneSet[frameIndex];
-                write.dstBinding = 0;
-                write.descriptorCount = 1;
-                write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                write.pBufferInfo = &bufInfo;
-                vkUpdateDescriptorSets(vkCtx_->getDevice(), 1, &write, 0, nullptr);
+            VkDescriptorBufferInfo bufInfo[2] = {
+                {instance.boneBuffer[k], 0, bufferSize},
+                {instance.boneBuffer[(k + kRing - 1) % kRing], 0, bufferSize},
+            };
+            VkWriteDescriptorSet writes[2] = {};
+            for (uint32_t b = 0; b < 2; ++b) {
+                writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[b].dstSet = instance.boneSet[k];
+                writes[b].dstBinding = b;
+                writes[b].descriptorCount = 1;
+                writes[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                writes[b].pBufferInfo = &bufInfo[b];
             }
+            vkUpdateDescriptorSets(vkCtx_->getDevice(), 2, writes, 0, nullptr);
         }
+        // Drawn only with the whole ring; what failed is tried again next frame.
+        if (!ok) destroyInstanceBones(instance, true);
     }
+}
+
+bool CharacterRenderer::writeFrameBones(CharacterInstance& inst, const glm::mat4& model) {
+    constexpr int kRing = CharacterInstance::kBoneRing;
+    const int k = static_cast<int>(boneFrame_ % kRing);
+    const int prev = (k + kRing - 1) % kRing;
+    const int numBones = std::min(static_cast<int>(inst.boneMatrices.size()), MAX_BONES);
+    if (inst.boneMapped[k] && inst.boneWritten[k] != boneFrame_) {
+        auto* dst = static_cast<glm::mat4*>(inst.boneMapped[k]);
+        if (numBones > 0) memcpy(dst, inst.boneMatrices.data(), numBones * sizeof(glm::mat4));
+        dst[MAX_BONES] = model;
+        inst.boneWritten[k] = boneFrame_;
+    }
+    return inst.boneWritten[prev] != 0 && inst.boneWritten[prev] + 1 == boneFrame_;
 }
 
 namespace {
@@ -3435,30 +3461,28 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             float extent = 2.0f * gpuModel.data.boundRadius * std::max(instance.scale, 0.001f);
             charPush.lightFlags.z = glm::clamp(extent, kSelfShadowMinExtent, kSelfShadowMaxExtent);
         }
-        charPush.diffuseColour = glm::vec4(instance.diffuseColour, 1.0f);
-        rtMotionPush(instance, charPush);
-        vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(charPush), &charPush);
+        // w: drawn see-through, as a whole - the ray traced lighting's
+        // G-buffer holds what shows through it (rtLightSeeThrough).
+        const float instanceAlpha = instance.opacity * instance.kitAlpha * instance.cameraAlpha;
+        charPush.diffuseColour = glm::vec4(instance.diffuseColour, instanceAlpha < 0.999f ? 1.0f : 0.0f);
 
-        // Upload bone matrices to SSBO
+        // This frame's pose and placement into the bone ring (set 2), beside
+        // last frame's. lightFlags.w: last frame's is there, and the surface
+        // finds itself in the lighting traced then where it stood
+        // (character.vert).
         int numBones = std::min(static_cast<int>(instance.boneMatrices.size()), MAX_BONES);
+        charPush.lightFlags.w = 0.0f;
         if (numBones > 0) {
             // GPU allocation is performed by prepareRender() before command
             // recording. Never allocate buffers/descriptors from the draw loop.
-            if (!instance.boneBuffer[frameIndex] || !instance.boneSet[frameIndex]) continue;
-
-            // Upload bone matrices
-            if (instance.boneMapped[frameIndex]) {
-                memcpy(instance.boneMapped[frameIndex], instance.boneMatrices.data(),
-                       numBones * sizeof(glm::mat4));
-            }
-
-            // Bind bone descriptor set (set 2)
-            if (instance.boneSet[frameIndex]) {
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        pipelineLayout_, 2, 1, &instance.boneSet[frameIndex], 0, nullptr);
-            }
+            const int ring = static_cast<int>(boneFrame_ % CharacterInstance::kBoneRing);
+            if (!instance.boneBuffer[ring] || !instance.boneSet[ring]) continue;
+            if (writeFrameBones(instance, modelMat)) charPush.lightFlags.w = 1.0f;
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout_, 2, 1, &instance.boneSet[ring], 0, nullptr);
         }
+        vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(charPush), &charPush);
 
         // Bind vertex and index buffers
         VkDeviceSize offset = 0;
@@ -4142,11 +4166,9 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
 
     uint32_t frameIndex = vkCtx_->getCurrentFrame();
     if (frameIndex >= 2) return;
-    VkDevice device = vkCtx_->getDevice();
     // The shadow worker records this while the doodad worker draws the
     // blended characters through render(), and both copy each instance's pose
-    // into the same bone buffer - here, and on the path below that makes one
-    // where prepareRender could not, from the same descriptor pool.
+    // into the same bone buffer (writeFrameBones).
     std::lock_guard<std::mutex> renderLock(renderMutex_);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
@@ -4172,73 +4194,12 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
             ? inst.overrideModelMatrix
             : getModelMatrix(inst);
 
-        // Ensure bone SSBO is allocated and upload bone matrices
-        int numBones = std::min(static_cast<int>(inst.boneMatrices.size()), MAX_BONES);
-        if (numBones > 0) {
-            if (!inst.boneBuffer[frameIndex]) {
-                VkBufferCreateInfo bci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-                bci.size = MAX_BONES * sizeof(glm::mat4);
-                bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-                VmaAllocationCreateInfo aci{};
-                aci.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-                aci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
-                VmaAllocationInfo ai{};
-                if (vmaCreateBuffer(vkCtx_->getAllocator(), &bci, &aci,
-                    &inst.boneBuffer[frameIndex], &inst.boneAlloc[frameIndex], &ai) != VK_SUCCESS) {
-                    inst.boneBuffer[frameIndex] = VK_NULL_HANDLE;
-                    inst.boneAlloc[frameIndex] = VK_NULL_HANDLE;
-                    inst.boneMapped[frameIndex] = nullptr;
-                    continue;
-                }
-                inst.boneMapped[frameIndex] = ai.pMappedData;
-
-                // Initialize all bone slots to identity so out-of-range indices
-                // produce correct (neutral) transforms instead of GPU garbage
-                if (inst.boneMapped[frameIndex]) {
-                    auto* dst = static_cast<glm::mat4*>(inst.boneMapped[frameIndex]);
-                    for (int j = 0; j < MAX_BONES; j++) dst[j] = glm::mat4(1.0f);
-                }
-
-                VkDescriptorSetAllocateInfo dsAI{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-                dsAI.descriptorPool = boneDescPool_;
-                dsAI.descriptorSetCount = 1;
-                dsAI.pSetLayouts = &boneSetLayout_;
-                VkResult dsRes = vkAllocateDescriptorSets(device, &dsAI, &inst.boneSet[frameIndex]);
-                if (dsRes != VK_SUCCESS) {
-                    LOG_ERROR("CharacterRenderer[shadow]: bone descriptor allocation failed (instance=",
-                              inst.id, ", frame=", frameIndex, ", vk=", static_cast<int>(dsRes), ")");
-                    if (inst.boneBuffer[frameIndex]) {
-                        vmaDestroyBuffer(vkCtx_->getAllocator(),
-                                         inst.boneBuffer[frameIndex], inst.boneAlloc[frameIndex]);
-                        inst.boneBuffer[frameIndex] = VK_NULL_HANDLE;
-                        inst.boneAlloc[frameIndex] = VK_NULL_HANDLE;
-                        inst.boneMapped[frameIndex] = nullptr;
-                    }
-                }
-
-                if (inst.boneSet[frameIndex]) {
-                    VkDescriptorBufferInfo bInfo{};
-                    bInfo.buffer = inst.boneBuffer[frameIndex];
-                    bInfo.offset = 0;
-                    bInfo.range = bci.size;
-                    VkWriteDescriptorSet w{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                    w.dstSet = inst.boneSet[frameIndex];
-                    w.dstBinding = 0;
-                    w.descriptorCount = 1;
-                    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    w.pBufferInfo = &bInfo;
-                    vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
-                }
-            }
-            // Once a frame: the cascades after the first draw the same pose.
-            if (inst.boneMapped[frameIndex] && inst.shadowBonesFrame != shadowFrameSerial_) {
-                memcpy(inst.boneMapped[frameIndex], inst.boneMatrices.data(),
-                       numBones * sizeof(glm::mat4));
-                inst.shadowBonesFrame = shadowFrameSerial_;
-            }
-        }
-
-        if (!inst.boneSet[frameIndex]) continue;
+        // This frame's pose into the bone ring, as the main pass has it (or
+        // will: whichever draws first writes it). The ring is allocated by
+        // prepareRender alone; an instance it has not reached casts next frame.
+        const int ring = static_cast<int>(boneFrame_ % CharacterInstance::kBoneRing);
+        if (inst.boneMatrices.empty() || !inst.boneSet[ring]) continue;
+        writeFrameBones(inst, modelMat);
 
         // Params at set 1 and bones at set 2, together, per instance.
         //
@@ -4250,7 +4211,7 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
         // from a set the GPU no longer considered bound, which GPU-assisted
         // validation reports as indexing a descriptor array of length zero,
         // thousands of times a session.
-        VkDescriptorSet sets[2] = {shadowParams_.set, inst.boneSet[frameIndex]};
+        VkDescriptorSet sets[2] = {shadowParams_.set, inst.boneSet[ring]};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipelineLayout_,
             0, 2, sets, 0, nullptr);
         currentTexSet = shadowParams_.set;

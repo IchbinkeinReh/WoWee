@@ -541,6 +541,8 @@ function(compile_shaders TARGET_NAME)
     # hence the target environment on the hardware tracer.
     set(SHADER_VARIANTS
         "rt_prepare.comp.glsl|rt_prepare_ms.comp.spv|-DRT_MSAA"
+        "rt_prepare.comp.glsl|rt_prepare_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
+        "rt_prepare.comp.glsl|rt_prepare_ms_hw.comp.spv|-DRT_MSAA -DRT_HARDWARE --target-env=vulkan1.2"
         "rt_trace.comp.glsl|rt_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
         "rt_gi_trace.comp.glsl|rt_gi_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
     )

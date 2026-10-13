@@ -4,6 +4,7 @@
 #include "rendering/client_ribbon.hpp"
 #include "rendering/spatial_grid.hpp"
 #include "rendering/shadow_params.hpp"
+#include "rendering/rt_mover.hpp"
 
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/blp_loader.hpp"
@@ -407,6 +408,18 @@ struct M2Instance {
 
     void recomputeCachedCullFactors();
 
+    // What the ray traced lighting knows of how it moves (prepareRtMovers):
+    // the placement and pose it was drawn with last frame (rtSeenFrame,
+    // M2Renderer::rtFrame_ then), and, in the frame it moved since, where in
+    // that frame's rtPrevBuffer_ they were copied to (1 + offset, 0 none).
+    glm::mat4 rtPrevModel{1.0f};
+    std::vector<glm::mat4> rtPrevBones;
+    uint64_t rtSeenFrame = 0;
+    uint64_t rtPrevRefFrame = 0;
+    uint32_t rtPrevRef = 0;
+    // The frame its placement was last set in (notePlaced).
+    uint64_t rtPlacedFrame = 0;
+
     bool bonesDirty[2] = {false, false};  // Per-frame-index: set when bones recomputed, cleared after upload
     // Mega-bone slot this instance's bones were last uploaded to, per frame
     // index (0 = never uploaded; valid slots start at 1). Lets prepareRender
@@ -547,6 +560,10 @@ public:
     void setRtLampLevel(float level) { rtLampLevel_ = level; }
     /// How many pieces of animated models the last sync placed.
     [[nodiscard]] uint32_t rtAnimatedPieces() const { return rtAnimatedPieces_; }
+    /// The game objects and moved doodads that moved since last frame, as
+    /// prepareRender found them: the ray traced lighting's movers
+    /// (RtLighting::FrameInputs::movers), ranked by distance.
+    [[nodiscard]] const std::vector<RtMover>& rtMovers() const { return rtMovers_; }
     void setForceNoCull(bool v) { forceNoCull_ = v; }
 
     /** Ensure GPU→CPU cull output is visible to the host after a fence wait.
@@ -1092,6 +1109,9 @@ private:
     /// colour under it (a its MCSH shadow), interiorDirect.xyz the terrain's
     /// face normal and w the distance it is gone by (groundEffectDist).
     static constexpr int32_t kInstanceDetailDoodad = 8;
+    /// From this bit up, 1 + where in rtPrevBuffer_ an instance that moved
+    /// since last frame finds last frame's placement and pose (m2.vert).
+    static constexpr int kInstanceRtPrevShift = 12;
     void writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) const;
     // How many instances one frame may hand the GPU, not how many exist. Ground
     // clutter is what fills it: it is drawn by the thousand and every tuft
@@ -1111,7 +1131,16 @@ private:
     // twice that, and the clutter is what gives way should even that fill.
     static constexpr uint32_t MAX_INSTANCE_DATA = 131072;
     VkDescriptorSetLayout instanceSetLayout_ = VK_NULL_HANDLE;
+    /// The main pass's set 3: instanceSetLayout_'s binding and, at 1,
+    /// rtPrevBuffer_. The shadow pass keeps instanceSetLayout_.
+    VkDescriptorSetLayout instanceRtSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool instanceDescPool_ = VK_NULL_HANDLE;
+    /// Per frame slot: what moved since last frame (M2Instance::rtPrevRef),
+    /// each as last frame's model matrix followed by its bones.
+    static constexpr uint32_t kRtPrevCapacity = 16384;  // matrices
+    ::VkBuffer rtPrevBuffer_[2] = {};
+    VmaAllocation rtPrevAlloc_[2] = {};
+    void* rtPrevMapped_[2] = {};
     ::VkBuffer instanceBuffer_[2] = {};
     VmaAllocation instanceAlloc_[2] = {};
     void* instanceMapped_[2] = {};
@@ -1188,6 +1217,15 @@ private:
     std::vector<uint32_t> rtDynamicOwnerIds_;
     // Pieces of animated models placed by the last sync.
     uint32_t rtAnimatedPieces_ = 0;
+    // What moved since last frame (prepareRtMovers): counted by
+    // prepareRender, the movers it found, and the instances (ids) whose
+    // placement was set since - besides the game objects, which can move by
+    // their pose alone.
+    uint64_t rtFrame_ = 0;
+    std::vector<RtMover> rtMovers_;
+    std::vector<uint32_t> rtPlacedIds_;
+    void prepareRtMovers(uint32_t frameIndex, const glm::vec3& cameraPos);
+    void notePlaced(uint32_t instanceId, M2Instance& inst);
     void registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
     void releaseRtModel(M2ModelGPU& gpuModel);
 

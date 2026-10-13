@@ -61,6 +61,11 @@ struct InstanceData {
 layout(set = 3, binding = 0) readonly buffer InstanceSSBO {
     InstanceData instanceData[];
 };
+// What moved since last frame (M2Renderer::prepareRtMovers): its model matrix
+// then, followed by its bones then, from 1 less than flags >> 12.
+layout(set = 3, binding = 1) readonly buffer RtPrevSSBO {
+    mat4 rtPrev[];
+};
 
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
@@ -81,6 +86,10 @@ layout(location = 9) flat out int vInteriorLit;
 layout(location = 10) flat out vec3 vInteriorAmbient;
 layout(location = 11) flat out vec4 vInteriorDirect;
 layout(location = 12) flat out float vDetailLit;  // ground cover's baked shadow (flags & 8)
+// Where this point of the surface was a frame earlier, when the ray traced
+// lighting it reads was traced, and whether it moved since (rtLightAt).
+layout(location = 13) out vec3 RtPrevPos;
+layout(location = 14) flat out int vRtMoved;
 
 void main() {
     // Fetch per-instance data from SSBO
@@ -94,6 +103,8 @@ void main() {
     vec4 pos = vec4(aPos, 1.0);
     vec4 norm = vec4(aNormal, 0.0);
 
+    int prevRef = instanceData[instIdx].flags >> 12;
+    vec4 prevPos = vec4(aPos, 1.0);
     if (uBones != 0) {
         // Clamp to the range this instance actually owns. A model whose bone
         // count exceeds the ceiling would otherwise index into the next
@@ -106,6 +117,14 @@ void main() {
                      + bones[bBase + bi.w] * aBoneWeights.w;
         pos = skinMat * pos;
         norm = skinMat * norm;
+        if (prevRef > 0) {
+            int pb = prevRef;  // the bones follow the model matrix at prevRef - 1
+            mat4 prevSkin = rtPrev[pb + bi.x] * aBoneWeights.x
+                          + rtPrev[pb + bi.y] * aBoneWeights.y
+                          + rtPrev[pb + bi.z] * aBoneWeights.z
+                          + rtPrev[pb + bi.w] * aBoneWeights.w;
+            prevPos = prevSkin * prevPos;
+        }
     }
 
     // Nothing here moves the geometry on its own. The client animates a
@@ -115,6 +134,8 @@ void main() {
     vec4 worldPos = model * pos;
 
     FragPos = worldPos.xyz;
+    RtPrevPos = prevRef > 0 ? (rtPrev[prevRef - 1] * prevPos).xyz : worldPos.xyz;
+    vRtMoved = prevRef > 0 ? 1 : 0;
     Normal = mat3(model) * norm.xyz;
 
     // Each stage's coordinates (0x00836600 names the vertex program by them):

@@ -25,7 +25,8 @@
 // viewPos and:
 //     mat4 rtViewProj;   // the frame the result was traced in
 //     vec4 rtCameraPos;  // its camera position
-//     vec4 rtParams;     // x = mode (0 off, 1 sun, 2 +AO, 3 +probe light)
+//     vec4 rtParams;     // x = mode (0 off, 1 sun, 2 +AO, 3 +probe light),
+//                        // z = 1: borrow nothing this frame (a room changed)
 // and after the shadow cascades at its end:
 //     vec4 giVolume[2];
 //     vec4 giVolumeMod[2];
@@ -108,12 +109,15 @@ void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec4 point, inou
     sunAo += l.rg * w;
 }
 
-// Set by a shader drawing a unit (character.frag) before rtLightAt.
+// Set by a shader drawing what moves on its own - a unit, what it carries,
+// a door or a lift (character.frag, m2.frag) - before rtLightAt, which it
+// hands where the surface was when the result was traced: its vertex shader
+// places it a second time with last frame's placement and pose.
 bool rtSurfaceIsUnit = false;
 
 // The distance a texel of the result stands for, 0 where it is no use to
-// this surface. The nearest units' texels carry theirs negated (rt_filter):
-// those serve only units. A unit moves on its own, and the result is a frame
+// this surface. A mover's texels carry theirs negated (rt_filter): those
+// serve only movers. A mover moves on its own, and the result is a frame
 // old, so the ground a body has just walked off, or swung an arm or a staff
 // away from, finds the body's texels where it lies - lit as the body was.
 // Weighed in, they matched the ground at the feet; refused, they left it
@@ -121,6 +125,13 @@ bool rtSurfaceIsUnit = false;
 // a frame behind, in other light. Refused, such a surface borrows (below).
 float rtTexelDist(vec4 l) {
     return l.a < 0.0 && !rtSurfaceIsUnit ? 0.0 : abs(l.a);
+}
+
+// The same for a texel borrowed from beside: only another mover's for a
+// mover - the body's own texels a little further on - and only what stands
+// still for the rest, never the light of another object.
+float rtBorrowDist(vec4 l) {
+    return (l.a < 0.0) == rtSurfaceIsUnit ? abs(l.a) : 0.0;
 }
 
 // The result is traced at half resolution, so a surface's texel neighbours
@@ -179,6 +190,14 @@ RtLight rtLightAt(vec3 worldPos) {
             }
         }
         if (wsum > 1e-4) weight = smoothstep(0.1, 0.6, best);
+        // Only texels a little off its distance: as good as none, and then it
+        // may borrow below rather than be drawn without the tracing.
+        if (weight <= 0.0) {
+            wsum = 0.0;
+            sunAo = vec2(0.0);
+            point = vec4(0.0);
+            bakedDark = 0.0;
+        }
     }
 
     // Nothing of this surface here: the best texel at its distance in eight
@@ -222,6 +241,9 @@ RtLight rtLightAt(vec3 worldPos) {
         hidden = b.w <= 0.0 || dot(apart, apart) > 2.25;
     }
     bool borrowed = false;
+    // Just after a room was entered or left the history starts afresh, and
+    // nothing is borrowed either: what is beside may be the other room.
+    if (rtParams.z > 0.5) hidden = false;
     for (int ring = 0; ring < 3 && hidden && wsum <= 1e-4; ++ring) {
         int reach = ring == 0 ? 3 : (ring == 1 ? 8 : 20);
         float ringTolerance = tolerance * (1.0 + 0.5 * float(ring));
@@ -233,7 +255,7 @@ RtLight rtLightAt(vec3 worldPos) {
                 if (x == 0 && y == 0) continue;
                 ivec2 q = clamp(center + ivec2(x, y) * reach, ivec2(0), size - 1);
                 vec4 l = texelFetch(uRtLight, q, 0);
-                float d = rtTexelDist(l);
+                float d = rtBorrowDist(l);
                 float e = (d - expected) / ringTolerance;
                 float match = d > 0.0 ? 1.0 - e * e : 0.0;
                 if (match > ringBest) {
@@ -249,6 +271,36 @@ RtLight rtLightAt(vec3 worldPos) {
             weight = (moved ? 1.0 : 0.8) * smoothstep(0.0, 0.75, ringBest);
             borrowed = true;
         }
+    }
+    // Still nothing, for what stands still: then it stands inside a mover's
+    // box itself - a fence post a unit leans on, a table it stands at - and
+    // is its own texels there, which carry the mover's sign. Taken back at a
+    // tighter distance than above, where a body could not be.
+    if (wsum <= 1e-4 && onScreen && !rtSurfaceIsUnit && rtParams.z < 0.5) {
+        float tight = 0.01 * expected + 0.03;
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                ivec2 q = clamp(center + ivec2(x, y), ivec2(0), size - 1);
+                vec4 l = texelFetch(uRtLight, q, 0);
+                float e = (abs(l.a) - expected) / tight;
+                float match = l.a < 0.0 ? exp(-e * e) : 0.0;
+                vec2 o = vec2(q) - f;
+                float w = match * exp(-dot(o, o));
+                if (w <= 1e-4) continue;
+                best = max(best, match);
+                wsum += w;
+                rtGather(q, l, w, sunAo, point, bakedDark);
+            }
+        }
+        if (wsum > 1e-4) weight = smoothstep(0.1, 0.6, best);
+    }
+    if (int(giParams.y + 0.5) == 8) {
+        // How well the surface found itself: green its own, orange borrowed,
+        // red nothing; blue where it moves on its own.
+        rtGiDebugSet = true;
+        rtGiDebugColour = wsum <= 1e-4 ? vec3(1.0, 0.0, 0.0)
+                        : borrowed ? vec3(1.0, 0.5, 0.0) : vec3(1.0 - weight, weight, 0.0);
+        if (rtSurfaceIsUnit) rtGiDebugColour = mix(rtGiDebugColour, vec3(0.0, 0.0, 1.0), 0.35);
     }
     if (wsum <= 1e-4) return rtLightDebug(r);
 
@@ -267,6 +319,42 @@ RtLight rtLightAt(vec3 worldPos) {
     return r;
 }
 
+// A unit drawn see-through finds nothing of itself in the result: where its
+// depth is, the G-buffer holds what shows through it (rt_prepare). It is lit
+// as the result would light it, without what the result holds of it: the
+// shadow map's shadow at the traced shadow's strength, no occlusion, and the
+// point lights of what stands right behind it, which it shares a place
+// with - not the bare fallback, whose weaker shadow and missing torchlight
+// would change the body's light the moment it begins to fade.
+RtLight rtLightSeeThrough(vec3 worldPos) {
+    RtLight r = RtLight(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0);
+    if (rtParams.x < 0.5) return r;
+    vec4 clip = rtViewProj * vec4(worldPos, 1.0);
+    if (clip.w <= 0.0) return r;
+    vec2 uv = clamp(clip.xy / clip.w * 0.5 + 0.5, vec2(0.0), vec2(1.0));
+    ivec2 size = textureSize(uRtLight, 0);
+    ivec2 center = ivec2(uv * vec2(size));
+    vec2 sunAo = vec2(0.0);
+    vec4 point = vec4(0.0);
+    float bakedDark = 0.0;
+    float wsum = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 q = clamp(center + ivec2(x, y), ivec2(0), size - 1);
+            vec4 l = texelFetch(uRtLight, q, 0);
+            if (l.a == 0.0) continue;
+            rtGather(q, l, 1.0, sunAo, point, bakedDark);
+            wsum += 1.0;
+        }
+    }
+    r.weight = 1.0;
+    if (wsum > 0.0) {
+        r.point = point.rgb / wsum * rtPointStrength();
+        float total = max(point.r, max(point.g, point.b));
+        r.pointOwn = r.point * (total > 1e-4 ? clamp(1.0 - point.a / total, 0.0, 1.0) : 1.0);
+    }
+    return rtLightDebug(r);
+}
 
 // The traced shadow and the shadow map combined, the lesser of the two. The
 // traced one alone would do for the world and for the units near the camera;

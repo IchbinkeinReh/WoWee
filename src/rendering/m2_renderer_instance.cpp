@@ -101,6 +101,7 @@ void M2Renderer::setInstancePosition(uint32_t instanceId, const glm::vec3& posit
 
     inst.position = position;
     inst.updateModelMatrix();
+    notePlaced(instanceId, inst);
     // Use cachedModel instead of a fresh models.find() - the pointer was set
     // at addInstance and stays valid as long as the instance exists.
     if (inst.cachedModel) {
@@ -470,6 +471,7 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
     // Update model matrix directly
     inst.modelMatrix = transform;
     inst.invModelMatrix = glm::inverse(transform);
+    notePlaced(instanceId, inst);
 
     // Extract position from transform for bounds
     inst.position = glm::vec3(transform[3]);

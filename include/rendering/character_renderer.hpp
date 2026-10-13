@@ -3,6 +3,7 @@
 #include "rendering/vk_shader.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/blob_shadow.hpp"
+#include "rendering/rt_mover.hpp"
 
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
@@ -421,12 +422,10 @@ public:
         uint32_t shapes = 0;      // appearances registered
     };
     [[nodiscard]] RtStats rtStats() const { return rtStats_; }
-    /// The nearest bodies' boxes as syncRtScene placed them this frame (min,
-    /// max), what they carry included, nearest first: what of the depth is a
-    /// unit for the ray traced lighting (RtLighting::FrameInputs::unitBoxes).
-    [[nodiscard]] const std::vector<std::pair<glm::vec3, glm::vec3>>& rtUnitBoxes() const {
-        return rtUnitBoxes_;
-    }
+    /// Every unit and what it carries as syncRtScene placed them this frame,
+    /// with how each moved since the last: the ray traced lighting's movers
+    /// (RtLighting::FrameInputs::movers), ranked by distance.
+    [[nodiscard]] const std::vector<RtMover>& rtMovers() const { return rtMovers_; }
 
 private:
     std::unordered_map<std::string, pipeline::BLPImage>* predecodedBLPCache_ = nullptr;
@@ -605,12 +604,11 @@ private:
         // 0x00781a10), and lightFlags as drawn.
         float directScale = 1.0f;
         glm::vec4 drawFlags{0.0f, 1.0f, 0.0f, 0.0f};
-        // Where the instance stood when the ray traced lighting last traced
-        // (syncRtScene, rtSyncGeneration_ then): the result the surfaces read
-        // is that frame's, and a unit that has moved since looks itself up
-        // where it stood (rtMotionPush).
-        glm::vec3 rtTracedAt{0.0f};
-        uint64_t rtTracedGeneration = 0;
+        // The model matrix syncRtScene placed the instance with, and in
+        // which of its generations: how it moved since, for the lighting's
+        // movers (RtMover::prevFromCur).
+        glm::mat4 rtPlacedModel{1.0f};
+        uint64_t rtPlacedGeneration = 0;
 
         // Enchant visual attached to a weapon. It needs its animation advanced
         // even though its transform comes from the parent; it is drawn by its
@@ -643,11 +641,19 @@ private:
 
         const M2ModelGPU* cachedModel = nullptr;  // Avoid per-frame hash lookups
 
-        // Per-instance bone SSBO (double-buffered per frame)
-        VkBuffer boneBuffer[2] = {};
-        VmaAllocation boneAlloc[2] = {};
-        void* boneMapped[2] = {};
-        VkDescriptorSet boneSet[2] = {};
+        // Per-instance bone SSBOs, a ring of three by boneFrame_: this
+        // frame's pose, and last frame's beside it, which the frame before is
+        // still drawing with, as the ray traced lighting a surface reads was
+        // traced a frame earlier and it finds itself where it stood then
+        // (character.vert). Past the bones, at MAX_BONES, the model matrix.
+        // Set k binds ring k at 0 and the one before it at 1.
+        static constexpr int kBoneRing = 3;
+        VkBuffer boneBuffer[kBoneRing] = {};
+        VmaAllocation boneAlloc[kBoneRing] = {};
+        void* boneMapped[kBoneRing] = {};
+        VkDescriptorSet boneSet[kBoneRing] = {};
+        /// The boneFrame_ that last wrote each, 0 for none.
+        uint64_t boneWritten[kBoneRing] = {};
         /// The shadow frame (shadowFrameSerial_) that last copied the bones,
         /// so the second and third cascades do not copy them again.
         uint64_t shadowBonesFrame = 0;
@@ -946,13 +952,14 @@ private:
     std::unordered_map<uint32_t, RtCharacter> rtCharacters_;
     uint64_t rtSyncGeneration_ = 0;
     RtStats rtStats_;
-    std::vector<std::pair<glm::vec3, glm::vec3>> rtUnitBoxes_;
-    /// Where an instance is placed, for rtTracedAt.
-    static glm::vec3 rtPlacedAt(const CharacterInstance& inst);
-    /// How far `inst` has moved since the lighting was traced, packed into
-    /// the push constants' lightFlags.w and diffuseColour.w (rtUnitMotion in
-    /// character.frag.glsl).
-    void rtMotionPush(const CharacterInstance& inst, CharPushConstants& push) const;
+    std::vector<RtMover> rtMovers_;
+    /// Counted once a frame by prepareRender: which of an instance's bone
+    /// buffers is this frame's (boneFrame_ % kBoneRing).
+    uint64_t boneFrame_ = 0;
+    /// This frame's pose and placement into the instance's bone buffer of
+    /// this frame, once; whether last frame's is there too (character.vert
+    /// then places the surface where it was).
+    bool writeFrameBones(CharacterInstance& inst, const glm::mat4& model);
     uint64_t rtShapeKey(const CharacterInstance& inst, const M2ModelGPU& gm,
                         std::vector<std::pair<uint32_t, uint32_t>>& batches);
     void rtAcquireShape(uint64_t key, const CharacterInstance& inst, const M2ModelGPU& gm,

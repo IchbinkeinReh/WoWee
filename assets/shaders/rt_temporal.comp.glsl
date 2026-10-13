@@ -10,16 +10,23 @@
 // Three terms ride along - sun, occlusion and point light visibility - and
 // the history length is the fourth channel.
 //
-// The reprojection follows the camera only. What moves on its own - a unit
-// turning, walking, swinging an arm - drags its shadow over ground whose
-// history still holds the shadow where it was, and the camera's own test
-// passes there: same ground, same distance. So the history is also held to
-// what this frame's samples around the pixel allow (a variance clamp over
-// the same surface), and a history clamped hard is shortened with it, so a
-// shadow that moved off a patch of ground leaves in a few frames instead of
-// fading out over two dozen behind whatever cast it.
+// What moves on its own - a unit, what it carries, a door, a lift - is a
+// mover (rt_movers.glsli): its texels look for their history where its motion
+// since last frame puts them, and only among last frame's movers' texels, so
+// a body never takes the ground's history nor the ground the body's. Its pose
+// does not follow that rigid motion - an arm swings, a lid opens - so the
+// mover's own history is kept short.
+//
+// A mover's shadow is another matter: it is dragged over ground whose history
+// still holds the shadow where it was, and the test passes there - same
+// ground, same distance. So the history is also held to what this frame's
+// samples around the pixel allow (a variance clamp over the same surface),
+// and a history clamped hard is shortened with it, so a shadow that moved off
+// a patch of ground leaves in a few frames instead of fading out over two
+// dozen behind whatever cast it.
 
 #include "rt_common.glsli"
+#include "rt_movers.glsli"
 
 layout(set = 0, binding = 3) uniform sampler2D uGbufCur;
 layout(set = 0, binding = 5) uniform sampler2D uGbufPrev;
@@ -46,10 +53,18 @@ void main() {
     }
 
     vec3 p = rtGbufWorld(g, px);
+    int mover = rtGbufMover(g);
+    // Where this surface was when last frame's history was made.
+    vec3 pp = p;
+    vec3 pn = n;
+    if (mover > 0) {
+        pp = rtMoverPrev(mover - 1, p);
+        pn = normalize(rtMoverPrevDir(mover - 1, n));
+    }
 
     float len = 0.0;
     vec4 hist = vec4(0.0);
-    vec4 clip = pass.prevViewProj * vec4(p, 1.0);
+    vec4 clip = pass.prevViewProj * vec4(pp, 1.0);
     if (pass.misc.y > 0.5 && clip.w > 0.0) {
         vec2 puv = clip.xy / clip.w * 0.5 + 0.5;
         if (all(greaterThanEqual(puv, vec2(0.0))) && all(lessThan(puv, vec2(1.0)))) {
@@ -57,7 +72,7 @@ void main() {
             vec2 f = puv * pass.extent.xy - 0.5;
             ivec2 base = ivec2(floor(f));
             vec2 w = fract(f);
-            float expected = length(p - pass.prevCameraPos.xyz);
+            float expected = length(pp - pass.prevCameraPos.xyz);
             float wsum = 0.0;
             for (int i = 0; i < 4; ++i) {
                 ivec2 o = ivec2(i & 1, i >> 1);
@@ -65,7 +80,7 @@ void main() {
                 vec4 pg = texelFetch(uGbufPrev, q, 0);
                 float pd = rtGbufDist(pg);
                 bool same = pd > 0.0 && abs(pd - expected) < 0.05 * expected + 0.1 &&
-                            dot(rtGbufNormal(pg), n) > 0.8;
+                            dot(rtGbufNormal(pg), pn) > 0.8 && (rtGbufMover(pg) > 0) == (mover > 0);
                 float bw = (o.x == 1 ? w.x : 1.0 - w.x) * (o.y == 1 ? w.y : 1.0 - w.y);
                 if (same && bw > 0.0) {
                     hist += texelFetch(uHistPrev, q, 0) * bw;
@@ -92,7 +107,8 @@ void main() {
                 vec4 qg = texelFetch(uGbufCur, q, 0);
                 float qd = rtGbufDist(qg);
                 bool same = (x == 0 && y == 0) ||
-                            (qd > 0.0 && abs(qd - dist) < 0.05 * dist + 0.1 && dot(rtGbufNormal(qg), n) > 0.8);
+                            (qd > 0.0 && abs(qd - dist) < 0.05 * dist + 0.1 && dot(rtGbufNormal(qg), n) > 0.8 &&
+                             rtGbufMover(qg) == mover);
                 if (!same) continue;
                 vec3 v = texelFetch(uRaw, q, 0).rgb;
                 m1 += v;
@@ -114,6 +130,7 @@ void main() {
     // body's legs trailing it. Kept short while it is here, the history lets
     // go of it within a few frames once it has moved on.
     if (raw.a > 0.5) len = min(len, UNIT_HISTORY);
+    if (mover > 0) len = min(len, rtMovers[mover - 1].lo.w);
     len = min(len + 1.0, MAX_HISTORY);
     float a = 1.0 / len;
     vec3 lightOut = mix(hist.rgb, raw.rgb, a);

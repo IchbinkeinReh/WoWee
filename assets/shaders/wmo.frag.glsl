@@ -79,7 +79,7 @@ layout(set = 1, binding = 3) uniform sampler2D uEnvTexture;
 // The group's draw, after the vertex stage's model matrix: 1 when the group
 // is drawn in the camera's interior pass (0x007a9380's local_14).
 layout(push_constant) uniform GroupPush {
-    layout(offset = 64) int interiorPass;
+    layout(offset = 128) int interiorPass;
     int highlight;   // the game object highlight: the light's ambient into c29
 } gp;
 
@@ -95,6 +95,10 @@ layout(location = 5) in vec3 Bitangent;
 layout(location = 6) in vec2 EnvCoord;
 layout(location = 7) in vec2 TexCoord2;   // the second MOTV
 layout(location = 8) in vec4 VertColor2;  // the second MOCV
+// Where this point was when the ray traced lighting was traced, and whether
+// the building moved since (wmo.vert).
+layout(location = 9) in vec3 RtPrevPos;
+layout(location = 10) flat in int vRtMoved;
 
 layout(location = 0) out vec4 outColor;
 
@@ -343,7 +347,8 @@ void main() {
         shadow = csmShadow(uShadowMap, FragPos, norm, nl, bias);
         shadow = mix(1.0, shadow, shadowParams.y);
     }
-    RtLight rt = rtLightAt(FragPos);
+    rtSurfaceIsUnit = vRtMoved != 0;
+    RtLight rt = rtLightAt(RtPrevPos);
     // The shadow variants let a face turned edge-on to the sun out of the
     // map's shadow (rtEdgeOnLift); the traced one keeps its own.
     shadow = rtShadowEdgeOn(rt, shadow, norm, normalize(-lightDir.xyz));

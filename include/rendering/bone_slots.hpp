@@ -34,7 +34,8 @@ void releaseBoneSlot(VkContext& ctx, VkDescriptorPool pool,
                      VkDescriptorSet set, VkBuffer buffer, VmaAllocation allocation,
                      bool defer);
 
-/// Releases both frame slots of one skinned instance.
+/// Releases every bone slot of one skinned instance (two for a doodad, one
+/// per frame in flight; three for a character, CharacterInstance::kBoneRing).
 ///
 /// The loop around releaseBoneSlot was written out twice as well - once per
 /// renderer, over two instance types whose bone members are named alike. What
@@ -46,7 +47,8 @@ template <typename Instance>
 void releaseInstanceBones(VkContext& ctx, VkDescriptorPool pool,
                           const std::shared_ptr<std::atomic<uint64_t>>& poolGeneration,
                           Instance& inst, bool defer) {
-    for (int i = 0; i < 2; i++) {
+    constexpr size_t kSlots = sizeof(inst.boneSet) / sizeof(inst.boneSet[0]);
+    for (size_t i = 0; i < kSlots; i++) {
         // Snapshot the handles, clear the slot, then release the copies.
         const VkDescriptorSet boneSet = inst.boneSet[i];
         const ::VkBuffer boneBuf = inst.boneBuffer[i];

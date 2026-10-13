@@ -489,6 +489,14 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
         ci.bindingCount = 1;
         ci.pBindings = &binding;
         vkCreateDescriptorSetLayout(device, &ci, nullptr, &instanceSetLayout_);
+
+        // The main pass's: the same, and at 1 what moved since last frame,
+        // where it was then (rtPrevBuffer_, m2.vert's RtPrevPos).
+        VkDescriptorSetLayoutBinding rtBindings[2] = {binding, binding};
+        rtBindings[1].binding = 1;
+        ci.bindingCount = 2;
+        ci.pBindings = rtBindings;
+        vkCreateDescriptorSetLayout(device, &ci, nullptr, &instanceRtSetLayout_);
     }
 
     // Particle texture set layout (set 1 for particles): binding 0 = sampler2D
@@ -617,8 +625,8 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
         static_assert(sizeof(M2InstanceGPU) == 192, "M2InstanceGPU must be 192 bytes (std430)");
         const VkDeviceSize instBufSize = MAX_INSTANCE_DATA * sizeof(M2InstanceGPU);
 
-        // Descriptor pool for 2 sets (double-buffered)
-        VkDescriptorPoolSize poolSize{.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 2};
+        // Descriptor pool for 2 sets (double-buffered), two buffers each
+        VkDescriptorPoolSize poolSize{.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 4};
         VkDescriptorPoolCreateInfo poolCi{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolCi.maxSets = 2;
         poolCi.poolSizeCount = 1;
@@ -637,23 +645,31 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
                             &instanceBuffer_[i], &instanceAlloc_[i], &allocInfo);
             instanceMapped_[i] = allocInfo.pMappedData;
 
+            bci.size = kRtPrevCapacity * sizeof(glm::mat4);
+            VmaAllocationInfo prevInfo{};
+            vmaCreateBuffer(ctx->getAllocator(), &bci, &aci, &rtPrevBuffer_[i], &rtPrevAlloc_[i], &prevInfo);
+            rtPrevMapped_[i] = prevInfo.pMappedData;
+
             VkDescriptorSetAllocateInfo setAi{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             setAi.descriptorPool = instanceDescPool_;
             setAi.descriptorSetCount = 1;
-            setAi.pSetLayouts = &instanceSetLayout_;
+            setAi.pSetLayouts = &instanceRtSetLayout_;
             vkAllocateDescriptorSets(device, &setAi, &instanceSet_[i]);
 
-            VkDescriptorBufferInfo bufInfo{};
-            bufInfo.buffer = instanceBuffer_[i];
-            bufInfo.offset = 0;
-            bufInfo.range = instBufSize;
-            VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            write.dstSet = instanceSet_[i];
-            write.dstBinding = 0;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            write.pBufferInfo = &bufInfo;
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+            VkDescriptorBufferInfo bufInfo[2] = {
+                {instanceBuffer_[i], 0, instBufSize},
+                {rtPrevBuffer_[i], 0, kRtPrevCapacity * sizeof(glm::mat4)},
+            };
+            VkWriteDescriptorSet writes[2] = {};
+            for (uint32_t b = 0; b < 2; ++b) {
+                writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[b].dstSet = instanceSet_[i];
+                writes[b].dstBinding = b;
+                writes[b].descriptorCount = 1;
+                writes[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                writes[b].pBufferInfo = &bufInfo[b];
+            }
+            vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
         }
     }
 
@@ -851,7 +867,7 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
     // Push constant: int texCoordSet + int isFoliage + int instanceDataOffset
     //              + float swayRefHeight + float swayAmp (both unused) + float plantHeight (24 bytes)
     {
-        VkDescriptorSetLayout setLayouts[] = {perFrameLayout, materialSetLayout_, boneSetLayout_, instanceSetLayout_};
+        VkDescriptorSetLayout setLayouts[] = {perFrameLayout, materialSetLayout_, boneSetLayout_, instanceRtSetLayout_};
         VkPushConstantRange pushRange{};
         pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
         pushRange.offset = 0;
@@ -1052,6 +1068,8 @@ void M2Renderer::shutdown() {
         destroy(alloc, instanceBuffer_[i], instanceAlloc_[i]);
         instanceMapped_[i] = nullptr;
         instanceSet_[i] = VK_NULL_HANDLE;
+        destroy(alloc, rtPrevBuffer_[i], rtPrevAlloc_[i]);
+        rtPrevMapped_[i] = nullptr;
     }
     destroy(device, instanceDescPool_);
 
@@ -1073,6 +1091,7 @@ void M2Renderer::shutdown() {
     destroy(device, materialSetLayout_);
     destroy(device, boneSetLayout_);
     destroy(device, instanceSetLayout_);
+    destroy(device, instanceRtSetLayout_);
     destroy(device, particleTexLayout_);
 
     // Destroy shadow resources

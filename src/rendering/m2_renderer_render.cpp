@@ -1,4 +1,6 @@
 #include <optional>
+#include <cstring>
+#include <limits>
 #include "rendering/shadow_params.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_renderer_internal.h"
@@ -694,9 +696,109 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
 // drawn by the particle or ribbon systems.
 static const bool kM2NoSkinning = envFlagEnabled("WOWEE_M2_NO_SKINNING");
 
+void M2Renderer::notePlaced(uint32_t instanceId, M2Instance& inst) {
+    if (inst.rtPlacedFrame == rtFrame_ + 1) return;
+    inst.rtPlacedFrame = rtFrame_ + 1;
+    rtPlacedIds_.push_back(instanceId);
+}
+
+// What moved since last frame, for the ray traced lighting. Its result is a
+// frame old, so a surface that moved looks itself up where it was then, in
+// last frame's placement and pose (m2.vert's RtPrevPos, from rtPrevBuffer_);
+// and its texels are a mover's, which nothing else takes for its own
+// (RtLighting::FrameInputs::movers). Game objects - a door swinging, a chest
+// opening, a lift, a ship - by their placement and their pose, and doodads
+// whose placement was set (a ship's cargo) by their placement. Other doodads
+// are placed once, and what of them is animated - a tree in the wind, a
+// banner - moves too little to tell.
+void M2Renderer::prepareRtMovers(uint32_t frameIndex, const glm::vec3& cameraPos) {
+    ++rtFrame_;
+    rtMovers_.clear();
+    // As far as a mover can be told from what stands behind it at the half
+    // resolution the lighting is traced at.
+    constexpr float kMoverRange = 150.0f;
+    auto* prevOut = frameIndex < 2 ? static_cast<glm::mat4*>(rtPrevMapped_[frameIndex]) : nullptr;
+    uint32_t prevUsed = 0;
+
+    auto visit = [&](uint32_t id) {
+        auto it = instanceIndexById.find(id);
+        if (it == instanceIndexById.end()) return;
+        M2Instance& inst = instances[it->second];
+        if (inst.rtSeenFrame == rtFrame_ || !inst.cachedModel) return;
+        const bool seenLastFrame = inst.rtSeenFrame + 1 == rtFrame_;
+        inst.rtSeenFrame = rtFrame_;
+        const glm::vec3 toCam = inst.position - cameraPos;
+        const bool inRange = glm::dot(toCam, toCam) < kMoverRange * kMoverRange;
+
+        bool moved = false;
+        if (seenLastFrame && inRange) {
+            moved = inst.modelMatrix != inst.rtPrevModel;
+            if (!moved && inst.rtPrevBones.size() == inst.boneMatrices.size()) {
+                // Moved in its pose: any bone by more than a hair.
+                for (size_t b = 0; b < inst.boneMatrices.size() && !moved; ++b) {
+                    const glm::mat4 d = inst.boneMatrices[b] - inst.rtPrevBones[b];
+                    for (int c = 0; c < 4 && !moved; ++c) {
+                        moved = glm::dot(glm::vec3(d[c]), glm::vec3(d[c])) > 1e-6f;
+                    }
+                }
+            } else if (!moved) {
+                moved = !inst.boneMatrices.empty();
+            }
+        }
+        if (moved) {
+            // Last frame's placement and pose, for the vertex stage.
+            const uint32_t need = 1u + static_cast<uint32_t>(inst.rtPrevBones.size());
+            if (prevOut && prevUsed + need <= kRtPrevCapacity &&
+                inst.rtPrevBones.size() == inst.boneMatrices.size()) {
+                prevOut[prevUsed] = inst.rtPrevModel;
+                if (!inst.rtPrevBones.empty()) {
+                    std::memcpy(prevOut + prevUsed + 1, inst.rtPrevBones.data(),
+                                inst.rtPrevBones.size() * sizeof(glm::mat4));
+                }
+                inst.rtPrevRef = prevUsed + 1;
+                inst.rtPrevRefFrame = rtFrame_;
+                prevUsed += need;
+            }
+            // Its box this frame, and how it moved as a whole.
+            const M2ModelGPU& m = *inst.cachedModel;
+            RtMover mover;
+            mover.lo = glm::vec3(std::numeric_limits<float>::max());
+            mover.hi = glm::vec3(std::numeric_limits<float>::lowest());
+            for (int c = 0; c < 8; ++c) {
+                const glm::vec3 local((c & 1) ? m.boundMax.x : m.boundMin.x, (c & 2) ? m.boundMax.y : m.boundMin.y,
+                                      (c & 4) ? m.boundMax.z : m.boundMin.z);
+                const glm::vec3 w(inst.modelMatrix * glm::vec4(local, 1.0f));
+                mover.lo = glm::min(mover.lo, w);
+                mover.hi = glm::max(mover.hi, w);
+            }
+            mover.lo -= glm::vec3(0.1f);
+            mover.hi += glm::vec3(0.1f);
+            mover.prevFromCur = inst.rtPrevModel * glm::inverse(inst.modelMatrix);
+            mover.rank = glm::dot(toCam, toCam);
+            rtMovers_.push_back(mover);
+        }
+        if (inRange) {
+            inst.rtPrevModel = inst.modelMatrix;
+            inst.rtPrevBones = inst.boneMatrices;
+        }
+    };
+    for (uint32_t id : gameObjectInstanceIds_) visit(id);
+    // Placed this frame or the one before: a doodad that moves with a ship
+    // stops being one the frame after it stops.
+    std::vector<uint32_t> placed;
+    placed.swap(rtPlacedIds_);
+    for (uint32_t id : placed) {
+        visit(id);
+        auto it = instanceIndexById.find(id);
+        if (it != instanceIndexById.end() && instances[it->second].rtPlacedFrame + 1 >= rtFrame_) {
+            rtPlacedIds_.push_back(id);
+        }
+    }
+}
+
 void M2Renderer::prepareRender(uint32_t frameIndex, const Camera& camera) {
     if (!initialized_ || instances.empty()) return;
-    (void)camera;  // reserved for future frustum-based culling
+    prepareRtMovers(frameIndex, camera.getPosition());
 
     // --- Mega bone SSBO: assign ranges and upload all animated instance bones ---
     // Offset 0 is reserved as the identity/no-bones sentinel; animated instances
@@ -975,6 +1077,10 @@ void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) co
     }
     e.flags = (inst.interiorLit ? kInstanceInteriorLit : 0) | (inst.interiorPass ? kInstanceInteriorPass : 0) |
               (inst.worldObjectLit && !inst.interiorLit ? kInstanceWorldObject : 0);
+    // Moved since last frame: where it was then (prepareRtMovers).
+    if (inst.rtPrevRefFrame == rtFrame_ && inst.rtPrevRef != 0) {
+        e.flags |= static_cast<int32_t>(inst.rtPrevRef << kInstanceRtPrevShift);
+    }
     e.interiorAmbient = glm::vec4(inst.interiorAmbient, 0.0f);
     e.interiorDirect = glm::vec4(inst.interiorDirect, inst.interiorTowardSun);
 }

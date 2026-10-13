@@ -75,7 +75,7 @@ public:
     /// Ray traced lighting: 0 off, 1 sun, 2 + occlusion, 3 + bounce. See RtLighting.
     int pendingRtLighting = 0;
     /// Settings > Debug Graphics: the view the surfaces show instead
-    /// (0-7, Renderer::setRtDebugView) and the lighting's strengths in
+    /// (0-9, Renderer::setRtDebugView) and the lighting's strengths in
     /// percent (Renderer::LightingTune).
     int pendingDbgView = 0;
     int pendingDbgAmbient = 100;

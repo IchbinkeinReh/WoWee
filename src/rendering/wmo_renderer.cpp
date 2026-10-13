@@ -258,12 +258,12 @@ bool WMORenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayou
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushRange.offset = 0;
-    pushRange.size = sizeof(GPUPushConstants);
+    pushRange.size = sizeof(WMOInstancePush);
     // The group's draw: whether it is in the camera's interior pass, which
     // picks its fog colour (WMOGroupPush).
     VkPushConstantRange groupRange{};
     groupRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    groupRange.offset = sizeof(GPUPushConstants);
+    groupRange.offset = sizeof(WMOInstancePush);
     groupRange.size = sizeof(WMOGroupPush);
 
     std::vector<VkDescriptorSetLayout> setLayouts = { perFrameLayout, materialSetLayout_ };
@@ -1277,6 +1277,9 @@ void WMORenderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tra
     // Update model matrix and bounds
     inst.modelMatrix = transform;
     inst.invModelMatrix = glm::inverse(transform);
+    if (std::find(rtPlacedIds_.begin(), rtPlacedIds_.end(), instanceId) == rtPlacedIds_.end()) {
+        rtPlacedIds_.push_back(instanceId);
+    }
 
     const glm::vec3 oldBoundsMin = inst.worldBoundsMin;
     const glm::vec3 oldBoundsMax = inst.worldBoundsMax;
@@ -1648,8 +1651,41 @@ void WMORenderer::gatherCandidates(const glm::vec3& queryMin, const glm::vec3& q
     }
 }
 
+// A building that moves - a ship's hull, a gunship - as the ray traced
+// lighting takes it: drawn this frame where its last frame's placement puts a
+// surface, it finds itself in the result traced then (wmo.vert), and its
+// texels are a mover's, which nothing else takes (RtMover).
+void WMORenderer::prepareRtMovers() {
+    rtMovers_.clear();
+    std::vector<uint32_t> placed;
+    placed.swap(rtPlacedIds_);
+    for (uint32_t id : placed) {
+        auto it = instanceIndexById.find(id);
+        if (it == instanceIndexById.end()) continue;
+        WMOInstance& inst = instances[it->second];
+        if (inst.rtLastFrame == currentFrameId) continue;  // listed twice
+        const bool drawnLastFrame = inst.rtLastFrame != 0 && inst.rtLastFrame + 1 == currentFrameId;
+        const bool moved = drawnLastFrame && inst.rtLastModel != inst.modelMatrix;
+        if (moved) {
+            inst.rtPrevModel = inst.rtLastModel;
+            inst.rtPrevFrame = currentFrameId;
+            RtMover m;
+            m.lo = inst.worldBoundsMin - glm::vec3(0.1f);
+            m.hi = inst.worldBoundsMax + glm::vec3(0.1f);
+            m.prevFromCur = inst.rtLastModel * inst.invModelMatrix;
+            m.rank = 0.0f;  // few and large: always among the movers
+            rtMovers_.push_back(m);
+        }
+        inst.rtLastModel = inst.modelMatrix;
+        inst.rtLastFrame = currentFrameId;
+        // Watched until a frame passes with it standing still.
+        if (moved || !drawnLastFrame) rtPlacedIds_.push_back(id);
+    }
+}
+
 void WMORenderer::prepareRender() {
     ++currentFrameId;
+    prepareRtMovers();
 
     // Update material UBOs if settings changed (mapped memory writes - main thread only)
     if (materialSettingsDirty_) {
@@ -1858,11 +1894,12 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
         const ModelData& model = *dl.model;
 
 
-        // Push model matrix
-        GPUPushConstants push{};
+        // Push model matrix, and last frame's where it moved since
+        WMOInstancePush push{};
         push.model = instance.modelMatrix;
+        push.prevModel = instance.rtPrevFrame == currentFrameId ? instance.rtPrevModel : instance.modelMatrix;
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
-                            0, sizeof(GPUPushConstants), &push);
+                            0, sizeof(WMOInstancePush), &push);
 
         // LOD shell groups render only beyond this distance squared (190 units)
         static constexpr float LOD_SHELL_DIST_SQ = 196.0f * 196.0f;
@@ -1895,7 +1932,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
             groupPush.interiorPass = (passGroups && gi < passGroups->size() && (*passGroups)[gi]) ? 1 : 0;
             groupPush.highlight = instance.highlighted ? 1 : 0;
             vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
-                               sizeof(GPUPushConstants), sizeof(WMOGroupPush), &groupPush);
+                               sizeof(WMOInstancePush), sizeof(WMOGroupPush), &groupPush);
 
             // Bind vertex + index buffers
             VkDeviceSize offset = 0;

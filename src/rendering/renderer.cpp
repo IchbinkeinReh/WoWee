@@ -6008,10 +6008,26 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
     }
     {
         WOWEE_PROFILE_SCOPE("rt: sync characters", Cpu);
+        if (characterRenderer) characterRenderer->syncRtScene(in.cameraPos);
+    }
+    {
+        // Everything that moves on its own, nearest first, as many as the
+        // pass takes.
+        WOWEE_PROFILE_SCOPE("rt: movers", Cpu);
+        static std::vector<RtMover> movers;  // main thread only; keeps its capacity
+        movers.clear();
+        if (wmoRenderer) movers.insert(movers.end(), wmoRenderer->rtMovers().begin(), wmoRenderer->rtMovers().end());
+        if (m2Renderer) movers.insert(movers.end(), m2Renderer->rtMovers().begin(), m2Renderer->rtMovers().end());
         if (characterRenderer) {
-            characterRenderer->syncRtScene(in.cameraPos);
-            in.unitBoxes = &characterRenderer->rtUnitBoxes();
+            movers.insert(movers.end(), characterRenderer->rtMovers().begin(), characterRenderer->rtMovers().end());
         }
+        auto nearer = [](const RtMover& a, const RtMover& b) { return a.rank < b.rank; };
+        if (movers.size() > RtLighting::kMaxMovers) {
+            std::nth_element(movers.begin(), movers.begin() + RtLighting::kMaxMovers, movers.end(), nearer);
+            movers.resize(RtLighting::kMaxMovers);
+        }
+        std::sort(movers.begin(), movers.end(), nearer);
+        in.movers = &movers;
     }
     {
         // The frame's point lights: what carries one near the camera, cut to

@@ -62,12 +62,23 @@ constexpr float kPosedRadius = 40.0f;
 constexpr uint32_t kMinPieceTriangles = 24;
 // How far a group's box reaches past its geometry, and how far its floor is
 // lifted: the ground the feet stand on must stay outside, or the unit would
-// stop shadowing the ground right at its feet.
+// stop shadowing the ground right at its feet - and, as a mover's box, stop
+// taking its own light (rtLightAt).
 constexpr float kGroupMargin = 0.1f;
 constexpr float kGroupFloorLift = 0.15f;
-// How many of the nearest bodies' boxes go to the lighting as units
-// (rtUnitBoxes); the rest of RtLighting::kUnitBoxes is for riders.
-constexpr size_t kUnitBoxBodies = RtLighting::kUnitBoxes - 4;
+// How far a mover's box reaches past a unit in its Stand pose: a stride, an
+// arm swung, a weapon raised reach past that pose's box.
+constexpr float kStandPoseMargin = 0.3f;
+
+// Whether m is the identity, to a millimetre: a mover that did not move.
+bool nearlyIdentity(const glm::mat4& m) {
+    for (int c = 0; c < 4; ++c) {
+        for (int r = 0; r < 3; ++r) {
+            if (std::abs(m[c][r] - (c == r ? 1.0f : 0.0f)) > 1e-3f) return false;
+        }
+    }
+    return true;
+}
 
 RtAabb transformBox(const glm::vec3& bmin, const glm::vec3& bmax, const glm::mat4& m) {
     RtAabb out;
@@ -319,47 +330,32 @@ void CharacterRenderer::rtForget(RtCharacter& rc) {
     rc.group = 0;
 }
 
-glm::vec3 CharacterRenderer::rtPlacedAt(const CharacterInstance& inst) {
-    return inst.hasOverrideModelMatrix ? glm::vec3(inst.overrideModelMatrix[3]) : inst.position + inst.renderOffset;
-}
-
-// The surfaces read the lighting traced a frame earlier, found by projecting
-// their position with that frame's camera. That follows the camera alone: a
-// unit that walked on since stands somewhere else than it did in the result,
-// finds the ground behind it there or nothing at all, and is drawn in other
-// light - the player most of all, whom the camera follows, so that every
-// step lands the body away from where the result had it. Moved back by how
-// far it went, it finds itself. Its pose moves too - a limb, a turn - but by
-// far less.
-void CharacterRenderer::rtMotionPush(const CharacterInstance& inst, CharPushConstants& push) const {
-    // Only from the latest trace: the opaque surfaces draw before this
-    // frame's (RtLighting::record), so it is the one they read. What draws
-    // after it in the frame reads the same result but is placed as now.
-    if (inst.rtTracedGeneration == 0 || inst.rtTracedGeneration != rtSyncGeneration_) return;
-    const glm::vec3 d = rtPlacedAt(inst) - inst.rtTracedAt;
-    // Packed as rtUnitMotion unpacks it; farther than two yards in a frame
-    // is a teleport, or a frame long enough that nothing would match anyway.
-    constexpr float kStep = 1024.0f;
-    const glm::vec2 q = glm::round(glm::vec2(d) * kStep) + 2048.0f;
-    if (q.x < 0.0f || q.y < 0.0f || q.x > 4095.0f || q.y > 4095.0f || std::abs(d.z) > 2.0f) return;
-    if (glm::dot(d, d) < 1e-8f) return;
-    const uint32_t packed = static_cast<uint32_t>(q.x) | (static_cast<uint32_t>(q.y) << 12);
-    push.lightFlags.w = static_cast<float>(packed + 1u);
-    push.diffuseColour.w = d.z;
-}
-
 void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
-    rtUnitBoxes_.clear();
+    rtMovers_.clear();
     if (!rtScene_ || !rtScene_->isActive()) return;
     const uint64_t gen = ++rtSyncGeneration_;
     rtStats_ = RtStats{};
-    // Where everything stands as this frame's lighting is traced (rtMotionPush).
-    for (auto& [id, inst] : instances) {
-        inst.rtTracedAt = rtPlacedAt(inst);
-        inst.rtTracedGeneration = gen;
-    }
-    // The nearest bodies' boxes for rtUnitBoxes, by their group.
-    std::unordered_map<uint32_t, size_t> unitBoxOf;
+
+    // A unit, or what it carries, as the lighting's mover: its box, and how
+    // it moved since it was last placed here (a frame ago, or not at all).
+    auto addMover = [&](CharacterInstance& inst, const glm::mat4& modelMat, const RtAabb& box,
+                        float distSq, bool posed, bool liftFloor) {
+        const bool placedLastFrame = inst.rtPlacedGeneration != 0 && inst.rtPlacedGeneration + 1 == gen;
+        const glm::mat4 prevModel = placedLastFrame ? inst.rtPlacedModel : modelMat;
+        inst.rtPlacedModel = modelMat;
+        inst.rtPlacedGeneration = gen;
+        if (!box.valid()) return;
+        RtMover m;
+        const float margin = posed ? kGroupMargin : kStandPoseMargin;
+        m.lo = box.bmin - glm::vec3(margin);
+        m.hi = box.bmax + glm::vec3(margin);
+        if (liftFloor) m.lo.z = std::min(box.bmin.z + kGroupFloorLift, m.hi.z);
+        m.prevFromCur = prevModel * glm::inverse(modelMat);
+        m.moving = !nearlyIdentity(m.prevFromCur) || inst.currentAnimationId != 0;
+        m.seeThrough = inst.opacity * inst.kitAlpha * inst.cameraAlpha < 0.999f;
+        m.rank = distSq;
+        rtMovers_.push_back(m);
+    };
 
     // Who casts: what the shadow pass would draw, in range, nearest first.
     struct Candidate {
@@ -472,27 +468,12 @@ void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
             const glm::vec3 hi = box.bmax + glm::vec3(kGroupMargin);
             lo.z = std::min(box.bmin.z + kGroupFloorLift, hi.z);
             rtScene_->setGroupBounds(rc.group, lo, hi);
-            if (rank < kUnitBoxBodies) {
-                unitBoxOf[rc.group] = rtUnitBoxes_.size();
-                rtUnitBoxes_.emplace_back(lo, hi);
-            }
-        } else if (!body && box.valid()) {
-            auto ub = group != 0 ? unitBoxOf.find(group) : unitBoxOf.end();
-            if (ub != unitBoxOf.end()) {
-                // A staff, a shield, a weapon on the back: part of the unit.
-                // Not its floor, which stays clear of the ground it stands on.
-                auto& [lo, hi] = rtUnitBoxes_[ub->second];
-                lo = glm::vec3(glm::min(glm::vec2(lo), glm::vec2(box.bmin) - kGroupMargin), lo.z);
-                hi = glm::max(hi, box.bmax + glm::vec3(kGroupMargin));
-            } else if (group == 0 && rtUnitBoxes_.size() < RtLighting::kUnitBoxes &&
-                       c.distSq < kPosedRadius * kPosedRadius) {
-                // One of its own that is hung on another - a rider in its seat.
-                glm::vec3 lo = box.bmin - glm::vec3(kGroupMargin);
-                const glm::vec3 hi = box.bmax + glm::vec3(kGroupMargin);
-                lo.z = std::min(box.bmin.z + kGroupFloorLift, hi.z);
-                rtUnitBoxes_.emplace_back(lo, hi);
-            }
         }
+        // Every unit is a mover, and so is what it carries - a staff, a
+        // shield, a weapon on the back - which moves with its bone; their
+        // floors clear of the ground a body stands on, as is a rider's,
+        // one of its own hung on another (group 0).
+        addMover(inst, modelMat, box, c.distSq, posed, body || group == 0);
         ++rtStats_.characters;
     };
     for (size_t i = 0; i < bodies.size(); ++i) place(bodies[i], true, i);

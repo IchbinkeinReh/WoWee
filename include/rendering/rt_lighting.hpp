@@ -9,6 +9,7 @@
 #include <vulkan/vulkan.h>
 
 #include "rendering/rt_gi_probes.hpp"
+#include "rendering/rt_mover.hpp"
 #include "rendering/rt_point_lights.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_utils.hpp"
@@ -113,14 +114,16 @@ public:
         /// no map), the map giving their shadows in this frame's pose.
         glm::vec3 unitMapCenter{0.0f};
         float unitMapRadius = 0.0f;
-        /// The nearest units' boxes this frame (min, max), at most
-        /// kUnitBoxes: what of the depth is a unit, which moves on its own.
-        /// The surfaces do not take a unit's texels of the result for the
-        /// ground it stood on a frame earlier (rtLightAt, rt_lighting.glsli).
-        const std::vector<std::pair<glm::vec3, glm::vec3>>* unitBoxes = nullptr;
+        /// What moves on its own this frame, most important (nearest) first;
+        /// past kMaxMovers are dropped. The surfaces do not take a mover's
+        /// texels of the result for what stood behind it a frame earlier
+        /// (rtLightAt, rt_lighting.glsli).
+        const std::vector<RtMover>* movers = nullptr;
     };
-    /// Must match RT_UNIT_BOXES in rt_common.glsli.
-    static constexpr uint32_t kUnitBoxes = 16;
+    /// Must match RT_MAX_MOVERS in rt_movers.glsli. A G-buffer texel carries
+    /// its mover as 4 x (index + 1) beside its 2x2 sub-pixel in a half float,
+    /// which holds whole numbers exactly to 2048.
+    static constexpr uint32_t kMaxMovers = 500;
 
     /// Record the pass. Outside a render pass, after the opaque geometry.
     /// The depth image must be in DEPTH_STENCIL_ATTACHMENT_OPTIMAL and is
@@ -149,6 +152,7 @@ private:
         Target point;              // the point lights unshadowed (rt_trace.comp)
         AllocatedBuffer ubo{};
         AllocatedBuffer lights{};  // rt_lights::PointLightGPU[kMaxPointLights], mapped
+        AllocatedBuffer movers{};  // RtMoverGPU[kMaxMovers], mapped
         VkDescriptorSet sets[3] = {};  // one per filter pass; set 0 also runs the rest
         VkImage boundDepth = VK_NULL_HANDLE;
         bool wroteImages = false;
@@ -158,6 +162,8 @@ private:
     bool createImages(VkExtent2D traceExtent);
     void destroyImages();
     void writeSlotSets(uint32_t slot);
+    /// The frame's movers into the slot's list, those on screen; how many.
+    uint32_t writeMovers(Slot& s, const FrameInputs& in);
     VkImageView depthViewFor(VkImage image, bool msaa);
 
     VkContext* ctx_ = nullptr;
