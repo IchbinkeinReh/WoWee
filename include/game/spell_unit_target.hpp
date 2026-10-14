@@ -332,6 +332,24 @@ inline constexpr uint8_t kFailedNoTarget = 0xb;
     return playerHasTarget ? kFailedBadTargets : kFailedNoTarget;
 }
 
+/// 0x0071b0c0: whether the player would get down from its mount for it -
+/// not on a taxi (UNIT_FIELD_FLAGS 0x100000), autoDismount on, and
+/// autoDismountFlying as well while flying (MOVEMENTFLAG 0x2000000).
+[[nodiscard]] constexpr bool wouldDismount(uint32_t unitFlags, bool flying, bool autoDismount,
+                                           bool autoDismountFlying) {
+    return (unitFlags & 0x100000u) == 0 && autoDismount && (!flying || autoDismountFlying);
+}
+
+/// 0x00729a70: 0x00729740 asked only of a caster able to fight now - alive,
+/// and not mounted (+0x9c0) or one that would get down for it - at a unit
+/// with health, or flagged dead (UNIT_DYNFLAG 0x20).
+[[nodiscard]] constexpr bool mayAttackNow(bool casterDead, bool casterMounted, bool wouldDismount,
+                                          uint32_t unitHealth, uint32_t unitDynamicFlags, bool mayAttack) {
+    if (casterDead || (casterMounted && !wouldDismount)) return false;
+    if (unitHealth == 0 && (unitDynamicFlags & 0x20u) == 0) return false;
+    return mayAttack;
+}
+
 /// 0x00809610, before 0x0080cce0 picks the spell's units: what the unit cast
 /// at may be taken as - Spell.dbc Targets (+0x40, its low half) with each
 /// effect's ImplicitTargetA - and whether TARGET_UNIT_PET (5) puts the

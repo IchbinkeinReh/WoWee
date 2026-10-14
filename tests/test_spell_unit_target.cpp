@@ -216,6 +216,24 @@ TEST_CASE("the unit cast at is held to the reach as what it may be taken as (0x0
     REQUIRE(reachFailure(29.0f * 29.0f, r) == kFailedOutOfRange);
 }
 
+TEST_CASE("may attack now: a caster able to fight, a unit alive (0x00729a70)", "[unit_target]") {
+    REQUIRE(mayAttackNow(false, false, false, 100, 0, true));
+    REQUIRE_FALSE(mayAttackNow(false, false, false, 100, 0, false));
+    // Dead, or mounted with no dismounting for it.
+    REQUIRE_FALSE(mayAttackNow(true, false, false, 100, 0, true));
+    REQUIRE_FALSE(mayAttackNow(false, true, false, 100, 0, true));
+    REQUIRE(mayAttackNow(false, true, true, 100, 0, true));
+    // A unit with no health counts only while flagged dead.
+    REQUIRE_FALSE(mayAttackNow(false, false, false, 0, 0, true));
+    REQUIRE(mayAttackNow(false, false, false, 0, 0x20, true));
+    // 0x0071b0c0: autoDismount, never on a taxi, autoDismountFlying in the air.
+    REQUIRE(wouldDismount(0, false, true, false));
+    REQUIRE_FALSE(wouldDismount(0, false, false, true));
+    REQUIRE_FALSE(wouldDismount(0x100000, false, true, true));
+    REQUIRE_FALSE(wouldDismount(0, true, true, false));
+    REQUIRE(wouldDismount(0, true, true, true));
+}
+
 TEST_CASE("no unit: the cursor, or the refusals 0x32, 0xc and 0xb (0x0080cce0)", "[unit_target]") {
     // A friendly spell waits for a click.
     REQUIRE(noUnitFailure(0, 0, kUnitAlly, false, false, true) == 0);

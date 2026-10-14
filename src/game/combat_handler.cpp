@@ -9,6 +9,7 @@
 #include "game/packet_parsers.hpp"
 #include "game/entity.hpp"
 #include "game/update_field_table.hpp"
+#include "game/spell_unit_target.hpp"
 #include "game/opcode_table.hpp"
 #include "rendering/renderer.hpp"
 #include "audio/audio_coordinator.hpp"
@@ -1551,23 +1552,31 @@ void CombatHandler::setTarget(uint64_t guid) {
     // Looted-out, unskinnable corpses cannot be selected.
     if (!isSelectableUnit(guid)) return;
 
-    // Save previous target - once as "the last one whatever it was", which is
-    // what TargetLastTarget flips back to, and once under its kind, which is
-    // what makes TargetLastEnemy and TargetLastFriend worth having: a healer's
-    // last friendly target survives half a fight's worth of tab-targeting.
+    // Save previous target as "the last one whatever it was", which is what
+    // TargetLastTarget flips back to.
     if (owner_.getTargetGuid() != 0) {
-        const uint64_t previous = owner_.getTargetGuid();
-        owner_.lastTargetGuidRef() = previous;
-        auto entity = owner_.getEntityManager().getEntity(previous);
+        owner_.lastTargetGuidRef() = owner_.getTargetGuid();
+    }
+    // 0x00524bf0: the unit now taken, one in view, is remembered as the last
+    // enemy where the player may attack it now (0x00729a70), else as the last
+    // friend where it may help it (0x007293d0) - the target chosen, not the
+    // one left, so TargetLastEnemy and TargetLastFriend (0x00525df0,
+    // 0x00525e50) go back to the last of each the player picked.
+    const uint64_t me = owner_.getPlayerGuid();
+    auto player = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(me));
+    if (guid != 0 && player) {
+        auto entity = owner_.getEntityManager().getEntity(guid);
         if (auto* unit = dynamic_cast<Unit*>(entity.get())) {
-            // 0x00524bf0: the last enemy one the player may attack
-            // (0x00729a70), else the last friend one the player may help
-            // (0x007293d0).
-            const uint64_t me = owner_.getPlayerGuid();
-            if (unit->getHealth() > 0 && owner_.unitMayAttack(me, previous)) {
-                lastEnemyTargetGuid_ = previous;
-            } else if (owner_.unitMayAssist(me, previous)) {
-                lastFriendTargetGuid_ = previous;
+            const bool wouldDismount = unit_target::wouldDismount(
+                player->getUnitFlags(), owner_.isPlayerFlying(),
+                addons::storedCVarValue("autoDismount", "1") != "0",
+                addons::storedCVarValue("autoDismountFlying", "0") != "0");
+            if (unit_target::mayAttackNow(owner_.isPlayerDead(), owner_.isMounted(), wouldDismount,
+                                          unit->getHealth(), unit->getDynamicFlags(),
+                                          owner_.unitMayAttack(me, guid))) {
+                lastEnemyTargetGuid_ = guid;
+            } else if (owner_.unitMayAssist(me, guid)) {
+                lastFriendTargetGuid_ = guid;
             }
         }
     }
@@ -1807,19 +1816,21 @@ void CombatHandler::targetNearestRaidMember(bool reverse) {
     });
 }
 
+bool CombatHandler::rememberedTargetReachable(uint64_t guid) const {
+    // 0x00525df0 / 0x00525e50: a unit in view (0x004d4db0), else the player,
+    // its pet or one of its group (0x0052d310, 0x00573200). Silent otherwise.
+    if (guid == 0) return false;
+    if (auto e = owner_.getEntityManager().getEntity(guid); e && e->isUnit()) return true;
+    return guid == owner_.getPlayerGuid() || guid == owner_.getPetGuid() || isGroupMemberGuid(guid);
+}
+
 void CombatHandler::targetLastEnemy() {
-    // Silent with none, as TargetLastEnemy (0x00525df0) is.
-    if (lastEnemyTargetGuid_ == 0) {
-        return;
-    }
+    if (!rememberedTargetReachable(lastEnemyTargetGuid_)) return;
     targetUnit(lastEnemyTargetGuid_);  // 0x00525df0 -> 0x00524bf0
 }
 
 void CombatHandler::targetLastFriend() {
-    // Silent with none, as TargetLastFriend (0x00525e50) is.
-    if (lastFriendTargetGuid_ == 0) {
-        return;
-    }
+    if (!rememberedTargetReachable(lastFriendTargetGuid_)) return;
     targetUnit(lastFriendTargetGuid_);  // 0x00525e50 -> 0x00524bf0
 }
 

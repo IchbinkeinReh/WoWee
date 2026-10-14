@@ -160,10 +160,12 @@ private:
     uint64_t lastTabTargetMs_ = 0;
 
     // One remembered target of each kind, for targetLastEnemy/Friend. Written
-    // by setTarget as the old target is let go, so they are the target before
-    // this one rather than this one.
+    // by setTarget from the unit taken (0x00524bf0, DAT_00bd07c0/07c8), so
+    // they are the last enemy and friend picked - the current one among them.
     uint64_t lastEnemyTargetGuid_ = 0;
     uint64_t lastFriendTargetGuid_ = 0;
+    /// Whether a remembered target can be taken again (0x00525df0).
+    [[nodiscard]] bool rememberedTargetReachable(uint64_t guid) const;
 
     /// The walk both cycles do: everything alive within range that `wanted`
     /// accepts, nearest first, then step to the next one past the current
