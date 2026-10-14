@@ -201,9 +201,9 @@ void TransportAnimator::evaluateAndApply(
         transport.rotation =
             glm::angleAxis(transport.spawnYaw, glm::vec3(0.0f, 0.0f, 1.0f));
     } else if (transport.hasServerYaw && !transport.useClientAnimation) {
-        float effectiveYaw = transport.serverYaw +
-            (transport.serverYawFlipped180 ? glm::pi<float>() : 0.0f);
-        transport.rotation = glm::angleAxis(effectiveYaw, glm::vec3(0.0f, 0.0f, 1.0f));
+        // Drawn by the facing the server gave it, which its passengers'
+        // facings are kept to (0x00712ee0 draws a game object by its rotation).
+        transport.rotation = glm::angleAxis(transport.facing, glm::vec3(0.0f, 0.0f, 1.0f));
     } else if (xyClamped) {
         // The tangent below comes from a separate, unclamped evaluation of the same
         // spline - it doesn't know the position is currently pinned at the keyframe

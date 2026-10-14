@@ -140,8 +140,9 @@ void TransportClockSync::processServerUpdate(
     transport.position = position;
     transport.serverYaw = orientation;
     transport.hasServerYaw = true;
-    float effectiveYaw = transport.serverYaw + (transport.serverYawFlipped180 ? glm::pi<float>() : 0.0f);
-    transport.rotation = glm::angleAxis(effectiveYaw, glm::vec3(0.0f, 0.0f, 1.0f));
+    // Drawn by its facing, as the client draws a game object by its rotation
+    // (0x00712ee0), so the hull and its passengers agree.
+    transport.rotation = glm::angleAxis(transport.facing, glm::vec3(0.0f, 0.0f, 1.0f));
 
     if (hadPrevUpdate) {
         const double dt = elapsedTime - prevUpdateTime;
@@ -151,8 +152,6 @@ void TransportClockSync::processServerUpdate(
             constexpr float kMinAuthoritativeSpeed = 0.15f;
             constexpr float kMaxSpeed = 60.0f;
             if (speedSq >= kMinAuthoritativeSpeed * kMinAuthoritativeSpeed) {
-                updateYawAlignment(transport, v);
-
                 if (speedSq > kMaxSpeed * kMaxSpeed) {
                     v *= (kMaxSpeed * glm::inversesqrt(speedSq));
                 }
@@ -160,10 +159,6 @@ void TransportClockSync::processServerUpdate(
                 transport.serverLinearVelocity = v;
                 transport.serverAngularVelocity = 0.0f;
                 transport.hasServerVelocity = true;
-
-                // Re-apply potentially corrected yaw this frame after alignment check.
-                effectiveYaw = transport.serverYaw + (transport.serverYawFlipped180 ? glm::pi<float>() : 0.0f);
-                transport.rotation = glm::angleAxis(effectiveYaw, glm::vec3(0.0f, 0.0f, 1.0f));
             }
         }
     } else {
@@ -203,56 +198,6 @@ void TransportClockSync::processServerUpdate(
         } else if (!transport.allowBootstrapVelocity) {
             LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec,
                      " DBC bootstrap velocity disabled for this transport");
-        }
-    }
-}
-
-void TransportClockSync::updateYawAlignment(
-    ActiveTransport& transport,
-    const glm::vec3& velocity) const
-{
-    // Auto-detect 180-degree yaw mismatch by comparing heading to movement direction.
-    // Some transports appear to report yaw opposite their actual travel direction.
-    //
-    // This is the server-driven analogue of TransportManager::transportModelBowOffset:
-    // the same per-model "bow vs. direction of travel" offset, but measured live from the
-    // authoritative position stream instead of read from a seed table. Position-driven
-    // transports can learn it here; client-animated TaxiPath ships never stream motion, so
-    // they read the seed table instead. Both feed the one rule: facing = travel + offset.
-    glm::vec2 horizontalV(velocity.x, velocity.y);
-    float hLenSq = glm::dot(horizontalV, horizontalV);
-    if (hLenSq > 0.04f) {
-        horizontalV *= glm::inversesqrt(hLenSq);
-        // The velocity is canonical, so the heading has to be too - and
-        // serverYaw already is: updateServerTransport hands this the entity's
-        // canonical orientation, not the wire's. Canonical yaw is
-        // atan2(-dy, dx), so the direction is (cos c, -sin c).
-        //
-        // It was taken as a server yaw and turned a further quarter turn, so
-        // the dot product measured travel across the heading rather than
-        // along it, and a transport moving straight ahead scored 0 while one
-        // moving sideways scored as aligned or reversed.
-        const float canonicalYaw = transport.serverYaw;
-        glm::vec2 heading(std::cos(canonicalYaw), -std::sin(canonicalYaw));
-        float alignDot = glm::dot(heading, horizontalV);
-
-        if (alignDot < -0.35f) {
-            transport.serverYawAlignmentScore = std::max(transport.serverYawAlignmentScore - 1, -12);
-        } else if (alignDot > 0.35f) {
-            transport.serverYawAlignmentScore = std::min(transport.serverYawAlignmentScore + 1, 12);
-        }
-
-        if (!transport.serverYawFlipped180 && transport.serverYawAlignmentScore <= -4) {
-            transport.serverYawFlipped180 = true;
-            LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec,
-                     " enabled 180-degree yaw correction (alignScore=",
-                     transport.serverYawAlignmentScore, ")");
-        } else if (transport.serverYawFlipped180 &&
-                   transport.serverYawAlignmentScore >= 4) {
-            transport.serverYawFlipped180 = false;
-            LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec,
-                     " disabled 180-degree yaw correction (alignScore=",
-                     transport.serverYawAlignmentScore, ")");
         }
     }
 }

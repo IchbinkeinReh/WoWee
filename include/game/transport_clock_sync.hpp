@@ -25,8 +25,8 @@ public:
         float deltaTime,
         uint32_t& outPathTimeMs) const;
 
-    /// Process a server position update: update clock offset, detect yaw flips,
-    /// bootstrap velocity, and switch between client/server driven modes.
+    /// Process a server position update: update clock offset, bootstrap
+    /// velocity, and switch between client/server driven modes.
     void processServerUpdate(
         ActiveTransport& transport,
         const PathEntry* pathEntry,
@@ -35,10 +35,6 @@ public:
         double elapsedTime);
 
 private:
-    /// Detect and apply 180-degree yaw correction based on movement vs heading alignment.
-    void updateYawAlignment(
-        ActiveTransport& transport,
-        const glm::vec3& velocity) const;
 
     /// Bootstrap velocity from nearest DBC path segment on first authoritative sample.
     void bootstrapVelocityFromPath(

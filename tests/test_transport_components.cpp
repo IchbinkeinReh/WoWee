@@ -47,8 +47,6 @@ static ActiveTransport makeTransport(uint64_t guid = 1, uint32_t pathId = 100) {
     t.hasServerYaw = false;
     t.dockYaw = 0.0f;
     t.hasDockYaw = false;
-    t.serverYawFlipped180 = false;
-    t.serverYawAlignmentScore = 0;
     t.lastServerUpdate = 0.0;
     t.serverUpdateCount = 0;
     t.serverLinearVelocity = glm::vec3(0);
@@ -147,75 +145,27 @@ static constexpr float kCanonicalYawAlongCanonicalX = 0.0f;
 static constexpr float kHullYawAlongCanonicalX =
     kServerYawAlongCanonicalX + glm::pi<float>();
 
-TEST_CASE("ClockSync: yaw flip detection after repeated misaligned updates", "[transport_clock_sync]") {
+TEST_CASE("ClockSync: a server-driven hull is drawn by its facing, whichever way it moves",
+          "[transport_clock_sync]") {
+    // The client draws a game object by its rotation (0x00712ee0) and has no
+    // correction for one that moves against it. A hull flipped on that was
+    // drawn half a turn from the frame its passengers' facings are kept in.
     TransportClockSync sync;
     auto path = makeCirclePath();
     auto t = makeTransport();
     t.useClientAnimation = false;
-
-    // Travelling along canonical +X while reporting the yaw for -X.
+    // Its facing, as updateServerTransport sets it: the wire's, along
+    // canonical -X while it travels +X.
+    t.facing = kServerYawAlongCanonicalX - glm::pi<float>();
     const float reversedYaw = kCanonicalYawAlongCanonicalX - glm::pi<float>();
     glm::vec3 pos(100.0f, 200.0f, 0.0f);
     sync.processServerUpdate(t, &path, pos, reversedYaw, 1.0);
-
     for (int i = 1; i <= 8; i++) {
         pos.x += 5.0f;
         sync.processServerUpdate(t, &path, pos, reversedYaw, 1.0 + i * 0.5);
     }
-
-    REQUIRE(t.serverYawFlipped180);
-}
-
-TEST_CASE("ClockSync: a transport facing its direction of travel is never flipped",
-          "[transport_clock_sync]") {
-    TransportClockSync sync;
-    auto path = makeCirclePath();
-    auto t = makeTransport();
-    t.useClientAnimation = false;
-
-    // The check used to compare the velocity against (cos s, sin s), the two
-    // components of the heading swapped. That is a reflection, so a transport
-    // facing exactly along its travel scored sin(2s) instead of 1 - negative for
-    // half of all headings, which flipped correct transports through 180 degrees
-    // purely on which way their route ran. Sweep the headings to pin that down.
-    for (int step = 0; step < 16; ++step) {
-        const float canonicalHeading = static_cast<float>(step) * glm::pi<float>() / 8.0f;
-        const glm::vec3 dir(std::cos(canonicalHeading), -std::sin(canonicalHeading), 0.0f);
-        // What updateServerTransport passes: the canonical yaw, as it is.
-        const float serverYaw = canonicalHeading;
-
-        auto moving = makeTransport();
-        moving.useClientAnimation = false;
-        glm::vec3 p(100.0f, 200.0f, 0.0f);
-        sync.processServerUpdate(moving, &path, p, serverYaw, 1.0);
-        for (int i = 1; i <= 10; i++) {
-            p += dir * 5.0f;
-            sync.processServerUpdate(moving, &path, p, serverYaw, 1.0 + i * 0.5);
-        }
-
-        INFO("canonical heading step " << step);
-        REQUIRE_FALSE(moving.serverYawFlipped180);
-        REQUIRE(moving.serverYawAlignmentScore > 0);
-    }
-}
-
-TEST_CASE("ClockSync: a transport sliding sideways is neither aligned nor reversed",
-          "[transport_clock_sync]") {
-    // The yaw it is handed is canonical. Read as a server yaw it was a quarter
-    // turn out, so travel across the heading scored as along it: this one,
-    // facing canonical +X and drifting along -Y, was flipped.
-    TransportClockSync sync;
-    auto path = makeCirclePath();
-    auto t = makeTransport();
-    t.useClientAnimation = false;
-    glm::vec3 pos(100.0f, 200.0f, 0.0f);
-    sync.processServerUpdate(t, &path, pos, kCanonicalYawAlongCanonicalX, 1.0);
-    for (int i = 1; i <= 8; i++) {
-        pos.y -= 5.0f;
-        sync.processServerUpdate(t, &path, pos, kCanonicalYawAlongCanonicalX, 1.0 + i * 0.5);
-    }
-    REQUIRE_FALSE(t.serverYawFlipped180);
-    REQUIRE(t.serverYawAlignmentScore == 0);
+    const glm::quat drawn = glm::angleAxis(t.facing, glm::vec3(0.0f, 0.0f, 1.0f));
+    REQUIRE(std::abs(glm::dot(t.rotation, drawn)) == Catch::Approx(1.0f).margin(1e-5));
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -244,11 +194,11 @@ TEST_CASE("Animator: uses server yaw when the server drives position", "[transpo
     auto t = makeTransport();
     t.useClientAnimation = false;   // server-driven: its yaw is current
     t.hasServerYaw = true;
-    t.serverYaw = 1.0f;
-    t.serverYawFlipped180 = false;
+    t.serverYaw = 1.0f - glm::half_pi<float>();
+    t.facing = 1.0f;                // the wire's, as updateServerTransport keeps it
 
     animator.evaluateAndApply(t, path, 500);
-    // Rotation should be based on serverYaw=1.0, not spline tangent
+    // Rotation should be its facing, 1.0, not the spline tangent
     float expectedYaw = 1.0f;
     glm::quat expected = glm::angleAxis(expectedYaw, glm::vec3(0.0f, 0.0f, 1.0f));
     REQUIRE(t.rotation.w == Catch::Approx(expected.w).margin(0.01f));

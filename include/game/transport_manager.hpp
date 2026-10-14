@@ -69,13 +69,12 @@ struct ActiveTransport {
     // turning - unless it has TransportRotation.dbc rows, which turn it
     // (TransportManager::applyPathRotation). A ship on its TaxiPath route is turned along it, facing back
     // down the way it goes (0x007134a0 -> 0x007f82b0). rotation above is the
-    // hull as drawn, which each kind keeps in its own convention.
+    // hull as drawn, by this facing (0x00712ee0) - a tram's along its track
+    // excepted.
     float facing = 0.0f;
     // GAMEOBJECT_PARENTROTATION, on the wire's axes: what a transport turning
     // by TransportRotation.dbc is turned by besides (0x0070dc10).
     glm::quat parentRotation{1.0f, 0.0f, 0.0f, 0.0f};
-    bool serverYawFlipped180;       // Auto-correction when server yaw is consistently opposite movement
-    int serverYawAlignmentScore;    // Hysteresis score for yaw flip detection
 
     double lastServerUpdate;         // Time of last server movement update
     int serverUpdateCount;          // Number of server updates received
@@ -184,8 +183,8 @@ public:
     // Single source of truth for a transport hull's fixed orientation offset:
     // its rendered facing is (direction of travel) + this constant. Every
     // orientation path funnels through here rather than re-listing ships.
-    // Server-position-driven transports (trams, zeppelins) never reach it - they
-    // measure the same offset live from heading-vs-velocity in updateYawAlignment().
+    // Server-position-driven transports (trams, zeppelins) never reach it -
+    // they are drawn by the facing the server gives them.
     //
     // Measured from the art rather than guessed: every transport hull in the WoW
     // data is authored with its bow at model-space -X, so the offset is PI for

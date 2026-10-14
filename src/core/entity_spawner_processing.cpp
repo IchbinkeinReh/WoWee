@@ -1500,7 +1500,9 @@ void EntitySpawner::processPendingTransportDoodads() {
                 glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(it->x, it->y, it->z));
                 glm::mat4 wmoTransform(1.0f);
                 wmoTransform = glm::translate(wmoTransform, renderPos);
-                wmoTransform = glm::rotate(wmoTransform, it->orientation, glm::vec3(0, 0, 1));
+                // At its facing, as TransportManager draws the hull.
+                wmoTransform = glm::rotate(wmoTransform, core::coords::canonicalToServerYaw(it->orientation),
+                                           glm::vec3(0, 0, 1));
                 wmoRenderer->setInstanceTransform(it->instanceId, wmoTransform);
             }
             it = pendingTransportDoodadBatches_.erase(it);

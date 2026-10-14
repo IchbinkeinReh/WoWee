@@ -210,15 +210,15 @@ void TransportManager::registerTransport(uint64_t guid,
         }
     }
 
-    // The authored yaw, carrying the same offset the spawner applies for this
-    // model kind: an M2's default facing is +renderX and every M2 game object
-    // is turned 90° for it (renderYawM2go), while a WMO is placed unturned.
-    // The transform below is rebuilt from scratch every frame, so a rotation
-    // that skips the offset puts the model at right angles to where it was
-    // placed. Only route-less transports read this - a tangent-derived heading
-    // carries its own convention and is left alone.
-    transport.spawnYaw = spawnOrientation +
-        (isM2 ? glm::half_pi<float>() : 0.0f);
+    // The authored yaw as the hull is drawn: a turn to the server's facing,
+    // as the spawner draws any game object (0x00712ee0) - a model's default
+    // faces +renderX, M2 or WMO. A WMO hull was placed at the canonical yaw,
+    // a quarter turn behind its passengers' frame. The transform below is
+    // rebuilt from scratch every frame, so a rotation that skips this puts the
+    // model at right angles to where it was placed. Only route-less
+    // transports read this - a tangent-derived heading carries its own
+    // convention and is left alone.
+    transport.spawnYaw = core::coords::canonicalToServerYaw(spawnOrientation);
     // Identity discarded the authored placement, so every transport started
     // life facing the same way whatever the server said.
     transport.rotation = glm::angleAxis(transport.spawnYaw, glm::vec3(0.0f, 0.0f, 1.0f));
@@ -245,8 +245,6 @@ void TransportManager::registerTransport(uint64_t guid,
     transport.hasServerYaw = false;
     transport.dockYaw = 0.0f;
     transport.hasDockYaw = false;
-    transport.serverYawFlipped180 = false;
-    transport.serverYawAlignmentScore = 0;
     transport.lastServerUpdate = 0.0f;
     transport.serverUpdateCount = 0;
     transport.serverLinearVelocity = glm::vec3(0.0f);
@@ -807,7 +805,7 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
         transport->lastServerUpdate = elapsedTime_;
         transport->basePosition = position;
         transport->position = position;
-        transport->rotation = glm::angleAxis(orientation, glm::vec3(0.0f, 0.0f, 1.0f));
+        transport->rotation = glm::angleAxis(transport->facing, glm::vec3(0.0f, 0.0f, 1.0f));
         updateTransformMatrices(*transport);
         pushTransform(*transport);
         return;
