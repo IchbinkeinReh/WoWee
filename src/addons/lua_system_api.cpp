@@ -14,6 +14,7 @@
 #include <vector>
 #include "game/chat_handler.hpp"
 #include "game/group_defines.hpp"
+#include "game/battleground_flag.hpp"
 #include "game/minimap_tracking.hpp"
 #include "core/open_url.hpp"
 #include "core/version.hpp"
@@ -3098,25 +3099,38 @@ static int lua_GetBattlefieldPosition(lua_State* L) {
 
 /// GetBattlefieldFlagPosition(index) → where a carried flag is, and which flag.
 ///
-/// The third value names a texture under Interface\\WorldStateFrame, so a
-/// wrong one is not a missing icon but the enemy's flag drawn over your own.
-/// The server writes the alliance carrier and then the horde one, skipping
-/// whichever is not held - so with both carried the order says which is which,
-/// and with one carried it does not. Rather than guess, that case answers zero
-/// and the frame hides: no flag on the map is a smaller lie than the wrong one.
-/// The client keeps the carriers last first (0x0054b3f0), so the first index
-/// is the horde one.
+/// The third value names a texture under Interface\\WorldStateFrame, picked
+/// as 0x0054d010 picks it (game::bg_flag): by the carrier's own team where it
+/// is in sight, else by whether it is in the player's raid - so one carrier
+/// alone is drawn with its flag as two are. The client keeps the carriers
+/// last first (0x0054b3f0), and an index past them has no texture.
 static int lua_GetBattlefieldFlagPosition(lua_State* L) {
     auto* gh = getGameHandler(L);
     auto* svc = getLuaServices(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     float u = 0.0f, v = 0.0f;
     const auto* p = bgEntryAt(gh, 1, index);
-    if (p && bgCount(gh, 1) == 2 && svc && svc->mapUVForWorldPos &&
+    const char* flag = nullptr;
+    if (p) {
+        std::optional<uint8_t> raceInSight;
+        if (auto carrier = gh->getEntityManager().getEntity(p->guid);
+            carrier && carrier->getType() == game::ObjectType::PLAYER) {
+            raceInSight = static_cast<uint8_t>(
+                carrier->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) & 0xFF);
+        }
+        bool inRaid = false;
+        const auto& group = gh->getPartyData();
+        if (game::groupIsRaid(group.groupType)) {
+            for (const auto& m : group.members) inRaid = inRaid || m.guid == p->guid;
+        }
+        flag = game::bg_flag::texture(
+            game::bg_flag::carrierTeam(raceInSight, gh->getPlayerRace(), inRaid), gh->getCurrentMapId());
+    }
+    if (p && flag && svc && svc->mapUVForWorldPos &&
         svc->mapUVForWorldPos(p->wowX, p->wowY, 0.0f, u, v)) {
         lua_pushnumber(L, u);
         lua_pushnumber(L, v);
-        lua_pushstring(L, index == 1 ? "HordeFlag" : "AllianceFlag");
+        lua_pushstring(L, flag);
         return 3;
     }
     lua_pushnumber(L, 0.0);

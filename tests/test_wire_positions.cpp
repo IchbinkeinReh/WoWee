@@ -9,9 +9,11 @@
 #include <catch_amalgamated.hpp>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "core/application.hpp"
+#include "game/battleground_flag.hpp"
 #include "game/transport_local.hpp"
 #include "game/world_packets.hpp"
 
@@ -73,6 +75,27 @@ TEST_CASE("a battleground's positions are kept canonical, list by list", "[wire_
     CHECK(positions[0].canonicalX == Catch::Approx(1544.8f));
     CHECK(positions[0].canonicalY == Catch::Approx(1029.3f));
     CHECK(p.getRemainingSize() == 0);
+}
+
+TEST_CASE("one flag carrier is drawn with the flag its team holds", "[wire_positions]") {
+    // The packet above: one carrier, guid 7. The client draws it as it draws
+    // two (0x0054d010): by its own team where it is in sight - a Horde one
+    // (an orc) holds the Alliance flag - else by the raid it is or is not in.
+    namespace bf = wowee::game::bg_flag;
+    constexpr uint32_t kWarsong = 489;
+    CHECK(std::string(bf::texture(bf::carrierTeam(uint8_t{2}, 1, false), kWarsong)) == "AllianceFlag");
+    CHECK(std::string(bf::texture(bf::carrierTeam(uint8_t{1}, 2, false), kWarsong)) == "HordeFlag");
+    // Out of sight: a human's raid mate holds the Horde flag, anyone else
+    // the Alliance one.
+    CHECK(std::string(bf::texture(bf::carrierTeam(std::nullopt, 1, true), kWarsong)) == "HordeFlag");
+    CHECK(std::string(bf::texture(bf::carrierTeam(std::nullopt, 1, false), kWarsong)) == "AllianceFlag");
+    // Eye of the Storm names them the other way round.
+    CHECK(std::string(bf::texture(bf::carrierTeam(uint8_t{2}, 1, false), 566)) == "HordeFlag");
+    // ChrRaces: the goblin's faction template is an Alliance one.
+    CHECK(bf::raceTeam(9) == 1);
+    CHECK(bf::raceTeam(10) == 0);
+    CHECK(bf::raceTeam(0) == -1);
+    CHECK(bf::texture(-1, kWarsong) == nullptr);
 }
 
 TEST_CASE("a battleground's flag carriers are kept last first", "[wire_positions]") {
