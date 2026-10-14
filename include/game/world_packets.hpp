@@ -313,7 +313,8 @@ public:
 struct AccountDataTimesData {
     uint32_t serverTime;                // Current server time (Unix timestamp)
     uint8_t unknown;                    // Unknown (always 1?)
-    uint32_t accountDataTimes[8];       // Timestamps for 8 account data slots
+    uint32_t mask = 0;                  // Which of the 8 slots carry a time
+    uint32_t accountDataTimes[8];       // Timestamps for 8 account data slots, 0 where not sent
 
     [[nodiscard]] bool isValid() const { return true; }
 };

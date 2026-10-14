@@ -2305,7 +2305,11 @@ void Renderer::updatePlayerArea() {
     playerLinkedArea_ = 0;
     playerLinkIndoors_ = false;
     playerPlace_ = {};
-    if (!gh || !gh->isInWorld() || !terrainManager || !zoneManager) return;
+    // Out of the world the texts go back to nothing, as leaving it clears the
+    // client's (0x00529160, from 0x00406510) - so the first area after
+    // entering again is a new area, as it is on a new map.
+    if (!gh || !gh->isInWorld()) { zoneTextsKnown_ = false; return; }
+    if (!terrainManager || !zoneManager) return;
     if (gh->getCurrentMapId() != zoneTextsMapId_) {
         zoneTextsMapId_ = gh->getCurrentMapId();
         zoneTextsKnown_ = false;

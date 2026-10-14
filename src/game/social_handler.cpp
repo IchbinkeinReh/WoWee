@@ -2939,9 +2939,18 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
         // panel reads back through its own API. Unhandled, a guild with an
         // active bank filled guild chat with "Guild event 17: 000000000051451B".
         case GuildEvent::BANK_MONEY_SET:
-        case GuildEvent::BANK_TAB_AND_MONEY:
             if (data.numStrings >= 1)
                 owner_.setGuildBankMoney(guildEventMoney(data.strings[0]));
+            break;
+        case GuildEvent::BANK_TAB_AND_MONEY:
+            // 0x006d92d0 case 0x12 reads nothing out of this one: it asks
+            // again for the tab the open vault is showing (0x005a5800, which
+            // does nothing with no banker) and sends
+            // MSG_GUILD_BANK_MONEY_WITHDRAWN, whose answer this client has no
+            // reader for yet. This used to take a balance out of its first
+            // string and raise GUILDBANK_UPDATE_TABS, neither of which the
+            // client does.
+            owner_.queryGuildBankTab(owner_.getGuildBankActiveTab());
             break;
         case GuildEvent::BANK_BAG_SLOTS_CHANGED:
         case GuildEvent::BANK_TAB_PURCHASED:
@@ -3016,9 +3025,6 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
                 break;
             case GuildEvent::BANK_TAB_PURCHASED:
             case GuildEvent::BANK_TAB_UPDATED:
-            case GuildEvent::BANK_TAB_AND_MONEY:
-                // The money half of 18 went through setGuildBankMoney above,
-                // which fires GUILDBANK_UPDATE_MONEY when the figure moved.
                 owner_.addonEventCallbackRef()("GUILDBANK_UPDATE_TABS", {});
                 break;
             case GuildEvent::BANK_TEXT_CHANGED:

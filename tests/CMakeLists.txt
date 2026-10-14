@@ -2663,6 +2663,10 @@ wowee_add_test(test_gather_spells
 wowee_add_packet_test(test_lfg_update
     SOURCES ${CMAKE_SOURCE_DIR}/src/game/lfg_update.cpp)
 
+# ── test_account_data_times ──────────────────────────────────
+# SMSG_ACCOUNT_DATA_TIMES, against the fixed layout wow.exe reads.
+wowee_add_packet_test(test_account_data_times)
+
 # ── test_group_list_parse ────────────────────────────────────
 # SMSG_GROUP_LIST built as the server writes it and read back, in both its
 # shapes. The dungeon finder shape was read a byte long - a seventh field that

@@ -955,8 +955,10 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         // FrameXML arranges itself from this event, so the interface diagnostics
         // wait for it rather than describing a layout nobody ever sees.
         ui::frameXmlNoteWorldEntry();
-        // Also fire ZONE_CHANGED_NEW_AREA and UPDATE_WORLD_STATES so map/BG addons refresh
-        fireAddonEvent("ZONE_CHANGED_NEW_AREA", {});
+        // UPDATE_WORLD_STATES so map and battleground addons refresh. Not
+        // ZONE_CHANGED_NEW_AREA: the client raises that from the player's
+        // area (0x005204c0), which Renderer::updatePlayerArea follows and
+        // which says it for the first area on a map.
         fireAddonEvent("UPDATE_WORLD_STATES", {});
         // Entering a battleground, told apart by the map itself rather than by
         // anything the server says about it - BattlemasterList.dbc names the

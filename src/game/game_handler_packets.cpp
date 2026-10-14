@@ -1702,16 +1702,12 @@ void GameHandler::registerCoreOpcodes() {
         const uint32_t mapBefore = worldStateMapId_;
         const uint32_t zoneBefore = worldStateZoneId_;
         worldStateMapId_ = packet.readUInt32();
-        {
-            uint32_t newZoneId = packet.readUInt32();
-            if (newZoneId != worldStateZoneId_ && newZoneId != 0) {
-                worldStateZoneId_ = newZoneId;
-                    fireAddonEvent("ZONE_CHANGED_NEW_AREA", {});
-                    fireAddonEvent("ZONE_CHANGED", {});
-            } else {
-                worldStateZoneId_ = newZoneId;
-            }
-        }
+        // The zone the states are for, and nothing more: 0x00526530 raises no
+        // zone event. ZONE_CHANGED, _INDOORS and _NEW_AREA come from the
+        // player's own area as it moves (0x005204c0), which
+        // Renderer::updatePlayerArea follows; firing them here as well
+        // announced every zone twice and every world-state refresh once.
+        worldStateZoneId_ = packet.readUInt32();
         // TBC added areaId in 2.1.0; WotLK kept it. Classic/Turtle use the shorter format.
         size_t remaining = packet.getRemainingSize();
         bool hasAreaId = isActiveExpansion("tbc") || isActiveExpansion("wotlk");

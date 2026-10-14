@@ -744,47 +744,31 @@ bool LoginVerifyWorldParser::parse(network::Packet& packet, LoginVerifyWorldData
 }
 
 bool AccountDataTimesParser::parse(network::Packet& packet, AccountDataTimesData& data) {
-    // Common layouts seen in the wild:
-    // - WotLK-like: uint32 serverTime, uint8 unk, uint32 mask, uint32[up to 8] slotTimes
-    // - Older/variant: uint32 serverTime, uint8 unk, uint32[up to 8] slotTimes
-    // Some servers only send a subset of slots.
-    if (packet.getSize() < 5) {
-        LOG_ERROR("SMSG_ACCOUNT_DATA_TIMES packet too small: ", packet.getSize(),
-                  " bytes (need at least 5)");
+    // The layout 0x006b94c0 reads: uint32 server time, a byte, uint32 mask,
+    // then one uint32 time for each bit set in the mask, in slot order. The
+    // times are only taken when exactly that many are left - the client
+    // checks the remainder against the mask's count and otherwise reads none.
+    // This used to guess whether a mask was there at all from the packet's
+    // length.
+    for (uint32_t& t : data.accountDataTimes) t = 0;
+    data.mask = 0;
+    if (!packet.hasRemaining(4 + 1 + 4)) {
+        LOG_ERROR("SMSG_ACCOUNT_DATA_TIMES packet too small: ", packet.getSize(), " bytes");
         return false;
-    }
-
-    for (uint32_t& t : data.accountDataTimes) {
-        t = 0;
     }
     data.serverTime = packet.readUInt32();
     data.unknown = packet.readUInt8();
-
-    size_t remaining = packet.getRemainingSize();
-    uint32_t mask = 0xFF;
-    if (remaining >= 4 && ((remaining - 4) % 4) == 0) {
-        // Treat first dword as slot mask when payload shape matches.
-        mask = packet.readUInt32();
+    data.mask = packet.readUInt32();
+    size_t set = 0;
+    for (int i = 0; i < 8; ++i)
+        if (data.mask & (1u << i)) ++set;
+    if (packet.getRemainingSize() == set * 4) {
+        for (int i = 0; i < 8; ++i)
+            if (data.mask & (1u << i)) data.accountDataTimes[i] = packet.readUInt32();
     }
-    remaining = packet.getRemainingSize();
-    size_t slotWords = std::min<size_t>(8, remaining / 4);
-
-    LOG_DEBUG("Parsed SMSG_ACCOUNT_DATA_TIMES:");
-    LOG_DEBUG("  Server time: ", data.serverTime);
-    LOG_DEBUG("  Unknown: ", static_cast<int>(data.unknown));
-    LOG_DEBUG("  Mask: 0x", std::hex, mask, std::dec, " slotsInPacket=", slotWords);
-
-    for (size_t i = 0; i < slotWords; ++i) {
-        data.accountDataTimes[i] = packet.readUInt32();
-        if (data.accountDataTimes[i] != 0 || ((mask & (1u << i)) != 0)) {
-            LOG_DEBUG("  Data slot ", i, ": ", data.accountDataTimes[i]);
-        }
-    }
-    if (packet.getReadPos() != packet.getSize()) {
-        LOG_DEBUG("  AccountDataTimes trailing bytes: ", packet.getRemainingSize());
-        packet.skipAll();
-    }
-
+    packet.skipAll();
+    LOG_DEBUG("Parsed SMSG_ACCOUNT_DATA_TIMES: server time ", data.serverTime,
+              ", mask 0x", std::hex, data.mask, std::dec);
     return true;
 }
 
