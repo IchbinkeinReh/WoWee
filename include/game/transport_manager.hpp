@@ -272,6 +272,10 @@ public:
     [[nodiscard]] std::optional<glm::mat4> passengerRenderFrame(uint64_t transportGuid) const;
     [[nodiscard]] glm::vec3 serverToTransportLocal(uint64_t transportGuid,
                                      const glm::vec3& serverOffset) const;
+    /// serverToTransportLocal's inverse: a passenger's offset as the wire
+    /// carries it, for the movement the client sends.
+    [[nodiscard]] glm::vec3 transportLocalToServer(uint64_t transportGuid,
+                                                   const glm::vec3& localOffset) const;
     // Adopt the server's published route phase for a transport. phase is a
     // fraction in [0,1) of periodMs. Cheap and idempotent - safe to call on every
     // object update that carries the fields.

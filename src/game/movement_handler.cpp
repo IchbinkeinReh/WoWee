@@ -961,8 +961,11 @@ void MovementHandler::sendMovement(Opcode opcode) {
     wireInfo.orientation = core::coords::canonicalToServerYaw(wireInfo.orientation);
 
     if (includeTransportInWire) {
-        glm::vec3 serverTransportPos = core::coords::canonicalToServer(
-            glm::vec3(wireInfo.transportX, wireInfo.transportY, wireInfo.transportZ));
+        // Back to the wire's axes the way it came in (serverToTransportLocal):
+        // a WMO transport's offset is the wire's already, and swapping it put
+        // the player across the deck for the server.
+        glm::vec3 serverTransportPos = transportOffsetToWire(
+            wireInfo.transportGuid, glm::vec3(wireInfo.transportX, wireInfo.transportY, wireInfo.transportZ));
         wireInfo.transportX = serverTransportPos.x;
         wireInfo.transportY = serverTransportPos.y;
         wireInfo.transportZ = serverTransportPos.z;
@@ -1194,7 +1197,7 @@ network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counte
     wire.z = serverPos.z;
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
         glm::vec3 serverTransport =
-            core::coords::canonicalToServer(glm::vec3(wire.transportX, wire.transportY, wire.transportZ));
+            transportOffsetToWire(wire.transportGuid, glm::vec3(wire.transportX, wire.transportY, wire.transportZ));
         wire.transportX = serverTransport.x;
         wire.transportY = serverTransport.y;
         wire.transportZ = serverTransport.z;
@@ -2439,8 +2442,9 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
         // player's transport-local coordinates. They are not a world position
         // near map origin. Hold them until the same ship is registered on the
         // destination map, then compose them through its new transform.
-        owner_.beginPlayerTransportWorldTransfer(
-            mapId, core::coords::serverToCanonical(glm::vec3(serverX, serverY, serverZ)));
+        // The wire's offset: the ship's kind on the new map decides its
+        // axes (TransportManager::serverToTransportLocal).
+        owner_.beginPlayerTransportWorldTransfer(mapId, glm::vec3(serverX, serverY, serverZ));
     }
     const uint32_t transferAreaTriggerId = lastAreaTriggerId_;
     lastAreaTriggerId_ = 0;
@@ -4397,6 +4401,12 @@ MovementSpeeds MovementHandler::moverSpeeds() const {
     return speeds;
 }
 
+glm::vec3 MovementHandler::transportOffsetToWire(uint64_t transportGuid, const glm::vec3& localOffset) const {
+    if (const TransportManager* transports = owner_.getTransportManager())
+        return transports->transportLocalToServer(transportGuid, localOffset);
+    return core::coords::canonicalToServer(localOffset);
+}
+
 MovementInfo MovementHandler::moverWireInfo() {
     MovementInfo wire = movementInfo;
     wire.time = nextMovementTimestampMs();
@@ -4408,7 +4418,8 @@ MovementInfo MovementHandler::moverWireInfo() {
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
         wire.transportTime = wire.time;
         wire.transportTime2 = wire.time;
-        const glm::vec3 t = core::coords::canonicalToServer(glm::vec3(wire.transportX, wire.transportY, wire.transportZ));
+        const glm::vec3 t =
+            transportOffsetToWire(wire.transportGuid, glm::vec3(wire.transportX, wire.transportY, wire.transportZ));
         wire.transportX = t.x;
         wire.transportY = t.y;
         wire.transportZ = t.z;

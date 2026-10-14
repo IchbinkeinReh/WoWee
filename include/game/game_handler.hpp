@@ -1920,7 +1920,7 @@ public:
     // Preserve an authoritative on-deck offset while a continent transfer tears
     // down the origin map's transport and constructs its destination instance.
     void beginPlayerTransportWorldTransfer(uint32_t destinationMapId,
-                                           const glm::vec3& localOffset);
+                                           const glm::vec3& wireOffset);
     bool hasPendingPlayerTransportWorldTransfer() const {
         return pendingPlayerTransportTransfer_;
     }
@@ -4955,7 +4955,7 @@ private:
     uint64_t pendingPlayerTransportGuid_ = 0;
     uint32_t pendingPlayerTransportEntry_ = 0;
     uint32_t pendingPlayerTransportMapId_ = 0xFFFFFFFFu;
-    glm::vec3 pendingPlayerTransportOffset_ = glm::vec3(0.0f);
+    glm::vec3 pendingPlayerTransportOffset_ = glm::vec3(0.0f);  ///< as the wire has it
     std::unique_ptr<TransportManager> transportManager_;  // Transport movement manager
     uint32_t weaponProficiency_ = 0;  // bitmask from SMSG_SET_PROFICIENCY itemClass=2
     uint32_t armorProficiency_  = 0;  // bitmask from SMSG_SET_PROFICIENCY itemClass=4

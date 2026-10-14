@@ -1564,13 +1564,13 @@ glm::vec3 GameHandler::getComposedWorldPosition() {
 }
 
 void GameHandler::beginPlayerTransportWorldTransfer(
-    uint32_t destinationMapId, const glm::vec3& localOffset) {
+    uint32_t destinationMapId, const glm::vec3& wireOffset) {
     if (playerTransportGuid_ == 0) return;
 
     pendingPlayerTransportTransfer_ = true;
     pendingPlayerTransportGuid_ = playerTransportGuid_;
     pendingPlayerTransportMapId_ = destinationMapId;
-    pendingPlayerTransportOffset_ = localOffset;
+    pendingPlayerTransportOffset_ = wireOffset;
     pendingPlayerTransportEntry_ = 0;
     if (transportManager_) {
         if (const auto* transport = transportManager_->getTransport(playerTransportGuid_)) {
@@ -1582,7 +1582,7 @@ void GameHandler::beginPlayerTransportWorldTransfer(
                 pendingPlayerTransportGuid_, std::dec,
                 " entry=", pendingPlayerTransportEntry_,
                 " destinationMap=", destinationMapId,
-                " local=(", localOffset.x, ",", localOffset.y, ",", localOffset.z, ")");
+                " wire offset=(", wireOffset.x, ",", wireOffset.y, ",", wireOffset.z, ")");
 }
 
 bool GameHandler::completePlayerTransportWorldTransfer(
@@ -1599,18 +1599,21 @@ bool GameHandler::completePlayerTransportWorldTransfer(
          transport->entry == pendingPlayerTransportEntry_);
     if (!matchingTransport) return false;
 
-    setPlayerOnTransport(transportGuid, pendingPlayerTransportOffset_);
-    worldPosition = transportManager_->getPlayerWorldPosition(
-        transportGuid, pendingPlayerTransportOffset_);
+    // The wire's offset, put in this ship's axes now its kind is known: it
+    // was swapped as canonical, which for a WMO ship - every boat and
+    // zeppelin - is not how its offsets are kept, and put the player across
+    // the deck from where the server has them.
+    const glm::vec3 localOffset =
+        transportManager_->serverToTransportLocal(transportGuid, pendingPlayerTransportOffset_);
+    setPlayerOnTransport(transportGuid, localOffset);
+    worldPosition = transportManager_->getPlayerWorldPosition(transportGuid, localOffset);
     setPosition(worldPosition.x, worldPosition.y, worldPosition.z);
 
     LOG_WARNING("Transport world transfer restored: guid=0x", std::hex,
                 transportGuid, std::dec,
                 " entry=", transport->entry,
                 " map=", currentMapId_,
-                " local=(", pendingPlayerTransportOffset_.x, ",",
-                pendingPlayerTransportOffset_.y, ",",
-                pendingPlayerTransportOffset_.z, ") world=(",
+                " local=(", localOffset.x, ",", localOffset.y, ",", localOffset.z, ") world=(",
                 worldPosition.x, ",", worldPosition.y, ",", worldPosition.z, ")");
 
     pendingPlayerTransportTransfer_ = false;

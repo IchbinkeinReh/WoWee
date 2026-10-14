@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/application.hpp"
+#include "game/transport_local.hpp"
 #include "game/world_packets.hpp"
 
 namespace wowee {
@@ -83,4 +84,18 @@ TEST_CASE("a GM ticket sends the player's place as the wire has it", "[wire_posi
                                        0x00, 0x00, 0x74, 0x41,    // 15.25: the wire's x
                                        0x00, 0x2C, 0x87, 0xC5,    // -4325.5: its y
                                        0x00, 0x00, 0xB0, 0x40});  // 5.5
+}
+
+TEST_CASE("a passenger's offset goes back out as it came in", "[wire_positions]") {
+    const glm::vec3 wire(3.0f, -7.5f, 2.25f);
+    for (const bool wmo : {true, false}) {
+        const glm::vec3 local = transport_local::fromWire(wmo, wire);
+        const glm::vec3 back = transport_local::toWire(wmo, local);
+        CHECK(back.x == wire.x);
+        CHECK(back.y == wire.y);
+        CHECK(back.z == wire.z);
+    }
+    // A WMO transport keeps the wire's axes; an M2 one a canonical delta.
+    CHECK(transport_local::fromWire(true, wire).x == 3.0f);
+    CHECK(transport_local::fromWire(false, wire).x == -7.5f);
 }

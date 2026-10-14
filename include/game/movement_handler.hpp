@@ -329,6 +329,9 @@ private:
     [[nodiscard]] const MovementInfo& movementOf(uint64_t guid) const;
     /// A movement packet for the mover, in server coordinates.
     [[nodiscard]] MovementInfo moverWireInfo();
+    /// A passenger's offset on `transportGuid` as the wire carries it - the
+    /// inverse of how it came in (TransportManager::serverToTransportLocal).
+    [[nodiscard]] glm::vec3 transportOffsetToWire(uint64_t transportGuid, const glm::vec3& localOffset) const;
     void handleActivateTaxiReply(network::Packet& packet);
     void loadTaxiDbc();
 

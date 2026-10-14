@@ -1,4 +1,5 @@
 #include "game/transport_manager.hpp"
+#include "game/transport_local.hpp"
 
 #include <set>
 #include "game/transport_clock_sync.hpp"
@@ -447,8 +448,13 @@ glm::vec3 TransportManager::serverToTransportLocal(
     // the world-space server->canonical X/Y swap here displaced deck NPCs and
     // server-attached players across the hull. M2 transports retain their older
     // canonical-delta representation.
-    if (it != transports_.end() && !it->second.isM2) return serverOffset;
-    return core::coords::serverToCanonical(serverOffset);
+    return transport_local::fromWire(it != transports_.end() && !it->second.isM2, serverOffset);
+}
+
+glm::vec3 TransportManager::transportLocalToServer(
+    uint64_t transportGuid, const glm::vec3& localOffset) const {
+    const auto it = transports_.find(transportGuid);
+    return transport_local::toWire(it != transports_.end() && !it->second.isM2, localOffset);
 }
 
 bool TransportManager::isPointOnTransportDeck(uint64_t transportGuid,
