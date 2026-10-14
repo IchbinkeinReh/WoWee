@@ -331,15 +331,14 @@ TEST_CASE("Vanilla auction list parses id-only enchant, no flags, no delay", "[a
     CHECK(packet.getRemainingSize() == 0);
 }
 
-// SMSG_ITEM_QUERY_SINGLE_RESPONSE comes in two shapes: some servers send
-// BuyCount between Flags2 and BuyPrice, some do not, and the client has to work
-// out which from the bytes. Guessing from InventoryType alone does not work - on
-// a server without BuyCount that read lands on AllowableClass, and a
-// class-restricted item's mask is a small, plausible-looking number. Priest-only
-// is 16, which is INVTYPE_CLOAK, so a priest robe claimed to be a cloak.
+// SMSG_ITEM_QUERY_SINGLE_RESPONSE has one shape in 3.3.5: Flags, Flags2,
+// BuyPrice, SellPrice, InventoryType, as 0x0098d910 reads the record - no
+// BuyCount. A class-restricted item's mask read one place early is a small,
+// plausible-looking number: priest-only is 16, INVTYPE_CLOAK, so a priest
+// robe read with a BuyCount claimed to be a cloak.
 namespace {
 
-// Everything up to and including Quality; identical in both layouts.
+// Everything up to and including Quality.
 void writeItemHeader(wowee::network::Packet& p, uint32_t entry) {
     p.writeUInt32(entry);
     p.writeUInt32(4);     // Class: Armor
@@ -353,7 +352,7 @@ void writeItemHeader(wowee::network::Packet& p, uint32_t entry) {
     p.writeUInt32(2);     // Quality: Uncommon
 }
 
-// The fields after InventoryType, which is what makes a wrong guess detectable.
+// The fields after InventoryType, which a read one place out would shift.
 void writeItemTail(wowee::network::Packet& p, uint32_t allowableClass) {
     p.writeUInt32(allowableClass);
     p.writeUInt32(0xFFFFFFFF);  // AllowableRace: all
@@ -365,19 +364,19 @@ void writeItemTail(wowee::network::Packet& p, uint32_t allowableClass) {
 
 } // namespace
 
-TEST_CASE("item query detects the BuyCount layout from more than one field",
+TEST_CASE("item query reads the price fields with no BuyCount",
           "[packet][item]") {
     using namespace wowee::game;
 
     constexpr uint32_t kPriestOnly = 16;   // the mask that reads as INVTYPE_CLOAK
     constexpr uint32_t kRobe = 20;
 
-    SECTION("server without BuyCount, class-restricted item") {
+    SECTION("a class-restricted item") {
         wowee::network::Packet p;
         writeItemHeader(p, 7048);
         p.writeUInt32(0);        // Flags
         p.writeUInt32(0);        // Flags2
-        p.writeUInt32(1000);     // BuyPrice   (no BuyCount on this server)
+        p.writeUInt32(1000);     // BuyPrice
         p.writeUInt32(250);      // SellPrice
         p.writeUInt32(kRobe);    // InventoryType
         writeItemTail(p, kPriestOnly);
@@ -390,41 +389,19 @@ TEST_CASE("item query detects the BuyCount layout from more than one field",
         CHECK(data.requiredLevel == 24);
     }
 
-    SECTION("server with BuyCount, same item") {
+    SECTION("an item usable by every class") {
         wowee::network::Packet p;
-        writeItemHeader(p, 7048);
-        p.writeUInt32(0);        // Flags
-        p.writeUInt32(0);        // Flags2
-        p.writeUInt32(1);        // BuyCount
-        p.writeUInt32(1000);     // BuyPrice
-        p.writeUInt32(250);      // SellPrice
-        p.writeUInt32(kRobe);    // InventoryType
-        writeItemTail(p, kPriestOnly);
+        writeItemHeader(p, 7049);
+        p.writeUInt32(0);
+        p.writeUInt32(0);
+        p.writeUInt32(1000);
+        p.writeUInt32(250);
+        p.writeUInt32(5);            // InventoryType: Chest
+        writeItemTail(p, 0xFFFFFFFF);  // all classes
 
         ItemQueryResponseData data;
         REQUIRE(ItemQueryResponseParser::parse(p, data));
-        CHECK(data.inventoryType == kRobe);
-        CHECK(data.allowableClass == kPriestOnly);
-        CHECK(data.itemLevel == 29);
-    }
-
-    SECTION("an item usable by every class still resolves either way") {
-        for (bool withBuyCount : {false, true}) {
-            wowee::network::Packet p;
-            writeItemHeader(p, 7049);
-            p.writeUInt32(0);
-            p.writeUInt32(0);
-            if (withBuyCount) p.writeUInt32(1);
-            p.writeUInt32(1000);
-            p.writeUInt32(250);
-            p.writeUInt32(5);            // InventoryType: Chest
-            writeItemTail(p, 0xFFFFFFFF);  // all classes
-
-            ItemQueryResponseData data;
-            INFO("withBuyCount: " << withBuyCount);
-            REQUIRE(ItemQueryResponseParser::parse(p, data));
-            CHECK(data.inventoryType == 5);
-        }
+        CHECK(data.inventoryType == 5);
     }
 }
 

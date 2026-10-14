@@ -1021,6 +1021,11 @@ wowee_add_packet_test(test_combat_log_layout)
 # after SMSG_CAST_FAILED's result (0x00809af0).
 wowee_add_packet_test(test_aura_cast_packet_layout)
 
+# ── test_item_packet_layout ────────────────────────────────────────────
+# SMSG_ITEM_QUERY_SINGLE_RESPONSE as 0x0098d910 reads the record: no BuyCount.
+wowee_add_packet_test(test_item_packet_layout)
+
+
 # ── test_spell_damage_log_layout ───────────────────────────────────────
 # SMSG_SPELLNONMELEEDAMAGELOG before WotLK, pinned before the Classic and TBC
 # readers were merged. The expansions differ by one field - overkill - and

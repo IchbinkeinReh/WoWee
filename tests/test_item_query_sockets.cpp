@@ -14,7 +14,7 @@
 // The packet here is built field for field the way AzerothCore's
 // WorldSession::HandleItemQuerySingleOpcode writes it, so the test also pins
 // the fifty-odd fields the parser walks to reach the sockets - including the
-// BuyCount that AzerothCore does not send, which the parser scores for.
+// BuyCount, which 3.3.5 does not have and AzerothCore does not send.
 #include <catch_amalgamated.hpp>
 
 #include "core/application.hpp"

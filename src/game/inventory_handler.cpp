@@ -523,7 +523,12 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         if (packet.getRemainingSize() < baseSz) return;
         const bool hasItemCount = packet.getRemainingSize() >= baseSz + 4;
         uint64_t objectGuid = packet.readUInt64();
-        if (hasMapId) packet.readUInt32(); // mapId
+        // 0x006fb2c0: a roll for loot on another map than the player's is
+        // dropped unopened.
+        if (hasMapId && packet.readUInt32() != owner_.getCurrentMapId()) {
+            packet.skipAll();
+            return;
+        }
         uint32_t lootSlot = packet.readUInt32();
         uint32_t itemId   = packet.readUInt32();
         /*uint32_t randSuffix =*/ packet.readUInt32();
