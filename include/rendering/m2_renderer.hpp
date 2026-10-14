@@ -825,6 +825,10 @@ public:
     /// corners, three to a triangle.
     void gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                 std::vector<glm::vec3>& out) const;
+    /// The same doodads' collision triangles that reach the box, whichever
+    /// way they face unless `facingUpOnly`.
+    void gatherCollisionTriangles(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                  std::vector<glm::vec3>& out, bool facingUpOnly = false) const;
 
     /// Every doodad the floor query would consider here, and what each one
     /// contributes. The WMO side has had debugDumpGroupsAtPosition for this

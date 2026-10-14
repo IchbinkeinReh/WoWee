@@ -260,6 +260,10 @@ public:
     using GroundQuery = std::function<std::optional<mount_transition::GroundHit>(const glm::vec3& top,
                                                                                  const glm::vec3& bottom)>;
     void setGroundQuery(GroundQuery query) { groundQuery_ = std::move(query); }
+    /// The world's intersect (0x007a3b70, flags 0x120111): how far from
+    /// `from` to `to` (0..1) the first surface is, either side.
+    using SegmentQuery = std::function<std::optional<float>(const glm::vec3& from, const glm::vec3& to)>;
+    void setSegmentQuery(SegmentQuery query) { segmentQuery_ = std::move(query); }
     /// Whether a unit shows its SpellVisual Flags 8 state kits (0x00720400):
     /// +0xa30 0x10000, its weapons away and no cast.
     using UnarmedKitsQuery = std::function<bool(uint64_t unitGuid)>;
@@ -598,6 +602,7 @@ private:
     UnitMountFieldQuery unitMountFieldQuery_;
     MountSink mountSink_;
     GroundQuery groundQuery_;
+    SegmentQuery segmentQuery_;
     /// 0x007265c0 case 16 for a kit on a unit.
     void startMountTransition(uint32_t renderInstanceId, uint32_t spellId, spell_kit::KitType type,
                               uint32_t castTimeMs);

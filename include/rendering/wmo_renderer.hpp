@@ -413,6 +413,10 @@ public:
     /// rather than a step, so no player radius and no step height. See the
     /// definition for why checkWallCollision cannot answer this.
     bool segmentBlocked(const glm::vec3& from, const glm::vec3& to) const;
+    /// How far from `from` to `to` (0..1) the first WMO collision face is,
+    /// either side, as the world's intersect asks with 0x120111
+    /// (0x007a3b70 -> 0x007a30d0): every group, no detail face.
+    [[nodiscard]] std::optional<float> segmentHit(const glm::vec3& from, const glm::vec3& to) const;
 
     /**
      * Check if a position is inside any WMO

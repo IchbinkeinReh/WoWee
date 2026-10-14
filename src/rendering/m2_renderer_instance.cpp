@@ -1312,6 +1312,11 @@ std::optional<float> M2Renderer::getInstanceFloorHeight(uint32_t instanceId,
 
 void M2Renderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                         std::vector<glm::vec3>& out) const {
+    gatherCollisionTriangles(boxMin, boxMax, out, true);
+}
+
+void M2Renderer::gatherCollisionTriangles(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                          std::vector<glm::vec3>& out, bool facingUpOnly) const {
     std::vector<size_t> candidates;
     gatherCandidates(boxMin, boxMax, candidates);
     std::vector<uint32_t> tris, walls;
@@ -1338,8 +1343,9 @@ void M2Renderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3
             lo = glm::min(lo, glm::vec2(local));
             hi = glm::max(hi, glm::vec2(local));
         }
-        // Every collision triangle the box reaches, floor or wall alike;
-        // facing up is the only test (0x007e32f0). Each query clears its list.
+        // Every collision triangle the box reaches, floor or wall alike; for
+        // a blob shadow, facing up is the only test (0x007e32f0). Each query
+        // clears its list.
         model.collision.getFloorTrisInRange(lo.x, lo.y, hi.x, hi.y, tris);
         model.collision.getWallTrisInRange(lo.x, lo.y, hi.x, hi.y, walls);
         tris.insert(tris.end(), walls.begin(), walls.end());
@@ -1350,7 +1356,7 @@ void M2Renderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3
             const glm::vec3& a = verts[indices[ti * 3]];
             const glm::vec3& b = verts[indices[ti * 3 + 1]];
             const glm::vec3& c = verts[indices[ti * 3 + 2]];
-            if (!blob_shadow::facesUp(instance.modelMatrix, a, b, c)) continue;
+            if (facingUpOnly && !blob_shadow::facesUp(instance.modelMatrix, a, b, c)) continue;
             const glm::vec3 wa(instance.modelMatrix * glm::vec4(a, 1.0f));
             const glm::vec3 wb(instance.modelMatrix * glm::vec4(b, 1.0f));
             const glm::vec3 wc(instance.modelMatrix * glm::vec4(c, 1.0f));

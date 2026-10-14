@@ -37,6 +37,7 @@
 #include "rendering/character_preview.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
+#include "rendering/collision_geometry.hpp"
 #include "pipeline/grass_profile.hpp"
 #include "pipeline/grass_population.hpp"
 #include "pipeline/grass_terrain.hpp"
@@ -3172,6 +3173,70 @@ void Renderer::setSpellTargetCircle(const glm::vec3& pos, float radius, bool una
 
 void Renderer::clearSpellTargetCircle() {
     spellTargetCircle_.reset();
+}
+
+std::optional<float> Renderer::intersectSegment(const glm::vec3& from, const glm::vec3& to) const {
+    const glm::vec3 delta = to - from;
+    const float length = glm::length(delta);
+    if (length <= 0.0f) return std::nullopt;
+    float best = 1.0f;
+    bool hit = false;
+    // Buildings (0x10).
+    if (wmoRenderer) {
+        if (const auto t = wmoRenderer->segmentHit(from, to); t && *t < best) {
+            best = *t;
+            hit = true;
+        }
+    }
+    // The terrain (0x100): where the segment crosses it, from either side -
+    // marched in half-yard steps and the crossing halved down.
+    if (terrainManager) {
+        auto above = [&](float f) -> std::optional<bool> {
+            const glm::vec3 p = from + delta * f;
+            const auto h = terrainManager->getHeightAt(p.x, p.y);
+            if (!h) return std::nullopt;
+            return p.z > *h;
+        };
+        const float step = 0.5f / length;
+        std::optional<bool> prevSide = above(0.0f);
+        float prev = 0.0f;
+        for (float f = std::min(step, 1.0f); prev < best; f = std::min(f + step, 1.0f)) {
+            const auto side = above(f);
+            if (side && prevSide && *side != *prevSide) {
+                float lo = prev, hi = f;
+                for (int i = 0; i < 16; ++i) {
+                    const float mid = 0.5f * (lo + hi);
+                    const auto midSide = above(mid);
+                    (midSide && *midSide == *prevSide ? lo : hi) = mid;
+                }
+                if (hi < best) {
+                    best = hi;
+                    hit = true;
+                }
+                break;
+            }
+            prevSide = side;
+            prev = f;
+            if (f >= 1.0f) break;
+        }
+    }
+    // Doodads (0x1), by their collision meshes, either face.
+    if (m2Renderer) {
+        const glm::vec3 end = from + delta * best;
+        std::vector<glm::vec3> tris;
+        m2Renderer->gatherCollisionTriangles(glm::min(from, end) - glm::vec3(0.5f),
+                                             glm::max(from, end) + glm::vec3(0.5f), tris);
+        const glm::vec3 dir = delta / length;
+        for (size_t i = 0; i + 2 < tris.size(); i += 3) {
+            const float t = rayTriangleIntersect(from, dir, tris[i], tris[i + 1], tris[i + 2]);
+            if (t > 0.0f && t < best * length) {
+                best = t / length;
+                hit = true;
+            }
+        }
+    }
+    if (!hit) return std::nullopt;
+    return best;
 }
 
 std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm::vec3& dir,

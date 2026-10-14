@@ -2896,6 +2896,9 @@ void Application::connectWorldHooks() {
                 return rendering::mount_transition::GroundHit{
                     .fraction = span > 0.0f ? (top.z - *best) / span : 0.0f, .normal = normal};
             });
+            svs->setSegmentQuery([this](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
+                return renderer ? renderer->intersectSegment(from, to) : std::nullopt;
+            });
             svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
                 return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
             });

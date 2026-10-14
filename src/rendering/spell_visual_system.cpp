@@ -2543,18 +2543,16 @@ void SpellVisualSystem::updateFallingModels(float deltaTime) {
     for (auto it = fallingModels_.begin(); it != fallingModels_.end();) {
         FallingModels& falling = *it;
         // 0x007fc220: those due this frame, each put on what is below its
-        // point. wowee has no segment query for the way up to a ceiling, so
-        // each is looked for from the full height.
+        // point, under any ceiling on the way up.
+        const auto segment = [this](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
+            return segmentQuery_ ? segmentQuery_(from, to) : std::nullopt;
+        };
         for (uint32_t n = blizzard_object::advance(falling.carried, deltaTime, falling.perSecond); n > 0; --n) {
             const float fraction = unit(fallingRng_);
             const glm::vec2 point = blizzard_object::fallPoint(glm::vec2(falling.centre), falling.radius, fraction,
                                                                 unit(fallingRng_));
-            const glm::vec3 top(point, falling.centre.z + blizzard_object::kRise);
-            const glm::vec3 bottom = top - glm::vec3(0.0f, 0.0f, blizzard_object::kDrop);
             FallingModels::Fall fall{.position = falling.centre};
-            if (groundQuery_) {
-                if (const auto hit = groundQuery_(top, bottom)) fall.position = top + (bottom - top) * hit->fraction;
-            }
+            if (const auto landed = blizzard_object::landing(falling.centre, point, segment)) fall.position = *landed;
             fall.startsIn = blizzard_object::startDelaySeconds(unit(fallingRng_));
             falling.falls.push_back(fall);
         }

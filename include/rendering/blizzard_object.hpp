@@ -13,10 +13,11 @@
 /// Each frame (0x007fc220): the rate times the frame's time, at most 1/15 s,
 /// adds up; each whole one past 1 is a model at a random point within the
 /// radius - a random fraction of it in a random direction - put on what is
-/// below it: from 16.67 above the object's height (or 0.95 of the way to a
-/// ceiling met on the way up from 1/6 above the object), the first floor
-/// within 33.33 down, else the object's own place. It waits 0 to 510 ms, then
-/// plays its Stand once (0x007fb2d0) and goes as that ends (0x007fc200).
+/// below it (landing): from 16.67 above the object's height (or 0.95 of the
+/// way to a ceiling met on the slanted way up from 1/6 above the object),
+/// the first surface within 33.33 down, else the object's own place. It
+/// waits 0 to 510 ms, then plays its Stand once (0x007fb2d0) and goes as
+/// that ends (0x007fc200).
 /// Every fourth event any of these models fires, if it is a $SND, plays the
 /// data's sound once where it is (0x007f9d80).
 ///
@@ -81,6 +82,23 @@ inline uint32_t advance(float& carried, float frameSeconds, float perSecond) {
 inline glm::vec2 fallPoint(const glm::vec2& centre, float radius, float fraction, float turn) {
     const float angle = turn * 6.2831855f;
     return {centre.x + fraction * std::cos(angle) * radius, centre.y + radius * std::sin(angle) * fraction};
+}
+
+/// 0x007fc220: where one falls to, from `centre` (the object's place) and
+/// its point in the plane. `segment(from, to)` is the world's intersect
+/// (0x007a3b70, flags 0x120111): how far along the first surface is, 0..1,
+/// or none. The way up is slanted, from just above the object to the point
+/// kRise above it, and 0.95 of the way to a ceiling is kept; from there the
+/// first surface within kDrop straight down. None where there is none - the
+/// object's own place is then used.
+template <class Segment>
+std::optional<glm::vec3> landing(const glm::vec3& centre, const glm::vec2& point, Segment&& segment) {
+    const glm::vec3 from(centre.x, centre.y, centre.z + kCeilingFrom);
+    glm::vec3 top(point, centre.z + kRise);
+    if (const std::optional<float> up = segment(from, top)) top = from + (top - from) * (*up * kCeilingKeep);
+    const glm::vec3 bottom(top.x, top.y, top.z - kDrop);
+    if (const std::optional<float> down = segment(top, bottom)) return top + (bottom - top) * *down;
+    return std::nullopt;
 }
 
 /// 0x007fc220: how long one waits before it plays, seconds - a random byte

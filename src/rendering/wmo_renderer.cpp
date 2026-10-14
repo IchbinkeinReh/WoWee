@@ -3804,6 +3804,58 @@ bool WMORenderer::segmentBlocked(const glm::vec3& from, const glm::vec3& to) con
     return false;
 }
 
+std::optional<float> WMORenderer::segmentHit(const glm::vec3& from, const glm::vec3& to) const {
+    QueryTimer timer(&queryTimeMs, &queryCallCount);
+    const glm::vec3 delta = to - from;
+    const float dist = glm::length(delta);
+    if (dist < 1e-4f) return std::nullopt;
+    const glm::vec3 dir = delta / dist;
+    gatherCandidates(glm::min(from, to) - glm::vec3(1.0f), glm::max(from, to) + glm::vec3(1.0f),
+                     tl_candidateScratch);
+    float best = 1.0f;
+    bool hit = false;
+    for (size_t idx : tl_candidateScratch) {
+        const auto& instance = instances[idx];
+        if (instance.hidden) continue;
+        if (!rayIntersectsAABB(from, dir, instance.worldBoundsMin, instance.worldBoundsMax)) continue;
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const ModelData& model = it->second;
+        // The fraction is the same in the instance's own space, where its
+        // mesh is: the placement is affine.
+        const glm::vec3 localFrom = glm::vec3(instance.invModelMatrix * glm::vec4(from, 1.0f));
+        const glm::vec3 localDelta = glm::vec3(instance.invModelMatrix * glm::vec4(to, 1.0f)) - localFrom;
+        const float localDist = glm::length(localDelta);
+        if (localDist < 1e-4f) continue;
+        const glm::vec3 localDir = localDelta / localDist;
+        for (size_t gi = 0; gi < model.groups.size(); ++gi) {
+            if (gi < instance.worldGroupBounds.size()) {
+                const auto& [gMin, gMax] = instance.worldGroupBounds[gi];
+                if (!rayIntersectsAABB(from, dir, gMin, gMax)) continue;
+            }
+            const auto& group = model.groups[gi];
+            if (!trianglesAlongRay(group, localFrom, localDir, tl_triScratch)) continue;
+            const auto& verts = group.collisionVertices;
+            const auto& indices = group.collisionIndices;
+            for (uint32_t triStart : tl_triScratch) {
+                if (triStart + 2 >= indices.size()) continue;
+                // 0x007ae140 makes 0x120111's mask 0x84: a detail face (MOPY
+                // 0x04) is not there for it.
+                const size_t tri = triStart / 3;
+                if (tri < group.triMopyFlags.size() && (group.triMopyFlags[tri] & 0x04u) != 0) continue;
+                const float t = rayTriangleIntersect(localFrom, localDir, verts[indices[triStart]],
+                                                     verts[indices[triStart + 1]], verts[indices[triStart + 2]]);
+                if (t > 0.0f && t < best * localDist) {
+                    best = t / localDist;
+                    hit = true;
+                }
+            }
+        }
+    }
+    if (!hit) return std::nullopt;
+    return best;
+}
+
 bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to, glm::vec3& adjustedPos, bool insideWMO) const {
     QueryTimer timer(&queryTimeMs, &queryCallCount);
     adjustedPos = to;

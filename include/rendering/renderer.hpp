@@ -306,6 +306,11 @@ public:
     /// none.
     [[nodiscard]] std::optional<glm::vec3> pickGround(const glm::vec3& origin, const glm::vec3& dir,
                                                       float maxDistance, uint32_t* wmoInstanceId = nullptr) const;
+    /// How far from `from` to `to` (0..1) the first surface is, either
+    /// side: the world's intersect with 0x120111 (0x007a3b70) - the
+    /// terrain, the buildings and the doodads' collision. Renderer
+    /// coordinates.
+    [[nodiscard]] std::optional<float> intersectSegment(const glm::vec3& from, const glm::vec3& to) const;
 
     // CPU timing stats (milliseconds, last frame).
     double getLastUpdateMs() const { return lastUpdateMs; }

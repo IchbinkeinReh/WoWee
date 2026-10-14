@@ -2,6 +2,8 @@
 // object's area (0x007fbd70, 0x007fc220).
 #include <catch_amalgamated.hpp>
 
+#include <vector>
+
 #include "rendering/blizzard_object.hpp"
 
 using namespace wowee::rendering::blizzard_object;
@@ -55,4 +57,60 @@ TEST_CASE("one waits a random byte, twice, in ms", "[blizzard_object]") {
     CHECK(startDelaySeconds(0.0f) == Catch::Approx(0.0f));
     CHECK(startDelaySeconds(1.0f) == Catch::Approx(0.51f));
     CHECK(startDelaySeconds(0.5f) == Catch::Approx(0.256f));
+}
+
+namespace {
+struct Ray {
+    glm::vec3 from, to;
+};
+}  // namespace
+
+TEST_CASE("one lands on the first floor below its point, under no ceiling", "[blizzard_object]") {
+    // 0x007fc220: a slanted way up from 1/6 above the object to 16.67 above
+    // it at the point, then straight down 33.33 from there.
+    const glm::vec3 centre(10.0f, 20.0f, 5.0f);
+    const glm::vec2 point(14.0f, 23.0f);
+    std::vector<Ray> rays;
+    const auto landed = landing(centre, point, [&](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
+        rays.push_back({from, to});
+        if (rays.size() == 1) return std::nullopt;  // no ceiling
+        return 0.5f;                                // a floor halfway down
+    });
+    REQUIRE(rays.size() == 2);
+    CHECK(rays[0].from == glm::vec3(10.0f, 20.0f, 5.0f + kCeilingFrom));
+    CHECK(rays[0].to == glm::vec3(14.0f, 23.0f, 5.0f + kRise));
+    CHECK(rays[1].from == rays[0].to);
+    CHECK(rays[1].to == glm::vec3(14.0f, 23.0f, 5.0f + kRise - kDrop));
+    REQUIRE(landed);
+    CHECK(landed->x == Catch::Approx(14.0f));
+    CHECK(landed->y == Catch::Approx(23.0f));
+    CHECK(landed->z == Catch::Approx(5.0f + kRise - kDrop * 0.5f));
+}
+
+TEST_CASE("under a ceiling one is sought from 0.95 of the way to it", "[blizzard_object]") {
+    const glm::vec3 centre(0.0f, 0.0f, 0.0f);
+    const glm::vec2 point(8.0f, 0.0f);
+    std::vector<Ray> rays;
+    const auto landed = landing(centre, point, [&](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
+        rays.push_back({from, to});
+        if (rays.size() == 1) return 0.5f;  // a ceiling halfway up the slant
+        return 0.25f;
+    });
+    REQUIRE(rays.size() == 2);
+    // The slant kept to 0.475 of its length: in x as well as in height.
+    const float keep = 0.5f * kCeilingKeep;
+    const glm::vec3 top(8.0f * keep, 0.0f, kCeilingFrom + (kRise - kCeilingFrom) * keep);
+    CHECK(rays[1].from.x == Catch::Approx(top.x));
+    CHECK(rays[1].from.y == Catch::Approx(0.0f));
+    CHECK(rays[1].from.z == Catch::Approx(top.z));
+    CHECK(rays[1].to.z == Catch::Approx(top.z - kDrop));
+    REQUIRE(landed);
+    CHECK(landed->x == Catch::Approx(top.x));
+    CHECK(landed->z == Catch::Approx(top.z - kDrop * 0.25f));
+}
+
+TEST_CASE("with nothing below it one takes the object's place", "[blizzard_object]") {
+    const auto landed = landing(glm::vec3(1.0f, 2.0f, 3.0f), glm::vec2(4.0f, 5.0f),
+                                [](const glm::vec3&, const glm::vec3&) -> std::optional<float> { return std::nullopt; });
+    CHECK_FALSE(landed.has_value());
 }
