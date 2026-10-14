@@ -1728,39 +1728,11 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         }
     }
 
-    // Instant melee abilities: client-side range + facing check.
-    // Melee is decided by the spell's own range, not by its school. SpellRange calls
-    // melee "Combat Range" (5 yards), while physical-school abilities that are cast at
-    // range - Steady Shot, Multi-Shot, Taunt, Deadly Throw - carry a 30-35 yard range.
-    // Testing the school instead would range-check those at 8 yards and swallow the cast.
-    // An unknown range (SpellRange.dbc unavailable) is not treated as melee, so the
-    // server arbitrates rather than the client blocking a legitimate cast.
-    if (!facingHandled) {
-        const bool isMeleeAbility = spellclass::isMeleeRange(getSpellMaxRange(spellId));
-        if (isMeleeAbility && target != 0) {
-            auto entity = owner_.getEntityManager().getEntity(target);
-            if (entity) {
-                float dx = entity->getX() - owner_.movementInfoRef().x;
-                float dy = entity->getY() - owner_.movementInfoRef().y;
-                float dz = entity->getZ() - owner_.movementInfoRef().z;
-                float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-                if (dist > 8.0f) {
-                    // SPELL_FAILED_OUT_OF_RANGE, worded as the server's would
-                    // be. This was English.
-                    owner_.raiseUiError(castFailureMessage(owner_, spellId, kSpellFailedOutOfRange, -1));
-                    return;
-                }
-                if (owner_.isAutoFaceTarget()) owner_.faceCanonicalYaw(std::atan2(-dy, dx));
-                facingHandled = true;
-            }
-        }
-    }
-
     // Face the target before casting any targeted spell (server checks facing arc).
     // Only send if a spell-specific block above didn't already handle facing,
     // to avoid redundant SET_FACING packets that waste bandwidth.
     //
-    // Only with the Combat page's debug setting on, here and for melee above:
+    // Only with the Combat page's debug setting on:
     // the original client never turns the player to cast, and a target behind
     // them is refused as not in front.
     if (!facingHandled && target != 0 && owner_.isAutoFaceTarget()) {
