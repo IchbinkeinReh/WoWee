@@ -5610,8 +5610,16 @@ private:
     void updatePredictedPower();
     /// 0x00728a20 for the unit, over `dtMs`.
     void regeneratePower(Unit& unit, uint64_t guid, uint32_t dtMs, int64_t nowMs);
-    /// UNIT_<POWER> where 0x00722c50 brought the prediction to its maximum.
+    /// 0x00722c50 past a change: UNIT_<POWER> where it brought the
+    /// prediction to its maximum, and the player's or its pet's usability
+    /// judged again (0x0053d1b0).
     void predictedPowerSaid(const Unit& unit, uint64_t guid, int type);
+    /// 0x0053d1b0: each action slot's spell (0x005a8d30) and each form held
+    /// to the power again (0x008017e0); ACTIONBAR_UPDATE_USABLE and
+    /// UPDATE_SHAPESHIFT_USABLE where one of them flipped.
+    void predictedPowerUsability();
+    std::array<bool, 144> actionShortOfPower_{};             ///< 0x00c1dc98
+    std::unordered_map<uint32_t, bool> formShortOfPower_;   ///< 0x00be8e2c's +5
     uint64_t pendingSpiritHealerGuid_ = 0;
     bool resurrectPending_ = false;
     bool resurrectRequestPending_ = false;

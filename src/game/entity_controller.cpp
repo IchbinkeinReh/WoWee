@@ -1411,11 +1411,8 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 if (result.maxPowerTypeChanged >= 0 && result.maxPowerTypeChanged < 7)
                     pendingEvents_.emit(kMaxPowerEvents[result.maxPowerTypeChanged], {unitId});
                 pendingEvents_.emit("UNIT_POWER", {unitId});
-                // When player power changes, action bar usability may change
-                if (block.guid == owner_.getPlayerGuid()) {
-                    pendingEvents_.emit("ACTIONBAR_UPDATE_USABLE", {});
-                    pendingEvents_.emit("SPELL_UPDATE_USABLE", {});
-                }
+                // The usability events come from the prediction moving
+                // (0x00722c50 -> 0x0053d1b0), not from the field.
             }
         }
     }

@@ -319,6 +319,10 @@ public:
     /// 0x00722d80: the unit channels (UNIT_CHANNEL_SPELL) a mana spell that
     /// costs it, without AttributesEx2 0x2000000.
     [[nodiscard]] bool channelCostsMana(const Unit& unit) const;
+    /// 0x008017e0: whether `unit` has what `spellId` costs - health, runes,
+    /// or the power as it is predicted (0x0071c2e0). A spell not known to
+    /// the cache has nothing to be short of.
+    [[nodiscard]] bool enoughPower(uint32_t spellId, const Unit& unit) const;
     [[nodiscard]] const std::vector<AuraSlot>* getUnitAuras(uint64_t guid) const {
         auto it = unitAurasCache_.find(guid);
         return (it != unitAurasCache_.end()) ? &it->second : nullptr;

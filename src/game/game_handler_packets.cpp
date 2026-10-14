@@ -2,6 +2,7 @@
 #include "core/env_flag.hpp"
 #include "core/app_clock.hpp"
 #include "game/game_handler.hpp"
+#include "game/shapeshift_forms.hpp"
 #include "game/achievement_criteria.hpp"
 #include "game/chat_channels.hpp"
 #include "game/difficulty_change.hpp"
@@ -256,10 +257,32 @@ void GameHandler::predictedPowerSaid(const Unit& unit, uint64_t guid, int type) 
     // 0x0060bf10 0x13 + type: UNIT_MANA .. UNIT_RUNIC_POWER, none for runes.
     static constexpr const char* kEvents[7] = {"UNIT_MANA", "UNIT_RAGE", "UNIT_FOCUS", "UNIT_ENERGY",
                                                "UNIT_HAPPINESS", nullptr, "UNIT_RUNIC_POWER"};
-    if (unit.predictedPower().value[type] != static_cast<int32_t>(unit.getMaxPowerByType(static_cast<uint8_t>(type))) ||
-        kEvents[type] == nullptr)
-        return;
-    if (const auto uid = guidToUnitId(guid); !uid.empty()) fireAddonEvent(kEvents[type], {uid});
+    if (unit.predictedPower().value[type] == static_cast<int32_t>(unit.getMaxPowerByType(static_cast<uint8_t>(type))) &&
+        kEvents[type] != nullptr)
+        if (const auto uid = guidToUnitId(guid); !uid.empty()) fireAddonEvent(kEvents[type], {uid});
+    // Then, for the player or its pet (0x004d3790, 0x005d3390), 0x0053d1b0.
+    if (guid == playerGuid || (petGuid_ != 0 && guid == petGuid_)) predictedPowerUsability();
+}
+
+void GameHandler::predictedPowerUsability() {
+    if (!spellHandler_) return;
+    const Unit* player = getUnitByGuid(playerGuid);
+    if (!player) return;
+    // 0x005a8d30: the spell each action slot holds against the player's
+    // power; ACTIONBAR_UPDATE_USABLE (0xb2) where any flipped.
+    bool actions = false;
+    for (size_t i = 0; i < actionBar.size(); ++i) {
+        const auto& a = actionBar[i];
+        const bool shortNow = a.type == ActionBarSlot::SPELL && a.id != 0 && !spellHandler_->enoughPower(a.id, *player);
+        actions |= power_prediction::noteShort(actionShortOfPower_[i], shortNow);
+    }
+    if (actions) fireAddonEvent("ACTIONBAR_UPDATE_USABLE", {});
+    // The forms the same way, UPDATE_SHAPESHIFT_USABLE (0x17a).
+    bool forms = false;
+    for (const auto& form : knownShapeshiftForms(getPlayerClass(), getKnownSpells()))
+        forms |= power_prediction::noteShort(formShortOfPower_[form.spellId],
+                                             !spellHandler_->enoughPower(form.spellId, *player));
+    if (forms) fireAddonEvent("UPDATE_SHAPESHIFT_USABLE", {});
 }
 
 void GameHandler::setPredictedPower(Unit& unit, int type, int32_t value) {

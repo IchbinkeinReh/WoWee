@@ -1892,6 +1892,19 @@ bool SpellHandler::channelCostsMana(const Unit& unit) const {
            it->second.powerType == 0 && powerCost(spell, unit, 0) > 0;
 }
 
+bool SpellHandler::enoughPower(uint32_t spellId, const Unit& unit) const {
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return true;
+    // 0x008017e0: the cost against the power as it is predicted
+    // (0x0071c2e0) - health under it, runes by 0x005ee5b0.
+    const int32_t type = static_cast<int32_t>(it->second.powerType);
+    const int32_t cost = powerCost(spellId, unit, 0);
+    if (type == -2) return cost < static_cast<int32_t>(unit.getHealth());
+    if (type == 5) return runeCost(spellId).paid;
+    if (type >= 0 && type < 7) return owner_.unitPower(unit, type) >= cost;
+    return true;
+}
+
 int32_t SpellHandler::powerCost(uint32_t spellId, const Entity& player, int depth) const {
     const auto own = owner_.spellNameCacheRef().find(spellId);
     if (own == owner_.spellNameCacheRef().end()) return 0;
@@ -2028,15 +2041,7 @@ cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& pla
     // 0x00809000: the spell's history - its cooldown, its category's, its
     // global cooldown.
     c.notReady = playerCooldown(spellId).running;
-    // 0x008017e0: the cost against the power as it is predicted
-    // (0x0071c2e0) - health under it, runes by 0x005ee5b0.
-    {
-        const int32_t type = static_cast<int32_t>(e.powerType);
-        const int32_t cost = powerCost(spellId, player, 0);
-        if (type == -2) c.enoughPower = cost < static_cast<int32_t>(unit.getHealth());
-        else if (type == 5) c.enoughPower = runeCost(spellId).paid;
-        else if (type >= 0 && type < 7) c.enoughPower = owner_.unitPower(unit, type) >= cost;
-    }
+    c.enoughPower = enoughPower(spellId, unit);
     // LEARN_SPELL's spell known, or one SkillLineAbility supersedes it with
     // (0x007260e0, 0x00726160).
     for (int k = 0; k < 3; ++k) {

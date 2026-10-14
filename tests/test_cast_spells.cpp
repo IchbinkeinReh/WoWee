@@ -871,3 +871,34 @@ TEST_CASE("rage falls out of combat and holds in it; mana keeps the five second 
     // Channelling a mana spell that costs holds it too.
     CHECK(interrupted(m, 0, 6000, true, 0u, false));
 }
+
+TEST_CASE("the usability events tell a flip, not every point of power, as 0x0053d1b0 has it", "[cast_spells]") {
+    using namespace power_prediction;
+    // Sinister Strike (45 energy) on a bar, judged each time the prediction
+    // moves (0x00722c50 -> 0x005a8d30): ACTIONBAR_UPDATE_USABLE only where
+    // the slot's short-of-power flag flips.
+    Predicted p;
+    p.reset({0, 0, 0, 30, 0, 0, 0});
+    bool slotShort = false;  // 0x00c1dc98, clear before the first judgement
+    int told = 0;
+    const auto judge = [&] {
+        if (noteShort(slotShort, p.value[3] < 45)) ++told;
+    };
+    judge();
+    CHECK(told == 1);  // 30 is short: flipped from the cleared flag
+    for (int i = 0; i < 14; ++i) {
+        tickEnergy(p, 1);
+        judge();
+    }
+    CHECK(p.value[3] == 44);
+    CHECK(told == 1);  // 31 .. 44: still short, nothing told
+    tickEnergy(p, 1);
+    judge();
+    CHECK(told == 2);  // 45: usable
+    tickEnergy(p, 10);
+    judge();
+    CHECK(told == 2);  // more energy, no event
+    CHECK(set(p, 3, 10, 100));
+    judge();
+    CHECK(told == 3);  // spent: short again
+}

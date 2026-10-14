@@ -95,6 +95,16 @@ struct Predicted {
     return changed;
 }
 
+/// 0x0053d1b0 / 0x005a8d30: an action's or a form's short-of-power flag
+/// takes what the prediction now says; whether it flipped. Only a flip is
+/// told (ACTIONBAR_UPDATE_USABLE, UPDATE_SHAPESHIFT_USABLE), not every
+/// point the power moves.
+[[nodiscard]] constexpr bool noteShort(bool& flag, bool shortNow) {
+    if (flag == shortNow) return false;
+    flag = shortNow;
+    return true;
+}
+
 /// 0x00722d80's question: whether `type` regenerates as interrupted - mana
 /// inside the five second rule (cleared once past it) or channelling a mana
 /// spell that costs (`channellingCost`), anything else in combat
