@@ -93,11 +93,11 @@ public:
             all.push_back({p, double(bright) * cell.area});
         }
         // By power, then by place, so the same model gives the same patches.
-        std::sort(all.begin(), all.end(), [](const Ranked& x, const Ranked& y) {
-            if (x.power != y.power) return x.power > y.power;
-            if (x.patch.centre.x != y.patch.centre.x) return x.patch.centre.x < y.patch.centre.x;
-            if (x.patch.centre.y != y.patch.centre.y) return x.patch.centre.y < y.patch.centre.y;
-            return x.patch.centre.z < y.patch.centre.z;
+        std::sort(all.begin(), all.end(), [](const Ranked& lhs, const Ranked& rhs) {
+            if (lhs.power != rhs.power) return lhs.power > rhs.power;
+            if (lhs.patch.centre.x != rhs.patch.centre.x) return lhs.patch.centre.x < rhs.patch.centre.x;
+            if (lhs.patch.centre.y != rhs.patch.centre.y) return lhs.patch.centre.y < rhs.patch.centre.y;
+            return lhs.patch.centre.z < rhs.patch.centre.z;
         });
         const size_t kept = std::min(all.size(), maxPatches);
         std::vector<GlowPatch> out;
