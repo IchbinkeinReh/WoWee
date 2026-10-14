@@ -26,8 +26,6 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerWake;
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
     // Unread here; declared so the cascades below land where the renderer writes them.
-    mat4 rtViewProj;
-    vec4 rtCameraPos;
     vec4 rtParams;
     vec4 cameraFogColor;
     vec4 averagedDirectColor;

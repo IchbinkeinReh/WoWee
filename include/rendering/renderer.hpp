@@ -683,9 +683,10 @@ public:
     void setLightingTune(const LightingTune& tune) { lightingTune_ = tune; }
     const LightingTune& lightingTune() const { return lightingTune_; }
     /// What the surfaces show instead of themselves, for looking at the ray
-    /// traced lighting's parts (rt_lighting.glsli): 0 nothing, 1-4 the probe
-    /// volume's, 5 the traced sun, 6 the point lights, 7 the traced
-    /// occlusion. WOWEE_GI_DEBUG, when set, wins.
+    /// traced lighting's parts (rt_lighting.glsli, rt_apply.glsli): 0 nothing,
+    /// 1-4 the probe volume's, 5 the traced sun, 6 the point lights, 7 the
+    /// traced occlusion, 8 the length of the traced history, 9 how well each
+    /// pixel found its own surface in the trace. WOWEE_GI_DEBUG, when set, wins.
     void setRtDebugView(int view) { rtDebugView_ = view; }
     /// The time of day the world is lit at, in hours (0-24), instead of the
     /// server's; negative for the server's own (Settings > Debug Graphics,
@@ -874,12 +875,18 @@ private:
     static constexpr uint32_t SEC_M2        = 5;  // M2 + particles + glow (worker 3)
     static constexpr uint32_t SEC_POST      = 6;  // water + weather + effects (worker 4)
     static constexpr uint32_t SEC_IMGUI     = 7;  // ImGui (main thread, non-FSR only)
-    static constexpr uint32_t NUM_SECONDARIES = 8;
+    // With the ray traced lighting the blended halves of the WMO and the
+    // models go after its trace, each in a buffer of its own recorded by the
+    // same worker as its opaque half (renderWorld).
+    static constexpr uint32_t SEC_WMO_BLEND = 8;  // WMO blended batches (worker 1)
+    static constexpr uint32_t SEC_M2_BLEND  = 9;  // M2 blended + particles + ribbons (worker 3)
+    static constexpr uint32_t NUM_SECONDARIES = 10;
     static constexpr uint32_t NUM_WORKERS = 5;
 
-    /// The doodads and, among their blended batches, the characters' own, by
-    /// distance. withCharacters: whether the characters draw at all.
-    void renderM2Models(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, bool withCharacters);
+    /// The doodads' blended batches and, among them, the characters' own, by
+    /// distance. withCharacters: whether the characters draw at all. After
+    /// m2Renderer->renderOpaque, on the same buffer or another.
+    void renderM2Blended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, bool withCharacters);
 
     // Per-worker command pools (thread-safe: one pool per thread)
     VkCommandPool workerCmdPools_[NUM_WORKERS] = {};
@@ -904,6 +911,7 @@ private:
     struct PendingWorld {
         bool pending = false;
         bool parallel = false;      // recorded into secondaries, not inline
+        bool deferred = false;      // the opaque phase in the G-buffer pass (leaveGbufferPhase)
         bool queueTerrain = false;
         bool queueWmo = false;
         bool queueM2 = false;
@@ -924,13 +932,31 @@ private:
     float lastDeltaTime_ = 0.0f;           // cached for post-process pipeline
     bool createSecondaryCommandResources();
     void destroySecondaryCommandResources();
-    VkCommandBuffer beginSecondary(uint32_t secondaryIndex);
+    /// gbufferPhase: for the ray traced lighting's G-buffer pass, not the
+    /// scene pass.
+    VkCommandBuffer beginSecondary(uint32_t secondaryIndex, bool gbufferPhase = false);
     void setSecondaryViewportScissor(VkCommandBuffer cmd);
 
     // Cached render pass state for secondary buffer inheritance
     VkRenderPass activeRenderPass_ = VK_NULL_HANDLE;
     VkFramebuffer activeFramebuffer_ = VK_NULL_HANDLE;
     VkExtent2D activeRenderExtent_ = {.width = 0, .height = 0};
+
+    // The ray traced lighting's frame (docs/deferred_rt_design.md): the scene
+    // begins in the G-buffer pass, the opaque phase draws there, and
+    // leaveGbufferPhase traces, applies and resumes the scene pass for the
+    // blended phase. Decided in beginFrame.
+    bool rtDeferredThisFrame_ = false;
+    bool gbufferPhaseOpen_ = false;
+    VkFramebuffer gbufferFramebuffer_ = VK_NULL_HANDLE;
+    // The scene's colour attachment 0 and its depth, which the trace reads
+    // and the apply pass draws into.
+    VkImage rtSceneDepth_ = VK_NULL_HANDLE;
+    VkImageView rtSceneColour_ = VK_NULL_HANDLE;
+    /// Close the G-buffer pass, trace and apply when the world was drawn, and
+    /// begin the scene pass again for what is drawn after. Once a frame; a
+    /// no-op outside the G-buffer phase.
+    void leaveGbufferPhase();
 
     // Active character previews for off-screen rendering
     std::vector<CharacterPreview*> activePreviews_;
@@ -964,8 +990,7 @@ private:
     std::vector<std::future<void>> screenshotWrites_;
     void writeRtLightingBindings();
     VkExtent2D sceneRenderExtent() const;
-    void recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool depthIsMsaa);
-    bool rtRecordedThisFrame_ = false;
+    void recordRtLighting();
     float volumetricFogDensity_ = 1.0f;
     /// Whether this frame builds the volume, decided where the per-frame block
     /// is written so the block's switch and the dispatch cannot disagree.

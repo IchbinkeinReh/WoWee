@@ -32,12 +32,10 @@ struct GPUPerFrameData {
     // z = 1 / ln(far / near), w = slice count. Off in the reflection pass and
     // the character preview, which bind a neutral volume there.
     glm::vec4 volumetricParams;
-    // Last frame's ray traced lighting at set 0 bindings 3 to 5, and how to
-    // find a surface in it (rt_lighting.glsli): the view-projection and camera
-    // position it was traced with, and params.x = mode, 0 when there is no
-    // result to read. Zero in the reflection pass and the character preview.
-    glm::mat4 rtViewProj;
-    glm::vec4 rtCameraPos;
+    // This frame's ray traced lighting at set 0 bindings 3 to 5, which what is
+    // drawn after the trace reads (rt_lighting.glsli): params.x = mode, 0
+    // when there is no result. Zero in the reflection pass and the character
+    // preview.
     glm::vec4 rtParams;
     // The camera's own fog colour, its WMO interior's fog blended in by how
     // far in it is (0x007f16f0's 0xd38ba0). fogColor above is the zone's
@@ -111,7 +109,7 @@ struct GPUPerFrameData {
 // std140 adds no padding between mat4 and vec4 members, so this is the block's
 // size on the GPU as well. A change here is a change to every PerFrame block
 // that declares the members it touches.
-static_assert(sizeof(GPUPerFrameData) == 1088, "GPUPerFrameData no longer matches the shaders' PerFrame");
+static_assert(sizeof(GPUPerFrameData) == 1008, "GPUPerFrameData no longer matches the shaders' PerFrame");
 
 // Push constants for the model matrix (most common case)
 struct GPUPushConstants {

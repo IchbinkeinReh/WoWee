@@ -3,7 +3,6 @@
 #include "rendering/vk_shader.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/blob_shadow.hpp"
-#include "rendering/rt_mover.hpp"
 
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
@@ -156,8 +155,10 @@ public:
     /// among the doodads' (see planBlended and M2Renderer::BlendedInterleave).
     enum class Phase { All, Opaque, Blended };
     /// onlyInstance: draw that instance alone (0 = all of them).
+    /// gbuffer: the opaque phase into the ray traced lighting's G-buffer
+    /// pass, with the pipelines built for it.
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                Phase phase = Phase::All, uint32_t onlyInstance = 0);
+                Phase phase = Phase::All, uint32_t onlyInstance = 0, bool gbuffer = false);
 
     /// An instance with blended batches, and its squared distance from the camera.
     struct BlendedDraw {
@@ -422,10 +423,6 @@ public:
         uint32_t shapes = 0;      // appearances registered
     };
     [[nodiscard]] RtStats rtStats() const { return rtStats_; }
-    /// Every unit and what it carries as syncRtScene placed them this frame,
-    /// with how each moved since the last: the ray traced lighting's movers
-    /// (RtLighting::FrameInputs::movers), ranked by distance.
-    [[nodiscard]] const std::vector<RtMover>& rtMovers() const { return rtMovers_; }
 
 private:
     std::unordered_map<std::string, pipeline::BLPImage>* predecodedBLPCache_ = nullptr;
@@ -604,11 +601,6 @@ private:
         // 0x00781a10), and lightFlags as drawn.
         float directScale = 1.0f;
         glm::vec4 drawFlags{0.0f, 1.0f, 0.0f, 0.0f};
-        // The model matrix syncRtScene placed the instance with, and in
-        // which of its generations: how it moved since, for the lighting's
-        // movers (RtMover::prevFromCur).
-        glm::mat4 rtPlacedModel{1.0f};
-        uint64_t rtPlacedGeneration = 0;
 
         // Enchant visual attached to a weapon. It needs its animation advanced
         // even though its transform comes from the parent; it is drawn by its
@@ -641,13 +633,10 @@ private:
 
         const M2ModelGPU* cachedModel = nullptr;  // Avoid per-frame hash lookups
 
-        // Per-instance bone SSBOs, a ring of three by boneFrame_: this
-        // frame's pose, and last frame's beside it, which the frame before is
-        // still drawing with, as the ray traced lighting a surface reads was
-        // traced a frame earlier and it finds itself where it stood then
-        // (character.vert). Past the bones, at MAX_BONES, the model matrix.
-        // Set k binds ring k at 0 and the one before it at 1.
-        static constexpr int kBoneRing = 3;
+        // Per-instance bone SSBOs, one for each frame in flight, taken in
+        // turn by boneFrame_: this frame's pose, while the frame before still
+        // draws with the other. Set k binds buffer k.
+        static constexpr int kBoneRing = 2;
         VkBuffer boneBuffer[kBoneRing] = {};
         VmaAllocation boneAlloc[kBoneRing] = {};
         void* boneMapped[kBoneRing] = {};
@@ -745,6 +734,10 @@ private:
     /// The client's per-material state on top of a blend pipeline: culled
     /// unless two-sided (0x4), depth test off for 0x8, depth write off for 0x10.
     VkPipeline pipelineVariant(VkPipeline base, uint16_t materialFlags, bool mirrored) const;
+    /// The opaque phase's bases with their variants, for the G-buffer pass;
+    /// null for any other base.
+    std::unordered_map<VkPipeline, std::array<VkPipeline, kPipelineVariantCount>> gbufferVariants_;
+    VkPipeline gbufferVariant(VkPipeline base, uint16_t materialFlags, bool mirrored) const;
     void destroyPipelineVariants();
     // Whole-instance fades (ghost form, spawn fade-in): alpha blend with depth
     // write kept on, so the faded model still self-occludes instead of showing
@@ -952,14 +945,11 @@ private:
     std::unordered_map<uint32_t, RtCharacter> rtCharacters_;
     uint64_t rtSyncGeneration_ = 0;
     RtStats rtStats_;
-    std::vector<RtMover> rtMovers_;
     /// Counted once a frame by prepareRender: which of an instance's bone
     /// buffers is this frame's (boneFrame_ % kBoneRing).
     uint64_t boneFrame_ = 0;
-    /// This frame's pose and placement into the instance's bone buffer of
-    /// this frame, once; whether last frame's is there too (character.vert
-    /// then places the surface where it was).
-    bool writeFrameBones(CharacterInstance& inst, const glm::mat4& model);
+    /// This frame's pose into the instance's bone buffer of this frame, once.
+    void writeFrameBones(CharacterInstance& inst);
     uint64_t rtShapeKey(const CharacterInstance& inst, const M2ModelGPU& gm,
                         std::vector<std::pair<uint32_t, uint32_t>>& batches);
     void rtAcquireShape(uint64_t key, const CharacterInstance& inst, const M2ModelGPU& gm,

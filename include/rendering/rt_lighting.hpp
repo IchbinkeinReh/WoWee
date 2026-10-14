@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -9,7 +10,6 @@
 #include <vulkan/vulkan.h>
 
 #include "rendering/rt_gi_probes.hpp"
-#include "rendering/rt_mover.hpp"
 #include "rendering/rt_point_lights.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_utils.hpp"
@@ -20,23 +20,24 @@ namespace rendering {
 class RtScene;
 
 /**
- * Ray traced sun shadows, ambient occlusion and multi-bounce diffuse light for
- * the forward renderer.
+ * Ray traced sun shadows, ambient occlusion, point lights and multi-bounce
+ * diffuse light, on a deferred lighting path (docs/deferred_rt_design.md).
+ *
+ * The opaque surfaces draw as the client draws them, each computing its own
+ * colour in its own shader, and in the same draw write a G-buffer beside it
+ * (VkContext::getGbufferRenderPass, rt_gbuffer.glsli): how that colour
+ * depends on the traced terms, which it drew neutral. Right after them, in
+ * the same frame, this traces from the depth and that G-buffer - one sample
+ * per term per pixel at half resolution, accumulated over frames by
+ * reprojecting the texels' own positions with the camera's motion, smoothed
+ * with an edge-aware filter - and a full-screen pass applies the result to
+ * the colour (rt_apply.glsli). What is drawn after it - the blended batches,
+ * a unit drawn see-through - reads the same result at its own position
+ * (rt_lighting.glsli). Nothing is read a frame late.
  *
  * The diffuse light is a probe volume around the camera (RtGiProbes), updated
- * in Full mode alongside the per-pixel terms below and read by the surfaces
- * at their own position and normal. The rest of this comment is the
- * per-pixel sun and occlusion.
- *
- * There is no G-buffer to trace from, so the pass runs after the opaque
- * geometry, on the depth it left: rebuild normals from depth, trace one
- * sample per term per pixel at half resolution, accumulate over frames with
- * reprojection, and smooth with an edge-aware filter. The surface shaders
- * read the result in the *next* frame, reprojecting their own position into
- * the frame the result was traced in (rt_lighting.glsli). Where that misses -
- * a surface just revealed, or one that moved - they fall back to the shadow
- * map and the flat ambient, so the one frame of latency only ever shows as
- * the old lighting, never as a hole.
+ * in Full mode beside the per-pixel terms and read by the surfaces at their
+ * own position and normal.
  *
  * What RtScene holds casts: terrain, buildings and doodads, and as dynamic
  * instances the characters, what they carry and what moves
@@ -45,13 +46,12 @@ class RtScene;
  * The point lights of the frame - torches, braziers, lamps, the omni lights
  * of buildings (rt_point_lights.hpp) - are traced in the same pass: their
  * light unshadowed into an image of its own, the fraction of it that arrives
- * beside the sun's visibility (rt_trace.comp.glsl). The surfaces add their
- * product to their light. With the pass off nothing reads either, and the
- * world is lit as the original lights it, by none of them.
+ * beside the sun's visibility (rt_trace.comp.glsl). With the pass off nothing
+ * reads either, and the world is lit as the original lights it, by none of
+ * them.
  *
- * The results are double-buffered by frame slot. Slot s writes its outputs
- * after its opaque pass; the per-frame set of slot s binds the outputs of the
- * other slot, which is the frame before it.
+ * The history is double-buffered by frame slot: slot s accumulates over the
+ * other slot's, which is the frame before it.
  */
 class RtLighting {
 public:
@@ -64,26 +64,30 @@ public:
     RtLighting(const RtLighting&) = delete;
     RtLighting& operator=(const RtLighting&) = delete;
 
-    /// Creates the sampler and the neutral image the per-frame sets bind while
-    /// the pass is off. Pipelines are built on first use.
+    /// Creates the samplers and the neutral image the per-frame sets bind
+    /// while the pass is off. Pipelines are built on first use.
     bool initialize(VkContext* ctx, RtScene* scene);
     void shutdown();
 
     void setMode(Mode mode) { mode_ = mode; }
     [[nodiscard]] Mode mode() const { return mode_; }
     [[nodiscard]] bool active() const { return mode_ != Mode::Off && pipelinesOk_; }
+    /// Whether a frame can be drawn through the G-buffer pass now: active,
+    /// with its images, and the device able to (VkContext::getGbufferRenderPass).
+    [[nodiscard]] bool ready() const;
 
-    /// Bring the images to the size the scene is rendered at, and the probe
-    /// volume into being or out of it with the mode. Call between frames,
-    /// before the per-frame sets are used. Returns true when the views
-    /// changed and the per-frame sets must be written again.
-    bool prepare(VkExtent2D sceneExtent);
+    /// Bring the images to the size and sample count the scene is rendered
+    /// at, and the probe volume into being or out of it with the mode. Call
+    /// between frames, before the per-frame sets are used. Returns true when
+    /// the views changed and the per-frame sets must be written again.
+    bool prepare(VkExtent2D sceneExtent, VkSampleCountFlagBits samples);
 
     /// The immutable sampler for per-frame bindings 3 to 5.
     [[nodiscard]] VkSampler sampler() const { return linearSampler_; }
     /// What per-frame set `slot` binds at 3 (sun, AO, point light share,
     /// distance), 4 (the probe atlas, rt_gi.glsli) and 5 (the point lights
-    /// unshadowed).
+    /// unshadowed): the result the frame of that slot traces, which what it
+    /// draws after the trace reads.
     [[nodiscard]] VkImageView lightViewForSlot(uint32_t slot) const;
     [[nodiscard]] VkImageView giViewForSlot(uint32_t slot) const;
     [[nodiscard]] VkImageView pointViewForSlot(uint32_t slot) const;
@@ -102,6 +106,10 @@ public:
     [[nodiscard]] VkExtent2D traceExtent() const { return traceExtent_; }
     [[nodiscard]] const RtGiProbes& probes() const { return probes_; }
 
+    /// The G-buffer pass's framebuffer over the scene's own colour (its MSAA
+    /// image under MSAA) and depth views; made on first use.
+    VkFramebuffer gbufferFramebuffer(VkImageView colour, VkImageView depth);
+
     struct FrameInputs {
         glm::mat4 viewProj;
         glm::vec3 cameraPos;
@@ -114,43 +122,41 @@ public:
         /// no map), the map giving their shadows in this frame's pose.
         glm::vec3 unitMapCenter{0.0f};
         float unitMapRadius = 0.0f;
-        /// What moves on its own this frame, most important (nearest) first;
-        /// past kMaxMovers are dropped. The surfaces do not take a mover's
-        /// texels of the result for what stood behind it a frame earlier
-        /// (rtLightAt, rt_lighting.glsli).
-        const std::vector<RtMover>* movers = nullptr;
+        /// The Debug Graphics strengths, as the per-frame block has them
+        /// (rtTune, lightTune), for the apply pass: the shadow darkness, the
+        /// traced sun shadow, the occlusion, the point lights, the baked
+        /// lamps' shadows, the point lights' shadows; and the debug view.
+        float shadowStrength = 0.6f;
+        float sunShadow = 1.0f;
+        float occlusion = 1.0f;
+        float pointLights = 1.0f;
+        float bakedLampShadow = 0.6f;
+        float pointShadow = 1.0f;
+        int debugView = 0;
     };
-    /// Must match RT_MAX_MOVERS in rt_movers.glsli. A G-buffer texel carries
-    /// its mover as 4 x (index + 1) beside its 2x2 sub-pixel in a half float,
-    /// which holds whole numbers exactly to 2048.
-    static constexpr uint32_t kMaxMovers = 500;
 
-    /// Once a frame, before consumerData: where the camera is and which
-    /// interior rooms it stands in (0 outside). After a teleport the surfaces
-    /// take nothing of the old result; after a cut - the camera pulled in by
-    /// a wall, a seat taken - or a room entered or left they take only their
-    /// own texels of it, borrowing nothing from beside. Either way the next
-    /// trace starts its history afresh.
-    void noteCamera(const glm::vec3& cameraPos, uint64_t roomKey);
+    /// The scene the G-buffer pass drew: its depth image, still in
+    /// DEPTH_STENCIL_ATTACHMENT_OPTIMAL (it is returned to it), and its
+    /// colour as attachment 0 - the MSAA image under MSAA - as the G-buffer
+    /// pass left it, which the apply pass draws into.
+    struct SceneTarget {
+        VkImage depthImage = VK_NULL_HANDLE;
+        VkImageView colourView = VK_NULL_HANDLE;
+        VkExtent2D extent{};
+    };
 
-    /// Record the pass. Outside a render pass, after the opaque geometry.
-    /// The depth image must be in DEPTH_STENCIL_ATTACHMENT_OPTIMAL and is
-    /// returned to it.
-    void record(VkCommandBuffer cmd, VkImage sceneDepth, VkExtent2D sceneExtent, bool depthMsaa,
-                const FrameInputs& in);
+    /// Record the trace and the apply pass, outside a render pass, after the
+    /// G-buffer pass and before anything blended.
+    void record(VkCommandBuffer cmd, const SceneTarget& target, const FrameInputs& in);
 
-    /// What the surface shaders need to find last frame's result, for the
-    /// per-frame block: the view-projection it was traced with, the camera
-    /// position, and params (x = mode, 0 when there is no usable result;
-    /// z = 1 when the surfaces must not borrow this frame, noteCamera);
-    /// and the probe volume as the atlas holds it (gi.params.x 0 when off).
+    /// What the surface shaders need for the per-frame block: params.x the
+    /// mode when this frame is traced (traced), 0 otherwise; and the probe
+    /// volume as the atlas holds it (gi.params.x 0 when off).
     struct ConsumerData {
-        glm::mat4 viewProj{1.0f};
-        glm::vec4 cameraPos{0.0f};
         glm::vec4 params{0.0f};
         RtGiProbes::ConsumerData gi;
     };
-    [[nodiscard]] ConsumerData consumerData() const;
+    [[nodiscard]] ConsumerData consumerData(bool traced) const;
 
 private:
     struct Target {
@@ -161,19 +167,20 @@ private:
         Target point;              // the point lights unshadowed (rt_trace.comp)
         AllocatedBuffer ubo{};
         AllocatedBuffer lights{};  // rt_lights::PointLightGPU[kMaxPointLights], mapped
-        AllocatedBuffer movers{};  // RtMoverGPU[kMaxMovers], mapped
         VkDescriptorSet sets[3] = {};  // one per filter pass; set 0 also runs the rest
-        VkImage boundDepth = VK_NULL_HANDLE;
-        bool wroteImages = false;
+        uint64_t setsGeneration = 0;   // the views they were written for
     };
 
     bool createPipelines();
+    bool createApplyPipeline();
     bool createImages(VkExtent2D traceExtent);
     void destroyImages();
+    bool createGbuffer(VkExtent2D extent, VkSampleCountFlagBits samples);
+    void destroyGbuffer();
     void writeSlotSets(uint32_t slot);
-    /// The frame's movers into the slot's list, those on screen; how many.
-    uint32_t writeMovers(Slot& s, const FrameInputs& in);
-    VkImageView depthViewFor(VkImage image, bool msaa);
+    VkImageView depthViewFor(VkImage image);
+    VkFramebuffer applyFramebuffer(VkImageView colour);
+    void recordApply(VkCommandBuffer cmd, const SceneTarget& target, Slot& s);
 
     VkContext* ctx_ = nullptr;
     RtScene* scene_ = nullptr;
@@ -181,13 +188,25 @@ private:
     bool pipelinesTried_ = false;
     bool pipelinesOk_ = false;
 
-    VkExtent2D sceneExtent_{};
     VkExtent2D traceExtent_{};
     Slot slots_[MAX_FRAMES_IN_FLIGHT];
     Target raw_, tmp_;
     RtGiProbes probes_;
     AllocatedImage neutral_{};
-    bool imagesNeedInit_ = false;
+
+    // The opaque surfaces' G-buffer (VkContext::kGbufferFormat), at the
+    // scene's size and sample count, and the passes over it.
+    AllocatedImage gbuf0_{}, gbuf1_{};
+    VkExtent2D gbufExtent_{};
+    VkSampleCountFlagBits gbufSamples_ = VK_SAMPLE_COUNT_1_BIT;
+    std::map<std::pair<VkImageView, VkImageView>, VkFramebuffer> gbufferFramebuffers_;
+    std::map<VkImageView, VkFramebuffer> applyFramebuffers_;
+    VkRenderPass applyRenderPass_ = VK_NULL_HANDLE;
+    VkPipeline apply_ = VK_NULL_HANDLE;
+    VkSampleCountFlagBits applySamples_ = VK_SAMPLE_COUNT_1_BIT;
+    /// Counts the views the sets bind - the G-buffer, the depth - so a slot
+    /// rewrites its sets when they changed.
+    uint64_t viewsGeneration_ = 1;
 
     VkSampler linearSampler_ = VK_NULL_HANDLE;
     VkSampler pointSampler_ = VK_NULL_HANDLE;
@@ -204,26 +223,13 @@ private:
 
     VkImage depthImage_ = VK_NULL_HANDLE;
     VkImageView depthView_ = VK_NULL_HANDLE;
-    bool depthViewMsaa_ = false;
 
-    // Counted by prepare(); a result is usable only in the frame right after
-    // the one that traced it, since that is whose slot the sets bind.
+    // Counted by prepare(): the history is usable only in the frame right
+    // after the one that wrote it, since that is whose slot holds it.
     uint64_t frameCounter_ = 0;
     uint64_t resultFrame_ = 0;
-    glm::mat4 resultViewProj_{1.0f};
-    glm::vec3 resultCameraPos_{0.0f};
-    Mode resultMode_ = Mode::Off;
     glm::mat4 prevViewProj_{1.0f};
     glm::vec3 prevCameraPos_{0.0f};
-    bool havePrev_ = false;
-
-    // noteCamera: this frame's camera against the last, and the room.
-    glm::vec3 notedCamera_{0.0f};
-    uint64_t notedRoom_ = 0;
-    bool notedOnce_ = false;
-    bool teleportThisFrame_ = false;  // nothing of the old result, no history
-    bool cutThisFrame_ = false;       // no history, no borrowing
-    bool roomThisFrame_ = false;      // no history, no borrowing
 };
 
 } // namespace rendering

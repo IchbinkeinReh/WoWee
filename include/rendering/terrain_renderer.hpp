@@ -125,7 +125,10 @@ public:
      * @param perFrameSet Per-frame descriptor set (set 0)
      * @param camera Camera for frustum culling
      */
-    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera);
+    /// gbuffer: drawn in the ray traced lighting's G-buffer pass, with the
+    /// pipelines built for it (VkContext::getGbufferRenderPass).
+    void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                bool gbuffer = false);
 
     /**
      * Initialize terrain shadow pipeline (must be called after initialize()).
@@ -222,6 +225,8 @@ private:
     // Main pipelines
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipeline wireframePipeline = VK_NULL_HANDLE;
+    VkPipeline gbufferPipeline_ = VK_NULL_HANDLE;
+    VkPipeline gbufferWireframe_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;
 

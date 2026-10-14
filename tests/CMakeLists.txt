@@ -1255,6 +1255,12 @@ wowee_add_test(test_rt_gi_volume
 wowee_add_test(test_rt_reconstruct
     SOURCES test_rt_reconstruct.cpp)
 
+# ── test_rt_gbuffer ──────────────────────────────────────────
+# Header-only: the G-buffer the opaque surfaces write beside their colour, and
+# the apply pass over it, against the forward shaders' own lighting formulas.
+wowee_add_test(test_rt_gbuffer
+    SOURCES test_rt_gbuffer.cpp)
+
 # ── test_rt_point_lights ─────────────────────────────────────
 # An M2's lights read from a synthetic file and placed by their bone, a
 # building's, the falloff the trace shader shares, and which lights a crowded

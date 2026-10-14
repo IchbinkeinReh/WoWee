@@ -171,6 +171,30 @@ bool WMORenderer::buildMainPassPipelines(VkDevice device,
         core::Logger::getInstance().warning("WMORenderer: wireframe pipeline not available");
     }
 
+    // The opaque and the wireframe pipeline once more for the ray traced
+    // lighting's G-buffer pass. The blended batches draw after its trace, in
+    // the scene pass, with the transparent pipeline above.
+    if (VkRenderPass gbufferPass = vkCtx_->getGbufferRenderPass()) {
+        const auto buildGbuffer = [&](VkPolygonMode mode) {
+            return PipelineBuilder()
+                .setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
+                            fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
+                .setVertexInput({ vertexBinding }, vertexAttribs)
+                .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+                .setRasterization(mode, VK_CULL_MODE_NONE)
+                .setDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+                .setColorBlendAttachment(PipelineBuilder::blendDisabled())
+                .setGbufferOutputs()
+                .setMultisample(vkCtx_->getMsaaSamples())
+                .setLayout(pipelineLayout_)
+                .setRenderPass(gbufferPass)
+                .setDynamicStates(viewportAndScissorDynamic())
+                .build(device, vkCtx_->getPipelineCache());
+        };
+        gbufferOpaquePipeline_ = buildGbuffer(VK_POLYGON_MODE_FILL);
+        gbufferWireframePipeline_ = buildGbuffer(VK_POLYGON_MODE_LINE);
+    }
+
     return opaquePipeline_ != VK_NULL_HANDLE;
 }
 
@@ -381,6 +405,8 @@ void WMORenderer::shutdown() {
     destroy(device, opaquePipeline_);
     destroy(device, transparentPipeline_);
     destroy(device, wireframePipeline_);
+    destroy(device, gbufferOpaquePipeline_);
+    destroy(device, gbufferWireframePipeline_);
     destroy(device, pipelineLayout_);
     destroy(device, materialDescPool_);
     destroy(device, materialSetLayout_);
@@ -1285,9 +1311,6 @@ void WMORenderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tra
     // Update model matrix and bounds
     inst.modelMatrix = transform;
     inst.invModelMatrix = glm::inverse(transform);
-    if (std::find(rtPlacedIds_.begin(), rtPlacedIds_.end(), instanceId) == rtPlacedIds_.end()) {
-        rtPlacedIds_.push_back(instanceId);
-    }
 
     const glm::vec3 oldBoundsMin = inst.worldBoundsMin;
     const glm::vec3 oldBoundsMax = inst.worldBoundsMax;
@@ -1659,42 +1682,8 @@ void WMORenderer::gatherCandidates(const glm::vec3& queryMin, const glm::vec3& q
     }
 }
 
-// A building that moves - a ship's hull, a gunship - as the ray traced
-// lighting takes it: drawn this frame where its last frame's placement puts a
-// surface, it finds itself in the result traced then (wmo.vert), and its
-// texels are a mover's, which nothing else takes (RtMover).
-void WMORenderer::prepareRtMovers() {
-    WOWEE_PROFILE_SCOPE("prepare: wmo movers", Cpu);
-    rtMovers_.clear();
-    std::vector<uint32_t> placed;
-    placed.swap(rtPlacedIds_);
-    for (uint32_t id : placed) {
-        auto it = instanceIndexById.find(id);
-        if (it == instanceIndexById.end()) continue;
-        WMOInstance& inst = instances[it->second];
-        if (inst.rtLastFrame == currentFrameId) continue;  // listed twice
-        const bool drawnLastFrame = inst.rtLastFrame != 0 && inst.rtLastFrame + 1 == currentFrameId;
-        const bool moved = drawnLastFrame && inst.rtLastModel != inst.modelMatrix;
-        if (moved) {
-            inst.rtPrevModel = inst.rtLastModel;
-            inst.rtPrevFrame = currentFrameId;
-            RtMover m;
-            m.lo = inst.worldBoundsMin - glm::vec3(0.1f);
-            m.hi = inst.worldBoundsMax + glm::vec3(0.1f);
-            m.prevFromCur = inst.rtLastModel * inst.invModelMatrix;
-            m.rank = 0.0f;  // few and large: always among the movers
-            rtMovers_.push_back(m);
-        }
-        inst.rtLastModel = inst.modelMatrix;
-        inst.rtLastFrame = currentFrameId;
-        // Watched until a frame passes with it standing still.
-        if (moved || !drawnLastFrame) rtPlacedIds_.push_back(id);
-    }
-}
-
 void WMORenderer::prepareRender() {
     ++currentFrameId;
-    prepareRtMovers();
 
     // Update material UBOs if settings changed (mapped memory writes - main thread only)
     if (materialSettingsDirty_) {
@@ -1722,9 +1711,9 @@ void WMORenderer::prepareRender() {
 }
 
 void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                         const glm::vec3* viewerPos, bool deferBlended) {
+                         const glm::vec3* viewerPos, bool gbuffer) {
     deferredBlends_.clear();
-    if (!opaquePipeline_ || instances.empty()) {
+    if (!opaquePipeline_ || instances.empty() || (gbuffer && !gbufferOpaquePipeline_)) {
         lastDrawCalls = 0;
         return;
     }
@@ -1889,6 +1878,10 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
     // ── Phase 2: Vulkan draw ────────────────────────────────
     // Select pipeline based on wireframe mode
     VkPipeline activePipeline = (wireframeMode && wireframePipeline_) ? wireframePipeline_ : opaquePipeline_;
+    if (gbuffer) {
+        activePipeline = (wireframeMode && gbufferWireframePipeline_) ? gbufferWireframePipeline_
+                                                                      : gbufferOpaquePipeline_;
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline);
 
     // Bind per-frame descriptor set (set 0)
@@ -1904,10 +1897,9 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
         const ModelData& model = *dl.model;
 
 
-        // Push model matrix, and last frame's where it moved since
+        // Push model matrix
         WMOInstancePush push{};
         push.model = instance.modelMatrix;
-        push.prevModel = instance.rtPrevFrame == currentFrameId ? instance.rtPrevModel : instance.modelMatrix;
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                             0, sizeof(WMOInstancePush), &push);
 
@@ -1957,7 +1949,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
                 int neededPipeline = 0; // opaque
                 if (mb.isTransparent && transparentPipeline_) {
                     neededPipeline = 1; // transparent (alpha blend, no depth write)
-                    if (deferBlended) {
+                    if (gbuffer) {
                         deferredBlends_.push_back({.group = &group, .batch = &mb,
                                                    .instanceIndex = dl.instanceIndex, .push = groupPush});
                         continue;
@@ -2006,7 +1998,6 @@ void WMORenderer::renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet
             const auto& instance = instances[d.instanceIndex];
             WMOInstancePush push{};
             push.model = instance.modelMatrix;
-            push.prevModel = instance.rtPrevFrame == currentFrameId ? instance.rtPrevModel : instance.modelMatrix;
             vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(WMOInstancePush), &push);
             boundInstance = d.instanceIndex;
@@ -4621,9 +4612,6 @@ void WMORenderer::updateInteriorPass(const glm::vec3& cameraPos, const Frustum* 
     std::unordered_map<uint32_t, std::vector<uint8_t>> pass;
     std::vector<std::pair<glm::vec3, glm::vec3>> bounds;
     std::vector<size_t> candidates;
-    // The interior rooms the camera is in (cameraRoomKey): the building and
-    // its groups that are not outside (0x8).
-    uint64_t roomKey = 0;
     gatherCandidates(cameraPos - glm::vec3(0.5f), cameraPos + glm::vec3(0.5f), candidates);
     for (size_t idx : candidates) {
         const auto& instance = instances[idx];
@@ -4643,14 +4631,6 @@ void WMORenderer::updateInteriorPass(const glm::vec3& cameraPos, const Frustum* 
             if (glm::all(glm::greaterThanEqual(local, g.boundingBoxMin)) &&
                 glm::all(glm::lessThanEqual(local, g.boundingBoxMax))) {
                 cameraGroups.push_back(static_cast<uint32_t>(gi));
-                if ((g.groupFlags & 0x8) == 0) {
-                    // Summed, so the order the buildings come in does not count.
-                    uint64_t h = (static_cast<uint64_t>(instance.id) << 20) ^ static_cast<uint64_t>(gi);
-                    h ^= h >> 33;
-                    h *= 0xff51afd7ed558ccdull;
-                    h ^= h >> 33;
-                    roomKey += h | 1u;
-                }
             }
         }
         if (cameraGroups.empty()) continue;
@@ -4677,7 +4657,6 @@ void WMORenderer::updateInteriorPass(const glm::vec3& cameraPos, const Frustum* 
         }
         if (any) pass[instance.id] = std::move(groups);
     }
-    cameraRoomKey_ = roomKey;
     if (pass != interiorPass_) {
         interiorPass_ = std::move(pass);
         ++interiorPassGeneration_;
@@ -4957,6 +4936,8 @@ void WMORenderer::recreatePipelines() {
     destroy(device, opaquePipeline_);
     destroy(device, transparentPipeline_);
     destroy(device, wireframePipeline_);
+    destroy(device, gbufferOpaquePipeline_);
+    destroy(device, gbufferWireframePipeline_);
 
     // --- Load shaders ---
     VkShaderModule vertShader, fragShader;

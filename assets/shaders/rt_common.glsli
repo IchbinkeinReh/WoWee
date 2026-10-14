@@ -1,8 +1,11 @@
-// Shared by the ray traced lighting passes (rt_*.comp.glsl).
+// Shared by the ray traced lighting passes (rt_*.comp.glsl, rt_apply).
 //
-// Set 0 is the lighting pass's own: this block, the scene depth and the
-// working images. Set 1 is the scene (rt_trace_sw.glsli / rt_trace_hw.glsli).
+// Set 0 is the lighting pass's own: this block, the scene depth, the
+// G-buffer the opaque surfaces wrote (rt_gbuffer.glsli) and the working
+// images. Set 1 is the scene (rt_trace_sw.glsli / rt_trace_hw.glsli).
 // Must match RtPassData in rt_lighting.cpp.
+
+#include "rt_gbuffer.glsli"
 
 layout(set = 0, binding = 0) uniform RtPassData {
     mat4 invViewProj;    // this frame: NDC -> world
@@ -13,15 +16,20 @@ layout(set = 0, binding = 0) uniform RtPassData {
     vec4 sunColor;       // rgb; w = 1 when the sun is above the horizon
     vec4 skyColor;       // rgb radiance of a ray that escapes
     vec4 params;         // x = mode (1 shadows, 2 +AO, 3 +probe GI), y = AO
-                         // radius, z unused, w = shadow ray length
+                         // radius, z = how many point lights, w = shadow ray length
     vec4 extent;         // xy = trace size, zw = 1 / trace size
     vec4 sceneExtent;    // xy = scene depth size, zw = 1 / size
     vec4 misc;           // x = 1 when the acceleration structure holds anything,
-                         // y = 1 when last frame's slot holds history,
-                         // z = how many movers the list holds (rt_movers.glsli)
+                         // y = 1 when last frame's slot holds history
     mat4 invViewProjRel; // this frame: NDC -> world less the camera position
     vec4 unitMap;        // xyz the shadow map's centre, w the radius it draws
                          // the units' sun shadows within (0: none)
+    // The Debug Graphics strengths, as the forward shaders take them from the
+    // per-frame block (rt_lighting.glsli), for the apply pass.
+    vec4 tune;           // x shadow darkness, y traced sun shadow, z occlusion,
+                         // w point lights
+    vec4 tune2;          // x baked-lamp shadows, y point lights' shadows,
+                         // z the debug view (0 none)
     // The probe volume (rt_gi.glsli), read only by the probe passes.
     vec4 giVolume[2];        // the grid this frame's update writes
     vec4 giVolumeMod[2];
@@ -104,40 +112,32 @@ vec3 rtRelFromDepth(vec2 uv, float depth) {
     return w.xyz / w.w;
 }
 
-// The tracer's G-buffer texel: octahedral normal in xy, distance to the
-// camera in z (0 for sky), and in w which pixel of the 2x2 scene block it was
-// taken from (0-3, x fastest), plus 4 x (1 + the mover's index) where that
-// surface is a mover's (rtGbufMover, rt_movers.glsli). The nearest surface in
-// the block is kept, so the edge of an object in front of the sky or a far
-// wall is never lost to the half resolution.
-vec2 rtOctEncode(vec3 n) {
-    n /= abs(n.x) + abs(n.y) + abs(n.z);
-    vec2 e = n.xy;
-    if (n.z < 0.0) e = (1.0 - abs(n.yx)) * vec2(e.x >= 0.0 ? 1.0 : -1.0, e.y >= 0.0 ? 1.0 : -1.0);
-    return e;
-}
-
-vec3 rtOctDecode(vec2 e) {
-    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
-    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
-    return normalize(n);
-}
-
+// The tracer's G-buffer texel, at trace resolution: octahedral normal in xy
+// (rebuilt from the depth), distance to the camera in z (0 for sky), and in
+// w which pixel of the 2x2 scene block it was taken from (0-3, x fastest),
+// plus 4 where that pixel is a surface of the tracing's (RT_GB_VALID in the
+// opaque G-buffer). The nearest such surface in the block is kept, so the
+// edge of an object in front of the sky or a far wall is never lost to the
+// half resolution.
 vec3 rtGbufNormal(vec4 g) { return rtOctDecode(g.xy); }
 float rtGbufDist(vec4 g) { return g.z; }
-// 0 for what stands still, else 1 + the index of the mover it is.
-int rtGbufMover(vec4 g) { return int(g.w + 0.5) >> 2; }
+int rtGbufSub(vec4 g) { return int(g.w + 0.5) & 3; }
+bool rtGbufValid(vec4 g) { return (int(g.w + 0.5) & 4) != 0; }
 
 // The first scene pixel of trace texel px's block, and the block's size.
 ivec2 rtBlockBase(ivec2 px) {
     return ivec2(floor(vec2(px) * pass.sceneExtent.xy * pass.extent.zw));
 }
 
+// The scene pixel a G-buffer texel stands for.
+ivec2 rtGbufPixel(vec4 g, ivec2 px) {
+    int sub = rtGbufSub(g);
+    return rtBlockBase(px) + ivec2(sub & 1, sub >> 1);
+}
+
 // World position a G-buffer texel stands for.
 vec3 rtGbufWorld(vec4 g, ivec2 px) {
-    int sub = int(g.w + 0.5) & 3;
-    ivec2 sp = rtBlockBase(px) + ivec2(sub & 1, sub >> 1);
-    vec2 uv = (vec2(sp) + 0.5) * pass.sceneExtent.zw;
+    vec2 uv = (vec2(rtGbufPixel(g, px)) + 0.5) * pass.sceneExtent.zw;
     vec3 dir = normalize(rtRelFromDepth(uv, 0.5));
     return pass.cameraPos.xyz + dir * g.z;
 }

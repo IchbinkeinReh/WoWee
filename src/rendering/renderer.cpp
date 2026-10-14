@@ -736,14 +736,9 @@ void Renderer::updatePerFrameUBO() {
     // colours.
 
     if (rtLighting_) {
-        // A camera that jumped, or a room entered or left, before the result
-        // of the last frame is read (RtLighting::noteCamera).
-        if (camera) {
-            rtLighting_->noteCamera(camera->getPosition(), wmoRenderer ? wmoRenderer->cameraRoomKey() : 0);
-        }
-        const RtLighting::ConsumerData rt = rtLighting_->consumerData();
-        currentFrameData.rtViewProj = rt.viewProj;
-        currentFrameData.rtCameraPos = rt.cameraPos;
+        // The mode when this frame is traced, which is when what draws after
+        // the trace reads its result (rt_lighting.glsli).
+        const RtLighting::ConsumerData rt = rtLighting_->consumerData(rtDeferredThisFrame_);
         currentFrameData.rtParams = rt.params;
         for (int c = 0; c < 2; ++c) {
             currentFrameData.giVolume[c] = rt.gi.volume[c];
@@ -1000,15 +995,6 @@ bool Renderer::initialize(core::Window* win) {
     // Create PostProcessPipeline (§4.3 - owns FSR/FXAA/FSR2/FSR3/brightness)
     postProcessPipeline_ = std::make_unique<PostProcessPipeline>();
     postProcessPipeline_->initialize(vkCtx);
-    // The ray traced lighting normally records where the water leaves the
-    // scene pass. A multisampled scene in an off-screen target never leaves
-    // it early, so the pass records here instead, as the upscaler takes over.
-    postProcessPipeline_->setSceneClosedHook([this](VkCommandBuffer) {
-        if (rtRecordedThisFrame_ || !postProcessPipeline_) return;
-        recordRtLighting(postProcessPipeline_->getSceneDepthImage(),
-                         postProcessPipeline_->getSceneRenderExtent(),
-                         postProcessPipeline_->sceneDepthIsMsaa());
-    });
 
     // Not fatal: without them the picture is only missing its glow.
     screenEffects_ = std::make_unique<ScreenEffects>();
@@ -1587,9 +1573,9 @@ void Renderer::beginFrame() {
 
     // Between frames, so a resize of the ray traced lighting's images can wait
     // for the device and rewrite both slots' sets.
-    if (rtLighting_ && rtLighting_->prepare(sceneRenderExtent())) writeRtLightingBindings();
-
-    rtRecordedThisFrame_ = false;
+    if (rtLighting_ && rtLighting_->prepare(sceneRenderExtent(), vkCtx->getMsaaSamples())) {
+        writeRtLightingBindings();
+    }
 
     // Acquire swapchain image and begin command buffer
     { WOWEE_PROFILE_SCOPE("beginFrame: acquire", Cpu);
@@ -1608,6 +1594,31 @@ void Renderer::beginFrame() {
 
     // FSR2 jitter pattern (§4.3 - delegates to PostProcessPipeline)
     if (postProcessPipeline_ && camera) postProcessPipeline_->applyJitter(camera.get());
+
+    // Whether the scene draws through the ray traced lighting's G-buffer pass
+    // this frame (docs/deferred_rt_design.md): the lighting is on and ready,
+    // and the scene's own colour and depth views are there to draw into.
+    rtDeferredThisFrame_ = false;
+    gbufferPhaseOpen_ = false;
+    gbufferFramebuffer_ = VK_NULL_HANDLE;
+    if (rtLighting_ && rtLighting_->ready() && camera) {
+        VkImageView colour = VK_NULL_HANDLE;
+        VkImageView depth = VK_NULL_HANDLE;
+        VkImage depthImage = VK_NULL_HANDLE;
+        const bool offscreen = postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE;
+        if (offscreen) {
+            postProcessPipeline_->getSceneAttachments(colour, depth, depthImage);
+        } else if (currentImageIndex < vkCtx->getSwapchainImageViews().size()) {
+            colour = vkCtx->getMsaaSamples() > VK_SAMPLE_COUNT_1_BIT
+                         ? vkCtx->getMsaaColorImageView() : vkCtx->getSwapchainImageViews()[currentImageIndex];
+            depth = vkCtx->getDepthImageView();
+            depthImage = vkCtx->getDepthImage();
+        }
+        gbufferFramebuffer_ = rtLighting_->gbufferFramebuffer(colour, depth);
+        rtDeferredThisFrame_ = gbufferFramebuffer_ != VK_NULL_HANDLE;
+        rtSceneColour_ = colour;
+        rtSceneDepth_ = depthImage;
+    }
 
     // Compute fresh shadow matrix BEFORE UBO update so shaders get current-frame data.
     lightSpaceMatrix = computeLightSpaceMatrix();
@@ -1706,7 +1717,24 @@ void Renderer::beginFrame() {
     VkSubpassContents subpassMode = parallelRecordingEnabled_
         ? VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
         : VK_SUBPASS_CONTENTS_INLINE;
-    vkCmdBeginRenderPass(currentCmd, &rpInfo, subpassMode);
+    // With the ray traced lighting the frame begins in its G-buffer pass,
+    // over the same colour and depth, cleared alike, and the G-buffer cleared
+    // to no surface. leaveGbufferPhase resumes the scene pass above, which
+    // everything after the opaque phase inherits.
+    if (rtDeferredThisFrame_) {
+        VkRenderPassBeginInfo gbInfo = rpInfo;
+        gbInfo.renderPass = vkCtx->getGbufferRenderPass();
+        gbInfo.framebuffer = gbufferFramebuffer_;
+        VkClearValue gbClear[4]{};
+        gbClear[0] = clearValues[0];
+        gbClear[1] = clearValues[1];
+        gbInfo.clearValueCount = 4;
+        gbInfo.pClearValues = gbClear;
+        vkCmdBeginRenderPass(currentCmd, &gbInfo, subpassMode);
+        gbufferPhaseOpen_ = true;
+    } else {
+        vkCmdBeginRenderPass(currentCmd, &rpInfo, subpassMode);
+    }
 
     if (!parallelRecordingEnabled_) {
         // Fallback: set dynamic viewport and scissor on primary (inline mode)
@@ -1734,6 +1762,11 @@ void Renderer::endFrame() {
     // A shadow pass no worker took - no world this frame, or the world drawn
     // inline - is recorded here, before the prologue it goes into is ended.
     flushShadowPass();
+
+    // A frame begun in the ray traced lighting's G-buffer pass whose world was
+    // never drawn: into the scene pass all the same, where the post-processing
+    // and the resolve expect it.
+    leaveGbufferPhase();
 
     logViewDistanceDiag();
 
@@ -3910,6 +3943,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
     uint32_t frameIdx = vkCtx->getCurrentFrame();
     VkDescriptorSet perFrameSet = perFrameDescSets[frameIdx];
+    // The opaque phase into the ray traced lighting's G-buffer pass, the
+    // blended one after its trace (beginFrame, leaveGbufferPhase).
+    const bool deferred = gbufferPhaseOpen_;
 
     // GPU crash diagnostic: skip individual renderers to isolate which one faults
     static const bool envSkipWMO = (std::getenv("WOWEE_SKIP_WMO") != nullptr);
@@ -3999,11 +4035,11 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         }
         if (wmoRenderer) wmoRenderer->prepareRender();
         auto prepWmoEnd = std::chrono::steady_clock::now();
-        if (m2Renderer && camera) m2Renderer->prepareRender(frameIdx, *camera);
+        if (m2Renderer && camera) m2Renderer->prepareRender(frameIdx);
         if (drawSkyModels && camera)
-            skyboxModelRenderer_->prepareRender(frameIdx, *camera);
+            skyboxModelRenderer_->prepareRender(frameIdx);
         if (drawStarsModel && camera)
-            starsModelRenderer_->prepareRender(frameIdx, *camera);
+            starsModelRenderer_->prepareRender(frameIdx);
         auto prepM2End = std::chrono::steady_clock::now();
         if (characterRenderer) characterRenderer->prepareRender(frameIdx);
         auto prepEnd = std::chrono::steady_clock::now();
@@ -4031,11 +4067,11 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             terrainFuture = core::ThreadPool::frameWorkers().submit([&]() -> double {
                 WOWEE_PROFILE_SCOPE("worker: terrain + grass", Worker);
                 auto t0 = std::chrono::steady_clock::now();
-                VkCommandBuffer cmd = beginSecondary(SEC_TERRAIN);
+                VkCommandBuffer cmd = beginSecondary(SEC_TERRAIN, deferred);
                 setSecondaryViewportScissor(cmd);
-                if (drawTerrain) terrainRenderer->render(cmd, perFrameSet, *camera);
+                if (drawTerrain) terrainRenderer->render(cmd, perFrameSet, *camera, deferred);
                 sceneMark(cmd, kMarkTerrain, "terrain");
-                if (drawGrass) grassRenderer_->render(cmd, frameIdx, perFrameSet);
+                if (drawGrass) grassRenderer_->render(cmd, frameIdx, perFrameSet, deferred);
                 sceneMark(cmd, kMarkGrass, "grass");
                 vkEndCommandBuffer(cmd);
                 return std::chrono::duration<double, std::milli>(
@@ -4047,11 +4083,18 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             wmoFuture = core::ThreadPool::frameWorkers().submit([&]() -> double {
                 WOWEE_PROFILE_SCOPE("worker: wmo", Worker);
                 auto t0 = std::chrono::steady_clock::now();
-                VkCommandBuffer cmd = beginSecondary(SEC_WMO);
+                VkCommandBuffer cmd = beginSecondary(SEC_WMO, deferred);
                 setSecondaryViewportScissor(cmd);
-                wmoRenderer->render(cmd, perFrameSet, *camera, &characterPosition);
+                wmoRenderer->render(cmd, perFrameSet, *camera, &characterPosition, deferred);
                 sceneMark(cmd, kMarkWmo, "wmo");
                 vkEndCommandBuffer(cmd);
+                if (deferred) {
+                    // The blended batches it kept, for after the trace.
+                    VkCommandBuffer blended = beginSecondary(SEC_WMO_BLEND);
+                    setSecondaryViewportScissor(blended);
+                    wmoRenderer->renderBlended(blended, perFrameSet);
+                    vkEndCommandBuffer(blended);
+                }
                 return std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - t0).count();
             });
@@ -4062,15 +4105,22 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         // function's but what it was handed.
         if (m2Renderer && camera && !skipM2) {
             m2Future_ = core::ThreadPool::frameWorkers().submit(
-                    [this, perFrameSet, skipChars, sceneMark]() -> double {
+                    [this, perFrameSet, skipChars, sceneMark, deferred]() -> double {
                 WOWEE_PROFILE_SCOPE("worker: m2", Worker);
                 auto t0 = std::chrono::steady_clock::now();
-                VkCommandBuffer cmd = beginSecondary(SEC_M2);
+                VkCommandBuffer cmd = beginSecondary(SEC_M2, deferred);
                 setSecondaryViewportScissor(cmd);
                 const auto tBegin = std::chrono::steady_clock::now();
                 {
                     WOWEE_PROFILE_SCOPE("m2 models (cull, sort, record)", Worker);
-                    renderM2Models(cmd, perFrameSet, !skipChars);
+                    m2Renderer->renderOpaque(cmd, perFrameSet, *camera, deferred);
+                    if (deferred) {
+                        // The rest goes after the trace, in a buffer of its own.
+                        vkEndCommandBuffer(cmd);
+                        cmd = beginSecondary(SEC_M2_BLEND);
+                        setSecondaryViewportScissor(cmd);
+                    }
+                    renderM2Blended(cmd, perFrameSet, !skipChars);
                 }
                 sceneMark(cmd, kMarkM2Blended, "m2 transparent + blended characters");
                 const auto tModels = std::chrono::steady_clock::now();
@@ -4167,11 +4217,11 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         charFuture = core::ThreadPool::frameWorkers().submit([&]() -> double {
             WOWEE_PROFILE_SCOPE("worker: characters", Worker);
             auto t0 = std::chrono::steady_clock::now();
-            VkCommandBuffer cmd = beginSecondary(SEC_CHARS);
+            VkCommandBuffer cmd = beginSecondary(SEC_CHARS, deferred);
             setSecondaryViewportScissor(cmd);
             if (characterRenderer && camera && !skipChars) {
                 characterRenderer->render(cmd, perFrameSet, *camera,
-                                          CharacterRenderer::Phase::Opaque);
+                                          CharacterRenderer::Phase::Opaque, 0, deferred);
             }
             sceneMark(cmd, kMarkChars, "characters (opaque)");
             vkEndCommandBuffer(cmd);
@@ -4267,7 +4317,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
         if (terrainRenderer && camera && terrainEnabled && !skipTerrain) {
             auto terrainStart = std::chrono::steady_clock::now();
-            terrainRenderer->render(currentCmd, perFrameSet, *camera);
+            terrainRenderer->render(currentCmd, perFrameSet, *camera, deferred);
             sceneMark(currentCmd, kMarkTerrain, "terrain");
             lastTerrainRenderMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - terrainStart).count();
@@ -4276,8 +4326,27 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         // After terrain, before the world's models: grass sits on the ground and
         // is occluded by everything standing on it.
         if (grassRenderer_ && vkCtx && !skipGrass) {
-            grassRenderer_->render(currentCmd, vkCtx->getCurrentFrame(), perFrameSet);
+            grassRenderer_->render(currentCmd, vkCtx->getCurrentFrame(), perFrameSet, deferred);
             sceneMark(currentCmd, kMarkGrass, "grass");
+        }
+
+        // With the ray traced lighting the rest of the opaque phase first, then
+        // the trace, and the sky with the blended phase after it.
+        if (deferred) {
+            if (wmoRenderer && camera && !skipWMO) {
+                wmoRenderer->prepareRender();
+                wmoRenderer->render(currentCmd, perFrameSet, *camera, &characterPosition, true);
+            }
+            if (characterRenderer && camera && !skipChars) {
+                characterRenderer->prepareRender(frameIdx);
+                characterRenderer->render(currentCmd, perFrameSet, *camera,
+                                          CharacterRenderer::Phase::Opaque, 0, true);
+            }
+            if (m2Renderer && camera && !skipM2) {
+                m2Renderer->prepareRender(frameIdx);
+                m2Renderer->renderOpaque(currentCmd, perFrameSet, *camera, true);
+            }
+            leaveGbufferPhase();
         }
 
         // Sky after the ground, for the reason given on the parallel path.
@@ -4293,10 +4362,10 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             skyParams.moonOcclusion = moonOcclusion_;
             skyParams.skyboxWeight = drawSkyModels && lightingManager
                 ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers()) : 0.0f;
-            if (drawStarsModel) starsModelRenderer_->prepareRender(frameIdx, *camera);
+            if (drawStarsModel) starsModelRenderer_->prepareRender(frameIdx);
             skySystem->render(currentCmd, perFrameSet, *camera, skyParams, drawStars);
             if (drawSkyModels) {
-                skyboxModelRenderer_->prepareRender(frameIdx, *camera);
+                skyboxModelRenderer_->prepareRender(frameIdx);
                 skyboxModelRenderer_->render(currentCmd, perFrameSet, *camera);
             }
             skySystem->updateGlare(*camera, skyParams);
@@ -4304,15 +4373,19 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         }
 
         if (wmoRenderer && camera && !skipWMO) {
-            wmoRenderer->prepareRender();
             auto wmoStart = std::chrono::steady_clock::now();
-            wmoRenderer->render(currentCmd, perFrameSet, *camera, &characterPosition);
+            if (deferred) {
+                wmoRenderer->renderBlended(currentCmd, perFrameSet);
+            } else {
+                wmoRenderer->prepareRender();
+                wmoRenderer->render(currentCmd, perFrameSet, *camera, &characterPosition);
+            }
             sceneMark(currentCmd, kMarkWmo, "wmo");
             lastWMORenderMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - wmoStart).count();
         }
 
-        if (characterRenderer && camera && !skipChars) {
+        if (characterRenderer && camera && !skipChars && !deferred) {
             characterRenderer->prepareRender(frameIdx);
             characterRenderer->render(currentCmd, perFrameSet, *camera,
                                       CharacterRenderer::Phase::Opaque);
@@ -4320,9 +4393,12 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         }
 
         if (m2Renderer && camera && !skipM2) {
-            m2Renderer->prepareRender(frameIdx, *camera);
             auto m2Start = std::chrono::steady_clock::now();
-            renderM2Models(currentCmd, perFrameSet, !skipChars);
+            if (!deferred) {
+                m2Renderer->prepareRender(frameIdx);
+                m2Renderer->renderOpaque(currentCmd, perFrameSet, *camera);
+            }
+            renderM2Blended(currentCmd, perFrameSet, !skipChars);
             sceneMark(currentCmd, kMarkM2Blended, "m2 transparent + blended characters");
             m2Renderer->renderM2Particles(currentCmd, perFrameSet);
             sceneMark(currentCmd, kMarkM2Particles, "m2 particles");
@@ -4356,6 +4432,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
     pendingWorld_.pending = true;
     pendingWorld_.parallel = parallelRecordingEnabled_;
+    pendingWorld_.deferred = deferred && parallelRecordingEnabled_;
     pendingWorld_.skipSky = skipSky;
     pendingWorld_.frameIdx = frameIdx;
     pendingWorld_.perFrameSet = perFrameSet;
@@ -4458,8 +4535,8 @@ void Renderer::finishRenderWorld() {
         }
 
         // --- Execute all secondary buffers in correct draw order ---
-        VkCommandBuffer validCmds[8];
-        const char* validLabels[8];
+        VkCommandBuffer validCmds[NUM_SECONDARIES];
+        const char* validLabels[NUM_SECONDARIES];
         uint32_t numCmds = 0;
         // Terrain first, then the sky. Every sky layer sits on the far plane
         // and depth-tests against what is already there, so drawing it after
@@ -4473,14 +4550,36 @@ void Renderer::finishRenderWorld() {
             validLabels[numCmds] = label;
             validCmds[numCmds++] = buffer;
         };
-        if (pw.queueTerrain)
-            queue(secondaryCmds_[SEC_TERRAIN][frameIdx], "terrain");
-        queue(secondaryCmds_[SEC_SKY][frameIdx], "sky");
-        if (pw.queueWmo)
-            queue(secondaryCmds_[SEC_WMO][frameIdx], "wmo");
-        queue(secondaryCmds_[SEC_CHARS][frameIdx], "characters");
-        if (pw.queueM2)
-            queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
+        if (pw.deferred) {
+            // With the ray traced lighting: the opaque phase in the G-buffer
+            // pass, then the trace and the apply pass (leaveGbufferPhase), then
+            // the sky and everything blended in the scene pass, which the
+            // sky's depth test against the far plane leaves the same picture.
+            if (pw.queueTerrain)
+                queue(secondaryCmds_[SEC_TERRAIN][frameIdx], "terrain");
+            if (pw.queueWmo)
+                queue(secondaryCmds_[SEC_WMO][frameIdx], "wmo");
+            queue(secondaryCmds_[SEC_CHARS][frameIdx], "characters");
+            if (pw.queueM2)
+                queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
+            if (numCmds > 0) vkCmdExecuteCommands(currentCmd, numCmds, validCmds);
+            numCmds = 0;
+            leaveGbufferPhase();
+            queue(secondaryCmds_[SEC_SKY][frameIdx], "sky");
+            if (pw.queueWmo)
+                queue(secondaryCmds_[SEC_WMO_BLEND][frameIdx], "wmo blended");
+            if (pw.queueM2)
+                queue(secondaryCmds_[SEC_M2_BLEND][frameIdx], "m2 blended");
+        } else {
+            if (pw.queueTerrain)
+                queue(secondaryCmds_[SEC_TERRAIN][frameIdx], "terrain");
+            queue(secondaryCmds_[SEC_SKY][frameIdx], "sky");
+            if (pw.queueWmo)
+                queue(secondaryCmds_[SEC_WMO][frameIdx], "wmo");
+            queue(secondaryCmds_[SEC_CHARS][frameIdx], "characters");
+            if (pw.queueM2)
+                queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
+        }
         queue(secondaryCmds_[SEC_POST][frameIdx], "water/effects");
         // The client draws the target's circle once the world is down
         // (0x004f6f90 from CGWorldFrame::Render).
@@ -4531,10 +4630,6 @@ void Renderer::finishRenderWorld() {
             sceneColor = vkCtx->getSwapchainImages()[currentImageIndex];
             sceneDepth = vkCtx->getDepthCopySourceImage();
         }
-
-        // The opaque scene is finished and out of its pass: the ray traced
-        // lighting reads its depth here, for the surfaces of the next frame.
-        recordRtLighting(sceneDepth, sceneExtent, depthIsMsaa);
 
         if (sceneColor != VK_NULL_HANDLE && waterRenderer->isRefractionEnabled()) {
             waterRenderer->captureSceneHistory(currentCmd, sceneColor, sceneDepth,
@@ -5504,6 +5599,18 @@ bool Renderer::createSecondaryCommandResources() {
         }
     }
 
+    // The blended halves, recorded by the same workers as their opaque ones.
+    const std::pair<uint32_t, uint32_t> blendedSecondaries[] = {{SEC_WMO_BLEND, 1}, {SEC_M2_BLEND, 3}};
+    for (const auto& [idx, worker] : blendedSecondaries) {
+        allocInfo.commandPool = workerCmdPools_[worker];
+        for (uint32_t f = 0; f < MAX_FRAMES; ++f) {
+            if (vkAllocateCommandBuffers(device, &allocInfo, &secondaryCmds_[idx][f]) != VK_SUCCESS) {
+                LOG_ERROR("Failed to allocate blended secondary buffer idx=", idx, " f=", f);
+                return false;
+            }
+        }
+    }
+
     parallelRecordingEnabled_ = true;
     LOG_INFO("Multithreaded rendering: ", NUM_WORKERS, " worker threads, ",
              NUM_SECONDARIES, " secondary buffers [ENABLED]");
@@ -5536,15 +5643,17 @@ void Renderer::destroySecondaryCommandResources() {
     parallelRecordingEnabled_ = false;
 }
 
-VkCommandBuffer Renderer::beginSecondary(uint32_t secondaryIndex) {
+VkCommandBuffer Renderer::beginSecondary(uint32_t secondaryIndex, bool gbufferPhase) {
     uint32_t frame = vkCtx->getCurrentFrame();
     VkCommandBuffer cmd = secondaryCmds_[secondaryIndex][frame];
 
+    // The blended phase of a G-buffer frame runs in a pass compatible with the
+    // scene pass (VkContext::getSceneResumeRenderPass) on its framebuffer.
     VkCommandBufferInheritanceInfo inheritInfo{};
     inheritInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
-    inheritInfo.renderPass = activeRenderPass_;
+    inheritInfo.renderPass = gbufferPhase ? vkCtx->getGbufferRenderPass() : activeRenderPass_;
     inheritInfo.subpass = 0;
-    inheritInfo.framebuffer = activeFramebuffer_;
+    inheritInfo.framebuffer = gbufferPhase ? gbufferFramebuffer_ : activeFramebuffer_;
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -5560,7 +5669,7 @@ VkCommandBuffer Renderer::beginSecondary(uint32_t secondaryIndex) {
     return cmd;
 }
 
-void Renderer::renderM2Models(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, bool withCharacters) {
+void Renderer::renderM2Blended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, bool withCharacters) {
     // The client keeps every model of the scene - doodads and units alike - in
     // one list sorted by distance, and draws the blended ones far to near. The
     // doodads are drawn here; the characters' opaque batches were drawn with
@@ -5578,7 +5687,7 @@ void Renderer::renderM2Models(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
         .draw = [&] {
             characterRenderer->renderBlendedInstance(cmd, perFrameSet, *camera, plan[next++].instanceId);
         }};
-    m2Renderer->render(cmd, perFrameSet, *camera, &among);
+    m2Renderer->renderBlended(cmd, perFrameSet, &among);
     // Whatever stands in front of every doodad, or when the doodad pass drew
     // nothing at all.
     while (next < plan.size()) among.draw();
@@ -6059,9 +6168,39 @@ VkExtent2D Renderer::sceneRenderExtent() const {
     return vkCtx->getSwapchainExtent();
 }
 
-void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool depthIsMsaa) {
+void Renderer::leaveGbufferPhase() {
+    if (!gbufferPhaseOpen_ || currentCmd == VK_NULL_HANDLE) return;
+    gbufferPhaseOpen_ = false;
+    vkCmdEndRenderPass(currentCmd);
+    vkCtx->gpuMark(currentCmd, "g-buffer pass end");
+
+    // The trace and the apply pass, from what the opaque phase drew.
+    if (worldDrawnThisFrame_) recordRtLighting();
+
+    // The scene pass again, loading what is there, for the blended phase;
+    // under MSAA it resolves at its end as the scene pass would have.
+    VkRenderPassBeginInfo rp{};
+    rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp.renderPass = vkCtx->getSceneResumeRenderPass();
+    rp.framebuffer = activeFramebuffer_;
+    rp.renderArea.extent = activeRenderExtent_;
+    vkCmdBeginRenderPass(currentCmd, &rp,
+                         parallelRecordingEnabled_ ? VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
+                                                   : VK_SUBPASS_CONTENTS_INLINE);
+    if (!parallelRecordingEnabled_) {
+        VkViewport viewport{};
+        viewport.width = static_cast<float>(activeRenderExtent_.width);
+        viewport.height = static_cast<float>(activeRenderExtent_.height);
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(currentCmd, 0, 1, &viewport);
+        VkRect2D scissor{};
+        scissor.extent = activeRenderExtent_;
+        vkCmdSetScissor(currentCmd, 0, 1, &scissor);
+    }
+}
+
+void Renderer::recordRtLighting() {
     if (!rtLighting_ || !rtLighting_->active() || !camera) return;
-    rtRecordedThisFrame_ = true;
     RtLighting::FrameInputs in{};
     in.viewProj = camera->getProjectionMatrix() * camera->getViewMatrix();
     in.cameraPos = camera->getPosition();
@@ -6108,25 +6247,15 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
         WOWEE_PROFILE_SCOPE("rt: sync characters", Cpu);
         if (characterRenderer) characterRenderer->syncRtScene(in.cameraPos);
     }
-    {
-        // Everything that moves on its own, nearest first, as many as the
-        // pass takes.
-        WOWEE_PROFILE_SCOPE("rt: movers", Cpu);
-        static std::vector<RtMover> movers;  // main thread only; keeps its capacity
-        movers.clear();
-        if (wmoRenderer) movers.insert(movers.end(), wmoRenderer->rtMovers().begin(), wmoRenderer->rtMovers().end());
-        if (m2Renderer) movers.insert(movers.end(), m2Renderer->rtMovers().begin(), m2Renderer->rtMovers().end());
-        if (characterRenderer) {
-            movers.insert(movers.end(), characterRenderer->rtMovers().begin(), characterRenderer->rtMovers().end());
-        }
-        auto nearer = [](const RtMover& a, const RtMover& b) { return a.rank < b.rank; };
-        if (movers.size() > RtLighting::kMaxMovers) {
-            std::nth_element(movers.begin(), movers.begin() + RtLighting::kMaxMovers, movers.end(), nearer);
-            movers.resize(RtLighting::kMaxMovers);
-        }
-        std::sort(movers.begin(), movers.end(), nearer);
-        in.movers = &movers;
-    }
+    // The Debug Graphics strengths and view, as the per-frame block carries
+    // them to the forward shaders (updatePerFrameUBO), for the apply pass.
+    in.shadowStrength = currentFrameData.rtTune.x;
+    in.pointLights = currentFrameData.rtTune.y;
+    in.bakedLampShadow = currentFrameData.rtTune.z;
+    in.sunShadow = currentFrameData.lightTune.y;
+    in.pointShadow = currentFrameData.lightTune.z;
+    in.occlusion = currentFrameData.lightTune.w;
+    in.debugView = static_cast<int>(currentFrameData.giParams.y + 0.5f);
     {
         // The frame's point lights: what carries one near the camera, cut to
         // what reaches into the view and to the most the pass traces.
@@ -6159,7 +6288,11 @@ void Renderer::recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool
     }
     {
         WOWEE_PROFILE_SCOPE("rt: record", Cpu);
-        rtLighting_->record(currentCmd, sceneDepth, sceneExtent, depthIsMsaa, in);
+        RtLighting::SceneTarget target;
+        target.depthImage = rtSceneDepth_;
+        target.colourView = rtSceneColour_;
+        target.extent = activeRenderExtent_;
+        rtLighting_->record(currentCmd, target, in);
     }
     // What the scene holds, every ten seconds while the lighting is on: to
     // read beside the frame profile when judging its cost.

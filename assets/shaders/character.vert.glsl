@@ -17,18 +17,10 @@ layout(set = 0, binding = 0) uniform PerFrame {
 
 layout(push_constant) uniform Push {
     mat4 model;
-    // w: the instance's last frame is in PrevBoneSSBO (character.frag's
-    // lightFlags, CharacterRenderer::writeFrameBones).
-    layout(offset = 96) vec4 lightFlags;
 } push;
 
 layout(set = 2, binding = 0) readonly buffer BoneSSBO {
     mat4 bones[];
-};
-// Last frame's bones, and at MAX_BONES its model matrix: where the surface
-// stood when the ray traced lighting it reads was traced.
-layout(set = 2, binding = 1) readonly buffer PrevBoneSSBO {
-    mat4 prevBones[];
 };
 
 layout(location = 0) in vec3 aPos;
@@ -46,8 +38,6 @@ layout(location = 3) out vec3 Tangent;
 layout(location = 4) out vec3 Bitangent;
 layout(location = 5) out vec2 TexCoord2;
 layout(location = 6) out vec2 EnvCoord;
-// Where this point of the surface was a frame earlier (rtLightAt).
-layout(location = 7) out vec3 RtPrevPos;
 
 vec3 safeNormalize(vec3 v, vec3 fallback) {
     float len2 = dot(v, v);
@@ -94,14 +84,6 @@ void main() {
     const vec3 modelOriginView = (view * vec4(push.model[3].xyz, 1.0)).xyz;
     const vec3 viewP = mat3(view) * (modelMat3 * skinnedPos.xyz) + skinnedPos.w * modelOriginView;
     FragPos = worldPos.xyz;
-    RtPrevPos = worldPos.xyz;
-    if (push.lightFlags.w > 0.5) {
-        mat4 prevSkin = prevBones[bi.x] * aBoneWeights.x
-                      + prevBones[bi.y] * aBoneWeights.y
-                      + prevBones[bi.z] * aBoneWeights.z
-                      + prevBones[bi.w] * aBoneWeights.w;
-        RtPrevPos = (prevBones[MAX_BONES] * (prevSkin * vec4(aPos, 1.0))).xyz;
-    }
     Normal = modelMat3 * skinnedNorm;
     TexCoord = aTexCoord;
     TexCoord2 = aTexCoord2;

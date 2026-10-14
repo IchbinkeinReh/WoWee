@@ -162,6 +162,22 @@ VkImage PostProcessPipeline::getSceneDepthImage() const {
     return VK_NULL_HANDLE;
 }
 
+bool PostProcessPipeline::getSceneAttachments(VkImageView& colour, VkImageView& depth,
+                                              VkImage& depthImage) const {
+    const bool msaa = vkCtx_ && vkCtx_->getMsaaSamples() > VK_SAMPLE_COUNT_1_BIT;
+    const auto take = [&](const AllocatedImage& colour1x, const AllocatedImage& colourMsaa,
+                          const AllocatedImage& sceneDepth) {
+        colour = msaa ? colourMsaa.imageView : colour1x.imageView;
+        depth = sceneDepth.imageView;
+        depthImage = sceneDepth.image;
+        return colour != VK_NULL_HANDLE && depth != VK_NULL_HANDLE;
+    };
+    if (fsr2_.enabled && fsr2_.sceneFramebuffer) return take(fsr2_.sceneColor, fsr2_.sceneMsaaColor, fsr2_.sceneDepth);
+    if (needsFXAAPass() && fxaa_.sceneFramebuffer) return take(fxaa_.sceneColor, fxaa_.sceneMsaaColor, fxaa_.sceneDepth);
+    if (fsr_.enabled && fsr_.sceneFramebuffer) return take(fsr_.sceneColor, fsr_.sceneMsaaColor, fsr_.sceneDepth);
+    return false;
+}
+
 bool PostProcessPipeline::isFsr2BlockingMsaa() const {
     return fsr2_.enabled && vkCtx_ && !vkCtx_->isDepthResolveSupported();
 }
@@ -185,7 +201,6 @@ bool PostProcessPipeline::executePostProcessing(VkCommandBuffer cmd, uint32_t im
         // End the off-screen scene render pass
         vkCmdEndRenderPass(currentCmd_);
         vkCtx_->gpuMark(currentCmd_, "scene pass end (store / resolve)");
-        if (sceneClosedHook_) sceneClosedHook_(currentCmd_);
 
         if (fsr2_.useAmdBackend) {
             // Compute passes: motion vectors -> temporal accumulation
@@ -311,7 +326,6 @@ bool PostProcessPipeline::executePostProcessing(VkCommandBuffer cmd, uint32_t im
         // End the off-screen scene render pass
         vkCmdEndRenderPass(currentCmd_);
         vkCtx_->gpuMark(currentCmd_, "scene pass end (store / resolve)");
-        if (sceneClosedHook_) sceneClosedHook_(currentCmd_);
 
         // Transition resolved scene color: PRESENT_SRC_KHR → SHADER_READ_ONLY
         transitionImageLayout(currentCmd_, fxaa_.sceneColor.image,
@@ -354,7 +368,6 @@ bool PostProcessPipeline::executePostProcessing(VkCommandBuffer cmd, uint32_t im
         // When both FSR1 and FXAA are enabled, FXAA took priority above.
         vkCmdEndRenderPass(currentCmd_);
         vkCtx_->gpuMark(currentCmd_, "scene pass end (store / resolve)");
-        if (sceneClosedHook_) sceneClosedHook_(currentCmd_);
 
         // Transition scene color (1x resolve/color target): PRESENT_SRC_KHR → SHADER_READ_ONLY
         transitionImageLayout(currentCmd_, fsr_.sceneColor.image,

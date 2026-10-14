@@ -3,8 +3,9 @@
 //
 // The pass only runs in the world, and the world needs a realm. This stands
 // up the real context and the real RtScene / RtLighting on a hidden window,
-// puts a box between a wall and the sun, fakes the wall's depth buffer, traces
-// one frame and reads the result back:
+// puts a box between a wall and the sun, fakes the wall's depth buffer (the
+// G-buffer pass cleared to its depth, its G-buffer to no surface), traces one
+// frame and reads the result back:
 //
 //   - a wall point whose ray to the sun crosses the box must be in shadow,
 //   - wall points whose rays miss it must be lit,
@@ -125,8 +126,12 @@ int main() {
                                                VK_IMAGE_USAGE_SAMPLED_BIT |
                                                VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
+        // The scene's colour, which the apply pass draws into.
+        AllocatedImage colour = createImage(ctx.getDevice(), ctx.getAllocator(), kSize, kSize,
+                                            ctx.getSwapchainFormat(), VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+
         lighting.setMode(RtLighting::Mode::Full);
-        lighting.prepare(sceneExtent);
+        lighting.prepare(sceneExtent, VK_SAMPLE_COUNT_1_BIT);
 
         RtLighting::FrameInputs in{};
         in.viewProj = viewProj;
@@ -136,32 +141,31 @@ int main() {
         in.skyColor = glm::vec3(0.3f, 0.35f, 0.4f);
         in.sunUp = true;
 
-        auto depthLayout = [&](VkCommandBuffer cmd, VkImageLayout from, VkImageLayout to) {
-            VkImageMemoryBarrier2 b{};
-            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            b.srcStageMask = b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.srcAccessMask = b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            b.oldLayout = from;
-            b.newLayout = to;
-            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.image = depth.image;
-            b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-            VkDependencyInfo dep{};
-            dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &b;
-            cmdPipelineBarrier2(cmd, dep);
+        // One frame: the G-buffer pass with nothing drawn - the depth cleared
+        // to the wall's, the G-buffer to no surface - then the trace.
+        auto traceFrame = [&](VkCommandBuffer cmd) {
+            VkRenderPassBeginInfo rp{};
+            rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rp.renderPass = ctx.getGbufferRenderPass();
+            rp.framebuffer = lighting.gbufferFramebuffer(colour.imageView, depth.imageView);
+            rp.renderArea.extent = sceneExtent;
+            VkClearValue clears[4]{};
+            clears[1].depthStencil = {wallDepth, 0};
+            rp.clearValueCount = 4;
+            rp.pClearValues = clears;
+            vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdEndRenderPass(cmd);
+            RtLighting::SceneTarget target;
+            target.depthImage = depth.image;
+            target.colourView = colour.imageView;
+            target.extent = sceneExtent;
+            lighting.record(cmd, target, in);
         };
-        ctx.immediateSubmit([&](VkCommandBuffer cmd) {
-            depthLayout(cmd, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            VkClearDepthStencilValue clear{wallDepth, 0};
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-            vkCmdClearDepthStencilImage(cmd, depth.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                        &clear, 1, &range);
-            depthLayout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-            lighting.record(cmd, depth.image, sceneExtent, false, in);
-        });
+        if (!lighting.ready()) {
+            std::fprintf(stderr, "the deferred lighting path is unavailable here\n");
+            return 2;
+        }
+        ctx.immediateSubmit(traceFrame);
 
         const VkExtent2D te = lighting.traceExtent();
         const VkDeviceSize bytes = VkDeviceSize(te.width) * te.height * 8;
@@ -343,10 +347,8 @@ int main() {
         }
 
         auto frame = [&]() {
-            lighting.prepare(sceneExtent);
-            ctx.immediateSubmit([&](VkCommandBuffer cmd) {
-                lighting.record(cmd, depth.image, sceneExtent, false, in);
-            });
+            lighting.prepare(sceneExtent, VK_SAMPLE_COUNT_1_BIT);
+            ctx.immediateSubmit(traceFrame);
         };
         // Long enough for a probe updated one frame in four to be blended
         // over many times, and for the bounces to settle.
@@ -368,7 +370,7 @@ int main() {
             {"on top of the solid block", {41, -45, 4.5f}, {0, 0, 1}},
         };
         constexpr uint32_t kPoints = sizeof(points) / sizeof(points[0]);
-        const RtLighting::ConsumerData cd = lighting.consumerData();
+        const RtLighting::ConsumerData cd = lighting.consumerData(true);
         expect("the surfaces are told the volume is on", cd.gi.params.x > 0.5f);
 
         VkDevice dev = ctx.getDevice();
@@ -581,6 +583,7 @@ int main() {
         destroyBuffer(ctx.getAllocator(), light);
         destroyBuffer(ctx.getAllocator(), probes);
         destroyImage(ctx.getDevice(), ctx.getAllocator(), depth);
+        destroyImage(ctx.getDevice(), ctx.getAllocator(), colour);
         lighting.shutdown();
         scene.shutdown();
         ctx.shutdown();

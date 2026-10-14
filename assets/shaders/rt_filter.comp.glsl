@@ -6,13 +6,12 @@
 // Pixels with a long history are already smooth and are filtered less, so
 // settled shadows keep their edges. The three terms are sun, occlusion and
 // point light visibility; alpha carries the history length from pass to
-// pass, and the last pass writes the distance there instead, which the
-// surface shaders check the result against - negated where the surface is a
-// mover's (rtGbufMover), which rtLightAt treats as gone a frame on.
+// pass, and the last pass writes the distance there instead, which the apply
+// pass and the blended surfaces check the result against (rt_apply,
+// rt_lighting.glsli).
 //
-// A tap of another mover, or of what stands still beside a mover, is not
-// taken: a body's light is not smeared over the ground at its feet, nor the
-// ground's over the body, nor one unit's over the next.
+// A tap of what is no surface of the tracing's (grass, the debug views) is
+// not taken for one that is, nor the other way round.
 
 #include "rt_common.glsli"
 
@@ -37,7 +36,7 @@ void main() {
     vec4 c = texelFetch(uIn, px, 0);
     float dist = rtGbufDist(g);
     vec3 n = rtGbufNormal(g);
-    int mover = rtGbufMover(g);
+    bool valid = rtGbufValid(g);
     if (dist <= 0.0) {
         imageStore(uOut, px, vec4(c.rgb, pc.last != 0 ? 0.0 : c.a));
         return;
@@ -54,7 +53,7 @@ void main() {
             if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, ivec2(pass.extent.xy)))) continue;
             vec4 qg = texelFetch(uGbufCur, q, 0);
             float qd = rtGbufDist(qg);
-            if (qd <= 0.0 || rtGbufMover(qg) != mover) continue;
+            if (qd <= 0.0 || rtGbufValid(qg) != valid) continue;
             float k = KERNEL[abs(x)] * KERNEL[abs(y)];
             float wz = exp(-abs(qd - dist) / (0.02 * dist * float(pc.step) + 1e-3));
             float wn = pow(max(dot(rtGbufNormal(qg), n), 0.0), 32.0);
@@ -65,5 +64,5 @@ void main() {
         }
     }
     sum /= wsum;
-    imageStore(uOut, px, vec4(sum, pc.last != 0 ? (mover > 0 ? -dist : dist) : history));
+    imageStore(uOut, px, vec4(sum, pc.last != 0 ? dist : history));
 }

@@ -395,6 +395,7 @@ bool GrassRenderer::createDrawPipeline(VkDescriptorSetLayout perFrameLayout) {
 bool GrassRenderer::buildDrawPipeline() {
     VkDevice device = vkCtx_->getDevice();
     destroyPipeline(device, pipeline_, pipelineLayout_);
+    destroy(device, gbufferPipeline_);
 
     auto shaders = loadShaderPair(device, "assets/shaders/grass.vert.spv",
                                   "assets/shaders/grass.frag.spv", "grass");
@@ -411,20 +412,28 @@ bool GrassRenderer::buildDrawPipeline() {
 
     // No vertex input: the shader builds the quad from gl_VertexIndex and reads
     // everything else from the two storage buffers.
-    pipeline_ = PipelineBuilder()
-                    .setShaders(shaders.vertStage, shaders.fragStage)
-                    .setVertexInput({}, {})
-                    .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-                    // Two-sided: a blade is a single quad and is seen from both
-                    // faces as the camera moves around it.
-                    .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-                    .setDepthTest(true, true, VK_COMPARE_OP_LESS)
-                    .setColorBlendAttachment(PipelineBuilder::blendDisabled())
-                    .setMultisample(vkCtx_->getMsaaSamples())
-                    .setLayout(pipelineLayout_)
-                    .setRenderPass(vkCtx_->getImGuiRenderPass())
-                    .setDynamicStates(viewportAndScissorDynamic())
-                    .build(device, vkCtx_->getPipelineCache());
+    // And once more for the ray traced lighting's G-buffer pass, where a blade
+    // writes a G-buffer of no surface of the tracing's: grass reads no traced
+    // light, with the tracing on or off.
+    const auto build = [&](bool gbuffer) {
+        PipelineBuilder b;
+        b.setShaders(shaders.vertStage, shaders.fragStage)
+            .setVertexInput({}, {})
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            // Two-sided: a blade is a single quad and is seen from both
+            // faces as the camera moves around it.
+            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+            .setDepthTest(true, true, VK_COMPARE_OP_LESS)
+            .setColorBlendAttachment(PipelineBuilder::blendDisabled())
+            .setMultisample(vkCtx_->getMsaaSamples())
+            .setLayout(pipelineLayout_)
+            .setRenderPass(gbuffer ? vkCtx_->getGbufferRenderPass() : vkCtx_->getImGuiRenderPass())
+            .setDynamicStates(viewportAndScissorDynamic());
+        if (gbuffer) b.setGbufferOutputs();
+        return b.build(device, vkCtx_->getPipelineCache());
+    };
+    pipeline_ = build(false);
+    if (vkCtx_->getGbufferRenderPass()) gbufferPipeline_ = build(true);
 
     return pipeline_ != VK_NULL_HANDLE;
 }
@@ -624,8 +633,9 @@ void GrassRenderer::reportCullResult() {
 }
 
 void GrassRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex,
-                           VkDescriptorSet perFrameSet) {
+                           VkDescriptorSet perFrameSet, bool gbuffer) {
     if (!isReady() || frameIndex >= kFrames || bladeCount_ == 0) return;
+    if (gbuffer && !gbufferPipeline_) return;
 
     if (!drawReported_) {
         drawReported_ = true;
@@ -633,7 +643,7 @@ void GrassRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex,
                  " blades in the source buffer");
     }
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gbuffer ? gbufferPipeline_ : pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
                             &perFrameSet, 0, nullptr);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 1, 1,
@@ -652,6 +662,7 @@ void GrassRenderer::shutdown() {
     VmaAllocator allocator = vkCtx_->getAllocator();
 
     destroyPipeline(device, pipeline_, pipelineLayout_);
+    destroy(device, gbufferPipeline_);
     destroy(device, cullPipeline_);
     destroy(device, cullPipelineLayout_);
     destroy(device, cullSetLayout_);

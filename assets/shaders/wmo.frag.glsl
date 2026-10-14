@@ -14,8 +14,6 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerPos;   // xyz = player world position, w = horizontal speed
     vec4 playerWake;  // xyz = trailing player position (springback reference)
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
-    mat4 rtViewProj;
-    vec4 rtCameraPos;
     vec4 rtParams;
     vec4 cameraFogColor;  // the camera's fog, its interior's blended in
     vec4 averagedDirectColor;   // light mode 2's direct light (0xd38cb0)
@@ -79,7 +77,7 @@ layout(set = 1, binding = 3) uniform sampler2D uEnvTexture;
 // The group's draw, after the vertex stage's model matrix: 1 when the group
 // is drawn in the camera's interior pass (0x007a9380's local_14).
 layout(push_constant) uniform GroupPush {
-    layout(offset = 128) int interiorPass;
+    layout(offset = 64) int interiorPass;
     int highlight;   // the game object highlight: the light's ambient into c29
 } gp;
 
@@ -95,10 +93,6 @@ layout(location = 5) in vec3 Bitangent;
 layout(location = 6) in vec2 EnvCoord;
 layout(location = 7) in vec2 TexCoord2;   // the second MOTV
 layout(location = 8) in vec4 VertColor2;  // the second MOCV
-// Where this point was when the ray traced lighting was traced, and whether
-// the building moved since (wmo.vert).
-layout(location = 9) in vec3 RtPrevPos;
-layout(location = 10) flat in int vRtMoved;
 
 layout(location = 0) out vec4 outColor;
 
@@ -194,6 +188,15 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     return color;
 }
 
+// How much of a colour applyFog lets through: it takes c to c * fogShare + the
+// fog's own light. The ray traced lighting's G-buffer scales what it writes
+// by it (rtSurfaceScale).
+float fogShare(vec3 worldPos, float dist) {
+    float share = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
+    if (volumetricParams.x > 0.5) share *= fogVolumeAt(worldPos).a;
+    return share;
+}
+
 // One pass's vertex colour, as the MapObj vertex programs work it out from
 // the vertex colour `v` (attrib 4). The unlit variant passes it through. The
 // lit ones take the light L = clamp(ambient + clamp(N.L) x direct) of
@@ -217,7 +220,18 @@ vec3 windowEmissive() {
     return floor(frameSidn * 0.5) / 255.0;
 }
 
-vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt) {
+//
+// knee: the same as the traced occlusion sees it (rt_gbuffer.glsli), the
+// colour as min(cap, y * ao + z) with ao over the ambient of modes 1 and 2.
+// The two clamps fold into one: min(1, s min(1, x) + t) = min(1, s + t, s x + t).
+struct PassKnee {
+    vec3 y;
+    vec3 z;
+    vec3 cap;
+};
+
+vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt, out PassKnee knee) {
+    knee = PassKnee(vec3(0.0), v, vec3(1.0));
     if (mode == 0) return v;
     vec3 ambient = vec3(wmoAmbientR, wmoAmbientG, wmoAmbientB);
     vec3 direct = vec3(0.0);
@@ -239,6 +253,12 @@ vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt) {
     float ndl = clamp(dot(norm, normalize(-lightDir.xyz)), 0.0, 1.0);
     vec3 light = clamp(ambient + ndl * direct, 0.0, 1.0);
     vec3 c29 = windowEmissive();
+    // What the occlusion scales: the zone's ambient of modes 1 and 2, not the
+    // MOHD ambient of mode 3.
+    vec3 occluded = mode == 3 ? vec3(0.0) : ambient;
+    vec3 rest = ndl * direct + ambient - occluded;
+    knee = unifiedPath != 0 ? PassKnee(0.5 * occluded, 0.5 * rest + v + c29, min(vec3(1.0), 0.5 + v + c29))
+                            : PassKnee(v * occluded, v * rest + c29, min(vec3(1.0), v + c29));
     return unifiedPath != 0 ? clamp(light * 0.5 + v + c29, 0.0, 1.0) : clamp(v * light + c29, 0.0, 1.0);
 }
 
@@ -248,9 +268,12 @@ vec3 passColour(int mode, vec3 v, vec3 norm, RtLight rt) {
 // programs that add it - holds the building's own lights already, baked by
 // the artists' tools from the very MOLT lights traced here: it takes only
 // the other lights, and the building's lights' shadows over its colour.
+bool passBaked(int mode) {
+    return hasVertexColors != 0 && (mode == 0 || mode == 3 || unifiedPath != 0);
+}
+
 vec3 withPointLights(vec3 c, int mode, RtLight rt) {
-    bool baked = hasVertexColors != 0 && (mode == 0 || mode == 3 || unifiedPath != 0);
-    if (baked) return c * (rtBakedLight() * rtBakedShade(rt)) + 0.5 * rtPointLightOwn(rt);
+    if (passBaked(mode)) return c * (rtBakedLight() * rtBakedShade(rt)) + 0.5 * rtPointLightOwn(rt);
     return c + 0.5 * rtPointLight(rt);
 }
 
@@ -263,8 +286,12 @@ vec3 withPointLights(vec3 c, int mode, RtLight rt) {
 // other table none, and those are drawn as Diffuse here) lays MOMT texture_2 at the second MOTV under texture_1 by
 // the second MOCV's alpha: mix(tex2, tex1, secondary.a), its alpha the same
 // way, and doubles it over the colour as the others do.
+vec4 surfaceTexel(vec4 tex) {
+    return (program == 6 && unifiedPath != 0) ? mix(texture(uEnvTexture, TexCoord2), tex, VertColor2.a) : tex;
+}
+
 vec3 surface(vec3 c, vec4 tex, vec3 env) {
-    if (program == 6 && unifiedPath != 0) tex = mix(texture(uEnvTexture, TexCoord2), tex, VertColor2.a);
+    tex = surfaceTexel(tex);
     vec3 rgb = 2.0 * c * tex.rgb;
     if (program == 3) rgb += tex.a * env;
     else if (program == 5) rgb += tex.rgb * tex.a * env;
@@ -277,6 +304,25 @@ vec3 fogPass(vec3 color, int which, float dist) {
     if (which == 0) return color;
     vec3 colour = (which == 2 && gp.interiorPass != 0) ? cameraFogColor.rgb : fogColor.rgb;
     return applyFog(color, FragPos, dist, colour);
+}
+
+// One pass as the traced terms will change it (rt_gbuffer.glsli): its colour
+// c (passColour's, before the sun's shadow) scaled by that shadow where the
+// pass is shadowed and by the lamps' shade where it is baked light, the
+// occlusion inside its clamps, the point lights halved and doubled again by
+// surface(), all of it through the doubling texel and the pass's fog.
+RtSurface passSurface(int mode, vec3 c, PassKnee knee, bool shadowedPass, float shadowScale,
+                      vec3 texel, int fogWhich, float dist) {
+    RtSurface s = rtSurfaceNone();
+    s.flags = RT_GB_VALID | (shadowedPass ? RT_GB_SUN : 0u) | (passBaked(mode) ? RT_GB_BAKED : 0u);
+    float scale = (shadowedPass ? shadowScale : 1.0) * (passBaked(mode) ? rtBakedLight() : 1.0);
+    s.g = c * scale;
+    rtSurfaceOcclusion(s, knee.y, knee.z, knee.cap);
+    s.occY *= scale;
+    s.occE *= scale;
+    s.kp = vec3(0.5);
+    rtSurfaceScale(s, 2.0 * texel * (fogWhich == 0 ? 1.0 : fogShare(FragPos, dist)));
+    return s;
 }
 
 void main() {
@@ -347,10 +393,11 @@ void main() {
         shadow = csmShadow(uShadowMap, FragPos, norm, nl, bias);
         shadow = mix(1.0, shadow, shadowParams.y);
     }
-    rtSurfaceIsUnit = vRtMoved != 0;
-    RtLight rt = rtLightAt(RtPrevPos);
+    // Drawn into the G-buffer, with the traced terms neutral (rt_lighting.glsli).
+    RtLight rt = kGbuffer ? rtNeutral() : rtLightAt(FragPos);
     // The shadow variants let a face turned edge-on to the sun out of the
     // map's shadow (rtEdgeOnLift); the traced one keeps its own.
+    const float mapLit = rtMapEdgeOn(shadow, norm, normalize(-lightDir.xyz));
     shadow = rtShadowEdgeOn(rt, shadow, norm, normalize(-lightDir.xyz));
     // Not here: their sat(dot(P, c3.xyz) + c3.w) lift. 0x008745d0 sets c3 to
     // 0x007bb670's plane (normal from the world matrix, through the player
@@ -366,22 +413,39 @@ void main() {
     // (c30, 0x00873210), not the distance to the eye.
     float dist = -(view * vec4(FragPos, 1.0)).z;
 
-    vec3 inside = passColour(insideLight, v.rgb, norm, rt);
+    PassKnee insideKnee;
+    const vec3 insideLit = passColour(insideLight, v.rgb, norm, rt, insideKnee);
+    vec3 inside = insideLit;
     if ((shadowed & 2) != 0) inside *= shadowScale;
     inside = withPointLights(inside, insideLight, rt);
     inside = fogPass(surface(inside, texColor, env), (fogs >> 2) & 3, dist);
+    RtSurface rtSurface = rtSurfaceNone();
+    if (kGbuffer) {
+        rtSurface = passSurface(insideLight, insideLit, insideKnee, (shadowed & 2) != 0, shadowScale,
+                                surfaceTexel(texColor).rgb, (fogs >> 2) & 3, dist);
+    }
 
     vec3 result = inside;
     if (transition != 0) {
         // A transition batch, drawn twice (0x007a9380, 0x007ac9f0): the
         // first pass times the output alpha (blend 9), then the second times
         // one minus it, added (blend 7).
-        vec3 outside = passColour(outsideLight, v.rgb, norm, rt);
+        PassKnee outsideKnee;
+        const vec3 outsideLit = passColour(outsideLight, v.rgb, norm, rt, outsideKnee);
+        vec3 outside = outsideLit;
         if ((shadowed & 1) != 0) outside *= shadowScale;
         outside = withPointLights(outside, outsideLight, rt);
         outside = fogPass(surface(outside, texColor, env), fogs & 3, dist);
         result = outside * alpha + inside * (1.0 - alpha);
+        if (kGbuffer) {
+            rtSurface = rtSurfaceMix(passSurface(outsideLight, outsideLit, outsideKnee, (shadowed & 1) != 0,
+                                                 shadowScale, surfaceTexel(texColor).rgb, fogs & 3, dist),
+                                     rtSurface, alpha);
+        }
     }
 
     outColor = vec4(rtGiDebug(result), alpha);
+    rtSurface.normal = norm;
+    rtSurface.map = mapLit;
+    rtWriteGbuffer(rtSurface, outColor.rgb);
 }

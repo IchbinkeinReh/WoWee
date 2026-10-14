@@ -37,7 +37,9 @@
 
 layout(set = 0, binding = 3) uniform sampler2D uGbufCur;
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D uRaw;
-layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D uPointOut;  // a = the baked lights' part
+// In: the normal the surface is lit by (rt_prepare). Out: the point lights'
+// light; a = the baked lights' part.
+layout(set = 0, binding = 11, rgba16f) uniform image2D uPointOut;
 
 // Must match rt_lights::PointLightGPU.
 struct RtPointLight {
@@ -76,6 +78,7 @@ void main() {
         return;
     }
     vec3 n = rtGbufNormal(g);
+    vec3 shadingN = rtOctDecode(imageLoad(uPointOut, px).xy);
     vec3 p = rtGbufWorld(g, px);
     vec3 origin = p + n * rtSurfaceOffset(dist);
     uint rng = rtSeed(uvec2(px), uint(pass.cameraPos.w));
@@ -135,7 +138,7 @@ void main() {
         float end = abs(light.positionEnd.w);
         if (d2 >= end * end) continue;
         float d = sqrt(d2);
-        float ndl = d > 1e-4 ? dot(n, toLight / d) : 1.0;
+        float ndl = d > 1e-4 ? dot(shadingN, toLight / d) : 1.0;
         if (ndl <= 0.0) continue;
         vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl);
         float w = max(c.r, max(c.g, c.b));

@@ -62,23 +62,9 @@ constexpr float kPosedRadius = 40.0f;
 constexpr uint32_t kMinPieceTriangles = 24;
 // How far a group's box reaches past its geometry, and how far its floor is
 // lifted: the ground the feet stand on must stay outside, or the unit would
-// stop shadowing the ground right at its feet - and, as a mover's box, stop
-// taking its own light (rtLightAt).
+// stop shadowing the ground right at its feet.
 constexpr float kGroupMargin = 0.1f;
 constexpr float kGroupFloorLift = 0.15f;
-// How far a mover's box reaches past a unit in its Stand pose: a stride, an
-// arm swung, a weapon raised reach past that pose's box.
-constexpr float kStandPoseMargin = 0.3f;
-
-// Whether m is the identity, to a millimetre: a mover that did not move.
-bool nearlyIdentity(const glm::mat4& m) {
-    for (int c = 0; c < 4; ++c) {
-        for (int r = 0; r < 3; ++r) {
-            if (std::abs(m[c][r] - (c == r ? 1.0f : 0.0f)) > 1e-3f) return false;
-        }
-    }
-    return true;
-}
 
 RtAabb transformBox(const glm::vec3& bmin, const glm::vec3& bmax, const glm::mat4& m) {
     RtAabb out;
@@ -331,32 +317,9 @@ void CharacterRenderer::rtForget(RtCharacter& rc) {
 }
 
 void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
-    rtMovers_.clear();
     if (!rtScene_ || !rtScene_->isActive()) return;
     const uint64_t gen = ++rtSyncGeneration_;
     rtStats_ = RtStats{};
-
-    // A unit, or what it carries, as the lighting's mover: its box, and how
-    // it moved since it was last placed here (a frame ago, or not at all).
-    auto addMover = [&](CharacterInstance& inst, const glm::mat4& modelMat, const RtAabb& box,
-                        float distSq, bool posed, bool liftFloor, bool grouped) {
-        const bool placedLastFrame = inst.rtPlacedGeneration != 0 && inst.rtPlacedGeneration + 1 == gen;
-        const glm::mat4 prevModel = placedLastFrame ? inst.rtPlacedModel : modelMat;
-        inst.rtPlacedModel = modelMat;
-        inst.rtPlacedGeneration = gen;
-        if (!box.valid()) return;
-        RtMover m;
-        const float margin = posed ? kGroupMargin : kStandPoseMargin;
-        m.lo = box.bmin - glm::vec3(margin);
-        m.hi = box.bmax + glm::vec3(margin);
-        if (liftFloor) m.lo.z = std::min(box.bmin.z + kGroupFloorLift, m.hi.z);
-        m.prevFromCur = prevModel * glm::inverse(modelMat);
-        m.moving = !nearlyIdentity(m.prevFromCur) || inst.currentAnimationId != 0;
-        m.seeThrough = inst.opacity * inst.kitAlpha * inst.cameraAlpha < 0.999f;
-        m.unit = grouped;
-        m.rank = distSq;
-        rtMovers_.push_back(m);
-    };
 
     // Who casts: what the shadow pass would draw, in range, nearest first.
     struct Candidate {
@@ -470,13 +433,6 @@ void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
             lo.z = std::min(box.bmin.z + kGroupFloorLift, hi.z);
             rtScene_->setGroupBounds(rc.group, lo, hi);
         }
-        // Every unit is a mover, and so is what it carries - a staff, a
-        // shield, a weapon on the back - which moves with its bone; their
-        // floors clear of the ground a body stands on, as is a rider's,
-        // one of its own hung on another (group 0).
-        // A rider is in no group: a ray passing the units by would still
-        // meet it, so its box is taken whole (rt_prepare).
-        addMover(inst, modelMat, box, c.distSq, posed, body || group == 0, group != 0);
         ++rtStats_.characters;
     };
     for (size_t i = 0; i < bodies.size(); ++i) place(bodies[i], true, i);

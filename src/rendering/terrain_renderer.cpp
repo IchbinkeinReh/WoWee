@@ -59,27 +59,35 @@ bool TerrainRenderer::buildMainPassPipelines(VkDevice device,
         toVkAttributes(kTerrainVertexAttributes);
 
     // --- Build fill pipeline (base for derivatives - shared state optimization) ---
+    // Each one twice where the device has the ray traced lighting's G-buffer
+    // pass: for the scene pass, and for that pass (gbuffer).
     VkRenderPass mainPass = vkCtx->getImGuiRenderPass();
+    VkRenderPass gbufferPass = vkCtx->getGbufferRenderPass();
+    const auto build = [&](VkPolygonMode mode, bool gbuffer, VkPipelineCreateFlags flags, VkPipeline base) {
+        PipelineBuilder b;
+        b.setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
+                     fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
+            .setVertexInput({ vertexBinding }, vertexAttribs)
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setRasterization(mode, VK_CULL_MODE_NONE)
+            .setDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setColorBlendAttachment(PipelineBuilder::blendDisabled())
+            .setMultisample(vkCtx->getMsaaSamples())
+            .setLayout(pipelineLayout)
+            .setRenderPass(gbuffer ? gbufferPass : mainPass)
+            .setDynamicStates(viewportAndScissorDynamic())
+            .setFlags(flags)
+            .setBasePipeline(base);
+        if (gbuffer) b.setGbufferOutputs();
+        return b.build(device, vkCtx->getPipelineCache());
+    };
 
-    pipeline = PipelineBuilder()
-        .setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
-                    fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
-        .setVertexInput({ vertexBinding }, vertexAttribs)
-        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-        .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
-        .setColorBlendAttachment(PipelineBuilder::blendDisabled())
-        .setMultisample(vkCtx->getMsaaSamples())
-        .setLayout(pipelineLayout)
-        .setRenderPass(mainPass)
-        .setDynamicStates(viewportAndScissorDynamic())
-        .setFlags(VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT)
-        .build(device, vkCtx->getPipelineCache());
-
+    pipeline = build(VK_POLYGON_MODE_FILL, false, VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT, VK_NULL_HANDLE);
     if (!pipeline) {
         LOG_ERROR("TerrainRenderer: failed to create fill pipeline");
         return false;
     }
+    if (gbufferPass) gbufferPipeline_ = build(VK_POLYGON_MODE_FILL, true, 0, VK_NULL_HANDLE);
 
     // --- Build wireframe pipeline (derivative of fill) ---
     // VK_POLYGON_MODE_LINE needs fillModeNonSolid, which plenty of mobile GPUs
@@ -91,21 +99,8 @@ bool TerrainRenderer::buildMainPassPipelines(VkDevice device,
         return true;
     }
 
-    wireframePipeline = PipelineBuilder()
-        .setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
-                    fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
-        .setVertexInput({ vertexBinding }, vertexAttribs)
-        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-        .setRasterization(VK_POLYGON_MODE_LINE, VK_CULL_MODE_NONE)
-        .setDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
-        .setColorBlendAttachment(PipelineBuilder::blendDisabled())
-        .setMultisample(vkCtx->getMsaaSamples())
-        .setLayout(pipelineLayout)
-        .setRenderPass(mainPass)
-        .setDynamicStates(viewportAndScissorDynamic())
-        .setFlags(VK_PIPELINE_CREATE_DERIVATIVE_BIT)
-        .setBasePipeline(pipeline)
-        .build(device, vkCtx->getPipelineCache());
+    wireframePipeline = build(VK_POLYGON_MODE_LINE, false, VK_PIPELINE_CREATE_DERIVATIVE_BIT, pipeline);
+    if (gbufferPass) gbufferWireframe_ = build(VK_POLYGON_MODE_LINE, true, 0, VK_NULL_HANDLE);
 
     if (!wireframePipeline) {
         LOG_WARNING("TerrainRenderer: wireframe pipeline not available");
@@ -312,6 +307,8 @@ void TerrainRenderer::recreatePipelines() {
     // Destroy old pipelines (keep layouts)
     destroy(device, pipeline);
     destroy(device, wireframePipeline);
+    destroy(device, gbufferPipeline_);
+    destroy(device, gbufferWireframe_);
 
     // Load shaders
     VkShaderModule vertShader, fragShader;
@@ -366,6 +363,8 @@ void TerrainRenderer::shutdown() {
 
     destroy(device, pipeline);
     destroy(device, wireframePipeline);
+    destroy(device, gbufferPipeline_);
+    destroy(device, gbufferWireframe_);
     destroy(device, pipelineLayout);
     destroy(device, materialDescPool);
     destroy(device, materialSetLayout);
@@ -1011,8 +1010,9 @@ bool TerrainRenderer::writeMaterialDescriptors(VkDescriptorSet set, const Terrai
     return true;
 }
 
-void TerrainRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera) {
-    if (chunks.empty() || !pipeline) {
+void TerrainRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                             bool gbuffer) {
+    if (chunks.empty() || !pipeline || (gbuffer && !gbufferPipeline_)) {
         static int emptyLog = 0;
         if (++emptyLog <= 3)
             LOG_WARNING("TerrainRenderer::render: chunks=", chunks.size(), " pipeline=", (pipeline != VK_NULL_HANDLE));
@@ -1047,6 +1047,7 @@ void TerrainRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, c
     }
 
     VkPipeline activePipeline = (wireframe && wireframePipeline) ? wireframePipeline : pipeline;
+    if (gbuffer) activePipeline = (wireframe && gbufferWireframe_) ? gbufferWireframe_ : gbufferPipeline_;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline);
 
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,

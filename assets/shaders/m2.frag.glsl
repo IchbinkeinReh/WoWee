@@ -14,8 +14,6 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerPos;   // xyz = player world position, w = horizontal speed
     vec4 playerWake;  // xyz = trailing player position (springback reference)
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
-    mat4 rtViewProj;
-    vec4 rtCameraPos;
     vec4 rtParams;
     vec4 cameraFogColor;  // the camera's fog, its interior's blended in
     // Unread here; declared so the cascades below land where the renderer writes them.
@@ -86,10 +84,6 @@ layout(location = 9) flat in int vInteriorLit;
 layout(location = 10) flat in vec3 vInteriorAmbient;
 layout(location = 11) flat in vec4 vInteriorDirect;
 layout(location = 12) flat in float vDetailLit;
-// Where this point was when the ray traced lighting it reads was traced, and
-// whether it moved since: a door, a chest, a lift (m2.vert).
-layout(location = 13) in vec3 RtPrevPos;
-layout(location = 14) flat in int vRtMoved;
 
 layout(location = 0) out vec4 outColor;
 
@@ -188,6 +182,15 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     return color;
 }
 
+// How much of a colour applyFog lets through: it takes c to c * fogShare + the
+// fog's own light. The ray traced lighting's G-buffer scales what it writes
+// by it (rtSurfaceScale).
+float fogShare(vec3 worldPos, float dist) {
+    float share = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
+    if (volumetricParams.x > 0.5) share *= fogVolumeAt(worldPos).a;
+    return share;
+}
+
 // The whole depth of the fog volume at this point of the screen, for the sky:
 // it lies behind everything, so it takes all the air there is.
 vec4 fogVolumeSky(vec2 uv) {
@@ -195,6 +198,9 @@ vec4 fogVolumeSky(vec2 uv) {
 }
 
 void main() {
+    // In a G-buffer pipeline every fragment writes the G-buffer; what is not
+    // lit as a surface of the tracing's writes none (rt_lighting.glsli).
+    rtWriteGbuffer(rtSurfaceNone(), vec3(0.0));
     const int filterMode = textureFilterMode(viewPos.w);
     const vec4 tex0 = hasTexture != 0 ? textureFiltered(uTexture, TexCoord, filterMode) : vec4(1.0);
     const vec4 tex1 = ((combiners >> 8) & 3) > 1 ? textureFiltered(uTexture2, TexCoord2, filterMode) : vec4(1.0);
@@ -272,8 +278,10 @@ void main() {
         vec3 toSun = normalize(-lightDir.xyz);
         vec3 terrainN = normalize(vInteriorDirect.xyz);
         float nl = clamp(dot(terrainN, toSun), 0.0, 1.0);
-        RtLight rt = rtLightAt(FragPos);
-        vec3 light = min(rtAmbient(rt, ambientColor.rgb, FragPos, terrainN) + nl * lightColor.rgb, vec3(1.0)) * vInteriorAmbient.rgb;
+        // Drawn into the G-buffer, with the traced terms neutral.
+        RtLight rt = kGbuffer ? rtNeutral() : rtLightAt(FragPos);
+        const vec3 ambientLit = rtAmbient(rt, ambientColor.rgb, FragPos, terrainN);
+        vec3 light = min(ambientLit + nl * lightColor.rgb, vec3(1.0)) * vInteriorAmbient.rgb;
         float shade = vDetailLit;
         if (shadowParams.x > 0.5) {
             // The shadow variants: the shadow map's light, no more than the
@@ -294,9 +302,26 @@ void main() {
             // tree's and house's shadow back out.
             shade = mix(shade, rt.sun, rt.weight);
         }
-        vec3 rgb = tex0.rgb * (light * rtShadowScale(rt, shade) + rtPointLight(rt));
+        const float shadeScale = rtShadowScale(rt, shade);
+        vec3 rgb = tex0.rgb * (light * shadeScale + rtPointLight(rt));
         rgb = applyFog(rgb, FragPos, depth, (vInteriorLit & 2) != 0 ? cameraFogColor.rgb : fogColor.rgb);
         outColor = vec4(rtGiDebug(rgb), alpha);
+        if (kGbuffer) {
+            // The traced terms as they will change it: all of it by the sun's
+            // shadow, the occlusion inside the light's clamp, the point lights
+            // on the texture.
+            RtSurface s = rtSurfaceNone();
+            s.normal = terrainN;
+            s.map = shade;
+            s.flags = RT_GB_VALID | RT_GB_SUN;
+            s.g = tex0.rgb * light * shadeScale;
+            rtSurfaceOcclusion(s, ambientLit, nl * lightColor.rgb, vec3(1.0));
+            s.occY *= tex0.rgb * vInteriorAmbient.rgb * shadeScale;
+            s.occE *= tex0.rgb * vInteriorAmbient.rgb * shadeScale;
+            s.kp = tex0.rgb;
+            rtSurfaceScale(s, vec3(fogShare(FragPos, depth)));
+            rtWriteGbuffer(s, outColor.rgb);
+        }
         return;
     }
 
@@ -336,8 +361,10 @@ void main() {
     const vec3 highlightAmbient = vHighlight > 0.0
         ? round(clamp(ambientColor.rgb, 0.0, 1.0) * 255.0) / 255.0 : vec3(0.0);
 
-    // The light the diffuse carries, which the stages then combine with.
+    // The light the diffuse carries, which the stages then combine with, and
+    // how the traced terms will change it (rt_gbuffer.glsli), in its units.
     vec3 light;
+    RtSurface rtSurface = rtSurfaceNone();
     if (unlit != 0) {
         // No light: the client draws an unlit batch with the batch colour
         // alone and adds nothing (FUN_0081fb10).
@@ -356,11 +383,13 @@ void main() {
         // and the torches' and lamps' where the ray tracing has it. The MODD
         // colour is the group's baked light, its lamps in it already: those
         // only shadow it (rtPointLightOwn, rtBakedShade).
-        rtSurfaceIsUnit = vRtMoved != 0;
-        RtLight rt = rtLightAt(RtPrevPos);
-        light = clamp(vInteriorAmbient + highlightAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0)
-                  * (rtBakedLight() * rtBakedShade(rt))
-              + rtPointLightOwn(rt);
+        RtLight rt = kGbuffer ? rtNeutral() : rtLightAt(FragPos);
+        const vec3 baked = clamp(vInteriorAmbient + highlightAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0)
+                         * rtBakedLight();
+        light = baked * rtBakedShade(rt) + rtPointLightOwn(rt);
+        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED;
+        rtSurface.g = baked;
+        rtSurface.kp = vec3(1.0);
     } else {
         // Ambient and diffuse only. The client lights an M2 batch with the
         // fixed-function light (FUN_0081fb10) and no specular term; its
@@ -374,11 +403,11 @@ void main() {
             shadow = mix(1.0, shadow, shadowParams.y);
         }
 
-        // What moved since the result was traced finds itself where it was.
-        rtSurfaceIsUnit = vRtMoved != 0;
-        RtLight rt = rtLightAt(RtPrevPos);
+        // Drawn into the G-buffer, with the traced terms neutral.
+        RtLight rt = kGbuffer ? rtNeutral() : rtLightAt(FragPos);
         // The shadow variants let a face turned edge-on to the sun out of the
         // map's shadow (rtEdgeOnLift); the traced one keeps its own.
+        rtSurface.map = rtMapEdgeOn(shadow, norm, normalize(-lightDir.xyz));
         shadow = rtShadowEdgeOn(rt, shadow, norm, normalize(-lightDir.xyz));
         // A game object takes its own: its ambient as it eases, its direct
         // light as scaled in the terrain's baked shadow (0x007a1e90).
@@ -389,12 +418,26 @@ void main() {
         // the direct light no more than one a channel (0x00873ca0), then the
         // shadow variants' 0.7 + 0.3 x the light the shadow map lets through
         // over all of it.
-        light = clamp(rtAmbient(rt, ambient, FragPos, norm) + diff * min(direct, vec3(1.0)), 0.0, 1.0)
-              * rtShadowScale(rt, shadow);
+        const vec3 ambientLit = rtAmbient(rt, ambient, FragPos, norm);
+        const float shadowScale = rtShadowScale(rt, shadow);
+        light = clamp(ambientLit + diff * min(direct, vec3(1.0)), 0.0, 1.0) * shadowScale;
+        rtSurface.flags = RT_GB_VALID | RT_GB_SUN;
+        rtSurface.g = light;
+        rtSurfaceOcclusion(rtSurface, ambientLit, diff * min(direct, vec3(1.0)), vec3(1.0));
+        rtSurface.occY *= shadowScale;
+        rtSurface.occE *= shadowScale;
+        rtSurface.kp = vec3(1.0);
         // The torches' and lamps' light, where the ray tracing has it.
         light += rtPointLight(rt);
     }
     vec3 result = combineStages(vec4(light * tint, batchFade), tex0, tex1).rgb;
+    // The stages are affine in the diffuse: what multiplies the light on its
+    // way through them multiplies the traced terms' part of it too.
+    if (kGbuffer) {
+        rtSurface.normal = norm;
+        rtSurfaceScale(rtSurface, combineStages(vec4(tint, batchFade), tex0, tex1).rgb -
+                                  combineStages(vec4(vec3(0.0), batchFade), tex0, tex1).rgb);
+    }
 
     // The fog's distance is the view depth: every vertex program takes it
     // from the model-view matrix's z row (c33) into ((end - z) / (end - start))^exp
@@ -424,6 +467,7 @@ void main() {
         // In a group of the camera's interior pass, the camera's fog colour
         // (0x007c1730 tests +0xc 0x8000).
         result = applyFog(result, FragPos, dist, (vInteriorLit & 2) != 0 ? cameraFogColor.rgb : fogColor.rgb);
+        if (kGbuffer) rtSurfaceScale(rtSurface, vec3(fogShare(FragPos, dist)));
     }
 
     float outAlpha = stageAlpha;
@@ -451,4 +495,5 @@ void main() {
         result *= vFadeAlpha;
     }
     outColor = vec4(rtGiDebug(result), outAlpha);
+    rtWriteGbuffer(rtSurface, outColor.rgb);
 }

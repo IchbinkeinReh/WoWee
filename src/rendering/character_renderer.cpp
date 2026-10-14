@@ -179,8 +179,8 @@ void applyMagentaKeyIfNeeded(pipeline::BLPImage& image, const std::string& path)
 
 // Descriptor pool sizing
 static constexpr uint32_t MAX_MATERIAL_SETS = 4096;
-// Three a skinned instance (CharacterInstance::kBoneRing).
-static constexpr uint32_t MAX_BONE_SETS = 12288;
+// Two a skinned instance (CharacterInstance::kBoneRing).
+static constexpr uint32_t MAX_BONE_SETS = 8192;
 
 // Texture compositing sizes (NPC skin upscale)
 static constexpr int kBaseTexSize    = 256;  // NPC baked texture default
@@ -382,7 +382,7 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
     auto buildCharPipeline = [&](VkPipelineColorBlendAttachmentState blendState,
                                   bool depthWrite, bool alphaToCoverage = false,
                                   VkCullModeFlags cullMode = VK_CULL_MODE_NONE,
-                                  bool depthTest = true) -> VkPipeline {
+                                  bool depthTest = true, bool gbuffer = false) -> VkPipeline {
         auto builder = PipelineBuilder()
             .setShaders(charVert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
                         charFrag.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
@@ -397,9 +397,10 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
             .setMultisample(samples);
         if (alphaToCoverage)
             builder.setAlphaToCoverage(true);
+        if (gbuffer) builder.setGbufferOutputs();
         return builder
             .setLayout(pipelineLayout_)
-            .setRenderPass(mainPass)
+            .setRenderPass(gbuffer ? vkCtx_->getGbufferRenderPass() : mainPass)
             .setDynamicStates({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BIAS})
             .build(device, vkCtx_->getPipelineCache());
     };
@@ -455,20 +456,53 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
         }
         pipelineVariants_[spec.base] = variants;
     }
+
+    // What the opaque phase draws with - opaque, alpha test, and the alpha
+    // blend a batch whose own alpha track is below one takes - once more with
+    // all their variants, for the ray traced lighting's G-buffer pass
+    // (gbufferVariant). Not for a preview's own pass.
+    if (renderPassOverride_ == VK_NULL_HANDLE && vkCtx_->getGbufferRenderPass()) {
+        for (const auto& spec : variantSpecs) {
+            if (!spec.base || (spec.base != opaquePipeline_ && spec.base != alphaTestPipeline_ &&
+                               spec.base != alphaPipeline_)) {
+                continue;
+            }
+            std::array<VkPipeline, kPipelineVariantCount> variants{};
+            for (uint32_t v = 0; v < kPipelineVariantCount; ++v) {
+                variants[v] = buildCharPipeline(spec.blend, ((v / 6) & 1) == 0, spec.alphaToCoverage,
+                                                kCullModes[v % 3], ((v / 3) & 1) == 0, true);
+            }
+            gbufferVariants_[spec.base] = variants;
+        }
+    }
 }
 
 void CharacterRenderer::destroyPipelineVariants() {
-    if (vkCtx_) rendering::destroyPipelineVariants(vkCtx_->getDevice(), pipelineVariants_);
+    if (!vkCtx_) return;
+    rendering::destroyPipelineVariants(vkCtx_->getDevice(), pipelineVariants_);
+    rendering::destroyPipelineVariants(vkCtx_->getDevice(), gbufferVariants_);
+}
+
+// A variant's index: cull (none, back, front) + 3 * no-depth-test + 6 * no-depth-write.
+static uint32_t charVariantIndex(uint16_t materialFlags, bool mirrored) {
+    const uint32_t cull = (materialFlags & 0x04) ? 0u : (mirrored ? 2u : 1u);
+    const uint32_t noTest = (materialFlags & 0x08) ? 1u : 0u;
+    const uint32_t noWrite = (materialFlags & 0x10) ? 1u : 0u;
+    return cull + 3u * noTest + 6u * noWrite;
 }
 
 VkPipeline CharacterRenderer::pipelineVariant(VkPipeline base, uint16_t materialFlags,
                                               bool mirrored) const {
     auto it = pipelineVariants_.find(base);
     if (it == pipelineVariants_.end()) return base;
-    const uint32_t cull = (materialFlags & 0x04) ? 0u : (mirrored ? 2u : 1u);
-    const uint32_t noTest = (materialFlags & 0x08) ? 1u : 0u;
-    const uint32_t noWrite = (materialFlags & 0x10) ? 1u : 0u;
-    return it->second[cull + 3u * noTest + 6u * noWrite];
+    return it->second[charVariantIndex(materialFlags, mirrored)];
+}
+
+VkPipeline CharacterRenderer::gbufferVariant(VkPipeline base, uint16_t materialFlags,
+                                             bool mirrored) const {
+    auto it = gbufferVariants_.find(base);
+    if (it == gbufferVariants_.end()) return VK_NULL_HANDLE;
+    return it->second[charVariantIndex(materialFlags, mirrored)];
 }
 
 bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout,
@@ -521,20 +555,18 @@ bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFram
         vkCreateDescriptorSetLayout(device, &ci, nullptr, &materialSetLayout_);
     }
 
-    // Bone set layout (set 2): binding 0 = this frame's bone matrices and
-    // model matrix, binding 1 = last frame's (CharacterInstance::boneBuffer)
+    // Bone set layout (set 2): binding 0 = the frame's bone matrices
+    // (CharacterInstance::boneBuffer)
     {
-        VkDescriptorSetLayoutBinding bindings[2] = {};
-        for (uint32_t b = 0; b < 2; ++b) {
-            bindings[b].binding = b;
-            bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[b].descriptorCount = 1;
-            bindings[b].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        }
+        VkDescriptorSetLayoutBinding binding{};
+        binding.binding = 0;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        binding.descriptorCount = 1;
+        binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
         VkDescriptorSetLayoutCreateInfo ci{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 2;
-        ci.pBindings = bindings;
+        ci.bindingCount = 1;
+        ci.pBindings = &binding;
         vkCreateDescriptorSetLayout(device, &ci, nullptr, &boneSetLayout_);
     }
 
@@ -555,7 +587,7 @@ bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFram
     }
     {
         VkDescriptorPoolSize sizes[] = {
-            {.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = MAX_BONE_SETS * 2},
+            {.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = MAX_BONE_SETS},
         };
         VkDescriptorPoolCreateInfo ci{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         ci.maxSets = MAX_BONE_SETS;
@@ -3152,13 +3184,16 @@ void CharacterRenderer::prepareRender(uint32_t frameIndex) {
 
     WOWEE_PROFILE_SCOPE("prepare: character bone ring", Cpu);
     // Pre-allocate bone SSBOs + descriptor sets on main thread (pool ops not
-    // thread-safe): the whole ring at once, as each set binds two of them.
+    // thread-safe): the whole ring at once.
     constexpr int kRing = CharacterInstance::kBoneRing;
-    const VkDeviceSize bufferSize = (MAX_BONES + 1) * sizeof(glm::mat4);
+    const VkDeviceSize bufferSize = MAX_BONES * sizeof(glm::mat4);
     for (auto& [id, instance] : instances) {
         int numBones = std::min(static_cast<int>(instance.boneMatrices.size()), MAX_BONES);
         if (numBones <= 0) continue;
-        if (instance.boneSet[0] && instance.boneSet[1] && instance.boneSet[2]) continue;
+        if (std::all_of(std::begin(instance.boneSet), std::end(instance.boneSet),
+                        [](VkDescriptorSet set) { return set != VK_NULL_HANDLE; })) {
+            continue;
+        }
 
         bool ok = true;
         for (int k = 0; k < kRing && ok; ++k) {
@@ -3184,7 +3219,7 @@ void CharacterRenderer::prepareRender(uint32_t frameIndex) {
             // produce correct (neutral) transforms instead of GPU garbage
             if (instance.boneMapped[k]) {
                 auto* dst = static_cast<glm::mat4*>(instance.boneMapped[k]);
-                for (int j = 0; j <= MAX_BONES; j++) dst[j] = glm::mat4(1.0f);
+                for (int j = 0; j < MAX_BONES; j++) dst[j] = glm::mat4(1.0f);
             }
         }
         for (int k = 0; k < kRing && ok; ++k) {
@@ -3201,38 +3236,29 @@ void CharacterRenderer::prepareRender(uint32_t frameIndex) {
                 ok = false;
                 break;
             }
-            VkDescriptorBufferInfo bufInfo[2] = {
-                {instance.boneBuffer[k], 0, bufferSize},
-                {instance.boneBuffer[(k + kRing - 1) % kRing], 0, bufferSize},
-            };
-            VkWriteDescriptorSet writes[2] = {};
-            for (uint32_t b = 0; b < 2; ++b) {
-                writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[b].dstSet = instance.boneSet[k];
-                writes[b].dstBinding = b;
-                writes[b].descriptorCount = 1;
-                writes[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                writes[b].pBufferInfo = &bufInfo[b];
-            }
-            vkUpdateDescriptorSets(vkCtx_->getDevice(), 2, writes, 0, nullptr);
+            const VkDescriptorBufferInfo bufInfo{instance.boneBuffer[k], 0, bufferSize};
+            VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = instance.boneSet[k];
+            write.dstBinding = 0;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            write.pBufferInfo = &bufInfo;
+            vkUpdateDescriptorSets(vkCtx_->getDevice(), 1, &write, 0, nullptr);
         }
         // Drawn only with the whole ring; what failed is tried again next frame.
         if (!ok) destroyInstanceBones(instance, true);
     }
 }
 
-bool CharacterRenderer::writeFrameBones(CharacterInstance& inst, const glm::mat4& model) {
+void CharacterRenderer::writeFrameBones(CharacterInstance& inst) {
     constexpr int kRing = CharacterInstance::kBoneRing;
     const int k = static_cast<int>(boneFrame_ % kRing);
-    const int prev = (k + kRing - 1) % kRing;
     const int numBones = std::min(static_cast<int>(inst.boneMatrices.size()), MAX_BONES);
     if (inst.boneMapped[k] && inst.boneWritten[k] != boneFrame_) {
         auto* dst = static_cast<glm::mat4*>(inst.boneMapped[k]);
         if (numBones > 0) memcpy(dst, inst.boneMatrices.data(), numBones * sizeof(glm::mat4));
-        dst[MAX_BONES] = model;
         inst.boneWritten[k] = boneFrame_;
     }
-    return inst.boneWritten[prev] != 0 && inst.boneWritten[prev] + 1 == boneFrame_;
 }
 
 namespace {
@@ -3332,8 +3358,8 @@ std::vector<CharacterRenderer::BlendedDraw> CharacterRenderer::planBlended(const
 }
 
 void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                               Phase phase, uint32_t onlyInstance) {
-    if (instances.empty() || !opaquePipeline_) {
+                               Phase phase, uint32_t onlyInstance, bool gbuffer) {
+    if (instances.empty() || !opaquePipeline_ || (gbuffer && gbufferVariants_.empty())) {
         return;
     }
     std::lock_guard<std::mutex> renderLock(renderMutex_);
@@ -3422,7 +3448,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                             pipelineLayout_, 0, 1, &perFrameSet, 0, nullptr);
 
     // Start with opaque pipeline
-    VkPipeline currentPipeline = opaquePipeline_;
+    VkPipeline currentPipeline = gbuffer ? gbufferVariant(opaquePipeline_, 0x04, false) : opaquePipeline_;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, currentPipeline);
 
     // One instance alone, or all of them. A caller drawing several blended
@@ -3475,23 +3501,16 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             float extent = 2.0f * gpuModel.data.boundRadius * std::max(instance.scale, 0.001f);
             charPush.lightFlags.z = glm::clamp(extent, kSelfShadowMinExtent, kSelfShadowMaxExtent);
         }
-        // w: drawn see-through, as a whole - the ray traced lighting's
-        // G-buffer holds what shows through it (rtLightSeeThrough).
-        const float instanceAlpha = instance.opacity * instance.kitAlpha * instance.cameraAlpha;
-        charPush.diffuseColour = glm::vec4(instance.diffuseColour, instanceAlpha < 0.999f ? 1.0f : 0.0f);
+        charPush.diffuseColour = glm::vec4(instance.diffuseColour, 0.0f);
 
-        // This frame's pose and placement into the bone ring (set 2), beside
-        // last frame's. lightFlags.w: last frame's is there, and the surface
-        // finds itself in the lighting traced then where it stood
-        // (character.vert).
+        // This frame's pose into the bone ring (set 2).
         int numBones = std::min(static_cast<int>(instance.boneMatrices.size()), MAX_BONES);
-        charPush.lightFlags.w = 0.0f;
         if (numBones > 0) {
             // GPU allocation is performed by prepareRender() before command
             // recording. Never allocate buffers/descriptors from the draw loop.
             const int ring = static_cast<int>(boneFrame_ % CharacterInstance::kBoneRing);
             if (!instance.boneBuffer[ring] || !instance.boneSet[ring]) continue;
-            if (writeFrameBones(instance, modelMat)) charPush.lightFlags.w = 1.0f;
+            writeFrameBones(instance);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipelineLayout_, 2, 1, &instance.boneSet[ring], 0, nullptr);
         }
@@ -3802,7 +3821,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 }
                 // Cull, depth test and depth write from the material's flags, as
                 // the client sets them for every blend mode (FUN_0081fe90).
-                desiredPipeline = pipelineVariant(desiredPipeline, materialFlags, mirroredInstance);
+                desiredPipeline = gbuffer ? gbufferVariant(desiredPipeline, materialFlags, mirroredInstance)
+                                          : pipelineVariant(desiredPipeline, materialFlags, mirroredInstance);
+                if (!desiredPipeline) continue;
                 if (desiredPipeline != currentPipeline) {
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
                     currentPipeline = desiredPipeline;
@@ -3983,6 +4004,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             // pick it explicitly so instance fades blend here too.
             VkPipeline fallbackPipeline = (instance.opacity * instance.kitAlpha * instance.cameraAlpha < 0.999f)
                 ? translucentPipeline_ : opaquePipeline_;
+            if (gbuffer) fallbackPipeline = gbufferVariant(opaquePipeline_, 0x04, false);
             if (fallbackPipeline != currentPipeline) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fallbackPipeline);
                 currentPipeline = fallbackPipeline;
@@ -4215,7 +4237,7 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
         // prepareRender alone; an instance it has not reached casts next frame.
         const int ring = static_cast<int>(boneFrame_ % CharacterInstance::kBoneRing);
         if (inst.boneMatrices.empty() || !inst.boneSet[ring]) continue;
-        writeFrameBones(inst, modelMat);
+        writeFrameBones(inst);
 
         // Params at set 1 and bones at set 2, together, per instance.
         //

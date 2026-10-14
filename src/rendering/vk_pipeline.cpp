@@ -78,6 +78,16 @@ PipelineBuilder& PipelineBuilder::setColorBlendAttachment(
     return *this;
 }
 
+PipelineBuilder& PipelineBuilder::setSampleShading(bool enable) {
+    sampleShading_ = enable;
+    return *this;
+}
+
+PipelineBuilder& PipelineBuilder::setGbufferOutputs() {
+    gbufferOutputs_ = true;
+    return *this;
+}
+
 PipelineBuilder& PipelineBuilder::setNoColorAttachment() {
     colorBlendAttachments_.clear();
     return *this;
@@ -174,7 +184,8 @@ VkPipeline PipelineBuilder::build(VkDevice device, VkPipelineCache cache) const 
     // Multisampling
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.sampleShadingEnable = sampleShading_ ? VK_TRUE : VK_FALSE;
+    multisampling.minSampleShading = sampleShading_ ? 1.0f : 0.0f;
     multisampling.rasterizationSamples = msaaSamples_;
     multisampling.alphaToCoverageEnable = alphaToCoverage_ ? VK_TRUE : VK_FALSE;
 
@@ -191,8 +202,26 @@ VkPipeline PipelineBuilder::build(VkDevice device, VkPipelineCache cache) const 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = static_cast<uint32_t>(colorBlendAttachments_.size());
-    colorBlending.pAttachments = colorBlendAttachments_.data();
+    // The G-buffer targets follow the colour, never blended: what they hold
+    // is packed words, not a colour.
+    std::vector<VkPipelineColorBlendAttachmentState> blends = colorBlendAttachments_;
+    if (gbufferOutputs_ && !blends.empty()) {
+        blends.push_back(blendDisabled());
+        blends.push_back(blendDisabled());
+    }
+    colorBlending.attachmentCount = static_cast<uint32_t>(blends.size());
+    colorBlending.pAttachments = blends.data();
+
+    // kGbuffer (constant_id 0) for the fragment stage of a G-buffer pipeline.
+    const VkBool32 gbufferConstant = VK_TRUE;
+    const VkSpecializationMapEntry gbufferEntry{0, 0, sizeof(VkBool32)};
+    VkSpecializationInfo gbufferSpec{1, &gbufferEntry, sizeof(VkBool32), &gbufferConstant};
+    std::vector<VkPipelineShaderStageCreateInfo> stages = shaderStages_;
+    if (gbufferOutputs_) {
+        for (auto& stage : stages) {
+            if (stage.stage == VK_SHADER_STAGE_FRAGMENT_BIT) stage.pSpecializationInfo = &gbufferSpec;
+        }
+    }
 
     // Dynamic state
     VkPipelineDynamicStateCreateInfo dynamicState{};
@@ -203,15 +232,15 @@ VkPipeline PipelineBuilder::build(VkDevice device, VkPipelineCache cache) const 
     // Create pipeline
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages_.size());
-    pipelineInfo.pStages = shaderStages_.data();
+    pipelineInfo.stageCount = static_cast<uint32_t>(stages.size());
+    pipelineInfo.pStages = stages.data();
     pipelineInfo.pVertexInputState = &vertexInput;
     pipelineInfo.pInputAssemblyState = &inputAssembly;
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pDepthStencilState = &depthStencil;
-    pipelineInfo.pColorBlendState = colorBlendAttachments_.empty() ? nullptr : &colorBlending;
+    pipelineInfo.pColorBlendState = blends.empty() ? nullptr : &colorBlending;
     pipelineInfo.pDynamicState = dynamicStates_.empty() ? nullptr : &dynamicState;
     pipelineInfo.layout = pipelineLayout_;
     pipelineInfo.flags = flags_;

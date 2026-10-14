@@ -307,6 +307,19 @@ public:
     // clearing it, so drawing can continue into the same framebuffer after the
     // pass has been closed for a copy. Null under MSAA.
     [[nodiscard]] VkRenderPass getSceneContinueRenderPass() const { return sceneContinueRenderPass; }
+    /// The ray traced lighting's opaque phase: the scene's colour and depth at
+    /// its sample count, plus the two G-buffer targets (kGbufferFormat),
+    /// stored for the trace and the apply pass. Null where the lighting cannot
+    /// run (createDeferredScenePasses).
+    [[nodiscard]] VkRenderPass getGbufferRenderPass() const { return gbufferRenderPass_; }
+    /// The pass the scene resumes in after the G-buffer pass, compatible with
+    /// getImGuiRenderPass() and begun on its framebuffers: it loads the colour
+    /// and depth, and under MSAA resolves at its end.
+    [[nodiscard]] VkRenderPass getSceneResumeRenderPass() const {
+        return msaaSamples_ > VK_SAMPLE_COUNT_1_BIT ? sceneResumeMsaaRenderPass_ : sceneContinueRenderPass;
+    }
+    static constexpr VkFormat kGbufferFormat = VK_FORMAT_R16G16B16A16_UNORM;
+    [[nodiscard]] bool isSampleRateShadingSupported() const { return sampleRateShadingSupported_; }
     [[nodiscard]] VkDescriptorPool getImGuiDescriptorPool() const { return imguiDescriptorPool; }
     [[nodiscard]] const std::vector<VkFramebuffer>& getSwapchainFramebuffers() const { return swapchainFramebuffers; }
 
@@ -359,6 +372,8 @@ public:
     /// while MSAA is on, so this is the question to ask before turning it on.
     [[nodiscard]] bool isDepthResolveSupported() const { return depthResolveSupported_; }
     [[nodiscard]] VkImageView getDepthImageView() const { return depthImageView; }
+    /// The multisampled colour the swapchain's scene pass draws into under MSAA.
+    [[nodiscard]] VkImageView getMsaaColorImageView() const { return msaaColorView_; }
 
     // Sampler cache: returns a shared VkSampler matching the given create info.
     // Callers must NOT destroy the returned sampler - it is owned by VkContext.
@@ -683,6 +698,10 @@ private:
     VkRenderPass sceneContinueRenderPass = VK_NULL_HANDLE;
     bool createOverlayRenderPass();
     bool createSceneContinueRenderPass();
+    void createDeferredScenePasses();
+    bool createMsaaScenePass(VkRenderPass& out, bool loadScene);
+    VkRenderPass gbufferRenderPass_ = VK_NULL_HANDLE;
+    VkRenderPass sceneResumeMsaaRenderPass_ = VK_NULL_HANDLE;
     void destroyOverlayRenderPass();
     VkDescriptorPool imguiDescriptorPool = VK_NULL_HANDLE;
 
@@ -725,6 +744,9 @@ private:
     std::mutex samplerCacheMutex_;
     std::unordered_map<uint64_t, VkSampler> samplerCache_;
     bool samplerAnisotropySupported_ = false;
+    bool dualSrcBlendSupported_ = false;
+    bool independentBlendSupported_ = false;
+    bool sampleRateShadingSupported_ = false;
     bool fillModeNonSolidSupported_ = false;
     bool multiDrawIndirectSupported_ = false;
     uint32_t maxDrawIndirectCount_ = 1;

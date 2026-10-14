@@ -53,7 +53,9 @@ public:
                       const glm::vec3& rangeCenter);
 
     /// Record the indirect draw. Must run inside the render pass.
-    void render(VkCommandBuffer cmd, uint32_t frameIndex, VkDescriptorSet perFrameSet);
+    /// gbuffer: in the ray traced lighting's G-buffer pass.
+    void render(VkCommandBuffer cmd, uint32_t frameIndex, VkDescriptorSet perFrameSet,
+                bool gbuffer = false);
 
     /// Replace the live population. Blades carry world positions, so this is
     /// the whole of what the renderer knows about where grass is.
@@ -149,6 +151,7 @@ private:
     VkDescriptorSet drawSet_[kFrames]{};
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    VkPipeline gbufferPipeline_ = VK_NULL_HANDLE;  // the same, for the G-buffer pass
 };
 
 } // namespace rendering

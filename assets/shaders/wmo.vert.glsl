@@ -15,10 +15,6 @@ layout(set = 0, binding = 0) uniform PerFrame {
 
 layout(push_constant) uniform Push {
     mat4 model;
-    // As it was last frame: where the ray traced lighting the surfaces read
-    // was traced; the model matrix itself for a building that stands still
-    // (WMORenderer::WMOInstancePush).
-    mat4 prevModel;
 } push;
 
 layout(location = 0) in vec3 aPos;
@@ -40,18 +36,12 @@ layout(location = 5) out vec3 Bitangent;
 layout(location = 6) out vec2 EnvCoord;
 layout(location = 7) out vec2 TexCoord2;
 layout(location = 8) out vec4 VertColor2;
-// Where this point was when the lighting was traced, and whether the building
-// moved since - a ship's hull (rtLightAt).
-layout(location = 9) out vec3 RtPrevPos;
-layout(location = 10) flat out int vRtMoved;
 
 void main() {
     // A building's geometry stays where it was authored. The client moves
     // nothing in a WMO procedurally, cloth painted into a wall included.
     vec4 worldPos = push.model * vec4(aPos, 1.0);
     FragPos = worldPos.xyz;
-    RtPrevPos = (push.prevModel * vec4(aPos, 1.0)).xyz;
-    vRtMoved = push.prevModel != push.model ? 1 : 0;
 
     mat3 normalMatrix = mat3(push.model);
     Normal = normalMatrix * aNormal;

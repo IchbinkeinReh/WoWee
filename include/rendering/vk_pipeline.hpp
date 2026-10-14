@@ -67,6 +67,15 @@ public:
     // Multisampling
     PipelineBuilder& setMultisample(VkSampleCountFlagBits samples);
     PipelineBuilder& setAlphaToCoverage(bool enable);
+    /// Shade every sample on its own (sampleRateShading), as the ray traced
+    /// lighting's apply pass does under MSAA.
+    PipelineBuilder& setSampleShading(bool enable);
+
+    /// For the ray traced lighting's G-buffer pass (VkContext::getGbufferRenderPass):
+    /// the two G-buffer targets after the colour, written unblended whatever
+    /// the colour's blend, and the fragment shader's specialization constant
+    /// 0 (kGbuffer, rt_gbuffer.glsli) set, so the same shader writes them.
+    PipelineBuilder& setGbufferOutputs();
 
     // Pipeline layout
     PipelineBuilder& setLayout(VkPipelineLayout layout);
@@ -122,6 +131,8 @@ private:
     float depthBiasSlope_ = 0.0f;
     VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
     bool alphaToCoverage_ = false;
+    bool sampleShading_ = false;
+    bool gbufferOutputs_ = false;
     std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments_;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkRenderPass renderPass_ = VK_NULL_HANDLE;

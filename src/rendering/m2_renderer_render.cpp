@@ -772,120 +772,8 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
 // drawn by the particle or ribbon systems.
 static const bool kM2NoSkinning = envFlagEnabled("WOWEE_M2_NO_SKINNING");
 
-void M2Renderer::notePlaced(uint32_t instanceId, M2Instance& inst) {
-    inst.rtPlacedFrame = rtFrame_ + 1;
-    // Once in the list, however often it is placed.
-    if (inst.rtPlacedListed) return;
-    inst.rtPlacedListed = true;
-    rtPlacedIds_.push_back(instanceId);
-}
-
-// What moved since last frame, for the ray traced lighting. Its result is a
-// frame old, so a surface that moved looks itself up where it was then, in
-// last frame's placement and pose (m2.vert's RtPrevPos, from rtPrevBuffer_);
-// and its texels are a mover's, which nothing else takes for its own
-// (RtLighting::FrameInputs::movers). Game objects - a door swinging, a chest
-// opening, a lift, a ship - by their placement and their pose, and doodads
-// whose placement was set (a ship's cargo) by their placement. Other doodads
-// are placed once, and what of them is animated - a tree in the wind, a
-// banner - moves too little to tell.
-void M2Renderer::prepareRtMovers(uint32_t frameIndex, const glm::vec3& cameraPos) {
-    WOWEE_PROFILE_SCOPE("prepare: m2 movers", Cpu);
-    ++rtFrame_;
-    rtMovers_.clear();
-    // As far as a mover can be told from what stands behind it at the half
-    // resolution the lighting is traced at.
-    constexpr float kMoverRange = 150.0f;
-    auto* prevOut = frameIndex < 2 ? static_cast<glm::mat4*>(rtPrevMapped_[frameIndex]) : nullptr;
-    uint32_t prevUsed = 0;
-
-    auto visit = [&](uint32_t id) {
-        auto it = instanceIndexById.find(id);
-        if (it == instanceIndexById.end()) return;
-        M2Instance& inst = instances[it->second];
-        if (inst.rtSeenFrame == rtFrame_ || !inst.cachedModel) return;
-        const bool seenLastFrame = inst.rtSeenFrame + 1 == rtFrame_;
-        inst.rtSeenFrame = rtFrame_;
-        const glm::vec3 toCam = inst.position - cameraPos;
-        const bool inRange = glm::dot(toCam, toCam) < kMoverRange * kMoverRange;
-
-        bool moved = false;
-        if (seenLastFrame && inRange) {
-            moved = inst.modelMatrix != inst.rtPrevModel;
-            if (!moved && inst.rtPrevBones.size() == inst.boneMatrices.size()) {
-                // Moved in its pose: any bone by more than a hair.
-                for (size_t b = 0; b < inst.boneMatrices.size() && !moved; ++b) {
-                    const glm::mat4 d = inst.boneMatrices[b] - inst.rtPrevBones[b];
-                    for (int c = 0; c < 4 && !moved; ++c) {
-                        moved = glm::dot(glm::vec3(d[c]), glm::vec3(d[c])) > 1e-6f;
-                    }
-                }
-            } else if (!moved) {
-                moved = !inst.boneMatrices.empty();
-            }
-        }
-        if (moved) {
-            // Last frame's placement and pose, for the vertex stage.
-            const uint32_t need = 1u + static_cast<uint32_t>(inst.rtPrevBones.size());
-            if (prevOut && prevUsed + need <= kRtPrevCapacity &&
-                inst.rtPrevBones.size() == inst.boneMatrices.size()) {
-                prevOut[prevUsed] = inst.rtPrevModel;
-                if (!inst.rtPrevBones.empty()) {
-                    std::memcpy(prevOut + prevUsed + 1, inst.rtPrevBones.data(),
-                                inst.rtPrevBones.size() * sizeof(glm::mat4));
-                }
-                inst.rtPrevRef = prevUsed + 1;
-                inst.rtPrevRefFrame = rtFrame_;
-                prevUsed += need;
-            }
-            // Its box this frame, and how it moved as a whole.
-            const M2ModelGPU& m = *inst.cachedModel;
-            RtMover mover;
-            mover.lo = glm::vec3(std::numeric_limits<float>::max());
-            mover.hi = glm::vec3(std::numeric_limits<float>::lowest());
-            for (int c = 0; c < 8; ++c) {
-                const glm::vec3 local((c & 1) ? m.boundMax.x : m.boundMin.x, (c & 2) ? m.boundMax.y : m.boundMin.y,
-                                      (c & 4) ? m.boundMax.z : m.boundMin.z);
-                const glm::vec3 w(inst.modelMatrix * glm::vec4(local, 1.0f));
-                mover.lo = glm::min(mover.lo, w);
-                mover.hi = glm::max(mover.hi, w);
-            }
-            mover.lo -= glm::vec3(0.1f);
-            mover.hi += glm::vec3(0.1f);
-            mover.prevFromCur = inst.rtPrevModel * glm::inverse(inst.modelMatrix);
-            mover.rank = glm::dot(toCam, toCam);
-            rtMovers_.push_back(mover);
-        }
-        if (inRange) {
-            inst.rtPrevModel = inst.modelMatrix;
-            inst.rtPrevBones = inst.boneMatrices;
-        }
-    };
-    for (uint32_t id : gameObjectInstanceIds_) visit(id);
-    // Placed this frame or the one before: a doodad that moves with a ship
-    // stops being one the frame after it stops.
-    std::vector<uint32_t> placed;
-    placed.swap(rtPlacedIds_);
-    for (uint32_t id : placed) {
-        auto it = instanceIndexById.find(id);
-        if (it == instanceIndexById.end()) continue;
-        instances[it->second].rtPlacedListed = false;
-    }
-    for (uint32_t id : placed) {
-        auto it = instanceIndexById.find(id);
-        if (it == instanceIndexById.end()) continue;
-        visit(id);
-        M2Instance& inst = instances[it->second];
-        if (inst.rtPlacedFrame + 1 >= rtFrame_ && !inst.rtPlacedListed) {
-            inst.rtPlacedListed = true;
-            rtPlacedIds_.push_back(id);
-        }
-    }
-}
-
-void M2Renderer::prepareRender(uint32_t frameIndex, const Camera& camera) {
+void M2Renderer::prepareRender(uint32_t frameIndex) {
     if (!initialized_ || instances.empty()) return;
-    prepareRtMovers(frameIndex, camera.getPosition());
     WOWEE_PROFILE_SCOPE("prepare: m2 bones", Cpu);
 
     // --- Mega bone SSBO: assign ranges and upload all animated instance bones ---
@@ -1165,10 +1053,6 @@ void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) co
     }
     e.flags = (inst.interiorLit ? kInstanceInteriorLit : 0) | (inst.interiorPass ? kInstanceInteriorPass : 0) |
               (inst.worldObjectLit && !inst.interiorLit ? kInstanceWorldObject : 0);
-    // Moved since last frame: where it was then (prepareRtMovers).
-    if (inst.rtPrevRefFrame == rtFrame_ && inst.rtPrevRef != 0) {
-        e.flags |= static_cast<int32_t>(inst.rtPrevRef << kInstanceRtPrevShift);
-    }
     e.interiorAmbient = glm::vec4(inst.interiorAmbient, 0.0f);
     e.interiorDirect = glm::vec4(inst.interiorDirect, inst.interiorTowardSun);
 }
@@ -1179,7 +1063,9 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     renderBlended(cmd, perFrameSet, interleave);
 }
 
-void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera) {
+void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                              bool gbuffer) {
+    if (gbuffer && gbufferVariants_.empty()) return;
     if (instances.empty() || !opaquePipeline_) {
         return;
     }
@@ -1486,8 +1372,8 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
                             pipelineLayout_, 0, 1, &perFrameSet, 0, nullptr);
 
     // Start with opaque pipeline
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
-    currentPipeline = opaquePipeline_;
+    currentPipeline = gbuffer ? gbufferVariant(opaquePipeline_, 0x04) : opaquePipeline_;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, currentPipeline);
 
     // Bind dummy bone set (set 2) so non-animated draws have a valid binding.
     // Bind mega bone SSBO instead - all instances index into one buffer via boneBase.
@@ -1811,6 +1697,13 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
                     desiredPipeline = detailGroup
                         ? pipelineVariant(alphaTestPipeline_, 0x04, false)
                         : pipelineVariant(desiredPipeline, batch.materialFlags, false);
+                    if (gbuffer) {
+                        desiredPipeline = detailGroup
+                            ? gbufferVariant(alphaTestPipeline_, 0x04)
+                            : gbufferVariant(forceCutout ? cutoutPipeline_ : blendPipelineFor(effectiveBlendMode),
+                                             batch.materialFlags);
+                        if (!desiredPipeline) continue;
+                    }
                     if (desiredPipeline != currentPipeline) {
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
                         currentPipeline = desiredPipeline;

@@ -34,6 +34,12 @@ layout(location = 5) in vec4 vHeadColor;
 layout(location = 6) in vec3 vWorldPos;
 
 layout(location = 0) out vec4 outColor;
+// The ray traced lighting's G-buffer, in a pipeline built for its pass
+// (PipelineBuilder::setGbufferOutputs): a blade is no surface of the
+// tracing's, and reads no traced light with the tracing on or off.
+layout(constant_id = 0) const bool kGbuffer = false;
+layout(location = 1) out vec4 outRtGbuf0;
+layout(location = 2) out vec4 outRtGbuf1;
 
 // The air between the camera and this point, out of the fog volume: rgb is
 // the light it scatters toward the camera, a how much of the point shows
@@ -101,4 +107,8 @@ void main() {
     // the terrain it grows from has gone into.
     lit = applyFog(lit, vWorldPos, length(viewPos.xyz - vWorldPos), fogColor.rgb);
     outColor = vec4(lit, 1.0);
+    if (kGbuffer) {
+        outRtGbuf0 = vec4(0.0);
+        outRtGbuf1 = vec4(0.0);
+    }
 }

@@ -14,8 +14,6 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerPos;   // xyz = player world position, w = horizontal speed
     vec4 playerWake;  // xyz = trailing player position (springback reference)
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
-    mat4 rtViewProj;
-    vec4 rtCameraPos;
     vec4 rtParams;
     vec4 cameraFogColor;
     vec4 averagedDirectColor;
@@ -137,6 +135,15 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     return color;
 }
 
+// How much of a colour applyFog lets through: it takes c to c * fogShare + the
+// fog's own light. The ray traced lighting's G-buffer scales what it writes
+// by it (rtSurfaceScale).
+float fogShare(vec3 worldPos, float dist) {
+    float share = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
+    if (volumetricParams.x > 0.5) share *= fogVolumeAt(worldPos).a;
+    return share;
+}
+
 void main() {
     // The fog's distance is the view depth: the Terrain vertex program takes it
     // from the model-view matrix's z row (c2) into ((end - z) / (end - start))^exp
@@ -201,10 +208,12 @@ void main() {
 
     // The vertex colour, which the pixel program doubles: the Terrain vertex
     // program's clamp(ambient + clamp(N.L) x direct) (c25, c24, c26), clamped
-    // to one before the chunk's vertex shading (MCCV) scales it.
-    RtLight rt = rtLightAt(FragPos);
+    // to one before the chunk's vertex shading (MCCV) scales it. Drawn into
+    // the G-buffer, with the traced terms neutral (rt_lighting.glsli).
+    RtLight rt = kGbuffer ? rtNeutral() : rtLightAt(FragPos);
     float ndl = clamp(dot(norm, normalize(-lightDir.xyz)), 0.0, 1.0);
-    vec3 light = clamp(rtAmbient(rt, ambientColor.rgb, FragPos, norm) + ndl * lightColor.rgb, 0.0, 1.0) * Shading;
+    vec3 ambientLit = rtAmbient(rt, ambientColor.rgb, FragPos, norm);
+    vec3 light = clamp(ambientLit + ndl * lightColor.rgb, 0.0, 1.0) * Shading;
 
     // The shadow: the baked one (MCSH, the alpha texture's fourth channel),
     // or with the sun's shadow map on, the map alone. Whatever is lit, lit
@@ -231,7 +240,8 @@ void main() {
         lit = mix(lit, rt.sun, rt.weight);
     }
 
-    vec3 result = (litColor * light + unlitColor) * rtShadowScale(rt, lit);
+    const float shadowScale = rtShadowScale(rt, lit);
+    vec3 result = (litColor * light + unlitColor) * shadowScale;
     // The torches' and lamps' light, where the ray tracing has it, on the lit
     // layers.
     result += litColor * rtPointLight(rt);
@@ -246,7 +256,24 @@ void main() {
         result += s * specularColor.rgb * specMask * lit;
     }
 
+    // What the traced terms will make of it (rt_gbuffer.glsli): all of it
+    // scaled by the sun's shadow, the occlusion inside the light's clamp, the
+    // point lights on the lit layers - here, before the fog, nothing else.
+    RtSurface surface = rtSurfaceNone();
+    if (kGbuffer) {
+        surface.normal = norm;
+        surface.map = lit;
+        surface.flags = RT_GB_VALID | RT_GB_SUN;
+        surface.g = result;
+        rtSurfaceOcclusion(surface, ambientLit, ndl * lightColor.rgb, vec3(1.0));
+        surface.occY *= litColor * Shading * shadowScale;
+        surface.occE *= litColor * Shading * shadowScale;
+        surface.kp = litColor;
+        rtSurfaceScale(surface, vec3(fogShare(FragPos, fragDist)));
+    }
+
     result = applyFog(result, FragPos, fragDist, fogColor.rgb);
 
     outColor = vec4(rtGiDebug(result), 1.0);
+    rtWriteGbuffer(surface, outColor.rgb);
 }
