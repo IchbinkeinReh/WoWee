@@ -7,6 +7,7 @@
 /// refusal is a SpellCastResult said through 0x00808200, or a game error
 /// (0x005216f0). Arithmetic only: the caller reads the world.
 
+#include <cstddef>
 #include <cstdint>
 
 namespace wowee::game::cast_check {

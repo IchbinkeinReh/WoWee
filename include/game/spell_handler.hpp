@@ -580,8 +580,12 @@ private:
     void armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required);
     /// CMSG_PET_CAST_SPELL at a unit or at none (0x0080ac90).
     void sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target);
-    /// CMSG_CAST_SPELL from the player at a unit or at none (0x0080ac90).
-    void sendPlayerCast(uint32_t spellId, uint64_t target);
+    /// CMSG_CAST_SPELL from the player at a unit, at none, or at an item
+    /// (0x0080ac90).
+    void sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t item = 0);
+    /// 0x0080c790: the weapon in hand the player's spell with Attributes
+    /// 0x200 puts its temporary enchantment on, 0 for none.
+    uint64_t enchantWeapon(uint32_t spellId) const;
     /// The player's cast or a pet's, by the caster.
     void sendCastBy(uint32_t spellId, uint64_t caster, uint64_t target);
     /// 0x0080c790 -> 0x0080cce0: the unit the spell goes at, or the cursor

@@ -1531,6 +1531,21 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // player chooses.
     constexpr uint32_t kSpellTargetFlagItem = 0x10;
     if ((getSpellTargetFlags(spellId) & kSpellTargetFlagItem) != 0) {
+        // 0x0080c790: a temporary enchantment of the player's (Attributes
+        // 0x200) goes on the weapon in hand without asking; with none in the
+        // main hand to fall back on, MAINHAND_EMPTY (0x0080cce0).
+        if (const uint64_t weapon = enchantWeapon(spellId); weapon != 0) {
+            sendPlayerCast(spellId, 0, weapon);
+            return;
+        }
+        if (const auto it = owner_.spellNameCacheRef().find(spellId);
+            it != owner_.spellNameCacheRef().end() &&
+            unit_target::noUnitFailure(it->second.attr, it->second.attrEx5, 0, true,
+                                       owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)) != 0,
+                                       false) == unit_target::kFailedMainhand) {
+            owner_.addUIError(castFailureMessage(owner_, spellId, unit_target::kFailedMainhand, -1, 0, 0));
+            return;
+        }
         if (owner_.isAwaitingItemTarget()) {
             // Not said: the interface has no such line.
             return;
@@ -1549,7 +1564,43 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     castAtUnits(spellId, owner_.getPlayerGuid(), targetGuid);
 }
 
-void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target) {
+uint64_t SpellHandler::enchantWeapon(uint32_t spellId) const {
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end() || (it->second.attr & 0x200u) == 0) return 0;
+    const auto& e = it->second;
+    // The equipped weapons (0x00754390 with 15, 16), each with its
+    // temporary enchantment and the time it has left.
+    const auto weapon = [&](EquipSlot slot, uint32_t timer, uint64_t& guid) {
+        unit_target::HandWeapon w;
+        guid = owner_.getEquipSlotGuid(static_cast<int>(slot));
+        const auto item = owner_.onlineItemsRef().find(guid);
+        if (guid == 0 || item == owner_.onlineItemsRef().end()) return w;
+        w.present = true;
+        if (const auto* info = owner_.getItemInfo(item->second.entry)) {
+            w.itemClass = info->itemClass;
+            w.subClass = info->subClass;
+        }
+        w.tempEnchant = item->second.temporaryEnchantId;
+        w.remaining = static_cast<int32_t>(owner_.getTempEnchantRemainingMs(timer));
+        return w;
+    };
+    uint64_t mainGuid = 0, offGuid = 0;
+    const auto main = weapon(EquipSlot::MAIN_HAND, 0, mainGuid);
+    const auto off = weapon(EquipSlot::OFF_HAND, 1, offGuid);
+    // The first ENCHANT_ITEM_TEMPORARY (54) effect a weapon takes.
+    for (int k = 0; k < 3; ++k) {
+        if (e.effectIds[k] != 54) continue;
+        switch (unit_target::enchantHand(static_cast<uint32_t>(e.equippedItemClass), e.equippedItemSubClassMask,
+                                         e.effectMiscValues[k], main, off)) {
+            case unit_target::Hand::Main: return mainGuid;
+            case unit_target::Hand::Off: return offGuid;
+            case unit_target::Hand::None: break;
+        }
+    }
+    return 0;
+}
+
+void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t item) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // 0x0080ac90 before it sends: the player stands (0x0071a360) unless
     // Attributes 0x8000000, gets down (0x007412e0) unless Attributes
@@ -1611,13 +1662,16 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target) {
         owner_.sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
     }
 
-    auto packet = owner_.getPacketParsers()
+    auto packet = item != 0
+        ? (owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpellOnItem(spellId, item)
+                                     : CastSpellPacket::buildItemTarget(spellId, item, ++castCount_))
+        : owner_.getPacketParsers()
         ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
         : CastSpellPacket::build(spellId, target, ++castCount_);
     LOG_DEBUG("CMSG_CAST_SPELL: spellId=", spellId, " target=0x", std::hex, target, std::dec,
               " castCount=", static_cast<int>(castCount_), " packetSize=", packet.getSize());
     owner_.getSocket()->send(packet);
-    LOG_INFO("Casting spell: ", spellId, " on 0x", std::hex, target, std::dec);
+    LOG_INFO("Casting spell: ", spellId, " on 0x", std::hex, item != 0 ? item : target, std::dec);
     castSent(spellId, owner_.getPlayerGuid());
 
     // Fire UNIT_SPELLCAST_SENT for cast bar addons
@@ -4606,7 +4660,9 @@ void SpellHandler::loadSpellNameCache() const {
                    maxLevelField = named("MaxLevel"), castTimeIndexField = named("CastingTimeIndex"),
                    effectMechanicField = named("EffectMechanic0"), triggerField = named("EffectTriggerSpell0"),
                    preventionField = named("PreventionType"), minFactionField = named("MinFactionId"),
-                   minRepField = named("MinReputation"), areaGroupField = named("AreaGroupId");
+                   minRepField = named("MinReputation"), areaGroupField = named("AreaGroupId"),
+                   itemClassField = named("EquippedItemClass"),
+                   itemSubClassMaskField = named("EquippedItemSubClassMask");
     const auto timing = pipeline::detectSpellTimingFields(dbc.get(), spellL);
     const uint32_t recoveryField = timing.recoveryTime;
     const uint32_t categoryRecoveryField = timing.categoryRecoveryTime;
@@ -4705,6 +4761,8 @@ void SpellHandler::loadSpellNameCache() const {
                 entry.minFactionId = u(minFactionField);
                 entry.minReputation = u(minRepField);
                 entry.areaGroupId = u(areaGroupField);
+                if (itemClassField < fieldCount) entry.equippedItemClass = n(itemClassField);
+                entry.equippedItemSubClassMask = u(itemSubClassMaskField);
             }
             // Load effect base points for $s1/$s2/$s3 tooltip substitution
             if (ebp0Field != 0xFFFFFFFF) entry.effectBasePoints[0] = static_cast<int32_t>(dbc->getUInt32(i, ebp0Field));

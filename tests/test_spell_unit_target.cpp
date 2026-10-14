@@ -413,3 +413,39 @@ TEST_CASE("the unit asked out of view goes as it is past 100 yards; ImplicitTarg
                    takes({kFriend}, kUnitParty));
     REQUIRE(c.what == Choice::Partly);
 }
+
+TEST_CASE("a temporary enchantment goes on the weapon 0x0080c790 picks", "[unit_target]") {
+    constexpr uint32_t kRockbiter = 1;  // its EffectMiscValue
+    HandWeapon main{true, 2, 0, 0, 0};
+    HandWeapon off{true, 2, 0, 0, 0};
+    // Rockbiter Weapon (8017): no class or subclass asked.
+    REQUIRE(enchantHand(static_cast<uint32_t>(-1), 0, kRockbiter, main, off) == Hand::Main);
+    REQUIRE(enchantHand(static_cast<uint32_t>(-1), 0, kRockbiter, HandWeapon{}, off) == Hand::Off);
+    REQUIRE(enchantHand(static_cast<uint32_t>(-1), 0, kRockbiter, HandWeapon{}, HandWeapon{}) == Hand::None);
+    // The main hand enchanted, the off hand not: the off hand.
+    main.tempEnchant = 7;
+    REQUIRE(enchantHand(static_cast<uint32_t>(-1), 0, kRockbiter, main, off) == Hand::Off);
+    // Both enchanted: the one carrying this enchantment, else none.
+    off.tempEnchant = 9;
+    REQUIRE(enchantHand(static_cast<uint32_t>(-1), 0, kRockbiter, main, off) == Hand::None);
+    off.tempEnchant = kRockbiter;
+    REQUIRE(enchantHand(static_cast<uint32_t>(-1), 0, kRockbiter, main, off) == Hand::Off);
+    main.tempEnchant = kRockbiter;
+    REQUIRE(enchantHand(static_cast<uint32_t>(-1), 0, kRockbiter, main, off) == Hand::Main);
+    // Both carrying it: the one with less left, the main hand on a tie.
+    main.remaining = 600000;
+    off.remaining = 300000;
+    REQUIRE(enchantHand(static_cast<uint32_t>(-1), 0, kRockbiter, main, off) == Hand::Off);
+    off.remaining = 600000;
+    REQUIRE(enchantHand(static_cast<uint32_t>(-1), 0, kRockbiter, main, off) == Hand::Main);
+}
+
+TEST_CASE("a temporary enchantment asking for a weapon class passes over what is not one", "[unit_target]") {
+    // Flametongue Weapon (8024): EquippedItemClass 2, subclass mask 0x2a5f3.
+    const HandWeapon shield{true, 4, 6, 0, 0};
+    const HandWeapon axe{true, 2, 0, 0, 0};
+    const HandWeapon bow{true, 2, 2, 0, 0};  // subclass 2 is not in the mask
+    REQUIRE(enchantHand(2, 0x2a5f3, 5, shield, axe) == Hand::Off);
+    REQUIRE(enchantHand(2, 0x2a5f3, 5, bow, HandWeapon{}) == Hand::None);
+    REQUIRE(enchantHand(2, 0x2a5f3, 5, axe, shield) == Hand::Main);
+}

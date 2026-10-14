@@ -4412,6 +4412,8 @@ public:
         uint32_t minFactionId = 0;
         uint32_t minReputation = 0;
         uint32_t areaGroupId = 0;
+        int32_t equippedItemClass = -1;
+        uint32_t equippedItemSubClassMask = 0;
     };
     static constexpr size_t PLAYER_EXPLORED_ZONES_COUNT = 128;
     std::string getAreaName(uint32_t areaId) const;

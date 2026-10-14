@@ -332,6 +332,37 @@ inline constexpr uint8_t kFailedNoTarget = 0xb;
     return playerHasTarget ? kFailedBadTargets : kFailedNoTarget;
 }
 
+/// A weapon in hand as 0x0080c790 reads it for a temporary enchantment.
+struct HandWeapon {
+    bool present = false;
+    uint32_t itemClass = 0;    ///< 0x00707220
+    uint32_t subClass = 0;     ///< 0x00707250
+    uint32_t tempEnchant = 0;  ///< its temporary enchantment (0x00518b30)
+    int32_t remaining = 0;     ///< that one's time left (0x005e8290)
+};
+enum class Hand : uint8_t { None, Main, Off };
+
+/// 0x0080c790, the player's spell with Attributes 0x200: an
+/// ENCHANT_ITEM_TEMPORARY (54) effect giving `enchant` goes on a weapon in
+/// hand - with EquippedItemSubClassMask set, one of EquippedItemClass and a
+/// subclass in the mask. The main hand, unless it is missing or enchanted
+/// and the off hand is not; both enchanted, the one carrying this
+/// enchantment, the one with less left where both do; neither, none.
+[[nodiscard]] constexpr Hand enchantHand(uint32_t equippedClass, uint32_t subClassMask, uint32_t enchant,
+                                         const HandWeapon& main, const HandWeapon& off) {
+    const auto fits = [&](const HandWeapon& w) {
+        return w.present &&
+               (subClassMask == 0 || (w.itemClass == equippedClass && (subClassMask & (1u << (w.subClass & 31))) != 0));
+    };
+    const bool m = fits(main), o = fits(off);
+    if (!m) return o ? Hand::Off : Hand::None;
+    if (!o || main.tempEnchant == 0) return Hand::Main;
+    if (off.tempEnchant == 0) return Hand::Off;
+    if (main.tempEnchant == enchant)
+        return off.tempEnchant == enchant && main.remaining > off.remaining ? Hand::Off : Hand::Main;
+    return off.tempEnchant == enchant ? Hand::Off : Hand::None;
+}
+
 /// What 0x0080c790 makes of the units for a spell (0x0080cce0 after it):
 /// cast at none, cast at a unit, a unit taken with more still wanted (left
 /// there), or no unit - the cursor or noUnitFailure's refusal.

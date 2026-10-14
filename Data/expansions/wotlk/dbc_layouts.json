@@ -380,6 +380,8 @@
     "MinFactionId": 219,
     "MinReputation": 220,
     "AreaGroupId": 224,
+    "EquippedItemClass": 68,
+    "EquippedItemSubClassMask": 69,
     "Category": 1,
     "DmgClass": 213,
     "StartRecoveryCategory": 205,
