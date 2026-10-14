@@ -14,6 +14,7 @@
 
 #include "core/application.hpp"
 #include "game/packet_parsers.hpp"
+#include "game/power_prediction.hpp"
 #include "game/world_packets.hpp"
 
 namespace wowee {
@@ -214,12 +215,41 @@ TEST_CASE("attacker state: the rage under 0x800000, after the block", "[combatlo
     s.rage = 125;
     const auto d = readSwing(s);
     CHECK(d.blocked == 40u);
+    CHECK(d.rageGained == 125);
 
     Swing plain;
     plain.hitInfo = 0x2 | 0x800000;
     plain.damage = 10;
     plain.rage = 51;
-    CHECK(readSwing(plain).victimState == 1u);
+    CHECK(readSwing(plain).rageGained == 51);
+
+    // No rage on the wire for a crushing blow: 0x20000 is not RAGE_GAIN.
+    Swing crush;
+    crush.hitInfo = 0x2 | 0x20000;
+    crush.damage = 300;
+    CHECK(readSwing(crush).rageGained == 0);
+}
+
+TEST_CASE("attacker state: the swing's rage moves the attacker's prediction", "[combatlog]") {
+    // 0x007512b0 -> 0x00722cf0(1, +0x64): a warrior (rage, power type 1) at
+    // 20.0 rage of 100.0 gains the swing's 12.5.
+    Swing s;
+    s.hitInfo = 0x2 | 0x800000;
+    s.damage = 100;
+    s.rage = 125;
+    const auto d = readSwing(s);
+    power_prediction::Predicted p;
+    p.reset({0, 200, 0, 0, 0, 0, 0});
+    CHECK(power_prediction::add(p, 1, d.rageGained, 1, 0u, 1000));
+    CHECK(p.value[1] == 325);
+    // Only on the unit's own power type: a druid in cat form gains none.
+    power_prediction::Predicted cat;
+    cat.reset({0, 200, 0, 0, 0, 0, 0});
+    CHECK_FALSE(power_prediction::add(cat, 1, d.rageGained, 3, 0u, 1000));
+    CHECK(cat.value[1] == 200);
+    // No more than the maximum.
+    CHECK(power_prediction::add(p, 1, 900, 1, 0u, 1000));
+    CHECK(p.value[1] == 1000);
 }
 
 TEST_CASE("attacker state: the debug block under 0x1 is passed over", "[combatlog]") {

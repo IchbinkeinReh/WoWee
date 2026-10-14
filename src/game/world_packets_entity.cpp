@@ -874,9 +874,10 @@ bool AttackerStateUpdateParser::parse(network::Packet& packet, AttackerStateUpda
         if (!packet.hasRemaining(4)) return fail();
         data.blocked = packet.readUInt32();
     }
+    data.rageGained = 0;
     if ((data.hitInfo & 0x800000u) != 0) {  // HITINFO_RAGE_GAIN (+0x64)
         if (!packet.hasRemaining(4)) return fail();
-        packet.readUInt32();
+        data.rageGained = static_cast<int32_t>(packet.readUInt32());
     }
     // HITINFO_UNK1: a uint32, eight floats, two pairs of floats, a uint32 -
     // read and kept by nothing that WoWee shows.

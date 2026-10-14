@@ -783,6 +783,9 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     // 0x00755630's last word: a unit victim that took nothing of a blocked
     // swing blocked it.
     if (data.totalDamage == 0 && data.blocked != 0 && owner_.getUnitByGuid(data.targetGuid)) data.victimState = 5;
+    // 0x007512b0, first of all: the rage a swing gave goes on the attacker's
+    // predicted rage (0x00722cf0), whoever the attacker is.
+    if ((data.hitInfo & 0x800000u) != 0) owner_.addPredictedPower(data.attackerGuid, 1, data.rageGained);
 
     bool isPlayerAttacker = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());

@@ -2213,6 +2213,9 @@ struct AttackerStateUpdateData {
     uint32_t victimState = 0;
     int32_t overkill = -1;
     uint32_t blocked = 0;
+    /// HITINFO_RAGE_GAIN (0x800000): the attacker's rage, in tenths, that
+    /// 0x007512b0 adds to its prediction (+0x64).
+    int32_t rageGained = 0;
 
     [[nodiscard]] bool isValid() const { return attackerGuid != 0; }
     [[nodiscard]] bool isCrit() const     { return (hitInfo & 0x0200) != 0; }
