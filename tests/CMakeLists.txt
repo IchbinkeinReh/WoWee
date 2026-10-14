@@ -2820,6 +2820,11 @@ wowee_add_test(test_dynamic_object_visual
 wowee_add_test(test_spell_missiles_in_flight
     SOURCES test_spell_missiles_in_flight.cpp)
 
+# ── test_blizzard_object ─────────────────────────────
+# A kit's CharProc 9: the models it drops over a dynamic object's area.
+wowee_add_test(test_blizzard_object
+    SOURCES test_blizzard_object.cpp)
+
 # ── test_spell_chain ─────────────────────────────────
 # SpellChainEffects beams: the row, a chain's bolts (0x007fa4d0) and the
 # lightning strip (Common Lightning.cpp, 0x009a8c00 to 0x009ab730).

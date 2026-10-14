@@ -560,6 +560,11 @@
     "CharParamThree2": 35,
     "CharParamThree3": 36
   },
+  "SpellVisualKitAreaModel": {
+    "ID": 0,
+    "ModelName": 1,
+    "Enum": 2
+  },
   "SpellVisualKitModelAttach": {
     "AttachmentID": 3,
     "ID": 0,

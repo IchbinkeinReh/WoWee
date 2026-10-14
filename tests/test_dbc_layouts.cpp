@@ -159,6 +159,11 @@ TEST_CASE("WotLK layout carries the spell missile columns", "[dbc][layout]") {
     const auto* effectName = layout.getLayout("SpellVisualEffectName");
     REQUIRE(effectName != nullptr);
     CHECK(effectName->field("Scale") == 4);
+
+    // 0x007fbd70 reads a row's model at +4.
+    const auto* areaModel = layout.getLayout("SpellVisualKitAreaModel");
+    REQUIRE(areaModel != nullptr);
+    CHECK(areaModel->field("ModelName") == 1);
 }
 
 // CharacterFacialHairStyles drives the three facial-feature geoset channels: a

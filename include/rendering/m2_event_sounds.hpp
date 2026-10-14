@@ -24,7 +24,9 @@
 // A unit's callback (0x00734a40 -> 0x00732650) plays its CreatureSoundData
 // and footsteps instead, and none of these. A dynamic object's (0x00704f20
 // -> 0x00704c30): $SND the data's sound once, where the event is, and $SHK
-// the camera shake below. A spell missile's model is given no callback at all (0x00733820 makes it with
+// the camera shake below. A model a kit's CharProc 9 drops (0x007f9d80): of
+// all their events, counted together, each fourth that is a $SND plays the
+// data's sound once where it is. A spell missile's model is given no callback at all (0x00733820 makes it with
 // 0x0081f8f0 alone), so its events do nothing.
 //
 // A game object's and a dynamic object's $SHK shake the camera: the data is
@@ -79,6 +81,7 @@ enum class Owner : uint8_t {
     Effect,      ///< 0x006f7b00; the argument is 1 on the active player
     Doodad,      ///< 0x007bd5a0, a map doodad's
     DynamicObject,  ///< 0x00704c30, a dynamic object's
+    FallingModel,   ///< 0x007f9d80, one a kit's CharProc 9 drops
 };
 
 /// The GameObjectDisplayInfo Sound slot a game object's event plays
@@ -145,7 +148,9 @@ inline SoundPlan planSound(Owner owner, uint32_t eventId, uint32_t data) {
         if (eventId == kSound) return {.play = Play::OnEffect, .sound = data};
         return {};
     case Owner::DynamicObject:
-        // 0x004c6a40 with no sound object: once.
+    case Owner::FallingModel:
+        // 0x004c6a40 with no sound object: once. A falling model's only every
+        // fourth event (0x007f9d80, see fallingEventPlays).
         if (eventId == kSound) return {.play = Play::Once, .sound = data};
         return {};
     case Owner::None:
@@ -153,6 +158,10 @@ inline SoundPlan planSound(Owner owner, uint32_t eventId, uint32_t data) {
     }
     return {};
 }
+
+/// 0x007f9d80: the events of every falling model are counted together, and
+/// only each fourth may play.
+inline bool fallingEventPlays(uint32_t& counter) { return (++counter & 3u) == 0; }
 
 /// Whether an owner's event shakes the camera, by the SpellEffectCameraShakes
 /// row in its data: a game object's $SHK (0x0070c050) and a dynamic
@@ -225,6 +234,8 @@ private:
     /// The loop an instance plays, by instance id: one each, as the client's
     /// object has one sound object (0x004c5be0).
     std::unordered_map<uint32_t, Loop> loops_;
+    /// 0x00d397ac: the falling models' events, counted.
+    uint32_t fallingEvents_ = 0;
 };
 
 }  // namespace wowee::rendering

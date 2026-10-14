@@ -2,6 +2,7 @@
 #include <cctype>
 #include <future>
 #include "rendering/dynamic_object_visual.hpp"
+#include "rendering/blizzard_object.hpp"
 #include "rendering/mount_seat.hpp"
 #include "rendering/spell_missile.hpp"
 #include "rendering/placement_transform.hpp"
@@ -17,6 +18,7 @@
 #include "core/logger.hpp"
 #include "core/weapon_attachment.hpp"
 #include "audio/audio_engine.hpp"
+#include "addons/lua_api_registrations.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -115,6 +117,17 @@ void SpellVisualSystem::loadSpellVisualDbc() {
         }
         return model;
     };
+    // SpellVisualKitAreaModel.dbc's ModelName (+4) by row, as 0x007fbd70
+    // counts them.
+    std::vector<std::string> areaModelPaths;
+    if (const auto* areaLayout = layout ? layout->getLayout("SpellVisualKitAreaModel") : nullptr) {
+        auto areaDbc = cachedAssetManager_->loadDBCOptional("SpellVisualKitAreaModel.dbc");
+        const uint32_t nameField = areaLayout->tryField("ModelName");
+        if (areaDbc && areaDbc->isLoaded() && nameField < areaDbc->getFieldCount()) {
+            for (uint32_t i = 0; i < areaDbc->getRecordCount(); ++i)
+                areaModelPaths.push_back(pipeline::modelPathToM2(areaDbc->getString(i, nameField)));
+        }
+    }
     // Each kit's AnimID (+8), for a mount aura's rider pose (0x00724820).
     std::unordered_map<uint32_t, int32_t> kitAnimIds;
     // Each kit's WorldEffect (+0x38), BaseEffect (+0x14) and SoundID
@@ -123,6 +136,10 @@ void SpellVisualSystem::loadSpellVisualDbc() {
         uint32_t worldEffect = 0;
         uint32_t baseEffect = 0;
         uint32_t soundId = 0;
+        /// The first CharProc 9 (0x00704f60): its CharParamZero and One.
+        bool fallingModels = false;
+        float fallingRow = 0.0f;
+        float fallingPerSecond = 0.0f;
     };
     std::unordered_map<uint32_t, KitAreaColumns> kitAreaColumns;
     if (kitDbc && kitDbc->isLoaded()) {
@@ -166,6 +183,15 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                 area.worldEffect = column(worldField);
                 area.baseEffect = column(kitColumn("BaseEffect", 5));
                 area.soundId = column(kitSoundField);
+                for (uint32_t k = 0; k < 4 && !area.fallingModels; ++k) {
+                    if (procFields[k] == 0xFFFFFFFFu ||
+                        kitDbc->getUInt32(i, procFields[k]) != blizzard_object::kCharProc)
+                        continue;
+                    area.fallingModels = true;
+                    if (paramFields[k][0] != 0xFFFFFFFFu) area.fallingRow = kitDbc->getFloat(i, paramFields[k][0]);
+                    if (paramFields[k][1] != 0xFFFFFFFFu)
+                        area.fallingPerSecond = kitDbc->getFloat(i, paramFields[k][1]);
+                }
             }
             KitRecord kit;
             kit.id = kitId;
@@ -355,7 +381,14 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                 if (auto it = effectAreaSizes.find(effect); it != effectAreaSizes.end()) area.areaEffectSize = it->second;
                 if (auto it = effectScales.find(effect); it != effectScales.end()) area.effectScale = it->second;
             }
-            if (!area.modelPath.empty() || area.soundId != 0) persistentAreas_[vid] = std::move(area);
+            // 0x007fbd70: a CharProc 9's model, its SpellVisualKitAreaModel row.
+            if (kit.fallingModels) {
+                const auto row = blizzard_object::areaModelRow(kit.fallingRow, areaModelPaths.size());
+                area.fallingModel = row ? areaModelPaths[*row] : pipeline::modelPathToM2(blizzard_object::kDefaultModel);
+                area.fallingPerSecond = kit.fallingPerSecond;
+            }
+            if (!area.modelPath.empty() || area.soundId != 0 || !area.fallingModel.empty())
+                persistentAreas_[vid] = std::move(area);
         }
         // Where a chain leaves and meets a unit (0x007fc5f0, 0x007fabf0).
         {
@@ -2396,6 +2429,7 @@ void SpellVisualSystem::update(float deltaTime) {
     expireWaitingKits();
     expireStateKitWaits();
     updateDynamicObjects(deltaTime);
+    updateFallingModels(deltaTime);
     publishClientStrips();
     if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
 
@@ -2474,6 +2508,15 @@ bool SpellVisualSystem::missileInFlight(const DynamicObjectCast& cast) const {
 
 void SpellVisualSystem::startDynamicObjectKit(DynamicObjectVisual& object) {
     if (object.held) return;
+    // 0x00704f60 -> 0x007fbd70: the kit's CharProc 9, models falling over
+    // the object's radius, as many a second as spellEffectLevel (default 9)
+    // lets them (0x007fb5b0).
+    if (!object.area.fallingModel.empty()) {
+        const int level = std::atoi(addons::storedCVarValue("spellEffectLevel", "9").c_str());
+        fallingModels_.push_back(FallingModels{
+            .ownerGuid = object.guid, .modelPath = object.area.fallingModel, .centre = object.position,
+            .radius = object.radius, .perSecond = blizzard_object::rate(object.area.fallingPerSecond, level)});
+    }
     // 0x00704f60: the kit's sound on the object, looping, rising over two
     // seconds.
     if (const LoadedSound* sound = soundEntry(object.area.soundId)) {
@@ -2485,7 +2528,88 @@ void SpellVisualSystem::startDynamicObjectKit(DynamicObjectVisual& object) {
     }
 }
 
+void SpellVisualSystem::stopFallingModels(uint64_t ownerGuid) {
+    // 0x007f9ee0: no more fall; those falling play out.
+    for (FallingModels& falling : fallingModels_) {
+        if (falling.ownerGuid != ownerGuid) continue;
+        falling.ownerGuid = 0;
+        falling.perSecond = 0.0f;
+    }
+}
+
+void SpellVisualSystem::updateFallingModels(float deltaTime) {
+    if (!m2Renderer_) return;
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+    for (auto it = fallingModels_.begin(); it != fallingModels_.end();) {
+        FallingModels& falling = *it;
+        // 0x007fc220: those due this frame, each put on what is below its
+        // point. wowee has no segment query for the way up to a ceiling, so
+        // each is looked for from the full height.
+        for (uint32_t n = blizzard_object::advance(falling.carried, deltaTime, falling.perSecond); n > 0; --n) {
+            const float fraction = unit(fallingRng_);
+            const glm::vec2 point = blizzard_object::fallPoint(glm::vec2(falling.centre), falling.radius, fraction,
+                                                                unit(fallingRng_));
+            const glm::vec3 top(point, falling.centre.z + blizzard_object::kRise);
+            const glm::vec3 bottom = top - glm::vec3(0.0f, 0.0f, blizzard_object::kDrop);
+            FallingModels::Fall fall{.position = falling.centre};
+            if (groundQuery_) {
+                if (const auto hit = groundQuery_(top, bottom)) fall.position = top + (bottom - top) * hit->fraction;
+            }
+            fall.startsIn = blizzard_object::startDelaySeconds(unit(fallingRng_));
+            falling.falls.push_back(fall);
+        }
+        for (auto fallIt = falling.falls.begin(); fallIt != falling.falls.end();) {
+            FallingModels::Fall& fall = *fallIt;
+            if (fall.instanceId == 0) {
+                // 0x007fb2d0: once its time has come and its model is there,
+                // drawn where it fell, playing its Stand once.
+                fall.startsIn -= deltaTime;
+                if (fall.startsIn > 0.0f) {
+                    ++fallIt;
+                    continue;
+                }
+                const uint32_t modelId = acquireEffectModel(falling.modelPath);
+                if (modelId == 0) {
+                    if (const auto known = spellVisualModelIds_.find(falling.modelPath);
+                        known != spellVisualModelIds_.end() && spellVisualFailedModels_.count(known->second) != 0) {
+                        fallIt = falling.falls.erase(fallIt);
+                        continue;
+                    }
+                    ++fallIt;
+                    continue;
+                }
+                fall.instanceId = m2Renderer_->createInstance(modelId, fall.position, glm::vec3(0.0f), 1.0f, false);
+                if (fall.instanceId == 0) {
+                    fallIt = falling.falls.erase(fallIt);
+                    continue;
+                }
+                // Its events to 0x007f9d80; its end to 0x007fc200.
+                m2Renderer_->setInstanceEventOwner(fall.instanceId, m2_event::Owner::FallingModel, 0);
+                m2Renderer_->setInstanceAnimation(fall.instanceId, dynamic_object::kAnimStand, false);
+                fall.endsIn = m2Renderer_->getInstanceAnimDuration(fall.instanceId) * 0.001f;
+                ++fallIt;
+                continue;
+            }
+            fall.endsIn -= deltaTime;
+            if (fall.endsIn <= 0.0f) {
+                // 0x007fc200 -> 0x007fc010: its Stand over, it goes.
+                m2Renderer_->removeInstance(fall.instanceId);
+                fallIt = falling.falls.erase(fallIt);
+                continue;
+            }
+            ++fallIt;
+        }
+        // 0x007fc220: stopped and with none left, it goes.
+        if (falling.perSecond == 0.0f && falling.falls.empty()) {
+            it = fallingModels_.erase(it);
+            continue;
+        }
+        ++it;
+    }
+}
+
 void SpellVisualSystem::releaseDynamicObject(DynamicObjectVisual& object) {
+    stopFallingModels(object.guid);
     // 0x00704940 / 0x007054e0: the sound falls over three seconds.
     if (object.soundHandle != 0)
         audio::AudioEngine::instance().stopSoundWithFade(object.soundHandle, dynamic_object::kSoundFadeOutSeconds);
@@ -2599,6 +2723,12 @@ void SpellVisualSystem::cancelAllPrecastVisuals() {
 void SpellVisualSystem::reset() {
     for (DynamicObjectVisual& object : dynamicObjects_) releaseDynamicObject(object);
     dynamicObjects_.clear();
+    for (const FallingModels& falling : fallingModels_) {
+        for (const FallingModels::Fall& fall : falling.falls) {
+            if (fall.instanceId != 0 && m2Renderer_) m2Renderer_->removeInstance(fall.instanceId);
+        }
+    }
+    fallingModels_.clear();
     // Clear lingering spell visual instances from the previous map/combat session.
     // Without this, old effects could remain visible after teleport or map change.
     for (auto& sv : activeSpellVisuals_) {

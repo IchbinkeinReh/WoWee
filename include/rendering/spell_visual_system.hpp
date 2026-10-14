@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <functional>
 #include <optional>
+#include <random>
 #include <memory>
 #include <glm/glm.hpp>
 
@@ -451,6 +452,10 @@ private:
         float areaEffectSize = 0.0f;
         float effectScale = 0.0f;
         uint32_t soundId = 0;
+        /// The kit's CharProc 9 (blizzard_object.hpp): the model that falls,
+        /// empty for none, and how many a second (CharParamOne).
+        std::string fallingModel;
+        float fallingPerSecond = 0.0f;
     };
     std::unordered_map<uint32_t, PersistentArea> persistentAreas_;
     struct DynamicObjectVisual {
@@ -471,6 +476,27 @@ private:
         bool held = false;
     };
     std::vector<DynamicObjectVisual> dynamicObjects_;
+    /// A CharProc 9's falling models (0x007fbd70, blizzard_object.hpp),
+    /// which outlast their object until the last has played.
+    struct FallingModels {
+        uint64_t ownerGuid = 0;  ///< the dynamic object, 0 once it has gone
+        std::string modelPath;
+        glm::vec3 centre{0.0f};
+        float radius = 0.0f;
+        float perSecond = 0.0f;
+        float carried = 0.0f;
+        struct Fall {
+            glm::vec3 position{0.0f};
+            float startsIn = 0.0f;  ///< seconds until it plays
+            uint32_t instanceId = 0;
+            float endsIn = -1.0f;  ///< seconds to its Stand's end, once playing
+        };
+        std::vector<Fall> falls;
+    };
+    std::vector<FallingModels> fallingModels_;
+    std::mt19937 fallingRng_{0x7fc220u};
+    void updateFallingModels(float deltaTime);
+    void stopFallingModels(uint64_t ownerGuid);
     void updateDynamicObjects(float deltaTime);
     void releaseDynamicObject(DynamicObjectVisual& object);
     /// 0x00704f60: what the object shows besides its model, unless held.

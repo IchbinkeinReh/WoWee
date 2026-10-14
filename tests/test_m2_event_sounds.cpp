@@ -162,3 +162,19 @@ TEST_CASE("A dynamic object's $SND plays once and its $SHK shakes the camera", "
     CHECK(m2_event::planSound(Owner::DynamicObject, m2_event::fourCC("$GO0"), 0).play == Play::None);
     CHECK_FALSE(m2_event::shakesCamera(Owner::DynamicObject, m2_event::kSound));
 }
+
+TEST_CASE("A falling model's events play only every fourth, and only a $SND", "[m2_event]") {
+    // 0x007f9d80: one count for all of them; each fourth, a $SND plays once.
+    const auto snd = m2_event::planSound(Owner::FallingModel, m2_event::kSound, 3346);
+    CHECK(snd.play == Play::Once);
+    CHECK(snd.sound == 3346);
+    CHECK(m2_event::planSound(Owner::FallingModel, m2_event::kDoodadSoundOnce, 7).play == Play::None);
+    CHECK_FALSE(m2_event::shakesCamera(Owner::FallingModel, m2_event::kCameraShake));
+    uint32_t counter = 0;
+    CHECK_FALSE(m2_event::fallingEventPlays(counter));
+    CHECK_FALSE(m2_event::fallingEventPlays(counter));
+    CHECK_FALSE(m2_event::fallingEventPlays(counter));
+    CHECK(m2_event::fallingEventPlays(counter));
+    CHECK_FALSE(m2_event::fallingEventPlays(counter));
+    CHECK(counter == 5);
+}
