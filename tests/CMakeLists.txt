@@ -1030,6 +1030,10 @@ wowee_add_packet_test(test_item_packet_layout)
 # SMSG_RAID_INSTANCE_INFO's saves (0x00501030).
 wowee_add_packet_test(test_social_packet_layout)
 
+# ── test_vendor_packet_layout ──────────────────────────────────────────
+# SMSG_LIST_INVENTORY's fixed 32-byte items and empty-list reason (0x006d9960).
+wowee_add_packet_test(test_vendor_packet_layout)
+
 # ── test_spell_damage_log_layout ───────────────────────────────────────
 # SMSG_SPELLNONMELEEDAMAGELOG before WotLK, pinned before the Classic and TBC
 # readers were merged. The expansions differ by one field - overkill - and

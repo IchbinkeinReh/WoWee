@@ -251,6 +251,8 @@ public:
     /// Tell the interface a quest moved - see the definition for why the
     /// three events go together.
     void announceQuestLogChanged(uint32_t questId);
+    void announceQuestItemPushed(uint32_t itemId, uint32_t count, uint32_t totalCount,
+                                 const std::string& itemName);
 
     void clearQuestStateForCharacterSwitch() {
         questLog_.clear();

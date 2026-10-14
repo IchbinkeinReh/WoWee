@@ -1,15 +1,6 @@
-// SMSG_LOOT_RESPONSE, and the section that only exists on some realms.
-//
-// The quest-item list at the end is WotLK's. Whether the parser looks for it is
-// decided by the expansion this client is configured for, not by the realm - and
-// those two can disagree. A 3.3.5 profile pointed at a 1.12 realm reads the byte
-// after the regular items as a quest count when it is nothing of the kind, and a
-// bogus count is a list that cannot parse.
-//
-// That used to lose the whole response. The regular items had already been read
-// correctly and were thrown away with it, so the loot window never opened and
-// the only trace was one warning about a section the realm never sent - which
-// reads as "the realm sent nothing" rather than "we dropped what it sent".
+// SMSG_LOOT_RESPONSE as 0x006d53b0 reads it: guid, loot type, gold, a count
+// and that many 22-byte items. Nothing after them - the client reads no
+// quest-item list, and TrinityCore/AzerothCore 3.3.5 send none.
 #include <catch_amalgamated.hpp>
 #include "game/world_packets.hpp"
 #include "core/application.hpp"
@@ -46,84 +37,42 @@ wowee::network::Packet packetOf(const std::vector<uint8_t>& body) {
     return wowee::network::Packet(0x160, body);  // SMSG_LOOT_RESPONSE
 }
 
-/// The body a realm sends for one chest holding one stack, with no quest
-/// section - which is every realm older than 3.3.5.
-std::vector<uint8_t> chestWithoutQuestSection(uint64_t guid) {
+/// One chest holding one stack, as the cores build it.
+std::vector<uint8_t> chest(uint64_t guid) {
     Bytes p;
     p.u64(guid);
     p.u8(3);            // lootType
     p.u32(120);         // gold
-    p.u8(1);            // one regular item
+    p.u8(1);            // one item
     p.item(0, 1673, 2);
     return p.b;
 }
 
 }  // namespace
 
-TEST_CASE("a realm with no quest section still yields its loot", "[loot]") {
-    // Parsed as WotLK, which is the mismatch: there is no quest count byte to
-    // read and whatever follows is not one.
-    auto body = chestWithoutQuestSection(0xF110000689000699ull);
-    body.push_back(0x7F);  // a stray byte read as a count of 127
-
+TEST_CASE("a chest's gold and items are read", "[loot]") {
+    const auto body = chest(0xF110000689000699ull);
     auto packet = packetOf(body);
     LootResponseData data;
-    REQUIRE(LootResponseParser::parse(packet, data, /*isWotlkFormat=*/true));
+    REQUIRE(LootResponseParser::parse(packet, data));
     CHECK(data.lootGuid == 0xF110000689000699ull);
     CHECK(data.gold == 120);
     REQUIRE(data.items.size() == 1);
     CHECK(data.items[0].itemId == 1673);
     CHECK(data.items[0].count == 2);
-    CHECK_FALSE(data.items[0].isQuestItem);
 }
 
-TEST_CASE("the same body parsed as its own expansion", "[loot]") {
-    const auto body = chestWithoutQuestSection(0x42ull);
+TEST_CASE("bytes after the items are not a quest list", "[loot]") {
+    // The client reads nothing past the items, so neither does WoWee: a byte
+    // there is not taken for a count and adds no items.
+    auto body = chest(0x99ull);
+    body.push_back(1);
+    for (int i = 0; i < 22; ++i) body.push_back(0x11);
     auto packet = packetOf(body);
     LootResponseData data;
-    REQUIRE(LootResponseParser::parse(packet, data, /*isWotlkFormat=*/false));
-    CHECK(data.gold == 120);
+    REQUIRE(LootResponseParser::parse(packet, data));
     REQUIRE(data.items.size() == 1);
     CHECK(data.items[0].itemId == 1673);
-}
-
-TEST_CASE("a real quest section is read", "[loot]") {
-    Bytes p;
-    p.u64(0x99ull);
-    p.u8(3);
-    p.u32(5);
-    p.u8(1);
-    p.item(0, 111, 1);
-    p.u8(1);              // one quest item
-    p.item(1, 222, 3);
-
-    auto packet = packetOf(p.b);
-    LootResponseData data;
-    REQUIRE(LootResponseParser::parse(packet, data, /*isWotlkFormat=*/true));
-    REQUIRE(data.items.size() == 2);
-    CHECK(data.items[0].itemId == 111);
-    CHECK_FALSE(data.items[0].isQuestItem);
-    CHECK(data.items[1].itemId == 222);
-    CHECK(data.items[1].isQuestItem);
-}
-
-TEST_CASE("a quest count larger than the bytes behind it keeps the rest", "[loot]") {
-    // A truncated genuine section, rather than a mismatched expansion. The
-    // regular items still stand: losing the quest items is the smaller loss.
-    Bytes p;
-    p.u64(0x7ull);
-    p.u8(3);
-    p.u32(0);
-    p.u8(1);
-    p.item(0, 555, 1);
-    p.u8(4);              // claims four, sends one
-    p.item(1, 666, 1);
-
-    auto packet = packetOf(p.b);
-    LootResponseData data;
-    REQUIRE(LootResponseParser::parse(packet, data, /*isWotlkFormat=*/true));
-    REQUIRE(data.items.size() == 1);
-    CHECK(data.items[0].itemId == 555);
 }
 
 TEST_CASE("a refusal is not loot", "[loot]") {
@@ -135,7 +84,7 @@ TEST_CASE("a refusal is not loot", "[loot]") {
 
     auto packet = packetOf(p.b);
     LootResponseData data;
-    CHECK_FALSE(LootResponseParser::parse(packet, data, /*isWotlkFormat=*/true));
+    CHECK_FALSE(LootResponseParser::parse(packet, data));
 }
 
 TEST_CASE("a truncated regular list is refused outright", "[loot]") {
@@ -149,5 +98,5 @@ TEST_CASE("a truncated regular list is refused outright", "[loot]") {
 
     auto packet = packetOf(p.b);
     LootResponseData data;
-    CHECK_FALSE(LootResponseParser::parse(packet, data, /*isWotlkFormat=*/false));
+    CHECK_FALSE(LootResponseParser::parse(packet, data));
 }

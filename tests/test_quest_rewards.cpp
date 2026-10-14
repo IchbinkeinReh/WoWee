@@ -491,15 +491,9 @@ TEST_CASE("Offer reward: WotLK layout (AzerothCore)", "[quest_rewards]") {
 // SMSG_QUESTGIVER_REQUEST_ITEMS - what a quest asks to be handed in
 // ============================================================
 //
-// The parser cannot know the prefix length: the words between the two strings
-// and the required money differ by expansion, and the packet says nothing about
-// how many there are. It used to try every skip from 0 to 24 and score each
-// reading for plausibility, which chose one whose item count was 128 and whose
-// item id was nothing - a required item drawn as an empty square with no name.
-//
-// Every server build ends the message with 0x04, 0x08, 0x10 and nothing after,
-// so the reading that lands exactly on those is the right one rather than the
-// most likely one. These pin both prefix lengths against that.
+// 3.3.5 reads a fixed layout (0x006d08f0): five words between the text and
+// the money, the items, then four words that must all be non-zero for the
+// quest to be completable. Packets as TrinityCore/AzerothCore build them.
 
 namespace {
 
@@ -528,7 +522,7 @@ TEST_CASE("Request items: WotLK prefix (azerothcore)", "[quest_rewards]") {
     Bytes b = buildRequestItems({0, 1, 0, 8, 0}, 0, {{{24494u, 20u, 40195u}}}, 0);
     network::Packet p(0, b);
     QuestRequestItemsData d;
-    REQUIRE(QuestRequestItemsParser::parse(p, d));
+    REQUIRE(QuestRequestItemsParser::parse(p, d, true));
     REQUIRE(d.questId == 2477);
     REQUIRE(d.title == "The Path of Glory");
     REQUIRE(d.requiredMoney == 0);
@@ -538,15 +532,29 @@ TEST_CASE("Request items: WotLK prefix (azerothcore)", "[quest_rewards]") {
     CHECK(d.requiredItems[0].displayInfoId == 40195);
 }
 
-TEST_CASE("Request items: shorter pre-WotLK prefix", "[quest_rewards]") {
-    // unknown, emote, closeOnCancel - no questFlags or suggestedPlayers
-    Bytes b = buildRequestItems({0, 1, 0}, 0, {{{24494u, 20u, 40195u}}}, 3);
+TEST_CASE("Request items: completable only when all four words are set", "[quest_rewards]") {
+    // 0x006d08f0: the four words after the items must all be non-zero.
+    Bytes b = buildRequestItems({0, 1, 0, 8, 0}, 0, {{{24494u, 20u, 40195u}}}, 3);
     network::Packet p(0, b);
     QuestRequestItemsData d;
-    REQUIRE(QuestRequestItemsParser::parse(p, d));
+    REQUIRE(QuestRequestItemsParser::parse(p, d, true));
+    CHECK(d.isCompletable());
+    Bytes b2 = buildRequestItems({0, 1, 0, 8, 0}, 0, {{{24494u, 20u, 40195u}}}, 0);
+    network::Packet p2(0, b2);
+    QuestRequestItemsData d2;
+    REQUIRE(QuestRequestItemsParser::parse(p2, d2, true));
+    CHECK_FALSE(d2.isCompletable());
+}
+
+TEST_CASE("Request items: a large required count is read, not guessed past", "[quest_rewards]") {
+    // A layout scorer marked large money as implausible; the client reads it.
+    Bytes b = buildRequestItems({0, 1, 0, 8, 0}, 2000000, {{{43, 250u, 7u}}}, 3);
+    network::Packet p(0, b);
+    QuestRequestItemsData d;
+    REQUIRE(QuestRequestItemsParser::parse(p, d, true));
+    CHECK(d.requiredMoney == 2000000);
     REQUIRE(d.requiredItems.size() == 1);
-    CHECK(d.requiredItems[0].itemId == 24494);
-    CHECK(d.requiredItems[0].count == 20);
+    CHECK(d.requiredItems[0].count == 250);
 }
 
 TEST_CASE("Request items: money and several items", "[quest_rewards]") {
@@ -554,7 +562,7 @@ TEST_CASE("Request items: money and several items", "[quest_rewards]") {
                                 {{{1234u, 1u, 100u}}, {{5678u, 12u, 200u}}}, 3);
     network::Packet p(0, b);
     QuestRequestItemsData d;
-    REQUIRE(QuestRequestItemsParser::parse(p, d));
+    REQUIRE(QuestRequestItemsParser::parse(p, d, true));
     CHECK(d.requiredMoney == 5000);
     REQUIRE(d.requiredItems.size() == 2);
     CHECK(d.requiredItems[0].itemId == 1234);

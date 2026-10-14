@@ -689,7 +689,7 @@ network::Packet LootReleasePacket::build(uint64_t lootGuid) {
     return packet;
 }
 
-bool LootResponseParser::parse(network::Packet& packet, LootResponseData& data, bool isWotlkFormat) {
+bool LootResponseParser::parse(network::Packet& packet, LootResponseData& data) {
     data = LootResponseData{};
     size_t avail = packet.getRemainingSize();
 
@@ -726,7 +726,7 @@ bool LootResponseParser::parse(network::Packet& packet, LootResponseData& data, 
     //   slot(1)+itemId(4)+count(4)+displayInfo(4)+randSuffix(4)+randProp(4)+slotType(1) = 22
     constexpr size_t kItemSize = 22u;
 
-    auto parseLootItemList = [&](uint8_t listCount, bool markQuestItems) -> bool {
+    auto parseLootItemList = [&](uint8_t listCount) -> bool {
         for (uint8_t i = 0; i < listCount; ++i) {
             size_t remaining = packet.getRemainingSize();
             if (remaining < kItemSize) {
@@ -741,50 +741,20 @@ bool LootResponseParser::parse(network::Packet& packet, LootResponseData& data, 
             item.randomSuffix     = packet.readUInt32();
             item.randomPropertyId = packet.readUInt32();
             item.lootSlotType     = packet.readUInt8();
-            item.isQuestItem      = markQuestItems;
             data.items.push_back(item);
         }
         return true;
     };
 
     data.items.reserve(itemCount);
-    if (!parseLootItemList(itemCount, false)) {
+    if (!parseLootItemList(itemCount)) {
         LOG_WARNING("LootResponseParser: truncated regular item list");
         return false;
     }
 
-    // Quest item section only present in WotLK 3.3.5a.
-    //
-    // Whether it is there is decided by the expansion this client is configured
-    // for, not by the realm, and those two can disagree - a 3.3.5 profile
-    // pointed at a 1.12 realm reads the byte after the regular items as a quest
-    // count when it is not one, and a bogus count means a list that cannot
-    // parse. That used to lose the whole response, regular items and all: the
-    // loot window never opened and the only trace was one warning about a
-    // section the realm never sent.
-    //
-    // So the optional section is parsed into its own list and merged only if it
-    // parses whole. Failing it costs the quest items on a realm that really
-    // sent some, and keeps the ordinary loot either way, which is the better
-    // side to be wrong on.
-    uint8_t questItemCount = 0;
-    if (isWotlkFormat && packet.hasRemaining(1)) {
-        const size_t regularItems = data.items.size();
-        questItemCount = packet.readUInt8();
-        data.items.reserve(regularItems + questItemCount);
-        if (!parseLootItemList(questItemCount, true)) {
-            LOG_WARNING("LootResponseParser: the quest item section does not parse"
-                        " (asked for ", static_cast<int>(questItemCount),
-                        " items) - keeping the ", regularItems,
-                        " regular item(s). A realm older than the expansion this"
-                        " client is set to sends no such section.");
-            data.items.resize(regularItems);
-            questItemCount = 0;
-        }
-    }
-
-    LOG_DEBUG("Loot response: ", static_cast<int>(itemCount), " regular + ", static_cast<int>(questItemCount),
-             " quest items, ", data.gold, " copper");
+    // Nothing follows the items: 0x006d53b0 reads no further, and neither core
+    // sends a quest-item list on 3.3.5.
+    LOG_DEBUG("Loot response: ", static_cast<int>(itemCount), " items, ", data.gold, " copper");
     return true;
 }
 
@@ -1088,6 +1058,11 @@ network::Packet GmTicketCreatePacket::build(uint32_t mapId, float canonicalX, fl
 }
 
 bool QuestRequestItemsParser::parse(network::Packet& packet, QuestRequestItemsData& data) {
+    return parse(packet, data, !isPreWotlk());
+}
+
+bool QuestRequestItemsParser::parse(network::Packet& packet, QuestRequestItemsData& data,
+                                    bool wotlkLayout) {
     if (!packet.hasRemaining(20)) return false;
     data.npcGuid = packet.readUInt64();
     data.questId = packet.readUInt32();
@@ -1099,6 +1074,40 @@ bool QuestRequestItemsParser::parse(network::Packet& packet, QuestRequestItemsDa
         return true;
     }
 
+    // 3.3.5: the fixed layout 0x006d08f0 reads - emote delay, emote,
+    // closeOnCancel, flags, suggested players, money, the item count and
+    // id/count/display per item, then four words; the quest can be completed
+    // only when all four are non-zero (the cores send 3 or 0, then 4, 8, 16).
+    if (wotlkLayout) {
+        if (!packet.hasRemaining(28)) return true;
+        packet.readUInt32();  // emote delay
+        packet.readUInt32();  // emote
+        packet.readUInt32();  // closeOnCancel
+        packet.readUInt32();  // quest flags
+        packet.readUInt32();  // suggested players
+        data.requiredMoney = packet.readUInt32();
+        const uint32_t itemCount = packet.readUInt32();
+        for (uint32_t i = 0; i < itemCount; ++i) {
+            if (!packet.hasRemaining(12)) return true;
+            QuestRewardItem item;
+            item.itemId = packet.readUInt32();
+            item.count = packet.readUInt32();
+            item.displayInfoId = packet.readUInt32();
+            if (item.itemId != 0) data.requiredItems.push_back(item);
+        }
+        if (!packet.hasRemaining(16)) return true;
+        const uint32_t w0 = packet.readUInt32();
+        const uint32_t w1 = packet.readUInt32();
+        const uint32_t w2 = packet.readUInt32();
+        const uint32_t w3 = packet.readUInt32();
+        data.completableFlags = (w0 != 0 && w1 != 0 && w2 != 0 && w3 != 0) ? 0x3u : 0u;
+        LOG_DEBUG("Quest request items: id=", data.questId, " title='", data.title,
+                  "' items=", data.requiredItems.size(), " completable=", data.isCompletable());
+        return true;
+    }
+
+    // Older realms: the prefix length differs by build, so it is still found
+    // by the trailer below.
     struct ParsedTail {
         uint32_t requiredMoney = 0;
         uint32_t completableFlags = 0;
@@ -1657,6 +1666,11 @@ network::Packet BuybackItemPacket::build(uint64_t vendorGuid, uint32_t slot) {
 }
 
 bool ListInventoryParser::parse(network::Packet& packet, ListInventoryData& data) {
+    return parse(packet, data, !isClassicLikeExpansion());
+}
+
+bool ListInventoryParser::parse(network::Packet& packet, ListInventoryData& data,
+                                bool hasExtendedCost) {
     // Preserve canRepair - it was set by the gossip handler before this packet
     // arrived and is not part of the wire format.
     const bool savedCanRepair = data.canRepair;
@@ -1671,31 +1685,20 @@ bool ListInventoryParser::parse(network::Packet& packet, ListInventoryData& data
     data.vendorGuid = packet.readUInt64();
     uint8_t itemCount = packet.readUInt8();
 
+    // 0x006d9960: no items means a reason byte follows; only reason 0 (an
+    // empty vendor) opens the window, the others are console lines.
     if (itemCount == 0) {
-        LOG_INFO("Vendor has nothing for sale");
-        return true;
+        const uint8_t reason = packet.hasRemaining(1) ? packet.readUInt8() : 0;
+        LOG_INFO("Vendor has nothing for sale (reason ", static_cast<int>(reason), ")");
+        return reason == 0;
     }
 
-    // Auto-detect whether server sends 7 fields (28 bytes/item) or 8 fields (32 bytes/item).
-    // Some servers omit the extendedCost field entirely; reading 8 fields on a 7-field packet
-    // misaligns every item after the first and produces garbage prices.
-    size_t remaining = packet.getRemainingSize();
-    const size_t bytesPerItemNoExt = 28;
-    const size_t bytesPerItemWithExt = 32;
-    bool hasExtendedCost = false;
-    if (remaining < static_cast<size_t>(itemCount) * bytesPerItemNoExt) {
-        LOG_WARNING("ListInventoryParser: truncated packet (items=", static_cast<int>(itemCount),
-                    ", remaining=", remaining, ")");
-        return false;
-    }
-    if (remaining >= static_cast<size_t>(itemCount) * bytesPerItemWithExt) {
-        hasExtendedCost = true;
-    }
-
+    // Each item is eight u32s: slot, item, display, count left, price,
+    // durability, buy count, extended cost. 1.12 has no extended cost.
+    const size_t kItemBytes = hasExtendedCost ? 32 : 28;
     data.items.reserve(itemCount);
     for (uint8_t i = 0; i < itemCount; ++i) {
-        const size_t perItemBytes = hasExtendedCost ? bytesPerItemWithExt : bytesPerItemNoExt;
-        if (!packet.hasRemaining(perItemBytes)) {
+        if (!packet.hasRemaining(kItemBytes)) {
             LOG_WARNING("ListInventoryParser: item ", static_cast<int>(i), " truncated");
             return false;
         }
@@ -1711,7 +1714,7 @@ bool ListInventoryParser::parse(network::Packet& packet, ListInventoryData& data
         data.items.push_back(item);
     }
 
-    LOG_DEBUG("Vendor inventory: ", static_cast<int>(itemCount), " items (extendedCost: ", hasExtendedCost ? "yes" : "no", ")");
+    LOG_DEBUG("Vendor inventory: ", static_cast<int>(itemCount), " items");
     return true;
 }
 

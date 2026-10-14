@@ -105,8 +105,7 @@ void QuestHandler::reconcileItemObjectivesFromInventory(
         if (quest.complete) continue;
         for (const auto& obj : quest.itemObjectives) {
             if (obj.itemId == 0 || obj.required == 0) continue;
-            // Keep the derived required-count map in sync so the
-            // SMSG_QUESTUPDATE_ADD_ITEM path and this one agree.
+            // Keep the derived required-count map in sync.
             quest.requiredItemCounts[obj.itemId] = obj.required;
 
             auto cit = carriedCounts.find(obj.itemId);
@@ -153,6 +152,27 @@ void QuestHandler::reconcileItemObjectivesFromInventory(
     // Collecting the last item may have made a quest turn-in-able (! → ?),
     // so refresh nearby giver markers immediately.
     if (maybeCompletedObjective) requeryNearbyQuestGiverStatus();
+}
+
+/// SMSG_ITEM_PUSH_RESULT's quest line (0x006d7de0 -> 0x006d7c30): the first
+/// quest in the log asking for this item, while the count before the push was
+/// short of the requirement, shows ERR_QUEST_ADD_ITEM_SII with the new count
+/// held to it. The client registers no SMSG_QUESTUPDATE_ADD_ITEM handler; this
+/// is where the line comes from.
+void QuestHandler::announceQuestItemPushed(uint32_t itemId, uint32_t count,
+                                           uint32_t totalCount, const std::string& itemName) {
+    for (const auto& quest : questLog_) {
+        for (const auto& obj : quest.itemObjectives) {
+            if (obj.itemId != itemId || obj.required == 0) continue;
+            const int64_t before = int64_t(totalCount) - int64_t(count);
+            if (before < int64_t(obj.required) && !itemName.empty()) {
+                owner_.addUIInfoMessage(interfaceFormat("ERR_QUEST_ADD_ITEM_SII", "%1$s: %2$d/%3$d",
+                    {itemName, std::to_string(std::min(totalCount, obj.required)),
+                     std::to_string(obj.required)}));
+            }
+            return;
+        }
+    }
 }
 
 /// Say that a quest moved, to everything that draws one.
@@ -886,9 +906,9 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             // The turn-in lines 0x006d0e10 prints, in chat: ERR_QUEST_COMPLETE_S
             // with the title, then ERR_QUEST_REWARD_EXP_I and
             // ERR_QUEST_REWARD_MONEY_S for the experience and money the
-            // WotLK packet carries after the id. Nothing was printed before.
-            // (Its honour, talent point, arena point and reward item lines
-            // are not given here.)
+            // WotLK packet carries after the id, then the honour (sent ten
+            // times over), talent point and arena point lines in their own
+            // chat types. (Its reward item line is not given here.)
             for (const auto& q : questLog_) {
                 if (q.questId == questId && !q.title.empty()) {
                     owner_.addSystemChatMessage(questTitleText("ERR_QUEST_COMPLETE_S", "%s completed.", q.title));
@@ -907,6 +927,26 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                         [](const char* k, const char* e) { return interfaceString(k, e); });
                     owner_.addSystemChatMessage(interfaceFormat("ERR_QUEST_REWARD_MONEY_S",
                         "Received %s.", {coins}));
+                }
+                if (packet.hasRemaining(12)) {
+                    const int32_t honor = static_cast<int32_t>(packet.readUInt32());
+                    const int32_t talents = static_cast<int32_t>(packet.readUInt32());
+                    const int32_t arena = static_cast<int32_t>(packet.readUInt32());
+                    if (honor > 0) {
+                        owner_.addLocalChatLine(ChatType::COMBAT_HONOR_GAIN,
+                            interfaceFormat("COMBATLOG_HONORAWARD", "You have been awarded %d honor points.",
+                                            {std::to_string(honor / 10)}));
+                    }
+                    if (talents > 0) {
+                        owner_.addLocalChatLine(ChatType::MONEY,
+                            interfaceFormat("LEVEL_UP_CHAR_POINTS", "You have gained %d talent points.",
+                                            {std::to_string(talents)}));
+                    }
+                    if (arena > 0) {
+                        owner_.addLocalChatLine(ChatType::ARENA_POINTS,
+                            interfaceFormat("COMBATLOG_ARENAPOINTSAWARD", "You have been awarded %d arena points.",
+                                            {std::to_string(arena)}));
+                    }
                 }
             }
             for (auto it = questLog_.begin(); it != questLog_.end(); ++it) {
@@ -1024,109 +1064,6 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 }
             }
             requeryNearbyQuestGiverStatus();
-        }
-    };
-
-    // ---- SMSG_QUESTUPDATE_ADD_ITEM ----
-    table[Opcode::SMSG_QUESTUPDATE_ADD_ITEM] = [this](network::Packet& packet) {
-        if (packet.hasRemaining(8)) {
-            uint32_t itemId = packet.readUInt32();
-            uint32_t count = packet.readUInt32();
-            owner_.queryItemInfo(itemId, 0);
-
-            std::string itemLabel = "item #" + std::to_string(itemId);
-            std::string itemName;
-            if (const ItemQueryResponseData* info = owner_.getItemInfo(itemId)) {
-                if (!info->name.empty()) itemLabel = itemName = info->name;
-            }
-
-            bool updatedAny = false;
-            bool maybeCompletedObjective = false;
-            for (auto& quest : questLog_) {
-                if (quest.complete) continue;
-                bool tracksItem =
-                    quest.requiredItemCounts.count(itemId) > 0 ||
-                    quest.itemCounts.count(itemId) > 0;
-                // Also check itemObjectives parsed from SMSG_QUEST_QUERY_RESPONSE in case
-                // requiredItemCounts hasn't been populated yet (race during quest accept).
-                if (!tracksItem) {
-                    for (const auto& obj : quest.itemObjectives) {
-                        if (obj.itemId == itemId && obj.required > 0) {
-                            quest.requiredItemCounts.emplace(itemId, obj.required);
-                            tracksItem = true;
-                            break;
-                        }
-                    }
-                }
-                if (!tracksItem) continue;
-                // SMSG_QUESTUPDATE_ADD_ITEM carries the amount added by this
-                // loot operation, not the new absolute objective count.
-                const uint32_t required = quest.requiredItemCounts.count(itemId) != 0
-                    ? quest.requiredItemCounts[itemId] : std::numeric_limits<uint32_t>::max();
-                const uint32_t current = quest.itemCounts[itemId];
-                quest.itemCounts[itemId] = current >= required - std::min(required, count)
-                    ? required
-                    : current + count;
-                updatedAny = true;
-                // ERR_QUEST_ADD_ITEM_SII on screen in yellow while the count
-                // was still short of the requirement, the new count held to it
-                // - as 0x006d7c30 does when an objective item changes count.
-                // This was an English chat line, "Quest item: [X] (n)", once
-                // per packet whatever it counted towards.
-                const bool requiredKnownHere = required != std::numeric_limits<uint32_t>::max();
-                if (requiredKnownHere && current < required && !itemName.empty()) {
-                    owner_.addUIInfoMessage(interfaceFormat("ERR_QUEST_ADD_ITEM_SII", "%1$s: %2$d/%3$d",
-                        {itemName, std::to_string(quest.itemCounts[itemId]), std::to_string(required)}));
-                }
-                // An unknown requirement (no SMSG_QUEST_QUERY_RESPONSE yet) can't
-                // be compared against, so assume it may have just filled rather
-                // than leaving those quests without a marker refresh. The requery
-                // is rate-limited, so guessing wide costs nothing.
-                const bool requiredKnown = required != std::numeric_limits<uint32_t>::max();
-                if (!requiredKnown || quest.itemCounts[itemId] >= required) {
-                    maybeCompletedObjective = true;
-                }
-            }
-
-            if (owner_.questProgressCallbackRef() && updatedAny) {
-                for (const auto& quest : questLog_) {
-                    if (quest.complete) continue;
-                    if (quest.itemCounts.count(itemId) == 0) continue;
-                    uint32_t required = 0;
-                    auto rIt = quest.requiredItemCounts.find(itemId);
-                    if (rIt != quest.requiredItemCounts.end()) required = rIt->second;
-                    if (required == 0) {
-                        for (const auto& obj : quest.itemObjectives) {
-                            if (obj.itemId == itemId) { required = obj.required; break; }
-                        }
-                    }
-                    if (required == 0) required = count;
-                    owner_.questProgressCallbackRef()(quest.title, itemLabel, count, required);
-                    break;
-                }
-            }
-
-            if (owner_.addonEventCallbackRef() && updatedAny) {
-                // Once per quest this item counts towards, each named by its
-                // position in the log - which is what the interface auto-watches
-                // from, and what it could not do with no argument at all.
-                for (const auto& quest : questLog_) {
-                    if (quest.complete) continue;
-                    if (quest.itemCounts.count(itemId) == 0) continue;
-                    const int index = questLogIndexOf(quest.questId);
-                    if (index > 0) {
-                        owner_.addonEventCallbackRef()("QUEST_WATCH_UPDATE",
-                                                       {std::to_string(index)});
-                    }
-                }
-                owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
-                owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
-            }
-            // Refresh nearby giver markers now if collecting this item may have
-            // made a quest turn-in-able (! → ?), rather than on leave/return.
-            if (maybeCompletedObjective) requeryNearbyQuestGiverStatus();
-            LOG_INFO("Quest item update: itemId=", itemId, " count=", count,
-                     " trackedQuestsUpdated=", updatedAny);
         }
     };
 

@@ -628,6 +628,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         /*uint32_t suffixFactor  =*/ packet.readUInt32();
         int32_t randomProp = static_cast<int32_t>(packet.readUInt32());
         uint32_t count = packet.readUInt32();
+        const uint32_t totalCount = packet.readUInt32();
 
         // A party member's push is a line in chat and nothing else (0x00523900):
         // "X bekommt Beute: ..." for loot, "X stellt her: ..." for a creation.
@@ -650,7 +651,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             // Item info not yet cached - defer notification
             owner_.pendingItemPushNotifsRef().push_back({.itemId = itemId, .count = count,
                 .bagButtonId = bagButtonId, .self = self, .received = received,
-                .created = created, .showInChat = showInChat, .randomProp = randomProp, .who = who});
+                .created = created, .showInChat = showInChat, .randomProp = randomProp, .who = who,
+                .totalCount = totalCount});
             owner_.ensureItemInfo(itemId);
             return;
         }
@@ -667,6 +669,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // printed "Received item: [x] x2" as a system line for all of them.
         owner_.addLocalChatLine(ChatType::LOOT, interface_text::itemPushLine(push, link, who, uiText));
         if (!self) return;
+        if (auto* qh = owner_.getQuestHandler())
+            qh->announceQuestItemPushed(itemId, count, totalCount, info->name);
         if (auto* ac = owner_.services().audioCoordinator) {
             if (auto* sfx = ac->getUiSoundManager())
                 sfx->playLootItem();
@@ -1289,8 +1293,7 @@ void InventoryHandler::lootMasterGive(uint8_t lootSlot, uint64_t targetGuid) {
 }
 
 void InventoryHandler::handleLootResponse(network::Packet& packet) {
-    const bool wotlkLoot = isActiveExpansion("wotlk");
-    if (!LootResponseParser::parse(packet, currentLoot_, wotlkLoot)) return;
+    if (!LootResponseParser::parse(packet, currentLoot_)) return;
     const bool hasLoot = !currentLoot_.items.empty() || currentLoot_.gold > 0;
     LOG_INFO("SMSG_LOOT_RESPONSE: guid=0x", std::hex, currentLoot_.lootGuid, std::dec,
              " items=", currentLoot_.items.size(), " gold=", currentLoot_.gold);
@@ -4850,6 +4853,8 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                 owner_.addLocalChatLine(ChatType::LOOT,
                                         interface_text::itemPushLine(push, link, it->who, uiText));
                 if (!it->self) { it = owner_.pendingItemPushNotifsRef().erase(it); continue; }
+                if (auto* qh = owner_.getQuestHandler())
+                    qh->announceQuestItemPushed(data.entry, it->count, it->totalCount, data.name);
                 if (auto* ac = owner_.services().audioCoordinator) {
                     if (auto* sfx = ac->getUiSoundManager()) sfx->playLootItem();
                 }

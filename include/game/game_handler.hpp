@@ -4850,6 +4850,8 @@ private:
         bool showInChat = true;
         int32_t randomProp = 0;
         std::string who;
+        /// The stack total after the push, for the quest progress line.
+        uint32_t totalCount = 0;
     };
     std::vector<PendingItemPushNotif> pendingItemPushNotifs_;
     std::array<uint64_t, 23> equipSlotGuids_{};

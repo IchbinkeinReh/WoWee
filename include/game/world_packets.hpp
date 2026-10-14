@@ -2751,7 +2751,6 @@ struct LootItem {
     uint32_t randomSuffix = 0;
     uint32_t randomPropertyId = 0;
     uint8_t lootSlotType = 0;
-    bool isQuestItem = false;
     bool looted = false;
 };
 
@@ -2860,10 +2859,8 @@ public:
 /** SMSG_LOOT_RESPONSE parser */
 class LootResponseParser {
 public:
-    // isWotlkFormat: true for WotLK (has trailing quest item section),
-    //                false for Classic/TBC (no quest item section).
-    //                Per-item size is 22 bytes across all expansions.
-    static bool parse(network::Packet& packet, LootResponseData& data, bool isWotlkFormat = true);
+    // guid, type, then gold, count and 22-byte items (0x006d53b0); no list after.
+    static bool parse(network::Packet& packet, LootResponseData& data);
 };
 
 // ============================================================
@@ -3073,7 +3070,10 @@ struct QuestRequestItemsData {
 /** SMSG_QUESTGIVER_REQUEST_ITEMS parser */
 class QuestRequestItemsParser {
 public:
+    /** Layout resolved from the active expansion profile. */
     static bool parse(network::Packet& packet, QuestRequestItemsData& data);
+    /** wotlkLayout: 3.3.5's fixed reading (0x006d08f0). */
+    static bool parse(network::Packet& packet, QuestRequestItemsData& data, bool wotlkLayout);
 };
 
 /** SMSG_QUESTGIVER_OFFER_REWARD data (choose reward) */
@@ -3221,7 +3221,10 @@ public:
 /** SMSG_LIST_INVENTORY parser */
 class ListInventoryParser {
 public:
+    /** Item size resolved from the active expansion profile. */
     static bool parse(network::Packet& packet, ListInventoryData& data);
+    /** hasExtendedCost: 3.3.5's 32-byte item (0x006d9960); 1.12 has none. */
+    static bool parse(network::Packet& packet, ListInventoryData& data, bool hasExtendedCost);
 };
 
 // ============================================================
