@@ -646,6 +646,7 @@ public:
     void censusInstance(const M2Instance& instance);
 
     void setInstanceTransform(uint32_t instanceId, const glm::mat4& transform);
+    [[nodiscard]] std::optional<glm::mat4> getInstanceModelMatrix(uint32_t instanceId) const;
     void setInstanceAnimationFrozen(uint32_t instanceId, bool frozen);
     /// Hold the current sequence at `fraction` (0..1) of its length instead of
     /// running it on: a LightSkybox model with flag 0x1, whose animation is

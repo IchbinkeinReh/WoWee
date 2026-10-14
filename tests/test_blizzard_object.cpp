@@ -114,3 +114,42 @@ TEST_CASE("with nothing below it one takes the object's place", "[blizzard_objec
                                 [](const glm::vec3&, const glm::vec3&) -> std::optional<float> { return std::nullopt; });
     CHECK_FALSE(landed.has_value());
 }
+
+TEST_CASE("on a transport one is sought in the world and kept in its frame", "[blizzard_object]") {
+    // 0x007fc220 with +0x184: the place put in the world by the frame, the
+    // landing brought back into it; 0x007fb2d0 draws it through the frame.
+    glm::mat4 frame(0.0f);  // a quarter turn about z, then moved
+    frame[0] = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+    frame[1] = glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f);
+    frame[2] = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+    frame[3] = glm::vec4(100.0f, 200.0f, 10.0f, 1.0f);
+    const glm::vec3 centre(5.0f, 0.0f, 2.0f);  // in the transport's frame
+    std::vector<Ray> rays;
+    const glm::vec3 place = drop(centre, &frame, 4.0f, 0.5f, 0.0f,
+                                 [&](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
+                                     rays.push_back({from, to});
+                                     if (rays.size() == 1) return std::nullopt;
+                                     return 0.5f;
+                                 });
+    REQUIRE(rays.size() == 2);
+    // The way up starts above the object's place in the world.
+    CHECK(rays[0].from.x == Catch::Approx(100.0f));
+    CHECK(rays[0].from.y == Catch::Approx(205.0f));
+    CHECK(rays[0].from.z == Catch::Approx(12.0f + kCeilingFrom));
+    // The point two yards east of it in the world.
+    CHECK(rays[0].to.x == Catch::Approx(102.0f));
+    CHECK(rays[0].to.y == Catch::Approx(205.0f));
+    // Kept in the frame: two yards east in the world is two along -y there.
+    CHECK(place.x == Catch::Approx(5.0f));
+    CHECK(place.y == Catch::Approx(-2.0f));
+    CHECK(place.z == Catch::Approx(2.0f + kRise - kDrop * 0.5f));
+    const glm::vec3 drawn = drawnAt(place, &frame);
+    CHECK(drawn.x == Catch::Approx(102.0f));
+    CHECK(drawn.y == Catch::Approx(205.0f));
+    // Landing on nothing, the object's own place, in the frame.
+    CHECK(drop(centre, &frame, 4.0f, 0.5f, 0.0f, [](const glm::vec3&, const glm::vec3&) -> std::optional<float> {
+              return std::nullopt;
+          }) == centre);
+    // With no frame the place is the world's.
+    CHECK(drawnAt(place, nullptr) == place);
+}

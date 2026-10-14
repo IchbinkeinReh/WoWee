@@ -2489,13 +2489,22 @@ void SpellVisualSystem::update(float deltaTime) {
 
 void SpellVisualSystem::addDynamicObject(uint64_t guid, uint32_t visualId, const DynamicObjectCast& cast,
                                          uint8_t type, float radius, float objectScale, const glm::vec3& position,
-                                         float yaw) {
+                                         float yaw, uint64_t transportGuid) {
     loadSpellVisualDbc();
     removeDynamicObject(guid, false);
     const auto it = persistentAreas_.find(visualId);
     if (it == persistentAreas_.end()) return;
     DynamicObjectVisual object{.guid = guid, .area = it->second, .type = type, .radius = radius,
                                .objectScale = objectScale, .position = position, .yaw = yaw, .cast = cast};
+    // A passenger whose transport is not there is made in the world
+    // (0x00705230 -> 0x004f4230).
+    if (transportGuid != 0 && transportFrameQuery_) {
+        if (const auto frame = transportFrameQuery_(transportGuid)) {
+            object.transportGuid = transportGuid;
+            object.fromMadeFrame = glm::inverse(*frame);
+            object.moved = glm::mat4(1.0f);
+        }
+    }
     // 0x00705230: held while a missile of its cast flies (0x00804cc0).
     object.held = missileInFlight(cast);
     startDynamicObjectKit(object);
@@ -2515,7 +2524,8 @@ void SpellVisualSystem::startDynamicObjectKit(DynamicObjectVisual& object) {
         const int level = std::atoi(addons::storedCVarValue("spellEffectLevel", "9").c_str());
         fallingModels_.push_back(FallingModels{
             .ownerGuid = object.guid, .modelPath = object.area.fallingModel, .centre = object.position,
-            .radius = object.radius, .perSecond = blizzard_object::rate(object.area.fallingPerSecond, level)});
+            .radius = object.radius, .perSecond = blizzard_object::rate(object.area.fallingPerSecond, level),
+            .frame = object.moved});
     }
     // 0x00704f60: the kit's sound on the object, looping, rising over two
     // seconds.
@@ -2547,12 +2557,11 @@ void SpellVisualSystem::updateFallingModels(float deltaTime) {
         const auto segment = [this](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
             return segmentQuery_ ? segmentQuery_(from, to) : std::nullopt;
         };
+        const glm::mat4* frame = falling.frame ? &*falling.frame : nullptr;
         for (uint32_t n = blizzard_object::advance(falling.carried, deltaTime, falling.perSecond); n > 0; --n) {
             const float fraction = unit(fallingRng_);
-            const glm::vec2 point = blizzard_object::fallPoint(glm::vec2(falling.centre), falling.radius, fraction,
-                                                                unit(fallingRng_));
-            FallingModels::Fall fall{.position = falling.centre};
-            if (const auto landed = blizzard_object::landing(falling.centre, point, segment)) fall.position = *landed;
+            FallingModels::Fall fall{.position = blizzard_object::drop(falling.centre, frame, falling.radius, fraction,
+                                                                       unit(fallingRng_), segment)};
             fall.startsIn = blizzard_object::startDelaySeconds(unit(fallingRng_));
             falling.falls.push_back(fall);
         }
@@ -2576,7 +2585,8 @@ void SpellVisualSystem::updateFallingModels(float deltaTime) {
                     ++fallIt;
                     continue;
                 }
-                fall.instanceId = m2Renderer_->createInstance(modelId, fall.position, glm::vec3(0.0f), 1.0f, false);
+                fall.instanceId = m2Renderer_->createInstance(modelId, blizzard_object::drawnAt(fall.position, frame),
+                                                              glm::vec3(0.0f), 1.0f, false);
                 if (fall.instanceId == 0) {
                     fallIt = falling.falls.erase(fallIt);
                     continue;
@@ -2595,6 +2605,8 @@ void SpellVisualSystem::updateFallingModels(float deltaTime) {
                 fallIt = falling.falls.erase(fallIt);
                 continue;
             }
+            // 0x007fb2d0: drawn each frame where the frame puts it.
+            if (frame) m2Renderer_->setInstancePosition(fall.instanceId, blizzard_object::drawnAt(fall.position, frame));
             ++fallIt;
         }
         // 0x007fc220: stopped and with none left, it goes.
@@ -2639,6 +2651,18 @@ void SpellVisualSystem::updateDynamicObjects(float deltaTime) {
     if (!m2Renderer_) return;
     for (auto it = dynamicObjects_.begin(); it != dynamicObjects_.end();) {
         DynamicObjectVisual& object = *it;
+        // 0x007132e0 -> 0x00704910: on a transport, its matrix each frame,
+        // for the model (0x00744380) and the drops (0x007fa1b0).
+        if (object.transportGuid != 0 && transportFrameQuery_) {
+            if (const auto frame = transportFrameQuery_(object.transportGuid)) {
+                object.moved = *frame * object.fromMadeFrame;
+                if (object.instanceId != 0)
+                    m2Renderer_->setInstanceTransform(object.instanceId, *object.moved * object.madeModel);
+                for (FallingModels& falling : fallingModels_) {
+                    if (falling.ownerGuid == object.guid) falling.frame = object.moved;
+                }
+            }
+        }
         // 0x007051b0: once its cast's missile has arrived, the model shows -
         // from its Birth - and its kit starts (0x00704f60).
         if (object.held && !object.decaying && !missileInFlight(object.cast)) {
@@ -2662,6 +2686,10 @@ void SpellVisualSystem::updateDynamicObjects(float deltaTime) {
                     object.objectScale;
                 object.instanceId = m2Renderer_->createInstance(modelId, object.position,
                                                                 glm::vec3(0.0f, 0.0f, object.yaw), scale);
+                if (object.instanceId != 0 && object.moved) {
+                    object.madeModel = m2Renderer_->getInstanceModelMatrix(object.instanceId).value_or(glm::mat4(1.0f));
+                    m2Renderer_->setInstanceTransform(object.instanceId, *object.moved * object.madeModel);
+                }
                 if (object.instanceId != 0) {
                     // Its events go to the object (0x00704f20 -> 0x00704c30).
                     m2Renderer_->setInstanceEventOwner(object.instanceId, m2_event::Owner::DynamicObject, 0);

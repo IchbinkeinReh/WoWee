@@ -2896,6 +2896,12 @@ void Application::connectWorldHooks() {
                 return rendering::mount_transition::GroundHit{
                     .fraction = span > 0.0f ? (top.z - *best) / span : 0.0f, .normal = normal};
             });
+            // A transport's matrix, for a dynamic object riding it
+            // (0x007132e0 -> 0x00704910).
+            svs->setTransportFrameQuery([this](uint64_t transportGuid) -> std::optional<glm::mat4> {
+                auto* transports = gameHandler ? gameHandler->getTransportManager() : nullptr;
+                return transports ? transports->passengerRenderFrame(transportGuid) : std::nullopt;
+            });
             svs->setSegmentQuery([this](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
                 return renderer ? renderer->intersectSegment(from, to) : std::nullopt;
             });

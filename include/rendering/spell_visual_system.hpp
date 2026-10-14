@@ -222,6 +222,11 @@ public:
     /// object of that cast keeps its model hidden until then.
     using MissileInFlightQuery = std::function<bool(uint64_t caster, uint32_t spellId, uint32_t castTime)>;
     void setMissileInFlightQuery(MissileInFlightQuery query) { missileInFlightQuery_ = std::move(query); }
+    /// A transport's matrix, renderer coordinates (GameObject_C's +0x1a8,
+    /// which 0x007132e0 hands its passengers each frame); none where it is
+    /// not known.
+    using TransportFrameQuery = std::function<std::optional<glm::mat4>(uint64_t transportGuid)>;
+    void setTransportFrameQuery(TransportFrameQuery query) { transportFrameQuery_ = std::move(query); }
     /// The CharacterRenderer instance drawing a unit, 0 while it has none.
     using UnitInstanceResolver = std::function<uint32_t(uint64_t unitGuid)>;
     void setUnitInstanceResolver(UnitInstanceResolver resolver) { unitInstanceResolver_ = std::move(resolver); }
@@ -313,9 +318,12 @@ public:
     /// model at `position` turned to `yaw` (radians about Z), sized by its
     /// DYNAMICOBJECT_RADIUS, type (BYTES' low byte) and own scale, made once
     /// the model has loaded; and the kit's sound looping there. While a
-    /// missile of its cast flies, none of it shows.
+    /// missile of its cast flies, none of it shows. On a transport
+    /// (`transportGuid`, its frame known), its model and its CharProc 9
+    /// drops go with the transport from where they are now (0x00704910).
     void addDynamicObject(uint64_t guid, uint32_t visualId, const DynamicObjectCast& cast, uint8_t type,
-                          float radius, float objectScale, const glm::vec3& position, float yaw);
+                          float radius, float objectScale, const glm::vec3& position, float yaw,
+                          uint64_t transportGuid = 0);
     /// The dynamic object gone: `destroyed` (SMSG_DESTROY_OBJECT) lets its
     /// model play its Decay first; out of range it goes at once.
     void removeDynamicObject(uint64_t guid, bool destroyed);
@@ -478,6 +486,13 @@ private:
         DynamicObjectCast cast;
         /// +0x150 & 2: held hidden while a missile of its cast flies.
         bool held = false;
+        /// On a transport: the transport, its matrix where the object was
+        /// made, inverted, and how far it has moved it since (0x00704910):
+        /// `position` is then where it was made.
+        uint64_t transportGuid = 0;
+        glm::mat4 fromMadeFrame{1.0f};
+        std::optional<glm::mat4> moved;
+        glm::mat4 madeModel{1.0f};  ///< the model's matrix as made
     };
     std::vector<DynamicObjectVisual> dynamicObjects_;
     /// A CharProc 9's falling models (0x007fbd70, blizzard_object.hpp),
@@ -489,6 +504,9 @@ private:
         float radius = 0.0f;
         float perSecond = 0.0f;
         float carried = 0.0f;
+        /// +0x144 while +0x184 is set: the frame `centre` and the falls'
+        /// places are in, the object's; it stays once the object has gone.
+        std::optional<glm::mat4> frame;
         struct Fall {
             glm::vec3 position{0.0f};
             float startsIn = 0.0f;  ///< seconds until it plays
@@ -728,6 +746,7 @@ private:
     void loadCameraShakes();
     SpellVisualResolver spellVisualResolver_;
     MissileInFlightQuery missileInFlightQuery_;
+    TransportFrameQuery transportFrameQuery_;
     UnarmedKitsQuery unarmedKitsQuery_;
     AttachedEffectScale attachedEffectScale_;
     /// 0x00720400 for a unit: hide or show its Flags 8 kits as asked.

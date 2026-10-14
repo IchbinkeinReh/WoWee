@@ -487,7 +487,12 @@ void EntityController::updateNonPlayerTransportAttachment(const UpdateBlock& blo
         }
     }
     if (block.guid == owner_.getPlayerGuid()) return;
-    if (entityType != ObjectType::UNIT && entityType != ObjectType::GAMEOBJECT) return;
+    // A dynamic object rides one too (UPDATEFLAG_POSITION, 0x004d3890): its
+    // place is its offset there (0x00705230 -> 0x004f4230).
+    if (entityType != ObjectType::UNIT && entityType != ObjectType::GAMEOBJECT &&
+        entityType != ObjectType::DYNAMICOBJECT) {
+        return;
+    }
 
     if (block.onTransport && block.transportGuid != 0) {
         const glm::vec3 serverOffset(block.transportX, block.transportY, block.transportZ);
@@ -2461,10 +2466,17 @@ bool EntityController::spawnDynamicObjectFromFields(uint64_t guid, const Entity&
     }
     if (const uint16_t timeIdx = fieldIndex(UF::DYNAMICOBJECT_CASTTIME); timeIdx != 0xFFFF)
         castTime = entity.getField(timeIdx);
+    // The transport it rides, where that is known: one that is not leaves
+    // it in the world (0x004f4230).
+    uint64_t transportGuid = 0;
+    if (const auto it = owner_.transportAttachmentsRef().find(guid);
+        it != owner_.transportAttachmentsRef().end() && !it->second.offsetNeedsTransportResolution) {
+        transportGuid = it->second.transportGuid;
+    }
     owner_.dynamicObjectSpawnCallbackRef()(guid, entity.getField(spellIdx), caster, castTime,
                                            static_cast<uint8_t>(entity.getField(bytesIdx) & 0xFF),
                                            bitsToFloat(entity.getField(radiusIdx)), scale, entity.getX(),
-                                           entity.getY(), entity.getZ(), entity.getOrientation());
+                                           entity.getY(), entity.getZ(), entity.getOrientation(), transportGuid);
     return true;
 }
 

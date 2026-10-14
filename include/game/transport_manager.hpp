@@ -266,6 +266,10 @@ public:
         return snapshot;
     }
     glm::vec3 getPlayerWorldPosition(uint64_t transportGuid, const glm::vec3& localOffset);
+    /// The render-space matrix getPlayerWorldPosition puts a passenger's
+    /// offset into the world with: the WMO transport's transform, or an M2
+    /// one's place alone. None for a transport not known.
+    [[nodiscard]] std::optional<glm::mat4> passengerRenderFrame(uint64_t transportGuid) const;
     [[nodiscard]] glm::vec3 serverToTransportLocal(uint64_t transportGuid,
                                      const glm::vec3& serverOffset) const;
     // Adopt the server's published route phase for a transport. phase is a

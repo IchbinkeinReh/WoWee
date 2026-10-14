@@ -479,6 +479,12 @@ void M2Renderer::setInstanceParticleColors(uint32_t instanceId, const std::array
     inst.hasParticleColors = true;
 }
 
+std::optional<glm::mat4> M2Renderer::getInstanceModelMatrix(uint32_t instanceId) const {
+    const auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return std::nullopt;
+    return instances[idxIt->second].modelMatrix;
+}
+
 void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& transform) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;

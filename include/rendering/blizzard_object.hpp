@@ -21,6 +21,11 @@
 /// Every fourth event any of these models fires, if it is a $SND, plays the
 /// data's sound once where it is (0x007f9d80).
 ///
+/// On a transport the object hands the effect the transport's matrix each
+/// frame (0x007132e0 -> 0x00704910 -> 0x007fa1b0): its place and its drops'
+/// are then in the transport's frame (drop, drawnAt). Once the object has
+/// gone the last matrix stays.
+///
 /// The object gone (0x00704940, 0x007054e0 -> 0x007f9ee0) sets the rate to
 /// 0: no more fall, and the effect goes once the last has played.
 
@@ -99,6 +104,27 @@ std::optional<glm::vec3> landing(const glm::vec3& centre, const glm::vec2& point
     const glm::vec3 bottom(top.x, top.y, top.z - kDrop);
     if (const std::optional<float> down = segment(top, bottom)) return top + (bottom - top) * *down;
     return std::nullopt;
+}
+
+/// 0x007fc220: where one falls, in the frame its effect is in - a
+/// transport's (+0x144, while +0x184 is set, 0x007fa1b0) or else the
+/// world's. The object's place (`centre`, in that frame) is put in the
+/// world (0x004c21b0), the point drawn around it there, and the landing
+/// sought there brought back into the frame (0x004c2fc0, 0x004c2300); where
+/// it lands on nothing, the object's own place.
+template <class Segment>
+glm::vec3 drop(const glm::vec3& centre, const glm::mat4* frame, float radius, float fraction, float turn,
+               Segment&& segment) {
+    const glm::vec3 world = frame ? glm::vec3(*frame * glm::vec4(centre, 1.0f)) : centre;
+    const std::optional<glm::vec3> landed = landing(world, fallPoint(glm::vec2(world), radius, fraction, turn), segment);
+    if (!landed) return centre;
+    return frame ? glm::vec3(glm::inverse(*frame) * glm::vec4(*landed, 1.0f)) : *landed;
+}
+
+/// 0x007fb2d0: where one is drawn - its place, put in the world by the
+/// frame where there is one.
+inline glm::vec3 drawnAt(const glm::vec3& place, const glm::mat4* frame) {
+    return frame ? glm::vec3(*frame * glm::vec4(place, 1.0f)) : place;
 }
 
 /// 0x007fc220: how long one waits before it plays, seconds - a random byte

@@ -432,6 +432,13 @@ glm::vec3 TransportManager::getPlayerWorldPosition(uint64_t transportGuid, const
     return core::coords::renderToCanonical(glm::vec3(worldPos));
 }
 
+std::optional<glm::mat4> TransportManager::passengerRenderFrame(uint64_t transportGuid) const {
+    const auto it = transports_.find(transportGuid);
+    if (it == transports_.end()) return std::nullopt;
+    if (it->second.isM2) return glm::translate(glm::mat4(1.0f), core::coords::canonicalToRender(it->second.position));
+    return it->second.transform;
+}
+
 glm::vec3 TransportManager::serverToTransportLocal(
     uint64_t transportGuid, const glm::vec3& serverOffset) const {
     const auto it = transports_.find(transportGuid);

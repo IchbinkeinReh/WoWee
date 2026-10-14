@@ -1735,10 +1735,12 @@ public:
     /// A dynamic object come into view (DynamicObject_C, 0x00705230): its
     /// DYNAMICOBJECT_SPELLID, CASTER and CASTTIME (the cast, 0x00804cc0),
     /// BYTES' low byte (its type), RADIUS and OBJECT_FIELD_SCALE_X, where it
-    /// is (canonical) and its facing.
+    /// is (canonical) and its facing, and the transport it rides, 0 for
+    /// none or one not yet known (0x004f4230).
     using DynamicObjectSpawnCallback =
         std::function<void(uint64_t guid, uint32_t spellId, uint64_t caster, uint32_t castTime, uint8_t type,
-                           float radius, float scale, float x, float y, float z, float orientation)>;
+                           float radius, float scale, float x, float y, float z, float orientation,
+                           uint64_t transportGuid)>;
     void setDynamicObjectSpawnCallback(DynamicObjectSpawnCallback cb) { dynamicObjectSpawnCallback_ = std::move(cb); }
     /// A dynamic object gone: `destroyed` by SMSG_DESTROY_OBJECT (0x004d7610
     /// passes 1 to 0x00704a70), else out of range or the world unloaded.
