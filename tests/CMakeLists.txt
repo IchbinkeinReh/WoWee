@@ -2657,6 +2657,12 @@ wowee_add_test(test_gather_spells
     SOURCES test_gather_spells.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_lfg_update ──────────────────────────────────────────
+# The dungeon finder's queue updates and proposals, decided as wow.exe does:
+# LFG_PROPOSAL_SUCCEEDED / _FAILED from the update that ends a proposal.
+wowee_add_packet_test(test_lfg_update
+    SOURCES ${CMAKE_SOURCE_DIR}/src/game/lfg_update.cpp)
+
 # ── test_group_list_parse ────────────────────────────────────
 # SMSG_GROUP_LIST built as the server writes it and read back, in both its
 # shapes. The dungeon finder shape was read a byte long - a seventh field that

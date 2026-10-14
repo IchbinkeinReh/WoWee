@@ -7,6 +7,7 @@
 #include "game/group_defines.hpp"
 #include "game/handler_types.hpp"
 #include "game/calendar_data.hpp"
+#include "game/lfg_update.hpp"
 #include "network/packet.hpp"
 #include <array>
 #include <chrono>
@@ -376,6 +377,8 @@ public:
     [[nodiscard]] uint8_t  getLfgNeedDps() const    { return lfgNeedDps_; }
     [[nodiscard]] uint64_t getLfgBootVictimGuid() const { return lfgBootVictimGuid_; }
     [[nodiscard]] const std::unordered_map<uint32_t, uint32_t>& getLfgLocks() const { return lfgLocks_; }
+    [[nodiscard]] const std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>>&
+    getLfgPartyLocks() const { return lfgPartyLocks_; }
     [[nodiscard]] const std::vector<LfgReward>& getLfgRewards() const { return lfgRewards_; }
     void handleLfgPlayerInfo(network::Packet& packet);
     [[nodiscard]] const std::vector<LfgProposalMember>& getLfgProposalMembers() const {
@@ -585,9 +588,13 @@ private:
     void handleLfgRoleCheckUpdate(network::Packet& packet);
     void handleLfgUpdatePlayer(network::Packet& packet);
     void handleLfgUpdateParty(network::Packet& packet);
-    void readLfgDungeonList(network::Packet& packet);
-    void applyLfgUpdate(uint8_t updateType, bool extraInfo, bool queued,
-                        bool inDungeon);
+    void applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party);
+    /// Whether any of the body's dungeons is a raid, which turns the queue's
+    /// lines into the raid browser's (0x00557260).
+    bool lfgBodyHasRaid(const LfgUpdateBody& body) const;
+    /// Drop the proposal the way 0x00552850 does.
+    void clearLfgProposal();
+    void handleLfgPartyInfo(network::Packet& packet);
     void handleLfgPlayerReward(network::Packet& packet);
     void handleLfgBootProposalUpdate(network::Packet& packet);
     void handleLfgTeleportDenied(network::Packet& packet);
@@ -723,6 +730,15 @@ private:
     /// resends the update as each member answers, and opening again would
     /// reset the countdown and the ticks beside every name.
     uint32_t shownProposalId_ = 0;
+    /// A proposal is held (its dungeon is non-zero) until a decline or a
+    /// queue update ends it - the condition 0x0055bdc0 tests before firing
+    /// LFG_PROPOSAL_SUCCEEDED or _FAILED.
+    bool lfgProposalValid_ = false;
+    /// The last player and party queue bodies (0x00acd9a0, 0x00acdac0).
+    LfgUpdateBody lfgPlayerUpdate_;
+    LfgUpdateBody lfgPartyUpdate_;
+    /// The party's locks from SMSG_LFG_PARTY_INFO, by member and dungeon.
+    std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> lfgPartyLocks_;
     uint8_t  lfgOfferedRoles_ = 0;
     // The queue's own numbers, which never arrived while the length check was
     // longer than the packet.

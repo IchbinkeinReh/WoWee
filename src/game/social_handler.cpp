@@ -2,6 +2,7 @@
 #include "core/local_time.hpp"
 #include "game/item_text.hpp"
 #include "game/social_handler.hpp"
+#include <string_view>
 #include "addons/lua_api_registrations.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "game/game_handler.hpp"
@@ -1039,8 +1040,16 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_LFG_BOOT_PROPOSAL_UPDATE] = [this](network::Packet& packet) { handleLfgBootProposalUpdate(packet); };
     table[Opcode::SMSG_LFG_TELEPORT_DENIED] = [this](network::Packet& packet) { handleLfgTeleportDenied(packet); };
     table[Opcode::SMSG_LFG_DISABLED] = [this](network::Packet& /*packet*/) {
-        // ERR_SYSTEM_DISABLED on screen (0x0055bdc0); this printed an English
-        // line to chat.
+        // 0x0055bdc0 case 0x398: everything the dungeon finder held is
+        // dropped - the proposal, both queue bodies, the locks - then
+        // LFG_UPDATE false and ERR_SYSTEM_DISABLED.
+        clearLfgProposal();
+        lfgPlayerUpdate_ = LfgUpdateBody{};
+        lfgPartyUpdate_ = LfgUpdateBody{};
+        lfgLocks_.clear();
+        lfgPartyLocks_.clear();
+        lfgState_ = LfgState::None;
+        owner_.fireAddonEvent("LFG_UPDATE", {eventBool(false)});
         gameError(owner_, ErrTo::Error, "ERR_SYSTEM_DISABLED", "This system is currently disabled.");
     };
     table[Opcode::SMSG_LFG_OFFER_CONTINUE] = [this](network::Packet& packet) {
@@ -1109,8 +1118,10 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_LFG_PLAYER_INFO] = [this](network::Packet& packet) {
         handleLfgPlayerInfo(packet);
     };
-    for (auto op : { Opcode::SMSG_LFG_UPDATE_SEARCH, Opcode::SMSG_UPDATE_LFG_LIST,
-                     Opcode::SMSG_LFG_PARTY_INFO }) {
+    table[Opcode::SMSG_LFG_PARTY_INFO] = [this](network::Packet& packet) {
+        handleLfgPartyInfo(packet);
+    };
+    for (auto op : { Opcode::SMSG_LFG_UPDATE_SEARCH, Opcode::SMSG_UPDATE_LFG_LIST }) {
         table[op] = [](network::Packet& packet) { packet.skipAll(); };
     }
     table[Opcode::SMSG_OPEN_LFG_DUNGEON_FINDER] = [this](network::Packet& packet) {
@@ -4124,6 +4135,29 @@ void SocialHandler::handleLfgPlayerInfo(network::Packet& packet) {
     }
 }
 
+// SMSG_LFG_PARTY_INFO - what each party member may not queue for. Skipped
+// until now; 0x0055bdc0 (case 0x372, 0x0055b080) reads a count, then per
+// member a guid and the same lock list SMSG_LFG_PLAYER_INFO ends with, and
+// raises the two events that one does.
+void SocialHandler::handleLfgPartyInfo(network::Packet& packet) {
+    lfgPartyLocks_.clear();
+    if (!packet.hasRemaining(1)) { packet.skipAll(); return; }
+    const uint8_t members = packet.readUInt8();
+    for (uint8_t i = 0; i < members; ++i) {
+        if (!packet.hasRemaining(8 + 4)) break;
+        const uint64_t guid = packet.readUInt64();
+        const uint32_t lockCount = packet.readUInt32();
+        auto& locks = lfgPartyLocks_[guid];
+        for (uint32_t j = 0; j < lockCount && packet.hasRemaining(8); ++j) {
+            const uint32_t entry = packet.readUInt32();
+            locks[entry & 0x00FFFFFFu] = packet.readUInt32();
+        }
+    }
+    packet.skipAll();
+    owner_.fireAddonEvent("LFG_LOCK_INFO_RECEIVED");
+    owner_.fireAddonEvent("LFG_UPDATE_RANDOM_INFO");
+}
+
 void SocialHandler::handleLfgQueueStatus(network::Packet& packet) {
     // Thirty-one bytes, not thirty-three: dungeon, five wait times, three
     // one-byte "needed" counts, and the time queued. The old length check was
@@ -4193,109 +4227,61 @@ enum : uint32_t {
 }  // namespace
 
 void SocialHandler::handleLfgProposalUpdate(network::Packet& packet) {
-    // The header is fifteen bytes, and the state is ONE of them.
-    //
-    // This read three uint32s where the server writes dungeon(4), state(1),
-    // id(4), encounters(4), silent(1), size(1) - so the proposal id came out of
-    // the state byte plus three bytes of the id, and the state itself out of
-    // the id's last byte plus three of the encounter count. Every branch below
-    // was taken on a number assembled from the wrong bytes, which is why the
-    // pop never behaved: it was not that the state was unhandled, it was never
-    // read.
-    if (!packet.hasRemaining(15)) return;
-    const uint32_t dungeonEntry = packet.readUInt32();
-    const uint32_t proposalState = packet.readUInt8();
-    const uint32_t proposalId = packet.readUInt32();
-    const uint32_t encountersDone = packet.readUInt32();
-    // "silent" means do NOT raise the window - the player is already in the
-    // group being proposed to, so there is nothing to accept.
-    const bool silent = packet.readUInt8() != 0;
-    const uint8_t groupSize = packet.hasRemaining(1) ? packet.readUInt8() : 0;
-    (void)encountersDone;
+    // dungeon(4), state(1), id(4), encounters(4), silent(1), size(1), and a
+    // row per member - see parseLfgProposal. This once read three uint32s for
+    // the header, so the state came out of the id's bytes.
+    LfgProposal proposal;
+    if (!parseLfgProposal(packet, proposal)) return;
+    packet.skipAll();
 
     // The entry packs the dungeon and its type, the same way
     // LFGDungeonData::Entry builds it.
-    const uint32_t dungeonId = dungeonEntry & 0x00FFFFFFu;
-
+    const uint32_t dungeonId = proposal.dungeonEntry & 0x00FFFFFFu;
     lfgProposalMembers_.clear();
-    for (uint8_t i = 0; i < groupSize && packet.hasRemaining(9); ++i) {
+    for (const auto& r : proposal.members) {
         LfgProposalMember m;
-        m.role      = packet.readUInt32();
-        m.isSelf    = packet.readUInt8() != 0;
-        m.inDungeon = packet.readUInt8() != 0;
-        m.sameGroup = packet.readUInt8() != 0;
-        m.answered  = packet.readUInt8() != 0;
-        m.accepted  = packet.readUInt8() != 0;
+        m.role = r.roles;
+        m.isSelf = r.isSelf;
+        m.inDungeon = r.inDungeon;
+        m.sameGroup = r.sameGroup;
+        m.answered = r.answered;
+        m.accepted = r.accepted;
         lfgProposalMembers_.push_back(m);
     }
-
-    lfgDungeonId_ = dungeonId; lfgProposalId_ = proposalId;
-    switch (proposalState) {
-        case kProposalInitiating:
-            lfgState_ = LfgState::Proposal;
-            break;
-        case kProposalFailed:
-            lfgState_ = LfgState::Queued; lfgProposalId_ = 0;
-            break;
-        case kProposalSuccess:
-            lfgState_ = LfgState::InDungeon; lfgProposalId_ = 0;
-            break;
+    lfgDungeonId_ = dungeonId;
+    lfgProposalId_ = proposal.id;
+    // Held until a decline below or a queue update ends it (0x0055bdc0,
+    // cases 0x361, 0x367, 0x368).
+    lfgProposalValid_ = proposal.dungeonEntry != 0;
+    switch (proposal.state) {
+        case kProposalInitiating: lfgState_ = LfgState::Proposal;  break;
+        case kProposalFailed:     lfgState_ = LfgState::Queued;    break;
+        case kProposalSuccess:    lfgState_ = LfgState::InDungeon; break;
         default: break;
     }
-    // Nothing is said for the proposal itself - its dialog is the
-    // announcement - only who turned it down, from the members' answers
-    // (0x0055bdc0): ERR_LFG_PROPOSAL_DECLINED_PARTY for someone of the
-    // player's own group, else ERR_LFG_PROPOSAL_DECLINED_SELF for the
-    // player, system lines. This printed "Dungeon Finder: A group has been
-    // found...", "...Group proposal failed." (twice) and "...Entering
-    // dungeon..." in English.
-    {
-        bool selfDeclined = false, partyDeclined = false;
-        for (const auto& m : lfgProposalMembers_) {
-            if (!m.answered || m.accepted) continue;
-            if (m.isSelf) selfDeclined = true;
-            else if (m.sameGroup) partyDeclined = true;
-        }
-        if (partyDeclined)
+    // The state itself announces nothing: LFG_PROPOSAL_FAILED and _SUCCEEDED
+    // come from the queue update that ends the proposal (applyLfgUpdate),
+    // and from here only on a decline. This fired them off the state, which
+    // the client never looks at.
+    const LfgProposalOutcome outcome = decideLfgProposal(proposal, shownProposalId_);
+    owner_.fireAddonEvent("LFG_PROPOSAL_UPDATE");
+    if (outcome.show) owner_.fireAddonEvent("LFG_PROPOSAL_SHOW");
+    if (outcome.declinedLine) {
+        if (std::string_view(outcome.declinedLine) == "ERR_LFG_PROPOSAL_DECLINED_PARTY")
             gameError(owner_, ErrTo::Chat, "ERR_LFG_PROPOSAL_DECLINED_PARTY", "A member of your group has declined the proposal.");
-        else if (selfDeclined)
+        else
             gameError(owner_, ErrTo::Chat, "ERR_LFG_PROPOSAL_DECLINED_SELF", "You have declined the group invitation.");
     }
-    // The proposal dialog is built from GetLFGProposal, which already answers
-    // from this - it just had no way to know a proposal had arrived.
-    if (!owner_.addonEventCallbackRef()) return;
-    auto fire = owner_.addonEventCallbackRef();
-    fire("LFG_PROPOSAL_UPDATE", {});
-
-    // UPDATE alone only refreshes a dialog already on screen.
-    // LFDFrame_OnEvent opens it on SHOW - that branch is the one calling
-    // StaticPopupSpecial_Show - and closes it on SUCCEEDED or FAILED. None of
-    // the three was fired, so a pop arrived as a line of chat and nothing else,
-    // with no way to accept it.
-    //
-    // SHOW once per proposal rather than on every update: the server resends
-    // this as each member answers, and showing again would reset the dialog's
-    // countdown and its per-member ticks every time.
-    switch (proposalState) {
-        case kProposalInitiating:
-            // Not when the server says silent: that means the player is
-            // already in the group being proposed to and has nothing to answer.
-            if (!silent && shownProposalId_ != proposalId) {
-                shownProposalId_ = proposalId;
-                fire("LFG_PROPOSAL_SHOW", {});
-            }
-            break;
-        case kProposalFailed:
-            shownProposalId_ = 0;
-            fire("LFG_PROPOSAL_FAILED", {});
-            break;
-        case kProposalSuccess:
-            shownProposalId_ = 0;
-            fire("LFG_PROPOSAL_SUCCEEDED", {});
-            break;
-        default:
-            break;
+    if (outcome.failed) {
+        clearLfgProposal();
+        owner_.fireAddonEvent("LFG_PROPOSAL_FAILED");
     }
+}
+
+void SocialHandler::clearLfgProposal() {
+    lfgProposalValid_ = false;
+    lfgProposalId_ = 0;
+    lfgProposalMembers_.clear();
 }
 
 void SocialHandler::handleLfgRoleCheckUpdate(network::Packet& packet) {
@@ -4368,220 +4354,85 @@ void SocialHandler::handleLfgRoleCheckUpdate(network::Packet& packet) {
     }
 }
 
-/// SMSG_LFG_UPDATE_PLAYER and SMSG_LFG_UPDATE_PARTY.
-///
-/// Both open with the update type and a flag saying whether the rest of the
-/// packet is there. Neither was being read: the flag was *inferred* from the
-/// update type by a list of the types thought not to carry a body, and the
-/// body itself - which is where the server says whether you are queued - was
-/// skipped three bytes at a time.
-///
-/// The numbers were a version out too. Under 3.3.5's LfgUpdateType, 15 is
-/// UPDATE_STATUS, the refresh the server sends whenever the queue state is
-/// restated; this read it as "left the queue", set the state to none and said
-/// so in chat. So a player queued for a dungeon was thrown out of the queue by
-/// the packet whose whole job is to confirm they are still in it - locally,
-/// while the server kept them queued, which is what made it look like being
-/// dropped for no reason.
-///
-/// Reading the flags instead of the type is what stops that returning: the
-/// server states the queue in the packet, and the update type only decides
-/// what to say about it.
-namespace {
-
-// 3.3.5 LfgUpdateType, as the server writes it.
-enum : uint8_t {
-    kLfgDefault             = 0,
-    kLfgLeaderUnk1          = 1,
-    kLfgRoleCheckAborted    = 4,
-    // Five, observed: it arrives the moment a queue is joined, carrying a body
-    // that says queued. The listings of this enum disagree about whether the
-    // join is 5 or 6, so both are treated as one - the flags in the body decide
-    // the state either way, and this only decides the wording.
-    kLfgJoinQueue           = 5,
-    kLfgJoinQueueAlt        = 6,
-    kLfgRoleCheckFailed     = 7,
-    kLfgRemovedFromQueue    = 8,
-    kLfgProposalFailed      = 9,
-    kLfgProposalDeclined    = 10,
-    kLfgGroupFound          = 11,
-    kLfgAddedToQueue        = 13,
-    kLfgProposalBegin       = 14,
-    kLfgUpdateStatus        = 15,
-    kLfgGroupMemberOffline  = 16,
-    kLfgGroupDisband        = 17,
-};
-
-/// Whether this client knows the update type, for the warning below.
-bool lfgUpdateKnown(uint8_t updateType) {
-    switch (updateType) {
-        case kLfgJoinQueue: case kLfgJoinQueueAlt: case kLfgAddedToQueue:
-        case kLfgRemovedFromQueue: case kLfgRoleCheckFailed: case kLfgRoleCheckAborted:
-        case kLfgProposalFailed: case kLfgProposalDeclined: case kLfgGroupFound:
-        case kLfgGroupDisband:
-            return true;
-        default:
-            return false;
+/// SMSG_LFG_UPDATE_PLAYER and SMSG_LFG_UPDATE_PARTY - read and decided in
+/// game/lfg_update, applied here.
+bool SocialHandler::lfgBodyHasRaid(const LfgUpdateBody& body) const {
+    if (!body.extraInfo) return false;
+    for (uint32_t entry : body.dungeons) {
+        const uint32_t id = entry & 0x00FFFFFFu;
+        for (const auto& d : owner_.getLfgDungeons()) {
+            if (d.id == id && d.typeId == static_cast<uint32_t>(LfgTypeId::Raid)) return true;
+        }
     }
+    return false;
 }
-
-/// The lines 0x0055bdc0 says for SMSG_LFG_UPDATE_PLAYER and _PARTY, from the
-/// queue as it was and as it now is. A proposal still pending that the
-/// update ends, with the player still listed and queued, is
-/// ERR_LFG_PROPOSAL_FAILED. Joining is ERR_LFG_JOINED_QUEUE; leaving - no
-/// longer joined, or no longer queued - is ERR_LFG_LEFT_QUEUE, and only for
-/// update types 7 and 15 by the server's numbering (removed from the queue, a
-/// member gone offline). System lines all. This client used to print its own
-/// English for each update type instead ("Dungeon Finder: ...").
-void sayLfgUpdate(GameHandler& gh, uint8_t updateType, bool extraInfo, bool joined, bool queued,
-                  bool prevJoined, bool prevQueued, bool proposalEnds, bool mayAnnounceJoin) {
-    if (proposalEnds && extraInfo && queued)
-        gameError(gh, ErrTo::Chat, "ERR_LFG_PROPOSAL_FAILED", "Your group has been returned to the queue.");
-    bool left = false;
-    if (joined && !prevJoined) {
-        if (mayAnnounceJoin)
-            gameError(gh, ErrTo::Chat, "ERR_LFG_JOINED_QUEUE", "You are now queued in the Dungeon Finder.");
-        return;
-    }
-    left = (!joined && prevJoined) || (!queued && prevQueued);
-    if (left && (updateType == 7 || updateType == 15))
-        gameError(gh, ErrTo::Chat, "ERR_LFG_LEFT_QUEUE", "You have left the Dungeon Finder queue.");
-}
-
-}  // namespace
 
 void SocialHandler::handleLfgUpdatePlayer(network::Packet& packet) {
-    //   uint8  updateType
-    //   uint8  extraInfo
-    //   if extraInfo:
-    //     uint8  queued
-    //     uint8  0
-    //     uint8  0
-    //     uint8  dungeonCount
-    //     uint32 dungeon x dungeonCount
-    //     cstring comment
-    if (!packet.hasRemaining(2)) return;
-    const uint8_t updateType = packet.readUInt8();
-    const bool extraInfo = packet.readUInt8() != 0;
-    bool queued = false;
-    if (extraInfo && packet.hasRemaining(4)) {
-        queued = packet.readUInt8() != 0;
-        packet.readUInt8();
-        packet.readUInt8();
-        readLfgDungeonList(packet);
-    }
-    // The queue before this update, as near as this client keeps it: listed
-    // whenever there is any state, queued while queued or offered a group.
-    const bool prevJoined = lfgState_ != LfgState::None;
-    const bool prevQueued = lfgState_ == LfgState::Queued || lfgState_ == LfgState::Proposal;
-    const bool proposalPending = lfgProposalId_ != 0 || lfgState_ == LfgState::Proposal;
-    sayLfgUpdate(owner_, updateType, extraInfo, /*joined=*/extraInfo, queued, prevJoined, prevQueued,
-                 proposalPending && !isInGroup(), /*mayAnnounceJoin=*/true);
-    applyLfgUpdate(updateType, extraInfo, queued, /*inDungeon=*/false);
+    uint8_t updateType = 0;
+    LfgUpdateBody body;
+    if (!parseLfgUpdate(packet, /*party=*/false, updateType, body)) return;
+    applyLfgUpdate(updateType, body, /*party=*/false);
 }
 
 void SocialHandler::handleLfgUpdateParty(network::Packet& packet) {
-    // The same opening, and then a body of its own - a join flag ahead of the
-    // queued one and three more bytes before the count. Routed to the player
-    // handler before this existed, which read the join flag as "queued" and
-    // the dungeon count out of the middle of the padding.
-    //
-    //   uint8  updateType
-    //   uint8  extraInfo
-    //   if extraInfo:
-    //     uint8  joined
-    //     uint8  queued
-    //     uint8  0
-    //     uint8  0
-    //     uint8  0 x3
-    //     uint8  dungeonCount
-    //     uint32 dungeon x dungeonCount
-    //     cstring comment
-    if (!packet.hasRemaining(2)) return;
-    const uint8_t updateType = packet.readUInt8();
-    const bool extraInfo = packet.readUInt8() != 0;
-    bool queued = false;
-    bool joined = false;
-    bool hasDungeons = false;
-    if (extraInfo && packet.hasRemaining(8)) {
-        joined = packet.readUInt8() != 0;
-        queued = packet.readUInt8() != 0;
-        for (int i = 0; i < 5; ++i) packet.readUInt8();
-        if (packet.hasRemaining(1)) {
-            const size_t at = packet.getReadPos();
-            hasDungeons = packet.readUInt8() != 0;
-            packet.setReadPos(at);
-        }
-        readLfgDungeonList(packet);
-    }
-    {
-        const bool prevJoined = lfgState_ != LfgState::None;
-        const bool prevQueued = lfgState_ == LfgState::Queued || lfgState_ == LfgState::Proposal;
-        const bool proposalPending = lfgProposalId_ != 0 || lfgState_ == LfgState::Proposal;
-        sayLfgUpdate(owner_, updateType, extraInfo, joined, queued, prevJoined, prevQueued,
-                     proposalPending && isInGroup(), /*mayAnnounceJoin=*/hasDungeons);
-    }
-    // The party's join flag covers being in the dungeon as well as being in the
-    // queue, so it only means "in a dungeon" when the queue flag is off.
-    applyLfgUpdate(updateType, extraInfo, queued, joined && !queued);
+    uint8_t updateType = 0;
+    LfgUpdateBody body;
+    if (!parseLfgUpdate(packet, /*party=*/true, updateType, body)) return;
+    applyLfgUpdate(updateType, body, /*party=*/true);
 }
 
-/// The dungeons the update is about. The first is the one the queue window
-/// names; the comment after them is the group's listing text, which this
-/// client does not offer a way to set.
-void SocialHandler::readLfgDungeonList(network::Packet& packet) {
-    if (!packet.hasRemaining(1)) return;
-    const uint8_t count = packet.readUInt8();
-    for (uint8_t i = 0; i < count && packet.hasRemaining(4); ++i) {
-        const uint32_t dungeonEntry = packet.readUInt32();
-        if (i == 0) lfgDungeonId_ = dungeonEntry & 0x00FFFFFFu;
+void SocialHandler::applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party) {
+    using namespace lfg_update_type;
+    LfgUpdateBody& stored = party ? lfgPartyUpdate_ : lfgPlayerUpdate_;
+    const LfgUpdateOutcome outcome = decideLfgUpdate(
+        updateType, body, stored, party, isInGroup(), lfgProposalValid_,
+        [this](const LfgUpdateBody& b) { return lfgBodyHasRaid(b); });
+
+    if (outcome.proposalEnds) {
+        clearLfgProposal();
+        if (outcome.proposalReturnedLine)
+            gameError(owner_, ErrTo::Chat, "ERR_LFG_PROPOSAL_FAILED", "Your group has been returned to the queue.");
+        owner_.fireAddonEvent(outcome.proposalEvent);
     }
-}
+    if (!outcome.changed) return;
 
-/// The state the packet describes, and a word about it if it moved.
-void SocialHandler::applyLfgUpdate(uint8_t updateType, bool extraInfo,
-                                   bool queued, bool inDungeon) {
-    const LfgState previous = lfgState_;
+    if (outcome.line) {
+        struct Line { const char* key; const char* enUS; };
+        static constexpr Line kLines[] = {
+            {"ERR_LFG_JOINED_QUEUE", "You are now queued in the Dungeon Finder."},
+            {"ERR_LFG_JOINED_LIST", "You are now listed in the Raid Browser."},
+            {"ERR_LFG_LEFT_QUEUE", "You have left the Dungeon Finder queue."},
+            {"ERR_LFG_LEFT_LIST", "You have been removed from the Raid Browser."},
+        };
+        for (const auto& l : kLines)
+            if (std::string_view(l.key) == outcome.line) gameError(owner_, ErrTo::Chat, l.key, l.enUS);
+    }
+    stored = body;
+    if (!body.dungeons.empty()) lfgDungeonId_ = body.dungeons.front() & 0x00FFFFFFu;
 
-    // A proposal is the one state the flags do not distinguish: the server
-    // sends it with the queue flag still set, because a proposal is a queue
-    // that has found something.
-    if (updateType == kLfgGroupFound || updateType == kLfgProposalBegin) {
+    // This client's own summary of the queue, which GetLFGMode reads. A
+    // proposal is the one state the flags do not tell apart: the server sends
+    // it with the queue flag still set. The types are the client's numbering
+    // (lfg_update_type); the list this used before ran one high from 5 up,
+    // so 14 - the routine status restatement - read as a proposal starting.
+    if (updateType == kGroupFound || updateType == kProposalBegin) {
         lfgState_ = LfgState::Proposal;
-    } else if (!extraInfo) {
-        // No body means no state, which is the server's way of saying none -
-        // and for the types that never carry one it is not a statement about
-        // the queue at all, so those are left alone.
-        switch (updateType) {
-            case kLfgDefault:
-            case kLfgLeaderUnk1:
-            case kLfgGroupMemberOffline:
-                break;
-            default:
-                lfgState_ = LfgState::None;
-                break;
-        }
-    } else if (queued) {
+    } else if (!body.extraInfo) {
+        // No body means no queue - except for the types that are not a
+        // statement about the queue at all.
+        if (updateType != kDefault && updateType != kLeaderUnk1 &&
+            updateType != kGroupMemberOffline)
+            lfgState_ = LfgState::None;
+    } else if (body.queued) {
         lfgState_ = LfgState::Queued;
-    } else if (inDungeon) {
+    } else if (party && body.joined) {
+        // The party's join flag covers being in the dungeon as well as being
+        // in the queue, so it only means "in a dungeon" when not queued.
         lfgState_ = LfgState::InDungeon;
     }
 
-    // The lines are sayLfgUpdate's, said before the state above moved.
-    (void)previous;
-    if (!lfgUpdateKnown(updateType) && updateType != kLfgUpdateStatus && updateType != kLfgDefault) {
-        // An update type this client has no name for. Said once so it can be
-        // added, rather than silently deciding the queue is over.
-        static std::set<uint8_t> said;
-        if (said.insert(updateType).second) {
-            LOG_WARNING("SMSG_LFG_UPDATE: unhandled update type ",
-                        static_cast<int>(updateType), " (extraInfo=", extraInfo,
-                        ", queued=", queued, ") - the queue state is left as it was");
-        }
-    }
-
-    // Queue state changed - GetLFGInfoServer answers the new one.
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
+    // LFG_UPDATE, false, from the side the update is for (0x0055bdc0).
+    if (outcome.fireUpdate) owner_.fireAddonEvent("LFG_UPDATE", {eventBool(false)});
 }
 
 void SocialHandler::handleLfgPlayerReward(network::Packet& packet) {
@@ -4614,11 +4465,13 @@ void SocialHandler::handleLfgPlayerReward(network::Packet& packet) {
     reward.randomDungeonId = packet.readUInt32();
     reward.dungeonId       = packet.readUInt32();
     reward.done            = packet.readUInt8() != 0;
-    packet.readUInt32();   // the constant 1
+    // 0x0055bdc0 names the four after it: strangers, base money, base XP,
+    // variable money, variable XP - the variable parts paid per stranger.
+    const uint32_t strangers = packet.readUInt32();
     reward.money           = packet.readUInt32();
     reward.xp              = packet.readUInt32();
-    packet.readUInt32();
-    packet.readUInt32();
+    const uint32_t varMoney = packet.readUInt32();
+    const uint32_t varXp    = packet.readUInt32();
     const uint8_t itemNum = packet.readUInt8();
     for (uint8_t i = 0; i < itemNum && packet.hasRemaining(12); ++i) {
         LfgCompletionReward::Item item;
@@ -4635,11 +4488,24 @@ void SocialHandler::handleLfgPlayerReward(network::Packet& packet) {
     // ERR_QUEST_REWARD_EXP_I and ERR_QUEST_REWARD_MONEY_S, system lines
     // (0x0055bdc0); the items are announced by their own pushes. This built
     // an English "Dungeon Finder reward: ..." it never printed.
-    if (reward.xp > 0)
-        gameError(owner_, ErrTo::Chat, "ERR_QUEST_REWARD_EXP_I", "Experience gained: %d.", {std::to_string(reward.xp)});
-    if (reward.money > 0)
-        gameError(owner_, ErrTo::Chat, "ERR_QUEST_REWARD_MONEY_S", "Received %s.",
-                  {interface_text::moneyText(reward.money, [](const char* k, const char* e) { return interfaceString(k, e); })});
+    //
+    // Each figure on its own line when above zero, in the client's order: the
+    // base XP, the variable XP times the strangers, the base money, the
+    // variable money times the strangers. Signed, as it compares them.
+    const auto sayXp = [&](int32_t xp) {
+        if (xp > 0)
+            gameError(owner_, ErrTo::Chat, "ERR_QUEST_REWARD_EXP_I", "Experience gained: %d.", {std::to_string(xp)});
+    };
+    const auto sayMoney = [&](int32_t money) {
+        if (money > 0)
+            gameError(owner_, ErrTo::Chat, "ERR_QUEST_REWARD_MONEY_S", "Received %s.",
+                      {interface_text::moneyText(static_cast<uint32_t>(money),
+                                                 [](const char* k, const char* e) { return interfaceString(k, e); })});
+    };
+    sayXp(static_cast<int32_t>(reward.xp));
+    sayXp(static_cast<int32_t>(strangers * varXp));
+    sayMoney(static_cast<int32_t>(reward.money));
+    sayMoney(static_cast<int32_t>(strangers * varMoney));
 
     // The reward toast. It carries no arguments - the frame reads the nine
     // values back through GetLFGCompletionReward - so the store above has to

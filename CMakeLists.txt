@@ -707,6 +707,7 @@ set(WOWEE_SOURCES
     src/game/spline_packet.cpp
     src/game/shapeshift_forms.cpp
     src/game/calendar_data.cpp
+    src/game/lfg_update.cpp
     src/game/faction_hostility.cpp
     src/game/packet_parsers_tbc.cpp
     src/game/packet_parsers_classic.cpp
