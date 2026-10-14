@@ -489,6 +489,12 @@ network::Packet GuildBankSwapItemsPacket::buildInventoryToBank(
     return p;
 }
 
+bool GuildBankMoneyWithdrawnParser::parse(network::Packet& packet, int32_t& remaining) {
+    if (!packet.hasRemaining(4)) return false;
+    remaining = static_cast<int32_t>(packet.readUInt32());
+    return true;
+}
+
 bool GuildBankListParser::parse(network::Packet& packet, GuildBankData& data) {
     if (!packet.hasRemaining(14)) return false;
 

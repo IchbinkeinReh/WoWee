@@ -994,8 +994,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     // The money the player may still take today, an int32 (-1 no limit), and
     // GUILDBANK_UPDATE_WITHDRAWMONEY (0x005a4ab0).
     table[Opcode::MSG_GUILD_BANK_MONEY_WITHDRAWN] = [this](network::Packet& packet) {
-        if (packet.hasRemaining(4)) {
-            guildBankWithdrawMoney_ = static_cast<int32_t>(packet.readUInt32());
+        if (GuildBankMoneyWithdrawnParser::parse(packet, guildBankWithdrawMoney_)) {
             if (owner_.addonEventCallbackRef())
                 owner_.addonEventCallbackRef()("GUILDBANK_UPDATE_WITHDRAWMONEY", {});
         }

@@ -3664,6 +3664,14 @@ public:
     static bool parse(network::Packet& packet, GuildBankData& data);
 };
 
+/** MSG_GUILD_BANK_MONEY_WITHDRAWN's answer: the money the player may still
+ *  take today, an int32, -1 for no limit (0x005a4ab0). False when it is cut
+ *  short, with `remaining` untouched. */
+class GuildBankMoneyWithdrawnParser {
+public:
+    static bool parse(network::Packet& packet, int32_t& remaining);
+};
+
 // ============================================================
 // Auction House System
 // ============================================================

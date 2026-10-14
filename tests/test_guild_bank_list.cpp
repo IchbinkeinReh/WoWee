@@ -154,3 +154,24 @@ TEST_CASE("an empty slot carries nothing after its entry") {
     CHECK(data.tabItems[1].itemEntry == 858u);
     CHECK(data.tabItems[1].stackCount == 5u);
 }
+
+// MSG_GUILD_BANK_MONEY_WITHDRAWN's answer: one int32, the money the player may
+// still take today, -1 for no limit (0x005a4ab0 reads it into 0x00c1dc34).
+TEST_CASE("the money left to withdraw is one int32, -1 for no limit") {
+    const auto read = [](std::vector<uint8_t> bytes, int32_t& out) {
+        wowee::network::Packet packet(0, std::move(bytes));
+        const bool ok = GuildBankMoneyWithdrawnParser::parse(packet, out);
+        if (ok) CHECK_FALSE(packet.hasData());   // all four bytes, nothing else
+        return ok;
+    };
+    int32_t remaining = 0;
+    REQUIRE(read({0x40, 0x0D, 0x03, 0x00}, remaining));   // 200000 copper, 20g
+    CHECK(remaining == 200000);
+    REQUIRE(read({0xFF, 0xFF, 0xFF, 0xFF}, remaining));
+    CHECK(remaining == -1);
+
+    // Cut short: nothing read, the last answer kept.
+    remaining = 5;
+    CHECK_FALSE(read({0x01, 0x02, 0x03}, remaining));
+    CHECK(remaining == 5);
+}

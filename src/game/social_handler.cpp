@@ -2957,11 +2957,28 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
             owner_.queryGuildBankTab(owner_.getGuildBankActiveTab());
             owner_.requestGuildBankWithdrawMoney();
             break;
+        case GuildEvent::RANK_UPDATED: {
+            // 0x006d92d0 case 10: when the rank changed is the player's own
+            // (PLAYER_GUILDRANK against the first string), its rights are asked
+            // for again and so is the money it may take (0x005caa40:
+            // MSG_GUILD_PERMISSIONS, MSG_GUILD_BANK_MONEY_WITHDRAWN), then the
+            // tab the open vault shows (0x005a5800, nothing with no banker).
+            // MSG_GUILD_PERMISSIONS has no reader in this client yet, so only
+            // the money is asked for.
+            const uint16_t unitEnd = fieldIndex(UF::UNIT_END);
+            const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+            if (data.numStrings >= 1 && unitEnd != 0xFFFF && self &&
+                self->getField(static_cast<uint16_t>(unitEnd + 4)) ==
+                    static_cast<uint32_t>(std::strtol(data.strings[0].c_str(), nullptr, 10))) {
+                owner_.requestGuildBankWithdrawMoney();
+                owner_.queryGuildBankTab(owner_.getGuildBankActiveTab());
+            }
+            break;
+        }
         case GuildEvent::BANK_BAG_SLOTS_CHANGED:
         case GuildEvent::BANK_TAB_PURCHASED:
         case GuildEvent::BANK_TAB_UPDATED:
         case GuildEvent::BANK_TEXT_CHANGED:
-        case GuildEvent::RANK_UPDATED:
         case GuildEvent::RANK_DELETED:
             // Silent here; the interface events they mean are fired below.
             break;
