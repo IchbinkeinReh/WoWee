@@ -232,6 +232,37 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
         data.missileDelayMs = packet.readUInt32();
         data.hasMissileTrajectory = true;
     }
+    // 0x20: the ammo's display and inventory type; 0x80000: two u32s more.
+    if (data.castFlags & 0x20u) {
+        if (!packet.hasRemaining(8)) return true;
+        packet.readUInt32();
+        packet.readUInt32();
+    }
+    if (data.castFlags & 0x80000u) {
+        if (!packet.hasRemaining(8)) return true;
+        packet.readUInt32();
+        packet.readUInt32();
+    }
+    // Target flag 0x40: a byte the client keeps by the caster (0x0080e100).
+    if (data.targetFlags & 0x40u) {
+        if (!packet.hasRemaining(1)) return true;
+        packet.readUInt8();
+    }
+    // Target flag 0x80000: a u32 count, then each a place (three floats) and
+    // the u64 of what it is relative to, 0 for the world.
+    if (data.targetFlags & 0x80000u) {
+        if (!packet.hasRemaining(4)) return true;
+        const uint32_t count = packet.readUInt32();
+        for (uint32_t i = 0; i < count; ++i) {
+            if (!packet.hasRemaining(20)) return true;
+            SpellGoExtraTarget extra;
+            extra.x = packet.readFloat();
+            extra.y = packet.readFloat();
+            extra.z = packet.readFloat();
+            extra.transportGuid = packet.readUInt64();
+            data.extraTargets.push_back(extra);
+        }
+    }
 
     LOG_DEBUG("Spell go: spell=", data.spellId, " hits=", static_cast<int>(data.hitCount),
              " misses=", static_cast<int>(data.missCount));

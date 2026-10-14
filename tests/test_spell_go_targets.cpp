@@ -119,3 +119,72 @@ TEST_CASE("an ADJUST_MISSILE cast keeps its elevation and delay", "[spell_go]") 
     CHECK(data.missileElevation == 0.75f);
     CHECK(data.missileDelayMs == 1800);
 }
+
+TEST_CASE("target flag 0x80000's places are read, and the packet to its end", "[spell_go]") {
+    // 0x0080e1b0 after the targets: power (0x800), the trajectory (0x20000),
+    // the ammo (0x20), cast flag 0x80000's two u32s, the destination's byte
+    // (target flag 0x40), then target flag 0x80000's count and places, each
+    // three floats and a u64.
+    wowee::network::Packet p(0);
+    p.writePackedGuid(kCaster);
+    p.writePackedGuid(kCaster);
+    p.writeUInt8(0);
+    p.writeUInt32(42208);
+    p.writeUInt32(0x100 | 0x800 | 0x20000 | 0x20 | 0x80000);
+    p.writeUInt32(1000);
+    p.writeUInt8(0);         // hits
+    p.writeUInt8(0);         // misses
+    p.writeUInt32(0x40 | 0x80000);
+    p.writePackedGuid(0);
+    p.writeFloat(1.0f); p.writeFloat(2.0f); p.writeFloat(3.0f);
+    p.writeUInt32(500);      // power
+    p.writeFloat(0.5f);      // elevation
+    p.writeUInt32(900);      // delay
+    p.writeUInt32(0x1111);   // ammo display
+    p.writeUInt32(0x2222);   // ammo inventory type
+    p.writeUInt32(0x3333);   // cast flag 0x80000
+    p.writeUInt32(0x4444);
+    p.writeUInt8(7);         // the destination's byte
+    p.writeUInt32(2);        // places
+    p.writeFloat(10.0f); p.writeFloat(20.0f); p.writeFloat(30.0f);
+    p.writeUInt64(0);
+    p.writeFloat(-1.5f); p.writeFloat(2.5f); p.writeFloat(-3.5f);
+    p.writeUInt64(0x1FC0000000000ABCull);
+    SpellGoData data;
+    REQUIRE(SpellGoParser::parse(p, data));
+    CHECK(data.missileElevation == 0.5f);
+    CHECK(data.missileDelayMs == 900);
+    REQUIRE(data.extraTargets.size() == 2);
+    CHECK(data.extraTargets[0].x == 10.0f);
+    CHECK(data.extraTargets[0].y == 20.0f);
+    CHECK(data.extraTargets[0].z == 30.0f);
+    CHECK(data.extraTargets[0].transportGuid == 0);
+    CHECK(data.extraTargets[1].x == -1.5f);
+    CHECK(data.extraTargets[1].y == 2.5f);
+    CHECK(data.extraTargets[1].z == -3.5f);
+    CHECK(data.extraTargets[1].transportGuid == 0x1FC0000000000ABCull);
+    CHECK(p.getRemainingSize() == 0);
+}
+
+TEST_CASE("no places without target flag 0x80000, whatever the cast flags", "[spell_go]") {
+    // Cast flag 0x80000 is two u32s of its own; it does not stand for the
+    // targets' places.
+    wowee::network::Packet q(0);
+    q.writePackedGuid(kCaster);
+    q.writePackedGuid(kCaster);
+    q.writeUInt8(0);
+    q.writeUInt32(1);
+    q.writeUInt32(0x100 | 0x80000);
+    q.writeUInt32(1000);
+    q.writeUInt8(0);
+    q.writeUInt8(0);
+    q.writeUInt32(0x2);
+    q.writePackedGuid(kTarget);
+    q.writeUInt32(5);
+    q.writeUInt32(6);
+    SpellGoData data;
+    REQUIRE(SpellGoParser::parse(q, data));
+    CHECK(data.targetGuid == kTarget);
+    CHECK(data.extraTargets.empty());
+    CHECK(q.getRemainingSize() == 0);
+}

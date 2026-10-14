@@ -2426,6 +2426,14 @@ struct SpellGoMissEntry {
     uint8_t  missType   = 0;  // 0=MISS 1=DODGE 2=PARRY 3=BLOCK 4=EVADE 5=IMMUNE 6=DEFLECT 7=ABSORB 8=RESIST 11=REFLECT
 };
 
+/// SMSG_SPELL_GO target flag 0x80000: a further place the cast goes to, in
+/// server coordinates - in the frame of the object transportGuid names, or
+/// the world's where that is 0 (0x0080e1b0).
+struct SpellGoExtraTarget {
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    uint64_t transportGuid = 0;
+};
+
 struct SpellGoData {
     /// Cast flag 0x800: the caster's power of the spell's type after the cast
     /// (0x0080e1b0).
@@ -2466,6 +2474,8 @@ struct SpellGoData {
     bool hasMissileTrajectory = false;
     float missileElevation = 0.0f;
     uint32_t missileDelayMs = 0;
+    /// Target flag 0x80000's places, as read (WotLK only).
+    std::vector<SpellGoExtraTarget> extraTargets;
 
     [[nodiscard]] bool isValid() const { return spellId != 0; }
 };

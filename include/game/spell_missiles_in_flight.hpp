@@ -8,7 +8,8 @@
 /// (Spell.dbc, +0xbc) other than 0 when the casting unit is known: the cast's
 /// caster unit, spell and the packet's time (the u32 after the cast flags),
 /// arriving after the flight from the caster to the destination (target flag
-/// 0x40) or else to the first unit hit - distance over speed, in ms. Each
+/// 0x40) or else to the first unit hit - distance over speed, in ms - and
+/// one more to each place of target flag 0x80000 (0x00804b20 again). Each
 /// frame drops those arrived (0x00804c10, from the world's update); leaving
 /// the world drops all (0x008047a0). Times are the client's clock
 /// (0x0086ae20), in ms.

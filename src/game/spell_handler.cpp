@@ -15,6 +15,7 @@
 #include "game/packet_parsers.hpp"
 #include "game/entity.hpp"
 #include "game/go_interaction_anim.hpp"
+#include "game/transport_manager.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
@@ -3299,19 +3300,33 @@ void SpellHandler::noteMissileInFlight(const SpellGoData& data) {
     const auto caster = entities.getEntity(data.casterUnit);
     if (!caster) return;
     const glm::vec3 from(caster->getX(), caster->getY(), caster->getZ());
+    const auto add = [&](const glm::vec3& to) {
+        missilesInFlight_.add({.caster = data.casterUnit, .spellId = data.spellId, .castTime = data.castTime,
+                               .arrivesAt = historyNowMs() + spell_missiles::flightMs(glm::length(to - from), speed)});
+    };
     // To the destination where the targets have one, else to the first unit
-    // hit, if the client knows it; otherwise nothing is added.
-    glm::vec3 to;
+    // hit, if the client knows it; otherwise none for these. The destination
+    // is the wire's, as the caster's place is not.
     if ((data.targetFlags & 0x40u) != 0 && data.hasDestLocation) {
-        to = glm::vec3(data.destX, data.destY, data.destZ);
-    } else {
-        if (data.hitTargets.empty()) return;
-        const auto target = entities.getEntity(data.hitTargets.front());
-        if (!target) return;
-        to = glm::vec3(target->getX(), target->getY(), target->getZ());
+        add(core::coords::serverToCanonical(glm::vec3(data.destX, data.destY, data.destZ)));
+    } else if (!data.hitTargets.empty()) {
+        if (const auto target = entities.getEntity(data.hitTargets.front()))
+            add(glm::vec3(target->getX(), target->getY(), target->getZ()));
     }
-    missilesInFlight_.add({.caster = data.casterUnit, .spellId = data.spellId, .castTime = data.castTime,
-                           .arrivesAt = historyNowMs() + spell_missiles::flightMs(glm::length(to - from), speed)});
+    // Target flag 0x80000: one more for each further place - one in a
+    // transport's frame put in the world by it, and one whose transport is
+    // not known left out (0x0080e1b0 -> 0x0074b4c0, 0x00804b20).
+    for (const SpellGoExtraTarget& extra : data.extraTargets) {
+        const glm::vec3 place(extra.x, extra.y, extra.z);
+        if (extra.transportGuid == 0) {
+            add(core::coords::serverToCanonical(place));
+            continue;
+        }
+        TransportManager* transports = owner_.getTransportManager();
+        if (!transports || !transports->getTransport(extra.transportGuid)) continue;
+        add(transports->getPlayerWorldPosition(extra.transportGuid,
+                                               transports->serverToTransportLocal(extra.transportGuid, place)));
+    }
 }
 
 void SpellHandler::handleSpellGo(network::Packet& packet) {
