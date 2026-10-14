@@ -991,6 +991,16 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
 
     // ---- Guild Bank ----
     table[Opcode::SMSG_GUILD_BANK_LIST] = [this](network::Packet& packet) { handleGuildBankList(packet); };
+    // The money the player may still take today, an int32 (-1 no limit), and
+    // GUILDBANK_UPDATE_WITHDRAWMONEY (0x005a4ab0).
+    table[Opcode::MSG_GUILD_BANK_MONEY_WITHDRAWN] = [this](network::Packet& packet) {
+        if (packet.hasRemaining(4)) {
+            guildBankWithdrawMoney_ = static_cast<int32_t>(packet.readUInt32());
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("GUILDBANK_UPDATE_WITHDRAWMONEY", {});
+        }
+        packet.skipAll();
+    };
     // The reply shares its opcode with the request: a tab id and its text.
     table[Opcode::MSG_QUERY_GUILD_BANK_TEXT] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(1)) return;
@@ -3798,10 +3808,16 @@ void InventoryHandler::guildBankDepositFromInventory(uint8_t srcBag, uint8_t src
 }
 
 void InventoryHandler::setGuildBankMoney(uint64_t money) {
-    if (guildBankData_.money == money) return;
+    // Guild event 17 sets it and says so whether or not it moved (0x006d92d0).
     guildBankData_.money = money;
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("GUILDBANK_UPDATE_MONEY", {});
+}
+
+void InventoryHandler::requestGuildBankWithdrawMoney() {
+    if (!owner_.isInWorld() || !owner_.getSocket()) return;
+    network::Packet pkt(wireOpcode(Opcode::MSG_GUILD_BANK_MONEY_WITHDRAWN));
+    owner_.getSocket()->send(pkt);
 }
 
 void InventoryHandler::handleGuildBankList(network::Packet& packet) {
@@ -3833,11 +3849,11 @@ void InventoryHandler::handleGuildBankList(network::Packet& packet) {
             owner_.addonEventCallbackRef()("GUILDBANK_UPDATE_TABS", {});
         }
         owner_.addonEventCallbackRef()("GUILDBANKBAGSLOTS_CHANGED", {});
-        // The money line and the withdraw allowance, which are read from
-        // GetGuildBankMoney and GetGuildBankWithdrawMoney and were never asked
-        // for again after the frame first drew.
+        // The money line, read from GetGuildBankMoney. Not the withdraw
+        // allowance: that is MSG_GUILD_BANK_MONEY_WITHDRAWN's, which says so
+        // itself (0x005a4ab0) - the list's own allowance is the tab's items
+        // (0x005a7250 -> 0x00c1dc30).
         owner_.addonEventCallbackRef()("GUILDBANK_UPDATE_MONEY", {});
-        owner_.addonEventCallbackRef()("GUILDBANK_UPDATE_WITHDRAWMONEY", {});
     }
     for (const auto& tab : guildBankData_.tabs) {
         for (const auto& item : tab.items) {

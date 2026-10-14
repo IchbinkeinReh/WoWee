@@ -949,6 +949,9 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         // No calendar request is pending in a new session (0x00528010 ->
         // 0x005be2a0), and the interface is told so.
         setCalendarActionPending(false);
+        // And the guild money the player may take today is asked for
+        // (0x00528010 -> 0x005a56f0).
+        requestGuildBankWithdrawMoney();
     }
 
     // Fire PLAYER_ENTERING_WORLD - THE most important event for addon initialization.
@@ -1571,6 +1574,14 @@ const GuildBankData& GameHandler::getGuildBankData() const {
     if (inventoryHandler_) return inventoryHandler_->getGuildBankData();
     return guildBankData_;
 }
+void GameHandler::requestGuildBankWithdrawMoney() {
+    if (inventoryHandler_) inventoryHandler_->requestGuildBankWithdrawMoney();
+}
+
+int32_t GameHandler::getGuildBankWithdrawMoney() const {
+    return inventoryHandler_ ? inventoryHandler_->getGuildBankWithdrawMoney() : 0;
+}
+
 void GameHandler::setGuildBankMoney(uint64_t money) {
     if (inventoryHandler_) inventoryHandler_->setGuildBankMoney(money);
     else guildBankData_.money = money;

@@ -466,6 +466,11 @@ public:
     /// the new total from the event, and GetGuildBankMoney has to answer with
     /// it or the panel shows the figure it opened with.
     void setGuildBankMoney(uint64_t money);
+    /// Ask how much guild money the player may still take today
+    /// (MSG_GUILD_BANK_MONEY_WITHDRAWN, empty), and the answer: -1 for no
+    /// limit, 0 until it arrives (0x005a4ab0 -> 0x00c1dc34).
+    void requestGuildBankWithdrawMoney();
+    int32_t getGuildBankWithdrawMoney() const { return guildBankWithdrawMoney_; }
     uint8_t getGuildBankActiveTab() const { return guildBankActiveTab_; }
     void setGuildBankActiveTab(uint8_t tab) { guildBankActiveTab_ = tab; }
 
@@ -777,6 +782,7 @@ private:
     uint64_t guildBankerGuid_ = 0;
     std::array<std::string, 6> guildBankTabText_{};
     GuildBankData guildBankData_;
+    int32_t guildBankWithdrawMoney_ = 0;
     uint8_t guildBankActiveTab_ = 0;
 
     // ---- Auction House state ----

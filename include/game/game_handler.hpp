@@ -3606,6 +3606,10 @@ public:
     /// The bank's balance as SMSG_GUILD_EVENT reports it, for guild members
     /// who are not the one standing at the banker.
     void setGuildBankMoney(uint64_t money);
+    /// MSG_GUILD_BANK_MONEY_WITHDRAWN: ask for, and read back, the money the
+    /// player may still take from the guild bank today (-1 is no limit).
+    void requestGuildBankWithdrawMoney();
+    int32_t getGuildBankWithdrawMoney() const;
     uint8_t getGuildBankActiveTab() const;
     void setGuildBankActiveTab(uint8_t tab);
 

@@ -3900,19 +3900,26 @@ void registerInventoryLuaAPI(lua_State* L) {
                 gh->getGuildBankData().money) : 0.0);
             return 1;
         }},
+                // What MSG_GUILD_BANK_MONEY_WITHDRAWN last said, as it said
+                // it: -1 is no limit, which the panel tests for itself
+                // (`withdrawLimit >= 0`) to show "Unlimited" (0x005a44a0).
+                // Not the bank list's allowance, which counts the tab's items.
                 {"GetGuildBankWithdrawMoney", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            // -1 is the server saying "no limit", and the panel reads that as
-            // a number to compare against - a large one keeps the comparison
-            // true without pretending to a figure.
-            const int32_t w = gh ? gh->getGuildBankData().withdrawAmount : 0;
-            lua_pushnumber(L, w < 0 ? 100000000.0 : static_cast<double>(w));
+            lua_pushnumber(L, gh ? static_cast<double>(gh->getGuildBankWithdrawMoney()) : 0.0);
             return 1;
         }},
+                // 1 when the player is in a guild and their rank may withdraw
+                // gold (GR_RIGHT_WITHDRAW_GOLD, 0x80000), nil otherwise
+                // (0x005a5f60) - the rank's right, not how much is left.
                 {"CanWithdrawGuildBankMoney", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const int32_t w = gh ? gh->getGuildBankData().withdrawAmount : 0;
-            lua_pushboolean(L, (w != 0) ? 1 : 0);
+            constexpr uint32_t kWithdrawGold = 0x00080000u;
+            if (gh && gh->isInGuild() && (gh->getPlayerGuildRankRights() & kWithdrawGold)) {
+                lua_pushnumber(L, 1);
+            } else {
+                lua_pushnil(L);
+            }
             return 1;
         }},
                 {"GetCurrentGuildBankTab", [](lua_State* L) -> int {
@@ -3981,7 +3988,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushboolean(L, 1);   // viewable: it was sent, so it is
             lua_pushboolean(L, 1);   // canDeposit
             lua_pushnumber(L, 0);
-            lua_pushnumber(L, 0);
+            // Withdrawals remaining: the bank list's own allowance, -1 for no
+            // limit (0x005a67f0 pushes 0x00c1dc30, which 0x005a7250 reads).
+            lua_pushnumber(L, static_cast<double>(gh->getGuildBankData().withdrawAmount));
             return 6;
         }},
                 // GetGuildBankItemInfo(tab, slot) → texture, count, locked
