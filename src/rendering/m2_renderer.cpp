@@ -1280,6 +1280,11 @@ bool M2Renderer::hasModel(uint32_t modelId) const {
     return models.find(modelId) != models.end();
 }
 
+float M2Renderer::getModelVertexRadius(uint32_t modelId) const {
+    const auto it = models.find(modelId);
+    return it != models.end() ? it->second.vertexRadius : 0.0f;
+}
+
 namespace {
 
 } // namespace
@@ -1493,6 +1498,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     gpuModel.vertexBoxMin = model.vertexBoxMin;
     gpuModel.vertexBoxMax = model.vertexBoxMax;
     gpuModel.hasVertexBox = model.hasVertexBox;
+    gpuModel.vertexRadius = model.vertexRadius;
     gpuModel.boundRadius = model.boundRadius;
     // Fallback when the M2 header reports 0. Measured from the model origin,
     // like the header value it stands in for: the sphere this feeds is centred

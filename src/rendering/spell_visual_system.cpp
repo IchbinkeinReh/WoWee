@@ -1,6 +1,7 @@
 #include "rendering/spell_visual_system.hpp"
 #include <cctype>
 #include <future>
+#include "rendering/dynamic_object_visual.hpp"
 #include "rendering/mount_seat.hpp"
 #include "rendering/spell_missile.hpp"
 #include "rendering/placement_transform.hpp"
@@ -77,6 +78,10 @@ void SpellVisualSystem::loadSpellVisualDbc() {
     const uint32_t fxMinScaleField = fxLayout ? fxLayout->tryField("MinAllowedScale") : 0xFFFFFFFFu;
     const uint32_t fxMaxScaleField = fxLayout ? fxLayout->tryField("MaxAllowedScale") : 0xFFFFFFFFu;
     std::unordered_map<uint32_t, std::pair<float, float>> effectAllowedScales;
+    // AreaEffectSize (+0xc), which sizes a dynamic object's model
+    // (0x00704d90).
+    const uint32_t fxAreaSizeField = fxLayout ? fxLayout->tryField("AreaEffectSize") : 0xFFFFFFFFu;
+    std::unordered_map<uint32_t, float> effectAreaSizes;
     for (uint32_t i = 0; i < fxDbc->getRecordCount(); ++i) {
         uint32_t id   = fxDbc->getUInt32(i, 0);
         std::string p = fxDbc->getString(i, fxFilePathField);
@@ -89,6 +94,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                 effectScales[id] = fxDbc->getFloat(i, fxScaleField);
             if (fxMinScaleField < fxDbc->getFieldCount() && fxMaxScaleField < fxDbc->getFieldCount())
                 effectAllowedScales[id] = {fxDbc->getFloat(i, fxMinScaleField), fxDbc->getFloat(i, fxMaxScaleField)};
+            if (fxAreaSizeField < fxDbc->getFieldCount()) effectAreaSizes[id] = fxDbc->getFloat(i, fxAreaSizeField);
         }
     }
 
@@ -111,6 +117,14 @@ void SpellVisualSystem::loadSpellVisualDbc() {
     };
     // Each kit's AnimID (+8), for a mount aura's rider pose (0x00724820).
     std::unordered_map<uint32_t, int32_t> kitAnimIds;
+    // Each kit's WorldEffect (+0x38), BaseEffect (+0x14) and SoundID
+    // (+0x3c), for a dynamic object's (0x00704b30, 0x00704f60).
+    struct KitAreaColumns {
+        uint32_t worldEffect = 0;
+        uint32_t baseEffect = 0;
+        uint32_t soundId = 0;
+    };
+    std::unordered_map<uint32_t, KitAreaColumns> kitAreaColumns;
     if (kitDbc && kitDbc->isLoaded()) {
         const uint32_t fc = kitDbc->getFieldCount();
         auto kitColumn = [&](const char* name, uint32_t fallback) {
@@ -144,6 +158,15 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             if (!kitId) continue;
             if (kitAnimField != 0xFFFFFFFFu && kitDbc->getInt32(i, kitAnimField) >= 0)
                 kitAnimIds[kitId] = kitDbc->getInt32(i, kitAnimField);
+            {
+                KitAreaColumns& area = kitAreaColumns[kitId];
+                const auto column = [&](uint32_t field) {
+                    return field != 0xFFFFFFFFu ? static_cast<uint32_t>(std::max(kitDbc->getInt32(i, field), 0)) : 0u;
+                };
+                area.worldEffect = column(worldField);
+                area.baseEffect = column(kitColumn("BaseEffect", 5));
+                area.soundId = column(kitSoundField);
+            }
             KitRecord kit;
             kit.id = kitId;
             for (size_t k = 0; k < slotFields.size(); ++k) {
@@ -238,6 +261,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
     const uint32_t svStateKitField     = svColumn("StateKit");
     const uint32_t svStateDoneKitField = svColumn("StateDoneKit");
     const uint32_t svChannelKitField   = svColumn("ChannelKit");
+    const uint32_t svPersistentKitField = svColumn("PersistentAreaKit");
     const uint32_t svCastOffField[3] = {svColumn("MissileCastOffsetX"), svColumn("MissileCastOffsetY"),
                                         svColumn("MissileCastOffsetZ")};
     const uint32_t svImpactOffField[3] = {svColumn("MissileImpactOffsetX"), svColumn("MissileImpactOffsetY"),
@@ -315,6 +339,23 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             if (kits_.count(auraKits.channelKit) == 0) auraKits.channelKit = 0;
             if (auraKits.stateKit != 0 || auraKits.stateDoneKit != 0 || auraKits.channelKit != 0)
                 visualAuraKits_[vid] = auraKits;
+        }
+        // The PersistentAreaKit a dynamic object of the visual's spell shows
+        // (0x00704b30): the kit's WorldEffect, else its BaseEffect, and its
+        // SoundID (0x00704f60). Nothing where the kit table lacks the row.
+        if (const auto kitIt = kitAreaColumns.find(static_cast<uint32_t>(std::max(svInt(i, svPersistentKitField, 0), 0)));
+            kitIt != kitAreaColumns.end()) {
+            const KitAreaColumns& kit = kitIt->second;
+            PersistentArea area;
+            area.soundId = kit.soundId;
+            const uint32_t effect = dynamic_object::effectRow(kit.worldEffect, effectPaths.count(kit.worldEffect) != 0,
+                                                              kit.baseEffect, effectPaths.count(kit.baseEffect) != 0);
+            if (effect != 0) {
+                area.modelPath = effectPaths[effect];
+                if (auto it = effectAreaSizes.find(effect); it != effectAreaSizes.end()) area.areaEffectSize = it->second;
+                if (auto it = effectScales.find(effect); it != effectScales.end()) area.effectScale = it->second;
+            }
+            if (!area.modelPath.empty() || area.soundId != 0) persistentAreas_[vid] = std::move(area);
         }
         // Where a chain leaves and meets a unit (0x007fc5f0, 0x007fabf0).
         {
@@ -898,6 +939,10 @@ const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t sou
             if (!path.empty()) loaded.data = cachedAssetManager_->readFile(path);
             const float volume = dbc->getFloat(row, 24);
             if (volume > 0.0f) loaded.volume = volume;
+            if (dbc->getFieldCount() > 27) {
+                loaded.minDistance = dbc->getFloat(row, 26);
+                loaded.cutoff = dbc->getFloat(row, 27);
+            }
         }
         // Remembered either way, so a row without a file is read once.
         it = soundEntries_.emplace(soundId, std::move(loaded)).first;
@@ -2350,6 +2395,7 @@ void SpellVisualSystem::update(float deltaTime) {
     updateMountTransitions();
     expireWaitingKits();
     expireStateKitWaits();
+    updateDynamicObjects(deltaTime);
     publishClientStrips();
     if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
 
@@ -2407,6 +2453,109 @@ void SpellVisualSystem::update(float deltaTime) {
     }
 }
 
+void SpellVisualSystem::addDynamicObject(uint64_t guid, uint32_t visualId, uint8_t type, float radius,
+                                         float objectScale, const glm::vec3& position, float yaw) {
+    loadSpellVisualDbc();
+    removeDynamicObject(guid, false);
+    const auto it = persistentAreas_.find(visualId);
+    if (it == persistentAreas_.end()) return;
+    DynamicObjectVisual object{.guid = guid, .area = it->second, .type = type, .radius = radius,
+                               .objectScale = objectScale, .position = position, .yaw = yaw};
+    // 0x00704f60: the kit's sound on the object, looping, rising over two
+    // seconds.
+    if (const LoadedSound* sound = soundEntry(object.area.soundId)) {
+        const float maxDistance = sound->cutoff > 0.0f ? sound->cutoff : 100.0f;
+        const float minDistance = sound->minDistance > 0.0f ? std::min(sound->minDistance, maxDistance) : 1.0f;
+        object.soundHandle = audio::AudioEngine::instance().playSound3DLooping(
+            sound->data, position, sound->volume, maxDistance, minDistance, dynamic_object::kSoundFadeInSeconds);
+    }
+    dynamicObjects_.push_back(std::move(object));
+}
+
+void SpellVisualSystem::releaseDynamicObject(DynamicObjectVisual& object) {
+    // 0x00704940 / 0x007054e0: the sound falls over three seconds.
+    if (object.soundHandle != 0)
+        audio::AudioEngine::instance().stopSoundWithFade(object.soundHandle, dynamic_object::kSoundFadeOutSeconds);
+    object.soundHandle = 0;
+    if (object.instanceId != 0 && m2Renderer_) m2Renderer_->removeInstance(object.instanceId);
+    object.instanceId = 0;
+}
+
+void SpellVisualSystem::removeDynamicObject(uint64_t guid, bool destroyed) {
+    for (auto it = dynamicObjects_.begin(); it != dynamicObjects_.end(); ++it) {
+        if (it->guid != guid || it->decaying) continue;
+        // 0x00704a70: a destroyed object's model plays its Decay and the
+        // object goes as it ends (0x00704a40); otherwise it goes now.
+        if (it->instanceId != 0 && m2Renderer_ &&
+            dynamic_object::decaysOnRemoval(destroyed,
+                                            m2Renderer_->hasAnimation(it->instanceId, dynamic_object::kAnimDecay))) {
+            m2Renderer_->setInstanceAnimation(it->instanceId, dynamic_object::kAnimDecay, false);
+            it->decaying = true;
+            it->sequenceEndsIn = m2Renderer_->getInstanceAnimDuration(it->instanceId) * 0.001f;
+            return;
+        }
+        releaseDynamicObject(*it);
+        dynamicObjects_.erase(it);
+        return;
+    }
+}
+
+void SpellVisualSystem::updateDynamicObjects(float deltaTime) {
+    if (!m2Renderer_) return;
+    for (auto it = dynamicObjects_.begin(); it != dynamicObjects_.end();) {
+        DynamicObjectVisual& object = *it;
+        if (object.instanceId == 0 && !object.decaying && !object.area.modelPath.empty()) {
+            // A model that will not load is not asked for again.
+            if (const auto known = spellVisualModelIds_.find(object.area.modelPath);
+                known != spellVisualModelIds_.end() && spellVisualFailedModels_.count(known->second) != 0) {
+                object.area.modelPath.clear();
+            }
+        }
+        if (object.instanceId == 0 && !object.decaying && !object.area.modelPath.empty()) {
+            // 0x00704d90, as the model has loaded: its scale, and its Birth.
+            const uint32_t modelId = acquireEffectModel(object.area.modelPath);
+            if (modelId != 0) {
+                const float scale =
+                    dynamic_object::modelScale(object.type, object.radius, m2Renderer_->getModelVertexRadius(modelId),
+                                               true, object.area.areaEffectSize, object.area.effectScale) *
+                    object.objectScale;
+                object.instanceId = m2Renderer_->createInstance(modelId, object.position,
+                                                                glm::vec3(0.0f, 0.0f, object.yaw), scale);
+                if (object.instanceId != 0) {
+                    // Its events go to the object (0x00704f20 -> 0x00704c30).
+                    m2Renderer_->setInstanceEventOwner(object.instanceId, m2_event::Owner::DynamicObject, 0);
+                    object.hasHold = m2Renderer_->hasAnimation(object.instanceId, dynamic_object::kAnimHold);
+                    const uint32_t first = dynamic_object::firstSequence(
+                        m2Renderer_->hasAnimation(object.instanceId, dynamic_object::kAnimBirth));
+                    m2Renderer_->setInstanceAnimation(object.instanceId, first, first == dynamic_object::kAnimStand);
+                    object.sequenceEndsIn = m2Renderer_->getInstanceAnimDuration(object.instanceId) * 0.001f;
+                }
+            }
+        }
+        if (object.instanceId != 0 && object.sequenceEndsIn >= 0.0f) {
+            object.sequenceEndsIn -= deltaTime;
+            if (object.sequenceEndsIn <= 0.0f) {
+                object.sequenceEndsIn = -1.0f;
+                if (object.decaying) {
+                    // 0x00704a40: the Decay over, the object goes.
+                    releaseDynamicObject(object);
+                    it = dynamicObjects_.erase(it);
+                    continue;
+                }
+                // 0x00704af0 -> 0x00704a00: its Hold, else its Stand.
+                m2Renderer_->setInstanceAnimation(object.instanceId, dynamic_object::idleSequence(object.hasHold),
+                                                  true);
+            }
+        }
+        if (object.decaying && object.instanceId == 0) {
+            releaseDynamicObject(object);
+            it = dynamicObjects_.erase(it);
+            continue;
+        }
+        ++it;
+    }
+}
+
 void SpellVisualSystem::cancelAllPrecastVisuals() {
     // 0x007fec00: the cast's precast kits' effects go (0x00744bd0), a mount
     // transition's handing its unit over, which is then set to the
@@ -2429,6 +2578,8 @@ void SpellVisualSystem::cancelAllPrecastVisuals() {
 }
 
 void SpellVisualSystem::reset() {
+    for (DynamicObjectVisual& object : dynamicObjects_) releaseDynamicObject(object);
+    dynamicObjects_.clear();
     // Clear lingering spell visual instances from the previous map/combat session.
     // Without this, old effects could remain visible after teleport or map change.
     for (auto& sv : activeSpellVisuals_) {

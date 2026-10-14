@@ -1736,6 +1736,19 @@ public:
     /// holds it. Without one, the despawn callback.
     void setGameObjectDestroyCallback(GameObjectDespawnCallback cb) { gameObjectDestroyCallback_ = std::move(cb); }
 
+    /// A dynamic object come into view (DynamicObject_C, 0x00705230): its
+    /// DYNAMICOBJECT_SPELLID, BYTES' low byte (its type), RADIUS and
+    /// OBJECT_FIELD_SCALE_X, where it is (canonical) and its facing.
+    using DynamicObjectSpawnCallback = std::function<void(uint64_t guid, uint32_t spellId, uint8_t type, float radius,
+                                                          float scale, float x, float y, float z, float orientation)>;
+    void setDynamicObjectSpawnCallback(DynamicObjectSpawnCallback cb) { dynamicObjectSpawnCallback_ = std::move(cb); }
+    /// A dynamic object gone: `destroyed` by SMSG_DESTROY_OBJECT (0x004d7610
+    /// passes 1 to 0x00704a70), else out of range or the world unloaded.
+    using DynamicObjectDespawnCallback = std::function<void(uint64_t guid, bool destroyed)>;
+    void setDynamicObjectDespawnCallback(DynamicObjectDespawnCallback cb) {
+        dynamicObjectDespawnCallback_ = std::move(cb);
+    }
+
     /// A custom animation the server plays on a game object: the client's
     /// animation state for it (go_interaction_anim.hpp), Custom0..3 from
     /// SMSG_GAMEOBJECT_CUSTOM_ANIM (0x0070be90) and Despawn from
@@ -4102,6 +4115,8 @@ public:
         return gameObjectDestroyCallback_ ? gameObjectDestroyCallback_ : gameObjectDespawnCallback_;
     }
     auto& gameObjectInfoCallbackRef() { return gameObjectInfoCallback_; }
+    auto& dynamicObjectSpawnCallbackRef() { return dynamicObjectSpawnCallback_; }
+    auto& dynamicObjectDespawnCallbackRef() { return dynamicObjectDespawnCallback_; }
     auto& gameObjectMoveCallbackRef() { return gameObjectMoveCallback_; }
     auto& gameObjectSpawnCallbackRef() { return gameObjectSpawnCallback_; }
     auto& gameObjectStateCallbackRef() { return gameObjectStateCallback_; }
@@ -4885,6 +4900,8 @@ private:
     GameObjectMoveCallback gameObjectMoveCallback_;
     GameObjectDespawnCallback gameObjectDespawnCallback_;
     GameObjectDespawnCallback gameObjectDestroyCallback_;
+    DynamicObjectSpawnCallback dynamicObjectSpawnCallback_;
+    DynamicObjectDespawnCallback dynamicObjectDespawnCallback_;
     GameObjectInfoCallback gameObjectInfoCallback_;
     GameObjectCustomAnimCallback gameObjectCustomAnimCallback_;
     GameObjectStateCallback gameObjectStateCallback_;

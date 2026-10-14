@@ -6,6 +6,7 @@
 #include "rendering/character_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "game/game_handler.hpp"
 
@@ -108,6 +109,20 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
     // ...and one the server took away, which an animation may hold a while.
     gameHandler_.setGameObjectDestroyCallback([this](uint64_t guid) {
         entitySpawner_.destroyGameObject(guid);
+    });
+
+    // A dynamic object's model: its spell's visual's PersistentAreaKit
+    // (0x00705100 -> 0x00704b30), where it stands and facing as it faces.
+    gameHandler_.setDynamicObjectSpawnCallback([this](uint64_t guid, uint32_t spellId, uint8_t type, float radius,
+                                                      float scale, float x, float y, float z, float orientation) {
+        auto* visuals = renderer_.getSpellVisualSystem();
+        if (!visuals) return;
+        visuals->addDynamicObject(guid, gameHandler_.getSpellVisualId(spellId), type, radius, scale,
+                                  core::coords::canonicalToRender(glm::vec3(x, y, z)),
+                                  orientation + glm::radians(90.0f));
+    });
+    gameHandler_.setDynamicObjectDespawnCallback([this](uint64_t guid, bool destroyed) {
+        if (auto* visuals = renderer_.getSpellVisualSystem()) visuals->removeDynamicObject(guid, destroyed);
     });
 
     // GameObject metadata arrival - settles the animation policy for models that

@@ -260,3 +260,19 @@ TEST_CASE("The screen effect's player fields sit where the client reads them",
     CHECK(j["PLAYER_BYTES_3"].get<uint32_t>() == unitEnd + 0x1c / 4);
     CHECK(j["PLAYER_FIELD_BYTES2"].get<uint32_t>() + 2 == j["PLAYER_FIELD_COMBAT_RATING_1"].get<uint32_t>());
 }
+
+// A dynamic object's fields follow OBJECT_END (6): CASTER takes two, then
+// BYTES, SPELLID and RADIUS at +8, +0xc and +0x10 of them, as 0x00705100
+// and 0x00704d90 read them.
+TEST_CASE("A dynamic object's fields sit where the client reads them", "[update_fields]") {
+    const std::string path = (std::filesystem::path(WOWEE_SOURCE_DIR) /
+        "Data" / "expansions" / "wotlk" / "update_fields.json").string();
+    std::ifstream in(path);
+    REQUIRE(in.good());
+    nlohmann::json j;
+    in >> j;
+    constexpr uint32_t kObjectEnd = 6;
+    CHECK(j["DYNAMICOBJECT_BYTES"].get<uint32_t>() == kObjectEnd + 8 / 4);
+    CHECK(j["DYNAMICOBJECT_SPELLID"].get<uint32_t>() == kObjectEnd + 0xc / 4);
+    CHECK(j["DYNAMICOBJECT_RADIUS"].get<uint32_t>() == kObjectEnd + 0x10 / 4);
+}

@@ -22,14 +22,14 @@
 //     event is; $DSL that one looping on the doodad, rising over 3 seconds;
 //     $DSE ends the doodad's loop.
 // A unit's callback (0x00734a40 -> 0x00732650) plays its CreatureSoundData
-// and footsteps instead, and none of these. A dynamic object's (0x00704c30:
-// $SND, $SHK) has no model here to own: wowee draws no dynamic object. A
-// spell missile's model is given no callback at all (0x00733820 makes it with
+// and footsteps instead, and none of these. A dynamic object's (0x00704f20
+// -> 0x00704c30): $SND the data's sound once, where the event is, and $SHK
+// the camera shake below. A spell missile's model is given no callback at all (0x00733820 makes it with
 // 0x0081f8f0 alone), so its events do nothing.
 //
-// A game object's $SHK shakes the camera: the data is a
-// SpellEffectCameraShakes row, each of whose CameraShakes goes on the camera
-// where the event is (0x0070c050 -> 0x00606410).
+// A game object's and a dynamic object's $SHK shake the camera: the data is
+// a SpellEffectCameraShakes row, each of whose CameraShakes goes on the
+// camera where the event is (0x0070c050, 0x00704c30 -> 0x00606410).
 //
 // A doodad's $EAC, $EDC, $EWT and $EMV set the ObjectEffect state of the
 // game object the doodad belongs to (0x006f7270, 0x006f61d0); wowee has no
@@ -78,6 +78,7 @@ enum class Owner : uint8_t {
     GameObject,  ///< 0x0070c050; the argument is its display id
     Effect,      ///< 0x006f7b00; the argument is 1 on the active player
     Doodad,      ///< 0x007bd5a0, a map doodad's
+    DynamicObject,  ///< 0x00704c30, a dynamic object's
 };
 
 /// The GameObjectDisplayInfo Sound slot a game object's event plays
@@ -143,6 +144,10 @@ inline SoundPlan planSound(Owner owner, uint32_t eventId, uint32_t data) {
     case Owner::Effect:
         if (eventId == kSound) return {.play = Play::OnEffect, .sound = data};
         return {};
+    case Owner::DynamicObject:
+        // 0x004c6a40 with no sound object: once.
+        if (eventId == kSound) return {.play = Play::Once, .sound = data};
+        return {};
     case Owner::None:
         break;
     }
@@ -150,9 +155,10 @@ inline SoundPlan planSound(Owner owner, uint32_t eventId, uint32_t data) {
 }
 
 /// Whether an owner's event shakes the camera, by the SpellEffectCameraShakes
-/// row in its data: a game object's $SHK (0x0070c050).
+/// row in its data: a game object's $SHK (0x0070c050) and a dynamic
+/// object's (0x00704c30).
 inline bool shakesCamera(Owner owner, uint32_t eventId) {
-    return owner == Owner::GameObject && eventId == kCameraShake;
+    return (owner == Owner::GameObject || owner == Owner::DynamicObject) && eventId == kCameraShake;
 }
 
 /// Each of `times` (ms in the sequence, sorted) the animation passed in

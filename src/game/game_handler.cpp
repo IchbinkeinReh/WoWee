@@ -207,6 +207,8 @@ void GameHandler::disconnect() {
             playerDespawnCallback_(guid);
         else if (entity->getType() == ObjectType::GAMEOBJECT && gameObjectDespawnCallback_)
             gameObjectDespawnCallback_(guid);
+        else if (entity->getType() == ObjectType::DYNAMICOBJECT && dynamicObjectDespawnCallback_)
+            dynamicObjectDespawnCallback_(guid, false);
     }
     otherPlayerVisibleItemEntries_.clear();
     otherPlayerVisibleDirty_.clear();

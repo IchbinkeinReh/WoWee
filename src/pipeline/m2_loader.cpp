@@ -1297,6 +1297,7 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     if (model.hasVertexBox) {
         model.vertexBoxMin = glm::vec3(header.vertexBox[0], header.vertexBox[1], header.vertexBox[2]);
         model.vertexBoxMax = glm::vec3(header.vertexBox[3], header.vertexBox[4], header.vertexBox[5]);
+        model.vertexRadius = header.vertexRadius;
     }
 
     // Read vertices

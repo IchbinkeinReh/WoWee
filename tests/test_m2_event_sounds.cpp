@@ -149,3 +149,16 @@ TEST_CASE("A game object's $SHK shakes the camera", "[m2_event]") {
     CHECK_FALSE(m2_event::shakesCamera(Owner::Effect, m2_event::kCameraShake));
     CHECK_FALSE(m2_event::shakesCamera(Owner::None, m2_event::kCameraShake));
 }
+
+TEST_CASE("A dynamic object's $SND plays once and its $SHK shakes the camera", "[m2_event]") {
+    // 0x00704c30: $SND the data's SoundEntries row with no sound object.
+    const auto snd = m2_event::planSound(Owner::DynamicObject, m2_event::kSound, 3346);
+    CHECK(snd.play == Play::Once);
+    CHECK(snd.sound == 3346);
+    CHECK(m2_event::shakesCamera(Owner::DynamicObject, m2_event::kCameraShake));
+    // Nothing else of the other owners'.
+    CHECK(m2_event::planSound(Owner::DynamicObject, m2_event::kDoodadSoundOnce, 7).play == Play::None);
+    CHECK(m2_event::planSound(Owner::DynamicObject, m2_event::kDoodadSoundLoop, 7).play == Play::None);
+    CHECK(m2_event::planSound(Owner::DynamicObject, m2_event::fourCC("$GO0"), 0).play == Play::None);
+    CHECK_FALSE(m2_event::shakesCamera(Owner::DynamicObject, m2_event::kSound));
+}

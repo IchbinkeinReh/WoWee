@@ -115,6 +115,7 @@ struct M2ModelGPU {
     glm::vec3 vertexBoxMin{0.0f};
     glm::vec3 vertexBoxMax{0.0f};
     bool hasVertexBox = false;
+    float vertexRadius = 0.0f;  ///< the header's +0xb8
     bool collisionSteppedFountain = false;
     bool collisionSteppedLowPlatform = false;
     bool collisionPlanter = false;
@@ -514,6 +515,8 @@ public:
     void shutdown();
 
     [[nodiscard]] bool hasModel(uint32_t modelId) const;
+    /// A loaded model's vertex radius (the M2 header's +0xb8), 0 without one.
+    [[nodiscard]] float getModelVertexRadius(uint32_t modelId) const;
     bool loadModel(const pipeline::M2Model& model, uint32_t modelId);
     /** Force-remove a model and all its GPU resources. Caller must ensure no instances reference it. */
     void unloadModel(uint32_t modelId);

@@ -211,6 +211,12 @@ enum class UF : uint16_t {
     GAMEOBJECT_LEVEL,
     /// The object's faction template, how it regards the player (0x0070edd0).
     GAMEOBJECT_FACTION,
+    /// WotLK: a dynamic object's fields past OBJECT_END (+0xd0): BYTES' low
+    /// byte its type (+8), its spell (+0xc) and radius (+0x10), which pick
+    /// and size its model (0x00705100, 0x00704d90).
+    DYNAMICOBJECT_BYTES,
+    DYNAMICOBJECT_SPELLID,
+    DYNAMICOBJECT_RADIUS,
 
     // Item fields
     ITEM_FIELD_STACK_COUNT,

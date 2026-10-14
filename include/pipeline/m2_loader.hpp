@@ -274,6 +274,9 @@ struct M2Model {
     glm::vec3 vertexBoxMin{0.0f};
     glm::vec3 vertexBoxMax{0.0f};
     bool hasVertexBox = false;
+    /// The header's vertex radius (+0xb8), which a dynamic object's model
+    /// is sized by (0x004f5e80, 0x00704d90).
+    float vertexRadius = 0.0f;
 
     // Geometry data
     std::vector<M2Vertex> vertices;

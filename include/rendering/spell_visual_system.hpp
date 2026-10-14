@@ -292,6 +292,17 @@ public:
     /// A SoundEntries sound at a place, once.
     void playSoundAt(uint32_t soundId, const glm::vec3& position);
 
+    /// A dynamic object come into view (DynamicObject_C, see
+    /// dynamic_object_visual.hpp): its spell's visual's PersistentAreaKit
+    /// model at `position` turned to `yaw` (radians about Z), sized by its
+    /// DYNAMICOBJECT_RADIUS, type (BYTES' low byte) and own scale, made once
+    /// the model has loaded; and the kit's sound looping there.
+    void addDynamicObject(uint64_t guid, uint32_t visualId, uint8_t type, float radius, float objectScale,
+                          const glm::vec3& position, float yaw);
+    /// The dynamic object gone: `destroyed` (SMSG_DESTROY_OBJECT) lets its
+    /// model play its Decay first; out of range it goes at once.
+    void removeDynamicObject(uint64_t guid, bool destroyed);
+
     // Advance lifetime timers and remove expired instances.
     void update(float deltaTime);
 
@@ -420,6 +431,33 @@ private:
         uint32_t impactArea = 0;
     };
     std::unordered_map<uint32_t, VisualKits> visualKits_;
+    /// A visual's PersistentAreaKit (+0x64) as a dynamic object shows it
+    /// (0x00704b30, 0x00704f60): the effect's file, AreaEffectSize and Scale,
+    /// and the kit's SoundID.
+    struct PersistentArea {
+        std::string modelPath;  ///< empty for no model
+        float areaEffectSize = 0.0f;
+        float effectScale = 0.0f;
+        uint32_t soundId = 0;
+    };
+    std::unordered_map<uint32_t, PersistentArea> persistentAreas_;
+    struct DynamicObjectVisual {
+        uint64_t guid = 0;
+        PersistentArea area;
+        uint8_t type = 0;
+        float radius = 0.0f;
+        float objectScale = 1.0f;
+        glm::vec3 position{0.0f};
+        float yaw = 0.0f;
+        uint32_t instanceId = 0;   ///< 0 until the model has loaded
+        uint32_t soundHandle = 0;
+        bool hasHold = false;
+        float sequenceEndsIn = -1.0f;  ///< seconds to the sequence's end, < 0 none
+        bool decaying = false;
+    };
+    std::vector<DynamicObjectVisual> dynamicObjects_;
+    void updateDynamicObjects(float deltaTime);
+    void releaseDynamicObject(DynamicObjectVisual& object);
     /// 0x00745230 on a unit (renderInstanceId, 0 for none) or at a place:
     /// the kit's models, its weapon effects (precast and cast kits), its
     /// camera shake and its colour. Returns a state kit's models.
@@ -761,6 +799,8 @@ private:
     struct LoadedSound {
         std::vector<uint8_t> data;
         float volume = 1.0f;
+        float minDistance = 0.0f;  ///< MinDistance (26)
+        float cutoff = 0.0f;       ///< DistanceCutoff (27)
     };
     std::unordered_map<uint32_t, LoadedSound> soundEntries_;           // SoundEntries id → its file, empty if none
     std::unordered_map<std::string, uint32_t> spellVisualModelIds_;   // M2 path → M2Renderer modelId

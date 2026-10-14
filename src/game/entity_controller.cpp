@@ -277,6 +277,8 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
             pendingNameQueries.erase(guid);
         } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
             owner_.gameObjectDestroyCallbackRef()(guid);   // 0x004d7230
+        } else if (entity->getType() == ObjectType::DYNAMICOBJECT && owner_.dynamicObjectDespawnCallbackRef()) {
+            owner_.dynamicObjectDespawnCallbackRef()(guid, false);   // 0x004d7230
         } else if (entity->getType() == ObjectType::CORPSE && owner_.playerDespawnCallbackRef()) {
             owner_.playerDespawnCallbackRef()(guid);
         }
@@ -2065,6 +2067,14 @@ struct EntityController::CorpseTypeHandler : EntityController::IObjectTypeHandle
     void onValuesUpdate(const UpdateBlock& block, std::shared_ptr<Entity>& entity) override { ctl_.onValuesUpdateCorpse(block, entity); }
 };
 
+struct EntityController::DynamicObjectTypeHandler : EntityController::IObjectTypeHandler {
+    EntityController& ctl_;
+    explicit DynamicObjectTypeHandler(EntityController& c) : ctl_(c) {}
+    void onCreate(const UpdateBlock& block, std::shared_ptr<Entity>& entity, bool&) override {
+        if (entity) ctl_.spawnDynamicObjectFromFields(block.guid, *entity);
+    }
+};
+
 // ============================================================
 // Handler registry infrastructure
 // ============================================================
@@ -2076,6 +2086,7 @@ void EntityController::initTypeHandlers() {
     typeHandlers_[static_cast<uint8_t>(ObjectType::ITEM)] = std::make_unique<ItemTypeHandler>(*this);
     typeHandlers_[static_cast<uint8_t>(ObjectType::CONTAINER)] = std::make_unique<ItemTypeHandler>(*this);
     typeHandlers_[static_cast<uint8_t>(ObjectType::CORPSE)] = std::make_unique<CorpseTypeHandler>(*this);
+    typeHandlers_[static_cast<uint8_t>(ObjectType::DYNAMICOBJECT)] = std::make_unique<DynamicObjectTypeHandler>(*this);
 }
 
 EntityController::IObjectTypeHandler* EntityController::getTypeHandler(ObjectType type) const {
@@ -2286,6 +2297,9 @@ void EntityController::respawnKnownEntities() {
             case ObjectType::CORPSE:
                 if (spawnCorpseFromFields(guid, *entity)) ++corpses;
                 break;
+            case ObjectType::DYNAMICOBJECT:
+                spawnDynamicObjectFromFields(guid, *entity);
+                break;
             default:
                 break;
         }
@@ -2413,6 +2427,25 @@ void EntityController::onValuesUpdateCorpse(const UpdateBlock& block, const std:
     if (flagsField == 0xFFFF || block.fields.find(flagsField) == block.fields.end()) return;
     if (owner_.playerDespawnCallbackRef()) owner_.playerDespawnCallbackRef()(block.guid);
     spawnCorpseFromFields(block.guid, *entity);
+}
+
+bool EntityController::spawnDynamicObjectFromFields(uint64_t guid, const Entity& entity) {
+    const uint16_t bytesIdx = fieldIndex(UF::DYNAMICOBJECT_BYTES);
+    const uint16_t spellIdx = fieldIndex(UF::DYNAMICOBJECT_SPELLID);
+    const uint16_t radiusIdx = fieldIndex(UF::DYNAMICOBJECT_RADIUS);
+    if (bytesIdx == 0xFFFF || spellIdx == 0xFFFF || radiusIdx == 0xFFFF) return false;
+    if (!owner_.dynamicObjectSpawnCallbackRef()) return true;
+    // The object's own scale (+0x9c), which its model's multiplies
+    // (0x00704d90).
+    float scale = 1.0f;
+    if (const uint16_t scaleIdx = fieldIndex(UF::OBJECT_FIELD_SCALE_X); scaleIdx != 0xFFFF) {
+        if (const uint32_t raw = entity.getField(scaleIdx); raw != 0) scale = bitsToFloat(raw);
+    }
+    owner_.dynamicObjectSpawnCallbackRef()(guid, entity.getField(spellIdx),
+                                           static_cast<uint8_t>(entity.getField(bytesIdx) & 0xFF),
+                                           bitsToFloat(entity.getField(radiusIdx)), scale, entity.getX(),
+                                           entity.getY(), entity.getZ(), entity.getOrientation());
+    return true;
 }
 
 void EntityController::onCreateCorpse(const UpdateBlock& block, const std::shared_ptr<Entity>& entity) {
@@ -2998,6 +3031,8 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
                 pendingNameQueries.erase(data.guid);
             } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
                 owner_.gameObjectDestroyCallbackRef()(data.guid);   // 0x004d7610
+            } else if (entity->getType() == ObjectType::DYNAMICOBJECT && owner_.dynamicObjectDespawnCallbackRef()) {
+                owner_.dynamicObjectDespawnCallbackRef()(data.guid, true);   // 0x004d7610
             } else if (entity->getType() == ObjectType::CORPSE && owner_.playerDespawnCallbackRef()) {
                 owner_.playerDespawnCallbackRef()(data.guid);
             }

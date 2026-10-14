@@ -503,12 +503,14 @@
     "MissileImpactOffsetZ": 31,
     "MissileModel": 8,
     "MissileSound": 11,
+    "PersistentAreaKit": 25,
     "PrecastKit": 1,
     "StateDoneKit": 5,
     "StateKit": 4,
     "TargetImpactKit": 15
   },
   "SpellVisualEffectName": {
+    "AreaEffectSize": 3,
     "FilePath": 2,
     "ID": 0,
     "MaxAllowedScale": 6,

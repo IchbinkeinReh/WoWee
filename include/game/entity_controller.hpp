@@ -327,6 +327,7 @@ private:
     struct GameObjectTypeHandler;
     struct ItemTypeHandler;
     struct CorpseTypeHandler;
+    struct DynamicObjectTypeHandler;
     std::unordered_map<uint8_t, std::unique_ptr<IObjectTypeHandler>> typeHandlers_;
     void initTypeHandlers();
     [[nodiscard]] IObjectTypeHandler* getTypeHandler(ObjectType type) const;
@@ -340,6 +341,9 @@ private:
     /// Draws a corpse from its fields (0x00705670, 0x00705b20); false when
     /// the field layout does not have them.
     bool spawnCorpseFromFields(uint64_t guid, const Entity& entity);
+    /// Hands a dynamic object's fields to its model (DynamicObject_C,
+    /// 0x00705230); false when the field layout does not have them.
+    bool spawnDynamicObjectFromFields(uint64_t guid, const Entity& entity);
     void handleDisplayIdChange(const UpdateBlock& block,
                                const std::shared_ptr<Entity>& entity,
                                const std::shared_ptr<Unit>& unit,

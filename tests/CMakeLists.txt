@@ -2779,6 +2779,11 @@ wowee_add_test(test_char_sections
 wowee_add_test(test_spell_kit
     SOURCES test_spell_kit.cpp)
 
+# ── test_dynamic_object_visual ───────────────────────
+# A dynamic object's model: its effect, its scale and its sequences.
+wowee_add_test(test_dynamic_object_visual
+    SOURCES test_dynamic_object_visual.cpp)
+
 # ── test_spell_chain ─────────────────────────────────
 # SpellChainEffects beams: the row, a chain's bolts (0x007fa4d0) and the
 # lightning strip (Common Lightning.cpp, 0x009a8c00 to 0x009ab730).
