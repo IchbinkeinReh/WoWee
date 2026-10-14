@@ -4123,6 +4123,19 @@ const std::vector<LfgProposalMember>& GameHandler::getLfgProposalMembers() const
     return socialHandler_ ? socialHandler_->getLfgProposalMembers() : empty;
 }
 
+const std::vector<LfgMemberLocks>& GameHandler::getLfgPartyLocks() const {
+    static const std::vector<LfgMemberLocks> empty;
+    return socialHandler_ ? socialHandler_->getLfgPartyLocks() : empty;
+}
+
+bool GameHandler::hasLfgPartyLocks() const {
+    return socialHandler_ && socialHandler_->hasLfgPartyLocks();
+}
+
+bool GameHandler::hasLfgPlayerLocks() const {
+    return socialHandler_ && socialHandler_->hasLfgPlayerLocks();
+}
+
 const std::unordered_map<uint32_t, uint32_t>& GameHandler::getLfgLocks() const {
     static const std::unordered_map<uint32_t, uint32_t> empty;
     return socialHandler_ ? socialHandler_->getLfgLocks() : empty;

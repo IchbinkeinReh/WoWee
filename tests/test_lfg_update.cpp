@@ -239,3 +239,65 @@ TEST_CASE("A decline fails the proposal, the party's before the player's", "[lfg
     o = decideLfgProposal(prop, lastId);
     CHECK_FALSE(o.failed);
 }
+
+TEST_CASE("Joining and leaving play their sounds with their lines", "[lfg]") {
+    // 0x0055bdc0 plays PVPENTERQUEUE (8462) with the joined line and
+    // LFG_Denied (17341) with the left one; no line, no sound.
+    LfgUpdateBody none, joined;
+    joined.extraInfo = joined.joined = joined.queued = true;
+    joined.dungeons = {kRandom};
+    LfgUpdateOutcome o = decideLfgUpdate(lfg_update_type::kJoinQueue, joined, none, false, false,
+                                         false, kNoRaid);
+    CHECK(o.sound == lfg_sound::kEnterQueue);
+    o = decideLfgUpdate(lfg_update_type::kRemovedFromQueue, none, joined, false, false, false, kNoRaid);
+    CHECK(o.sound == lfg_sound::kDenied);
+    o = decideLfgUpdate(lfg_update_type::kRoleCheckFailed, none, joined, false, false, false, kNoRaid);
+    CHECK(o.sound == 0);
+}
+
+TEST_CASE("A declined proposal plays LFG_Denied", "[lfg]") {
+    LfgProposalRow me{0x2, true, false, false, true, false};
+    LfgProposalRow waiting{0x2, true, false, false, false, false};
+    uint32_t lastId = 0;
+    LfgProposal prop;
+    Packet p = proposal(8, false, {me});
+    REQUIRE(parseLfgProposal(p, prop));
+    CHECK(decideLfgProposal(prop, lastId).sound == lfg_sound::kDenied);
+    Packet q = proposal(9, false, {waiting});
+    REQUIRE(parseLfgProposal(q, prop));
+    CHECK(decideLfgProposal(prop, lastId).sound == 0);
+}
+
+TEST_CASE("The party lock block reads member by member, in order", "[lfg]") {
+    // LFGMgr's BuildPartyLockDungeonBlock: a byte count, then per member a
+    // guid, a uint32 count and entry/status pairs - as SMSG_LFG_PARTY_INFO
+    // and SMSG_LFG_JOIN_RESULT 6 carry it.
+    Packet p(0x372);
+    p.writeUInt8(2);
+    p.writeUInt64(0x30);
+    p.writeUInt32(2);
+    p.writeUInt32(kRandom); p.writeUInt32(2);
+    p.writeUInt32(206); p.writeUInt32(1);
+    p.writeUInt64(0x20);
+    p.writeUInt32(1);
+    p.writeUInt32(574); p.writeUInt32(6);
+    std::vector<LfgMemberLocks> party;
+    REQUIRE(parseLfgPartyLocks(p, party));
+    CHECK(p.getRemainingSize() == 0);
+    REQUIRE(party.size() == 2);
+    CHECK(party[0].guid == 0x30);
+    REQUIRE(party[0].locks.size() == 2);
+    CHECK(party[0].locks[0] == std::pair<uint32_t, uint32_t>{kRandom, 2});
+    CHECK(party[0].locks[1] == std::pair<uint32_t, uint32_t>{206, 1});
+    CHECK(party[1].guid == 0x20);
+    CHECK(party[1].locks[0] == std::pair<uint32_t, uint32_t>{574, 6});
+
+    Packet cut(0x372);
+    cut.writeUInt8(1);
+    cut.writeUInt64(0x30);
+    cut.writeUInt32(2);
+    cut.writeUInt32(206); cut.writeUInt32(1);
+    CHECK_FALSE(parseLfgPartyLocks(cut, party));
+    REQUIRE(party.size() == 1);
+    CHECK(party[0].locks.size() == 1);
+}

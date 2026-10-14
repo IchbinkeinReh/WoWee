@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace wowee {
@@ -33,6 +34,13 @@ constexpr uint8_t kUpdateStatus       = 14;
 constexpr uint8_t kGroupMemberOffline = 15;
 constexpr uint8_t kGroupDisband       = 16;
 }  // namespace lfg_update_type
+
+/// The interface sounds 0x0055bdc0 plays (0x004c8fc0), by SoundEntries id.
+namespace lfg_sound {
+constexpr uint32_t kDenied       = 17341;  ///< LFG_Denied
+constexpr uint32_t kDungeonReady = 17318;  ///< LFG_DungeonReady
+constexpr uint32_t kEnterQueue   = 8462;   ///< PVPENTERQUEUE
+}  // namespace lfg_sound
 
 /// The body of either update, as the client keeps it to compare with the
 /// next one (0x00acd9a0 for the player, 0x00acdac0 for the party).
@@ -65,6 +73,8 @@ struct LfgUpdateOutcome {
     bool changed = false;
     /// The interface string to say, or none.
     const char* line = nullptr;
+    /// The sound that goes with it: a queue joined or left (lfg_sound), or 0.
+    uint32_t sound = 0;
     /// LFG_UPDATE, false.
     bool fireUpdate = false;
 };
@@ -104,10 +114,25 @@ struct LfgProposalOutcome {
     bool show = false;                 ///< LFG_PROPOSAL_SHOW, after LFG_PROPOSAL_UPDATE
     const char* declinedLine = nullptr;  ///< ERR_LFG_PROPOSAL_DECLINED_PARTY / _SELF
     bool failed = false;               ///< the proposal dropped and LFG_PROPOSAL_FAILED
+    uint32_t sound = 0;                ///< LFG_Denied with a decline, else 0
 };
 
 /// `lastId` is the last proposal id seen, which this updates (0x00552900).
 LfgProposalOutcome decideLfgProposal(const LfgProposal& p, uint32_t& lastId);
+
+/// One party member's locks: the dungeon entries (type in the top byte) they
+/// may not queue for, and why, in the order they came (0x00559b10).
+struct LfgMemberLocks {
+    uint64_t guid = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> locks;   ///< entry, status
+};
+
+/// The party lock block SMSG_LFG_PARTY_INFO carries, and SMSG_LFG_JOIN_RESULT
+/// with result 6 after its two uint32s (0x0055b080): a byte count, then per
+/// member a guid, a uint32 count and that many entry/status pairs. A member
+/// or an entry named twice is the same one, updated. False when cut short,
+/// with what was read whole kept.
+bool parseLfgPartyLocks(network::Packet& packet, std::vector<LfgMemberLocks>& out);
 
 }  // namespace game
 }  // namespace wowee

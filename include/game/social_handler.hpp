@@ -377,8 +377,12 @@ public:
     [[nodiscard]] uint8_t  getLfgNeedDps() const    { return lfgNeedDps_; }
     [[nodiscard]] uint64_t getLfgBootVictimGuid() const { return lfgBootVictimGuid_; }
     [[nodiscard]] const std::unordered_map<uint32_t, uint32_t>& getLfgLocks() const { return lfgLocks_; }
-    [[nodiscard]] const std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>>&
-    getLfgPartyLocks() const { return lfgPartyLocks_; }
+    /// The party's locks, member by member in the order the server listed
+    /// them, and whether any have arrived (0x00acdc08) - and the same for the
+    /// player's own (0x00acdbe8).
+    [[nodiscard]] const std::vector<LfgMemberLocks>& getLfgPartyLocks() const { return lfgPartyLocks_; }
+    [[nodiscard]] bool hasLfgPartyLocks() const { return lfgPartyLocksReceived_; }
+    [[nodiscard]] bool hasLfgPlayerLocks() const { return lfgPlayerLocksReceived_; }
     [[nodiscard]] const std::vector<LfgReward>& getLfgRewards() const { return lfgRewards_; }
     void handleLfgPlayerInfo(network::Packet& packet);
     [[nodiscard]] const std::vector<LfgProposalMember>& getLfgProposalMembers() const {
@@ -583,6 +587,7 @@ private:
     void handleDuelComplete(network::Packet& packet);
     void handleDuelWinner(network::Packet& packet);
     void handleLfgJoinResult(network::Packet& packet);
+    void playLfgSound(uint32_t soundId);
     void handleLfgQueueStatus(network::Packet& packet);
     void handleLfgProposalUpdate(network::Packet& packet);
     void handleLfgRoleCheckUpdate(network::Packet& packet);
@@ -737,8 +742,11 @@ private:
     /// The last player and party queue bodies (0x00acd9a0, 0x00acdac0).
     LfgUpdateBody lfgPlayerUpdate_;
     LfgUpdateBody lfgPartyUpdate_;
-    /// The party's locks from SMSG_LFG_PARTY_INFO, by member and dungeon.
-    std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> lfgPartyLocks_;
+    /// The party's locks from SMSG_LFG_PARTY_INFO or a join refused with
+    /// result 6, in the server's order.
+    std::vector<LfgMemberLocks> lfgPartyLocks_;
+    bool lfgPartyLocksReceived_ = false;
+    bool lfgPlayerLocksReceived_ = false;
     uint8_t  lfgOfferedRoles_ = 0;
     // The queue's own numbers, which never arrived while the length check was
     // longer than the packet.

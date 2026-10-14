@@ -31,6 +31,7 @@
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/game_utils.hpp"
+#include "game/interface_text.hpp"
 
 #include <algorithm>
 #include <string>
@@ -226,49 +227,78 @@ void registerLfgLuaAPI(lua_State* L) {
         }
         return 1;
     }},
-    // Which dungeons the server will not let this character queue for. It
-    // says so in SMSG_LFG_PLAYER_INFO, which this client skipped wholesale -
-    // so every dungeon listed as queueable and the server did the refusing.
+    // Which dungeons this character or the party may not queue for, and why:
+    // the party's locks first - not a raid's - then the player's own, each
+    // dungeon's reason by its id (0x005576b0).
     {"GetLFDChoiceLockedState", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
         lua_newtable(L);
         if (!gh) return 1;
-        for (const auto& [dungeonId, status] : gh->getLfgLocks()) {
-            if (status == 0) continue;          // 0 is not a lock
-            lua_pushboolean(L, 1);
-            lua_rawseti(L, -2, static_cast<lua_Integer>(dungeonId));
+        constexpr uint32_t kRaidType = 2;
+        if (gh->hasLfgPartyLocks()) {
+            for (const auto& member : gh->getLfgPartyLocks()) {
+                for (const auto& [entry, status] : member.locks) {
+                    if ((entry >> 24) == kRaidType) continue;
+                    lua_pushnumber(L, static_cast<double>(status));
+                    lua_rawseti(L, -2, static_cast<lua_Integer>(entry & 0x00FFFFFFu));
+                }
+            }
+        }
+        if (gh->hasLfgPlayerLocks()) {
+            for (const auto& [dungeonId, status] : gh->getLfgLocks()) {
+                lua_pushnumber(L, static_cast<double>(status));
+                lua_rawseti(L, -2, static_cast<lua_Integer>(dungeonId));
+            }
         }
         return 1;
     }},
-    // GetLFDLockInfo(dungeonID, index) → playerName, lockedReason
-    //
-    // The reason is the server's lock status, which indexes
-    // LFG_INSTANCE_INVALID_CODES directly - 1 expansion, 2 level too low, 3
-    // too high, 4 and 5 gear, 6 raid locked. The name stays nil: the player
-    // block names nobody, and the party block that would is a different packet
-    // this client does not read.
-    // How many players the lock list covers. One - this character. The counting
-    // table answers zero for it, which was right while nothing was parsed and
-    // is not now: a zero here means the loop that prints why you cannot queue
-    // never runs, so the tooltip shows its heading and no reason.
-    //
-    // Binding it over the counting table is what that table's own comment
-    // describes: a real implementation replaces the stub by existing. The
-    // party's locks are a different packet this client does not read, so the
-    // answer stays one rather than the group's size.
+    // GetLFDLockPlayerCount() - the player, and each party member whose locks
+    // the server has sent: none before the player's own have arrived, one
+    // until the party's have (0x00557890).
     {"GetLFDLockPlayerCount", [](lua_State* L) -> int {
-        lua_pushinteger(L, 1);
+        auto* gh = getGameHandler(L);
+        lua_Integer count = 0;
+        if (gh && gh->hasLfgPlayerLocks())
+            count = gh->hasLfgPartyLocks()
+                        ? static_cast<lua_Integer>(gh->getLfgPartyLocks().size()) + 1 : 1;
+        lua_pushinteger(L, count);
         return 1;
     }},
+    // GetLFDLockInfo(dungeonID, index) -> playerName, lockedReason
+    //
+    // Index 1 is the player, 2 on the party members in the order the server
+    // listed them (0x00557930). The name is the name cache's, or UNKNOWN -
+    // which it always is for the player, whose lock set carries no guid. The
+    // reason is the lock status, indexing LFG_INSTANCE_INVALID_CODES, and 0
+    // for a dungeon that is not locked: the interface tests `lockedReason ~=
+    // 0`, so nil there formatted a reason for every unlocked dungeon.
     {"GetLFDLockInfo", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
-        const uint32_t dungeonId = static_cast<uint32_t>(luaL_optinteger(L, 1, 0));
-        if (!gh || dungeonId == 0) return luaReturnNil(L);
-        const auto& locks = gh->getLfgLocks();
-        auto it = locks.find(dungeonId);
-        if (it == locks.end()) return luaReturnNil(L);
-        lua_pushnil(L);
-        lua_pushinteger(L, static_cast<lua_Integer>(it->second));
+        const lua_Integer dungeonId = luaL_optinteger(L, 1, 0);
+        const lua_Integer index = luaL_optinteger(L, 2, 0);
+        if (!gh || dungeonId < 0) return 0;
+        const auto unknown = []() { return wowee::game::interfaceString("UNKNOWN", "Unknown"); };
+        uint32_t reason = 0;
+        if (index == 1) {
+            if (!gh->hasLfgPlayerLocks()) return 0;
+            const auto& locks = gh->getLfgLocks();
+            auto it = locks.find(static_cast<uint32_t>(dungeonId));
+            if (it != locks.end()) reason = it->second;
+            lua_pushstring(L, unknown().c_str());
+        } else {
+            if (!gh->hasLfgPartyLocks() || index < 2) return 0;
+            const auto& party = gh->getLfgPartyLocks();
+            if (static_cast<size_t>(index - 1) > party.size()) return 0;
+            const auto& member = party[static_cast<size_t>(index - 2)];
+            for (const auto& [entry, status] : member.locks) {
+                if ((entry & 0x00FFFFFFu) != static_cast<uint32_t>(dungeonId)) continue;
+                reason = status;
+                break;
+            }
+            const std::string& name = gh->lookupName(member.guid);
+            lua_pushstring(L, name.empty() ? unknown().c_str() : name.c_str());
+        }
+        lua_pushnumber(L, static_cast<double>(reason));
         return 2;
     }},
 

@@ -7,6 +7,7 @@
 #include "game/ground_target.hpp"
 #include "game/unit_reaction.hpp"
 #include "game/calendar_data.hpp"
+#include "game/lfg_update.hpp"
 #include "game/game_interfaces.hpp"
 #include "game/world_packets.hpp"
 #include "game/character.hpp"
@@ -2231,6 +2232,11 @@ public:
     uint8_t  getLfgOfferedRoles() const;
     const std::vector<LfgProposalMember>& getLfgProposalMembers() const;
     const std::unordered_map<uint32_t, uint32_t>& getLfgLocks() const;
+    /// The party's locks in the server's order, and whether the party's and
+    /// the player's own have arrived.
+    const std::vector<LfgMemberLocks>& getLfgPartyLocks() const;
+    bool hasLfgPartyLocks() const;
+    bool hasLfgPlayerLocks() const;
     const std::vector<LfgReward>& getLfgRewards() const;
     int32_t  getLfgAvgWaitSec() const;
     int32_t  getLfgMyWaitSec() const;

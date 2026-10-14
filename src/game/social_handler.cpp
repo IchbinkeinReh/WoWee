@@ -1048,6 +1048,8 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         lfgPartyUpdate_ = LfgUpdateBody{};
         lfgLocks_.clear();
         lfgPartyLocks_.clear();
+        lfgPlayerLocksReceived_ = false;
+        lfgPartyLocksReceived_ = false;
         lfgState_ = LfgState::None;
         owner_.fireAddonEvent("LFG_UPDATE", {eventBool(false)});
         gameError(owner_, ErrTo::Error, "ERR_SYSTEM_DISABLED", "This system is currently disabled.");
@@ -4042,6 +4044,14 @@ void SocialHandler::handleInstanceDifficulty(network::Packet& packet) {
 // LFG Handlers
 // ============================================================
 
+/// A dungeon finder sound, by SoundEntries id, as 0x0055bdc0 plays them
+/// through 0x004c8fc0.
+void SocialHandler::playLfgSound(uint32_t soundId) {
+    if (soundId == 0) return;
+    if (auto* ac = owner_.services().audioCoordinator)
+        if (auto* sfx = ac->getUiSoundManager()) sfx->playById(soundId);
+}
+
 void SocialHandler::handleLfgJoinResult(network::Packet& packet) {
     // Two uint32s, not two bytes. Reading a byte each left the result right by
     // accident - every value in that enum fits in one - and the state wrong
@@ -4051,6 +4061,15 @@ void SocialHandler::handleLfgJoinResult(network::Packet& packet) {
     if (!packet.hasRemaining(8)) return;
     const uint32_t result = packet.readUInt32();
     const uint32_t state  = packet.readUInt32();
+    // Result 6, a party member not meeting the requirements, carries the
+    // party's locks behind the two, read in place of whatever the party held
+    // as SMSG_LFG_PARTY_INFO's are (0x0055ae20, 0x0055b080) - without its
+    // events.
+    if (result == 6) {
+        parseLfgPartyLocks(packet, lfgPartyLocks_);
+        lfgPartyLocksReceived_ = true;
+    }
+    packet.skipAll();
     // A join is said by the queue update that follows it (ERR_LFG_JOINED_QUEUE)
     // and a refusal here, as 0x0055bdc0 picks it from its table at
     // 0x00acdda8 - system lines but for ERR_LFG_CANT_USE_DUNGEONS on screen,
@@ -4135,6 +4154,7 @@ void SocialHandler::handleLfgPlayerInfo(network::Packet& packet) {
         lfgLocks_[entry & 0x00FFFFFFu] = status;
     }
     packet.skipAll();
+    lfgPlayerLocksReceived_ = true;
 
     LOG_INFO("SMSG_LFG_PLAYER_INFO: ", randomCount, " random dungeons, ",
              lfgLocks_.size(), " locked");
@@ -4149,19 +4169,9 @@ void SocialHandler::handleLfgPlayerInfo(network::Packet& packet) {
 // member a guid and the same lock list SMSG_LFG_PLAYER_INFO ends with, and
 // raises the two events that one does.
 void SocialHandler::handleLfgPartyInfo(network::Packet& packet) {
-    lfgPartyLocks_.clear();
-    if (!packet.hasRemaining(1)) { packet.skipAll(); return; }
-    const uint8_t members = packet.readUInt8();
-    for (uint8_t i = 0; i < members; ++i) {
-        if (!packet.hasRemaining(8 + 4)) break;
-        const uint64_t guid = packet.readUInt64();
-        const uint32_t lockCount = packet.readUInt32();
-        auto& locks = lfgPartyLocks_[guid];
-        for (uint32_t j = 0; j < lockCount && packet.hasRemaining(8); ++j) {
-            const uint32_t entry = packet.readUInt32();
-            locks[entry & 0x00FFFFFFu] = packet.readUInt32();
-        }
-    }
+    // In packet order, which is the order GetLFDLockInfo counts members in.
+    parseLfgPartyLocks(packet, lfgPartyLocks_);
+    lfgPartyLocksReceived_ = true;
     packet.skipAll();
     owner_.fireAddonEvent("LFG_LOCK_INFO_RECEIVED");
     owner_.fireAddonEvent("LFG_UPDATE_RANDOM_INFO");
@@ -4275,6 +4285,7 @@ void SocialHandler::handleLfgProposalUpdate(network::Packet& packet) {
     const LfgProposalOutcome outcome = decideLfgProposal(proposal, shownProposalId_);
     owner_.fireAddonEvent("LFG_PROPOSAL_UPDATE");
     if (outcome.show) owner_.fireAddonEvent("LFG_PROPOSAL_SHOW");
+    playLfgSound(outcome.sound);
     if (outcome.declinedLine) {
         if (std::string_view(outcome.declinedLine) == "ERR_LFG_PROPOSAL_DECLINED_PARTY")
             gameError(owner_, ErrTo::Chat, "ERR_LFG_PROPOSAL_DECLINED_PARTY", "A member of your group has declined the proposal.");
@@ -4342,8 +4353,18 @@ void SocialHandler::handleLfgRoleCheckUpdate(network::Packet& packet) {
     // ERR_LFG_ROLE_CHECK_ABORTED for state 5, system lines (0x0055bdc0); a
     // failed check is said by the join result. These were English, the
     // missing-role one on screen as well.
-    if (initiating)
+    //
+    // LFG_DungeonReady with the check starting; LFG_Denied when it ends
+    // aborted (5) or with someone choosing no role (6) - not when the popup
+    // is shown instead.
+    if (initiating) {
         gameError(owner_, ErrTo::Chat, "ERR_LFG_ROLE_CHECK_INITIATED", "A role check has been initiated. Your group will be queued when all members have selected a role.");
+        playLfgSound(lfg_sound::kDungeonReady);
+    }
+    constexpr uint32_t kRoleCheckBeginning = 2;
+    const bool showPopup = roleCheckState == kRoleCheckBeginning && !selfChosen;
+    if (!showPopup && (roleCheckState == 5 || roleCheckState == 6))
+        playLfgSound(lfg_sound::kDenied);
     if (roleCheckState == 5)
         gameError(owner_, ErrTo::Chat, "ERR_LFG_ROLE_CHECK_ABORTED", "The role check has been aborted.");
     // Likewise GetLFGRoleUpdate, which reports the check in progress.
@@ -4356,10 +4377,8 @@ void SocialHandler::handleLfgRoleCheckUpdate(network::Packet& packet) {
         // State 2 is LFG_ROLECHECK_INITIALITING, where the check begins.
         // Everything else is an ending: finished, missing a role, the wrong
         // roles between them, aborted, or someone picking none.
-        constexpr uint32_t kRoleCheckBeginning = 2;
-        owner_.addonEventCallbackRef()(
-            roleCheckState == kRoleCheckBeginning && !selfChosen ? "LFG_ROLE_CHECK_SHOW"
-                                                                 : "LFG_ROLE_CHECK_HIDE", {});
+        owner_.addonEventCallbackRef()(showPopup ? "LFG_ROLE_CHECK_SHOW"
+                                                 : "LFG_ROLE_CHECK_HIDE", {});
     }
 }
 
@@ -4405,6 +4424,7 @@ void SocialHandler::applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body
     }
     if (!outcome.changed) return;
 
+    playLfgSound(outcome.sound);
     if (outcome.line) {
         struct Line { const char* key; const char* enUS; };
         static constexpr Line kLines[] = {

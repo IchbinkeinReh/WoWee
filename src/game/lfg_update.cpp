@@ -91,13 +91,18 @@ LfgUpdateOutcome decideLfgUpdate(uint8_t updateType, const LfgUpdateBody& body,
     const auto leftQueue = [&]() -> const char* {
         return (!body.queued && stored.queued) ? left() : nullptr;
     };
+    //
+    // Each line comes with its sound: PVPENTERQUEUE joining, LFG_Denied
+    // leaving.
     if (!body.joined) {
         out.line = stored.joined ? left() : leftQueue();
     } else if (!stored.joined && (!party || !body.dungeons.empty())) {
         out.line = hasRaid(body) ? "ERR_LFG_JOINED_LIST" : "ERR_LFG_JOINED_QUEUE";
+        out.sound = lfg_sound::kEnterQueue;
     } else {
         out.line = leftQueue();
     }
+    if (out.line && !out.sound) out.sound = lfg_sound::kDenied;
     out.fireUpdate = applies;
     return out;
 }
@@ -150,7 +155,36 @@ LfgProposalOutcome decideLfgProposal(const LfgProposal& p, uint32_t& lastId) {
     if (partyMember) out.declinedLine = "ERR_LFG_PROPOSAL_DECLINED_PARTY";
     else if (self) out.declinedLine = "ERR_LFG_PROPOSAL_DECLINED_SELF";
     out.failed = out.declinedLine != nullptr;
+    if (out.failed) out.sound = lfg_sound::kDenied;
     return out;
+}
+
+bool parseLfgPartyLocks(network::Packet& packet, std::vector<LfgMemberLocks>& out) {
+    out.clear();
+    if (!packet.hasRemaining(1)) return false;
+    const uint8_t members = packet.readUInt8();
+    for (uint8_t i = 0; i < members; ++i) {
+        if (!packet.hasRemaining(8 + 4)) return false;
+        const uint64_t guid = packet.readUInt64();
+        // Found or added at the end (0x0055aea0).
+        auto member = std::find_if(out.begin(), out.end(),
+                                   [guid](const LfgMemberLocks& m) { return m.guid == guid; });
+        if (member == out.end()) {
+            out.push_back({guid, {}});
+            member = out.end() - 1;
+        }
+        const uint32_t count = packet.readUInt32();
+        for (uint32_t j = 0; j < count; ++j) {
+            if (!packet.hasRemaining(8)) return false;
+            const uint32_t entry = packet.readUInt32();
+            const uint32_t status = packet.readUInt32();
+            auto lock = std::find_if(member->locks.begin(), member->locks.end(),
+                                     [entry](const auto& l) { return l.first == entry; });
+            if (lock == member->locks.end()) member->locks.emplace_back(entry, status);
+            else lock->second = status;
+        }
+    }
+    return true;
 }
 
 }  // namespace game
