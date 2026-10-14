@@ -2163,11 +2163,16 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
     }
 
     float facingAngle = entity->getOrientation();
+    // FINAL_POINT: a place in the transport's frame, as the move's points
+    // are. Faced in the world once the move's own end is (below); the wire's
+    // x and y went into the canonical facing as they came.
+    std::optional<glm::vec3> facingSpotWorld;
     if (moveType == 2) {
         if (packet.getReadPos() + 12 > packet.getSize()) return;
-        float sx = packet.readFloat(), sy = packet.readFloat(), sz = packet.readFloat();
-        facingAngle = std::atan2(-(sy - localY), sx - localX);
-        (void)sz;
+        const float sx = packet.readFloat(), sy = packet.readFloat(), sz = packet.readFloat();
+        auto* transports = owner_.getTransportManager();
+        facingSpotWorld = transports->getPlayerWorldPosition(
+            transportGuid, transports->serverToTransportLocal(transportGuid, glm::vec3(sx, sy, sz)));
     } else if (moveType == 3) {
         if (packet.getReadPos() + 8 > packet.getSize()) return;
         uint64_t tgtGuid = packet.readUInt64();
@@ -2220,6 +2225,12 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
 
     glm::vec3 startLocalCanonical = owner_.getTransportManager()->serverToTransportLocal(
         transportGuid, glm::vec3(localX, localY, localZ));
+    // A facing from `from` towards `to`, both in the world (canonical).
+    const auto facingTowards = [&facingAngle](const glm::vec3& from, const glm::vec3& to) {
+        const float dx = to.x - from.x;
+        const float dy = to.y - from.y;
+        if (std::abs(dx) > 0.01f || std::abs(dy) > 0.01f) facingAngle = std::atan2(-dy, dx);
+    };
     // Its movement flags as the handler finds them (0x0073c8e0); the move
     // sets them below.
     const bool wasOnSpline = onMoveSpline(moverGuid);
@@ -2232,11 +2243,13 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
             transportGuid, glm::vec3(destLocalX, destLocalY, destLocalZ));
         glm::vec3 destWorld  = owner_.getTransportManager()->getPlayerWorldPosition(transportGuid, destLocalCanonical);
 
+        // In the world: a WMO transport's local points are on the wire's
+        // axes, which the canonical facing does not take.
         if (moveType == 0) {
-            float dx = destLocalCanonical.x - startLocalCanonical.x;
-            float dy = destLocalCanonical.y - startLocalCanonical.y;
-            if (std::abs(dx) > 0.01f || std::abs(dy) > 0.01f)
-                facingAngle = std::atan2(-dy, dx);
+            facingTowards(owner_.getTransportManager()->getPlayerWorldPosition(transportGuid, startLocalCanonical),
+                          destWorld);
+        } else if (facingSpotWorld) {
+            facingTowards(destWorld, *facingSpotWorld);
         }
 
         owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, destLocalCanonical, false, 0.0f);
@@ -2261,6 +2274,7 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
                   " dur=", duration, "ms dest=(", destWorld.x, ",", destWorld.y, ",", destWorld.z, ")");
     } else {
         glm::vec3 startWorld = owner_.getTransportManager()->getPlayerWorldPosition(transportGuid, startLocalCanonical);
+        if (facingSpotWorld) facingTowards(startWorld, *facingSpotWorld);
         owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, startLocalCanonical, false, 0.0f);
         entity->setPosition(startWorld.x, startWorld.y, startWorld.z, facingAngle);
         // A stop: every way it moved stops (0x006f11b0 -> 0x006e9980).
