@@ -77,11 +77,6 @@ inline bool endsWithToken(const std::string& lower, std::string_view token) noex
 
 /// Whether this name is a lit fire: a campfire, a bonfire, a fire pit, or
 /// something named "fire" outright.
-///
-/// Shared by classifyM2Model and classifyAmbientEmitter, which spelled it out
-/// separately and had already drifted - one is what the renderer treats as
-/// flame, the other is what the sound system plays a fire loop over, and a
-/// model can be neither but not one without the other.
 bool isLitFireName(const std::string& lower) noexcept {
     if (endsWithToken(lower, "off") || endsWithToken(lower, "out")) return false;
     return hasStandaloneWord(lower, "fire") || has(lower, "campfire")
@@ -265,28 +260,10 @@ M2ClassificationResult classifyM2Model(
     //
     // An explicitly unlit variant is not a fire. These carry the same name
     // with a suffix, and treating one as burning gives a cold fire pit a
-    // flame's colour floor and an ambient fire loop.
+    // flame's colour floor.
     const bool unlitVariant = endsWithToken(n, "off") || endsWithToken(n, "out");
     const bool fireName    = isLitFireName(n);
     const bool brazierName = has(n, "brazier") || has(n, "cauldronfire");
-    // A forge is a forge only when "forge" is what the name ends on. Matched as
-    // a bare substring it also caught Ironforge, so all 64 doodads of the city
-    // - benches, statues, cliffs, elevators, lanterns - were treated as forge
-    // fire and drawn additive, which is to say translucent. Anything after the
-    // token names something else: IronforgeBench is a bench, ForgeArms are
-    // arms, CrystalForgeController is a control panel.
-    const bool forgeName = [&] {
-        if (has(n, "forgelava")) return false;
-        const std::size_t i = n.rfind("forge");
-        if (i == std::string::npos) return false;
-        for (std::size_t k = i + 5; k < n.size(); ++k) {
-            const char c = n[k];
-            const bool qualifier = (c >= '0' && c <= '9') || c == '_' || c == '-'
-                                || c == '.' || c == ' ';
-            if (!qualifier) return false;
-        }
-        return true;
-    }();
     const bool torchName   = has(n, "torch") && !r.isKoboldFlame && !unlitVariant;
     r.isBrazierOrFire = fireName || brazierName;
     r.isTorch         = torchName;
@@ -579,23 +556,6 @@ M2ClassificationResult classifyM2Model(
     // Instance portals are spell effects too.
     if (r.isInstancePortal) r.isSpellEffect = true;
 
-    // ---------------------------------------------------------------
-    // Ambient emitter type (for sound system integration)
-    // ---------------------------------------------------------------
-    if (r.isBrazierOrFire) {
-        const bool isSmallFire = has(n, "small") || has(n, "campfire");
-        r.ambientEmitterType = isSmallFire ? AmbientEmitterType::FireplaceSmall
-                                           : AmbientEmitterType::FireplaceLarge;
-    } else if (r.isTorch) {
-        r.ambientEmitterType = AmbientEmitterType::Torch;
-    } else if (forgeName) {
-        r.ambientEmitterType = AmbientEmitterType::Forge;
-    } else if (r.collisionSteppedFountain) {
-        r.ambientEmitterType = AmbientEmitterType::Fountain;
-    } else if (r.isWaterfall) {
-        r.ambientEmitterType = AmbientEmitterType::Waterfall;
-    }
-
     return r;
 }
 
@@ -684,28 +644,6 @@ M2BatchTexClassification classifyBatchTexture(const std::string& lowerTexKey)
         "dungeons\\textures\\doodads\\stormwindlampglass.blp";
 
     return r;
-}
-
-// ---------------------------------------------------------------------------
-// classifyAmbientEmitter - lightweight name-only emitter type detection
-// ---------------------------------------------------------------------------
-
-AmbientEmitterType classifyAmbientEmitter(const std::string& lowerName)
-{
-    const bool fireName    = isLitFireName(lowerName);
-    const bool brazierName = has(lowerName, "brazier") || has(lowerName, "cauldronfire");
-    const bool forgeName   = has(lowerName, "forge") && !has(lowerName, "forgelava");
-
-    if (fireName || brazierName) {
-        const bool isSmall = has(lowerName, "small") || has(lowerName, "campfire");
-        return isSmall ? AmbientEmitterType::FireplaceSmall
-                       : AmbientEmitterType::FireplaceLarge;
-    }
-    if (has(lowerName, "torch"))     return AmbientEmitterType::Torch;
-    if (forgeName)                   return AmbientEmitterType::Forge;
-    if (has(lowerName, "fountain"))  return AmbientEmitterType::Fountain;
-    if (has(lowerName, "waterfall")) return AmbientEmitterType::Waterfall;
-    return AmbientEmitterType::None;
 }
 
 } // namespace rendering

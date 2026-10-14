@@ -466,7 +466,7 @@ bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pi
 }
 
 bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
-                              float volume, float pitch, float maxDistance) {
+                              float volume, float pitch, float maxDistance, float minDistance) {
     if (!initialized_ || !engine_ || wavData.empty()) return false;
     if (masterVolume_ <= 0.0f) return false;
 
@@ -523,7 +523,7 @@ bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::ve
     ma_sound_set_attenuation_model(sound.get(), ma_attenuation_model_inverse);
     ma_sound_set_min_gain(sound.get(), 0.0f);
     ma_sound_set_max_gain(sound.get(), 1.0f);
-    ma_sound_set_min_distance(sound.get(), 1.0f);
+    ma_sound_set_min_distance(sound.get(), std::max(minDistance, 0.0f));
     ma_sound_set_max_distance(sound.get(), maxDistance);
     ma_sound_set_rolloff(sound.get(), 1.0f);
 
@@ -553,7 +553,8 @@ bool AudioEngine::playSound3D(const std::string& mpqPath, const glm::vec3& posit
 }
 
 uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, const glm::vec3& position,
-                                         float volume, float maxDistance) {
+                                         float volume, float maxDistance, float minDistance,
+                                         float fadeInSeconds) {
     if (!initialized_ || !engine_ || wavData.empty()) return 0;
     if (masterVolume_ <= 0.0f) return 0;
 
@@ -584,9 +585,12 @@ uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, co
     ma_sound_set_attenuation_model(sound.get(), ma_attenuation_model_inverse);
     ma_sound_set_min_gain(sound.get(), 0.0f);
     ma_sound_set_max_gain(sound.get(), 1.0f);
-    ma_sound_set_min_distance(sound.get(), 1.0f);
+    ma_sound_set_min_distance(sound.get(), std::max(minDistance, 0.0f));
     ma_sound_set_max_distance(sound.get(), maxDistance);
     ma_sound_set_rolloff(sound.get(), 1.0f);
+    if (fadeInSeconds > 0.0f)
+        ma_sound_set_fade_in_milliseconds(sound.get(), 0.0f, 1.0f,
+                                          static_cast<ma_uint64>(fadeInSeconds * 1000.0f));
     if (ma_sound_start(sound.get()) != MA_SUCCESS) return 0;
 
     uint32_t id = nextSoundId_++;

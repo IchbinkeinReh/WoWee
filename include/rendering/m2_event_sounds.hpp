@@ -17,10 +17,17 @@
 //   a spell effect (0x006f7b00): $SND the data's sound, at the event, or -
 //     on the active player, with Sound_ListenerAtCharacter (default 1) - at
 //     the listener at 0.65 of its volume.
+//   a map doodad, one an ADT or a WMO places (0x007becd0, 0x007bef40,
+//     both registering 0x007bd5a0): $DSO the data's sound once, where the
+//     event is; $DSL that one looping on the doodad, rising over 3 seconds;
+//     $DSE ends the doodad's loop.
 // A unit's callback (0x00734a40 -> 0x00732650) plays its CreatureSoundData
-// and footsteps instead, and none of these. A map doodad's (0x007bd5a0:
-// $DSO, $DSL, $DSE) and a dynamic object's (0x00704c30: $SND) play sounds
-// too; their models are given no owner here yet.
+// and footsteps instead, and none of these. A dynamic object's (0x00704c30:
+// $SND) plays a sound too; its model is given no owner here yet.
+//
+// A doodad's $EAC, $EDC, $EWT and $EMV set the ObjectEffect state of the
+// game object the doodad belongs to (0x006f7270, 0x006f61d0); wowee has no
+// ObjectEffect, and they do nothing here.
 
 #include <algorithm>
 #include <array>
@@ -51,12 +58,18 @@ constexpr uint32_t fourCC(const char (&s)[5]) {
 constexpr uint32_t kSound = fourCC("$SND");          // 0x444e5324
 constexpr uint32_t kDoodadSoundOnce = fourCC("$DSO"); // 0x4f534424
 constexpr uint32_t kDoodadSoundLoop = fourCC("$DSL"); // 0x4c534424
+constexpr uint32_t kDoodadSoundEnd = fourCC("$DSE");  // 0x45534424
+
+/// How long a loop takes to fade once its owner goes (0x008799e0 sets a
+/// looping sound's fade out to 0.5 as its sound object lets it go).
+constexpr float kOwnerGoneFadeSeconds = 0.5f;
 
 /// Whose model an instance is, which decides what its events do.
 enum class Owner : uint8_t {
     None,        ///< no callback: its events do nothing
     GameObject,  ///< 0x0070c050; the argument is its display id
     Effect,      ///< 0x006f7b00; the argument is 1 on the active player
+    Doodad,      ///< 0x007bd5a0, a map doodad's
 };
 
 /// The GameObjectDisplayInfo Sound slot a game object's event plays
@@ -82,8 +95,10 @@ enum class Play : uint8_t {
     /// (0x004cfe00); any other kit once.
     ObjectKit,
     /// Looping on the object, whatever the kit says, with the same two
-    /// tests ($DSL, 0x0070c050).
+    /// tests ($DSL, 0x0070c050 and 0x007bd5a0).
     ObjectLoop,
+    /// The owner's loop ends ($DSE, 0x007bd5a0 -> 0x004c6390).
+    StopLoop,
     /// A spell effect's: on the effect (0x006f7b00 hands 0x004c6a40 its
     /// sound object, +0x34), so a looping kit goes on until it goes away.
     OnEffect,
@@ -95,6 +110,11 @@ struct SoundPlan {
     /// $GOn / $GCn (slotted).
     uint32_t sound = 0;
     bool slotted = false;
+    /// A loop's fade in and fade out, seconds (the play's +0x10 and +0x14,
+    /// 0x004c6a40 -> 0x008785f0, 0x00878610): a game object's $DSL 1 and 1,
+    /// a doodad's 3 in; none for any other.
+    float fadeIn = 0.0f;
+    float fadeOut = 0.0f;
 };
 
 /// What an event of an owner's model plays.
@@ -104,7 +124,13 @@ inline SoundPlan planSound(Owner owner, uint32_t eventId, uint32_t data) {
         if (const auto slot = gameObjectSoundSlot(eventId))
             return {.play = Play::ObjectKit, .sound = *slot, .slotted = true};
         if (eventId == kSound || eventId == kDoodadSoundOnce) return {.play = Play::Once, .sound = data};
-        if (eventId == kDoodadSoundLoop) return {.play = Play::ObjectLoop, .sound = data};
+        if (eventId == kDoodadSoundLoop)
+            return {.play = Play::ObjectLoop, .sound = data, .fadeIn = 1.0f, .fadeOut = 1.0f};
+        return {};
+    case Owner::Doodad:
+        if (eventId == kDoodadSoundOnce) return {.play = Play::Once, .sound = data};
+        if (eventId == kDoodadSoundLoop) return {.play = Play::ObjectLoop, .sound = data, .fadeIn = 3.0f};
+        if (eventId == kDoodadSoundEnd) return {.play = Play::StopLoop};
         return {};
     case Owner::Effect:
         if (eventId == kSound) return {.play = Play::OnEffect, .sound = data};
@@ -156,6 +182,7 @@ private:
         std::vector<std::vector<uint8_t>> files;  ///< each file's data
         std::vector<uint32_t> frequency;          ///< each file's weight
         float volume = 1.0f;                      ///< VolumeFloat
+        float minDistance = 0.0f;                 ///< MinDistance
         float cutoff = 0.0f;                      ///< DistanceCutoff
         bool loops = false;                       ///< Flags 0x200
     };
@@ -168,6 +195,7 @@ private:
         uint32_t soundId = 0;
         glm::vec3 offset{0.0f};    ///< from the instance's origin, where it started
         glm::vec3 position{0.0f};  ///< where it is now
+        float fadeOut = 0.0f;      ///< how long a $DSE takes to end it
     };
     std::unordered_map<uint32_t, Kit> kits_;
     std::unordered_map<uint32_t, std::array<uint32_t, 10>> displaySounds_;

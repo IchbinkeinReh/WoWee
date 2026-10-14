@@ -44,17 +44,6 @@ bool assetNameHasToken(const std::string& path, std::string_view token);
 /// `firebeam` still matches `fire`.
 bool assetNameHasWordToken(const std::string& path, std::string_view token);
 
-/// Ambient sound emitter type for doodad models (fire, water, etc.).
-enum class AmbientEmitterType : uint8_t {
-    None           = 0,
-    FireplaceSmall = 1, ///< Small fire / campfire
-    FireplaceLarge = 2, ///< Large brazier / bonfire
-    Torch          = 3, ///< Wall torch / standing torch
-    Fountain       = 4, ///< Fountain water loop
-    Waterfall      = 5, ///< Waterfall ambient
-    Forge          = 6, ///< Forge / anvil fire
-};
-
 /**
  * Output of classifyM2Model(): all name/geometry-based flags for an M2 model.
  * Pure data - no Vulkan, GPU, or asset-manager dependencies.
@@ -82,15 +71,12 @@ struct M2ClassificationResult {
     bool isKoboldFlame      = false; ///< Kobold candle/torch model
     bool isGroundDetail     = false; ///< Ground-clutter detail doodad (always non-blocking)
     bool isInvisibleTrap    = false; ///< Event-object invisible trap (no render, no collision)
-    bool isWaterfall        = false; ///< Waterfall model (ambient sound + splash particles)
+    bool isWaterfall        = false; ///< Waterfall model
     bool isBrazierOrFire    = false; ///< Brazier / campfire / bonfire model
     bool isTorch            = false; ///< Wall-mounted or standing torch
     bool isSkyBird          = false; ///< Flying bird/bat doodad (hide until animation range)
     bool isLightBeam        = false; ///< Distant rotating lighthouse/light-ray beam
     bool isTransportDoodad  = false; ///< Ship sail/paddle child whose motion must remain visible
-
-    // --- Ambient emitter type (for sound system) ---
-    AmbientEmitterType ambientEmitterType = AmbientEmitterType::None;
 
     // --- Animation flags ---
     bool shadowWindFoliage  = false; ///< Cast shadows in the alpha-tested foliage pass (leaf cutouts)
@@ -144,10 +130,6 @@ struct M2BatchTexClassification {
  */
 M2BatchTexClassification classifyBatchTexture(const std::string& lowerTexKey);
 
-// ---------------------------------------------------------------------------
-// Lightweight ambient emitter classification (name-only, no geometry needed)
-// ---------------------------------------------------------------------------
-
 /// Whether a creature model is one of the deliberately invisible helpers that
 /// scripts hang their effects on - triggers, bunnies, and the plain measuring
 /// boxes under World\\Scale.
@@ -160,15 +142,6 @@ M2BatchTexClassification classifyBatchTexture(const std::string& lowerTexKey);
 ///
 /// @param lowerPath Lowercased, backslash-normalised model path
 bool isHelperCreatureModel(const std::string& lowerPath);
-
-/**
- * Classify an M2 model path for ambient sound emitter type.
- * Faster than the full classifyM2Model() when only the emitter type is needed.
- *
- * @param lowerName Lowercased model path/name
- * @return AmbientEmitterType::None if the model is not an ambient emitter source
- */
-AmbientEmitterType classifyAmbientEmitter(const std::string& lowerName);
 
 } // namespace rendering
 } // namespace wowee

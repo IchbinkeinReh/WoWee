@@ -129,14 +129,13 @@ struct M2ModelGPU {
     bool isGroundDetail = false;    // Ground clutter/detail doodads (culling distance, density, dedup)
     bool isWaterVegetation = false; // Cattails, reeds, kelp etc. near water (insect spawning)
     bool isFireflyEffect = false;   // Firefly/fireflies M2 (exempt from particle dampeners)
-    bool isWaterfall = false;       // Waterfall model (ambient sound + splash particles)
+    bool isWaterfall = false;       // Waterfall model
     bool isBrazierOrFire = false;   // Brazier / campfire / bonfire model
     bool isTorch = false;           // Wall-mounted or standing torch
     // A lamp or lantern with no light of its own, and where its glass glows in
     // its own space (rt_lights::lampLight). Set when its ray traced mesh is.
     bool isLamp = false;
     glm::vec3 lampLocal{0.0f};
-    AmbientEmitterType ambientEmitterType = AmbientEmitterType::None;
 
     // Collision mesh with spatial grid (from M2 bounding geometry)
     struct CollisionMesh {
@@ -741,8 +740,8 @@ public:
 
     /// Give an instance's model events an owner, whose callback they go to
     /// (CM2Model +0x1c4, 0x00824060): a game object's (0x00712f30), with its
-    /// display id, or a spell effect's (0x006f94c0), with 1 when it is on the
-    /// active player.
+    /// display id, a spell effect's (0x006f94c0), with 1 when it is on the
+    /// active player, or a map doodad's (0x007becd0, 0x007bef40), with 0.
     void setInstanceEventOwner(uint32_t instanceId, m2_event::Owner owner, uint32_t ownerArg);
     /// An event an owned instance's animation passed (0x00830fb0), where it
     /// is in the world: its position on its bone (0x004c21b0).

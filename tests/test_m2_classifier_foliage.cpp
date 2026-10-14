@@ -20,13 +20,6 @@ wowee::rendering::M2ClassificationResult classify(const std::string& name,
                            500, 0);
 }
 
-// Whether the classifier takes a model for a smithy forge, which is what gives
-// it the forge's ambient sound.
-bool isForge(const std::string& name) {
-    return classify(name).ambientEmitterType ==
-           wowee::rendering::AmbientEmitterType::Forge;
-}
-
 } // namespace
 
 // Foliage tokens are substring-matched because model names concatenate words
@@ -127,43 +120,6 @@ TEST_CASE("a ruin misread as foliage would also lose its collision",
 
     const auto tree = classify("DustwallowTree04", 9.0f, 7.0f);
     CHECK(tree.isFoliageLike);
-}
-
-// A forge gets the forge's ambient sound loop, so a false positive puts a
-// roaring fire in every bench and statue of Ironforge.
-TEST_CASE("only an actual forge is treated as forge fire", "[m2][classifier][forge]") {
-    SECTION("the city of Ironforge is not a forge") {
-        for (const char* n : {"IronforgeBench_Average01", "IronforgeStatue_01",
-                              "IronforgeCliff01", "IronforgeElevator",
-                              "IronforgeHangingLantern01", "IronforgeBanner01",
-                              "IronforgeSignpost", "ironforgepiston"}) {
-            INFO(n);
-            CHECK_FALSE(isForge(n));
-        }
-    }
-
-    SECTION("nor is a part of one, or a panel that controls one") {
-        CHECK_FALSE(isForge("Dalaran_ForgeArms"));
-        CHECK_FALSE(isForge("Dalaran_ForgeSmelter"));
-        CHECK_FALSE(isForge("BU_CrystalForgeController"));
-        CHECK_FALSE(isForge("UL_Forge_Iron_Press"));
-    }
-
-    SECTION("real forges still are, with or without a numeric suffix") {
-        for (const char* n : {"DR_Forge_01", "OM_Forge_01", "BU_Forge_01",
-                              "ID_Forge", "TS_Forge_01", "BE_Forge01",
-                              "Dalaran_Forge", "SC_RuneForge_02",
-                              "ET_CrystalForge", "BlacksmithForge",
-                              "DarkIronForge", "Wolvar_Forge",
-                              "WORLD\\GENERIC\\HUMAN\\FORGE\\ID_FORGE.M2"}) {
-            INFO(n);
-            CHECK(isForge(n));
-        }
-    }
-
-    SECTION("forge lava stays excluded as before") {
-        CHECK_FALSE(isForge("UL_ForgeLava"));
-    }
 }
 
 TEST_CASE("Blizzard's own misspellings are foliage too", "[m2][classifier]") {
@@ -416,26 +372,16 @@ TEST_CASE("a fire whose name runs its words together is still a fire",
     }
 }
 
-// The ambient sound system asks the same question with its own entry point.
-// It had its own copy of the test and the two had already drifted: a model
-// could be drawn as flame and play no fire, or the reverse.
-TEST_CASE("the fire sound and the fire rendering agree on what a fire is",
-          "[m2][classifier][fire]") {
-    using wowee::rendering::AmbientEmitterType;
-    const auto emitter = [](const char* name) {
-        return wowee::rendering::classifyAmbientEmitter(name);
-    };
+// A lit fire is drawn as flame; one named as put out, or only named for
+// fire, is not.
+TEST_CASE("only a lit fire is drawn as one", "[m2][classifier][fire]") {
     for (const char* name : {"orcbonfire", "orcpvpbonfirelarge", "blackrockorccampfire",
                              "largefirepit01", "valgarde_fire"}) {
         CAPTURE(name);
         CHECK(classify(std::string(name) + ".m2").isBrazierOrFire);
-        const auto type = emitter(name);
-        CHECK((type == AmbientEmitterType::FireplaceSmall ||
-               type == AmbientEmitterType::FireplaceLarge));
     }
     for (const char* name : {"firewoodpile03", "gunshopfireworks01", "orcbonfireoff"}) {
         CAPTURE(name);
         CHECK_FALSE(classify(std::string(name) + ".m2").isBrazierOrFire);
-        CHECK(emitter(name) == AmbientEmitterType::None);
     }
 }

@@ -65,15 +65,12 @@ public:
     void setCityType(CityType type);
     [[nodiscard]] CityType getCurrentCity() const { return currentCity_; }
 
-    // Emitter management
+    // Emitter management. A doodad's sounds - a fire's, a fountain's, a
+    // waterfall's - are not emitters here but its model's events
+    // (0x007bd5a0, rendering::M2EventSounds).
     enum class AmbientType {
-        FIREPLACE_SMALL,
-        FIREPLACE_LARGE,
-        TORCH,
-        FOUNTAIN,
         WATER_SURFACE,
         RIVER,
-        WATERFALL,
         WIND,
         BIRD_DAY,
         CRICKET_NIGHT,
@@ -112,13 +109,8 @@ private:
     };
 
     // Sound libraries
-    std::vector<AmbientSample> fireSoundsSmall_;
-    std::vector<AmbientSample> fireSoundsLarge_;
-    std::vector<AmbientSample> torchSounds_;
     std::vector<AmbientSample> waterSounds_;
     std::vector<AmbientSample> riverSounds_;
-    std::vector<AmbientSample> waterfallSounds_;
-    std::vector<AmbientSample> fountainSounds_;
     std::vector<AmbientSample> windSounds_;
     std::vector<AmbientSample> tavernSounds_;
     std::vector<AmbientSample> blacksmithSounds_;

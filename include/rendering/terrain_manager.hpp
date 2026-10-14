@@ -144,7 +144,8 @@ struct PendingTile {
     };
     std::vector<WMODoodadReady> wmoDoodads;
 
-    // Ambient sound emitters (detected from doodads)
+    // Ambient sound emitters (the tile's water; a doodad's sounds are its
+    // model's events, M2EventSounds)
     struct AmbientEmitter {
         glm::vec3 position;
         uint32_t type;  // Maps to AmbientSoundManager::AmbientType

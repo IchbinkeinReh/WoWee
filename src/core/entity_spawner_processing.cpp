@@ -1451,6 +1451,9 @@ void EntitySpawner::processPendingTransportDoodads() {
                 continue;
             }
             m2Renderer->setSkipCollision(m2InstanceId, true);
+            // The WMO's doodads are map doodads (0x007bf740 -> 0x007bef40,
+            // which registers 0x007bd5a0 for their events).
+            m2Renderer->setInstanceEventOwner(m2InstanceId, rendering::m2_event::Owner::Doodad, 0);
             if (doodadTemplate.interiorLit) {
                 m2Renderer->setInstanceInteriorLight(m2InstanceId, doodadTemplate.interiorAmbient,
                                                      doodadTemplate.interiorDirect);

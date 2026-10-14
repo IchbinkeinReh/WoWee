@@ -831,34 +831,6 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                         // Extract world position for frustum culling
                         glm::vec3 worldPos = glm::vec3(worldMatrix[3]);
 
-                        // Detect ambient sound emitters from doodad model path
-                        std::string m2PathLower = m2Path;
-                        std::transform(m2PathLower.begin(), m2PathLower.end(), m2PathLower.begin(), ::tolower);
-
-                        // Debug: Log all doodad paths to help identify fire-related models
-                        static int doodadLogCount = 0;
-                        if (doodadLogCount < 50) {  // Limit logging to first 50 doodads
-                            LOG_DEBUG("WMO doodad: ", m2Path);
-                            doodadLogCount++;
-                        }
-
-                        auto emitterType = rendering::classifyAmbientEmitter(m2PathLower);
-                        if (emitterType != rendering::AmbientEmitterType::None) {
-                            PendingTile::AmbientEmitter emitter;
-                            emitter.position = worldPos;
-                            // Map classifier enum to AmbientSoundManager type codes
-                            switch (emitterType) {
-                                case rendering::AmbientEmitterType::FireplaceSmall: emitter.type = 0; break;
-                                case rendering::AmbientEmitterType::FireplaceLarge: emitter.type = 1; break;
-                                case rendering::AmbientEmitterType::Torch:          emitter.type = 2; break;
-                                case rendering::AmbientEmitterType::Fountain:       emitter.type = 3; break;
-                                case rendering::AmbientEmitterType::Waterfall:      emitter.type = 6; break;
-                                case rendering::AmbientEmitterType::Forge:          emitter.type = 1; break; // Forge → large fire
-                                default: emitter.type = 0; break;
-                            }
-                            pending->ambientEmitters.push_back(emitter);
-                        }
-
                         PendingTile::WMODoodadReady doodadReady;
                         doodadReady.modelId = doodadModelId;
                         doodadReady.model = std::move(m2Model);
@@ -1120,6 +1092,9 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                     // MDDF 0x1: no distance culls it (0x007becd0).
                     if (p.mddfFlags & kMddfNoDistanceCull)
                         m2Renderer->setInstanceNoDistanceCull(instId, true);
+                    // Its model's events go to the doodad (0x007becd0 registers
+                    // 0x007bd5a0).
+                    m2Renderer->setInstanceEventOwner(instId, m2_event::Owner::Doodad, 0);
                     ft.m2InstanceIds.push_back(instId);
                     if (p.uniqueId != 0) {
                         placedDoodadIds.insert(p.uniqueId);
@@ -1280,6 +1255,9 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                     // blocking, but structural doodads such as Exodarplatform01
                     // carry the only authored floor for their walkable ramps.
                     m2Renderer->setSkipWallCollision(wmoDoodadInstId, true);
+                    // A WMO's doodad is a map doodad too (0x007bef40 registers
+                    // 0x007bd5a0).
+                    m2Renderer->setInstanceEventOwner(wmoDoodadInstId, m2_event::Owner::Doodad, 0);
                     if (doodad.interiorLit) {
                         m2Renderer->setInstanceInteriorLight(wmoDoodadInstId, doodad.interiorAmbient,
                                                              doodad.interiorDirect);
@@ -1317,12 +1295,12 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                     if (layer.liquidType == 0 && chunkIdx % 32 == 0) {
                         PendingTile::AmbientEmitter emitter;
                         emitter.position = glm::vec3(chunkCenterX, chunkCenterY, waterHeight);
-                        emitter.type = 4;
+                        emitter.type = static_cast<uint32_t>(audio::AmbientSoundManager::AmbientType::WATER_SURFACE);
                         pending->ambientEmitters.push_back(emitter);
                     } else if (layer.liquidType == 1 && chunkIdx % 64 == 0) {
                         PendingTile::AmbientEmitter emitter;
                         emitter.position = glm::vec3(chunkCenterX, chunkCenterY, waterHeight);
-                        emitter.type = 4;
+                        emitter.type = static_cast<uint32_t>(audio::AmbientSoundManager::AmbientType::WATER_SURFACE);
                         pending->ambientEmitters.push_back(emitter);
                     }
                 }

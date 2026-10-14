@@ -511,6 +511,10 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                                 uint32_t doodadInstId = m2Renderer->createInstanceWithMatrix(doodadModelId, worldMatrix, worldPos);
                                 if (doodadInstId) {
                                     m2Renderer->setSkipWallCollision(doodadInstId, true);
+                                    // A map doodad's events (0x007bef40 ->
+                                    // 0x007bd5a0).
+                                    m2Renderer->setInstanceEventOwner(
+                                        doodadInstId, rendering::m2_event::Owner::Doodad, 0);
                                     // An interior group's doodad is lit by its
                                     // own colour (0x007bf740, 0x007c1150).
                                     if (doodadIdx < interiorDoodads.size() && interiorDoodads[doodadIdx]) {

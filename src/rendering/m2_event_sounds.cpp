@@ -14,7 +14,8 @@ namespace wowee::rendering {
 
 // A SoundEntries row as 0x004c6a40 plays it (its kit, built from the row by
 // 0x004cd4a0): 3..12 File, 13..22 Freq, 23 DirectoryBase, 24 VolumeFloat
-// (+0x34), 25 Flags (+0x3c), 27 DistanceCutoff. Null when it has no file this
+// (+0x34), 25 Flags (+0x3c), 26 MinDistance (+0x2c), 27 DistanceCutoff
+// (+0x30) - the last two the channel's 3D min and max (0x00879390). Null when it has no file this
 // install can read.
 const M2EventSounds::Kit* M2EventSounds::kit(uint32_t soundId, pipeline::AssetManager* assets) {
     if (soundId == 0 || !assets) return nullptr;
@@ -37,6 +38,7 @@ const M2EventSounds::Kit* M2EventSounds::kit(uint32_t soundId, pipeline::AssetMa
             const float volume = dbc->getFloat(row, 24);
             if (volume > 0.0f) loaded.volume = volume;
             loaded.loops = (dbc->getUInt32(row, 25) & 0x200u) != 0;
+            loaded.minDistance = dbc->getFloat(row, 26);
             loaded.cutoff = dbc->getFloat(row, 27);
         }
         // Remembered either way, so a row without a file is read once.
@@ -85,10 +87,20 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets) {
     for (const M2Renderer::FiredEvent& fired : m2.takeFiredEvents()) {
         const m2_event::SoundPlan plan = m2_event::planSound(fired.owner, fired.id, fired.data);
         if (plan.play == m2_event::Play::None) continue;
+        if (plan.play == m2_event::Play::StopLoop) {
+            // 0x004c6390(obj, 0, -1): over the fade out the loop was started
+            // with, at once where it had none (0x00879840).
+            if (auto it = loops_.find(fired.instanceId); it != loops_.end()) {
+                audio.stopSoundWithFade(it->second.handle, it->second.fadeOut);
+                loops_.erase(it);
+            }
+            continue;
+        }
         const uint32_t soundId = plan.slotted ? displaySound(fired.ownerArg, plan.sound, assets) : plan.sound;
         const Kit* k = kit(soundId, assets);
         if (!k) continue;
         const float maxDistance = k->cutoff > 0.0f ? k->cutoff : 100.0f;
+        const float minDistance = k->minDistance > 0.0f ? std::min(k->minDistance, maxDistance) : 1.0f;
         // A spell effect on the active player, with the listener at the
         // character (Sound_ListenerAtCharacter, default 1): at 0.65 of its
         // volume (0x009f2818), and where the listener is (0x006f7b00).
@@ -107,14 +119,14 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets) {
         if (!loops) {
             const std::vector<uint8_t>* file = pickFile(*k);
             if (atListener) audio.playSound2D(*file, volume);
-            else audio.playSound3D(*file, fired.position, volume, 1.0f, maxDistance);
+            else audio.playSound3D(*file, fired.position, volume, 1.0f, maxDistance, minDistance);
             continue;
         }
         // A loop on its owner: none while the owner already plays one
-        // (0x004c5be0), and none for a game object where the kit already
-        // plays within sqrt(6) of the event (0x004cfe00).
+        // (0x004c5be0), and none for a game object or a doodad where the kit
+        // already plays within sqrt(6) of the event (0x004cfe00).
         if (loops_.count(fired.instanceId)) continue;
-        if (fired.owner == m2_event::Owner::GameObject) {
+        if (fired.owner == m2_event::Owner::GameObject || fired.owner == m2_event::Owner::Doodad) {
             bool near = false;
             for (const auto& [id, loop] : loops_) {
                 const glm::vec3 d = loop.position - fired.position;
@@ -124,17 +136,20 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets) {
         }
         const auto origin = m2.getInstancePosition(fired.instanceId);
         if (!origin) continue;
-        const uint32_t handle = audio.playSound3DLooping(*pickFile(*k), fired.position, volume, maxDistance);
+        const uint32_t handle = audio.playSound3DLooping(*pickFile(*k), fired.position, volume, maxDistance,
+                                                         minDistance, plan.fadeIn);
         if (handle != 0)
             loops_[fired.instanceId] = Loop{.handle = handle, .soundId = soundId, .offset = fired.position - *origin,
-                                            .position = fired.position};
+                                            .position = fired.position, .fadeOut = plan.fadeOut};
     }
 
-    // A loop goes with its owner, and ends when it does (0x004c6390).
+    // A loop goes with its owner, and ends when it does: the owner's sound
+    // object let go fades a looping sound out over half a second (a doodad
+    // unloaded, 0x007c2350 -> 0x004c7440 -> 0x008799e0).
     for (auto it = loops_.begin(); it != loops_.end();) {
         const auto origin = m2.getInstancePosition(it->first);
         if (!origin) {
-            audio.stopSound(it->second.handle);
+            audio.stopSoundWithFade(it->second.handle, m2_event::kOwnerGoneFadeSeconds);
             it = loops_.erase(it);
             continue;
         }

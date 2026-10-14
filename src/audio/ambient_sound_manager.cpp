@@ -12,12 +12,10 @@ namespace audio {
 
 namespace {
     // Distance thresholds (in game units)
-    constexpr float MAX_FIRE_DISTANCE = 20.0f;
     constexpr float MAX_WATER_DISTANCE = 35.0f;
     constexpr float MAX_AMBIENT_DISTANCE = 50.0f;
 
     // Volume settings
-    constexpr float FIRE_VOLUME = 0.7f;
     constexpr float WATER_VOLUME = 0.5f;
     constexpr float BIRD_VOLUME = 0.6f;
     constexpr float CRICKET_VOLUME = 0.5f;
@@ -27,7 +25,6 @@ namespace {
     constexpr float BIRD_MAX_INTERVAL = 20.0f;
     constexpr float CRICKET_MIN_INTERVAL = 6.0f;
     constexpr float CRICKET_MAX_INTERVAL = 15.0f;
-    constexpr float FIRE_LOOP_INTERVAL = 3.0f;  // Fire crackling loop length
 
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -46,15 +43,8 @@ bool AmbientSoundManager::initialize(pipeline::AssetManager* assets) {
 
     LOG_INFO("AmbientSoundManager: Initializing...");
 
-    // Load fire sounds
-    fireSoundsSmall_.resize(1);
-    loadSound("Sound\\Doodad\\CampFireSmallLoop.wav", fireSoundsSmall_[0], assets);
-
-    fireSoundsLarge_.resize(1);
-    loadSound("Sound\\Doodad\\CampFireLargeLoop.wav", fireSoundsLarge_[0], assets);
-
-    torchSounds_.resize(1);
-    loadSound("Sound\\Doodad\\TorchFireLoop.wav", torchSounds_[0], assets);
+    // A doodad's own sounds - a campfire's, a fountain's, a waterfall's - are
+    // its model's events (0x007bd5a0, M2EventSounds), not guessed here.
 
     // Load water sounds
     waterSounds_.resize(1);
@@ -62,13 +52,6 @@ bool AmbientSoundManager::initialize(pipeline::AssetManager* assets) {
 
     riverSounds_.resize(1);
     loadSound("Sound\\Ambience\\Water\\RiverSlowA.wav", riverSounds_[0], assets);
-
-    waterfallSounds_.resize(1);
-    loadSound("Sound\\Doodad\\WaterFallSmall.wav", waterfallSounds_[0], assets);
-
-    // Load fountain sounds
-    fountainSounds_.resize(1);
-    loadSound("Sound\\Doodad\\FountainSmallMediumLoop.wav", fountainSounds_[0], assets);
 
     // Load wind/ambience sounds
     windSounds_.resize(1);
@@ -323,9 +306,7 @@ void AmbientSoundManager::update(float deltaTime, const glm::vec3& cameraPos, bo
 
 void AmbientSoundManager::updatePositionalEmitters(float deltaTime, const glm::vec3& cameraPos) {
     // First pass: mark emitters as active/inactive based on distance
-    int activeFireCount = 0;
     int activeWaterCount = 0;
-    const int MAX_ACTIVE_FIRE = 5;      // Max 5 fire sounds at once
     const int MAX_ACTIVE_WATER = 3;     // Max 3 water sounds at once
 
     for (auto& emitter : emitters_) {
@@ -334,18 +315,10 @@ void AmbientSoundManager::updatePositionalEmitters(float deltaTime, const glm::v
 
         // Determine max distance based on type
         float maxDist = MAX_AMBIENT_DISTANCE;
-        bool isFire = false;
         bool isWater = false;
 
-        if (emitter.type == AmbientType::FIREPLACE_SMALL ||
-            emitter.type == AmbientType::FIREPLACE_LARGE ||
-            emitter.type == AmbientType::TORCH) {
-            maxDist = MAX_FIRE_DISTANCE;
-            isFire = true;
-        } else if (emitter.type == AmbientType::WATER_SURFACE ||
-                   emitter.type == AmbientType::RIVER ||
-                   emitter.type == AmbientType::WATERFALL ||
-                   emitter.type == AmbientType::FOUNTAIN) {
+        if (emitter.type == AmbientType::WATER_SURFACE ||
+            emitter.type == AmbientType::RIVER) {
             maxDist = MAX_WATER_DISTANCE;
             isWater = true;
         }
@@ -354,14 +327,11 @@ void AmbientSoundManager::updatePositionalEmitters(float deltaTime, const glm::v
         const float maxDistSq = maxDist * maxDist;
         const bool withinRange = (distSq < maxDistSq);
 
-        if (isFire && withinRange && activeFireCount < MAX_ACTIVE_FIRE) {
-            emitter.active = true;
-            activeFireCount++;
-        } else if (isWater && withinRange && activeWaterCount < MAX_ACTIVE_WATER) {
+        if (isWater && withinRange && activeWaterCount < MAX_ACTIVE_WATER) {
             emitter.active = true;
             activeWaterCount++;
-        } else if (!isFire && !isWater && withinRange) {
-            emitter.active = true;  // Other types (fountain, etc)
+        } else if (!isWater && withinRange) {
+            emitter.active = true;
         } else {
             emitter.active = false;
         }
@@ -376,30 +346,6 @@ void AmbientSoundManager::updatePositionalEmitters(float deltaTime, const glm::v
 
         // Handle different emitter types
         switch (emitter.type) {
-            case AmbientType::FIREPLACE_SMALL:
-                if (emitter.lastPlayTime >= FIRE_LOOP_INTERVAL && !fireSoundsSmall_.empty() && fireSoundsSmall_[0].loaded) {
-                    float volume = FIRE_VOLUME * volumeScale_ * (1.0f - (distance / maxDist));
-                    AudioEngine::instance().playSound3D(fireSoundsSmall_[0].data, emitter.position, volume);
-                    emitter.lastPlayTime = 0.0f;
-                }
-                break;
-
-            case AmbientType::FIREPLACE_LARGE:
-                if (emitter.lastPlayTime >= FIRE_LOOP_INTERVAL && !fireSoundsLarge_.empty() && fireSoundsLarge_[0].loaded) {
-                    float volume = FIRE_VOLUME * volumeScale_ * (1.0f - (distance / maxDist));
-                    AudioEngine::instance().playSound3D(fireSoundsLarge_[0].data, emitter.position, volume);
-                    emitter.lastPlayTime = 0.0f;
-                }
-                break;
-
-            case AmbientType::TORCH:
-                if (emitter.lastPlayTime >= FIRE_LOOP_INTERVAL && !torchSounds_.empty() && torchSounds_[0].loaded) {
-                    float volume = FIRE_VOLUME * 0.7f * volumeScale_ * (1.0f - (distance / maxDist));
-                    AudioEngine::instance().playSound3D(torchSounds_[0].data, emitter.position, volume);
-                    emitter.lastPlayTime = 0.0f;
-                }
-                break;
-
             case AmbientType::WATER_SURFACE:
                 if (emitter.lastPlayTime >= 5.0f && !waterSounds_.empty() && waterSounds_[0].loaded) {
                     float volume = WATER_VOLUME * volumeScale_ * (1.0f - (distance / maxDist));
@@ -412,22 +358,6 @@ void AmbientSoundManager::updatePositionalEmitters(float deltaTime, const glm::v
                 if (emitter.lastPlayTime >= 5.0f && !riverSounds_.empty() && riverSounds_[0].loaded) {
                     float volume = WATER_VOLUME * volumeScale_ * (1.0f - (distance / maxDist));
                     AudioEngine::instance().playSound3D(riverSounds_[0].data, emitter.position, volume);
-                    emitter.lastPlayTime = 0.0f;
-                }
-                break;
-
-            case AmbientType::WATERFALL:
-                if (emitter.lastPlayTime >= 4.0f && !waterfallSounds_.empty() && waterfallSounds_[0].loaded) {
-                    float volume = WATER_VOLUME * 1.2f * volumeScale_ * (1.0f - (distance / maxDist));
-                    AudioEngine::instance().playSound3D(waterfallSounds_[0].data, emitter.position, volume);
-                    emitter.lastPlayTime = 0.0f;
-                }
-                break;
-
-            case AmbientType::FOUNTAIN:
-                if (emitter.lastPlayTime >= 6.0f && !fountainSounds_.empty() && fountainSounds_[0].loaded) {
-                    float volume = WATER_VOLUME * 0.8f * volumeScale_ * (1.0f - (distance / maxDist));
-                    AudioEngine::instance().playSound3D(fountainSounds_[0].data, emitter.position, volume);
                     emitter.lastPlayTime = 0.0f;
                 }
                 break;
@@ -556,7 +486,7 @@ uint64_t AmbientSoundManager::addEmitter(const glm::vec3& position, AmbientType 
     emitter.position = position;
     emitter.active = false;
     emitter.lastPlayTime = randomFloat(0.0f, 2.0f);  // Random initial offset
-    emitter.loopInterval = FIRE_LOOP_INTERVAL;
+    emitter.loopInterval = 5.0f;
 
     emitters_.push_back(emitter);
     return emitter.id;

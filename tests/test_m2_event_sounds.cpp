@@ -68,6 +68,7 @@ TEST_CASE("A game object's $GOn and $GCn are its display's Sound slots", "[m2_ev
     CHECK(m2_event::kSound == 0x444e5324u);
     CHECK(m2_event::kDoodadSoundOnce == 0x4f534424u);
     CHECK(m2_event::kDoodadSoundLoop == 0x4c534424u);
+    CHECK(m2_event::kDoodadSoundEnd == 0x45534424u);
 }
 
 TEST_CASE("What a game object's events play", "[m2_event]") {
@@ -82,8 +83,17 @@ TEST_CASE("What a game object's events play", "[m2_event]") {
     CHECK_FALSE(snd.slotted);
     CHECK(snd.sound == 1234u);
     CHECK(m2_event::planSound(Owner::GameObject, m2_event::kDoodadSoundOnce, 7).play == Play::Once);
-    // $DSL: the data's sound looping on the object.
-    CHECK(m2_event::planSound(Owner::GameObject, m2_event::kDoodadSoundLoop, 7).play == Play::ObjectLoop);
+    // $DSL: the data's sound looping on the object, in and out over a
+    // second each (0x0070c050 sets the play's +0x10 and +0x14 to 1).
+    const auto loop = m2_event::planSound(Owner::GameObject, m2_event::kDoodadSoundLoop, 7);
+    CHECK(loop.play == Play::ObjectLoop);
+    CHECK(loop.sound == 7u);
+    CHECK(loop.fadeIn == 1.0f);
+    CHECK(loop.fadeOut == 1.0f);
+    // A display's looping kit plays as the defaults have it, without fades.
+    CHECK(bite.fadeIn == 0.0f);
+    // $DSE is a doodad's; a game object has no case for it.
+    CHECK(m2_event::planSound(Owner::GameObject, m2_event::kDoodadSoundEnd, 7).play == Play::None);
     // A camera shake ($SHK) or a footfall plays nothing here.
     CHECK(m2_event::planSound(Owner::GameObject, m2_event::fourCC("$SHK"), 7).play == Play::None);
     CHECK(m2_event::planSound(Owner::GameObject, m2_event::fourCC("$FSD"), 7).play == Play::None);
@@ -98,4 +108,30 @@ TEST_CASE("What a spell effect's events play", "[m2_event]") {
     CHECK(m2_event::planSound(Owner::Effect, m2_event::fourCC("$GO0"), 99).play == Play::None);
     // A model nobody owns plays nothing.
     CHECK(m2_event::planSound(Owner::None, m2_event::kSound, 99).play == Play::None);
+}
+
+TEST_CASE("What a map doodad's events play", "[m2_event]") {
+    // 0x007bd5a0: $DSO once where the event is.
+    const auto once = m2_event::planSound(Owner::Doodad, m2_event::kDoodadSoundOnce, 3346);
+    CHECK(once.play == Play::Once);
+    CHECK(once.sound == 3346u);
+    // $DSL looping on the doodad, rising over 3 seconds (the play's +0x10),
+    // with no fade out of its own.
+    const auto loop = m2_event::planSound(Owner::Doodad, m2_event::kDoodadSoundLoop, 3346);
+    CHECK(loop.play == Play::ObjectLoop);
+    CHECK(loop.sound == 3346u);
+    CHECK(loop.fadeIn == 3.0f);
+    CHECK(loop.fadeOut == 0.0f);
+    // $DSE ends it.
+    CHECK(m2_event::planSound(Owner::Doodad, m2_event::kDoodadSoundEnd, 0).play == Play::StopLoop);
+    // $SND and a game object's display slots are not a doodad's.
+    CHECK(m2_event::planSound(Owner::Doodad, m2_event::kSound, 3346).play == Play::None);
+    CHECK(m2_event::planSound(Owner::Doodad, m2_event::fourCC("$GO0"), 0).play == Play::None);
+    // The elevator states ($EAC, $EDC, $EWT, $EMV) set its game object's
+    // ObjectEffect state, and play nothing themselves.
+    for (uint32_t id : {m2_event::fourCC("$EAC"), m2_event::fourCC("$EDC"), m2_event::fourCC("$EWT"),
+                        m2_event::fourCC("$EMV")}) {
+        CAPTURE(id);
+        CHECK(m2_event::planSound(Owner::Doodad, id, 0).play == Play::None);
+    }
 }

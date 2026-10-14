@@ -73,16 +73,22 @@ public:
     void stopSound(uint32_t id);
 
     // 3D positional sound playback
+    /// `minDistance` is how far out it plays at full volume, `maxDistance`
+    /// where it stops getting quieter - a SoundEntries row's MinDistance and
+    /// DistanceCutoff, the client's 3D min and max (0x004c6a40 -> 0x00879390).
     bool playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
-                     float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f);
+                     float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
+                     float minDistance = 1.0f);
     bool playSound3D(const std::string& mpqPath, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f);
 
     /// A looping 3D sound that stays until stopped, for one that follows
     /// something across the world - a spell missile's (0x007022d0). Returns
-    /// a non-zero handle, or 0 on failure.
+    /// a non-zero handle, or 0 on failure. It rises from silence over
+    /// `fadeInSeconds` (the client's fade-in, 0x004c6a40 -> 0x008785f0).
     uint32_t playSound3DLooping(const std::vector<uint8_t>& wavData, const glm::vec3& position,
-                                float volume = 1.0f, float maxDistance = 100.0f);
+                                float volume = 1.0f, float maxDistance = 100.0f,
+                                float minDistance = 1.0f, float fadeInSeconds = 0.0f);
     /// Move a sound started with a handle (no-op once it has finished).
     void setSoundPosition(uint32_t id, const glm::vec3& position);
     /// Stop a sound started with a handle over `seconds`, after which it is
