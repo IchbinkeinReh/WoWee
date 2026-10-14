@@ -23,7 +23,13 @@
 //     $DSE ends the doodad's loop.
 // A unit's callback (0x00734a40 -> 0x00732650) plays its CreatureSoundData
 // and footsteps instead, and none of these. A dynamic object's (0x00704c30:
-// $SND) plays a sound too; its model is given no owner here yet.
+// $SND, $SHK) has no model here to own: wowee draws no dynamic object. A
+// spell missile's model is given no callback at all (0x00733820 makes it with
+// 0x0081f8f0 alone), so its events do nothing.
+//
+// A game object's $SHK shakes the camera: the data is a
+// SpellEffectCameraShakes row, each of whose CameraShakes goes on the camera
+// where the event is (0x0070c050 -> 0x00606410).
 //
 // A doodad's $EAC, $EDC, $EWT and $EMV set the ObjectEffect state of the
 // game object the doodad belongs to (0x006f7270, 0x006f61d0); wowee has no
@@ -33,6 +39,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -59,6 +66,7 @@ constexpr uint32_t kSound = fourCC("$SND");          // 0x444e5324
 constexpr uint32_t kDoodadSoundOnce = fourCC("$DSO"); // 0x4f534424
 constexpr uint32_t kDoodadSoundLoop = fourCC("$DSL"); // 0x4c534424
 constexpr uint32_t kDoodadSoundEnd = fourCC("$DSE");  // 0x45534424
+constexpr uint32_t kCameraShake = fourCC("$SHK");     // 0x4b485324
 
 /// How long a loop takes to fade once its owner goes (0x008799e0 sets a
 /// looping sound's fade out to 0.5 as its sound object lets it go).
@@ -141,6 +149,12 @@ inline SoundPlan planSound(Owner owner, uint32_t eventId, uint32_t data) {
     return {};
 }
 
+/// Whether an owner's event shakes the camera, by the SpellEffectCameraShakes
+/// row in its data: a game object's $SHK (0x0070c050).
+inline bool shakesCamera(Owner owner, uint32_t eventId) {
+    return owner == Owner::GameObject && eventId == kCameraShake;
+}
+
 /// Each of `times` (ms in the sequence, sorted) the animation passed in
 /// going from `fromMs` to `toMs`: after the one and at or before the other
 /// (0x00830fb0). With a `lapMs` the sequence loops, and each time comes
@@ -172,8 +186,10 @@ void forEachCrossed(const std::vector<uint32_t>& times, float fromMs, float toMs
 /// Plays the sounds of the model events M2Renderer::update found.
 class M2EventSounds {
 public:
+    /// Shakes the camera by a SpellEffectCameraShakes row, where an event is.
+    using ShakeCamera = std::function<void(uint32_t shakesId, const glm::vec3& at)>;
     /// Play this frame's events, and follow (and end) the loops they start.
-    void update(M2Renderer& m2, pipeline::AssetManager* assets);
+    void update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera = {});
     /// Stop every loop, as the world goes.
     void clear();
 

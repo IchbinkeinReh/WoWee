@@ -82,9 +82,13 @@ uint32_t M2EventSounds::displaySound(uint32_t displayId, uint32_t slot, pipeline
     return it != displaySounds_.end() && slot < it->second.size() ? it->second[slot] : 0u;
 }
 
-void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets) {
+void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera) {
     auto& audio = audio::AudioEngine::instance();
     for (const M2Renderer::FiredEvent& fired : m2.takeFiredEvents()) {
+        if (m2_event::shakesCamera(fired.owner, fired.id)) {
+            if (shakeCamera) shakeCamera(fired.data, fired.position);
+            continue;
+        }
         const m2_event::SoundPlan plan = m2_event::planSound(fired.owner, fired.id, fired.data);
         if (plan.play == m2_event::Play::None) continue;
         if (plan.play == m2_event::Play::StopLoop) {

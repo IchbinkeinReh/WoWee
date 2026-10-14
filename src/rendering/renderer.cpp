@@ -2975,10 +2975,14 @@ void Renderer::update(float deltaTime) {
         m2AnimLaunched = false;
     }
 
-    // What the models' events play, now the step that found them is done.
+    // What the models' events play, now the step that found them is done -
+    // and the camera shakes they start, by SpellEffectCameraShakes as a
+    // spell kit's (0x0070c050 -> 0x00606410).
     if (m2Renderer) {
         if (!m2EventSounds_) m2EventSounds_ = std::make_unique<M2EventSounds>();
-        m2EventSounds_->update(*m2Renderer, cachedAssetManager);
+        m2EventSounds_->update(*m2Renderer, cachedAssetManager, [this](uint32_t shakesId, const glm::vec3& at) {
+            if (spellVisualSystem_) spellVisualSystem_->playCameraShakes(shakesId, at);
+        });
     }
 
     // Footsteps: age visual prints, then let authored footfall events add new ones.

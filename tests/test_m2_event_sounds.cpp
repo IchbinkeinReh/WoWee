@@ -69,6 +69,7 @@ TEST_CASE("A game object's $GOn and $GCn are its display's Sound slots", "[m2_ev
     CHECK(m2_event::kDoodadSoundOnce == 0x4f534424u);
     CHECK(m2_event::kDoodadSoundLoop == 0x4c534424u);
     CHECK(m2_event::kDoodadSoundEnd == 0x45534424u);
+    CHECK(m2_event::kCameraShake == 0x4b485324u);
 }
 
 TEST_CASE("What a game object's events play", "[m2_event]") {
@@ -134,4 +135,17 @@ TEST_CASE("What a map doodad's events play", "[m2_event]") {
         CAPTURE(id);
         CHECK(m2_event::planSound(Owner::Doodad, id, 0).play == Play::None);
     }
+    // A doodad's events shake nothing.
+    CHECK_FALSE(m2_event::shakesCamera(Owner::Doodad, m2_event::kCameraShake));
+}
+
+TEST_CASE("A game object's $SHK shakes the camera", "[m2_event]") {
+    // 0x0070c050: the data is a SpellEffectCameraShakes row, each of its
+    // CameraShakes put on the camera where the event is (0x00606410).
+    CHECK(m2_event::shakesCamera(Owner::GameObject, m2_event::kCameraShake));
+    CHECK_FALSE(m2_event::shakesCamera(Owner::GameObject, m2_event::kSound));
+    // A spell effect's callback (0x006f7b00) has no $SHK, nor a doodad's
+    // (0x007bd5a0).
+    CHECK_FALSE(m2_event::shakesCamera(Owner::Effect, m2_event::kCameraShake));
+    CHECK_FALSE(m2_event::shakesCamera(Owner::None, m2_event::kCameraShake));
 }
