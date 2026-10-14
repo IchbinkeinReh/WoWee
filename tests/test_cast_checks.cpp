@@ -1,6 +1,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "game/cast_checks.hpp"
+#include "game/outdoors.hpp"
 
 #include <vector>
 
@@ -313,4 +314,41 @@ TEST_CASE("reputation, area, time of day and maps", "[cast_checks]") {
     Caster ground = idle();
     ground.flyable = 0;
     REQUIRE(check(flying, ground).code == kNotHere);
+}
+
+TEST_CASE("indoors and outdoors spells are held to where the player stands (0x0071b7f0)", "[cast_checks]") {
+    Spell travel;  // Travel Form: Attributes 0x8000
+    travel.attr = 0x8000;
+    Spell mount = travel;  // a mount: outdoors only, aura 78
+    mount.aura[0] = 78;
+    Spell inside;
+    inside.attr = 0x4000;
+    Caster c = idle();
+    REQUIRE(check(travel, c).code == 0);  // unknown: nothing asked
+    c.outdoors = 0;
+    REQUIRE(check(travel, c).code == kOnlyOutdoors);
+    REQUIRE(check(mount, c).code == kNoMountsAllowed);
+    REQUIRE(check(inside, c).code == 0);
+    c.outdoors = 1;
+    REQUIRE(check(travel, c).code == 0);
+    REQUIRE(check(mount, c).code == 0);
+    REQUIRE(check(inside, c).code == kOnlyIndoors);
+}
+
+TEST_CASE("indoors is the building group's, else the ground's area (0x0077fbf0)", "[cast_checks]") {
+    using namespace wowee::game::outdoors;
+    Place p;
+    REQUIRE(outdoors(p, 0));                 // no group, an area flagged neither
+    REQUIRE_FALSE(outdoors(p, 0x2000000u));  // AREA_FLAG_INSIDE
+    REQUIRE(outdoors(p, 0x6000000u));        // outside wins
+    p.inGroup = true;
+    REQUIRE_FALSE(outdoors(p, 0x4000000u));  // an interior group, whatever the area
+    p.groupFlags = 0x8;                      // exterior
+    REQUIRE(outdoors(p, 0));
+    p.hasRow = true;
+    p.rowFlags = 0x2;  // WMOAreaTable: indoors
+    REQUIRE_FALSE(outdoors(p, 0));
+    p.groupFlags = 0;
+    p.rowFlags = 0x4;  // outdoors
+    REQUIRE(outdoors(p, 0));
 }

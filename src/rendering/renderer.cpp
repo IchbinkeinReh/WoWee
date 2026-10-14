@@ -2288,6 +2288,7 @@ void Renderer::updatePlayerArea() {
     playerLinks_.clear();
     playerLinkedArea_ = 0;
     playerLinkIndoors_ = false;
+    playerPlace_ = {};
     if (!gh || !gh->isInWorld() || !terrainManager || !zoneManager) return;
     if (gh->getCurrentMapId() != zoneTextsMapId_) {
         zoneTextsMapId_ = gh->getCurrentMapId();
@@ -2332,6 +2333,20 @@ void Renderer::updatePlayerArea() {
         }
     }
     const uint32_t groundArea = terrainManager->getAreaIdAt(feet.x, feet.y).value_or(0);
+    // Indoors or out (0x0077fbf0): the first group linked, moving or not
+    // (0x007a13e0), with its WMOAreaTable row; else the ground's area.
+    playerPlace_.known = true;
+    playerPlace_.groundArea = groundArea;
+    if (wmoRenderer && !playerLinks_.empty()) {
+        if (const auto g = wmoRenderer->groupArea(playerLinks_.front())) {
+            playerPlace_.inGroup = true;
+            playerPlace_.groupFlags = g->flags;
+            if (const auto* row = mi::areaRow(rows, g->wmoId, g->nameSet, g->areaGroupId)) {
+                playerPlace_.hasRow = true;
+                playerPlace_.rowFlags = row->flags;
+            }
+        }
+    }
     // A moving building's group names nothing (0x00782560 and 0x007a13e0
     // pass over map objects with 0x400).
     const bool linkedStill = linked && !linked->dynamic;

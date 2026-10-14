@@ -2125,6 +2125,11 @@ cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& pla
             c.areaArg = c.area == 2 ? firstArea : 0;
         }
     }
+    // 0x0071b7f0: indoors or out where the player stands (0x0077fbf0).
+    if (renderer && renderer->getPlayerPlace().known) {
+        const auto& place = renderer->getPlayerPlace();
+        c.outdoors = outdoors::outdoors(place, owner_.getAreaFlags(place.groundArea)) ? 1 : 0;
+    }
     // 0x007261b0: an area flagged for flying (0x400, not 0x20000000); in
     // Northrend (571) also Cold Weather Flying (54197), unless
     // AttributesEx7 0x400000.

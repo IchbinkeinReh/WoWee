@@ -23,6 +23,7 @@
 #include "rendering/sky_system.hpp"
 #include "rendering/screen_effect_state.hpp"
 #include "rendering/minimap_indoor.hpp"
+#include "game/outdoors.hpp"
 #include "game/zone_area.hpp"
 #include "audio/zone_ambience.hpp"
 #include "core/screen_recorder.hpp"
@@ -231,6 +232,8 @@ public:
     /// The texts the interface names the player's place by (game::zone_area),
     /// none until there is a place to name.
     const game::zone_area::Texts* getZoneTexts() const { return zoneTextsKnown_ ? &zoneTexts_ : nullptr; }
+    /// What 0x0077fbf0 reads of where the player stands (updatePlayerArea).
+    const game::outdoors::Place& getPlayerPlace() const { return playerPlace_; }
     VkContext* getVkContext() const { return vkCtx; }
     VkDescriptorSetLayout getPerFrameSetLayout() const { return perFrameSetLayout; }
     /// What a per-frame set allocated elsewhere binds at binding 2: a fog
@@ -1022,6 +1025,7 @@ private:
     /// The liquid the camera is in for the ambience (0x00780620), 0 for none.
     uint32_t cameraLiquidType_ = 0;
     bool playerLinkIndoors_ = false;
+    game::outdoors::Place playerPlace_;
     game::zone_area::Texts zoneTexts_;
     bool zoneTextsKnown_ = false;
     uint32_t zoneTextsMapId_ = 0xFFFFFFFFu;

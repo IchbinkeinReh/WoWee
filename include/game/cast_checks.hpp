@@ -29,12 +29,15 @@ inline constexpr uint8_t kNotReady = 0x43;
 inline constexpr uint8_t kNotShapeshift = 0x44;
 inline constexpr uint8_t kNotStanding = 0x45;
 inline constexpr uint8_t kNotUnsheathed = 0x48;
+inline constexpr uint8_t kNoMountsAllowed = 0x53;
 inline constexpr uint8_t kNoPet = 0x54;
 inline constexpr uint8_t kNoPower = 0x55;
 inline constexpr uint8_t kOnlyAbovewater = 0x58;
 inline constexpr uint8_t kOnlyDaytime = 0x59;
+inline constexpr uint8_t kOnlyIndoors = 0x5a;
 inline constexpr uint8_t kOnlyMounted = 0x5b;
 inline constexpr uint8_t kOnlyNighttime = 0x5c;
+inline constexpr uint8_t kOnlyOutdoors = 0x5d;
 inline constexpr uint8_t kOnlyShapeshift = 0x5e;
 inline constexpr uint8_t kOnlyStealthed = 0x5f;
 inline constexpr uint8_t kOnlyUnderwater = 0x60;
@@ -197,6 +200,7 @@ struct Caster {
     /// in it, else 1 (INCORRECT_AREA) or 2 (REQUIRES_AREA, `areaArg`).
     int area = -1;
     uint32_t areaArg = 0;
+    int outdoors = -1;          ///< 0x0071b7f0 (0x0077fbf0); -1 unknown
     int flyable = -1;           ///< 0x007261b0; -1 unknown
 };
 
@@ -326,6 +330,17 @@ struct Result {
         return fail(kReputation);
     if (static_cast<int32_t>(s.areaGroupId) > 0 && c.area > 0)
         return c.area == 2 ? fail(kRequiresArea, c.areaArg) : fail(kIncorrectArea);
+    // Attributes 0xc000 (0x0071b7f0): indoors, one only for outdoors
+    // (0x8000) is ONLY_OUTDOORS, NO_MOUNTS_ALLOWED for a mount (aura 78,
+    // 0x007fde50); outdoors, one only for indoors (0x4000) ONLY_INDOORS.
+    if ((s.attr & 0xc000u) != 0 && c.outdoors >= 0) {
+        if (c.outdoors == 0) {
+            if ((s.attr & 0x8000u) != 0)
+                return fail(s.aura[0] == 78 || s.aura[1] == 78 || s.aura[2] == 78 ? kNoMountsAllowed : kOnlyOutdoors);
+        } else if ((s.attr & 0x4000u) != 0) {
+            return fail(kOnlyIndoors);
+        }
+    }
     // AttributesEx4 0x4000000: where flying is (0x007261b0).
     if ((s.attrEx4 & 0x4000000u) != 0 && c.flyable == 0) return fail(kNotHere);
     if (c.mapType >= 0) {
