@@ -14,7 +14,7 @@ namespace rendering {
 // Pure logic state machine for combat animation. No renderer dependency.
 // States: INACTIVE · COMBAT_IDLE · MELEE_SWING · RANGED_SHOOT · RANGED_LOAD ·
 //         SPELL_PRECAST · SPELL_CASTING · SPELL_FINALIZE · HIT_REACTION ·
-//         STUNNED · CHARGE · UNSHEATHE · SHEATHE
+//         STUNNED · UNSHEATHE · SHEATHE
 //
 // Stun overrides all combat states. Spell state cleared on interrupts.
 // offHandTurn_ alternation managed internally.
@@ -32,7 +32,6 @@ public:
         SPELL_FINALIZE,
         HIT_REACTION,
         STUNNED,
-        CHARGE,
         UNSHEATHE,
         SHEATHE,
     };
@@ -81,7 +80,6 @@ public:
     // ── Hit/stun management ─────────────────────────────────────────────
     void triggerHitReaction(uint32_t animId);
     void setStunned(bool stunned);
-    void setCharging(bool charging);
 
     static constexpr uint8_t PRIORITY = 50;
 
@@ -103,9 +101,6 @@ private:
 
     // Stun
     bool stunned_ = false;
-
-    // Charge
-    bool charging_ = false;
 
     // Off-hand alternation for dual wielding
     /// Which hand the next swing uses, and which this one chose.

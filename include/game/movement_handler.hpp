@@ -68,6 +68,8 @@ public:
     /// player, a unit the server gave it control of - a vehicle it drives, a
     /// unit it possesses - or none (0). movementInfo is that unit's movement.
     [[nodiscard]] uint64_t activeMover() const;
+    /// Whether a unit's move spline from its monster move still runs (+0xbc).
+    [[nodiscard]] bool onMoveSpline(uint64_t guid);
     /// 0x00717c50 at world entry: the player again, and no other unit
     /// controlled.
     void resetActiveMover();
@@ -322,7 +324,6 @@ private:
     /// A unit's move spline from its monster move (+0xbc, 0x0098c770), and
     /// whether it still runs: not let go (+0x20 0x400) nor run out.
     void noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs);
-    [[nodiscard]] bool onMoveSpline(uint64_t guid);
     /// The movement of `guid` as the client keeps it: movementInfo for the
     /// mover, the player's held one while another unit moves.
     [[nodiscard]] const MovementInfo& movementOf(uint64_t guid) const;

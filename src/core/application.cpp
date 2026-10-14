@@ -3221,8 +3221,7 @@ void Application::performLogoutToLogin() {
     lastSentCanonicalYaw_ = 1000.0f;
     idleYawned_ = false;
 
-    // --- Charge state ---
-    if (animationCallbacks_) animationCallbacks_->resetChargeState();
+    playerSplineLastFrame_ = false;
 
     // --- Player identity ---
     spawnedPlayerGuid_ = 0;
@@ -3407,12 +3406,20 @@ void Application::applyServerMovementState(float deltaTime) {
     if (worldEntryCallbacks_) {
         worldEntryCallbacks_->update(deltaTime);
     }
+    // A server move spline carries the player as it does any unit
+    // (SMSG_MONSTER_MOVE, 0x0073c8e0) - Charge's run among them - and the
+    // keys do not move it meanwhile. Held one frame past its end, for the
+    // player to be put where it ends.
+    const uint64_t playerGuid = gameHandler ? gameHandler->getPlayerGuid() : 0;
+    const bool carriedBySpline = gameHandler && !onTaxi && gameHandler->activeMover() == playerGuid &&
+                                 gameHandler->onMoveSpline(playerGuid);
+    const bool splineCarried = carriedBySpline || playerSplineLastFrame_;
+    playerSplineLastFrame_ = carriedBySpline;
     if (renderer && renderer->getCameraController()) {
     // A ship carries the player's reference frame, but it must not
     // freeze local controls like a taxi flight. On-deck walking is
     // folded into the transport-local offset in the sync block below.
-    const bool externallyDrivenMotion = onTaxi ||
-        (animationCallbacks_ && animationCallbacks_->isCharging());
+    const bool externallyDrivenMotion = onTaxi || splineCarried;
     // Keep physics frozen (externalFollow) during landing clamp when terrain
     // hasn't loaded yet - prevents gravity from pulling player through void.
     bool hearthFreeze = worldEntryCallbacks_ && worldEntryCallbacks_->isHearthTeleportPending();
@@ -3818,9 +3825,28 @@ void Application::applyServerMovementState(float deltaTime) {
             }
         }
         gameHandler->updateM2TransportBoarding(canonical);
-    } else if (animationCallbacks_ && animationCallbacks_->isCharging()) {
-        // Warrior Charge: interpolation delegated to AnimationCallbackHandler
-        animationCallbacks_->updateCharge(deltaTime);
+    } else if (splineCarried) {
+        // Where the spline has the player's own entity (0x0073c8e0), to its
+        // end once it has run out, and facing as it does.
+        if (auto playerEntity = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid())) {
+            const glm::vec3 canonical = carriedBySpline
+                ? glm::vec3(playerEntity->getX(), playerEntity->getY(), playerEntity->getZ())
+                : glm::vec3(playerEntity->getLatestX(), playerEntity->getLatestY(), playerEntity->getLatestZ());
+            const glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
+            renderer->getCharacterPosition() = renderPos;
+            const float yawDeg = core::coords::canonicalToCharacterYawDeg(playerEntity->getOrientation());
+            renderer->setCharacterYaw(yawDeg);
+            renderer->getCameraController()->setFacingYaw(yawDeg);
+            // The movement the client keeps goes with it; the entity is not
+            // set, which would end its spline.
+            auto& move = gameHandler->movementInfoRef();
+            move.x = canonical.x;
+            move.y = canonical.y;
+            move.z = canonical.z;
+            gameHandler->setOrientation(playerEntity->getOrientation());
+            if (glm::vec3* followTarget = renderer->getCameraController()->getFollowTargetMutable())
+                *followTarget = renderPos;
+        }
     } else {
         hasWMORideLock_ = false;
         lastWMORideTransportGuid_ = 0;

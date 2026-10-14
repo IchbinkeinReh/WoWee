@@ -570,8 +570,13 @@ private:
         bool taken = false;
         uint32_t required = 0;
         uint64_t unit = 0;  ///< the unit taken: the one asked, or its target (0x007ffc40)
+        bool outOfReach = false;  ///< one it fills, refused by the reach (0x00803850)
     };
     UnitTake takeUnit(uint32_t spellId, uint64_t caster, uint64_t unitGuid, uint32_t required, bool say) const;
+    /// 0x0072aaf0: whether the unit - the one that made it, up its creators -
+    /// carries an aura letting the spell go without its aura state or out of
+    /// combat (aura 262 matching the spell's class mask, 0x007283a0).
+    bool auraLetsSpell(uint64_t unit, uint32_t spellId) const;
     /// The cursor holds the spell for a unit (0x0080cce0).
     void armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required);
     /// CMSG_PET_CAST_SPELL at a unit or at none (0x0080ac90).

@@ -332,4 +332,36 @@ inline constexpr uint8_t kFailedNoTarget = 0xb;
     return playerHasTarget ? kFailedBadTargets : kFailedNoTarget;
 }
 
+/// 0x00809610, before 0x0080cce0 picks the spell's units: what the unit cast
+/// at may be taken as - Spell.dbc Targets (+0x40, its low half) with each
+/// effect's ImplicitTargetA - and whether TARGET_UNIT_PET (5) puts the
+/// player's pet in its place (where no plain unit is wanted).
+struct ReachKinds {
+    uint32_t mask = 0;
+    bool pet = false;
+};
+[[nodiscard]] constexpr ReachKinds reachKinds(uint32_t targets, const uint32_t (&implicitA)[3]) {
+    uint32_t mask = targets & 0xFFFFu;
+    bool pet = false;
+    for (const uint32_t a : implicitA) {
+        switch (a) {
+            case 1: mask &= ~kUnitDead; break;
+            case 5: pet = true; mask &= ~kCorpseAlly; break;
+            case 6: case 53: mask |= kUnitEnemy; break;
+            case 21: case 45: mask |= kUnitAlly; break;
+            case 23: mask |= kGameObject; break;
+            case 25: case 63: case 64: case 65: case 66: case 67: case 68: case 69: case 70: case 71: case 74: case 75:
+                mask |= kUnit;
+                break;
+            case 26: mask |= kGameObjectItem; break;
+            case 35: mask |= kUnitParty; break;
+            case 57: case 61: mask |= kUnitRaid; break;
+            default: break;
+        }
+    }
+    pet = pet && (mask & kUnit) == 0;
+    if (pet) mask |= kUnit;
+    return {mask, pet};
+}
+
 }  // namespace wowee::game::unit_target

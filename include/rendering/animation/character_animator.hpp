@@ -48,7 +48,6 @@ public:
     void startLooting() override;
     void stopLooting() override;
     void setStunned(bool stunned) override;
-    void setCharging(bool charging) override;
     void setStandState(uint8_t state) override;
     void setStealthed(bool stealth) override;
     void setInCombat(bool combat) override;

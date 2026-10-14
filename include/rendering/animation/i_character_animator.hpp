@@ -30,7 +30,6 @@ public:
     virtual void startLooting() = 0;
     virtual void stopLooting() = 0;
     virtual void setStunned(bool stunned) = 0;
-    virtual void setCharging(bool charging) = 0;
     virtual void setStandState(uint8_t state) = 0;
     virtual void setStealthed(bool stealth) = 0;
     virtual void setInCombat(bool combat) = 0;

@@ -59,7 +59,6 @@ class SwimEffects;
 class MountDust;
 class FishingLineRenderer;
 class LevelUpEffect;
-class ChargeEffect;
 class CharacterRenderer;
 class WMORenderer;
 class M2Renderer;
@@ -76,7 +75,6 @@ class M2EventSounds;
 class PostProcessPipeline;
 class AnimationController;
 class LevelUpEffect;
-class ChargeEffect;
 class SwimEffects;
 class RenderGraph;
 class OverlaySystem;
@@ -285,7 +283,6 @@ public:
     AnimationController* getAnimationController() const { return animationController_.get(); }
     LevelUpEffect* getLevelUpEffect() const { syncWorldRecording(); return levelUpEffect.get(); }
     LootSparkles* getLootSparkles() const { syncWorldRecording(); return lootSparkles_.get(); }
-    ChargeEffect* getChargeEffect() const { syncWorldRecording(); return chargeEffect.get(); }
     SwimEffects* getSwimEffects() const { syncWorldRecording(); return swimEffects.get(); }
 
     // Selection circle for targeted entity
@@ -396,7 +393,6 @@ private:
     std::unique_ptr<MountDust> mountDust;
     std::unique_ptr<LevelUpEffect> levelUpEffect;
     std::unique_ptr<LootSparkles> lootSparkles_;
-    std::unique_ptr<ChargeEffect> chargeEffect;
     std::unique_ptr<FishingLineRenderer> fishingLines_;
     std::unique_ptr<CharacterRenderer> characterRenderer;
     std::unique_ptr<WMORenderer> wmoRenderer;

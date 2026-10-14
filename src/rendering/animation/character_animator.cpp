@@ -82,10 +82,6 @@ void CharacterAnimator::setStunned(bool stunned) {
     combat_.setStunned(stunned);
 }
 
-void CharacterAnimator::setCharging(bool charging) {
-    combat_.setCharging(charging);
-}
-
 void CharacterAnimator::setStandState(uint8_t state) {
     activity_.setStandState(state);
 }

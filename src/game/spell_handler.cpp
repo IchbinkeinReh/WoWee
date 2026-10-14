@@ -1065,7 +1065,7 @@ bool SpellHandler::unitMayAssist(uint64_t helper, uint64_t unit) const {
 
 SpellHandler::UnitTake SpellHandler::takeUnit(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid,
                                               uint32_t required, bool say) const {
-    UnitTake out{false, required, 0};
+    UnitTake out{false, required, 0, false};
     const auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end() || unitGuid == 0) return out;
     auto& em = owner_.getEntityManager();
@@ -1131,10 +1131,36 @@ SpellHandler::UnitTake SpellHandler::takeUnit(uint32_t spellId, uint64_t casterG
         const glm::vec3 d(unit->getX() - caster->getX(), unit->getY() - caster->getY(), unit->getZ() - caster->getZ());
         if (const uint8_t fail = unit_target::reachFailure(glm::dot(d, d), range)) {
             if (say) owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
+            out.outOfReach = true;
             return out;
         }
     }
-    return {true, t.required, unitGuid};
+    return {true, t.required, unitGuid, false};
+}
+
+bool SpellHandler::auraLetsSpell(uint64_t unit, uint32_t spellId) const {
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return false;
+    const auto& spell = it->second;
+    uint64_t root = unit;
+    for (auto e = owner_.getEntityManager().getEntity(unit); e;) {
+        const uint64_t up = entityGuidField(*e, UF::UNIT_FIELD_CREATEDBY);
+        if (up == 0) break;
+        root = up;
+        e = owner_.getEntityManager().getEntity(up);
+        if (!e) root = 0;
+    }
+    const auto* auras = root == owner_.getPlayerGuid() ? &playerAuras_ : getUnitAuras(root);
+    if (!auras) return false;
+    for (const auto& a : *auras) {
+        if (a.spellId == 0) continue;
+        const auto as = owner_.spellNameCacheRef().find(a.spellId);
+        if (as == owner_.spellNameCacheRef().end()) continue;
+        if (pet::auraIgnoresAuraState(as->second.spellFamily, as->second.effectAuraIds, as->second.effectClassMask,
+                                      a.flags, spell.spellFamily, spell.spellFamilyFlags))
+            return true;
+    }
+    return false;
 }
 
 void SpellHandler::armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required) {
@@ -1230,28 +1256,7 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
         // (0x005d3520), else an aura 262 for the spell on the unit that
         // made it, up its creators (0x0072aaf0 -> 0x007283a0).
         if ((spell.attrEx & 0x500000u) != 0 && caster == owner_.getPetGuid()) {
-            uint64_t root = caster;
-            for (auto e = casterEntity; e;) {
-                const uint64_t up = entityGuidField(*e, UF::UNIT_FIELD_CREATEDBY);
-                if (up == 0) break;
-                root = up;
-                e = owner_.getEntityManager().getEntity(up);
-                if (!e) root = 0;
-            }
-            bool auraLetsIt = false;
-            const auto* auras = root == owner_.getPlayerGuid() ? &playerAuras_ : getUnitAuras(root);
-            static const std::vector<AuraSlot> kNoAuras;
-            for (const auto& a : auras ? *auras : kNoAuras) {
-                if (a.spellId == 0) continue;
-                const auto as = owner_.spellNameCacheRef().find(a.spellId);
-                if (as == owner_.spellNameCacheRef().end()) continue;
-                if (pet::auraIgnoresAuraState(as->second.spellFamily, as->second.effectAuraIds,
-                                              as->second.effectClassMask, a.flags, spell.spellFamily,
-                                              spell.spellFamilyFlags)) {
-                    auraLetsIt = true;
-                    break;
-                }
-            }
+            const bool auraLetsIt = auraLetsSpell(caster, spellId);
             const uint8_t casterClass =
                 static_cast<uint8_t>((entityField(*casterEntity, UF::UNIT_FIELD_BYTES_0) >> 8) & 0xFFu);
             if (const uint8_t fail = pet::comboPointsFailure(spell.attrEx, owner_.petComboPointsOn(targetGuid),
@@ -1680,69 +1685,47 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // is your own and every facing block below would otherwise use it.
     bool facingHandled = (target != 0 && target == owner_.getPlayerGuid());
 
-    // Warrior Charge (ranks 1-3): client-side range check + charge callback
-    if (spellId == 100 || spellId == 6178 || spellId == 11578) {
-        // Charge is an opener: it cannot be used once the fight has started.
-        // These refusals are the SPELL_FAILED_ results the cast would get,
-        // worded as castFailureMessage words them: AFFECTING_COMBAT (1),
-        // BAD_IMPLICIT_TARGETS (0xb) for no target, BAD_TARGETS (0xc),
-        // TARGETS_DEAD (0x6d), TOO_CLOSE and OUT_OF_RANGE. They were English.
-        if (owner_.isInCombat()) {
+    // 0x0080cce0 -> 0x00809610: the unit cast at, where the spell may take
+    // it, is held to the spell's reach (0x007ff480, 0x00803850) and the cast
+    // refused, said, outside it. There is no more to it on this side - no
+    // spell of its own, Charge among them, and no facing.
+    loadSpellNameCache();
+    if (const auto it = owner_.spellNameCacheRef().find(spellId); it != owner_.spellNameCacheRef().end()) {
+        const auto& e = it->second;
+        if (target != 0 && !selfCast && !fishingCast) {
+            const auto kinds = unit_target::reachKinds(e.targetFlags, e.implicitTargetsA);
+            const uint64_t unit = kinds.pet ? owner_.getPetGuid() : target;
+            if (kinds.mask != 0 && unit != 0 &&
+                takeUnit(spellId, owner_.getPlayerGuid(), unit, kinds.mask, true).outOfReach)
+                return;
+        }
+        // 0x00739650: Attributes 0x10000000 is not cast by a caster in combat
+        // (UNIT_FIELD_FLAGS 0x80000) - unless an aura of its lets it
+        // (0x0072aaf0) - SPELL_FAILED_AFFECTING_COMBAT.
+        const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+        if ((e.attr & 0x10000000u) != 0 && player &&
+            (entityField(*player, UF::UNIT_FIELD_FLAGS) & 0x80000u) != 0 &&
+            !auraLetsSpell(owner_.getPlayerGuid(), spellId)) {
             owner_.raiseUiError(castFailureMessage(owner_, spellId, 0x01, -1));
             return;
         }
-        if (target == 0) {
-            owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedNoTarget, -1));
-            return;
+        if (target != 0 && !selfCast && !fishingCast) {
+            // 0x0080c790 -> 0x0080bc80: an enemy spell takes a unit the
+            // player may attack (0x00729740); one no unit fills is refused
+            // with a target as SPELL_FAILED_BAD_TARGETS, or for Attributes
+            // 0x200 with no main hand SPELL_FAILED_MAINHAND_EMPTY (0x0080cce0).
+            // The cursor 0x0080cce0 would hold the spell with instead is not
+            // armed here: such a cast goes to the server as it did.
+            const uint32_t required = ground_target::requiredTargets(e.targetFlags, e.implicitTargetsA[0], false);
+            if ((required & unit_target::kUnitEnemy) != 0 && !ground_target::takesNoUnit(e.implicitTargetsA[0]) &&
+                !takeUnit(spellId, owner_.getPlayerGuid(), target, required, false).taken) {
+                const bool mainhand = owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)) != 0;
+                if (const uint8_t fail = unit_target::noUnitFailure(e.attr, e.attrEx5, required, true, mainhand, true)) {
+                    owner_.raiseUiError(castFailureMessage(owner_, spellId, fail, -1));
+                    return;
+                }
+            }
         }
-        auto entity = owner_.getEntityManager().getEntity(target);
-        if (!entity) {
-            owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedNoTarget, -1));
-            return;
-        }
-        // Charge needs an attackable unit. Game objects (mining nodes, herb nodes,
-        // chests, doors) and corpse objects can all be the current target in this
-        // client, and none of them derive from Unit - so they used to slip past the
-        // hostility checks below untouched and let the player charge at scenery.
-        auto unit = std::dynamic_pointer_cast<Unit>(entity);
-        const ObjectType targetType = entity->getType();
-        if (!unit || (targetType != ObjectType::UNIT && targetType != ObjectType::PLAYER)) {
-            owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedBadTargets, -1));
-            return;
-        }
-        // Corpses cannot be charged.
-        if (unit->getHealth() == 0) {
-            owner_.raiseUiError(castFailureMessage(owner_, spellId, 0x6d, -1));
-            return;
-        }
-        // An enemy spell takes a unit the player may attack (0x0080bc80 asking
-        // 0x00729740), else is refused with a target: SPELL_FAILED_BAD_TARGETS
-        // (0x0080cce0). Neutral creatures pass; a friendly one, or one flagged
-        // out of reach or immune to players, does not.
-        if (!owner_.unitMayAttack(owner_.getPlayerGuid(), target)) {
-            owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedBadTargets, -1));
-            return;
-        }
-        float tx = entity->getX(), ty = entity->getY(), tz = entity->getZ();
-        float dx = tx - owner_.movementInfoRef().x;
-        float dy = ty - owner_.movementInfoRef().y;
-        float dz = tz - owner_.movementInfoRef().z;
-        float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (dist < 8.0f) {
-            owner_.raiseUiError(castFailureMessage(owner_, spellId, kSpellFailedTooClose, -1));
-            return;
-        }
-        if (dist > 25.0f) {
-            owner_.raiseUiError(castFailureMessage(owner_, spellId, kSpellFailedOutOfRange, -1));
-            return;
-        }
-        float yaw = std::atan2(-dy, dx);
-        owner_.movementInfoRef().orientation = yaw;
-        owner_.sendMovement(Opcode::MSG_MOVE_SET_FACING);
-        if (owner_.chargeCallbackRef()) {
-            owner_.chargeCallbackRef()(target, tx, ty, tz);
-        }
-        facingHandled = true;
     }
 
     // Instant melee abilities: client-side range + facing check.
@@ -1779,8 +1762,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     //
     // Only with the Combat page's debug setting on, here and for melee above:
     // the original client never turns the player to cast, and a target behind
-    // them is refused as not in front. Charge still turns - its dash runs
-    // along that line.
+    // them is refused as not in front.
     if (!facingHandled && target != 0 && owner_.isAutoFaceTarget()) {
         auto entity = owner_.getEntityManager().getEntity(target);
         if (entity) {

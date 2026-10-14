@@ -184,6 +184,38 @@ TEST_CASE("the reach to a unit (0x007ff480) and its refusals (0x00803850)", "[un
     REQUIRE(r.max == 100.0f);
 }
 
+TEST_CASE("the unit cast at is held to the reach as what it may be taken as (0x00809610)", "[unit_target]") {
+    // Charge: TARGET_UNIT_TARGET_ENEMY, an enemy, nothing of its own.
+    auto k = reachKinds(0, {6, 0, 0});
+    REQUIRE(k.mask == kUnitEnemy);
+    REQUIRE_FALSE(k.pet);
+    // A friendly spell; a dead unit's bit taken away by the caster (1).
+    k = reachKinds(kUnitDead | kUnitAlly, {21, 1, 0});
+    REQUIRE(k.mask == kUnitAlly);
+    // The pet stands for the unit where no plain unit is wanted.
+    k = reachKinds(kCorpseAlly, {5, 0, 0});
+    REQUIRE(k.pet);
+    REQUIRE(k.mask == kUnit);
+    k = reachKinds(0, {5, 25, 0});
+    REQUIRE_FALSE(k.pet);
+    REQUIRE(k.mask == kUnit);
+    // Charge's SpellRange row, 8 to 25 and neither melee nor ranged: both
+    // reaches widen the minimum as well as the maximum.
+    RangeInput in;
+    in.hasRow = true;
+    in.rowMin = 8.0f;
+    in.rowMax = 25.0f;
+    in.casterReach = 1.5f;
+    in.hasUnit = true;
+    in.unitReach = 1.5f;
+    const auto r = unitRange(in, [](float m) { return m; });
+    REQUIRE(r.min == Catch::Approx(11.0f));
+    REQUIRE(r.max == Catch::Approx(28.0f));
+    REQUIRE(reachFailure(10.0f * 10.0f, r) == kFailedTooClose);
+    REQUIRE(reachFailure(20.0f * 20.0f, r) == 0);
+    REQUIRE(reachFailure(29.0f * 29.0f, r) == kFailedOutOfRange);
+}
+
 TEST_CASE("no unit: the cursor, or the refusals 0x32, 0xc and 0xb (0x0080cce0)", "[unit_target]") {
     // A friendly spell waits for a click.
     REQUIRE(noUnitFailure(0, 0, kUnitAlly, false, false, true) == 0);

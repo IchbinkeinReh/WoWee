@@ -41,16 +41,6 @@ void CombatFSM::onEvent(AnimEvent event) {
         case AnimEvent::HIT_REACT:
             // Handled by triggerHitReaction() with animId
             break;
-        case AnimEvent::CHARGE_START:
-            charging_ = true;
-            clearSpellState();
-            state_ = State::CHARGE;
-            break;
-        case AnimEvent::CHARGE_END:
-            charging_ = false;
-            if (state_ == State::CHARGE)
-                state_ = State::INACTIVE;
-            break;
         case AnimEvent::SWIM_ENTER:
             clearSpellState();
             hitReactionAnimId_ = 0;
@@ -121,17 +111,6 @@ void CombatFSM::setStunned(bool stunned) {
     }
 }
 
-void CombatFSM::setCharging(bool charging) {
-    charging_ = charging;
-    if (charging) {
-        clearSpellState();
-        hitReactionAnimId_ = 0;
-        state_ = State::CHARGE;
-    } else if (state_ == State::CHARGE) {
-        state_ = State::INACTIVE;
-    }
-}
-
 // ── State transitions ────────────────────────────────────────────────────────
 
 void CombatFSM::updateTransitions(const Input& in) {
@@ -163,15 +142,6 @@ void CombatFSM::updateTransitions(const Input& in) {
         state_ = State::RANGED_SHOOT;
         return;
     }
-    if (charging_ && !stunned_) {
-        if (state_ != State::CHARGE) {
-            clearSpellState();
-            hitReactionAnimId_ = 0;
-        }
-        state_ = State::CHARGE;
-        return;
-    }
-
     switch (state_) {
         case State::INACTIVE:
             if (in.inCombat && in.grounded && !in.swimming && !in.moving) {
@@ -287,12 +257,6 @@ void CombatFSM::updateTransitions(const Input& in) {
                 state_ = in.inCombat ? State::COMBAT_IDLE : State::INACTIVE;
             } else if (in.swimming) {
                 stunned_ = false;
-                state_ = State::INACTIVE;
-            }
-            break;
-
-        case State::CHARGE:
-            if (!charging_) {
                 state_ = State::INACTIVE;
             }
             break;
@@ -437,11 +401,6 @@ AnimOutput CombatFSM::resolve(const Input& in, const AnimCapabilitySet& caps,
             loop = true;
             break;
 
-        case State::CHARGE:
-            animId = caps.resolvedRun ? caps.resolvedRun : anim::RUN;
-            loop = true;
-            break;
-
         case State::UNSHEATHE:
             animId = caps.resolvedUnsheathe ? caps.resolvedUnsheathe : anim::SHEATHE;
             loop = false;
@@ -464,7 +423,6 @@ void CombatFSM::reset() {
     clearSpellState();
     hitReactionAnimId_ = 0;
     stunned_ = false;
-    charging_ = false;
     offHandTurn_ = false;
     offHandThisSwing_ = false;
 }

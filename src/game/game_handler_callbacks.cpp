@@ -1137,6 +1137,10 @@ uint64_t GameHandler::activeMover() const {
     return movementHandler_ ? movementHandler_->activeMover() : playerGuid;
 }
 
+bool GameHandler::onMoveSpline(uint64_t guid) {
+    return movementHandler_ && movementHandler_->onMoveSpline(guid);
+}
+
 void GameHandler::sendRequestVehicleExit() {
     if (state != WorldState::IN_WORLD || !socket) return;
     if (drivesItsVehicle(vehicleRoster_, playerGuid, activeMover())) {

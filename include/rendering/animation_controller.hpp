@@ -117,8 +117,6 @@ public:
     /// Trigger a ranged shot animation (Auto Shot, Shoot, Throw)
     void triggerRangedShot();
     [[nodiscard]] RangedWeaponType getEquippedRangedType() const { return weaponLoadout_.rangedType; }
-    void setCharging(bool charging);
-    [[nodiscard]] bool isCharging() const { return charging_; }
 
     // ── Spell casting ──────────────────────────────────────────────────────
     /// Enter spell cast animation sequence:
@@ -169,9 +167,6 @@ public:
 
     // ── Effect triggers ────────────────────────────────────────────────────
     void triggerLevelUpEffect(const glm::vec3& position);
-    void startChargeEffect(const glm::vec3& position, const glm::vec3& direction);
-    void emitChargeEffect(const glm::vec3& position, const glm::vec3& direction);
-    void stopChargeEffect();
 
     // ── Mount ──────────────────────────────────────────────────────────────
     void setMounted(uint32_t mountInstId, uint32_t mountDisplayId,
@@ -216,7 +211,6 @@ private:
     const glm::vec3* targetPosition_ = nullptr;
     bool inCombat_ = false;
     bool stunned_ = false;
-    bool charging_ = false;
 
     // ── Footstep event tracking (delegated to FootstepDriver) ────────────
     FootstepDriver footstepDriver_;
