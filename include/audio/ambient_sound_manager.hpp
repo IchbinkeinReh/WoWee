@@ -89,8 +89,6 @@ public:
     // Volume control
     void setVolumeScale(float scale);
     [[nodiscard]] float getVolumeScale() const { return volumeScale_; }
-    void setBellVolumeScale(float scale) { bellVolumeScale_ = scale; }
-    [[nodiscard]] float getBellVolumeScale() const { return bellVolumeScale_; }
 
 private:
     struct AmbientEmitter {
@@ -158,12 +156,6 @@ private:
     std::vector<AmbientSample> thunderbluffDaySounds_;
     std::vector<AmbientSample> thunderbluffNightSounds_;
 
-    // City bell sounds
-    std::vector<AmbientSample> bellAllianceSounds_;
-    std::vector<AmbientSample> bellHordeSounds_;
-    std::vector<AmbientSample> bellNightElfSounds_;
-    std::vector<AmbientSample> bellTribalSounds_;
-
     // Active emitters
     std::vector<AmbientEmitter> emitters_;
     uint64_t nextEmitterId_ = 1;
@@ -171,7 +163,6 @@ private:
     // State tracking
     float gameTimeHours_ = 12.0f;  // Default noon
     float volumeScale_ = 1.0f;
-    float bellVolumeScale_ = 0.5f;
     float birdTimer_ = 0.0f;
     float cricketTimer_ = 0.0f;
     float windLoopTime_ = 0.0f;
@@ -180,7 +171,6 @@ private:
     float oceanLoopTime_ = 0.0f;
     float zoneLoopTime_ = 0.0f;
     float cityLoopTime_ = 0.0f;
-    float bellTollTime_ = 0.0f;
     bool wasIndoor_ = false;
     bool wasBlacksmith_ = false;
     bool wasSwimming_ = false;
@@ -210,7 +200,6 @@ private:
     void updateWaterAmbience(float deltaTime, bool isSwimming);
     void updateZoneAmbience(float deltaTime, bool isIndoor);
     void updateCityAmbience(float deltaTime);
-    void updateBellTolls(float deltaTime);
     bool loadSound(const std::string& path, AmbientSample& sample, pipeline::AssetManager* assets);
 
     // Time of day helpers

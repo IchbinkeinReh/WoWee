@@ -911,8 +911,6 @@ constexpr SettingDesc kSchema[] = {
      "Off silences the world's own noise without disturbing the volumes below.", "", 1},
     {"ambientvolume", "Ambience volume", SettingKind::Int, 0, 100, 5, "Sound", "",
      "Wind, water, birds and the rest of the world's own noise.", "", 100},
-    {"bellvolume", "City bells", SettingKind::Int, 0, 100, 5, "Sound", "",
-     "The hour struck in the capital cities.", "", 50},
 
     {"npcvoicevolume", "NPC voices", SettingKind::Int, 0, 100, 5, "Sound", "Voices",
      "Greetings, farewells and quest speech from the people you talk to.", "", 100},

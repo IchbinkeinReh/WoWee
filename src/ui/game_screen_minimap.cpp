@@ -1901,7 +1901,6 @@ void GameScreen::saveSettings() {
     out << "effects_volume=" << settingsPanel_.pendingEffectsVolume << "\n";
     out << "music_volume=" << settingsPanel_.pendingMusicVolume << "\n";
     out << "ambient_volume=" << settingsPanel_.pendingAmbientVolume << "\n";
-    out << "bell_volume=" << settingsPanel_.pendingBellVolume << "\n";
     out << "ui_volume=" << settingsPanel_.pendingUiVolume << "\n";
     out << "combat_volume=" << settingsPanel_.pendingCombatVolume << "\n";
     out << "spell_volume=" << settingsPanel_.pendingSpellVolume << "\n";
@@ -2190,7 +2189,6 @@ void GameScreen::loadSettings() {
             else if (key == "effects_volume") settingsPanel_.pendingEffectsVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "music_volume") settingsPanel_.pendingMusicVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "ambient_volume") settingsPanel_.pendingAmbientVolume = std::clamp(std::stoi(val), 0, 100);
-            else if (key == "bell_volume") settingsPanel_.pendingBellVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "ui_volume") settingsPanel_.pendingUiVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "combat_volume") settingsPanel_.pendingCombatVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "spell_volume") settingsPanel_.pendingSpellVolume = std::clamp(std::stoi(val), 0, 100);

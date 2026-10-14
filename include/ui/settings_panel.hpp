@@ -125,7 +125,6 @@ public:
     bool pendingEnableSoundEffects = true;
     int pendingMusicVolume = 30;
     int pendingAmbientVolume = 100;
-    int pendingBellVolume = 50;
     /// One scale over every sound that is not music or ambience.
     ///
     /// WoW has a single Sound Effects slider and this client has seven - ui,

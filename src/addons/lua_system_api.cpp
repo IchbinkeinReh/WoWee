@@ -707,10 +707,7 @@ static void applySoundCVars(lua_State* L) {
 
     const bool ambOn = soundCVar("sound_enableambience", 1.0f) != 0.0f;
     if (!ambOn) {
-        if (auto* ambient = ac->getAmbientSoundManager()) {
-            ambient->setVolumeScale(0.0f);
-            ambient->setBellVolumeScale(0.0f);
-        }
+        if (auto* ambient = ac->getAmbientSoundManager()) ambient->setVolumeScale(0.0f);
     }
 
     // The character's own voice lines for a refused action - "I can't do that

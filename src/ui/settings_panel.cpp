@@ -1206,7 +1206,6 @@ constexpr FieldBinding kFieldBindings[] = {
     // --- Sound ---
     {.key = "musicvolume",     .asInt  = &SettingsPanel::pendingMusicVolume},
     {.key = "ambientvolume",   .asInt  = &SettingsPanel::pendingAmbientVolume},
-    {.key = "bellvolume",      .asInt  = &SettingsPanel::pendingBellVolume},
     {.key = "uivolume",        .asInt  = &SettingsPanel::pendingUiVolume},
     {.key = "combatvolume",    .asInt  = &SettingsPanel::pendingCombatVolume},
     {.key = "spellvolume",     .asInt  = &SettingsPanel::pendingSpellVolume},
@@ -1275,7 +1274,7 @@ const FieldBinding* findFieldBinding(const std::string& key) {
 bool isVolumeKey(const std::string& key) {
     return key == "mastervolume" || key == "mutesound" ||
            key == "effectsvolume" || key == "musicvolume" || key == "ambientvolume" ||
-           key == "bellvolume" || key == "uivolume" || key == "combatvolume" ||
+           key == "uivolume" || key == "combatvolume" ||
            key == "spellvolume" || key == "movementvolume" || key == "footstepvolume" ||
            key == "mountvolume" || key == "activityvolume" || key == "npcvoicevolume" ||
            key == "characterspeech";
@@ -1761,10 +1760,7 @@ void SettingsPanel::applyAudioVolumes(audio::AudioCoordinator* ac) {
     if (auto* music = ac->getMusicManager())
         music->setVolume(pendingMusicVolume);
     if (auto* ambient = ac->getAmbientSoundManager())
-    {
         ambient->setVolumeScale(pendingAmbientVolume / 100.0f);
-        ambient->setBellVolumeScale(pendingBellVolume / 100.0f);
-    }
     if (auto* ui = ac->getUiSoundManager())
         ui->setVolumeScale(fx * pendingUiVolume / 100.0f);
     if (auto* combat = ac->getCombatSoundManager())
