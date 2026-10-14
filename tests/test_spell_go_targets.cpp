@@ -9,6 +9,10 @@
 
 #include "core/application.hpp"
 #include "game/world_packets.hpp"
+#include "game/spell_target_point.hpp"
+
+#include <optional>
+#include <vector>
 
 namespace wowee {
 namespace core {
@@ -187,4 +191,128 @@ TEST_CASE("no places without target flag 0x80000, whatever the cast flags", "[sp
     CHECK(data.targetGuid == kTarget);
     CHECK(data.extraTargets.empty());
     CHECK(q.getRemainingSize() == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Where the targets' points are. The wire carries each with the packed guid
+// of the object whose frame it is in (0x009ab9c0 keeps both); the client
+// puts the destination in the world through that object's matrix, an
+// identity one when it does not know it (0x009ab810 -> 0x0074b430). The
+// points were taken as canonical as they came, X and Y the wrong way round.
+
+namespace {
+
+namespace stp = wowee::game::spell_target_point;
+
+/// A ship in the world at canonical (100, 200, 10), facing canonical yaw 0
+/// - the wire's quarter turn (pi/2).
+constexpr uint64_t kShip = 0x1FC00000000007F2ull;
+std::optional<glm::vec3> shipFrame(uint64_t guid, const glm::vec3& wire) {
+    if (guid != kShip) return std::nullopt;
+    return stp::inObjectFrame(glm::vec3(100.0f, 200.0f, 10.0f), 0.0f, wire);
+}
+
+}  // namespace
+
+TEST_CASE("a ground cast's destination is the wire's point, X and Y swapped", "[spell_go]") {
+    // Blizzard (10) on the ground: no hits, target flag 0x40, its point in
+    // the world's frame (packed guid 0), then 0x40's byte.
+    const std::vector<uint8_t> bytes = {
+        0x01, 0x42, 0x01, 0x42,                          // caster, caster unit
+        0x01, 0x0A, 0x00, 0x00, 0x00,                    // cast count, spell 10
+        0x00, 0x01, 0x00, 0x00, 0x40, 0xE2, 0x01, 0x00,  // cast flags 0x100, time
+        0x00, 0x00,                                      // hits, misses
+        0x40, 0x00, 0x00, 0x00, 0x00,                    // target flags, world
+        0xB8, 0x86, 0xD1, 0x44, 0x52, 0xDA, 0x86, 0xC5, 0x7B, 0x14, 0x76, 0x42,
+        0x00};
+    wowee::network::Packet p(0, bytes);
+    SpellGoData data;
+    REQUIRE(SpellGoParser::parse(p, data));
+    REQUIRE(data.hasDestLocation);
+    CHECK(data.destTransportGuid == 0);
+    const glm::vec3 world = stp::worldPoint(data.destTransportGuid, glm::vec3(data.destX, data.destY, data.destZ),
+                                            shipFrame);
+    CHECK(world.x == Catch::Approx(-4315.29f));
+    CHECK(world.y == Catch::Approx(1676.21f));
+    CHECK(world.z == Catch::Approx(61.52f));
+    CHECK(p.getRemainingSize() == 0);
+}
+
+TEST_CASE("a destination on a ship is in the ship's frame", "[spell_go]") {
+    const std::vector<uint8_t> bytes = {
+        0x01, 0x42, 0x01, 0x42,
+        0x01, 0x0A, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x00, 0x40, 0xE2, 0x01, 0x00,
+        0x00, 0x00,
+        0x40, 0x00, 0x00, 0x00,
+        0xC3, 0xF2, 0x07, 0xC0, 0x1F,                    // the ship's packed guid
+        0x00, 0x00, 0x20, 0xC0, 0x00, 0x00, 0xC8, 0x40, 0x00, 0x00, 0x80, 0x40,
+        0x00};
+    wowee::network::Packet p(0, bytes);
+    SpellGoData data;
+    REQUIRE(SpellGoParser::parse(p, data));
+    REQUIRE(data.hasDestLocation);
+    CHECK(data.destTransportGuid == kShip);
+    const glm::vec3 local(data.destX, data.destY, data.destZ);
+    // (-2.5, 6.25) turned a quarter turn is (-6.25, -2.5) on the wire, from
+    // the ship's wire (200, 100): canonical (97.5, 193.75), 4 above it.
+    const glm::vec3 world = stp::worldPoint(data.destTransportGuid, local, shipFrame);
+    CHECK(world.x == Catch::Approx(97.5f));
+    CHECK(world.y == Catch::Approx(193.75f));
+    CHECK(world.z == Catch::Approx(14.0f));
+    // A ship the client does not know: the point as it came.
+    const glm::vec3 unknown = stp::worldPoint(data.destTransportGuid, local,
+                                              [](uint64_t, const glm::vec3&) { return std::optional<glm::vec3>{}; });
+    CHECK(unknown.x == Catch::Approx(6.25f));
+    CHECK(unknown.y == Catch::Approx(-2.5f));
+    CHECK(unknown.z == Catch::Approx(4.0f));
+    CHECK(p.getRemainingSize() == 0);
+}
+
+TEST_CASE("each of the two points keeps its own frame", "[spell_go]") {
+    const std::vector<uint8_t> bytes = {
+        0x01, 0x42, 0x01, 0x42,
+        0x01, 0x0A, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x00, 0x40, 0xE2, 0x01, 0x00,
+        0x00, 0x00,
+        0x60, 0x00, 0x00, 0x00,
+        0x00,                                            // source: the world's
+        0x00, 0x00, 0xA0, 0x40, 0x00, 0x00, 0x40, 0xC0, 0x00, 0x00, 0xC0, 0x3F,
+        0xC3, 0xF2, 0x07, 0xC0, 0x1F,                    // destination: the ship's
+        0x00, 0x00, 0x20, 0xC0, 0x00, 0x00, 0xC8, 0x40, 0x00, 0x00, 0x80, 0x40,
+        0x00};
+    wowee::network::Packet p(0, bytes);
+    SpellGoData data;
+    REQUIRE(SpellGoParser::parse(p, data));
+    REQUIRE(data.hasSourceLocation);
+    REQUIRE(data.hasDestLocation);
+    CHECK(data.sourceTransportGuid == 0);
+    CHECK(data.destTransportGuid == kShip);
+    const glm::vec3 source = stp::worldPoint(data.sourceTransportGuid,
+                                             glm::vec3(data.sourceX, data.sourceY, data.sourceZ), shipFrame);
+    CHECK(source.x == Catch::Approx(-3.0f));
+    CHECK(source.y == Catch::Approx(5.0f));
+    CHECK(source.z == Catch::Approx(1.5f));
+    const glm::vec3 dest = stp::worldPoint(data.destTransportGuid,
+                                           glm::vec3(data.destX, data.destY, data.destZ), shipFrame);
+    CHECK(dest.x == Catch::Approx(97.5f));
+    CHECK(dest.y == Catch::Approx(193.75f));
+    CHECK(p.getRemainingSize() == 0);
+}
+
+TEST_CASE("an object's frame turns with its facing", "[spell_go]") {
+    // The matrix turns the wire's axes: facing the wire's +Y (canonical yaw
+    // 0) ahead is the wire's +Y, canonical +X; the object's left (local +Y)
+    // is then the wire's -X, canonical -Y.
+    const glm::vec3 ahead = stp::inObjectFrame(glm::vec3(0.0f), 0.0f, glm::vec3(1.0f, 0.0f, 0.0f));
+    CHECK(ahead.x == Catch::Approx(1.0f));
+    CHECK(ahead.y == Catch::Approx(0.0f).margin(1e-5));
+    const glm::vec3 left = stp::inObjectFrame(glm::vec3(0.0f), 0.0f, glm::vec3(0.0f, 1.0f, 0.0f));
+    CHECK(left.x == Catch::Approx(0.0f).margin(1e-5));
+    CHECK(left.y == Catch::Approx(-1.0f));
+    // Facing the wire's +X (canonical -pi/2): ahead is canonical +Y.
+    const glm::vec3 side = stp::inObjectFrame(glm::vec3(5.0f, 5.0f, 0.0f), -wowee::core::coords::PI * 0.5f,
+                                              glm::vec3(2.0f, 0.0f, 0.0f));
+    CHECK(side.x == Catch::Approx(5.0f));
+    CHECK(side.y == Catch::Approx(7.0f));
 }

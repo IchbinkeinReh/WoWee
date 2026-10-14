@@ -504,6 +504,13 @@ private:
     uint32_t resolveSpellVisualId(uint32_t spellId);
     // Resolve render-space position for a unit GUID (player or entity).
     bool resolveUnitPosition(uint64_t guid, glm::vec3& outPos);
+    /// A wire point in the frame of the object `guid` names, put in the
+    /// world (canonical) by its matrix; nullopt when the object is not known
+    /// (0x0074b4c0).
+    std::optional<glm::vec3> pointInObjectFrame(uint64_t guid, const glm::vec3& wirePoint);
+    /// A SpellCastTargets point in the world, canonical: in the frame of
+    /// `frameGuid`, or as it came where that is 0 or not known (0x009ab810).
+    glm::vec3 targetPointInWorld(uint64_t frameGuid, float x, float y, float z);
     // Play the cast/precast visual effect at the caster's position.
     void triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint32_t castTimeMs = 0);
     // Play the impact visual effect at the target's position.

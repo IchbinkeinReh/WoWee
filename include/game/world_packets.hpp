@@ -2525,6 +2525,10 @@ struct SpellCastTargetsData {
     uint64_t objectGuid = 0;
     std::optional<std::array<float, 3>> source;  ///< 0x20, when it was read whole
     std::optional<std::array<float, 3>> dest;    ///< 0x40, when it was read whole
+    /// The object each point is in the frame of, 0 for the world's: the
+    /// client keeps both with their points (0x009ab9c0, +0x40 and +0x48).
+    uint64_t sourceTransportGuid = 0;
+    uint64_t destTransportGuid = 0;
 };
 
 /// Read one SpellCastTargets. False when the packet ends before what the
@@ -2570,15 +2574,19 @@ struct SpellGoData {
     uint8_t missCount = 0;
     std::vector<SpellGoMissEntry> missTargets;
     uint64_t targetGuid = 0;  ///< Primary target GUID from SpellCastTargets (0 = none/AoE)
-    /// SpellCastTargets flags and the two points they may carry, in server
-    /// (canonical) coordinates. The client aims a spell's missile with them:
-    /// at each target for a unit cast, at the destination for a ground one
-    /// (FUN_007fffb0). Read for WotLK only; the older parsers leave them 0.
+    /// SpellCastTargets flags and the two points they may carry, as the wire
+    /// has them: server coordinates, in the frame of the object the matching
+    /// transport guid names, or the world's where that is 0 - see
+    /// spell_target_point::worldPoint. The client aims a spell's missile with
+    /// them: at each target for a unit cast, at the destination for a ground
+    /// one (FUN_007fffb0). Read for WotLK only; the older parsers leave them 0.
     uint32_t targetFlags = 0;
     bool hasSourceLocation = false;
     float sourceX = 0.0f, sourceY = 0.0f, sourceZ = 0.0f;
+    uint64_t sourceTransportGuid = 0;
     bool hasDestLocation = false;
     float destX = 0.0f, destY = 0.0f, destZ = 0.0f;
+    uint64_t destTransportGuid = 0;
     /// Cast flag 0x20000 (ADJUST_MISSILE): the missile's elevation, radians,
     /// and how long after SMSG_SPELL_GO it lands, milliseconds (0x0080e1b0).
     /// The client flies it on an arc between the two (0x00700880).

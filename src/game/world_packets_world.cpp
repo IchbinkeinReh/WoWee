@@ -28,8 +28,9 @@ bool readSpellCastTargets(network::Packet& packet, SpellCastTargetsData& out) {
         guid = packet.readPackedGuid();
         return true;
     };
-    auto readPoint = [&](std::optional<std::array<float, 3>>& point) {
-        uint64_t transport = 0;
+    // A point: the packed guid of the object whose frame it is in (0 for the
+    // world's), then three floats - both kept, as 0x009ab9c0 keeps them.
+    auto readPoint = [&](std::optional<std::array<float, 3>>& point, uint64_t& transport) {
         if (!readGuid(transport) || !packet.hasRemaining(12)) return false;
         std::array<float, 3> xyz{};
         for (float& v : xyz) v = packet.readFloat();
@@ -39,8 +40,16 @@ bool readSpellCastTargets(network::Packet& packet, SpellCastTargetsData& out) {
     uint64_t item = 0;
     if ((out.flags & 0x18a02u) && !readGuid(out.objectGuid)) return false;
     if ((out.flags & 0x1010u) && !readGuid(item)) return false;
-    if ((out.flags & 0x20u) && !readPoint(out.source)) return false;
-    if ((out.flags & 0x40u) && !readPoint(out.dest)) return false;
+    if (out.flags & 0x20u) {
+        uint64_t transport = 0;
+        if (!readPoint(out.source, transport)) return false;
+        out.sourceTransportGuid = transport;
+    }
+    if (out.flags & 0x40u) {
+        uint64_t transport = 0;
+        if (!readPoint(out.dest, transport)) return false;
+        out.destTransportGuid = transport;
+    }
     if (out.flags & 0x2000u) {
         bool terminated = false;
         while (packet.hasData()) {
@@ -193,12 +202,14 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
         data.sourceX = (*targets.source)[0];
         data.sourceY = (*targets.source)[1];
         data.sourceZ = (*targets.source)[2];
+        data.sourceTransportGuid = targets.sourceTransportGuid;
     }
     if (targets.dest) {
         data.hasDestLocation = true;
         data.destX = (*targets.dest)[0];
         data.destY = (*targets.dest)[1];
         data.destZ = (*targets.dest)[2];
+        data.destTransportGuid = targets.destTransportGuid;
     }
     if (!targetsWhole) return true;
 

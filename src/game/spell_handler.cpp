@@ -16,6 +16,7 @@
 #include "game/entity.hpp"
 #include "game/go_interaction_anim.hpp"
 #include "game/transport_manager.hpp"
+#include "game/spell_target_point.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
@@ -476,6 +477,26 @@ bool SpellHandler::resolveUnitPosition(uint64_t guid, glm::vec3& outPos) {
     return true;
 }
 
+std::optional<glm::vec3> SpellHandler::pointInObjectFrame(uint64_t guid, const glm::vec3& wirePoint) {
+    // The object's world matrix (0x0074b430 -> vtable +0xc4): a transport the
+    // manager runs through its own, any other object - a vehicle - by its
+    // place and facing.
+    if (TransportManager* transports = owner_.getTransportManager(); transports && transports->getTransport(guid))
+        return transports->getPlayerWorldPosition(guid, transports->serverToTransportLocal(guid, wirePoint));
+    if (const auto object = owner_.getEntityManager().getEntity(guid)) {
+        return spell_target_point::inObjectFrame(glm::vec3(object->getX(), object->getY(), object->getZ()),
+                                                 object->getOrientation(), wirePoint);
+    }
+    return std::nullopt;
+}
+
+glm::vec3 SpellHandler::targetPointInWorld(uint64_t frameGuid, float x, float y, float z) {
+    return spell_target_point::worldPoint(frameGuid, glm::vec3(x, y, z),
+                                          [this](uint64_t guid, const glm::vec3& wire) {
+                                              return pointInObjectFrame(guid, wire);
+                                          });
+}
+
 void SpellHandler::triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint32_t castTimeMs) {
     LOG_INFO("SpellVisual: triggerCastVisual spellId=", spellId, " casterGuid=0x", std::hex, casterGuid, std::dec);
     auto* renderer = owner_.services().renderer;
@@ -626,15 +647,19 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
         break;
     }
     case sm::Targeting::Location: {
-        const auto point = [](float x, float y, float z) {
-            return MissileEnd{0, core::coords::canonicalToRender(glm::vec3(x, y, z))};
+        // The wire's points (0x00732ff0): the one it flies to in the frame
+        // of its transport guid; with both, the source is where it starts,
+        // taken as a place in the world.
+        const auto point = [](const glm::vec3& canonical) {
+            return MissileEnd{0, core::coords::canonicalToRender(canonical)};
         };
         MissileEnd to;
         if (data.hasDestLocation) {
-            to = point(data.destX, data.destY, data.destZ);
-            if (data.hasSourceLocation) from = point(data.sourceX, data.sourceY, data.sourceZ);
+            to = point(targetPointInWorld(data.destTransportGuid, data.destX, data.destY, data.destZ));
+            if (data.hasSourceLocation)
+                from = point(core::coords::serverToCanonical(glm::vec3(data.sourceX, data.sourceY, data.sourceZ)));
         } else if (data.hasSourceLocation) {
-            to = point(data.sourceX, data.sourceY, data.sourceZ);
+            to = point(targetPointInWorld(data.sourceTransportGuid, data.sourceX, data.sourceY, data.sourceZ));
         } else {
             break;
         }
@@ -3321,9 +3346,9 @@ void SpellHandler::noteMissileInFlight(const SpellGoData& data) {
     };
     // To the destination where the targets have one, else to the first unit
     // hit, if the client knows it; otherwise none for these. The destination
-    // is the wire's, as the caster's place is not.
+    // is the wire's, in its transport's frame (0x009ab810).
     if ((data.targetFlags & 0x40u) != 0 && data.hasDestLocation) {
-        add(core::coords::serverToCanonical(glm::vec3(data.destX, data.destY, data.destZ)));
+        add(targetPointInWorld(data.destTransportGuid, data.destX, data.destY, data.destZ));
     } else if (!data.hitTargets.empty()) {
         if (const auto target = entities.getEntity(data.hitTargets.front()))
             add(glm::vec3(target->getX(), target->getY(), target->getZ()));
@@ -3335,12 +3360,9 @@ void SpellHandler::noteMissileInFlight(const SpellGoData& data) {
         const glm::vec3 place(extra.x, extra.y, extra.z);
         if (extra.transportGuid == 0) {
             add(core::coords::serverToCanonical(place));
-            continue;
+        } else if (const auto placed = pointInObjectFrame(extra.transportGuid, place)) {
+            add(*placed);
         }
-        TransportManager* transports = owner_.getTransportManager();
-        if (!transports || !transports->getTransport(extra.transportGuid)) continue;
-        add(transports->getPlayerWorldPosition(extra.transportGuid,
-                                               transports->serverToTransportLocal(extra.transportGuid, place)));
     }
 }
 
@@ -3645,7 +3667,8 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                         // Where its kits' chains go (0x00724f50, 0x00715400).
                         std::optional<glm::vec3> destination;
                         if ((data.targetFlags & 0x40u) && data.hasDestLocation)
-                            destination = core::coords::canonicalToRender(glm::vec3(data.destX, data.destY, data.destZ));
+                            destination = core::coords::canonicalToRender(
+                                targetPointInWorld(data.destTransportGuid, data.destX, data.destY, data.destZ));
                         svs->setUnitCastTargets(data.casterUnit, data.spellId, data.hitTargets, destination);
                         svs->playSpellVisual(visualId, casterPos, /*useImpactKit=*/false,
                                              owner_.resolveUnitRenderInstance(data.casterUnit), false,
@@ -3670,7 +3693,8 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                             spellIt != owner_.spellNameCacheRef().end() ? spellIt->second.missileSpeed : 0.0f;
                         svs->playSpellAreaKits(
                             visualId,
-                            core::coords::canonicalToRender(glm::vec3(data.destX, data.destY, data.destZ)),
+                            core::coords::canonicalToRender(
+                                targetPointInWorld(data.destTransportGuid, data.destX, data.destY, data.destZ)),
                             flewToPlace, data.spellId, data.casterUnit, speed,
                             haveCasterPos ? std::optional<glm::vec3>(casterPos) : std::nullopt);
                     }
