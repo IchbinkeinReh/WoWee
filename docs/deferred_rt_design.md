@@ -119,7 +119,7 @@ Two `R16G16B16A16_UNORM` attachments, 128 bits, packed as 16-bit words
 |------|------|
 | 0 | normal oct u (10) - knee r (6) |
 | 1 | normal oct v (10) - knee g (6) |
-| 2 | shadow-map lit (8) - flags (4) - spare |
+| 2 | shadow-map lit (8) - flags (6) - spare |
 | 3 | g.r (8) - g.g (8) |
 | 4 | g.b (8) - occ.r (8) |
 | 5 | occ.g (8) - occ.b (8) |
@@ -128,7 +128,10 @@ Two `R16G16B16A16_UNORM` attachments, 128 bits, packed as 16-bit words
 
 `g = G/C0`, `occ = (Y-E)/C0` (the most occlusion can take), `knee = E/Y`,
 `kp = Kp/2`. Flags: valid (an RT surface), sun-shadowed, baked (bakedShade and
-the lights less the building's own), lift-after-min (characters). A cleared
+the lights less the building's own), lift-after-min (characters), interior
+(baked light of a room: the room's own light shades it, see "Interior light"
+below), unit (a unit's body: its point-light shadow rays pass the units by,
+see "Point lights from what glows"). A cleared
 G-buffer is "not an RT surface": the sky, grass, the debug views 1-4 and
 anything drawn with the colour only are left as they are by the apply pass.
 
@@ -207,6 +210,82 @@ The G-buffer is created at the scene render extent (FSR/FSR2 internal size,
 FXAA, or the swapchain) and follows it on resize. Framebuffers are cached per
 colour view. FSR2's jitter is in the matrices the trace uses, as today.
 
+## Point lights from what glows
+
+Besides the lights the files carry (M2 lights, MOLT) and the ones given to
+fires and lamps without one (fireLight, lampLight), two more kinds of point
+light (rt_glow.hpp, `Source::Emissive` and `Source::Particle`, each with its
+own intensity and reach slider in Debug Lights):
+
+* Emissive surfaces. At model load (`M2Renderer::computeGlow`) every batch
+  drawn unlit (M2 flag 0x1), additive (blend 3, 4) or as a glow card, whose
+  texture is bright enough, has its triangles binned into 6-yard cells of the
+  model's space (`GlowBuilder`); the brightest four cells become patches and
+  the rest are merged into the nearest. A patch's colour is the texture's
+  mean over its visible texels (the BLP's small mip, `averageColor` x
+  `alphaCoverage`) times the batch colour and transparency, and per frame its
+  animated batch's colour and alpha tracks where they move. Its light is at
+  the patch's middle, of its hue, with strength and reach growing with the
+  square root of its power (brightness x area x the instance's scale squared),
+  capped (`glowLight`). WMOs (`WMORenderer::gatherGlows`): per group, the
+  windows (MOMT 0x10, by their sidn colour, at night only) and, in exterior
+  groups, bright unlit or additive batches where no MOLT light stands within a
+  few yards (that light already is the glow's). An interior group's windows,
+  and an emissive doodad of an interior, are `baked` like its lamps.
+* Particle emitters. While `prepareM2Particles` writes the particles out, an
+  instance within 100 yards sums each emitter's live particles
+  (`ParticleGlow`): position, colour x the texture's mean, weighted by alpha x
+  quad area x blend (adds 1, unlit alpha 0.35, lit or modulate 0). One light
+  per emitter at the weighted centroid, its strength from the summed area
+  (a third of a surface's, `kParticleGain`), its reach at most 10 yards. It
+  follows the effect's flicker since it is rebuilt every frame. The lights
+  are read by `collectRtLights` after the M2 worker is joined (or the previous
+  frame's on the single-threaded path).
+
+No double light: a model with an M2 light, a fire or a lamp gets neither
+glow patches nor particle lights; a model with glow patches gets no particle
+lights.
+
+Lamps (lampLight) and glows are lit by day and night:
+`daylightScale(windowLevel, day)` gives them all their light at night and
+`kLampDayLevel` / `kGlowDayLevel` (0.5) at noon; windows, lit only at night,
+none by day. Fires keep their full strength by day; they were never gated.
+
+Units and their own light: a unit's traced pieces are rigid and coarser
+than its skin, so a shadow ray from the skin toward a light beside it often
+started inside a neighbouring piece and the body shadowed itself; a unit
+standing by a fire took none of its light. Unit surfaces carry `RT_GB_UNIT`;
+`rt_prepare` passes it in the point normal's z, and `rt_trace` lets their
+point-light rays pass every unit by (as the sun's do within the shadow map's
+reach). A unit no longer casts point-light shadows onto other units.
+
+## Interior light
+
+Inside, the original shows a room's baked vertex colours evenly. With RT on,
+a baked colour of an interior - the WMO's baked passes in the camera's
+interior pass that are not under the sun, its doodads lit by their MODD
+colour, units on its floors (`RT_GB_INTERIOR`) - is scaled by
+
+```
+s = base + (1 - base) * clamp(L / fullAt, 0, 1)      (rtInteriorShade)
+```
+
+where `L` is the brightest channel of the shadowed point light at the
+pixel, every light counted, the building's own baked MOLT lights included,
+each with its traced shadow (the apply pass's `point / wsum` before the
+point-light strength). `base` and `fullAt` are Debug Graphics sliders
+(50% and 100% by default). Where the lamps shine fully all of the painted
+colour remains; where none reaches, `base` of it. Weighted by the pixel's
+match weight, so a pixel without a traced result is as painted.
+
+It combines with the baked lamps' shadow (`rtBakedShade`) as the lesser of
+the two (`rtInteriorBakedShade`), so a lamp's shadow does not darken twice;
+with `base` at 100% the look is exactly the previous one. It goes through the
+same G-buffer term as the baked shade (`G`, the part of C0 the shade
+multiplies), in the apply pass and, for blended geometry, in the forward
+shaders. With RT off nothing changes (`rtTune2.yz` are read only through
+the traced terms, whose weight is 0).
+
 ## What gets deleted
 
 * `rt_mover.hpp`, `rt_movers.glsli`, `RtLighting::kMaxMovers`, mover buffers,
@@ -236,8 +315,26 @@ BVH, the probe GI, the CameraZoom Lua functions.
 * GPU: +16 bytes/pixel written by opaque draws (x samples under MSAA), one
   full-screen apply pass (per sample under MSAA), an MSAA colour/depth store and
   reload at the phase break with MSAA. The trace itself is unchanged in cost.
+* Glow lights: at model load, one pass over the glowing batches' triangles
+  (M2 and WMO groups). Per frame, the lit-instance list grows by the models
+  with glow patches (a distance test each, up to four lights each when near),
+  a few additions per particle for the emitters of instances within 100
+  yards, and the WMO glows of instances in range. More lights compete for the
+  128 the trace takes; the trace's per-pixel loop over the lights is the same
+  loop with more entries (up to the same 128).
+* Interior light: a few ALU ops per pixel in the apply pass and in the
+  blended forward shaders; no new texture reads.
 
 ## Risks
+
+* Glow lights: a model whose unlit batches are not light sources (a sign
+  painted bright, a bright unlit cloth) gets a light; the brightness floor
+  (0.35 for opaque unlit batches) keeps most of them out. Particle lights on
+  baked interior surfaces add to light the bake may already hold (the hearth's
+  MOLT light), so a hearth's walls are brighter than painted.
+* Windows at night become many lights in a city; the ranking keeps the 128
+  most important.
+* A unit casts no point-light shadow on another unit (`RT_GB_UNIT`).
 
 * Opaque M2 batches with "no depth write" (material flag 0x10) leave no depth;
   the sky, now drawn after them, can cover them where nothing stands behind.

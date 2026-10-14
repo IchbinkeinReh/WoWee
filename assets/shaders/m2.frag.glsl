@@ -386,8 +386,10 @@ void main() {
         RtLight rt = kGbuffer ? rtNeutral() : rtLightAt(FragPos);
         const vec3 baked = clamp(vInteriorAmbient + highlightAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0)
                          * rtBakedLight();
-        light = baked * rtBakedShade(rt) + rtPointLightOwn(rt);
-        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED;
+        // Inside a building its room's own light shades it too
+        // (rtInteriorShade).
+        light = baked * rtInteriorBakedShade(rt) + rtPointLightOwn(rt);
+        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED | RT_GB_INTERIOR;
         rtSurface.g = baked;
         rtSurface.kp = vec3(1.0);
     } else {

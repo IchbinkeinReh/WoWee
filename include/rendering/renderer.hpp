@@ -670,6 +670,13 @@ public:
         /// colour, and its falloff window's start and end.
         float sourceIntensity[7] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
         float sourceReach[7] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+        /// Ray traced, inside: a baked colour (an interior's vertex colours, a
+        /// doodad's MODD colour, a unit's floor colour) shows at
+        /// interiorBase + (1 - interiorBase) x lit, lit the point lights'
+        /// shadowed light there over interiorFullAt, at most 1
+        /// (rt_gbuffer.glsli rtInteriorShade). 1 leaves the bake as painted.
+        float interiorBase = 0.5f;
+        float interiorFullAt = 1.0f;
         // Shadows.
         float shadowStrength = 0.6f;    ///< ray traced: how much of the light a shadow takes
         float tracedSunShadow = 1.0f;   ///< ray traced: how much of the traced sun shadows shows

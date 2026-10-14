@@ -760,7 +760,11 @@ void Renderer::updatePerFrameUBO() {
                                            std::clamp(lightingTune_.tracedSunShadow, 0.0f, 1.0f),
                                            std::clamp(lightingTune_.pointShadow, 0.0f, 1.0f),
                                            std::clamp(lightingTune_.occlusion, 0.0f, 1.0f));
-    currentFrameData.rtTune2 = glm::vec4(std::max(lightingTune_.bounce, 0.0f), 0.0f, 0.0f, 0.0f);
+    // y, z: inside, a baked colour where no point light reaches and the
+    // light at which all of it shows (rtInteriorShade).
+    currentFrameData.rtTune2 = glm::vec4(std::max(lightingTune_.bounce, 0.0f),
+                                         std::clamp(lightingTune_.interiorBase, 0.0f, 1.0f),
+                                         std::max(lightingTune_.interiorFullAt, 0.01f), 0.0f);
 
     // Player motion, consumed by water ripples and by the foliage brush in
     // m2.vert. Horizontal speed only: a fall shouldn't read as running.
@@ -6254,6 +6258,8 @@ void Renderer::recordRtLighting() {
     in.bakedLampShadow = currentFrameData.rtTune.z;
     in.sunShadow = currentFrameData.lightTune.y;
     in.pointShadow = currentFrameData.lightTune.z;
+    in.interiorBase = currentFrameData.rtTune2.y;
+    in.interiorFullAt = currentFrameData.rtTune2.z;
     in.occlusion = currentFrameData.lightTune.w;
     in.debugView = static_cast<int>(currentFrameData.giParams.y + 0.5f);
     {

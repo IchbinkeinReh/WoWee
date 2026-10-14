@@ -303,6 +303,13 @@ constexpr SettingDesc kSchema[] = {
      "How far the probes' bounced light darkens shaded places and\n"
      "lifts lit ones (Shadows, occlusion and bounce light). 0 leaves\n"
      "the flat ambient.", "", 100},
+    {"dbginteriorbase", "Inside, unlit by lamps (%)", SettingKind::Int, 0, 100, 5, "Debug Graphics", "Interiors, ray traced",
+     "How much of a room's painted light shows where no lamp's light\n"
+     "reaches: walls, floors, the things and people in it. Where the\n"
+     "lamps shine fully all of it shows. 100 is as painted.", "", 50},
+    {"dbginteriorfullat", "Inside, lamp light for full colour (%)", SettingKind::Int, 5, 300, 5, "Debug Graphics", "",
+     "How bright the lamps' traced light must be for a room's painted\n"
+     "light to show in full. Lower lights more of the room.", "", 100},
     {"dbgtimeoverride", "Use this time of day", SettingKind::Bool, 0, 0, 0, "Debug Time", "Time of day",
      "Light the world at the time below instead of the server's.\n"
      "Only what is drawn; the server's clock is left alone.", "", 0},

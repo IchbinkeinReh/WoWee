@@ -23,9 +23,10 @@ struct RtLight {
     glm::vec3 point;
     glm::vec3 pointOwn;
     float bakedShade;
+    float interiorShade = 1.0f;
 };
 
-constexpr RtLight kNeutral{1.0f, 1.0f, 1.0f, glm::vec3(0.0f), glm::vec3(0.0f), 1.0f};
+constexpr RtLight kNeutral{1.0f, 1.0f, 1.0f, glm::vec3(0.0f), glm::vec3(0.0f), 1.0f, 1.0f};
 
 struct Strengths {
     float k = 0.6f;        // rtTune.x
@@ -60,6 +61,7 @@ RtLight randomTraced(Rng& rng) {
     r.point = rng.v(0.0f, 0.6f) * r.weight;
     r.pointOwn = r.point * rng(0.0f, 1.0f);
     r.bakedShade = 1.0f - 0.6f * r.weight * rng(0.0f, 1.0f);
+    r.interiorShade = interiorShade(r.point, r.weight, rng(0.0f, 1.0f), rng(0.05f, 1.0f));
     return r;
 }
 
@@ -71,6 +73,7 @@ Traced toTraced(const RtLight& r) {
     t.point = r.point;
     t.pointOwn = r.pointOwn;
     t.bakedShade = r.bakedShade;
+    t.interiorShade = r.interiorShade;
     return t;
 }
 
@@ -275,6 +278,56 @@ TEST_CASE("A unit's light applies as character.frag lights it", "[rt_gbuffer]") 
         const RtLight r = randomTraced(rng);
         requireClose(applied(s, c0, r, st, toSun), colour(r), c0);
     }
+}
+
+// Inside (RT_GB_INTERIOR), m2.frag's interior doodad and character.frag's
+// unit on an interior floor: the baked colour times the lesser of the lamps'
+// shade and the room's own light (rtInteriorBakedShade), the other lights
+// added. A baked surface that is not an interior's takes the lamps' shade
+// alone.
+TEST_CASE("An interior's baked colour applies as the room's light shades it", "[rt_gbuffer]") {
+    Rng rng;
+    for (int i = 0; i < 400; ++i) {
+        const glm::vec3 baked = rng.v(0.05f, 1.0f);
+        const glm::vec3 m = rng.v(0.2f, 1.5f);
+        const bool interior = i % 4 != 0;
+        const auto colour = [&](const RtLight& r) {
+            const float shade = interior ? std::min(r.bakedShade, r.interiorShade) : r.bakedShade;
+            return m * (baked * shade + r.pointOwn);
+        };
+        const glm::vec3 c0 = colour(kNeutral);
+        Surface s;
+        s.flags = kValid | kBaked | (interior ? kInterior : 0u);
+        s.g = baked * m;
+        s.kp = m;
+        const RtLight r = randomTraced(rng);
+        requireClose(applied(s, c0, r, Strengths{}, glm::vec3(0.0f, 0.0f, 1.0f)), colour(r), c0);
+    }
+}
+
+// rtInteriorShade: half where no lamp reaches (the default), all of it at the
+// light named full and above, linear between; as painted where the pixel
+// found no traced result of its own, and at a base of one.
+TEST_CASE("The room's own light runs from the base to the whole colour", "[rt_gbuffer]") {
+    CHECK(interiorShade(glm::vec3(0.0f), 1.0f, 0.5f, 0.5f) == Catch::Approx(0.5f));
+    CHECK(interiorShade(glm::vec3(0.25f, 0.1f, 0.0f), 1.0f, 0.5f, 0.5f) == Catch::Approx(0.75f));
+    CHECK(interiorShade(glm::vec3(0.5f), 1.0f, 0.5f, 0.5f) == Catch::Approx(1.0f));
+    CHECK(interiorShade(glm::vec3(3.0f), 1.0f, 0.5f, 0.5f) == Catch::Approx(1.0f));
+    CHECK(interiorShade(glm::vec3(0.0f), 0.0f, 0.5f, 0.5f) == Catch::Approx(1.0f));
+    CHECK(interiorShade(glm::vec3(0.0f), 0.5f, 0.5f, 0.5f) == Catch::Approx(0.75f));
+    CHECK(interiorShade(glm::vec3(0.0f), 1.0f, 1.0f, 0.5f) == Catch::Approx(1.0f));
+    CHECK(interiorShade(glm::vec3(0.0f), 1.0f, 0.0f, 0.5f) == Catch::Approx(0.0f));
+    // Brighter light never darkens.
+    float last = 0.0f;
+    for (float l = 0.0f; l <= 1.0f; l += 0.05f) {
+        const float v = interiorShade(glm::vec3(l), 1.0f, 0.3f, 0.7f);
+        CHECK(v >= last);
+        last = v;
+    }
+    // The flag survives the words beside the others.
+    Surface s;
+    s.flags = kValid | kBaked | kLiftAfter | kInterior | kUnit;
+    CHECK(unpack(pack(s, glm::vec3(0.5f))).flags == s.flags);
 }
 
 // terrain.frag: lit and unlit layers alike scaled by the shadow, the light

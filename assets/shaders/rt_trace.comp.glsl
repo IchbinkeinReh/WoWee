@@ -37,7 +37,7 @@
 
 layout(set = 0, binding = 3) uniform sampler2D uGbufCur;
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D uRaw;
-// In: the normal the surface is lit by (rt_prepare). Out: the point lights'
+// In: the normal the surface is lit by, z a unit's body (rt_prepare). Out: the point lights'
 // light; a = the baked lights' part.
 layout(set = 0, binding = 11, rgba16f) uniform image2D uPointOut;
 
@@ -78,7 +78,16 @@ void main() {
         return;
     }
     vec3 n = rtGbufNormal(g);
-    vec3 shadingN = rtOctDecode(imageLoad(uPointOut, px).xy);
+    vec4 pointIn = imageLoad(uPointOut, px);
+    vec3 shadingN = rtOctDecode(pointIn.xy);
+    // A unit's body (RT_GB_UNIT, rt_prepare). Its traced pieces are rigid
+    // and coarse - a standing pose, or a piece per bone - and do not hold
+    // the drawn skin closely: a ray from the skin toward a torch beside it
+    // started inside a neighbouring piece (an arm, the robe's skirt) and was
+    // shadowed by the body itself, so a unit by a fire took none of its
+    // light. Its rays to the point lights pass the units by, as the sun's do
+    // within the shadow map's reach.
+    bool unitSurface = pointIn.z > 0.5;
     vec3 p = rtGbufWorld(g, px);
     vec3 origin = p + n * rtSurfaceOffset(dist);
     uint rng = rtSeed(uvec2(px), uint(pass.cameraPos.w));
@@ -157,7 +166,9 @@ void main() {
         float reach = d - min(RT_LIGHT_STANDOFF, 0.5 * d);
         if (d > 1e-3 && reach > 0.0) {
             bool byUnit;
+            rtSkipUnits = unitSurface;
             pointVis = rtOccludedBy(origin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
+            rtSkipUnits = false;
             unitHit = unitHit || byUnit;
         }
     }

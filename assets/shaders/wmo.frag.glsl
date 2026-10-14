@@ -272,8 +272,18 @@ bool passBaked(int mode) {
     return hasVertexColors != 0 && (mode == 0 || mode == 3 || unifiedPath != 0);
 }
 
-vec3 withPointLights(vec3 c, int mode, RtLight rt) {
-    if (passBaked(mode)) return c * (rtBakedLight() * rtBakedShade(rt)) + 0.5 * rtPointLightOwn(rt);
+// A baked pass of a group in the camera's interior pass, not under the sun:
+// a room's own painted light, which its lamps' traced light shades too
+// (rtInteriorShade, RT_GB_INTERIOR).
+bool passInterior(int mode, bool shadowedPass) {
+    return passBaked(mode) && !shadowedPass && gp.interiorPass != 0;
+}
+
+vec3 withPointLights(vec3 c, int mode, bool shadowedPass, RtLight rt) {
+    if (passBaked(mode)) {
+        float shade = passInterior(mode, shadowedPass) ? rtInteriorBakedShade(rt) : rtBakedShade(rt);
+        return c * (rtBakedLight() * shade) + 0.5 * rtPointLightOwn(rt);
+    }
     return c + 0.5 * rtPointLight(rt);
 }
 
@@ -314,7 +324,8 @@ vec3 fogPass(vec3 color, int which, float dist) {
 RtSurface passSurface(int mode, vec3 c, PassKnee knee, bool shadowedPass, float shadowScale,
                       vec3 texel, int fogWhich, float dist) {
     RtSurface s = rtSurfaceNone();
-    s.flags = RT_GB_VALID | (shadowedPass ? RT_GB_SUN : 0u) | (passBaked(mode) ? RT_GB_BAKED : 0u);
+    s.flags = RT_GB_VALID | (shadowedPass ? RT_GB_SUN : 0u) | (passBaked(mode) ? RT_GB_BAKED : 0u) |
+              (passInterior(mode, shadowedPass) ? RT_GB_INTERIOR : 0u);
     float scale = (shadowedPass ? shadowScale : 1.0) * (passBaked(mode) ? rtBakedLight() : 1.0);
     s.g = c * scale;
     rtSurfaceOcclusion(s, knee.y, knee.z, knee.cap);
@@ -417,7 +428,7 @@ void main() {
     const vec3 insideLit = passColour(insideLight, v.rgb, norm, rt, insideKnee);
     vec3 inside = insideLit;
     if ((shadowed & 2) != 0) inside *= shadowScale;
-    inside = withPointLights(inside, insideLight, rt);
+    inside = withPointLights(inside, insideLight, (shadowed & 2) != 0, rt);
     inside = fogPass(surface(inside, texColor, env), (fogs >> 2) & 3, dist);
     RtSurface rtSurface = rtSurfaceNone();
     if (kGbuffer) {
@@ -434,7 +445,7 @@ void main() {
         const vec3 outsideLit = passColour(outsideLight, v.rgb, norm, rt, outsideKnee);
         vec3 outside = outsideLit;
         if ((shadowed & 1) != 0) outside *= shadowScale;
-        outside = withPointLights(outside, outsideLight, rt);
+        outside = withPointLights(outside, outsideLight, (shadowed & 1) != 0, rt);
         outside = fogPass(surface(outside, texColor, env), fogs & 3, dist);
         result = outside * alpha + inside * (1.0 - alpha);
         if (kGbuffer) {

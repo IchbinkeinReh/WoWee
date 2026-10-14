@@ -133,6 +133,10 @@ public:
         float bakedLampShadow = 0.6f;
         float pointShadow = 1.0f;
         int debugView = 0;
+        /// Inside: what of a baked colour shows where no point light reaches,
+        /// and the light at which all of it does (rtInteriorShade).
+        float interiorBase = 1.0f;
+        float interiorFullAt = 1.0f;
     };
 
     /// The scene the G-buffer pass drew: its depth image, still in

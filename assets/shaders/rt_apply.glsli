@@ -44,11 +44,12 @@ struct Traced {
     vec3 point;
     vec3 pointOwn;
     float bakedShade;
+    float interiorShade;  // rtInteriorShade
     float best;     // how well the best texel matched (debug view 9)
 };
 
 Traced findTraced(vec2 uv, float expected) {
-    Traced r = Traced(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0, 0.0);
+    Traced r = Traced(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0, 1.0, 0.0);
     ivec2 size = ivec2(pass.extent.xy);
     vec2 f = uv * pass.extent.xy - 0.5;
     ivec2 center = ivec2(floor(f + 0.5));
@@ -86,6 +87,7 @@ Traced findTraced(vec2 uv, float expected) {
     float total = max(point.r, max(point.g, point.b));
     r.pointOwn = r.point * (total > 1e-4 ? clamp(1.0 - point.a / total, 0.0, 1.0) : 1.0);
     r.bakedShade = 1.0 - pass.tune2.x * r.weight * bakedDark / wsum;
+    r.interiorShade = rtInteriorShade(point.rgb / wsum, r.weight, pass.tune3.x, pass.tune3.y);
     return r;
 }
 
@@ -128,7 +130,11 @@ void main() {
         rs = sigma / max(sigma0, 1e-4);
     }
     bool baked = (g.flags & RT_GB_BAKED) != 0u;
-    float rr = rs * (baked ? r.bakedShade : 1.0);
+    // Inside, the room's own light over its baked colour or the baked lamps'
+    // shadows, whichever is darker: the lesser, so the one does not darken
+    // twice what the other has already (rtInteriorShade).
+    float shade = (g.flags & RT_GB_INTERIOR) != 0u ? min(r.bakedShade, r.interiorShade) : r.bakedShade;
+    float rr = rs * (baked ? shade : 1.0);
     // The occlusion over the flat ambient (rtAmbient), from Shadows and
     // occlusion on.
     float ao = pass.params.x >= float(RT_MODE_AO) - 0.5 ? 1.0 - r.weight * pass.tune.z * (1.0 - r.ao) : 1.0;

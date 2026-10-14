@@ -24,6 +24,8 @@ inline constexpr uint32_t kValid = 1u;
 inline constexpr uint32_t kSun = 2u;
 inline constexpr uint32_t kBaked = 4u;
 inline constexpr uint32_t kLiftAfter = 8u;
+inline constexpr uint32_t kInterior = 16u;
+inline constexpr uint32_t kUnit = 32u;
 
 /// What a surface knows of how its colour depends on the traced terms, in the
 /// colour's own units: C = C0 + g (r - 1) - r max(0, occY (1 - ao) - occE) + kp P.
@@ -73,7 +75,7 @@ inline Words pack(const Surface& s, const glm::vec3& c0) {
     Words w{};
     w[0] = static_cast<uint16_t>(quantise(oct.x, 1023.0f) | (quantise(knee.r, 63.0f) << 10));
     w[1] = static_cast<uint16_t>(quantise(oct.y, 1023.0f) | (quantise(knee.g, 63.0f) << 10));
-    w[2] = static_cast<uint16_t>(byte(s.map) | ((s.flags & 15u) << 8));
+    w[2] = static_cast<uint16_t>(byte(s.map) | ((s.flags & 63u) << 8));
     w[3] = static_cast<uint16_t>(byte(g.r) | (byte(g.g) << 8));
     w[4] = static_cast<uint16_t>(byte(g.b) | (byte(occ.r) << 8));
     w[5] = static_cast<uint16_t>(byte(occ.g) | (byte(occ.b) << 8));
@@ -90,7 +92,7 @@ inline Texel unpack(const Words& w) {
     t.knee = glm::vec3(static_cast<float>(w[0] >> 10), static_cast<float>(w[1] >> 10),
                        static_cast<float>(w[7] >> 8)) / 63.0f;
     t.map = unbyte(w[2], 0);
-    t.flags = (w[2] >> 8) & 15u;
+    t.flags = (w[2] >> 8) & 63u;
     t.g = glm::vec3(unbyte(w[3], 0), unbyte(w[3], 8), unbyte(w[4], 0));
     t.occ = glm::vec3(unbyte(w[4], 8), unbyte(w[5], 0), unbyte(w[5], 8));
     t.kp = glm::vec3(unbyte(w[6], 0), unbyte(w[6], 8), unbyte(w[7], 0)) * 2.0f;
@@ -117,7 +119,19 @@ struct Traced {
     glm::vec3 point{0.0f};
     glm::vec3 pointOwn{0.0f};
     float bakedShade = 1.0f;
+    float interiorShade = 1.0f;
 };
+
+/// rtInteriorShade: inside, what a baked colour is scaled by - `base` where
+/// no point light reaches, all of it where their shadowed light (its
+/// brightest channel) is `fullAt` or more, linear between, weighed in by the
+/// weight the pixel found its own traced result with.
+inline float interiorShade(const glm::vec3& pointLight, float weight, float base, float fullAt) {
+    const float l = std::max(pointLight.r, std::max(pointLight.g, pointLight.b));
+    const float lit = std::clamp(l / std::max(fullAt, 1e-3f), 0.0f, 1.0f);
+    const float w = std::clamp(weight, 0.0f, 1.0f);
+    return (1.0f - w) + w * (base + (1.0f - base) * lit);
+}
 
 /// The Debug Graphics strengths the apply pass reads (rtTune.x, lightTune.y,
 /// lightTune.w) and the mode (occlusion from 2 on).
@@ -156,7 +170,8 @@ inline Factors apply(const Texel& t, const Traced& r, const Tune& tune, const gl
         rs = sigma / std::max(sigma0, 1e-4f);
     }
     const bool baked = (t.flags & kBaked) != 0;
-    const float rr = rs * (baked ? r.bakedShade : 1.0f);
+    const float shade = (t.flags & kInterior) != 0 ? std::min(r.bakedShade, r.interiorShade) : r.bakedShade;
+    const float rr = rs * (baked ? shade : 1.0f);
     const float ao = tune.mode >= 2 ? 1.0f - r.weight * tune.occlusion * (1.0f - r.ao) : 1.0f;
     f.mul = glm::vec3(1.0f) + t.g * (rr - 1.0f) - rr * occlusionLoss(t, ao);
     f.add = t.kp * (baked ? r.pointOwn : r.point);

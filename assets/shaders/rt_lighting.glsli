@@ -42,7 +42,9 @@
 //                        // shadows; w 1 when these three blocks are set
 //     vec4 lightTune;    // x baked light, y traced sun shadows, z point
 //                        // lights' shadows, w traced occlusion
-//     vec4 rtTune2;      // x the probes' bounced light
+//     vec4 rtTune2;      // x the probes' bounced light, y z inside, a baked
+//                        // colour where no point light reaches and the light
+//                        // where all of it shows (rtInteriorShade)
 
 #include "rt_gi.glsli"
 #include "rt_gbuffer.glsli"
@@ -65,6 +67,7 @@ struct RtLight {
     vec3 point;       // the point lights' light here, shadowed, times weight
     vec3 pointOwn;    // the same less the buildings' own (baked) lights
     float bakedShade; // what those lights' shadows leave of a baked colour
+    float interiorShade;  // inside, what the room's own light leaves of it (rtInteriorShade)
 };
 
 // How much of a baked colour a lamp's shadow takes, where the lamp alone
@@ -88,6 +91,11 @@ float rtSunShadowStrength() { return rtTune.w > 0.5 ? lightTune.y : 1.0; }
 float rtPointShadowStrength() { return rtTune.w > 0.5 ? lightTune.z : 1.0; }
 float rtAoStrength() { return rtTune.w > 0.5 ? lightTune.w : 1.0; }
 float rtBounceStrength() { return rtTune.w > 0.5 ? rtTune2.x : 1.0; }
+// Inside, what of a baked colour shows where no point light reaches, and the
+// light at which all of it does (rtInteriorShade); 1, the bake as painted,
+// without the settings.
+float rtInteriorBase() { return rtTune.w > 0.5 ? rtTune2.y : 1.0; }
+float rtInteriorFullAt() { return rtTune.w > 0.5 ? rtTune2.z : 1.0; }
 
 // What WOWEE_GI_DEBUG shows instead of the surface, when it shows anything.
 vec3 rtGiDebugColour = vec3(0.0);
@@ -117,7 +125,7 @@ RtLight rtLightDebug(RtLight r) {
 // and shape, with the sun's visibility and the occlusion at 1 and no point
 // lights. The apply pass puts in what the trace found.
 RtLight rtNeutral() {
-    return RtLight(1.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0);
+    return RtLight(1.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0, 1.0);
 }
 
 // What the opaque surface of a G-buffer pipeline writes beside its colour
@@ -142,12 +150,13 @@ void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec4 point, inou
 
 // The terms from the sums over wsum, weighed in by weight.
 RtLight rtLightFrom(float weight, float wsum, vec2 sunAo, vec4 point, float bakedDark) {
-    RtLight r = RtLight(weight, sunAo.x / wsum, sunAo.y / wsum, vec3(0.0), vec3(0.0), 1.0);
+    RtLight r = RtLight(weight, sunAo.x / wsum, sunAo.y / wsum, vec3(0.0), vec3(0.0), 1.0, 1.0);
     r.point = point.rgb / wsum * (weight * rtPointStrength());
     // The other lights' part: the whole less the baked lights' share of it.
     float total = max(point.r, max(point.g, point.b));
     r.pointOwn = r.point * (total > 1e-4 ? clamp(1.0 - point.a / total, 0.0, 1.0) : 1.0);
     r.bakedShade = 1.0 - rtBakedShadowStrength() * weight * bakedDark / wsum;
+    r.interiorShade = rtInteriorShade(point.rgb / wsum, weight, rtInteriorBase(), rtInteriorFullAt());
     return r;
 }
 
@@ -160,7 +169,7 @@ RtLight rtLightFrom(float weight, float wsum, vec2 sunAo, vec4 point, float bake
 // matching ones are blended. Where none match, weight 0: as without the
 // tracing.
 RtLight rtLightAt(vec3 worldPos) {
-    RtLight r = RtLight(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0);
+    RtLight r = RtLight(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0, 1.0);
     if (rtParams.x < 0.5) return r;
     vec4 clip = projection * (view * vec4(worldPos, 1.0));
     if (clip.w <= 0.0) return rtLightDebug(r);
@@ -208,7 +217,7 @@ RtLight rtLightAt(vec3 worldPos) {
 RtLight rtLightBehind(vec3 worldPos) {
     RtLight own = rtLightAt(worldPos);
     if (own.weight > 0.0 || rtParams.x < 0.5) return own;
-    RtLight r = RtLight(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0);
+    RtLight r = RtLight(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0, 1.0);
     vec4 clip = projection * (view * vec4(worldPos, 1.0));
     if (clip.w <= 0.0) return own;
     vec2 uv = clamp(clip.xy / clip.w * 0.5 + 0.5, vec2(0.0), vec2(1.0));
@@ -287,6 +296,12 @@ vec3 rtPointLightOwn(RtLight r) {
 // across it - a unit, a table, a pillar between a lamp and the floor.
 float rtBakedShade(RtLight r) {
     return r.bakedShade;
+}
+
+// The same for an interior's baked colour (RT_GB_INTERIOR): the room's own
+// light over it, or the lamps' shadows, whichever is darker.
+float rtInteriorBakedShade(RtLight r) {
+    return min(r.bakedShade, r.interiorShade);
 }
 
 // What the shadow variants scale a lit colour by: 0.7 + 0.3 x the light let

@@ -485,10 +485,11 @@ void main() {
         // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct).
         const vec3 ambientLit = rtAmbient(rt, pc.interiorAmbient.rgb);
         const vec3 floorDirect = idiff * pc.interiorDirect.rgb * pc.diffuseColour.rgb * pc.lightFlags.y;
+        // Inside, the room's own light shades it too (rtInteriorShade).
         light = clamp(ambientLit + floorDirect, 0.0, 1.0)
-                  * (rtBakedLight() * rtBakedShade(rt))
+                  * (rtBakedLight() * rtInteriorBakedShade(rt))
               + rtPointLightOwn(rt);
-        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED;
+        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED | RT_GB_INTERIOR | RT_GB_UNIT;
         rtSurface.g = clamp(ambientLit + floorDirect, 0.0, 1.0) * rtBakedLight();
         rtSurfaceOcclusion(rtSurface, ambientLit, floorDirect, vec3(1.0));
         rtSurface.occY *= rtBakedLight();
@@ -550,7 +551,7 @@ void main() {
         const float shadowScale = rtShadowScale(rt, shadow);
         light = clamp(ambientLit + diff * direct, 0.0, 1.0)
               * shadowScale;
-        rtSurface.flags = RT_GB_VALID | RT_GB_SUN | RT_GB_LIFT_AFTER |
+        rtSurface.flags = RT_GB_VALID | RT_GB_SUN | RT_GB_LIFT_AFTER | RT_GB_UNIT |
                           (pc.interiorAmbient.w > 0.5 ? RT_GB_BAKED : 0u);
         rtSurface.g = light;
         rtSurfaceOcclusion(rtSurface, ambientLit, diff * direct, vec3(1.0));

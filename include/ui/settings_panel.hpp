@@ -102,6 +102,10 @@ public:
     int pendingDbgEmissiveLightReach = 100;
     int pendingDbgParticleLightIntensity = 100;
     int pendingDbgParticleLightReach = 100;
+    /// Inside, a baked colour where no lamp shines and the lamps' light at
+    /// which it is whole (Renderer::LightingTune::interiorBase, interiorFullAt).
+    int pendingDbgInteriorBase = 50;
+    int pendingDbgInteriorFullAt = 100;
     int pendingDbgShadowDarkness = 60;
     int pendingDbgTracedSunShadow = 100;
     int pendingDbgMapSunShadow = 100;
