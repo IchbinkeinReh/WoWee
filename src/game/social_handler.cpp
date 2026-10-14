@@ -731,18 +731,16 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         gameError(owner_, ErrTo::Error, "ERR_PLAYER_DEAD", "You can't do that when you're dead.");
     };
     table[Opcode::MSG_BATTLEGROUND_PLAYER_POSITIONS] = [this](network::Packet& packet) {
+        // Canonical, as every reader takes them: the wire's x and y were
+        // kept as they came, X and Y the wrong way round.
         bgPlayerPositions_.clear();
-        for (int grp = 0; grp < 2; ++grp) {
-            if (!packet.hasRemaining(4)) break;
-            uint32_t count = packet.readUInt32();
-            for (uint32_t i = 0; i < count && packet.getRemainingSize() >= 16; ++i) {
-                BgPlayerPosition pos;
-                pos.guid = packet.readUInt64();
-                pos.wowX = packet.readFloat();
-                pos.wowY = packet.readFloat();
-                pos.group = grp;
-                bgPlayerPositions_.push_back(pos);
-            }
+        for (const auto& read : BattlegroundPlayerPositionsParser::parse(packet)) {
+            BgPlayerPosition pos;
+            pos.guid = read.guid;
+            pos.wowX = read.canonicalX;
+            pos.wowY = read.canonicalY;
+            pos.group = read.group;
+            bgPlayerPositions_.push_back(pos);
         }
     };
     table[Opcode::SMSG_REMOVED_FROM_PVP_QUEUE] = [this](network::Packet& packet) {

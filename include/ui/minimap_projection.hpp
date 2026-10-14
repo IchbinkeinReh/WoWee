@@ -2,6 +2,9 @@
 
 #include <glm/glm.hpp>
 
+#include <cmath>
+#include <optional>
+
 namespace wowee::ui {
 
 /// The minimap draws the world rotated around the player and scaled from yards
@@ -44,6 +47,23 @@ inline glm::vec2 minimapOffsetToRenderDelta(float px, float py, const MinimapVie
     const float rotX = oldRx * v.cosBearing - ry * v.sinBearing;
     const float rotY = oldRx * v.sinBearing + ry * v.cosBearing;
     return {-rotY, rotX};
+}
+
+/// MINIMAP_PING's x and y (0x0057eb80): the ping's offset from the player,
+/// on the wire's axes, over the minimap's width - twice its view radius
+/// (0x007f3b90) - with +x to the right and +y up, which Minimap_SetPing
+/// multiplies by the frame's size. A map that turns turns it too, by the
+/// wire facing it is turned to.
+inline glm::vec2 minimapPingEventOffset(const glm::vec2& wireDelta, float viewRadius,
+                                        std::optional<float> mapWireFacing = std::nullopt) {
+    if (!(viewRadius > 0.0f)) return {0.0f, 0.0f};
+    glm::vec2 d = wireDelta;
+    if (mapWireFacing) {
+        const float c = std::cos(*mapWireFacing), s = std::sin(*mapWireFacing);
+        d = {c * wireDelta.x + s * wireDelta.y, -s * wireDelta.x + c * wireDelta.y};
+    }
+    const float scale = 1.0f / (viewRadius + viewRadius);
+    return {-d.y * scale, d.x * scale};
 }
 
 }  // namespace wowee::ui

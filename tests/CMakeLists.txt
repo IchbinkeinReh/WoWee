@@ -2908,6 +2908,11 @@ wowee_add_test(test_swing_trail
 # SMSG_SPELL_GO's target flags and points, which a ground missile flies to.
 wowee_add_packet_test(test_spell_go_targets)
 
+# ── test_wire_positions ──────────────────────────────
+# Places on the wire - gossip points, minimap pings, battleground positions,
+# a GM ticket's, a passenger's offset - in the coordinates each side takes.
+wowee_add_packet_test(test_wire_positions)
+
 # ── Sanitizers, once every test target exists ────────────────
 # This must be the last thing in this file. The loop walks ALL_TEST_TARGETS,
 # which register_test_target appends to as each test is declared, so the

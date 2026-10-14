@@ -1026,6 +1026,63 @@ bool BindPointUpdateParser::parse(network::Packet& packet, BindPointUpdateData& 
     return true;
 }
 
+bool GossipPoiParser::parse(network::Packet& packet, GossipPoiData& data) {
+    if (!packet.hasRemaining(20)) return false;
+    data.flags = packet.readUInt32();
+    const float wireX = packet.readFloat();
+    const float wireY = packet.readFloat();
+    data.canonicalX = wireY;
+    data.canonicalY = wireX;
+    data.icon = packet.readUInt32();
+    data.importance = packet.readUInt32();
+    data.name = packet.readString();
+    return true;
+}
+
+bool MinimapPingParser::parse(network::Packet& packet, MinimapPingData& data) {
+    if (!packet.hasRemaining(16)) return false;
+    data.senderGuid = packet.readUInt64();
+    const float wireX = packet.readFloat();
+    const float wireY = packet.readFloat();
+    data.canonicalX = wireY;
+    data.canonicalY = wireX;
+    return true;
+}
+
+std::vector<BattlegroundPlayerPositionData> BattlegroundPlayerPositionsParser::parse(network::Packet& packet) {
+    std::vector<BattlegroundPlayerPositionData> out;
+    for (int group = 0; group < 2; ++group) {
+        if (!packet.hasRemaining(4)) break;
+        const uint32_t count = packet.readUInt32();
+        for (uint32_t i = 0; i < count && packet.hasRemaining(16); ++i) {
+            BattlegroundPlayerPositionData pos;
+            pos.guid = packet.readUInt64();
+            const float wireX = packet.readFloat();
+            const float wireY = packet.readFloat();
+            pos.canonicalX = wireY;
+            pos.canonicalY = wireX;
+            pos.group = group;
+            out.push_back(pos);
+        }
+    }
+    return out;
+}
+
+network::Packet GmTicketCreatePacket::build(uint32_t mapId, float canonicalX, float canonicalY, float canonicalZ,
+                                            const std::string& text) {
+    network::Packet pkt(wireOpcode(Opcode::CMSG_GMTICKET_CREATE));
+    pkt.writeUInt32(mapId);
+    pkt.writeFloat(canonicalY);  // the wire's x
+    pkt.writeFloat(canonicalX);  // the wire's y
+    pkt.writeFloat(canonicalZ);
+    pkt.writeString(text);
+    pkt.writeUInt32(1);  // needResponse = yes
+    pkt.writeUInt8(0);   // needMoreHelp = no
+    pkt.writeUInt32(0);  // no chat-log timestamps
+    pkt.writeUInt32(0);  // and so no compressed chat log
+    return pkt;
+}
+
 bool QuestRequestItemsParser::parse(network::Packet& packet, QuestRequestItemsData& data) {
     if (!packet.hasRemaining(20)) return false;
     data.npcGuid = packet.readUInt64();

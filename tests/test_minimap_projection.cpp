@@ -135,3 +135,25 @@ TEST_CASE("a map with no rect yet answers zero rather than dividing by it") {
     CHECK(renderDeltaToMinimapOffset(10.0f, 10.0f, zero).x == Catch::Approx(0.0f));
     CHECK(minimapOffsetToRenderDelta(10.0f, 10.0f, zero).x == Catch::Approx(0.0f));
 }
+
+// MINIMAP_PING's x and y, as 0x0057eb80 works them out: the ping's offset
+// from the player over the map's width, +x right and +y up. The world place
+// was handed over instead, and Minimap_SetPing put it far off the map.
+TEST_CASE("MINIMAP_PING carries the offset over the map's width", "[minimap]") {
+    using wowee::ui::minimapPingEventOffset;
+    // The wire's +x is north, up the map; its +y west, to the left.
+    const glm::vec2 north = minimapPingEventOffset(glm::vec2(50.0f, 0.0f), 100.0f);
+    CHECK(north.x == Catch::Approx(0.0f).margin(1e-6));
+    CHECK(north.y == Catch::Approx(0.25f));
+    const glm::vec2 west = minimapPingEventOffset(glm::vec2(0.0f, 50.0f), 100.0f);
+    CHECK(west.x == Catch::Approx(-0.25f));
+    CHECK(west.y == Catch::Approx(0.0f).margin(1e-6));
+    // A map turned to face west puts west up.
+    const glm::vec2 turned = minimapPingEventOffset(glm::vec2(0.0f, 50.0f), 100.0f, 1.5707964f);
+    CHECK(turned.x == Catch::Approx(0.0f).margin(1e-5));
+    CHECK(turned.y == Catch::Approx(0.25f));
+    // And north is then to its right.
+    const glm::vec2 right = minimapPingEventOffset(glm::vec2(50.0f, 0.0f), 100.0f, 1.5707964f);
+    CHECK(right.x == Catch::Approx(0.25f));
+    CHECK(right.y == Catch::Approx(0.0f).margin(1e-5));
+}

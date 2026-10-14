@@ -661,15 +661,16 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
 
     // ---- SMSG_GOSSIP_POI ----
     table[Opcode::SMSG_GOSSIP_POI] = [this](network::Packet& packet) {
-        if (!packet.hasRemaining(20)) return;
-        const uint32_t flags = packet.readUInt32();
-        float poiX = packet.readFloat();
-        float poiY = packet.readFloat();
-        uint32_t icon = packet.readUInt32();
-        uint32_t data = packet.readUInt32();
-        std::string name = packet.readString();
-        GossipPoi poi; poi.x = poiX; poi.y = poiY; poi.icon = icon; poi.data = data; poi.name = std::move(name);
-        poi.flags = flags;
+        // The place comes as the wire has it; every reader of gossipPois_
+        // takes it canonical, as the quest points beside it are.
+        GossipPoiData read;
+        if (!GossipPoiParser::parse(packet, read)) return;
+        const float poiX = read.canonicalX;
+        const float poiY = read.canonicalY;
+        const uint32_t icon = read.icon;
+        GossipPoi poi; poi.x = poiX; poi.y = poiY; poi.icon = icon; poi.data = read.importance;
+        poi.name = std::move(read.name);
+        poi.flags = read.flags;
         poi.receivedMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
         if (gossipPois_.size() >= 200) gossipPois_.erase(gossipPois_.begin());

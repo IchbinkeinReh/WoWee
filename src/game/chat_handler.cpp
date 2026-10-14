@@ -1999,17 +1999,11 @@ void ChatHandler::submitGmTicket(const std::string& text) {
     // The chat log is a client-side transcript this client does not keep, so
     // both of its lengths go across as zero, which is how the real client
     // sends a ticket raised outside a conversation.
-    network::Packet pkt(wireOpcode(Opcode::CMSG_GMTICKET_CREATE));
-    pkt.writeUInt32(owner_.currentMapIdRef());
-    pkt.writeFloat(owner_.movementInfoRef().x);
-    pkt.writeFloat(owner_.movementInfoRef().y);
-    pkt.writeFloat(owner_.movementInfoRef().z);
-    pkt.writeString(text);
-    pkt.writeUInt32(1);  // needResponse = yes
-    pkt.writeUInt8(0);   // needMoreHelp = no
-    pkt.writeUInt32(0);  // no chat-log timestamps
-    pkt.writeUInt32(0);  // and so no compressed chat log
-    owner_.getSocket()->send(pkt);
+    //
+    // The place is the player's on the wire (0x005ac8f0): the canonical one
+    // went out as it was, X and Y the wrong way round.
+    const auto& me = owner_.movementInfoRef();
+    owner_.getSocket()->send(GmTicketCreatePacket::build(owner_.currentMapIdRef(), me.x, me.y, me.z, text));
     LOG_INFO("Submitted GM ticket: '", text, "'");
 }
 

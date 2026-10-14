@@ -2913,6 +2913,60 @@ public:
     static bool parse(network::Packet& packet, BindPointUpdateData& data);
 };
 
+/// SMSG_GOSSIP_POI as 0x0058a870 reads it: flags, the place (two floats,
+/// the wire's x then y), icon, importance, name. The place is kept here in
+/// canonical coordinates, as every reader of the gossip points takes it.
+struct GossipPoiData {
+    uint32_t flags = 0;
+    float canonicalX = 0.0f;
+    float canonicalY = 0.0f;
+    uint32_t icon = 0;
+    uint32_t importance = 0;
+    std::string name;
+};
+
+class GossipPoiParser {
+public:
+    static bool parse(network::Packet& packet, GossipPoiData& data);
+};
+
+/// MSG_MINIMAP_PING from the server as 0x006e2e90 (case 0x1d5) reads it: the
+/// sender's full guid - not a packed one - then the place, the wire's x and
+/// y. The place is kept here in canonical coordinates.
+struct MinimapPingData {
+    uint64_t senderGuid = 0;
+    float canonicalX = 0.0f;
+    float canonicalY = 0.0f;
+};
+
+class MinimapPingParser {
+public:
+    static bool parse(network::Packet& packet, MinimapPingData& data);
+};
+
+/// MSG_BATTLEGROUND_PLAYER_POSITIONS as 0x0054b3f0 reads it: two lists, each
+/// a u32 count then a guid and the wire's x and y for each. Kept here in
+/// canonical coordinates; group is the list (0 the team, 1 the carriers).
+struct BattlegroundPlayerPositionData {
+    uint64_t guid = 0;
+    float canonicalX = 0.0f;
+    float canonicalY = 0.0f;
+    int group = 0;
+};
+
+class BattlegroundPlayerPositionsParser {
+public:
+    static std::vector<BattlegroundPlayerPositionData> parse(network::Packet& packet);
+};
+
+/// CMSG_GMTICKET_CREATE: the map and the player's place - on the wire, so
+/// the canonical place is turned back - then the text and the fields after.
+class GmTicketCreatePacket {
+public:
+    static network::Packet build(uint32_t mapId, float canonicalX, float canonicalY, float canonicalZ,
+                                 const std::string& text);
+};
+
 /** CMSG_QUESTGIVER_QUERY_QUEST packet builder */
 class QuestgiverQueryQuestPacket {
 public:

@@ -1,0 +1,86 @@
+// Places the server sends and the client sends back, as the wire has them.
+//
+// The wire's x and y are the canonical y and x (core/coordinates.hpp). Each
+// of these took one side of that the wrong way: a gossip point, a minimap
+// ping and a battleground's flag carriers were kept as they came and drawn as
+// canonical; a GM ticket sent the canonical place as it was; and the minimap
+// ping was read with a packed guid where the client reads a full one, so its
+// two floats were never the ones the server wrote.
+#include <catch_amalgamated.hpp>
+
+#include <cstdint>
+#include <vector>
+
+#include "core/application.hpp"
+#include "game/world_packets.hpp"
+
+namespace wowee {
+namespace core {
+Application* Application::instance = nullptr;
+}
+}  // namespace wowee
+
+using namespace wowee::game;
+
+TEST_CASE("a gossip point is kept canonical", "[wire_positions]") {
+    // SMSG_GOSSIP_POI (0x0058a870): flags, x, y, icon, importance, name -
+    // a city guard's "the bank" in Stormwind, wire (-8932.69, 610.23).
+    const std::vector<uint8_t> bytes = {
+        0x63, 0x00, 0x00, 0x00,                          // flags
+        0xC3, 0x92, 0x0B, 0xC6, 0xB8, 0x8E, 0x18, 0x44,  // x, y
+        0x07, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,  // icon, importance
+        0x53, 0x74, 0x6F, 0x72, 0x6D, 0x77, 0x69, 0x6E, 0x64, 0x20, 0x42, 0x61, 0x6E, 0x6B, 0x00};
+    wowee::network::Packet p(0, bytes);
+    GossipPoiData poi;
+    REQUIRE(GossipPoiParser::parse(p, poi));
+    CHECK(poi.flags == 0x63);
+    CHECK(poi.canonicalX == Catch::Approx(610.23f));
+    CHECK(poi.canonicalY == Catch::Approx(-8932.69f));
+    CHECK(poi.icon == 7);
+    CHECK(poi.importance == 6);
+    CHECK(poi.name == "Stormwind Bank");
+    CHECK(p.getRemainingSize() == 0);
+}
+
+TEST_CASE("a minimap ping is a full guid and a place, kept canonical", "[wire_positions]") {
+    // MSG_MINIMAP_PING (0x006e2e90 case 0x1d5): u64 sender, x, y.
+    const std::vector<uint8_t> bytes = {
+        0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x33, 0x23, 0xCB, 0x44, 0x66, 0xE6, 0xC0, 0xC4};
+    wowee::network::Packet p(0, bytes);
+    MinimapPingData ping;
+    REQUIRE(MinimapPingParser::parse(p, ping));
+    CHECK(ping.senderGuid == 0x42);
+    CHECK(ping.canonicalX == Catch::Approx(-1543.2f));
+    CHECK(ping.canonicalY == Catch::Approx(1625.1f));
+    CHECK(p.getRemainingSize() == 0);
+}
+
+TEST_CASE("a battleground's positions are kept canonical, list by list", "[wire_positions]") {
+    // MSG_BATTLEGROUND_PLAYER_POSITIONS (0x0054b3f0): no team positions, one
+    // flag carrier at wire (1029.3, 1544.8).
+    const std::vector<uint8_t> bytes = {
+        0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00,
+        0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x9A, 0xA9, 0x80, 0x44, 0x9A, 0x19, 0xC1, 0x44};
+    wowee::network::Packet p(0, bytes);
+    const auto positions = BattlegroundPlayerPositionsParser::parse(p);
+    REQUIRE(positions.size() == 1);
+    CHECK(positions[0].guid == 7);
+    CHECK(positions[0].group == 1);
+    CHECK(positions[0].canonicalX == Catch::Approx(1544.8f));
+    CHECK(positions[0].canonicalY == Catch::Approx(1029.3f));
+    CHECK(p.getRemainingSize() == 0);
+}
+
+TEST_CASE("a GM ticket sends the player's place as the wire has it", "[wire_positions]") {
+    // 0x005ac8f0: the map, then the player's x, y, z.
+    const auto pkt = GmTicketCreatePacket::build(1, -4325.5f, 15.25f, 5.5f, "help");
+    const auto& d = pkt.getData();
+    const std::vector<uint8_t> head(d.begin(), d.begin() + 16);
+    CHECK(head == std::vector<uint8_t>{0x01, 0x00, 0x00, 0x00,
+                                       0x00, 0x00, 0x74, 0x41,    // 15.25: the wire's x
+                                       0x00, 0x2C, 0x87, 0xC5,    // -4325.5: its y
+                                       0x00, 0x00, 0xB0, 0x40});  // 5.5
+}

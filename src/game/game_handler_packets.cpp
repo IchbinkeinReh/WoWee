@@ -28,6 +28,9 @@
 #include "game/update_field_table.hpp"
 #include "game/expansion_profile.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/minimap.hpp"
+#include "rendering/camera.hpp"
+#include "ui/minimap_projection.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/post_process_pipeline.hpp"
 #include "rendering/spell_visual_system.hpp"
@@ -1285,36 +1288,49 @@ void GameHandler::registerCoreOpcodes() {
 
     // Minimap ping
     dispatchTable_[Opcode::MSG_MINIMAP_PING] = [this](network::Packet& packet) {
-        const bool mmTbcLike = isPreWotlk();
-        if (!packet.hasRemaining(mmTbcLike ? 8u : 1u) ) return;
-        uint64_t senderGuid = mmTbcLike
-            ? packet.readUInt64() : packet.readPackedGuid();
-        if (!packet.hasRemaining(8)) return;
-        float pingX = packet.readFloat();
-        float pingY = packet.readFloat();
+        // The sender's full guid and the place (0x006e2e90 case 0x1d5). A
+        // packed guid was read here, which put the two floats where the
+        // guid's bytes are.
+        MinimapPingData read;
+        if (!MinimapPingParser::parse(packet, read)) return;
         MinimapPing ping;
-        ping.senderGuid = senderGuid;
-        ping.wowX = pingY;
-        ping.wowY = pingX;
+        ping.senderGuid = read.senderGuid;
+        ping.wowX = read.canonicalX;
+        ping.wowY = read.canonicalY;
         ping.age  = 0.0f;
         minimapPings_.push_back(ping);
+        const uint64_t senderGuid = read.senderGuid;
         if (senderGuid != playerGuid) {
                             withSoundManager(&audio::AudioCoordinator::getUiSoundManager, [](auto* sfx) { sfx->playMinimapPing(); });
         }
         // The ping is drawn by this client from minimapPings_ and was never
         // announced, so a handed-over minimap heard the sound and showed
-        // nothing. The interface wants the unit that pinged and the position,
-        // and marks the spot itself.
-        //
-        // x then y, in that order, which is the reverse of how they are stored
-        // above: the wire sends them the other way round and this client swaps
-        // them on the way in. Passing the stored pair straight through would
-        // put every ping at its own mirror image.
+        // nothing. The interface wants the unit that pinged and where, as
+        // 0x0057eb80 gives it: the offset from the player over the map's
+        // width, turned with the map - Minimap_SetPing scales it by the
+        // frame. The world place itself put every ping far off the map.
         std::string unitId = guidToUnitId(senderGuid);
         if (unitId.empty()) unitId = "player";
-        fireAddonEvent("MINIMAP_PING", {unitId,
-                                        std::to_string(ping.wowY),
-                                        std::to_string(ping.wowX)});
+        const glm::vec3 pingWire = core::coords::canonicalToServer(glm::vec3(ping.wowX, ping.wowY, 0.0f));
+        const glm::vec3 meWire =
+            core::coords::canonicalToServer(glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z));
+        float viewRadius = 0.0f;
+        std::optional<float> mapFacing;
+        if (auto* renderer = services_.renderer) {
+            if (auto* minimap = renderer->getMinimap()) {
+                viewRadius = minimap->getViewRadius();
+                if (minimap->isRotateWithCamera()) {
+                    if (auto* camera = renderer->getCamera()) {
+                        // Render space is the wire's.
+                        const glm::vec3 fwd = camera->getForward();
+                        mapFacing = std::atan2(fwd.y, fwd.x);
+                    }
+                }
+            }
+        }
+        const glm::vec2 offset = ui::minimapPingEventOffset(
+            glm::vec2(pingWire.x - meWire.x, pingWire.y - meWire.y), viewRadius, mapFacing);
+        fireAddonEvent("MINIMAP_PING", {unitId, std::to_string(offset.x), std::to_string(offset.y)});
     };
     dispatchTable_[Opcode::SMSG_ZONE_UNDER_ATTACK] = [this](network::Packet& packet) {
         if (packet.hasRemaining(4)) {
