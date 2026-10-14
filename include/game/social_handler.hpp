@@ -599,6 +599,9 @@ private:
     bool lfgBodyHasRaid(const LfgUpdateBody& body) const;
     /// Drop the proposal the way 0x00552850 does.
     void clearLfgProposal();
+    /// The player has left the group: the party's locks, a role check still
+    /// beginning and a proposal held go (0x0055b120).
+    void leaveLfgGroup();
     void handleLfgPartyInfo(network::Packet& packet);
     void handleLfgPlayerReward(network::Packet& packet);
     void handleLfgBootProposalUpdate(network::Packet& packet);

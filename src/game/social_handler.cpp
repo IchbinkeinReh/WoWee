@@ -2509,6 +2509,7 @@ void SocialHandler::handlePartyCommandResult(network::Packet& packet) {
                 gameError(owner_, ErrTo::Chat, "ERR_INVITE_PLAYER_S", "You have invited %s to join your group.", name);
             else if (data.command == PartyCommand::LEAVE) {
                 gameError(owner_, ErrTo::Chat, "ERR_LEFT_GROUP_YOU", "You leave the group.");
+                leaveLfgGroup();   // 0x0055b120
                 if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CANCEL_SUMMON", {});
             }
             break;
@@ -4092,9 +4093,12 @@ void SocialHandler::handleLfgJoinResult(network::Packet& packet) {
     // 0x00acdda8 - system lines but for ERR_LFG_CANT_USE_DUNGEONS on screen,
     // and a failed role check named by its reason. These were English
     // ("Dungeon Finder: ..."), refusals said twice.
-    if (result == 0) {
-        lfgState_ = static_cast<LfgState>(state);
-    } else if (result == 1 && state == 3) {
+    //
+    // Nothing else: case 0x364 keeps no queue state from it and raises no
+    // event - the queue update that follows says what changed (LFG_UPDATE).
+    // This took the second uint32 for the queue state, which a join that
+    // succeeded sends as 0, so every join set it to None.
+    if (result == 1 && state == 3) {
         gameError(owner_, ErrTo::Chat, "ERR_LFG_ROLE_CHECK_FAILED_TIMEOUT", "The Role Check has failed because a group member did not respond.");
     } else if (result == 1 && state == 4) {
         gameError(owner_, ErrTo::Chat, "ERR_LFG_ROLE_CHECK_FAILED_NOT_VIABLE", "The Role Check has failed because your group is not viable.");
@@ -4120,12 +4124,6 @@ void SocialHandler::handleLfgJoinResult(network::Packet& packet) {
             default: break;
         }
     }
-    // The queue state moved, either into a queue or back out of the attempt,
-    // and LFG_UPDATE is how the panel is told to re-read it - the same event
-    // handleLfgUpdate fires for the same reason two handlers down. Without it
-    // the state was right in this client and stale in the interface until some
-    // other LFG packet happened along.
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
 }
 
 // SMSG_LFG_PLAYER_INFO - what the random dungeons pay out, and what this
@@ -4310,6 +4308,26 @@ void SocialHandler::handleLfgProposalUpdate(network::Packet& packet) {
             gameError(owner_, ErrTo::Chat, "ERR_LFG_PROPOSAL_DECLINED_SELF", "You have declined the group invitation.");
     }
     if (outcome.failed) {
+        clearLfgProposal();
+        owner_.fireAddonEvent("LFG_PROPOSAL_FAILED");
+    }
+}
+
+void SocialHandler::leaveLfgGroup() {
+    // 0x0055b120, as the player leaves the group (0x006cbec0, command 2):
+    // the party's locks are forgotten (0x0055ae20 on 0x00acdc08); a role check
+    // still beginning (0x00beaa4c == 2) is dropped with its dungeons and
+    // members and LFG_ROLE_CHECK_HIDE; a proposal held (0x00bea980) is dropped
+    // with LFG_PROPOSAL_FAILED. Nothing is said for either that is not there.
+    lfgPartyLocks_.clear();
+    lfgPartyLocksReceived_ = false;
+    if (lfgState_ == LfgState::RoleCheck) {
+        lfgState_ = LfgState::None;
+        lfgRoleCheckDungeons_.clear();
+        lfgRoleCheckMembers_ = 0;
+        owner_.fireAddonEvent("LFG_ROLE_CHECK_HIDE");
+    }
+    if (lfgProposalValid_) {
         clearLfgProposal();
         owner_.fireAddonEvent("LFG_PROPOSAL_FAILED");
     }
