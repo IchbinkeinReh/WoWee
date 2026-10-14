@@ -3103,7 +3103,9 @@ static int lua_GetBattlefieldPosition(lua_State* L) {
 /// as 0x0054d010 picks it (game::bg_flag): by the carrier's own team where it
 /// is in sight, else by whether it is in the player's raid - so one carrier
 /// alone is drawn with its flag as two are. The client keeps the carriers
-/// last first (0x0054b3f0), and an index past them has no texture.
+/// last first (0x0054b3f0), and an index past them has no texture. The place
+/// is the carrier's own while it is in sight (0x0054dcc0 -> 0x005444f0),
+/// else the one the server's positions packet gave.
 static int lua_GetBattlefieldFlagPosition(lua_State* L) {
     auto* gh = getGameHandler(L);
     auto* svc = getLuaServices(L);
@@ -3111,12 +3113,14 @@ static int lua_GetBattlefieldFlagPosition(lua_State* L) {
     float u = 0.0f, v = 0.0f;
     const auto* p = bgEntryAt(gh, 1, index);
     const char* flag = nullptr;
+    std::optional<glm::vec2> carrierInSight;
     if (p) {
         std::optional<uint8_t> raceInSight;
         if (auto carrier = gh->getEntityManager().getEntity(p->guid);
             carrier && carrier->getType() == game::ObjectType::PLAYER) {
             raceInSight = static_cast<uint8_t>(
                 carrier->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) & 0xFF);
+            carrierInSight = glm::vec2(carrier->getX(), carrier->getY());
         }
         bool inRaid = false;
         const auto& group = gh->getPartyData();
@@ -3126,12 +3130,20 @@ static int lua_GetBattlefieldFlagPosition(lua_State* L) {
         flag = game::bg_flag::texture(
             game::bg_flag::carrierTeam(raceInSight, gh->getPlayerRace(), inRaid), gh->getCurrentMapId());
     }
-    if (p && flag && svc && svc->mapUVForWorldPos &&
-        svc->mapUVForWorldPos(p->wowX, p->wowY, 0.0f, u, v)) {
-        lua_pushnumber(L, u);
-        lua_pushnumber(L, v);
-        lua_pushstring(L, flag);
-        return 3;
+    if (p && flag && svc && svc->mapUVForWorldPos) {
+        // The carrier's own place while it is in sight, else the packet's.
+        if (const auto uv = game::bg_flag::mapPosition(
+                carrierInSight, glm::vec2(p->wowX, p->wowY),
+                [svc](float x, float y, float& mu, float& mv) {
+                    return svc->mapUVForWorldPos(x, y, 0.0f, mu, mv);
+                })) {
+            u = uv->x;
+            v = uv->y;
+            lua_pushnumber(L, u);
+            lua_pushnumber(L, v);
+            lua_pushstring(L, flag);
+            return 3;
+        }
     }
     lua_pushnumber(L, 0.0);
     lua_pushnumber(L, 0.0);

@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <glm/glm.hpp>
 
 namespace wowee::game::bg_flag {
 
@@ -42,6 +43,21 @@ inline const char* texture(int team, uint32_t mapId) {
     constexpr uint32_t kEyeOfTheStorm = 566;
     const int index = mapId == kEyeOfTheStorm ? static_cast<int>(team == 0) : team;
     return index == 0 || index == 1 ? kNames[index] : nullptr;
+}
+
+/// Where a carrier is on the map (0x0054dcc0): its own place where it is in
+/// sight (0x005444f0 asks the object for it, vtable +0x2c), else - or where
+/// that lies off the map, which 0x005444f0 answers as (0, 0) - the place
+/// MSG_BATTLEGROUND_PLAYER_POSITIONS gave it (0x0054a4a0). `project` takes a
+/// canonical x, y to the map's u, v, false where it cannot.
+template <typename Project>
+std::optional<glm::vec2> mapPosition(std::optional<glm::vec2> carrierInSight, const glm::vec2& packet,
+                                     Project&& project) {
+    float u = 0.0f, v = 0.0f;
+    if (carrierInSight && project(carrierInSight->x, carrierInSight->y, u, v) && (u != 0.0f || v != 0.0f))
+        return glm::vec2(u, v);
+    if (project(packet.x, packet.y, u, v)) return glm::vec2(u, v);
+    return std::nullopt;
 }
 
 }  // namespace wowee::game::bg_flag

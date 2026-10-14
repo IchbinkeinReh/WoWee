@@ -233,3 +233,28 @@ TEST_CASE("a passenger on a turned lift is sent its place in the lift's frame", 
     CHECK(world.x == Catch::Approx(incoming.x));
     CHECK(world.y == Catch::Approx(-incoming.y));
 }
+
+TEST_CASE("a flag carrier in sight is placed where it is, else where the packet put it", "[wire_positions]") {
+    // 0x0054dcc0: the carrier's own place (0x005444f0) while it is in sight,
+    // the positions packet's (0x0054a4a0) otherwise or where that comes out
+    // at (0, 0) - off the map.
+    const auto project = [](float x, float y, float& u, float& v) {
+        if (x < 0.0f) return false;
+        u = x / 100.0f;
+        v = y / 100.0f;
+        return true;
+    };
+    const glm::vec2 packet(10.0f, 20.0f);
+    const auto inSight = bg_flag::mapPosition(glm::vec2(50.0f, 60.0f), packet, project);
+    REQUIRE(inSight);
+    CHECK(inSight->x == Catch::Approx(0.5f));
+    CHECK(inSight->y == Catch::Approx(0.6f));
+    const auto outOfSight = bg_flag::mapPosition(std::nullopt, packet, project);
+    REQUIRE(outOfSight);
+    CHECK(outOfSight->x == Catch::Approx(0.1f));
+    CHECK(outOfSight->y == Catch::Approx(0.2f));
+    const auto offMap = bg_flag::mapPosition(glm::vec2(-5.0f, 60.0f), packet, project);
+    REQUIRE(offMap);
+    CHECK(offMap->x == Catch::Approx(0.1f));
+    CHECK_FALSE(bg_flag::mapPosition(std::nullopt, glm::vec2(-1.0f, 0.0f), project));
+}
