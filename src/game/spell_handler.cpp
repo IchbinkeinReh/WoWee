@@ -1373,6 +1373,51 @@ void SpellHandler::playerCooldownsChanged() {
     owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
 }
 
+const std::array<uint32_t, 3>* SpellHandler::runeCostRow(uint32_t id) const {
+    if (!runeCostRowsLoaded_) {
+        runeCostRowsLoaded_ = true;
+        auto* am = owner_.services().assetManager;
+        // SpellRuneCost.dbc: the id, blood, unholy, frost, runic power.
+        if (auto dbc = am && am->isInitialized() ? am->loadDBC("SpellRuneCost.dbc") : nullptr;
+            dbc && dbc->isLoaded() && dbc->getFieldCount() >= 4) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                runeCostRows_[dbc->getUInt32(i, 0)] = {dbc->getUInt32(i, 1), dbc->getUInt32(i, 2), dbc->getUInt32(i, 3)};
+        }
+    }
+    const auto it = runeCostRows_.find(id);
+    return id != 0 && it != runeCostRows_.end() ? &it->second : nullptr;
+}
+
+SpellHandler::RuneCost SpellHandler::runeCost(uint32_t spellId) const {
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end() || it->second.powerType != 5) return {};
+    const auto* row = runeCostRow(it->second.runeCostId);
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (!row || !player) return {};
+    // The least of the spell's schools' cost modifier and multiplier
+    // (0x005ee050, 0x005ee0b0) on 100, through the cost modifiers.
+    int32_t mod = 0;
+    float mult = 0.0f;
+    bool any = false;
+    for (uint32_t school = 0; school < 7; ++school) {
+        if ((it->second.schoolMask & (1u << school)) == 0) continue;
+        const uint16_t mi = fieldIndex(UF::UNIT_FIELD_POWER_COST_MODIFIER);
+        const uint16_t xi = fieldIndex(UF::UNIT_FIELD_POWER_COST_MULTIPLIER);
+        const auto m = static_cast<int32_t>(mi != 0xFFFF ? player->getField(static_cast<uint16_t>(mi + school)) : 0u);
+        const float x = xi != 0xFFFF ? std::bit_cast<float>(player->getField(static_cast<uint16_t>(xi + school))) : 0.0f;
+        if (!any || m < mod) mod = m;
+        if (!any || x < mult) mult = x;
+        any = true;
+    }
+    auto pct = static_cast<int32_t>(std::nearbyint(static_cast<float>(mod + 100) * (mult + 1.0f)));
+    if (const auto mods = spellModifiers(spellId, 14); mods.any) pct = (pct + mods.flat) * mods.pct / 100;
+    if (pct == 0) return {};
+    const uint32_t cost[3] = {(*row)[0], (*row)[1], (*row)[2]};
+    const auto& r = owner_.getPlayerRunes();
+    if (runes::costMet(r, cost, pct)) return {};
+    return {false, runes::readyFor(r, cost, pct)};
+}
+
 spell_history::History::Cooldown SpellHandler::playerCooldown(uint32_t spellId) const {
     loadSpellNameCache();
     const auto it = owner_.spellNameCacheRef().find(spellId);
@@ -1380,8 +1425,24 @@ spell_history::History::Cooldown SpellHandler::playerCooldown(uint32_t spellId) 
     // 0x00807980: none for a spell whose first effect is 78 or 47
     // (TRADE_SKILL).
     if (it->second.effectIds[0] == 78 || it->second.effectIds[0] == 47) return {};
+    // With a rune cost (RuneCostID), the runes it waits on (0x005ee7e0), for
+    // an entry of its own or of a spell sharing a rune type with it.
+    std::optional<int64_t> runesReady;
+    const auto* row = runeCostRow(it->second.runeCostId);
+    if (row) {
+        if (const auto cost = runeCost(spellId); !cost.paid) runesReady = cost.readyAt;
+    }
+    const auto sharesRunes = [&](uint32_t other) {
+        const auto o = owner_.spellNameCacheRef().find(other);
+        const auto* orow = o != owner_.spellNameCacheRef().end() ? runeCostRow(o->second.runeCostId) : nullptr;
+        if (!row || !orow) return false;
+        for (int t = 0; t < 3; ++t)
+            if ((*row)[t] != 0 && (*orow)[t] != 0) return true;
+        return false;
+    };
     return playerHistory_.query(spellId, it->second.category, it->second.startRecoveryCategory, historyNowMs(),
-                                [this](uint32_t c) { return (spellCategoryFlags(c) & 0x2u) != 0; });
+                                [this](uint32_t c) { return (spellCategoryFlags(c) & 0x2u) != 0; }, runesReady,
+                                sharesRunes);
 }
 
 int32_t SpellHandler::moddedCooldown(uint32_t spellId, int32_t ms) const {
@@ -1947,12 +2008,13 @@ cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& pla
     // 0x00809000: the spell's history - its cooldown, its category's, its
     // global cooldown.
     c.notReady = playerCooldown(spellId).running;
-    // 0x008017e0: the cost against the power - health under it, runes
-    // as they stand (not kept: let).
+    // 0x008017e0: the cost against the power - health under it, runes by
+    // 0x005ee5b0.
     {
         const int32_t type = static_cast<int32_t>(e.powerType);
         const int32_t cost = powerCost(spellId, player, 0);
         if (type == -2) c.enoughPower = cost < static_cast<int32_t>(unit.getHealth());
+        else if (type == 5) c.enoughPower = runeCost(spellId).paid;
         else if (const uint16_t power = fieldIndex(UF::UNIT_FIELD_POWER1); power != 0xFFFF && type >= 0 && type < 7 && type != 5)
             c.enoughPower = static_cast<int32_t>(player.getField(static_cast<uint16_t>(power + type))) >= cost;
     }
@@ -3358,6 +3420,13 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                 playerHistory_.add(h);
                 playerCooldownsChanged();
             }
+        }
+        // A rune spell (PowerType 5) of the player's says which runes it
+        // used (0x0080e1b0 -> 0x005ee240).
+        if (data.hasRuneList && data.casterUnit == owner_.getPlayerGuid()) {
+            if (const auto it = owner_.spellNameCacheRef().find(data.spellId);
+                it != owner_.spellNameCacheRef().end() && it->second.powerType == 5)
+                owner_.runeListChanged(data.runesBefore, data.runesAfter, data.runeProgress);
         }
         if (now - historyPruneAt_ >= 0) {
             historyPruneAt_ = now + 30000;
@@ -4774,7 +4843,7 @@ void SpellHandler::loadSpellNameCache() const {
                    preventionField = named("PreventionType"), minFactionField = named("MinFactionId"),
                    minRepField = named("MinReputation"), areaGroupField = named("AreaGroupId"),
                    itemClassField = named("EquippedItemClass"),
-                   itemSubClassMaskField = named("EquippedItemSubClassMask");
+                   itemSubClassMaskField = named("EquippedItemSubClassMask"), runeCostField = named("RuneCostID");
     const auto timing = pipeline::detectSpellTimingFields(dbc.get(), spellL);
     const uint32_t recoveryField = timing.recoveryTime;
     const uint32_t categoryRecoveryField = timing.categoryRecoveryTime;
@@ -4875,6 +4944,7 @@ void SpellHandler::loadSpellNameCache() const {
                 entry.areaGroupId = u(areaGroupField);
                 if (itemClassField < fieldCount) entry.equippedItemClass = n(itemClassField);
                 entry.equippedItemSubClassMask = u(itemSubClassMaskField);
+                entry.runeCostId = u(runeCostField);
             }
             // Load effect base points for $s1/$s2/$s3 tooltip substitution
             if (ebp0Field != 0xFFFFFFFF) entry.effectBasePoints[0] = static_cast<int32_t>(dbc->getUInt32(i, ebp0Field));

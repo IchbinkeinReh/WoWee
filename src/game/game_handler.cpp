@@ -727,6 +727,7 @@ void GameHandler::update(float deltaTime) {
 
     updateNetworking();
     if (!socket) return;  // disconnect() may have been called
+    if (state == WorldState::IN_WORLD) updateRunes();
 
     // Sends a Warden response built off the main thread. Nothing else does:
     // without this the server's check goes unanswered and it drops the

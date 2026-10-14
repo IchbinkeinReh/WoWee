@@ -619,6 +619,20 @@ private:
     /// 0x00812410's SupercededBySpell for the player's race and class, 0 for none.
     uint32_t supersededBy(uint32_t spellId) const;
     void loadAreaGroups() const;
+    /// 0x005ee5b0: whether the player's runes pay the spell - one of
+    /// PowerType 5 with a SpellRuneCost row, at the cost percentage the
+    /// school's power cost modifier and multiplier and the cost modifiers
+    /// (op 14) make of 100 - and, where they do not, when they will
+    /// (0x005ee7e0).
+    struct RuneCost {
+        bool paid = true;
+        int64_t readyAt = 0;
+    };
+    RuneCost runeCost(uint32_t spellId) const;
+    /// SpellRuneCost.dbc: blood, unholy, frost by row.
+    mutable std::unordered_map<uint32_t, std::array<uint32_t, 3>> runeCostRows_;
+    mutable bool runeCostRowsLoaded_ = false;
+    const std::array<uint32_t, 3>* runeCostRow(uint32_t id) const;
     mutable bool castTimesLoaded_ = false;
     mutable std::unordered_map<uint32_t, std::array<int32_t, 3>> castTimes_;  ///< SpellCastTimes: base, per level, minimum
     mutable bool supersedeLoaded_ = false;

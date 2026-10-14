@@ -2418,6 +2418,12 @@ struct SpellGoMissEntry {
 };
 
 struct SpellGoData {
+    /// Flag 0x200000: the runes ready before and after the cast, and how far
+    /// along its cooldown each one it used is, out of 255.
+    bool hasRuneList = false;
+    uint8_t runesBefore = 0;
+    uint8_t runesAfter = 0;
+    std::array<uint8_t, 8> runeProgress{};
     uint64_t casterGuid = 0;
     uint64_t casterUnit = 0;
     uint8_t castCount = 0;

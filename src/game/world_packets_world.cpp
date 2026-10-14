@@ -213,11 +213,14 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
         if (!packet.hasRemaining(2)) return true;
         const uint8_t before = packet.readUInt8();
         const uint8_t after = packet.readUInt8();
+        data.hasRuneList = true;
+        data.runesBefore = before;
+        data.runesAfter = after;
         for (uint32_t rune = 0; rune < 6; ++rune) {
             const uint8_t bit = static_cast<uint8_t>(1u << rune);
             if ((before & bit) && !(after & bit)) {
                 if (!packet.hasRemaining(1)) return true;
-                packet.readUInt8();
+                data.runeProgress[rune] = packet.readUInt8();
             }
         }
     }

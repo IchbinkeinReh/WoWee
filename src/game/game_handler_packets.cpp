@@ -1,5 +1,6 @@
 #include "ui/framexml_takeover.hpp"
 #include "core/env_flag.hpp"
+#include "core/app_clock.hpp"
 #include "game/game_handler.hpp"
 #include "game/achievement_criteria.hpp"
 #include "game/chat_channels.hpp"
@@ -47,6 +48,7 @@
 #include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
 #include "rendering/animation/animation_ids.hpp"
+#include <bit>
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
 #include <cmath>
@@ -207,22 +209,48 @@ void GameHandler::sendChangePlayerDifficulty(uint32_t difficulty) {
     socket->send(packet);
 }
 
-// The rune bar draws itself from these two events and from nothing else. All
-// three rune packets stored their state and announced none of it, so a death
-// knight's runes were drawn once at login and then stood still.
+// The rune bar draws itself from these two events and from nothing else.
 //
 // "usable" is sent as a present argument or no argument at all rather than as
 // one and zero, because zero is true in Lua: an argument saying the rune is on
 // cooldown would read as one saying it is ready.
-void GameHandler::fireRuneUpdate(uint32_t index) {
-    if (index >= playerRunes_.size()) return;
-    const std::string oneBased = std::to_string(index + 1);
-    fireAddonEvent("RUNE_TYPE_UPDATE", {oneBased});
-    if (playerRunes_[index].ready) {
-        fireAddonEvent("RUNE_POWER_UPDATE", {oneBased, "1"});
-    } else {
-        fireAddonEvent("RUNE_POWER_UPDATE", {oneBased});
+void GameHandler::fireRunePowerUpdates(const std::array<runes::PowerUpdate, runes::kMax>& updates, int n) {
+    for (int k = 0; k < n; ++k) {
+        const std::string oneBased = std::to_string(updates[k].rune + 1);
+        if (updates[k].usable) fireAddonEvent("RUNE_POWER_UPDATE", {oneBased, "1"});
+        else fireAddonEvent("RUNE_POWER_UPDATE", {oneBased});
     }
+}
+
+std::array<float, 4> GameHandler::runeRegen() const {
+    std::array<float, 4> regen{};
+    const auto player = getEntityManager().getEntity(playerGuid);
+    const uint16_t f = fieldIndex(UF::PLAYER_RUNE_REGEN_1);
+    if (!player || f == 0xFFFF) return regen;
+    for (uint16_t t = 0; t < 4; ++t) regen[t] = std::bit_cast<float>(player->getField(static_cast<uint16_t>(f + t)));
+    return regen;
+}
+
+void GameHandler::runeListChanged(uint8_t before, uint8_t after, const std::array<uint8_t, runes::kMax>& progress) {
+    std::array<runes::PowerUpdate, runes::kMax> out{};
+    const int n = playerRunes_.changed(before, after, progress.data(),
+                                       static_cast<int64_t>(core::appTimeSeconds() * 1000.0), runeRegen(), out);
+    fireRunePowerUpdates(out, n);
+}
+
+void GameHandler::updateRunes() {
+    // A death knight (power type 6) regenerating (UNIT_FIELD_FLAGS_2 0x800).
+    const auto player = getEntityManager().getEntity(playerGuid);
+    if (!player) return;
+    const uint16_t b0 = fieldIndex(UF::UNIT_FIELD_BYTES_0), f2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+    if (b0 == 0xFFFF || f2 == 0xFFFF || ((player->getField(b0) >> 24) & 0xFFu) != 6 ||
+        (player->getField(f2) & 0x800u) == 0)
+        return;
+    const auto now = static_cast<int64_t>(core::appTimeSeconds() * 1000.0);
+    const uint32_t ready = playerRunes_.readyBy(now);
+    if (ready == playerRunes_.ready) return;
+    std::array<runes::PowerUpdate, runes::kMax> out{};
+    fireRunePowerUpdates(out, playerRunes_.changed(playerRunes_.ready, ready, nullptr, now, runeRegen(), out));
 }
 
 // The opcodes this handler answers itself, grouped by what they are about: the
@@ -2323,69 +2351,54 @@ void GameHandler::registerRemainingOpcodes() {
         }
         packet.skipAll();
     };
-    // uint8 runeIndex + uint8 newRuneType (0=Blood,1=Unholy,2=Frost,3=Death)
+    // 0x005ee020: uint8 rune, uint8 its new type - RUNE_TYPE_UPDATE.
     dispatchTable_[Opcode::SMSG_CONVERT_RUNE] = [this](network::Packet& packet) {
-        // uint8 runeIndex + uint8 newRuneType (0=Blood,1=Unholy,2=Frost,3=Death)
         if (!packet.hasRemaining(2)) {
             packet.skipAll();
             return;
         }
-        uint8_t idx  = packet.readUInt8();
-        uint8_t type = packet.readUInt8();
-        if (idx < 6) {
-            playerRunes_[idx].type = static_cast<RuneType>(type & 0x3);
-            // Stored and never announced: the rune bar redraws a rune on this
-            // event and on nothing else, so a rune converted to Death kept the
-            // colour it was drawn with at login.
+        const uint8_t idx = packet.readUInt8();
+        const uint8_t type = packet.readUInt8();
+        if (idx < runes::kMax) {
+            playerRunes_.type[idx] = type;
             fireAddonEvent("RUNE_TYPE_UPDATE", {std::to_string(idx + 1)});
         }
     };
-    // uint32 count, then per rune: uint8 type, uint8 elapsed.
-    //
-    // This read a one-byte "ready mask" and six cooldowns, which is neither the
-    // shape nor the meaning. Player::ResyncRunes writes a count first, so the
-    // mask was the low byte of that count and every cooldown after it was
-    // half a type and half an elapsed value.
-    //
-    // The polarity was inverted as well. The server sends
-    // 255 - cooldown * 51, so 255 means the cooldown has fully elapsed and the
-    // rune is ready, and 0 means it was just spent - the opposite of what
-    // `1 - cd/255` computed.
-    //
-    // The type is in here too and was never read, so a rune converted to Death
-    // kept whatever it was at login.
+    // 0x005ee440: uint32 count, then per rune its type and how far along its
+    // cooldown it is, out of 255 (Player::ResyncRunes sends 255 - cooldown *
+    // 51). Which runes are ready is left as it was.
     dispatchTable_[Opcode::SMSG_RESYNC_RUNES] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(4)) {
             packet.skipAll();
             return;
         }
-        const uint32_t count = packet.readUInt32();
-        for (uint32_t i = 0; i < count && i < playerRunes_.size(); ++i) {
+        playerRunes_.count = static_cast<int>(packet.readUInt32());
+        const auto now = static_cast<int64_t>(core::appTimeSeconds() * 1000.0);
+        const auto regen = runeRegen();
+        std::array<runes::PowerUpdate, runes::kMax> out{};
+        int n = 0;
+        for (int i = 0; i < playerRunes_.count && i < runes::kMax; ++i) {
             if (!packet.hasRemaining(2)) break;
-            const uint8_t type    = packet.readUInt8();
-            const uint8_t elapsed = packet.readUInt8();
-            playerRunes_[i].type = static_cast<RuneType>(type & 0x3);
-            playerRunes_[i].readyFraction = elapsed / 255.0f;
-            playerRunes_[i].ready = (elapsed >= 255);
-            fireRuneUpdate(i);
+            const uint8_t type = packet.readUInt8();
+            const uint8_t progress = packet.readUInt8();
+            playerRunes_.resync(i, type, progress, now, regen);
+            out[n++] = {i, false};
         }
+        fireRunePowerUpdates(out, n);
         packet.skipAll();
     };
-    // uint32 runeMask (bit i=1 → rune i just became ready)
+    // 0x005ee520: uint32 mask - each rune in it not ready has its cooldown
+    // run out.
     dispatchTable_[Opcode::SMSG_ADD_RUNE_POWER] = [this](network::Packet& packet) {
-        // uint32 runeMask (bit i=1 → rune i just became ready)
         if (!packet.hasRemaining(4)) {
             packet.skipAll();
             return;
         }
-        uint32_t runeMask = packet.readUInt32();
-        for (int i = 0; i < 6; i++) {
-            if (runeMask & (1u << i)) {
-                playerRunes_[i].ready = true;
-                playerRunes_[i].readyFraction = 1.0f;
-                fireRuneUpdate(static_cast<uint32_t>(i));
-            }
-        }
+        std::array<runes::PowerUpdate, runes::kMax> out{};
+        const int n = playerRunes_.addPower(packet.readUInt32(), static_cast<int64_t>(core::appTimeSeconds() * 1000.0),
+                                            runeRegen(), out);
+        fireRunePowerUpdates(out, n);
+        fireAddonEvent("ACTIONBAR_UPDATE_COOLDOWN", {});
     };
 
     // uint8 result: 0=success, 1=failed, 2=disabled

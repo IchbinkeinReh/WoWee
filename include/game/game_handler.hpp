@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/rune_state.hpp"
 #include "game/spell_history.hpp"
 #include "game/quest_giver_status.hpp"
 #include "game/spell_mods.hpp"
@@ -354,8 +355,9 @@ public:
     /// Seconds until the next one, and the healer it belongs to.
     float getAreaSpiritHealerTime() const { return areaSpiritHealerSeconds_; }
     uint64_t getAreaSpiritHealerGuid() const { return areaSpiritHealerGuid_; }
-    /// Announce a rune's type and readiness to the interface.
-    void fireRuneUpdate(uint32_t index);
+    /// RUNE_POWER_UPDATE for each rune the client says it of (0x0081b530
+    /// 0x256): its slot from 1, and "1" when usable.
+    void fireRunePowerUpdates(const std::array<runes::PowerUpdate, runes::kMax>& updates, int n);
     const std::vector<std::string>& getJoinedChannels() const;
     /// Whether the player owns this chat channel. See ChatHandler.
     bool ownsChatChannel(const std::string& name) const;
@@ -2570,14 +2572,14 @@ public:
     void updatePetActionBar();
     uint64_t getComboTarget() const { return comboTarget_; }
 
-    // Death Knight rune state (6 runes: 0-1=Blood, 2-3=Unholy, 4-5=Frost; may become Death=3)
-    enum class RuneType : uint8_t { Blood = 0, Unholy = 1, Frost = 2, Death = 3 };
-    struct RuneSlot {
-        RuneType type = RuneType::Blood;
-        bool     ready = true;          // Server-confirmed ready state
-        float    readyFraction = 1.0f;  // 0.0=depleted → 1.0=full (from server sync)
-    };
-    const std::array<RuneSlot, 6>& getPlayerRunes() const { return playerRunes_; }
+    /// The death knight's runes as the client keeps them (runes::Runes).
+    const runes::Runes& getPlayerRunes() const { return playerRunes_; }
+    /// A cast's rune list (SMSG_SPELL_GO flag 0x200000 -> 0x005ee240): the
+    /// runes ready before and after it, and how far along each one it put on
+    /// cooldown is, out of 255.
+    void runeListChanged(uint8_t before, uint8_t after, const std::array<uint8_t, runes::kMax>& progress);
+    /// PLAYER_RUNE_REGEN by rune type, per second (+0x1008 +0x1214).
+    std::array<float, 4> runeRegen() const;
 
     // Talent-driven spell modifiers (SMSG_SET_FLAT_SPELL_MODIFIER / SMSG_SET_PCT_SPELL_MODIFIER)
     // SpellModOp matches WotLK SpellModOp enum (server-side).
@@ -4408,6 +4410,7 @@ public:
         uint32_t areaGroupId = 0;
         int32_t equippedItemClass = -1;
         uint32_t equippedItemSubClassMask = 0;
+        uint32_t runeCostId = 0;
     };
     static constexpr size_t PLAYER_EXPLORED_ZONES_COUNT = 128;
     std::string getAreaName(uint32_t areaId) const;
@@ -5576,14 +5579,10 @@ private:
     bool deathReleaseValid_ = false;
     uint32_t deathReleaseMapId_ = 0;
     glm::vec3 deathReleaseCanonical_{0.0f};
-    // Death Knight runes (class 6): slots 0-1=Blood, 2-3=Unholy, 4-5=Frost initially
-    std::array<RuneSlot, 6> playerRunes_ = [] {
-        std::array<RuneSlot, 6> r{};
-        r[0].type = r[1].type = RuneType::Blood;
-        r[2].type = r[3].type = RuneType::Unholy;
-        r[4].type = r[5].type = RuneType::Frost;
-        return r;
-    }();
+    runes::Runes playerRunes_;
+    /// 0x00728a20: a death knight's cooling runes whose time has come are
+    /// ready, each frame.
+    void updateRunes();
     uint64_t pendingSpiritHealerGuid_ = 0;
     bool resurrectPending_ = false;
     bool resurrectRequestPending_ = false;

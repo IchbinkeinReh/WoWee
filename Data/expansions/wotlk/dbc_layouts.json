@@ -382,6 +382,7 @@
     "AreaGroupId": 224,
     "EquippedItemClass": 68,
     "EquippedItemSubClassMask": 69,
+    "RuneCostID": 226,
     "Category": 1,
     "DmgClass": 213,
     "StartRecoveryCategory": 205,

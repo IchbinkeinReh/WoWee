@@ -201,6 +201,8 @@ enum class UF : uint16_t {
     /// WotLK: the ranged attack time (+0xe8), which a ranged spell's
     /// category cooldown runs longer by (0x007fef60).
     UNIT_FIELD_RANGEDATTACKTIME,
+    /// WotLK: the runes' regen rate by type, four floats (+0x1008 +0x1214).
+    PLAYER_RUNE_REGEN_1,
     /// WotLK: the unit the player looks through - a vehicle it drives, a
     /// possessed unit (+0x1008 +0x770, 0x004f7310).
     PLAYER_FARSIGHT,

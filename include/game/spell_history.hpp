@@ -7,6 +7,7 @@
 /// Times are in milliseconds of the client's clock (0x0086ae20).
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace wowee::game::spell_history {
@@ -104,6 +105,16 @@ public:
     template <typename Shared>
     [[nodiscard]] Cooldown query(uint32_t spellId, uint32_t category, uint32_t startRecoveryCategory, int64_t now,
                                  Shared&& shared) const {
+        return query(spellId, category, startRecoveryCategory, now, shared, std::nullopt,
+                     [](uint32_t) { return false; });
+    }
+    /// With a rune cost the runes do not pay, ready at `runesReady`
+    /// (0x005ee7e0): an entry of the spell's own, or of one sharing a rune
+    /// type with it (`sharesRunes`), runs until then, as ten seconds.
+    template <typename Shared, typename SharesRunes>
+    [[nodiscard]] Cooldown query(uint32_t spellId, uint32_t category, uint32_t startRecoveryCategory, int64_t now,
+                                 Shared&& shared, std::optional<int64_t> runesReady,
+                                 SharesRunes&& sharesRunes) const {
         Cooldown out;
         int64_t latest = now;
         const auto take = [&](int64_t end, int64_t start, int32_t duration, const Entry& e, bool enable) {
@@ -121,6 +132,11 @@ public:
                 take((e.onHold ? now : e.categoryStart) + e.categoryDuration, e.onHold ? now : e.categoryStart,
                      e.categoryDuration, e, true);
             if (e.gcdCategory == startRecoveryCategory && e.gcd != 0) take(e.start + e.gcd, e.start, e.gcd, e, false);
+            if (runesReady && (e.spellId == spellId || sharesRunes(e.spellId)) && *runesReady - latest >= 0) {
+                latest = *runesReady;
+                out.start = *runesReady - 10000;
+                out.duration = 10000;
+            }
         }
         out.running = latest != now;
         return out;

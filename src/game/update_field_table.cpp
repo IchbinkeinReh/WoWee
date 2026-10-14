@@ -104,6 +104,7 @@ static const UFNameEntry kUFNames[] = {
     {.name = "UNIT_FIELD_POWER_COST_MULTIPLIER", .field = UF::UNIT_FIELD_POWER_COST_MULTIPLIER},
     {.name = "PLAYER_FIELD_BYTES", .field = UF::PLAYER_FIELD_BYTES},
     {.name = "UNIT_FIELD_RANGEDATTACKTIME", .field = UF::UNIT_FIELD_RANGEDATTACKTIME},
+    {.name = "PLAYER_RUNE_REGEN_1", .field = UF::PLAYER_RUNE_REGEN_1},
     {.name = "PLAYER_FARSIGHT", .field = UF::PLAYER_FARSIGHT},
     {.name = "GAMEOBJECT_FLAGS", .field = UF::GAMEOBJECT_FLAGS},
     {.name = "GAMEOBJECT_BYTES_1", .field = UF::GAMEOBJECT_BYTES_1},

@@ -1924,6 +1924,16 @@ target_link_libraries(test_spell_history PRIVATE catch2_main)
 add_test(NAME spell_history COMMAND test_spell_history)
 register_test_target(test_spell_history)
 
+# ── test_rune_state ─────────────────────────────────────────
+add_executable(test_rune_state
+    test_rune_state.cpp
+)
+target_include_directories(test_rune_state PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_rune_state SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_rune_state PRIVATE catch2_main)
+add_test(NAME rune_state COMMAND test_rune_state)
+register_test_target(test_rune_state)
+
 # ── test_spell_unit_target ──────────────────────────────────
 add_executable(test_spell_unit_target
     test_spell_unit_target.cpp
