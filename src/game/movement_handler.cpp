@@ -2251,7 +2251,11 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
             facingTowards(destWorld, *facingSpotWorld);
         }
 
-        owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, destLocalCanonical, false, 0.0f);
+        // A fixed facing is one on the transport at the end of the move as
+        // much as at a stop (0x006eb0b0 sets the movement's +0x20 to it on
+        // arriving), so the transport's turn meanwhile is in it.
+        owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, destLocalCanonical,
+                                      fixedLocalFacing.has_value(), fixedLocalFacing.value_or(0.0f));
         const float pathLength =
             glm::length(destWorld - glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
         entity->startMoveTo(destWorld.x, destWorld.y, destWorld.z, facingAngle, duration / 1000.0f);
@@ -4012,6 +4016,12 @@ void MovementHandler::updateAttachedTransportChildren(float /*deltaTime*/) {
                 attachment.transportGuid, attachment.localOffset);
             attachment.offsetNeedsTransportResolution = false;
         }
+
+        // A monster move on the transport under way is its own until it
+        // ends: along its path, facing along it (0x0073c8e0), and only on
+        // arriving the facing it asked for (0x006eb0b0). Putting it at its
+        // destination here every frame ended the move as it began.
+        if (entity->isActivelyMoving() && onMoveSpline(childGuid)) continue;
 
         glm::vec3 composed = owner_.getTransportManager()->getPlayerWorldPosition(
             attachment.transportGuid, attachment.localOffset);
