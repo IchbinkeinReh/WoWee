@@ -2691,7 +2691,9 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
 
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("PLAYER_ENTERING_WORLD", {"0"});
-        owner_.addonEventCallbackRef()("ZONE_CHANGED_NEW_AREA", {});
+        // Not ZONE_CHANGED_NEW_AREA: the client raises it only from the
+        // player's area (0x005204c0, Renderer::updatePlayerArea), which
+        // forgets its texts on a new map so the first area is still new.
     }
 }
 
