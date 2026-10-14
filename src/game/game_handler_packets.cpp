@@ -663,7 +663,7 @@ void GameHandler::registerCoreOpcodes() {
     dispatchTable_[Opcode::SMSG_LEARNED_DANCE_MOVES] = [](network::Packet& packet) {
         LOG_DEBUG("SMSG_LEARNED_DANCE_MOVES: ignored (size=", packet.getSize(), ")");
     };
-    dispatchTable_[Opcode::SMSG_CHAR_RENAME] = [this](network::Packet& packet) {
+    dispatchTable_[Opcode::SMSG_CHAR_RENAME] = [](network::Packet& packet) {
         // uint8 result, and the guid and the new name only when it succeeded.
         //
         // This read a four-byte result and required thirteen bytes. A refusal
@@ -1639,7 +1639,7 @@ void GameHandler::registerCoreOpcodes() {
             if (info && info->valid) addSystemChatMessage(currency(itemCounts[i], info->name));
         }
     };
-    dispatchTable_[Opcode::SMSG_SOCKET_GEMS_RESULT] = [this](network::Packet& packet) {
+    dispatchTable_[Opcode::SMSG_SOCKET_GEMS_RESULT] = [](network::Packet& packet) {
         // There is no result field. Item::SendUpdateSockets writes the item's
         // guid and then the four enchantment ids now in its sockets, and sends
         // it only when the sockets were actually changed - so arriving *is* the
