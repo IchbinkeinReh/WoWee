@@ -137,6 +137,9 @@ TEST_CASE("ClockSync: processServerUpdate sets yaw and rotation", "[transport_cl
 // So a transport travelling along canonical +X is facing its direction of travel
 // at s = +pi/2, and facing exactly backwards at s = -pi/2.
 static constexpr float kServerYawAlongCanonicalX = glm::half_pi<float>();
+// processServerUpdate is handed the canonical yaw (updateServerTransport passes
+// the entity's orientation), which along canonical +X is 0.
+static constexpr float kCanonicalYawAlongCanonicalX = 0.0f;
 
 // Every transport hull is authored with its bow at model-space -X, so a hull
 // travelling along canonical +X renders at that heading plus PI. Measured from
@@ -151,7 +154,7 @@ TEST_CASE("ClockSync: yaw flip detection after repeated misaligned updates", "[t
     t.useClientAnimation = false;
 
     // Travelling along canonical +X while reporting the yaw for -X.
-    const float reversedYaw = kServerYawAlongCanonicalX - glm::pi<float>();
+    const float reversedYaw = kCanonicalYawAlongCanonicalX - glm::pi<float>();
     glm::vec3 pos(100.0f, 200.0f, 0.0f);
     sync.processServerUpdate(t, &path, pos, reversedYaw, 1.0);
 
@@ -178,7 +181,8 @@ TEST_CASE("ClockSync: a transport facing its direction of travel is never flippe
     for (int step = 0; step < 16; ++step) {
         const float canonicalHeading = static_cast<float>(step) * glm::pi<float>() / 8.0f;
         const glm::vec3 dir(std::cos(canonicalHeading), -std::sin(canonicalHeading), 0.0f);
-        const float serverYaw = canonicalHeading + glm::half_pi<float>();
+        // What updateServerTransport passes: the canonical yaw, as it is.
+        const float serverYaw = canonicalHeading;
 
         auto moving = makeTransport();
         moving.useClientAnimation = false;
@@ -193,6 +197,25 @@ TEST_CASE("ClockSync: a transport facing its direction of travel is never flippe
         REQUIRE_FALSE(moving.serverYawFlipped180);
         REQUIRE(moving.serverYawAlignmentScore > 0);
     }
+}
+
+TEST_CASE("ClockSync: a transport sliding sideways is neither aligned nor reversed",
+          "[transport_clock_sync]") {
+    // The yaw it is handed is canonical. Read as a server yaw it was a quarter
+    // turn out, so travel across the heading scored as along it: this one,
+    // facing canonical +X and drifting along -Y, was flipped.
+    TransportClockSync sync;
+    auto path = makeCirclePath();
+    auto t = makeTransport();
+    t.useClientAnimation = false;
+    glm::vec3 pos(100.0f, 200.0f, 0.0f);
+    sync.processServerUpdate(t, &path, pos, kCanonicalYawAlongCanonicalX, 1.0);
+    for (int i = 1; i <= 8; i++) {
+        pos.y -= 5.0f;
+        sync.processServerUpdate(t, &path, pos, kCanonicalYawAlongCanonicalX, 1.0 + i * 0.5);
+    }
+    REQUIRE_FALSE(t.serverYawFlipped180);
+    REQUIRE(t.serverYawAlignmentScore == 0);
 }
 
 // ══════════════════════════════════════════════════════════════════

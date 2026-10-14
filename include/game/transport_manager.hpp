@@ -52,7 +52,7 @@ struct ActiveTransport {
     int32_t serverClockOffsetMs;   // Offset: serverClock - localNow
     bool useClientAnimation;        // Use client-side path animation
     bool clientAnimationReverse;    // Run client animation in reverse along the selected path
-    float serverYaw;                // Server-authoritative yaw (radians)
+    float serverYaw;                // The server's yaw for it, canonical (radians)
     bool hasServerYaw;              // Whether we've received server yaw
     float dockYaw;                  // Authored server spawn yaw used during route dwell
     bool hasDockYaw;                // Whether dockYaw was captured before client route assignment
