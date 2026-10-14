@@ -125,3 +125,48 @@ TEST_CASE("a passenger's offset goes back out as it came in", "[wire_positions]"
     CHECK(transport_local::fromWire(true, wire).x == 3.0f);
     CHECK(transport_local::fromWire(false, wire).x == -7.5f);
 }
+
+TEST_CASE("a passenger on a turned lift is sent its place in the lift's frame", "[wire_positions]") {
+    // The client's offset is the place put through the inverse of the lift's
+    // matrix (0x004f47b0 -> 0x004c2300); a lift placed at pi/2 has its own +x
+    // along the wire's +y. Standing two yards north of its middle - canonical
+    // +x, the wire's +y - is two yards along the lift's +x.
+    const float liftFacing = 1.5707964f;
+    const glm::vec3 wire = transport_local::toWire(false, glm::vec3(2.0f, 0.0f, 0.5f), liftFacing);
+    CHECK(wire.x == Catch::Approx(2.0f));
+    CHECK(wire.y == Catch::Approx(0.0f).margin(1e-5));
+    CHECK(wire.z == 0.5f);
+
+    // As a heartbeat writes it: flags (ONTRANSPORT), flags2, time, x y z o,
+    // the lift's packed guid (0xF110000000000ABC), then the offset.
+    MovementInfo info;
+    info.flags = static_cast<uint32_t>(MovementFlags::ONTRANSPORT);
+    info.transportGuid = 0xF110000000000ABCull;
+    info.transportX = wire.x;
+    info.transportY = wire.y;
+    info.transportZ = wire.z;
+    wowee::network::Packet out;
+    MovementPacket::writeMovementPayload(out, info);
+    wowee::network::Packet r(0, out.getData());
+    r.readUInt32();
+    r.readUInt16();
+    r.readUInt32();
+    for (int i = 0; i < 4; ++i) r.readFloat();
+    const std::vector<uint8_t> guid = {r.readUInt8(), r.readUInt8(), r.readUInt8(),
+                                       r.readUInt8(), r.readUInt8()};
+    CHECK(guid == std::vector<uint8_t>{0xC3, 0xBC, 0x0A, 0x10, 0xF1});
+    CHECK(r.readFloat() == Catch::Approx(2.0f));
+    CHECK(r.readFloat() == Catch::Approx(0.0f).margin(1e-5));
+    CHECK(r.readFloat() == 0.5f);
+
+    // An offset the server sends on the lift comes back out as it came.
+    const glm::vec3 incoming(1.5f, -2.0f, 6.25f);
+    const glm::vec3 local = transport_local::fromWire(false, incoming, 1.2f);
+    const glm::vec3 back = transport_local::toWire(false, local, 1.2f);
+    CHECK(back.x == Catch::Approx(incoming.x));
+    CHECK(back.y == Catch::Approx(incoming.y));
+    CHECK(back.z == incoming.z);
+    // And it is the lift's turn of it in the world, not the wire's axes.
+    CHECK(glm::length(local) == Catch::Approx(glm::length(incoming)));
+    CHECK_FALSE(local.x == Catch::Approx(incoming.y));
+}

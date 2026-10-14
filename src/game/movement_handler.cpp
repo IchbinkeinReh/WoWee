@@ -833,12 +833,12 @@ void MovementHandler::sendMovement(Opcode opcode) {
     }
 
     // The player's transport; a unit moved in its stead carries its own.
+    // An elevator or a tram is one as a ship is: the client attaches its
+    // mover to any game object flagged a transport it stands on (0x007612b0
+    // -> 0x006ec7b0 -> 0x006ec400; 0x0074b3f0 asks vtable +0xec, a game
+    // object's GAMEOBJECT_FLAGS & GO_FLAG_TRANSPORT, 0x00712f20), M2 or WMO,
+    // and writes the block whenever it has one (0x00987140).
     bool includeTransportInWire = moverIsPlayer && owner_.isOnTransport();
-    if (includeTransportInWire && owner_.getTransportManager()) {
-        if (auto* tr = owner_.getTransportManager()->getTransport(owner_.playerTransportGuidRef()); tr && tr->isM2) {
-            includeTransportInWire = false;
-        }
-    }
 
     // Add transport data if player is on a server-recognized transport
     if (includeTransportInWire) {

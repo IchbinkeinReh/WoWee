@@ -449,14 +449,16 @@ glm::vec3 TransportManager::serverToTransportLocal(
     // local axes. Their render transform consumes those axes directly; applying
     // the world-space server->canonical X/Y swap here displaced deck NPCs and
     // server-attached players across the hull. M2 transports retain their older
-    // canonical-delta representation.
-    return transport_local::fromWire(it != transports_.end() && !it->second.isM2, serverOffset);
+    // canonical-delta representation, unturned from the transport's frame.
+    if (it == transports_.end()) return transport_local::fromWire(false, serverOffset);
+    return transport_local::fromWire(!it->second.isM2, serverOffset, it->second.facing);
 }
 
 glm::vec3 TransportManager::transportLocalToServer(
     uint64_t transportGuid, const glm::vec3& localOffset) const {
     const auto it = transports_.find(transportGuid);
-    return transport_local::toWire(it != transports_.end() && !it->second.isM2, localOffset);
+    if (it == transports_.end()) return transport_local::toWire(false, localOffset);
+    return transport_local::toWire(!it->second.isM2, localOffset, it->second.facing);
 }
 
 std::optional<float> TransportManager::transportFacing(uint64_t transportGuid) const {
