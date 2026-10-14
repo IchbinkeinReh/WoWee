@@ -15,6 +15,7 @@
 #include "audio/zone_ambience.hpp"
 #include "rendering/client_liquid.hpp"
 #include "rendering/client_proc_water.hpp"
+#include "rendering/minimap_indoor.hpp"
 #include "rendering/cube_texture.hpp"
 #include "rendering/vk_texture.hpp"
 
@@ -46,6 +47,8 @@ struct WaterSurface {
 
     int tileX = -1, tileY = -1;
     uint32_t wmoId = 0;
+    /// The building's group the liquid is in (MOGI's index).
+    uint32_t wmoGroup = 0;
 
     uint8_t xOffset = 0;
     uint8_t yOffset = 0;
@@ -123,7 +126,7 @@ public:
     /// `momtDiffuseBGRA`: the diffuse colour of the MOMT entry the liquid
     /// names, which an interior liquid's vertices take (0x00793d20).
     void loadFromWMO(const pipeline::WMOLiquid& liquid, const glm::mat4& modelMatrix, uint32_t wmoId,
-                     uint32_t momtDiffuseBGRA = 0xffffffffu);
+                     uint32_t momtDiffuseBGRA = 0xffffffffu, uint32_t wmoGroup = 0);
     void removeWMOs(const std::vector<uint32_t>& wmoIds);
     void removeTile(int tileX, int tileY);
     void clear();
@@ -214,10 +217,12 @@ public:
     std::optional<uint16_t> getWaterTypeAt(float glX, float glY) const;
     /// Every liquid cell whose middle - its centre, half way up between the
     /// liquid's lowest and highest - is within `radius` of `at`, with its
-    /// LiquidType row (0x0077f390 -> 0x0079c360): the ground's liquid, and
-    /// a building's with the player linked to one (0x007a1b10).
-    std::vector<audio::zone_ambience::LiquidCell> liquidCellsNear(const glm::vec3& at, float radius,
-                                                                  bool linkedToBuilding) const;
+    /// LiquidType row (0x0077f390 -> 0x0079c360): the ground's liquid where
+    /// `ground`, and that of the buildings' groups in `groups` - the ones the
+    /// portal walk from the player's met (0x007a1b10).
+    std::vector<audio::zone_ambience::LiquidCell>
+    liquidCellsNear(const glm::vec3& at, float radius, bool ground,
+                    const std::vector<minimap_indoor::GroupRef>& groups) const;
     bool isWmoWaterAt(float glX, float glY) const;
 
     int getSurfaceCount() const { return static_cast<int>(surfaces.size()); }

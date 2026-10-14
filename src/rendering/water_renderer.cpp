@@ -1004,7 +1004,7 @@ void WaterRenderer::removeTile(int tileX, int tileY) {
 
 void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
                                  const glm::mat4& modelMatrix,
-                                 uint32_t wmoId, uint32_t momtDiffuseBGRA) {
+                                 uint32_t wmoId, uint32_t momtDiffuseBGRA, uint32_t wmoGroup) {
     if (!liquid.hasLiquid() || liquid.xTiles == 0 || liquid.yTiles == 0) return;
     if (liquid.xVerts < 2 || liquid.yVerts < 2) return;
     if (liquid.xTiles != liquid.xVerts - 1 || liquid.yTiles != liquid.yVerts - 1) return;
@@ -1014,6 +1014,7 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
     surface.tileX = -1;
     surface.tileY = -1;
     surface.wmoId = wmoId;
+    surface.wmoGroup = wmoGroup;
     surface.liquidType = static_cast<uint16_t>(liquid.liquidType);
     surface.xOffset = 0;
     surface.yOffset = 0;
@@ -1680,17 +1681,20 @@ std::optional<uint16_t> WaterRenderer::getWaterTypeAt(float glX, float glY) cons
     return bestType;
 }
 
-std::vector<audio::zone_ambience::LiquidCell> WaterRenderer::liquidCellsNear(const glm::vec3& at, float radius,
-                                                                             bool linkedToBuilding) const {
+std::vector<audio::zone_ambience::LiquidCell>
+WaterRenderer::liquidCellsNear(const glm::vec3& at, float radius, bool ground,
+                               const std::vector<minimap_indoor::GroupRef>& groups) const {
     std::vector<audio::zone_ambience::LiquidCell> cells;
     const float radiusSq = radius * radius;
     for (const auto& surface : surfaces) {
-        // A building's liquid is asked for only with the player linked to
-        // one of its groups (0x0077f390 -> 0x007a1b10, the groups through
-        // their portals). The client then leaves the ground's out where no
-        // group open to the sky is within a portal of the player's; that
-        // walk is not made here, and the ground's is always asked.
-        if (surface.wmoId != 0 && !linkedToBuilding) continue;
+        // The ground's where it is asked for, and a building's group's where
+        // the walk through the portals met it (0x0077f390 -> 0x007a1b10).
+        if (surface.wmoId == 0 ? !ground
+                               : std::find(groups.begin(), groups.end(),
+                                           minimap_indoor::GroupRef{surface.wmoId, surface.wmoGroup}) ==
+                                     groups.end()) {
+            continue;
+        }
         const uint32_t liquidType = surface.clientLiquidType != 0 ? surface.clientLiquidType : surface.liquidType;
         const float z = (surface.minHeight + surface.maxHeight) * 0.5f;
         const float dz = z - at.z;

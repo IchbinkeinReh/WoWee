@@ -3062,7 +3062,11 @@ void Renderer::update(float deltaTime) {
         zctx.cameraLiquidType = cameraLiquidType_;
         if (waterRenderer) {
             zctx.liquidQuery = [this](const glm::vec3& at, float radius) {
-                return waterRenderer->liquidCellsNear(at, radius, !playerLinks_.empty());
+                // 0x0077f390: the ground's, and the buildings' the portal
+                // walk from the player's groups meets (0x007a1b10).
+                WMORenderer::LiquidSources sources;
+                if (wmoRenderer) sources = wmoRenderer->liquidSourcesAt(at, playerLinks_);
+                return waterRenderer->liquidCellsNear(at, radius, sources.ground, sources.groups);
             };
         }
         zctx.screenEffectAmbienceId = screenEffectAmbience_;

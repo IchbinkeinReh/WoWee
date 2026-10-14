@@ -136,3 +136,47 @@ TEST_CASE("a liquid cell is heard from its middle", "[audio][ambience][liquid]")
     CHECK(c.x == Catch::Approx(1000.0f - 2.5f * cell));
     CHECK(c.y == Catch::Approx(2000.0f - 3.5f * cell));
 }
+
+TEST_CASE("the liquid's portal walk from the player's group", "[audio][ambience][liquid]") {
+    // Three groups in a row: 0 (the player's, inside) - 1 (inside) - 2
+    // (open to the sky), and 3 past 2, all boxes holding the player.
+    const glm::vec3 lo(-10.0f), hi(10.0f);
+    std::vector<za::WalkGroup> groups(4);
+    for (auto& g : groups) {
+        g.min = lo;
+        g.max = hi;
+        g.loaded = true;
+    }
+    groups[0].past = {1};
+    groups[1].past = {0, 2, 0xffff};
+    groups[2].past = {1, 3};
+    groups[2].flags = za::kGroupOpenToSky;
+    groups[3].past = {2};
+    const glm::vec3 player(0.0f);
+
+    std::vector<uint32_t> asked;
+    uint32_t openDepth = za::kNoOpenDepth;
+    za::walkLiquidGroups(groups, 0, 0, 0, player, openDepth, [&](uint32_t g) { asked.push_back(g); });
+    // Two portals deep: 3 is past the limit.
+    CHECK(asked == std::vector<uint32_t>{0, 1, 2});
+    CHECK(openDepth == 2);
+    // Open to the sky two portals off: the ground's liquid is not asked.
+    CHECK_FALSE(za::groundLiquidAsked(true, openDepth));
+    CHECK(za::groundLiquidAsked(false, openDepth));
+
+    // From the middle one it is one portal off.
+    asked.clear();
+    openDepth = za::kNoOpenDepth;
+    za::walkLiquidGroups(groups, 1, 1, 0, player, openDepth, [&](uint32_t g) { asked.push_back(g); });
+    CHECK(asked == std::vector<uint32_t>{1, 0, 2, 3});
+    CHECK(openDepth == 1);
+    CHECK(za::groundLiquidAsked(true, openDepth));
+
+    // A group whose box does not hold the player ends the walk there.
+    groups[1].max = glm::vec3(-5.0f);
+    asked.clear();
+    openDepth = za::kNoOpenDepth;
+    za::walkLiquidGroups(groups, 0, 0, 0, player, openDepth, [&](uint32_t g) { asked.push_back(g); });
+    CHECK(asked == std::vector<uint32_t>{0});
+    CHECK(openDepth == za::kNoOpenDepth);
+}

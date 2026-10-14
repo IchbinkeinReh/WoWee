@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/zone_ambience.hpp"
 #include "rendering/minimap_indoor.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/vk_shader.hpp"
@@ -513,6 +514,15 @@ public:
     /// building whose name is not known.
     [[nodiscard]] std::optional<minimap_indoor::Scene>
     indoorMinimapAt(const glm::vec3& pos, float radius, const std::vector<GroupRef>& links) const;
+    /// What the liquid's sound asks for with the player at `pos` linked to
+    /// `links` (0x0077f390): the buildings' groups the portal walk from each
+    /// link meets (0x007a1b10 -> 0x0079bbf0), and whether the ground's liquid
+    /// is asked for too.
+    struct LiquidSources {
+        bool ground = true;
+        std::vector<GroupRef> groups;
+    };
+    [[nodiscard]] LiquidSources liquidSourcesAt(const glm::vec3& pos, const std::vector<GroupRef>& links) const;
     /// WMOAreaTable's rows, which decide what is indoors (0x007f5ba0). Not
     /// owned; null for none.
     void setAreaRows(const minimap_indoor::AreaRows* table) { areaRows_ = table; }
@@ -831,6 +841,8 @@ private:
         std::vector<minimap_indoor::GroupInfo> minimapGroups;
         std::vector<std::vector<minimap_indoor::PortalLink>> minimapLinks;
         std::vector<std::vector<glm::vec3>> minimapPortals;
+        /// Every group as the liquid's portal walk reads it (0x0079bbf0).
+        std::vector<audio::zone_ambience::WalkGroup> liquidWalk;
         /// MOHD's WMOAreaTable WMOID.
         uint32_t wmoId = 0;
         // MFOG, and each group's four indices into it (0 = none)

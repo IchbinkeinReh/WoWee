@@ -37,6 +37,7 @@
 #include <vector>
 
 #include <glm/glm.hpp>
+#include <glm/vector_relational.hpp>
 
 namespace wowee::audio::zone_ambience {
 
@@ -212,6 +213,52 @@ struct LiquidCell {
 
 /// Every liquid cell within a radius of a point (0x0077f390).
 using LiquidQuery = std::function<std::vector<LiquidCell>(const glm::vec3&, float)>;
+
+/// A building's group as the liquid's walk reads it (0x0079bbf0): its box
+/// in the building's space (MOGI +4), its flags (MOGP +0x30, none for a
+/// group not loaded), and the groups past its portals (MOPR), 0xffff for
+/// none.
+struct WalkGroup {
+    glm::vec3 min{0.0f};
+    glm::vec3 max{0.0f};
+    uint32_t flags = 0;
+    bool loaded = false;
+    std::vector<uint32_t> past;
+};
+/// MOGP's flag for a group open to the sky.
+inline constexpr uint32_t kGroupOpenToSky = 0x8;
+/// How many portals deep the walk goes (0xaee008).
+inline constexpr uint32_t kLiquidPortalDepth = 2;
+/// The depth of a group open to the sky before one is met (0x0077f390).
+inline constexpr uint32_t kNoOpenDepth = 9999;
+
+/// 0x0079bbf0: the walk from `group`, reached from `from`, `depth` portals
+/// in. A loaded group whose box holds `local` - the player in the
+/// building's space - has its liquid asked for (`ask(group)`), lowers
+/// `openDepth` to its depth where it is open to the sky, and the walk goes
+/// on past its portals, not back through the one it came by, to two deep.
+/// A group may be met more than once.
+template <typename Ask>
+void walkLiquidGroups(const std::vector<WalkGroup>& groups, uint32_t group, uint32_t from, uint32_t depth,
+                      const glm::vec3& local, uint32_t& openDepth, Ask&& ask) {
+    if (depth > kLiquidPortalDepth || group >= groups.size()) return;
+    const WalkGroup& g = groups[group];
+    if (!(glm::all(glm::lessThanEqual(g.min, local)) && glm::all(glm::lessThanEqual(local, g.max)))) return;
+    if (!g.loaded) return;
+    if ((g.flags & kGroupOpenToSky) != 0 && depth < openDepth) openDepth = depth;
+    ask(group);
+    for (const uint32_t next : g.past) {
+        if (next == 0xffffu || next == from) continue;
+        walkLiquidGroups(groups, next, group, depth + 1, local, openDepth, ask);
+    }
+}
+
+/// 0x0077f390: the ground's liquid is asked for unless the player is linked
+/// to a building (0x007a1b10 walks from each of its groups) and no group
+/// open to the sky was met within a portal of them.
+constexpr bool groundLiquidAsked(bool linkedToBuilding, uint32_t openDepth) {
+    return !linkedToBuilding || openDepth < 2;
+}
 
 /// The cell whose sound plays (0x004d21b0): the nearest across the ground,
 /// the first of equals.

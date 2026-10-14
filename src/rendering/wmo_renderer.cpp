@@ -982,6 +982,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         const size_t count = std::max(model.groupInfo.size(), model.groups.size());
         modelData.minimapGroups.assign(count, {});
         modelData.minimapLinks.assign(count, {});
+        modelData.liquidWalk.assign(count, {});
         modelData.wmoId = model.wmoId;
         for (size_t gi = 0; gi < count; ++gi) {
             auto& info = modelData.minimapGroups[gi];
@@ -994,12 +995,18 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 info.min = model.groups[gi].boundingBoxMin;
                 info.max = model.groups[gi].boundingBoxMax;
             }
+            auto& walk = modelData.liquidWalk[gi];
+            walk.min = info.min;
+            walk.max = info.max;
             if (gi >= model.groups.size()) continue;
             info.areaGroupId = model.groups[gi].areaGroupId;
+            walk.flags = model.groups[gi].flags;
+            walk.loaded = true;
             const uint32_t first = model.groups[gi].portalStart;
             const uint32_t end = first + model.groups[gi].portalCount;
             for (uint32_t r = first; r < end && r < model.portalRefs.size(); ++r) {
                 modelData.minimapLinks[gi].push_back({model.portalRefs[r].groupIndex, model.portalRefs[r].portalIndex});
+                walk.past.push_back(model.portalRefs[r].groupIndex);
             }
         }
         // Each portal's corners, which 0x007afc70 tests against the area.
@@ -4237,6 +4244,31 @@ std::optional<WMORenderer::GroupArea> WMORenderer::groupArea(const GroupRef& ref
     area.flags = info.flags;
     area.dynamic = instance.isTransport;
     return area;
+}
+
+WMORenderer::LiquidSources WMORenderer::liquidSourcesAt(const glm::vec3& pos,
+                                                        const std::vector<GroupRef>& links) const {
+    namespace za = audio::zone_ambience;
+    LiquidSources out;
+    uint32_t openDepth = za::kNoOpenDepth;
+    // 0x007a1b10: from each group the player is linked to, in the player's
+    // place in its building.
+    for (const GroupRef& link : links) {
+        const auto at = instanceIndexById.find(link.instanceId);
+        if (at == instanceIndexById.end() || at->second >= instances.size()) continue;
+        const WMOInstance& instance = instances[at->second];
+        const auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const glm::vec3 local(instance.invModelMatrix * glm::vec4(pos, 1.0f));
+        za::walkLiquidGroups(it->second.liquidWalk, link.group, link.group, 0, local, openDepth,
+                             [&](uint32_t group) {
+                                 const GroupRef ref{instance.id, group};
+                                 if (std::find(out.groups.begin(), out.groups.end(), ref) == out.groups.end())
+                                     out.groups.push_back(ref);
+                             });
+    }
+    out.ground = za::groundLiquidAsked(!links.empty(), openDepth);
+    return out;
 }
 
 std::optional<minimap_indoor::Scene>

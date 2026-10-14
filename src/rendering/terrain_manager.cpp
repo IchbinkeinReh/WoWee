@@ -1208,7 +1208,8 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                         const auto& mats = wmoReady.model.materials;
                         const uint32_t momtColor = group.liquid.momtIndex < mats.size()
                             ? mats[group.liquid.momtIndex].color2 : 0xffffffffu;
-                        waterRenderer->loadFromWMO(group.liquid, modelMatrix, wmoInstId, momtColor);
+                        waterRenderer->loadFromWMO(group.liquid, modelMatrix, wmoInstId, momtColor,
+                                                   static_cast<uint32_t>(ft.wmoLiquidGroupIndex - 1));
                         liquidGroupsLoaded++;
                     }
                     // More liquid groups remain on this WMO - yield
