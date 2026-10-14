@@ -55,14 +55,18 @@ vec3 relAt(ivec2 p, float depth) {
     return rtRelFromDepth((vec2(p) + 0.5) * pass.sceneExtent.zw, depth);
 }
 
+// A mover's kind, hi.w: 1 drawn see-through, 2 a unit (RtMover).
+bool moverSeeThrough(int i) { return (int(rtMovers[i].hi.w + 0.5) & 1) != 0; }
+bool moverIsUnit(int i) { return (int(rtMovers[i].hi.w + 0.5) & 2) != 0; }
+
 // The mover a world position is in, 1 + its index, 0 for none: inside its box
 // this frame, the nearest one's where boxes overlap (the list is nearest
-// first). See-through ones only when asked for.
-int moverAt(vec3 w, uint listed, bool seeThrough) {
+// first). See-through ones and units only when asked for.
+int moverAt(vec3 w, uint listed, bool seeThrough, bool units) {
     int mover = 0;
     for (uint k = 0u; k < listed; ++k) {
         int i = int(sMovers[k]);
-        if ((mover == 0 || i + 1 < mover) && (seeThrough || rtMovers[i].hi.w < 0.5) &&
+        if ((mover == 0 || i + 1 < mover) && (seeThrough || !moverSeeThrough(i)) && (units || !moverIsUnit(i)) &&
             all(greaterThanEqual(w, rtMovers[i].lo.xyz)) && all(lessThanEqual(w, rtMovers[i].hi.xyz))) {
             mover = i + 1;
         }
@@ -124,10 +128,10 @@ void main() {
     // found where it was (rt_temporal), and where it stood when this is read
     // - a frame on - may be bare ground (rtLightAt).
     uint listed = min(sMoverCount, TILE_MOVERS);
-    int mover = moverAt(pass.cameraPos.xyz + p, listed, true);
+    int mover = moverAt(pass.cameraPos.xyz + p, listed, true, true);
 
     // A see-through unit's: what shows through it instead (above).
-    if (mover > 0 && rtMovers[mover - 1].hi.w > 0.5) {
+    if (mover > 0 && moverSeeThrough(mover - 1)) {
         vec3 dir = normalize(p);
         uint rng = rtSeed(uvec2(px), uint(pass.cameraPos.w));
         float t;
@@ -142,7 +146,25 @@ void main() {
         }
         p = dir * t;
         n = hn;
-        mover = moverAt(pass.cameraPos.xyz + p, listed, false);
+        mover = moverAt(pass.cameraPos.xyz + p, listed, false, false);
+    } else if (mover > 0 && moverIsUnit(mover - 1) && pass.misc.x > 0.5) {
+        // A unit's box holds more than the unit: the wall it stands at, a
+        // window frame behind it, the floor, what its staff reaches past.
+        // Those stand still, and tagged as the unit's, they were taken for
+        // gone a frame on and borrowed their light from beside. Where the
+        // scene without the units has a surface at this very depth, this is
+        // that surface, not the unit.
+        float dist = length(p);
+        float tolerance = 0.05 + 0.005 * dist;
+        vec3 dir = p / dist;
+        uint rng = rtSeed(uvec2(px), uint(pass.cameraPos.w) + 7u);
+        float t;
+        vec3 hn;
+        vec4 hs;
+        rtSkipUnits = true;
+        bool hit = rtClosest(pass.cameraPos.xyz, dir, dist + tolerance, rng, t, hn, hs);
+        rtSkipUnits = false;
+        if (hit && t > dist - tolerance) mover = moverAt(pass.cameraPos.xyz + p, listed, false, false);
     }
 
     imageStore(uGbuf, px, vec4(rtOctEncode(n), length(p), float(sub) + 4.0 * float(mover)));

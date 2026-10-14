@@ -656,7 +656,7 @@ uint32_t RtLighting::writeMovers(Slot& s, const FrameInputs& in) {
         // A mover keeps a short history while it moves, as its pose does not
         // follow the rigid motion; one standing still, a longer one.
         g.lo = glm::vec4(m.lo, m.moving ? 6.0f : 16.0f);
-        g.hi = glm::vec4(m.hi, m.seeThrough ? 1.0f : 0.0f);
+        g.hi = glm::vec4(m.hi, (m.seeThrough ? 1.0f : 0.0f) + (m.unit ? 2.0f : 0.0f));
         for (int r = 0; r < 3; ++r) {
             g.motion[r] = glm::vec4(m.prevFromCur[0][r], m.prevFromCur[1][r], m.prevFromCur[2][r],
                                     m.prevFromCur[3][r]);

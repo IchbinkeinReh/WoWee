@@ -23,6 +23,11 @@ struct RtMover {
     /// Drawn see-through (a unit fading, the player's body as the camera
     /// closes in): its texels are what stands behind it (rt_prepare).
     bool seeThrough = false;
+    /// A unit, in the ray traced scene among the units (a group, which a
+    /// ray can pass by): of the texels in its box, those the scene without
+    /// the units also has at that depth are what stands beside it - a wall,
+    /// a window frame, the floor - not it (rt_prepare).
+    bool unit = false;
     /// What orders the list, the nearest first: the squared distance from
     /// the camera.
     float rank = 0.0f;

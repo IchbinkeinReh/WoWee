@@ -339,7 +339,7 @@ void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
     // A unit, or what it carries, as the lighting's mover: its box, and how
     // it moved since it was last placed here (a frame ago, or not at all).
     auto addMover = [&](CharacterInstance& inst, const glm::mat4& modelMat, const RtAabb& box,
-                        float distSq, bool posed, bool liftFloor) {
+                        float distSq, bool posed, bool liftFloor, bool grouped) {
         const bool placedLastFrame = inst.rtPlacedGeneration != 0 && inst.rtPlacedGeneration + 1 == gen;
         const glm::mat4 prevModel = placedLastFrame ? inst.rtPlacedModel : modelMat;
         inst.rtPlacedModel = modelMat;
@@ -353,6 +353,7 @@ void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
         m.prevFromCur = prevModel * glm::inverse(modelMat);
         m.moving = !nearlyIdentity(m.prevFromCur) || inst.currentAnimationId != 0;
         m.seeThrough = inst.opacity * inst.kitAlpha * inst.cameraAlpha < 0.999f;
+        m.unit = grouped;
         m.rank = distSq;
         rtMovers_.push_back(m);
     };
@@ -473,7 +474,9 @@ void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
         // shield, a weapon on the back - which moves with its bone; their
         // floors clear of the ground a body stands on, as is a rider's,
         // one of its own hung on another (group 0).
-        addMover(inst, modelMat, box, c.distSq, posed, body || group == 0);
+        // A rider is in no group: a ray passing the units by would still
+        // meet it, so its box is taken whole (rt_prepare).
+        addMover(inst, modelMat, box, c.distSq, posed, body || group == 0, group != 0);
         ++rtStats_.characters;
     };
     for (size_t i = 0; i < bodies.size(); ++i) place(bodies[i], true, i);
