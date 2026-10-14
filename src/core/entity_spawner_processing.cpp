@@ -941,11 +941,13 @@ void EntitySpawner::finishWmoSpawn(const PreparedGameObjectWMO& result, uint32_t
 
     glm::vec3 renderPos = core::coords::canonicalToRender(
         glm::vec3(result.x, result.y, result.z));
+    // Drawn by its rotation, as the synchronous path draws it (0x00712ee0).
     uint32_t instanceId = wmoRenderer->createInstance(
-        modelId, renderPos, glm::vec3(0.0f, 0.0f, result.orientation), result.scale);
+        modelId, renderPos, gameObjectPlacement(result.guid, result.orientation), result.scale);
     if (instanceId == 0) return;
 
-    gameObjectInstances_[result.guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = true};
+    gameObjectInstances_[result.guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = true,
+                                         .scale = result.scale};
 
     // The synchronous WMO path notifies TransportManager after creating the
     // render instance. Do the same here: unique/uncached transport WMOs (notably

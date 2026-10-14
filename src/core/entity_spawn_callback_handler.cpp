@@ -6,6 +6,7 @@
 #include "rendering/character_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
+#include "rendering/placement_transform.hpp"
 #include "rendering/spell_visual_system.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "game/game_handler.hpp"
@@ -227,19 +228,15 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
         }
         glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
         auto& info = it->second;
+        // Its place, its rotation and its scale, as it was drawn at spawn
+        // (0x00712ee0). An M2 lost its turn and its scale here, and a WMO
+        // was turned to the canonical yaw.
+        const glm::mat4 transform = rendering::placementModelMatrix(
+            renderPos, entitySpawner_.gameObjectPlacement(guid, orientation), info.scale);
         if (info.isWmo) {
-            if (auto* wr = renderer_.getWMORenderer()) {
-                glm::mat4 transform(1.0f);
-                transform = glm::translate(transform, renderPos);
-                transform = glm::rotate(transform, orientation, glm::vec3(0, 0, 1));
-                wr->setInstanceTransform(info.instanceId, transform);
-            }
+            if (auto* wr = renderer_.getWMORenderer()) wr->setInstanceTransform(info.instanceId, transform);
         } else {
-            if (auto* mr = renderer_.getM2Renderer()) {
-                glm::mat4 transform(1.0f);
-                transform = glm::translate(transform, renderPos);
-                mr->setInstanceTransform(info.instanceId, transform);
-            }
+            if (auto* mr = renderer_.getM2Renderer()) mr->setInstanceTransform(info.instanceId, transform);
         }
     });
 }

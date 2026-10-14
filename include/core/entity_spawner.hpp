@@ -476,6 +476,10 @@ public:
     // GameObject instance accessors
     auto& getGameObjectInstances() { return gameObjectInstances_; }
     const auto& getGameObjectInstances() const { return gameObjectInstances_; }
+    /// The placement angles a game object is drawn at: its update block's
+    /// rotation (0x00714250 keeps it, 0x00712ee0 draws by it), or a turn to
+    /// its facing where the block carried none.
+    [[nodiscard]] glm::vec3 gameObjectPlacement(uint64_t guid, float canonicalYaw) const;
 
     // Display data accessors (needed by Application for gryphon/wyvern display IDs)
     const auto& getDisplayDataMap() const { return displayDataMap_; }
@@ -1128,6 +1132,7 @@ private:
         uint32_t modelId = 0;
         uint32_t instanceId = 0;
         bool isWmo = false;
+        float scale = 1.0f;
     };
 
     std::unordered_map<uint32_t, uint32_t> gameObjectDisplayIdModelCache_;

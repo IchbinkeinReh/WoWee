@@ -1218,10 +1218,11 @@ bool UpdateObjectParser::parseMovementBlock(network::Packet& packet, UpdateBlock
         /*float vehicleAimAdjustment =*/ packet.readFloat();
     }
 
-    // Rotation (GameObjects)
+    // Rotation (GameObjects): kept packed, as 0x004d3890 keeps it.
     if (updateFlags & UPDATEFLAG_ROTATION) {
         if (rem() < 8) return false;
-        /*int64_t rotation =*/ packet.readUInt64();
+        block.packedRotation = packet.readUInt64();
+        block.hasRotation = true;
     }
 
     return true;

@@ -30,6 +30,8 @@
 #include "game/game_handler.hpp"
 #include "game/game_services.hpp"
 #include "game/transport_manager.hpp"
+#include "game/game_object_rotation.hpp"
+#include "rendering/placement_transform.hpp"
 
 #include <cmath>
 #include <algorithm>
@@ -634,6 +636,24 @@ std::string EntitySpawner::transportModelPath(uint32_t entry, uint32_t displayId
     return "";
 }
 
+glm::vec3 EntitySpawner::gameObjectPlacement(uint64_t guid, float canonicalYaw) const {
+    if (gameHandler_) {
+        const auto entity = gameHandler_->getEntityManager().getEntity(guid);
+        if (entity && entity->getType() == game::ObjectType::GAMEOBJECT) {
+            if (const auto& rotation = static_cast<const game::GameObject&>(*entity).getRotation()) {
+                // A passenger's facing is its transport's plus its own, and
+                // its rotation is turned by the transport's the same way
+                // (0x004f45b0 -> 0x004f4320): the facing asked for less the
+                // rotation's own is the transport's turn.
+                namespace gor = game::game_object_rotation;
+                const float carried = core::coords::canonicalToServerYaw(canonicalYaw) - gor::facing(*rotation);
+                return gor::placementEuler(gor::fromFacing(carried) * *rotation);
+            }
+        }
+    }
+    return {0.0f, 0.0f, core::coords::canonicalToServerYaw(canonicalYaw)};
+}
+
 void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t displayId, float x, float y, float z, float orientation, float scale) {
     if (!renderer_ || !assetManager_) return;
 
@@ -703,19 +723,12 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
         LOG_DEBUG("GameObject position update: displayId=", displayId, " guid=0x", std::hex, guid, std::dec,
                  " pos=(", x, ", ", y, ", ", z, ")");
         if (renderer_) {
+            const glm::mat4 transform = rendering::placementModelMatrix(
+                renderPos, gameObjectPlacement(guid, orientation), info.scale);
             if (info.isWmo) {
-                if (auto* wr = renderer_->getWMORenderer()) {
-                    glm::mat4 transform(1.0f);
-                    transform = glm::translate(transform, renderPos);
-                    transform = glm::rotate(transform, orientation, glm::vec3(0, 0, 1));
-                    wr->setInstanceTransform(info.instanceId, transform);
-                }
+                if (auto* wr = renderer_->getWMORenderer()) wr->setInstanceTransform(info.instanceId, transform);
             } else {
-                if (auto* mr = renderer_->getM2Renderer()) {
-                    glm::mat4 transform(1.0f);
-                    transform = glm::translate(transform, renderPos);
-                    mr->setInstanceTransform(info.instanceId, transform);
-                }
+                if (auto* mr = renderer_->getM2Renderer()) mr->setInstanceTransform(info.instanceId, transform);
             }
         }
         return;
@@ -750,10 +763,12 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
     bool isWmo = lowerPath.size() >= 4 && lowerPath.substr(lowerPath.size() - 4) == ".wmo";
 
     glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
-    const float renderYawWmo = orientation;
-    // M2 game objects: model default faces +renderX. renderYaw = canonical + 90° = server_yaw
-    // (same offset as creature/character renderer_ so all M2 models face consistently)
-    const float renderYawM2go = orientation + glm::radians(90.0f);
+    // Either kind is drawn by the one matrix (0x00712ee0): its place, its
+    // rotation on the wire's axes - which are the renderer's - and its
+    // scale. A model's default faces +renderX, so a turn to the server's
+    // facing is canonical + 90°. The WMO kind was drawn at the canonical yaw,
+    // a quarter turn behind.
+    const glm::vec3 placement = gameObjectPlacement(guid, orientation);
 
     bool loadedAsWmo = false;
     if (isWmo) {
@@ -815,14 +830,14 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
         }
 
         if (loadedAsWmo) {
-            uint32_t instanceId = wmoRenderer->createInstance(modelId, renderPos,
-                glm::vec3(0.0f, 0.0f, renderYawWmo), scale);
+            uint32_t instanceId = wmoRenderer->createInstance(modelId, renderPos, placement, scale);
             if (instanceId == 0) {
                 LOG_WARNING("Failed to create gameobject WMO instance for guid 0x", std::hex, guid, std::dec);
                 return;
             }
 
-            gameObjectInstances_[guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = true};
+            gameObjectInstances_[guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = true,
+                                          .scale = scale};
             LOG_DEBUG("Spawned gameobject WMO: guid=0x", std::hex, guid, std::dec,
                      " displayId=", displayId, " at (", x, ", ", y, ", ", z, ")");
 
@@ -949,8 +964,7 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
             gameObjectDisplayIdModelCache_[displayId] = modelId;
         }
 
-        uint32_t instanceId = m2Renderer->createInstance(modelId, renderPos,
-            glm::vec3(0.0f, 0.0f, renderYawM2go), scale);
+        uint32_t instanceId = m2Renderer->createInstance(modelId, renderPos, placement, scale);
         if (instanceId == 0) {
             LOG_WARNING("Failed to create gameobject instance for guid 0x", std::hex, guid, std::dec);
             return;
@@ -974,7 +988,8 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
             m2Renderer->setSkipCollision(instanceId, true);
         }
 
-        gameObjectInstances_[guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = false};
+        gameObjectInstances_[guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = false,
+                                      .scale = scale};
 
         // ...and the pose the server described before this model existed.
         if (auto pending = gameObjectPendingState_.find(guid);

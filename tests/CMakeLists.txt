@@ -2935,6 +2935,10 @@ wowee_add_packet_test(test_wire_positions)
 # transport's own added in the world.
 wowee_add_packet_test(test_transport_facing)
 
+# ── test_game_object_rotation ──────────────────────
+# A game object's packed rotation: read, unpacked, faced and drawn by.
+wowee_add_packet_test(test_game_object_rotation)
+
 # ── Sanitizers, once every test target exists ────────────────
 # This must be the last thing in this file. The loop walks ALL_TEST_TARGETS,
 # which register_test_target appends to as each test is declared, so the

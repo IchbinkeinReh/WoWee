@@ -588,6 +588,11 @@ struct UpdateBlock {
     /// UPDATEFLAG_VEHICLE: the unit's Vehicle.dbc row (0x0074c750), 0 for none.
     uint32_t vehicleId = 0;
 
+    /// UPDATEFLAG_ROTATION: a game object's packed rotation as the reader
+    /// keeps it (0x004d3890, +0x2d0) - game_object_rotation::unpack.
+    bool hasRotation = false;
+    uint64_t packedRotation = 0;
+
     // Field data (for VALUES and CREATE updates) - sorted flat vector instead of
     // std::map to drop the per-field heap allocation on every UPDATE_OBJECT block.
     FlatFieldMap fields;

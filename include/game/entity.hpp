@@ -20,6 +20,7 @@
 #include "game/flat_field_map.hpp"
 #include "game/monster_move_flags.hpp"
 #include "game/power_prediction.hpp"
+#include <glm/gtc/quaternion.hpp>
 
 namespace wowee {
 namespace game {
@@ -1071,10 +1072,17 @@ public:
     [[nodiscard]] uint32_t getDisplayId() const { return displayId; }
     void setDisplayId(uint32_t id) { displayId = id; }
 
+    /// Its rotation from the update block, on the wire's axes - what the
+    /// client faces and draws it by (game_object_rotation). None where the
+    /// block carried none.
+    [[nodiscard]] const std::optional<glm::quat>& getRotation() const { return rotation; }
+    void setRotation(const glm::quat& q) { rotation = q; }
+
 protected:
     std::string name;
     uint32_t entry = 0;
     uint32_t displayId = 0;
+    std::optional<glm::quat> rotation;
 };
 
 /// What to call this entity on screen, whatever kind it turns out to be.

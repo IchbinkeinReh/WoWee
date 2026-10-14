@@ -11,6 +11,7 @@
 #include "game/inventory_handler.hpp"
 #include "game/transport_manager.hpp"
 #include "game/transport_local.hpp"
+#include "game/game_object_rotation.hpp"
 #include "game/movement_handler.hpp"
 #include "game/combat_handler.hpp"
 #include "game/spell_unit_target.hpp"
@@ -724,6 +725,26 @@ namespace {
 /// did, in memcpy form, until this was pointed at them.
 float bitsToFloat(uint32_t raw) {
     return std::bit_cast<float>(raw);
+}
+
+/// The canonical facing a block gives. A game object's is its rotation's
+/// (0x0070c310 -> 0x004f4630), which 0x00714250 takes from the block's
+/// packed rotation; the stationary orientation beside it is not what the
+/// client faces it by.
+float blockCanonicalFacing(const UpdateBlock& block) {
+    if (block.hasRotation) {
+        return core::coords::serverToCanonicalYaw(game_object_rotation::facing(
+            game_object_rotation::unpack(block.packedRotation)));
+    }
+    return core::coords::serverToCanonicalYaw(block.orientation);
+}
+
+/// A game object keeps the block's rotation for drawing.
+void applyBlockRotation(const UpdateBlock& block, Entity& entity) {
+    if (block.hasRotation && entity.getType() == ObjectType::GAMEOBJECT) {
+        static_cast<GameObject&>(entity).setRotation(
+            game_object_rotation::unpack(block.packedRotation));
+    }
 }
 }  // namespace
 
@@ -2857,8 +2878,9 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
     // Set position from movement block (server → canonical)
     if (block.hasMovement) {
         glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
-        float oCanonical = core::coords::serverToCanonicalYaw(block.orientation);
+        float oCanonical = blockCanonicalFacing(block);
         entity->setPosition(pos.x, pos.y, pos.z, oCanonical);
+        applyBlockRotation(block, *entity);
         LOG_DEBUG("  Position: (", pos.x, ", ", pos.y, ", ", pos.z, ")");
         if (block.guid == owner_.getPlayerGuid() && block.runSpeed > 0.1f && block.runSpeed < 100.0f) {
             if (auto* movement = owner_.getMovementHandler()) {
@@ -2917,8 +2939,9 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     // Position update (common)
     if (block.hasMovement) {
         glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
-        float oCanonical = core::coords::serverToCanonicalYaw(block.orientation);
+        float oCanonical = blockCanonicalFacing(block);
         entity->setPosition(pos.x, pos.y, pos.z, oCanonical);
+        applyBlockRotation(block, *entity);
         updateNonPlayerTransportAttachment(block, entity, entity->getType());
     }
 
@@ -2946,8 +2969,9 @@ void EntityController::handleMovementUpdate(const UpdateBlock& block) {
             auto entity = entityManager.getEntity(block.guid);
             if (entity) {
                 glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
-                float oCanonical = core::coords::serverToCanonicalYaw(block.orientation);
+                float oCanonical = blockCanonicalFacing(block);
                 entity->setPosition(pos.x, pos.y, pos.z, oCanonical);
+                applyBlockRotation(block, *entity);
                 LOG_DEBUG("Updated entity position: 0x", std::hex, block.guid, std::dec);
                 applyBlockSpeedsToEntity(block, *entity);
 
