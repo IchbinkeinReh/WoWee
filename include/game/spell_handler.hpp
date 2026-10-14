@@ -581,6 +581,17 @@ private:
     void armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required);
     /// CMSG_PET_CAST_SPELL at a unit or at none (0x0080ac90).
     void sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target);
+    /// CMSG_CAST_SPELL from the player at a unit or at none (0x0080ac90).
+    void sendPlayerCast(uint32_t spellId, uint64_t target);
+    /// The player's cast or a pet's, by the caster.
+    void sendCastBy(uint32_t spellId, uint64_t caster, uint64_t target);
+    /// 0x0080c790 -> 0x0080cce0: the unit the spell goes at, or the cursor
+    /// held for one, or the refusal - the player's spells and a pet's alike.
+    void castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targetGuid);
+    /// 0x0080cce0's checks of the player before the units: the unit asked
+    /// held to the reach (0x00809610), then 0x00739650. False, said, where
+    /// the cast is refused.
+    bool castChecksPass(uint32_t spellId, uint64_t targetGuid);
     /// ChrClasses SpellClassSet for the player's class (0x008007a0), and
     /// the class it was read for.
     mutable uint32_t classSpellFamily_ = 0;

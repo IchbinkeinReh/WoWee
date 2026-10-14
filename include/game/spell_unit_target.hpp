@@ -332,6 +332,45 @@ inline constexpr uint8_t kFailedNoTarget = 0xb;
     return playerHasTarget ? kFailedBadTargets : kFailedNoTarget;
 }
 
+/// What 0x0080c790 makes of the units for a spell (0x0080cce0 after it):
+/// cast at none, cast at a unit, a unit taken with more still wanted (left
+/// there), or no unit - the cursor or noUnitFailure's refusal.
+enum class Choice : uint8_t { AtNone, AtUnit, Partly, NoUnit };
+struct Chosen {
+    Choice what = Choice::NoUnit;
+    uint64_t unit = 0;
+};
+
+/// 0x0080c790: nothing wanted, it goes at none; else not with
+/// ImplicitTargetA 16 (`takesNoUnit`), the unit asked - the cast's, else the
+/// player's target - as it is when out of view with a reach past 100 yards
+/// (`askedFar`, 0x00802c30), else as 0x0080bc80 takes it (`take(guid)`:
+/// taken, what is still wanted, the unit); failing that, with autoSelfCast
+/// on and none asked or one the caster may not help (`helpless`), the
+/// player, then a caster other than the player.
+template <typename Take>
+[[nodiscard]] constexpr Chosen chooseUnit(uint32_t required, bool takesNoUnit, uint64_t asked, bool askedFar,
+                                          bool autoSelfCast, bool helpless, uint64_t player, uint64_t caster,
+                                          Take&& take) {
+    if (required == 0) return {Choice::AtNone, 0};
+    if (takesNoUnit) return {};
+    if (asked != 0 && askedFar) return {Choice::AtUnit, asked};
+    Chosen out{};
+    const auto tried = [&](uint64_t guid) {
+        if (guid == 0) return false;
+        const auto t = take(guid);
+        if (!t.taken) return false;
+        out = t.required == 0 ? Chosen{Choice::AtUnit, t.unit} : Chosen{Choice::Partly, 0};
+        return true;
+    };
+    if (tried(asked)) return out;
+    if (autoSelfCast && helpless) {
+        if (tried(player)) return out;
+        if (caster != player && tried(caster)) return out;
+    }
+    return {};
+}
+
 /// 0x0071b0c0: whether the player would get down from its mount for it -
 /// not on a taxi (UNIT_FIELD_FLAGS 0x100000), autoDismount on, and
 /// autoDismountFlying as well while flying (MOVEMENTFLAG 0x2000000).

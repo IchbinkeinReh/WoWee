@@ -2,6 +2,8 @@
 
 #include "game/spell_unit_target.hpp"
 
+#include <vector>
+
 using namespace wowee::game::unit_target;
 
 // What a spell takes of a unit (0x0080bc80), the relations it asks of its
@@ -331,4 +333,83 @@ TEST_CASE("the last target is the one left, none included (0x00524bf0)", "[unit_
     // Clearing the target: the one let go; with none, nothing changes.
     REQUIRE(lastTargetAfter(0x30, 0, 0x20) == 0x30);
     REQUIRE(lastTargetAfter(0, 0, 0x20) == 0x20);
+}
+
+namespace {
+// A stand-in for 0x0080bc80: the units it takes, each filling all that is
+// wanted, or only part of it.
+struct Taken {
+    bool taken = false;
+    uint32_t required = 0;
+    uint64_t unit = 0;
+};
+constexpr uint64_t kPlayer = 1, kPet = 2, kFriend = 3, kEnemy = 4;
+auto takes(std::vector<uint64_t> units, uint32_t left = 0) {
+    return [units, left](uint64_t guid) {
+        for (uint64_t u : units)
+            if (u == guid) return Taken{true, left, guid};
+        return Taken{};
+    };
+}
+}  // namespace
+
+TEST_CASE("a spell wanting nothing goes at none (0x0080c790)", "[unit_target]") {
+    // A self buff, a shout, an area spell: target or none, autoSelfCast or not.
+    const auto c = chooseUnit(0, false, kEnemy, false, true, false, kPlayer, kPlayer, takes({kEnemy}));
+    REQUIRE(c.what == Choice::AtNone);
+    REQUIRE(chooseUnit(0, false, 0, false, false, true, kPlayer, kPlayer, takes({})).what == Choice::AtNone);
+}
+
+TEST_CASE("a heal goes at the friend asked, else the player by autoSelfCast (0x0080c790)", "[unit_target]") {
+    // At a friend: that friend.
+    auto c = chooseUnit(kUnitAlly, false, kFriend, false, true, false, kPlayer, kPlayer, takes({kFriend, kPlayer}));
+    REQUIRE(c.what == Choice::AtUnit);
+    REQUIRE(c.unit == kFriend);
+    // Nothing selected: the player.
+    c = chooseUnit(kUnitAlly, false, 0, false, true, true, kPlayer, kPlayer, takes({kPlayer}));
+    REQUIRE(c.what == Choice::AtUnit);
+    REQUIRE(c.unit == kPlayer);
+    // An enemy selected, which the player may not help: the player.
+    c = chooseUnit(kUnitAlly, false, kEnemy, false, true, true, kPlayer, kPlayer, takes({kPlayer}));
+    REQUIRE(c.unit == kPlayer);
+    // autoSelfCast off: no unit, so the cursor holds it (no refusal for a
+    // spell wanting no enemy).
+    c = chooseUnit(kUnitAlly, false, kEnemy, false, false, true, kPlayer, kPlayer, takes({kPlayer}));
+    REQUIRE(c.what == Choice::NoUnit);
+    REQUIRE(noUnitFailure(0, 0, kUnitAlly, true, true, true) == 0);
+    // A unit the player may help but the spell does not take is not
+    // stood in for by the player.
+    c = chooseUnit(kUnitAlly, false, kFriend, false, true, false, kPlayer, kPlayer, takes({kPlayer}));
+    REQUIRE(c.what == Choice::NoUnit);
+}
+
+TEST_CASE("an enemy spell takes the enemy, and with none is refused (0x0080c790, 0x0080cce0)", "[unit_target]") {
+    auto c = chooseUnit(kUnitEnemy, false, kEnemy, false, true, true, kPlayer, kPlayer, takes({kEnemy}));
+    REQUIRE(c.what == Choice::AtUnit);
+    REQUIRE(c.unit == kEnemy);
+    // Nothing selected: autoSelfCast tries the player, who does not fill an
+    // enemy, and it is refused - no target, BAD_IMPLICIT_TARGETS.
+    c = chooseUnit(kUnitEnemy, false, 0, false, true, true, kPlayer, kPlayer, takes({}));
+    REQUIRE(c.what == Choice::NoUnit);
+    REQUIRE(noUnitFailure(0, 0, kUnitEnemy, true, true, false) == kFailedNoTarget);
+    REQUIRE(noUnitFailure(0, 0, kUnitEnemy, true, true, true) == kFailedBadTargets);
+}
+
+TEST_CASE("a pet's spell falls back to the player, then the pet (0x0080c790)", "[unit_target]") {
+    auto c = chooseUnit(kUnitAlly, false, 0, false, true, true, kPlayer, kPet, takes({kPet}));
+    REQUIRE(c.unit == kPet);
+    c = chooseUnit(kUnitAlly, false, 0, false, true, true, kPlayer, kPet, takes({kPlayer, kPet}));
+    REQUIRE(c.unit == kPlayer);
+}
+
+TEST_CASE("the unit asked out of view goes as it is past 100 yards; ImplicitTargetA 16 takes none", "[unit_target]") {
+    auto c = chooseUnit(kUnitAlly, false, kFriend, true, true, false, kPlayer, kPlayer, takes({}));
+    REQUIRE(c.what == Choice::AtUnit);
+    REQUIRE(c.unit == kFriend);
+    c = chooseUnit(kUnitAlly, true, kFriend, false, true, true, kPlayer, kPlayer, takes({kFriend, kPlayer}));
+    REQUIRE(c.what == Choice::NoUnit);
+    // A unit filling part of what is wanted: nothing more is done.
+    c = chooseUnit(kUnitAlly | kUnitParty, false, kFriend, false, true, false, kPlayer, kPlayer,
+                   takes({kFriend}, kUnitParty));
+    REQUIRE(c.what == Choice::Partly);
 }

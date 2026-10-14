@@ -1187,7 +1187,7 @@ void SpellHandler::spellTargetUnit(uint64_t unitGuid) {
     const UnitTarget held = unitTarget_;
     unitTarget_ = UnitTarget{};
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
-    sendPetCast(held.spellId, held.caster, t.unit);
+    sendCastBy(held.spellId, held.caster, t.unit);
 }
 
 bool SpellHandler::spellCanTargetUnit(uint64_t unitGuid) const {
@@ -1266,74 +1266,9 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
             }
         }
     }
+    cancelGroundTargeting();  // 0x00809a60
     if (armGroundTarget(spellId, caster)) return;
-    // 0x0080c790: the targets it needs - none, it goes at none.
-    uint32_t required = ground_target::requiredTargets(spell.targetFlags, spell.implicitTargetsA[0], false);
-    if (required == 0) {
-        sendPetCast(spellId, caster, 0);
-        return;
-    }
-    // Else a unit: the one asked, or the player's target - none at all with
-    // ImplicitTargetA 16.
-    if (!ground_target::takesNoUnit(spell.implicitTargetsA[0])) {
-        const uint64_t asked = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
-        auto& em = owner_.getEntityManager();
-        const auto unit = asked != 0 ? em.getEntity(asked) : nullptr;
-        // One out of view goes as it is, for a spell reaching past 100
-        // yards (0x00802c30 with no unit).
-        if (asked != 0 && !unit) {
-            const auto casterEntity = em.getEntity(caster);
-            unit_target::RangeInput in;
-            in.attr = spell.attr;
-            in.hasRow = spell.hasRangeRow;
-            in.rowFlags = spell.rangeFlags;
-            const int k = spellTargetKind(spell.targetFlags,
-                                          {spell.implicitTargetsA[0], spell.implicitTargetsA[1], spell.implicitTargetsA[2]},
-                                          {spell.implicitTargetsB[0], spell.implicitTargetsB[1], spell.implicitTargetsB[2]},
-                                          {spell.effectAuraIds[0], spell.effectAuraIds[1], spell.effectAuraIds[2]}) == 1
-                              ? 1 : 0;
-            in.rowMin = std::max(0.0f, spell.rangeMin[k]);
-            in.rowMax = std::max(0.0f, spell.rangeMax[k]);
-            in.casterReach = casterEntity && casterEntity->isUnit()
-                                 ? static_cast<const Unit&>(*casterEntity).getCombatReach() : 0.0f;
-            const auto range = unit_target::unitRange(in, [&](float m) {
-                return spell_mods::apply(m, spellModifiers(spellId, spell_mods::kOpRange));
-            });
-            if (range.max > 100.0f) {
-                sendPetCast(spellId, caster, asked);
-                return;
-            }
-        }
-        // 0x0080bc80: a unit that fills what is wanted; cast once nothing
-        // more is.
-        const auto tryUnit = [&](uint64_t guid) {
-            const auto t = takeUnit(spellId, caster, guid, required, true);
-            if (!t.taken) return false;
-            if (t.required == 0) sendPetCast(spellId, caster, t.unit);
-            return true;
-        };
-        if (unit && tryUnit(asked)) return;
-        // Auto self-cast, with none asked or one the caster may not help:
-        // the player, then the caster itself.
-        if (owner_.isAutoSelfCast()) {
-            bool helpless = asked == 0;
-            if (!helpless && unit && unit->isUnit()) {
-                const auto c = em.getEntity(caster);
-                helpless = !c || !relationsOf(owner_, c, unit, 0).mayAssist;
-            }
-            if (helpless) {
-                if (tryUnit(owner_.getPlayerGuid())) return;
-                if (caster != owner_.getPlayerGuid() && tryUnit(caster)) return;
-            }
-        }
-    }
-    // 0x0080cce0 with no unit: the cursor holds it, or it is refused.
-    if (const uint8_t fail = unit_target::noUnitFailure(spell.attr, spell.attrEx5, required, false, false,
-                                                        owner_.getTargetGuid() != 0)) {
-        owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
-        return;
-    }
-    armUnitTarget(spellId, caster, required);
+    castAtUnits(spellId, caster, targetGuid);
 }
 
 int64_t SpellHandler::historyNowMs() {
@@ -1536,6 +1471,12 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         }
     }
 
+    // 0x0080cce0: what the cursor holds is put down (0x00809a60), then the
+    // unit asked is held to the reach (0x00809610) and the caster to
+    // 0x00739650's rules.
+    cancelGroundTargeting();
+    if (!castChecksPass(spellId, targetGuid)) return;
+
     // A spell that wants a place on the ground waits for it (0x0080c790).
     if (armGroundTarget(spellId, 0)) return;
 
@@ -1605,13 +1546,6 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // the mount aura can be identified exactly rather than guessed at.
     if (!owner_.isMounted()) lastGroundCastSpellId_ = spellId;
 
-    const bool fishingCast = spellclass::isFishingCast(spellId);
-    uint64_t target = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
-    // Self-targeted spells (hearthstone, shouts, self-buffs) always land on the
-    // caster, so they must not carry the current target along.
-    const bool selfCast = (spellId == SPELL_ID_HEARTHSTONE) || isSelfCastSpell(spellId);
-    if (selfCast || fishingCast) target = 0;
-
     // Spells cast at an item - Disenchant, Prospecting, Milling, the enchant
     // formulas - carry TARGET_FLAG_ITEM in Spell.dbc's Targets. Sending one with
     // no item in SpellCastTargets is what made the server answer "can't be
@@ -1628,114 +1562,30 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         return;
     }
 
-    // Auto self-cast: a spell that has to be aimed at a friendly unit falls back
-    // to the caster when nothing friendly is selected - no target at all, or an
-    // enemy, which is the usual state mid-fight. Without it, healing yourself
-    // while fighting means dropping the target, casting, and picking it back up.
-    // Gated on the setting, which the interface offers and this ignored. With
-    // it off the cast goes out at whatever is selected and the server refuses
-    // it, which is what the real client does and what someone turning the
-    // option off is asking for.
-    if (owner_.isAutoSelfCast() &&
-        !selfCast && !fishingCast && getSpellImplicitTargetA(spellId) != 0 &&
-        spellclass::requiresFriendlyTarget(getSpellImplicitTargetA(spellId))) {
-        bool haveFriendlyTarget = false;
-        if (target != 0 && target != owner_.getPlayerGuid()) {
-            if (auto entity = owner_.getEntityManager().getEntity(target)) {
-                if (entity->isUnit()) {
-                    const auto* unit = static_cast<Unit*>(entity.get());
-                    // Friendly, not merely "not hostile". A faction can be
-                    // neither and most wildlife is: a neutral boar answered
-                    // false to isHostile, held the cast, and the server refused
-                    // it as an invalid target - which is what a heal aimed at
-                    // some enemies and not others looked like. A dead unit
-                    // cannot take a buff either, and a player may always be
-                    // helped once their faction is friendly. The player's
-                    // reaction to it, friendly or better (0x007251c0).
-                    // Health is deliberately not asked about: it is zero for a
-                    // unit whose first update has not landed, and self-casting
-                    // a heal meant for a party member because their health had
-                    // not arrived yet would be a worse fault than the one this
-                    // fixes.
-                    haveFriendlyTarget = owner_.playerReactionTo(*unit) >= 5;
-                }
-            }
-        }
-        // Anything that is not a unit we can help - gone, dead, hostile,
-        // neutral, or never found - leaves the spell on the caster.
-        if (!haveFriendlyTarget) {
-            target = owner_.getPlayerGuid();
-        }
+    // 0x0080c790: the unit it goes at - none, the one asked, the player by
+    // autoSelfCast - or the cursor holds it for one (0x0080cce0). Without
+    // Spell.dbc, at what is selected.
+    if (owner_.spellNameCacheRef().count(spellId) == 0) {
+        sendPlayerCast(spellId, targetGuid != 0 ? targetGuid : owner_.getTargetGuid());
+        return;
     }
+    castAtUnits(spellId, owner_.getPlayerGuid(), targetGuid);
+}
 
-    // Track whether a spell-specific block already handled facing so the generic
-    // facing block below doesn't send redundant SET_FACING packets.
-    //
+void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const bool fishingCast = spellclass::isFishingCast(spellId);
     // A spell that lands on you never turns you. Facing is worked out from the
     // vector between you and your target, and when the target is you that
     // vector is the gap between the position this client has moved you to and
     // the one the server last confirmed - which, while running, points
-    // backwards along your own path. An instant self-cast on auto-run
-    // therefore spun the character a half-turn and sent them back the way they
-    // came. The gap clears the length check whenever you are moving at all,
-    // which is why it only happened in motion.
+    // backwards along your own path.
     //
-    // selfCast above catches the spells that are self-targeted by nature;
-    // this catches aiming a friendly spell at yourself, where the target guid
-    // is your own and every facing block below would otherwise use it.
-    bool facingHandled = (target != 0 && target == owner_.getPlayerGuid());
-
-    // 0x0080cce0 -> 0x00809610: the unit cast at, where the spell may take
-    // it, is held to the spell's reach (0x007ff480, 0x00803850) and the cast
-    // refused, said, outside it. There is no more to it on this side - no
-    // spell of its own, Charge among them, and no facing.
-    loadSpellNameCache();
-    if (const auto it = owner_.spellNameCacheRef().find(spellId); it != owner_.spellNameCacheRef().end()) {
-        const auto& e = it->second;
-        if (target != 0 && !selfCast && !fishingCast) {
-            const auto kinds = unit_target::reachKinds(e.targetFlags, e.implicitTargetsA);
-            const uint64_t unit = kinds.pet ? owner_.getPetGuid() : target;
-            if (kinds.mask != 0 && unit != 0 &&
-                takeUnit(spellId, owner_.getPlayerGuid(), unit, kinds.mask, true).outOfReach)
-                return;
-        }
-        // 0x00739650: Attributes 0x10000000 is not cast by a caster in combat
-        // (UNIT_FIELD_FLAGS 0x80000) - unless an aura of its lets it
-        // (0x0072aaf0) - SPELL_FAILED_AFFECTING_COMBAT.
-        const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
-        if ((e.attr & 0x10000000u) != 0 && player &&
-            (entityField(*player, UF::UNIT_FIELD_FLAGS) & 0x80000u) != 0 &&
-            !auraLetsSpell(owner_.getPlayerGuid(), spellId)) {
-            owner_.raiseUiError(castFailureMessage(owner_, spellId, 0x01, -1));
-            return;
-        }
-        if (target != 0 && !selfCast && !fishingCast) {
-            // 0x0080c790 -> 0x0080bc80: an enemy spell takes a unit the
-            // player may attack (0x00729740); one no unit fills is refused
-            // with a target as SPELL_FAILED_BAD_TARGETS, or for Attributes
-            // 0x200 with no main hand SPELL_FAILED_MAINHAND_EMPTY (0x0080cce0).
-            // The cursor 0x0080cce0 would hold the spell with instead is not
-            // armed here: such a cast goes to the server as it did.
-            const uint32_t required = ground_target::requiredTargets(e.targetFlags, e.implicitTargetsA[0], false);
-            if ((required & unit_target::kUnitEnemy) != 0 && !ground_target::takesNoUnit(e.implicitTargetsA[0]) &&
-                !takeUnit(spellId, owner_.getPlayerGuid(), target, required, false).taken) {
-                const bool mainhand = owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)) != 0;
-                if (const uint8_t fail = unit_target::noUnitFailure(e.attr, e.attrEx5, required, true, mainhand, true)) {
-                    owner_.raiseUiError(castFailureMessage(owner_, spellId, fail, -1));
-                    return;
-                }
-            }
-        }
-    }
-
     // Face the target before casting any targeted spell (server checks facing arc).
-    // Only send if a spell-specific block above didn't already handle facing,
-    // to avoid redundant SET_FACING packets that waste bandwidth.
-    //
     // Only with the Combat page's debug setting on:
     // the original client never turns the player to cast, and a target behind
     // them is refused as not in front.
-    if (!facingHandled && target != 0 && owner_.isAutoFaceTarget()) {
+    if (target != 0 && target != owner_.getPlayerGuid() && owner_.isAutoFaceTarget()) {
         auto entity = owner_.getEntityManager().getEntity(target);
         if (entity) {
             float dx = entity->getX() - owner_.movementInfoRef().x;
@@ -1749,30 +1599,6 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // Heartbeat ensures the server has the updated orientation before the cast packet.
     if (target != 0 || fishingCast) {
         owner_.sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
-    }
-
-    // A spell that needs an enemy, with nothing selected, is refused here - it
-    // is not sent at whatever the packet would make of an empty target.
-    //
-    // An empty SpellCastTargets is TARGET_FLAG_SELF, and the server reads that
-    // as "the caster is the target": it fills the unit target in with the
-    // caster and casts the spell on them. So a hunter with no target who
-    // pressed a shot shot themselves, and kept doing it until they died.
-    //
-    // selfCast and fishingCast clear the target deliberately and are the cases
-    // TARGET_FLAG_SELF is actually for, so they are not caught by this; a
-    // friendly spell has already fallen back to the caster above when the
-    // player has auto self-cast on, and is left to the server when they do not.
-    if (target == 0 && !selfCast && !fishingCast &&
-        spellclass::requiresHostileTarget(getSpellImplicitTargetA(spellId))) {
-        // SPELL_FAILED_BAD_IMPLICIT_TARGETS, as 0x0080cce0 refuses an enemy
-        // spell with nothing selected (unit_target::noUnitFailure). This was
-        // English.
-        owner_.raiseUiError(castFailureMessage(owner_, spellId, unit_target::kFailedNoTarget, -1));
-        LOG_WARNING("Cast refused: spell ", spellId,
-                    " needs a hostile target and nothing is selected - sending it"
-                    " with an empty target would have aimed it at the caster");
-        return;
     }
 
     auto packet = owner_.getPacketParsers()
@@ -1796,6 +1622,98 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         gcdTotal_ = 1.5f;
         gcdStartedAt_ = std::chrono::steady_clock::now();
     }
+}
+
+bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid) {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return true;
+    const auto& e = it->second;
+    // 0x00809610: the unit asked - the cast's, else the target - where the
+    // spell may take it (Targets with each effect's ImplicitTargetA, the pet
+    // for TARGET_UNIT_PET), held to the spell's reach (0x007ff480,
+    // 0x00803850) and refused, said, outside it.
+    const uint64_t asked = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
+    const auto kinds = unit_target::reachKinds(e.targetFlags, e.implicitTargetsA);
+    const uint64_t unit = kinds.pet ? owner_.getPetGuid() : asked;
+    if (kinds.mask != 0 && unit != 0 && takeUnit(spellId, owner_.getPlayerGuid(), unit, kinds.mask, true).outOfReach)
+        return false;
+    // 0x00739650: Attributes 0x10000000 is not cast by a caster in combat
+    // (UNIT_FIELD_FLAGS 0x80000) - unless an aura of its lets it
+    // (0x0072aaf0) - SPELL_FAILED_AFFECTING_COMBAT.
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if ((e.attr & 0x10000000u) != 0 && player && (entityField(*player, UF::UNIT_FIELD_FLAGS) & 0x80000u) != 0 &&
+        !auraLetsSpell(owner_.getPlayerGuid(), spellId)) {
+        owner_.raiseUiError(castFailureMessage(owner_, spellId, 0x01, -1));
+        return false;
+    }
+    return true;
+}
+
+void SpellHandler::sendCastBy(uint32_t spellId, uint64_t caster, uint64_t target) {
+    if (caster == owner_.getPlayerGuid()) sendPlayerCast(spellId, target);
+    else sendPetCast(spellId, caster, target);
+}
+
+void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targetGuid) {
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    const auto& spell = it->second;
+    const uint64_t player = owner_.getPlayerGuid();
+    // 0x0080c790: the targets it needs.
+    const uint32_t required = ground_target::requiredTargets(spell.targetFlags, spell.implicitTargetsA[0], false);
+    // The unit asked: the cast's, else the player's target.
+    const uint64_t asked = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
+    auto& em = owner_.getEntityManager();
+    const auto unit = asked != 0 ? em.getEntity(asked) : nullptr;
+    // One out of view goes as it is, for a spell reaching past 100 yards
+    // (0x00802c30 with no unit).
+    bool far = false;
+    if (required != 0 && asked != 0 && !unit) {
+        const auto casterEntity = em.getEntity(caster);
+        unit_target::RangeInput in;
+        in.attr = spell.attr;
+        in.hasRow = spell.hasRangeRow;
+        in.rowFlags = spell.rangeFlags;
+        const int k = spellTargetKind(spell.targetFlags,
+                                      {spell.implicitTargetsA[0], spell.implicitTargetsA[1], spell.implicitTargetsA[2]},
+                                      {spell.implicitTargetsB[0], spell.implicitTargetsB[1], spell.implicitTargetsB[2]},
+                                      {spell.effectAuraIds[0], spell.effectAuraIds[1], spell.effectAuraIds[2]}) == 1
+                          ? 1 : 0;
+        in.rowMin = std::max(0.0f, spell.rangeMin[k]);
+        in.rowMax = std::max(0.0f, spell.rangeMax[k]);
+        in.casterReach = casterEntity && casterEntity->isUnit()
+                             ? static_cast<const Unit&>(*casterEntity).getCombatReach() : 0.0f;
+        const auto range = unit_target::unitRange(in, [&](float m) {
+            return spell_mods::apply(m, spellModifiers(spellId, spell_mods::kOpRange));
+        });
+        far = range.max > 100.0f;
+    }
+    // Auto self-cast with none asked, or a unit the caster may not help.
+    bool helpless = asked == 0;
+    if (!helpless && unit && unit->isUnit()) {
+        const auto c = em.getEntity(caster);
+        helpless = !c || !relationsOf(owner_, c, unit, 0).mayAssist;
+    }
+    const auto chosen = unit_target::chooseUnit(
+        required, ground_target::takesNoUnit(spell.implicitTargetsA[0]), asked, far, owner_.isAutoSelfCast(),
+        helpless, player, caster, [&](uint64_t guid) { return takeUnit(spellId, caster, guid, required, true); });
+    switch (chosen.what) {
+        case unit_target::Choice::AtNone: sendCastBy(spellId, caster, 0); return;
+        case unit_target::Choice::AtUnit: sendCastBy(spellId, caster, chosen.unit); return;
+        case unit_target::Choice::Partly: return;
+        case unit_target::Choice::NoUnit: break;
+    }
+    // 0x0080cce0 with no unit: the cursor holds it, or it is refused - a
+    // main hand looked for from the player alone.
+    const bool byPlayer = caster == player;
+    const bool mainhand = byPlayer && owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)) != 0;
+    if (const uint8_t fail = unit_target::noUnitFailure(spell.attr, spell.attrEx5, required, byPlayer, mainhand,
+                                                        owner_.getTargetGuid() != 0)) {
+        owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
+        return;
+    }
+    armUnitTarget(spellId, caster, required);
 }
 
 bool SpellHandler::cancelGroundTargeting() {
