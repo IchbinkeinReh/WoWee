@@ -350,6 +350,34 @@ inline constexpr uint8_t kFailedNoTarget = 0xb;
     return mayAttack;
 }
 
+/// 0x0071f5c0 between the player and another player: in a duel with each
+/// other - the same PLAYER_DUEL_ARBITER, both on a PLAYER_DUEL_TEAM, not the
+/// same one.
+[[nodiscard]] constexpr bool duelOpponents(uint64_t arbiter, uint32_t team, uint64_t unitArbiter, uint32_t unitTeam) {
+    return team != 0 && unitTeam != 0 && arbiter == unitArbiter && team != unitTeam;
+}
+
+/// A unit's end (CGUnit_C, 0x00735xxx) -> 0x00524350: a unit leaving view is
+/// forgotten - no longer the target, last target, last enemy or friend, nor
+/// the focus - unless it is one of the player's party or raid (0x00512a30)
+/// not in a duel with the player (0x0071f5c0).
+[[nodiscard]] constexpr bool forgottenOnLeaving(bool groupMember, bool duelOpponent) {
+    return !groupMember || duelOpponent;
+}
+
+/// 0x0073c330: a unit whose UNIT_FIELD_FLAGS turn not selectable (0x2000000)
+/// is forgotten as well (0x00524350), in the group or not.
+[[nodiscard]] constexpr bool forgottenOnFlags(uint32_t oldFlags, uint32_t newFlags) {
+    return ((oldFlags ^ newFlags) & newFlags & kFlagNotSelectable) != 0;
+}
+
+/// 0x00524bf0: the last target once the target goes from `old` to `taken` -
+/// the old one, none included, when a unit is taken; the one let go when the
+/// target is cleared (none to let go, nothing changes).
+[[nodiscard]] constexpr uint64_t lastTargetAfter(uint64_t old, uint64_t taken, uint64_t last) {
+    return taken != 0 || old != 0 ? old : last;
+}
+
 /// 0x00809610, before 0x0080cce0 picks the spell's units: what the unit cast
 /// at may be taken as - Spell.dbc Targets (+0x40, its low half) with each
 /// effect's ImplicitTargetA - and whether TARGET_UNIT_PET (5) puts the

@@ -102,6 +102,12 @@ public:
     /// target stays; else it becomes the target. False when offered.
     bool targetUnit(uint64_t guid);
     void clearTarget();
+    /// 0x00524350: the unit is no longer the target, the last target, the
+    /// last enemy or friend, nor the focus.
+    void forgetUnit(uint64_t guid);
+    /// A unit leaving view (CGUnit_C's end, 0x00735xxx): forgotten unless it
+    /// is one of the group not in a duel with the player.
+    void unitLeavesView(uint64_t guid);
     [[nodiscard]] std::shared_ptr<Entity> getTarget() const;
     void setFocus(uint64_t guid);
     void clearFocus();

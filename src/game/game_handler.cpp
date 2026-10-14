@@ -775,10 +775,9 @@ void GameHandler::update(float deltaTime) {
         releaseInteractionObject(/*farewell=*/true);
     }
 
-    // Validate target still exists
-    if (targetGuid != 0 && !entityController_->getEntityManager().hasEntity(targetGuid)) {
-        clearTarget();
-    }
+    // No check here that the target is still in view: a unit leaving lets
+    // itself go (0x00524350, CombatHandler::unitLeavesView), and one of the
+    // group stays the target out of view, as in the client.
 
     // Update auto-follow: refresh render position or cancel if entity disappeared
     if (followTargetGuid_ != 0) {

@@ -1552,11 +1552,10 @@ void CombatHandler::setTarget(uint64_t guid) {
     // Looted-out, unskinnable corpses cannot be selected.
     if (!isSelectableUnit(guid)) return;
 
-    // Save previous target as "the last one whatever it was", which is what
-    // TargetLastTarget flips back to.
-    if (owner_.getTargetGuid() != 0) {
-        owner_.lastTargetGuidRef() = owner_.getTargetGuid();
-    }
+    // 0x00524bf0: the last target, which TargetLastTarget flips back to, is
+    // the one left - none included.
+    owner_.lastTargetGuidRef() =
+        unit_target::lastTargetAfter(owner_.getTargetGuid(), guid, owner_.lastTargetGuidRef());
     // 0x00524bf0: the unit now taken, one in view, is remembered as the last
     // enemy where the player may attack it now (0x00729a70), else as the last
     // friend where it may help it (0x007293d0) - the target chosen, not the
@@ -1636,6 +1635,8 @@ void CombatHandler::setTarget(uint64_t guid) {
 }
 
 void CombatHandler::clearTarget() {
+    // 0x00524bf0 with none: the target let go is the last target.
+    owner_.lastTargetGuidRef() = unit_target::lastTargetAfter(owner_.getTargetGuid(), 0, owner_.lastTargetGuidRef());
     if (owner_.getTargetGuid() != 0) {
         LOG_INFO("Target cleared");
         // Zero the GUID before firing the event so callbacks/addons that query
@@ -1648,6 +1649,49 @@ void CombatHandler::clearTarget() {
     }
     owner_.tabCycleIndexRef() = -1;
     owner_.tabCycleStaleRef() = true;
+}
+
+void CombatHandler::forgetUnit(uint64_t guid) {
+    if (guid == 0) return;
+    if (guid == owner_.getTargetGuid()) {
+        // 0x005241b0: let go, the server told (CMSG_SET_SELECTION) and
+        // PLAYER_TARGET_CHANGED.
+        owner_.setTargetGuidRaw(0);
+        if (owner_.isInWorld() && owner_.getSocket()) owner_.getSocket()->send(SetSelectionPacket::build(0));
+        owner_.fireAddonEvent("PLAYER_TARGET_CHANGED", {});
+    }
+    if (owner_.lastTargetGuidRef() == guid) owner_.lastTargetGuidRef() = 0;
+    if (lastEnemyTargetGuid_ == guid) lastEnemyTargetGuid_ = 0;
+    if (lastFriendTargetGuid_ == guid) lastFriendTargetGuid_ = 0;
+    if (owner_.focusGuidRef() == guid) {
+        // 0x0051ff20 with none: PLAYER_FOCUS_CHANGED.
+        owner_.focusGuidRef() = 0;
+        owner_.fireAddonEvent("PLAYER_FOCUS_CHANGED", {});
+    }
+}
+
+void CombatHandler::unitLeavesView(uint64_t guid) {
+    const bool group = isGroupMemberGuid(guid);
+    bool duel = false;
+    if (group) {
+        auto& em = owner_.getEntityManager();
+        const auto me = em.getEntity(owner_.getPlayerGuid());
+        const auto it = em.getEntity(guid);
+        const auto field = [](const Entity& e, UF f) {
+            const uint16_t i = fieldIndex(f);
+            return i != 0xFFFF ? e.getField(i) : 0u;
+        };
+        const auto guidField = [&](const Entity& e, UF f) {
+            const uint16_t i = fieldIndex(f);
+            return i != 0xFFFF ? e.getField(i) | (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(i + 1))) << 32)
+                               : 0ull;
+        };
+        if (me && it && it->getType() == ObjectType::PLAYER) {
+            duel = unit_target::duelOpponents(guidField(*me, UF::PLAYER_DUEL_ARBITER), field(*me, UF::PLAYER_DUEL_TEAM),
+                                              guidField(*it, UF::PLAYER_DUEL_ARBITER), field(*it, UF::PLAYER_DUEL_TEAM));
+        }
+    }
+    if (unit_target::forgottenOnLeaving(group, duel)) forgetUnit(guid);
 }
 
 std::shared_ptr<Entity> CombatHandler::getTarget() const {

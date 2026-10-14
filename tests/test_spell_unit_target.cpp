@@ -305,3 +305,30 @@ TEST_CASE("both moving, a melee row or a player unit reaches 8/3 more (0x007ff48
     none.unitIsPlayer = none.casterMoving = none.unitMoving = true;
     REQUIRE(unitRange(none, same).max == Catch::Approx(0.0f));
 }
+
+TEST_CASE("a unit leaving view is forgotten unless it is of the group (0x00524350)", "[unit_target]") {
+    REQUIRE(forgottenOnLeaving(false, false));
+    REQUIRE_FALSE(forgottenOnLeaving(true, false));
+    // One of the group the player duels is forgotten all the same (0x0071f5c0).
+    REQUIRE(forgottenOnLeaving(true, true));
+    REQUIRE(duelOpponents(0x1234, 1, 0x1234, 2));
+    REQUIRE_FALSE(duelOpponents(0x1234, 1, 0x1234, 1));
+    REQUIRE_FALSE(duelOpponents(0x1234, 1, 0x5678, 2));
+    REQUIRE_FALSE(duelOpponents(0x1234, 0, 0x1234, 2));
+}
+
+TEST_CASE("a unit turned not selectable is forgotten (0x0073c330)", "[unit_target]") {
+    REQUIRE(forgottenOnFlags(0, kFlagNotSelectable));
+    REQUIRE_FALSE(forgottenOnFlags(kFlagNotSelectable, kFlagNotSelectable));
+    REQUIRE_FALSE(forgottenOnFlags(kFlagNotSelectable, 0));
+    REQUIRE_FALSE(forgottenOnFlags(0, kFlagPlayerControlled));
+}
+
+TEST_CASE("the last target is the one left, none included (0x00524bf0)", "[unit_target]") {
+    // Taking a unit with none before: the last target is none.
+    REQUIRE(lastTargetAfter(0, 0x10, 0x20) == 0);
+    REQUIRE(lastTargetAfter(0x30, 0x10, 0x20) == 0x30);
+    // Clearing the target: the one let go; with none, nothing changes.
+    REQUIRE(lastTargetAfter(0x30, 0, 0x20) == 0x30);
+    REQUIRE(lastTargetAfter(0, 0, 0x20) == 0x20);
+}

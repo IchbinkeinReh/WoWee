@@ -11,6 +11,8 @@
 #include "game/inventory_handler.hpp"
 #include "game/transport_manager.hpp"
 #include "game/movement_handler.hpp"
+#include "game/combat_handler.hpp"
+#include "game/spell_unit_target.hpp"
 #include "core/logger.hpp"
 #include "game/interface_text.hpp"
 #include "core/coordinates.hpp"
@@ -258,6 +260,8 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
         }
 
         LOG_DEBUG("Entity went out of range: 0x", std::hex, guid, std::dec);
+        if (entity->isUnit() && owner_.getCombatHandler()) owner_.getCombatHandler()->unitLeavesView(guid);
+        else if (guid == owner_.getTargetGuid()) owner_.setTargetGuidRaw(0);
         // Trigger despawn callbacks before removing entity
         if (entity->getType() == ObjectType::UNIT && owner_.creatureDespawnCallbackRef()) {
             owner_.creatureDespawnCallbackRef()(guid);
@@ -1122,6 +1126,9 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         } else if (key == ufi.flags) {
             uint32_t oldFlags = unit->getUnitFlags();
             unit->setUnitFlags(val);
+            // 0x0073c330: turned not selectable, it is forgotten (0x00524350).
+            if (unit_target::forgottenOnFlags(oldFlags, val) && owner_.getCombatHandler())
+                owner_.getCombatHandler()->forgetUnit(block.guid);
             // UNIT_FIELD_FLAGS is the server's authoritative combat state. Spell-only
             // attackers do not necessarily produce SMSG_ATTACKSTOP, so retaining them
             // after this bit clears leaves the client permanently "in combat".
@@ -2951,6 +2958,7 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
     }
 
     // Remove entity
+    bool destroyedUnit = false;
     if (entityManager.hasEntity(data.guid)) {
         if (transportGuids_.count(data.guid) > 0) {
             const bool playerAboardNow = (owner_.playerTransportGuidRef() == data.guid);
@@ -2972,6 +2980,10 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
         }
         // Mirror out-of-range handling: invoke render-layer despawn callbacks before entity removal.
         auto entity = entityManager.getEntity(data.guid);
+        if (entity && entity->isUnit() && owner_.getCombatHandler()) {
+            destroyedUnit = true;
+            owner_.getCombatHandler()->unitLeavesView(data.guid);
+        }
         if (entity) {
             if (entity->getType() == ObjectType::UNIT && owner_.creatureDespawnCallbackRef()) {
                 owner_.creatureDespawnCallbackRef()(data.guid);
@@ -3010,7 +3022,8 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
     if (owner_.getCombatHandler() && data.guid == owner_.getCombatHandler()->getAutoAttackTargetGuid()) {
         owner_.stopAutoAttack();
     }
-    if (data.guid == owner_.getTargetGuid()) {
+    // A unit was let go as it left (0x00524350, above).
+    if (!destroyedUnit && data.guid == owner_.getTargetGuid()) {
         owner_.setTargetGuidRaw(0);
     }
     if (owner_.getCombatHandler()) owner_.getCombatHandler()->removeHostileAttacker(data.guid);

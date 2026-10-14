@@ -8,6 +8,7 @@
 #include "game/update_field_table.hpp"
 #include "game/transport_manager.hpp"
 #include "game/entity.hpp"
+#include "game/combat_handler.hpp"
 #include "game/monster_move_flags.hpp"
 #include "network/world_socket.hpp"
 #include "network/packet.hpp"
@@ -2597,6 +2598,14 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
         owner_.mountCallbackRef()(0);
     }
 
+    // Every unit but the player leaves view (0x00524350 for each).
+    std::vector<uint64_t> leaving;
+    for (const auto& [guid, entity] : owner_.getEntityManager().getEntities()) {
+        if (guid != owner_.getPlayerGuid() && entity->isUnit()) leaving.push_back(guid);
+    }
+    if (auto* combat = owner_.getCombatHandler()) {
+        for (const uint64_t guid : leaving) combat->unitLeavesView(guid);
+    }
     for (const auto& [guid, entity] : owner_.getEntityManager().getEntities()) {
         if (guid == owner_.getPlayerGuid()) continue;
         if (entity->getType() == ObjectType::UNIT && owner_.creatureDespawnCallbackRef()) {
