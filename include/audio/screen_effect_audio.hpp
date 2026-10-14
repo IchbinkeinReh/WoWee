@@ -22,8 +22,8 @@ constexpr uint32_t dayOrNight(uint32_t day, uint32_t night, bool isDay) { return
 /// take the place of the zone's. A row of 0 or none empties the slot. Only
 /// slots 0 to 2 wait out the zone music's silence between tracks; slot 10's
 /// plays at once and again when its track ends (0x004c87d0, 0x004c8830).
-/// The DBC columns read:
-inline constexpr uint32_t kSoundAmbienceDayCol = 1, kSoundAmbienceNightCol = 2;
+/// The ambience goes in the ambience's slots with the rest
+/// (audio/zone_ambience.hpp); the music's DBC columns read:
 inline constexpr uint32_t kZoneMusicDayCol = 6, kZoneMusicNightCol = 7;
 
 }  // namespace wowee::audio::screen_effect_audio

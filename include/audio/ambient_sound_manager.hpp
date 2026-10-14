@@ -1,11 +1,12 @@
 #pragma once
 
-#include <vector>
-#include <memory>
-#include <string>
 #include <cstdint>
+#include <functional>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include <glm/vec3.hpp>
-#include "audio/ambience_loops.hpp"
+#include "audio/zone_ambience.hpp"
 
 namespace wowee {
 namespace pipeline {
@@ -14,197 +15,71 @@ class AssetManager;
 
 namespace audio {
 
+/// The world's ambience as the client plays it (audio/zone_ambience.hpp):
+/// the ambience channel and its slots (0xb4ac50, 0x004c9910). The places,
+/// the weather and the liquid say what goes in the slots; this plays what
+/// they pick.
 class AmbientSoundManager {
 public:
     AmbientSoundManager() = default;
     ~AmbientSoundManager() = default;
 
-    // Initialization
     bool initialize(pipeline::AssetManager* assets);
     void shutdown();
     /// Leaving the world: the ambience stops at once and forgets the place
-    /// it was for (0x00409550 -> 0x004c85f0).
+    /// it was for (0x00409550 -> 0x004c85f0 -> 0x004c6450(1)), and the
+    /// slots the next world fills again (the weather's by 0x00403be9).
     void stopAll();
 
-    // Main update loop - called from renderer
-    void update(float deltaTime, const glm::vec3& cameraPos, bool isIndoor, bool isSwimming = false, bool isBlacksmith = false);
+    /// A slot from a SoundAmbience row (0x004c8c90): its +4 by day, its +8
+    /// by night; 0 or a row not there empties it.
+    void setSlotAmbience(int slot, uint32_t soundAmbienceId);
+    /// A slot from one SoundEntries id for day and night, -1 emptying it
+    /// (the weather's, 0x004c8610).
+    void setSlotSound(int slot, int32_t soundId);
+    /// The liquid the camera is in, 0 for none (0x004c8630): the underwater
+    /// sound in slot 9, and the next change of sound made at once.
+    void setCameraLiquid(uint32_t liquidType);
 
-    // Weather control
-    enum class WeatherType { NONE, RAIN_LIGHT, RAIN_MEDIUM, RAIN_HEAVY, SNOW_LIGHT, SNOW_MEDIUM, SNOW_HEAVY };
-    void setWeather(WeatherType type);
-    [[nodiscard]] WeatherType getCurrentWeather() const { return currentWeather_; }
+    /// The ambience channel, once a frame (0x004c9910).
+    void update(bool isDay, bool indoors);
 
-    // Zone ambience control
-    enum class ZoneType {
-        NONE,
-        FOREST_NORMAL,
-        FOREST_SNOW,
-        BEACH,
-        GRASSLANDS,
-        JUNGLE,
-        MARSH,
-        DESERT_CANYON,
-        DESERT_PLAINS
-    };
-    void setZoneType(ZoneType type);
-    [[nodiscard]] ZoneType getCurrentZone() const { return currentZone_; }
-
-    // Convenience: derive ZoneType and CityType from a WoW zone ID
-    void setZoneId(uint32_t zoneId);
-
-    // City ambience control
-    enum class CityType {
-        NONE,
-        STORMWIND,
-        IRONFORGE,
-        DARNASSUS,
-        ORGRIMMAR,
-        UNDERCITY,
-        THUNDERBLUFF
-    };
-    void setCityType(CityType type);
-    [[nodiscard]] CityType getCurrentCity() const { return currentCity_; }
-
-    // Emitter management. A doodad's sounds - a fire's, a fountain's, a
-    // waterfall's - are not emitters here but its model's events
-    // (0x007bd5a0, rendering::M2EventSounds).
-    enum class AmbientType {
-        WATER_SURFACE,
-        RIVER,
-        WIND,
-        BIRD_DAY,
-        CRICKET_NIGHT,
-        OWL_NIGHT
-    };
-
-    uint64_t addEmitter(const glm::vec3& position, AmbientType type);
-
-    /// A higher sound slot's ambience - the screen effect's (0x004c8fa0,
-    /// slot 10) - holds the zone's and city's back.
-    void setAmbienceOverridden(bool overridden) { ambienceOverridden_ = overridden; }
-
-    // Time of day control (0-24 hours)
-    void setGameTime(float hours);
-
-    // Volume control
+    // Volume control: the ambience volume, over each sound's own.
     void setVolumeScale(float scale);
     [[nodiscard]] float getVolumeScale() const { return volumeScale_; }
 
+    [[nodiscard]] const zone_ambience::Slots& slots() const { return slots_; }
+
 private:
-    struct AmbientEmitter {
-        uint64_t id;
-        AmbientType type;
-        glm::vec3 position;
-        bool active;
-        float lastPlayTime;
-        float loopInterval;  // For periodic/looping sounds
+    /// A SoundEntries row as 0x004c6a40 plays it: 3..12 File, 13..22 Freq,
+    /// 23 DirectoryBase, 24 VolumeFloat, 26 MinDistance, 27 DistanceCutoff.
+    struct Kit {
+        std::vector<std::vector<uint8_t>> files;
+        std::vector<uint32_t> frequency;
+        float volume = 1.0f;
+        float minDistance = 0.0f;
+        float cutoff = 0.0f;
     };
+    const Kit* kit(int32_t soundId);
+    const std::vector<uint8_t>& pickFile(const Kit& k);
+    pipeline::AssetManager* assets_ = nullptr;
+    std::unordered_map<int32_t, Kit> kits_;
 
-    struct AmbientSample {
-        std::string path;
-        std::vector<uint8_t> data;
-        bool loaded;
+    zone_ambience::Slots slots_{};
+    uint32_t cameraLiquid_ = 0;
+    bool switchAtOnce_ = false;
+
+    /// What the channel plays, and the one falling out behind it.
+    struct Channel {
+        uint32_t handle = 0;
+        int32_t sound = -1;
+        float volume = 1.0f;  ///< the sound's own
     };
+    Channel current_;
+    uint32_t fadingHandle_ = 0;
 
-    // Sound libraries
-    std::vector<AmbientSample> waterSounds_;
-    std::vector<AmbientSample> riverSounds_;
-    std::vector<AmbientSample> windSounds_;
-    std::vector<AmbientSample> tavernSounds_;
-    std::vector<AmbientSample> blacksmithSounds_;
-    std::vector<AmbientSample> birdSounds_;
-    std::vector<AmbientSample> cricketSounds_;
-
-    // Weather sound libraries
-    std::vector<AmbientSample> rainLightSounds_;
-    std::vector<AmbientSample> rainMediumSounds_;
-    std::vector<AmbientSample> rainHeavySounds_;
-    std::vector<AmbientSample> snowLightSounds_;
-    std::vector<AmbientSample> snowMediumSounds_;
-    std::vector<AmbientSample> snowHeavySounds_;
-
-    // Water ambience libraries
-    std::vector<AmbientSample> underwaterSounds_;
-
-    // Zone ambience libraries (day and night versions)
-    std::vector<AmbientSample> forestNormalDaySounds_;
-    std::vector<AmbientSample> forestNormalNightSounds_;
-    std::vector<AmbientSample> forestSnowDaySounds_;
-    std::vector<AmbientSample> forestSnowNightSounds_;
-    std::vector<AmbientSample> beachDaySounds_;
-    std::vector<AmbientSample> beachNightSounds_;
-    std::vector<AmbientSample> grasslandsDaySounds_;
-    std::vector<AmbientSample> grasslandsNightSounds_;
-    std::vector<AmbientSample> jungleDaySounds_;
-    std::vector<AmbientSample> jungleNightSounds_;
-    std::vector<AmbientSample> marshDaySounds_;
-    std::vector<AmbientSample> marshNightSounds_;
-    std::vector<AmbientSample> desertCanyonDaySounds_;
-    std::vector<AmbientSample> desertCanyonNightSounds_;
-    std::vector<AmbientSample> desertPlainsDaySounds_;
-    std::vector<AmbientSample> desertPlainsNightSounds_;
-
-    // City ambience libraries (day and night versions)
-    std::vector<AmbientSample> stormwindDaySounds_;
-    std::vector<AmbientSample> stormwindNightSounds_;
-    std::vector<AmbientSample> ironforgeSounds_;  // No separate day/night
-    std::vector<AmbientSample> darnassusDaySounds_;
-    std::vector<AmbientSample> darnassusNightSounds_;
-    std::vector<AmbientSample> orgrimmarDaySounds_;
-    std::vector<AmbientSample> orgrimmarNightSounds_;
-    std::vector<AmbientSample> undercitySounds_;  // No separate day/night (underground)
-    std::vector<AmbientSample> thunderbluffDaySounds_;
-    std::vector<AmbientSample> thunderbluffNightSounds_;
-
-    // Active emitters
-    std::vector<AmbientEmitter> emitters_;
-    uint64_t nextEmitterId_ = 1;
-
-    // State tracking
-    float gameTimeHours_ = 12.0f;  // Default noon
     float volumeScale_ = 1.0f;
-    float birdTimer_ = 0.0f;
-    float cricketTimer_ = 0.0f;
-    float windLoopTime_ = 0.0f;
-    float blacksmithLoopTime_ = 0.0f;
-    float weatherLoopTime_ = 0.0f;
-    float oceanLoopTime_ = 0.0f;
-    float zoneLoopTime_ = 0.0f;
-    float cityLoopTime_ = 0.0f;
-    bool wasIndoor_ = false;
-    bool wasBlacksmith_ = false;
-    bool wasSwimming_ = false;
     bool initialized_ = false;
-    bool ambienceOverridden_ = false;
-    WeatherType currentWeather_ = WeatherType::NONE;
-    uint32_t currentZoneId_ = 0;
-    ZoneType currentZone_ = ZoneType::NONE;
-    CityType currentCity_ = CityType::NONE;
-
-    // Active audio tracking
-    struct ActiveSound {
-        uint64_t emitterId;
-        float startTime;
-    };
-    std::vector<ActiveSound> activeSounds_;
-    /// The ambience loops still running, for stopAll().
-    AmbienceLoops loops_;
-    void playAmbienceLoop(const std::vector<uint8_t>& data, float volume);
-
-    // Helper methods
-    void updatePositionalEmitters(float deltaTime, const glm::vec3& cameraPos);
-    void updatePeriodicSounds(float deltaTime, bool isIndoor, bool isSwimming);
-    void updateWindAmbience(float deltaTime, bool isIndoor);
-    void updateBlacksmithAmbience(float deltaTime);
-    void updateWeatherAmbience(float deltaTime, bool isIndoor);
-    void updateWaterAmbience(float deltaTime, bool isSwimming);
-    void updateZoneAmbience(float deltaTime, bool isIndoor);
-    void updateCityAmbience(float deltaTime);
-    bool loadSound(const std::string& path, AmbientSample& sample, pipeline::AssetManager* assets);
-
-    // Time of day helpers
-    [[nodiscard]] bool isDaytime() const { return gameTimeHours_ >= 6.0f && gameTimeHours_ < 20.0f; }
-    [[nodiscard]] bool isNighttime() const { return !isDaytime(); }
 };
 
 } // namespace audio

@@ -16,6 +16,7 @@
 #include "game/zone_manager.hpp"
 #include "core/logger.hpp"
 #include "pipeline/dbc_loader.hpp"
+#include "pipeline/dbc_layout.hpp"
 
 namespace wowee {
 namespace audio {
@@ -81,15 +82,14 @@ void AudioCoordinator::leaveWorld() {
     // 0x0087a2f0), with its slot (3) cleared. Here they share the one music
     // manager, so whichever is playing stops its own way.
     if (musicManager_) musicManager_->stopMusic(musicManager_->isScriptMusic() ? 500.0f : 0.0f);
-    // 0x004c85f0: the ambience's channels (0xb4ac50) - the zone's and the
-    // screen effect's loop.
-    if (screenEffectAmbienceHandle_ != 0) AudioEngine::instance().stopSound(screenEffectAmbienceHandle_);
-    screenEffectAmbienceHandle_ = 0;
+    // 0x004c85f0: the ambience's channels (0xb4ac50).
     if (ambientSoundManager_) ambientSoundManager_->stopAll();
     // The slots the next world fills again.
     screenEffectSounds_ = {};
-    screenEffectAmbiencePlaying_.clear();
     screenEffectMusicPlaying_.clear();
+    ambiencePlace_.reset();
+    worldStateAmbience_.reset();
+    screenEffectAmbienceId_ = 0;
     currentZoneId_ = 0;
     currentZoneName_.clear();
     inTavern_ = false;
@@ -165,33 +165,12 @@ bool AudioCoordinator::updateScreenEffectAudio(const ZoneAudioContext& ctx) {
     namespace sea = screen_effect_audio;
     const bool isDay = sea::isSoundDaytime(ctx.gameTimeHours);
     ScreenEffectSounds& want = screenEffectSounds_;
-    if (ctx.assetManager &&
-        (want.ambienceId != ctx.screenEffectAmbienceId || want.zoneMusicId != ctx.screenEffectZoneMusicId ||
-         want.isDay != isDay)) {
-        want.ambienceId = ctx.screenEffectAmbienceId;
+    if (ctx.assetManager && (want.zoneMusicId != ctx.screenEffectZoneMusicId || want.isDay != isDay)) {
         want.zoneMusicId = ctx.screenEffectZoneMusicId;
         want.isDay = isDay;
-        want.ambience = daySoundFile(*ctx.assetManager, "SoundAmbience.dbc", want.ambienceId,
-                                     sea::kSoundAmbienceDayCol, sea::kSoundAmbienceNightCol, isDay);
         want.music = daySoundFile(*ctx.assetManager, "ZoneMusic.dbc", want.zoneMusicId, sea::kZoneMusicDayCol,
                                   sea::kZoneMusicNightCol, isDay);
     }
-
-    // The ambience: a loop kept on the listener.
-    auto& engine = AudioEngine::instance();
-    if (want.ambience != screenEffectAmbiencePlaying_) {
-        if (screenEffectAmbienceHandle_ != 0) engine.stopSoundWithFade(screenEffectAmbienceHandle_, 1.0f);
-        screenEffectAmbienceHandle_ = 0;
-        screenEffectAmbiencePlaying_ = want.ambience;
-        if (!want.ambience.empty() && ctx.assetManager) {
-            const auto data = ctx.assetManager->readFileOptional(want.ambience);
-            const float volume = ambientSoundManager_ ? ambientSoundManager_->getVolumeScale() : 1.0f;
-            if (!data.empty()) screenEffectAmbienceHandle_ = engine.playSound3DLooping(data, ctx.cameraPosition, volume);
-        }
-    } else if (screenEffectAmbienceHandle_ != 0) {
-        engine.setSoundPosition(screenEffectAmbienceHandle_, ctx.cameraPosition);
-    }
-    if (ambientSoundManager_) ambientSoundManager_->setAmbienceOverridden(!screenEffectAmbiencePlaying_.empty());
 
     // The music: at once, and again whenever it ends.
     if (!musicManager_) return false;
@@ -212,14 +191,91 @@ bool AudioCoordinator::updateScreenEffectAudio(const ZoneAudioContext& ctx) {
     return false;
 }
 
+void AudioCoordinator::updateAmbience(const ZoneAudioContext& ctx) {
+    namespace za = zone_ambience;
+    if (!ambientSoundManager_) return;
+    auto& ambience = *ambientSoundManager_;
+    auto* assets = ctx.assetManager;
+
+    // Slot 0, the place (0x0078e9a0): its AreaTable rows' SoundAmbience
+    // (+0x1c) and its building's.
+    if (ctx.place && assets && ctx.place != ambiencePlace_) {
+        ambiencePlace_ = ctx.place;
+        const za::Place& at = *ctx.place;
+        uint32_t zoneAmbience = 0, areaAmbience = 0;
+        const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("AreaTable")
+                                                            : nullptr;
+        const uint32_t col = layout ? layout->tryField("SoundAmbience") : 0xFFFFFFFFu;
+        auto areas = assets->loadDBCOptional("AreaTable.dbc");
+        const auto rowAmbience = [&](uint32_t id) -> uint32_t {
+            if (id == 0 || !areas || !areas->isLoaded() || col >= areas->getFieldCount()) return 0;
+            const int32_t idx = areas->findRecordById(id);
+            return idx >= 0 ? areas->getUInt32(static_cast<uint32_t>(idx), col) : 0;
+        };
+        zoneAmbience = rowAmbience(at.zone);
+        areaAmbience = rowAmbience(at.area);
+        ambience.setSlotAmbience(za::kSlotPlace, za::placeAmbience(zoneAmbience, areaAmbience, at.buildingAmbience,
+                                                                   at.groupAmbience, at.indoors));
+    }
+
+    // Slot 1, the world states' (0x004cbe70): WorldStateZoneSounds.dbc, 0
+    // the world state, 1 the value, 2 the area, 3 the WMOAreaTable row, 6
+    // the SoundAmbience.
+    if (!worldStateSoundsLoaded_ && assets) {
+        worldStateSoundsLoaded_ = true;
+        auto dbc = assets->loadDBCOptional("WorldStateZoneSounds.dbc");
+        if (dbc && dbc->isLoaded() && dbc->getFieldCount() >= 8) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                worldStateSounds_.push_back({dbc->getUInt32(i, 0), dbc->getUInt32(i, 1), dbc->getUInt32(i, 2),
+                                             dbc->getUInt32(i, 3), dbc->getUInt32(i, 6)});
+        }
+    }
+    if (ambiencePlace_) {
+        const auto value = [&](uint32_t state) -> uint32_t {
+            if (!ctx.worldStates) return 0;
+            const auto it = ctx.worldStates->find(state);
+            return it != ctx.worldStates->end() ? it->second : 0;
+        };
+        const std::optional<uint32_t> row = za::worldStateAmbience(worldStateSounds_, *ambiencePlace_, value);
+        if (row != worldStateAmbience_) {
+            worldStateAmbience_ = row;
+            ambience.setSlotAmbience(za::kSlotWorldState, row.value_or(0));
+        }
+    }
+
+    // Slot 8, the weather's (0x00526ade): the Weather.dbc row's AmbienceID
+    // (+4), where it has one, when SMSG_WEATHER names it.
+    if (ctx.weatherSerial != weatherSerialSeen_ && assets) {
+        weatherSerialSeen_ = ctx.weatherSerial;
+        int32_t sound = -1;
+        auto dbc = assets->loadDBCOptional("Weather.dbc");
+        const int32_t idx = dbc && dbc->isLoaded() && dbc->getFieldCount() > 1 ? dbc->findRecordById(ctx.weatherId)
+                                                                                : -1;
+        if (idx >= 0) sound = dbc->getInt32(static_cast<uint32_t>(idx), 1);
+        ambience.setSlotSound(za::kSlotWeather, sound > 0 ? sound : -1);
+    }
+
+    // Slot 9, under liquid (0x004c8630), and slot 10, the screen effect's
+    // (0x004c8fa0).
+    ambience.setCameraLiquid(ctx.cameraLiquidType);
+    if (ctx.screenEffectAmbienceId != screenEffectAmbienceId_) {
+        screenEffectAmbienceId_ = ctx.screenEffectAmbienceId;
+        ambience.setSlotAmbience(za::kSlotScreenEffect, screenEffectAmbienceId_);
+    }
+
+    const bool indoors = ambiencePlace_ && ambiencePlace_->indoors;
+    ambience.update(screen_effect_audio::isSoundDaytime(ctx.gameTimeHours), indoors);
+}
+
 void AudioCoordinator::updateZoneAudio(const ZoneAudioContext& ctx) {
     float deltaTime = ctx.deltaTime;
     if (musicSwitchCooldown_ > 0.0f) {
         musicSwitchCooldown_ = std::max(0.0f, musicSwitchCooldown_ - deltaTime);
     }
 
-    // Resolve the spatial zone before updating ambience. Zone ambience used to
-    // run first, leaving it one zone behind and permanently on its noon default.
+    updateAmbience(ctx);
+
+    // The zone the music is for.
     auto* zm = ctx.zoneManager;
     const uint32_t tileZoneId = (zm && ctx.hasTile)
         ? zm->getZoneId(ctx.tileX, ctx.tileY)
@@ -228,30 +284,6 @@ void AudioCoordinator::updateZoneAudio(const ZoneAudioContext& ctx) {
         ? zm->resolveAreaZoneId(ctx.serverZoneId)
         : ctx.serverZoneId;
     uint32_t zoneId = serverZoneId != 0 ? serverZoneId : tileZoneId;
-
-    // ── Ambient weather audio sync ──
-    if (ambientSoundManager_) {
-        bool isBlacksmith = (ctx.insideWmoId == 96048);
-
-        if (zoneId != 0) {
-            ambientSoundManager_->setZoneId(zoneId);
-        }
-        ambientSoundManager_->setGameTime(ctx.gameTimeHours);
-
-        // Map visual weather type to ambient sound weather type
-        AmbientSoundManager::WeatherType audioWeatherType = AmbientSoundManager::WeatherType::NONE;
-        if (ctx.weatherType == 1) { // RAIN
-            if (ctx.weatherIntensity < 0.33f)      audioWeatherType = AmbientSoundManager::WeatherType::RAIN_LIGHT;
-            else if (ctx.weatherIntensity < 0.66f)  audioWeatherType = AmbientSoundManager::WeatherType::RAIN_MEDIUM;
-            else                                     audioWeatherType = AmbientSoundManager::WeatherType::RAIN_HEAVY;
-        } else if (ctx.weatherType == 2) { // SNOW
-            if (ctx.weatherIntensity < 0.33f)      audioWeatherType = AmbientSoundManager::WeatherType::SNOW_LIGHT;
-            else if (ctx.weatherIntensity < 0.66f)  audioWeatherType = AmbientSoundManager::WeatherType::SNOW_MEDIUM;
-            else                                     audioWeatherType = AmbientSoundManager::WeatherType::SNOW_HEAVY;
-        }
-        ambientSoundManager_->setWeather(audioWeatherType);
-        ambientSoundManager_->update(deltaTime, ctx.cameraPosition, ctx.insideWmo, ctx.isSwimming, isBlacksmith);
-    }
 
     // The screen effect's slot is above all the zone's.
     if (updateScreenEffectAudio(ctx)) return;
@@ -277,7 +309,7 @@ void AudioCoordinator::updateZoneAudio(const ZoneAudioContext& ctx) {
             lastLoggedWmoId = wmoModelId;
         }
 
-        // Blacksmith detection (ambient forge sounds)
+        // Blacksmith detection (the music stops inside)
         if (wmoModelId == 96048) {
             insideBlacksmith = true;
             LOG_INFO("Detected blacksmith WMO ", wmoModelId);

@@ -15,7 +15,6 @@
 #include "rendering/m2_model_classifier.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/camera.hpp"
-#include "audio/ambient_sound_manager.hpp"
 #include "core/coordinates.hpp"
 #include "pipeline/wowee_terrain_loader.hpp"
 #include "pipeline/wowee_model.hpp"
@@ -1275,51 +1274,13 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
     }
 
     case FinalizationPhase::WATER: {
-        // Terrain water was already loaded in TERRAIN phase.
-        // Generate water ambient emitters here.
-        if (ambientSoundManager) {
-            for (size_t chunkIdx = 0; chunkIdx < pending->terrain.waterData.size(); chunkIdx++) {
-                const auto& chunkWater = pending->terrain.waterData[chunkIdx];
-                if (!chunkWater.hasWater()) continue;
-
-                int chunkX = chunkIdx % 16;
-                int chunkY = chunkIdx / 16;
-                float tileOriginX = (32.0f - x) * core::coords::TILE_SIZE;
-                float tileOriginY = (32.0f - y) * core::coords::TILE_SIZE;
-                float chunkCenterX = tileOriginX + (chunkX + 0.5f) * 33.333333f;
-                float chunkCenterY = tileOriginY + (chunkY + 0.5f) * 33.333333f;
-
-                if (!chunkWater.layers.empty()) {
-                    const auto& layer = chunkWater.layers[0];
-                    float waterHeight = layer.minHeight;
-                    if (layer.liquidType == 0 && chunkIdx % 32 == 0) {
-                        PendingTile::AmbientEmitter emitter;
-                        emitter.position = glm::vec3(chunkCenterX, chunkCenterY, waterHeight);
-                        emitter.type = static_cast<uint32_t>(audio::AmbientSoundManager::AmbientType::WATER_SURFACE);
-                        pending->ambientEmitters.push_back(emitter);
-                    } else if (layer.liquidType == 1 && chunkIdx % 64 == 0) {
-                        PendingTile::AmbientEmitter emitter;
-                        emitter.position = glm::vec3(chunkCenterX, chunkCenterY, waterHeight);
-                        emitter.type = static_cast<uint32_t>(audio::AmbientSoundManager::AmbientType::WATER_SURFACE);
-                        pending->ambientEmitters.push_back(emitter);
-                    }
-                }
-            }
-        }
-
+        // Terrain water was already loaded in TERRAIN phase. The client
+        // places no sound emitters on it.
         ft.phase = FinalizationPhase::AMBIENT;
         return false;
     }
 
     case FinalizationPhase::AMBIENT: {
-        // Register ambient sound emitters
-        if (ambientSoundManager && !pending->ambientEmitters.empty()) {
-            for (const auto& emitter : pending->ambientEmitters) {
-                auto type = static_cast<audio::AmbientSoundManager::AmbientType>(emitter.type);
-                ambientSoundManager->addEmitter(emitter.position, type);
-            }
-        }
-
         // Commit tile to loadedTiles
         auto tile = std::make_unique<TerrainTile>();
         tile->coord = coord;

@@ -743,7 +743,7 @@ wowee_add_test(test_difficulty_change
             ${TEST_COMMON_SOURCES})
 
 # ── test_world_leave_sound ───────────────────────────────────
-# The ambience loops leaving the world stops, and the teleports that do it.
+# The teleports that unload the world's sound.
 wowee_add_test(test_world_leave_sound
     SOURCES test_world_leave_sound.cpp
             ${TEST_COMMON_SOURCES})
@@ -2930,6 +2930,12 @@ wowee_add_test(test_minimap_blips
 # Interface art for additive drawing and Texture:SetDesaturated.
 wowee_add_test(test_texture_variants
     SOURCES test_texture_variants.cpp)
+
+# ── test_zone_ambience ───────────────────────────────────────
+# The ambience's slots, and a place's and a world state's ambience, as the
+# client picks them.
+wowee_add_test(test_zone_ambience
+    SOURCES test_zone_ambience.cpp)
 
 # ── test_screen_effect_state ─────────────────────────────────
 # The full-screen effects' CPU side: rows, drunk blur, wave, nether field, fog noise.

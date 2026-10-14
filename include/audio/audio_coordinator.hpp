@@ -2,8 +2,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
+#include <vector>
 #include <glm/vec3.hpp>
+#include "audio/zone_ambience.hpp"
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -30,11 +34,17 @@ struct ZoneAudioContext {
     bool isSwimming = false;
     bool insideWmo = false;
     uint32_t insideWmoId = 0;
-    // Visual weather state for ambient audio sync
-    int weatherType = 0;      // 0=none, 1=rain, 2=snow, 3=storm
-    float weatherIntensity = 0.0f;
-    // Visible sky clock after zone ambience overrides (hours in [0, 24)).
+    // The game clock (hours in [0, 24)): the sound day (0x004c9850).
     float gameTimeHours = 12.0f;
+    // Where the player is for the ambience (0x0078f020), none until known.
+    std::optional<zone_ambience::Place> place;
+    // The Weather.dbc row SMSG_WEATHER last named, and a count of them.
+    uint32_t weatherId = 0;
+    uint32_t weatherSerial = 0;
+    // The liquid the camera is in, 0 for none (0x00780620).
+    uint32_t cameraLiquidType = 0;
+    // The world states the server has sent.
+    const std::unordered_map<uint32_t, uint32_t>* worldStates = nullptr;
     // Terrain tile for offline zone lookup
     int tileX = 0, tileY = 0;
     bool hasTile = false;
@@ -112,6 +122,9 @@ private:
     /// The screen effect's slot (0x004c8fa0, slot 10): its ambience and
     /// music over the zone's. True while its music plays.
     bool updateScreenEffectAudio(const ZoneAudioContext& ctx);
+    /// The ambience's slots from the place, the world states, the weather
+    /// and the camera's liquid, and the ambience and the liquid's sound.
+    void updateAmbience(const ZoneAudioContext& ctx);
 
     std::unique_ptr<MusicManager> musicManager_;
     std::unique_ptr<FootstepManager> footstepManager_;
@@ -133,16 +146,21 @@ private:
     bool inTavern_ = false;
     bool inBlacksmith_ = false;
     float musicSwitchCooldown_ = 0.0f;
-    // The screen effect's sounds as last resolved, and its ambience's loop.
+    // The screen effect's sounds as last resolved.
     struct ScreenEffectSounds {
-        uint32_t ambienceId = 0, zoneMusicId = 0;
+        uint32_t zoneMusicId = 0;
         bool isDay = true;
-        std::string ambience, music;
+        std::string music;
     };
     ScreenEffectSounds screenEffectSounds_;
-    std::string screenEffectAmbiencePlaying_;
-    uint32_t screenEffectAmbienceHandle_ = 0;
     std::string screenEffectMusicPlaying_;
+    // What the ambience's slots were last filled from.
+    std::optional<zone_ambience::Place> ambiencePlace_;
+    std::optional<uint32_t> worldStateAmbience_;
+    std::vector<zone_ambience::WorldStateSound> worldStateSounds_;
+    bool worldStateSoundsLoaded_ = false;
+    uint32_t weatherSerialSeen_ = 0;
+    uint32_t screenEffectAmbienceId_ = 0;
 };
 
 } // namespace audio

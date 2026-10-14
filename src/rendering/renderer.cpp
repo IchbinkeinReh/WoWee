@@ -2357,6 +2357,27 @@ void Renderer::updatePlayerArea() {
     const uint32_t area = za::placeArea(wmoDist, wmoArea, groundDown(nameStartZ, nameEndZ), groundArea);
     if (area == 0) return;
 
+    // Where the ambience is for (0x0078f020): the place's area and its zone,
+    // and the rows of the building group the player is linked to
+    // (0x007a1640) with whether it is inside (0x007a1480).
+    if (const auto parent = zoneManager->areaParent(area)) {
+        audio::zone_ambience::Place place;
+        place.zone = *parent != 0 ? *parent : area;
+        place.area = *parent != 0 ? area : 0;
+        if (linked) {
+            if (const auto* row = mi::areaRow(rows, linked->wmoId, linked->nameSet, linked->areaGroupId)) {
+                place.groupRow = row->id;
+                place.groupAmbience = row->soundAmbience;
+            }
+            if (const auto* row = mi::areaRow(rows, linked->wmoId, linked->nameSet, -1)) {
+                place.buildingRow = row->id;
+                place.buildingAmbience = row->soundAmbience;
+            }
+            place.indoors = playerLinkIndoors_;
+        }
+        ambiencePlace_ = place;
+    }
+
     // AreaTable as the texts read it: ParentAreaID and the name.
     std::unordered_map<uint32_t, za::AreaInfo> areaRows;
     const auto lookup = [&](uint32_t id) -> const za::AreaInfo* {
@@ -2597,6 +2618,7 @@ void Renderer::update(float deltaTime) {
         // death set for a ghost - and the nether world's fog (0x007ed870).
         updateScreenEffect(deltaTime);
         cameraInLiquid_ = cameraLiquid.submerged;
+        cameraLiquidType_ = cameraLiquid.submerged ? std::max<uint32_t>(cameraLiquid.liquidType, 1u) : 0u;
         const bool ghost = gh && gh->isPlayerGhost();
         if (screenEffectState_.kind() == screen_effect::Kind::NetherWorld) {
             // White with the full-screen effects on (0xd45774's ffx, 1 by
@@ -3029,15 +3051,17 @@ void Renderer::update(float deltaTime) {
         zctx.isSwimming = cameraController ? cameraController->isSwimming() : false;
         zctx.insideWmo = insideWmo;
         zctx.insideWmoId = insideWmoId;
-        if (weather) {
-            auto wt = weather->getWeatherType();
-            if (wt == Weather::Type::RAIN)       zctx.weatherType = 1;
-            else if (wt == Weather::Type::SNOW)  zctx.weatherType = 2;
-            zctx.weatherIntensity = weather->getIntensity();
-        }
         if (lightingManager) {
             zctx.gameTimeHours = lightingManager->getTimeOfDayHours();
         }
+        zctx.place = ambiencePlace_;
+        if (const auto* gh = core::Application::getInstance().getGameHandler()) {
+            zctx.weatherId = gh->getWeatherType();
+            zctx.weatherSerial = gh->getWeatherSerial();
+            zctx.worldStates = &gh->getWorldStates();
+        }
+        zctx.cameraLiquidType = cameraLiquidType_;
+
         if (terrainManager) {
             auto tile = terrainManager->getCurrentTile();
             zctx.tileX = tile.x;
@@ -3091,9 +3115,6 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
         case 0:
             if (audioCoordinator_->getAmbientSoundManager()) {
                 audioCoordinator_->getAmbientSoundManager()->initialize(cachedAssetManager);
-            }
-            if (terrainManager && audioCoordinator_->getAmbientSoundManager()) {
-                terrainManager->setAmbientSoundManager(audioCoordinator_->getAmbientSoundManager());
             }
             break;
         case 1:
@@ -4877,10 +4898,6 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (wmoRenderer && m2Renderer) {
             wmoRenderer->setM2Renderer(m2Renderer.get());
         }
-        // Set ambient sound manager for environmental audio emitters
-        if (audioCoordinator_->getAmbientSoundManager()) {
-            terrainManager->setAmbientSoundManager(audioCoordinator_->getAmbientSoundManager());
-        }
         // Pass asset manager to character renderer for texture loading
         if (characterRenderer) {
             characterRenderer->setAssetManager(assetManager);
@@ -6356,6 +6373,8 @@ void Renderer::loadWmoAreaRows() {
                               layout->tryField("WMOGroupID"), layout->tryField("Flags"),
                               layout->tryField("AreaTableID")};
     const uint32_t nameCol = layout->tryField("AreaName");
+    const uint32_t idCol = layout->tryField("ID");
+    const uint32_t ambienceCol = layout->tryField("SoundAmbience");
     auto data = assetManager->readFile("DBFilesClient\\WMOAreaTable.dbc");
     pipeline::DBCFile dbc;
     if (data.empty() || !dbc.load(data)) return;
@@ -6376,6 +6395,8 @@ void Renderer::loadWmoAreaRows() {
         row.flags = dbc.getUInt32(i, cols[3]);
         row.areaId = dbc.getUInt32(i, cols[4]);
         if (haveNames) row.name = dbc.getString(i, nameCol);
+        if (idCol < dbc.getFieldCount()) row.id = dbc.getUInt32(i, idCol);
+        if (ambienceCol < dbc.getFieldCount()) row.soundAmbience = dbc.getUInt32(i, ambienceCol);
         wmoAreaRows_[minimap_indoor::areaKey(dbc.getUInt32(i, cols[0]), dbc.getUInt32(i, cols[1]),
                                              static_cast<int32_t>(dbc.getUInt32(i, cols[2])))] =
             std::move(row);

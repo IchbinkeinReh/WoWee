@@ -30,7 +30,8 @@
     "ExploreFlag": 3,
     "ID": 0,
     "MapID": 1,
-    "ParentAreaNum": 2
+    "ParentAreaNum": 2,
+    "SoundAmbience": 7
   },
   "CharHairGeosets": {
     "GeosetID": 4,
@@ -681,6 +682,7 @@
     "WMOID": 1,
     "NameSetID": 2,
     "WMOGroupID": 3,
+    "SoundAmbience": 6,
     "Flags": 9,
     "AreaTableID": 10,
     "AreaName": 11

@@ -67,8 +67,11 @@ public:
     bool playSound2D(const std::vector<uint8_t>& wavData, float volume = 1.0f, float pitch = 1.0f);
     bool playSound2D(const std::string& mpqPath, float volume = 1.0f, float pitch = 1.0f);
 
-    // Stoppable 2D sound - returns a non-zero handle, or 0 on failure
-    uint32_t playSound2DStoppable(const std::vector<uint8_t>& wavData, float volume = 1.0f);
+    // Stoppable 2D sound - returns a non-zero handle, or 0 on failure.
+    /// `loop` plays it until stopped; it rises from silence over
+    /// `fadeInSeconds` (the client's fade-in, 0x004c6a40 -> 0x008785f0).
+    uint32_t playSound2DStoppable(const std::vector<uint8_t>& wavData, float volume = 1.0f, bool loop = false,
+                                  float fadeInSeconds = 0.0f);
     // Stop a sound started with playSound2DStoppable (no-op if already finished)
     void stopSound(uint32_t id);
 
@@ -91,6 +94,9 @@ public:
                                 float minDistance = 1.0f, float fadeInSeconds = 0.0f);
     /// Move a sound started with a handle (no-op once it has finished).
     void setSoundPosition(uint32_t id, const glm::vec3& position);
+    /// Change the volume of a sound started with a handle (no-op once it has
+    /// finished or is fading out).
+    void setSoundVolume(uint32_t id, float volume);
     /// Stop a sound started with a handle over `seconds`, after which it is
     /// cleaned up like a sound that ended (no-op once it has finished).
     void stopSoundWithFade(uint32_t id, float seconds);

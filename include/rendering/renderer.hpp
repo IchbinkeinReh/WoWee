@@ -24,6 +24,7 @@
 #include "rendering/screen_effect_state.hpp"
 #include "rendering/minimap_indoor.hpp"
 #include "game/zone_area.hpp"
+#include "audio/zone_ambience.hpp"
 #include "core/screen_recorder.hpp"
 #include "pipeline/custom_zone_discovery.hpp"
 
@@ -1016,6 +1017,10 @@ private:
     /// first of them (0x00782560, none where it names none), and the texts.
     std::vector<minimap_indoor::GroupRef> playerLinks_;
     uint32_t playerLinkedArea_ = 0;
+    /// Where the ambience is for (0x0078f020), none until first known.
+    std::optional<audio::zone_ambience::Place> ambiencePlace_;
+    /// The liquid the camera is in for the ambience (0x00780620), 0 for none.
+    uint32_t cameraLiquidType_ = 0;
     bool playerLinkIndoors_ = false;
     game::zone_area::Texts zoneTexts_;
     bool zoneTextsKnown_ = false;
