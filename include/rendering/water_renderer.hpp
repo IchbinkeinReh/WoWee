@@ -49,6 +49,13 @@ struct WaterSurface {
     uint32_t wmoId = 0;
     /// The building's group the liquid is in (MOGI's index).
     uint32_t wmoGroup = 0;
+    /// A building's liquid in the building's space, as its search reads it
+    /// (0x0079b760): the world to the building, the corner, each vertex's
+    /// height and each tile's flags.
+    glm::mat4 wmoWorldToLocal{1.0f};
+    glm::vec2 wmoLocalCorner{0.0f};
+    std::vector<float> wmoLocalHeights;
+    std::vector<uint8_t> wmoTileFlags;
 
     uint8_t xOffset = 0;
     uint8_t yOffset = 0;
@@ -218,8 +225,9 @@ public:
     /// Every liquid cell whose middle - its centre, half way up between the
     /// liquid's lowest and highest - is within `radius` of `at`, with its
     /// LiquidType row (0x0077f390 -> 0x0079c360): the ground's liquid where
-    /// `ground`, and that of the buildings' groups in `groups` - the ones the
-    /// portal walk from the player's met (0x007a1b10).
+    /// `ground`. Ahead of it the buildings' groups in `groups` - the ones the
+    /// portal walk from the player's met (0x007a1b10), in its order - give
+    /// their nearest tile of each LiquidType, at any distance (0x0079b760).
     std::vector<audio::zone_ambience::LiquidCell>
     liquidCellsNear(const glm::vec3& at, float radius, bool ground,
                     const std::vector<minimap_indoor::GroupRef>& groups) const;

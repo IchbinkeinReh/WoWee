@@ -4262,9 +4262,9 @@ WMORenderer::LiquidSources WMORenderer::liquidSourcesAt(const glm::vec3& pos,
         const glm::vec3 local(instance.invModelMatrix * glm::vec4(pos, 1.0f));
         za::walkLiquidGroups(it->second.liquidWalk, link.group, link.group, 0, local, openDepth,
                              [&](uint32_t group) {
-                                 const GroupRef ref{instance.id, group};
-                                 if (std::find(out.groups.begin(), out.groups.end(), ref) == out.groups.end())
-                                     out.groups.push_back(ref);
+                                 // Each time it is met, in order: each is
+                                 // searched then (0x0079bbf0 -> 0x0079b760).
+                                 out.groups.push_back(GroupRef{instance.id, group});
                              });
     }
     out.ground = za::groundLiquidAsked(!links.empty(), openDepth);

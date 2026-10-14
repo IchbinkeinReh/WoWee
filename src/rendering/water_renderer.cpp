@@ -1015,6 +1015,13 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
     surface.tileY = -1;
     surface.wmoId = wmoId;
     surface.wmoGroup = wmoGroup;
+    // As the building group's liquid search reads it (0x0079b760).
+    surface.wmoWorldToLocal = glm::inverse(modelMatrix);
+    surface.wmoLocalCorner = glm::vec2(liquid.basePosition.x, liquid.basePosition.y);
+    surface.wmoLocalHeights.assign(static_cast<size_t>(liquid.xVerts) * liquid.yVerts, liquid.basePosition.z);
+    std::copy_n(liquid.heights.begin(), std::min(liquid.heights.size(), surface.wmoLocalHeights.size()),
+                surface.wmoLocalHeights.begin());
+    surface.wmoTileFlags = liquid.flags;
     surface.liquidType = static_cast<uint16_t>(liquid.liquidType);
     surface.xOffset = 0;
     surface.yOffset = 0;
@@ -1684,17 +1691,34 @@ std::optional<uint16_t> WaterRenderer::getWaterTypeAt(float glX, float glY) cons
 std::vector<audio::zone_ambience::LiquidCell>
 WaterRenderer::liquidCellsNear(const glm::vec3& at, float radius, bool ground,
                                const std::vector<minimap_indoor::GroupRef>& groups) const {
-    std::vector<audio::zone_ambience::LiquidCell> cells;
+    namespace za = audio::zone_ambience;
+    std::vector<za::LiquidCell> cells;
+    // First each building group the walk through the portals met, in the
+    // order it met them (0x0077f390 -> 0x007a1b10 -> 0x0079b760): the
+    // nearest tile of each LiquidType, however far. Where it is, is the
+    // player's place in the world and the way to the tile in the building's
+    // space, not turned by the building (0x004d2390).
+    std::vector<za::BuildingLiquidFound> found;
+    for (const auto& ref : groups) {
+        for (const auto& surface : surfaces) {
+            if (surface.wmoId != ref.instanceId || surface.wmoGroup != ref.group) continue;
+            const za::BuildingLiquid liquid{surface.liquidType,
+                                            surface.width,
+                                            surface.height,
+                                            surface.wmoLocalCorner,
+                                            surface.wmoLocalHeights,
+                                            surface.wmoTileFlags};
+            za::searchBuildingLiquid(liquid, glm::vec3(surface.wmoWorldToLocal * glm::vec4(at, 1.0f)), found);
+        }
+    }
+    for (const auto& f : found) cells.push_back({f.liquidType, at + f.offset});
+
+    // Then the ground's, where it is asked for: every cell whose middle is
+    // within the radius (0x0079d2b0 -> 0x0079c360).
+    if (!ground) return cells;
     const float radiusSq = radius * radius;
     for (const auto& surface : surfaces) {
-        // The ground's where it is asked for, and a building's group's where
-        // the walk through the portals met it (0x0077f390 -> 0x007a1b10).
-        if (surface.wmoId == 0 ? !ground
-                               : std::find(groups.begin(), groups.end(),
-                                           minimap_indoor::GroupRef{surface.wmoId, surface.wmoGroup}) ==
-                                     groups.end()) {
-            continue;
-        }
+        if (surface.wmoId != 0) continue;
         const uint32_t liquidType = surface.clientLiquidType != 0 ? surface.clientLiquidType : surface.liquidType;
         const float z = (surface.minHeight + surface.maxHeight) * 0.5f;
         const float dz = z - at.z;

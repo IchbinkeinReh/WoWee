@@ -516,8 +516,8 @@ public:
     indoorMinimapAt(const glm::vec3& pos, float radius, const std::vector<GroupRef>& links) const;
     /// What the liquid's sound asks for with the player at `pos` linked to
     /// `links` (0x0077f390): the buildings' groups the portal walk from each
-    /// link meets (0x007a1b10 -> 0x0079bbf0), and whether the ground's liquid
-    /// is asked for too.
+    /// link meets (0x007a1b10 -> 0x0079bbf0), in order and as often as it
+    /// meets them, and whether the ground's liquid is asked for too.
     struct LiquidSources {
         bool ground = true;
         std::vector<GroupRef> groups;

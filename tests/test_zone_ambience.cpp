@@ -180,3 +180,77 @@ TEST_CASE("the liquid's portal walk from the player's group", "[audio][ambience]
     CHECK(asked == std::vector<uint32_t>{0});
     CHECK(openDepth == za::kNoOpenDepth);
 }
+
+namespace {
+/// A building liquid of `w` by `h` tiles at the origin, every vertex at
+/// `height`, every tile with liquid.
+struct TestLiquid {
+    std::vector<float> heights;
+    std::vector<uint8_t> flags;
+    za::BuildingLiquid at(uint32_t type, int w, int h) const {
+        return {type, w, h, glm::vec2(0.0f), heights, flags};
+    }
+    TestLiquid(int w, int h, float height)
+        : heights(static_cast<size_t>((w + 1) * (h + 1)), height), flags(static_cast<size_t>(w * h), 0) {}
+};
+}  // namespace
+
+TEST_CASE("a building's liquid: the nearest tile by the growing disc", "[audio][ambience]") {
+    constexpr float T = za::kBuildingLiquidTile;
+    TestLiquid water(10, 10, 7.0f);
+    std::vector<za::BuildingLiquidFound> found;
+
+    // On a tile: that tile, the way to its corner (0x0079c1a0).
+    za::searchBuildingLiquid(water.at(1, 10, 10), {10.0f, 10.0f, 5.0f}, found);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].liquidType == 1);
+    CHECK(found[0].offset.x == Catch::Approx(2 * T - 10.0f));
+    CHECK(found[0].offset.y == Catch::Approx(2 * T - 10.0f));
+    CHECK(found[0].offset.z == Catch::Approx(2.0f));
+
+    // A hole there: the ring of nine. (1,2) is kept first, (3,2) is further
+    // than 2 up and a tile across make and replaces it, and the rest are
+    // not further than that.
+    water.flags[2 * 10 + 2] = 0x0f;
+    found.clear();
+    za::searchBuildingLiquid(water.at(1, 10, 10), {10.0f, 10.0f, 5.0f}, found);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].offset.x == Catch::Approx(3 * T - 10.0f));
+    CHECK(found[0].offset.y == Catch::Approx(2 * T - 10.0f));
+}
+
+TEST_CASE("a building's liquid is found far off, and one entry per type", "[audio][ambience]") {
+    constexpr float T = za::kBuildingLiquidTile;
+    const TestLiquid pool(3, 1, 0.0f);
+    std::vector<za::BuildingLiquidFound> found;
+
+    // Thirty tiles off - 125 yards, past the ground's 60 - and still found.
+    const glm::vec3 far(-30.0f * T - 1.0f, 1.0f, 0.0f);
+    za::searchBuildingLiquid(pool.at(5, 3, 1), far, found);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].offset.x == Catch::Approx(30.0f * T + 1.0f));
+    CHECK(found[0].offset.y == Catch::Approx(-1.0f));
+
+    // Sixty-one tiles off is past the last disc.
+    found.clear();
+    za::searchBuildingLiquid(pool.at(5, 3, 1), {-61.0f * T - 1.0f, 1.0f, 0.0f}, found);
+    CHECK(found.empty());
+
+    // Another group of the same type further off keeps what is there; one
+    // of another type adds its own.
+    const TestLiquid near(4, 4, 0.0f);
+    found.clear();
+    za::searchBuildingLiquid(near.at(5, 4, 4), {1.0f, 1.0f, 0.0f}, found);
+    za::searchBuildingLiquid(pool.at(5, 3, 1), far, found);
+    za::searchBuildingLiquid(pool.at(6, 3, 1), far, found);
+    REQUIRE(found.size() == 2);
+    CHECK(found[0].liquidType == 5);
+    CHECK(found[0].offset.x == Catch::Approx(-1.0f));
+    CHECK(found[1].liquidType == 6);
+    CHECK(found[1].offset.x == Catch::Approx(30.0f * T + 1.0f));
+
+    // No type, or no tiles: nothing is asked.
+    found.clear();
+    za::searchBuildingLiquid(pool.at(0, 3, 1), far, found);
+    CHECK(found.empty());
+}

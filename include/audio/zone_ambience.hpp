@@ -30,10 +30,13 @@
 // and no SoundEmitters.dbc sounds - it loads that table (0x0064d3e0 into
 // 0xad4694) and reads nothing from it.
 
+#include <algorithm>
 #include <array>
+#include <climits>
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -187,17 +190,20 @@ inline std::optional<uint32_t> worldStateAmbience(const std::vector<WorldStateSo
 //
 // Not while the camera is in liquid (0x004c8670): then nothing is asked and
 // what plays goes on. Otherwise at most every half second, and only once the
-// player has moved (0x004d2230), the liquid within 60 yards of the player
-// is asked for (0x0077f390): every liquid cell whose middle - its centre at
-// half way between the liquid's lowest and highest - is within 60 yards
-// (0x0079c360). A liquid whose LiquidType has flag 0x80 is passed over with
+// player has moved (0x004d2230), the liquid about the player is asked for
+// (0x0077f390): from the building groups the portal walk meets, each
+// LiquidType's nearest tile however far (0x0079b760, searchBuildingLiquid),
+// placed by adding the way to it in the building's space to the player's
+// place, unturned; and from the ground, every liquid cell whose middle - its
+// centre at half way between the liquid's lowest and highest - is within 60
+// yards (0x0079c360). A liquid whose LiquidType has flag 0x80 is passed over with
 // the player indoors. Of what is left, the cell nearest across the ground
 // wins (0x004d21b0), and its LiquidType's SoundID plays there: a 3D loop
 // rising over a second, at the sound's own volume and distances. While the
 // same sound wins within 20 yards of where it plays it moves there; a
 // different one, or one further off, fades the last out over a second and
-// starts anew. With nothing within 60 yards the sound wanted is none
-// (sound 0), and what plays fades out.
+// starts anew. With nothing found the sound wanted is none (sound 0), and
+// what plays fades out.
 
 inline constexpr float kLiquidQueryRadius = 60.0f;
 inline constexpr float kLiquidRecheckSeconds = 0.5f;
@@ -258,6 +264,130 @@ void walkLiquidGroups(const std::vector<WalkGroup>& groups, uint32_t group, uint
 /// open to the sky was met within a portal of them.
 constexpr bool groundLiquidAsked(bool linkedToBuilding, uint32_t openDepth) {
     return !linkedToBuilding || openDepth < 2;
+}
+
+/// A building group's liquid as its search reads it (0x0079b760): the
+/// group's LiquidType (+0x144), its tiles across and along (+0x11c, +0x120),
+/// its corner in the building's space (+0x124, +0x128), each vertex's height
+/// ((tilesX + 1) per row, +0x134) and each tile's flags (+0x138).
+struct BuildingLiquid {
+    uint32_t liquidType = 0;
+    int tilesX = 0;
+    int tilesY = 0;
+    glm::vec2 corner{0.0f};
+    std::span<const float> heights;
+    std::span<const uint8_t> tileFlags;
+};
+/// What the search keeps (0x0079c1a0): one entry per LiquidType, the way
+/// from the player to the nearest tile's corner, in the building's space.
+struct BuildingLiquidFound {
+    uint32_t liquidType = 0;
+    glm::vec3 offset{0.0f};
+};
+/// A building liquid's tile (0xa3fa30) and its inverse (0xadf804).
+inline constexpr float kBuildingLiquidTile = 4.1666665f;
+inline constexpr float kBuildingLiquidTileInverse = 0.24f;
+/// The discs' radii in tiles (0xa3fa48): to 10 by one, to 20 by two, to 60
+/// by four - some 250 yards.
+inline constexpr std::array<float, 26> kBuildingLiquidRings{0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 12, 14,
+                                                            16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60};
+
+/// 0x0079b760: a building group's liquid about `local` - the player in the
+/// building's space - into `found`, which every group asked for, and then
+/// the ground, add to. A disc of tiles about the player's grows ring by ring
+/// (0x0079b590) until a ring keeps something; each row's tiles are visited
+/// once (0x0079b4c0 remembers each row's span, the gaps inside it too). A
+/// tile with liquid (flags' low nibble not 0xf) is kept for its LiquidType
+/// unless what the type has is no further than the tile's height above the
+/// player and the ring's radius make (0x0079c1a0) - the tile's own distance
+/// across the ground is not asked.
+inline void searchBuildingLiquid(const BuildingLiquid& liquid, const glm::vec3& local,
+                                 std::vector<BuildingLiquidFound>& found) {
+    const int w = liquid.tilesX, h = liquid.tilesY;
+    if (liquid.liquidType == 0 || w <= 0 || h <= 0) return;
+    // The x87 keeps the differences unrounded for the tile and stores them
+    // as floats for the offsets; 0x0088b9c0 truncates.
+    const double dx = static_cast<double>(local.x) - static_cast<double>(liquid.corner.x);
+    const double dy = static_cast<double>(local.y) - static_cast<double>(liquid.corner.y);
+    const auto lx = static_cast<float>(dx), ly = static_cast<float>(dy);
+    const int cx = static_cast<int>(dx * static_cast<double>(kBuildingLiquidTileInverse));
+    const int cy = static_cast<int>(dy * static_cast<double>(kBuildingLiquidTileInverse));
+
+    bool kept = false;     // +0x30
+    float ringSq = 0.0f;   // +0x2c
+    const auto tiles = [&](int x0, int x1, int y) {
+        for (int x = x0; x <= x1; ++x) {
+            const size_t t = static_cast<size_t>(w) * static_cast<size_t>(y) + static_cast<size_t>(x);
+            if (t >= liquid.tileFlags.size() || (liquid.tileFlags[t] & 0xf) == 0xf) continue;
+            const size_t v = static_cast<size_t>(w + 1) * static_cast<size_t>(y) + static_cast<size_t>(x);
+            const float dz = (v < liquid.heights.size() ? liquid.heights[v] : 0.0f) - local.z;
+            auto it = std::find_if(found.begin(), found.end(), [&](const BuildingLiquidFound& f) {
+                return f.liquidType == liquid.liquidType;
+            });
+            if (it == found.end()) {
+                found.push_back({});
+                it = std::prev(found.end());
+            } else if (glm::dot(it->offset, it->offset) <= dz * dz + ringSq) {
+                continue;
+            }
+            it->liquidType = liquid.liquidType;
+            it->offset = {static_cast<float>(x) * kBuildingLiquidTile - lx,
+                          static_cast<float>(y) * kBuildingLiquidTile - ly, dz};
+            kept = true;
+        }
+    };
+    // 0x0079b470: each row's visited span, none yet.
+    std::vector<std::pair<int, int>> spans(static_cast<size_t>(h), {INT_MAX, INT_MIN});
+    const auto row = [&](int x0, int x1, int y) {
+        if (y < 0 || y >= h || x1 < 0 || x0 >= w) return;
+        const int a = std::clamp(x0, 0, w - 1);
+        const int b = std::clamp(x1, 0, w - 1);
+        auto& span = spans[static_cast<size_t>(y)];
+        int from = a;
+        if (span.first <= span.second) {
+            tiles(a, span.first - 1, y);
+            from = span.second + 1;
+        }
+        tiles(from, b, y);
+        span = {std::min(span.first, a), std::max(span.second, b)};
+    };
+    // 0x0079b590: the disc of radius r - 1 about (x, y), its rows by the
+    // midpoint circle; 0 is the tile, 1 the nine about it.
+    const auto disc = [&](int x, int y, int r) {
+        if (r == 0) {
+            row(x, x, y);
+            return;
+        }
+        if (r == 1) {
+            row(x - 1, x + 1, y);
+            row(x - 1, x + 1, y - 1);
+            row(x - 1, x + 1, y + 1);
+            return;
+        }
+        const int d = r - 1;
+        row(x - d, x + d, y);
+        int err = d, odd = 1, step = 1 - 2 * d, across = d, i = 0;
+        do {
+            ++i;
+            err -= odd;
+            odd += 2;
+            if (err < 0) {
+                --across;
+                err -= step;
+                step += 2;
+            }
+            row(x - across, x + across, y - i);
+            row(x - across, x + across, y + i);
+            row(x - i, x + i, y - across);
+            row(x - i, x + i, y + across);
+        } while (i <= across);
+    };
+    for (const float r : kBuildingLiquidRings) {
+        if (kept) break;
+        const double radius = static_cast<double>(kBuildingLiquidTile) * static_cast<double>(r);
+        ringSq = static_cast<float>(radius * radius);
+        disc(cx, cy, static_cast<int>(r));
+    }
 }
 
 /// The cell whose sound plays (0x004d21b0): the nearest across the ground,
