@@ -318,6 +318,25 @@ inline bool calendarInviteThrottled(uint32_t lastInviteMs, uint32_t nowMs) {
     return lastInviteMs != 0 && static_cast<int32_t>(nowMs - lastInviteMs) < 2000;
 }
 
+/// Whether an event added at `lastAddMs` (0: none yet) still holds the next
+/// back at `nowMs`: five seconds, CALENDAR_ERROR_EVENT_THROTTLED, as
+/// CalendarAddEvent (0x005bbd60) and CalendarCanAddEvent (0x005b8ba0) measure
+/// it against 0x00c207fc.
+inline bool calendarAddThrottled(uint32_t lastAddMs, uint32_t nowMs) {
+    return lastAddMs != 0 && static_cast<int32_t>(nowMs - lastAddMs) < 5000;
+}
+
+/// The invite id an opened event keeps for the player (+0x28): their own
+/// row's when it carries a moderation rank, else 0 (0x005f2c00). A new event
+/// keeps 1 (0x005f2a20). It is what an invitation sends as its own.
+uint64_t calendarOwnInviteId(const CalendarEventDetail& open, uint64_t player);
+
+/// 0x005f1b30: whether the player may invite to the open event - it keeps an
+/// invite id for them, or they made it.
+inline bool calendarMayInvite(uint64_t ownInviteId, uint64_t creator, uint64_t player) {
+    return ownInviteId != 0 || creator == player;
+}
+
 /// A date moved on by whole minutes, weekday and all - what 0x0076c3f0 does
 /// to the date it is handed.
 WowDate addMinutes(const WowDate& date, int64_t minutes);

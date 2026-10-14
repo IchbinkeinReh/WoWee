@@ -4545,6 +4545,9 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
         return;
     }
     packet.skipAll();
+    // An event sent in full is the open one now, in place of a new one
+    // (0x005bed20).
+    if (which == CalendarPacket::SendEvent) calendarDraftOpen_ = false;
     for (const auto& signal : ctx.signals) {
         // The dispatcher's ending clears the pending action as it says so.
         if (signal.event == "CALENDAR_ACTION_PENDING") {

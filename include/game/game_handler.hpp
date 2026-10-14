@@ -814,6 +814,21 @@ public:
     /// CalendarCanSendInvite (0x005b8b30): no calendar request pending, and
     /// the last invitation two seconds gone.
     bool calendarCanSendInvite() const;
+    /// CalendarCanAddEvent (0x005b8ba0): no calendar request pending, and the
+    /// last event added five seconds gone.
+    bool calendarCanAddEvent() const;
+    /// CalendarNewEvent / CalendarNewGuildEvent (0x005bbe50, 0x005bc030): a
+    /// new event becomes the open one (0x00c207ec) - the player's, invited to
+    /// before it exists, keeping invite id 1 (0x005f2a20) - until
+    /// SMSG_CALENDAR_SEND_EVENT opens another. A guild event needs a guild:
+    /// without one the error dialog, ERR_GUILD_PLAYER_NOT_IN_GUILD, and
+    /// nothing opened (false).
+    bool openCalendarDraft(bool guildEvent);
+    /// Whether an event is open (0x00c207ec): a new one, or the one last sent
+    /// in full while its id stands.
+    bool isCalendarEventOpen() const {
+        return calendarDraftOpen_ || calendarEventDetail_.eventId != 0;
+    }
     /// Set it and say so, CALENDAR_ACTION_PENDING (0x005b7e20).
     void setCalendarActionPending(bool pending);
     /// A player's name has arrived: an open event may have been waiting on
@@ -826,10 +841,10 @@ public:
     const CalendarEventDetail& getCalendarEventDetail() const {
         return calendarEventDetail_;
     }
-    /// Invite someone to an event, or to one not yet created.
-    void inviteToCalendarEvent(uint64_t eventId, uint64_t inviteId,
-                               const std::string& name, bool isPreInvite,
-                               bool isGuildEvent);
+    /// CalendarEventInvite (0x005bc360 -> 0x005f2070): invite someone to the
+    /// open event. `draftFlags` are the new event's, for when it is the open
+    /// one.
+    void calendarEventInvite(const std::string& name, uint32_t draftFlags);
     /// Set another invitee's status or moderator rank.
     void setCalendarInviteStatus(uint64_t inviteeGuid, uint64_t eventId,
                                  uint64_t inviteId, uint8_t status);
@@ -844,7 +859,7 @@ public:
                                         uint32_t minRank);
     /// Ask the server for one event's detail: CMSG_CALENDAR_GET_EVENT.
     void requestCalendarEvent(uint64_t eventId);
-    /// Send a staged event to the server.
+    /// CalendarAddEvent (0x005bbd60): send the new event to the server.
     void createCalendarEvent(const CalendarEventDraft& draft);
     /// Answer an invitation. Status is a CalendarInviteStatus.
     void respondToCalendarInvite(uint64_t eventId, uint64_t inviteId,
@@ -5766,12 +5781,19 @@ private:
     /// When the last invitation went, on calendarClockMs (0x00c207f8); 0 for
     /// none yet.
     uint32_t lastCalendarInviteMs_ = 0;
+    /// When the last event was added, on calendarClockMs (0x00c207fc); 0 for
+    /// none yet.
+    uint32_t lastCalendarAddMs_ = 0;
+    /// Whether the open event (0x00c207ec) is a new one rather than
+    /// calendarEventDetail_.
+    bool calendarDraftOpen_ = false;
     /// The millisecond clock the invitation throttle is measured on
     /// (0x0086ae20), never 0 so that 0 can mean none sent.
     static uint32_t calendarClockMs();
     /// The calendar's error dialog: CALENDAR_UPDATE_ERROR with the words, then
     /// CALENDAR_ACTION_PENDING false (0x005b9960).
-    void calendarErrorDialog(const char* key, const char* enUS);
+    void calendarErrorDialog(const char* key, const char* enUS,
+                             const std::vector<std::string>& args = {});
     /// The whole calendar, as of the server's last answer to a request for it.
     CalendarData calendarData_;
     /// One event in full, as of the last one opened.

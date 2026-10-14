@@ -8090,8 +8090,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 // none of them talks to the server on its own, which is what
                 // lets the create form be filled in in any order and cancelled
                 // without trace.
+                // The new event becomes the open one (0x005bbe50), which is
+                // what CalendarEventInvite and CalendarAddEvent act on.
                 {"CalendarNewEvent", [](lua_State* L) -> int {
-            (void)L;
+            if (auto* gh = getGameHandler(L)) gh->openCalendarDraft(false);
             calendarDraft() = wowee::game::CalendarEventDraft{};
             // Today, so an event committed without touching the date lands
             // somewhere real rather than on 1 January 2000.
@@ -8105,8 +8107,11 @@ void registerSystemLuaAPI(lua_State* L) {
             d.eventTime.hour = 12;
             return 0;
         }},
+                // Only in a guild; otherwise the error dialog and nothing
+                // opened (0x005bc030).
                 {"CalendarNewGuildEvent", [](lua_State* L) -> int {
-            (void)L;
+            auto* gh = getGameHandler(L);
+            if (!gh || !gh->openCalendarDraft(true)) return 0;
             calendarDraft() = wowee::game::CalendarEventDraft{};
             // CALENDAR_FLAG_GUILD_EVENT, which is what the server reads to
             // decide the event belongs to the guild rather than the player.
@@ -8255,23 +8260,15 @@ void registerSystemLuaAPI(lua_State* L) {
             gh->setCalendarInviteModerator(inv.guid, ev.eventId, inv.inviteId, 0);
             return 0;
         }},
-                // Inviting someone.
-                //
-                // Two cases in one call, which is how WoW does it. An event
-                // that exists is invited to by id; an event still being
-                // created has no id yet, so the invitation is a *pre-invite*
-                // and the server holds it against the creator until the event
-                // is committed. Telling them apart by whether an event is
-                // open, which is the same thing the interface means.
+                // CalendarEventInvite(name) - invite someone to the open event
+                // (0x005bcf00 -> 0x005bc360): to a new one before it exists,
+                // or to the one opened. Which, and whether the player may, is
+                // the open event's; the checks are calendarEventInvite's.
                 {"CalendarEventInvite", [](lua_State* L) -> int {
-            const char* name = luaL_optstring(L, 1, "");
+            const char* name = lua_tostring(L, 1);
             auto* gh = getGameHandler(L);
-            if (!gh || !name || !*name) return 0;
-            const auto& open = gh->getCalendarEventDetail();
-            const bool preInvite = (open.eventId == 0);
-            const uint32_t flags = preInvite ? calendarDraft().flags : open.flags;
-            gh->inviteToCalendarEvent(open.eventId, 0, name, preInvite,
-                                      (flags & 0x0400u) != 0);
+            if (!gh || !name) return 0;
+            gh->calendarEventInvite(name, calendarDraft().flags);
             return 0;
         }},
                 // The three bounds go on the wire: this has its own opcode
@@ -8286,12 +8283,21 @@ void registerSystemLuaAPI(lua_State* L) {
                 static_cast<uint32_t>(luaL_optnumber(L, 3, 0)));
             return 0;
         }},
-                // And the commit.
+                // And the commit (0x005bcc70), held five seconds after the
+                // last (createCalendarEvent).
                 {"CalendarAddEvent", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) {
                 gh->createCalendarEvent(calendarDraft());
             }
             return 0;
+        }},
+                // CalendarCanAddEvent() - may an event be added now
+                // (0x005b8ba0): no calendar request pending and the last added
+                // five seconds gone (0x00c207fc).
+                {"CalendarCanAddEvent", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushboolean(L, gh && gh->calendarCanAddEvent() ? 1 : 0);
+            return 1;
         }},
                 // ---- The right-click menu on a day's event ----
                 //

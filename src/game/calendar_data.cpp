@@ -1042,5 +1042,11 @@ void calendarNameArrived(CalendarEventDetail& open, uint64_t guid,
     }
 }
 
+uint64_t calendarOwnInviteId(const CalendarEventDetail& open, uint64_t player) {
+    for (const auto& inv : open.invitees)
+        if (player != 0 && inv.guid == player) return inv.rank != 0 ? inv.inviteId : 0;
+    return 0;
+}
+
 }  // namespace game
 }  // namespace wowee

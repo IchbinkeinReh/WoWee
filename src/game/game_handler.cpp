@@ -3602,8 +3602,9 @@ uint32_t GameHandler::calendarClockMs() {
     return now == 0 ? 1u : now;
 }
 
-void GameHandler::calendarErrorDialog(const char* key, const char* enUS) {
-    fireAddonEvent("CALENDAR_UPDATE_ERROR", {interfaceString(key, enUS)});
+void GameHandler::calendarErrorDialog(const char* key, const char* enUS,
+                                      const std::vector<std::string>& args) {
+    fireAddonEvent("CALENDAR_UPDATE_ERROR", {interfaceFormat(key, enUS, args)});
     setCalendarActionPending(false);
 }
 
@@ -3612,22 +3613,76 @@ bool GameHandler::calendarCanSendInvite() const {
            !calendarInviteThrottled(lastCalendarInviteMs_, calendarClockMs());
 }
 
+bool GameHandler::calendarCanAddEvent() const {
+    return !calendarActionPending_ &&
+           !calendarAddThrottled(lastCalendarAddMs_, calendarClockMs());
+}
+
+bool GameHandler::openCalendarDraft(bool guildEvent) {
+    if (!isInWorld()) return false;
+    if (guildEvent && !isInGuild()) {
+        calendarErrorDialog("ERR_GUILD_PLAYER_NOT_IN_GUILD", "You are not in a guild.");
+        return false;
+    }
+    calendarDraftOpen_ = true;
+    return true;
+}
+
 // Each request below is one the client sends only while no other is pending,
 // and marks pending once sent (0x005b7e20 and the setters beside it); the
 // server's answer, or its error, clears it (0x005c3fe0, 0x005b9960).
 
-void GameHandler::inviteToCalendarEvent(uint64_t eventId, uint64_t inviteId,
-                                        const std::string& name,
-                                        bool isPreInvite, bool isGuildEvent) {
-    if (!calendarActionAllowed()) return;
-    // 0x005bc360: within two seconds of the last invitation, the error dialog
-    // instead (CALENDAR_ERROR_INVITE_THROTTLED); one sent restarts the wait.
+void GameHandler::calendarEventInvite(const std::string& name, uint32_t draftFlags) {
+    // 0x005bc360: nothing while a request is out or with no event open, and
+    // nothing, silently, unless the player may invite to it (0x005f1b30).
+    if (!calendarActionAllowed() || !isCalendarEventOpen()) return;
+    const bool draft = calendarDraftOpen_;
+    const CalendarEventDetail& open = calendarEventDetail_;
+    const uint64_t ownInviteId = draft ? 1 : calendarOwnInviteId(open, playerGuid);
+    if (!calendarMayInvite(ownInviteId, draft ? playerGuid : open.creatorGuid, playerGuid)) return;
+    // Within two seconds of the last invitation, the error dialog instead
+    // (CALENDAR_ERROR_INVITE_THROTTLED); one sent restarts the wait. The
+    // setting at 0x00bd09ac that would lift it is never registered in this
+    // build, so it always holds.
     if (calendarInviteThrottled(lastCalendarInviteMs_, calendarClockMs())) {
         calendarErrorDialog("CALENDAR_ERROR_INVITE_THROTTLED",
                             "The number of invites that can be sent is limited, please wait to send another invite.");
         return;
     }
-    socialHandler_->inviteToCalendarEvent(eventId, inviteId, name, isPreInvite, isGuildEvent);
+    // 0x005f2070, on the open event: none to a guild announcement, none past
+    // a hundred, none to a name already on the list - the name cut to what
+    // its 0x30-byte buffer holds, against each invitee whose name is known.
+    // A new event's list is its maker (0x005f2a20).
+    const uint32_t flags = draft ? draftFlags : open.flags;
+    if (flags & calendar_flag::kAnnouncement) {
+        calendarErrorDialog("CALENDAR_ERROR_INVITES_DISABLED", "Invites are disabled for this event.");
+        return;
+    }
+    const size_t onList = draft ? 1 : open.invitees.size();
+    if (onList >= 100) {
+        calendarErrorDialog("CALENDAR_ERROR_INVITES_EXCEEDED",
+                            "You cannot invite more than %d players to this event.", {"100"});
+        return;
+    }
+    const std::string who = name.substr(0, 0x2F);
+    bool already = false;
+    if (draft) {
+        already = lookupName(playerGuid) == who;
+    } else {
+        for (const auto& inv : open.invitees) {
+            const std::string known = lookupName(inv.guid);
+            if (!known.empty() && known == who) { already = true; break; }
+        }
+    }
+    if (already) {
+        calendarErrorDialog("CALENDAR_ERROR_ALREADY_INVITED_TO_EVENT_S", "%s has already been invited.", {who});
+        return;
+    }
+    // Its own permission check (CALENDAR_ERROR_PERMISSIONS) is the one passed
+    // above. The open event's id, its own invite id, the name, whether it is
+    // yet to be made (+0x500) and whether it is the guild's (0x400).
+    socialHandler_->inviteToCalendarEvent(draft ? 0 : open.eventId, ownInviteId, who, draft,
+                                          (flags & calendar_flag::kGuildEvent) != 0);
     lastCalendarInviteMs_ = calendarClockMs();
     setCalendarActionPending(true);
 }
@@ -3674,8 +3729,26 @@ void GameHandler::requestCalendarEvent(uint64_t eventId) {
 }
 
 void GameHandler::createCalendarEvent(const CalendarEventDraft& draft) {
+    // CalendarAddEvent (0x005bcc70) asks the trial-account gate first
+    // (0x005191c0(0x13)), which is not modelled; the setting at 0x00bd09ac
+    // that would skip it is never registered in this build. Then 0x005bbd60:
+    // nothing while a request is out; with no event open, the error dialog,
+    // CALENDAR_ERROR_INTERNAL; within five seconds of the last event added,
+    // CALENDAR_ERROR_EVENT_THROTTLED. Only a new event is sent (0x005f1b90
+    // returns on +0x500 clear), and sending it restarts the wait.
     if (!calendarActionAllowed()) return;
+    if (!isCalendarEventOpen()) {
+        calendarErrorDialog("CALENDAR_ERROR_INTERNAL", "Internal calendar error.");
+        return;
+    }
+    if (calendarAddThrottled(lastCalendarAddMs_, calendarClockMs())) {
+        calendarErrorDialog("CALENDAR_ERROR_EVENT_THROTTLED",
+                            "The number of events that can be created is limited, please wait to create another event.");
+        return;
+    }
+    if (!calendarDraftOpen_) return;
     socialHandler_->createCalendarEvent(draft);
+    lastCalendarAddMs_ = calendarClockMs();
     setCalendarActionPending(true);
 }
 

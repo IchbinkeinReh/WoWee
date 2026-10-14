@@ -1034,3 +1034,35 @@ TEST_CASE("Invitations are two seconds apart", "[calendar]") {
     CHECK(calendarInviteThrottled(0xFFFFFF00u, 0x00000100u));   // across the wrap
     CHECK_FALSE(calendarInviteThrottled(0xFFFFFF00u, 0x00000800u));
 }
+
+TEST_CASE("Events added are five seconds apart", "[calendar]") {
+    // 0x005bbd60 / 0x005b8ba0 against 0x00c207fc.
+    CHECK_FALSE(calendarAddThrottled(0, 500));
+    CHECK(calendarAddThrottled(10000, 10000));
+    CHECK(calendarAddThrottled(10000, 14999));
+    CHECK_FALSE(calendarAddThrottled(10000, 15000));
+    CHECK(calendarAddThrottled(0xFFFFFF00u, 0x00000100u));   // across the wrap
+}
+
+TEST_CASE("Who may invite to an opened event", "[calendar]") {
+    // 0x005f2c00 keeps the player's own invite id only when their row carries
+    // a rank; 0x005f1b30 lets them invite with one, or as the event's maker.
+    constexpr uint64_t me = 0x42, maker = 0x77;
+    CalendarEventDetail open;
+    open.eventId = 900;
+    open.creatorGuid = maker;
+    CalendarEventInvitee mine;
+    mine.guid = me;
+    mine.inviteId = 31;
+    open.invitees.push_back(mine);
+    CHECK(calendarOwnInviteId(open, me) == 0u);   // a plain invitee
+    CHECK_FALSE(calendarMayInvite(calendarOwnInviteId(open, me), maker, me));
+    open.invitees[0].rank = 1;                    // moderator
+    CHECK(calendarOwnInviteId(open, me) == 31u);
+    CHECK(calendarMayInvite(calendarOwnInviteId(open, me), maker, me));
+    // Not on the list at all, but its maker.
+    CHECK(calendarOwnInviteId(open, maker) == 0u);
+    CHECK(calendarMayInvite(0, maker, maker));
+    // A new event keeps invite id 1 (0x005f2a20).
+    CHECK(calendarMayInvite(1, 0, me));
+}
