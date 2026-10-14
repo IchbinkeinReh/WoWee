@@ -1344,9 +1344,12 @@ bool CastFailedParser::parse(network::Packet& packet, CastFailedData& data) {
     data.castCount = packet.readUInt8();
     data.spellId = packet.readUInt32();
     data.result = packet.readUInt8();
-    // Spell-focus and totem failures append ids naming the missing
-    // station/tool so the client can surface them.
-    readCastResultArgs(packet, data.result, data.miscArg, data.miscArg2);
+    // 0x00809af0 takes up to two u32s after the result, whatever the result,
+    // while the packet has them: the area, focus, reagent, item class, skill
+    // and rank 0x00808200 names in the line. Read only for the focus and
+    // totem results, a missing reagent or too low a skill said nothing.
+    data.miscArg = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+    data.miscArg2 = packet.hasRemaining(4) ? packet.readUInt32() : 0;
     LOG_INFO("Cast failed: spell=", data.spellId, " result=", static_cast<int>(data.result));
     return true;
 }

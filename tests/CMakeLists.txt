@@ -1016,6 +1016,11 @@ wowee_add_packet_test(test_attacker_state_layout)
 # spell logs with full guids or effect tables.
 wowee_add_packet_test(test_combat_log_layout)
 
+# ── test_aura_cast_packet_layout ───────────────────────────────────────
+# SMSG_AURA_UPDATE(_ALL) as 0x0072f5d0 / 0x00716510 read them, and the ids
+# after SMSG_CAST_FAILED's result (0x00809af0).
+wowee_add_packet_test(test_aura_cast_packet_layout)
+
 # ── test_spell_damage_log_layout ───────────────────────────────────────
 # SMSG_SPELLNONMELEEDAMAGELOG before WotLK, pinned before the Classic and TBC
 # readers were merged. The expansions differ by one field - overkill - and

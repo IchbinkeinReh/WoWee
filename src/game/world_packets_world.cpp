@@ -281,17 +281,23 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
 }
 
 bool AuraUpdateParser::parse(network::Packet& packet, AuraUpdateData& data, bool isAll) {
-    // Validation: packed GUID (1-8 bytes minimum for reading)
+    // 0x007300a0 -> 0x0072f5d0, the same reader for SMSG_AURA_UPDATE and
+    // SMSG_AURA_UPDATE_ALL: the unit's packed guid, then slots to the end of
+    // the packet - a single update may carry more than one. Each slot is
+    // 0x00716510: a u8 slot and u32 spell; for a spell, u8 flags, u8 level,
+    // u8 stack; the caster's packed guid unless flags 0x08 (the unit itself
+    // cast it, and the slot's caster is the unit), the max and remaining
+    // duration under 0x20. Nothing else - no effect amounts in 3.3.5.
+    (void)isAll;
     if (!packet.hasRemaining(1)) return false;
 
     data.guid = packet.readPackedGuid();
 
     // Cap number of aura entries to prevent unbounded loop DoS
-    uint32_t maxAuras = isAll ? 512 : 1;
+    constexpr uint32_t maxAuras = 512;
     uint32_t auraCount = 0;
 
     while (packet.hasData() && auraCount < maxAuras) {
-        // Validate we can read slot (1) + spellId (4) = 5 bytes minimum
         if (!packet.hasRemaining(5)) {
             LOG_DEBUG("Aura update: truncated entry at position ", auraCount);
             break;
@@ -305,57 +311,32 @@ bool AuraUpdateParser::parse(network::Packet& packet, AuraUpdateData& data, bool
         if (spellId != 0) {
             aura.spellId = spellId;
 
-            // Validate flags + level + charges (3 bytes)
             if (!packet.hasRemaining(3)) {
                 LOG_WARNING("Aura update: truncated flags/level/charges at entry ", auraCount);
-                aura.flags = 0;
-                aura.level = 0;
-                aura.charges = 0;
+                break;
+            }
+            aura.flags = packet.readUInt8();
+            aura.level = packet.readUInt8();
+            aura.charges = packet.readUInt8();
+
+            if (aura.flags & 0x08) {
+                aura.casterGuid = data.guid;
             } else {
-                aura.flags = packet.readUInt8();
-                aura.level = packet.readUInt8();
-                aura.charges = packet.readUInt8();
+                if (!packet.hasRemaining(1)) break;
+                aura.casterGuid = packet.readPackedGuid();
             }
 
-            if (!(aura.flags & 0x08)) { // NOT_CASTER flag
-                // Validate space for packed GUID read (minimum 1 byte)
-                if (!packet.hasRemaining(1)) {
-                    aura.casterGuid = 0;
-                } else {
-                    aura.casterGuid = packet.readPackedGuid();
-                }
-            }
-
-            if (aura.flags & 0x20) { // DURATION - need 8 bytes (two uint32s)
+            if (aura.flags & 0x20) {
                 if (!packet.hasRemaining(8)) {
                     LOG_WARNING("Aura update: truncated duration fields at entry ", auraCount);
-                    aura.maxDurationMs = 0;
-                    aura.durationMs = 0;
-                } else {
-                    aura.maxDurationMs = static_cast<int32_t>(packet.readUInt32());
-                    aura.durationMs = static_cast<int32_t>(packet.readUInt32());
+                    break;
                 }
-            }
-
-            if (aura.flags & 0x40) { // EFFECT_AMOUNTS
-                // Only read amounts for active effect indices (flags 0x01, 0x02, 0x04)
-                for (int i = 0; i < 3; ++i) {
-                    if (aura.flags & (1 << i)) {
-                        if (packet.hasRemaining(4)) {
-                            packet.readUInt32();
-                        } else {
-                            LOG_WARNING("Aura update: truncated effect amount ", i, " at entry ", auraCount);
-                            break;
-                        }
-                    }
-                }
+                aura.maxDurationMs = static_cast<int32_t>(packet.readUInt32());
+                aura.durationMs = static_cast<int32_t>(packet.readUInt32());
             }
         }
 
         data.updates.emplace_back(slot, aura);
-
-        // For single update, only one entry
-        if (!isAll) break;
     }
 
     if (auraCount >= maxAuras && packet.hasData()) {
