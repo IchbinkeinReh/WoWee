@@ -106,7 +106,15 @@ public:
     /// 0x00809000 for the player's spell: the cooldown that runs longest of
     /// its own, its category's and its global cooldown (0x00807980), in
     /// milliseconds of historyNowMs().
-    [[nodiscard]] spell_history::History::Cooldown playerCooldown(uint32_t spellId) const;
+    [[nodiscard]] spell_history::History::Cooldown playerCooldown(uint32_t spellId) const {
+        return historyCooldown(spellId, 0, false);
+    }
+    /// 0x00807980 on the player's history, or the pet's: a spell's, cast
+    /// from the item `itemId` (whose template may give it its category) or
+    /// from none.
+    [[nodiscard]] spell_history::History::Cooldown historyCooldown(uint32_t spellId, uint32_t itemId, bool pet) const;
+    /// 0x00809030: an item's - its first use spell's (trigger 0), cast from it.
+    [[nodiscard]] spell_history::History::Cooldown itemCooldown(uint32_t itemId) const;
     /// The client's clock for the history, in milliseconds (0x0086ae20):
     /// GetTime()'s, a thousandth of a second at a time.
     static int64_t historyNowMs();
@@ -168,9 +176,6 @@ public:
 
     // Known spells
     [[nodiscard]] const std::unordered_set<uint32_t>& getKnownSpells() const { return knownSpells_; }
-    [[nodiscard]] const std::unordered_map<uint32_t, float>& getSpellCooldowns() const { return spellCooldowns_; }
-    [[nodiscard]] float getSpellCooldown(uint32_t spellId) const;
-    [[nodiscard]] float getSpellCooldownTotal(uint32_t spellId) const;
 
     // Cast state
     [[nodiscard]] bool isCasting() const { return casting_ || restorationActive_; }
@@ -525,7 +530,6 @@ private:
 
     // Find the on-use spell for an item (trigger=0 Use or trigger=5 NoDelay).
     // CMSG_USE_ITEM requires a valid spellId or the server silently ignores it.
-    void seedCooldownFromSpellInfo(uint32_t spellId);
     void handleSupercededSpell(network::Packet& packet);
     void handleRemovedSpell(network::Packet& packet);
     void handleUnlearnSpells(network::Packet& packet);
@@ -536,14 +540,6 @@ private:
 
     // --- Spell state ---
     std::unordered_set<uint32_t> knownSpells_;
-    std::unordered_map<uint32_t, float> spellCooldowns_;    // spellId -> remaining seconds
-    // spellId -> the length the cooldown had when it began. Kept beside the
-    // remaining time rather than derived from it because GetSpellCooldown is
-    // asked for (start, duration), and answering (now, remaining) redraws the
-    // swirl as a fresh full sweep every time the interface asks - which it does
-    // on every ACTIONBAR_UPDATE_COOLDOWN, so a long cooldown appears to restart
-    // whenever anything else is cast.
-    std::unordered_map<uint32_t, float> spellCooldownTotals_;
     uint8_t castCount_ = 0;
 
     struct GroundTarget {

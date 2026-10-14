@@ -191,26 +191,23 @@ static int lua_GetNumBankSlots(lua_State* L) {
     return 2;
 }
 
-/// GetContainerItemCooldown(bag, slot) → start, duration, enable.
-///
-/// It answered zero for everything, so a potion or a trinket in the bags never
-/// drew its cooldown sweep. The bags are handed over, so FrameXML's is the only
-/// one drawing them.
+/// GetContainerItemCooldown(bag, slot) → start, duration, enable
+/// (0x005d7d90): the item there as its use spell cast from it (0x008090c0),
+/// 0, 0, 1 without one; no item, 0, 0, 0.
 static int lua_GetContainerItemCooldown(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int bag = static_cast<int>(luaL_optnumber(L, 1, -1));
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-    double start = 0.0, duration = 0.0;
     if (gh && slot >= 1) {
         const auto& inv = gh->getInventory();
         // Through the shared resolver, so the bank and the keyring answer too:
         // BankFrame_UpdateCooldown asks this for every one of its slots.
         const game::ItemSlot* s = containerItemSlot(inv, bag, slot);
-        if (s && !s->empty()) itemUseCooldown(gh, s->item.itemId, start, duration);
+        if (s && !s->empty()) return pushHistoryCooldown(L, gh->itemCooldown(s->item.itemId));
     }
-    lua_pushnumber(L, start);
-    lua_pushnumber(L, duration);
-    lua_pushnumber(L, 1);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
     return 3;
 }
 
@@ -604,6 +601,13 @@ static int lua_GetItemFamily(lua_State* L) {
     const auto* info = (gh && itemId) ? gh->getItemInfo(itemId) : nullptr;
     lua_pushnumber(L, info ? info->bagFamily : 0);
     return 1;
+}
+
+/// GetItemCooldown(item) → start, duration, enable (0x00510fc0): an id or a
+/// link; the item's use spell as cast from it (0x00809030), 0, 0, 0 with none.
+static int lua_GetItemCooldown(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    return pushItemCooldown(L, gh, itemIdFromArg(L, 1));
 }
 
 static int lua_GetItemInfo(lua_State* L) {
@@ -3429,6 +3433,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetMerchantItemLink",  lua_GetMerchantItemLink},
                 {"CanMerchantRepair",    lua_CanMerchantRepair},
                 {"GetContainerItemCooldown",  lua_GetContainerItemCooldown},
+                {"GetItemCooldown",           lua_GetItemCooldown},
                 {"GetBankSlotCost",        lua_GetBankSlotCost},
                 {"GetNumBankSlots",        lua_GetNumBankSlots},
                 {"GetInventoryAlertStatus",   lua_GetInventoryAlertStatus},

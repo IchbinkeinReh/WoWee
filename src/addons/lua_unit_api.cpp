@@ -1839,25 +1839,20 @@ static int lua_GetUnitMaxHealthModifier(lua_State* L) {
     return 1;
 }
 
-/// GetInventoryItemCooldown(unit, slot) → start, duration, enabled. All zero
-/// is "nothing on cooldown", which is what the sheet checks for before doing
-/// arithmetic with the first two.
-/// GetInventoryItemCooldown(unit, slot) → start, duration, enable.
-///
-/// The same as the container one and for the same reason: an equipped trinket
-/// on cooldown drew nothing on the paperdoll, which is handed over.
+/// GetInventoryItemCooldown(unit, slot) → start, duration, enable
+/// (0x005e7e60): the player's item there, with a use spell, as that spell
+/// cast from it (0x008090c0); else 0, 0, 0.
 static int lua_GetInventoryItemCooldown(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-    double start = 0.0, duration = 0.0;
     if (gh && slot >= 1 && slot <= 19) {
         const auto& sl = gh->getInventory().getEquipSlot(
             static_cast<game::EquipSlot>(slot - 1));
-        if (!sl.empty()) itemUseCooldown(gh, sl.item.itemId, start, duration);
+        if (!sl.empty()) return pushItemCooldown(L, gh, sl.item.itemId);
     }
-    lua_pushnumber(L, start);
-    lua_pushnumber(L, duration);
-    lua_pushnumber(L, 1);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
     return 3;
 }
 
@@ -3419,21 +3414,9 @@ void registerUnitLuaAPI(lua_State* L) {
                 return 3;
             }
             const auto& list = gh->getCompanions(std::string(kind) == "MOUNT");
-            float left = 0.0f, total = 0.0f;
-            if (index <= static_cast<int>(list.size())) {
-                const uint32_t spellId = list[static_cast<size_t>(index) - 1].spellId;
-                left = gh->getSpellCooldown(spellId);
-                total = gh->getSpellCooldownTotal(spellId);
-                if (total < left) total = left;
-            }
-            if (left <= 0.01f) {
-                lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 1);
-                return 3;
-            }
-            lua_pushnumber(L, luaGetTimeNow() - (total - left));
-            lua_pushnumber(L, total);
-            lua_pushnumber(L, 1);
-            return 3;
+            if (index > static_cast<int>(list.size())) return 0;
+            // 0x0053e490: the companion's spell, from the history (0x00809000).
+            return pushHistoryCooldown(L, gh->playerSpellCooldown(list[static_cast<size_t>(index) - 1].spellId));
         }},
                 // Summoning a mount or a critter is casting its spell - there
                 // is no separate companion message on the wire in 3.3.5.

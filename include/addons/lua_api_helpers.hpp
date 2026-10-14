@@ -856,34 +856,27 @@ inline uint64_t containerSlotGuid(game::GameHandler* gh, int bag, int slot) {
     return 0;
 }
 
-/// An item's cooldown, which is its on-use spell's.
-///
-/// The client tracks cooldowns per spell, and an item on cooldown is one whose
-/// use spell is - the same relationship dispatchUseItem walks to decide what
-/// using it casts. The original duration is now kept beside the remaining time,
-/// so the sweep is wound back to where it actually began: reporting it as
-/// starting *now* and lasting what is left drew the right arc only until the
-/// interface asked a second time, at which point the swirl jumped back to full
-/// and unwound again. BAG_UPDATE_COOLDOWN fires on every use, so it asked often.
-///
-/// False when the item has no use spell or that spell is ready.
-inline bool itemUseCooldown(game::GameHandler* gh, uint32_t itemId,
-                            double& start, double& duration) {
-    if (!gh || itemId == 0) return false;
-    const auto* info = gh->getItemInfo(itemId);
-    if (!info || !info->valid) return false;
-    for (const auto& sp : info->spells) {
-        if (sp.spellId == 0 || (sp.spellTrigger != 0 && sp.spellTrigger != 5)) continue;
-        const auto& cds = gh->getSpellCooldowns();
-        auto it = cds.find(sp.spellId);
-        if (it == cds.end() || it->second <= 0.0f) continue;
-        double total = gh->getSpellCooldownTotal(sp.spellId);
-        if (total < it->second) total = it->second;
-        start = luaGetTimeNow() - (total - it->second);
-        duration = total;
-        return true;
-    }
-    return false;
+/// Start, length and enable of a spell history's answer (0x00807980), as
+/// the cooldown queries push them: seconds, seconds, 0 or 1.
+inline int pushHistoryCooldown(lua_State* L, const game::spell_history::History::Cooldown& cd) {
+    lua_pushnumber(L, static_cast<double>(cd.start) * 0.001);
+    lua_pushnumber(L, static_cast<double>(cd.duration) * 0.001);
+    lua_pushnumber(L, cd.enabled ? 1 : 0);
+    return 3;
+}
+
+/// An item's as the item queries answer it (0x008090c0): with a use spell
+/// (trigger 0), its cooldown cast from the item; without, 0, 0, 0.
+inline int pushItemCooldown(lua_State* L, game::GameHandler* gh, uint32_t itemId) {
+    const auto* info = gh ? gh->getItemInfo(itemId) : nullptr;
+    bool use = false;
+    for (size_t k = 0; info && info->valid && k < info->spells.size() && !use; ++k)
+        use = info->spells[k].spellId != 0 && info->spells[k].spellTrigger == 0;
+    if (use) return pushHistoryCooldown(L, gh->itemCooldown(itemId));
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    return 3;
 }
 
 // Find GroupMember data for a GUID (for party members out of entity range)

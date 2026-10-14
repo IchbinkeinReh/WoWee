@@ -455,19 +455,17 @@ static int lua_GetActionCount(lua_State* L) {
     return 1;
 }
 
-// GetActionCooldown(slot) → start, duration, enable
+// GetActionCooldown(slot) → start, duration, enable (0x005a91c0 ->
+// 0x005a8e40): a spell's from the player's history, a pet slot's spell from
+// the pet's (0x00809000), an item's as its use spell cast from it
+// (0x00809030).
 static int lua_GetActionCooldown(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 1); return 3; }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
     if (const auto ref = petActionRef(gh, slot)) {
-        // A pet slot's spell waits as the pet bar's does.
         const uint32_t spell = petSlotSpell(ref->packed);
-        const float remaining = spell ? gh->getSpellCooldown(spell) : 0.0f;
-        lua_pushnumber(L, remaining > 0.01f ? luaGetTimeNow() : 0.0);
-        lua_pushnumber(L, remaining > 0.01f ? remaining : 0.0);
-        lua_pushnumber(L, 1);
-        return 3;
+        return pushHistoryCooldown(L, spell ? gh->petSpellCooldown(spell) : game::spell_history::History::Cooldown{});
     }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
@@ -477,35 +475,11 @@ static int lua_GetActionCooldown(lua_State* L) {
         return 3;
     }
     const auto& action = bar[slot];
-    if (action.type == game::ActionBarSlot::SPELL) {
-        // 0x005a8e40: a spell's is its history's, as GetSpellCooldown answers
-        // it (0x00809000).
-        const auto cd = gh->playerSpellCooldown(action.id);
-        lua_pushnumber(L, static_cast<double>(cd.start) * 0.001);
-        lua_pushnumber(L, static_cast<double>(cd.duration) * 0.001);
-        lua_pushnumber(L, cd.enabled ? 1 : 0);
-        return 3;
-    }
-    if (action.cooldownRemaining > 0.0f) {
-        // WoW returns GetTime()-based start time; approximate
-        double now = 0;
-        lua_getglobal(L, "GetTime");
-        if (lua_isfunction(L, -1)) {
-            lua_call(L, 0, 1);
-            now = lua_tonumber(L, -1);
-            lua_pop(L, 1);
-        } else {
-            lua_pop(L, 1);
-        }
-        double start = now - (action.cooldownTotal - action.cooldownRemaining);
-        lua_pushnumber(L, start);
-        lua_pushnumber(L, action.cooldownTotal);
-        lua_pushnumber(L, 1);
-    } else {
-        lua_pushnumber(L, 0);
-        lua_pushnumber(L, 0);
-        lua_pushnumber(L, 1);
-    }
+    if (action.type == game::ActionBarSlot::SPELL) return pushHistoryCooldown(L, gh->playerSpellCooldown(action.id));
+    if (action.type == game::ActionBarSlot::ITEM) return pushHistoryCooldown(L, gh->itemCooldown(action.id));
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 1);
     return 3;
 }
 
@@ -531,13 +505,12 @@ static int lua_UseAction(lua_State* L) {
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) return 0;
     const auto& action = bar[slot];
     // The end of the chain a click travels, and the last place it can stop
-    // without saying so: an empty slot, a cooldown, or a type nothing acts on
-    // all look the same from the button. At debug level, because pressing a
+    // without saying so: an empty slot or a type nothing acts on look the
+    // same from the button. At debug level, because pressing a
     // button on the action bar is the most ordinary thing a player does and
     // this was a warning on every one of them.
-    LOG_DEBUG("UseAction: slot ", slot + 1, " type=", static_cast<int>(action.type),
-              " id=", action.id, " ready=", action.isReady() ? 1 : 0);
-    if (action.type == game::ActionBarSlot::SPELL && action.isReady()) {
+    LOG_DEBUG("UseAction: slot ", slot + 1, " type=", static_cast<int>(action.type), " id=", action.id);
+    if (action.type == game::ActionBarSlot::SPELL) {
         // A unit that resolves wins; anything else falls back to the target,
         // which is what an ordinary click has always done. An unresolvable
         // unit is not treated as "cast on nobody" - a raid frame naming a
@@ -2684,17 +2657,13 @@ void registerActionLuaAPI(lua_State* L) {
                 return 3;
             }
             const uint32_t packed = gh->getPetActionSlot(index - 1);
-            // A command or a stance has no cooldown of its own.
-            const float remaining = game::pet::isPetSpellAction(packed)
-                ? gh->getSpellCooldown(game::pet::petActionId(packed)) : 0.0f;
-            if (remaining <= 0.01f) {
+            // A command or a stance has no cooldown of its own; a spell's is
+            // the pet's history's (0x005d5280 -> 0x00809000).
+            if (!game::pet::isPetSpellAction(packed)) {
                 lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 1);
                 return 3;
             }
-            lua_pushnumber(L, luaGetTimeNow());
-            lua_pushnumber(L, remaining);
-            lua_pushnumber(L, 1);
-            return 3;
+            return pushHistoryCooldown(L, gh->petSpellCooldown(game::pet::petActionId(packed)));
         }},
                 {"PetAttack", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);

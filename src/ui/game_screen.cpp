@@ -2013,7 +2013,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                             gameHandler.sendPetAction(packed, gameHandler.hasTarget() ? gameHandler.getTargetGuid()
                                                                                       : gameHandler.getPetGuid());
                         }
-                    } else if (bar[slotIdx].type == game::ActionBarSlot::SPELL && bar[slotIdx].isReady()) {
+                    } else if (bar[slotIdx].type == game::ActionBarSlot::SPELL) {
                         uint64_t target = gameHandler.hasTarget() ? gameHandler.getTargetGuid() : 0;
                         gameHandler.castSpell(bar[slotIdx].id, target);
                     } else if (bar[slotIdx].type == game::ActionBarSlot::ITEM && bar[slotIdx].id != 0) {

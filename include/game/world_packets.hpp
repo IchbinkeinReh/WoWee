@@ -2032,6 +2032,12 @@ struct ItemQueryResponseData {
     struct ItemSpell {
         uint32_t spellId = 0;
         uint32_t spellTrigger = 0; // 0=Use, 1=Equip, 2=ChanceOnHit, 5=Learn
+        /// The template's own cooldown, its category and the category's
+        /// cooldown (+0x13c, +0x150, +0x164); under zero (under one for the
+        /// category), the spell's.
+        int32_t cooldown = -1;
+        uint32_t category = 0;
+        int32_t categoryCooldown = -1;
     };
     std::array<ItemSpell, 5> spells{};
     uint32_t bindType = 0;      // 0=none, 1=BoP, 2=BoE, 3=BoU, 4=BoQ

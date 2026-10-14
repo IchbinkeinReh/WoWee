@@ -90,7 +90,7 @@ public:
     }
     [[nodiscard]] const std::vector<Entry>& entries() const { return entries_; }
 
-    /// What 0x00807980 answers of a spell cast with no item: the cooldown
+    /// What 0x00807980 answers of a spell: the cooldown
     /// that runs longest of the spell's own, its category's (Category, or
     /// any whose SpellCategory row has Flags 0x2 - `shared`) and the global
     /// cooldown of its StartRecoveryCategory, with its start and length; a
@@ -110,11 +110,12 @@ public:
     }
     /// With a rune cost the runes do not pay, ready at `runesReady`
     /// (0x005ee7e0): an entry of the spell's own, or of one sharing a rune
-    /// type with it (`sharesRunes`), runs until then, as ten seconds.
+    /// type with it (`sharesRunes`), runs until then, as ten seconds. Cast
+    /// from an item (`itemId`), the spell's own entries are that item's.
     template <typename Shared, typename SharesRunes>
     [[nodiscard]] Cooldown query(uint32_t spellId, uint32_t category, uint32_t startRecoveryCategory, int64_t now,
                                  Shared&& shared, std::optional<int64_t> runesReady,
-                                 SharesRunes&& sharesRunes) const {
+                                 SharesRunes&& sharesRunes, uint32_t itemId = 0) const {
         Cooldown out;
         int64_t latest = now;
         const auto take = [&](int64_t end, int64_t start, int32_t duration, const Entry& e, bool enable) {
@@ -125,7 +126,7 @@ public:
             if (enable && out.enabled) out.enabled = !e.onHold;
         };
         for (const auto& e : entries_) {
-            if (e.spellId == spellId && e.itemId == 0 && (e.duration != 0 || e.onHold))
+            if (e.spellId == spellId && e.itemId == itemId && (e.duration != 0 || e.onHold))
                 take((e.onHold ? now + 1 : e.start) + e.duration, e.onHold ? now : e.start, e.onHold ? 1 : e.duration,
                      e, true);
             if (((e.category != 0 && e.category == category) || shared(e.category)) && e.categoryDuration != 0)

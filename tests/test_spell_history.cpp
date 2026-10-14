@@ -80,3 +80,25 @@ TEST_CASE("SMSG_CAST_FAILED takes the cast's global cooldown off (0x00804720)", 
     REQUIRE_FALSE(h.query(133, 0, 133, 200, kNoShared).running);
     REQUIRE(h.entries().empty());
 }
+
+TEST_CASE("an item's cooldown is its use spell's as cast from it (0x00807980)", "[spell_history]") {
+    const auto noRunes = [](uint32_t) { return false; };
+    History h;
+    // A Healthstone (item 5512, spell 6262) used: SMSG_SPELL_GO from the
+    // item puts the template's two minutes under the item (0x00707e90);
+    // SMSG_ITEM_COOLDOWN thirty seconds under another (0x00807060).
+    h.add(Entry{.spellId = 6262, .itemId = 5512, .start = 0, .duration = 120000, .category = 4,
+                .categoryStart = 0, .categoryDuration = 120000});
+    h.add(Entry{.spellId = 6263, .itemId = 19004, .start = 0, .duration = 30000});
+    // Asked of the item, the spell's own and its category's run.
+    const auto item = h.query(6262, 4, 0, 1000, kNoShared, std::nullopt, noRunes, 5512);
+    REQUIRE(item.running);
+    REQUIRE(item.duration == 120000);
+    // Of the spell with no item (or another item), only the category holds it.
+    const auto spell = h.query(6262, 0, 0, 1000, kNoShared, std::nullopt, noRunes, 0);
+    REQUIRE_FALSE(spell.running);
+    REQUIRE(h.query(6263, 0, 0, 1000, kNoShared, std::nullopt, noRunes, 19004).duration == 30000);
+    REQUIRE_FALSE(h.query(6263, 0, 0, 1000, kNoShared, std::nullopt, noRunes, 19005).running);
+    // Another item whose template gives the spell category 4 shares it.
+    REQUIRE(h.query(6262, 4, 0, 1000, kNoShared, std::nullopt, noRunes, 5511).running);
+}

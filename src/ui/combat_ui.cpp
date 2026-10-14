@@ -59,15 +59,21 @@ void CombatUI::renderCooldownTracker(game::GameHandler& gameHandler,
                                      const SpellIconFn& getSpellIcon) {
     if (!settings.showCooldownTracker_) return;
 
-    const auto& cooldowns = gameHandler.getSpellCooldowns();
-    if (cooldowns.empty()) return;
+    const auto* spells = gameHandler.getSpellHandler();
+    if (!spells || spells->playerSpellHistory().entries().empty()) return;
 
-    // Collect spells with remaining cooldown > 0.5s (skip GCD noise)
+    // Each spell in the player's history as its cooldown query answers it
+    // (0x00807980), with more than 0.5 s left (skip GCD noise).
     struct CDEntry { uint32_t spellId; float remaining; };
     std::vector<CDEntry> active;
     active.reserve(16);
-    for (const auto& [sid, rem] : cooldowns) {
-        if (rem > 0.5f) active.push_back({.spellId = sid, .remaining = rem});
+    const int64_t now = game::SpellHandler::historyNowMs();
+    for (const auto& e : spells->playerSpellHistory().entries()) {
+        if (std::any_of(active.begin(), active.end(), [&](const CDEntry& a) { return a.spellId == e.spellId; }))
+            continue;
+        const auto cd = spells->historyCooldown(e.spellId, e.itemId, false);
+        const float rem = static_cast<float>(cd.start + cd.duration - now) * 0.001f;
+        if (cd.running && rem > 0.5f) active.push_back({.spellId = e.spellId, .remaining = rem});
     }
     if (active.empty()) return;
 

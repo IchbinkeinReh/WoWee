@@ -38,10 +38,7 @@ struct ActionBarSlot {
     enum Type : uint8_t { EMPTY = 0, SPELL = 1, ITEM = 2, MACRO = 3 };
     Type type = EMPTY;
     uint32_t id = 0;              // spellId, itemId, or macroId
-    float cooldownRemaining = 0.0f;
-    float cooldownTotal = 0.0f;
 
-    [[nodiscard]] bool isReady() const { return cooldownRemaining <= 0.0f; }
     [[nodiscard]] bool isEmpty() const { return type == EMPTY; }
 };
 

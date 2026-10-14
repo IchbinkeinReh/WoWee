@@ -2949,16 +2949,6 @@ uint32_t GameHandler::getPlayerGuildRankIndex() const {
     return socialHandler_ ? socialHandler_->getPlayerGuildRankIndex() : 0xFFFFFFFFu;
 }
 
-float GameHandler::getSpellCooldown(uint32_t spellId) const {
-    if (spellHandler_) return spellHandler_->getSpellCooldown(spellId);
-    return 0;
-}
-
-float GameHandler::getSpellCooldownTotal(uint32_t spellId) const {
-    if (spellHandler_) return spellHandler_->getSpellCooldownTotal(spellId);
-    return 0;
-}
-
 // ============================================================
 // Talents
 // ============================================================

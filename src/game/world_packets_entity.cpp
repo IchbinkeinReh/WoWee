@@ -616,9 +616,9 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         data.spells[i].spellId = packet.readUInt32();
         data.spells[i].spellTrigger = packet.readUInt32();
         packet.readUInt32(); // SpellCharges
-        packet.readUInt32(); // SpellCooldown
-        packet.readUInt32(); // SpellCategory
-        packet.readUInt32(); // SpellCategoryCooldown
+        data.spells[i].cooldown = static_cast<int32_t>(packet.readUInt32());
+        data.spells[i].category = packet.readUInt32();
+        data.spells[i].categoryCooldown = static_cast<int32_t>(packet.readUInt32());
     }
 
     // Bonding type (0=none, 1=BoP, 2=BoE, 3=BoU, 4=BoQ)

@@ -347,8 +347,9 @@ void SpellbookScreen::renderSpellTooltip(const SpellInfo* info, game::GameHandle
     }
 
     // Cooldown if active
-    float cd = gameHandler.getSpellCooldown(info->spellId);
-    if (cd > 0.0f) {
+    const auto history = gameHandler.playerSpellCooldown(info->spellId);
+    const float cd = static_cast<float>(history.start + history.duration - game::SpellHandler::historyNowMs()) * 0.001f;
+    if (history.running && cd > 0.0f) {
         ImGui::TextColored(ui::colors::kRed, "Cooldown: %.1fs", cd);
     }
 

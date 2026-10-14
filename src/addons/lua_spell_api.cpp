@@ -905,33 +905,12 @@ static int lua_GetSpellCooldown(lua_State* L) {
     // asks in the last of those three.
     const uint32_t spellId = spellIdForCall(L, gh);
     const char* book = !lua_isnoneornil(L, 2) && lua_isnumber(L, 1) ? lua_tostring(L, 2) : nullptr;
-    if (!book || std::string(book) != "pet") {
-        // 0x00540e80: the player's history (0x00809000) - the start and
-        // length of what runs longest of the spell's cooldown, its
-        // category's and its global cooldown, in seconds, and whether it is
-        // enabled (not held until an event).
-        const auto cd = gh->playerSpellCooldown(spellId);
-        lua_pushnumber(L, static_cast<double>(cd.start) * 0.001);
-        lua_pushnumber(L, static_cast<double>(cd.duration) * 0.001);
-        lua_pushnumber(L, cd.enabled ? 1 : 0);
-        return 3;
-    }
-    float cd = gh->getSpellCooldown(spellId);
-    double nowSec = luaGetTimeNow();
-    if (cd > 0.01f) {
-        // The pair asked for is (start, duration), not (now, remaining) - the
-        // cooldown frame draws a sweep of `duration` beginning at `start`.
-        double total = gh->getSpellCooldownTotal(spellId);
-        if (total < cd) total = cd;   // a total never recorded falls back to what is left
-        double start = nowSec - (total - cd);
-        lua_pushnumber(L, start);
-        lua_pushnumber(L, total);
-    } else {
-        lua_pushnumber(L, 0);       // not on cooldown
-        lua_pushnumber(L, 0);
-    }
-    lua_pushnumber(L, 1);           // enabled
-    return 3;
+    // 0x00540e80: the player's history, or the pet's for the pet's book
+    // (0x00809000) - the start and length of what runs longest of the
+    // spell's cooldown, its category's and its global cooldown, in seconds,
+    // and whether it is enabled (not held until an event).
+    if (!book || std::string(book) != "pet") return pushHistoryCooldown(L, gh->playerSpellCooldown(spellId));
+    return pushHistoryCooldown(L, gh->petSpellCooldown(spellId));
 }
 
 static int lua_HasTarget(lua_State* L) {
@@ -1248,22 +1227,20 @@ static int lua_IsUsableSpell(lua_State* L) {
         return 2;
     }
 
-    float cd = gh->getSpellCooldown(spellId);
-    bool onCooldown = (cd > 0.1f);
+    // A cooldown does not make it unusable (0x00541680 asks 0x0080b5d0 and
+    // the power, 0x008017e0).
     bool noMana = false;
-    if (!onCooldown) {
-        auto spellData = gh->getSpellData(spellId);
-        if (spellData.manaCost > 0) {
-            auto playerEntity = gh->getEntityManager().getEntity(gh->getPlayerGuid());
-            if (playerEntity) {
-                auto* unit = dynamic_cast<game::Unit*>(playerEntity.get());
-                if (unit && gh->unitPower(*unit, unit->getPowerType()) < static_cast<int32_t>(spellData.manaCost)) {
-                    noMana = true;
-                }
+    auto spellData = gh->getSpellData(spellId);
+    if (spellData.manaCost > 0) {
+        auto playerEntity = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+        if (playerEntity) {
+            auto* unit = dynamic_cast<game::Unit*>(playerEntity.get());
+            if (unit && gh->unitPower(*unit, unit->getPowerType()) < static_cast<int32_t>(spellData.manaCost)) {
+                noMana = true;
             }
         }
     }
-    lua_pushboolean(L, (onCooldown || noMana) ? 0 : 1);
+    lua_pushboolean(L, noMana ? 0 : 1);
     lua_pushboolean(L, noMana ? 1 : 0);
     return 2;
 }

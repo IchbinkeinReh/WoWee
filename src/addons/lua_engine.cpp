@@ -2076,7 +2076,12 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     }
 
     // What is left of its cooldown, after the reagents (ITEM_COOLDOWN_TIME).
-    if (const float left = gh->getSpellCooldown(spellId); left > 0.1f) {
+    // From the history, held cooldowns aside (0x00625b90 -> 0x00809000).
+    const auto cd = gh->playerSpellCooldown(spellId);
+    if (const float left = cd.enabled && cd.start != 0 && cd.duration != 0
+                               ? static_cast<float>(static_cast<double>(cd.start + cd.duration) * 0.001 - luaGetTimeNow())
+                               : 0.0f;
+        left > 0.1f) {
         const bool minutes = left >= 60.0f;
         std::string text = globalOr(L, minutes ? "ITEM_COOLDOWN_TIME_MIN" : "ITEM_COOLDOWN_TIME_SEC",
                                     minutes ? "Cooldown remaining: %d min" : "Cooldown remaining: %d sec");

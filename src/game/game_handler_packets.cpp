@@ -1761,36 +1761,6 @@ void GameHandler::registerCoreOpcodes() {
             }
             actionBar[i] = slot;
         }
-        // Apply any pending cooldowns from spellHandler's cooldowns to newly populated slots.
-        // SMSG_SPELL_COOLDOWN often arrives before SMSG_ACTION_BUTTONS during login,
-        // so the per-slot cooldownRemaining would be 0 without this sync.
-        if (spellHandler_) {
-            const auto& cooldowns = spellHandler_->getSpellCooldowns();
-            for (auto& slot : actionBar) {
-                if (slot.type == ActionBarSlot::SPELL && slot.id != 0) {
-                    auto cdIt = cooldowns.find(slot.id);
-                    if (cdIt != cooldowns.end() && cdIt->second > 0.0f) {
-                        slot.cooldownRemaining = cdIt->second;
-                        slot.cooldownTotal     = cdIt->second;
-                    }
-                } else if (slot.type == ActionBarSlot::ITEM && slot.id != 0) {
-                    // Items (potions, trinkets): look up the item's on-use spell
-                    // and check if that spell has a pending cooldown.
-                    const auto* qi = getItemInfo(slot.id);
-                    if (qi && qi->valid) {
-                        for (const auto& sp : qi->spells) {
-                            if (sp.spellId == 0) continue;
-                            auto cdIt = cooldowns.find(sp.spellId);
-                            if (cdIt != cooldowns.end() && cdIt->second > 0.0f) {
-                                slot.cooldownRemaining = cdIt->second;
-                                slot.cooldownTotal     = cdIt->second;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
         LOG_INFO("SMSG_ACTION_BUTTONS: populated action bar from server");
         // Zero means every slot, which is what the whole bar arriving at
         // once is. Sent with no argument the buttons compared nil against

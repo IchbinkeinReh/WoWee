@@ -425,13 +425,8 @@ static int lua_GetQuestLogSpecialItemCooldown(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const auto item = questSpecialItemAt(gh, index);
-    double start = 0.0, duration = 0.0;
-    if (item.itemId && itemUseCooldown(gh, item.itemId, start, duration)) {
-        lua_pushnumber(L, start);
-        lua_pushnumber(L, duration);
-        lua_pushnumber(L, 1);
-        return 3;
-    }
+    // Its use spell's, cast from it (0x00809030).
+    if (item.itemId) return pushHistoryCooldown(L, gh->itemCooldown(item.itemId));
     lua_pushnumber(L, 0);
     lua_pushnumber(L, 0);
     lua_pushnumber(L, 1);
@@ -3726,9 +3721,10 @@ void registerQuestLuaAPI(lua_State* L) {
             if (!gh || i < 1) return luaReturnNil(L);
             const auto* rec = tradeSkillRecipeAt(tradeSkillRows(gh), i);
             if (!rec) return luaReturnNil(L);
-            const float left = gh->getSpellCooldown(rec->spellId);
-            if (left <= 0.0f) return luaReturnNil(L);
-            lua_pushnumber(L, left);
+            // 0x005da9a0: the history's (0x00809000), what is left of it.
+            const auto cd = gh->playerSpellCooldown(rec->spellId);
+            if (!cd.running) return luaReturnNil(L);
+            lua_pushnumber(L, static_cast<double>(cd.start + cd.duration) * 0.001 - luaGetTimeNow());
             return 1;
         }},
                 {"GetTradeSkillTools", [](lua_State* L) -> int {

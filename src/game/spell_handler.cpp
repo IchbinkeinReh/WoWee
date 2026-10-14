@@ -84,16 +84,6 @@ std::string formatSkillRankUp(const std::string& format, const std::string& skil
 
 }  // namespace
 
-// Merge incoming cooldown with local remaining time - keeps local timer when
-// a stale/duplicate packet arrives after local countdown has progressed.
-static float mergeCooldownSeconds(float current, float incoming) {
-    constexpr float kEpsilon = 0.05f;
-    if (incoming <= 0.0f) return 0.0f;
-    if (current <= 0.0f) return incoming;
-    if (incoming > current + kEpsilon) return current;
-    return incoming;
-}
-
 namespace {
 constexpr uint8_t kSpellFailedNotReady = 67;
 constexpr uint8_t kSpellFailedAlreadyOpen = 8;
@@ -1414,7 +1404,15 @@ SpellHandler::RuneCost SpellHandler::runeCost(uint32_t spellId) const {
     return {false, runes::readyFor(r, cost, pct)};
 }
 
-spell_history::History::Cooldown SpellHandler::playerCooldown(uint32_t spellId) const {
+spell_history::History::Cooldown SpellHandler::itemCooldown(uint32_t itemId) const {
+    const auto* info = owner_.getItemInfo(itemId);
+    if (!info || !info->valid) return {};
+    for (const auto& sp : info->spells)
+        if (sp.spellId != 0 && sp.spellTrigger == 0) return historyCooldown(sp.spellId, itemId, false);
+    return {};
+}
+
+spell_history::History::Cooldown SpellHandler::historyCooldown(uint32_t spellId, uint32_t itemId, bool pet) const {
     loadSpellNameCache();
     const auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end()) return {};
@@ -1436,9 +1434,17 @@ spell_history::History::Cooldown SpellHandler::playerCooldown(uint32_t spellId) 
             if ((*row)[t] != 0 && (*orow)[t] != 0) return true;
         return false;
     };
-    return playerHistory_.query(spellId, it->second.category, it->second.startRecoveryCategory, historyNowMs(),
-                                [this](uint32_t c) { return (spellCategoryFlags(c) & 0x2u) != 0; }, runesReady,
-                                sharesRunes);
+    // An item's template gives the spell its category (ItemSpellCategory
+    // over 0, the last of its slots naming the spell).
+    uint32_t category = it->second.category;
+    if (const auto* info = itemId != 0 ? owner_.getItemInfo(itemId) : nullptr; info && info->valid) {
+        for (const auto& sp : info->spells)
+            if (sp.spellId == spellId && static_cast<int32_t>(sp.category) > 0) category = sp.category;
+    }
+    return (pet ? petHistory_ : playerHistory_)
+        .query(spellId, category, it->second.startRecoveryCategory, historyNowMs(),
+               [this](uint32_t c) { return (spellCategoryFlags(c) & 0x2u) != 0; }, runesReady, sharesRunes,
+               itemId);
 }
 
 int32_t SpellHandler::moddedCooldown(uint32_t spellId, int32_t ms) const {
@@ -2477,50 +2483,6 @@ void SpellHandler::cancelAura(uint32_t spellId) {
     owner_.getSocket()->send(packet);
 }
 
-float SpellHandler::getSpellCooldown(uint32_t spellId) const {
-    auto it = spellCooldowns_.find(spellId);
-    return (it != spellCooldowns_.end()) ? it->second : 0.0f;
-}
-
-// The length the running cooldown began with. Falls back to whatever is left
-// when nothing recorded a total, which is the old behaviour rather than a zero:
-// a duration of zero reads as "no cooldown" to the interface and would clear a
-// swirl that is still running.
-float SpellHandler::getSpellCooldownTotal(uint32_t spellId) const {
-    auto it = spellCooldownTotals_.find(spellId);
-    if (it != spellCooldownTotals_.end()) return it->second;
-    return getSpellCooldown(spellId);
-}
-
-void SpellHandler::seedCooldownFromSpellInfo(uint32_t spellId) {
-    if (spellId == 0) return;
-    auto existing = spellCooldowns_.find(spellId);
-    if (existing != spellCooldowns_.end() && existing->second > 0.5f) return;
-
-    owner_.loadSpellNameCache();
-    auto it = owner_.spellNameCacheRef().find(spellId);
-    if (it == owner_.spellNameCacheRef().end()) return;
-
-    const uint32_t cooldownMs = std::max(it->second.recoveryMs, it->second.categoryRecoveryMs);
-    if (cooldownMs <= 1500) return; // ignore GCD-sized recovery
-
-    const float seconds = cooldownMs / 1000.0f;
-    spellCooldowns_[spellId] = seconds;
-    spellCooldownTotals_[spellId] = seconds;
-    for (auto& slot : owner_.actionBarRef()) {
-        if (slot.type != ActionBarSlot::SPELL || slot.id != spellId) continue;
-        slot.cooldownRemaining = seconds;
-        slot.cooldownTotal = seconds;
-    }
-
-    LOG_DEBUG("Seeded cooldown from Spell.dbc: spell=", spellId, " ms=", cooldownMs);
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_COOLDOWN", {});
-    }
-}
-
 void SpellHandler::learnTalent(uint32_t talentId, uint32_t requestedRank) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) {
         LOG_WARNING("learnTalent: Not in world or no socket connection");
@@ -2935,29 +2897,6 @@ void SpellHandler::updateTimers(float dt) {
             }
         }
     }
-    // Tick down spell cooldowns
-    bool anyCooldownEnded = false;
-    for (auto it = spellCooldowns_.begin(); it != spellCooldowns_.end(); ) {
-        it->second -= dt;
-        if (it->second <= 0.0f) {
-            spellCooldownTotals_.erase(it->first);
-            it = spellCooldowns_.erase(it);
-            anyCooldownEnded = true;
-        } else {
-            ++it;
-        }
-    }
-    // A cooldown running out is the one thing that makes a spell usable again
-    // without the server saying anything, so nothing announced it and the
-    // button stayed dimmed until the next time mana happened to change - the
-    // only other place these two are fired from. Said once for the frame
-    // however many ended in it.
-    if (anyCooldownEnded && owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_USABLE", {});
-        owner_.addonEventCallbackRef()("SPELL_UPDATE_USABLE", {});
-        owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
-    }
     // Tick down unit cast states
     for (auto it = unitCastStates_.begin(); it != unitCastStates_.end(); ) {
         if (it->second.casting && it->second.timeRemaining > 0.0f) {
@@ -3098,45 +3037,12 @@ void SpellHandler::handleInitialSpells(network::Packet& packet) {
         }
     }
 
-    // Set initial cooldowns
-    for (const auto& cd : data.cooldowns) {
-        uint32_t effectiveMs = std::max(cd.cooldownMs, cd.categoryCooldownMs);
-        if (effectiveMs > 0) {
-            spellCooldowns_[cd.spellId] = effectiveMs / 1000.0f;
-            spellCooldownTotals_[cd.spellId] = effectiveMs / 1000.0f;
-        }
-    }
-
     // Load saved action bar or use defaults
     owner_.actionBarRef()[0].type = ActionBarSlot::SPELL;
     owner_.actionBarRef()[0].id = SPELL_ID_ATTACK;
     owner_.actionBarRef()[11].type = ActionBarSlot::SPELL;
     owner_.actionBarRef()[11].id = 8690;  // Hearthstone
     owner_.loadCharacterConfig();
-
-    // Sync login-time cooldowns into action bar slot overlays
-    for (auto& slot : owner_.actionBarRef()) {
-        if (slot.type == ActionBarSlot::SPELL && slot.id != 0) {
-            auto it = spellCooldowns_.find(slot.id);
-            if (it != spellCooldowns_.end() && it->second > 0.0f) {
-                slot.cooldownTotal     = it->second;
-                slot.cooldownRemaining = it->second;
-            }
-        } else if (slot.type == ActionBarSlot::ITEM && slot.id != 0) {
-            const auto* qi = owner_.getItemInfo(slot.id);
-            if (qi && qi->valid) {
-                for (const auto& sp : qi->spells) {
-                    if (sp.spellId == 0) continue;
-                    auto it = spellCooldowns_.find(sp.spellId);
-                    if (it != spellCooldowns_.end() && it->second > 0.0f) {
-                        slot.cooldownTotal     = it->second;
-                        slot.cooldownRemaining = it->second;
-                        break;
-                    }
-                }
-            }
-        }
-    }
 
     // Pre-load skill line DBCs
     owner_.loadSkillLineDbc();
@@ -3200,9 +3106,6 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     auto playerEntity = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
     if (auto playerUnit = std::dynamic_pointer_cast<Unit>(playerEntity)) {
         powerType = playerUnit->getPowerType();
-    }
-    if (data.result == kSpellFailedNotReady) {
-        seedCooldownFromSpellInfo(data.spellId);
     }
     // 0x00809af0: the cast's global cooldown is taken off (0x00808200 ->
     // 0x00804720), and a spell held until an event (Attributes 0x2000000)
@@ -3477,6 +3380,34 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                 playerCooldownsChanged();
             }
         }
+        // Cast from an item of the player's whose use spell it is: the item
+        // template's cooldown, category and category cooldown (0x00707e90 ->
+        // 0x00706c50), the spell's own where under zero (the category under
+        // one), begun now, as cast from that item.
+        if (data.casterUnit == owner_.getPlayerGuid() && data.casterGuid != data.casterUnit) {
+            loadSpellNameCache();
+            const auto item = owner_.onlineItemsRef().find(data.casterGuid);
+            const auto it = owner_.spellNameCacheRef().find(data.spellId);
+            const auto* info = item != owner_.onlineItemsRef().end() ? owner_.getItemInfo(item->second.entry) : nullptr;
+            const ItemQueryResponseData::ItemSpell* use = nullptr;
+            for (size_t k = 0; info && info->valid && k < info->spells.size() && !use; ++k)
+                if (info->spells[k].spellId != 0 && info->spells[k].spellTrigger == 0) use = &info->spells[k];
+            if (it != owner_.spellNameCacheRef().end() && use && use->spellId == data.spellId) {
+                spell_history::Entry h;
+                h.spellId = data.spellId;
+                h.itemId = item->second.entry;
+                h.start = now;
+                h.duration = use->cooldown < 0 ? static_cast<int32_t>(it->second.recoveryMs) : use->cooldown;
+                h.category = static_cast<int32_t>(use->category) < 1 ? it->second.category : use->category;
+                h.categoryStart = now;
+                h.categoryDuration = use->categoryCooldown < 0 ? static_cast<int32_t>(it->second.categoryRecoveryMs)
+                                                               : use->categoryCooldown;
+                h.onHold = (it->second.attr & 0x2000000u) != 0;
+                playerHistory_.add(h);
+                playerCooldownsChanged();
+                if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
+            }
+        }
         // A rune spell (PowerType 5) of the player's says which runes it
         // used (0x0080e1b0 -> 0x005ee240).
         if (data.hasRuneList && data.casterUnit == owner_.getPlayerGuid()) {
@@ -3510,18 +3441,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         if (restorationLoop) {
             owner_.setStandState(1); // UNIT_STAND_STATE_SIT
         }
-        // Start the cooldown the moment the cast lands, the way the real client
-        // does. The server sends SMSG_SPELL_COOLDOWN only when it is correcting
-        // a cooldown the client is expected to have worked out for itself, so
-        // waiting for one meant most abilities showed no swirl at all - and the
-        // hearthstone, whose thirty minutes live in its spell's category
-        // recovery, showed none until you clicked it a second time and the
-        // refusal seeded it.
-        //
-        // Anything at or under the global cooldown is ignored inside, and an
-        // existing cooldown is left alone, so this cannot shorten one.
-        seedCooldownFromSpellInfo(data.spellId);
-
         // Play cast-complete sound
         if (!owner_.isProfessionSpell(data.spellId) && !rangedWeaponAttack)
             playSpellCastSound(data.spellId);
@@ -3756,7 +3675,6 @@ void SpellHandler::handleSpellCooldown(network::Packet& packet) {
         loadSpellNameCache();
         const int64_t now = historyNowMs();
         auto& history = forPlayer ? playerHistory_ : petHistory_;
-        const size_t at = packet.getReadPos();
         while (packet.getRemainingSize() >= 8) {
             const uint32_t spellId = packet.readUInt32();
             const uint32_t cooldownMs = packet.readUInt32();
@@ -3780,43 +3698,9 @@ void SpellHandler::handleSpellCooldown(network::Packet& packet) {
             }
             history.add(h);
         }
-        packet.setReadPos(at);
     }
+    packet.skipAll();
 
-    const size_t entrySize = isClassicFormat ? 12u : 8u;
-    while (packet.getRemainingSize() >= entrySize) {
-        uint32_t spellId    = packet.readUInt32();
-        uint32_t cdItemId   = 0;
-        if (isClassicFormat) cdItemId = packet.readUInt32();
-        uint32_t cooldownMs = packet.readUInt32();
-
-        float seconds = cooldownMs / 1000.0f;
-        if (spellId == 0) continue;  // no spell, nothing kept (0x00806dd0)
-
-        auto it = spellCooldowns_.find(spellId);
-        if (it == spellCooldowns_.end()) {
-            spellCooldowns_[spellId] = seconds;
-            spellCooldownTotals_[spellId] = seconds;
-        } else {
-            it->second = mergeCooldownSeconds(it->second, seconds);
-            float& total = spellCooldownTotals_[spellId];
-            total = std::max(total, it->second);
-        }
-        for (auto& slot : owner_.actionBarRef()) {
-            bool match = (slot.type == ActionBarSlot::SPELL && slot.id == spellId)
-                      || (cdItemId != 0 && slot.type == ActionBarSlot::ITEM && slot.id == cdItemId);
-            if (match) {
-                float prevRemaining = slot.cooldownRemaining;
-                float merged = mergeCooldownSeconds(slot.cooldownRemaining, seconds);
-                slot.cooldownRemaining = merged;
-                if (slot.cooldownTotal <= 0.0f || prevRemaining <= 0.0f) {
-                    slot.cooldownTotal = seconds;
-                } else {
-                    slot.cooldownTotal = std::max(slot.cooldownTotal, merged);
-                }
-            }
-        }
-    }
     LOG_DEBUG("handleSpellCooldown: parsed for ",
               isClassicFormat ? "Classic" : "TBC/WotLK", " format");
     if (owner_.addonEventCallbackRef()) {
@@ -3836,13 +3720,6 @@ void SpellHandler::handleCooldownEvent(network::Packet& packet) {
     // else the player's.
     (eventGuid != 0 && eventGuid == owner_.getPetGuid() ? petHistory_ : playerHistory_)
         .event(spellId, historyNowMs(), false);
-    spellCooldowns_.erase(spellId);
-    spellCooldownTotals_.erase(spellId);
-    for (auto& slot : owner_.actionBarRef()) {
-        if (slot.type == ActionBarSlot::SPELL && slot.id == spellId) {
-            slot.cooldownRemaining = 0.0f;
-        }
-    }
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
         owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
@@ -4163,8 +4040,6 @@ void SpellHandler::handleSupercededSpell(network::Packet& packet) {
     for (auto& slot : owner_.actionBarRef()) {
         if (slot.type == ActionBarSlot::SPELL && slot.id == oldSpellId) {
             slot.id = newSpellId;
-            slot.cooldownRemaining = 0.0f;
-            slot.cooldownTotal = 0.0f;
             barChanged = true;
             LOG_DEBUG("Action bar slot upgraded: spell ", oldSpellId, " -> ", newSpellId);
         }
@@ -4607,10 +4482,8 @@ void SpellHandler::resetCastState() {
 
 void SpellHandler::resetAllState() {
     knownSpells_.clear();
-    spellCooldowns_.clear();
     playerHistory_.clear();  // 0x00802a50
     petHistory_.clear();
-    spellCooldownTotals_.clear();
     playerAuras_.clear();
     targetAuras_.clear();
     unitAurasCache_.clear();
@@ -5766,9 +5639,6 @@ void SpellHandler::handleCastResult(network::Packet& packet) {
                 if (auto pu = std::dynamic_pointer_cast<Unit>(pe))
                     playerPowerType = static_cast<int>(pu->getPowerType());
             }
-            if (castResult == kSpellFailedNotReady) {
-                seedCooldownFromSpellInfo(castResultSpellId);
-            }
             // Totem failures name tool item ids; request their info so a retry
             // of the craft can show the tool's name even if it wasn't cached.
             if (castResult == kCastResultTotems) {
@@ -5825,12 +5695,6 @@ void SpellHandler::handleClearCooldown(network::Packet& packet) {
         (guid != 0 && guid == owner_.getPetGuid() ? petHistory_ : playerHistory_)
             .event(spellId, historyNowMs(), true);
         playerCooldownsChanged();
-        spellCooldowns_.erase(spellId);
-        spellCooldownTotals_.erase(spellId);
-        for (auto& slot : owner_.actionBarRef()) {
-            if (slot.type == ActionBarSlot::SPELL && slot.id == spellId)
-                slot.cooldownRemaining = 0.0f;
-        }
     }
 }
 
@@ -5846,15 +5710,6 @@ void SpellHandler::handleModifyCooldown(network::Packet& packet) {
         // player's.
         (guid != 0 && guid == owner_.getPetGuid() ? petHistory_ : playerHistory_).modify(spellId, diffMs);
         playerCooldownsChanged();
-        float diffSec = diffMs / 1000.0f;
-        auto it = spellCooldowns_.find(spellId);
-        if (it != spellCooldowns_.end()) {
-            it->second = std::max(0.0f, it->second + diffSec);
-            for (auto& slot : owner_.actionBarRef()) {
-                if (slot.type == ActionBarSlot::SPELL && slot.id == spellId)
-                    slot.cooldownRemaining = std::max(0.0f, slot.cooldownRemaining + diffSec);
-            }
-        }
     }
 }
 
@@ -6082,46 +5937,23 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
 }
 
 void SpellHandler::handleItemCooldown(network::Packet& packet) {
-    // uint64 itemGuid + uint32 spellId + uint32 cooldownMs
-    size_t rem = packet.getRemainingSize();
-    if (rem >= 16) {
-        uint64_t itemGuid = packet.readUInt64();
-        uint32_t spellId  = packet.readUInt32();
-        uint32_t cdMs     = packet.readUInt32();
-        float cdSec = cdMs / 1000.0f;
-        if (cdSec > 0.0f) {
-            if (spellId != 0) {
-                auto it = spellCooldowns_.find(spellId);
-                if (it == spellCooldowns_.end()) {
-                    spellCooldowns_[spellId] = cdSec;
-                    spellCooldownTotals_[spellId] = cdSec;
-                } else {
-                    it->second = mergeCooldownSeconds(it->second, cdSec);
-                    float& total = spellCooldownTotals_[spellId];
-                    total = std::max(total, it->second);
-                }
-            }
-            // Resolve itemId from the GUID so item-type slots are also updated
-            uint32_t itemId = 0;
-            auto iit = owner_.onlineItemsRef().find(itemGuid);
-            if (iit != owner_.onlineItemsRef().end()) itemId = iit->second.entry;
-            for (auto& slot : owner_.actionBarRef()) {
-                bool match = (spellId != 0 && slot.type == ActionBarSlot::SPELL && slot.id == spellId)
-                          || (itemId  != 0 && slot.type == ActionBarSlot::ITEM  && slot.id == itemId);
-                if (match) {
-                    float prevRemaining = slot.cooldownRemaining;
-                    float merged = mergeCooldownSeconds(slot.cooldownRemaining, cdSec);
-                    slot.cooldownRemaining = merged;
-                    if (slot.cooldownTotal <= 0.0f || prevRemaining <= 0.0f) {
-                        slot.cooldownTotal = cdSec;
-                    } else {
-                        slot.cooldownTotal = std::max(slot.cooldownTotal, merged);
-                    }
-                }
-            }
-            LOG_DEBUG("SMSG_ITEM_COOLDOWN: itemGuid=0x", std::hex, itemGuid, std::dec,
-                      " spellId=", spellId, " itemId=", itemId, " cd=", cdSec, "s");
+    // 0x00807060: the item's guid and a spell - the item, there, and the
+    // spell put the spell in the player's history as cast from it, thirty
+    // seconds from now.
+    if (packet.hasRemaining(12)) {
+        const uint64_t itemGuid = packet.readUInt64();
+        const uint32_t spellId = packet.readUInt32();
+        loadSpellNameCache();
+        const auto item = owner_.onlineItemsRef().find(itemGuid);
+        if (item != owner_.onlineItemsRef().end() && owner_.spellNameCacheRef().count(spellId) != 0) {
+            spell_history::Entry h;
+            h.spellId = spellId;
+            h.itemId = item->second.entry;
+            h.start = historyNowMs();
+            h.duration = 30000;
+            playerHistory_.add(h);
         }
+        playerCooldownsChanged();
     }
     // The bags redraw their cooldown swirls from this and nothing else, so a
     // potion or trinket put on cooldown showed none. This message is the item

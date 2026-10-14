@@ -890,16 +890,8 @@ void GameHandler::update(float deltaTime) {
             craftCastGoGraceSec_ = 0.0f;
         }
 
-        // Unit cast states and spell cooldowns are ticked by SpellHandler::updateTimers()
+        // Unit cast states are ticked by SpellHandler::updateTimers()
         // (called from GameHandler::updateTimers above). No duplicate tick-down here.
-
-        // Update action bar cooldowns
-        for (auto& slot : actionBar) {
-            if (slot.cooldownRemaining > 0.0f) {
-                slot.cooldownRemaining -= deltaTime;
-                if (slot.cooldownRemaining < 0.0f) slot.cooldownRemaining = 0.0f;
-            }
-        }
 
         // Update combat text (Phase 2)
         updateCombatText(deltaTime);
@@ -4481,6 +4473,12 @@ const std::unordered_map<uint32_t, TalentTabEntry>& GameHandler::getAllTalentTab
 }
 spell_history::History::Cooldown GameHandler::playerSpellCooldown(uint32_t spellId) const {
     return spellHandler_ ? spellHandler_->playerCooldown(spellId) : spell_history::History::Cooldown{};
+}
+spell_history::History::Cooldown GameHandler::petSpellCooldown(uint32_t spellId) const {
+    return spellHandler_ ? spellHandler_->historyCooldown(spellId, 0, true) : spell_history::History::Cooldown{};
+}
+spell_history::History::Cooldown GameHandler::itemCooldown(uint32_t itemId) const {
+    return spellHandler_ ? spellHandler_->itemCooldown(itemId) : spell_history::History::Cooldown{};
 }
 bool GameHandler::showTalentWipeConfirmDialog() const {
     return spellHandler_ ? spellHandler_->showTalentWipeConfirmDialog() : false;

@@ -1584,6 +1584,10 @@ public:
     /// 0x00809000 for the player's spell (SpellHandler::playerCooldown):
     /// start and length in milliseconds of GetTime()'s clock.
     spell_history::History::Cooldown playerSpellCooldown(uint32_t spellId) const;
+    /// The same of the pet's history (0x00809000 with 1).
+    spell_history::History::Cooldown petSpellCooldown(uint32_t spellId) const;
+    /// 0x00809030: an item's, its use spell's as cast from it.
+    spell_history::History::Cooldown itemCooldown(uint32_t itemId) const;
 
     // Weather state (updated by SMSG_WEATHER)
     // weatherType: the Weather.dbc row id (the server's WeatherState)
@@ -1920,14 +1924,6 @@ public:
     }
     bool completePlayerTransportWorldTransfer(uint64_t transportGuid,
                                               glm::vec3& worldPosition);
-
-    // Cooldowns
-    float getSpellCooldown(uint32_t spellId) const;
-    float getSpellCooldownTotal(uint32_t spellId) const;
-    const std::unordered_map<uint32_t, float>& getSpellCooldowns() const {
-        static const std::unordered_map<uint32_t, float> empty;
-        return spellHandler_ ? spellHandler_->getSpellCooldowns() : empty;
-    }
 
     // Player GUID
     uint64_t getPlayerGuid() const { return playerGuid; }
