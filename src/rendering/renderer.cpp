@@ -2595,14 +2595,16 @@ void Renderer::update(float deltaTime) {
         const auto* gh = core::Application::getInstance().getGameHandler();
         uint32_t mapId    = gh ? gh->getCurrentMapId() : 0;
         float gameTime    = gh ? gh->getGameTime() : -1.0f;
-        // WOWEE_GAME_TIME=<hours>: the light at a time of day of one's
-        // choosing, for comparing lighting work at noon in the middle of the
-        // night. Only what is drawn; the server's clock is left alone.
-        static const float gameTimeOverride = [] {
+        // A time of day of one's choosing, for comparing lighting work at
+        // noon in the middle of the night: WOWEE_GAME_TIME=<hours>, or the
+        // Debug Graphics settings' (setGameTimeOverride), which win once set.
+        // Only what is drawn; the server's clock is left alone.
+        static const float envGameTime = [] {
             const char* v = std::getenv("WOWEE_GAME_TIME");
             return (v && *v) ? static_cast<float>(std::atof(v)) : -1.0f;
         }();
-        if (gameTimeOverride >= 0.0f) gameTime = gameTimeOverride;
+        if (gameTimeOverride_ >= 0.0f) gameTime = std::fmod(gameTimeOverride_, 24.0f);
+        else if (envGameTime >= 0.0f) gameTime = envGameTime;
         // SMSG_WEATHER names a Weather.dbc row; the weather takes it from
         // there (0x007846a0). Nothing falls without one: the client makes up
         // no weather of its own, and draws it indoors as out, the ground it

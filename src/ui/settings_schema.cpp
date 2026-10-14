@@ -299,6 +299,12 @@ constexpr SettingDesc kSchema[] = {
      "How far the probes' bounced light darkens shaded places and\n"
      "lifts lit ones (Shadows, occlusion and bounce light). 0 leaves\n"
      "the flat ambient.", "", 100},
+    {"dbgtimeoverride", "Use this time of day", SettingKind::Bool, 0, 0, 0, "Debug Time", "Time of day",
+     "Light the world at the time below instead of the server's.\n"
+     "Only what is drawn; the server's clock is left alone.", "", 0},
+    {"dbgtime", "Time of day (hours)", SettingKind::Float, 0, 24, 0.25f, "Debug Time", "",
+     "The time of day the world is lit at while the switch above\n"
+     "is on: 0 and 24 are midnight, 12 is noon.", "", 12},
     {"dbgmodellightintensity", "Model lights: intensity (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "Intensity and reach",
      "The lights model files carry: braziers, crystals, spell\n"
      "effects on objects.\n"

@@ -697,6 +697,9 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 ImGui::Spacing();
                 drawSchemaCategory("Debug Graphics", saveCallback);
                 ImGui::Spacing();
+                ImGui::SeparatorText("Time of day");
+                drawSchemaCategory("Debug Time", saveCallback);
+                ImGui::Spacing();
                 ImGui::SeparatorText("Light sources");
                 drawSchemaCategory("Debug Lights", saveCallback);
                 ImGui::Spacing();
@@ -708,6 +711,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 if (ImGui::Button("Restore Debug Graphics Defaults", ImVec2(-1, 0))) {
                     restoreSchemaDefaults("Debug Graphics");
                     restoreSchemaDefaults("Debug Lights");
+                    restoreSchemaDefaults("Debug Time");
                     restoreSchemaDefaults("Debug Shadows");
                     saveCallback();
                 }
@@ -902,7 +906,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "lensflare",
     "screenglow", "raytracedlighting",
     // The Debug Graphics settings: each applies all of them.
-    "dbgview", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
+    "dbgview", "dbgtimeoverride", "dbgtime", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
     "dbgmodellightintensity", "dbgmodellightreach", "dbgfirelightintensity", "dbgfirelightreach", "dbglamplightintensity", "dbglamplightreach", "dbgbuildinglightintensity", "dbgbuildinglightreach", "dbgunitlightintensity", "dbgunitlightreach",
     "dbgtracedsunshadow", "dbgmapsunshadow", "dbgpointshadow", "dbgbakedlampshadow", "dbgocclusion", "dbgterrainshadow", "dbgblobshadow",
     // Moved off the game's own Effects panel, so this list is now what
@@ -1063,6 +1067,8 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "lightshafts",    .asInt   = &SettingsPanel::pendingVolumetricFog},
     {.key = "raytracedlighting", .asInt = &SettingsPanel::pendingRtLighting},
     {.key = "dbgview", .asInt = &SettingsPanel::pendingDbgView},
+    {.key = "dbgtimeoverride", .asBool = &SettingsPanel::pendingDbgTimeOverride},
+    {.key = "dbgtime", .asFloat = &SettingsPanel::pendingDbgTime},
     {.key = "dbgambient", .asInt = &SettingsPanel::pendingDbgAmbient},
     {.key = "dbgsun", .asInt = &SettingsPanel::pendingDbgSun},
     {.key = "dbgbakedlight", .asInt = &SettingsPanel::pendingDbgBakedLight},
@@ -1312,6 +1318,7 @@ void SettingsPanel::applyLightingTune() {
     t.blobShadow = pct(pendingDbgBlobShadow);
     renderer->setLightingTune(t);
     renderer->setRtDebugView(pendingDbgView);
+    renderer->setGameTimeOverride(pendingDbgTimeOverride ? pendingDbgTime : -1.0f);
 }
 
 void SettingsPanel::applySettingSideEffects(const std::string& key) {
@@ -1534,6 +1541,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
     } else if (key == "raytracedlighting") {
         if (renderer) renderer->setRtLightingMode(pendingRtLighting);
     } else if (key == "dbgview" ||
+               key == "dbgtimeoverride" ||
+               key == "dbgtime" ||
                key == "dbgambient" ||
                key == "dbgsun" ||
                key == "dbgbakedlight" ||

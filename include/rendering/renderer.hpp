@@ -680,6 +680,10 @@ public:
     /// volume's, 5 the traced sun, 6 the point lights, 7 the traced
     /// occlusion. WOWEE_GI_DEBUG, when set, wins.
     void setRtDebugView(int view) { rtDebugView_ = view; }
+    /// The time of day the world is lit at, in hours (0-24), instead of the
+    /// server's; negative for the server's own (Settings > Debug Graphics,
+    /// WOWEE_GAME_TIME). Only what is drawn: the server's clock is left alone.
+    void setGameTimeOverride(float hours) { gameTimeOverride_ = hours; }
     /// A multiplier on how thick that air is; 1 is the default mist.
     void setVolumetricFogDensity(float density) { volumetricFogDensity_ = glm::clamp(density, 0.0f, 3.0f); }
     /// Rays streaming from the sun across the finished picture. See SunShafts.
@@ -947,6 +951,7 @@ private:
     std::unique_ptr<RtLighting> rtLighting_;
     LightingTune lightingTune_{};
     int rtDebugView_ = 0;
+    float gameTimeOverride_ = -1.0f;
     void writeRtLightingBindings();
     VkExtent2D sceneRenderExtent() const;
     void recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool depthIsMsaa);

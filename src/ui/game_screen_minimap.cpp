@@ -1938,6 +1938,8 @@ void GameScreen::saveSettings() {
     out << "light_shafts=" << settingsPanel_.pendingVolumetricFog << "\n";
     out << "ray_traced_lighting=" << settingsPanel_.pendingRtLighting << "\n";
     out << "dbg_view=" << settingsPanel_.pendingDbgView << "\n";
+    out << "dbg_time_override=" << (settingsPanel_.pendingDbgTimeOverride ? 1 : 0) << "\n";
+    out << "dbg_time=" << settingsPanel_.pendingDbgTime << "\n";
     out << "dbg_ambient=" << settingsPanel_.pendingDbgAmbient << "\n";
     out << "dbg_sun=" << settingsPanel_.pendingDbgSun << "\n";
     out << "dbg_baked_light=" << settingsPanel_.pendingDbgBakedLight << "\n";
@@ -2232,7 +2234,9 @@ void GameScreen::loadSettings() {
             else if (key == "fog_strength") settingsPanel_.pendingFogStrength = std::clamp(std::stof(val), 0.0f, 2.0f);
             else if (key == "light_shafts") settingsPanel_.pendingVolumetricFog = std::clamp(std::stoi(val), 0, 3);
             else if (key == "ray_traced_lighting") settingsPanel_.pendingRtLighting = std::clamp(std::stoi(val), 0, 3);
-            else if (key == "dbg_view") settingsPanel_.pendingDbgView = std::clamp(std::stoi(val), 0, 7);
+            else if (key == "dbg_view") settingsPanel_.pendingDbgView = std::clamp(std::stoi(val), 0, 9);
+            else if (key == "dbg_time_override") settingsPanel_.pendingDbgTimeOverride = (val == "1");
+            else if (key == "dbg_time") settingsPanel_.pendingDbgTime = std::clamp(std::stof(val), 0.0f, 24.0f);
             else if (key == "dbg_ambient") settingsPanel_.pendingDbgAmbient = std::clamp(std::stoi(val), 0, 300);
             else if (key == "dbg_sun") settingsPanel_.pendingDbgSun = std::clamp(std::stoi(val), 0, 300);
             else if (key == "dbg_baked_light") settingsPanel_.pendingDbgBakedLight = std::clamp(std::stoi(val), 0, 300);

@@ -83,6 +83,10 @@ public:
     int pendingDbgBakedLight = 100;
     int pendingDbgPointLights = 100;
     int pendingDbgBounce = 100;
+    /// A time of day to light the world at instead of the server's, in
+    /// hours, used while the switch is on (Renderer::setGameTimeOverride).
+    bool pendingDbgTimeOverride = false;
+    float pendingDbgTime = 12.0f;
     /// Per kind of point light (rt_lights::Source), in percent of its own.
     int pendingDbgModelLightIntensity = 100;
     int pendingDbgModelLightReach = 100;

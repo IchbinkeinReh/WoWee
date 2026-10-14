@@ -339,7 +339,7 @@ TEST_CASE("every panel the client offers still has settings on it", "[settings][
     for (const auto& d : schema()) present.insert(d.category);
 
     for (const char* category : {"Graphics", "Shadows", "Detail", "Grass", "Water", "Ray Tracing", "Debug Graphics",
-                                 "Debug Lights", "Debug Shadows", "Upscaling", "Display",
+                                 "Debug Lights", "Debug Time", "Debug Shadows", "Upscaling", "Display",
                                  "Camera", "Interface", "Minimap", "Action Bars", "HUD",
                                  "Combat", "Names", "Nameplates", "Combat Text", "Unit Frames",
                                  "Sound", "Sound Effects", "Chat", "Gameplay"}) {
@@ -368,6 +368,7 @@ TEST_CASE("every panel the client offers still has settings on it", "[settings][
     // parts and strengths, fourteen controls, more than one page holds.
     // Twenty-five with Debug Lights: each kind of point light's intensity
     // and reach, ten more controls.
-    INFO("the schema names " << present.size() << " categories where twenty-five are expected");
-    CHECK(present.size() == 25);
+    // Twenty-six with Debug Time: the time of day to light the world at.
+    INFO("the schema names " << present.size() << " categories where twenty-six are expected");
+    CHECK(present.size() == 26);
 }
