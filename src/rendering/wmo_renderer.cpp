@@ -691,6 +691,8 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         return ModelLoadResult::Failed;
     }
 
+    gatherGlows(modelData);
+
     // Build pre-merged batches for each group (texture-sorted for efficient rendering)
     for (auto& groupRes : modelData.groups) {
         // Use pointer value as key for batching
@@ -4993,6 +4995,74 @@ void WMORenderer::collectGrassClearings(float minX, float minY, float maxX, floa
 namespace wowee {
 namespace rendering {
 
+void WMORenderer::gatherGlows(ModelData& modelData) {
+    modelData.glows.clear();
+    for (const auto& group : modelData.groups) {
+        if (group.isLOD || group.allUntextured || group.collisionVertices.empty()) continue;
+        const bool interior = (group.groupFlags & pipeline::wmo_doodad_light::kOutsideGroupFlags) == 0;
+        // Windows and the rest apart: the windows are lit at night only.
+        rt_lights::GlowBuilder windows, glows;
+        for (const auto& batch : group.batches) {
+            const uint32_t mat = batch.materialId;
+            const uint32_t flags = mat < modelData.materialFlags.size() ? modelData.materialFlags[mat] : 0;
+            const uint32_t blend = mat < modelData.materialBlendModes.size() ? modelData.materialBlendModes[mat] : 0;
+            const uint32_t sidn = mat < modelData.materialSidn.size() ? modelData.materialSidn[mat] : 0;
+            if (blend >= 4) continue;  // the modulates darken
+            glm::vec3 texel(1.0f);
+            if (mat < modelData.materialTextureIndices.size()) {
+                const uint32_t ti = modelData.materialTextureIndices[mat];
+                if (ti < modelData.textures.size() && modelData.textures[ti]) {
+                    texel = modelData.textures[ti]->averageColor();
+                    if (blend != 0) texel *= modelData.textures[ti]->alphaCoverage();
+                }
+            }
+            rt_lights::GlowBuilder* into = nullptr;
+            glm::vec3 color(0.0f);
+            if (sidn != 0) {
+                // A window at night: its sidn colour added to its light, the
+                // texel doubled over it (wmo.frag windowEmissive, surface()).
+                const glm::vec3 c(static_cast<float>((sidn >> 16) & 0xffu) / 255.0f,
+                                  static_cast<float>((sidn >> 8) & 0xffu) / 255.0f,
+                                  static_cast<float>(sidn & 0xffu) / 255.0f);
+                color = glm::min(2.0f * c * texel, glm::vec3(1.0f));
+                into = &windows;
+            } else if (!interior && ((flags & 0x01u) != 0 || blend == 3)) {
+                // Outside, an unlit or additive batch: lamp glass, lava, a
+                // crystal. A dark unlit one (most unlit stone) glows at nothing.
+                color = texel;
+                if (blend != 3 && std::max(color.r, std::max(color.g, color.b)) < 0.35f) continue;
+                into = &glows;
+            }
+            if (!into) continue;
+            const uint32_t end = std::min<uint32_t>(batch.startIndex + batch.indexCount,
+                                                    static_cast<uint32_t>(group.collisionIndices.size()));
+            for (uint32_t i = batch.startIndex; i + 2 < end; i += 3) {
+                const uint16_t a = group.collisionIndices[i], b = group.collisionIndices[i + 1],
+                               c = group.collisionIndices[i + 2];
+                if (a >= group.collisionVertices.size() || b >= group.collisionVertices.size() ||
+                    c >= group.collisionVertices.size()) {
+                    continue;
+                }
+                into->addTriangle(group.collisionVertices[a], group.collisionVertices[b], group.collisionVertices[c],
+                                  color, 0, false);
+            }
+        }
+        for (const auto& patch : windows.finish()) modelData.glows.push_back({patch, true, interior});
+        for (const auto& patch : glows.finish()) {
+            // Where the building carries a light of its own (MOLT) beside the
+            // glow, that light is the glow's: a second would light it twice.
+            bool lit = false;
+            for (const auto& l : modelData.lights) {
+                if (l.type == 0 && glm::length(l.position - patch.centre) < 3.0f + std::sqrt(patch.area)) {
+                    lit = true;
+                    break;
+                }
+            }
+            if (!lit) modelData.glows.push_back({patch, false, interior});
+        }
+    }
+}
+
 void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
     if (!rtScene_ || rtModelMeshes_.count(modelId)) return;
     RtScene::MeshSource src;
@@ -5119,8 +5189,10 @@ void WMORenderer::syncRtScene() {
     }
 }
 
-void WMORenderer::collectRtLights(const glm::vec3& eye, float range,
+void WMORenderer::collectRtLights(const glm::vec3& eye, float range, float nightLevel,
                                   std::vector<rt_lights::PointLight>& out) const {
+    const float glowLevel = rt_lights::daylightScale(nightLevel, rt_lights::kGlowDayLevel);
+    const float windowLevel = rt_lights::daylightScale(nightLevel, 0.0f);
     for (const auto& inst : instances) {
         if (inst.hidden) continue;
         // Nearest point of the instance's box: a city is one instance and
@@ -5134,6 +5206,19 @@ void WMORenderer::collectRtLights(const glm::vec3& eye, float range,
                                               light.attenuationStart, light.attenuationEnd, light.type,
                                               inst.modelMatrix);
             if (l) out.push_back(*l);
+        }
+        const float scale2 = glm::dot(glm::vec3(inst.modelMatrix[0]), glm::vec3(inst.modelMatrix[0]));
+        for (const auto& glow : model->second.glows) {
+            const float level = glow.window ? windowLevel : glowLevel;
+            if (level <= 0.0f) continue;
+            const glm::vec3 position = glm::vec3(inst.modelMatrix * glm::vec4(glow.patch.centre, 1.0f));
+            if (glm::length(position - eye) - rt_lights::kGlowMaxReach > range) continue;
+            rt_lights::PointLight l = rt_lights::glowLight(position, glow.patch.color * level,
+                                                           glow.patch.area * scale2, rt_lights::Source::Emissive);
+            // An interior group's windows are in its baked colours: inside
+            // they only cast their shadows, outside they light the street.
+            l.baked = glow.interior;
+            out.push_back(l);
         }
     }
 }

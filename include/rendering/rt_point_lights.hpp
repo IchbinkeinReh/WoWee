@@ -6,6 +6,8 @@
 /// building's into its vertex colours and links an M2's into a grid that
 /// lights models near it (0x00834c70); it never lights the world with either
 /// at runtime. RtLighting does, in its modes only, with a shadow ray to each.
+/// What glows - emissive surfaces and particle emitters - gives lights of its
+/// own beside these (rt_glow.hpp).
 ///
 /// Gathered on the CPU every frame - from the instances that carry lights,
 /// not from every instance - culled to what can reach the view, ranked, and
@@ -33,8 +35,10 @@ enum class Source : uint8_t {
     Lamp = 2,      // lampLight: a lamp that carries none of its own
     Building = 3,  // a WMO's MOLT light
     Unit = 4,      // an M2 light of a character or creature
+    Emissive = 5,  // glowLight: a model's or a building's glowing surfaces (rt_glow.hpp)
+    Particle = 6,  // glowLight: a particle emitter's live particles (rt_glow.hpp)
 };
-inline constexpr size_t kSourceCount = 5;
+inline constexpr size_t kSourceCount = 7;
 
 struct PointLight {
     glm::vec3 position{0.0f};
@@ -211,9 +215,11 @@ inline PointLight fireLight(const glm::vec3& boxMin, const glm::vec3& boxMax, co
 /// human lamps and lanterns has an M2 light (their files list none); the
 /// original draws only their glowing glass. The light sits at `local`, the
 /// middle of that glass in the model's space (lampGlowCentre), warm, reaching
-/// some nine yards; `level` turns it on - the window level, full at night
-/// and out by day (wmo_sidn::windowLevel), as the lamps of a town are lit.
+/// some nine yards. Its glass glows day and night, so it is lit day and
+/// night: `level` is how much of it shows (rt_glow.hpp daylightScale, full at
+/// night, kLampDayLevel at noon).
 inline constexpr float kLampReach = 6.0f;
+inline constexpr float kLampDayLevel = 0.5f;
 inline PointLight lampLight(const glm::vec3& local, const glm::mat4& modelMatrix, float level) {
     PointLight out;
     out.position = glm::vec3(modelMatrix * glm::vec4(local, 1.0f));

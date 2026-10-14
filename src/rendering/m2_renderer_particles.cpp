@@ -355,6 +355,7 @@ void M2Renderer::prepareM2Particles() {
     particlesPrepared_ = true;
     particleRunCursor_ = 0;
     particleRuns_.clear();
+    rtParticleLights_.clear();
     // This frame's buffer: the other may still be in use by the GPU.
     const uint32_t vbSlot = vkCtx_->getCurrentFrame() % kDynamicVBSlots;
     if (!particlePipeline_ || !m2ParticleVB_[vbSlot]) return;
@@ -402,6 +403,18 @@ void M2Renderer::prepareM2Particles() {
         const size_t idx = particleDrawOrder_[instOrder].second;
         auto& inst = instances[idx];
         const auto& gpu = *inst.cachedModel;
+
+        // One light per emitter for the ray traced lighting (rt_lights::
+        // ParticleGlow), summed as its particles are written below: for the
+        // instances near the camera whose model gives no light otherwise (an
+        // M2 light, a fire's, a lamp's, its glowing batches).
+        constexpr float kParticleLightRange = 100.0f;
+        const bool glowLights = rtScene_ && particleDrawOrder_[instOrder].first < kParticleLightRange * kParticleLightRange &&
+                                gpu.lights.empty() && !gpu.isBrazierOrFire && !gpu.isTorch && !gpu.isLamp &&
+                                gpu.glowPatches.empty();
+        if (glowLights) rtEmitterGlowScratch_.assign(gpu.particleEmitters.size(), rt_lights::ParticleGlow{});
+        float emitterGlowWeight = 0.0f;
+        glm::vec3 emitterGlowTexel(1.0f);
 
 
         // Cache the last emitter's per-emitter state so adjacent particles
@@ -523,6 +536,12 @@ void M2Renderer::prepareM2Particles() {
                 cachedTotalTiles = static_cast<uint32_t>(cachedTilesX) *
                                    static_cast<uint32_t>(cachedTilesY);
                 cachedBlendType = cachedEm->blendingType;
+                if (glowLights) {
+                    // What its texture shows on average, by how much of it.
+                    emitterGlowWeight = rt_lights::particleGlowWeight(cachedBlendType, (cachedEm->flags & 0x1) != 0);
+                    emitterGlowTexel = cachedTex ? cachedTex->averageColor() * cachedTex->alphaCoverage()
+                                                 : glm::vec3(1.0f);
+                }
                 // Lit unless flagged 0x1, for blends 0-4 (FUN_0081fb10); fogged
                 // by blend - black for the adds, the fog's colour for opaque,
                 // key and alpha, white and grey for the modulates - unless
@@ -572,6 +591,10 @@ void M2Renderer::prepareM2Particles() {
             // whatever model it belongs to. Each of those was here to make a
             // point sprite that was too small, and a quad is the size it is.
             const float scale = rawScale;
+            if (glowLights && emitterGlowWeight > 0.0f) {
+                rtEmitterGlowScratch_[static_cast<size_t>(p.emitterIndex)].add(
+                    pWorld, color * emitterGlowTexel, alpha, scale * p.sizeVary * cachedModelScale, emitterGlowWeight);
+            }
 
             if (vbWritten >= MAX_M2_PARTICLE_VERTS) {
                 droppedParticles += 1;
@@ -646,6 +669,16 @@ void M2Renderer::prepareM2Particles() {
             ++vbWritten;
             ++particleRuns_.back().count;
             totalParticles++;
+        }
+
+        if (glowLights) {
+            const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
+            for (const rt_lights::ParticleGlow& glow : rtEmitterGlowScratch_) {
+                auto l = glow.light();
+                if (!l) continue;
+                l->color *= fade;
+                rtParticleLights_.push_back(*l);
+            }
         }
 
         if (!emitterDiag.empty()) {

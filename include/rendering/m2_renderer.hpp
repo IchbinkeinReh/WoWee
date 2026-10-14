@@ -13,6 +13,7 @@
 #include "rendering/m2_track_sampler.hpp"
 #include "rendering/m2_particle_motion.hpp"
 #include "rendering/m2_event_sounds.hpp"
+#include "rendering/rt_glow.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -140,6 +141,12 @@ struct M2ModelGPU {
     // its own space (rt_lights::lampLight). Set when its ray traced mesh is.
     bool isLamp = false;
     glm::vec3 lampLocal{0.0f};
+    /// What of it glows - its unlit and additive batches, its glow cards -
+    /// in a few patches of its own space (rt_lights::GlowBuilder), each a
+    /// light while an instance is near (rt_lights::glowLight). Gathered at
+    /// load (computeGlow); empty for a model that carries a light of its own
+    /// or is given one (a fire, a lamp).
+    std::vector<rt_lights::GlowPatch> glowPatches;
 
     // Collision mesh with spatial grid (from M2 bounding geometry)
     struct CollisionMesh {
@@ -577,9 +584,16 @@ public:
     /// lamps, spell effects), placed for this frame, within `range` of `eye`.
     /// Walks the instances syncRtScene found to carry lights, so it follows
     /// that call.
-    void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
-    /// How far the lamps are lit (rt_lights::lampLight): the window level.
-    void setRtLampLevel(float level) { rtLampLevel_ = level; }
+    /// `nightLevel` is the window level (wmo_sidn::windowLevel), which the
+    /// lamps and the glowing surfaces show more of at night
+    /// (rt_lights::daylightScale). The particle emitters' lights are those
+    /// the last prepareM2Particles gathered.
+    void collectRtLights(const glm::vec3& eye, float range, float nightLevel,
+                         std::vector<rt_lights::PointLight>& out) const;
+    /// WOWEE_RT_LIGHT_DIAG: the doodads within `radius` of `eye` and what
+    /// each gives of light - its M2 lights, a fire's or a lamp's, its glow
+    /// patches, its emitters - logged.
+    void logRtLightDiag(const glm::vec3& eye, float radius) const;
     /// How many pieces of animated models the last sync placed.
     [[nodiscard]] uint32_t rtAnimatedPieces() const { return rtAnimatedPieces_; }
     void setForceNoCull(bool v) { forceNoCull_ = v; }
@@ -1250,7 +1264,14 @@ private:
     // complete pass found them; the pass in progress fills rtLitNext_.
     std::vector<uint32_t> rtLitInstances_;
     std::vector<uint32_t> rtLitNext_;
-    float rtLampLevel_ = 0.0f;
+    /// One light per particle emitter near the camera whose model gives no
+    /// other (rt_lights::ParticleGlow), gathered by prepareM2Particles as it
+    /// writes the particles out; read by collectRtLights after the worker
+    /// that wrote them has been joined.
+    std::vector<rt_lights::PointLight> rtParticleLights_;
+    std::vector<rt_lights::ParticleGlow> rtEmitterGlowScratch_;
+    /// The glowing patches of a model just loaded (M2ModelGPU::glowPatches).
+    static void computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
     // The pass over every instance is spread over a few frames: where it has
     // got to. The instances placed in the dynamic level - moving ones - are
     // brought up to date every frame from rtDynamicOwnerIds_ (M2Instance ids).

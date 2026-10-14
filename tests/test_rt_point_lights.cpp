@@ -323,7 +323,8 @@ TEST_CASE("a lamp without a light of its own is lit at its glass, at night", "[r
     CHECK(night.attenuationStart < night.attenuationEnd);
     CHECK(night.color.r > night.color.b);
     CHECK_FALSE(night.baked);
-    // Out by day, part-way at dusk.
+    // As much as its level says: out at none, half at a half (by day
+    // rt_glow.hpp's daylightScale gives it kLampDayLevel).
     CHECK(lampLight(glass, model, 0.0f).color.r == 0.0f);
     CHECK(lampLight(glass, model, 0.5f).color.r == Catch::Approx(0.5f));
     // A lantern scaled down still reaches the ground.

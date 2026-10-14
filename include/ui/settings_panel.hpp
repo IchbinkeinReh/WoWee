@@ -98,6 +98,10 @@ public:
     int pendingDbgBuildingLightReach = 100;
     int pendingDbgUnitLightIntensity = 100;
     int pendingDbgUnitLightReach = 100;
+    int pendingDbgEmissiveLightIntensity = 100;
+    int pendingDbgEmissiveLightReach = 100;
+    int pendingDbgParticleLightIntensity = 100;
+    int pendingDbgParticleLightReach = 100;
     int pendingDbgShadowDarkness = 60;
     int pendingDbgTracedSunShadow = 100;
     int pendingDbgMapSunShadow = 100;

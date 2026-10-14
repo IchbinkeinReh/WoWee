@@ -11,6 +11,7 @@
 #include "pipeline/grass_clearing.hpp"
 #include "pipeline/wmo_loader.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
+#include "rendering/rt_glow.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -87,8 +88,11 @@ public:
     /// seen to move, is one of the scene's dynamic instances.
     void syncRtScene();
     /// The omni lights (MOLT) of the instances near `eye`, placed in the
-    /// world: lamps, braziers, glowing windows.
-    void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    /// world: lamps, braziers; and what of them glows (ModelData::glows):
+    /// lamp glass and lava outside, the windows at night by `nightLevel`
+    /// (wmo_sidn::windowLevel).
+    void collectRtLights(const glm::vec3& eye, float range, float nightLevel,
+                         std::vector<rt_lights::PointLight>& out) const;
 
     /**
      * Load WMO model and create GPU resources
@@ -796,6 +800,16 @@ private:
         glm::vec3 boundingBoxMax;
         glm::vec3 wmoAmbientColor{0.5f, 0.5f, 0.5f};  // From MOHD, used for interior lighting
         std::vector<pipeline::WMOLight> lights;        // MOLT, for the ray traced lighting
+        /// What glows of it, for the ray traced lighting (rt_lights::glowLight):
+        /// per group, its windows (MOMT 0x10, lit at night by their sidn
+        /// colour) and, outside, its bright unlit and additive batches where
+        /// no MOLT light sits already. Gathered as its groups load.
+        struct Glow {
+            rt_lights::GlowPatch patch;
+            bool window = false;    // lit at night only
+            bool interior = false;  // of an interior group: in its baked colours
+        };
+        std::vector<Glow> glows;
         uint32_t mohdFlags = 0;                        // MOHD flags (0x2: see floorAlong)
         bool isLowPlatform = false;
 
@@ -1028,6 +1042,8 @@ private:
     std::unordered_map<uint32_t, RtInstanceRecord> rtInstances_;  // WMO instance id ->
     uint64_t rtSyncGeneration_ = 0;
     void registerRtModel(uint32_t modelId, const ModelData& model);
+    /// ModelData::glows, from its groups' batches once they are loaded.
+    static void gatherGlows(ModelData& modelData);
     void releaseRtModel(uint32_t modelId);
 
     // Current map name for zone-specific floor cache

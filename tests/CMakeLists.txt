@@ -1270,6 +1270,12 @@ wowee_add_test(test_rt_point_lights
             ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_rt_glow ─────────────────────────────────────────────
+# Header-only: what glows gathered into patches at load, their lights, an
+# emitter's particles summed into one, and the lamps' light by day.
+wowee_add_test(test_rt_glow
+    SOURCES test_rt_glow.cpp)
+
 # ── test_eye_adaptation ──────────────────────────────────────
 # Header-only: the eye's exposure under the ray traced lighting - one in
 # daylight, part of the way elsewhere, quicker into the light than out.

@@ -325,7 +325,7 @@ constexpr SettingDesc kSchema[] = {
      "Ray traced. 100 is as it is now.", "", 100},
     {"dbglamplightintensity", "Lamps and lanterns: intensity (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "Street lamps, lanterns and sconces whose files carry no\n"
-     "light, lit at night.\n"
+     "light, lit day and night, brighter at night.\n"
      "Ray traced. 100 is as it is now.", "", 100},
     {"dbglamplightreach", "Lamps and lanterns: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "How far its light reaches: where the falloff starts and ends.\n"
@@ -342,6 +342,20 @@ constexpr SettingDesc kSchema[] = {
      "creatures.\n"
      "Ray traced. 100 is as it is now.", "", 100},
     {"dbgunitlightreach", "Unit lights: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
+     "How far its light reaches: where the falloff starts and ends.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgemissivelightintensity", "Glowing surfaces: intensity (%)", SettingKind::Int, 100, 1000, 10, "Debug Glow", "What glows",
+     "What glows of models and buildings: lamp glass, glow cards,\n"
+     "lava, crystals, windows at night. Brighter at night.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgemissivelightreach", "Glowing surfaces: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Glow", "",
+     "How far its light reaches: where the falloff starts and ends.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgparticlelightintensity", "Particles: intensity (%)", SettingKind::Int, 100, 1000, 10, "Debug Glow", "",
+     "Particle effects that glow - spells, flames, candles - one\n"
+     "light per emitter at the middle of its particles.\n"
+     "Ray traced. 100 is as it is now.", "", 100},
+    {"dbgparticlelightreach", "Particles: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Glow", "",
      "How far its light reaches: where the falloff starts and ends.\n"
      "Ray traced. 100 is as it is now.", "", 100},
 

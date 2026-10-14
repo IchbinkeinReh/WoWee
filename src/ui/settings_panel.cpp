@@ -702,6 +702,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 ImGui::Spacing();
                 ImGui::SeparatorText("Light sources");
                 drawSchemaCategory("Debug Lights", saveCallback);
+                drawSchemaCategory("Debug Glow", saveCallback);
                 ImGui::Spacing();
                 ImGui::SeparatorText("Shadows");
                 drawSchemaCategory("Debug Shadows", saveCallback);
@@ -711,6 +712,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 if (ImGui::Button("Restore Debug Graphics Defaults", ImVec2(-1, 0))) {
                     restoreSchemaDefaults("Debug Graphics");
                     restoreSchemaDefaults("Debug Lights");
+                    restoreSchemaDefaults("Debug Glow");
                     restoreSchemaDefaults("Debug Time");
                     restoreSchemaDefaults("Debug Shadows");
                     saveCallback();
@@ -908,6 +910,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     // The Debug Graphics settings: each applies all of them.
     "dbgview", "dbgtimeoverride", "dbgtime", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
     "dbgmodellightintensity", "dbgmodellightreach", "dbgfirelightintensity", "dbgfirelightreach", "dbglamplightintensity", "dbglamplightreach", "dbgbuildinglightintensity", "dbgbuildinglightreach", "dbgunitlightintensity", "dbgunitlightreach",
+    "dbgemissivelightintensity", "dbgemissivelightreach", "dbgparticlelightintensity", "dbgparticlelightreach",
     "dbgtracedsunshadow", "dbgmapsunshadow", "dbgpointshadow", "dbgbakedlampshadow", "dbgocclusion", "dbgterrainshadow", "dbgblobshadow",
     // Moved off the game's own Effects panel, so this list is now what
     // applies them at startup; the cvar store used to do it.
@@ -1084,6 +1087,10 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "dbgbuildinglightreach", .asInt = &SettingsPanel::pendingDbgBuildingLightReach},
     {.key = "dbgunitlightintensity", .asInt = &SettingsPanel::pendingDbgUnitLightIntensity},
     {.key = "dbgunitlightreach", .asInt = &SettingsPanel::pendingDbgUnitLightReach},
+    {.key = "dbgemissivelightintensity", .asInt = &SettingsPanel::pendingDbgEmissiveLightIntensity},
+    {.key = "dbgemissivelightreach", .asInt = &SettingsPanel::pendingDbgEmissiveLightReach},
+    {.key = "dbgparticlelightintensity", .asInt = &SettingsPanel::pendingDbgParticleLightIntensity},
+    {.key = "dbgparticlelightreach", .asInt = &SettingsPanel::pendingDbgParticleLightReach},
     {.key = "dbgshadowdarkness", .asInt = &SettingsPanel::pendingDbgShadowDarkness},
     {.key = "dbgtracedsunshadow", .asInt = &SettingsPanel::pendingDbgTracedSunShadow},
     {.key = "dbgmapsunshadow", .asInt = &SettingsPanel::pendingDbgMapSunShadow},
@@ -1308,6 +1315,10 @@ void SettingsPanel::applyLightingTune() {
     t.sourceReach[3] = pct(pendingDbgBuildingLightReach);
     t.sourceIntensity[4] = pct(pendingDbgUnitLightIntensity);
     t.sourceReach[4] = pct(pendingDbgUnitLightReach);
+    t.sourceIntensity[5] = pct(pendingDbgEmissiveLightIntensity);
+    t.sourceReach[5] = pct(pendingDbgEmissiveLightReach);
+    t.sourceIntensity[6] = pct(pendingDbgParticleLightIntensity);
+    t.sourceReach[6] = pct(pendingDbgParticleLightReach);
     t.shadowStrength = pct(pendingDbgShadowDarkness);
     t.tracedSunShadow = pct(pendingDbgTracedSunShadow);
     t.mapSunShadow = pct(pendingDbgMapSunShadow);
@@ -1558,6 +1569,10 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
                key == "dbgbuildinglightreach" ||
                key == "dbgunitlightintensity" ||
                key == "dbgunitlightreach" ||
+               key == "dbgemissivelightintensity" ||
+               key == "dbgemissivelightreach" ||
+               key == "dbgparticlelightintensity" ||
+               key == "dbgparticlelightreach" ||
                key == "dbgshadowdarkness" ||
                key == "dbgtracedsunshadow" ||
                key == "dbgmapsunshadow" ||

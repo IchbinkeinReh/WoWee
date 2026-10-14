@@ -6264,13 +6264,11 @@ void Renderer::recordRtLighting() {
         // Main thread only; kept to keep its capacity.
         static std::vector<rt_lights::PointLight> lightScratch;
         lightScratch.clear();
-        if (m2Renderer) {
-            // The lamps are lit as the windows are: at night (rt_lights::lampLight).
-            m2Renderer->setRtLampLevel(lightingManager ? wmo_sidn::windowLevel(lightingManager->getTimeOfDay())
-                                                       : 0.0f);
-            m2Renderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
-        }
-        if (wmoRenderer) wmoRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        // The lamps and what glows show more of their light at night, the
+        // windows only then (rt_lights::daylightScale).
+        const float nightLevel = lightingManager ? wmo_sidn::windowLevel(lightingManager->getTimeOfDay()) : 0.0f;
+        if (m2Renderer) m2Renderer->collectRtLights(in.cameraPos, kLightRange, nightLevel, lightScratch);
+        if (wmoRenderer) wmoRenderer->collectRtLights(in.cameraPos, kLightRange, nightLevel, lightScratch);
         if (characterRenderer) characterRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         // The Debug Graphics settings' strength and reach per kind of light.
         for (rt_lights::PointLight& l : lightScratch) {
@@ -6285,6 +6283,28 @@ void Renderer::recordRtLighting() {
         rt_lights::selectLights(lightScratch, in.cameraPos, kLightRange, RtLighting::kMaxPointLights,
                                 [&](const glm::vec3& p, float r) { return frustum.intersectsSphere(p, r); });
         rtLighting_->setPointLights(lightScratch);
+        // WOWEE_RT_LIGHT_DIAG=1: every five seconds, the lights kept by kind
+        // and the nearest of them, and the doodads near the camera with what
+        // each gives of light - to tell a fire that has none from one too
+        // weak to see.
+        static const bool lightDiag = core::envFlagEnabled("WOWEE_RT_LIGHT_DIAG", false);
+        static auto lastLightDiag = std::chrono::steady_clock::now();
+        if (lightDiag && std::chrono::steady_clock::now() - lastLightDiag > std::chrono::seconds(5)) {
+            lastLightDiag = std::chrono::steady_clock::now();
+            size_t bySource[rt_lights::kSourceCount] = {};
+            for (const auto& l : lightScratch) ++bySource[std::min(size_t(l.source), rt_lights::kSourceCount - 1)];
+            LOG_WARNING("RT lights: ", lightScratch.size(), " kept; model ", bySource[0], ", fire ", bySource[1],
+                     ", lamp ", bySource[2], ", building ", bySource[3], ", unit ", bySource[4], ", emissive ",
+                     bySource[5], ", particle ", bySource[6]);
+            for (const auto& l : lightScratch) {
+                const float dist = glm::length(l.position - in.cameraPos);
+                if (dist > 25.0f) continue;
+                LOG_WARNING("RT light: source ", int(l.source), " at ", dist, " yd (", l.position.x, ", ", l.position.y,
+                         ", ", l.position.z, ") colour (", l.color.r, ", ", l.color.g, ", ", l.color.b, ") reach ",
+                         l.attenuationStart, "-", l.attenuationEnd, l.baked ? " baked" : "");
+            }
+            if (m2Renderer) m2Renderer->logRtLightDiag(in.cameraPos, 20.0f);
+        }
     }
     {
         WOWEE_PROFILE_SCOPE("rt: record", Cpu);

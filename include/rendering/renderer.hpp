@@ -668,8 +668,8 @@ public:
         float bounce = 1.0f;            ///< ray traced: the probes' bounced light (Full mode)
         /// Ray traced, per kind of point light (rt_lights::Source): its
         /// colour, and its falloff window's start and end.
-        float sourceIntensity[5] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-        float sourceReach[5] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+        float sourceIntensity[7] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+        float sourceReach[7] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
         // Shadows.
         float shadowStrength = 0.6f;    ///< ray traced: how much of the light a shadow takes
         float tracedSunShadow = 1.0f;   ///< ray traced: how much of the traced sun shadows shows

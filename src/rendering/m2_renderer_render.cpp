@@ -78,29 +78,6 @@ const pipeline::M2TextureTransform* batchStageTransform(const M2ModelGPU& model,
     return &model.textureTransforms[transformIdx];
 }
 
-// A batch's colour and alpha for one instance's frame, for the shader's
-// colorMul; alpha -1 leaves the material's static values in charge. The
-// client samples both tracks on every draw (FUN_0081fe90).
-glm::vec4 batchColorMul(const M2ModelGPU& model, const M2ModelGPU::BatchGPU& batch,
-                        int sequenceIndex, float animTime, float globalTime) {
-    if (!batch.colorAnimated) return glm::vec4(1.0f, 1.0f, 1.0f, -1.0f);
-    glm::vec3 rgb = batch.tint;
-    float alpha = 1.0f;
-    if (batch.colorTrackIndex < model.colorRGBTracks.size()) {
-        rgb = m2_track::sampleVec3(model.colorRGBTracks[batch.colorTrackIndex], sequenceIndex,
-                                   animTime, globalTime, model.globalSequenceDurations, rgb);
-    }
-    if (batch.colorTrackIndex < model.colorAlphaTracks.size()) {
-        alpha *= m2_track::sampleFloat(model.colorAlphaTracks[batch.colorTrackIndex], sequenceIndex,
-                                       animTime, globalTime, model.globalSequenceDurations, 1.0f);
-    }
-    if (batch.weightTrackIndex < model.textureWeightTracks.size()) {
-        alpha *= m2_track::sampleFloat(model.textureWeightTracks[batch.weightTrackIndex], sequenceIndex,
-                                       animTime, globalTime, model.globalSequenceDurations, 1.0f);
-    }
-    return glm::vec4(glm::max(rgb, glm::vec3(0.0f)), glm::clamp(alpha, 0.0f, 1.0f));
-}
-
 // Push constants carry per-batch data only; per-instance data is in the
 // instance SSBO.
 struct M2PushConstants {

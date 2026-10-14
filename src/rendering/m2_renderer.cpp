@@ -2174,6 +2174,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
 
 
     registerRtModel(gpuModel, model);
+    if (!skyMode_) computeGlow(gpuModel, model);
     models[modelId] = std::move(gpuModel);
     spatialIndexDirty_ = true;  // Map may have rehashed - refresh cachedModel pointers
 
@@ -2189,6 +2190,64 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
 
 namespace wowee {
 namespace rendering {
+
+void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
+    for (const M2Instance& inst : instances) {
+        const M2ModelGPU* model = inst.cachedModel;
+        if (!model || glm::length(inst.position - eye) > radius) continue;
+        const bool listed = std::find(rtLitInstances_.begin(), rtLitInstances_.end(), inst.id) != rtLitInstances_.end();
+        LOG_WARNING("RT doodad '", model->name, "' at ", glm::length(inst.position - eye), " yd: lights ",
+                 model->lights.size(), model->isBrazierOrFire ? " fire" : "", model->isTorch ? " torch" : "",
+                 model->isLamp ? " lamp" : "", " glow ", model->glowPatches.size(), " emitters ",
+                 model->particleEmitters.size(), " live ", inst.particles.size(),
+                 inst.interiorLit ? " interior" : "", listed ? " listed" : "");
+    }
+}
+
+void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& model) {
+    gpuModel.glowPatches.clear();
+    if (model.vertices.empty() || model.indices.empty()) return;
+    // What gives a light already (an M2 light, fireLight, lampLight), and
+    // what glows without lighting anything: the sky, a trap, ground clutter,
+    // foliage, falling water, a lighthouse's beam.
+    if (!gpuModel.lights.empty() || gpuModel.isLamp || gpuModel.isBrazierOrFire || gpuModel.isTorch ||
+        gpuModel.isInvisibleTrap || gpuModel.isGroundDetail || gpuModel.isSkyBird || gpuModel.isLightBeam ||
+        gpuModel.isWaterfall || gpuModel.isFoliageLike || gpuModel.isSmallFoliage) {
+        return;
+    }
+    rt_lights::GlowBuilder builder;
+    for (uint32_t bi = 0; bi < gpuModel.batches.size(); ++bi) {
+        const auto& batch = gpuModel.batches[bi];
+        if (batch.batchOpacity < 0.01f || batch.starLayer) continue;
+        // The modulates darken what is behind them; nothing of them glows.
+        if (batch.blendMode >= 5) continue;
+        const bool additive = batch.blendMode == 3 || batch.blendMode == 4;
+        const bool unlit = (batch.materialFlags & 0x01u) != 0;
+        if (!additive && !unlit && !batch.glowCardLike) continue;
+        // What it shows: the texture's mean over what of it is visible, times
+        // how much of it is (an add by alpha, a cutout, a blend), times the
+        // batch's colour - here where it does not move, per frame where it
+        // does (collectRtLights).
+        glm::vec3 color(1.0f);
+        if (batch.texture) {
+            color = batch.texture->averageColor();
+            if (batch.blendMode != 0) color *= batch.texture->alphaCoverage();
+        }
+        if (!batch.colorAnimated) color *= batch.tint * batch.staticAlpha;
+        // An unlit opaque batch is lit by nothing but shows its texture as it
+        // is: a dark one (a statue's stone, a black cloth) glows at nothing.
+        const float bright = std::max(color.r, std::max(color.g, color.b));
+        if (!additive && !batch.glowCardLike && bright < 0.35f) continue;
+        const size_t end = std::min<size_t>(size_t(batch.indexStart) + batch.indexCount, model.indices.size());
+        for (size_t i = batch.indexStart; i + 2 < end; i += 3) {
+            const uint16_t a = model.indices[i], b = model.indices[i + 1], c = model.indices[i + 2];
+            if (a >= model.vertices.size() || b >= model.vertices.size() || c >= model.vertices.size()) continue;
+            builder.addTriangle(model.vertices[a].position, model.vertices[b].position, model.vertices[c].position,
+                                color, bi, batch.colorAnimated);
+        }
+    }
+    gpuModel.glowPatches = builder.finish();
+}
 
 void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& model) {
     if (!rtScene_ || model.vertices.empty() || model.indices.empty()) return;
@@ -2426,7 +2485,8 @@ void M2Renderer::syncRtScene() {
             model = &it->second;
         }
         if (scanning && model &&
-            (!model->lights.empty() || model->isBrazierOrFire || model->isTorch || model->isLamp)) {
+            (!model->lights.empty() || model->isBrazierOrFire || model->isTorch || model->isLamp ||
+             !model->glowPatches.empty())) {
             rtLitNext_.push_back(inst.id);
         }
         const uint32_t mesh = model ? model->rtMesh : RtScene::kInvalid;
@@ -2544,8 +2604,12 @@ void M2Renderer::syncRtScene() {
     }
 }
 
-void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
+void M2Renderer::collectRtLights(const glm::vec3& eye, float range, float nightLevel,
                                  std::vector<rt_lights::PointLight>& out) const {
+    // A lamp's glass and a glowing surface glow by day as by night; against
+    // the sun they light less (rt_lights::daylightScale).
+    const float lampLevel = rt_lights::daylightScale(nightLevel, rt_lights::kLampDayLevel);
+    const float glowLevel = rt_lights::daylightScale(nightLevel, rt_lights::kGlowDayLevel);
     for (uint32_t id : rtLitInstances_) {
         auto found = instanceIndexById.find(id);
         if (found == instanceIndexById.end() || found->second >= instances.size()) continue;
@@ -2558,9 +2622,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
         if (glm::dot(d, d) > reach * reach) continue;
         const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
         if (model->lights.empty() && model->isLamp) {
-            // A lamp with no light of its own, lit at night (rt_lights::lampLight).
-            if (rtLampLevel_ <= 0.0f) continue;
-            rt_lights::PointLight l = rt_lights::lampLight(model->lampLocal, inst.modelMatrix, rtLampLevel_);
+            // A lamp with no light of its own (rt_lights::lampLight).
+            rt_lights::PointLight l = rt_lights::lampLight(model->lampLocal, inst.modelMatrix, lampLevel);
             l.color *= fade;
             // A lamp of a WMO interior is in the interior's baked colours
             // already: there it only casts its shadows (PointLight::baked).
@@ -2568,9 +2631,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             out.push_back(l);
             continue;
         }
-        if (model->lights.empty()) {
+        if (model->lights.empty() && (model->isBrazierOrFire || model->isTorch)) {
             // A fire with no light of its own (rt_lights::fireLight).
-            if (!model->isBrazierOrFire && !model->isTorch) continue;
             const glm::vec3 bmin = model->hasVertexBox ? model->vertexBoxMin : model->boundMin;
             const glm::vec3 bmax = model->hasVertexBox ? model->vertexBoxMax : model->boundMax;
             rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch,
@@ -2578,6 +2640,28 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                                                            static_cast<float>(inst.id % 97u));
             l.color *= fade;
             out.push_back(l);
+            continue;
+        }
+        if (model->lights.empty()) {
+            // What glows of it (M2ModelGPU::glowPatches): a light at each
+            // patch, its colour times its batch's colour and transparency
+            // where those move.
+            const float scale2 = glm::dot(glm::vec3(inst.modelMatrix[0]), glm::vec3(inst.modelMatrix[0]));
+            for (const rt_lights::GlowPatch& patch : model->glowPatches) {
+                glm::vec3 color = patch.color * (glowLevel * fade);
+                if (patch.animatedBatch < model->batches.size()) {
+                    const glm::vec4 mul = batchColorMul(*model, model->batches[patch.animatedBatch],
+                                                        inst.currentSequenceIndex, inst.animTime,
+                                                        inst.globalSequenceTime);
+                    if (mul.a >= 0.0f) color *= glm::vec3(mul) * mul.a;
+                }
+                rt_lights::PointLight l = rt_lights::glowLight(
+                    glm::vec3(inst.modelMatrix * glm::vec4(patch.centre, 1.0f)), color, patch.area * scale2,
+                    rt_lights::Source::Emissive);
+                // Inside, the glow is in the baked colours as a lamp's is.
+                l.baked = inst.interiorLit;
+                out.push_back(l);
+            }
             continue;
         }
         for (const auto& light : model->lights) {
@@ -2588,6 +2672,11 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             l->color *= fade;
             out.push_back(*l);
         }
+    }
+    // The particle emitters' (prepareM2Particles), within the range.
+    for (const rt_lights::PointLight& l : rtParticleLights_) {
+        if (glm::length(l.position - eye) - l.attenuationEnd > range) continue;
+        out.push_back(l);
     }
 }
 
