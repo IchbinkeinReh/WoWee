@@ -481,7 +481,7 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_WHO] = [this](network::Packet& packet) {
         if (owner_.getState() == WorldState::IN_WORLD) handleWho(packet);
     };
-    table[Opcode::SMSG_WHOIS] = [this](network::Packet& packet) {
+    table[Opcode::SMSG_WHOIS] = [](network::Packet& packet) {
         // The game console's and nobody else's (0x006b3280 hands the text to
         // the console, 0x00765270) - this printed it into chat as "[Whois]".
         if (packet.getReadPos() < packet.getSize()) {
