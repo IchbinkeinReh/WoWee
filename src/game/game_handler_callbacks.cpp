@@ -4499,5 +4499,25 @@ const std::string& GameHandler::getSkillLineName(uint32_t skillLineId) const {
 }
 
 
+void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& packet) {
+    CalendarContext ctx{calendarData_, calendarEventDetail_};
+    ctx.player = playerGuid;
+    ctx.playerLevel = static_cast<uint8_t>(serverPlayerLevel_);
+    if (!applyCalendarPacket(which, packet, ctx)) {
+        LOG_WARNING("Calendar packet ", static_cast<int>(which),
+                    " could not be read whole; the calendar is left as it was");
+        packet.skipAll();
+        return;
+    }
+    packet.skipAll();
+    for (const auto& signal : ctx.signals) fireAddonEvent(signal.event, signal.args);
+    // 0x005bbbb0: an alert about an event the calendar has not loaded asks
+    // for the pending count instead.
+    if (ctx.askNumPending && isInWorld() && socket) {
+        network::Packet ask(wireOpcode(Opcode::CMSG_CALENDAR_GET_NUM_PENDING));
+        socket->send(ask);
+    }
+}
+
 } // namespace game
 } // namespace wowee

@@ -75,6 +75,11 @@ struct CalendarRaidLockout {
     uint32_t difficulty = 0;
     uint32_t secondsRemaining = 0;
     uint64_t instanceGuid = 0;
+    /// When it runs out, as the calendar places it: the packet's own "now" -
+    /// the zone time the calendar carries, or the packed time at the head of
+    /// a lockout packet - plus the whole minutes left (0x005c29c0,
+    /// 0x005c37d0, 0x005c3880 all add seconds / 60 to that date).
+    WowDate expires;
 };
 
 /// When a raid's lock resets, and how often.
@@ -113,6 +118,23 @@ struct CalendarData {
     uint32_t resetRelationTime = 0;
     std::vector<CalendarRaidReset> resets;
     std::vector<CalendarHoliday> holidays;
+
+    /// The client's pending-invite list: one event id per invitation still
+    /// waiting on an answer (0x005be590 appends, 0x005becd0 removes the
+    /// first match). Rebuilt from the invites when the calendar arrives.
+    std::vector<uint64_t> pendingInvites;
+    /// SMSG_CALENDAR_SEND_NUM_PENDING's count (0x00c207f4), which the
+    /// calendar arriving zeroes.
+    uint32_t serverPendingCount = 0;
+    /// Whether a whole calendar has arrived this session (0x00c207f2).
+    bool received = false;
+
+    /// CalendarGetNumPendingInvites: the larger of the server's count and the
+    /// list's (0x005bec70).
+    [[nodiscard]] uint32_t pendingInviteCount() const {
+        const auto listed = static_cast<uint32_t>(pendingInvites.size());
+        return listed > serverPendingCount ? listed : serverPendingCount;
+    }
 };
 
 /**
@@ -167,6 +189,93 @@ struct CalendarEventDetail {
 
 /// Read one SMSG_CALENDAR_SEND_EVENT. False when it runs out mid-row.
 bool parseCalendarSendEvent(network::Packet& packet, CalendarEventDetail& out);
+
+/// The calendar's event flags, as 0x005b7fd0 and the handlers test them.
+namespace calendar_flag {
+constexpr uint32_t kPlayer          = 0x0001;
+constexpr uint32_t kSystem          = 0x0004;
+constexpr uint32_t kHoliday         = 0x0008;
+constexpr uint32_t kInvitesLocked   = 0x0010;
+constexpr uint32_t kAnnouncement    = 0x0040;  ///< a guild announcement: no invites
+constexpr uint32_t kRaidLockout     = 0x0080;
+constexpr uint32_t kRaidReset       = 0x0200;
+constexpr uint32_t kGuildEvent      = 0x0400;
+}  // namespace calendar_flag
+
+/// CalendarInviteStatus values the handlers act on.
+namespace calendar_status {
+constexpr uint8_t kInvited     = 0;
+constexpr uint8_t kAccepted    = 1;
+constexpr uint8_t kConfirmed   = 3;
+constexpr uint8_t kSignedUp    = 6;
+constexpr uint8_t kNotSignedUp = 7;
+constexpr uint8_t kRemoved     = 9;
+}  // namespace calendar_status
+
+/// The calendarType string the interface is handed for an event's flags
+/// (0x005b7fd0).
+const char* calendarTypeForFlags(uint32_t flags);
+
+/// The calendar packets 0x005c3fe0 dispatches, plus the one it reaches by its
+/// default case.
+enum class CalendarPacket {
+    SendCalendar,          // 0x436
+    SendEvent,             // 0x437
+    FilterGuild,           // 0x438
+    ArenaTeam,             // 0x439
+    EventInvite,           // 0x43A
+    InviteRemoved,         // 0x43B
+    EventStatus,           // 0x43C
+    LockoutAdded,          // 0x43E
+    LockoutRemoved,        // 0x43F
+    InviteAlert,           // 0x440
+    InviteRemovedAlert,    // 0x441
+    InviteStatusAlert,     // 0x442
+    EventRemovedAlert,     // 0x443
+    EventUpdatedAlert,     // 0x444
+    ModeratorStatusAlert,  // 0x445
+    SendNumPending,        // 0x448
+    InviteNotes,           // 0x460
+    InviteNotesAlert,      // 0x461
+    LockoutUpdated,        // 0x471
+    ClearPendingAction,    // 0x4BB
+};
+
+/// One interface event, with its arguments, in the order wow.exe raises it.
+struct CalendarSignal {
+    std::string event;
+    std::vector<std::string> args;
+};
+
+/// What a calendar packet changes, and what it says about it.
+///
+/// `cal` and `open` are the client's two halves: the calendar's event list
+/// and the one event slot (0x00c207ec) that SMSG_CALENDAR_SEND_EVENT fills
+/// and CalendarNewEvent starts afresh. The handler fills `signals`; the
+/// caller raises them as they are.
+struct CalendarContext {
+    CalendarData& cal;
+    CalendarEventDetail& open;
+    uint64_t player = 0;
+    uint8_t playerLevel = 0;
+    std::vector<CalendarSignal> signals;
+    /// Ask the server for the pending count (CMSG_CALENDAR_GET_NUM_PENDING),
+    /// which two alerts do for an event the calendar has not yet loaded
+    /// (0x005bbbb0).
+    bool askNumPending = false;
+};
+
+/// Read one calendar packet the way 0x005c3fe0 and its handlers read it, and
+/// apply it. Every packet but the four alerts that return straight out of the
+/// dispatcher - and those whose clear-pending byte says otherwise - ends with
+/// CALENDAR_ACTION_PENDING false. False when the packet is cut short, with
+/// nothing applied.
+bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
+                         CalendarContext& ctx);
+
+/// A date moved on by whole minutes, weekday and all - what 0x0076c3f0 does
+/// to the date it is handed.
+WowDate addMinutes(const WowDate& date, int64_t minutes);
 
 /// An event being built up before it is sent.
 ///

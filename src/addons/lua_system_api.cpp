@@ -8022,8 +8022,9 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, ev.eventTime.fullYear());
             lua_pushnumber(L, ev.eventTime.hour);
             lua_pushnumber(L, ev.eventTime.minute);
-            constexpr uint32_t kFlagInvitesLocked = 0x1000;
-            lua_pushboolean(L, (ev.flags & kFlagInvitesLocked) ? 1 : 0);
+            // CALENDAR_FLAG_INVITES_LOCKED is 0x10, the bit the calendar's
+            // own handlers test (0x005c29c0, 0x005bf590); 0x1000 was read here.
+            lua_pushboolean(L, (ev.flags & wowee::game::calendar_flag::kInvitesLocked) ? 1 : 0);
             lua_pushboolean(L, 0);              // autoApprove
             lua_pushboolean(L, 0);              // pendingInvite
             lua_pushnumber(L, calendarInviteStatusFor(gh->getCalendarData(),

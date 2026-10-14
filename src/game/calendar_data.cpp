@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <ctime>
 
+#include "game/handler_types.hpp"
 #include "network/packet.hpp"
 #include "core/local_time.hpp"
 
@@ -108,6 +109,8 @@ bool parseCalendarSendCalendar(network::Packet& packet, CalendarData& out) {
         // ObjectGuid straight into the buffer, not WriteAsPacked like the two
         // creator fields above it.
         lock.instanceGuid = packet.readUInt64();
+        // From the zone time just read, in whole minutes (0x005c29c0).
+        lock.expires = addMinutes(out.zoneTime, lock.secondsRemaining / 60);
         out.lockouts.push_back(lock);
     }
 
@@ -164,7 +167,41 @@ int64_t dayNumber(int year, int month, int day) {
     return era * 146097 + doe - 719468;
 }
 
+/// The civil date of a day number, the inverse of dayNumber (Hinnant's
+/// civil_from_days).
+void civilFromDays(int64_t z, int& year, int& month, int& day) {
+    z += 719468;
+    const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    const int64_t doe = z - era * 146097;
+    const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const int64_t mp = (5 * doy + 2) / 153;
+    day = static_cast<int>(doy - (153 * mp + 2) / 5 + 1);
+    month = static_cast<int>(mp < 10 ? mp + 3 : mp - 9);
+    year = static_cast<int>(yoe + era * 400 + (month <= 2 ? 1 : 0));
+}
+
 }  // namespace
+
+WowDate addMinutes(const WowDate& date, int64_t minutes) {
+    const int64_t start = dayNumber(date.fullYear(), date.month, date.day) * 1440 +
+                          date.hour * 60 + date.minute;
+    const int64_t total = start + minutes;
+    int64_t days = total / 1440;
+    int64_t rest = total % 1440;
+    if (rest < 0) { rest += 1440; --days; }
+    WowDate out;
+    int y = 0, m = 0, d = 0;
+    civilFromDays(days, y, m, d);
+    out.yearSince2000 = y - 2000;
+    out.month = m;
+    out.day = d;
+    out.hour = static_cast<int>(rest / 60);
+    out.minute = static_cast<int>(rest % 60);
+    // 1970-01-01 was a Thursday, day number 0.
+    out.weekday = static_cast<int>(((days % 7) + 7 + 4) % 7);
+    return out;
+}
 
 std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
                                                     int month, int day,
@@ -194,30 +231,19 @@ std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
         }
     }
 
-    // Raid lockouts, which the packet dates only by how long they have left.
-    //
-    // serverTimeUnix is the server's own clock at the moment it sent the
-    // calendar, and every lockout counts down from there - so the expiry is
-    // that instant plus the remainder, and it is converted here rather than at
-    // each reader so the day it lands on and the time it shows cannot
-    // disagree.
-    if (data.serverTimeUnix != 0) {
-        for (size_t l = 0; l < data.lockouts.size(); ++l) {
-            const std::time_t expiry =
-                static_cast<std::time_t>(data.serverTimeUnix) +
-                static_cast<std::time_t>(data.lockouts[l].secondsRemaining);
-            std::tm tmv{};
-            tmv = core::localTime(expiry);
-            if (dayNumber(tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday) != wanted) {
-                continue;
-            }
-            CalendarDayEntry entry;
-            entry.kind = CalendarEntryKind::RaidLockout;
-            entry.index = l;
-            entry.hour = tmv.tm_hour;
-            entry.minute = tmv.tm_min;
-            out.push_back(entry);
-        }
+    // Raid lockouts, on the day and at the time they run out. The packets
+    // date a lockout only by how long it has left, and the client adds that
+    // to the zone time the same packet carries (0x005c29c0) - the server's
+    // own wall clock in the realm's zone, not this machine's.
+    for (size_t l = 0; l < data.lockouts.size(); ++l) {
+        const WowDate& when = data.lockouts[l].expires;
+        if (dayNumber(when.fullYear(), when.month, when.day) != wanted) continue;
+        CalendarDayEntry entry;
+        entry.kind = CalendarEntryKind::RaidLockout;
+        entry.index = l;
+        entry.hour = when.hour;
+        entry.minute = when.minute;
+        out.push_back(entry);
     }
 
     for (size_t e = 0; e < data.events.size(); ++e) {
@@ -292,6 +318,630 @@ bool parseCalendarSendEvent(network::Packet& packet, CalendarEventDetail& out) {
         if (!readTerminatedString(packet, inv.note)) return false;
         out.invitees.push_back(std::move(inv));
     }
+    return true;
+}
+
+
+const char* calendarTypeForFlags(uint32_t flags) {
+    using namespace calendar_flag;
+    // 0x005b7fd0, in its order: the player bit wins outright, then the guild
+    // announcement, the guild event, system, holiday, raid lockout and raid
+    // reset; anything left with 0x2 or 0x100 is the player's own.
+    if (flags & kPlayer) return "PLAYER";
+    if (flags & kAnnouncement) return "GUILD_ANNOUNCEMENT";
+    if (flags & kGuildEvent) return "GUILD_EVENT";
+    if (flags & kSystem) return "SYSTEM";
+    if (flags & kHoliday) return "HOLIDAY";
+    if (flags & kRaidLockout) return "RAID_LOCKOUT";
+    if (flags & kRaidReset) return "RAID_RESET";
+    if ((flags & 0x2u) == 0 && (flags & 0x100u) == 0) return "";
+    return "PLAYER";
+}
+
+namespace {
+
+/// Minutes since an arbitrary epoch, for ordering two dates.
+int64_t minuteKey(const WowDate& d) {
+    return dayNumber(d.fullYear(), d.month, d.day) * 1440 + d.hour * 60 + d.minute;
+}
+
+CalendarEvent* findEvent(CalendarData& cal, uint64_t eventId) {
+    for (auto& ev : cal.events)
+        if (ev.eventId == eventId) return &ev;
+    return nullptr;
+}
+
+CalendarInvite* findInvite(CalendarData& cal, uint64_t eventId) {
+    for (auto& inv : cal.invites)
+        if (inv.eventId == eventId) return &inv;
+    return nullptr;
+}
+
+/// The invite half of an event's row - the client keeps the invite id, the
+/// status and the sender on the event itself, so a row the calendar holds
+/// always has one to write to.
+CalendarInvite& inviteFor(CalendarData& cal, uint64_t eventId) {
+    if (CalendarInvite* inv = findInvite(cal, eventId)) return *inv;
+    CalendarInvite inv;
+    inv.eventId = eventId;
+    cal.invites.push_back(inv);
+    return cal.invites.back();
+}
+
+/// 0x005becd0: the first pending entry for the event, if there is one.
+bool removeFirstPending(CalendarData& cal, uint64_t eventId) {
+    auto it = std::find(cal.pendingInvites.begin(), cal.pendingInvites.end(), eventId);
+    if (it == cal.pendingInvites.end()) return false;
+    cal.pendingInvites.erase(it);
+    return true;
+}
+
+/// 0x005be950: the event out of the list, and its invite with it.
+bool removeEvent(CalendarData& cal, uint64_t eventId) {
+    auto it = std::find_if(cal.events.begin(), cal.events.end(),
+                           [eventId](const CalendarEvent& ev) { return ev.eventId == eventId; });
+    if (it == cal.events.end()) return false;
+    cal.events.erase(it);
+    cal.invites.erase(std::remove_if(cal.invites.begin(), cal.invites.end(),
+                                     [eventId](const CalendarInvite& inv) {
+                                         return inv.eventId == eventId;
+                                     }),
+                      cal.invites.end());
+    return true;
+}
+
+CalendarEventInvitee* findInvitee(CalendarEventDetail& open, uint64_t guid) {
+    for (auto& inv : open.invitees)
+        if (inv.guid == guid) return &inv;
+    return nullptr;
+}
+
+bool isOpen(const CalendarEventDetail& open, uint64_t eventId) {
+    return open.eventId != 0 && open.eventId == eventId;
+}
+
+void say(CalendarContext& ctx, const char* event, std::vector<std::string> args = {}) {
+    ctx.signals.push_back({event, std::move(args)});
+}
+
+bool readGuid(network::Packet& packet, uint64_t& out) {
+    if (!packet.hasFullPackedGuid()) return false;
+    out = packet.readPackedGuid();
+    return true;
+}
+
+/// The "signed up through the guild" mark (the row's 0x9c bit 8): set for a
+/// guild invite and for a guild event the player was never invited to.
+bool guildSignupRow(const CalendarData& cal, uint64_t eventId) {
+    for (const auto& inv : cal.invites)
+        if (inv.eventId == eventId) return inv.isGuildEvent;
+    return true;
+}
+
+}  // namespace
+
+bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
+                         CalendarContext& ctx) {
+    using namespace calendar_flag;
+    using namespace calendar_status;
+    CalendarData& cal = ctx.cal;
+    CalendarEventDetail& open = ctx.open;
+    // The dispatcher's ending (0x005c3fe0): CALENDAR_ACTION_PENDING false,
+    // unless the handler returned straight out or the packet's own byte said
+    // to leave the pending action alone.
+    bool clearsAction = true;
+
+    switch (which) {
+    case CalendarPacket::SendCalendar: {
+        CalendarData parsed;
+        if (!parseCalendarSendCalendar(packet, parsed)) return false;
+        // 0x005c29c0 zeroes the server's count first, then keeps a pending
+        // entry for each invite still unanswered whose event is listed, still
+        // ahead and not locked, from a sender it knows.
+        for (const auto& inv : parsed.invites) {
+            if (inv.status != kInvited) continue;
+            const CalendarEvent* ev = nullptr;
+            for (const auto& e : parsed.events)
+                if (e.eventId == inv.eventId) { ev = &e; break; }
+            if (!ev || (ev->flags & kInvitesLocked)) continue;
+            if (minuteKey(ev->eventTime) <= minuteKey(parsed.zoneTime)) continue;
+            const uint64_t sender = inv.isGuildEvent ? ev->creatorGuid : inv.creatorGuid;
+            if (sender == 0) continue;
+            parsed.pendingInvites.push_back(inv.eventId);
+        }
+        parsed.serverPendingCount = 0;
+        parsed.received = true;
+        cal = std::move(parsed);
+        say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        if (!cal.pendingInvites.empty()) say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+        break;
+    }
+
+    case CalendarPacket::SendEvent: {
+        CalendarEventDetail parsed;
+        if (!parseCalendarSendEvent(packet, parsed)) return false;
+        // The player's own status off the invite list - a guild event they
+        // are not on is "not signed up" (0x005f2c00).
+        int myStatus = -1;
+        for (const auto& inv : parsed.invitees)
+            if (ctx.player != 0 && inv.guid == ctx.player) { myStatus = inv.status; break; }
+        if (myStatus < 0 && (parsed.flags & kGuildEvent)) myStatus = kNotSignedUp;
+        open = std::move(parsed);
+        // An event that turns out to be waiting on the player's answer joins
+        // the pending list, once (0x005bed20).
+        if (myStatus == kInvited && minuteKey(open.eventTime) > minuteKey(cal.zoneTime) &&
+            std::find(cal.pendingInvites.begin(), cal.pendingInvites.end(), open.eventId) ==
+                cal.pendingInvites.end()) {
+            cal.pendingInvites.push_back(open.eventId);
+            say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+        }
+        // Opened, or just made: CALENDAR_OPEN_EVENT with the calendar type,
+        // CALENDAR_NEW_EVENT with whether it was a copy.
+        if (open.sendType == 1 || open.sendType == 2)
+            say(ctx, "CALENDAR_NEW_EVENT", {eventBool(open.sendType == 2)});
+        else
+            say(ctx, "CALENDAR_OPEN_EVENT", {calendarTypeForFlags(open.flags)});
+        break;
+    }
+
+    case CalendarPacket::FilterGuild:
+    case CalendarPacket::ArenaTeam: {
+        // The invite list for the event being made (0x005f2f90): a count, then
+        // a guid and a level each - in place of whatever list it had.
+        if (!packet.hasRemaining(4)) return false;
+        const uint32_t count = packet.readUInt32();
+        if (count > packet.getRemainingSize() / 2) return false;
+        std::vector<CalendarEventInvitee> rows;
+        rows.reserve(count);
+        bool listed = false;
+        for (uint32_t i = 0; i < count; ++i) {
+            CalendarEventInvitee row;
+            if (!readGuid(packet, row.guid)) return false;
+            if (!packet.hasRemaining(1)) return false;
+            row.level = packet.readUInt8();
+            if (ctx.player != 0 && row.guid == ctx.player) {
+                row.status = kConfirmed;
+                row.rank = 2;
+                listed = true;
+            }
+            rows.push_back(std::move(row));
+        }
+        // The player is on it whatever the list said, confirmed and its owner.
+        if (!listed) {
+            CalendarEventInvitee me;
+            me.guid = ctx.player;
+            me.level = ctx.playerLevel;
+            me.status = kConfirmed;
+            me.rank = 2;
+            rows.push_back(std::move(me));
+        }
+        open.invitees = std::move(rows);
+        say(ctx, "CALENDAR_UPDATE_INVITE_LIST", {eventBool(true)});
+        break;
+    }
+
+    case CalendarPacket::EventInvite: {
+        // 0x005bf030: invitee, event, invite, level, status, whether a status
+        // time follows, the time, and the clear-pending byte.
+        uint64_t guid = 0;
+        if (!readGuid(packet, guid)) return false;
+        if (!packet.hasRemaining(8 + 8 + 1 + 1 + 1)) return false;
+        const uint64_t eventId = packet.readUInt64();
+        const uint64_t inviteId = packet.readUInt64();
+        const uint8_t level = packet.readUInt8();
+        const uint8_t status = packet.readUInt8();
+        const uint8_t hasTime = packet.readUInt8();
+        uint32_t statusTime = 0;
+        if (hasTime == 1) {
+            if (!packet.hasRemaining(4)) return false;
+            statusTime = packet.readUInt32();
+        }
+        if (!packet.hasRemaining(1)) return false;
+        if (packet.readUInt8() == 0) clearsAction = false;
+        if (hasTime == 1 && findEvent(cal, eventId)) {
+            CalendarInvite& inv = inviteFor(cal, eventId);
+            inv.inviteId = inviteId;
+            inv.status = status;
+            say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        }
+        if (isOpen(open, eventId)) {
+            CalendarEventInvitee row;
+            row.guid = guid;
+            row.inviteId = inviteId;
+            row.level = level;
+            row.status = status;
+            // The player's own row is the owner's unless it came timed
+            // (0x005f32b0).
+            row.rank = (ctx.player != 0 && guid == ctx.player && hasTime != 1) ? 2 : 0;
+            row.isGuildMember = hasTime != 0;
+            row.statusTime = unpackWowPackedTime(statusTime);
+            open.invitees.push_back(std::move(row));
+            say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
+        }
+        break;
+    }
+
+    case CalendarPacket::InviteRemoved: {
+        // 0x005bf250: invitee, event, the event's flags, clear-pending.
+        uint64_t guid = 0;
+        if (!readGuid(packet, guid)) return false;
+        if (!packet.hasRemaining(8 + 4 + 1)) return false;
+        const uint64_t eventId = packet.readUInt64();
+        const uint32_t flags = packet.readUInt32();
+        if (packet.readUInt8() == 0) clearsAction = false;
+        // A guild event stays on the calendar, not signed up.
+        if ((flags & kGuildEvent) && findEvent(cal, eventId)) {
+            CalendarInvite& inv = inviteFor(cal, eventId);
+            inv.inviteId = 0;
+            inv.status = kNotSignedUp;
+            say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        }
+        if (isOpen(open, eventId)) {
+            open.invitees.erase(std::remove_if(open.invitees.begin(), open.invitees.end(),
+                                               [guid](const CalendarEventInvitee& r) {
+                                                   return r.guid == guid;
+                                               }),
+                                open.invitees.end());
+            say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
+        }
+        break;
+    }
+
+    case CalendarPacket::EventStatus: {
+        // 0x005bf420: invitee, event, its time, its flags, the status,
+        // clear-pending, the status time.
+        uint64_t guid = 0;
+        if (!readGuid(packet, guid)) return false;
+        if (!packet.hasRemaining(8 + 4 + 4 + 1 + 1 + 4)) return false;
+        const uint64_t eventId = packet.readUInt64();
+        packet.readUInt32();  // event time
+        packet.readUInt32();  // flags
+        const uint8_t status = packet.readUInt8();
+        if (packet.readUInt8() == 0) clearsAction = false;
+        const uint32_t statusTime = packet.readUInt32();
+        if (!findEvent(cal, eventId)) break;
+        if (ctx.player != 0 && guid == ctx.player) {
+            inviteFor(cal, eventId).status = status;
+            if (status == kInvited) {
+                cal.pendingInvites.push_back(eventId);
+                say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+            } else if (removeFirstPending(cal, eventId)) {
+                say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+            }
+            say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        }
+        if (isOpen(open, eventId)) {
+            if (CalendarEventInvitee* row = findInvitee(open, guid)) {
+                row->status = status;
+                if (statusTime != 0) row->statusTime = unpackWowPackedTime(statusTime);
+                say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
+            }
+        }
+        break;
+    }
+
+    case CalendarPacket::LockoutAdded: {
+        // 0x005c37d0: now, map, difficulty, seconds left, instance.
+        if (!packet.hasRemaining(4 + 4 + 4 + 4 + 8)) return false;
+        const WowDate now = unpackWowPackedTime(packet.readUInt32());
+        CalendarRaidLockout lock;
+        lock.mapId = packet.readUInt32();
+        lock.difficulty = packet.readUInt32();
+        lock.secondsRemaining = packet.readUInt32();
+        lock.instanceGuid = packet.readUInt64();
+        lock.expires = addMinutes(now, static_cast<int32_t>(lock.secondsRemaining) / 60);
+        cal.lockouts.push_back(lock);
+        say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        break;
+    }
+
+    case CalendarPacket::LockoutRemoved: {
+        // 0x005c07e0: a map of -1 clears every lockout and is all there is;
+        // otherwise difficulty, seconds and instance follow, -1 in either of
+        // the first and last matching any.
+        if (!packet.hasRemaining(4)) return false;
+        const uint32_t mapId = packet.readUInt32();
+        if (static_cast<int32_t>(mapId) < 0) {
+            cal.lockouts.clear();
+        } else {
+            if (!packet.hasRemaining(4 + 4 + 8)) return false;
+            const uint32_t difficulty = packet.readUInt32();
+            packet.readUInt32();  // seconds
+            const uint64_t instance = packet.readUInt64();
+            cal.lockouts.erase(
+                std::remove_if(cal.lockouts.begin(), cal.lockouts.end(),
+                               [&](const CalendarRaidLockout& l) {
+                                   if (l.mapId != mapId) return false;
+                                   if (difficulty != 0xFFFFFFFFu && l.difficulty != difficulty) return false;
+                                   if (instance != ~0ull && l.instanceGuid != instance) return false;
+                                   return true;
+                               }),
+                cal.lockouts.end());
+        }
+        say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        break;
+    }
+
+    case CalendarPacket::LockoutUpdated: {
+        // 0x005c3880: now, map, difficulty, the old seconds and the new.
+        if (!packet.hasRemaining(4 * 5)) return false;
+        const WowDate now = unpackWowPackedTime(packet.readUInt32());
+        const uint32_t mapId = packet.readUInt32();
+        const uint32_t difficulty = packet.readUInt32();
+        packet.readUInt32();  // the old seconds
+        const uint32_t seconds = packet.readUInt32();
+        const WowDate expires = addMinutes(now, static_cast<int32_t>(seconds) / 60);
+        for (auto& l : cal.lockouts) {
+            if (l.mapId != mapId || l.difficulty != difficulty) continue;
+            if (minuteKey(l.expires) == minuteKey(expires)) continue;
+            l.expires = expires;
+            l.secondsRemaining = seconds;
+        }
+        say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        break;
+    }
+
+    case CalendarPacket::InviteAlert: {
+        // 0x005c3ab0: the event's row and the invite, then creator and sender.
+        clearsAction = false;
+        if (!packet.hasRemaining(8 + 1)) return false;
+        CalendarEvent ev;
+        ev.eventId = packet.readUInt64();
+        if (!readTerminatedString(packet, ev.title)) return false;
+        if (!packet.hasRemaining(4 * 4 + 8 + 1 + 1)) return false;
+        ev.eventTimePacked = packet.readUInt32();
+        ev.eventTime = unpackWowPackedTime(ev.eventTimePacked);
+        ev.flags = packet.readUInt32();
+        ev.type = packet.readUInt32();
+        ev.dungeonId = static_cast<int32_t>(packet.readUInt32());
+        CalendarInvite inv;
+        inv.eventId = ev.eventId;
+        inv.inviteId = packet.readUInt64();
+        inv.status = packet.readUInt8();
+        inv.rank = packet.readUInt8();
+        uint64_t creator = 0, sender = 0;
+        if (!readGuid(packet, creator) || !readGuid(packet, sender)) return false;
+        ev.creatorGuid = creator;
+        // A sign-up row names the creator and carries the guild mark; any
+        // other names who sent it.
+        const bool signup = inv.status == kNotSignedUp || inv.status == kSignedUp;
+        inv.isGuildEvent = signup;
+        inv.creatorGuid = signup ? creator : sender;
+        removeEvent(cal, ev.eventId);
+        cal.events.push_back(ev);
+        cal.invites.push_back(inv);
+        if (inv.status == kInvited && !(ev.flags & kAnnouncement)) {
+            cal.pendingInvites.push_back(ev.eventId);
+            say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+        }
+        say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        break;
+    }
+
+    case CalendarPacket::InviteRemovedAlert: {
+        // 0x005c0ae0: event, its time, its flags, the status it was left at.
+        clearsAction = false;
+        if (!packet.hasRemaining(8 + 4 + 4 + 1)) return false;
+        const uint64_t eventId = packet.readUInt64();
+        packet.readUInt32();  // event time
+        packet.readUInt32();  // flags
+        packet.readUInt8();   // status: a mail goes with it unless 0 or 9
+        const CalendarEvent* ev = findEvent(cal, eventId);
+        bool dropEvent = true;
+        if (ev && (ev->flags & kGuildEvent) && guildSignupRow(cal, eventId)) {
+            // A guild event the player signed up to stays, not signed up.
+            inviteFor(cal, eventId).status = kNotSignedUp;
+            if (isOpen(open, eventId) && ctx.player != 0) {
+                open.invitees.erase(std::remove_if(open.invitees.begin(), open.invitees.end(),
+                                                   [&](const CalendarEventInvitee& r) {
+                                                       return r.guid == ctx.player;
+                                                   }),
+                                    open.invitees.end());
+                say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
+            }
+            say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+            dropEvent = false;
+        } else if (isOpen(open, eventId)) {
+            open = CalendarEventDetail{};
+            say(ctx, "CALENDAR_CLOSE_EVENT");
+        }
+        removeFirstPending(cal, eventId);
+        say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+        if (dropEvent && removeEvent(cal, eventId)) say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        break;
+    }
+
+    case CalendarPacket::InviteStatusAlert: {
+        // 0x005bf590: event, its time, its flags, the player's new status.
+        clearsAction = false;
+        if (!packet.hasRemaining(8 + 4 + 4 + 1)) return false;
+        const uint64_t eventId = packet.readUInt64();
+        packet.readUInt32();  // event time
+        packet.readUInt32();  // flags
+        const uint8_t status = packet.readUInt8();
+        CalendarEvent* ev = findEvent(cal, eventId);
+        if (!ev) {
+            // An event this calendar has never seen: ask how many are waiting
+            // instead, until the calendar itself has arrived.
+            if (!cal.received) ctx.askNumPending = true;
+            break;
+        }
+        inviteFor(cal, eventId).status = status;
+        if (!(ev->flags & kInvitesLocked)) {
+            if (status == kInvited) {
+                cal.pendingInvites.push_back(eventId);
+                say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+            } else if (removeFirstPending(cal, eventId)) {
+                say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+            }
+        }
+        if (isOpen(open, eventId) && ctx.player != 0) {
+            if (CalendarEventInvitee* row = findInvitee(open, ctx.player)) {
+                row->status = status;
+                say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
+            }
+        }
+        say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        break;
+    }
+
+    case CalendarPacket::EventRemovedAlert: {
+        // 0x005c0cf0: clear-pending, event, its time.
+        if (!packet.hasRemaining(1 + 8 + 4)) return false;
+        if (packet.readUInt8() == 0) clearsAction = false;
+        const uint64_t eventId = packet.readUInt64();
+        packet.readUInt32();
+        if (isOpen(open, eventId)) {
+            open = CalendarEventDetail{};
+            say(ctx, "CALENDAR_CLOSE_EVENT");
+        }
+        if (removeEvent(cal, eventId)) {
+            removeFirstPending(cal, eventId);
+            say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+            say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        }
+        break;
+    }
+
+    case CalendarPacket::EventUpdatedAlert: {
+        // 0x005c3d30: clear-pending, event, its old time, then the row as it
+        // now is - flags, time, type, dungeon, title - and, for the event that
+        // is open, from the flags again with the description, repeat, the
+        // invite limit and the lockout time (0x005f14b0).
+        if (!packet.hasRemaining(1 + 8 + 4)) return false;
+        if (packet.readUInt8() == 0) clearsAction = false;
+        const uint64_t eventId = packet.readUInt64();
+        packet.readUInt32();  // the old time
+        const size_t rest = packet.getReadPos();
+        if (!packet.hasRemaining(4 + 4 + 1 + 4)) return false;
+        const uint32_t flags = packet.readUInt32();
+        const uint32_t timePacked = packet.readUInt32();
+        const uint8_t type = packet.readUInt8();
+        const int32_t dungeonId = static_cast<int32_t>(packet.readUInt32());
+        std::string title;
+        if (!readTerminatedString(packet, title)) return false;
+        if (CalendarEvent* ev = findEvent(cal, eventId)) {
+            const bool wasLocked = (ev->flags & kInvitesLocked) != 0;
+            const bool nowLocked = (flags & kInvitesLocked) != 0;
+            ev->title = title;
+            ev->flags = flags;
+            ev->type = type;
+            ev->dungeonId = dungeonId;
+            ev->eventTimePacked = timePacked;
+            ev->eventTime = unpackWowPackedTime(timePacked);
+            const CalendarInvite* inv = findInvite(cal, eventId);
+            if (wasLocked != nowLocked && inv && inv->status == kInvited) {
+                if (!nowLocked) {
+                    cal.pendingInvites.push_back(eventId);
+                    say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+                } else if (removeFirstPending(cal, eventId)) {
+                    say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+                }
+            }
+            say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        } else if (!cal.received) {
+            ctx.askNumPending = true;
+        }
+        if (isOpen(open, eventId)) {
+            packet.setReadPos(rest);
+            if (!packet.hasRemaining(4 + 4 + 1 + 4)) return false;
+            const uint32_t oFlags = packet.readUInt32();
+            const uint32_t oTime = packet.readUInt32();
+            const uint8_t oType = packet.readUInt8();
+            const int32_t oDungeon = static_cast<int32_t>(packet.readUInt32());
+            std::string oTitle, oDesc;
+            if (!readTerminatedString(packet, oTitle)) return false;
+            if (!readTerminatedString(packet, oDesc)) return false;
+            if (!packet.hasRemaining(1 + 4 + 4)) return false;
+            open.flags = oFlags;
+            open.eventTimePacked = oTime;
+            open.eventTime = unpackWowPackedTime(oTime);
+            open.type = oType;
+            open.dungeonId = oDungeon;
+            open.title = std::move(oTitle);
+            open.description = std::move(oDesc);
+            open.repeatOption = packet.readUInt8();
+            open.maxInvites = packet.readUInt32();
+            open.timeZoneTime = unpackWowPackedTime(packet.readUInt32());
+            say(ctx, "CALENDAR_UPDATE_EVENT");
+        } else {
+            packet.skipAll();
+        }
+        break;
+    }
+
+    case CalendarPacket::ModeratorStatusAlert: {
+        // 0x005c0e70: invitee, event, rank, clear-pending.
+        uint64_t guid = 0;
+        if (!readGuid(packet, guid)) return false;
+        if (!packet.hasRemaining(8 + 1 + 1)) return false;
+        const uint64_t eventId = packet.readUInt64();
+        const uint8_t rank = packet.readUInt8();
+        if (packet.readUInt8() == 0) clearsAction = false;
+        if (isOpen(open, eventId)) {
+            if (CalendarEventInvitee* row = findInvitee(open, guid)) {
+                row->rank = rank;
+                say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
+            }
+        }
+        if (ctx.player != 0 && guid == ctx.player) {
+            if (CalendarInvite* inv = findInvite(cal, eventId)) inv->rank = rank;
+            say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
+        }
+        break;
+    }
+
+    case CalendarPacket::SendNumPending: {
+        // 0x005b7ce0: the count, announced when it moves.
+        if (!packet.hasRemaining(4)) return false;
+        const uint32_t count = packet.readUInt32();
+        const bool moved = count != cal.serverPendingCount;
+        cal.serverPendingCount = count;
+        if (moved) say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+        break;
+    }
+
+    case CalendarPacket::InviteNotes: {
+        // 0x005bbc20: invitee, event, the note, clear-pending.
+        uint64_t guid = 0;
+        if (!readGuid(packet, guid)) return false;
+        if (!packet.hasRemaining(8)) return false;
+        const uint64_t eventId = packet.readUInt64();
+        std::string note;
+        if (!readTerminatedString(packet, note)) return false;
+        if (!packet.hasRemaining(1)) return false;
+        if (packet.readUInt8() == 0) clearsAction = false;
+        if (isOpen(open, eventId)) {
+            if (CalendarEventInvitee* row = findInvitee(open, guid)) {
+                row->note = std::move(note);
+                say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
+            }
+        }
+        break;
+    }
+
+    case CalendarPacket::InviteNotesAlert: {
+        // 0x005bbcd0: event and the note, for the player's own row.
+        clearsAction = false;
+        if (!packet.hasRemaining(8)) return false;
+        const uint64_t eventId = packet.readUInt64();
+        std::string note;
+        if (!readTerminatedString(packet, note)) return false;
+        if (isOpen(open, eventId) && ctx.player != 0) {
+            if (CalendarEventInvitee* row = findInvitee(open, ctx.player)) {
+                row->note = std::move(note);
+                say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
+            }
+        }
+        break;
+    }
+
+    case CalendarPacket::ClearPendingAction:
+        // No body: the dispatcher's default ending is the whole of it.
+        break;
+    }
+
+    if (clearsAction) say(ctx, "CALENDAR_ACTION_PENDING", {eventBool(false)});
     return true;
 }
 

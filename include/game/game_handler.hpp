@@ -801,7 +801,8 @@ public:
     void requestBfMgrExit(uint32_t battleId);
 
     // WotLK Calendar
-    uint32_t getCalendarPendingInvites() const { return calendarPendingInvites_; }
+    /// CalendarGetNumPendingInvites (0x005bec70).
+    uint32_t getCalendarPendingInvites() const { return calendarData_.pendingInviteCount(); }
     void requestCalendar(); ///< Send CMSG_CALENDAR_GET_CALENDAR to the server
     /// The calendar the server last sent, empty until it has answered one.
     const CalendarData& getCalendarData() const { return calendarData_; }
@@ -5724,8 +5725,9 @@ private:
     void noteNpcAnswered() { pendingNpcHello_.guid = 0; }
     float       areaSpiritHealerSeconds_ = 0.0f;
 
-    // ---- WotLK Calendar: pending invite counter ----
-    uint32_t    calendarPendingInvites_ = 0; ///< Unacknowledged calendar invites (SMSG_CALENDAR_SEND_NUM_PENDING)
+    /// One calendar packet, read and applied as 0x005c3fe0 does, and the
+    /// events it raises fired.
+    void handleCalendarPacket(CalendarPacket which, network::Packet& packet);
     /// The whole calendar, as of the server's last answer to a request for it.
     CalendarData calendarData_;
     /// One event in full, as of the last one opened.

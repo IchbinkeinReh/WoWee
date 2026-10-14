@@ -388,43 +388,452 @@ TEST_CASE("An event packet cut short is refused", "[calendar]") {
 }
 
 TEST_CASE("A raid lockout lands on the day it expires", "[calendar]") {
-    // The packet dates a lockout only by how long it has left, so the day it
-    // belongs to is the server's clock plus that remainder. Getting it wrong
-    // puts the lockout on the wrong day with no sign of it - the entry is
-    // there, it is simply on a day the player is not looking at.
+    // The packet dates a lockout only by how long it has left, and the client
+    // places it at the calendar's zone time plus that, in whole minutes
+    // (0x005c29c0) - the realm's clock, not this machine's.
+    Packet p = fullCalendar();
+    CalendarData parsed;
+    REQUIRE(parseCalendarSendCalendar(p, parsed));
+    REQUIRE(parsed.lockouts.size() == 1);
+    const WowDate want = addMinutes(parsed.zoneTime, 86400 / 60);
+    CHECK(parsed.lockouts[0].expires.day == want.day);
+    CHECK(parsed.lockouts[0].expires.month == want.month);
+
     CalendarData cal;
-    // A fixed instant, then a lockout expiring two days later. Both are
-    // converted through localtime here for the same reason the code does:
-    // the calendar grid is in local days, and a UTC day boundary would put
-    // the lockout on the wrong side of midnight for half the world.
-    const std::time_t base = 1300000000;
-    cal.serverTimeUnix = static_cast<uint32_t>(base);
     CalendarRaidLockout lock;
     lock.mapId = 533;
-    lock.difficulty = 1;
-    lock.secondsRemaining = 2 * 24 * 60 * 60;
+    lock.expires = unpackWowPackedTime(0x09927000u + (21u << 6) + 30u);  // 10 Oct 2009 21:30
     cal.lockouts.push_back(lock);
-
-    const std::time_t expiry = base + lock.secondsRemaining;
-    std::tm tmv = wowee::core::localTime(expiry);
-
-    const auto onDay = calendarEntriesForDay(cal, tmv.tm_mon + 1, tmv.tm_mday,
-                                             tmv.tm_year + 1900);
+    const auto onDay = calendarEntriesForDay(cal, 10, 10, 2009);
     REQUIRE(onDay.size() == 1);
     CHECK(onDay[0].kind == CalendarEntryKind::RaidLockout);
-    CHECK(onDay[0].index == 0);
-    CHECK(onDay[0].hour == tmv.tm_hour);
-    CHECK(onDay[0].minute == tmv.tm_min);
+    CHECK(onDay[0].hour == 21);
+    CHECK(onDay[0].minute == 30);
+    CHECK(calendarEntriesForDay(cal, 10, 9, 2009).empty());
+}
 
-    // And on no other day.
-    const auto dayBefore = calendarEntriesForDay(cal, tmv.tm_mon + 1,
-                                                 tmv.tm_mday - 1,
-                                                 tmv.tm_year + 1900);
-    CHECK(dayBefore.empty());
+TEST_CASE("Adding minutes to a packed date crosses months, years and weekdays", "[calendar]") {
+    WowDate d;
+    d.yearSince2000 = 9; d.month = 12; d.day = 31; d.hour = 23; d.minute = 30;
+    const WowDate n = addMinutes(d, 45);
+    CHECK(n.fullYear() == 2010);
+    CHECK(n.month == 1);
+    CHECK(n.day == 1);
+    CHECK(n.hour == 0);
+    CHECK(n.minute == 15);
+    CHECK(n.weekday == 5);  // 1 January 2010 was a Friday
+    const WowDate leap = addMinutes(WowDate{0, 0, 0, 28, 2, 12}, 24 * 60);
+    CHECK(leap.month == 2);
+    CHECK(leap.day == 29);
+}
 
-    // With no server clock there is nothing to count from, so it is placed
-    // nowhere rather than on 1 January 1970.
-    cal.serverTimeUnix = 0;
-    CHECK(calendarEntriesForDay(cal, tmv.tm_mon + 1, tmv.tm_mday,
-                                tmv.tm_year + 1900).empty());
+// ---- The calendar's incremental packets, applied as wow.exe applies them ----
+//
+// Each packet below is laid out as AzerothCore's CalendarMgr writes it, and
+// the events checked are the ones 0x005c3fe0's handlers raise, in order.
+
+#include "game/handler_types.hpp"
+
+namespace {
+
+constexpr uint64_t kMe = 0x11ull;
+constexpr uint32_t kOct1 = 0x09902000u;   // Thursday 1 October 2009, 00:00
+constexpr uint32_t kOct10 = 0x09927000u;  // Saturday 10 October 2009, 00:00
+
+std::vector<std::string> names(const CalendarContext& ctx) {
+    std::vector<std::string> out;
+    for (const auto& s : ctx.signals) out.push_back(s.event);
+    return out;
+}
+
+/// A calendar with one event on it, the player invited and not yet answered.
+CalendarData calendarWithInvite(uint64_t eventId, uint32_t flags = 0) {
+    CalendarData cal;
+    cal.received = true;
+    cal.zoneTime = unpackWowPackedTime(kOct1);
+    CalendarEvent ev;
+    ev.eventId = eventId;
+    ev.title = "Raid";
+    ev.eventTimePacked = kOct10;
+    ev.eventTime = unpackWowPackedTime(kOct10);
+    ev.flags = flags;
+    cal.events.push_back(ev);
+    CalendarInvite inv;
+    inv.eventId = eventId;
+    inv.inviteId = 77;
+    inv.status = calendar_status::kInvited;
+    inv.creatorGuid = 0x42;
+    cal.invites.push_back(inv);
+    cal.pendingInvites.push_back(eventId);
+    return cal;
+}
+
+}  // namespace
+
+TEST_CASE("The whole calendar keeps its unanswered invites pending", "[calendar]") {
+    // fullCalendar's second invite is unanswered, but its event is dated
+    // before the zone time, so it is not ahead: nothing is pending.
+    Packet p = fullCalendar();
+    CalendarData cal;
+    cal.serverPendingCount = 5;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::SendCalendar, p, ctx));
+    CHECK(cal.received);
+    CHECK(cal.serverPendingCount == 0);
+    CHECK(cal.pendingInvites.empty());
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_EVENT_LIST",
+                                                 "CALENDAR_ACTION_PENDING"});
+    CHECK(ctx.signals.back().args == std::vector<std::string>{kEventNil});
+}
+
+TEST_CASE("An opened event says so with its calendar type", "[calendar]") {
+    Packet p = oneEvent();   // sendType 0, a guild event
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::SendEvent, p, ctx));
+    CHECK(open.eventId == 4242);
+    // The player (0x11) is on the list as accepted, so nothing is pending.
+    REQUIRE(ctx.signals.size() == 2);
+    CHECK(ctx.signals[0].event == "CALENDAR_OPEN_EVENT");
+    CHECK(ctx.signals[0].args == std::vector<std::string>{"GUILD_EVENT"});
+    CHECK(ctx.signals[1].event == "CALENDAR_ACTION_PENDING");
+}
+
+TEST_CASE("A copied event is a new event that says it was copied", "[calendar]") {
+    Packet src = oneEvent();
+    std::vector<uint8_t> bytes = src.getData();
+    bytes[0] = 2;   // CALENDAR_SENDTYPE_COPY
+    Packet p(0x437, bytes);
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::SendEvent, p, ctx));
+    CHECK(ctx.signals[0].event == "CALENDAR_NEW_EVENT");
+    CHECK(ctx.signals[0].args == std::vector<std::string>{"1"});
+}
+
+TEST_CASE("The guild filter fills the new event's invite list", "[calendar]") {
+    // Guild::MassInviteToEvent: a count, then a packed guid and a byte each.
+    Packet p(0x438);
+    p.writeUInt32(2);
+    p.writePackedGuid(0x21); p.writeUInt8(70);
+    p.writePackedGuid(0x22); p.writeUInt8(80);
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe, 80};
+    REQUIRE(applyCalendarPacket(CalendarPacket::FilterGuild, p, ctx));
+    CHECK(p.getRemainingSize() == 0);
+    REQUIRE(open.invitees.size() == 3);
+    CHECK(open.invitees[0].guid == 0x21);
+    CHECK(open.invitees[0].level == 70);
+    CHECK(open.invitees[1].level == 80);
+    // The player is added as the confirmed owner.
+    CHECK(open.invitees[2].guid == kMe);
+    CHECK(open.invitees[2].status == calendar_status::kConfirmed);
+    CHECK(open.invitees[2].rank == 2);
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_INVITE_LIST",
+                                                 "CALENDAR_ACTION_PENDING"});
+    CHECK(ctx.signals[0].args == std::vector<std::string>{"1"});
+}
+
+TEST_CASE("An invite to the open event joins its list", "[calendar]") {
+    // CalendarMgr::SendCalendarEventInvite: invitee, event, invite, level,
+    // status, whether a status time follows, it, and the sign-up byte.
+    Packet p(0x43A);
+    p.writePackedGuid(0x33);
+    p.writeUInt64(9);
+    p.writeUInt64(500);
+    p.writeUInt8(80);
+    p.writeUInt8(calendar_status::kInvited);
+    p.writeUInt8(1);
+    p.writeUInt32(kOct1);
+    p.writeUInt8(1);
+    CalendarData cal = calendarWithInvite(9);
+    CalendarEventDetail open;
+    open.eventId = 9;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::EventInvite, p, ctx));
+    CHECK(p.getRemainingSize() == 0);
+    REQUIRE(open.invitees.size() == 1);
+    CHECK(open.invitees[0].guid == 0x33);
+    CHECK(open.invitees[0].inviteId == 500);
+    CHECK(open.invitees[0].level == 80);
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_EVENT_LIST",
+                                                 "CALENDAR_UPDATE_INVITE_LIST",
+                                                 "CALENDAR_ACTION_PENDING"});
+}
+
+TEST_CASE("A sign-up invite leaves the pending action alone", "[calendar]") {
+    Packet p(0x43A);
+    p.writePackedGuid(kMe);
+    p.writeUInt64(9); p.writeUInt64(500);
+    p.writeUInt8(80); p.writeUInt8(calendar_status::kSignedUp);
+    p.writeUInt8(0);      // no status time
+    p.writeUInt8(0);      // the invitee sent it themself
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::EventInvite, p, ctx));
+    CHECK(p.getRemainingSize() == 0);
+    CHECK(ctx.signals.empty());
+}
+
+TEST_CASE("An invite removed takes the row off the open event", "[calendar]") {
+    // SendCalendarEventInviteRemove: invitee, event, flags, a byte.
+    Packet p(0x43B);
+    p.writePackedGuid(0x33);
+    p.writeUInt64(9);
+    p.writeUInt32(0);
+    p.writeUInt8(1);
+    CalendarData cal = calendarWithInvite(9);
+    CalendarEventDetail open;
+    open.eventId = 9;
+    CalendarEventInvitee row; row.guid = 0x33;
+    open.invitees.push_back(row);
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::InviteRemoved, p, ctx));
+    CHECK(open.invitees.empty());
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_INVITE_LIST",
+                                                 "CALENDAR_ACTION_PENDING"});
+}
+
+TEST_CASE("The player's own status answers the pending invite", "[calendar]") {
+    // SendCalendarEventStatus: invitee packed, event, its time, its flags,
+    // status, a byte, the status time - where this used to read two ids.
+    Packet p(0x43C);
+    p.writePackedGuid(kMe);
+    p.writeUInt64(9);
+    p.writeUInt32(kOct10);
+    p.writeUInt32(0);
+    p.writeUInt8(calendar_status::kAccepted);
+    p.writeUInt8(1);
+    p.writeUInt32(kOct1);
+    CalendarData cal = calendarWithInvite(9);
+    CalendarEventDetail open;
+    open.eventId = 9;
+    CalendarEventInvitee row; row.guid = kMe;
+    open.invitees.push_back(row);
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::EventStatus, p, ctx));
+    CHECK(p.getRemainingSize() == 0);
+    CHECK(cal.invites[0].status == calendar_status::kAccepted);
+    CHECK(cal.pendingInvites.empty());
+    CHECK(open.invitees[0].status == calendar_status::kAccepted);
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_PENDING_INVITES",
+                                                 "CALENDAR_UPDATE_EVENT_LIST",
+                                                 "CALENDAR_UPDATE_INVITE_LIST",
+                                                 "CALENDAR_ACTION_PENDING"});
+}
+
+TEST_CASE("Raid lockouts are added, moved and removed by their packets", "[calendar]") {
+    CalendarData cal;
+    CalendarEventDetail open;
+    {
+        // SendCalendarRaidLockout(add): now, map, difficulty, seconds, id.
+        Packet p(0x43E);
+        p.writeUInt32(kOct1);
+        p.writeUInt32(533); p.writeUInt32(1); p.writeUInt32(2 * 86400 + 90);
+        p.writeUInt64(0x1234);
+        CalendarContext ctx{cal, open, kMe};
+        REQUIRE(applyCalendarPacket(CalendarPacket::LockoutAdded, p, ctx));
+        CHECK(p.getRemainingSize() == 0);
+        REQUIRE(cal.lockouts.size() == 1);
+        CHECK(cal.lockouts[0].instanceGuid == 0x1234);
+        CHECK(cal.lockouts[0].expires.day == 3);
+        CHECK(cal.lockouts[0].expires.minute == 1);
+        CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_EVENT_LIST",
+                                                     "CALENDAR_ACTION_PENDING"});
+    }
+    {
+        // SendCalendarRaidLockoutUpdated: now, map, difficulty, 0, seconds.
+        Packet p(0x471);
+        p.writeUInt32(kOct1);
+        p.writeUInt32(533); p.writeUInt32(1); p.writeUInt32(0); p.writeUInt32(86400);
+        CalendarContext ctx{cal, open, kMe};
+        REQUIRE(applyCalendarPacket(CalendarPacket::LockoutUpdated, p, ctx));
+        CHECK(cal.lockouts[0].expires.day == 2);
+    }
+    {
+        // SendCalendarRaidLockout(remove): map, difficulty, 0, id.
+        Packet p(0x43F);
+        p.writeUInt32(533); p.writeUInt32(1); p.writeUInt32(0);
+        p.writeUInt64(0x1234);
+        CalendarContext ctx{cal, open, kMe};
+        REQUIRE(applyCalendarPacket(CalendarPacket::LockoutRemoved, p, ctx));
+        CHECK(p.getRemainingSize() == 0);
+        CHECK(cal.lockouts.empty());
+    }
+}
+
+TEST_CASE("An invite alert puts the event on the calendar and pends it", "[calendar]") {
+    // SendCalendarEventInviteAlert.
+    Packet p(0x440);
+    p.writeUInt64(31);
+    p.writeString("Ulduar");
+    p.writeUInt32(kOct10);
+    p.writeUInt32(0);
+    p.writeUInt32(0);            // type
+    p.writeUInt32(603);          // dungeon
+    p.writeUInt64(600);          // invite
+    p.writeUInt8(calendar_status::kInvited);
+    p.writeUInt8(0);             // rank
+    p.writePackedGuid(0x42);     // creator
+    p.writePackedGuid(0x43);     // sender
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::InviteAlert, p, ctx));
+    CHECK(p.getRemainingSize() == 0);
+    REQUIRE(cal.events.size() == 1);
+    CHECK(cal.events[0].title == "Ulduar");
+    CHECK(cal.events[0].dungeonId == 603);
+    CHECK(cal.events[0].creatorGuid == 0x42);
+    REQUIRE(cal.invites.size() == 1);
+    CHECK(cal.invites[0].inviteId == 600);
+    CHECK(cal.invites[0].creatorGuid == 0x43);
+    CHECK(cal.pendingInviteCount() == 1);
+    // No CALENDAR_ACTION_PENDING: the dispatcher returns before it.
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_PENDING_INVITES",
+                                                 "CALENDAR_UPDATE_EVENT_LIST"});
+}
+
+TEST_CASE("An invite removed alert takes the event off the calendar", "[calendar]") {
+    // SendCalendarEventInviteRemoveAlert: event, time, flags, status.
+    Packet p(0x441);
+    p.writeUInt64(9); p.writeUInt32(kOct10); p.writeUInt32(0);
+    p.writeUInt8(calendar_status::kRemoved);
+    CalendarData cal = calendarWithInvite(9);
+    CalendarEventDetail open;
+    open.eventId = 9;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::InviteRemovedAlert, p, ctx));
+    CHECK(cal.events.empty());
+    CHECK(cal.pendingInvites.empty());
+    CHECK(open.eventId == 0);
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_CLOSE_EVENT",
+                                                 "CALENDAR_UPDATE_PENDING_INVITES",
+                                                 "CALENDAR_UPDATE_EVENT_LIST"});
+}
+
+TEST_CASE("A status alert for an unknown event asks for the pending count", "[calendar]") {
+    // SendCalendarEventStatusAlert: event, time, flags, status.
+    Packet p(0x442);
+    p.writeUInt64(99); p.writeUInt32(kOct10); p.writeUInt32(0); p.writeUInt8(1);
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::InviteStatusAlert, p, ctx));
+    CHECK(ctx.askNumPending);
+    CHECK(ctx.signals.empty());
+}
+
+TEST_CASE("An event removed alert closes it and takes it off", "[calendar]") {
+    // SendCalendarEventRemovedAlert: a byte, event, time.
+    Packet p(0x443);
+    p.writeUInt8(1); p.writeUInt64(9); p.writeUInt32(kOct10);
+    CalendarData cal = calendarWithInvite(9);
+    CalendarEventDetail open;
+    open.eventId = 9;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::EventRemovedAlert, p, ctx));
+    CHECK(cal.events.empty());
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_CLOSE_EVENT",
+                                                 "CALENDAR_UPDATE_PENDING_INVITES",
+                                                 "CALENDAR_UPDATE_EVENT_LIST",
+                                                 "CALENDAR_ACTION_PENDING"});
+}
+
+TEST_CASE("An event updated alert rewrites the row and the open event", "[calendar]") {
+    // SendCalendarEventUpdateAlert.
+    Packet p(0x444);
+    p.writeUInt8(1);
+    p.writeUInt64(9);
+    p.writeUInt32(kOct10);                       // old time
+    p.writeUInt32(calendar_flag::kInvitesLocked);
+    p.writeUInt32(kOct1);                        // new time
+    p.writeUInt8(2);                             // type
+    p.writeUInt32(615);
+    p.writeString("Moved raid");
+    p.writeString("New plan");
+    p.writeUInt8(0);
+    p.writeUInt32(100);
+    p.writeUInt32(0);
+    CalendarData cal = calendarWithInvite(9);
+    CalendarEventDetail open;
+    open.eventId = 9;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::EventUpdatedAlert, p, ctx));
+    CHECK(p.getRemainingSize() == 0);
+    CHECK(cal.events[0].title == "Moved raid");
+    CHECK(cal.events[0].dungeonId == 615);
+    CHECK(cal.events[0].eventTime.day == 1);
+    // Locked now, so no longer waiting on the player.
+    CHECK(cal.pendingInvites.empty());
+    CHECK(open.description == "New plan");
+    CHECK(open.maxInvites == 100);
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_PENDING_INVITES",
+                                                 "CALENDAR_UPDATE_EVENT_LIST",
+                                                 "CALENDAR_UPDATE_EVENT",
+                                                 "CALENDAR_ACTION_PENDING"});
+}
+
+TEST_CASE("Moderator status and notes reach the open event's rows", "[calendar]") {
+    CalendarData cal = calendarWithInvite(9);
+    CalendarEventDetail open;
+    open.eventId = 9;
+    CalendarEventInvitee row; row.guid = kMe;
+    open.invitees.push_back(row);
+    {
+        // SendCalendarEventModeratorStatusAlert: invitee, event, rank, a byte.
+        Packet p(0x445);
+        p.writePackedGuid(kMe); p.writeUInt64(9); p.writeUInt8(1); p.writeUInt8(1);
+        CalendarContext ctx{cal, open, kMe};
+        REQUIRE(applyCalendarPacket(CalendarPacket::ModeratorStatusAlert, p, ctx));
+        CHECK(open.invitees[0].rank == 1);
+        CHECK(cal.invites[0].rank == 1);
+        CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_INVITE_LIST",
+                                                     "CALENDAR_UPDATE_EVENT_LIST",
+                                                     "CALENDAR_ACTION_PENDING"});
+    }
+    {
+        // The invitee, the event, the note and a byte - the event's id where
+        // the core names it an invite id, since that is what the client
+        // compares it against.
+        Packet p(0x460);
+        p.writePackedGuid(kMe); p.writeUInt64(9); p.writeString("late"); p.writeUInt8(0);
+        CalendarContext ctx{cal, open, kMe};
+        REQUIRE(applyCalendarPacket(CalendarPacket::InviteNotes, p, ctx));
+        CHECK(open.invitees[0].note == "late");
+        CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_INVITE_LIST"});
+    }
+    {
+        Packet p(0x461);
+        p.writeUInt64(9); p.writeString("on time");
+        CalendarContext ctx{cal, open, kMe};
+        REQUIRE(applyCalendarPacket(CalendarPacket::InviteNotesAlert, p, ctx));
+        CHECK(open.invitees[0].note == "on time");
+        CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_INVITE_LIST"});
+    }
+}
+
+TEST_CASE("The pending count and the cleared action", "[calendar]") {
+    CalendarData cal;
+    CalendarEventDetail open;
+    {
+        Packet p(0x448);
+        p.writeUInt32(3);
+        CalendarContext ctx{cal, open, kMe};
+        REQUIRE(applyCalendarPacket(CalendarPacket::SendNumPending, p, ctx));
+        CHECK(cal.pendingInviteCount() == 3);
+        CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_PENDING_INVITES",
+                                                     "CALENDAR_ACTION_PENDING"});
+    }
+    {
+        Packet p(0x4BB);
+        CalendarContext ctx{cal, open, kMe};
+        REQUIRE(applyCalendarPacket(CalendarPacket::ClearPendingAction, p, ctx));
+        CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_ACTION_PENDING"});
+    }
 }
