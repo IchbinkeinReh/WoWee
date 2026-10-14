@@ -9,6 +9,16 @@
 namespace wowee {
 namespace rendering {
 
+/// The middle of a surface's cell (`cellX`, `cellY`) on the ground, the
+/// point the liquid's sound is asked from (0x0079c360: a cell's corner less
+/// half a cell along each axis).
+inline glm::vec2 surfaceCellCentre(const glm::vec3& origin, const glm::vec3& stepX, const glm::vec3& stepY,
+                                   int cellX, int cellY) {
+    const glm::vec3 p = origin + stepX * (static_cast<float>(cellX) + 0.5f) +
+                        stepY * (static_cast<float>(cellY) + 0.5f);
+    return glm::vec2(p.x, p.y);
+}
+
 /// Where a world position falls in a water surface's own grid.
 ///
 /// A surface is an origin and two step vectors, one per grid axis, so a lake

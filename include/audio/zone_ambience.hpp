@@ -22,6 +22,8 @@
 // over five; one that comes as the camera enters or leaves liquid cuts both
 // at once and starts at full. Nothing left to play stops what plays at once.
 //
+// The one other ambient sound is the liquid's (0x004d2390), below.
+//
 // The client has nothing else: no birds or crickets of its own (they are in
 // the SoundAmbience files), no bells (a capital's hourly bell is the
 // server's SMSG_PLAY_SOUND - 0x19c2 and its kin appear nowhere in wow.exe),
@@ -159,6 +161,65 @@ inline std::optional<uint32_t> worldStateAmbience(const std::vector<WorldStateSo
         if (r.area == at.area) return found;
     }
     return found;
+}
+
+// ---------------------------------------------------------------------------
+// The liquid's sound (0x004d2390, every frame).
+//
+// Not while the camera is in liquid (0x004c8670): then nothing is asked and
+// what plays goes on. Otherwise at most every half second, and only once the
+// player has moved (0x004d2230), the liquid within 60 yards of the player
+// is asked for (0x0077f390): every liquid cell whose middle - its centre at
+// half way between the liquid's lowest and highest - is within 60 yards
+// (0x0079c360). A liquid whose LiquidType has flag 0x80 is passed over with
+// the player indoors. Of what is left, the cell nearest across the ground
+// wins (0x004d21b0), and its LiquidType's SoundID plays there: a 3D loop
+// rising over a second, at the sound's own volume and distances. While the
+// same sound wins within 20 yards of where it plays it moves there; a
+// different one, or one further off, fades the last out over a second and
+// starts anew. With nothing within 60 yards the sound wanted is none
+// (sound 0), and what plays fades out.
+
+inline constexpr float kLiquidQueryRadius = 60.0f;
+inline constexpr float kLiquidRecheckSeconds = 0.5f;
+inline constexpr float kLiquidFollowDistance = 20.0f;
+inline constexpr float kLiquidFadeSeconds = 1.0f;
+inline constexpr uint32_t kLiquidTypeQuietIndoors = 0x80;
+
+/// One liquid cell as the query finds it: its LiquidType row and where.
+struct LiquidCell {
+    uint32_t liquidType = 0;
+    glm::vec3 position{0.0f};
+};
+
+/// Every liquid cell within a radius of a point (0x0077f390).
+using LiquidQuery = std::function<std::vector<LiquidCell>(const glm::vec3&, float)>;
+
+/// The cell whose sound plays (0x004d21b0): the nearest across the ground,
+/// the first of equals.
+inline std::optional<LiquidCell> nearestLiquid(const std::vector<LiquidCell>& cells, const glm::vec3& player) {
+    std::optional<LiquidCell> best;
+    float bestDist = 0.0f;
+    for (const auto& c : cells) {
+        const glm::vec2 d(c.position.x - player.x, c.position.y - player.y);
+        const float dist = glm::dot(d, d);
+        if (best && bestDist <= dist) continue;
+        best = c;
+        bestDist = dist;
+    }
+    return best;
+}
+
+/// What becomes of the playing liquid sound when a sound is wanted at a
+/// place (0x004d2390). Sound 0 is none.
+enum class LiquidChange { Keep, Move, Restart };
+constexpr LiquidChange liquidChange(int32_t playingSound, const glm::vec3& playingAt, int32_t wantedSound,
+                                    const glm::vec3& wantedAt) {
+    if (playingSound != wantedSound) return LiquidChange::Restart;
+    if (playingAt == wantedAt) return LiquidChange::Keep;
+    const glm::vec3 d = playingAt - wantedAt;
+    return glm::dot(d, d) < kLiquidFollowDistance * kLiquidFollowDistance ? LiquidChange::Move
+                                                                         : LiquidChange::Restart;
 }
 
 }  // namespace wowee::audio::zone_ambience

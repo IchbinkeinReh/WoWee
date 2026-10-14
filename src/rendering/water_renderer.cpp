@@ -1680,6 +1680,49 @@ std::optional<uint16_t> WaterRenderer::getWaterTypeAt(float glX, float glY) cons
     return bestType;
 }
 
+std::vector<audio::zone_ambience::LiquidCell> WaterRenderer::liquidCellsNear(const glm::vec3& at, float radius,
+                                                                             bool linkedToBuilding) const {
+    std::vector<audio::zone_ambience::LiquidCell> cells;
+    const float radiusSq = radius * radius;
+    for (const auto& surface : surfaces) {
+        // A building's liquid is asked for only with the player linked to
+        // one of its groups (0x0077f390 -> 0x007a1b10, the groups through
+        // their portals). The client then leaves the ground's out where no
+        // group open to the sky is within a portal of the player's; that
+        // walk is not made here, and the ground's is always asked.
+        if (surface.wmoId != 0 && !linkedToBuilding) continue;
+        const uint32_t liquidType = surface.clientLiquidType != 0 ? surface.clientLiquidType : surface.liquidType;
+        const float z = (surface.minHeight + surface.maxHeight) * 0.5f;
+        const float dz = z - at.z;
+        if (dz * dz > radiusSq) continue;
+        // The surface's box on the ground first: most are far off.
+        const glm::vec3 corners[4] = {surface.origin, surface.origin + surface.stepX * float(surface.width),
+                                      surface.origin + surface.stepY * float(surface.height),
+                                      surface.origin + surface.stepX * float(surface.width) +
+                                          surface.stepY * float(surface.height)};
+        glm::vec2 lo(corners[0]), hi(corners[0]);
+        for (const auto& c : corners) {
+            lo = glm::min(lo, glm::vec2(c));
+            hi = glm::max(hi, glm::vec2(c));
+        }
+        const glm::vec2 nearest = glm::clamp(glm::vec2(at), lo, hi) - glm::vec2(at);
+        if (glm::dot(nearest, nearest) > radiusSq) continue;
+        for (int iy = 0; iy < surface.height; ++iy) {
+            for (int ix = 0; ix < surface.width; ++ix) {
+                if (!waterCellRendered(surface.mask, surface.wmoId, surface.width, surface.xOffset,
+                                       surface.yOffset, ix, iy)) {
+                    continue;
+                }
+                const glm::vec2 c = surfaceCellCentre(surface.origin, surface.stepX, surface.stepY, ix, iy);
+                const glm::vec3 p(c.x, c.y, z);
+                const glm::vec3 d = p - at;
+                if (glm::dot(d, d) <= radiusSq) cells.push_back({liquidType, p});
+            }
+        }
+    }
+    return cells;
+}
+
 bool WaterRenderer::isWmoWaterAt(float glX, float glY) const {
     for (const auto& surface : surfaces) {
         if (surface.wmoId == 0) continue;

@@ -38,11 +38,14 @@ struct ZoneAudioContext {
     float gameTimeHours = 12.0f;
     // Where the player is for the ambience (0x0078f020), none until known.
     std::optional<zone_ambience::Place> place;
+    glm::vec3 playerPosition{0.0f};
     // The Weather.dbc row SMSG_WEATHER last named, and a count of them.
     uint32_t weatherId = 0;
     uint32_t weatherSerial = 0;
     // The liquid the camera is in, 0 for none (0x00780620).
     uint32_t cameraLiquidType = 0;
+    // The liquid cells about a point (0x0077f390).
+    zone_ambience::LiquidQuery liquidQuery;
     // The world states the server has sent.
     const std::unordered_map<uint32_t, uint32_t>* worldStates = nullptr;
     // Terrain tile for offline zone lookup

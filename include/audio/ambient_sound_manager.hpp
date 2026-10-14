@@ -16,9 +16,9 @@ class AssetManager;
 namespace audio {
 
 /// The world's ambience as the client plays it (audio/zone_ambience.hpp):
-/// the ambience channel and its slots (0xb4ac50, 0x004c9910). The places,
-/// the weather and the liquid say what goes in the slots; this plays what
-/// they pick.
+/// the ambience channel and its slots (0xb4ac50, 0x004c9910), and the
+/// nearest liquid's sound (0x004d2390). The places, the weather and the
+/// liquid say what goes in the slots; this plays what they pick.
 class AmbientSoundManager {
 public:
     AmbientSoundManager() = default;
@@ -44,6 +44,11 @@ public:
     /// The ambience channel, once a frame (0x004c9910).
     void update(bool isDay, bool indoors);
 
+    using LiquidQuery = zone_ambience::LiquidQuery;
+    /// The liquid's sound, once a frame (0x004d2390), for the player at
+    /// `player`.
+    void updateLiquid(float deltaTime, const glm::vec3& player, bool indoors, const LiquidQuery& query);
+
     // Volume control: the ambience volume, over each sound's own.
     void setVolumeScale(float scale);
     [[nodiscard]] float getVolumeScale() const { return volumeScale_; }
@@ -62,8 +67,17 @@ private:
     };
     const Kit* kit(int32_t soundId);
     const std::vector<uint8_t>& pickFile(const Kit& k);
+    /// LiquidType.dbc's flags (+8) and SoundID (+0x10) by row.
+    struct LiquidRow {
+        uint32_t flags = 0;
+        int32_t sound = 0;
+    };
+    LiquidRow liquidRow(uint32_t liquidType);
+
     pipeline::AssetManager* assets_ = nullptr;
     std::unordered_map<int32_t, Kit> kits_;
+    std::unordered_map<uint32_t, LiquidRow> liquidRows_;
+    bool liquidRowsLoaded_ = false;
 
     zone_ambience::Slots slots_{};
     uint32_t cameraLiquid_ = 0;
@@ -77,6 +91,20 @@ private:
     };
     Channel current_;
     uint32_t fadingHandle_ = 0;
+
+    /// The liquid's sound: what plays where. Sound 0 is none.
+    struct Liquid {
+        uint32_t handle = 0;
+        int32_t sound = 0;
+        glm::vec3 at{0.0f};
+        float volume = 1.0f;
+    };
+    Liquid liquid_;
+    /// Where the last cell asked for was (0x004d2390 keeps it when none is
+    /// found), where the player was then, and the time since.
+    glm::vec3 liquidWantedAt_{0.0f};
+    glm::vec3 liquidAskedAt_{0.0f};
+    float liquidTimer_ = 0.0f;
 
     float volumeScale_ = 1.0f;
     bool initialized_ = false;

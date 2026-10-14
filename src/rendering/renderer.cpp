@@ -3055,13 +3055,18 @@ void Renderer::update(float deltaTime) {
             zctx.gameTimeHours = lightingManager->getTimeOfDayHours();
         }
         zctx.place = ambiencePlace_;
+        zctx.playerPosition = characterPosition;
         if (const auto* gh = core::Application::getInstance().getGameHandler()) {
             zctx.weatherId = gh->getWeatherType();
             zctx.weatherSerial = gh->getWeatherSerial();
             zctx.worldStates = &gh->getWorldStates();
         }
         zctx.cameraLiquidType = cameraLiquidType_;
-
+        if (waterRenderer) {
+            zctx.liquidQuery = [this](const glm::vec3& at, float radius) {
+                return waterRenderer->liquidCellsNear(at, radius, !playerLinks_.empty());
+            };
+        }
         if (terrainManager) {
             auto tile = terrainManager->getCurrentTile();
             zctx.tileX = tile.x;

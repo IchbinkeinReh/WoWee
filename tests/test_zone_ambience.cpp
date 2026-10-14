@@ -1,9 +1,11 @@
 // The world's ambience as the client picks it (audio/zone_ambience.hpp):
 // the slots and the one that plays (0x004c86f0), a place's SoundAmbience
-// (0x0078e9a0) and a world state's (0x004cbe70).
+// (0x0078e9a0), a world state's (0x004cbe70), and the liquid's sound
+// (0x004d2390).
 #include <catch_amalgamated.hpp>
 
 #include "audio/zone_ambience.hpp"
+#include "rendering/water_surface_grid.hpp"
 
 #include <unordered_map>
 
@@ -96,4 +98,41 @@ TEST_CASE("a world state's ambience is the row whose value it has and which name
     // A state with another value names nothing.
     states[2019] = 0;
     CHECK_FALSE(za::worldStateAmbience(rows, court, value));
+}
+
+TEST_CASE("the liquid nearest across the ground is the one heard", "[audio][ambience][liquid]") {
+    const glm::vec3 player(100.0f, 100.0f, 0.0f);
+    CHECK_FALSE(za::nearestLiquid({}, player));
+    // Far below but close across the ground beats near in height but further
+    // across it (0x004d21b0 measures x and y only).
+    const std::vector<za::LiquidCell> cells = {
+        {1, {110.0f, 100.0f, 0.0f}},
+        {2, {104.0f, 100.0f, -40.0f}},
+        {5, {96.0f, 100.0f, 0.0f}},  // as near: the first stays
+    };
+    const auto n = za::nearestLiquid(cells, player);
+    REQUIRE(n);
+    CHECK(n->liquidType == 2);
+}
+
+TEST_CASE("the liquid's sound follows within 20 yards and starts anew past them", "[audio][ambience][liquid]") {
+    const glm::vec3 at(0.0f, 0.0f, 0.0f);
+    CHECK(za::liquidChange(1111, at, 1111, at) == za::LiquidChange::Keep);
+    CHECK(za::liquidChange(1111, at, 1111, {19.0f, 0.0f, 0.0f}) == za::LiquidChange::Move);
+    CHECK(za::liquidChange(1111, at, 1111, {20.0f, 0.0f, 0.0f}) == za::LiquidChange::Restart);
+    // Another sound, or none (0), starts again where it is.
+    CHECK(za::liquidChange(1111, at, 1114, at) == za::LiquidChange::Restart);
+    CHECK(za::liquidChange(1111, at, 0, at) == za::LiquidChange::Restart);
+    CHECK(za::liquidChange(0, at, 0, at) == za::LiquidChange::Keep);
+}
+
+TEST_CASE("a liquid cell is heard from its middle", "[audio][ambience][liquid]") {
+    // A chunk's grid: 8 cells of 4.1666 yards each way, stepping down x and y
+    // as the client's do.
+    const float cell = 33.333333f / 8.0f;
+    const glm::vec3 origin(1000.0f, 2000.0f, 5.0f);
+    const glm::vec3 stepX(-cell, 0.0f, 0.0f), stepY(0.0f, -cell, 0.0f);
+    const glm::vec2 c = wowee::rendering::surfaceCellCentre(origin, stepX, stepY, 2, 3);
+    CHECK(c.x == Catch::Approx(1000.0f - 2.5f * cell));
+    CHECK(c.y == Catch::Approx(2000.0f - 3.5f * cell));
 }

@@ -2932,8 +2932,8 @@ wowee_add_test(test_texture_variants
     SOURCES test_texture_variants.cpp)
 
 # ── test_zone_ambience ───────────────────────────────────────
-# The ambience's slots, and a place's and a world state's ambience, as the
-# client picks them.
+# The ambience's slots, a place's and a world state's ambience, and the
+# liquid's sound, as the client picks them.
 wowee_add_test(test_zone_ambience
     SOURCES test_zone_ambience.cpp)
 

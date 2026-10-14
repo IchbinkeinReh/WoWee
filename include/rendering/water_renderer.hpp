@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "audio/zone_ambience.hpp"
 #include "rendering/client_liquid.hpp"
 #include "rendering/client_proc_water.hpp"
 #include "rendering/cube_texture.hpp"
@@ -211,6 +212,12 @@ public:
     /// underwater detection from elevated WMO water far above the camera.
     std::optional<float> getNearestWaterHeightAt(float glX, float glY, float queryZ, float maxAbove = 15.0f) const;
     std::optional<uint16_t> getWaterTypeAt(float glX, float glY) const;
+    /// Every liquid cell whose middle - its centre, half way up between the
+    /// liquid's lowest and highest - is within `radius` of `at`, with its
+    /// LiquidType row (0x0077f390 -> 0x0079c360): the ground's liquid, and
+    /// a building's with the player linked to one (0x007a1b10).
+    std::vector<audio::zone_ambience::LiquidCell> liquidCellsNear(const glm::vec3& at, float radius,
+                                                                  bool linkedToBuilding) const;
     bool isWmoWaterAt(float glX, float glY) const;
 
     int getSurfaceCount() const { return static_cast<int>(surfaces.size()); }

@@ -35,6 +35,10 @@ void AmbientSoundManager::stopAll() {
     engine.stopSound(fadingHandle_);
     current_ = {};
     fadingHandle_ = 0;
+    engine.stopSound(liquid_.handle);
+    liquid_ = {};
+    liquidWantedAt_ = liquidAskedAt_ = glm::vec3(0.0f);
+    liquidTimer_ = 0.0f;
     slots_ = {};
     cameraLiquid_ = 0;
     switchAtOnce_ = false;
@@ -147,10 +151,77 @@ void AmbientSoundManager::update(bool isDay, bool indoors) {
     }
 }
 
+AmbientSoundManager::LiquidRow AmbientSoundManager::liquidRow(uint32_t liquidType) {
+    if (!liquidRowsLoaded_ && assets_) {
+        liquidRowsLoaded_ = true;
+        // LiquidType.dbc: 0 ID, 2 Flags, 4 SoundID.
+        auto dbc = assets_->loadDBCOptional("LiquidType.dbc");
+        if (dbc && dbc->isLoaded() && dbc->getFieldCount() > 4) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                liquidRows_[dbc->getUInt32(i, 0)] = LiquidRow{dbc->getUInt32(i, 2), dbc->getInt32(i, 4)};
+        }
+    }
+    const auto it = liquidRows_.find(liquidType);
+    return it != liquidRows_.end() ? it->second : LiquidRow{};
+}
+
+void AmbientSoundManager::updateLiquid(float deltaTime, const glm::vec3& player, bool indoors,
+                                       const LiquidQuery& query) {
+    if (!initialized_ || !query) return;
+    // The camera in liquid: nothing asked, what plays goes on (0x004c8670).
+    if (cameraLiquid_ != 0) return;
+    // Every half second, once the player has moved (0x004d2230).
+    liquidTimer_ += deltaTime;
+    if (liquidTimer_ < za::kLiquidRecheckSeconds) return;
+    liquidTimer_ = 0.0f;
+    if (player == liquidAskedAt_) return;
+    liquidAskedAt_ = player;
+
+    std::vector<za::LiquidCell> cells = query(player, za::kLiquidQueryRadius);
+    if (indoors) {
+        std::erase_if(cells, [&](const za::LiquidCell& c) {
+            return (liquidRow(c.liquidType).flags & za::kLiquidTypeQuietIndoors) != 0;
+        });
+    }
+    int32_t wanted = 0;
+    if (const auto nearest = za::nearestLiquid(cells, player)) {
+        wanted = liquidRow(nearest->liquidType).sound;
+        liquidWantedAt_ = nearest->position;
+    }
+
+    auto& engine = AudioEngine::instance();
+    bool moved = false;
+    switch (za::liquidChange(liquid_.sound, liquid_.at, wanted, liquidWantedAt_)) {
+    case za::LiquidChange::Keep: break;
+    case za::LiquidChange::Move:
+        liquid_.at = liquidWantedAt_;
+        moved = true;
+        break;
+    case za::LiquidChange::Restart:
+        engine.stopSoundWithFade(liquid_.handle, za::kLiquidFadeSeconds);
+        liquid_ = {};
+        liquid_.sound = wanted;
+        liquid_.at = liquidWantedAt_;
+        break;
+    }
+    if (liquid_.handle == 0) {
+        if (const Kit* k = kit(liquid_.sound)) {
+            const float maxDistance = k->cutoff > 0.0f ? k->cutoff : 100.0f;
+            const float minDistance = k->minDistance > 0.0f ? std::min(k->minDistance, maxDistance) : 1.0f;
+            liquid_.volume = k->volume;
+            liquid_.handle = engine.playSound3DLooping(pickFile(*k), liquid_.at, k->volume * volumeScale_,
+                                                       maxDistance, minDistance, za::kLiquidFadeSeconds);
+        }
+    } else if (moved) {
+        engine.setSoundPosition(liquid_.handle, liquid_.at);
+    }
+}
+
 void AmbientSoundManager::setVolumeScale(float scale) {
     volumeScale_ = std::clamp(scale, 0.0f, 1.0f);
     auto& engine = AudioEngine::instance();
     engine.setSoundVolume(current_.handle, current_.volume * volumeScale_);
+    engine.setSoundVolume(liquid_.handle, liquid_.volume * volumeScale_);
 }
 
 } // namespace audio

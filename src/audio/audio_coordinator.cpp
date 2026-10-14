@@ -265,6 +265,7 @@ void AudioCoordinator::updateAmbience(const ZoneAudioContext& ctx) {
 
     const bool indoors = ambiencePlace_ && ambiencePlace_->indoors;
     ambience.update(screen_effect_audio::isSoundDaytime(ctx.gameTimeHours), indoors);
+    ambience.updateLiquid(ctx.deltaTime, ctx.playerPosition, indoors, ctx.liquidQuery);
 }
 
 void AudioCoordinator::updateZoneAudio(const ZoneAudioContext& ctx) {

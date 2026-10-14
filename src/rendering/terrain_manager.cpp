@@ -1274,8 +1274,9 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
     }
 
     case FinalizationPhase::WATER: {
-        // Terrain water was already loaded in TERRAIN phase. The client
-        // places no sound emitters on it.
+        // Terrain water was already loaded in TERRAIN phase. Its sound is the
+        // nearest liquid cell's, asked for as the player moves
+        // (AmbientSoundManager::updateLiquid), not emitters placed per tile.
         ft.phase = FinalizationPhase::AMBIENT;
         return false;
     }
