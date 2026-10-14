@@ -242,8 +242,15 @@ public:
     /// viewerPos is the character; portal culling seeds from it as well as from
     /// the camera, because at a doorway the two stand in different groups and
     /// neither alone is reliably the right place to start.
+    ///
+    /// The blended batches are drawn among the opaque ones, group by group, as
+    /// the client draws them - unless deferBlended, when only the opaque ones
+    /// are and the blended are kept for renderBlended, which the ray traced
+    /// lighting draws after its trace.
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                const glm::vec3* viewerPos = nullptr);
+                const glm::vec3* viewerPos = nullptr, bool deferBlended = false);
+    /// The blended batches the last render(deferBlended) kept, in its order.
+    void renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
 
     /**
      * Initialize shadow pipeline (Phase 7)
@@ -1161,6 +1168,14 @@ private:
     };
     std::vector<size_t> visibleInstances_;      // reused per frame
     std::vector<InstanceDrawList> drawLists_;    // reused per frame
+    /// A blended batch render(deferBlended) kept for renderBlended.
+    struct DeferredBlend {
+        const GroupResources* group = nullptr;
+        const GroupResources::MergedBatch* batch = nullptr;
+        size_t instanceIndex = 0;
+        WMOGroupPush push{};
+    };
+    std::vector<DeferredBlend> deferredBlends_;  // reused per frame
     std::unordered_set<uint32_t> portalVisibleGroupSet_; // reused per frame (portal culling scratch)
     /// The camera's interior pass (updateInteriorPass): per instance id, a
     /// flag per group, and the world bounds of the groups flagged.

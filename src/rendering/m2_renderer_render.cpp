@@ -101,6 +101,29 @@ glm::vec4 batchColorMul(const M2ModelGPU& model, const M2ModelGPU::BatchGPU& bat
     return glm::vec4(glm::max(rgb, glm::vec3(0.0f)), glm::clamp(alpha, 0.0f, 1.0f));
 }
 
+// Push constants carry per-batch data only; per-instance data is in the
+// instance SSBO.
+struct M2PushConstants {
+    int32_t texCoordSet;        // each stage's coordinate source (m2PackCoordSources)
+    int32_t isFoliage;          // -1 = sky, 0 = everything else
+    int32_t instanceDataOffset; // Base index into instance SSBO for this draw group
+    float swayRefHeight;        // Unused, zero; kept so the shader's layout holds
+    float swayAmp;              // Unused, zero; kept so the shader's layout holds
+    float plantHeight;          // Unused, zero; kept so the shader's layout holds
+};
+
+// Fill the model half of the push constants.
+//
+// There is no sway any more: the client moves a doodad only through its
+// own bones and texture tracks, so a tree, a banner or a field of clutter
+// moves exactly as its artist keyed it and the shader adds nothing.
+void fillModelPush(M2PushConstants& pc, bool sky) {
+    pc.isFoliage = sky ? -1 : 0;
+    pc.swayRefHeight = 0.0f;
+    pc.swayAmp = 0.0f;
+    pc.plantHeight = 0.0f;
+}
+
 } // namespace
 
 void M2Renderer::seedInstanceAnimation(const M2ModelGPU& model, uint32_t modelId,
@@ -1152,6 +1175,11 @@ void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) co
 
 void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
                         const BlendedInterleave* interleave) {
+    renderOpaque(cmd, perFrameSet, camera);
+    renderBlended(cmd, perFrameSet, interleave);
+}
+
+void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera) {
     if (instances.empty() || !opaquePipeline_) {
         return;
     }
@@ -1443,35 +1471,9 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
                     " visible of ", p.instances, " instances");
     };
 
-    uint32_t currentModelId = UINT32_MAX;
-    const M2ModelGPU* currentModel = nullptr;
-    bool currentModelValid = false;
-
     // State tracking
     VkPipeline currentPipeline = VK_NULL_HANDLE;
     VkDescriptorSet currentMaterialSet = VK_NULL_HANDLE;
-
-    // Push constants now carry per-batch data only; per-instance data is in instance SSBO.
-    struct M2PushConstants {
-        int32_t texCoordSet;        // each stage's coordinate source (m2PackCoordSources)
-        int32_t isFoliage;          // -1 = sky, 0 = everything else
-        int32_t instanceDataOffset; // Base index into instance SSBO for this draw group
-        float swayRefHeight;        // Unused, zero; kept so the shader's layout holds
-        float swayAmp;              // Unused, zero; kept so the shader's layout holds
-        float plantHeight;          // Unused, zero; kept so the shader's layout holds
-    };
-
-    // Fill the model half of the push constants.
-    //
-    // There is no sway any more: the client moves a doodad only through its
-    // own bones and texture tracks, so a tree, a banner or a field of clutter
-    // moves exactly as its artist keyed it and the shader adds nothing.
-    auto fillModelPush = [](M2PushConstants& pc, bool sky) {
-        pc.isFoliage = sky ? -1 : 0;
-        pc.swayRefHeight = 0.0f;
-        pc.swayAmp = 0.0f;
-        pc.plantHeight = 0.0f;
-    };
 
     // Validate per-frame descriptor set before any Vulkan commands
     if (!perFrameSet) {
@@ -1854,6 +1856,30 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         gpuOpaqueMark_ = UINT32_MAX;
     }
 
+    if (m2Profile) {
+        const auto m2T3 = std::chrono::steady_clock::now();
+        const auto ms = [](auto a, auto b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        sayPhases({.cull = ms(m2T0, m2T1),
+                   .sort = ms(m2T1, m2T2),
+                   .record = ms(m2T2, m2T3),
+                   .visible = sortedVisible_.size(),
+                   .instances = instances.size()});
+    }
+}
+
+void M2Renderer::renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
+                               const BlendedInterleave* interleave) {
+    if (instances.empty() || !opaquePipeline_ || !perFrameSet) return;
+    const uint32_t frameIndex = vkCtx_->getCurrentFrame();
+    auto* instSSBO = static_cast<M2InstanceGPU*>(instanceMapped_[frameIndex]);
+    uint32_t currentModelId = UINT32_MAX;
+    const M2ModelGPU* currentModel = nullptr;
+    bool currentModelValid = false;
+    VkPipeline currentPipeline = VK_NULL_HANDLE;
+    VkDescriptorSet currentMaterialSet = VK_NULL_HANDLE;
+
     // =====================================================================
     // Pass 2: Transparent/additive batches - back-to-front per instance
     // =====================================================================
@@ -1862,12 +1888,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
     // M2InstanceGPU entry and issues a single-instance indexed draw.
     std::sort(transparentVisible_.begin(), transparentVisible_.end(),
               [](const VisibleEntry& a, const VisibleEntry& b) { return a.distSq > b.distSq; });
-
-    currentModelId = UINT32_MAX;
-    currentModel = nullptr;
-    currentModelValid = false;
-    currentPipeline = opaquePipeline_;
-    currentMaterialSet = VK_NULL_HANDLE;
 
     // Everything the loop below keeps bound, bound again after another
     // pipeline layout has been drawn with in its middle.
@@ -1891,6 +1911,9 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         currentPipeline = VK_NULL_HANDLE;
         currentMaterialSet = VK_NULL_HANDLE;
     };
+    // The opaque half may have been recorded into another buffer: nothing of
+    // its state is taken for bound here.
+    rebindM2State();
 
     // Another renderer's blended models that stand behind the next doodad (or
     // behind every one that is left) are drawn first. They bind a state of
@@ -2093,17 +2116,6 @@ void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const 
         skyDiagLastTransparent_ = skyDiagDrawsTransparent_;
     }
 
-    if (m2Profile) {
-        const auto m2T3 = std::chrono::steady_clock::now();
-        const auto ms = [](auto a, auto b) {
-            return std::chrono::duration<double, std::milli>(b - a).count();
-        };
-        sayPhases({.cull = ms(m2T0, m2T1),
-                   .sort = ms(m2T1, m2T2),
-                   .record = ms(m2T2, m2T3),
-                   .visible = sortedVisible_.size(),
-                   .instances = instances.size()});
-    }
 }
 
 bool M2Renderer::initializeShadow(VkRenderPass shadowRenderPass) {

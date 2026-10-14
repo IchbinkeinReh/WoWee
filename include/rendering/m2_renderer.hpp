@@ -558,12 +558,21 @@ public:
         std::function<bool(float&)> peek;
         std::function<void()> draw;
     };
+    /// Both halves on one buffer, one after the other.
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
                 const BlendedInterleave* interleave = nullptr);
-    /// A GPU timestamp index (VkContext::gpuReserveMarks) the next render()
-    /// writes between its opaque and its blended halves, so the frame profiler
-    /// can tell the two apart. Used once and forgotten; set before the
-    /// recording thread starts.
+    /// The opaque half: culls and sorts what is visible, and draws what is
+    /// drawn with depth written.
+    void renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera);
+    /// The blended half, far to near, of what renderOpaque found: right after
+    /// it on the same buffer, or later on another (the ray traced lighting
+    /// draws it after the trace). Binds all it needs.
+    void renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
+                       const BlendedInterleave* interleave = nullptr);
+    /// A GPU timestamp index (VkContext::gpuReserveMarks) the next
+    /// renderOpaque() writes at its end, so the frame profiler can tell the
+    /// two halves apart. Used once and forgotten; set before the recording
+    /// thread starts.
     void setGpuOpaqueMark(uint32_t index) { gpuOpaqueMark_ = index; }
 
     /** Set the HiZ system for occlusion culling (Phase 6.3). nullptr disables HiZ. */

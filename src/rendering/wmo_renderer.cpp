@@ -1722,7 +1722,8 @@ void WMORenderer::prepareRender() {
 }
 
 void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                         const glm::vec3* viewerPos) {
+                         const glm::vec3* viewerPos, bool deferBlended) {
+    deferredBlends_.clear();
     if (!opaquePipeline_ || instances.empty()) {
         lastDrawCalls = 0;
         return;
@@ -1956,6 +1957,11 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
                 int neededPipeline = 0; // opaque
                 if (mb.isTransparent && transparentPipeline_) {
                     neededPipeline = 1; // transparent (alpha blend, no depth write)
+                    if (deferBlended) {
+                        deferredBlends_.push_back({.group = &group, .batch = &mb,
+                                                   .instanceIndex = dl.instanceIndex, .push = groupPush});
+                        continue;
+                    }
                 }
 
                 // Switch pipeline if needed (descriptor sets and push constants
@@ -1984,6 +1990,42 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
 
         lastPortalCulledGroups += dl.portalCulled;
         lastDistanceCulledGroups += dl.distanceCulled;
+    }
+}
+
+void WMORenderer::renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
+    if (deferredBlends_.empty() || !transparentPipeline_) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, transparentPipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
+                            0, 1, &perFrameSet, 0, nullptr);
+    size_t boundInstance = SIZE_MAX;
+    const GroupResources* boundGroup = nullptr;
+    for (const DeferredBlend& d : deferredBlends_) {
+        if (d.instanceIndex >= instances.size()) continue;
+        if (d.instanceIndex != boundInstance) {
+            const auto& instance = instances[d.instanceIndex];
+            WMOInstancePush push{};
+            push.model = instance.modelMatrix;
+            push.prevModel = instance.rtPrevFrame == currentFrameId ? instance.rtPrevModel : instance.modelMatrix;
+            vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(WMOInstancePush), &push);
+            boundInstance = d.instanceIndex;
+        }
+        vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           sizeof(WMOInstancePush), sizeof(WMOGroupPush), &d.push);
+        if (d.group != boundGroup) {
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &d.group->vertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, d.group->indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+            boundGroup = d.group;
+        }
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
+                                1, 1, &d.batch->materialSet, 0, nullptr);
+        for (const auto& dr : d.batch->draws) {
+            if (dr.indexCount == 0) continue;
+            vkCmdDrawIndexed(cmd, dr.indexCount, 1, dr.firstIndex, 0, 0);
+            lastDrawCalls++;
+        }
     }
 }
 
