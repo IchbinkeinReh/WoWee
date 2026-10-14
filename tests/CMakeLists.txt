@@ -1010,6 +1010,12 @@ wowee_add_test(test_movement_flags
 # was factored out. Same link set as the other two layout tests.
 wowee_add_packet_test(test_attacker_state_layout)
 
+# ── test_combat_log_layout ─────────────────────────────────────────────
+# The 3.3.5 combat log packets as TrinityCore and AzerothCore send them,
+# against wow.exe's readers: SMSG_ATTACKERSTATEUPDATE (0x00755630) and the
+# spell logs with full guids or effect tables.
+wowee_add_packet_test(test_combat_log_layout)
+
 # ── test_spell_damage_log_layout ───────────────────────────────────────
 # SMSG_SPELLNONMELEEDAMAGELOG before WotLK, pinned before the Classic and TBC
 # readers were merged. The expansions differ by one field - overkill - and

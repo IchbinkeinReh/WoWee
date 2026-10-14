@@ -5806,6 +5806,24 @@ void SpellHandler::handleSpellLogMiss(network::Packet& packet) {
     //                 + count × (uint64 victim + uint8 missInfo)
     // All expansions append uint32 reflectSpellId + uint8 reflectResult when
     // missInfo==REFLECT (11).
+    if (isActiveExpansion("wotlk")) {
+        // 0x006d3090: full guids and no reflect tail; a miss under the debug
+        // byte carries two floats and is not logged.
+        SpellLogMissData d;
+        if (!SpellLogMissParser::parse(packet, d)) {
+            packet.skipAll();
+            return;
+        }
+        if (d.debug) return;
+        for (const auto& miss : d.misses) {
+            const CombatTextEntry::Type ct = combatTextTypeFromSpellMissInfo(miss.missInfo);
+            if (d.casterGuid == owner_.getPlayerGuid())
+                owner_.addCombatText(ct, 0, d.spellId, true, 0, d.casterGuid, miss.victimGuid);
+            else if (miss.victimGuid == owner_.getPlayerGuid())
+                owner_.addCombatText(ct, 0, d.spellId, false, 0, d.casterGuid, miss.victimGuid);
+        }
+        return;
+    }
     const bool spellMissUsesFullGuid = isActiveExpansion("tbc");
     auto readSpellMissGuid = [&]() -> uint64_t {
         if (spellMissUsesFullGuid)
@@ -5985,6 +6003,13 @@ void SpellHandler::handleDispelFailed(network::Packet& packet) {
     //              [+ count × uint32 failedSpellId]
     // TBC:         uint64 caster + uint64 victim + uint32 spellId
     //              [+ count × uint32 failedSpellId]
+    // WotLK:       as TBC (0x00750ea0).
+    if (isActiveExpansion("wotlk")) {
+        DispelFailedData d;
+        DispelFailedParser::parse(packet, d);
+        packet.skipAll();
+        return;
+    }
     const bool dispelUsesFullGuid = isActiveExpansion("tbc");
     uint32_t dispelSpellId = 0;
     uint64_t dispelCasterGuid = 0;
@@ -6246,9 +6271,24 @@ void SpellHandler::handleExtraAuraInfo(network::Packet& packet, bool isInit) {
 }
 
 void SpellHandler::handleSpellDispelLog(network::Packet& packet) {
-    // WotLK/Classic/Turtle: packed casterGuid + packed victimGuid + uint32 dispelSpell + uint8 isStolen
-    // TBC:                  full uint64 casterGuid + full uint64 victimGuid + ...
+    // Classic/Turtle: packed casterGuid + packed victimGuid + uint32 dispelSpell + uint8 isStolen
+    // TBC:            full uint64 casterGuid + full uint64 victimGuid + ...
     // + uint32 count + count × (uint32 dispelled_spellId + uint32 unk)
+    // WotLK (0x006ce2b0): the victim first, and the byte after the spell
+    // dropped - a dispel is a dispel, a steal comes as SMSG_SPELLSTEALLOG.
+    if (isActiveExpansion("wotlk")) {
+        SpellDispelLogData d;
+        if (SpellDispelLogParser::parse(packet, d) &&
+            (d.victimGuid == owner_.getPlayerGuid() || d.casterGuid == owner_.getPlayerGuid())) {
+            const bool isPlayerCaster = d.casterGuid == owner_.getPlayerGuid();
+            for (const auto& aura : d.auras)
+                if (aura.spellId != 0)
+                    owner_.addCombatText(CombatTextEntry::DISPEL, 0, aura.spellId, isPlayerCaster, 0, d.casterGuid,
+                                         d.victimGuid);
+        }
+        packet.skipAll();
+        return;
+    }
     const bool dispelUsesFullGuid = isActiveExpansion("tbc");
     if (!packet.hasRemaining(dispelUsesFullGuid ? 8u : 1u)
         || (!dispelUsesFullGuid && !packet.hasFullPackedGuid())) {
@@ -6407,26 +6447,30 @@ void SpellHandler::handleSpellChanceProcLog(network::Packet& packet) {
 
 void SpellHandler::handleSpellInstaKillLog(network::Packet& packet) {
     // Sent when a unit is killed by a spell with SPELL_ATTR_EX2_INSTAKILL (e.g. Execute, Obliterate, etc.)
-    // WotLK/Classic/Turtle: packed_guid caster + packed_guid victim + uint32 spellId
-    // TBC:                  full uint64 caster + full uint64 victim + uint32 spellId
-    const bool ikUsesFullGuid = isActiveExpansion("tbc");
-    auto ik_rem = [&]() { return packet.getRemainingSize(); };
-    if (ik_rem() < (ikUsesFullGuid ? 8u : 1u)
-        || (!ikUsesFullGuid && !packet.hasFullPackedGuid())) {
-        packet.skipAll(); return;
+    // Classic/Turtle: packed_guid caster + packed_guid victim + uint32 spellId
+    // TBC, WotLK:     full uint64 caster + full uint64 victim + uint32 spellId (0x006ce260)
+    SpellLogGuidsData ik;
+    if (!isClassicLikeExpansion()) {
+        if (!SpellLogGuidsParser::parse(packet, ik, false)) {
+            packet.skipAll(); return;
+        }
+    } else {
+        if (!packet.hasFullPackedGuid()) {
+            packet.skipAll(); return;
+        }
+        ik.casterGuid = packet.readPackedGuid();
+        if (!packet.hasFullPackedGuid()) {
+            packet.skipAll(); return;
+        }
+        ik.victimGuid = packet.readPackedGuid();
+        if (!packet.hasRemaining(4)) {
+            packet.skipAll(); return;
+        }
+        ik.spellId = packet.readUInt32();
     }
-    uint64_t ikCaster = ikUsesFullGuid
-        ? packet.readUInt64() : packet.readPackedGuid();
-    if (ik_rem() < (ikUsesFullGuid ? 8u : 1u)
-        || (!ikUsesFullGuid && !packet.hasFullPackedGuid())) {
-        packet.skipAll(); return;
-    }
-    uint64_t ikVictim = ikUsesFullGuid
-        ? packet.readUInt64() : packet.readPackedGuid();
-    if (ik_rem() < 4) {
-        packet.skipAll(); return;
-    }
-    uint32_t ikSpell = packet.readUInt32();
+    const uint64_t ikCaster = ik.casterGuid;
+    const uint64_t ikVictim = ik.victimGuid;
+    const uint32_t ikSpell = ik.spellId;
     // Show kill/death feedback for the local player
     if (ikCaster == owner_.getPlayerGuid()) {
         owner_.addCombatText(CombatTextEntry::INSTAKILL, 0, ikSpell, true, 0, ikCaster, ikVictim);
@@ -6441,217 +6485,113 @@ void SpellHandler::handleSpellInstaKillLog(network::Packet& packet) {
     packet.skipAll();
 }
 
-// ---- handleSpellLogExecute per-effect parsers (extracted to reduce nesting) ----
+// ---- handleSpellLogExecute, per effect logged (extracted to reduce nesting) ----
 
-namespace {
-
-/// The target guid an effect-log entry opens with, in whichever form this
-/// server writes it.
-///
-/// SMSG_SPELLLOGEXECUTE names its target with a packed guid, and some cores
-/// write a full eight-byte one instead - which is what exeUsesFullGuid decides,
-/// once, for the whole packet. Each per-effect parser then had to read it that
-/// way, with the right guard for each form: eight bytes for a full guid, and
-/// for a packed one a byte plus the check that the mask's bytes are all there.
-///
-/// Written out in three of them. False means the packet cannot honour it, and
-/// every caller answers that the same way - abandon the rest of the packet,
-/// because a target read short leaves every field after it misaligned.
-bool readEffectLogTarget(network::Packet& packet, bool usesFullGuid, uint64_t& out) {
-    if (!packet.hasRemaining(usesFullGuid ? 8u : 1u)) return false;
-    if (!usesFullGuid && !packet.hasFullPackedGuid()) return false;
-    out = usesFullGuid ? packet.readUInt64() : packet.readPackedGuid();
-    return true;
-}
-
-}  // namespace
-
-void SpellHandler::parseEffectPowerDrain(network::Packet& packet, uint32_t effectLogCount,
-                                          uint64_t caster, uint32_t spellId,
-                                          bool isPlayerCaster, bool usesFullGuid) {
-    // SPELL_EFFECT_POWER_DRAIN: packed_guid target + uint32 amount + uint32 powerType + float multiplier
-    const uint64_t playerGuid = owner_.getPlayerGuid();
-    for (uint32_t li = 0; li < effectLogCount; ++li) {
-        uint64_t drainTarget = 0;
-        if (!readEffectLogTarget(packet, usesFullGuid, drainTarget)) { packet.skipAll(); break; }
-        if (!packet.hasRemaining(12)) { packet.skipAll(); break; }
-        uint32_t drainAmount = packet.readUInt32();
-        uint32_t drainPower  = packet.readUInt32(); // 0=mana,1=rage,3=energy,6=runic
-        float    drainMult   = packet.readFloat();
-
-        LOG_DEBUG("SMSG_SPELLLOGEXECUTE POWER_DRAIN: spell=", spellId,
-                  " power=", drainPower, " amount=", drainAmount,
-                  " multiplier=", drainMult);
-        if (drainAmount == 0) continue;
-        // 0x00752100: taken from the target's predicted power, happiness aside.
-        if (drainPower != 4) owner_.addPredictedPower(drainTarget, static_cast<int>(drainPower), -static_cast<int32_t>(drainAmount));
-
-        const auto powerByte = static_cast<uint8_t>(drainPower);
-        if (drainTarget == playerGuid)
-            owner_.addCombatText(CombatTextEntry::POWER_DRAIN,
-                                 static_cast<int32_t>(drainAmount), spellId, false,
-                                 powerByte, caster, drainTarget);
-        if (!isPlayerCaster) continue;
-        if (drainTarget != playerGuid)
-            owner_.addCombatText(CombatTextEntry::POWER_DRAIN,
-                                 static_cast<int32_t>(drainAmount), spellId, true,
-                                 powerByte, caster, drainTarget);
-        if (drainMult <= 0.0f || !std::isfinite(drainMult)) continue;
-        const uint32_t gained = static_cast<uint32_t>(
-            std::lround(static_cast<double>(drainAmount) * static_cast<double>(drainMult)));
-        if (gained > 0)
-            owner_.addCombatText(CombatTextEntry::ENERGIZE,
-                                 static_cast<int32_t>(gained), spellId, true,
-                                 powerByte, caster, caster);
-    }
-}
-
-void SpellHandler::parseEffectHealthLeech(network::Packet& packet, uint32_t effectLogCount,
-                                           uint64_t caster, uint32_t spellId,
-                                           bool isPlayerCaster, bool usesFullGuid) {
-    // SPELL_EFFECT_HEALTH_LEECH: packed_guid target + uint32 amount + float multiplier
-    const uint64_t playerGuid = owner_.getPlayerGuid();
-    for (uint32_t li = 0; li < effectLogCount; ++li) {
-        uint64_t leechTarget = 0;
-        if (!readEffectLogTarget(packet, usesFullGuid, leechTarget)) { packet.skipAll(); break; }
-        if (!packet.hasRemaining(8)) { packet.skipAll(); break; }
-        uint32_t leechAmount = packet.readUInt32();
-        float    leechMult   = packet.readFloat();
-
-        LOG_DEBUG("SMSG_SPELLLOGEXECUTE HEALTH_LEECH: spell=", spellId,
-                  " amount=", leechAmount, " multiplier=", leechMult);
-        if (leechAmount == 0) continue;
-
-        if (leechTarget == playerGuid) {
-            owner_.addCombatText(CombatTextEntry::SPELL_DAMAGE,
-                                 static_cast<int32_t>(leechAmount), spellId, false, 0,
-                                 caster, leechTarget);
-        } else if (isPlayerCaster) {
-            owner_.addCombatText(CombatTextEntry::SPELL_DAMAGE,
-                                 static_cast<int32_t>(leechAmount), spellId, true, 0,
-                                 caster, leechTarget);
-        }
-        if (!isPlayerCaster || leechMult <= 0.0f || !std::isfinite(leechMult)) continue;
-        const uint32_t gained = static_cast<uint32_t>(
-            std::lround(static_cast<double>(leechAmount) * static_cast<double>(leechMult)));
-        if (gained > 0)
-            owner_.addCombatText(CombatTextEntry::HEAL,
-                                 static_cast<int32_t>(gained), spellId, true, 0,
-                                 caster, caster);
-    }
-}
-
-void SpellHandler::parseEffectCreateItem(network::Packet& packet, uint32_t effectLogCount,
-                                          uint64_t /*caster*/, uint32_t spellId,
-                                          bool isPlayerCaster) {
-    // SPELL_EFFECT_CREATE_ITEM / CREATE_ITEM2: uint32 itemEntry per log entry
-    for (uint32_t li = 0; li < effectLogCount; ++li) {
-        if (!packet.hasRemaining(4)) break;
-        uint32_t itemEntry = packet.readUInt32();
-        if (!isPlayerCaster || itemEntry == 0) continue;
-
-        // No chat line here: SMSG_SPELLLOGEXECUTE is combat log only
-        // (0x006d3730), and the item is announced by the item push that
-        // brings it (LOOT_ITEM_CREATED_SELF). This printed "You create X
-        // using Y." in English.
-        owner_.ensureItemInfo(itemEntry);
-        LOG_DEBUG("SMSG_SPELLLOGEXECUTE CREATE_ITEM: spell=", spellId, " item=", itemEntry);
-    }
-}
-
-void SpellHandler::parseEffectInterruptCast(network::Packet& packet, uint32_t effectLogCount,
-                                             uint64_t caster, uint32_t spellId,
-                                             bool isPlayerCaster, bool usesFullGuid) {
-    // SPELL_EFFECT_INTERRUPT_CAST: packed_guid target + uint32 interrupted_spell_id
-    const uint64_t playerGuid = owner_.getPlayerGuid();
-    for (uint32_t li = 0; li < effectLogCount; ++li) {
-        uint64_t icTarget = 0;
-        if (!readEffectLogTarget(packet, usesFullGuid, icTarget)) { packet.skipAll(); break; }
-        if (!packet.hasRemaining(4)) { packet.skipAll(); break; }
-        uint32_t icSpellId = packet.readUInt32();
-        // Clear the interrupted unit's cast bar immediately
-        unitCastStates_.erase(icTarget);
-        noteUnitCastEnd(icTarget, false);
-        // Record interrupt in combat log when player is involved
-        if (isPlayerCaster || icTarget == playerGuid)
-            owner_.addCombatText(CombatTextEntry::INTERRUPT, 0, icSpellId, isPlayerCaster, 0,
-                                 caster, icTarget);
-        LOG_DEBUG("SMSG_SPELLLOGEXECUTE INTERRUPT_CAST: spell=", spellId,
-                  " interrupted=", icSpellId, " target=0x", std::hex, icTarget, std::dec);
-    }
-}
-
-void SpellHandler::parseEffectFeedPet(network::Packet& packet, uint32_t effectLogCount,
-                                       uint64_t /*caster*/, uint32_t /*spellId*/,
+void SpellHandler::logEffectPowerDrain(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
                                        bool isPlayerCaster) {
-    // SPELL_EFFECT_FEED_PET: uint32 itemEntry per log entry
-    for (uint32_t li = 0; li < effectLogCount; ++li) {
-        if (!packet.hasRemaining(4)) break;
-        uint32_t feedItem = packet.readUInt32();
-        if (!isPlayerCaster || feedItem == 0) continue;
+    // SPELL_EFFECT_POWER_DRAIN / POWER_BURN: target + amount + powerType + multiplier
+    const uint64_t playerGuid = owner_.getPlayerGuid();
+    const uint64_t drainTarget = entry.targetGuid;
+    const uint32_t drainAmount = entry.value1;
+    const uint32_t drainPower = entry.value2;  // 0=mana,1=rage,3=energy,6=runic
+    const float drainMult = entry.multiplier;
+    LOG_DEBUG("SMSG_SPELLLOGEXECUTE POWER_DRAIN: spell=", spellId,
+              " power=", drainPower, " amount=", drainAmount,
+              " multiplier=", drainMult);
+    if (drainAmount == 0) return;
+    // 0x00752100: taken from the target's predicted power, happiness aside.
+    if (drainPower != 4) owner_.addPredictedPower(drainTarget, static_cast<int>(drainPower), -static_cast<int32_t>(drainAmount));
 
-        // No chat line: combat log only (0x006d3730). This printed "You feed
-        // your pet X." in English.
-        owner_.ensureItemInfo(feedItem);
-        LOG_DEBUG("SMSG_SPELLLOGEXECUTE FEED_PET: item=", feedItem);
-    }
+    const auto powerByte = static_cast<uint8_t>(drainPower);
+    if (drainTarget == playerGuid)
+        owner_.addCombatText(CombatTextEntry::POWER_DRAIN,
+                             static_cast<int32_t>(drainAmount), spellId, false,
+                             powerByte, caster, drainTarget);
+    if (!isPlayerCaster) return;
+    if (drainTarget != playerGuid)
+        owner_.addCombatText(CombatTextEntry::POWER_DRAIN,
+                             static_cast<int32_t>(drainAmount), spellId, true,
+                             powerByte, caster, drainTarget);
+    if (drainMult <= 0.0f || !std::isfinite(drainMult)) return;
+    const uint32_t gained = static_cast<uint32_t>(
+        std::lround(static_cast<double>(drainAmount) * static_cast<double>(drainMult)));
+    if (gained > 0)
+        owner_.addCombatText(CombatTextEntry::ENERGIZE,
+                             static_cast<int32_t>(gained), spellId, true,
+                             powerByte, caster, caster);
+}
+
+void SpellHandler::logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, bool isPlayerCaster) {
+    // SPELL_EFFECT_CREATE_ITEM / CREATE_RANDOM_ITEM / CREATE_ITEM_2: the item
+    const uint32_t itemEntry = entry.value1;
+    if (!isPlayerCaster || itemEntry == 0) return;
+    // No chat line here: SMSG_SPELLLOGEXECUTE is combat log only
+    // (0x006d3730), and the item is announced by the item push that
+    // brings it (LOOT_ITEM_CREATED_SELF). This printed "You create X
+    // using Y." in English.
+    owner_.ensureItemInfo(itemEntry);
+    LOG_DEBUG("SMSG_SPELLLOGEXECUTE CREATE_ITEM: spell=", spellId, " item=", itemEntry);
+}
+
+void SpellHandler::logEffectInterruptCast(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
+                                          bool isPlayerCaster) {
+    // SPELL_EFFECT_INTERRUPT_CAST: target + interrupted_spell_id
+    const uint64_t playerGuid = owner_.getPlayerGuid();
+    const uint64_t icTarget = entry.targetGuid;
+    const uint32_t icSpellId = entry.value1;
+    // Clear the interrupted unit's cast bar immediately
+    unitCastStates_.erase(icTarget);
+    noteUnitCastEnd(icTarget, false);
+    // Record interrupt in combat log when player is involved
+    if (isPlayerCaster || icTarget == playerGuid)
+        owner_.addCombatText(CombatTextEntry::INTERRUPT, 0, icSpellId, isPlayerCaster, 0,
+                             caster, icTarget);
+    LOG_DEBUG("SMSG_SPELLLOGEXECUTE INTERRUPT_CAST: spell=", spellId,
+              " interrupted=", icSpellId, " target=0x", std::hex, icTarget, std::dec);
+}
+
+void SpellHandler::logEffectFeedPet(const SpellLogExecuteEntry& entry, bool isPlayerCaster) {
+    // SPELL_EFFECT_FEED_PET: the item
+    const uint32_t feedItem = entry.value1;
+    if (!isPlayerCaster || feedItem == 0) return;
+    // No chat line: combat log only (0x006d3730). This printed "You feed
+    // your pet X." in English.
+    owner_.ensureItemInfo(feedItem);
+    LOG_DEBUG("SMSG_SPELLLOGEXECUTE FEED_PET: item=", feedItem);
 }
 
 void SpellHandler::handleSpellLogExecute(network::Packet& packet) {
     // WotLK/Classic/Turtle: packed_guid caster + uint32 spellId + uint32 effectCount
     // TBC:                  uint64 caster + uint32 spellId + uint32 effectCount
-    // Per-effect: uint8 effectType + uint32 effectLogCount + effect-specific data
-    // Effect 10 = POWER_DRAIN:   packed_guid target + uint32 amount + uint32 powerType + float multiplier
-    // Effect 11 = HEALTH_LEECH:  packed_guid target + uint32 amount + float multiplier
-    // Effect 24 = CREATE_ITEM:   uint32 itemEntry
-    // Effect 26 = INTERRUPT_CAST: packed_guid target + uint32 interrupted_spell_id
-    // Effect 49 = FEED_PET:      uint32 itemEntry
-    // Effect 114= CREATE_ITEM2:  uint32 itemEntry (same layout as CREATE_ITEM)
-    const bool exeUsesFullGuid = isActiveExpansion("tbc");
-    if (!packet.hasRemaining(exeUsesFullGuid ? 8u : 1u) ) {
-        packet.skipAll(); return;
-    }
-    if (!exeUsesFullGuid && !packet.hasFullPackedGuid()) {
-        packet.skipAll(); return;
-    }
-    uint64_t exeCaster = exeUsesFullGuid
-        ? packet.readUInt64() : packet.readPackedGuid();
-    if (!packet.hasRemaining(8)) {
-        packet.skipAll(); return;
-    }
-    uint32_t exeSpellId = packet.readUInt32();
-    uint32_t exeEffectCount = packet.readUInt32();
-    exeEffectCount = std::min(exeEffectCount, 32u); // sanity
+    // Per effect: uint32 effect + uint32 count + what 0x006d3220 reads for it
+    // (SpellLogExecuteParser) - nothing for an effect it does not name.
+    SpellLogExecuteData data;
+    const bool ok = SpellLogExecuteParser::parse(packet, data, isActiveExpansion("tbc"));
+    packet.skipAll();
+    if (!ok && data.entries.empty()) return;
 
-    const bool isPlayerCaster = (exeCaster == owner_.getPlayerGuid());
-    for (uint32_t ei = 0; ei < exeEffectCount; ++ei) {
-        if (!packet.hasRemaining(8)) break;
-        uint32_t effectType     = packet.readUInt32();
-        uint32_t effectLogCount = packet.readUInt32();
-        effectLogCount = std::min(effectLogCount, 64u); // sanity
-
-        if (effectType == SpellEffect::POWER_DRAIN) {
-            parseEffectPowerDrain(packet, effectLogCount, exeCaster, exeSpellId,
-                                  isPlayerCaster, exeUsesFullGuid);
-        } else if (effectType == SpellEffect::HEALTH_LEECH) {
-            parseEffectHealthLeech(packet, effectLogCount, exeCaster, exeSpellId,
-                                   isPlayerCaster, exeUsesFullGuid);
-        } else if (effectType == SpellEffect::CREATE_ITEM || effectType == SpellEffect::CREATE_ITEM2) {
-            parseEffectCreateItem(packet, effectLogCount, exeCaster, exeSpellId,
-                                  isPlayerCaster);
-        } else if (effectType == SpellEffect::INTERRUPT_CAST) {
-            parseEffectInterruptCast(packet, effectLogCount, exeCaster, exeSpellId,
-                                     isPlayerCaster, exeUsesFullGuid);
-        } else if (effectType == SpellEffect::FEED_PET) {
-            parseEffectFeedPet(packet, effectLogCount, exeCaster, exeSpellId,
-                               isPlayerCaster);
-        } else {
-            // Unknown effect type - stop parsing to avoid misalignment
-            packet.skipAll();
-            break;
+    const bool isPlayerCaster = (data.casterGuid == owner_.getPlayerGuid());
+    for (const auto& entry : data.entries) {
+        switch (entry.effect) {
+            case SpellEffect::POWER_DRAIN:
+            case SpellEffect::POWER_BURN:
+                logEffectPowerDrain(entry, data.casterGuid, data.spellId, isPlayerCaster);
+                break;
+            case SpellEffect::CREATE_ITEM:
+            case SpellEffect::CREATE_RANDOM_ITEM:
+            case SpellEffect::CREATE_ITEM2:
+                logEffectCreateItem(entry, data.spellId, isPlayerCaster);
+                break;
+            case SpellEffect::INTERRUPT_CAST:
+                logEffectInterruptCast(entry, data.casterGuid, data.spellId, isPlayerCaster);
+                break;
+            case SpellEffect::FEED_PET:
+                logEffectFeedPet(entry, isPlayerCaster);
+                break;
+            default:
+                break;
         }
     }
-    packet.skipAll();
 }
 
 void SpellHandler::handleClearExtraAuraInfo(network::Packet& packet) {

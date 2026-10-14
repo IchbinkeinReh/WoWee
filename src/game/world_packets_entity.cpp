@@ -826,86 +826,191 @@ bool AttackStopParser::parse(network::Packet& packet, AttackStopData& data) {
 }
 
 bool AttackerStateUpdateParser::parse(network::Packet& packet, AttackerStateUpdateData& data) {
-    // Upfront validation: hitInfo(4) + packed GUIDs(1-8 each) + totalDamage(4) + overkill(4) + subDamageCount(1) = 17 bytes minimum
-    if (!packet.hasRemaining(17)) return false;
-
-    size_t startPos = packet.getReadPos();
+    // 0x00755630, field by field. A field the flags do not name is not on the
+    // wire: absorbs only under 0x60, resists under 0x180, the blocked amount
+    // under 0x2000, the rage under 0x800000, the debug block under 0x1.
+    const size_t startPos = packet.getReadPos();
+    const auto fail = [&] {
+        packet.setReadPos(startPos);
+        return false;
+    };
+    if (!packet.hasRemaining(4)) return fail();
     data.hitInfo = packet.readUInt32();
-    if (!packet.hasFullPackedGuid()) {
-        packet.setReadPos(startPos);
-        return false;
-    }
+    if (!packet.hasFullPackedGuid()) return fail();
     data.attackerGuid = packet.readPackedGuid();
-    if (!packet.hasFullPackedGuid()) {
-        packet.setReadPos(startPos);
-        return false;
-    }
+    if (!packet.hasFullPackedGuid()) return fail();
     data.targetGuid = packet.readPackedGuid();
-
-    // Validate totalDamage + overkill + subDamageCount can be read (9 bytes)
-    // WotLK (AzerothCore) sends: damage(4) + overkill(4) + subDamageCount(1)
-    if (!packet.hasRemaining(9)) {
-        packet.setReadPos(startPos);
-        return false;
-    }
-
+    if (!packet.hasRemaining(9)) return fail();
     data.totalDamage = static_cast<int32_t>(packet.readUInt32());
     data.overkill = static_cast<int32_t>(packet.readUInt32());
     data.subDamageCount = packet.readUInt8();
 
-    // Cap subDamageCount: each entry is 20 bytes. If the claimed count
-    // exceeds what the remaining bytes can hold, a GUID was mis-parsed
-    // (off by one byte), causing the school-mask byte to be read as count.
-    // In that case clamp to the number of full entries that fit.
-    {
-        size_t remaining = packet.getRemainingSize();
-        size_t maxFit    = remaining / 20;
-        if (data.subDamageCount > maxFit) {
-            data.subDamageCount = static_cast<uint8_t>(std::min<size_t>(maxFit, 64));
-        } else if (data.subDamageCount > 64) {
-            data.subDamageCount = 64;
-        }
-    }
-    if (data.subDamageCount == 0) return false;
-
-    data.subDamages.reserve(data.subDamageCount);
-    for (uint8_t i = 0; i < data.subDamageCount; ++i) {
-        // Each sub-damage entry needs 20 bytes: schoolMask(4) + damage(4) + intDamage(4) + absorbed(4) + resisted(4)
-        if (!packet.hasRemaining(20)) {
-            data.subDamageCount = i;
-            break;
-        }
-        SubDamage sub;
+    // School, damage as a float, damage as an integer.
+    if (!packet.hasRemaining(static_cast<size_t>(data.subDamageCount) * 12)) return fail();
+    data.subDamages.assign(data.subDamageCount, SubDamage{});
+    for (auto& sub : data.subDamages) {
         sub.schoolMask = packet.readUInt32();
         sub.damage = packet.readFloat();
         sub.intDamage = packet.readUInt32();
-        sub.absorbed = packet.readUInt32();
-        sub.resisted = packet.readUInt32();
-        data.subDamages.push_back(sub);
+    }
+    // HITINFO_FULL_ABSORB | HITINFO_PARTIAL_ABSORB.
+    if ((data.hitInfo & 0x60u) != 0) {
+        if (!packet.hasRemaining(static_cast<size_t>(data.subDamageCount) * 4)) return fail();
+        for (auto& sub : data.subDamages) sub.absorbed = packet.readUInt32();
+    }
+    // HITINFO_FULL_RESIST | HITINFO_PARTIAL_RESIST.
+    if ((data.hitInfo & 0x180u) != 0) {
+        if (!packet.hasRemaining(static_cast<size_t>(data.subDamageCount) * 4)) return fail();
+        for (auto& sub : data.subDamages) sub.resisted = packet.readUInt32();
     }
 
-    // Validate victimState + overkill fields (8 bytes)
-    if (!packet.hasRemaining(8)) {
-        data.victimState = 0;
-        return !data.subDamages.empty();
+    // A byte, then the attacker state and the melee spell.
+    if (!packet.hasRemaining(9)) return fail();
+    data.victimState = packet.readUInt8();
+    packet.readUInt32();  // attacker state (+0x58)
+    packet.readUInt32();  // melee spell (+0x5c)
+    data.blocked = 0;
+    if ((data.hitInfo & 0x2000u) != 0) {  // HITINFO_BLOCK
+        if (!packet.hasRemaining(4)) return fail();
+        data.blocked = packet.readUInt32();
     }
-
-    data.victimState = packet.readUInt32();
-    // WotLK: attackerState(4) + meleeSpellId(4) follow victimState
-    auto rem = [&]() { return packet.getRemainingSize(); };
-    if (rem() >= 4) packet.readUInt32(); // attackerState (always 0)
-    if (rem() >= 4) packet.readUInt32(); // meleeSpellId (0 for auto-attack)
-
-    // hitInfo-conditional fields: HITINFO_BLOCK(0x2000), RAGE_GAIN(0x20000), FAKE_DAMAGE(0x40)
-    if ((data.hitInfo & 0x2000) && rem() >= 4)  data.blocked  = packet.readUInt32();
-    else data.blocked = 0;
-    // RAGE_GAIN and FAKE_DAMAGE both add a uint32 we can skip
-    if ((data.hitInfo & 0x20000) && rem() >= 4) packet.readUInt32(); // rage gain
-    if ((data.hitInfo & 0x40)    && rem() >= 4) packet.readUInt32(); // fake damage total
+    if ((data.hitInfo & 0x800000u) != 0) {  // HITINFO_RAGE_GAIN (+0x64)
+        if (!packet.hasRemaining(4)) return fail();
+        packet.readUInt32();
+    }
+    // HITINFO_UNK1: a uint32, eight floats, two pairs of floats, a uint32 -
+    // read and kept by nothing that WoWee shows.
+    if ((data.hitInfo & 0x1u) != 0) {
+        if (!packet.hasRemaining(4 + 8 * 4 + 4 * 4 + 4)) return fail();
+        packet.setReadPos(packet.getReadPos() + 4 + 8 * 4 + 4 * 4 + 4);
+    }
 
     LOG_DEBUG("Melee hit: ", data.totalDamage, " damage",
               data.isCrit() ? " (CRIT)" : "",
               data.isMiss() ? " (MISS)" : "");
+    return true;
+}
+
+bool SpellLogGuidsParser::parse(network::Packet& packet, SpellLogGuidsData& data, bool debugByte) {
+    if (!packet.hasRemaining(20u + (debugByte ? 1u : 0u))) return false;
+    data.casterGuid = packet.readUInt64();
+    data.victimGuid = packet.readUInt64();
+    data.spellId = packet.readUInt32();
+    data.debug = debugByte ? packet.readUInt8() : 0;
+    return true;
+}
+
+bool SpellDamageShieldParser::parse(network::Packet& packet, SpellDamageShieldData& data) {
+    if (!packet.hasRemaining(32)) return false;
+    data.victimGuid = packet.readUInt64();
+    data.casterGuid = packet.readUInt64();
+    data.spellId = packet.readUInt32();
+    data.damage = packet.readUInt32();
+    data.overkill = packet.readUInt32();
+    data.schoolMask = packet.readUInt32();
+    return true;
+}
+
+bool SpellLogMissParser::parse(network::Packet& packet, SpellLogMissData& data) {
+    if (!packet.hasRemaining(17)) return false;
+    data.spellId = packet.readUInt32();
+    data.casterGuid = packet.readUInt64();
+    data.debug = packet.readUInt8() != 0;
+    const uint32_t count = packet.readUInt32();
+    const size_t entry = data.debug ? 17u : 9u;
+    if (packet.getRemainingSize() / entry < count) return false;
+    data.misses.clear();
+    data.misses.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        SpellLogMissData::Miss m;
+        m.victimGuid = packet.readUInt64();
+        m.missInfo = packet.readUInt8();
+        if (data.debug) {
+            packet.readFloat();
+            packet.readFloat();
+        }
+        data.misses.push_back(m);
+    }
+    return true;
+}
+
+bool DispelFailedParser::parse(network::Packet& packet, DispelFailedData& data) {
+    if (!packet.hasRemaining(20)) return false;
+    data.casterGuid = packet.readUInt64();
+    data.victimGuid = packet.readUInt64();
+    data.spellId = packet.readUInt32();
+    while (packet.hasRemaining(4)) packet.readUInt32();
+    return true;
+}
+
+bool SpellDispelLogParser::parse(network::Packet& packet, SpellDispelLogData& data) {
+    if (!packet.hasFullPackedGuid()) return false;
+    data.victimGuid = packet.readPackedGuid();
+    if (!packet.hasFullPackedGuid()) return false;
+    data.casterGuid = packet.readPackedGuid();
+    if (!packet.hasRemaining(9)) return false;
+    data.spellId = packet.readUInt32();
+    packet.readUInt8();
+    const uint32_t count = packet.readUInt32();
+    if (packet.getRemainingSize() / 5 < count) return false;
+    data.auras.clear();
+    data.auras.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        SpellDispelLogData::Aura a;
+        a.spellId = packet.readUInt32();
+        a.flag = packet.readUInt8();
+        data.auras.push_back(a);
+    }
+    return true;
+}
+
+bool SpellLogExecuteParser::parse(network::Packet& packet, SpellLogExecuteData& data, bool fullGuids) {
+    const auto guid = [&](uint64_t& out) {
+        if (fullGuids) {
+            if (!packet.hasRemaining(8)) return false;
+            out = packet.readUInt64();
+            return true;
+        }
+        if (!packet.hasFullPackedGuid()) return false;
+        out = packet.readPackedGuid();
+        return true;
+    };
+    if (!guid(data.casterGuid) || !packet.hasRemaining(8)) return false;
+    data.spellId = packet.readUInt32();
+    const auto effects = static_cast<int32_t>(packet.readUInt32());
+    data.entries.clear();
+    for (int32_t e = 0; e < effects; ++e) {
+        if (!packet.hasRemaining(8)) return false;
+        const uint32_t effect = packet.readUInt32();
+        const auto count = static_cast<int32_t>(packet.readUInt32());
+        // What the entry carries: a target, then this many uint32s, and the
+        // drain's multiplier.
+        bool target = true;
+        int words = 0;
+        bool multiplier = false;
+        switch (effect) {
+            case 8: case 62: words = 2; multiplier = true; break;      // POWER_DRAIN, POWER_BURN
+            case 18: case 113: break;                                  // RESURRECT, RESURRECT_NEW
+            case 19: case 68: words = 1; break;                        // ADD_EXTRA_ATTACKS, INTERRUPT_CAST
+            case 24: case 59: case 157: case 101:                      // the items, FEED_PET
+                target = false; words = 1; break;
+            case 28: case 33: case 50: case 56: case 76: case 81:      // the summons, OPEN_LOCK
+            case 83: case 102: case 104: case 105: case 106: case 107:
+                break;
+            case 111: words = 2; break;                                // DURABILITY_DAMAGE
+            default: continue;                                         // nothing per entry
+        }
+        for (int32_t i = 0; i < count; ++i) {
+            SpellLogExecuteEntry entry;
+            entry.effect = effect;
+            if (target && !guid(entry.targetGuid)) return false;
+            if (!packet.hasRemaining(static_cast<size_t>(words) * 4 + (multiplier ? 4 : 0))) return false;
+            if (words > 0) entry.value1 = packet.readUInt32();
+            if (words > 1) entry.value2 = packet.readUInt32();
+            if (multiplier) entry.multiplier = packet.readFloat();
+            data.entries.push_back(entry);
+        }
+    }
     return true;
 }
 

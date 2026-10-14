@@ -780,6 +780,9 @@ void CombatHandler::handleAttackStop(network::Packet& packet) {
 void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     AttackerStateUpdateData data;
     if (!owner_.getPacketParsers()->parseAttackerStateUpdate(packet, data)) return;
+    // 0x00755630's last word: a unit victim that took nothing of a blocked
+    // swing blocked it.
+    if (data.totalDamage == 0 && data.blocked != 0 && owner_.getUnitByGuid(data.targetGuid)) data.victimState = 5;
 
     bool isPlayerAttacker = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
@@ -828,7 +831,7 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
             auto weaponSize = audio::CombatSoundManager::WeaponSize::MEDIUM;
             if (data.isMiss()) {
                 csm->playWeaponMiss(false);
-            } else if (data.victimState == 1 || data.victimState == 2) {
+            } else if (data.victimState == 2 || data.victimState == 3) {
                 // Dodge/parry - swing whoosh but no impact
                 csm->playWeaponSwing(weaponSize, false);
             } else {
@@ -839,36 +842,23 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
         }
         // Character vocalizations
         if (auto* asm_ = ac->getActivitySoundManager()) {
-            if (isPlayerAttacker && !data.isMiss() && data.victimState != 1 && data.victimState != 2) {
+            if (isPlayerAttacker && !data.isMiss() && data.victimState != 2 && data.victimState != 3) {
                 asm_->playAttackGrunt();
             }
-            if (isPlayerTarget && !data.isMiss() && data.victimState != 1 && data.victimState != 2) {
+            if (isPlayerTarget && !data.isMiss() && data.victimState != 2 && data.victimState != 3) {
                 asm_->playWound(data.isCrit());
             }
         }
     }
 
-    if (data.isMiss()) {
-        addCombatText(CombatTextEntry::MISS, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 1) {
-        addCombatText(CombatTextEntry::DODGE, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 2) {
-        addCombatText(CombatTextEntry::PARRY, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 4) {
-        // VICTIMSTATE_BLOCKS: show reduced damage and the blocked amount
-        if (data.totalDamage > 0)
-            addCombatText(CombatTextEntry::MELEE_DAMAGE, data.totalDamage, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-        addCombatText(CombatTextEntry::BLOCK, static_cast<int32_t>(data.blocked), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 5) {
-        // VICTIMSTATE_EVADE: NPC evaded (out of combat zone).
-        addCombatText(CombatTextEntry::EVADE, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 6) {
-        // VICTIMSTATE_IS_IMMUNE: Target is immune to this attack.
-        addCombatText(CombatTextEntry::IMMUNE, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else if (data.victimState == 7) {
-        // VICTIMSTATE_DEFLECT: Attack was deflected (e.g. shield slam reflect).
-        addCombatText(CombatTextEntry::DEFLECT, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-    } else {
+    // 0x007512b0's order: a hit (1) or a block (5) that did damage, then a
+    // miss, a full absorb, a full resist, and the victim's state.
+    uint32_t totalAbsorbed = 0, totalResisted = 0;
+    for (const auto& sub : data.subDamages) {
+        totalAbsorbed += sub.absorbed;
+        totalResisted += sub.resisted;
+    }
+    if ((data.victimState == 1 || data.victimState == 5) && data.totalDamage != 0) {
         CombatTextEntry::Type type;
         if (data.isCrit())
             type = CombatTextEntry::CRIT_DAMAGE;
@@ -879,25 +869,39 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
         else
             type = CombatTextEntry::MELEE_DAMAGE;
         addCombatText(type, data.totalDamage, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
-        // Show partial absorb/resist from sub-damage entries
-        uint32_t totalAbsorbed = 0, totalResisted = 0;
-        for (const auto& sub : data.subDamages) {
-            totalAbsorbed += sub.absorbed;
-            totalResisted += sub.resisted;
-        }
+        if (data.blocked > 0)
+            addCombatText(CombatTextEntry::BLOCK, static_cast<int32_t>(data.blocked), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
         if (totalAbsorbed > 0)
             addCombatText(CombatTextEntry::ABSORB, static_cast<int32_t>(totalAbsorbed), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
         if (totalResisted > 0)
             addCombatText(CombatTextEntry::RESIST, static_cast<int32_t>(totalResisted), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
+    } else if (data.isMiss()) {
+        addCombatText(CombatTextEntry::MISS, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
+    } else if ((data.hitInfo & 0x20u) != 0) {
+        addCombatText(CombatTextEntry::ABSORB, static_cast<int32_t>(totalAbsorbed), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
+    } else if ((data.hitInfo & 0x80u) != 0) {
+        addCombatText(CombatTextEntry::RESIST, static_cast<int32_t>(totalResisted), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
+    } else if (data.victimState == 2) {
+        addCombatText(CombatTextEntry::DODGE, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
+    } else if (data.victimState == 3) {
+        addCombatText(CombatTextEntry::PARRY, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
+    } else if (data.victimState == 5) {
+        addCombatText(CombatTextEntry::BLOCK, static_cast<int32_t>(data.blocked), 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
+    } else if (data.victimState == 6) {
+        addCombatText(CombatTextEntry::EVADE, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
+    } else if (data.victimState == 7) {
+        addCombatText(CombatTextEntry::IMMUNE, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
+    } else if (data.victimState == 8) {
+        addCombatText(CombatTextEntry::DEFLECT, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
     }
 
     // Fire hit reaction animation on the victim
     if (owner_.hitReactionCallbackRef() && !data.isMiss()) {
         using HR = GameHandler::HitReaction;
         HR reaction = HR::WOUND;
-        if (data.victimState == 1) reaction = HR::DODGE;
-        else if (data.victimState == 2) reaction = HR::PARRY;
-        else if (data.victimState == 4) reaction = HR::BLOCK;
+        if (data.victimState == 2) reaction = HR::DODGE;
+        else if (data.victimState == 3) reaction = HR::PARRY;
+        else if (data.victimState == 5) reaction = HR::BLOCK;
         else if (data.isCrit()) reaction = HR::CRIT_WOUND;
         owner_.hitReactionCallbackRef()(data.targetGuid, reaction);
     }
@@ -1176,6 +1180,18 @@ void CombatHandler::handlePvpCredit(network::Packet& packet) {
 }
 
 void CombatHandler::handleProcResist(network::Packet& packet) {
+    // 0x00750d40: full guids, the spell and a debug byte.
+    if (isActiveExpansion("wotlk")) {
+        SpellLogGuidsData d;
+        if (SpellLogGuidsParser::parse(packet, d, true)) {
+            if (d.victimGuid == owner_.getPlayerGuid())
+                addCombatText(CombatTextEntry::RESIST, 0, d.spellId, false, 0, d.casterGuid, d.victimGuid);
+            else if (d.casterGuid == owner_.getPlayerGuid())
+                addCombatText(CombatTextEntry::RESIST, 0, d.spellId, true, 0, d.casterGuid, d.victimGuid);
+        }
+        packet.skipAll();
+        return;
+    }
     const bool prUsesFullGuid = isActiveExpansion("tbc");
     auto readPrGuid = [&]() -> uint64_t {
         if (prUsesFullGuid)
@@ -1201,7 +1217,19 @@ void CombatHandler::handleProcResist(network::Packet& packet) {
 void CombatHandler::handleSpellDamageShield(network::Packet& packet) {
     // Classic: packed_guid victim + packed_guid caster + spellId(4) + damage(4) + schoolMask(4)
     // TBC:     uint64 victim + uint64 caster + spellId(4) + damage(4) + schoolMask(4)
-    // WotLK:   packed_guid victim + packed_guid caster + spellId(4) + damage(4) + absorbed(4) + schoolMask(4)
+    // WotLK:   0x006d3750 - uint64 victim + uint64 caster + spellId(4) + damage(4) + overkill(4) + schoolMask(4)
+    if (isActiveExpansion("wotlk")) {
+        SpellDamageShieldData d;
+        if (!SpellDamageShieldParser::parse(packet, d)) {
+            packet.skipAll();
+            return;
+        }
+        if (d.casterGuid == owner_.getPlayerGuid())
+            addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId, true, 0, d.casterGuid, d.victimGuid);
+        else if (d.victimGuid == owner_.getPlayerGuid())
+            addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId, false, 0, d.casterGuid, d.victimGuid);
+        return;
+    }
     const bool shieldTbc = isActiveExpansion("tbc");
     const bool shieldWotlkLike = !isClassicLikeExpansion() && !shieldTbc;
     const auto shieldRem = [&]() { return packet.getRemainingSize(); };
@@ -1239,8 +1267,18 @@ void CombatHandler::handleSpellDamageShield(network::Packet& packet) {
 }
 
 void CombatHandler::handleSpellOrDamageImmune(network::Packet& packet) {
-    // WotLK/Classic/Turtle: packed casterGuid + packed victimGuid + uint32 spellId + uint8 saveType
-    // TBC:                  full uint64 casterGuid + full uint64 victimGuid + uint32 + uint8
+    // Classic/Turtle: packed casterGuid + packed victimGuid + uint32 spellId + uint8 saveType
+    // TBC:            full uint64 casterGuid + full uint64 victimGuid + uint32 + uint8
+    // WotLK:          as TBC (0x006ce3d0).
+    if (isActiveExpansion("wotlk")) {
+        SpellLogGuidsData d;
+        if (SpellLogGuidsParser::parse(packet, d, true) &&
+            (d.casterGuid == owner_.getPlayerGuid() || d.victimGuid == owner_.getPlayerGuid()))
+            addCombatText(CombatTextEntry::IMMUNE, 0, d.spellId, d.casterGuid == owner_.getPlayerGuid(), 0,
+                          d.casterGuid, d.victimGuid);
+        packet.skipAll();
+        return;
+    }
     const bool immuneUsesFullGuid = isActiveExpansion("tbc");
     const size_t minSz = immuneUsesFullGuid ? 21u : 2u;
     if (!packet.hasRemaining(minSz)) {
@@ -1268,6 +1306,12 @@ void CombatHandler::handleSpellOrDamageImmune(network::Packet& packet) {
 }
 
 void CombatHandler::handleResistLog(network::Packet& packet) {
+    // 3.3.5 registers nothing for SMSG_RESISTLOG (0x1d6 is not among
+    // 0x006b0b80's opcodes), so the packet says nothing there.
+    if (isActiveExpansion("wotlk")) {
+        packet.skipAll();
+        return;
+    }
     // WotLK/Classic/Turtle: uint32 hitInfo + packed_guid attacker + packed_guid victim + uint32 spellId
     //                      + float resistFactor + uint32 targetRes + uint32 resistedValue + ...
     // TBC:                 same layout but full uint64 GUIDs

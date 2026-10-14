@@ -513,20 +513,13 @@ private:
     void refreshRestorationFromPlayerAuras();
     void stopRestorationPresentation();
 
-    // --- handleSpellLogExecute per-effect parsers (extracted to reduce nesting) ---
-    void parseEffectPowerDrain(network::Packet& packet, uint32_t effectLogCount,
-                               uint64_t caster, uint32_t spellId, bool isPlayerCaster,
-                               bool usesFullGuid);
-    void parseEffectHealthLeech(network::Packet& packet, uint32_t effectLogCount,
-                                uint64_t caster, uint32_t spellId, bool isPlayerCaster,
-                                bool usesFullGuid);
-    void parseEffectCreateItem(network::Packet& packet, uint32_t effectLogCount,
-                               uint64_t caster, uint32_t spellId, bool isPlayerCaster);
-    void parseEffectInterruptCast(network::Packet& packet, uint32_t effectLogCount,
-                                  uint64_t caster, uint32_t spellId, bool isPlayerCaster,
-                                  bool usesFullGuid);
-    void parseEffectFeedPet(network::Packet& packet, uint32_t effectLogCount,
-                            uint64_t caster, uint32_t spellId, bool isPlayerCaster);
+    // --- handleSpellLogExecute, per effect logged (extracted to reduce nesting) ---
+    void logEffectPowerDrain(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
+                             bool isPlayerCaster);
+    void logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, bool isPlayerCaster);
+    void logEffectInterruptCast(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
+                                bool isPlayerCaster);
+    void logEffectFeedPet(const SpellLogExecuteEntry& entry, bool isPlayerCaster);
 
     // Find the on-use spell for an item (trigger=0 Use or trigger=5 NoDelay).
     // CMSG_USE_ITEM requires a valid spellId or the server silently ignores it.

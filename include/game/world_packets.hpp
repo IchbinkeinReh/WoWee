@@ -2208,20 +2208,128 @@ struct AttackerStateUpdateData {
     int32_t totalDamage = 0;
     uint8_t subDamageCount = 0;
     std::vector<SubDamage> subDamages;
-    uint32_t victimState = 0;    // 0=hit, 1=dodge, 2=parry, 3=interrupt, 4=block, etc.
+    /// 1 hit, 2 dodge, 3 parry, 4 interrupt, 5 blocks, 6 evades, 7 immune,
+    /// 8 deflects (0x007512b0's cases).
+    uint32_t victimState = 0;
     int32_t overkill = -1;
     uint32_t blocked = 0;
 
     [[nodiscard]] bool isValid() const { return attackerGuid != 0; }
     [[nodiscard]] bool isCrit() const     { return (hitInfo & 0x0200) != 0; }
     [[nodiscard]] bool isMiss() const     { return (hitInfo & 0x0010) != 0; }
-    [[nodiscard]] bool isGlancing() const { return (hitInfo & 0x0800) != 0; }
-    [[nodiscard]] bool isCrushing() const { return (hitInfo & 0x1000) != 0; }
+    /// 0x007512b0's bits 0x10000 and 0x20000.
+    [[nodiscard]] bool isGlancing() const { return (hitInfo & 0x10000) != 0; }
+    [[nodiscard]] bool isCrushing() const { return (hitInfo & 0x20000) != 0; }
 };
 
 class AttackerStateUpdateParser {
 public:
     static bool parse(network::Packet& packet, AttackerStateUpdateData& data);
+};
+
+/// SMSG_PROCRESIST (0x00750d40), SMSG_SPELLORDAMAGE_IMMUNE (0x006ce3d0) and
+/// SMSG_SPELLINSTAKILLLOG (0x006ce260): two full eight-byte guids - not
+/// packed - and a spell; the first two with a debug byte after it.
+struct SpellLogGuidsData {
+    uint64_t casterGuid = 0;
+    uint64_t victimGuid = 0;
+    uint32_t spellId = 0;
+    uint8_t debug = 0;
+};
+
+class SpellLogGuidsParser {
+public:
+    /// `debugByte`: whether the packet ends in the debug byte.
+    static bool parse(network::Packet& packet, SpellLogGuidsData& data, bool debugByte);
+};
+
+/// SMSG_SPELLDAMAGESHIELD (0x006d3750): the one the shield struck and its
+/// owner as full guids, then four uint32s.
+struct SpellDamageShieldData {
+    uint64_t victimGuid = 0;
+    uint64_t casterGuid = 0;
+    uint32_t spellId = 0;
+    uint32_t damage = 0;
+    uint32_t overkill = 0;
+    uint32_t schoolMask = 0;
+};
+
+class SpellDamageShieldParser {
+public:
+    static bool parse(network::Packet& packet, SpellDamageShieldData& data);
+};
+
+/// SMSG_SPELLLOGMISS (0x006d3090): full guids, and two floats after each
+/// miss where the debug byte is set - a miss the client then does not log.
+struct SpellLogMissData {
+    struct Miss {
+        uint64_t victimGuid = 0;
+        uint8_t missInfo = 0;
+    };
+    uint32_t spellId = 0;
+    uint64_t casterGuid = 0;
+    bool debug = false;
+    std::vector<Miss> misses;
+};
+
+class SpellLogMissParser {
+public:
+    static bool parse(network::Packet& packet, SpellLogMissData& data);
+};
+
+/// SMSG_DISPEL_FAILED (0x00750ea0): full guids, the spell, then the auras
+/// that held to the end of the packet - logged by the client, passed over
+/// here.
+struct DispelFailedData {
+    uint64_t casterGuid = 0;
+    uint64_t victimGuid = 0;
+    uint32_t spellId = 0;
+};
+
+class DispelFailedParser {
+public:
+    static bool parse(network::Packet& packet, DispelFailedData& data);
+};
+
+/// SMSG_SPELLDISPELLOG, SMSG_SPELLSTEALLOG and SMSG_SPELLBREAKLOG
+/// (0x006ce2b0): the victim then the caster, packed; the spell, a byte the
+/// client reads and drops, and the auras with a byte each.
+struct SpellDispelLogData {
+    struct Aura {
+        uint32_t spellId = 0;
+        uint8_t flag = 0;
+    };
+    uint64_t victimGuid = 0;
+    uint64_t casterGuid = 0;
+    uint32_t spellId = 0;
+    std::vector<Aura> auras;
+};
+
+class SpellDispelLogParser {
+public:
+    static bool parse(network::Packet& packet, SpellDispelLogData& data);
+};
+
+/// SMSG_SPELLLOGEXECUTE (0x006d3220): what each effect logs, by 0x006d368c's
+/// table - nothing at all for an effect it does not name.
+struct SpellLogExecuteEntry {
+    uint32_t effect = 0;
+    uint64_t targetGuid = 0;  ///< the effects that name one
+    uint32_t value1 = 0;      ///< amount, item, interrupted spell, attacks, item id
+    uint32_t value2 = 0;      ///< power type, slot
+    float multiplier = 0.0f;  ///< drain and burn
+};
+
+struct SpellLogExecuteData {
+    uint64_t casterGuid = 0;
+    uint32_t spellId = 0;
+    std::vector<SpellLogExecuteEntry> entries;
+};
+
+class SpellLogExecuteParser {
+public:
+    /// `fullGuids`: TBC's eight-byte guids in place of packed ones.
+    static bool parse(network::Packet& packet, SpellLogExecuteData& data, bool fullGuids);
 };
 
 /** SMSG_SPELLNONMELEEDAMAGELOG data (simplified) */
