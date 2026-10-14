@@ -4847,8 +4847,7 @@ void SpellHandler::loadSpellNameCache() const {
                    effectMechanicField = named("EffectMechanic0"), triggerField = named("EffectTriggerSpell0"),
                    preventionField = named("PreventionType"), minFactionField = named("MinFactionId"),
                    minRepField = named("MinReputation"), areaGroupField = named("AreaGroupId"),
-                   itemClassField = named("EquippedItemClass"),
-                   itemSubClassMaskField = named("EquippedItemSubClassMask"), runeCostField = named("RuneCostID");
+                   itemClassField = named("EquippedItemClass"), runeCostField = named("RuneCostID");
     const auto timing = pipeline::detectSpellTimingFields(dbc.get(), spellL);
     const uint32_t recoveryField = timing.recoveryTime;
     const uint32_t categoryRecoveryField = timing.categoryRecoveryTime;
@@ -4948,7 +4947,7 @@ void SpellHandler::loadSpellNameCache() const {
                 entry.minReputation = u(minRepField);
                 entry.areaGroupId = u(areaGroupField);
                 if (itemClassField < fieldCount) entry.equippedItemClass = n(itemClassField);
-                entry.equippedItemSubClassMask = u(itemSubClassMaskField);
+                entry.equippedItemSubClassMask = u(named("EquippedItemSubClassMask"));
                 entry.runeCostId = u(runeCostField);
             }
             // Load effect base points for $s1/$s2/$s3 tooltip substitution
