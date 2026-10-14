@@ -4266,7 +4266,7 @@ public:
         ObjectType type = ObjectType::OBJECT;
         uint64_t transportGuid = 0;
         glm::vec3 localOffset{0.0f};
-        float localOrientation = 0.0f;
+        float localOrientation = 0.0f;  // the wire's, as transport_local keeps it
         bool hasLocalOrientation = false;
         bool offsetNeedsTransportResolution = false;
     };

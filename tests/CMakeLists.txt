@@ -2927,6 +2927,11 @@ wowee_add_packet_test(test_spell_go_targets)
 # a GM ticket's, a passenger's offset - in the coordinates each side takes.
 wowee_add_packet_test(test_wire_positions)
 
+# ── test_transport_facing ────────────────────────────
+# A passenger's facing on a transport: kept on it as the wire has it, the
+# transport's own added in the world.
+wowee_add_packet_test(test_transport_facing)
+
 # ── Sanitizers, once every test target exists ────────────────
 # This must be the last thing in this file. The loop walks ALL_TEST_TARGETS,
 # which register_test_target appends to as each test is declared, so the

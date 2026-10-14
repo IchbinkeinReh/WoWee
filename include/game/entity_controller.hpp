@@ -290,7 +290,7 @@ private:
 
     void applyPlayerTransportState(const UpdateBlock& block,
                                     const std::shared_ptr<Entity>& entity,
-                                    const glm::vec3& canonicalPos, float oCanonical,
+                                    const glm::vec3& canonicalPos,
                                     bool updateMovementInfoPos);
     // Apply unit fields during CREATE - returns true if entity is initially dead.
     bool applyUnitFieldsOnCreate(const UpdateBlock& block,

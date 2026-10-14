@@ -332,6 +332,10 @@ private:
     /// A passenger's offset on `transportGuid` as the wire carries it - the
     /// inverse of how it came in (TransportManager::serverToTransportLocal).
     [[nodiscard]] glm::vec3 transportOffsetToWire(uint64_t transportGuid, const glm::vec3& localOffset) const;
+    /// A passenger's facing on `transportGuid` as the wire carries it, for a
+    /// canonical world yaw (transport_local::localFacing); `kept` where the
+    /// transport is not one the manager runs, such as a vehicle.
+    [[nodiscard]] float transportFacingToWire(uint64_t transportGuid, float canonicalYaw, float kept) const;
     void handleActivateTaxiReply(network::Packet& packet);
     void loadTaxiDbc();
 

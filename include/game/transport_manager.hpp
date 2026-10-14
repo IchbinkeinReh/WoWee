@@ -61,6 +61,15 @@ struct ActiveTransport {
     // tangent to derive one from, and deriving anyway is how a lift ended up
     // sideways.
     float spawnYaw = 0.0f;
+    // The facing the client gives it, in the wire's convention, which its
+    // passengers' facings are kept relative to (transport_local). A game
+    // object's is the yaw of its own rotation (0x00712db0 -> 0x0070c310 ->
+    // 0x004f4630): where the server placed it, an elevator or a tram
+    // included, which 0x007139e0 moves along TransportAnimation.dbc without
+    // turning. A ship on its TaxiPath route is turned along it, facing back
+    // down the way it goes (0x007134a0 -> 0x007f82b0). rotation above is the
+    // hull as drawn, which each kind keeps in its own convention.
+    float facing = 0.0f;
     bool serverYawFlipped180;       // Auto-correction when server yaw is consistently opposite movement
     int serverYawAlignmentScore;    // Hysteresis score for yaw flip detection
 
@@ -276,6 +285,9 @@ public:
     /// carries it, for the movement the client sends.
     [[nodiscard]] glm::vec3 transportLocalToServer(uint64_t transportGuid,
                                                    const glm::vec3& localOffset) const;
+    /// The transport's facing as the client has it (ActiveTransport::facing),
+    /// for its passengers' facings. None for a transport not known.
+    [[nodiscard]] std::optional<float> transportFacing(uint64_t transportGuid) const;
     // Adopt the server's published route phase for a transport. phase is a
     // fraction in [0,1) of periodMs. Cheap and idempotent - safe to call on every
     // object update that carries the fields.

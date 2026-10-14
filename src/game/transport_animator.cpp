@@ -267,6 +267,10 @@ void TransportAnimator::evaluateAndApply(
                 const float effectiveYaw = routeYaw;
                 transport.rotation = glm::angleAxis(
                     effectiveYaw, glm::vec3(0.0f, 0.0f, 1.0f));
+                // Which is the client's own facing for a ship on its route:
+                // atan2 of the route's direction reversed, on the wire's axes
+                // (0x007f82b0), its passengers' facings kept to it.
+                transport.facing = core::coords::normalizeAngleRad(routeYaw);
                 if (shipDockBlend > 0.999f && needsSideOnDock) {
                     static std::unordered_set<uint64_t> loggedDockGuids;
                     if (loggedDockGuids.insert(transport.guid).second) {

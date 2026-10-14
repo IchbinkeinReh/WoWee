@@ -10,6 +10,7 @@
 #include "game/chat_handler.hpp"
 #include "game/inventory_handler.hpp"
 #include "game/transport_manager.hpp"
+#include "game/transport_local.hpp"
 #include "game/movement_handler.hpp"
 #include "game/combat_handler.hpp"
 #include "game/spell_unit_target.hpp"
@@ -506,9 +507,10 @@ void EntityController::updateNonPlayerTransportAttachment(const UpdateBlock& blo
             ? owner_.getTransportManager()->serverToTransportLocal(block.transportGuid, serverOffset)
             : serverOffset;
         const bool hasLocalOrientation = (block.updateFlags & 0x0020) != 0; // UPDATEFLAG_LIVING
-        float localOriCanonical = core::coords::normalizeAngleRad(-block.transportO);
+        // Its facing on the transport as the wire has it (0x009872c0); it
+        // was taken negated, the other way round from every other reader.
         owner_.setTransportAttachment(block.guid, entityType, block.transportGuid,
-                               localOffset, hasLocalOrientation, localOriCanonical,
+                               localOffset, hasLocalOrientation, block.transportO,
                                !transportResolved);
         if (owner_.getTransportManager() && owner_.getTransportManager()->getTransport(block.transportGuid)) {
             glm::vec3 composed = owner_.getTransportManager()->getPlayerWorldPosition(block.transportGuid, localOffset);
@@ -818,7 +820,7 @@ std::shared_ptr<Entity> EntityController::createEntityFromBlock(const UpdateBloc
 //     When false (CREATE), movementInfo is only set for resolved transport positions.
 void EntityController::applyPlayerTransportState(const UpdateBlock& block,
                                                    const std::shared_ptr<Entity>& entity,
-                                                   const glm::vec3& canonicalPos, float oCanonical,
+                                                   const glm::vec3& canonicalPos,
                                                    bool updateMovementInfoPos) {
     // Reject server-pushed position corrections to near-origin on map 0.
     // The server stores a corrupted position from a faulty area-trigger
@@ -852,7 +854,12 @@ void EntityController::applyPlayerTransportState(const UpdateBlock& block,
         owner_.setPlayerOnTransport(block.transportGuid, canonicalOffset);
         if (owner_.getTransportManager() && owner_.getTransportManager()->getTransport(owner_.playerTransportGuidRef())) {
             glm::vec3 composed = owner_.getTransportManager()->getPlayerWorldPosition(owner_.playerTransportGuidRef(), owner_.playerTransportOffsetRef());
-            entity->setPosition(composed.x, composed.y, composed.z, oCanonical);
+            // Facing the transport's way plus its own on it (0x009872c0 ->
+            // 0x004f42a0), as the heartbeat sends it back.
+            const float facing = transport_local::worldYaw(
+                *owner_.getTransportManager()->transportFacing(owner_.playerTransportGuidRef()), block.transportO);
+            entity->setPosition(composed.x, composed.y, composed.z, facing);
+            if (updateMovementInfoPos) owner_.movementInfoRef().orientation = facing;
             owner_.movementInfoRef().x = composed.x;
             owner_.movementInfoRef().y = composed.y;
             owner_.movementInfoRef().z = composed.z;
@@ -2850,7 +2857,7 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
         applyBlockSpeedsToEntity(block, *entity);
         // 3b: Track player-on-transport state
         if (block.guid == owner_.getPlayerGuid()) {
-            applyPlayerTransportState(block, entity, pos, oCanonical, false);
+            applyPlayerTransportState(block, entity, pos, false);
         }
         // 3i: Track transport-relative children so they follow parent transport motion.
         updateNonPlayerTransportAttachment(block, entity, block.objectType);
@@ -2936,7 +2943,7 @@ void EntityController::handleMovementUpdate(const UpdateBlock& block) {
                 if (block.guid == owner_.getPlayerGuid()) {
                     owner_.movementInfoRef().orientation = oCanonical;
                     resyncPlayerIfFarFromServer(pos);
-                    applyPlayerTransportState(block, entity, pos, oCanonical, true);
+                    applyPlayerTransportState(block, entity, pos, true);
                 }
 
                 // Fire transport move callback if this is a known transport

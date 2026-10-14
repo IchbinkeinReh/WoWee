@@ -285,6 +285,47 @@ TEST_CASE("Animator: world-coordinate WMO faces along the server-space route", "
     REQUIRE(t.rotation.z == Catch::Approx(expected.z).margin(0.01f));
 }
 
+TEST_CASE("Animator: a ship on its route faces as the client faces it", "[transport_animator][transport]") {
+    // 0x007f82b0: atan2 of the route's direction reversed, on the wire's axes.
+    // Sailing canonical +X is sailing the wire's +Y, so the ship faces -pi/2 -
+    // the facing its passengers' are kept to, whatever it was placed at.
+    TransportAnimator animator;
+    CatmullRomSpline spline({
+        {0,    glm::vec3(0.0f, 0.0f, 0.0f)},
+        {1000, glm::vec3(10.0f, 0.0f, 0.0f)},
+        {2000, glm::vec3(20.0f, 0.0f, 0.0f)},
+    });
+    PathEntry path(std::move(spline), 303, false, true, true);
+    auto t = makeTransport();
+    t.basePosition = glm::vec3(0.0f);
+    t.isM2 = false;
+    t.facing = 2.0f;
+
+    animator.evaluateAndApply(t, path, 500);
+
+    const float wireDx = 0.0f, wireDy = 1.0f;
+    const float client = std::atan2(-wireDy, -wireDx);
+    REQUIRE(std::abs(wowee::core::coords::normalizeAngleRad(t.facing - client)) < 0.01f);
+}
+
+TEST_CASE("Animator: a lift keeps the facing it was placed at", "[transport_animator][transport]") {
+    // 0x007139e0 moves a type 11 transport along its path without turning it.
+    TransportAnimator animator;
+    CatmullRomSpline spline({
+        {0,    glm::vec3(0.0f, 0.0f, 0.0f)},
+        {1000, glm::vec3(0.0f, 0.0f, 20.0f)},
+        {2000, glm::vec3(0.0f, 0.0f, 0.0f)},
+    });
+    PathEntry path(std::move(spline), 304, /*zOnly=*/true, true, false);
+    auto t = makeTransport();
+    t.isM2 = true;
+    t.facing = 1.2f;
+
+    animator.evaluateAndApply(t, path, 500);
+
+    REQUIRE(t.facing == Catch::Approx(1.2f));
+}
+
 TEST_CASE("Animator: a docked ship holds its arrival heading, not its spawn yaw",
           "[transport_animator][transport]") {
     // A dock wait is encoded as repeated positions, so the tangent vanishes and

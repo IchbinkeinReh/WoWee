@@ -3763,6 +3763,20 @@ void Application::applyServerMovementState(float deltaTime) {
             if (!sameRideFrame && !tr->isM2) {
                 deckFloorPending_ = true;
             }
+            // The rider's facing is kept on the deck, not in the world: the
+            // world one is the ship's plus it (0x004f42a0), so as the ship
+            // turns, so does whoever is standing on it, and the camera behind.
+            if (sameRideFrame) {
+                const float turnDeg = glm::degrees(
+                    core::coords::normalizeAngleRad(tr->facing - lastWMORideFacing_));
+                auto* cc = renderer->getCameraController();
+                if (cc && std::abs(turnDeg) > 1e-4f) {
+                    cc->turnWithVehicle(turnDeg);
+                    cc->setFacingYaw(cc->getFacingYaw() + turnDeg);
+                    renderer->setCharacterYaw(cc->getFacingYaw());
+                }
+            }
+            lastWMORideFacing_ = tr->facing;
             if (sameRideFrame && renderer->getCameraController()) {
                 const glm::vec3 localMotion =
                     tentativeRender - lastWMORideLockedRender_;

@@ -221,6 +221,8 @@ void TransportManager::registerTransport(uint64_t guid,
     // Identity discarded the authored placement, so every transport started
     // life facing the same way whatever the server said.
     transport.rotation = glm::angleAxis(transport.spawnYaw, glm::vec3(0.0f, 0.0f, 1.0f));
+    // Where the server placed it, whichever kind it is drawn as.
+    transport.facing = core::coords::canonicalToServerYaw(spawnOrientation);
     transport.playerOnBoard = false;
     transport.playerLocalOffset = glm::vec3(0.0f);
     transport.hasDeckBounds = false;
@@ -455,6 +457,12 @@ glm::vec3 TransportManager::transportLocalToServer(
     uint64_t transportGuid, const glm::vec3& localOffset) const {
     const auto it = transports_.find(transportGuid);
     return transport_local::toWire(it != transports_.end() && !it->second.isM2, localOffset);
+}
+
+std::optional<float> TransportManager::transportFacing(uint64_t transportGuid) const {
+    const auto it = transports_.find(transportGuid);
+    if (it == transports_.end()) return std::nullopt;
+    return it->second.facing;
 }
 
 bool TransportManager::isPointOnTransportDeck(uint64_t transportGuid,
@@ -764,6 +772,13 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
     }
 
     auto* pathEntry = pathRepo_.findPath(transport->pathId);
+
+    // The facing the server gives it - a game object's own (0x00712db0) -
+    // except on a ship this client sails along its route, which the client
+    // turns along the route itself (0x007134a0) and the animator follows.
+    if (!(transport->useClientAnimation && transport->worldCoords && !transport->isM2)) {
+        transport->facing = core::coords::canonicalToServerYaw(orientation);
+    }
 
     // MO_TRANSPORT spawn orientation is the authored dock alignment. Preserve
     // it before TaxiPathNode assignment replaces the stationary spawn path;

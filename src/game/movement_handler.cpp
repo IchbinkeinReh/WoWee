@@ -7,6 +7,7 @@
 #include "game/vehicle_mover.hpp"
 #include "game/update_field_table.hpp"
 #include "game/transport_manager.hpp"
+#include "game/transport_local.hpp"
 #include "game/entity.hpp"
 #include "game/combat_handler.hpp"
 #include "game/monster_move_flags.hpp"
@@ -872,19 +873,9 @@ void MovementHandler::sendMovement(Opcode opcode) {
         movementInfo.transportSeat = -1;
         movementInfo.transportTime2 = movementInfo.time;
 
-        float transportYawCanonical = 0.0f;
-        if (owner_.getTransportManager()) {
-            if (auto* tr = owner_.getTransportManager()->getTransport(owner_.playerTransportGuidRef()); tr) {
-                if (tr->hasServerYaw) {
-                    transportYawCanonical = tr->serverYaw;
-                } else {
-                    transportYawCanonical = glm::eulerAngles(tr->rotation).z;
-                }
-            }
-        }
-
-        movementInfo.transportO =
-            core::coords::normalizeAngleRad(movementInfo.orientation - transportYawCanonical);
+        // The facing on it, as the wire has it (0x00987140).
+        movementInfo.transportO = transportFacingToWire(
+            movementInfo.transportGuid, movementInfo.orientation, movementInfo.transportO);
     } else {
         movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::ONTRANSPORT);
         movementInfo.transportGuid = 0;
@@ -969,7 +960,6 @@ void MovementHandler::sendMovement(Opcode opcode) {
         wireInfo.transportX = serverTransportPos.x;
         wireInfo.transportY = serverTransportPos.y;
         wireInfo.transportZ = serverTransportPos.z;
-        wireInfo.transportO = core::coords::normalizeAngleRad(-wireInfo.transportO);
     }
 
     // Build and send movement packet (expansion-specific format)
@@ -1190,6 +1180,8 @@ network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counte
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
         wire.transportTime = wire.time;
         wire.transportTime2 = wire.time;
+        // The facing on it as it stands now, as the heartbeat sends it.
+        wire.transportO = transportFacingToWire(wire.transportGuid, wire.orientation, wire.transportO);
     }
     glm::vec3 serverPos = core::coords::canonicalToServer(glm::vec3(wire.x, wire.y, wire.z));
     wire.x = serverPos.x;
@@ -1501,8 +1493,9 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
         owner_.getTransportManager()->getTransport(transportGuid)) {
         glm::vec3 localCanonical = owner_.getTransportManager()->serverToTransportLocal(
             transportGuid, glm::vec3(tLocalX, tLocalY, tLocalZ));
+        // Its facing on it as it came (0x009872c0), turned with it.
         owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, localCanonical, true,
-                               core::coords::serverToCanonicalYaw(tLocalO));
+                               tLocalO);
         glm::vec3 worldPos = owner_.getTransportManager()->getPlayerWorldPosition(transportGuid, localCanonical);
         canonical = worldPos;
     } else if (!onTransport) {
@@ -2163,6 +2156,7 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
     }
 
     float facingAngle = entity->getOrientation();
+    std::optional<float> fixedLocalFacing;
     // FINAL_POINT: a place in the transport's frame, as the move's points
     // are. Faced in the world once the move's own end is (below); the wire's
     // x and y went into the canonical facing as they came.
@@ -2183,8 +2177,13 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
                 facingAngle = std::atan2(-dy, dx);
         }
     } else if (moveType == 4) {
+        // FINAL_ANGLE is a facing on the transport, as every passenger's is
+        // (0x006eb0b0 sets the movement's +0x20 to it): the transport's own
+        // is added in the world (0x004f42a0). It was taken as a world facing.
         if (packet.getReadPos() + 4 > packet.getSize()) return;
-        facingAngle = core::coords::serverToCanonicalYaw(packet.readFloat());
+        fixedLocalFacing = packet.readFloat();
+        facingAngle = transport_local::worldYaw(
+            owner_.getTransportManager()->transportFacing(transportGuid).value_or(0.0f), *fixedLocalFacing);
     }
 
     if (packet.getReadPos() + 4 > packet.getSize()) return;
@@ -2275,7 +2274,9 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
     } else {
         glm::vec3 startWorld = owner_.getTransportManager()->getPlayerWorldPosition(transportGuid, startLocalCanonical);
         if (facingSpotWorld) facingTowards(startWorld, *facingSpotWorld);
-        owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, startLocalCanonical, false, 0.0f);
+        // A fixed facing stays on the transport, turning with it.
+        owner_.setTransportAttachment(moverGuid, entity->getType(), transportGuid, startLocalCanonical,
+                                      fixedLocalFacing.has_value(), fixedLocalFacing.value_or(0.0f));
         entity->setPosition(startWorld.x, startWorld.y, startWorld.z, facingAngle);
         // A stop: every way it moved stops (0x006f11b0 -> 0x006e9980).
         entity->setMonsterMoveFlags(monster_move::afterMonsterMove(moveFlagsBefore, wasOnSpline, false, 0), false);
@@ -4017,12 +4018,12 @@ void MovementHandler::updateAttachedTransportChildren(float /*deltaTime*/) {
 
         float composedOrientation = entity->getOrientation();
         if (attachment.hasLocalOrientation) {
-            // Client-owned ship routes do not retain hasServerYaw, but their
-            // live quaternion still carries the tangent/dock rotation. Using
-            // zero made attached NPCs face in a fixed world direction while
-            // their deck turned beneath them.
-            float baseYaw = 2.0f * std::atan2(transport->rotation.z, transport->rotation.w);
-            composedOrientation = baseYaw + attachment.localOrientation;
+            // The transport's facing plus its own on it (0x004f42a0), so it
+            // turns with the deck. This added the hull's drawn rotation to a
+            // facing taken off the wire negated or a quarter turn round, and
+            // each kind of transport draws its hull its own way.
+            composedOrientation =
+                transport_local::worldYaw(transport->facing, attachment.localOrientation);
         }
 
         glm::vec3 oldPos(entity->getX(), entity->getY(), entity->getZ());
@@ -4424,6 +4425,12 @@ glm::vec3 MovementHandler::transportOffsetToWire(uint64_t transportGuid, const g
     return core::coords::canonicalToServer(localOffset);
 }
 
+float MovementHandler::transportFacingToWire(uint64_t transportGuid, float canonicalYaw, float kept) const {
+    const TransportManager* transports = owner_.getTransportManager();
+    const std::optional<float> facing = transports ? transports->transportFacing(transportGuid) : std::nullopt;
+    return facing ? transport_local::localFacing(*facing, canonicalYaw) : kept;
+}
+
 MovementInfo MovementHandler::moverWireInfo() {
     MovementInfo wire = movementInfo;
     wire.time = nextMovementTimestampMs();
@@ -4431,6 +4438,8 @@ MovementInfo MovementHandler::moverWireInfo() {
     wire.x = serverPos.x;
     wire.y = serverPos.y;
     wire.z = serverPos.z;
+    if (wire.hasFlag(MovementFlags::ONTRANSPORT))
+        wire.transportO = transportFacingToWire(wire.transportGuid, wire.orientation, wire.transportO);
     wire.orientation = core::coords::canonicalToServerYaw(wire.orientation);
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
         wire.transportTime = wire.time;
