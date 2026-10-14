@@ -474,6 +474,12 @@ public:
     int32_t getGuildBankWithdrawMoney() const { return guildBankWithdrawMoney_; }
     uint8_t getGuildBankActiveTab() const { return guildBankActiveTab_; }
     void setGuildBankActiveTab(uint8_t tab) { guildBankActiveTab_ = tab; }
+    /// The tabs the guild has bought (0x00c1dc0c): set by the bank list's tab
+    /// names (0x005a7250) and by MSG_GUILD_PERMISSIONS (0x005cb9f0), one more
+    /// on guild event 15 (0x006d92d0). GetNumGuildBankTabs, the cost of the
+    /// next and the one BuyGuildBankTab buys all count from it.
+    uint8_t getGuildBankTabCount() const { return guildBankTabCount_; }
+    void setGuildBankTabCount(uint8_t count) { guildBankTabCount_ = count; }
 
     // ---- Auction House ----
     void openAuctionHouse(uint64_t guid);
@@ -785,6 +791,7 @@ private:
     GuildBankData guildBankData_;
     int32_t guildBankWithdrawMoney_ = 0;
     uint8_t guildBankActiveTab_ = 0;
+    uint8_t guildBankTabCount_ = 0;
 
     // ---- Auction House state ----
     bool auctionOpen_ = false;

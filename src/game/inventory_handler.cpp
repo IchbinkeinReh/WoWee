@@ -3730,8 +3730,8 @@ void InventoryHandler::queryGuildBankTab(uint8_t tabId) {
 
 void InventoryHandler::buyGuildBankTab() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || guildBankerGuid_ == 0) return;
-    uint8_t nextTab = static_cast<uint8_t>(guildBankData_.tabs.size());
-    auto packet = GuildBankBuyTabPacket::build(guildBankerGuid_, nextTab);
+    // The next tab is the count bought (0x005a5010 sends 0x00c1dc0c).
+    auto packet = GuildBankBuyTabPacket::build(guildBankerGuid_, guildBankTabCount_);
     owner_.getSocket()->send(packet);
 }
 
@@ -3830,6 +3830,10 @@ void InventoryHandler::requestGuildBankWithdrawMoney() {
 
 void InventoryHandler::handleGuildBankList(network::Packet& packet) {
     if (!GuildBankListParser::parse(packet, guildBankData_)) return;
+    // The tab names come with the count of tabs bought (0x005a7250 ->
+    // 0x00c1dc0c).
+    if (guildBankData_.tabsIncluded)
+        guildBankTabCount_ = static_cast<uint8_t>(guildBankData_.tabs.size());
     // Receiving the bank list means the banker accepted us - make sure the
     // window is shown even if the open path didn't (e.g. a server-initiated
     // refresh, or the banker guid arrived only with the list).

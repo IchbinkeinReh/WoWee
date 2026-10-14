@@ -10,6 +10,7 @@
 #include <catch_amalgamated.hpp>
 
 #include <cstdint>
+#include <iterator>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -174,4 +175,43 @@ TEST_CASE("the money left to withdraw is one int32, -1 for no limit") {
     remaining = 5;
     CHECK_FALSE(read({0x01, 0x02, 0x03}, remaining));
     CHECK(remaining == 5);
+}
+
+// MSG_GUILD_PERMISSIONS's answer (0x005cb9f0): rank id, rights, gold a day,
+// the tabs bought (one byte), then six pairs of tab flags and items a day.
+TEST_CASE("the guild permissions are the rank, its rights and six tab pairs") {
+    std::vector<uint8_t> bytes = {
+        0x02, 0x00, 0x00, 0x00,   // rank 2
+        0x43, 0x00, 0x0C, 0x00,   // rights 0x000C0043
+        0x40, 0x0D, 0x03, 0x00,   // 200000 copper a day
+        0x03,                     // three tabs bought
+    };
+    for (uint8_t t = 0; t < 6; ++t) {
+        const uint8_t flags[] = {static_cast<uint8_t>(t + 1), 0x00, 0x00, 0x00};
+        const uint8_t items[] = {static_cast<uint8_t>(10 * t), 0x00, 0x00, 0x00};
+        bytes.insert(bytes.end(), std::begin(flags), std::end(flags));
+        bytes.insert(bytes.end(), std::begin(items), std::end(items));
+    }
+    REQUIRE(bytes.size() == 61u);
+    {
+        wowee::network::Packet packet(0, bytes);
+        GuildPermissionsData data;
+        REQUIRE(GuildPermissionsParser::parse(packet, data));
+        CHECK_FALSE(packet.hasData());   // all 61 bytes, nothing else
+        CHECK(data.rankId == 2u);
+        CHECK(data.rank.rights == 0x000C0043u);
+        CHECK(data.rank.goldLimit == 200000u);
+        CHECK(data.purchasedTabs == 3u);
+        for (size_t t = 0; t < 6; ++t) {
+            CHECK(data.rank.bankTabRights[t] == t + 1);
+            CHECK(data.rank.bankTabSlotsPerDay[t] == 10 * t);
+        }
+    }
+    // Cut short by a byte: nothing read, what was there kept.
+    bytes.pop_back();
+    wowee::network::Packet packet(0, bytes);
+    GuildPermissionsData data;
+    data.rankId = 7;
+    CHECK_FALSE(GuildPermissionsParser::parse(packet, data));
+    CHECK(data.rankId == 7u);
 }

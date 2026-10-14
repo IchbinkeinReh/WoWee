@@ -698,6 +698,7 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     // ---- Guild ----
     table[Opcode::SMSG_GUILD_INFO] = [this](network::Packet& packet) { handleGuildInfo(packet); };
     table[Opcode::SMSG_GUILD_ROSTER] = [this](network::Packet& packet) { handleGuildRoster(packet); };
+    table[Opcode::MSG_GUILD_PERMISSIONS] = [this](network::Packet& packet) { handleGuildPermissions(packet); };
     table[Opcode::SMSG_GUILD_QUERY_RESPONSE] = [this](network::Packet& packet) { handleGuildQueryResponse(packet); };
     table[Opcode::SMSG_GUILD_EVENT] = [this](network::Packet& packet) { handleGuildEvent(packet); };
     table[Opcode::SMSG_GUILD_INVITE] = [this](network::Packet& packet) { handleGuildInvite(packet); };
@@ -1684,6 +1685,38 @@ void SocialHandler::requestGuildRoster() {
     // friends frame opens with an empty one. Every one of those put a line in
     // chat that the real client never writes.
     LOG_DEBUG("Requested guild roster");
+}
+
+void SocialHandler::requestGuildPermissions() {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    network::Packet packet(wireOpcode(Opcode::MSG_GUILD_PERMISSIONS));
+    owner_.getSocket()->send(packet);
+}
+
+// MSG_GUILD_PERMISSIONS's answer (0x005cb9f0): read only with the player in
+// the world. It writes the rank's row of the rank table the roster fills
+// (0x00c21e60, 0x38 a rank: rights, gold per day, six tab flags, six item
+// counts) and the count of tabs bought (0x00c1dc0c), then raises
+// GUILD_ROSTER_UPDATE with nothing (event 400). Everything that reads the
+// player's or the edited rank's rights reads that row: the Can* queries,
+// CanGuildBankRepair, GetGuildBankTabInfo, GetGuildBankTabPermissions,
+// GetGuildBankWithdrawLimit, GuildControlGetRankFlags.
+void SocialHandler::handleGuildPermissions(network::Packet& packet) {
+    if (!owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        packet.skipAll();
+        return;
+    }
+    GuildPermissionsData data;
+    if (!GuildPermissionsParser::parse(packet, data)) {
+        packet.skipAll();
+        return;
+    }
+    // The client's table always has ten rows; this one holds the roster's
+    // ranks, and every reader of it stops at the last of those, so a rank
+    // past them would be written where nothing reads it.
+    if (data.rankId < guildRoster_.ranks.size()) guildRoster_.ranks[data.rankId] = data.rank;
+    owner_.setGuildBankTabCount(data.purchasedTabs);
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GUILD_ROSTER_UPDATE", {});
 }
 
 // The longer "guild information" text, which is a different field from the
@@ -2964,20 +2997,22 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
             // for again and so is the money it may take (0x005caa40:
             // MSG_GUILD_PERMISSIONS, MSG_GUILD_BANK_MONEY_WITHDRAWN), then the
             // tab the open vault shows (0x005a5800, nothing with no banker).
-            // MSG_GUILD_PERMISSIONS has no reader in this client yet, so only
-            // the money is asked for.
             const uint16_t unitEnd = fieldIndex(UF::UNIT_END);
             const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
             if (data.numStrings >= 1 && unitEnd != 0xFFFF && self &&
                 self->getField(static_cast<uint16_t>(unitEnd + 4)) ==
                     static_cast<uint32_t>(std::strtol(data.strings[0].c_str(), nullptr, 10))) {
-                owner_.requestGuildBankWithdrawMoney();
+                owner_.requestGuildPermissions();
                 owner_.queryGuildBankTab(owner_.getGuildBankActiveTab());
             }
             break;
         }
-        case GuildEvent::BANK_BAG_SLOTS_CHANGED:
         case GuildEvent::BANK_TAB_PURCHASED:
+            // 0x006d92d0 case 0xf: one more tab bought (0x00c1dc0c), and
+            // GUILDBANK_UPDATE_TABS below.
+            owner_.setGuildBankTabCount(static_cast<uint8_t>(owner_.getGuildBankTabCount() + 1));
+            break;
+        case GuildEvent::BANK_BAG_SLOTS_CHANGED:
         case GuildEvent::BANK_TAB_UPDATED:
         case GuildEvent::BANK_TEXT_CHANGED:
         case GuildEvent::RANK_DELETED:

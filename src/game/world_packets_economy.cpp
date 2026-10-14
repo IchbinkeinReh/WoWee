@@ -489,6 +489,21 @@ network::Packet GuildBankSwapItemsPacket::buildInventoryToBank(
     return p;
 }
 
+bool GuildPermissionsParser::parse(network::Packet& packet, GuildPermissionsData& data) {
+    if (!packet.hasRemaining(4 + 4 + 4 + 1 + 6 * 8)) return false;
+    GuildPermissionsData out;
+    out.rankId = packet.readUInt32();
+    out.rank.rights = packet.readUInt32();
+    out.rank.goldLimit = packet.readUInt32();
+    out.purchasedTabs = packet.readUInt8();
+    for (size_t t = 0; t < 6; ++t) {
+        out.rank.bankTabRights[t] = packet.readUInt32();
+        out.rank.bankTabSlotsPerDay[t] = packet.readUInt32();
+    }
+    data = out;
+    return true;
+}
+
 bool GuildBankMoneyWithdrawnParser::parse(network::Packet& packet, int32_t& remaining) {
     if (!packet.hasRemaining(4)) return false;
     remaining = static_cast<int32_t>(packet.readUInt32());

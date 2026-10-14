@@ -147,6 +147,9 @@ public:
     // Guild
     void requestGuildInfo();
     void requestGuildRoster();
+    /// MSG_GUILD_PERMISSIONS, empty: the rights of the player's rank, asked
+    /// for by 0x005caa40.
+    void requestGuildPermissions();
     /// Ask for the guild's event log. The reply is the same opcode.
     void requestGuildEventLog();
     /// Ask for one bank tab's log. Tab six is the money log, which is what the
@@ -566,6 +569,7 @@ private:
     void handlePartyMemberStats(network::Packet& packet, bool isFull);
     void handleGuildInfo(network::Packet& packet);
     void handleGuildRoster(network::Packet& packet);
+    void handleGuildPermissions(network::Packet& packet);
     void handleGuildQueryResponse(network::Packet& packet);
     void handleGuildEvent(network::Packet& packet);
     // Updates a roster member's cached online flag; returns true only on a real change so

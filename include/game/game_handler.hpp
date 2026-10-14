@@ -3619,6 +3619,11 @@ public:
     /// player may still take from the guild bank today (-1 is no limit).
     void requestGuildBankWithdrawMoney();
     int32_t getGuildBankWithdrawMoney() const;
+    /// 0x005caa40: MSG_GUILD_PERMISSIONS, then MSG_GUILD_BANK_MONEY_WITHDRAWN.
+    void requestGuildPermissions();
+    /// The tabs the guild has bought (0x00c1dc0c), and setting it.
+    uint8_t getGuildBankTabCount() const;
+    void setGuildBankTabCount(uint8_t count);
     uint8_t getGuildBankActiveTab() const;
     void setGuildBankActiveTab(uint8_t tab);
 

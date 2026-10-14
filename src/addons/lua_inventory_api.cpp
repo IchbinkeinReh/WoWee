@@ -12,6 +12,7 @@
 #include "core/logger.hpp"
 #include "core/config_paths.hpp"
 #include <array>
+#include <cmath>
 #include <fstream>
 #include <filesystem>
 #include <ranges>
@@ -3471,33 +3472,17 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // of the socketing surface. Two registrations of one name would
                 // be settled by load order.
                 {"SpellCanTargetItem",    lua_SpellCanTargetItem},
-                // CanGuildBankRepair() - whether the guild-repair button
-                // appears beside the merchant's own.
-                //
-                // Answered false while the rank rights were being read wrongly;
-                // everything it needs has been here since. The right is
-                // GR_RIGHT_WITHDRAW_REPAIR from AzerothCore's GuildRankRights,
-                // held by the player's own rank, and the bank has to have
-                // something in it - the button offers to spend guild money, and
-                // offering to spend none is offering nothing.
-                //
-                // RepairAllItems already sends the guild flag, so this gate was
-                // the whole of what was missing.
+                // CanGuildBankRepair() - 1 when the player is in a guild and
+                // their rank holds the repair right (0x40000), nil otherwise
+                // (0x005cc200). Nothing about what is in the bank.
                 {"CanGuildBankRepair", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh || gh->getGuildBankData().money == 0) { return luaReturnFalse(L); }
-            const auto& roster = gh->getGuildRoster();
-            const uint64_t self = gh->getPlayerGuid();
-            for (const auto& m : roster.members) {
-                if (m.guid != self) continue;
-                if (m.rankIndex >= roster.ranks.size()) break;
-                constexpr uint32_t kWithdrawRepair = 0x00040000u;
-                const bool may =
-                    (roster.ranks[m.rankIndex].rights & kWithdrawRepair) != 0;
-                lua_pushboolean(L, may ? 1 : 0);
-                return 1;
-            }
-            return luaReturnFalse(L);
+            constexpr uint32_t kWithdrawRepair = 0x00040000u;
+            if (gh && gh->isInGuild() && (gh->getPlayerGuildRankRights() & kWithdrawRepair))
+                lua_pushnumber(L, 1);
+            else
+                lua_pushnil(L);
+            return 1;
         }},
                 {"GetBuybackItemInfo",      lua_GetBuybackItemInfo},
                 {"GetBuybackItemLink",      lua_GetBuybackItemLink},
@@ -3941,55 +3926,58 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (gh && tab >= 1) gh->queryGuildBankTab(static_cast<uint8_t>(tab - 1));
             return 0;
         }},
-                // How many tabs the guild has bought. blizzard_guildbankui does
-                // `elseif ( tab > GetNumGuildBankTabs() )` to decide whether to
-                // offer the buy screen, and comparing a number against nil
-                // raises - so the window died on any tab past the last one.
-                //
-                // The list it counts is the same one GetGuildBankTabInfo
-                // indexes, so the two cannot disagree.
+                // How many tabs the guild has bought (0x005a44d0 pushes
+                // 0x00c1dc0c): what the bank list's tab names said, what
+                // MSG_GUILD_PERMISSIONS said, one more for each bought since.
+                // blizzard_guildbankui compares a tab against it to offer the
+                // buy screen.
                 {"GetNumGuildBankTabs", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? static_cast<lua_Number>(gh->getGuildBankData().tabs.size()) : 0);
+            lua_pushnumber(L, gh ? static_cast<lua_Number>(gh->getGuildBankTabCount()) : 0);
             return 1;
         }},
                 // GetGuildBankTabInfo(tab) → name, icon, viewable, canDeposit,
                 //                            numWithdrawals, remaining
+                // (0x005a67f0). Nothing at all without the player. A tab past
+                // the count bought, or past six, is nil, nil, nil, nil, 0, 0.
+                // Otherwise the name (GUILDBANK_TAB_NUMBER for none), the
+                // icon, then off the player's rank's row (0x005a41c0,
+                // 0x005a41f0): 1 or nil for view (0x01) and for deposit
+                // (0x02), the items a day, and the bank list's allowance, -1
+                // for no limit (0x00c1dc30).
                 {"GetGuildBankTabInfo", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const auto* tabs = gh ? &gh->getGuildBankData().tabs : nullptr;
-            // A tab the guild has not bought answers as an empty tab rather
-            // than as one nil, and the difference is a raise.
-            //
-            // Every caller unpacks all six and the panel walks 1..
-            // MAX_GUILDBANK_TABS whatever the guild owns, so the tail of that
-            // loop always lands here. With a single nil the sixth value is nil
-            // and GuildBankFrame_Update does `if remainingWithdrawals > 0`,
-            // which is a comparison against nil - it takes the whole update
-            // down part way, and a guild with no tabs at all never gets past
-            // it.
-            //
-            // The numbers are zeros and the strings empty, which is what the
-            // panel reads as "locked, nothing withdrawable"; it substitutes its
-            // own "Tab N" for the empty name a line later.
-            if (!tabs || tab < 1 || tab > static_cast<int>(tabs->size())) {
-                lua_pushstring(L, "");
-                lua_pushstring(L, "");
-                lua_pushboolean(L, 0);   // not viewable
-                lua_pushboolean(L, 0);   // cannot deposit
-                lua_pushnumber(L, 0);    // withdrawals allowed
-                lua_pushnumber(L, 0);    // withdrawals remaining
+            if (!gh) return 0;
+            const int tab = static_cast<int>(std::lround(luaL_checknumber(L, 1))) - 1;
+            if (tab < 0 || tab >= 6 || tab >= gh->getGuildBankTabCount()) {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 0);
                 return 6;
             }
-            const auto& t = (*tabs)[tab - 1];
-            lua_pushstring(L, t.tabName.c_str());
-            lua_pushstring(L, t.tabIcon.c_str());
-            lua_pushboolean(L, 1);   // viewable: it was sent, so it is
-            lua_pushboolean(L, 1);   // canDeposit
-            lua_pushnumber(L, 0);
-            // Withdrawals remaining: the bank list's own allowance, -1 for no
-            // limit (0x005a67f0 pushes 0x00c1dc30, which 0x005a7250 reads).
+            const auto& tabs = gh->getGuildBankData().tabs;
+            const auto* t = static_cast<size_t>(tab) < tabs.size() ? &tabs[static_cast<size_t>(tab)] : nullptr;
+            if (t && !t->tabName.empty()) {
+                lua_pushstring(L, t->tabName.c_str());
+            } else {
+                lua_pushstring(L, wowee::game::interfaceFormat("GUILDBANK_TAB_NUMBER", "Tab %d",
+                                                               {std::to_string(tab + 1)}).c_str());
+            }
+            lua_pushstring(L, t ? t->tabIcon.c_str() : "");
+            uint32_t flags = 0;
+            int32_t perDay = 0;
+            const uint32_t rank = gh->getPlayerGuildRankIndex();
+            const auto& ranks = gh->getGuildRoster().ranks;
+            if (rank < ranks.size()) {
+                flags = ranks[rank].bankTabRights[static_cast<size_t>(tab)];
+                perDay = static_cast<int32_t>(ranks[rank].bankTabSlotsPerDay[static_cast<size_t>(tab)]);
+            }
+            if (flags & 0x01u) lua_pushnumber(L, 1); else lua_pushnil(L);
+            if (flags & 0x02u) lua_pushnumber(L, 1); else lua_pushnil(L);
+            lua_pushnumber(L, perDay);
             lua_pushnumber(L, static_cast<double>(gh->getGuildBankData().withdrawAmount));
             return 6;
         }},
@@ -4229,17 +4217,20 @@ void registerInventoryLuaAPI(lua_State* L) {
             push("Border", g.borderStyle, static_cast<int>(g.borderColor), "TL");
             return 6;
         }},
-                // The guild master, which is what the real client answers and
-                // is now a question this can put - rank zero in the roster. It
-                // used to say no on the grounds that nothing could send the
-                // change; that was true of the builder and not of the opcode,
-                // which has been in all three expansion maps.
-                //
-                // AzerothCore does not gate the rename by rank at all, so this
-                // is the client being stricter than the server, as retail is.
+                // CanEditGuildTabInfo(tab) - 1 when the player's rank may
+                // update that tab's text (0x04 of its flags on the rank's
+                // row), nil otherwise; a tab past six has no flags
+                // (0x005cc290).
                 {"CanEditGuildTabInfo", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && gh->getPlayerGuildRankIndex() == 0 ? 1 : 0);
+            const int tab = static_cast<int>(std::lround(luaL_checknumber(L, 1))) - 1;
+            uint32_t flags = 0;
+            if (gh && tab >= 0 && tab < 6) {
+                const uint32_t rank = gh->getPlayerGuildRankIndex();
+                const auto& ranks = gh->getGuildRoster().ranks;
+                if (rank < ranks.size()) flags = ranks[rank].bankTabRights[static_cast<size_t>(tab)];
+            }
+            if (flags & 0x04u) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
                 // SetGuildBankTabInfo(tab, name, icon) - the rename popup's
@@ -4270,7 +4261,8 @@ void registerInventoryLuaAPI(lua_State* L) {
                 1000000u, 2500000u, 5000000u, 10000000u, 25000000u, 50000000u
             };
             auto* gh = getGameHandler(L);
-            const size_t owned = gh ? gh->getGuildBankData().tabs.size() : 0;
+            // Indexed by the count bought (0x005a6b20).
+            const size_t owned = gh ? gh->getGuildBankTabCount() : 0;
             if (owned >= 6) { lua_pushnil(L); return 1; }
             lua_pushnumber(L, static_cast<lua_Number>(kTabCost[owned]));
             return 1;

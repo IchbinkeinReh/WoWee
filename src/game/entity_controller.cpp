@@ -2685,8 +2685,7 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         // client's watchers on them (0x006e1bb0, 0x006d1ae0, registered at
         // 0x250 + 0xc / + 0x10 and called only on a change, 0x004d5150) ask
         // for the guild rights and the money the player may take
-        // (0x005caa40). MSG_GUILD_PERMISSIONS has no reader in this client
-        // yet, so only MSG_GUILD_BANK_MONEY_WITHDRAWN goes.
+        // (0x005caa40).
         if (const uint16_t unitEnd = fieldIndex(UF::UNIT_END); unitEnd != 0xFFFF) {
             bool guildMoved = false;
             for (const uint16_t key : {static_cast<uint16_t>(unitEnd + 3),
@@ -2697,7 +2696,7 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                 const auto was = last.find(key);
                 if ((was == last.end() ? 0u : was->second) != now->second) guildMoved = true;
             }
-            if (guildMoved) owner_.requestGuildBankWithdrawMoney();
+            if (guildMoved) owner_.requestGuildPermissions();
         }
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.

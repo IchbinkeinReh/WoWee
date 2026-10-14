@@ -1582,6 +1582,19 @@ int32_t GameHandler::getGuildBankWithdrawMoney() const {
     return inventoryHandler_ ? inventoryHandler_->getGuildBankWithdrawMoney() : 0;
 }
 
+void GameHandler::requestGuildPermissions() {
+    if (socialHandler_) socialHandler_->requestGuildPermissions();
+    requestGuildBankWithdrawMoney();
+}
+
+uint8_t GameHandler::getGuildBankTabCount() const {
+    return inventoryHandler_ ? inventoryHandler_->getGuildBankTabCount() : 0;
+}
+
+void GameHandler::setGuildBankTabCount(uint8_t count) {
+    if (inventoryHandler_) inventoryHandler_->setGuildBankTabCount(count);
+}
+
 void GameHandler::setGuildBankMoney(uint64_t money) {
     if (inventoryHandler_) inventoryHandler_->setGuildBankMoney(money);
     else guildBankData_.money = money;
@@ -2486,9 +2499,11 @@ void GameHandler::saveGuildRank(const std::string& rankName) {
     if (!socialHandler_) return;
     if (selectedGuildRank_ < 1) return;
     const auto& p = pendingGuildRank_;
-    // Ranks are zero-based on the wire and one-based in the panel.
+    // Ranks are zero-based on the wire and one-based in the panel. The gold a
+    // day goes as the row holds it times 10000: SetGuildBankWithdrawLimit
+    // writes gold, the roster copper (0x005cb170).
     socialHandler_->saveGuildRank(static_cast<uint32_t>(selectedGuildRank_ - 1),
-                                  p.rights, rankName, p.goldLimit,
+                                  p.rights, rankName, p.goldLimit * 10000u,
                                   p.tabRights.data(), p.tabSlots.data());
 }
 

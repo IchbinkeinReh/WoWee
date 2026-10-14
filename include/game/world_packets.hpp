@@ -3664,6 +3664,22 @@ public:
     static bool parse(network::Packet& packet, GuildBankData& data);
 };
 
+/** MSG_GUILD_PERMISSIONS's answer, as 0x005cb9f0 reads it: the rank, its
+ *  rights and gold per day (copper), the bank tabs the guild has bought (a
+ *  byte), then per tab of six its flags (view 0x01, deposit 0x02, update
+ *  text 0x04) and items per day - 61 bytes. */
+struct GuildPermissionsData {
+    uint32_t rankId = 0;
+    GuildRankInfo rank;
+    uint8_t purchasedTabs = 0;
+};
+
+/** False when it is cut short, with `data` untouched. */
+class GuildPermissionsParser {
+public:
+    static bool parse(network::Packet& packet, GuildPermissionsData& data);
+};
+
 /** MSG_GUILD_BANK_MONEY_WITHDRAWN's answer: the money the player may still
  *  take today, an int32, -1 for no limit (0x005a4ab0). False when it is cut
  *  short, with `remaining` untouched. */
