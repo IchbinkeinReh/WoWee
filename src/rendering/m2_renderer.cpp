@@ -1499,6 +1499,8 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     gpuModel.vertexBoxMax = model.vertexBoxMax;
     gpuModel.hasVertexBox = model.hasVertexBox;
     gpuModel.vertexRadius = model.vertexRadius;
+    gpuModel.collisionBoxMin = model.boundMin;
+    gpuModel.collisionBoxMax = model.boundMax;
     gpuModel.boundRadius = model.boundRadius;
     // Fallback when the M2 header reports 0. Measured from the model origin,
     // like the header value it stands in for: the sphere this feeds is centred

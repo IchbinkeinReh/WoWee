@@ -116,6 +116,10 @@ struct M2ModelGPU {
     glm::vec3 vertexBoxMax{0.0f};
     bool hasVertexBox = false;
     float vertexRadius = 0.0f;  ///< the header's +0xb8
+    // The header's +0xbc box, which a transport's passengers are kept in
+    // (0x0077ffb0).
+    glm::vec3 collisionBoxMin{0.0f};
+    glm::vec3 collisionBoxMax{0.0f};
     bool collisionSteppedFountain = false;
     bool collisionSteppedLowPlatform = false;
     bool collisionPlanter = false;
@@ -708,14 +712,6 @@ public:
     bool getInstanceHeight(uint32_t instanceId, glm::vec3& outPosition, float& outScale,
                            float& outModelHeight) const;
 
-    /// The world-space box of an instance's collision geometry.
-    ///
-    /// What a lift's deck actually covers, as opposed to how far its origin is
-    /// from you. Boarding a generic M2 transport is decided on a radius around
-    /// that origin, which is why standing beside an Undercity lift shaft
-    /// attaches you to the car.
-    bool getInstanceWorldBounds(uint32_t instanceId, glm::vec3& outMin, glm::vec3& outMax) const;
-
     /// The floor one named instance offers under a point, ignoring every other.
     ///
     /// Asked of a lift car, this is "is its deck under your feet" - which a box
@@ -723,6 +719,8 @@ public:
     /// doorway and the ground just outside it.
     std::optional<float> getInstanceFloorHeight(uint32_t instanceId,
                                                 float glX, float glY, float glZ) const;
+    /// An instance's model's header box (+0xbc), in the model's own frame.
+    bool getInstanceCollisionBox(uint32_t instanceId, glm::vec3& outMin, glm::vec3& outMax) const;
 
     /// The id of an instance's only animation, where it has exactly one.
     ///

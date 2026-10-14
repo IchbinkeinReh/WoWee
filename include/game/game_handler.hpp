@@ -1883,8 +1883,8 @@ public:
     bool hasServerTransportUpdate(uint64_t guid) const { return entityController_->hasServerTransportUpdate(guid); }
     glm::vec3 getComposedWorldPosition();  // Compose transport transform * local offset
     TransportManager* getTransportManager() { return transportManager_.get(); }
-    // Client-side transport board/disembark check by proximity to the live deck.
-    // Covers M2 trams/lifts and client-animated TaxiPathNode WMO ships.
+    // Client-side transport board/disembark: onto the GO_FLAG_TRANSPORT object
+    // whose floor is underfoot, off onto the world's ground (0x006ec7b0).
     void updateM2TransportBoarding(const glm::vec3& playerCanonical);
     void setPlayerOnTransport(uint64_t transportGuid, const glm::vec3& localOffset) {
         // Validate transport is registered before attaching player
@@ -4963,11 +4963,6 @@ private:
     glm::vec3 playerTransportOffset_ = glm::vec3(0.0f); // Player offset on transport
     uint64_t playerTransportStickyGuid_ = 0;       // Last transport player was on (temporary retention)
     float playerTransportStickyTimer_ = 0.0f;      // Seconds to keep sticky transport alive after transient clears
-    // Consecutive frames a ship rider has had no deck beneath them. Walking off
-    // onto the pier leaves the rider well inside the ship's boarding footprint,
-    // so losing the deck is what actually distinguishes "ashore" from "aboard".
-    // Counted rather than tested instantly so a jump is not a disembark.
-    int shipNoDeckSupportFrames_ = 0;
     bool pendingPlayerTransportTransfer_ = false;
     uint64_t pendingPlayerTransportGuid_ = 0;
     uint32_t pendingPlayerTransportEntry_ = 0;

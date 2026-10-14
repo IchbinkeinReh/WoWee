@@ -1,6 +1,7 @@
 #include "game/transport_manager.hpp"
 #include "game/game_object_rotation.hpp"
 #include "game/transport_local.hpp"
+#include "game/transport_boarding.hpp"
 
 #include <set>
 #include "game/transport_clock_sync.hpp"
@@ -570,40 +571,56 @@ bool TransportManager::isTransportCollisionReady(uint64_t transportGuid) const {
     return wmoRenderer_->instanceHasCollisionGeometry(it->second.wmoInstanceId);
 }
 
-std::optional<bool> TransportManager::isPointOverM2Footprint(
-    uint64_t transportGuid, const glm::vec3& canonicalPosition) const {
-    if (!m2Renderer_) return std::nullopt;
-    const auto it = transports_.find(transportGuid);
-    if (it == transports_.end() || !it->second.isM2 || it->second.wmoInstanceId == 0) {
-        return std::nullopt;
-    }
-    glm::vec3 boundsMin, boundsMax;
-    if (!m2Renderer_->getInstanceWorldBounds(it->second.wmoInstanceId, boundsMin, boundsMax)) {
-        return std::nullopt;
-    }
-    // The bounds are the renderer's, so the point has to be too.
+uint64_t TransportManager::groundTransportUnder(const glm::vec3& canonicalPosition) const {
     const glm::vec3 render = core::coords::canonicalToRender(canonicalPosition);
-
-    // The box is only a cheap first pass. It cannot be the answer on its own:
-    // it is axis-aligned around the whole car, so it covers the doorway and the
-    // ground just outside it, and a car is as tall as it is wide - which is how
-    // standing outside a lift's door at the top of the shaft still pulled the
-    // player down with it.
-    if (render.x < boundsMin.x || render.x > boundsMax.x ||
-        render.y < boundsMin.y || render.y > boundsMax.y ||
-        render.z < boundsMin.z - 2.0f || render.z > boundsMax.z + 2.0f) {
-        return false;
+    uint64_t owner = 0;
+    float ownerDeck = -std::numeric_limits<float>::infinity();
+    for (const auto& [guid, transport] : transports_) {
+        // A hull on the other map is held still and hidden there.
+        if (!transport.onThisMap || transport.wmoInstanceId == 0) continue;
+        std::optional<float> deck;
+        if (transport.isM2) {
+            if (!m2Renderer_) continue;
+            // The car's own floor under the feet, within a step of them -
+            // not a box about it, which covers its doorway and the ground
+            // outside.
+            deck = m2Renderer_->getInstanceFloorHeight(
+                transport.wmoInstanceId, render.x, render.y,
+                render.z + rendering::movement::kMaxStepUp);
+            if (deck) {
+                const float delta = render.z - *deck;
+                if (delta < -rendering::movement::kMaxStepUp || delta > 2.0f) deck.reset();
+            }
+        } else {
+            deck = getTransportDeckFloorHeight(guid, canonicalPosition);
+            if (deck) {
+                const float delta = canonicalPosition.z - *deck;
+                if (delta < -0.35f || delta > 1.25f) deck.reset();
+            }
+        }
+        if (deck && *deck > ownerDeck) {
+            ownerDeck = *deck;
+            owner = guid;
+        }
     }
+    return owner;
+}
 
-    // The answer is whether the car's own floor is under the feet. Outside the
-    // door there is nothing below but shaft, so the ray finds nothing and the
-    // board is refused; on the deck it lands within a step and it is allowed.
-    const auto deck = m2Renderer_->getInstanceFloorHeight(
-        it->second.wmoInstanceId, render.x, render.y,
-        render.z + rendering::movement::kMaxStepUp);
-    if (!deck) return false;
-    const float delta = render.z - *deck;
-    return delta >= -rendering::movement::kMaxStepUp && delta <= 2.0f;
+bool TransportManager::stillHoldsPassenger(uint64_t transportGuid,
+                                           const glm::vec3& canonicalPosition) const {
+    const auto it = transports_.find(transportGuid);
+    if (it == transports_.end()) return false;
+    const ActiveTransport& transport = it->second;
+    if (!transport.isM2) return false;
+    // No model to ask: 0x0070b360 keeps the passenger.
+    if (transport.wmoInstanceId == 0 || !m2Renderer_) return true;
+    glm::vec3 boxMin, boxMax;
+    // A model not loaded yet holds nobody (0x0077ffb0).
+    if (!m2Renderer_->getInstanceCollisionBox(transport.wmoInstanceId, boxMin, boxMax)) return false;
+    // The mover's place on the transport, in its frame (the movement's +0x10).
+    const glm::vec3 local = transport_local::toWire(
+        false, transport_local::toLocal(false, passengerFrame(transport), canonicalPosition));
+    return transport_boarding::insideCollisionBox(local, boxMin, boxMax);
 }
 
 std::optional<float> TransportManager::getTransportDeckFloorHeight(

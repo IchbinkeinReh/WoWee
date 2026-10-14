@@ -239,20 +239,18 @@ public:
     // entirely on the client.
     void setRiderTransport(uint64_t guid) { riderTransportGuid_ = guid; }
 
-    /// Whether a point stands over an M2 transport's actual footprint.
-    ///
-    /// getTransportDeckFloorHeight refuses an M2 outright, so the ship path's
-    /// deck test has never been available to a lift, and boarding one is
-    /// decided on a radius about its origin instead - twelve yards across and
-    /// fifteen tall for anything that is not a tram or a Thunder Bluff lift.
-    /// An Undercity lift car is about fifteen wide, so that radius reaches
-    /// well past the deck and out into the shaft: standing beside one attaches
-    /// you to it, and it then carries you down through the floor.
-    ///
-    /// Nullopt where the renderer has no bounds for the instance, so a caller
-    /// can keep its old test rather than refuse a board it cannot judge.
-    [[nodiscard]] std::optional<bool> isPointOverM2Footprint(
-        uint64_t transportGuid, const glm::vec3& canonicalPosition) const;
+    /// The transport whose own floor is the ground under the feet at a
+    /// point, or 0 where it is no transport's - the owner of the face a step
+    /// stands on, which the client hands to 0x006ec7b0 (0x007620f0). The
+    /// highest deck within a step of the feet, M2 car or WMO hull.
+    [[nodiscard]] uint64_t groundTransportUnder(const glm::vec3& canonicalPosition) const;
+    /// Whether a transport still holds a passenger at a point though the
+    /// ground under it is the world's (vtable +0xf0, 0x0070b360 ->
+    /// 0x0077ffb0): an M2 one while the point is inside its model's
+    /// collision box, its top raised a head's height; a WMO one never, as it
+    /// has no convex volume here to say so (0x007aea10 answers 0 without).
+    [[nodiscard]] bool stillHoldsPassenger(uint64_t transportGuid,
+                                           const glm::vec3& canonicalPosition) const;
     void registerTransport(uint64_t guid,
                            uint32_t wmoInstanceId,
                            uint32_t pathId,

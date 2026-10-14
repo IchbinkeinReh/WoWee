@@ -2954,6 +2954,11 @@ wowee_add_packet_test(test_game_object_rotation)
 wowee_add_test(test_transport_rotation
     SOURCES test_transport_rotation.cpp)
 
+# ── test_transport_boarding ────────────────────────
+# Which transport the player is on, from the ground under its feet.
+wowee_add_test(test_transport_boarding
+    SOURCES test_transport_boarding.cpp)
+
 # ── Sanitizers, once every test target exists ────────────────
 # This must be the last thing in this file. The loop walks ALL_TEST_TARGETS,
 # which register_test_target appends to as each test is declared, so the

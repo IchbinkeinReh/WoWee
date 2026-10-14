@@ -1256,14 +1256,14 @@ void M2Renderer::debugDumpFloorCandidatesAt(float glX, float glY, float glZ) con
     LOG_WARNING("=== Total: ", reported, " M2 candidates ===");
 }
 
-bool M2Renderer::getInstanceWorldBounds(uint32_t instanceId, glm::vec3& outMin,
-                                        glm::vec3& outMax) const {
+bool M2Renderer::getInstanceCollisionBox(uint32_t instanceId, glm::vec3& outMin,
+                                         glm::vec3& outMax) const {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end() || idxIt->second >= instances.size()) return false;
     const auto& inst = instances[idxIt->second];
     if (!inst.cachedModel) return false;
-    outMin = inst.worldBoundsMin;
-    outMax = inst.worldBoundsMax;
+    outMin = inst.cachedModel->collisionBoxMin;
+    outMax = inst.cachedModel->collisionBoxMax;
     return true;
 }
 
