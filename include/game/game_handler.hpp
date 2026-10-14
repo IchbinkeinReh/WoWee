@@ -1269,10 +1269,6 @@ public:
     uint32_t getCraftingSkillLine() const { return spellHandler_ ? spellHandler_->getCraftingSkillLine() : 0; }
     void closeCraftingWindow() { if (spellHandler_) spellHandler_->closeCraftingWindow(); }
 
-    // 400ms spell-queue window: next spell to cast when current finishes
-    uint32_t getQueuedSpellId() const;
-    void cancelQueuedSpell() { if (spellHandler_) spellHandler_->cancelQueuedSpell(); }
-
     // Unit cast state (aliased from handler_types.hpp)
     using UnitCastState = game::UnitCastState;
     // Returns cast state for any unit by GUID (delegates to SpellHandler)

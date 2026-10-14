@@ -1635,18 +1635,13 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // A spell that wants a place on the ground waits for it (0x0080c790).
     if (armGroundTarget(spellId, 0)) return;
 
+    // No spell is held for when the cast ends: 3.3.5 has no spell queue (no
+    // SpellQueueWindow, nothing kept by 0x0080cce0 or 0x0080ac90).
     if (casting_) {
-        // Spell queue: if we're within 400ms of the cast completing (and not channeling),
-        // store the spell so it fires automatically when the cast finishes.
-        if (!castIsChannel_ && castTimeRemaining_ > 0.0f && castTimeRemaining_ <= 0.4f) {
-            queuedSpellId_     = spellId;
-            queuedSpellTarget_ = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
-            LOG_INFO("Spell queue: queued spellId=", spellId, " (", castTimeRemaining_ * 1000.0f,
-                     "ms remaining)");
-        } else if (craftQueueSpellId_ == spellId) {
-            // Outside that window the press is dropped, which for a craft is
-            // the whole action gone with nothing said - and a bandage is a
-            // three second cast, so this is the easy one to hit.
+        if (craftQueueSpellId_ == spellId) {
+            // The press is dropped, which for a craft is the whole action
+            // gone with nothing said - and a bandage is a three second cast,
+            // so this is the easy one to hit.
             LOG_WARNING("Craft: spell ", spellId, " not sent - a cast is already "
                         "running with ", castTimeRemaining_, "s left");
         }
@@ -2382,8 +2377,6 @@ void SpellHandler::cancelCast() {
         cancelAura(auraSpell);
         owner_.setStandState(0);
         stopRestorationPresentation();
-        queuedSpellId_ = 0;
-        queuedSpellTarget_ = 0;
         LOG_INFO("Cancelled restoration aura: spellId=", auraSpell);
         return;
     }
@@ -2403,8 +2396,6 @@ void SpellHandler::cancelCast() {
     castTimeRemaining_ = 0.0f;
     craftQueueSpellId_ = 0;
     craftQueueRemaining_ = 0;
-    queuedSpellId_ = 0;
-    queuedSpellTarget_ = 0;
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("UNIT_SPELLCAST_STOP", {"player"});
     // Remove lingering precast visual effects
@@ -3175,8 +3166,6 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
         if (auto* svs = renderer->getSpellVisualSystem())
             svs->cancelAllPrecastVisuals();
     }
-    queuedSpellId_ = 0;
-    queuedSpellTarget_ = 0;
 
     // Stop precast sound
     if (auto* ac = owner_.services().audioCoordinator) {
@@ -3599,15 +3588,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             // count down instead of sitting at the number first asked for.
             if (owner_.addonEventCallbackRef())
                 owner_.addonEventCallbackRef()("UPDATE_TRADESKILL_RECAST", {});
-        }
-        // Spell queue: fire the next queued spell
-        else if (queuedSpellId_ != 0) {
-            uint32_t nextSpell  = queuedSpellId_;
-            uint64_t nextTarget = queuedSpellTarget_;
-            queuedSpellId_     = 0;
-            queuedSpellTarget_ = 0;
-            LOG_INFO("Spell queue: firing queued spellId=", nextSpell);
-            castSpell(nextSpell, nextTarget);
         }
     } else {
         // For non-player casters: if no tracked cast state exists, this was an
@@ -4561,8 +4541,6 @@ void SpellHandler::stopCasting() {
     owner_.lastInteractedGoGuidRef() = 0;
     craftQueueSpellId_ = 0;
     craftQueueRemaining_ = 0;
-    queuedSpellId_ = 0;
-    queuedSpellTarget_ = 0;
 
     LOG_INFO("Cancelled spell cast");
 }
@@ -4579,8 +4557,6 @@ void SpellHandler::resetCastState() {
     castTimeTotal_ = 0.0f;  // Must match castTimeRemaining_ to keep getCastProgress() == 0
     craftQueueSpellId_ = 0;
     craftQueueRemaining_ = 0;
-    queuedSpellId_ = 0;
-    queuedSpellTarget_ = 0;
     owner_.pendingGameObjectInteractGuidRef() = 0;
     // lastInteractedGoGuid_ is intentionally NOT cleared here - it must survive
     // until the server delivers SMSG_LOOT_RESPONSE after the cast completes.
@@ -5746,7 +5722,6 @@ void SpellHandler::handleCastResult(network::Packet& packet) {
             owner_.lastInteractedGoGuidRef() = 0;
             owner_.pendingGameObjectInteractGuidRef() = 0;
             craftQueueSpellId_ = 0; craftQueueRemaining_ = 0;
-            queuedSpellId_ = 0; queuedSpellTarget_ = 0;
             int playerPowerType = -1;
             if (auto pe = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
                 if (auto pu = std::dynamic_pointer_cast<Unit>(pe))
@@ -6044,8 +6019,6 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         owner_.lastInteractedGoGuidRef() = 0;
         craftQueueSpellId_ = 0;
         craftQueueRemaining_ = 0;
-        queuedSpellId_ = 0;
-        queuedSpellTarget_ = 0;
         // Remove lingering precast visual effects
         if (auto* renderer = owner_.services().renderer) {
             if (auto* svs = renderer->getSpellVisualSystem())

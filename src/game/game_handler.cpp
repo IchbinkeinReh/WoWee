@@ -4469,9 +4469,6 @@ int GameHandler::getCraftQueueRemaining() const {
 uint32_t GameHandler::getCraftQueueSpellId() const {
     return spellHandler_ ? spellHandler_->getCraftQueueSpellId() : 0;
 }
-uint32_t GameHandler::getQueuedSpellId() const {
-    return spellHandler_ ? spellHandler_->getQueuedSpellId() : 0;
-}
 const std::unordered_map<uint32_t, TalentEntry>& GameHandler::getAllTalents() const {
     if (spellHandler_) return spellHandler_->getAllTalents();
     static const std::unordered_map<uint32_t, TalentEntry> empty;

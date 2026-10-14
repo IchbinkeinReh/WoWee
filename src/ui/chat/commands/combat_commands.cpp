@@ -1,5 +1,5 @@
 // Combat commands: /cast, /castsequence, /use, /equip, /equipset,
-//                  /startattack, /stopattack, /stopcasting, /cancelqueuedspell
+//                  /startattack, /stopattack, /stopcasting
 // Moved from ChatPanel::sendChatMessage() if/else chain (Phase 3).
 #include "ui/chat/i_chat_command.hpp"
 #include "ui/chat/macro_evaluator.hpp"
@@ -511,17 +511,6 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Stop current cast"; }
 };
 
-// --- /cancelqueuedspell, /stopspellqueue ---
-class CancelQueuedSpellCommand : public IChatCommand {
-public:
-    ChatCommandResult execute(ChatCommandContext& ctx) override {
-        ctx.gameHandler.cancelQueuedSpell();
-        return {};
-    }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"cancelqueuedspell", "stopspellqueue"}; }
-    [[nodiscard]] std::string helpText() const override { return "Cancel queued spell"; }
-};
-
 // --- Registration ---
 void registerCombatCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<CastCommand>());
@@ -532,7 +521,6 @@ void registerCombatCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<StartAttackCommand>());
     reg.registerCommand(std::make_unique<StopAttackCommand>());
     reg.registerCommand(std::make_unique<StopCastingCommand>());
-    reg.registerCommand(std::make_unique<CancelQueuedSpellCommand>());
 }
 
 } // namespace ui

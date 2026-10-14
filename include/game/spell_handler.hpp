@@ -220,10 +220,6 @@ public:
     // totem-category cast failures; empty if unknown.
     const std::string& getTotemCategoryName(uint32_t categoryId);
 
-    // Spell queue (400ms window)
-    [[nodiscard]] uint32_t getQueuedSpellId() const { return queuedSpellId_; }
-    void cancelQueuedSpell() { queuedSpellId_ = 0; queuedSpellTarget_ = 0; }
-
     // Unit cast state (tracked per GUID for target frame + boss frames)
     [[nodiscard]] const UnitCastState* getUnitCastState(uint64_t guid) const {
         auto it = unitCastStates_.find(guid);
@@ -691,14 +687,11 @@ private:
     std::unordered_map<uint32_t, std::string> totemCategoryNames_;
     bool totemCategoryDbcLoaded_ = false;
 
-    // Spell queue (400ms window)
     uint32_t lastGroundCastSpellId_ = 0;
     /// When auto-attack was last toggled, for the Ability Toggle guard: a
     /// second press inside a short window is an accident rather than a
     /// decision. See the SPELL_ID_ATTACK branch in castSpell.
     std::chrono::steady_clock::time_point autoAttackToggledAt_{};
-    uint32_t queuedSpellId_ = 0;
-    uint64_t queuedSpellTarget_ = 0;
 
     // Per-unit cast state
     std::unordered_map<uint64_t, UnitCastState> unitCastStates_;
