@@ -92,6 +92,15 @@ public:
 
     // --- The pet's spell history (0x00d3f5ac + 24) ---
     [[nodiscard]] const spell_history::History& petSpellHistory() const { return petHistory_; }
+    // --- The player's (0x00d3f5ac) ---
+    [[nodiscard]] const spell_history::History& playerSpellHistory() const { return playerHistory_; }
+    /// 0x00809000 for the player's spell: the cooldown that runs longest of
+    /// its own, its category's and its global cooldown (0x00807980), in
+    /// milliseconds of historyNowMs().
+    [[nodiscard]] spell_history::History::Cooldown playerCooldown(uint32_t spellId) const;
+    /// The client's clock for the history, in milliseconds (0x0086ae20):
+    /// GetTime()'s, a thousandth of a second at a time.
+    static int64_t historyNowMs();
     /// 0x00809100 for the pet: secureAbilityToggle on, and the spell's
     /// cooldown began under 1.5 s ago (0x00807d40) - its button does not
     /// turn it off.
@@ -298,17 +307,6 @@ public:
         auto it = unitAurasCache_.find(guid);
         return (it != unitAurasCache_.end()) ? &it->second : nullptr;
     }
-
-    // Global Cooldown (GCD)
-    [[nodiscard]] float getGCDRemaining() const {
-        if (gcdTotal_ <= 0.0f) return 0.0f;
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - gcdStartedAt_).count() / 1000.0f;
-        float rem = gcdTotal_ - elapsed;
-        return rem > 0.0f ? rem : 0.0f;
-    }
-    [[nodiscard]] float getGCDTotal() const { return gcdTotal_; }
-    [[nodiscard]] bool isGCDActive() const { return getGCDRemaining() > 0.0f; }
 
     // Spell book tabs
     const std::vector<SpellBookTab>& getSpellBookTabs();
@@ -557,9 +555,24 @@ private:
     };
     UnitTarget unitTarget_;
     spell_history::History petHistory_;
+    spell_history::History playerHistory_;
     int64_t historyPruneAt_ = 0;  ///< 0x00d3f608: the next prune, on a spell go
-    /// The client's clock for the history, in milliseconds (0x0086ae20).
-    static int64_t historyNowMs();
+    /// 0x00805d70: the global cooldown a cast begins in the caster's history
+    /// - StartRecoveryTime through its modifiers, the usual 1.5 s hastened.
+    void noteGlobalCooldown(uint32_t spellId, uint64_t caster, spell_history::History& history);
+    /// 0x007fef60: CategoryRecoveryTime as the history takes it - for the
+    /// player (not `pet`) scaled by the main hand's speed for a category
+    /// flagged 0x1, and the ranged attack time added for Attributes 0x2
+    /// without AttributesEx2 0x20000; through the Cooldown modifiers (op 11)
+    /// unless AttributesEx6 0x80000000.
+    int32_t categoryCooldown(uint32_t spellId, bool pet) const;
+    /// 0x0053bac0: the player's history changed - ACTIONBAR_UPDATE_COOLDOWN
+    /// (0x005a7cc0), then SPELL_UPDATE_COOLDOWN.
+    void playerCooldownsChanged();
+    /// SpellCategory.dbc's Flags (0x00ad478c), 0 for none.
+    uint32_t spellCategoryFlags(uint32_t category) const;
+    mutable std::unordered_map<uint32_t, uint32_t> spellCategoryFlags_;
+    mutable bool spellCategoriesLoaded_ = false;
     /// A cooldown through the spell's Cooldown modifiers (op 11).
     int32_t moddedCooldown(uint32_t spellId, int32_t ms) const;
     /// 0x0080bc80 for a spell and a unit: whether it fills some of
@@ -682,10 +695,6 @@ private:
     std::vector<AuraSlot> playerAuras_;
     std::vector<AuraSlot> targetAuras_;
     std::unordered_map<uint64_t, std::vector<AuraSlot>> unitAurasCache_;
-
-    // Global Cooldown
-    float gcdTotal_ = 0.0f;
-    std::chrono::steady_clock::time_point gcdStartedAt_{};
 
     // Spell book tabs
     std::vector<SpellBookTab> spellBookTabs_;

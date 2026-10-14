@@ -904,35 +904,28 @@ static int lua_GetSpellCooldown(lua_State* L) {
     // A name, an id, or a book slot with the book beside it - the spellbook
     // asks in the last of those three.
     const uint32_t spellId = spellIdForCall(L, gh);
+    const char* book = !lua_isnoneornil(L, 2) && lua_isnumber(L, 1) ? lua_tostring(L, 2) : nullptr;
+    if (!book || std::string(book) != "pet") {
+        // 0x00540e80: the player's history (0x00809000) - the start and
+        // length of what runs longest of the spell's cooldown, its
+        // category's and its global cooldown, in seconds, and whether it is
+        // enabled (not held until an event).
+        const auto cd = gh->playerSpellCooldown(spellId);
+        lua_pushnumber(L, static_cast<double>(cd.start) * 0.001);
+        lua_pushnumber(L, static_cast<double>(cd.duration) * 0.001);
+        lua_pushnumber(L, cd.enabled ? 1 : 0);
+        return 3;
+    }
     float cd = gh->getSpellCooldown(spellId);
-    // Also check GCD - if spell has no individual cooldown but GCD is active,
-    // return the GCD timing (this is how WoW handles it)
-    float gcdRem = gh->getGCDRemaining();
-    float gcdTotal = gh->getGCDTotal();
-
-    // WoW returns (start, duration, enabled) where remaining = start + duration - GetTime()
     double nowSec = luaGetTimeNow();
-
     if (cd > 0.01f) {
-        // Spell-specific cooldown (longer than GCD). The pair asked for is
-        // (start, duration), not (now, remaining) - the cooldown frame draws a
-        // sweep of `duration` beginning at `start`, so saying it began now with
-        // a length of whatever is left restarts the swirl at full every time
-        // the interface asks. It asks on every ACTIONBAR_UPDATE_COOLDOWN, which
-        // fires on every cast, so a five-minute cooldown looked like it kept
-        // starting over. Wound back the same way the GCD branch below already
-        // does it.
+        // The pair asked for is (start, duration), not (now, remaining) - the
+        // cooldown frame draws a sweep of `duration` beginning at `start`.
         double total = gh->getSpellCooldownTotal(spellId);
         if (total < cd) total = cd;   // a total never recorded falls back to what is left
         double start = nowSec - (total - cd);
         lua_pushnumber(L, start);
         lua_pushnumber(L, total);
-    } else if (gcdRem > 0.01f) {
-        // GCD is active - return GCD timing
-        double elapsed = gcdTotal - gcdRem;
-        double start = nowSec - elapsed;
-        lua_pushnumber(L, start);
-        lua_pushnumber(L, gcdTotal);
     } else {
         lua_pushnumber(L, 0);       // not on cooldown
         lua_pushnumber(L, 0);

@@ -4480,8 +4480,8 @@ const std::unordered_map<uint32_t, TalentTabEntry>& GameHandler::getAllTalentTab
     static const std::unordered_map<uint32_t, TalentTabEntry> empty;
     return empty;
 }
-float GameHandler::getGCDTotal() const {
-    return spellHandler_ ? spellHandler_->getGCDTotal() : 0.0f;
+spell_history::History::Cooldown GameHandler::playerSpellCooldown(uint32_t spellId) const {
+    return spellHandler_ ? spellHandler_->playerCooldown(spellId) : spell_history::History::Cooldown{};
 }
 bool GameHandler::showTalentWipeConfirmDialog() const {
     return spellHandler_ ? spellHandler_->showTalentWipeConfirmDialog() : false;

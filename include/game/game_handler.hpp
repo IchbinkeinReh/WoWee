@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/spell_history.hpp"
 #include "game/quest_giver_status.hpp"
 #include "game/spell_mods.hpp"
 #include "game/ground_target.hpp"
@@ -1582,16 +1583,9 @@ public:
     }
     float getTimeSpeed() const { return timeSpeed_; }
 
-    // Global Cooldown (GCD) - set when the server sends a spellId=0 cooldown entry
-    float getGCDRemaining() const {
-        if (gcdTotal_ <= 0.0f) return 0.0f;
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - gcdStartedAt_).count() / 1000.0f;
-        float rem = gcdTotal_ - elapsed;
-        return rem > 0.0f ? rem : 0.0f;
-    }
-    float getGCDTotal() const;
-    bool isGCDActive() const { return getGCDRemaining() > 0.0f; }
+    /// 0x00809000 for the player's spell (SpellHandler::playerCooldown):
+    /// start and length in milliseconds of GetTime()'s clock.
+    spell_history::History::Cooldown playerSpellCooldown(uint32_t spellId) const;
 
     // Weather state (updated by SMSG_WEATHER)
     // weatherType: the Weather.dbc row id (the server's WeatherState)
@@ -5463,10 +5457,6 @@ private:
     /// Game minutes per real second (default 1/60: a game day per real day).
     float timeSpeed_ = kDefaultGameTimeSpeed;
     void handleLoginSetTimeSpeed(network::Packet& packet);
-
-    // ---- Global Cooldown (GCD) ----
-    float gcdTotal_ = 0.0f;
-    std::chrono::steady_clock::time_point gcdStartedAt_{};
 
     // ---- Weather state (SMSG_WEATHER) ----
     uint32_t weatherType_ = 0;       // the Weather.dbc row the server names

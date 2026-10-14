@@ -16,6 +16,7 @@ namespace wowee::game::spell_history {
 /// until an event, +0x28 the global cooldown's category, +0x2c its length).
 struct Entry {
     uint32_t spellId = 0;
+    uint32_t itemId = 0;
     int64_t start = 0;
     int32_t duration = 0;
     uint32_t category = 0;
@@ -87,6 +88,43 @@ public:
         return false;
     }
     [[nodiscard]] const std::vector<Entry>& entries() const { return entries_; }
+
+    /// What 0x00807980 answers of a spell cast with no item: the cooldown
+    /// that runs longest of the spell's own, its category's (Category, or
+    /// any whose SpellCategory row has Flags 0x2 - `shared`) and the global
+    /// cooldown of its StartRecoveryCategory, with its start and length; a
+    /// held entry counts as starting now, the spell's own a millisecond
+    /// long and running a millisecond more, and leaves it disabled.
+    struct Cooldown {
+        bool running = false;  ///< any ends after now
+        int64_t start = 0;
+        int32_t duration = 0;
+        bool enabled = true;
+    };
+    template <typename Shared>
+    [[nodiscard]] Cooldown query(uint32_t spellId, uint32_t category, uint32_t startRecoveryCategory, int64_t now,
+                                 Shared&& shared) const {
+        Cooldown out;
+        int64_t latest = now;
+        const auto take = [&](int64_t end, int64_t start, int32_t duration, const Entry& e, bool enable) {
+            if (end - latest < 0) return;
+            out.start = start;
+            out.duration = duration;
+            latest = end;
+            if (enable && out.enabled) out.enabled = !e.onHold;
+        };
+        for (const auto& e : entries_) {
+            if (e.spellId == spellId && e.itemId == 0 && (e.duration != 0 || e.onHold))
+                take((e.onHold ? now + 1 : e.start) + e.duration, e.onHold ? now : e.start, e.onHold ? 1 : e.duration,
+                     e, true);
+            if (((e.category != 0 && e.category == category) || shared(e.category)) && e.categoryDuration != 0)
+                take((e.onHold ? now : e.categoryStart) + e.categoryDuration, e.onHold ? now : e.categoryStart,
+                     e.categoryDuration, e, true);
+            if (e.gcdCategory == startRecoveryCategory && e.gcd != 0) take(e.start + e.gcd, e.start, e.gcd, e, false);
+        }
+        out.running = latest != now;
+        return out;
+    }
 
 private:
     std::vector<Entry> entries_;

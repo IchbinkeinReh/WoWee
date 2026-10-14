@@ -3591,7 +3591,6 @@ void GameHandler::registerRemainingOpcodes() {
         Opcode::SMSG_COMMENTATOR_SKIRMISH_QUEUE_RESULT1,
         Opcode::SMSG_COMMENTATOR_SKIRMISH_QUEUE_RESULT2,
         Opcode::SMSG_COMMENTATOR_STATE_CHANGED,
-        Opcode::SMSG_COOLDOWN_CHEAT,
         Opcode::SMSG_DANCE_QUERY_RESPONSE,
         Opcode::SMSG_DBLOOKUP,
         Opcode::SMSG_DEBUGAURAPROC,

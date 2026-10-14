@@ -1914,6 +1914,16 @@ target_link_libraries(test_pet_action PRIVATE catch2_main)
 add_test(NAME pet_action COMMAND test_pet_action)
 register_test_target(test_pet_action)
 
+# ── test_spell_history ──────────────────────────────────────
+add_executable(test_spell_history
+    test_spell_history.cpp
+)
+target_include_directories(test_spell_history PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_spell_history SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_spell_history PRIVATE catch2_main)
+add_test(NAME spell_history COMMAND test_spell_history)
+register_test_target(test_spell_history)
+
 # ── test_spell_unit_target ──────────────────────────────────
 add_executable(test_spell_unit_target
     test_spell_unit_target.cpp

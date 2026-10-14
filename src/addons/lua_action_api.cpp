@@ -477,6 +477,15 @@ static int lua_GetActionCooldown(lua_State* L) {
         return 3;
     }
     const auto& action = bar[slot];
+    if (action.type == game::ActionBarSlot::SPELL) {
+        // 0x005a8e40: a spell's is its history's, as GetSpellCooldown answers
+        // it (0x00809000).
+        const auto cd = gh->playerSpellCooldown(action.id);
+        lua_pushnumber(L, static_cast<double>(cd.start) * 0.001);
+        lua_pushnumber(L, static_cast<double>(cd.duration) * 0.001);
+        lua_pushnumber(L, cd.enabled ? 1 : 0);
+        return 3;
+    }
     if (action.cooldownRemaining > 0.0f) {
         // WoW returns GetTime()-based start time; approximate
         double now = 0;
@@ -491,18 +500,6 @@ static int lua_GetActionCooldown(lua_State* L) {
         double start = now - (action.cooldownTotal - action.cooldownRemaining);
         lua_pushnumber(L, start);
         lua_pushnumber(L, action.cooldownTotal);
-        lua_pushnumber(L, 1);
-    } else if (action.type == game::ActionBarSlot::SPELL && gh->isGCDActive()) {
-        // No individual cooldown but GCD is active - show GCD sweep
-        float gcdRem = gh->getGCDRemaining();
-        float gcdTotal = gh->getGCDTotal();
-        double now = 0;
-        lua_getglobal(L, "GetTime");
-        if (lua_isfunction(L, -1)) { lua_call(L, 0, 1); now = lua_tonumber(L, -1); lua_pop(L, 1); }
-        else lua_pop(L, 1);
-        double elapsed = gcdTotal - gcdRem;
-        lua_pushnumber(L, now - elapsed);
-        lua_pushnumber(L, gcdTotal);
         lua_pushnumber(L, 1);
     } else {
         lua_pushnumber(L, 0);
