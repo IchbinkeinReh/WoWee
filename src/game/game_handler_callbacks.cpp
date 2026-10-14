@@ -12,6 +12,7 @@
 #include "game/spell_description_eval.hpp"
 #include "game/gather_spells.hpp"
 #include "game/spell_target_kind.hpp"
+#include "game/spell_visual_choice.hpp"
 #include "game/packed_time.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/game_utils.hpp"
@@ -4418,7 +4419,16 @@ uint32_t GameHandler::getSpellVisualId(uint32_t spellId) const {
     if (spellId == 0) return 0;
     loadSpellNameCache();
     auto it = spellNameCache_.find(spellId);
-    return it != spellNameCache_.end() ? it->second.spellVisualId : 0;
+    if (it == spellNameCache_.end()) return 0;
+    // 0x007fa290: the second where violenceLevel is under 2.
+    return spell_visual::choose(
+        it->second.spellVisualId, it->second.spellVisualId2,
+        spell_visual::violenceLevel(addons::storedCVarValue("violenceLevel",
+                                                            std::to_string(spell_visual::kViolenceLevelLimit))));
+}
+
+bool GameHandler::isSpellMissileInFlight(uint64_t caster, uint32_t spellId, uint32_t castTime) const {
+    return spellHandler_ && spellHandler_->isMissileInFlight(caster, spellId, castTime);
 }
 
 uint32_t GameHandler::getSpellMountCreature(uint32_t spellId) const {

@@ -3715,7 +3715,8 @@ public:
     bool isSpellPassive(uint32_t spellId) const;
     /// Spell.dbc Attributes, the base word; nothing for a spell not in it.
     std::optional<uint32_t> getSpellAttributes(uint32_t spellId) const;
-    /// Spell.dbc SpellVisual (the first); 0 for none.
+    /// The SpellVisual the client shows for a spell (0x007fa290, see
+    /// spell_visual_choice.hpp); 0 for none.
     uint32_t getSpellVisualId(uint32_t spellId) const;
     /// 0x00804cc0: whether a missile of the cast a dynamic object carries
     /// (DYNAMICOBJECT_CASTER, SPELLID, CASTTIME) still flies.
@@ -4358,6 +4359,9 @@ public:
         uint32_t effectRadiusIndex[3] = {0, 0, 0};
         float durationSec = 0.0f;
         uint32_t spellVisualId = 0;
+        /// Spell.dbc's second SpellVisual (+0x210), shown under violenceLevel
+        /// 2 (0x007fa290).
+        uint32_t spellVisualId2 = 0;
         // Spell.dbc Speed: yards per second the spell's missile flies at, the
         // client's CMissile speed (FUN_00732ff0). Zero - most spells - means
         // it lands at once and sends no missile.

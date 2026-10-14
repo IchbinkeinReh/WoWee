@@ -807,6 +807,12 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // On by default (0x004d1600 registers it "1"): a spell effect's model
     // sound on the active player plays at the listener (M2EventSounds).
     else if (n == "sound_listeneratcharacter") lua_pushstring(L, "1");
+    // The client registers both (0x007f3a10, 0x0078e400): violenceLevel at
+    // its locale's limit, 2 here, which shows a spell's first SpellVisual
+    // (0x007fa290); spellEffectLevel ("Spell Detail") at 9, which drops all
+    // of a kit's falling models (0x007fb5b0).
+    else if (n == "violencelevel") lua_pushstring(L, "2");
+    else if (n == "spelleffectlevel") lua_pushstring(L, "9");
     else if (n == "sound_numchannels") lua_pushstring(L, "64");
     else if (n == "sound_outputquality") lua_pushstring(L, "2");
     else if (n == "uiscale") lua_pushstring(L, "1");

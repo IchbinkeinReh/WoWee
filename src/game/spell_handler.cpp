@@ -469,11 +469,7 @@ void SpellHandler::playSpellCastSound(uint32_t spellId) {
 
 // ---- Spell visual effect helpers ----
 
-uint32_t SpellHandler::resolveSpellVisualId(uint32_t spellId) {
-    owner_.loadSpellNameCache();
-    auto it = owner_.spellNameCacheRef().find(spellId);
-    return (it != owner_.spellNameCacheRef().end()) ? it->second.spellVisualId : 0;
-}
+uint32_t SpellHandler::resolveSpellVisualId(uint32_t spellId) { return owner_.getSpellVisualId(spellId); }
 
 bool SpellHandler::resolveUnitPosition(uint64_t guid, glm::vec3& outPos) {
     auto* renderer = owner_.services().renderer;
@@ -5020,8 +5016,10 @@ void SpellHandler::loadSpellNameCache() const {
                 entry.maxRange = static_cast<float>(entry.rangeIndex); // store index temporarily
             }
             // SpellVisualID: references SpellVisual.dbc for cast/impact M2 effects
-            if (spellVisualIdField != 0xFFFFFFFF && spellVisualIdField < dbc->getFieldCount())
-                entry.spellVisualId = dbc->getUInt32(i, spellVisualIdField);
+            // and the second of the two, the next column (+0x210), which
+            // 0x007fa290 shows under violenceLevel 2.
+            entry.spellVisualId = spellVisualIdField < fieldCount ? dbc->getUInt32(i, spellVisualIdField) : 0;
+            entry.spellVisualId2 = spellVisualIdField < fieldCount - 1 ? dbc->getUInt32(i, spellVisualIdField + 1) : 0;
             if (speedField != 0xFFFFFFFF && speedField < fieldCount)
                 entry.missileSpeed = dbc->getFloat(i, speedField);
             if (spellMissileField != 0xFFFFFFFF && spellMissileField < fieldCount)

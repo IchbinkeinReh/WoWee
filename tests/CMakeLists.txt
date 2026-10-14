@@ -2825,6 +2825,11 @@ wowee_add_test(test_spell_missiles_in_flight
 wowee_add_test(test_blizzard_object
     SOURCES test_blizzard_object.cpp)
 
+# ── test_spell_visual_choice ─────────────────────────
+# Which of a spell's SpellVisuals shows, by violenceLevel (0x007fa290).
+wowee_add_test(test_spell_visual_choice
+    SOURCES test_spell_visual_choice.cpp)
+
 # ── test_spell_chain ─────────────────────────────────
 # SpellChainEffects beams: the row, a chain's bolts (0x007fa4d0) and the
 # lightning strip (Common Lightning.cpp, 0x009a8c00 to 0x009ab730).
