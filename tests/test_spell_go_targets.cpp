@@ -48,6 +48,8 @@ TEST_CASE("a unit cast keeps its target and flags", "[spell_go]") {
     REQUIRE(SpellGoParser::parse(p, data));
     CHECK(data.targetFlags == 0x2);
     CHECK(data.targetGuid == kTarget);
+    // The cast's time, which its dynamic object carries (0x00804cc0).
+    CHECK(data.castTime == 123456);
     CHECK_FALSE(data.hasSourceLocation);
     CHECK_FALSE(data.hasDestLocation);
     REQUIRE(data.hitTargets.size() == 1);

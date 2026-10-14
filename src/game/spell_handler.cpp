@@ -2903,6 +2903,8 @@ void SpellHandler::syncPreWotlkTalentsFromKnownSpells() {
 }
 
 void SpellHandler::updateTimers(float dt) {
+    // 0x00804c10: the missiles that have arrived leave the list.
+    missilesInFlight_.expire(historyNowMs());
     // Tick down cast bar
     if (casting_ && castTimeRemaining_ > 0.0f) {
         castTimeRemaining_ -= dt;
@@ -3362,9 +3364,34 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     }
 }
 
+void SpellHandler::noteMissileInFlight(const SpellGoData& data) {
+    owner_.loadSpellNameCache();
+    const auto spellIt = owner_.spellNameCacheRef().find(data.spellId);
+    if (spellIt == owner_.spellNameCacheRef().end() || spellIt->second.missileSpeed == 0.0f) return;
+    const float speed = spellIt->second.missileSpeed;
+    auto& entities = owner_.getEntityManager();
+    const auto caster = entities.getEntity(data.casterUnit);
+    if (!caster) return;
+    const glm::vec3 from(caster->getX(), caster->getY(), caster->getZ());
+    // To the destination where the targets have one, else to the first unit
+    // hit, if the client knows it; otherwise nothing is added.
+    glm::vec3 to;
+    if ((data.targetFlags & 0x40u) != 0 && data.hasDestLocation) {
+        to = glm::vec3(data.destX, data.destY, data.destZ);
+    } else {
+        if (data.hitTargets.empty()) return;
+        const auto target = entities.getEntity(data.hitTargets.front());
+        if (!target) return;
+        to = glm::vec3(target->getX(), target->getY(), target->getZ());
+    }
+    missilesInFlight_.add({.caster = data.casterUnit, .spellId = data.spellId, .castTime = data.castTime,
+                           .arrivesAt = historyNowMs() + spell_missiles::flightMs(glm::length(to - from), speed)});
+}
+
 void SpellHandler::handleSpellGo(network::Packet& packet) {
     SpellGoData data;
     if (!owner_.getPacketParsers()->parseSpellGo(packet, data)) return;
+    noteMissileInFlight(data);
     const bool rangedWeaponAttack = spellclass::isRangedWeaponAutoAttack(data.spellId);
     // 0x00805330 for a cast that had no start (instant), as for one that had.
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
@@ -4577,6 +4604,7 @@ void SpellHandler::resetAllState() {
     targetAuras_.clear();
     unitAurasCache_.clear();
     unitCastStates_.clear();
+    missilesInFlight_.clear();
     resetCastState();
     resetTalentState();
 }

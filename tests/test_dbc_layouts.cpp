@@ -275,4 +275,7 @@ TEST_CASE("A dynamic object's fields sit where the client reads them", "[update_
     CHECK(j["DYNAMICOBJECT_BYTES"].get<uint32_t>() == kObjectEnd + 8 / 4);
     CHECK(j["DYNAMICOBJECT_SPELLID"].get<uint32_t>() == kObjectEnd + 0xc / 4);
     CHECK(j["DYNAMICOBJECT_RADIUS"].get<uint32_t>() == kObjectEnd + 0x10 / 4);
+    // 0x00804cc0 reads the caster at +0 and the cast time at +0x14.
+    CHECK(j["DYNAMICOBJECT_CASTER"].get<uint32_t>() == kObjectEnd);
+    CHECK(j["DYNAMICOBJECT_CASTTIME"].get<uint32_t>() == kObjectEnd + 0x14 / 4);
 }

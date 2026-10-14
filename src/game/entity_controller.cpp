@@ -2441,7 +2441,17 @@ bool EntityController::spawnDynamicObjectFromFields(uint64_t guid, const Entity&
     if (const uint16_t scaleIdx = fieldIndex(UF::OBJECT_FIELD_SCALE_X); scaleIdx != 0xFFFF) {
         if (const uint32_t raw = entity.getField(scaleIdx); raw != 0) scale = bitsToFloat(raw);
     }
-    owner_.dynamicObjectSpawnCallbackRef()(guid, entity.getField(spellIdx),
+    // The cast (0x00804cc0): its caster unit and its time; without the
+    // fields, none, and the model is never held back.
+    uint64_t caster = 0;
+    uint32_t castTime = 0;
+    if (const uint16_t casterIdx = fieldIndex(UF::DYNAMICOBJECT_CASTER); casterIdx != 0xFFFF) {
+        caster = entity.getField(casterIdx) |
+                 (static_cast<uint64_t>(entity.getField(static_cast<uint16_t>(casterIdx + 1))) << 32);
+    }
+    if (const uint16_t timeIdx = fieldIndex(UF::DYNAMICOBJECT_CASTTIME); timeIdx != 0xFFFF)
+        castTime = entity.getField(timeIdx);
+    owner_.dynamicObjectSpawnCallbackRef()(guid, entity.getField(spellIdx), caster, castTime,
                                            static_cast<uint8_t>(entity.getField(bytesIdx) & 0xFF),
                                            bitsToFloat(entity.getField(radiusIdx)), scale, entity.getX(),
                                            entity.getY(), entity.getZ(), entity.getOrientation());

@@ -80,7 +80,7 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
     data.spellId = packet.readUInt32();
     data.castFlags = packet.readUInt32();
     // Timestamp in 3.3.5a
-    packet.readUInt32();
+    data.castTime = packet.readUInt32();
 
     const uint8_t rawHitCount = packet.readUInt8();
     if (rawHitCount > 128) {

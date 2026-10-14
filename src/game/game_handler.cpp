@@ -215,6 +215,7 @@ void GameHandler::disconnect() {
     otherPlayerMoveTimeMs_.clear();
     if (spellHandler_) spellHandler_->clearUnitCastStates();
     if (spellHandler_) spellHandler_->clearUnitAurasCache();
+    if (spellHandler_) spellHandler_->clearMissilesInFlight();
     if (combatHandler_) combatHandler_->clearCombatText();
     entityController_->clearAll();
     // The next character starts with no form and its own bar.

@@ -2429,6 +2429,10 @@ struct SpellGoData {
     uint8_t castCount = 0;
     uint32_t spellId = 0;
     uint32_t castFlags = 0;
+    /// The server's time of the cast, the u32 after the cast flags; a
+    /// dynamic object of the cast carries it as DYNAMICOBJECT_CASTTIME
+    /// (0x0080e1b0, 0x00804cc0). WotLK only; the older parsers leave it 0.
+    uint32_t castTime = 0;
     uint8_t hitCount = 0;
     std::vector<uint64_t>       hitTargets;
     uint8_t missCount = 0;

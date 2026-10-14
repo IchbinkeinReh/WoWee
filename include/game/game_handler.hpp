@@ -1733,10 +1733,12 @@ public:
     void setGameObjectDestroyCallback(GameObjectDespawnCallback cb) { gameObjectDestroyCallback_ = std::move(cb); }
 
     /// A dynamic object come into view (DynamicObject_C, 0x00705230): its
-    /// DYNAMICOBJECT_SPELLID, BYTES' low byte (its type), RADIUS and
-    /// OBJECT_FIELD_SCALE_X, where it is (canonical) and its facing.
-    using DynamicObjectSpawnCallback = std::function<void(uint64_t guid, uint32_t spellId, uint8_t type, float radius,
-                                                          float scale, float x, float y, float z, float orientation)>;
+    /// DYNAMICOBJECT_SPELLID, CASTER and CASTTIME (the cast, 0x00804cc0),
+    /// BYTES' low byte (its type), RADIUS and OBJECT_FIELD_SCALE_X, where it
+    /// is (canonical) and its facing.
+    using DynamicObjectSpawnCallback =
+        std::function<void(uint64_t guid, uint32_t spellId, uint64_t caster, uint32_t castTime, uint8_t type,
+                           float radius, float scale, float x, float y, float z, float orientation)>;
     void setDynamicObjectSpawnCallback(DynamicObjectSpawnCallback cb) { dynamicObjectSpawnCallback_ = std::move(cb); }
     /// A dynamic object gone: `destroyed` by SMSG_DESTROY_OBJECT (0x004d7610
     /// passes 1 to 0x00704a70), else out of range or the world unloaded.
@@ -3715,6 +3717,9 @@ public:
     std::optional<uint32_t> getSpellAttributes(uint32_t spellId) const;
     /// Spell.dbc SpellVisual (the first); 0 for none.
     uint32_t getSpellVisualId(uint32_t spellId) const;
+    /// 0x00804cc0: whether a missile of the cast a dynamic object carries
+    /// (DYNAMICOBJECT_CASTER, SPELLID, CASTTIME) still flies.
+    bool isSpellMissileInFlight(uint64_t caster, uint32_t spellId, uint32_t castTime) const;
     /// What a spell is aimed at (0x007fe1b0): 2 enemies, 1 friends, 0 neither.
     uint32_t getSpellTargetKind(uint32_t spellId) const;
     /// Whether one of a spell's effects shapeshifts (aura 36) into `form`

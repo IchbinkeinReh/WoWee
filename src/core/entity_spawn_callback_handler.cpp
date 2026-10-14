@@ -113,11 +113,13 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
 
     // A dynamic object's model: its spell's visual's PersistentAreaKit
     // (0x00705100 -> 0x00704b30), where it stands and facing as it faces.
-    gameHandler_.setDynamicObjectSpawnCallback([this](uint64_t guid, uint32_t spellId, uint8_t type, float radius,
-                                                      float scale, float x, float y, float z, float orientation) {
+    gameHandler_.setDynamicObjectSpawnCallback([this](uint64_t guid, uint32_t spellId, uint64_t caster,
+                                                      uint32_t castTime, uint8_t type, float radius, float scale,
+                                                      float x, float y, float z, float orientation) {
         auto* visuals = renderer_.getSpellVisualSystem();
         if (!visuals) return;
-        visuals->addDynamicObject(guid, gameHandler_.getSpellVisualId(spellId), type, radius, scale,
+        visuals->addDynamicObject(guid, gameHandler_.getSpellVisualId(spellId),
+                                  {.caster = caster, .spellId = spellId, .castTime = castTime}, type, radius, scale,
                                   core::coords::canonicalToRender(glm::vec3(x, y, z)),
                                   orientation + glm::radians(90.0f));
     });

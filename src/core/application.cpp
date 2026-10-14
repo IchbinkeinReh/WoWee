@@ -2899,6 +2899,10 @@ void Application::connectWorldHooks() {
             svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
                 return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
             });
+            // 0x00804cc0: a dynamic object waits on its cast's missile.
+            svs->setMissileInFlightQuery([this](uint64_t caster, uint32_t spellId, uint32_t castTime) {
+                return gameHandler && gameHandler->isSpellMissileInFlight(caster, spellId, castTime);
+            });
             // A chain's ends (0x007fae90): the unit an instance
             // draws, its height, and a game object's place.
             svs->setInstanceUnitResolver([this](uint32_t renderInstanceId) -> uint64_t {

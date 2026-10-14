@@ -218,10 +218,14 @@ enum class UF : uint16_t {
     GAMEOBJECT_FACTION,
     /// WotLK: a dynamic object's fields past OBJECT_END (+0xd0): BYTES' low
     /// byte its type (+8), its spell (+0xc) and radius (+0x10), which pick
-    /// and size its model (0x00705100, 0x00704d90).
+    /// and size its model (0x00705100, 0x00704d90); its CASTER (+0, a
+    /// guid) and CASTTIME (+0x14), which with its spell name the cast whose
+    /// missile may still fly (0x00804cc0).
+    DYNAMICOBJECT_CASTER,
     DYNAMICOBJECT_BYTES,
     DYNAMICOBJECT_SPELLID,
     DYNAMICOBJECT_RADIUS,
+    DYNAMICOBJECT_CASTTIME,
 
     // Item fields
     ITEM_FIELD_STACK_COUNT,

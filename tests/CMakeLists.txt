@@ -2815,6 +2815,11 @@ wowee_add_test(test_spell_kit
 wowee_add_test(test_dynamic_object_visual
     SOURCES test_dynamic_object_visual.cpp)
 
+# ── test_spell_missiles_in_flight ────────────────────
+# The casts whose missile still flies, which hold a dynamic object hidden.
+wowee_add_test(test_spell_missiles_in_flight
+    SOURCES test_spell_missiles_in_flight.cpp)
+
 # ── test_spell_chain ─────────────────────────────────
 # SpellChainEffects beams: the row, a chain's bolts (0x007fa4d0) and the
 # lightning strip (Common Lightning.cpp, 0x009a8c00 to 0x009ab730).

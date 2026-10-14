@@ -217,6 +217,10 @@ public:
     /// Spell.dbc SpellVisual of a spell, 0 for none.
     using SpellVisualResolver = std::function<uint32_t(uint32_t spellId)>;
     void setSpellVisualResolver(SpellVisualResolver resolver) { spellVisualResolver_ = std::move(resolver); }
+    /// Whether a missile of a cast still flies (0x00804cc0): a dynamic
+    /// object of that cast keeps its model hidden until then.
+    using MissileInFlightQuery = std::function<bool(uint64_t caster, uint32_t spellId, uint32_t castTime)>;
+    void setMissileInFlightQuery(MissileInFlightQuery query) { missileInFlightQuery_ = std::move(query); }
     /// The CharacterRenderer instance drawing a unit, 0 while it has none.
     using UnitInstanceResolver = std::function<uint32_t(uint64_t unitGuid)>;
     void setUnitInstanceResolver(UnitInstanceResolver resolver) { unitInstanceResolver_ = std::move(resolver); }
@@ -292,13 +296,21 @@ public:
     /// A SoundEntries sound at a place, once.
     void playSoundAt(uint32_t soundId, const glm::vec3& position);
 
+    /// The cast a dynamic object carries: DYNAMICOBJECT_CASTER, SPELLID and
+    /// CASTTIME (0x00804cc0).
+    struct DynamicObjectCast {
+        uint64_t caster = 0;
+        uint32_t spellId = 0;
+        uint32_t castTime = 0;
+    };
     /// A dynamic object come into view (DynamicObject_C, see
     /// dynamic_object_visual.hpp): its spell's visual's PersistentAreaKit
     /// model at `position` turned to `yaw` (radians about Z), sized by its
     /// DYNAMICOBJECT_RADIUS, type (BYTES' low byte) and own scale, made once
-    /// the model has loaded; and the kit's sound looping there.
-    void addDynamicObject(uint64_t guid, uint32_t visualId, uint8_t type, float radius, float objectScale,
-                          const glm::vec3& position, float yaw);
+    /// the model has loaded; and the kit's sound looping there. While a
+    /// missile of its cast flies, none of it shows.
+    void addDynamicObject(uint64_t guid, uint32_t visualId, const DynamicObjectCast& cast, uint8_t type,
+                          float radius, float objectScale, const glm::vec3& position, float yaw);
     /// The dynamic object gone: `destroyed` (SMSG_DESTROY_OBJECT) lets its
     /// model play its Decay first; out of range it goes at once.
     void removeDynamicObject(uint64_t guid, bool destroyed);
@@ -454,10 +466,16 @@ private:
         bool hasHold = false;
         float sequenceEndsIn = -1.0f;  ///< seconds to the sequence's end, < 0 none
         bool decaying = false;
+        DynamicObjectCast cast;
+        /// +0x150 & 2: held hidden while a missile of its cast flies.
+        bool held = false;
     };
     std::vector<DynamicObjectVisual> dynamicObjects_;
     void updateDynamicObjects(float deltaTime);
     void releaseDynamicObject(DynamicObjectVisual& object);
+    /// 0x00704f60: what the object shows besides its model, unless held.
+    void startDynamicObjectKit(DynamicObjectVisual& object);
+    bool missileInFlight(const DynamicObjectCast& cast) const;
     /// 0x00745230 on a unit (renderInstanceId, 0 for none) or at a place:
     /// the kit's models, its weapon effects (precast and cast kits), its
     /// camera shake and its colour. Returns a state kit's models.
@@ -678,6 +696,7 @@ private:
     bool cameraShakesLoaded_ = false;
     void loadCameraShakes();
     SpellVisualResolver spellVisualResolver_;
+    MissileInFlightQuery missileInFlightQuery_;
     UnarmedKitsQuery unarmedKitsQuery_;
     AttachedEffectScale attachedEffectScale_;
     /// 0x00720400 for a unit: hide or show its Flags 8 kits as asked.

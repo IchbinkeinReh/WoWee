@@ -2453,23 +2453,36 @@ void SpellVisualSystem::update(float deltaTime) {
     }
 }
 
-void SpellVisualSystem::addDynamicObject(uint64_t guid, uint32_t visualId, uint8_t type, float radius,
-                                         float objectScale, const glm::vec3& position, float yaw) {
+void SpellVisualSystem::addDynamicObject(uint64_t guid, uint32_t visualId, const DynamicObjectCast& cast,
+                                         uint8_t type, float radius, float objectScale, const glm::vec3& position,
+                                         float yaw) {
     loadSpellVisualDbc();
     removeDynamicObject(guid, false);
     const auto it = persistentAreas_.find(visualId);
     if (it == persistentAreas_.end()) return;
     DynamicObjectVisual object{.guid = guid, .area = it->second, .type = type, .radius = radius,
-                               .objectScale = objectScale, .position = position, .yaw = yaw};
+                               .objectScale = objectScale, .position = position, .yaw = yaw, .cast = cast};
+    // 0x00705230: held while a missile of its cast flies (0x00804cc0).
+    object.held = missileInFlight(cast);
+    startDynamicObjectKit(object);
+    dynamicObjects_.push_back(std::move(object));
+}
+
+bool SpellVisualSystem::missileInFlight(const DynamicObjectCast& cast) const {
+    return missileInFlightQuery_ && missileInFlightQuery_(cast.caster, cast.spellId, cast.castTime);
+}
+
+void SpellVisualSystem::startDynamicObjectKit(DynamicObjectVisual& object) {
+    if (object.held) return;
     // 0x00704f60: the kit's sound on the object, looping, rising over two
     // seconds.
     if (const LoadedSound* sound = soundEntry(object.area.soundId)) {
         const float maxDistance = sound->cutoff > 0.0f ? sound->cutoff : 100.0f;
         const float minDistance = sound->minDistance > 0.0f ? std::min(sound->minDistance, maxDistance) : 1.0f;
         object.soundHandle = audio::AudioEngine::instance().playSound3DLooping(
-            sound->data, position, sound->volume, maxDistance, minDistance, dynamic_object::kSoundFadeInSeconds);
+            sound->data, object.position, sound->volume, maxDistance, minDistance,
+            dynamic_object::kSoundFadeInSeconds);
     }
-    dynamicObjects_.push_back(std::move(object));
 }
 
 void SpellVisualSystem::releaseDynamicObject(DynamicObjectVisual& object) {
@@ -2504,6 +2517,12 @@ void SpellVisualSystem::updateDynamicObjects(float deltaTime) {
     if (!m2Renderer_) return;
     for (auto it = dynamicObjects_.begin(); it != dynamicObjects_.end();) {
         DynamicObjectVisual& object = *it;
+        // 0x007051b0: once its cast's missile has arrived, the model shows -
+        // from its Birth - and its kit starts (0x00704f60).
+        if (object.held && !object.decaying && !missileInFlight(object.cast)) {
+            object.held = false;
+            startDynamicObjectKit(object);
+        }
         if (object.instanceId == 0 && !object.decaying && !object.area.modelPath.empty()) {
             // A model that will not load is not asked for again.
             if (const auto known = spellVisualModelIds_.find(object.area.modelPath);
@@ -2511,7 +2530,7 @@ void SpellVisualSystem::updateDynamicObjects(float deltaTime) {
                 object.area.modelPath.clear();
             }
         }
-        if (object.instanceId == 0 && !object.decaying && !object.area.modelPath.empty()) {
+        if (object.instanceId == 0 && !object.decaying && !object.held && !object.area.modelPath.empty()) {
             // 0x00704d90, as the model has loaded: its scale, and its Birth.
             const uint32_t modelId = acquireEffectModel(object.area.modelPath);
             if (modelId != 0) {

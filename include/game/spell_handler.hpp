@@ -6,6 +6,7 @@
 #include "game/spell_mods.hpp"
 #include "game/ground_target.hpp"
 #include "game/spell_history.hpp"
+#include "game/spell_missiles_in_flight.hpp"
 #include "game/cast_checks.hpp"
 #include "game/handler_types.hpp"
 #include "audio/spell_sound_manager.hpp"
@@ -89,6 +90,14 @@ public:
     /// Whether the held spell would take the unit, within its reach
     /// (0x00803a50): the Cast cursor over it, else UnableCast (0x004f8190).
     [[nodiscard]] bool spellCanTargetUnit(uint64_t unitGuid) const;
+
+    /// 0x00804cc0: whether a missile of the cast a dynamic object carries
+    /// (its DYNAMICOBJECT_CASTER, SPELLID and CASTTIME) still flies.
+    [[nodiscard]] bool isMissileInFlight(uint64_t caster, uint32_t spellId, uint32_t castTime) const {
+        return missilesInFlight_.contains(caster, spellId, castTime);
+    }
+    /// 0x008047a0, as the world goes (0x004fa390).
+    void clearMissilesInFlight() { missilesInFlight_.clear(); }
 
     // --- The pet's spell history (0x00d3f5ac + 24) ---
     [[nodiscard]] const spell_history::History& petSpellHistory() const { return petHistory_; }
@@ -556,6 +565,10 @@ private:
     UnitTarget unitTarget_;
     spell_history::History petHistory_;
     spell_history::History playerHistory_;
+    /// 0x00af5274: the casts whose missile still flies.
+    spell_missiles::InFlightList missilesInFlight_;
+    /// 0x0080e1b0: a cast whose spell has a missile Speed joins the list.
+    void noteMissileInFlight(const SpellGoData& data);
     int64_t historyPruneAt_ = 0;  ///< 0x00d3f608: the next prune, on a spell go
     /// 0x00805d70: the global cooldown a cast begins in the caster's history
     /// - StartRecoveryTime through its modifiers, the usual 1.5 s hastened.
