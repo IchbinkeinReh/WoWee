@@ -110,6 +110,16 @@ public:
     [[nodiscard]] bool isMusicPlaying() const;
     void setMusicVolume(float volume);
 
+    /// A track streamed from its encoded bytes, any number at once - the
+    /// zone music's channel pair, whose two tracks cross (0x004c7140).
+    /// Returns a non-zero handle, or 0 on failure. It plays once unless
+    /// `loop`, and is taken away by update() once it has ended.
+    uint32_t playStream(std::shared_ptr<const std::vector<uint8_t>> data, float volume, bool loop);
+    [[nodiscard]] bool isStreamPlaying(uint32_t id) const;
+    void setStreamVolume(uint32_t id, float volume);
+    /// Stops it at once (no-op once it has ended).
+    void stopStream(uint32_t id);
+
     // Update (call once per frame for cleanup/position sync)
     void update(float deltaTime);
 
@@ -149,6 +159,15 @@ private:
     void* musicDecoder_ = nullptr;  // ma_decoder* - Keep decoder alive for streaming
     std::shared_ptr<const std::vector<uint8_t>> musicData_;  // Keep encoded music data alive
     float musicVolume_ = 1.0f;
+
+    struct ActiveStream {
+        ma_sound* sound = nullptr;
+        void* decoder = nullptr;  // ma_decoder*
+        std::shared_ptr<const std::vector<uint8_t>> data;
+        uint32_t id = 0;
+    };
+    std::vector<ActiveStream> activeStreams_;
+    static void releaseStream(ActiveStream& stream);
 
     bool initialized_ = false;
     float masterVolume_ = 1.0f;

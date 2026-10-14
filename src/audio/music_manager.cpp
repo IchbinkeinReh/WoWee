@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <random>
 
 namespace wowee {
 namespace audio {
@@ -25,11 +26,7 @@ bool MusicManager::initialize(pipeline::AssetManager* assets) {
 }
 
 float MusicManager::effectiveMusicVolume() const {
-    float vol = volumePercent / 100.0f;
-    if (underwaterMode) {
-        vol *= 0.3f;
-    }
-    return vol;
+    return volumePercent / 100.0f;
 }
 
 void MusicManager::shutdown() {
@@ -38,28 +35,15 @@ void MusicManager::shutdown() {
     playing = false;
     fadingIn = false;
     fadingOut = false;
-    crossfading = false;
     fadeInTimer = 0.0f;
     fadeInDuration = 0.0f;
     fadeInTargetVolume = 0.0f;
     currentTrack.clear();
-    currentTrackIsFile = false;
-    scriptMusic_ = false;
-    pendingTrack.clear();
-    pendingIsFile = false;
     musicDataCache_.clear();
+    stopZoneMusic(true);
+    zoneKits_.clear();
+    endedZoneTracks_.clear();
     assetManager = nullptr;
-}
-
-void MusicManager::preloadMusic(const std::string& mpqPath) {
-    if (!assetManager || mpqPath.empty()) return;
-    if (musicDataCache_.find(mpqPath) != musicDataCache_.end()) return;
-
-    auto data = assetManager->readFile(mpqPath);
-    if (!data.empty()) {
-        musicDataCache_[mpqPath] =
-            std::make_shared<const std::vector<uint8_t>>(std::move(data));
-    }
 }
 
 void MusicManager::playMusic(const std::string& mpqPath, bool loop, float fadeInMs) {
@@ -79,7 +63,9 @@ void MusicManager::playMusic(const std::string& mpqPath, bool loop, float fadeIn
     // Read music file from cache or MPQ
     auto cacheIt = musicDataCache_.find(mpqPath);
     if (cacheIt == musicDataCache_.end()) {
-        preloadMusic(mpqPath);
+        auto data = assetManager->readFile(mpqPath);
+        if (!data.empty())
+            musicDataCache_[mpqPath] = std::make_shared<const std::vector<uint8_t>>(std::move(data));
         cacheIt = musicDataCache_.find(mpqPath);
     }
     if (cacheIt == musicDataCache_.end() || !cacheIt->second || cacheIt->second->empty()) {
@@ -101,8 +87,6 @@ void MusicManager::playMusic(const std::string& mpqPath, bool loop, float fadeIn
             AudioEngine::instance().setMusicVolume(0.0f);
         }
         currentTrack = mpqPath;
-        currentTrackIsFile = false;
-        scriptMusic_ = false;
         // A track started ends any fade of the last: the engine has one.
         fadingOut = false;
         LOG_INFO("Music: Playing ", mpqPath);
@@ -189,8 +173,6 @@ void MusicManager::pollPendingFileLoad() {
             AudioEngine::instance().setMusicVolume(0.0f);
         }
         currentTrack = filePath;
-        currentTrackIsFile = true;
-        scriptMusic_ = false;
         fadingOut = false;
         LOG_INFO("Music: Playing file ", filePath);
     } else {
@@ -198,17 +180,9 @@ void MusicManager::pollPendingFileLoad() {
     }
 }
 
-void MusicManager::playScriptMusic(const std::string& mpqPath) {
-    playMusic(mpqPath, /*loop=*/false);
-    if (playing && currentTrack == mpqPath) scriptMusic_ = true;
-}
-
 void MusicManager::stopMusic(float fadeMs) {
     cancelPendingFileLoad();
     fadingIn = false;
-    crossfading = false;
-    pendingTrack.clear();
-    pendingIsFile = false;
     if (!playing) return;
 
     if (fadeMs > 0.0f) {
@@ -225,8 +199,6 @@ void MusicManager::stopMusic(float fadeMs) {
         playing = false;
         fadingOut = false;
         currentTrack.clear();
-        currentTrackIsFile = false;
-        scriptMusic_ = false;
     }
 }
 
@@ -247,53 +219,8 @@ void MusicManager::setVolume(int volume) {
     }
 }
 
-void MusicManager::setUnderwaterMode(bool underwater) {
-    if (underwaterMode == underwater) return;
-    underwaterMode = underwater;
-
-    // Apply volume change immediately
-    float vol = effectiveMusicVolume();
-    if (fadingIn) {
-        fadeInTargetVolume = vol;
-        float t = std::clamp(fadeInTimer / std::max(fadeInDuration, 0.001f), 0.0f, 1.0f);
-        AudioEngine::instance().setMusicVolume(fadeInTargetVolume * t);
-    } else {
-        AudioEngine::instance().setMusicVolume(vol);
-    }
-}
-
-void MusicManager::crossfadeTo(const std::string& mpqPath, float fadeMs) {
-    if (mpqPath == currentTrack && playing) return;
-
-    // Simple implementation: stop and start (no actual crossfade yet)
-    if (fadeMs > 0 && playing) {
-        crossfading = true;
-        pendingTrack = mpqPath;
-        pendingIsFile = false;
-        fadeTimer = 0.0f;
-        fadeDuration = fadeMs / 1000.0f;
-        AudioEngine::instance().stopMusic();
-    } else {
-        playMusic(mpqPath, loopTracks_);
-    }
-}
-
-void MusicManager::crossfadeToFile(const std::string& filePath, float fadeMs) {
-    if (filePath == currentTrack && playing) return;
-
-    if (fadeMs > 0 && playing) {
-        crossfading = true;
-        pendingTrack = filePath;
-        pendingIsFile = true;
-        fadeTimer = 0.0f;
-        fadeDuration = fadeMs / 1000.0f;
-        AudioEngine::instance().stopMusic();
-    } else {
-        playFilePath(filePath, loopTracks_);
-    }
-}
-
 void MusicManager::update(float deltaTime) {
+    updateZoneTracks(deltaTime);
     // Hand off any background-loaded track before touching playback state.
     pollPendingFileLoad();
 
@@ -313,8 +240,6 @@ void MusicManager::update(float deltaTime) {
             AudioEngine::instance().setMusicVolume(effectiveMusicVolume());
             playing = false;
             currentTrack.clear();
-            currentTrackIsFile = false;
-            scriptMusic_ = false;
         }
         return;  // Don't process other fade logic while fading out
     }
@@ -327,21 +252,179 @@ void MusicManager::update(float deltaTime) {
             fadingIn = false;
         }
     }
+}
 
-    // Handle crossfade
-    if (crossfading) {
-        fadeTimer += deltaTime;
-        if (fadeTimer >= fadeDuration * 0.3f) {
-            // Start new track after brief pause
-            crossfading = false;
-            if (pendingIsFile) {
-                playFilePath(pendingTrack, loopTracks_);
-            } else {
-                playMusic(pendingTrack, loopTracks_);
+// ---------------------------------------------------------------------------
+// The zone music's channel pair (0xb4ac90).
+
+MusicManager::ZoneKit* MusicManager::zoneKit(int32_t sound) {
+    if (sound <= 0 || !assetManager) return nullptr;
+    auto it = zoneKits_.find(sound);
+    if (it == zoneKits_.end()) {
+        ZoneKit kit;
+        // SoundEntries.dbc: 3..12 File, 13..22 Freq, 23 DirectoryBase,
+        // 24 VolumeFloat, 25 Flags.
+        auto dbc = assetManager->loadDBCOptional("SoundEntries.dbc");
+        const int32_t idx = dbc && dbc->isLoaded() && dbc->getFieldCount() > 25
+                                ? dbc->findRecordById(static_cast<uint32_t>(sound))
+                                : -1;
+        if (idx >= 0) {
+            const auto row = static_cast<uint32_t>(idx);
+            const std::string dir = dbc->getString(row, 23);
+            for (uint32_t f = 0; f < 10; ++f) {
+                const std::string name = dbc->getString(row, 3 + f);
+                if (name.empty()) continue;
+                kit.paths.push_back(dir.empty() ? name : dir + "\\" + name);
+                kit.frequency.push_back(dbc->getUInt32(row, 13 + f));
             }
-            pendingTrack.clear();
-            pendingIsFile = false;
+            const float volume = dbc->getFloat(row, 24);
+            if (volume > 0.0f) kit.volume = volume;
+            kit.loop = (dbc->getUInt32(row, 25) & zone_music::kSoundLoops) != 0;
         }
+        // Remembered either way, so a row without a file is read once.
+        it = zoneKits_.emplace(sound, std::move(kit)).first;
+    }
+    return it->second.paths.empty() ? nullptr : &it->second;
+}
+
+bool MusicManager::trackPlaying(uint32_t id) const {
+    const auto it = zoneTracks_.find(id);
+    if (it == zoneTracks_.end()) return false;
+    return it->second.loading || AudioEngine::instance().isStreamPlaying(it->second.stream);
+}
+
+void MusicManager::fallTrack(uint32_t id) {
+    const auto it = zoneTracks_.find(id);
+    if (it == zoneTracks_.end()) return;
+    if (it->second.fall <= 0.0f) {
+        stopTrack(id, true);
+        return;
+    }
+    it->second.rate = -1.0f / it->second.fall;
+}
+
+void MusicManager::stopTrack(uint32_t id, bool report) {
+    const auto it = zoneTracks_.find(id);
+    if (it == zoneTracks_.end()) return;
+    AudioEngine::instance().stopStream(it->second.stream);
+    if (report) endedZoneTracks_.push_back(it->second.end);
+    zoneTracks_.erase(it);
+}
+
+void MusicManager::detach(ZoneRecord& record, bool atOnce) {
+    // 0x00879840: at once when told to or without a fall of its own.
+    if (atOnce) stopTrack(record.track, true);
+    else fallTrack(record.track);
+    record.track = 0;
+}
+
+bool MusicManager::playZoneTrack(int32_t sound, int slot, float fadeIn, float fadeOut, const ZoneTrackEnd& end) {
+    ZoneRecord& current = zoneRecords_[zoneCurrent_];
+    ZoneRecord& other = zoneRecords_[1 - zoneCurrent_];
+    if (sound == current.sound && trackPlaying(current.track)) return false;
+    if (sound == other.sound && trackPlaying(other.track)) {
+        // Still falling: it rises again and the current falls.
+        fallTrack(current.track);
+        if (auto it = zoneTracks_.find(other.track); it != zoneTracks_.end())
+            it->second.rate = fadeIn > 0.0f ? 1.0f / fadeIn : 1000.0f;
+        zoneCurrent_ = 1 - zoneCurrent_;
+        return false;
+    }
+    detach(other, false);
+    fallTrack(current.track);
+
+    // 0x004c6a40 on the other record: a file of the sound, if it has one.
+    ZoneKit* kit = zoneKit(sound);
+    if (!kit || !assetManager) return false;
+    static std::mt19937 rng{std::random_device{}()};
+    const auto file = zone_music::pickFile(kit->frequency, kit->last, static_cast<uint32_t>(rng()));
+    if (!file) return false;
+    kit->last = file;
+
+    ZoneTrack track;
+    track.loading = true;
+    track.loop = kit->loop;
+    track.kitVolume = kit->volume;
+    track.level = fadeIn > 0.0f ? 0.0f : 1.0f;
+    track.rate = fadeIn > 0.0f ? 1.0f / fadeIn : 0.0f;
+    track.fall = fadeOut;
+    track.end = end;
+    auto* assets = assetManager;
+    track.pending = core::ThreadPool::ioWorkers().submit(
+        [assets, path = kit->paths[*file]]() -> std::shared_ptr<const std::vector<uint8_t>> {
+            auto bytes = assets->readFile(path);
+            if (bytes.empty()) return nullptr;
+            return std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
+        });
+    const uint32_t id = nextZoneTrack_++;
+    if (nextZoneTrack_ == 0) nextZoneTrack_ = 1;
+    zoneTracks_.emplace(id, std::move(track));
+    other = ZoneRecord{sound, slot, id};
+    zoneCurrent_ = 1 - zoneCurrent_;
+    return true;
+}
+
+void MusicManager::releaseZoneTrack(int slot) {
+    ZoneRecord& current = zoneRecords_[zoneCurrent_];
+    detach(current, false);
+    current.slot = slot;
+    current.sound = 0;
+}
+
+void MusicManager::stopZoneMusic(bool atOnce) {
+    for (auto& record : zoneRecords_) {
+        if (atOnce) {
+            stopTrack(record.track, false);
+            record.track = 0;
+        } else {
+            detach(record, false);
+        }
+        record = ZoneRecord{};
+    }
+    if (atOnce) {
+        // What fell before goes with them.
+        for (auto& [id, track] : zoneTracks_) AudioEngine::instance().stopStream(track.stream);
+        zoneTracks_.clear();
+    }
+}
+
+zone_music::Channel MusicManager::zoneChannel() const {
+    const ZoneRecord& current = zoneRecords_[zoneCurrent_];
+    return zone_music::Channel{trackPlaying(current.track), current.sound, current.slot};
+}
+
+std::vector<MusicManager::ZoneTrackEnd> MusicManager::takeEndedZoneTracks() {
+    std::vector<ZoneTrackEnd> out;
+    out.swap(endedZoneTracks_);
+    return out;
+}
+
+void MusicManager::updateZoneTracks(float deltaTime) {
+    auto& engine = AudioEngine::instance();
+    std::vector<uint32_t> ended;
+    for (auto& [id, track] : zoneTracks_) {
+        if (track.loading) {
+            if (!track.pending.valid() ||
+                track.pending.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                auto data = track.pending.valid() ? track.pending.get() : nullptr;
+                track.loading = false;
+                if (data) track.stream = engine.playStream(std::move(data), 0.0f, track.loop);
+                if (track.stream == 0) LOG_WARNING("Music: a zone track could not be played");
+            }
+        }
+        track.level = std::clamp(track.level + track.rate * deltaTime, 0.0f, 1.0f);
+        if (track.level >= 1.0f && track.rate > 0.0f) track.rate = 0.0f;
+        const bool fallen = track.rate < 0.0f && track.level <= 0.0f;
+        if (fallen || (!track.loading && !engine.isStreamPlaying(track.stream))) {
+            ended.push_back(id);
+            continue;
+        }
+        engine.setStreamVolume(track.stream, track.kitVolume * track.level * effectiveMusicVolume());
+    }
+    for (uint32_t id : ended) {
+        stopTrack(id, true);
+        for (auto& record : zoneRecords_)
+            if (record.track == id) record.track = 0;
     }
 }
 

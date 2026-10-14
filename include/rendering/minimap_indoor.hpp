@@ -179,6 +179,8 @@ struct AreaRow {
     std::string name;
     uint32_t id = 0;             ///< the row's own id (WorldStateZoneSounds names it)
     uint32_t soundAmbience = 0;  ///< +0x18, the place's ambience (0x0078e9a0)
+    uint32_t zoneMusic = 0;      ///< +0x1c, the place's music (0x0078e9a0)
+    uint32_t introSound = 0;     ///< +0x20, the place's intro music (0x0078e9a0)
 };
 /// WMOAreaTable's rows by WMO, name set and group (0x00990560 looks them up
 /// exactly; the group -1 is the building's own row).

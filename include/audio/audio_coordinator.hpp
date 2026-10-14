@@ -6,12 +6,13 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <random>
 #include <glm/vec3.hpp>
 #include "audio/zone_ambience.hpp"
+#include "audio/zone_music.hpp"
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
-namespace game { class ZoneManager; }
 namespace audio {
 
 class MusicManager;
@@ -30,10 +31,6 @@ class MovementSoundManager;
 /// All values are pre-queried so AudioCoordinator needs no rendering pointers.
 struct ZoneAudioContext {
     float deltaTime = 0.0f;
-    glm::vec3 cameraPosition{0.0f};
-    bool isSwimming = false;
-    bool insideWmo = false;
-    uint32_t insideWmoId = 0;
     // The game clock (hours in [0, 24)): the sound day (0x004c9850).
     float gameTimeHours = 12.0f;
     // Where the player is for the ambience (0x0078f020), none until known.
@@ -48,13 +45,6 @@ struct ZoneAudioContext {
     zone_ambience::LiquidQuery liquidQuery;
     // The world states the server has sent.
     const std::unordered_map<uint32_t, uint32_t>* worldStates = nullptr;
-    // Terrain tile for offline zone lookup
-    int tileX = 0, tileY = 0;
-    bool hasTile = false;
-    // Server-authoritative zone (from SMSG_INIT_WORLD_STATES); 0 = offline
-    uint32_t serverZoneId = 0;
-    // Zone manager pointer (for zone info and music queries)
-    game::ZoneManager* zoneManager = nullptr;
     // The screen effect's SoundAmbience and ZoneMusic rows, 0 for none
     // (ScreenEffect.dbc +0x20, +0x24; 0x004f7020).
     uint32_t screenEffectAmbienceId = 0;
@@ -67,10 +57,6 @@ struct ZoneAudioContext {
 /// Owned by Application; Renderer and UI components access through Application.
 class AudioCoordinator {
 public:
-    /// Loop Music, from the audio options. Takes effect on the next
-    /// track; a track already running is not restarted to obey it.
-    void setZoneMusicLooping(bool loop);
-
     AudioCoordinator();
     ~AudioCoordinator();
 
@@ -88,24 +74,29 @@ public:
     /// clip raised by more than 10 yards (0x007831a0). An instance difficulty
     /// changed (SMSG_CHANGEPLAYER_DIFFICULTY_RESULT 9, 0x0052c460) does it too.
     ///
-    /// What the client's unload (0x00409550) stops: the zone music's two
-    /// channels at once and the script music over half a second (0x004c93b0),
-    /// and the ambience's channels (0x004c85f0). The zone they were for is
-    /// forgotten too, so the next world entry starts its music afresh.
+    /// What the client's unload (0x00409550) stops: the music channel's two
+    /// tracks at once, with SMSG_PLAY_MUSIC's slot emptied and the silence
+    /// between tracks ended (0x004c93b0), and the ambience's channels
+    /// (0x004c85f0). The place they were for is forgotten too, so the next
+    /// world fills the slots afresh.
     void leaveWorld();
+    /// Entering the world from the character screen (0x00405540 ->
+    /// 0x004c9330): every intro may play again at once.
+    void forgetIntroMusic();
 
-    /// Per-frame zone detection, music transitions, and ambient weather sync.
+    /// SMSG_PLAY_MUSIC (0x277 -> 0x004c92b0): the sound goes to the music's
+    /// slot 3, above the zone's, until it ends.
+    void playServerMusic(uint32_t soundId);
+    /// Sound_EnableMusic (0x004d1590): off stops the music at once as the
+    /// unload does, and the slots pick nothing while it is off.
+    void setMusicEnabled(bool enabled);
+    /// Sound_ZoneMusicNoDelay, the options' Loop Music: no silence between
+    /// the zone's tracks (0x004c87d0).
+    void setZoneMusicNoDelay(bool noDelay) { musicNoDelay_ = noDelay; }
+
+    /// Per-frame sound slots: the ambience and the music.
     /// Called from Renderer::update() with a pre-filled context.
     void updateZoneAudio(const ZoneAudioContext& ctx);
-
-    [[nodiscard]] const std::string& getCurrentZoneName() const { return currentZoneName_; }
-    [[nodiscard]] uint32_t getCurrentZoneId() const { return currentZoneId_; }
-
-    /// Called when the "Enable WoWee Music" setting is turned off. If one of
-    /// the WoWee (file-based) tracks is currently playing, crossfade to a
-    /// stock track so the disable takes effect immediately instead of waiting
-    /// for the track to end.
-    void onOriginalSoundtrackDisabled(game::ZoneManager* zm);
 
     // Accessors for all audio managers (same interface as Renderer had)
     MusicManager* getMusicManager() { return musicManager_.get(); }
@@ -121,13 +112,18 @@ public:
     MovementSoundManager* getMovementSoundManager() { return movementSoundManager_.get(); }
 
 private:
-    void playZoneMusic(const std::string& music);
-    /// The screen effect's slot (0x004c8fa0, slot 10): its ambience and
-    /// music over the zone's. True while its music plays.
-    bool updateScreenEffectAudio(const ZoneAudioContext& ctx);
-    /// The ambience's slots from the place, the world states, the weather
-    /// and the camera's liquid, and the ambience and the liquid's sound.
+    /// The slots from the place, the world states, the weather, the camera's
+    /// liquid and the screen effect, and the ambience and the liquid's sound.
     void updateAmbience(const ZoneAudioContext& ctx);
+    /// The music channel, once a frame (0x004c9910), and the ends of its
+    /// tracks.
+    void updateMusic(const ZoneAudioContext& ctx);
+    /// 0x004c8d80: a music slot from a ZoneMusic row (-1 or 0 for none).
+    void setMusicSlotZoneMusic(int slot, int64_t zoneMusicId);
+    /// 0x004c8cf0: an intro slot from a ZoneIntroMusicTable row.
+    void setMusicSlotIntro(int slot, int64_t introId);
+    [[nodiscard]] zone_music::Context musicContext() const;
+    [[nodiscard]] uint64_t nowMs() const;
 
     std::unique_ptr<MusicManager> musicManager_;
     std::unique_ptr<FootstepManager> footstepManager_;
@@ -143,27 +139,24 @@ private:
 
     bool audioAvailable_ = false;
 
-    // Zone/music state - moved from Renderer
-    uint32_t currentZoneId_ = 0;
-    std::string currentZoneName_;
-    bool inTavern_ = false;
-    bool inBlacksmith_ = false;
-    float musicSwitchCooldown_ = 0.0f;
-    // The screen effect's sounds as last resolved.
-    struct ScreenEffectSounds {
-        uint32_t zoneMusicId = 0;
-        bool isDay = true;
-        std::string music;
-    };
-    ScreenEffectSounds screenEffectSounds_;
-    std::string screenEffectMusicPlaying_;
-    // What the ambience's slots were last filled from.
+    // What the slots were last filled from.
     std::optional<zone_ambience::Place> ambiencePlace_;
-    std::optional<uint32_t> worldStateAmbience_;
+    std::optional<zone_ambience::WorldStateSound> worldStateRow_;
     std::vector<zone_ambience::WorldStateSound> worldStateSounds_;
     bool worldStateSoundsLoaded_ = false;
     uint32_t weatherSerialSeen_ = 0;
     uint32_t screenEffectAmbienceId_ = 0;
+    uint32_t screenEffectZoneMusicId_ = 0;
+
+    // The music's slots (0xb4aab0) and what the pick reads besides.
+    zone_music::Slots musicSlots_{};
+    int musicTime_ = 0;              ///< 0x00ac3878
+    bool musicEnabled_ = true;       ///< Sound_EnableMusic
+    bool musicNoDelay_ = false;      ///< Sound_ZoneMusicNoDelay
+    uint64_t silenceUntil_ = 0;      ///< 0xb4aaa0
+    pipeline::AssetManager* cachedAssets_ = nullptr;
+    std::unordered_map<int32_t, uint64_t> introDue_;  ///< 0xb4acd8
+    std::mt19937 musicRng_{std::random_device{}()};
 };
 
 } // namespace audio

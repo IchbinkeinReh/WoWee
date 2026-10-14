@@ -215,9 +215,6 @@ public:
     bool pendingAutoFaceTarget = false;
     bool pendingIdleCameraOrbit = true;
 
-    // ---- Pending soundtrack ----
-    bool pendingUseOriginalSoundtrack = true;
-
     // ---- Pending buff bar layout ----
     // Multiplier for the buff/debuff bar icons, on top of the automatic
     // resolution scaling (0.75–1.5).
@@ -309,7 +306,6 @@ public:
     // slowest subsystem arrived - clobbering anything the player changed in
     // that window - or latching on the first and never feeding the rest.
     bool settingsRereadFromDisk_ = false;
-    bool zoneSettingsApplied_ = false;
     bool terrainSettingsApplied_ = false;
     bool volumeSettingsApplied_ = false;  // True once saved volume settings applied to audio managers
     bool msaaSettingsApplied_ = false;   // True once saved MSAA setting applied to renderer

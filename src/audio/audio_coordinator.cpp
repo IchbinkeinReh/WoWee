@@ -13,10 +13,10 @@
 #include "audio/movement_sound_manager.hpp"
 #include "audio/screen_effect_audio.hpp"
 #include "pipeline/asset_manager.hpp"
-#include "game/zone_manager.hpp"
 #include "core/logger.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/dbc_layout.hpp"
+#include <chrono>
 
 namespace wowee {
 namespace audio {
@@ -76,158 +76,155 @@ void AudioCoordinator::shutdown() {
 }
 
 void AudioCoordinator::leaveWorld() {
-    // 0x004c93b0: the zone music's channels at once (0x004c6450(1) on
-    // 0xb4ac90, no fade) and the script music SMSG_PLAY_MUSIC and PlayMusic
-    // start (0xb4ac3c) over half a second (0x004c6390 with 0.5, seconds by
-    // 0x0087a2f0), with its slot (3) cleared. Here they share the one music
-    // manager, so whichever is playing stops its own way.
-    if (musicManager_) musicManager_->stopMusic(musicManager_->isScriptMusic() ? 500.0f : 0.0f);
+    // 0x004c93b0: the music channel's two tracks at once (0x004c6450(1) on
+    // 0xb4ac90) - SMSG_PLAY_MUSIC's among them, its slot (3) emptied - and
+    // the silence between tracks over. The script's PlayMusic (0xb4ac3c,
+    // over half a second) is not played here.
+    if (musicManager_) musicManager_->stopZoneMusic(true);
+    silenceUntil_ = 0;
     // 0x004c85f0: the ambience's channels (0xb4ac50).
     if (ambientSoundManager_) ambientSoundManager_->stopAll();
-    // The slots the next world fills again.
-    screenEffectSounds_ = {};
-    screenEffectMusicPlaying_.clear();
+    // The slots the next world fills again, from its place (0x0078e960
+    // forgets the last) and its screen effect.
+    musicSlots_ = {};
     ambiencePlace_.reset();
-    worldStateAmbience_.reset();
+    worldStateRow_.reset();
     screenEffectAmbienceId_ = 0;
-    currentZoneId_ = 0;
-    currentZoneName_.clear();
-    inTavern_ = false;
-    inBlacksmith_ = false;
-    musicSwitchCooldown_ = 0.0f;
+    screenEffectZoneMusicId_ = 0;
     LOG_INFO("World unloaded: music and ambience stopped");
 }
 
-void AudioCoordinator::playZoneMusic(const std::string& music) {
-    if (music.empty() || !musicManager_) return;
-    if (music.rfind("file:", 0) == 0) {
-        musicManager_->crossfadeToFile(music.substr(5));
-    } else {
-        musicManager_->crossfadeTo(music);
-    }
+void AudioCoordinator::forgetIntroMusic() {
+    introDue_.clear();
 }
 
-void AudioCoordinator::setZoneMusicLooping(bool loop) {
-    if (musicManager_) musicManager_->setLooping(loop);
+void AudioCoordinator::playServerMusic(uint32_t soundId) {
+    zone_music::fillServer(musicSlots_[zone_music::kSlotServer], static_cast<int32_t>(soundId));
 }
 
-void AudioCoordinator::onOriginalSoundtrackDisabled(game::ZoneManager* zm) {
-    if (!zm || !musicManager_) return;
-    if (!musicManager_->isCurrentTrackFile()) return;
-    if (!musicManager_->isPlaying() && !musicManager_->isLoading()) return;
-    // Only act in-world with a known zone; the login screen intentionally
-    // plays a file track and is not part of the zone rotation this setting
-    // controls.
-    if (currentZoneId_ == 0) return;
-
-    std::string music = zm->getRandomMusic(currentZoneId_);
-    if (!music.empty() && music.rfind("file:", 0) != 0) {
-        playZoneMusic(music);
-        musicSwitchCooldown_ = 6.0f;
-    } else {
-        musicManager_->stopMusic();
-    }
+void AudioCoordinator::setMusicEnabled(bool enabled) {
+    if (enabled == musicEnabled_) return;
+    musicEnabled_ = enabled;
+    if (enabled) return;
+    // 0x004d1590: off, the music stops as at the unload (0x004c93b0), and
+    // SMSG_PLAY_MUSIC's slot is emptied (0x004c92f0).
+    if (musicManager_) musicManager_->stopZoneMusic(true);
+    musicSlots_[zone_music::kSlotServer] = {};
+    silenceUntil_ = 0;
 }
 
-namespace {
-
-// The file a SoundEntries row plays: its DirectoryBase (23) and the first of
-// its ten File columns (3-12) that is set.
-std::string soundEntryFile(pipeline::AssetManager& assets, uint32_t soundId) {
-    if (soundId == 0) return {};
-    auto dbc = assets.loadDBCOptional("SoundEntries.dbc");
-    const int32_t idx = dbc && dbc->getFieldCount() >= 24 ? dbc->findRecordById(soundId) : -1;
-    if (idx < 0) return {};
-    const auto row = static_cast<uint32_t>(idx);
-    const std::string dir = dbc->getString(row, 23);
-    for (uint32_t f = 3; f <= 12; ++f) {
-        const std::string name = dbc->getString(row, f);
-        if (!name.empty()) return dir.empty() ? name : dir + "\\" + name;
-    }
-    return {};
+uint64_t AudioCoordinator::nowMs() const {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch())
+                                     .count());
 }
 
-// A SoundAmbience or ZoneMusic row's sound for the time.
-std::string daySoundFile(pipeline::AssetManager& assets, const char* table, uint32_t id, uint32_t dayCol,
-                         uint32_t nightCol, bool isDay) {
-    if (id == 0) return {};
-    auto dbc = assets.loadDBCOptional(table);
-    const int32_t idx = dbc && dbc->getFieldCount() > nightCol ? dbc->findRecordById(id) : -1;
-    if (idx < 0) return {};
-    const auto row = static_cast<uint32_t>(idx);
-    return soundEntryFile(assets, screen_effect_audio::dayOrNight(dbc->getUInt32(row, dayCol),
-                                                                  dbc->getUInt32(row, nightCol), isDay));
+zone_music::Context AudioCoordinator::musicContext() const {
+    zone_music::Context c;
+    c.enabled = musicEnabled_;
+    c.noDelay = musicNoDelay_;
+    c.time = musicTime_;
+    c.now = nowMs();
+    c.silenceUntil = silenceUntil_;
+    c.introDue = &introDue_;
+    return c;
 }
 
-}  // namespace
-
-bool AudioCoordinator::updateScreenEffectAudio(const ZoneAudioContext& ctx) {
-    namespace sea = screen_effect_audio;
-    const bool isDay = sea::isSoundDaytime(ctx.gameTimeHours);
-    ScreenEffectSounds& want = screenEffectSounds_;
-    if (ctx.assetManager && (want.zoneMusicId != ctx.screenEffectZoneMusicId || want.isDay != isDay)) {
-        want.zoneMusicId = ctx.screenEffectZoneMusicId;
-        want.isDay = isDay;
-        want.music = daySoundFile(*ctx.assetManager, "ZoneMusic.dbc", want.zoneMusicId, sea::kZoneMusicDayCol,
-                                  sea::kZoneMusicNightCol, isDay);
-    }
-
-    // The music: at once, and again whenever it ends.
-    if (!musicManager_) return false;
-    if (!want.music.empty()) {
-        if (want.music != screenEffectMusicPlaying_ || (!musicManager_->isPlaying() && !musicManager_->isLoading())) {
-            playZoneMusic(want.music);
-            screenEffectMusicPlaying_ = want.music;
+void AudioCoordinator::setMusicSlotZoneMusic(int slot, int64_t zoneMusicId) {
+    namespace zm = zone_music;
+    if (slot < 0 || slot >= zm::kSlotCount) return;
+    // ZoneMusic.dbc: 0 ID, 2..3 SilenceIntervalMin, 4..5 SilenceIntervalMax,
+    // 6..7 Sounds - each day then night.
+    std::optional<zm::ZoneMusicRow> row;
+    if (zoneMusicId > 0 && cachedAssets_) {
+        auto dbc = cachedAssets_->loadDBCOptional("ZoneMusic.dbc");
+        const int32_t idx = dbc && dbc->isLoaded() && dbc->getFieldCount() >= 8
+                                ? dbc->findRecordById(static_cast<uint32_t>(zoneMusicId))
+                                : -1;
+        if (idx >= 0) {
+            const auto r = static_cast<uint32_t>(idx);
+            row = zm::ZoneMusicRow{{dbc->getUInt32(r, 2), dbc->getUInt32(r, 3)},
+                                   {dbc->getUInt32(r, 4), dbc->getUInt32(r, 5)},
+                                   {dbc->getInt32(r, 6), dbc->getInt32(r, 7)}};
         }
-        musicManager_->update(ctx.deltaTime);
-        return true;
     }
-    if (!screenEffectMusicPlaying_.empty()) {
-        // The slot emptied: the zone's music again.
-        screenEffectMusicPlaying_.clear();
-        musicManager_->stopMusic();
-        musicSwitchCooldown_ = 0.0f;
+    zm::fillZoneMusic(musicSlots_[static_cast<size_t>(slot)], row ? &*row : nullptr);
+    const zm::Channel ch = musicManager_ ? musicManager_->zoneChannel() : zm::Channel{};
+    const zm::Pick now = zm::pick(musicSlots_, ch, musicContext());
+    if (zm::zoneMusicEndsSilence(slot, zoneMusicId, row.has_value(), now, ch)) silenceUntil_ = 0;
+}
+
+void AudioCoordinator::setMusicSlotIntro(int slot, int64_t introId) {
+    namespace zm = zone_music;
+    if (slot < 0 || slot >= zm::kSlotCount) return;
+    // ZoneIntroMusicTable.dbc: 0 ID, 2 SoundID, 3 Priority, 4 MinDelayMinutes.
+    std::optional<zm::IntroRow> row;
+    if (introId > 0 && cachedAssets_) {
+        auto dbc = cachedAssets_->loadDBCOptional("ZoneIntroMusicTable.dbc");
+        const int32_t idx = dbc && dbc->isLoaded() && dbc->getFieldCount() >= 5
+                                ? dbc->findRecordById(static_cast<uint32_t>(introId))
+                                : -1;
+        if (idx >= 0) {
+            const auto r = static_cast<uint32_t>(idx);
+            row = zm::IntroRow{dbc->getInt32(r, 2), dbc->getUInt32(r, 4)};
+        }
     }
-    return false;
+    zm::fillIntro(musicSlots_[static_cast<size_t>(slot)], row ? &*row : nullptr);
 }
 
 void AudioCoordinator::updateAmbience(const ZoneAudioContext& ctx) {
     namespace za = zone_ambience;
-    if (!ambientSoundManager_) return;
-    auto& ambience = *ambientSoundManager_;
+    namespace zm = zone_music;
+    auto* ambience = ambientSoundManager_.get();
     auto* assets = ctx.assetManager;
 
     // Slot 0, the place (0x0078e9a0): its AreaTable rows' SoundAmbience
-    // (+0x1c) and its building's.
+    // (+0x1c) and its building's; and the music's slots 0 and 5, its
+    // ZoneMusic (+0x20) and intro (+0x24) by the same chain.
     if (ctx.place && assets && ctx.place != ambiencePlace_) {
         ambiencePlace_ = ctx.place;
         const za::Place& at = *ctx.place;
-        uint32_t zoneAmbience = 0, areaAmbience = 0;
         const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("AreaTable")
                                                             : nullptr;
-        const uint32_t col = layout ? layout->tryField("SoundAmbience") : 0xFFFFFFFFu;
         auto areas = assets->loadDBCOptional("AreaTable.dbc");
-        const auto rowAmbience = [&](uint32_t id) -> uint32_t {
+        const auto column = [&](const char* name) { return layout ? layout->tryField(name) : 0xFFFFFFFFu; };
+        const auto rowValue = [&](uint32_t id, uint32_t col) -> uint32_t {
             if (id == 0 || !areas || !areas->isLoaded() || col >= areas->getFieldCount()) return 0;
             const int32_t idx = areas->findRecordById(id);
             return idx >= 0 ? areas->getUInt32(static_cast<uint32_t>(idx), col) : 0;
         };
-        zoneAmbience = rowAmbience(at.zone);
-        areaAmbience = rowAmbience(at.area);
-        ambience.setSlotAmbience(za::kSlotPlace, za::placeAmbience(zoneAmbience, areaAmbience, at.buildingAmbience,
-                                                                   at.groupAmbience, at.indoors));
+        const auto chain = [&](uint32_t col, uint32_t building, uint32_t group) {
+            return za::placeAmbience(rowValue(at.zone, col), rowValue(at.area, col), building, group, at.indoors);
+        };
+        if (ambience) {
+            ambience->setSlotAmbience(za::kSlotPlace,
+                                      chain(column("SoundAmbience"), at.buildingAmbience, at.groupAmbience));
+        }
+        // 0x0078e9a0 fills the intro (0x004c8cf0) before the music
+        // (0x004c8d80).
+        setMusicSlotIntro(zm::kSlotPlaceIntro, chain(column("IntroSound"), at.buildingIntro, at.groupIntro));
+        setMusicSlotZoneMusic(zm::kSlotPlace, chain(column("ZoneMusic"), at.buildingMusic, at.groupMusic));
     }
 
     // Slot 1, the world states' (0x004cbe70): WorldStateZoneSounds.dbc, 0
-    // the world state, 1 the value, 2 the area, 3 the WMOAreaTable row, 6
-    // the SoundAmbience.
+    // the world state, 1 the value, 2 the area, 3 the WMOAreaTable row, 4 the
+    // intro, 5 the ZoneMusic, 6 the SoundAmbience. Its intro goes to the
+    // music's slot 6 and its ZoneMusic to its slot 1.
     if (!worldStateSoundsLoaded_ && assets) {
         worldStateSoundsLoaded_ = true;
         auto dbc = assets->loadDBCOptional("WorldStateZoneSounds.dbc");
         if (dbc && dbc->isLoaded() && dbc->getFieldCount() >= 8) {
-            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
-                worldStateSounds_.push_back({dbc->getUInt32(i, 0), dbc->getUInt32(i, 1), dbc->getUInt32(i, 2),
-                                             dbc->getUInt32(i, 3), dbc->getUInt32(i, 6)});
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                za::WorldStateSound row;
+                row.worldState = dbc->getUInt32(i, 0);
+                row.value = dbc->getUInt32(i, 1);
+                row.area = dbc->getUInt32(i, 2);
+                row.wmoArea = dbc->getUInt32(i, 3);
+                row.intro = dbc->getUInt32(i, 4);
+                row.music = dbc->getUInt32(i, 5);
+                row.ambience = dbc->getUInt32(i, 6);
+                worldStateSounds_.push_back(row);
+            }
         }
     }
     if (ambiencePlace_) {
@@ -236,180 +233,89 @@ void AudioCoordinator::updateAmbience(const ZoneAudioContext& ctx) {
             const auto it = ctx.worldStates->find(state);
             return it != ctx.worldStates->end() ? it->second : 0;
         };
-        const std::optional<uint32_t> row = za::worldStateAmbience(worldStateSounds_, *ambiencePlace_, value);
-        if (row != worldStateAmbience_) {
-            worldStateAmbience_ = row;
-            ambience.setSlotAmbience(za::kSlotWorldState, row.value_or(0));
+        const std::optional<za::WorldStateSound> row = za::worldStateRow(worldStateSounds_, *ambiencePlace_, value);
+        if (row != worldStateRow_) {
+            worldStateRow_ = row;
+            if (ambience) ambience->setSlotAmbience(za::kSlotWorldState, row ? row->ambience : 0);
+            setMusicSlotIntro(zm::kSlotWorldStateIntro, row ? int64_t{row->intro} : -1);
+            setMusicSlotZoneMusic(zm::kSlotWorldState, row ? int64_t{row->music} : -1);
         }
     }
 
     // Slot 8, the weather's (0x00526ade): the Weather.dbc row's AmbienceID
     // (+4), where it has one, when SMSG_WEATHER names it.
-    if (ctx.weatherSerial != weatherSerialSeen_ && assets) {
+    if (ctx.weatherSerial != weatherSerialSeen_ && assets && ambience) {
         weatherSerialSeen_ = ctx.weatherSerial;
         int32_t sound = -1;
         auto dbc = assets->loadDBCOptional("Weather.dbc");
         const int32_t idx = dbc && dbc->isLoaded() && dbc->getFieldCount() > 1 ? dbc->findRecordById(ctx.weatherId)
                                                                                 : -1;
         if (idx >= 0) sound = dbc->getInt32(static_cast<uint32_t>(idx), 1);
-        ambience.setSlotSound(za::kSlotWeather, sound > 0 ? sound : -1);
+        ambience->setSlotSound(za::kSlotWeather, sound > 0 ? sound : -1);
     }
 
     // Slot 9, under liquid (0x004c8630), and slot 10, the screen effect's
-    // (0x004c8fa0).
-    ambience.setCameraLiquid(ctx.cameraLiquidType);
+    // ambience and music (0x004c8fa0).
+    if (ambience) ambience->setCameraLiquid(ctx.cameraLiquidType);
     if (ctx.screenEffectAmbienceId != screenEffectAmbienceId_) {
         screenEffectAmbienceId_ = ctx.screenEffectAmbienceId;
-        ambience.setSlotAmbience(za::kSlotScreenEffect, screenEffectAmbienceId_);
+        if (ambience) ambience->setSlotAmbience(za::kSlotScreenEffect, screenEffectAmbienceId_);
+    }
+    if (ctx.screenEffectZoneMusicId != screenEffectZoneMusicId_) {
+        screenEffectZoneMusicId_ = ctx.screenEffectZoneMusicId;
+        setMusicSlotZoneMusic(zm::kSlotScreenEffect, screenEffectZoneMusicId_);
     }
 
+    if (!ambience) return;
     const bool indoors = ambiencePlace_ && ambiencePlace_->indoors;
-    ambience.update(screen_effect_audio::isSoundDaytime(ctx.gameTimeHours), indoors);
-    ambience.updateLiquid(ctx.deltaTime, ctx.playerPosition, indoors, ctx.liquidQuery);
+    ambience->update(screen_effect_audio::isSoundDaytime(ctx.gameTimeHours), indoors);
+    ambience->updateLiquid(ctx.deltaTime, ctx.playerPosition, indoors, ctx.liquidQuery);
+}
+
+void AudioCoordinator::updateMusic(const ZoneAudioContext& ctx) {
+    namespace zm = zone_music;
+    if (!musicManager_) return;
+    auto& music = *musicManager_;
+    music.update(ctx.deltaTime);
+
+    // What each track's end does (0x004c5d20's notes).
+    for (const auto& end : music.takeEndedZoneTracks()) {
+        switch (zm::onEnd(end.slot)) {
+        case zm::OnEnd::Silence: {
+            // 0x004c8ab0: the silence, if the slots still pick the sound.
+            const zm::Pick now = zm::pick(musicSlots_, music.zoneChannel(), musicContext());
+            silenceUntil_ = zm::silenceAfter(end.sound, end.silenceMin, end.silenceMax, now.sound, nowMs(),
+                                             static_cast<uint32_t>(musicRng_()));
+            break;
+        }
+        case zm::OnEnd::EmptyServerSlot:
+            musicSlots_[zm::kSlotServer] = {};  // 0x004c90c0
+            break;
+        case zm::OnEnd::IntroDelay:
+            introDue_[end.sound] = zm::introDueAfter(end.silenceMin, nowMs());  // 0x004c9080
+            break;
+        case zm::OnEnd::None:
+            break;
+        }
+    }
+
+    // 0x004c9910: the channel given what the slots pick, unless it plays it.
+    const zm::Channel ch = music.zoneChannel();
+    const zm::Pick want = zm::pick(musicSlots_, ch, musicContext());
+    if (!zm::shouldStart(want, ch, false)) return;
+    if (want.slot >= zm::kSlotCount) {
+        music.releaseZoneTrack(want.slot);
+        return;
+    }
+    music.playZoneTrack(want.sound, want.slot, zm::fadeInSeconds(ch), zm::kFadeSeconds,
+                        {want.slot, want.sound, want.silenceMin, want.silenceMax});
 }
 
 void AudioCoordinator::updateZoneAudio(const ZoneAudioContext& ctx) {
-    float deltaTime = ctx.deltaTime;
-    if (musicSwitchCooldown_ > 0.0f) {
-        musicSwitchCooldown_ = std::max(0.0f, musicSwitchCooldown_ - deltaTime);
-    }
-
+    cachedAssets_ = ctx.assetManager;
+    musicTime_ = zone_music::timeIndex(screen_effect_audio::isSoundDaytime(ctx.gameTimeHours));
     updateAmbience(ctx);
-
-    // The zone the music is for.
-    auto* zm = ctx.zoneManager;
-    const uint32_t tileZoneId = (zm && ctx.hasTile)
-        ? zm->getZoneId(ctx.tileX, ctx.tileY)
-        : 0;
-    const uint32_t serverZoneId = (zm && ctx.serverZoneId != 0)
-        ? zm->resolveAreaZoneId(ctx.serverZoneId)
-        : ctx.serverZoneId;
-    uint32_t zoneId = serverZoneId != 0 ? serverZoneId : tileZoneId;
-
-    // The screen effect's slot is above all the zone's.
-    if (updateScreenEffectAudio(ctx)) return;
-
-    // ── Zone detection and music transitions ──
-    if (!zm || !musicManager_ || !ctx.hasTile) return;
-
-    bool insideTavern = false;
-    bool insideBlacksmith = false;
-    std::string tavernMusic;
-
-    // WMO-based location overrides (taverns, blacksmiths, city zones)
-    if (ctx.insideWmo) {
-        uint32_t wmoModelId = ctx.insideWmoId;
-
-        // Stormwind WMO → force Stormwind City zone
-        if (wmoModelId == 10047) zoneId = 1519;
-
-        // Log WMO transitions
-        static uint32_t lastLoggedWmoId = 0;
-        if (wmoModelId != lastLoggedWmoId) {
-            LOG_INFO("Inside WMO model ID: ", wmoModelId);
-            lastLoggedWmoId = wmoModelId;
-        }
-
-        // Blacksmith detection (the music stops inside)
-        if (wmoModelId == 96048) {
-            insideBlacksmith = true;
-            LOG_INFO("Detected blacksmith WMO ", wmoModelId);
-        }
-
-        // Tavern / inn detection
-        if (wmoModelId == 191 || wmoModelId == 71414 || wmoModelId == 190 ||
-            wmoModelId == 220 || wmoModelId == 221 ||
-            wmoModelId == 5392 || wmoModelId == 5393) {
-            insideTavern = true;
-            // The first slot is our own tavern track. It falls back to the
-            // Blizzard one it replaces when the file is missing, and the
-            // original-soundtrack setting drops it the same way zone music does.
-            static const std::string tavernRemix =
-                game::ZoneManager::resolveOriginalMusicFile("TavernAllianceREMIX.mp3");
-            const bool useRemix = !tavernRemix.empty() &&
-                (!ctx.zoneManager || ctx.zoneManager->getUseOriginalSoundtrack());
-            const std::vector<std::string> tavernTracks = {
-                useRemix ? tavernRemix
-                         : std::string("Sound\\Music\\ZoneMusic\\TavernAlliance\\TavernAlliance01.mp3"),
-                "Sound\\Music\\ZoneMusic\\TavernAlliance\\TavernAlliance02.mp3",
-                "Sound\\Music\\ZoneMusic\\TavernHuman\\RA_HumanTavern1A.mp3",
-                "Sound\\Music\\ZoneMusic\\TavernHuman\\RA_HumanTavern2A.mp3",
-            };
-            static int tavernTrackIndex = 0;
-            tavernMusic = tavernTracks[tavernTrackIndex++ % tavernTracks.size()];
-            LOG_INFO("Detected tavern WMO ", wmoModelId, ", playing: ", tavernMusic);
-        }
-    }
-
-    // Tavern music transitions
-    if (insideTavern) {
-        if (!inTavern_ && !tavernMusic.empty()) {
-            inTavern_ = true;
-            LOG_INFO("Entered tavern");
-            musicManager_->playMusic(tavernMusic, true);
-            musicSwitchCooldown_ = 6.0f;
-        }
-    } else if (inTavern_) {
-        inTavern_ = false;
-        LOG_INFO("Exited tavern");
-        auto* info = zm->getZoneInfo(currentZoneId_);
-        if (info) {
-            std::string music = zm->getRandomMusic(currentZoneId_);
-            if (!music.empty()) {
-                playZoneMusic(music);
-                musicSwitchCooldown_ = 6.0f;
-            }
-        }
-    }
-
-    // Blacksmith transitions (stop music, let ambience play)
-    if (insideBlacksmith) {
-        if (!inBlacksmith_) {
-            inBlacksmith_ = true;
-            LOG_INFO("Entered blacksmith - stopping music");
-            musicManager_->stopMusic();
-        }
-    } else if (inBlacksmith_) {
-        inBlacksmith_ = false;
-        LOG_INFO("Exited blacksmith - restoring music");
-        auto* info = zm->getZoneInfo(currentZoneId_);
-        if (info) {
-            std::string music = zm->getRandomMusic(currentZoneId_);
-            if (!music.empty()) {
-                playZoneMusic(music);
-                musicSwitchCooldown_ = 6.0f;
-            }
-        }
-    }
-
-    // Normal zone transitions
-    if (!insideTavern && !insideBlacksmith && zoneId != currentZoneId_ && zoneId != 0) {
-        currentZoneId_ = zoneId;
-        auto* info = zm->getZoneInfo(zoneId);
-        if (info) {
-            currentZoneName_ = info->name;
-            LOG_INFO("Entered zone: ", info->name);
-            if (musicSwitchCooldown_ <= 0.0f) {
-                std::string music = zm->getRandomMusic(zoneId);
-                if (!music.empty()) {
-                    playZoneMusic(music);
-                    musicSwitchCooldown_ = 6.0f;
-                }
-            }
-        }
-    }
-
-    musicManager_->update(deltaTime);
-
-    // When a track finishes, pick a new random track from the current zone
-    if (!musicManager_->isPlaying() && !inTavern_ && !inBlacksmith_ &&
-        currentZoneId_ != 0 && musicSwitchCooldown_ <= 0.0f) {
-        std::string music = zm->getRandomMusic(currentZoneId_);
-        if (!music.empty()) {
-            playZoneMusic(music);
-            musicSwitchCooldown_ = 2.0f;
-        }
-    }
+    updateMusic(ctx);
 }
 
 } // namespace audio

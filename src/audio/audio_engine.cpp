@@ -259,6 +259,8 @@ void AudioEngine::shutdown() {
 
     // Stop music
     stopMusic();
+    for (auto& stream : activeStreams_) releaseStream(stream);
+    activeStreams_.clear();
 
     // Clean up all active sounds
     for (auto& activeSound : activeSounds_) {
@@ -637,6 +639,86 @@ void AudioEngine::stopSoundWithFade(uint32_t id, float seconds) {
     }
 }
 
+void AudioEngine::releaseStream(ActiveStream& stream) {
+    if (stream.sound) {
+        ma_sound_uninit(stream.sound);
+        std::free(stream.sound);
+        stream.sound = nullptr;
+    }
+    if (stream.decoder) {
+        auto* decoder = static_cast<ma_decoder*>(stream.decoder);
+        ma_decoder_uninit(decoder);
+        delete decoder;
+        stream.decoder = nullptr;
+    }
+    stream.data.reset();
+}
+
+uint32_t AudioEngine::playStream(std::shared_ptr<const std::vector<uint8_t>> data, float volume, bool loop) {
+    if (!initialized_ || !engine_ || !data || data->empty()) return 0;
+    ActiveStream stream;
+    stream.data = std::move(data);
+    auto* decoder = new ma_decoder();
+    ma_decoder_config decoderConfig = ma_decoder_config_init_default();
+    if (ma_decoder_init_memory(stream.data->data(), stream.data->size(), &decoderConfig, decoder) != MA_SUCCESS) {
+        delete decoder;
+        return 0;
+    }
+    stream.decoder = decoder;
+    stream.sound = static_cast<ma_sound*>(std::malloc(sizeof(ma_sound)));
+    if (!stream.sound) {
+        releaseStream(stream);
+        return 0;
+    }
+    if (ma_sound_init_from_data_source(engine_, decoder,
+                                       MA_SOUND_FLAG_STREAM | MA_SOUND_FLAG_NO_PITCH |
+                                           MA_SOUND_FLAG_NO_SPATIALIZATION,
+                                       nullptr, stream.sound) != MA_SUCCESS) {
+        std::free(stream.sound);
+        stream.sound = nullptr;
+        releaseStream(stream);
+        return 0;
+    }
+    ma_sound_set_volume(stream.sound, volume);
+    ma_sound_set_looping(stream.sound, loop ? MA_TRUE : MA_FALSE);
+    if (ma_sound_start(stream.sound) != MA_SUCCESS) {
+        releaseStream(stream);
+        return 0;
+    }
+    stream.id = nextSoundId_++;
+    if (nextSoundId_ == 0) nextSoundId_ = 1;
+    activeStreams_.push_back(std::move(stream));
+    return activeStreams_.back().id;
+}
+
+bool AudioEngine::isStreamPlaying(uint32_t id) const {
+    if (id == 0) return false;
+    for (const auto& stream : activeStreams_)
+        if (stream.id == id) return ma_sound_is_playing(stream.sound) == MA_TRUE;
+    return false;
+}
+
+void AudioEngine::setStreamVolume(uint32_t id, float volume) {
+    if (id == 0) return;
+    for (auto& stream : activeStreams_) {
+        if (stream.id == id) {
+            ma_sound_set_volume(stream.sound, volume);
+            return;
+        }
+    }
+}
+
+void AudioEngine::stopStream(uint32_t id) {
+    if (id == 0) return;
+    for (size_t i = 0; i < activeStreams_.size(); ++i) {
+        if (activeStreams_[i].id != id) continue;
+        releaseStream(activeStreams_[i]);
+        activeStreams_[i] = std::move(activeStreams_.back());
+        activeStreams_.pop_back();
+        return;
+    }
+}
+
 bool AudioEngine::playMusic(std::shared_ptr<const std::vector<uint8_t>> musicData,
                             float volume, bool loop) {
     if (!initialized_ || !engine_ || !musicData || musicData->empty()) {
@@ -779,6 +861,15 @@ void AudioEngine::update(float deltaTime) {
             std::free(buffer);
             activeSounds_[i] = std::move(activeSounds_.back());
             activeSounds_.pop_back();
+        } else {
+            ++i;
+        }
+    }
+    for (size_t i = 0; i < activeStreams_.size();) {
+        if (!ma_sound_is_playing(activeStreams_[i].sound)) {
+            releaseStream(activeStreams_[i]);
+            activeStreams_[i] = std::move(activeStreams_.back());
+            activeStreams_.pop_back();
         } else {
             ++i;
         }

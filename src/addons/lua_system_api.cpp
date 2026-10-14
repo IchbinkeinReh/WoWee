@@ -700,10 +700,14 @@ static void applySoundCVars(lua_State* L) {
     //
     // What is left here are the three enable switches, which the client's panel
     // has no equivalent for. They multiply whatever the settings applied.
+    // Music off is the MUSIC category muted and the music stopped, the slots
+    // picking nothing until it is on again (0x004d1590, 0x004c88b0).
     const bool musicOn = soundCVar("sound_enablemusic", 1.0f) != 0.0f;
     if (!musicOn) {
         if (auto* music = ac->getMusicManager()) music->setVolume(0);
     }
+    ac->setMusicEnabled(musicOn);
+    ac->setZoneMusicNoDelay(soundCVar("sound_zonemusicnodelay", 0.0f) != 0.0f);
 
     const bool ambOn = soundCVar("sound_enableambience", 1.0f) != 0.0f;
     if (!ambOn) {
@@ -1629,11 +1633,11 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
         }
     }
     // Loop Music. The checkbox says Loop Music and the CVar behind it says
-    // ZoneMusicNoDelay, which is the same thing said from the other side: a
-    // track that runs on leaves no silence between it and the next.
+    // ZoneMusicNoDelay: the zone's next track follows without the silence
+    // between them (0x004c87d0). A track still plays once.
     if (key == "sound_zonemusicnodelay") {
-        if (auto* svc = getLuaServices(L); svc && svc->setZoneMusicLooping) {
-            svc->setZoneMusicLooping(value != "0");
+        if (auto* svc = getLuaServices(L); svc && svc->setZoneMusicNoDelay) {
+            svc->setZoneMusicNoDelay(value != "0");
         }
     }
     // Ground Clutter Radius, in yards and used as it stands.

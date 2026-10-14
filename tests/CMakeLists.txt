@@ -2947,6 +2947,12 @@ wowee_add_test(test_texture_variants
 wowee_add_test(test_zone_ambience
     SOURCES test_zone_ambience.cpp)
 
+# ── test_zone_music ──────────────────────────────────────────
+# The music's slots, the silence between tracks, the intros' delay and a
+# kit's file, as the client picks them.
+wowee_add_test(test_zone_music
+    SOURCES test_zone_music.cpp)
+
 # ── test_screen_effect_state ─────────────────────────────────
 # The full-screen effects' CPU side: rows, drunk blur, wave, nether field, fog noise.
 wowee_add_test(test_screen_effect_state

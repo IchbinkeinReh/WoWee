@@ -900,12 +900,10 @@ constexpr SettingDesc kSchema[] = {
     {"enablemusic", "Enable music", SettingKind::Bool, 0, 0, 0, "Sound", "Music",
      "Off silences the score without disturbing the volume below.", "", 1},
     {"musicvolume", "Music volume", SettingKind::Int, 0, 100, 5, "Sound", "",
-     "The zone's music. With the WoWee soundtrack on, that too.", "", 30},
-    {"woweemusic", "WoWee soundtrack", SettingKind::Bool, 0, 0, 0, "Sound", "",
-     "Play this client's own music in the rotation alongside the game's.", "", 1},
+     "The zone's music.", "", 30},
     {"loopmusic", "Play without gaps", SettingKind::Bool, 0, 0, 0, "Sound", "",
-     "Start the next track straight away rather than leaving the long\n"
-     "silence between them the original client had.", "", 0},
+     "Start the zone's next track straight away rather than leaving the\n"
+     "silence its music sets between them (Sound_ZoneMusicNoDelay).", "", 0},
 
     {"enableambience", "Enable ambience", SettingKind::Bool, 0, 0, 0, "Sound", "Ambience",
      "Off silences the world's own noise without disturbing the volumes below.", "", 1},

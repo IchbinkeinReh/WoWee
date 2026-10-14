@@ -31,7 +31,9 @@
     "ID": 0,
     "MapID": 1,
     "ParentAreaNum": 2,
-    "SoundAmbience": 7
+    "SoundAmbience": 7,
+    "ZoneMusic": 8,
+    "IntroSound": 9
   },
   "CharHairGeosets": {
     "GeosetID": 4,
@@ -702,6 +704,8 @@
     "NameSetID": 2,
     "WMOGroupID": 3,
     "SoundAmbience": 6,
+    "ZoneMusic": 7,
+    "IntroSound": 8,
     "Flags": 9,
     "AreaTableID": 10,
     "AreaName": 11

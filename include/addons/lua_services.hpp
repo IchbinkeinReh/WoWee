@@ -36,8 +36,9 @@ struct LuaServices {
     /// How far the ground cover is drawn - the game's Ground Clutter Radius.
     std::function<void(float)> setGroundDetailDistance;
 
-    /// Loop Music - whether a zone track runs on or stops at its end.
-    std::function<void(bool)> setZoneMusicLooping;
+    /// Loop Music, Sound_ZoneMusicNoDelay: no silence between the zone's
+    /// tracks (0x004c87d0).
+    std::function<void(bool)> setZoneMusicNoDelay;
 
     /// Which page of the main action bar is showing.
     ///

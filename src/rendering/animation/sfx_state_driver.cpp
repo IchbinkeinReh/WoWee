@@ -11,7 +11,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/mount_sound_manager.hpp"
-#include "audio/music_manager.hpp"
 #include "rendering/camera_controller.hpp"
 
 namespace wowee {
@@ -70,19 +69,12 @@ void SfxStateDriver::update(float deltaTime, Renderer* renderer,
 
         activitySoundManager->setSwimmingState(swimming, moving);
 
-        if (renderer->getAudioCoordinator()->getMusicManager()) {
-            renderer->getAudioCoordinator()->getMusicManager()->setUnderwaterMode(swimming);
-        }
-
         prevGrounded_ = grounded;
         prevJumping_ = jumping;
         prevFalling_ = falling;
         prevSwimming_ = swimming;
     } else {
         activitySoundManager->setSwimmingState(false, false);
-        if (renderer->getAudioCoordinator()->getMusicManager()) {
-            renderer->getAudioCoordinator()->getMusicManager()->setUnderwaterMode(false);
-        }
         initialized_ = false;
     }
 

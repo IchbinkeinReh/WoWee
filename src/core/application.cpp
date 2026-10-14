@@ -791,8 +791,8 @@ bool Application::initialize() {
         luaSvc.setActionBarPage = [uim = uiManager.get()](int page) {
             if (uim) uim->getGameScreen().actionBarPanel().setMainActionBarPage(page);
         };
-        luaSvc.setZoneMusicLooping = [this](bool loop) {
-            if (audioCoordinator_) audioCoordinator_->setZoneMusicLooping(loop);
+        luaSvc.setZoneMusicNoDelay = [this](bool noDelay) {
+            if (audioCoordinator_) audioCoordinator_->setZoneMusicNoDelay(noDelay);
         };
         luaSvc.setGroundDetailDistance = [this](float yards) {
             if (!renderer) return;
@@ -3206,10 +3206,15 @@ void Application::performLogoutToLogin() {
         gameHandler->disconnect();
     }
 
-    // The world's sound goes with it (0x00409550): zone and script music,
-    // and the ambience. Nothing updates them past this point, so a loop
-    // left running here played on over the login screen.
-    if (audioCoordinator_) audioCoordinator_->leaveWorld();
+    // The world's sound goes with it (0x00409550): the music and the
+    // ambience. Nothing updates them past this point, so a loop left running
+    // here played on over the login screen. The next entry from the
+    // character screen lets every intro play again (0x00405540 ->
+    // 0x004c9330).
+    if (audioCoordinator_) {
+        audioCoordinator_->leaveWorld();
+        audioCoordinator_->forgetIntroMusic();
+    }
 
     // --- Per-session flags ---
     npcsSpawned = false;

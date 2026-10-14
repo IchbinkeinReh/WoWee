@@ -81,7 +81,8 @@ constexpr std::optional<Pick> pick(const Slots& slots, bool isDay, bool indoors)
 /// 0x0078e9a0: the SoundAmbience row of a place - the building group's
 /// WMOAreaTable row, then the building's own (group -1), then, outside only,
 /// the area's AreaTable row and its zone's. 0 for none. A row not there
-/// counts as 0.
+/// counts as 0. The place's ZoneMusic and intro take the same chain
+/// (audio/zone_music.hpp).
 constexpr uint32_t placeAmbience(uint32_t zone, uint32_t area, uint32_t buildingRow, uint32_t groupRow,
                                  bool indoors) {
     if (groupRow != 0) return groupRow;
@@ -91,21 +92,26 @@ constexpr uint32_t placeAmbience(uint32_t zone, uint32_t area, uint32_t building
 }
 
 /// A WorldStateZoneSounds.dbc row (0x004cc1b0): +0 the world state, +4 the
-/// value it wants, +8 an AreaTable id, +0xc a WMOAreaTable id, +0x18 the
-/// SoundAmbience row.
+/// value it wants, +8 an AreaTable id, +0xc a WMOAreaTable id, +0x10 the
+/// ZoneIntroMusicTable row, +0x14 the ZoneMusic row, +0x18 the SoundAmbience
+/// row.
 struct WorldStateSound {
     uint32_t worldState = 0;
     uint32_t value = 0;
     uint32_t area = 0;
     uint32_t wmoArea = 0;
     uint32_t ambience = 0;
+    uint32_t intro = 0;
+    uint32_t music = 0;
+    bool operator==(const WorldStateSound&) const = default;
 };
 
-/// Where the player is, as the ambience asks (0x0078f020): the zone and
-/// the area its place name is from (0x0077fa00) - the area 0 where it is a
-/// zone - and, linked to a building's group (0x007a1640), the group's and
-/// the building's own WMOAreaTable rows - their ids and SoundAmbience, 0 for
-/// none - and whether the group is inside (0x007a1480).
+/// Where the player is, as the ambience and the music ask (0x0078f020): the
+/// zone and the area its place name is from (0x0077fa00) - the area 0 where
+/// it is a zone - and, linked to a building's group (0x007a1640), the
+/// group's and the building's own WMOAreaTable rows - their ids,
+/// SoundAmbience, ZoneMusic and IntroSound, 0 for none - and whether the
+/// group is inside (0x007a1480).
 struct Place {
     uint32_t zone = 0;
     uint32_t area = 0;
@@ -113,29 +119,33 @@ struct Place {
     uint32_t groupRow = 0;
     uint32_t buildingAmbience = 0;
     uint32_t groupAmbience = 0;
+    uint32_t buildingMusic = 0;
+    uint32_t groupMusic = 0;
+    uint32_t buildingIntro = 0;
+    uint32_t groupIntro = 0;
     bool indoors = false;
     constexpr bool operator==(const Place&) const = default;
 };
 
 /// 0x004cbe70: the row whose world state has its value (0 for a state never
 /// sent, 0x00548d10) and which names the place; its SoundAmbience goes to
-/// slot 1, none emptying it.
+/// slot 1, its ZoneMusic to the music's slot 1 and its intro to slot 6,
+/// none emptying them.
 ///   Inside: a row for the building or the group, the group's ending it.
 ///   Outside with a building: the best of the group (first), the area, the
 ///     zone - the building's own row is not asked.
 ///   Outside: a row for the zone or the area, in order, the area's ending
 ///     it.
-inline std::optional<uint32_t> worldStateAmbience(const std::vector<WorldStateSound>& rows,
-                                                  const Place& at,
-                                                  const std::function<uint32_t(uint32_t)>& stateValue) {
-    std::optional<uint32_t> found;
+inline std::optional<WorldStateSound> worldStateRow(const std::vector<WorldStateSound>& rows, const Place& at,
+                                                   const std::function<uint32_t(uint32_t)>& stateValue) {
+    std::optional<WorldStateSound> found;
     const auto matches = [&](const WorldStateSound& r) { return stateValue(r.worldState) == r.value; };
     if (at.indoors) {
         for (const auto& r : rows) {
             const bool names = (at.buildingRow > 0 && r.wmoArea == at.buildingRow) ||
                                (at.groupRow > 0 && r.wmoArea == at.groupRow);
             if (!names || !matches(r)) continue;
-            found = r.ambience;
+            found = r;
             if (r.wmoArea == at.groupRow) return found;
         }
         return found;
@@ -148,7 +158,7 @@ inline std::optional<uint32_t> worldStateAmbience(const std::vector<WorldStateSo
             if (at.area > 0 && r.area == at.area) rank = 2;
             if (at.groupRow > 0 && r.wmoArea == at.groupRow) rank = 0;
             if (rank >= best || !matches(r)) continue;
-            found = r.ambience;
+            found = r;
             best = rank;
             if (rank == 0) return found;
         }
@@ -157,10 +167,18 @@ inline std::optional<uint32_t> worldStateAmbience(const std::vector<WorldStateSo
     for (const auto& r : rows) {
         const bool names = (at.zone > 0 && r.area == at.zone) || (at.area > 0 && r.area == at.area);
         if (!names || !matches(r)) continue;
-        found = r.ambience;
+        found = r;
         if (r.area == at.area) return found;
     }
     return found;
+}
+
+/// The SoundAmbience of 0x004cbe70's row.
+inline std::optional<uint32_t> worldStateAmbience(const std::vector<WorldStateSound>& rows, const Place& at,
+                                                  const std::function<uint32_t(uint32_t)>& stateValue) {
+    const auto row = worldStateRow(rows, at, stateValue);
+    if (!row) return std::nullopt;
+    return row->ambience;
 }
 
 // ---------------------------------------------------------------------------

@@ -965,7 +965,7 @@ bool Renderer::initialize(core::Window* win) {
     zoneManager = std::make_unique<game::ZoneManager>();
     zoneManager->initialize();
     if (assetManager) {
-        zoneManager->enrichFromDBC(assetManager);
+        zoneManager->loadAreaTable(assetManager);
     }
 
     // Audio is now owned by AudioCoordinator (created by Application).
@@ -2076,8 +2076,9 @@ void Renderer::resetCombatVisualState() {
 }
 
 const std::string& Renderer::getCurrentZoneName() const {
+    // The zone text (0x0078f020), once the place is known.
     static const std::string empty;
-    return audioCoordinator_ ? audioCoordinator_->getCurrentZoneName() : empty;
+    return zoneTextsKnown_ ? zoneTexts_.zone : empty;
 }
 
 bool Renderer::updateSkyboxLayers() {
@@ -2277,8 +2278,6 @@ uint32_t Renderer::getCurrentZoneId() const {
         const uint32_t areaId = gh->getWorldStateZoneId();
         return zoneManager ? zoneManager->resolveAreaZoneId(areaId) : areaId;
     }
-    if (audioCoordinator_ && audioCoordinator_->getCurrentZoneId() != 0)
-        return audioCoordinator_->getCurrentZoneId();
     return tileZoneId;
 }
 
@@ -2357,7 +2356,7 @@ void Renderer::updatePlayerArea() {
     const uint32_t area = za::placeArea(wmoDist, wmoArea, groundDown(nameStartZ, nameEndZ), groundArea);
     if (area == 0) return;
 
-    // Where the ambience is for (0x0078f020): the place's area and its zone,
+    // Where the ambience and the music are for (0x0078f020): the place's area and its zone,
     // and the rows of the building group the player is linked to
     // (0x007a1640) with whether it is inside (0x007a1480).
     if (const auto parent = zoneManager->areaParent(area)) {
@@ -2368,10 +2367,14 @@ void Renderer::updatePlayerArea() {
             if (const auto* row = mi::areaRow(rows, linked->wmoId, linked->nameSet, linked->areaGroupId)) {
                 place.groupRow = row->id;
                 place.groupAmbience = row->soundAmbience;
+                place.groupMusic = row->zoneMusic;
+                place.groupIntro = row->introSound;
             }
             if (const auto* row = mi::areaRow(rows, linked->wmoId, linked->nameSet, -1)) {
                 place.buildingRow = row->id;
                 place.buildingAmbience = row->soundAmbience;
+                place.buildingMusic = row->zoneMusic;
+                place.buildingIntro = row->introSound;
             }
             place.indoors = playerLinkIndoors_;
         }
@@ -2560,10 +2563,9 @@ void Renderer::update(float deltaTime) {
     // Resolve WMO containment before the ambience consumes it.
     const bool canQueryWmo = (camera && wmoRenderer);
     const glm::vec3 camPos = camera ? camera->getPosition() : glm::vec3(0.0f);
-    uint32_t insideWmoId = 0;
     const bool insideWmo = [&] {
         WOWEE_PROFILE_SCOPE("camera inside a WMO", Cpu);
-        return canQueryWmo && wmoRenderer->isInsideWMO(camPos.x, camPos.y, camPos.z, &insideWmoId);
+        return canQueryWmo && wmoRenderer->isInsideWMO(camPos.x, camPos.y, camPos.z);
     }();
     playerIndoors_ = insideWmo;
     // Where the player is, and the zone events when that changes: on the
@@ -3047,10 +3049,6 @@ void Renderer::update(float deltaTime) {
     if (audioCoordinator_) {
         audio::ZoneAudioContext zctx;
         zctx.deltaTime = deltaTime;
-        zctx.cameraPosition = camPos;
-        zctx.isSwimming = cameraController ? cameraController->isSwimming() : false;
-        zctx.insideWmo = insideWmo;
-        zctx.insideWmoId = insideWmoId;
         if (lightingManager) {
             zctx.gameTimeHours = lightingManager->getTimeOfDayHours();
         }
@@ -3067,16 +3065,6 @@ void Renderer::update(float deltaTime) {
                 return waterRenderer->liquidCellsNear(at, radius, !playerLinks_.empty());
             };
         }
-        if (terrainManager) {
-            auto tile = terrainManager->getCurrentTile();
-            zctx.tileX = tile.x;
-            zctx.tileY = tile.y;
-            zctx.hasTile = true;
-        }
-        // Use the precise MCNK area classification when available; this avoids
-        // stale server world-state zones and whole-ADT ambiguity at river banks.
-        zctx.serverZoneId = getCurrentZoneId();
-        zctx.zoneManager = zoneManager.get();
         zctx.screenEffectAmbienceId = screenEffectAmbience_;
         zctx.screenEffectZoneMusicId = screenEffectZoneMusic_;
         zctx.assetManager = core::Application::getInstance().getAssetManager();
@@ -4973,27 +4961,6 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
                 if (!blobShadowRenderer->initialize(vkCtx, perFrameSetLayout, assetManager))
                     LOG_WARNING("Blob shadow renderer initialization failed (non-fatal)");
             }
-
-            if (core::envFlagEnabled("WOWEE_PREWARM_ZONE_MUSIC", false)) {
-                if (zoneManager) {
-                    for (const auto& musicPath : zoneManager->getAllMusicPaths()) {
-                        audioCoordinator_->getMusicManager()->preloadMusic(musicPath);
-                    }
-                }
-                const std::string tavernRemix =
-                    game::ZoneManager::resolveOriginalMusicFile("TavernAllianceREMIX.mp3");
-                const std::vector<std::string> tavernTracks = {
-                    tavernRemix.empty()
-                        ? std::string("Sound\\Music\\ZoneMusic\\TavernAlliance\\TavernAlliance01.mp3")
-                        : tavernRemix,
-                    "Sound\\Music\\ZoneMusic\\TavernAlliance\\TavernAlliance02.mp3",
-                    "Sound\\Music\\ZoneMusic\\TavernHuman\\RA_HumanTavern1A.mp3",
-                    "Sound\\Music\\ZoneMusic\\TavernHuman\\RA_HumanTavern2A.mp3",
-                };
-                for (const auto& musicPath : tavernTracks) {
-                    audioCoordinator_->getMusicManager()->preloadMusic(musicPath);
-                }
-            }
         } else {
             deferredWorldInitPending_ = true;
             deferredWorldInitStage_ = 0;
@@ -5002,9 +4969,9 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
 
         cachedAssetManager = assetManager;
 
-        // Enrich zone music from DBC if not already done (e.g. asset manager was null at init).
+        // AreaTable, if it was not read at init (the asset manager was null).
         if (zoneManager && assetManager) {
-            zoneManager->enrichFromDBC(assetManager);
+            zoneManager->loadAreaTable(assetManager);
         }
     } else if (worldGpuAssetsReloadPending_ && cachedAssetManager) {
         // A renderer rebuilt after a lost device: the audio above was set up
@@ -6380,6 +6347,8 @@ void Renderer::loadWmoAreaRows() {
     const uint32_t nameCol = layout->tryField("AreaName");
     const uint32_t idCol = layout->tryField("ID");
     const uint32_t ambienceCol = layout->tryField("SoundAmbience");
+    const uint32_t musicCol = layout->tryField("ZoneMusic");
+    const uint32_t introCol = layout->tryField("IntroSound");
     auto data = assetManager->readFile("DBFilesClient\\WMOAreaTable.dbc");
     pipeline::DBCFile dbc;
     if (data.empty() || !dbc.load(data)) return;
@@ -6402,6 +6371,8 @@ void Renderer::loadWmoAreaRows() {
         if (haveNames) row.name = dbc.getString(i, nameCol);
         if (idCol < dbc.getFieldCount()) row.id = dbc.getUInt32(i, idCol);
         if (ambienceCol < dbc.getFieldCount()) row.soundAmbience = dbc.getUInt32(i, ambienceCol);
+        if (musicCol < dbc.getFieldCount()) row.zoneMusic = dbc.getUInt32(i, musicCol);
+        if (introCol < dbc.getFieldCount()) row.introSound = dbc.getUInt32(i, introCol);
         wmoAreaRows_[minimap_indoor::areaKey(dbc.getUInt32(i, cols[0]), dbc.getUInt32(i, cols[1]),
                                              static_cast<int32_t>(dbc.getUInt32(i, cols[2])))] =
             std::move(row);

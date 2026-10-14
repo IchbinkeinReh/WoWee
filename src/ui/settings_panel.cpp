@@ -37,7 +37,6 @@
 #include "rendering/vk_context.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/character_renderer.hpp"
-#include "game/zone_manager.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/music_manager.hpp"
@@ -1215,7 +1214,6 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "activityvolume",  .asInt  = &SettingsPanel::pendingActivityVolume},
     {.key = "npcvoicevolume",  .asInt  = &SettingsPanel::pendingNpcVoiceVolume},
     {.key = "characterspeech", .asBool = &SettingsPanel::pendingCharacterSpeech},
-    {.key = "woweemusic",      .asBool = &SettingsPanel::pendingUseOriginalSoundtrack},
 
     // --- Gameplay ---
     {.key = "autoloot",     .asBool = &SettingsPanel::pendingAutoLoot},
@@ -1600,24 +1598,6 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         showLatencyMeter_ = pendingShowLatencyMeter;
     } else if (key == "showfps") {
         showFps_ = pendingShowFps;
-    } else if (key == "woweemusic") {
-        // Not a volume: it changes which tracks the zone rotation can pick, and
-        // switching it off has to stop whichever of ours is playing now - the
-        // rotation would otherwise honour it only at the next zone change.
-        //
-        // The interface's options panel has offered this since the schema grew
-        // and it did nothing but store the answer, because the only copy of
-        // this lived beside the checkbox in the settings window.
-        if (renderer) {
-            if (auto* zm = renderer->getZoneManager()) {
-                zm->setUseOriginalSoundtrack(pendingUseOriginalSoundtrack);
-                if (!pendingUseOriginalSoundtrack) {
-                    if (auto* ac = renderer->getAudioCoordinator()) {
-                        ac->onOriginalSoundtrackDisabled(zm);
-                    }
-                }
-            }
-        }
     } else if (key == "grassenabled" || key == "grassdensity" || key == "grassheight" ||
                key == "grassdistance") {
         // Grass belonged in its own branch all along. These calls were sitting

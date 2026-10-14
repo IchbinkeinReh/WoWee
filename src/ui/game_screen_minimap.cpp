@@ -30,7 +30,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/music_manager.hpp"
-#include "game/zone_manager.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/mount_sound_manager.hpp"
@@ -1531,13 +1530,6 @@ void GameScreen::renderMinimapReadouts(const MinimapFrame& frame, game::GameHand
         }
         if (zoneName.empty() && zoneId != 0) {
             zoneName = gameHandler.getWhoAreaName(zoneId);
-            if (zoneName.empty()) {
-                if (auto* zmRenderer = renderer ? renderer->getZoneManager() : nullptr) {
-                    if (const game::ZoneInfo* zi = zmRenderer->getZoneInfo(zoneId)) {
-                        zoneName = zi->name;
-                    }
-                }
-            }
         }
         if (zoneName.empty() && renderer) {
             zoneName = renderer->getCurrentZoneName();
@@ -1896,7 +1888,6 @@ void GameScreen::saveSettings() {
     out << "enable_ambience=" << (settingsPanel_.pendingEnableAmbience ? 1 : 0) << "\n";
     out << "error_speech=" << (settingsPanel_.pendingErrorSpeech ? 1 : 0) << "\n";
     out << "enable_sound_effects=" << (settingsPanel_.pendingEnableSoundEffects ? 1 : 0) << "\n";
-    out << "use_original_soundtrack=" << (settingsPanel_.pendingUseOriginalSoundtrack ? 1 : 0) << "\n";
     out << "master_volume=" << settingsPanel_.pendingMasterVolume << "\n";
     out << "effects_volume=" << settingsPanel_.pendingEffectsVolume << "\n";
     out << "music_volume=" << settingsPanel_.pendingMusicVolume << "\n";
@@ -2184,7 +2175,6 @@ void GameScreen::loadSettings() {
             else if (key == "enable_ambience") settingsPanel_.pendingEnableAmbience = (val != "0");
             else if (key == "error_speech") settingsPanel_.pendingErrorSpeech = (val != "0");
             else if (key == "enable_sound_effects") settingsPanel_.pendingEnableSoundEffects = (val != "0");
-            else if (key == "use_original_soundtrack") settingsPanel_.pendingUseOriginalSoundtrack = (std::stoi(val) != 0);
             else if (key == "master_volume") settingsPanel_.pendingMasterVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "effects_volume") settingsPanel_.pendingEffectsVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "music_volume") settingsPanel_.pendingMusicVolume = std::clamp(std::stoi(val), 0, 100);

@@ -64,17 +64,9 @@ void AudioCallbackHandler::setupCallbacks() {
         }
     });
 
-    // Server-triggered music callback (SMSG_PLAY_MUSIC)
-    // Resolves soundId → SoundEntries.dbc → MPQ path → MusicManager.
+    // SMSG_PLAY_MUSIC: the sound goes to the music's slot 3 (0x004c92b0).
     gameHandler_.setPlayMusicCallback([this](uint32_t soundId) {
-        if (!renderer_) return;
-        auto* music = audioCoordinator_ ? audioCoordinator_->getMusicManager() : nullptr;
-        if (!music) return;
-
-        auto path = resolveSoundEntryPath(soundId);
-        if (path) {
-            music->playScriptMusic(*path);
-        }
+        if (audioCoordinator_) audioCoordinator_->playServerMusic(soundId);
     });
 
     // SMSG_PLAY_SOUND: look up SoundEntries.dbc and play 2-D sound effect

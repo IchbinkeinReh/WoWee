@@ -37,7 +37,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/music_manager.hpp"
-#include "game/zone_manager.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/mount_sound_manager.hpp"
@@ -144,7 +143,6 @@ void GameScreen::applySavedAntiAliasing(rendering::Renderer* renderer) {
 void GameScreen::reapplySettingsAfterGpuRebuild(rendering::Renderer* renderer) {
     auto& panel = settingsPanel_;
     panel.minimapSettingsApplied_ = false;
-    panel.zoneSettingsApplied_ = false;
     panel.terrainSettingsApplied_ = false;
     panel.lightingSettingsApplied_ = false;
     panel.fxaaSettingsApplied_ = false;
@@ -431,8 +429,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     }
 
     // Apply initial settings when renderer becomes available
-    if (!settingsPanel_.minimapSettingsApplied_ || !settingsPanel_.zoneSettingsApplied_ ||
-        !settingsPanel_.terrainSettingsApplied_) {
+    if (!settingsPanel_.minimapSettingsApplied_ || !settingsPanel_.terrainSettingsApplied_) {
         auto* renderer = services_.renderer;
         if (renderer) {
             // Re-read from disk once. This screen is constructed by UIManager's
@@ -459,20 +456,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                     minimap->setSquareShape(settingsPanel_.minimapSquare_);
                     settingsPanel_.minimapSettingsApplied_ = true;
                 }
-            }
-            if (!settingsPanel_.zoneSettingsApplied_) {
-            if (auto* zm = renderer->getZoneManager()) {
-                zm->setUseOriginalSoundtrack(settingsPanel_.pendingUseOriginalSoundtrack);
-                // Setting the flag alone is not the whole apply: music that
-                // already started during the loading screen keeps playing
-                // through a disabled setting.
-                if (!settingsPanel_.pendingUseOriginalSoundtrack) {
-                    if (auto* ac = renderer->getAudioCoordinator()) {
-                        ac->onOriginalSoundtrackDisabled(zm);
-                    }
-                }
-                settingsPanel_.zoneSettingsApplied_ = true;
-            }
             }
             if (!settingsPanel_.terrainSettingsApplied_) {
             if (auto* tm = renderer->getTerrainManager()) {
