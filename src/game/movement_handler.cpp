@@ -1195,6 +1195,9 @@ network::Packet MovementHandler::buildForceAck(Opcode ackOpcode, uint32_t counte
     wire.x = serverPos.x;
     wire.y = serverPos.y;
     wire.z = serverPos.z;
+    // The facing too, as every other movement the client sends has it: the
+    // canonical one went out, a quarter turn off.
+    wire.orientation = core::coords::canonicalToServerYaw(wire.orientation);
     if (wire.hasFlag(MovementFlags::ONTRANSPORT)) {
         glm::vec3 serverTransport =
             transportOffsetToWire(wire.transportGuid, glm::vec3(wire.transportX, wire.transportY, wire.transportZ));
