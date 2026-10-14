@@ -132,12 +132,12 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         // already plays within sqrt(6) of the event (0x004cfe00).
         if (loops_.count(fired.instanceId)) continue;
         if (fired.owner == m2_event::Owner::GameObject || fired.owner == m2_event::Owner::Doodad) {
-            bool near = false;
+            bool loopNear = false;
             for (const auto& [id, loop] : loops_) {
                 const glm::vec3 d = loop.position - fired.position;
-                near = near || (loop.soundId == soundId && glm::dot(d, d) < 6.0f);
+                loopNear = loopNear || (loop.soundId == soundId && glm::dot(d, d) < 6.0f);
             }
-            if (near) continue;
+            if (loopNear) continue;
         }
         const auto origin = m2.getInstancePosition(fired.instanceId);
         if (!origin) continue;

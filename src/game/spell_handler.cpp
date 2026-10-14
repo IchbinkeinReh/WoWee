@@ -2226,7 +2226,7 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
     const auto unit = asked != 0 ? em.getEntity(asked) : nullptr;
     // One out of view goes as it is, for a spell reaching past 100 yards
     // (0x00802c30 with no unit).
-    bool far = false;
+    bool farReach = false;
     if (required != 0 && asked != 0 && !unit) {
         const auto casterEntity = em.getEntity(caster);
         unit_target::RangeInput in;
@@ -2245,7 +2245,7 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
         const auto range = unit_target::unitRange(in, [&](float m) {
             return spell_mods::apply(m, spellModifiers(spellId, spell_mods::kOpRange));
         });
-        far = range.max > 100.0f;
+        farReach = range.max > 100.0f;
     }
     // Auto self-cast with none asked, or a unit the caster may not help.
     bool helpless = asked == 0;
@@ -2254,7 +2254,7 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
         helpless = !c || !relationsOf(owner_, c, unit, 0).mayAssist;
     }
     const auto chosen = unit_target::chooseUnit(
-        required, ground_target::takesNoUnit(spell.implicitTargetsA[0]), asked, far, owner_.isAutoSelfCast(),
+        required, ground_target::takesNoUnit(spell.implicitTargetsA[0]), asked, farReach, owner_.isAutoSelfCast(),
         helpless, player, caster, [&](uint64_t guid) { return takeUnit(spellId, caster, guid, required, true); });
     switch (chosen.what) {
         case unit_target::Choice::AtNone: sendCastBy(spellId, caster, 0); return;

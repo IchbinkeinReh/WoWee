@@ -286,16 +286,16 @@ template <typename MaxMods>
     Range r{};
     float extra = 0.0f;
     if (in.hasRow) {
-        const float near = (in.hasUnit ? in.unitReach : in.casterReach) + in.casterReach + 4.0f / 3.0f;
+        const float nearReach = (in.hasUnit ? in.unitReach : in.casterReach) + in.casterReach + 4.0f / 3.0f;
         if ((in.rowFlags & 1u) == 0) {
-            r.min = (in.rowFlags & 2u) == 0 ? in.rowMin : (near <= 5.0f ? 5.0f : near) + in.rowMin;
+            r.min = (in.rowFlags & 2u) == 0 ? in.rowMin : (nearReach <= 5.0f ? 5.0f : nearReach) + in.rowMin;
             r.max = in.rowMax;
             if (in.hasUnit) {
                 extra = in.casterReach + in.unitReach;
                 if (r.min != 0.0f && (in.rowFlags & 2u) == 0) r.min += extra;
             }
         } else {
-            extra = near <= 5.0f ? 5.0f : near;
+            extra = nearReach <= 5.0f ? 5.0f : nearReach;
         }
         if (in.hasUnit && in.casterMoving && in.unitMoving && ((in.rowFlags & 1u) != 0 || in.unitIsPlayer))
             extra += 8.0f / 3.0f;
