@@ -1022,6 +1022,8 @@ bool EntityController::applyUnitFieldsOnCreate(const UpdateBlock& block,
         }
     }
     applyPlayerShapeshiftForm(block);
+    // The predicted powers start as the fields (0x0071c320).
+    unit->resetPredictedPower();
     // Initial update masks commonly omit fields whose value is zero. A dead unit
     // can therefore arrive without UNIT_FIELD_HEALTH even though its default
     // client-side health is zero; the dynamic corpse bits remain authoritative.
@@ -1074,6 +1076,8 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     uint32_t oldHealth = unit->getHealth();
     bool petExperienceChanged = false;
     bool petStatsChanged = false;
+    bool powerTypeMoved = false;
+    uint8_t powersMoved = 0, maxPowersMoved = 0;
     for (const auto& [key, val] : block.fields) {
         if (key == ufi.health) {
             unit->setHealth(val);
@@ -1121,6 +1125,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             uint8_t oldPT = unit->getPowerType();
             unit->setPowerType(static_cast<uint8_t>((val >> 24) & 0xFF));
             if (unit->getPowerType() != oldPT) {
+                powerTypeMoved = true;
                 auto uid = owner_.guidToUnitId(block.guid);
                 if (!uid.empty())
                     pendingEvents_.emit("UNIT_DISPLAYPOWER", {uid});
@@ -1360,12 +1365,17 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             unit->setPowerByType(static_cast<uint8_t>(key - ufi.powerBase), val);
             result.powerChanged = true;
             result.powerTypeChanged = static_cast<int>(key - ufi.powerBase);
+            powersMoved |= static_cast<uint8_t>(1u << (key - ufi.powerBase));
         } else if (key >= ufi.maxPowerBase && key < ufi.maxPowerBase + 7) {
             unit->setMaxPowerByType(static_cast<uint8_t>(key - ufi.maxPowerBase), val);
             result.powerChanged = true;
             result.maxPowerTypeChanged = static_cast<int>(key - ufi.maxPowerBase);
+            maxPowersMoved |= static_cast<uint8_t>(1u << (key - ufi.maxPowerBase));
         }
     }
+    // The fields' handlers (0x00741d00) in field order, once all are written.
+    if (powerTypeMoved || powersMoved != 0 || maxPowersMoved != 0)
+        owner_.powerFieldsChanged(*unit, block.guid, powerTypeMoved, powersMoved, maxPowersMoved);
 
     // Fire UNIT_HEALTH / UNIT_POWER events for Lua addons
     if ((result.healthChanged || result.powerChanged)) {

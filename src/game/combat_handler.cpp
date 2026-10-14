@@ -1112,17 +1112,8 @@ void CombatHandler::handlePowerUpdate(network::Packet& packet) {
     if (!packet.hasRemaining(5)) return;
     uint8_t  powerType = packet.readUInt8();
     uint32_t value     = packet.readUInt32();
-    if (auto* unit = owner_.getUnitByGuid(guid)) unit->setPowerByType(powerType, value);
-    if (guid != 0) {
-        auto unitId = owner_.guidToUnitId(guid);
-        if (!unitId.empty()) {
-            owner_.fireAddonEvent("UNIT_POWER", {unitId});
-            if (guid == owner_.getPlayerGuid()) {
-                owner_.fireAddonEvent("ACTIONBAR_UPDATE_USABLE", {});
-                owner_.fireAddonEvent("SPELL_UPDATE_USABLE", {});
-            }
-        }
-    }
+    // 0x007236c0: the predicted power alone; the field is the update's.
+    if (auto* unit = owner_.getUnitByGuid(guid)) owner_.setPredictedPower(*unit, powerType, static_cast<int32_t>(value));
 }
 
 void CombatHandler::handleUpdateComboPoints(network::Packet& packet) {

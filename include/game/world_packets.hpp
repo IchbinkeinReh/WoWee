@@ -2386,6 +2386,9 @@ struct SpellStartData {
     uint32_t castFlags = 0;
     uint32_t castTime = 0;
     uint64_t targetGuid = 0;
+    /// Cast flag 0x800: the caster's power of the spell's type (0x00806700).
+    bool hasPower = false;
+    uint32_t power = 0;
 
     [[nodiscard]] bool isValid() const { return spellId != 0; }
 };
@@ -2418,6 +2421,10 @@ struct SpellGoMissEntry {
 };
 
 struct SpellGoData {
+    /// Cast flag 0x800: the caster's power of the spell's type after the cast
+    /// (0x0080e1b0).
+    bool hasPower = false;
+    uint32_t power = 0;
     /// Flag 0x200000: the runes ready before and after the cast, and how far
     /// along its cooldown each one it used is, out of 255.
     bool hasRuneList = false;

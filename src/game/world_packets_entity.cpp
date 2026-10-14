@@ -1283,8 +1283,13 @@ bool SpellStartParser::parse(network::Packet& packet, SpellStartData& data) {
 
     // SpellCastTargets, as the client reads them here too (0x00806700).
     SpellCastTargetsData targets;
-    readSpellCastTargets(packet, targets);  // best effort: a short tail is kept
+    const bool targetsWhole = readSpellCastTargets(packet, targets);  // best effort: a short tail is kept
     data.targetGuid = targets.objectGuid;
+    // 0x800: the caster's power.
+    if (targetsWhole && (data.castFlags & 0x800u) != 0 && packet.hasRemaining(4)) {
+        data.hasPower = true;
+        data.power = packet.readUInt32();
+    }
 
     LOG_DEBUG("Spell start: spell=", data.spellId, " castTime=", data.castTime, "ms");
     return true;

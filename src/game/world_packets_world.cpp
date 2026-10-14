@@ -205,7 +205,8 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
     // 0x800: the caster's power after the cast.
     if (data.castFlags & 0x800u) {
         if (!packet.hasRemaining(4)) return true;
-        packet.readUInt32();
+        data.hasPower = true;
+        data.power = packet.readUInt32();
     }
     // 0x200000: the runes before and after, then a cooldown byte for each of
     // the six that was ready before and is not after.

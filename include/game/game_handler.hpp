@@ -2579,6 +2579,23 @@ public:
     /// PLAYER_RUNE_REGEN by rune type, per second (+0x1008 +0x1214).
     std::array<float, 4> runeRegen() const;
 
+    /// 0x0071c2e0: a unit's power of `type` as UnitPower and the cast see it -
+    /// the predicted one while the CVar predictedPower is on, else its field.
+    int32_t unitPower(const Unit& unit, int type) const;
+    /// 0x00722c50: the prediction of `type` set to `value`, no more than the
+    /// maximum.
+    void setPredictedPower(Unit& unit, int type, int32_t value);
+    /// 0x00722cf0: the prediction moved by an energize (+) or a drain (-).
+    void addPredictedPower(uint64_t guid, int type, int32_t delta);
+    /// What a unit's update said of its powers: its power type changed
+    /// (0x00723620), the POWER fields of `powers` (0x007234d0) and the
+    /// MAXPOWER fields of `maxes` (0x007235c0), a bit by type.
+    void powerFieldsChanged(Unit& unit, uint64_t guid, bool typeChanged, uint8_t powers, uint8_t maxes);
+    /// 0x0071c390: a mana cost holds mana regeneration for five seconds.
+    void startFiveSecondRule(Unit& unit);
+    /// The CVar predictedPower (0x0051d9b0 registers it "1").
+    void setPredictedPowerEnabled(bool on) { predictedPowerOn_ = on; }
+
     // Talent-driven spell modifiers (SMSG_SET_FLAT_SPELL_MODIFIER / SMSG_SET_PCT_SPELL_MODIFIER)
     // SpellModOp matches WotLK SpellModOp enum (server-side).
     enum class SpellModOp : uint8_t {
@@ -5586,8 +5603,17 @@ private:
     glm::vec3 deathReleaseCanonical_{0.0f};
     runes::Runes playerRunes_;
     /// 0x00728a20: a death knight's cooling runes whose time has come are
-    /// ready, each frame.
+    /// ready, with the rest of the player's regeneration.
     void updateRunes();
+    bool predictedPowerOn_ = true;
+    int64_t predictedPowerTick_ = 0;  ///< 0x00bd08a0
+    /// 0x005196f0: the player and its pet regenerate, a tenth of a second
+    /// or more at a time.
+    void updatePredictedPower();
+    /// 0x00728a20 for the unit, over `dtMs`.
+    void regeneratePower(Unit& unit, uint64_t guid, uint32_t dtMs, int64_t nowMs);
+    /// UNIT_<POWER> where 0x00722c50 brought the prediction to its maximum.
+    void predictedPowerSaid(const Unit& unit, uint64_t guid, int type);
     uint64_t pendingSpiritHealerGuid_ = 0;
     bool resurrectPending_ = false;
     bool resurrectRequestPending_ = false;

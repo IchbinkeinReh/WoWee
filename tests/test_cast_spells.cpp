@@ -2,6 +2,7 @@
 
 #include "game/cast_checks.hpp"
 #include "game/ground_target.hpp"
+#include "game/power_prediction.hpp"
 #include "game/spell_unit_target.hpp"
 
 #include <string>
@@ -746,4 +747,127 @@ TEST_CASE("ordinary spells of every class go at the unit 0x0080c790 takes", "[ca
         INFO(r.name << " (" << r.id << ")");
         for (int asked = 0; asked < 3; ++asked) CHECK(unitFor(r, asked) == r.out[asked]);
     }
+}
+
+namespace {
+
+const Row& rowOf(uint32_t id) {
+    for (const auto& r : kRows)
+        if (r.id == id) return r;
+    FAIL("no row " << id);
+    return kRows[0];
+}
+
+/// 0x00739650 at the rogue's energy as 0x008017e0 holds it: the predicted
+/// power (0x0071c2e0) against the spell's cost.
+uint8_t checkAtEnergy(const Row& r, const power_prediction::Predicted& p, int32_t cost) {
+    cast_check::Caster c;
+    c.mapType = 0;
+    c.sheath = 1;
+    c.daytime = 1;
+    c.outdoors = 1;
+    c.wouldStand = c.wouldUnshift = c.wouldDismount = true;
+    c.enoughPower = p.value[3] >= cost;
+    return cast_check::check(checkSpell(r), c).code;
+}
+
+/// 0x00728a20 for a rogue over `ticks` tenths of a second: energy at the
+/// table's 10 a second plus `modifier`, in combat or not alike.
+void tickEnergy(power_prediction::Predicted& p, int ticks, float modifier = 0.0f, bool inCombat = false) {
+    for (int i = 0; i < ticks; ++i) {
+        const bool held = power_prediction::interrupted(p, 3, 0, false, inCombat ? 0x80000u : 0u, false);
+        (void)power_prediction::regenerate(p, 3, power_prediction::kTickMs, held, modifier, 100, 0x800u);
+    }
+}
+
+}  // namespace
+
+TEST_CASE("a rogue's energy is predicted between the server's updates, as 0x00722d80 has it", "[cast_spells]") {
+    using namespace power_prediction;
+    const Row& sinister = rowOf(1752);  // 45 energy
+    const Row& eviscerate = rowOf(2098);  // 35 energy
+    Predicted p;
+    p.reset({0, 0, 0, 100, 0, 0, 0});
+    CHECK(checkAtEnergy(sinister, p, 45) == 0);
+
+    // Sinister Strike's SMSG_SPELL_GO says 55 left (cast flag 0x800).
+    CHECK(set(p, 3, 55, 100));
+    // The field's 55 is not ahead of it and changes nothing (0x007234d0);
+    // one ahead is taken; a unit not predicted takes every update.
+    CHECK_FALSE(takesField(true, 55, p.value[3]));
+    CHECK(takesField(true, 56, p.value[3]));
+    CHECK(takesField(false, 10, 55));
+
+    // A second at 10 a second, in combat as out of it.
+    tickEnergy(p, 10, 0.0f, true);
+    CHECK(p.value[3] == 65);
+    CHECK(p.carry == 0);
+
+    // Eviscerate leaves 30: Sinister Strike is refused NO_POWER until the
+    // prediction reaches 45, a second and a half later - not the next
+    // server update two seconds away.
+    CHECK(set(p, 3, 30, 100));
+    CHECK(checkAtEnergy(sinister, p, 45) == cast_check::kNoPower);
+    CHECK(checkAtEnergy(eviscerate, p, 35) == cast_check::kNoPower);
+    tickEnergy(p, 5);
+    CHECK(p.value[3] == 35);
+    CHECK(checkAtEnergy(eviscerate, p, 35) == 0);
+    CHECK(checkAtEnergy(sinister, p, 45) == cast_check::kNoPower);
+    tickEnergy(p, 9);
+    CHECK(p.value[3] == 44);
+    CHECK(checkAtEnergy(sinister, p, 45) == cast_check::kNoPower);
+    tickEnergy(p, 1);
+    CHECK(checkAtEnergy(sinister, p, 45) == 0);
+
+    // The server's 50 is ahead of it, and taken.
+    CHECK(takesField(true, 50, p.value[3]));
+    CHECK(set(p, 3, 50, 100));
+
+    // No more than the maximum; at it, nothing more is counted.
+    tickEnergy(p, 60);
+    CHECK(p.value[3] == 100);
+    const uint32_t carry = p.carry;
+    CHECK_FALSE(regenerate(p, 3, kTickMs, false, 0.0f, 100, 0x800u));
+    CHECK(p.carry == carry);
+}
+
+TEST_CASE("UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER adds to the energy rate in thousandths", "[cast_spells]") {
+    using namespace power_prediction;
+    Predicted p;
+    p.reset({0, 0, 0, 20, 0, 0, 0});
+    // 12.5 a second: a tenth of a second is 1.25, the quarters carried.
+    tickEnergy(p, 1, 2.5f);
+    CHECK(p.value[3] == 21);
+    CHECK(p.carry == 250);
+    tickEnergy(p, 3, 2.5f);
+    CHECK(p.value[3] == 25);
+    CHECK(p.carry == 0);
+}
+
+TEST_CASE("rage falls out of combat and holds in it; mana keeps the five second rule", "[cast_spells]") {
+    using namespace power_prediction;
+    Predicted p;
+    p.reset({1000, 100, 0, 0, 0, 0, 0});
+    // Out of combat, 12.5 a second - 1.25 a tenth, the fraction carried
+    // (0x00577370, then rounded to even).
+    for (int32_t want : {98, 97, 96, 95}) {
+        CHECK(regenerate(p, 1, kTickMs, interrupted(p, 1, 0, false, 0u, false), 0.0f, 1000, 0x800u));
+        CHECK(p.value[1] == want);
+    }
+    // In combat (UNIT_FLAG_IN_COMBAT) or under SPELL_AURA_INTERRUPT_REGEN, none.
+    CHECK_FALSE(regenerate(p, 1, kTickMs, interrupted(p, 1, 0, false, 0x80000u, false), 0.0f, 1000, 0x800u));
+    CHECK_FALSE(regenerate(p, 1, kTickMs, interrupted(p, 1, 0, false, 0u, true), 0.0f, 1000, 0x800u));
+    // UNIT_FIELD_FLAGS_2 0x100 holds a loss.
+    CHECK_FALSE(regenerate(p, 1, kTickMs, false, 0.0f, 1000, 0x900u));
+
+    // Mana: the INTERRUPTED modifier for five seconds after a cost, then
+    // the other.
+    Predicted m;
+    m.reset({500, 0, 0, 0, 0, 0, 0});
+    m.interruptedUntil = 5000;
+    CHECK(interrupted(m, 0, 4999, false, 0u, false));
+    CHECK_FALSE(interrupted(m, 0, 5000, false, 0u, false));
+    CHECK(m.interruptedUntil == 0);
+    // Channelling a mana spell that costs holds it too.
+    CHECK(interrupted(m, 0, 6000, true, 0u, false));
 }

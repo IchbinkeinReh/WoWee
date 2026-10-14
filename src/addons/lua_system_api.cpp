@@ -813,6 +813,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // of a kit's falling models (0x007fb5b0).
     else if (n == "violencelevel") lua_pushstring(L, "2");
     else if (n == "spelleffectlevel") lua_pushstring(L, "9");
+    // On (0x0051d9b0): UnitPower and the cast read the predicted power.
+    else if (n == "predictedpower") lua_pushstring(L, "1");
     else if (n == "sound_numchannels") lua_pushstring(L, "64");
     else if (n == "sound_outputquality") lua_pushstring(L, "2");
     else if (n == "uiscale") lua_pushstring(L, "1");
@@ -1583,6 +1585,10 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     // The interface's own scale, which is the widget tree's to keep - not a
     // client setting, and not the ImGui window scale beside it in the settings
     // window. Those are two different interfaces that happen to share a word.
+    // The power UnitPower and the cast read (0x0071c2e0).
+    if (key == "predictedpower") {
+        if (auto* gh = getGameHandler(L)) gh->setPredictedPowerEnabled(value != "0");
+    }
     if (key == "uiscale") {
         if (auto* tree = getWidgetTree(L)) {
             // Only when the switch beside it is on. Otherwise the stored value

@@ -239,18 +239,116 @@ void GameHandler::runeListChanged(uint8_t before, uint8_t after, const std::arra
 }
 
 void GameHandler::updateRunes() {
-    // A death knight (power type 6) regenerating (UNIT_FIELD_FLAGS_2 0x800).
-    const auto player = getEntityManager().getEntity(playerGuid);
-    if (!player) return;
-    const uint16_t b0 = fieldIndex(UF::UNIT_FIELD_BYTES_0), f2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
-    if (b0 == 0xFFFF || f2 == 0xFFFF || ((player->getField(b0) >> 24) & 0xFFu) != 6 ||
-        (player->getField(f2) & 0x800u) == 0)
-        return;
     const auto now = static_cast<int64_t>(core::appTimeSeconds() * 1000.0);
     const uint32_t ready = playerRunes_.readyBy(now);
     if (ready == playerRunes_.ready) return;
     std::array<runes::PowerUpdate, runes::kMax> out{};
     fireRunePowerUpdates(out, playerRunes_.changed(playerRunes_.ready, ready, nullptr, now, runeRegen(), out));
+}
+
+int32_t GameHandler::unitPower(const Unit& unit, int type) const {
+    if (type < 0 || type >= 7) return 0;
+    if (predictedPowerOn_) return unit.predictedPower().value[type];
+    return static_cast<int32_t>(unit.getPowerByType(static_cast<uint8_t>(type)));
+}
+
+void GameHandler::predictedPowerSaid(const Unit& unit, uint64_t guid, int type) {
+    // 0x0060bf10 0x13 + type: UNIT_MANA .. UNIT_RUNIC_POWER, none for runes.
+    static constexpr const char* kEvents[7] = {"UNIT_MANA", "UNIT_RAGE", "UNIT_FOCUS", "UNIT_ENERGY",
+                                               "UNIT_HAPPINESS", nullptr, "UNIT_RUNIC_POWER"};
+    if (unit.predictedPower().value[type] != static_cast<int32_t>(unit.getMaxPowerByType(static_cast<uint8_t>(type))) ||
+        kEvents[type] == nullptr)
+        return;
+    if (const auto uid = guidToUnitId(guid); !uid.empty()) fireAddonEvent(kEvents[type], {uid});
+}
+
+void GameHandler::setPredictedPower(Unit& unit, int type, int32_t value) {
+    if (power_prediction::set(unit.predictedPower(), type, value,
+                              static_cast<int32_t>(unit.getMaxPowerByType(static_cast<uint8_t>(type)))))
+        predictedPowerSaid(unit, unit.getGuid(), type);
+}
+
+void GameHandler::addPredictedPower(uint64_t guid, int type, int32_t delta) {
+    Unit* unit = getUnitByGuid(guid);
+    if (!unit) return;
+    const uint16_t f2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+    if (power_prediction::add(unit->predictedPower(), type, delta, unit->getPowerType(),
+                              f2 != 0xFFFF ? unit->getField(f2) : 0u,
+                              static_cast<int32_t>(unit->getMaxPowerByType(static_cast<uint8_t>(type < 0 ? 0 : type)))))
+        predictedPowerSaid(*unit, guid, type);
+}
+
+void GameHandler::powerFieldsChanged(Unit& unit, uint64_t guid, bool typeChanged, uint8_t powers, uint8_t maxes) {
+    // 0x00723620: the new power type's, from its field.
+    if (typeChanged && unit.getPowerType() < 7)
+        setPredictedPower(unit, unit.getPowerType(), static_cast<int32_t>(unit.getPower()));
+    // 0x007234d0: the field's - the player's and its pet's only where it is
+    // ahead of the prediction.
+    for (int t = 0; t < 7; ++t) {
+        if ((powers & (1u << t)) == 0) continue;
+        const auto field = static_cast<int32_t>(unit.getPowerByType(static_cast<uint8_t>(t)));
+        if (power_prediction::takesField(predictedPowerOn_ && (guid == playerGuid || guid == petGuid_), field,
+                                         unit.predictedPower().value[t]))
+            setPredictedPower(unit, t, field);
+    }
+    // 0x007235c0: under a new maximum, the field's.
+    for (int t = 0; t < 7; ++t)
+        if ((maxes & (1u << t)) != 0)
+            setPredictedPower(unit, t, static_cast<int32_t>(unit.getPowerByType(static_cast<uint8_t>(t))));
+}
+
+void GameHandler::startFiveSecondRule(Unit& unit) {
+    unit.predictedPower().interruptedUntil =
+        static_cast<int64_t>(core::appTimeSeconds() * 1000.0) + power_prediction::kFiveSecondRuleMs;
+}
+
+void GameHandler::updatePredictedPower() {
+    const auto now = static_cast<int64_t>(core::appTimeSeconds() * 1000.0);
+    if (predictedPowerTick_ == 0) {
+        predictedPowerTick_ = now;
+        return;
+    }
+    const auto dt = static_cast<uint32_t>(now - predictedPowerTick_);
+    if (dt < power_prediction::kTickMs) return;
+    predictedPowerTick_ = now;
+    if (!predictedPowerOn_) return;
+    if (Unit* player = getUnitByGuid(playerGuid)) regeneratePower(*player, playerGuid, dt, now);
+    if (petGuid_ != 0)
+        if (Unit* pet = getUnitByGuid(petGuid_)) regeneratePower(*pet, petGuid_, dt, now);
+}
+
+void GameHandler::regeneratePower(Unit& unit, uint64_t guid, uint32_t dtMs, int64_t nowMs) {
+    const auto field = [&](UF f, uint32_t offset = 0) {
+        const uint16_t i = fieldIndex(f);
+        return i != 0xFFFF ? unit.getField(static_cast<uint16_t>(i + offset)) : 0u;
+    };
+    // Alive and regenerating (UNIT_FIELD_FLAGS_2 0x800).
+    const uint32_t flags2 = field(UF::UNIT_FIELD_FLAGS_2);
+    if (unit.getHealth() == 0 || (flags2 & 0x800u) == 0) return;
+    const auto regenerate = [&](int t) {
+        // 0x00722d80: not a power PLAYER_FIELD_BYTES2's byte 2 keeps from
+        // the player's prediction; the table's rate and the field's
+        // modifier, as usual or interrupted.
+        if (guid == playerGuid && ((field(UF::PLAYER_FIELD_BYTES2) >> 16) & (1u << t)) != 0) return;
+        const bool held = power_prediction::interrupted(
+            unit.predictedPower(), t, nowMs, t == 0 && spellHandler_ && spellHandler_->channelCostsMana(unit),
+            field(UF::UNIT_FIELD_FLAGS), t != 0 && spellHandler_ && spellHandler_->unitHasAuraType(guid, 94));
+        const float mod = std::bit_cast<float>(field(held ? UF::UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER
+                                                          : UF::UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER,
+                                                     static_cast<uint32_t>(t)));
+        if (power_prediction::regenerate(unit.predictedPower(), t, dtMs, held, mod,
+                                         static_cast<int32_t>(unit.getMaxPowerByType(static_cast<uint8_t>(t))), flags2))
+            predictedPowerSaid(unit, guid, t);
+    };
+    const uint8_t type = unit.getPowerType();
+    if (type >= 7) return;
+    regenerate(type);
+    // A druid's mana and energy besides the form's own.
+    if (((field(UF::UNIT_FIELD_BYTES_0) >> 8) & 0xFFu) == 11) {
+        if (type != 0) regenerate(0);
+        if (type != 3) regenerate(3);
+    }
+    if (guid == playerGuid && type == 6) updateRunes();
 }
 
 // The opcodes this handler answers itself, grouped by what they are about: the

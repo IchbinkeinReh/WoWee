@@ -19,6 +19,7 @@
 #include "math/spline.hpp"
 #include "game/flat_field_map.hpp"
 #include "game/monster_move_flags.hpp"
+#include "game/power_prediction.hpp"
 
 namespace wowee {
 namespace game {
@@ -938,6 +939,16 @@ public:
     [[nodiscard]] uint8_t getPowerType() const { return powerType; }
     void setPowerType(uint8_t t) { powerType = t; }
 
+    /// The powers the client predicts (+0xfb4); see power_prediction.hpp.
+    [[nodiscard]] power_prediction::Predicted& predictedPower() { return predicted; }
+    [[nodiscard]] const power_prediction::Predicted& predictedPower() const { return predicted; }
+    /// 0x0071c320: from the fields, as a unit is made.
+    void resetPredictedPower() {
+        std::array<uint32_t, 7> fields{};
+        for (int t = 0; t < 7; ++t) fields[t] = powers[t];
+        predicted.reset(fields);
+    }
+
     [[nodiscard]] uint32_t getAuraState() const { return auraState; }
     void setAuraState(uint32_t state) { auraState = state; }
 
@@ -1010,6 +1021,7 @@ protected:
     uint32_t powers[7] = {};     // Indexed by power type (0=mana,1=rage,2=focus,3=energy,4=happiness,5=runes,6=runic)
     uint32_t maxPowers[7] = {};  // Max values per power type
     uint8_t powerType = 0;       // Active power type
+    power_prediction::Predicted predicted;
     uint32_t auraState = 0;      // UNIT_FIELD_AURASTATE reactive opportunity mask
     uint32_t level = 1;
     uint32_t entry = 0;

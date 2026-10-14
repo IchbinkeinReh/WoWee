@@ -308,7 +308,7 @@ static int lua_IsUsableAction(lua_State* L) {
                 usable = false;
             } else {
                 const auto data = gh->getSpellData(spell);
-                if (data.manaCost > 0 && pet->getPowerByType(data.powerType) < data.manaCost) {
+                if (data.manaCost > 0 && gh->unitPower(*pet, data.powerType) < static_cast<int32_t>(data.manaCost)) {
                     usable = false;
                     noPower = true;
                 }
@@ -344,7 +344,7 @@ static int lua_IsUsableAction(lua_State* L) {
                 auto pe = gh->getEntityManager().getEntity(gh->getPlayerGuid());
                 if (pe) {
                     auto* unit = dynamic_cast<game::Unit*>(pe.get());
-                    if (unit && unit->getPower() < spellData.manaCost) {
+                    if (unit && gh->unitPower(*unit, unit->getPowerType()) < static_cast<int32_t>(spellData.manaCost)) {
                         noMana = true;
                         usable = false;
                     }

@@ -308,6 +308,12 @@ public:
     // Auras
     [[nodiscard]] const std::vector<AuraSlot>& getPlayerAuras() const { return playerAuras_; }
     [[nodiscard]] const std::vector<AuraSlot>& getTargetAuras() const { return targetAuras_; }
+    /// 0x00727e70's bit for `auraType`: an aura of the unit's with an effect
+    /// of the type on.
+    [[nodiscard]] bool unitHasAuraType(uint64_t guid, uint32_t auraType) const;
+    /// 0x00722d80: the unit channels (UNIT_CHANNEL_SPELL) a mana spell that
+    /// costs it, without AttributesEx2 0x2000000.
+    [[nodiscard]] bool channelCostsMana(const Unit& unit) const;
     [[nodiscard]] const std::vector<AuraSlot>* getUnitAuras(uint64_t guid) const {
         auto it = unitAurasCache_.find(guid);
         return (it != unitAurasCache_.end()) ? &it->second : nullptr;
@@ -623,6 +629,8 @@ private:
     int32_t powerCost(uint32_t spellId, const Entity& player, int depth) const;
     /// 0x007ff180 != 0: whether the spell takes time to cast.
     bool hasCastTime(uint32_t spellId, const Entity& player) const;
+    /// SMSG_SPELL_START / SMSG_SPELL_GO's cast flag 0x800: the caster's power.
+    void castPowerSaid(uint64_t casterUnit, uint32_t spellId, uint32_t power, bool go);
     /// 0x007283a0: an aura of the player's of the type, on, for the spell.
     bool playerAuraAffects(uint32_t auraType, uint32_t spellId) const;
     /// 0x00812410's SupercededBySpell for the player's race and class, 0 for none.

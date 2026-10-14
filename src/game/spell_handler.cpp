@@ -1863,6 +1863,28 @@ bool SpellHandler::playerAuraAffects(uint32_t auraType, uint32_t spellId) const 
     return false;
 }
 
+bool SpellHandler::unitHasAuraType(uint64_t guid, uint32_t auraType) const {
+    const auto* auras = guid == owner_.getPlayerGuid() ? &playerAuras_ : getUnitAuras(guid);
+    if (!auras) return false;
+    for (const auto& a : *auras) {
+        if (a.spellId == 0) continue;
+        const auto it = owner_.spellNameCacheRef().find(a.spellId);
+        if (it == owner_.spellNameCacheRef().end()) continue;
+        for (int k = 0; k < 3; ++k)
+            if ((a.flags & (1u << k)) != 0 && it->second.effectAuraIds[k] == auraType) return true;
+    }
+    return false;
+}
+
+bool SpellHandler::channelCostsMana(const Unit& unit) const {
+    const uint16_t ch = fieldIndex(UF::UNIT_CHANNEL_SPELL);
+    const uint32_t spell = ch != 0xFFFF ? unit.getField(ch) : 0u;
+    if (spell == 0) return false;
+    const auto it = owner_.spellNameCacheRef().find(spell);
+    return it != owner_.spellNameCacheRef().end() && (it->second.attrEx2 & 0x2000000u) == 0 &&
+           it->second.powerType == 0 && powerCost(spell, unit, 0) > 0;
+}
+
 int32_t SpellHandler::powerCost(uint32_t spellId, const Entity& player, int depth) const {
     const auto own = owner_.spellNameCacheRef().find(spellId);
     if (own == owner_.spellNameCacheRef().end()) return 0;
@@ -1999,15 +2021,14 @@ cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& pla
     // 0x00809000: the spell's history - its cooldown, its category's, its
     // global cooldown.
     c.notReady = playerCooldown(spellId).running;
-    // 0x008017e0: the cost against the power - health under it, runes by
-    // 0x005ee5b0.
+    // 0x008017e0: the cost against the power as it is predicted
+    // (0x0071c2e0) - health under it, runes by 0x005ee5b0.
     {
         const int32_t type = static_cast<int32_t>(e.powerType);
         const int32_t cost = powerCost(spellId, player, 0);
         if (type == -2) c.enoughPower = cost < static_cast<int32_t>(unit.getHealth());
         else if (type == 5) c.enoughPower = runeCost(spellId).paid;
-        else if (const uint16_t power = fieldIndex(UF::UNIT_FIELD_POWER1); power != 0xFFFF && type >= 0 && type < 7 && type != 5)
-            c.enoughPower = static_cast<int32_t>(player.getField(static_cast<uint16_t>(power + type))) >= cost;
+        else if (type >= 0 && type < 7) c.enoughPower = owner_.unitPower(unit, type) >= cost;
     }
     // LEARN_SPELL's spell known, or one SkillLineAbility supersedes it with
     // (0x007260e0, 0x00726160).
@@ -3240,6 +3261,22 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     if (owner_.spellCastFailedCallbackRef()) owner_.spellCastFailedCallbackRef()(data.spellId);
 }
 
+void SpellHandler::castPowerSaid(uint64_t casterUnit, uint32_t spellId, uint32_t power, bool go) {
+    // 0x00806700, 0x0080e1b0: cast flag 0x800 says the caster's power of the
+    // spell's type, set where UNIT_FIELD_FLAGS_2 0x100 does not hold its
+    // stats (health and runes are kept apart); a mana cost gone holds mana
+    // regeneration for five seconds (0x0071c390).
+    Unit* unit = owner_.getUnitByGuid(casterUnit);
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (!unit || it == owner_.spellNameCacheRef().end()) return;
+    const auto type = static_cast<int32_t>(it->second.powerType);
+    if (type == -2 || type == 5) return;
+    if ((entityField(*unit, UF::UNIT_FIELD_FLAGS_2) & 0x100u) == 0)
+        owner_.setPredictedPower(*unit, type, static_cast<int32_t>(power));
+    if (go && type == 0) owner_.startFiveSecondRule(*unit);
+}
+
 void SpellHandler::handleSpellStart(network::Packet& packet) {
     SpellStartData data;
     if (!owner_.getPacketParsers()->parseSpellStart(packet, data)) {
@@ -3249,6 +3286,7 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     LOG_DEBUG("SMSG_SPELL_START: caster=0x", std::hex, data.casterUnit, std::dec,
               " spell=", data.spellId, " castTime=", data.castTime,
               " target=0x", std::hex, data.targetGuid, std::dec);
+    if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, false);
 
     // Classify spell targeting for animation selection:
     //   DIRECTED - targets a specific other unit (Frostbolt, Heal)
@@ -3378,6 +3416,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     if (!owner_.getPacketParsers()->parseSpellGo(packet, data)) return;
     noteMissileInFlight(data);
     const bool rangedWeaponAttack = spellclass::isRangedWeaponAutoAttack(data.spellId);
+    if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, true);
     // 0x00805330 for a cast that had no start (instant), as for one that had.
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
 
@@ -6227,6 +6266,7 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
             if (!packet.hasRemaining(8)) break;
             uint8_t periodicPowerType = static_cast<uint8_t>(packet.readUInt32());
             uint32_t amount = packet.readUInt32();
+            if (amount != 0) owner_.addPredictedPower(victimGuid, periodicPowerType, static_cast<int32_t>(amount));  // 0x00752040
             if ((isPlayerVictim || isPlayerCaster) && amount > 0)
                 owner_.addCombatText(CombatTextEntry::ENERGIZE, static_cast<int32_t>(amount),
                               spellId, isPlayerCaster, periodicPowerType, casterGuid, victimGuid);
@@ -6236,6 +6276,8 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
             uint8_t powerType = static_cast<uint8_t>(packet.readUInt32());
             uint32_t amount = packet.readUInt32();
             float multiplier = packet.readFloat();
+            // 0x00752100: taken from the victim's predicted power, happiness aside.
+            if (amount != 0 && powerType != 4) owner_.addPredictedPower(victimGuid, powerType, -static_cast<int32_t>(amount));
             if (isPlayerVictim && amount > 0)
                 owner_.addCombatText(CombatTextEntry::POWER_DRAIN, static_cast<int32_t>(amount),
                               spellId, false, powerType, casterGuid, victimGuid);
@@ -6288,6 +6330,8 @@ void SpellHandler::handleSpellEnergizeLog(network::Packet& packet) {
     int32_t  amount        = static_cast<int32_t>(packet.readUInt32());
     bool isPlayerVictim = (victimGuid == owner_.getPlayerGuid());
     bool isPlayerCaster = (casterGuid == owner_.getPlayerGuid());
+    // 0x00752040: the victim's predicted power, by the amount.
+    if (amount != 0) owner_.addPredictedPower(victimGuid, energizePowerType, amount);
     if ((isPlayerVictim || isPlayerCaster) && amount > 0)
         owner_.addCombatText(CombatTextEntry::ENERGIZE, amount, spellId, isPlayerCaster, energizePowerType, casterGuid, victimGuid);
     packet.skipAll();
@@ -6592,6 +6636,8 @@ void SpellHandler::parseEffectPowerDrain(network::Packet& packet, uint32_t effec
                   " power=", drainPower, " amount=", drainAmount,
                   " multiplier=", drainMult);
         if (drainAmount == 0) continue;
+        // 0x00752100: taken from the target's predicted power, happiness aside.
+        if (drainPower != 4) owner_.addPredictedPower(drainTarget, static_cast<int>(drainPower), -static_cast<int32_t>(drainAmount));
 
         const auto powerByte = static_cast<uint8_t>(drainPower);
         if (drainTarget == playerGuid)
