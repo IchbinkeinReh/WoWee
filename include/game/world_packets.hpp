@@ -814,7 +814,9 @@ struct MessageChatData {
  */
 class MessageChatParser {
 public:
-    static bool parse(network::Packet& packet, MessageChatData& data);
+    /// `tbcLayout`: the 2.4.3 reading of the BG system and foreign whisper
+    /// bodies, kept as it was; the default is 3.3.5's (0x0050be70).
+    static bool parse(network::Packet& packet, MessageChatData& data, bool tbcLayout = false);
 };
 
 // Returns true when a chat packet is addon traffic and extracts the standard
@@ -2689,6 +2691,24 @@ struct PartyCommandResultData {
 class PartyCommandResultParser {
 public:
     static bool parse(network::Packet& packet, PartyCommandResultData& data);
+};
+
+/** One SMSG_RAID_INSTANCE_INFO save, as 3.3.5 sends it (0x00501030). */
+struct RaidInstanceSave {
+    uint32_t mapId = 0;
+    uint32_t difficulty = 0;
+    uint64_t instanceId = 0;
+    bool locked = false;
+    bool extended = false;
+    uint32_t resetSeconds = 0;  ///< seconds from now until the save resets
+};
+
+class RaidInstanceInfoParser {
+public:
+    /// WotLK: a u32 count, each save its map, difficulty, u64 instance id,
+    /// the locked and extended bytes and the u32 seconds left. False when a
+    /// save is cut short; the ones before it are kept.
+    static bool parse(network::Packet& packet, std::vector<RaidInstanceSave>& saves);
 };
 
 /** SMSG_GROUP_DECLINE data */

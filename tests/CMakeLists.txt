@@ -1025,6 +1025,10 @@ wowee_add_packet_test(test_aura_cast_packet_layout)
 # SMSG_ITEM_QUERY_SINGLE_RESPONSE as 0x0098d910 reads the record: no BuyCount.
 wowee_add_packet_test(test_item_packet_layout)
 
+# ── test_social_packet_layout ──────────────────────────────────────────
+# SMSG_MESSAGECHAT's battleground and foreign-whisper bodies (0x0050be70) and
+# SMSG_RAID_INSTANCE_INFO's saves (0x00501030).
+wowee_add_packet_test(test_social_packet_layout)
 
 # ── test_spell_damage_log_layout ───────────────────────────────────────
 # SMSG_SPELLNONMELEEDAMAGELOG before WotLK, pinned before the Classic and TBC

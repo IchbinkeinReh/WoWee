@@ -1338,7 +1338,7 @@ bool TbcPacketParsers::parseSpellHealLog(network::Packet& packet, SpellHealLogDa
 // ============================================================================
 
 bool TbcPacketParsers::parseMessageChat(network::Packet& packet, MessageChatData& data) {
-    return MessageChatParser::parse(packet, data);
+    return MessageChatParser::parse(packet, data, /*tbcLayout=*/true);
 }
 
 // ============================================================================

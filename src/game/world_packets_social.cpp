@@ -71,7 +71,7 @@ bool decodeAddonChatPayload(const MessageChatData& data,
     return true;
 }
 
-bool MessageChatParser::parse(network::Packet& packet, MessageChatData& data) {
+bool MessageChatParser::parse(network::Packet& packet, MessageChatData& data, bool tbcLayout) {
     // SMSG_MESSAGECHAT format (WoW 3.3.5a):
     // uint8 type
     // uint32 language
@@ -172,10 +172,37 @@ bool MessageChatParser::parse(network::Packet& packet, MessageChatData& data) {
 
         case ChatType::BG_SYSTEM_NEUTRAL:
         case ChatType::BG_SYSTEM_ALLIANCE:
-        case ChatType::BG_SYSTEM_HORDE:
-            // BG/Arena system messages - no sender GUID or name field, just message.
-            // Reclassify as SYSTEM for consistent display.
-            data.type = ChatType::SYSTEM;
+        case ChatType::BG_SYSTEM_HORDE: {
+            if (tbcLayout) {
+                // As it was read for 2.4.3, which this does not touch.
+                data.type = ChatType::SYSTEM;
+                break;
+            }
+            // 0x0050be70: the target's guid, and its name after it when it
+            // is not a player's. Read as nothing, the guid was taken for the
+            // message length and every battleground announcement came out
+            // empty; and they keep their own type, CHAT_MSG_BG_SYSTEM_*, in
+            // their own colours, rather than passing as system lines.
+            data.receiverGuid = packet.readUInt64();
+            const uint32_t hi = static_cast<uint32_t>(data.receiverGuid >> 32);
+            const uint32_t lo = static_cast<uint32_t>(data.receiverGuid);
+            if (data.receiverGuid != 0 &&
+                ((hi & 0xF0000000u) != 0 || (lo == 0 && (hi & 0xF07FFFFFu) == 0))) {
+                if (!packet.readSizedString(data.receiverName)) return false;
+            }
+            break;
+        }
+
+        case ChatType::WHISPER_FOREIGN:
+            if (tbcLayout) {
+                data.receiverGuid = packet.readUInt64();
+                break;
+            }
+            // The sender's name, then the receiver - and from there on it is
+            // a whisper (0x0050be70 makes it type 7).
+            if (!packet.readSizedString(data.senderName)) return false;
+            data.receiverGuid = packet.readUInt64();
+            data.type = ChatType::WHISPER;
             break;
 
         default:

@@ -3944,17 +3944,36 @@ void SocialHandler::handleRaidInstanceInfo(network::Packet& packet) {
     const bool isTbc = isActiveExpansion("tbc");
     const bool isClassic = isClassicLikeExpansion();
     const bool useTbcFormat = isTbc || isClassic;
+    instanceLockouts_.clear();
+    if (!useTbcFormat) {
+        // 0x00501030: map, difficulty, the u64 instance id, locked, extended,
+        // then the u32 seconds left. This took the instance id for the reset
+        // time and left the seconds unread, so every save after the first
+        // was read four bytes out and each reset was an instance id.
+        std::vector<RaidInstanceSave> saves;
+        RaidInstanceInfoParser::parse(packet, saves);
+        const auto now = static_cast<uint64_t>(std::time(nullptr));
+        instanceLockouts_.reserve(saves.size());
+        for (const RaidInstanceSave& save : saves) {
+            InstanceLockout lo;
+            lo.mapId = save.mapId;
+            lo.difficulty = save.difficulty;
+            lo.instanceId = save.instanceId;
+            lo.resetTime = now + save.resetSeconds;
+            lo.locked = save.locked;
+            lo.extended = save.extended;
+            instanceLockouts_.push_back(lo);
+        }
+        return;
+    }
     if (!packet.hasRemaining(4)) return;
     uint32_t count = packet.readUInt32();
-    instanceLockouts_.clear();
     instanceLockouts_.reserve(count);
-    const size_t kEntrySize = useTbcFormat ? 13 : 18;
     for (uint32_t i = 0; i < count; ++i) {
-        if (packet.getRemainingSize() < kEntrySize) break;
+        if (packet.getRemainingSize() < 13) break;
         InstanceLockout lo;
         lo.mapId = packet.readUInt32(); lo.difficulty = packet.readUInt32();
-        if (useTbcFormat) { lo.resetTime = packet.readUInt32(); lo.locked = packet.readUInt8() != 0; lo.extended = false; }
-        else { lo.resetTime = packet.readUInt64(); lo.locked = packet.readUInt8() != 0; lo.extended = packet.readUInt8() != 0; }
+        lo.resetTime = packet.readUInt32(); lo.locked = packet.readUInt8() != 0; lo.extended = false;
         instanceLockouts_.push_back(lo);
     }
 }

@@ -437,7 +437,8 @@ enum class LfgTypeId : uint32_t {
 struct InstanceLockout {
     uint32_t mapId       = 0;
     uint32_t difficulty  = 0;
-    uint64_t resetTime   = 0;
+    uint64_t resetTime   = 0;      ///< when it resets, Unix seconds
+    uint64_t instanceId  = 0;
     bool     locked      = false;
     bool     extended    = false;
 };

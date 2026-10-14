@@ -538,6 +538,24 @@ bool GroupListParser::parse(network::Packet& packet, GroupListData& data,
     return true;
 }
 
+bool RaidInstanceInfoParser::parse(network::Packet& packet, std::vector<RaidInstanceSave>& saves) {
+    saves.clear();
+    if (!packet.hasRemaining(4)) return false;
+    const uint32_t count = packet.readUInt32();
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!packet.hasRemaining(22)) return false;
+        RaidInstanceSave save;
+        save.mapId = packet.readUInt32();
+        save.difficulty = packet.readUInt32();
+        save.instanceId = packet.readUInt64();
+        save.locked = packet.readUInt8() != 0;
+        save.extended = packet.readUInt8() != 0;
+        save.resetSeconds = packet.readUInt32();
+        saves.push_back(save);
+    }
+    return true;
+}
+
 bool PartyCommandResultParser::parse(network::Packet& packet, PartyCommandResultData& data) {
     // Upfront validation: command(4) + name(var) + result(4) = 8 bytes minimum (plus name string)
     if (!packet.hasRemaining(8)) return false;
