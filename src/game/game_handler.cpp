@@ -3806,8 +3806,10 @@ void GameHandler::closeNpcInteraction() {
                           Window::AuctionHouse, Window::Stable, Window::Registrar}) {
         closeInteractionWindow(window);
     }
-    // The tabard designer (CLOSE_TABARD_FRAME) and the battlemaster's list
-    // (BATTLEFIELDS_CLOSED) close here too; this client opens neither.
+    // The battlemaster's list (BATTLEFIELDS_CLOSED), opened from
+    // SMSG_BATTLEFIELD_LIST, closes with the rest. The tabard designer
+    // (CLOSE_TABARD_FRAME) would too; this client does not open it.
+    fireAddonEvent("BATTLEFIELDS_CLOSED", {});
 }
 
 void GameHandler::updatePetActionBar() {
@@ -4282,6 +4284,57 @@ bool GameHandler::isInInstance() const {
     auto it = mapInstanceTypeCache_.find(currentMapId_);
     return it != mapInstanceTypeCache_.end() &&
            (it->second == 1 || it->second == 2);
+}
+
+std::unordered_map<uint64_t, std::vector<AuraSlot>>& GameHandler::unitAurasCacheRef() {
+    // Party member stats wrote their auras to a map of GameHandler's own that
+    // nothing read; the interface reads SpellHandler's.
+    return spellHandler_->unitAurasCacheRef();
+}
+
+int GameHandler::mapInstanceType(uint32_t mapId) const {
+    loadMapNameCache();
+    auto it = mapInstanceTypeCache_.find(mapId);
+    return it != mapInstanceTypeCache_.end() ? static_cast<int>(it->second) : -1;
+}
+
+namespace {
+/// MapDifficulty.dbc's row for a map and difficulty (0x00634950), or -1.
+/// Fields: 1 MapID, 2 Difficulty, 21 MaxPlayers, 22 Difficultystring.
+int mapDifficultyRow(const std::shared_ptr<pipeline::DBCFile>& dbc, uint32_t mapId, uint32_t difficulty) {
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() <= 22) return -1;
+    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        if (dbc->getUInt32(i, 1) == mapId && dbc->getUInt32(i, 2) == difficulty) return static_cast<int>(i);
+    }
+    return -1;
+}
+} // namespace
+
+uint32_t GameHandler::savedInstanceMaxPlayers(uint32_t mapId, uint32_t difficulty) const {
+    auto* am = services().assetManager;
+    if (!am || !am->isInitialized()) return 0;
+    auto md = am->loadDBC("MapDifficulty.dbc");
+    const int row = mapDifficultyRow(md, mapId, difficulty);
+    if (row >= 0) {
+        if (const uint32_t n = md->getUInt32(static_cast<uint32_t>(row), 21)) return n;
+    }
+    // 0x00634ab0 falls back to Map.dbc's MaxPlayers (field 65 in 3.3.5).
+    auto map = am->loadDBC("Map.dbc");
+    if (!map || !map->isLoaded() || map->getFieldCount() <= 65) return 0;
+    for (uint32_t i = 0; i < map->getRecordCount(); ++i) {
+        if (map->getUInt32(i, 0) == mapId) return map->getUInt32(i, 65);
+    }
+    return 0;
+}
+
+std::string GameHandler::savedInstanceDifficultyName(uint32_t mapId, uint32_t difficulty) const {
+    auto* am = services().assetManager;
+    if (!am || !am->isInitialized()) return {};
+    auto md = am->loadDBC("MapDifficulty.dbc");
+    const int row = mapDifficultyRow(md, mapId, difficulty);
+    if (row < 0) return {};
+    const std::string key = md->getString(static_cast<uint32_t>(row), 22);
+    return key.empty() ? std::string() : interfaceString(key.c_str(), key.c_str());
 }
 
 int GameHandler::currentMapInstanceType() const {

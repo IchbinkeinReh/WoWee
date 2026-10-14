@@ -3067,25 +3067,19 @@ void registerUnitLuaAPI(lua_State* L) {
         }},
                 // GetBattlefieldTeamInfo(faction) → name, rating, newRating, skill
                 //
-                // Arena only. The frame subtracts the two ratings to show the
-                // change, so the old one is derived from the new one and the
-                // change the server sent - which makes the subtraction come out
-                // as that change whichever way round the server means it.
-                //
-                // The matchmaker rating is not parsed, and nil is the right
-                // answer for it: the frame prints "-------" for a rating it was
-                // not given, where a zero would read as a real one.
+                // The three words MSG_PVP_LOG_DATA carries for the team, as
+                // they came (0x0054a180).
                 {"GetBattlefieldTeamInfo", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int faction = static_cast<int>(luaL_checknumber(L, 1));
             const auto* sb = gh ? gh->getBgScoreboard() : nullptr;
-            if (!sb || !sb->isArena || faction < 0 || faction > 1) return luaReturnNil(L);
-            const auto& team = sb->arenaTeams[faction];
-            lua_pushstring(L, team.teamName.c_str());
-            lua_pushnumber(L, static_cast<double>(team.newRating) -
-                              static_cast<double>(team.ratingChange));
+            const bool ok = sb && faction >= 0 && faction <= 1;
+            const game::ArenaTeamScore none{};
+            const auto& team = ok ? sb->arenaTeams[faction] : none;
+            if (ok) lua_pushstring(L, team.teamName.c_str()); else lua_pushnil(L);
+            lua_pushnumber(L, static_cast<double>(team.rating));
             lua_pushnumber(L, static_cast<double>(team.newRating));
-            lua_pushnil(L);
+            lua_pushnumber(L, static_cast<double>(team.matchmakerRating));
             return 4;
         }},
                 // ReportPlayerIsPVPAFK(name) - flag someone as not taking part.

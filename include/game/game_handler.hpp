@@ -262,6 +262,14 @@ public:
     uint32_t getCurrentMapId() const { return currentMapId_; }
     /// Map.dbc InstanceType of the current map, -1 without its row.
     int currentMapInstanceType() const;
+    /// Map.dbc InstanceType for a map, -1 for one it does not have.
+    int mapInstanceType(uint32_t mapId) const;
+    /// What GetSavedInstanceInfo gives for a save's size and difficulty name
+    /// (0x004ff2c0): MapDifficulty.dbc's MaxPlayers for the map and
+    /// difficulty, else Map.dbc's; and that row's Difficultystring, empty
+    /// where there is no row.
+    uint32_t savedInstanceMaxPlayers(uint32_t mapId, uint32_t difficulty) const;
+    std::string savedInstanceDifficultyName(uint32_t mapId, uint32_t difficulty) const;
     bool getHomeBind(uint32_t& mapId, glm::vec3& pos) const {
         if (!hasHomeBind_) return false;
         mapId = homeBindMapId_;
@@ -4101,7 +4109,8 @@ public:
     auto& gmTicketTextRef() { return gmTicketText_; }
     auto& bookPagesRef() { return bookPages_; }
     auto& activeTotemSlotsRef() { return activeTotemSlots_; }
-    auto& unitAurasCacheRef() { return unitAurasCache_; }
+    /// The per-unit aura lists SpellHandler keeps, which the interface reads.
+    std::unordered_map<uint64_t, std::vector<AuraSlot>>& unitAurasCacheRef();
     auto& lastInteractedGoGuidRef() { return lastInteractedGoGuid_; }
     auto& pendingGameObjectInteractGuidRef() { return pendingGameObjectInteractGuid_; }
 
@@ -4989,7 +4998,6 @@ private:
     std::unordered_map<uint32_t, std::string> macroIcons_;
     std::vector<AuraSlot> playerAuras;
     std::vector<AuraSlot> targetAuras;
-    std::unordered_map<uint64_t, std::vector<AuraSlot>> unitAurasCache_; // per-unit aura cache
     uint64_t petGuid_ = 0;
     uint32_t petActionSlots_[10] = {};   // SMSG_PET_SPELLS action bar (10 slots)
     uint8_t  petCommand_ = 1;            // 0=stay,1=follow,2=attack,3=dismiss

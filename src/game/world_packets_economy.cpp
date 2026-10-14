@@ -496,18 +496,13 @@ bool GuildBankListParser::parse(network::Packet& packet, GuildBankData& data) {
     data.tabId = packet.readUInt8();
     data.withdrawAmount = static_cast<int32_t>(packet.readUInt32());
     uint8_t fullUpdate = packet.readUInt8();
-    data.tabsIncluded = (fullUpdate != 0);
 
-    // The flag alone decides it. GuildBankQueryResults::Write - which does gate
-    // the tab list on `!Tab && FullUpdate` - is Cataclysm's packet; 3.3.5 and
-    // 2.4.3 send it from Guild::SendBankList under `withTabInfo` and nothing
-    // else, whichever tab the list describes.
-    //
-    // The extra test cost the tabs on any server that answers a tab query with
-    // the names attached: the block is on the wire, this skipped it, and every
-    // field after it was then read one block early - the item count out of the
-    // tab count, the items out of the names.
-    if (fullUpdate) {
+    // 0x005a7250 reads the tab names only for a full update of the first
+    // tab, as TrinityCore and AzerothCore send them (Guild::_SendBankList,
+    // `sendAllSlots && !tabId`). A full update of any other tab carries none,
+    // and reading the item count as a tab count there lost every item.
+    data.tabsIncluded = fullUpdate != 0 && data.tabId == 0;
+    if (data.tabsIncluded) {
         if (!packet.hasRemaining(1)) {
             LOG_WARNING("GuildBankListParser: truncated before tabCount");
             data.tabs.clear();

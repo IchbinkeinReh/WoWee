@@ -1,15 +1,12 @@
 // SMSG_GUILD_BANK_LIST, whose tab-name block is optional.
 //
-// Guild::SendBankList writes the tab names under one flag - "with tab info" -
-// and the items after them. The reader gated the names on that flag *and* on
-// the list describing tab zero, which is Cataclysm's rule
-// (GuildBankQueryResults::Write tests `!Tab && FullUpdate`) and not 3.3.5's. On
-// a server that answers a tab query with the names attached, the block is on
-// the wire and was skipped: the item count came out of the tab count and the
-// items out of the names, so the panel drew nothing.
+// 0x005a7250 reads the tab names only when the list is a full update of tab
+// zero, which is when TrinityCore and AzerothCore 3.3.5 write them
+// (`sendAllSlots && !tabId`). A full update of any other tab has the item
+// count straight after the flag.
 //
-// The three shapes are pinned here because nothing about a mis-parse raises -
-// the bytes are all valid, they are just read a block early.
+// The shapes are pinned here because nothing about a mis-parse raises - the
+// bytes are all valid, they are just read a block early or late.
 #include <catch_amalgamated.hpp>
 
 #include <cstdint>
@@ -105,18 +102,17 @@ TEST_CASE("the opening list carries the tabs and the first tab's items") {
     CHECK(data.tabItems[1].stackCount == 20u);
 }
 
-TEST_CASE("a later tab may carry the names too") {
-    // The regression. Reading this as though the names were absent takes the
-    // tab count for the item count and the first name for a slot.
-    Writer w = header(2, true, {"Tab One", "Tab Two", "Tab Three"});
+TEST_CASE("a full update of a later tab carries no names") {
+    // Taking the flag alone as the names' marker read the item count as a tab
+    // count and the items as names, and the tab drew empty.
+    Writer w = header(2, false, {});
+    w.bytes.back() = 1;          // full update, no names: tab 2
     w.u8(1);
     w.item(5, 2589, 12);
 
     const GuildBankData data = parse(w);
     CHECK(data.tabId == 2);
-    CHECK(data.tabsIncluded);
-    REQUIRE(data.tabs.size() == 3);
-    CHECK(data.tabs[2].tabName == "Tab Three");
+    CHECK_FALSE(data.tabsIncluded);
     REQUIRE(data.tabItems.size() == 1);
     CHECK(data.tabItems[0].slotId == 5);
     CHECK(data.tabItems[0].itemEntry == 2589u);

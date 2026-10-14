@@ -7760,20 +7760,20 @@ void registerSystemLuaAPI(lua_State* L) {
             // reached the Raid Info panel as the instance's name.
             std::string mapName = gh->getMapName(l.mapId);
             if (mapName.empty()) mapName = "Instance " + std::to_string(l.mapId);
+            // As 0x004ff2c0 returns them: the instance id's two halves, the
+            // difficulty counted from one, raid from Map.dbc's InstanceType,
+            // the size and difficulty name from MapDifficulty.dbc.
             lua_pushstring(L, mapName.c_str());     // name
-            lua_pushnumber(L, l.mapId);             // id
-            lua_pushnumber(L, static_cast<double>(l.resetTime - static_cast<uint64_t>(time(nullptr)))); // reset (seconds until)
-            lua_pushnumber(L, l.difficulty);        // difficulty
+            lua_pushnumber(L, static_cast<double>(static_cast<uint32_t>(l.instanceId)));  // id
+            const int64_t left = static_cast<int64_t>(l.resetTime) - static_cast<int64_t>(time(nullptr));
+            lua_pushnumber(L, static_cast<double>(left > 0 ? left : 0)); // reset (seconds until)
+            lua_pushnumber(L, l.difficulty + 1);    // difficulty
             lua_pushboolean(L, l.locked ? 1 : 0);  // locked
             lua_pushboolean(L, l.extended ? 1 : 0); // extended
-            lua_pushnumber(L, 0);                   // instanceIDMostSig
-            lua_pushboolean(L, l.difficulty >= 2 ? 1 : 0); // isRaid (25-man = raid)
-            lua_pushnumber(L, l.difficulty >= 2 ? 25 : (l.difficulty >= 1 ? 10 : 5)); // maxPlayers
-            // The difficulty in words, which the raid lockout row prints
-            // beside the instance name. It was not returned, so that column
-            // was blank on every saved instance.
-            const char* diffName = game::instanceDifficultyName(l.difficulty);
-            lua_pushstring(L, diffName ? diffName : "Normal");
+            lua_pushnumber(L, static_cast<double>(static_cast<uint32_t>(l.instanceId >> 32))); // instanceIDMostSig
+            lua_pushboolean(L, gh->mapInstanceType(l.mapId) == 2 ? 1 : 0); // isRaid
+            lua_pushnumber(L, gh->savedInstanceMaxPlayers(l.mapId, l.difficulty)); // maxPlayers
+            lua_pushstring(L, gh->savedInstanceDifficultyName(l.mapId, l.difficulty).c_str());
             return 10;
         }},
                 {"CalendarGetDate", [](lua_State* L) -> int {

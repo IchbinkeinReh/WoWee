@@ -1834,6 +1834,18 @@ bool BattlefieldStatusPacket::parse(network::Packet& packet, BattlefieldStatusDa
     // runs short and nothing reports anything; the status is simply never one
     // of the values it is compared against, and a queue that exists reads as no
     // queue at all.
+    // 0x0054ae40: a zero uint64 is the queue gone (status none) and nothing
+    // follows it - which is all the cores send when the player leaves a
+    // queue. Read as a header, the missing fields failed the parse and the
+    // queue was never cleared.
+    if (wotlkFormat && packet.hasRemaining(8)) {
+        const size_t at = packet.getReadPos();
+        if (packet.readUInt64() == 0) {
+            data.statusId = 0;
+            return true;
+        }
+        packet.setReadPos(at);
+    }
     if (!classicFormat) {
         if (!packet.hasRemaining(2)) return false;
         data.arenaType = packet.readUInt8();
@@ -1877,6 +1889,122 @@ bool BattlefieldStatusPacket::parse(network::Packet& packet, BattlefieldStatusDa
         default:
             break;
     }
+    return true;
+}
+
+bool PvpLogDataParser::parse(network::Packet& packet, BgScoreboardData& data) {
+    auto remaining = [&]() { return packet.getRemainingSize(); };
+    if (remaining() < 1) return false;
+    // The layout is settled and the dump that asked about it is gone.
+    //
+    // The question it existed to answer - whether there is a team byte after
+    // the guid - is answered by the source rather than by a byte count, and the
+    // answer is "in an arena, yes; in a battleground, no". They are two
+    // different rows written by two different overrides, and the type byte at
+    // the top of this packet says which one follows.
+    data = BgScoreboardData{};
+    data.isArena = (packet.readUInt8() != 0);
+    if (data.isArena) {
+        // 0x0054d280: both teams' three words, then both names. This read
+        // five words and a name per team, so the second team's figures and
+        // both names came from the wrong place, and every row after them.
+        if (remaining() < 24) { packet.skipAll(); return false; }
+        for (auto& arenaTeam : data.arenaTeams) {
+            arenaTeam.rating = packet.readUInt32();
+            arenaTeam.newRating = packet.readUInt32();
+            arenaTeam.matchmakerRating = packet.readUInt32();
+        }
+        for (auto& arenaTeam : data.arenaTeams)
+            arenaTeam.teamName = remaining() > 0 ? packet.readString() : "";
+    }
+    // Ended, and the winner, BEFORE the player count. This was read after the
+    // players, where there is nothing left to read it from.
+    if (remaining() < 1) return false;
+    data.hasWinner = (packet.readUInt8() != 0);
+    if (data.hasWinner) {
+        if (remaining() < 1) return false;
+        data.winner = packet.readUInt8();
+    }
+
+    if (remaining() < 4) return false;
+    uint32_t playerCount = packet.readUInt32();
+    data.players.reserve(playerCount);
+    for (uint32_t i = 0; i < playerCount && remaining() >= 12; ++i) {
+        BgPlayerScore ps;
+        ps.guid = packet.readUInt64();
+        // Two different rows, and the type byte at the top says which.
+        //
+        // BattlegroundScore::AppendToPacket - killing blows, honourable kills,
+        // deaths, bonus honour, damage, healing. No team.
+        // ArenaScore::AppendToPacket - killing blows, a team BYTE, damage,
+        // healing. No honourable kills, deaths or honour at all.
+        //
+        // This read one row that was neither: a team byte from the arena
+        // shape followed by the battleground's four counters, then a stat block
+        // with null-terminated names that no core writes. Everything after the
+        // guid was off by a byte, and damage and healing were skipped entirely
+        // - which is why GetBattlefieldScore answered zero for both.
+        ps.killingBlows = packet.readUInt32();
+        if (data.isArena) {
+            if (remaining() < 1) { data.players.push_back(std::move(ps)); break; }
+            ps.team = packet.readUInt8();
+            ps.hasTeam = true;
+        } else {
+            if (remaining() < 12) { data.players.push_back(std::move(ps)); break; }
+            ps.honorableKills = packet.readUInt32();
+            ps.deaths         = packet.readUInt32();
+            ps.bonusHonor     = packet.readUInt32();
+            // No team on the wire for a battleground. The byte that used to
+            // fill this was the low byte of the killing blows, so the faction
+            // tabs were already filtering on nothing; leaving it unset is the
+            // same amount of information, honestly labelled.
+        }
+        if (remaining() < 8) { data.players.push_back(std::move(ps)); break; }
+        ps.damageDone  = packet.readUInt32();
+        ps.healingDone = packet.readUInt32();
+
+        // BuildObjectivesBlock: a count and that many bare values. The names
+        // this used to read are not on the wire - BattlegroundWS writes
+        // uint32(2) and two numbers - so every value past the first came from
+        // the wrong offset.
+        if (remaining() >= 4) {
+            uint32_t statCount = packet.readUInt32();
+            for (uint32_t st = 0; st < statCount && remaining() >= 4; ++st) {
+                ps.bgStats.emplace_back(std::string(), packet.readUInt32());
+            }
+        }
+        data.players.push_back(std::move(ps));
+    }
+    return true;
+}
+
+bool BattlefieldListParser::parse(network::Packet& packet, BattlefieldListData& data) {
+    data = BattlefieldListData{};
+    if (!packet.hasRemaining(8 + 1 + 4 + 2 + 13 + 1)) return false;
+    data.battlemasterGuid = packet.readUInt64();
+    data.fromWhere = packet.readUInt8();
+    data.bgTypeId = packet.readUInt32();
+    data.minLevel = packet.readUInt8();
+    data.maxLevel = packet.readUInt8();
+    // hasWin, winHonor, winArena, lossHonor, then isRandom and, for the
+    // random battleground, the same four again.
+    packet.readUInt8();
+    packet.readUInt32();
+    packet.readUInt32();
+    packet.readUInt32();
+    const bool isRandom = packet.readUInt8() != 0;
+    if (isRandom) {
+        if (!packet.hasRemaining(13)) return false;
+        packet.readUInt8();
+        packet.readUInt32();
+        packet.readUInt32();
+        packet.readUInt32();
+    }
+    if (!packet.hasRemaining(4)) return false;
+    const uint32_t count = packet.readUInt32();
+    if (count > packet.getRemainingSize() / 4) return false;
+    data.instanceIds.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) data.instanceIds.push_back(packet.readUInt32());
     return true;
 }
 

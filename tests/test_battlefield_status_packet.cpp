@@ -135,3 +135,104 @@ TEST_CASE("SMSG_BATTLEFIELD_STATUS reads the status the server sent",
         CHECK_FALSE(BattlefieldStatusPacket::parse(p, d));
     }
 }
+
+TEST_CASE("SMSG_BATTLEFIELD_STATUS: a zero header is the queue gone", "[battleground]") {
+    // BuildBattlegroundStatusPacket for STATUS_NONE: the slot and a uint64 0,
+    // and nothing else (0x0054ae40 clears the slot on it). Read as a header,
+    // the fields that are not there failed the parse and the queue stayed.
+    std::vector<uint8_t> b = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    wowee::network::Packet packet(0x2D4, b);
+    BattlefieldStatusData data;
+    data.statusId = 1;
+    REQUIRE(BattlefieldStatusPacket::parse(packet, data, false, true));
+    CHECK(data.queueSlot == 1u);
+    CHECK(data.statusId == 0u);
+    CHECK(packet.getRemainingSize() == 0);
+}
+
+TEST_CASE("SMSG_BATTLEFIELD_LIST as the cores build it", "[battleground]") {
+    // BattlegroundMgr::BuildBattlegroundListPacket: battlemaster guid, from
+    // where, type, two unknown bytes, the reward block, isRandom (and a
+    // second block when it is), then the instance ids (0x0054e390).
+    std::vector<uint8_t> b;
+    auto u8 = [&](uint8_t v) { b.push_back(v); };
+    auto u32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) b.push_back(uint8_t(v >> (8 * i))); };
+    auto u64 = [&](uint64_t v) { u32(uint32_t(v)); u32(uint32_t(v >> 32)); };
+    u64(0xF13000384F000ABCull);
+    u8(0);           // from the battlemaster
+    u32(2);          // Warsong Gulch
+    u8(0); u8(0);
+    u8(1);           // has won today
+    u32(1240); u32(0); u32(310);
+    u8(0);           // not random
+    u32(3);
+    u32(11); u32(12); u32(15);
+    wowee::network::Packet packet(0x23D, b);
+    BattlefieldListData data;
+    REQUIRE(BattlefieldListParser::parse(packet, data));
+    CHECK(packet.getRemainingSize() == 0);
+    CHECK(data.battlemasterGuid == 0xF13000384F000ABCull);
+    CHECK(data.bgTypeId == 2u);
+    REQUIRE(data.instanceIds.size() == 3);
+    CHECK(data.instanceIds[2] == 15u);
+}
+
+TEST_CASE("SMSG_BATTLEFIELD_LIST for the random battleground has a second block", "[battleground]") {
+    std::vector<uint8_t> b;
+    auto u8 = [&](uint8_t v) { b.push_back(v); };
+    auto u32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) b.push_back(uint8_t(v >> (8 * i))); };
+    auto u64 = [&](uint64_t v) { u32(uint32_t(v)); u32(uint32_t(v >> 32)); };
+    u64(0);
+    u8(1);           // asked for from elsewhere
+    u32(32);
+    u8(0); u8(0);
+    u8(0); u32(0); u32(0); u32(0);
+    u8(1);           // random
+    u8(1); u32(2000); u32(25); u32(500);
+    u32(0);
+    wowee::network::Packet packet(0x23D, b);
+    BattlefieldListData data;
+    REQUIRE(BattlefieldListParser::parse(packet, data));
+    CHECK(packet.getRemainingSize() == 0);
+    CHECK(data.fromWhere == 1);
+    CHECK(data.bgTypeId == 32u);
+    CHECK(data.instanceIds.empty());
+}
+
+TEST_CASE("MSG_PVP_LOG_DATA: an arena's ratings come before both names", "[battleground]") {
+    // Battleground::BuildPvPLogDataPacket for an arena: each team's rating
+    // lost, gained and matchmaker rating, then the two names (0x0054d280).
+    std::vector<uint8_t> b;
+    auto u8 = [&](uint8_t v) { b.push_back(v); };
+    auto u32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) b.push_back(uint8_t(v >> (8 * i))); };
+    auto u64 = [&](uint64_t v) { u32(uint32_t(v)); u32(uint32_t(v >> 32)); };
+    auto str = [&](const char* s) { while (*s) b.push_back(uint8_t(*s++)); b.push_back(0); };
+    u8(1);
+    u32(0); u32(14); u32(1532);      // team 0: won 14
+    u32(14); u32(0); u32(1490);      // team 1: lost 14
+    str("Gold Team");
+    str("Green Team");
+    u8(1); u8(0);                    // ended, team 0 won
+    u32(1);
+    u64(0x51);
+    u32(2);                          // killing blows
+    u8(0);                           // team
+    u32(81234); u32(4021);           // damage, healing
+    u32(0);                          // no objective values
+    wowee::network::Packet packet(0x2E0, b);
+    BgScoreboardData data;
+    REQUIRE(PvpLogDataParser::parse(packet, data));
+    CHECK(packet.getRemainingSize() == 0);
+    CHECK(data.isArena);
+    CHECK(data.arenaTeams[0].newRating == 14u);
+    CHECK(data.arenaTeams[0].matchmakerRating == 1532u);
+    CHECK(data.arenaTeams[1].rating == 14u);
+    CHECK(data.arenaTeams[1].matchmakerRating == 1490u);
+    CHECK(data.arenaTeams[0].teamName == "Gold Team");
+    CHECK(data.arenaTeams[1].teamName == "Green Team");
+    CHECK(data.hasWinner);
+    REQUIRE(data.players.size() == 1);
+    CHECK(data.players[0].killingBlows == 2u);
+    CHECK(data.players[0].damageDone == 81234u);
+    CHECK(data.players[0].healingDone == 4021u);
+}

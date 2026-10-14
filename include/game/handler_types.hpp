@@ -218,10 +218,14 @@ struct BgPlayerScore {
     std::vector<std::pair<std::string, uint32_t>> bgStats;
 };
 
+/// One arena team's line of MSG_PVP_LOG_DATA: three words, raw, as
+/// GetBattlefieldTeamInfo returns them (0x0054a180) - the cores write rating
+/// lost, rating gained and the matchmaker rating.
 struct ArenaTeamScore {
     std::string teamName;
-    uint32_t    ratingChange = 0;
-    uint32_t    newRating    = 0;
+    uint32_t    rating           = 0;
+    uint32_t    newRating        = 0;
+    uint32_t    matchmakerRating = 0;
 };
 
 struct BgScoreboardData {

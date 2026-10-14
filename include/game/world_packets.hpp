@@ -8,6 +8,7 @@
 #include "game/spell_defines.hpp"
 #include "game/group_defines.hpp"
 #include "game/flat_field_map.hpp"
+#include "game/handler_types.hpp"
 #include <array>
 #include <optional>
 #include <vector>
@@ -3309,6 +3310,32 @@ public:
     /// classicFormat selects the pre-TBC shape, which has no arena fields.
     static bool parse(network::Packet& packet, BattlefieldStatusData& data,
                       bool classicFormat = false, bool wotlkFormat = true);
+};
+
+/** MSG_PVP_LOG_DATA, as 0x0054d280 reads it, into the scoreboard. */
+class PvpLogDataParser {
+public:
+    static bool parse(network::Packet& packet, BgScoreboardData& data);
+};
+
+/** SMSG_BATTLEFIELD_LIST, as 0x0054e390 reads it. */
+struct BattlefieldListData {
+    uint64_t battlemasterGuid = 0;
+    uint8_t  fromWhere = 0;
+    uint32_t bgTypeId = 0;
+    uint8_t  minLevel = 0;
+    uint8_t  maxLevel = 0;
+    // The reward block (and the random battleground's second one) is stepped
+    // over: the panel takes its rewards from elsewhere.
+    std::vector<uint32_t> instanceIds;
+};
+
+class BattlefieldListParser {
+public:
+    /// The battlemaster's guid, where it was asked from, the type, two level
+    /// bytes, the reward block (and a second for the random battleground),
+    /// then the running instances.
+    static bool parse(network::Packet& packet, BattlefieldListData& data);
 };
 
 /** CMSG_LFG_JOIN packet builder */

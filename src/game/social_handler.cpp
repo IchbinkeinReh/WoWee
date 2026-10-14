@@ -715,6 +715,15 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
                           "%s is already in an arena team of that size.", {name});
         }
     };
+    table[Opcode::MSG_PETITION_DECLINE] = [this](network::Packet& packet) {
+        // Someone declined to sign: ERR_PETITION_DECLINED_S naming them, a
+        // system line, when the name is known (0x006cf140). Nothing read it.
+        if (packet.hasRemaining(8)) {
+            const std::string name = owner_.lookupName(packet.readUInt64());
+            if (!name.empty())
+                gameError(owner_, ErrTo::Chat, "ERR_PETITION_DECLINED_S", "%s has declined to sign your charter.", {name});
+        }
+    };
     table[Opcode::MSG_GUILD_EVENT_LOG_QUERY] = [this](network::Packet& packet) { handleGuildEventLog(packet); };
     table[Opcode::MSG_GUILD_BANK_LOG_QUERY] = [this](network::Packet& packet) { handleGuildBankLog(packet); };
     table[Opcode::SMSG_PETITION_QUERY_RESPONSE] = [this](network::Packet& packet) { handlePetitionQueryResponse(packet); };
@@ -2617,11 +2626,22 @@ void SocialHandler::handlePartyMemberStats(network::Packet& packet, bool isFull)
     if (updateFlags & 0x0200) {
         if (remaining() >= 8) {
             uint64_t auraMask = packet.readUInt64();
-            std::vector<AuraSlot> newAuras;
+            // 0x006cf9b0: the mask names the slots this packet changes. The
+            // full form starts from no auras; the other keeps every slot the
+            // mask leaves out, and a spell id of 0 empties a slot. The list
+            // is slot-indexed, as SMSG_AURA_UPDATE keeps the same cache.
+            // Rebuilt from only the slots named, a party member lost every
+            // aura but the one that changed.
+            const bool cacheIt = memberGuid != 0 && memberGuid != owner_.getPlayerGuid() &&
+                                 memberGuid != owner_.getTargetGuid();
+            std::vector<AuraSlot> auras;
+            if (!isFull && cacheIt) {
+                auto it = owner_.unitAurasCacheRef().find(memberGuid);
+                if (it != owner_.unitAurasCacheRef().end()) auras = it->second;
+            }
             for (int i = 0; i < 64; ++i) {
                 if (auraMask & (uint64_t(1) << i)) {
                     AuraSlot a;
-                    a.level = static_cast<uint8_t>(i);
                     if (isWotLK) {
                         if (remaining() < 5) break;
                         a.spellId = packet.readUInt32();
@@ -2632,12 +2652,11 @@ void SocialHandler::handlePartyMemberStats(network::Packet& packet, bool isFull)
                         uint8_t dt = owner_.getSpellDispelType(a.spellId);
                         if (dt > 0) a.flags = 0x80;
                     }
-                    if (a.spellId != 0) newAuras.push_back(a);
+                    if (auras.size() <= static_cast<size_t>(i)) auras.resize(i + 1);
+                    auras[i] = a;
                 }
             }
-            if (memberGuid != 0 && memberGuid != owner_.getPlayerGuid() && memberGuid != owner_.getTargetGuid()) {
-                owner_.unitAurasCacheRef()[memberGuid] = std::move(newAuras);
-            }
+            if (cacheIt) owner_.unitAurasCacheRef()[memberGuid] = std::move(auras);
         }
     }
     // Skip pet fields and vehicle seat
@@ -2913,32 +2932,22 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PLAYER_GUILD_UPDATE", {});
             break;
         case GuildEvent::SIGNED_ON:
-            // Only announce a real offline→online transition. On login the server floods
-            // SIGNED_ON for members the roster already lists as online; suppressing those
-            // (state unchanged) matches the real client and stops the guild-chat spam.
-            //
-            // ...and only when the player wants to hear about it at all. Guild
-            // Member Notify is offered by the panel and was read by nothing, so
-            // a large guild announced every arrival and departure whatever it
-            // said. The transition is still tracked when the message is
-            // suppressed - the roster's idea of who is online is not the
-            // player's idea of what is worth reading.
-            //
-            // The words are the friend list's, ERR_FRIEND_ONLINE_SS and
-            // ERR_FRIEND_OFFLINE_S, and 0x006d92d0 leaves out the player and
+        case GuildEvent::SIGNED_OFF: {
+            // 0x006d92d0: ERR_FRIEND_ONLINE_SS / ERR_FRIEND_OFFLINE_S for every
+            // one, while Guild Member Notify is on, leaving out the player and
             // anyone on the friends list, whose own notice says it already.
-            if (data.numStrings >= 1 && guildMemberOnlineTransition(data.strings[0], true) &&
-                addons::storedCVarValue("guildMemberNotify", "1") != "0" &&
-                data.strings[0] != ownName(owner_) && !owner_.friendsCacheRef().count(data.strings[0]))
-                msg = interfaceFormat("ERR_FRIEND_ONLINE_SS", "|Hplayer:%s|h[%s]|h has come online.",
-                                      {data.strings[0], data.strings[0]});
+            // The client keeps no idea of a "transition" to hold one back by;
+            // the roster's online state is still kept in step.
+            const bool on = data.eventType == GuildEvent::SIGNED_ON;
+            if (data.numStrings >= 1) (void)guildMemberOnlineTransition(data.strings[0], on);
+            if (data.numStrings >= 1 && addons::storedCVarValue("guildMemberNotify", "1") != "0" &&
+                data.strings[0] != ownName(owner_) && !owner_.friendsCacheRef().count(data.strings[0])) {
+                msg = on ? interfaceFormat("ERR_FRIEND_ONLINE_SS", "|Hplayer:%s|h[%s]|h has come online.",
+                                           {data.strings[0], data.strings[0]})
+                         : interfaceFormat("ERR_FRIEND_OFFLINE_S", "%s has gone offline.", {data.strings[0]});
+            }
             break;
-        case GuildEvent::SIGNED_OFF:
-            if (data.numStrings >= 1 && guildMemberOnlineTransition(data.strings[0], false) &&
-                addons::storedCVarValue("guildMemberNotify", "1") != "0" &&
-                data.strings[0] != ownName(owner_) && !owner_.friendsCacheRef().count(data.strings[0]))
-                msg = interfaceFormat("ERR_FRIEND_OFFLINE_S", "%s has gone offline.", {data.strings[0]});
-            break;
+        }
         // The bank's half of the event list. The server broadcasts these to
         // every member whenever anyone touches the bank, so they are frequent,
         // and not one of them is a chat line - they carry the figures the bank
@@ -2953,25 +2962,16 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
         case GuildEvent::BANK_TAB_PURCHASED:
         case GuildEvent::BANK_TAB_UPDATED:
         case GuildEvent::BANK_TEXT_CHANGED:
-        case GuildEvent::TABARD_CHANGED:
         case GuildEvent::RANK_UPDATED:
         case GuildEvent::RANK_DELETED:
             // Silent here; the interface events they mean are fired below.
             break;
-        default: {
-            // Not a chat line either: an event this client does not know is a
-            // gap in this switch, and guild chat is not where that belongs.
-            // Once per type - these arrive as often as the bank ones do, and a
-            // log that repeats itself answers nothing a single line does not.
-            static bool warned[256] = {};
-            if (!warned[data.eventType]) {
-                warned[data.eventType] = true;
-                LOG_WARNING("SMSG_GUILD_EVENT: unhandled type ", static_cast<int>(data.eventType),
-                            " strings=", static_cast<int>(data.numStrings),
-                            data.numStrings >= 1 ? (" first=" + data.strings[0]) : std::string());
-            }
+        default:
+            // Any other type - the tabard event (9) among them - is
+            // ERR_GUILD_INTERNAL with the event's strings, as 0x006d92d0's
+            // default says it.
+            msg = interfaceFormat("ERR_GUILD_INTERNAL", "Internal guild error.", {s(0), s(1), s(2)});
             break;
-        }
     }
 
     if (!msg.empty()) {
@@ -3026,9 +3026,6 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
             // The bank panel's own events, which are what these types mean.
             // GuildBankFrame_OnEvent returns early unless the frame is
             // visible, so firing them while it is shut costs nothing.
-            case GuildEvent::TABARD_CHANGED:
-                owner_.addonEventCallbackRef()("GUILDTABARD_UPDATE", {});
-                break;
             case GuildEvent::BANK_BAG_SLOTS_CHANGED:
                 owner_.addonEventCallbackRef()("GUILDBANKBAGSLOTS_CHANGED", {});
                 break;
@@ -3049,12 +3046,6 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
                 break;
             default: break;
         }
-    }
-
-    // A new tabard is in the guild query, not the roster, so it is the query
-    // that has to be asked again for the emblem to change.
-    if (data.eventType == GuildEvent::TABARD_CHANGED) {
-        if (const uint32_t id = ownGuildId()) queryGuildInfo(id);
     }
 
     if (clientWillRequest) requestGuildRoster();
@@ -3174,7 +3165,13 @@ void SocialHandler::handlePetitionShowlist(network::Packet& packet) {
     // offers three and the panel prices whichever tab is open.
     petitionCharters_ = data.charters;
     showPetitionDialog_ = true;
+    // Which window by the registrar's own flags, as 0x006d69f0 picks it: a
+    // petitioner that is also a tabard designer (NPC flags 0x40000 and
+    // 0x80000) is the guild registrar, any other the arena one. The charter
+    // on offer only stands in when the unit is not to hand.
     petitionIsGuildCharter_ = data.isGuildCharter();
+    if (auto unit = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(data.npcGuid)))
+        petitionIsGuildCharter_ = (unit->getNpcFlags() & 0xC0000u) == 0xC0000u;
     // The vendor panel opens on this. showPetitionDialog_ is what this
     // client's own dialog reads, and the interface's version was told
     // nothing, so walking up to a guild master or an arena registrar opened
@@ -3741,6 +3738,8 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
         return;
     }
     const uint32_t queueSlot = status.queueSlot;
+    // 0x0054ae40 drops a status for any slot past the second.
+    if (!isPreWotlk() && queueSlot > 1) return;
     bgJoinPendingType_ = 0;  // answered
     const uint8_t arenaType = status.arenaType;
     const uint32_t bgTypeId = status.bgTypeId;
@@ -3810,14 +3809,44 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
 }
 
 void SocialHandler::handleBattlefieldList(network::Packet& packet) {
-    if (!packet.hasRemaining(5)) return;
     AvailableBgInfo info;
+    if (!isPreWotlk()) {
+        // 0x0054e390. This read the type out of the battlemaster's guid and
+        // everything after it from the wrong place, so the instance list the
+        // panel offers was noise.
+        BattlefieldListData data;
+        if (!BattlefieldListParser::parse(packet, data)) return;
+        info.bgTypeId = data.bgTypeId;
+        info.minLevel = data.minLevel;
+        info.maxLevel = data.maxLevel;
+        info.instanceIds = std::move(data.instanceIds);
+        bool updated = false;
+        for (auto& existing : availableBgs_) { if (existing.bgTypeId == info.bgTypeId) { existing = std::move(info); updated = true; break; } }
+        if (!updated) availableBgs_.push_back(std::move(info));
+        // The window it opens, as the client picks it: the random
+        // battleground from a battlemaster is NPC_PVPQUEUE_ANYWHERE, a list
+        // asked for from elsewhere PVPQUEUE_ANYWHERE_SHOW, and otherwise the
+        // battlemaster's own list - BATTLEFIELDS_SHOW, the battlemaster the
+        // interaction object (0x005496d0).
+        constexpr uint32_t kRandomBattleground = 32;
+        if (data.bgTypeId == kRandomBattleground && data.battlemasterGuid != 0) {
+            owner_.setInteractionObject(data.battlemasterGuid);
+            owner_.fireAddonEvent("NPC_PVPQUEUE_ANYWHERE", {});
+        } else if (data.fromWhere != 0) {
+            owner_.fireAddonEvent("PVPQUEUE_ANYWHERE_SHOW", {});
+        } else if (data.battlemasterGuid != 0) {
+            owner_.setInteractionObject(data.battlemasterGuid);
+            owner_.fireAddonEvent("BATTLEFIELDS_SHOW", {});
+        } else {
+            owner_.fireAddonEvent("BATTLEFIELDS_CLOSED", {});
+            owner_.fireAddonEvent("BATTLEFIELDS_SHOW", {});
+        }
+        return;
+    }
+    if (!packet.hasRemaining(5)) return;
     info.bgTypeId = packet.readUInt32();
     info.isRegistered = packet.readUInt8() != 0;
-    const bool isWotlk = isActiveExpansion("wotlk");
-    const bool isTbc = isActiveExpansion("tbc");
-    if (isTbc || isWotlk) { if (!packet.hasRemaining(1)) return; info.isHoliday = packet.readUInt8() != 0; }
-    if (isWotlk) { if (!packet.hasRemaining(8)) return; info.minLevel = packet.readUInt32(); info.maxLevel = packet.readUInt32(); }
+    if (isActiveExpansion("tbc")) { if (!packet.hasRemaining(1)) return; info.isHoliday = packet.readUInt8() != 0; }
     if (!packet.hasRemaining(4)) return;
     uint32_t count = std::min(packet.readUInt32(), 256u);
     info.instanceIds.reserve(count);
@@ -4977,10 +5006,14 @@ void SocialHandler::handleArenaTeamStats(network::Packet& packet) {
     stats.weekGames = packet.readUInt32(); stats.weekWins = packet.readUInt32();
     stats.seasonGames = packet.readUInt32(); stats.seasonWins = packet.readUInt32();
     stats.rank = packet.readUInt32();
+    // ARENA_TEAM_UPDATE, as 0x005a2d50 fires it once the figures are in;
+    // the PvP panel's ratings and games redraw on it and on nothing else.
+    bool known = false;
     for (auto& s : arenaTeamStats_) {
-        if (s.teamId == stats.teamId) { stats.teamName = std::move(s.teamName); stats.teamType = s.teamType; s = std::move(stats); return; }
+        if (s.teamId == stats.teamId) { stats.teamName = std::move(s.teamName); stats.teamType = s.teamType; s = std::move(stats); known = true; break; }
     }
-    arenaTeamStats_.push_back(std::move(stats));
+    if (!known) arenaTeamStats_.push_back(std::move(stats));
+    owner_.fireAddonEvent("ARENA_TEAM_UPDATE", {});
 }
 
 void SocialHandler::requestArenaTeamRoster(uint32_t teamId) {
@@ -5010,87 +5043,13 @@ void SocialHandler::handleArenaError(network::Packet& packet) {
 }
 
 void SocialHandler::handlePvpLogData(network::Packet& packet) {
-    auto remaining = [&]() { return packet.getRemainingSize(); };
-    if (remaining() < 1) return;
-    // The layout is settled and the dump that asked about it is gone.
-    //
-    // The question it existed to answer - whether there is a team byte after
-    // the guid - is answered by the source rather than by a byte count, and the
-    // answer is "in an arena, yes; in a battleground, no". They are two
-    // different rows written by two different overrides, and the type byte at
-    // the top of this packet says which one follows.
-    bgScoreboard_ = BgScoreboardData{};
-    bgScoreboard_.isArena = (packet.readUInt8() != 0);
-    if (bgScoreboard_.isArena) {
-        for (auto& arenaTeam : bgScoreboard_.arenaTeams) {
-            if (remaining() < 20) { packet.skipAll(); return; }
-            arenaTeam.ratingChange = packet.readUInt32();
-            arenaTeam.newRating = packet.readUInt32();
-            packet.readUInt32(); packet.readUInt32(); packet.readUInt32();
-            arenaTeam.teamName = remaining() > 0 ? packet.readString() : "";
+    if (!PvpLogDataParser::parse(packet, bgScoreboard_)) return;
+    for (auto& ps : bgScoreboard_.players) {
+        auto ent = owner_.getEntityManager().getEntity(ps.guid);
+        if (ent && (ent->getType() == game::ObjectType::PLAYER || ent->getType() == game::ObjectType::UNIT)) {
+            auto u = std::static_pointer_cast<game::Unit>(ent);
+            if (!u->getName().empty()) ps.name = u->getName();
         }
-    }
-    // Ended, and the winner, BEFORE the player count. This was read after the
-    // players, where there is nothing left to read it from.
-    if (remaining() < 1) return;
-    bgScoreboard_.hasWinner = (packet.readUInt8() != 0);
-    if (bgScoreboard_.hasWinner) {
-        if (remaining() < 1) return;
-        bgScoreboard_.winner = packet.readUInt8();
-    }
-
-    if (remaining() < 4) return;
-    uint32_t playerCount = packet.readUInt32();
-    bgScoreboard_.players.reserve(playerCount);
-    for (uint32_t i = 0; i < playerCount && remaining() >= 12; ++i) {
-        BgPlayerScore ps;
-        ps.guid = packet.readUInt64();
-        // Two different rows, and the type byte at the top says which.
-        //
-        // BattlegroundScore::AppendToPacket - killing blows, honourable kills,
-        // deaths, bonus honour, damage, healing. No team.
-        // ArenaScore::AppendToPacket - killing blows, a team BYTE, damage,
-        // healing. No honourable kills, deaths or honour at all.
-        //
-        // This read one row that was neither: a team byte from the arena
-        // shape followed by the battleground's four counters, then a stat block
-        // with null-terminated names that no core writes. Everything after the
-        // guid was off by a byte, and damage and healing were skipped entirely
-        // - which is why GetBattlefieldScore answered zero for both.
-        ps.killingBlows = packet.readUInt32();
-        if (bgScoreboard_.isArena) {
-            if (remaining() < 1) { bgScoreboard_.players.push_back(std::move(ps)); break; }
-            ps.team = packet.readUInt8();
-            ps.hasTeam = true;
-        } else {
-            if (remaining() < 12) { bgScoreboard_.players.push_back(std::move(ps)); break; }
-            ps.honorableKills = packet.readUInt32();
-            ps.deaths         = packet.readUInt32();
-            ps.bonusHonor     = packet.readUInt32();
-            // No team on the wire for a battleground. The byte that used to
-            // fill this was the low byte of the killing blows, so the faction
-            // tabs were already filtering on nothing; leaving it unset is the
-            // same amount of information, honestly labelled.
-        }
-        if (remaining() < 8) { bgScoreboard_.players.push_back(std::move(ps)); break; }
-        ps.damageDone  = packet.readUInt32();
-        ps.healingDone = packet.readUInt32();
-
-        { auto ent = owner_.getEntityManager().getEntity(ps.guid);
-          if (ent && (ent->getType() == game::ObjectType::PLAYER || ent->getType() == game::ObjectType::UNIT))
-              { auto u = std::static_pointer_cast<game::Unit>(ent); if (!u->getName().empty()) ps.name = u->getName(); } }
-
-        // BuildObjectivesBlock: a count and that many bare values. The names
-        // this used to read are not on the wire - BattlegroundWS writes
-        // uint32(2) and two numbers - so every value past the first came from
-        // the wrong offset.
-        if (remaining() >= 4) {
-            uint32_t statCount = packet.readUInt32();
-            for (uint32_t st = 0; st < statCount && remaining() >= 4; ++st) {
-                ps.bgStats.emplace_back(std::string(), packet.readUInt32());
-            }
-        }
-        bgScoreboard_.players.push_back(std::move(ps));
     }
     // The scoreboard is drawn from this and asked for it by name -
     // RequestBattlefieldScoreData sends the query, UPDATE_BATTLEFIELD_SCORE is

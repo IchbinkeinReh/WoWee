@@ -1052,9 +1052,8 @@ wowee_add_packet_test(test_prewotlk_build_packets)
 wowee_add_packet_test(test_item_query_layout)
 
 # ── test_guild_bank_list ───────────────────────────────────────────────
-# SMSG_GUILD_BANK_LIST, whose tab-name block is optional and was gated on the
-# wrong condition - so a tab query that answered with the names attached had
-# every field after them read a block early, and the vault drew empty.
+# SMSG_GUILD_BANK_LIST, whose tab-name block comes only with a full update of
+# tab zero (0x005a7250).
 wowee_add_packet_test(test_guild_bank_list)
 
 # ── test_guild_event_money ─────────────────────────────────────────────
