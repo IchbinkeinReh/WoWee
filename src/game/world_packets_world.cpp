@@ -1053,6 +1053,7 @@ std::vector<BattlegroundPlayerPositionData> BattlegroundPlayerPositionsParser::p
     for (int group = 0; group < 2; ++group) {
         if (!packet.hasRemaining(4)) break;
         const uint32_t count = packet.readUInt32();
+        const size_t first = out.size();
         for (uint32_t i = 0; i < count && packet.hasRemaining(16); ++i) {
             BattlegroundPlayerPositionData pos;
             pos.guid = packet.readUInt64();
@@ -1063,6 +1064,10 @@ std::vector<BattlegroundPlayerPositionData> BattlegroundPlayerPositionsParser::p
             pos.group = group;
             out.push_back(pos);
         }
+        // The team list is kept in the order it came; the flag carriers from
+        // the last slot back (0x0054b3f0 counts its index down), so the
+        // carrier written first is the second.
+        if (group == 1) std::reverse(out.begin() + static_cast<std::ptrdiff_t>(first), out.end());
     }
     return out;
 }

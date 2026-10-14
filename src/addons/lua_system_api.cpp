@@ -3104,6 +3104,8 @@ static int lua_GetBattlefieldPosition(lua_State* L) {
 /// whichever is not held - so with both carried the order says which is which,
 /// and with one carried it does not. Rather than guess, that case answers zero
 /// and the frame hides: no flag on the map is a smaller lie than the wrong one.
+/// The client keeps the carriers last first (0x0054b3f0), so the first index
+/// is the horde one.
 static int lua_GetBattlefieldFlagPosition(lua_State* L) {
     auto* gh = getGameHandler(L);
     auto* svc = getLuaServices(L);
@@ -3114,7 +3116,7 @@ static int lua_GetBattlefieldFlagPosition(lua_State* L) {
         svc->mapUVForWorldPos(p->wowX, p->wowY, 0.0f, u, v)) {
         lua_pushnumber(L, u);
         lua_pushnumber(L, v);
-        lua_pushstring(L, index == 1 ? "AllianceFlag" : "HordeFlag");
+        lua_pushstring(L, index == 1 ? "HordeFlag" : "AllianceFlag");
         return 3;
     }
     lua_pushnumber(L, 0.0);

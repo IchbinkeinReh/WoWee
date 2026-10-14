@@ -75,6 +75,32 @@ TEST_CASE("a battleground's positions are kept canonical, list by list", "[wire_
     CHECK(p.getRemainingSize() == 0);
 }
 
+TEST_CASE("a battleground's flag carriers are kept last first", "[wire_positions]") {
+    // 0x0054b3f0 reads the carriers into its slots counting down: of two,
+    // the one written first is the second. One team position, kept in order.
+    const std::vector<uint8_t> bytes = {
+        0x01, 0x00, 0x00, 0x00,
+        0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x40,    // (1, 2)
+        0x02, 0x00, 0x00, 0x00,
+        0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x40, 0x40, 0x00, 0x00, 0x80, 0x40,    // (3, 4)
+        0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xA0, 0x40, 0x00, 0x00, 0xC0, 0x40};   // (5, 6)
+    wowee::network::Packet p(0, bytes);
+    const auto positions = BattlegroundPlayerPositionsParser::parse(p);
+    REQUIRE(positions.size() == 3);
+    CHECK(positions[0].guid == 5);
+    CHECK(positions[0].group == 0);
+    CHECK(positions[1].guid == 8);
+    CHECK(positions[1].group == 1);
+    CHECK(positions[1].canonicalX == Catch::Approx(6.0f));
+    CHECK(positions[1].canonicalY == Catch::Approx(5.0f));
+    CHECK(positions[2].guid == 7);
+    CHECK(positions[2].group == 1);
+    CHECK(p.getRemainingSize() == 0);
+}
+
 TEST_CASE("a GM ticket sends the player's place as the wire has it", "[wire_positions]") {
     // 0x005ac8f0: the map, then the player's x, y, z.
     const auto pkt = GmTicketCreatePacket::build(1, -4325.5f, 15.25f, 5.5f, "help");
