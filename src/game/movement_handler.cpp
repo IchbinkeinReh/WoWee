@@ -2259,6 +2259,13 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         const float pathLength =
             glm::length(destWorld - glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
         entity->startMoveTo(destWorld.x, destWorld.y, destWorld.z, facingAngle, duration / 1000.0f);
+        // Run on the transport, from where the mover is on it now.
+        if (entity->isActivelyMoving()) {
+            if (const auto from = owner_.getTransportManager()->worldToTransportLocal(
+                    transportGuid, glm::vec3(entity->getX(), entity->getY(), entity->getZ()))) {
+                owner_.transportAttachmentsRef()[moverGuid].moveFromLocal = *from;
+            }
+        }
         // Along the path, then the facing asked for on arriving - as
         // handleMonsterMove does.
         entity->faceAlongMove(moveType >= 2 ? std::optional<float>(facingAngle) : std::nullopt,
@@ -3980,6 +3987,7 @@ void MovementHandler::setTransportAttachment(uint64_t childGuid, ObjectType type
     attachment.hasLocalOrientation = hasLocalOrientation;
     attachment.localOrientation = localOrientation;
     attachment.offsetNeedsTransportResolution = offsetNeedsTransportResolution;
+    attachment.moveFromLocal.reset();
 }
 
 void MovementHandler::clearTransportAttachment(uint64_t childGuid) {
@@ -4021,7 +4029,21 @@ void MovementHandler::updateAttachedTransportChildren(float /*deltaTime*/) {
         // ends: along its path, facing along it (0x0073c8e0), and only on
         // arriving the facing it asked for (0x006eb0b0). Putting it at its
         // destination here every frame ended the move as it began.
-        if (entity->isActivelyMoving() && onMoveSpline(childGuid)) continue;
+        //
+        // It runs on the transport, though: the spline is set on the
+        // movement whose place is the one on the transport (0x0098c770), and
+        // the world's is that put through the transport each frame
+        // (0x004f4460). So its ends go where the transport is now, and a
+        // move on a moving deck stays on it.
+        if (entity->isActivelyMoving() && onMoveSpline(childGuid)) {
+            if (attachment.moveFromLocal) {
+                auto* transports = owner_.getTransportManager();
+                entity->setMoveEnds(
+                    transports->getPlayerWorldPosition(attachment.transportGuid, *attachment.moveFromLocal),
+                    transports->getPlayerWorldPosition(attachment.transportGuid, attachment.localOffset));
+            }
+            continue;
+        }
 
         glm::vec3 composed = owner_.getTransportManager()->getPlayerWorldPosition(
             attachment.transportGuid, attachment.localOffset);

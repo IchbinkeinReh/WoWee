@@ -4279,6 +4279,11 @@ public:
         float localOrientation = 0.0f;  // the wire's, as transport_local keeps it
         bool hasLocalOrientation = false;
         bool offsetNeedsTransportResolution = false;
+        // Where a monster move under way on the transport set out from, in
+        // its frame; localOffset is where it ends. The spline is the
+        // movement's own, on the transport (0x0098c770), and placed through
+        // the transport as it is each frame (0x004f4460).
+        std::optional<glm::vec3> moveFromLocal;
     };
     struct AreaTriggerEntry {
         uint32_t id = 0;

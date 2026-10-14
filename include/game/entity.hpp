@@ -654,6 +654,21 @@ public:
 
     [[nodiscard]] bool isEntityMoving() const { return isMoving_; }
 
+    /// Puts a single-segment move's two ends somewhere else, keeping how far
+    /// along it is: a move on a transport is run in the transport's frame,
+    /// so its ends in the world go where the transport takes them.
+    void setMoveEnds(const glm::vec3& start, const glm::vec3& end) {
+        if (!isMoving_ || movingByFlags_ || usePathMode_) return;
+        moveStartX_ = start.x; moveStartY_ = start.y; moveStartZ_ = start.z;
+        moveEndX_ = end.x; moveEndY_ = end.y; moveEndZ_ = end.z;
+        if (moveDuration_ > 0.0f && moveElapsed_ < moveDuration_) {
+            const float t = moveElapsed_ / moveDuration_;
+            x = start.x + (end.x - start.x) * t;
+            y = start.y + (end.y - start.y) * t;
+            z = start.z + (end.z - start.z) * t;
+        }
+    }
+
     /// True only during the active interpolation phase (before reaching destination).
     /// Unlike isEntityMoving(), this does NOT include the dead-reckoning overrun window,
     /// so animations (Run/Walk) should use this to avoid "running in place" after arrival.

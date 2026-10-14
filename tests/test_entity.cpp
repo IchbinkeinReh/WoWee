@@ -795,3 +795,28 @@ TEST_CASE("A cyclic spline keeps the unit moving, a move that never starts does 
     g.updateMovement(5.0f);
     CHECK(g.getReportedMoveFlags() == (0x1u | 0x4u));
 }
+
+TEST_CASE("A move on a transport goes where the transport takes its ends (0x0098c770)", "[entity][monstermove]") {
+    // A deck move from (0,0,0) to (10,0,0) half run, the deck then carried
+    // twenty yards along y: the mover is half way along the carried path,
+    // not where the world path was.
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    e.startMoveTo(10.0f, 0.0f, 0.0f, 0.0f, 2.0f);
+    e.updateMovement(1.0f);
+    CHECK(e.getX() == Catch::Approx(5.0f));
+    e.setMoveEnds(glm::vec3(0.0f, 20.0f, 0.0f), glm::vec3(10.0f, 20.0f, 0.0f));
+    CHECK(e.getX() == Catch::Approx(5.0f));
+    CHECK(e.getY() == Catch::Approx(20.0f));
+    e.updateMovement(0.5f);
+    CHECK(e.getX() == Catch::Approx(7.5f));
+    CHECK(e.getY() == Catch::Approx(20.0f));
+    CHECK(e.getLatestY() == Catch::Approx(20.0f));
+
+    // A unit standing still has no move to carry.
+    Entity f;
+    f.setPosition(1.0f, 2.0f, 3.0f, 0.0f);
+    f.setMoveEnds(glm::vec3(9.0f), glm::vec3(9.0f));
+    CHECK(f.getX() == 1.0f);
+    CHECK_FALSE(f.isEntityMoving());
+}
