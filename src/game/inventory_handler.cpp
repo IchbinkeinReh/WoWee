@@ -3162,18 +3162,23 @@ void InventoryHandler::closeMailbox() {
     }
 }
 
-void InventoryHandler::checkForMail() {
+void InventoryHandler::checkForMail(float delay) {
     if (mailboxOpen_) {
         mailCheckOnClose_ = true;
         return;
     }
-    // 0x0056ff70 asks, then a zero delay marks mail as there and says so.
+    // 0x0056ff70 asks, knowing nothing until the answer; then a zero delay
+    // marks mail as there and says so (UPDATE_PENDING_MAIL). Any other delay
+    // is kept quietly as the time to the next letter, which the answer
+    // replaces - this client keeps no countdown of its own, so nothing is
+    // shown until then.
     mailCheckOnClose_ = false;
     if (owner_.isInWorld() && owner_.getSocket()) {
         network::Packet query(wireOpcode(Opcode::MSG_QUERY_NEXT_MAIL_TIME));
         owner_.getSocket()->send(query);
     }
-    setHasNewMail(true);
+    if (std::fabs(delay) < 2.3841858e-07f) setHasNewMail(true);
+    else hasNewMail_ = false;
 }
 
 void InventoryHandler::refreshMailList() {
@@ -3543,8 +3548,12 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
 }
 
 void InventoryHandler::handleReceivedMail(network::Packet& packet) {
-    (void)packet;
-    setHasNewMail(true);
+    // A float, the delay until the letter is there (0x00571a10), handed to
+    // the same look for mail a removed calendar invite makes (0x005704d0).
+    // This marked mail as there without asking, whatever the delay.
+    const float delay = packet.hasRemaining(4) ? packet.readFloat() : 0.0f;
+    packet.skipAll();
+    checkForMail(delay);
 }
 
 void InventoryHandler::handleQueryNextMailTime(network::Packet& packet) {

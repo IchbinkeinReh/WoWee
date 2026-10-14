@@ -8047,37 +8047,16 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushstring(L, (ev.flags & 0x0400u) ? "GUILD_EVENT" : "PLAYER");
             return 25;
         }},
-                // CalendarCanSendInvite() - may this player invite to the event
-                // that is open?
-                //
-                // Five places in the calendar ask it, and it was bound nowhere.
-                // With the missing-API stand-in on, an unknown global answers
-                // with a callable table and a table is truthy - so every one of
-                // those five took the "yes, you may" branch, and the invite
-                // controls appeared on events belonging to other people. With
-                // the stand-in off it raises outright, which is how it was
-                // found: clicking through a panel loads the calendar, and the
-                // calendar raised on the way up.
-                //
-                // The event's creator always may. Anyone else may only if their
-                // own row on the invite list carries at least moderator -
-                // CALENDAR_RANK_PLAYER 0, MODERATOR 1, OWNER 2, from
-                // CalendarMgr.h. The rank is per invitee rather than on the
-                // event, so it is this player's row that answers.
+                // CalendarCanSendInvite() - may an invitation go now
+                // (0x005b8b30): no calendar request pending and the last
+                // invitation two seconds gone (0x00c207f8). Nothing about who
+                // may invite - the create-event frame that asks is the
+                // editor's - where this answered from the player's own row on
+                // the open event's list, and so said no to every invitation to
+                // an event still being made.
                 {"CalendarCanSendInvite", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushboolean(L, 0); return 1; }
-            const auto& ev = gh->getCalendarEventDetail();
-            const uint64_t me = gh->getPlayerGuid();
-            bool can = (me != 0 && ev.creatorGuid == me);
-            if (!can) {
-                for (const auto& inv : ev.invitees) {
-                    if (inv.guid != me) continue;
-                    can = inv.rank >= 1;
-                    break;
-                }
-            }
-            lua_pushboolean(L, can ? 1 : 0);
+            lua_pushboolean(L, gh && gh->calendarCanSendInvite() ? 1 : 0);
             return 1;
         }},
                 {"CalendarEventGetNumInvites", [](lua_State* L) -> int {

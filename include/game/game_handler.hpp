@@ -811,6 +811,9 @@ public:
     /// CalendarIsActionPending: a calendar request is out and unanswered
     /// (0x00c207f3).
     bool isCalendarActionPending() const { return calendarActionPending_; }
+    /// CalendarCanSendInvite (0x005b8b30): no calendar request pending, and
+    /// the last invitation two seconds gone.
+    bool calendarCanSendInvite() const;
     /// Set it and say so, CALENDAR_ACTION_PENDING (0x005b7e20).
     void setCalendarActionPending(bool pending);
     /// A player's name has arrived: an open event may have been waiting on
@@ -5755,6 +5758,15 @@ private:
     /// pending (0x005b9310, 0x005b9860 and the rest).
     bool calendarActionAllowed() const;
     bool calendarActionPending_ = false;
+    /// When the last invitation went, on calendarClockMs (0x00c207f8); 0 for
+    /// none yet.
+    uint32_t lastCalendarInviteMs_ = 0;
+    /// The millisecond clock the invitation throttle is measured on
+    /// (0x0086ae20), never 0 so that 0 can mean none sent.
+    static uint32_t calendarClockMs();
+    /// The calendar's error dialog: CALENDAR_UPDATE_ERROR with the words, then
+    /// CALENDAR_ACTION_PENDING false (0x005b9960).
+    void calendarErrorDialog(const char* key, const char* enUS);
     /// The whole calendar, as of the server's last answer to a request for it.
     CalendarData calendarData_;
     /// One event in full, as of the last one opened.

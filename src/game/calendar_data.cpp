@@ -828,8 +828,8 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         }
         // Left at anything but invited or removed, the server mails the
         // player about it, and the client looks for mail as it does on
-        // SMSG_RECEIVED_MAIL (0x005704d0).
-        if (status != kInvited && status != kRemoved) ctx.checkMail = true;
+        // SMSG_RECEIVED_MAIL (0x005704d0) - before the pending invite goes.
+        if (status != kInvited && status != kRemoved) say(ctx, kCalendarCheckMail);
         removeFirstPending(cal, eventId);
         say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
         if (dropEvent && removeEvent(cal, eventId)) say(ctx, "CALENDAR_UPDATE_EVENT_LIST");

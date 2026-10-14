@@ -287,10 +287,14 @@ struct CalendarContext {
     std::function<bool(uint64_t)> nameKnown;
     /// Names the open event waits on, to be asked for (CMSG_NAME_QUERY).
     std::vector<uint64_t> nameQueries;
-    /// A removed invitation that leaves a mail behind: look for mail as
-    /// SMSG_RECEIVED_MAIL does (0x005c0ae0 -> 0x005704d0).
-    bool checkMail = false;
 };
+
+/// The signal standing for a look for mail, which a removed invitation that
+/// leaves a mail behind makes as SMSG_RECEIVED_MAIL does (0x005c0ae0 ->
+/// 0x005704d0) - in its place among the events, ahead of
+/// CALENDAR_UPDATE_PENDING_INVITES. Not an interface event: the caller looks
+/// for mail where it stands.
+inline constexpr const char* kCalendarCheckMail = "<check mail>";
 
 /// Read one calendar packet the way 0x005c3fe0 and its handlers read it, and
 /// apply it. Every packet but the four alerts that return straight out of the
@@ -304,6 +308,15 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
 /// 0x005f1a40): once none are left, what the event was holding back is said.
 void calendarNameArrived(CalendarEventDetail& open, uint64_t guid,
                          std::vector<CalendarSignal>& out);
+
+/// Whether an invitation sent at `lastInviteMs` (0: none yet) still holds
+/// the next back at `nowMs`, both on the client's millisecond clock: two
+/// seconds, CALENDAR_ERROR_INVITE_THROTTLED, as CalendarEventInvite
+/// (0x005bc360) and CalendarCanSendInvite (0x005b8b30) measure it against
+/// 0x00c207f8.
+inline bool calendarInviteThrottled(uint32_t lastInviteMs, uint32_t nowMs) {
+    return lastInviteMs != 0 && static_cast<int32_t>(nowMs - lastInviteMs) < 2000;
+}
 
 /// A date moved on by whole minutes, weekday and all - what 0x0076c3f0 does
 /// to the date it is handed.

@@ -999,19 +999,38 @@ TEST_CASE("An invite from someone ignored pends without being counted", "[calend
 }
 
 TEST_CASE("A removed invite that leaves a mail looks for it", "[calendar]") {
-    // 0x005c0ae0 calls 0x005704d0 unless the status was invited or removed.
-    const auto mailFor = [](uint8_t status) {
+    // 0x005c0ae0 calls 0x005704d0 unless the status was invited or removed,
+    // after the open event closes and before the pending invite goes.
+    const auto signalsFor = [](uint8_t status) {
         Packet p(0x441);
         p.writeUInt64(9); p.writeUInt32(kOct10); p.writeUInt32(0);
         p.writeUInt8(status);
         CalendarData cal = calendarWithInvite(9);
         CalendarEventDetail open;
+        open.eventId = 9;
         CalendarContext ctx{cal, open, kMe};
         REQUIRE(applyCalendarPacket(CalendarPacket::InviteRemovedAlert, p, ctx));
-        return ctx.checkMail;
+        return names(ctx);
     };
-    CHECK(mailFor(calendar_status::kAccepted));
-    CHECK(mailFor(calendar_status::kConfirmed));
-    CHECK_FALSE(mailFor(calendar_status::kInvited));
-    CHECK_FALSE(mailFor(calendar_status::kRemoved));
+    const std::vector<std::string> withMail{"CALENDAR_CLOSE_EVENT", kCalendarCheckMail,
+                                            "CALENDAR_UPDATE_PENDING_INVITES",
+                                            "CALENDAR_UPDATE_EVENT_LIST"};
+    const std::vector<std::string> withoutMail{"CALENDAR_CLOSE_EVENT",
+                                               "CALENDAR_UPDATE_PENDING_INVITES",
+                                               "CALENDAR_UPDATE_EVENT_LIST"};
+    CHECK(signalsFor(calendar_status::kAccepted) == withMail);
+    CHECK(signalsFor(calendar_status::kConfirmed) == withMail);
+    CHECK(signalsFor(calendar_status::kInvited) == withoutMail);
+    CHECK(signalsFor(calendar_status::kRemoved) == withoutMail);
+}
+
+TEST_CASE("Invitations are two seconds apart", "[calendar]") {
+    // 0x005bc360 / 0x005b8b30 against 0x00c207f8: none sent yet never holds,
+    // and the wait is measured as the client's signed difference.
+    CHECK_FALSE(calendarInviteThrottled(0, 500));
+    CHECK(calendarInviteThrottled(10000, 10000));
+    CHECK(calendarInviteThrottled(10000, 11999));
+    CHECK_FALSE(calendarInviteThrottled(10000, 12000));
+    CHECK(calendarInviteThrottled(0xFFFFFF00u, 0x00000100u));   // across the wrap
+    CHECK_FALSE(calendarInviteThrottled(0xFFFFFF00u, 0x00000800u));
 }

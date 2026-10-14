@@ -3595,6 +3595,23 @@ void GameHandler::setCalendarActionPending(bool pending) {
     fireAddonEvent("CALENDAR_ACTION_PENDING", {eventBool(pending)});
 }
 
+uint32_t GameHandler::calendarClockMs() {
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const auto now = static_cast<uint32_t>(ms);
+    return now == 0 ? 1u : now;
+}
+
+void GameHandler::calendarErrorDialog(const char* key, const char* enUS) {
+    fireAddonEvent("CALENDAR_UPDATE_ERROR", {interfaceString(key, enUS)});
+    setCalendarActionPending(false);
+}
+
+bool GameHandler::calendarCanSendInvite() const {
+    return !calendarActionPending_ &&
+           !calendarInviteThrottled(lastCalendarInviteMs_, calendarClockMs());
+}
+
 // Each request below is one the client sends only while no other is pending,
 // and marks pending once sent (0x005b7e20 and the setters beside it); the
 // server's answer, or its error, clears it (0x005c3fe0, 0x005b9960).
@@ -3603,7 +3620,15 @@ void GameHandler::inviteToCalendarEvent(uint64_t eventId, uint64_t inviteId,
                                         const std::string& name,
                                         bool isPreInvite, bool isGuildEvent) {
     if (!calendarActionAllowed()) return;
+    // 0x005bc360: within two seconds of the last invitation, the error dialog
+    // instead (CALENDAR_ERROR_INVITE_THROTTLED); one sent restarts the wait.
+    if (calendarInviteThrottled(lastCalendarInviteMs_, calendarClockMs())) {
+        calendarErrorDialog("CALENDAR_ERROR_INVITE_THROTTLED",
+                            "The number of invites that can be sent is limited, please wait to send another invite.");
+        return;
+    }
     socialHandler_->inviteToCalendarEvent(eventId, inviteId, name, isPreInvite, isGuildEvent);
+    lastCalendarInviteMs_ = calendarClockMs();
     setCalendarActionPending(true);
 }
 

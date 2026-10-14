@@ -4536,11 +4536,15 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
             setCalendarActionPending(false);
             continue;
         }
+        // A removed invitation that leaves a mail looks for it where 0x005c0ae0
+        // does, between its event-list and pending-invite events (0x005704d0).
+        if (signal.event == kCalendarCheckMail) {
+            if (inventoryHandler_) inventoryHandler_->checkForMail(0.0f);
+            continue;
+        }
         fireAddonEvent(signal.event, signal.args);
     }
     for (uint64_t guid : ctx.nameQueries) queryPlayerName(guid);
-    // A removed invitation that leaves a mail looks for it (0x005704d0).
-    if (ctx.checkMail && inventoryHandler_) inventoryHandler_->checkForMail();
     // 0x005bbbb0: an alert about an event the calendar has not loaded asks
     // for the pending count instead.
     if (ctx.askNumPending && isInWorld() && socket) {
