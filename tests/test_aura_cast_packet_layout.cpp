@@ -166,3 +166,23 @@ TEST_CASE("cast failed: a skill and a rank, or an item class and subclass mask",
     CHECK(bareData.result == 0x0c);
     CHECK(bareData.miscArg == 0u);
 }
+
+TEST_CASE("SMSG_TOTEM_CREATED carries the totem's guid whole", "[totem]") {
+    // Totem::InitStats writes slot, uint64 guid, duration and spell
+    // (0x00526530 reads the guid with the 8-byte reader). Read as a packed
+    // guid, the mask byte and the guid's bytes became duration and spell.
+    Writer w;
+    w.u8(0);                                  // fire
+    w.u32(static_cast<uint32_t>(kCreature));
+    w.u32(static_cast<uint32_t>(kCreature >> 32));
+    w.u32(120000);                            // two minutes
+    w.u32(3599);                              // Searing Totem
+    auto packet = w.packet();
+    TotemCreatedData data;
+    REQUIRE(TotemCreatedParser::parse(packet, data));
+    CHECK(packet.getRemainingSize() == 0);
+    CHECK(data.slot == 0);
+    CHECK(data.guid == kCreature);
+    CHECK(data.durationMs == 120000u);
+    CHECK(data.spellId == 3599u);
+}

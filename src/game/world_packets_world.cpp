@@ -1951,5 +1951,14 @@ bool SpellUpdateChainTargetsParser::parse(network::Packet& packet, SpellUpdateCh
     return true;
 }
 
+bool TotemCreatedParser::parse(network::Packet& packet, TotemCreatedData& data) {
+    if (!packet.hasRemaining(17)) return false;
+    data.slot = packet.readUInt8();
+    data.guid = packet.readUInt64();
+    data.durationMs = packet.readUInt32();
+    data.spellId = packet.readUInt32();
+    return true;
+}
+
 } // namespace game
 } // namespace wowee

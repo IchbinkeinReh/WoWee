@@ -6076,18 +6076,17 @@ void SpellHandler::handleDispelFailed(network::Packet& packet) {
 }
 
 void SpellHandler::handleTotemCreated(network::Packet& packet) {
-    // WotLK:       uint8 slot + packed_guid + uint32 duration + uint32 spellId
-    // TBC/Classic: uint8 slot + uint64 guid  + uint32 duration + uint32 spellId
-    const bool totemTbcLike = isPreWotlk();
-    if (!packet.hasRemaining(totemTbcLike ? 17u : 9u) ) return;
-    uint8_t slot = packet.readUInt8();
-    if (totemTbcLike)
-        /*uint64_t guid =*/ packet.readUInt64();
-    else
-        /*uint64_t guid =*/ packet.readPackedGuid();
-    if (!packet.hasRemaining(8)) return;
-    uint32_t duration = packet.readUInt32();
-    uint32_t spellId  = packet.readUInt32();
+    // 0x00526530 (0x413): slot, the totem's guid as a full uint64 on every
+    // expansion - TrinityCore and AzerothCore write GetGUID() whole - then
+    // duration and spell. Read as a packed guid on 3.3.5, the mask byte and
+    // the guid's bytes became the duration and the spell, and the totem bar
+    // showed noise. A zero guid changes nothing.
+    TotemCreatedData totem;
+    if (!TotemCreatedParser::parse(packet, totem)) return;
+    if (totem.guid == 0) return;
+    const uint8_t slot = totem.slot;
+    const uint32_t duration = totem.durationMs;
+    const uint32_t spellId = totem.spellId;
     LOG_DEBUG("SMSG_TOTEM_CREATED: slot=", static_cast<int>(slot),
               " spellId=", spellId, " duration=", duration, "ms");
     if (slot < GameHandler::NUM_TOTEM_SLOTS) {
@@ -6733,22 +6732,37 @@ void SpellHandler::handleResumeCastBar(network::Packet& packet) {
     uint32_t spellId   = packet.readUInt32();
     uint32_t remainMs  = packet.readUInt32();
     uint32_t totalMs   = packet.readUInt32();
+    // 0x008020c0: a spell Spell.dbc does not have is ignored; one with
+    // AttributesEx 0x4 resumes as a channel (UNIT_SPELLCAST_CHANNEL_START),
+    // anything else as a cast (UNIT_SPELLCAST_START).
+    loadSpellNameCache();
+    const auto entry = owner_.spellNameCacheRef().find(spellId);
+    if (entry == owner_.spellNameCacheRef().end()) return;
+    const bool channel = (entry->second.attrEx & 0x4u) != 0;
     if (totalMs > 0) {
         if (caster == owner_.getPlayerGuid()) {
             casting_            = true;
-            castIsChannel_      = false;
+            castIsChannel_      = channel;
             currentCastSpellId_ = spellId;
             castTimeTotal_      = totalMs  / 1000.0f;
             castTimeRemaining_  = remainMs / 1000.0f;
         } else {
             auto& s = unitCastStates_[caster];
             s.casting       = true;
+            s.isChannel     = channel;
             s.spellId       = spellId;
             s.timeTotal     = totalMs  / 1000.0f;
             s.timeRemaining = remainMs / 1000.0f;
         }
         LOG_DEBUG("SMSG_RESUME_CAST_BAR: caster=0x", std::hex, caster, std::dec,
-                  " spell=", spellId, " remaining=", remainMs, "ms total=", totalMs, "ms");
+                  " spell=", spellId, " remaining=", remainMs, "ms total=", totalMs, "ms",
+                  channel ? " (channel)" : "");
+        if (owner_.addonEventCallbackRef()) {
+            const auto unitId = owner_.guidToUnitId(caster);
+            if (!unitId.empty())
+                owner_.fireAddonEvent(channel ? "UNIT_SPELLCAST_CHANNEL_START" : "UNIT_SPELLCAST_START",
+                                      spellcastArgs(unitId, spellId));
+        }
     }
 }
 

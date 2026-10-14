@@ -728,17 +728,14 @@ enum class ChatType : uint8_t {
     BATTLEGROUND = 0x2C,
     BATTLEGROUND_LEADER = 0x2D,
     RESTRICTED = 0x2E,
+    // Read as a creature-spoken line (sender name, target) by 0x0050be70;
+    // the client's table at 0x009fa558 names it BATTLENET.
+    BATTLENET = 0x2F,
     ACHIEVEMENT = 0x30,
     GUILD_ACHIEVEMENT = 0x31,
-    // 0x32 is CHAT_MSG_ARENA_POINTS, and is deliberately absent rather than
-    // overlooked: AzerothCore declares it in SharedDefines.h and never sends
-    // it - the only other mentions are the generated enum reflection. Naming
-    // it here would add a type nothing can arrive as.
-    //
-    // Checked while chasing CHAT_MSG_TARGETICONS, which FrameXML registers for
-    // and which looks like the gap at 0x32. It is not a wire type at all in
-    // 3.3.5a; the client generates that message itself when a raid marker is
-    // set, so nothing on the wire is missing for it either.
+    // No server sends it; the client prints its own quest-reward arena point
+    // line in it (0x006d0e10, COMBATLOG_ARENAPOINTSAWARD).
+    ARENA_POINTS = 0x32,
     PARTY_LEADER = 0x33,
 };
 
@@ -818,6 +815,12 @@ public:
     /// bodies, kept as it was; the default is 3.3.5's (0x0050be70).
     static bool parse(network::Packet& packet, MessageChatData& data, bool tbcLayout = false);
 };
+
+/// Whether SMSG_GM_MESSAGECHAT carries the GM's name after the header for this
+/// chat type: 0x0050be70 reads it in its general branch only, so not for the
+/// creature-spoken types, the foreign whisper, the battleground announcements
+/// or the achievements.
+bool gmChatCarriesSenderName(uint8_t type);
 
 // Returns true when a chat packet is addon traffic and extracts the standard
 // prefix<TAB>payload envelope when present. Some legacy clients send the
@@ -2720,6 +2723,19 @@ struct GroupDeclineData {
 class GroupDeclineResponseParser {
 public:
     static bool parse(network::Packet& packet, GroupDeclineData& data);
+};
+
+/** SMSG_TOTEM_CREATED, as 0x00526530 reads it. */
+struct TotemCreatedData {
+    uint8_t  slot = 0;
+    uint64_t guid = 0;
+    uint32_t durationMs = 0;
+    uint32_t spellId = 0;
+};
+
+class TotemCreatedParser {
+public:
+    static bool parse(network::Packet& packet, TotemCreatedData& data);
 };
 
 // ============================================================

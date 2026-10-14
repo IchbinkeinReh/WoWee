@@ -111,7 +111,8 @@ bool MessageChatParser::parse(network::Packet& packet, MessageChatData& data, bo
         case ChatType::MONSTER_WHISPER:
         case ChatType::MONSTER_PARTY:
         case ChatType::RAID_BOSS_EMOTE:
-        case ChatType::RAID_BOSS_WHISPER: {
+        case ChatType::RAID_BOSS_WHISPER:
+        case ChatType::BATTLENET: {
             // Length-prefixed, bounds-checked against the packet, terminator stripped.
             packet.readSizedString(data.senderName);
             // Read receiver GUID (NamedGuid: guid + optional name for non-player targets)
@@ -262,6 +263,20 @@ bool MessageChatParser::parse(network::Packet& packet, MessageChatData& data, bo
     return true;
 }
 
+bool gmChatCarriesSenderName(uint8_t type) {
+    switch (static_cast<ChatType>(type)) {
+        case ChatType::MONSTER_SAY: case ChatType::MONSTER_PARTY: case ChatType::MONSTER_YELL:
+        case ChatType::MONSTER_WHISPER: case ChatType::MONSTER_EMOTE:
+        case ChatType::RAID_BOSS_EMOTE: case ChatType::RAID_BOSS_WHISPER: case ChatType::BATTLENET:
+        case ChatType::WHISPER_FOREIGN:
+        case ChatType::BG_SYSTEM_NEUTRAL: case ChatType::BG_SYSTEM_ALLIANCE: case ChatType::BG_SYSTEM_HORDE:
+        case ChatType::ACHIEVEMENT: case ChatType::GUILD_ACHIEVEMENT:
+            return false;
+        default:
+            return true;
+    }
+}
+
 const char* getChatTypeString(ChatType type) {
     switch (type) {
         case ChatType::SYSTEM: return "SYSTEM";
@@ -313,6 +328,8 @@ const char* getChatTypeString(ChatType type) {
         case ChatType::RESTRICTED: return "RESTRICTED";
         case ChatType::ACHIEVEMENT: return "ACHIEVEMENT";
         case ChatType::GUILD_ACHIEVEMENT: return "GUILD_ACHIEVEMENT";
+        case ChatType::BATTLENET: return "BATTLENET";
+        case ChatType::ARENA_POINTS: return "ARENA_POINTS";
         case ChatType::PARTY_LEADER: return "PARTY_LEADER";
         default: return "UNKNOWN";
     }

@@ -100,6 +100,40 @@ TEST_CASE("chat: a foreign whisper names its sender and reads as a whisper", "[c
     CHECK(data.message == "hello from afar");
 }
 
+TEST_CASE("chat: type 0x2F is BATTLENET and reads like a creature's line", "[chat]") {
+    // 0x0050be70 puts 0x2F with the creature-spoken types: the sender's
+    // name, then a target guid (and its name when it is not a player's).
+    Writer w;
+    header(w, 0x2F, 0x99);
+    w.sized("Friend");
+    w.u64(0);
+    w.sized("hi");
+    w.u8(0);
+    auto packet = w.packet();
+    MessageChatData data;
+    REQUIRE(MessageChatParser::parse(packet, data));
+    CHECK(packet.getRemainingSize() == 0);
+    CHECK(data.type == ChatType::BATTLENET);
+    CHECK(data.senderName == "Friend");
+    CHECK(data.message == "hi");
+    CHECK(std::string(getChatTypeString(ChatType::BATTLENET)) == "BATTLENET");
+    CHECK(std::string(getChatTypeString(ChatType::ARENA_POINTS)) == "ARENA_POINTS");
+}
+
+TEST_CASE("chat: a GM's name comes only before the general branch's types", "[chat]") {
+    // SMSG_GM_MESSAGECHAT is 0x0050be70 with the GM flag: the name is read
+    // for say, whisper, channel and the like, not for creature types, the
+    // foreign whisper, battleground announcements or achievements.
+    CHECK(gmChatCarriesSenderName(0x01));   // SAY
+    CHECK(gmChatCarriesSenderName(0x07));   // WHISPER
+    CHECK(gmChatCarriesSenderName(0x11));   // CHANNEL
+    CHECK_FALSE(gmChatCarriesSenderName(0x0C));  // MONSTER_SAY
+    CHECK_FALSE(gmChatCarriesSenderName(0x08));  // WHISPER_FOREIGN
+    CHECK_FALSE(gmChatCarriesSenderName(0x24));  // BG_SYSTEM_NEUTRAL
+    CHECK_FALSE(gmChatCarriesSenderName(0x2F));  // BATTLENET
+    CHECK_FALSE(gmChatCarriesSenderName(0x30));  // ACHIEVEMENT
+}
+
 TEST_CASE("raid info: each save carries its instance id and the seconds left", "[raidinfo]") {
     Writer w;
     w.u32(2);

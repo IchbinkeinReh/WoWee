@@ -1169,6 +1169,20 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                                             : "PLAYER_REGEN_ENABLED", {});
                 }
             }
+            // 0x0073c330: the player's pet (charmed or else summoned by the
+            // player) going in and out of combat, UNIT_FLAG_PET_IN_COMBAT
+            // (0x800), is PET_ATTACK_START / PET_ATTACK_STOP (0x005d30a0).
+            if (((oldFlags ^ val) & 0x800u) != 0) {
+                auto guidAt = [&](UF low) -> uint64_t {
+                    const uint16_t i = fieldIndex(low);
+                    if (i == 0xFFFF) return 0;
+                    return unit->getField(i) | (static_cast<uint64_t>(unit->getField(static_cast<uint16_t>(i + 1))) << 32);
+                };
+                uint64_t master = guidAt(UF::UNIT_FIELD_CHARMEDBY);
+                if (master == 0) master = guidAt(UF::UNIT_FIELD_SUMMONEDBY_LO);
+                if (master != 0 && master == owner_.getPlayerGuid())
+                    pendingEvents_.emit((val & 0x800u) ? "PET_ATTACK_START" : "PET_ATTACK_STOP", {});
+            }
             // Detect stun state change on local player
             constexpr uint32_t UNIT_FLAG_STUNNED = 0x00040000;
             if (block.guid == owner_.getPlayerGuid() && owner_.stunStateCallbackRef()) {

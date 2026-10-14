@@ -206,18 +206,19 @@ void ChatHandler::registerOpcodes(DispatchTable& table) {
     };
     table[Opcode::SMSG_GM_MESSAGECHAT] = [this](network::Packet& packet) {
         if (owner_.getState() != WorldState::IN_WORLD) return;
-        // SMSG_GM_MESSAGECHAT has the same header as SMSG_MESSAGECHAT
-        // (type[1]+lang[4]+senderGuid[8]+unk[4] = 17 bytes) followed by an
-        // extra gmNameLen[4]+gmName[N] before the type-specific body.
-        // Strip the GM name field to produce standard SMSG_MESSAGECHAT format.
-        if (!packet.hasRemaining(21)) return; // 17 header + 4 gmNameLen min
+        // SMSG_GM_MESSAGECHAT is SMSG_MESSAGECHAT read with the GM flag
+        // (0x0050ebc0 -> 0x0050be70(.., 1)): the sender's name comes after the
+        // header for the types read through the reader's general branch - not
+        // the creature-spoken types, the foreign whisper, the battleground
+        // announcements or the achievements - and the client keeps it as the
+        // line's sender rather than dropping it.
+        if (!packet.hasRemaining(17)) return;
         uint8_t  type       = packet.readUInt8();
         uint32_t lang       = packet.readUInt32();
         uint64_t senderGuid = packet.readUInt64();
         uint32_t unk        = packet.readUInt32();
-        uint32_t gmNameLen  = packet.readUInt32();
-        if (!packet.hasRemaining(gmNameLen)) return;
-        packet.setReadPos(packet.getReadPos() + gmNameLen); // skip gmName
+        std::string gmName;
+        if (gmChatCarriesSenderName(type) && !packet.readSizedString(gmName)) return;
 
         // Rebuild as regular SMSG_MESSAGECHAT (header + remaining body)
         network::Packet regular(0);
@@ -228,7 +229,7 @@ void ChatHandler::registerOpcodes(DispatchTable& table) {
         const auto body = packet.remainingData();
         if (!body.empty())
             regular.writeBytes(body.data(), body.size());
-        handleMessageChat(regular);
+        handleMessageChat(regular, gmName);
     };
     table[Opcode::SMSG_TEXT_EMOTE] = [this](network::Packet& packet) {
         if (owner_.getState() == WorldState::IN_WORLD) handleTextEmote(packet);
@@ -499,7 +500,7 @@ void ChatHandler::sendAddonMessage(ChatType type, const std::string& message, co
     owner_.getSocket()->send(packet);
 }
 
-void ChatHandler::handleMessageChat(network::Packet& packet) {
+void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& gmName) {
     LOG_DEBUG("Handling SMSG_MESSAGECHAT");
     if (chatPacketDiagEnabled()) {
         const auto& raw = packet.getData();
@@ -520,6 +521,7 @@ void ChatHandler::handleMessageChat(network::Packet& packet) {
                     "' receiver=", formatChatLogGuid(data.receiverGuid), " receiverName='", data.receiverName,
                     "' channel='", data.channelName, "' msg='", data.message, "'");
     }
+    if (!gmName.empty()) data.senderName = gmName;
     LOG_DEBUG("INCOMING CHAT: type=", static_cast<int>(data.type),
              " (", getChatTypeString(data.type), ") sender=0x", std::hex, data.senderGuid, std::dec,
              " '", data.senderName, "' msg='", data.message.substr(0, 60), "'");

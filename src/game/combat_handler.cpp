@@ -81,11 +81,24 @@ constexpr const char* kPetSpellFailedNames[] = {
 /// The on-screen line for the pet's failed cast, as 0x00805610 words it: its
 /// own ERR_PET_SPELL_* lines for the results it has one for, the cooldown and
 /// power lines, and otherwise the SPELL_FAILED_ text through
-/// ERR_SPELL_FAILED_S. Where the result names something not looked up here
-/// (an item class, a form, an area, a focus object, a mechanic, a custom
-/// error) the English this client had is kept rather than an unfilled %s.
-std::string petCastFailureMessage(const GameHandler& owner, uint32_t spellId, uint8_t result) {
+/// ERR_SPELL_FAILED_S. An area (0x65) or focus object (0x66) is named from
+/// the first id after the result, as SMSG_CAST_FAILED's are, and nothing is
+/// shown when it is not known. Where the result names something not looked up
+/// here (an item class, a form, a mechanic, a custom error) the English this
+/// client had is kept rather than an unfilled %s.
+std::string petCastFailureMessage(const GameHandler& owner, uint32_t spellId, uint8_t result,
+                                  uint32_t miscArg) {
     switch (result) {
+        case 0x65: case 0x66: {
+            const std::string name = result == 0x65 ? owner.getAreaName(miscArg)
+                                                    : owner.getSpellFocusName(miscArg);
+            if (miscArg == 0 || name.empty()) return {};
+            const std::string key = std::string("SPELL_FAILED_") + kPetSpellFailedNames[result];
+            const char* enUS = getSpellCastResultString(result);
+            const std::string text = chat_channels::luaFormat(
+                interfaceString(key.c_str(), enUS ? enUS : "%s"), {name});
+            return chat_channels::luaFormat(interfaceString("ERR_SPELL_FAILED_S", "%s"), {text});
+        }
         case 0x01: return interfaceString("ERR_PET_SPELL_AFFECTING_COMBAT", "Your pet is in combat");
         case 0x17: return interfaceString("ERR_PET_SPELL_DEAD", "Your pet is dead");
         case 0x38: return interfaceString("ERR_PET_SPELL_NOPATH", "No path available");
@@ -110,7 +123,7 @@ std::string petCastFailureMessage(const GameHandler& owner, uint32_t spellId, ui
         case 0x61: return interfaceString("ERR_PET_SPELL_OUT_OF_RANGE", "Your pet is out of range");
         case 0x67: return interfaceString("ERR_PET_SPELL_ROOTED", "Your pet can't move");
         case 0x6d: return interfaceString("ERR_PET_SPELL_TARGETS_DEAD", "Your pet's target is dead");
-        case 0x1d: case 0x1e: case 0x1f: case 0x5e: case 0x65: case 0x66: case 0x93: case 0xac: {
+        case 0x1d: case 0x1e: case 0x1f: case 0x5e: case 0x93: case 0xac: {
             const char* enUS = getSpellCastResultString(result);
             return enUS ? std::string(enUS) : std::string();
         }
@@ -1388,7 +1401,7 @@ void CombatHandler::handlePetTameFailure(network::Packet& packet) {
 void CombatHandler::handlePetActionFeedback(network::Packet& packet) {
     // On screen, as 0x005d4da0 words it: 1 ERR_PET_SPELL_DEAD; 2, with the
     // spell, ERR_NO_ATTACK_TARGET - or ERR_GENERIC_NO_VALID_TARGETS for a
-    // spell aimed at friends; 3 ERR_INVALID_ATTACK_TARGET; 4
+    // spell aimed at friends; 3, with the spell, ERR_INVALID_ATTACK_TARGET; 4
     // ERR_PET_SPELL_NOPATH; nothing else. These were English chat lines.
     if (!packet.hasRemaining(1)) return;
     const uint8_t msg = packet.readUInt8();
@@ -1402,11 +1415,18 @@ void CombatHandler::handlePetActionFeedback(network::Packet& packet) {
                 owner_.addUIError(interfaceString("ERR_GENERIC_NO_VALID_TARGETS", "No valid targets."));
             else
                 owner_.addUIError(interfaceString("ERR_NO_ATTACK_TARGET", "There is nothing to attack."));
+            // The spell's global cooldown comes off the pet's bar
+            // (0x00804780 -> 0x00804720), as for a failed pet cast.
+            if (auto* spells = owner_.getSpellHandler()) spells->notePetCastFailed(spellId);
             break;
         }
-        case 3:
+        case 3: {
             owner_.addUIError(interfaceString("ERR_INVALID_ATTACK_TARGET", "You cannot attack that target."));
+            // The spell follows the message here too, and is let go the same way.
+            const uint32_t spellId = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+            if (auto* spells = owner_.getSpellHandler()) spells->notePetCastFailed(spellId);
             break;
+        }
         case 4:
             owner_.addUIError(interfaceString("ERR_PET_SPELL_NOPATH", "No path available"));
             break;
@@ -1426,6 +1446,9 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         uint32_t spellId   = packet.readUInt32();
         uint8_t  reason    = (packet.hasRemaining(1))
                                  ? packet.readUInt8() : 0;
+        // Up to two ids after the result, read when present, as
+        // SMSG_CAST_FAILED's are (0x00806c30, 0x00809af0).
+        const uint32_t miscArg = packet.hasRemaining(4) ? packet.readUInt32() : 0;
         LOG_DEBUG("SMSG_PET_CAST_FAILED: spell=", spellId,
                   " reason=", static_cast<int>(reason));
         // 0x00806c30 -> 0x00804720: its global cooldown off the pet's
@@ -1435,7 +1458,7 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         // see petCastFailureMessage. This was "Spell: reason" in English, in
         // chat.
         if (reason != 0) {
-            const std::string errMsg = petCastFailureMessage(owner_, spellId, reason);
+            const std::string errMsg = petCastFailureMessage(owner_, spellId, reason, miscArg);
             if (!errMsg.empty()) owner_.addUIError(errMsg);
         }
     }
@@ -1501,25 +1524,19 @@ void CombatHandler::handlePetUnlearnedSpell(network::Packet& packet) {
 }
 
 void CombatHandler::handlePetMode(network::Packet& packet) {
-    // uint64 petGuid, uint32 mode
-    // mode bits: low byte = command state, next byte = react state
+    // 0x005d3630: the pet's guid and its mode word, kept only for the pet the
+    // player has, then PET_BAR_UPDATE. The word is SMSG_PET_SPELLS's: the
+    // react state in the low byte and the command above it (0x005a7980 and
+    // the ACT_COMMAND test beside it) - read the other way round, a change of
+    // stance lit the wrong button. Attacking is the pet's combat flag
+    // (UNIT_FLAG_PET_IN_COMBAT), not this.
     if (packet.hasRemaining(12)) {
         uint64_t modeGuid = packet.readUInt64();
         uint32_t mode     = packet.readUInt32();
         if (modeGuid == owner_.petGuidRef()) {
-            // COMMAND_ATTACK is 2. The pet frame lights its attack indicator on
-            // the start and clears it on the stop, so only the crossing matters
-            // - this packet arrives for every mode change, and firing on each
-            // would relight an indicator that is already lit.
-            constexpr uint8_t kCommandAttack = 2;
-            const bool wasAttacking = owner_.petCommandRef() == kCommandAttack;
-            owner_.petCommandRef() = static_cast<uint8_t>(mode & 0xFF);
-            owner_.petReactRef()   = static_cast<uint8_t>((mode >> 8) & 0xFF);
-            const bool nowAttacking = owner_.petCommandRef() == kCommandAttack;
-            if (nowAttacking != wasAttacking && owner_.addonEventCallbackRef()) {
-                owner_.addonEventCallbackRef()(
-                    nowAttacking ? "PET_ATTACK_START" : "PET_ATTACK_STOP", {});
-            }
+            owner_.petReactRef()   = static_cast<uint8_t>(mode & 0xFF);
+            owner_.petCommandRef() = static_cast<uint8_t>((mode >> 8) & 0xFF);
+            owner_.fireAddonEvent("PET_BAR_UPDATE", {});
             LOG_DEBUG("SMSG_PET_MODE: command=", static_cast<int>(owner_.petCommandRef()),
                       " react=", static_cast<int>(owner_.petReactRef()));
         }

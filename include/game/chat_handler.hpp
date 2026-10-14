@@ -151,7 +151,8 @@ private:
     /// short enough that a line does not feel withheld.
     static constexpr double kNameWaitSeconds = 1.0;
     // --- Packet handlers ---
-    void handleMessageChat(network::Packet& packet);
+    /// gmName: SMSG_GM_MESSAGECHAT's sender name, kept as the line's sender.
+    void handleMessageChat(network::Packet& packet, const std::string& gmName = {});
     /// Deliver a parsed chat line: resolve its sender, filter it, store it and
     /// tell the interface. Split from handleMessageChat so a line held back
     /// for its sender's name can be run through it again once the name lands.
