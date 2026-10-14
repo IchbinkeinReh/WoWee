@@ -262,7 +262,10 @@ public:
     /// world, where there is no turn to have been part way through.
     void snapCharacterBodyYaw() { characterBodyInstance_ = 0; }
 
-    // Screenshot capture - copies swapchain image to PNG file
+    /// Copy the frame on screen and write it to a PNG file. Only the copy
+    /// holds the frame; the conversion and the PNG's compression run on a
+    /// worker, so a screenshot no longer freezes the client. True once the
+    /// copy is taken; a failed write is logged.
     bool captureScreenshot(const std::string& outputPath);
 
     /// Start writing the screen, interface included, and what the client
@@ -952,6 +955,9 @@ private:
     LightingTune lightingTune_{};
     int rtDebugView_ = 0;
     float gameTimeOverride_ = -1.0f;
+    /// Screenshots being converted and written on a worker (captureScreenshot);
+    /// waited for at shutdown so none is cut off half written.
+    std::vector<std::future<void>> screenshotWrites_;
     void writeRtLightingBindings();
     VkExtent2D sceneRenderExtent() const;
     void recordRtLighting(VkImage sceneDepth, VkExtent2D sceneExtent, bool depthIsMsaa);

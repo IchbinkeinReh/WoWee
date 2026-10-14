@@ -1054,6 +1054,9 @@ void Renderer::shutdown() {
     // Once per initialize. A rebuild after a lost device that did not come
     // back leaves this shut down against a context that is gone, and the
     // application's own shutdown then asks again.
+    // A screenshot still being written is finished, not cut off.
+    for (auto& write : screenshotWrites_) write.wait();
+    screenshotWrites_.clear();
     if (!needsShutdown_) return;
     needsShutdown_ = false;
     syncWorldRecording();
@@ -1992,8 +1995,12 @@ bool Renderer::captureScreenshot(const std::string& outputPath) {
     bufInfo.size  = bufSize;
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
+    // Memory the CPU reads back from: cached, where CPU_ONLY's is write-
+    // combined and every byte read from it crawls - the colour swap and the
+    // PNG encoder's five filter passes a row over it held the frame for
+    // seconds.
     VmaAllocationCreateInfo allocCI{};
-    allocCI.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+    allocCI.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
 
     VkBuffer stagingBuf = VK_NULL_HANDLE;
     VmaAllocation stagingAlloc = VK_NULL_HANDLE;
@@ -2043,32 +2050,40 @@ bool Renderer::captureScreenshot(const std::string& outputPath) {
 
     vkCtx->endSingleTimeCommands(cmd);
 
-    // Map and convert BGRA → RGBA
+    // The pixels out in one pass, and the buffer given back at once.
+    std::vector<uint8_t> pixels(static_cast<size_t>(bufSize));
     void* mapped = nullptr;
-    vmaMapMemory(alloc, stagingAlloc, &mapped);
-    auto* pixels = static_cast<uint8_t*>(mapped);
-    for (uint32_t i = 0; i < w * h; ++i) {
-        std::swap(pixels[i * 4 + 0], pixels[i * 4 + 2]); // B ↔ R
+    if (vmaMapMemory(alloc, stagingAlloc, &mapped) != VK_SUCCESS) {
+        vmaDestroyBuffer(alloc, stagingBuf, stagingAlloc);
+        LOG_WARNING("Screenshot: could not map the staging buffer");
+        return false;
     }
-
-    // Ensure output directory exists
-    std::filesystem::path outPath(outputPath);
-    if (outPath.has_parent_path())
-        std::filesystem::create_directories(outPath.parent_path());
-
-    int ok = stbi_write_png(outputPath.c_str(),
-                            static_cast<int>(w), static_cast<int>(h),
-                            4, pixels, static_cast<int>(w * 4));
-
+    vmaInvalidateAllocation(alloc, stagingAlloc, 0, VK_WHOLE_SIZE);
+    std::memcpy(pixels.data(), mapped, pixels.size());
     vmaUnmapMemory(alloc, stagingAlloc);
     vmaDestroyBuffer(alloc, stagingBuf, stagingAlloc);
 
-    if (ok) {
-        LOG_INFO("Screenshot saved: ", outputPath);
-    } else {
-        LOG_WARNING("Screenshot: stbi_write_png failed for ", outputPath);
-    }
-    return ok != 0;
+    // The rest - BGRA to RGBA, the folder, the PNG's compression - on a
+    // worker, while the client goes on drawing. Finished writes are dropped
+    // from the list; the rest are waited for at shutdown.
+    std::erase_if(screenshotWrites_, [](const std::future<void>& f) {
+        return f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    });
+    screenshotWrites_.push_back(std::async(std::launch::async,
+        [pixels = std::move(pixels), w, h, outputPath]() mutable {
+            for (size_t i = 0; i + 3 < pixels.size(); i += 4) std::swap(pixels[i], pixels[i + 2]);
+            std::error_code ec;
+            const std::filesystem::path outPath(outputPath);
+            if (outPath.has_parent_path()) std::filesystem::create_directories(outPath.parent_path(), ec);
+            const int ok = stbi_write_png(outputPath.c_str(), static_cast<int>(w), static_cast<int>(h), 4,
+                                          pixels.data(), static_cast<int>(w * 4));
+            if (ok) {
+                LOG_INFO("Screenshot saved: ", outputPath);
+            } else {
+                LOG_WARNING("Screenshot: stbi_write_png failed for ", outputPath);
+            }
+        }));
+    return true;
 }
 
 void Renderer::resetCombatVisualState() {
