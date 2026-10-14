@@ -4427,9 +4427,14 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     LOG_DEBUG("SMSG_TRADE_STATUS_EXTENDED: ", ownSide ? "own" : "trader",
               " slots=", count, " gold=", gold);
 
+    // 0x00704680 reads slots until the packet ends and empties every slot it
+    // was not told about - a core that writes only the filled slots takes an
+    // item off the table by leaving it out, and kept here it stayed on show.
+    std::array<bool, TRADE_SLOT_COUNT> mentioned{};
     for (uint32_t i = 0; i < count; ++i) {
         if (!packet.hasRemaining(kSlotBytes)) { packet.skipAll(); break; }
         const uint8_t slotNum = packet.readUInt8();
+        if (slotNum < TRADE_SLOT_COUNT) mentioned[slotNum] = true;
         const uint32_t itemId    = packet.readUInt32();
         const uint32_t displayId = packet.readUInt32();
         const uint32_t stackCnt  = packet.readUInt32();
@@ -4453,6 +4458,12 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
         if (itemId != 0) owner_.ensureItemInfo(itemId);
     }
     packet.skipAll();
+    for (int slot = 0; slot < TRADE_SLOT_COUNT; ++slot) {
+        if (mentioned[static_cast<size_t>(slot)]) continue;
+        slots[slot].itemId = 0;
+        slots[slot].displayId = 0;
+        slots[slot].stackCount = 0;
+    }
 
     uint64_t& side = ownSide ? myTradeGold_ : peerTradeGold_;
     const bool goldChanged = (side != gold);

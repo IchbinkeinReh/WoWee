@@ -1509,5 +1509,41 @@ network::Packet InitiateTradePacket::build(uint64_t targetGuid) {
     return packet;
 }
 
+bool readInspectEnchantments(network::Packet& packet, std::array<uint32_t, 19>& items,
+                             std::array<uint16_t, 19>& permanentEnchants) {
+    // Read with only the mask and the enchantments, the random property, the
+    // creator and the suffix of each item were taken for the next one, and
+    // every slot after the first came out of the wrong bytes.
+    constexpr int kEquipmentSlots = 19;
+    constexpr int kEnchantmentSlots = 12;
+    bool sawGear = false;
+    if (!packet.hasRemaining(4)) return false;
+    const uint32_t slotMask = packet.readUInt32();
+    for (int slot = 0; slot < kEquipmentSlots; ++slot) {
+        if (!(slotMask & (1u << slot))) continue;
+        if (!packet.hasRemaining(6)) break;
+        // A negative entry is the item's id with a flag (0x006cdf30 stores
+        // the magnitude).
+        const int32_t entry = static_cast<int32_t>(packet.readUInt32());
+        items[slot] = static_cast<uint32_t>(entry < 0 ? -entry : entry);
+        sawGear = true;
+        const uint16_t enchantMask = packet.readUInt16();
+        for (int e = 0; e < kEnchantmentSlots; ++e) {
+            if (!(enchantMask & (1u << e))) continue;
+            if (!packet.hasRemaining(2)) return sawGear;
+            const uint16_t enchId = packet.readUInt16();
+            // Slot zero is the permanent enchant, which the paperdoll names.
+            if (e == 0) permanentEnchants[slot] = enchId;
+        }
+        if (!packet.hasRemaining(2)) break;
+        packet.readUInt16();                 // random property
+        if (!packet.hasFullPackedGuid()) break;
+        packet.readPackedGuid();             // creator
+        if (!packet.hasRemaining(4)) break;
+        packet.readUInt32();                 // suffix factor
+    }
+    return sawGear;
+}
+
 } // namespace game
 } // namespace wowee

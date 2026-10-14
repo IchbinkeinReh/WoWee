@@ -4,6 +4,7 @@
 // the chat bodies, 0x00501030 for the saves.
 #include <catch_amalgamated.hpp>
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -165,4 +166,32 @@ TEST_CASE("raid info: each save carries its instance id and the seconds left", "
     CHECK(saves[1].instanceId == 0x5678u);
     CHECK(saves[1].extended);
     CHECK(saves[1].resetSeconds == 7200u);
+}
+
+TEST_CASE("inspect: each item carries its property, creator and suffix", "[inspect]") {
+    // Player::BuildEnchantmentsInfoData: slot mask, then per item the entry,
+    // the enchantment mask and ids, the random property (u16), the creator's
+    // packed guid and the suffix factor (0x006cdf30).
+    Writer w;
+    w.u32((1u << 0) | (1u << 4));   // head and chest
+    w.u32(40546);                   // head
+    w.bytes.push_back(0x01); w.bytes.push_back(0x00);   // enchant slot 0
+    w.bytes.push_back(0xA4); w.bytes.push_back(0x0E);   // 3748
+    w.bytes.push_back(0x00); w.bytes.push_back(0x00);   // random property
+    w.u8(0);                        // no creator
+    w.u32(0);                       // suffix
+    w.u32(40550);                   // chest
+    w.bytes.push_back(0x00); w.bytes.push_back(0x00);   // no enchants
+    w.bytes.push_back(0x2A); w.bytes.push_back(0x00);   // random property 42
+    w.u8(0x01); w.u8(0x51);         // made by guid 0x51
+    w.u32(1500);                    // suffix factor
+    auto packet = w.packet();
+    std::array<uint32_t, 19> items{};
+    std::array<uint16_t, 19> enchants{};
+    REQUIRE(readInspectEnchantments(packet, items, enchants));
+    CHECK(packet.getRemainingSize() == 0);
+    CHECK(items[0] == 40546u);
+    CHECK(enchants[0] == 3748u);
+    CHECK(items[4] == 40550u);
+    CHECK(enchants[4] == 0u);
 }

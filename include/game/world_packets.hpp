@@ -3855,5 +3855,13 @@ public:
                                  uint32_t facialHairEntry, uint32_t skinColorEntry);
 };
 
+/// SMSG_INSPECT_TALENT's gear, after the talents (0x006cdf30): a mask of the
+/// nineteen equipment slots filled, then per slot the item, a mask of its
+/// enchantment slots and an id per set bit, the random property (u16), the
+/// creator's packed guid and the suffix factor. True when any slot was read.
+bool readInspectEnchantments(network::Packet& packet, std::array<uint32_t, 19>& items,
+                             std::array<uint16_t, 19>& permanentEnchants);
+
+
 } // namespace game
 } // namespace wowee

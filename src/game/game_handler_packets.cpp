@@ -1699,6 +1699,8 @@ void GameHandler::registerCoreOpcodes() {
             LOG_WARNING("SMSG_INIT_WORLD_STATES too short: ", packet.getSize(), " bytes");
             return;
         }
+        const uint32_t mapBefore = worldStateMapId_;
+        const uint32_t zoneBefore = worldStateZoneId_;
         worldStateMapId_ = packet.readUInt32();
         {
             uint32_t newZoneId = packet.readUInt32();
@@ -1735,6 +1737,11 @@ void GameHandler::registerCoreOpcodes() {
                 return;
             }
         }
+        // UPDATE_WORLD_STATES when anything moved (0x00526530, 0x2c2): the
+        // place, or any value. The battleground score and capture bars draw
+        // from it; told nothing on arrival, they kept the last place's
+        // figures until the first single update.
+        const auto before = worldStates_;
         worldStates_.clear();
         worldStates_.reserve(count);
         for (uint16_t i = 0; i < count; ++i) {
@@ -1742,6 +1749,8 @@ void GameHandler::registerCoreOpcodes() {
             uint32_t val = packet.readUInt32();
             worldStates_[key] = val;
         }
+        if (worldStates_ != before || worldStateMapId_ != mapBefore || worldStateZoneId_ != zoneBefore)
+            fireAddonEvent("UPDATE_WORLD_STATES", {});
     };
 
     // ---- SMSG_ACTION_BUTTONS ----
@@ -3017,11 +3026,14 @@ void GameHandler::registerRemainingOpcodes() {
             // row was earned beside it.
             achievements[id] = packet.readUInt32();
         }
+        // The criteria records are SMSG_ALL_ACHIEVEMENT_DATA's (0x005b34a0):
+        // packed counter, packed guid, flags, date and two timers - not the
+        // fixed sixteen bytes this stepped over them by.
         while (packet.hasRemaining(4)) {
             uint32_t id = packet.readUInt32();
             if (id == 0xFFFFFFFF) break;
-            if (!packet.hasRemaining(16)) break;
-            packet.readUInt64(); packet.readUInt32(); packet.readUInt32();
+            CriteriaProgressRecord rec;
+            if (!readCriteriaProgressTail(packet, rec)) break;
         }
         inspectedPlayerAchievements_[inspectedGuid] = std::move(achievements);
         LOG_INFO("SMSG_RESPOND_INSPECT_ACHIEVEMENTS: guid=0x", std::hex, inspectedGuid, std::dec,

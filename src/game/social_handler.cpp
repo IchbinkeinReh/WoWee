@@ -1429,36 +1429,10 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
         }
     }
 
-    // BuildEnchantmentsInfoData: a mask of which of the nineteen equipment
-    // slots are filled, then per filled slot the item's entry, a mask of which
-    // of its twelve enchantment slots are used, and an id per set bit.
-    //
-    // What was here read the slot mask and then one bare uint16 per set bit,
-    // so it took the low half of the first item's entry as that slot's enchant
-    // and drifted further out of step with every item after it.
-    constexpr int kEquipmentSlots = 19;
-    constexpr int kEnchantmentSlots = 12;
+    // BuildEnchantmentsInfoData, as 0x006cdf30 reads it.
     std::array<uint32_t, 19> itemEntries{};
     std::array<uint16_t, 19> enchantIds{};
-    bool sawGear = false;
-    if (packet.hasRemaining(4)) {
-        const uint32_t slotMask = packet.readUInt32();
-        for (int slot = 0; slot < kEquipmentSlots; ++slot) {
-            if (!(slotMask & (1u << slot))) continue;
-            if (!packet.hasRemaining(6)) break;
-            itemEntries[slot] = packet.readUInt32();
-            sawGear = true;
-            const uint16_t enchantMask = packet.readUInt16();
-            for (int e = 0; e < kEnchantmentSlots; ++e) {
-                if (!(enchantMask & (1u << e))) continue;
-                if (!packet.hasRemaining(2)) break;
-                const uint16_t enchId = packet.readUInt16();
-                // Slot zero is the permanent enchant, which is the one the
-                // paperdoll names.
-                if (e == 0) enchantIds[slot] = enchId;
-            }
-        }
-    }
+    const bool sawGear = readInspectEnchantments(packet, itemEntries, enchantIds);
 
     // A different player means the honour figures in hand are somebody else's.
     // The fields here are assigned one at a time rather than as a whole struct,
@@ -4351,6 +4325,20 @@ void SocialHandler::handleLfgRoleCheckUpdate(network::Packet& packet) {
                                          .typeId = static_cast<uint8_t>((entry >> 24) & 0xFFu)});
     }
     lfgRoleCheckMembers_ = packet.hasRemaining(1) ? packet.readUInt8() : 0;
+    // Each member: guid, whether they have chosen, their roles and level.
+    // The popup is for a player who has not chosen yet (0x0055bdc0, case
+    // 0x363) - the server restates the check as each member picks, and
+    // showing it whatever the player's own answer raised it again over a
+    // choice already made. The first member stands in when the player is
+    // not listed, as there.
+    bool selfChosen = false;
+    for (uint8_t i = 0; i < lfgRoleCheckMembers_ && packet.hasRemaining(14); ++i) {
+        const uint64_t guid = packet.readUInt64();
+        const bool chosen = packet.readUInt8() != 0;
+        packet.readUInt32();  // roles
+        packet.readUInt8();   // level
+        if (i == 0 || guid == owner_.getPlayerGuid()) selfChosen = chosen;
+    }
 
     if (roleCheckState == 1) lfgState_ = LfgState::Queued;
     else if (roleCheckState == 3) lfgState_ = LfgState::None;
@@ -4375,8 +4363,8 @@ void SocialHandler::handleLfgRoleCheckUpdate(network::Packet& packet) {
         // roles between them, aborted, or someone picking none.
         constexpr uint32_t kRoleCheckBeginning = 2;
         owner_.addonEventCallbackRef()(
-            roleCheckState == kRoleCheckBeginning ? "LFG_ROLE_CHECK_SHOW"
-                                                  : "LFG_ROLE_CHECK_HIDE", {});
+            roleCheckState == kRoleCheckBeginning && !selfChosen ? "LFG_ROLE_CHECK_SHOW"
+                                                                 : "LFG_ROLE_CHECK_HIDE", {});
     }
 }
 
