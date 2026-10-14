@@ -2797,6 +2797,20 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
         owner_.clearShapeshiftFormPending();
     }
 
+    // A dynamic object the client already has is not made again: its
+    // movement block is passed over (0x004d6c00 -> 0x004d3a80) and only its
+    // values are taken (0x004d53c0). Nothing moves one once it is made - its
+    // place is the create block's (0x004d3890, 0x00705230) and its fields
+    // hold none - so its model stays where it is.
+    if (block.objectType == ObjectType::DYNAMICOBJECT) {
+        if (auto known = entityManager.getEntity(block.guid);
+            known && known->getType() == ObjectType::DYNAMICOBJECT) {
+            for (const auto& field : block.fields) known->setField(field.first, field.second);
+            flushPendingEvents();
+            return;
+        }
+    }
+
     // 3a: Create entity from block type
     std::shared_ptr<Entity> entity = createEntityFromBlock(block);
 
