@@ -74,6 +74,9 @@ struct ShapeshiftFormRow {
     /// CreatureType (+0x10): what the form makes its unit, 0 for unchanged
     /// (0x0071f300).
     uint32_t creatureType = 0;
+    /// CombatRoundTime (+0x18): the form's swing, which a power cost of
+    /// Attributes 0x400 adds a hundredth of (0x008012f0).
+    uint32_t combatRoundTime = 0;
 };
 
 /// SPELL_AURA_MOD_SHAPESHIFT, the aura a form's spell applies (0x24).

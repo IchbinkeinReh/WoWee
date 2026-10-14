@@ -3582,12 +3582,14 @@ const ShapeshiftFormRow* GameHandler::shapeshiftFormRow(uint8_t form) const {
             // PresetSpellID[8] (0x008b8c60, +0x2c), where the layout has it.
             const uint32_t presetField = layout ? layout->tryField("PresetSpellID0") : 0xFFFFFFFFu;
             const uint32_t creatureTypeField = layout ? layout->tryField("CreatureType") : 0xFFFFFFFFu;
+            const uint32_t roundField = layout ? layout->tryField("CombatRoundTime") : 0xFFFFFFFFu;
             for (uint32_t row = 0; row < dbc->getRecordCount(); ++row) {
                 if (dbc->getUInt32(row, idField) != form) continue;
                 ShapeshiftFormRow r;
                 r.bonusActionBar = dbc->getUInt32(row, barField);
                 if (flagsField < dbc->getFieldCount()) r.flags = dbc->getUInt32(row, flagsField);
                 if (creatureTypeField < dbc->getFieldCount()) r.creatureType = dbc->getUInt32(row, creatureTypeField);
+                if (roundField < dbc->getFieldCount()) r.combatRoundTime = dbc->getUInt32(row, roundField);
                 if (presetField != 0xFFFFFFFFu && presetField + 8 <= dbc->getFieldCount()) {
                     for (uint32_t i = 0; i < 8; ++i) r.presetSpells[i] = dbc->getUInt32(row, presetField + i);
                 }
@@ -4281,6 +4283,12 @@ bool GameHandler::isInInstance() const {
     auto it = mapInstanceTypeCache_.find(currentMapId_);
     return it != mapInstanceTypeCache_.end() &&
            (it->second == 1 || it->second == 2);
+}
+
+int GameHandler::currentMapInstanceType() const {
+    loadMapNameCache();
+    auto it = mapInstanceTypeCache_.find(currentMapId_);
+    return it != mapInstanceTypeCache_.end() ? static_cast<int>(it->second) : -1;
 }
 
 bool GameHandler::isDynamicDifficultyMap() const {

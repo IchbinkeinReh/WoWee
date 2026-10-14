@@ -189,6 +189,15 @@ enum class UF : uint16_t {
     /// WotLK: a unit's casting speed as a factor, which shortens a pet's
     /// global cooldown (+0x128, 0x00805d70).
     UNIT_MOD_CAST_SPEED,
+    /// WotLK: what 0x00739650 and the power cost (0x008012f0) read - the
+    /// base mana and health (+0x1c8, +0x1cc), the cost modifier and
+    /// multiplier per school (+500, +0x210: UNIT_END-relative 131 and 138),
+    /// and PLAYER_FIELD_BYTES (+0x1008 +0x1064).
+    UNIT_FIELD_BASE_MANA,
+    UNIT_FIELD_BASE_HEALTH,
+    UNIT_FIELD_POWER_COST_MODIFIER,
+    UNIT_FIELD_POWER_COST_MULTIPLIER,
+    PLAYER_FIELD_BYTES,
     /// WotLK: the unit the player looks through - a vehicle it drives, a
     /// possessed unit (+0x1008 +0x770, 0x004f7310).
     PLAYER_FARSIGHT,

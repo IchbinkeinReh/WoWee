@@ -1924,6 +1924,16 @@ target_link_libraries(test_spell_unit_target PRIVATE catch2_main)
 add_test(NAME spell_unit_target COMMAND test_spell_unit_target)
 register_test_target(test_spell_unit_target)
 
+# ── test_cast_checks ────────────────────────────────────────
+add_executable(test_cast_checks
+    test_cast_checks.cpp
+)
+target_include_directories(test_cast_checks PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_cast_checks SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_cast_checks PRIVATE catch2_main)
+add_test(NAME cast_checks COMMAND test_cast_checks)
+register_test_target(test_cast_checks)
+
 # ── test_go_interaction_anim ────────────────────────────────
 add_executable(test_go_interaction_anim
     test_go_interaction_anim.cpp

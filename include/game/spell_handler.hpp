@@ -6,6 +6,7 @@
 #include "game/spell_mods.hpp"
 #include "game/ground_target.hpp"
 #include "game/spell_history.hpp"
+#include "game/cast_checks.hpp"
 #include "game/handler_types.hpp"
 #include "audio/spell_sound_manager.hpp"
 #include "network/packet.hpp"
@@ -24,6 +25,7 @@ namespace wowee {
 namespace game {
 
 class GameHandler;
+class Entity;
 
 class SpellHandler {
 public:
@@ -359,9 +361,6 @@ public:
     /// Spell.dbc RangeIndex resolved via SpellRange.dbc, in yards. Melee ("Combat
     /// Range") is 5; self-only is 0; negative means SpellRange.dbc was unavailable.
     [[nodiscard]] float getSpellMaxRange(uint32_t spellId) const;
-    /// True for "Self Only" range spells (shouts, self-buffs): they always land on
-    /// the caster, so they take no explicit target and skip melee range checks.
-    [[nodiscard]] bool isSelfCastSpell(uint32_t spellId) const;
     /// Maps a superseded spell rank to the highest rank we actually know. Returns
     /// spellId unchanged when it is already known, or has no known same-name rank.
     [[nodiscard]] uint32_t resolveHighestKnownRank(uint32_t spellId) const;
@@ -592,6 +591,23 @@ private:
     /// held to the reach (0x00809610), then 0x00739650. False, said, where
     /// the cast is refused.
     bool castChecksPass(uint32_t spellId, uint64_t targetGuid);
+    /// What 0x00739650 asks of the player for the spell (cast_check::Caster).
+    cast_check::Caster casterState(uint32_t spellId, const Entity& player);
+    /// 0x008012f0: the spell's power cost to the player.
+    int32_t powerCost(uint32_t spellId, const Entity& player, int depth) const;
+    /// 0x007ff180 != 0: whether the spell takes time to cast.
+    bool hasCastTime(uint32_t spellId, const Entity& player) const;
+    /// 0x007283a0: an aura of the player's of the type, on, for the spell.
+    bool playerAuraAffects(uint32_t auraType, uint32_t spellId) const;
+    /// 0x00812410's SupercededBySpell for the player's race and class, 0 for none.
+    uint32_t supersededBy(uint32_t spellId) const;
+    void loadAreaGroups() const;
+    mutable bool castTimesLoaded_ = false;
+    mutable std::unordered_map<uint32_t, std::array<int32_t, 3>> castTimes_;  ///< SpellCastTimes: base, per level, minimum
+    mutable bool supersedeLoaded_ = false;
+    mutable std::unordered_multimap<uint32_t, std::array<uint32_t, 3>> supersedes_;  ///< spell: race mask, class mask, next
+    mutable bool areaGroupsLoaded_ = false;
+    mutable std::unordered_map<uint32_t, std::array<uint32_t, 7>> areaGroups_;  ///< six areas, then the next group
     /// ChrClasses SpellClassSet for the player's class (0x008007a0), and
     /// the class it was read for.
     mutable uint32_t classSpellFamily_ = 0;

@@ -40,6 +40,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <iterator>
 #include <sstream>
 
@@ -915,6 +916,50 @@ uint64_t entityGuidField(const Entity& e, UF low) {
     return e.getField(idx) | (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
 }
 
+/// Spell.dbc as 0x00739650 reads it (cast_check::Spell).
+cast_check::Spell checkSpellOf(const GameHandler::SpellNameEntry& e) {
+    cast_check::Spell s;
+    s.attr = e.attr;
+    s.attrEx = e.attrEx;
+    s.attrEx2 = e.attrEx2;
+    s.attrEx3 = e.attrEx3;
+    s.attrEx4 = e.attrEx4;
+    s.attrEx5 = e.attrEx5;
+    s.attrEx6 = e.attrEx6;
+    s.attrEx7 = e.attrEx7;
+    s.dispel = e.dispelType;
+    s.mechanic = e.mechanic;
+    s.schoolMask = e.schoolMask;
+    for (int w = 0; w < 2; ++w) {
+        s.stances[w] = e.stances[w];
+        s.stancesNot[w] = e.stancesNot[w];
+    }
+    s.targets = e.targetFlags;
+    s.casterAuraState = e.casterAuraState;
+    s.casterAuraStateNot = e.casterAuraStateNot;
+    s.casterAuraSpell = e.casterAuraSpell;
+    s.excludeCasterAuraSpell = e.excludeCasterAuraSpell;
+    s.recoveryTime = static_cast<int32_t>(e.recoveryMs);
+    s.categoryRecoveryTime = static_cast<int32_t>(e.categoryRecoveryMs);
+    s.interruptFlags = e.interruptFlags;
+    s.auraInterruptFlags = e.auraInterruptFlags;
+    s.channelInterruptFlags = e.channelInterruptFlags;
+    for (int k = 0; k < 3; ++k) {
+        s.effect[k] = e.effectIds[k];
+        s.effectMechanic[k] = e.effectMechanic[k];
+        s.implicitA[k] = e.implicitTargetsA[k];
+        s.implicitB[k] = e.implicitTargetsB[k];
+        s.aura[k] = e.effectAuraIds[k];
+        s.misc[k] = e.effectMiscValues[k];
+        s.trigger[k] = e.effectTriggerSpell[k];
+    }
+    s.preventionType = e.preventionType;
+    s.minFactionId = e.minFactionId;
+    s.minReputation = e.minReputation;
+    s.areaGroupId = e.areaGroupId;
+    return s;
+}
+
 uint32_t entityField(const Entity& e, UF f) {
     const uint16_t idx = fieldIndex(f);
     return idx != 0xFFFF ? e.getField(idx) : 0u;
@@ -1425,30 +1470,10 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         return;
     }
 
-    // Casting any spell while mounted → dismount first, then cast (retail
-    // behavior: the mount is a cancellable aura that a cast removes). Exception:
-    // while actively flying (airborne on a flying mount) retail blocks the cast
-    // entirely rather than dropping the player out of the sky, so bail there.
-    // dismount() clears the local mount state synchronously, so control falls
-    // through and the cast is sent from the ground in the same action.
+    // A spell cast while mounted: refused as NOT_MOUNTED where the player
+    // would not get down (0x00739650, castChecksPass), the mount left as
+    // it is sent where it would (0x0080ac90, sendPlayerCast).
     if (owner_.isMounted()) {
-        if (owner_.isPlayerFlying()) {
-            // Auto Dismount in Flight, which the player is asked about and
-            // which was decided for them: casting while airborne was always
-            // refused, so the switch moved and nothing followed it.
-            //
-            // Refusing is the default and stays the default - it is the
-            // sensible one, since the alternative is falling - but with the
-            // setting on this dismounts and lets the cast go, which is what
-            // the option is for and what the real client does with it.
-            if (addons::storedCVarValue("autoDismountFlying", "0") == "0") {
-                // SPELL_FAILED_NOT_MOUNTED, which 0x0080ac90 gives when
-                // 0x0071b0c0 will not dismount. This was English.
-                owner_.addUIError(castFailureMessage(owner_, spellId, 0x40, -1));
-                return;
-            }
-            owner_.dismount();
-        }
         // Pressing the mount you are already riding dismounts you and stops
         // there. Falling through to the cast would put the player straight back
         // on the same mount, so the button appeared to do nothing.
@@ -1464,8 +1489,8 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         const bool ridingThisMount =
             spellId != 0 && (spellId == owner_.getMountAuraSpellId() ||
                              owner_.playerCarriesAura(spellId));
-        owner_.dismount();
         if (ridingThisMount) {
+            owner_.dismount();
             LOG_INFO("Dismount via mount action: spell=", spellId);
             return;
         }
@@ -1498,54 +1523,6 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         return;
     }
 
-    // A spell with a cast time cannot be started while moving, and the answer
-    // is to refuse it - not to stop the player.
-    //
-    // This used to clear the movement flags and send MSG_MOVE_STOP so the
-    // server would accept the cast, on the reading that a server rejecting a
-    // cast-time spell while moving was an obstacle. It is the rule: Spell::
-    // CheckCast answers SPELL_FAILED_MOVING for a cast-time spell from a moving
-    // player, and a mount aura carries AURA_INTERRUPT_FLAG_NOT_SEATED so it is
-    // refused as well. Stopping the player first meant a mount key pressed at a
-    // run halted them and mounted them, which no real client does - reported
-    // from play as being able to mount while running.
-    //
-    // Instant spells are unaffected, which is what keeps casting on the move
-    // working for everything that should.
-    // Named rather than 0x0F, which is the same four bits and says nothing
-    // about which.
-    constexpr uint32_t kHorizontalMove =
-        static_cast<uint32_t>(MovementFlags::FORWARD) |
-        static_cast<uint32_t>(MovementFlags::BACKWARD) |
-        static_cast<uint32_t>(MovementFlags::STRAFE_LEFT) |
-        static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT);
-    const uint32_t moveFlags = owner_.movementInfoRef().flags;
-    const bool isMoving = (moveFlags & kHorizontalMove) != 0;
-    if (isMoving && owner_.getSpellData(spellId).castTimeMs > 0) {
-        // Logged with the flags that decided it.
-        //
-        // The server answers SPELL_FAILED_MOVING in the same words, so a player
-        // who is standing still and told they are moving cannot tell which of
-        // the two said it. This line names the refusal as ours and prints the
-        // bits behind it: a flag still set with no key held is a stop that was
-        // never sent, and the log says which direction it was.
-        LOG_WARNING("Cast refused as moving: spell ", spellId,
-                    " castTime ", owner_.getSpellData(spellId).castTimeMs, "ms",
-                    " flags=0x", std::hex, moveFlags, std::dec,
-                    (moveFlags & static_cast<uint32_t>(MovementFlags::FORWARD)      ? " FORWARD" : ""),
-                    (moveFlags & static_cast<uint32_t>(MovementFlags::BACKWARD)     ? " BACKWARD" : ""),
-                    (moveFlags & static_cast<uint32_t>(MovementFlags::STRAFE_LEFT)  ? " STRAFE_LEFT" : ""),
-                    (moveFlags & static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT) ? " STRAFE_RIGHT" : ""));
-        // SPELL_FAILED_MOVING, as 0x0080ac90 refuses a cast on the move.
-        // This was English.
-        owner_.raiseUiError(castFailureMessage(owner_, spellId, kSpellFailedMoving, -1));
-        return;
-    }
-
-    // Remembered so that, if this cast turns out to be what mounted the player,
-    // the mount aura can be identified exactly rather than guessed at.
-    if (!owner_.isMounted()) lastGroundCastSpellId_ = spellId;
-
     // Spells cast at an item - Disenchant, Prospecting, Milling, the enchant
     // formulas - carry TARGET_FLAG_ITEM in Spell.dbc's Targets. Sending one with
     // no item in SpellCastTargets is what made the server answer "can't be
@@ -1574,6 +1551,39 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
 
 void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // 0x0080ac90 before it sends: the player stands (0x0071a360) unless
+    // Attributes 0x8000000, gets down (0x007412e0) unless Attributes
+    // 0x1000000, and leaves a form the spell may not be cast in
+    // (0x00726ce0) - what 0x00739650 let go on autoStand, autoDismount and
+    // autoUnshift.
+    if (const auto it = owner_.spellNameCacheRef().find(spellId); it != owner_.spellNameCacheRef().end()) {
+        const auto& e = it->second;
+        const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+        if (player && player->isUnit()) {
+            const uint16_t b1 = fieldIndex(UF::UNIT_FIELD_BYTES_1);
+            if ((e.attr & 0x8000000u) == 0 && b1 != 0xFFFF && (player->getField(b1) & 0xFFu) != 0)
+                owner_.setStandState(0);
+            if ((e.attr & 0x1000000u) == 0 && owner_.isMounted()) owner_.dismount();
+            const auto c = casterState(spellId, *player);
+            if (cast_check::formFailure(checkSpellOf(e), c) == cast_check::kNotShapeshift) {
+                // The form's aura: one that is SHAPESHIFT (36) to the form.
+                for (const auto& a : playerAuras_) {
+                    const auto f = a.spellId != 0 ? owner_.spellNameCacheRef().find(a.spellId)
+                                                  : owner_.spellNameCacheRef().end();
+                    if (f == owner_.spellNameCacheRef().end()) continue;
+                    for (int k = 0; k < 3; ++k) {
+                        if (f->second.effectAuraIds[k] == 36 && f->second.effectMiscValues[k] == c.form) {
+                            cancelAura(a.spellId);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Remembered so that, if this cast turns out to be what mounted the player,
+    // the mount aura can be identified exactly rather than guessed at.
+    if (!owner_.isMounted()) lastGroundCastSpellId_ = spellId;
     const bool fishingCast = spellclass::isFishingCast(spellId);
     // A spell that lands on you never turns you. Facing is worked out from the
     // vector between you and your target, and when the target is you that
@@ -1638,16 +1648,357 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid) {
     const uint64_t unit = kinds.pet ? owner_.getPetGuid() : asked;
     if (kinds.mask != 0 && unit != 0 && takeUnit(spellId, owner_.getPlayerGuid(), unit, kinds.mask, true).outOfReach)
         return false;
-    // 0x00739650: Attributes 0x10000000 is not cast by a caster in combat
-    // (UNIT_FIELD_FLAGS 0x80000) - unless an aura of its lets it
-    // (0x0072aaf0) - SPELL_FAILED_AFFECTING_COMBAT.
+    // 0x00739650.
     const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
-    if ((e.attr & 0x10000000u) != 0 && player && (entityField(*player, UF::UNIT_FIELD_FLAGS) & 0x80000u) != 0 &&
-        !auraLetsSpell(owner_.getPlayerGuid(), spellId)) {
-        owner_.raiseUiError(castFailureMessage(owner_, spellId, 0x01, -1));
-        return false;
+    if (!player || !player->isUnit()) return true;
+    const auto r = cast_check::check(checkSpellOf(e), casterState(spellId, *player));
+    switch (r.error) {
+        case cast_check::GameError::SpellAlreadyKnown:
+            // ERR_SPELL_ALREADY_KNOWN_S with the spell's name (0x005216f0 0x36).
+            owner_.addUIError(interfaceFormat("ERR_SPELL_ALREADY_KNOWN_S", "You already know %s.",
+                                              {getSpellName(r.errorSpell)}));
+            return false;
+        case cast_check::GameError::TameFailedTooMany:
+            // 0x00800390(2): ERR_TAME_FAILED with PETTAME_TOOMANY.
+            owner_.addUIError(interfaceFormat("ERR_TAME_FAILED", "%s",
+                                              {interfaceString("PETTAME_TOOMANY", "You have too many pets.")}));
+            return false;
+        case cast_check::GameError::None: break;
     }
-    return true;
+    if (r.code == 0) return true;
+    owner_.raiseUiError(castFailureMessage(owner_, spellId, r.code, static_cast<int32_t>(e.powerType), r.arg));
+    return false;
+}
+
+bool SpellHandler::playerAuraAffects(uint32_t auraType, uint32_t spellId) const {
+    const auto own = owner_.spellNameCacheRef().find(spellId);
+    if (own == owner_.spellNameCacheRef().end()) return false;
+    const auto& spell = own->second;
+    // 0x007283a0: an aura of the player's of the type, its effect on, whose
+    // class mask meets the spell's (0x007fdec0).
+    for (const auto& a : playerAuras_) {
+        if (a.spellId == 0) continue;
+        const auto it = owner_.spellNameCacheRef().find(a.spellId);
+        if (it == owner_.spellNameCacheRef().end() || it->second.spellFamily != spell.spellFamily) continue;
+        for (int k = 0; k < 3; ++k) {
+            if (it->second.effectAuraIds[k] != auraType || (a.flags & (1u << k)) == 0) continue;
+            for (int w = 0; w < 3; ++w) {
+                if ((it->second.effectClassMask[k][w] & spell.spellFamilyFlags[w]) != 0) return true;
+            }
+        }
+    }
+    return false;
+}
+
+int32_t SpellHandler::powerCost(uint32_t spellId, const Entity& player, int depth) const {
+    const auto own = owner_.spellNameCacheRef().find(spellId);
+    if (own == owner_.spellNameCacheRef().end()) return 0;
+    const auto& e = own->second;
+    // 0x008012f0 for the player: ManaCost, plus ManaCostPerLevel for each
+    // level past BaseLevel (to MaxLevel), plus ManaCostPercentage of the
+    // base power (0x0071b770).
+    const auto field = [&](UF f, uint32_t offset = 0) {
+        const uint16_t i = fieldIndex(f);
+        return i != 0xFFFF ? player.getField(static_cast<uint16_t>(i + offset)) : 0u;
+    };
+    int32_t level = static_cast<int32_t>(field(UF::UNIT_FIELD_LEVEL));
+    if (e.maxLevel > 0 && e.maxLevel < level) level = e.maxLevel;
+    if (level < 0) level = 0;
+    int32_t cost = (level - e.baseLevel) * e.manaCostPerLevel + e.manaCost;
+    if (e.manaCostPct != 0) {
+        int32_t base = 0;
+        switch (static_cast<int32_t>(e.powerType)) {
+            case 0: base = static_cast<int32_t>(field(UF::UNIT_FIELD_BASE_MANA)); break;
+            case -2: base = static_cast<int32_t>(field(UF::UNIT_FIELD_BASE_HEALTH)); break;
+            case 1: case 6: base = 1000; break;
+            case 2: case 3: base = 100; break;
+            case 5: base = 1; break;
+            default: break;
+        }
+        cost += base * e.manaCostPct / 100;
+    }
+    // Attributes 0x400: a hundredth of the form's swing, else the weapon's
+    // (the off hand's with AttributesEx3 0x1000000), 2000 where it has none
+    // to use.
+    if ((e.attr & 0x400u) != 0) {
+        uint32_t swing = 0;
+        const uint8_t form = static_cast<uint8_t>(field(UF::UNIT_FIELD_BYTES_2) >> 24);
+        if (const auto* row = owner_.shapeshiftFormRow(form)) swing = row->combatRoundTime;
+        if (swing == 0) {
+            const bool offhand = (e.attrEx3 & 0x1000000u) != 0;
+            const uint64_t guid = owner_.getEquipSlotGuid(static_cast<int>(offhand ? EquipSlot::OFF_HAND : EquipSlot::MAIN_HAND));
+            const auto it = owner_.onlineItemsRef().find(guid);
+            const bool disarmed = offhand ? (field(UF::UNIT_FIELD_FLAGS_2) & 0x80u) != 0
+                                          : (field(UF::UNIT_FIELD_FLAGS) & 0x200000u) != 0;
+            const auto* info = it != owner_.onlineItemsRef().end() ? owner_.getItemInfo(it->second.entry) : nullptr;
+            // 0x006d71a0: not broken.
+            const bool usable = it != owner_.onlineItemsRef().end() &&
+                                (it->second.maxDurability == 0 || it->second.curDurability != 0);
+            swing = info && usable && !disarmed ? info->delayMs : 2000u;
+        }
+        cost += static_cast<int32_t>(swing / 100);
+    }
+    // The school's cost modifier and multiplier, the least of its schools
+    // (0x005ee050, 0x005ee0b0).
+    int32_t mod = 0;
+    float mult = 0.0f;
+    bool any = false;
+    for (uint32_t school = 0; school < 7; ++school) {
+        if ((e.schoolMask & (1u << school)) == 0) continue;
+        const int32_t m = static_cast<int32_t>(field(UF::UNIT_FIELD_POWER_COST_MODIFIER, school));
+        float x = 0.0f;
+        const uint32_t raw = field(UF::UNIT_FIELD_POWER_COST_MULTIPLIER, school);
+        std::memcpy(&x, &raw, sizeof x);
+        if (!any || m < mod) mod = m;
+        if (!any || x < mult) mult = x;
+        any = true;
+    }
+    cost = static_cast<int32_t>(std::nearbyint(static_cast<float>(mod + cost) * (mult + 1.0f)));
+    // Cost modifiers (op 14).
+    const auto mods = spellModifiers(spellId, 14);
+    if (mods.any) cost = (cost + mods.flat) * mods.pct / 100;
+    // SUMMON_ALL_TOTEMS (97): with it the totems on its action buttons
+    // (from 132 on, flagged AttributesEx7 0x20).
+    if (depth == 0) {
+        for (int k = 0; k < 3; ++k) {
+            if (e.effectIds[k] != 97) continue;
+            const uint32_t first = e.effectMiscValues[k], count = e.effectMiscValuesB[k];
+            if (first >= 12 || first + count >= 13) continue;
+            for (uint32_t n = 0; n < count; ++n) {
+                const auto& slot = owner_.getActionBar()[132 + first + n];
+                if (slot.type != ActionBarSlot::SPELL || slot.id == 0) continue;
+                const auto t = owner_.spellNameCacheRef().find(slot.id);
+                if (t != owner_.spellNameCacheRef().end() && (t->second.attrEx7 & 0x20u) != 0)
+                    cost += powerCost(slot.id, player, depth + 1);
+            }
+        }
+    }
+    return cost < 1 ? 0 : cost;
+}
+
+bool SpellHandler::hasCastTime(uint32_t spellId, const Entity& player) const {
+    const auto own = owner_.spellNameCacheRef().find(spellId);
+    if (own == owner_.spellNameCacheRef().end()) return false;
+    const auto& e = own->second;
+    // 0x007ff180: SpellCastTimes' base and per level past BaseLevel, at
+    // least its minimum, through the cast time modifiers (op 10), the
+    // casting speed unless an ability, a trade spell or AttributesEx3
+    // 0x20000000, half a second more for a ranged one.
+    if (!castTimesLoaded_) {
+        castTimesLoaded_ = true;
+        auto* am = owner_.services().assetManager;
+        if (auto dbc = am && am->isInitialized() ? am->loadDBC("SpellCastTimes.dbc") : nullptr;
+            dbc && dbc->isLoaded() && dbc->getFieldCount() >= 4) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                castTimes_[dbc->getUInt32(i, 0)] = {static_cast<int32_t>(dbc->getUInt32(i, 1)),
+                                                    static_cast<int32_t>(dbc->getUInt32(i, 2)),
+                                                    static_cast<int32_t>(dbc->getUInt32(i, 3))};
+            }
+        }
+    }
+    const auto row = castTimes_.find(e.castingTimeIndex);
+    if (row == castTimes_.end()) return false;
+    const uint16_t levelIdx = fieldIndex(UF::UNIT_FIELD_LEVEL);
+    int32_t level = levelIdx != 0xFFFF ? static_cast<int32_t>(player.getField(levelIdx)) : 0;
+    if (e.maxLevel > 0 && e.maxLevel < level) level = e.maxLevel;
+    int32_t t = (level - e.baseLevel) * row->second[1] + row->second[0];
+    if (t < row->second[2]) t = row->second[2];
+    const auto mods = spellModifiers(spellId, 10);
+    if (mods.any) t = (t + mods.flat) * mods.pct / 100;
+    if ((e.attr & 0x30u) == 0 && (e.attrEx3 & 0x20000000u) == 0 && t > 0) {
+        const float speed = castSpeedOf(player);
+        if (speed != 1.0f) t = static_cast<int32_t>(std::nearbyint(static_cast<float>(t) * speed));
+    }
+    if ((e.attr & 0x2u) != 0) t += 500;
+    return t > 0;
+}
+
+cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& player) {
+    const auto& e = owner_.spellNameCacheRef().find(spellId)->second;
+    namespace cc = cast_check;
+    const auto field = [&](UF f) {
+        const uint16_t i = fieldIndex(f);
+        return i != 0xFFFF ? player.getField(i) : 0u;
+    };
+    const auto& unit = static_cast<const Unit&>(player);
+    cc::Caster c;
+    c.mapType = owner_.currentMapInstanceType();
+    // 0x00809000: the spell's history; WoWee keeps the cooldowns the
+    // server and the casts start, not the global cooldown's.
+    c.notReady = getSpellCooldown(spellId) > 0.0f;
+    // 0x008017e0: the cost against the power - health under it, runes
+    // as they stand (not kept: let).
+    {
+        const int32_t type = static_cast<int32_t>(e.powerType);
+        const int32_t cost = powerCost(spellId, player, 0);
+        if (type == -2) c.enoughPower = cost < static_cast<int32_t>(unit.getHealth());
+        else if (const uint16_t power = fieldIndex(UF::UNIT_FIELD_POWER1); power != 0xFFFF && type >= 0 && type < 7 && type != 5)
+            c.enoughPower = static_cast<int32_t>(player.getField(static_cast<uint16_t>(power + type))) >= cost;
+    }
+    // LEARN_SPELL's spell known, or one SkillLineAbility supersedes it with
+    // (0x007260e0, 0x00726160).
+    for (int k = 0; k < 3; ++k) {
+        const uint32_t learn = e.effectTriggerSpell[k];
+        if (e.effectIds[k] != 36 || learn == 0) continue;
+        bool known = knownSpells_.count(learn) != 0;
+        for (uint32_t next = supersededBy(learn), n = 0; !known && next != 0 && n < 32; next = supersededBy(next), ++n)
+            known = knownSpells_.count(next) != 0;
+        c.learnKnown[k] = known;
+    }
+    c.hasCharm = entityGuidField(player, UF::UNIT_FIELD_CHARM) != 0;
+    c.hasSummon = entityGuidField(player, UF::UNIT_FIELD_SUMMON) != 0;
+    c.alive = unit.getHealth() > 0;
+    c.playerBytes = static_cast<uint8_t>(field(UF::PLAYER_FIELD_BYTES) & 0xFFu);
+    c.charmedByOther = entityGuidField(player, UF::UNIT_FIELD_CHARMEDBY) != 0;
+    c.unitFlags = field(UF::UNIT_FIELD_FLAGS);
+    // The holds' aura walks (0x00804430) over the player's auras.
+    const cc::Spell cast = checkSpellOf(e);
+    std::vector<cc::Spell> auraSpells;
+    for (const auto& a : playerAuras_) {
+        if (a.spellId == 0) continue;
+        const auto it = owner_.spellNameCacheRef().find(a.spellId);
+        if (it != owner_.spellNameCacheRef().end()) auraSpells.push_back(checkSpellOf(it->second));
+    }
+    const auto auras = [&](auto&& fn) {
+        for (const auto& a : auraSpells)
+            if (!fn(a)) return;
+    };
+    c.charm = cc::hold(cast, auras, {6u, 177u, 2u});
+    c.stun = cc::hold(cast, auras, {12u});
+    c.silence = cc::hold(cast, auras, {27u, 60u});
+    c.pacify = cc::hold(cast, auras, {25u, 60u});
+    c.fear = cc::hold(cast, auras, {7u});
+    c.confuse = cc::hold(cast, auras, {5u});
+    const uint32_t bytes2 = field(UF::UNIT_FIELD_BYTES_2);
+    c.sheath = static_cast<uint8_t>(bytes2 & 0xFFu);
+    c.mounted = owner_.isMounted();
+    const bool flying = (owner_.movementInfoRef().flags & 0x2000000u) != 0;
+    c.wouldDismount = unit_target::wouldDismount(c.unitFlags, flying,
+                                                 addons::storedCVarValue("autoDismount", "1") != "0",
+                                                 addons::storedCVarValue("autoDismountFlying", "0") != "0");
+    const uint32_t bytes1 = field(UF::UNIT_FIELD_BYTES_1);
+    c.standState = static_cast<uint8_t>(bytes1 & 0xFFu);
+    c.wouldStand = addons::storedCVarValue("autoStand", "1") != "0";
+    // 0x004c9850: 05:30 to 21:00 of the game's clock, in whole minutes.
+    if (const float h = owner_.getGameTime(); h >= 0.0f) {
+        const int minute = static_cast<int>(h * 60.0f) % (24 * 60);
+        c.daytime = minute >= 5 * 60 + 30 && minute < 21 * 60 ? 1 : 0;
+    }
+    c.moveFlags = owner_.movementInfoRef().flags;
+    c.hasCastTime = hasCastTime(spellId, player);
+    c.form = static_cast<uint8_t>(bytes2 >> 24);
+    if (const auto* row = owner_.shapeshiftFormRow(c.form)) {
+        c.formRow = true;
+        c.formFlags = row->flags;
+    }
+    c.ignoresForm = playerAuraAffects(275, spellId);
+    // 0x0071b130: autoUnshift, off a taxi, not flying unless
+    // autoDismountFlying, from a form not flagged 0x100.
+    c.wouldUnshift = (c.unitFlags & 0x100000u) == 0 && addons::storedCVarValue("autoUnshift", "1") != "0" &&
+                     (!flying || addons::storedCVarValue("autoDismountFlying", "0") != "0") &&
+                     (!c.formRow || (c.formFlags & 0x100u) == 0);
+    c.visFlags = static_cast<uint8_t>((bytes1 >> 16) & 0xFFu);
+    c.ignoresAuraState = auraLetsSpell(owner_.getPlayerGuid(), spellId);
+    c.auraState = field(UF::UNIT_FIELD_AURASTATE);
+    const auto carries = [&](uint32_t id) {
+        if (id == 0) return false;
+        for (const auto& a : playerAuras_)
+            if (a.spellId == id) return true;
+        return false;
+    };
+    c.hasCasterAuraSpell = carries(e.casterAuraSpell);
+    c.hasExcludedAuraSpell = carries(e.excludeCasterAuraSpell);
+    // 0x005d05b0: the standing in MinFactionId, 0 where it has none.
+    if (e.minFactionId != 0) {
+        const uint32_t i = owner_.getRepListIdByFactionId(e.minFactionId);
+        const auto& all = owner_.getInitialFactions();
+        c.reputation = i < 0x80 && i < all.size() ? all[i].standing : 0;
+    }
+    // The area (0x00519ca0: the subzone, else the zone) in AreaGroupId's
+    // chain (0x007199e0): its id or its parent's among a group's six.
+    const auto* renderer = core::Application::getInstance().getRenderer();
+    const auto* texts = renderer ? renderer->getZoneTexts() : nullptr;
+    const uint32_t area = texts ? (texts->subzoneId != 0 ? texts->subzoneId : texts->zoneId) : 0;
+    const uint32_t parent = texts && texts->subzoneId != 0 ? texts->zoneId : 0;
+    if (static_cast<int32_t>(e.areaGroupId) > 0 && texts) {
+        if (area == 0) {
+            c.area = 1;
+        } else {
+            loadAreaGroups();
+            int listed = 0;
+            uint32_t firstArea = 0;
+            bool in = false;
+            for (uint32_t g = e.areaGroupId, n = 0; g != 0 && !in && n < 64; ++n) {
+                const auto it = areaGroups_.find(g);
+                if (it == areaGroups_.end()) break;
+                if (n == 0) firstArea = it->second[0];
+                for (int k = 0; k < 6 && it->second[k] != 0; ++k) {
+                    ++listed;
+                    if (it->second[k] == area || it->second[k] == parent) in = true;
+                }
+                g = it->second[6];
+            }
+            c.area = in ? 0 : (listed == 1 && firstArea != 0 ? 2 : 1);
+            c.areaArg = c.area == 2 ? firstArea : 0;
+        }
+    }
+    // 0x007261b0: an area flagged for flying (0x400, not 0x20000000); in
+    // Northrend (571) also Cold Weather Flying (54197), unless
+    // AttributesEx7 0x400000.
+    if ((e.attrEx4 & 0x4000000u) != 0 && texts) {
+        const uint32_t flags = owner_.getAreaFlags(area);
+        bool fly = area != 0 && (flags & 0x400u) != 0 && (flags & 0x20000000u) == 0;
+        if (fly && (e.attrEx7 & 0x400000u) == 0 && owner_.getCurrentMapId() == 571 && knownSpells_.count(54197) == 0)
+            fly = false;
+        c.flyable = fly ? 1 : 0;
+    }
+    return c;
+}
+
+uint32_t SpellHandler::supersededBy(uint32_t spellId) const {
+    // 0x00812410: the SkillLineAbility row for the player's race and class,
+    // its SupercededBySpell (+0x20).
+    if (!supersedeLoaded_) {
+        supersedeLoaded_ = true;
+        auto* am = owner_.services().assetManager;
+        if (auto dbc = am && am->isInitialized() ? am->loadDBC("SkillLineAbility.dbc") : nullptr;
+            dbc && dbc->isLoaded() && dbc->getFieldCount() > 8) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                const uint32_t next = dbc->getUInt32(i, 8);
+                if (next != 0)
+                    supersedes_.emplace(dbc->getUInt32(i, 2),
+                                        std::array<uint32_t, 3>{dbc->getUInt32(i, 3), dbc->getUInt32(i, 4), next});
+            }
+        }
+    }
+    const uint32_t bytes0 = [&] {
+        const auto p = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+        return p ? entityField(*p, UF::UNIT_FIELD_BYTES_0) : 0u;
+    }();
+    const uint32_t race = bytes0 & 0xFFu, cls = (bytes0 >> 8) & 0xFFu;
+    const auto [lo, hi] = supersedes_.equal_range(spellId);
+    for (auto it = lo; it != hi; ++it) {
+        const auto& [raceMask, classMask, next] = it->second;
+        if ((raceMask == 0 || (race != 0 && (raceMask & (1u << (race - 1))) != 0)) &&
+            (classMask == 0 || (cls != 0 && (classMask & (1u << (cls - 1))) != 0)))
+            return next;
+    }
+    return 0;
+}
+
+void SpellHandler::loadAreaGroups() const {
+    if (areaGroupsLoaded_) return;
+    areaGroupsLoaded_ = true;
+    auto* am = owner_.services().assetManager;
+    // AreaGroup.dbc: the id, six AreaIDs and NextAreaID.
+    if (auto dbc = am && am->isInitialized() ? am->loadDBC("AreaGroup.dbc") : nullptr;
+        dbc && dbc->isLoaded() && dbc->getFieldCount() >= 8) {
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+            std::array<uint32_t, 7> row{};
+            for (uint32_t k = 0; k < 7; ++k) row[k] = dbc->getUInt32(i, k + 1);
+            areaGroups_[dbc->getUInt32(i, 0)] = row;
+        }
+    }
 }
 
 void SpellHandler::sendCastBy(uint32_t spellId, uint64_t caster, uint64_t target) {
@@ -4242,6 +4593,20 @@ void SpellHandler::loadSpellNameCache() const {
     // WotLK, Classic and Turtle every cooldown this client worked out for itself
     // came back zero - which is most of them, since the server sends a cooldown
     // only when it is correcting one the client should already have.
+    // 0x00739650's (cast_check::Spell), named by the WotLK layout alone.
+    const auto named = [&](const char* name) { return spellL ? spellL->tryField(name) : 0xFFFFFFFFu; };
+    const uint32_t mechanicField = named("Mechanic"), stancesField = named("Stances"),
+                   stancesNotField = named("StancesNot"), casterStateField = named("CasterAuraState"),
+                   casterStateNotField = named("CasterAuraStateNot"), casterAuraField = named("CasterAuraSpell"),
+                   excludeAuraField = named("ExcludeCasterAuraSpell"), interruptField = named("InterruptFlags"),
+                   auraInterruptField = named("AuraInterruptFlags"),
+                   channelInterruptField = named("ChannelInterruptFlags"), powerTypeField = named("PowerType"),
+                   manaCostField = named("ManaCost"), perLevelField = named("ManaCostPerLevel"),
+                   costPctField = named("ManaCostPercentage"), baseLevelField = named("BaseLevel"),
+                   maxLevelField = named("MaxLevel"), castTimeIndexField = named("CastingTimeIndex"),
+                   effectMechanicField = named("EffectMechanic0"), triggerField = named("EffectTriggerSpell0"),
+                   preventionField = named("PreventionType"), minFactionField = named("MinFactionId"),
+                   minRepField = named("MinReputation"), areaGroupField = named("AreaGroupId");
     const auto timing = pipeline::detectSpellTimingFields(dbc.get(), spellL);
     const uint32_t recoveryField = timing.recoveryTime;
     const uint32_t categoryRecoveryField = timing.categoryRecoveryTime;
@@ -4309,6 +4674,37 @@ void SpellHandler::loadSpellNameCache() const {
             }
             if (targetAuraStateField != 0xFFFFFFFF && targetAuraStateField < fieldCount) {
                 entry.targetAuraState = dbc->getUInt32(i, targetAuraStateField);
+            }
+            {
+                const auto u = [&](uint32_t f) { return f < fieldCount ? dbc->getUInt32(i, f) : 0u; };
+                const auto n = [&](uint32_t f) { return static_cast<int32_t>(u(f)); };
+                entry.mechanic = u(mechanicField);
+                for (uint32_t w = 0; w < 2; ++w) {
+                    if (stancesField < fieldCount) entry.stances[w] = u(stancesField + w);
+                    if (stancesNotField < fieldCount) entry.stancesNot[w] = u(stancesNotField + w);
+                }
+                entry.casterAuraState = u(casterStateField);
+                entry.casterAuraStateNot = u(casterStateNotField);
+                entry.casterAuraSpell = u(casterAuraField);
+                entry.excludeCasterAuraSpell = u(excludeAuraField);
+                entry.interruptFlags = u(interruptField);
+                entry.auraInterruptFlags = u(auraInterruptField);
+                entry.channelInterruptFlags = u(channelInterruptField);
+                entry.powerType = u(powerTypeField);
+                entry.manaCost = n(manaCostField);
+                entry.manaCostPerLevel = n(perLevelField);
+                entry.manaCostPct = n(costPctField);
+                entry.baseLevel = n(baseLevelField);
+                entry.maxLevel = n(maxLevelField);
+                entry.castingTimeIndex = u(castTimeIndexField);
+                for (uint32_t k = 0; k < 3; ++k) {
+                    if (effectMechanicField < fieldCount) entry.effectMechanic[k] = u(effectMechanicField + k);
+                    if (triggerField < fieldCount) entry.effectTriggerSpell[k] = u(triggerField + k);
+                }
+                entry.preventionType = u(preventionField);
+                entry.minFactionId = u(minFactionField);
+                entry.minReputation = u(minRepField);
+                entry.areaGroupId = u(areaGroupField);
             }
             // Load effect base points for $s1/$s2/$s3 tooltip substitution
             if (ebp0Field != 0xFFFFFFFF) entry.effectBasePoints[0] = static_cast<int32_t>(dbc->getUInt32(i, ebp0Field));
@@ -4845,17 +5241,6 @@ uint32_t SpellHandler::getSpellImplicitTargetA(uint32_t spellId) const {
     loadSpellNameCache();
     auto it = owner_.spellNameCacheRef().find(spellId);
     return (it != owner_.spellNameCacheRef().end()) ? it->second.implicitTargetA : 0;
-}
-
-bool SpellHandler::isSelfCastSpell(uint32_t spellId) const {
-    if (spellId == 0) return false;
-    loadSpellNameCache();
-    auto it = owner_.spellNameCacheRef().find(spellId);
-    if (it == owner_.spellNameCacheRef().end()) return false;
-    // SpellRange "Self Only" has a max range of 0 - the spell cannot reach any
-    // other unit, so it is cast on the caster no matter what is targeted.
-    // A negative range means SpellRange.dbc was unavailable; assume not self-cast.
-    return spellclass::isSelfCastRange(it->second.maxRange);
 }
 
 const std::string& SpellHandler::getSkillLineName(uint32_t skillLineId) const {

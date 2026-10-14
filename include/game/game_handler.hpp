@@ -258,6 +258,8 @@ public:
      */
     const MovementInfo& getMovementInfo() const { return movementInfo; }
     uint32_t getCurrentMapId() const { return currentMapId_; }
+    /// Map.dbc InstanceType of the current map, -1 without its row.
+    int currentMapInstanceType() const;
     bool getHomeBind(uint32_t& mapId, glm::vec3& pos) const {
         if (!hasHomeBind_) return false;
         mapId = homeBindMapId_;
@@ -4364,6 +4366,37 @@ public:
         // Spell.dbc TargetAuraState: the aura state the target must be in for the spell
         // to be castable (e.g. Execute → AURA_STATE_HEALTHLESS_20_PERCENT). 0 = none.
         uint32_t targetAuraState = 0;
+        /// What 0x00739650 and the functions it calls read besides
+        /// (cast_check::Spell): Mechanic, Stances/StancesNot (64 bits
+        /// each), CasterAuraState/Not, CasterAuraSpell and its exclusion,
+        /// the three interrupt masks, the power cost (0x008012f0: PowerType,
+        /// ManaCost, ManaCostPerLevel, ManaCostPercentage, BaseLevel,
+        /// MaxLevel), CastingTimeIndex (0x007ff180), each effect's
+        /// mechanic and trigger spell, PreventionType, MinFactionId,
+        /// MinReputation and AreaGroupId.
+        uint32_t mechanic = 0;
+        uint32_t stances[2] = {0, 0};
+        uint32_t stancesNot[2] = {0, 0};
+        uint32_t casterAuraState = 0;
+        uint32_t casterAuraStateNot = 0;
+        uint32_t casterAuraSpell = 0;
+        uint32_t excludeCasterAuraSpell = 0;
+        uint32_t interruptFlags = 0;
+        uint32_t auraInterruptFlags = 0;
+        uint32_t channelInterruptFlags = 0;
+        uint32_t powerType = 0;
+        int32_t manaCost = 0;
+        int32_t manaCostPerLevel = 0;
+        int32_t manaCostPct = 0;
+        int32_t baseLevel = 0;
+        int32_t maxLevel = 0;
+        uint32_t castingTimeIndex = 0;
+        uint32_t effectMechanic[3] = {0, 0, 0};
+        uint32_t effectTriggerSpell[3] = {0, 0, 0};
+        uint32_t preventionType = 0;
+        uint32_t minFactionId = 0;
+        uint32_t minReputation = 0;
+        uint32_t areaGroupId = 0;
     };
     static constexpr size_t PLAYER_EXPLORED_ZONES_COUNT = 128;
     std::string getAreaName(uint32_t areaId) const;

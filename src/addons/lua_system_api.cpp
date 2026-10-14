@@ -866,6 +866,10 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "autodismountflying") lua_pushstring(L, "0");
     // On, as the client registers it (0x0051d9b0: autoDismount "1").
     else if (n == "autodismount") lua_pushstring(L, "1");
+    // On, as the client registers them (0x0051d9b0: autoStand and
+    // autoUnshift "1"), which 0x00739650 reads.
+    else if (n == "autostand") lua_pushstring(L, "1");
+    else if (n == "autounshift") lua_pushstring(L, "1");
     else if (n == "colorblindmode") lua_pushstring(L, "0");
     // Off, as the real client has it: a second press stops the swing unless
     // the player has asked to be protected from that.
