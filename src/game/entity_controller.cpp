@@ -739,6 +739,20 @@ float blockCanonicalFacing(const UpdateBlock& block) {
     return core::coords::serverToCanonicalYaw(block.orientation);
 }
 
+/// A transport's GAMEOBJECT_PARENTROTATION, when the block touches it - what
+/// it is turned by besides its TransportRotation.dbc rows (0x0070dc10).
+void applyParentRotation(const UpdateBlock& block, const Entity& entity, TransportManager* tm) {
+    const uint16_t first = fieldIndex(UF::GAMEOBJECT_PARENTROTATION);
+    if (!tm || first == 0xFFFF) return;
+    bool touched = false;
+    for (uint16_t i = 0; i < 4; ++i) touched = touched || block.fields.find(static_cast<uint16_t>(first + i)) != block.fields.end();
+    if (!touched) return;
+    const auto component = [&](uint16_t i) {
+        return bitsToFloat(entity.getField(static_cast<uint16_t>(first + i)));
+    };
+    tm->setParentRotation(block.guid, glm::quat(component(3), component(0), component(1), component(2)));
+}
+
 /// A game object keeps the block's rotation for drawing.
 void applyBlockRotation(const UpdateBlock& block, Entity& entity) {
     if (block.hasRotation && entity.getType() == ObjectType::GAMEOBJECT) {
@@ -2400,6 +2414,7 @@ void EntityController::onCreateGameObject(const UpdateBlock& block, std::shared_
              " pos=(", go->getX(), ", ", go->getY(), ", ", go->getZ(), ")");
     if (block.updateFlags & 0x0002) {
         transportGuids_.insert(block.guid);
+        applyParentRotation(block, *entity, owner_.getTransportManager());
         LOG_INFO("Detected transport GameObject: 0x", std::hex, block.guid, std::dec,
                  " entry=", go->getEntry(),
                  " displayId=", go->getDisplayId(),
@@ -2729,6 +2744,7 @@ void EntityController::onValuesUpdateGameObject(const UpdateBlock& block, std::s
         }
     }
 
+    if (transportGuids_.count(block.guid)) applyParentRotation(block, *entity, owner_.getTransportManager());
     applyTransportRouteClock(block);
 }
 

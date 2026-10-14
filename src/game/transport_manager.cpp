@@ -1,4 +1,5 @@
 #include "game/transport_manager.hpp"
+#include "game/game_object_rotation.hpp"
 #include "game/transport_local.hpp"
 
 #include <set>
@@ -275,6 +276,9 @@ void TransportManager::registerTransport(uint64_t guid,
     // CRITICAL: Update WMO renderer with initial transform
     pushTransform(transport);
 
+    if (const auto parent = parentRotations_.find(guid); parent != parentRotations_.end())
+        transport.parentRotation = parent->second;
+
     transports_[guid] = transport;
 
     // A route phase the server published before this was registered.
@@ -314,6 +318,7 @@ void TransportManager::clearTransports() {
     // Held phases belong to the map that published them; a reused GUID on the
     // next map must not inherit one.
     pendingRouteClocks_.clear();
+    parentRotations_.clear();
     if (count != 0) {
         LOG_INFO("TransportManager: Cleared ", count, " transports for map transition");
     }
@@ -700,6 +705,10 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
 
     // Evaluate position + rotation via Animator
     animator_.evaluateAndApply(transport, *pathEntry, pathTimeMs);
+    // An elevator or a tram (type 11) with TransportRotation rows turns along
+    // its TransportAnimation path (0x007139e0 -> 0x007106d0 -> 0x0070dc10).
+    // A ship on its TaxiPath route is not one.
+    if (pathEntry->fromDBC && !pathEntry->worldCoords) applyPathRotation(transport, pathTimeMs);
 
     // Update transform matrices
     updateTransformMatrices(transport);
@@ -879,6 +888,32 @@ void TransportManager::rebindTransportInstance(uint64_t guid, uint32_t instanceI
 
 bool TransportManager::loadTransportAnimationDBC(pipeline::AssetManager* assetMgr) {
     return pathRepo_.loadTransportAnimationDBC(assetMgr);
+}
+
+bool TransportManager::loadTransportRotationDBC(pipeline::AssetManager* assetMgr) {
+    return pathRepo_.loadTransportRotationDBC(assetMgr);
+}
+
+void TransportManager::setParentRotation(uint64_t transportGuid, const glm::quat& rotation) {
+    parentRotations_[transportGuid] = rotation;
+    if (auto* transport = getTransport(transportGuid)) transport->parentRotation = rotation;
+}
+
+bool TransportManager::applyPathRotation(ActiveTransport& transport, uint32_t pathTimeMs) const {
+    const auto track = pathRepo_.findRotationTrack(transport.entry);
+    if (!track) return false;
+    const auto rotation = transport_rotation::rotationAt(
+        *track->keys, pathTimeMs + track->startMs, track->endMs, transport.parentRotation);
+    if (!rotation) return false;
+    // Its rotation now (0x004f43b0), so its facing is this one's
+    // (0x004f4630) and its passengers' facings follow it. Drawn by it: the
+    // hull's rotation is taken through the canonical basis turn that
+    // updateTransformMatrices puts back, so the render matrix is the
+    // client's - its axes are the wire's.
+    transport.facing = core::coords::normalizeAngleRad(game_object_rotation::facing(*rotation));
+    const glm::quat basis = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    transport.rotation = glm::conjugate(basis) * *rotation * basis;
+    return true;
 }
 
 bool TransportManager::loadTaxiPathNodeDBC(pipeline::AssetManager* assetMgr) {

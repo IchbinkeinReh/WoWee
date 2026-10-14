@@ -412,6 +412,7 @@ bool TransportPathRepository::loadTransportAnimationDBC(pipeline::AssetManager* 
 
         // Get base duration from last normalized timeIndex
         uint32_t lastTimeMs = sortedWaypoints.back().first - t0;
+        animationSpans_[transportEntry] = {t0, sortedWaypoints.back().first};
 
         // Calculate wrap duration (last → first segment)
         // Use average segment duration as wrap duration
@@ -474,6 +475,46 @@ bool TransportPathRepository::loadTransportAnimationDBC(pipeline::AssetManager* 
 
     LOG_INFO("Loaded ", pathsLoaded, " transport paths from TransportAnimation.dbc");
     return pathsLoaded > 0;
+}
+
+// ── DBC: TransportRotation ─────────────────────────────────────
+
+bool TransportPathRepository::loadTransportRotationDBC(pipeline::AssetManager* assetMgr) {
+    if (!assetMgr) return false;
+    auto dbcData = assetMgr->readFile("DBFilesClient\\TransportRotation.dbc");
+    if (dbcData.empty()) {
+        LOG_WARNING("TransportRotation.dbc not found - transports will not turn along their paths");
+        return false;
+    }
+    pipeline::DBCFile dbc;
+    if (!dbc.load(dbcData)) {
+        LOG_ERROR("Failed to parse TransportRotation.dbc");
+        return false;
+    }
+    std::unordered_map<uint32_t, std::vector<transport_rotation::Key>> byEntry;
+    for (uint32_t i = 0; i < dbc.getRecordCount(); i++) {
+        transport_rotation::Key key;
+        key.timeMs = dbc.getUInt32(i, 2);
+        key.rotation = glm::quat(dbc.getFloat(i, 6), dbc.getFloat(i, 3), dbc.getFloat(i, 4), dbc.getFloat(i, 5));
+        byEntry[dbc.getUInt32(i, 1)].push_back(key);
+    }
+    for (auto& [entry, keys] : byEntry) storeRotationKeys(entry, std::move(keys));
+    LOG_INFO("Loaded TransportRotation.dbc: ", dbc.getRecordCount(), " rows for ", rotations_.size(),
+             " transports");
+    return true;
+}
+
+std::optional<TransportPathRepository::RotationTrack>
+TransportPathRepository::findRotationTrack(uint32_t entry) const {
+    const auto it = rotations_.find(entry);
+    if (it == rotations_.end() || it->second.size() < 2) return std::nullopt;
+    RotationTrack track;
+    track.keys = &it->second;
+    if (const auto span = animationSpans_.find(entry); span != animationSpans_.end()) {
+        track.startMs = span->second.first;
+        track.endMs = span->second.second;
+    }
+    return track;
 }
 
 // ── DBC: TaxiPathNode ──────────────────────────────────────────

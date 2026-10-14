@@ -2939,6 +2939,11 @@ wowee_add_packet_test(test_transport_facing)
 # A game object's packed rotation: read, unpacked, faced and drawn by.
 wowee_add_packet_test(test_game_object_rotation)
 
+# ── test_transport_rotation ────────────────────────
+# An elevator's or a tram's turn along its path, TransportRotation.dbc.
+wowee_add_test(test_transport_rotation
+    SOURCES test_transport_rotation.cpp)
+
 # ── Sanitizers, once every test target exists ────────────────
 # This must be the last thing in this file. The loop walks ALL_TEST_TARGETS,
 # which register_test_target appends to as each test is declared, so the

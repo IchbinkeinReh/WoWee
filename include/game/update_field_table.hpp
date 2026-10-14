@@ -216,6 +216,9 @@ enum class UF : uint16_t {
     GAMEOBJECT_LEVEL,
     /// The object's faction template, how it regards the player (0x0070edd0).
     GAMEOBJECT_FACTION,
+    /// WotLK: four floats, x y z w (+0xd0 +0x10), what a transport turning
+    /// by TransportRotation.dbc is turned by besides (0x0070dc10).
+    GAMEOBJECT_PARENTROTATION,
     /// WotLK: a dynamic object's fields past OBJECT_END (+0xd0): BYTES' low
     /// byte its type (+8), its spell (+0xc) and radius (+0x10), which pick
     /// and size its model (0x00705100, 0x00704d90); its CASTER (+0, a

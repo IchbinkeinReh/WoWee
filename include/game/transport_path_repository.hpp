@@ -5,7 +5,9 @@
 #pragma once
 
 #include "math/spline.hpp"
+#include "game/transport_rotation.hpp"
 #include <cstdint>
+#include <optional>
 #include <vector>
 #include <unordered_map>
 #include <glm/glm.hpp>
@@ -128,6 +130,24 @@ public:
 
     // ── DBC loading ─────────────────────────────────────────
     bool loadTransportAnimationDBC(pipeline::AssetManager* assetMgr);
+    /// TransportRotation.dbc: id, the game object's entry, the time, then
+    /// x, y, z, w - each entry's rows in the order the file has them.
+    bool loadTransportRotationDBC(pipeline::AssetManager* assetMgr);
+    void storeRotationKeys(uint32_t entry, std::vector<transport_rotation::Key> keys) {
+        rotations_[entry] = std::move(keys);
+    }
+
+    /// An entry's turn along its path, on its TransportAnimation timeline.
+    struct RotationTrack {
+        const std::vector<transport_rotation::Key>* keys = nullptr;
+        /// The path's first and last node times as the DBC has them. Paths
+        /// here start at 0 (startMs is taken off), the client's at the file's
+        /// own times, and its last segment runs to the last node.
+        uint32_t startMs = 0;
+        uint32_t endMs = 0;
+    };
+    /// None for an entry with fewer than two rows: it does not turn.
+    [[nodiscard]] std::optional<RotationTrack> findRotationTrack(uint32_t entry) const;
     bool loadTaxiPathNodeDBC(pipeline::AssetManager* assetMgr);
 
     // ── Path construction ───────────────────────────────────
@@ -225,6 +245,10 @@ private:
     // can be rebuilt at the hull's real speed once the server publishes its
     // route period.
     std::unordered_map<uint32_t, TaxiRoute> taxiRoutes_;
+    // TransportRotation.dbc rows by game object entry.
+    std::unordered_map<uint32_t, std::vector<transport_rotation::Key>> rotations_;
+    // TransportAnimation.dbc's first and last node times by entry.
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> animationSpans_;
 };
 
 } // namespace wowee::game

@@ -753,6 +753,7 @@ bool Application::initialize() {
         // Load transport paths from TransportAnimation.dbc and TaxiPathNode.dbc
         if (gameHandler && gameHandler->getTransportManager()) {
             gameHandler->getTransportManager()->loadTransportAnimationDBC(assetManager.get());
+            gameHandler->getTransportManager()->loadTransportRotationDBC(assetManager.get());
             gameHandler->getTransportManager()->loadTaxiPathNodeDBC(assetManager.get());
         }
 

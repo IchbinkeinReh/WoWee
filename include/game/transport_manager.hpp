@@ -66,10 +66,14 @@ struct ActiveTransport {
     // object's is the yaw of its own rotation (0x00712db0 -> 0x0070c310 ->
     // 0x004f4630): where the server placed it, an elevator or a tram
     // included, which 0x007139e0 moves along TransportAnimation.dbc without
-    // turning. A ship on its TaxiPath route is turned along it, facing back
+    // turning - unless it has TransportRotation.dbc rows, which turn it
+    // (TransportManager::applyPathRotation). A ship on its TaxiPath route is turned along it, facing back
     // down the way it goes (0x007134a0 -> 0x007f82b0). rotation above is the
     // hull as drawn, which each kind keeps in its own convention.
     float facing = 0.0f;
+    // GAMEOBJECT_PARENTROTATION, on the wire's axes: what a transport turning
+    // by TransportRotation.dbc is turned by besides (0x0070dc10).
+    glm::quat parentRotation{1.0f, 0.0f, 0.0f, 0.0f};
     bool serverYawFlipped180;       // Auto-correction when server yaw is consistently opposite movement
     int serverYawAlignmentScore;    // Hysteresis score for yaw flip detection
 
@@ -320,6 +324,14 @@ public:
 
     // Load transport paths from TransportAnimation.dbc
     bool loadTransportAnimationDBC(pipeline::AssetManager* assetMgr);
+    // And their turns along them, TransportRotation.dbc.
+    bool loadTransportRotationDBC(pipeline::AssetManager* assetMgr);
+    /// A transport's GAMEOBJECT_PARENTROTATION (x, y, z, w), kept for when it
+    /// registers if it has not yet.
+    void setParentRotation(uint64_t transportGuid, const glm::quat& rotation);
+    /// Turn a transport by its TransportRotation.dbc rows at a path time, as
+    /// 0x007139e0 does; false where it has fewer than two and keeps its own.
+    bool applyPathRotation(ActiveTransport& transport, uint32_t pathTimeMs) const;
 
     // Load transport paths from TaxiPathNode.dbc (world-coordinate paths for MO_TRANSPORT)
     bool loadTaxiPathNodeDBC(pipeline::AssetManager* assetMgr);
@@ -407,6 +419,7 @@ private:
     /// noteServerPathTime's samples: the path time, and elapsedTime_ on arrival.
     struct ServerPathTime { uint32_t pathTimeMs; double receivedAt; };
     std::unordered_map<uint64_t, ServerPathTime> serverPathTimes_;
+    std::unordered_map<uint64_t, glm::quat> parentRotations_;
     uint64_t riderTransportGuid_ = 0;
     rendering::WMORenderer* wmoRenderer_ = nullptr;
     rendering::M2Renderer* m2Renderer_ = nullptr;
