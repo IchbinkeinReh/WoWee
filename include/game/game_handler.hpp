@@ -801,8 +801,20 @@ public:
     void requestBfMgrExit(uint32_t battleId);
 
     // WotLK Calendar
-    /// CalendarGetNumPendingInvites (0x005bec70).
-    uint32_t getCalendarPendingInvites() const { return calendarData_.pendingInviteCount(); }
+    /// CalendarGetNumPendingInvites (0x005bec70): invitations from anyone
+    /// on the ignore list are not counted.
+    uint32_t getCalendarPendingInvites() const {
+        return calendarData_.pendingInviteCount(
+            [this](uint64_t guid) { return ignoreListGuids_.count(guid) != 0; });
+    }
+    /// CalendarIsActionPending: a calendar request is out and unanswered
+    /// (0x00c207f3).
+    bool isCalendarActionPending() const { return calendarActionPending_; }
+    /// Set it and say so, CALENDAR_ACTION_PENDING (0x005b7e20).
+    void setCalendarActionPending(bool pending);
+    /// A player's name has arrived: an open event may have been waiting on
+    /// it (0x005f1b10).
+    void onCalendarNameKnown(uint64_t guid);
     void requestCalendar(); ///< Send CMSG_CALENDAR_GET_CALENDAR to the server
     /// The calendar the server last sent, empty until it has answered one.
     const CalendarData& getCalendarData() const { return calendarData_; }
@@ -5728,6 +5740,11 @@ private:
     /// One calendar packet, read and applied as 0x005c3fe0 does, and the
     /// events it raises fired.
     void handleCalendarPacket(CalendarPacket which, network::Packet& packet);
+    /// Whether a calendar request may go out now: in the world, and none
+    /// already pending. Every sender asks first and, having sent, marks it
+    /// pending (0x005b9310, 0x005b9860 and the rest).
+    bool calendarActionAllowed() const;
+    bool calendarActionPending_ = false;
     /// The whole calendar, as of the server's last answer to a request for it.
     CalendarData calendarData_;
     /// One event in full, as of the last one opened.

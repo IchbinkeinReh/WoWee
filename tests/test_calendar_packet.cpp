@@ -464,7 +464,7 @@ CalendarData calendarWithInvite(uint64_t eventId, uint32_t flags = 0) {
     inv.status = calendar_status::kInvited;
     inv.creatorGuid = 0x42;
     cal.invites.push_back(inv);
-    cal.pendingInvites.push_back(eventId);
+    cal.pendingInvites.push_back({eventId, 0x42});
     return cal;
 }
 
@@ -836,4 +836,182 @@ TEST_CASE("The pending count and the cleared action", "[calendar]") {
         REQUIRE(applyCalendarPacket(CalendarPacket::ClearPendingAction, p, ctx));
         CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_ACTION_PENDING"});
     }
+}
+
+// ---- What the handlers hold back, drop and leave for others ----
+
+TEST_CASE("An opened event waits for its invitees' names", "[calendar]") {
+    // 0x005bed20: while a name on the list is being asked for, the event is
+    // not announced; the last answer announces it (0x005f1a40, case 4).
+    Packet p = oneEvent();
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe};
+    ctx.nameKnown = [](uint64_t guid) { return guid == kMe; };
+    REQUIRE(applyCalendarPacket(CalendarPacket::SendEvent, p, ctx));
+    CHECK(ctx.nameQueries == std::vector<uint64_t>{0x070000000000BEEFull});
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_ACTION_PENDING"});
+
+    std::vector<CalendarSignal> said;
+    calendarNameArrived(open, 0x99, said);   // not one it waits on
+    CHECK(said.empty());
+    calendarNameArrived(open, 0x070000000000BEEFull, said);
+    REQUIRE(said.size() == 1);
+    CHECK(said[0].event == "CALENDAR_OPEN_EVENT");
+    CHECK(said[0].args == std::vector<std::string>{"GUILD_EVENT"});
+    // Said once: the count is spent.
+    said.clear();
+    calendarNameArrived(open, 0x070000000000BEEFull, said);
+    CHECK(said.empty());
+}
+
+TEST_CASE("A new event and an invite to it wait for names the same way", "[calendar]") {
+    Packet src = oneEvent();
+    std::vector<uint8_t> bytes = src.getData();
+    bytes[0] = 1;   // CALENDAR_SENDTYPE_ADD
+    Packet p(0x437, bytes);
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe};
+    ctx.nameKnown = [](uint64_t guid) { return guid == kMe; };
+    REQUIRE(applyCalendarPacket(CalendarPacket::SendEvent, p, ctx));
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_ACTION_PENDING"});
+
+    // An invite to it while that name is still out: its own name is known,
+    // but the list is held back all the same - and now says only the invite
+    // list once the names are in (0x005f32b0 sets case 0).
+    Packet inv(0x43A);
+    inv.writePackedGuid(kMe);
+    inv.writeUInt64(4242); inv.writeUInt64(9100);
+    inv.writeUInt8(80); inv.writeUInt8(calendar_status::kInvited);
+    inv.writeUInt8(0); inv.writeUInt8(1);
+    CalendarContext ctx2{cal, open, kMe};
+    ctx2.nameKnown = ctx.nameKnown;
+    REQUIRE(applyCalendarPacket(CalendarPacket::EventInvite, inv, ctx2));
+    CHECK(ctx2.nameQueries.empty());
+    CHECK(names(ctx2) == std::vector<std::string>{"CALENDAR_ACTION_PENDING"});
+
+    std::vector<CalendarSignal> said;
+    calendarNameArrived(open, 0x070000000000BEEFull, said);
+    REQUIRE(said.size() == 1);
+    CHECK(said[0].event == "CALENDAR_UPDATE_INVITE_LIST");
+    CHECK(said[0].args.empty());
+}
+
+TEST_CASE("The guild filter's list waits for the names it lists", "[calendar]") {
+    Packet p(0x438);
+    p.writeUInt32(1);
+    p.writePackedGuid(0x21); p.writeUInt8(70);
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe, 80};
+    ctx.nameKnown = [](uint64_t) { return false; };
+    REQUIRE(applyCalendarPacket(CalendarPacket::FilterGuild, p, ctx));
+    // The player's own row, added after, is not asked for.
+    CHECK(ctx.nameQueries == std::vector<uint64_t>{0x21});
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_ACTION_PENDING"});
+    std::vector<CalendarSignal> said;
+    calendarNameArrived(open, 0x21, said);
+    REQUIRE(said.size() == 1);
+    CHECK(said[0].event == "CALENDAR_UPDATE_INVITE_LIST");
+    CHECK(said[0].args == std::vector<std::string>{"1"});
+}
+
+TEST_CASE("The calendar drops events the player has no invite to", "[calendar]") {
+    // 0x005c29c0: a guild announcement needs no invite and a guild event
+    // without one is listed not signed up; any other event is dropped.
+    Packet p(0x436);
+    p.writeUInt32(1);                       // invites: event 3 only
+    p.writeUInt64(3); p.writeUInt64(503);
+    p.writeUInt8(calendar_status::kInvited); p.writeUInt8(0); p.writeUInt8(0);
+    p.writePackedGuid(0x42);
+    p.writeUInt32(4);                       // events
+    const std::pair<uint64_t, uint32_t> rows[] = {
+        {1, 0},                             // no invite: dropped
+        {2, calendar_flag::kGuildEvent},    // no invite: not signed up
+        {3, 0},                             // invited
+        {4, calendar_flag::kAnnouncement},  // needs none
+    };
+    for (const auto& [id, flags] : rows) {
+        p.writeUInt64(id);
+        p.writeString("e");
+        p.writeUInt32(0);
+        p.writeUInt32(kOct10);
+        p.writeUInt32(flags);
+        p.writeUInt32(static_cast<uint32_t>(-1));
+        p.writePackedGuid(0x55);
+    }
+    p.writeUInt32(1300000000u);
+    p.writeUInt32(kOct1);
+    p.writeUInt32(0);                       // lockouts
+    p.writeUInt32(0); p.writeUInt32(0);     // reset time, resets
+    p.writeUInt32(0);                       // holidays
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::SendCalendar, p, ctx));
+    CHECK(p.getRemainingSize() == 0);
+    REQUIRE(cal.events.size() == 3);
+    CHECK(cal.events[0].eventId == 2);
+    CHECK(cal.events[1].eventId == 3);
+    CHECK(cal.events[2].eventId == 4);
+    bool guildRow = false;
+    for (const auto& inv : cal.invites) {
+        if (inv.eventId != 2) continue;
+        guildRow = true;
+        CHECK(inv.status == calendar_status::kNotSignedUp);
+        CHECK(inv.isGuildEvent);
+        CHECK(inv.creatorGuid == 0x55);
+    }
+    CHECK(guildRow);
+    REQUIRE(cal.pendingInvites.size() == 1);
+    CHECK(cal.pendingInvites[0].eventId == 3);
+    CHECK(cal.pendingInvites[0].sender == 0x42);
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_EVENT_LIST",
+                                                 "CALENDAR_UPDATE_PENDING_INVITES",
+                                                 "CALENDAR_ACTION_PENDING"});
+}
+
+TEST_CASE("An invite from someone ignored pends without being counted", "[calendar]") {
+    // 0x005c3ab0 keeps the node but says nothing when 0x006b52e0 finds the
+    // sender ignored, and 0x005bec70 leaves it out of the count.
+    Packet p(0x440);
+    p.writeUInt64(31);
+    p.writeString("Ulduar");
+    p.writeUInt32(kOct10);
+    p.writeUInt32(0); p.writeUInt32(0); p.writeUInt32(603);
+    p.writeUInt64(600);
+    p.writeUInt8(calendar_status::kInvited);
+    p.writeUInt8(0);
+    p.writePackedGuid(0x42);
+    p.writePackedGuid(0x43);
+    CalendarData cal;
+    CalendarEventDetail open;
+    CalendarContext ctx{cal, open, kMe};
+    const auto ignoring = [](uint64_t guid) { return guid == 0x43; };
+    ctx.isIgnored = ignoring;
+    REQUIRE(applyCalendarPacket(CalendarPacket::InviteAlert, p, ctx));
+    CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_EVENT_LIST"});
+    REQUIRE(cal.pendingInvites.size() == 1);
+    CHECK(cal.pendingInvites[0].sender == 0x43);
+    CHECK(cal.pendingInviteCount(ignoring) == 0);
+    CHECK(cal.pendingInviteCount() == 1);
+}
+
+TEST_CASE("A removed invite that leaves a mail looks for it", "[calendar]") {
+    // 0x005c0ae0 calls 0x005704d0 unless the status was invited or removed.
+    const auto mailFor = [](uint8_t status) {
+        Packet p(0x441);
+        p.writeUInt64(9); p.writeUInt32(kOct10); p.writeUInt32(0);
+        p.writeUInt8(status);
+        CalendarData cal = calendarWithInvite(9);
+        CalendarEventDetail open;
+        CalendarContext ctx{cal, open, kMe};
+        REQUIRE(applyCalendarPacket(CalendarPacket::InviteRemovedAlert, p, ctx));
+        return ctx.checkMail;
+    };
+    CHECK(mailFor(calendar_status::kAccepted));
+    CHECK(mailFor(calendar_status::kConfirmed));
+    CHECK_FALSE(mailFor(calendar_status::kInvited));
+    CHECK_FALSE(mailFor(calendar_status::kRemoved));
 }

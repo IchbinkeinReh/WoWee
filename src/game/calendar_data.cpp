@@ -370,10 +370,54 @@ CalendarInvite& inviteFor(CalendarData& cal, uint64_t eventId) {
 
 /// 0x005becd0: the first pending entry for the event, if there is one.
 bool removeFirstPending(CalendarData& cal, uint64_t eventId) {
-    auto it = std::find(cal.pendingInvites.begin(), cal.pendingInvites.end(), eventId);
+    auto it = std::find_if(cal.pendingInvites.begin(), cal.pendingInvites.end(),
+                           [eventId](const CalendarData::PendingInvite& p) {
+                               return p.eventId == eventId;
+                           });
     if (it == cal.pendingInvites.end()) return false;
     cal.pendingInvites.erase(it);
     return true;
+}
+
+/// Who an event's row says sent it (the row's 0xb8): the creator for a guild
+/// sign-up, otherwise whoever the invite names. Nobody for an event the
+/// calendar does not hold.
+uint64_t rowSender(CalendarData& cal, uint64_t eventId) {
+    const CalendarEvent* ev = findEvent(cal, eventId);
+    if (!ev) return 0;
+    const CalendarInvite* inv = findInvite(cal, eventId);
+    if (!inv) return 0;
+    return inv->isGuildEvent ? ev->creatorGuid : inv->creatorGuid;
+}
+
+/// 0x005be590: the event's row joins the pending list, with its sender.
+void addPending(CalendarData& cal, uint64_t eventId) {
+    cal.pendingInvites.push_back({eventId, rowSender(cal, eventId)});
+}
+
+bool ignored(const CalendarContext& ctx, uint64_t guid) {
+    return ctx.isIgnored && ctx.isIgnored(guid);
+}
+
+/// 0x0067d770 with the event's callback (0x005f1b10): a name not yet known is
+/// counted, and asked for. A zero guid is never known and never asked.
+void awaitName(CalendarContext& ctx, uint64_t guid) {
+    if (guid != 0 && (!ctx.nameKnown || ctx.nameKnown(guid))) return;
+    ctx.open.namesAwaited.push_back(guid);
+    if (guid != 0) ctx.nameQueries.push_back(guid);
+}
+
+/// 0x005f1a40's switch: what the open event says once its names are in.
+void sayOnceNamed(const CalendarEventDetail& open, uint8_t what,
+                  std::vector<CalendarSignal>& out) {
+    switch (what) {
+    case 0: out.push_back({"CALENDAR_UPDATE_INVITE_LIST", {}}); break;
+    case 1: out.push_back({"CALENDAR_UPDATE_INVITE_LIST", {eventBool(true)}}); break;
+    case 2: out.push_back({"CALENDAR_NEW_EVENT", {eventBool(false)}}); break;
+    case 3: out.push_back({"CALENDAR_NEW_EVENT", {eventBool(true)}}); break;
+    case 4: out.push_back({"CALENDAR_OPEN_EVENT", {calendarTypeForFlags(open.flags)}}); break;
+    default: break;
+    }
 }
 
 /// 0x005be950: the event out of the list, and its invite with it.
@@ -435,25 +479,45 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
     case CalendarPacket::SendCalendar: {
         CalendarData parsed;
         if (!parseCalendarSendCalendar(packet, parsed)) return false;
-        // 0x005c29c0 zeroes the server's count first, then keeps a pending
-        // entry for each invite still unanswered whose event is listed, still
-        // ahead and not locked, from a sender it knows.
+        // 0x005c29c0 puts an event on the calendar only with its invite - a
+        // guild announcement needs none, and a guild event without one is
+        // there not signed up, sent by its creator. Any other event the
+        // player has no invite to is dropped.
+        std::vector<CalendarEvent> listed;
+        listed.reserve(parsed.events.size());
+        for (auto& ev : parsed.events) {
+            if (!(ev.flags & kAnnouncement) && !findInvite(parsed, ev.eventId)) {
+                if (!(ev.flags & kGuildEvent)) continue;
+                CalendarInvite inv;
+                inv.eventId = ev.eventId;
+                inv.status = kNotSignedUp;
+                inv.isGuildEvent = true;
+                inv.creatorGuid = ev.creatorGuid;
+                parsed.invites.push_back(inv);
+            }
+            listed.push_back(std::move(ev));
+        }
+        parsed.events = std::move(listed);
+        // It zeroes the server's count first, then keeps a pending entry for
+        // each invite still unanswered whose event is listed - not as an
+        // announcement - still ahead and not locked, and whose invite names
+        // a sender. One from a sender on the ignore list stays in the list
+        // but is not counted (0x006b52e0).
+        uint32_t counted = 0;
         for (const auto& inv : parsed.invites) {
             if (inv.status != kInvited) continue;
-            const CalendarEvent* ev = nullptr;
-            for (const auto& e : parsed.events)
-                if (e.eventId == inv.eventId) { ev = &e; break; }
-            if (!ev || (ev->flags & kInvitesLocked)) continue;
+            const CalendarEvent* ev = findEvent(parsed, inv.eventId);
+            if (!ev || (ev->flags & (kInvitesLocked | kAnnouncement))) continue;
             if (minuteKey(ev->eventTime) <= minuteKey(parsed.zoneTime)) continue;
-            const uint64_t sender = inv.isGuildEvent ? ev->creatorGuid : inv.creatorGuid;
-            if (sender == 0) continue;
-            parsed.pendingInvites.push_back(inv.eventId);
+            if (inv.creatorGuid == 0) continue;
+            parsed.pendingInvites.push_back({inv.eventId, inv.creatorGuid});
+            if (!ignored(ctx, inv.creatorGuid)) ++counted;
         }
         parsed.serverPendingCount = 0;
         parsed.received = true;
         cal = std::move(parsed);
         say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
-        if (!cal.pendingInvites.empty()) say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+        if (counted != 0) say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
         break;
     }
 
@@ -467,20 +531,26 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
             if (ctx.player != 0 && inv.guid == ctx.player) { myStatus = inv.status; break; }
         if (myStatus < 0 && (parsed.flags & kGuildEvent)) myStatus = kNotSignedUp;
         open = std::move(parsed);
+        // Every invitee's name is looked up as the list is read (0x005f2c00).
+        for (const auto& inv : open.invitees) awaitName(ctx, inv.guid);
         // An event that turns out to be waiting on the player's answer joins
         // the pending list, once (0x005bed20).
+        const uint64_t eventId = open.eventId;
         if (myStatus == kInvited && minuteKey(open.eventTime) > minuteKey(cal.zoneTime) &&
-            std::find(cal.pendingInvites.begin(), cal.pendingInvites.end(), open.eventId) ==
-                cal.pendingInvites.end()) {
-            cal.pendingInvites.push_back(open.eventId);
+            std::none_of(cal.pendingInvites.begin(), cal.pendingInvites.end(),
+                         [eventId](const CalendarData::PendingInvite& p) {
+                             return p.eventId == eventId;
+                         })) {
+            cal.pendingInvites.push_back({eventId, rowSender(cal, eventId)});
             say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
         }
         // Opened, or just made: CALENDAR_OPEN_EVENT with the calendar type,
-        // CALENDAR_NEW_EVENT with whether it was a copy.
-        if (open.sendType == 1 || open.sendType == 2)
-            say(ctx, "CALENDAR_NEW_EVENT", {eventBool(open.sendType == 2)});
-        else
-            say(ctx, "CALENDAR_OPEN_EVENT", {calendarTypeForFlags(open.flags)});
+        // CALENDAR_NEW_EVENT with whether it was a copy - held back while any
+        // invitee's name is still being asked for, and said by the last
+        // answer instead (0x005f1410, 0x005f1a40).
+        const uint8_t what = open.sendType == 1 ? 2 : open.sendType == 2 ? 3 : 4;
+        if (open.namesAwaited.empty()) sayOnceNamed(open, what, ctx.signals);
+        else open.onceNamed = what;
         break;
     }
 
@@ -515,8 +585,13 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
             me.rank = 2;
             rows.push_back(std::move(me));
         }
+        // Each listed name is looked up, the player's own row added after
+        // them is not; said now when every name is known, else by the last
+        // answer (0x005f2f90).
+        for (uint32_t i = 0; i < count; ++i) awaitName(ctx, rows[i].guid);
         open.invitees = std::move(rows);
-        say(ctx, "CALENDAR_UPDATE_INVITE_LIST", {eventBool(true)});
+        if (open.namesAwaited.empty()) say(ctx, "CALENDAR_UPDATE_INVITE_LIST", {eventBool(true)});
+        else open.onceNamed = 1;
         break;
     }
 
@@ -556,7 +631,11 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
             row.isGuildMember = hasTime != 0;
             row.statusTime = unpackWowPackedTime(statusTime);
             open.invitees.push_back(std::move(row));
-            say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
+            // Held back while any name on the list is still being asked for,
+            // this one or an earlier one.
+            awaitName(ctx, guid);
+            if (open.namesAwaited.empty()) say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
+            else open.onceNamed = 0;
         }
         break;
     }
@@ -603,7 +682,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         if (ctx.player != 0 && guid == ctx.player) {
             inviteFor(cal, eventId).status = status;
             if (status == kInvited) {
-                cal.pendingInvites.push_back(eventId);
+                addPending(cal, eventId);
                 say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
             } else if (removeFirstPending(cal, eventId)) {
                 say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
@@ -710,9 +789,11 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         removeEvent(cal, ev.eventId);
         cal.events.push_back(ev);
         cal.invites.push_back(inv);
+        // Pending, with its sender - and said only when the sender is not
+        // on the ignore list (0x006b52e0).
         if (inv.status == kInvited && !(ev.flags & kAnnouncement)) {
-            cal.pendingInvites.push_back(ev.eventId);
-            say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
+            cal.pendingInvites.push_back({ev.eventId, inv.creatorGuid});
+            if (!ignored(ctx, inv.creatorGuid)) say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
         }
         say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
         break;
@@ -725,7 +806,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         const uint64_t eventId = packet.readUInt64();
         packet.readUInt32();  // event time
         packet.readUInt32();  // flags
-        packet.readUInt8();   // status: a mail goes with it unless 0 or 9
+        const uint8_t status = packet.readUInt8();
         const CalendarEvent* ev = findEvent(cal, eventId);
         bool dropEvent = true;
         if (ev && (ev->flags & kGuildEvent) && guildSignupRow(cal, eventId)) {
@@ -745,6 +826,10 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
             open = CalendarEventDetail{};
             say(ctx, "CALENDAR_CLOSE_EVENT");
         }
+        // Left at anything but invited or removed, the server mails the
+        // player about it, and the client looks for mail as it does on
+        // SMSG_RECEIVED_MAIL (0x005704d0).
+        if (status != kInvited && status != kRemoved) ctx.checkMail = true;
         removeFirstPending(cal, eventId);
         say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
         if (dropEvent && removeEvent(cal, eventId)) say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
@@ -769,7 +854,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         inviteFor(cal, eventId).status = status;
         if (!(ev->flags & kInvitesLocked)) {
             if (status == kInvited) {
-                cal.pendingInvites.push_back(eventId);
+                addPending(cal, eventId);
                 say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
             } else if (removeFirstPending(cal, eventId)) {
                 say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
@@ -832,7 +917,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
             const CalendarInvite* inv = findInvite(cal, eventId);
             if (wasLocked != nowLocked && inv && inv->status == kInvited) {
                 if (!nowLocked) {
-                    cal.pendingInvites.push_back(eventId);
+                    addPending(cal, eventId);
                     say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
                 } else if (removeFirstPending(cal, eventId)) {
                     say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
@@ -943,6 +1028,18 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
 
     if (clearsAction) say(ctx, "CALENDAR_ACTION_PENDING", {eventBool(false)});
     return true;
+}
+
+void calendarNameArrived(CalendarEventDetail& open, uint64_t guid,
+                         std::vector<CalendarSignal>& out) {
+    // One callback per lookup counted, each taking one off the count and the
+    // one that empties it saying what was held back (0x005f1a40).
+    auto& awaited = open.namesAwaited;
+    for (auto it = std::find(awaited.begin(), awaited.end(), guid); it != awaited.end();
+         it = std::find(awaited.begin(), awaited.end(), guid)) {
+        awaited.erase(it);
+        if (awaited.empty()) sayOnceNamed(open, open.onceNamed, out);
+    }
 }
 
 }  // namespace game

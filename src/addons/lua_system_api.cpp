@@ -7951,12 +7951,12 @@ void registerSystemLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->requestCalendar();
             return 0;
         }},
-                // Whether a request is in flight. Nothing here queues one, so
-                // the answer is no - and false rather than nothing, because
-                // the interface disables buttons on it and nil would read the
-                // same as false only by accident.
+                // Whether a calendar request is out and unanswered - set by
+                // every calendar send, cleared by the server's answer or error
+                // (0x005b8c10 pushes 0x00c207f3 as a boolean).
                 {"CalendarIsActionPending", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0);
+            auto* gh = getGameHandler(L);
+            lua_pushboolean(L, gh && gh->isCalendarActionPending() ? 1 : 0);
             return 1;
         }},
                 // minLevel, maxLevel, rank - the default filter a guild event

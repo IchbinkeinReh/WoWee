@@ -946,6 +946,9 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         // daily quests reset, which is the only place that figure comes from.
         // Silently - the announcement belongs to /time.
         queryServerTime(false);
+        // No calendar request is pending in a new session (0x00528010 ->
+        // 0x005be2a0), and the interface is told so.
+        setCalendarActionPending(false);
     }
 
     // Fire PLAYER_ENTERING_WORLD - THE most important event for addon initialization.
@@ -4505,6 +4508,10 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
     CalendarContext ctx{calendarData_, calendarEventDetail_};
     ctx.player = playerGuid;
     ctx.playerLevel = static_cast<uint8_t>(serverPlayerLevel_);
+    ctx.isIgnored = [this](uint64_t guid) { return ignoreListGuids_.count(guid) != 0; };
+    ctx.nameKnown = [this](uint64_t guid) {
+        return guid == playerGuid || !lookupName(guid).empty();
+    };
     if (!applyCalendarPacket(which, packet, ctx)) {
         LOG_WARNING("Calendar packet ", static_cast<int>(which),
                     " could not be read whole; the calendar is left as it was");
@@ -4512,13 +4519,29 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
         return;
     }
     packet.skipAll();
-    for (const auto& signal : ctx.signals) fireAddonEvent(signal.event, signal.args);
+    for (const auto& signal : ctx.signals) {
+        // The dispatcher's ending clears the pending action as it says so.
+        if (signal.event == "CALENDAR_ACTION_PENDING") {
+            setCalendarActionPending(false);
+            continue;
+        }
+        fireAddonEvent(signal.event, signal.args);
+    }
+    for (uint64_t guid : ctx.nameQueries) queryPlayerName(guid);
+    // A removed invitation that leaves a mail looks for it (0x005704d0).
+    if (ctx.checkMail && inventoryHandler_) inventoryHandler_->checkForMail();
     // 0x005bbbb0: an alert about an event the calendar has not loaded asks
     // for the pending count instead.
     if (ctx.askNumPending && isInWorld() && socket) {
         network::Packet ask(wireOpcode(Opcode::CMSG_CALENDAR_GET_NUM_PENDING));
         socket->send(ask);
     }
+}
+
+void GameHandler::onCalendarNameKnown(uint64_t guid) {
+    std::vector<CalendarSignal> said;
+    calendarNameArrived(calendarEventDetail_, guid, said);
+    for (const auto& signal : said) fireAddonEvent(signal.event, signal.args);
 }
 
 } // namespace game

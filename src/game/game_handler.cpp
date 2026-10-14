@@ -3586,59 +3586,79 @@ void GameHandler::requestCalendar() {
     if (socialHandler_) socialHandler_->requestCalendar();
 }
 
+bool GameHandler::calendarActionAllowed() const {
+    return socialHandler_ && isInWorld() && !calendarActionPending_;
+}
+
+void GameHandler::setCalendarActionPending(bool pending) {
+    calendarActionPending_ = pending;
+    fireAddonEvent("CALENDAR_ACTION_PENDING", {eventBool(pending)});
+}
+
+// Each request below is one the client sends only while no other is pending,
+// and marks pending once sent (0x005b7e20 and the setters beside it); the
+// server's answer, or its error, clears it (0x005c3fe0, 0x005b9960).
+
 void GameHandler::inviteToCalendarEvent(uint64_t eventId, uint64_t inviteId,
                                         const std::string& name,
                                         bool isPreInvite, bool isGuildEvent) {
-    if (socialHandler_) {
-        socialHandler_->inviteToCalendarEvent(eventId, inviteId, name,
-                                              isPreInvite, isGuildEvent);
-    }
+    if (!calendarActionAllowed()) return;
+    socialHandler_->inviteToCalendarEvent(eventId, inviteId, name, isPreInvite, isGuildEvent);
+    setCalendarActionPending(true);
 }
 
 void GameHandler::massInviteGuildToCalendarEvent(uint32_t minLevel,
                                                  uint32_t maxLevel,
                                                  uint32_t minRank) {
-    if (socialHandler_) {
-        socialHandler_->massInviteGuildToCalendarEvent(minLevel, maxLevel, minRank);
-    }
+    if (!calendarActionAllowed()) return;
+    socialHandler_->massInviteGuildToCalendarEvent(minLevel, maxLevel, minRank);
+    setCalendarActionPending(true);
 }
 
 void GameHandler::updateCalendarEvent(uint64_t eventId, uint64_t inviteId,
                                       const CalendarEventDraft& draft) {
-    if (socialHandler_) socialHandler_->updateCalendarEvent(eventId, inviteId, draft);
+    if (!calendarActionAllowed()) return;
+    socialHandler_->updateCalendarEvent(eventId, inviteId, draft);
+    setCalendarActionPending(true);
 }
 
 void GameHandler::removeCalendarEvent(uint64_t eventId, uint64_t inviteId) {
-    if (socialHandler_) socialHandler_->removeCalendarEvent(eventId, inviteId);
+    if (!calendarActionAllowed()) return;
+    socialHandler_->removeCalendarEvent(eventId, inviteId);
+    setCalendarActionPending(true);
 }
 
 void GameHandler::setCalendarInviteStatus(uint64_t inviteeGuid, uint64_t eventId,
                                           uint64_t inviteId, uint8_t status) {
-    if (socialHandler_) {
-        socialHandler_->setCalendarInviteStatus(inviteeGuid, eventId, inviteId, status);
-    }
+    if (!calendarActionAllowed()) return;
+    socialHandler_->setCalendarInviteStatus(inviteeGuid, eventId, inviteId, status);
+    setCalendarActionPending(true);
 }
 
 void GameHandler::setCalendarInviteModerator(uint64_t inviteeGuid, uint64_t eventId,
                                              uint64_t inviteId, uint8_t rank) {
-    if (socialHandler_) {
-        socialHandler_->setCalendarInviteModerator(inviteeGuid, eventId, inviteId, rank);
-    }
+    if (!calendarActionAllowed()) return;
+    socialHandler_->setCalendarInviteModerator(inviteeGuid, eventId, inviteId, rank);
+    setCalendarActionPending(true);
 }
 
 void GameHandler::requestCalendarEvent(uint64_t eventId) {
-    if (socialHandler_) socialHandler_->requestCalendarEvent(eventId);
+    if (!calendarActionAllowed()) return;
+    socialHandler_->requestCalendarEvent(eventId);
+    setCalendarActionPending(true);
 }
 
 void GameHandler::createCalendarEvent(const CalendarEventDraft& draft) {
-    if (socialHandler_) socialHandler_->createCalendarEvent(draft);
+    if (!calendarActionAllowed()) return;
+    socialHandler_->createCalendarEvent(draft);
+    setCalendarActionPending(true);
 }
 
 void GameHandler::respondToCalendarInvite(uint64_t eventId, uint64_t inviteId,
                                           uint32_t status) {
-    if (socialHandler_) {
-        socialHandler_->respondToCalendarInvite(eventId, inviteId, status);
-    }
+    if (!calendarActionAllowed()) return;
+    socialHandler_->respondToCalendarInvite(eventId, inviteId, status);
+    setCalendarActionPending(true);
 }
 
 // ============================================================

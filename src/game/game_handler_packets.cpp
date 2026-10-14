@@ -2528,7 +2528,7 @@ void GameHandler::registerRemainingOpcodes() {
             const std::string text = interfaceString("COMPLAINT_ADDED", "Complaint Registered.");
             if (where == 12) {
                 fireAddonEvent("CALENDAR_UPDATE_ERROR", {text});
-                fireAddonEvent("CALENDAR_ACTION_PENDING", {eventBool(false)});
+                setCalendarActionPending(false);
             } else {
                 addSystemChatMessage(text);
             }
@@ -3401,7 +3401,7 @@ void GameHandler::registerRemainingOpcodes() {
             if (e.arg == 1) args.push_back(name);
             else if (e.arg != 0) args.push_back(std::to_string(e.arg));
             fireAddonEvent("CALENDAR_UPDATE_ERROR", {interfaceFormat(e.key, e.enUS, args)});
-            fireAddonEvent("CALENDAR_ACTION_PENDING", {eventBool(false)});
+            setCalendarActionPending(false);
             break;
         }
         packet.skipAll();

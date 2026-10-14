@@ -3141,6 +3141,30 @@ void InventoryHandler::closeMailbox() {
     showMailCompose_ = false;
     clearMailAttachments();
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_CLOSED", {});
+    // A look for mail held over while it was open goes out now, with nothing
+    // known until the answer (0x00571730 -> 0x0056ff70).
+    if (mailCheckOnClose_) {
+        mailCheckOnClose_ = false;
+        hasNewMail_ = false;
+        if (owner_.isInWorld() && owner_.getSocket()) {
+            network::Packet query(wireOpcode(Opcode::MSG_QUERY_NEXT_MAIL_TIME));
+            owner_.getSocket()->send(query);
+        }
+    }
+}
+
+void InventoryHandler::checkForMail() {
+    if (mailboxOpen_) {
+        mailCheckOnClose_ = true;
+        return;
+    }
+    // 0x0056ff70 asks, then a zero delay marks mail as there and says so.
+    mailCheckOnClose_ = false;
+    if (owner_.isInWorld() && owner_.getSocket()) {
+        network::Packet query(wireOpcode(Opcode::MSG_QUERY_NEXT_MAIL_TIME));
+        owner_.getSocket()->send(query);
+    }
+    setHasNewMail(true);
 }
 
 void InventoryHandler::refreshMailList() {

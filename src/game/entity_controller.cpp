@@ -3275,6 +3275,8 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
         if (owner_.getChatHandler()) owner_.getChatHandler()->flushChatAwaitingName(data.guid);
         // A trade request's ERR_INITIATE_TRADE_S waiting for it (0x00703c60).
         if (owner_.getInventoryHandler()) owner_.getInventoryHandler()->onPlayerNameKnown(data.guid, data.name);
+        // An open calendar event holding its invite list back for it (0x005f1b10).
+        owner_.onCalendarNameKnown(data.guid);
         // Update entity name
         auto entity = entityManager.getEntity(data.guid);
         if (entity && entity->getType() == ObjectType::PLAYER) {

@@ -339,6 +339,10 @@ public:
     bool hasNewMail() const { return hasNewMail_; }
     void openMailbox(uint64_t guid);
     void closeMailbox();
+    /// Look for mail, as SMSG_RECEIVED_MAIL with no delay does (0x005704d0):
+    /// with the mailbox open, only once it closes; otherwise ask the server
+    /// (MSG_QUERY_NEXT_MAIL_TIME) and show the letter meanwhile.
+    void checkForMail();
 
     /// Put paper in the compose frame, so its Send button can be enabled.
     void selectDefaultStationery();
@@ -747,6 +751,8 @@ private:
     bool pendingLootActive_ = false;
     uint8_t pendingLootSlot_ = 0;
     bool mailboxOpen_ = false;
+    /// A look for mail held over until the mailbox closes (0x00beb1e8).
+    bool mailCheckOnClose_ = false;
     uint64_t mailboxGuid_ = 0;
     std::vector<MailMessage> mailInbox_;
     int selectedMailIndex_ = -1;

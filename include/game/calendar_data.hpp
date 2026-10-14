@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -119,10 +120,15 @@ struct CalendarData {
     std::vector<CalendarRaidReset> resets;
     std::vector<CalendarHoliday> holidays;
 
-    /// The client's pending-invite list: one event id per invitation still
-    /// waiting on an answer (0x005be590 appends, 0x005becd0 removes the
-    /// first match). Rebuilt from the invites when the calendar arrives.
-    std::vector<uint64_t> pendingInvites;
+    /// The client's pending-invite list: one node per invitation still
+    /// waiting on an answer, with who sent it (0x005be590 appends,
+    /// 0x005becd0 removes the first match). Rebuilt from the invites when the
+    /// calendar arrives.
+    struct PendingInvite {
+        uint64_t eventId = 0;
+        uint64_t sender = 0;
+    };
+    std::vector<PendingInvite> pendingInvites;
     /// SMSG_CALENDAR_SEND_NUM_PENDING's count (0x00c207f4), which the
     /// calendar arriving zeroes.
     uint32_t serverPendingCount = 0;
@@ -130,9 +136,13 @@ struct CalendarData {
     bool received = false;
 
     /// CalendarGetNumPendingInvites: the larger of the server's count and the
-    /// list's (0x005bec70).
-    [[nodiscard]] uint32_t pendingInviteCount() const {
-        const auto listed = static_cast<uint32_t>(pendingInvites.size());
+    /// list's, which counts only invitations from a sender who is known and
+    /// not on the ignore list (0x005bec70, 0x006b52e0).
+    [[nodiscard]] uint32_t pendingInviteCount(
+            const std::function<bool(uint64_t)>& isIgnored = {}) const {
+        uint32_t listed = 0;
+        for (const auto& p : pendingInvites)
+            if (p.sender != 0 && !(isIgnored && isIgnored(p.sender))) ++listed;
         return listed > serverPendingCount ? listed : serverPendingCount;
     }
 };
@@ -185,6 +195,13 @@ struct CalendarEventDetail {
     WowDate timeZoneTime;
     uint32_t guildId = 0;
     std::vector<CalendarEventInvitee> invitees;
+    /// Invitees whose names are still being asked for, one per lookup the
+    /// client counts (0x548), and what to say once the last one is in (0x54c,
+    /// 0x005f1a40): 0 CALENDAR_UPDATE_INVITE_LIST, 1 the same with true, 2
+    /// CALENDAR_NEW_EVENT, 3 the same for a copy, 4 CALENDAR_OPEN_EVENT. A
+    /// fresh event starts at 1 (0x005f29e0).
+    std::vector<uint64_t> namesAwaited;
+    uint8_t onceNamed = 1;
 };
 
 /// Read one SMSG_CALENDAR_SEND_EVENT. False when it runs out mid-row.
@@ -263,6 +280,16 @@ struct CalendarContext {
     /// which two alerts do for an event the calendar has not yet loaded
     /// (0x005bbbb0).
     bool askNumPending = false;
+    /// Whether a player is on the ignore list (0x006b52e0). Unset, nobody is.
+    std::function<bool(uint64_t)> isIgnored;
+    /// Whether a player's name is already known (0x0067d770). Unset, every
+    /// name is.
+    std::function<bool(uint64_t)> nameKnown;
+    /// Names the open event waits on, to be asked for (CMSG_NAME_QUERY).
+    std::vector<uint64_t> nameQueries;
+    /// A removed invitation that leaves a mail behind: look for mail as
+    /// SMSG_RECEIVED_MAIL does (0x005c0ae0 -> 0x005704d0).
+    bool checkMail = false;
 };
 
 /// Read one calendar packet the way 0x005c3fe0 and its handlers read it, and
@@ -272,6 +299,11 @@ struct CalendarContext {
 /// nothing applied.
 bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
                          CalendarContext& ctx);
+
+/// A name the open event was waiting on has arrived (0x005f1b10 ->
+/// 0x005f1a40): once none are left, what the event was holding back is said.
+void calendarNameArrived(CalendarEventDetail& open, uint64_t guid,
+                         std::vector<CalendarSignal>& out);
 
 /// A date moved on by whole minutes, weekday and all - what 0x0076c3f0 does
 /// to the date it is handed.
