@@ -3254,6 +3254,14 @@ float characterRenderRadiusSq() {
     return renderRadius * renderRadius;
 }
 
+// Drawn see-through as a whole - the player's body as the camera closes in, a
+// unit fading in or out, a ghost: all of it goes with the blended batches, the
+// world's last phase, so the depth it writes (for its own parts to sort) hides
+// nothing opaque drawn after the characters - a tree trunk behind the body.
+bool instanceDrawnFaded(float opacity, float kitAlpha, float cameraAlpha) {
+    return opacity * kitAlpha * cameraAlpha < 0.999f;
+}
+
 /// Whether any batch of the model is blended (blend mode 2 and up).
 template <class Model>
 bool modelHasBlendedBatch(const Model& gpuModel) {
@@ -3309,7 +3317,10 @@ std::vector<CharacterRenderer::BlendedDraw> CharacterRenderer::planBlended(const
     const float renderRadiusSq = characterRenderRadiusSq();
     for (const auto& [id, instance] : instances) {
         if (!isDrawCandidate(instance, camPos, frustum, renderRadiusSq)) continue;
-        if (!modelHasBlendedBatch(*instance.cachedModel)) continue;
+        if (!modelHasBlendedBatch(*instance.cachedModel) &&
+            !instanceDrawnFaded(instance.opacity, instance.kitAlpha, instance.cameraAlpha)) {
+            continue;
+        }
         const glm::vec3 at = instance.hasOverrideModelMatrix
             ? glm::vec3(instance.overrideModelMatrix[3]) : instance.position;
         const glm::vec3 d = at - camPos;
@@ -3431,7 +3442,8 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         const auto& gpuModel = *instance.cachedModel;
 
         // Nothing to draw in the blended phase for a model with no blended batch.
-        if (phase == Phase::Blended && !modelHasBlendedBatch(gpuModel)) continue;
+        const bool faded = instanceDrawnFaded(instance.opacity, instance.kitAlpha, instance.cameraAlpha);
+        if (phase == Phase::Blended && !faded && !modelHasBlendedBatch(gpuModel)) continue;
 
         // Set model matrix (use override for weapon instances)
         glm::mat4 modelMat = instance.hasOverrideModelMatrix
@@ -3536,8 +3548,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 if (pass == 0 && bm != 0) continue;  // pass 0: opaque only
                 if (pass == 1 && bm == 0) continue;   // pass 1: non-opaque only
                 // Blended batches (2 and up) are the world's last phase.
-                if (phase == Phase::Opaque && bm >= 2) continue;
-                if (phase == Phase::Blended && bm < 2) continue;
+                // A faded instance draws every batch there (instanceDrawnFaded).
+                if (phase == Phase::Opaque && (bm >= 2 || faded)) continue;
+                if (phase == Phase::Blended && bm < 2 && !faded) continue;
                 if (applyGeosetFilter) {
                     if (instance.activeGeosets.find(batch.submeshId) == instance.activeGeosets.end()) {
                         continue;
@@ -3957,8 +3970,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.indexStart, 0, 0);
             }
             } // end pass loop
-        } else {
-            // Draw entire model with first texture
+        } else if ((phase == Phase::Blended) == faded) {
+            // Draw entire model with first texture: in the opaque phase, or
+            // faded in the blended one (instanceDrawnFaded)
             VkTexture* texPtr = !gpuModel.textureIds.empty() ? gpuModel.textureIds[0] : whiteTexture_.get();
             if (!texPtr || !texPtr->isValid()) texPtr = whiteTexture_.get();
 
