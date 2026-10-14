@@ -16,6 +16,8 @@
 
 #include <glm/glm.hpp>
 
+#include "rendering/rt_gi_volume.hpp"
+
 namespace wowee::rendering::rt_gbuffer {
 
 inline constexpr uint32_t kValid = 1u;
@@ -49,26 +51,9 @@ struct Texel {
 /// The eight 16-bit words of the two R16G16B16A16_UNORM targets.
 using Words = std::array<uint16_t, 8>;
 
-inline glm::vec2 octEncode(glm::vec3 n) {
-    n /= std::abs(n.x) + std::abs(n.y) + std::abs(n.z);
-    glm::vec2 e(n.x, n.y);
-    if (n.z < 0.0f) {
-        e = (1.0f - glm::abs(glm::vec2(n.y, n.x))) *
-            glm::vec2(e.x >= 0.0f ? 1.0f : -1.0f, e.y >= 0.0f ? 1.0f : -1.0f);
-    }
-    return e;
-}
-
-inline glm::vec3 octDecode(glm::vec2 e) {
-    glm::vec3 n(e.x, e.y, 1.0f - std::abs(e.x) - std::abs(e.y));
-    if (n.z < 0.0f) {
-        const glm::vec2 xy = (1.0f - glm::abs(glm::vec2(n.y, n.x))) *
-                             glm::vec2(n.x >= 0.0f ? 1.0f : -1.0f, n.y >= 0.0f ? 1.0f : -1.0f);
-        n.x = xy.x;
-        n.y = xy.y;
-    }
-    return glm::normalize(n);
-}
+// The same octahedral mapping as the probe tiles (rt_gi_volume.hpp).
+using gi::octDecode;
+using gi::octEncode;
 
 inline uint32_t quantise(float v, float steps) {
     return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * steps + 0.5f);

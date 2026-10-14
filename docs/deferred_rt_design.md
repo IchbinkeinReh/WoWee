@@ -249,4 +249,13 @@ BVH, the probe GI, the CameraZoom Lua functions.
   the non-RT look (as today's "no result").
 * The G-buffer needs `R16G16B16A16_UNORM` as a colour attachment at the MSAA
   sample count, dual-source blending and independent blending; without them RT
-  stays off with a log line.
+  stays off with a log line. Under MSAA the apply pass also needs
+  `sampleRateShading`.
+* Foliage and other alpha-tested thin geometry often finds no traced texel
+  within the 3x3 match at half resolution (red in debug views 5 and 7) and so
+  shows the non-RT look there. The old path borrowed a neighbour's result for
+  those pixels; the new one does not, so leaves can look flatter than before.
+* Every opaque pipeline gets a G-buffer twin (specialization constant), which
+  doubles those pipelines' creation at startup and in the pipeline cache.
+* Transparent units (`rtLightBehind`) get the shadow map at RT strength and the
+  point lights of what stands behind them, but no traced AO.
