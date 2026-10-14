@@ -279,10 +279,14 @@ constexpr SettingDesc kSchema[] = {
      "Replace the picture with one part of the ray traced lighting.\n"
      "The traced views work in every ray tracing mode; the probe views\n"
      "need Shadows, occlusion and bounce light. Nothing with ray tracing\n"
-     "off. WOWEE_GI_DEBUG, when set, wins.",
+     "off. The history length is green where a surface has been traced\n"
+     "over many frames and red where it starts afresh; the last view is\n"
+     "green where a pixel found its own surface in the half-resolution\n"
+     "trace and red where it is lit as without the tracing.\n"
+     "WOWEE_GI_DEBUG, when set, wins.",
      "Off|Probe light ratio (grey = open field)|Probe irradiance|Ambient with the probes|"
      "Probe cascades|Traced sun visibility|Point lights' light|Traced occlusion|"
-     "How each surface found its traced light|How far each unit moved since last frame", 0},
+     "Traced history length|How each pixel found its traced surface", 0},
     {"dbgambient", "Ambient light (%)", SettingKind::Int, 0, 300, 5, "Debug Graphics", "Light",
      "The zone's ambient light, the base every surface starts from\n"
      "before the sun and the lamps. 100 is the zone's own.", "", 100},
