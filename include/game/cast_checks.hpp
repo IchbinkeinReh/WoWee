@@ -353,4 +353,20 @@ struct Result {
     return {};
 }
 
+/// 0x0080cce0 -> 0x00805f60: a press of the spell already pending - its
+/// cast running - is dropped without a word while it is not ready
+/// (0x00809000) or waits on the next swing (Attributes 0x4 | 0x400). Any
+/// other press goes on to the checks and is sent: neither 0x0080cce0 nor
+/// 0x0080ac90 asks after the running cast.
+[[nodiscard]] constexpr bool dropsPendingPress(bool samePending, bool notReady, uint32_t attributes) {
+    return samePending && (notReady || (attributes & 0x404u) != 0);
+}
+
+/// 0x00809af0 fails the pending cast its count names (0x008051d0), not the
+/// running one: a spell sent during a cast and refused SPELL_IN_PROGRESS, or
+/// any other spell's failure, leaves the running cast as it was.
+[[nodiscard]] constexpr bool failureEndsRunningCast(bool casting, uint8_t result, bool sameSpell) {
+    return !casting || (result != kSpellInProgress && sameSpell);
+}
+
 }  // namespace wowee::game::cast_check

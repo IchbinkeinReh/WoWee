@@ -902,3 +902,23 @@ TEST_CASE("the usability events tell a flip, not every point of power, as 0x0053
     judge();
     CHECK(told == 3);  // spent: short again
 }
+
+TEST_CASE("a spell pressed during a cast is sent, as 0x0080cce0 has it", "[cast_spells]") {
+    using namespace cast_check;
+    // Another spell: not dropped, whatever the cooldowns - the checks and
+    // the server have it.
+    CHECK_FALSE(dropsPendingPress(false, true, 0x4u));
+    // The spell being cast, pressed again: dropped while not ready or on the
+    // next swing (0x00805f60, 0x00809000, Attributes 0x404), sent otherwise.
+    CHECK(dropsPendingPress(true, true, 0u));
+    CHECK(dropsPendingPress(true, false, 0x4u));
+    CHECK(dropsPendingPress(true, false, 0x400u));
+    CHECK_FALSE(dropsPendingPress(true, false, 0x10u));
+    // The server's SPELL_IN_PROGRESS for the press leaves the running cast
+    // (0x00809af0 fails the pending cast its count names).
+    CHECK_FALSE(failureEndsRunningCast(true, kSpellInProgress, true));
+    CHECK_FALSE(failureEndsRunningCast(true, kSpellInProgress, false));
+    CHECK_FALSE(failureEndsRunningCast(true, kNotReady, false));
+    CHECK(failureEndsRunningCast(true, kNotReady, true));
+    CHECK(failureEndsRunningCast(false, kSpellInProgress, false));
+}

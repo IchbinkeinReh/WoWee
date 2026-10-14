@@ -1633,6 +1633,14 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         }
     }
 
+    // 0x0080cce0 -> 0x00805f60: the same spell already pending, dropped.
+    if (casting_ && currentCastSpellId_ == spellId) {
+        const auto it = owner_.spellNameCacheRef().find(spellId);
+        if (cast_check::dropsPendingPress(true, playerCooldown(spellId).running,
+                                          it != owner_.spellNameCacheRef().end() ? it->second.attr : 0u))
+            return;
+    }
+
     // 0x0080cce0: what the cursor holds is put down (0x00809a60), then the
     // unit asked is held to the reach (0x00809610) and the caster to
     // 0x00739650's rules.
@@ -1642,18 +1650,11 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // A spell that wants a place on the ground waits for it (0x0080c790).
     if (armGroundTarget(spellId, 0)) return;
 
-    // No spell is held for when the cast ends: 3.3.5 has no spell queue (no
-    // SpellQueueWindow, nothing kept by 0x0080cce0 or 0x0080ac90).
-    if (casting_) {
-        if (craftQueueSpellId_ == spellId) {
-            // The press is dropped, which for a craft is the whole action
-            // gone with nothing said - and a bandage is a three second cast,
-            // so this is the easy one to hit.
-            LOG_WARNING("Craft: spell ", spellId, " not sent - a cast is already "
-                        "running with ", castTimeRemaining_, "s left");
-        }
-        return;
-    }
+    // Another spell pressed while a cast runs is not held back: neither
+    // 0x0080cce0 nor 0x0080ac90 asks after the running cast, so it is sent,
+    // and the server answers SPELL_FAILED_SPELL_IN_PROGRESS (or, for one it
+    // lets through, interrupts the channel itself). Nothing is kept for when
+    // the cast ends: 3.3.5 has no spell queue.
 
     // Spells cast at an item - Disenchant, Prospecting, Milling, the enchant
     // formulas - carry TARGET_FLAG_ITEM in Spell.dbc's Targets. Sending one with
@@ -3086,24 +3087,31 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     const uint64_t gatherGoGuid = owner_.lastInteractedGoGuidRef();
     const bool gatherCast = gatherGoGuid != 0 && isGatherSpellId(data.spellId);
 
-    casting_ = false;
-    castIsChannel_ = false;
-    currentCastSpellId_ = 0;
-    castTimeRemaining_ = 0.0f;
-    owner_.lastInteractedGoGuidRef() = 0;
-    owner_.pendingGameObjectInteractGuidRef() = 0;
-    craftQueueSpellId_ = 0;
-    craftQueueRemaining_ = 0;
-    // Remove lingering precast visual effects
-    if (auto* renderer = owner_.services().renderer) {
-        if (auto* svs = renderer->getSpellVisualSystem())
-            svs->cancelAllPrecastVisuals();
-    }
+    // 0x00809af0 fails the pending cast the count names (0x008051d0), not
+    // whatever is casting: a spell sent during a cast and refused
+    // SPELL_IN_PROGRESS leaves the running cast as it was.
+    const bool otherCast =
+        !cast_check::failureEndsRunningCast(casting_, data.result, data.spellId == currentCastSpellId_);
+    if (!otherCast) {
+        casting_ = false;
+        castIsChannel_ = false;
+        currentCastSpellId_ = 0;
+        castTimeRemaining_ = 0.0f;
+        owner_.lastInteractedGoGuidRef() = 0;
+        owner_.pendingGameObjectInteractGuidRef() = 0;
+        craftQueueSpellId_ = 0;
+        craftQueueRemaining_ = 0;
+        // Remove lingering precast visual effects
+        if (auto* renderer = owner_.services().renderer) {
+            if (auto* svs = renderer->getSpellVisualSystem())
+                svs->cancelAllPrecastVisuals();
+        }
 
-    // Stop precast sound
-    if (auto* ac = owner_.services().audioCoordinator) {
-        if (auto* ssm = ac->getSpellSoundManager()) {
-            ssm->stopPrecast();
+        // Stop precast sound
+        if (auto* ac = owner_.services().audioCoordinator) {
+            if (auto* ssm = ac->getSpellSoundManager()) {
+                ssm->stopPrecast();
+            }
         }
     }
 
@@ -3163,6 +3171,8 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
             owner_.playErrorSpeech(*speech);
     }
 
+    // Not for a cast refused beside the running one: its bar goes on.
+    if (otherCast) return;
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("UNIT_SPELLCAST_FAILED", spellcastArgs("player", data.spellId));
         owner_.addonEventCallbackRef()("UNIT_SPELLCAST_STOP", spellcastArgs("player", data.spellId));
