@@ -421,47 +421,51 @@ glm::vec3 TransportManager::getPlayerWorldPosition(uint64_t transportGuid, const
                     " not found - returning localOffset as-is (callers should guard)");
         return localOffset;
     }
+    // Through the transport's matrix as it is now (0x004f4460), an M2 lift's
+    // as much as a WMO ship's: one turned by TransportRotation.dbc carries
+    // its riders round with it rather than only turning their facings.
+    return transport_local::toWorld(!transport->isM2, passengerFrame(*transport), localOffset);
+}
 
-    if (transport->isM2) {
-        // M2 transports (trams): localOffset is a canonical world-space delta
-        // from the transport's canonical position. Just add directly.
-        return transport->position + localOffset;
-    }
+std::optional<glm::vec3> TransportManager::worldToTransportLocal(
+    uint64_t transportGuid, const glm::vec3& canonicalWorld) const {
+    const auto it = transports_.find(transportGuid);
+    if (it == transports_.end()) return std::nullopt;
+    return transport_local::toLocal(!it->second.isM2, passengerFrame(it->second), canonicalWorld);
+}
 
-    // WMO transports (ships): localOffset is in transport-local space,
-    // use the render-space transform matrix.
-    glm::vec4 localPos(localOffset, 1.0f);
-    glm::vec4 worldPos = transport->transform * localPos;
-    // transform is a renderer-space matrix; every caller of this API expects
-    // canonical world coordinates. Returning it raw swaps X/Y again when the
-    // application converts canonical -> render, leaving riders behind or mirrored.
-    return core::coords::renderToCanonical(glm::vec3(worldPos));
+glm::mat4 TransportManager::passengerFrame(const ActiveTransport& transport) {
+    // A WMO hull is drawn by its facing (or its TransportRotation turn), so
+    // its render transform is the client's matrix (0x00712ee0). An M2 one's
+    // is its place and the rotation the client gives it - its facing, or its
+    // TransportRotation turn - not the drawn one, which for the Deeprun tram
+    // follows its track instead.
+    if (!transport.isM2) return transport.transform;
+    return transport_local::frame(
+        transport.position,
+        transport.pathRotation.value_or(game_object_rotation::fromFacing(transport.facing)));
 }
 
 std::optional<glm::mat4> TransportManager::passengerRenderFrame(uint64_t transportGuid) const {
     const auto it = transports_.find(transportGuid);
     if (it == transports_.end()) return std::nullopt;
-    if (it->second.isM2) return glm::translate(glm::mat4(1.0f), core::coords::canonicalToRender(it->second.position));
-    return it->second.transform;
+    return passengerFrame(it->second);
 }
 
 glm::vec3 TransportManager::serverToTransportLocal(
     uint64_t transportGuid, const glm::vec3& serverOffset) const {
     const auto it = transports_.find(transportGuid);
-    // WMO transport movement blocks already express offsets in the model's
-    // local axes. Their render transform consumes those axes directly; applying
-    // the world-space server->canonical X/Y swap here displaced deck NPCs and
-    // server-attached players across the hull. M2 transports retain their older
-    // canonical-delta representation, unturned from the transport's frame.
+    // The wire's offset is in the transport's own frame, which is how it is
+    // kept: a WMO transport's as it comes, an M2 one's on canonical axes.
     if (it == transports_.end()) return transport_local::fromWire(false, serverOffset);
-    return transport_local::fromWire(!it->second.isM2, serverOffset, it->second.facing);
+    return transport_local::fromWire(!it->second.isM2, serverOffset);
 }
 
 glm::vec3 TransportManager::transportLocalToServer(
     uint64_t transportGuid, const glm::vec3& localOffset) const {
     const auto it = transports_.find(transportGuid);
     if (it == transports_.end()) return transport_local::toWire(false, localOffset);
-    return transport_local::toWire(!it->second.isM2, localOffset, it->second.facing);
+    return transport_local::toWire(!it->second.isM2, localOffset);
 }
 
 std::optional<float> TransportManager::transportFacing(uint64_t transportGuid) const {
@@ -909,6 +913,7 @@ bool TransportManager::applyPathRotation(ActiveTransport& transport, uint32_t pa
     // updateTransformMatrices puts back, so the render matrix is the
     // client's - its axes are the wire's.
     transport.facing = core::coords::normalizeAngleRad(game_object_rotation::facing(*rotation));
+    transport.pathRotation = *rotation;
     const glm::quat basis = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
     transport.rotation = glm::conjugate(basis) * *rotation * basis;
     return true;

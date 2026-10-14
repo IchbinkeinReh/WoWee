@@ -3903,13 +3903,19 @@ void Application::applyServerMovementState(float deltaTime) {
                 // still moves the player, instead of either (a) fully locking
                 // movement or (b) recomputing offset from the absolute position,
                 // which is a no-op identity once fed back into
-                // lockedCanonical = tr->position + offset: the character's render
+                // lockedCanonical = transport matrix * offset: the character's render
                 // position could never actually change due to the tram moving, so
                 // riding appeared to "float" in place no matter how far the tram
                 // traveled underneath.
                 const bool isDeeprunTram =
                     game::TransportManager::isDeeprunTramTransport(*tr);
-                glm::vec3 localOffset = gameHandler->getPlayerTransportOffset();
+                auto* transports = gameHandler->getTransportManager();
+                const uint64_t rideGuid = gameHandler->getPlayerTransportGuid();
+                // The offset is in the car's own frame; the walking below is
+                // in the world's, so it is done to the place the offset puts
+                // the rider and taken back into the car's frame after.
+                glm::vec3 riderCanonical = transports->getPlayerWorldPosition(
+                    rideGuid, gameHandler->getPlayerTransportOffset());
                 glm::vec3 tentativeCanonical = core::coords::renderToCanonical(renderPos);
                 if (hasM2RideLock_) {
                     glm::vec3 walkDelta = tentativeCanonical - lastM2RideLockedCanonical_;
@@ -3932,9 +3938,31 @@ void Application::applyServerMovementState(float deltaTime) {
                     const bool hasMovementInput = renderer->getCameraController() &&
                         renderer->getCameraController()->isMoving();
                     if (hasMovementInput) {
-                        localOffset.x += walkDelta.x;
-                        localOffset.y += walkDelta.y;
+                        riderCanonical.x += walkDelta.x;
+                        riderCanonical.y += walkDelta.y;
                     }
+                }
+                // Thunder Bluff lifts have real floor at both ends of their travel,
+                // so letting Z track physics while airborne (jumping) is recoverable -
+                // the player lands back on the platform. The Deeprun Tram tunnel has
+                // no floor at all except at the two station platforms; if this ran for
+                // it, isGrounded() ever reporting false mid-tunnel (e.g. because M2
+                // collision for a moving instance isn't recognized as ground the same
+                // way static terrain is) would let gravity pull the player away from
+                // the tram with nothing to land on - reported live as falling through
+                // the tram/tunnel and dying. Keep Z fully locked for the tram; only
+                // lifts get the airborne exception.
+                if (!isDeeprunTram && renderer->getCameraController() &&
+                    !renderer->getCameraController()->isGrounded()) {
+                    // While airborne (jump/fall), let vertical offset track normal
+                    // physics instead of staying pinned to the boarding-time value.
+                    // Without this, floor clamping can hold world-Z static unless the
+                    // player is jumping, which makes lifts appear to not move vertically.
+                    riderCanonical.z = tentativeCanonical.z;
+                }
+                glm::vec3 localOffset =
+                    transports->worldToTransportLocal(rideGuid, riderCanonical).value_or(glm::vec3(0.0f));
+                if (hasM2RideLock_) {
                     // Keep a generous distance clamp as a secondary backstop for any
                     // other source of drift (e.g. knockback, server-forced movement)
                     // this input gate doesn't cover.
@@ -3959,27 +3987,9 @@ void Application::applyServerMovementState(float deltaTime) {
                 if (isDeeprunTram && renderer->getCameraController()) {
                     renderer->getCameraController()->suppressVerticalPhysics();
                 }
-                // Thunder Bluff lifts have real floor at both ends of their travel,
-                // so letting Z track physics while airborne (jumping) is recoverable -
-                // the player lands back on the platform. The Deeprun Tram tunnel has
-                // no floor at all except at the two station platforms; if this ran for
-                // it, isGrounded() ever reporting false mid-tunnel (e.g. because M2
-                // collision for a moving instance isn't recognized as ground the same
-                // way static terrain is) would let gravity pull the player away from
-                // the tram with nothing to land on - reported live as falling through
-                // the tram/tunnel and dying. Keep Z fully locked for the tram; only
-                // lifts get the airborne exception.
-                if (!isDeeprunTram && renderer->getCameraController() &&
-                    !renderer->getCameraController()->isGrounded()) {
-                    // While airborne (jump/fall), let vertical offset track normal
-                    // physics instead of staying pinned to the boarding-time value.
-                    // Without this, floor clamping can hold world-Z static unless the
-                    // player is jumping, which makes lifts appear to not move vertically.
-                    localOffset.z = tentativeCanonical.z - tr->position.z;
-                }
                 gameHandler->setPlayerTransportOffset(localOffset);
 
-                glm::vec3 lockedCanonical = tr->position + localOffset;
+                glm::vec3 lockedCanonical = transports->getPlayerWorldPosition(rideGuid, localOffset);
                 renderPos = core::coords::canonicalToRender(lockedCanonical);
                 renderer->getCharacterPosition() = renderPos;
                 lastM2RideLockedCanonical_ = lockedCanonical;

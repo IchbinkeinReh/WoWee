@@ -144,9 +144,44 @@ TEST_CASE("a passenger's offset goes back out as it came in", "[wire_positions]"
         CHECK(back.y == wire.y);
         CHECK(back.z == wire.z);
     }
-    // A WMO transport keeps the wire's axes; an M2 one a canonical delta.
+    // A WMO transport keeps the wire's axes; an M2 one canonical ones.
     CHECK(transport_local::fromWire(true, wire).x == 3.0f);
     CHECK(transport_local::fromWire(false, wire).x == -7.5f);
+}
+
+TEST_CASE("a passenger is carried round by a transport that turns", "[wire_positions]") {
+    // 0x004f4460: the place is the offset put through the transport's matrix
+    // as it is now. A lift at canonical (100, 200, 50) with a rider standing
+    // two yards along its own +x (the wire's), turned a quarter by
+    // TransportRotation.dbc, has that rider two yards along the wire's +y -
+    // canonical +x - from its middle, not where the rider stood at boarding.
+    const glm::vec3 lift(100.0f, 200.0f, 50.0f);
+    for (const bool wmo : {true, false}) {
+        const glm::vec3 local = transport_local::fromWire(wmo, glm::vec3(2.0f, 0.0f, 0.5f));
+        const glm::vec3 before = transport_local::toWorld(
+            wmo, transport_local::frame(lift, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)), local);
+        CHECK(before.x == Catch::Approx(100.0f));
+        CHECK(before.y == Catch::Approx(202.0f));
+        CHECK(before.z == Catch::Approx(50.5f));
+        const glm::mat4 turned =
+            transport_local::frame(lift, glm::angleAxis(1.5707964f, glm::vec3(0.0f, 0.0f, 1.0f)));
+        const glm::vec3 after = transport_local::toWorld(wmo, turned, local);
+        CHECK(after.x == Catch::Approx(102.0f));
+        CHECK(after.y == Catch::Approx(200.0f).margin(1e-4));
+        CHECK(after.z == Catch::Approx(50.5f));
+        // And boarding there takes the same offset back (0x004c2300).
+        const glm::vec3 back = transport_local::toLocal(wmo, turned, after);
+        CHECK(back.x == Catch::Approx(local.x).margin(1e-4));
+        CHECK(back.y == Catch::Approx(local.y).margin(1e-4));
+        CHECK(back.z == Catch::Approx(local.z).margin(1e-4));
+    }
+    // A tilt the rows carry tilts the rider with it: a half turn about the
+    // wire's x puts a rider half a yard up half a yard down.
+    const glm::vec3 local = transport_local::fromWire(false, glm::vec3(0.0f, 0.0f, 0.5f));
+    const glm::vec3 tipped = transport_local::toWorld(
+        false, transport_local::frame(lift, glm::angleAxis(3.1415927f, glm::vec3(1.0f, 0.0f, 0.0f))),
+        local);
+    CHECK(tipped.z == Catch::Approx(49.5f));
 }
 
 TEST_CASE("a passenger on a turned lift is sent its place in the lift's frame", "[wire_positions]") {
@@ -154,11 +189,14 @@ TEST_CASE("a passenger on a turned lift is sent its place in the lift's frame", 
     // matrix (0x004f47b0 -> 0x004c2300); a lift placed at pi/2 has its own +x
     // along the wire's +y. Standing two yards north of its middle - canonical
     // +x, the wire's +y - is two yards along the lift's +x.
-    const float liftFacing = 1.5707964f;
-    const glm::vec3 wire = transport_local::toWire(false, glm::vec3(2.0f, 0.0f, 0.5f), liftFacing);
+    const glm::vec3 liftPlace(10.0f, 20.0f, 30.0f);
+    const glm::mat4 lift =
+        transport_local::frame(liftPlace, glm::angleAxis(1.5707964f, glm::vec3(0.0f, 0.0f, 1.0f)));
+    const glm::vec3 wire = transport_local::toWire(
+        false, transport_local::toLocal(false, lift, liftPlace + glm::vec3(2.0f, 0.0f, 0.5f)));
     CHECK(wire.x == Catch::Approx(2.0f));
     CHECK(wire.y == Catch::Approx(0.0f).margin(1e-5));
-    CHECK(wire.z == 0.5f);
+    CHECK(wire.z == Catch::Approx(0.5f));
 
     // As a heartbeat writes it: flags (ONTRANSPORT), flags2, time, x y z o,
     // the lift's packed guid (0xF110000000000ABC), then the offset.
@@ -184,12 +222,14 @@ TEST_CASE("a passenger on a turned lift is sent its place in the lift's frame", 
 
     // An offset the server sends on the lift comes back out as it came.
     const glm::vec3 incoming(1.5f, -2.0f, 6.25f);
-    const glm::vec3 local = transport_local::fromWire(false, incoming, 1.2f);
-    const glm::vec3 back = transport_local::toWire(false, local, 1.2f);
-    CHECK(back.x == Catch::Approx(incoming.x));
-    CHECK(back.y == Catch::Approx(incoming.y));
+    const glm::vec3 local = transport_local::fromWire(false, incoming);
+    const glm::vec3 back = transport_local::toWire(false, local);
+    CHECK(back.x == incoming.x);
+    CHECK(back.y == incoming.y);
     CHECK(back.z == incoming.z);
     // And it is the lift's turn of it in the world, not the wire's axes.
-    CHECK(glm::length(local) == Catch::Approx(glm::length(incoming)));
-    CHECK_FALSE(local.x == Catch::Approx(incoming.y));
+    const glm::vec3 world = transport_local::toWorld(false, lift, local) - liftPlace;
+    CHECK(glm::length(world) == Catch::Approx(glm::length(incoming)));
+    CHECK(world.x == Catch::Approx(incoming.x));
+    CHECK(world.y == Catch::Approx(-incoming.y));
 }

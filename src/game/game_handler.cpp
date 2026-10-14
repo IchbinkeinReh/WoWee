@@ -1823,9 +1823,9 @@ void GameHandler::updateM2TransportBoarding(const glm::vec3& playerCanonical) {
             if (tr) {
                 const bool isDeeprunTram =
                     TransportManager::isDeeprunTramTransport(*tr);
-                const glm::vec3 offset = tr->isM2
-                    ? playerCanonical - tr->position
-                    : glm::vec3(tr->invTransform * glm::vec4(playerRenderPos, 1.0f));
+                // Through the inverse of its matrix (0x004f47b0 -> 0x004c2300).
+                const glm::vec3 offset =
+                    tm->worldToTransportLocal(bestGuid, playerCanonical).value_or(glm::vec3(0.0f));
                 setPlayerOnTransport(bestGuid, offset);
                 if (isDeeprunTram) {
                     const bool attached = getPlayerTransportGuid() == bestGuid;

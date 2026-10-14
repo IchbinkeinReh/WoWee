@@ -75,6 +75,10 @@ struct ActiveTransport {
     // GAMEOBJECT_PARENTROTATION, on the wire's axes: what a transport turning
     // by TransportRotation.dbc is turned by besides (0x0070dc10).
     glm::quat parentRotation{1.0f, 0.0f, 0.0f, 0.0f};
+    // The rotation TransportRotation.dbc last turned it to, on the wire's
+    // axes (applyPathRotation): its passengers' frame, tilt and all. None
+    // for a transport turned by its facing alone.
+    std::optional<glm::quat> pathRotation;
 
     double lastServerUpdate;         // Time of last server movement update
     int serverUpdateCount;          // Number of server updates received
@@ -277,11 +281,21 @@ public:
         }
         return snapshot;
     }
+    /// A passenger's canonical place in the world: its offset put through
+    /// the transport's matrix now (0x004f4460), so a transport that turns
+    /// carries it round.
     glm::vec3 getPlayerWorldPosition(uint64_t transportGuid, const glm::vec3& localOffset);
+    /// getPlayerWorldPosition's inverse, as boarding takes an offset
+    /// (0x004f47b0 -> 0x004c2300). None for a transport not known.
+    [[nodiscard]] std::optional<glm::vec3> worldToTransportLocal(uint64_t transportGuid,
+                                                                 const glm::vec3& canonicalWorld) const;
     /// The render-space matrix getPlayerWorldPosition puts a passenger's
-    /// offset into the world with: the WMO transport's transform, or an M2
-    /// one's place alone. None for a transport not known.
+    /// offset into the world with (0x00712ee0's, the object's +0xc4): the
+    /// WMO transport's transform, or an M2 one's place and rotation. None
+    /// for a transport not known.
     [[nodiscard]] std::optional<glm::mat4> passengerRenderFrame(uint64_t transportGuid) const;
+    /// The same matrix for a transport in hand.
+    [[nodiscard]] static glm::mat4 passengerFrame(const ActiveTransport& transport);
     [[nodiscard]] glm::vec3 serverToTransportLocal(uint64_t transportGuid,
                                      const glm::vec3& serverOffset) const;
     /// serverToTransportLocal's inverse: a passenger's offset as the wire
