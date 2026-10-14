@@ -249,7 +249,13 @@ static int lua_CombatLog_Object_IsA(lua_State* L) {
     return 1;
 }
 
+/// PlaySound(sound) (0x009858b0): a SoundEntries row on the SFX channel
+/// (0x004c8fc0), named by its id (a number, or a string that reads as one) or
+/// by its Name (0x004ccaa0). Anything else is the usage error. Returns
+/// nothing.
 static int lua_PlaySound(lua_State* L) {
+    if (!lua_isnumber(L, 1) && !lua_isstring(L, 1)) return luaL_error(L, "Usage: PlaySound(\"sound\")");
+
     // Silent while the interface is building itself, before anything else -
     // including the log below, so a line here means a sound that was played.
     // See LuaEngine::setUiSoundsSuppressed and AddonManager::loadAllAddons.
@@ -288,8 +294,9 @@ static int lua_PlaySound(lua_State* L) {
     // Accept numeric sound ID or string name
     std::string sound;
     if (lua_isnumber(L, 1)) {
-        uint32_t id = static_cast<uint32_t>(lua_tonumber(L, 1));
-        // Map common WoW sound IDs to named sounds
+        const auto id = static_cast<int32_t>(lua_tonumber(L, 1));
+        if (id > 0 && sfx->playById(static_cast<uint32_t>(id))) return 0;
+        // Without the row: the ids that have a stand-in here.
         switch (id) {
             case 856: case 1115: sfx->playButtonClick(); return 0; // igMainMenuOption
             case 840: sfx->playQuestActivate(); return 0;          // igQuestListOpen
@@ -418,19 +425,40 @@ static int lua_PlaySound(lua_State* L) {
     return 0;
 }
 
-// PlaySoundFile(path) - stub (file-based sounds not loaded from Lua)
-/// PlaySoundFile(path) - a sound named by where it lives rather than by a
-/// SoundEntries row.
+/// PlaySoundFile(file) (0x009859b0): the file once on the SCRIPTSOUND
+/// channel (0x004c9110(file, 4)). A second argument is not read. Returns 1.
 ///
 /// One caller in the interface, on the login screen, and a great many in
-/// addons: it is how an addon ships a sound of its own. Reads and caches the
-/// same way PlaySound does, because a path and a name are both just keys.
+/// addons: it is how an addon ships a sound of its own.
 static int lua_PlaySoundFile(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: PlaySoundFile(\"soundfile\")");
     auto* svc = getLuaServices(L);
     auto* ac = svc ? svc->audioCoordinator : nullptr;
     auto* sfx = ac ? ac->getUiSoundManager() : nullptr;
-    const char* path = luaL_optstring(L, 1, "");
+    const char* path = lua_tostring(L, 1);
     if (sfx && path && *path) sfx->playFile(path);
+    lua_pushnumber(L, 1);
+    return 1;
+}
+
+/// PlayMusic(file) (0x00985950): the file looping on the SCRIPTMUSIC channel
+/// (0x004c9110(file, 5)), and the zone music held off until StopMusic.
+/// Returns 1.
+static int lua_PlayMusic(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: PlayMusic(\"musicfile\")");
+    auto* svc = getLuaServices(L);
+    auto* ac = svc ? svc->audioCoordinator : nullptr;
+    const char* path = lua_tostring(L, 1);
+    if (ac && path) ac->playScriptMusic(path);
+    lua_pushnumber(L, 1);
+    return 1;
+}
+
+/// StopMusic() (0x00985a10 -> 0x004c8680): PlayMusic's file falls over half
+/// a second and the zone music may start again. Returns nothing.
+static int lua_StopMusic(lua_State* L) {
+    auto* svc = getLuaServices(L);
+    if (auto* ac = svc ? svc->audioCoordinator : nullptr) ac->stopScriptMusic();
     return 0;
 }
 
@@ -7034,6 +7062,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"Sound_GameSystem_GetOutputDriverNameByIndex", lua_Sound_GetOutputDriverNameByIndex},
                 {"PlaySound",           lua_PlaySound},
                 {"PlaySoundFile",       lua_PlaySoundFile},
+                {"PlayMusic",           lua_PlayMusic},
+                {"StopMusic",           lua_StopMusic},
                 {"GetPlayerMapPosition", lua_GetPlayerMapPosition},
                 {"GetPlayerFacing",     lua_GetPlayerFacing},
                 {"GetCVar",             lua_GetCVar},

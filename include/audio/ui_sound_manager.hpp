@@ -34,10 +34,13 @@ public:
     /// False when the name is not in the table or its file will not load, so
     /// the caller can fall back rather than going silent.
     bool playByName(const std::string& soundName);
+    /// Play a SoundEntries row by its id - PlaySound(856) (0x009858b0 ->
+    /// 0x004c8fc0). False as playByName is.
+    bool playById(uint32_t soundId);
 
-    /// Play a sound by path, which is what PlaySoundFile takes. Cached the
-    /// same way and by the same store: a path and a name are both just keys,
-    /// and nothing can be both.
+    /// Play a sound by path, which is what PlaySoundFile takes (0x009859b0 ->
+    /// 0x004c9110 on the SCRIPTSOUND channel, once, at full volume). Cached
+    /// by path.
     bool playFile(const std::string& path);
 
     // Volume control
@@ -154,15 +157,18 @@ private:
 
     // Helper methods
     bool loadSound(const std::string& path, UISample& sample, pipeline::AssetManager* assets);
-    /// SoundEntries rows by upper-cased name, built on the first playByName.
-    /// Empty after a build that found no table, which is also how the build is
-    /// stopped from being attempted on every click.
+    /// SoundEntries rows' files by id, and the ids by upper-cased name (the
+    /// first row of a name), built on the first play. Empty after a build
+    /// that found no table, which is also how the build is stopped from being
+    /// attempted on every click.
     void ensureSoundEntriesLoaded();
     bool soundEntriesBuilt_ = false;
-    std::unordered_map<std::string, std::vector<std::string>> soundPathsByName_;
-    /// Samples loaded on demand by name. Kept because a UI sound is played
+    std::unordered_map<uint32_t, std::vector<std::string>> soundPathsById_;
+    std::unordered_map<std::string, uint32_t> soundIdByName_;
+    /// Samples loaded on demand, by row and by PlaySoundFile's path. Kept because a UI sound is played
     /// again and again, and reading it from the archive each time is the one
     /// cost this has that the preloaded libraries do not.
+    std::unordered_map<uint32_t, UISample> idSamples_;
     std::unordered_map<std::string, UISample> namedSamples_;
     pipeline::AssetManager* assets_ = nullptr;
     void playSound(const std::vector<UISample>& library);

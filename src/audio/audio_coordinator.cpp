@@ -77,10 +77,11 @@ void AudioCoordinator::shutdown() {
 
 void AudioCoordinator::leaveWorld() {
     // 0x004c93b0: the music channel's two tracks at once (0x004c6450(1) on
-    // 0xb4ac90) - SMSG_PLAY_MUSIC's among them, its slot (3) emptied - and
-    // the silence between tracks over. The script's PlayMusic (0xb4ac3c,
-    // over half a second) is not played here.
+    // 0xb4ac90) - SMSG_PLAY_MUSIC's among them, its slot (3) emptied - the
+    // script's PlayMusic over half a second (0xb4ac3c), and the silence
+    // between tracks over.
     if (musicManager_) musicManager_->stopZoneMusic(true);
+    stopScriptMusic();
     silenceUntil_ = 0;
     // 0x004c85f0: the ambience's channels (0xb4ac50).
     if (ambientSoundManager_) ambientSoundManager_->stopAll();
@@ -102,13 +103,33 @@ void AudioCoordinator::playServerMusic(uint32_t soundId) {
     zone_music::fillServer(musicSlots_[zone_music::kSlotServer], static_cast<int32_t>(soundId));
 }
 
+void AudioCoordinator::playScriptMusic(const std::string& path) {
+    // 0x004c9110: nothing with Sound_EnableMusic off (10); otherwise the
+    // file replaces what the track held, looping (0x0087f7a0).
+    if (!musicEnabled_ || !musicManager_) return;
+    musicManager_->stopMusic(0.0f);
+    musicManager_->playMusic(path, true, 0.0f);
+    // Only once it plays (0x00878730): the hold, and the zone music's two
+    // tracks falling over their own falls.
+    scriptMusic_.played(musicEnabled_, musicManager_->isPlaying());
+    if (scriptMusic_.held) musicManager_->stopZoneMusic(false);
+}
+
+void AudioCoordinator::stopScriptMusic() {
+    // 0x004c8680: 0x004c6390(0xb4ac3c, 0, 0.5) and the hold lifted.
+    if (musicManager_) musicManager_->stopMusic(500.0f);
+    scriptMusic_.stopped();
+}
+
 void AudioCoordinator::setMusicEnabled(bool enabled) {
     if (enabled == musicEnabled_) return;
     musicEnabled_ = enabled;
     if (enabled) return;
-    // 0x004d1590: off, the music stops as at the unload (0x004c93b0), and
-    // SMSG_PLAY_MUSIC's slot is emptied (0x004c92f0).
+    // 0x004d1590: off, the music stops as at the unload (0x004c93b0),
+    // SMSG_PLAY_MUSIC's slot is emptied (0x004c92f0) and the script's music
+    // stops (0x004c8680).
     if (musicManager_) musicManager_->stopZoneMusic(true);
+    stopScriptMusic();
     musicSlots_[zone_music::kSlotServer] = {};
     silenceUntil_ = 0;
 }
@@ -302,7 +323,7 @@ void AudioCoordinator::updateMusic(const ZoneAudioContext& ctx) {
     // 0x004c9910: the channel given what the slots pick, unless it plays it.
     const zm::Channel ch = music.zoneChannel();
     const zm::Pick want = zm::pick(musicSlots_, ch, musicContext());
-    if (!zm::shouldStart(want, ch, false)) return;
+    if (!zm::shouldStart(want, ch, scriptMusic_.held)) return;
     if (want.slot >= zm::kSlotCount) {
         music.releaseZoneTrack(want.slot);
         return;

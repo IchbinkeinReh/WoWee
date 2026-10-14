@@ -189,6 +189,19 @@ inline Pick pick(const Slots& slots, const Channel& ch, const Context& c) {
     return Pick{};
 }
 
+/// The script's music hold (0xb4aaa4): PlayMusic's file (0x004c9110(file,
+/// 5)) sets it once the file plays - not with Sound_EnableMusic off - and
+/// only StopMusic (0x004c8680), the unload (0x004c93b0) and Sound_EnableMusic
+/// off clear it. The file looping on, nothing else ends it.
+struct ScriptMusicHold {
+    bool held = false;
+    /// PlayMusic: whether the music is enabled and the file then plays.
+    constexpr void played(bool musicEnabled, bool started) {
+        if (musicEnabled && started) held = true;
+    }
+    constexpr void stopped() { held = false; }
+};
+
 /// 0x004c9910: whether the channel is given what is picked - not while the
 /// script's music plays, nor the silence, nor what plays already.
 constexpr bool shouldStart(const Pick& p, const Channel& ch, bool scriptMusicPlaying) {

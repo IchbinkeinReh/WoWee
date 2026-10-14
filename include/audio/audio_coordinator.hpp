@@ -87,8 +87,18 @@ public:
     /// SMSG_PLAY_MUSIC (0x277 -> 0x004c92b0): the sound goes to the music's
     /// slot 3, above the zone's, until it ends.
     void playServerMusic(uint32_t soundId);
+    /// The script's PlayMusic (0x004c9110(file, 5)): unless Sound_EnableMusic
+    /// is off, the file loops on its own track (0xb4ac44); once it plays the
+    /// zone music falls over its own fall (0x004c6450(0)) and none starts
+    /// (0xb4aaa4) until StopMusic.
+    void playScriptMusic(const std::string& path);
+    /// StopMusic (0x004c8680): the script's file falls over half a second
+    /// and the zone music may start again.
+    void stopScriptMusic();
+    [[nodiscard]] bool scriptMusicPlaying() const { return scriptMusic_.held; }
     /// Sound_EnableMusic (0x004d1590): off stops the music at once as the
-    /// unload does, and the slots pick nothing while it is off.
+    /// unload does, and the script's as StopMusic does; the slots pick
+    /// nothing while it is off.
     void setMusicEnabled(bool enabled);
     /// Sound_ZoneMusicNoDelay, the options' Loop Music: no silence between
     /// the zone's tracks (0x004c87d0).
@@ -153,6 +163,7 @@ private:
     int musicTime_ = 0;              ///< 0x00ac3878
     bool musicEnabled_ = true;       ///< Sound_EnableMusic
     bool musicNoDelay_ = false;      ///< Sound_ZoneMusicNoDelay
+    zone_music::ScriptMusicHold scriptMusic_;  ///< 0xb4aaa4
     uint64_t silenceUntil_ = 0;      ///< 0xb4aaa0
     pipeline::AssetManager* cachedAssets_ = nullptr;
     std::unordered_map<int32_t, uint64_t> introDue_;  ///< 0xb4acd8

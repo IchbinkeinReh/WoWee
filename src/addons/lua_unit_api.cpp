@@ -932,8 +932,6 @@ static int lua_IsInRaid(lua_State* L) {
     return 1;
 }
 
-// PlaySound(soundId) - play a WoW UI sound by ID or name
-
 static int lua_UnitRace(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { lua_pushstring(L, "Unknown"); lua_pushstring(L, "Unknown"); lua_pushnumber(L, 0); return 3; }

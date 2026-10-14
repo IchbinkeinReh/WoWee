@@ -202,9 +202,12 @@ void UiSoundManager::ensureSoundEntriesLoaded() {
         // The first row wins. Names repeat in this table and the later rows
         // are variants; a UI click wants one sound, not a different one each
         // time.
-        if (!paths.empty()) soundPathsByName_.emplace(name, std::move(paths));
+        if (paths.empty()) continue;
+        const uint32_t id = dbc->getUInt32(row, 0);
+        soundIdByName_.emplace(name, id);
+        soundPathsById_.emplace(id, std::move(paths));
     }
-    LOG_INFO("UISoundManager: ", soundPathsByName_.size(),
+    LOG_INFO("UISoundManager: ", soundIdByName_.size(),
              " sound names from SoundEntries.dbc");
 }
 
@@ -216,19 +219,28 @@ bool UiSoundManager::playByName(const std::string& soundName) {
     for (char& ch : key) {
         ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
     }
+    // 0x004ccaa0: the name is the row's, and the row's id is what plays.
+    auto it = soundIdByName_.find(key);
+    if (it == soundIdByName_.end()) return false;
+    return playById(it->second);
+}
 
-    auto cached = namedSamples_.find(key);
-    if (cached == namedSamples_.end()) {
-        auto it = soundPathsByName_.find(key);
-        if (it == soundPathsByName_.end()) return false;
+bool UiSoundManager::playById(uint32_t soundId) {
+    if (!initialized_ || soundId == 0) return false;
+    ensureSoundEntriesLoaded();
+
+    auto cached = idSamples_.find(soundId);
+    if (cached == idSamples_.end()) {
+        auto it = soundPathsById_.find(soundId);
+        if (it == soundPathsById_.end()) return false;
         UISample sample;
         sample.loaded = false;
         for (const std::string& path : it->second) {
             if (loadSound(path, sample, assets_)) break;
         }
-        // Remembered even when nothing loaded, so a name whose file this
+        // Remembered even when nothing loaded, so a row whose file this
         // install does not have is looked for once rather than on every click.
-        cached = namedSamples_.emplace(key, std::move(sample)).first;
+        cached = idSamples_.emplace(soundId, std::move(sample)).first;
     }
     if (!cached->second.loaded) return false;
 
@@ -253,8 +265,10 @@ bool UiSoundManager::playFile(const std::string& path) {
         cached = namedSamples_.emplace(path, std::move(sample)).first;
     }
     if (!cached->second.loaded) return false;
-    return AudioEngine::instance().playSound2D(cached->second.data,
-                                               0.7f * volumeScale_, 1.0f);
+    // 0x004c9110(path, 4): the SCRIPTSOUND channel at full volume. Nothing
+    // sets that channel's volume and Sound_EnableSFX does not silence it -
+    // only the master volume and Sound_EnableAllSound reach it.
+    return AudioEngine::instance().playSound2D(cached->second.data, 1.0f, 1.0f);
 }
 
 void UiSoundManager::playSound(const std::vector<UISample>& library) {

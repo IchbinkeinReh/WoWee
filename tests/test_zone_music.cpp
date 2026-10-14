@@ -125,6 +125,25 @@ TEST_CASE("the channel is given what is picked unless it plays it", "[audio][mus
     CHECK_FALSE(zm::shouldStart(forest, {}, true));
 }
 
+TEST_CASE("the script's PlayMusic holds the zone music until StopMusic", "[audio][music]") {
+    const zm::Pick forest{zm::kSlotPlace, 2523, 180000, 300000};
+    zm::ScriptMusicHold hold;
+    // Music off, or a file that does not play: no hold (0x004c9110).
+    hold.played(false, true);
+    CHECK_FALSE(hold.held);
+    hold.played(true, false);
+    CHECK_FALSE(hold.held);
+    hold.played(true, true);
+    CHECK(hold.held);
+    CHECK_FALSE(zm::shouldStart(forest, {}, hold.held));
+    // A second PlayMusic that fails leaves the hold as it was.
+    hold.played(true, false);
+    CHECK(hold.held);
+    // StopMusic lifts it (0x004c8680).
+    hold.stopped();
+    CHECK(zm::shouldStart(forest, {}, hold.held));
+}
+
 TEST_CASE("an intro plays once in its delay and to its end", "[audio][music]") {
     zm::Slots slots{};
     zm::fillZoneMusic(slots[zm::kSlotPlace], &kForest);
