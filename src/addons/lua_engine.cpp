@@ -12286,7 +12286,8 @@ int luaTracebackHandler(lua_State* L) {
 
 /// Loads and runs a chunk with the traceback handler in place. Returns the
 /// same non-zero-on-error convention as luaL_dostring.
-int runChunk(lua_State* L, const char* chunk, size_t len, const char* name) {
+int runChunk(lua_State* L, const char* chunk, size_t len, const char* name,
+             int nresults = 0) {
     const int base = lua_gettop(L);
     lua_pushcfunction(L, luaTracebackHandler);
     if (luaL_loadbuffer(L, chunk, len, name) != 0) {
@@ -12295,7 +12296,7 @@ int runChunk(lua_State* L, const char* chunk, size_t len, const char* name) {
         lua_remove(L, base + 1);
         return 1;
     }
-    const int rc = lua_pcall(L, 0, 0, base + 1);
+    const int rc = lua_pcall(L, 0, nresults, base + 1);
     lua_remove(L, base + 1);
     return rc;
 }
@@ -12433,7 +12434,10 @@ bool LuaEngine::evaluateBoolean(const std::string& expression) {
     const std::string chunk = "return (" + expression + ")";
     const int base = lua_gettop(L_);
     BudgetGuard guard(L_, chunkTimeoutMs_);
-    if (runChunk(L_, chunk.c_str(), chunk.size(), chunk.c_str()) != 0) {
+    // One result kept: run with none, the answer was thrown away and what was
+    // read below was whatever the stack held underneath - nothing, in the
+    // client, so every question the client asked the interface came back no.
+    if (runChunk(L_, chunk.c_str(), chunk.size(), chunk.c_str(), 1) != 0) {
         const char* err = lua_tostring(L_, -1);
         LOG_WARNING("LuaEngine: ", expression, " - ", err ? err : "(unknown)");
         // Recorded, not only logged. This answers questions the client asks
