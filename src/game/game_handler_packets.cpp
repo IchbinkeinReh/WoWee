@@ -2994,8 +2994,11 @@ void GameHandler::registerRemainingOpcodes() {
     dispatchTable_[Opcode::SMSG_PROPOSE_LEVEL_GRANT] = [this](network::Packet& packet) {
         // Recruit-A-Friend: a mentor is offering to grant you a level.
         // HandleGrantLevel writes GetPackGUID(), so this is packed.
-        if (packet.hasRemaining(1)) {
+        // Only while none is on offer; that one stays the one accepted
+        // (0x00513fd0 keeps the guid at 0x00bd08b8).
+        if (packet.hasRemaining(1) && levelGrantMentorGuid_ == 0) {
             uint64_t mentorGuid = packet.readPackedGuid();
+            levelGrantMentorGuid_ = mentorGuid;
             std::string mentorName;
             auto ent = entityController_->getEntityManager().getEntity(mentorGuid);
             if (auto* unit = dynamic_cast<Unit*>(ent.get())) mentorName = unit->getName();

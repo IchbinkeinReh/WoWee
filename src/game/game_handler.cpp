@@ -2959,6 +2959,22 @@ void GameHandler::sendOptOutOfLoot(bool optOut) {
     LOG_INFO("CMSG_OPT_OUT_OF_LOOT: ", optOut ? "opting out" : "opting in");
 }
 
+void GameHandler::sendHearthAndResurrect() {
+    if (!getSocket()) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_HEARTH_AND_RESURRECT));
+    getSocket()->send(packet);
+}
+
+void GameHandler::acceptLevelGrant() {
+    if (levelGrantMentorGuid_ == 0) return;
+    if (getSocket()) {
+        network::Packet packet(wireOpcode(Opcode::CMSG_ACCEPT_LEVEL_GRANT));
+        packet.writePackedGuid(levelGrantMentorGuid_);
+        getSocket()->send(packet);
+    }
+    levelGrantMentorGuid_ = 0;
+}
+
 void GameHandler::runInterfaceCommand(const std::string& lua) const {
     if (!interfaceCommand_) {
         // A key reaching here before the interface is up does nothing, and does

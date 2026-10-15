@@ -355,6 +355,14 @@ public:
     const std::vector<GuildBankLogEntry>& getGuildBankLog(uint8_t tab) const;
     /// Tell the server whether to pass on every loot roll for us.
     void sendOptOutOfLoot(bool optOut);
+    /// HearthAndResurrectFromArea (0x0054c7a0): CMSG_HEARTH_AND_RESURRECT,
+    /// empty, and nothing kept.
+    void sendHearthAndResurrect();
+    /// AcceptLevelGrant (0x00523360 -> 0x00521b00): with a proposal pending,
+    /// CMSG_ACCEPT_LEVEL_GRANT naming its mentor (packed), and none pending.
+    void acceptLevelGrant();
+    /// DeclineLevelGrant (0x00517d20): none pending, and nothing sent.
+    void declineLevelGrant() { levelGrantMentorGuid_ = 0; }
     /// Ask an area spirit healer when the next mass resurrection is.
     void queryAreaSpiritHealer(uint64_t guid);
     /// Join that resurrection. Nothing happens without it.
@@ -4904,6 +4912,9 @@ private:
     std::string dndMessage_;
     std::string lastWhisperSender_;
     uint64_t lastWhisperSenderGuid_ = 0;
+    /// The mentor of the level grant on offer (0x00bd08b8): kept from the
+    /// first SMSG_PROPOSE_LEVEL_GRANT while none is (0x00513fd0).
+    uint64_t levelGrantMentorGuid_ = 0;
 
     // ---- Online item tracking ----
     std::unordered_map<uint64_t, OnlineItemInfo> onlineItems_;

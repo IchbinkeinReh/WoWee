@@ -4665,9 +4665,27 @@ static int lua_IsActiveBattlefieldArena(lua_State* L) {
     return 2;
 }
 
-// CanHearthAndResurrectFromArea() → whether the zone offers the combined
-// hearth-and-release button. Only world PvP zones do, and none are tracked.
-static int lua_CanHearthAndResurrectFromArea(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// CanHearthAndResurrectFromArea() → 1 where the zone's AreaTable row carries
+// 0x08000000, else nil (0x0054c810 reads the zone at 0x00bd080c) - the
+// combined hearth-and-release button, which is Wintergrasp's.
+static int lua_CanHearthAndResurrectFromArea(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    auto* svc = getLuaServices(L);
+    const uint32_t zoneId = svc && svc->getLiveZoneId ? svc->getLiveZoneId() : 0;
+    if (gh && zoneId != 0 && (gh->getAreaFlags(zoneId) & 0x08000000u) != 0) {
+        lua_pushnumber(L, 1);
+    } else {
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+// HearthAndResurrectFromArea() - asks for it, and answers nothing
+// (0x0054c7a0: CMSG_HEARTH_AND_RESURRECT, empty).
+static int lua_HearthAndResurrectFromArea(lua_State* L) {
+    if (auto* gh = getGameHandler(L)) gh->sendHearthAndResurrect();
+    return 0;
+}
 
 // GetWorldPVPQueueStatus(i) → status, mapName, queueID
 //
@@ -5769,6 +5787,17 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"IsBattlefieldArena",       lua_IsBattlefieldArena},
                 {"IsActiveBattlefieldArena", lua_IsActiveBattlefieldArena},
                 {"CanHearthAndResurrectFromArea", lua_CanHearthAndResurrectFromArea},
+                {"HearthAndResurrectFromArea", lua_HearthAndResurrectFromArea},
+                // The Recruit-a-Friend level grant LEVEL_GRANT_PROPOSED offers:
+                // accepted (0x00523360) or let go (0x00517d20).
+                {"AcceptLevelGrant", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->acceptLevelGrant();
+            return 0;
+        }},
+                {"DeclineLevelGrant", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->declineLevelGrant();
+            return 0;
+        }},
                 {"GetWorldPVPQueueStatus",   lua_GetWorldPVPQueueStatus},
                 {"LeaveBattlefield",         lua_LeaveBattlefield},
                 {"CreateWorldMapArrowFrame",   lua_CreateWorldMapArrowFrame},
