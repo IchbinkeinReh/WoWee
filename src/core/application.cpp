@@ -3190,6 +3190,19 @@ void Application::processDeferredLogoutToLogin() {
 
 void Application::unloadInterface() {
     if (addonManager_ && addonsLoaded_) {
+        // A player still in combat is first told the fight is over
+        // (0x00528f00: the player there is, UNIT_FLAG_IN_COMBAT in
+        // UNIT_FIELD_FLAGS, event 0x99, then 0x00528c30). Nothing else ends
+        // the fight for an interface on its way out, so an addon that locked
+        // itself on PLAYER_REGEN_DISABLED saved its state still locked.
+        if (gameHandler) {
+            const uint16_t flagsIdx = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+            auto player = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
+            if (player && flagsIdx != 0xFFFF &&
+                (player->getField(flagsIdx) & game::UNIT_FLAG_IN_COMBAT) != 0) {
+                addonManager_->fireEvent("PLAYER_REGEN_ENABLED");
+            }
+        }
         addonManager_->fireEvent("PLAYER_LEAVING_WORLD");
         // Then PLAYER_LOGOUT, and the saved variables after it (0x00528f00:
         // 0x00528c30, event 0xfe, 0x00527130). It fired when the server
