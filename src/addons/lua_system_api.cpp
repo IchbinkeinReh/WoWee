@@ -782,6 +782,9 @@ static void applySoundCVars(lua_State* L) {
         if (auto* m = ac->getMountSoundManager())     m->setVolumeScale(0.0f);
         if (auto* m = ac->getNpcVoiceManager())       m->setVolumeScale(0.0f);
         if (auto* m = ac->getPlayerVoiceManager())    m->setVolumeScale(0.0f);
+        // The Effects channel: a doodad's fire or a spell's sound, which
+        // went on through the switch (0x004c6a40 refuses every SFX play).
+        audio::AudioEngine::instance().setEffectsVolume(0.0f);
     }
 }
 

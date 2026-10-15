@@ -748,6 +748,12 @@ wowee_add_test(test_world_leave_sound
     SOURCES test_world_leave_sound.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_sound_distance ──────────────────────────────────────
+# A 3D sound heard out to its DistanceCutoff and no further.
+wowee_add_test(test_sound_distance
+    SOURCES test_sound_distance.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_tile_size_agreement ─────────────────────────────────
 # The ADT tile size, which three headers each declared and two files spelled
 # with two fewer decimals. Pins the value against its own arithmetic.

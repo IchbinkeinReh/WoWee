@@ -121,10 +121,14 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         case m2_event::Play::OnEffect: loops = k->loops; break;
         default: break;
         }
+        // Every owner's play is an SFX one (0x004c5990 leaves the type 0,
+        // "SFX"): heard at the Sound Effects volume, and not with
+        // Sound_EnableSFX off (0x004c6a40).
+        constexpr auto kSfx = audio::Channel::Effects;
         if (!loops) {
             const std::vector<uint8_t>* file = pickFile(*k);
-            if (atListener) audio.playSound2D(*file, volume);
-            else audio.playSound3D(*file, fired.position, volume, 1.0f, maxDistance, minDistance);
+            if (atListener) audio.playSound2D(*file, volume, 1.0f, kSfx);
+            else audio.playSound3D(*file, fired.position, volume, 1.0f, maxDistance, minDistance, kSfx);
             continue;
         }
         // A loop on its owner: none while the owner already plays one
@@ -142,7 +146,7 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         const auto origin = m2.getInstancePosition(fired.instanceId);
         if (!origin) continue;
         const uint32_t handle = audio.playSound3DLooping(*pickFile(*k), fired.position, volume, maxDistance,
-                                                         minDistance, plan.fadeIn);
+                                                         minDistance, plan.fadeIn, kSfx);
         if (handle != 0)
             loops_[fired.instanceId] = Loop{.handle = handle, .soundId = soundId, .offset = fired.position - *origin,
                                             .position = fired.position, .fadeOut = plan.fadeOut};

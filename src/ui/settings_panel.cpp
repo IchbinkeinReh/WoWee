@@ -1765,13 +1765,25 @@ void SettingsPanel::applyAudioVolumes(audio::AudioCoordinator* ac) {
     if (!ac) return;
     // Every effect volume is its own balance; this is the one slider over them,
     // which is what Blizzard's Sound Effects control drives.
-    const float fx = static_cast<float>(pendingEffectsVolume) / 100.0f;
+    // With its switch off a channel is silent whatever its slider says: the
+    // client refuses an SFX, ambience or music play outright then (0x004c6a40
+    // returns 9, 11 and 10). Applied here, where every volume is set - at
+    // start-up as much as on a change - and not only when a switch moves:
+    // this ran once as the world loaded and put every channel back at its
+    // slider, so a client saved with sound effects, ambience and music off
+    // played all three after a restart.
+    const float fx = pendingEnableSoundEffects ? static_cast<float>(pendingEffectsVolume) / 100.0f : 0.0f;
     float masterScale = soundMuted_ ? 0.0f : static_cast<float>(pendingMasterVolume) / 100.0f;
     audio::AudioEngine::instance().setMasterVolume(masterScale);
+    // And the sounds whose callers keep no volume of their own - a model's
+    // events, a spell kit's, the server's - on the engine's Effects channel.
+    audio::AudioEngine::instance().setEffectsVolume(fx);
     if (auto* music = ac->getMusicManager())
-        music->setVolume(pendingMusicVolume);
+        music->setVolume(pendingEnableMusic ? pendingMusicVolume : 0);
+    // Music off also empties the slots and stops what plays (0x004d1590).
+    ac->setMusicEnabled(pendingEnableMusic);
     if (auto* ambient = ac->getAmbientSoundManager())
-        ambient->setVolumeScale(pendingAmbientVolume / 100.0f);
+        ambient->setVolumeScale(pendingEnableAmbience ? pendingAmbientVolume / 100.0f : 0.0f);
     if (auto* ui = ac->getUiSoundManager())
         ui->setVolumeScale(fx * pendingUiVolume / 100.0f);
     if (auto* combat = ac->getCombatSoundManager())

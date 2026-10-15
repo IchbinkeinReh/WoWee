@@ -16,6 +16,16 @@ namespace wowee {
 namespace pipeline { class AssetManager; }
 namespace audio {
 
+/// Which of the client's volume channels a sound is heard on (0x004c6a40
+/// checks the play's type against 0x009f2010's names: "SFX", "MUSIC",
+/// "AMBIENCE", ...). `Own` is a caller that scales its sounds itself - the
+/// sound managers, each with its slider times the effects volume, and the
+/// ambience and music with theirs. `Effects` is an SFX sound from a caller
+/// that keeps no volume of its own - a model's events, a spell kit's, the
+/// server's SMSG_PLAY_SOUND - heard at the Sound Effects volume and not at
+/// all with Sound_EnableSFX off (0x004c6a40 returns 9 for an SFX play then).
+enum class Channel : uint8_t { Own, Effects };
+
 /**
  * AudioEngine: Singleton managing miniaudio device and playback.
  * Replaces process-spawning audio system with proper non-blocking library.
@@ -64,8 +74,10 @@ public:
     [[nodiscard]] const glm::vec3& getListenerPosition() const { return listenerPosition_; }
 
     // Simple 2D sound playback (non-blocking)
-    bool playSound2D(const std::vector<uint8_t>& wavData, float volume = 1.0f, float pitch = 1.0f);
-    bool playSound2D(const std::string& mpqPath, float volume = 1.0f, float pitch = 1.0f);
+    bool playSound2D(const std::vector<uint8_t>& wavData, float volume = 1.0f, float pitch = 1.0f,
+                     Channel channel = Channel::Own);
+    bool playSound2D(const std::string& mpqPath, float volume = 1.0f, float pitch = 1.0f,
+                     Channel channel = Channel::Own);
 
     // Stoppable 2D sound - returns a non-zero handle, or 0 on failure.
     /// `loop` plays it until stopped; it rises from silence over
@@ -81,9 +93,10 @@ public:
     /// DistanceCutoff, the client's 3D min and max (0x004c6a40 -> 0x00879390).
     bool playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
-                     float minDistance = 1.0f);
+                     float minDistance = 1.0f, Channel channel = Channel::Own);
     bool playSound3D(const std::string& mpqPath, const glm::vec3& position,
-                     float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f);
+                     float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
+                     Channel channel = Channel::Own);
 
     /// A looping 3D sound that stays until stopped, for one that follows
     /// something across the world - a spell missile's (0x007022d0). Returns
@@ -91,7 +104,8 @@ public:
     /// `fadeInSeconds` (the client's fade-in, 0x004c6a40 -> 0x008785f0).
     uint32_t playSound3DLooping(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                                 float volume = 1.0f, float maxDistance = 100.0f,
-                                float minDistance = 1.0f, float fadeInSeconds = 0.0f);
+                                float minDistance = 1.0f, float fadeInSeconds = 0.0f,
+                                Channel channel = Channel::Own);
     /// Move a sound started with a handle (no-op once it has finished).
     void setSoundPosition(uint32_t id, const glm::vec3& position);
     /// Change the volume of a sound started with a handle (no-op once it has
@@ -119,6 +133,11 @@ public:
     void setStreamVolume(uint32_t id, float volume);
     /// Stops it at once (no-op once it has ended).
     void stopStream(uint32_t id);
+
+    /// The Sound Effects volume, 0 with Sound_EnableSFX off: what the
+    /// Effects channel is heard at.
+    void setEffectsVolume(float volume);
+    [[nodiscard]] float getEffectsVolume() const { return effectsVolume_; }
 
     // Update (call once per frame for cleanup/position sync)
     void update(float deltaTime);
@@ -150,8 +169,13 @@ private:
         void* buffer;  // ma_audio_buffer* - Keep audio buffer alive
         std::shared_ptr<const std::vector<uint8_t>> pcmDataRef;  // Keep decoded PCM alive
         uint32_t id = 0;  // 0 = anonymous (not stoppable)
+        float cutoff = 0.0f;  // a 3D sound's DistanceCutoff: not heard past it (0: none)
+        bool culled = false;  // a looping one paused out past its cutoff
     };
     std::vector<ActiveSound> activeSounds_;
+    /// Pauses what is out past its cutoff and resumes what has come back in
+    /// (audio/sound_distance.hpp), once a frame.
+    void cullByDistance();
     uint32_t nextSoundId_ = 1;
 
     // Music track state
@@ -171,6 +195,10 @@ private:
 
     bool initialized_ = false;
     float masterVolume_ = 1.0f;
+    float effectsVolume_ = 1.0f;
+    /// The Effects channel's group (an ma_sound_group is an ma_sound).
+    ma_sound* effectsGroup_ = nullptr;
+    ma_sound* groupFor(Channel channel) const;
     bool suspended_ = false;
     glm::vec3 listenerPosition_{0.0f, 0.0f, 0.0f};
     glm::vec3 listenerForward_{0.0f, 0.0f, -1.0f};

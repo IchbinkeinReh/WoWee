@@ -2,6 +2,7 @@
 #include "audio/audio_engine.hpp"
 #include "core/logger.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "audio/sound_distance.hpp"
 
 
 #include "../../extern/miniaudio.h"
@@ -240,9 +241,28 @@ bool AudioEngine::initialize() {
         default: break;
     }
 
+    // The Effects channel: a group under the engine, at the effects volume.
+    effectsGroup_ = static_cast<ma_sound*>(std::malloc(sizeof(ma_sound_group)));
+    if (effectsGroup_ && ma_sound_group_init(engine_, 0, nullptr, effectsGroup_) == MA_SUCCESS) {
+        ma_sound_group_set_volume(effectsGroup_, effectsVolume_);
+    } else {
+        LOG_WARNING("AudioEngine: no effects group - those sounds play at their own volume");
+        std::free(effectsGroup_);
+        effectsGroup_ = nullptr;
+    }
+
     initialized_ = true;
     LOG_INFO("AudioEngine initialized (miniaudio, backend: ", backendName, ")");
     return true;
+}
+
+ma_sound* AudioEngine::groupFor(Channel channel) const {
+    return channel == Channel::Effects ? effectsGroup_ : nullptr;
+}
+
+void AudioEngine::setEffectsVolume(float volume) {
+    effectsVolume_ = glm::clamp(volume, 0.0f, 1.0f);
+    if (effectsGroup_) ma_sound_group_set_volume(effectsGroup_, effectsVolume_);
 }
 
 std::string AudioEngine::getOutputDeviceName() const {
@@ -271,6 +291,12 @@ void AudioEngine::shutdown() {
         std::free(buffer);
     }
     activeSounds_.clear();
+
+    if (effectsGroup_) {
+        ma_sound_group_uninit(effectsGroup_);
+        std::free(effectsGroup_);
+        effectsGroup_ = nullptr;
+    }
 
     capturing_.store(false, std::memory_order_release);
     if (engine_) {
@@ -321,7 +347,7 @@ void AudioEngine::setListenerOrientation(const glm::vec3& forward, const glm::ve
     }
 }
 
-bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume, float pitch) {
+bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume, float pitch, Channel channel) {
     // Size and volume, because this overload is handed decoded bytes and has
     // no name to report. The sample managers all cache their clips and call
     // this one, so the path-named log above never fires for them - and a sound
@@ -365,7 +391,7 @@ bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume,
         engine_,
         audioBuffer.get(),
         MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_ASYNC | MA_SOUND_FLAG_NO_PITCH | MA_SOUND_FLAG_NO_SPATIALIZATION,
-        nullptr,
+        groupFor(channel),
         sound.get()
     );
 
@@ -452,7 +478,7 @@ void AudioEngine::stopSound(uint32_t id) {
     }
 }
 
-bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pitch) {
+bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pitch, Channel channel) {
     // Which file, and how loud, for the one-shots that name a path.
     //
     // A sound reported as playing loudly on every world entry cannot be found
@@ -469,13 +495,15 @@ bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pi
         LOG_WARNING("AudioEngine::playSound2D: failed to load '", mpqPath, "'");
         return false;
     }
-    return playSound2D(data, volume, pitch);
+    return playSound2D(data, volume, pitch, channel);
 }
 
 bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
-                              float volume, float pitch, float maxDistance, float minDistance) {
+                              float volume, float pitch, float maxDistance, float minDistance, Channel channel) {
     if (!initialized_ || !engine_ || wavData.empty()) return false;
     if (masterVolume_ <= 0.0f) return false;
+    // Past its cutoff it is not heard, so not played (audio/sound_distance.hpp).
+    if (!sound_distance::heard(position, listenerPosition_, maxDistance)) return false;
 
     DecodedWavCacheEntry decoded;
     if (!decodeWavCached(wavData, decoded) || !decoded.pcmData || decoded.frames == 0) {
@@ -513,7 +541,7 @@ bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::ve
         engine_,
         audioBuffer.get(),
         MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_ASYNC,  // Removed NO_PITCH flag
-        nullptr,
+        groupFor(channel),
         sound.get()
     );
 
@@ -540,13 +568,13 @@ bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::ve
     }
 
     // Track for cleanup
-    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData});
+    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, 0u, maxDistance});
 
     return true;
 }
 
 bool AudioEngine::playSound3D(const std::string& mpqPath, const glm::vec3& position,
-                              float volume, float pitch, float maxDistance) {
+                              float volume, float pitch, float maxDistance, Channel channel) {
     if (!assetManager_) {
         LOG_WARNING("AudioEngine::playSound3D(path): no AssetManager set");
         return false;
@@ -556,12 +584,12 @@ bool AudioEngine::playSound3D(const std::string& mpqPath, const glm::vec3& posit
         LOG_WARNING("AudioEngine::playSound3D: failed to load '", mpqPath, "'");
         return false;
     }
-    return playSound3D(data, position, volume, pitch, maxDistance);
+    return playSound3D(data, position, volume, pitch, maxDistance, 1.0f, channel);
 }
 
 uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                                          float volume, float maxDistance, float minDistance,
-                                         float fadeInSeconds) {
+                                         float fadeInSeconds, Channel channel) {
     if (!initialized_ || !engine_ || wavData.empty()) return 0;
     if (masterVolume_ <= 0.0f) return 0;
 
@@ -581,7 +609,7 @@ uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, co
     if (!sound) return 0;
     if (ma_sound_init_from_data_source(engine_, audioBuffer.get(),
                                        MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_ASYNC | MA_SOUND_FLAG_NO_PITCH,
-                                       nullptr, sound.get()) != MA_SUCCESS) {
+                                       groupFor(channel), sound.get()) != MA_SUCCESS) {
         return 0;
     }
     sound.markInitialised();
@@ -598,11 +626,14 @@ uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, co
     if (fadeInSeconds > 0.0f)
         ma_sound_set_fade_in_milliseconds(sound.get(), 0.0f, 1.0f,
                                           static_cast<ma_uint64>(fadeInSeconds * 1000.0f));
-    if (ma_sound_start(sound.get()) != MA_SUCCESS) return 0;
+    // Out past its cutoff it waits, paused, for the listener to come in.
+    const bool culled = !sound_distance::heard(position, listenerPosition_, maxDistance);
+    if (!culled && ma_sound_start(sound.get()) != MA_SUCCESS) return 0;
 
     uint32_t id = nextSoundId_++;
     if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
-    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, id});
+    activeSounds_.push_back(
+        {sound.release(), audioBuffer.release(), decoded.pcmData, id, maxDistance, culled});
     return id;
 }
 
@@ -630,6 +661,11 @@ void AudioEngine::stopSoundWithFade(uint32_t id, float seconds) {
     if (id == 0) return;
     for (auto& active : activeSounds_) {
         if (active.id == id) {
+            // One paused out of range is not heard: gone now.
+            if (active.culled) {
+                stopSound(id);
+                return;
+            }
             // update() takes it away once it has stopped playing.
             ma_sound_stop_with_fade_in_milliseconds(
                 active.sound, static_cast<ma_uint64>(std::max(seconds, 0.0f) * 1000.0f));
@@ -848,12 +884,13 @@ void AudioEngine::update(float deltaTime) {
     if (!initialized_ || !engine_) {
         return;
     }
+    cullByDistance();
 
     // Clean up finished sounds - swap-and-pop avoids the O(N) shift that
     // vector::erase does for each removal (and the ref-count atomics in
     // ActiveSound's shared_ptr made that shift noticeably more expensive).
     for (size_t i = 0; i < activeSounds_.size(); ) {
-        if (!ma_sound_is_playing(activeSounds_[i].sound)) {
+        if (!activeSounds_[i].culled && !ma_sound_is_playing(activeSounds_[i].sound)) {
             ma_sound_uninit(activeSounds_[i].sound);
             std::free(activeSounds_[i].sound);
             ma_audio_buffer* buffer = static_cast<ma_audio_buffer*>(activeSounds_[i].buffer);
@@ -872,6 +909,24 @@ void AudioEngine::update(float deltaTime) {
             activeStreams_.pop_back();
         } else {
             ++i;
+        }
+    }
+}
+
+void AudioEngine::cullByDistance() {
+    for (auto& active : activeSounds_) {
+        if (!(active.cutoff > 0.0f)) continue;
+        const ma_vec3f p = ma_sound_get_position(active.sound);
+        const bool heard = sound_distance::heard(glm::vec3(p.x, p.y, p.z), listenerPosition_, active.cutoff);
+        if (heard == !active.culled) continue;
+        if (!heard) {
+            // A looping one pauses where it is; one played once, or one
+            // already let go to fade, is over.
+            ma_sound_stop(active.sound);
+            active.culled = active.id != 0 && ma_sound_is_looping(active.sound) == MA_TRUE;
+        } else {
+            ma_sound_start(active.sound);
+            active.culled = false;
         }
     }
 }

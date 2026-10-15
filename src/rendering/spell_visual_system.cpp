@@ -610,7 +610,8 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
     if (useImpactKit) {
         auto kitIt = kits_.find(kitId);
         if (const LoadedSound* sound = kitIt != kits_.end() ? soundEntry(kitIt->second.soundId) : nullptr)
-            audio::AudioEngine::instance().playSound3D(sound->data, worldPosition, sound->volume);
+            audio::AudioEngine::instance().playSound3D(sound->data, worldPosition, sound->volume, 1.0f, 100.0f,
+                                                       1.0f, audio::Channel::Effects);
     }
     playKitOnUnit(kitId, spell_kit::KitType::Cast, attachInstanceId, worldPosition,
                   attachInstanceId == 0 ? &worldPosition : nullptr, 0, spellId);
@@ -987,7 +988,8 @@ const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t sou
 uint32_t SpellVisualSystem::startMissileSound(uint32_t soundId, const glm::vec3& position) {
     const LoadedSound* sound = soundEntry(soundId);
     if (!sound) return 0;
-    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, sound->volume);
+    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, sound->volume, 100.0f, 1.0f,
+                                                             0.0f, audio::Channel::Effects);
 }
 
 // One frame of every missile in flight (FUN_007015d0): home on the target,
@@ -2336,7 +2338,8 @@ void SpellVisualSystem::loadCameraShakes() {
 
 void SpellVisualSystem::playSoundAt(uint32_t soundId, const glm::vec3& position) {
     if (const LoadedSound* sound = soundId ? soundEntry(soundId) : nullptr)
-        audio::AudioEngine::instance().playSound3D(sound->data, position, sound->volume);
+        audio::AudioEngine::instance().playSound3D(sound->data, position, sound->volume, 1.0f, 100.0f, 1.0f,
+                                                   audio::Channel::Effects);
 }
 
 void SpellVisualSystem::stepUnarmedKits(uint64_t unitGuid, UnitAuraKits& unit, bool force) {
@@ -2534,7 +2537,7 @@ void SpellVisualSystem::startDynamicObjectKit(DynamicObjectVisual& object) {
         const float minDistance = sound->minDistance > 0.0f ? std::min(sound->minDistance, maxDistance) : 1.0f;
         object.soundHandle = audio::AudioEngine::instance().playSound3DLooping(
             sound->data, object.position, sound->volume, maxDistance, minDistance,
-            dynamic_object::kSoundFadeInSeconds);
+            dynamic_object::kSoundFadeInSeconds, audio::Channel::Effects);
     }
 }
 

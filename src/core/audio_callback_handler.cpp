@@ -69,11 +69,13 @@ void AudioCallbackHandler::setupCallbacks() {
         if (audioCoordinator_) audioCoordinator_->playServerMusic(soundId);
     });
 
-    // SMSG_PLAY_SOUND: look up SoundEntries.dbc and play 2-D sound effect
+    // SMSG_PLAY_SOUND: look up SoundEntries.dbc and play 2-D sound effect -
+    // an SFX one (0x00526530 plays it with the default type 0, "SFX"), at
+    // the Sound Effects volume and not with Sound_EnableSFX off.
     gameHandler_.setPlaySoundCallback([this](uint32_t soundId) {
         auto path = resolveSoundEntryPath(soundId);
         if (path) {
-            audio::AudioEngine::instance().playSound2D(*path);
+            audio::AudioEngine::instance().playSound2D(*path, 1.0f, 1.0f, audio::Channel::Effects);
         }
     });
 
@@ -88,9 +90,9 @@ void AudioCallbackHandler::setupCallbacks() {
         if (entity) {
             glm::vec3 canonical{entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()};
             glm::vec3 pos = core::coords::canonicalToRender(canonical);
-            audio::AudioEngine::instance().playSound3D(*path, pos);
+            audio::AudioEngine::instance().playSound3D(*path, pos, 1.0f, 1.0f, 100.0f, audio::Channel::Effects);
         } else {
-            audio::AudioEngine::instance().playSound2D(*path);
+            audio::AudioEngine::instance().playSound2D(*path, 1.0f, 1.0f, audio::Channel::Effects);
         }
     });
 
