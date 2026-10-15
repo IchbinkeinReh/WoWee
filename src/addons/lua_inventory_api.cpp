@@ -782,6 +782,44 @@ static int lua_GetItemQualityColor(lua_State* L) {
 /// unless given. A denomination of zero is left out, so no money at all is
 /// the empty string. It was an alias of GetCoinTextureString, which draws the
 /// coin icons this one spells out in words.
+/// One denomination as 0x007e7d80 writes it: SStrPrintf (0x0076f070) into a
+/// 0x400 buffer with the global string as the format and the count as its one
+/// argument. The format is the interface's to set, so it is not handed to
+/// printf here: each integer conversion (d i u o x X c, with its flags, width
+/// and precision) is formatted on its own, the first taking the count; "%%"
+/// is a percent sign; anything else - a %s, %f, %n, or a second conversion,
+/// which in the client read past the one argument - writes nothing.
+static std::string formatCoinAmount(const char* format, int32_t count) {
+    std::string out;
+    bool used = false;
+    for (const char* p = format; *p && out.size() < 0x3ff; ++p) {
+        if (*p != '%') { out += *p; continue; }
+        const char* start = p++;
+        std::string spec = "%";
+        while (*p && std::strchr("-+ #0", *p)) spec += *p++;
+        int digits = 0;
+        while (*p >= '0' && *p <= '9') { if (++digits <= 3) spec += *p; ++p; }
+        if (*p == '.') {
+            spec += *p++;
+            digits = 0;
+            while (*p >= '0' && *p <= '9') { if (++digits <= 3) spec += *p; ++p; }
+        }
+        while (*p && std::strchr("hlLqjzt", *p)) ++p;  // length modifiers
+        if (!*p) break;
+        if (*p == '%' && p == start + 1) { out += '%'; continue; }
+        if (!std::strchr("diuoxXc", *p) || used) continue;
+        used = true;
+        spec += *p;
+        char piece[64];
+        if (*p == 'c') std::snprintf(piece, sizeof(piece), spec.c_str(), static_cast<int>(static_cast<unsigned char>(count)));
+        else if (*p == 'd' || *p == 'i') std::snprintf(piece, sizeof(piece), spec.c_str(), static_cast<int>(count));
+        else std::snprintf(piece, sizeof(piece), spec.c_str(), static_cast<unsigned>(count));
+        out += piece;
+    }
+    if (out.size() > 0x3ff) out.resize(0x3ff);
+    return out;
+}
+
 static int lua_GetCoinText(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetCoinText(amount [,separator])");
     const char* separator = luaL_optstring(L, 2, ", ");
@@ -795,8 +833,7 @@ static int lua_GetCoinText(lua_State* L) {
         if (count == 0) continue;
         lua_getglobal(L, token);
         const char* format = lua_isstring(L, -1) ? lua_tostring(L, -1) : token;
-        char piece[0x400];
-        std::snprintf(piece, sizeof(piece), format, count);
+        const std::string piece = formatCoinAmount(format, count);
         lua_pop(L, 1);
         if (!out.empty()) out += separator;
         out += piece;
