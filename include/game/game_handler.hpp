@@ -3914,6 +3914,12 @@ public:
         auto it = onlineItems_.find(guid);
         return it != onlineItems_.end() && (it->second.flags & 0x1u) != 0;
     }
+    /// ITEM_FIELD_FLAGS of an item this client holds: 0x1 soulbound, 0x100
+    /// bound but still tradeable. 0 for one it does not.
+    uint32_t getItemFieldFlags(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it != onlineItems_.end() ? it->second.flags : 0u;
+    }
     uint32_t getItemEntryByGuid(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
         return (it != onlineItems_.end()) ? it->second.entry : 0;

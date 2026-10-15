@@ -316,11 +316,12 @@ CHECKS = [
     ("framexml_event_arity.py",
      r"^(\d+) fired from several places with differing counts", 0,
      "events whose argument count depends on which path fired them"),
-    # Five, and every one is unreachable: the event that shows its dialog is
+    # Three, and every one is unreachable: the event that shows its dialog is
     # not fired anywhere under src/. LEVEL_GRANT_PROPOSED is Recruit-a-Friend
-    # level granting, END_BOUND_TRADEABLE and END_REFUND end a refund window,
-    # and TRADE_REPLACE_ENCHANT is the trade-window twin of REPLACE_ENCHANT -
-    # which *is* fired, from inventory_handler, and whose verb is bound.
+    # level granting, and TRADE_REPLACE_ENCHANT is the trade-window twin of
+    # REPLACE_ENCHANT - which *is* fired, from inventory_handler, and whose
+    # verb is bound. END_REFUND and END_BOUND_TRADEABLE left the list when the
+    # enchant path began raising them and their verbs were bound.
     #
     # It was twenty-five. The rest went as the bind-confirmation family and the
     # socketing prompts were implemented, and the ceiling stayed at twenty-five

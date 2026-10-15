@@ -2311,6 +2311,49 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
             return;
         }
 
+        // An enchant on an item that can still be handed back asks first
+        // (0x005210d0): one bought within the refund window, for a permanent
+        // enchant, raises END_REFUND with 1; one bound but still tradeable
+        // (ITEM_FIELD_FLAGS 0x1 with 0x100), END_BOUND_TRADEABLE with
+        // "itemenchant", or "spellenchant" for a spell cast on it (0x0080c790
+        // in Spell_C, 0x0080da40 on the answer). Only for an enchanting
+        // spell - effects 53, 54 and 156 - and before the replace question.
+        bool enchanting = false, temporary = false;
+        {
+            const auto& cache = owner_.spellNameCacheRef();
+            if (auto it = cache.find(pending.spellId); it != cache.end()) {
+                for (uint32_t effect : it->second.effectIds) {
+                    if (effect == 53 || effect == 156) enchanting = true;
+                    if (effect == 54) enchanting = temporary = true;
+                }
+            }
+        }
+        if (enchanting) {
+            // The window is two hours of played time (0x1c20 s), as
+            // noteMailAttachRefundable counts it.
+            const auto* refund = owner_.getItemRefundInfo(targetItemGuid);
+            if (!temporary && refund && refund->playedSincePurchase < 2 * 60 * 60) {
+                pendingItemTarget_.reset();
+                pendingEnchant_ = PendingEnchant{.active = true, .targetItemGuid = targetItemGuid, .request = pending};
+                if (owner_.addonEventCallbackRef())
+                    owner_.addonEventCallbackRef()("END_REFUND", {"1"});
+                return;
+            }
+            // Bound and still tradeable (0x00708520 without 0x00709550): the
+            // server takes 0x100 away when the trade window closes. A
+            // temporary enchant asks only when it binds, which none here is
+            // known to.
+            const uint32_t flags = owner_.getItemFieldFlags(targetItemGuid);
+            if (!temporary && (flags & 0x1u) && (flags & 0x100u)) {
+                pendingItemTarget_.reset();
+                pendingEnchant_ = PendingEnchant{.active = true, .targetItemGuid = targetItemGuid, .request = pending};
+                if (owner_.addonEventCallbackRef())
+                    owner_.addonEventCallbackRef()(
+                        "END_BOUND_TRADEABLE", {pending.fromSpell ? "spellenchant" : "itemenchant"});
+                return;
+            }
+        }
+
         const auto enchants = owner_.getItemEnchantIds(targetItemGuid);
         if (enchants.first != 0) {
             // Taken out of the parked slot entirely: see PendingEnchant.

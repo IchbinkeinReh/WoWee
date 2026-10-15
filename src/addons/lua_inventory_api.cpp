@@ -3818,6 +3818,31 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->replaceEnchant();
             return 0;
         }},
+                // EndRefund(n) (0x00523370) - the Okay on END_REFUND: 1
+                // applies the enchant held back for it (0x005210d0 with the
+                // checks passed), 2 the socketing frame's gems (0x005c4ff0).
+                {"EndRefund", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return 0;
+            auto* gh = getGameHandler(L);
+            const int which = static_cast<int>(lua_tonumber(L, 1));
+            if (gh && which == 1) gh->replaceEnchant();
+            else if (gh && which == 2) gh->acceptSockets();
+            return 0;
+        }},
+                // EndBoundTradeable(type) (0x005233d0) - the Okay on
+                // END_BOUND_TRADEABLE: "itemenchant" and "spellenchant" apply
+                // the held enchant, "gem" the socketing frame's gems.
+                {"EndBoundTradeable", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: EndBoundTradeable(\"type\")");
+            std::string type = lua_tostring(L, 1);
+            toLowerInPlace(type);
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            if (type == "itemenchant" || type == "spellenchant") gh->replaceEnchant();
+            else if (type == "gem") gh->acceptSockets();
+            return 0;
+        }},
                 // The Okay on "Disenchanting X will destroy it", which is this
                 // client's own dialog - the real client asks nothing there, and
                 // the question it was asking instead was about binding an item

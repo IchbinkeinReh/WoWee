@@ -16,10 +16,9 @@
 //     enchantment id, and SpellItemEnchantment names the gem it came out of.
 //   * Whether a gem *matches* its socket is real, out of GemProperties.dbc -
 //     the colour mask of the gem against the colour mask of the socket.
-//   * The refund and bound-tradeable windows are not modelled. Both answer nil,
-//     which is what GetContainerItemPurchaseInfo already answers and for the
-//     same reason: the per-item timer behind them is server state this client
-//     is never sent. Answering yes would promise a refund that does not exist.
+//   * The refund and bound-tradeable windows are what this client knows of
+//     them: a refund record the server answered CMSG_ITEM_REFUND_INFO with,
+//     and ITEM_FIELD_FLAGS 0x100 for an item bound but still tradeable.
 #include "addons/lua_api_helpers.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/game_utils.hpp"
@@ -283,18 +282,35 @@ int lua_CloseSocketInfo(lua_State* L) {
     return 0;
 }
 
-/// The refund and bound-tradeable windows, which this client is not sent.
-///
-/// Both gate a warning about socketing an item that could still be handed back.
-/// nil means "no window", which is true here - and the honest answer, because
-/// claiming one would have the panel warn about a refund that cannot happen.
+/// GetSocketItemRefundable() (0x005c5470 -> 0x005c50e0): 1 while the item
+/// on the socketing frame has a refund record, carries no enchant or gem yet
+/// (0x00708ac0) and is inside its two hours of played time; else nil.
 int lua_GetSocketItemRefundable(lua_State* L) {
-    lua_pushnil(L);
+    auto* gh = getGameHandler(L);
+    const uint64_t guid = gh ? gh->getSocketItemGuid() : 0;
+    const auto* refund = guid ? gh->getItemRefundInfo(guid) : nullptr;
+    bool refundable = false;
+    if (refund) {
+        const auto sockets = gh->getItemSocketEnchantIds(guid);
+        const bool modified = gh->getItemEnchantIds(guid).first != 0 ||
+                              sockets[0] != 0 || sockets[1] != 0 || sockets[2] != 0;
+        refundable = !modified && refund->playedSincePurchase < 2 * 60 * 60;
+    }
+    if (refundable) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
     return 1;
 }
 
+/// GetSocketItemBoundTradeable() (0x005c4ea0 -> 0x005c4970): 1 while that
+/// item is bound but still tradeable (0x00708520 without 0x00709550) -
+/// ITEM_FIELD_FLAGS 0x1 with 0x100, which the server takes away when the
+/// trade window closes; else nil.
 int lua_GetSocketItemBoundTradeable(lua_State* L) {
-    lua_pushnil(L);
+    auto* gh = getGameHandler(L);
+    const uint64_t guid = gh ? gh->getSocketItemGuid() : 0;
+    const uint32_t flags = guid ? gh->getItemFieldFlags(guid) : 0;
+    if ((flags & 0x1u) && (flags & 0x100u)) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
     return 1;
 }
 

@@ -95,15 +95,6 @@ EXPECTED = {
     # and there is no click path to it.
     "AcceptLevelGrant": "LEVEL_GRANT_PROPOSED unreachable",
     "DeclineLevelGrant": "LEVEL_GRANT_PROPOSED unreachable",
-    # END_REFUND and END_BOUND_TRADEABLE have two ways in and neither runs.
-    # The events are fired nowhere; the item socketing frame raises the same
-    # two popups from its Socket button, but only behind
-    # GetSocketItemRefundable and GetSocketItemBoundTradeable, which both
-    # answer nil - the per-item timer behind them is server state this client
-    # is never sent, and answering yes would promise a refund that does not
-    # exist.
-    "EndRefund": "END_REFUND unreachable by event or by click",
-    "EndBoundTradeable": "END_BOUND_TRADEABLE unreachable by event or by click",
     # This client does not put an enchant on the trade window, so
     # TRADE_REPLACE_ENCHANT has nothing to fire it.
     "ReplaceTradeEnchant": "TRADE_REPLACE_ENCHANT unreachable",
