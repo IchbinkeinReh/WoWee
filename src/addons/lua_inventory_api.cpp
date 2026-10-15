@@ -2279,19 +2279,6 @@ static int lua_GetLatestThreeSenders(lua_State* L) {
     return 3;
 }
 
-/// PickupEquipmentSetByName(name) - drag a gear set onto the cursor.
-///
-/// Defined and does nothing, deliberately. The cursor here holds items and
-/// spells; there is no state for it to hold a set, and inventing one to be
-/// dropped on an action bar is a feature rather than a binding.
-///
-/// Defined all the same because it is reachable: it hangs off OnDragStart of a
-/// set button, guarded only by the set having a name, and equipment sets do
-/// exist here - GetNumEquipmentSets answers from a real list. Undefined, the
-/// first drag of a saved set would raise. The set still equips from its
-/// button, which is the operation; only the drag is lost.
-static int lua_PickupEquipmentSetByName(lua_State* L) { (void)L; return 0; }
-
 // What this client does not keep per bag slot: durability and gem sockets.
 //
 // Both are read straight into locals and guarded before use - paperdollframe
@@ -3681,7 +3668,6 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetContainerItemID",    lua_GetContainerItemID},
                 {"GetContainerFreeSlots", lua_GetContainerFreeSlots},
                 {"GetLatestThreeSenders", lua_GetLatestThreeSenders},
-                {"PickupEquipmentSetByName", lua_PickupEquipmentSetByName},
                 {"GetContainerItemDurability", lua_GetContainerItemDurability},
                 {"GetContainerItemGems",  lua_ItemGemsNone},
                 {"GetInventoryItemGems",  lua_ItemGemsNone},

@@ -774,7 +774,11 @@ network::Packet SetActionButtonPacket::build(uint8_t button, uint8_t type, uint3
         uint8_t packedType = 0x00; // spell
         if (type == 2 /* ITEM */)  packedType = 0x80;
         if (type == 3 /* MACRO */) packedType = 0x40;
-        uint32_t packed = (id == 0) ? 0 : (static_cast<uint32_t>(packedType) << 24) | (id & 0x00FFFFFF);
+        // An equipment set is 0x20 over its set id (0x005ab120), and set 0 is
+        // a set: the action is not zero for it.
+        if (type == 4 /* EQUIPMENT_SET */) packedType = 0x20;
+        const bool clears = type == 0 || (id == 0 && type != 4);
+        uint32_t packed = clears ? 0 : (static_cast<uint32_t>(packedType) << 24) | (id & 0x00FFFFFF);
         packet.writeUInt32(packed);
         LOG_DEBUG("Built CMSG_SET_ACTION_BUTTON (TBC/WotLK): button=", static_cast<int>(button),
                   " packed=0x", std::hex, packed, std::dec);

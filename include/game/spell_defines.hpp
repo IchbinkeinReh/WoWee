@@ -35,9 +35,10 @@ struct AuraSlot {
  * Action bar slot
  */
 struct ActionBarSlot {
-    enum Type : uint8_t { EMPTY = 0, SPELL = 1, ITEM = 2, MACRO = 3 };
+    /// EQUIPMENT_SET is the client's action 0x20000000 | set id (0x005a78f0).
+    enum Type : uint8_t { EMPTY = 0, SPELL = 1, ITEM = 2, MACRO = 3, EQUIPMENT_SET = 4 };
     Type type = EMPTY;
-    uint32_t id = 0;              // spellId, itemId, or macroId
+    uint32_t id = 0;              // spellId, itemId, macroId, or equipment set id
 
     [[nodiscard]] bool isEmpty() const { return type == EMPTY; }
 };

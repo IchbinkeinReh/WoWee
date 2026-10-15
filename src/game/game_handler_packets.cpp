@@ -1815,9 +1815,13 @@ void GameHandler::registerCoreOpcodes() {
                 type = static_cast<uint8_t>((packed >> 24) & 0xFF);
                 id = packed & 0x00FFFFFFu;
             }
-            if (id == 0) continue;
+            // An equipment set (0x20) may be set 0 (0x005a7950).
+            if (id == 0 && !(type == 0x20 && !isClassicLikeExpansion())) continue;
             ActionBarSlot slot;
             switch (type) {
+                case 0x20:
+                    if (isClassicLikeExpansion()) continue;
+                    slot.type = ActionBarSlot::EQUIPMENT_SET; slot.id = id; break;
                 case 0x00: slot.type = ActionBarSlot::SPELL; slot.id = id; break;
                 case 0x01: slot.type = ActionBarSlot::ITEM;  slot.id = id; break;  // Classic item
                 case 0x80: slot.type = ActionBarSlot::ITEM;  slot.id = id; break;  // TBC/WotLK item
