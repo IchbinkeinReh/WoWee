@@ -270,14 +270,12 @@ particles give all their light at every hour, inside and out (the user's
 choice; the original's own time-dependent lighting - the Light.dbc colours, the
 drawn window glow - is untouched).
 
-A baked light's shadow ray from a baked surface (`RT_GB_BAKED`, passed by
-`rt_prepare` in the point normal's z) passes the buildings by
-(`rtSkipBuildings`; WMO meshes carry `kMeshBuilding`, and in hardware the
-instance mask `kBuildingMask`, culled with `0x01`). The bake already holds the
-building's walls' shadows of its own lamps; traced again, a lamp in a corridor
-cast its door frame's hard shadow onto the floor of the room beyond, where
-the bake never had its light. Doodads still shadow baked lights there; every
-other surface and every other light sees the walls as before.
+A light behind a surface's geometric face (below a floor, behind a wall)
+gives it nothing, whatever its normal map says (`rt_trace`): a bumped plank's
+normal leans toward the hearth's light a yard under the upper floor of the
+Goldshire inn and took it in grainy orange streaks. (For a time baked lights'
+rays from baked surfaces passed the buildings by; through the floor and the
+walls that let every lamp reach every room, and it was taken out again.)
 
 Units cast no point-light shadows: every point light's shadow ray passes
 the units by (`rtSkipUnits`, as the sun's does within the shadow map's

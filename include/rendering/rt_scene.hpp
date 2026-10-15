@@ -84,14 +84,7 @@ public:
         /// Ground: a heightfield whose every face looks up, so a ray that
         /// meets it going upward is coming from underneath (rtClosestEx).
         kMeshTerrain = 1u,
-        /// A building (WMO): its own walls are in the baked colours of its
-        /// rooms already, so a baked light's shadow ray from a baked surface
-        /// passes it by (rtSkipBuildings). In hardware its instances carry
-        /// the ray mask kBuildingMask instead of the others' kOtherMask.
-        kMeshBuilding = 2u,
     };
-    static constexpr uint8_t kOtherMask = 0x01u;
-    static constexpr uint8_t kBuildingMask = 0x02u;
 
     /// An indexed triangle mesh in object space. `surfaces` holds one packed
     /// surface (packRtSurface) per triangle, or a single one for all of them.

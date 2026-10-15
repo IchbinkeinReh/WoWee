@@ -84,15 +84,7 @@ void main() {
         return;
     }
     vec3 n = rtGbufNormal(g);
-    vec4 pointIn = imageLoad(uPointOut, px);
-    vec3 shadingN = rtOctDecode(pointIn.xy);
-    // A surface whose colour is a building's baked light (RT_GB_BAKED, from
-    // rt_prepare). The bake holds the building's walls' shadows of its own
-    // lamps already; traced again, a lamp in the corridor cast the door
-    // frame's hard shadow onto the floor of the room beyond, which its light
-    // never reached in the bake. Its rays to the baked lights pass the
-    // buildings by; the doodads and the rest still shadow them.
-    bool bakedSurface = pointIn.z > 0.5;
+    vec3 shadingN = rtOctDecode(imageLoad(uPointOut, px).xy);
     vec3 p = rtGbufWorld(g, px);
     vec3 origin = p + n * rtSurfaceOffset(dist);
     uint rng = rtSeed(uvec2(px), uint(pass.cameraPos.w));
@@ -152,6 +144,13 @@ void main() {
         float end = abs(light.positionEnd.w);
         if (d2 >= end * end) continue;
         float d = sqrt(d2);
+        // Behind the surface itself - below a floor, behind a wall - no
+        // light, by its geometric face, whatever its normal map says: a
+        // bumped plank's normal leans toward a lamp under the floor (the
+        // hearth's light below the inn's upper rooms) and, its shadow ray
+        // starting from the far side of the board, took that light in
+        // grainy streaks.
+        if (d > 1e-4 && dot(n, toLight) <= 0.0) continue;
         float ndl = d > 1e-4 ? dot(shadingN, toLight / d) : 1.0;
         if (ndl <= 0.0) continue;
         vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl);
@@ -183,10 +182,8 @@ void main() {
             // no unit's shadow by a lamp either.
             bool byUnit;
             rtSkipUnits = true;
-            rtSkipBuildings = bakedSurface && light.positionEnd.w < 0.0;
             pointVis = rtOccludedBy(origin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
             rtSkipUnits = false;
-            rtSkipBuildings = false;
         }
     }
 

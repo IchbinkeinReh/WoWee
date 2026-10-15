@@ -29,10 +29,6 @@ uint rtTriIndex(uint instance, uint primitive) {
 
 #include "rt_trace_alpha.glsli"
 
-// The instance masks (RtScene::kOtherMask, kBuildingMask): a ray that passes
-// the buildings by (rtSkipBuildings) culls by the others' alone.
-uint rtRayMask() { return rtSkipBuildings ? 0x01u : 0xFFu; }
-
 bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, inout uint rng) {
     if (rtInGroup(rtInstances[inst].group, origin)) return false;
     return rtSolidAt(rtTris[rtTriIndex(inst, prim)], bary, rng);
@@ -58,12 +54,12 @@ bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, inout uint 
 bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool unit) {
     unit = false;
     rayQueryEXT q;
-    rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsTerminateOnFirstHitEXT, rtRayMask(),
+    rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
                           origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(q, rng);
     if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT) return true;
     rayQueryEXT d;
-    rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsTerminateOnFirstHitEXT, rtRayMask(),
+    rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
                           origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(d, rng);
     if (rayQueryGetIntersectionTypeEXT(d, true) == gl_RayQueryCommittedIntersectionNoneEXT) return false;
