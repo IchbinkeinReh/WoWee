@@ -878,18 +878,21 @@ public:
     const std::string& getGuildName() const override;
     const GuildRosterData& getGuildRoster() const override;
 
-    /// Where the player sits in the guild, as an index into the roster's rank
-    /// list. Rank zero is the guild master, which is what IsGuildLeader asks.
-    /// Returns 0xFFFFFFFF when the roster has not arrived or the player is not
-    /// in it - distinct from rank zero, which is the opposite answer.
-    ///
-    /// Shared because the chat handler was already doing this walk to decide
-    /// whether to show officer chat, and a second copy is how two answers to
-    /// one question start to disagree.
+    /// Where the player sits in the guild: PLAYER_GUILDRANK, as the client
+    /// reads it. Rank zero is the guild master, which is what IsGuildLeader
+    /// asks. 0xFFFFFFFF with no player or no guild - distinct from rank zero,
+    /// which is the opposite answer.
     uint32_t getPlayerGuildRankIndex() const;
+    /// PLAYER_GUILDRANK whether or not in a guild, for the readers that do not
+    /// ask (0x005a67f0, 0x005cc290); 0xFFFFFFFF with no player.
+    uint32_t getPlayerGuildRankField() const;
+    /// A row of the rank table (0x00c21e60), null past the tenth.
+    const GuildRankInfo* getGuildRankRow(uint32_t rank) const;
     bool hasGuildRoster() const override;
     const std::vector<std::string>& getGuildRankNames() const;
     uint32_t getPlayerGuildRankRights() const;
+    /// The guild half of entering the world (0x005cb900).
+    void onPlayerEnteredWorldGuild();
     /// Which rank the guild control panel is editing. Client-side only - the
     /// panel picks it from a dropdown and asks for its rights with a call that
     /// takes no argument, so the choice has to be remembered here.

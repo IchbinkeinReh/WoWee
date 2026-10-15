@@ -2220,6 +2220,9 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
     if (block.guid == owner_.getPlayerGuid()) {
         owner_.lastPlayerFieldsRef() = entity->getFields();
         owner_.maybeDetectVisibleItemLayout();
+        // The active player made: 0x006e6150 -> 0x00528010 -> 0x005cb900,
+        // the guild rights asked for with PLAYER_GUILDID now known.
+        owner_.onPlayerEnteredWorldGuild();
     }
 
     // Name query + visible items

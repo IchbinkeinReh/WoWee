@@ -11,6 +11,7 @@
 #include "ui/framexml_takeover.hpp"
 #include "core/logger.hpp"
 #include "core/config_paths.hpp"
+#include "pipeline/asset_manager.hpp"
 #include <array>
 #include <cmath>
 #include <fstream>
@@ -21,6 +22,18 @@
 #include <string_view>
 
 namespace wowee::addons {
+
+/// One row of StringLookups.dbc, as 0x00634910 hands back its string (+4);
+/// empty for a row that is not there.
+static std::string stringLookup(game::GameHandler* gh, uint32_t id) {
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!am || !am->isInitialized()) return {};
+    auto dbc = am->loadDBC("StringLookups.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 2) return {};
+    const int32_t row = dbc->findRecordById(id);
+    if (row < 0) return {};
+    return dbc->getString(static_cast<uint32_t>(row), 1);
+}
 
 /// What each side has staked in the open trade.
 ///
@@ -3941,13 +3954,14 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // (0x005a67f0). Nothing at all without the player. A tab past
                 // the count bought, or past six, is nil, nil, nil, nil, 0, 0.
                 // Otherwise the name (GUILDBANK_TAB_NUMBER for none), the
-                // icon, then off the player's rank's row (0x005a41c0,
-                // 0x005a41f0): 1 or nil for view (0x01) and for deposit
-                // (0x02), the items a day, and the bank list's allowance, -1
-                // for no limit (0x00c1dc30).
+                // icon as a path, then off the row of the player's
+                // PLAYER_GUILDRANK (0x005a41c0, 0x005a41f0): 1 or nil for view
+                // (0x01) and for deposit (0x02), the items a day, and the bank
+                // list's allowance, -1 for no limit (0x00c1dc30).
                 {"GetGuildBankTabInfo", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) return 0;
+            const uint32_t rank = gh ? gh->getPlayerGuildRankField() : 0xFFFFFFFFu;
+            if (rank == 0xFFFFFFFFu) return 0;
             const int tab = static_cast<int>(std::lround(luaL_checknumber(L, 1))) - 1;
             if (tab < 0 || tab >= 6 || tab >= gh->getGuildBankTabCount()) {
                 lua_pushnil(L);
@@ -3966,14 +3980,19 @@ void registerInventoryLuaAPI(lua_State* L) {
                 lua_pushstring(L, wowee::game::interfaceFormat("GUILDBANK_TAB_NUMBER", "Tab %d",
                                                                {std::to_string(tab + 1)}).c_str());
             }
-            lua_pushstring(L, t ? t->tabIcon.c_str() : "");
+            // The tab's icon, INV_Misc_QuestionMark when it has none (the
+            // client writes that into the tab), behind StringLookups row 3 -
+            // "Interface\\Icons" - and a backslash; with no prefix, neither
+            // (0x00634910(3), "%s%s%s" with 0x009e4f88 or 0x009e14ff).
+            const std::string icon = (t && !t->tabIcon.empty()) ? t->tabIcon
+                                                                : std::string("INV_Misc_QuestionMark");
+            const std::string prefix = stringLookup(gh, 3);
+            lua_pushstring(L, (prefix + (prefix.empty() ? "" : "\\") + icon).c_str());
             uint32_t flags = 0;
             int32_t perDay = 0;
-            const uint32_t rank = gh->getPlayerGuildRankIndex();
-            const auto& ranks = gh->getGuildRoster().ranks;
-            if (rank < ranks.size()) {
-                flags = ranks[rank].bankTabRights[static_cast<size_t>(tab)];
-                perDay = static_cast<int32_t>(ranks[rank].bankTabSlotsPerDay[static_cast<size_t>(tab)]);
+            if (const auto* row = gh->getGuildRankRow(rank)) {
+                flags = row->bankTabRights[static_cast<size_t>(tab)];
+                perDay = static_cast<int32_t>(row->bankTabSlotsPerDay[static_cast<size_t>(tab)]);
             }
             if (flags & 0x01u) lua_pushnumber(L, 1); else lua_pushnil(L);
             if (flags & 0x02u) lua_pushnumber(L, 1); else lua_pushnil(L);
@@ -4226,9 +4245,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             const int tab = static_cast<int>(std::lround(luaL_checknumber(L, 1))) - 1;
             uint32_t flags = 0;
             if (gh && tab >= 0 && tab < 6) {
-                const uint32_t rank = gh->getPlayerGuildRankIndex();
-                const auto& ranks = gh->getGuildRoster().ranks;
-                if (rank < ranks.size()) flags = ranks[rank].bankTabRights[static_cast<size_t>(tab)];
+                if (const auto* row = gh->getGuildRankRow(gh->getPlayerGuildRankField()))
+                    flags = row->bankTabRights[static_cast<size_t>(tab)];
             }
             if (flags & 0x04u) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;

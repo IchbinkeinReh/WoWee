@@ -1693,6 +1693,16 @@ void SocialHandler::requestGuildPermissions() {
     owner_.getSocket()->send(packet);
 }
 
+void SocialHandler::onPlayerEnteredWorld() {
+    // 0x005cb900: rank 0's tab flags and items a day (0x00c21e68..0x00c21e94)
+    // to -1, then the rights asked for when the player is in a guild. Only
+    // MSG_GUILD_PERMISSIONS here; the money is asked for beside it in
+    // 0x00528010 (0x005a56f0).
+    guildRankTable_[0].bankTabRights.fill(0xFFFFFFFFu);
+    guildRankTable_[0].bankTabSlotsPerDay.fill(0xFFFFFFFFu);
+    if (getEntityGuildId(owner_.getPlayerGuid()) != 0) requestGuildPermissions();
+}
+
 // MSG_GUILD_PERMISSIONS's answer (0x005cb9f0): read only with the player in
 // the world. It writes the rank's row of the rank table the roster fills
 // (0x00c21e60, 0x38 a rank: rights, gold per day, six tab flags, six item
@@ -1711,10 +1721,9 @@ void SocialHandler::handleGuildPermissions(network::Packet& packet) {
         packet.skipAll();
         return;
     }
-    // The client's table always has ten rows; this one holds the roster's
-    // ranks, and every reader of it stops at the last of those, so a rank
-    // past them would be written where nothing reads it.
-    if (data.rankId < guildRoster_.ranks.size()) guildRoster_.ranks[data.rankId] = data.rank;
+    // Into the rank table by the rank it names, whether or not the roster
+    // listed that rank (the client indexes its ten rows unchecked).
+    if (data.rankId < guildRankTable_.size()) guildRankTable_[data.rankId] = data.rank;
     owner_.setGuildBankTabCount(data.purchasedTabs);
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GUILD_ROSTER_UPDATE", {});
 }
@@ -2781,6 +2790,10 @@ void SocialHandler::handleGuildRoster(network::Packet& packet) {
     if (!owner_.getPacketParsers()->parseGuildRoster(packet, data)) return;
     guildRoster_ = std::move(data);
     hasGuildRoster_ = true;
+    // Its ranks' rows of the rank table, and the rest of the ten zeroed
+    // (0x005cc5d0).
+    for (size_t i = 0; i < guildRankTable_.size(); ++i)
+        guildRankTable_[i] = i < guildRoster_.ranks.size() ? guildRoster_.ranks[i] : GuildRankInfo{};
 
     // A roster is only sent to a member, so this is the server saying so.
     //
@@ -2834,18 +2847,25 @@ void SocialHandler::saveGuildRank(uint32_t rankId, uint32_t rights, const std::s
     requestGuildRoster();
 }
 
+uint32_t SocialHandler::getPlayerGuildRankField() const {
+    const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    const uint16_t unitEnd = fieldIndex(UF::UNIT_END);
+    if (!self || unitEnd == 0xFFFF) return 0xFFFFFFFFu;
+    return self->getField(static_cast<uint16_t>(unitEnd + 4));
+}
+
+// The client's rank readers take PLAYER_GUILDRANK off the player, in a guild
+// by PLAYER_GUILDID (0x005cbca0, 0x005cbcf0 and the Can* beside them); this
+// looked for the player's row in the roster, so nothing was known until a
+// roster came, and nothing at all when it left the player out.
 uint32_t SocialHandler::getPlayerGuildRankIndex() const {
-    if (!hasGuildRoster_) return 0xFFFFFFFFu;
-    const uint64_t me = owner_.getPlayerGuid();
-    for (const auto& m : guildRoster_.members)
-        if (m.guid == me) return m.rankIndex;
-    return 0xFFFFFFFFu;
+    if (getEntityGuildId(owner_.getPlayerGuid()) == 0) return 0xFFFFFFFFu;
+    return getPlayerGuildRankField();
 }
 
 uint32_t SocialHandler::getPlayerGuildRankRights() const {
-    const uint32_t idx = getPlayerGuildRankIndex();
-    if (idx >= guildRoster_.ranks.size()) return 0;
-    return guildRoster_.ranks[idx].rights;
+    const GuildRankInfo* row = getGuildRankRow(getPlayerGuildRankIndex());
+    return row ? row->rights : 0;
 }
 
 void SocialHandler::handleGuildQueryResponse(network::Packet& packet) {

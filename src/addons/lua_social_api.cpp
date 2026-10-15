@@ -1592,12 +1592,10 @@ void registerSocialLuaAPI(lua_State* L) {
             uint32_t flags = 0;
             int32_t perDay = 0;
             if (gh && tab >= 0 && tab < 6) {
-                const auto& ranks = gh->getGuildRoster().ranks;
                 const int sel = gh->getSelectedGuildRank();
-                if (sel >= 1 && sel <= static_cast<int>(ranks.size())) {
-                    const auto& rank = ranks[static_cast<size_t>(sel) - 1];
-                    flags = rank.bankTabRights[static_cast<size_t>(tab)];
-                    perDay = static_cast<int32_t>(rank.bankTabSlotsPerDay[static_cast<size_t>(tab)]);
+                if (const auto* rank = sel >= 1 ? gh->getGuildRankRow(static_cast<uint32_t>(sel) - 1) : nullptr) {
+                    flags = rank->bankTabRights[static_cast<size_t>(tab)];
+                    perDay = static_cast<int32_t>(rank->bankTabSlotsPerDay[static_cast<size_t>(tab)]);
                 }
             }
             for (const uint32_t bit : {0x01u, 0x02u, 0x04u}) {
@@ -1613,10 +1611,9 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             int32_t limit = 0;
             if (gh) {
-                const auto& ranks = gh->getGuildRoster().ranks;
                 const int sel = gh->getSelectedGuildRank();
-                if (sel >= 1 && sel <= static_cast<int>(ranks.size()))
-                    limit = static_cast<int32_t>(ranks[static_cast<size_t>(sel) - 1].goldLimit);
+                if (const auto* rank = sel >= 1 ? gh->getGuildRankRow(static_cast<uint32_t>(sel) - 1) : nullptr)
+                    limit = static_cast<int32_t>(rank->goldLimit);
             }
             if (limit >= 0) limit /= 10000;
             lua_pushnumber(L, limit);
@@ -1912,10 +1909,10 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GuildControlGetRankFlags", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const auto& roster = gh->getGuildRoster();
             const int sel = gh->getSelectedGuildRank();
-            if (sel < 1 || sel > static_cast<int>(roster.ranks.size())) return 0;
-            const uint32_t rights = roster.ranks[static_cast<size_t>(sel) - 1].rights;
+            const auto* rank = sel >= 1 ? gh->getGuildRankRow(static_cast<uint32_t>(sel) - 1) : nullptr;
+            if (!rank) return 0;
+            const uint32_t rights = rank->rights;
             for (uint32_t bit : kGuildRankFlagBits) lua_pushboolean(L, (rights & bit) ? 1 : 0);
             return static_cast<int>(kGuildRankFlagCount);
         }},

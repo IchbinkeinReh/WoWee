@@ -150,6 +150,11 @@ public:
     /// MSG_GUILD_PERMISSIONS, empty: the rights of the player's rank, asked
     /// for by 0x005caa40.
     void requestGuildPermissions();
+    /// The guild half of the player entering the world (0x005cb900, from
+    /// 0x00528010 as the active player is made): rank 0's six tab flags and
+    /// items a day set to -1, and MSG_GUILD_PERMISSIONS - alone, without the
+    /// money - when PLAYER_GUILDID names a guild.
+    void onPlayerEnteredWorld();
     /// Ask for the guild's event log. The reply is the same opcode.
     void requestGuildEventLog();
     /// Ask for one bank tab's log. Tab six is the money log, which is what the
@@ -242,15 +247,22 @@ public:
         guildQueryData_ = GuildQueryResponseData{};
     }
     [[nodiscard]] const std::vector<std::string>& getGuildRankNames() const { return guildRankNames_; }
-    /// The rights bitmask of the player's own guild rank, or 0 when it is not
-    /// known. The roster carries one per rank and the member row names which
-    /// rank each member holds; both were parsed and stored and neither was
-    /// being read.
-    /// Where the player sits in the guild, as an index into the rank list.
-    /// 0xFFFFFFFF when the roster has not arrived or the player is not in it -
-    /// distinct from rank zero, which is the guild master.
+    /// Where the player sits in the guild: PLAYER_GUILDRANK, which is what
+    /// the client reads (descriptor +0x10, e.g. 0x005cbcf0), not the roster's
+    /// row for them. 0xFFFFFFFF with no player or no guild (PLAYER_GUILDID
+    /// 0) - distinct from rank zero, which is the guild master.
+    /// The rights of that rank, off its row of the rank table; 0 when there is
+    /// none.
     [[nodiscard]] uint32_t getPlayerGuildRankIndex() const;
     [[nodiscard]] uint32_t getPlayerGuildRankRights() const;
+    /// PLAYER_GUILDRANK (UNIT_END + 4) as it stands, in a guild or not;
+    /// 0xFFFFFFFF with no player.
+    [[nodiscard]] uint32_t getPlayerGuildRankField() const;
+    /// One row of the rank table (0x00c21e60, ten of 0x38 bytes), or null
+    /// past the tenth.
+    [[nodiscard]] const GuildRankInfo* getGuildRankRow(uint32_t rank) const {
+        return rank < guildRankTable_.size() ? &guildRankTable_[rank] : nullptr;
+    }
     [[nodiscard]] bool hasPendingGuildInvite() const { return pendingGuildInvite_; }
     [[nodiscard]] const std::string& getPendingGuildInviterName() const { return pendingGuildInviterName_; }
     [[nodiscard]] const std::string& getPendingGuildInviteGuildName() const { return pendingGuildInviteGuildName_; }
@@ -673,6 +685,11 @@ private:
     std::string guildName_;
     std::vector<std::string> guildRankNames_;
     GuildRosterData guildRoster_;
+    /// The rank table (0x00c21e60): ten rows of rights, gold a day, six tab
+    /// flags and six items a day. The roster fills its ranks' rows and zeroes
+    /// the rest (0x005cc5d0); MSG_GUILD_PERMISSIONS writes the row of the
+    /// rank it names (0x005cb9f0). Every reader of a rank's rights reads it.
+    std::array<GuildRankInfo, 10> guildRankTable_{};
     GuildInfoData guildInfoData_;
     GuildQueryResponseData guildQueryData_;
     bool hasGuildRoster_ = false;

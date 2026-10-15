@@ -2486,9 +2486,11 @@ bool GameHandler::hasPendingBgInvite() const {
 void GameHandler::setSelectedGuildRank(int index) {
     selectedGuildRank_ = index;
     pendingGuildRank_ = PendingGuildRank{};
-    const auto& roster = getGuildRoster();
-    if (index < 1 || index > static_cast<int>(roster.ranks.size())) return;
-    const auto& r = roster.ranks[static_cast<size_t>(index) - 1];
+    // Off the rank table, as 0x005ca090 reads it for the rank chosen.
+    if (index < 1) return;
+    const GuildRankInfo* row = getGuildRankRow(static_cast<uint32_t>(index) - 1);
+    if (!row) return;
+    const auto& r = *row;
     pendingGuildRank_.rights    = r.rights;
     pendingGuildRank_.goldLimit = r.goldLimit;
     pendingGuildRank_.tabRights = r.bankTabRights;
@@ -2978,6 +2980,18 @@ void GameHandler::requestContactList() {
 
 uint32_t GameHandler::getPlayerGuildRankIndex() const {
     return socialHandler_ ? socialHandler_->getPlayerGuildRankIndex() : 0xFFFFFFFFu;
+}
+
+uint32_t GameHandler::getPlayerGuildRankField() const {
+    return socialHandler_ ? socialHandler_->getPlayerGuildRankField() : 0xFFFFFFFFu;
+}
+
+const GuildRankInfo* GameHandler::getGuildRankRow(uint32_t rank) const {
+    return socialHandler_ ? socialHandler_->getGuildRankRow(rank) : nullptr;
+}
+
+void GameHandler::onPlayerEnteredWorldGuild() {
+    if (socialHandler_) socialHandler_->onPlayerEnteredWorld();
 }
 
 // ============================================================
