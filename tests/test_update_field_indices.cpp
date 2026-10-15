@@ -68,6 +68,8 @@ TEST_CASE("the WotLK field indices are what the server sends", "[update-fields]"
         // (0x006dca00, 0x006dca90).
         {"PLAYER_TRACK_CREATURES", 1022},
         {"PLAYER_TRACK_RESOURCES", 1023},
+        // The arena teams' block, 0x1150 past UNIT_END (0x005bc240).
+        {"PLAYER_FIELD_ARENA_TEAM_INFO_1_1", 1256},
     };
 
     const auto ours = declaredFields("wotlk");

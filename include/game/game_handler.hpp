@@ -890,6 +890,7 @@ public:
     /// LFGDungeons row's name, texture and expansion, and for a raid its
     /// difficulty's name.
     struct CalendarEventTexture {
+        uint32_t dungeonId = 0;  ///< the LFGDungeons row the list holds
         std::string name;
         std::string texture;
         uint32_t expansion = 0;
@@ -943,6 +944,11 @@ public:
     /// Invite the guild by level and rank filter.
     void massInviteGuildToCalendarEvent(uint32_t minLevel, uint32_t maxLevel,
                                         uint32_t minRank);
+    /// Invite one of the player's arena teams (0x005bc240), by 0-2.
+    void massInviteArenaTeamToCalendarEvent(uint32_t teamIndex);
+    /// The open event is new and neither a guild announcement nor a guild
+    /// event - what both mass invitations need.
+    [[nodiscard]] bool calendarTakesMassInvite() const;
     /// Ask the server for one event's detail: CMSG_CALENDAR_GET_EVENT.
     void requestCalendarEvent(uint64_t eventId);
     /// CalendarAddEvent (0x005bbd60): send the new event to the server.

@@ -8434,7 +8434,21 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, ev.type + 1);          // wire counts from zero
             lua_pushnumber(L, ev.repeatOption + 1);  // and so does this
             lua_pushnumber(L, ev.maxInvites);
-            lua_pushnumber(L, ev.dungeonId);        // textureIndex
+            // textureIndex: the dungeon's 1-based place in the event type's
+            // CalendarEventGetTextures list, 0 off it (0x005b9700 + 1).
+            {
+                long place = 0;
+                if (ev.type <= 1) {
+                    const auto rows = gh->calendarEventTextures(ev.type == 0 ? 1 : 2);
+                    for (size_t i = 0; i < rows.size(); ++i) {
+                        if (static_cast<int32_t>(rows[i].dungeonId) == ev.dungeonId) {
+                            place = static_cast<long>(i) + 1;
+                            break;
+                        }
+                    }
+                }
+                lua_pushnumber(L, static_cast<lua_Number>(place));
+            }
             lua_pushnumber(L, ev.eventTime.weekday + 1);
             lua_pushnumber(L, ev.eventTime.month);
             lua_pushnumber(L, ev.eventTime.day);
@@ -8776,9 +8790,21 @@ void registerSystemLuaAPI(lua_State* L) {
                 static_cast<uint8_t>(uiOption > 0 ? uiOption - 1 : 0);
             return 0;
         }},
+                // CalendarEventSetTextureID(textureIndex) (0x005bb800 ->
+                // 0x005b9630): the dungeon at that 1-based place in the list
+                // CalendarEventGetTextures gives for the event's type - a raid
+                // (wire type 0) the raids', a dungeon (1) the dungeons'. Any
+                // other type, or a place off the list, changes nothing.
                 {"CalendarEventSetTextureID", [](lua_State* L) -> int {
-            calendarDraft().dungeonId =
-                static_cast<int32_t>(luaL_optnumber(L, 1, -1));
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CalendarEventSetTextureID(textureIndex)");
+            auto* gh = getGameHandler(L);
+            auto& draft = calendarDraft();
+            if (!gh || draft.type > 1) return 0;
+            const long index = std::lround(lua_tonumber(L, 1)) - 1;
+            const auto rows = gh->calendarEventTextures(draft.type == 0 ? 1 : 2);
+            if (index >= 0 && static_cast<size_t>(index) < rows.size())
+                draft.dungeonId = static_cast<int32_t>(rows[static_cast<size_t>(index)].dungeonId);
             return 0;
         }},
                 // Editing the open event, and deleting it.
@@ -8876,14 +8902,27 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 // The three bounds go on the wire: this has its own opcode
                 // rather than being an invitation with the name left out, and
-                // the server picks the members from them.
+                // the server picks the members from them. The rank counts from
+                // 1 here and from 0 on the wire (0x005bccb0).
                 {"CalendarMassInviteGuild", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) && !lua_isnumber(L, 2) && !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: CalendarMassInviteGuild(minLevel, maxLevel, minRank)");
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
             gh->massInviteGuildToCalendarEvent(
-                static_cast<uint32_t>(luaL_optnumber(L, 1, 1)),
-                static_cast<uint32_t>(luaL_optnumber(L, 2, 80)),
-                static_cast<uint32_t>(luaL_optnumber(L, 3, 0)));
+                static_cast<uint32_t>(std::lround(lua_tonumber(L, 1))),
+                static_cast<uint32_t>(std::lround(lua_tonumber(L, 2))),
+                static_cast<uint32_t>(std::lround(lua_tonumber(L, 3)) - 1));
+            return 0;
+        }},
+                // CalendarMassInviteArenaTeam(index) (0x005bce60): arena team
+                // 1-3 (its usage text names CalendarNewArenaTeamEvent).
+                {"CalendarMassInviteArenaTeam", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CalendarNewArenaTeamEvent(index)");
+            if (auto* gh = getGameHandler(L))
+                gh->massInviteArenaTeamToCalendarEvent(
+                    static_cast<uint32_t>(std::lround(lua_tonumber(L, 1)) - 1));
             return 0;
         }},
                 // And the commit (0x005bcc70), held five seconds after the

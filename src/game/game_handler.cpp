@@ -3899,6 +3899,7 @@ std::vector<GameHandler::CalendarEventTexture> GameHandler::calendarEventTexture
     out.reserve(rows.size());
     for (const LfgDungeon* d : rows) {
         CalendarEventTexture t;
+        t.dungeonId = d->id;
         t.name = d->name;
         t.texture = d->texture;
         t.expansion = d->expansion;
@@ -3987,11 +3988,40 @@ void GameHandler::calendarEventInvite(const std::string& name) {
     setCalendarActionPending(true);
 }
 
+// Whether the open event takes a mass invitation (0x005bc160, 0x005bc240): a
+// new one, neither a guild announcement nor a guild event (+0x500, 0x440).
+bool GameHandler::calendarTakesMassInvite() const {
+    return calendarDraftOpen_ &&
+           (calendarEventDetail_.flags & (calendar_flag::kAnnouncement | calendar_flag::kGuildEvent)) == 0;
+}
+
+// 0x005bc160: not in a guild is said; otherwise the new event's guild filter.
 void GameHandler::massInviteGuildToCalendarEvent(uint32_t minLevel,
                                                  uint32_t maxLevel,
                                                  uint32_t minRank) {
-    if (!calendarActionAllowed()) return;
+    if (!calendarActionAllowed() || !entityController_->getEntityManager().getEntity(playerGuid)) return;
+    if (getEntityGuildId(playerGuid) == 0) {
+        calendarErrorDialog("ERR_GUILD_PLAYER_NOT_IN_GUILD", "You are not in a guild.");
+        return;
+    }
+    if (!calendarTakesMassInvite()) return;
     socialHandler_->massInviteGuildToCalendarEvent(minLevel, maxLevel, minRank);
+    setCalendarActionPending(true);
+}
+
+// CalendarMassInviteArenaTeam(index) (0x005bce60 -> 0x005bc240): the team id
+// of arena team 0-2 (PLAYER_FIELD_ARENA_TEAM_INFO_1_1, seven fields each) as
+// CMSG_CALENDAR_ARENA_TEAM, onto a new event; nothing for a slot with no team.
+void GameHandler::massInviteArenaTeamToCalendarEvent(uint32_t teamIndex) {
+    if (!calendarActionAllowed() || teamIndex >= 3) return;
+    auto player = entityController_->getEntityManager().getEntity(playerGuid);
+    const uint16_t base = fieldIndex(UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1);
+    if (!player || base == 0xFFFF) return;
+    const uint32_t teamId = player->getField(static_cast<uint16_t>(base + teamIndex * 7));
+    if (teamId == 0 || !calendarTakesMassInvite()) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_CALENDAR_ARENA_TEAM));
+    packet.writeUInt32(teamId);
+    socket->send(packet);
     setCalendarActionPending(true);
 }
 
