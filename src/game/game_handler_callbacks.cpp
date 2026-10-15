@@ -3186,6 +3186,67 @@ void GameHandler::declineGuildInvite() {
     if (socialHandler_) socialHandler_->declineGuildInvite();
 }
 
+// GMSurveyAnswerSubmit(question, rank, comment) (0x005ac390 -> 0x005ac260):
+// question 0-9's rank and comment, kept for the submit.
+void GameHandler::setGmSurveyAnswer(uint32_t question, uint8_t rank, const std::string& comment) {
+    if (question >= gmSurveyRanks_.size()) return;
+    gmSurveyRanks_[question] = rank;
+    gmSurveyComments_[question] = comment;
+}
+
+// GMSurveyCommentSubmit(comment) (0x005ac480 -> 0x005ac2d0).
+void GameHandler::setGmSurveyComment(const std::string& comment) { gmSurveyComment_ = comment; }
+
+// GMSurveySubmit (0x005ad230 -> 0x005acd50): CMSG_GMSURVEY_SUBMIT. The survey
+// is GMSurveyCurrentSurvey's for the client's locale index (DAT_00c5de9c);
+// each of its ten questions goes as its id, then - while there is one - the
+// rank and comment given it, the first missing id ending the list; then the
+// comment. What was kept is let go after (0x005ac1f0).
+void GameHandler::submitGmSurvey() {
+    // The client's locale index (0x00405dd0, the table at 0x00ad2fe0); enGB
+    // reads as enUS.
+    static constexpr const char* kLocales[] = {"enUS", "koKR", "frFR", "deDE", "zhCN",
+                                               "zhTW", "esES", "esMX", "ruRU"};
+    const auto* profile = services_.expansionRegistry ? services_.expansionRegistry->getActive() : nullptr;
+    uint32_t localeIndex = 0;
+    if (profile) {
+        for (uint32_t i = 0; i < std::size(kLocales); ++i)
+            if (profile->locale == kLocales[i]) localeIndex = i;
+    }
+    uint32_t surveyId = 0;
+    std::array<uint32_t, 10> questions{};
+    if (auto* am = services_.assetManager; am && am->isInitialized()) {
+        auto current = am->loadDBCOptional("GMSurveyCurrentSurvey.dbc");
+        if (current && current->isLoaded()) {
+            const int32_t row = current->findRecordById(localeIndex);
+            if (row >= 0) surveyId = current->getUInt32(static_cast<uint32_t>(row), 1);
+        }
+        auto surveys = am->loadDBCOptional("GMSurveySurveys.dbc");
+        if (surveys && surveys->isLoaded() && surveyId != 0) {
+            const int32_t row = surveys->findRecordById(surveyId);
+            if (row >= 0 && surveys->getFieldCount() >= 11) {
+                for (uint32_t i = 0; i < questions.size(); ++i)
+                    questions[i] = surveys->getUInt32(static_cast<uint32_t>(row), 1 + i);
+            }
+        }
+    }
+    if (isInWorld()) {
+        network::Packet packet(wireOpcode(Opcode::CMSG_GMSURVEY_SUBMIT));
+        packet.writeUInt32(surveyId);
+        for (uint32_t i = 0; i < questions.size(); ++i) {
+            packet.writeUInt32(questions[i]);
+            if (questions[i] == 0) break;
+            packet.writeUInt8(gmSurveyRanks_[i]);
+            packet.writeString(gmSurveyComments_[i]);
+        }
+        packet.writeString(gmSurveyComment_);
+        socket->send(packet);
+    }
+    gmSurveyRanks_.fill(0);
+    for (auto& comment : gmSurveyComments_) comment.clear();
+    gmSurveyComment_.clear();
+}
+
 void GameHandler::submitGmTicket(const std::string& text) {
     if (chatHandler_) chatHandler_->submitGmTicket(text);
 }

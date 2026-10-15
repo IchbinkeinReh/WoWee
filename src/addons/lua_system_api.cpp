@@ -6673,6 +6673,31 @@ void registerSystemLuaAPI(lua_State* L) {
                 // account with no survey pending should see.
                 {"GMSurveyQuestion",            lua_ReturnNil},
                 {"GMSurveyAnswer",              lua_ReturnNil},
+                // GMSurveyAnswerSubmit(question, rank, comment) (0x005ac390):
+                // questions 1-10, kept until GMSurveySubmit sends them.
+                {"GMSurveyAnswerSubmit", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isstring(L, 3))
+                return luaL_error(L, "Usage: GMSurveyAnswerSubmit(question, rank, comment)");
+            const long question = std::lround(lua_tonumber(L, 1));
+            const long rank = std::lround(lua_tonumber(L, 2));
+            if (question < 1 || question > 10)
+                return luaL_error(L, "GMSurveyAnswerSubmit: Questions limited from %d to %d", 1, 10);
+            if (auto* gh = getGameHandler(L))
+                gh->setGmSurveyAnswer(static_cast<uint32_t>(question - 1), static_cast<uint8_t>(rank),
+                                      lua_tostring(L, 3));
+            return 0;
+        }},
+                // GMSurveyCommentSubmit(comment) (0x005ac480).
+                {"GMSurveyCommentSubmit", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GMSurveyCommentSubmit(comment)");
+            if (auto* gh = getGameHandler(L)) gh->setGmSurveyComment(lua_tostring(L, 1));
+            return 0;
+        }},
+                // GMSurveySubmit() (0x005ad230 -> 0x005acd50).
+                {"GMSurveySubmit", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->submitGmSurvey();
+            return 0;
+        }},
                 // Movie recording, which is a Mac client feature this build
                 // does not have. Its siblings above already answer; these are
                 // the ones MacOptionsFrame reaches as it loads, so each one

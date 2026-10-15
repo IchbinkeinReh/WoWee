@@ -3569,6 +3569,10 @@ void GameHandler::onLeaveWorld(bool worldport) {
     // The possess bar's spell is let go (0x005d3360): UPDATE_BONUS_ACTIONBAR
     // if there was one.
     setPossessSpell(0);
+    // The GM survey's answers and comment are let go (0x005ac1f0).
+    gmSurveyRanks_.fill(0);
+    for (auto& comment : gmSurveyComments_) comment.clear();
+    gmSurveyComment_.clear();
     // The bank, the tabard and guild registrar, the mailbox, the auction
     // house, the stable and the petition vendor (0x0057ba90, 0x00598ec0,
     // 0x00599e90, 0x00571be0, 0x0059f150, 0x005a1160, 0x005a2880), and the

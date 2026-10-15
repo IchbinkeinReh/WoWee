@@ -817,6 +817,11 @@ public:
 
     // GM Ticket
     void submitGmTicket(const std::string& text);
+    /// The GM survey's answers (0x005ac260, 0x005ac2d0) and their submit
+    /// (0x005acd50).
+    void setGmSurveyAnswer(uint32_t question, uint8_t rank, const std::string& comment);
+    void setGmSurveyComment(const std::string& comment);
+    void submitGmSurvey();
     void updateGmTicket(const std::string& text);
     void deleteGmTicket();
     void requestGmTicket();          ///< Send CMSG_GMTICKET_GETTICKET to query open ticket
@@ -5773,6 +5778,9 @@ private:
     uint32_t currentMountDisplayId_ = 0;
     uint32_t mountAuraSpellId_ = 0;       // Spell ID of the aura that caused mounting (for CMSG_CANCEL_AURA fallback)
     bool playerDead_ = false;
+    std::array<uint8_t, 10> gmSurveyRanks_{};        ///< DAT_00c1e8c4
+    std::array<std::string, 10> gmSurveyComments_{}; ///< DAT_00c1e8d8
+    std::string gmSurveyComment_;                    ///< DAT_00c1e900
     bool inCinematic_ = false;  ///< DAT_00bd07fc, between CINEMATIC_START and _STOP
     bool releasedSpirit_ = false;
     uint32_t corpseMapId_ = 0;
