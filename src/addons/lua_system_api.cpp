@@ -1,6 +1,7 @@
 // lua_system_api.cpp - System, time, sound, locale, map, addons, instances, and utilities Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include <array>
+#include <chrono>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -2809,6 +2810,91 @@ static int lua_strlenutf8(lua_State* L) {
     }
     lua_pushnumber(L, chars);
     return 1;
+}
+
+/// strconcat(...) - every argument joined, as one string (0x00816d80: a
+/// lua_concat of the whole stack). With none it is the empty string.
+static int lua_strconcat(lua_State* L) {
+    lua_concat(L, lua_gettop(L));
+    return 1;
+}
+
+/// strreplace(s, find, replace [, max]) -> result, count (0x00816c40).
+///
+/// A plain substring rather than a pattern, replaced up to `max` times (0 or
+/// none is every one), into the client's 4096-byte buffer: what does not fit
+/// is cut. No replacement answers `s` itself. The client's loop never ends on
+/// an empty `find` with no limit; this one stops once the buffer is full.
+static int lua_strreplace(lua_State* L) {
+    size_t sLen = 0, findLen = 0, replLen = 0;
+    const char* s = luaL_checklstring(L, 1, &sLen);
+    const char* find = luaL_checklstring(L, 2, &findLen);
+    const char* repl = luaL_checklstring(L, 3, &replLen);
+    const lua_Integer limit = luaL_optinteger(L, 4, 0);
+    constexpr size_t kBuffer = 0x1000;
+    std::string out;
+    size_t room = kBuffer;
+    size_t pos = 0;
+    int count = 0;
+    for (; limit == 0 || count < limit; ++count) {
+        const char* hit = std::strstr(s + pos, find);
+        if (!hit) break;
+        if (findLen == 0 && room == 0) break;
+        const size_t lead = std::min(static_cast<size_t>(hit - (s + pos)), room);
+        out.append(s + pos, lead);
+        room -= lead;
+        const size_t put = std::min(replLen, room);
+        out.append(repl, put);
+        room -= put;
+        pos = static_cast<size_t>(hit - s) + findLen;
+    }
+    if (count < 1) {
+        lua_pushlstring(L, s, sLen);
+    } else {
+        out.append(s + pos, std::min(sLen - pos, room));
+        lua_pushlstring(L, out.data(), out.size());
+    }
+    lua_pushnumber(L, count);
+    return 2;
+}
+
+/// difftime(t1 [, t2]) - t1 - t2 in seconds, t2 defaulting to 0 (0x008178a0).
+/// Both are taken as whole seconds first.
+static int lua_wow_difftime(lua_State* L) {
+    const auto t2 = static_cast<std::time_t>(static_cast<int32_t>(luaL_optnumber(L, 2, 0)));
+    const auto t1 = static_cast<std::time_t>(static_cast<int32_t>(luaL_checknumber(L, 1)));
+    lua_pushnumber(L, std::difftime(t1, t2));
+    return 1;
+}
+
+/// debugprofilestart() / debugprofilestop() (0x00817350, 0x00817370): the
+/// performance counter kept, and the milliseconds since. Until a start the
+/// counter's own zero is the mark, as the client's static starts out.
+static std::chrono::steady_clock::duration& debugProfileMark() {
+    static std::chrono::steady_clock::duration mark{};
+    return mark;
+}
+
+static int lua_debugprofilestart(lua_State* L) {
+    (void)L;
+    debugProfileMark() = std::chrono::steady_clock::now().time_since_epoch();
+    return 0;
+}
+
+static int lua_debugprofilestop(lua_State* L) {
+    const auto since = std::chrono::steady_clock::now().time_since_epoch() - debugProfileMark();
+    lua_pushnumber(L, std::chrono::duration<double, std::milli>(since).count());
+    return 1;
+}
+
+/// The one function the shipped client registers under every name whose
+/// body was compiled out of it (0x008e5250): it answers nothing. The debug
+/// family beside these - debugload, debuginfo, debugprint, debugdump,
+/// debugbreak, debughook, debugtimestamp - and the developer toggles
+/// Bindings.xml and the world map still name.
+static int lua_compiledOutNothing(lua_State* L) {
+    (void)L;
+    return 0;
 }
 
 // wipe(table) - clear all entries from a table
@@ -7293,8 +7379,33 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"strtrim",           lua_strtrim},
                 {"strlenutf8",        lua_strlenutf8},
                 {"wipe",              lua_wipe},
+                {"strconcat",         lua_strconcat},
+                {"strreplace",        lua_strreplace},
                 {"date",              lua_wow_date},
                 {"time",              lua_wow_time},
+                {"difftime",          lua_wow_difftime},
+                {"debugprofilestart", lua_debugprofilestart},
+                {"debugprofilestop",  lua_debugprofilestop},
+                {"debugload",         lua_compiledOutNothing},
+                {"debuginfo",         lua_compiledOutNothing},
+                {"debugprint",        lua_compiledOutNothing},
+                {"debugdump",         lua_compiledOutNothing},
+                {"debugbreak",        lua_compiledOutNothing},
+                {"debughook",         lua_compiledOutNothing},
+                {"debugtimestamp",    lua_compiledOutNothing},
+                {"ResetPerformanceValues",   lua_compiledOutNothing},
+                {"TeleportToDebugObject",    lua_compiledOutNothing},
+                {"ToggleCollision",          lua_compiledOutNothing},
+                {"ToggleCollisionDisplay",   lua_compiledOutNothing},
+                {"TogglePerformanceDisplay", lua_compiledOutNothing},
+                {"TogglePerformancePause",   lua_compiledOutNothing},
+                {"TogglePerformanceValues",  lua_compiledOutNothing},
+                {"TogglePlayerBounds",       lua_compiledOutNothing},
+                {"TogglePortals",            lua_compiledOutNothing},
+                {"ToggleTris",               lua_compiledOutNothing},
+                {"CloseGuildRoster",         lua_compiledOutNothing},
+                {"GetExtendedItemInfo",      lua_compiledOutNothing},
+                {"QuestPOIUpdateTexture",    lua_compiledOutNothing},
                 {"GetTime",           lua_wow_gettime},
                 {"IsConnectedToServer", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
