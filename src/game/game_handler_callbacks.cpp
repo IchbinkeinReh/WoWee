@@ -2759,6 +2759,57 @@ uint64_t guidFieldOf(const Entity& e, UF low) {
 }
 }  // namespace
 
+void GameHandler::setPossessSpell(uint32_t spellId) {
+    if (possessSpellId_ == spellId) return;
+    possessSpellId_ = spellId;
+    fireAddonEvent("UPDATE_BONUS_ACTIONBAR", {});  // event 0xb4
+}
+
+void GameHandler::updatePossessSpell() {
+    // 0x006e4fd0, on PLAYER_FARSIGHT.
+    auto player = getEntityManager().getEntity(playerGuid);
+    if (!player) return;
+    const uint64_t farsight = guidFieldOf(*player, UF::PLAYER_FARSIGHT);
+    if (farsight == 0 || !getEntityManager().getEntity(farsight)) {
+        setPossessSpell(0);  // 0x005d30e0(0)
+        return;
+    }
+    // 0x005d62a0: the player rides its charm, or its summon when it has no
+    // charm (+0xd0's first guid, else its second, against the vehicle the
+    // player sits in).
+    uint64_t controlled = guidFieldOf(*player, UF::UNIT_FIELD_CHARM);
+    if (controlled == 0) controlled = guidFieldOf(*player, UF::UNIT_FIELD_SUMMON);
+    const auto passenger = vehicleRoster_.passenger(playerGuid);
+    const bool ridesItsCharm = passenger && passenger->vehicleGuid != 0 && passenger->vehicleGuid == controlled;
+    std::shared_ptr<pipeline::DBCFile> props;
+    std::vector<pet::PossessAura> auras;
+    for (const AuraSlot& slot : getPlayerAuras()) {
+        pet::PossessAura a;
+        if (!slot.isEmpty()) {
+            getSpellName(slot.spellId);  // fills the cache
+            const auto it = spellNameCache_.find(slot.spellId);
+            if (it != spellNameCache_.end()) {
+                a.spellId = slot.spellId;
+                a.flags = slot.flags;
+                for (int i = 0; i < 3; ++i) {
+                    a.effects[i] = it->second.effectIds[i];
+                    a.auraTypes[i] = it->second.effectAuraIds[i];
+                    if (a.effects[i] != pet::kEffectSummon) continue;
+                    if (!props) {
+                        auto* am = services_.assetManager;
+                        props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
+                    }
+                    const int32_t row = props && props->getFieldCount() > 1
+                        ? props->findRecordById(it->second.effectMiscValuesB[i]) : -1;
+                    if (row >= 0) a.summonControl[i] = static_cast<int32_t>(props->getUInt32(static_cast<uint32_t>(row), 1));
+                }
+            }
+        }
+        auras.push_back(a);
+    }
+    if (const auto spell = pet::possessBarSpell(auras, ridesItsCharm)) setPossessSpell(*spell);
+}
+
 void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
     // 0x005d4210: a spell the pet casts itself - AttributesEx4 0x20, or the
     // pet is the active mover (0x006dd060) - goes as the player's casts do

@@ -15,6 +15,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <vector>
 
 namespace wowee {
 namespace game {
@@ -265,6 +267,43 @@ struct DismissContext {
     // A summon whose SummonProperties Flags have 0x20 is not sent away.
     if ((c.summonPropertiesFlags & 0x20u) != 0) return DismissAction::None;
     return DismissAction::PetAction;
+}
+
+/// One of the player's auras as 0x005d62a0 reads it.
+struct PossessAura {
+    uint32_t spellId = 0;
+    uint8_t flags = 0;                        ///< the aura's flags; 0x80 harmful
+    uint32_t effects[3] = {0, 0, 0};          ///< Spell.dbc Effect
+    uint32_t auraTypes[3] = {0, 0, 0};        ///< EffectApplyAuraName
+    int32_t summonControl[3] = {-1, -1, -1};  ///< a SUMMON effect's SummonProperties Control (+4), else -1
+};
+inline constexpr uint32_t kAuraModPossess = 2;
+inline constexpr uint32_t kAuraModCharm = 6;
+inline constexpr uint32_t kAuraModPossessPet = 128;
+inline constexpr uint32_t kAuraControlVehicle = 236;
+inline constexpr int32_t kSummonControlPossessed = 3;
+
+/// The spell the possess bar is for (0x005d62a0, into 0xc234e0), from the
+/// player's auras in slot order: the first that is not harmful (flags 0x80)
+/// and either applies MOD_POSSESS, MOD_POSSESS_PET or MOD_CHARM - or
+/// CONTROL_VEHICLE when the player rides its charm (its summon, with no
+/// charm) - or summons through a SummonProperties row whose Control is 3.
+/// Nothing when no aura names one: the spell is then left as it was.
+[[nodiscard]] inline std::optional<uint32_t> possessBarSpell(const std::vector<PossessAura>& auras,
+                                                             bool ridesItsCharm) {
+    for (const PossessAura& a : auras) {
+        if (a.spellId == 0 || (a.flags & 0x80u) != 0) continue;
+        for (uint32_t type : a.auraTypes) {
+            if (type == kAuraModPossess || type == kAuraModPossessPet || type == kAuraModCharm ||
+                (type == kAuraControlVehicle && ridesItsCharm)) {
+                return a.spellId;
+            }
+        }
+        for (int i = 0; i < 3; ++i) {
+            if (a.effects[i] == kEffectSummon && a.summonControl[i] == kSummonControlPossessed) return a.spellId;
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace pet

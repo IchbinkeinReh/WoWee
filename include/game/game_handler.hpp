@@ -2720,6 +2720,13 @@ public:
     /// and the pet lives, and - where the pet is the vehicle it sits in - its
     /// seat's VehicleAbilityDisplay is 1.
     void updatePetActionBar();
+    /// The spell the possess bar is for (0xc234e0, IsPossessBarVisible
+    /// 0x005a8820), 0 for none. Asked again when the unit the player looks
+    /// through changes (0x006e4fd0): none there is none (0x005d30e0(0)),
+    /// else the player's auras say (0x005d62a0, pet::possessBarSpell).
+    /// Each change is UPDATE_BONUS_ACTIONBAR.
+    uint32_t getPossessSpellId() const { return possessSpellId_; }
+    void updatePossessSpell();
     uint64_t getComboTarget() const { return comboTarget_; }
 
     /// The death knight's runes as the client keeps them (runes::Runes).
@@ -5370,6 +5377,8 @@ private:
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     bool petActionsOnBonusBar_ = false;
+    uint32_t possessSpellId_ = 0;
+    void setPossessSpell(uint32_t spellId);
     /// The column the arena rosters are sorted by, so clicking it again knows
     /// to reverse rather than re-sort the same way.
     std::string arenaSortKey_;

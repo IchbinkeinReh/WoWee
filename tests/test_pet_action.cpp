@@ -318,3 +318,39 @@ TEST_CASE("a pet's global cooldown, hastened from 1 to 1.5 s (0x00805d70)", "[pe
     REQUIRE(globalCooldown(133, 1500, 1500, 2, 0, 0.5f) == 1500);
     REQUIRE(globalCooldown(0, 1000, 1000, 0, 0, 0.5f) == 1000);
 }
+
+TEST_CASE("the possess bar's spell is the first aura that possesses", "[pet]") {
+    // 0x005d62a0: in slot order; MOD_POSSESS (2), MOD_POSSESS_PET (128) and
+    // MOD_CHARM (6) always, CONTROL_VEHICLE (236) only riding the charm, and
+    // a SUMMON whose SummonProperties Control is 3.
+    auto aura = [](uint32_t spell, uint32_t auraType) {
+        PossessAura a;
+        a.spellId = spell;
+        a.effects[0] = 6;  // APPLY_AURA
+        a.auraTypes[0] = auraType;
+        return a;
+    };
+    CHECK_FALSE(possessBarSpell({}, false).has_value());
+    CHECK_FALSE(possessBarSpell({aura(100, 4)}, false).has_value());
+    CHECK(possessBarSpell({aura(100, 4), aura(605, kAuraModPossess)}, false) == 605u);
+    CHECK(possessBarSpell({aura(1002, kAuraModPossessPet)}, false) == 1002u);
+    CHECK(possessBarSpell({aura(7, kAuraModCharm), aura(605, kAuraModPossess)}, false) == 7u);
+
+    // A vehicle's control aura counts only when the vehicle is the charm.
+    CHECK_FALSE(possessBarSpell({aura(46598, kAuraControlVehicle)}, false).has_value());
+    CHECK(possessBarSpell({aura(46598, kAuraControlVehicle)}, true) == 46598u);
+
+    // A harmful aura (flags 0x80) is passed over.
+    PossessAura harmful = aura(605, kAuraModPossess);
+    harmful.flags = 0x80;
+    CHECK_FALSE(possessBarSpell({harmful}, false).has_value());
+
+    // A summon of a possessed kind, in any effect.
+    PossessAura summon;
+    summon.spellId = 33;
+    summon.effects[2] = kEffectSummon;
+    summon.summonControl[2] = kSummonControlPossessed;
+    CHECK(possessBarSpell({summon}, false) == 33u);
+    summon.summonControl[2] = 2;  // a pet's
+    CHECK_FALSE(possessBarSpell({summon}, false).has_value());
+}

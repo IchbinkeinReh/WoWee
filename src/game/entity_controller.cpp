@@ -2723,6 +2723,7 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                     entity->getField(farsight);
                 movement->onFarsightChanged(looked);  // 0x006e2880
             }
+            owner_.updatePossessSpell();  // 0x005d30e0 / 0x005d62a0
             owner_.updatePetActionBar();
         }
         PlayerFieldIndices pfi = PlayerFieldIndices::resolve();
