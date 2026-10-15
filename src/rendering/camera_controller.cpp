@@ -2896,15 +2896,22 @@ void CameraController::update(float deltaTime) {
     vehicleYawOffset_.step(cameraClockMs_);
     vehiclePitchOffset_.step(cameraClockMs_);
     if (viewBlending_) {
+        // Only the parts being eased are set (0x00603d30 steps them by +0x98
+        // 0x4000000, 0x2000000, 0x1000000); each ends as it arrives.
+        const bool distanceEasing = viewDistance_.easing();
+        const bool pitchEasing = viewPitch_.easing();
+        const bool yawEasing = viewYaw_.easing();
         viewDistance_.step(cameraClockMs_);
         viewPitch_.step(cameraClockMs_);
         viewYaw_.step(cameraClockMs_);
-        userTargetDistance = viewDistance_.value;
-        pitch = viewPitch_.value;
-        yaw += viewYaw_.value - viewYawApplied_;
-        viewYawApplied_ = viewYaw_.value;
+        if (distanceEasing) userTargetDistance = viewDistance_.value;
+        if (pitchEasing) pitch = viewPitch_.value;
+        if (yawEasing) {
+            yaw += viewYaw_.value - viewYawApplied_;
+            viewYawApplied_ = viewYaw_.value;
+        }
         if (camera) camera->setRotation(yaw, pitch);
-        viewBlending_ = viewYaw_.startMs != viewYaw_.endMs;
+        viewBlending_ = viewDistance_.easing() || viewPitch_.easing() || viewYaw_.easing();
     }
     if (timedZoomElapsed_ >= 0.0f) {
         timedZoomElapsed_ += deltaTime;
@@ -3585,18 +3592,27 @@ void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
         rotateArmed_ = true;  // past the dead-zone: this is a deliberate drag
     }
 
-    viewMovedByPlayer_ = true;  // 0x006020b0
-    // Directly update stored yaw/pitch (no lossy forward-vector derivation)
-    yaw -= event.xrel * mouseSensitivity;
+    // Directly update stored yaw/pitch (no lossy forward-vector derivation).
     // SDL yrel > 0 = mouse moved DOWN. In WoW, mouse-down = look down = pitch decreases.
     // invertMouse flips to flight-sim style (mouse-down = look up).
-    float invert = invertMouse ? 1.0f : -1.0f;
-    pitch += event.yrel * mouseSensitivity * invert;
+    const float invert = invertMouse ? 1.0f : -1.0f;
+    lookBy(-event.xrel * mouseSensitivity, event.yrel * mouseSensitivity * invert);
+}
 
+void CameraController::lookBy(float yawDegrees, float pitchDegrees) {
+    viewMovedByPlayer_ = true;  // 0x006020b0
+    // 0x005fe5f0: the yaw being eased to turns with the camera. The ease is
+    // applied to the yaw as it changes, so the turn is kept as it is.
+    yaw += yawDegrees;
+    // 0x005ffc20: where the pitch eases from and to move with it, each held
+    // to the limits, and the ease goes on from there.
     // WoW-style pitch limits: can look almost straight down, limited upward
-    pitch = glm::clamp(pitch, MIN_PITCH, MAX_PITCH);
-
-    camera->setRotation(yaw, pitch);
+    pitch = glm::clamp(pitch + pitchDegrees, MIN_PITCH, MAX_PITCH);
+    if (viewPitch_.easing()) {
+        viewPitch_.shift(pitchDegrees, MIN_PITCH, MAX_PITCH);
+        pitch = viewPitch_.value;
+    }
+    if (camera) camera->setRotation(yaw, pitch);
 }
 
 void CameraController::processMouseButton(const SDL_MouseButtonEvent& event) {
@@ -3935,12 +3951,8 @@ bool CameraController::groundNotStreamedYet(float x, float y) const {
 void CameraController::applyLookDelta(float dxPixels, float dyPixels) {
     if (!enabled || !camera || introActive) return;
 
-    viewMovedByPlayer_ = true;  // 0x006020b0
-    yaw -= dxPixels * mouseSensitivity;
     const float invert = invertMouse ? 1.0f : -1.0f;
-    pitch += dyPixels * mouseSensitivity * invert;
-    pitch = glm::clamp(pitch, MIN_PITCH, MAX_PITCH);
-    camera->setRotation(yaw, pitch);
+    lookBy(-dxPixels * mouseSensitivity, dyPixels * mouseSensitivity * invert);
 }
 
 void CameraController::processMouseWheel(float delta) {
@@ -3972,22 +3984,24 @@ float CameraController::clampedZoomDistance(float distance) const {
 void CameraController::zoomBy(float yards) {
     collisionZoomDebt_ = 0.0f;
     collisionClearSeconds_ = 0.0f;
-    userTargetDistance = clampedZoomDistance(userTargetDistance - yards);
+    // 0x006000e0: while a view's distance is eased to (+0x98 0x4000000) the
+    // wheel moves only where it ends (+0x1e8), not where it is (+0x118).
+    if (viewDistance_.easing())
+        viewDistance_.retarget(clampedZoomDistance(viewDistance_.to - yards));
+    else
+        userTargetDistance = clampedZoomDistance(userTargetDistance - yards);
     timedZoomElapsed_ = -1.0f;
     viewMovedByPlayer_ = true;  // 0x006000e0
 }
 
 CameraController::ViewPose CameraController::currentViewPose() const {
     ViewPose pose;
-    if (viewBlending_) {
-        pose.distance = viewDistance_.target();
-        pose.pitch = -viewPitch_.target();
-        pose.yaw = viewYaw_.target();
-    } else {
-        pose.distance = userTargetDistance;
-        pose.pitch = -pitch;
-        pose.yaw = yaw - facingYaw;
-    }
+    pose.distance = viewDistance_.easing() ? viewDistance_.target() : userTargetDistance;
+    pose.pitch = -(viewPitch_.easing() ? viewPitch_.target() : pitch);
+    // The yaw as it is and what is left of the ease, so a turn made meanwhile
+    // is in it as in +0x260 (0x005fe5f0).
+    pose.yaw = yaw - facingYaw;
+    if (viewYaw_.easing()) pose.yaw += viewYaw_.target() - viewYawApplied_;
     pose.yaw = std::remainder(pose.yaw, 360.0f);
     return pose;
 }
@@ -4000,6 +4014,7 @@ void CameraController::goToViewPose(const ViewPose& pose, float seconds) {
     const float fromYaw = pose.yaw + std::remainder((yaw - facingYaw) - pose.yaw, 360.0f);
     if (seconds <= 0.0f) {
         viewBlending_ = false;
+        for (auto* part : {&viewDistance_, &viewPitch_, &viewYaw_}) part->startMs = part->endMs;
         userTargetDistance = distance;
         currentDistance = distance;
         pitch = toPitch;
@@ -4009,14 +4024,20 @@ void CameraController::goToViewPose(const ViewPose& pose, float seconds) {
     }
     timedZoomElapsed_ = -1.0f;
     const uint32_t end = cameraClockMs_ + static_cast<uint32_t>(seconds * 1000.0f);
-    viewDistance_.value = userTargetDistance;
-    viewDistance_.set(distance, cameraClockMs_, end);
-    viewPitch_.value = pitch;
-    viewPitch_.set(toPitch, cameraClockMs_, end);
-    viewYaw_.value = fromYaw;
-    viewYaw_.set(pose.yaw, cameraClockMs_, end);
+    // Each part eased only where it is 0.001 or more from the view (yards,
+    // radians: 0x005fe950, 0x005fea40, 0x005feb60); the rest is left at rest.
+    constexpr float kRadianDegrees = 57.29578f;
+    const auto ease = [&](game::vehicle::EasedCameraOffset& part, float from, float target,
+                          float threshold) {
+        part.value = from;
+        if (std::fabs(target - from) >= threshold) part.set(target, cameraClockMs_, end);
+        else part.startMs = part.endMs = cameraClockMs_;
+    };
+    ease(viewDistance_, userTargetDistance, distance, 0.001f);
+    ease(viewPitch_, pitch, toPitch, 0.001f * kRadianDegrees);
+    ease(viewYaw_, fromYaw, pose.yaw, 0.001f * kRadianDegrees);
     viewYawApplied_ = fromYaw;
-    viewBlending_ = true;
+    viewBlending_ = viewDistance_.easing() || viewPitch_.easing() || viewYaw_.easing();
 }
 
 void CameraController::setFollowTarget(glm::vec3* target) {

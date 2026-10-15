@@ -201,6 +201,26 @@ struct EasedCameraOffset {
     }
     /// Where it is going: what it eases to, or is at once it has.
     [[nodiscard]] float target() const { return startMs == endMs ? value : to; }
+    [[nodiscard]] bool easing() const { return startMs != endMs; }
+    /// Turned by the mouse while it eases (0x005ffc20 the pitch: +0x234,
+    /// +0x230, +0x120): where it eased from, where it goes and where it is
+    /// each moved by the turn and held to lo..hi. It keeps easing - the turn
+    /// is added to the ease, neither lost to it nor ending it.
+    void shift(float delta, float lo, float hi) {
+        const auto held = [lo, hi](float v) { return v < lo ? lo : (v < hi ? v : hi); };
+        value = held(value + delta);
+        if (!easing()) return;
+        from = held(from + delta);
+        to = held(to + delta);
+    }
+    /// Zoomed by the wheel while it eases (0x006000e0 cases 0/1 move +0x1e8
+    /// alone while +0x98 0x4000000 is set): only where it goes moves, and it
+    /// eases there from where it set out in the time left. At rest it is put
+    /// there.
+    void retarget(float target) {
+        if (easing()) to = target;
+        else value = target;
+    }
 };
 
 /// The camera's distance mode (0x00600590): 0 the ordinary, 1 a seat with

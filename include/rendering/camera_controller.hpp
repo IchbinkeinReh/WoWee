@@ -349,11 +349,16 @@ public:
         float yaw = 0.0f;
     };
     /// Where the camera is going, as SaveView keeps it (0x005fe4e0 reads the
-    /// targets: +0x1e8, +0x230, +0x260).
+    /// targets: +0x1e8, +0x230, +0x260), with whatever the mouse and the
+    /// wheel have added to a view being eased to.
     [[nodiscard]] ViewPose currentViewPose() const;
     /// Taken to a view (0x00603330): over `seconds` with the client's ease,
-    /// every part over the same time; at once with none. Yaw the short way
-    /// round (0x005fd5c0).
+    /// every part that moves over the same time; at once with none. Yaw the
+    /// short way round (0x005fd5c0). A part already within 0.001 (yards, or
+    /// radians) of the view is not eased (0x005fe950, 0x005fea40,
+    /// 0x005feb60), so the mouse and the wheel move it as at rest.
+    /// Meanwhile the mouse adds to the ease (0x006020b0 -> 0x005ffc20,
+    /// 0x005fe5f0) and the wheel moves where it ends (0x006000e0).
     void goToViewPose(const ViewPose& pose, float seconds);
     /// Whether the view has been moved by the wheel or the mouse since the
     /// last view was set (+0x98 0x40: 0x006000e0, 0x006020b0 set it,
@@ -581,9 +586,9 @@ private:
     int distanceMode_ = 0;                  ///< +0x2c4
     float savedDistance_ = -1.0f;           ///< cameraSavedDistance; below 0 until the first change
     float savedVehicleDistance_ = -1.0f;    ///< cameraSavedVehicleDistance, "-1.0"
-    /// A view being eased to (0x00603330 with style 1): each part from where
-    /// it was, the yaw from the facing and applied as it changes, so a turn
-    /// made meanwhile is kept.
+    /// A view being eased to (0x00603330 with style 1): each part that moves
+    /// from where it was, the yaw from the facing and applied as it changes,
+    /// so a turn made meanwhile - by the mouse or the character - is kept.
     game::vehicle::EasedCameraOffset viewDistance_;
     game::vehicle::EasedCameraOffset viewPitch_;
     game::vehicle::EasedCameraOffset viewYaw_;
@@ -592,6 +597,8 @@ private:
     bool viewMovedByPlayer_ = false;
     /// The wheel's limits on the distance, as zoomBy holds it.
     [[nodiscard]] float clampedZoomDistance(float distance) const;
+    /// The mouse's turn of the camera (0x006020b0): yaw and pitch in degrees.
+    void lookBy(float yawDegrees, float pitchDegrees);
     game::vehicle::EasedCameraOffset vehicleYawOffset_;
     game::vehicle::EasedCameraOffset vehiclePitchOffset_;
     uint32_t cameraClockMs_ = 0;

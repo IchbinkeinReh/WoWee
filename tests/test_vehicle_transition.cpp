@@ -332,6 +332,59 @@ TEST_CASE("a camera offset's target is where it eases to, or where it rests", "[
     CHECK(yaw.target() == 0.0f);
 }
 
+TEST_CASE("the mouse adds to a view's pitch being eased to (0x006020b0 -> 0x005ffc20)", "[vehicle][camera]") {
+    gv::EasedCameraOffset pitch;
+    pitch.value = -10.0f;
+    pitch.set(30.0f, 1000, 2000);
+    pitch.step(1500);
+    REQUIRE(pitch.value == Catch::Approx(10.0f));
+    // Up 5: from, to and where it is all move, and it keeps easing.
+    pitch.shift(5.0f, -88.0f, 88.0f);
+    CHECK(pitch.value == Catch::Approx(15.0f));
+    CHECK(pitch.easing());
+    CHECK(pitch.target() == Catch::Approx(35.0f));
+    pitch.step(1500);
+    CHECK(pitch.value == Catch::Approx(15.0f));  // not lost to the next step
+    pitch.step(2001);
+    CHECK(pitch.value == Catch::Approx(35.0f));
+    CHECK_FALSE(pitch.easing());
+
+    // Each end held to the limits on its own.
+    gv::EasedCameraOffset up;
+    up.value = 0.0f;
+    up.set(80.0f, 0, 1000);
+    up.shift(20.0f, -88.0f, 88.0f);
+    CHECK(up.from == Catch::Approx(20.0f));
+    CHECK(up.to == Catch::Approx(88.0f));
+    CHECK(up.value == Catch::Approx(20.0f));
+
+    // At rest it is only moved and held.
+    gv::EasedCameraOffset rest;
+    rest.value = 85.0f;
+    rest.shift(10.0f, -88.0f, 88.0f);
+    CHECK(rest.value == Catch::Approx(88.0f));
+    CHECK_FALSE(rest.easing());
+}
+
+TEST_CASE("the wheel moves where a view's distance ends, not where it is (0x006000e0)", "[vehicle][camera]") {
+    gv::EasedCameraOffset distance;
+    distance.value = 5.0f;
+    distance.set(15.0f, 1000, 2000);
+    distance.step(1500);
+    REQUIRE(distance.value == Catch::Approx(10.0f));
+    distance.retarget(25.0f);
+    CHECK(distance.value == Catch::Approx(10.0f));
+    CHECK(distance.target() == Catch::Approx(25.0f));
+    // From where it set out to the new end, in the time it had.
+    distance.step(1500);
+    CHECK(distance.value == Catch::Approx(15.0f));
+    distance.step(2001);
+    CHECK(distance.value == Catch::Approx(25.0f));
+    CHECK_FALSE(distance.easing());
+    distance.retarget(8.0f);
+    CHECK(distance.value == Catch::Approx(8.0f));
+}
+
 TEST_CASE("a seat picks the camera's distance mode (0x0074c0e0 -> 0x00600590)", "[vehicle]") {
     gv::SeatRecord fixedCamera;
     fixedCamera.flags = gv::kSeatFlagFixedCamera;
