@@ -3164,6 +3164,9 @@ void registerUnitLuaAPI(lua_State* L) {
             // popped found none and did nothing.
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
+            // 0x0054da10 asks the taint check (kind 0x14: insecure code only
+            // inside a hardware event) once it has its arguments.
+            if (!taint::allowed(L, 0x14)) return 0;
             const uint32_t slot = (idx >= 1 && idx <= 3) ? static_cast<uint32_t>(idx - 1)
                                                          : 0xFFFFFFFFu;
             int accept = lua_toboolean(L, 2);

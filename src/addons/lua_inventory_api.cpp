@@ -3,6 +3,7 @@
 #include "game/item_text.hpp"
 #include "game/interface_text.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/game_utils.hpp"
@@ -863,6 +864,8 @@ static int lua_AddTradeMoney(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint64_t held = cursorMoney();
     if (!gh || held == 0) return 0;
+    // 0x00586dc0 -> 0x00586930, which asks the taint check (kind 7).
+    if (!taint::allowed(L, 7)) return 0;
     gh->setTradeGold(gh->getMyTradeGold() + held);
     setCursorMoney(L, 0);
     return 0;
@@ -1808,7 +1811,8 @@ uint64_t usedOnUnit(lua_State* L, int index) {
 static int lua_UseItemByName(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint32_t itemId = carriedItemMatching(gh, L, 1);
-    if (gh && itemId != 0) gh->useItemById(itemId, usedOnUnit(L, 2));
+    if (gh && itemId != 0 && itemUseAllowed(L, gh, itemId, false))
+        gh->useItemById(itemId, usedOnUnit(L, 2));
     return 0;
 }
 
@@ -1825,6 +1829,9 @@ static int lua_EquipItemByName(lua_State* L) {
     if (!gh) return 0;
     const uint32_t itemId = carriedItemMatching(gh, L, 1);
     if (itemId == 0) return 0;
+    // 0x0051cdb0 -> 0x006dff90 / AutoEquipItem, which ask the taint check
+    // (kind 0x16).
+    if (!taint::allowed(L, 0x16)) return 0;
     const int wantSlot = static_cast<int>(luaL_optnumber(L, 2, 0));
     // Zero is "no slot named", not slot zero - the interface's own numbering
     // starts at one, so there is no ambiguity to resolve.
@@ -1880,6 +1887,22 @@ static int lua_IsEquippedItem(lua_State* L) {
     return 1;
 }
 
+// Whether insecure code may use `itemId` (UseItem, 0x00708c20): wearing it is
+// CGPlayer_C::AutoEquipItem's check (kind 0x16, not in combat lockdown);
+// anything else is the cast of its use spell (0x0080da40 -> 0x0080cce0). An
+// item already worn is only ever used. An item with neither asks nothing.
+bool itemUseAllowed(lua_State* L, game::GameHandler* gh, uint32_t itemId, bool worn) {
+    const auto* info = gh ? gh->getItemInfo(itemId) : nullptr;
+    if (!info || !info->valid) return true;
+    if (!worn && info->inventoryType != 0 && info->itemClass != game::ITEM_CLASS_QUEST)
+        return taint::allowed(L, 0x16);
+    for (const auto& spell : info->spells) {
+        if (spell.spellId != 0 && spell.spellTrigger == 0)
+            return spellCastAllowed(L, gh, spell.spellId);
+    }
+    return true;
+}
+
 // UseInventoryItem(slot) - use what is equipped in a slot
 //
 // How a trinket is clicked on the character sheet. The slot numbers are the
@@ -1893,7 +1916,8 @@ static int lua_UseInventoryItem(lua_State* L) {
     // paperdoll's right-click arrives here.
     if (completedItemTarget(L, gh->getEquipSlotGuid(slotId - 1))) return 0;
     const auto& slot = *inventorySlotItem(gh->getInventory(), slotId);
-    if (!slot.empty()) gh->useItemById(slot.item.itemId, usedOnUnit(L, 2));
+    if (!slot.empty() && itemUseAllowed(L, gh, slot.item.itemId, true))
+        gh->useItemById(slot.item.itemId, usedOnUnit(L, 2));
     return 0;
 }
 
@@ -2035,6 +2059,11 @@ static int lua_UseContainerItem(lua_State* L) {
             return 0;
         }
     }
+
+    // Equipping and using ask the taint check; reading and opening do not
+    // (0x005d8650: AutoEquipItem 0x006dfee0, UseItem 0x00708c20).
+    if (!readable && !openable && !itemUseAllowed(L, gh, itemSlot->item.itemId, false))
+        return 0;
 
     // By slot rather than by item id: the id searches the bags for a match and
     // can find a different stack of the same thing than the one clicked.
@@ -2999,6 +3028,8 @@ static int lua_PutItemInBag(lua_State* L) {
     }
     const int bagIndex = isWorn ? wornIndex : bankIndex;
     const auto& inv = gh->getInventory();
+    // 0x005ea780 -> 0x005e8d30 -> SwapItems (0x006df890, kind 0x16).
+    if (!taint::allowed(L, 0x16)) return 0;
 
     // A bag dropped on a bag slot changes places with what is worn there, it
     // does not go inside it. Without this the loop below found a free slot in
@@ -3067,6 +3098,8 @@ static int lua_PutItemInBackpack(lua_State* L) {
         return 1;
     }
     const int free = gh->getInventory().findFreeBackpackSlot();
+    // 0x005ea7f0 -> 0x005e8d30 -> SwapItems (0x006df890, kind 0x16).
+    if (free >= 0 && !taint::allowed(L, 0x16)) return 0;
     if (free >= 0) {
         gh->swapContainerItems(srcBag, srcSlot, 0xFF,
                                static_cast<uint8_t>(game::slots::backpackWireSlot(free)));
@@ -3874,11 +3907,15 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->confirmBindOnUse();
             return 0;
         }},
+                // Both through CGPlayer_C::ClearPendingEquip (0x006e01a0),
+                // whose swap and equip ask the taint check (kind 0x16).
                 {"EquipPendingItem", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0x16)) return 0;
             if (auto* gh = getGameHandler(L)) gh->equipPendingItem();
             return 0;
         }},
                 {"CancelPendingEquip", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0x16)) return 0;
             if (auto* gh = getGameHandler(L)) gh->cancelPendingEquip();
             return 0;
         }},
@@ -3958,6 +3995,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"AcceptTrade", [](lua_State* L) -> int {
+            // Asked of the taint check first (0x005866e0, kind 7): insecure
+            // code accepts a trade only inside a hardware event.
+            if (!taint::allowed(L, 7)) return 0;
             auto* gh = getGameHandler(L);
             if (gh) gh->acceptTrade();
             return 0;
@@ -4464,6 +4504,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
             const uint32_t bid = static_cast<uint32_t>(luaL_optnumber(L, 3, 0));
             if (!gh) return 0;
+            // 0x0059da40 asks the taint check (kind 8: a hardware event).
+            if (!taint::allowed(L, 8)) return 0;
             const auto& res = auctionListFor(gh, list);
             if (index < 1 || index > static_cast<int>(res.auctions.size())) return 0;
             const auto& a = res.auctions[index - 1];
@@ -4478,6 +4520,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh) return 0;
+            if (!taint::allowed(L, 8)) return 0;   // 0x0059ddf0, as PlaceAuctionBid
             const auto& res = gh->getAuctionOwnerResults();
             if (index < 1 || index > static_cast<int>(res.auctions.size())) return 0;
             gh->auctionCancelItem(res.auctions[index - 1].auctionId);

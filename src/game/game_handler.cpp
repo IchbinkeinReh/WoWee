@@ -4111,9 +4111,9 @@ void GameHandler::requestCalendarEvent(uint64_t eventId) {
 
 void GameHandler::createCalendarEvent(const CalendarEventDraft& draft) {
     // CalendarAddEvent (0x005bcc70) asks the taint check first
-    // (0x005191c0(0x13)), which always passes in a client without taint
-    // tracking (see lua_ToggleRun); the setting at 0x00bd09ac that would
-    // skip the throttle below is never registered in this build. Then 0x005bbd60:
+    // (0x005191c0(0x13)), which its binding does before calling here; the
+    // setting at 0x00bd09ac that would skip the throttle below is never
+    // registered in this build. Then 0x005bbd60:
     // nothing while a request is out; with no event open, the error dialog,
     // CALENDAR_ERROR_INTERNAL; within five seconds of the last event added,
     // CALENDAR_ERROR_EVENT_THROTTLED. Only a new event is sent (0x005f1b90

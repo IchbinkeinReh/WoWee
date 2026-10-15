@@ -406,6 +406,20 @@ static int lua_Frame_GetName(lua_State* L) {
     return 1;
 }
 
+// frame:GetID() (0x0049fab0): a number held by the frame, so
+// pushed fresh like any the client answers.
+static int lua_Frame_GetID(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_Number id = 0;
+    {
+        taint::Quiet quiet;
+        lua_getfield(L, 1, "__id");
+        id = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+    }
+    lua_pushnumber(L, id);
+    return 1;
+}
 
 
 
@@ -430,6 +444,20 @@ wowee::ui::Widget* widgetOf(lua_State* L, int index) {
     auto* tree = wowee::addons::getWidgetTree(L);
     if (!tree) return nullptr;
     return tree->get(widgetIdOf(L, index));
+}
+
+/// 0x00488540: whether the running code may change the frame a method was
+/// called on. A protected frame is out of reach of insecure code during
+/// combat lockdown, and a refusal is reported through CGGameUI +0x1254
+/// (0x00513640 -> 0x00513530, blocked in combat). Asked first thing by every
+/// method that moves, sizes, shows, hides, reparents or re-layers a frame,
+/// and by SetAttribute, SetID and the scroll and mouse switches.
+static bool protectedFrameAllows(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || !w->protectedFrame || taint::current() == 0 || !taint::combatLockdown())
+        return true;
+    taint::reportRefusal(L, taint::Refusal::BlockedInCombat);
+    return false;
 }
 
 /// The same widget, for a setter about to write something it is measured
@@ -549,6 +577,98 @@ void recordScriptError(lua_State* L, const char* script) {
     lua_pop(L, 1);
 }
 
+// The protected-frame methods: IsProtected (0x0049cad0), CanChangeProtectedState
+// (0x0049cb60) and CanChangeAttribute (0x0049f260), answered 1 or nil as the
+// client answers them.
+static void pushFlag(lua_State* L, bool on) {
+    if (on) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+}
+// IsProtected() -> protected, explicitly. Only the explicit kind is kept here
+// (see Widget::protectedFrame), so the two answers agree.
+static int lua_Frame_IsProtected(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    const bool on = w && w->protectedFrame;
+    pushFlag(L, on);
+    pushFlag(L, on);
+    return 2;
+}
+// CanChangeProtectedState() -> nil for a protected frame in combat lockdown,
+// whoever asks.
+static int lua_Frame_CanChangeProtectedState(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, !(w && w->protectedFrame && taint::combatLockdown()));
+    return 1;
+}
+// CanChangeAttribute() -> whether SetAttribute would be let through, asked
+// without the refusal being reported.
+static int lua_Frame_CanChangeAttribute(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, !(w && w->protectedFrame && taint::current() != 0 &&
+                  taint::combatLockdown()));
+    return 1;
+}
+
+// frame:SetAttribute("name", value) (0x0049f610).
+//
+// Protected like moving the frame (0x00488540). The value is kept secure
+// whoever set it (0x0084f0d0 with 0), so the secure code that reads it back -
+// SecureActionButton_OnClick reading "type" and "spell" - is not tainted by
+// an addon having configured the button out of combat. OnAttributeChanged
+// then runs as any script does, under whoever set it.
+static int lua_Frame_SetAttribute(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
+    lua_settop(L, 3);
+    if (!lua_istable(L, 1) || !lua_isstring(L, 2)) {
+        const char* who = "<unnamed>";
+        if (lua_istable(L, 1)) {
+            lua_getfield(L, 1, "__name");
+            if (const char* n = lua_tostring(L, -1)) who = n;
+        }
+        return luaL_error(L, "Usage: %s:SetAttribute(\"name\", value)", who);
+    }
+    lua_settaintof(L, 3, 0);
+    taint::Quiet quiet;
+    lua_getfield(L, 1, "__attributes");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, 1, "__attributes");
+    }
+    lua_pushvalue(L, 2);
+    lua_pushvalue(L, 3);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "__scripts");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, "OnAttributeChanged");
+        if (lua_isfunction(L, -1)) {
+            lua_pushvalue(L, 1);
+            lua_pushvalue(L, 2);
+            lua_pushvalue(L, 3);
+            if (pcallScript(L, "OnAttributeChanged", 3, 0) != 0)
+                recordScriptError(L, "OnAttributeChanged");
+        } else {
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    return 0;
+}
+
+// frame:SetID(id) (0x0049fb00) - protected like the rest; GetID reads it back.
+static int lua_Frame_SetID(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
+    luaL_checktype(L, 1, LUA_TTABLE);
+    // A number in the frame, not anybody's value: held secure.
+    lua_pushnumber(L, luaL_optnumber(L, 2, 0));
+    lua_settaintof(L, -1, 0);
+    taint::Quiet quiet;
+    lua_setfield(L, 1, "__id");
+    return 0;
+}
+
 // frame:Click([button[, down]]) - the frame's own PreClick, OnClick and
 // PostClick, as a real press runs them. FrameXML activates buttons this way -
 // a keybinding that presses an action button, a dropdown that picks its
@@ -620,6 +740,14 @@ static int lua_WoweeTemplate(lua_State* L) {
     return 1;
 }
 
+// __WoweeSetProtected(frame): the emitter's line for protected="true", which
+// the client reads off the XML into the frame's flags as it is built.
+static int lua_WoweeSetProtected(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->protectedFrame = true;
+    return 0;
+}
+
+
 /// Whether the frame is shown, from the widget rather than a field beside it.
 ///
 /// Show and Hide write both, but they are not the only way a frame's
@@ -632,6 +760,7 @@ static int lua_WoweeTemplate(lua_State* L) {
 // after the first is optional and the shapes overlap, so decide by type rather
 // than by count.
 int lua_Region_SetPoint(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
@@ -676,11 +805,13 @@ int lua_Region_SetPoint(lua_State* L) {
 }
 
 int lua_Region_ClearAllPoints(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     if (auto* tree = wowee::addons::getWidgetTree(L)) tree->clearPoints(widgetIdOf(L, 1));
     return 0;
 }
 
 int lua_Region_SetAllPoints(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
@@ -701,6 +832,7 @@ int lua_Region_SetAllPoints(lua_State* L) {
 }
 
 int lua_Region_SetSize(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (tree && id != 0) {
@@ -880,12 +1012,14 @@ int lua_Region_GetName(lua_State* L) {
 }
 
 int lua_Region_SetWidth(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (tree && id != 0) tree->setWidth(id, static_cast<float>(luaL_optnumber(L, 2, 0)));
     return 0;
 }
 int lua_Region_SetHeight(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (tree && id != 0) tree->setHeight(id, static_cast<float>(luaL_optnumber(L, 2, 0)));
@@ -1132,6 +1266,7 @@ int lua_Region_GetCenter(lua_State* L) {
 /// parent can be changed as well as a frame's, and that table used to carry
 /// its own copy of both bodies.
 static int lua_Region_SetParent(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     luaL_checktype(L, 1, LUA_TTABLE);
     // A name is as good as a table here, and FrameXML passes both.
     if (lua_isstring(L, 2) && !lua_isnumber(L, 2)) {
@@ -1218,6 +1353,7 @@ int lua_Region_GetScale(lua_State* L) {
     return 1;
 }
 int lua_Region_SetScale(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) {
         const float v = static_cast<float>(luaL_optnumber(L, 2, 1.0));
         // A scale of zero collapses the frame and everything under it to
@@ -1367,6 +1503,7 @@ static void noteTooltipItem(lua_State* L, uint32_t itemId) {
 // clipped. Until now SetVerticalScroll was a no-op and every getter answered
 // zero, so a scroll bar had nothing to report and nothing to move.
 int lua_ScrollFrame_SetScrollChild(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
@@ -1450,6 +1587,7 @@ float scrollOffsetArg(lua_State* L, int index) {
 }
 
 int lua_ScrollFrame_SetVerticalScroll(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
@@ -1468,6 +1606,7 @@ int lua_ScrollFrame_SetVerticalScroll(lua_State* L) {
     return 0;
 }
 int lua_ScrollFrame_SetHorizontalScroll(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
@@ -3668,6 +3807,7 @@ int lua_Minimap_PingLocation(lua_State* L) {
 /// end of their range. Fired only on a real change, since the interface
 /// disables what is already disabled on every update.
 int lua_Button_Enable(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* w = widgetOf(L, 1);
     if (!w || w->enabled) return 0;
     w->enabled = true;
@@ -3686,6 +3826,7 @@ int lua_Button_Enable(lua_State* L) {
     return 0;
 }
 int lua_Button_Disable(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* w = widgetOf(L, 1);
     if (!w || !w->enabled) return 0;
     w->enabled = false;
@@ -3807,6 +3948,7 @@ static void fireOnShowNow(lua_State* L, int frameIndex, wowee::ui::Widget* w) {
 }
 
 int lua_Region_Show(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* w = widgetOf(L, 1);
     bool becameShown = false;
     if (w) {
@@ -3849,6 +3991,7 @@ int lua_Region_Show(lua_State* L) {
     return 0;
 }
 int lua_Region_Hide(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     // No OnHide from here, and it is not the asymmetry with Show it looks
     // like. Running it here is what the real client does and it fixes a real
     // fault - ContainerFrame_GenerateFrame indexes its bag list by a counter
@@ -4085,6 +4228,7 @@ int lua_Frame_SetHyperlinksEnabled(lua_State* L) {
     return 0;
 }
 int lua_Frame_EnableMouse(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) {
         // Absent argument means true, which is how addons usually write it.
         w->mouseEnabled = lua_isnone(L, 2) ? true : (lua_toboolean(L, 2) != 0);
@@ -4098,6 +4242,7 @@ int lua_Frame_IsMouseEnabled(lua_State* L) {
 }
 
 int lua_Frame_SetFrameStrata(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) {
         w->strata = wowee::ui::parseStrata(luaL_optstring(L, 2, "MEDIUM"));
         w->strataExplicit = true;
@@ -4118,6 +4263,7 @@ int lua_Frame_GetFrameStrata(lua_State* L) {
 }
 
 int lua_Frame_SetFrameLevel(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     auto* w = widgetOf(L, 1);
@@ -4776,6 +4922,7 @@ int lua_Frame_GetPushedTextOffset(lua_State* L) {
 }
 
 int lua_Frame_SetHitRectInsets(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) {
         w->hitInsetLeft   = static_cast<float>(luaL_optnumber(L, 2, 0.0));
         w->hitInsetRight  = static_cast<float>(luaL_optnumber(L, 3, 0.0));
@@ -4904,6 +5051,7 @@ int lua_Frame_GetChildren(lua_State* L) {
 }
 
 int lua_Frame_EnableKeyboard(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) w->keyboardEnabled = lua_toboolean(L, 2) != 0;
     return 0;
 }
@@ -4918,6 +5066,7 @@ int lua_Frame_SetPropagateKeyboardInput(lua_State* L) {
 }
 
 int lua_Frame_SetToplevel(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) w->topLevel = lua_toboolean(L, 2) != 0;
     return 0;
 }
@@ -4927,12 +5076,14 @@ int lua_Frame_IsToplevel(lua_State* L) {
     return 1;
 }
 int lua_Frame_Raise(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (tree && id) tree->raise(id);
     return 0;
 }
 int lua_Frame_Lower(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (tree && id) tree->lower(id);
@@ -6238,6 +6389,7 @@ void LuaEngine::registerCoreAPI() {
     // securecall, hooksecurefunc - is the client's own C (0x00816da0 to
     // 0x00817170), and first, because bootstrap code below hooks with it.
     taint::registerLuaApi(L_);
+    lua_register(L_, "__WoweeSetProtected", lua_WoweeSetProtected);
     lua_register(L_, "__WoweeTemplate", lua_WoweeTemplate);
 
     // Override print() to go to chat
@@ -6442,9 +6594,15 @@ void LuaEngine::registerCoreAPI() {
         {"UnregisterAllEvents", lua_Frame_UnregisterAllEvents},
         {"SetScript",       lua_Frame_SetScript},
         {"HookScript",      lua_Frame_HookScript},
+        {"SetAttribute",    lua_Frame_SetAttribute},
         {"Click",           lua_Frame_Click},
+        {"SetID",           lua_Frame_SetID},
+        {"IsProtected",     lua_Frame_IsProtected},
+        {"CanChangeProtectedState", lua_Frame_CanChangeProtectedState},
+        {"CanChangeAttribute", lua_Frame_CanChangeAttribute},
         {"GetScript",       lua_Frame_GetScript},
         {"GetName",         lua_Frame_GetName},
+        {"GetID",           lua_Frame_GetID},
         {"Show",            lua_Region_Show},
         {"Hide",            lua_Region_Hide},
         {"IsShown",         lua_Region_IsShown},
@@ -7057,7 +7215,8 @@ void LuaEngine::registerCoreAPI() {
         "    self.__clicks = set\n"
         "end\n"
 
-        // SetAttribute and GetAttribute are defined further down, on the same
+        // SetAttribute is C (lua_Frame_SetAttribute, protected and secure as
+        // the client's), and GetAttribute is defined further down, on the same
         // metatable, in a later chunk that overwrites whatever is here - so an
         // earlier pair is dead the moment it is written. The pair that used to
         // sit here kept its values under a different key and took one argument
@@ -7147,12 +7306,6 @@ void LuaEngine::registerCoreAPI() {
         "    local ok, out = pcall(string.format, fmt, ...)\n"
         "    self:SetText(ok and out or fmt)\n"
         "end\n"
-        "function mt:SetAttribute(name, value)\n"
-        "    self.__attributes = self.__attributes or {}\n"
-        "    self.__attributes[name] = value\n"
-        "    local handler = self.__scripts and self.__scripts.OnAttributeChanged\n"
-        "    if handler then handler(self, name, value) end\n"
-        "end\n"
         // The three-argument form names one attribute in pieces, and falls
         // back to the bare name when no piece-specific value was set - which
         // is how every action button works. ActionButton_OnLoad sets "type",
@@ -7189,8 +7342,6 @@ void LuaEngine::registerCoreAPI() {
         // The scroll getters are real bindings now, applied after this block.
         // Zero when unset, which is what the real client answers and what
         // FrameXML concatenates into a name without checking.
-        "function mt:SetID(id) self.__id = id end\n"
-        "function mt:GetID() return self.__id or 0 end\n"
         "function mt:GetScrollChild() return self.__scrollChild end\n"
         // SetFontString, GetFontString and GetNormalFontObject are
         // kButtonLabelLua's, run once this block has.
@@ -7336,7 +7487,7 @@ void LuaEngine::registerCoreAPI() {
         "GetZoom=1,GetZoomLevels=1,HasFocus=1,HasScript=1,Hide=1,HideUIPanel=1,\n"
         "HighlightText=1,HookScript=1,IgnoreDepth=1,InitializeTabardColors=1,Insert=1,\n"
         "IsEnabled=1,IsEquippedItem=1,IsEventRegistered=1,IsMouseEnabled=1,\n"
-        "IsObjectType=1,IsProtected=1,IsShown=1,IsUnderMouse=1,\n"
+        "IsObjectType=1,IsShown=1,IsUnderMouse=1,\n"
         "IsUnit=1,IsVisible=1,LockHighlight=1,Lower=1,MoveUIPanel=1,\n"
         "New=1,NumLines=1,OnFinished=1,OnUpdate=1,PageDown=1,PageUp=1,\n"
         // PingLocation is a real binding now, applied after this set.

@@ -29,6 +29,7 @@
 // An empty answer is chosen deliberately over a plausible one. Every caller
 // here guards, and a fabricated reward or lock reads as fact.
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/game_utils.hpp"
 #include "game/interface_text.hpp"
@@ -424,7 +425,11 @@ void registerLfgLuaAPI(lua_State* L) {
     // minimap's queue menu. Neither was bound, so a pop that did appear could
     // not be answered - and it did not appear either, because LFG_PROPOSAL_SHOW
     // was not fired.
+    //
+    // Both answer through 0x00554450, which asks the taint check (kind 9:
+    // insecure code only inside a hardware event).
     {"AcceptProposal", [](lua_State* L) -> int {
+        if (!taint::allowed(L, 9)) return 0;
         auto* gh = getGameHandler(L);
         if (gh && gh->getLfgProposalId() != 0) {
             gh->lfgAcceptProposal(gh->getLfgProposalId(), true);
@@ -432,6 +437,7 @@ void registerLfgLuaAPI(lua_State* L) {
         return 0;
     }},
     {"RejectProposal", [](lua_State* L) -> int {
+        if (!taint::allowed(L, 9)) return 0;
         auto* gh = getGameHandler(L);
         if (gh && gh->getLfgProposalId() != 0) {
             gh->lfgAcceptProposal(gh->getLfgProposalId(), false);
@@ -803,8 +809,10 @@ void registerLfgLuaAPI(lua_State* L) {
     {"SearchLFGGetPartyResults",   [](lua_State* L) -> int { return luaReturnNil(L); }},
     {"SearchLFGGetEncounterResults", [](lua_State* L) -> int { return luaReturnNil(L); }},
     {"SearchLFGGetJoinedID",       luaReturnZero},
-    {"SearchLFGJoin",              luaReturnNothing},
-    {"SearchLFGLeave",             luaReturnNothing},
+    // Nothing behind them yet, but they ask the taint check all the same
+    // (0x00559400, 0x005594e0: kind 9).
+    {"SearchLFGJoin",              [](lua_State* L) -> int { taint::allowed(L, 9); return 0; }},
+    {"SearchLFGLeave",             [](lua_State* L) -> int { taint::allowed(L, 9); return 0; }},
     };
 
     for (const auto& [name, func] : api) {

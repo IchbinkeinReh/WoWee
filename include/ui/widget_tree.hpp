@@ -189,6 +189,12 @@ struct Widget {
     /// calls it toplevel, and it is what stops one window staying buried under
     /// another once two overlap. FrameXML declares it on 102 frames.
     bool topLevel = false;
+    /// Declared protected="true", itself or by a template (the client's
+    /// region flag +0x60 0x10000, IsProtected's second answer). Insecure code
+    /// may not move, size, show or hide such a frame in combat lockdown
+    /// (0x00488540). The client also counts a frame protected through what it
+    /// is anchored to (0x00489b50); that half is not kept here.
+    bool protectedFrame = false;
     /// Whether the frame receives OnKeyDown and OnKeyUp, and whether it lets
     /// the key through afterwards. WoW consumes by default and passes on only
     /// when asked, which is why a dialog swallows the movement keys while it

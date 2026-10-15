@@ -119,7 +119,12 @@ bool cursorItemCameFromInventory() {
 /// the first shift-click on a pet ability takes the bar down. Clicking a pet
 /// ability to use it goes through a different path and works; only rearranging
 /// the bar is lost.
-static int lua_PickupPetAction(lua_State* L) { (void)L; return 0; }
+//
+// It asks the taint check first all the same (0x005d65c0, kind 0xe).
+static int lua_PickupPetAction(lua_State* L) {
+    taint::allowed(L, 0xe);
+    return 0;
+}
 
 /// Change what the cursor is holding, and say so.
 ///
@@ -215,6 +220,9 @@ static const char* petTokenTexture(uint32_t packed) {
 /// named by `unitArg`, else the target.
 static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, int unitArg) {
     if (!gh || !gh->hasPet() || (packed & 0x00FFFFFFu) == 0) return;
+    // CGPetInfo::SendPetAction asks the taint check first (0x005d4210, kind
+    // 2): a pet's action is refused outright to insecure code.
+    if (!taint::allowed(L, 2)) return;
     uint64_t target = 0;
     if (const char* uid = luaL_optstring(L, unitArg, nullptr)) {
         std::string u(uid);
@@ -547,13 +555,18 @@ static int lua_UseAction(lua_State* L) {
         // to go as CMSG_USE_ITEM rather than a cast, or the server drops it.
         // This client's own action bar did that and was the only place that
         // did; the bar is FrameXML's now and this is the path its buttons take.
-        if (const uint32_t itemForSpell = gh->getItemIdForSpell(action.id)) {
+        //
+        // Either way through 0x0080cce0, and its taint check (0x005abbc0 ->
+        // 0x0053bc40, or UseItem -> 0x0080da40).
+        if (!spellCastAllowed(L, gh, action.id)) {
+            // Refused, and the interface told (ADDON_ACTION_FORBIDDEN).
+        } else if (const uint32_t itemForSpell = gh->getItemIdForSpell(action.id)) {
             gh->useItemById(itemForSpell, target);
         } else {
             gh->castSpell(action.id, target);
         }
     } else if (action.type == game::ActionBarSlot::ITEM && action.id != 0) {
-        gh->useItemById(action.id);
+        if (itemUseAllowed(L, gh, action.id, false)) gh->useItemById(action.id);
     } else if (action.type == game::ActionBarSlot::EQUIPMENT_SET) {
         // WEAR_EQUIPMENT_SET with the set's name, for the interface to equip
         // it (0x005abbc0 -> 0x005ae660).
@@ -607,10 +620,11 @@ static int lua_PickupEquipmentSet(lua_State* L) {
 }
 
 // PickupEquipmentSetByName(name) (0x005af250): the set of that name
-// (0x005ae600), off a set button's drag. Its 0x005191c0(0xe) taint check
-// always passes here (see lua_ToggleRun).
+// (0x005ae600), off a set button's drag - after its taint check
+// (0x005191c0(0xe), refused to insecure code in combat lockdown).
 static int lua_PickupEquipmentSetByName(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: PickupEquipmentSetByName(\"setName\")");
+    if (!taint::allowed(L, 0xe)) return 0;
     auto* gh = getGameHandler(L);
     const char* name = lua_tostring(L, 1);
     if (!gh || !name || !*name) return 0;
@@ -725,6 +739,9 @@ static int lua_PickupAction(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     int slot = static_cast<int>(luaL_checknumber(L, 1));
+    // CGActionBar::PickupAction asks the taint check (0x005abe70, kind 0xe):
+    // the bar is not rearranged by insecure code in combat lockdown.
+    if (!taint::allowed(L, 0xe)) return 0;
     const auto& bar = gh->getActionBar();
     if (slot < 1 || slot > static_cast<int>(bar.size())) return 0;
 
@@ -835,6 +852,7 @@ static int lua_PlaceAction(lua_State* L) {
 static int lua_PickupSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
+    if (!taint::allowed(L, 0xe)) return 0;   // 0x0053baf0
     // Through the shared resolver, so the book is read as well as the slot:
     // dragging a pet spell out of the book picked up whichever of the player's
     // spells sat at that index.
@@ -949,6 +967,7 @@ static int lua_SplitGuildBankItem(lua_State* L) {
 static int lua_PickupCompanion(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
+    if (!taint::allowed(L, 0xe)) return 0;   // 0x0053bbc0
     const char* mode = luaL_optstring(L, 1, "");
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
     if (index < 1) return 0;
@@ -1273,6 +1292,9 @@ static int lua_PickupContainerItem(lua_State* L) {
             return 0;
         }
 
+        // CGPlayer_C::SwapItems asks the taint check (0x006df890, kind 0x16):
+        // insecure code moves nothing in combat lockdown.
+        if (!taint::allowed(L, 0x16)) return 0;
         const int wasBag = s_cursorBag, wasSlot = s_cursorSlot;
         // Part of a stack moves as a split rather than a swap: a swap would
         // send the whole thing, which is not what was picked up.
@@ -1445,6 +1467,7 @@ static int lua_PickupInventoryItem(lua_State* L) {
     // Carrying something: equip it here, which is the other half of the drag.
     uint8_t srcBag = 0, srcSlot = 0;
     if (cursorWireSlot(srcBag, srcSlot)) {
+        if (!taint::allowed(L, 0x16)) return 0;   // SwapItems, 0x006df890
         gh->swapContainerItems(srcBag, srcSlot, 0xFF,
                                static_cast<uint8_t>(slot - 1));
         clearCursorItem(L);
@@ -1509,6 +1532,12 @@ static int lua_DeleteCursorItem(lua_State* L) {
 // AutoEquipCursorItem() - equip item from cursor
 static int lua_AutoEquipCursorItem(lua_State* L) {
     auto* gh = getGameHandler(L);
+    // CGPlayer_C::AutoEquipCursorItem asks the taint check (0x006dfc40, kind
+    // 0x16) before anything moves.
+    if (gh && s_cursorType == CursorType::ITEM && s_cursorId != 0 &&
+        !taint::allowed(L, 0x16)) {
+        return 0;
+    }
     if (gh && s_cursorType == CursorType::ITEM && s_cursorId != 0) {
         gh->useItemById(s_cursorId);
     }
@@ -2080,6 +2109,9 @@ static int lua_SetBinding(lua_State* L) {
     seedBindingDefaults();
     const std::string key = luaL_checkstring(L, 1);
     const char* command = lua_isnoneornil(L, 2) ? nullptr : luaL_checkstring(L, 2);
+    // 0x00563520 -> 0x00562ed0, which asks the taint check (kind 0xd: not
+    // insecure code in combat lockdown).
+    if (!taint::allowed(L, 0xd)) return 0;
 
     // A key belongs to one command at a time, so it leaves the one that had it
     // before it joins another - otherwise both claim it and which one answers
@@ -2110,7 +2142,7 @@ static int lua_SetBinding(lua_State* L) {
 
 // SaveBindings(which) → writes what is bound where, for the next run
 static int lua_SaveBindings(lua_State* L) {
-    (void)L;
+    if (!taint::allowed(L, 0xd)) return 0;   // 0x005640c0 -> 0x00562b80
     const std::string path = bindingsFilePath();
     std::error_code ec;
     std::filesystem::create_directories(
@@ -2130,7 +2162,7 @@ static int lua_SaveBindings(lua_State* L) {
 
 // LoadBindings(which) → what a previous run saved, over the defaults
 static int lua_LoadBindings(lua_State* L) {
-    (void)L;
+    if (!taint::allowed(L, 0xd)) return 0;   // 0x00564070 -> 0x00562b80
     seedBindingDefaults();
     std::ifstream in(bindingsFilePath());
     if (!in) return 0;   // Nothing saved yet is not a failure.
@@ -2188,12 +2220,16 @@ static int lua_RunBinding(lua_State* L) {
 // reached from restrictedframes.lua, the secure-frame machinery behind action
 // buttons and unit frames, so a raise there breaks the frame rather than the
 // binding. Bound alongside it, doing the same nothing.
-static int lua_SetOverrideBindingClick(lua_State* L) { (void)L; return 0; }
-static int lua_SetOverrideBinding(lua_State* L) { (void)L; return 0; }
-static int lua_SetOverrideBindingSpell(lua_State* L) { (void)L; return 0; }
-static int lua_SetOverrideBindingMacro(lua_State* L) { (void)L; return 0; }
-static int lua_SetOverrideBindingItem(lua_State* L) { (void)L; return 0; }
-static int lua_ClearOverrideBindings(lua_State* L) { (void)L; return 0; }
+//
+// What they do ask is the taint check (0x00563480 and 0x005604f0, kind 0xd:
+// not insecure code in combat lockdown), and that is kept: its refusal is
+// an event the interface hears.
+static int lua_SetOverrideBindingClick(lua_State* L) { taint::allowed(L, 0xd); return 0; }
+static int lua_SetOverrideBinding(lua_State* L) { taint::allowed(L, 0xd); return 0; }
+static int lua_SetOverrideBindingSpell(lua_State* L) { taint::allowed(L, 0xd); return 0; }
+static int lua_SetOverrideBindingMacro(lua_State* L) { taint::allowed(L, 0xd); return 0; }
+static int lua_SetOverrideBindingItem(lua_State* L) { taint::allowed(L, 0xd); return 0; }
+static int lua_ClearOverrideBindings(lua_State* L) { taint::allowed(L, 0xd); return 0; }
 
 // Frame methods: SetPoint, SetSize, SetWidth, SetHeight, GetWidth, GetHeight, GetCenter, SetAlpha, GetAlpha
 
@@ -2322,6 +2358,9 @@ void registerActionLuaAPI(lua_State* L) {
             const char* icon = luaL_optstring(L, 2, "");
             const char* body = luaL_optstring(L, 3, "");
             const bool perChar = lua_toboolean(L, 4) != 0;
+            // The macro verbs ask the taint check (0x00568160, 0x00566fa0,
+            // 0x00566f70: kind 0xc - not insecure code in combat lockdown).
+            if (!taint::allowed(L, 0xc)) return 0;
             // The first free id in the half that was asked for. WoW allows 18
             // of each; refusing past that is what stops a full list growing
             // ids the interface will not show.
@@ -2339,6 +2378,7 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 // EditMacro(id, name, icon, body) → id
                 {"EditMacro",           [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0xc)) return 0;   // see CreateMacro
             auto* gh = getGameHandler(L);
             const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (!gh || id == 0) return luaReturnNil(L);
@@ -2373,6 +2413,7 @@ void registerActionLuaAPI(lua_State* L) {
                 // that is more faithful than keeping a hole, and it is the
                 // assumption getMacroIds already documents.
                 {"DeleteMacro",         [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0xc)) return 0;   // see CreateMacro
             auto* gh = getGameHandler(L);
             const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (!gh || id == 0) return 0;
@@ -2404,6 +2445,7 @@ void registerActionLuaAPI(lua_State* L) {
                 // that sets it already went out for spells and items; a macro
                 // was simply never something the cursor could hold.
                 {"PickupMacro",         [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0xe)) return 0;   // 0x005674f0
             auto* gh = getGameHandler(L);
             const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (!gh || id == 0 || gh->getMacroText(id).empty()) return 0;
@@ -2426,6 +2468,9 @@ void registerActionLuaAPI(lua_State* L) {
                 // closing while the player has already accepted, so without it
                 // the only way out of an accepted trade was to end it.
                 {"CancelTradeAccept", [](lua_State* L) -> int {
+            // 0x00586730 asks the taint check first (kind 7: insecure code
+            // only inside a hardware event).
+            if (!taint::allowed(L, 7)) return 0;
             if (auto* gh = getGameHandler(L)) gh->unacceptTrade();
             return 0;
         }},
@@ -2532,6 +2577,7 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 {"ChangeActionBarPage", [](lua_State* L) -> int {
             int page = static_cast<int>(luaL_checknumber(L, 1));
+            if (!taint::allowed(L, 0xe)) return 0;   // 0x005a7f60
             if (page < 1) page = 1;
             if (page > 6) page = 6;
             lua_pushnumber(L, page);
@@ -2801,6 +2847,8 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 {"PetAttack", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // Through CGPetInfo::SendPetAction (0x005d4210), kind 2.
+            if (gh && gh->hasPet() && !taint::allowed(L, 2)) return 0;
             if (gh && gh->hasPet() && gh->hasTarget())
                 gh->sendPetAction(
                     game::pet::packPetAction(game::pet::ActionType::Command, game::pet::kAttack),
@@ -2809,6 +2857,8 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 {"PetFollow", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // Through CGPetInfo::SendPetAction (0x005d4210), kind 2.
+            if (gh && gh->hasPet() && !taint::allowed(L, 2)) return 0;
             if (gh && gh->hasPet())
                 gh->sendPetAction(
                     game::pet::packPetAction(game::pet::ActionType::Command, game::pet::kFollow), 0);
@@ -2816,6 +2866,8 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 {"PetWait", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // Through CGPetInfo::SendPetAction (0x005d4210), kind 2.
+            if (gh && gh->hasPet() && !taint::allowed(L, 2)) return 0;
             if (gh && gh->hasPet())
                 gh->sendPetAction(
                     game::pet::packPetAction(game::pet::ActionType::Command, game::pet::kStay), 0);
@@ -2823,6 +2875,8 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 {"PetPassiveMode", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // Through CGPetInfo::SendPetAction (0x005d4210), kind 2.
+            if (gh && gh->hasPet() && !taint::allowed(L, 2)) return 0;
             if (gh && gh->hasPet())
                 gh->sendPetAction(
                     game::pet::packPetAction(game::pet::ActionType::Reaction, game::pet::kPassive), 0);
@@ -2844,6 +2898,8 @@ void registerActionLuaAPI(lua_State* L) {
             if (!gh || !gh->hasPet() || index < 1 || index > game::GameHandler::PET_ACTION_BAR_SLOTS) return 0;
             uint32_t packed = gh->getPetActionSlot(index - 1);
             uint32_t spellId = packed & 0x00FFFFFF;
+            // 0x005d66f0 -> 0x005d5d20, which asks the taint check (kind 2).
+            if (spellId != 0 && !taint::allowed(L, 2)) return 0;
             if (spellId != 0) gh->togglePetSpellAutocast(spellId);
             return 0;
         }},
@@ -2908,6 +2964,8 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 {"PetDefensiveMode", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // Through CGPetInfo::SendPetAction (0x005d4210), kind 2.
+            if (gh && gh->hasPet() && !taint::allowed(L, 2)) return 0;
             if (gh && gh->hasPet())
                 gh->sendPetAction(
                     game::pet::packPetAction(game::pet::ActionType::Reaction, game::pet::kDefensive), 0);
@@ -2918,6 +2976,8 @@ void registerActionLuaAPI(lua_State* L) {
                 // aggressive, and the button for it did nothing.
                 {"PetAggressiveMode", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // Through CGPetInfo::SendPetAction (0x005d4210), kind 2.
+            if (gh && gh->hasPet() && !taint::allowed(L, 2)) return 0;
             if (gh && gh->hasPet())
                 gh->sendPetAction(
                     game::pet::packPetAction(game::pet::ActionType::Reaction, game::pet::kAggressive), 0);

@@ -3,6 +3,7 @@
 #include "core/local_time.hpp"
 #include "game/item_text.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/auction_filters.hpp"
 #include "game/game_utils.hpp"
@@ -3720,6 +3721,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 return 0;
             }
             if (count < 1) count = 1;
+            // 0x005dac00 -> 0x0080da40: the craft's cast asks the taint check
+            // - kind 6, a trade skill, so a hardware event is enough.
+            if (!spellCastAllowed(L, gh, rec->spellId)) return 0;
             LOG_WARNING("DoTradeSkill: row ", i, " '", rec->name,
                         "' spell=", rec->spellId, " count=", count);
             gh->startCraftQueue(rec->spellId, count);

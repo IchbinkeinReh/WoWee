@@ -853,6 +853,20 @@ inline uint32_t spellIdForBookSlot(game::GameHandler* gh, int slot) {
 /// happen to carry those ids, which is why the spellbook drew a page of
 /// unrelated icons. The names beside them were right the whole time, because
 /// GetSpellName already took the slot form.
+/// The kind 0x0080cce0 hands the taint check (0x005191c0) before it casts
+/// `spellId`: 6 - a hardware event is enough - for a trade skill (effect 47,
+/// or Attributes 0x20), 2 - refused outright - for anything else, and -1 for
+/// the few it casts without asking (effects 0x53, 0x98 and 0xa2, a mount, a
+/// companion's summon - 0x008009b0).
+int spellCastCheckKind(game::GameHandler* gh, uint32_t spellId);
+
+/// That check, asked for `spellId` (taint::allowed with its kind).
+bool spellCastAllowed(lua_State* L, game::GameHandler* gh, uint32_t spellId);
+
+/// The same for using an item (lua_inventory_api.cpp): equipping it, or the
+/// cast of its use spell. `worn` for one already equipped, which is used.
+bool itemUseAllowed(lua_State* L, game::GameHandler* gh, uint32_t itemId, bool worn);
+
 inline uint32_t spellIdForCall(lua_State* L, game::GameHandler* gh) {
     if (!gh) return 0;
     // A book beside a number is a slot. A book beside a *name* is not a form

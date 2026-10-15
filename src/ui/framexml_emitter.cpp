@@ -971,6 +971,13 @@ struct Emitter {
         if (const std::string* hidden = node.attr("hidden")) {
             line(var + (attrIsTrue(*hidden) ? ":Hide()" : ":Show()"));
         }
+        // A protected frame - SecureFrameTemplate and everything built on it
+        // say so - is out of insecure code's reach in combat lockdown
+        // (0x00488540). The client reads it off the XML into the frame's
+        // flags; a template that declares it marks every frame inheriting it.
+        if (node.attrBool("protected")) {
+            line("__WoweeSetProtected(" + var + ")");
+        }
 
         if (const XmlNode* size = node.child("Size")) {
             float w = 0, h = 0;

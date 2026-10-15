@@ -6,6 +6,7 @@
 #include <iterator>
 #include <vector>
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_taint.hpp"
 #include "game/chat_handler.hpp"
 #include "game/difficulty_change.hpp"
 #include "game/reputation_standing.hpp"
@@ -116,6 +117,9 @@ static int lua_GetLanguageByIndex(lua_State* L) {
 }
 
 static int lua_SendChatMessage(lua_State* L) {
+    // 0x0050d170 asks the taint check with kind 0xa, which no rule names:
+    // chat is never refused for taint, and the hardware event is left alone.
+    taint::allowed(L, 0xa);
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const char* msg = luaL_checkstring(L, 1);
@@ -968,6 +972,9 @@ static int lua_NewGMTicket(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const char* text = luaL_checkstring(L, 1);
+    // The ticket verbs ask the taint check (0x005ad080, 0x005ad0f0,
+    // 0x005ad150: kind 0x11, refused to insecure code).
+    if (!taint::allowed(L, 0x11)) return 0;
     // needResponse is not carried by the packet this client sends, so it is
     // read and dropped rather than quietly changing what is submitted.
     gh->submitGmTicket(text);
@@ -1290,6 +1297,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"UpdateGMTicket", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* text = luaL_optstring(L, 1, "");
+            if (!taint::allowed(L, 0x11)) return 0;   // see NewGMTicket
             if (gh && text && *text) gh->updateGmTicket(text);
             return 0;
         }},
@@ -1870,11 +1878,16 @@ void registerSocialLuaAPI(lua_State* L) {
                 // after and a no-op would look like the request was made.
                 {"Stuck", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // 0x00510410 -> 0x0080da40: the cast asks the taint check.
+            if (gh && !spellCastAllowed(L, gh, 7355)) return 0;
             if (gh) gh->castSpell(7355);
             return 0;
         }},
                 {"GMReportLag", [](lua_State* L) -> int { (void)L; return 0; }},
-                {"GMResponseNeedMoreHelp", [](lua_State* L) -> int { (void)L; return 0; }},
+                {"GMResponseNeedMoreHelp", [](lua_State* L) -> int {
+            taint::allowed(L, 0x11);   // see NewGMTicket
+            return 0;
+        }},
                 // GetGMStatus() - ask whether the ticket queue is open.
                 //
                 // A request, not a getter: the answer comes back as
@@ -2176,7 +2189,10 @@ void registerSocialLuaAPI(lua_State* L) {
             }
             return luaReturnFalse(L);
         }},
+                // Both ask the taint check first (0x0052e1b0, and 0x0052e400 ->
+                // 0x0052df40: kind 4, refused to insecure code).
                 {"SetPartyAssignment", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 4)) return 0;
             auto* gh = getGameHandler(L);
             std::string what(luaL_optstring(L, 1, ""));
             const char* unit = luaL_optstring(L, 2, "");
@@ -2191,6 +2207,7 @@ void registerSocialLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"ClearPartyAssignment", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 4)) return 0;
             auto* gh = getGameHandler(L);
             std::string what(luaL_optstring(L, 1, ""));
             const char* unit = luaL_optstring(L, 2, "");
@@ -2218,6 +2235,9 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int idx   = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int group = static_cast<int>(luaL_optnumber(L, 2, 0));
+            // 0x00573b50 and 0x00573c90 ask the taint check (kind 0xb: not
+            // insecure code in combat lockdown).
+            if (!taint::allowed(L, 0xb)) return 0;
             if (!gh || idx < 1) return 0;
             const auto& members = gh->getPartyData().members;
             if (idx > static_cast<int>(members.size())) return 0;
@@ -2229,6 +2249,7 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int a = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int b = static_cast<int>(luaL_optnumber(L, 2, 0));
+            if (!taint::allowed(L, 0xb)) return 0;   // see SetRaidSubgroup
             if (!gh || a < 1 || b < 1) return 0;
             const auto& members = gh->getPartyData().members;
             const int n = static_cast<int>(members.size());
@@ -2992,6 +3013,8 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"UninviteUnit", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // 0x0051a7a0: insecure code only inside a hardware event.
+            if (gh && !taint::allowedInHardwareEvent(L)) return 0;
             if (gh) gh->uninvitePlayer(luaL_checkstring(L, 1));
             return 0;
         }},
@@ -3528,10 +3551,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // a toggle and nothing else, so asking to enable something
                 // already on would turn it off, which is the opposite of what
                 // was typed.
+                //
+                // All three through 0x005d5e10, which asks the taint check
+                // (kind 2) before it toggles anything.
                 {"EnableSpellAutocast",  [](lua_State* L) -> int {
+            if (!taint::allowed(L, 2)) return 0;
             return setPetAutocastByName(L, true);
         }},
                 {"DisableSpellAutocast", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 2)) return 0;
             return setPetAutocastByName(L, false);
         }},
                 // ToggleSpellAutocast(spell, bookType) - asked in two shapes.
@@ -3541,6 +3569,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // handled, so right-clicking a pet spell in the spellbook
                 // looked up a pet spell called "12" and toggled nothing at all.
                 {"ToggleSpellAutocast",  [](lua_State* L) -> int {
+            if (!taint::allowed(L, 2)) return 0;
             auto* gh = getGameHandler(L);
             const uint32_t id = (!lua_isnoneornil(L, 2) && lua_isnumber(L, 1))
                 ? spellIdForCall(L, gh)
@@ -3720,33 +3749,47 @@ void registerSocialLuaAPI(lua_State* L) {
                     return setAllAddOnsEnabled(L, true);
                 }},
                 {"SetTaxiBenchmarkMode",     [](lua_State* L) -> int { (void)L; return 0; }},
-                {"StopMacro",                [](lua_State* L) -> int { (void)L; return 0; }},
+                // 0x00564b90 asks the taint check (kind 3) before stopping.
+                {"StopMacro",                [](lua_State* L) -> int {
+                    taint::allowed(L, 3);
+                    return 0;
+                }},
                 // The targeting variants this client has no equivalent for.
                 // targetEnemy and targetFriend do not filter to players, and
                 // one last-target is tracked rather than one per side - so
                 // wiring these to the nearest thing would target the wrong
                 // unit, which is worse than not answering the command.
                 {"TargetLastEnemy", [](lua_State* L) -> int {
+                    // Through CGGameUI__Target (0x00524bf0): refused to
+                    // insecure code.
+                    if (!taint::allowedSecureOnly(L)) return 0;
                     if (auto* gh = getGameHandler(L)) gh->targetLastEnemy();
                     return 0;
                 }},
                 {"TargetLastFriend", [](lua_State* L) -> int {
+                    // Through CGGameUI__Target (0x00524bf0): refused to
+                    // insecure code.
+                    if (!taint::allowedSecureOnly(L)) return 0;
                     if (auto* gh = getGameHandler(L)) gh->targetLastFriend();
                     return 0;
                 }},
                 {"TargetNearestEnemyPlayer", [](lua_State* L) -> int {
+                    if (!taint::allowedSecureOnly(L)) return 0;   // 0x00524fc0
                     if (auto* gh = getGameHandler(L)) gh->targetNearestEnemyPlayer(wantsReverseArg(L));
                     return 0;
                 }},
                 {"TargetNearestFriendPlayer", [](lua_State* L) -> int {
+                    if (!taint::allowedSecureOnly(L)) return 0;   // 0x00524fc0
                     if (auto* gh = getGameHandler(L)) gh->targetNearestFriendPlayer(wantsReverseArg(L));
                     return 0;
                 }},
                 {"TargetNearestPartyMember", [](lua_State* L) -> int {
+                    if (!taint::allowedSecureOnly(L)) return 0;   // 0x00524fc0
                     if (auto* gh = getGameHandler(L)) gh->targetNearestPartyMember(wantsReverseArg(L));
                     return 0;
                 }},
                 {"TargetNearestRaidMember", [](lua_State* L) -> int {
+                    if (!taint::allowedSecureOnly(L)) return 0;   // 0x00524fc0
                     if (auto* gh = getGameHandler(L)) gh->targetNearestRaidMember(wantsReverseArg(L));
                     return 0;
                 }},

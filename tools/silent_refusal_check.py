@@ -82,6 +82,10 @@ ACTION_VERBS = (
 # Saying so, at a level the log a report arrives with actually carries.
 LOUD = re.compile(r"\b(LOG_WARNING|LOG_ERROR|raiseUiError|addUIError|luaL_error"
                   r"|addSystemChatMessage|addLocalChatMessage)\b")
+# A refusal the taint check made, which is never silent: 0x00513530 reports it
+# to the interface as ADDON_ACTION_FORBIDDEN or _BLOCKED (MACRO_ for /run),
+# and FrameXML says so on screen. The guard's own condition is the speech.
+TAINT_CHECK = re.compile(r"\b(?:taint::allowed\w*|spellCastAllowed|itemUseAllowed)\s*\(")
 # Saying so where nobody will read it.
 QUIET = re.compile(r"\b(LOG_INFO|LOG_DEBUG)\b")
 
@@ -280,7 +284,7 @@ def main():
                 # not read as speech.
                 line = raw[:s].count("\n") + body_clean[:off].count("\n") + 1
                 entry = (path.name, line, name, bare[:46])
-                if LOUD.search(branch):
+                if LOUD.search(branch) or TAINT_CHECK.search(cond):
                     continue
                 if QUIET.search(branch):
                     quiet_only.append(entry)

@@ -85,6 +85,12 @@ EXPECTED_FIELD_ONLY = {
     # SetScript's companion, now in C so the hook keeps the client's taint
     # rules (0x0049edb0); the same table, for the same reason.
     "HookScript": "__scripts",
+    # Attributes and the ID are Lua-side records the client keeps beside the
+    # frame, read back by GetAttribute and GetID; both setters reach the
+    # widget only to ask whether it is protected (0x00488540).
+    "SetAttribute": "__attributes",
+    "SetID": "__id",
+    "GetID": "__id",
     "RegisterEvent": "__events",
     "UnregisterEvent": "__events",
     # The reader for the pair above. Events are one of the few things that

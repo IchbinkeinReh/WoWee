@@ -3,6 +3,8 @@
 #include "game/shapeshift_forms.hpp"
 #include "game/game_utils.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_taint.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "game/item_text.hpp"
 #include "addons/lua_engine.hpp"
 #include "core/logger.hpp"
@@ -63,6 +65,7 @@ uint32_t highestKnownRankByName(game::GameHandler* gh, const std::string& name) 
 // SPELL_FAILED_OUT_OF_RANGE. Nothing is returned.
 static int lua_SpellTargetUnit(lua_State* L) {
     std::string token = luaL_checkstring(L, 1);
+    if (!taint::allowed(L, 2)) return 0;   // 0x0080dc33
     auto* gh = getGameHandler(L);
     if (!gh || !gh->isUnitTargeting()) return 0;
     toLowerInPlace(token);
@@ -82,7 +85,13 @@ static int lua_SpellCanTargetUnit(lua_State* L) {
 }
 // Only spells waiting for a unit are held for a click; an item cursor is
 // finished by the bag click instead, so this answers false.
-static int lua_SpellTargetItem(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// Asked of the taint check first (0x008007e0, kind 2) like the rest of the
+// targeting family.
+static int lua_SpellTargetItem(lua_State* L) {
+    if (!taint::allowed(L, 2)) return 0;
+    lua_pushboolean(L, 0);
+    return 1;
+}
 
 // Dropping what the cursor holds onto a unit, which opens a trade. The cursor
 // carries no item here, so there is nothing to drop.
@@ -90,7 +99,11 @@ static int lua_DropItemOnUnit(lua_State* L) { lua_pushboolean(L, 0); return 1; }
 
 // The totem bar's per-slot spell choice, which needs the multi-cast action bar
 // this client does not model.
-static int lua_SetMultiCastSpell(lua_State* L) { (void)L; return 0; }
+// It asks the taint check first all the same (0x005ab8a0, kind 0xe).
+static int lua_SetMultiCastSpell(lua_State* L) {
+    taint::allowed(L, 0xe);
+    return 0;
+}
 
 
 // --- Totems ---
@@ -573,7 +586,8 @@ static int lua_CastSpellByName(lua_State* L) {
             target = resolveUnitGuid(gh, u);
         }
         if (target == 0 && gh->hasTarget()) target = gh->getTargetGuid();
-        gh->castSpell(bestId, target);
+        // 0x00540310 -> 0x0080da40 -> 0x0080cce0, which asks the taint check.
+        if (spellCastAllowed(L, gh, bestId)) gh->castSpell(bestId, target);
     }
     return 0;
 }
@@ -776,7 +790,8 @@ static int lua_CastSpell(lua_State* L) {
     // resolved through the player's tabs cast whichever of the player's spells
     // sat at that index.
     const uint32_t id = spellIdForCall(L, gh);
-    if (id != 0) gh->castSpell(id, gh->getTargetGuid());
+    // 0x00541250 -> 0x0053bc40 -> 0x0080cce0, which asks the taint check.
+    if (id != 0 && spellCastAllowed(L, gh, id)) gh->castSpell(id, gh->getTargetGuid());
     return 0;
 }
 
@@ -896,8 +911,9 @@ static int lua_TargetUnit(lua_State* L) {
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
-    // 0x00525a30 -> 0x005259e0 -> 0x00524bf0.
-    if (guid != 0) gh->targetUnit(guid);
+    // 0x00525a30 -> 0x005259e0 -> 0x00524bf0, which refuses insecure code
+    // a target outright.
+    if (guid != 0 && taint::allowedSecureOnly(L)) gh->targetUnit(guid);
     return 0;
 }
 
@@ -917,14 +933,17 @@ static int lua_FocusUnit(lua_State* L) {
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
-    if (guid != 0) gh->setFocus(guid);
+    // 0x0051ff20: a change of focus is refused to insecure code.
+    if (guid != 0 && (guid == gh->getFocusGuid() || taint::allowedSecureOnly(L)))
+        gh->setFocus(guid);
     return 0;
 }
 
 // ClearFocus() - clear focus target
 static int lua_ClearFocus(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (gh) gh->clearFocus();
+    // 0x005225e0 -> 0x0051ff20: letting a focus go is a change of it too.
+    if (gh && (gh->getFocusGuid() == 0 || taint::allowedSecureOnly(L))) gh->clearFocus();
     return 0;
 }
 
@@ -938,15 +957,16 @@ static int lua_AssistUnit(lua_State* L) {
     uint64_t guid = resolveUnitGuid(gh, uidStr);
     if (guid == 0) return 0;
     uint64_t theirTarget = getEntityTargetGuid(gh, guid);
-    // 0x00525eb0 -> 0x005259e0 -> 0x00524bf0.
-    if (theirTarget != 0) gh->targetUnit(theirTarget);
+    // 0x00525eb0 -> 0x005259e0 -> 0x00524bf0, refused to insecure code.
+    if (theirTarget != 0 && taint::allowedSecureOnly(L)) gh->targetUnit(theirTarget);
     return 0;
 }
 
 // TargetLastTarget() - re-target previous target
 static int lua_TargetLastTarget(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (gh) gh->targetLastTarget();
+    // 0x00525d70 -> 0x005259e0 -> 0x00524bf0, refused to insecure code.
+    if (gh && taint::allowedSecureOnly(L)) gh->targetLastTarget();
     return 0;
 }
 
@@ -960,7 +980,9 @@ static bool wantsReverse(lua_State* L) {
     return lua_toboolean(L, 1) != 0;
 }
 
+// Every TargetNearest* is refused to insecure code first thing (0x00524fc0).
 static int lua_TargetNearestEnemy(lua_State* L) {
+    if (!taint::allowedSecureOnly(L)) return 0;
     auto* gh = getGameHandler(L);
     if (gh) gh->targetEnemy(wantsReverse(L));
     return 0;
@@ -969,6 +991,7 @@ static int lua_TargetNearestEnemy(lua_State* L) {
 // TargetNearest([reverse]) - the nearest unit of any kind (0x00525a90 ->
 // 0x00524fc0 with no filter); reverse read as the client reads a switch.
 static int lua_TargetNearest(lua_State* L) {
+    if (!taint::allowedSecureOnly(L)) return 0;   // 0x00524fc0
     if (auto* gh = getGameHandler(L)) gh->targetNearest(luaClientSwitchArg(L, 1, false));
     return 0;
 }
@@ -988,6 +1011,9 @@ static int lua_InteractUnit(lua_State* L) {
     std::string token = lua_tostring(L, 1);
     toLowerInPlace(token);
     const uint64_t guid = resolveUnitGuid(gh, token);
+    // Insecure code is refused once the unit is looked up, and answered
+    // nothing (0x00527f00).
+    if (!taint::allowedSecureOnly(L)) return 0;
     if (guid == 0 || !gh->getEntityManager().getEntity(guid)) {
         lua_pushnil(L);
         return 1;
@@ -1001,8 +1027,14 @@ static int lua_InteractUnit(lua_State* L) {
 
 // AttackTarget() - the attack binding (0x0051a650): stops a running swing,
 // else starts one at the target.
+//
+// Starting one asks the taint check (0x006e4950, kind 1): insecure code may
+// stop a swing and never start one.
 static int lua_AttackTarget(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->attackTarget();
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    if (!gh->isAutoAttacking() && gh->hasTarget() && !taint::allowed(L, 1)) return 0;
+    gh->attackTarget();
     return 0;
 }
 
@@ -1016,6 +1048,7 @@ static int lua_ToggleSheath(lua_State* L) {
 
 // TargetNearestFriend([reverse]) - target nearest friendly unit
 static int lua_TargetNearestFriend(lua_State* L) {
+    if (!taint::allowedSecureOnly(L)) return 0;   // 0x00524fc0
     auto* gh = getGameHandler(L);
     if (gh) gh->targetFriend(wantsReverse(L));
     return 0;
@@ -1193,7 +1226,8 @@ static int lua_CastSpellByID(lua_State* L) {
         target = resolveUnitGuid(gh, u);
     }
     if (target == 0 && gh->hasTarget()) target = gh->getTargetGuid();
-    gh->castSpell(spellId, target);
+    // 0x0053e060 -> 0x0080da40 -> 0x0080cce0, which asks the taint check.
+    if (spellCastAllowed(L, gh, spellId)) gh->castSpell(spellId, target);
     return 0;
 }
 
@@ -1241,6 +1275,34 @@ static int lua_IsUsableSpell(lua_State* L) {
 }
 
 
+int spellCastCheckKind(game::GameHandler* gh, uint32_t spellId) {
+    if (!gh || spellId == 0) return 2;
+    gh->loadSpellNameCache();
+    const auto it = gh->spellNameCacheRef().find(spellId);
+    if (it == gh->spellNameCacheRef().end()) return 2;
+    const auto& spell = it->second;
+    const uint32_t effect = spell.effectIds[0];
+    if (effect == 0x53 || effect == 0x98 || effect == 0xa2) return -1;
+    // 0x008009b0: the first effect a mount's aura (78), or a summon into the
+    // companion slot - SummonProperties Slot (+0x10) 5.
+    if (spell.effectAuraIds[0] == 78) return -1;
+    if (effect == 28) {
+        auto* am = gh->services().assetManager;
+        auto props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc")
+                                               : nullptr;
+        const int32_t row = props && props->getFieldCount() > 4
+            ? props->findRecordById(spell.effectMiscValuesB[0]) : -1;
+        if (row >= 0 && props->getUInt32(static_cast<uint32_t>(row), 4) == 5) return -1;
+    }
+    if (effect == 47 || (spell.attr & 0x20u) != 0) return 6;
+    return 2;
+}
+
+bool spellCastAllowed(lua_State* L, game::GameHandler* gh, uint32_t spellId) {
+    const int kind = spellCastCheckKind(gh, spellId);
+    return kind < 0 || taint::allowed(L, kind);
+}
+
 void registerSpellLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"GetTotemInfo",     lua_GetTotemInfo},
@@ -1255,6 +1317,7 @@ void registerSpellLuaAPI(lua_State* L) {
         }},
                 {"GetTotemTimeLeft", lua_GetTotemTimeLeft},
                 {"SpellStopCasting", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 2)) return 0;   // 0x00809ea0
             auto* gh = getGameHandler(L);
             if (gh) gh->cancelCast();
             return 0;
@@ -1262,7 +1325,9 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"SpellStopTargeting", [](lua_State* L) -> int {
             // Puts down whatever the cursor holds for a target: a spell
             // waiting for a place on the ground or for a unit, or the item
-            // cursor a stone or an oil arms.
+            // cursor a stone or an oil arms. Asked of the taint check first
+            // (0x00809e30, kind 2).
+            if (!taint::allowed(L, 2)) return 0;
             auto* gh = getGameHandler(L);
             if (gh) gh->cancelGroundTargeting();
             if (gh && gh->isAwaitingItemTarget()) gh->cancelItemTargeting();
@@ -1280,16 +1345,27 @@ void registerSpellLuaAPI(lua_State* L) {
                 // Releasing the left one with a spell waiting for a place casts
                 // it at the ground under the cursor (0x00527360 -> 0x0080c340);
                 // releasing the right one puts the spell down.
-                {"CameraOrSelectOrMoveStart", [](lua_State*) -> int { return 0; }},
+                //
+                // All four ask 0x005191c0(0) first (0x005fc6c0-0x005fc730,
+                // 0x005fc610, 0x005fc680): kind 0, refused to insecure code.
+                {"CameraOrSelectOrMoveStart", [](lua_State* L) -> int {
+            taint::allowed(L, 0);
+            return 0;
+        }},
                 {"CameraOrSelectOrMoveStop", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0)) return 0;
             auto* gh = getGameHandler(L);
             if (gh && gh->isGroundTargeting()) {
                 if (auto at = gh->groundTargetCursor()) gh->placeGroundTarget(*at);
             }
             return 0;
         }},
-                {"TurnOrActionStart", [](lua_State*) -> int { return 0; }},
+                {"TurnOrActionStart", [](lua_State* L) -> int {
+            taint::allowed(L, 0);
+            return 0;
+        }},
                 {"TurnOrActionStop", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0)) return 0;
             auto* gh = getGameHandler(L);
             if (gh) gh->cancelGroundTargeting();
             return 0;

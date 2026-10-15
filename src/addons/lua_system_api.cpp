@@ -2713,7 +2713,10 @@ static int lua_SetTracking(lua_State* L) {
     }
     const int index = static_cast<int>(lua_tonumber(L, 1));
     if (index >= 1 && index <= static_cast<int>(spells.size())) {
-        gh->castSpell(spells[static_cast<size_t>(index - 1)], 0);
+        // 0x0057f380 -> 0x0080da40: a tracking spell's cast asks the taint
+        // check like any other.
+        const uint32_t spell = spells[static_cast<size_t>(index - 1)];
+        if (spellCastAllowed(L, gh, spell)) gh->castSpell(spell, 0);
         return 0;
     }
     const auto others = otherTrackingEntries(L, gh);
@@ -4160,6 +4163,7 @@ static int lua_Screenshot(lua_State* L) {
 // ToggleAutoRun(), TurnLeftStart() / TurnLeftStop(), TurnRightStart() /
 // TurnRightStop() - the movement bindings, acting as their keys do.
 static int lua_ToggleAutoRun(lua_State* L) {
+    if (!taint::allowed(L, 0)) return 0;   // 0x005fc190
     auto* svc = getLuaServices(L);
     if (svc && svc->toggleAutoRun) svc->toggleAutoRun();
     return 0;
@@ -4167,18 +4171,10 @@ static int lua_ToggleAutoRun(lua_State* L) {
 // ToggleRun() - the walk/run binding (0x005faae0): flips the mover's walk mode.
 //
 // It first asks 0x005191c0(0), the protected-function check that ~50 client
-// functions share (PickupEquipmentSetByName, CalendarAddEvent, ...). That is
-// the taint check: DAT_00d4139c is the name of the addon whose code is running
-// (0x0048ec10 swaps it in around a script; /run and macros use the marker at
-// 0x00ac804c, 0x00510b30), 0 for Blizzard's own code. Tainted, kinds 0-5 and
-// 0x10-0x11 are refused outright (ADDON/MACRO_ACTION_FORBIDDEN, 0x00513530),
-// kinds 6-9, 0xf, 0x12-0x15, 0x17 outside a hardware event (+0x1250, set
-// around a click in 0x00967760), and 0xb-0xe, 0x16 in combat lockdown (+0x124c,
-// 0x00524600). So it is on in normal play whenever an addon or /run calls one.
-// This client has no taint tracking - issecure() is true everywhere - which
-// makes every caller Blizzard's and the check always pass; it is skipped here
-// and at its other callers until there is a taint model to ask.
+// functions share (see taint::allowed): kind 0, like every movement binding,
+// is refused outright to insecure code and uses up the hardware event.
 static int lua_ToggleRun(lua_State* L) {
+    if (!taint::allowed(L, 0)) return 0;
     if (auto* gh = getGameHandler(L)) gh->toggleRun();
     return 0;
 }
@@ -4337,6 +4333,7 @@ static int lua_FlipCameraYaw(lua_State* L) {
 // JumpOrAscendStart() (0x005fbf80): holds ascend (0x2000) until AscendStop,
 // and jumps.
 static int lua_JumpOrAscendStart(lua_State* L) {
+    if (!taint::allowed(L, 0)) return 0;   // after the player is found
     auto* svc = getLuaServices(L);
     if (svc && svc->setBindingControl)
         svc->setBindingControl(rendering::CameraController::kControlAscend, true);
@@ -4347,8 +4344,12 @@ static int lua_JumpOrAscendStart(lua_State* L) {
 // input-control bit and each Stop clears it - MoveForward 0x10, MoveBackward
 // 0x20, StrafeLeft 0x40, StrafeRight 0x80; AscendStop 0x2000, DescendStop
 // 0x4000.
-template <uint32_t Bit, bool Held>
+//
+// Every one asks 0x005191c0(0) first, and does nothing for insecure code -
+// all but the mouselook pair (0x005fcc10, 0x005fc890), which ask nothing.
+template <uint32_t Bit, bool Held, bool Asks = true>
 static int lua_BindingControl(lua_State* L) {
+    if (Asks && !taint::allowed(L, 0)) return 0;
     auto* svc = getLuaServices(L);
     if (svc && svc->setBindingControl) svc->setBindingControl(Bit, Held);
     return 0;
@@ -4377,6 +4378,7 @@ static int lua_IsMouselooking(lua_State* L) {
 }
 template <int Direction, bool Held>
 static int lua_BindingTurn(lua_State* L) {
+    if (!taint::allowed(L, 0)) return 0;   // 0x005fc320-0x005fc3f0, kind 0
     auto* svc = getLuaServices(L);
     if (svc && svc->setBindingTurn) svc->setBindingTurn(Direction, Held);
     return 0;
@@ -5267,6 +5269,9 @@ static int lua_GetLFGCompletionRewardItem(lua_State* L) {
 static int lua_RunMacroText(lua_State* L) {
     auto* svc = getLuaServices(L);
     const char* body = luaL_optstring(L, 1, "");
+    // 0x00566400 -> 0x00564db0, which asks the taint check (kind 3): a
+    // macro is never run by insecure code.
+    if (!taint::allowed(L, 3)) return 0;
     if (svc && svc->runMacroText && body && *body) svc->runMacroText(body);
     return 0;
 }
@@ -5276,6 +5281,7 @@ static int lua_RunMacro(lua_State* L) {
     auto* svc = getLuaServices(L);
     auto* gh = getGameHandler(L);
     if (!svc || !svc->runMacroText || !gh) return 0;
+    if (!taint::allowed(L, 3)) return 0;   // 0x00566e80 -> 0x00564db0
     uint32_t macroId = 0;
     if (lua_isnumber(L, 1)) {
         macroId = static_cast<uint32_t>(lua_tonumber(L, 1));
@@ -5346,6 +5352,8 @@ static int lua_ForceLogout(lua_State* L) {
 // needs one, or /reload typed at the interface rather than at the client's own
 // command handler. Doing the work here would free the state mid-call.
 static int lua_ReloadUI(lua_State* L) {
+    // 0x005222e0: insecure code reloads only inside a hardware event.
+    if (!taint::allowedInHardwareEvent(L)) return 0;
     auto* svc = getLuaServices(L);
     if (svc && svc->requestReloadUI) svc->requestReloadUI();
     return 0;
@@ -6012,8 +6020,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"AscendStop",        lua_BindingControl<rendering::CameraController::kControlAscend, false>},
                 {"DescendStop",       lua_BindingControl<rendering::CameraController::kControlDescend, false>},
                 {"SitStandOrDescendStart", lua_SitStandOrDescendStart},
-                {"MouselookStart",    lua_BindingControl<CC::kControlMouselook, true>},
-                {"MouselookStop",     lua_BindingControl<CC::kControlMouselook, false>},
+                {"MouselookStart",    lua_BindingControl<CC::kControlMouselook, true, false>},
+                {"MouselookStop",     lua_BindingControl<CC::kControlMouselook, false, false>},
                 {"IsMouselooking",    lua_IsMouselooking},
                 {"MoveAndSteerStart", lua_BindingControl<kMoveAndSteer, true>},
                 {"MoveAndSteerStop",  lua_BindingControl<kMoveAndSteer, false>},
@@ -6226,18 +6234,22 @@ void registerSystemLuaAPI(lua_State* L) {
                 // 0x400 and 0x800): the mover pitches up or down at its
                 // pitch rate while one is held (0x005fb1a0).
                 {"VehicleAimUpStart", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0)) return 0;   // as the pitch keys
             if (auto* gh = getGameHandler(L)) gh->setVehicleAimKey(true, true);
             return 0;
         }},
                 {"VehicleAimUpStop", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0)) return 0;   // as the pitch keys
             if (auto* gh = getGameHandler(L)) gh->setVehicleAimKey(true, false);
             return 0;
         }},
                 {"VehicleAimDownStart", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0)) return 0;   // as the pitch keys
             if (auto* gh = getGameHandler(L)) gh->setVehicleAimKey(false, true);
             return 0;
         }},
                 {"VehicleAimDownStop", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0)) return 0;   // as the pitch keys
             if (auto* gh = getGameHandler(L)) gh->setVehicleAimKey(false, false);
             return 0;
         }},
@@ -7917,6 +7929,8 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"CancelLogout", [](lua_State* L) -> int {
+            // 0x0051ac90: insecure code only inside a hardware event.
+            if (!taint::allowedInHardwareEvent(L)) return 0;
             auto* gh = getGameHandler(L);
             if (gh) gh->cancelLogout();
             return 0;
@@ -8100,6 +8114,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // better.
                 {"SetCurrentTitle", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // 0x00522e30: insecure code only inside a hardware event.
+            if (gh && !taint::allowedInHardwareEvent(L)) return 0;
             if (gh) gh->sendSetTitle(static_cast<int32_t>(luaL_optnumber(L, 1, -1)));
             return 0;
         }},
@@ -8923,6 +8939,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // it back. With nothing open there is nothing to change, so
                 // both do nothing rather than inventing an id.
                 {"CalendarUpdateEvent", [](lua_State* L) -> int {
+            // 0x005bced0 asks the taint check first (kind 0x13: insecure code
+            // only inside a hardware event).
+            if (!taint::allowed(L, 0x13)) return 0;
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
             const auto& open = gh->getCalendarEventDetail();
@@ -9036,6 +9055,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // And the commit (0x005bcc70), held five seconds after the
                 // last (createCalendarEvent).
                 {"CalendarAddEvent", [](lua_State* L) -> int {
+            if (!taint::allowed(L, 0x13)) return 0;   // 0x005bcc70
             if (auto* gh = getGameHandler(L)) {
                 gh->createCalendarEvent(calendarDraft());
             }
