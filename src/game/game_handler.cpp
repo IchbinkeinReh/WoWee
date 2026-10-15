@@ -2978,6 +2978,15 @@ void GameHandler::sendHearthAndResurrect() {
     getSocket()->send(packet);
 }
 
+void GameHandler::sendChannelVoice(const std::string& channel, bool on) {
+    if (!getSocket()) return;
+    const uint16_t wire = wireOpcode(on ? Opcode::CMSG_CHANNEL_VOICE_ON : Opcode::CMSG_CHANNEL_VOICE_OFF);
+    if (wire == 0xFFFF) return;
+    network::Packet packet(wire);
+    packet.writeString(channel);
+    getSocket()->send(packet);
+}
+
 void GameHandler::queryQuestsCompleted() {
     if (!getSocket()) return;
     const uint16_t wire = wireOpcode(Opcode::CMSG_QUERY_QUESTS_COMPLETED);

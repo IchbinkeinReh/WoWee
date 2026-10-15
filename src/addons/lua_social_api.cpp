@@ -1206,6 +1206,10 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BNSendFriendInvite",       lua_BNNothing},
                 {"BNSendFriendInviteByID",   lua_BNNothing},
                 {"BNDeclineFriendInvite",    lua_BNNothing},
+                // 0x005355c0: only with the Battle.net connection up (its
+                // state 1, 0x006b0990) - never here - and then not even a
+                // usage error.
+                {"BNAcceptFriendInvite",     lua_BNNothing},
                 {"BNRemoveFriend",           lua_BNNothing},
                 {"BNReportPlayer",           lua_BNNothing},
                 {"BNCreateConversation",     lua_BNNothing},

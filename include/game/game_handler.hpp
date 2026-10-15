@@ -369,6 +369,9 @@ public:
     /// HearthAndResurrectFromArea (0x0054c7a0): CMSG_HEARTH_AND_RESURRECT,
     /// empty, and nothing kept.
     void sendHearthAndResurrect();
+    /// ChannelVoiceOn / ChannelVoiceOff and their display-row twins
+    /// (0x004fe460, 0x004fe530): CMSG_CHANNEL_VOICE_ON or _OFF, the name.
+    void sendChannelVoice(const std::string& channel, bool on);
     /// AcceptLevelGrant (0x00523360 -> 0x00521b00): with a proposal pending,
     /// CMSG_ACCEPT_LEVEL_GRANT naming its mentor (packed), and none pending.
     void acceptLevelGrant();

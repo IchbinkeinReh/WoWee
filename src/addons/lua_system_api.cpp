@@ -5695,6 +5695,75 @@ static int lua_GetNumVoiceSessionMembersBySessionID(lua_State* L) {
     return 1;
 }
 
+// GetVoiceSessionMemberInfoBySessionID(session, member) (0x007deef0): a
+// member of one of the voice sessions (0x00d31aa0), of which there are none
+// without voice chat - nothing, as for a session that is not there.
+static int lua_GetVoiceSessionMemberInfoBySessionID(lua_State* L) {
+    (void)L;
+    return 0;
+}
+
+// SetActiveVoiceChannel(displayIndex) (0x00500ae0). 0 leaves the active one -
+// none here, so display 1 (0x00b743cc + 1) - and says so with
+// CHANNEL_VOICE_UPDATE; another index makes that channel active only where it
+// has voice on (+0x14 of its display row), which none has.
+static int lua_SetActiveVoiceChannel(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return 0;
+    if (static_cast<int>(lua_tonumber(L, 1)) != 0) return 0;
+    if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("CHANNEL_VOICE_UPDATE", {"1"});
+    return 0;
+}
+
+// ChannelVoiceOn("channel") / ChannelVoiceOff("channel") (0x004fea70,
+// 0x004fea90 -> 0x004fe460): CMSG_CHANNEL_VOICE_ON or _OFF with the channel's
+// name - a number names the channel joined at it, and none sends nothing.
+template <bool On>
+static int lua_ChannelVoice(lua_State* L) {
+    if (!lua_isstring(L, 1))
+        return luaL_error(L, On ? "Usage: ChannelVoiceOn(\"channel\")"
+                                : "Usage: ChannelVoiceOff(\"channel\")");
+    std::string name = lua_tostring(L, 1);
+    auto* gh = getGameHandler(L);
+    if (!gh || name.empty()) return 0;
+    if (const int number = std::atoi(name.c_str()); number != 0) {
+        const auto& joined = gh->getJoinedChannels();
+        if (number < 0 || static_cast<size_t>(number) > joined.size()) return 0;
+        name = joined[static_cast<size_t>(number) - 1];
+    }
+    gh->sendChannelVoice(name, On);
+    return 0;
+}
+
+// DisplayChannelVoiceOn(displayIndex) / DisplayChannelVoiceOff(displayIndex)
+// (0x004feab0, 0x004fead0 -> 0x004fe530): the same for the channel on that
+// row of the channel list; a row that is not a channel sends nothing.
+template <bool On>
+static int lua_DisplayChannelVoice(lua_State* L) {
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, On ? "Usage: DisplayChannelVoiceOn(\"displayIndex\")"
+                                : "Usage: DisplayChannelVoiceOff(\"displayIndex\")");
+    const auto index = std::llround(lua_tonumber(L, 1));
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const auto& joined = gh->getJoinedChannels();
+    if (index < 1 || static_cast<size_t>(index) > joined.size()) return 0;
+    gh->sendChannelVoice(joined[static_cast<size_t>(index) - 1], On);
+    return 0;
+}
+
+// VoiceChat_RecordLoopbackSound(seconds) / VoiceChat_PlayLoopbackSound()
+// (0x00985d60, 0x00985de0): nothing without the voice sound system
+// (0x00878cc0), which this client does not start.
+static int lua_VoiceChat_RecordLoopbackSound(lua_State* L) {
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: VoiceChat_RecordLoopbackSound(MaxRecordTimeInSeconds)");
+    return 0;
+}
+static int lua_VoiceChat_PlayLoopbackSound(lua_State* L) {
+    (void)L;
+    return 0;
+}
+
 // RequestRaidInfo() - ask the server for saved instance lockouts. The reply is
 // SMSG_RAID_INSTANCE_INFO, which the client already parses for
 // GetSavedInstanceInfo; nothing was asking for it.
@@ -6050,6 +6119,14 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"VoiceChat_GetCurrentMicrophoneSignalLevel", lua_VoiceChat_GetCurrentMicrophoneSignalLevel},
                 {"GetVoiceSessionInfo",      lua_GetVoiceSessionInfo},
                 {"GetNumVoiceSessionMembersBySessionID", lua_GetNumVoiceSessionMembersBySessionID},
+                {"GetVoiceSessionMemberInfoBySessionID", lua_GetVoiceSessionMemberInfoBySessionID},
+                {"SetActiveVoiceChannel",    lua_SetActiveVoiceChannel},
+                {"ChannelVoiceOn",           lua_ChannelVoice<true>},
+                {"ChannelVoiceOff",          lua_ChannelVoice<false>},
+                {"DisplayChannelVoiceOn",    lua_DisplayChannelVoice<true>},
+                {"DisplayChannelVoiceOff",   lua_DisplayChannelVoice<false>},
+                {"VoiceChat_RecordLoopbackSound", lua_VoiceChat_RecordLoopbackSound},
+                {"VoiceChat_PlayLoopbackSound",   lua_VoiceChat_PlayLoopbackSound},
                 {"CanShowAchievementUI",     lua_CanShowAchievementUI},
                 {"IsXPUserDisabled",         lua_IsXPUserDisabled},
                 {"GetAddOnMemoryUsage",      lua_GetAddOnMemoryUsage},
@@ -7201,6 +7278,19 @@ void registerSystemLuaAPI(lua_State* L) {
                 //
                 // Turn this on with the recorder, not before it.
                 {"IsMacClient",              lua_ReturnFalse},
+                // GameMovieFinished() (0x0051d590 -> 0x00518870): only while a
+                // movie plays (0x00bd0800), which none does here -
+                // SMSG_TRIGGER_MOVIE is answered with CMSG_COMPLETE_MOVIE at
+                // once - so nothing.
+                {"GameMovieFinished",        lua_ReturnNothing},
+                // debuglocals([level]) (0x00819a60): the locals only inside the
+                // error handler's call (0x00d3f79c, set around it by
+                // 0x00819730), which this client never makes - so nothing.
+                {"debuglocals",              lua_ReturnNothing},
+                // ReplaceTradeEnchant() (0x00510b80 -> 0x0080c5f0): only with
+                // an enchant waiting on the trade window's slot (0x00d3f4e0
+                // 0x4010), which this client never puts there - so nothing.
+                {"ReplaceTradeEnchant",      lua_ReturnNothing},
                 // IsPartyLeader() - whether *this* player leads the group.
                 //
                 // The client has known this all along: the party data carries a
