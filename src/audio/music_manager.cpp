@@ -53,6 +53,7 @@ void MusicManager::shutdown() {
     musicDataCache_.clear();
     stopZoneMusic(true);
     zoneKits_.clear();
+    unplayableZoneFiles_.clear();
     endedZoneTracks_.clear();
     assetManager = nullptr;
 }
@@ -346,14 +347,21 @@ bool MusicManager::playZoneTrack(int32_t sound, int slot, float fadeIn, float fa
     fallTrack(current.track);
 
     // 0x004c6a40 on the other record: a file of the sound, if it has one.
+    // Nothing without the sound engine (0x00878cb0: 0x11).
     ZoneKit* kit = zoneKit(sound);
-    if (!kit || !assetManager) return false;
+    if (!kit || !assetManager || !AudioEngine::instance().isInitialized()) return false;
     static std::mt19937 rng{std::random_device{}()};
     const auto file = zone_music::pickFile(kit->frequency, kit->last, static_cast<uint32_t>(rng()));
     if (!file) return false;
     kit->last = file;
+    // A file that would not open (0x0087ee60) is no track: the records stay
+    // as they are and no end is noted, so the next frame asks again
+    // (0x004c9910). Known not to open, it fails here without a read.
+    const std::string& path = kit->paths[*file];
+    if (unplayableZoneFiles_.count(path)) return false;
 
     ZoneTrack track;
+    track.path = path;
     track.loading = true;
     track.loop = kit->loop;
     track.kitVolume = kit->volume;
@@ -363,7 +371,7 @@ bool MusicManager::playZoneTrack(int32_t sound, int slot, float fadeIn, float fa
     track.end = end;
     auto* assets = assetManager;
     track.pending = core::ThreadPool::ioWorkers().submit(
-        [assets, path = kit->paths[*file]]() -> std::shared_ptr<const std::vector<uint8_t>> {
+        [assets, path]() -> std::shared_ptr<const std::vector<uint8_t>> {
             auto bytes = assets->readFile(path);
             if (bytes.empty()) return nullptr;
             return std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
@@ -420,6 +428,7 @@ void MusicManager::updateZoneTracks(float deltaTime) {
     });
     auto& engine = AudioEngine::instance();
     std::vector<uint32_t> ended;
+    std::vector<uint32_t> failed;
     for (auto& [id, track] : zoneTracks_) {
         if (track.loading) {
             if (!track.pending.valid() ||
@@ -427,7 +436,17 @@ void MusicManager::updateZoneTracks(float deltaTime) {
                 auto data = track.pending.valid() ? track.pending.get() : nullptr;
                 track.loading = false;
                 if (data) track.stream = engine.playStream(std::move(data), 0.0f, track.loop);
-                if (track.stream == 0) LOG_WARNING("Music: a zone track could not be played");
+                if (track.stream == 0) {
+                    // Never opened: no end to note (0x004c9910 hands the
+                    // channel its note only for a track that started), and
+                    // the file is not read again. The client says nothing of
+                    // a file not found (0x00877e10 with FMOD error 23); this
+                    // says it once.
+                    if (unplayableZoneFiles_.insert(track.path).second)
+                        LOG_WARNING("Music: zone track could not be played: ", track.path);
+                    failed.push_back(id);
+                    continue;
+                }
             }
         }
         track.level = std::clamp(track.level + track.rate * deltaTime, 0.0f, 1.0f);
@@ -438,6 +457,11 @@ void MusicManager::updateZoneTracks(float deltaTime) {
             continue;
         }
         engine.setStreamVolume(track.stream, track.kitVolume * track.level * effectiveMusicVolume());
+    }
+    for (uint32_t id : failed) {
+        stopTrack(id, false);
+        for (auto& record : zoneRecords_)
+            if (record.track == id) record.track = 0;
     }
     for (uint32_t id : ended) {
         stopTrack(id, true);

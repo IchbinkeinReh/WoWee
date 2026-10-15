@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "audio/zone_music.hpp"
@@ -115,6 +116,9 @@ private:
     };
     ZoneKit* zoneKit(int32_t sound);
     std::unordered_map<int32_t, ZoneKit> zoneKits_;
+    /// Kit files that were read and would not play: asked for again, they
+    /// fail at once, as the client's open of a missing file does each frame.
+    std::unordered_set<std::string> unplayableZoneFiles_;
 
     /// A track of the pair: read on a worker, then streamed. Its level rises
     /// or falls linearly; one fallen to nothing stops.
@@ -128,6 +132,7 @@ private:
         float rate = 0.0f;  ///< level per second, + rising, - falling
         float fall = 0.0f;  ///< the seconds it falls over (0x00878610)
         ZoneTrackEnd end;
+        std::string path;
     };
     struct ZoneRecord {
         int32_t sound = 0;
