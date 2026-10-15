@@ -352,7 +352,8 @@ TEST_CASE("A transition batch's passes each take their own shade", "[rt_gbuffer]
 // found no traced result of its own, and at a base of one.
 TEST_CASE("The room's own light runs from the base to the whole colour", "[rt_gbuffer]") {
     CHECK(interiorShade(glm::vec3(0.0f), 1.0f, 0.5f, 0.5f) == Catch::Approx(0.5f));
-    CHECK(interiorShade(glm::vec3(0.25f, 0.1f, 0.0f), 1.0f, 0.5f, 0.5f) == Catch::Approx(0.75f));
+    // Eased into full: half of fullAt gives three quarters of the light.
+    CHECK(interiorShade(glm::vec3(0.25f, 0.1f, 0.0f), 1.0f, 0.5f, 0.5f) == Catch::Approx(0.875f));
     CHECK(interiorShade(glm::vec3(0.5f), 1.0f, 0.5f, 0.5f) == Catch::Approx(1.0f));
     CHECK(interiorShade(glm::vec3(3.0f), 1.0f, 0.5f, 0.5f) == Catch::Approx(1.0f));
     CHECK(interiorShade(glm::vec3(0.0f), 0.0f, 0.5f, 0.5f) == Catch::Approx(1.0f));
@@ -366,6 +367,23 @@ TEST_CASE("The room's own light runs from the base to the whole colour", "[rt_gb
         CHECK(v >= last);
         last = v;
     }
+    // Near fullAt the colour changes slowly, not in a step.
+    CHECK(interiorShade(glm::vec3(0.45f), 1.0f, 0.0f, 0.5f) > 0.98f);
+
+    // A baked lamp's shadow takes its share of the colour, fading with its
+    // light to nothing at the end of its reach, not all of it until there.
+    CHECK(bakedDarkness(0.0f, 0.0f) == 0.0f);
+    CHECK(bakedDarkness(2.0f, 1.0f) == 0.0f);
+    CHECK(bakedDarkness(0.5f, 0.0f) == Catch::Approx(0.5f));
+    CHECK(bakedDarkness(0.05f, 0.0f) < 0.1f);
+    float prev = 0.0f;
+    for (float b = 0.0f; b <= 3.0f; b += 0.1f) {
+        const float d = bakedDarkness(b, 0.0f);
+        CHECK(d >= prev);
+        CHECK(d < 1.0f);
+        prev = d;
+    }
+
     // The flag survives the words beside the others.
     Surface s;
     s.flags = kValid | kBaked | kLiftAfter | kInterior | kUnit;

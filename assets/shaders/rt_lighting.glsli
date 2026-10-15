@@ -144,7 +144,7 @@ void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec4 point, inou
     vec4 p = texelFetch(uRtPointLight, q, 0);
     float vis = l.b;
     point += p * (mix(1.0, vis, rtPointShadowStrength()) * w);
-    bakedDark += min(p.a, 1.0) * (1.0 - vis) * w;
+    bakedDark += rtBakedDarkness(p.a, vis) * w;
     sunAo += l.rg * w;
 }
 

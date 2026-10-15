@@ -198,10 +198,26 @@ RtGbuf rtGbufUnpack(vec4 gb0, vec4 gb1) {
 // from its lamps, which the original shows the same everywhere; this lets
 // the corners away from them fall dark and the places by them stay as
 // painted. Mirrored in rt_gbuffer_pack.hpp (interiorShade).
+// The light eases into full (lit (2 - lit)): taken linearly, a strong lamp's
+// light crossed fullAt near the end of its reach, and the room's colour
+// jumped there along an arc.
 float rtInteriorShade(vec3 pointLight, float weight, float base, float fullAt) {
     float l = max(pointLight.r, max(pointLight.g, pointLight.b));
     float lit = clamp(l / max(fullAt, 1e-3), 0.0, 1.0);
+    lit = lit * (2.0 - lit);
     return mix(1.0, base + (1.0 - base) * lit, clamp(weight, 0.0, 1.0));
+}
+
+// How much of a baked colour the building's own lamps' shadows take, before
+// the Debug Graphics strength: their share of the colour, baked / (baked +
+// the rest of the bake, taken as half a lamp's worth), times the part of the
+// light that the trace finds blocked. Taken as min(baked, 1) as it was, a
+// strong lamp counted as the whole of the colour until the end of its reach,
+// and the shadow of a wall it shines past ended in a hard arc there.
+const float RT_BAKE_REST = 0.5;
+float rtBakedDarkness(float baked, float vis) {
+    baked = max(baked, 0.0);
+    return baked / (baked + RT_BAKE_REST) * (1.0 - vis);
 }
 
 // What the occlusion ao takes of C0, as a fraction of it: occ, the most it

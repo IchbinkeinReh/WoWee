@@ -58,8 +58,14 @@ float rtLightFalloff(float d, float start, float end) {
     return t * t * (3.0 - 2.0 * t);
 }
 
-// A light is a small sphere, so its shadows have a soft edge.
-const float RT_LIGHT_RADIUS = 0.15;
+// A light is a sphere, so its shadows have a soft edge: the larger the
+// light's reach the larger its source - a candle's flame, a lantern's glass,
+// a hearth - from 0.15 to half a yard. At a fixed 0.15 every lamp's shadow of
+// a post or a door frame was knife-sharp to its end, a hard wedge and arc on
+// the floor (the Goldshire inn upstairs).
+float rtLightRadius(float reach) {
+    return clamp(0.04 * reach, 0.15, 0.5);
+}
 // A light sits inside its lamp - a lantern's glass, a brazier's bowl - so a
 // shadow ray stops this short of it rather than finding the lamp itself.
 const float RT_LIGHT_STANDOFF = 0.45;
@@ -160,10 +166,13 @@ void main() {
     float pointVis = 1.0;
     if (picked >= 0) {
         RtPointLight light = rtPointLights[picked];
-        vec3 jitter = (vec3(rtRandom(rng), rtRandom(rng), rtRandom(rng)) * 2.0 - 1.0) * RT_LIGHT_RADIUS;
+        float radius = rtLightRadius(abs(light.positionEnd.w));
+        vec3 jitter = (vec3(rtRandom(rng), rtRandom(rng), rtRandom(rng)) * 2.0 - 1.0) * radius;
         vec3 toLight = light.positionEnd.xyz + jitter - origin;
         float d = length(toLight);
-        float reach = d - min(RT_LIGHT_STANDOFF, 0.5 * d);
+        // Short of the light by the standoff, and by the jitter's reach so a
+        // point picked at the source's edge does not land inside the lamp.
+        float reach = d - min(RT_LIGHT_STANDOFF + radius, 0.5 * d);
         if (d > 1e-3 && reach > 0.0) {
             bool byUnit;
             rtSkipUnits = unitSurface;

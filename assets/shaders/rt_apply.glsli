@@ -73,7 +73,7 @@ Traced findTraced(vec2 uv, float expected) {
             wsum += w;
             vec4 p = imageLoad(uPoint, q);
             point += p * (mix(1.0, l.b, pointShadow) * w);
-            bakedDark += min(p.a, 1.0) * (1.0 - l.b) * w;
+            bakedDark += rtBakedDarkness(p.a, l.b) * w;
             sunAo += l.rg * w;
         }
     }

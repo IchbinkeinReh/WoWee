@@ -129,13 +129,22 @@ struct Traced {
     float interiorShade = 1.0f;
 };
 
+/// rtBakedDarkness: what of a baked colour the building's lamps' shadows
+/// take, before the strength: their share of it times the blocked part.
+inline constexpr float kBakeRest = 0.5f;
+inline float bakedDarkness(float baked, float vis) {
+    baked = std::max(baked, 0.0f);
+    return baked / (baked + kBakeRest) * (1.0f - vis);
+}
+
 /// rtInteriorShade: inside, what a baked colour is scaled by - `base` where
 /// no point light reaches, all of it where their shadowed light (its
 /// brightest channel) is `fullAt` or more, linear between, weighed in by the
 /// weight the pixel found its own traced result with.
 inline float interiorShade(const glm::vec3& pointLight, float weight, float base, float fullAt) {
     const float l = std::max(pointLight.r, std::max(pointLight.g, pointLight.b));
-    const float lit = std::clamp(l / std::max(fullAt, 1e-3f), 0.0f, 1.0f);
+    float lit = std::clamp(l / std::max(fullAt, 1e-3f), 0.0f, 1.0f);
+    lit = lit * (2.0f - lit);
     const float w = std::clamp(weight, 0.0f, 1.0f);
     return (1.0f - w) + w * (base + (1.0f - base) * lit);
 }

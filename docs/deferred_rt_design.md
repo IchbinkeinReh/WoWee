@@ -285,8 +285,13 @@ interior pass that are not under the sun, its doodads lit by their MODD
 colour, units on its floors (`RT_GB_INTERIOR`) - is scaled by
 
 ```
-s = base + (1 - base) * clamp(L / fullAt, 0, 1)      (rtInteriorShade)
+l = clamp(L / fullAt, 0, 1)
+s = base + (1 - base) * l * (2 - l)      (rtInteriorShade)
 ```
+
+The light eases into full (`l (2 - l)`): taken linearly, a strong lamp's
+light crossed `fullAt` near the end of its reach, and the room's colour
+jumped there along an arc.
 
 where `L` is the brightest channel of the shadowed point light at the
 pixel, every light counted, the building's own baked MOLT lights included,
@@ -295,6 +300,18 @@ point-light strength). `base` and `fullAt` are Debug Graphics sliders
 (50% and 100% by default). Where the lamps shine fully all of the painted
 colour remains; where none reaches, `base` of it. Weighted by the pixel's
 match weight, so a pixel without a traced result is as painted.
+
+The baked lamps' shadow takes their share of the baked colour: `baked /
+(baked + 0.5)` (the rest of the bake taken as half a lamp's worth) times the
+blocked part (`rtBakedDarkness`), times the Debug Shadows strength. It took
+`min(baked, 1)` before, so a strong lamp counted as the whole colour until
+the very end of its reach, and the shadow of a wall or post it shone past
+ended in a hard arc there.
+
+Shadows of point lights are soft by the light's size: the shadow ray aims at
+a point jittered within `clamp(0.04 * reach, 0.15, 0.5)` yards of the light
+(`rtLightRadius`), and stops that much shorter, so a lamp's shadow of a post
+or a frame has a penumbra rather than a knife edge to its end.
 
 It combines with the baked lamps' shadow (`rtBakedShade`) as the lesser of
 the two (`rtInteriorBakedShade`), so a lamp's shadow does not darken twice;
