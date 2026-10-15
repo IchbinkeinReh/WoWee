@@ -1789,6 +1789,61 @@ if(WOWEE_BUILD_FRAMEXML_RUN)
     if(TARGET opcodes-generate)
         add_dependencies(framexml_run opcodes-generate)
     endif()
+
+    # Ordinary play under the taint system, against the real interface: a key
+    # binding and a click on an action button, a right-click on a bag slot in
+    # the interface's bags and in WoweeAllBags, targeting from a binding, an
+    # addon's secure macro button, the same in combat lockdown, and a reload -
+    # each protected call reached secure and nothing refused. See
+    # tools/taint_play/watch.lua.
+    #
+    # The interface is game data, so it is named rather than found: an
+    # expansion directory holding interface/FrameXML. Unset or without one,
+    # the test is skipped, not passed.
+    set(WOWEE_FRAMEXML_TEST_DATA "" CACHE PATH
+        "Expansion directory with interface/FrameXML for the FrameXML run tests")
+    if(WOWEE_BUILD_TESTS)
+        # Where this client's own addons are found beside the working
+        # directory, so WoweeAllBags loads as it does in the client; the run's
+        # logs and settings stay in the build tree.
+        set(_taint_play_dir ${CMAKE_CURRENT_BINARY_DIR}/framexml_taint_play)
+        file(MAKE_DIRECTORY ${_taint_play_dir})
+        file(CREATE_LINK ${CMAKE_CURRENT_SOURCE_DIR}/addons ${_taint_play_dir}/addons
+             SYMBOLIC COPY_ON_ERROR)
+        set(_tp ${CMAKE_CURRENT_SOURCE_DIR}/tools/taint_play)
+        set(_tp_data "${WOWEE_FRAMEXML_TEST_DATA}")
+        if(_tp_data STREQUAL "")
+            set(_tp_data ${_taint_play_dir}/no-interface)
+        endif()
+        add_test(NAME framexml_taint_play
+            COMMAND framexml_run ${_tp_data}
+                "--skip-unless:ActionButton1 ~= nil and ContainerFrame1 ~= nil"
+                --player --chunk:${_tp}/watch.lua
+                --fire:PLAYER_LOGIN --fire:VARIABLES_LOADED --fire:PLAYER_ENTERING_WORLD
+                --tick:30
+                --binding:ACTIONBUTTON1 --click:ActionButton1
+                "--expect:WoweeSetSetting('separatebags', '1') or true"
+                --binding:TOGGLEBACKPACK --tick:2 --click:ContainerFrame1Item16,R
+                --binding:TOGGLEBACKPACK
+                "--expect:WoweeSetSetting('separatebags', '0') or true"
+                --binding:TOGGLEBACKPACK --tick:2 --click:WoweeAllBagsItem1,R
+                --binding:TARGETPARTYMEMBER1
+                --chunk:${_tp}/macro_button.lua --click:TaintPlayMacroButton
+                --fire:PLAYER_REGEN_DISABLED "--expect:InCombatLockdown()"
+                --binding:ACTIONBUTTON1 --click:ActionButton1
+                --click:WoweeAllBagsItem1,R --binding:TARGETPARTYMEMBER1
+                --click:TaintPlayMacroButton --tick:30
+                --fire:PLAYER_REGEN_ENABLED "--expect:not InCombatLockdown()"
+                "--lua:TaintPlay_Clean('UseAction', 'UseContainerItem', 'TargetUnit', 'RunMacroText')"
+                --reload --player --chunk:${_tp}/watch.lua
+                --fire:PLAYER_LOGIN --fire:VARIABLES_LOADED --fire:PLAYER_ENTERING_WORLD
+                --tick:30 --binding:ACTIONBUTTON1 --click:ActionButton1
+                "--lua:TaintPlay_Clean('UseAction')"
+            WORKING_DIRECTORY ${_taint_play_dir})
+        set_tests_properties(framexml_taint_play PROPERTIES
+            SKIP_RETURN_CODE 77
+            ENVIRONMENT "WOWEE_CONFIG_ROOT=${_taint_play_dir}/config;WOWEE_LOG_FILE=${_taint_play_dir}/framexml_run.log")
+    endif()
 endif()
 
 

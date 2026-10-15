@@ -56,6 +56,7 @@
 
 #include "addons/addon_manager.hpp"
 #include "addons/lua_services.hpp"
+#include "addons/lua_taint.hpp"
 #include "ui/settings_schema.hpp"
 #include "ui/settings_panel.hpp"
 #include "ui/game_screen.hpp"
@@ -75,6 +76,8 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <cstring>
 #include <cstdlib>
 #include "core/env.hpp"
@@ -1002,6 +1005,147 @@ int main(int argc, char** argv) {
                 for (size_t k = before; k < errors.size(); ++k) {
                     std::printf("   %s\n", errors[k].c_str());
                 }
+            }
+            continue;
+        }
+        // --binding:COMMAND runs a binding's script the way the client's key
+        // dispatch does (0x00563150): down, then up, inside a hardware event
+        // and secure.
+        //
+        // --bind goes through this client's key map, which hands the action bar
+        // keys to the game screen rather than to the interface; this is the
+        // client's own path for any command, ACTIONBUTTON1 included.
+        if (std::strncmp(argv[i], "--binding:", 10) == 0) {
+            relayout();
+            const std::string command = argv[i] + 10;
+            // RunBinding from the interface's own secure code, inside the
+            // hardware event a key press is: the same script, the same taint
+            // and the same flag as the key dispatch gives it. The release
+            // only for a binding that asks to hear it (runOnUp).
+            const bool onUp = mgr.interfaceCommandBoolean(
+                "__WoweeBindingRunOnUp and __WoweeBindingRunOnUp['" + command + "']");
+            for (const char* half : {"down", "up"}) {
+                if (!onUp && std::strcmp(half, "up") == 0) break;
+                wowee::addons::taint::HardwareEvent hardware;
+                mgr.runInterfaceCommand("RunBinding('" + command + "', '" + half + "')");
+            }
+            std::printf("   %s pressed\n", command.c_str());
+            if (errors.size() != before) {
+                ++raised;
+                for (size_t k = before; k < errors.size(); ++k) {
+                    std::printf("   %s\n", errors[k].c_str());
+                }
+            }
+            continue;
+        }
+        // --click:NAME[,BUTTON] presses and releases a mouse button over the
+        // middle of a named frame, through the same dispatch as --mouse - so
+        // the click is a hardware event and reaches whatever the hit test
+        // finds there, which is said if it is not the frame named.
+        if (std::strncmp(argv[i], "--click:", 8) == 0) {
+            relayout();
+            std::string spec = argv[i] + 8;
+            std::string button = "L";
+            if (const size_t comma = spec.find(','); comma != std::string::npos) {
+                button = spec.substr(comma + 1);
+                spec = spec.substr(0, comma);
+            }
+            auto* engine = mgr.getLuaEngine();
+            const wowee::ui::Widget* w = engine ? engine->widgets().findByName(spec) : nullptr;
+            // Resolved now, as a measurement asked of it from Lua would be.
+            if (w) engine->widgets().resolveWidget(w->id);
+            if (!w || w->rectW <= 0.0f || w->rectH <= 0.0f) {
+                ++raised;
+                std::printf("   %s: no such frame on screen\n", spec.c_str());
+                continue;
+            }
+            const float scale = engine->widgets().uiScale() > 0.0f
+                                    ? engine->widgets().uiScale() : 1.0f;
+            const float mx = (w->left + w->rectW * 0.5f) * scale;
+            const float my = 1080.0f - (w->bottom + w->rectH * 0.5f) * scale;
+            {
+                float tx = mx, ty = my;
+                wowee::ui::mouseToTreeSpace(tx, ty, 1080.0f, engine->widgets().uiScale());
+                const uint32_t hit = engine->widgets().hitTest(tx, ty);
+                if (hit != w->id) {
+                    const auto* h = hit ? engine->widgets().get(hit) : nullptr;
+                    std::printf("   note: the hit test finds %s there\n",
+                                h ? (h->name.empty() ? "(unnamed)" : h->name.c_str())
+                                  : "nothing");
+                }
+            }
+            wowee::addons::LuaEngine::MouseButtons up, down;
+            down.left = button == "L";
+            down.right = button == "R";
+            down.middle = button == "M";
+            engine->dispatchMouse(mx, my, 1080.0f, up);
+            engine->dispatchMouse(mx, my, 1080.0f, down);
+            engine->dispatchMouse(mx, my, 1080.0f, up);
+            std::printf("   clicked %s with %s at %.0f,%.0f\n", spec.c_str(),
+                        button.c_str(), mx, my);
+            if (errors.size() != before) {
+                ++raised;
+                for (size_t k = before; k < errors.size(); ++k) {
+                    std::printf("   %s\n", errors[k].c_str());
+                }
+            }
+            continue;
+        }
+        // --reload is /reload: the Lua state made anew and everything loaded
+        // into it again.
+        if (std::strcmp(argv[i], "--reload") == 0) {
+            const bool ok = mgr.reload();
+            std::printf("   %s\n", ok ? "reloaded" : "reload failed");
+            if (!ok || errors.size() != before) {
+                ++raised;
+                for (size_t k = before; k < errors.size(); ++k) {
+                    std::printf("   %s\n", errors[k].c_str());
+                }
+            }
+            continue;
+        }
+        // --chunk:PATH runs a Lua file as the interface's own secure code, for
+        // a check too long to pass as an argument.
+        if (std::strncmp(argv[i], "--chunk:", 8) == 0) {
+            relayout();
+            std::ifstream in(argv[i] + 8);
+            if (!in) {
+                ++raised;
+                std::printf("   no file %s\n", argv[i] + 8);
+                continue;
+            }
+            std::stringstream text;
+            text << in.rdbuf();
+            mgr.runInterfaceCommand(text.str());
+            if (errors.size() == before) {
+                std::printf("   ran\n");
+            } else {
+                ++raised;
+                for (size_t k = before; k < errors.size(); ++k) {
+                    std::printf("   %s\n", errors[k].c_str());
+                }
+            }
+            continue;
+        }
+        // --skip-unless:EXPR ends the run as skipped (77, which ctest reads as
+        // such) when the interface says no - for a test that needs FrameXML on
+        // a machine that may not have it.
+        if (std::strncmp(argv[i], "--skip-unless:", 14) == 0) {
+            if (!mgr.interfaceCommandBoolean(argv[i] + 14)) {
+                std::printf("   skipped: %s\n", argv[i] + 14);
+                return 77;
+            }
+            continue;
+        }
+        // --expect:EXPR asks the interface a yes-or-no question, secure, and
+        // says EXPECT FAILED when the answer is no - for a check run as a test.
+        if (std::strncmp(argv[i], "--expect:", 9) == 0) {
+            relayout();
+            if (mgr.interfaceCommandBoolean(argv[i] + 9)) {
+                std::printf("   expect: yes\n");
+            } else {
+                ++raised;
+                std::printf("   EXPECT FAILED: %s\n", argv[i] + 9);
             }
             continue;
         }
