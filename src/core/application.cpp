@@ -2311,6 +2311,14 @@ void Application::updateMapWindow() {
 void Application::shutdown() {
     LOG_DEBUG("Shutting down application...");
 
+    // Quitting from the world takes the interface down as logging out does
+    // (0x00528f00): PLAYER_LEAVING_WORLD, PLAYER_LOGOUT and the saved
+    // variables, while the world and the character are still there to ask
+    // about. PLAYER_LOGOUT is raised nowhere else, so /quit, Exit Game and
+    // closing the window left addons that write their saved variables on it
+    // with nothing saved. Nothing when the interface is already down.
+    unloadInterface();
+
     // Before the window, whose destructor takes SDL down with it.
     if (window) SDL_RemoveEventWatch(lifecycleWatch, window.get());
     ui::gamepadControls().setKeyRouter(nullptr);
