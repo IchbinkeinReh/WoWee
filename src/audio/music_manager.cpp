@@ -31,6 +31,17 @@ float MusicManager::effectiveMusicVolume() const {
 
 void MusicManager::shutdown() {
     cancelPendingFileLoad();
+    // A zone track's read holds the AssetManager by pointer, and dropping a
+    // pool future does not join its worker - the application frees the
+    // assets right after this. Wait the reads out first, as the spawner does
+    // its loads (EntitySpawner::resetAllState).
+    for (auto& [id, track] : zoneTracks_) {
+        if (track.pending.valid()) track.pending.wait();
+    }
+    for (auto& read : abandonedZoneReads_) {
+        if (read.valid()) read.wait();
+    }
+    abandonedZoneReads_.clear();
     AudioEngine::instance().stopMusic();
     playing = false;
     fadingIn = false;
@@ -308,6 +319,7 @@ void MusicManager::stopTrack(uint32_t id, bool report) {
     if (it == zoneTracks_.end()) return;
     AudioEngine::instance().stopStream(it->second.stream);
     if (report) endedZoneTracks_.push_back(it->second.end);
+    if (it->second.pending.valid()) abandonedZoneReads_.push_back(std::move(it->second.pending));
     zoneTracks_.erase(it);
 }
 
@@ -383,7 +395,10 @@ void MusicManager::stopZoneMusic(bool atOnce) {
     }
     if (atOnce) {
         // What fell before goes with them.
-        for (auto& [id, track] : zoneTracks_) AudioEngine::instance().stopStream(track.stream);
+        for (auto& [id, track] : zoneTracks_) {
+            AudioEngine::instance().stopStream(track.stream);
+            if (track.pending.valid()) abandonedZoneReads_.push_back(std::move(track.pending));
+        }
         zoneTracks_.clear();
     }
 }
@@ -400,6 +415,9 @@ std::vector<MusicManager::ZoneTrackEnd> MusicManager::takeEndedZoneTracks() {
 }
 
 void MusicManager::updateZoneTracks(float deltaTime) {
+    std::erase_if(abandonedZoneReads_, [](const auto& read) {
+        return !read.valid() || read.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    });
     auto& engine = AudioEngine::instance();
     std::vector<uint32_t> ended;
     for (auto& [id, track] : zoneTracks_) {

@@ -142,6 +142,10 @@ private:
     void detach(ZoneRecord& record, bool atOnce);
     void updateZoneTracks(float deltaTime);
     std::unordered_map<uint32_t, ZoneTrack> zoneTracks_;
+    /// The reads of tracks stopped while still loading. Each holds the
+    /// AssetManager by pointer, so shutdown() waits them out before the
+    /// assets go; update() lets those finished go.
+    std::vector<std::future<std::shared_ptr<const std::vector<uint8_t>>>> abandonedZoneReads_;
     uint32_t nextZoneTrack_ = 1;
     ZoneRecord zoneRecords_[2];
     int zoneCurrent_ = 0;  ///< +0x38; the other is +0x3c
