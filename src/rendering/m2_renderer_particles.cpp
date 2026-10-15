@@ -673,12 +673,15 @@ void M2Renderer::prepareM2Particles() {
 
         if (glowLights) {
             const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
+            const size_t firstLight = rtParticleLights_.size();
             for (const rt_lights::ParticleGlow& glow : rtEmitterGlowScratch_) {
                 auto l = glow.light();
                 if (!l) continue;
                 l->color *= fade;
                 rtParticleLights_.push_back(*l);
             }
+            // One model's emitters together no brighter than a fire.
+            rt_lights::capTotalStrength(rtParticleLights_, firstLight, rt_lights::kMaxParticleModelStrength);
         }
 
         if (!emitterDiag.empty()) {

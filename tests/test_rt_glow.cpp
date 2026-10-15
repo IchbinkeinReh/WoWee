@@ -127,6 +127,25 @@ TEST_CASE("An emitter's light sits among its particles, of their colour", "[rt_g
     CHECK(brightest(more.light()->color) <= kParticleGain * kGlowMaxStrength + 1e-4f);
 }
 
+TEST_CASE("A model's emitters together are capped at a fire's strength", "[rt_glow]") {
+    std::vector<PointLight> lights(3);
+    lights[0].color = glm::vec3(5.0f);  // another model's, before the range
+    for (size_t i = 1; i < 3; ++i) lights[i].color = glm::vec3(0.4f, 0.2f, 0.0f);
+    capTotalStrength(lights, 1, 1.0f);
+    CHECK(lights[0].color.r == 5.0f);  // untouched
+    CHECK(lights[1].color.r == Catch::Approx(0.4f));  // under the cap: as it was
+    for (int i = 0; i < 10; ++i) {
+        PointLight l;
+        l.color = glm::vec3(0.4f, 0.2f, 0.0f);
+        lights.push_back(l);
+    }
+    capTotalStrength(lights, 1, 1.0f);
+    float total = 0.0f;
+    for (size_t i = 1; i < lights.size(); ++i) total += lights[i].color.r;
+    CHECK(total == Catch::Approx(1.0f));
+    CHECK(lights[1].color.g == Catch::Approx(lights[1].color.r * 0.5f));  // hue kept
+}
+
 TEST_CASE("The adds give their light, smoke and modulates none", "[rt_glow]") {
     CHECK(particleGlowWeight(4, false) == 1.0f);
     CHECK(particleGlowWeight(3, true) == 1.0f);

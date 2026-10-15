@@ -191,6 +191,25 @@ inline float particleGlowWeight(uint16_t blendType, bool unlit) {
 inline constexpr float kParticleGain = 0.35f;
 inline constexpr float kParticleMaxReach = 10.0f;
 
+/// The most one model's emitters give together (their brightest channels
+/// summed): a fire's few emitters about a fireLight's, while a model with
+/// a flame on every hoof and along its mane (the Dreadsteed, a dozen and
+/// more emitters) gives no more than that, not a dozen fires' worth.
+inline constexpr float kMaxParticleModelStrength = 1.0f;
+
+/// Scale lights[first..] down together so their strengths sum to at most
+/// `cap`; what they light keeps its share of each.
+inline void capTotalStrength(std::vector<PointLight>& lights, size_t first, float cap) {
+    float total = 0.0f;
+    for (size_t i = first; i < lights.size(); ++i) {
+        const glm::vec3& c = lights[i].color;
+        total += std::max(c.r, std::max(c.g, c.b));
+    }
+    if (!(total > cap)) return;
+    const float scale = cap / total;
+    for (size_t i = first; i < lights.size(); ++i) lights[i].color *= scale;
+}
+
 /// One emitter's live particles, summed as they are written out
 /// (M2Renderer::prepareM2Particles).
 struct ParticleGlow {
