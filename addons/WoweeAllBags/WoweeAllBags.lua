@@ -129,6 +129,7 @@ local windows = {}
 local function newWindow(spec)
     local w = {
         buttons = {},
+        holders = {},
         headers = {},
         search  = "",
         sections = spec.sections,
@@ -236,10 +237,34 @@ local function newWindow(spec)
 
     -- ── Slots ───────────────────────────────────────────────────────────────
 
+    -- This is an addon, and its code is insecure: a slot whose click were this
+    -- file's own would have UseContainerItem refused outright for anything
+    -- used rather than worn (ADDON_ACTION_FORBIDDEN), and every move refused
+    -- in combat. So each slot is the interface's own item button,
+    -- ContainerFrameItemButtonTemplate, whose click, drag and right-click are
+    -- Blizzard's and secure - the way the bag addons of the day were built.
+    -- That button reads its bag off its parent's ID and its slot off its own,
+    -- so every bag gets a holder frame to carry the number.
+    --
+    -- Without the interface loaded the template is not there, and the slot
+    -- keeps scripts of its own.
+    local secureSlots = type(ContainerFrameItemButton_OnClick) == "function"
+
+    local function holderFor(bag)
+        local h = w.holders[bag]
+        if h then return h end
+        h = CreateFrame("Frame", nil, f)
+        h:SetAllPoints(f)
+        h:SetID(bag)
+        w.holders[bag] = h
+        return h
+    end
+
     local function slotButton(index)
         local b = w.buttons[index]
         if b then return b end
-        b = CreateFrame("Button", spec.itemPrefix .. index, f)
+        b = CreateFrame("Button", spec.itemPrefix .. index, f,
+                        secureSlots and "ContainerFrameItemButtonTemplate" or nil)
         b:SetWidth(SLOT)
         b:SetHeight(SLOT)
         b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
@@ -312,6 +337,18 @@ local function newWindow(spec)
             GameTooltip:Show()
         end)
         b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        if secureSlots then
+            -- After the template's own, which does the work; this only
+            -- redraws, and a hook keeps nothing it does.
+            local redraw = function() WoweeAllBags_Update() end
+            b:HookScript("OnClick", redraw)
+            b:HookScript("OnDragStart", redraw)
+            b:HookScript("OnReceiveDrag", redraw)
+            w.buttons[index] = b
+            return b
+        end
+
         b:SetScript("OnDragStart", function(self)
             if not self.bag then return end
             PickupContainerItem(self.bag, self.slot)
@@ -385,6 +422,10 @@ local function newWindow(spec)
                     shown = shown + 1
                     local b = slotButton(shown)
                     b.bag, b.slot = bag, slot
+                    if secureSlots then
+                        b:SetParent(holderFor(bag))
+                        b:SetID(slot)
+                    end
                     b:ClearAllPoints()
                     b:SetPoint("TOPLEFT", f, "TOPLEFT",
                                EDGE + col * (SLOT + PAD),
