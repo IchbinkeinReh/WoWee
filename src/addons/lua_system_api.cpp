@@ -4360,9 +4360,11 @@ static int lua_BindingControl(lua_State* L) {
     return 0;
 }
 // SitStandOrDescendStart() (0x0051b1d0): holds descend (0x005fc0f0), and out
-// of flight sits or stands - both what X does here, which this holds.
+// of flight sits or stands, as a press of X.
 static int lua_SitStandOrDescendStart(lua_State* L) {
-    return lua_BindingControl<rendering::CameraController::kControlDescend, true>(L);
+    lua_BindingControl<rendering::CameraController::kControlDescend, true>(L);
+    if (auto* cc = luaCamera(L)) cc->pressBindingSitStand();
+    return 0;
 }
 // MouselookStart() (0x005fcc10) / MouselookStop() (0x005fc890) hold and
 // release the right button's control, 0x1. MoveAndSteerStart() (0x005fc780)

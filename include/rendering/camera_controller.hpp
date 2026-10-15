@@ -168,6 +168,8 @@ public:
         kControlPitchUp = 0x400, kControlPitchDown = 0x800,
         kControlAscend = 0x2000, kControlDescend = 0x4000;
     void setBindingControl(uint32_t bit, bool held);
+    /// SitStandOrDescendStart's sit or stand, as a press of X (0x0051b1d0).
+    void pressBindingSitStand() { bindingSitStand_ = true; }
     /// IsMouselooking() (0x005f9dd0): input control 0x2000001 held.
     [[nodiscard]] bool isMouselooking() const { return rightMouseDown; }
     [[nodiscard]] bool isRightMouseHeld() const { return rightMouseDown; }
@@ -890,6 +892,7 @@ private:
     bool bindingTurnRight_ = false;
     bool bindingJump_ = false;
     uint32_t bindingControls_ = 0;
+    bool bindingSitStand_ = false;
     bool tildeWasDown = false;
 
     // Auto-follow target position (WoW /follow). Non-null when following.

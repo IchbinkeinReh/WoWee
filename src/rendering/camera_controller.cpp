@@ -9,6 +9,7 @@
 #include "ui/keybinding_manager.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "rendering/movement_limits.hpp"
+#include <utility>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -3326,16 +3327,22 @@ void CameraController::update(float deltaTime) {
                                   std::sin(moveYawRad) * std::cos(flightPitchRad),
                                   std::sin(flightPitchRad));
 
-    // Toggle sit/crouch with X key (edge-triggered) - only when UI doesn't want keyboard
-    // Blocked while mounted
+    // X is SitStandOrDescendStart's key (0x0051b1d0): it holds descend, and
+    // out of flight - the mover's 0x2000000 - it stands a sitting character
+    // up or sits a standing one. The sit is refused moving, swimming or
+    // falling (0x006dcb40, flags 0x2e0100f); mounted, as before.
     bool prevSitting = sitting;
-    bool xDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_X) || held(kControlDescend));
-    // While swimming, X dives down instead of toggling sit
-    if (xDown && !xKeyWasDown && !mounted_ && !swimming) {
-        sitting = !sitting;
+    const bool xKey = !uiWantsKeyboard && input.isKeyPressed(SDL_SCANCODE_X);
+    bool xDown = xKey || (!uiWantsKeyboard && held(kControlDescend));
+    const bool sitStandPress = (xKey && !xKeyWasDown) || std::exchange(bindingSitStand_, false);
+    if (sitStandPress && !isFlightAirborne()) {
+        const bool moving = nowForward || nowBackward || nowStrafeLeft || nowStrafeRight ||
+                            nowTurnLeft || nowTurnRight;
+        if (sitting) sitting = false;
+        else if (!mounted_ && !swimming && grounded && !moving) sitting = true;
     }
     if (mounted_) sitting = false;
-    xKeyWasDown = xDown;
+    xKeyWasDown = xKey;
 
     // Reset camera angles with R key (edge-triggered) - only when UI doesn't want keyboard
     // Does NOT move the player; full reset() is reserved for world-entry/respawn.
