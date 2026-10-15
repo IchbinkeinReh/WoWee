@@ -200,6 +200,8 @@ void GameHandler::disconnect() {
     }
     // The loot rolls go with the world, unanswered and unsaid (0x006fafb0).
     if (inventoryHandler_) inventoryHandler_->dropLootRolls();
+    // The letters read from the mailbox (0x00571630).
+    if (inventoryHandler_) inventoryHandler_->forgetMailbox();
     activeCharacterGuid_ = 0;
     guildNameCache_.clear();
     pendingGuildNameQueries_.clear();

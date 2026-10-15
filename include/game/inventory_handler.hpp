@@ -139,6 +139,8 @@ public:
     /// Leaving the world (0x00406510 -> 0x006fafb0): the rolls are dropped,
     /// nothing sent and nothing said.
     void dropLootRolls() { lootRolls_.clear(); }
+    /// Leaving the world (0x00571630): the mailbox's letters are let go.
+    void forgetMailbox();
 
     // ---- Equipment Sets (aliased from handler_types.hpp) ----
     using EquipmentSetInfo = game::EquipmentSetInfo;

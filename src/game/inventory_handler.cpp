@@ -3183,6 +3183,13 @@ void InventoryHandler::closeMailbox() {
     }
 }
 
+void InventoryHandler::forgetMailbox() {
+    // The letters read from the mailbox are freed with the world
+    // (0x00406510 -> 0x00529160 -> 0x00571630).
+    mailInbox_.clear();
+    selectedMailIndex_ = -1;
+}
+
 void InventoryHandler::checkForMail(float delay) {
     if (mailboxOpen_) {
         mailCheckOnClose_ = true;
@@ -3913,6 +3920,12 @@ void InventoryHandler::openAuctionHouse(uint64_t guid) {
 void InventoryHandler::closeAuctionHouse() {
     auctionOpen_ = false;
     auctioneerGuid_ = 0;
+    // The three lists go with the window (0x0059f150 frees 0xc0f448,
+    // 0xc0f458 and 0xc0f468): a house opened again, or the next character's,
+    // starts with none until the server answers a query.
+    auctionBrowseResults_ = AuctionListResult{};
+    auctionOwnerResults_ = AuctionListResult{};
+    auctionBidderResults_ = AuctionListResult{};
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_CLOSED", {});
 }
 
