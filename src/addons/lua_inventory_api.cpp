@@ -14,6 +14,7 @@
 #include "pipeline/asset_manager.hpp"
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <filesystem>
 #include <ranges>
@@ -730,10 +731,36 @@ static int lua_GetItemQualityColor(lua_State* L) {
 // in a scan of any of those frames: they reach it through the money frame's own
 // file, which they pull in rather than declare.
 
-// GetCoinText(amount, separator) → "12g 30s 45c"
-//
-// Denominations with a zero count are left out, as WoW does - except when the
-// whole amount is zero, which prints as copper rather than as nothing.
+/// GetCoinText(amount [, separator]) -> "12 Gold, 30 Silver, 45 Copper"
+/// (0x00510c60 -> 0x007e7d80).
+///
+/// Gold, silver and copper (0x007e7c70), each through its global string -
+/// GOLD_AMOUNT, SILVER_AMOUNT, COPPER_AMOUNT - joined by the separator, ", "
+/// unless given. A denomination of zero is left out, so no money at all is
+/// the empty string. It was an alias of GetCoinTextureString, which draws the
+/// coin icons this one spells out in words.
+static int lua_GetCoinText(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetCoinText(amount [,separator])");
+    const char* separator = luaL_optstring(L, 2, ", ");
+    auto amount = static_cast<int32_t>(std::lround(lua_tonumber(L, 1)));
+    static constexpr std::array<std::pair<const char*, int32_t>, 3> kCoins{{
+        {"GOLD_AMOUNT", 10000}, {"SILVER_AMOUNT", 100}, {"COPPER_AMOUNT", 1}}};
+    std::string out;
+    for (const auto& [token, unit] : kCoins) {
+        const int32_t count = amount < unit ? 0 : amount / unit;
+        if (count != 0) amount %= unit;
+        if (count == 0) continue;
+        lua_getglobal(L, token);
+        const char* format = lua_isstring(L, -1) ? lua_tostring(L, -1) : token;
+        char piece[0x400];
+        std::snprintf(piece, sizeof(piece), format, count);
+        lua_pop(L, 1);
+        if (!out.empty()) out += separator;
+        out += piece;
+    }
+    lua_pushstring(L, out.c_str());
+    return 1;
+}
 
 // Moving money with the cursor: picking an amount up, dropping it into a trade,
 // a mail, a mail's cash-on-delivery box, or the guild bank.
@@ -3792,6 +3819,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"CheckInbox",          lua_CheckInbox},
                 {"ReturnInboxItem",      lua_ReturnInboxItem},
                 {"GetCoinIcon",          lua_GetCoinIcon},
+                {"GetCoinText",          lua_GetCoinText},
                 {"CloseMail",           lua_CloseMail},
                 {"SendMail",            lua_SendMail},
                 {"SetSendMailMoney",    lua_SetSendMailMoney},

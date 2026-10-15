@@ -8651,7 +8651,6 @@ void LuaEngine::registerCoreAPI() {
         "    if c > 0 or r == '' then r = r .. format(COPPER_AMOUNT_TEXTURE, c, 0, 0) end\n"
         "    return r\n"
         "end\n"
-        "GetCoinText = GetCoinTextureString\n"
     );
 
     // RAID_CLASS_COLORS, filled from the same table this client colours a name
