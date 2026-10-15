@@ -362,6 +362,12 @@ public:
     /// targets: +0x1e8, +0x230, +0x260), with whatever the mouse and the
     /// wheel have added to a view being eased to.
     [[nodiscard]] ViewPose currentViewPose() const;
+    /// Where the camera is now, part way through an ease or not (+0x118,
+    /// +0x120, +0x11c - what 0x00603330 resets each target to before it
+    /// measures the way to a new view).
+    [[nodiscard]] ViewPose presentViewPose() const {
+        return {userTargetDistance, -pitch, std::remainder(yaw - facingYaw, 360.0f)};
+    }
     /// Taken to a view (0x00603330): over `seconds` with the client's ease,
     /// every part that moves over the same time; at once with none. Yaw the
     /// short way round (0x005fd5c0). A part already within 0.001 (yards, or

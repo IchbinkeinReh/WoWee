@@ -4222,8 +4222,10 @@ static void setCameraView(rendering::CameraController& cc, int index) {
     // (cameraDistanceSmoothSpeed yards, cameraPitchSmoothSpeed and
     // cameraYawSmoothSpeed degrees a second: 0x00600e00, 0x00601190,
     // 0x00601410); all take the longest, held to cameraSmoothTimeMin and
-    // cameraSmoothTimeMax.
-    const auto from = cc.currentViewPose();
+    // cameraSmoothTimeMax. Measured from where the camera is now: 0x00603330
+    // first resets each part's end to its present value, so a view set part
+    // way through another blend is timed from the middle of it.
+    const auto from = cc.presentViewPose();
     const float dDistance = std::fabs(to.distance - from.distance);
     const float dPitch = std::fabs(to.pitch - from.pitch);
     const float dYaw = std::fabs(std::remainder(to.yaw - from.yaw, 360.0f));
