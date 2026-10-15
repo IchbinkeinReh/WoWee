@@ -85,10 +85,15 @@ void main() {
     if (dot(n, p) > 0.0) n = -n;
 
     vec3 shading = n;
+    float baked = 0.0;
     if (valid) {
-        shading = rtGbufShadingNormal(texelFetch(uSceneGbuf0, sp, 0));
+        vec4 gb0 = texelFetch(uSceneGbuf0, sp, 0);
+        shading = rtGbufShadingNormal(gb0);
         if (dot(shading, p) > 0.0) shading = -shading;
+        baked = (rtGbufFlags(gb0) & RT_GB_BAKED) != 0u ? 1.0 : 0.0;
     }
-    imageStore(uPointNormal, px, vec4(rtOctEncode(shading), 0.0, 0.0));
+    // z: a surface whose colour is baked light, whose rays to the baked
+    // lights pass the buildings by (rt_trace).
+    imageStore(uPointNormal, px, vec4(rtOctEncode(shading), baked, 0.0));
     imageStore(uGbuf, px, vec4(rtOctEncode(n), length(p), float(sub) + (valid ? 4.0 : 0.0)));
 }

@@ -19,6 +19,7 @@ struct RtTri { vec4 v0; vec4 v1; vec4 v2; };
 struct RtMesh { uint nodeOffset; uint triOffset; uint pad0; uint pad1; };
 struct RtInstance { vec4 worldToObject[3]; uint mesh; uint flags; uint group; uint pad2; };
 const uint RT_MESH_TERRAIN = 1u;  // RtScene::kMeshTerrain
+const uint RT_MESH_BUILDING = 2u;  // RtScene::kMeshBuilding
 
 layout(std430, set = 1, binding = 0) readonly buffer RtTris { RtTri rtTris[]; };
 layout(std430, set = 1, binding = 1) readonly buffer RtNodes { RtNode rtNodes[]; };
@@ -131,6 +132,7 @@ bool rtTraceScene(vec3 o, vec3 d, inout float tMax, out uint hitTri, out uint hi
             for (uint i = node.leftOrFirst; i < node.leftOrFirst + node.count; ++i) {
                 RtInstance inst = rtInstances[i];
                 if (rtInGroup(inst.group, o)) continue;
+                if (rtSkipBuildings && (inst.flags & RT_MESH_BUILDING) != 0u) continue;
                 // The object-space direction is left unnormalised so t stays
                 // a world-space distance.
                 vec3 oo = rtToObject(inst, vec4(o, 1.0));

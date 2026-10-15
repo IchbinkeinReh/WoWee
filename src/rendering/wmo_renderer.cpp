@@ -5144,7 +5144,6 @@ void WMORenderer::gatherGlows(ModelData& modelData) {
         rt_lights::GlowBuilder glows;
         for (const auto& batch : group.batches) {
             const uint32_t mat = batch.materialId;
-            const uint32_t flags = mat < modelData.materialFlags.size() ? modelData.materialFlags[mat] : 0;
             const uint32_t blend = mat < modelData.materialBlendModes.size() ? modelData.materialBlendModes[mat] : 0;
             // The windows (MOMT 0x10) give no light: their glow is the
             // original's at night only, and a light at every hour in the
@@ -5152,7 +5151,6 @@ void WMORenderer::gatherGlows(ModelData& modelData) {
             // behind it at noon and cast their posts' shadows across the
             // floors (the Goldshire inn upstairs).
             if (mat < modelData.materialSidn.size() && modelData.materialSidn[mat] != 0) continue;
-            if (blend >= 4) continue;  // the modulates darken
             glm::vec3 texel(1.0f);
             if (mat < modelData.materialTextureIndices.size()) {
                 const uint32_t ti = modelData.materialTextureIndices[mat];
@@ -5161,11 +5159,14 @@ void WMORenderer::gatherGlows(ModelData& modelData) {
                     if (blend != 0) texel *= modelData.textures[ti]->alphaCoverage();
                 }
             }
-            // Outside, an unlit or additive batch: lamp glass, lava, a
-            // crystal. A dark unlit one (most unlit stone) glows at nothing.
-            if ((flags & 0x01u) == 0 && blend != 3) continue;
+            // Outside, an additive batch: a glow card, lava, a crystal's
+            // shine. Not an unlit opaque one: in a building those are its
+            // windows, trims and signs painted with their light in them (the
+            // inns' mm_*_windows textures), not sources - each one lit as a
+            // light shone through its wall into the rooms behind it and cast
+            // the door frames' hard shadows across their floors.
+            if (blend != 3) continue;
             const glm::vec3 color = texel;
-            if (blend != 3 && std::max(color.r, std::max(color.g, color.b)) < 0.35f) continue;
             const uint32_t end = std::min<uint32_t>(batch.startIndex + batch.indexCount,
                                                     static_cast<uint32_t>(group.collisionIndices.size()));
             for (uint32_t i = batch.startIndex; i + 2 < end; i += 3) {
@@ -5197,6 +5198,7 @@ void WMORenderer::gatherGlows(ModelData& modelData) {
 void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
     if (!rtScene_ || rtModelMeshes_.count(modelId)) return;
     RtScene::MeshSource src;
+    src.flags = RtScene::kMeshBuilding;
     for (const auto& group : model.groups) {
         // Distance shells and groups the renderer never draws would cast
         // shadows the player cannot see the source of.

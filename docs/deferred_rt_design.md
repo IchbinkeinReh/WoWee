@@ -241,11 +241,13 @@ own intensity and reach slider in Debug Lights):
   the patch's middle, of its hue, with strength and reach growing with the
   square root of its power (brightness x area x the instance's scale squared),
   capped (`glowLight`). WMOs (`WMORenderer::gatherGlows`): in exterior groups,
-  bright unlit or additive batches where no MOLT light stands within a few
-  yards (that light already is the glow's). Windows (MOMT 0x10) give no light:
-  their glow is the original's at night only, and a light at every hour in a
-  window lit the rooms behind it at noon and cast the posts' shadows across
-  their floors. An emissive doodad of an interior is `baked` like its lamps.
+  additive batches only, where no MOLT light stands within a few yards (that
+  light already is the glow's). Not the unlit opaque ones: in a building
+  those are windows, trims and signs painted with their light in them (the
+  inns' `mm_*_windows` textures), and each became a light at the window that
+  shone through the wall into the room behind it and cast the door frames'
+  hard shadows across its floor. Windows (MOMT 0x10) give none either. An
+  emissive doodad of an interior is `baked` like its lamps.
 * Particle emitters. While `prepareM2Particles` writes the particles out, an
   instance within 100 yards sums each emitter's live particles
   (`ParticleGlow`): position, colour x the texture's mean, weighted by alpha x
@@ -267,6 +269,15 @@ No point light depends on the time of day: lamps (lampLight), fires, glows,
 particles give all their light at every hour, inside and out (the user's
 choice; the original's own time-dependent lighting - the Light.dbc colours, the
 drawn window glow - is untouched).
+
+A baked light's shadow ray from a baked surface (`RT_GB_BAKED`, passed by
+`rt_prepare` in the point normal's z) passes the buildings by
+(`rtSkipBuildings`; WMO meshes carry `kMeshBuilding`, and in hardware the
+instance mask `kBuildingMask`, culled with `0x01`). The bake already holds the
+building's walls' shadows of its own lamps; traced again, a lamp in a corridor
+cast its door frame's hard shadow onto the floor of the room beyond, where
+the bake never had its light. Doodads still shadow baked lights there; every
+other surface and every other light sees the walls as before.
 
 Units cast no point-light shadows: every point light's shadow ray passes
 the units by (`rtSkipUnits`, as the sun's does within the shadow map's

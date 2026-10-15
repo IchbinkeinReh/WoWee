@@ -22,6 +22,11 @@ layout(std430, set = 1, binding = 9) readonly buffer RtGroups { vec4 rtGroups[];
 // map draws the units truly posed and this frame (rt_trace.comp).
 bool rtSkipUnits = false;
 
+// Set by the caller for one ray: pass every building (RT_MESH_BUILDING) by.
+// A baked light's ray from a baked surface does: the building's own walls
+// are in that surface's baked colour already (rt_trace).
+bool rtSkipBuildings = false;
+
 // Whether a ray from p passes the instances of `group` by: it starts inside
 // the group's box - on the character the group is, which never shadows or
 // occludes itself.
