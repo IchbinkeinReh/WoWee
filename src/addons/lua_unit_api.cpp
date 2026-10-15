@@ -26,7 +26,7 @@ static int lua_UnitName(lua_State* L) {
         std::string uidStr(uid);
         toLowerInPlace(uidStr);
         uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
-        const auto* pm = findPartyMember(gh, guid);
+        const auto* pm = findRosterMember(gh, guid);
         if (pm && !pm->name.empty()) {
             lua_pushstring(L, pm->name.c_str());
         } else if (gh && guid != 0) {
@@ -206,7 +206,7 @@ static int lua_UnitExists(lua_State* L) {
         std::string uidStr(uid);
         toLowerInPlace(uidStr);
         uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
-        lua_pushboolean(L, guid != 0 && findPartyMember(gh, guid) != nullptr);
+        lua_pushboolean(L, guid != 0 && findRosterMember(gh, guid) != nullptr);
     }
     return 1;
 }

@@ -6708,7 +6708,20 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetMuteStatus",            lua_ReturnFalse},
                 {"GetActiveVoiceChannel",    lua_ReturnNil},
                 {"GetVoiceCurrentSessionID", lua_ReturnNil},
-                {"GetPartyMember",           lua_ReturnFalse},
+                // GetPartyMember(1-4) -> 1 when that party slot holds someone,
+                // else nil (0x0052c1d0). PartyMemberFrame_UpdateMember shows a
+                // party frame on this and nothing else, so answering false for
+                // every slot kept all four frames hidden in every group.
+                {"GetPartyMember", [](lua_State* L) -> int {
+            const int slot = lua_isnumber(L, 1) ? static_cast<int>(lua_tonumber(L, 1) + 0.5) : 0;
+            if (slot < 1 || slot > 4) return luaL_error(L, "Usage: GetPartyMember(1-4)");
+            auto* gh = getGameHandler(L);
+            if (!gh || !gh->isInGroup() ||
+                game::partySlotGuid(gh->getPartyData(), gh->getPlayerGuid(), slot) == 0)
+                return luaReturnNil(L);
+            lua_pushnumber(L, 1);
+            return 1;
+        }},
                 // GetZonePVPInfo() → pvpType, isSubZonePvP, factionName
                 //
                 // minimap.lua unpacks three and answered nil for all of them,

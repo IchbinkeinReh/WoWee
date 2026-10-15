@@ -2706,6 +2706,13 @@ wowee_add_test(test_party_wire_codes
     SOURCES test_party_wire_codes.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_party_slots ─────────────────────────────────────────
+# Who "party1".."party4" and GetPartyMember name. GetPartyMember answered false
+# for every slot, and the party frames show on that answer alone.
+wowee_add_test(test_party_slots
+    SOURCES test_party_slots.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_stationery ──────────────────────────────────────────
 # The letterhead a letter is written on. Answering nil for it drew the mail
 # body's dark brown font on an empty black frame.

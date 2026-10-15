@@ -440,15 +440,8 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
     if (uid.rfind("party", 0) == 0 && uid.size() > 5) {
         int idx = 0;
         try { idx = std::stoi(uid.substr(5)); } catch (...) { return 0; }
-        if (idx < 1 || idx > 4) return 0;
-        const auto& pd = gh->getPartyData();
-        // party members exclude self; index 1-based
-        int found = 0;
-        for (const auto& m : pd.members) {
-            if (m.guid == gh->getPlayerGuid()) continue;
-            if (++found == idx) return m.guid;
-        }
-        return 0;
+        if (!gh->isInGroup()) return 0;
+        return game::partySlotGuid(gh->getPartyData(), gh->getPlayerGuid(), idx);
     }
     // boss1-boss5, the encounter frames. Filled by
     // SMSG_UPDATE_INSTANCE_ENCOUNTER_UNIT; without this every UnitExists("boss1")
@@ -912,6 +905,20 @@ inline const game::GroupMember* findPartyMember(game::GameHandler* gh, uint64_t 
     if (!gh || guid == 0) return nullptr;
     for (const auto& m : gh->getPartyData().members) {
         if (m.guid == guid && m.hasPartyStats) return &m;
+    }
+    return nullptr;
+}
+
+/// A group member by guid from the roster alone, stats or no stats.
+///
+/// Who is in the group and what they are called come with SMSG_GROUP_LIST;
+/// findPartyMember waits for SMSG_PARTY_MEMBER_STATS as well, which an offline
+/// member may never get. UnitExists("party1") and UnitName("party1") read the
+/// roster, so an offline or distant member's frame shows, with their name.
+inline const game::GroupMember* findRosterMember(game::GameHandler* gh, uint64_t guid) {
+    if (!gh || guid == 0) return nullptr;
+    for (const auto& m : gh->getPartyData().members) {
+        if (m.guid == guid) return &m;
     }
     return nullptr;
 }

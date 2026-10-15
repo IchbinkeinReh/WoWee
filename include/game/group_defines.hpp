@@ -144,6 +144,24 @@ struct GroupListData {
     return *dungeonMapId != mapId;
 }
 
+/// Who sits in party slot `slot` (1-4), or 0 for nobody.
+///
+/// The client keeps four party guids (0xbd1948): "party1".."party4" and
+/// GetPartyMember (0x0052c1d0) both read them. They are the other members of
+/// the player's own party - in a raid, of the player's own subgroup, which is
+/// what GetNumPartyMembers counts as well - in roster order.
+inline uint64_t partySlotGuid(const GroupListData& group, uint64_t playerGuid, int slot) {
+    if (slot < 1 || slot > 4) return 0;
+    const bool raid = groupIsRaid(group.groupType);
+    int found = 0;
+    for (const auto& m : group.members) {
+        if (m.guid == 0 || m.guid == playerGuid) continue;
+        if (raid && m.subGroup != group.subGroup) continue;
+        if (++found == slot) return m.guid;
+    }
+    return 0;
+}
+
 /**
  * Party command types
  */
