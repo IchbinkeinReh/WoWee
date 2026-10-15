@@ -1498,6 +1498,27 @@ void InventoryHandler::sendLootRoll(uint64_t objectGuid, uint32_t slot, uint8_t 
     endLootRoll(objectGuid, slot);
 }
 
+void InventoryHandler::passLootRollsForWorldport() {
+    // A roll answered has already gone from the list (sendLootRoll), so all
+    // that are left are the unanswered ones the client passes. Each window
+    // this client shows comes down by its id, as 0x006fafd0 says it for a
+    // window shown (+0x41 clear).
+    const std::vector<LootRollEntry> rolls = std::move(lootRolls_);
+    lootRolls_.clear();
+    for (const LootRollEntry& roll : rolls) {
+        if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
+            network::Packet pkt(wireOpcode(Opcode::CMSG_LOOT_ROLL));
+            pkt.writeUInt64(roll.objectGuid);
+            pkt.writeUInt32(roll.slot);
+            pkt.writeUInt8(0);  // pass
+            owner_.getSocket()->send(pkt);
+        }
+        if (owner_.addonEventCallbackRef()) {
+            owner_.addonEventCallbackRef()("CANCEL_LOOT_ROLL", {std::to_string(roll.rollId)});
+        }
+    }
+}
+
 void InventoryHandler::handleLootRoll(network::Packet& packet) {
     // objectGuid(8) + lootSlot(4) + playerGuid(8) + itemId(4) + itemRandSuffix(4) +
     // itemRandProp(4) + rollNumber(1) + rollType(1) + autoPass(1)

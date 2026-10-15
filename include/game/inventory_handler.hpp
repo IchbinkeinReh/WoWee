@@ -132,6 +132,13 @@ public:
         return nullptr;
     }
     void sendLootRoll(uint64_t objectGuid, uint32_t slot, uint8_t rollType);
+    /// A worldport (0x00403b70 -> 0x006fafd0): every roll not yet answered is
+    /// passed (CMSG_LOOT_ROLL, 0) and its window taken down
+    /// (CANCEL_LOOT_ROLL); none is left.
+    void passLootRollsForWorldport();
+    /// Leaving the world (0x00406510 -> 0x006fafb0): the rolls are dropped,
+    /// nothing sent and nothing said.
+    void dropLootRolls() { lootRolls_.clear(); }
 
     // ---- Equipment Sets (aliased from handler_types.hpp) ----
     using EquipmentSetInfo = game::EquipmentSetInfo;

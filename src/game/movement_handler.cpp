@@ -1,6 +1,7 @@
 #include "game/movement_handler.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
+#include "game/inventory_handler.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/spline_packet.hpp"
 #include "game/vehicle.hpp"
@@ -2565,6 +2566,8 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     // client leaving the world: windows, timers, remembered units
     // (0x006e5090 -> 0x00528c30).
     owner_.onLeaveWorld(/*worldport=*/true);
+    // The loot rolls not yet answered are passed (0x006fafd0).
+    if (auto* inventory = owner_.getInventoryHandler()) inventory->passLootRollsForWorldport();
 
     const bool isSameMap       = (mapId == owner_.currentMapIdRef());
     const bool isResurrection  = owner_.resurrectPendingRef();

@@ -198,6 +198,8 @@ void GameHandler::disconnect() {
         closeCraftingWindow();
         onLeaveWorld(/*worldport=*/false);
     }
+    // The loot rolls go with the world, unanswered and unsaid (0x006fafb0).
+    if (inventoryHandler_) inventoryHandler_->dropLootRolls();
     activeCharacterGuid_ = 0;
     guildNameCache_.clear();
     pendingGuildNameQueries_.clear();
