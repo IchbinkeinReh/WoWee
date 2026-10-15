@@ -357,6 +357,9 @@ public:
     /// the sender are a zero, the mail's own id, and another zero.
     void reportMailSpam(uint64_t senderGuid, uint32_t mailId);
     void leaveGroup();
+    /// A worldport to `mapId`: the party's finder dungeon is forgotten,
+    /// LFG_UPDATE, if worldportForgetsLfgDungeon says so (0x0052cc30).
+    void forgetLfgDungeonOnWorldport(uint32_t mapId);
     void convertToRaid();
     void sendSetLootMethod(uint32_t method, uint32_t threshold, uint64_t masterLooterGuid);
     [[nodiscard]] bool isInGroup() const { return !partyData.isEmpty(); }

@@ -2156,6 +2156,21 @@ void SocialHandler::leaveGroup() {
     }
 }
 
+void SocialHandler::forgetLfgDungeonOnWorldport(uint32_t mapId) {
+    if (partyData.lfgDungeonEntry == 0) return;
+    std::optional<uint32_t> dungeonMapId;
+    const uint32_t row = partyData.lfgDungeonEntry & 0xFFFFFFu;
+    for (const LfgDungeon& d : owner_.getLfgDungeons()) {
+        if (d.id == row) {
+            dungeonMapId = d.mapId;
+            break;
+        }
+    }
+    if (!worldportForgetsLfgDungeon(partyData, owner_.getPlayerGuid(), dungeonMapId, mapId)) return;
+    partyData.lfgDungeonEntry = 0;
+    owner_.fireAddonEvent("LFG_UPDATE", {});
+}
+
 void SocialHandler::convertToRaid() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // ConvertToRaid (0x00574a00) does nothing at all unless the player
@@ -2433,6 +2448,10 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     const std::vector<GroupMember> prevMembers = partyData.members;
     partyData = GroupListData{};
     if (!GroupListParser::parse(packet, partyData, hasRoles, hasBattleGroupFlag)) return;
+    // 0x006d8870 empties the party (0x0052d6e0(0), the finder dungeon with
+    // it) and then sets the roster's dungeon (0x0052c0a0), which says
+    // LFG_UPDATE when that changes it - for every roster of a finder group.
+    if (partyData.lfgDungeonEntry != 0) owner_.fireAddonEvent("LFG_UPDATE", {});
     // 0x006d8870: a group with members sets the player's difficulty.
     if (partyData.hasPlayerDifficulty) owner_.playerDifficultyRef() = partyData.playerDifficulty;
 

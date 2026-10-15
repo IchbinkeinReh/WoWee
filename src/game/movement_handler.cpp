@@ -2572,6 +2572,10 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     if (auto* renderer = owner_.services().renderer) renderer->resetScreenEffect();
     // The loot rolls not yet answered are passed (0x006fafd0).
     if (auto* inventory = owner_.getInventoryHandler()) inventory->passLootRollsForWorldport();
+    // The party's finder dungeon, ungrouped and off its map, is forgotten
+    // (0x0052cc30) - against the map arrived on, which 0x004d7750 has made
+    // current by then.
+    owner_.forgetLfgDungeonOnWorldport(mapId);
 
     const bool isSameMap       = (mapId == owner_.currentMapIdRef());
     const bool isResurrection  = owner_.resurrectPendingRef();

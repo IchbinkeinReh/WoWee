@@ -3064,6 +3064,10 @@ void GameHandler::leaveGroup() {
     if (socialHandler_) socialHandler_->leaveGroup();
 }
 
+void GameHandler::forgetLfgDungeonOnWorldport(uint32_t mapId) {
+    if (socialHandler_) socialHandler_->forgetLfgDungeonOnWorldport(mapId);
+}
+
 void GameHandler::convertToRaid() {
     if (socialHandler_) socialHandler_->convertToRaid();
 }

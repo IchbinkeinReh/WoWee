@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -117,10 +118,31 @@ struct GroupListData {
     uint32_t memberCount = 0;
     std::vector<GroupMember> members;
     uint64_t leaderGuid = 0;
+    /// WotLK: the dungeon finder's dungeon of a finder group, the entry its
+    /// roster carries (0x006d8870 -> 0x0052c0a0, 0xbd19a4); IsPartyLFG asks
+    /// whether there is one (0x0052c310). 0 for any other group, and for
+    /// none - leaving or losing the group forgets it (0x0052d6e0).
+    uint32_t lfgDungeonEntry = 0;
 
     [[nodiscard]] bool isValid() const { return true; }
     [[nodiscard]] bool isEmpty() const { return memberCount == 0; }
 };
+
+/// Whether a worldport forgets the party's finder dungeon (0x0052cc30, from
+/// 0x00403b70 once the new map is current): there is one, the player's party
+/// slots are empty - no other member in the player's own subgroup, which is
+/// what 0x006d8870 fills them from - and the map arrived on is not the
+/// dungeon's (LFGDungeons.dbc MapID, +0x1c, of the entry's low 24 bits). An
+/// entry with no row is kept. `dungeonMapId` is that row's map, or nothing.
+[[nodiscard]] inline bool worldportForgetsLfgDungeon(const GroupListData& party, uint64_t playerGuid,
+                                                     std::optional<uint32_t> dungeonMapId,
+                                                     uint32_t mapId) {
+    if (party.lfgDungeonEntry == 0 || !dungeonMapId) return false;
+    for (const GroupMember& m : party.members) {
+        if (m.guid != 0 && m.guid != playerGuid && m.subGroup == party.subGroup) return false;
+    }
+    return *dungeonMapId != mapId;
+}
 
 /**
  * Party command types

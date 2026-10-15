@@ -2210,6 +2210,8 @@ public:
     void acceptGroupInvite();
     void declineGroupInvite();
     void leaveGroup();
+    /// SocialHandler::forgetLfgDungeonOnWorldport (0x0052cc30).
+    void forgetLfgDungeonOnWorldport(uint32_t mapId);
     void convertToRaid();
     void sendSetLootMethod(uint32_t method, uint32_t threshold, uint64_t masterLooterGuid);
     bool isInGroup() const;

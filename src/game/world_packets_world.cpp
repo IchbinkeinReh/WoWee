@@ -455,7 +455,7 @@ bool GroupListParser::parse(network::Packet& packet, GroupListData& data,
     if (hasRoles && (data.groupType & kGroupTypeLfg)) {
         if (rem() < 5) return false;
         packet.readUInt8();  // lfg state
-        packet.readUInt32(); // lfg dungeon entry
+        data.lfgDungeonEntry = packet.readUInt32();
     }
 
     if (rem() < 8) return false;

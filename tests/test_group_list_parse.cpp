@@ -18,6 +18,7 @@
 #include <catch_amalgamated.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -186,4 +187,53 @@ TEST_CASE("the last byte is the player's difficulty", "[group-list]") {
     const GroupListData solo = parsed(groupList(0x00, {}, 0x1001, false), ok);
     REQUIRE(ok);
     CHECK_FALSE(solo.hasPlayerDifficulty);
+}
+
+TEST_CASE("a finder group's roster carries its dungeon", "[group-list]") {
+    // 0x006d8870 hands the entry to 0x0052c0a0 (0xbd19a4); IsPartyLFG
+    // (0x0052c310) is whether there is one.
+    bool ok = false;
+    const GroupListData lfg = parsed(groupList(0x08, fourOthers(), 0x1002, true), ok);
+    REQUIRE(ok);
+    CHECK(lfg.lfgDungeonEntry == 285);
+
+    const GroupListData plain = parsed(groupList(0x00, fourOthers(), 0x1001, false), ok);
+    REQUIRE(ok);
+    CHECK(plain.lfgDungeonEntry == 0);
+}
+
+TEST_CASE("a worldport forgets the finder dungeon only ungrouped and off its map", "[group-list]") {
+    // 0x0052cc30: no one in the party slots (the player's own subgroup), a
+    // dungeon with a row, and the new map not its map.
+    using wowee::game::GroupMember;
+    using wowee::game::worldportForgetsLfgDungeon;
+    constexpr uint64_t kSelf = 0x10;
+    GroupListData party;
+    party.lfgDungeonEntry = 285;
+    party.subGroup = 0;
+
+    // Alone in the group, ported off the dungeon's map: forgotten.
+    CHECK(worldportForgetsLfgDungeon(party, kSelf, 43u, 1));
+    // On its map: kept.
+    CHECK_FALSE(worldportForgetsLfgDungeon(party, kSelf, 43u, 43));
+    // No LFGDungeons row: kept.
+    CHECK_FALSE(worldportForgetsLfgDungeon(party, kSelf, std::nullopt, 1));
+    // No dungeon: nothing to forget.
+    GroupListData none = party;
+    none.lfgDungeonEntry = 0;
+    CHECK_FALSE(worldportForgetsLfgDungeon(none, kSelf, 43u, 1));
+
+    // Another member in the player's subgroup fills a party slot: kept.
+    GroupMember other;
+    other.guid = 0x20;
+    other.subGroup = 0;
+    party.members.push_back(other);
+    CHECK_FALSE(worldportForgetsLfgDungeon(party, kSelf, 43u, 1));
+    // One in another subgroup of a raid does not.
+    party.members.back().subGroup = 3;
+    CHECK(worldportForgetsLfgDungeon(party, kSelf, 43u, 1));
+    // Nor does the player's own entry, should a roster list it.
+    party.members.back().guid = kSelf;
+    party.members.back().subGroup = 0;
+    CHECK(worldportForgetsLfgDungeon(party, kSelf, 43u, 1));
 }
