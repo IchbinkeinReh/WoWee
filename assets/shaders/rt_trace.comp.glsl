@@ -84,16 +84,7 @@ void main() {
         return;
     }
     vec3 n = rtGbufNormal(g);
-    vec4 pointIn = imageLoad(uPointOut, px);
-    vec3 shadingN = rtOctDecode(pointIn.xy);
-    // A unit's body (RT_GB_UNIT, rt_prepare). Its traced pieces are rigid
-    // and coarse - a standing pose, or a piece per bone - and do not hold
-    // the drawn skin closely: a ray from the skin toward a torch beside it
-    // started inside a neighbouring piece (an arm, the robe's skirt) and was
-    // shadowed by the body itself, so a unit by a fire took none of its
-    // light. Its rays to the point lights pass the units by, as the sun's do
-    // within the shadow map's reach.
-    bool unitSurface = pointIn.z > 0.5;
+    vec3 shadingN = rtOctDecode(imageLoad(uPointOut, px).xy);
     vec3 p = rtGbufWorld(g, px);
     vec3 origin = p + n * rtSurfaceOffset(dist);
     uint rng = rtSeed(uvec2(px), uint(pass.cameraPos.w));
@@ -174,11 +165,18 @@ void main() {
         // point picked at the source's edge does not land inside the lamp.
         float reach = d - min(RT_LIGHT_STANDOFF + radius, 0.5 * d);
         if (d > 1e-3 && reach > 0.0) {
+            // The units cast no point-light shadows: their traced bodies
+            // are rigid pieces in a standing pose (or a piece per bone),
+            // coarse and a frame late. A unit by a fire was shadowed by its
+            // own body, and under a lamp above and behind it the player's
+            // body threw a hard, room-sized wedge across the floor ahead -
+            // with the camera close, a black shape with nothing in sight to
+            // cast it (the Goldshire inn's upper floor). The original lights
+            // no unit's shadow by a lamp either.
             bool byUnit;
-            rtSkipUnits = unitSurface;
+            rtSkipUnits = true;
             pointVis = rtOccludedBy(origin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
             rtSkipUnits = false;
-            unitHit = unitHit || byUnit;
         }
     }
 

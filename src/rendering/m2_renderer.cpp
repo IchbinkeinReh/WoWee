@@ -2173,8 +2173,13 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     }
 
 
+    // The lamp's light and what glows first: the ray traced scene leaves the
+    // models that give light out of its occluders (registerRtModel).
+    if (!skyMode_) {
+        detectLamp(gpuModel, model);
+        computeGlow(gpuModel, model);
+    }
     registerRtModel(gpuModel, model);
-    if (!skyMode_) computeGlow(gpuModel, model);
     models[modelId] = std::move(gpuModel);
     spatialIndexDirty_ = true;  // Map may have rehashed - refresh cachedModel pointers
 
@@ -2200,7 +2205,7 @@ void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
                  model->lights.size(), model->isBrazierOrFire ? " fire" : "", model->isTorch ? " torch" : "",
                  model->isLamp ? " lamp" : "", " glow ", model->glowPatches.size(), " emitters ",
                  model->particleEmitters.size(), " live ", inst.particles.size(),
-                 inst.interiorLit ? " interior" : "", listed ? " listed" : "");
+                 inst.interiorLit ? " interior" : "", listed ? " listed" : "", " lampBone ", model->lampBone, " bones ", inst.boneMatrices.size());
     }
 }
 
@@ -2242,27 +2247,22 @@ void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& mode
         for (size_t i = batch.indexStart; i + 2 < end; i += 3) {
             const uint16_t a = model.indices[i], b = model.indices[i + 1], c = model.indices[i + 2];
             if (a >= model.vertices.size() || b >= model.vertices.size() || c >= model.vertices.size()) continue;
+            // The bone of the triangle's first vertex, heaviest weight.
+            const auto& va = model.vertices[a];
+            int heaviest = -1;
+            for (int k = 0; k < 4; ++k) {
+                if (va.boneWeights[k] > 0 && (heaviest < 0 || va.boneWeights[k] > va.boneWeights[heaviest])) heaviest = k;
+            }
+            const uint32_t bone = heaviest >= 0 ? va.boneIndices[heaviest] : ~0u;
             builder.addTriangle(model.vertices[a].position, model.vertices[b].position, model.vertices[c].position,
-                                color, bi, batch.colorAnimated);
+                                color, bi, batch.colorAnimated, bone);
         }
     }
     gpuModel.glowPatches = builder.finish();
 }
 
-void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& model) {
-    if (!rtScene_ || model.vertices.empty() || model.indices.empty()) return;
-    // What the renderer never draws, and what is too small and numerous to be
-    // worth its triangles (ground clutter).
-    if (gpuModel.isInvisibleTrap || gpuModel.isSpellEffect ||
-        gpuModel.isGroundDetail || gpuModel.isSkyBird || gpuModel.isLightBeam) {
-        return;
-    }
-    // An animated model - a door, a chest, a banner, a lantern on its chain -
-    // as one mesh would cast its bind pose, not the pose on screen. It is
-    // cut into pieces by bone instead, which syncRtScene places by this
-    // frame's bones while the instance is near.
-    const bool animated = gpuModel.hasAnimation && !gpuModel.disableAnimation && !gpuModel.isTransportDoodad;
-
+void M2Renderer::detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model) {
+    if (model.vertices.empty() || model.indices.empty()) return;
     // A lamp with no light of its own gets one at its glowing glass
     // (rt_lights::lampLight) - not a broken one, nor one put out.
     if (gpuModel.lights.empty() && gpuModel.isLanternLike && !gpuModel.isBrazierOrFire && !gpuModel.isTorch) {
@@ -2296,9 +2296,48 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
             const glm::vec3 bmax = gpuModel.hasVertexBox ? gpuModel.vertexBoxMax : gpuModel.boundMax;
             gpuModel.lampLocal = rt_lights::lampGlowCentre(
                 positions, model.indices, [&](size_t i) { return any && glows[i] != 0; }, bmin, bmax);
+            // The bone that holds the glass, or with none glowing the one
+            // that holds most of the lamp.
+            gpuModel.lampBone = rt_lights::dominantBone(model.vertices, model.indices,
+                                                        [&](size_t i) { return !any || glows[i] != 0; });
             gpuModel.isLamp = true;
         }
     }
+}
+
+void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& model) {
+    if (!rtScene_ || model.vertices.empty() || model.indices.empty()) return;
+    // What the renderer never draws, and what is too small and numerous to be
+    // worth its triangles (ground clutter).
+    if (gpuModel.isInvisibleTrap || gpuModel.isSpellEffect ||
+        gpuModel.isGroundDetail || gpuModel.isSkyBird || gpuModel.isLightBeam) {
+        return;
+    }
+    // An animated model - a door, a chest, a banner, a lantern on its chain -
+    // as one mesh would cast its bind pose, not the pose on screen. It is
+    // cut into pieces by bone instead, which syncRtScene places by this
+    // frame's bones while the instance is near.
+    const bool animated = gpuModel.hasAnimation && !gpuModel.disableAnimation && !gpuModel.isTransportDoodad;
+
+    // What gives light from inside itself - a lamp, a lantern, a candelabra
+    // (detectLamp), a glowing crystal or lava (glowPatches), a model carrying
+    // its own M2 light - casts no shadow of its own light: the light sits in
+    // its glass, its flame or its glow, and the model's frame, cap and bars
+    // around it took most of its rays and threw them as hard wedges across
+    // the room (a hanging lantern in the Goldshire inn lit its floor through
+    // the gaps between its bars). Such a fixture's shadow of anything else's
+    // light is small; it is left out of the scene.
+    if (gpuModel.isLamp || !gpuModel.glowPatches.empty() || !gpuModel.lights.empty()) return;
+
+    // A flat sheet on the floor - a rug, a doormat, a map on a table - casts
+    // no shadow worth its triangles, and lying a few hundredths of a yard
+    // over what it covers it shadowed that whole. The ray traced lighting
+    // traces from the opaque surfaces it has in its G-buffer, a short way off
+    // them: a sheet not among them (drawn blended, or thinner than the
+    // offset) covered every ray from the floor beneath, which went black to
+    // the lamps in the rug's exact outline (StormwindRug01 in the Goldshire
+    // inn's rooms). rt_lights::isFlatSheet.
+    if (rt_lights::isFlatSheet(model.vertices)) return;
 
     RtScene::MeshSource src;
     src.positions.reserve(model.vertices.size());
@@ -2619,7 +2658,9 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
         const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
         if (model->lights.empty() && model->isLamp) {
             // A lamp with no light of its own (rt_lights::lampLight).
-            rt_lights::PointLight l = rt_lights::lampLight(model->lampLocal, inst.modelMatrix);
+            // Where the bones hold the glass this frame (a lantern swings).
+            rt_lights::PointLight l = rt_lights::lampLight(
+                model->lampLocal, rt_lights::boneCarried(inst.modelMatrix, inst.boneMatrices, model->lampBone));
             l.color *= fade;
             // A lamp of a WMO interior is in the interior's baked colours
             // already: there it only casts its shadows (PointLight::baked).
@@ -2651,9 +2692,9 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                                                         inst.globalSequenceTime);
                     if (mul.a >= 0.0f) color *= glm::vec3(mul) * mul.a;
                 }
-                rt_lights::PointLight l = rt_lights::glowLight(
-                    glm::vec3(inst.modelMatrix * glm::vec4(patch.centre, 1.0f)), color, patch.area * scale2,
-                    rt_lights::Source::Emissive);
+                const glm::mat4 carried = rt_lights::boneCarried(inst.modelMatrix, inst.boneMatrices, patch.bone);
+                rt_lights::PointLight l = rt_lights::glowLight(glm::vec3(carried * glm::vec4(patch.centre, 1.0f)), color,
+                                                               patch.area * scale2, rt_lights::Source::Emissive);
                 // Inside, the glow is in the baked colours as a lamp's is.
                 l.baked = inst.interiorLit;
                 out.push_back(l);

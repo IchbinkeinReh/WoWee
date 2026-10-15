@@ -130,8 +130,7 @@ Two `R16G16B16A16_UNORM` attachments, 128 bits, packed as 16-bit words
 `kp = Kp/2`. Flags: valid (an RT surface), sun-shadowed, baked (bakedShade and
 the lights less the building's own), lift-after-min (characters), interior
 (baked light of a room: the room's own light shades it, see "Interior light"
-below), unit (a unit's body: its point-light shadow rays pass the units by,
-see "Point lights from what glows"), transition (below). A cleared
+below), transition (below). A cleared
 G-buffer is "not an RT surface": the sky, grass, the debug views 1-4 and
 anything drawn with the colour only are left as they are by the apply pass.
 
@@ -269,13 +268,35 @@ particles give all their light at every hour, inside and out (the user's
 choice; the original's own time-dependent lighting - the Light.dbc colours, the
 drawn window glow - is untouched).
 
-Units and their own light: a unit's traced pieces are rigid and coarser
-than its skin, so a shadow ray from the skin toward a light beside it often
-started inside a neighbouring piece and the body shadowed itself; a unit
-standing by a fire took none of its light. Unit surfaces carry `RT_GB_UNIT`;
-`rt_prepare` passes it in the point normal's z, and `rt_trace` lets their
-point-light rays pass every unit by (as the sun's do within the shadow map's
-reach). A unit no longer casts point-light shadows onto other units.
+Units cast no point-light shadows: every point light's shadow ray passes
+the units by (`rtSkipUnits`, as the sun's does within the shadow map's
+reach). A unit's traced body is rigid pieces in a standing pose (or a piece
+per bone), coarser than its skin and a frame late. A ray from the skin toward
+a torch beside it began inside a neighbouring piece, so a unit by a fire took
+none of its light; and under a lamp above and behind it, the player's body
+threw a hard wedge as large as a room across the floor ahead - with the
+camera close in, a black shape with nothing in view to cast it (the Goldshire
+inn's upper floor). The original lights no unit's shadow by a lamp either.
+
+Two more kinds of model are left out of the traced scene as occluders
+(`M2Renderer::registerRtModel`), found the same evening by colouring every
+pixel by the mesh that stopped its ray to the brightest light:
+
+* What gives light from inside itself - a lamp or lantern (`isLamp`), a model
+  with glow patches or its own M2 light. The light sits in its glass or its
+  flame, and the frame, the cap and the bars around it took most of its rays:
+  a hanging lantern's bars threw hard wedges across the floor of the room
+  below it. Such a fixture's shadow of other lights is small.
+* A flat sheet - half a yard or more across and no thicker than a tenth of
+  that (`rt_lights::isFlatSheet`): a rug, a doormat, a sleeping mat. The trace
+  starts a few hundredths of a yard off the opaque surfaces in the G-buffer;
+  a rug lying just above the floor covered every ray from the floor beneath it
+  and blacked out its exact outline (StormwindRug01 at the doors of the inn's
+  rooms).
+
+A lamp's light, and a glow patch, follow the bone that holds the glass
+(`rt_lights::dominantBone`, `boneCarried`): a lantern on its chain swings away
+from its bind pose, and a light left at the bind pose sat beside the glass.
 
 ## Interior light
 
@@ -369,7 +390,8 @@ BVH, the probe GI, the CameraZoom Lua functions.
   MOLT light), so a hearth's walls are brighter than painted.
 * Glowing batches become many lights in a city; the ranking keeps the 128
   most important.
-* A unit casts no point-light shadow on another unit (`RT_GB_UNIT`).
+* Units cast no point-light shadows at all (a torch held up beside an NPC
+  leaves no shadow of it on the wall).
 
 * Opaque M2 batches with "no depth write" (material flag 0x10) leave no depth;
   the sky, now drawn after them, can cover them where nothing stands behind.

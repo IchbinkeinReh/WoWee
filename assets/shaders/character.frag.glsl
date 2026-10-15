@@ -489,7 +489,7 @@ void main() {
         light = clamp(ambientLit + floorDirect, 0.0, 1.0)
                   * (rtBakedLight() * rtInteriorBakedShade(rt))
               + rtPointLightOwn(rt);
-        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED | RT_GB_INTERIOR | RT_GB_UNIT;
+        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED | RT_GB_INTERIOR;
         rtSurface.g = clamp(ambientLit + floorDirect, 0.0, 1.0) * rtBakedLight();
         rtSurfaceOcclusion(rtSurface, ambientLit, floorDirect, vec3(1.0));
         rtSurface.occY *= rtBakedLight();
@@ -551,7 +551,7 @@ void main() {
         const float shadowScale = rtShadowScale(rt, shadow);
         light = clamp(ambientLit + diff * direct, 0.0, 1.0)
               * shadowScale;
-        rtSurface.flags = RT_GB_VALID | RT_GB_SUN | RT_GB_LIFT_AFTER | RT_GB_UNIT |
+        rtSurface.flags = RT_GB_VALID | RT_GB_SUN | RT_GB_LIFT_AFTER |
                           (pc.interiorAmbient.w > 0.5 ? RT_GB_BAKED : 0u);
         rtSurface.g = light;
         rtSurfaceOcclusion(rtSurface, ambientLit, diff * direct, vec3(1.0));

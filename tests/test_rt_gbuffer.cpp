@@ -386,7 +386,7 @@ TEST_CASE("The room's own light runs from the base to the whole colour", "[rt_gb
 
     // The flag survives the words beside the others.
     Surface s;
-    s.flags = kValid | kBaked | kLiftAfter | kInterior | kUnit;
+    s.flags = kValid | kBaked | kLiftAfter | kInterior;
     CHECK(unpack(pack(s, glm::vec3(0.5f))).flags == s.flags);
 }
 

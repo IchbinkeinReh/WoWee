@@ -328,3 +328,45 @@ TEST_CASE("a lamp without a light of its own is lit at its glass, at night", "[r
     const PointLight small = lampLight(glass, glm::scale(model, glm::vec3(0.2f)));
     CHECK(small.attenuationEnd == Catch::Approx(3.0f * kWorldReachScale));
 }
+
+TEST_CASE("A rug is a flat sheet; a table, a post and a plate on its edge are not", "[rt_point_lights]") {
+    auto box = [](glm::vec3 lo, glm::vec3 hi) {
+        std::vector<pipeline::M2Vertex> v(2);
+        v[0].position = lo;
+        v[1].position = hi;
+        return v;
+    };
+    CHECK(isFlatSheet(box({0, 0, 0}, {3.0f, 2.0f, 0.02f})));   // a rug
+    CHECK(isFlatSheet(box({0, 0, 0}, {0.8f, 0.6f, 0.05f})));   // a doormat
+    CHECK_FALSE(isFlatSheet(box({0, 0, 0}, {2.0f, 1.0f, 0.9f})));   // a table
+    CHECK_FALSE(isFlatSheet(box({0, 0, 0}, {0.2f, 0.2f, 3.0f})));   // a post
+    CHECK_FALSE(isFlatSheet(box({0, 0, 0}, {0.3f, 0.3f, 0.01f})));  // a coin: too small to matter
+    CHECK_FALSE(isFlatSheet(box({0, 0, 0}, {2.0f, 2.0f, 0.4f})));   // a low platform
+    CHECK_FALSE(isFlatSheet({}));
+}
+
+TEST_CASE("A lamp's light follows the bone that holds its glass", "[rt_point_lights]") {
+    std::vector<pipeline::M2Vertex> v(6);
+    for (auto& x : v) {
+        x.boneWeights[0] = 255;
+        x.boneWeights[1] = x.boneWeights[2] = x.boneWeights[3] = 0;
+        x.boneIndices[1] = x.boneIndices[2] = x.boneIndices[3] = 0;
+    }
+    // The chain on bone 0, the glass on bone 2.
+    v[0].boneIndices[0] = v[1].boneIndices[0] = v[2].boneIndices[0] = 0;
+    v[3].boneIndices[0] = v[4].boneIndices[0] = v[5].boneIndices[0] = 2;
+    const std::vector<uint16_t> idx = {0, 1, 2, 3, 4, 5};
+    CHECK(dominantBone(v, idx, [](size_t i) { return i >= 3; }) == 2u);
+    CHECK(dominantBone(v, idx, [](size_t) { return true; }) == 0u);  // a tie: the lower bone
+    CHECK(dominantBone(v, idx, [](size_t) { return false; }) == ~0u);
+
+    // Carried by its bone's pose, or by the model alone without one.
+    const glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f));
+    std::vector<glm::mat4> bones(3, glm::mat4(1.0f));
+    bones[2] = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.5f, 0.0f));  // swung half a yard
+    const glm::vec3 at = glm::vec3(boneCarried(model, bones, 2) * glm::vec4(0.0f, 0.0f, 3.0f, 1.0f));
+    CHECK(at.x == Catch::Approx(10.0f));
+    CHECK(at.y == Catch::Approx(0.5f));
+    const glm::vec3 still = glm::vec3(boneCarried(model, {}, 2) * glm::vec4(0.0f, 0.0f, 3.0f, 1.0f));
+    CHECK(still.y == Catch::Approx(0.0f));
+}

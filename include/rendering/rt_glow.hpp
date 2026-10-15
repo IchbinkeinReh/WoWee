@@ -37,6 +37,9 @@ struct GlowPatch {
     /// The batch that gives most of it, whose colour and transparency tracks
     /// scale it per frame where they move (~0 where none does).
     uint32_t animatedBatch = ~0u;
+    /// The bone that carries most of it (rt_lights::boneCarried), ~0 for the
+    /// model's own space.
+    uint32_t bone = ~0u;
 };
 
 /// How large a cell glowing triangles are binned by, in yards of the model's
@@ -54,9 +57,9 @@ class GlowBuilder {
 public:
     /// One triangle of a glowing batch, `color` what it emits (the texture's
     /// mean times the batch's colour), `batch` the batch it is of and whether
-    /// that batch's colour moves.
+    /// that batch's colour moves, `bone` the bone that carries it (~0 none).
     void addTriangle(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& color,
-                     uint32_t batch, bool animated) {
+                     uint32_t batch, bool animated, uint32_t bone = ~0u) {
         const float area = 0.5f * glm::length(glm::cross(b - a, c - a));
         if (!(area > 0.0f) || !std::isfinite(area)) return;
         const glm::vec3 mid = (a + b + c) / 3.0f;
@@ -69,6 +72,14 @@ public:
         if (animated && area > cell.animatedArea) {
             cell.animatedArea = area;
             cell.animatedBatch = batch;
+        }
+        if (bone != ~0u) {
+            float& w = cell.boneArea[bone];
+            w += area;
+            if (w > cell.bestBoneArea) {
+                cell.bestBoneArea = w;
+                cell.bone = bone;
+            }
         }
     }
 
@@ -89,6 +100,7 @@ public:
             p.centre = glm::vec3(cell.centre / cell.area);
             p.color = glm::vec3(cell.color / cell.area);
             p.animatedBatch = cell.animatedBatch;
+            p.bone = cell.bone;
             const float bright = std::max(p.color.r, std::max(p.color.g, p.color.b));
             all.push_back({p, double(bright) * cell.area});
         }
@@ -138,6 +150,9 @@ private:
         glm::dvec3 color{0.0};
         float animatedArea = 0.0f;
         uint32_t animatedBatch = ~0u;
+        std::unordered_map<uint32_t, float> boneArea;
+        float bestBoneArea = 0.0f;
+        uint32_t bone = ~0u;
     };
     std::unordered_map<int64_t, Cell> cells_;
 };

@@ -41,8 +41,6 @@ const uint RT_GB_INTERIOR = 16u;   // baked light of an interior - the WMO's in
                                    // the camera's interior pass, its doodads, a
                                    // unit on its floor: the room's own light
                                    // shades it too (rtInteriorShade)
-const uint RT_GB_UNIT = 32u;       // a unit's body (character.frag): its rays
-                                   // to the point lights pass the units by
 const uint RT_GB_TRANSITION = 64u; // a WMO transition batch's two passes in
                                    // one: the sun's shade scales only the
                                    // outside pass's share, the baked shade

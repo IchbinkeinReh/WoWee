@@ -141,6 +141,10 @@ struct M2ModelGPU {
     // its own space (rt_lights::lampLight). Set when its ray traced mesh is.
     bool isLamp = false;
     glm::vec3 lampLocal{0.0f};
+    /// The bone that carries the lamp's glass (rt_lights::dominantBone): a
+    /// lantern on its chain swings away from its bind pose, and a light left
+    /// there sat beside it, shadowed by the lantern's own frame.
+    uint32_t lampBone = ~0u;
     /// What of it glows - its unlit and additive batches, its glow cards -
     /// in a few patches of its own space (rt_lights::GlowBuilder), each a
     /// light while an instance is near (rt_lights::glowLight). Gathered at
@@ -1269,6 +1273,9 @@ private:
     std::vector<rt_lights::ParticleGlow> rtEmitterGlowScratch_;
     /// The glowing patches of a model just loaded (M2ModelGPU::glowPatches).
     static void computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
+    /// A lamp with no light of its own and where its glass glows
+    /// (M2ModelGPU::isLamp, lampLocal, lampBone).
+    static void detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
     // The pass over every instance is spread over a few frames: where it has
     // got to. The instances placed in the dynamic level - moving ones - are
     // brought up to date every frame from rtDynamicOwnerIds_ (M2Instance ids).

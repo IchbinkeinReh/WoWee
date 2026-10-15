@@ -247,6 +247,58 @@ glm::vec3 lampGlowCentre(const std::vector<glm::vec3>& positions, const std::vec
     return {0.5f * (boxMin.x + boxMax.x), 0.5f * (boxMin.y + boxMax.y), boxMax.z - 0.2f * size.z};
 }
 
+/// The bone that carries most of what glows - each glowing vertex's
+/// heaviest bone, counted once per index - for a lamp on a chain, a lantern
+/// that swings, whose glass the bones move away from its bind pose. ~0u when
+/// nothing glows or no vertex has a weight. `glowing(i)` as lampGlowCentre's.
+template <class Glowing>
+uint32_t dominantBone(const std::vector<pipeline::M2Vertex>& vertices, const std::vector<uint16_t>& indices,
+                      Glowing&& glowing) {
+    std::vector<uint32_t> votes;
+    for (size_t i = 0; i < indices.size(); ++i) {
+        if (indices[i] >= vertices.size() || !glowing(i)) continue;
+        const pipeline::M2Vertex& v = vertices[indices[i]];
+        int best = -1;
+        for (int k = 0; k < 4; ++k) {
+            if (v.boneWeights[k] > 0 && (best < 0 || v.boneWeights[k] > v.boneWeights[best])) best = k;
+        }
+        if (best < 0) continue;
+        const uint32_t bone = v.boneIndices[best];
+        if (bone >= votes.size()) votes.resize(bone + 1, 0);
+        ++votes[bone];
+    }
+    uint32_t bone = ~0u;
+    uint32_t most = 0;
+    for (uint32_t b = 0; b < votes.size(); ++b) {
+        if (votes[b] > most) {
+            most = votes[b];
+            bone = b;
+        }
+    }
+    return bone;
+}
+
+/// A model that is a flat sheet: half a yard or more across and no thicker
+/// than a tenth of that (nor than 0.15 yards) - a rug, a doormat. It is kept
+/// out of the ray traced scene as an occluder (M2Renderer::registerRtModel).
+inline bool isFlatSheet(const std::vector<pipeline::M2Vertex>& vertices) {
+    if (vertices.empty()) return false;
+    glm::vec3 lo(vertices[0].position), hi(vertices[0].position);
+    for (const auto& v : vertices) {
+        lo = glm::min(lo, v.position);
+        hi = glm::max(hi, v.position);
+    }
+    const glm::vec3 size = hi - lo;
+    const float across = std::max(size.x, size.y);
+    return across >= 0.5f && size.z < 0.15f && size.z < 0.1f * across;
+}
+
+/// The matrix that carries a point of a model's space into the world this
+/// frame: the model's, times `bone`'s pose where the instance has one.
+inline glm::mat4 boneCarried(const glm::mat4& modelMatrix, const std::vector<glm::mat4>& bones, uint32_t bone) {
+    return bone < bones.size() ? modelMatrix * bones[bone] : modelMatrix;
+}
+
 /// A WMO's omni light (MOLT type 0) placed by its instance. Spot,
 /// directional and ambient lights are only the baked lighting's.
 inline std::optional<PointLight> placeWmoLight(const glm::vec3& localPosition, const glm::vec3& color,

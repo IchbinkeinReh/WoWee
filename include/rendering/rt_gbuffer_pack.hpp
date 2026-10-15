@@ -25,7 +25,6 @@ inline constexpr uint32_t kSun = 2u;
 inline constexpr uint32_t kBaked = 4u;
 inline constexpr uint32_t kLiftAfter = 8u;
 inline constexpr uint32_t kInterior = 16u;
-inline constexpr uint32_t kUnit = 32u;
 inline constexpr uint32_t kTransition = 64u;
 
 /// What a surface knows of how its colour depends on the traced terms, in the
