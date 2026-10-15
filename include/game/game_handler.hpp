@@ -825,6 +825,14 @@ public:
     /// CalendarCanAddEvent (0x005b8ba0): no calendar request pending, and the
     /// last event added five seconds gone.
     bool calendarCanAddEvent() const;
+    /// CalendarEventCanEdit (0x005b8a50): an event open, and for a guild
+    /// announcement the rank's 0x100000 right (0x005cbca0), else whether
+    /// the player may invite to it (0x005f1b30).
+    bool calendarCanEditOpenEvent() const;
+    /// CalendarEventSelectInvite (0x005b8ae0 -> 0x005f1a00): the open
+    /// event's row `index` (from 0) becomes the selected one; an index past
+    /// the list changes nothing.
+    void calendarSelectInvite(size_t index);
     /// CalendarNewEvent / CalendarNewGuildAnnouncement / CalendarNewGuildEvent
     /// (0x005bbe50, 0x005bbf20, 0x005bc030): a new event, made by
     /// calendarNewEvent (0x005f2a20), takes the open one's place (0x00c207ec)

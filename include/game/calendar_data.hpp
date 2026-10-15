@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -202,6 +203,13 @@ struct CalendarEventDetail {
     /// fresh event starts at 1 (0x005f29e0).
     std::vector<uint64_t> namesAwaited;
     uint8_t onceNamed = 1;
+    /// The invite id of the row CalendarEventSelectInvite chose (+0x20),
+    /// none - 0 - until one is (0x005f1060).
+    uint64_t selectedInviteId = 0;
+    /// How the invite list is ordered (+0x544): status, 3, until
+    /// CalendarEventSortInvites says otherwise, none of the six reversed.
+    uint8_t inviteSortCriterion = 3;
+    std::array<bool, 6> inviteSortReversed{};
 };
 
 /// Read one SMSG_CALENDAR_SEND_EVENT. False when it runs out mid-row.

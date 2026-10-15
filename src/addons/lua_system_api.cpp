@@ -8223,6 +8223,68 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, inv.isGuildMember ? 1 : 0);
             return 7;
         }},
+                // The open event's own questions (0x005b8a50, 0x005b8aa0):
+                // whether the player may edit it, and its calendarType - nil
+                // with none open.
+                {"CalendarEventCanEdit", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushboolean(L, gh && gh->calendarCanEditOpenEvent() ? 1 : 0);
+            return 1;
+        }},
+                {"CalendarEventGetCalendarType", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh || !gh->isCalendarEventOpen()) {
+                lua_pushnil(L);
+                return 1;
+            }
+            lua_pushstring(L, wowee::game::calendarTypeForFlags(
+                gh->getCalendarEventDetail().flags));
+            return 1;
+        }},
+                // The selected row of the invite list, by its invite id
+                // (0x005b8ae0, 0x005bbb00): 0 where no row carries it, or with
+                // no event open.
+                {"CalendarEventSelectInvite", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CalendarEventSelectInvite(index)");
+            const auto index = static_cast<int>(lua_tointeger(L, 1));
+            auto* gh = getGameHandler(L);
+            if (gh && index >= 1) gh->calendarSelectInvite(static_cast<size_t>(index) - 1);
+            return 0;
+        }},
+                {"CalendarEventGetSelectedInvite", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            int selected = 0;
+            if (gh && gh->isCalendarEventOpen()) {
+                const auto& open = gh->getCalendarEventDetail();
+                for (size_t i = 0; i < open.invitees.size(); ++i) {
+                    if (open.invitees[i].inviteId == open.selectedInviteId) {
+                        selected = static_cast<int>(i) + 1;
+                        break;
+                    }
+                }
+            }
+            lua_pushinteger(L, selected);
+            return 1;
+        }},
+                // The invite list's order, as its criterion and whether it is
+                // reversed (0x005b8690): "" and false with no event open.
+                {"CalendarEventGetInviteSortCriterion", [](lua_State* L) -> int {
+            static constexpr std::array<const char*, 6> kCriteria{
+                "name", "level", "class", "status", "party", "notes"};
+            auto* gh = getGameHandler(L);
+            if (!gh || !gh->isCalendarEventOpen()) {
+                lua_pushstring(L, "");
+                lua_pushboolean(L, 0);
+                return 2;
+            }
+            const auto& open = gh->getCalendarEventDetail();
+            const size_t criterion = open.inviteSortCriterion;
+            lua_pushstring(L, criterion < kCriteria.size() ? kCriteria[criterion] : "");
+            lua_pushboolean(L, criterion < kCriteria.size() &&
+                                   open.inviteSortReversed[criterion] ? 1 : 0);
+            return 2;
+        }},
                 // ---- Creating an event ----
                 //
                 // The staging half of the calendar's write side. Each of these

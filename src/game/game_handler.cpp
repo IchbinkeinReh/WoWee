@@ -3634,6 +3634,23 @@ bool GameHandler::calendarCanAddEvent() const {
            !calendarAddThrottled(lastCalendarAddMs_, calendarClockMs());
 }
 
+bool GameHandler::calendarCanEditOpenEvent() const {
+    if (!isCalendarEventOpen()) return false;
+    const CalendarEventDetail& open = calendarEventDetail_;
+    if (open.flags & calendar_flag::kAnnouncement) {
+        constexpr uint32_t kGuildRightCreateEvent = 0x100000;
+        return (getPlayerGuildRankRights() & kGuildRightCreateEvent) != 0;
+    }
+    const uint64_t ownInviteId = calendarDraftOpen_ ? 1 : calendarOwnInviteId(open, playerGuid);
+    return calendarMayInvite(ownInviteId, open.creatorGuid, playerGuid);
+}
+
+void GameHandler::calendarSelectInvite(size_t index) {
+    if (!isCalendarEventOpen()) return;
+    auto& open = calendarEventDetail_;
+    if (index < open.invitees.size()) open.selectedInviteId = open.invitees[index].inviteId;
+}
+
 bool GameHandler::openCalendarNewEvent(CalendarNewKind kind) {
     if (!isInWorld() || !entityController_->getEntityManager().getEntity(playerGuid)) return false;
     if (kind != CalendarNewKind::Player && getEntityGuildId(playerGuid) == 0) {
