@@ -523,6 +523,49 @@ static uint32_t itemIdFromArg(lua_State* L, int index) {
     return 0;
 }
 
+// GetItemIcon(item) (0x00517020): the icon of Item.dbc's display (+0x14) for
+// the item - a number, or an "item:" link or the name of a cached item
+// (0x00709de0, names compared without case) - as StringLookups row 3, a
+// backslash and ItemDisplayInfo's icon, INV_Misc_QuestionMark when that has
+// none (0x0070a910). Nothing at all, not even nil, for an id Item.dbc lacks.
+static int lua_GetItemIcon(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    int32_t itemId = 0;
+    if (lua_isnumber(L, 1)) {
+        itemId = static_cast<int32_t>(lua_tointeger(L, 1));
+    } else if (lua_isstring(L, 1) && gh) {
+        const std::string str = lua_tostring(L, 1);
+        const auto pos = str.find("item:");
+        if (pos != std::string::npos) {
+            itemId = static_cast<int32_t>(std::strtol(str.c_str() + pos + 5, nullptr, 10));
+        } else {
+            const auto lower = [](std::string t) { toLowerInPlace(t); return t; };
+            const std::string want = lower(str);
+            for (const auto& [id, info] : gh->getItemInfoCache()) {
+                if (lower(info.name) == want) { itemId = static_cast<int32_t>(id); break; }
+            }
+        }
+    }
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (itemId <= 0 || !am || !am->isInitialized()) return 0;
+    auto items = am->loadDBCOptional("Item.dbc");
+    if (!items || !items->isLoaded() || items->getFieldCount() < 6) return 0;
+    const int32_t row = items->findRecordById(static_cast<uint32_t>(itemId));
+    if (row < 0) return 0;
+    const uint32_t displayId = items->getUInt32(static_cast<uint32_t>(row), 5);
+    std::string path = gh->getItemIconPath(displayId);
+    if (path.empty()) path = "Interface\\Icons\\INV_Misc_QuestionMark";
+    const std::string dir = stringLookup(gh, 3);
+    if (!dir.empty()) {
+        // The resolver answers under Interface\Icons; the client builds the
+        // same path from the lookup row.
+        const auto slash = path.find_last_of('\\');
+        path = dir + "\\" + path.substr(slash == std::string::npos ? 0 : slash + 1);
+    }
+    lua_pushstring(L, path.c_str());
+    return 1;
+}
+
 // IsDressableItem(item) → whether the dress-up model can wear or hold it
 //
 // Armour and weapons only: everything else has no display slot, and the frame
@@ -3506,6 +3549,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetMerchantItemCostInfo", lua_GetMerchantItemCostInfo},
                 {"GetMerchantItemCostItem", lua_GetMerchantItemCostItem},
                 {"GetItemInfo",       lua_GetItemInfo},
+                {"GetItemIcon",       lua_GetItemIcon},
                 {"__WoweeTryOn",   lua_WoweeTryOn},
                 {"__WoweeSetModelCreature", lua_WoweeSetModelCreature},
                 {"__WoweeUndress", lua_WoweeUndress},

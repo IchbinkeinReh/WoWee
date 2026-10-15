@@ -695,6 +695,17 @@ static int lua_CursorHasSpell(lua_State* L) {
     return 1;
 }
 
+// CursorHasMoney() (0x005151c0) / CursorHasMacro() (0x00515180): the
+// cursor's type is 2 / 8. 1 or nil.
+static int lua_CursorHasMoney(lua_State* L) {
+    if (s_cursorType == CursorType::MONEY) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
+}
+static int lua_CursorHasMacro(lua_State* L) {
+    if (s_cursorType == CursorType::MACRO) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
+}
+
 // PickupAction(slot) - picks up an action from the action bar
 /// PickupAction(slot) - take what is in a slot onto the cursor, and put down
 /// what the cursor was already holding.
@@ -2248,6 +2259,8 @@ void registerActionLuaAPI(lua_State* L) {
                 {"PickupPetAction",     lua_PickupPetAction},
                 {"CursorHasItem",       lua_CursorHasItem},
                 {"CursorHasSpell",      lua_CursorHasSpell},
+                {"CursorHasMoney",      lua_CursorHasMoney},
+                {"CursorHasMacro",      lua_CursorHasMacro},
                 {"DeleteCursorItem",    lua_DeleteCursorItem},
                 {"AutoEquipCursorItem", lua_AutoEquipCursorItem},
                 {"IsModifiedClick",     lua_IsModifiedClick},

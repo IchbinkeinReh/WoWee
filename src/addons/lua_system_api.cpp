@@ -28,6 +28,7 @@
 #include "ui/fullscreen_scale.hpp"
 #include "ui/widget_tree.hpp"
 #include "rendering/camera_controller.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/bg_score_defs.hpp"
 #include "game/calendar_month.hpp"
@@ -4304,16 +4305,15 @@ static int lua_FlipCameraYaw(lua_State* L) {
     return 0;
 }
 
-static int lua_JumpOrAscendStart(lua_State* L) {
 // JumpOrAscendStart() (0x005fbf80): holds ascend (0x2000) until AscendStop,
 // and jumps.
+static int lua_JumpOrAscendStart(lua_State* L) {
     auto* svc = getLuaServices(L);
-    if (svc && svc->pressJump) svc->pressJump();
     if (svc && svc->setBindingControl)
         svc->setBindingControl(rendering::CameraController::kControlAscend, true);
+    if (svc && svc->pressJump) svc->pressJump();
     return 0;
 }
-template <int Direction, bool Held>
 // The held movement bindings (0x005fc0a0-0x005fc560): each Start sets its
 // input-control bit and each Stop clears it - MoveForward 0x10, MoveBackward
 // 0x20, StrafeLeft 0x40, StrafeRight 0x80; AscendStop 0x2000, DescendStop
@@ -4329,6 +4329,7 @@ static int lua_BindingControl(lua_State* L) {
 static int lua_SitStandOrDescendStart(lua_State* L) {
     return lua_BindingControl<rendering::CameraController::kControlDescend, true>(L);
 }
+template <int Direction, bool Held>
 static int lua_BindingTurn(lua_State* L) {
     auto* svc = getLuaServices(L);
     if (svc && svc->setBindingTurn) svc->setBindingTurn(Direction, Held);
@@ -5954,7 +5955,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"TurnLeftStop",             lua_BindingTurn<-1, false>},
                 {"TurnRightStart",           lua_BindingTurn<1, true>},
                 {"TurnRightStop",            lua_BindingTurn<1, false>},
-                {"WoweeShowSettings",        lua_WoweeShowSettings},
                 {"MoveForwardStart",  lua_BindingControl<rendering::CameraController::kControlForward, true>},
                 {"MoveForwardStop",   lua_BindingControl<rendering::CameraController::kControlForward, false>},
                 {"MoveBackwardStart", lua_BindingControl<rendering::CameraController::kControlBackward, true>},
@@ -5966,6 +5966,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"AscendStop",        lua_BindingControl<rendering::CameraController::kControlAscend, false>},
                 {"DescendStop",       lua_BindingControl<rendering::CameraController::kControlDescend, false>},
                 {"SitStandOrDescendStart", lua_SitStandOrDescendStart},
+                {"WoweeShowSettings",        lua_WoweeShowSettings},
                 {"WoweeSettingList",         lua_WoweeSettingList},
                 {"WoweeVersion",             lua_WoweeVersion},
                 {"WoweeOpenURL",             lua_WoweeOpenURL},
@@ -7322,7 +7323,14 @@ void registerSystemLuaAPI(lua_State* L) {
                 // cosmetic and wrong in the smaller direction.
                 //
                 // Turn this on with the recorder, not before it.
-                {"IsMacClient",              lua_ReturnFalse},
+                // nil, 0x00510b90 - the same function the Windows build
+                // registers for IsLinuxClient.
+                {"IsMacClient",              lua_ReturnNil},
+                {"IsLinuxClient",            lua_ReturnNil},
+                // IsWindowsClient() (0x004dce40): 1. IsDebugBuild()
+                // (0x0050fe80): false.
+                {"IsWindowsClient", [](lua_State* L) -> int { lua_pushnumber(L, 1); return 1; }},
+                {"IsDebugBuild",             lua_ReturnFalse},
                 // GameMovieFinished() (0x0051d590 -> 0x00518870): only while a
                 // movie plays (0x00bd0800), which none does here -
                 // SMSG_TRIGGER_MOVIE is answered with CMSG_COMPLETE_MOVIE at
@@ -8177,6 +8185,23 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, gh ? gh->getHonorPoints() : 0);
             lua_pushnumber(L, 75000);
             return 2;
+        }},
+                // GetMaxArenaCurrency() (0x005d6ff0): 10000.
+                {"GetMaxArenaCurrency", [](lua_State* L) -> int { lua_pushnumber(L, 10000); return 1; }},
+                // GetDamageBonusStat() (0x0051afb0): the player's class row in
+                // ChrClasses, its second column + 1; 0 without one.
+                {"GetDamageBonusStat", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            auto* am = gh ? gh->services().assetManager : nullptr;
+            double stat = 0;
+            if (am && am->isInitialized() && gh->getPlayerClass() != 0) {
+                auto classes = am->loadDBCOptional("ChrClasses.dbc");
+                const int32_t row = classes && classes->isLoaded() && classes->getFieldCount() >= 2
+                                        ? classes->findRecordById(gh->getPlayerClass()) : -1;
+                if (row >= 0) stat = static_cast<double>(classes->getInt32(static_cast<uint32_t>(row), 1)) + 1;
+            }
+            lua_pushnumber(L, stat);
+            return 1;
         }},
                 {"GetArenaCurrency", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
