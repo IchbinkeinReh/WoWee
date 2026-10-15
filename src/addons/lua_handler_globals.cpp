@@ -1,4 +1,5 @@
 #include "addons/lua_handler_globals.hpp"
+#include "addons/lua_taint.hpp"
 
 #include <cstring>
 
@@ -64,8 +65,13 @@ void setLegacyHandlerGlobals(bool on) { gLegacyHandlerGlobals = on; }
 bool legacyHandlerGlobals() { return gLegacyHandlerGlobals; }
 
 int pcallScript(lua_State* L, const char* script, int nargs, int errfunc) {
+    // A handler runs secure to begin with (0x0048ec10) and then tainted by
+    // whoever set it (0x00819ea0) - which is the taint its function value
+    // carries, SetScript having given it the setter's.
     if (!gLegacyHandlerGlobals || nargs < 1)
-        return lua_pcall(L, nargs, 0, errfunc);
+        return taint::pcallHandler(L, nargs, 0, errfunc);
+    const int record = lua_gettaintof(L, lua_gettop(L) - nargs);
+    taint::Scope outer(0);
 
     const int selfIdx = lua_gettop(L) - nargs + 1;
     // OnEvent alone puts the event name before the payload; every other
@@ -85,9 +91,14 @@ int pcallScript(lua_State* L, const char* script, int nargs, int errfunc) {
     // back. A client before 3.0 left the higher argN wherever the last event
     // had left them, and a body written against one reads no further than the
     // count its own event carries.
+    // The globals themselves are set secure and taint nothing, as 0x00819ea0
+    // sets them with the scope closed.
+    int rc = 0;
+    const int base = gHandlerDepth * kHandlerSaveSlots;
+    {
+    taint::Quiet quiet;
     pushSaveTable(L);
     const int save = lua_gettop(L);
-    const int base = gHandlerDepth * kHandlerSaveSlots;
     rawGetGlobal(L, "this");
     lua_rawseti(L, save, base + 1);
     if (isEvent) {
@@ -111,12 +122,19 @@ int pcallScript(lua_State* L, const char* script, int nargs, int errfunc) {
         lua_setglobal(L, kHandlerArgNames[i]);
     }
 
+    }
+
     ++gHandlerDepth;
-    const int rc = lua_pcall(L, nargs, 0, errfunc);
+    {
+        taint::Scope inner(record);
+        taint::adoptArguments(L, nargs, record);
+        rc = lua_pcall(L, nargs, 0, errfunc);
+    }
     --gHandlerDepth;
 
     // Above whatever pcall left - nothing on success, the error on failure -
     // and popped again, so a caller still finds its error at the top.
+    taint::Quiet quiet;
     pushSaveTable(L);
     const int back = lua_gettop(L);
     lua_rawgeti(L, back, base + 1);
@@ -135,23 +153,43 @@ int pcallScript(lua_State* L, const char* script, int nargs, int errfunc) {
 
 int lua_WoweeFireOnLoad(lua_State* L) {
     if (!lua_istable(L, 1)) return 0;
-    lua_getfield(L, 1, "__scripts");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
-    lua_getfield(L, -1, "OnLoad");
-    if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return 0; }
-    lua_remove(L, -2);                    // __scripts, leaving the handler
+    {
+        // Fetched the way the client holds it, as a reference: reading the
+        // handler out of the table must not taint the file being loaded.
+        taint::Quiet quiet;
+        lua_getfield(L, 1, "__scripts");
+        if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
+        lua_getfield(L, -1, "OnLoad");
+        if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return 0; }
+        lua_remove(L, -2);                // __scripts, leaving the handler
+    }
     lua_pushvalue(L, 1);                  // self
     if (!gLegacyHandlerGlobals) {
-        lua_call(L, 1, 0);
+        // 0x00493230 runs it through 0x0048ec10 like any other script. A
+        // pcall so the taint is put back before a raise goes on up - it is
+        // raised again, because an OnLoad that raises has always taken the
+        // rest of its file with it.
+        if (taint::pcallHandler(L, 1, 0, 0) != 0) return lua_error(L);
         return 0;
     }
     // The saved value rides on the stack below the call rather than anywhere it
     // would have to be cleaned up, because a raise here does not return.
-    rawGetGlobal(L, "this");
-    lua_insert(L, -3);                    // beneath the handler and its argument
-    lua_pushvalue(L, 1);
-    lua_setglobal(L, "this");
-    lua_call(L, 1, 0);
+    {
+        taint::Quiet quiet;
+        rawGetGlobal(L, "this");
+        lua_insert(L, -3);                // beneath the handler and its argument
+        lua_pushvalue(L, 1);
+        lua_setglobal(L, "this");
+    }
+    if (taint::pcallHandler(L, 1, 0, 0) != 0) {
+        {
+            taint::Quiet quiet;
+            lua_pushvalue(L, -2);
+            lua_setglobal(L, "this");
+        }
+        return lua_error(L);
+    }
+    taint::Quiet quiet;
     lua_setglobal(L, "this");             // what was saved, still on the stack
     return 0;
 }

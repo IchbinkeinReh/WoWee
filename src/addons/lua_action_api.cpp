@@ -2,6 +2,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/item_text.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_taint.hpp"
 #include "addons/lua_api_registrations.hpp"
 // For fireEvent: paging has to reach the frames as well as the addons.
 #include "addons/lua_engine.hpp"
@@ -2158,12 +2159,23 @@ static int lua_RunBinding(lua_State* L) {
     const std::string command = luaL_checkstring(L, 1);
     const char* keystate = lua_isnoneornil(L, 2) ? "down" : luaL_checkstring(L, 2);
 
-    lua_getglobal(L, "__WoweeBindingScripts");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
-    lua_getfield(L, -1, command.c_str());
-    if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return 0; }
+    // Run under the caller's own taint (0x0055fad0 hands 0x0055f860 the
+    // running one), the script found without tainting it further.
+    const int caller = taint::current();
+    {
+        taint::Quiet quiet;
+        lua_getglobal(L, "__WoweeBindingScripts");
+        if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
+        lua_getfield(L, -1, command.c_str());
+        if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return 0; }
+    }
     lua_pushstring(L, keystate);
-    if (lua_pcall(L, 1, 0, 0) != 0) {
+    int rc = 0;
+    {
+        taint::Scope binding(caller);
+        rc = lua_pcall(L, 1, 0, 0);
+    }
+    if (rc != 0) {
         LOG_WARNING("Binding ", command, " failed: ",
                     lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
         lua_pop(L, 1);

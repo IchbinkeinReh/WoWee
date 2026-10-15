@@ -376,6 +376,14 @@ struct Emitter {
         result.lua += inner.result.lua;
         for (auto& w : inner.result.warnings) result.warnings.push_back(w);
         line("end");
+        wrapTemplate(name);
+    }
+
+    /// Inherited under the taint of the file defining it, whoever inherits
+    /// it (0x004932c0) - see lua_WoweeTemplate.
+    void wrapTemplate(const std::string& name) {
+        line("__WoweeTemplates[" + quote(name) + "] = __WoweeTemplate(__WoweeTemplates[" +
+             quote(name) + "])");
     }
 
     /// Button art declared as its own element rather than inside a Layer.
@@ -846,6 +854,7 @@ struct Emitter {
             result.lua += inner.result.lua;
             for (auto& w : inner.result.warnings) result.warnings.push_back(w);
             line("end");
+            wrapTemplate(name);
             return {};
         }
 

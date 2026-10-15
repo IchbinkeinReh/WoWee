@@ -23,6 +23,7 @@
 #include "ui/settings_schema.hpp"
 #include "imgui.h"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
 #include "ui/display_modes.hpp"
 #include "ui/fullscreen_scale.hpp"
@@ -4112,25 +4113,18 @@ static int lua_UnitFactionGroup(lua_State* L) {
     return 2;
 }
 
-// RunScript(body) → compiles and runs Lua, the way /script and every macro do
+// RunScript(body) → compiles and runs Lua, the way /script does (0x00510b30)
 //
-// A compile failure is reported the same way a runtime one is, because to
-// whoever typed it they are the same mistake. The error goes through the normal
-// path, which shows it without telling any script about it.
+// Under the taint every /run carries (PTR_DAT_00ac804c), whoever calls it, so
+// what it does is refused as MACRO_ACTION_FORBIDDEN rather than run as the
+// interface's own code. A compile failure is reported the same way a runtime
+// one is, through the error handler (0x00819210), because to whoever typed it
+// they are the same mistake.
 static int lua_RunScript(lua_State* L) {
-    const char* body = luaL_optstring(L, 1, nullptr);
+    if (!lua_isstring(L, 1)) return 0;
+    const char* body = lua_tostring(L, 1);
     if (!body || !*body) return 0;
-    if (luaL_loadstring(L, body) != 0) {
-        const char* err = lua_tostring(L, -1);
-        LOG_WARNING("RunScript would not compile: ", err ? err : "?");
-        lua_pop(L, 1);
-        return 0;
-    }
-    if (lua_pcall(L, 0, 0, 0) != 0) {
-        const char* err = lua_tostring(L, -1);
-        LOG_WARNING("RunScript failed: ", err ? err : "?");
-        lua_pop(L, 1);
-    }
+    taint::execute(L, body, body, taint::macro());
     return 0;
 }
 

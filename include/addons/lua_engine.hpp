@@ -41,6 +41,10 @@ public:
     bool executeFile(const std::string& path);
     bool executeString(const std::string& code);
 
+    /// Run typed text the way RunScript does (0x00819210): tainted by
+    /// `taint`, with a failure handed to the interface's error handler.
+    void runScriptAs(const std::string& code, int taint);
+
     /// Run a Lua expression and answer whether it came out true.
     ///
     /// executeString cannot say anything back, and some decisions belong to

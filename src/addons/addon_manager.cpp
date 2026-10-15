@@ -1,5 +1,6 @@
 #include "addons/addon_manager.hpp"
 #include "addons/lua_handler_globals.hpp"
+#include "addons/lua_taint.hpp"
 #include "addons/addon_lua_snippets.hpp"
 #include "addons/lua_api_registrations.hpp"
 
@@ -376,6 +377,9 @@ void AddonManager::loadAllAddons() {
                 static_cast<float>(luaServices_.window->getWidth()),
                 static_cast<float>(luaServices_.window->getHeight()));
         }
+        // The original interface is Blizzard's, and secure: loaded with no
+        // taint, as is everything this client runs in its place below.
+        taint::Scope secure(0, 0);
         luaEngine_.setUiSoundsSuppressed(true);
         loadFrameXml(frameXmlDir_);
         luaEngine_.setUiSoundsSuppressed(false);
@@ -1602,46 +1606,67 @@ bool AddonManager::loadXmlFile(const std::string& path, int depth) {
     return ok;
 }
 
+/// What an addon's code is tainted by: its own name, unless it is one of
+/// Blizzard's.
+///
+/// The client decides by signature (0x005f79a0: an addon whose .toc 0x008165e0
+/// verifies as Blizzard-signed has +0x24 cleared, and is loaded secure). The
+/// signatures live in the game's archives and do not survive extraction, so
+/// here the name stands in for them: Blizzard ships its own interface addons
+/// as Blizzard_*, and only those are signed.
+static int addonTaint(const TocFile& addon) {
+    if (addon.addonName.rfind("Blizzard_", 0) == 0) return 0;
+    return taint::intern(addon.addonName);
+}
+
 bool AddonManager::loadAddon(const TocFile& addon) {
-    // Load SavedVariables before addon code (so globals are available at load time)
-    auto savedVars = addon.getSavedVariables();
-    if (!savedVars.empty()) {
-        std::string svPath = getSavedVariablesPath(addon);
-        luaEngine_.loadSavedVariables(svPath);
-        LOG_DEBUG("AddonManager: loaded saved variables for '", addon.addonName, "'");
-    }
-    // Load per-character SavedVariables
-    auto savedVarsPC = addon.getSavedVariablesPerCharacter();
-    if (!savedVarsPC.empty()) {
-        std::string svpcPath = getSavedVariablesPerCharacterPath(addon);
-        if (!svpcPath.empty()) {
-            luaEngine_.loadSavedVariables(svpcPath);
-            LOG_DEBUG("AddonManager: loaded per-character saved variables for '", addon.addonName, "'");
-        }
-    }
-
+    // Everything the addon's files do runs under its taint, and so does every
+    // object they make (0x005f80b0: DAT_00d4139c and DAT_00d413ac both set to
+    // the addon's name for an insecure one, 0 for Blizzard's) - its saved
+    // variables included. ADDON_LOADED goes out after, secure again.
     bool success = true;
-    for (const auto& filename : addon.files) {
-        std::string lower = filename;
-        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
-        // Through resolvePath, because a .toc names its files the way Blizzard
-        // wrote them - Blizzard_TalentUI.xml - and this install has them in
-        // lower case. Concatenating the two finds nothing on a case-sensitive
-        // filesystem, which is every one of the Blizzard load-on-demand addons.
-        const fs::path resolved = resolvePath(fs::path(addon.basePath), filename);
-        const std::string fullPath =
-            resolved.empty() ? (addon.basePath + "/" + filename) : resolved.string();
-
-        if (lower.size() >= 4 && lower.substr(lower.size() - 4) == ".lua") {
-            if (!luaEngine_.executeFile(fullPath)) {
-                LOG_ERROR("AddonManager: '", addon.addonName, "' failed on ", filename);
-                success = false;
-            } else {
-                LOG_INFO("AddonManager: ran ", addon.addonName, "/", filename);
+    {
+        const int loadTaint = addonTaint(addon);
+        taint::Scope scope(loadTaint, loadTaint);
+        // Load SavedVariables before addon code (so globals are available at load time)
+        auto savedVars = addon.getSavedVariables();
+        if (!savedVars.empty()) {
+            std::string svPath = getSavedVariablesPath(addon);
+            luaEngine_.loadSavedVariables(svPath);
+            LOG_DEBUG("AddonManager: loaded saved variables for '", addon.addonName, "'");
+        }
+        // Load per-character SavedVariables
+        auto savedVarsPC = addon.getSavedVariablesPerCharacter();
+        if (!savedVarsPC.empty()) {
+            std::string svpcPath = getSavedVariablesPerCharacterPath(addon);
+            if (!svpcPath.empty()) {
+                luaEngine_.loadSavedVariables(svpcPath);
+                LOG_DEBUG("AddonManager: loaded per-character saved variables for '", addon.addonName, "'");
             }
-        } else if (lower.size() >= 4 && lower.substr(lower.size() - 4) == ".xml") {
-            if (!loadXmlFile(fullPath, 0)) success = false;
+        }
+
+        for (const auto& filename : addon.files) {
+            std::string lower = filename;
+            for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            // Through resolvePath, because a .toc names its files the way Blizzard
+            // wrote them - Blizzard_TalentUI.xml - and this install has them in
+            // lower case. Concatenating the two finds nothing on a case-sensitive
+            // filesystem, which is every one of the Blizzard load-on-demand addons.
+            const fs::path resolved = resolvePath(fs::path(addon.basePath), filename);
+            const std::string fullPath =
+                resolved.empty() ? (addon.basePath + "/" + filename) : resolved.string();
+
+            if (lower.size() >= 4 && lower.substr(lower.size() - 4) == ".lua") {
+                if (!luaEngine_.executeFile(fullPath)) {
+                    LOG_ERROR("AddonManager: '", addon.addonName, "' failed on ", filename);
+                    success = false;
+                } else {
+                    LOG_INFO("AddonManager: ran ", addon.addonName, "/", filename);
+                }
+            } else if (lower.size() >= 4 && lower.substr(lower.size() - 4) == ".xml") {
+                if (!loadXmlFile(fullPath, 0)) success = false;
+            }
         }
     }
 
@@ -1721,11 +1746,25 @@ bool AddonManager::loadAddOnByName(const std::string& name, std::string& reason)
 }
 
 bool AddonManager::runScript(const std::string& code) {
-    return luaEngine_.executeString(code);
+    // What the player typed after /run or /script: SlashCmdList.SCRIPT hands
+    // it to RunScript, which runs it under the /run taint (0x00510b30), so
+    // anything protected it reaches is MACRO_ACTION_FORBIDDEN.
+    //
+    // Typed and sent with Enter, so inside the hardware event the chat box's
+    // OnEnterPressed is run in (0x00967760) - what lets a typed /run do what
+    // a click could.
+    if (!luaEngine_.isInitialized()) return false;
+    taint::HardwareEvent hardware;
+    luaEngine_.runScriptAs(code, taint::macro());
+    return true;
 }
 
 void AddonManager::runInterfaceCommand(const std::string& lua) {
     if (lua.empty()) return;
+    // The client acting through its own interface - opening a panel off a
+    // key, a click on a native button - which is Blizzard's code and secure
+    // whatever was running last, as the client's own calls into Lua are.
+    taint::Scope secure(0);
     if (!luaEngine_.executeString(lua)) {
         LOG_WARNING("interface command failed: ", lua);
     }
@@ -1733,6 +1772,7 @@ void AddonManager::runInterfaceCommand(const std::string& lua) {
 
 bool AddonManager::interfaceCommandBoolean(const std::string& expression) {
     if (expression.empty()) return false;
+    taint::Scope secure(0);   // as runInterfaceCommand
     return luaEngine_.evaluateBoolean(expression);
 }
 

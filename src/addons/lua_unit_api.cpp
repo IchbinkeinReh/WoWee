@@ -6,6 +6,7 @@
 #include "game/pvp_flags.hpp"
 #include "rendering/selection_circle.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_taint.hpp"
 #include <cstdlib>
 
 namespace wowee::addons {
@@ -1322,9 +1323,13 @@ static int lua_PetCanBeDismissed(lua_State* L) {
 // Abandoning is a hunter's pet, and nothing here knows which kind it has yet.
 static int lua_PetCanBeAbandoned(lua_State* L) { return luaReturnFalse(L); }
 
+// InCombatLockdown() (0x00511cc0): 1 while CGGameUI +0x124c is clear, nil
+// otherwise. Not the same question as being in combat: the lockdown starts
+// only once PLAYER_REGEN_DISABLED has been heard and ends before
+// PLAYER_REGEN_ENABLED goes out (0x00524600, see LuaEngine::fireEvent).
 static int lua_InCombatLockdown(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->isInCombat());
+    if (taint::combatLockdown()) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
     return 1;
 }
 

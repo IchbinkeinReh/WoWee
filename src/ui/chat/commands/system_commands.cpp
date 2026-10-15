@@ -72,8 +72,9 @@ public:
             // ask for it, and let the frame take the interface down as the
             // client does (0x0052af40) - PLAYER_LEAVING_WORLD and
             // PLAYER_LOGOUT first, then the load and its login events. Doing
-            // the reload here skipped the leaving half.
-            am->runScript("ReloadUI()");
+            // the reload here skipped the leaving half. Secure, as that
+            // slash command's own handler is, rather than as typed /run text.
+            am->runInterfaceCommand("ReloadUI()");
         } else {
             game::MessageChatData rlMsg;
             rlMsg.type = game::ChatType::SYSTEM;

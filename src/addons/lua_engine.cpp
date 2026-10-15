@@ -23,6 +23,7 @@
 #include "rendering/minimap_zoom.hpp"
 #include <cmath>
 #include "addons/lua_handler_globals.hpp"
+#include "addons/lua_taint.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "addons/toc_parser.hpp"
 #include "addons/button_label_lua.hpp"
@@ -271,17 +272,29 @@ static int lua_Frame_UnregisterEvent(lua_State* L) {
 static int lua_Frame_SetScript(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const char* scriptType = luaL_checkstring(L, 2);
-    // arg 3 can be function or nil
-    lua_getfield(L, 1, "__scripts");
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        lua_newtable(L);
-        lua_pushvalue(L, -1);
-        lua_setfield(L, 1, "__scripts");
-    }
+    // The script is held with the taint of whoever set it (0x0049edb0 keeps
+    // the two side by side), and that is what it runs under - see
+    // pcallScript. Read first, so a handler an insecure caller hands over
+    // taints the setter as reading it does in the client.
     lua_pushvalue(L, 3);
-    lua_setfield(L, -2, scriptType);
-    lua_pop(L, 1);
+    const int setter = taint::current();
+    // arg 3 can be function or nil
+    {
+        // The table of them is the client's C-side record, not anybody's
+        // value: made and reached without tainting or being tainted.
+        taint::Quiet quiet;
+        lua_getfield(L, 1, "__scripts");
+        if (lua_isnil(L, -1)) {
+            lua_pop(L, 1);
+            lua_newtable(L);
+            lua_pushvalue(L, -1);
+            lua_setfield(L, 1, "__scripts");
+        }
+        lua_pushvalue(L, -2);
+        lua_settaintof(L, -1, setter);
+        lua_setfield(L, -2, scriptType);
+        lua_pop(L, 2);
+    }
 
     // Track frames with OnUpdate in __WoweeOnUpdateFrames
     //
@@ -313,6 +326,60 @@ static int lua_Frame_SetScript(lua_State* L) {
     return 0;
 }
 
+// Frame method: frame:HookScript("handler", func) (0x0049edb0)
+//
+// With nothing set it is SetScript. Otherwise the script becomes the wrapper
+// hooksecurefunc uses (0x00817050): the original runs first under its own
+// taint, then the hook under the hooker's, which keeps nothing - so an addon
+// hooking a secure frame's OnClick leaves the click secure. A closure that
+// called both, made by the hooking addon, ran the original tainted too.
+static int lua_Frame_HookScript(lua_State* L) {
+    if (!lua_istable(L, 1) || !lua_isstring(L, 2) || lua_type(L, 3) != LUA_TFUNCTION) {
+        const char* who = "<unnamed>";
+        if (lua_istable(L, 1)) {
+            lua_getfield(L, 1, "__name");
+            if (const char* n = lua_tostring(L, -1)) who = n;
+        }
+        return luaL_error(L, "Usage: %s:HookScript(\"type\", function)", who);
+    }
+    lua_settop(L, 3);
+    const int hooker = taint::current();
+    int record = 0;
+    bool set = false;
+    {
+        taint::Quiet quiet;
+        lua_getfield(L, 1, "__scripts");
+        if (lua_istable(L, -1)) {
+            lua_pushvalue(L, 2);
+            lua_rawget(L, -2);
+            set = lua_isfunction(L, -1);
+            record = lua_gettaintof(L, -1);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    if (!set) {
+        // 0x0049edb0 sets it with the running taint, as SetScript does.
+        lua_pushcfunction(L, lua_Frame_SetScript);
+        lua_insert(L, 1);
+        lua_call(L, 3, 0);
+        return 0;
+    }
+    taint::Quiet quiet;
+    lua_getfield(L, 1, "__scripts");                   // 4
+    lua_pushvalue(L, 2);                               // 5 the name
+    lua_pushvalue(L, 2);
+    lua_rawget(L, 4);                                  // 6 the original
+    lua_settaintof(L, 6, record);
+    lua_pushvalue(L, 3);                               // 7 the hook
+    lua_settaintof(L, 7, hooker);
+    lua_pushcclosure(L, taint::lua_SecureHookWrapper, 2);
+    lua_settaintof(L, -1, record);
+    lua_rawset(L, 4);
+    lua_settop(L, 0);
+    return 0;
+}
+
 // Frame method: frame:GetScript("handler")
 static int lua_Frame_GetScript(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -329,9 +396,16 @@ static int lua_Frame_GetScript(lua_State* L) {
 // Frame method: frame:GetName()
 static int lua_Frame_GetName(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    lua_getfield(L, 1, "__name");
+    {
+        taint::Quiet quiet;
+        lua_getfield(L, 1, "__name");
+    }
+    // The client's name is a C string, pushed fresh: the addon that made the
+    // frame does not taint Blizzard code asking a frame its name.
+    lua_settaintof(L, -1, taint::current());
     return 1;
 }
+
 
 
 
@@ -473,6 +547,77 @@ void recordScriptError(lua_State* L, const char* script) {
     LOG_ERROR("LuaEngine: ", msg);
     if (auto* e = engineFrom(L)) e->noteLuaError(msg);
     lua_pop(L, 1);
+}
+
+// frame:Click([button[, down]]) - the frame's own PreClick, OnClick and
+// PostClick, as a real press runs them. FrameXML activates buttons this way -
+// a keybinding that presses an action button, a dropdown that picks its
+// default, /click. Each runs as a script does (0x0048ec10): under whoever set
+// it, and leaving the caller's taint as it was - so an addon clicking a
+// secure button runs the button's secure handler, and Blizzard code clicking
+// an addon's is not tainted by it.
+//
+// A scripted click flips a check button exactly as a real one does, so the
+// two paths cannot disagree about what the button now says. The scripts are
+// read first because a frame with none is not clicked at all - and then
+// neither is it toggled.
+static int lua_Frame_Click(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const char* button = luaL_optstring(L, 2, "LeftButton");
+    const bool hasDown = !lua_isnoneornil(L, 3);
+    const bool down = lua_toboolean(L, 3) != 0;
+    taint::Quiet quiet;
+    lua_getfield(L, 1, "__scripts");
+    const bool hasScripts = lua_istable(L, -1);
+    lua_pop(L, 1);
+    if (!hasScripts) return 0;
+    if (auto* w = widgetOf(L, 1); w && w->enabled && w->objectType == "CheckButton")
+        w->checked = !w->checked;
+    for (const char* script : {"PreClick", "OnClick", "PostClick"}) {
+        lua_getfield(L, 1, "__scripts");
+        lua_getfield(L, -1, script);
+        if (!lua_isfunction(L, -1)) { lua_pop(L, 2); continue; }
+        lua_pushvalue(L, 1);
+        lua_pushstring(L, button);
+        if (hasDown) lua_pushboolean(L, down);
+        else lua_pushnil(L);
+        if (pcallScript(L, script, 3, 0) != 0) recordScriptError(L, script);
+        lua_pop(L, 1);   // __scripts
+    }
+    return 0;
+}
+
+// A template, inherited (0x004932c0): built into the frame under the taint
+// of the file that defined it - DAT_00d4139c and DAT_00d413ac both - whoever
+// is building the frame. So a Blizzard template inherited by an addon's frame
+// sets secure scripts, and an addon's template taints only what it builds.
+static int lua_TemplateApply(lua_State* L) {
+    const int definer = static_cast<int>(lua_tointeger(L, lua_upvalueindex(2)));
+    const int n = lua_gettop(L);
+    {
+        taint::Quiet quiet;   // reaching it taints nobody
+        lua_pushvalue(L, lua_upvalueindex(1));
+    }
+    lua_insert(L, 1);
+    int rc = 0;
+    {
+        taint::Scope inherit(definer, definer);
+        rc = lua_pcall(L, n, LUA_MULTRET, 0);
+    }
+    if (rc != 0) return lua_error(L);   // raised on, as the plain call did
+    return lua_gettop(L);
+}
+
+// __WoweeTemplate(fn): the emitter's wrapper for every template it defines,
+// which remembers who defined it - the taint the function was made under.
+static int lua_WoweeTemplate(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+    const int definer = lua_gettaintof(L, 1);
+    lua_pushvalue(L, 1);
+    lua_pushinteger(L, definer);
+    lua_pushcclosure(L, lua_TemplateApply, 2);
+    lua_settaintof(L, -1, definer);
+    return 1;
 }
 
 /// Whether the frame is shown, from the widget rather than a field beside it.
@@ -1009,7 +1154,13 @@ static int lua_Region_SetParent(lua_State* L) {
 
 static int lua_Region_GetParent(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    lua_getfield(L, 1, "__parent");
+    {
+        taint::Quiet quiet;
+        lua_getfield(L, 1, "__parent");
+    }
+    // Fresh, as the client pushes a frame out of its registry reference:
+    // whoever reparented it last does not taint the code asking.
+    lua_settaintof(L, -1, taint::current());
     return 1;
 }
 
@@ -1166,6 +1317,9 @@ static void callScriptOnTable(lua_State* L, int tableIdx, const char* script,
     // Positive indices only, which is all any caller here has: lua_absindex
     // is 5.2 and this is 5.1.
     const int abs = tableIdx;
+    // Reached as the client reaches a script, by reference: finding it taints
+    // nobody, and the caller is left as it was found (0x0048ec10).
+    taint::Quiet quiet;
     lua_getfield(L, abs, "__scripts");
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
     lua_getfield(L, -1, script);
@@ -3517,6 +3671,7 @@ int lua_Button_Enable(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w || w->enabled) return 0;
     w->enabled = true;
+    taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
         lua_getfield(L, -1, "OnEnable");
@@ -3534,6 +3689,7 @@ int lua_Button_Disable(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w || !w->enabled) return 0;
     w->enabled = false;
+    taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
         lua_getfield(L, -1, "OnDisable");
@@ -3570,6 +3726,7 @@ int lua_Button_IsEnabled(lua_State* L) {
 /// bag buttons' item animation and nothing else.
 static void queueAnimFinished(lua_State* L, int frameIndex) {
     const int abs = frameIndex > 0 ? frameIndex : lua_gettop(L) + frameIndex + 1;
+    taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, abs, "__scripts");
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
     lua_getfield(L, -1, "OnAnimFinished");
@@ -3608,6 +3765,7 @@ static bool ancestorsShown(lua_State* L, const wowee::ui::Widget* w) {
 /// going round by widget id the way LuaEngine::frameHasScript has to.
 static bool frameScriptSet(lua_State* L, int frameIndex, const char* name) {
     const int abs = frameIndex > 0 ? frameIndex : lua_gettop(L) + frameIndex + 1;
+    taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, abs, "__scripts");
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
     lua_getfield(L, -1, name);
@@ -3632,6 +3790,7 @@ static bool frameScriptSet(lua_State* L, int frameIndex, const char* name) {
 /// order rather than a workaround for that one function.
 static void fireOnShowNow(lua_State* L, int frameIndex, wowee::ui::Widget* w) {
     const int abs = frameIndex > 0 ? frameIndex : lua_gettop(L) + frameIndex + 1;
+    taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, abs, "__scripts");
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
     lua_getfield(L, -1, "OnShow");
@@ -4731,6 +4890,7 @@ int lua_Frame_GetChildren(lua_State* L) {
         lua_pushinteger(L, static_cast<lua_Integer>(childId));
         lua_rawget(L, registry);
         if (lua_istable(L, -1)) {
+            lua_settaintof(L, -1, taint::current());   // fresh, as GetParent
             ++pushed;
         } else {
             // A widget with no Lua table behind it is not a child anyone can
@@ -4909,6 +5069,7 @@ int lua_StatusBar_SetValue(lua_State* L) {
     // every update - which also stops a handler that sets its own bar from
     // recurring.
     if (changed) {
+        taint::Quiet quiet;   // see callScriptOnTable
         lua_getfield(L, 1, "__scripts");
         if (lua_istable(L, -1)) {
             lua_getfield(L, -1, "OnValueChanged");
@@ -4958,6 +5119,7 @@ int lua_ColorSelect_SetColorRGB(lua_State* L) {
     if (w->pickerHSV[1] <= 0.0f) w->pickerHSV[0] = hueBefore;
     if (!changed) return 0;
 
+    taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
         lua_getfield(L, -1, "OnColorSelect");
@@ -5821,6 +5983,11 @@ static int lua_CreateFrame(lua_State* L) {
     // Applied after the metatable, so the template's body can call methods on
     // what it is given.
     if (const char* templates = lua_isstring(L, 4) ? lua_tostring(L, 4) : nullptr) {
+        // Found and applied without tainting the caller, and run under the
+        // taint of whoever defined the template (0x004932c0) - which the
+        // emitter's own templates also see to themselves (__WoweeTemplate);
+        // this covers the ones this client defines in Lua.
+        taint::Quiet quiet;
         const std::string list(templates);
         size_t start = 0;
         while (start <= list.size()) {
@@ -5836,8 +6003,14 @@ static int lua_CreateFrame(lua_State* L) {
                 if (lua_istable(L, -1)) {
                     lua_getfield(L, -1, one.c_str());
                     if (lua_isfunction(L, -1)) {
+                        const int definer = lua_gettaintof(L, -1);
                         lua_pushvalue(L, -3);            // the frame
-                        if (lua_pcall(L, 1, 0, 0) != 0) {
+                        int rc = 0;
+                        {
+                            taint::Scope inherit(definer, definer);
+                            rc = lua_pcall(L, 1, 0, 0);
+                        }
+                        if (rc != 0) {
                             // Once per template. A template that fails fails
                             // for every frame using it, and the loop this very
                             // failure causes then repeats it: one run wrote the
@@ -5909,6 +6082,7 @@ static int lua_CreateFrame(lua_State* L) {
         // frames Lua builds, and OptionsList_OnLoad builds a list of them:
         // their OnLoad is what gives each button the .text it is asked for
         // moments later.
+        taint::Quiet quietOnLoad;   // see callScriptOnTable
         lua_getfield(L, -1, "__scripts");
         if (lua_istable(L, -1)) {
             lua_getfield(L, -1, "OnLoad");
@@ -5948,11 +6122,20 @@ LuaEngine::~LuaEngine() {
 bool LuaEngine::initialize() {
     if (L_) return true;
 
+    // Every state starts secure, out of combat lockdown and outside a
+    // hardware event - the taint is the process's, as the client's is, and a
+    // reload must not inherit what the last interface left running.
+    taint::reset();
     L_ = luaL_newstate();
     if (!L_) {
         LOG_ERROR("LuaEngine: failed to create Lua state");
         return false;
     }
+    // Where 0x00513530 reports a refused protected call.
+    taint::setEventSink([this](const std::string& event,
+                               const std::vector<std::string>& eventArgs) {
+        fireEvent(event, eventArgs);
+    });
 
     // Open safe standard libraries (no io, os, debug, package)
     luaopen_base(L_);
@@ -6008,8 +6191,10 @@ void LuaEngine::shutdown() {
         // client's own windows can ask what FrameXML is carrying, and calling
         // through it after the close would be reading a freed state.
         ui::frameXmlSetCursorBridge(nullptr, nullptr);
+        taint::setEventSink(nullptr);
         lua_close(L_);
         L_ = nullptr;
+        taint::reset();
         // The frames go with the state that built them. Without this the next
         // load appends a second copy of every frame to the first and both draw
         // - which is what a logout followed by another login did, since that
@@ -6049,6 +6234,12 @@ void LuaEngine::setLuaServices(const LuaServices& services) {
 
 
 void LuaEngine::registerCoreAPI() {
+    // The taint vocabulary - issecure, issecurevariable, forceinsecure,
+    // securecall, hooksecurefunc - is the client's own C (0x00816da0 to
+    // 0x00817170), and first, because bootstrap code below hooks with it.
+    taint::registerLuaApi(L_);
+    lua_register(L_, "__WoweeTemplate", lua_WoweeTemplate);
+
     // Override print() to go to chat
     lua_pushcfunction(L_, lua_wow_print);
     lua_setglobal(L_, "print");
@@ -6250,6 +6441,8 @@ void LuaEngine::registerCoreAPI() {
         {"UnregisterEvent", lua_Frame_UnregisterEvent},
         {"UnregisterAllEvents", lua_Frame_UnregisterAllEvents},
         {"SetScript",       lua_Frame_SetScript},
+        {"HookScript",      lua_Frame_HookScript},
+        {"Click",           lua_Frame_Click},
         {"GetScript",       lua_Frame_GetScript},
         {"GetName",         lua_Frame_GetName},
         {"Show",            lua_Region_Show},
@@ -6592,26 +6785,6 @@ void LuaEngine::registerCoreAPI() {
         // false would have the interface offer a scroll-to-bottom button that
         // does nothing.
         "function mt:AtBottom() return true end\n"
-        // Click() runs the frame's own OnClick, with the same PreClick and
-        // PostClick around it that a real press produces. FrameXML activates
-        // buttons this way - a keybinding that presses an action button, a
-        // dropdown that picks its default - and it answered as a no-op, so
-        // none of those did anything.
-        // A scripted click flips a check button exactly as a real one does, so
-        // the two paths cannot disagree about what the button now says. The
-        // scripts are read first because a frame with none is not clicked at
-        // all - and then neither is it toggled.
-        "function mt:Click(button, down)\n"
-        "    local s = rawget(self, '__scripts')\n"
-        "    if not s then return end\n"
-        "    button = button or 'LeftButton'\n"
-        "    if self:GetObjectType() == 'CheckButton' and self:IsEnabled() then\n"
-        "        self:SetChecked(not self:GetChecked())\n"
-        "    end\n"
-        "    if s.PreClick then s.PreClick(self, button, down) end\n"
-        "    if s.OnClick then s.OnClick(self, button, down) end\n"
-        "    if s.PostClick then s.PostClick(self, button, down) end\n"
-        "end\n"
     );
 
     // Animations. Written in Lua because it is almost entirely bookkeeping -
@@ -6894,14 +7067,6 @@ void LuaEngine::registerCoreAPI() {
         // reordered, clicking a unit frame would have stopped targeting and
         // right-clicking would have stopped opening a menu, with nothing to
         // say why.
-        "function mt:HookScript(scriptType, fn)\n"
-        "    local orig = self.__scripts and self.__scripts[scriptType]\n"
-        "    if orig then\n"
-        "        self:SetScript(scriptType, function(...) orig(...); fn(...) end)\n"
-        "    else\n"
-        "        self:SetScript(scriptType, fn)\n"
-        "    end\n"
-        "end\n"
         // IsMouseOver is not here. It was, answering a flat false, and it sat
         // among these no-ops as though it were one - but there is a real
         // implementation of it in C, registered earlier and therefore losing.
@@ -7569,25 +7734,6 @@ void LuaEngine::registerCoreAPI() {
         // ChatFrame1's own OnLoad both reassign DEFAULT_CHAT_FRAME. See the
         // redirect in AddonManager::loadFrameXml for what it is kept for.
         "__WoweeClientChatAddMessage = DEFAULT_CHAT_FRAME.AddMessage\n"
-    );
-
-    // hooksecurefunc - hook a function to run additional code after it
-    bootstrap(
-        "function hooksecurefunc(tblOrName, nameOrFunc, funcOrNil)\n"
-        "    local tbl, name, hook\n"
-        "    if type(tblOrName) == 'table' then\n"
-        "        tbl, name, hook = tblOrName, nameOrFunc, funcOrNil\n"
-        "    else\n"
-        "        tbl, name, hook = _G, tblOrName, nameOrFunc\n"
-        "    end\n"
-        "    local orig = tbl[name]\n"
-        "    if type(orig) ~= 'function' then return end\n"
-        "    tbl[name] = function(...)\n"
-        "        local r = {orig(...)}\n"
-        "        hook(...)\n"
-        "        return unpack(r)\n"
-        "    end\n"
-        "end\n"
     );
 
     // LibStub - universal library version management used by Ace3 and virtually all addon libs.
@@ -8476,36 +8622,12 @@ void LuaEngine::registerCoreAPI() {
         "function geterrorhandler() return _errorHandler end\n"
         "function seterrorhandler(fn) if type(fn)=='function' then _errorHandler=fn end end\n"
         "function debugstack(start, count1, count2) return '' end\n"
-        // A name is as valid as a function here, and FrameXML mostly passes a
-        // name: UIDropDownMenu_Initialize does
-        // securecall("UIDropDownMenu_InitializeHelper", frame), and the helper
-        // is what sets UIDROPDOWNMENU_INIT_MENU and zeroes every list's
-        // numButtons. Accepting only a function meant that call did nothing at
-        // all, silently, and eight files died further on indexing what it
-        // should have set.
-        //
-        // rawget, so a name this client does not have stays nil rather than
-        // becoming the missing-API object, which is not callable as a function.
-        "function securecall(fn, ...)\n"
-        "    if type(fn) == 'string' then fn = rawget(_G, fn) end\n"
-        "    if type(fn) == 'function' then return fn(...) end\n"
-        "end\n"
         // WoW's own names for indexing the global table, which predate _G being
         // exposed and are still what a good deal of 3.3.5 code is written with.
         // Blizzard_DebugTools calls getglobal at file scope and failed to load
         // whole without it.
         "function getglobal(n) return _G[n] end\n"
         "function setglobal(n, v) _G[n] = v end\n"
-        // The rest of the taint vocabulary, which is a no-op here for the same
-        // reason issecure is: nothing in this client is tainted, so nothing
-        // needs protecting from it. Both are called for their effect and their
-        // return value respectively, and both were missing - forceinsecure at
-        // nine call sites and scrub at ten.
-        //
-        // /dump found it. DevTools_DumpCommand calls forceinsecure() on its
-        // first line, so the command raised rather than dumping - which only
-        // became reachable at all once Blizzard_DebugTools started loading.
-        "function forceinsecure() end\n"
         // scrub keeps what can cross the secure boundary and drops the rest:
         // strings, numbers and booleans pass, everything else becomes nil.
         // The count has to survive, because securehandlers.lua returns it
@@ -8523,24 +8645,6 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         // Iterating a table the secure way, which for our purposes is next.
         "SecureNext = next\n"
-        // Secure, because nothing here is tainted.
-        //
-        // These answered false, which is the opposite of the premise written
-        // above them: taint is what makes code insecure, no addon here taints
-        // anything, so every call site is secure and WoW would say so. False
-        // told the interface it was running tainted and sent it down the
-        // defensive branch everywhere.
-        //
-        // The cost was a reported bug with no error behind it.
-        // ActionButton_ShowGrid increments its counter only `if (issecure())`
-        // and shows the button only once that counter reaches one - so the
-        // empty slots of the action bar never appeared while something was on
-        // the cursor. Dragging a spell to the bar therefore had nothing to
-        // land on: the press went to MainMenuBar, which is the strip behind
-        // them and takes no drop, and the spell stayed on the cursor. Bag to
-        // bag worked the whole time, because those buttons are always shown.
-        "function issecurevariable(...) return true end\n"
-        "function issecure() return true end\n"
         // GetCVarBool wraps C-side GetCVar (registered in table) for boolean queries
         // Misc compatibility stubs
         // GetScreenWidth, GetScreenHeight, GetNumLootItems are now C functions
@@ -9012,6 +9116,22 @@ void LuaEngine::fireEvent(const std::string& eventName,
                            const std::vector<std::string>& args) {
     if (!L_) return;
 
+    // Combat lockdown is the flag these two events announce, and 0x00524600
+    // moves it on the far side of each: leaving combat lifts it before
+    // PLAYER_REGEN_ENABLED goes out, entering it locks only after every
+    // handler has heard PLAYER_REGEN_DISABLED - which is the moment an
+    // interface has to put its protected frames right before the fight.
+    struct LockdownAfter {
+        bool lock;
+        ~LockdownAfter() { if (lock) taint::setCombatLockdown(true); }
+    } lockdownAfter{eventName == "PLAYER_REGEN_DISABLED"};
+    if (eventName == "PLAYER_REGEN_ENABLED") taint::setCombatLockdown(false);
+
+    // The event and its payload go out secure, and finding who is listening
+    // taints nothing (0x0081ac90): each handler is run tainted by whoever set
+    // it, by pcallScript and pcallHandler.
+    taint::Quiet quiet;
+
     // The trade skill list may change shape now, and only now. It is held still
     // between these events because the frame reads it many times to draw one
     // selection and its shape depends on item data that arrives while those
@@ -9067,7 +9187,7 @@ void LuaEngine::fireEvent(const std::string& eventName,
                 }
 
                 int nargs = 1 + static_cast<int>(args.size());
-                if (lua_pcall(L_, nargs, 0, 0) != 0) {
+                if (taint::pcallHandler(L_, nargs, 0, 0) != 0) {
                     const char* err = lua_tostring(L_, -1);
                     std::string errStr = err ? err : "(unknown)";
                     LOG_ERROR("LuaEngine: event '", eventName, "' handler error: ", errStr);
@@ -9189,6 +9309,7 @@ std::string scriptOrigin(const wowee::ui::WidgetTree& widgets, uint32_t wid,
 
 int LuaEngine::beginFrameScript(uint32_t wid, const char* script) {
     if (!L_ || wid == 0) return 0;
+    taint::Quiet quiet;   // see callScriptOnTable
     lua_getglobal(L_, "__WoweeFramesByWid");
     if (!lua_istable(L_, -1)) { lua_pop(L_, 1); return 0; }
     lua_pushinteger(L_, static_cast<lua_Integer>(wid));
@@ -9235,6 +9356,7 @@ void LuaEngine::callFrameScript(uint32_t wid, const char* script,
 
 bool LuaEngine::frameHasScript(uint32_t wid, const char* script) {
     if (!L_ || wid == 0) return false;
+    taint::Quiet quiet;   // see callScriptOnTable
     lua_getglobal(L_, "__WoweeFramesByWid");
     if (!lua_istable(L_, -1)) { lua_pop(L_, 1); return false; }
     lua_pushinteger(L_, static_cast<lua_Integer>(wid));
@@ -9849,6 +9971,9 @@ void LuaEngine::setEditFocus(uint32_t wid) {
 }
 
 void LuaEngine::dispatchText(const char* utf8) {
+    // An entry from the client's own loop: what it looks up taints nothing,
+    // and each handler it reaches is run under its own taint (pcallScript).
+    taint::Quiet quiet;
     if (!L_ || focusedWid_ == 0 || !utf8) return;
     auto* w = widgets_.get(focusedWid_);
     if (!w || !w->isEditBox) return;
@@ -9964,6 +10089,7 @@ std::string LuaEngine::bindingCommandFor(int sdlKeycode, bool shift, bool ctrl,
 }
 
 std::string LuaEngine::bindingCommandForKey(const std::string& key) {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_ || key.empty()) return "";
     // Which command the key runs, and then the command's script - both asked
     // of the interface's own tables rather than restated here. GetBindingAction
@@ -9998,12 +10124,23 @@ bool LuaEngine::dispatchBindingKey(int sdlKeycode, bool shift, bool ctrl,
 
 bool LuaEngine::runBindingScript(const std::string& command, bool down) {
     if (!L_) return false;
+    // A key binding is a hardware event for whatever it runs (0x00563150 sets
+    // it around the binding and clears it after), and the binding runs secure
+    // (0x0055f860 hands 0x00819ea0 a taint of 0) - only an addon's own
+    // binding script, a closure that addon made, runs insecure.
+    taint::HardwareEvent hardware;
+    taint::Quiet quiet;   // see callScriptOnTable
     lua_getglobal(L_, "__WoweeBindingScripts");
     if (!lua_istable(L_, -1)) { lua_pop(L_, 1); return false; }
     lua_getfield(L_, -1, command.c_str());
     if (!lua_isfunction(L_, -1)) { lua_pop(L_, 2); return false; }
     lua_pushstring(L_, down ? "down" : "up");
-    if (lua_pcall(L_, 1, 0, 0) != 0) {
+    int rc = 0;
+    {
+        taint::Scope binding(0);
+        rc = lua_pcall(L_, 1, 0, 0);
+    }
+    if (rc != 0) {
         LOG_WARNING("Binding ", command, " failed: ",
                     luaL_optstring(L_, -1, "?"));
         lua_pop(L_, 1);
@@ -10015,6 +10152,7 @@ bool LuaEngine::runBindingScript(const std::string& command, bool down) {
 }
 
 LuaEngine::PadKeyOutcome LuaEngine::dispatchPadKey(const char* padKey) {
+    taint::Quiet quiet;   // as dispatchText
     PadKeyOutcome outcome;
     if (!L_ || !padKey || !*padKey) return outcome;
 
@@ -10074,6 +10212,7 @@ const ui::Widget* LuaEngine::topKeyboardFrame() const {
 }
 
 void LuaEngine::dispatchFrameChar(const char* utf8) {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_ || !utf8 || !*utf8) return;
     const ui::Widget* best = topKeyboardFrame();
     if (!best) return;
@@ -10093,6 +10232,7 @@ void LuaEngine::dispatchFrameChar(const char* utf8) {
 }
 
 bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down) {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_) return false;
     const std::string key = wowKeyName(sdlKeycode);
     if (key.empty()) return false;
@@ -10107,6 +10247,7 @@ bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down) {
 }
 
 void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld) {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_ || focusedWid_ == 0) return;
     auto* w = widgets_.get(focusedWid_);
     if (!w || !w->isEditBox) return;
@@ -10270,7 +10411,13 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld) {
             }
             // The handler decides what to do with it, including whether to let
             // go of focus - a chat box does, a search field does not.
-            callFrameScript(focusedWid_, "OnEnterPressed");
+            //
+            // A hardware event while it runs (0x00967760), which is what lets
+            // a /cast typed into the chat box do what a click would.
+            {
+                taint::HardwareEvent hardware;
+                callFrameScript(focusedWid_, "OnEnterPressed");
+            }
             break;
         case kEscape:
             callFrameScript(focusedWid_, "OnEscapePressed");
@@ -10336,6 +10483,7 @@ void LuaEngine::reportEventListenersOnce() {
 /// it goes, so handlers run in the order the full walk ran them and a frame a
 /// handler resizes further on is reached in the same pass, as it was.
 void LuaEngine::updateSizeChanges() {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
     for (uint32_t id = widgets_.takeResizePending(1); id != 0;
          id = widgets_.takeResizePending(id + 1)) {
@@ -10381,6 +10529,7 @@ void LuaEngine::updateSizeChanges() {
 }
 
 void LuaEngine::updateVisibility() {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
     // By index and re-fetched each time: a handler is free to create frames,
     // and OnShow very often does.
@@ -10497,6 +10646,7 @@ bool LuaEngine::editBoxHasFocus() const {
 }
 
 void LuaEngine::updateScrollRanges() {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
     for (uint32_t id : widgets_.scrollFrames()) {
         auto* w = widgets_.get(id);
@@ -10547,6 +10697,7 @@ void LuaEngine::updateScrollRanges() {
 }
 
 bool LuaEngine::dispatchMouseWheel(float x, float y, float delta) {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_) return false;
     const float s = widgets_.uiScale();
     if (s > 0.0f) { x /= s; y /= s; }
@@ -10694,6 +10845,7 @@ bool LuaEngine::glideWheel(uint32_t wheelFrame, float notches) {
 }
 
 void LuaEngine::advanceWheelGlide(float elapsed) {
+    taint::Quiet quiet;   // as dispatchText
     if (wheelGlide_.slider == 0) return;
     const auto* bar = widgets_.get(wheelGlide_.slider);
     // Gone, taken hold of, or moved by something else - a drag of the thumb,
@@ -10720,6 +10872,7 @@ void LuaEngine::advanceWheelGlide(float elapsed) {
 /// slider:SetValue(value), through the method so OnValueChanged fires exactly
 /// as it does for the interface's own calls.
 void LuaEngine::setSliderValue(uint32_t wid, float value) {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
     lua_getglobal(L_, "__WoweeFramesByWid");
     if (!lua_istable(L_, -1)) { lua_pop(L_, 1); return; }
@@ -10750,6 +10903,7 @@ bool LuaEngine::holdsMousePress() const {
 }
 
 void LuaEngine::releaseMouseHover() {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
     if (hoverWid_ != 0) {
         callFrameScript(hoverWid_, "OnLeave");
@@ -10765,6 +10919,7 @@ void LuaEngine::releaseMouseHover() {
 }
 
 void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons buttons) {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
     // The cursor arrives in window pixels measured from the top, and the tree
     // is in interface units measured from the bottom. ui::mouseToTreeSpace is
@@ -11364,9 +11519,15 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                         cb && cb->enabled && cb->objectType == "CheckButton") {
                         cb->checked = !cb->checked;
                     }
-                    callFrameScript(pressedWid_[i], "PreClick", b.name);
-                    callFrameScript(pressedWid_[i], "OnClick", b.name);
-                    callFrameScript(pressedWid_[i], "PostClick", b.name);
+                    // A hardware event for the length of the click and no
+                    // longer (0x0096fa80): the only time a protected action
+                    // of that sort may be taken by insecure code.
+                    {
+                        taint::HardwareEvent hardware;
+                        callFrameScript(pressedWid_[i], "PreClick", b.name);
+                        callFrameScript(pressedWid_[i], "OnClick", b.name);
+                        callFrameScript(pressedWid_[i], "PostClick", b.name);
+                    }
 
                     // A second click on the same frame, soon enough after the
                     // first, is also a double click - WoW sends both, and the
@@ -11374,6 +11535,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                     const double now = core::appTimeSeconds();
                     if (pressedWid_[i] == lastClickWid_ &&
                         (now - lastClickTime_) <= kDoubleClickSeconds) {
+                        taint::HardwareEvent hardware;   // 0x0096fb60
                         callFrameScript(pressedWid_[i], "OnDoubleClick", b.name);
                         // Cleared, or a third click reads as a second double.
                         lastClickWid_ = 0;
@@ -11522,6 +11684,7 @@ void LuaEngine::expireMessages(float elapsed) {
 /// Run the OnAnimFinished handlers owed by frames shown to play an animation
 /// this client does not play.
 void LuaEngine::drainPendingAnimFinished() {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
     lua_getglobal(L_, "__WoweePendingAnimFinished");
     if (!lua_istable(L_, -1)) { lua_pop(L_, 1); return; }
@@ -11538,6 +11701,7 @@ void LuaEngine::drainPendingAnimFinished() {
 }
 
 void LuaEngine::drainPendingTextChanged() {
+    taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
     drainPendingAnimFinished();
     lua_getglobal(L_, "__WoweePendingTextChanged");
@@ -11579,6 +11743,11 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
 
     if (!L_) return;
 
+    // Finding what to run taints nothing; each OnUpdate runs tainted by
+    // whoever set it (pcallScript), and the animation system - this client's
+    // stand-in for the client's own C - runs secure.
+    taint::Quiet quiet;
+
     drainPendingTextChanged();
     advanceWheelGlide(elapsed);
 
@@ -11587,7 +11756,12 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
     lua_getglobal(L_, "__WoweeTickAnimations");
     if (lua_isfunction(L_, -1)) {
         lua_pushnumber(L_, elapsed);
-        if (lua_pcall(L_, 1, 0, 0) != 0) {
+        int animRc = 0;
+        {
+            taint::Scope secure(0);
+            animRc = lua_pcall(L_, 1, 0, 0);
+        }
+        if (animRc != 0) {
             LOG_WARNING("animation tick error: ", luaL_optstring(L_, -1, "?"));
             lua_pop(L_, 1);
         }
@@ -11715,6 +11889,12 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
 
 bool LuaEngine::dispatchSlashCommand(const std::string& command, const std::string& args) {
     if (!L_) return false;
+    // Reached only from Enter in the chat box, as ChatEdit_ParseText is from
+    // its OnEnterPressed - inside that hardware event (0x00967760). The list
+    // is searched without tainting anything, and the handler found runs
+    // tainted by whoever put it there.
+    taint::HardwareEvent hardware;
+    taint::Quiet quiet;
 
     // Check each SlashCmdList entry: for key NAME, check SLASH_NAME1, SLASH_NAME2, etc.
     lua_getglobal(L_, "SlashCmdList");
@@ -11744,7 +11924,7 @@ bool LuaEngine::dispatchSlashCommand(const std::string& command, const std::stri
                     // Call the handler with args
                     lua_pushvalue(L_, -1); // copy handler
                     lua_pushstring(L_, args.c_str());
-                    if (lua_pcall(L_, 1, 0, 0) != 0) {
+                    if (taint::pcallHandler(L_, 1, 0, 0) != 0) {
                         const char* serr = lua_tostring(L_, -1);
                         LOG_ERROR("LuaEngine: SlashCmdList['", name, "'] error: ",
                                   serr ? serr : "?");
@@ -12130,6 +12310,12 @@ std::string LuaEngine::globalText(const char* name) const {
     }
     lua_pop(L_, 1);
     return out;
+}
+
+void LuaEngine::runScriptAs(const std::string& code, int taint) {
+    if (!L_ || code.empty()) return;
+    BudgetGuard guard(L_, chunkTimeoutMs_);
+    taint::execute(L_, code.c_str(), code.c_str(), taint);
 }
 
 bool LuaEngine::executeString(const std::string& code) {

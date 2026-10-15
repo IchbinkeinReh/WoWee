@@ -326,6 +326,7 @@ register_test_target(test_framexml_takeover)
 add_executable(test_lua_handler_globals
     test_lua_handler_globals.cpp
     ${CMAKE_SOURCE_DIR}/src/addons/lua_handler_globals.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_taint.cpp
 )
 target_include_directories(test_lua_handler_globals PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_lua_handler_globals SYSTEM PRIVATE
@@ -334,6 +335,22 @@ target_link_libraries(test_lua_handler_globals PRIVATE catch2_main lua51)
 wowee_test_link_glm(test_lua_handler_globals)
 add_test(NAME lua_handler_globals COMMAND test_lua_handler_globals)
 register_test_target(test_lua_handler_globals)
+
+# ── test_lua_taint ──────────────────────────────────────────
+# The client's add-on protection: the taint the patched Lua core carries on
+# every value, the bracket around every call into Lua, and 0x005191c0's rules
+# for what insecure code is refused - all of it a function of a bare Lua state.
+add_executable(test_lua_taint
+    test_lua_taint.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_taint.cpp
+)
+target_include_directories(test_lua_taint PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_lua_taint SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
+target_link_libraries(test_lua_taint PRIVATE catch2_main lua51)
+wowee_test_link_glm(test_lua_taint)
+add_test(NAME lua_taint COMMAND test_lua_taint)
+register_test_target(test_lua_taint)
 
 # ── test_lua_generic_for ────────────────────────────────────
 # `for k, v in t do` over a plain table - the Lua 5.0 form 1.12's FrameXML is

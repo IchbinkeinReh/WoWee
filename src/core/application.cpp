@@ -4969,6 +4969,19 @@ void Application::update(float deltaTime) {
             addonManager_->fireEvent("UPDATE_CHAT_WINDOWS");
             addonManager_->fireEvent("PLAYER_LOGIN");
             addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
+            // A player still fighting is told so again, which is what puts the
+            // new interface into combat lockdown (0x00528010: after
+            // PLAYER_ENTERING_WORLD, UNIT_FLAG_IN_COMBAT is event 0x98 and
+            // +0x124c cleared) - the other half of what fireInterfaceLeaving
+            // says on the way out.
+            if (gameHandler) {
+                const uint16_t flagsIdx = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+                auto player = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
+                if (player && flagsIdx != 0xFFFF &&
+                    (player->getField(flagsIdx) & game::UNIT_FLAG_IN_COMBAT) != 0) {
+                    addonManager_->fireEvent("PLAYER_REGEN_DISABLED");
+                }
+            }
             addons::LuaEngine::setUiSoundsSuppressed(false);
         }
     }

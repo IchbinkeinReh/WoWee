@@ -82,6 +82,9 @@ EXPECTED_FIELD_ONLY = {
     "GetParent": "__parent, and nil is load bearing",
     "GetScript": "__scripts",
     "SetScript": "__scripts",
+    # SetScript's companion, now in C so the hook keeps the client's taint
+    # rules (0x0049edb0); the same table, for the same reason.
+    "HookScript": "__scripts",
     "RegisterEvent": "__events",
     "UnregisterEvent": "__events",
     # The reader for the pair above. Events are one of the few things that
