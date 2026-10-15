@@ -795,7 +795,39 @@ static void applySoundCVars(lua_State* L) {
 /// opened. Nothing looked broken: the button worked, it just always agreed
 /// with wherever the controls already were.
 
+/// The eight camera views' cvars (registered by 0x005fd910):
+/// "camera" + Distance, Pitch or Yaw + the view's suffix, and the defaults
+/// the client registers them with (0x00ad1ba8); pitch and yaw in degrees.
+constexpr const char* kCameraViewSuffix[8] = {"", "A", "B", "C", "D", "E", "Com", "Barber Shop"};
+constexpr const char* kCameraViewPart[3] = {"Distance", "Pitch", "Yaw"};
+constexpr const char* kCameraViewDefault[8][3] = {
+    {"0.0", "0.0", "0.0"},   {"0.0", "0.0", "0.0"},    {"5.55", "10.0", "0.0"},
+    {"5.55", "20.0", "0.0"}, {"13.88", "30.0", "0.0"}, {"13.88", "10.0", "0.0"},
+    {"0.0", "0.0", "0.0"},   {"5.0", "10.0", "0.0"},
+};
+
+static std::string cameraViewCVar(int view, int part) {
+    return std::string("camera") + kCameraViewPart[part] + kCameraViewSuffix[view];
+}
+
+/// A camera view cvar's registered default, or null for any other name.
+static const char* cameraViewCVarDefault(const std::string& lowerName) {
+    for (int view = 0; view < 8; ++view) {
+        for (int part = 0; part < 3; ++part) {
+            std::string name = cameraViewCVar(view, part);
+            toLowerInPlace(name);
+            if (name == lowerName) return kCameraViewDefault[view][part];
+        }
+    }
+    return nullptr;
+}
+
 static void pushCvarDefault(lua_State* L, const std::string& n) {
+    // The camera's views, and which one it is on and how it moves to another
+    // (0x005fd910: cameraView "2", cameraViewBlendStyle "1").
+    if (const char* view = cameraViewCVarDefault(n)) { lua_pushstring(L, view); return; }
+    if (n == "cameraview") { lua_pushstring(L, "2"); return; }
+    if (n == "cameraviewblendstyle") { lua_pushstring(L, "1"); return; }
     // Return sensible defaults for commonly queried CVars
     // The sound ones read back as on and at full, which is what this client
     // starts as. Volume up/down step from whatever is read here, so answering
@@ -4139,6 +4171,147 @@ static int lua_CameraZoom(lua_State* L) {
     if (svc && svc->cameraZoom) svc->cameraZoom(Sign * yards);
     return 0;
 }
+// ---- The camera's saved views ----
+//
+// Eight views on the camera (+0xb8), read from their cvars when it is made
+// (0x005fd910) and kept: SaveView writes both, ResetView only the view. The
+// bindings reach the five third-person ones, 1-5; which one is current is
+// cameraView (+0xb4).
+struct CameraViews {
+    bool loaded = false;
+    std::array<rendering::CameraController::ViewPose, 8> views{};
+    int current = 2;
+};
+
+static float storedCVarFloat(const std::string& name, const char* fallback) {
+    return static_cast<float>(std::atof(storedCVarValue(name, fallback).c_str()));
+}
+
+static CameraViews& cameraViews() {
+    static CameraViews views;
+    if (!views.loaded) {
+        views.loaded = true;
+        for (int i = 0; i < 8; ++i) {
+            views.views[static_cast<size_t>(i)] = {
+                .distance = storedCVarFloat(cameraViewCVar(i, 0), kCameraViewDefault[i][0]),
+                .pitch = storedCVarFloat(cameraViewCVar(i, 1), kCameraViewDefault[i][1]),
+                .yaw = storedCVarFloat(cameraViewCVar(i, 2), kCameraViewDefault[i][2])};
+        }
+        views.current = static_cast<int>(storedCVarFloat("cameraView", "2"));
+    }
+    return views;
+}
+
+static rendering::CameraController* luaCamera(lua_State* L) {
+    auto* svc = getLuaServices(L);
+    return svc && svc->getCameraController ? svc->getCameraController() : nullptr;
+}
+
+/// 0x00603330 from the bindings: view `index` taken by cameraViewBlendStyle -
+/// 1 eased, 2 at once, anything else not at all - the current one again at
+/// once while the player has not moved it since. A new one is kept in
+/// cameraView.
+static void setCameraView(rendering::CameraController& cc, int index) {
+    auto& views = cameraViews();
+    int style = static_cast<int>(storedCVarFloat("cameraViewBlendStyle", "1"));
+    if (views.current == index && !cc.viewMovedByPlayer() && style != 0) style = 2;
+    if (views.current != index) {
+        views.current = index;
+        setStoredCVar("cameraView", std::to_string(index));
+    }
+    const auto& to = views.views[static_cast<size_t>(index)];
+    if (style == 2) {
+        cc.goToViewPose(to, 0.0f);
+        return;
+    }
+    if (style != 1) return;
+    // Each part that moves takes its distance over its smoothing speed
+    // (cameraDistanceSmoothSpeed yards, cameraPitchSmoothSpeed and
+    // cameraYawSmoothSpeed degrees a second: 0x00600e00, 0x00601190,
+    // 0x00601410); all take the longest, held to cameraSmoothTimeMin and
+    // cameraSmoothTimeMax.
+    const auto from = cc.currentViewPose();
+    const float dDistance = std::fabs(to.distance - from.distance);
+    const float dPitch = std::fabs(to.pitch - from.pitch);
+    const float dYaw = std::fabs(std::remainder(to.yaw - from.yaw, 360.0f));
+    constexpr float kRadian = 57.29578f;
+    float seconds = 0.0f;
+    if (dDistance >= 0.001f)
+        seconds = std::max(seconds, dDistance / storedCVarFloat("cameraDistanceSmoothSpeed", "8.33"));
+    if (dPitch / kRadian >= 0.001f)
+        seconds = std::max(seconds, dPitch / storedCVarFloat("cameraPitchSmoothSpeed", "45"));
+    if (dYaw / kRadian >= 0.001f)
+        seconds = std::max(seconds, dYaw / storedCVarFloat("cameraYawSmoothSpeed", "180"));
+    seconds = std::max(seconds, storedCVarFloat("cameraSmoothTimeMin", "0.1"));
+    seconds = std::min(seconds, storedCVarFloat("cameraSmoothTimeMax", "2.0"));
+    cc.goToViewPose(to, seconds);
+}
+
+/// The view number the bindings pass, 1-5, or a usage error.
+static int cameraViewArg(lua_State* L, const char* usage) {
+    if (!lua_isnumber(L, 1)) luaL_error(L, "%s", usage);  // does not return
+    return static_cast<int>(lua_tonumber(L, 1));
+}
+
+// SetView(index) (0x006039b0).
+static int lua_SetView(lua_State* L) {
+    const int index = cameraViewArg(L, "Usage: SetView(viewModeIndex)");
+    auto* cc = luaCamera(L);
+    if (cc && index >= 1 && index <= 5) setCameraView(*cc, index);
+    return 0;
+}
+
+// SaveView(index) (0x005ff260 -> 0x005fe440): where the camera is going kept
+// as that view, and in its cvars.
+static int lua_SaveView(lua_State* L) {
+    const int index = cameraViewArg(L, "Usage: SaveView(viewModeIndex)");
+    auto* cc = luaCamera(L);
+    if (!cc || index < 1 || index > 5) return 0;
+    const auto pose = cc->currentViewPose();
+    cameraViews().views[static_cast<size_t>(index)] = pose;
+    const float parts[3] = {pose.distance, pose.pitch, pose.yaw};
+    for (int part = 0; part < 3; ++part) {
+        char text[40];
+        std::snprintf(text, sizeof(text), "%f", static_cast<double>(parts[part]));
+        setStoredCVar(cameraViewCVar(index, part), text);
+    }
+    return 0;
+}
+
+// ResetView(index) (0x00604c80 -> 0x006048a0): that view back to its default
+// - the view only, the cvars keep what was saved - and taken again if it is
+// the one the camera is on.
+static int lua_ResetView(lua_State* L) {
+    const int index = cameraViewArg(L, "Usage: ResetView(viewModeIndex)");
+    auto* cc = luaCamera(L);
+    if (!cc || index < 1 || index > 5) return 0;
+    auto& views = cameraViews();
+    views.views[static_cast<size_t>(index)] = {
+        .distance = static_cast<float>(std::atof(kCameraViewDefault[index][0])),
+        .pitch = static_cast<float>(std::atof(kCameraViewDefault[index][1])),
+        .yaw = static_cast<float>(std::atof(kCameraViewDefault[index][2]))};
+    if (views.current == index) setCameraView(*cc, index);
+    return 0;
+}
+
+// NextView() / PrevView() (0x00604ce0, 0x00604d10): the next view up to 5,
+// the one before down to 1.
+template <int Step>
+static int lua_StepView(lua_State* L) {
+    auto* cc = luaCamera(L);
+    if (!cc) return 0;
+    const int current = cameraViews().current;
+    if (Step > 0 ? current < 5 : current > 1) setCameraView(*cc, current + Step);
+    return 0;
+}
+
+// FlipCameraYaw(degrees) (0x005ff2c0).
+static int lua_FlipCameraYaw(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: FlipCameraYaw(degrees)");
+    if (auto* cc = luaCamera(L)) cc->flipYaw(static_cast<float>(lua_tonumber(L, 1)));
+    return 0;
+}
+
 static int lua_JumpOrAscendStart(lua_State* L) {
     auto* svc = getLuaServices(L);
     if (svc && svc->pressJump) svc->pressJump();
@@ -5689,6 +5862,16 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"Screenshot",               lua_Screenshot},
                 {"CameraZoomIn",             lua_CameraZoom<1>},
                 {"CameraZoomOut",            lua_CameraZoom<-1>},
+                // The same two functions under the vehicle's binding names
+                // (0x006018a0, 0x006018b0 jump to 0x006017e0, 0x00601840).
+                {"VehicleCameraZoomIn",      lua_CameraZoom<1>},
+                {"VehicleCameraZoomOut",     lua_CameraZoom<-1>},
+                {"SetView",                  lua_SetView},
+                {"SaveView",                 lua_SaveView},
+                {"ResetView",                lua_ResetView},
+                {"NextView",                 lua_StepView<1>},
+                {"PrevView",                 lua_StepView<-1>},
+                {"FlipCameraYaw",            lua_FlipCameraYaw},
                 {"ToggleAutoRun",            lua_ToggleAutoRun},
                 {"JumpOrAscendStart",        lua_JumpOrAscendStart},
                 {"TurnLeftStart",            lua_BindingTurn<-1, true>},

@@ -10,6 +10,7 @@
 namespace wowee::core  { class Window; }
 namespace wowee::audio { class AudioCoordinator; }
 namespace wowee::game  { class ExpansionRegistry; }
+namespace wowee::rendering { class CameraController; }
 
 namespace wowee::addons {
 
@@ -335,6 +336,9 @@ struct LuaServices {
     std::function<void()> pressJump;
     /// CameraZoomIn(yards) and CameraZoomOut(yards), as the wheel's bindings.
     std::function<void(float yards)> cameraZoom;
+    /// The camera, for the saved views (SetView, SaveView, ResetView,
+    /// NextView, PrevView) and FlipCameraYaw; none before there is one.
+    std::function<rendering::CameraController*()> getCameraController;
 };
 
 } // namespace wowee::addons

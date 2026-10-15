@@ -2895,6 +2895,17 @@ void CameraController::update(float deltaTime) {
     cameraClockMs_ += static_cast<uint32_t>(std::max(0.0f, deltaTime) * 1000.0f);
     vehicleYawOffset_.step(cameraClockMs_);
     vehiclePitchOffset_.step(cameraClockMs_);
+    if (viewBlending_) {
+        viewDistance_.step(cameraClockMs_);
+        viewPitch_.step(cameraClockMs_);
+        viewYaw_.step(cameraClockMs_);
+        userTargetDistance = viewDistance_.value;
+        pitch = viewPitch_.value;
+        yaw += viewYaw_.value - viewYawApplied_;
+        viewYawApplied_ = viewYaw_.value;
+        if (camera) camera->setRotation(yaw, pitch);
+        viewBlending_ = viewYaw_.startMs != viewYaw_.endMs;
+    }
     if (timedZoomElapsed_ >= 0.0f) {
         timedZoomElapsed_ += deltaTime;
         const float t = std::min(timedZoomElapsed_ / timedZoomSeconds_, 1.0f);
@@ -3570,6 +3581,7 @@ void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
         rotateArmed_ = true;  // past the dead-zone: this is a deliberate drag
     }
 
+    viewMovedByPlayer_ = true;  // 0x006020b0
     // Directly update stored yaw/pitch (no lossy forward-vector derivation)
     yaw -= event.xrel * mouseSensitivity;
     // SDL yrel > 0 = mouse moved DOWN. In WoW, mouse-down = look down = pitch decreases.
@@ -3919,6 +3931,7 @@ bool CameraController::groundNotStreamedYet(float x, float y) const {
 void CameraController::applyLookDelta(float dxPixels, float dyPixels) {
     if (!enabled || !camera || introActive) return;
 
+    viewMovedByPlayer_ = true;  // 0x006020b0
     yaw -= dxPixels * mouseSensitivity;
     const float invert = invertMouse ? 1.0f : -1.0f;
     pitch += dyPixels * mouseSensitivity * invert;
@@ -3937,10 +3950,7 @@ void CameraController::processMouseWheel(float delta) {
     zoomBy(delta * zoomSpeed);
 }
 
-void CameraController::zoomBy(float yards) {
-    collisionZoomDebt_ = 0.0f;
-    collisionClearSeconds_ = 0.0f;
-    userTargetDistance -= yards;
+float CameraController::clampedZoomDistance(float distance) const {
     // A multiple of the original client's limit rather than a choice between
     // two numbers, so the game's own Max Camera Distance slider means something
     // at every position instead of only at its ends.
@@ -3952,8 +3962,57 @@ void CameraController::zoomBy(float yards) {
     if (distanceMode_ == 1) maxDist = 50.0f;
     if (seatZoomMax_) maxDist = *seatZoomMax_;
     if (seatZoomMin_) minDist = std::max(minDist, *seatZoomMin_);
-    userTargetDistance = glm::clamp(userTargetDistance, minDist, std::max(minDist, maxDist));
+    return glm::clamp(distance, minDist, std::max(minDist, maxDist));
+}
+
+void CameraController::zoomBy(float yards) {
+    collisionZoomDebt_ = 0.0f;
+    collisionClearSeconds_ = 0.0f;
+    userTargetDistance = clampedZoomDistance(userTargetDistance - yards);
     timedZoomElapsed_ = -1.0f;
+    viewMovedByPlayer_ = true;  // 0x006000e0
+}
+
+CameraController::ViewPose CameraController::currentViewPose() const {
+    ViewPose pose;
+    if (viewBlending_) {
+        pose.distance = viewDistance_.target();
+        pose.pitch = -viewPitch_.target();
+        pose.yaw = viewYaw_.target();
+    } else {
+        pose.distance = userTargetDistance;
+        pose.pitch = -pitch;
+        pose.yaw = yaw - facingYaw;
+    }
+    pose.yaw = std::remainder(pose.yaw, 360.0f);
+    return pose;
+}
+
+void CameraController::goToViewPose(const ViewPose& pose, float seconds) {
+    viewMovedByPlayer_ = false;
+    const float distance = clampedZoomDistance(pose.distance);
+    const float toPitch = glm::clamp(-pose.pitch, MIN_PITCH, MAX_PITCH);
+    // The yaw from the facing, taken to within half a turn of where it goes.
+    const float fromYaw = pose.yaw + std::remainder((yaw - facingYaw) - pose.yaw, 360.0f);
+    if (seconds <= 0.0f) {
+        viewBlending_ = false;
+        userTargetDistance = distance;
+        currentDistance = distance;
+        pitch = toPitch;
+        yaw += pose.yaw - fromYaw;
+        if (camera) camera->setRotation(yaw, pitch);
+        return;
+    }
+    timedZoomElapsed_ = -1.0f;
+    const uint32_t end = cameraClockMs_ + static_cast<uint32_t>(seconds * 1000.0f);
+    viewDistance_.value = userTargetDistance;
+    viewDistance_.set(distance, cameraClockMs_, end);
+    viewPitch_.value = pitch;
+    viewPitch_.set(toPitch, cameraClockMs_, end);
+    viewYaw_.value = fromYaw;
+    viewYaw_.set(pose.yaw, cameraClockMs_, end);
+    viewYawApplied_ = fromYaw;
+    viewBlending_ = true;
 }
 
 void CameraController::setFollowTarget(glm::vec3* target) {

@@ -1023,6 +1023,9 @@ bool Application::initialize() {
         luaSvc.cameraZoom = [r = renderer.get()](float yards) {
             if (auto* cc = r ? r->getCameraController() : nullptr) cc->zoomBy(yards);
         };
+        luaSvc.getCameraController = [r = renderer.get()]() -> rendering::CameraController* {
+            return r ? r->getCameraController() : nullptr;
+        };
         luaSvc.setBindingTurn = [r = renderer.get()](int direction, bool held) {
             auto* cc = r ? r->getCameraController() : nullptr;
             if (!cc) return;
