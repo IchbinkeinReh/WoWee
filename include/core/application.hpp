@@ -233,6 +233,9 @@ private:
     /// other. Clearing addonsLoaded_ without this is what made a second login
     /// in one session come up doubled.
     void unloadInterface();
+    /// What the interface hears as the world is taken out from under it
+    /// (0x00528f00), on logout, on quitting and on ReloadUI alike.
+    void fireInterfaceLeaving();
     /// Records how long one named stage of a frame took.
     ///
     /// The per-stage timings only ever spoke up above 50ms, which says which

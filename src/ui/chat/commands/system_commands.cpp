@@ -68,20 +68,12 @@ public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         auto* am = ctx.services.addonManager;
         if (am) {
-            am->reload();
-            am->fireEvent("VARIABLES_LOADED");
-            // The chat windows are rebuilt by the reload and come up with the
-            // defaults their XML carries, so they have to be told to read the
-            // settings back - same as at login, and the reason a /reload used
-            // to lose the chat layout.
-            am->fireEvent("UPDATE_CHAT_WINDOWS");
-            am->fireEvent("PLAYER_LOGIN");
-            am->fireEvent("PLAYER_ENTERING_WORLD");
-            game::MessageChatData rlMsg;
-            rlMsg.type = game::ChatType::SYSTEM;
-            rlMsg.language = game::ChatLanguage::UNIVERSAL;
-            rlMsg.message = "Interface reloaded.";
-            ctx.gameHandler.addLocalChatMessage(rlMsg);
+            // What FrameXML's own /reload does (ChatFrame.lua: ReloadUI()):
+            // ask for it, and let the frame take the interface down as the
+            // client does (0x0052af40) - PLAYER_LEAVING_WORLD and
+            // PLAYER_LOGOUT first, then the load and its login events. Doing
+            // the reload here skipped the leaving half.
+            am->runScript("ReloadUI()");
         } else {
             game::MessageChatData rlMsg;
             rlMsg.type = game::ChatType::SYSTEM;

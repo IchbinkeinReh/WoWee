@@ -3207,8 +3207,9 @@ void Application::processDeferredLogoutToLogin() {
     performLogoutToLogin();
 }
 
-void Application::unloadInterface() {
-    if (addonManager_ && addonsLoaded_) {
+void Application::fireInterfaceLeaving() {
+    if (!addonManager_) return;
+    {
         // A player still in combat is first told the fight is over
         // (0x00528f00: the player there is, UNIT_FLAG_IN_COMBAT in
         // UNIT_FIELD_FLAGS, event 0x99, then 0x00528c30). Nothing else ends
@@ -3222,12 +3223,21 @@ void Application::unloadInterface() {
                 addonManager_->fireEvent("PLAYER_REGEN_ENABLED");
             }
         }
+        // 0x00528c30 ends with INSTANCE_LOCK_STOP (0x279), which closes a
+        // pending instance-bind prompt, then PLAYER_LEAVING_WORLD (0x100).
+        addonManager_->fireEvent("INSTANCE_LOCK_STOP");
         addonManager_->fireEvent("PLAYER_LEAVING_WORLD");
         // Then PLAYER_LOGOUT, and the saved variables after it (0x00528f00:
         // 0x00528c30, event 0xfe, 0x00527130). It fired when the server
         // accepted the logout, twenty seconds early and also for a logout
         // then cancelled.
         addonManager_->fireEvent("PLAYER_LOGOUT");
+    }
+}
+
+void Application::unloadInterface() {
+    if (addonManager_ && addonsLoaded_) {
+        fireInterfaceLeaving();
         // Saves the saved variables on its way out, so this has to run while
         // the outgoing character is still the one named - the per-character
         // files are keyed by that name, and writing them after it changed
@@ -4932,6 +4942,12 @@ void Application::update(float deltaTime) {
     if (reloadUiPending_) {
         reloadUiPending_ = false;
         if (addonManager_) {
+            // ReloadUI (0x005222e0) only sets DAT_00bd0791; the frame then
+            // takes the interface down exactly as logout does (0x0052af40:
+            // 0x00528f00) before loading it again (0x0052a980), so the
+            // interface hears it leave the world and log out - and saves
+            // what it saves on PLAYER_LOGOUT - before its state is gone.
+            if (addonsLoaded_) fireInterfaceLeaving();
             addonManager_->reload();
             // The same three the /reload command sends, so an interface
             // reloaded from a popup comes up in the same state as one reloaded
