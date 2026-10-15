@@ -26,6 +26,7 @@
 #include "game/quest_handler.hpp"
 #include "game/movement_handler.hpp"
 #include "game/entity_controller.hpp"
+#include "game/skill_ups.hpp"
 #include "game/game_services.hpp"
 #include "network/packet.hpp"
 #include "core/logger.hpp"
@@ -76,6 +77,7 @@ struct PlayerSkill {
     uint16_t maxValue = 0;
     uint16_t bonusTemp = 0;    // temporary buff bonus (food, potions, etc.)
     uint16_t bonusPerm = 0;    // permanent spec/misc bonus (rarely non-zero)
+    uint16_t step = 0;         // the skill's tier, the id word's high half (0x00594760)
     [[nodiscard]] uint16_t effectiveValue() const { return value + bonusTemp + bonusPerm; }
 };
 
@@ -1780,6 +1782,27 @@ public:
 
     // Player skills
     const std::unordered_map<uint32_t, PlayerSkill>& getPlayerSkills() const { return playerSkills_; }
+    /// The skill-point purchase (SkillUps): what a skill's row in the
+    /// skills window says about it - GetSkillLineInfo's numTempPoints,
+    /// stepCost, rankCost, minLevel and skillCostType (0x005cde20).
+    struct SkillPurchaseInfo {
+        uint32_t pending = 0;
+        uint32_t stepCost = 0;   ///< 0: none for sale
+        uint32_t rankCost = 0;   ///< 0: none
+        uint32_t minLevel = 0;
+        uint32_t costType = 0;   ///< SkillCostIndex + 1
+        bool heldAtOne = false;  ///< the race/class row's 0x400
+    };
+    SkillPurchaseInfo getSkillPurchaseInfo(uint32_t skillId);
+    /// The player's skill points, PLAYER_CHARACTER_POINTS2 (0x005cd970(1)).
+    uint32_t getSkillPoints() const;
+    /// GetAdjustedSkillPoints (0x005ce540): the points less those pending.
+    int32_t getAdjustedSkillPoints() const;
+    void addSkillUp(uint32_t skillId);
+    void removeSkillUp(uint32_t skillId);
+    void acceptSkillUps();
+    void cancelSkillUps();
+    void buySkillTier(uint32_t skillId);
     const std::string& getSkillName(uint32_t skillId) const;
     /// The heading a skill is filed under, and that heading's name and place.
     /// Zero and empty for a skill the file does not categorise.
@@ -5714,6 +5737,9 @@ private:
 
     // ---- Player skills ----
     std::unordered_map<uint32_t, PlayerSkill> playerSkills_;
+    SkillUps skillUps_;
+    /// The skill's row for this race and class, the tables read first.
+    const SkillUps::RaceClassInfo* skillRaceClassInfo(uint32_t skillId);
     std::unordered_map<uint32_t, std::string> skillLineNames_;
     std::unordered_map<uint32_t, uint32_t> skillLineCategories_;
     /// The headings the skills tab groups under, from SkillLineCategory.dbc,

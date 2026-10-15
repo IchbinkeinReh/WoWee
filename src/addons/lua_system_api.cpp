@@ -6269,7 +6269,6 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, gh ? gh->getCorpseReclaimDelaySec() : 0.0);
             return 1;
         }},
-                {"GetAdjustedSkillPoints",   lua_ReturnZero},
                 // Which party slot holds the leader, in the same 1-to-4
                 // ordering resolveUnitGuid gives "party1".."party4": members
                 // other than the player, in order. Zero means the player leads
@@ -7031,7 +7030,6 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 {"HasDebugZoneMap",          lua_ReturnFalse},
                 {"CanQueueForWintergrasp",   lua_ReturnFalse},
-                {"CancelSkillUps",           lua_ReturnNothing},
                 {"ConvertToRaid",            lua_ReturnNothing},
                 {"FillLocalizedClassList",   lua_ReturnNothing},
                 // Sends the request rather than doing nothing. The reply is

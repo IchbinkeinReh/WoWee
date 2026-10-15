@@ -5601,6 +5601,7 @@ void SpellHandler::extractSkillFields(const FlatFieldMap& fields) {
         skill.maxValue = maxValue;
         skill.bonusTemp = bonusTemp;
         skill.bonusPerm = bonusPerm;
+        skill.step = static_cast<uint16_t>(raw0 >> 16);
         newSkills[skillId] = skill;
     }
 

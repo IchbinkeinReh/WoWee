@@ -106,6 +106,9 @@ enum class UF : uint16_t {
     // 1, and LockType ids from 1 (herbs, minerals, treasure, fish). The
     // minimap blips what they match (0x006dca00, 0x006dca90 read them at
     // 0xda8 and 0xdac past UNIT_END, which is 1022 and 1023). WotLK only.
+    // The skill points the old rank purchase spends (0xda4 past UNIT_END,
+    // 1021; 0x005cd970(1), 0x005ce540). WotLK only.
+    PLAYER_CHARACTER_POINTS2,
     PLAYER_TRACK_CREATURES,
     PLAYER_TRACK_RESOURCES,
     // Expertise, in expertise *points* rather than percent - the character

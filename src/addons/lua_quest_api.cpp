@@ -12,6 +12,7 @@
 #include "ui/chat/chat_utils.hpp"
 #include "core/logger.hpp"
 
+#include <cmath>
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -1456,35 +1457,34 @@ static int lua_GetSkillLineInfo(lua_State* L) {
     std::string name = gh->getSkillName(skill.skillId);
     if (name.empty()) name = "Skill " + std::to_string(skill.skillId);
 
+    // The rest as 0x005cde20 answers them: the rank and its maximum with the
+    // permanent bonus (0x0051a250, 0x00594710), the pending skill-ups as
+    // numTempPoints and the temporary bonus as the modifier (0x005cd920).
+    // A skill whose race/class row has 0x400 is held at one.
+    const auto purchase = gh->getSkillPurchaseInfo(skill.skillId);
+    uint32_t rank = skill.value ? skill.value + skill.bonusPerm : 0u;
+    uint32_t maxRank = skill.maxValue ? skill.maxValue + skill.bonusPerm : 0u;
+    if (purchase.heldAtOne) {
+        maxRank = 1;
+        if (rank > 1) rank = 1;
+    }
     lua_pushstring(L, name.c_str());                    // 1: skillName
-    lua_pushboolean(L, 0);                              // 2: isHeader
-    lua_pushboolean(L, 1);                              // 3: isExpanded
-    lua_pushnumber(L, skill.effectiveValue());           // 4: skillRank
-    lua_pushnumber(L, skill.bonusTemp);                  // 5: numTempPoints
-    lua_pushnumber(L, skill.bonusPerm);                  // 6: skillModifier
-    lua_pushnumber(L, skill.maxValue);                   // 7: skillMaxRank
+    lua_pushnil(L);                                     // 2: isHeader
+    lua_pushnil(L);                                     // 3: isExpanded
+    lua_pushnumber(L, rank);                            // 4: skillRank
+    lua_pushnumber(L, purchase.pending);                // 5: numTempPoints
+    lua_pushnumber(L, skill.bonusTemp);                 // 6: skillModifier
+    lua_pushnumber(L, maxRank);                         // 7: skillMaxRank
     lua_pushboolean(L, 0);                              // 8: isAbandonable
-    // Nil, not zero, and this is the whole of the "Learn Mounts" mystery.
-    //
-    // SkillFrame_SetStatusBar branches on these three in order:
-    //
-    //     if ( stepCost ) then          -- a skill that must be bought
-    //         statusBarName:SetFormattedText(LEARN_SKILL_TEMPLATE, skillName)
-    //     elseif ( rankCost or numTempPoints > 0 ) then   -- trainable
-    //     else                                            -- an ordinary skill
-    //
-    // Zero is *true* in Lua, so the first branch always won and every row in
-    // the skills window was titled "Learn <skill>" - First Aid, Axes, Cooking,
-    // everything - as though none of them were known.
-    //
-    // No purchase cost is tracked here, and nil is how the client says a skill
-    // has none. With both nil and no temporary points, the third branch runs
-    // and the row is simply the skill's name, which is what it should have
-    // been reading all along.
-    lua_pushnil(L);                                     // 9: stepCost
-    lua_pushnil(L);                                     // 10: rankCost
-    lua_pushnumber(L, 0);                               // 11: minLevel
-    lua_pushnumber(L, 0);                               // 12: skillCostType
+    // stepCost and rankCost nil where there is none to pay: SkillFrame
+    // branches on them as truths, and zero is true in Lua. A cost is the
+    // skill-point purchase's (SkillTiers / SkillCostsData).
+    if (purchase.stepCost) lua_pushnumber(L, purchase.stepCost);  // 9: stepCost
+    else lua_pushnil(L);
+    if (purchase.rankCost) lua_pushnumber(L, purchase.rankCost);  // 10: rankCost
+    else lua_pushnil(L);
+    lua_pushnumber(L, purchase.minLevel);               // 11: minLevel
+    lua_pushnumber(L, purchase.costType);               // 12: skillCostType
     // The sentence the detail panel prints under the selected skill.
     //
     // Returning twelve values left it nil, and SkillDetailFrame_SetStatusBar
@@ -1494,6 +1494,23 @@ static int lua_GetSkillLineInfo(lua_State* L) {
     // window showed "%s %s" where the description belongs.
     lua_pushstring(L, gh->getSkillDescription(skill.skillId).c_str());  // 13
     return 13;
+}
+
+/// The skill-point purchase's verbs, by row in the skills window (an index
+/// as the client's skill list numbers it); a heading or a row past the end
+/// does nothing. AddSkillUp (0x005ce460), RemoveSkillUp (0x005ce4d0) and
+/// BuySkillTier (0x005ce6f0) each raise their usage error without a number.
+template <void (game::GameHandler::*Verb)(uint32_t)>
+static int lua_SkillRowVerb(lua_State* L, const char* usage) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "%s", usage);
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const auto rows = skillRows(gh);
+    const auto index = static_cast<long long>(std::llround(lua_tonumber(L, 1)));
+    if (index < 1 || index > static_cast<long long>(rows.size())) return 0;
+    const auto& row = rows[static_cast<size_t>(index) - 1];
+    if (!row.isHeader) (gh->*Verb)(row.skillId);
+    return 0;
 }
 
 // --- Friends/Ignore API ---
@@ -3164,6 +3181,31 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"IsAtStableMaster",       lua_IsAtStableMaster},
                 {"GetNextStableSlotCost",  lua_GetNextStableSlotCost},
                 {"GetSkillLineInfo",        lua_GetSkillLineInfo},
+                {"AddSkillUp", [](lua_State* L) -> int {
+            return lua_SkillRowVerb<&game::GameHandler::addSkillUp>(L, "Usage: AddSkillUp(index)");
+        }},
+                {"RemoveSkillUp", [](lua_State* L) -> int {
+            return lua_SkillRowVerb<&game::GameHandler::removeSkillUp>(L, "Usage: RemoveSkillUp(index)");
+        }},
+                {"BuySkillTier", [](lua_State* L) -> int {
+            return lua_SkillRowVerb<&game::GameHandler::buySkillTier>(L, "Usage: BuySkillTier(index)");
+        }},
+                // AcceptSkillUps (0x005ce5d0) and CancelSkillUps (0x005cd820).
+                {"AcceptSkillUps", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->acceptSkillUps();
+            return 0;
+        }},
+                {"CancelSkillUps", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->cancelSkillUps();
+            return 0;
+        }},
+                // GetAdjustedSkillPoints (0x005ce540): the points less those
+                // the pending skill-ups spend.
+                {"GetAdjustedSkillPoints", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? gh->getAdjustedSkillPoints() : 0);
+            return 1;
+        }},
                 // Opening and closing a heading. The index is a position in
                 // the drawn rows, and a click on a skill row rather than a
                 // heading is ignored rather than refused - the tab calls these
