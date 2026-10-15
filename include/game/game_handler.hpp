@@ -4680,6 +4680,14 @@ public:
         int32_t equippedItemClass = -1;
         uint32_t equippedItemSubClassMask = 0;
         uint32_t runeCostId = 0;
+        /// What 0x0080b5d0 reads beside 0x00739650's: TargetAuraStateNot
+        /// [23], TargetAuraSpell [25], ExcludeTargetAuraSpell [27], Totem
+        /// [50] and TotemCategory [158] (0x008091d0).
+        uint32_t targetAuraStateNot = 0;
+        uint32_t targetAuraSpell = 0;
+        uint32_t excludeTargetAuraSpell = 0;
+        uint32_t totems[2] = {0, 0};
+        uint32_t totemCategories[2] = {0, 0};
     };
     static constexpr size_t PLAYER_EXPLORED_ZONES_COUNT = 128;
     std::string getAreaName(uint32_t areaId) const;

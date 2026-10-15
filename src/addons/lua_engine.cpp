@@ -6456,6 +6456,7 @@ void LuaEngine::registerCoreAPI() {
     registerLfgLuaAPI(L_);
     registerSocketLuaAPI(L_);
     registerAbsentLuaAPI(L_);
+    registerItemQueryLuaAPI(L_);
 
     // WoW aliases
     lua_getglobal(L_, "string");

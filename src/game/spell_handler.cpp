@@ -1876,6 +1876,328 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid) {
     return false;
 }
 
+uint32_t SpellHandler::classSpellFamily() const {
+    // The class's spell family, ChrClasses SpellClassSet (+0x20, WotLK
+    // column 56; 22 in TBC's file, 14 in Classic's), set when the player
+    // enters the world (0x008007a0, 0x00d397b4).
+    const uint8_t classId = owner_.getPlayerClass();
+    if (classSpellFamilyFor_ != classId) {
+        classSpellFamilyFor_ = classId;
+        classSpellFamily_ = 0;
+        auto* am = core::Application::getInstance().getAssetManager();
+        auto classes = am ? am->loadDBCOptional("ChrClasses.dbc") : nullptr;
+        const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ChrClasses") : nullptr;
+        const uint32_t field = layout ? layout->tryField("SpellClassSet") : 0xFFFFFFFF;
+        const int32_t row = classes && field < classes->getFieldCount() ? classes->findRecordById(classId) : -1;
+        if (row >= 0) classSpellFamily_ = classes->getUInt32(static_cast<uint32_t>(row), field);
+    }
+    return classSpellFamily_;
+}
+
+bool SpellHandler::historyHeld(uint32_t spellId, uint32_t itemId, uint32_t category) const {
+    // 0x00807da0: an entry of the spell's from the item (none: 0) with a
+    // cooldown, or of the category the spell is in (the item's own where
+    // it gives one), its cooldown held until an event.
+    for (const auto& e : playerHistory_.entries()) {
+        if (!e.onHold) continue;
+        if (e.spellId == spellId && e.itemId == itemId) return true;
+        if (e.category == category && e.categoryDuration != 0) return true;
+    }
+    return false;
+}
+
+bool SpellHandler::toolsCarried(uint32_t spellId, const Entity& player) const {
+    const auto& e = owner_.spellNameCacheRef().find(spellId)->second;
+    const auto& inv = owner_.getInventory();
+    // 0x008091d0: each Totem carried (0x00754a20) ...
+    for (const uint32_t totem : e.totems)
+        if (totem != 0 && inv.countCarried(totem) == 0) return false;
+    // ... each TotemCategory met by what is carried: items whose own
+    // category is of its type, their masks together covering its mask
+    // (0x007548f0 -> 0x007541f0; TotemCategory.dbc type 18, mask 19).
+    auto* am = core::Application::getInstance().getAssetManager();
+    auto cats = am ? am->loadDBCOptional("TotemCategory.dbc") : nullptr;
+    for (const uint32_t cat : e.totemCategories) {
+        if (cat == 0) continue;
+        const int32_t row = cats && cats->getFieldCount() > 19 ? cats->findRecordById(cat) : -1;
+        if (row < 0) return false;
+        const uint32_t type = cats->getUInt32(static_cast<uint32_t>(row), 18);
+        uint32_t need = cats->getUInt32(static_cast<uint32_t>(row), 19);
+        inv.forEachCarried([&](const ItemDef& d) {
+            const auto* info = owner_.getItemInfo(d.itemId);
+            if (!info || info->totemCategory == 0 || need == 0) return;
+            const int32_t r = cats->findRecordById(info->totemCategory);
+            if (r >= 0 && cats->getUInt32(static_cast<uint32_t>(r), 18) == type)
+                need &= ~cats->getUInt32(static_cast<uint32_t>(r), 19);
+        });
+        if (need != 0) return false;
+    }
+    // 0x00800d60: no reagents prepared (UNIT_FLAG 0x20 with AttributesEx5
+    // 0x2), or for a spell of the class's family PLAYER_NO_REAGENT_COST
+    // names.
+    const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
+    const uint32_t unitFlags = flagsIdx != 0xFFFF ? player.getField(flagsIdx) : 0u;
+    bool free = (unitFlags & 0x20u) != 0 && (e.attrEx5 & 0x2u) != 0;
+    if (!free && e.spellFamily != 0 && e.spellFamily == classSpellFamily()) {
+        const uint16_t mask = fieldIndex(UF::PLAYER_NO_REAGENT_COST_1);
+        for (uint16_t w = 0; mask != 0xFFFF && w < 3 && !free; ++w)
+            free = (player.getField(static_cast<uint16_t>(mask + w)) & e.spellFamilyFlags[w]) != 0;
+    }
+    if (free) return true;
+    // Each reagent carried in its count - one more where the reagent is an
+    // item whose own spell this is, with charges.
+    for (const auto& r : e.reagents) {
+        if (r.itemId == 0) continue;
+        uint32_t need = r.count;
+        if (const auto* info = owner_.getItemInfo(r.itemId)) {
+            for (const auto& sp : info->spells)
+                if (sp.spellId == spellId && sp.charges != 0) ++need;
+        }
+        if (inv.countCarried(r.itemId) < need) return false;
+    }
+    return true;
+}
+
+bool SpellHandler::weaponCarried(uint32_t spellId, const Entity& player) const {
+    const auto& e = owner_.spellNameCacheRef().find(spellId)->second;
+    // 0x008093d0: no item wanted (Targets 0x10, no EquippedItemClass or
+    // subclasses) ...
+    if ((e.targetFlags & 0x10u) != 0 || e.equippedItemClass < 0 || e.equippedItemSubClassMask == 0) return true;
+    const auto field = [&](UF f) {
+        const uint16_t i = fieldIndex(f);
+        return i != 0xFFFF ? player.getField(i) : 0u;
+    };
+    // ... else one in the slots it looks in (0x006de230): the main hand for
+    // AttributesEx3 0x400, the off hand for 0x1000000, the ranged slot for
+    // a ranged spell (Attributes 0x2), else any - not a hand disarmed, nor a
+    // broken item.
+    const auto found = [&](uint32_t slots) -> const ItemQueryResponseData* {
+        const uint32_t flags = field(UF::UNIT_FIELD_FLAGS), flags2 = field(UF::UNIT_FIELD_FLAGS_2);
+        if ((flags & 0x200000u) != 0) slots &= ~0x8000u;
+        if ((flags2 & 0x80u) != 0) slots &= ~0x10000u;
+        if ((flags2 & 0x400u) != 0) slots &= ~0x20000u;
+        for (int slot = 0; slot < 0x17; ++slot) {
+            if ((slots & (1u << slot)) == 0) continue;
+            const auto it = owner_.onlineItemsRef().find(owner_.getEquipSlotGuid(slot));
+            if (it == owner_.onlineItemsRef().end()) continue;
+            if (it->second.maxDurability != 0 && it->second.curDurability == 0) continue;
+            const auto* info = owner_.getItemInfo(it->second.entry);
+            if (info && static_cast<int32_t>(info->itemClass) == e.equippedItemClass &&
+                (e.equippedItemSubClassMask & (1u << (info->subClass & 31))) != 0)
+                return info;
+        }
+        return nullptr;
+    };
+    uint32_t slots = 0xFFFFFFFFu;
+    if ((e.attrEx3 & 0x400u) != 0) slots = 0x8000u;
+    else if ((e.attrEx3 & 0x1000000u) != 0) slots = 0x10000u;
+    else if ((e.attr & 0x2u) != 0) slots = 0x20000u;
+    const auto* weapon = found(slots);
+    if (!weapon) return false;
+    // Both hands wanted (AttributesEx3 0x1000400): the off hand too.
+    if ((e.attrEx3 & 0x1000400u) == 0x1000400u && !found(0x10000u)) return false;
+    // Its ammunition, where its ItemSubClass row (Flags 0x10: thrown) does
+    // not do without: PLAYER_AMMO_ID put in, and some carried.
+    auto* am = core::Application::getInstance().getAssetManager();
+    if (auto sub = am ? am->loadDBCOptional("ItemSubClass.dbc") : nullptr; sub && sub->getFieldCount() > 4) {
+        for (uint32_t r = 0; r < sub->getRecordCount(); ++r) {
+            if (sub->getUInt32(r, 0) != weapon->itemClass || sub->getUInt32(r, 1) != weapon->subClass) continue;
+            if ((sub->getUInt32(r, 4) & 0x10u) != 0) return true;
+            break;
+        }
+    }
+    if (weapon->ammoType == 0) return true;
+    const uint32_t ammo = field(UF::PLAYER_AMMO_ID);
+    return ammo != 0 && owner_.getInventory().countCarried(ammo) != 0;
+}
+
+bool SpellHandler::spellUsable(uint32_t spellId, const ItemQueryResponseData* item) {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return false;
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (!player || !player->isUnit()) return false;
+    const auto& e = it->second;
+    namespace cc = cast_check;
+    const cc::Caster c = casterState(spellId, *player);
+    cc::Usable u;
+    const uint16_t pf = fieldIndex(UF::PLAYER_FLAGS);
+    u.playerFlags = pf != 0xFFFF ? player->getField(pf) : 0u;
+    // vtable +0x128: dead, or a ghost (PLAYER_FLAGS 0x10).
+    u.deadOrGhost = static_cast<const Unit&>(*player).getHealth() == 0 || (u.playerFlags & 0x10u) != 0;
+    u.control = owner_.isServerMovementAllowed();
+    // An item flagged 0x10000000 is used without the spell's tools.
+    u.tools = (item && (item->itemFlags & 0x10000000u) != 0) || toolsCarried(spellId, *player);
+    u.equipped = weaponCarried(spellId, *player);
+    // 0x00513920: the combo points are on the target.
+    u.comboPoints = owner_.getComboPoints() != 0 && owner_.getComboTarget() == owner_.getTargetGuid() &&
+                    owner_.getTargetGuid() != 0;
+    u.held = historyHeld(spellId, 0, e.category);
+    // The target's aura states and spells (TargetAuraState [21], its Not
+    // [23], TargetAuraSpell [25], ExcludeTargetAuraSpell [27]) and the side
+    // its first effect wants. With autoSelfCast, no target, or a friend
+    // wanted and the target no friend, the player stands for it.
+    const auto spellKnown = [&](uint32_t id) { return id != 0 && owner_.spellNameCacheRef().count(id) != 0; };
+    if (e.targetAuraState != 0 || e.targetAuraStateNot != 0 || spellKnown(e.targetAuraSpell) ||
+        spellKnown(e.excludeTargetAuraSpell)) {
+        auto& em = owner_.getEntityManager();
+        auto target = owner_.getTargetGuid() != 0 ? em.getEntity(owner_.getTargetGuid()) : nullptr;
+        if (target && !target->isUnit()) target = nullptr;
+        const uint32_t a0 = e.implicitTargetsA[0];
+        const bool friendWanted = a0 == 21 || a0 == 35 || a0 == 57 || a0 == 61;
+        if (owner_.isAutoSelfCast() &&
+            (!target || (friendWanted && !relationsOf(owner_, player, target, 0).mayAssist)))
+            target = player;
+        if (!target) {
+            if (e.targetAuraState != 0 || spellKnown(e.targetAuraSpell)) u.target = false;
+        } else {
+            const uint16_t st = fieldIndex(UF::UNIT_FIELD_AURASTATE);
+            const uint32_t states = st != 0xFFFF ? target->getField(st) : 0u;
+            const auto hasState = [&](uint32_t s) { return (states & (1u << ((s - 1) & 31))) != 0; };
+            const auto* auras = target->getGuid() == owner_.getPlayerGuid() ? &playerAuras_
+                                                                            : getUnitAuras(target->getGuid());
+            const auto carries = [&](uint32_t id) {
+                if (!auras) return false;
+                for (const auto& a : *auras)
+                    if (a.spellId == id) return true;
+                return false;
+            };
+            const bool lets = c.ignoresAuraState;
+            if (e.targetAuraState != 0 && !hasState(e.targetAuraState) && !lets) u.target = false;
+            if (e.targetAuraStateNot != 0 && hasState(e.targetAuraStateNot) && !lets) u.target = false;
+            if (spellKnown(e.targetAuraSpell) && !carries(e.targetAuraSpell) && !lets) u.target = false;
+            if (spellKnown(e.excludeTargetAuraSpell) && carries(e.excludeTargetAuraSpell) && !lets) u.target = false;
+            const auto r = relationsOf(owner_, player, target, 0);
+            if (a0 == 6 && !r.mayAttack) u.target = false;
+            if (a0 == 21 && !r.mayAssist) u.target = false;
+            if (a0 == 35 && (!r.inParty || !r.mayAssist)) u.target = false;
+            if ((a0 == 57 || a0 == 61) && (!r.inRaid || !r.mayAssist)) u.target = false;
+        }
+    }
+    return cc::usable(checkSpellOf(e), c, u);
+}
+
+unit_target::Range SpellHandler::spellReach(uint32_t spellId, const Entity& caster, const Entity* unit,
+                                            bool friendly) const {
+    const auto& e = owner_.spellNameCacheRef().find(spellId)->second;
+    const int k = friendly ? 1 : 0;
+    unit_target::RangeInput in;
+    in.attr = e.attr;
+    in.hasRow = e.hasRangeRow;
+    in.rowFlags = e.rangeFlags;
+    in.rowMin = std::max(0.0f, e.rangeMin[k]);
+    in.rowMax = std::max(0.0f, e.rangeMax[k]);
+    in.casterReach = caster.isUnit() ? static_cast<const Unit&>(caster).getCombatReach() : 0.0f;
+    if (unit && unit->isUnit()) {
+        in.hasUnit = true;
+        in.unitReach = static_cast<const Unit&>(*unit).getCombatReach();
+        in.unitIsPlayer = unit->getType() == ObjectType::PLAYER;
+        in.casterMoving = movingForReach(owner_, caster);
+        in.unitMoving = movingForReach(owner_, *unit);
+    }
+    return unit_target::unitRange(in, [&](float m) {
+        return spell_mods::apply(m, spellModifiers(spellId, spell_mods::kOpRange));
+    });
+}
+
+std::optional<unit_target::Range> SpellHandler::spellRange(uint32_t spellId, uint64_t casterGuid) const {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const auto caster = owner_.getEntityManager().getEntity(casterGuid);
+    if (it == owner_.spellNameCacheRef().end() || !caster) return std::nullopt;
+    // 0x00801650 with no unit: the friendly row for a spell aimed at
+    // friends (0x007fe1b0 answering 1), else the hostile one.
+    return spellReach(spellId, *caster, nullptr, owner_.getSpellTargetKind(spellId) == 1);
+}
+
+std::optional<bool> SpellHandler::reachAnswer(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid) const {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    auto& em = owner_.getEntityManager();
+    const auto caster = em.getEntity(casterGuid);
+    // 0x00809610: the unit asked, else the target.
+    if (unitGuid == 0) unitGuid = owner_.getTargetGuid();
+    auto unit = unitGuid != 0 ? em.getEntity(unitGuid) : nullptr;
+    if (it == owner_.spellNameCacheRef().end() || !caster || !unit) return std::nullopt;
+    const auto& e = it->second;
+    // Targets (low half) and what the effects' ImplicitTargetA add; a pet
+    // wanted (5) and no plain unit puts the pet in its place.
+    uint32_t m = e.targetFlags & 0xFFFFu;
+    bool pet = false;
+    for (const uint32_t a : e.implicitTargetsA) {
+        switch (a) {
+            case 1: m &= ~0x400u; break;
+            case 5: pet = true; m &= ~0x8000u; break;
+            case 6: case 53: m |= 0x80u; break;
+            case 21: case 45: m |= 0x100u; break;
+            case 23: m |= 0x800u; break;
+            case 25: case 63: case 64: case 65: case 66: case 67: case 68: case 69: case 70: case 71: case 74:
+            case 75: m |= 0x2u; break;
+            case 26: m |= 0x4000u; break;
+            case 35: m |= 0x8u; break;
+            case 57: case 61: m |= 0x4u; break;
+            default: break;
+        }
+    }
+    if (pet && (m & 0x2u) == 0) {
+        unit = owner_.getPetGuid() != 0 ? em.getEntity(owner_.getPetGuid()) : nullptr;
+        if (!unit) return std::nullopt;
+        m |= 0x2u;
+    }
+    const auto inReach = [&](const Entity& u, bool friendly) {
+        const auto range = spellReach(spellId, *caster, &u, friendly);
+        const glm::vec3 d(u.getX() - caster->getX(), u.getY() - caster->getY(), u.getZ() - caster->getZ());
+        return unit_target::reachFailure(glm::dot(d, d), range) == 0;  // 0x00803850
+    };
+    if (unit->getType() == ObjectType::GAMEOBJECT) {
+        if ((m & 0x4800u) == 0) return std::nullopt;
+        return inReach(*unit, owner_.getSpellTargetKind(spellId) == 1);
+    }
+    // A corpse is not asked about here.
+    if (!unit->isUnit()) return std::nullopt;
+    if ((e.attrEx5 & 0x800u) != 0) {
+        // 0x007ffc40: the unit, or its own target standing for it.
+        const uint64_t itsGuid = entityGuidField(*unit, UF::UNIT_FIELD_TARGET_LO);
+        auto its = itsGuid != 0 ? em.getEntity(itsGuid) : nullptr;
+        if (its && !its->isUnit()) its = nullptr;
+        const auto pick = unit_target::retarget(m, relationsOf(owner_, caster, unit, e.attrEx6), its != nullptr,
+                                                its ? relationsOf(owner_, caster, its, e.attrEx6)
+                                                    : unit_target::Relations{});
+        if (pick == unit_target::Retarget::None) return std::nullopt;
+        if (pick == unit_target::Retarget::ItsTarget) unit = its;
+    }
+    const uint32_t flags = entityField(*unit, UF::UNIT_FIELD_FLAGS);
+    if ((flags & 0x10000u) != 0 && (e.attrEx6 & 0x1000000u) == 0) return std::nullopt;
+    if (e.targetCreatureType != 0) {
+        const uint32_t type = creatureTypeOf(owner_, *unit);
+        if (type == 0 || (e.targetCreatureType & (1u << ((type - 1) & 31))) == 0) return std::nullopt;
+    }
+    const auto& un = static_cast<const Unit&>(*unit);
+    const bool dead = un.getHealth() == 0;
+    if (dead) {
+        if ((un.getDynamicFlags() & 0x20u) == 0 && (m & 0x8600u) == 0 && (e.attrEx2 & 0x1u) == 0) return std::nullopt;
+    } else if ((m & 0x400u) != 0) {
+        return std::nullopt;
+    }
+    const auto r = relationsOf(owner_, caster, unit, e.attrEx6);
+    const bool taken = ((m & 0x8u) != 0 && r.inParty && r.mayAssist) || ((m & 0x4u) != 0 && r.inRaid && r.mayAssist) ||
+                       ((m & 0x100u) != 0 && r.mayAssistEx6) || ((m & 0x80u) != 0 && r.mayAttack) ||
+                       ((m & 0x2u) != 0 && (flags & 0x100u) == 0);
+    const bool isPlayer = unit->getType() == ObjectType::PLAYER;
+    if (!taken) {
+        // An ally's corpse (0x8000): a dead player or pet the caster may
+        // help; an enemy's (0x200): a dead player it may not.
+        if ((m & 0x8000u) != 0 && dead && (isPlayer || entityField(*unit, UF::UNIT_FIELD_PETNUMBER) != 0)) {
+            if (!r.mayAssist) return std::nullopt;
+        } else if ((m & 0x200u) == 0 || !dead || !isPlayer || r.mayAssist) {
+            return std::nullopt;
+        }
+    }
+    // 0x00803850 at the friendly row for a unit the caster may help
+    // (0x00801650).
+    return inReach(*unit, r.mayAssist);
+}
+
 bool SpellHandler::playerAuraAffects(uint32_t auraType, uint32_t spellId) const {
     const auto own = owner_.spellNameCacheRef().find(spellId);
     if (own == owner_.spellNameCacheRef().end()) return false;
@@ -2353,24 +2675,11 @@ spell_mods::Sum SpellHandler::spellModifiers(uint32_t spellId, uint8_t op) const
     loadSpellNameCache();
     auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end()) return {};
-    // The class's spell family, ChrClasses SpellClassSet (+0x20, WotLK
-    // column 56; 22 in TBC's file, 14 in Classic's), set when the player
-    // enters the world (0x008007a0).
-    const uint8_t classId = owner_.getPlayerClass();
-    if (classSpellFamilyFor_ != classId) {
-        classSpellFamilyFor_ = classId;
-        classSpellFamily_ = 0;
-        auto* am = core::Application::getInstance().getAssetManager();
-        auto classes = am ? am->loadDBCOptional("ChrClasses.dbc") : nullptr;
-        const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ChrClasses") : nullptr;
-        const uint32_t field = layout ? layout->tryField("SpellClassSet") : 0xFFFFFFFF;
-        const int32_t row = classes && field < classes->getFieldCount() ? classes->findRecordById(classId) : -1;
-        if (row >= 0) classSpellFamily_ = classes->getUInt32(static_cast<uint32_t>(row), field);
-    }
+    const uint32_t family = classSpellFamily();
     const auto& flat = owner_.spellFlatModsRef();
     const auto& pct = owner_.spellPctModsRef();
     const auto& e = it->second;
-    return spell_mods::modifiers(e.spellFamily, e.spellFamilyFlags, e.attrEx3, classSpellFamily_, op,
+    return spell_mods::modifiers(e.spellFamily, e.spellFamilyFlags, e.attrEx3, family, op,
                                  [&](uint8_t bit, uint8_t o) {
                                      const GameHandler::SpellModKey key{.op = static_cast<GameHandler::SpellModOp>(o),
                                                                         .group = bit};
@@ -3272,6 +3581,8 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         casting_ = true;
         castIsChannel_ = false;
         currentCastSpellId_ = data.spellId;
+        // Cast from an item, the caster SMSG_SPELL_START names is the item.
+        castItemGuid_ = data.casterGuid != data.casterUnit ? data.casterGuid : 0;
         castTimeTotal_ = data.castTime / 1000.0f;
         castTimeRemaining_ = castTimeTotal_;
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURRENT_SPELL_CAST_CHANGED", {});
@@ -4594,6 +4905,77 @@ void SpellHandler::handleUpdateAuraDuration(uint8_t slot, uint32_t durationMs) {
 
 static const std::string SPELL_EMPTY_STRING;
 
+namespace {
+// 0x00739650's columns (cast_check::Spell) and the ones 0x0080b5d0 and
+// 0x008091d0 read beside them, named by the WotLK layout alone.
+struct CastCheckColumns {
+    uint32_t mechanic, stances, stancesNot, casterState, casterStateNot, casterAura, excludeAura, interrupt,
+        auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, baseLevel, maxLevel,
+        castTimeIndex, effectMechanic, trigger, prevention, minFaction, minRep, areaGroup, itemClass,
+        itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory;
+
+    template <class Layout>
+    explicit CastCheckColumns(const Layout* l) {
+        const auto named = [&](const char* name) { return l ? l->tryField(name) : 0xFFFFFFFFu; };
+        mechanic = named("Mechanic"), stances = named("Stances"), stancesNot = named("StancesNot");
+        casterState = named("CasterAuraState"), casterStateNot = named("CasterAuraStateNot");
+        casterAura = named("CasterAuraSpell"), excludeAura = named("ExcludeCasterAuraSpell");
+        interrupt = named("InterruptFlags"), auraInterrupt = named("AuraInterruptFlags");
+        channelInterrupt = named("ChannelInterruptFlags"), powerType = named("PowerType");
+        manaCost = named("ManaCost"), perLevel = named("ManaCostPerLevel"), costPct = named("ManaCostPercentage");
+        baseLevel = named("BaseLevel"), maxLevel = named("MaxLevel"), castTimeIndex = named("CastingTimeIndex");
+        effectMechanic = named("EffectMechanic0"), trigger = named("EffectTriggerSpell0");
+        prevention = named("PreventionType"), minFaction = named("MinFactionId"), minRep = named("MinReputation");
+        areaGroup = named("AreaGroupId"), itemClass = named("EquippedItemClass");
+        itemSubClassMask = named("EquippedItemSubClassMask"), runeCost = named("RuneCostID");
+        targetStateNot = named("TargetAuraStateNot"), targetAura = named("TargetAuraSpell");
+        excludeTargetAura = named("ExcludeTargetAuraSpell"), totem = named("Totem");
+        totemCategory = named("TotemCategory");
+    }
+
+    void read(GameHandler::SpellNameEntry& entry, const pipeline::DBCFile& dbc, uint32_t i) const {
+        const uint32_t fieldCount = dbc.getFieldCount();
+        const auto u = [&](uint32_t f) { return f < fieldCount ? dbc.getUInt32(i, f) : 0u; };
+        const auto n = [&](uint32_t f) { return static_cast<int32_t>(u(f)); };
+        entry.mechanic = u(mechanic);
+        for (uint32_t w = 0; w < 2; ++w) {
+            if (stances < fieldCount) entry.stances[w] = u(stances + w);
+            if (stancesNot < fieldCount) entry.stancesNot[w] = u(stancesNot + w);
+            if (totem < fieldCount) entry.totems[w] = u(totem + w);
+            if (totemCategory < fieldCount) entry.totemCategories[w] = u(totemCategory + w);
+        }
+        entry.casterAuraState = u(casterState);
+        entry.casterAuraStateNot = u(casterStateNot);
+        entry.casterAuraSpell = u(casterAura);
+        entry.excludeCasterAuraSpell = u(excludeAura);
+        entry.interruptFlags = u(interrupt);
+        entry.auraInterruptFlags = u(auraInterrupt);
+        entry.channelInterruptFlags = u(channelInterrupt);
+        entry.powerType = u(powerType);
+        entry.manaCost = n(manaCost);
+        entry.manaCostPerLevel = n(perLevel);
+        entry.manaCostPct = n(costPct);
+        entry.baseLevel = n(baseLevel);
+        entry.maxLevel = n(maxLevel);
+        entry.castingTimeIndex = u(castTimeIndex);
+        for (uint32_t k = 0; k < 3; ++k) {
+            if (effectMechanic < fieldCount) entry.effectMechanic[k] = u(effectMechanic + k);
+            if (trigger < fieldCount) entry.effectTriggerSpell[k] = u(trigger + k);
+        }
+        entry.preventionType = u(prevention);
+        entry.minFactionId = u(minFaction);
+        entry.minReputation = u(minRep);
+        entry.areaGroupId = u(areaGroup);
+        if (itemClass < fieldCount) entry.equippedItemClass = n(itemClass);
+        entry.equippedItemSubClassMask = u(itemSubClassMask);
+        entry.runeCostId = u(runeCost);
+        entry.targetAuraStateNot = u(targetStateNot);
+        entry.targetAuraSpell = u(targetAura);
+        entry.excludeTargetAuraSpell = u(excludeTargetAura);
+    }
+};
+}  // namespace
+
 void SpellHandler::loadSpellNameCache() const {
     if (owner_.spellNameCacheLoadedRef()) return;
 
@@ -4812,20 +5194,7 @@ void SpellHandler::loadSpellNameCache() const {
     // came back zero - which is most of them, since the server sends a cooldown
     // only when it is correcting one the client should already have.
     // 0x00739650's (cast_check::Spell), named by the WotLK layout alone.
-    const auto named = [&](const char* name) { return spellL ? spellL->tryField(name) : 0xFFFFFFFFu; };
-    const uint32_t mechanicField = named("Mechanic"), stancesField = named("Stances"),
-                   stancesNotField = named("StancesNot"), casterStateField = named("CasterAuraState"),
-                   casterStateNotField = named("CasterAuraStateNot"), casterAuraField = named("CasterAuraSpell"),
-                   excludeAuraField = named("ExcludeCasterAuraSpell"), interruptField = named("InterruptFlags"),
-                   auraInterruptField = named("AuraInterruptFlags"),
-                   channelInterruptField = named("ChannelInterruptFlags"), powerTypeField = named("PowerType"),
-                   manaCostField = named("ManaCost"), perLevelField = named("ManaCostPerLevel"),
-                   costPctField = named("ManaCostPercentage"), baseLevelField = named("BaseLevel"),
-                   maxLevelField = named("MaxLevel"), castTimeIndexField = named("CastingTimeIndex"),
-                   effectMechanicField = named("EffectMechanic0"), triggerField = named("EffectTriggerSpell0"),
-                   preventionField = named("PreventionType"), minFactionField = named("MinFactionId"),
-                   minRepField = named("MinReputation"), areaGroupField = named("AreaGroupId"),
-                   itemClassField = named("EquippedItemClass"), runeCostField = named("RuneCostID");
+    const CastCheckColumns castColumns(spellL);
     const auto timing = pipeline::detectSpellTimingFields(dbc.get(), spellL);
     const uint32_t recoveryField = timing.recoveryTime;
     const uint32_t categoryRecoveryField = timing.categoryRecoveryTime;
@@ -4894,40 +5263,7 @@ void SpellHandler::loadSpellNameCache() const {
             if (targetAuraStateField != 0xFFFFFFFF && targetAuraStateField < fieldCount) {
                 entry.targetAuraState = dbc->getUInt32(i, targetAuraStateField);
             }
-            {
-                const auto u = [&](uint32_t f) { return f < fieldCount ? dbc->getUInt32(i, f) : 0u; };
-                const auto n = [&](uint32_t f) { return static_cast<int32_t>(u(f)); };
-                entry.mechanic = u(mechanicField);
-                for (uint32_t w = 0; w < 2; ++w) {
-                    if (stancesField < fieldCount) entry.stances[w] = u(stancesField + w);
-                    if (stancesNotField < fieldCount) entry.stancesNot[w] = u(stancesNotField + w);
-                }
-                entry.casterAuraState = u(casterStateField);
-                entry.casterAuraStateNot = u(casterStateNotField);
-                entry.casterAuraSpell = u(casterAuraField);
-                entry.excludeCasterAuraSpell = u(excludeAuraField);
-                entry.interruptFlags = u(interruptField);
-                entry.auraInterruptFlags = u(auraInterruptField);
-                entry.channelInterruptFlags = u(channelInterruptField);
-                entry.powerType = u(powerTypeField);
-                entry.manaCost = n(manaCostField);
-                entry.manaCostPerLevel = n(perLevelField);
-                entry.manaCostPct = n(costPctField);
-                entry.baseLevel = n(baseLevelField);
-                entry.maxLevel = n(maxLevelField);
-                entry.castingTimeIndex = u(castTimeIndexField);
-                for (uint32_t k = 0; k < 3; ++k) {
-                    if (effectMechanicField < fieldCount) entry.effectMechanic[k] = u(effectMechanicField + k);
-                    if (triggerField < fieldCount) entry.effectTriggerSpell[k] = u(triggerField + k);
-                }
-                entry.preventionType = u(preventionField);
-                entry.minFactionId = u(minFactionField);
-                entry.minReputation = u(minRepField);
-                entry.areaGroupId = u(areaGroupField);
-                if (itemClassField < fieldCount) entry.equippedItemClass = n(itemClassField);
-                entry.equippedItemSubClassMask = u(named("EquippedItemSubClassMask"));
-                entry.runeCostId = u(runeCostField);
-            }
+            castColumns.read(entry, *dbc, i);
             // Load effect base points for $s1/$s2/$s3 tooltip substitution
             if (ebp0Field != 0xFFFFFFFF) entry.effectBasePoints[0] = static_cast<int32_t>(dbc->getUInt32(i, ebp0Field));
             if (ebp1Field != 0xFFFFFFFF) entry.effectBasePoints[1] = static_cast<int32_t>(dbc->getUInt32(i, ebp1Field));

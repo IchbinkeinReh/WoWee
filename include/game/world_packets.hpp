@@ -2050,6 +2050,8 @@ struct ItemQueryResponseData {
         int32_t cooldown = -1;
         uint32_t category = 0;
         int32_t categoryCooldown = -1;
+        /// SpellCharges (+0x128): under zero, spent with the item.
+        int32_t charges = 0;
     };
     std::array<ItemSpell, 5> spells{};
     uint32_t bindType = 0;      // 0=none, 1=BoP, 2=BoE, 3=BoU, 4=BoQ
@@ -2063,6 +2065,21 @@ struct ItemQueryResponseData {
     // Generic stat pairs for non-primary stats (hit, crit, haste, AP, SP, etc.)
     struct ExtraStat { uint32_t statType = 0; int32_t statValue = 0; };
     std::vector<ExtraStat> extraStats;
+    /// Every (type, value) pair as it was sent, StatsCount of them, the
+    /// primaries among them: what the stat summary adds (0x0061b990).
+    std::vector<ExtraStat> statPairs;
+    /// ScalingStatDistribution (+0xb8) and ScalingStatValue (+0xbc): an
+    /// heirloom's stats, armour and damage by the level (0x0061f550).
+    uint32_t scalingStatDistribution = 0;
+    uint32_t scalingStatValue = 0;
+    /// Both damage entries as sent (+0xc0 minimums, +0xc8 maximums, +0xd0
+    /// types) - the summary's damage per second takes both (0x0061f410).
+    struct Damage { float min = 0.0f; float max = 0.0f; uint32_t type = 0; };
+    std::array<Damage, 2> damages{};
+    uint32_t ammoType = 0;          ///< +0xf8
+    int32_t block = 0;              ///< +0x1a4
+    uint32_t totemCategory = 0;     ///< +0x1bc
+    uint32_t itemLimitCategory = 0; ///< +0x1ec (ItemLimitCategory.dbc)
 
     /// File one (type, value) pair from an item query into this item.
     ///

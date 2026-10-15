@@ -492,6 +492,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         uint32_t statType = packet.readUInt32();
         int32_t statValue = static_cast<int32_t>(packet.readUInt32());
         data.applyStat(statType, statValue);
+        data.statPairs.push_back({.statType = statType, .statValue = statValue});
     }
 
     // ScalingStatDistribution and ScalingStatValue
@@ -499,8 +500,8 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         LOG_WARNING("SMSG_ITEM_QUERY_SINGLE_RESPONSE: truncated before scaling stats (entry=", data.entry, ")");
         return true;  // Have core fields; scaling is optional
     }
-    packet.readUInt32(); // ScalingStatDistribution
-    packet.readUInt32(); // ScalingStatValue
+    data.scalingStatDistribution = packet.readUInt32();
+    data.scalingStatValue = packet.readUInt32();
 
     // WotLK 3.3.5a: 2 damage entries (12 bytes each) + armor + 6 resists + delay + ammoType + rangedModRange
     // = 24 + 36 + 4 = 64 bytes minimum. Guard here because the section above
@@ -516,6 +517,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         float dmgMin = packet.readFloat();
         float dmgMax = packet.readFloat();
         uint32_t damageType = packet.readUInt32();
+        data.damages[static_cast<size_t>(i)] = {dmgMin, dmgMax, damageType};
         if (!haveWeaponDamage && dmgMax > 0.0f) {
             if (damageType == 0 || data.damageMax <= 0.0f) {
                 data.damageMin = dmgMin;
@@ -533,7 +535,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
     data.shadowRes = static_cast<int32_t>(packet.readUInt32()); // ShadowRes
     data.arcaneRes = static_cast<int32_t>(packet.readUInt32()); // ArcaneRes
     data.delayMs = packet.readUInt32();
-    packet.readUInt32(); // AmmoType
+    data.ammoType = packet.readUInt32();
     packet.readFloat();  // RangedModRange
 
     // 5 item spells: SpellId, SpellTrigger, SpellCharges, SpellCooldown, SpellCategory, SpellCategoryCooldown
@@ -541,7 +543,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         if (!packet.hasRemaining(24)) break;
         data.spells[i].spellId = packet.readUInt32();
         data.spells[i].spellTrigger = packet.readUInt32();
-        packet.readUInt32(); // SpellCharges
+        data.spells[i].charges = static_cast<int32_t>(packet.readUInt32());
         data.spells[i].cooldown = static_cast<int32_t>(packet.readUInt32());
         data.spells[i].category = packet.readUInt32();
         data.spells[i].categoryCooldown = static_cast<int32_t>(packet.readUInt32());
@@ -573,14 +575,16 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         packet.readUInt32();
         data.material = packet.readUInt32();
         data.sheath = packet.readUInt32();
-        for (size_t i = 0; i < 3; ++i) packet.readUInt32();
+        packet.readUInt32();  // RandomProperty and RandomSuffix: the link
+        packet.readUInt32();  // names the one rolled
+        data.block = static_cast<int32_t>(packet.readUInt32());
         data.itemSetId = packet.readUInt32(); // ItemSet(6)
         // MaxDurability(7), Area(8), Map(9)
         for (size_t i = 0; i < 3; ++i) packet.readUInt32();
         // BagFamily(10) - kept rather than skipped. GetItemFamily answers from
         // it, and an addon asking what a bag holds gets nil without it.
         data.bagFamily = packet.readUInt32();
-        packet.readUInt32();  // TotemCategory(11)
+        data.totemCategory = packet.readUInt32();  // TotemCategory(11)
         // The three sockets, colour and content together, one socket at a
         // time - `for (s) { << Socket[s].Color; << Socket[s].Content; }`.
         // Read as three colours followed by three contents this took the
@@ -599,6 +603,14 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         // its colour is known. An item carries no socket colour of its own.
         if (packet.hasRemaining(4)) {
             data.gemProperties = packet.readUInt32();
+        }
+        // RequiredDisenchantSkill, ArmorDamageModifier, Duration, then
+        // ItemLimitCategory - GetItemUniqueness's (0x00516ed0).
+        if (packet.hasRemaining(16)) {
+            packet.readUInt32();
+            packet.readFloat();
+            packet.readUInt32();
+            data.itemLimitCategory = packet.readUInt32();
         }
     }
 

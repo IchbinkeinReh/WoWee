@@ -33,6 +33,9 @@ namespace wowee::addons {
 /// the only reason the number means anything on the other side.
 int questLogRowForQuest(game::GameHandler* gh, uint32_t questId);
 
+/// The highest-rank known spell with this name, or 0 (lua_spell_api.cpp).
+uint32_t highestKnownRankByName(game::GameHandler* gh, const std::string& name);
+
 /// Put FrameXML's quest log in front of `questId`.
 ///
 /// Asked for by a quest link in chat and by the objective tracker, neither of

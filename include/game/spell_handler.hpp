@@ -8,6 +8,7 @@
 #include "game/spell_history.hpp"
 #include "game/spell_missiles_in_flight.hpp"
 #include "game/cast_checks.hpp"
+#include "game/spell_unit_target.hpp"
 #include "game/handler_types.hpp"
 #include "audio/spell_sound_manager.hpp"
 #include "network/packet.hpp"
@@ -328,6 +329,20 @@ public:
     /// or the power as it is predicted (0x0071c2e0). A spell not known to
     /// the cache has nothing to be short of.
     [[nodiscard]] bool enoughPower(uint32_t spellId, const Unit& unit) const;
+    /// 0x0080b5d0 for the player: whether the spell could be cast now -
+    /// `item` the template it is used from, none for a spell's own.
+    bool spellUsable(uint32_t spellId, const ItemQueryResponseData* item);
+    /// 0x00807da0: an entry of the player's history - the spell's from the
+    /// item `itemId` (0 none), or one of `category` - held for an event.
+    [[nodiscard]] bool historyHeld(uint32_t spellId, uint32_t itemId, uint32_t category) const;
+    /// 0x00809610: nothing where the unit (0: the target) is none the
+    /// spell may be aimed at, else whether it is in the caster's reach.
+    [[nodiscard]] std::optional<bool> reachAnswer(uint32_t spellId, uint64_t caster, uint64_t unit) const;
+    /// 0x00801650 with no unit: the spell's reach from the caster.
+    [[nodiscard]] std::optional<unit_target::Range> spellRange(uint32_t spellId, uint64_t caster) const;
+    /// The item the running cast was cast from (SMSG_SPELL_START's caster
+    /// where it is not the unit), 0 for none (0x00805fc0).
+    [[nodiscard]] uint64_t currentCastItemGuid() const { return casting_ ? castItemGuid_ : 0; }
     [[nodiscard]] const std::vector<AuraSlot>* getUnitAuras(uint64_t guid) const {
         auto it = unitAurasCache_.find(guid);
         return (it != unitAurasCache_.end()) ? &it->second : nullptr;
@@ -570,6 +585,7 @@ private:
         uint32_t required = 0;
     };
     UnitTarget unitTarget_;
+    uint64_t castItemGuid_ = 0;
     spell_history::History petHistory_;
     spell_history::History playerHistory_;
     /// 0x00af5274: the casts whose missile still flies.
@@ -641,6 +657,15 @@ private:
     /// 0x00812410's SupercededBySpell for the player's race and class, 0 for none.
     uint32_t supersededBy(uint32_t spellId) const;
     void loadAreaGroups() const;
+    /// ChrClasses SpellClassSet for the player's class (0x00d397b4).
+    uint32_t classSpellFamily() const;
+    /// 0x008091d0 for the player: the spell's totems, tools and reagents.
+    bool toolsCarried(uint32_t spellId, const Entity& player) const;
+    /// 0x008093d0 for the player: the weapon it wants, and its ammunition.
+    bool weaponCarried(uint32_t spellId, const Entity& player) const;
+    /// 0x007ff480 from the caster to the unit (none: a place), at the
+    /// friendly row or the hostile.
+    unit_target::Range spellReach(uint32_t spellId, const Entity& caster, const Entity* unit, bool friendly) const;
     /// 0x005ee5b0: whether the player's runes pay the spell - one of
     /// PowerType 5 with a SpellRuneCost row, at the cost percentage the
     /// school's power cost modifier and multiplier and the cost modifiers

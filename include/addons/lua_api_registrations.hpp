@@ -17,6 +17,8 @@ void registerSocialLuaAPI(lua_State* L);
 void registerSystemLuaAPI(lua_State* L);
 /// The answers from subsystems this client does not have (lua_absent_api).
 void registerAbsentLuaAPI(lua_State* L);
+/// What is asked of an item or a spell without using it (lua_item_query_api).
+void registerItemQueryLuaAPI(lua_State* L);
 
 /// Re-apply every CVar restored from disk, now that the services behind them
 /// exist. See applyCVarSideEffects.

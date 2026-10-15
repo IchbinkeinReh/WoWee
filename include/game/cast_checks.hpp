@@ -353,6 +353,88 @@ struct Result {
     return {};
 }
 
+/// What 0x0080b5d0 asks of the player beyond 0x00739650's caster state:
+/// answers the caller works out of the world.
+struct Usable {
+    uint32_t playerFlags = 0;   ///< PLAYER_FLAGS (+0x1008 +8)
+    bool deadOrGhost = false;   ///< vtable +0x128 (UnitIsDeadOrGhost's)
+    bool control = true;        ///< 0x00bcfb8c: the client controls the player
+    bool tools = true;          ///< 0x008091d0 (totems, tools, reagents) - or the item's Flags 0x10000000
+    bool equipped = true;       ///< 0x008093d0: the weapon it wants, and its ammunition
+    bool comboPoints = true;    ///< 0x00513920: combo points on the target
+    bool target = true;         ///< the target aura states and spells, and its side
+    bool held = false;          ///< 0x008091b0: its history entry held for an event
+};
+
+/// 0x007fcc70: a spell on the next swing, a channel or one repeating.
+[[nodiscard]] constexpr bool swingChannelOrRepeat(const Spell& s) {
+    return (s.attr & 0x404u) != 0 || (s.attrEx & 0x200u) != 0 || (s.attrEx2 & 0x100000u) != 0;
+}
+
+/// 0x0080b5d0 for the player: whether the spell could be cast now - what
+/// IsUsableSpell, IsUsableItem and the action bar ask before the power
+/// (0x008017e0). Its own reading of most of 0x00739650's tests: no
+/// history, no power, no pet or stand state, nothing about moving.
+[[nodiscard]] constexpr bool usable(const Spell& s, const Caster& c, const Usable& u) {
+    if (s.effect[0] == 47) return true;  // TRADE_SKILL
+    // PLAYER_FLAGS 0x1000000: no attacks (ATTACK, effect 78, or Attributes
+    // 0x2) nor swings, channels and repeats; 0x800000: attacks only.
+    const bool attack = s.effect[0] == 78 || (s.attr & 0x2u) != 0;
+    if ((u.playerFlags & 0x1000000u) != 0) {
+        if (attack || swingChannelOrRepeat(s)) return false;
+    } else if (!attack && (u.playerFlags & 0x800000u) != 0) {
+        return false;
+    }
+    if (u.deadOrGhost && (s.attr & 0x800000u) == 0) return false;
+    if (c.mapType == 4) {
+        if ((s.attrEx4 & 0x20000u) == 0 &&
+            (s.recoveryTime > 900000 || s.categoryRecoveryTime > 900000 || (s.attrEx4 & 0x10000u) != 0))
+            return false;
+    } else if (c.mapType >= 0 && (s.attrEx6 & 0x2u) != 0) {
+        return false;
+    }
+    // Out of control: only what the hold lets - fleeing (AttributesEx5
+    // 0x20000, or the fear auras' walk), confused (0x40000, the confusion's),
+    // with a charm of its own (UNIT_FIELD_CHARM, 0x004f5f00) the charm
+    // auras' - or, on a taxi, a spell with Attributes 0x1000000.
+    if (!u.control) {
+        bool lets = false;
+        if ((c.unitFlags & 0x800000u) != 0 && ((s.attrEx5 & 0x20000u) != 0 || c.fear.lets)) lets = true;
+        if ((c.unitFlags & 0x400000u) != 0 && ((s.attrEx5 & 0x40000u) != 0 || c.confuse.lets)) lets = true;
+        if (c.hasCharm && c.charm.lets) lets = true;
+        if (!lets && ((c.unitFlags & 0x100000u) == 0 || (s.attr & 0x1000000u) == 0)) return false;
+    }
+    if (!u.tools || !u.equipped) return false;
+    // AttributesEx 0x100000 | 0x400000: combo points on the target.
+    if ((s.attrEx & 0x500000u) != 0 && !u.comboPoints && !c.ignoresAuraState) return false;
+    // 0x0072bac0, the form; 0x0071b130 may leave one for it.
+    if (const uint8_t code = formFailure(s, c); code != 0 && (code == kOnlyShapeshift || !c.wouldUnshift)) return false;
+    if ((s.attr & 0x20000u) != 0 && (c.visFlags & 0x2u) == 0 && !c.ignoresForm) return false;  // 0x0072bc20
+    if ((s.attr & 0x10000000u) != 0 && (c.unitFlags & 0x80000u) != 0 && !c.ignoresAuraState) return false;
+    const auto hasState = [&](uint32_t st) { return (c.auraState & (1u << ((st - 1) & 31))) != 0; };
+    if (s.casterAuraState != 0 && !hasState(s.casterAuraState) && !c.ignoresAuraState) return false;
+    if (s.casterAuraStateNot != 0 && hasState(s.casterAuraStateNot) && !c.ignoresAuraState) return false;
+    if (s.casterAuraSpell != 0 && !c.hasCasterAuraSpell && !c.ignoresAuraState) return false;
+    if (s.excludeCasterAuraSpell != 0 && c.hasExcludedAuraSpell && !c.ignoresAuraState) return false;
+    if (!u.target) return false;
+    // Attributes 0x2000000: not while its history is held.
+    if ((s.attr & 0x2000000u) != 0 && u.held) return false;
+    // NOT_UNDERWATER (0x100) only swimming, NOT_ABOVEWATER (0x80) only not.
+    const bool channeled = (s.attrEx & 0x44u) != 0;
+    const bool swimming = (c.moveFlags & 0x200000u) != 0;
+    if (!swimming && ((s.auraInterruptFlags & 0x100u) != 0 || (channeled && (s.channelInterruptFlags & 0x100u) != 0)))
+        return false;
+    if (swimming && ((s.auraInterruptFlags & 0x80u) != 0 || (channeled && (s.channelInterruptFlags & 0x80u) != 0)))
+        return false;
+    if ((s.attr & 0xc000u) != 0 && c.outdoors >= 0) {
+        if (c.outdoors == 0 ? (s.attr & 0x8000u) != 0 : (s.attr & 0x4000u) != 0) return false;
+    }
+    if ((s.attrEx4 & 0x4000000u) != 0 && c.flyable == 0) return false;
+    if ((s.attrEx3 & 0x800u) != 0 && c.mapType >= 0 && c.mapType != 3) return false;
+    if ((s.attrEx6 & 0x800u) != 0 && c.mapType == 2) return false;
+    return true;
+}
+
 /// 0x0080cce0 -> 0x00805f60: a press of the spell already pending - its
 /// cast running - is dropped without a word while it is not ready
 /// (0x00809000) or waits on the next swing (Attributes 0x4 | 0x400). Any

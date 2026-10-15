@@ -212,6 +212,11 @@ enum class UF : uint16_t {
     /// WotLK: the unit the player looks through - a vehicle it drives, a
     /// possessed unit (+0x1008 +0x770, 0x004f7310).
     PLAYER_FARSIGHT,
+    /// WotLK: the ammunition the player has put in (+0x1008 +0x1068,
+    /// 0x005e8300) and the class spells it needs no reagents for, three
+    /// mask words (+0x1008 +0x1224, 0x00800d60).
+    PLAYER_AMMO_ID,
+    PLAYER_NO_REAGENT_COST_1,
     GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,
     // MO_TRANSPORT route clock. LEVEL carries the route's period in ms; the high

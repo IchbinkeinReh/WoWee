@@ -2834,6 +2834,37 @@ static int lua_GetInventoryItemID(lua_State* L) {
     return 1;
 }
 
+/// GetInventoryItemQuality(unit, slot) (0x005ea040): of the player, or
+/// the unit inspected, the quality of the item in the slot - -1 for one
+/// that is not equipment (InventoryType 0); the ammunition put in for
+/// slot 0, the player's only. Nil where there is none or it is not in the
+/// cache.
+static int lua_GetInventoryItemQuality(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetInventoryItemQuality(\"unit\", slot)");
+    std::string uid = lua_tostring(L, 1);
+    toLowerInPlace(uid);
+    if (!gh || !lua_isnumber(L, 2)) return luaReturnNil(L);
+    const int slotId = static_cast<int>(lua_tonumber(L, 2));
+    const bool self = resolveUnitGuid(gh, uid) == gh->getPlayerGuid();
+    uint32_t entry = 0;
+    if (slotId == 0) {
+        const uint16_t ammo = game::fieldIndex(game::UF::PLAYER_AMMO_ID);
+        const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+        if (self && player && ammo != 0xFFFF) entry = player->getField(ammo);
+        if (entry != 0) gh->ensureItemInfo(entry);
+    } else if (self) {
+        const game::ItemSlot* sp = inventorySlotItem(gh->getInventory(), slotId);
+        entry = sp && !sp->empty() ? sp->item.itemId : 0;
+    } else {
+        entry = inspectedItemEntry(gh, uid, slotId);
+    }
+    const auto* info = entry != 0 ? gh->getItemInfo(entry) : nullptr;
+    if (!info) return luaReturnNil(L);
+    lua_pushnumber(L, info->inventoryType == 0 ? -1 : static_cast<int>(info->quality));
+    return 1;
+}
+
 static int lua_GetInventoryItemTexture(lua_State* L) {
     auto* gh = getGameHandler(L);
     const char* uid = luaL_optstring(L, 1, "player");
@@ -3800,6 +3831,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetInventoryItemID",      lua_GetInventoryItemID},
+                {"GetInventoryItemQuality", lua_GetInventoryItemQuality},
                 {"GetInventoryItemTexture", lua_GetInventoryItemTexture},
                 {"GetNumLootItems",     lua_GetNumLootItems},
                 {"GetLootSlotInfo",     lua_GetLootSlotInfo},

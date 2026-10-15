@@ -13,7 +13,6 @@
 
 namespace wowee::addons {
 
-namespace {
 
 /// The highest-rank known spell with this name, or 0 when the player knows
 /// none by that name.
@@ -50,8 +49,6 @@ uint32_t highestKnownRankByName(game::GameHandler* gh, const std::string& name) 
     }
     return bestId;
 }
-
-}  // namespace
 
 
 // ---- Finishing a spell that is waiting for a target ----
@@ -154,31 +151,6 @@ static int lua_GetTotemTimeLeft(lua_State* L) {
     }
     lua_pushnumber(L, gh->getTotemSlot(slot - 1).remainingMs() / 1000.0);
     return 1;
-}
-
-static int lua_IsSpellInRange(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    const char* spellNameOrId = luaL_checkstring(L, 1);
-    const char* uid = luaL_optstring(L, 2, "target");
-
-    // Resolve spell ID
-    uint32_t spellId = 0;
-    if (spellNameOrId[0] >= '0' && spellNameOrId[0] <= '9') {
-        spellId = static_cast<uint32_t>(strtoul(spellNameOrId, nullptr, 10));
-    } else {
-        // The rank that would actually be cast, not the first one found. A
-        // range check exists to say whether pressing the button will work, so
-        // it has to be asked of the same spell /cast would pick; where ranks
-        // differ in range, answering about rank one greys out a button that
-        // would have reached.
-        spellId = highestKnownRankByName(gh, spellNameOrId);
-    }
-    if (spellId == 0) { return luaReturnNil(L); }
-
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    return pushSpellRangeAnswer(L, gh, spellId, resolveUnitGuid(gh, uidStr));
 }
 
 // UnitIsVisible(unit) → boolean (entity exists in the client's entity manager)
@@ -1231,49 +1203,6 @@ static int lua_CastSpellByID(lua_State* L) {
     return 0;
 }
 
-static int lua_IsUsableSpell(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushboolean(L, 0); lua_pushboolean(L, 0); return 2; }
-
-    uint32_t spellId = 0;
-    if (lua_isnumber(L, 1)) {
-        spellId = static_cast<uint32_t>(lua_tonumber(L, 1));
-    } else if (lua_isstring(L, 1)) {
-        const char* name = lua_tostring(L, 1);
-        if (!name || !*name) { lua_pushboolean(L, 0); lua_pushboolean(L, 0); return 2; }
-        std::string nameLow(name);
-        toLowerInPlace(nameLow);
-        for (uint32_t sid : gh->getKnownSpells()) {
-            std::string sn = gh->getSpellName(sid);
-            toLowerInPlace(sn);
-            if (sn == nameLow) { spellId = sid; break; }
-        }
-    }
-
-    if (spellId == 0 || !gh->getKnownSpells().count(spellId)) {
-        lua_pushboolean(L, 0);
-        lua_pushboolean(L, 0);
-        return 2;
-    }
-
-    // A cooldown does not make it unusable (0x00541680 asks 0x0080b5d0 and
-    // the power, 0x008017e0).
-    bool noMana = false;
-    auto spellData = gh->getSpellData(spellId);
-    if (spellData.manaCost > 0) {
-        auto playerEntity = gh->getEntityManager().getEntity(gh->getPlayerGuid());
-        if (playerEntity) {
-            auto* unit = dynamic_cast<game::Unit*>(playerEntity.get());
-            if (unit && gh->unitPower(*unit, unit->getPowerType()) < static_cast<int32_t>(spellData.manaCost)) {
-                noMana = true;
-            }
-        }
-    }
-    lua_pushboolean(L, noMana ? 0 : 1);
-    lua_pushboolean(L, noMana ? 1 : 0);
-    return 2;
-}
-
 
 int spellCastCheckKind(game::GameHandler* gh, uint32_t spellId) {
     if (!gh || spellId == 0) return 2;
@@ -1370,7 +1299,6 @@ void registerSpellLuaAPI(lua_State* L) {
             if (gh) gh->cancelGroundTargeting();
             return 0;
         }},
-                {"IsSpellInRange",    lua_IsSpellInRange},
                 {"UnitBuff",          lua_UnitBuff},
                 {"UnitDebuff",        lua_UnitDebuff},
                 {"UnitAura",          lua_UnitAuraGeneric},
@@ -1412,7 +1340,6 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"GetSpellInfo",      lua_GetSpellInfo},
                 {"GetSpellTexture",   lua_GetSpellTexture},
                 {"GetSpellLink",         lua_GetSpellLink},
-                {"IsUsableSpell",        lua_IsUsableSpell},
                 {"CancelUnitBuff",      lua_CancelUnitBuff},
                 {"TargetUnit",        lua_TargetUnit},
                 {"ClearTarget",       lua_ClearTarget},

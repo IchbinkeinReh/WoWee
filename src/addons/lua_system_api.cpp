@@ -6972,10 +6972,6 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, !(svc && svc->isPlayerIndoors && svc->isPlayerIndoors()));
             return 1;
         }},
-                {"IsHarmfulItem",            lua_ReturnFalse},
-                {"IsHelpfulItem",            lua_ReturnFalse},
-                {"IsHarmfulSpell",           lua_ReturnFalse},
-                {"IsHelpfulSpell",           lua_ReturnFalse},
                 // IsPossessBarVisible() (0x005a8820): the possess bar's spell
                 // (0xc234e0) is there and applies no CONTROL_VEHICLE (236,
                 // 0x007fde50) - a vehicle has its own bar.

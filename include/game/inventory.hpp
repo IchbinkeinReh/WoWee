@@ -252,6 +252,31 @@ public:
     /// be in the bags and missing from the crafting check at the same time.
     [[nodiscard]] uint32_t countItem(uint32_t itemId) const;
 
+    /// Each item the client's own searches walk (0x007546f0 with its
+    /// default set 0x247): the equipment and the bags worn, the backpack,
+    /// what each worn bag holds and the keyring - not the bank.
+    template <typename F>
+    void forEachCarried(F&& fn) const {
+        for (const auto& s : equipment)
+            if (!s.empty()) fn(s.item);
+        for (const auto& s : backpack)
+            if (!s.empty()) fn(s.item);
+        for (int b = 0; b < NUM_BAG_SLOTS; ++b)
+            for (int i = 0; i < getBagSize(b); ++i)
+                if (const auto& s = getBagSlot(b, i); !s.empty()) fn(s.item);
+        for (const auto& s : keyring_)
+            if (!s.empty()) fn(s.item);
+    }
+    /// 0x00754d00: how many of the item those hold, an occupied slot being
+    /// at least one.
+    [[nodiscard]] uint32_t countCarried(uint32_t itemId) const {
+        uint32_t n = 0;
+        forEachCarried([&](const ItemDef& d) {
+            if (d.itemId == itemId) n += d.stackCount > 0 ? d.stackCount : 1;
+        });
+        return n;
+    }
+
     // Equipment
     [[nodiscard]] const ItemSlot& getEquipSlot(EquipSlot slot) const;
     bool setEquipSlot(EquipSlot slot, const ItemDef& item);

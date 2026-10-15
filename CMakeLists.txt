@@ -1093,6 +1093,7 @@ set(WOWEE_SOURCES
     src/addons/lua_lfg_api.cpp
     src/addons/lua_socket_api.cpp
     src/addons/lua_absent_api.cpp
+    src/addons/lua_item_query_api.cpp
     src/addons/lua_social_api.cpp
     src/addons/lua_system_api.cpp
     src/addons/lua_action_api.cpp
