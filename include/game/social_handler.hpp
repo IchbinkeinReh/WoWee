@@ -237,6 +237,11 @@ public:
     /// Called as a character enters the world: the name, the ranks and the
     /// roster all belong to whoever was played last, and isInGuild() reads the
     /// name.
+    /// The world's setup (0x00405540 -> 0x0052b550) starts these empty: the
+    /// party (0x0052d0e0), the raid and its ready check (0x005756c0), the
+    /// battlefield queues (0x0054e720), the arena teams (0x005a40e0) and the
+    /// dungeon finder (0x0055d440).
+    void resetForWorldEntry();
     void clearGuildMembership() {
         inGuild_ = false;
         joinedGuildName_.clear();

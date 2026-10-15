@@ -5076,6 +5076,50 @@ void SocialHandler::respondInstanceLock(bool accept) {
     owner_.fireAddonEvent("INSTANCE_LOCK_STOP", {});
 }
 
+void SocialHandler::resetForWorldEntry() {
+    // The server tells a character of its group only when it has one, so the
+    // last character's party and raid stayed on the frames of one with none.
+    partyData = GroupListData{};
+    pendingReadyCheck_ = false;
+    readyCheckReadyCount_ = 0;
+    readyCheckNotReadyCount_ = 0;
+    readyCheckInitiator_.clear();
+    readyCheckResults_.clear();
+    bgQueues_ = {};
+    availableBgs_.clear();
+    bgScoreboard_ = BgScoreboardData{};
+    bgPlayerPositions_.clear();
+    bgJoinPendingType_ = 0;
+    arenaTeamStats_.clear();
+    arenaTeamRosters_.clear();
+    lfgState_ = LfgState::None;
+    lfgCompletionReward_ = LfgCompletionReward{};
+    lfgDungeonId_ = 0;
+    lfgProposalId_ = 0;
+    shownProposalId_ = 0;
+    lfgProposalValid_ = false;
+    lfgPlayerUpdate_ = LfgUpdateBody{};
+    lfgPartyUpdate_ = LfgUpdateBody{};
+    lfgPartyLocks_.clear();
+    lfgPartyLocksReceived_ = false;
+    lfgPlayerLocksReceived_ = false;
+    lfgOfferedRoles_ = 0;
+    lfgWaitTank_ = lfgWaitHealer_ = lfgWaitDps_ = -1;
+    lfgNeedTank_ = lfgNeedHealer_ = lfgNeedDps_ = 0;
+    lfgBootVictimGuid_ = 0;
+    lfgLocks_.clear();
+    lfgRewards_.clear();
+    lfgProposalMembers_.clear();
+    lfgAvgWaitSec_ = lfgMyWaitSec_ = -1;
+    lfgQueuedSeconds_ = 0;
+    lfgBootVotes_ = lfgBootTotal_ = lfgBootTimeLeft_ = lfgBootNeeded_ = 0;
+    lfgRoleCheckDungeons_.clear();
+    lfgRoleCheckMembers_ = 0;
+    lfgBootInProgress_ = lfgBootDidVote_ = lfgBootMyVote_ = false;
+    lfgBootTargetName_.clear();
+    lfgBootReason_.clear();
+}
+
 void SocialHandler::resetTransferState() {
     instanceLock_ = InstanceLockPrompt{};
     encounterUnitGuids_.fill(0);

@@ -573,6 +573,7 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     // is where that showed: the click passed the check, the server refused it
     // with error 9, and an empty vault window was already on screen.
     if (socialHandler_) socialHandler_->clearGuildMembership();
+    if (socialHandler_) socialHandler_->resetForWorldEntry();
 
     LOG_INFO("========================================");
     LOG_INFO("   ENTERING WORLD");
