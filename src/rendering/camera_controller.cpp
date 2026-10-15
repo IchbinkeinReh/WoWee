@@ -3022,7 +3022,10 @@ void CameraController::update(float deltaTime) {
     bool keyQ = !uiWantsKeyboard && !sitting && !movementSuppressed && input.isKeyPressed(SDL_SCANCODE_Q);
     bool keyE = !uiWantsKeyboard && !sitting && !movementSuppressed && input.isKeyPressed(SDL_SCANCODE_E);
     bool shiftDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LSHIFT) || input.isKeyPressed(SDL_SCANCODE_RSHIFT));
-    bool ctrlDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LCTRL) || input.isKeyPressed(SDL_SCANCODE_RCTRL));
+    // Exploration mode's slow modifier only. In the game the client walks by
+    // the WALKING movement flag ToggleRun sets (0x00987570), not by a key held.
+    bool ctrlDown = !useWoWSpeed && !uiWantsKeyboard &&
+                    (input.isKeyPressed(SDL_SCANCODE_LCTRL) || input.isKeyPressed(SDL_SCANCODE_RCTRL));
     // JumpOrAscendStart() presses it once, as the key does.
     bool nowJump = !uiWantsKeyboard && !sitting && !movementSuppressed &&
                    (input.isKeyJustPressed(SDL_SCANCODE_SPACE) || bindingJump_);
@@ -3213,14 +3216,15 @@ void CameraController::update(float deltaTime) {
     // Calculate movement speed based on direction and modifiers
     float speed;
     if (useWoWSpeed) {
-        // Movement speeds (WoW-like: Ctrl walk, default run, backpedal slower)
-        if (nowBackward && !nowForward) {
+        // The ground speed the client picks (0x00987570): the walk speed in
+        // walk mode, backwards or not; else backpedal, else run.
+        if (walkMode_) {
+            speed = (walkSpeedOverride_ > 0.0f && walkSpeedOverride_ < 100.0f && !std::isnan(walkSpeedOverride_))
+                        ? walkSpeedOverride_ : WOW_WALK_SPEED;
+        } else if (nowBackward && !nowForward) {
             speed = (runBackSpeedOverride_ > 0.0f && runBackSpeedOverride_ < 100.0f
                      && !std::isnan(runBackSpeedOverride_))
                         ? runBackSpeedOverride_ : WOW_BACK_SPEED;
-        } else if (ctrlDown) {
-            speed = (walkSpeedOverride_ > 0.0f && walkSpeedOverride_ < 100.0f && !std::isnan(walkSpeedOverride_))
-                        ? walkSpeedOverride_ : WOW_WALK_SPEED;
         } else if (runSpeedOverride_ > 0.0f && runSpeedOverride_ < 100.0f && !std::isnan(runSpeedOverride_)) {
             speed = runSpeedOverride_;
         } else {
@@ -3241,7 +3245,7 @@ void CameraController::update(float deltaTime) {
     if (useWoWSpeed) {
         // "Sprinting" flag drives run animation/stronger footstep set.
         // In WoW mode this means running pace (not walk/backpedal), not Shift.
-        runPace = hasMoveInput && !ctrlDown && !nowBackward;
+        runPace = hasMoveInput && !walkMode_ && !nowBackward;
     } else {
         runPace = hasMoveInput && shiftDown;
     }

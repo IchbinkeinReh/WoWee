@@ -245,6 +245,8 @@ public:
     void setUseWoWSpeed(bool use) { useWoWSpeed = use; }
     void setRunSpeedOverride(float speed) { runSpeedOverride_ = speed; }
     void setWalkSpeedOverride(float speed) { walkSpeedOverride_ = speed; }
+    /// The mover's walk mode (movement flag WALKING, set by ToggleRun).
+    void setWalkMode(bool walking) { walkMode_ = walking; }
     void setSwimSpeedOverride(float speed) { swimSpeedOverride_ = speed; }
     void setSwimBackSpeedOverride(float speed) { swimBackSpeedOverride_ = speed; }
     void setFlightSpeedOverride(float speed) { flightSpeedOverride_ = speed; }
@@ -920,6 +922,7 @@ private:
     // Server-driven speed overrides (0 = use hardcoded default)
     float runSpeedOverride_ = 0.0f;
     float walkSpeedOverride_ = 0.0f;
+    bool walkMode_ = false;
     float swimSpeedOverride_ = 0.0f;
     float swimBackSpeedOverride_ = 0.0f;
     float flightSpeedOverride_ = 0.0f;

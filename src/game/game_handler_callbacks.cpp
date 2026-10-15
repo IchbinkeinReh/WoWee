@@ -1720,6 +1720,33 @@ void GameHandler::sendMovement(Opcode opcode) {
     if (movementHandler_) movementHandler_->sendMovement(opcode);
 }
 
+// ToggleRun (0x005faae0): the mover's walk mode. Refused while a server
+// spline carries the mover (its +0xbc without 0x400), while its seat holds it
+// (0x0074ba40), and unless it is alive, standing, unrooted and off a transport
+// (0x005fa9e0: health, movement flags 0x100a00, stand state 7). Otherwise the
+// mode flips by the move event 0x11/0x12 (0x0071ae50 -> 0x006ecf10), which
+// sets or clears WALKING (0x0098b0e0) and sends MSG_MOVE_SET_RUN_MODE or
+// MSG_MOVE_SET_WALK_MODE (0x006ef860, 0xc2/0xc3).
+void GameHandler::toggleRun() {
+    if (state != WorldState::IN_WORLD) return;
+    const uint64_t mover = activeMover();
+    auto unit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(mover));
+    if (!unit || onMoveSpline(mover) || moverHeldBySeat()) return;
+    constexpr uint32_t kRefused = static_cast<uint32_t>(MovementFlags::ROOT) |
+                                  static_cast<uint32_t>(MovementFlags::ONTRANSPORT) | 0x00100000u;
+    constexpr uint8_t kStandStateDead = 7;
+    if (unit->getHealth() == 0 || (movementInfo.flags & kRefused) != 0 || isOnTransport() ||
+        unit->getStandState() == kStandStateDead) {
+        return;
+    }
+    sendMovement(movementInfo.hasFlag(MovementFlags::WALKING) ? Opcode::MSG_MOVE_SET_RUN_MODE
+                                                               : Opcode::MSG_MOVE_SET_WALK_MODE);
+}
+
+bool GameHandler::isWalkMode() const {
+    return movementInfo.hasFlag(MovementFlags::WALKING);
+}
+
 void GameHandler::sanitizeMovementForTaxi() {
     if (movementHandler_) movementHandler_->sanitizeMovementForTaxi();
 }

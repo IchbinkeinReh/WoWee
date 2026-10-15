@@ -1771,6 +1771,8 @@ void seedBindingDefaults() {
         // this one was unbound because nothing had ever told it.
         {"TARGETNEARESTENEMY", "TAB"},
         {"TOGGLEGAMEMENU", "ESCAPE"},
+        // Run through their scripts, ToggleSheath() and ToggleRun().
+        {"TOGGLESHEATH", "Z"},  {"TOGGLERUN", "NUMPADDIVIDE"},
         {"SCREENSHOT", "PRINTSCREEN"},
         {"ACTIONBUTTON1", "1"}, {"ACTIONBUTTON2", "2"},
         {"ACTIONBUTTON3", "3"}, {"ACTIONBUTTON4", "4"},
@@ -1862,9 +1864,9 @@ bool clientActsOnBinding(const std::string& command) {
     // nothing, since it looks like the binding never ran.
     static constexpr const char* kClientAnswers[] = {
         "MOVEFORWARD", "MOVEBACKWARD", "TURNLEFT", "TURNRIGHT",
-        "STRAFELEFT", "STRAFERIGHT", "JUMP", "TOGGLEAUTORUN", "TOGGLERUN",
+        "STRAFELEFT", "STRAFERIGHT", "JUMP", "TOGGLEAUTORUN",
         "TOGGLEGAMEMENU", "OPENCHAT", "OPENCHATSLASH", "TARGETNEARESTENEMY",
-        "SCREENSHOT", "TOGGLESHEATH", "NAMEPLATES", "FRIENDNAMEPLATES", "ALLNAMEPLATES",
+        "SCREENSHOT", "NAMEPLATES", "FRIENDNAMEPLATES", "ALLNAMEPLATES",
         "ACTIONBUTTON1", "ACTIONBUTTON2", "ACTIONBUTTON3", "ACTIONBUTTON4",
         "ACTIONBUTTON5", "ACTIONBUTTON6", "ACTIONBUTTON7", "ACTIONBUTTON8",
         "ACTIONBUTTON9", "ACTIONBUTTON10", "ACTIONBUTTON11", "ACTIONBUTTON12",

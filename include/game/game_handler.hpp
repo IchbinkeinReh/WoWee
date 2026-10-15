@@ -296,6 +296,11 @@ public:
      */
     void sendMovement(Opcode opcode);
 
+    /// ToggleRun (0x005faae0): flip the mover's walk mode, as the binding does.
+    void toggleRun();
+    /// The mover walks rather than runs (movement flag WALKING, 0x0098b0e0).
+    [[nodiscard]] bool isWalkMode() const;
+
     /**
      * Update player position
      * @param x X coordinate

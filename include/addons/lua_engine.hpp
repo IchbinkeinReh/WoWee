@@ -193,8 +193,12 @@ public:
     /// key this client answers itself - see KeybindingManager::answersKey -
     /// because most bindings toggle something and two answers to one press
     /// cancel out.
+    ///
+    /// A held key's auto-repeat runs nothing again - the press ran the binding
+    /// once - but is still claimed when the key holds a binding, so it reaches
+    /// nothing further either.
     bool dispatchBindingKey(int sdlKeycode, bool shift, bool ctrl, bool alt,
-                            bool down);
+                            bool down, bool repeat = false);
 
     /// The command this key holds, or empty. Whether the client would run it is
     /// a separate question - see clientActsOnBinding - and keeping the two

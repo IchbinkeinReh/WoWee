@@ -9928,8 +9928,19 @@ static std::string wowKeyName(int sym) {
         case 0x4000004F: return "RIGHT";
         case 0x40000052: return "UP";
         case 0x40000051: return "DOWN";
+        // The keypad, by the client's names for it (0x009eb5a8..0x009eb5f0).
+        case 0x40000054: return "NUMPADDIVIDE";
+        case 0x40000055: return "NUMPADMULTIPLY";
+        case 0x40000056: return "NUMPADMINUS";
+        case 0x40000057: return "NUMPADPLUS";
+        case 0x40000063: return "NUMPADDECIMAL";
         default: break;
     }
+    // SDLK_KP_1..SDLK_KP_9 run on from 0x40000059, and SDLK_KP_0 follows them.
+    if (sym >= 0x40000059 && sym <= 0x40000061) {
+        return "NUMPAD" + std::to_string(sym - 0x40000059 + 1);
+    }
+    if (sym == 0x40000062) return "NUMPAD0";
     // F1..F12 are contiguous in SDL's scancode-derived range.
     if (sym >= 0x4000003A && sym <= 0x40000045) {
         return "F" + std::to_string(sym - 0x4000003A + 1);
@@ -9973,13 +9984,14 @@ std::string LuaEngine::bindingCommandForKey(const std::string& key) {
 }
 
 bool LuaEngine::dispatchBindingKey(int sdlKeycode, bool shift, bool ctrl,
-                                   bool alt, bool down) {
+                                   bool alt, bool down, bool repeat) {
     if (!L_) return false;
     const std::string command = bindingCommandFor(sdlKeycode, shift, ctrl, alt);
     if (command.empty()) return false;
     // Left alone if the client performs it. Not "already handled, so skip the
     // work" - running it as well would undo it.
     if (clientActsOnBinding(command)) return false;
+    if (repeat) return true;
     return runBindingScript(command, down);
 }
 

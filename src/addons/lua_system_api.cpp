@@ -4165,6 +4165,11 @@ static int lua_ToggleAutoRun(lua_State* L) {
     if (svc && svc->toggleAutoRun) svc->toggleAutoRun();
     return 0;
 }
+// ToggleRun() - the walk/run binding (0x005faae0): flips the mover's walk mode.
+static int lua_ToggleRun(lua_State* L) {
+    if (auto* gh = getGameHandler(L)) gh->toggleRun();
+    return 0;
+}
 // CameraZoomIn(yards) / CameraZoomOut(yards) - the camera's distance from the
 // player, as the zoom bindings move it.
 template <int Sign>
@@ -5945,6 +5950,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"PrevView",                 lua_StepView<-1>},
                 {"FlipCameraYaw",            lua_FlipCameraYaw},
                 {"ToggleAutoRun",            lua_ToggleAutoRun},
+                {"ToggleRun",                lua_ToggleRun},
                 {"JumpOrAscendStart",        lua_JumpOrAscendStart},
                 {"TurnLeftStart",            lua_BindingTurn<-1, true>},
                 {"TurnLeftStop",             lua_BindingTurn<-1, false>},

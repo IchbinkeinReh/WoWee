@@ -2034,13 +2034,17 @@ void Application::run() {
                     // has no path for, which until now could be bound in
                     // the interface's own key-binding panel and then never
                     // honoured by any press.
-                    if (auto* engine = addonManager_->getLuaEngine()) {
+                    // Not while one of this client's own text fields is
+                    // being typed into: a letter there is text, not Z.
+                    if (auto* engine = addonManager_->getLuaEngine();
+                        engine && !ImGui::GetIO().WantTextInput) {
                         const SDL_Keymod mods = SDL_GetModState();
                         if (engine->dispatchBindingKey(
                                 event.key.key,
                                 (mods & SDL_KMOD_SHIFT) != 0,
                                 (mods & SDL_KMOD_CTRL) != 0,
-                                (mods & SDL_KMOD_ALT) != 0, true)) {
+                                (mods & SDL_KMOD_ALT) != 0, true,
+                                event.key.repeat)) {
                             // The fourth way a press can end in the pump - an
                             // interface key binding claimed it - which had no
                             // line. For the DEFAULT Escape this does not fire:
@@ -3356,6 +3360,7 @@ void Application::applyServerMovementState(float deltaTime) {
         const game::MovementSpeeds speeds = gameHandler->moverSpeeds();
         renderer->getCameraController()->setRunSpeedOverride(speeds.run);
         renderer->getCameraController()->setWalkSpeedOverride(speeds.walk);
+        renderer->getCameraController()->setWalkMode(gameHandler->isWalkMode());
         renderer->getCameraController()->setSwimSpeedOverride(speeds.swim);
         renderer->getCameraController()->setSwimBackSpeedOverride(speeds.swimBack);
         renderer->getCameraController()->setFlightSpeedOverride(speeds.flight);
@@ -4703,21 +4708,12 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
         wasAutoAttacking_ = attackWeaponNeeded;
     }
 
-    // Toggle weapon sheathe state with Z (ignored while UI captures keyboard).
+    // The weapons as the fields hold them. Z itself is the TOGGLESHEATH
+    // binding, run through the interface's bindings like any other key
+    // (Bindings.xml -> ToggleSheath, 0x0051a6b0 -> 0x006e23a0).
     inGameStep = "weapon-toggle input";
     updateCheckpoint = "in_game: weapon-toggle input";
-    {
-        const bool uiWantsKeyboard = ImGui::GetIO().WantCaptureKeyboard ||
-                                     ui::interfaceTakingTypedInput();
-        auto& input = Input::getInstance();
-        // The key (0x006e23a0) changes the client's own state, tells the
-        // server (CMSG_SET_SHEATHED) and reaches for the weapons with the
-        // shoulders' Sheath and HipSheath (0x00736b60).
-        if (!uiWantsKeyboard && input.isKeyJustPressed(SDL_SCANCODE_Z) && appearanceComposer_) {
-            appearanceComposer_->toggleSheath();
-        }
-        if (appearanceComposer_) appearanceComposer_->updateWeaponsFromFields();
-    }
+    if (appearanceComposer_) appearanceComposer_->updateWeaponsFromFields();
 
     inGameStep = "world update";
     updateCheckpoint = "in_game: world update";

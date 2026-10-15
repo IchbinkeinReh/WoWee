@@ -769,6 +769,14 @@ void MovementHandler::sendMovement(Opcode opcode) {
             movementInfo.flags &= ~(static_cast<uint32_t>(MovementFlags::PITCH_UP) |
                                     static_cast<uint32_t>(MovementFlags::PITCH_DOWN));
             break;
+        // The walk and run modes ToggleRun asks for (0x006ef860 events
+        // 0x12/0x11 -> 0x0098b0e0).
+        case Opcode::MSG_MOVE_SET_WALK_MODE:
+            movementInfo.flags |= static_cast<uint32_t>(MovementFlags::WALKING);
+            break;
+        case Opcode::MSG_MOVE_SET_RUN_MODE:
+            movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::WALKING);
+            break;
         case Opcode::MSG_MOVE_START_DESCEND:
             // Must set DESCENDING so outgoing movement packets carry the correct
             // flag during flight descent. Only clearing ASCENDING left the flag
