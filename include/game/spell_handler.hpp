@@ -98,6 +98,10 @@ public:
     }
     /// 0x008047a0, as the world goes (0x004fa390).
     void clearMissilesInFlight() { missilesInFlight_.clear(); }
+    /// SMSG_NEW_WORLD (0x00403d10 -> 0x00403b70): the spell the cursor holds
+    /// is put down (0x00809a60) and both spell histories are emptied
+    /// (0x00804af0) - SMSG_INITIAL_SPELLS and SMSG_PET_SPELLS send them again.
+    void newWorld();
 
     // --- The pet's spell history (0x00d3f5ac + 24) ---
     [[nodiscard]] const spell_history::History& petSpellHistory() const { return petHistory_; }

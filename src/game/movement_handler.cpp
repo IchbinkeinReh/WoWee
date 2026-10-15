@@ -2557,6 +2557,11 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
         }
     }
 
+    // Every SMSG_NEW_WORLD, the same map's too (0x00403b70): a spell held on
+    // the cursor for a place or a unit of the old world does not wait in the
+    // new one, and the spell histories start again.
+    if (owner_.getSpellHandler()) owner_.getSpellHandler()->newWorld();
+
     const bool isSameMap       = (mapId == owner_.currentMapIdRef());
     const bool isResurrection  = owner_.resurrectPendingRef();
     if (isSameMap && isResurrection) {

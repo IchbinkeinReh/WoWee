@@ -4552,6 +4552,13 @@ void SpellHandler::resetAllState() {
     resetTalentState();
 }
 
+void SpellHandler::newWorld() {
+    cancelGroundTargeting();
+    playerHistory_.clear();
+    petHistory_.clear();
+    playerCooldownsChanged();
+}
+
 void SpellHandler::resetTalentState() {
     learnedTalents_[0].clear();
     learnedTalents_[1].clear();
