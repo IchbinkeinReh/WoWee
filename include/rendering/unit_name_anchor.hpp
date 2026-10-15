@@ -38,4 +38,22 @@ constexpr float plateAlpha(bool haveTarget, bool isTarget) {
     return haveTarget && !isTarget ? 127.0f / 255.0f : 1.0f;
 }
 
+/// How many pixels a yard is on screen in the plane that faces the camera at
+/// clip depth `clipW`, for a projection whose [1][1] is `proj11` and a screen
+/// `screenH` pixels tall. The name's world height is measured this way
+/// (0x007e5420 through the projection at the anchor).
+inline float pixelsPerYard(float proj11, float screenH, float clipW) {
+    return (proj11 < 0.0f ? -proj11 : proj11) * 0.5f * screenH / clipW;
+}
+
+/// A point of text laid out on screen, as its offset in that plane through
+/// the anchor: yards right and up of it. The screen's y runs down and the
+/// view's up, so the second is turned over. Added to the anchor in view
+/// space and projected, it lands back on the pixel it was laid out at, and
+/// at the anchor's depth - the string stands in the world as the client's
+/// world string batch does (0x007e5640), not over it.
+inline glm::vec2 billboardOffset(const glm::vec2& pointPx, const glm::vec2& anchorPx, float pxPerYard) {
+    return {(pointPx.x - anchorPx.x) / pxPerYard, -(pointPx.y - anchorPx.y) / pxPerYard};
+}
+
 }  // namespace wowee::rendering::unit_name_anchor

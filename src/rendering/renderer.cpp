@@ -57,6 +57,7 @@
 #include "rendering/quest_giver_markers.hpp"
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/fishing_line.hpp"
+#include "rendering/world_text_renderer.hpp"
 #include "rendering/blob_shadow_renderer.hpp"
 #include "rendering/selection_circle.hpp"
 #include "rendering/spell_target_circle.hpp"
@@ -936,6 +937,12 @@ bool Renderer::initialize(core::Window* win) {
     if (!fishingLines_->initialize(this, vkCtx, perFrameSetLayout))
         LOG_WARNING("Fishing line initialization failed (non-fatal)");
 
+    worldText_ = std::make_unique<WorldTextRenderer>();
+    if (!worldText_->initialize(vkCtx, perFrameSetLayout)) {
+        LOG_WARNING("World text initialization failed (non-fatal)");
+        worldText_.reset();
+    }
+
     levelUpEffect = std::make_unique<LevelUpEffect>();
     lootSparkles_ = std::make_unique<LootSparkles>();
 
@@ -1153,6 +1160,10 @@ void Renderer::shutdown() {
         fishingLines_->shutdown();
         fishingLines_.reset();
     }
+    if (worldText_) {
+        worldText_->shutdown();
+        worldText_.reset();
+    }
 
     LOG_DEBUG("Renderer::shutdown - characterRenderer...");
     if (characterRenderer) {
@@ -1365,6 +1376,7 @@ void Renderer::applyMsaaChange() {
     }
     if (mountDust) mountDust->recreatePipelines();
     if (fishingLines_) fishingLines_->recreatePipelines();
+    if (worldText_) worldText_->recreatePipelines();
 
     // Sky system sub-renderers
     if (skySystem) {
@@ -4212,6 +4224,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             // CGWorldFrame::Render); queued after the world's passes below.
             if (blobShadowRenderer && camera) blobShadowRenderer->renderSelection(cmd, perFrameSet);
             if (blobShadowRenderer && camera) blobShadowRenderer->renderSpellTarget(cmd, perFrameSet);
+            // The names over heads, a world string batch: in the scene,
+            // tested against its depth (0x007e5640, 0x006c53a0).
+            if (worldText_ && camera) worldText_->render(cmd, perFrameSet);
             sceneMark(cmd, kMarkSelection, "selection circle");
             vkEndCommandBuffer(cmd);
         }
@@ -4431,6 +4446,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         // The circle under the target, on the finished world (0x004f6f90).
         if (blobShadowRenderer && camera) blobShadowRenderer->renderSelection(currentCmd, perFrameSet);
         if (blobShadowRenderer && camera) blobShadowRenderer->renderSpellTarget(currentCmd, perFrameSet);
+        if (worldText_ && camera) worldText_->render(currentCmd, perFrameSet);
         sceneMark(currentCmd, kMarkSelection, "selection circle");
     }
 

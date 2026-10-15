@@ -22,11 +22,10 @@
 #include "rendering/imgui_blend.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/unit_name_anchor.hpp"
-#include "rendering/wmo_renderer.hpp"
+#include "rendering/world_text_renderer.hpp"
 #include "ui/interface_fonts.hpp"
 #include "ui/nameplate_cast_bar.hpp"
 #include "ui/nameplate_stacking.hpp"
-#include "ui/sight_cache.hpp"
 #include "ui/ui_helpers.hpp"
 #include "ui/ui_raid_icons.hpp"
 #include "ui/ui_texture_load.hpp"
@@ -261,12 +260,21 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     });
     static thread_local std::vector<ui::PlateBox> placed;
     placed.clear();
-    static SightCache sight;
-    // Each answer is a ray through the city, about a tenth of a
-    // millisecond in Dalaran: sixteen a frame keep a name that walks behind
-    // a wall a few tenths of a second behind it, at under two milliseconds.
-    sight.beginFrame(16);
-    const auto* wmo = appRenderer ? appRenderer->queryWMORenderer() : nullptr;
+
+    // The names over heads go into the world, not onto the screen: the
+    // client writes them into a world string batch (0x007e64d0 makes it with
+    // 0x006bf160(1, 1)) and draws that with the depth test and write on
+    // (0x006c53a0), so a wall in front of a name hides it pixel by pixel.
+    // There is no line of sight asked for. Each name is laid out here in
+    // pixels by the interface's font, as it was drawn before, and handed to
+    // the scene as offsets in the plane facing the camera through its
+    // anchor - where the scene's depth decides it, the next time the world
+    // is drawn.
+    auto* worldText = appRenderer ? appRenderer->getWorldTextRenderer() : nullptr;
+    static ImDrawList* nameList = nullptr;
+    if (worldText && !nameList) nameList = IM_NEW(ImDrawList)(ImGui::GetDrawListSharedData());
+    static thread_local std::vector<rendering::WorldTextRenderer::Vertex> nameTriangles;
+    nameTriangles.clear();
 
     // The name's anchor: the PlayerName attachment, else over the model
     // (0x0071fef0).
@@ -282,12 +290,9 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     // (0x007e5640), depth tested in the world - a wall in front hides it.
     auto drawOverheadName = [&](uint64_t guid, const game::Entity& e, const game::Unit& unit, bool isPlayer) {
         const glm::vec3 anchor = namePoint(guid, e);
-        // On screen first: the projection is a multiply, the sight a ray
-        // through the city's geometry.
         float clipW = 0.0f;
         const auto at = project(viewProj, anchor, screenW, screenH, &clipW);
         if (!at) return;
-        if (guid != playerGuid && sight.blocked(wmo, guid, camPos, anchor)) return;
 
         // 0x0072d4f0: tags, the name with its title, then the guild or the
         // creature's title on lines of their own. A Mirror Image (aura 279)
@@ -366,21 +371,41 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
 
         const ImU32 color = toU32(targetCircleColor(gameHandler, unit), 255);
         const ImVec2 size = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text.c_str());
-        // Lines centred, the block's bottom on the anchor.
-        float y = at->y - size.y;
-        size_t start = 0;
-        while (start <= text.size()) {
-            const size_t end = text.find('\n', start);
-            const std::string line = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
-            const ImVec2 ls = font->CalcTextSizeA(px, FLT_MAX, 0.0f, line.c_str());
-            outlinedText(drawList, font, px, ImVec2(at->x - ls.x * 0.5f, y), color, line.c_str());
-            y += ls.y;
-            if (end == std::string::npos) break;
-            start = end + 1;
+        if (worldText && nameList) {
+            // One name at a time, so its indices are its own.
+            nameList->_ResetForNewFrame();
+            nameList->PushTexture(font->OwnerAtlas->TexRef);
+            nameList->PushClipRectFullScreen();
+            // Lines centred, the block's bottom on the anchor.
+            float y = at->y - size.y;
+            size_t start = 0;
+            while (start <= text.size()) {
+                const size_t end = text.find('\n', start);
+                const std::string line =
+                    text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                const ImVec2 ls = font->CalcTextSizeA(px, FLT_MAX, 0.0f, line.c_str());
+                outlinedText(nameList, font, px, ImVec2(at->x - ls.x * 0.5f, y), color, line.c_str());
+                y += ls.y;
+                if (end == std::string::npos) break;
+                start = end + 1;
+            }
+            const float perYard = rendering::unit_name_anchor::pixelsPerYard(proj[1][1], screenH, clipW);
+            const glm::vec2 anchorPx(at->x, at->y);
+            for (const ImDrawIdx i : nameList->IdxBuffer) {
+                const ImDrawVert& v = nameList->VtxBuffer[i];
+                nameTriangles.push_back(
+                    {.anchor = anchor,
+                     .offset = rendering::unit_name_anchor::billboardOffset(glm::vec2(v.pos.x, v.pos.y),
+                                                                            anchorPx, perYard),
+                     .uv = glm::vec2(v.uv.x, v.uv.y),
+                     .colour = v.col});
+            }
         }
 
         // The raid icon over the name, a yard square, fading in from the
-        // camera (0x007e5340, 0x007e52a0).
+        // camera (0x007e5340, 0x007e52a0). Not in the world batch: it is
+        // drawn with the depth test off (0x007e5640 sets state 0xd to 0), so
+        // no wall hides it.
         const uint8_t mark = gameHandler.getEntityRaidMark(guid);
         if (mark < game::GameHandler::kRaidMarkCount) {
             if (VkDescriptorSet tex = getRaidTargetIcon(mark, assets)) {
@@ -477,6 +502,9 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         plateRecs.push_back({.entity = entityPtr.get(), .unit = unit, .guid = guid, .isPlayer = isPlayer,
                              .isTarget = isTarget, .left = left, .bottom = bottom, .depth = clipW});
     }
+
+    // Every name of this frame, to the scene.
+    if (worldText) worldText->setText(std::move(nameTriangles), font->OwnerAtlas);
 
     // Forget the units whose plates are gone.
     for (auto it = plateHealth.begin(); it != plateHealth.end();) {

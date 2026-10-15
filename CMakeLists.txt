@@ -993,6 +993,7 @@ set(WOWEE_SOURCES
     src/rendering/swim_effects.cpp
     src/rendering/mount_dust.cpp
     src/rendering/fishing_line.cpp
+    src/rendering/world_text_renderer.cpp
     src/rendering/levelup_effect.cpp
     src/rendering/spell_visual_system.cpp
     src/rendering/post_process_pipeline.cpp

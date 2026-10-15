@@ -60,6 +60,7 @@ class LightingManager;
 class SwimEffects;
 class MountDust;
 class FishingLineRenderer;
+class WorldTextRenderer;
 class LevelUpEffect;
 class CharacterRenderer;
 class WMORenderer;
@@ -222,6 +223,8 @@ public:
     QuestGiverMarkers* getQuestGiverMarkers() const { syncWorldRecording(); return questGiverMarkers_.get(); }
     FootprintRenderer* getFootprintRenderer() const { return footprintRenderer.get(); }
     FishingLineRenderer* getFishingLineRenderer() const { return fishingLines_.get(); }
+    /// The names over heads, drawn in the scene (0x007e5640).
+    WorldTextRenderer* getWorldTextRenderer() const { return worldText_.get(); }
     SkySystem* getSkySystem() const { return skySystem.get(); }
     const std::string& getCurrentZoneName() const;
     uint32_t getCurrentZoneId() const;
@@ -410,6 +413,7 @@ private:
     std::unique_ptr<LevelUpEffect> levelUpEffect;
     std::unique_ptr<LootSparkles> lootSparkles_;
     std::unique_ptr<FishingLineRenderer> fishingLines_;
+    std::unique_ptr<WorldTextRenderer> worldText_;
     std::unique_ptr<CharacterRenderer> characterRenderer;
     std::unique_ptr<WMORenderer> wmoRenderer;
     std::unique_ptr<M2Renderer> m2Renderer;
