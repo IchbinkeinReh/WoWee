@@ -26,6 +26,7 @@ inline constexpr uint32_t kBaked = 4u;
 inline constexpr uint32_t kLiftAfter = 8u;
 inline constexpr uint32_t kInterior = 16u;
 inline constexpr uint32_t kUnit = 32u;
+inline constexpr uint32_t kTransition = 64u;
 
 /// What a surface knows of how its colour depends on the traced terms, in the
 /// colour's own units: C = C0 + g (r - 1) - r max(0, occY (1 - ao) - occE) + kp P.
@@ -37,6 +38,7 @@ struct Surface {
     glm::vec3 occY{0.0f};
     glm::vec3 occE{0.0f};
     glm::vec3 kp{0.0f};
+    float outside = 1.0f;  ///< kTransition: the outside pass's share of g
 };
 
 /// The same read back from the targets, relative to C0.
@@ -48,6 +50,7 @@ struct Texel {
     glm::vec3 occ{0.0f};
     glm::vec3 knee{1.0f};
     glm::vec3 kp{0.0f};
+    float outside = 1.0f;
 };
 
 /// The eight 16-bit words of the two R16G16B16A16_UNORM targets.
@@ -73,14 +76,16 @@ inline Words pack(const Surface& s, const glm::vec3& c0) {
     const glm::vec3 kp = s.kp * 0.5f;
     const auto byte = [](float v) { return quantise(v, 255.0f); };
     Words w{};
-    w[0] = static_cast<uint16_t>(quantise(oct.x, 1023.0f) | (quantise(knee.r, 63.0f) << 10));
-    w[1] = static_cast<uint16_t>(quantise(oct.y, 1023.0f) | (quantise(knee.g, 63.0f) << 10));
-    w[2] = static_cast<uint16_t>(byte(s.map) | ((s.flags & 63u) << 8));
+    const uint32_t f = quantise(s.outside, 63.0f);
+    w[0] = static_cast<uint16_t>(quantise(oct.x, 1023.0f) | (quantise(knee.r, 31.0f) << 10) | ((f & 1u) << 15));
+    w[1] = static_cast<uint16_t>(quantise(oct.y, 1023.0f) | (quantise(knee.g, 31.0f) << 10) |
+                                 (((f >> 1) & 1u) << 15));
+    w[2] = static_cast<uint16_t>(byte(s.map) | ((s.flags & 127u) << 8) | (((f >> 2) & 1u) << 15));
     w[3] = static_cast<uint16_t>(byte(g.r) | (byte(g.g) << 8));
     w[4] = static_cast<uint16_t>(byte(g.b) | (byte(occ.r) << 8));
     w[5] = static_cast<uint16_t>(byte(occ.g) | (byte(occ.b) << 8));
     w[6] = static_cast<uint16_t>(byte(kp.r) | (byte(kp.g) << 8));
-    w[7] = static_cast<uint16_t>(byte(kp.b) | (quantise(knee.b, 63.0f) << 8));
+    w[7] = static_cast<uint16_t>(byte(kp.b) | (quantise(knee.b, 31.0f) << 8) | ((f >> 3) << 13));
     return w;
 }
 
@@ -89,10 +94,12 @@ inline Texel unpack(const Words& w) {
     Texel t;
     const glm::vec2 oct(static_cast<float>(w[0] & 1023u) / 1023.0f, static_cast<float>(w[1] & 1023u) / 1023.0f);
     t.normal = octDecode(oct * 2.0f - 1.0f);
-    t.knee = glm::vec3(static_cast<float>(w[0] >> 10), static_cast<float>(w[1] >> 10),
-                       static_cast<float>(w[7] >> 8)) / 63.0f;
+    t.knee = glm::vec3(static_cast<float>((w[0] >> 10) & 31u), static_cast<float>((w[1] >> 10) & 31u),
+                       static_cast<float>((w[7] >> 8) & 31u)) / 31.0f;
     t.map = unbyte(w[2], 0);
-    t.flags = (w[2] >> 8) & 63u;
+    t.flags = (w[2] >> 8) & 127u;
+    t.outside = static_cast<float>(((w[0] >> 15) & 1u) | (((w[1] >> 15) & 1u) << 1) | (((w[2] >> 15) & 1u) << 2) |
+                                   (((w[7] >> 13) & 7u) << 3)) / 63.0f;
     t.g = glm::vec3(unbyte(w[3], 0), unbyte(w[3], 8), unbyte(w[4], 0));
     t.occ = glm::vec3(unbyte(w[4], 8), unbyte(w[5], 0), unbyte(w[5], 8));
     t.kp = glm::vec3(unbyte(w[6], 0), unbyte(w[6], 8), unbyte(w[7], 0)) * 2.0f;
@@ -171,10 +178,19 @@ inline Factors apply(const Texel& t, const Traced& r, const Tune& tune, const gl
     }
     const bool baked = (t.flags & kBaked) != 0;
     const float shade = (t.flags & kInterior) != 0 ? std::min(r.bakedShade, r.interiorShade) : r.bakedShade;
-    const float rr = rs * (baked ? shade : 1.0f);
+    const float rIn = baked ? shade : 1.0f;
+    const glm::vec3 pointIn = baked ? r.pointOwn : r.point;
     const float ao = tune.mode >= 2 ? 1.0f - r.weight * tune.occlusion * (1.0f - r.ao) : 1.0f;
+    if ((t.flags & kTransition) != 0) {
+        const float o = t.outside;
+        const float rr = (1.0f - o) * rIn + o * rs;
+        f.mul = glm::vec3(1.0f) + t.g * (o * (rs - 1.0f) + (1.0f - o) * (rIn - 1.0f)) - rr * occlusionLoss(t, ao);
+        f.add = t.kp * ((1.0f - o) * pointIn + o * r.point);
+        return f;
+    }
+    const float rr = rs * rIn;
     f.mul = glm::vec3(1.0f) + t.g * (rr - 1.0f) - rr * occlusionLoss(t, ao);
-    f.add = t.kp * (baked ? r.pointOwn : r.point);
+    f.add = t.kp * pointIn;
     return f;
 }
 

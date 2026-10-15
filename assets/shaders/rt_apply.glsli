@@ -134,12 +134,25 @@ void main() {
     // shadows, whichever is darker: the lesser, so the one does not darken
     // twice what the other has already (rtInteriorShade).
     float shade = (g.flags & RT_GB_INTERIOR) != 0u ? min(r.bakedShade, r.interiorShade) : r.bakedShade;
-    float rr = rs * (baked ? shade : 1.0);
+    float rIn = baked ? shade : 1.0;
+    vec3 pointIn = baked ? r.pointOwn : r.point;
     // The occlusion over the flat ambient (rtAmbient), from Shadows and
     // occlusion on.
     float ao = pass.params.x >= float(RT_MODE_AO) - 0.5 ? 1.0 - r.weight * pass.tune.z * (1.0 - r.ao) : 1.0;
-    outMul = vec4(vec3(1.0) + g.g * (rr - 1.0) - rr * rtOcclusionLoss(g, ao), 1.0);
-    outAdd = vec4(g.kp * (baked ? r.pointOwn : r.point), 0.0);
+    if ((g.flags & RT_GB_TRANSITION) != 0u) {
+        // A transition batch's two passes (rtSurfaceMix): the sun's shade
+        // over the outside pass's share, the baked shade over the inside's;
+        // all the lights on the outside pass, the others on a baked inside.
+        float f = g.outside;
+        float rr = mix(rIn, rs, f);
+        outMul = vec4(vec3(1.0) + g.g * (f * (rs - 1.0) + (1.0 - f) * (rIn - 1.0)) -
+                      rr * rtOcclusionLoss(g, ao), 1.0);
+        outAdd = vec4(g.kp * mix(pointIn, r.point, f), 0.0);
+    } else {
+        float rr = rs * rIn;
+        outMul = vec4(vec3(1.0) + g.g * (rr - 1.0) - rr * rtOcclusionLoss(g, ao), 1.0);
+        outAdd = vec4(g.kp * pointIn, 0.0);
+    }
 
     // WOWEE_GI_DEBUG 5-9 and the Debug Graphics views, instead of the picture:
     // the traced sun's visibility, the point lights' light as it is added,

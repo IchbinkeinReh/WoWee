@@ -90,7 +90,7 @@ glm::vec3 applied(const Surface& s, const glm::vec3& c0, const RtLight& r, const
     return c0 * f.mul + f.add;
 }
 
-/// The bytes hold a channel to 1/255 of the colour, a knee to 1/63, and the
+/// The bytes hold a channel to 1/255 of the colour, a knee to 1/31, and the
 /// point lights' factor to 2/255 of itself - under half a step of an 8-bit
 /// display where a colour is dark and a torch bright beside it.
 void requireClose(const glm::vec3& got, const glm::vec3& want, const glm::vec3& c0) {
@@ -124,7 +124,7 @@ TEST_CASE("G-buffer words hold what a surface writes", "[rt_gbuffer]") {
             REQUIRE(std::abs(t.g[c] - s.g[c] / c0[c]) <= 0.5f / 255.0f + 1e-5f);
             REQUIRE(std::abs(t.occ[c] - (s.occY[c] - s.occE[c]) / c0[c]) <= 0.5f / 255.0f + 1e-5f);
             REQUIRE(std::abs(t.kp[c] - s.kp[c]) <= 1.0f / 255.0f + 1e-5f);
-            REQUIRE(std::abs(t.knee[c] - s.occE[c] / s.occY[c]) <= 0.5f / 63.0f + 1e-5f);
+            REQUIRE(std::abs(t.knee[c] - s.occE[c] / s.occY[c]) <= 0.5f / 31.0f + 1e-5f);
         }
     }
 }
@@ -302,6 +302,48 @@ TEST_CASE("An interior's baked colour applies as the room's light shades it", "[
         s.kp = m;
         const RtLight r = randomTraced(rng);
         requireClose(applied(s, c0, r, Strengths{}, glm::vec3(0.0f, 0.0f, 1.0f)), colour(r), c0);
+    }
+}
+
+// A WMO transition batch (wmo.frag, rtSurfaceMix): the outside pass, under
+// the sun's shadow, times alpha, plus the inside pass, the room's baked
+// colour, times one less alpha. Each pass takes its own shade: the sun the
+// trace finds blocked at a door darkens only the outside pass's share, the
+// room's light only the inside's. One shade over both made the floor at the
+// doors black.
+TEST_CASE("A transition batch's passes each take their own shade", "[rt_gbuffer]") {
+    Rng rng;
+    for (int i = 0; i < 400; ++i) {
+        const glm::vec3 m = rng.v(0.2f, 1.0f);
+        const float outsideLight = rng(0.1f, 1.0f), baked = rng(0.05f, 1.0f);
+        const float alpha = i % 5 == 0 ? 0.0f : (i % 5 == 1 ? 1.0f : rng(0.0f, 1.0f));
+        const float map = rng(0.0f, 1.0f) < 0.5f ? 1.0f : rng(0.0f, 1.0f);
+        Strengths st;
+        st.mode = 1;  // no occlusion: the passes here clamp nothing
+        // C0: the colour with the traced terms neutral.
+        const glm::vec3 c0 = m * (alpha * outsideLight * rtShadowScale(kNeutral, map, st) + (1.0f - alpha) * baked);
+        const float gOut = alpha * outsideLight * rtShadowScale(kNeutral, map, st);
+        const float gIn = (1.0f - alpha) * baked;
+        Surface s;
+        s.flags = kValid | kTransition | kSun | kBaked | kInterior;
+        s.map = map;
+        s.g = m * (gOut + gIn);
+        s.outside = gOut + gIn > 1e-6f ? gOut / (gOut + gIn) : alpha;
+        // The point lights by the same shares (the passes' Kp in proportion
+        // to their G, as the WMO's texel makes them).
+        s.kp = m;
+        const RtLight r = randomTraced(rng);
+        const glm::vec3 want = alpha * (m * (outsideLight * rtShadowScale(r, rtShadow(r, map, st), st))) +
+                               (1.0f - alpha) * (m * (baked * std::min(r.bakedShade, r.interiorShade))) +
+                               m * (s.outside * r.point + (1.0f - s.outside) * r.pointOwn);
+        requireClose(applied(s, c0, r, st, glm::vec3(0.0f, 0.0f, 1.0f)), want, c0);
+    }
+    // The share survives the words, to a 63rd.
+    Surface s;
+    s.flags = kValid | kTransition;
+    for (float o : {0.0f, 0.3f, 0.77f, 1.0f}) {
+        s.outside = o;
+        CHECK(std::abs(unpack(pack(s, glm::vec3(0.5f))).outside - o) <= 0.5f / 63.0f + 1e-5f);
     }
 }
 

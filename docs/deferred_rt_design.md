@@ -117,23 +117,37 @@ Two `R16G16B16A16_UNORM` attachments, 128 bits, packed as 16-bit words
 
 | word | bits |
 |------|------|
-| 0 | normal oct u (10) - knee r (6) |
-| 1 | normal oct v (10) - knee g (6) |
-| 2 | shadow-map lit (8) - flags (6) - spare |
+| 0 | normal oct u (10) - knee r (5) - outside share bit 0 |
+| 1 | normal oct v (10) - knee g (5) - outside share bit 1 |
+| 2 | shadow-map lit (8) - flags (7) - outside share bit 2 |
 | 3 | g.r (8) - g.g (8) |
 | 4 | g.b (8) - occ.r (8) |
 | 5 | occ.g (8) - occ.b (8) |
 | 6 | kp.r (8) - kp.g (8) |
-| 7 | kp.b (8) - knee b (6) |
+| 7 | kp.b (8) - knee b (5) - outside share bits 3-5 |
 
 `g = G/C0`, `occ = (Y-E)/C0` (the most occlusion can take), `knee = E/Y`,
 `kp = Kp/2`. Flags: valid (an RT surface), sun-shadowed, baked (bakedShade and
 the lights less the building's own), lift-after-min (characters), interior
 (baked light of a room: the room's own light shades it, see "Interior light"
 below), unit (a unit's body: its point-light shadow rays pass the units by,
-see "Point lights from what glows"). A cleared
+see "Point lights from what glows"), transition (below). A cleared
 G-buffer is "not an RT surface": the sky, grass, the debug views 1-4 and
 anything drawn with the colour only are left as they are by the apply pass.
+
+A WMO transition batch draws an outside pass times alpha and an inside pass
+times one less alpha (wmo.frag). The two take different traced terms: the
+outside pass the sun's shadow, the inside pass (the room's baked colour) the
+baked shade and the room's own light. Written as one surface under one shade,
+the sun the trace finds blocked indoors (leaving 30-40% of the colour at the
+usual shadow darkness) multiplied the inside pass's baked colour too, with
+its interior shade: the floor and frames at doors went black. `rtSurfaceMix`
+now flags the texel transition and stores the outside pass's share of G (6
+bits, from the knees' sixth bits and the spare ones); the apply pass scales
+that share by the sun's ratio and the rest by the baked shade, the outside
+share taking every point light and the inside the others. The outside part
+keeps the outside pass's sun flag, the inside part the inside pass's baked
+and interior flags.
 
 16 bytes per pixel (per sample under MSAA). Position comes from the depth
 buffer, which is already there; nothing is written twice.
@@ -237,7 +251,10 @@ own intensity and reach slider in Debug Lights):
   (`ParticleGlow`): position, colour x the texture's mean, weighted by alpha x
   quad area x blend (adds 1, unlit alpha 0.35, lit or modulate 0). One light
   per emitter at the weighted centroid, its strength from the summed area
-  (a third of a surface's, `kParticleGain`), its reach at most 10 yards. It
+  (a third of a surface's, `kParticleGain`), its reach at most 10 yards; one
+  model's emitters together at most a fire's strength
+  (`kMaxParticleModelStrength`), so a mount with a flame on every hoof does
+  not light like a dozen fires. It
   follows the effect's flicker since it is rebuilt every frame. The lights
   are read by `collectRtLights` after the M2 worker is joined (or the previous
   frame's on the single-threaded path).
@@ -338,8 +355,9 @@ BVH, the probe GI, the CameraZoom Lua functions.
 
 * Opaque M2 batches with "no depth write" (material flag 0x10) leave no depth;
   the sky, now drawn after them, can cover them where nothing stands behind.
-* WMO transition batches mix two passes with possibly different shadow/baked
-  flags into one G-buffer texel; the flags of the inside pass are used.
+* WMO transition batches: the outside pass's sun flag and the inside pass's
+  baked and interior flags are assumed (a unified WMO's unlit outside pass is
+  taken unbaked), and the point lights are split by G's shares, not Kp's.
 * Terrain specular (option, off by default) is scaled with the sun shadow ratio
   rather than with the lit value.
 * Pixels at thin features that find no traced texel of their own fall back to

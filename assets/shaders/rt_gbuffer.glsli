@@ -21,14 +21,14 @@
 //
 // Stored relative to C0 they fit in a byte each. Two R16G16B16A16_UNORM
 // targets, eight 16-bit words:
-//     0  normal (octahedral) u, 10 bits | knee r, 6
-//     1  normal v, 10 | knee g, 6
-//     2  the shadow map's light, 8 | flags, 6
+//     0  normal (octahedral) u, 10 bits | knee r, 5 | outside share bit 0
+//     1  normal v, 10 | knee g, 5 | outside share bit 1
+//     2  the shadow map's light, 8 | flags, 7 | outside share bit 2
 //     3  g.r | g.g          (g = G / C0)
 //     4  g.b | occ.r        (occ = (Y - E) / C0, the most the occlusion takes)
 //     5  occ.g | occ.b
 //     6  kp.r | kp.g        (kp = Kp / 2)
-//     7  kp.b | knee b, 6   (knee = E / Y)
+//     7  kp.b | knee b, 5 | outside share bits 3-5   (knee = E / Y)
 // A cleared texel is no surface of the tracing's: the sky, grass, a debug view.
 
 const uint RT_GB_VALID = 1u;       // a surface the traced terms apply to
@@ -43,6 +43,10 @@ const uint RT_GB_INTERIOR = 16u;   // baked light of an interior - the WMO's in
                                    // shades it too (rtInteriorShade)
 const uint RT_GB_UNIT = 32u;       // a unit's body (character.frag): its rays
                                    // to the point lights pass the units by
+const uint RT_GB_TRANSITION = 64u; // a WMO transition batch's two passes in
+                                   // one: the sun's shade scales only the
+                                   // outside pass's share, the baked shade
+                                   // only the inside pass's (rtSurfaceMix)
 
 vec2 rtOctEncode(vec3 n) {
     n /= abs(n.x) + abs(n.y) + abs(n.z);
@@ -67,11 +71,12 @@ struct RtSurface {
     vec3 occY;     // Y
     vec3 occE;     // E
     vec3 kp;       // Kp
+    float outside; // RT_GB_TRANSITION: the outside pass's share of G
 };
 
 // Nothing traced applies: the colour is left as it is.
 RtSurface rtSurfaceNone() {
-    return RtSurface(vec3(0.0, 0.0, 1.0), 1.0, 0u, vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
+    return RtSurface(vec3(0.0, 0.0, 1.0), 1.0, 0u, vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), 1.0);
 }
 
 // The occlusion's part of a light the Diffuse programs clamp,
@@ -92,11 +97,22 @@ void rtSurfaceScale(inout RtSurface s, vec3 m) {
 }
 
 // Two surfaces drawn as one, a * t + b * (1 - t) - a WMO transition batch's
-// two passes. Their flags together: where only one pass is shadowed or baked
-// light, the other's part is taken as being so too.
+// outside pass a and inside pass b. The traced terms scale each pass's share
+// on its own: the sun's shade the outside pass's (if it is shadowed), the
+// baked shade and the room's light the inside pass's (if it is baked light).
+// Taken together under one shade, the sun the trace finds blocked indoors
+// darkened the inside pass's baked colour as well, and with the room's own
+// light over it the floor at a door went black. G's outside share goes with
+// it (RtSurface::outside).
 RtSurface rtSurfaceMix(RtSurface a, RtSurface b, float t) {
     RtSurface s = b;
-    s.flags = a.flags | b.flags;
+    s.flags = RT_GB_VALID | RT_GB_TRANSITION | (a.flags & RT_GB_SUN) |
+              (b.flags & (RT_GB_BAKED | RT_GB_INTERIOR));
+    vec3 ga = a.g * t;
+    vec3 gb = b.g * (1.0 - t);
+    float la = max(ga.r, max(ga.g, ga.b));
+    float lb = max(gb.r, max(gb.g, gb.b));
+    s.outside = la + lb > 1e-6 ? la / (la + lb) : t;
     s.g = mix(b.g, a.g, t);
     s.occY = mix(b.occY, a.occY, t);
     s.occE = mix(b.occE, a.occE, t);
@@ -105,6 +121,7 @@ RtSurface rtSurfaceMix(RtSurface a, RtSurface b, float t) {
 }
 
 uint rtByte(float v) { return uint(clamp(v, 0.0, 1.0) * 255.0 + 0.5); }
+uint rtBits5(float v) { return uint(clamp(v, 0.0, 1.0) * 31.0 + 0.5); }
 uint rtBits6(float v) { return uint(clamp(v, 0.0, 1.0) * 63.0 + 0.5); }
 uint rtBits10(float v) { return uint(clamp(v, 0.0, 1.0) * 1023.0 + 0.5); }
 
@@ -119,14 +136,15 @@ void rtSurfacePack(RtSurface s, vec3 c0, out vec4 gb0, out vec4 gb1) {
                      s.occY.g > 1e-6 ? s.occE.g / s.occY.g : 1.0,
                      s.occY.b > 1e-6 ? s.occE.b / s.occY.b : 1.0);
     vec3 kp = s.kp * 0.5;
-    uint w0 = rtBits10(oct.x) | (rtBits6(knee.r) << 10);
-    uint w1 = rtBits10(oct.y) | (rtBits6(knee.g) << 10);
-    uint w2 = rtByte(s.map) | ((s.flags & 63u) << 8);
+    uint f = rtBits6(s.outside);
+    uint w0 = rtBits10(oct.x) | (rtBits5(knee.r) << 10) | ((f & 1u) << 15);
+    uint w1 = rtBits10(oct.y) | (rtBits5(knee.g) << 10) | (((f >> 1) & 1u) << 15);
+    uint w2 = rtByte(s.map) | ((s.flags & 127u) << 8) | (((f >> 2) & 1u) << 15);
     uint w3 = rtByte(g.r) | (rtByte(g.g) << 8);
     uint w4 = rtByte(g.b) | (rtByte(occ.r) << 8);
     uint w5 = rtByte(occ.g) | (rtByte(occ.b) << 8);
     uint w6 = rtByte(kp.r) | (rtByte(kp.g) << 8);
-    uint w7 = rtByte(kp.b) | (rtBits6(knee.b) << 8);
+    uint w7 = rtByte(kp.b) | (rtBits5(knee.b) << 8) | ((f >> 3) << 13);
     gb0 = vec4(w0, w1, w2, w3) / 65535.0;
     gb1 = vec4(w4, w5, w6, w7) / 65535.0;
 }
@@ -140,12 +158,13 @@ struct RtGbuf {
     vec3 occ;    // (Y - E) / C0
     vec3 knee;   // E / Y
     vec3 kp;     // Kp
+    float outside;  // RT_GB_TRANSITION: the outside pass's share of G
 };
 
 uvec4 rtWords(vec4 v) { return uvec4(v * 65535.0 + 0.5); }
 float rtUnbyte(uint w, uint shift) { return float((w >> shift) & 255u) / 255.0; }
 
-uint rtGbufFlags(vec4 gb0) { return (rtWords(gb0).z >> 8) & 63u; }
+uint rtGbufFlags(vec4 gb0) { return (rtWords(gb0).z >> 8) & 127u; }
 
 // The normal the surface is lit by.
 vec3 rtGbufShadingNormal(vec4 gb0) {
@@ -159,9 +178,11 @@ RtGbuf rtGbufUnpack(vec4 gb0, vec4 gb1) {
     uvec4 b = rtWords(gb1);
     RtGbuf r;
     r.normal = rtGbufShadingNormal(gb0);
-    r.knee = vec3(float(a.x >> 10), float(a.y >> 10), float(b.w >> 8)) / 63.0;
+    r.knee = vec3(float((a.x >> 10) & 31u), float((a.y >> 10) & 31u), float((b.w >> 8) & 31u)) / 31.0;
     r.map = rtUnbyte(a.z, 0u);
-    r.flags = (a.z >> 8) & 63u;
+    r.flags = (a.z >> 8) & 127u;
+    r.outside = float(((a.x >> 15) & 1u) | (((a.y >> 15) & 1u) << 1) | (((a.z >> 15) & 1u) << 2) |
+                      (((b.w >> 13) & 7u) << 3)) / 63.0;
     r.g = vec3(rtUnbyte(a.w, 0u), rtUnbyte(a.w, 8u), rtUnbyte(b.x, 0u));
     r.occ = vec3(rtUnbyte(b.x, 8u), rtUnbyte(b.y, 0u), rtUnbyte(b.y, 8u));
     r.kp = vec3(rtUnbyte(b.z, 0u), rtUnbyte(b.z, 8u), rtUnbyte(b.w, 0u)) * 2.0;
