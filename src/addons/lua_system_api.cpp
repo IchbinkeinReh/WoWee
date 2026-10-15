@@ -4137,6 +4137,19 @@ static int lua_ToggleAutoRun(lua_State* L) {
     return 0;
 }
 // ToggleRun() - the walk/run binding (0x005faae0): flips the mover's walk mode.
+//
+// It first asks 0x005191c0(0), the protected-function check that ~50 client
+// functions share (PickupEquipmentSetByName, CalendarAddEvent, ...). That is
+// the taint check: DAT_00d4139c is the name of the addon whose code is running
+// (0x0048ec10 swaps it in around a script; /run and macros use the marker at
+// 0x00ac804c, 0x00510b30), 0 for Blizzard's own code. Tainted, kinds 0-5 and
+// 0x10-0x11 are refused outright (ADDON/MACRO_ACTION_FORBIDDEN, 0x00513530),
+// kinds 6-9, 0xf, 0x12-0x15, 0x17 outside a hardware event (+0x1250, set
+// around a click in 0x00967760), and 0xb-0xe, 0x16 in combat lockdown (+0x124c,
+// 0x00524600). So it is on in normal play whenever an addon or /run calls one.
+// This client has no taint tracking - issecure() is true everywhere - which
+// makes every caller Blizzard's and the check always pass; it is skipped here
+// and at its other callers until there is a taint model to ask.
 static int lua_ToggleRun(lua_State* L) {
     if (auto* gh = getGameHandler(L)) gh->toggleRun();
     return 0;

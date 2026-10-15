@@ -606,7 +606,8 @@ static int lua_PickupEquipmentSet(lua_State* L) {
 }
 
 // PickupEquipmentSetByName(name) (0x005af250): the set of that name
-// (0x005ae600), off a set button's drag.
+// (0x005ae600), off a set button's drag. Its 0x005191c0(0xe) taint check
+// always passes here (see lua_ToggleRun).
 static int lua_PickupEquipmentSetByName(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: PickupEquipmentSetByName(\"setName\")");
     auto* gh = getGameHandler(L);
