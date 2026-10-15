@@ -2,6 +2,7 @@
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
 #include "game/inventory_handler.hpp"
+#include "rendering/renderer.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/spline_packet.hpp"
 #include "game/vehicle.hpp"
@@ -2566,6 +2567,9 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     // client leaving the world: windows, timers, remembered units
     // (0x006e5090 -> 0x00528c30).
     owner_.onLeaveWorld(/*worldport=*/true);
+    // The screen effect goes back to none (0x004f7020(0)); the player's row
+    // comes back with the player (0x004f88b0), its fade-in from the start.
+    if (auto* renderer = owner_.services().renderer) renderer->resetScreenEffect();
     // The loot rolls not yet answered are passed (0x006fafd0).
     if (auto* inventory = owner_.getInventoryHandler()) inventory->passLootRollsForWorldport();
 

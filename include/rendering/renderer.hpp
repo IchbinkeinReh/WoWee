@@ -706,6 +706,16 @@ public:
     /// The client's full-screen glow, ffxGlow (on by default where shaders
     /// are supported). See ScreenEffects.
     void setScreenGlowEnabled(bool enabled) { screenGlowEnabled_ = enabled; }
+    /// No ScreenEffect row: the glow, no light slot, no sounds
+    /// (0x004f7020(0), on a worldport and the world's teardown). The
+    /// player's row is chosen again when there is a player to choose it for
+    /// (0x004f88b0 from the player's PostInit), its fades started over.
+    void resetScreenEffect() {
+        screenEffectState_.select(nullptr);
+        screenEffectLightOverride_ = -1;
+        screenEffectAmbience_ = 0;
+        screenEffectZoneMusic_ = 0;
+    }
     int getTerrainLoadRadius() const;
     int getTerrainUnloadRadius() const { return getTerrainLoadRadius() + 3; }
     void setMsaaSamples(VkSampleCountFlagBits samples);

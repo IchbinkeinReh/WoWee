@@ -197,6 +197,9 @@ void GameHandler::disconnect() {
     if (wasInWorld) {
         closeCraftingWindow();
         onLeaveWorld(/*worldport=*/false);
+        // And the screen effect goes back to none (0x00406510 ->
+        // 0x004f7020(0)), its fades with it.
+        if (services_.renderer) services_.renderer->resetScreenEffect();
     }
     // The loot rolls go with the world, unanswered and unsaid (0x006fafb0).
     if (inventoryHandler_) inventoryHandler_->dropLootRolls();
