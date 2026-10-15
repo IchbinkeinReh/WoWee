@@ -627,6 +627,10 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     std::fill(std::begin(playerSpellCritPct_), std::end(playerSpellCritPct_), -1.0f);
     std::fill(std::begin(playerCombatRatings_), std::end(playerCombatRatings_), -1);
     if (spellHandler_) spellHandler_->resetAllState();
+    // The trade partner and who asked (0x007048d0, from the world's setup
+    // 0x00405540): one left from the last world - logged out or cut off
+    // mid-request - answered every request with ERR_ALREADY_TRADING.
+    if (inventoryHandler_) inventoryHandler_->resetTradeState();
     if (auto* renderer = services_.renderer) {
         if (auto* camera = renderer->getCameraController()) camera->setIntoxication(0.0f);
     }
