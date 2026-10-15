@@ -2648,16 +2648,18 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"IsAvailableQuestTrivial", lua_GreetingQuestTrivial<true>},
                 {"GetAvailableLevel",       lua_GreetingQuestLevel<true>},
                 {"GetActiveLevel",          lua_GreetingQuestLevel<false>},
-                // isTrivial, isDaily, isRepeatable - which icon the greeting
-                // panel puts beside an offered quest.
+                // GetAvailableQuestInfo(index) (0x0058dbc0): isTrivial,
+                // isDaily, isRepeatable, each 1 or nil - which icon the
+                // greeting panel puts beside an offered quest. Grey by the
+                // client's own table (0x0058aba0), as IsAvailableQuestTrivial.
                 {"GetAvailableQuestInfo", [](lua_State* L) -> int {
-            const int index = static_cast<int>(luaL_checknumber(L, 1));
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetAvailableQuestInfo(index)");
+            const int index = static_cast<int>(lua_tonumber(L, 1));
             const auto* q = gossipQuestAt(L, /*available=*/true, index);
-            auto* gh = getGameHandler(L);
-            lua_pushboolean(L, (gh && q &&
-                questIsTrivial(static_cast<int>(gh->getPlayerLevel()), q->questLevel)) ? 1 : 0);
-            lua_pushboolean(L, q && (q->questFlags & kQuestFlagsDaily) ? 1 : 0);
-            lua_pushboolean(L, q && q->isRepeatable ? 1 : 0);
+            const auto pushFlag = [L](bool on) { if (on) lua_pushnumber(L, 1); else lua_pushnil(L); };
+            pushFlag(greetingQuestIsTrivial(getGameHandler(L), q ? q->questLevel : 0));
+            pushFlag(q && (q->questFlags & kQuestFlagsDaily));
+            pushFlag(q && q->isRepeatable);
             return 3;
         }},
                 // Whether the gossip window must be shown even when there is
