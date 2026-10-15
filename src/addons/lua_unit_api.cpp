@@ -2519,6 +2519,85 @@ static int lua_UnitIsConnected(lua_State* L) {
 
 // HasAction(slot) → boolean (1-indexed slot)
 
+/// 0x0052d310 / 0x00573200: the player, a party or raid member, or the pet
+/// or charm (UNIT_FIELD_CHARM, else UNIT_FIELD_SUMMON) of one of them. For a
+/// member out of view the client asks the pet guid its party stats carried;
+/// this client keeps none, so such a pet is not counted.
+static bool isGroupMemberOrPet(game::GameHandler* gh, uint64_t guid) {
+    if (!gh || guid == 0) return false;
+    const auto petOf = [gh](uint64_t owner) {
+        const uint64_t charm = guidField(gh, owner, game::UF::UNIT_FIELD_CHARM);
+        return charm ? charm : guidField(gh, owner, game::UF::UNIT_FIELD_SUMMON);
+    };
+    const uint64_t player = gh->getPlayerGuid();
+    if (guid == player || petOf(player) == guid) return true;
+    for (const auto& m : gh->getPartyData().members) {
+        if (m.guid == 0) continue;
+        if (m.guid == guid) return true;
+        if (gh->getEntityManager().getEntity(m.guid) && petOf(m.guid) == guid) return true;
+    }
+    return false;
+}
+
+/// UnitIsFeignDeath(unit) (0x0060f3d0): 1 for a unit of the player's own
+/// group (0x00512a30) whose UNIT_DYNAMIC_FLAGS carry 0x20, which is how a
+/// feigning hunter is shown to them; nil otherwise.
+static int lua_UnitIsFeignDeath(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsFeignDeath(\"unit\")");
+    auto* gh = getGameHandler(L);
+    auto* unit = resolveUnit(L, lua_tostring(L, 1));
+    if (gh && unit && isGroupMemberOrPet(gh, unit->getGuid()) &&
+        (unit->getField(game::fieldIndex(game::UF::UNIT_DYNAMIC_FLAGS)) & 0x20) != 0) {
+        lua_pushnumber(L, 1);
+    } else {
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+/// UnitIsTrivial(unit) (0x006112b0 -> 0x006de130): a unit that is not a
+/// player, far enough below the player's level to be grey - more than the
+/// table at 0x00a31bb8 allows for the player's level / 5, or more than 8 past
+/// level 99. 1 or nil.
+static int lua_UnitIsTrivial(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsTrivial(\"unit\")");
+    static constexpr int kGreyGap[20] = {4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8};
+    auto* gh = getGameHandler(L);
+    auto* unit = resolveUnit(L, lua_tostring(L, 1));
+    bool trivial = false;
+    if (gh && unit && unit->getType() != game::ObjectType::PLAYER) {
+        auto me = std::dynamic_pointer_cast<game::Unit>(gh->getEntityManager().getEntity(gh->getPlayerGuid()));
+        if (me) {
+            const int playerLevel = static_cast<int>(me->getLevel());
+            const int gap = playerLevel - static_cast<int>(unit->getLevel());
+            if (gap > 0) {
+                const unsigned band = static_cast<unsigned>(playerLevel / 5);
+                trivial = band < 20 ? gap > kGreyGap[band] : gap > 8;
+            }
+        }
+    }
+    if (trivial) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
+}
+
+/// UnitIsPVPSanctuary(unit) (0x0060cf20): UNIT_FIELD_BYTES_2's second byte
+/// carries 0x08 in a sanctuary such as Dalaran. 1 or nil.
+static int lua_UnitIsPVPSanctuary(lua_State* L) {
+    auto* unit = resolveUnit(L, lua_tostring(L, 1));
+    const uint32_t bytes2 = unit ? unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2)) : 0;
+    if ((bytes2 >> 8) & 0x08) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
+}
+
+/// IsRealPartyLeader() (0x0052cd30) / IsRealRaidLeader() (0x00573ab0): the
+/// group's leader (DAT_00bd1990) is the player. 1 or nil.
+static int lua_IsRealGroupLeader(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint64_t leader = gh ? gh->getPartyData().leaderGuid : 0;
+    if (leader != 0 && leader == gh->getPlayerGuid()) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
+}
+
 void registerUnitLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"UnitName",      lua_UnitName},
@@ -3080,6 +3159,11 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"CheckInteractDistance", lua_CheckInteractDistance},
                 {"UnitInRange",           lua_UnitInRange},
                 {"IsRaidLeader",          lua_IsRaidLeader},
+                {"IsRealPartyLeader",     lua_IsRealGroupLeader},
+                {"IsRealRaidLeader",      lua_IsRealGroupLeader},
+                {"UnitIsFeignDeath",      lua_UnitIsFeignDeath},
+                {"UnitIsTrivial",         lua_UnitIsTrivial},
+                {"UnitIsPVPSanctuary",    lua_UnitIsPVPSanctuary},
                 // The class token without the localised name beside it, which
                 // is all UnitClassBase is: the same second return UnitClass
                 // already computes.
