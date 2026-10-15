@@ -1121,6 +1121,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "camerayawmovespeed") lua_pushstring(L, "0.2");
     // Not joined unless asked for, as it ships.
     else if (n == "guildrecruitmentchannel") lua_pushstring(L, "0");
+    // Combat log entries are kept 300 seconds unless set (0x0074d9e0).
+    else if (n == "combatlogretentiontime") lua_pushstring(L, "300");
 
     // The uvarInfo table's own defaults, for the CVars it names that nothing
     // here answered. An unanswered CVar is not "off": GetCVar gives back
@@ -4383,6 +4385,67 @@ static int lua_StepView(lua_State* L) {
     return 0;
 }
 
+/// A CVar's value as a number, through GetCVar as the interface reads it.
+static double cvarNumber(lua_State* L, const char* name) {
+    lua_getglobal(L, "GetCVar");
+    lua_pushstring(L, name);
+    lua_call(L, 1, 1);
+    const double v = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0.0;
+    lua_pop(L, 1);
+    return v;
+}
+static void setCVarText(lua_State* L, const char* name, const std::string& value) {
+    lua_getglobal(L, "SetCVar");
+    lua_pushstring(L, name);
+    lua_pushstring(L, value.c_str());
+    lua_call(L, 2, 0);
+}
+
+// The graphics settings' own calls (0x00510200 ff.): GetFarclip and
+// GetTexLodBias read farclip and texLodBias, GetBaseMip one less than
+// baseMip; the setters write them back - farclip and texLodBias as "%f",
+// baseMip as the whole number given. Water detail is no setting: Get 0,
+// Set only checks its argument (0x00608560, 0x005101d0).
+static int lua_GetFarclip(lua_State* L) {
+    lua_pushnumber(L, cvarNumber(L, "farclip"));
+    return 1;
+}
+static int lua_SetFarclip(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetFarclip(value)");
+    char text[32];
+    std::snprintf(text, sizeof(text), "%f", lua_tonumber(L, 1));
+    setCVarText(L, "farclip", text);
+    return 0;
+}
+static int lua_GetTexLodBias(lua_State* L) {
+    lua_pushnumber(L, cvarNumber(L, "texLodBias"));
+    return 1;
+}
+static int lua_SetTexLodBias(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetTexLodBias(value)");
+    char text[32];
+    std::snprintf(text, sizeof(text), "%f", lua_tonumber(L, 1));
+    setCVarText(L, "texLodBias", text);
+    return 0;
+}
+static int lua_GetBaseMip(lua_State* L) {
+    lua_pushnumber(L, 1.0 - static_cast<double>(static_cast<float>(cvarNumber(L, "baseMip"))));
+    return 1;
+}
+static int lua_SetBaseMip(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetBaseMip(value)");
+    setCVarText(L, "baseMip", std::to_string(static_cast<int>(lua_tonumber(L, 1))));
+    return 0;
+}
+static int lua_GetWaterDetail(lua_State* L) {
+    lua_pushnumber(L, 0);
+    return 1;
+}
+static int lua_SetWaterDetail(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetWaterDetail(value)");
+    return 0;
+}
+
 // MoveView{In,Out,Left,Right,Up,Down}Start([speed]) and Stop (0x005ff080
 // ff., 0x005ff000): the camera's view moves that way at speed (1 by default)
 // times cameraDistanceMoveSpeed (yards, 8.33) for in and out,
@@ -6082,6 +6145,14 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"NextView",                 lua_StepView<1>},
                 {"PrevView",                 lua_StepView<-1>},
                 {"FlipCameraYaw",            lua_FlipCameraYaw},
+                {"GetFarclip",               lua_GetFarclip},
+                {"SetFarclip",               lua_SetFarclip},
+                {"GetTexLodBias",            lua_GetTexLodBias},
+                {"SetTexLodBias",            lua_SetTexLodBias},
+                {"GetBaseMip",               lua_GetBaseMip},
+                {"SetBaseMip",               lua_SetBaseMip},
+                {"GetWaterDetail",           lua_GetWaterDetail},
+                {"SetWaterDetail",           lua_SetWaterDetail},
                 {"MoveViewInStart",          lua_MoveViewStart<0>},
                 {"MoveViewInStop",           lua_MoveViewStop<0>},
                 {"MoveViewOutStart",         lua_MoveViewStart<1>},
@@ -6240,6 +6311,25 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"CombatLogGetNumEntries",         lua_CombatLogGetNumEntries},
                 {"CombatLogGetCurrentEntry",       lua_CombatLogGetCurrentEntry},
                 {"CombatLogAdvanceEntry",          lua_CombatLogAdvanceEntry},
+                // How long combat log entries are kept: the CVar
+                // combatLogRetentionTime, 300 seconds by default (0x0074d9e0,
+                // 0x0074d5b0 sets it). No entries are kept here, so clearing
+                // them walks an empty list (0x00751120).
+                {"CombatLogGetRetentionTime", [](lua_State* L) -> int {
+            lua_pushnumber(L, std::atoi(storedCVarValue("combatlogretentiontime", "300").c_str()));
+            return 1;
+        }},
+                {"CombatLogSetRetentionTime", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CombatLogSetRetentionTime(seconds)");
+            const std::string value = std::to_string(static_cast<int>(lua_tonumber(L, 1)));
+            auto& stored = cvarStore()["combatlogretentiontime"];
+            if (stored != value) {
+                stored = value;
+                saveStoredCVars();
+            }
+            return 0;
+        }},
+                {"CombatLogClearEntries",          [](lua_State*) -> int { return 0; }},
                 {"CombatLogSetCurrentEntry",       lua_CombatLogSetCurrentEntry},
                 {"CombatLogAddFilter",             lua_CombatLogAddFilter},
                 {"CombatLogResetFilter",           lua_CombatLogResetFilter},
@@ -6804,6 +6894,13 @@ void registerSystemLuaAPI(lua_State* L) {
                 // nothing, and nothing is what disables the button - so a
                 // wrong answer here is a button that looks available and does
                 // not move.
+                // ClearTutorials() (0x00530820 -> 0x00530510): every one of
+                // the sixty marked seen, and CMSG_TUTORIAL_CLEAR.
+                {"ClearTutorials", [](lua_State* L) -> int {
+            for (int id = 1; id <= 60; ++id) flagTutorial(id);
+            if (auto* gh = getGameHandler(L)) gh->sendTutorialClear();
+            return 0;
+        }},
                 {"GetNextCompleatedTutorial", [](lua_State* L) -> int {
             const int from = static_cast<int>(luaL_optnumber(L, 1, 0));
             for (int id : tutorialIds()) {

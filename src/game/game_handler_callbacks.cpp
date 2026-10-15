@@ -2774,6 +2774,22 @@ void GameHandler::handlePetSpells(network::Packet& packet) {
     if (spellHandler_) spellHandler_->handlePetSpells(packet);
 }
 
+void GameHandler::petStopAttack() {
+    if (!petAttacking_) return;
+    if (socket && state == WorldState::IN_WORLD && wireOpcode(Opcode::CMSG_PET_STOP_ATTACK) != 0xFFFF) {
+        network::Packet packet(wireOpcode(Opcode::CMSG_PET_STOP_ATTACK));
+        packet.writeUInt64(petGuid_);
+        socket->send(packet);
+    }
+    petAttacking_ = false;
+}
+
+void GameHandler::sendTutorialClear() {
+    if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR));
+    socket->send(packet);
+}
+
 void GameHandler::sendPetAction(uint32_t action, uint64_t targetGuid) {
     if (spellHandler_) spellHandler_->sendPetAction(action, targetGuid);
 }

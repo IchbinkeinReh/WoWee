@@ -37,6 +37,7 @@ GameHandler::SkillPurchaseInfo GameHandler::getSkillPurchaseInfo(uint32_t skillI
     out.minLevel = info->minLevel;
     out.costType = info->costIndex + 1;
     out.heldAtOne = (info->flags & 0x400) != 0;
+    out.abandonable = skill.step != 0 && (info->flags & 0x20) != 0;
     return out;
 }
 

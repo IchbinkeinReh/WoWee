@@ -934,6 +934,20 @@ static int lua_AssistUnit(lua_State* L) {
     return 0;
 }
 
+// TargetTotem(slot) - 0x005262e0: the totem last placed in slot 1-4, by
+// the guid SMSG_TOTEM_CREATED gave (0x00bd0b08); none there, nothing.
+static int lua_TargetTotem(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TargetTotem(slot)");
+    const int slot = static_cast<int>(lua_tonumber(L, 1));
+    if (slot < 1 || slot > game::GameHandler::NUM_TOTEM_SLOTS)
+        return luaL_error(L, "Totem slot must be in range of 1 to %d", game::GameHandler::NUM_TOTEM_SLOTS);
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const uint64_t guid = gh->getTotemSlot(slot - 1).guid;
+    if (guid != 0) gh->targetUnit(guid);
+    return 0;
+}
+
 // TargetLastTarget() - re-target previous target
 static int lua_TargetLastTarget(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -1347,6 +1361,7 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"ClearFocus",        lua_ClearFocus},
                 {"AssistUnit",        lua_AssistUnit},
                 {"TargetLastTarget",  lua_TargetLastTarget},
+                {"TargetTotem",       lua_TargetTotem},
                 {"TargetNearestEnemy",  lua_TargetNearestEnemy},
                 {"TargetNearestFriend", lua_TargetNearestFriend},
                 {"TargetNearest",       lua_TargetNearest},

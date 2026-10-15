@@ -1421,7 +1421,7 @@ static int lua_GetSkillLineInfo(lua_State* L) {
         lua_pushboolean(L, 0);                          // 2: isHeader
         lua_pushboolean(L, 1);                          // 3: isExpanded
         for (int i = 4; i <= 7; ++i) lua_pushnumber(L, 0);   // rank, temp, mod, max
-        lua_pushboolean(L, 0);                          // 8: isAbandonable
+        lua_pushnil(L);                                 // 8: isAbandonable
         // stepCost and rankCost nil for the same reason they are nil below:
         // zero is true in Lua, so a zero here sends the empty row down the
         // "Learn <skill>" branch. The fix went in on the real path and this
@@ -1443,7 +1443,7 @@ static int lua_GetSkillLineInfo(lua_State* L) {
         lua_pushboolean(L, 1);                          // 2: isHeader
         lua_pushboolean(L, gh->isSkillCategoryCollapsed(row.categoryId) ? 0 : 1);
         for (int i = 4; i <= 7; ++i) lua_pushnumber(L, 0);
-        lua_pushboolean(L, 0);                          // 8: isAbandonable
+        lua_pushnil(L);                                 // 8: isAbandonable
         lua_pushnil(L);                                 // 9: stepCost
         lua_pushnil(L);                                 // 10: rankCost
         lua_pushnumber(L, 0);                           // 11: minLevel
@@ -1476,7 +1476,10 @@ static int lua_GetSkillLineInfo(lua_State* L) {
     lua_pushnumber(L, purchase.pending);                // 5: numTempPoints
     lua_pushnumber(L, skill.bonusTemp);                 // 6: skillModifier
     lua_pushnumber(L, maxRank);                         // 7: skillMaxRank
-    lua_pushboolean(L, 0);                              // 8: isAbandonable
+    // 8: isAbandonable - 1 where a step is taken and the race/class row
+    // has 0x20, else nil (0x005cde20).
+    if (purchase.abandonable) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
     // stepCost and rankCost nil where there is none to pay: SkillFrame
     // branches on them as truths, and zero is true in Lua. A cost is the
     // skill-point purchase's (SkillTiers / SkillCostsData).
@@ -1804,6 +1807,12 @@ static bool& tradeSkillOnlyMakeable() {
     static bool only = false;
     return only;
 }
+/// TradeSkillOnlyShowSkillUps (0x005dd420, 0x00c235cc): only the recipes
+/// that still raise the skill - not the trivial (3) ones (0x005dcc40).
+static bool& tradeSkillOnlySkillUps() {
+    static bool only = false;
+    return only;
+}
 
 /// The recipes the panel should show, in its order.
 ///
@@ -1890,6 +1899,7 @@ static std::vector<game::GameHandler::CraftRecipe> visibleCraftingRecipes(
     const auto level = tradeSkillLevelRange();
     for (const auto& r : gh->getCraftingRecipes()) {
         if (tradeSkillOnlyMakeable() && r.canMake <= 0) continue;
+        if (tradeSkillOnlySkillUps() && r.difficulty >= 3) continue;
         if (!needle.empty()) {
             std::string name = r.name;
             toLowerInPlace(name);
@@ -3182,6 +3192,19 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"IsAtStableMaster",       lua_IsAtStableMaster},
                 {"GetNextStableSlotCost",  lua_GetNextStableSlotCost},
                 {"GetSkillLineInfo",        lua_GetSkillLineInfo},
+                // AbandonSkill(index) (0x005ce2c0): CMSG_UNLEARN_SKILL for
+                // the skill on that row of the skills window - the row
+                // index UNLEARN_SKILL's popup carries, as GetSkillLineInfo
+                // numbers it.
+                {"AbandonSkill", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: AbandonSkill(index)");
+            auto* gh = getGameHandler(L);
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            const auto rows = gh ? skillRows(gh) : std::vector<SkillRow>{};
+            if (index >= 1 && index <= static_cast<int>(rows.size()))
+                gh->unlearnSkill(rows[static_cast<size_t>(index) - 1].skillId);
+            return 0;
+        }},
                 {"AddSkillUp", [](lua_State* L) -> int {
             return lua_SkillRowVerb<&game::GameHandler::addSkillUp>(L, "Usage: AddSkillUp(index)");
         }},
@@ -3944,6 +3967,28 @@ void registerQuestLuaAPI(lua_State* L) {
                 gh->fireAddonEvent("TRADE_SKILL_FILTER_UPDATE", {});
             }
             return 0;
+        }},
+                // TradeSkillOnlyShowSkillUps([on]) (0x005dd420): on unless
+                // false is given; a change rebuilds the list and says so, as
+                // the makeable box does (0x005dd3e0).
+                {"TradeSkillOnlyShowSkillUps",  [](lua_State* L) -> int {
+            const bool only = lua_isnone(L, 1) || lua_toboolean(L, 1) != 0;
+            if (only == tradeSkillOnlySkillUps()) return 0;
+            tradeSkillOnlySkillUps() = only;
+            ++tradeSkillRowsGeneration();
+            if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("TRADE_SKILL_FILTER_UPDATE", {});
+            return 0;
+        }},
+                // The search box's two filters as they stand (0x005da150,
+                // 0x005da170): the name, and the item level range.
+                {"GetTradeSkillItemNameFilter", [](lua_State* L) -> int {
+            lua_pushstring(L, tradeSkillNameFilter().c_str());
+            return 1;
+        }},
+                {"GetTradeSkillItemLevelFilter", [](lua_State* L) -> int {
+            lua_pushnumber(L, tradeSkillLevelRange().first);
+            lua_pushnumber(L, tradeSkillLevelRange().second);
+            return 2;
         }},
                 {"CollapseTradeSkillSubClass",  [](lua_State* L) -> int {
             return tradeSkillHeaderSetCollapsed(L, true);

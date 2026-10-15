@@ -4573,6 +4573,9 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
     // 0x005d6b90 begins by emptying the pet's spell history (0x00804420).
     petHistory_.clear();
     const size_t remaining = packet.getRemainingSize();
+    // 0x005d6b90 lets go of the attack (0x00c234dc), then holds it again
+    // for a pet in combat (0x0071afb0: UNIT_FLAG_PET_IN_COMBAT).
+    owner_.setPetAttacking(false);
     if (remaining < 8) {
         owner_.petGuidRef() = 0;
         // No pet: its combo points go (0x005d6900 -> 0x005d34b0).
@@ -4595,6 +4598,8 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
     // Ask what it is called. Nothing else does, and the name a player gave a
     // pet comes back in answer to this and nothing else.
     if (owner_.petGuidRef() != 0) requestPetName(owner_.petGuidRef());
+    if (const auto pet = owner_.getEntityManager().getEntity(owner_.petGuidRef()); pet && pet->isUnit())
+        owner_.setPetAttacking((entityField(*pet, UF::UNIT_FIELD_FLAGS) & 0x800u) != 0);
     if (owner_.petGuidRef() == 0) {
         owner_.petComboTargetRef() = 0;
         owner_.petComboPointsRef() = 0;
@@ -4706,6 +4711,9 @@ void SpellHandler::sendPetAction(uint32_t action, uint64_t targetGuid) {
     if (!owner_.hasPet() || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto pkt = PetActionPacket::build(owner_.petGuidRef(), action, targetGuid);
     owner_.getSocket()->send(pkt);
+    // The attack command holds the pet to be attacking (0x005d3790, command
+    // 2 -> 0x00c234dc).
+    if (action == pet::packPetAction(pet::ActionType::Command, pet::kAttack)) owner_.setPetAttacking(true);
     LOG_DEBUG("sendPetAction: petGuid=0x", std::hex, owner_.petGuidRef(),
               " action=0x", action, " target=0x", targetGuid, std::dec);
 }
@@ -6441,6 +6449,7 @@ void SpellHandler::handleTotemCreated(network::Packet& packet) {
     if (slot < GameHandler::NUM_TOTEM_SLOTS) {
         owner_.activeTotemSlotsRef()[slot].spellId    = spellId;
         owner_.activeTotemSlotsRef()[slot].durationMs = duration;
+        owner_.activeTotemSlotsRef()[slot].guid       = totem.guid;
         owner_.activeTotemSlotsRef()[slot].placedAt   = std::chrono::steady_clock::now();
         // The totem bar draws each slot from its start and duration, and
         // refreshes on this alone - without it a totem is placed and the bar

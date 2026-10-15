@@ -1321,6 +1321,17 @@ public:
     void dismissPet();
     void renamePet(const std::string& newName);
     bool hasPet() const { return petGuid_ != 0; }
+    /// Whether the pet is held to be attacking (0x00c234dc): set by its
+    /// UNIT_FLAG_PET_IN_COMBAT (0x005d30a0) and by an attack command,
+    /// cleared by PetStopAttack.
+    bool isPetAttacking() const { return petAttacking_; }
+    void setPetAttacking(bool attacking) { petAttacking_ = attacking; }
+    /// PetStopAttack() (0x005d5640 -> 0x005d4650): while the pet attacks,
+    /// CMSG_PET_STOP_ATTACK for it, and it is held to have stopped.
+    void petStopAttack();
+    /// ClearTutorials (0x00530820 -> 0x00530510): CMSG_TUTORIAL_CLEAR, the
+    /// server's word for every tutorial seen.
+    void sendTutorialClear();
     // Returns true once after SMSG_PET_RENAMEABLE; consuming the flag clears it.
     bool consumePetRenameablePending() { bool v = petRenameablePending_; petRenameablePending_ = false; return v; }
     /// The same flag without taking it. The unit menu asks whether a rename is
@@ -1813,6 +1824,8 @@ public:
         uint32_t minLevel = 0;
         uint32_t costType = 0;   ///< SkillCostIndex + 1
         bool heldAtOne = false;  ///< the race/class row's 0x400
+        /// May be unlearned (0x005cde20): a step taken and the row's 0x20.
+        bool abandonable = false;
     };
     SkillPurchaseInfo getSkillPurchaseInfo(uint32_t skillId);
     /// The player's skill points, PLAYER_CHARACTER_POINTS2 (0x005cd970(1)).
@@ -3006,6 +3019,7 @@ public:
     struct TotemSlot {
         uint32_t spellId     = 0;
         uint32_t durationMs  = 0;
+        uint64_t guid        = 0;  ///< 0x00bd0b08: what TargetTotem takes
         std::chrono::steady_clock::time_point placedAt{};
         [[nodiscard]] bool active() const { return spellId != 0 && remainingMs() > 0; }
         [[nodiscard]] float remainingMs() const {
@@ -6019,6 +6033,7 @@ private:
     uint32_t lastCalendarAddMs_ = 0;
     /// Whether the open event (0x00c207ec) is a new one, not yet made.
     bool calendarDraftOpen_ = false;
+    bool petAttacking_ = false;
     /// The event CalendarContextEventCopy kept (0x00ad0350): its id, the
     /// invite id it had (+0xb0) and its time (+0x88). Id 0 for none.
     struct CalendarClipboard {

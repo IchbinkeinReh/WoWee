@@ -2855,6 +2855,12 @@ void registerActionLuaAPI(lua_State* L) {
                     gh->getTargetGuid());
             return 0;
         }},
+                // PetStopAttack() (0x005d5640 -> 0x005d4650): only while the
+                // pet is held to be attacking (0x00c234dc).
+                {"PetStopAttack", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->petStopAttack();
+            return 0;
+        }},
                 {"PetFollow", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             // Through CGPetInfo::SendPetAction (0x005d4210), kind 2.
@@ -2940,26 +2946,11 @@ void registerActionLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->resetInstances();
             return 0;
         }},
-                // UNLEARN_SKILL's accept, from the skill panel's unlearn
-                // button. The skill line comes from the button's own row.
-                // Takes a skill id here, and FrameXML's one caller passes it
-                // whatever it was handed as the popup's data - which in the
-                // original client is the skills tab's row index, not an id.
-                // Nothing shows UNLEARN_SKILL in this build (GetSkillLineInfo
-                // answers isAbandonable false, so no row offers to unlearn), so
-                // the two never meet; if the popup is ever raised, whichever
-                // side passes the index has to resolve it through skillRows()
-                // first, or this unlearns the skill whose id happens to equal a
-                // row number.
-                {"AbandonSkill", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const auto skillId = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (gh && skillId) gh->unlearnSkill(skillId);
-            return 0;
-        }},
+                // IsPetAttackActive() (0x005d3160): the attack flag
+                // PetStopAttack clears (0x00c234dc).
                 {"IsPetAttackActive", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && gh->getPetCommand() == 2 ? 1 : 0); // 2=attack
+            lua_pushboolean(L, gh && gh->isPetAttacking() ? 1 : 0);
             return 1;
         }},
                 {"PetDefensiveMode", [](lua_State* L) -> int {

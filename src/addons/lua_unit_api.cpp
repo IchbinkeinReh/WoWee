@@ -7,6 +7,7 @@
 #include "rendering/selection_circle.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
+#include "game/power_prediction.hpp"
 #include <cstdlib>
 
 namespace wowee::addons {
@@ -2621,8 +2622,49 @@ static int lua_IsRealGroupLeader(lua_State* L) {
     return 1;
 }
 
+/// GetUnitPitch(unit) (0x00613330): the unit's pitch (vtable +0x14c), 0
+/// for none.
+static int lua_GetUnitPitch(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetUnitPitch(\"unit\")");
+    auto* gh = getGameHandler(L);
+    const uint64_t guid = resolveUnitArgGuid(L, gh);
+    const auto unit = gh && guid ? gh->getEntityManager().getEntity(guid) : nullptr;
+    lua_pushnumber(L, unit && unit->isUnit() ? gh->unitPitch(guid) : 0.0f);
+    return 1;
+}
+
+/// GetPowerRegen() (0x00612b40): the player's power type's regeneration a
+/// second, as it regenerates and interrupted (0x004f5390: the table's,
+/// 0x004f5300, and UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER or the
+/// INTERRUPTED one), each a thousandth more.
+static int lua_GetPowerRegen(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto player = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    if (!player || !player->isUnit()) {
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 0);
+        return 2;
+    }
+    const uint16_t bytes0 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0);
+    const int type = bytes0 != 0xFFFF ? static_cast<int>((player->getField(bytes0) >> 24) & 0xFFu) : 0;
+    for (int interrupted = 0; interrupted < 2; ++interrupted) {
+        float modifier = 0.0f;
+        const uint16_t f = game::fieldIndex(interrupted ? game::UF::UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER
+                                                        : game::UF::UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER);
+        if (f != 0xFFFF && type < 7) {
+            const uint32_t raw = player->getField(static_cast<uint16_t>(f + type));
+            std::memcpy(&modifier, &raw, sizeof modifier);
+        }
+        const float base = type < 7 ? game::power_prediction::kBaseRegen[type][interrupted] : 0.0f;
+        lua_pushnumber(L, static_cast<double>(base + modifier) + 0.001);
+    }
+    return 2;
+}
+
 void registerUnitLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
+                {"GetUnitPitch",  lua_GetUnitPitch},
+                {"GetPowerRegen", lua_GetPowerRegen},
                 {"UnitName",      lua_UnitName},
                 {"GetUnitName",   lua_UnitName},
                 {"UnitHealth",    lua_UnitHealth},

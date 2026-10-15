@@ -1215,8 +1215,10 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 };
                 uint64_t master = guidAt(UF::UNIT_FIELD_CHARMEDBY);
                 if (master == 0) master = guidAt(UF::UNIT_FIELD_SUMMONEDBY_LO);
-                if (master != 0 && master == owner_.getPlayerGuid())
+                if (master != 0 && master == owner_.getPlayerGuid()) {
+                    owner_.setPetAttacking((val & 0x800u) != 0);
                     pendingEvents_.emit((val & 0x800u) ? "PET_ATTACK_START" : "PET_ATTACK_STOP", {});
+                }
             }
             // Detect stun state change on local player
             constexpr uint32_t UNIT_FLAG_STUNNED = 0x00040000;
