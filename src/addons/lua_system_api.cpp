@@ -230,6 +230,39 @@ static int calendarRespondToContextInvite(lua_State* L, uint32_t status) {
     return 0;
 }
 
+/// The event a context verb names: three numbers name a row of a day, else
+/// the row the menu is about (0x00c207e8). False with neither - the verb's
+/// usage error; true with an event id of 0 where the row is not an event.
+static bool calendarNamedOrContextEvent(lua_State* L, uint64_t& eventId) {
+    eventId = 0;
+    CalendarContextRow row = calendarContextRow();
+    if (lua_isnumber(L, 1) && lua_isnumber(L, 2) && lua_isnumber(L, 3)) {
+        row = {.monthOffset = static_cast<int>(std::lround(lua_tonumber(L, 1))),
+               .day = static_cast<int>(std::lround(lua_tonumber(L, 2))),
+               .index = static_cast<int>(std::lround(lua_tonumber(L, 3)))};
+    } else if (row.day < 1 || row.index < 1) {
+        return false;
+    }
+    auto* gh = getGameHandler(L);
+    if (!gh) return true;
+    const auto rows = calendarRowsFor(*gh, row.monthOffset, row.day);
+    if (row.index < 1 || static_cast<size_t>(row.index) > rows.size()) return true;
+    const auto& entry = rows[static_cast<size_t>(row.index) - 1];
+    if (entry.kind == wowee::game::CalendarEntryKind::Event)
+        eventId = gh->getCalendarData().events[entry.index].eventId;
+    return true;
+}
+
+/// A global string of the interface's, or its key where it has none -
+/// what the client's string lookup (0x00819d40) answers.
+static void pushGlobalText(lua_State* L, const char* key) {
+    lua_getglobal(L, key);
+    if (!lua_isstring(L, -1)) {
+        lua_pop(L, 1);
+        lua_pushstring(L, key);
+    }
+}
+
 /// The player's own answer to an event, from the invite list that came with
 /// it. Zero is CALENDAR_INVITESTATUS_INVITED, which is what an event carries
 /// while it is unanswered.
@@ -9078,13 +9111,49 @@ void registerSystemLuaAPI(lua_State* L) {
                                    ev.creatorGuid == gh->getPlayerGuid() ? 1 : 0);
             return 1;
         }},
-                // Reporting an event is a GM feature this client has no
-                // packet for. False rather than nothing: the menu tests it to
-                // decide whether to draw the entry, and a stand-in would draw
-                // one that does nothing when clicked.
+                // CalendarContextEventCanComplain([monthOffset, day, index])
+                // (0x005bd4f0) and CalendarContextEventComplain (0x005bd600):
+                // the row named, or the one the menu is about, a usage error
+                // with neither. Whether and how is calendarCanComplain's and
+                // calendarComplain's.
                 {"CalendarContextEventCanComplain", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0);
+            uint64_t eventId = 0;
+            if (!calendarNamedOrContextEvent(L, eventId))
+                return luaL_error(L, "Usage: CalendarContextEventCanComplain([-1.0.1], monthDay, index)");
+            auto* gh = getGameHandler(L);
+            lua_pushboolean(L, gh && eventId && gh->calendarCanComplain(eventId) ? 1 : 0);
             return 1;
+        }},
+                {"CalendarContextEventComplain", [](lua_State* L) -> int {
+            uint64_t eventId = 0;
+            if (!calendarNamedOrContextEvent(L, eventId))
+                return luaL_error(L, "Usage: CalendarContextEventComplain([-1.0.1], monthDay, index)");
+            if (auto* gh = getGameHandler(L); gh && eventId) gh->calendarComplain(eventId);
+            return 0;
+        }},
+                // CalendarContextDeselectEvent() (0x005b8510): the menu is
+                // about no event any more.
+                {"CalendarContextDeselectEvent", [](lua_State*) -> int {
+            calendarContextRow() = {};
+            return 0;
+        }},
+                // CalendarGetMonthNames() / CalendarGetWeekdayNames()
+                // (0x005b80e0, 0x005b8120): the interface's MONTH_JANUARY ..
+                // MONTH_DECEMBER and WEEKDAY_SUNDAY .. WEEKDAY_SATURDAY.
+                {"CalendarGetMonthNames", [](lua_State* L) -> int {
+            static constexpr const char* kMonths[12] = {
+                "MONTH_JANUARY", "MONTH_FEBRUARY", "MONTH_MARCH", "MONTH_APRIL",
+                "MONTH_MAY", "MONTH_JUNE", "MONTH_JULY", "MONTH_AUGUST",
+                "MONTH_SEPTEMBER", "MONTH_OCTOBER", "MONTH_NOVEMBER", "MONTH_DECEMBER"};
+            for (const char* key : kMonths) pushGlobalText(L, key);
+            return 12;
+        }},
+                {"CalendarGetWeekdayNames", [](lua_State* L) -> int {
+            static constexpr const char* kDays[7] = {
+                "WEEKDAY_SUNDAY", "WEEKDAY_MONDAY", "WEEKDAY_TUESDAY", "WEEKDAY_WEDNESDAY",
+                "WEEKDAY_THURSDAY", "WEEKDAY_FRIDAY", "WEEKDAY_SATURDAY"};
+            for (const char* key : kDays) pushGlobalText(L, key);
+            return 7;
         }},
                 // Delete the row the menu is about.
                 {"CalendarContextEventRemove", [](lua_State* L) -> int {

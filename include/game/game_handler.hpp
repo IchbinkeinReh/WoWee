@@ -980,6 +980,15 @@ public:
     /// announcement with the rank's 0x100000 right (0x005cbca0), any other
     /// as its maker or a moderator - else CALENDAR_ERROR_PERMISSIONS.
     void calendarCopyEvent(uint64_t eventId);
+    /// CalendarContextEventCanComplain (0x005bd4f0 -> 0x005bc9d0): nothing
+    /// pending, complaints on (SMSG_FEATURE_SYSTEM_STATUS, 0xbceffc), an
+    /// event that is not a guild event, announcement or the like (flags
+    /// 0x6cc), made by another who is not ignored.
+    bool calendarCanComplain(uint64_t eventId) const;
+    /// CalendarContextEventComplain (0x005bd600 -> 0x005bca50): the maker
+    /// reported once (CMSG_CALENDAR_COMPLAIN) - a second time, COMPLAINT_ADDED
+    /// and the player's own invitation removed instead.
+    void calendarComplain(uint64_t eventId);
     /// CalendarContextEventPaste (0x005bd460 -> 0x005bc870): the copied event
     /// onto day `day` (from 1) of `month`/`year`, which has `numDays` days,
     /// at its own hour - nothing pending, something copied, the add throttle
@@ -5976,6 +5985,12 @@ private:
     /// one and not one the player is listed on. True when sent.
     bool calendarSendSignUp(bool tentative);
     bool calendarActionPending_ = false;
+    /// SMSG_FEATURE_SYSTEM_STATUS (0x006e2e90 case 0x3c9): the complaint
+    /// system (0xbceffc).
+    uint8_t complaintSystemStatus_ = 0;
+    /// Those already complained about, newest first, at most 32 (0x006b3700,
+    /// 0x006b3750).
+    std::deque<uint64_t> complainedGuids_;
     /// When the last invitation went, on calendarClockMs (0x00c207f8); 0 for
     /// none yet.
     uint32_t lastCalendarInviteMs_ = 0;

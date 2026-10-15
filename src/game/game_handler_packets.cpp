@@ -1400,7 +1400,11 @@ void GameHandler::registerCoreOpcodes() {
 
     // (SMSG_INITIALIZE_FACTIONS, SMSG_SET_FACTION_STANDING,
     //  SMSG_SET_FACTION_ATWAR, SMSG_SET_FACTION_VISIBLE → moved to SocialHandler)
-    dispatchTable_[Opcode::SMSG_FEATURE_SYSTEM_STATUS] = [](network::Packet& packet) {
+    // Two bytes (0x006e2e90 case 0x3c9): the complaint system's state
+    // (0xbceffc), which lets a calendar event be complained about, and voice
+    // chat's (0xbcf004), which matters only to a client with voice.
+    dispatchTable_[Opcode::SMSG_FEATURE_SYSTEM_STATUS] = [this](network::Packet& packet) {
+        if (packet.hasRemaining(1)) complaintSystemStatus_ = packet.readUInt8();
         packet.skipAll();
     };
 
@@ -2548,7 +2552,8 @@ void GameHandler::registerRemainingOpcodes() {
         // printed English "Your complaint has been submitted." for 0 and
         // "Report a Player is currently disabled." on the error line for 2.
         if (packet.hasRemaining(2)) {
-            packet.readUInt8();
+            // A first byte of 1 turns the complaint system off (0xbceffc).
+            if (packet.readUInt8() == 1) complaintSystemStatus_ = 0;
             const uint8_t where = packet.readUInt8();
             const std::string text = interfaceString("COMPLAINT_ADDED", "Complaint Registered.");
             if (where == 12) {

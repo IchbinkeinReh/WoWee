@@ -3877,6 +3877,53 @@ void GameHandler::calendarRemoveOpenInvite(size_t index) {
     setCalendarActionPending(true);
 }
 
+bool GameHandler::calendarCanComplain(uint64_t eventId) const {
+    if (calendarActionPending_ || complaintSystemStatus_ == 0) return false;
+    if (!entityController_->getEntityManager().getEntity(playerGuid)) return false;
+    for (const auto& ev : calendarData_.events) {
+        if (ev.eventId != eventId) continue;
+        return (ev.flags & 0x6cc) == 0 && ev.creatorGuid != playerGuid &&
+               ignoreListGuids_.count(ev.creatorGuid) == 0;
+    }
+    return false;
+}
+
+void GameHandler::calendarComplain(uint64_t eventId) {
+    if (!calendarCanComplain(eventId) || !socket) return;
+    const CalendarEvent* event = nullptr;
+    for (const auto& ev : calendarData_.events)
+        if (ev.eventId == eventId) event = &ev;
+    if (!event) return;
+    uint64_t ownInviteId = 0;
+    for (const auto& invite : calendarData_.invites)
+        if (invite.eventId == eventId) ownInviteId = invite.inviteId;
+    const uint64_t maker = event->creatorGuid;
+    const bool already = std::find(complainedGuids_.begin(), complainedGuids_.end(), maker) !=
+                         complainedGuids_.end();
+    if (!already) {
+        complainedGuids_.push_front(maker);
+        if (complainedGuids_.size() > 32) complainedGuids_.pop_back();
+        // CMSG_CALENDAR_COMPLAIN: the maker, the event, the player's invite.
+        network::Packet packet(wireOpcode(Opcode::CMSG_CALENDAR_COMPLAIN));
+        packet.writeUInt64(maker);
+        packet.writeUInt64(eventId);
+        packet.writeUInt64(ownInviteId);
+        socket->send(packet);
+    } else {
+        // Already reported: said so in the calendar's dialog (0x005b9960),
+        // and the player's own invitation is taken off the event.
+        fireAddonEvent("CALENDAR_UPDATE_ERROR",
+                       {interfaceString("COMPLAINT_ADDED", "Complaint Registered.")});
+        network::Packet packet(wireOpcode(Opcode::CMSG_CALENDAR_EVENT_REMOVE_INVITE));
+        packet.writePackedGuid(playerGuid);
+        packet.writeUInt64(ownInviteId);
+        packet.writeUInt64(0);
+        packet.writeUInt64(eventId);
+        socket->send(packet);
+    }
+    setCalendarActionPending(true);
+}
+
 bool GameHandler::calendarOpenEventHasPendingInvite() const {
     if (!isCalendarEventOpen()) return false;
     const uint64_t eventId = calendarEventDetail_.eventId;
