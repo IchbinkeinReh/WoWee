@@ -867,31 +867,6 @@ static int lua_UpdateSpells(lua_State* L) {
     return 0;
 }
 
-
-static int lua_GetSpellDescription(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushstring(L, ""); return 1; }
-    uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-    // The shared formatter, which is what every other description path uses.
-    // The local one this replaced knew $s and $o and wrote a literal "X" for
-    // $d and the rest, so a duration read as "lasts X sec".
-    const std::string desc =
-        gh->formatSpellDescription(spellId, gh->getSpellDescription(spellId));
-    lua_pushstring(L, desc.c_str());
-    return 1;
-}
-
-
-static int lua_GetEnchantInfo(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    uint32_t enchantId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-    std::string name = gh->getEnchantName(enchantId);
-    if (name.empty()) { return luaReturnNil(L); }
-    lua_pushstring(L, name.c_str());
-    return 1;
-}
-
 static int lua_GetSpellCooldown(lua_State* L) {
     auto* gh = getGameHandler(L);
     // Three values on this path too, like every other. The cooldown frame does
@@ -911,12 +886,6 @@ static int lua_GetSpellCooldown(lua_State* L) {
     // and whether it is enabled (not held until an event).
     if (!book || std::string(book) != "pet") return pushHistoryCooldown(L, gh->playerSpellCooldown(spellId));
     return pushHistoryCooldown(L, gh->petSpellCooldown(spellId));
-}
-
-static int lua_HasTarget(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->hasTarget());
-    return 1;
 }
 
 // TargetUnit(unitId) - set current target
@@ -1034,28 +1003,6 @@ static int lua_SetRaidTarget(lua_State* L) {
     else if (index == 0)
         gh->setRaidMark(guid, 0xFF); // clear
     return 0;
-}
-
-// GetSpellPowerCost(spellId) → {{ type=powerType, cost=manaCost, name=powerName }}
-
-static int lua_GetSpellPowerCost(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { lua_newtable(L); return 1; }
-    uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-    auto data = gh->getSpellData(spellId);
-    lua_newtable(L); // outer table (array of cost entries)
-    if (data.manaCost > 0) {
-        lua_newtable(L); // cost entry
-        lua_pushnumber(L, data.powerType);
-        lua_setfield(L, -2, "type");
-        lua_pushnumber(L, data.manaCost);
-        lua_setfield(L, -2, "cost");
-    
-        lua_pushstring(L, data.powerType < 7 ? kLuaPowerNames[data.powerType] : "MANA");
-        lua_setfield(L, -2, "name");
-        lua_rawseti(L, -2, 1); // outer[1] = entry
-    }
-    return 1;
 }
 
 // --- GetSpellInfo / GetSpellTexture ---
@@ -1338,15 +1285,11 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"GetKnownSlotFromHighestRankSlot", lua_GetKnownSlotFromHighestRankSlot},
                 {"UpdateSpells",      lua_UpdateSpells},
                 {"GetSpellCooldown",  lua_GetSpellCooldown},
-                {"GetSpellPowerCost", lua_GetSpellPowerCost},
-                {"GetSpellDescription", lua_GetSpellDescription},
-                {"GetEnchantInfo",     lua_GetEnchantInfo},
                 {"GetSpellInfo",      lua_GetSpellInfo},
                 {"GetSpellTexture",   lua_GetSpellTexture},
                 {"GetSpellLink",         lua_GetSpellLink},
                 {"IsUsableSpell",        lua_IsUsableSpell},
                 {"CancelUnitBuff",      lua_CancelUnitBuff},
-                {"HasTarget",         lua_HasTarget},
                 {"TargetUnit",        lua_TargetUnit},
                 {"ClearTarget",       lua_ClearTarget},
                 {"FocusUnit",         lua_FocusUnit},
@@ -1357,15 +1300,6 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"TargetNearestFriend", lua_TargetNearestFriend},
                 {"GetRaidTargetIndex",  lua_GetRaidTargetIndex},
                 {"SetRaidTarget",       lua_SetRaidTarget},
-                {"IsPlayerSpell", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-            lua_pushboolean(L, gh && gh->getKnownSpells().count(spellId) ? 1 : 0);
-            return 1;
-        }},
-                {"IsSpellOverlayed", [](lua_State* L) -> int {
-            (void)L; lua_pushboolean(L, 0); return 1; // No proc overlay tracking
-        }},
                 {"IsCurrentSpell", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));

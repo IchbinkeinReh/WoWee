@@ -229,37 +229,6 @@ static int lua_SendAddonMessage(lua_State* L) {
     return 0;
 }
 
-// RegisterAddonMessagePrefix(prefix) - register prefix for receiving addon messages
-static int lua_RegisterAddonMessagePrefix(lua_State* L) {
-    const char* prefix = luaL_checkstring(L, 1);
-    // Store in a global Lua table for filtering
-    lua_getglobal(L, "__WoweeAddonPrefixes");
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        lua_newtable(L);
-        lua_pushvalue(L, -1);
-        lua_setglobal(L, "__WoweeAddonPrefixes");
-    }
-    lua_pushboolean(L, 1);
-    lua_setfield(L, -2, prefix);
-    lua_pop(L, 1);
-    lua_pushboolean(L, 1); // success
-    return 1;
-}
-
-// IsAddonMessagePrefixRegistered(prefix) → boolean
-static int lua_IsAddonMessagePrefixRegistered(lua_State* L) {
-    const char* prefix = luaL_checkstring(L, 1);
-    lua_getglobal(L, "__WoweeAddonPrefixes");
-    if (lua_istable(L, -1)) {
-        lua_getfield(L, -1, prefix);
-        lua_pushboolean(L, lua_toboolean(L, -1));
-        return 1;
-    }
-    lua_pushboolean(L, 0);
-    return 1;
-}
-
 static int lua_GetNumFriends(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
@@ -2220,8 +2189,6 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GetLanguageByIndex", lua_GetLanguageByIndex},
                 {"SendChatMessage",   lua_SendChatMessage},
                 {"SendAddonMessage",  lua_SendAddonMessage},
-                {"RegisterAddonMessagePrefix", lua_RegisterAddonMessagePrefix},
-                {"IsAddonMessagePrefixRegistered", lua_IsAddonMessagePrefixRegistered},
                 {"IsInGuild",               lua_IsInGuild},
                 {"GetGuildInfo",            lua_GetGuildInfoFunc},
                 {"GetNumGuildMembers",      lua_GetNumGuildMembers},
@@ -2360,11 +2327,6 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GuildLeave", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (gh) gh->leaveGuild();
-            return 0;
-        }},
-                {"GuildSetPublicNote", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            if (gh) gh->setGuildPublicNote(luaL_checkstring(L, 1), luaL_checkstring(L, 2));
             return 0;
         }},
                 // DoEmote(token) - every emote FrameXML offers, and there

@@ -566,26 +566,6 @@ static int lua_UnitDetailedThreatSituation(lua_State* L) {
     return 5;
 }
 
-// UnitDistanceSquared(unit) → distSq, canCalculate
-static int lua_UnitDistanceSquared(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushnumber(L, 0); lua_pushboolean(L, 0); return 2; }
-    const char* uid = luaL_checkstring(L, 1);
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    if (guid == 0 || guid == gh->getPlayerGuid()) { lua_pushnumber(L, 0); lua_pushboolean(L, 0); return 2; }
-    auto targetEnt = gh->getEntityManager().getEntity(guid);
-    auto playerEnt = gh->getEntityManager().getEntity(gh->getPlayerGuid());
-    if (!targetEnt || !playerEnt) { lua_pushnumber(L, 0); lua_pushboolean(L, 0); return 2; }
-    float dx = playerEnt->getX() - targetEnt->getX();
-    float dy = playerEnt->getY() - targetEnt->getY();
-    float dz = playerEnt->getZ() - targetEnt->getZ();
-    lua_pushnumber(L, dx*dx + dy*dy + dz*dz);
-    lua_pushboolean(L, 1);
-    return 2;
-}
-
 // CheckInteractDistance(unit, distIndex) → boolean
 // distIndex: 1=inspect(28yd), 2=trade(11yd), 3=duel(10yd), 4=follow(28yd)
 static int lua_CheckInteractDistance(lua_State* L) {
@@ -925,29 +905,6 @@ static int lua_GetAttackPower(lua_State* L) {
     return 3;
 }
 
-static int lua_GetRangedAttackPower(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    int32_t ap = gh ? gh->getRangedAttackPower() : 0;
-    if (ap < 0) ap = 0;
-    lua_pushnumber(L, ap);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    return 3;
-}
-
-
-static int lua_IsInGroup(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->isInGroup());
-    return 1;
-}
-
-static int lua_IsInRaid(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->isInGroup() &&
-                       game::groupIsRaid(gh->getPartyData().groupType));
-    return 1;
-}
 
 static int lua_UnitRace(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -990,12 +947,6 @@ static int lua_UnitPowerType(lua_State* L) {
     lua_pushnumber(L, 0);
     lua_pushstring(L, "MANA");
     return 2;
-}
-
-static int lua_GetNumGroupMembers(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    lua_pushnumber(L, gh ? gh->getPartyData().memberCount : 0);
-    return 1;
 }
 
 static int lua_UnitGUID(lua_State* L) {
@@ -2571,7 +2522,6 @@ static int lua_UnitIsConnected(lua_State* L) {
 void registerUnitLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"UnitName",      lua_UnitName},
-                {"UnitFullName",  lua_UnitName},
                 {"GetUnitName",   lua_UnitName},
                 {"UnitHealth",    lua_UnitHealth},
                 {"UnitHealthMax", lua_UnitHealthMax},
@@ -2579,10 +2529,6 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"UnitPowerMax",  lua_UnitPowerMax},
                 {"UnitMana",      lua_UnitPower},
                 {"UnitManaMax",   lua_UnitPowerMax},
-                {"UnitRage",      lua_UnitPower},
-                {"UnitEnergy",    lua_UnitPower},
-                {"UnitFocus",     lua_UnitPower},
-                {"UnitRunicPower", lua_UnitPower},
                 {"UnitLevel",     lua_UnitLevel},
                 {"UnitExists",    lua_UnitExists},
                 {"UnitIsDead",    lua_UnitIsDead},
@@ -2675,9 +2621,6 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"GetSpellBonusDamage", lua_GetSpellBonusDamage},
                 {"GetSpellBonusHealing", lua_GetSpellBonusHealing},
                 {"GetAttackPowerForStat", lua_GetAttackPower},
-                {"GetRangedAttackPower",  lua_GetRangedAttackPower},
-                {"IsInGroup",     lua_IsInGroup},
-                {"IsInRaid",      lua_IsInRaid},
                 {"GetShapeshiftFormInfo", [](lua_State* L) -> int {
             // GetShapeshiftFormInfo(index) → icon, name, isActive, isCastable
             auto* gh = getGameHandler(L);
@@ -3130,12 +3073,10 @@ void registerUnitLuaAPI(lua_State* L) {
         }},
                 {"UnitRace",          lua_UnitRace},
                 {"UnitPowerType",     lua_UnitPowerType},
-                {"GetNumGroupMembers", lua_GetNumGroupMembers},
                 {"UnitGUID",          lua_UnitGUID},
                 {"UnitIsPlayer",      lua_UnitIsPlayer},
                 {"UnitPVPName",       lua_UnitPVPName},
                 {"InCombatLockdown",  lua_InCombatLockdown},
-                {"UnitDistanceSquared", lua_UnitDistanceSquared},
                 {"CheckInteractDistance", lua_CheckInteractDistance},
                 {"UnitInRange",           lua_UnitInRange},
                 {"IsRaidLeader",          lua_IsRaidLeader},

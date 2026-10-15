@@ -3434,20 +3434,6 @@ static int lua_GetLootMethod(lua_State* L) {
 
 // --- Additional WoW API ---
 
-static int lua_GetItemLink(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    uint32_t itemId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-    if (itemId == 0) { return luaReturnNil(L); }
-    const auto* info = gh->getItemInfo(itemId);
-    if (!info || info->name.empty()) { return luaReturnNil(L); }
-
-    uint32_t qi = info->quality < 8 ? info->quality : 1u;
-    const std::string link = game::itemChatLink(itemId, qi, info->name);
-    lua_pushstring(L, link.c_str());
-    return 1;
-}
-
 // GetSpellLink(spellIdOrName) → "|cFFxxxxxx|Hspell:ID|h[Name]|h|r"
 
 void registerInventoryLuaAPI(lua_State* L) {
@@ -3715,7 +3701,6 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 {"GetInventoryItemID",      lua_GetInventoryItemID},
                 {"GetInventoryItemTexture", lua_GetInventoryItemTexture},
-                {"GetItemLink",          lua_GetItemLink},
                 {"GetNumLootItems",     lua_GetNumLootItems},
                 {"GetLootSlotInfo",     lua_GetLootSlotInfo},
                 {"GetLootSlotLink",     lua_GetLootSlotLink},
@@ -3872,28 +3857,12 @@ void registerInventoryLuaAPI(lua_State* L) {
             gh->buyItem(gh->getVendorGuid(), vi.itemId, vi.slot, count);
             return 0;
         }},
-                {"SellContainerItem", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            int bag = static_cast<int>(luaL_checknumber(L, 1));
-            int slot = static_cast<int>(luaL_checknumber(L, 2));
-            if (!gh) return 0;
-            if (bag == 0) gh->sellItemBySlot(slot - 1);
-            else if (bag >= 1 && bag <= 4) gh->sellItemInBag(bag - 1, slot - 1);
-            return 0;
-        }},
                 {"RepairAllItems", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (gh && gh->getVendorItems().canRepair) {
                 bool useGuildBank = lua_toboolean(L, 1) != 0;
                 gh->repairAll(gh->getVendorGuid(), useGuildBank);
             }
-            return 0;
-        }},
-                {"UnequipItemSlot", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            int slot = static_cast<int>(luaL_checknumber(L, 1));
-            if (gh && slot >= 1 && slot <= 19)
-                gh->unequipToBackpack(static_cast<game::EquipSlot>(slot - 1));
             return 0;
         }},
                 {"AcceptTrade", [](lua_State* L) -> int {

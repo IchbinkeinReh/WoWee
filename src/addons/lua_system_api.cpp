@@ -2693,11 +2693,6 @@ static int lua_GetGameTime(lua_State* L) {
     return 2;
 }
 
-static int lua_GetServerTime(lua_State* L) {
-    lua_pushnumber(L, static_cast<double>(std::time(nullptr)));
-    return 1;
-}
-
 
 static int lua_IsInInstance(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -3744,12 +3739,6 @@ static int lua_SetChatColorNameByClass(lua_State* L) {
     if (lua_toboolean(L, 2)) chatColorByClass().insert(type);
     else chatColorByClass().erase(type);
     return 0;
-}
-static int lua_GetChatColorNameByClass(lua_State* L) {
-    std::string type(luaL_optstring(L, 1, ""));
-    toLowerInPlace(type);
-    lua_pushboolean(L, chatColorByClass().count(type) ? 1 : 0);
-    return 1;
 }
 
 /// Names FrameXML reached for and did not find, harvested from a run rather
@@ -6476,7 +6465,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"SetChatWindowUninteractable",  lua_SetChatWindowUninteractable},
                 {"ResetChatWindows",             lua_ResetChatWindows},
                 {"SetChatColorNameByClass",      lua_SetChatColorNameByClass},
-                {"GetChatColorNameByClass",      lua_GetChatColorNameByClass},
                 {"GetExistingLocales",       lua_ReturnNil},
                 // Read from the real keyboard: a shift-click means something
                 // different from a click, and FrameXML asks on every press.
@@ -7374,7 +7362,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetSubZoneText",       lua_GetSubZoneText},
                 {"GetMinimapZoneText",   lua_GetMinimapZoneText},
                 {"GetGameTime",             lua_GetGameTime},
-                {"GetServerTime",           lua_GetServerTime},
                 {"CombatLog_Object_IsA", lua_CombatLog_Object_IsA},
                 {"GetNumAddOns",      lua_GetNumAddOns},
                 {"GetAddOnInfo",      lua_GetAddOnInfo},
@@ -7447,10 +7434,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 const auto* ac = gh->getActiveCharacter();
                 lua_pushstring(L, ac ? "WoWee" : "Unknown");
             } else lua_pushstring(L, "Unknown");
-            return 1;
-        }},
-                {"GetNormalizedRealmName", [](lua_State* L) -> int {
-            lua_pushstring(L, "WoWee");
             return 1;
         }},
                 // ShowHelm(show) and ShowCloak(show) are setters, and these
@@ -7722,12 +7705,6 @@ void registerSystemLuaAPI(lua_State* L) {
             if (gh) gh->sendSetTitle(static_cast<int32_t>(luaL_optnumber(L, 1, -1)));
             return 0;
         }},
-                {"GetInspectSpecialization", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const auto* ir = gh ? gh->getInspectResult() : nullptr;
-            lua_pushnumber(L, ir ? ir->activeTalentGroup : 0);
-            return 1;
-        }},
                 // GetInspectArenaTeamData(index) →
                 //   name, size, rating, weekPlayed, weekWins, seasonPlayed,
                 //   seasonWins, playerRating
@@ -7875,13 +7852,6 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             lua_pushnumber(L, gh ? gh->getArenaPoints() : 0);
             lua_pushnumber(L, 5000);
-            return 2;
-        }},
-                {"GetTimePlayed", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
-            lua_pushnumber(L, gh->getTotalTimePlayed());
-            lua_pushnumber(L, gh->getLevelTimePlayed());
             return 2;
         }},
                 {"GetBindLocation", [](lua_State* L) -> int {
@@ -8750,47 +8720,6 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 {"CalendarGetMaxCreateDate", [](lua_State* L) -> int {
             return pushCalendarBoundDate(L, 12);
-        }},
-                {"GetDifficultyInfo", [](lua_State* L) -> int {
-            // GetDifficultyInfo(id) → name, groupType, isHeroic, maxPlayers
-            int diff = static_cast<int>(luaL_checknumber(L, 1));
-            struct DiffInfo { const char* name; const char* group; int heroic; int maxPlayers; };
-            static const DiffInfo infos[] = {
-                {"5 Player", "party", 0, 5},          // 0: Normal 5-man
-                {"5 Player (Heroic)", "party", 1, 5},  // 1: Heroic 5-man
-                {"10 Player", "raid", 0, 10},          // 2: 10-man Normal
-                {"25 Player", "raid", 0, 25},          // 3: 25-man Normal
-                {"10 Player (Heroic)", "raid", 1, 10}, // 4: 10-man Heroic
-                {"25 Player (Heroic)", "raid", 1, 25}, // 5: 25-man Heroic
-            };
-            if (diff >= 0 && diff < 6) {
-                lua_pushstring(L, infos[diff].name);
-                lua_pushstring(L, infos[diff].group);
-                lua_pushboolean(L, infos[diff].heroic);
-                lua_pushnumber(L, infos[diff].maxPlayers);
-            } else {
-                lua_pushstring(L, "Unknown");
-                lua_pushstring(L, "party");
-                lua_pushboolean(L, 0);
-                lua_pushnumber(L, 5);
-            }
-            return 4;
-        }},
-                {"GetWeatherInfo", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
-            lua_pushnumber(L, gh->getWeatherType());
-            lua_pushnumber(L, gh->getWeatherIntensity());
-            return 2;
-        }},
-                {"GetMaxPlayerLevel", [](lua_State* L) -> int {
-            auto* svc = getLuaServices(L);
-            auto* reg = svc ? svc->expansionRegistry : nullptr;
-            auto* prof = reg ? reg->getActive() : nullptr;
-            if (prof && prof->id == "wotlk") lua_pushnumber(L, 80);
-            else if (prof && prof->id == "tbc") lua_pushnumber(L, 70);
-            else lua_pushnumber(L, 60);
-            return 1;
         }},
                 // Counted from zero, like GetExpansionLevel beside it and like
                 // the table it is used to index. This answered one higher, and

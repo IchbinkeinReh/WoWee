@@ -1475,7 +1475,6 @@ public:
     }
 
     // Completed quests (populated from SMSG_QUERY_QUESTS_COMPLETED_RESPONSE)
-    bool isQuestCompleted(uint32_t questId) const { return completedQuests_.count(questId) > 0; }
     const std::unordered_set<uint32_t>& getCompletedQuests() const { return completedQuests_; }
 
     // NPC death callback (for animations)

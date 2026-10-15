@@ -610,21 +610,6 @@ static int lua_GetQuestLogQuestText(lua_State* L) {
     return 2;
 }
 
-// IsQuestComplete(questID) → boolean
-static int lua_IsQuestComplete(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    uint32_t questId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-    if (!gh) { return luaReturnFalse(L); }
-    for (const auto& q : gh->getQuestLog()) {
-        if (q.questId == questId) {
-            lua_pushboolean(L, q.complete);
-            return 1;
-        }
-    }
-    lua_pushboolean(L, 0);
-    return 1;
-}
-
 // SelectQuestLogEntry(index) - select a quest in the quest log
 static int lua_SelectQuestLogEntry(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -2896,15 +2881,10 @@ void registerQuestLuaAPI(lua_State* L) {
                 // The client asks the server for this list on entering the
                 // world - CMSG_QUERY_QUESTS_COMPLETED - parses the reply into
                 // completedQuests_ and keeps it there. Nothing could read it:
-                // the two names that ask, which every quest addon uses and
-                // which is how a quest giver knows to grey an offer out, were
-                // not bound at all.
-                {"IsQuestFlaggedCompleted", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            lua_pushboolean(L, (gh && id && gh->isQuestCompleted(id)) ? 1 : 0);
-            return 1;
-        }},
+                // GetQuestsCompleted, the one name that asks, which every quest
+                // addon uses and which is how a quest giver knows to grey an
+                // offer out, was not bound at all.
+                //
                 // GetQuestsCompleted([table]) - the whole set at once, keyed by
                 // quest id, which is the shape the caller indexes. Fills the
                 // table it is given, as WoW does, so a caller reusing one does
@@ -3140,7 +3120,6 @@ void registerQuestLuaAPI(lua_State* L) {
             bookPage() = 0;
             return 0;
         }},
-                {"IsQuestComplete",         lua_IsQuestComplete},
                 {"SelectQuestLogEntry",     lua_SelectQuestLogEntry},
                 {"GetQuestLogSelection",    lua_GetQuestLogSelection},
                 {"GetQuestLogPushable",     lua_GetQuestLogPushable},

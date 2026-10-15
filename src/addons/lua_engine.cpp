@@ -6135,6 +6135,10 @@ void LuaEngine::registerCoreAPI() {
     // Skipped rather than assumed where the vendored Lua lacks one - getn is
     // compiled out here, and setting a global to nil would be no better than
     // leaving it absent.
+    //
+    // Only the names the client's own compat.lua sets (the chunk 0x00819bb0
+    // runs at 0x00af57f0): fmod, modf, huge and tconcat were never globals
+    // there - math.fmod is reached as mod.
     struct Alias { const char* lib; const char* field; const char* global; };
     static constexpr Alias kAliases[] = {
         {"math", "abs", "abs"},        {"math", "ceil", "ceil"},
@@ -6142,17 +6146,16 @@ void LuaEngine::registerCoreAPI() {
         {"math", "min", "min"},        {"math", "fmod", "mod"},
         {"math", "sqrt", "sqrt"},      {"math", "random", "random"},
         {"math", "exp", "exp"},        {"math", "log", "log"},
-        {"math", "log10", "log10"},    {"math", "fmod", "fmod"},
-        {"math", "modf", "modf"},      {"math", "frexp", "frexp"},
-        {"math", "ldexp", "ldexp"},    {"math", "huge", "huge"},
-        {"math", "deg", "deg"},        {"math", "rad", "rad"},
+        {"math", "log10", "log10"},    {"math", "frexp", "frexp"},
+        {"math", "ldexp", "ldexp"},    {"math", "deg", "deg"},
+        {"math", "rad", "rad"},
         {"string", "gsub", "gsub"},    {"string", "sub", "strsub"},
         {"string", "len", "strlen"},   {"string", "upper", "strupper"},
         {"string", "lower", "strlower"}, {"string", "find", "strfind"},
         {"string", "rep", "strrep"},   {"string", "byte", "strbyte"},
         {"string", "char", "strchar"}, {"string", "match", "strmatch"},
         {"string", "gmatch", "gmatch"}, {"table", "sort", "sort"},
-        {"table", "getn", "getn"},     {"table", "concat", "tconcat"},
+        {"table", "getn", "getn"},
     };
     for (const auto& a : kAliases) {
         lua_getglobal(L_, a.lib);
@@ -7750,7 +7753,6 @@ void LuaEngine::registerCoreAPI() {
         // never ran again to correct it.
         "    end\n"
         "end\n"
-        "function StopSound() end\n"
         "function UIParent_OnEvent() end\n"
         // Filling the screen, not sitting at a point on it. The widget tree's
         // root is already the screen, and a frame created with no anchors falls
@@ -8604,22 +8606,6 @@ void LuaEngine::registerCoreAPI() {
         "  RAID_CLASS_COLORS = {}\n"
         "  __WoweeClassColor = cc\n"
         "end\n"
-        // GetClassColor(className) - returns r, g, b, colorString
-        //
-        // The hex is computed rather than read off the entry. FrameXML's
-        // constants.lua assigns RAID_CLASS_COLORS its own plain table, replacing
-        // the one built above and the colorStr on every entry with it - so
-        // reading the field answered nil for every class the moment the
-        // interface loaded. The fallback's string was eight hex digits where the
-        // success path's was six, which an addon writing '|cff' .. str renders
-        // as a colour code with a stray f after it.
-        "function GetClassColor(className)\n"
-        "    local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[className]\n"
-        "    if not c then return 1, 1, 1, 'ffffff' end\n"
-        "    return c.r, c.g, c.b,\n"
-        "        c.colorStr or string.format('%02x%02x%02x',\n"
-        "            math.floor(c.r * 255 + 0.5), math.floor(c.g * 255 + 0.5), math.floor(c.b * 255 + 0.5))\n"
-        "end\n"
         // QuestDifficultyColors table for quest level coloring
         "QuestDifficultyColors = {\n"
         "    impossible = {r=1.0,g=0.1,b=0.1,font='QuestDifficulty_Impossible'},\n"
@@ -8793,11 +8779,6 @@ void LuaEngine::registerCoreAPI() {
         "HIGHLIGHT_FONT_COLOR = {r=1.0,g=1.0,b=1.0}\n"
         "GREEN_FONT_COLOR = {r=0.1,g=1.0,b=0.1}\n"
         "RED_FONT_COLOR = {r=1.0,g=0.1,b=0.1}\n"
-        // C_ChatInfo - addon message prefix API used by some addons
-        "C_ChatInfo = C_ChatInfo or {}\n"
-        "C_ChatInfo.RegisterAddonMessagePrefix = RegisterAddonMessagePrefix\n"
-        "C_ChatInfo.IsAddonMessagePrefixRegistered = IsAddonMessagePrefixRegistered\n"
-        "C_ChatInfo.SendAddonMessage = SendAddonMessage\n"
     );
 
     // Action bar constants and functions used by action bar addons
@@ -8859,11 +8840,6 @@ void LuaEngine::registerCoreAPI() {
         "    for _, v in pairs(tbl) do if v == item then return true end end\n"
         "    return false\n"
         "end\n"
-        "function tInvert(tbl)\n"
-        "    local inv = {}\n"
-        "    for k, v in pairs(tbl) do inv[v] = k end\n"
-        "    return inv\n"
-        "end\n"
         "function CopyTable(src)\n"
         "    if type(src) ~= 'table' then return src end\n"
         "    local copy = {}\n"
@@ -8872,26 +8848,6 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         "function tDeleteItem(tbl, item)\n"
         "    for i = #tbl, 1, -1 do if tbl[i] == item then table.remove(tbl, i) end end\n"
-        "end\n"
-        // Mixin pattern - used by modern addons for OOP-style object creation
-        "function Mixin(obj, ...)\n"
-        "    for i = 1, select('#', ...) do\n"
-        "        local mixin = select(i, ...)\n"
-        "        for k, v in pairs(mixin) do obj[k] = v end\n"
-        "    end\n"
-        "    return obj\n"
-        "end\n"
-        "function CreateFromMixins(...)\n"
-        "    return Mixin({}, ...)\n"
-        "end\n"
-        "function CreateAndInitFromMixin(mixin, ...)\n"
-        "    local obj = CreateFromMixins(mixin)\n"
-        "    if obj.Init then obj:Init(...) end\n"
-        "    return obj\n"
-        "end\n"
-        "function MergeTable(dest, src)\n"
-        "    for k, v in pairs(src) do dest[k] = v end\n"
-        "    return dest\n"
         "end\n"
         // String utilities (WoW globals that alias Lua string functions)
         "strupper = string.upper\n"
@@ -8902,7 +8858,6 @@ void LuaEngine::registerCoreAPI() {
         "strrep = string.rep\n"
         "strbyte = string.byte\n"
         "strchar = string.char\n"
-        "strgfind = string.gmatch\n"
         "function tostringall(...)\n"
         "    local n = select('#', ...)\n"
         "    if n == 0 then return end\n"
@@ -8916,9 +8871,6 @@ void LuaEngine::registerCoreAPI() {
         "strjoin = function(delim, ...)\n"
         "    return table.concat({...}, delim)\n"
         "end\n"
-        // Math utilities
-        "function Clamp(val, lo, hi) return math.min(math.max(val, lo), hi) end\n"
-        "function Round(val) return math.floor(val + 0.5) end\n"
         // Bit operations (WoW provides these; Lua 5.1 doesn't have native bit ops)
         "bit = bit or {}\n"
         "bit.band = bit.band or function(a, b) local r,m=0,1 for i=0,31 do if a%2==1 and b%2==1 then r=r+m end a=math.floor(a/2) b=math.floor(b/2) m=m*2 end return r end\n"
