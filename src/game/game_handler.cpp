@@ -185,9 +185,18 @@ bool GameHandler::connect(const std::string& host,
 
 void GameHandler::disconnect() {
     taxiRecoverPending_ = onTaxiFlight_;
+    const bool wasInWorld = state == WorldState::IN_WORLD;
     if (socket) {
         socket->disconnect();
         socket.reset();
+    }
+    // Leaving the world (0x00406510 -> 0x00529160 -> 0x00528f00): the trade
+    // skill window closes (0x005da5a0), and the rest of what goes with the
+    // world on any way out of it (0x00528c30). Nothing is sent: the
+    // connection is already gone.
+    if (wasInWorld) {
+        closeCraftingWindow();
+        onLeaveWorld(/*worldport=*/false);
     }
     activeCharacterGuid_ = 0;
     guildNameCache_.clear();
@@ -3498,6 +3507,61 @@ void GameHandler::closeNpcInteraction() {
     // SMSG_BATTLEFIELD_LIST, closes with the rest. The tabard designer
     // (CLOSE_TABARD_FRAME) would too; this client does not open it.
     fireAddonEvent("BATTLEFIELDS_CLOSED", {});
+}
+
+void GameHandler::onLeaveWorld(bool worldport) {
+    // CGGameUI's leaving of the world (0x00528c30). The client reaches it from
+    // the player object's end (0x006e78d0 -> 0x006e5090), so on every
+    // worldport - 0x00403b70 destroys every object - and at logout through
+    // 0x00528f00. In its order, what wowee has of it:
+    //
+    // The three mirror timers stop, each said by name (0x00513ea0).
+    for (size_t i = 0; i < 3; ++i) {
+        mirrorTimers_[i] = MirrorTimer{};
+        fireAddonEvent("MIRROR_TIMER_STOP", {kMirrorTimerNames[i]});
+    }
+    // The loot window is let go, CMSG_LOOT_RELEASE with it (0x00588180 ->
+    // 0x00523640(1, 0, 0)).
+    if (inventoryHandler_) inventoryHandler_->closeLoot();
+    using go_interaction::Window;
+    // The book, gossip, the quest window, the flight map, the trainer and the
+    // merchant (0x0058a430, 0x0058ab20, 0x0058dd30, 0x00591ac0, 0x005947b0,
+    // 0x00585fe0).
+    for (Window window : {Window::Book, Window::Gossip, Window::Quest, Window::Taxi, Window::Trainer,
+                          Window::Merchant}) {
+        closeInteractionWindow(window);
+    }
+    // The trade (0x005880c0): an open window closes - TRADE_CLOSED - and
+    // CMSG_CANCEL_TRADE goes twice whether one was open or not (0x00704040).
+    if (inventoryHandler_) {
+        if (inventoryHandler_->isTradeOpen()) {
+            inventoryHandler_->resetTradeState();
+            fireAddonEvent("TRADE_CLOSED", {});
+        }
+        if (isInWorld()) {
+            for (int i = 0; i < 2; ++i) socket->send(CancelTradePacket::build());
+        }
+    }
+    // The bank, the tabard and guild registrar, the mailbox, the auction
+    // house, the stable and the petition vendor (0x0057ba90, 0x00598ec0,
+    // 0x00599e90, 0x00571be0, 0x0059f150, 0x005a1160, 0x005a2880), and the
+    // guild bank with the interaction object below.
+    for (Window window : {Window::Bank, Window::Registrar, Window::Mailbox, Window::AuctionHouse,
+                          Window::Stable, Window::GuildBank}) {
+        closeInteractionWindow(window);
+    }
+    // The socketing window (0x005c4ee0 -> 0x005c4680, SOCKET_INFO_CLOSE).
+    if (inventoryHandler_) inventoryHandler_->closeSocketing();
+    // The barber's chair (0x0052e9f0, BARBER_SHOP_CLOSE).
+    if (barberShopOpen_) closeBarberShop();
+    // The interaction object, with no farewell (0x00512e60).
+    releaseInteractionObject();
+    // The target, the focus and the units remembered (0x00512a30, 0xbd07b8,
+    // 0xbd07c0, 0xbd07c8).
+    if (combatHandler_) combatHandler_->leaveWorld();
+    // PLAYER_LEAVING_WORLD (event 0x100). At logout the interface is taken
+    // down with it before this runs (Application::unloadInterface).
+    if (worldport) fireAddonEvent("PLAYER_LEAVING_WORLD", {});
 }
 
 void GameHandler::updatePetActionBar() {

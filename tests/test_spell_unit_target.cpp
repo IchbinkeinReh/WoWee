@@ -319,6 +319,12 @@ TEST_CASE("a unit leaving view is forgotten unless it is of the group (0x0052435
     REQUIRE_FALSE(duelOpponents(0x1234, 0, 0x1234, 2));
 }
 
+TEST_CASE("leaving the world keeps the player and the group as target and focus (0x00512a30)", "[unit_target]") {
+    REQUIRE(keptOnLeavingWorld(true, false));
+    REQUIRE(keptOnLeavingWorld(false, true));
+    REQUIRE_FALSE(keptOnLeavingWorld(false, false));
+}
+
 TEST_CASE("a unit turned not selectable is forgotten (0x0073c330)", "[unit_target]") {
     REQUIRE(forgottenOnFlags(0, kFlagNotSelectable));
     REQUIRE_FALSE(forgottenOnFlags(kFlagNotSelectable, kFlagNotSelectable));

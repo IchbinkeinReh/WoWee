@@ -108,6 +108,10 @@ public:
     /// A unit leaving view (CGUnit_C's end, 0x00735xxx): forgotten unless it
     /// is one of the group not in a duel with the player.
     void unitLeavesView(uint64_t guid);
+    /// Leaving the world (0x00528c30): the target and the focus let go unless
+    /// they are the player or of the group (0x00512a30), and the last target,
+    /// last enemy and last friend forgotten whatever they were.
+    void leaveWorld();
     [[nodiscard]] std::shared_ptr<Entity> getTarget() const;
     void setFocus(uint64_t guid);
     void clearFocus();

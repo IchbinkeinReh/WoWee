@@ -2561,6 +2561,10 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     // the cursor for a place or a unit of the old world does not wait in the
     // new one, and the spell histories start again.
     if (owner_.getSpellHandler()) owner_.getSpellHandler()->newWorld();
+    // And the player object goes with every other (0x004d6750), which is the
+    // client leaving the world: windows, timers, remembered units
+    // (0x006e5090 -> 0x00528c30).
+    owner_.onLeaveWorld(/*worldport=*/true);
 
     const bool isSameMap       = (mapId == owner_.currentMapIdRef());
     const bool isResurrection  = owner_.resurrectPendingRef();

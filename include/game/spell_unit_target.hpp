@@ -435,6 +435,15 @@ template <typename Take>
     return !groupMember || duelOpponent;
 }
 
+/// Leaving the world (0x00528c30, on every worldport and at logout): the
+/// target and the focus stay only when they are the player or one of the
+/// party or raid (0x00512a30 -> 0x0052d310, 0x00573200) - a duel makes no
+/// difference here. The last target and the last enemy and friend go
+/// whatever they were (0xbd07b8, 0xbd07c0, 0xbd07c8).
+[[nodiscard]] constexpr bool keptOnLeavingWorld(bool isPlayer, bool groupMember) {
+    return isPlayer || groupMember;
+}
+
 /// 0x0073c330: a unit whose UNIT_FIELD_FLAGS turn not selectable (0x2000000)
 /// is forgotten as well (0x00524350), in the group or not.
 [[nodiscard]] constexpr bool forgottenOnFlags(uint32_t oldFlags, uint32_t newFlags) {

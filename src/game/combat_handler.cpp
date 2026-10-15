@@ -1749,6 +1749,19 @@ void CombatHandler::unitLeavesView(uint64_t guid) {
     if (unit_target::forgottenOnLeaving(group, duel)) forgetUnit(guid);
 }
 
+void CombatHandler::leaveWorld() {
+    const uint64_t me = owner_.getPlayerGuid();
+    const auto kept = [&](uint64_t guid) { return unit_target::keptOnLeavingWorld(guid == me, isGroupMemberGuid(guid)); };
+    // 0x00528c30: the target goes as a unit leaving does (0x005241b0 - the
+    // server told, PLAYER_TARGET_CHANGED), and the focus with none
+    // (0x0051ff20, PLAYER_FOCUS_CHANGED).
+    if (const uint64_t target = owner_.getTargetGuid(); target != 0 && !kept(target)) forgetUnit(target);
+    if (const uint64_t focus = owner_.focusGuidRef(); focus != 0 && !kept(focus)) forgetUnit(focus);
+    owner_.lastTargetGuidRef() = 0;  // 0xbd07b8
+    lastEnemyTargetGuid_ = 0;        // 0xbd07c0
+    lastFriendTargetGuid_ = 0;       // 0xbd07c8
+}
+
 std::shared_ptr<Entity> CombatHandler::getTarget() const {
     if (owner_.getTargetGuid() == 0) return nullptr;
     return owner_.getEntityManager().getEntity(owner_.getTargetGuid());
