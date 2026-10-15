@@ -241,11 +241,12 @@ own intensity and reach slider in Debug Lights):
   animated batch's colour and alpha tracks where they move. Its light is at
   the patch's middle, of its hue, with strength and reach growing with the
   square root of its power (brightness x area x the instance's scale squared),
-  capped (`glowLight`). WMOs (`WMORenderer::gatherGlows`): per group, the
-  windows (MOMT 0x10, by their sidn colour, at night only) and, in exterior
-  groups, bright unlit or additive batches where no MOLT light stands within a
-  few yards (that light already is the glow's). An interior group's windows,
-  and an emissive doodad of an interior, are `baked` like its lamps.
+  capped (`glowLight`). WMOs (`WMORenderer::gatherGlows`): in exterior groups,
+  bright unlit or additive batches where no MOLT light stands within a few
+  yards (that light already is the glow's). Windows (MOMT 0x10) give no light:
+  their glow is the original's at night only, and a light at every hour in a
+  window lit the rooms behind it at noon and cast the posts' shadows across
+  their floors. An emissive doodad of an interior is `baked` like its lamps.
 * Particle emitters. While `prepareM2Particles` writes the particles out, an
   instance within 100 yards sums each emitter's live particles
   (`ParticleGlow`): position, colour x the texture's mean, weighted by alpha x
@@ -263,14 +264,10 @@ No double light: a model with an M2 light, a fire or a lamp gets neither
 glow patches nor particle lights; a model with glow patches gets no particle
 lights.
 
-Lamps (lampLight) and glows are lit by day and night:
-`daylightScale(windowLevel, day)` gives them all their light at night and
-`kLampDayLevel` / `kGlowDayLevel` (0.5) at noon; windows, lit only at night,
-none by day. That is for outside only, against the sun: lamps and glows of a
-WMO interior (`interiorLit` doodads) keep all their light around the clock, and
-an interior group's windows give no light at all (the room's light is its bake,
-which does not change with the hour). Fires keep their full strength by day;
-they were never gated.
+No point light depends on the time of day: lamps (lampLight), fires, glows,
+particles give all their light at every hour, inside and out (the user's
+choice; the original's own time-dependent lighting - the Light.dbc colours, the
+drawn window glow - is untouched).
 
 Units and their own light: a unit's traced pieces are rigid and coarser
 than its skin, so a shadow ray from the skin toward a light beside it often
@@ -353,7 +350,7 @@ BVH, the probe GI, the CameraZoom Lua functions.
   (0.35 for opaque unlit batches) keeps most of them out. Particle lights on
   baked interior surfaces add to light the bake may already hold (the hearth's
   MOLT light), so a hearth's walls are brighter than painted.
-* Windows at night become many lights in a city; the ranking keeps the 128
+* Glowing batches become many lights in a city; the ranking keeps the 128
   most important.
 * A unit casts no point-light shadow on another unit (`RT_GB_UNIT`).
 

@@ -156,15 +156,3 @@ TEST_CASE("The adds give their light, smoke and modulates none", "[rt_glow]") {
     CHECK(particleGlowWeight(5, true) == 0.0f);
     CHECK(particleGlowWeight(6, true) == 0.0f);
 }
-
-TEST_CASE("A lamp is lit by day as by night, less against the sun", "[rt_glow]") {
-    CHECK(daylightScale(1.0f, 0.5f) == Catch::Approx(1.0f));
-    CHECK(daylightScale(0.0f, 0.5f) == Catch::Approx(0.5f));
-    CHECK(daylightScale(0.5f, 0.5f) == Catch::Approx(0.75f));
-    // A window, lit at night only.
-    CHECK(daylightScale(0.0f, 0.0f) == 0.0f);
-    CHECK(daylightScale(2.0f, 0.0f) == Catch::Approx(1.0f));
-    CHECK(daylightScale(-1.0f, kGlowDayLevel) == Catch::Approx(kGlowDayLevel));
-    // A lamp by day is not out (the light the user sees on its glass).
-    CHECK(lampLight(glm::vec3(0.0f), glm::mat4(1.0f), daylightScale(0.0f, kLampDayLevel)).color.r > 0.0f);
-}

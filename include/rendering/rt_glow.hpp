@@ -1,8 +1,8 @@
 #pragma once
 
 /// The light of what glows: a model's or a building's emissive surfaces - its
-/// unlit and additive batches, glow cards, lava, crystals, lamp glass, the
-/// windows at night - and a particle emitter's live particles. The original
+/// unlit and additive batches, glow cards, lava, crystals, lamp glass
+/// - and a particle emitter's live particles. The original
 /// lights nothing with either; RtLighting does, in its modes only, beside the
 /// lights the files carry (rt_point_lights.hpp).
 ///
@@ -148,7 +148,7 @@ private:
 /// reached at), up to a ceiling. Set so a lamp's glass (some 0.2) lights as a
 /// lamp does, about 0.9 and five yards, a hearth fire's flames (some 0.5) as
 /// a fire does, and a candle's (some 0.01) a little, close by; a lava flow or
-/// a wall of windows stops at the ceiling.
+/// a wall of glowing crystals stops at the ceiling.
 inline constexpr float kGlowStrengthPerRootPower = 2.0f;
 inline constexpr float kGlowMaxStrength = 1.2f;
 inline constexpr float kGlowReachPerRootPower = 12.0f;
@@ -240,18 +240,5 @@ struct ParticleGlow {
         return l;
     }
 };
-
-/// What is left by day of a light that is lit for the night - a lamp, a
-/// glowing window: all of it at night (`nightLevel` 1, the window level,
-/// wmo_sidn::windowLevel), `day` of it at noon. A lamp burns by day too, but
-/// against the sun's light it shows less, and a lamp as bright at noon as at
-/// midnight would light the street as if it were dark. A glowing surface
-/// keeps kGlowDayLevel by day (a lamp kLampDayLevel, rt_point_lights.hpp); a
-/// window, lit only at night, none.
-inline constexpr float kGlowDayLevel = 0.5f;
-inline float daylightScale(float nightLevel, float day) {
-    const float n = std::clamp(nightLevel, 0.0f, 1.0f);
-    return day + (1.0f - day) * n;
-}
 
 }  // namespace wowee::rendering::rt_lights

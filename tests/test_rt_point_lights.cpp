@@ -316,18 +316,15 @@ TEST_CASE("a lamp without a light of its own is lit at its glass, at night", "[r
     CHECK(top.z == Catch::Approx(3.2f));
 
     const glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 20.0f, 30.0f));
-    const PointLight night = lampLight(glass, model, 1.0f);
+    const PointLight night = lampLight(glass, model);
     CHECK(night.position.x == Catch::Approx(11.5f));
     CHECK(night.position.z == Catch::Approx(33.2f));
     CHECK(night.attenuationEnd == Catch::Approx(kLampReach * kWorldReachScale));
     CHECK(night.attenuationStart < night.attenuationEnd);
     CHECK(night.color.r > night.color.b);
     CHECK_FALSE(night.baked);
-    // As much as its level says: out at none, half at a half (by day
-    // rt_glow.hpp's daylightScale gives it kLampDayLevel).
-    CHECK(lampLight(glass, model, 0.0f).color.r == 0.0f);
-    CHECK(lampLight(glass, model, 0.5f).color.r == Catch::Approx(0.5f));
+    CHECK(night.color.r == Catch::Approx(1.0f));
     // A lantern scaled down still reaches the ground.
-    const PointLight small = lampLight(glass, glm::scale(model, glm::vec3(0.2f)), 1.0f);
+    const PointLight small = lampLight(glass, glm::scale(model, glm::vec3(0.2f)));
     CHECK(small.attenuationEnd == Catch::Approx(3.0f * kWorldReachScale));
 }

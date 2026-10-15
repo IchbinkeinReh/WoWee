@@ -89,10 +89,8 @@ public:
     void syncRtScene();
     /// The omni lights (MOLT) of the instances near `eye`, placed in the
     /// world: lamps, braziers; and what of them glows (ModelData::glows):
-    /// lamp glass and lava outside, the windows at night by `nightLevel`
-    /// (wmo_sidn::windowLevel).
-    void collectRtLights(const glm::vec3& eye, float range, float nightLevel,
-                         std::vector<rt_lights::PointLight>& out) const;
+    /// lamp glass and lava outside. None of it depends on the hour.
+    void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
 
     /**
      * Load WMO model and create GPU resources
@@ -801,15 +799,9 @@ private:
         glm::vec3 wmoAmbientColor{0.5f, 0.5f, 0.5f};  // From MOHD, used for interior lighting
         std::vector<pipeline::WMOLight> lights;        // MOLT, for the ray traced lighting
         /// What glows of it, for the ray traced lighting (rt_lights::glowLight):
-        /// per group, its windows (MOMT 0x10, lit at night by their sidn
-        /// colour) and, outside, its bright unlit and additive batches where
-        /// no MOLT light sits already. Gathered as its groups load.
-        struct Glow {
-            rt_lights::GlowPatch patch;
-            bool window = false;    // lit at night only
-            bool interior = false;  // of an interior group: in its baked colours
-        };
-        std::vector<Glow> glows;
+        /// per exterior group, its bright unlit and additive batches where no
+        /// MOLT light sits already (no windows). Gathered as its groups load.
+        std::vector<rt_lights::GlowPatch> glows;
         uint32_t mohdFlags = 0;                        // MOHD flags (0x2: see floorAlong)
         bool isLowPlatform = false;
 

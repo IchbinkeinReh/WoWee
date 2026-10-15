@@ -584,12 +584,9 @@ public:
     /// lamps, spell effects), placed for this frame, within `range` of `eye`.
     /// Walks the instances syncRtScene found to carry lights, so it follows
     /// that call.
-    /// `nightLevel` is the window level (wmo_sidn::windowLevel), which the
-    /// lamps and the glowing surfaces show more of at night
-    /// (rt_lights::daylightScale). The particle emitters' lights are those
-    /// the last prepareM2Particles gathered.
-    void collectRtLights(const glm::vec3& eye, float range, float nightLevel,
-                         std::vector<rt_lights::PointLight>& out) const;
+    /// The particle emitters' lights are those the last prepareM2Particles
+    /// gathered. None of it depends on the hour.
+    void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
     /// WOWEE_RT_LIGHT_DIAG: the doodads within `radius` of `eye` and what
     /// each gives of light - its M2 lights, a fire's or a lamp's, its glow
     /// patches, its emitters - logged.

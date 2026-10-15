@@ -6270,11 +6270,9 @@ void Renderer::recordRtLighting() {
         // Main thread only; kept to keep its capacity.
         static std::vector<rt_lights::PointLight> lightScratch;
         lightScratch.clear();
-        // The lamps and what glows show more of their light at night, the
-        // windows only then (rt_lights::daylightScale).
-        const float nightLevel = lightingManager ? wmo_sidn::windowLevel(lightingManager->getTimeOfDay()) : 0.0f;
-        if (m2Renderer) m2Renderer->collectRtLights(in.cameraPos, kLightRange, nightLevel, lightScratch);
-        if (wmoRenderer) wmoRenderer->collectRtLights(in.cameraPos, kLightRange, nightLevel, lightScratch);
+        // None of it depends on the hour.
+        if (m2Renderer) m2Renderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        if (wmoRenderer) wmoRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         if (characterRenderer) characterRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         // The Debug Graphics settings' strength and reach per kind of light.
         for (rt_lights::PointLight& l : lightScratch) {

@@ -215,16 +215,13 @@ inline PointLight fireLight(const glm::vec3& boxMin, const glm::vec3& boxMax, co
 /// human lamps and lanterns has an M2 light (their files list none); the
 /// original draws only their glowing glass. The light sits at `local`, the
 /// middle of that glass in the model's space (lampGlowCentre), warm, reaching
-/// some nine yards. Its glass glows day and night, so it is lit day and
-/// night: `level` is how much of it shows (rt_glow.hpp daylightScale, full at
-/// night, kLampDayLevel at noon).
+/// some nine yards. Its glass glows at every hour, and so does its light.
 inline constexpr float kLampReach = 6.0f;
-inline constexpr float kLampDayLevel = 0.5f;
-inline PointLight lampLight(const glm::vec3& local, const glm::mat4& modelMatrix, float level) {
+inline PointLight lampLight(const glm::vec3& local, const glm::mat4& modelMatrix) {
     PointLight out;
     out.position = glm::vec3(modelMatrix * glm::vec4(local, 1.0f));
     const float scale = glm::length(glm::vec3(modelMatrix[0]));
-    out.color = glm::vec3(1.0f, 0.78f, 0.48f) * std::clamp(level, 0.0f, 1.0f);
+    out.color = glm::vec3(1.0f, 0.78f, 0.48f);
     out.attenuationEnd = std::clamp(kLampReach * scale, 3.0f, 12.0f) * kWorldReachScale;
     out.attenuationStart = 0.2f * out.attenuationEnd;
     out.source = Source::Lamp;

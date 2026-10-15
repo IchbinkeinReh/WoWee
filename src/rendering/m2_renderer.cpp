@@ -2604,15 +2604,8 @@ void M2Renderer::syncRtScene() {
     }
 }
 
-void M2Renderer::collectRtLights(const glm::vec3& eye, float range, float nightLevel,
+void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                                  std::vector<rt_lights::PointLight>& out) const {
-    // A lamp's glass and a glowing surface glow by day as by night; outside,
-    // against the sun, they light less (rt_lights::daylightScale). Inside a
-    // building (interiorLit) there is no sun to set against them: there they
-    // keep all their light around the clock, or a room's lamps would
-    // brighten at dusk.
-    const float outdoorLampLevel = rt_lights::daylightScale(nightLevel, rt_lights::kLampDayLevel);
-    const float outdoorGlowLevel = rt_lights::daylightScale(nightLevel, rt_lights::kGlowDayLevel);
     for (uint32_t id : rtLitInstances_) {
         auto found = instanceIndexById.find(id);
         if (found == instanceIndexById.end() || found->second >= instances.size()) continue;
@@ -2624,11 +2617,9 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range, float nightL
         const glm::vec3 d = inst.position - eye;
         if (glm::dot(d, d) > reach * reach) continue;
         const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
-        const float lampLevel = inst.interiorLit ? 1.0f : outdoorLampLevel;
-        const float glowLevel = inst.interiorLit ? 1.0f : outdoorGlowLevel;
         if (model->lights.empty() && model->isLamp) {
             // A lamp with no light of its own (rt_lights::lampLight).
-            rt_lights::PointLight l = rt_lights::lampLight(model->lampLocal, inst.modelMatrix, lampLevel);
+            rt_lights::PointLight l = rt_lights::lampLight(model->lampLocal, inst.modelMatrix);
             l.color *= fade;
             // A lamp of a WMO interior is in the interior's baked colours
             // already: there it only casts its shadows (PointLight::baked).
@@ -2653,7 +2644,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range, float nightL
             // where those move.
             const float scale2 = glm::dot(glm::vec3(inst.modelMatrix[0]), glm::vec3(inst.modelMatrix[0]));
             for (const rt_lights::GlowPatch& patch : model->glowPatches) {
-                glm::vec3 color = patch.color * (glowLevel * fade);
+                glm::vec3 color = patch.color * fade;
                 if (patch.animatedBatch < model->batches.size()) {
                     const glm::vec4 mul = batchColorMul(*model, model->batches[patch.animatedBatch],
                                                         inst.currentSequenceIndex, inst.animTime,
