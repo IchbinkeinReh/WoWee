@@ -729,7 +729,7 @@ void EditorViewport::render(VkCommandBuffer cmd) {
     terrainRenderer_->render(cmd, perFrameSet, *camera_);
 
     if (m2Renderer_) {
-        m2Renderer_->prepareRender(frame, *camera_);
+        m2Renderer_->prepareRender(frame);
         m2Renderer_->render(cmd, perFrameSet, *camera_);
     }
     if (wmoRenderer_) {
