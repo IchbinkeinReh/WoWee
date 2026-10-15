@@ -3730,6 +3730,169 @@ void GameHandler::calendarSelectInvite(size_t index) {
     if (index < open.invitees.size()) open.selectedInviteId = open.invitees[index].inviteId;
 }
 
+/// The keys 0x005f1720 sorts the invite list by that live outside the event:
+/// the name cache's name and class (0x0067d770, its +0x148 through
+/// ChrClasses), and the group list (0x00549670).
+CalendarInviteSortKeys calendarSortKeys(const GameHandler& gh) {
+    CalendarInviteSortKeys keys;
+    keys.name = [&gh](uint64_t guid) { return gh.lookupName(guid); };
+    keys.className = [&gh](uint64_t guid) -> std::string {
+        const uint8_t cls = gh.lookupPlayerClass(guid);
+        return cls == 0 ? std::string() : getClassName(static_cast<Class>(cls));
+    };
+    keys.inGroup = [&gh](uint64_t guid) {
+        for (const auto& m : gh.getPartyData().members)
+            if (m.guid == guid) return true;
+        return false;
+    };
+    return keys;
+}
+
+void GameHandler::calendarSortOpenInvites(uint8_t criterion, bool toggle) {
+    if (!isCalendarEventOpen()) return;
+    calendarSortInvites(calendarEventDetail_, criterion, toggle, calendarSortKeys(*this));
+    fireAddonEvent("CALENDAR_UPDATE_INVITE_LIST", {});
+}
+
+void GameHandler::calendarRespondToOpenEvent(uint8_t status) {
+    // 0x005bc3e0: the player in view, nothing pending, an event open.
+    if (calendarActionPending_ || !isCalendarEventOpen() || !socket ||
+        !entityController_->getEntityManager().getEntity(playerGuid)) return;
+    const CalendarEventDetail& open = calendarEventDetail_;
+    const bool ownGuildEvent = (open.flags & calendar_flag::kGuildEvent) != 0 &&
+                               open.guildId == getEntityGuildId(playerGuid);
+    bool sent = false;
+    if (ownGuildEvent) {
+        // Only Tentative goes on, as a tentative sign-up (0x005f2530(1)).
+        if (status != 8) return;
+        sent = calendarSendSignUp(true);
+    } else if (!calendarDraftOpen_ && (status == 1 || status == 2 || status == 8)) {
+        // 0x005f23f0: CMSG_CALENDAR_EVENT_RSVP for the player's own row -
+        // none on a guild event where that row is the guild's.
+        for (const auto& row : open.invitees) {
+            if (row.guid != playerGuid) continue;
+            if ((open.flags & calendar_flag::kGuildEvent) && row.isGuildMember) break;
+            network::Packet packet(wireOpcode(Opcode::CMSG_CALENDAR_EVENT_RSVP));
+            packet.writeUInt64(open.eventId);
+            packet.writeUInt64(row.inviteId);
+            packet.writeUInt32(status);
+            socket->send(packet);
+            sent = true;
+            break;
+        }
+    }
+    if (sent) setCalendarActionPending(true);
+}
+
+bool GameHandler::calendarSendSignUp(bool tentative) {
+    // 0x005f2530: not for a new event, nor one the player is listed on;
+    // CMSG_CALENDAR_EVENT_SIGNUP with the event and whether tentatively.
+    if (calendarDraftOpen_ || !socket) return false;
+    const CalendarEventDetail& open = calendarEventDetail_;
+    for (const auto& row : open.invitees)
+        if (row.guid == playerGuid) return false;
+    network::Packet packet(wireOpcode(Opcode::CMSG_CALENDAR_EVENT_SIGNUP));
+    packet.writeUInt64(open.eventId);
+    packet.writeUInt8(tentative ? 1 : 0);
+    socket->send(packet);
+    return true;
+}
+
+void GameHandler::calendarSignUpToOpenEvent() {
+    // 0x005bc460: nothing pending, a guild event open.
+    if (calendarActionPending_ || !isCalendarEventOpen() ||
+        (calendarEventDetail_.flags & calendar_flag::kGuildEvent) == 0) return;
+    if (calendarSendSignUp(false)) setCalendarActionPending(true);
+}
+
+bool GameHandler::calendarSetOpenEventFlag(uint32_t flag, bool on) {
+    if (!isCalendarEventOpen()) return false;
+    CalendarEventDetail& open = calendarEventDetail_;
+    if (open.flags & calendar_flag::kAnnouncement) {
+        constexpr uint32_t kGuildRightCreateEvent = 0x100000;
+        if ((getPlayerGuildRankRights() & kGuildRightCreateEvent) == 0) return false;
+    } else {
+        const uint64_t ownInviteId = calendarDraftOpen_ ? 1 : calendarOwnInviteId(open, playerGuid);
+        if (!calendarMayInvite(ownInviteId, open.creatorGuid, playerGuid)) return false;
+    }
+    // 0x005f13b0 / 0x005f13e0.
+    if (on) open.flags |= flag;
+    else open.flags &= ~flag;
+    return true;
+}
+
+void GameHandler::calendarRemoveOpenInvite(size_t index) {
+    // 0x005b9780: nothing pending, an event open; then 0x005f2220.
+    if (calendarActionPending_ || !isCalendarEventOpen()) return;
+    CalendarEventDetail& open = calendarEventDetail_;
+    if (index >= open.invitees.size()) return;
+    const CalendarEventInvitee row = open.invitees[index];
+    // Not the owner's row.
+    if (row.rank == 2) {
+        calendarErrorDialog("CALENDAR_DELETE_CREATOR_FAILED", "CALENDAR_DELETE_CREATOR_FAILED");
+        return;
+    }
+    // Another's only where the player may invite.
+    if (entityController_->getEntityManager().getEntity(playerGuid) && row.guid != playerGuid) {
+        const uint64_t ownInviteId = calendarDraftOpen_ ? 1 : calendarOwnInviteId(open, playerGuid);
+        if (!calendarMayInvite(ownInviteId, open.creatorGuid, playerGuid)) {
+            calendarErrorDialog("CALENDAR_ERROR_PERMISSIONS", "You don't have permission to do that.");
+            return;
+        }
+    }
+    if (calendarDraftOpen_) {
+        // A new event's list is the client's own: the row goes at once.
+        open.invitees.erase(open.invitees.begin() + static_cast<std::ptrdiff_t>(index));
+        fireAddonEvent("CALENDAR_UPDATE_INVITE_LIST", {});
+        return;
+    }
+    if (!socket) return;
+    // CMSG_CALENDAR_EVENT_REMOVE_INVITE: the invitee (packed), their invite,
+    // the player's own invite id (+0x28) and the event.
+    network::Packet packet(wireOpcode(Opcode::CMSG_CALENDAR_EVENT_REMOVE_INVITE));
+    packet.writePackedGuid(row.guid);
+    packet.writeUInt64(row.inviteId);
+    packet.writeUInt64(calendarOwnInviteId(open, playerGuid));
+    packet.writeUInt64(open.eventId);
+    socket->send(packet);
+    setCalendarActionPending(true);
+}
+
+bool GameHandler::calendarOpenEventHasPendingInvite() const {
+    if (!isCalendarEventOpen()) return false;
+    const uint64_t eventId = calendarEventDetail_.eventId;
+    for (const auto& p : calendarData_.pendingInvites)
+        if (p.eventId == eventId) return true;
+    return false;
+}
+
+std::vector<GameHandler::CalendarEventTexture> GameHandler::calendarEventTextures(int eventType) const {
+    // Interface type 1 is a raid, LFGDungeons TypeID 2; type 2 a dungeon, 1.
+    std::vector<CalendarEventTexture> out;
+    if (eventType != 1 && eventType != 2) return out;
+    const uint32_t typeId = eventType == 1 ? 2u : 1u;
+    loadLfgDungeonDbc();
+    const int32_t faction = isPlayerAlliance() ? 1 : 0;
+    std::vector<const LfgDungeon*> rows;
+    for (const auto& d : lfgDungeons_)
+        if (d.typeId == typeId && (d.faction < 0 || d.faction == faction)) rows.push_back(&d);
+    // 0x005b8e50: the newer expansion first, then the name without case.
+    std::stable_sort(rows.begin(), rows.end(), [](const LfgDungeon* a, const LfgDungeon* b) {
+        if (a->expansion != b->expansion) return a->expansion > b->expansion;
+        return calendarCompareCaseless(a->name, b->name) < 0;
+    });
+    out.reserve(rows.size());
+    for (const LfgDungeon* d : rows) {
+        CalendarEventTexture t;
+        t.name = d->name;
+        t.texture = d->texture;
+        t.expansion = d->expansion;
+        if (eventType == 1) t.difficulty = savedInstanceDifficultyName(d->mapId, d->difficulty);
+        out.push_back(std::move(t));
+    }
+    return out;
+}
+
 bool GameHandler::openCalendarNewEvent(CalendarNewKind kind) {
     if (!isInWorld() || !entityController_->getEntityManager().getEntity(playerGuid)) return false;
     if (kind != CalendarNewKind::Player && getEntityGuildId(playerGuid) == 0) {

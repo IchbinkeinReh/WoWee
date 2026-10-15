@@ -1,7 +1,9 @@
 #include "game/calendar_data.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <ctime>
+#include <iterator>
 
 #include "game/handler_types.hpp"
 #include "network/packet.hpp"
@@ -1096,6 +1098,86 @@ bool calendarDateAddable(const WowDate& date, const WowDate* now) {
 
 bool calendarTimePassed(const WowDate& when, const WowDate* now) {
     return now && minuteKey(when) <= minuteKey(*now);
+}
+
+namespace {
+
+/// 0x0076ea40: code point order, which for UTF-8 is byte order.
+int compareCodePoints(const std::string& a, const std::string& b) {
+    const int c = a.compare(b);
+    return c < 0 ? -1 : c > 0 ? 1 : 0;
+}
+
+}  // namespace
+
+/// 0x0076ec80: without case, a difference in case alone deciding only when
+/// nothing else does.
+int calendarCompareCaseless(const std::string& a, const std::string& b) {
+    int byCase = 0;
+    const size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+        const auto ca = static_cast<unsigned char>(a[i]);
+        const auto cb = static_cast<unsigned char>(b[i]);
+        const int la = std::tolower(ca), lb = std::tolower(cb);
+        if (la != lb) return la - lb;
+        if (byCase == 0 && ca != cb) byCase = static_cast<int>(ca) - static_cast<int>(cb);
+    }
+    if (a.size() != b.size()) return a.size() < b.size() ? -1 : 1;
+    return byCase;
+}
+
+void calendarSortInvites(CalendarEventDetail& open, uint8_t criterion, bool toggle,
+                         const CalendarInviteSortKeys& keys) {
+    // The weight each CalendarInviteStatus sorts by (0x00ad16cc).
+    static constexpr int kStatusWeight[] = {9, 3, 6, 1, 7, 4, 2, 8, 5, 3};
+    for (size_t i = 0; i < open.inviteSortReversed.size(); ++i) {
+        if (i == criterion) {
+            if (toggle) open.inviteSortReversed[i] = !open.inviteSortReversed[i];
+            open.inviteSortCriterion = criterion;
+        } else {
+            open.inviteSortReversed[i] = false;
+        }
+    }
+    const uint8_t by = open.inviteSortCriterion;
+    const bool reversed = by < open.inviteSortReversed.size() && open.inviteSortReversed[by];
+    const auto nameOf = [&keys](uint64_t guid) { return keys.name ? keys.name(guid) : std::string(); };
+    // A name not yet known compares equal to anything (0x0067d770 gives none).
+    const auto byName = [&nameOf](const CalendarEventInvitee& a, const CalendarEventInvitee& b) {
+        const std::string na = nameOf(a.guid), nb = nameOf(b.guid);
+        return na.empty() || nb.empty() ? 0 : compareCodePoints(na, nb);
+    };
+    const auto weight = [](uint8_t status) {
+        return status < std::size(kStatusWeight) ? kStatusWeight[status] : 0;
+    };
+    const auto compare = [&](const CalendarEventInvitee& a, const CalendarEventInvitee& b) {
+        int c = 0;
+        switch (by) {
+        case 0: c = byName(a, b); break;
+        case 1: c = static_cast<int>(a.level) - static_cast<int>(b.level); break;
+        case 2: {
+            const std::string ca = keys.className ? keys.className(a.guid) : std::string();
+            const std::string cb = keys.className ? keys.className(b.guid) : std::string();
+            if (!ca.empty() && !cb.empty()) c = calendarCompareCaseless(ca, cb);
+            break;
+        }
+        case 3: c = weight(a.status) - weight(b.status); break;
+        case 4: {
+            const bool ga = keys.inGroup && keys.inGroup(a.guid);
+            const bool gb = keys.inGroup && keys.inGroup(b.guid);
+            c = ga == gb ? 0 : ga ? -1 : 1;
+            break;
+        }
+        case 5: c = calendarCompareCaseless(a.note, b.note); break;
+        default: break;
+        }
+        if (reversed) c = -c;
+        if (by != 0 && c == 0) c = byName(a, b);
+        return c;
+    };
+    std::stable_sort(open.invitees.begin(), open.invitees.end(),
+                     [&compare](const CalendarEventInvitee& a, const CalendarEventInvitee& b) {
+                         return compare(a, b) < 0;
+                     });
 }
 
 uint64_t calendarOwnInviteId(const CalendarEventDetail& open, uint64_t player) {

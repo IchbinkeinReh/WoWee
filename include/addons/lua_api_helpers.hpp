@@ -77,6 +77,34 @@ inline int interfaceVersion(lua_State* L) {
 }
 
 // ---- Lua return helpers - used 200+ times as guard/fallback returns ----
+/// An argument read as a switch the way the client reads one (0x00815500):
+/// nil is off, a boolean itself, a number whether its whole part is not 0, a
+/// string by 0x00815400 - "0", "F...", "N...", "off" and "disabled" off,
+/// "1"-"9", "T...", "Y...", "on" and "enabled" on - and anything else, an
+/// absent argument included, `fallback`.
+inline bool luaClientSwitchArg(lua_State* L, int idx, bool fallback) {
+    switch (lua_type(L, idx)) {
+    case LUA_TNIL:     return false;
+    case LUA_TBOOLEAN: return lua_toboolean(L, idx) != 0;
+    case LUA_TNUMBER:  return static_cast<long long>(lua_tonumber(L, idx)) != 0;
+    case LUA_TSTRING: {
+        std::string v = lua_tostring(L, idx);
+        if (v.empty()) return fallback;
+        switch (v[0]) {
+        case '0': case 'F': case 'N': case 'f': case 'n': return false;
+        case 'T': case 'Y': case 't': case 'y': return true;
+        default: break;
+        }
+        if (v[0] >= '1' && v[0] <= '9') return true;
+        toLowerInPlace(v);
+        if (v == "off" || v == "disabled") return false;
+        if (v == "on" || v == "enabled") return true;
+        return fallback;
+    }
+    default: return fallback;
+    }
+}
+
 inline int luaReturnNil(lua_State* L)  { lua_pushnil(L); return 1; }
 inline int luaReturnZero(lua_State* L) { lua_pushnumber(L, 0); return 1; }
 inline int luaReturnFalse(lua_State* L){ lua_pushboolean(L, 0); return 1; }

@@ -4572,6 +4572,23 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
     // An event sent in full is the open one now, in place of a new one
     // (0x005bed20).
     if (which == CalendarPacket::SendEvent) calendarDraftOpen_ = false;
+    // The list ordered before it is announced, once every name is in: an
+    // event sent in full, or a guild's or arena team's list, by status
+    // (0x005f2c00, 0x005f2f90: 0x005f1980(3, 0)); an invitee added, by the
+    // order kept (0x005f32b0).
+    const auto says = [&ctx](const char* event) {
+        return std::any_of(ctx.signals.begin(), ctx.signals.end(),
+                           [event](const CalendarSignal& s) { return s.event == event; });
+    };
+    if ((which == CalendarPacket::SendEvent &&
+         (says("CALENDAR_OPEN_EVENT") || says("CALENDAR_NEW_EVENT"))) ||
+        ((which == CalendarPacket::FilterGuild || which == CalendarPacket::ArenaTeam) &&
+         says("CALENDAR_UPDATE_INVITE_LIST"))) {
+        calendarSortInvites(calendarEventDetail_, 3, false, calendarSortKeys(*this));
+    } else if (which == CalendarPacket::EventInvite && says("CALENDAR_UPDATE_INVITE_LIST")) {
+        calendarSortInvites(calendarEventDetail_, calendarEventDetail_.inviteSortCriterion, false,
+                            calendarSortKeys(*this));
+    }
     for (const auto& signal : ctx.signals) {
         // The dispatcher's ending clears the pending action as it says so.
         if (signal.event == "CALENDAR_ACTION_PENDING") {
@@ -4598,6 +4615,11 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
 void GameHandler::onCalendarNameKnown(uint64_t guid) {
     std::vector<CalendarSignal> said;
     calendarNameArrived(calendarEventDetail_, guid, said);
+    // The last name in orders the list by the order kept (0x005f1a40).
+    if (!said.empty()) {
+        calendarSortInvites(calendarEventDetail_, calendarEventDetail_.inviteSortCriterion, false,
+                            calendarSortKeys(*this));
+    }
     for (const auto& signal : said) fireAddonEvent(signal.event, signal.args);
 }
 

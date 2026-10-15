@@ -156,6 +156,11 @@ inline const char* worldStateName(WorldState state) {
 using WorldConnectSuccessCallback = std::function<void()>;
 using WorldConnectFailureCallback = std::function<void(const std::string& reason)>;
 
+class GameHandler;
+/// The keys the calendar's invite list is ordered by that the event does not
+/// hold (0x005f1720): names and classes from the name cache, the group.
+CalendarInviteSortKeys calendarSortKeys(const GameHandler& gh);
+
 /**
  * GameHandler - Manages world server connection and game protocol
  *
@@ -839,6 +844,48 @@ public:
     /// event's row `index` (from 0) becomes the selected one; an index past
     /// the list changes nothing.
     void calendarSelectInvite(size_t index);
+    /// CalendarEventSortInvites (0x005b8570 -> 0x005f1980): the open event's
+    /// invite list by `criterion` (0-5), its reversal turned over where
+    /// `toggle`; then CALENDAR_UPDATE_INVITE_LIST. Nothing with none open.
+    void calendarSortOpenInvites(uint8_t criterion, bool toggle);
+    /// The player's answer to the open event: CalendarEventAvailable (1),
+    /// CalendarEventDecline (2) and CalendarEventTentative (8) (0x005bd6e0,
+    /// 0x005bd760, 0x005bd750 -> 0x005bc3e0). A guild event of the player's
+    /// own guild takes a sign-up instead - tentative only, the other two
+    /// nothing.
+    void calendarRespondToOpenEvent(uint8_t status);
+    /// CalendarEventSignUp (0x005bd7d0 -> 0x005bc460): a guild event the
+    /// player is not yet listed on, signed up to (CMSG_CALENDAR_EVENT_SIGNUP).
+    void calendarSignUpToOpenEvent();
+    /// CalendarEventSetLocked / ClearLocked / SetAutoApprove /
+    /// ClearAutoApprove (0x005bb870, 0x005bb8b0, 0x005bb8f0, 0x005bb930):
+    /// the open event's flag 0x10 or 0x20 set or cleared, where the player
+    /// may edit it - the guild right 0x100000 for an announcement
+    /// (0x005cbca0), else 0x005f1b30. True when it may.
+    bool calendarSetOpenEventFlag(uint32_t flag, bool on);
+    /// CalendarEventRemoveInvite (0x005bb0c0 -> 0x005b9780 -> 0x005f2220):
+    /// row `index` (from 0) off the open event's list - asked of the server
+    /// for one already made, taken off at once for a new one.
+    void calendarRemoveOpenInvite(size_t index);
+    /// CalendarEventHasPendingInvite (0x005bdd90): the open event among the
+    /// invitations still waiting on an answer (0x005bd850).
+    bool calendarOpenEventHasPendingInvite() const;
+    /// CalendarContextEventClipboard (0x005b8540): an event copied to paste.
+    bool calendarHasCopiedEvent() const { return calendarClipboard_.eventId != 0; }
+    /// One of the textures CalendarEventGetTextures lists (0x005bb970): an
+    /// LFGDungeons row's name, texture and expansion, and for a raid its
+    /// difficulty's name.
+    struct CalendarEventTexture {
+        std::string name;
+        std::string texture;
+        uint32_t expansion = 0;
+        std::string difficulty;
+    };
+    /// The raids (interface event type 1) or dungeons (2) the event editor
+    /// offers a texture for (0x005be3e5 builds them, 0x005b8e50 orders them):
+    /// LFGDungeons rows of that TypeID for both factions or the player's,
+    /// the newest expansion first, then by name. Empty for any other type.
+    std::vector<CalendarEventTexture> calendarEventTextures(int eventType) const;
     /// CalendarNewEvent / CalendarNewGuildAnnouncement / CalendarNewGuildEvent
     /// (0x005bbe50, 0x005bbf20, 0x005bc030): a new event, made by
     /// calendarNewEvent (0x005f2a20), takes the open one's place (0x00c207ec)
@@ -5834,6 +5881,9 @@ private:
     /// already pending. Every sender asks first and, having sent, marks it
     /// pending (0x005b9310, 0x005b9860 and the rest).
     bool calendarActionAllowed() const;
+    /// 0x005f2530: CMSG_CALENDAR_EVENT_SIGNUP for the open event, not a new
+    /// one and not one the player is listed on. True when sent.
+    bool calendarSendSignUp(bool tentative);
     bool calendarActionPending_ = false;
     /// When the last invitation went, on calendarClockMs (0x00c207f8); 0 for
     /// none yet.

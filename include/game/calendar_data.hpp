@@ -349,6 +349,28 @@ inline bool calendarMayInvite(uint64_t ownInviteId, uint64_t creator, uint64_t p
     return ownInviteId != 0 || creator == player;
 }
 
+/// 0x0076ec80: two strings in order without case, a difference in case
+/// alone deciding only when nothing else does. Negative, 0 or positive.
+int calendarCompareCaseless(const std::string& a, const std::string& b);
+
+/// What the invite list is ordered by that the event itself does not hold:
+/// each invitee's name and class name, and whether they are in the player's
+/// group.
+struct CalendarInviteSortKeys {
+    std::function<std::string(uint64_t)> name;
+    std::function<std::string(uint64_t)> className;
+    std::function<bool(uint64_t)> inGroup;
+};
+
+/// 0x005f1980: the open event's invite list ordered by `criterion` (name,
+/// level, class, status, party, notes: 0-5). `toggle` turns that one's
+/// reversal over; every other criterion's is cleared. 0x005f1720 compares:
+/// names by code point, levels and the status weights (0x00ad16cc) by
+/// difference, class names and notes without case, the player's group
+/// first; reversed where asked, and a tie that is not by name broken by name.
+void calendarSortInvites(CalendarEventDetail& open, uint8_t criterion, bool toggle,
+                         const CalendarInviteSortKeys& keys);
+
 /// The new event CalendarNewEvent, CalendarNewGuildAnnouncement and
 /// CalendarNewGuildEvent open (0x005f2a20 with 0, 1, 2): the player's, id 0,
 /// flags 0x01, 0x40 or 0x400, a hundred invites at most, no dungeon - and on

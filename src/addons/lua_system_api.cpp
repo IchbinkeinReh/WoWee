@@ -147,6 +147,18 @@ static wowee::game::CalendarEventDraft& calendarDraft() {
     return draft;
 }
 
+/// CalendarEventSetLocked and its three siblings: the open event's flag,
+/// where the player may (GameHandler::calendarSetOpenEventFlag), and the
+/// draft's to match, which is what an edit sends.
+static int calendarSetOpenEventFlag(lua_State* L, uint32_t flag, bool on) {
+    auto* gh = getGameHandler(L);
+    if (gh && gh->calendarSetOpenEventFlag(flag, on)) {
+        if (on) calendarDraft().flags |= flag;
+        else calendarDraft().flags &= ~flag;
+    }
+    return 0;
+}
+
 /// The row a right-click menu is about: which month, which day, which entry.
 ///
 /// State because the menu needs it to be. UIDropDownMenu builds its list in
@@ -8254,6 +8266,124 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, criterion < kCriteria.size() &&
                                    open.inviteSortReversed[criterion] ? 1 : 0);
             return 2;
+        }},
+                // CalendarEventSortInvites("criterion"[, reverse]) (0x005b8570):
+                // one of the six words, anything else "status"; `reverse`
+                // turns that one's reversal over, and left out does so too
+                // (0x00815500 defaults it to 1).
+                {"CalendarEventSortInvites", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: CalendarEventSortInvites(\"criteria\", reverse)");
+            static constexpr std::array<const char*, 6> kCriteria{
+                "name", "level", "class", "status", "party", "notes"};
+            std::string word = lua_tostring(L, 1);
+            toLowerInPlace(word);
+            uint8_t criterion = 3;
+            for (size_t i = 0; i < kCriteria.size(); ++i)
+                if (word == kCriteria[i]) { criterion = static_cast<uint8_t>(i); break; }
+            const bool toggle = luaClientSwitchArg(L, 2, true);
+            if (auto* gh = getGameHandler(L)) gh->calendarSortOpenInvites(criterion, toggle);
+            return 0;
+        }},
+                // The player's own answer to the open event (0x005bd6e0,
+                // 0x005bd760, 0x005bd750, 0x005bd7d0).
+                {"CalendarEventAvailable", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->calendarRespondToOpenEvent(1);
+            return 0;
+        }},
+                {"CalendarEventDecline", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->calendarRespondToOpenEvent(2);
+            return 0;
+        }},
+                {"CalendarEventTentative", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->calendarRespondToOpenEvent(8);
+            return 0;
+        }},
+                {"CalendarEventSignUp", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->calendarSignUpToOpenEvent();
+            return 0;
+        }},
+                // The open event's lock (0x10) and auto-approve (0x20) flags
+                // (0x005bb870 - 0x005bb930), on the draft the edit commits as
+                // well.
+                {"CalendarEventSetLocked", [](lua_State* L) -> int {
+            return calendarSetOpenEventFlag(L, 0x10, true);
+        }},
+                {"CalendarEventClearLocked", [](lua_State* L) -> int {
+            return calendarSetOpenEventFlag(L, 0x10, false);
+        }},
+                {"CalendarEventSetAutoApprove", [](lua_State* L) -> int {
+            return calendarSetOpenEventFlag(L, 0x20, true);
+        }},
+                {"CalendarEventClearAutoApprove", [](lua_State* L) -> int {
+            return calendarSetOpenEventFlag(L, 0x20, false);
+        }},
+                // CalendarEventRemoveInvite(index) (0x005bb0c0).
+                {"CalendarEventRemoveInvite", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CalendarEventRemoveInvite(index)");
+            const auto index = static_cast<long long>(std::lround(lua_tonumber(L, 1))) - 1;
+            auto* gh = getGameHandler(L);
+            if (gh && index >= 0) gh->calendarRemoveOpenInvite(static_cast<size_t>(index));
+            return 0;
+        }},
+                // CalendarEventGetInviteResponseTime(index) → weekday, month,
+                // day, year, hour, minute (0x005ba420): when that row answered,
+                // all six 0 where it has no time or there is no such row.
+                {"CalendarEventGetInviteResponseTime", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CalendarEventGetInviteResponseTime(index)");
+            const auto index = static_cast<long long>(std::lround(lua_tonumber(L, 1))) - 1;
+            auto* gh = getGameHandler(L);
+            const wowee::game::CalendarEventInvitee* row = nullptr;
+            if (gh && gh->isCalendarEventOpen() && index >= 0) {
+                const auto& list = gh->getCalendarEventDetail().invitees;
+                if (static_cast<size_t>(index) < list.size()) row = &list[static_cast<size_t>(index)];
+            }
+            if (!row || wowee::game::packWowPackedTime(row->statusTime) == 0) {
+                for (int i = 0; i < 6; ++i) lua_pushnumber(L, 0);
+                return 6;
+            }
+            const auto& t = row->statusTime;
+            lua_pushnumber(L, t.weekday + 1);
+            lua_pushnumber(L, t.month);
+            lua_pushnumber(L, t.day);
+            lua_pushnumber(L, t.fullYear());
+            lua_pushnumber(L, t.hour);
+            lua_pushnumber(L, t.minute);
+            return 6;
+        }},
+                // CalendarEventGetTextures(eventType) → name, texture,
+                // expansion, difficulty per row (0x005bb970): raids for 1,
+                // dungeons for 2, nothing for any other.
+                {"CalendarEventGetTextures", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CalendarEventGetTextures(eventType)");
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            const auto rows = gh->calendarEventTextures(
+                static_cast<int>(std::lround(lua_tonumber(L, 1))));
+            if (rows.empty() || !lua_checkstack(L, static_cast<int>(rows.size() * 4))) return 0;
+            for (const auto& r : rows) {
+                lua_pushstring(L, r.name.c_str());
+                lua_pushstring(L, r.texture.c_str());
+                lua_pushinteger(L, static_cast<lua_Integer>(r.expansion));
+                lua_pushstring(L, r.difficulty.c_str());
+            }
+            return static_cast<int>(rows.size() * 4);
+        }},
+                // Whether the open event is among the invitations still
+                // waiting on an answer (0x005bdd90); false with none open.
+                {"CalendarEventHasPendingInvite", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushboolean(L, gh && gh->calendarOpenEventHasPendingInvite() ? 1 : 0);
+            return 1;
+        }},
+                // Whether an event has been copied to paste (0x005b8540).
+                {"CalendarContextEventClipboard", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushboolean(L, gh && gh->calendarHasCopiedEvent() ? 1 : 0);
+            return 1;
         }},
                 // ---- Creating an event ----
                 //
