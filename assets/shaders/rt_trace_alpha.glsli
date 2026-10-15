@@ -21,6 +21,11 @@ layout(std430, set = 1, binding = 9) readonly buffer RtGroups { vec4 rtGroups[];
 // what it carries - by. The sun's ray does near the camera, where the shadow
 // map draws the units truly posed and this frame (rt_trace.comp).
 bool rtSkipUnits = false;
+// Set by the caller for one ray: how far along it a grouped instance - a
+// unit, what it carries - may stop it; past that the units are passed by.
+// The point lights' shadow rays (rt_trace.comp) keep a unit's shadow to the
+// stretch of floor or wall near it.
+float rtUnitReach = 1e30;
 
 // Whether a ray from p passes the instances of `group` by: it starts inside
 // the group's box - on the character the group is, which never shadows or

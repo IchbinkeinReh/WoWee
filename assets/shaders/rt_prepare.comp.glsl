@@ -10,8 +10,8 @@
 // normal the G-buffer holds: a ray leaves along it, and a smoothed or
 // normal-mapped normal points rays into the surface they start from. The
 // point lights take the shading normal, which goes to rt_trace in the image
-// it writes the point lights' light to (uPointNormal), turned toward the
-// camera as the geometric one is.
+// it writes the point lights' light to (uPointNormal), turned to the side
+// of the geometric face (not toward the camera: see below).
 //
 // Built with RT_MSAA when the scene is multisampled; sample 0 stands for the
 // pixel then.

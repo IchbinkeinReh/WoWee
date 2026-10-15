@@ -37,7 +37,7 @@
 
 layout(set = 0, binding = 3) uniform sampler2D uGbufCur;
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D uRaw;
-// In: the normal the surface is lit by, z a unit's body (rt_prepare). Out: the point lights'
+// In: the normal the surface is lit by (rt_prepare). Out: the point lights'
 // light; a = the baked lights' part.
 layout(set = 0, binding = 11, rgba16f) uniform image2D uPointOut;
 
@@ -69,6 +69,34 @@ float rtLightRadius(float reach) {
 // A light sits inside its lamp - a lantern's glass, a brazier's bowl - so a
 // shadow ray stops this short of it rather than finding the lamp itself.
 const float RT_LIGHT_STANDOFF = 0.45;
+// How far a unit's point-light shadow reaches from its body: no farther than
+// this, nor than three quarters of the way from the surface to the light,
+// and fading out over the last half of it (rtUnitShadowReach).
+const float RT_UNIT_SHADOW_MAX = 5.0;
+const float RT_UNIT_SHADOW_SHARE = 0.75;
+const float RT_UNIT_SHADOW_FADE = 0.5;
+
+// How far along a point light's shadow ray, of length d from the surface, a
+// unit may stop it (rtUnitReach). A unit's traced body is its own triangles
+// cut into rigid pieces, each held by one bone and placed by its bone
+// (character_renderer_rt.cpp): right in size, place and pose, but not the
+// skin at the joints. Close to a body that is the shadow one expects - feet,
+// legs, the floor beside it, a wall it stands against. A lamp just above and
+// behind the head, though, threw the body's shadow across the room: the
+// farther the surface is from the body against the body's distance to the
+// light, the more the pieces' every error is magnified, to a hard,
+// room-sized wedge (the Goldshire inn's upper floor). So the body occludes
+// only the part of the ray near the surface - within RT_UNIT_SHADOW_MAX
+// yards and within RT_UNIT_SHADOW_SHARE of the way to the light, so its
+// shadow is never more than four times its size - and that end is drawn per
+// ray, down to RT_UNIT_SHADOW_FADE of it: the shadow is whole up to about
+// 1.6 times the body's size and fades out beyond, rather than stops at an
+// edge. A unit's own surface never meets its own pieces (its group's box,
+// rtInGroup), which do not hold its skin closely enough to shadow it.
+float rtUnitShadowReach(float d, inout uint rng) {
+    float reach = min(RT_UNIT_SHADOW_MAX, RT_UNIT_SHADOW_SHARE * d);
+    return reach * mix(RT_UNIT_SHADOW_FADE, 1.0, rtRandom(rng));
+}
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -172,18 +200,12 @@ void main() {
         // point picked at the source's edge does not land inside the lamp.
         float reach = d - min(RT_LIGHT_STANDOFF + radius, 0.5 * d);
         if (d > 1e-3 && reach > 0.0) {
-            // The units cast no point-light shadows: their traced bodies
-            // are rigid pieces in a standing pose (or a piece per bone),
-            // coarse and a frame late. A unit by a fire was shadowed by its
-            // own body, and under a lamp above and behind it the player's
-            // body threw a hard, room-sized wedge across the floor ahead -
-            // with the camera close, a black shape with nothing in sight to
-            // cast it (the Goldshire inn's upper floor). The original lights
-            // no unit's shadow by a lamp either.
+            // The units cast their shadows near them (rtUnitShadowReach).
             bool byUnit;
-            rtSkipUnits = true;
+            rtUnitReach = rtUnitShadowReach(d, rng);
             pointVis = rtOccludedBy(origin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
-            rtSkipUnits = false;
+            rtUnitReach = 1e30;
+            unitHit = unitHit || byUnit;
         }
     }
 

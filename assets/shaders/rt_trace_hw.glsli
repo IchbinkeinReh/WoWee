@@ -29,8 +29,10 @@ uint rtTriIndex(uint instance, uint primitive) {
 
 #include "rt_trace_alpha.glsli"
 
-bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, inout uint rng) {
-    if (rtInGroup(rtInstances[inst].group, origin)) return false;
+bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, float t, inout uint rng) {
+    uint group = rtInstances[inst].group;
+    if (rtInGroup(group, origin)) return false;
+    if (group != 0u && t > rtUnitReach) return false;  // a unit, past its reach
     return rtSolidAt(rtTris[rtTriIndex(inst, prim)], bary, rng);
 }
 
@@ -44,7 +46,8 @@ bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, inout uint 
             rtAcceptCandidate(rayQueryGetIntersectionInstanceCustomIndexEXT(q, false), \
                               rayQueryGetIntersectionPrimitiveIndexEXT(q, false),      \
                               rayQueryGetIntersectionBarycentricsEXT(q, false),        \
-                              rayQueryGetWorldRayOriginEXT(q), rng))                   \
+                              rayQueryGetWorldRayOriginEXT(q),                         \
+                              rayQueryGetIntersectionTEXT(q, false), rng))             \
             rayQueryConfirmIntersectionEXT(q);                                         \
     }
 

@@ -158,7 +158,12 @@ per 2x2 block the nearest sample among the valid RT surfaces (any sample if
 none, so terrain under grass still gets traced), the geometric normal rebuilt
 from depth as today (robust ray origins), the distance, which sub-pixel, and
 whether it was valid. `rt_trace` uses the G-buffer's shading normal for the
-point lights' N.L. Outputs as today: (sun, AO, point visibility, distance) and
+point lights' N.L, turned to the side of the geometric face and replaced by
+the geometric normal where the two differ by more than 60 degrees. It was
+turned toward the camera once: the Goldshire inn's interior floors carry
+vertex normals tilted far off up near walls and doors, the flip then turned
+them down or sideways as the camera moved, the overhead lamps' N.L went to
+zero, and black discs and patches in view 6 turned with the camera. Outputs as today: (sun, AO, point visibility, distance) and
 (point light unshadowed, baked part), now for the current frame.
 
 `rt_temporal` reprojects each texel's own world position with the previous
@@ -277,15 +282,33 @@ Goldshire inn and took it in grainy orange streaks. (For a time baked lights'
 rays from baked surfaces passed the buildings by; through the floor and the
 walls that let every lamp reach every room, and it was taken out again.)
 
-Units cast no point-light shadows: every point light's shadow ray passes
-the units by (`rtSkipUnits`, as the sun's does within the shadow map's
-reach). A unit's traced body is rigid pieces in a standing pose (or a piece
-per bone), coarser than its skin and a frame late. A ray from the skin toward
-a torch beside it began inside a neighbouring piece, so a unit by a fire took
-none of its light; and under a lamp above and behind it, the player's body
-threw a hard wedge as large as a room across the floor ahead - with the
-camera close in, a black shape with nothing in view to cast it (the Goldshire
-inn's upper floor). The original lights no unit's shadow by a lamp either.
+Units cast point-light shadows near themselves (`rtUnitShadowReach`,
+`rtUnitReach`). A unit's traced body is its own triangles cut into rigid
+pieces, each held by one bone and placed by this frame's bones (the nearest
+16 within 40 yards; the rest one mesh in a standing pose), so it does not
+hold the skin at the joints. For a while (7a9053b0) every point light's
+shadow ray passed the units by: under a lamp above and behind it the
+player's body threw a hard wedge as large as a room across the floor ahead -
+the farther the floor from the body against the body's distance to the
+lamp, the more the pieces' errors are magnified - and with the camera close
+in it was a black shape with nothing in view to cast it (the Goldshire inn's
+upper floor; the black discs seen there were partly the shading-normal flip
+above). Now a unit stops a point light's shadow ray only within the stretch
+near the surface: at most 5 yards, and at most three quarters of the way to
+the light, so the shadow is never more than four times the body's size. That
+end is drawn per ray between 50% and 100% of it, so the shadow is whole up
+to about 1.6 times the body's size and fades out beyond instead of ending at
+an edge; the light's size (`rtLightRadius`) gives its penumbra. A unit's own
+surface is never shadowed by its own pieces or by what it carries: a ray that
+starts inside its group's box passes the group by (`rtInGroup`), as for the
+sun; the box's floor is lifted 0.15 yards so the ground at its feet still
+takes its shadow. Other units' pieces shadow it as they shadow the floor. In
+the hardware tracer a grouped instance is never opaque (it comes to the
+candidate loop), where one past the reach is turned down; the software
+tracer clips a grouped instance's walk at the reach. The probes' rays (GI)
+leave the reach at its default, unlimited. A pixel whose shadow ray a unit
+stopped keeps a short history (`UNIT_HISTORY`), so the shadow follows the
+body.
 
 Two more kinds of model are left out of the traced scene as occluders
 (`M2Renderer::registerRtModel`), found the same evening by colouring every
@@ -399,8 +422,9 @@ BVH, the probe GI, the CameraZoom Lua functions.
   MOLT light), so a hearth's walls are brighter than painted.
 * Glowing batches become many lights in a city; the ranking keeps the 128
   most important.
-* Units cast no point-light shadows at all (a torch held up beside an NPC
-  leaves no shadow of it on the wall).
+* Units' point-light shadows end 5 yards from the body (or three quarters
+  of the way to the light), fading out from half that: a lamp low behind a
+  unit, or just above its head, casts a shorter shadow than it would.
 
 * Opaque M2 batches with "no depth write" (material flag 0x10) leave no depth;
   the sky, now drawn after them, can cover them where nothing stands behind.

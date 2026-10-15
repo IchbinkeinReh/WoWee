@@ -135,7 +135,10 @@ bool rtTraceScene(vec3 o, vec3 d, inout float tMax, out uint hitTri, out uint hi
                 // a world-space distance.
                 vec3 oo = rtToObject(inst, vec4(o, 1.0));
                 vec3 od = rtToObject(inst, vec4(d, 0.0));
-                if (rtTraceMesh(rtMeshes[inst.mesh], oo, od, tMax, hitTri, anyHit, rng)) {
+                // A unit stops the ray no farther than rtUnitReach.
+                float tHit = inst.group != 0u ? min(tMax, rtUnitReach) : tMax;
+                if (rtTraceMesh(rtMeshes[inst.mesh], oo, od, tHit, hitTri, anyHit, rng)) {
+                    tMax = tHit;
                     found = true;
                     hitInstance = i;
                     if (anyHit) return true;
