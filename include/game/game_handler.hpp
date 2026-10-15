@@ -1332,6 +1332,9 @@ public:
     /// ClearTutorials (0x00530820 -> 0x00530510): CMSG_TUTORIAL_CLEAR, the
     /// server's word for every tutorial seen.
     void sendTutorialClear();
+    /// A commentator's request, as CommentatorFrame.cpp builds it
+    /// (CMSG_COMMENTATOR_*): sent in the world.
+    void sendCommentatorRequest(network::Packet& packet);
     // Returns true once after SMSG_PET_RENAMEABLE; consuming the flag clears it.
     bool consumePetRenameablePending() { bool v = petRenameablePending_; petRenameablePending_ = false; return v; }
     /// The same flag without taking it. The unit menu asks whether a rename is

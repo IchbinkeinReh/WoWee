@@ -19,6 +19,8 @@ void registerSystemLuaAPI(lua_State* L);
 void registerAbsentLuaAPI(lua_State* L);
 /// What is asked of an item or a spell without using it (lua_item_query_api).
 void registerItemQueryLuaAPI(lua_State* L);
+/// The arena commentator's functions (lua_commentator_api).
+void registerCommentatorLuaAPI(lua_State* L);
 
 /// Re-apply every CVar restored from disk, now that the services behind them
 /// exist. See applyCVarSideEffects.

@@ -2784,6 +2784,10 @@ void GameHandler::petStopAttack() {
     petAttacking_ = false;
 }
 
+void GameHandler::sendCommentatorRequest(network::Packet& packet) {
+    if (socket && state == WorldState::IN_WORLD) socket->send(packet);
+}
+
 void GameHandler::sendTutorialClear() {
     if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR) == 0xFFFF) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR));
