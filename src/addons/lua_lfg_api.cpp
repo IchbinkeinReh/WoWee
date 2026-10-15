@@ -164,6 +164,22 @@ void pushInfoRow(lua_State* L, const char* name, int typeId, int minLevel,
 void registerLfgLuaAPI(lua_State* L) {
     static const std::pair<const char*, lua_CFunction> api[] = {
 
+    // GetLFGTypes() (0x00552dd0): the seven LFG_TYPE_* strings, NONE to
+    // RANDOM_DUNGEON, as the interface names them.
+    {"GetLFGTypes", [](lua_State* L) -> int {
+        static constexpr const char* kTypes[7] = {
+            "LFG_TYPE_NONE", "LFG_TYPE_DUNGEON", "LFG_TYPE_RAID", "LFG_TYPE_QUEST",
+            "LFG_TYPE_ZONE", "LFG_TYPE_HEROIC_DUNGEON", "LFG_TYPE_RANDOM_DUNGEON"};
+        for (const char* key : kTypes) {
+            lua_getglobal(L, key);
+            if (!lua_isstring(L, -1)) {
+                lua_pop(L, 1);
+                lua_pushstring(L, key);
+            }
+        }
+        return 7;
+    }},
+
     // ---- The catalogue ----
 
     // GetLFDChoiceInfo(t) / GetLFRChoiceInfo - every listable row keyed by id,

@@ -610,6 +610,17 @@ inline int factionHeaderSetCollapsed(lua_State* L, bool collapsed) {
     return 0;
 }
 
+/// Every top-level group opened or closed at once.
+inline int allTopFactionHeadersSetCollapsed(lua_State* L, bool collapsed) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const auto rows = gh->getReputationRows();
+    for (const auto& row : rows)
+        if (row.isHeader && !row.isChild && gh->isFactionCollapsed(row.factionId) != collapsed)
+            gh->setFactionCollapsed(row.factionId, collapsed);
+    return 0;
+}
+
 /// The same thirteen for a drawn row, which knows its place in the tree.
 inline int pushFactionRow(lua_State* L, game::GameHandler* gh,
                           const game::GameHandler::ReputationRow& row) {

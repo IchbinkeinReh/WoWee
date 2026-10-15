@@ -6,6 +6,7 @@
 #include "game/pvp_flags.hpp"
 #include "rendering/selection_circle.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include <cstdlib>
 
 namespace wowee::addons {
 
@@ -3466,6 +3467,16 @@ void registerUnitLuaAPI(lua_State* L) {
             if (index <= static_cast<int>(list.size())) {
                 gh->castSpell(list[static_cast<size_t>(index) - 1].spellId, 0);
             }
+            return 0;
+        }},
+                // SummonRandomCritter() (0x0053e7e0 -> 0x006d7b30): one of
+                // the player's critters at random (rand() % count), cast.
+                {"SummonRandomCritter", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            const auto& list = gh->getCompanions(false);
+            if (!list.empty())
+                gh->castSpell(list[static_cast<size_t>(std::rand()) % list.size()].spellId, 0);
             return 0;
         }},
                 // Putting one away is cancelling its aura, which is the same

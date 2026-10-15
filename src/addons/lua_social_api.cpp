@@ -2874,6 +2874,17 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"CollapseFactionHeader", [](lua_State* L) -> int {
             return factionHeaderSetCollapsed(L, true);
         }},
+                // CollapseAllFactionHeaders / ExpandAllFactionHeaders
+                // (0x005d1fc0, 0x005d1fe0 -> 0x005d1d20 past the last row):
+                // the mask of open top-level groups (0x00ad0ae4) emptied or
+                // filled - every top-level heading closed or opened, the
+                // groups inside them left as they were.
+                {"CollapseAllFactionHeaders", [](lua_State* L) -> int {
+            return allTopFactionHeadersSetCollapsed(L, true);
+        }},
+                {"ExpandAllFactionHeaders", [](lua_State* L) -> int {
+            return allTopFactionHeadersSetCollapsed(L, false);
+        }},
                 {"IsFactionInactive", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_checknumber(L, 1));

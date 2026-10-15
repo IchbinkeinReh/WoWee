@@ -7064,6 +7064,13 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"HasDebugZoneMap",          lua_ReturnFalse},
+                // IsDesaturateSupported() (0x00511fb0): 1 where the device
+                // can draw a texture desaturated (0x00483290), as every one
+                // here does; nothing otherwise.
+                {"IsDesaturateSupported", [](lua_State* L) -> int {
+            lua_pushnumber(L, 1);
+            return 1;
+        }},
                 {"CanQueueForWintergrasp",   lua_ReturnFalse},
                 {"ConvertToRaid",            lua_ReturnNothing},
                 {"FillLocalizedClassList",   lua_ReturnNothing},
