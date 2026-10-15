@@ -2836,7 +2836,8 @@ static int lua_strconcat(lua_State* L) {
 /// A plain substring rather than a pattern, replaced up to `max` times (0 or
 /// none is every one), into the client's 4096-byte buffer: what does not fit
 /// is cut. No replacement answers `s` itself. The client's loop never ends on
-/// an empty `find` with no limit; this one stops once the buffer is full.
+/// an empty `find` with no limit; this one stops once the buffer is full, or
+/// at once where an empty replacement would never fill it.
 static int lua_strreplace(lua_State* L) {
     size_t sLen = 0, findLen = 0, replLen = 0;
     const char* s = luaL_checklstring(L, 1, &sLen);
@@ -2851,7 +2852,7 @@ static int lua_strreplace(lua_State* L) {
     for (; limit == 0 || count < limit; ++count) {
         const char* hit = std::strstr(s + pos, find);
         if (!hit) break;
-        if (findLen == 0 && room == 0) break;
+        if (findLen == 0 && (room == 0 || replLen == 0)) break;
         const size_t lead = std::min(static_cast<size_t>(hit - (s + pos)), room);
         out.append(s + pos, lead);
         room -= lead;
