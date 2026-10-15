@@ -3069,6 +3069,7 @@ struct QuestRequestItemsData {
     std::string completionText;
     uint32_t requiredMoney = 0;
     uint32_t completableFlags = 0;  // 0x03 = completable
+    uint32_t questFlags = 0;        // QUEST_FLAGS_*, 3.x only
     std::vector<QuestRewardItem> requiredItems;
 
     [[nodiscard]] bool isCompletable() const { return (completableFlags & 0x03) != 0; }
@@ -3089,6 +3090,7 @@ struct QuestOfferRewardData {
     uint32_t questId = 0;
     std::string title;
     std::string rewardText;
+    uint32_t questFlags = 0;    // QUEST_FLAGS_*, 3.x only
     uint32_t rewardMoney = 0;
     uint32_t rewardXp = 0;
     uint32_t rewardHonor = 0;   // honor points (the packet's ×10 value, unscaled)

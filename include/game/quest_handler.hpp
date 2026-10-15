@@ -86,6 +86,9 @@ public:
                std::chrono::steady_clock::now() >= questDetailsOpenTime_;
     }
     [[nodiscard]] const QuestDetailsData& getQuestDetails() const { return currentQuestDetails_; }
+    /// The flags of the quest the quest frame last showed (DAT_00c0d6b4):
+    /// details, progress and reward each set them (0x0058dd50, 0x0058ba80).
+    [[nodiscard]] uint32_t getQuestFrameFlags() const { return questFrameFlags_; }
 
     // Gossip / quest map POI markers (aliased from handler_types.hpp)
     using GossipPoi = game::GossipPoi;
@@ -308,6 +311,7 @@ private:
     bool questDetailsOpen_ = false;
     std::chrono::steady_clock::time_point questDetailsOpenTime_{};
     QuestDetailsData currentQuestDetails_;
+    uint32_t questFrameFlags_ = 0;
 
     // Quest turn-in
     bool questRequestItemsOpen_ = false;

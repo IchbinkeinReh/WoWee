@@ -875,6 +875,43 @@ const game::GossipQuestItem* gossipQuestAt(lua_State* L, bool available, int ind
     return nullptr;
 }
 
+/// 0x0058aba0, which IsActiveQuestTrivial and IsAvailableQuestTrivial ask: a
+/// quest level (not -1) more than the table at 0x00a12fd0 allows for the
+/// player's level / 5 below it - 8 from level 100 - is grey. A row that is not
+/// there counts as level 0.
+static bool greetingQuestIsTrivial(game::GameHandler* gh, int questLevel) {
+    static constexpr int kGreyGap[20] = {4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8};
+    if (!gh || questLevel == -1) return false;
+    const int playerLevel = static_cast<int>(gh->getPlayerLevel());
+    const unsigned band = static_cast<unsigned>(playerLevel / 5);
+    return (band < 20 ? kGreyGap[band] : 8) + questLevel < playerLevel;
+}
+
+/// IsActiveQuestTrivial / IsAvailableQuestTrivial (0x0058d420, 0x0058d370):
+/// the greeting's quest at the index, 1 or nil.
+template <bool Available>
+static int lua_GreetingQuestTrivial(lua_State* L) {
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, Available ? "Usage: IsAvailableQuestTrivial(index)"
+                                       : "Usage: IsActiveQuestTrivial(index)");
+    const auto* q = gossipQuestAt(L, Available, static_cast<int>(lua_tonumber(L, 1)));
+    if (greetingQuestIsTrivial(getGameHandler(L), q ? q->questLevel : 0)) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+
+/// GetAvailableLevel / GetActiveLevel (0x0058bf70, 0x0058c010): the
+/// greeting's quest's level at the index, 0 past the list.
+template <bool Available>
+static int lua_GreetingQuestLevel(lua_State* L) {
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, Available ? "Usage: GetGetAvailableLevel(index)"
+                                       : "Usage: GetGetActiveLevel(index)");
+    const auto* q = gossipQuestAt(L, Available, static_cast<int>(lua_tonumber(L, 1)));
+    lua_pushnumber(L, q ? q->questLevel : 0);
+    return 1;
+}
+
 int countGossipQuests(lua_State* L, bool available) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
@@ -2573,18 +2610,12 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"SelectActiveQuest", [](lua_State* L) -> int {
             return selectGossipQuestAt(L, /*available=*/false);
         }},
-                // Greys the title of a quest the player has outlevelled. The
-                // gossip list carries each quest's level and the threshold is
-                // the server's own formula, so this is a comparison rather than
-                // the guess the old comment here declined to make.
-                {"IsActiveQuestTrivial", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_checknumber(L, 1));
-            const auto* q = gossipQuestAt(L, /*available=*/false, index);
-            lua_pushboolean(L, (gh && q &&
-                questIsTrivial(static_cast<int>(gh->getPlayerLevel()), q->questLevel)) ? 1 : 0);
-            return 1;
-        }},
+                // Greys the title of a quest the player has outlevelled, by
+                // the client's own table rather than the server's formula.
+                {"IsActiveQuestTrivial",    lua_GreetingQuestTrivial<false>},
+                {"IsAvailableQuestTrivial", lua_GreetingQuestTrivial<true>},
+                {"GetAvailableLevel",       lua_GreetingQuestLevel<true>},
+                {"GetActiveLevel",          lua_GreetingQuestLevel<false>},
                 // isTrivial, isDaily, isRepeatable - which icon the greeting
                 // panel puts beside an offered quest.
                 {"GetAvailableQuestInfo", [](lua_State* L) -> int {

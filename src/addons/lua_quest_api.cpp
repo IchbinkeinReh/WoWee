@@ -20,6 +20,13 @@
 
 namespace wowee::addons {
 
+/// The flags of the quest on the quest frame (DAT_00c0d6b4), which the
+/// details, progress and reward packets each set.
+static uint32_t questFrameFlags(game::GameHandler* gh) {
+    auto* qh = gh ? gh->getQuestHandler() : nullptr;
+    return qh ? qh->getQuestFrameFlags() : 0;
+}
+
 // ── The quest log is a list of headers with quests under them ───────────────
 //
 // WoW's quest log is grouped: a zone header, the quests in that zone, the next
@@ -3373,7 +3380,18 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"QuestFlagsPVP", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             constexpr uint32_t kQuestFlagsPvp = 0x00002000u;
-            lua_pushboolean(L, gh && (gh->getQuestDetails().questFlags & kQuestFlagsPvp) ? 1 : 0);
+            lua_pushboolean(L, gh && (questFrameFlags(gh) & kQuestFlagsPvp) ? 1 : 0);
+            return 1;
+        }},
+                // QuestIsDaily() (0x0058c4d0) / QuestIsWeekly() (0x0058c510):
+                // QUEST_FLAGS_DAILY 0x1000 / _WEEKLY 0x8000 of the quest the
+                // frame shows. 1 or nil.
+                {"QuestIsDaily", [](lua_State* L) -> int {
+            if (questFrameFlags(getGameHandler(L)) & 0x1000u) lua_pushnumber(L, 1); else lua_pushnil(L);
+            return 1;
+        }},
+                {"QuestIsWeekly", [](lua_State* L) -> int {
+            if (questFrameFlags(getGameHandler(L)) & 0x8000u) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
                 // QuestGetAutoAccept() stays false, and that is the answer

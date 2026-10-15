@@ -1083,7 +1083,7 @@ bool QuestRequestItemsParser::parse(network::Packet& packet, QuestRequestItemsDa
         packet.readUInt32();  // emote delay
         packet.readUInt32();  // emote
         packet.readUInt32();  // closeOnCancel
-        packet.readUInt32();  // quest flags
+        data.questFlags = packet.readUInt32();
         packet.readUInt32();  // suggested players
         data.requiredMoney = packet.readUInt32();
         const uint32_t itemCount = packet.readUInt32();
@@ -1234,7 +1234,7 @@ bool QuestOfferRewardParser::parse(network::Packet& packet, QuestOfferRewardData
     if (era == QuestPacketEra::WOTLK) {
         if (!packet.hasRemaining(9)) return true;
         packet.readUInt8();  // autoFinish
-        packet.readUInt32(); // questFlags
+        data.questFlags = packet.readUInt32();
         packet.readUInt32(); // suggestedPlayers
 
         if (!packet.hasRemaining(4)) return true;

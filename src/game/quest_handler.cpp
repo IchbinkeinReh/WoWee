@@ -2669,6 +2669,7 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
         return;
     }
     currentQuestDetails_ = data;
+    questFrameFlags_ = data.questFlags;
     for (auto& q : questLog_) {
         if (q.questId != data.questId) continue;
         if (!data.title.empty() && (isPlaceholderQuestTitle(q.title) || data.title.size() >= q.title.size())) {
@@ -2713,6 +2714,7 @@ void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
     }
 
     currentQuestRequestItems_ = data;
+    questFrameFlags_ = data.questFlags;
     questRequestItemsOpen_ = true;
     gossipWindowOpen_ = false;
     questDetailsOpen_ = false;
@@ -2775,6 +2777,7 @@ void QuestHandler::handleQuestOfferReward(network::Packet& packet) {
         pendingTurnInRewardRequest_ = false;
     }
     currentQuestOfferReward_ = data;
+    questFrameFlags_ = data.questFlags;
     questOfferRewardOpen_ = true;
     questRequestItemsOpen_ = false;
     gossipWindowOpen_ = false;
