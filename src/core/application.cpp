@@ -3182,6 +3182,11 @@ void Application::processDeferredLogoutToLogin() {
 void Application::unloadInterface() {
     if (addonManager_ && addonsLoaded_) {
         addonManager_->fireEvent("PLAYER_LEAVING_WORLD");
+        // Then PLAYER_LOGOUT, and the saved variables after it (0x00528f00:
+        // 0x00528c30, event 0xfe, 0x00527130). It fired when the server
+        // accepted the logout, twenty seconds early and also for a logout
+        // then cancelled.
+        addonManager_->fireEvent("PLAYER_LOGOUT");
         // Saves the saved variables on its way out, so this has to run while
         // the outgoing character is still the one named - the per-character
         // files are keyed by that name, and writing them after it changed

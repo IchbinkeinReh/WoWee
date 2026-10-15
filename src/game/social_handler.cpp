@@ -3748,7 +3748,10 @@ void SocialHandler::handleLogoutResponse(network::Packet& packet) {
         // printed "Logging out..." / "Logging out in 20 seconds...".
         logoutCountdown_ = data.instant ? 0.0f : 20.0f;
         if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("PLAYER_LOGOUT", {});
+            // Not PLAYER_LOGOUT: the client raises that only as the world is
+            // taken down (0x00528f00), after the server says the character is
+            // out (Application::unloadInterface).
+            //
             // The timer the server just imposed, announced so the interface can
             // show it. UIParent answers PLAYER_CAMPING with the CAMP popup and
             // PLAYER_QUITING with QUIT, both of which count down and offer to
